@@ -1448,7 +1448,45 @@ relay anti-pattern 정리 후 최신 Core 0.17.5로 4개 언어 routed 4패턴�
 > node는 전 pattern이 목표 median 60에 미달. 특히 **DEALER_ROUTER (REQREP 갭 25.4, SENDSEND 24.3)** 의 작은 size(64~4096 ~19~34%)가 최저.
 > node의 작은 size routed가 구조적 병목(N-API 경계·per-message 오버헤드) 후보.
 
-**java·dotnet: 측정 진행 중 → 완료 시 갱신.**
+**java** (0.17.5, tcp %C / pattern 평균 → 목표 routed85·reqrep70):
+
+| pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 평균 | 판정 |
+|---|--|--|--|--|--|--|--|--|
+| MULTI_DEALER_ROUTER_SENDSEND | 94.0 | 102.5 | 72.8 | 76.7 | 86.8 | 99.5 | 88.7 | 통과 |
+| MULTI_ROUTER_ROUTER_SENDSEND | 99.2 | 159.7 | 149.0 | 67.0 | 61.0 | 81.3 | 102.9 | 통과 |
+| MULTI_DEALER_ROUTER_REQREP | 84.6 | 107.4 | 115.4 | 116.2 | **27.0** | **37.7** | 81.4 | 통과(대용량 셀 급락) |
+| MULTI_ROUTER_ROUTER_REQREP | 107.0 | 123.1 | 131.2 | 128.3 | **28.4** | **39.5** | 92.9 | 통과(대용량 셀 급락) |
+
+> java는 relay 정리로 routed 평균이 이전 70.5%→81~103%로 크게 개선(목표 충족). 단 **REQREP 대용량(65536/131072)=27~40%** 는 기존 Core
+> work-charge cubic 절벽 + 바인딩 async 상호작용(§ 별도 기록). Core 레벨 요인이라 바인딩 단독 개선 대상 아님.
+
+**dotnet** (0.17.5, tcp %C / pattern 평균 → 목표 routed80·reqrep70):
+
+| pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 평균 | 갭 |
+|---|--|--|--|--|--|--|--|--|
+| MULTI_DEALER_ROUTER_SENDSEND | 49.4 | 58.5 | 52.2 | 71.0 | 81.2 | 60.5 | 62.1 | **17.9(미달)** |
+| MULTI_ROUTER_ROUTER_SENDSEND | 53.7 | 70.3 | 70.3 | 70.5 | 112.3 | 39.5 | 69.4 | 10.6(미달) |
+| MULTI_DEALER_ROUTER_REQREP | 56.9 | 64.6 | 66.2 | 70.4 | 64.2 | 78.0 | 66.7 | 3.3(경미) |
+| MULTI_ROUTER_ROUTER_REQREP | 72.7 | 67.0 | 66.8 | 71.8 | 76.7 | 91.4 | 74.4 | 통과 |
+
+### 11.2 목표 대비 갭 순위 → 개선 대상
+
+pattern 평균의 목표 median 대비 갭(큰 순):
+
+| 순위 | 언어·pattern | 평균%C | 목표 | 갭 |
+|--|--|--|--|--|
+| 1 | **node · DEALER_ROUTER_REQREP** | 34.6 | 60 | **25.4** |
+| 2 | node · DEALER_ROUTER_SENDSEND | 35.7 | 60 | 24.3 |
+| 3 | node · ROUTER_ROUTER_SENDSEND | 37.9 | 60 | 22.1 |
+| 4 | dotnet · DEALER_ROUTER_SENDSEND | 62.1 | 80 | 17.9 |
+| 5 | node · ROUTER_ROUTER_REQREP | 46.1 | 60 | 13.9 |
+| 6 | dotnet · ROUTER_ROUTER_SENDSEND | 69.4 | 80 | 10.6 |
+
+- cpp·java는 pattern 평균으로 목표 충족(각각 outlier 셀: cpp `RR_SENDSEND 131072=47`, java 대용량 REQREP는 Core 절벽 요인).
+- **셀 단위 최악**: node 작은 size routed(예: `DEALER_ROUTER_SENDSEND 1024=18.7` → 갭 41). node routed hot-path가 전 pattern에 걸쳐
+  목표 미달이라 **구조적(systemic) 병목**으로 판단.
+- **개선 1순위 = Node routed hot-path**(N-API 경계·per-message wrapper·event-loop 오버헤드). 근본원인 진단 → 최적화 → §7.7 채택/revert.
+  이후 dotnet DEALER_ROUTER_SENDSEND(2순위)로 이어간다.
 
 ## 12. 완료 기준
 
