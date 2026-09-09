@@ -86,7 +86,7 @@ sequenceDiagram
     C->>R: submit send·request
     R->>R: E1 encode the typed payload into wire parts (once)
     R->>R: E2 read the target from the prepared candidate list
-    R->>R: E3 register pending entry, reply route and dispatcher slot (request)
+    R->>R: E3 register pending entry and dispatcher slot (plus reply route for a request)
     R->>B: E4 start the binding's async operation, get the pending result
     B-->>R: (send) local admission succeeded — immediately or as a later completion
     B->>R: (request) reply·error·timeout notification → terminal authority decided
@@ -97,8 +97,8 @@ sequenceDiagram
 | Stage | What the runtime does | Execution resource | So that |
 |---|---|---|---|
 | E1 encode | Encodes the typed payload with the codec into a list of wire parts. Never allocates a new buffer to join header and body. | caller | The Framework adds zero full copies ([Payload Ownership "2"](05-payload-ownership-and-codec.en.md#2-copies-that-can-be-eliminated)). |
-| E2 resolve | Reads one target from the candidate list and selection order prepared at change time. The normal path reads the published candidate array and advances the cursor. The ordering between candidate replacement and selection, and the fallback that runs the selection procedure when the cycle search reached its bound, are owned by [Channel Messaging "The Candidate List and Selection Order Are Prepared in Advance Whenever State Changes"](../02-channel-transport/02-channel-messaging.en.md#the-candidate-list-and-selection-order-are-prepared-in-advance-whenever-state-changes). | caller | No per-request scan of peers, no repeated filtering or sorting. |
-| E3 register | For a request, creates `OperationId` and `ReplyRouteId` and registers the pending entry, the reply route and the completion-dispatcher slot **before the transport submit**, as in [Submit And Completion "10"](01-submit-and-completion.en.md#10-operation-identity-and-where-completion-happens-implementation). Without a free slot the request is refused with `CapacityExceeded`. | caller | A reply is never processed before its registration, and no timer object is created per request — the deadline is a field of the entry and expiry is checked by the management work of §4.2 or a timer wheel. |
+| E2 resolve | Picks one target from the candidate list and selection order prepared at change time. Ownership of the selection state (candidate list, accumulators, cursor), the way candidate replacement and selection are put into one order, and the fallback that runs the selection procedure when the cycle search reached its bound are owned by [Channel Messaging "The Candidate List and Selection Order Are Prepared in Advance Whenever State Changes"](../02-channel-transport/02-channel-messaging.en.md#the-candidate-list-and-selection-order-are-prepared-in-advance-whenever-state-changes). What this page requires is that selection finishes in constant time in the caller context and never waits, per request, for a lane turn of another state owner (topology, liveness, port). | caller | No per-request scan of peers, no repeated filtering or sorting, no waiting on another owner's lane. |
+| E3 register | For every operation whose terminal completion may arrive later — request and send alike — registers the pending entry and the completion-dispatcher slot **before the transport submit**. For a request it also creates `OperationId` and `ReplyRouteId` and registers the reply route, as in [Submit And Completion "10"](01-submit-and-completion.en.md#10-operation-identity-and-where-completion-happens-implementation). Without a free slot the operation is refused with `CapacityExceeded`. The state class, protection and lifetime of the pending entry and the dispatcher reservation (held until the callback returns) are defined by [Submit And Completion "11"](01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation) and [State Ownership And Lanes "4"](06-state-ownership-and-lanes.en.md#4-state-classifications-and-how-to-tell-them-apart). What this page requires is that registration finishes in constant time in the caller context without waiting for another owner's lane turn. | caller | A completion is never processed before its registration, and no timer object is created per request — the deadline is a field of the entry and expiry is checked by the management work of §4.2 or a timer wheel. |
 | E4 submit | Starts the binding's asynchronous request/send operation **once** and receives the pending result. The Framework keeps no send queue of its own. | caller | HWM waiting and retries after the operation started belong to Core and the binding ([Submit And Completion "5"](01-submit-and-completion.en.md#5-backpressure-and-error-classification)); the Framework never creates a second operation. |
 | E5 complete | Where the binding reports completion (reply, error, timeout, local admission), decides terminal authority once through the atomic take-out of [Submit And Completion "9"](01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget) and hands the result to the dispatcher slot reserved in E3. The caller continuation runs in a **new execution turn** after the current completion handling and the lane-current scope have ended ([Submit And Completion "11"](01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation)). | binding completion resource → completion dispatcher | The only execution-resource switch the Framework introduces is that one dispatcher turn. No host mailbox or dispatch thread sits between the completion notification and the dispatcher. |
 
@@ -111,20 +111,21 @@ first instruction of the caller continuation".
 
 **A send completes** not when the E4 call returns but when local admission actually succeeded
 ([Submit And Completion "2"](01-submit-and-completion.en.md#2-completion-meaning-per-terminator-and-per-language-names)).
-With immediate admission it completes inside E4; when admission is pending on HWM, a later completion
-delivers it through the E5 path. The continuation of a caller that released its gate with `Yield` runs
+With immediate admission, E5 takes out the E3 entry within the same call, decides the result and hands
+it to the dispatcher slot; when admission is pending on HWM, a later completion takes the same E5 path.
+Either way the caller continuation runs in a new dispatcher turn. The continuation of a caller that released its gate with `Yield` runs
 after the gate is re-acquired as in [Handler Turn "3"](02-handler-turn-and-execution-gate.en.md#3-gate-and-claim-on-yield);
 that re-acquisition is not part of the switch count.
 
-**The candidate list read by E2 and the pending table of E3 are different state classes.** The
-candidate list is state that a lane rebuilds at change time and publishes by swapping one reference
-(the swap is C3 of [State Ownership And Lanes "4"](06-state-ownership-and-lanes.en.md#4-state-classifications-and-how-to-tell-them-apart);
-the array itself is immutable); the submit path only reads that reference. The pending table is a
-single map with per-request add and remove and no invariant spanning other state, so it is C1 of the
-same section — protected by atomic add and take-out, never routed through a lane. Neither enters a
-[state lane](../00-foundation/02-glossary.en.md#state-lane) — the execution unit that serialises access
-to a component's state — to wait for a result per request. An implementation that waits on the
-topology, liveness, selector and port lanes in turn for every request violates this page.
+**This page does not classify or protect the state touched by E2 and E3** — the selection state is
+owned by Channel Messaging, the pending entry and dispatcher reservation by Submit And Completion "10"
+and "11", and the classification rules by
+[State Ownership And Lanes "4"](06-state-ownership-and-lanes.en.md#4-state-classifications-and-how-to-tell-them-apart).
+What this page fixes is the **shape** that protection takes on the submit path: the request never asks
+**another owner** for a turn of its [state lane](../00-foundation/02-glossary.en.md#state-lane) — the
+execution unit that serialises access to a component's state — and waits for the result, and E1–E4
+finish as constant-time operations in the caller context. An implementation that waits on the topology,
+liveness, selector and port lanes in turn for every request violates this page.
 
 **Framework capacity waiting before handing over to the binding** follows
 [Submit And Completion "5"](01-submit-and-completion.en.md#5-backpressure-and-error-classification) and
