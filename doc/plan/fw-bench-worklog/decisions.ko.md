@@ -908,6 +908,9 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
   경로의 `.run().get()` 동기 왕복 합치기, (3) liveness probe/ACK를 application FIFO 앞에서 처리(FB-054). codec 복사는
   뒤로. 브랜치 `framework-cpp/7-dispatch-turn-cost`(worktree zlink-fwperf-cpp), job `fwperf-cpp-p2`(astra).
   보고서: `.artifacts/codex/fwperf-cpp/summary.md`.
+- **P2 1차 결과(02:20)**: 관리 작업 상각(819e2185d2) → window 0.014(×2.4), send 오류 0·count 일치, serial 불변. 0.90 미달.
+  astra BLOCKER "control record 우선 처리는 04장 §3과 충돌" → 스펙 08-messaging-hot-path §4.2가 정리: 별도 queue 없이
+  claim 즉시(I3) 처리. 2차는 스펙 08의 단계 모양으로 재개(Issue #7).
 
 ## FB-057 — .NET framework 병목 진단(P1, fwperf-dotnet): 단일 receive loop의 1건 읽기(spec은 64 batch)·단일 pump의 1 claim·요청별 cold Task+supervisor+DI scope, codec 전체 복사 (2026-09-10, Issue #5·#19)
 

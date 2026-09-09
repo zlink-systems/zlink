@@ -47,3 +47,5 @@ serial의 2~8배에 그친다(raw는 13~23배). 즉 요청당 **ms 단위의 고
 | 2026-09-10 | C++ | P1 완료 | FB-056: 1 ms sleep 아님. record당 끝나는 dispatch 회차(873 µs 관리 작업)와 요청당 동기 state-lane 왕복이 병목; FB-054는 probe가 application FIFO 뒤에 놓여 만료. P2 승인 → job `fwperf-cpp-p2` (Issue #7·#8) |
 | 2026-09-10 | .NET | P1 완료 | FB-057: 단일 receive loop 1건 읽기(spec 64)·pump 1 claim·요청별 cold Task+DI scope·codec 전체 복사. 100 ms poll은 원인 아님. P2 승인 → job `fwperf-dotnet-p2` (Issue #5·#19) |
 | 2026-09-10 | Java | P1 완료 | FB-058: 1 ms park 폴링(+49% 단독)·요청당 state-lane park 5회·permit 전 receive/3회 복사/1건 claim·executor hop. P2 승인 → job `fwperf-java-p2` (Issue #6) |
+| 2026-09-10 | C++ | P2 1차 | 819e2185d2(branch 유지): window ×2.4(0.014), send 오류 0(FB-054 증상 해소), serial 불변 — 0.90 미달. 잔여: record별 동기 lane 왕복·completion bridge. 2차는 스펙 08-messaging-hot-path(Issue #21) 기준 |
+| 2026-09-10 | 공통 | 스펙 | `01-execution/08-messaging-hot-path.{ko,en}.md` 초안(branch docs/21-messaging-hot-path), codex 리뷰 중 |
