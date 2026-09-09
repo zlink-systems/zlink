@@ -371,7 +371,7 @@ The shape may be narrower or more idiomatic than C, but the meaning stays
 the same.
 
 - Context lifecycle, options, shutdown, auto-HWM recalculation, version, capability helpers, strerror.
-- Message ownership, multipart payload, routing id, received metadata, topic message, subscription event.
+- Message ownership, multipart payload, routing id, received metadata, topic message, subscription event. Payload share/transfer/duplicate follow the common contract's `Copy`/`Move`/`Clone`: `Message Copy()` (ref-count share, `zlink_msg_copy`), `void Move(Message dest)` (ownership transfer, caller left empty, `zlink_msg_move`), and `Message Clone()` (deep copy). The existing deep-copy `CopyTo` aligns to `Clone`; `CopyTo` remains an `[Obsolete]` alias pointing to its prior deep-copy meaning for one release cycle. See the [common Message ownership contract](../draft/message-ownership.ko.md) §"명시적 Copy / Move / Clone".
 - pair, dealer, router, pub, sub, xpub, xsub, stream sockets.
 - Common options, typed socket options, TLS, bind/connect/disconnect, routing id, channel name, request/reply, publish/subscribe, callback surfaces.
 - socket monitor, monitor event/snapshot, poller, poll event, timer, SPOT timer integration.

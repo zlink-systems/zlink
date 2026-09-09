@@ -63,7 +63,7 @@ Application이 관찰하는 상태는 다음과 같다.
 
 | 상태 | 소유자와 사용 가능 범위 | 허용되는 다음 동작 |
 |---|---|---|
-| owned | `Message`가 유효한 payload를 소유한다. Payload view는 이 상태에서만 유효하다. | 읽기, 쓰기, 명시적 copy, send 제출, close |
+| owned | `Message`가 유효한 payload를 소유한다. Payload view는 이 상태에서만 유효하다. | 읽기, 쓰기, `Copy`/`Move`/`Clone`, send 제출, close |
 | held | Send operation이 payload를 독점적으로 보관한다. Core에는 아직 ownership이 이전되지 않았을 수 있지만 Application은 원본 객체를 사용할 수 없다. | operation의 submit, retry 또는 cleanup |
 | consumed | Core 또는 send operation이 payload를 소비했다. `Message`는 payload를 소유하지 않는다. | deterministic cleanup으로 wrapper를 반환한다. |
 | closed | Application 또는 runtime이 payload resource를 해제했다. | 더 이상 사용하지 않는다. |
@@ -106,23 +106,38 @@ UTF-8 변환을 마친 뒤 같은 규칙을 적용한다.
 통과한 binding은 caller와의 수명 분리를 유지하면서 이 materialization을 submit과 합칠
 수 있다.
 
-### 명시적 copy
+### 명시적 Copy / Move / Clone
 
-`copy()`는 source와 별도로 소비하거나 닫을 수 있는 owned `Message`를 반환한다. Core가
-큰 payload의 storage를 reference count로 공유할 수 있으므로 물리적인 payload 복사는
-필수 조건이 아니다. Application에서 관찰하는 조건은 source와 copy의 ownership이 서로
-독립적이라는 점이다.
+`Message`는 payload를 공유·이전·복제하는 세 동작을 **모든 binding에서 같은 이름·같은
+의미**로 제공한다. 이름은 Core C API와 1:1 대응하며, 언어별 케이싱만 관례를 따른다
+(`Copy`/`Move`/`Clone` ↔ C `zlink_msg_copy`/`zlink_msg_move` + deep copy). 정확한 언어별
+signature는 각 언어 spec의 Message 절과 계획 문서
+[`doc/plan/bindings-message-share-move-api-parity.ko.md`](../../../../doc/plan/bindings-message-share-move-api-parity.ko.md) §3.3이
+소유한다.
 
-`copy()`는 payload mutation이 서로 격리된 deep copy를 보장하지 않는다. Core처럼
-storage를 공유하는 구현에서는 source와 copy 중 하나를 수정한 결과가 다른 쪽에서도
-보일 수 있다. Copy 뒤 payload를 수정하는 사용법은 공통 계약으로 보장하지 않는다.
-독립적으로 수정할 payload는 `allocate(size)`로 새 storage를 만들고 `copy_to()`로
-채운다.
+**Copy (= `zlink_msg_copy`, reference-count 공유).** 호출 `Message`의 native payload
+버퍼를 **공유하는 새 owned `Message`를 반환**한다. 원본과 반환본 모두 유효하며 각자
+닫는다(refcount 증가). Core가 큰 payload storage를 reference count로 공유하므로 물리적
+복사는 일어나지 않을 수 있고, Application에서 관찰하는 조건은 두 핸들의 ownership과
+close가 서로 독립적이라는 점이다. `Copy`는 mutation이 격리된 deep copy를 **보장하지
+않는다** — 공유 storage 구현에서는 한쪽 수정이 다른 쪽에도 보일 수 있다. 공유 중
+payload는 immutable로 취급한다.
+
+**Move (= `zlink_msg_move`, 소유권 이전).** 호출 `Message`의 소유권을 **대상 인자로
+이전**한다. 대상의 이전 내용은 닫히고, **호출 `Message`는 empty(빈 상태)** 가 된다.
+refcount는 증가하지 않는다. 받은 message를 그대로 다시 보내는 relay/echo 경로처럼
+사본이 필요 없을 때 사용한다.
+
+**Clone (= deep copy, 독립 버퍼).** payload를 **독립 storage로 깊은 복사**한 owned
+`Message`를 반환한다. 원본과 refcount를 공유하지 않으므로 복제 뒤 어느 쪽을 수정해도
+서로 영향이 없다. 독립적으로 수정할 payload가 필요할 때 사용한다. (기존 binding의
+깊은 복사 메서드는 이 이름으로 정렬하며, 이전 이름은 한 릴리스 사이클 동안 이전 의미를
+가리키는 deprecated alias로 유지한다.)
 
 일반 socket에서 재시도하거나 여러 socket에 같은 payload를 보내야 하는 Application은
-첫 submit 전에 필요한 수만큼 copy를 만든다. Binding이 일반 socket의 send 실패 뒤
-원본을 암묵적으로 복원하거나 submit할 때마다 내부 copy를 만드는 방식은 이 계약을
-만족하지 않는다. STREAM backpressure 재시도는 아래 예외 규칙을 따른다.
+첫 submit 전에 필요한 수만큼 `Copy`(공유) 또는 `Clone`(독립)을 만든다. Binding이 일반
+socket의 send 실패 뒤 원본을 암묵적으로 복원하거나 submit할 때마다 내부 copy를 만드는
+방식은 이 계약을 만족하지 않는다. STREAM backpressure 재시도는 아래 예외 규칙을 따른다.
 
 ## Send operation의 ownership 이전
 
@@ -361,7 +376,9 @@ Application은 `Message` identity를 장기 `Map`, `WeakMap`이나 별도 metada
 별도 `moveMessage()`를 선택해야만 Core와 같은 no-copy send를 사용하는 구조는 공통
 기본 계약이 아니다. 기본 `Message` send가 ownership 이전 경로여야 한다. Bytes-like
 편의 overload는 임시 native `Message`를 만들 수 있지만, caller의 원본 bytes까지
-소비한다는 뜻은 아니다.
+소비한다는 뜻은 아니다. (여기서의 send-시 ownership 이전은 send 경로의 기본 동작이며,
+application이 명시적으로 소유권을 옮기는 `Move`(= `zlink_msg_move`)와는 별개다 — `Move`는
+받은 message를 사본 없이 그대로 다시 보내는 relay/echo 같은 경로에서 쓴다.)
 
 ## 기본 구현과 성능 특화 범위
 
@@ -453,7 +470,8 @@ body option은 native relay와 managed 처리의 서로 다른 사용 방식이 
 5. Held 상태에서 submit preflight가 실패하면 operation이 모든 입력을 닫는다.
 6. STREAM의 `DONTWAIT` backpressure 뒤에는 retained payload를 copy 없이 다시 submit할
    수 있다.
-7. `copy()`로 만든 source와 copy 중 하나를 보내도 다른 하나는 계속 owned 상태다.
+7. `Copy`(ref-count 공유)로 만든 source와 copy 중 하나를 보내도 다른 하나는 계속
+   owned 상태이며, 각자 독립적으로 닫을 수 있다(refcount 관찰).
 8. Builder가 각 payload를 받아 held 상태로 전환한 뒤 multipart 전송에 실패하면,
    Core에 전달하지 않은 part를 포함한 모든 입력이 재사용 불가 상태가 된다.
 9. Submit하지 않은 builder를 명시적으로 종료하면 held part가 모두 닫힌다.
@@ -475,6 +493,10 @@ body option은 native relay와 managed 처리의 서로 다른 사용 방식이 
     순서대로 호출한다. 성공, HWM, timeout과 실패에서 모든 part의 ownership을 하나의
     operation 규칙으로 정리한다. STREAM은 하나로 materialize한 payload를 `FINAL` 한 번으로
     제출한다.
+19. `Move`(소유권 이전) 뒤 대상은 원본의 payload를 소유하고 **원본은 empty** 상태가 되어
+    재사용/close가 안전하며(no-op), refcount는 증가하지 않는다. 대상의 이전 내용은 닫힌다.
+20. `Clone`(deep copy)으로 만든 사본은 원본과 storage를 공유하지 않는다 — 사본을 수정해도
+    원본 payload가 바뀌지 않고, 한쪽 close가 다른 쪽에 영향을 주지 않는다.
 
 Contract test는 public 동작과 ownership을 검증한다. 내부 최적화의 채택 여부는 별도
 microbenchmark가 아니라 위에서 정한 기존 perf 비교 결과로 판정한다. Native

@@ -571,7 +571,12 @@ C++ 호출자는 C 핸들 정리를 추론하지 않아도 된다.
 - 리소스 클래스는 소멸자에서 네이티브 핸들을 해제하고, close가 실패할 수 있을 때는 명시적
   `close` 또는 동등한 생명주기 메서드를 지원한다.
 - mutable 핸들을 공유 소유하는 대신 move-only 리소스 클래스를 선호한다.
-- 메시지 값은 효율적인 move를 지원하고, 복사를 요청할 때 명시적 copy를 지원한다.
+- 메시지 값은 효율적인 move를 지원하고, 명시적 payload 공유·이전·복제는 공통 계약의
+  `Copy`/`Move`/`Clone`(각각 C `zlink_msg_copy`/`zlink_msg_move` 및 deep copy)을 따른다.
+  C++ 시그니처는 `message_t::copy()`(공유, 새 값 반환) · `message_t::move(message_t&)`
+  (소유권 이전, 호출자 empty) · `message_t::clone()`(독립 복제)이며, `move`는 C API를 직접
+  감싼다(C++ move 시맨틱과 별개). 정의는 [Message ownership 공통 계약](../draft/message-ownership.ko.md)
+  §"명시적 Copy / Move / Clone".
 - data-plane 수신과 subscribe 경로는 호출자가 제공하는 저장소를 쓴다.
 - 수신 결과의 수명 API는 [64-bit byte HWM과 monitoring 계약](#64-bit-byte-hwm과-monitoring-계약)의
   C++ 출력 객체 설명을 따른다.

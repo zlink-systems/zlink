@@ -444,7 +444,13 @@ C보다 좁거나 더 관용적일 수 있지만, 의미는 동일하게 유지�
 - context 생명주기, 옵션, shutdown, auto-HWM 재계산, version, 역할,
   strerror 헬퍼.
 - 메시지 ownership, multipart payload, routing id, received metadata, topic
-  메시지, subscription 이벤트.
+  메시지, subscription 이벤트. payload 공유·이전·복제는 공통 계약의
+  `Copy`/`Move`/`Clone`을 따른다: `Message Copy()`(ref-count 공유, `zlink_msg_copy`),
+  `void Move(Message dest)`(소유권 이전, 호출자 empty, `zlink_msg_move`),
+  `Message Clone()`(deep copy). 기존 깊은복사 `CopyTo`는 `Clone`으로 정렬하고,
+  `CopyTo`는 한 릴리스 사이클 동안 이전 의미(deep copy)를 가리키는 `[Obsolete]` alias로
+  유지한다. 정의는 [Message ownership 공통 계약](../draft/message-ownership.ko.md)
+  §"명시적 Copy / Move / Clone".
 - pair, dealer, router, pub, sub, xpub, xsub, stream socket.
 - 공통 옵션, 타입화된 socket 옵션, TLS, bind/connect/disconnect, routing id,
   channel name, request/reply, publish/subscribe, 콜백 표면.

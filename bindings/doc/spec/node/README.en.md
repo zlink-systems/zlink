@@ -687,7 +687,15 @@ covers all of the following stable user-facing capabilities.
 - Context lifecycle, options, shutdown, auto-HWM recalculation, version,
   capability lookup, and strerror.
 - Message ownership, multipart payload, routing id, received metadata,
-  topic message, subscription event, and stream packet value.
+  topic message, subscription event, and stream packet value. Payload
+  share/transfer/duplicate follow the common contract's `Copy`/`Move`/`Clone`:
+  `copy(): Message` (ref-count share, `zlink_msg_copy`), `move(dest: Message): void`
+  (ownership transfer, caller left empty, `zlink_msg_move`), and `clone(): Message`
+  (deep copy). Since the existing `copy()` was a deep copy it aligns to `clone()`;
+  `copy` remains a `@deprecated` alias pointing to its prior deep-copy meaning for one
+  release cycle (it is not wired to the new ref-share `Copy`, to avoid a silent semantic
+  change). See the [common Message ownership contract](../draft/message-ownership.ko.md)
+  §"명시적 Copy / Move / Clone".
 - Every socket family and its typed options.
 - Monitor, poller, timer, and readiness semantics.
 - SPOT node, SPOT handle, topology snapshot, Actor, and stream Actor

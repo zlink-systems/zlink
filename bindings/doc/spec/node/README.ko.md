@@ -633,7 +633,13 @@ native config 실패를 native errno가 포함된 config 범주의 `ZlinkError`�
 - 컨텍스트 생명주기, 옵션, shutdown, auto-HWM 재계산, 버전, capability 조회,
   strerror.
 - 메시지 ownership, multipart payload, routing id, 수신 메타데이터, 토픽 메시지,
-  구독 이벤트, 스트림 packet 콜백.
+  구독 이벤트, 스트림 packet 콜백. payload 공유·이전·복제는 공통 계약의
+  `Copy`/`Move`/`Clone`을 따른다: `copy(): Message`(ref-count 공유, `zlink_msg_copy`),
+  `move(dest: Message): void`(소유권 이전, 호출자 empty, `zlink_msg_move`),
+  `clone(): Message`(deep copy). 기존 `copy()`는 깊은복사였으므로 `clone()`으로 정렬하고,
+  `copy`는 한 릴리스 사이클 동안 이전 의미(deep copy)를 가리키는 `@deprecated` alias로
+  유지한다(신규 ref-share `Copy`에 연결하지 않는다 — 의미 조용한 전환 방지). 정의는
+  [Message ownership 공통 계약](../draft/message-ownership.ko.md) §"명시적 Copy / Move / Clone".
 - 모든 소켓 패밀리와 그 타입 있는 옵션.
 - Monitor, poller, timer, readiness 의미.
 - SPOT node, SPOT 핸들, 토폴로지 스냅샷, Actor, 스트림

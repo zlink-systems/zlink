@@ -676,6 +676,13 @@ contract types.
 `Message`:
 
 - owns or shares message payload according to documented ownership rules;
+- provides payload share/transfer/duplicate as the common contract's `Copy`/`Move`/`Clone`:
+  `Message copy()` (ref-count share, `zlink_msg_copy`), `void move(Message dest)` (ownership
+  transfer, caller left empty, `zlink_msg_move`), and `Message clone()` (deep copy). The
+  existing `sharedCopyOf` aligns to `copy` and `moveInto`/`moveTo` to `move`; the former
+  names remain as `@Deprecated` aliases pointing to their prior meaning for one release
+  cycle. See the [common Message ownership contract](../draft/message-ownership.ko.md)
+  §"명시적 Copy / Move / Clone";
 - exposes Java-friendly factories such as `Message.from(...)`;
 - must not expose raw `wrapNative`, `wrapDirect`, native pointer, or borrowed
   Java-buffer send paths as public API;
