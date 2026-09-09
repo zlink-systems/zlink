@@ -160,6 +160,11 @@ def node_internal_dependency_pattern() -> str:
 # directories to discover additional targets.
 FRAMEWORK_SCALAR_FIELDS = (
     FrameworkField(
+        "framework/languages/cpp/CMakeLists.txt",
+        "project(zlink_framework_cpp) version",
+        rf"(project\(zlink_framework_cpp VERSION )(?P<version>{SEMVER})( LANGUAGES C CXX\))",
+    ),
+    FrameworkField(
         "framework/languages/java/zlink-http-client/src/main/java/systems/zlink/httpclient/internal/HttpClientVersion.java",
         "HttpClientVersion.VERSION (drives zlink-http-client and zlink-http-client-kotlin Gradle versions)",
         rf'(public static final String VERSION = ")(?P<version>{SEMVER})(";)',
@@ -316,12 +321,6 @@ def update_framework_node_lock(source: str, version: str) -> str:
 
 
 def synchronize_framework(sync: Synchronizer, version: str) -> None:
-    sync.regex(
-        "framework/languages/cpp/CMakeLists.txt",
-        rf"(project\(zlink_framework_cpp VERSION )(?P<version>{SEMVER})( LANGUAGES C CXX\))",
-        lambda match, version=version: replace_version_group(match, version),
-        1,
-    )
     for field in FRAMEWORK_SCALAR_FIELDS:
         sync.regex(
             field.relative,

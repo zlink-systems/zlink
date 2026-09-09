@@ -35,18 +35,42 @@ function Invoke-ZlinkCMake {
     }
 }
 
+function Get-ZlinkVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Key
+    )
+    $VersionMatches = @(Select-String -LiteralPath $Path -Pattern "^$([regex]::Escape($Key))=(\d+\.\d+\.\d+)$")
+    if ($VersionMatches.Count -ne 1) {
+        throw "Expected exactly one canonical $Key version in $Path."
+    }
+    return $VersionMatches[0].Matches[0].Groups[1].Value
+}
+
+function Get-StableBuildToken {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $Sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $Bytes = [Text.Encoding]::UTF8.GetBytes($Path.ToLowerInvariant())
+        return ([BitConverter]::ToString($Sha256.ComputeHash($Bytes), 0, 4)).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $Sha256.Dispose()
+    }
+}
+
 $CppRoot = $PSScriptRoot
 $RepositoryRoot = (Resolve-Path (Join-Path $CppRoot "../../..")).Path
-$CoreVersion = (Select-String -LiteralPath (Join-Path $RepositoryRoot "VERSION") -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
-$BindingVersion = (Select-String -LiteralPath (Join-Path $RepositoryRoot "BINDINGS_VERSION") -Pattern "^ZLINK_BINDINGS_VERSION=(.+)$").Matches.Groups[1].Value
-$FrameworkVersion = (Select-String -LiteralPath (Join-Path $RepositoryRoot "FRAMEWORK_VERSION") -Pattern "^ZLINK_FRAMEWORK_VERSION=(.+)$").Matches.Groups[1].Value
-if (@($CoreVersion, $BindingVersion, $FrameworkVersion) | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
-    throw "Unable to read Core, binding, or Framework version from $RepositoryRoot"
-}
+$CoreVersion = Get-ZlinkVersion -Path (Join-Path $RepositoryRoot "VERSION") -Key "LIBZLINK_VERSION"
+$BindingVersion = Get-ZlinkVersion -Path (Join-Path $RepositoryRoot "BINDINGS_VERSION") -Key "ZLINK_BINDINGS_VERSION"
+$FrameworkVersion = Get-ZlinkVersion -Path (Join-Path $RepositoryRoot "FRAMEWORK_VERSION") -Key "ZLINK_FRAMEWORK_VERSION"
 $CleanPackageRoot = Join-Path $RepositoryRoot ".artifacts/cpp-clean-$BindingVersion-package"
 
 if (-not $BuildDir) {
-    $BuildDir = Join-Path $RepositoryRoot ".artifacts/windows/build/framework-cpp"
+    $BuildDrive = Split-Path -Qualifier $RepositoryRoot
+    if (-not $BuildDrive) {
+        $BuildDrive = [IO.Path]::GetTempPath()
+    }
+    $BuildDir = Join-Path $BuildDrive ".zlink-build/cpp-$(Get-StableBuildToken -Path $RepositoryRoot)"
 }
 if (-not $LocalPackageRoot) {
     $LocalPackageRoot = if ($env:ZLINK_LOCAL_PACKAGE_ROOT) {
@@ -77,17 +101,22 @@ if (-not (Test-Path $VcpkgInstalledDir)) {
 }
 
 $CoreCMakeDir = Join-Path $CorePrefix "lib/cmake/zlink"
-if (-not (Test-Path (Join-Path $CoreCMakeDir "zlinkConfig.cmake"))) {
+$CoreConfigPath = Join-Path $CoreCMakeDir "zlinkConfig.cmake"
+$CoreConfigVersionPath = Join-Path $CoreCMakeDir "zlinkConfigVersion.cmake"
+$CoreConfigExists = Test-Path $CoreConfigPath -PathType Leaf
+$CoreConfigVersionExists = Test-Path $CoreConfigVersionPath -PathType Leaf
+if ($CoreConfigExists -ne $CoreConfigVersionExists) {
+    throw "Core CMake package metadata is incomplete: $CoreCMakeDir"
+}
+if (-not $CoreConfigExists) {
     foreach ($RequiredPath in @("include/zlink.h", "bin/zlink.dll", "lib/zlink.lib")) {
         if (-not (Test-Path (Join-Path $CorePrefix $RequiredPath) -PathType Leaf)) {
             throw "Core release package is missing $RequiredPath`: $CorePrefix"
         }
     }
-    $CoreCMakeDir = Join-Path $BuildDir "package-shims/zlink"
     New-Item -ItemType Directory -Force -Path $CoreCMakeDir | Out-Null
-    $CorePrefixCMake = ([IO.Path]::GetFullPath($CorePrefix)).Replace("\", "/")
     $CoreConfig = @'
-set(ZLINK_CORE_PACKAGE_PREFIX "@CORE_PREFIX@")
+get_filename_component(ZLINK_CORE_PACKAGE_PREFIX "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
 if(NOT TARGET libzlink)
   add_library(libzlink SHARED IMPORTED)
   set_target_properties(libzlink PROPERTIES
@@ -102,7 +131,7 @@ if(NOT TARGET libzlink)
   endforeach()
 endif()
 set(zlink_FOUND TRUE)
-'@.Replace("@CORE_PREFIX@", $CorePrefixCMake)
+'@
     $CoreConfigVersion = @"
 set(PACKAGE_VERSION `"$CoreVersion`")
 if(PACKAGE_FIND_VERSION VERSION_EQUAL PACKAGE_VERSION)
@@ -113,8 +142,8 @@ else()
 endif()
 "@
     $Utf8NoBom = [Text.UTF8Encoding]::new($false)
-    [IO.File]::WriteAllText((Join-Path $CoreCMakeDir "zlinkConfig.cmake"), $CoreConfig, $Utf8NoBom)
-    [IO.File]::WriteAllText((Join-Path $CoreCMakeDir "zlinkConfigVersion.cmake"), $CoreConfigVersion, $Utf8NoBom)
+    [IO.File]::WriteAllText($CoreConfigPath, $CoreConfig, $Utf8NoBom)
+    [IO.File]::WriteAllText($CoreConfigVersionPath, $CoreConfigVersion, $Utf8NoBom)
 }
 
 $VcpkgRoot = if ($env:VCPKG_ROOT) {
