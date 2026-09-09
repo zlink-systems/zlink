@@ -220,13 +220,13 @@ jobs:
           MAVEN_CENTRAL_BUNDLE_PATH: ${{ github.workspace }}/dist/framework-java/zlink-framework-java-${{ needs.resolve.outputs.version }}-central-bundle.zip
         working-directory: framework/languages/java
         run: |
-          ./gradlew --no-daemon publishAllPublicationsToCentralStagingRepository
+          ./gradlew --no-daemon publishAllPublicationsToCentralStagingRepository -Pzlink.includeSamples=false
           bash scripts/upload-central-bundle.sh
 
       - name: Build unsigned Maven artifacts for review
         if: needs.resolve.outputs.publish_registry != 'true'
         working-directory: framework/languages/java
-        run: ./gradlew --no-daemon publish
+        run: ./gradlew --no-daemon publish -Pzlink.includeSamples=false
 
       - uses: actions/upload-artifact@v6
         with:
