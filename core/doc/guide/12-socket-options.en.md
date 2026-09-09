@@ -1,4 +1,8 @@
 
+<!-- zlink-nav:start -->
+[← Core C API](02-core-api.en.md) | [ZMP Protocol →](zmp-protocol.en.md)
+<!-- zlink-nav:end -->
+
 # Socket options
 
 Use `zlink_set_option()` and `zlink_get_option()` for common raw-socket

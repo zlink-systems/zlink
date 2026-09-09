@@ -50,11 +50,13 @@ message의 수명은 **초기화 → 사용 → close** 순으로 진행한다. 
   할당한다. buffer 내용은 초기화되지 않으므로, [`zlink_msg_data`](#zlink_msg_data)로 pointer를
   얻어 송신 전에 data를 채운다.
 - **zero-copy** — [`zlink_msg_init_data`](#zlink_msg_init_data)가 caller가 제공한 buffer를
-  복사하지 않고 참조한다. library가 buffer를 더 이상 필요로 하지 않을 때(message가 송신되거나
-  닫힌 후) caller가 buffer를 해제할 수 있도록 callback을 호출한다.
+  복사하지 않고 참조한다. buffer를 참조하는 마지막 message가 닫힐 때(송신된 message는 library가
+  전송을 마친 뒤 닫는다) library가 caller가 넘긴 release callback `ffn_(data_, hint_)`를 호출한다.
 
 zero-copy message에서 buffer의 소유권은 callback이 경계다. caller는 callback이 호출될 때까지
-buffer를 수정하거나 해제해서는 안 된다.
+buffer를 수정하거나 해제해서는 안 되며, **buffer를 해제하는 일은 callback 안에서 한다** —
+callback 반환 뒤 caller가 같은 buffer를 다시 해제하면 이중 해제다. `ffn_`이 `NULL`이면
+library는 아무 callback도 호출하지 않으므로 buffer 수명은 전적으로 caller가 관리한다.
 
 ```mermaid
 sequenceDiagram
@@ -65,7 +67,7 @@ sequenceDiagram
     App->>Lib: socket으로 송신 또는 zlink_msg_close(msg)
     Note over App: ffn 호출 전까지 data 수정·해제 금지
     Lib-->>App: ffn(data, hint) 호출
-    Note over App: 이제 caller가 buffer를 해제할 수 있다
+    Note over App: ffn 안에서 buffer를 해제한다<br/>ffn 반환 뒤 다시 해제하지 않는다
 ```
 
 payload에는 [`zlink_msg_data`](#zlink_msg_data)와 [`zlink_msg_size`](#zlink_msg_size)로
@@ -79,7 +81,7 @@ message 내용의 소유권은 세 함수로 옮기거나 공유한다.
 | 함수 | 용도 | 성공 후 상태 |
 |---|---|---|
 | [`zlink_msg_move`](#zlink_msg_move) | 내용 이동 | `src_`는 빈 message가 되고 `dest_`가 원래 내용을 가진다. |
-| [`zlink_msg_copy`](#zlink_msg_copy) | 경량 복사 | large/zero-copy storage는 두 message가 buffer를 공유하고, 작은 inline message는 값으로 복사된다. |
+| [`zlink_msg_copy`](#zlink_msg_copy) | 경량 복사 | large/zero-copy storage는 두 message가 buffer를 공유하고, 작은 inline message(`zlink_msg_init_size`로 만든 `size_ <= 29` byte payload)는 값으로 복사된다. |
 | [`zlink_msg_adopt`](#zlink_msg_adopt) | binding이 초기화되지 않은 storage로 소유권 인수 | `dest_`가 초기화되어 원래 내용을 소유하고 `src_`는 빈 초기화 상태가 된다. |
 
 large/zero-copy storage를 복사하면 두 message가 같은 data buffer를 공유한다. 같은 data
@@ -150,9 +152,13 @@ callback 타입이다. message data buffer가 더 이상 필요하지 않을 때
 
 ## 6. 함수
 
-모든 `zlink_msg_*` 함수에 공통인 입력 규칙: handle이 `NULL`이거나 message가 유효하지
-않으면(미초기화·이미 close) `errno == EFAULT`를 설정한다. 이때 각 함수가 반환하는 값은
-다음과 같다.
+모든 `zlink_msg_*` 함수에 공통인 입력 규칙: handle이 `NULL`이면 `errno == EFAULT`를 설정한다.
+`zlink_msg_close`, `zlink_msg_data`, `zlink_msg_size`, `zlink_msg_refcnt`와 `zlink_msg_adopt`의
+`src_`는 초기화된 message여야 하며, 유효하지 않으면(미초기화·이미 close) 역시 `EFAULT`다.
+`zlink_msg_init*`는 초기화되지 않은 non-NULL storage를 받으며 그 storage의 이전 상태는
+검사하지 않는다 — 이미 초기화된 message에 다시 init하면 이전 내용이 해제되지 않으므로 먼저
+close한다. `zlink_msg_move`와 `zlink_msg_copy`는 두 pointer가 non-NULL이면 진행하며 `src_`는
+초기화된 message여야 한다. 이때 각 함수가 반환하는 값은 다음과 같다.
 
 | 함수 | 반환값 |
 |---|---|

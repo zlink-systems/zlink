@@ -364,22 +364,22 @@ SUBSCRIBE/UNSUBSCRIBE uses `zlink_set_subscription()` /
 
 ```c
 typedef enum zlink_option_t {
-  ZLINK_OPT_AFFINITY                  = 0x3001,  // I/O thread affinity bitmask (uint64_t)
-  ZLINK_OPT_RATE                      = 0x3003,  // Multicast data rate (kbps, int)
-  ZLINK_OPT_RECOVERY_IVL              = 0x3004,  // Multicast recovery interval (ms, int)
+  ZLINK_OPT_AFFINITY                  = 0x3001,  // I/O thread affinity bitmask (uint64_t; default 0)
+  ZLINK_OPT_RATE                      = 0x3003,  // Multicast data rate (kbps, int; default 100)
+  ZLINK_OPT_RECOVERY_IVL              = 0x3004,  // Multicast recovery interval (ms, int; default 10000)
   ZLINK_OPT_SNDBUF                    = 0x3005,  // Kernel send-buffer size (int; -1=keep OS default, >=0=request size from OS)
   ZLINK_OPT_RCVBUF                    = 0x3006,  // Kernel receive-buffer size (int; -1=keep OS default, >=0=request size from OS)
   ZLINK_OPT_FD                        = 0x3007,  // File descriptor (zlink_fd_t, read-only)
   ZLINK_OPT_EVENTS                    = 0x3008,  // Event-state bitmask (int, read-only)
   ZLINK_OPT_TYPE                      = 0x3009,  // Socket type (`zlink_socket_type_t` value as int, read-only)
-  ZLINK_OPT_LINGER                    = 0x300A,  // Shutdown wait (ms, int; -1=infinite, 0=immediate)
-  ZLINK_OPT_RECONNECT_IVL             = 0x300B,  // Initial reconnect interval (ms, int)
-  ZLINK_OPT_BACKLOG                   = 0x300C,  // Listener backlog (int)
-  ZLINK_OPT_RECONNECT_IVL_MAX         = 0x300D,  // Maximum reconnect interval (ms, int; 0=use IVL only)
+  ZLINK_OPT_LINGER                    = 0x300A,  // Shutdown wait (ms, int; -1=infinite, 0=immediate; default -1)
+  ZLINK_OPT_RECONNECT_IVL             = 0x300B,  // Initial reconnect interval (ms, int; default 100)
+  ZLINK_OPT_BACKLOG                   = 0x300C,  // Listener backlog (int; default 100)
+  ZLINK_OPT_RECONNECT_IVL_MAX         = 0x300D,  // Maximum reconnect interval (ms, int; 0=use IVL only; default 0)
   ZLINK_OPT_MAXMSGSIZE                = 0x300E,  // Maximum inbound message size (int64_t; positive=limit, nonpositive=unlimited, default -1)
   ZLINK_OPT_SNDHWM                    = 0x300F,  // Accounted-byte HWM for a directional send pipe (uint64_t; default 4,096,000, 0=unlimited)
   ZLINK_OPT_RCVHWM                    = 0x3010,  // Accounted-byte HWM for a directional receive pipe (uint64_t; default 4,096,000, 0=unlimited)
-  ZLINK_OPT_MULTICAST_HOPS            = 0x3011,  // Multicast TTL (int)
+  ZLINK_OPT_MULTICAST_HOPS            = 0x3011,  // Multicast TTL (int; default 1)
   ZLINK_OPT_RCVTIMEO                  = 0x3012,  // Receive timeout (ms, int; default 1000; explicitly setting -1 means infinite)
   ZLINK_OPT_SNDTIMEO                  = 0x3013,  // Send timeout (ms, int; default 1000; explicitly setting -1 means infinite)
   ZLINK_OPT_LAST_ENDPOINT             = 0x3014,  // Bound endpoint (string, read-only)
@@ -387,27 +387,27 @@ typedef enum zlink_option_t {
   ZLINK_OPT_TCP_KEEPALIVE_CNT         = 0x3016,  // TCP_KEEPCNT (int; -1=OS default)
   ZLINK_OPT_TCP_KEEPALIVE_IDLE        = 0x3017,  // TCP_KEEPIDLE (seconds, int; -1=OS default)
   ZLINK_OPT_TCP_KEEPALIVE_INTVL       = 0x3018,  // TCP_KEEPINTVL (seconds, int; -1=OS default)
-  ZLINK_OPT_IMMEDIATE                 = 0x3019,  // Queue messages only to completed connections (int)
-  ZLINK_OPT_IPV6                      = 0x301A,  // Enable IPv6 on the socket (int; 0=off, positive=on, getter returns 0/1)
-  ZLINK_OPT_CONFLATE                  = 0x301B,  // PUB/SUB keep only the latest message per topic (int; DEALER cannot enable it)
-  ZLINK_OPT_TOS                       = 0x301C,  // IP Type-of-Service value (int)
-  ZLINK_OPT_HANDSHAKE_IVL             = 0x301D,  // ZMTP handshake timeout (ms, int)
+  ZLINK_OPT_IMMEDIATE                 = 0x3019,  // Queue messages only to completed connections (int; default 0)
+  ZLINK_OPT_IPV6                      = 0x301A,  // Enable IPv6 on the socket (int; only 0 or 1 accepted, other values EINVAL; default 0)
+  ZLINK_OPT_CONFLATE                  = 0x301B,  // PUB/SUB keep only the latest message per topic (int; only 0 or 1 accepted; DEALER cannot enable it; default 0)
+  ZLINK_OPT_TOS                       = 0x301C,  // IP Type-of-Service value (int; default 0)
+  ZLINK_OPT_HANDSHAKE_IVL             = 0x301D,  // ZMTP handshake timeout (ms, int; default 30000)
   ZLINK_OPT_BLOCKY                    = 0x301E,  // Identifier unsupported by the socket option API; see below
   ZLINK_OPT_INVERT_MATCHING           = 0x3020,  // Invert topic matching (int)
-  ZLINK_OPT_CONNECT_TIMEOUT           = 0x3024,  // Connection timeout (ms, int)
-  ZLINK_OPT_TCP_MAXRT                 = 0x3025,  // Maximum TCP retransmission timeout (ms, int)
-  ZLINK_OPT_MULTICAST_MAXTPDU         = 0x3026,  // Maximum multicast TPDU size (int)
+  ZLINK_OPT_CONNECT_TIMEOUT           = 0x3024,  // Connection timeout (ms, int; default 0=OS default)
+  ZLINK_OPT_TCP_MAXRT                 = 0x3025,  // Maximum TCP retransmission timeout (ms, int; default 0=OS default)
+  ZLINK_OPT_MULTICAST_MAXTPDU         = 0x3026,  // Maximum multicast TPDU size (int; default 1500)
   ZLINK_OPT_BINDTODEVICE              = 0x3027,  // Network-interface binding (string)
   ZLINK_OPT_TLS_CERT                   = 0x3028,  // Path to a PEM-encoded TLS certificate (string)
   ZLINK_OPT_TLS_KEY                    = 0x3029,  // Path to a PEM-encoded TLS private key (string)
   ZLINK_OPT_TLS_CA                     = 0x302A,  // Path to a PEM-encoded CA certificate bundle (string)
-  ZLINK_OPT_TLS_VERIFY                 = 0x302B,  // Enable TLS peer verification (int; 0=off, positive=on, getter returns 0/1)
-  ZLINK_OPT_TLS_REQUIRE_CLIENT_CERT    = 0x302C,  // Require a client certificate (int; 0=off, positive=on, getter returns 0/1)
+  ZLINK_OPT_TLS_VERIFY                 = 0x302B,  // Enable TLS peer verification (int; only 0 or 1 accepted, other values EINVAL; default 1)
+  ZLINK_OPT_TLS_REQUIRE_CLIENT_CERT    = 0x302C,  // Require a client certificate (int; only 0 or 1 accepted; default 0)
   ZLINK_OPT_TLS_HOSTNAME               = 0x302D,  // Hostname for SNI and certificate verification (string)
-  ZLINK_OPT_TLS_TRUST_SYSTEM           = 0x302E,  // Trust the system CA certificate store (int; 0=off, positive=on, getter returns 0/1)
+  ZLINK_OPT_TLS_TRUST_SYSTEM           = 0x302E,  // Trust the system CA certificate store (int; only 0 or 1 accepted; default 1)
   ZLINK_OPT_TLS_PASSWORD               = 0x302F,  // Private-key password (string)
-  ZLINK_OPT_ZMP_METADATA               = 0x3030,  // Enable or disable attached ZMP metadata (int; 0=off, positive=on, getter returns 0/1)
-  ZLINK_OPT_TCP_NODELAY                = 0x3031,  // Enable TCP_NODELAY (int; 0=off, positive=on, getter returns 0/1)
+  ZLINK_OPT_ZMP_METADATA               = 0x3030,  // Enable or disable attached ZMP metadata (int; only 0 or 1 accepted, other values EINVAL; default 0)
+  ZLINK_OPT_TCP_NODELAY                = 0x3031,  // TCP_NODELAY (int; -1=OS default, 0=off, 1=on; default 1)
   ZLINK_OPT_RID_DUPLICATE_POLICY       = 0x3033,  // Peer routing-ID duplicate policy (int; default REJECT; see §4)
   ZLINK_OPT_SUBMIT_RETRY_MODE          = 0x3037,  // Local submit-failure retry mode (int; ZLINK_SUBMIT_RETRY_OFF or ZLINK_SUBMIT_RETRY_LOCAL_FAILURE; raw socket default off)
   ZLINK_OPT_SUBMIT_RETRY_TIMEOUT       = 0x3038,  // Local submit-failure retry budget (ms, int; raw socket default 0, 0 disables retry)
@@ -454,8 +454,8 @@ The two [HWM](../glossary.en.md#hwm) `uint64_t` options
 (`ZLINK_OPT_SNDHWM`, `ZLINK_OPT_RCVHWM`) require exactly
 `sizeof(uint64_t)` bytes in
 `zlink_set_option()` and `zlink_get_option()`. A four-byte value is rejected
-with `ZLINK_CONFIG_INVALID_ARGUMENT`. The unsupported socket option value
-`0x3034` is also unknown and fails with `ZLINK_CONFIG_INVALID_ARGUMENT` and `EINVAL`.
+with `ZLINK_CONFIG_INVALID_ARGUMENT`. An option value that is not in the enum
+above is unknown and fails with `ZLINK_CONFIG_INVALID_ARGUMENT` and `EINVAL`.
 Pipe admission accounts the actual retained bytes.
 
 HWM is applied to each HWM-controlled application directional pipe. On DEALER-ROUTER, DATA,
@@ -692,7 +692,8 @@ Endpoints the socket had bound are released before close returns, under the same
 **Returns:** `ZLINK_CLOSE_OK` on success; otherwise a `zlink_close_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
 
 **Errors:** `EFAULT` if the pointer is invalid, or `ESTALE` if the opaque
-value is stale. `EBUSY` if another operation is in flight.
+value is stale. `EBUSY` if another operation is in flight. `ESHUTDOWN` if a
+close has already been accepted on the same handle (including a second close).
 
 **See also:** `zlink_socket`
 
@@ -834,8 +835,11 @@ ZLINK_EXPORT zlink_config_result_t zlink_set_tls_server (void *handle_,
 Configures a TLS certificate and private key on a server socket and selects
 whether to require a client certificate.
 
-This function applies to raw server sockets that support TLS. Unsupported raw socket types and other handle kinds
-return `ZLINK_CONFIG_NOT_SUPPORTED` with `errno == ENOTSUP`.
+This function applies to any raw socket handle regardless of socket type — the values are used when
+that socket binds a `tls://` or `wss://` endpoint. A NULL `cert_` or `key_` returns
+`ZLINK_CONFIG_INVALID_HANDLE` with `errno == EFAULT`, and `require_client_cert_` accepts only `0` or
+`1` (any other value returns `ZLINK_CONFIG_INVALID_ARGUMENT` with `EINVAL`). A handle that is not a
+raw socket fails with the handle errors of [§2 Thread safety](#2-thread-safety).
 
 **Returns:** `ZLINK_CONFIG_OK` on success; otherwise a `zlink_config_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
 
@@ -857,8 +861,11 @@ ZLINK_EXPORT zlink_config_result_t zlink_set_tls_client (void *handle_,
 Configures a CA certificate, a hostname for SNI and certificate verification,
 and whether to trust the system CA certificate store on a client socket.
 
-This function applies to raw client sockets that support TLS. Unsupported raw socket types and other handle kinds return
-`ZLINK_CONFIG_NOT_SUPPORTED` with `errno == ENOTSUP`.
+This function applies to any raw socket handle regardless of socket type — the values are used when
+that socket connects to a `tls://` or `wss://` endpoint. A NULL `ca_cert_` or `hostname_` returns
+`ZLINK_CONFIG_INVALID_HANDLE` with `errno == EFAULT`, and `trust_system_` accepts only `0` or `1`
+(any other value returns `ZLINK_CONFIG_INVALID_ARGUMENT` with `EINVAL`). A handle that is not a raw
+socket fails with the handle errors of [§2 Thread safety](#2-thread-safety).
 
 **Returns:** `ZLINK_CONFIG_OK` on success; otherwise a `zlink_config_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
 
@@ -879,9 +886,10 @@ Binds the socket to a local endpoint. The endpoint string uses the format
 
 - `tcp://interface:port` or `tcp://*:port`
 - `inproc://name` (in-process)
-- `ipc://pathname` (inter-process, POSIX only)
+- `ipc://pathname` (inter-process; only in `ZLINK_HAVE_IPC` builds, not on Windows)
 - `ws://interface:port` (WebSocket)
-- `tls://interface:port` (TLS-encrypted TCP)
+- `wss://interface:port` (WebSocket over TLS; only in `ZLINK_HAVE_WSS` builds)
+- `tls://interface:port` (TLS-encrypted TCP; only in `ZLINK_HAVE_TLS` builds)
 
 A socket can be bound to multiple endpoints. For TCP, if port 0 is specified
 the system assigns an ephemeral port; use `ZLINK_OPT_LAST_ENDPOINT` to retrieve
@@ -1121,8 +1129,9 @@ A wait token ends only in three ways: (a) the WRITABLE record above; (b)
 explicit removal of the target (`zlink_disconnect_rid`, endpoint termination
 for that RID), which produces a WRITABLE record with
 `send_result == ZLINK_SEND_TERMINAL` and `send_terminal_errno == ENOENT`; (c)
-socket close or context termination, which produces a WRITABLE record with
-`ZLINK_SEND_TERMINAL` and the lifecycle errno (`ESHUTDOWN` or `ETERM`). A peer
+socket close or context termination, where Core ends the token internally with
+`ZLINK_SEND_TERMINAL` and the lifecycle errno (`ESHUTDOWN` or `ETERM`) and
+delivers no record. A peer
 weight dropping to 0 does not end a wait token. A NONE wait that has not
 returned completes synchronously: target removal returns
 `ZLINK_SUBMIT_NOT_FOUND` with `ENOENT`, peer-type rejection returns
@@ -1576,7 +1585,7 @@ connection, options, send/receive/completion functions, return values, and
   Core does not replay the application payload.
 - A wait token ends only through the WRITABLE record, explicit target removal
   (`ZLINK_SEND_TERMINAL` with `ENOENT`), or socket close and context
-  termination (`ZLINK_SEND_TERMINAL` with the lifecycle errno). A peer weight
+  termination (ended internally, no record delivered). A peer weight
   of 0 does not end a wait token.
 - Filling all 65,536 slots with a mix of SEND wait tokens and REQUEST
   completions makes the next SEND `DONTWAIT FINAL` return

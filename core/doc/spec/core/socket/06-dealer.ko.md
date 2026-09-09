@@ -130,7 +130,8 @@ pipe의 remote weight가 `0`으로 바뀌어도 `ZLINK_PART_FINAL`까지 남은 
 ## 4. Part sequence와 소유권
 
 `*_part` send 호출은 `ZLINK_PART_MORE`부터 `ZLINK_PART_FINAL`까지 하나의 multipart sequence를
-구성한다. 열린 sequence가 있는 동안 같은 handle에서 다른 send helper family를 섞을 수 없다.
+구성한다. 한 thread에 열린 sequence가 있는 동안 그 thread는 다른 send helper family를 섞을 수
+없다. sequence는 thread별로 독립이므로 다른 thread는 같은 handle에 자기 sequence를 따로 열 수 있다.
 
 초기화된 유효한 `part_`를 send API에 넘기면 함수는 성공과 실패 모두에서 그 message 내용을
 소비하고 길이 0인 초기화 상태로 둔다. 따라서 호출 결과와 관계없이 호출자가 전송 전 payload를
@@ -138,7 +139,7 @@ pipe의 remote weight가 `0`으로 바뀌어도 `ZLINK_PART_FINAL`까지 남은 
 보관해야 한다.
 
 각 send helper family는 성공한 중간 part를 `ZLINK_PART_FINAL`이 성공할 때까지 하나의 record로
-staging한다. 열린 sequence의 중간 또는 마지막 submit이 실패하면 Core는 이전에 staging한 part와
+임시로 보관한다. 열린 sequence의 중간 또는 마지막 submit이 실패하면 Core는 이전에 임시로 보관한 part와
 실패한 part를 원자적으로 폐기하고 sequence를 닫는다. peer에는 그 record의 어떤 part도 보이지
 않는다. 실패한 호출의 `part_`도 소비되며 다음 submit은 새 record의 첫 part로 시작한다.
 실패한 request submit은 completion ID `0`이고 completion과 context echo를 만들지 않는다.
@@ -243,8 +244,7 @@ typedef enum zlink_dealer_option_t {
 쓴 byte 수로 갱신된다. DEALER 전용이 아닌 HWM, reconnect와 timeout option은
 `zlink_set_option()`과 `zlink_get_option()`을 사용한다.
 
-`0..10000` 밖의 가중치는 거부하며 clamp하지 않는다. `0..100` 값의 의미는 범위를 넓히기 전과
-같다.
+가중치는 `0..10000` 범위의 절대값이다. 범위를 벗어난 값은 거부하며 범위 안으로 보정하지 않는다.
 
 공통 [`ZLINK_OPT_CONFLATE` 계약](README.ko.md#conflation)은 DEALER의 frame 단위 conflation
 활성화를 허용하지 않는다. `1` 설정은 `ZLINK_CONFIG_NOT_SUPPORTED`와 `ENOTSUP`이고, `0`은

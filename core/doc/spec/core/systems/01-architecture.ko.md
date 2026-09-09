@@ -53,8 +53,8 @@ thread — object와 command 및 message를 교환한다.
 
 [Context](../glossary.ko.md#context)는 I/O thread와 socket을 담는 최상위 container다. 그
 구현인 `ctx_t`는 socket slot, I/O thread, 닫힌 socket의 마무리 정리를 전담하는 reaper
-thread, endpoint registry와 monitor 및 timer callback에 사용하는 generic control
-runtime을 소유한다.
+thread, endpoint registry와 내부 monitor queue 전달·Auto HWM 재계산을 실행하는 context별
+generic control runtime을 소유한다. Generic timer는 process 전역 timer scheduler가 관리한다.
 
 Socket close는 termination command를 보내고 소유한 object가 자원을 해제할 때까지
 기다린다.
@@ -75,4 +75,9 @@ class는 endpoint parsing, connection 설정과 운영체제 I/O를 처리한다
 
 Poller는 socket, file descriptor와 generic timer readiness를 한 곳에서 통합한다. Socket
 monitor는 raw transport와 protocol 전이를 관찰한다. Control runtime은 socket I/O thread
-밖에서 monitor와 timer callback을 실행한다.
+밖에서 내부 monitor queue 전달과 Auto HWM 재계산을 실행한다. Generic timer scheduler는
+만료 횟수를 queue에 기록하며 application은 `zlink_timer_recv()`로 그 값을 받는다.
+
+<!-- zlink-nav:start -->
+[시스템 목차](README.ko.md) | [이전: 시스템 개요](README.ko.md) | [다음: Threading model](02-threading-model.ko.md)
+<!-- zlink-nav:end -->

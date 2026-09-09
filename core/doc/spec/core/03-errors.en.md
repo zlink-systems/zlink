@@ -264,8 +264,8 @@ Neither outcome applies the state partially.
 
 ```c
 #define ZLINK_VERSION_MAJOR 0
-#define ZLINK_VERSION_MINOR 13
-#define ZLINK_VERSION_PATCH 0
+#define ZLINK_VERSION_MINOR 17
+#define ZLINK_VERSION_PATCH 5
 
 #define ZLINK_MAKE_VERSION(major, minor, patch) \
   ((major) * 10000 + (minor) * 100 + (patch))
@@ -304,11 +304,13 @@ Returns a description string for an errno value.
 ZLINK_EXPORT const char *zlink_strerror(int errnum);
 ```
 
-The caller does not free or modify the returned pointer. For a ZLink extended errno, it
-points to a constant string inside the library. For any other errno, it points to the
-platform libc `strerror` result. Therefore, callers must not assume that the pointer
-remains valid after later calls or locale changes. Copy the string immediately if it must
-be retained.
+The caller does not free or modify the returned pointer. For `EFSM`, `ENOCOMPATPROTO`,
+`ETERM`, `EMTHREAD`, `EHOSTUNREACH`, and `ESTALE` it points to a constant string inside the
+library; on Windows, `ENOTSUP`, `EPROTONOSUPPORT`, `ENOBUFS`, `ENETDOWN`, `EADDRINUSE`,
+`EADDRNOTAVAIL`, `ECONNREFUSED`, and `EINPROGRESS` are library constants as well. For every
+other value — even one in the ZLink extended range — it points to the platform libc
+`strerror` result. Therefore, callers must not assume that the pointer remains valid after
+later calls or locale changes. Copy the string immediately if it must be retained.
 
 **Return value:** A pointer to the description string for `errnum`. Do not free or modify
 it; its lifetime follows the rules above.
@@ -360,11 +362,11 @@ transport and internal failure. Errno is unspecified after a successful call.
 | `ZLINK_SUBMIT_TERMINATED` | `ETERM`, `ESHUTDOWN` | Context or socket lifecycle ended |
 | `ZLINK_SUBMIT_INVALID_HANDLE` | `EFAULT` | The handle is `NULL` or has the wrong kind |
 | `ZLINK_SUBMIT_INVALID_ARGUMENT` | `EINVAL`, `EMSGSIZE` | Invalid pointer, count, metadata, or flags |
-| `ZLINK_SUBMIT_NOT_SUPPORTED` | `ENOTSUP` | The handle does not support the operation |
-| `ZLINK_SUBMIT_INVALID_STATE` | `EBUSY`, `ESTALE`, `EALREADY` | Socket lifecycle or request state error |
+| `ZLINK_SUBMIT_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | The handle does not support the operation |
+| `ZLINK_SUBMIT_INVALID_STATE` | `EFSM`, `EBUSY`, `ESTALE`, `EALREADY` | Socket lifecycle or request state error |
 | `ZLINK_SUBMIT_THREAD_VIOLATION` | `EDEADLK`, `EPERM`, `EMTHREAD` | Forbidden reentry or thread use |
 | `ZLINK_SUBMIT_OUT_OF_MEMORY` | `ENOMEM` | Required storage could not be acquired |
-| `ZLINK_SUBMIT_SEQ_EXHAUSTED` | `EOVERFLOW` | Operation sequence space is exhausted |
+| `ZLINK_SUBMIT_SEQ_EXHAUSTED` | `EOVERFLOW`, `EBUSY` on the request submit path | Operation sequence space is exhausted |
 | `ZLINK_SUBMIT_INTERNAL_ERROR` | preserved errno | Internal failure without another public category |
 
 Each socket document defines input ownership and socket-specific detailed conditions.
@@ -379,7 +381,7 @@ Each socket document defines input ownership and socket-specific detailed condit
 | `ZLINK_REQUEST_TERMINATED` | `ETERM`, `ESHUTDOWN` | Owner lifecycle ended |
 | `ZLINK_REQUEST_PROTOCOL_ERROR` | `EPROTO`, `ENOCOMPATPROTO` | Malformed or incompatible reply |
 | `ZLINK_REQUEST_INTERNAL_ERROR` | preserved errno | Internal failure without another terminal category |
-| `ZLINK_REQUEST_REJECTED` | `EACCES`, `ECONNREFUSED`, `ECANCELED` | Peer or admission rejection |
+| `ZLINK_REQUEST_REJECTED` | `EACCES`, `ECONNREFUSED`, `ECANCELED`, `EPROTOTYPE` | Peer, admission, or peer socket type rejection |
 | `ZLINK_REQUEST_CONFLICT` | `EEXIST`, `ESTALE` | Request correlation conflict (`EEXIST`) or transport pair [generation](glossary.en.md#generation) mismatch (`ESTALE`) |
 | `ZLINK_REQUEST_BUSY` | `EBUSY` | An active request lifecycle exists |
 | `ZLINK_REQUEST_NOT_CONNECTED` | `ENOTCONN`, `EHOSTUNREACH` | Terminal route is disconnected |
@@ -400,7 +402,7 @@ After a successful request submit, exactly one terminal result is delivered by
 | `ZLINK_RECV_BUSY` | `EBUSY` | Another receive mode is active |
 | `ZLINK_RECV_TERMINATED` | `ETERM` | Context terminated |
 | `ZLINK_RECV_INVALID_HANDLE` | `EFAULT` | The handle or a required output pointer is invalid |
-| `ZLINK_RECV_NOT_SUPPORTED` | `ENOTSUP` | The handle does not support this receive operation |
+| `ZLINK_RECV_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | The handle does not support this receive operation |
 | `ZLINK_RECV_INTERNAL_ERROR` | preserved errno | Internal failure without another public category |
 | `ZLINK_RECV_BUFFER_TOO_SMALL` | `ENOBUFS` | Caller output capacity is insufficient |
 | `ZLINK_RECV_INVALID_STATE` | `EINVAL`, `ESTALE`, `ESHUTDOWN` | Receive lifecycle state error |
@@ -414,7 +416,7 @@ topic length and leaves the queued record and other outputs unchanged.
 |---|---|---|
 | `ZLINK_HANDLER_INVALID_ARGUMENT` | `EINVAL` | A handler argument is invalid |
 | `ZLINK_HANDLER_BUSY` | `EBUSY` | An exclusive handler state already exists |
-| `ZLINK_HANDLER_NOT_SUPPORTED` | `ENOTSUP` | The handle does not support the handler operation |
+| `ZLINK_HANDLER_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | The handle does not support the handler operation |
 | `ZLINK_HANDLER_DEADLOCK` | `EDEADLK` | Forbidden handler reentry |
 | `ZLINK_HANDLER_INVALID_HANDLE` | `EFAULT` | The handle is invalid |
 | `ZLINK_HANDLER_INTERNAL_ERROR` | preserved errno | Internal failure without another public category |
@@ -429,11 +431,11 @@ topic length and leaves the queued record and other outputs unchanged.
 |---|---|---|
 | `ZLINK_BIND_INVALID_ARGUMENT` | `EINVAL` | The endpoint is invalid |
 | `ZLINK_BIND_ADDR_IN_USE` | `EADDRINUSE` | The endpoint is already in use |
-| `ZLINK_BIND_NOT_SUPPORTED` | `ENOTSUP`, `EPROTONOSUPPORT` | Unsupported transport |
+| `ZLINK_BIND_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP`, `EPROTONOSUPPORT` | Unsupported transport |
 | `ZLINK_BIND_INVALID_HANDLE` | `EFAULT` | The handle is invalid |
 | `ZLINK_BIND_INTERNAL_ERROR` | preserved errno | Bind failure without another public category |
 | `ZLINK_CONNECT_INVALID_ARGUMENT` | `EINVAL` | The endpoint or expected RID is invalid |
-| `ZLINK_CONNECT_NOT_SUPPORTED` | `ENOTSUP`, `EPROTONOSUPPORT` | Unsupported transport or operation |
+| `ZLINK_CONNECT_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP`, `EPROTONOSUPPORT` | Unsupported transport or operation |
 | `ZLINK_CONNECT_INVALID_HANDLE` | `EFAULT` | The handle is invalid |
 | `ZLINK_CONNECT_INTERNAL_ERROR` | preserved errno | Connect failure without another public category |
 | `ZLINK_CONNECT_NOT_FOUND` | `ENOENT` | No connection intent exists |
@@ -447,7 +449,7 @@ topic length and leaves the queued record and other outputs unchanged.
 |---|---|---|
 | `ZLINK_CONFIG_INVALID_HANDLE` | `EFAULT` | The handle or output pointer is invalid |
 | `ZLINK_CONFIG_INVALID_ARGUMENT` | `EINVAL`, `EMSGSIZE` | The option, size, name, or value is invalid |
-| `ZLINK_CONFIG_NOT_SUPPORTED` | `ENOTSUP` | Unsupported handle and option combination |
+| `ZLINK_CONFIG_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | Unsupported handle and option combination |
 | `ZLINK_CONFIG_INTERNAL_ERROR` | preserved errno | Internal failure without another public category |
 | `ZLINK_CONFIG_INVALID_STATE` | `EBUSY`, `ESTALE`, `EALREADY`, `ESHUTDOWN`, `ENOTCONN`, `ETIMEDOUT`, `EPROTO` | Socket lifecycle or terminal state rejected the change |
 | `ZLINK_CONFIG_NOT_FOUND` | `ENOENT` | No local query target exists |
@@ -466,8 +468,10 @@ topic length and leaves the queued record and other outputs unchanged.
 ### Layers
 
 - Internal execution paths continue to use `int errno`.
-- The public C API normalizes failures into **eight typed result enums by function
-  category**. The exact enum depends on the function category.
+- The public C API normalizes function-return failures into **eight typed result enums by
+  function category**. The exact enum depends on the function category. The SEND state of a
+  completion record uses a separate `zlink_send_complete_result_t` (`ZLINK_SEND_ADMITTED = 0`,
+  `ZLINK_SEND_TERMINAL = 202`).
   - `zlink_submit_result_t` — send / publish / request submit / reply submit
   - `zlink_request_result_t` — request completion record
   - `zlink_recv_result_t` — recv / subscribe / monitor recv / timer recv
@@ -479,7 +483,9 @@ topic length and leaves the queued record and other outputs unchanged.
     message lifecycle, timer config
 - Nonzero result enum values use nonoverlapping numeric ranges for each family
   (1-13, 101-113, 201-208, 301-306, 401-404, 501-505, 601-608, and 701-709).
-  Therefore, any nonzero `int` value always identifies its origin unambiguously.
+  However, `ZLINK_SEND_TERMINAL` (202) of `zlink_send_complete_result_t` shares its number
+  with `ZLINK_RECV_BUSY` (202), so identifying the origin of a nonzero `int` also requires
+  knowing whether the value is a function return or a completion record's `send_result`.
 - See [Result and errno mapping](#result-and-errno-mapping) above for the formal enum
   catalog.
 - The request completion queue passes internal errno through `from_errno` normalization
@@ -489,9 +495,9 @@ topic length and leaves the queued record and other outputs unchanged.
 The code is organized around three files.
 
 - [core/include/zlink_errno.h](https://github.com/zlink-systems/zlink/blob/main/core/include/zlink_errno.h)
-  defines public extended errno values.
-- [core/include/zlink_enum.h](https://github.com/zlink-systems/zlink/blob/main/core/include/zlink_enum.h)
-  defines public result enums.
+  defines the public extended errno values and the eight per-function-family result enums.
+- [core/include/zlink/socket/api.h](https://github.com/zlink-systems/zlink/blob/main/core/include/zlink/socket/api.h)
+  defines `zlink_send_complete_result_t` used by completion records.
 - [core/src/runtime/core/internal_errno.hpp](https://github.com/zlink-systems/zlink/blob/main/core/src/runtime/core/internal_errno.hpp)
   defines the internal errno catalog used by normalization helpers.
 

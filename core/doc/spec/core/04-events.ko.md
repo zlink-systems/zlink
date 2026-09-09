@@ -118,3 +118,7 @@ open 시 지정한 event mask)만으로 다음을 확인한다. 각 항목은 un
 - 서로 다른 connection I/O thread의 event 사이에는 전역 wall-clock order를 보장하지 않는다.
 
 Queue overflow와 status counter의 검증은 [Monitoring](06-monitoring.ko.md)이 소유한다.
+
+<!-- zlink-nav:start -->
+[Core 스펙 목차](README.ko.md) | [이전: Errors](03-errors.ko.md) | [다음: Polling](05-polling.ko.md)
+<!-- zlink-nav:end -->

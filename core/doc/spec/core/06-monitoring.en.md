@@ -90,11 +90,14 @@ Each event defines `value` as follows.
 
 | Event | `value` |
 |---|---|
+| `CONNECTED`, `LISTENING`, `ACCEPTED`, `CLOSED` | The OS transport descriptor converted to `uint64_t` |
+| `CONNECT_RETRIED` | The interval (ms) until the next reconnect attempt |
+| `CONNECT_DELAYED`, `BIND_FAILED`, `ACCEPT_FAILED`, `CLOSE_FAILED`, `HANDSHAKE_FAILED_NO_DETAIL` | The errno for that failure |
+| `MONITOR_STOPPED` | `0` |
 | `DISCONNECTED` | A `zlink_disconnect_reason_t` value |
 | `HANDSHAKE_FAILED_PROTOCOL` | A `zlink_protocol_error_t` value |
 | `PEER_WEIGHT_CHANGED` | The new `0..10000` weight |
 | `CONNECTION_READY` | The current count of public transports that are ready for this monitor source |
-| Other failure events | The errno for that failure |
 | Three receive-flow events | Owned by [Events](04-events.en.md) |
 
 Because the `value` of `CONNECTION_READY` is the current count of public ready transports, use
@@ -495,6 +498,9 @@ This function fills `status_out` according to [§6](#6-status-snapshot). `abi_ve
 Optional fields absent from `detail_flags` are zero. The pipe-total field group is internally
 consistent, and cross-consistency with the Auto HWM fields and flow counters is not guaranteed
 ([§6.3](#63-byte-and-pending-diagnostic-fields) owns the consistency scope and its mechanism).
+If the source socket is closed first, the monitor handle stays valid until it is closed, but this
+function returns `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP` — the caller drains the remaining events
+and then closes the monitor separately.
 
 **Returns:** A `zlink_config_result_t` value.
 

@@ -139,7 +139,8 @@ selected.
 ## 4. Part sequences and ownership
 
 `*_part` send calls form one multipart sequence from `ZLINK_PART_MORE` through `ZLINK_PART_FINAL`.
-While a sequence is open, another send helper family cannot be interleaved on the same handle.
+While a thread has a sequence open, that thread cannot interleave another send helper family.
+Sequences are per thread, so another thread can open its own sequence on the same handle.
 
 When a valid initialized `part_` is passed to a send API, the function consumes its message content
 on both success and failure and leaves it as an initialized zero-length message. Regardless of the
@@ -260,8 +261,8 @@ When calling `zlink_get_dealer_option()`, `*optvallen_` is the input capacity of
 success, it is updated to the number of bytes actually written. HWM, reconnect, and timeout options
 that are not DEALER-specific use `zlink_set_option()` and `zlink_get_option()`.
 
-A weight outside `0..10000` is rejected and is not clamped. Values in `0..100` retain the meaning
-they had before the range was widened.
+The weight is an absolute value in `0..10000`. A value outside that range is rejected, not adjusted
+into the range.
 
 The common [`ZLINK_OPT_CONFLATE` contract](README.en.md#conflation) does not allow DEALER to enable
 frame-level conflation. Setting `1` returns `ZLINK_CONFIG_NOT_SUPPORTED` with `ENOTSUP`; setting `0`

@@ -1,4 +1,8 @@
 
+<!-- zlink-nav:start -->
+[← TLS and WSS](05-tls-security.en.md) | [Core performance →](10-performance.en.md)
+<!-- zlink-nav:end -->
+
 # Monitoring raw sockets
 
 Socket monitors expose transport and protocol events without changing the data

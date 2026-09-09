@@ -20,3 +20,7 @@ internal procedures that produce that layout.
 |---|---|
 | [01. Protocol — ZMP v1.0](01-zmp.en.md) | The ZMP wire protocol byte layout and its internal encode/decode implementation |
 | [02. Protocol — RAW](02-raw.en.md) | The RAW wire format used by STREAM sockets, without ZMP framing |
+
+<!-- zlink-nav:start -->
+[Core Spec Index](../README.en.md) | [Previous: STREAM](../socket/08-stream.en.md) | [Next: ZMP Protocol Details](01-zmp.en.md)
+<!-- zlink-nav:end -->

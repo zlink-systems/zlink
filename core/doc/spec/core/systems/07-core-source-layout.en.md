@@ -11,12 +11,12 @@ title: "Core source layout"
 # Core Source Layout
 
 > **What this chapter defines** — an implementation description of how the raw runtime source
-> remaining in Core 0.13.0 is organized into directories and which include directions are allowed.
+> is organized into directories and which include directions are allowed.
 
 ## 1. Core Source Layout Overview
 
 This document explains the responsibilities of each directory containing the raw runtime source
-that remains in Core 0.13.0 and the allowed include directions between those directories. Its
+and the allowed include directions between those directories. Its
 intended audience is maintainers who modify Core source or decide where to place new files.
 
 This entire document is an **implementation description**, not a public contract. If the document
@@ -39,9 +39,9 @@ The source is divided into the following areas.
 core/
 |-- include/                public raw C ABI (root zlink.h, zlink_enum.h, zlink_errno.h)
 |   `-- zlink/              domain headers (common.h, core/, message/, socket/, eventing/)
-|-- src/api/                validation and C ABI facade (core, message, monitoring, socket)
-|-- src/runtime/sockets/    socket-type semantics
-|-- src/runtime/core/       context, session, pipe, and message runtime; poller, timer, and monitor foundations
+|-- src/api/                C ABI, validation, public multipart / request-reply / completion state, and the timer scheduler
+|-- src/runtime/sockets/    socket-type routing and pipe semantics
+|-- src/runtime/core/       context, session, pipe, and message runtime; poller and monitor foundations
 |-- src/runtime/engine/     ZMP and RAW engines
 |-- src/runtime/protocol/   ZMP and RAW wire codecs (encoder/decoder)
 |-- src/runtime/transports/ transport integration
@@ -56,9 +56,11 @@ implements the context, session, pipe, and message runtime.
 
 ## 3. Include Direction
 
-The public API facade in `src/api/` calls the socket-semantics layer, and the socket-semantics layer
-uses the runtime core's shared connection and pipe mechanisms. Engines and transports do not know
-the application meaning of socket types. Lower layers do not include headers from higher layers.
+The public entry points in `src/api/` call the socket-semantics layer. In the other direction, the
+socket runtime includes `api/socket` internal headers when it connects to the public multipart,
+request-reply, and completion state. The socket-semantics layer uses the runtime core's shared
+connection and pipe mechanisms. Engines and transports do not know the application meaning of
+socket types.
 
 MeshName, ChannelName, application mailboxes, Spot, Actor, Location Store, and service lifecycle
 state are concepts owned by Framework, the higher layer that provides application services on top
@@ -71,3 +73,7 @@ The root `zlink.h` includes only `zlink/common.h` and the domain headers for cor
 (`zlink/core/api.h`), message, socket, and eventing.
 Public headers do not include private headers from `src/`. Installed headers and the export manifest
 must match the [Core Runtime Boundary](../08-runtime-boundary.en.md).
+
+<!-- zlink-nav:start -->
+[Systems Index](README.en.md) | [Previous: Auto HWM](06-auto-hwm.en.md) | [Next: POSD Module Structure](08-posd-module-structure.en.md)
+<!-- zlink-nav:end -->

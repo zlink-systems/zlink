@@ -52,9 +52,12 @@ positive timeout expires returns the same result. A blocking call without
 `ZLINK_DONTWAIT` waits for the pipe to become writable within the send timeout
 and can publish successfully if it becomes writable while waiting.
 
-Setting the option to `1` couples the publisher to its slowest subscriber. If
-one pipe—the delivery queue for one subscriber—becomes full, delivery to every
-subscriber on the same socket stops. Request-reply sockets, rather than
+Setting the option to `1` couples the publisher to the slowest subscriber of
+that topic. Core checks the HWM only of the pipes (the delivery queue for one
+subscriber) whose filter matches the current topic; if any of them is full, the
+publish record is delivered to none of the matching subscribers and
+backpressure is returned. A full pipe of a subscriber whose filter does not
+match does not block this publish. Request-reply sockets, rather than
 PUB/SUB, provide reliable delivery that must not depend on subscriber speed.
 
 ## 3. Multipart Publishing and the Publish Record
@@ -131,8 +134,8 @@ Use these options with `zlink_set_pub_option()` and `zlink_get_pub_option()`.
 ```c
 typedef enum zlink_pub_option_t
 {
-    ZLINK_PUB_OPT_VERBOSE = 0x3301,            // Forward all subscription messages upstream (int; 0=off, positive=on (getter returns 0/1))
-    ZLINK_PUB_OPT_VERBOSER = 0x3302,           // Forward subscribe/unsubscribe messages upstream (int; 0=off, positive=on (getter returns 0/1))
+    ZLINK_PUB_OPT_VERBOSE = 0x3301,            // Observable on XPUB only: also surface subscribes for already-subscribed topics as events (int; 0=off, positive=on (getter returns 0/1))
+    ZLINK_PUB_OPT_VERBOSER = 0x3302,           // Observable on XPUB only: surface duplicate subscribes and every unsubscribe as events (int; 0=off, positive=on (getter returns 0/1))
     ZLINK_PUB_OPT_MANUAL = 0x3303,             // XPUB manual subscription management (int; 0=off, positive=on (getter returns 0/1))
     ZLINK_PUB_OPT_MANUAL_LAST_VALUE = 0x3304,  // Enable manual mode + deliver next publish only to the last subscription-event pipe (int; 0=off, positive=on (getter returns 0/1))
     ZLINK_PUB_OPT_NODROP = 0x3305,             // Return EAGAIN instead of dropping at HWM (int; 0=off, positive=on (getter returns 0/1), default 0)
@@ -146,10 +149,16 @@ typedef enum zlink_pub_option_t
 [§2 Delivery Loss and Backpressure](#2-delivery-loss-and-backpressure) describes
 the drop and backpressure behavior controlled by `ZLINK_PUB_OPT_NODROP`.
 Enabling `ZLINK_PUB_OPT_MANUAL_LAST_VALUE` also enables manual mode, and the
-next publish is delivered only to the pipe that produced the last subscription
-event. `ZLINK_PUB_OPT_APPROVE_SUBSCRIBE` and
+next publish is delivered only to the pipe of the subscription event the XPUB
+most recently dequeued. `ZLINK_PUB_OPT_APPROVE_SUBSCRIBE` and
 `ZLINK_PUB_OPT_REJECT_SUBSCRIBE` are write-only action options available only
-in manual mode. Querying either with `zlink_get_pub_option()` yields `EINVAL`.
+in manual mode; they apply the filter to the pipe of the most recently dequeued
+subscription event. If no event has been dequeued yet, or that pipe is already
+gone, both actions succeed without changing anything, and the next publish under
+`MANUAL_LAST_VALUE` is not restricted to a specific pipe. Querying either with
+`zlink_get_pub_option()` yields `EINVAL`. The verbose and manual options can be
+set and read on PUB as well, but PUB cannot receive subscription events, so
+their effect is observable only on XPUB.
 
 ## 7. Functions
 
@@ -263,7 +272,7 @@ one contract test.
 - Failure to allocate storage for the topic frame returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM`.
 
 **Part ownership**
-- The content of `part_` is consumed for every return result, including success, failure, and backpressure. A consumed `zlink_msg_t` can be reused only after it is initialized again.
+- The content of `part_` is consumed for every return result, including success, failure, and backpressure — after return `zlink_msg_size(part_)` is `0`, and that `zlink_msg_t` can be closed or used for the next publish as is, without initializing it again.
 
 **Publish-record atomicity**
 - If an intermediate or final part that passed pre-submit sequence validation fails in the send stage because of the HWM, a size limit, or another condition, the subscriber receives no part of that record, and the next `zlink_publish_part` call is treated as the first part of a new record.
@@ -287,3 +296,7 @@ one contract test.
 
 The [Auto HWM](../systems/06-auto-hwm.en.md#5-implementation-and-contract-test-verification-requirements)
 specification owns verification of auto HWM budget calculation and distribution.
+
+<!-- zlink-nav:start -->
+[Socket Index](README.en.md) | [Previous: PAIR](01-pair.en.md) | [Next: SUB](03-sub.en.md)
+<!-- zlink-nav:end -->

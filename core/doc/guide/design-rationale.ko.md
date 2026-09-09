@@ -34,7 +34,7 @@ zlink는 [libzmq](https://github.com/zeromq/libzmq) v4.3.5에서 출발해 **핵
 
 ### Zero-Copy — 작은 메시지는 inline, 큰 메시지는 참조 카운팅
 
-작은 메시지(64-bit에서 41바이트 이하)는 별도 힙 할당 없이 메시지 객체 안에 직접
+작은 메시지(29바이트 이하)는 별도 힙 할당 없이 메시지 객체 안에 직접
 저장한다(VSM, Very Small Message). 그보다 큰 메시지는 참조 카운팅으로 복사 없이 공유한다.
 
 **사용자에게 의미**: 작은 제어 메시지(틱, 하트비트, 짧은 명령)가 많은
@@ -50,18 +50,19 @@ API](09-message-api.ko.md)).
 스레드 사이 메시지 전달에 락 대신 CAS(Compare-And-Swap) 연산 기반 FIFO 큐(YPipe)를
 쓴다.
 
-**사용자에게 의미**: 핫 패스에서 락 경합이 없어 멀티코어 확장이 잘 된다. 대신
-소켓은 스레드 안전하지 않다 — 같은 소켓을 여러 스레드에서 동시에 다루지 않는 것이
-전제다([11 스레드 안전성](../spec/core/systems/04-thread-safety.ko.md)).
+**사용자에게 의미**: 핫 패스에서 락 경합이 없어 멀티코어 확장이 잘 된다. 공개 socket 핸들
+API는 thread-safe해서 여러 스레드가 같은 소켓에 동시에 `send`할 수 있고, 다만 한 소켓에서
+받는 쪽(receive)은 소비자 스레드 하나로 유지한다([11 Thread safety](11-thread-safety.ko.md)).
 
 ### True Async — Proactor 패턴
 
 Boost.Asio 기반으로 I/O **완료** 이벤트를 핸들러로 전달한다(Proactor). I/O를 직접
 폴링하지 않고 완료를 통지받는 구조다.
 
-**사용자에게 의미**: 콜백은 Context가 소유한 I/O 스레드에서 실행된다 — 콜백은 짧게
-유지하고 lock을 잡지 않으며, 그 안에서 핸들을 닫지 않는다. 다중 소켓을 한 루프에서
-poller로 묶는다(개념은 [02 Core API](02-core-api.ko.md), 언어 표면은 각
+**사용자에게 의미**: I/O 완료는 Context가 소유한 I/O 스레드 안에서 처리되고, 사용자 코드는
+그 스레드에서 실행되지 않는다 — Core는 application 콜백을 두지 않으며, application은 poller로
+readiness를 기다린 뒤 `*_recv_part()`·`zlink_completion_recv()`로 결과를 **pull**한다. 다중
+소켓을 한 루프에서 poller로 묶는다(개념은 [02 Core API](02-core-api.ko.md), 언어 표면은 각
 [바인딩 가이드](../../../bindings/doc/guide/README.ko.md)).
 
 ### Protocol Agnostic — Transport와 Protocol의 분리

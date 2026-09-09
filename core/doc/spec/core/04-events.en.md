@@ -136,3 +136,7 @@ event mask specified when opening a monitor. Each item maps to one unit test.
 
 [Monitoring](06-monitoring.en.md) owns verification of queue overflow and status
 counters.
+
+<!-- zlink-nav:start -->
+[Core Spec Index](README.en.md) | [Previous: Errors](03-errors.en.md) | [Next: Polling](05-polling.en.md)
+<!-- zlink-nav:end -->

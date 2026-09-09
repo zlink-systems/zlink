@@ -112,11 +112,11 @@ application ypipe 방향을 한 번만 등록하고 다음을 소유한다.
 - send·receive 역할과 profile 경계
 - manual HWM, current applied HWM과 accounted byte
 
-같은 inproc ypipe를 두 endpoint가 관찰해도 한 방향으로만 집계한다. 새 pipe pair의 방향별
-예약 규칙은 다음과 같다.
+같은 inproc ypipe를 두 endpoint가 관찰해도 같은 physical direction은 한 번만 집계한다. 새 pipe
+pair의 방향별 예약 규칙은 다음과 같다.
 
-DEALER-ROUTER single pipe도 Application 방향 한 개로 등록한다. 별도 Completion pipe가 없어도
-Application water-filling의 방향 수를 추가하거나 줄이지 않는다.
+DEALER-ROUTER single connection은 Application pipepair 하나, 즉 Application directional queue
+두 개로 등록한다. 별도 Completion pipe가 없으므로 completion directional queue는 추가하지 않는다.
 
 - application 방향: 역할별 하한을 원자적으로 예약한다. 두 방향을 모두 예약할 수 없으면 attach를 공개하기 전에 전체 예약을 거절하고 일부 방향만 등록하지 않는다.
   이 admission이 쓰는 budget은 **지금 예약하려는 위상**으로 계산한다 — 명시적 Core budget이
@@ -183,7 +183,7 @@ originQueueUsedBytes(queue) = physicalQueueAccountedBytes(queue)
 `total_planned_hwm_bytes`는 현재 application 방향 목표 합계이고
 `total_applied_hwm_bytes`는 live application 방향에 실제 적용된 HWM 합계이다.
 `core_queue_accounted_bytes`는 Core queue가 현재 보관하는 byte이고
-`current_accounted_bytes`는 그 값과 같다. 제거된 retained-credit 기능의 ABI 호환 field인
+`current_accounted_bytes`는 그 값과 같다. ABI-reserved field인
 `application_accounted_bytes`·`outstanding_application_lease_count`·
 `deferred_origin_credit_bytes`·`retired_queue_count`는 항상 0이다.
 
@@ -658,3 +658,7 @@ admission 결과, errno)만으로 관찰할 수 있는 동작이며, 각 항목�
 **snapshot 불변성**
 - `zlink_ctx_get_auto_hwm_budget_snapshot`이나 `zlink_ctx_reset_auto_hwm_budget_metrics`를 호출해도 같은 send sequence의 수락·거부 결과가 동일하다.
 - 지원하지 않는 `abi_version`은 `ENOTSUP`, 종료 중인 context는 `ETERM`으로 실패한다.
+
+<!-- zlink-nav:start -->
+[시스템 목차](README.ko.md) | [이전: Connection별 memory](05-connection-memory.ko.md) | [다음: Core source layout](07-core-source-layout.ko.md)
+<!-- zlink-nav:end -->

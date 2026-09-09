@@ -22,9 +22,10 @@ title: "I/O thread"
 
 각 I/O thread는 전용 **비동기 이벤트 루프**를 실행하며 다음을 수행한다.
 
-1. 등록된 [socket](../glossary.ko.md#socket)의 읽기/쓰기 준비 상태를 polling
+1. 등록된 [socket](../glossary.ko.md#socket)의 transport에 제출한 비동기 read·write의
+   completion handler 실행
 2. mailbox(thread 간 command 전달 채널)를 통해 수신된 command 처리
-3. timer 실행
+3. engine deadline에 사용하는 timer 실행
 
 이 문서는 I/O thread의 생성·수명이라는 관찰 가능한 동작과, 이벤트 루프·command 처리·thread
 할당의 내부 구현을 설명한다. 고수준 threading model(application thread, reaper thread,
@@ -172,7 +173,7 @@ I/O thread를 CPU 코어 수 이상으로 설정해도 이점이 없고 context-
 | `core/src/runtime/core/ctx_runtime_resources.cpp` | `start_io_threads_locked()`에서 thread 생성 |
 | `core/src/runtime/engine/asio/asio_poller.hpp/.cpp` | Boost ASIO 이벤트 루프, socket 모니터링 |
 | `core/src/runtime/core/poller_base.hpp` | Worker thread 기반 클래스 |
-| `core/src/runtime/core/mailbox.hpp` | Lock-free command queue + signaler |
+| `core/src/runtime/core/mailbox.hpp` | mutex로 multi-producer 삽입을 직렬화하는 command queue + signaler |
 
 ## 6. 구현 및 contract test 검증 요구
 
@@ -186,3 +187,7 @@ thread 목록과 내부 배치로 확인한다).
 - `zlink_ctx_new()`만 호출한 상태에서는 I/O thread가 없고, 첫 socket 생성이 thread를 시작한다.
 - 첫 socket 생성 전에 `ZLINK_IO_THREADS`를 N으로 설정하면 thread 이름이 `IO/0` … `IO/N-1`이다.
 - 할당 단위는 connection이다 — 한 socket의 여러 connection이 여러 I/O thread에 걸칠 수 있다.
+
+<!-- zlink-nav:start -->
+[시스템 목차](README.ko.md) | [이전: Threading model](02-threading-model.ko.md) | [다음: Thread safety](04-thread-safety.ko.md)
+<!-- zlink-nav:end -->

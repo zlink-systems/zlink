@@ -1,4 +1,8 @@
 
+<!-- zlink-nav:start -->
+[← zlink overview](01-overview.en.md) | [Raw Messaging Reliability →](reliability.en.md)
+<!-- zlink-nav:end -->
+
 # Choosing a socket pattern
 
 Choose the pattern from message direction, peer selection, and framing needs.

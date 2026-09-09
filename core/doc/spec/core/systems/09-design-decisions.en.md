@@ -61,3 +61,7 @@ payload frames.
 The poller reports readiness (the state in which it is worthwhile for a source to proceed with receive or
 send), the monitor reports transport/protocol transitions, and the generic timer reports time events. These
 three mechanisms do not interpret application payloads.
+
+<!-- zlink-nav:start -->
+[Systems Index](README.en.md) | [Previous: POSD Module Structure](08-posd-module-structure.en.md) | [Next: Core Hot Path](10-hot-path.en.md)
+<!-- zlink-nav:end -->

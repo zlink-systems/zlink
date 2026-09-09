@@ -37,7 +37,8 @@ Core는 part 단위 multipart API를 사용한다.
 - DEALER와 ROUTER request는 0이 아닌 completion ID를 반환한다. Reply와 terminal 결과는
   `zlink_completion_recv()`로 받고 각 record를 `zlink_completion_close()`로 해제한다.
 
-성공한 send가 message part를 소비하기 전까지 caller가 소유한다. 수신한 part는 정확히 한 번 close하거나
+`*_part` send에 전달한 message part는 성공·실패와 관계없이 Core가 소비한다 — 호출 뒤 그 part는
+빈 초기화 상태로 남으므로 다시 보내려면 호출 전에 복사해 둔다. 수신한 part는 정확히 한 번 close하거나
 move해야 한다.
 
 ## Eventing

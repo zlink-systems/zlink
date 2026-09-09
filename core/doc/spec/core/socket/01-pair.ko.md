@@ -40,9 +40,9 @@ PAIR socket은 message를 part 단위로 제출한다. 단일 part message는 `Z
 [multipart](../02-message.ko.md#4-multipart) message는 `ZLINK_PART_MORE`로 시작해 같은
 thread에서 같은 함수와 같은 `flags_`를 사용하여 `ZLINK_PART_FINAL`까지 이어서 전송한다.
 
-Core는 성공한 중간 part를 `ZLINK_PART_FINAL`이 성공할 때까지 하나의 묶음으로 staging한다.
+Core는 성공한 중간 part를 `ZLINK_PART_FINAL`이 성공할 때까지 하나의 묶음으로 임시로 보관한다.
 이 묶음을 record라 한다. 열린 sequence에서 중간 또는 마지막 submit 하나라도 실패하면 Core는
-이전에 staging한 part와 실패한 part를 원자적으로 폐기하고 sequence를 닫는다. peer에는 그
+이전에 임시로 보관한 part와 실패한 part를 원자적으로 폐기하고 sequence를 닫는다. peer에는 그
 record의 어떤 part도 보이지 않는다.
 
 ```mermaid
@@ -50,14 +50,14 @@ sequenceDiagram
     participant App as Application
     participant Core as Core
     App->>Core: zlink_send_part(part 1, ZLINK_PART_MORE)
-    Note over Core: 성공한 중간 part를 record로 staging
+    Note over Core: 성공한 중간 part를 record로 임시 보관
     App->>Core: zlink_send_part(part 2, ZLINK_PART_MORE)
     alt 마지막 submit까지 성공
         App->>Core: zlink_send_part(part 3, ZLINK_PART_FINAL)
         Note over Core: record가 완성된다
     else 중간 또는 마지막 submit 실패
         App--xCore: zlink_send_part(part N, ...) 실패
-        Note over Core: staging한 part와 실패한 part를<br/>원자적으로 폐기하고 sequence를 닫는다<br/>peer에는 그 record의 어떤 part도 보이지 않는다
+        Note over Core: 임시로 보관한 part와 실패한 part를<br/>원자적으로 폐기하고 sequence를 닫는다<br/>peer에는 그 record의 어떤 part도 보이지 않는다
     end
 ```
 
@@ -163,8 +163,8 @@ token으로 `ZLINK_COMPLETION_WRITABLE` record를 정확히 하나 발행한다.
 
 Wait token은 다음 중 하나로만 끝난다: 위 WRITABLE record, `zlink_disconnect()`로 endpoint를
 명시적으로 제거할 때의 WRITABLE record(`send_result == ZLINK_SEND_TERMINAL`,
-`send_terminal_errno == ENOENT`), socket close 또는 context 종료의 WRITABLE record
-(`ZLINK_SEND_TERMINAL`과 lifecycle errno). 물리 connection이 끊기는 것만으로는 token이 끝나지
+`send_terminal_errno == ENOENT`), 또는 socket close·context 종료 — 이때 Core는 token을 내부에서
+끝내며 record를 전달하지 않는다. 물리 connection이 끊기는 것만으로는 token이 끝나지
 않으며, 같은 logical route가 다시 연결되면 pipe attach가 WRITABLE record를 발행한다. `NONE
 FINAL`이 admission을 기다리는 동안 물리 connection이 끊겨도 terminal로 끝내지 않는다. Core는
 같은 PAIR logical route가 다시 연결되면 local queue admission을 다시 시도하며, `NONE`은
@@ -197,7 +197,7 @@ record의 admission이 아니다.
 
 **record 원자성**
 - 열린 multipart sequence에서 submit 하나가 실패하면 peer는 그 record의 어떤 part도 수신하지 않는다.
-- 실패한 호출의 `part_`를 포함해 성공·실패 모두에서 `part_`는 소비되며, 소비된 `zlink_msg_t`는 다시 초기화한 뒤에만 재사용할 수 있다.
+- 실패한 호출의 `part_`를 포함해 성공·실패 모두에서 `part_`는 소비된다 — 반환 뒤 `zlink_msg_size(part_)`는 `0`이고, 그 `zlink_msg_t`는 다시 초기화하지 않고 그대로 close하거나 다음 send에 쓸 수 있다.
 - 실패 후 다음 submit은 새 record의 첫 part로 시작한다 — 호출 전에 보관한 전체 record를 첫 part부터 다시 제출해 재시도할 수 있다.
 
 **Logical reconnect와 completion**
@@ -209,7 +209,7 @@ record의 admission이 아니다.
 - ID `0` 뒤 connection을 끊고 다시 연결해도 같은 application record가 replay되지 않으며,
   WRITABLE record 뒤의 재전송은 application이 다시 제출한 record다.
 - `zlink_disconnect()`로 endpoint를 제거하면 그 token은 `ZLINK_SEND_TERMINAL`+`ENOENT`인
-  WRITABLE record로 끝나고, socket close는 `ZLINK_SEND_TERMINAL`과 lifecycle errno로 끝난다.
+  WRITABLE record로 끝난다. socket close 뒤에는 그 token의 record를 받을 수 없다 — close가 token을 내부에서 끝내고 record를 전달하지 않는다.
 
 **Receive flow state 부재**
 - `zlink_socket_set_receive_flow_state()`는 PAIR socket에 대해 `errno == ENOTSUP`과 함께 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고, byte HWM·low water mark·transport backpressure 동작은 그대로 유지된다.
@@ -218,3 +218,7 @@ record의 admission이 아니다.
 
 소유권 이전, completion reservation 상한, close와 pull completion의 검증은
 [Socket 공통](README.ko.md)이 소유한다.
+
+<!-- zlink-nav:start -->
+[소켓 목차](README.ko.md) | [이전: 소켓 개요](README.ko.md) | [다음: PUB](02-pub.ko.md)
+<!-- zlink-nav:end -->

@@ -60,7 +60,12 @@ A Context's lifecycle proceeds in the order **create → use → shutdown signal
 - **Shutdown signal** — `zlink_ctx_shutdown` only signals that every
   blocking operation on sockets belonging to this Context should
   immediately unwind with `ETERM`. It is a non-blocking call that does not
-  release resources.
+  release resources. A `zlink_recv_part` unwound this way returns
+  `ZLINK_RECV_TERMINATED` and leaves the caller-initialized receive destination
+  and part flag unchanged. A `zlink_send_part` unwound this way returns
+  `ZLINK_SUBMIT_TERMINATED`, consumes the passed part like any other submit
+  failure (leaving it in the empty initialized state), and yields completion
+  ID `0`.
 - **Resource release** — `zlink_ctx_term` destroys the Context. This call
   may block until every socket created within the Context has closed. Each
   Context must be terminated exactly once.
@@ -244,8 +249,11 @@ Configures the context before or after sockets have been created. Refer to the
 option list in §4 for valid option names and their semantics. Setting
 `ZLINK_IO_THREADS` or `ZLINK_MAX_SOCKETS` succeeds at any time and is reflected
 by subsequent queries, but the actual I/O thread pool and socket-slot capacity
-are fixed once, using the values in effect when the first socket is created.
-Changing either value later does not change the runtime capacity.
+are fixed once, using the values in effect when the context runtime first
+starts. Changing either value later does not change the runtime capacity. The
+runtime starts with the first socket creation, but if the control runtime is
+requested earlier — for example by scheduling an Auto HWM recalculation with a
+positive debounce — it starts at that point instead.
 `ZLINK_CTX_OPT_AUTO_HWM_ENABLE` also applies to existing sockets: changing it
 schedules an automatic recalculation with a default debounce of 3000 ms. Call
 `zlink_ctx_auto_hwm_recalculate` if a new plan is needed before then. Only
@@ -284,8 +292,8 @@ ZLINK_EXPORT zlink_config_result_t zlink_ctx_set_data(void *context_,
 ```
 
 Each of the three Auto HWM byte options requires exactly `sizeof(uint64_t)`
-bytes. `0` means the input is unset, not unlimited. Every other size and the
-removed context option value `18` fail with `ZLINK_CONFIG_INVALID_ARGUMENT`.
+bytes. `0` means the input is unset, not unlimited. Every other size, and any
+context option value not in the enum above, fails with `ZLINK_CONFIG_INVALID_ARGUMENT`.
 Setting a valid value stores it and then schedules an Auto HWM recalculation.
 The setter still succeeds if the new budget cannot accommodate both the
 current manual HWM and the automatic minima. In that case, the planner does
@@ -327,6 +335,12 @@ a larger scratch buffer or a 4-byte one, fails with
 `ZLINK_CONFIG_INVALID_ARGUMENT` and `errno == EINVAL` instead of truncating or
 partially filling the value. The call writes the required `sizeof(uint64_t)` to
 `*optvallen_`; a successful call leaves the same size there.
+
+`ZLINK_THREAD_NAME_PREFIX` is also read through this function. Pass the output
+buffer capacity in `*optvallen_`. If the capacity is smaller than the stored
+prefix length, the call writes the required length to `*optvallen_` and fails
+with `ZLINK_CONFIG_INVALID_ARGUMENT` and `EINVAL`. Otherwise it copies the
+prefix bytes and updates `*optvallen_` to the copied length.
 
 **Returns:** `ZLINK_CONFIG_OK` on success; otherwise a
 `zlink_config_result_t` value. `zlink_errno()` retains the detailed internal
@@ -388,9 +402,14 @@ test.
 - Querying value `3` with `zlink_ctx_get` resolves to the read-only `ZLINK_SOCKET_LIMIT`; `ZLINK_THREAD_PRIORITY` cannot be queried through this path.
 - Attempting to set any of the three Auto HWM byte options through `zlink_ctx_set` produces `EINVAL` (only `zlink_ctx_set_data` may set them).
 - Querying an Auto HWM byte option through `zlink_ctx_get_data` with a size other than exactly `sizeof(uint64_t)` produces `EINVAL` and writes the required size into `*optvallen_`.
-- Writing the removed context option value `18` through `zlink_ctx_set_data` produces `ZLINK_CONFIG_INVALID_ARGUMENT`.
+- Writing a context option value that is not in the enum through `zlink_ctx_set_data` produces `ZLINK_CONFIG_INVALID_ARGUMENT`.
+- Querying `ZLINK_THREAD_NAME_PREFIX` through `zlink_ctx_get_data` with a capacity smaller than the stored prefix length produces `EINVAL` and writes the required length into `*optvallen_`.
 
 **Thread safety**
 - Every `zlink_ctx_*` function is safe to call concurrently from multiple threads. Only `zlink_ctx_term` is restricted to exactly once per context.
 
 Verification of Auto HWM budget and admission is owned by [Auto HWM](systems/06-auto-hwm.en.md#5-implementation-and-contract-test-verification-requirements).
+
+<!-- zlink-nav:start -->
+[Core spec index](README.en.md) | [Previous: Public-contract governance](00-public-contract-governance.en.md) | [Next: Message](02-message.en.md)
+<!-- zlink-nav:end -->

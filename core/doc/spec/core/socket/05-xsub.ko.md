@@ -16,8 +16,8 @@ title: "Socket — XSUB"
 
 XSUB는 구독 전달을 지원하는 확장 구독자 [socket](../glossary.ko.md#socket)이다. XSUB는
 SUB와 동일한 subscribe/unsubscribe 및 topic 수신 API를 지원하지만, 자체
-filter-match로 수신 message를 걸러내지 않는다. 연결된 XPUB가 XSUB의 구독 message를
-받아 upstream에서 filtering하며, XSUB는 실제로 들어온 message를 모두 application에
+filter-match로 수신 message를 걸러내지 않는다. 연결된 PUB 또는 XPUB가 XSUB의 구독 message를
+받아 publisher 쪽에서 filtering하며, XSUB는 실제로 들어온 message를 모두 application에
 전달한다.
 
 이 문서는 XSUB에서 구독을 등록·해제·조회하고 topic message를 part 단위로 수신하는 공개
@@ -37,9 +37,12 @@ XSUB의 구독은 topic filter 단위로 진행한다.
 
 1. Application이 [`zlink_set_subscription`](#zlink_set_subscription)으로 topic filter를
    등록한다. XSUB는 같은 filter를 중복 등록하면 reference count를 늘린다.
-2. 구독 message가 upstream으로 전달된다. 발행자 쪽 XPUB가 filter byte-prefix에
-   맞는 message만 선택하는 filtering을 담당한다. 구독 event를 관찰하고 수동으로
-   관리하는 계약은 [XPUB](04-xpub.ko.md)가 소유한다.
+2. XSUB는 local reference count를 먼저 갱신한 뒤 subscribe message를 연결된 각 upstream
+   pipe에 보낸다. 발행자 쪽 PUB 또는 XPUB가 filter byte-prefix에 맞는 message만 선택하는
+   filtering을 담당한다. 어떤 pipe가 `SNDHWM` 때문에 쓰기를 받지 못하면 그 pipe로 가는
+   subscribe message는 버려지지만 `zlink_set_subscription`은 성공한다 — 그 pipe에는 구독이
+   전달되지 않는다. 구독 event를 관찰하고 수동으로 관리하는 계약은 [XPUB](04-xpub.ko.md)가
+   소유한다.
 3. XSUB는 자체 filter-match를 적용하지 않고 실제로 들어온 모든 message를
    [`zlink_subscribe_part`](#zlink_subscribe_part)로 part 하나씩 수신하도록 전달한다.
 4. [`zlink_unset_subscription`](#zlink_unset_subscription)으로 등록한 구독의 reference
@@ -191,10 +194,10 @@ ZLINK_EXPORT zlink_recv_result_t zlink_subscribe_part (
 
 `topic_id_capacity_`가 topic 길이보다 작으면(길이 0 topic은 capacity 0으로 성공한다) 함수는
 `*topic_id_len_out_`에 필요한 topic 길이를 기록하고
-`ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. 이 경우 queue의 topic과
-payload를 소비하지 않으며 `topic_id_len_out_`을 제외한 output과 `part_out_`은
+`ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. 이 경우 Core는 그 message의 topic과
+payload를 내부에 보관하고, `topic_id_len_out_`을 제외한 output과 `part_out_`은
 변경하지 않는다. part 소유권도 이전하지 않으므로 호출자는 충분한 buffer로
-같은 message를 다시 수신할 수 있다. 용량이 0보다 큰데 `topic_id_buf_`가
+다시 호출해 보관된 같은 message를 받는다. 용량이 0보다 큰데 `topic_id_buf_`가
 NULL이면 queue를 검사하거나 소비하기 전에 `ZLINK_RECV_INVALID_HANDLE`과
 `EFAULT`를 반환하고 모든 output과 `part_out_`을 변경하지 않는다.
 
@@ -277,10 +280,15 @@ low water mark, transport backpressure는 그대로 유지된다. XSUB socket의
 
 **topic part 수신**
 - `zlink_subscribe_part`가 성공하면 topic의 binary byte가 NUL 없이 호출자 buffer에 복사되고 payload part의 소유권이 호출자에게 이전된다 — 받은 part는 `zlink_msg_close(part_out_)`로 정확히 한 번 닫는다. raw XSUB에서 `source_rid_out_`은 성공 시 `NULL`이다.
-- `topic_id_capacity_`가 topic 길이보다 작으면(길이 0 topic은 capacity 0으로 성공) `*topic_id_len_out_`에 필요한 topic 길이를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. queue의 topic과 payload는 소비되지 않고 `topic_id_len_out_`을 제외한 output과 `part_out_`은 변하지 않으며, part 소유권도 이전되지 않으므로 충분한 buffer로 같은 message를 다시 수신할 수 있다.
+- `topic_id_capacity_`가 topic 길이보다 작으면(길이 0 topic은 capacity 0으로 성공) `*topic_id_len_out_`에 필요한 topic 길이를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. Core가 그 message의 topic과 payload를 내부에 보관하고 `topic_id_len_out_`을 제외한 output과 `part_out_`은 변하지 않으며, part 소유권도 이전되지 않으므로 충분한 buffer로 다시 호출하면 같은 message를 수신한다.
+- topic frame 뒤에 payload part가 없는(topic frame에 `MORE`가 없는) record를 받으면 `ZLINK_RECV_INTERNAL_ERROR`와 `EPROTO`를 반환한다.
 - 용량이 0보다 큰데 `topic_id_buf_`가 NULL이면 queue를 검사하거나 소비하기 전에 `ZLINK_RECV_INVALID_HANDLE`과 `EFAULT`를 반환하고 모든 output과 `part_out_`은 변하지 않는다.
 - 한 multipart message는 첫 payload part부터 마지막 part까지 같은 thread에서 이 함수로 계속 수신하며, `*has_more_out_`은 다음 part가 있으면 `ZLINK_PART_MORE`, 마지막이면 `ZLINK_PART_FINAL`이다.
 
 **Receive flow state 없음**
 - `zlink_socket_set_receive_flow_state()`는 XSUB socket에 대해 `errno == ENOTSUP`과 함께 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고 아무것도 바꾸지 않는다 — byte HWM, low water mark와 transport backpressure는 그대로 유지된다.
 - XSUB socket의 monitor는 `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`를 설정하지 않고 `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, `ZLINK_EVENT_FLOW_STATE_STALE`를 발생시키지 않는다.
+
+<!-- zlink-nav:start -->
+[소켓 목차](README.ko.md) | [이전: XPUB](04-xpub.ko.md) | [다음: DEALER](06-dealer.ko.md)
+<!-- zlink-nav:end -->

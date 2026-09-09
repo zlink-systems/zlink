@@ -96,7 +96,7 @@ close 상태를 같은 word에 담으므로, 획득과 해제는 **다른 bit를
 
 내부 확인 조건: socket의 C2 상태를 읽고 쓰는 코드는 turn을 쥔 실행 주체 하나뿐이다.
 
-**구현(0.17.4).** turn과 공개 API 진입 상태는 하나의 상태어에 들어 있다.
+**현재 구현.** turn과 공개 API 진입 상태는 하나의 상태어에 들어 있다.
 
 | 비트 | 의미 |
 |---|---|
@@ -119,8 +119,9 @@ close 상태를 같은 word에 담으므로, 획득과 해제는 **다른 bit를
 - command drain은 batch 시작에서 turn을 얻어 mailbox dequeue, command 적용, 지연된 pipe 종료,
   readiness·submit progress 발행까지 같은 turn 안에서 끝낸다.
 - close는 turn을 기다리지 않는다. 실행 중 public API 수가 0일 때 close 비트를 CAS로 세운다.
-  poller 등록은 lifetime pin을 잡는 순간에만 admission을 얻고 즉시 반납하므로 등록이 close를
-  막지 않는다.
+  수가 0이 아니면 public poller의 짧은 readiness sample이 끝날 기회를 주기 위해 최대 1024회
+  backoff한 뒤에도 남아 있으면 `EBUSY`를 반환한다. poller 등록이 잡은 lifetime pin 자체는
+  admission을 즉시 반납하므로 등록이 close를 막지 않는다.
 
 ### 3.2 pipe의 두 끝과 그 사이
 
@@ -154,7 +155,7 @@ lock을 잡으면 안 된다.
 내부 확인 조건: pipe 끝의 값마다 writer가 하나이고, 그 값을 읽는 다른 주체가 있으면 발행돼
 있다.
 
-**구현(0.17.4).** 정상 송수신 경로에서 pipe가 잡는 mutex는 없다.
+**현재 구현.** 정상 송수신 경로에서 pipe가 잡는 mutex는 없다.
 
 - ypipe는 reader 하나·writer 하나의 SPSC이고 두 끝이 공유하는 것은 발행된 pointer 하나다.
   writer의 flush는 그 CAS가 "reader가 잠들었다"를 관측했을 때만 `activate_read` command를
@@ -195,7 +196,7 @@ poller와 command owner가 나눠 소비할 때 누가 먼저 소비하고 누�
 내부 확인 조건: 대기 등록과 알림 발행 사이에서 깨어남을 잃지 않는다 — 등록 뒤 잠들기 전에
 queue를 재확인하고, 알림은 등록을 본 뒤 발행한다.
 
-**구현(0.17.4).** producer는 command 하나당 mailbox lock을 한 번 잡는다. 그 구간에서 command
+**현재 구현.** producer는 command 하나당 mailbox lock을 한 번 잡는다. 그 구간에서 command
 기록과 flush, 관찰자 epoch·대기자 갱신, pending hint, 등록된 poller signal, Asio 예약 여부를
 모두 결정한다.
 
@@ -266,7 +267,7 @@ hot path에 새 lock을 들이는 변경은 이 질문의 답과 [§8](#8-검증
 | socket type이나 빈도를 이유로 command를 turn 밖에서 적용한다 | 공개 연산과 command가 같은 상태를 동시에 만진다 | [§3.1](#31-socket-turn) |
 | reader만 lock을 유지한 채 writer의 lock을 뺐다 | reader와 writer가 동기화되지 않는다 | [§3.2](#32-pipe의-두-끝과-그-사이): 값을 발행하거나 reader를 없앤다 |
 | 대기를 끝내 줄 주체가 필요로 하는 turn·lock을 쥔 채 기다린다 | 대기가 끝나지 않는다 | [§3.4](#34-대기와-재획득) |
-| 재진입하는 lock을 condition variable과 함께 쓴다 | 재진입 횟수가 둘 이상이면 대기가 mutex를 실제로 놓지 않아 진행이 멈춘다 | [§6](#6-lock의-종류·순서·memory-ordering): CV에는 재진입하지 않는 lock만 |
+| 재진입하는 lock을 condition variable과 함께 쓴다 | 재진입 횟수가 둘 이상이면 대기가 mutex를 실제로 놓지 않아 진행이 멈춘다 | [§6](#6-lock의-종류순서memory-ordering): CV에는 재진입하지 않는 lock만 |
 | message당 0회인 경로 때문에 hot path가 lock을 잡는다 | cold 경로가 message마다 비용을 강제한다 | [§3.2](#32-pipe의-두-끝과-그-사이): cold 경로 쪽만 잡는다 |
 
 lock을 semaphore나 `try_lock` 재시도로 바꾸는 것은 형태를 바꾸는 것이 아니다. 같은 자리에 같은

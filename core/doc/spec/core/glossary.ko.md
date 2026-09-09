@@ -48,7 +48,8 @@ Core가 memory 입력에서 계산해, application queue들의 HWM을 나눌 때
 
 ### effective cap
 
-Auto HWM budget에 씌우는 상한이다. profile 고정 cap과 활성 queue 하한 합계 중 큰 쪽이다.
+Auto HWM budget에 씌우는 상한이다. profile 고정 cap과 "활성 directional queue 수 × profile의
+data queue 최소값" 중 큰 쪽이다.
 
 ### water-filling
 
@@ -61,3 +62,7 @@ Terminal reply·error reply와 receive-flow control을 운반하며 HWM admissio
 계산에서 빠진다. DEALER-ROUTER에는 이 lane이 없고 reply가 single Application connection을
 사용한다. `zlink_completion_recv()`가 소비하는 socket-local completion queue는 이 physical
 connection과 다른 개념이다.
+
+<!-- zlink-nav:start -->
+[Core 스펙 목차](README.ko.md)
+<!-- zlink-nav:end -->

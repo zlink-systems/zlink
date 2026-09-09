@@ -133,8 +133,8 @@ write credit (peer drain, or pipe attach on reconnect), Core produces exactly on
 `peer_rid` set to the submitted RID. Credit on another RID does not wake this token. The caller
 resubmits its retained record to the same RID with `DONTWAIT`. Explicitly removing that RID with
 `zlink_disconnect_rid()` ends the token with a WRITABLE record carrying `ZLINK_SEND_TERMINAL` and
-`ENOENT`; socket close or context termination ends it with `ZLINK_SEND_TERMINAL` and the lifecycle
-errno. After ID `0`, Core does not replay the application payload.
+`ENOENT`. Socket close or context termination ends the token internally and delivers no record
+([§7](#7-completion-and-thread-safety)). After ID `0`, Core does not replay the application payload.
 [Socket Common](README.en.md#part-send-and-pending-admission) owns detailed ownership, result, and
 errno rules.
 
@@ -280,8 +280,9 @@ described above remain in effect. A STREAM socket monitor does not set
 
 ## 9. Peer routing ID and connection termination
 
-The public routing ID for STREAM is the 4-byte connection ID assigned by the
-server to each connection. Passing this ID to `zlink_disconnect_rid()` requests
+The public routing ID for STREAM is the 4-byte connection ID that Core assigns
+to each connection. Connections accepted through `zlink_bind()` and connections
+created through `zlink_connect()` both receive their ID from the local socket. Passing this ID to `zlink_disconnect_rid()` requests
 termination of that connection. A routing ID that is not 4 bytes fails as an
 invalid argument. [Socket Common](README.en.md) owns the contract for
 `zlink_disconnect_rid()` itself; [§10 Internals](#10-internals) explains how
@@ -317,7 +318,7 @@ sequenceDiagram
     participant Eng as Engine
     participant Tr as Transport
 
-    App->>SS: zlink_send(rid + data)
+    App->>SS: zlink_send_part_rid(rid, data)
     SS->>Eng: pipe_t::write()
     Eng->>Tr: raw_encode (passthrough bytes, no framing)
     Tr->>Tr: ws::write
@@ -572,3 +573,7 @@ item maps to one test.
 - Calling `zlink_disconnect_rid()` with a 4-byte routing ID requests
   termination of that connection; a routing ID that is not 4 bytes fails as an
   invalid argument.
+
+<!-- zlink-nav:start -->
+[Socket Index](README.en.md) | [Previous: ROUTER](07-router.en.md) | [Next: Protocol Overview](../protocol/README.en.md)
+<!-- zlink-nav:end -->

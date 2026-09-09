@@ -38,8 +38,8 @@ Core 소스는 다음 다섯 계층으로 나뉜다. 각 계층은 자기 행의
 
 | 계층 | 책임 |
 |---|---|
-| Public C API | argument를 검증하고, handle을 다루고, ownership을 표현하고, 내부 결과를 C API result로 변환한다 |
-| Socket semantics | socket type별로 routing을 정하고, multipart를 처리하고, request correlation을 관리한다 |
+| Public C API와 API integration | argument·handle·ownership·C API result 변환과 public multipart·request correlation·completion state를 관리한다 |
+| Socket semantics | socket type별 routing과 pipe 선택·전달을 관리하고 API integration의 request/reply state와 연결한다 |
 | Runtime core | context, session, pipe와 mailbox command를 다루고 lifecycle을 관리한다 |
 | Engine | ZMP·RAW framing과 handshake를 수행한다 |
 | Transport | TCP, WebSocket, IPC, inproc과 TLS로 I/O를 수행한다 |
@@ -61,3 +61,7 @@ service를 제공하는 상위 계층이다.
 - Framework가 private Core header나 symbol을 직접 사용한다.
 
 이 신호가 나타나면 새 helper를 추가하기 전에 책임 경계를 다시 검토한다.
+
+<!-- zlink-nav:start -->
+[시스템 목차](README.ko.md) | [이전: Source layout](07-core-source-layout.ko.md) | [다음: 설계 결정](09-design-decisions.ko.md)
+<!-- zlink-nav:end -->

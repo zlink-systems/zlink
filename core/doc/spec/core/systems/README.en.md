@@ -33,3 +33,7 @@ together with its internal implementation.
 | [09. Core Design Decisions](09-design-decisions.en.md) | Key design decisions |
 | [10. Core Hot Path](10-hot-path.en.md) | Scope of the per-message path, forbidden operations, state caches, performance gates |
 | [11. Synchronization Model](11-synchronization-model.en.md) | Ownership units (socket turn, pipe ends, mailbox), when a lock is allowed and forbidden forms, lock inventory |
+
+<!-- zlink-nav:start -->
+[Core Spec Index](../README.en.md) | [Previous: RAW (STREAM) Protocol Details](../protocol/02-raw.en.md) | [Next: Architecture](01-architecture.en.md)
+<!-- zlink-nav:end -->

@@ -19,3 +19,7 @@ title: "Protocol"
 |---|---|
 | [01. Protocol — ZMP v1.0](01-zmp.ko.md) | ZMP wire protocol의 byte 배치와 그 encode/decode 내부 구현 |
 | [02. Protocol — RAW](02-raw.ko.md) | STREAM socket이 사용하는, ZMP framing 없는 RAW wire format |
+
+<!-- zlink-nav:start -->
+[Core 스펙 목차](../README.ko.md) | [이전: STREAM](../socket/08-stream.ko.md) | [다음: ZMP 프로토콜 상세](01-zmp.ko.md)
+<!-- zlink-nav:end -->

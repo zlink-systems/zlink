@@ -1,4 +1,8 @@
 
+<!-- zlink-nav:start -->
+[← Socket options](12-socket-options.en.md) | [Core Glossary →](glossary.en.md)
+<!-- zlink-nav:end -->
+
 # ZMP Protocol
 
 > **What this chapter answers** — it introduces the concept of the wire

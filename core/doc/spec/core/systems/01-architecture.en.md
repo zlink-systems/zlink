@@ -57,7 +57,9 @@ each component exposes.
 [Context](../glossary.en.md#context) is the top-level container for I/O threads
 and sockets. Its implementation, `ctx_t`, owns socket slots, I/O threads, a
 reaper thread dedicated to the final cleanup of closed sockets, the endpoint
-registry, and the generic control runtime used for monitor and timer callbacks.
+registry, and a per-context generic control runtime that drives internal monitor
+queue delivery and Auto HWM recalculation. Generic timers are managed by a
+process-global timer scheduler.
 
 Socket closure sends a termination command and waits until the owned objects
 release their resources.
@@ -80,5 +82,11 @@ connection establishment, and operating-system I/O.
 
 The poller combines readiness for sockets, file descriptors, and generic
 timers in one place. The socket monitor observes raw transport and protocol
-transitions. The control runtime executes monitor and timer callbacks outside
-the socket I/O threads.
+transitions. The control runtime drives internal monitor queue delivery and
+Auto HWM recalculation outside the socket I/O threads. The generic timer
+scheduler records fire counts in a queue, and the application reads them with
+`zlink_timer_recv()`.
+
+<!-- zlink-nav:start -->
+[Systems Index](README.en.md) | [Previous: Systems Overview](README.en.md) | [Next: Threading Model](02-threading-model.en.md)
+<!-- zlink-nav:end -->

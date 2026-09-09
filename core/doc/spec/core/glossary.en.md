@@ -52,8 +52,8 @@ A version number that distinguishes a recreated queue in the same direction, or 
 
 ### effective cap
 
-The upper bound applied to the Auto HWM budget. It is the greater of the profile's fixed cap and the sum of the
-minimums for active queues.
+The upper bound applied to the Auto HWM budget. It is the greater of the profile's fixed cap and
+"number of active directional queues × the profile's data-queue minimum".
 
 ### water-filling
 
@@ -67,3 +67,7 @@ carries terminal replies, error replies, and receive-flow control and is exclude
 Application budget calculation. DEALER-ROUTER has no such lane; replies use its single Application
 connection. This physical connection is distinct from the socket-local completion queue consumed by
 `zlink_completion_recv()`.
+
+<!-- zlink-nav:start -->
+[Core Spec Index](README.en.md)
+<!-- zlink-nav:end -->
