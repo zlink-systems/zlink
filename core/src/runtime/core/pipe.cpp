@@ -806,28 +806,6 @@ uint64_t zlink::pipe_t::get_bytes_read () const
     return _published_bytes_read.load (std::memory_order_relaxed);
 }
 
-void zlink::pipe_t::record_peer_weight (uint64_t connection_id_,
-                                        uint32_t weight_)
-{
-    _peer_weight.store (weight_, std::memory_order_release);
-    _peer_weight_connection_id.store (connection_id_,
-                                      std::memory_order_release);
-}
-
-bool zlink::pipe_t::record_peer_weight_if_current (uint64_t connection_id_,
-                                                   uint32_t weight_)
-{
-    scoped_fast_lock_t generation_lock (_transport_lifetime->transport_sync);
-    if (weight_ > max_peer_weight
-        || _transport_lane != transport_lane_application
-        || (_transport_pair_id != 0 && connection_id_ == 0)
-        || get_transport_connection_id () != connection_id_
-        || !is_lifecycle_active ())
-        return false;
-    record_peer_weight (connection_id_, weight_);
-    return true;
-}
-
 bool zlink::pipe_t::peer_weight (uint32_t *weight_out_) const
 {
     const uint64_t connection_id =
@@ -2014,7 +1992,9 @@ void zlink::pipe_t::process_peer_weight (uint32_t weight_,
     // The exact pipe owns the latest value even before bind/xattach installs
     // its socket sink. A later scheduler attachment reads the same generation-
     // scoped record, so owner-command ordering cannot lose pre-admission state.
-    record_peer_weight (connection_id_, weight_);
+    _peer_weight.store (weight_, std::memory_order_release);
+    _peer_weight_connection_id.store (connection_id_,
+                                      std::memory_order_release);
     if (_sink)
         _sink->peer_weight_received (this, weight_);
 }

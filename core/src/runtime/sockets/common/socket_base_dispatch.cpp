@@ -423,12 +423,6 @@ int zlink::socket_base_t::xpeer_command (msg_t *msg_, pipe_t *pipe_)
     if (!pipe_)
         return 1;
     const uint64_t connection_id = pipe_->get_transport_connection_id ();
-    // Cache at the physical decode boundary before a following direct RID can
-    // publish this route. The owner command remains the only dynamic scheduler
-    // mutation path; this record only supplies its generation-tagged initial
-    // value to a not-yet-visible scheduler entry.
-    if (!pipe_->record_peer_weight_if_current (connection_id, weight))
-        return 1;
     //  Network decoding runs on an I/O thread. Reuse the same exact-pipe
     //  owner command as inproc so every scheduler mutation, pending-state
     //  promotion and monitor event is serialized by the socket mailbox.
@@ -445,7 +439,7 @@ void zlink::socket_base_t::peer_weight_received (pipe_t *pipe_,
 
 int zlink::socket_base_t::accept_peer_weight (pipe_t *pipe_, uint32_t weight_)
 {
-    if (!pipe_ || weight_ > max_peer_weight
+    if (!pipe_ || !pipe_->is_lifecycle_active () || weight_ > max_peer_weight
         || pipe_->get_transport_lane () != transport_lane_application)
         return 1;
 
@@ -468,8 +462,7 @@ int zlink::socket_base_t::accept_peer_weight (pipe_t *pipe_, uint32_t weight_)
         const transport_pairs_t::const_iterator it =
           _transport_pairs.find (key);
         apply_now = it != _transport_pairs.end () && it->second.ready
-                    && it->second.application == pipe_
-                    && pipe_->is_lifecycle_active ();
+                    && it->second.application == pipe_;
     }
     return apply_now ? apply_peer_weight (pipe_, weight_) : 1;
 }
@@ -486,48 +479,14 @@ int zlink::socket_base_t::apply_peer_weight (pipe_t *pipe_, uint32_t weight_)
     return 1;
 }
 
-bool zlink::socket_base_t::recorded_peer_weight_ready_locked (
-  pipe_t *pipe_, uint32_t *weight_out_) const
-{
-    if (!pipe_ || pipe_->get_transport_lane () != transport_lane_application)
-        return false;
-
-    const uint64_t pair_id = pipe_->get_transport_pair_id ();
-    if (pair_id != 0) {
-        const uint64_t generation =
-          pipe_->get_transport_pair_generation ();
-        scoped_lock_t pair_lock (_transport_pairs_sync);
-        const transport_pairs_t::const_iterator it =
-          _transport_pairs.find (transport_pair_key_t (pair_id, generation));
-        if (generation == 0 || it == _transport_pairs.end ()
-            || !it->second.ready || it->second.application != pipe_
-            || !pipe_->is_lifecycle_active ())
-            return false;
-    }
-
-    uint32_t weight = 100;
-    if (!pipe_->peer_weight (&weight))
-        return false;
-    if (weight_out_)
-        *weight_out_ = weight;
-    return true;
-}
-
-void zlink::socket_base_t::initialize_recorded_peer_weight (pipe_t *pipe_)
+void zlink::socket_base_t::apply_recorded_peer_weight (pipe_t *pipe_)
 {
     if (!pipe_)
         return;
     scoped_fast_lock_t generation_lock (pipe_->transport_sync ());
     uint32_t weight = 100;
-    if (recorded_peer_weight_ready_locked (pipe_, &weight))
-        initialize_peer_weight (pipe_, weight);
-}
-
-void zlink::socket_base_t::initialize_peer_weight (pipe_t *pipe_,
-                                                   uint32_t weight_)
-{
-    LIBZLINK_UNUSED (pipe_);
-    LIBZLINK_UNUSED (weight_);
+    if (pipe_->peer_weight (&weight))
+        (void) accept_peer_weight (pipe_, weight);
 }
 
 void zlink::socket_base_t::broadcast_local_peer_weight ()

@@ -124,12 +124,10 @@ class router_t : public routing_socket_base_t
     //  Receive peer id and update lookup map. The caller finishes returned
     //  pipe/cross-component actions only after dropping the route mutex.
     bool identify_peer (pipe_t *pipe_, bool locally_initiated_,
-                        route_adoption_actions_t *actions_,
-                        uint32_t initial_weight_);
+                        route_adoption_actions_t *actions_);
     bool adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
                                 bool locally_initiated_,
-                                route_adoption_actions_t *actions_,
-                                uint32_t initial_weight_);
+                                route_adoption_actions_t *actions_);
     void finish_route_adoption (pipe_t *adopted_pipe_,
                                 route_adoption_actions_t *actions_);
     bool duplicate_pipe_should_replace (const out_pipe_t &existing_outpipe_,
@@ -159,8 +157,6 @@ class router_t : public routing_socket_base_t
       uint64_t *transport_connection_id_out_,
       uint64_t *route_incarnation_id_out_, bool allow_unpaired_) const;
     int apply_peer_weight (pipe_t *pipe_, uint32_t weight_) ZLINK_OVERRIDE;
-    void initialize_peer_weight (pipe_t *pipe_,
-                                 uint32_t weight_) ZLINK_OVERRIDE;
     std::mutex *route_lifecycle_mutex () const ZLINK_OVERRIDE
     {
         return &_out_pipes_sync;
