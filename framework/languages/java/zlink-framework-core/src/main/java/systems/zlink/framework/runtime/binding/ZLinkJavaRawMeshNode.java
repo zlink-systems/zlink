@@ -1861,7 +1861,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         }
         frames.add(wire.encodeFrameworkMultipartFrame(parts));
         ZLinkServiceOperationRegistry.Operation<ZLinkBackendReceived> operation =
-            operations.register(timeout);
+            operations.register(operationId, timeout);
         requestApplication(targetNodeRid, frames, timeout)
             .whenComplete((replyFrames, failure) -> completeSpotRequest(
                 operation.id(),
@@ -2861,7 +2861,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                     ownerLeaseGeneration)),
             wire.encodeFrameworkMultipartFrame(parts));
         ZLinkServiceOperationRegistry.Operation<ZLinkBackendReceived> operation =
-            operations.register(timeout);
+            operations.register(operationId, timeout);
         port.request(
                 requireStarted(),
                 actor.nodeRid(),

@@ -45,6 +45,15 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     public <T> Operation<T> register(Duration timeout) {
+        return register(timeout, null);
+    }
+
+    /** Registers the full identity already carried by the service wire. */
+    public <T> Operation<T> register(UUID operationId, Duration timeout) {
+        return register(timeout, Objects.requireNonNull(operationId, "operationId"));
+    }
+
+    private <T> Operation<T> register(Duration timeout, UUID suppliedId) {
         Objects.requireNonNull(timeout, "timeout");
         if (timeout.isNegative() || timeout.isZero()) {
             throw new IllegalArgumentException("timeout must be positive");
@@ -64,15 +73,22 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             if (entries.size() >= maxPendingOperations) {
                 throw capacityExceeded();
             }
+            id = suppliedId;
+            if (id == null) {
+                do {
+                    id = UUID.randomUUID();
+                } while (id.getMostSignificantBits() == 0
+                    && id.getLeastSignificantBits() == 0
+                    || entries.containsKey(id));
+            } else if (id.getMostSignificantBits() == 0
+                && id.getLeastSignificantBits() == 0
+                || entries.containsKey(id)) {
+                throw new IllegalArgumentException("operation identity is zero or already pending");
+            }
             entry = new Entry<>();
             if (!completions.tryReserve(entry)) {
                 throw capacityExceeded();
             }
-            do {
-                id = UUID.randomUUID();
-            } while (id.getMostSignificantBits() == 0
-                && id.getLeastSignificantBits() == 0
-                || entries.containsKey(id));
             entry.id = id;
             entry.completion.cancellation(() -> cancel(entry.id, entry));
             entries.put(id, entry);
@@ -82,7 +98,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 entry.deadline = scheduler.schedule(
                     () -> completeExceptionally(
                         operationId,
-                        entry.timeoutFailure),
+                        new TimeoutException("service operation timed out")),
                     timeoutNanos,
                     TimeUnit.NANOSECONDS);
             } catch (RuntimeException schedulingFailure) {
@@ -255,8 +271,6 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         private static final int CANCELLATION = 3;
 
         private final OperationFuture<T> completion = new OperationFuture<>();
-        private final TimeoutException timeoutFailure =
-            new TimeoutException("service operation timed out");
         private UUID id;
         private volatile ScheduledFuture<?> deadline;
         private Entry<?> activePrevious;
