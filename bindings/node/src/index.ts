@@ -57,7 +57,9 @@ import type { BaseSocket, Message } from './zlink/contracts';
 
 configureMessageNativeOperations({
   allocate: (size) => requireNative().messageAllocate(size),
-  close: (nativeMessage, data) => requireNative().messageFrameClose(nativeMessage, data),
+  close: (nativeMessage, data) => data === undefined
+    ? requireNative().messageFrameClose(nativeMessage)
+    : requireNative().messageFrameClose(nativeMessage, data),
   copy: (nativeMessage) => requireNative().messageFrameCopy(nativeMessage),
   data: (nativeMessage) => requireNative().messageFrameData(nativeMessage),
   copyData: (nativeMessage) => requireNative().messageFrameCopyData(nativeMessage),
