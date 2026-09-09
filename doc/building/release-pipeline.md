@@ -14,11 +14,11 @@ Every release runs in GitHub Actions; nothing is published from a local machine.
 | Core (`core/`) | 5 native archives, source tarball, checksums, provenance | GitHub Release `core/vX.Y.Z` | `build.yml` | create the `core/vX.Y.Z` tag, then `workflow_dispatch` on that ref | `GITHUB_TOKEN` |
 | Core (Conan) | recipe | ConanCenter | none (PR) | PR to `conan-io/conan-center-index` `recipes/zlink/` | GitHub account |
 | Core (vcpkg) | port | microsoft/vcpkg | none (PR) | PR to `microsoft/vcpkg` `ports/zlink/` + `versions/` | GitHub account |
-| Binding C++ | source archive | GitHub Release `cpp/vX.Y.Z` | `bindings-release.yml` | `cpp/v*` tag or dispatch | `GITHUB_TOKEN` |
+| Binding C++ | source archive (all of `bindings/cpp` plus the root LICENSE; the vcpkg port and the Conan recipe build it against the installed Core package) | GitHub Release `cpp/vX.Y.Z` | `bindings-release.yml` | `cpp/v*` tag or dispatch | `GITHUB_TOKEN` |
 | Binding Node | `@zlink-systems/zlink` (with linux-x64 prebuild) | npm | `bindings-release.yml` | `node/v*` tag or dispatch | npm Trusted Publishing (OIDC, provenance) |
 | Binding Java | `systems.zlink:zlink`, `zlink-ext-netty` | Maven Central, GitHub Packages | `bindings-release.yml` | `java/v*` tag or dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` (GPG) |
 | Binding .NET | `Zlink` nupkg (+snupkg) | nuget.org | `release-dotnet.yml` (target `binding`) | `dotnet/v*` tag or dispatch | nuget Trusted Publishing (`NuGet/login`, policy `zlink-dotnet-release`) |
-| Framework C++ | source archive + sha256 | GitHub Release `framework/vA.B.C` | `framework-release.yml` | `framework/v*` tag or dispatch | `GITHUB_TOKEN` |
+| Framework C++ | source archive + sha256 (`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol headers verified with `--check`) | GitHub Release `framework/vA.B.C` | `framework-release.yml` | `framework/v*` tag or dispatch | `GITHUB_TOKEN` |
 | Framework Node | 8 `@zlink-systems/*` packages | npm | `framework-release.yml` | same | npm Trusted Publishing (registered per package) |
 | Framework JVM | 13 `systems.zlink:zlink-framework-*` artifacts (incl. Kotlin) | Maven Central | `framework-release.yml` | same | `MAVEN_CENTRAL_*`, `SIGNING_*` |
 | Framework .NET | 9 packages (`Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector`, ...) | nuget.org | `release-dotnet.yml` (target `framework`) | `framework/v*` tag or dispatch | nuget Trusted Publishing |

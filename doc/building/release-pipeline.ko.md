@@ -14,11 +14,11 @@
 | Core (`core/`) | 플랫폼별 native archive 5종, source tarball, checksums, provenance | GitHub Release `core/vX.Y.Z` | `build.yml` | `core/vX.Y.Z` 태그를 만든 뒤 그 ref로 `workflow_dispatch` | `GITHUB_TOKEN` |
 | Core (Conan) | recipe | ConanCenter | 없음(PR) | `conan-io/conan-center-index`에 `recipes/zlink/` PR | GitHub 계정 |
 | Core (vcpkg) | port | microsoft/vcpkg | 없음(PR) | `microsoft/vcpkg`에 `ports/zlink/` + `versions/` PR | GitHub 계정 |
-| Binding C++ | source archive | GitHub Release `cpp/vX.Y.Z` | `bindings-release.yml` | `cpp/v*` 태그 또는 dispatch | `GITHUB_TOKEN` |
+| Binding C++ | source archive(`bindings/cpp` 전체 + root LICENSE; vcpkg port·Conan recipe가 설치된 Core package에 맞춰 빌드) | GitHub Release `cpp/vX.Y.Z` | `bindings-release.yml` | `cpp/v*` 태그 또는 dispatch | `GITHUB_TOKEN` |
 | Binding Node | `@zlink-systems/zlink` (linux-x64 prebuild 포함) | npm | `bindings-release.yml` | `node/v*` 태그 또는 dispatch | npm Trusted Publishing(OIDC, provenance) |
 | Binding Java | `systems.zlink:zlink`, `zlink-ext-netty` | Maven Central, GitHub Packages | `bindings-release.yml` | `java/v*` 태그 또는 dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*`(GPG) |
 | Binding .NET | `Zlink` nupkg (+snupkg) | nuget.org | `release-dotnet.yml` (target `binding`) | `dotnet/v*` 태그 또는 dispatch | nuget Trusted Publishing(`NuGet/login`, 정책 `zlink-dotnet-release`) |
-| Framework C++ | source archive + sha256 | GitHub Release `framework/vA.B.C` | `framework-release.yml` | `framework/v*` 태그 또는 dispatch | `GITHUB_TOKEN` |
+| Framework C++ | source archive + sha256(`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol header를 `--check`로 검증) | GitHub Release `framework/vA.B.C` | `framework-release.yml` | `framework/v*` 태그 또는 dispatch | `GITHUB_TOKEN` |
 | Framework Node | `@zlink-systems/*` 8개 | npm | `framework-release.yml` | 위와 동일 | npm Trusted Publishing(패키지별 등록) |
 | Framework JVM | `systems.zlink:zlink-framework-*` 13개(Kotlin 포함) | Maven Central | `framework-release.yml` | 위와 동일 | `MAVEN_CENTRAL_*`, `SIGNING_*` |
 | Framework .NET | `Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector` 등 9개 | nuget.org | `release-dotnet.yml` (target `framework`) | `framework/v*` 태그 또는 dispatch | nuget Trusted Publishing |
