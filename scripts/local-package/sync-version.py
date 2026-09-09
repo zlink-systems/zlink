@@ -316,6 +316,12 @@ def update_framework_node_lock(source: str, version: str) -> str:
 
 
 def synchronize_framework(sync: Synchronizer, version: str) -> None:
+    sync.regex(
+        "framework/languages/cpp/CMakeLists.txt",
+        rf"(project\(zlink_framework_cpp VERSION )(?P<version>{SEMVER})( LANGUAGES C CXX\))",
+        lambda match, version=version: replace_version_group(match, version),
+        1,
+    )
     for field in FRAMEWORK_SCALAR_FIELDS:
         sync.regex(
             field.relative,
