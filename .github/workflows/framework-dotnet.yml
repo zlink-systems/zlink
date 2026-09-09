@@ -113,7 +113,8 @@ jobs:
         run: |
           # The released binding package carries the linux-x64 runtime only; the
           # other RIDs run the tests against the verified Core release archive.
-          core_version="${{ steps.packages.outputs.binding_version }}"
+          # The binding package version and the Core release it embeds differ; VERSION owns Core.
+          core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
           core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
             --version "${core_version}" \
             --platform "${{ matrix.target.core_platform }}" \

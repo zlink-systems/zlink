@@ -111,8 +111,11 @@ jobs:
         shell: bash
         run: |
           binding_version=$(node -p "require('./framework/languages/node/packages/framework/package.json').dependencies['@zlink-systems/zlink']")
+          # The binding package version and the Core release it embeds differ
+          # (binding 0.17.6 ships Core 0.17.5); the Core version is owned by VERSION.
+          core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
           core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
-            --version "${binding_version}" \
+            --version "${core_version}" \
             --platform "${{ matrix.target.core_platform }}" \
             --cache-dir .artifacts/core-release)
           if [ "${RUNNER_OS}" = "Windows" ]; then
@@ -240,13 +243,14 @@ jobs:
         shell: bash
         run: |
           binding_version=$(node -p "require('./framework/languages/node/packages/framework/package.json').dependencies['@zlink-systems/zlink']")
+          core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
           core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
-            --version "${binding_version}" \
+            --version "${core_version}" \
             --platform linux-x64 \
             --cache-dir .artifacts/core-release)
           echo "ZLINK_CORE_SOURCE=release" >> "${GITHUB_ENV}"
           echo "ZLINK_CORE_PACKAGE_PREFIX=${core_prefix}" >> "${GITHUB_ENV}"
-          echo "ZLINK_LIBRARY_PATH=${core_prefix}/lib/libzlink.so.${binding_version}" >> "${GITHUB_ENV}"
+          echo "ZLINK_LIBRARY_PATH=${core_prefix}/lib/libzlink.so.${core_version}" >> "${GITHUB_ENV}"
           echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare the .NET local packages for the cross-language test host
