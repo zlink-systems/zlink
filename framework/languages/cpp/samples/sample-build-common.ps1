@@ -120,6 +120,7 @@ function Resolve-ZlinkCppSampleBuild {
             foreach ($CacheName in @("zlink_DIR", "zlink_cpp_DIR")) {
                 $PackageDir = Get-ZlinkCppSampleCacheValue -BuildDir $BuildRoot -Name $CacheName
                 if ($PackageDir) {
+                    $RuntimeDirectories += [System.IO.Path]::GetFullPath((Join-Path $PackageDir "../../..\bin"))
                     $ConfigPath = Join-Path $PackageDir "zlinkConfig.cmake"
                     if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
                         $CoreMatch = Select-String -LiteralPath $ConfigPath -Pattern 'ZLINK_CORE_PACKAGE_PREFIX\s+"([^"]+)"' |
