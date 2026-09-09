@@ -828,10 +828,11 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   통과 28 / 미달 14. 미달: tcp req/reply, inproc·ipc의 다수(작은 payload managed/native 전환
   비용; local transport는 §2.1 예외 목표 적용). 2단계 개선 대상.
 - Multi 상태: `측정 완료(2026-09-09, 원샷)` — 4 transport × 7 pattern, clients=100.
-  통과 18 / 미달 9 / 미측정 1. 미측정 1셀(ws MULTI_ROUTER_ROUTER_SENDSEND 65536·131072B)은
-  **C multi 러너의 `non_zero_exit_1 at AUTO_HWM_DETAIL`**(C측 실패, 바인딩 무관) 때문 — 실패
-  진단 대상(§9.2 하단). .NET report에 `META,core_version` 라인이 없어 status에 `core_meta_missing`을
-  부기했으나 package provenance·console로 release 0.17.5 확인(양성).
+  통과 19 / 미달 9 / 미측정 0. 최초 1셀(ws MULTI_ROUTER_ROUTER_SENDSEND 65536·131072B)이
+  C multi 러너의 `non_zero_exit_1 at AUTO_HWM_DETAIL`로 실패했으나, **원인이 multi 러너에
+  release용 `PERF_PRINT_AUTO_HWM_DETAIL=0` 가드 누락임을 확인해 수정(9f2a977d59)** 후 재측정으로
+  해소(통과). .NET report에 `META,core_version` 라인이 없어 status에 `core_meta_missing`을 부기했으나
+  package provenance·console로 release 0.17.5 확인(양성).
 - 다음 작업: Java Single·Multi paired 측정.
 
 #### 9.2.1 Single suite
@@ -895,7 +896,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `ws` | `MULTI_DEALER_DEALER` | 42.3% | 41.9% | 37.3% | 95.3% | 71.4% | 98.7% | 미달 64.5%/lat0.34× · c0175-dotnet-multi |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 66.5% | 71.2% | 54.3% | 130.8% | 79.3% | 106.8% | 통과 84.8%/lat0.95× · c0175-dotnet-multi |
 | `ws` | `MULTI_DEALER_ROUTER_REQREP` | 171.9% | 132.0% | 174.8% | 247.5% | 76.3% | 118.0% | 통과 153.4%/lat0.47× · c0175-dotnet-multi |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 72.8% | 64.7% | 75.3% | 70.3% | 실패 | 실패 | 미측정(불완전: 실패 65536,131072B) 부분평균 70.8%/lat1.02× · c0175-dotnet-multi |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 72.8% | 64.7% | 75.3% | 70.3% | 92.8% | 117.1% | 통과 82.2%/lat1.02× · c0175-dotnet-multi |
 | `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 59.5% | 65.5% | 86.3% | 127.2% | 104.0% | 92.5% | 통과 89.2%/lat1.62× · c0175-dotnet-multi |
 | `ws` | `MULTI_PUBSUB` | 45.8% | 111.6% | 168.0% | 172.9% | 302.2% | 131.1% | 통과 155.3%/lat0.89× · c0175-dotnet-multi |
 | `ws` | `MULTI_STREAM` | 94.8% | 91.5% | 96.5% | 해당 없음 | 109.7% | 해당 없음 | 통과 98.1%/lat1.04× · c0175-dotnet-multi |
@@ -914,13 +915,13 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tls` | `MULTI_PUBSUB` | 55.1% | 68.3% | 81.0% | 135.8% | 118.6% | 149.1% | 통과 101.3%/lat0.91× · c0175-dotnet-multi |
 | `tls` | `MULTI_STREAM` | 94.9% | 80.4% | 82.9% | 해당 없음 | 94.1% | 해당 없음 | 통과 88.1%/lat1.14× · c0175-dotnet-multi |
 
-> **C multi 러너 재현 실패 메모(공통, 2단계 진단 대상).** `MULTI_ROUTER_ROUTER_SENDSEND`
-> ws의 65536·131072B에서 **C multi 러너**가 `non_zero_exit_1`로 종료했고 첫 오류가
-> `AUTO_HWM_DETAIL`(monitor snapshot 조회) 단계였다. C 자체 실패이므로 그 셀의 ratio를 계산할 수
-> 없어 모든 언어에서 `미측정`이 된다(C++ 0.17.4 multi에서는 나타나지 않았고 0.17.5 측정에서 관측).
-> release runtime의 monitor ABI와 large ws SENDSEND 조합에서 재현되는지, single 러너처럼 release일 때
-> `PERF_PRINT_AUTO_HWM_DETAIL=0`을 multi 러너에도 적용해야 하는지 2단계에서 확인한다. Core 원인이면
-> D-BP로 올린다.
+> **C multi 러너 AUTO_HWM_DETAIL 실패 — 해소됨(2026-09-09, 9f2a977d59).** 초기 0.17.5 측정에서
+> `MULTI_ROUTER_ROUTER_SENDSEND` ws 65536·131072B의 **C multi 러너**가 `non_zero_exit_1`로 종료했고
+> 첫 오류가 `AUTO_HWM_DETAIL`(monitor snapshot 조회) 단계였다. 원인은 Core가 아니라 **harness
+> parity 결함**: `run_benchmarks.sh`(single)는 `--core-version`(release) 시 구형 monitor ABI를
+> 피하려 `PERF_PRINT_AUTO_HWM_DETAIL=0`을 설정하는데 `run_benchmarks_multi.sh`에는 그 가드가 없었다.
+> 동일 가드를 추가(측정 workload 불변, optional introspection만 skip)한 뒤 재측정에서 두 셀 모두
+> `status: complete`로 통과. 이후 모든 언어 multi 측정은 이 수정본 러너로 진행한다.
 
 ### 9.3 Java
 
