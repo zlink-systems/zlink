@@ -328,13 +328,12 @@ final class PerfSocketReqRep {
                     received.close();
                     continue;
                 }
-                try (Message reply = Message.from(payload);
-                     Message tail = PerfUtil.measurementPartCount() == 2
+                try (Message tail = PerfUtil.measurementPartCount() == 2
                          ? PerfUtil.measurementTail() : null) {
                     if (tail != null) {
-                        received.reply().message(reply).message(tail).submit();
+                        received.reply().message(payload).message(tail).submit();
                     } else {
-                        received.reply().message(reply).submit();
+                        received.reply().message(payload).submit();
                     }
                 }
                 received.close();
