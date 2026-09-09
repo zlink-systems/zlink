@@ -129,9 +129,9 @@ payload는 유지하지 않는다. `target_rid_`에 해당하는 연결이 없�
 record를 정확히 하나 만들며 `send_result == ZLINK_SEND_ADMITTED`, `peer_rid`는 제출한 RID다.
 다른 RID의 credit은 이 token을 깨우지 않는다. 호출자는 보관한 record를 같은 RID에 `DONTWAIT`로
 다시 제출한다. `zlink_disconnect_rid()`로 그 RID를 명시적으로 제거하면 token은
-`ZLINK_SEND_TERMINAL`+`ENOENT`인 WRITABLE record로 끝나고, socket close·context 종료는
-`ZLINK_SEND_TERMINAL`과 lifecycle errno로 끝난다. ID `0` 뒤에는 application payload를 replay하지
-않는다. 상세 ownership·result·errno는
+`ZLINK_SEND_TERMINAL`+`ENOENT`인 WRITABLE record로 끝난다. socket close·context 종료는 token을
+내부에서 끝내며 record를 전달하지 않는다([§7](#7-completion과-thread-safety)). ID `0` 뒤에는 application
+payload를 replay하지 않는다. 상세 ownership·result·errno는
 [소켓 공통](README.ko.md#part-send와-pending-admission)을 따른다.
 
 여러 client가 연결된 STREAM에서 `ZLINK_POLLOUT`은 socket 전체의 집계 readiness이며
@@ -266,7 +266,8 @@ low water mark와 transport backpressure는 그대로 유지된다. STREAM socke
 
 ## 9. Peer routing ID와 연결 종료
 
-STREAM의 public routing ID는 server가 연결별로 부여한 4 byte connection id다.
+STREAM의 public routing ID는 Core가 연결별로 부여한 4 byte connection id다. `zlink_bind()`로
+받아들인 연결과 `zlink_connect()`로 만든 연결 모두 자기 socket이 id를 부여한다.
 `zlink_disconnect_rid()`에 이 id를 전달하면 해당 연결에 종료 요청을 넣는다.
 4 byte가 아닌 rid는 잘못된 인자로 실패한다. `zlink_disconnect_rid()` 함수 자체의
 계약은 [소켓 공통](README.ko.md)이 소유하며, id를 내부에서 찾는 방법은
@@ -300,7 +301,7 @@ sequenceDiagram
     participant Eng as Engine
     participant Tr as Transport
 
-    App->>SS: zlink_send(rid + data)
+    App->>SS: zlink_send_part_rid(rid, data)
     SS->>Eng: pipe_t::write()
     Eng->>Tr: raw_encode (passthrough byte, framing 없음)
     Tr->>Tr: ws::write
@@ -522,3 +523,7 @@ write는 `ZLINK_OPT_SNDBUF`, 양쪽은 `ZLINK_OPT_MAXMSGSIZE`가 더 작으면 �
 **연결 종료**
 - 4 byte rid로 `zlink_disconnect_rid()`를 호출하면 해당 연결에 종료 요청이 들어가고,
   4 byte가 아닌 rid는 잘못된 인자로 실패한다.
+
+<!-- zlink-nav:start -->
+[소켓 목차](README.ko.md) | [이전: ROUTER](07-router.ko.md) | [다음: 프로토콜 개요](../protocol/README.ko.md)
+<!-- zlink-nav:end -->

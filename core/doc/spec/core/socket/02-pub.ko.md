@@ -49,8 +49,10 @@ timeout이 만료할 때까지 writable이 되지 않은 호출도 같은 결과
 `ZLINK_DONTWAIT`를 주지 않은 blocking 호출은 send timeout 범위에서 pipe가
 writable이 될 때까지 대기하며, 대기 중 writable이 되면 발행에 성공할 수 있다.
 
-`1`로 설정하면 publisher가 가장 느린 subscriber에 묶인다. subscriber 하나로 가는 전달
-queue인 pipe 하나가 차면 같은 socket의 모든 subscriber에 대한 전달이 멈추기 때문이다.
+`1`로 설정하면 publisher가 그 topic을 구독한 subscriber 중 가장 느린 쪽에 묶인다. Core는 현재
+topic의 filter에 맞는 pipe(subscriber 하나로 가는 전달 queue)만 HWM을 검사하며, 그중 하나라도
+차 있으면 그 publish record를 filter가 맞는 어떤 subscriber에도 전달하지 않고 backpressure를
+돌려준다. filter가 맞지 않는 subscriber의 pipe가 차 있어도 이 publish는 막지 않는다.
 subscriber 속도에 의존하면 안 되는 신뢰 전달은 PUB/SUB가 아니라 request-reply socket이
 담당한다.
 
@@ -59,17 +61,17 @@ subscriber 속도에 의존하면 안 되는 신뢰 전달은 PUB/SUB가 아니�
 여러 frame(part)을 하나의 논리적 message로 묶어 전송하는 방식을
 [multipart](../02-message.ko.md#4-multipart)라 한다. Core는 성공한 중간 part를
 `ZLINK_PART_FINAL`이 성공할 때까지 하나의 publish record — subscriber에 한 단위로
-공개되는 발행 기록 — 로 staging한다.
+공개되는 발행 기록 — 로 임시로 보관한다.
 
 실제 send 단계에 진입한 중간 또는 마지막 part가 HWM, 크기 제한 등으로 실패하면
-이전에 staging한 part와 실패한 part를 원자적으로 폐기하고 sequence를 닫는다.
+이전에 임시로 보관한 part와 실패한 part를 원자적으로 폐기하고 sequence를 닫는다.
 subscriber에는 그 record의 어떤 part도 보이지 않는다. 실패한 호출의 `part_`도 소비되며
 다음 publish는 새 record의 첫 part로 시작한다. 따라서 backpressure를 포함한 send 단계
 실패 뒤에는 보관해 둔 전체 record를 첫 part부터 다시 제출해야 한다.
 
 topic이나 send flag를 바꾸거나, 다른 send helper를 사용하거나, 다른 thread에서 호출해
 제출 전 sequence 검증이 실패하면 그 호출의 `part_`만 소비한다. 이 실패는 기존에
-staging한 part를 폐기하거나 열린 sequence를 닫지 않는다. 원래 sequence를 소유한
+임시로 보관한 part를 폐기하거나 열린 sequence를 닫지 않는다. 원래 sequence를 소유한
 thread에서 같은 topic과 send flag를 사용해 `zlink_publish_part`로 후속 part를 제출하면
 기존 publish record를 계속할 수 있다.
 
@@ -79,9 +81,9 @@ sequenceDiagram
     participant Core as Core (PUB)
     participant Sub as Subscriber
     App->>Core: zlink_publish_part(part 1, ZLINK_PART_MORE)
-    Note over Core: publish record에 staging
+    Note over Core: publish record에 임시 보관
     App->>Core: zlink_publish_part(part 2, ZLINK_PART_MORE)
-    Note over Core: 같은 record에 staging
+    Note over Core: 같은 record에 임시 보관
     alt 마지막 submit 성공
         App->>Core: zlink_publish_part(part N, ZLINK_PART_FINAL)
         Core-->>Sub: record 전체를 한 단위로 전달
@@ -89,7 +91,7 @@ sequenceDiagram
         Note over Core: 호출 part만 소비하고<br/>열린 sequence는 유지
         Note over App,Core: 원래 thread·topic·flag로 기존 record 계속 가능
     else send 단계의 중간 또는 마지막 submit 실패
-        Note over Core: staging한 part와 실패한 part를<br/>원자적으로 폐기하고 sequence를 닫음
+        Note over Core: 임시로 보관한 part와 실패한 part를<br/>원자적으로 폐기하고 sequence를 닫음
         Note over Sub: 그 record의 어떤 part도 보이지 않음
     end
 ```
@@ -122,8 +124,8 @@ status는 `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`를 설정하지 않고
 ```c
 typedef enum zlink_pub_option_t
 {
-    ZLINK_PUB_OPT_VERBOSE = 0x3301,            // 모든 구독 message를 upstream 전달 (int; 0=off, 양수=on (getter는 0/1 반환))
-    ZLINK_PUB_OPT_VERBOSER = 0x3302,           // 구독/해제 message를 upstream 전달 (int; 0=off, 양수=on (getter는 0/1 반환))
+    ZLINK_PUB_OPT_VERBOSE = 0x3301,            // XPUB에서만 관찰: 이미 구독 중인 topic의 subscribe도 event로 공개 (int; 0=off, 양수=on (getter는 0/1 반환))
+    ZLINK_PUB_OPT_VERBOSER = 0x3302,           // XPUB에서만 관찰: 중복 subscribe와 모든 unsubscribe를 event로 공개 (int; 0=off, 양수=on (getter는 0/1 반환))
     ZLINK_PUB_OPT_MANUAL = 0x3303,             // XPUB 수동 구독 관리 (int; 0=off, 양수=on (getter는 0/1 반환))
     ZLINK_PUB_OPT_MANUAL_LAST_VALUE = 0x3304,  // manual 모드 활성 + 다음 발행을 마지막 구독 event pipe에만 전달 (int; 0=off, 양수=on (getter는 0/1 반환))
     ZLINK_PUB_OPT_NODROP = 0x3305,             // HWM 시 drop 대신 EAGAIN 반환 (int; 0=off, 양수=on (getter는 0/1 반환), 기본값 0)
@@ -137,9 +139,13 @@ typedef enum zlink_pub_option_t
 `ZLINK_PUB_OPT_NODROP`이 정하는 drop과 backpressure 동작은
 [§2 전달 손실과 backpressure](#2-전달-손실과-backpressure)가 설명한다.
 `ZLINK_PUB_OPT_MANUAL_LAST_VALUE`를 활성화하면 manual 모드도 함께 활성화되고,
-다음 발행은 마지막 구독 event를 낸 pipe에만 전달된다.
+다음 발행은 XPUB가 가장 최근에 꺼낸 구독 event의 pipe에만 전달된다.
 `ZLINK_PUB_OPT_APPROVE_SUBSCRIBE`와 `ZLINK_PUB_OPT_REJECT_SUBSCRIBE`는 manual 모드
-전용 write-only action 옵션이다. `zlink_get_pub_option()`으로 조회하면 `EINVAL`이다.
+전용 write-only action 옵션으로, 가장 최근에 꺼낸 구독 event의 pipe에 filter를 적용한다.
+아직 꺼낸 event가 없거나 그 pipe가 이미 끊겼으면 두 action은 성공하지만 아무것도 바꾸지
+않고, `MANUAL_LAST_VALUE`의 다음 발행도 특정 pipe로 제한되지 않는다.
+`zlink_get_pub_option()`으로 조회하면 `EINVAL`이다. verbose·manual 계열 option은 PUB에서도
+설정·조회할 수 있지만 PUB는 구독 event를 받을 수 없으므로 XPUB에서만 관찰 효과가 있다.
 
 ## 7. 함수
 
@@ -207,13 +213,13 @@ frame용 storage를 확보하지 못하면 `ZLINK_SUBMIT_OUT_OF_MEMORY`와 `ENOM
 
 `ZLINK_PART_MORE`로 시작한 multipart message는 `ZLINK_PART_FINAL`까지 같은 thread에서
 이 함수로 계속 보내야 하며, 중간에 다른 send helper를 호출하거나 topic과 flag를 바꿀
-수 없다. Core가 진행 중인 part를 하나의 publish record로 staging하고 실패 시 원자적으로
+수 없다. Core가 진행 중인 part를 하나의 publish record로 임시 보관하고 실패 시 원자적으로
 폐기하는 동작은 [§3 Multipart 발행과 publish record](#3-multipart-발행과-publish-record)가
 설명한다.
 이 topic·flag·helper·thread 조건을 위반해 제출 전 검증에서 실패하면 호출한 `part_`만
 소비하고 열린 sequence는 유지한다. 원래 thread에서 기존 topic과 flag로 이 함수를 다시
 호출하면 기존 publish record를 계속할 수 있다. 반면 검증을 통과해 send 단계에 진입한
-뒤 HWM·크기 제한 등으로 실패하면 실패 part와 staging part를 폐기하고 sequence를 닫는다.
+뒤 HWM·크기 제한 등으로 실패하면 실패 part와 임시로 보관한 part를 폐기하고 sequence를 닫는다.
 
 이 함수는 성공과 실패 모두에서 `part_`의 내용을 소비한다. 호출자는 반환값과 관계없이
 같은 내용을 다시 보내려면 호출 전에 별도 복사본을 만들어야 한다. 소비된 `zlink_msg_t`는
@@ -240,7 +246,7 @@ non-blocking 발행은 `flags_`에 `ZLINK_DONTWAIT`를 전달한다. 즉시 진�
 - topic frame용 storage를 확보하지 못하면 `ZLINK_SUBMIT_OUT_OF_MEMORY`와 `ENOMEM`이다.
 
 **part 소유권**
-- 성공·실패·backpressure 어느 반환 결과에서도 `part_`의 내용은 소비되며, 소비된 `zlink_msg_t`는 다시 초기화한 뒤에만 재사용할 수 있다.
+- 성공·실패·backpressure 어느 반환 결과에서도 `part_`의 내용은 소비된다 — 반환 뒤 `zlink_msg_size(part_)`는 `0`이고, 그 `zlink_msg_t`는 다시 초기화하지 않고 그대로 close하거나 다음 publish에 쓸 수 있다.
 
 **publish record 원자성**
 - 제출 전 sequence 검증을 통과한 중간 또는 마지막 part가 HWM·크기 제한 등으로 send 단계에서 실패하면 subscriber는 그 record의 어떤 part도 수신하지 않고, 다음 `zlink_publish_part` 호출은 새 record의 첫 part로 처리된다.
@@ -263,3 +269,7 @@ non-blocking 발행은 `flags_`에 `ZLINK_DONTWAIT`를 전달한다. 즉시 진�
 - PUB socket의 monitor는 `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`를 설정하지 않고 `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, `ZLINK_EVENT_FLOW_STATE_STALE`를 발생시키지 않는다.
 
 자동 HWM budget 계산·분배의 검증은 [Auto HWM](../systems/06-auto-hwm.ko.md#5-구현-및-contract-test-검증-요구)가 소유한다.
+
+<!-- zlink-nav:start -->
+[소켓 목차](README.ko.md) | [이전: PAIR](01-pair.ko.md) | [다음: SUB](03-sub.ko.md)
+<!-- zlink-nav:end -->

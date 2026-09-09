@@ -219,7 +219,8 @@ ZLINK_EXPORT zlink_config_result_t zlink_timer_start (void *timer_,
 event 사이의 간격(나노초)이며 `0`일 수 없다. `repeat_count_`가 `0`이면 명시적으로
 정지할 때까지 반복하고, 양수이면 해당 횟수만큼 event를 발생시킨 뒤 자동으로 정지한다.
 성공한 start 실행마다 fire 횟수를 초기화하므로 첫 fire는 `1`이고 이후 `2`, `3` 순서로
-증가한다.
+증가한다. 실행 중인 timer에 다시 호출해도 성공한다 — 새 start는 기존 schedule을 새 interval과
+repeat count로 교체하고, 이전 start에서 아직 읽지 않은 fire와 poller readiness를 폐기한다.
 
 **반환값:** 성공 시 `ZLINK_CONFIG_OK`, 실패 시 `zlink_config_result_t` 값. `zlink_errno()`는
 진단용 내부 errno를 그대로 유지한다.
@@ -266,7 +267,8 @@ recv 모드에서 다음 timer fire를 기다린다. 성공하면 `*fire_count_o
 **반환값:** 성공 시 `ZLINK_RECV_OK`, 실패 시 `zlink_recv_result_t` 값. `zlink_errno()`는
 진단용 내부 errno를 그대로 유지한다.
 
-**에러:** timer가 이미 멈췄고 더 읽을 fire가 없으면 `ZLINK_RECV_NO_DATA` (내부 `EAGAIN`).
+**에러:** `timer_`가 유효하지 않거나 `fire_count_out_ == NULL`이면 `ZLINK_RECV_INVALID_HANDLE`
+(내부 `EFAULT`). timer가 이미 멈췄고 더 읽을 fire가 없으면 `ZLINK_RECV_NO_DATA` (내부 `EAGAIN`).
 
 **스레드 안전성:** 같은 timer의 다른 작업과 동시에 호출하면 안 된다.
 
@@ -382,9 +384,10 @@ Request correlation과 reply target state는 proxy가 연결하지 않는다. Re
 투명하게 완료하는 기능은 이 API의 계약이 아니며, proxy가 request-reply
 metadata를 새로 만들거나 completion callback을 중계하지 않는다.
 
-**반환값:** proxy가 정상적으로 끝나면 `ZLINK_CONFIG_OK`, 그렇지 않으면
-`zlink_config_result_t` 오류. 필수 핸들이 `NULL`이거나 raw socket이 아니면
-`ZLINK_CONFIG_INVALID_HANDLE`이다.
+**반환값:** proxy loop에는 정상 종료 조건이나 공개 stop API가 없으므로 이 함수가
+`ZLINK_CONFIG_OK`로 반환하는 경로는 없다. socket 또는 context 종료를 포함해 poll·receive·send가
+실패하면 그 errno를 `zlink_config_result_t` 오류로 반환하며 호출 thread가 풀린다. 필수 핸들이
+`NULL`이거나 raw socket이 아니면 loop에 들어가기 전에 `ZLINK_CONFIG_INVALID_HANDLE`이다.
 
 ## 7. Sleep과 thread
 
@@ -408,8 +411,9 @@ typedef void (zlink_thread_fn) (void *);
 ZLINK_EXPORT void zlink_sleep (int seconds_);
 ```
 
-호출 thread를 최소 `seconds_`초 동안 일시 중지한다. 플랫폼별 sleep 함수에 대한 이식
-가능한 편의 wrapper다.
+호출 thread에 platform sleep(`Sleep()` 또는 POSIX `sleep()`)을 한 번 적용하는 편의 wrapper다.
+POSIX에서는 signal 때문에 `sleep()`이 interrupt되면 남은 시간을 다시 재우지 않으므로 `seconds_`초보다
+일찍 반환할 수 있다.
 
 **스레드 안전성:** 모든 스레드에서 호출할 수 있다.
 

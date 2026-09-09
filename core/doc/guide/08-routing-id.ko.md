@@ -3,7 +3,7 @@ title: "Routing ID"
 ---
 
 <!-- zlink-nav:start -->
-[가이드 목록](README.ko.md) | [이전: Thread safety](../spec/core/systems/04-thread-safety.ko.md) | [다음: PAIR 소켓](03-1-pair.ko.md)
+[가이드 목록](README.ko.md) | [이전: Thread safety](11-thread-safety.ko.md) | [다음: PAIR 소켓](03-1-pair.ko.md)
 <!-- zlink-nav:end -->
 
 # Routing ID

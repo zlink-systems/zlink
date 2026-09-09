@@ -202,10 +202,10 @@ payload part의 소유권을 호출자에게 이전한다. 호출자는 받은 p
 
 `topic_id_capacity_`가 topic 길이보다 작으면(길이 0 topic은 capacity 0으로 성공한다) 함수는
 `*topic_id_len_out_`에 필요한 topic 길이를 기록하고
-`ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. 이 경우 queue의 topic과
-payload를 소비하지 않으며 `topic_id_len_out_`을 제외한 output과 `part_out_`은
+`ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. 이 경우 Core는 그 message의 topic과
+payload를 내부에 보관하고, `topic_id_len_out_`을 제외한 output과 `part_out_`은
 변경하지 않는다. part 소유권도 이전하지 않으므로 호출자는 충분한 buffer로
-같은 message를 다시 수신할 수 있다. 용량이 0보다 큰데 `topic_id_buf_`가
+다시 호출해 보관된 같은 message를 받는다. 용량이 0보다 큰데 `topic_id_buf_`가
 NULL이면 queue를 검사하거나 소비하기 전에 `ZLINK_RECV_INVALID_HANDLE`과
 `EFAULT`를 반환하고 모든 output과 `part_out_`을 변경하지 않는다.
 
@@ -277,7 +277,8 @@ handle 타입이 구독 조회를 지원하지 않으면 `ENOTSUP`.
 **topic part 수신**
 - 성공한 `zlink_subscribe_part`는 topic의 binary byte를 NUL 없이 호출자 buffer에 복사하고 payload part의 소유권을 호출자에게 이전한다 — 호출자가 `zlink_msg_close(part_out_)`를 정확히 한 번 호출한다.
 - raw SUB·XSUB에서 `source_rid_out_`은 항상 `NULL`을 받는다.
-- `topic_id_capacity_`가 topic 길이보다 작으면(길이 0 topic은 capacity 0으로 성공) `*topic_id_len_out_`에 필요한 길이를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. queue의 topic과 payload는 소비되지 않아 충분한 buffer로 다시 호출하면 같은 message를 수신하고, `topic_id_len_out_`을 제외한 output과 `part_out_`은 변하지 않는다.
+- `topic_id_capacity_`가 topic 길이보다 작으면(길이 0 topic은 capacity 0으로 성공) `*topic_id_len_out_`에 필요한 길이를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. Core가 그 message의 topic과 payload를 내부에 보관하므로 충분한 buffer로 다시 호출하면 같은 message를 수신하고, `topic_id_len_out_`을 제외한 output과 `part_out_`은 변하지 않는다.
+- topic frame 뒤에 payload part가 없는(topic frame에 `MORE`가 없는) record를 받으면 `ZLINK_RECV_INTERNAL_ERROR`와 `EPROTO`를 반환한다.
 - 용량이 0보다 큰데 `topic_id_buf_`가 NULL이면 queue를 검사·소비하기 전에 `ZLINK_RECV_INVALID_HANDLE`과 `EFAULT`를 반환하고 모든 output과 `part_out_`이 변하지 않는다.
 - multipart message는 `*has_more_out_`이 `ZLINK_PART_MORE`인 동안 다음 payload part가 이어지고 마지막 part에서 `ZLINK_PART_FINAL`이 된다.
 
@@ -294,3 +295,7 @@ handle 타입이 구독 조회를 지원하지 않으면 `ENOTSUP`.
 
 Auto HWM budget 계산·admission의 검증은
 [Auto HWM §5](../systems/06-auto-hwm.ko.md#5-구현-및-contract-test-검증-요구)가 소유한다.
+
+<!-- zlink-nav:start -->
+[소켓 목차](README.ko.md) | [이전: PUB](02-pub.ko.md) | [다음: XPUB](04-xpub.ko.md)
+<!-- zlink-nav:end -->

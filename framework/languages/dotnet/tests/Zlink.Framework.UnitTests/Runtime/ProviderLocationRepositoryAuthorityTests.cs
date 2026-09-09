@@ -375,6 +375,113 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     }
 
     [Fact]
+    public async Task DescriptorRenewRetriesAfterSameOwnerLeaseHeartbeat()
+    {
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        var provider = new DescriptorCasConflictLocationStore(
+            inner,
+            DescriptorConflictMutation.Heartbeat);
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "descriptor-heartbeat-owner");
+        var preparing = Descriptor("source", owner) with
+        {
+            State = ZLinkFrameworkRuntimeState.Preparing
+        };
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (await repository.UpdateMeshNodeAsync(
+                preparing,
+                ZLinkLocationWriteIntent.NewClaim)).Status);
+        provider.Arm();
+
+        var result = await repository.UpdateMeshNodeAsync(
+            preparing with
+            {
+                DescriptorRevision = preparing.DescriptorRevision + 1,
+                State = ZLinkFrameworkRuntimeState.Serving
+            },
+            ZLinkLocationWriteIntent.Renew);
+
+        Assert.Equal(ZLinkLocationWriteStatus.Stored, result.Status);
+        Assert.Equal(2, provider.DescriptorWriteAttempts);
+        Assert.Equal(
+            ZLinkFrameworkRuntimeState.Serving,
+            Assert.Single(
+                (await repository.ListMeshNodesAsync("play", default)).Items)
+                .State);
+    }
+
+    [Theory]
+    [InlineData("ReplaceOwner")]
+    [InlineData("ReplaceRow")]
+    [InlineData("DeleteRow")]
+    [InlineData("RegressRevision")]
+    public async Task DescriptorRenewConflictRejectsChangedOwnerOrPredecessor(
+        string mutationName)
+    {
+        var mutation = Enum.Parse<DescriptorConflictMutation>(mutationName);
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        var provider = new DescriptorCasConflictLocationStore(inner, mutation);
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, $"descriptor-stale-{mutation}");
+        var preparing = Descriptor("source", owner) with
+        {
+            DescriptorRevision = 2,
+            State = ZLinkFrameworkRuntimeState.Preparing
+        };
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (await repository.UpdateMeshNodeAsync(
+                preparing,
+                ZLinkLocationWriteIntent.NewClaim)).Status);
+        provider.Arm();
+
+        var result = await repository.UpdateMeshNodeAsync(
+            preparing with
+            {
+                DescriptorRevision = 3,
+                State = ZLinkFrameworkRuntimeState.Serving
+            },
+            ZLinkLocationWriteIntent.Renew);
+
+        Assert.Equal(ZLinkLocationWriteStatus.IgnoredStale, result.Status);
+        Assert.Equal(1, provider.DescriptorWriteAttempts);
+    }
+
+    [Fact]
+    public async Task DescriptorRenewStopsAfterThreeHeartbeatRetries()
+    {
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        var provider = new DescriptorCasConflictLocationStore(
+            inner,
+            DescriptorConflictMutation.Heartbeat,
+            repeatMutation: true);
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "descriptor-retry-owner");
+        var preparing = Descriptor("source", owner) with
+        {
+            State = ZLinkFrameworkRuntimeState.Preparing
+        };
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (await repository.UpdateMeshNodeAsync(
+                preparing,
+                ZLinkLocationWriteIntent.NewClaim)).Status);
+        provider.Arm();
+
+        var result = await repository.UpdateMeshNodeAsync(
+            preparing with
+            {
+                DescriptorRevision = preparing.DescriptorRevision + 1,
+                State = ZLinkFrameworkRuntimeState.Serving
+            },
+            ZLinkLocationWriteIntent.Renew);
+
+        Assert.Equal(ZLinkLocationWriteStatus.IgnoredStale, result.Status);
+        Assert.Equal(4, provider.DescriptorWriteAttempts);
+    }
+
+    [Fact]
     public async Task SharedOpaqueProvider_CreatesAndReadsAuthorityAcrossRepositories()
     {
         var provider = new ZLinkInMemoryProviderLocationStore();
@@ -2897,6 +3004,171 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             ZLinkStoreScanRequest request,
             CancellationToken cancellationToken = default) =>
             inner.ScanAsync(request, cancellationToken);
+    }
+
+    private enum DescriptorConflictMutation
+    {
+        Heartbeat,
+        ReplaceOwner,
+        ReplaceRow,
+        DeleteRow,
+        RegressRevision
+    }
+
+    private sealed class DescriptorCasConflictLocationStore(
+        IZLinkLocationStore inner,
+        DescriptorConflictMutation mutation,
+        bool repeatMutation = false) : IZLinkLocationStore
+    {
+        private bool _armed;
+        private bool _mutated;
+
+        public int DescriptorWriteAttempts { get; private set; }
+
+        public void Arm() => _armed = true;
+
+        public ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default) =>
+            inner.ReadAsync(key, cancellationToken);
+
+        public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var descriptorPut = request.Mutations
+                .OfType<ZLinkStoreMutation.Put>()
+                .SingleOrDefault(static put => put.Key.Value.StartsWith(
+                    "mesh-node\0",
+                    StringComparison.Ordinal));
+            if (!_armed || descriptorPut is null)
+                return await inner.WriteAsync(request, cancellationToken);
+
+            DescriptorWriteAttempts++;
+            if (repeatMutation || !_mutated)
+            {
+                _mutated = true;
+                await MutatePredecessorAsync(
+                    request,
+                    descriptorPut,
+                    cancellationToken);
+            }
+            return await inner.WriteAsync(request, cancellationToken);
+        }
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default) =>
+            inner.ScanAsync(request, cancellationToken);
+
+        private async ValueTask MutatePredecessorAsync(
+            ZLinkStoreWriteRequest request,
+            ZLinkStoreMutation.Put descriptorPut,
+            CancellationToken cancellationToken)
+        {
+            var ownerCondition = request.Conditions
+                .OfType<ZLinkStoreCondition.Version>()
+                .Single(static condition => condition.Key.Value.StartsWith(
+                    "owner-lease\0",
+                    StringComparison.Ordinal));
+            var owner = Assert.IsType<ZLinkStoreReadResult.Found>(
+                await inner.ReadAsync(ownerCondition.Key, cancellationToken));
+            var retention = owner.Value.ExpiresAt is { } expiresAt
+                ? expiresAt - owner.Value.StoreNow
+                : throw new InvalidOperationException();
+
+            switch (mutation)
+            {
+                case DescriptorConflictMutation.Heartbeat:
+                    await ApplyAsync(
+                        new ZLinkStoreCondition.Version(
+                            ownerCondition.Key,
+                            owner.Value.Version),
+                        new ZLinkStoreMutation.Put(
+                            ownerCondition.Key,
+                            owner.Value.Bytes,
+                            retention),
+                        cancellationToken);
+                    break;
+                case DescriptorConflictMutation.ReplaceOwner:
+                    await ApplyAsync(
+                        new ZLinkStoreCondition.Version(
+                            ownerCondition.Key,
+                            owner.Value.Version),
+                        new ZLinkStoreMutation.Put(
+                            ownerCondition.Key,
+                            ZLinkProviderLocationRepository
+                                .EncodeOwnerLeaseRecordForGoldenTest(
+                                    "replacement-owner",
+                                    999),
+                            retention),
+                        cancellationToken);
+                    break;
+                case DescriptorConflictMutation.DeleteRow:
+                    var deleted = Assert.IsType<ZLinkStoreReadResult.Found>(
+                        await inner.ReadAsync(
+                            descriptorPut.Key,
+                            cancellationToken));
+                    await ApplyAsync(
+                        new ZLinkStoreCondition.Version(
+                            descriptorPut.Key,
+                            deleted.Value.Version),
+                        new ZLinkStoreMutation.Delete(descriptorPut.Key),
+                        cancellationToken);
+                    break;
+                case DescriptorConflictMutation.ReplaceRow:
+                    var replaced = Assert.IsType<ZLinkStoreReadResult.Found>(
+                        await inner.ReadAsync(
+                            descriptorPut.Key,
+                            cancellationToken));
+                    var replacement = JsonNode.Parse(replaced.Value.Bytes.Span)
+                                      ?? throw new InvalidDataException();
+                    replacement["descriptor"]!["endpoint"] =
+                        "tcp://127.0.0.1:7999";
+                    await ApplyAsync(
+                        new ZLinkStoreCondition.Version(
+                            descriptorPut.Key,
+                            replaced.Value.Version),
+                        new ZLinkStoreMutation.Put(
+                            descriptorPut.Key,
+                            Encoding.UTF8.GetBytes(replacement.ToJsonString()),
+                            null),
+                        cancellationToken);
+                    break;
+                case DescriptorConflictMutation.RegressRevision:
+                    var current = Assert.IsType<ZLinkStoreReadResult.Found>(
+                        await inner.ReadAsync(
+                            descriptorPut.Key,
+                            cancellationToken));
+                    var row = JsonNode.Parse(current.Value.Bytes.Span)
+                              ?? throw new InvalidDataException();
+                    row["descriptorRevision"] = "1";
+                    row["descriptor"]!["descriptorRevision"] = "1";
+                    await ApplyAsync(
+                        new ZLinkStoreCondition.Version(
+                            descriptorPut.Key,
+                            current.Value.Version),
+                        new ZLinkStoreMutation.Put(
+                            descriptorPut.Key,
+                            Encoding.UTF8.GetBytes(row.ToJsonString()),
+                            null),
+                        cancellationToken);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(mutation));
+            }
+        }
+
+        private async ValueTask ApplyAsync(
+            ZLinkStoreCondition condition,
+            ZLinkStoreMutation mutation,
+            CancellationToken cancellationToken)
+        {
+            Assert.IsType<ZLinkStoreWriteResult.Applied>(
+                await inner.WriteAsync(
+                    new ZLinkStoreWriteRequest([condition], [mutation]),
+                    cancellationToken));
+        }
     }
 
     private sealed class ExpireFirstSnapshotLocationStore(

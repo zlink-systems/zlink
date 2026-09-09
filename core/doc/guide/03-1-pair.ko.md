@@ -55,7 +55,7 @@ PAIR의 공개 수신 API는 recv/poller 전용이다. `zlink_recv_part()`로 �
 zlink_msg_t msg;
 zlink_msg_init_size(&msg, 5);
 memcpy(zlink_msg_data(&msg), "Hello", 5);
-zlink_send_part(client, &msg, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(client, &msg, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 /* Server receives with zlink_recv_part() (typically inside a poller loop) */
 zlink_msg_t part;
@@ -72,7 +72,7 @@ if (zlink_recv_part(server, NULL, &part, &more, ZLINK_RECV_FLAGS_NONE) == ZLINK_
 zlink_msg_t reply;
 zlink_msg_init_size(&reply, 5);
 memcpy(zlink_msg_data(&reply), "World", 5);
-zlink_send_part(server, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(server, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 ```
 
 ### 멀티파트 데이터 전송
@@ -90,9 +90,9 @@ zlink_msg_init_size(&part1, 6);
 memcpy(zlink_msg_data(&part1), "foobar", 6);
 
 zlink_submit_result_t rc = zlink_send_part(
-    server, &part0, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE);
+    server, &part0, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL);
 if (rc == ZLINK_SUBMIT_OK)
-    rc = zlink_send_part(server, &part1, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+    rc = zlink_send_part(server, &part1, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 /* 수신자는 zlink_recv_part()를 개별 호출로 반복하며 프레임을 하나씩 받는다.
    has_more_out_ == ZLINK_PART_FINAL이 될 때까지 반복:
@@ -148,9 +148,9 @@ zlink_msg_init_size(&body, 4);
 memcpy(zlink_msg_data(&body), "body", 4);
 
 zlink_submit_result_t rc = zlink_send_part(
-    server, &header, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE);
+    server, &header, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL);
 if (rc == ZLINK_SUBMIT_OK)
-    rc = zlink_send_part(server, &body, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+    rc = zlink_send_part(server, &body, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 ```
 
 ## 4. 소켓 옵션
@@ -190,7 +190,7 @@ zlink_connect(worker_signal, "inproc://signal");
 zlink_msg_t msg;
 zlink_msg_init_size(&msg, 4);
 memcpy(zlink_msg_data(&msg), "DONE", 4);
-zlink_send_part(worker_signal, &msg, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(worker_signal, &msg, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 /* Main: poller 루프(zlink_recv_part)로 "DONE" 수신 */
 ```

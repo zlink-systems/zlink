@@ -37,7 +37,7 @@ characteristics.
 | Tier | Meaning |
 |---|---|
 | Hot path | Multiple application threads may concurrently call supported socket send and request operations. |
-| Control path | Options, bind and connect operations, and handler registration are serialized per handle. |
+| Control path | Options and bind and connect operations are serialized per handle. |
 | Lifecycle | Close and destroy operations do not run concurrently with another mutable operation on the same handle. |
 
 ## 3. Internal rules
@@ -52,13 +52,19 @@ message ownership. In other words, the pipe's decision to accept a message and t
 message's ownership to the library do not occur separately. The [I/O thread](../glossary.en.md#io-thread)
 for a connection owns the state of the engine that handles protocol processing for that connection.
 
-**Receive modes.** Callback mode and synchronous receive mode are single consumers of the same
-queue. Because only one consumer may remove messages from a queue, the two modes cannot be registered
-at the same time.
+**Receive path.** Receiving is pull-only and one queue has one consumer. Core registers no
+application callback, so the consumer is always the application thread that calls the
+`*_recv_part()` / `zlink_completion_recv()` family.
 
 **Public API guard and close.** The guard at the public API boundary manages only the handle pin—a
 marker that keeps the handle valid while an API call is in progress—and the close state. It does not
-branch on service kind or application lifecycle. The guard never waits: a new entry after close has been
-accepted is rejected immediately, as is a close while an API call is in flight, and the result the
+branch on service kind or application lifecycle. A new entry after close has been accepted is rejected
+immediately with `ESHUTDOWN`. A close that finds a public API call in flight is rejected with `EBUSY`,
+except that a public poller's brief readiness sample is given a bounded backoff of at most 1024
+attempts to finish — if the admission has not ended by then, `EBUSY` is returned. The result the
 caller observes (`ESHUTDOWN`, `EBUSY`) is defined by
 [Socket Common §2 Thread safety](../socket/README.en.md#2-thread-safety).
+
+<!-- zlink-nav:start -->
+[Systems Index](README.en.md) | [Previous: I/O Thread](03-io-thread.en.md) | [Next: Per-Connection Memory](05-connection-memory.en.md)
+<!-- zlink-nav:end -->

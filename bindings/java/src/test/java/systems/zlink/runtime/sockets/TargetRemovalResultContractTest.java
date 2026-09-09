@@ -36,7 +36,7 @@ class TargetRemovalResultContractTest {
                         core.writable(pending, NativeErrno.ENOENT);
                     else
                         core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.NOT_CONNECTED, NativeErrno.EHOSTUNREACH, 0));
-                    assertEquals(1, owner.drain(null));
+                    assertEquals(1, owner.drain());
                     Throwable failure = CompletionNativeFixture.failure(waiter);
                     if (terminal && request) {
                         assertEquals(RequestResult.NOT_FOUND, assertInstanceOf(ZlinkRequestException.class, failure).getResult());

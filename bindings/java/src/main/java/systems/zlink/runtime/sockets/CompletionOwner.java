@@ -84,6 +84,8 @@ final class CompletionOwner implements AutoCloseable {
     private final Object ownerLock = new Object();
     private final ReentrantLock drainLock = new ReentrantLock();
     private final List<Pending<?>> retries = new ArrayList<>();
+    private Pending<?> publicSettlementHead;
+    private Pending<?> publicSettlementTail;
     private final ReentrantReadWriteLock nativeCallGate =
         new ReentrantReadWriteLock();
     private volatile boolean closed;
@@ -566,13 +568,44 @@ final class CompletionOwner implements AutoCloseable {
         }
     }
 
-    int drain(List<Runnable> settlements) {
-        drainLock.lock();
+    int drain() {
+        Pending<?> settlements = null;
         try {
-            return drainWithNativeGate(settlements);
+            drainLock.lock();
+            try {
+                return drainWithNativeGate(true);
+            } finally {
+                settlements = detachPublicSettlements();
+                signalDrainProgress();
+                drainLock.unlock();
+            }
         } finally {
-            signalDrainProgress();
-            drainLock.unlock();
+            completePublicSettlements(settlements);
+        }
+    }
+
+    private void enqueuePublicSettlement(Pending<?> state) {
+        if (publicSettlementTail == null) {
+            publicSettlementHead = state;
+        } else {
+            publicSettlementTail.nextPublicSettlement = state;
+        }
+        publicSettlementTail = state;
+    }
+
+    private Pending<?> detachPublicSettlements() {
+        Pending<?> head = publicSettlementHead;
+        publicSettlementHead = null;
+        publicSettlementTail = null;
+        return head;
+    }
+
+    private static void completePublicSettlements(Pending<?> state) {
+        while (state != null) {
+            Pending<?> next = state.nextPublicSettlement;
+            state.nextPublicSettlement = null;
+            state.completeFuture();
+            state = next;
         }
     }
 
@@ -589,27 +622,27 @@ final class CompletionOwner implements AutoCloseable {
                     return -1;
                 }
             }
-            return drainWithNativeGate(null);
+            return drainWithNativeGate(false);
         } finally {
             signalDrainProgress();
             drainLock.unlock();
         }
     }
 
-    private int drainWithNativeGate(List<Runnable> settlements) {
+    private int drainWithNativeGate(boolean settleInline) {
         ReentrantReadWriteLock.ReadLock read = nativeCallGate.readLock();
         read.lock();
         try {
             if (closed) {
                 return 0;
             }
-            return drainLocked(settlements);
+            return drainLocked(settleInline);
         } finally {
             read.unlock();
         }
     }
 
-    private int drainLocked(List<Runnable> settlements) {
+    private int drainLocked(boolean settleInline) {
         int progress = 0;
         MemorySegment completion = NATIVE_SCRATCH.get().completion;
         while (!closed) {
@@ -625,11 +658,9 @@ final class CompletionOwner implements AutoCloseable {
                         if (!state.awaitingWritable())
                             continue;
                         if (state.kind == PendingKind.REQUEST)
-                            retryRequest(state);
+                            retryRequest(state, settleInline);
                         else
-                            retrySend(state);
-                        if (settlements != null && state.terminalDispatched())
-                            settlements.add(state::awaitSettlement);
+                            retrySend(state, settleInline);
                     }
                 } finally {
                     retries.clear();
@@ -660,10 +691,7 @@ final class CompletionOwner implements AutoCloseable {
                 CLOSED_COMPLETIONS.incrementAndGet();
             }
             if (state != null) {
-                state.capture(result);
-                if (settlements != null && state.terminalDispatched()) {
-                    settlements.add(state::awaitSettlement);
-                }
+                state.capture(result, settleInline);
             }
         }
         return progress;
@@ -787,7 +815,7 @@ final class CompletionOwner implements AutoCloseable {
         }
     }
 
-    private void retrySend(Pending<?> untyped) {
+    private void retrySend(Pending<?> untyped, boolean settleInline) {
         @SuppressWarnings("unchecked")
         Pending<Void> state = (Pending<Void>) untyped;
         SubmitAttempt attempt;
@@ -796,27 +824,27 @@ final class CompletionOwner implements AutoCloseable {
                 SendFlags.DONT_WAIT.value(), 0, state.context(), true, false,
                 0L);
         } catch (RuntimeException | Error failure) {
-            state.reject(failure);
+            state.reject(failure, settleInline);
             return;
         }
 
         if (attempt.result() == SubmitResult.OK) {
             if (attempt.completionId() != 0L) {
                 state.reject(new ZlinkSubmitException(
-                    SubmitResult.INTERNAL_ERROR));
+                    SubmitResult.INTERNAL_ERROR), settleInline);
                 return;
             }
-            state.completeSendAsync();
+            state.completeSend(settleInline);
             return;
         }
         if (isWritableWait(attempt)) {
             state.armWritable(attempt.completionId());
         } else {
-            state.reject(submitFailure(attempt));
+            state.reject(submitFailure(attempt), settleInline);
         }
     }
 
-    private void retryRequest(Pending<?> untyped) {
+    private void retryRequest(Pending<?> untyped, boolean settleInline) {
         @SuppressWarnings("unchecked")
         Pending<List<Message>> state =
             (Pending<List<Message>>) untyped;
@@ -826,14 +854,14 @@ final class CompletionOwner implements AutoCloseable {
                 SendFlags.DONT_WAIT.value(), state.requestTimeoutMs,
                 state.context(), true, true, 0L);
         } catch (RuntimeException | Error failure) {
-            state.reject(failure);
+            state.reject(failure, settleInline);
             return;
         }
 
         if (attempt.result() == SubmitResult.OK) {
             if (attempt.completionId() == 0L) {
                 state.reject(new ZlinkSubmitException(
-                    SubmitResult.INTERNAL_ERROR));
+                    SubmitResult.INTERNAL_ERROR), settleInline);
                 return;
             }
             state.publishRequest(attempt.completionId());
@@ -843,7 +871,7 @@ final class CompletionOwner implements AutoCloseable {
         if (isWritableWait(attempt)) {
             state.armWritable(attempt.completionId());
         } else {
-            state.reject(submitFailure(attempt));
+            state.reject(submitFailure(attempt), settleInline);
         }
     }
 
@@ -971,6 +999,9 @@ final class CompletionOwner implements AutoCloseable {
         private long completionId;
         private Object result;
         private boolean requestAdmitted;
+        private Object terminalValue;
+        private Throwable terminalFailure;
+        private Pending<?> nextPublicSettlement;
 
         Pending(long token, PendingKind kind, RoutingId target,
                 List<Message> retained, int requestTimeoutMs) {
@@ -1016,15 +1047,15 @@ final class CompletionOwner implements AutoCloseable {
             signalDrainProgress();
         }
 
-        void capture(Object value) {
+        void capture(Object value, boolean settleInline) {
             if (value instanceof RequestCompletion) {
-                captureRequest(value);
+                captureRequest(value, settleInline);
             } else {
-                captureWritable(value);
+                captureWritable(value, settleInline);
             }
         }
 
-        private void captureRequest(Object value) {
+        private void captureRequest(Object value, boolean settleInline) {
             boolean ready;
             synchronized (this) {
                 if (dispatched) {
@@ -1036,11 +1067,15 @@ final class CompletionOwner implements AutoCloseable {
                 ready = published;
             }
             if (ready) {
-                settleCapturedRequest();
+                settleCapturedRequest(settleInline);
             }
         }
 
         private void settleCapturedRequest() {
+            settleCapturedRequest(false);
+        }
+
+        private void settleCapturedRequest(boolean settleInline) {
             Object capturedResult;
             long expectedId;
             synchronized (this) {
@@ -1052,27 +1087,27 @@ final class CompletionOwner implements AutoCloseable {
             }
             if (!(capturedResult instanceof RequestCompletion completion)) {
                 settle(null, new ZlinkRequestException(
-                    RequestResult.PROTOCOL_ERROR), false);
+                    RequestResult.PROTOCOL_ERROR), settleInline);
                 return;
             }
             if (completion.completionId() != expectedId) {
                 closeCapturedValue(completion.outcome());
                 settle(null, new ZlinkRequestException(
-                    RequestResult.PROTOCOL_ERROR), false);
+                    RequestResult.PROTOCOL_ERROR), settleInline);
                 return;
             }
             capturedResult = completion.outcome();
             if (capturedResult instanceof Throwable failure) {
-                settle(null, failure, false);
+                settle(null, failure, settleInline);
             } else {
-                settle(capturedResult, null, false);
+                settle(capturedResult, null, settleInline);
             }
         }
 
-        private void captureWritable(Object value) {
+        private void captureWritable(Object value, boolean settleInline) {
             if (!(value instanceof WritableCompletion completion)) {
                 reject(new ZlinkSubmitException(
-                    SubmitResult.INTERNAL_ERROR));
+                    SubmitResult.INTERNAL_ERROR), settleInline);
                 return;
             }
 
@@ -1097,7 +1132,7 @@ final class CompletionOwner implements AutoCloseable {
                 }
             }
             if (failure != null) {
-                reject(failure);
+                reject(failure, settleInline);
             } else if (kind == PendingKind.DISCARD_WRITABLE) {
                 completeDiscardInline();
             } else {
@@ -1120,68 +1155,66 @@ final class CompletionOwner implements AutoCloseable {
             closeParts(released);
         }
 
-        void completeSendInline() {
-            settle(null, null, true);
-        }
-
-        void completeSendAsync() {
-            settle(null, null, false);
+        void completeSend(boolean inline) {
+            settle(null, null, inline);
         }
 
         void completeDiscardInline() {
-            settle(null, null, true);
+            if (prepareSettlement(null, null)) {
+                completeFuture();
+            }
         }
 
         void reject(Throwable failure) {
             settle(null, Objects.requireNonNull(failure, "failure"), false);
         }
 
+        void reject(Throwable failure, boolean inline) {
+            settle(null, Objects.requireNonNull(failure, "failure"), inline);
+        }
+
         private void settle(Object value, Throwable failure, boolean inline) {
+            if (!prepareSettlement(value, failure)) {
+                return;
+            }
+            if (inline) {
+                enqueuePublicSettlement(this);
+            } else {
+                lane.dispatch(this::completeFuture);
+            }
+        }
+
+        private boolean prepareSettlement(Object value, Throwable failure) {
             synchronized (this) {
                 if (dispatched) {
-                    return;
+                    return false;
                 }
                 dispatched = true;
+                terminalValue = value;
+                terminalFailure = failure;
             }
             pending.remove(token, this);
             releaseRetained();
             signalDrainProgress();
-
-            Runnable completion = () -> {
-                try {
-                    if (failure != null) {
-                        future.completeExceptionally(failure);
-                    } else {
-                        @SuppressWarnings("unchecked")
-                        T typed = (T) value;
-                        future.complete(typed);
-                    }
-                } finally {
-                    synchronized (Pending.this) {
-                        Pending.this.notifyAll();
-                    }
-                }
-            };
-            if (inline) {
-                completion.run();
-            } else {
-                lane.dispatch(completion);
-            }
+            return true;
         }
 
-        synchronized void awaitSettlement() {
-            while (!future.isDone()) {
-                try {
-                    wait();
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    return;
+        private void completeFuture() {
+            try {
+                if (terminalFailure != null) {
+                    future.completeExceptionally(terminalFailure);
+                } else {
+                    @SuppressWarnings("unchecked")
+                    T typed = (T) terminalValue;
+                    future.complete(typed);
+                }
+            } finally {
+                terminalValue = null;
+                terminalFailure = null;
+                synchronized (this) {
+                    notifyAll();
                 }
             }
-        }
-
-        synchronized boolean terminalDispatched() {
-            return dispatched;
         }
 
         synchronized boolean awaitingWritable() {

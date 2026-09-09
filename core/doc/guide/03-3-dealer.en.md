@@ -262,12 +262,12 @@ zlink_connect(dealer2, endpoint);
 zlink_msg_t m1;
 zlink_msg_init_size(&m1, 12);
 memcpy(zlink_msg_data(&m1), "from_dealer1", 12);
-zlink_send_part(dealer1, &m1, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(dealer1, &m1, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 zlink_msg_t m2;
 zlink_msg_init_size(&m2, 12);
 memcpy(zlink_msg_data(&m2), "from_dealer2", 12);
-zlink_send_part(dealer2, &m2, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(dealer2, &m2, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 /* zlink_router_recv_part() distinguishes each DEALER's message by
    its source_rid */
@@ -322,8 +322,8 @@ void worker_thread(void *arg) {
     zlink_msg_init_size(&reply, 5);
     memcpy(zlink_msg_data(&reply), "World", 5);
 
-    zlink_send_part(worker, &envelope, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE);
-    zlink_send_part(worker, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+    zlink_send_part(worker, &envelope, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL);
+    zlink_send_part(worker, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
     zlink_msg_close(&request);
 
     /* Worker stays alive until socket is closed */
@@ -347,12 +347,12 @@ zlink_connect(b, "tcp://127.0.0.1:5558");
 zlink_msg_t ping;
 zlink_msg_init_size(&ping, 4);
 memcpy(zlink_msg_data(&ping), "ping", 4);
-zlink_send_part(a, &ping, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(a, &ping, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 zlink_msg_t pong;
 zlink_msg_init_size(&pong, 4);
 memcpy(zlink_msg_data(&pong), "pong", 4);
-zlink_send_part(b, &pong, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(b, &pong, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 /* b receives "ping" and a receives "pong" via zlink_recv_part() */
 ```
@@ -372,12 +372,15 @@ reached the HWM, the call blocks (default) or returns
 zlink_msg_t msg;
 zlink_msg_init_size(&msg, 4);
 memcpy(zlink_msg_data(&msg), "data", 4);
+zlink_completion_id_t wait_token = 0;   /* identifies the WRITABLE record when BACKPRESSURED */
 zlink_submit_result_t rc = zlink_send_part(
-    dealer, &msg, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL);
+    dealer, &msg, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL, &wait_token);
 if (rc == ZLINK_SUBMIT_NOT_ADMITTED) {
     /* No connected peer to admit the message */
 } else if (rc == ZLINK_SUBMIT_BACKPRESSURED) {
-    /* A peer is connected but its queue is at the HWM */
+    /* A peer is connected but its queue is at the HWM — the part was consumed, so
+       keep a copy, wait for ZLINK_POLLCOMPLETION, read wait_token's WRITABLE record
+       with zlink_completion_recv(), then resubmit */
 }
 ```
 

@@ -3,7 +3,7 @@ title: "TLS와 WSS"
 ---
 
 <!-- zlink-nav:start -->
-[가이드 목록](README.ko.md) | [이전: Transport 가이드](04-transports.ko.md) | [다음: Raw socket monitoring](../spec/core/06-monitoring.ko.md)
+[가이드 목록](README.ko.md) | [이전: Transport 가이드](04-transports.ko.md) | [다음: Monitoring](06-monitoring.ko.md)
 <!-- zlink-nav:end -->
 
 # TLS와 WSS
@@ -17,7 +17,7 @@ raw socket에 TLS를 설정한다.
 ## Server
 
 ```c
-void *server = zlink_socket(ctx, ZLINK_CORE_SOCKET_ROUTER);
+void *server = zlink_socket(ctx, ZLINK_SOCKET_ROUTER);
 zlink_set_tls_server(server, "server.crt", "server.key", 0);
 /* Bind가 handshake 경로를 시작하기 전에 certificate와 key를 설정한다. */
 zlink_bind(server, "tls://*:5555");
@@ -29,7 +29,7 @@ file은 PEM 형식을 사용한다.
 ## Client
 
 ```c
-void *client = zlink_socket(ctx, ZLINK_CORE_SOCKET_DEALER);
+void *client = zlink_socket(ctx, ZLINK_SOCKET_DEALER);
 zlink_set_tls_client(client, "ca.crt", "server.example.com", 0);
 /* Connection handshake에서 hostname을 검증한다. */
 zlink_connect(client, "tls://server.example.com:5555");

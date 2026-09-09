@@ -380,11 +380,11 @@ memcpy(zlink_msg_data(&part), "sunny", 5);
 zlink_publish_part(pub, "weather", &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);  /* OK */
 
 /* Using zlink_send_part() on PUB → returns ZLINK_SUBMIT_NOT_SUPPORTED */
-zlink_send_part(pub, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(pub, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 /* SUB: receive via zlink_subscribe_part(). Cannot send/publish */
 zlink_publish_part(sub, "weather", &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);  /* ZLINK_SUBMIT_NOT_SUPPORTED */
-zlink_send_part(sub, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);                /* ZLINK_SUBMIT_NOT_SUPPORTED */
+zlink_send_part(sub, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);                /* ZLINK_SUBMIT_NOT_SUPPORTED */
 ```
 
 ---
@@ -524,13 +524,13 @@ zlink_recv_result_t rc = zlink_xpub_recv_part(
 | Option | Type | Default | Description |
 |------|------|--------|------|
 | `ZLINK_PUB_OPT_MANUAL` | int | 0 | Enable manual subscription management mode |
-| `ZLINK_PUB_OPT_VERBOSE` | int | 0 | Forward duplicate subscription messages as well |
-| `zlink_set_subscription()` | -- | -- | (MANUAL mode) Add subscription to the current pipe |
-| `zlink_unset_subscription()` | -- | -- | (MANUAL mode) Remove subscription from the current pipe |
+| `ZLINK_PUB_OPT_VERBOSE` | int | 0 | Also surface duplicate subscribes for already-subscribed topics as events |
+| `ZLINK_PUB_OPT_APPROVE_SUBSCRIBE` | binary | -- | (MANUAL mode) Approve the topic subscription for the pipe of the most recently dequeued subscription event |
+| `ZLINK_PUB_OPT_REJECT_SUBSCRIBE` | binary | -- | (MANUAL mode) Reject the topic subscription for the pipe of the most recently dequeued subscription event |
 
 ### XPUB_MANUAL Mode
 
-By default, XPUB processes SUB subscriptions automatically. In MANUAL mode, after receiving a subscription frame, the application explicitly decides the actual subscription using `zlink_set_subscription()` / `zlink_unset_subscription()`.
+By default, XPUB processes SUB subscriptions automatically. In MANUAL mode, after receiving a subscription event with `zlink_xpub_recv_part()`, the application decides the actual subscription with `ZLINK_PUB_OPT_APPROVE_SUBSCRIBE` / `ZLINK_PUB_OPT_REJECT_SUBSCRIBE` through `zlink_set_pub_option()`. `zlink_set_subscription()` / `zlink_unset_subscription()` are SUB/XSUB-only and fail with `ZLINK_CONFIG_INVALID_ARGUMENT` on an XPUB handle.
 
 ```c
 /* Enable MANUAL mode */
@@ -538,8 +538,10 @@ int manual = 1;
 zlink_set_pub_option(xpub, ZLINK_PUB_OPT_MANUAL, &manual, sizeof(manual));
 
 /* zlink_xpub_recv_part() returns subscribed=1, topic="A"
-   Then apply transformed subscription: */
-zlink_set_subscription(xpub, "XA");
+   Then approve a transformed subscription for that subscriber's pipe: */
+const char mapped_topic[] = "XA";
+zlink_set_pub_option(xpub, ZLINK_PUB_OPT_APPROVE_SUBSCRIBE,
+                     mapped_topic, sizeof(mapped_topic) - 1);
 
 /* Publish */
 zlink_msg_t msg_a;
@@ -589,19 +591,20 @@ for (;;) {
     size_t topic_len = 0;
 
     zlink_recv_result_t rc = zlink_xpub_recv_part(
-      xpub, &source_rid, &subscribed, topic, sizeof(topic), &topic_len, ZLINK_RECV_FLAGS_NONE);
+      xpub, &source_rid, &subscribed, topic, sizeof(topic) - 1, &topic_len, ZLINK_RECV_FLAGS_NONE);
     if (rc != ZLINK_RECV_OK)
         break;
+    topic[topic_len] = '\0';   /* topic bytes are binary-safe (no NUL) — set_subscription takes a C string */
 
     if (subscribed) {
-        /* Register subscription */
-        zlink_set_subscription(xpub, topic);
+        /* Approve the subscription for the pipe of the event just dequeued */
+        zlink_set_pub_option(xpub, ZLINK_PUB_OPT_APPROVE_SUBSCRIBE, topic, topic_len);
 
         /* Propagate subscription upstream (XSUB) */
         zlink_set_subscription(xsub, topic);
     } else {
-        /* Unsubscription */
-        zlink_unset_subscription(xpub, topic);
+        /* Reject (remove) the subscription for that pipe */
+        zlink_set_pub_option(xpub, ZLINK_PUB_OPT_REJECT_SUBSCRIBE, topic, topic_len);
 
         zlink_unset_subscription(xsub, topic);
     }
@@ -663,7 +666,7 @@ msleep(100);  /* wait for subscription propagation */
 
 ### Subscription Management in XPUB MANUAL Mode
 
-In MANUAL mode, if `zlink_set_subscription()` is not called after receiving a subscription frame, that subscription is not registered. Subscriptions must be explicitly processed.
+In MANUAL mode, if `ZLINK_PUB_OPT_APPROVE_SUBSCRIBE` is not applied after receiving a subscription event, that subscription is not registered. Subscriptions must be explicitly processed.
 
 ### Multiple Subscribers → Single XPUB
 

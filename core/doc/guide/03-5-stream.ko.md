@@ -13,12 +13,13 @@ title: "STREAM 소켓"
 
 ## 1. 개요
 
-STREAM 소켓은 **외부 RAW 클라이언트**와 통신하기 위한 **서버 전용** 소켓이다.
+STREAM 소켓은 zlink framing 없이 **raw byte**를 주고받는 소켓이다. 반대편은 OS socket·WebSocket
+같은 외부 raw client일 수도 있고, receive mode를 설정한 다른 zlink STREAM 소켓일 수도 있다.
 
 핵심 규칙:
-- `ZLINK_SOCKET_STREAM`은 `zlink_bind()`만 지원한다.
-- `ZLINK_SOCKET_STREAM`에 `zlink_connect()`를 호출하면 `EOPNOTSUPP`를 반환한다.
-- 클라이언트는 zlink STREAM 소켓이 아니라 OS/Asio/WebSocket 등의 **raw client**를 사용해야 한다.
+- 첫 `zlink_bind()` 또는 `zlink_connect()` 전에 `ZLINK_STREAM_OPT_RECV_MODE`를 RAW 또는 PACKET으로
+  설정한다. mode 없이 bind/connect하면 `EINVAL`로 실패한다.
+- `ZLINK_SOCKET_STREAM`은 bind와 connect를 모두 지원한다(`zlink_connect()` 성공 시 `ZLINK_CONNECT_OK`).
 - RAW 모드는 raw 바이트 스트림을 그대로 전달한다. PACKET 모드는 2바이트 BE header 크기 +
   4바이트 BE body 크기 + header + body framing을 사용한다.
 - zlink API 수준에서: raw `zlink_recv_part()`는 발신 클라이언트의 4바이트
@@ -39,12 +40,14 @@ external raw client  <---- RAW 바이트 스트림 (framing 없음) ---->  STREA
 
 ```c
 void *stream = zlink_socket(ctx, ZLINK_SOCKET_STREAM);
+zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_RAW;   /* bind 전에 필수 */
+zlink_set_stream_option(stream, ZLINK_STREAM_OPT_RECV_MODE, &mode, sizeof(mode));
 int linger = 0;
 zlink_set_option(stream, ZLINK_OPT_LINGER, &linger, sizeof(linger));
 zlink_bind(stream, "tcp://0.0.0.0:8080");
 ```
 
-지원 transport(서버 bind):
+지원 transport(bind·connect 공통):
 - `tcp://`
 - `tls://`
 - `ws://`
@@ -74,17 +77,21 @@ STREAM만의 고유 동작은 다음과 같다.
   고정 4바이트(`uint32`, big-endian)이다.
 - 특정 클라이언트를 끊어야 하면 recv에서 받은 `source_rid`를
   `zlink_disconnect_rid()`에 넘긴다. STREAM의 대상 rid는 반드시 4바이트다.
-- connect/disconnect는 in-band 데이터 마커가 **아니다**. 소켓 monitor의
-  `ZLINK_EVENT_CONNECTION_READY` / `ZLINK_EVENT_DISCONNECTED` 이벤트로
-  보고되며 각각 4바이트 `routing_id`를 담는다. 우연히 1바이트 `0x00`/`0x01`인
-  raw payload는 일반 데이터로 전달된다.
+- 기본값(`ZLINK_STREAM_OPT_NOTIFY=0`)에서 connect/disconnect는 in-band 데이터 마커가
+  **아니다**. 소켓 monitor의 `ZLINK_EVENT_CONNECTION_READY` / `ZLINK_EVENT_DISCONNECTED`
+  이벤트로 보고되며 각각 4바이트 `routing_id`를 담는다. 우연히 1바이트 `0x00`/`0x01`인
+  raw payload는 일반 데이터로 전달된다. RAW 모드에서 bind/connect 전에
+  `ZLINK_STREAM_OPT_NOTIFY`를 `1`로 설정하면 `zlink_recv_part()`가 연결·해제마다 해당
+  `source_rid`와 함께 **길이 0 record**를 추가로 돌려주므로, 그 경우 길이 0 part는
+  데이터가 아니라 알림으로 해석한다.
 
 ---
 
 ## 4. RAW pull 예시
 
-STREAM RAW 모드에서 pull한 모든 part는 애플리케이션 데이터다.
-connect/disconnect는 소켓 monitor로 관찰한다([Monitoring](../spec/core/06-monitoring.ko.md) 참고).
+`ZLINK_STREAM_OPT_NOTIFY=0`(기본)이면 STREAM RAW 모드에서 pull한 모든 part는 애플리케이션 데이터이고,
+connect/disconnect는 소켓 monitor로 관찰한다([Monitoring](06-monitoring.ko.md) 참고).
+`NOTIFY=1`이면 길이 0 record가 연결·해제 알림으로 섞여 들어온다.
 
 ```c
 zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_RAW;
@@ -173,8 +180,8 @@ PACKET 모드의 규칙은 다음과 같다.
 
 ## 5. 클라이언트 구현 원칙
 
-클라이언트는 raw socket/websocket로 구현한다.
-STREAM은 raw 바이트를 그대로 전달하므로 **패킷 경계(framing)는 애플리케이션이 정의**해야 한다.
+클라이언트는 raw socket/websocket로 구현하거나, receive mode를 설정한 zlink STREAM 소켓으로
+`zlink_connect()`해도 된다. STREAM은 raw 바이트를 그대로 전달하므로 **패킷 경계(framing)는 애플리케이션이 정의**해야 한다.
 
 개념적 POSIX TCP 예시 (RAW 모드 — zlink framing 없음, 바이트 그대로):
 
@@ -212,7 +219,7 @@ send(fd, body, body_len, 0);
   - `ZLINK_OPT_SNDBUF` / `ZLINK_OPT_RCVBUF`
   - `ZLINK_OPT_BACKLOG`
   - `ZLINK_OPT_LINGER`
-  - `ZLINK_STREAM_OPT_RECV_MODE` (`zlink_set_stream_option()` / `zlink_get_stream_option()`): bind 전에 RAW 또는 PACKET 선택
+  - `ZLINK_STREAM_OPT_RECV_MODE` (`zlink_set_stream_option()` / `zlink_get_stream_option()`): 첫 bind 또는 connect 전에 RAW 또는 PACKET 선택
   - `ZLINK_STREAM_OPT_NOTIFY`: RAW 모드의 길이 0 connect/disconnect record 활성화. PACKET과 결합 불가
 - TLS/WSS 서버: `zlink_set_tls_server()`
 - TLS 클라이언트: `zlink_set_tls_client()`
@@ -226,17 +233,12 @@ STREAM listener는 raw TCP 피어가 보낸 바이트를 직접 받을 수 있�
 
 ### 6.1 STREAM 기본 런타임 프로파일
 
-현재 STREAM 내부 기본값:
+STREAM socket이 public option에 두는 기본값:
 - `ZLINK_OPT_BACKLOG`: `65536`
 - `ZLINK_OPT_SNDHWM` / `ZLINK_OPT_RCVHWM`: 기본 balanced auto-HWM 정책의 STREAM profile byte 값. context auto-HWM을 끄면 수동 byte 기본값 사용
 - `ZLINK_OPT_SNDBUF` / `ZLINK_OPT_RCVBUF`: 기본값 `-1`. OS 기본 버퍼와 TCP 자동 조정에 맡김
-- STREAM 배치 크기 기본값: `4096`
-- STREAM 읽기 여유 공간 기본값: `64`
-- STREAM accept 동시성 기본값: `4` (최대 `128`로 제한)
-- STREAM 세션 스케줄링 기본값: `rr`
 
-> STREAM 런타임 환경변수 및 내부 튜닝 상수는
-> [STREAM 내부 문서](../spec/core/socket/08-stream.ko.md)를 참고.
+> 각 option의 정확한 계약은 [STREAM socket 스펙](../spec/core/socket/08-stream.ko.md)이 소유한다.
 
 ---
 

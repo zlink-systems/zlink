@@ -88,10 +88,11 @@ The ABI v1 planner uses the context's physical directional queue registry. The r
 - Send and receive roles and profile bounds
 - Manual HWM, current applied HWM, and accounted bytes
 
-Even when two endpoints observe the same inproc ypipe, Core counts it only once per direction. A new pipe pair uses the following reservation rules for each direction.
+Even when two endpoints observe the same inproc ypipe, Core counts the same physical direction only once. A new pipe pair uses the following reservation rules for each direction.
 
-A DEALER-ROUTER single pipe is also registered as one Application direction. The absence of a
-separate Completion pipe neither adds nor removes a direction from Application water-filling.
+A DEALER-ROUTER single connection is registered as one Application pipepair, that is, two
+Application directional queues. Because there is no separate Completion pipe, no completion
+directional queue is added.
 
 - Application direction: atomically reserves the role-specific minimum. If both directions cannot be reserved, Core rejects the entire reservation before publishing the attach and does not register only a subset of the directions. The budget this admission uses is computed from **the topology being reserved**: the explicit Core budget when one is set, otherwise the budget whose effective cap comes from the number of application directions already reserved plus the two directions of this pair. It is not judged against the budget of an already recorded plan or against a seed budget whose queue count is zero: a plan snapshot can lag pipe creation, and judging by the fixed cap alone rejects with `ENOBUFS` connections that the same planner would fund. For this the registry keeps the reserved byte total together with the reserved direction count, and returns both when a direction retires and finishes draining.
 - Manual direction: also reserves the role-specific minimum before attach. A finite manual HWM applies to admission immediately and is included in the next plan's manual reservation sum and aggregate HWM statistics.
@@ -135,7 +136,7 @@ originQueueUsedBytes(queue) = physicalQueueAccountedBytes(queue)
 
 Ordinary admission checks only this origin-local sum and that queue's applied HWM. It does not block other queues merely because the context's `current_accounted_bytes` exceeds `effective_core_budget_bytes`.
 
-`total_planned_hwm_bytes` is the sum of the current targets for application directions, and `total_applied_hwm_bytes` is the sum of the HWMs actually applied to live application directions. `core_queue_accounted_bytes` is the number of bytes currently held by Core queues, and `current_accounted_bytes` equals that value. The ABI compatibility fields for the removed retained-credit feature—`application_accounted_bytes`, `outstanding_application_lease_count`, `deferred_origin_credit_bytes`, and `retired_queue_count`—are always zero.
+`total_planned_hwm_bytes` is the sum of the current targets for application directions, and `total_applied_hwm_bytes` is the sum of the HWMs actually applied to live application directions. `core_queue_accounted_bytes` is the number of bytes currently held by Core queues, and `current_accounted_bytes` equals that value.The ABI-reserved fields `application_accounted_bytes`, `outstanding_application_lease_count`, `deferred_origin_credit_bytes`, and `retired_queue_count` are always zero.
 
 The ROUTER-ROUTER [completion progress lane](../glossary.en.md#completion-progress-lane) does not
 apply a byte HWM, LWM, inproc HWM boost, or the legacy 256 KiB floor, and it is excluded from the
@@ -539,3 +540,7 @@ This section collects the items that workers must verify. These behaviors are ob
 **Snapshot invariance**
 - Calling `zlink_ctx_get_auto_hwm_budget_snapshot` or `zlink_ctx_reset_auto_hwm_budget_metrics` does not change the admission or rejection result for the same send sequence.
 - An unsupported `abi_version` fails with `ENOTSUP`, and a terminating context fails with `ETERM`.
+
+<!-- zlink-nav:start -->
+[Systems Index](README.en.md) | [Previous: Per-Connection Memory](05-connection-memory.en.md) | [Next: Core Source Layout](07-core-source-layout.en.md)
+<!-- zlink-nav:end -->

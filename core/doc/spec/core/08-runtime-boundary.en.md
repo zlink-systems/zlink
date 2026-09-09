@@ -50,7 +50,7 @@ Core provides the following capabilities through its public C ABI.
 - Message allocation, ownership, multipart frames, and routing IDs
 - PAIR, PUB, SUB, XPUB, XSUB, DEALER, ROUTER, and STREAM raw sockets
 - Bind, connect, disconnect, endpoint, and connection lifecycle
-- TCP, WebSocket, and TLS transports
+- inproc and TCP transports, plus IPC, WebSocket, WSS, and TLS transports depending on the build configuration
 - Classic PUB/SUB and raw STREAM
 - Raw socket monitors, generic events, poll, and pollers
 - Generic timers, threads, stopwatches, atomic counters, and proxies
@@ -64,7 +64,8 @@ headers, exported symbols, or compatibility facades.
 
 - MeshName, ChannelName membership, and service discovery
 - MeshNode lifecycle, peer admission, and node/channel messaging
-- Ready batches, claims, receive batches, and reply tokens
+- Ready batches, claims, receive batches, and service-level reply tokens (Core does own the
+  socket-local `zlink_reply_token_t` and request completion state of raw ROUTER request/reply)
 - Spot, Actor, Instance Spot activation, and Logical Multicast
 - Actor transfer, bound STREAM sessions, and service drain
 - MeshNode monitors, service snapshots, and Spot-owned timers
@@ -72,7 +73,7 @@ headers, exported symbols, or compatibility facades.
 The Core installation tree therefore has no `zlink/service/*.h`, and the root `zlink.h` does
 not include a service header. Raw sockets have no ChannelName setter or getter. Generic
 pollers handle only sockets, file descriptors, and generic timers; they return no service
-owner or claim. Socket monitors report only transport and protocol state.
+owner or claim. Socket monitors report the transport, protocol, queue, Auto HWM, and receive-flow state of raw sockets and connections as events and status snapshots; they report no MeshName, ChannelName, service owner, claim, or application handler state.
 
 Framework runtimes implement service contracts using only the public raw socket API of each
 language binding. There is no shared native service runtime for Framework, separate Core C
@@ -135,7 +136,7 @@ I/O progress from application dispatch progress.
 > own the public boundary maintained by Core. This section explains how the internal layers
 > divide responsibilities to enforce that boundary.
 
-Core 0.13.0 implements only raw sockets and transports. The public API facade validates
+Core implements the raw socket and transport runtime. The public API facade validates
 arguments, handles, and ownership. The socket semantics layer determines routing for
 PAIR, PUB/SUB, DEALER/ROUTER, and STREAM. Runtime core manages connections, sessions,
 pipes, and I/O threads, while engines handle TCP, WebSocket, and TLS framing.
@@ -207,8 +208,8 @@ record queue is neither a transport lane nor a wire record.
 
 ### Transport liveness implementation
 
-TCP and WebSocket engines deliver orderly disconnects, read/write failures, and protocol
-failures to the session. The session reports them through the socket monitor and updates
+TCP, IPC, WebSocket (WSS), and TLS engines deliver orderly disconnects, read/write failures,
+and protocol failures to the session. The session reports them through the socket monitor and updates
 the reconnect state of configured endpoints. Operating-system TCP keepalive and the TCP
 retransmission limit are applied as transport options; the engine does not create separate
 application control frames.
@@ -251,8 +252,9 @@ coalescing, or metric policy for Framework observers.
 ### Raw-only invariants
 
 - Core source and public ABI own no service protocol command or state machine.
-- Core creates no application mailbox, ready owner, claim, reply token, or terminal request
-  state.
+- Core creates no application mailbox, ready owner, claim, or service-level reply token. The
+  socket-local `zlink_reply_token_t` and request completion state of raw ROUTER request/reply
+  are Core contracts inside this boundary.
 - Core does not interpret Spot, Actor, or Instance identity, generation, or activation
   barriers.
 - Core does not call a Location Store, Checkpoint Store, lease, owner CAS, or maintenance
@@ -292,7 +294,7 @@ of public APIs. Each item maps to one check.
 - Raw socket, generic poller and timer, and socket monitor contract tests pass.
 - Generic pollers handle only sockets, file descriptors, and generic timers; they return no
   service owner or claim.
-- Socket monitors report only transport and protocol state.
+- Socket monitors report the transport, protocol, queue, Auto HWM, and receive-flow state of raw sockets and connections as events and status snapshots; they report no MeshName, ChannelName, service owner, claim, or application handler state.
 
 **Receive-flow state**
 

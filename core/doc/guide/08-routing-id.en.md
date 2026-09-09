@@ -1,5 +1,9 @@
 [Message API →](09-message-api.en.md)
 
+<!-- zlink-nav:start -->
+[← Thread safety](11-thread-safety.en.md) | [PAIR Socket →](03-1-pair.en.md)
+<!-- zlink-nav:end -->
+
 # Routing IDs
 
 A routing id identifies a connected peer on routed raw sockets. Core exposes it

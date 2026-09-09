@@ -61,3 +61,7 @@ byte 열), topic, request sequence와 subscription state를 application payload 
 Poller는 readiness — source가 receive 또는 send를 진행할 가치가 있는 상태 — 를 보고하고,
 monitor는 transport/protocol 전이를, generic timer는 시간 event를 보고한다. 이 세
 mechanism은 application payload를 해석하지 않는다.
+
+<!-- zlink-nav:start -->
+[시스템 목차](README.ko.md) | [이전: POSD module 구조](08-posd-module-structure.ko.md) | [다음: Core hot path](10-hot-path.ko.md)
+<!-- zlink-nav:end -->

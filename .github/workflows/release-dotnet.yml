@@ -198,9 +198,11 @@ jobs:
             echo "Framework version mismatch: requested=${version}, FRAMEWORK_VERSION=${framework_version}" >&2
             exit 1
           fi
-          declared=$(sed -n 's/.*<Version Condition="[^"]*">\(.*\)<\/Version>.*/\1/p' framework/languages/dotnet/Directory.Build.props | head -n1)
-          if [ "${version}" != "${declared}" ]; then
-            echo "Framework version mismatch: requested=${version}, Directory.Build.props=${declared}" >&2
+          # Directory.Build.props reads the root FRAMEWORK_VERSION file at build time (since
+          # 0.11.0), so the file above is the single declaration; only confirm the props still
+          # point at it.
+          if ! grep -q "ZLinkFrameworkVersionFile" framework/languages/dotnet/Directory.Build.props; then
+            echo "Directory.Build.props no longer reads FRAMEWORK_VERSION" >&2
             exit 1
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"

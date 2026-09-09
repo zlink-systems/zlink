@@ -105,7 +105,7 @@ released as in §3.4.
 Internal check condition: the code that reads or writes the socket's C2 state is exactly one
 execution party, the one holding the turn.
 
-**Implementation (0.17.4).** The turn and the public-API entry state live in one state word.
+**Current implementation.** The turn and the public-API entry state live in one state word.
 
 | Bit | Meaning |
 |---|---|
@@ -131,8 +131,10 @@ execution party, the one holding the turn.
   command application, deferred pipe termination and readiness / submit-progress publication
   inside that same turn.
 - Close does not wait for the turn: it CASes the close bit once the in-flight public API count is
-  zero. Poller registration holds an admission only while it takes the lifetime pin and releases
-  it immediately, so a registration never blocks close.
+  zero. If the count is not zero, it backs off at most 1024 times to let a public poller's brief
+  readiness sample finish, and returns `EBUSY` if a call is still in flight after that. Poller
+  registration holds an admission only while it takes the lifetime pin and releases it
+  immediately, so a registration never blocks close.
 
 ### 3.2 The two ends of a pipe and what lies between
 
@@ -170,7 +172,7 @@ the other's counter.
 Internal check condition: every value at a pipe end has one writer, and if another party reads
 it, it is published.
 
-**Implementation (0.17.4).** The steady send and receive paths take no pipe mutex.
+**Current implementation.** The steady send and receive paths take no pipe mutex.
 
 - The ypipe is single-producer / single-consumer, and the only value the two ends share is one
   published pointer. The writer's flush raises an `activate_read` command only when that CAS
@@ -219,7 +221,7 @@ Internal check condition: no wake-up is lost between waiter registration and not
 queue is re-checked after registering and before sleeping, and the notification is issued after
 the registration has been seen.
 
-**Implementation (0.17.4).** A producer takes the mailbox lock once per command. That section
+**Current implementation.** A producer takes the mailbox lock once per command. That section
 covers writing and flushing the command, updating the observer epoch and waiters, the pending
 hint, signalling registered pollers, and deciding whether to schedule the Asio callback.
 

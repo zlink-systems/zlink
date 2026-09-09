@@ -93,10 +93,9 @@ for TCP, TLS, WS, and WSS.
 ## 4. Measurement and limitations
 
 The monitor that reports runtime memory state separately exposes current bytes for application
-queues and completion lanes, as well as oversize-admission history. The
+queues and completion lanes, as well as oversize-admission history. The ABI-reserved fields
 `application_accounted_bytes`, `outstanding_application_lease_count`,
-`deferred_origin_credit_bytes`, and `retired_queue_count` fields that were allocated to the removed
-retained-credit feature remain for ABI compatibility and are always zero. The
+`deferred_origin_credit_bytes`, and `retired_queue_count` are always zero. The
 [Core budget](../glossary.en.md#auto-hwm-budget) — the total number of bytes that Core uses as the
 basis for distributing HWM among application queues after calculating it from memory inputs — is
 the normal-state basis for distributing per-pipe HWM, not a hard cap on actual context memory
@@ -152,3 +151,7 @@ maps to one test.
 - On the same transport, a DEALER-ROUTER logical peer uses one physical connection and a
   ROUTER-ROUTER logical peer uses two. Observing the reduction in idle resources does not provide a
   process hard cap that includes allocator, kernel, and TLS memory.
+
+<!-- zlink-nav:start -->
+[Systems Index](README.en.md) | [Previous: Thread Safety](04-thread-safety.en.md) | [Next: Auto HWM](06-auto-hwm.en.md)
+<!-- zlink-nav:end -->

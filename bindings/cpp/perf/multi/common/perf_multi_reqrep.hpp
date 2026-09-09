@@ -242,9 +242,9 @@ template <typename SocketT> class client_bench_t
                 break;
         }
 
+        const int drain_timeout_ms = std::max (1, _settings.send_drain_timeout_ms);
         const auto drain_deadline =
-          std::chrono::steady_clock::now () + std::chrono::milliseconds (
-                                                std::max (1000, _settings.rcvtimeo_ms * 4));
+          std::chrono::steady_clock::now () + std::chrono::milliseconds (drain_timeout_ms);
         while (_completion->outstanding.load (std::memory_order_acquire) != 0
                && std::chrono::steady_clock::now () < drain_deadline) {
             if (!progress_once (drain_deadline))
@@ -252,6 +252,10 @@ template <typename SocketT> class client_bench_t
         }
 
         if (_completion->outstanding.load (std::memory_order_acquire) != 0) {
+            std::cerr << "[perf-cpp-multi-reqrep] drain timeout size=" << _msg_size
+                      << " outstanding="
+                      << _completion->outstanding.load (std::memory_order_acquire)
+                      << " drain_timeout_ms=" << drain_timeout_ms << std::endl;
             // Do not let a bounded benchmark drain tear down the queue below
             // suspended detached request coroutines.  The normal successful
             // measurement path above remains unchanged.

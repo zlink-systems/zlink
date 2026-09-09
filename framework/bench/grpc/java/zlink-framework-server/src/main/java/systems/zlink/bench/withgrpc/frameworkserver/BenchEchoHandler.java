@@ -5,6 +5,7 @@ package systems.zlink.bench.withgrpc.frameworkserver;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.bench.withgrpc.proto.BenchPayload;
+import systems.zlink.bench.withgrpc.shared.BenchServerMetrics;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
 
@@ -14,10 +15,16 @@ import systems.zlink.framework.channels.ZLinkRequestHandler;
  */
 public final class BenchEchoHandler
     implements ZLinkRequestHandler<BenchPayload, BenchPayload> {
+    private final BenchServerMetrics metrics;
+
+    public BenchEchoHandler(BenchServerMetrics metrics) {
+        this.metrics = metrics;
+    }
 
     @Override
     public CompletionStage<BenchPayload> handle(
         BenchPayload request, ZLinkMessageContext context) {
+        metrics.record(request.getBody().asReadOnlyByteBuffer());
         return CompletableFuture.completedFuture(request);
     }
 }

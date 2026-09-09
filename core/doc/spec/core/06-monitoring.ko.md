@@ -82,11 +82,14 @@ event별 `value`의 의미는 다음과 같다.
 
 | Event | `value` |
 |---|---|
+| `CONNECTED`, `LISTENING`, `ACCEPTED`, `CLOSED` | 해당 OS transport descriptor를 `uint64_t`로 변환한 값 |
+| `CONNECT_RETRIED` | 다음 reconnect 시도까지의 interval(ms) |
+| `CONNECT_DELAYED`, `BIND_FAILED`, `ACCEPT_FAILED`, `CLOSE_FAILED`, `HANDSHAKE_FAILED_NO_DETAIL` | 해당 실패의 errno |
+| `MONITOR_STOPPED` | `0` |
 | `DISCONNECTED` | `zlink_disconnect_reason_t` 값 |
 | `HANDSHAKE_FAILED_PROTOCOL` | `zlink_protocol_error_t` 값 |
 | `PEER_WEIGHT_CHANGED` | 새 `0..10000` weight |
 | `CONNECTION_READY` | 해당 monitor source가 ready인 공개 transport 수의 현재 count |
-| 그 밖의 실패 event | 해당 실패의 errno |
 | receive-flow event 3개 | [Events](04-events.ko.md)가 소유 |
 
 `CONNECTION_READY`의 `value`는 ready인 공개 transport 수의 현재 count이므로, count가 증가한
@@ -476,6 +479,9 @@ ZLINK_EXPORT zlink_config_result_t zlink_monitor_status(
 Core가 반환한 현재 layout의 진단값이며 caller 입력이 아니다. `detail_flags`에 없는 선택
 field는 0이다. Pipe 합계 field 군은 군 내부에서 일관되며, Auto HWM field·flow counter와의 교차 일관성은
 보장하지 않는다([§6.3](#63-byte와-pending-진단-field)이 일관성 범위와 그 메커니즘을 소유한다).
+source socket이 먼저 닫히면 monitor handle은 close할 때까지 유효하지만 이 함수는
+`ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`을 반환한다 — caller는 남은 event를 소비한 뒤 monitor를
+별도로 닫는다.
 
 **반환값:** `zlink_config_result_t` 값.
 

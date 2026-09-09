@@ -17,7 +17,10 @@ title: "Socket — XPUB"
 XPUB는 구독 전달과 수동 제어를 지원하는 확장 publisher다. message를 주고받는 endpoint인
 [socket](../glossary.ko.md#socket) 중 발행하는 쪽이라는 점은 PUB와 같지만, XPUB는 구독하는
 쪽 peer(subscriber)가 보내는 구독·해제 요청을 구독 이벤트 message로 수신하고 수동 구독
-관리를 지원한다.
+관리를 지원한다. 기본 mode에서 event로 공개되는 것은 어떤 topic을 처음 요청한 subscribe와 그
+topic을 요청하는 subscriber가 더는 남지 않게 한 마지막 unsubscribe뿐이다 — 이미 구독 중인
+topic의 중복 subscribe나 다른 subscriber가 아직 남은 unsubscribe는 `ZLINK_PUB_OPT_VERBOSE` /
+`ZLINK_PUB_OPT_VERBOSER`를 켜야 event로 보인다([§4](#4-pub-옵션-zlink_pub_option_t)).
 
 이 문서는 XPUB 고유의 공개 계약 — PUB/XPUB 전용 옵션, message part 발행, 구독 이벤트
 수신 — 을 정의한다.
@@ -35,12 +38,15 @@ XPUB는 구독 전달과 수동 제어를 지원하는 확장 publisher다. mess
 
 subscriber가 보낸 구독·해제 요청은 XPUB에 구독 이벤트 message로 도착한다. application은
 [`zlink_xpub_recv_part`](#zlink_xpub_recv_part)로 이 이벤트를 하나씩 꺼내며, 각 이벤트에서
-어느 peer가 보냈는지(routing ID), 구독인지 해제인지, 어느 topic인지를 관찰한다. topic은
-message 앞의 topic frame이 운반하는, 구독 대상을 구분하는 byte 열이다.
+어느 peer가 보냈는지(routing ID), 구독인지 해제인지, 어느 topic인지를 관찰한다. 구독 이벤트는
+단일 frame이다 — 첫 byte가 subscribe면 `0x01`, unsubscribe면 `0x00`이고 나머지 byte가 topic(구독
+대상을 구분하는 byte 열)이다. 빈 topic의 이벤트도 첫 byte 하나를 가진다. `zlink_xpub_recv_part`가
+첫 byte를 `*subscribed_out_`로, 나머지를 topic output으로 나눠 돌려주므로 application이 frame을
+직접 해석할 일은 없다.
 
 수동 구독 관리는 `ZLINK_PUB_OPT_MANUAL`로 켠다. manual 모드의 구독 승인은
 `ZLINK_PUB_OPT_APPROVE_SUBSCRIBE`, 거부는 `ZLINK_PUB_OPT_REJECT_SUBSCRIBE` 옵션으로
-설정한다. 구독 message를 upstream으로 전달하는 verbose 계열을 포함한 전체 옵션은
+설정한다. 중복 구독·해제까지 이벤트로 공개하는 verbose 계열을 포함한 전체 옵션은
 [§4](#4-pub-옵션-zlink_pub_option_t)에 있다.
 
 ```mermaid
@@ -62,7 +68,10 @@ sequenceDiagram
 `zlink_publish_part()`는 해당 subscriber에 대한 message를 버리고 성공을 보고한다. 송신
 queue가 찼을 때 drop 대신 publisher의 추가 제출을 제한하는
 [backpressure](../glossary.ko.md#backpressure)를 주려면 명시적으로 `1`로 설정해야 하며,
-이때 `zlink_publish_part()`는 `ZLINK_SUBMIT_BACKPRESSURED`를 반환한다.
+이때 `zlink_publish_part()`는 `ZLINK_SUBMIT_BACKPRESSURED`를 반환한다. HWM 검사 대상은 현재
+topic의 filter에 맞는 pipe뿐이다 — 그중 하나라도 차 있으면 그 record를 filter가 맞는 어떤
+subscriber에도 전달하지 않고, filter가 맞지 않는 subscriber의 pipe 상태는 이 publish에 영향을
+주지 않는다.
 
 `1`로 설정하면 publisher가 가장 느린 subscriber에 묶인다. 한 pipe가 차면 같은
 socket의 모든 subscriber에 대한 전달이 멈추기 때문이다. subscriber 속도에
@@ -75,8 +84,8 @@ socket의 모든 subscriber에 대한 전달이 멈추기 때문이다. subscrib
 ```c
 typedef enum zlink_pub_option_t
 {
-    ZLINK_PUB_OPT_VERBOSE = 0x3301,            // 모든 구독 message를 upstream 전달 (int; 0=off, 양수=on (getter는 0/1 반환))
-    ZLINK_PUB_OPT_VERBOSER = 0x3302,           // 구독/해제 message를 upstream 전달 (int; 0=off, 양수=on (getter는 0/1 반환))
+    ZLINK_PUB_OPT_VERBOSE = 0x3301,            // 이미 구독 중인 topic의 subscribe도 event로 공개 (int; 0=off, 양수=on (getter는 0/1 반환))
+    ZLINK_PUB_OPT_VERBOSER = 0x3302,           // 중복 subscribe와 모든 unsubscribe를 event로 공개 (int; 0=off, 양수=on (getter는 0/1 반환))
     ZLINK_PUB_OPT_MANUAL = 0x3303,             // XPUB 수동 구독 관리 (int; 0=off, 양수=on (getter는 0/1 반환))
     ZLINK_PUB_OPT_MANUAL_LAST_VALUE = 0x3304,  // manual 모드 활성 + 다음 발행을 마지막 구독 event pipe에만 전달 (int; 0=off, 양수=on (getter는 0/1 반환))
     ZLINK_PUB_OPT_NODROP = 0x3305,             // HWM 시 drop 대신 EAGAIN 반환 (int; 0=off, 양수=on (getter는 0/1 반환), 기본값 0)
@@ -177,9 +186,9 @@ non-blocking 발행은 `flags_`에
 `ZLINK_SUBMIT_BACKPRESSURED`를 반환한다.
 
 Core는 성공한 중간 part를 `ZLINK_PART_FINAL`이 성공할 때까지 하나의 publish
-record로 staging한다. 실패 처리는 PUB와 같은 경로이며 [PUB §3](02-pub.ko.md#3-multipart-발행과-publish-record)이
+record로 임시로 보관한다. 실패 처리는 PUB와 같은 경로이며 [PUB §3](02-pub.ko.md#3-multipart-발행과-publish-record)이
 소유한다: 제출 전 sequence 검증 실패는 호출 part만 소비하고 열린 record를 유지하며, send 단계의
-중간·마지막 submit 실패는 staging한 part와 실패한 part를 원자적으로 폐기하고 sequence를 닫는다.
+중간·마지막 submit 실패는 임시로 보관한 part와 실패한 part를 원자적으로 폐기하고 sequence를 닫는다.
 
 적용 타입은 raw `PUB`, raw `XPUB`다. 다른 타입은
 `ZLINK_SUBMIT_NOT_SUPPORTED`, `errno == ENOTSUP`이다. 전체 결과 대응은
@@ -203,11 +212,14 @@ ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
                                zlink_recv_flags_t flags_);
 ```
 
-recv 모드에서 다음 구독 이벤트를 수신한다. 성공 시
-`source_rid_out_`는 NULL을 허용하는 선택 output이다. NULL이 아니면
-`*source_rid_out_`는 구독 peer의 Core 소유 routing ID view로 설정되며 수명은
+recv 모드에서 다음 구독 이벤트를 수신한다. `subscribed_out_`과 `topic_id_len_out_`은 필수
+output이고, `topic_id_capacity_`가 0보다 크면 `topic_id_buf_`도 필수다 — 이 pointer 중 하나라도
+NULL이면 event를 읽거나 output을 바꾸기 전에 `ZLINK_RECV_INVALID_HANDLE`과 `EFAULT`로 실패한다.
+`source_rid_out_`는 NULL을 허용하는 선택 output이다. NULL이 아니면, 아직 연결된 peer가 보낸
+이벤트에서는 `*source_rid_out_`가 그 peer의 Core 소유 routing ID view로 설정되며 수명은
 [Socket 공통의 borrowed RID 규칙](README.ko.md#3-pull-수신과-completion-모델)을 따른다(같은 socket의
-다음 data receive API 진입 또는 close까지 유효),
+다음 data receive API 진입 또는 close까지 유효). peer 연결이 끊겨 Core가 만든 unsubscribe
+이벤트이거나, 이벤트를 꺼내기 전에 그 peer가 끊겼으면 `*source_rid_out_`는 `NULL`이다.
 `*subscribed_out_`는
 subscribe이면 1, unsubscribe이면 0이다. `topic_id_buf_` /
 `*topic_id_len_out_`에 topic byte가 기록된다(binary-safe).
@@ -226,8 +238,9 @@ subscribe이면 1, unsubscribe이면 0이다. `topic_id_buf_` /
 **반환값:** 성공 시 `ZLINK_RECV_OK`, 실패 시 `zlink_recv_result_t` 값.
 `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
 
-**에러:** `xpub_`가 NULL이면 `EFAULT`. `ZLINK_DONTWAIT`가 설정되고
-이벤트가 없으면 `EAGAIN`. topic이 `topic_id_capacity_`보다 길면
+**에러:** `xpub_`, `subscribed_out_`, `topic_id_len_out_`가 NULL이거나 `topic_id_capacity_ > 0`인데
+`topic_id_buf_`가 NULL이면 `ZLINK_RECV_INVALID_HANDLE`과 `EFAULT`. `flags_`에 `ZLINK_RECV_FLAGS_DONTWAIT`가 설정되고
+이벤트가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`. topic이 `topic_id_capacity_`보다 길면
 `ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`. subject가 XPUB가 아니면 `ZLINK_RECV_NOT_SUPPORTED`와 `ENOTSUP`.
 
 **참고:** `zlink_publish_part`
@@ -259,9 +272,11 @@ low water mark와 transport backpressure는 그대로 유지된다. XPUB socket�
 **구독 이벤트 수신 (`zlink_xpub_recv_part`)**
 - raw XPUB에 구독 이벤트가 있으면 `ZLINK_RECV_OK`와 함께 `*subscribed_out_`(subscribe=1, unsubscribe=0), 구독 peer의 routing ID pointer, topic byte(binary-safe)가 관찰된다.
 - `source_rid_out_`은 NULL을 허용하는 선택 output이다.
-- `*source_rid_out_`의 routing ID view는 같은 socket의 다음 data receive API 진입 또는 close까지 유효하며, 다른 socket의 receive는 이를 바꾸지 않는다. 값을 보관하려면 반환 즉시 복사한다.
-- `ZLINK_DONTWAIT`가 설정되고 이벤트가 없으면 `EAGAIN`이다.
-- topic이 `topic_id_capacity_`보다 길면 `*topic_id_len_out_`에 필요 길이를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`·`ENOBUFS`를 반환하며, event는 보존되어 충분한 buffer의 다음 수신이 같은 event를 한 번 반환한다. subject가 XPUB가 아니면 `EINVAL`이다 — 두 경우 모두 공개 결과는 `ZLINK_RECV_INTERNAL_ERROR`로 표면화되고 `zlink_errno()`가 상세 errno를 유지한다.
+- 아직 연결된 peer의 이벤트에서 `*source_rid_out_`의 routing ID view는 같은 socket의 다음 data receive API 진입 또는 close까지 유효하며, 다른 socket의 receive는 이를 바꾸지 않는다. 값을 보관하려면 반환 즉시 복사한다.
+- peer 연결이 끊겨 Core가 만든 unsubscribe 이벤트, 또는 꺼내기 전에 peer가 끊긴 이벤트는 `ZLINK_RECV_OK`이지만 `*source_rid_out_ == NULL`이다.
+- `flags_`에 `ZLINK_RECV_FLAGS_DONTWAIT`가 설정되고 이벤트가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`이다.
+- topic이 `topic_id_capacity_`보다 길면 `*topic_id_len_out_`에 필요 길이를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`·`ENOBUFS`를 반환하며, event는 내부에 보관되어 충분한 buffer의 다음 수신이 같은 event를 한 번 반환한다.
+- subject가 raw XPUB가 아니면 `ZLINK_RECV_NOT_SUPPORTED`와 `ENOTSUP`이다.
 - `xpub_`가 NULL이면 `EFAULT`다.
 
 **발행과 topic (`zlink_publish_part`)**
@@ -282,3 +297,7 @@ low water mark와 transport backpressure는 그대로 유지된다. XPUB socket�
 **Receive flow state**
 - `zlink_socket_set_receive_flow_state()`는 XPUB socket에 대해 `ZLINK_CONFIG_NOT_SUPPORTED`와 `errno == ENOTSUP`을 반환하고 아무것도 바꾸지 않는다.
 - XPUB socket의 monitor는 `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`를 설정하지 않고 `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, `ZLINK_EVENT_FLOW_STATE_STALE`를 발생시키지 않는다.
+
+<!-- zlink-nav:start -->
+[소켓 목차](README.ko.md) | [이전: SUB](03-sub.ko.md) | [다음: XSUB](05-xsub.ko.md)
+<!-- zlink-nav:end -->

@@ -5,7 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlink = require('@zlink-systems/zlink');
 const { measurementParts, submitReply, waitForConnectionReady } = require('../perf/multi/perf_multi_runtime');
-const { RoutedReplySender, relayShutdownDrainMs, runRoutedSendSendRounds, trackPendingReplyTask, waitForReplyAdmissionOrStop } = require('../perf/multi/perf_multi_routed_sendsend');
+const { relayShutdownDrainMs, runRoutedSendSendRounds, sendServerReply, trackPendingReplyTask, } = require('../perf/multi/perf_multi_routed_sendsend');
 const { benchmarkEndpoint } = require('../perf/common/perf_endpoint');
 const { configureTlsClient, configureTlsServer } = require('../perf/common/perf_tls');
 function nextTurn() {
@@ -271,72 +271,27 @@ test('routed server reply tracking has no 4096-operation application cap', async
     assert.equal(pendingTasks.size, 0);
     assert.deepEqual(failures, []);
 });
-test('routed relay bounds a pending reply admission after STOP', async () => {
-    let releaseAdmission;
-    const admission = new Promise((resolve) => { releaseAdmission = resolve; });
-    const replies = new RoutedReplySender({}, async () => admission);
-    const routingId = zlink.RoutingId.from(Buffer.from('CLIENT'));
-    replies.enqueue({
-        routingId,
-        parts: [{ data: () => Buffer.alloc(64) }, { data: () => Buffer.alloc(0) }]
-    });
-    let now = 0n;
-    const drained = await replies.drainUntil(3n, () => now, async () => { now += 1n; await nextTurn(); });
-    assert.equal(drained, false);
-    assert.equal(replies.pendingCount, 1);
-    releaseAdmission(true);
-    await replies.drain();
-    assert.equal(replies.pendingCount, 0);
-});
-test('routed relay STOP interrupts receive coupling without dropping the pending reply', async () => {
-    let releaseAdmission;
-    const admission = new Promise((resolve) => { releaseAdmission = resolve; });
-    const replies = new RoutedReplySender({}, async () => admission);
-    const stopController = new AbortController();
-    const routingId = zlink.RoutingId.from(Buffer.from('CLIENT'));
-    replies.enqueue({
-        routingId,
-        parts: [{ data: () => Buffer.alloc(64) }, { data: () => Buffer.alloc(0) }]
-    });
-    let waitCompleted = false;
-    const wait = waitForReplyAdmissionOrStop({
-        replies,
-        stopSignal: stopController.signal
-    })
-        .then(() => { waitCompleted = true; });
-    await nextTurn();
-    assert.equal(waitCompleted, false);
-    assert.equal(replies.pendingCount, 1);
-    stopController.abort();
-    await wait;
-    assert.equal(waitCompleted, true);
-    assert.equal(replies.pendingCount, 1);
-    releaseAdmission(true);
-    await replies.drain();
-    assert.equal(replies.pendingCount, 0);
-});
-test('routed relay drives completion progress while receive is coupled', async () => {
-    let releaseAdmission;
-    const admission = new Promise((resolve) => { releaseAdmission = resolve; });
-    const replies = new RoutedReplySender({}, async () => admission);
-    const stopController = new AbortController();
-    const routingId = zlink.RoutingId.from(Buffer.from('CLIENT'));
-    replies.enqueue({
-        routingId,
-        parts: [{ data: () => Buffer.alloc(64) }, { data: () => Buffer.alloc(0) }]
-    });
-    let progressCalls = 0;
-    await waitForReplyAdmissionOrStop({
-        replies,
-        stopSignal: stopController.signal,
-        progress: () => {
-            progressCalls += 1;
-            if (progressCalls === 2)
-                releaseAdmission(true);
-        }
-    });
-    assert.equal(progressCalls, 2);
-    assert.equal(replies.pendingCount, 0);
+test('routed relay submits replies concurrently without an application FIFO', async () => {
+    const releases = [];
+    let submits = 0;
+    const received = () => {
+        const operation = {
+            message() { return this; },
+            submit() {
+                submits += 1;
+                return new Promise((resolve) => releases.push(resolve));
+            }
+        };
+        return {
+            send: () => operation,
+            parts: [Buffer.alloc(64), Buffer.alloc(0)]
+        };
+    };
+    const first = sendServerReply(received());
+    const second = sendServerReply(received());
+    assert.equal(submits, 2, 'a pending reply must not gate the next public submit');
+    releases.forEach((release) => release());
+    await Promise.all([first, second]);
 });
 test('routed relay drain stays inside the server shutdown budget', () => {
     const savedSendDrain = process.env.PERF_MULTI_SEND_DRAIN_TIMEOUT_MS;

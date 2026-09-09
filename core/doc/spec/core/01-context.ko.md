@@ -50,7 +50,11 @@ Context의 수명은 **만들기 → 사용 → 종료 신호 → 자원 해제*
 
 - **만들기** — `zlink_ctx_new`가 기본 옵션 값으로 Context를 만든다.
 - **종료 신호** — `zlink_ctx_shutdown`은 이 Context에 속한 socket의 모든 blocking 작업이 즉시
-  `ETERM`으로 풀리도록 신호만 보낸다. 자원은 해제하지 않는 non-blocking 호출이다.
+  `ETERM`으로 풀리도록 신호만 보낸다. 자원은 해제하지 않는 non-blocking 호출이다. 이렇게 풀린
+  `zlink_recv_part`는 `ZLINK_RECV_TERMINATED`를 반환하고 caller가 초기화해 둔 receive
+  destination과 part flag를 바꾸지 않는다. 풀린 `zlink_send_part`는 `ZLINK_SUBMIT_TERMINATED`를
+  반환하고 다른 submit 실패와 같이 전달한 part를 소비하며(빈 초기화 상태로 남음) completion
+  ID `0`을 돌려준다.
 - **자원 해제** — `zlink_ctx_term`이 Context를 파괴한다. 이 호출은 Context 안에서 만든 모든
   socket이 닫힐 때까지 blocking될 수 있다. 각 Context는 정확히 한 번만 term한다.
 
@@ -230,8 +234,10 @@ ZLINK_EXPORT zlink_config_result_t zlink_ctx_set(void *context_, zlink_ctx_optio
 
 socket이 생성되기 전 또는 후에 context를 구성한다. 유효한 옵션 이름과 의미는 §4 옵션
 목록을 참조한다. 단, `ZLINK_IO_THREADS`와 `ZLINK_MAX_SOCKETS`는 설정 자체는 언제든
-성공하고 조회에도 반영되지만, 실제 I/O thread pool과 socket 슬롯 용량은 첫 socket 생성
-시점의 값으로 한 번 고정되며 그 후에 값을 바꿔도 런타임 용량은 바뀌지 않는다.
+성공하고 조회에도 반영되지만, 실제 I/O thread pool과 socket 슬롯 용량은 context runtime이
+처음 시작될 때의 값으로 한 번 고정되며 그 후에 값을 바꿔도 런타임 용량은 바뀌지 않는다.
+runtime은 첫 socket 생성에서 시작되지만, 그 전에 양수 debounce로 Auto HWM 재계산이
+예약되는 등 control runtime이 먼저 요청되면 그 시점에 시작된다.
 `ZLINK_CTX_OPT_AUTO_HWM_ENABLE`은 이미 만들어진 socket에도 적용된다 — 변경은 자동
 재계산을 예약하며(기본 debounce 3000 ms), 그 전에 새 계획이 필요하면
 `zlink_ctx_auto_hwm_recalculate`를 호출한다. 아직 수동 `SNDHWM` / `RCVHWM` 값을 주지
@@ -267,8 +273,8 @@ ZLINK_EXPORT zlink_config_result_t zlink_ctx_set_data(void *context_,
 ```
 
 세 Auto HWM byte 옵션은 정확히 `sizeof(uint64_t)` byte를 받는다. 값 `0`은
-unlimited가 아니라 해당 입력을 설정하지 않았다는 뜻이다. 다른 크기와 제거된
-context 옵션 값 `18`은 `ZLINK_CONFIG_INVALID_ARGUMENT`로 실패한다. 유효한 값을 설정하면
+unlimited가 아니라 해당 입력을 설정하지 않았다는 뜻이다. 다른 크기와 위 enum에 없는
+context 옵션 값은 `ZLINK_CONFIG_INVALID_ARGUMENT`로 실패한다. 유효한 값을 설정하면
 값을 저장한 뒤 Auto HWM 재계산을 예약한다. 새 budget이 현재 수동 HWM과 자동 하한을 함께
 수용하지 못해도 setter는 성공하며, planner는 자동 하한을 낮추지 않고 budget snapshot에
 `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`를 설정한다. (계약은
@@ -307,6 +313,11 @@ ZLINK_EXPORT zlink_config_result_t zlink_ctx_get_data(void *context_,
 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `errno == EINVAL`로 실패한다. 이때 필요한
 크기인 `sizeof(uint64_t)`를 `*optvallen_`에 기록한다. 성공해도 같은 크기를
 유지한다.
+
+`ZLINK_THREAD_NAME_PREFIX`도 이 함수로 조회한다. `*optvallen_`에는 output buffer의 용량을
+전달한다. 용량이 저장된 prefix 길이보다 작으면 필요한 길이를 `*optvallen_`에 기록하고
+`ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로 실패한다. 충분하면 prefix byte를 복사하고
+`*optvallen_`을 복사한 길이로 갱신한다.
 
 **반환값:** 성공 시 `ZLINK_CONFIG_OK`, 실패 시 `zlink_config_result_t` 값.
 `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
@@ -365,9 +376,14 @@ unit test 하나로 이어진다.
 - 값 `3`을 `zlink_ctx_get`으로 조회하면 읽기 전용 `ZLINK_SOCKET_LIMIT`으로 해석되며, `ZLINK_THREAD_PRIORITY`는 이 경로로 조회할 수 없다.
 - 세 Auto HWM byte 옵션을 `zlink_ctx_set`으로 설정하려 하면 `EINVAL`이다(설정은 `zlink_ctx_set_data`만 허용).
 - Auto HWM byte 옵션을 `zlink_ctx_get_data`로 정확히 `sizeof(uint64_t)`가 아닌 크기로 조회하면 `EINVAL`이고 필요한 크기를 `*optvallen_`에 기록한다.
-- 제거된 context 옵션 값 `18`을 `zlink_ctx_set_data`로 쓰면 `ZLINK_CONFIG_INVALID_ARGUMENT`다.
+- enum에 없는 context 옵션 값을 `zlink_ctx_set_data`로 쓰면 `ZLINK_CONFIG_INVALID_ARGUMENT`다.
+- `ZLINK_THREAD_NAME_PREFIX`를 `zlink_ctx_get_data`로 저장된 prefix 길이보다 작은 용량으로 조회하면 `EINVAL`이고 필요한 길이를 `*optvallen_`에 기록한다.
 
 **스레드 안전성**
 - 모든 `zlink_ctx_*` 함수는 여러 thread에서 동시에 호출해도 안전하다. `zlink_ctx_term`만 context당 한 번으로 제한한다.
 
 Auto HWM budget과 admission의 검증은 [Auto HWM](systems/06-auto-hwm.ko.md#5-구현-및-contract-test-검증-요구)가 소유한다.
+
+<!-- zlink-nav:start -->
+[Core 스펙 목차](README.ko.md) | [이전: 공개 계약 관리](00-public-contract-governance.ko.md) | [다음: Message](02-message.ko.md)
+<!-- zlink-nav:end -->

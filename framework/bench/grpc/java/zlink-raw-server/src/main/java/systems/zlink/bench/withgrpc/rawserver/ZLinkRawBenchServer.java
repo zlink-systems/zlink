@@ -12,9 +12,11 @@ import systems.zlink.bench.withgrpc.shared.RawWire;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.RecvFlags;
+import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 
 /**
@@ -34,9 +36,9 @@ public final class ZLinkRawBenchServer {
     }
 
     public static void main(String[] args) throws Exception {
-        String endpoint = Args.value(args, "--endpoint", "tcp://127.0.0.1:5095");
-        String commandEndpoint = Args.value(args, "--command-endpoint", "tcp://127.0.0.1:5097");
-        String metricsUrl = Args.value(args, "--metrics-url", "http://127.0.0.1:5096");
+        String endpoint = Args.value(args, "--endpoint", "tcp://127.0.0.1:5247");
+        String commandEndpoint = Args.value(args, "--command-endpoint", "tcp://127.0.0.1:5248");
+        String metricsUrl = Args.value(args, "--metrics-url", "http://127.0.0.1:5249");
 
         BenchServerMetrics metrics = new BenchServerMetrics();
         Context context = Zlink.createContext();
@@ -77,10 +79,12 @@ public final class ZLinkRawBenchServer {
     private static void pumpRequests(RouterSocket socket, BenchServerMetrics metrics) {
         try (Received received = new Received()) {
             while (true) {
+                boolean receivedMessage = false;
                 try {
                     if (!socket.recv(received, RecvFlags.NONE)) {
                         continue;
                     }
+                    receivedMessage = true;
                     ByteBuffer body = lastPartBody(received);
                     if (body == null) {
                         metrics.recordError();
@@ -89,6 +93,7 @@ public final class ZLinkRawBenchServer {
                     }
                     byte[] copy = new byte[body.remaining()];
                     body.get(copy);
+                    metrics.record(ByteBuffer.wrap(copy));
                     byte[] reply = RawWire.encodeBenchPayload(copy);
                     // The two reply wrappers are closed after submit, as the .NET
                     // reference server does with `using` (ZLinkRawServer/Program.cs
@@ -109,8 +114,18 @@ public final class ZLinkRawBenchServer {
                             received.send().message(header).message(replyBody).submit();
                         }
                     }
+                } catch (ZlinkRecvException error) {
+                    if (error.getResult() == RecvResult.NO_DATA) {
+                        continue;
+                    }
+                    if (receivedMessage) {
+                        metrics.recordError();
+                    }
+                    System.err.println("raw request loop failed: " + error);
                 } catch (Exception error) {
-                    metrics.recordError();
+                    if (receivedMessage) {
+                        metrics.recordError();
+                    }
                     System.err.println("raw request loop failed: " + error);
                 }
                 // The Received is NOT closed per iteration. The reply submit is
@@ -126,10 +141,12 @@ public final class ZLinkRawBenchServer {
     private static void pumpCommands(RouterSocket socket, BenchServerMetrics metrics) {
         try (Received received = new Received()) {
             while (true) {
+                boolean receivedMessage = false;
                 try {
                     if (!socket.recv(received, RecvFlags.NONE)) {
                         continue;
                     }
+                    receivedMessage = true;
                     ByteBuffer body = lastPartBody(received);
                     if (body == null) {
                         metrics.recordError();
@@ -138,8 +155,18 @@ public final class ZLinkRawBenchServer {
                     // spec section 5 / G3: the send row's throughput is this count,
                     // taken on the server.
                     metrics.record(body);
+                } catch (ZlinkRecvException error) {
+                    if (error.getResult() == RecvResult.NO_DATA) {
+                        continue;
+                    }
+                    if (receivedMessage) {
+                        metrics.recordError();
+                    }
+                    System.err.println("raw command loop failed: " + error);
                 } catch (Exception error) {
-                    metrics.recordError();
+                    if (receivedMessage) {
+                        metrics.recordError();
+                    }
                     System.err.println("raw command loop failed: " + error);
                 }
             }

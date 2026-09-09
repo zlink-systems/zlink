@@ -43,6 +43,11 @@ if [[ -n "${CORE_VERSION_OPTION}" ]]; then
   export ZLINK_CORE_SOURCE=release
   export ZLINK_CORE_RELEASE_VERSION="${CORE_VERSION_OPTION}"
   export ZLINK_CORE_ALLOW_VERSION_MISMATCH=1
+  # Older released runtimes do not expose the current monitor snapshot ABI.
+  # Keep the workload identical but skip optional post-run introspection.
+  # (Parity with run_benchmarks.sh; without this the multi runner crashes at
+  # AUTO_HWM_DETAIL against a release runtime, e.g. ws SENDSEND large payloads.)
+  export PERF_PRINT_AUTO_HWM_DETAIL=0
 else
   export ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-local}"
 fi

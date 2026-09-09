@@ -1,5 +1,9 @@
 [English](https://zlink-systems.github.io/zlink/spec/) | 한국어
 
+<!-- zlink-nav:start -->
+[Core 스펙 목차](core/README.ko.md) | [프로토콜 목차](core/protocol/README.ko.md) | [시스템 목차](core/systems/README.ko.md)
+<!-- zlink-nav:end -->
+
 # ZLink 공개 스펙
 
 이 디렉터리는 ZLink의 공개 API 계약을 정의한다. 대상 독자는 Core와 bindings 구현자, 공개 API
@@ -37,3 +41,7 @@ internals가 소유한다. 계약 검토자는 이 목차와 공개 header를 �
 적합한 구현은 모든 정식 문서의 함수, 타입, 상수와 동작을 제공해야 한다. 공개 header, exported symbol,
 contract test, bindings와 설치 package가 정식 spec과 다르면 적합하지 않다. 내부 구현 세부를 공개
 계약으로 노출하거나 언어별 API가 공통 계약을 축소해서도 안 된다.
+
+<!-- zlink-nav:start -->
+[Core 스펙 목차](core/README.ko.md) | [프로토콜 목차](core/protocol/README.ko.md) | [시스템 목차](core/systems/README.ko.md)
+<!-- zlink-nav:end -->

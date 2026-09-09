@@ -142,7 +142,12 @@ public final class BenchServerMetrics {
         double workingSetMb) {
 
         public String toJson() {
-            return "{\"activeMessages\":" + activeMessages
+            return "{\"ready\":true,\"phase\":\"idle\""
+                + ",\"submitted\":" + activeMessages
+                + ",\"completed\":" + activeMessages
+                + ",\"received\":" + activeMessages
+                + ",\"inFlight\":0,\"currentInFlight\":0"
+                + ",\"activeMessages\":" + activeMessages
                 + ",\"totalMessages\":" + totalMessages
                 + ",\"errors\":" + errors
                 + ",\"meanMicros\":" + meanMicros

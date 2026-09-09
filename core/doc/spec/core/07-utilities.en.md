@@ -232,7 +232,10 @@ nanoseconds. `interval_ns_` is the interval between events in nanoseconds and
 must not be `0`. If `repeat_count_` is `0`, the timer repeats until
 explicitly stopped. If it is positive, the timer generates that many events
 and then stops automatically. Each successful start resets the fire count, so
-the first fire is `1`, followed by `2`, `3`, and so on.
+the first fire is `1`, followed by `2`, `3`, and so on. Calling it again on a
+running timer also succeeds — the new start replaces the existing schedule with
+the new interval and repeat count, and discards any fire not yet read and any
+poller readiness from the previous start.
 
 **Returns:** `ZLINK_CONFIG_OK` on success, or a `zlink_config_result_t` value
 on failure. `zlink_errno()` preserves the internal errno for diagnostics.
@@ -282,8 +285,10 @@ recent start execution.
 **Returns:** `ZLINK_RECV_OK` on success, or a `zlink_recv_result_t` value on
 failure. `zlink_errno()` preserves the internal errno for diagnostics.
 
-**Errors:** If the timer has already stopped and there is no fire left to read,
-the result is `ZLINK_RECV_NO_DATA` (internal `EAGAIN`).
+**Errors:** If `timer_` is invalid or `fire_count_out_ == NULL`, the result is
+`ZLINK_RECV_INVALID_HANDLE` (internal `EFAULT`). If the timer has already
+stopped and there is no fire left to read, the result is `ZLINK_RECV_NO_DATA`
+(internal `EAGAIN`).
 
 **Thread safety:** It must not be called concurrently with another operation
 on the same timer.
@@ -410,9 +415,12 @@ The proxy does not bridge request correlation or reply-target state. This API do
 transparently complete a request across a proxy, and the proxy neither creates request-reply
 metadata nor forwards completion records.
 
-**Returns:** `ZLINK_CONFIG_OK` when the proxy ends normally, or a
-`zlink_config_result_t` error otherwise. If a required handle is `NULL` or
-is not a raw socket, the result is `ZLINK_CONFIG_INVALID_HANDLE`.
+**Returns:** The proxy loop has no normal termination condition and no public
+stop API, so there is no path on which this function returns `ZLINK_CONFIG_OK`.
+When a poll, receive, or send fails — including socket or context termination —
+the function returns that errno as a `zlink_config_result_t` error and the
+calling thread is released. If a required handle is `NULL` or is not a raw
+socket, the result is `ZLINK_CONFIG_INVALID_HANDLE` before the loop starts.
 
 ## 7. Sleep and Thread
 
@@ -438,8 +446,10 @@ Sleeps for the specified number of seconds.
 ZLINK_EXPORT void zlink_sleep (int seconds_);
 ```
 
-Suspends the calling thread for at least `seconds_` seconds. It is a portable
-convenience wrapper around platform-specific sleep functions.
+A convenience wrapper that applies the platform sleep (`Sleep()` or POSIX
+`sleep()`) once to the calling thread. On POSIX, if `sleep()` is interrupted by
+a signal the remaining time is not slept again, so the call may return earlier
+than `seconds_` seconds.
 
 **Thread safety:** May be called from any thread.
 

@@ -1710,6 +1710,225 @@ test('production repository persists owner lease and MeshNode records through on
   assert.equal((await writer.listMeshNodes('play')).items.length, 0);
 });
 
+test('production repository retries descriptor renew after same-owner lease heartbeat', async () => {
+  const scenario = await descriptorConflictScenario('heartbeat');
+
+  const result = await scenario.repository.updateMeshNode(
+    scenario.serving,
+    internal.ZLinkLocationWriteIntent.Renew
+  );
+
+  assert.equal(result.status, internal.ZLinkLocationWriteStatus.Stored);
+  assert.equal(scenario.provider.descriptorWriteAttempts, 2);
+  assert.equal(
+    (await scenario.repository.listMeshNodes('play')).items[0].state,
+    framework.ZLinkFrameworkRuntimeState.Serving
+  );
+});
+
+for (const mutation of ['replaceOwner', 'replaceRow', 'deleteRow', 'regressRevision']) {
+  test(`production repository classifies descriptor renew as stale after ${mutation}`, async () => {
+    const scenario = await descriptorConflictScenario(mutation);
+
+    const result = await scenario.repository.updateMeshNode(
+      scenario.serving,
+      internal.ZLinkLocationWriteIntent.Renew
+    );
+
+    assert.equal(result.status, internal.ZLinkLocationWriteStatus.IgnoredStale);
+    assert.equal(scenario.provider.descriptorWriteAttempts, 1);
+  });
+}
+
+test('production repository stops descriptor renew after three heartbeat retries', async () => {
+  const scenario = await descriptorConflictScenario('heartbeat', true);
+
+  const result = await scenario.repository.updateMeshNode(
+    scenario.serving,
+    internal.ZLinkLocationWriteIntent.Renew
+  );
+
+  assert.equal(result.status, internal.ZLinkLocationWriteStatus.IgnoredStale);
+  assert.equal(scenario.provider.descriptorWriteAttempts, 4);
+});
+
+async function descriptorConflictScenario(mutation, repeatMutation = false) {
+  const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
+  const provider = new DescriptorCasConflictLocationStore(
+    inner,
+    mutation,
+    repeatMutation
+  );
+  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const claimed = await repository.claimOwnerLease(`descriptor-${mutation}`, 30_000);
+  assert.equal(claimed.kind, 'claimed');
+  if (claimed.kind !== 'claimed') throw new Error('owner lease claim failed');
+  const preparing = {
+    ...placementDescriptor(`descriptor-${mutation}`, 'Player', 100, 0, 0),
+    descriptorRevision: 2n,
+    state: framework.ZLinkFrameworkRuntimeState.Preparing,
+    ownerId: claimed.token.ownerId,
+    leaseGeneration: claimed.token.leaseGeneration,
+    updatedAt: now
+  };
+  assert.equal(
+    (await repository.updateMeshNode(
+      preparing,
+      internal.ZLinkLocationWriteIntent.NewClaim
+    )).status,
+    internal.ZLinkLocationWriteStatus.Stored
+  );
+  provider.arm();
+  return {
+    provider,
+    repository,
+    serving: {
+      ...preparing,
+      descriptorRevision: 3n,
+      state: framework.ZLinkFrameworkRuntimeState.Serving
+    }
+  };
+}
+
+class DescriptorCasConflictLocationStore {
+  descriptorWriteAttempts = 0;
+  armed = false;
+  mutated = false;
+
+  constructor(inner, mutation, repeatMutation) {
+    this.inner = inner;
+    this.mutation = mutation;
+    this.repeatMutation = repeatMutation;
+  }
+
+  arm() {
+    this.armed = true;
+  }
+
+  read(key, signal) {
+    return this.inner.read(key, signal);
+  }
+
+  scan(request, signal) {
+    return this.inner.scan(request, signal);
+  }
+
+  async write(request, signal) {
+    const descriptorPut = request.mutations.find(mutation =>
+      mutation.kind === 'put' && mutation.key.value.startsWith('mesh-node\0'));
+    if (!this.armed || descriptorPut === undefined) {
+      return await this.inner.write(request, signal);
+    }
+
+    this.descriptorWriteAttempts += 1;
+    if (this.repeatMutation || !this.mutated) {
+      this.mutated = true;
+      await this.mutatePredecessor(request, descriptorPut, signal);
+    }
+    return await this.inner.write(request, signal);
+  }
+
+  async mutatePredecessor(request, descriptorPut, signal) {
+    const ownerCondition = request.conditions.find(condition =>
+      condition.kind === 'version' && condition.key.value.startsWith('owner-lease\0'));
+    assert.notEqual(ownerCondition, undefined);
+    const owner = await this.inner.read(ownerCondition.key, signal);
+    assert.equal(owner.kind, 'found');
+    if (owner.kind !== 'found' || owner.value.expiresAt === undefined) {
+      throw new Error('owner lease is missing');
+    }
+    const retentionMs = owner.value.expiresAt.getTime() - owner.value.storeNow.getTime();
+
+    switch (this.mutation) {
+      case 'heartbeat':
+        await this.apply(
+          { kind: 'version', key: ownerCondition.key, expected: owner.value.version },
+          {
+            kind: 'put',
+            key: ownerCondition.key,
+            bytes: owner.value.bytes,
+            retentionMs
+          },
+          signal
+        );
+        return;
+      case 'replaceOwner': {
+        const replacement = JSON.parse(Buffer.from(owner.value.bytes).toString('utf8'));
+        replacement.ownerId = 'replacement-owner';
+        replacement.leaseGeneration = '999';
+        await this.apply(
+          { kind: 'version', key: ownerCondition.key, expected: owner.value.version },
+          {
+            kind: 'put',
+            key: ownerCondition.key,
+            bytes: Buffer.from(JSON.stringify(replacement)),
+            retentionMs
+          },
+          signal
+        );
+        return;
+      }
+      case 'deleteRow': {
+        const current = await this.requireDescriptor(descriptorPut.key, signal);
+        await this.apply(
+          { kind: 'version', key: descriptorPut.key, expected: current.value.version },
+          { kind: 'delete', key: descriptorPut.key },
+          signal
+        );
+        return;
+      }
+      case 'replaceRow': {
+        const current = await this.requireDescriptor(descriptorPut.key, signal);
+        const replacement = JSON.parse(Buffer.from(current.value.bytes).toString('utf8'));
+        replacement.descriptor.endpoint = 'tcp://127.0.0.1:7999';
+        await this.apply(
+          { kind: 'version', key: descriptorPut.key, expected: current.value.version },
+          {
+            kind: 'put',
+            key: descriptorPut.key,
+            bytes: Buffer.from(JSON.stringify(replacement))
+          },
+          signal
+        );
+        return;
+      }
+      case 'regressRevision': {
+        const current = await this.requireDescriptor(descriptorPut.key, signal);
+        const regressed = JSON.parse(Buffer.from(current.value.bytes).toString('utf8'));
+        regressed.descriptorRevision = '1';
+        regressed.descriptor.descriptorRevision = '1';
+        await this.apply(
+          { kind: 'version', key: descriptorPut.key, expected: current.value.version },
+          {
+            kind: 'put',
+            key: descriptorPut.key,
+            bytes: Buffer.from(JSON.stringify(regressed))
+          },
+          signal
+        );
+        return;
+      }
+      default:
+        throw new Error(`Unsupported descriptor conflict mutation: ${this.mutation}`);
+    }
+  }
+
+  async requireDescriptor(key, signal) {
+    const current = await this.inner.read(key, signal);
+    assert.equal(current.kind, 'found');
+    if (current.kind !== 'found') throw new Error('descriptor is missing');
+    return current;
+  }
+
+  async apply(condition, mutation, signal) {
+    assert.equal((await this.inner.write({
+      conditions: [condition],
+      mutations: [mutation]
+    }, signal)).kind, 'applied');
+  }
+}
+
 test('production repository leaves authority record and next-to-issue counters unchanged at generation exhaustion', async () => {
   const provider = new internal.ZLinkInMemoryProviderLocationStore();
   const repository = new internal.ZLinkLocationStoreRepository(provider);

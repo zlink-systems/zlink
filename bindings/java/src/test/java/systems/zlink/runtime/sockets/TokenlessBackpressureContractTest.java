@@ -47,7 +47,7 @@ class TokenlessBackpressureContractTest {
                     : dealer.send().message(Message.from("retry")).submit().toCompletableFuture();
                 core.writable(core.submissions.getLast(), 0);
                 core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.BACKPRESSURED, NativeErrno.EAGAIN, 0));
-                assertEquals(1, owner.drain(null));
+                assertEquals(1, owner.drain());
                 assertBackpressure(assertInstanceOf(ZlinkSubmitException.class, CompletionNativeFixture.failure(waiter)));
             }
             core.verify(2);

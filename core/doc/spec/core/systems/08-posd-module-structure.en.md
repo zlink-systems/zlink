@@ -40,8 +40,8 @@ its row.
 
 | Layer | Responsibility |
 |---|---|
-| Public C API | Validates arguments, manages handles, expresses ownership, and maps internal results to C API results |
-| Socket semantics | Decides routing per socket type, handles multipart behavior, and manages request correlation |
+| Public C API and API integration | Validates arguments, manages handles, expresses ownership, maps internal results to C API results, and owns the public multipart, request-correlation, and completion state |
+| Socket semantics | Decides routing and pipe selection/delivery per socket type and connects to the request/reply state of the API integration layer |
 | Runtime core | Manages contexts, sessions, pipes, and mailbox commands, and drives their lifecycle |
 | Engine | Performs ZMP and RAW framing and handshake |
 | Transport | Performs I/O over TCP, WebSocket, IPC, inproc, and TLS |
@@ -63,3 +63,7 @@ higher layer that provides application services on top of Core.
 - Framework directly uses a private Core header or symbol.
 
 When one of these signs appears, review the responsibility boundary before adding a new helper.
+
+<!-- zlink-nav:start -->
+[Systems Index](README.en.md) | [Previous: Core Source Layout](07-core-source-layout.en.md) | [Next: Design Decisions](09-design-decisions.en.md)
+<!-- zlink-nav:end -->

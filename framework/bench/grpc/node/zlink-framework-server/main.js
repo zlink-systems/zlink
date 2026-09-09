@@ -24,8 +24,8 @@ const { BenchServerMetrics, startStatsServer } = require('../shared/bench-server
 const contract = require('../shared/framework-bench-contract');
 
 const argv = process.argv.slice(2);
-const endpoint = argValue(argv, '--endpoint', 'tcp://127.0.0.1:5082');
-const metricsUrl = argValue(argv, '--metrics-url', 'http://127.0.0.1:5083');
+const endpoint = argValue(argv, '--endpoint', 'tcp://127.0.0.1:5234');
+const metricsUrl = argValue(argv, '--metrics-url', 'http://127.0.0.1:5235');
 
 const metrics = new BenchServerMetrics();
 
@@ -33,6 +33,7 @@ class EchoHandler {
   // spec section 2: `request-serial` and `request-window` echo the payload back so the
   // client can validate the 29-byte header it sent (G2).
   async handle(request) {
+    metrics.record(toBuffer(request && request.body));
     return request;
   }
 }

@@ -118,3 +118,7 @@ wire에는 payload byte만 전송한다.
 - PACKET mode의 output·ownership과 malformed framing의 상세 검증은
   [Socket — STREAM의 검증 요구](../socket/08-stream.ko.md#11-구현-및-contract-test-검증-요구)가
   소유한다.
+
+<!-- zlink-nav:start -->
+[프로토콜 목차](README.ko.md) | [이전: ZMP 프로토콜 상세](01-zmp.ko.md) | [다음: 시스템 개요](../systems/README.ko.md)
+<!-- zlink-nav:end -->

@@ -10,6 +10,7 @@
 [![License: MPL-2.0 / FSL-1.1 / Apache-2.0](https://img.shields.io/badge/License-multiple-blue.svg)](./doc/license/README.md)
 
 [Website](https://zlink.systems/) ·
+[Installation](https://zlink.systems/install/) ·
 [Framework guide](https://zlink.systems/) ·
 [Core guide](https://zlink.systems/guide/01-overview/) ·
 [Bindings guide](https://zlink.systems/bindings/guide/) ·
@@ -144,98 +145,28 @@ installation and native-runtime preparation procedure.
 
 - To use the Core API through a language package, [choose a Binding](https://zlink.systems/bindings/guide/)
   and follow its installation procedure and five-minute example.
-- To use ZLink Framework, pick a language under "Install a Framework package" below or open the
-  per-language guides on the [website](https://zlink.systems/).
+- To use ZLink Framework, pick a language on the [Installation](https://zlink.systems/install/)
+  page; the full per-language guides are on the [website](https://zlink.systems/).
 - After installation, run the samples for that language to verify the package
   and native runtime together in real client/server processes.
 
 ### Install a Framework package
 
-Start from the published packages only. Expand a language for the install commands and the first
-registration step; each entry links to that language's "installation and first run" guide. Current
-versions are framework 0.11 and binding 0.17.6; the framework package installs the matching binding.
-
-<details>
-<summary><b>C# / .NET</b> — nuget.org, ASP.NET Core integration</summary>
+The framework is installed from the packages published to each language's registry. It pulls in
+the binding package and the Core native runtime, so Core is never built separately.
 
 ```bash
-dotnet add package Zlink                       # Core messaging engine (.NET binding)
-dotnet add package Zlink.Framework             # contracts and runtime
-dotnet add package Zlink.Framework.AspNetCore  # DI and hosted-service registration
+dotnet add package Zlink.Framework.AspNetCore                 # C# / .NET (nuget.org)
+npm install @zlink-systems/framework @zlink-systems/nestjs    # Node.js / TypeScript (npm)
 ```
-
-Register the host with `builder.Services.AddZLinkFramework(...)`.
-[Installation and first run](https://zlink.systems/dotnet/guide/server/02-getting-started/) ·
-[Stream Connector](https://zlink.systems/dotnet/guide/stream-connector/) ·
-[HTTP Client](https://zlink.systems/dotnet/guide/http-client/)
-
-</details>
-
-<details>
-<summary><b>Java</b> — Maven Central, Spring Boot integration</summary>
 
 ```kotlin
-dependencies {
-    implementation("systems.zlink:zlink-framework-core")                // contracts and runtime
-    implementation("systems.zlink:zlink-framework-spring-boot-starter") // DI and lifecycle registration
-}
+implementation("systems.zlink:zlink-framework-spring-boot-starter")   // Java and Kotlin (Maven Central)
 ```
 
-Spring Boot auto-configuration registers the host as a bean.
-[Installation and first run](https://zlink.systems/java/guide/server/02-getting-started/) ·
-[Stream Connector](https://zlink.systems/java/guide/stream-connector/) ·
-[HTTP Client](https://zlink.systems/java/guide/http-client/)
-
-</details>
-
-<details>
-<summary><b>Kotlin</b> — Maven Central, Spring Boot integration + coroutine idiom</summary>
-
-```kotlin
-dependencies {
-    implementation("systems.zlink:zlink-framework-core")
-    implementation("systems.zlink:zlink-framework-spring-boot-starter")
-    implementation("systems.zlink:zlink-framework-kotlin")              // coroutine idiom
-}
-```
-
-[Installation and first run](https://zlink.systems/kotlin/guide/server/02-getting-started/) ·
-[Stream Connector](https://zlink.systems/kotlin/guide/stream-connector/) ·
-[HTTP Client](https://zlink.systems/kotlin/guide/http-client/)
-
-</details>
-
-<details>
-<summary><b>Node.js / TypeScript</b> — npm, NestJS integration</summary>
-
-```bash
-npm install @zlink-systems/framework   # contracts and runtime (binding @zlink-systems/zlink 포함)
-npm install @zlink-systems/nestjs      # DI and module registration
-```
-
-Without NestJS (Express and others), install only the framework package and start the host yourself.
-[Installation and first run](https://zlink.systems/node/guide/server/02-getting-started/) ·
-[Stream Connector](https://zlink.systems/node/guide/stream-connector/) ·
-[HTTP Client](https://zlink.systems/node/guide/http-client/)
-
-</details>
-
-<details>
-<summary><b>C++</b> — vcpkg/Conan + CMake, built-in framework host</summary>
-
-```cmake
-find_package(zlink CONFIG REQUIRED)            # Core (vcpkg `zlink` / Conan `zlink`)
-find_package(zlink_framework CONFIG REQUIRED)  # Framework (vcpkg overlay port `zlink-framework`)
-target_link_libraries(app PRIVATE zlink::framework)
-```
-
-Core comes from the vcpkg/Conan recipes; the framework from the GitHub Release source archive or
-the repository's vcpkg overlay port.
-[Installation and first run](https://zlink.systems/cpp/guide/server/02-getting-started/) ·
-[Stream Connector](https://zlink.systems/cpp/guide/stream-connector/) ·
-[HTTP Client](https://zlink.systems/cpp/guide/http-client/)
-
-</details>
+For C++, install Core with vcpkg or Conan and the framework with the vcpkg overlay port
+`zlink-framework`. The host registration code, the C++ CMake presets and each language's
+"installation and first run" link are on the [Installation](https://zlink.systems/install/) page.
 
 ### Build Core from the repository
 
@@ -291,8 +222,8 @@ See the [local package guide](./scripts/local-package/README.ko.md) for output
 locations, package provenance, and per-language artifacts. This runner produces
 Core and Binding packages; it does not establish Framework build completion.
 
-"Install a Framework package" above and the per-language
-[installation guides](https://zlink.systems/) cover package installation and the first application scenario. Framework source
+The [Installation](https://zlink.systems/install/) page and the per-language
+"installation and first run" guides cover package installation and the first application scenario. Framework source
 builds and tests are independent runtime lanes that require a matching Binding
 package and start from the corresponding source root:
 [C++](./framework/languages/cpp/),
@@ -344,11 +275,12 @@ contract first, then select a language implementation.
 | Read the formal Binding contracts | [Bindings specification](https://zlink.systems/bindings/spec/) |
 | Understand Framework and its use cases | [Framework guide](https://zlink.systems/) (chapter 1 of each language's server guide) |
 | Read the formal Framework contract | [Common Framework specification](https://zlink.systems/common/spec/server/) |
+| Messaging performance against gRPC | [gRPC comparison report](https://zlink.systems/bench/comparison/) (the specification and per-language bench pages sit in the same Bench section) |
 | Framework internals and exact interfaces | [Per-language specifications](https://zlink.systems/common/spec/server/) (source: `framework/doc/framework/common/spec/`) |
 | Build and test Core from source | [Core build guide](./doc/building/build-guide.md) |
 | Build local Core and Binding packages from the current source | [Local package guide](./scripts/local-package/README.ko.md) |
 | Install and use a Binding package | [Bindings guide](https://zlink.systems/bindings/guide/) |
-| Install a Framework package and run the first scenario | "Install a Framework package" above and [Installation and first run](https://zlink.systems/dotnet/guide/server/02-getting-started/) (switch language at the top of the chapter) |
+| Install a Framework package and run the first scenario | [Installation](https://zlink.systems/install/), then the per-language [Installation and first run](https://zlink.systems/dotnet/guide/server/02-getting-started/) (switch language at the top of the chapter) |
 | Enter a Framework runtime source/build lane | [C++](./framework/languages/cpp/) · [.NET](./framework/languages/dotnet/) · [JVM](./framework/languages/java/) · [Node.js](./framework/languages/node/) |
 | Prepare release packages | [Packaging guide](./doc/building/packaging.md) |
 | Find the build scripts and the release path | [Build and release pipeline](./doc/building/release-pipeline.md) |

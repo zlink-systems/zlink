@@ -211,10 +211,11 @@ submitted = int(cell.get("submitted", completed))
 errors = int(cell.get("errors", 0))
 abandoned = int(cell.get("abandoned", 0))
 received = int(cell["target_stats"]["received"])
-# B may receive requests that A submitted but never completed (abandoned after the
-# active window, spec 5.2) or that failed at A after reaching B. B can never receive
-# more than A submitted, nor fewer than A completed.
-if received > submitted or received < completed:
+# B may receive requests that A never completed: abandoned after the active window
+# (spec 5.2) or failed at A after reaching B. A's submitted counter excludes failed
+# requests, so the upper bound is completed + errors + abandoned; the lower bound is
+# completed.
+if received > completed + errors + abandoned or received < completed:
     raise SystemExit(
         f"request count mismatch: source submitted={submitted} completed={completed} "
         f"errors={errors} abandoned={abandoned}, target received={received}")

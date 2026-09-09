@@ -3,7 +3,7 @@ title: "Message API와 ownership"
 ---
 
 <!-- zlink-nav:start -->
-[가이드 목록](README.ko.md) | [이전: 설계 근거](design-rationale.ko.md) | [다음: Thread safety](../spec/core/systems/04-thread-safety.ko.md)
+[가이드 목록](README.ko.md) | [이전: 설계 근거](design-rationale.ko.md) | [다음: Thread safety](11-thread-safety.ko.md)
 <!-- zlink-nav:end -->
 
 # Message API와 ownership
@@ -11,8 +11,9 @@ title: "Message API와 ownership"
 > **이 장의 계약 소유 문서** — [Message](../spec/core/02-message.ko.md)가 다룬다. 이
 > 챕터는 message 소유권과 API 사용법을 설명한다.
 
-`zlink_msg_t`는 message part 하나를 소유한다. 사용 전에 초기화하고, ownership이 move되거나 성공한
-send가 소비하지 않았다면 정확히 한 번 close한다.
+`zlink_msg_t`는 message part 하나를 소유한다. 사용 전에 초기화하고, ownership이 move되거나 send에
+전달해 소비되지 않았다면 정확히 한 번 close한다. `*_part` send는 성공·실패 모두 part를 소비하며,
+소비된 part는 빈 초기화 상태로 남아 그대로 close하거나 다시 쓸 수 있다.
 
 ## Part 생성
 
@@ -24,13 +25,14 @@ send가 소비하지 않았다면 정확히 한 번 close한다.
 ## Multipart send
 
 Typed part API로 각 part를 보낸다. 마지막 전 part에는 `ZLINK_PART_MORE`, 마지막 part에는
-`ZLINK_PART_FINAL`을 사용한다. 성공한 send가 소비한 part를 다시 사용하지 않는다.
+`ZLINK_PART_FINAL`을 사용한다. send가 소비한 part의 내용은 성공·실패 모두 사라지므로, 같은 내용을
+다시 보내려면 호출 전에 복사해 둔다.
 
 ```c
 zlink_msg_t part;
 zlink_msg_init_size(&part, payload_size);
 memcpy(zlink_msg_data(&part), payload, payload_size);
-/* 성공한 final send는 ownership을 Core로 옮긴다. */
+/* send는 성공·실패 모두 part를 소비한다 — 호출 뒤 part는 빈 상태다. */
 zlink_send_part(socket, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
                 NULL, NULL);
 ```

@@ -1,4 +1,8 @@
 
+<!-- zlink-nav:start -->
+[← Core Glossary](glossary.en.md)
+<!-- zlink-nav:end -->
+
 # Core Usage Scenarios
 
 > **What this chapter answers** — a lookup table that maps a common requirement

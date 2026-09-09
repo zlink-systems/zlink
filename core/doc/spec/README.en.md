@@ -1,5 +1,9 @@
 [한국어](https://zlink-systems.github.io/zlink/ko/spec/) | English
 
+<!-- zlink-nav:start -->
+[Core Spec Index](core/README.en.md) | [Protocol Index](core/protocol/README.en.md) | [Systems Index](core/systems/README.en.md)
+<!-- zlink-nav:end -->
+
 # ZLink public specification
 
 This directory defines the ZLink public API contract. Its audience is Core and bindings implementers and public-contract reviewers. Formal documents linked from this index are authoritative for function signatures, returns, errors, ownership, and thread safety.
@@ -32,3 +36,7 @@ Formal specifications describe only the current contract. Guides own purpose and
 ## 3. Conformance
 
 A conforming implementation provides every function, type, constant, and behavior in the formal documents. A mismatch among public headers, exported symbols, contract tests, bindings, installed packages, and the formal specification is nonconforming. Internal implementation details are not exposed as public contracts, and a language-specific API cannot reduce the shared contract.
+
+<!-- zlink-nav:start -->
+[Core Spec Index](core/README.en.md) | [Protocol Index](core/protocol/README.en.md) | [Systems Index](core/systems/README.en.md)
+<!-- zlink-nav:end -->

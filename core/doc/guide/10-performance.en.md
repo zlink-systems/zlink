@@ -1,9 +1,13 @@
 
+<!-- zlink-nav:start -->
+[← Monitoring raw sockets](06-monitoring.en.md) | [Core C API →](02-core-api.en.md)
+<!-- zlink-nav:end -->
+
 # Core performance
 
 Measure the complete application path before changing socket options. Message
-size, connection count, queue depth, transport, TLS, and callback work all
-affect throughput and latency.
+size, connection count, queue depth, transport, and TLS all affect
+throughput and latency.
 
 ## Backpressure and HWM
 

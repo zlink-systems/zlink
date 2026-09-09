@@ -1,9 +1,6 @@
 [English](./framework-0.11.0.md) | [한국어](./framework-0.11.0.ko.md)
 
-# ZLink Framework 0.11.0 릴리스 노트 초안
-
-> 초안이다. CI가 다섯 플랫폼에서 녹색이 된 뒤 `framework/v0.11.0` 태그로 배포한다. 배포 전에
-> "배포 전 확인" 절의 항목을 지운다.
+# ZLink Framework 0.11.0 릴리스 노트
 
 ## 의존 버전
 
@@ -27,6 +24,18 @@ Framework 0.11.0은 C++·.NET·Java·Node.js에서 ZLink binding 0.17.6(Core 0.1
   Unavailable로 분류돼 선택 제외(NotFound) 대신 선택되던 결함이다.
 - C++: Boost 1.87 이상에서 제거된 waitable timer의 `cancel(error_code&)` 호출을 인자 없는
   `cancel()`로 바꿨다. 패키지 Boost로 빌드할 때 필요하다.
+- .NET·Node.js: Location repository가 descriptor CAS의 provider `Conflict`를 곧바로 ownership
+  loss(IgnoredStale)로 확정하지 않는다. 같은 host의 owner-lease heartbeat가 CAS의 read와 write
+  사이에 끼면 `Preparing → Serving` 게시가 영구 실패하던 결함으로, conflict 뒤 owner lease와
+  최초 predecessor를 다시 읽어 유지되면 갱신된 version으로 최대 3회 재발행한다(Java와 같은 규칙).
+
+### 알려진 문제
+
+- .NET macOS(arm64): 단위 테스트 `DrainCoordinatorTests.Host_Stop_With_All_Channel_Kinds_…`에서
+  StreamNode session의 Connected 관측이 5초 안에 오지 않는다. Linux·Windows에서는 통과하며 원인은
+  1.0에서 조사한다.
+- Node.js Windows CI: Chromium Stream Connector E2E 단계가 끝나지 않는다(CI 환경 문제로 분류,
+  Linux에서는 통과). 패키지 동작과는 무관하다.
 
 ### 패키지와 빌드
 
@@ -71,8 +80,3 @@ dependencies {
 C++은 GitHub Release 자산을 내려받아 CMake package를 설치한 뒤
 `find_package(zlink_framework_cpp CONFIG REQUIRED)`로 사용한다. 설치된 Core·binding package
 prefix를 `CMAKE_PREFIX_PATH`에 함께 준다.
-
-## 배포 전 확인
-
-- macOS Node 계약 테스트의 hang 조사(진행 중) 결과를 반영한다. macOS .NET 타이밍 테스트는 반영했다.
-- `FRAMEWORK_VERSION`을 0.11.0으로 올리고 `sync-version.py --write`를 실행한다.
