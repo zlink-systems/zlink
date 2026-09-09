@@ -2594,12 +2594,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         SendFlags flags,
         ReadOnlyMemory<byte> metadata)
     {
-        if (!TrySelectChannelTarget(channelName, out var targetRid))
+        var selection = TrySelectChannelTarget(channelName);
+        if (!selection.Selected)
         {
             return ChannelSelectionFailureResult(channelName);
         }
         return SubmitApplication(
-            targetRid,
+            selection.TargetRid,
             ServiceWireConstants.Command.ChannelSend,
             0,
             channelName,
@@ -2616,13 +2617,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         SendFlags flags,
         ReadOnlyMemory<byte> metadata)
     {
-        if (!TrySelectChannelTarget(channelName, out var targetRid))
+        var selection = TrySelectChannelTarget(channelName);
+        if (!selection.Selected)
         {
             operationId = default;
             return ChannelSelectionFailureResult(channelName);
         }
         return SubmitRequest(
-            targetRid,
+            selection.TargetRid,
             ServiceWireConstants.Command.ChannelRequest,
             channelName,
             parts,
@@ -2641,12 +2643,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ReadOnlyMemory<byte> metadata)
     {
         ArgumentNullException.ThrowIfNull(callback);
-        if (!TrySelectChannelTarget(channelName, out var targetRid))
+        var selection = TrySelectChannelTarget(channelName);
+        if (!selection.Selected)
         {
             return ChannelSelectionFailureResult(channelName);
         }
         var submit = SubmitRequest(
-            targetRid,
+            selection.TargetRid,
             ServiceWireConstants.Command.ChannelRequest,
             channelName,
             parts,
@@ -9056,7 +9059,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ReadOnlyMemory<byte> metadata,
         CancellationToken cancellationToken)
     {
-        if (!TrySelectChannelTarget(channelName, out var targetRid))
+        var selection = TrySelectChannelTarget(channelName);
+        if (!selection.Selected)
             //  Spec 07-channel-topology:414-415 — when no admitted remote
             //  Server has positive weight the call "ends with no target", and
             //  spec 32:87 classifies a target that doesn't exist as NotFound.
@@ -9070,9 +9074,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 SubmitResult.NotConnected => ZlinkSubmitException.ErrorCode.NotConnected,
                 _ => ZlinkSubmitException.ErrorCode.NotFound
             });
-        var peer = RequireDirectPeer(targetRid);
         await SendDirectWireAsync(
-                peer.PhysicalRoutingId,
+                selection.PhysicalRid,
                 CreateApplicationWire(
                     ServiceWireConstants.Command.ChannelSend,
                     0,
@@ -9083,7 +9086,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             .ConfigureAwait(false);
         Publish(
             MeshMonitorEventKind.MessageSubmitted,
-            peerRid: targetRid,
+            peerRid: selection.TargetRid,
             channelName: channelName);
     }
 
@@ -9096,15 +9099,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var targetRid = await WaitForChannelTargetAsync(
+        var target = await WaitForChannelTargetAsync(
                 channelName,
                 timeout,
                 cancellationToken)
             .ConfigureAwait(false);
-        var peer = RequireDirectPeer(targetRid);
         var operationId = NextStandaloneOperationId();
         var reply = await RequestDirectWireAsync(
-                peer.PhysicalRoutingId,
+                target.PhysicalRid,
                 CreateApplicationWire(
                     ServiceWireConstants.Command.ChannelRequest,
                     operationId.Low,
@@ -9116,18 +9118,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             .ConfigureAwait(false);
         Publish(
             MeshMonitorEventKind.MessageSubmitted,
-            peerRid: targetRid,
+            peerRid: target.TargetRid,
             channelName: channelName);
         return DecodeDirectApplicationReply(operationId.Low, reply);
     }
 
     private Peer RequireDirectPeer(RoutingId targetRid)
     {
-        var peer = RunState(() =>
-        {
-            _peersByRid.TryGetValue(targetRid, out var current);
-            return current;
-        });
+        Func<Peer?> resolve = () => _peersByRid.GetValueOrDefault(targetRid);
+        var peer = _lane.IsOnLane ? resolve() : RunState(resolve);
         if (peer is null || !peer.Admitted)
             throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
         return peer;
@@ -10649,77 +10648,99 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _readyHandler?.Invoke(MeshReadyDomains.All);
     }
 
-    private bool TrySelectChannelTarget(string channelName, out RoutingId targetRid)
-    {
-        var result = RunState(() =>
+    private (bool Selected, RoutingId TargetRid, RoutingId PhysicalRid,
+        SubmitResult Failure, string FailureReason, bool Wait, Task Changed)
+        TrySelectChannelTarget(string channelName) => RunState(() =>
         {
-            var selected = _channelSelection.TrySelect(channelName, out var target);
-            return (Selected: selected, Target: target);
+            if (_channelSelection.TrySelect(channelName, out var targetRid))
+                return (Selected: true, TargetRid: targetRid,
+                    PhysicalRid: RequireDirectPeer(targetRid).PhysicalRoutingId,
+                    Failure: default(SubmitResult), FailureReason: string.Empty,
+                    Wait: false, Changed: Task.CompletedTask);
+            var failure = ChannelSelectionFailureResultUnderLock(channelName);
+            var failureReason = ChannelSelectionFailureReasonUnderLock(channelName);
+            // Only a first admission epoch can make this request selectable.
+            // A known peer that lost its route is already Unavailable.
+            var wait = CanChannelTargetStillMaterializeUnderLock(channelName);
+            return (Selected: false, TargetRid: default(RoutingId),
+                PhysicalRid: default(RoutingId), Failure: failure,
+                FailureReason: failureReason, Wait: wait,
+                Changed: wait ? _channelSelectionChanged.Task : Task.CompletedTask);
         });
-        targetRid = result.Target;
-        return result.Selected;
-    }
 
-    private async ValueTask<RoutingId> WaitForChannelTargetAsync(
+    private ValueTask<(RoutingId TargetRid, RoutingId PhysicalRid)> WaitForChannelTargetAsync(
         string channelName,
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var effectiveTimeout = timeout > TimeSpan.Zero
-            ? timeout
-            : TimeSpan.FromSeconds(30);
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
-            _stop?.Token ?? CancellationToken.None);
-        deadline.CancelAfter(effectiveTimeout);
-        while (true)
+        var startedAt = Stopwatch.GetTimestamp();
+        try
         {
-            var selection = RunState(() =>
-            {
-                if (_channelSelection.TrySelect(channelName, out var targetRid))
-                    return (Selected: true, Target: targetRid,
-                        Failure: default(SubmitResult), FailureReason: string.Empty,
-                        Wait: false, Changed: Task.CompletedTask);
-                var failure = ChannelSelectionFailureResultUnderLock(channelName);
-                var failureReason = ChannelSelectionFailureReasonUnderLock(channelName);
-                // Only a first admission epoch can make this request
-                // selectable. A known peer that lost its admitted route is
-                // already Unavailable, and weight-zero/local-only membership
-                // has no eligible target under spec 08 §3.2.
-                var waitForSelectionChange =
-                    CanChannelTargetStillMaterializeUnderLock(channelName);
-                var changed = waitForSelectionChange
-                    ? _channelSelectionChanged.Task
-                    : Task.CompletedTask;
-                return (Selected: false, Target: default(RoutingId), Failure: failure,
-                    FailureReason: failureReason, Wait: waitForSelectionChange, Changed: changed);
-            });
+            var selection = TrySelectChannelTarget(channelName);
             if (selection.Selected)
-                return selection.Target;
+                return ValueTask.FromResult((selection.TargetRid, selection.PhysicalRid));
+            return WaitForSelectionAsync(this, channelName, selection, startedAt,
+                timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(30), cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            return ValueTask.FromException<(RoutingId, RoutingId)>(exception);
+        }
 
-            if (!selection.Wait)
-            {
-                ZLinkRuntimeMetrics.RecordChannelSelectionFailure(
-                    _meshName,
-                    channelName,
-                    selection.FailureReason);
-                throw new ZlinkSubmitException(selection.Failure switch
-                {
-                    SubmitResult.Terminated => ZlinkSubmitException.ErrorCode.Terminated,
-                    SubmitResult.NotConnected => ZlinkSubmitException.ErrorCode.NotConnected,
-                    _ => ZlinkSubmitException.ErrorCode.NotFound
-                });
-            }
+        static async ValueTask<(RoutingId TargetRid, RoutingId PhysicalRid)> WaitForSelectionAsync(
+            ZLinkManagedMeshNode node,
+            string channelName,
+            (bool Selected, RoutingId TargetRid, RoutingId PhysicalRid,
+                SubmitResult Failure, string FailureReason, bool Wait, Task Changed) selection,
+            long startedAt,
+            TimeSpan effectiveTimeout,
+            CancellationToken cancellationToken)
+        {
+            CancellationTokenSource? deadline = null;
             try
             {
-                await selection.Changed.WaitAsync(deadline.Token).ConfigureAwait(false);
+                while (true)
+                {
+                    if (!selection.Wait)
+                    {
+                        ZLinkRuntimeMetrics.RecordChannelSelectionFailure(
+                            node._meshName, channelName, selection.FailureReason);
+                        throw new ZlinkSubmitException(selection.Failure switch
+                        {
+                            SubmitResult.Terminated => ZlinkSubmitException.ErrorCode.Terminated,
+                            SubmitResult.NotConnected => ZlinkSubmitException.ErrorCode.NotConnected,
+                            _ => ZlinkSubmitException.ErrorCode.NotFound
+                        });
+                    }
+                    try
+                    {
+                        if (deadline is null)
+                        {
+                            deadline = CancellationTokenSource.CreateLinkedTokenSource(
+                                cancellationToken, node._stop?.Token ?? CancellationToken.None);
+                            var remaining = effectiveTimeout - Stopwatch.GetElapsedTime(startedAt);
+                            if (remaining <= TimeSpan.Zero)
+                                deadline.Cancel();
+                            else
+                                deadline.CancelAfter(remaining);
+                        }
+                        await selection.Changed.WaitAsync(deadline.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                        when (!cancellationToken.IsCancellationRequested)
+                    {
+                        throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.DeadlineExceeded,
+                            $"Channel '{channelName}' did not become selectable before its deadline.");
+                    }
+                    selection = node.TrySelectChannelTarget(channelName);
+                    if (selection.Selected)
+                        return (selection.TargetRid, selection.PhysicalRid);
+                }
             }
-            catch (OperationCanceledException)
-                when (!cancellationToken.IsCancellationRequested)
+            finally
             {
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.DeadlineExceeded,
-                    $"Channel '{channelName}' did not become selectable before its deadline.");
+                deadline?.Dispose();
             }
         }
     }
