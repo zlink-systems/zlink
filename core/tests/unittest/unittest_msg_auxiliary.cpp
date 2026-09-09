@@ -485,9 +485,36 @@ void test_raw_relocation_preserves_auxiliary_without_extra_close ()
 }
 }
 
+static void count_release (void *, void *hint_)
+{
+    ++*static_cast<int *> (hint_);
+}
+
+void test_message_alias_is_rejected_without_releasing_payload ()
+{
+    typedef zlink_config_result_t (*operation_t) (zlink_msg_t *, zlink_msg_t *);
+    const operation_t operations[] = {zlink_msg_move, zlink_msg_copy, zlink_msg_adopt};
+    for (size_t i = 0; i != 3; ++i) {
+        char payload[256];
+        memset (payload, 'x', sizeof (payload));
+        int releases = 0;
+        zlink_msg_t msg;
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_data (
+          &msg, payload, sizeof (payload), count_release, &releases));
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_INVALID_ARGUMENT, operations[i] (&msg, &msg));
+        TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+        TEST_ASSERT_EQUAL_INT (0, releases);
+        TEST_ASSERT_EQUAL_UINT64 (sizeof (payload), zlink_msg_size (&msg));
+        TEST_ASSERT_EQUAL_MEMORY (payload, zlink_msg_data (&msg), sizeof (payload));
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&msg));
+        TEST_ASSERT_EQUAL_INT (1, releases);
+    }
+}
+
 int main ()
 {
     UNITY_BEGIN ();
+    RUN_TEST (test_message_alias_is_rejected_without_releasing_payload);
     RUN_TEST (test_all_initializers_start_without_auxiliary_metadata);
     RUN_TEST (test_copy_and_move_preserve_metadata_for_every_payload_type);
     RUN_TEST (test_view_starts_without_source_metadata);
