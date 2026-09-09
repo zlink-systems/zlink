@@ -9,14 +9,29 @@ test('message copy shares native payload and survives source close', () => {
     const sourceView = source.data();
     sourceView.fill(0x2a);
     const copy = source.copy();
+    const copyView = copy.data();
     assert.equal(source.refCount(), 2);
     assert.equal(copy.refCount(), 2);
     assert.equal(copy.size(), 1024);
-    assert.equal(copy.data()[0], 0x2a);
+    assert.equal(copyView[0], 0x2a);
     source.close();
-    assert.equal(sourceView.byteLength, 0);
+    source.close();
+    assert.equal(sourceView.byteLength, 1024);
+    assert.equal(sourceView[0], 0x2a);
+    assert.equal(copyView[1023], 0x2a);
+    copy.close();
+    copy.close();
+    assert.equal(sourceView[1023], 0x2a);
+    assert.equal(copyView[1023], 0x2a);
+});
+test('message copy releases an unexposed source frame immediately', () => {
+    const source = zlink.Message.allocate(1024);
+    const copy = source.copy();
+    assert.equal(source.refCount(), 2);
+    assert.equal(copy.refCount(), 2);
+    source.close();
     assert.equal(copy.refCount(), 1);
-    assert.equal(copy.data()[1023], 0x2a);
+    assert.equal(copy.size(), 1024);
     copy.close();
 });
 test('message move transfers payload, replaces destination, and leaves source empty', () => {

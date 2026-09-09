@@ -1451,8 +1451,8 @@ napi_value message_frame_size (napi_env env, napi_callback_info info)
 
 napi_value message_frame_close (napi_env env, napi_callback_info info)
 {
-    napi_value argv[2];
-    size_t argc = 2;
+    napi_value argv[1];
+    size_t argc = 1;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     native_message_frame_handle_t *handle = NULL;
     if (argc < 1
@@ -1461,16 +1461,6 @@ napi_value message_frame_close (napi_env env, napi_callback_info info)
         || !handle) {
         napi_throw_type_error (env, NULL, "messageFrameClose requires a native message frame");
         return NULL;
-    }
-    if (argc > 1 && handle->frame) {
-        // A Buffer view retains the frame independently of its Message handle.
-        // Detach it and empty the frame now so close deterministically releases
-        // the Core payload/refcount instead of waiting for a later GC cycle.
-        detach_message_buffer (env, argv[1]);
-        if (zlink_msg_close (&handle->frame->message) != 0)
-            return throw_last_error (env, "message frame close failed");
-        if (zlink_msg_init (&handle->frame->message) != 0)
-            return throw_last_error (env, "message frame reinit failed");
     }
     release_native_message_frame (handle->frame);
     handle->frame = NULL;

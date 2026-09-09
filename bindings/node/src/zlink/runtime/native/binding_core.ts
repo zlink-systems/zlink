@@ -16,7 +16,7 @@ export interface CoreNativeBinding {
   ) => void;
   messageFrameRefCount: (nativeMessage: unknown) => number;
   messageFrameSize: (nativeMessage: unknown) => number;
-  messageFrameClose: (nativeMessage: unknown, data?: Buffer) => void;
+  messageFrameClose: (nativeMessage: unknown) => void;
   messageFromBuffer: (data: Buffer) => { data?: Buffer; nativeMessage: unknown };
   has: (capability: string) => boolean;
   proxy: (
