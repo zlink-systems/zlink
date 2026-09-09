@@ -882,6 +882,10 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
   구현마다 이렇게 다르다는 것이 이 패턴의 결과다.
 - 재측정: C++ `s3s_run{2,3}`, Java `s2r_run{1,2,3}`(rebuild 티켓 뒤). Node `s2q_run{1,2,3}`·Kotlin은
   영향 없음.
+- 추가(같은 날): C++ `s3s_run3`은 첫 셀에서 source의 HTTP listener bind 실패(`Address already in
+  use`, FB-053 경로)로 abort. 이 머신의 `ip_local_port_range`가 `1024 65535`라 다른 프로세스의
+  outbound 소켓이 고정 포트를 ephemeral로 잡는다(runner의 LISTEN preflight로는 못 잡음). 환경 조치:
+  `sysctl net.ipv4.ip_local_reserved_ports=5200-5299,6200-6219`(측정 세션마다). 재측정 `s3t_run3`.
 
 ## 범위 밖으로 확인하고 미룬 항목
 
