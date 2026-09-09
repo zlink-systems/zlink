@@ -147,7 +147,8 @@ jobs:
           curl -sSfL -o ".artifacts/wsl/npm/zlink-systems-zlink-${version}.tgz" \
             "https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-${version}.tgz"
           bash scripts/local-package/http-client/build-wsl.sh node
-          tar tzf .artifacts/wsl/npm/zlink-systems-http-client-*.tgz | grep -q 'package/dist/index.js'
+          tar tzf .artifacts/wsl/npm/zlink-systems-http-client-*.tgz > "${RUNNER_TEMP}/http-client-files.txt"
+          grep -q 'package/dist/index.js' "${RUNNER_TEMP}/http-client-files.txt"
 
       - name: Install framework dependencies
         working-directory: framework/languages/node
@@ -288,7 +289,8 @@ jobs:
           curl -sSfL -o ".artifacts/wsl/npm/zlink-systems-zlink-${version}.tgz" \
             "https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-${version}.tgz"
           bash scripts/local-package/http-client/build-wsl.sh node
-          tar tzf .artifacts/wsl/npm/zlink-systems-http-client-*.tgz | grep -q 'package/dist/index.js'
+          tar tzf .artifacts/wsl/npm/zlink-systems-http-client-*.tgz > "${RUNNER_TEMP}/http-client-files.txt"
+          grep -q 'package/dist/index.js' "${RUNNER_TEMP}/http-client-files.txt"
 
       - name: Install and build the Node framework workspace
         working-directory: framework/languages/node

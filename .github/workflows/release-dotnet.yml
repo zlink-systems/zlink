@@ -205,7 +205,7 @@ jobs:
           dotnet-version: '8.0.x'
 
       # Every packable framework project is published together: the public
-      # packages (Systems.Zlink.HttpClient, Systems.Zlink.Framework.AspNetCore,
+      # packages (Zlink.HttpClient, Zlink.Framework.AspNetCore,
       # Systems.Zlink.Stream.Connector) depend on Zlink.Framework and
       # Zlink.Framework.Contracts, so a partial push would leave consumers
       # unable to restore. The binding Systems.Zlink is restored from nuget.org,
