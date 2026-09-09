@@ -178,7 +178,12 @@ class ctx_physical_queue_registry_t
     mutable recursive_mutex_t _sync;
     std::map<uint64_t, physical_queue_handle_t> _directions;
     uint64_t _next_queue_id;
-    uint64_t _application_reserved_minimum_bytes;
+    // The atomic minimum reservation owns both its bytes and its topology.
+    // Plan snapshots can lag pipe creation and cannot supply this count.
+    struct {
+        uint64_t bytes;
+        uint64_t directions;
+    } _application_reservation;
     mutable std::atomic<uint64_t> _application_peak_accounted_bytes;
     mutable std::atomic<uint64_t> _completion_peak_accounted_bytes;
     std::atomic<uint64_t> _oversize_admission_count;

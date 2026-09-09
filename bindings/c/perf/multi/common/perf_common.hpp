@@ -332,8 +332,21 @@ inline bool drain_connect_monitor (connect_monitor_t &monitor_)
           monitor_.monitor, &event, ZLINK_RECV_FLAGS_DONTWAIT);
         if (rc == ZLINK_RECV_NO_DATA)
             return true;
-        if (rc != ZLINK_RECV_OK)
+        if (rc != ZLINK_RECV_OK) {
+            if (bench_debug_enabled ())
+                std::cerr << "[perf-multi] monitor recv failed rc=" << rc
+                          << " errno=" << zlink_errno () << std::endl;
             return false;
+        }
+        if (bench_debug_enabled ()
+            && (event.event != ZLINK_EVENT_CONNECTION_READY
+                || monitor_.state->connection_ready_count % 1000 == 0))
+            std::cerr << "[perf-multi] monitor event=" << event.event
+                      << " value=" << event.value
+                      << " ready=" << monitor_.state->connection_ready_count
+                      << " mono_ms=" << std::chrono::duration_cast<milliseconds_t> (
+                           steady_clock_t::now ().time_since_epoch ()).count ()
+                      << std::endl;
         connect_monitor_handler (&event, monitor_.state);
     }
 }

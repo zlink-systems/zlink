@@ -1498,6 +1498,9 @@ if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
   CORE_PROVENANCE_MANIFEST="${ZLINK_CORE_PACKAGE_PREFIX}/share/zlink/core-package-provenance.json"
   CORE_PROVENANCE_REVISION="$(sed -n 's/^[[:space:]]*"revision":[[:space:]]*"\([^"]*\)".*/\1/p' "${CORE_PROVENANCE_MANIFEST}" | head -n 1)"
   CORE_RELEASE_TAG="$(sed -n 's/^[[:space:]]*"tag":[[:space:]]*"\([^"]*\)".*/\1/p' "${CORE_PROVENANCE_MANIFEST}" | head -n 1)"
+  if grep -q '"dirty":[[:space:]]*true' "${CORE_PROVENANCE_MANIFEST}"; then
+    CORE_DIRTY="1"
+  fi
 else
   CORE_PROVENANCE_REVISION="$(git -C "${ROOT_DIR}" rev-parse HEAD)"
   if ! git -C "${ROOT_DIR}" diff --quiet -- core; then

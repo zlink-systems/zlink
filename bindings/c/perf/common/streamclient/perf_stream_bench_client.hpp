@@ -696,6 +696,11 @@ class bench_client_t : public bench_client_iface_t
             std::printf ("CLIENT_READY,%zu\n", size);
             std::fflush (stdout);
             if (!perf_multi_handshake::wait_for_start_from_stdin (size)) {
+                const int start_errno = errno;
+                std::fprintf (stderr,
+                              "perf_stream_client: START wait failed errno=%d "
+                              "connected=%ld expected=%ld\n",
+                              start_errno, connected, required_connect);
                 case_metrics_t failed;
                 failed.connect_ok = connected;
                 failed.connect_fail = 0;

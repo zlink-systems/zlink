@@ -181,11 +181,11 @@ int main (int argc, char **argv)
     }
     if (!wait_connect_ready_count (connect_monitor, settings.clients,
                                    settings.connect_ready_timeout_ms)) {
-        if (bench_debug_enabled ()) {
-            std::cerr << "[multi-stream-server] connection-ready barrier failed ready="
-                      << poll_connect_ready_count (connect_monitor)
-                      << " expected=" << settings.clients << std::endl;
-        }
+        std::cerr << "[multi-stream-server] connection-ready barrier failed ready="
+                  << poll_connect_ready_count (connect_monitor)
+                  << " expected=" << settings.clients
+                  << " monitor_error=" << connect_monitor.state->error_code
+                  << std::endl;
         close_connect_monitor (connect_monitor);
         const zlink_close_result_t close_result = close_stream_server_fenced (server);
         if (close_result == ZLINK_CLOSE_OK)

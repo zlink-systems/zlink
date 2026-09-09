@@ -363,7 +363,7 @@ zlink::physical_queue_endpoint_policy_t::physical_queue_endpoint_policy_t () :
 
 zlink::ctx_physical_queue_registry_t::ctx_physical_queue_registry_t () :
     _next_queue_id (1),
-    _application_reserved_minimum_bytes (0),
+    _application_reservation (),
     _application_peak_accounted_bytes (0),
     _completion_peak_accounted_bytes (0),
     _oversize_admission_count (0),
@@ -377,7 +377,8 @@ zlink::ctx_physical_queue_registry_t::ctx_physical_queue_registry_t () :
 zlink::ctx_physical_queue_registry_t::~ctx_physical_queue_registry_t ()
 {
     zlink_assert (_directions.empty ());
-    zlink_assert (_application_reserved_minimum_bytes == 0);
+    zlink_assert (_application_reservation.bytes == 0);
+    zlink_assert (_application_reservation.directions == 0);
 }
 
 uint64_t zlink::ctx_physical_queue_registry_t::allocate_queue_id_unlocked ()
@@ -423,18 +424,29 @@ int zlink::ctx_physical_queue_registry_t::create_pipepair_queues (
     }
 
     scoped_lock_t lock (_sync);
+    const uint64_t added_directions = per_direction_minimum != 0 ? 2 : 0;
     const bool reservation_overflow =
-      per_direction_minimum > UINT64_MAX / 2
-      || _application_reserved_minimum_bytes
+      _application_reservation.directions > UINT64_MAX - added_directions
+      || per_direction_minimum > UINT64_MAX / 2
+      || _application_reservation.bytes
            > UINT64_MAX - per_direction_minimum * 2;
     const uint64_t pair_minimum =
       reservation_overflow ? UINT64_MAX : per_direction_minimum * 2;
+    // Admission must use the topology being reserved, including this pair.
+    // The seed plan has no queue count and therefore only the fixed cap;
+    // using it here rejects connections that the same planner can fund.
+    const uint64_t budget = context_plan_.configured_core_budget_bytes > 0
+      ? context_plan_.configured_core_budget_bytes
+      : auto_hwm_effective_budget_bytes (
+          context_plan_.profile, context_plan_.resolved_memory_limit_bytes,
+          reservation_overflow ? UINT64_MAX
+            : _application_reservation.directions + added_directions);
     const uint64_t available_budget =
-      _application_reserved_minimum_bytes
-          >= context_plan_.effective_core_budget_bytes
+      _application_reservation.bytes
+          >= budget
         ? 0
-        : context_plan_.effective_core_budget_bytes
-            - _application_reserved_minimum_bytes;
+        : budget
+            - _application_reservation.bytes;
     if (reservation_overflow || pair_minimum > available_budget) {
         errno = ENOBUFS;
         return -1;
@@ -455,7 +467,8 @@ int zlink::ctx_physical_queue_registry_t::create_pipepair_queues (
     zlink_assert (first->queue_id != second->queue_id);
     _directions.insert (std::make_pair (first->queue_id, first));
     _directions.insert (std::make_pair (second->queue_id, second));
-    _application_reserved_minimum_bytes += pair_minimum;
+    _application_reservation.bytes += pair_minimum;
+    _application_reservation.directions += added_directions;
     *first_direction_ = first;
     *second_direction_ = second;
     return 0;
@@ -1326,10 +1339,14 @@ void zlink::ctx_physical_queue_registry_t::erase_direction_if_retired_and_draine
     if (it == _directions.end ())
         return;
     zlink_assert (it->second.get () == direction_.get ());
-    zlink_assert (_application_reserved_minimum_bytes
+    zlink_assert (_application_reservation.bytes
                   >= direction_->minimum_reservation_bytes);
-    _application_reserved_minimum_bytes -=
+    _application_reservation.bytes -=
       direction_->minimum_reservation_bytes;
+    if (direction_->minimum_reservation_bytes != 0) {
+        zlink_assert (_application_reservation.directions != 0);
+        --_application_reservation.directions;
+    }
     _directions.erase (it);
 }
 

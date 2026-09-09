@@ -285,6 +285,137 @@ static void release_pipepair_queue_handles (
     registry_->release_endpoint (&second_peer);
 }
 
+static void check_stream_pair_reservation_capacity (
+  const zlink::auto_hwm_budget_input_t &input_, size_t pair_count_,
+  bool expect_next_pair_rejected_,
+  zlink::physical_queue_class_t excluded_class_ =
+    zlink::physical_queue_class_application)
+{
+    zlink::auto_hwm_context_plan_t context;
+    zlink::auto_hwm_context_plan_make (input_, &context);
+    zlink::ctx_physical_queue_registry_t registry;
+    const size_t excluded_pair_count =
+      excluded_class_ == zlink::physical_queue_class_application ? 0 : 2050;
+    std::vector<zlink::physical_queue_handle_t> excluded_directions (
+      excluded_pair_count * 2);
+    size_t excluded_accepted = 0;
+    for (; excluded_accepted != excluded_pair_count; ++excluded_accepted) {
+        // Monitor queues require a finite positive HWM; the registry itself
+        // normalizes Completion queue HWM to zero.
+        if (registry.create_pipepair_queues (
+              4096, 4096, excluded_class_, zlink::auto_hwm_role_stream, true,
+              context, &excluded_directions[excluded_accepted * 2],
+              &excluded_directions[excluded_accepted * 2 + 1]) != 0)
+            break;
+    }
+    std::vector<zlink::physical_queue_handle_t> directions (pair_count_ * 2);
+    size_t accepted = 0;
+    for (; accepted != pair_count_; ++accepted) {
+        if (registry.create_pipepair_queues (
+              0, 0, zlink::physical_queue_class_application,
+              zlink::auto_hwm_role_stream, true, context,
+              &directions[accepted * 2], &directions[accepted * 2 + 1]) != 0)
+            break;
+    }
+
+    int rejected_rc = 0;
+    int rejected_errno = 0;
+    zlink::physical_queue_handle_t rejected_first;
+    zlink::physical_queue_handle_t rejected_second;
+    if (expect_next_pair_rejected_) {
+        rejected_rc = registry.create_pipepair_queues (
+          0, 0, zlink::physical_queue_class_application,
+          zlink::auto_hwm_role_stream, true, context, &rejected_first,
+          &rejected_second);
+        rejected_errno = errno;
+    }
+    const bool rejected_pair_empty =
+      !rejected_first.get () && !rejected_second.get ();
+    zlink::physical_queue_registry_snapshot_t snapshot;
+    registry.snapshot (&snapshot);
+
+    // Release before assertions so the registry can also be destroyed when
+    // this regression fails on an uncorrected Core.
+    for (size_t i = 0; i != accepted; ++i)
+        release_pipepair_queue_handles (&registry, &directions[i * 2],
+                                        &directions[i * 2 + 1]);
+    if (rejected_rc == 0 && rejected_first && rejected_second)
+        release_pipepair_queue_handles (&registry, &rejected_first,
+                                        &rejected_second);
+    for (size_t i = 0; i != excluded_accepted; ++i)
+        release_pipepair_queue_handles (&registry, &excluded_directions[i * 2],
+                                        &excluded_directions[i * 2 + 1]);
+
+    TEST_ASSERT_EQUAL_UINT64 (excluded_pair_count, excluded_accepted);
+    TEST_ASSERT_EQUAL_UINT64 (pair_count_, accepted);
+    TEST_ASSERT_EQUAL_UINT64 (pair_count_ * 2,
+                              snapshot.active_application_direction_count);
+    if (expect_next_pair_rejected_) {
+        TEST_ASSERT_EQUAL_INT (-1, rejected_rc);
+        TEST_ASSERT_EQUAL_INT (ENOBUFS, rejected_errno);
+        TEST_ASSERT_TRUE (rejected_pair_empty);
+    }
+}
+
+void test_stream_pair_reservation_grows_beyond_fixed_cap ()
+{
+    zlink::auto_hwm_budget_input_t input;
+    input.enabled = true;
+    input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
+    input.configured_memory_limit_bytes = 64ull * 1024ull * 1024ull * 1024ull;
+    // Balanced STREAM reserves 128 KiB per pair: pair 4097 crosses the
+    // 512 MiB fixed cap. No planner pass runs between these reservations.
+    check_stream_pair_reservation_capacity (input, 4097, false);
+}
+
+void test_stream_pair_reservation_keeps_percent_limit_atomic ()
+{
+    zlink::auto_hwm_budget_input_t input;
+    input.enabled = true;
+    input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
+    // The 5% share fits exactly 4097 pairs, above the fixed cap. The next
+    // pair must leave both handles empty and the registry count unchanged.
+    input.configured_memory_limit_bytes = 4097ull * 128ull * 1024ull * 20ull;
+    check_stream_pair_reservation_capacity (input, 4097, true);
+}
+
+void test_stream_pair_reservation_keeps_manual_limit_atomic ()
+{
+    zlink::auto_hwm_budget_input_t input;
+    input.enabled = true;
+    input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
+    input.configured_memory_limit_bytes = 64ull * 1024ull * 1024ull * 1024ull;
+    // A manual budget remains authoritative despite plentiful host memory.
+    input.configured_core_budget_bytes = 3ull * 128ull * 1024ull;
+    check_stream_pair_reservation_capacity (input, 3, true);
+}
+
+void test_stream_pair_reservation_keeps_profile_cap_when_floor_is_lower ()
+{
+    zlink::auto_hwm_budget_input_t input;
+    input.enabled = true;
+    input.profile = ZLINK_AUTO_HWM_PROFILE_THROUGHPUT;
+    input.configured_memory_limit_bytes = 64ull * 1024ull * 1024ull * 1024ull;
+    // STREAM reserves 256 KiB per direction, while this profile's effective
+    // cap floor uses the general 128 KiB minimum. At 2049 pairs the floor is
+    // still below the 1 GiB fixed cap: plentiful percent share cannot admit it.
+    check_stream_pair_reservation_capacity (input, 2048, true);
+}
+
+void test_stream_pair_reservation_excludes_monitor_and_completion_from_cap ()
+{
+    zlink::auto_hwm_budget_input_t input;
+    input.enabled = true;
+    input.profile = ZLINK_AUTO_HWM_PROFILE_THROUGHPUT;
+    input.configured_memory_limit_bytes = 64ull * 1024ull * 1024ull * 1024ull;
+    // Including the extra 4100 non-application directions in the queue floor
+    // would incorrectly raise the cap and admit a 2049th STREAM pair.
+    check_stream_pair_reservation_capacity (
+      input, 2048, true, zlink::physical_queue_class_monitor);
+    check_stream_pair_reservation_capacity (
+      input, 2048, true, zlink::physical_queue_class_completion);
+}
+
 void test_atomic_pair_minimum_reservation_has_one_linearization_winner ()
 {
     zlink::auto_hwm_budget_input_t input;
@@ -724,6 +855,11 @@ int main ()
     RUN_TEST (test_mixed_queue_water_filling_respects_budget_and_caps);
     RUN_TEST (test_water_filling_remainder_is_stable);
     RUN_TEST (test_insufficient_budget_keeps_role_minima_visible);
+    RUN_TEST (test_stream_pair_reservation_grows_beyond_fixed_cap);
+    RUN_TEST (test_stream_pair_reservation_keeps_percent_limit_atomic);
+    RUN_TEST (test_stream_pair_reservation_keeps_manual_limit_atomic);
+    RUN_TEST (test_stream_pair_reservation_keeps_profile_cap_when_floor_is_lower);
+    RUN_TEST (test_stream_pair_reservation_excludes_monitor_and_completion_from_cap);
     RUN_TEST (test_atomic_pair_minimum_reservation_has_one_linearization_winner);
     RUN_TEST (test_completion_pair_does_not_consume_application_reservation);
     RUN_TEST (test_single_lane_reply_is_application_accounting_only);
