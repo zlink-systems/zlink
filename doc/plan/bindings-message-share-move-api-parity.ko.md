@@ -163,16 +163,24 @@ C++·.NET·Java의 추가는 non-breaking(이름 정렬 alias 불필요). **Node
 - 공유 후 수명 오사용(공유 중 원본 mutate, 한쪽만 close 후 다른 쪽 사용) 방지를 테스트로 강제.
 - perf relay가 `Move`로 바뀌면 재제출/드레인 경로에서 소유권이 이미 이전됐음을 전제로 해야 하므로, 재제출이 필요한 언어는 C처럼 `Copy` snapshot을 병행.
 
-### 8.1 결정 기록 — Node `close()`는 GC 기반 정리 유지 (refcount 즉시성 미보장)
-- **배경:** `copy()`(ref-share) 도입 시 "copy 후 close하면 refcount 즉시 하락"을 보장하려고 Node `message_frame_close`에 버퍼 노출
-  메시지마다 `detach + close + reinit`를 강제하는 경로를 넣었더니, **MULTI_ROUTER_ROUTER_REQREP tcp 작은 size가 C 대비 ~38% →
-  ~8~10%로 3~5배 회귀**했다(REQREP는 요청·응답 메시지를 왕복 임계경로에서 close해 per-close 비용에 가장 민감; runs=3 재현).
-- **결정(사용자 승인):** Node `close()`는 **모든 경우 예전의 단일 release 경로**로 되돌린다. 노출된 `Buffer` view는 예전처럼
-  **GC/finalize 시점에 안전하게 정리**한다. 공개 `copy()`/`move()`/`clone()` API와 relay(move)는 그대로 유지.
-- **대가:** `copy()`로 공유한 두 핸들 중 하나를 close해도, 버퍼 view가 노출된 경우 `refCount()` 관찰값은 **즉시 1로 떨어지지 않고**
-  버퍼 GC 이후 반영된다. 이는 **진단용 `refCount()` 표시에만** 영향을 주며 정확성·안전성·소유권 독립에는 영향이 없다.
-- **회귀 원인은 refcount/move 로직이 아니라** 함께 들어간 "close 즉시 정리" 결정이었다. 계약 테스트는 "즉시 refcount 하락"이 아니라
-  "소유권 독립(양쪽 유효·각자 close·use-after-free 없음)"을 검증하도록 조정한다. Node spec/guide에 이 타이밍을 문서화했다.
+### 8.1 결정 기록 — Node REQREP 회귀의 진짜 원인은 perf relay 과설계 (close 아님)
+- **증상:** Message copy/move/clone 커밋(`02a696ccad`) 후 **MULTI_ROUTER_ROUTER_REQREP tcp 작은 size가 C 대비 ~38% → ~8~10%로
+  3~5배 회귀**(runs=3, quiet 재현). DEALER_DEALER·SENDSEND은 무변화. git bisect로 첫 bad 커밋 = `02a696ccad` 확정(부모 `02a696ccad~1`은
+  REQREP 64=55,241 ops로 정상 → Machine A 변경은 무죄).
+- **오진 두 번:** 처음엔 `message_frame_close`의 "즉시 정리(detach+close+reinit)"를 원인으로 보고 되돌렸으나 복구 실패. retry Buffer
+  snapshot(`copy()`)도 되돌렸으나 실패. → close·snapshot 둘 다 원인이 **아니었다.**
+- **진짜 원인:** perf 하네스 relay가 받은 메시지를 **직접 제출(이미 zero-copy 소유권 이전)** 하던 것을, "move 파리티"를 명목으로
+  `moveRelayMessage`(빈 `Message.allocate(0)` + `move` + `close`)로 감싼 것. REQREP는 요청·응답 왕복마다 이 alloc+move+close(N-API 3회)가
+  붙어 임계경로가 5배 느려졌다. **공개 API의 정상 소유권 이전 위에 얹은 중복 작업**이었다.
+- **해결(사용자 확정):** 네 언어 perf relay를 **공개 operation-builder에 받은 파트를 직접 얹어 submit하는 관용형**으로 통일(과설계 제거):
+  Node `moveRelayMessage` 제거, Java `source.move(payload)`+임시 Message 제거, C++ 불필요한 `std::move(...)` 제거, .NET은 이미 관용형.
+  submit이 소유권을 소비하고 `Received.close()`는 소비된 파트를 안전 처리(반복 close 안전)를 계약 테스트로 검증.
+- **결과(quiet, runs=3):** Node REQREP 64 6~9% → **39.8%**, 1024 → **47.7%**; Node SENDSEND 18~23% → **29~39%**(회귀 해소 + 원래보다
+  개선). Java REQREP → **101~137%**, SENDSEND 64 → **104%**(직접 빌더가 기존 대비 대폭 개선). C++ 정상(REQREP 95~108%, SENDSEND 88~120%),
+  .NET 무변경. **비대상 회귀 0.**
+- **곁가지 결정:** Node `close()`는 단일 release 경로(노출 Buffer는 GC/finalize 정리)로 유지한다 — 이는 회귀와 무관한 단순화이며, 그 결과
+  `copy()` 후 close 시 `refCount()`가 즉시 안 떨어지고 버퍼 GC 후 반영된다(진단용 표시에만 영향, 안전/정확성 무관). 계약 테스트는 "즉시 refcount
+  하락" 대신 "소유권 독립"을 검증. Node spec/guide에 이 타이밍을 문서화했다.
 
 ## 9. 검증
 
