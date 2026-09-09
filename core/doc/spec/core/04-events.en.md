@@ -89,8 +89,8 @@ the pipe. A RESUMED event alone therefore does not guarantee that the next send
 is accepted.
 
 `FLOW_STATE_STALE_EPOCH` means that the frame's flow epoch did not advance.
-`value` is the received epoch, and the current epoch is the value reported by
-the preceding PAUSED or RESUMED event for the same connection.
+`value` is the received epoch. The current epoch can be taken from the preceding PAUSED or
+RESUMED event for the same connection only if the same monitor observed that event.
 
 These three events use bits 16, 17, and 18 of the monitor event mask, so
 `ZLINK_EVENT_ALL` is `0x7FFFF`. A monitor that specifies a mask directly must
@@ -122,7 +122,7 @@ event mask specified when opening a monitor. Each item maps to one unit test.
   of the current Application pipe to which the state was applied. Even when a flow-state frame arrives
   on a ROUTER-ROUTER Completion connection, the event lane does not change to Completion.
 - A RESUMED event contains `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` only when clearing the remote pause makes the pipe actually writable. The flag is absent if another cause, such as byte HWM, transport wait, or termination, continues to block the pipe, and a RESUMED event alone does not guarantee acceptance of the next send.
-- The `flags` of a STALE event contain `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`, and `value` is the received epoch. The current epoch equals the value reported by the preceding PAUSED or RESUMED event for the same connection.
+- The `flags` of a STALE event contain `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`, and `value` is the received epoch. The current epoch can be taken from the preceding PAUSED or RESUMED event for the same connection only if the same monitor observed that event.
 
 **Event mask**
 

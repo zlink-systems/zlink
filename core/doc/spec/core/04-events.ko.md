@@ -76,7 +76,8 @@ byte [HWM](glossary.ko.md#hwm), transport wait, termination 같은 다른 원인
 다음 send가 수락된다고 보장하지 않는다.
 
 `FLOW_STATE_STALE_EPOCH`는 flow epoch가 전진하지 않은 frame을 뜻한다. `value`는 받은 epoch이고,
-현재 epoch는 같은 connection의 직전 PAUSED 또는 RESUMED event가 보고한 값이다.
+같은 monitor가 같은 connection의 직전 PAUSED 또는 RESUMED event를 관찰한 경우에만
+그 값을 현재 epoch로 사용할 수 있다.
 
 이 event 3개는 monitor event mask의 bit 16, 17, 18을 사용하므로 `ZLINK_EVENT_ALL`은
 `0x7FFFF`다. Mask를 직접 지정하는 monitor는 해당 bit를 설정해야 이 event를 받는다.
@@ -107,7 +108,7 @@ open 시 지정한 event mask)만으로 다음을 확인한다. 각 항목은 un
   connection에서 왔더라도 event의 lane을 Completion으로 바꾸지 않는다.
 - remote pause를 해제한 결과 pipe가 실제로 writable일 때만 RESUMED event에 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE`이 있다. byte HWM, transport wait, termination 같은 다른 원인이 pipe를 계속 막으면 이 flag가 없고, RESUMED event만으로 다음 send 수락이 보장되지 않는다.
 - STALE event의 `flags`에는 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`이 있고 `value`는 받은
-  epoch다. 현재 epoch는 같은 connection의 직전 PAUSED 또는 RESUMED event가 보고한 값과 같다.
+  epoch다. 같은 monitor가 같은 connection의 직전 PAUSED 또는 RESUMED event를 관찰한 경우에만 그 값을 현재 epoch로 사용할 수 있다.
 
 **Event mask**
 - Receive-flow event 3개는 monitor event mask의 bit 16, 17, 18을 사용하고 `ZLINK_EVENT_ALL`은 `0x7FFFF`다.
