@@ -151,7 +151,11 @@ function Cleanup {
         }
     }
     if ($RedisContainer) { Remove-ZlinkSampleRedis $RedisContainer }
-    if (Test-Path $RunDir) { Remove-Item -Recurse -Force $RunDir }
+    if ($env:ZLINK_CPP_CROSS_KEEP_RUN_DIR -eq '1') {
+        Write-Host "runDir=$RunDir"
+    } elseif (Test-Path $RunDir) {
+        Remove-Item -Recurse -Force $RunDir
+    }
 }
 
 $Succeeded = $false
