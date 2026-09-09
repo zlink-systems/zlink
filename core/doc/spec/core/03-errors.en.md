@@ -42,49 +42,42 @@ errno is unspecified after success.
 
 ## 3. Extended errno constants
 
-```c
-#define ZLINK_HAUSNUMERO 156384712      // Base value for ZLink extended errno values
+`H = ZLINK_HAUSNUMERO = 156384712` is the base for extended errno values. Existing platform
+definitions of POSIX names keep their OS values; the fallback below applies only when a name
+is absent. `EFSM`, `ENOCOMPATPROTO`, `ETERM`, and `EMTHREAD` are defined by ZLink.
 
-#define EFSM            (ZLINK_HAUSNUMERO + 51)  // disallowed request state transition
-#define ENOCOMPATPROTO  (ZLINK_HAUSNUMERO + 52)  // incompatible protocol reply
-#define ETERM           (ZLINK_HAUSNUMERO + 53)  // Context terminated
-#define EMTHREAD        (ZLINK_HAUSNUMERO + 54)  // forbidden thread usage
+| Name | Value or fallback | Meaning |
+|---|---|---|
+| `ENOTSUP` | `H + 1` | Unsupported operation |
+| `EPROTONOSUPPORT` | `H + 2` | Unsupported protocol |
+| `ENOBUFS` | `H + 3` | Insufficient buffer capacity |
+| `ENETDOWN` | `H + 4` | Network down |
+| `EADDRINUSE` | `H + 5` | Address in use |
+| `EADDRNOTAVAIL` | `H + 6` | Address unavailable |
+| `ECONNREFUSED` | `H + 7` | Connection refused |
+| `EINPROGRESS` | `H + 8` | Connection in progress |
+| `ENOTSOCK` | `H + 9` | Not a socket |
+| `EMSGSIZE` | `H + 10` | Message too large |
+| `EAFNOSUPPORT` | `H + 11` | Unsupported address family |
+| `ENETUNREACH` | `H + 12` | Network unreachable |
+| `ECONNABORTED` | `H + 13` | Connection aborted |
+| `ECONNRESET` | `H + 14` | Connection reset by peer |
+| `ENOTCONN` | `H + 15` | Not connected |
+| `ETIMEDOUT` | `H + 16` | Timeout expired |
+| `EHOSTUNREACH` | `H + 17` | Host unreachable |
+| `ENETRESET` | `H + 18` | Network reset |
+| `ESTALE` | `H + 19` | Stale handle |
+| `EALREADY` | `H + 20` | Operation already in progress |
+| `EDEADLK` | `H + 21` | Forbidden reentry |
+| `ESHUTDOWN` | `H + 22` | Socket shut down |
+| `EPROTOTYPE` | `H + 23` | Incompatible peer type |
+| `EOVERFLOW` | `H + 24` | Integer or sequence overflow |
+| `EFSM` | `H + 51` | Invalid state transition |
+| `ENOCOMPATPROTO` | `H + 52` | Incompatible protocol |
+| `ETERM` | `H + 53` | Context terminated |
+| `EMTHREAD` | `H + 54` | No I/O thread available |
 
-#ifndef ESTALE
-#define ESTALE          (ZLINK_HAUSNUMERO + 19)  // stale handle
-#endif
-#ifndef EALREADY
-#define EALREADY        (ZLINK_HAUSNUMERO + 20)  // duplicate operation
-#endif
-#ifndef EDEADLK
-#define EDEADLK         (ZLINK_HAUSNUMERO + 21)  // forbidden reentry
-#endif
-#ifndef ESHUTDOWN
-#define ESHUTDOWN       (ZLINK_HAUSNUMERO + 22)  // closed socket
-#endif
-#ifndef EPROTOTYPE
-#define EPROTOTYPE      (ZLINK_HAUSNUMERO + 23)  // peer socket type does not match the operation
-#endif
-#ifndef EOVERFLOW
-#define EOVERFLOW       (ZLINK_HAUSNUMERO + 24)  // completion ID sequence exhausted
-#endif
-```
-
-POSIX errno values missing on a platform use public values based on
-`ZLINK_HAUSNUMERO`. `ESTALE`, `EALREADY`, `EDEADLK`, `ESHUTDOWN`, `EPROTOTYPE`,
-and `EOVERFLOW`, which represent a stale handle, duplicate operation, forbidden
-reentry, closed socket, peer-type rejection, and sequence exhaustion, are available
-with the values above on every supported platform.
-
-The same fallback rule applies to the following 18 POSIX errno values. When the platform
-does not define a name, the public header defines it with values from
-`ZLINK_HAUSNUMERO + 1` through `+ 18`, in this order: `ENOTSUP`,
-`EPROTONOSUPPORT`, `ENOBUFS`, `ENETDOWN`, `EADDRINUSE`, `EADDRNOTAVAIL`,
-`ECONNREFUSED`, `EINPROGRESS`, `ENOTSOCK`, `EMSGSIZE`, `EAFNOSUPPORT`,
-`ENETUNREACH`, `ECONNABORTED`, `ECONNRESET`, `ENOTCONN`, `ETIMEDOUT`,
-`EHOSTUNREACH`, and `ENETRESET`. When the platform already defines a name, ZLink
-uses the platform value. [Result and errno mapping](#result-and-errno-mapping) owns
-the exact per-function mappings.
+The [mapping table](#result-and-errno-mapping) defines result/errno pairs for each function.
 
 ## 4. Result enums
 

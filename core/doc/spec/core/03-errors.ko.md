@@ -39,46 +39,42 @@ bindings 개발자다. 이 문서는 "공개 함수의 typed result와 thread-lo
 
 ## 3. 확장 errno 상수
 
-```c
-#define ZLINK_HAUSNUMERO 156384712      // zlink 확장 errno의 기준값
+`H = ZLINK_HAUSNUMERO = 156384712`를 기준으로 공개 errno를 정의한다. POSIX 이름을
+platform이 이미 정의하면 OS 값을 유지하고, 정의하지 않았을 때만 아래 fallback 값을 쓴다.
+`EFSM`, `ENOCOMPATPROTO`, `ETERM`, `EMTHREAD`는 ZLink 자체 정의다.
 
-#define EFSM            (ZLINK_HAUSNUMERO + 51)  // 허용하지 않는 request state 전이
-#define ENOCOMPATPROTO  (ZLINK_HAUSNUMERO + 52)  // 호환되지 않는 protocol reply
-#define ETERM           (ZLINK_HAUSNUMERO + 53)  // Context 종료
-#define EMTHREAD        (ZLINK_HAUSNUMERO + 54)  // 금지한 thread 사용
+| 이름 | 값 또는 fallback | 의미 |
+|---|---|---|
+| `ENOTSUP` | `H + 1` | 지원하지 않는 operation |
+| `EPROTONOSUPPORT` | `H + 2` | 지원하지 않는 protocol |
+| `ENOBUFS` | `H + 3` | 버퍼 용량 부족 |
+| `ENETDOWN` | `H + 4` | network 사용 불가 |
+| `EADDRINUSE` | `H + 5` | 주소 사용 중 |
+| `EADDRNOTAVAIL` | `H + 6` | 주소 사용 불가 |
+| `ECONNREFUSED` | `H + 7` | 연결 거부 |
+| `EINPROGRESS` | `H + 8` | 연결 진행 중 |
+| `ENOTSOCK` | `H + 9` | socket이 아닌 대상 |
+| `EMSGSIZE` | `H + 10` | message 크기 초과 |
+| `EAFNOSUPPORT` | `H + 11` | 지원하지 않는 address family |
+| `ENETUNREACH` | `H + 12` | network 도달 불가 |
+| `ECONNABORTED` | `H + 13` | 연결 중단 |
+| `ECONNRESET` | `H + 14` | peer가 연결 reset |
+| `ENOTCONN` | `H + 15` | 연결 없음 |
+| `ETIMEDOUT` | `H + 16` | timeout 만료 |
+| `EHOSTUNREACH` | `H + 17` | host 도달 불가 |
+| `ENETRESET` | `H + 18` | network reset |
+| `ESTALE` | `H + 19` | stale handle |
+| `EALREADY` | `H + 20` | 중복 operation |
+| `EDEADLK` | `H + 21` | 금지한 재진입 |
+| `ESHUTDOWN` | `H + 22` | 종료한 socket |
+| `EPROTOTYPE` | `H + 23` | 호환되지 않는 peer type |
+| `EOVERFLOW` | `H + 24` | 정수 또는 sequence 범위 초과 |
+| `EFSM` | `H + 51` | 허용하지 않는 state 전이 |
+| `ENOCOMPATPROTO` | `H + 52` | 호환되지 않는 protocol |
+| `ETERM` | `H + 53` | Context 종료 |
+| `EMTHREAD` | `H + 54` | 사용 가능한 I/O thread 없음 |
 
-#ifndef ESTALE
-#define ESTALE          (ZLINK_HAUSNUMERO + 19)  // stale handle
-#endif
-#ifndef EALREADY
-#define EALREADY        (ZLINK_HAUSNUMERO + 20)  // 중복 operation
-#endif
-#ifndef EDEADLK
-#define EDEADLK         (ZLINK_HAUSNUMERO + 21)  // 금지한 재진입
-#endif
-#ifndef ESHUTDOWN
-#define ESHUTDOWN       (ZLINK_HAUSNUMERO + 22)  // 종료한 socket
-#endif
-#ifndef EPROTOTYPE
-#define EPROTOTYPE      (ZLINK_HAUSNUMERO + 23)  // peer socket type이 operation과 맞지 않음
-#endif
-#ifndef EOVERFLOW
-#define EOVERFLOW       (ZLINK_HAUSNUMERO + 24)  // completion ID sequence 소진
-#endif
-```
-
-platform에 없는 POSIX errno는 `ZLINK_HAUSNUMERO` 기반 공개 값으로 정의한다. stale handle,
-중복 operation, 금지한 재진입, 종료한 socket, peer-type 거절과 sequence 소진을 표현하는
-`ESTALE`, `EALREADY`, `EDEADLK`, `ESHUTDOWN`, `EPROTOTYPE`과 `EOVERFLOW`는 모든 지원
-platform에서 위 값을 사용할 수 있다.
-
-같은 fallback 규칙이 다음 18개 POSIX errno에도 적용된다. platform이 해당 이름을 정의하지
-않으면 공개 header가 `ZLINK_HAUSNUMERO + 1`부터 `+ 18`까지의 값으로 정의한다 — 순서대로
-`ENOTSUP`, `EPROTONOSUPPORT`, `ENOBUFS`, `ENETDOWN`, `EADDRINUSE`, `EADDRNOTAVAIL`,
-`ECONNREFUSED`, `EINPROGRESS`, `ENOTSOCK`, `EMSGSIZE`, `EAFNOSUPPORT`, `ENETUNREACH`,
-`ECONNABORTED`, `ECONNRESET`, `ENOTCONN`, `ETIMEDOUT`, `EHOSTUNREACH`, `ENETRESET`이다.
-platform이 이름을 이미 정의하면 platform 값을 그대로 쓴다. 정확한 함수별 대응은
-[Result와 errno 대응](#result와-errno-대응)이 소유한다.
+함수별 result와 errno 대응은 [대응표](#result와-errno-대응)가 정의한다.
 
 ## 4. Result enum
 

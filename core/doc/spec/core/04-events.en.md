@@ -47,6 +47,20 @@ state value that remains observable as true while the condition persists. Do
 not assume that one readiness value corresponds one-to-one with one message or
 guarantees the success of the next operation.
 
+### Readiness flags
+
+| Flag | Value | Meaning and scope |
+|---|---:|---|
+| `ZLINK_POLLIN` | `1` | Socket receive or FD read may proceed |
+| `ZLINK_POLLOUT` | `2` | Socket submit or FD write may proceed |
+| `ZLINK_POLLERR` | `4` | Socket terminal state or FD error |
+| `ZLINK_POLLPRI` | `8` | FD urgent data; socket registration returns ENOTSUP |
+| `ZLINK_POLLCOMPLETION` | `32` | Completion record ready on a socket with a completion channel |
+
+`ZLINK_POLLCOMPLETION` is accepted only by persistent poller registration for sockets with a
+completion channel. FDs and `zlink_poll` reject it with `EINVAL`. `ZLINK_POLLITEMS_DFLT = 16`
+is inline capacity, not an event flag; including it in a mask produces `EINVAL`.
+
 ## 3. Raw socket lifecycle
 
 A raw socket monitor records endpoint bind/listen, outgoing connect, accept,
@@ -54,6 +68,28 @@ handshake success or failure, disconnect, protocol error, and close. Disconnect
 reasons distinguish transport error, handshake failure,
 [Context](glossary.en.md#context) termination, and unknown. Events contain no
 service topology or application payload.
+
+Event identifiers use the `ZLINK_EVENT_` prefix and have the same values as their
+`ZLINK_SOCKET_MONITOR_EVENT_` aliases. [Monitoring §3.2](06-monitoring.en.md#32-value-and-flags)
+defines `value`, disconnect reasons, protocol errors, lanes, and event flag values.
+
+| Event | Bit | Occurrence |
+|---|---|---|
+| `CONNECTED` | `1u << 0` | Outgoing transport connected |
+| `CONNECT_DELAYED` | `1u << 1` | Connect did not complete immediately |
+| `CONNECT_RETRIED` | `1u << 2` | Next reconnect scheduled |
+| `LISTENING` | `1u << 3` | Endpoint starts listening |
+| `BIND_FAILED` | `1u << 4` | Bind or listener setup failed |
+| `ACCEPTED` | `1u << 5` | Inbound transport accepted |
+| `ACCEPT_FAILED` | `1u << 6` | Accept failed |
+| `CLOSED` | `1u << 7` | Transport or endpoint closed |
+| `CLOSE_FAILED` | `1u << 8` | Close or endpoint cleanup failed |
+| `DISCONNECTED` | `1u << 9` | Transport disconnected |
+| `MONITOR_STOPPED` | `1u << 10` | Monitor stopped notification |
+| `HANDSHAKE_FAILED_NO_DETAIL` | `1u << 11` | Handshake failure without protocol detail |
+| `CONNECTION_READY` | `1u << 12` | Logical peer ready transition or count snapshot on disconnect |
+| `HANDSHAKE_FAILED_PROTOCOL` | `1u << 13` | ZMP handshake protocol validation failed |
+| `PEER_WEIGHT_CHANGED` | `1u << 15` | Peer weight applied |
 
 ## 4. Receive-flow event
 
@@ -77,11 +113,7 @@ also produces no public monitor event; it increments only the
 The version number of the applied flow state is called the flow epoch. Each
 event carries the following values.
 
-| Event | `value` | `flags` | Other fields |
-|---|---|---|---|
-| `ZLINK_EVENT_SEND_FLOW_PAUSED` | flow epoch of the applied state | none | `routing_id`, `connection_id`, and Application `transport_lane` of the paused peer |
-| `ZLINK_EVENT_SEND_FLOW_RESUMED` | flow epoch of the applied state | `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` if clearing the remote pause makes the pipe actually writable | same as PAUSED |
-| `ZLINK_EVENT_FLOW_STATE_STALE` | received flow epoch | `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` | `routing_id`, `connection_id`, and Application `transport_lane` of the peer |
+Monitoring defines [receive-flow values and flags](06-monitoring.en.md#32-value-and-flags).
 
 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` is absent if another cause, such
 as byte [HWM](glossary.en.md#hwm), transport wait, or termination, still blocks
