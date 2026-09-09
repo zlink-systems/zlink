@@ -538,9 +538,9 @@ inline bool submit_router_reply (zlink::received_t &received_,
     try {
         if (measurement_part_count () == 2) {
             zlink::message_t tail = measurement_empty_part ();
-            std::move (received_.reply ().message (part_)).message (tail).submit ();
+            received_.reply ().message (part_).message (tail).submit ();
         } else {
-            std::move (received_.reply ().message (part_)).submit ();
+            received_.reply ().message (part_).submit ();
         }
         return true;
     }

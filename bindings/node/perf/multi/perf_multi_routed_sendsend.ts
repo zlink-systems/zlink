@@ -25,7 +25,6 @@ const {
   emitMultiSocketHwmDetail,
   measurementParts,
   measurementPayload,
-  moveRelayMessage,
   pollEvents,
   pollEventHas,
   recvNoWaitInto,
@@ -113,11 +112,9 @@ function sendPayload(socket, routerClient, payload) {
 }
 
 async function sendServerReply(received) {
-  const movedParts = [];
   try {
-    for (const part of received.parts) movedParts.push(moveRelayMessage(part));
     let reply = received.send();
-    for (const part of movedParts) {
+    for (const part of received.parts) {
       reply = reply.message(part);
     }
     await reply.submit();
@@ -129,10 +126,6 @@ async function sendServerReply(received) {
       return true;
     }
     throw error;
-  } finally {
-    for (let index = 0; index < movedParts.length; index += 1) {
-      if (movedParts[index] !== received.parts[index]) movedParts[index].close();
-    }
   }
 }
 

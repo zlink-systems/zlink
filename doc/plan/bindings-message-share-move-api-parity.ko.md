@@ -163,6 +163,25 @@ C++·.NET·Java의 추가는 non-breaking(이름 정렬 alias 불필요). **Node
 - 공유 후 수명 오사용(공유 중 원본 mutate, 한쪽만 close 후 다른 쪽 사용) 방지를 테스트로 강제.
 - perf relay가 `Move`로 바뀌면 재제출/드레인 경로에서 소유권이 이미 이전됐음을 전제로 해야 하므로, 재제출이 필요한 언어는 C처럼 `Copy` snapshot을 병행.
 
+### 8.1 결정 기록 — Node REQREP 회귀의 진짜 원인은 perf relay 과설계 (close 아님)
+- **증상:** Message copy/move/clone 커밋(`02a696ccad`) 후 **MULTI_ROUTER_ROUTER_REQREP tcp 작은 size가 C 대비 ~38% → ~8~10%로
+  3~5배 회귀**(runs=3, quiet 재현). DEALER_DEALER·SENDSEND은 무변화. git bisect로 첫 bad 커밋 = `02a696ccad` 확정(부모 `02a696ccad~1`은
+  REQREP 64=55,241 ops로 정상 → Machine A 변경은 무죄).
+- **오진 두 번:** 처음엔 `message_frame_close`의 "즉시 정리(detach+close+reinit)"를 원인으로 보고 되돌렸으나 복구 실패. retry Buffer
+  snapshot(`copy()`)도 되돌렸으나 실패. → close·snapshot 둘 다 원인이 **아니었다.**
+- **진짜 원인:** perf 하네스 relay가 받은 메시지를 **직접 제출(이미 zero-copy 소유권 이전)** 하던 것을, "move 파리티"를 명목으로
+  `moveRelayMessage`(빈 `Message.allocate(0)` + `move` + `close`)로 감싼 것. REQREP는 요청·응답 왕복마다 이 alloc+move+close(N-API 3회)가
+  붙어 임계경로가 5배 느려졌다. **공개 API의 정상 소유권 이전 위에 얹은 중복 작업**이었다.
+- **해결(사용자 확정):** 네 언어 perf relay를 **공개 operation-builder에 받은 파트를 직접 얹어 submit하는 관용형**으로 통일(과설계 제거):
+  Node `moveRelayMessage` 제거, Java `source.move(payload)`+임시 Message 제거, C++ 불필요한 `std::move(...)` 제거, .NET은 이미 관용형.
+  submit이 소유권을 소비하고 `Received.close()`는 소비된 파트를 안전 처리(반복 close 안전)를 계약 테스트로 검증.
+- **결과(quiet, runs=3):** Node REQREP 64 6~9% → **39.8%**, 1024 → **47.7%**; Node SENDSEND 18~23% → **29~39%**(회귀 해소 + 원래보다
+  개선). Java REQREP → **101~137%**, SENDSEND 64 → **104%**(직접 빌더가 기존 대비 대폭 개선). C++ 정상(REQREP 95~108%, SENDSEND 88~120%),
+  .NET 무변경. **비대상 회귀 0.**
+- **곁가지 결정:** Node `close()`는 단일 release 경로(노출 Buffer는 GC/finalize 정리)로 유지한다 — 이는 회귀와 무관한 단순화이며, 그 결과
+  `copy()` 후 close 시 `refCount()`가 즉시 안 떨어지고 버퍼 GC 후 반영된다(진단용 표시에만 영향, 안전/정확성 무관). 계약 테스트는 "즉시 refcount
+  하락" 대신 "소유권 독립"을 검증. Node spec/guide에 이 타이밍을 문서화했다.
+
 ## 9. 검증
 
 - 단위·계약 테스트(`Copy`/`Move`/`Clone` 수명·refcount), 교차언어 parity 테스트 통과.
