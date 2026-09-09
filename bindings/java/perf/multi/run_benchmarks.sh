@@ -49,7 +49,7 @@ else
   export ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-local}"
 fi
 source "${REPO_DIR}/bindings/tools/local_core_runtime.sh"
-source "${ROOT_DIR}/require_java22.sh"
+source "${ROOT_DIR}/require_java25.sh"
 JAVA_BINDINGS_DIR="$(cd "${ROOT_DIR}/.." && pwd)"
 STREAM_CLIENT="${REPO_DIR}/bindings/c/build/perf/perf_stream_client"
 STREAM_CLIENT_DIR="${REPO_DIR}/bindings/c/perf/common/streamclient"
@@ -823,7 +823,7 @@ if [[ "${PIN_CPU}" -eq 1 ]]; then
   stream_client_prefix=("taskset" "-c" "0")
 fi
 
-require_java22
+require_java25
 
 mkdir -p "${RESULTS_ROOT}/multi/tmp" "${RESULTS_ROOT}/multi/report"
 if [[ -n "${OUTPUT_PATH}" ]]; then

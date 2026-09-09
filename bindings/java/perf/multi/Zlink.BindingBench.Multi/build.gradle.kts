@@ -13,7 +13,7 @@ repositories {
 
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(22))
+        languageVersion.set(JavaLanguageVersion.of(libs.versions.java.get().toInt()))
     }
 }
 
@@ -25,8 +25,9 @@ sourceSets {
 
 dependencies {
     implementation(project(":"))
-    implementation("io.netty:netty-buffer:4.1.100.Final")
+    implementation(libs.netty.buffer)
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 tasks.test {

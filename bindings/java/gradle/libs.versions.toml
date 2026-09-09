@@ -1,0 +1,11 @@
+[versions]
+java = "25"
+kotlin = "2.3.21"
+netty = "4.1.100.Final"
+
+[libraries]
+kotlin-test-junit5 = { module = "org.jetbrains.kotlin:kotlin-test-junit5", version.ref = "kotlin" }
+netty-buffer = { module = "io.netty:netty-buffer", version.ref = "netty" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

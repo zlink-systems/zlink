@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 
-# Java binding perf uses the Java 22 FFM API. installDist launchers resolve
+# Java binding perf uses the Java target from the shared version catalog. installDist launchers resolve
 # JAVA_HOME (or java on PATH) when they start, independently of Gradle's
 # compile toolchain. Validate that runtime before a measurement begins.
-require_java22() {
+require_java25() {
+  local required_java
+  required_java="$(sed -n 's/^java = "\([0-9]*\)"$/\1/p' "$(dirname "${BASH_SOURCE[0]}")/../gradle/libs.versions.toml")"
+  if [[ ! "${required_java}" =~ ^[0-9]+$ ]]; then
+    echo "Java target is missing from gradle/libs.versions.toml." >&2
+    return 1
+  fi
   local java_cmd
   local java_version_line
   local java_major
@@ -14,7 +20,7 @@ require_java22() {
     java_cmd="$(command -v java || true)"
   fi
   if [[ ! -x "${java_cmd}" ]]; then
-    echo "Java 22 runtime not found. Set JAVA_HOME to a JDK 22 installation." >&2
+    echo "Java ${required_java} runtime not found. Set JAVA_HOME to a JDK ${required_java} installation." >&2
     return 1
   fi
 
@@ -25,8 +31,8 @@ require_java22() {
     echo "Unable to determine Java runtime version: ${java_version_line}" >&2
     return 1
   fi
-  if (( java_major < 22 )); then
-    echo "Java perf requires Java 22 or newer (found: ${java_version_line})." >&2
+  if (( java_major < required_java )); then
+    echo "Java perf requires Java ${required_java} or newer (found: ${java_version_line})." >&2
     echo "Set JAVA_HOME to the JDK used to build the Java binding." >&2
     return 1
   fi

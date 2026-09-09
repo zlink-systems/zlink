@@ -11,7 +11,7 @@ description = 'zlink Java bindings — high-performance async messaging library'
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(22)
+        languageVersion = JavaLanguageVersion.of(libs.versions.java.get().toInteger())
     }
     withSourcesJar()
     withJavadocJar()
@@ -138,8 +138,8 @@ repositories {
 }
 
 dependencies {
-    api 'io.netty:netty-buffer:4.1.100.Final'
-    testImplementation 'io.netty:netty-buffer:4.1.100.Final'
+    api libs.netty.buffer
+    testImplementation libs.netty.buffer
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
 }
