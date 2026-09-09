@@ -197,10 +197,10 @@ await socket.send(routingId).message(out).submit();
 const dup = msg.clone();
 ```
 
-> **주의:** 기존 `copy()`는 깊은 복사였으나 이제 `clone()`으로 정렬되었고, `copy()`는
-> ref-count 공유입니다. 기존 코드의 `copy()`(깊은 복사 의도)는 `clone()`으로 바꾸세요.
-> `copy`는 한 릴리스 사이클 동안 이전 의미(깊은 복사)를 가리키는 `@deprecated` alias로
-> 유지됩니다.
+> **⚠ Breaking change:** 기존 `copy()`는 깊은 복사였으나 이제 `copy()`는 **ref-count
+> 공유**이고, 깊은 복사는 `clone()`으로 이동했습니다. JS는 동일 시그니처를 반환 의미만
+> 달리해 공존시킬 수 없어 alias가 불가능하므로 major 버전 breaking으로 처리합니다.
+> **기존 코드의 `copy()`(깊은 복사 의도)는 반드시 `clone()`으로 바꾸세요.**
 
 ---
 

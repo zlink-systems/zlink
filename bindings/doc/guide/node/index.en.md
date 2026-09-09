@@ -221,9 +221,10 @@ await socket.send(routingId).message(out).submit();
 const dup = msg.clone();
 ```
 
-> **Note:** the former `copy()` was a deep copy and now aligns to `clone()`; the new
-> `copy()` is a ref-count share. Replace deep-copy-intent `copy()` calls with `clone()`.
-> `copy` stays a `@deprecated` alias for its prior (deep-copy) meaning for one release cycle.
+> **⚠ Breaking change:** the former `copy()` was a deep copy; now `copy()` is a **ref-count
+> share** and the deep copy moved to `clone()`. JS cannot host the same signature with two
+> return meanings, so no alias is possible — this is a major-version break. **Replace
+> deep-copy-intent `copy()` calls with `clone()`.**
 
 ---
 

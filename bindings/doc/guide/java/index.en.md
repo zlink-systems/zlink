@@ -289,9 +289,9 @@ socket.send(routingId).message(out).submit_sync();
 try (Message dup = msg.clone()) { /* ... */ }
 ```
 
-> `sharedCopyOf` aligns to `copy`, and `moveInto`/`moveTo` to `move`; the former names
-> stay as `@Deprecated` aliases for their prior meaning for one release cycle. `copy()` is
-> a ref-share and does not guarantee mutation isolation — use `clone()` for that.
+> `copy()` is a ref-share and does not guarantee mutation isolation — use `clone()` for
+> that. (`sharedCopyOf`/`moveInto`/`moveTo` were internal, not public API, so the only
+> public-surface change is adding `copy`/`move`/`clone`.)
 
 ---
 

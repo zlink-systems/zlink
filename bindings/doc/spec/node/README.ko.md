@@ -636,9 +636,10 @@ native config 실패를 native errno가 포함된 config 범주의 `ZlinkError`�
   구독 이벤트, 스트림 packet 콜백. payload 공유·이전·복제는 공통 계약의
   `Copy`/`Move`/`Clone`을 따른다: `copy(): Message`(ref-count 공유, `zlink_msg_copy`),
   `move(dest: Message): void`(소유권 이전, 호출자 empty, `zlink_msg_move`),
-  `clone(): Message`(deep copy). 기존 `copy()`는 깊은복사였으므로 `clone()`으로 정렬하고,
-  `copy`는 한 릴리스 사이클 동안 이전 의미(deep copy)를 가리키는 `@deprecated` alias로
-  유지한다(신규 ref-share `Copy`에 연결하지 않는다 — 의미 조용한 전환 방지). 정의는
+  `clone(): Message`(독립 버퍼 deep copy). 기존 `copy()`가 깊은복사였으므로 그 동작은
+  `clone()`으로 이동한다. `copy`는 이제 **ref-share**다 — JS는 동일 시그니처를 반환 의미만
+  달리해 공존시킬 수 없어 deprecated alias가 불가능하므로, 이는 **major 버전 breaking
+  change**로 처리하고 마이그레이션(`copy`→`clone`)을 안내한다(조용한 변경 아님). 정의는
   [Message ownership 공통 계약](../draft/message-ownership.ko.md) §"명시적 Copy / Move / Clone".
 - 모든 소켓 패밀리와 그 타입 있는 옵션.
 - Monitor, poller, timer, readiness 의미.

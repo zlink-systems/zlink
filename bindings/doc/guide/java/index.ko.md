@@ -287,9 +287,9 @@ socket.send(routingId).message(out).submit_sync();
 try (Message dup = msg.clone()) { /* ... */ }
 ```
 
-> 기존 `sharedCopyOf`는 `copy`로, `moveInto`/`moveTo`는 `move`로 정렬되었습니다. 이전
-> 이름은 한 릴리스 사이클 동안 `@Deprecated` alias로 이전 의미를 가리킵니다. `copy()`는
-> ref-share이므로 mutation 격리를 보장하지 않습니다 — 독립 수정은 `clone()`.
+> `copy()`는 ref-share이므로 mutation 격리를 보장하지 않습니다 — 독립 수정은 `clone()`을
+> 쓰세요. (기존 `sharedCopyOf`/`moveInto`/`moveTo`는 공개 API가 아니라 내부 경로였으므로
+> 공개 표면 변화는 `copy`/`move`/`clone` 추가뿐입니다.)
 
 ---
 

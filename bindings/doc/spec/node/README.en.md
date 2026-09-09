@@ -691,11 +691,11 @@ covers all of the following stable user-facing capabilities.
   share/transfer/duplicate follow the common contract's `Copy`/`Move`/`Clone`:
   `copy(): Message` (ref-count share, `zlink_msg_copy`), `move(dest: Message): void`
   (ownership transfer, caller left empty, `zlink_msg_move`), and `clone(): Message`
-  (deep copy). Since the existing `copy()` was a deep copy it aligns to `clone()`;
-  `copy` remains a `@deprecated` alias pointing to its prior deep-copy meaning for one
-  release cycle (it is not wired to the new ref-share `Copy`, to avoid a silent semantic
-  change). See the [common Message ownership contract](../draft/message-ownership.ko.md)
-  §"명시적 Copy / Move / Clone".
+  (independent deep copy). Since the existing `copy()` was a deep copy, that behavior moves
+  to `clone()`; `copy` is now **ref-share**. JS cannot host the same signature with two
+  return meanings, so a deprecated alias is impossible — this is a **major-version breaking
+  change** with a documented migration (`copy`→`clone`), not a silent one. See the
+  [common Message ownership contract](../draft/message-ownership.ko.md) §"명시적 Copy / Move / Clone".
 - Every socket family and its typed options.
 - Monitor, poller, timer, and readiness semantics.
 - SPOT node, SPOT handle, topology snapshot, Actor, and stream Actor

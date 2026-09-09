@@ -57,8 +57,9 @@ context and before creating sockets.
 metadata on canonical receive results. `Message.copy()` (ref-count share, a new
 `Message` on the same buffer), `Message.move(dest)` (ownership transfer, caller left
 empty), and `Message.clone()` (deep copy) map 1:1 to `zlink_msg_copy`/`zlink_msg_move`
-and a deep copy; the former deep-copy `copy()` is now `clone()`, with `copy` kept as a
-deprecated alias for its prior meaning for one release cycle.
+and a deep copy; the former deep-copy `copy()` behavior moved to `clone()` and `copy()` is
+now a ref-count share — a major-version breaking change (no same-signature alias is
+possible), migrate deep-copy calls to `clone()`.
 Canonical raw sockets intentionally hide opposite-direction methods, so
 `PubSocket` does not expose `send()` or `recv()`, `SubSocket` does not expose
 `send()`, and `StreamSocket` does not expose `connect()` or active stream
