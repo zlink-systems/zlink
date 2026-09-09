@@ -268,6 +268,7 @@ public sealed class ClientServerChannelRuntimeTests
             var clientTransport =
                 clientRuntime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
+                clientTransport,
                 () => clientTransport.ReadyCount == 1,
                 TimeSpan.FromSeconds(10));
             Assert.True(
@@ -280,6 +281,7 @@ public sealed class ClientServerChannelRuntimeTests
             try
             {
                 await WaitUntilAsync(
+                    clientTransport,
                     () => clientTransport.LivenessAckCount > 0
                         && serverIdentity.LivenessAckCount > 0,
                     TimeSpan.FromSeconds(8));
@@ -336,6 +338,7 @@ public sealed class ClientServerChannelRuntimeTests
         try
         {
             await WaitUntilAsync(
+                clientRuntime.GetClientServerClientRuntime("work"),
                 () => clientRuntime.GetClientServerClientRuntime("work").ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
             var payload = new string('x', 1024);
@@ -377,6 +380,7 @@ public sealed class ClientServerChannelRuntimeTests
         try
         {
             await WaitUntilAsync(
+                clientRuntime.GetClientServerClientRuntime("work"),
                 () => clientRuntime.GetClientServerClientRuntime("work").ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
@@ -421,6 +425,7 @@ public sealed class ClientServerChannelRuntimeTests
         try
         {
             await WaitUntilAsync(
+                clientRuntime.GetClientServerClientRuntime("work"),
                 () => clientRuntime.GetClientServerClientRuntime("work").ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
 
@@ -473,6 +478,7 @@ public sealed class ClientServerChannelRuntimeTests
             var clientTransport =
                 clientRuntime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
+                clientTransport,
                 () => clientTransport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
             var serverState = await serverRuntime.EnsureStartedStateAsync(
@@ -488,6 +494,7 @@ public sealed class ClientServerChannelRuntimeTests
             var baselineProbeCount = serverIdentity.LivenessProbeCount;
 
             await WaitUntilAsync(
+                clientTransport,
                 () => serverIdentity.LivenessProbeCount > baselineProbeCount,
                 TimeSpan.FromSeconds(8));
             Assert.Equal(1, clientTransport.ReadyCount);
@@ -525,6 +532,7 @@ public sealed class ClientServerChannelRuntimeTests
             var clientTransport =
                 clientRuntime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
+                clientTransport,
                 () => clientTransport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
             var request = client.GetRequiredService<IZLinkRouteClient>()
@@ -566,6 +574,7 @@ public sealed class ClientServerChannelRuntimeTests
             var transport =
                 clientRuntime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
             var serverState = await serverRuntime.EnsureStartedStateAsync(
@@ -574,12 +583,14 @@ public sealed class ClientServerChannelRuntimeTests
                 .ClientServerServer!
                 .MarkDrainingAsync();
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 0,
                 TimeSpan.FromSeconds(8));
             await GetServerBundle(serverState, "work")
                 .ClientServerServer!
                 .MarkServingAsync();
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(8));
         }
@@ -601,6 +612,7 @@ public sealed class ClientServerChannelRuntimeTests
         {
             var transport = runtime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
 
@@ -617,6 +629,7 @@ public sealed class ClientServerChannelRuntimeTests
                 .ClientServerServer!
                 .MarkDrainingAsync();
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 0,
                 TimeSpan.FromSeconds(2));
         }
@@ -705,6 +718,7 @@ public sealed class ClientServerChannelRuntimeTests
         {
             var transport = runtime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
 
@@ -789,6 +803,7 @@ public sealed class ClientServerChannelRuntimeTests
         {
             var transport = runtime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
+                transport,
                 () => transport.AdmissionCompletedCount == 1,
                 TimeSpan.FromSeconds(5));
             Assert.Equal(0, transport.ReadyCount);
@@ -897,6 +912,7 @@ public sealed class ClientServerChannelRuntimeTests
             try
             {
                 await WaitUntilAsync(
+                    clientTransport,
                     () => clientTransport.ReadyCount == 2
                         && clientTransport.AdmissionCompletedCount == 3,
                     TimeSpan.FromSeconds(10));
@@ -932,6 +948,7 @@ public sealed class ClientServerChannelRuntimeTests
             Assert.Throws<ZLinkConfigurationException>(
                 () => runtimeOptions.Channel("work").Weight = 10_001);
             await WaitUntilAsync(
+                clientTransport,
                 () => clientTransport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
             for (var index = 0; index < 4; index++)
@@ -1003,11 +1020,13 @@ public sealed class ClientServerChannelRuntimeTests
             var transport =
                 clientRuntime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
 
             transport.AddManual(descriptor.Endpoint);
             await WaitUntilAsync(
+                transport,
                 () => transport.ConnectionIntentCount == 2
                     && transport.PhysicalConnectionCount == 1,
                 TimeSpan.FromSeconds(5));
@@ -1063,6 +1082,7 @@ public sealed class ClientServerChannelRuntimeTests
             var clientTransport =
                 clientRuntime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
+                clientTransport,
                 () => clientTransport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
 
@@ -1082,6 +1102,7 @@ public sealed class ClientServerChannelRuntimeTests
 
             await Task.Delay(TimeSpan.FromSeconds(2));
             await WaitUntilAsync(
+                clientTransport,
                 () => clientTransport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
             var reply = await client.GetRequiredService<IZLinkRouteClient>()
@@ -1102,15 +1123,51 @@ public sealed class ClientServerChannelRuntimeTests
     }
 
     private static async Task WaitUntilAsync(
+        ZLinkClientServerClientRuntime transport,
         Func<bool> condition,
         TimeSpan timeout)
     {
         var startedAt = Stopwatch.GetTimestamp();
-        while (!condition())
+        while (true)
         {
-            if (Stopwatch.GetElapsedTime(startedAt) >= timeout)
-                throw new TimeoutException("ClientServer condition was not reached.");
-            await Task.Delay(10);
+            if (condition())
+                return;
+
+            var changed = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnStateChanged() => changed.TrySetResult();
+
+            transport.StateChanged += OnStateChanged;
+            try
+            {
+                if (condition())
+                    return;
+
+                var remaining = timeout - Stopwatch.GetElapsedTime(startedAt);
+                if (remaining <= TimeSpan.Zero)
+                {
+                    if (condition())
+                        return;
+                    throw new TimeoutException(
+                        "ClientServer condition was not reached.");
+                }
+
+                try
+                {
+                    await changed.Task.WaitAsync(remaining);
+                }
+                catch (TimeoutException)
+                {
+                    if (condition())
+                        return;
+                    throw new TimeoutException(
+                        "ClientServer condition was not reached.");
+                }
+            }
+            finally
+            {
+                transport.StateChanged -= OnStateChanged;
+            }
         }
     }
 
@@ -1224,6 +1281,7 @@ public sealed class ClientServerChannelRuntimeTests
             var transport = local.GetRequiredService<ZLinkFrameworkRuntime>()
                 .GetClientServerClientRuntime("work");
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 2,
                 TimeSpan.FromSeconds(10));
 
@@ -1247,6 +1305,7 @@ public sealed class ClientServerChannelRuntimeTests
                 await local.GetRequiredService<ZLinkLocationAutoConnectHost>()
                     .MarkDrainingAsync());
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
             var afterDrain = await route.RequestToChannel(
@@ -1297,6 +1356,7 @@ public sealed class ClientServerChannelRuntimeTests
             var transport = local.GetRequiredService<ZLinkFrameworkRuntime>()
                 .GetClientServerClientRuntime("work");
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 1
                     && transport.AdmissionCompletedCount == 2,
                 TimeSpan.FromSeconds(10));
@@ -1516,6 +1576,7 @@ public sealed class ClientServerChannelRuntimeTests
             try
             {
                 await WaitUntilAsync(
+                    transport,
                     () => transport.ReadyCount == 1,
                     TimeSpan.FromSeconds(5));
             }
@@ -1592,6 +1653,7 @@ public sealed class ClientServerChannelRuntimeTests
             try
             {
                 await WaitUntilAsync(
+                    transport,
                     () => transport.ReadyCount == 1,
                     TimeSpan.FromSeconds(5));
             }
@@ -1697,6 +1759,7 @@ public sealed class ClientServerChannelRuntimeTests
                     out _));
             ReplyAdmission(router, hello, endpoint);
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
 
@@ -1733,6 +1796,7 @@ public sealed class ClientServerChannelRuntimeTests
                 .Message(draining)
                 .Async(CancellationToken.None);
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 0,
                 TimeSpan.FromSeconds(3));
         }
@@ -1759,7 +1823,7 @@ public sealed class ClientServerChannelRuntimeTests
             using var hello = await PollReceivedAsync(
                 storage => TryReceive(router, storage), TimeSpan.FromSeconds(5));
             ReplyAdmission(router, hello, endpoint);
-            await WaitUntilAsync(() => transport.ReadyCount == 1, TimeSpan.FromSeconds(5));
+            await WaitUntilAsync(transport, () => transport.ReadyCount == 1, TimeSpan.FromSeconds(5));
             var admittedAt = Stopwatch.GetTimestamp();
 
             using var first = await PollReceivedAsync(
@@ -1780,7 +1844,7 @@ public sealed class ClientServerChannelRuntimeTests
 
             try
             {
-                await WaitUntilAsync(() => transport.ReadyCount == 0, TimeSpan.FromSeconds(7));
+                await WaitUntilAsync(transport, () => transport.ReadyCount == 0, TimeSpan.FromSeconds(7));
             }
             catch (TimeoutException exception)
             {
@@ -1815,7 +1879,7 @@ public sealed class ClientServerChannelRuntimeTests
             using var hello = await PollReceivedAsync(
                 storage => TryReceive(router, storage), TimeSpan.FromSeconds(5));
             ReplyAdmission(router, hello, endpoint);
-            await WaitUntilAsync(() => transport.ReadyCount == 1, TimeSpan.FromSeconds(5));
+            await WaitUntilAsync(transport, () => transport.ReadyCount == 1, TimeSpan.FromSeconds(5));
             var previousAt = Stopwatch.GetTimestamp();
             ulong previousId = 0;
 
@@ -1836,6 +1900,7 @@ public sealed class ClientServerChannelRuntimeTests
                 probe.Reply().Message(ack).Submit();
                 var expectedAcks = index + 1;
                 await WaitUntilAsync(
+                    transport,
                     () => transport.LivenessAckCount == expectedAcks, TimeSpan.FromSeconds(1));
                 previousAt = receivedAt;
                 previousId = probeId;
@@ -1919,6 +1984,7 @@ public sealed class ClientServerChannelRuntimeTests
             var transport =
                 clientRuntime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
+                transport,
                 () => transport.AdmissionCompletedCount == 1,
                 TimeSpan.FromSeconds(5));
             Assert.Equal(0, transport.ReadyCount);
@@ -1931,6 +1997,65 @@ public sealed class ClientServerChannelRuntimeTests
             await serverRuntime.StopAsync(CancellationToken.None);
             await clientLocations.StopAsync();
             await serverLocations.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task AdmissionTimeout_RetriesOnSamePhysicalConnectionAndBecomesReady()
+    {
+        var port = ReservePort();
+        var endpoint = $"tcp://127.0.0.1:{port}";
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = CreateClientServerRouter(context);
+        router.Bind(endpoint);
+        await using var client = CreateClient(port);
+        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var transport = runtime.GetClientServerClientRuntime("work");
+            RoutingId clientRid;
+            using (var firstHello = await PollReceivedAsync(
+                       storage => TryReceive(router, storage),
+                       TimeSpan.FromSeconds(5)))
+            {
+                Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(
+                    firstHello.Parts, out _));
+                clientRid = firstHello.RoutingId
+                    ?? throw new InvalidOperationException(
+                        "missing client routing id");
+            }
+
+            using var secondHello = await PollReceivedAsync(
+                storage => TryReceive(router, storage),
+                TimeSpan.FromSeconds(5));
+            Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(
+                secondHello.Parts, out _));
+            Assert.Equal(clientRid, secondHello.RoutingId);
+            ReplyAdmission(router, secondHello, endpoint);
+
+            try
+            {
+                await WaitUntilAsync(
+                    transport,
+                    () => transport.ReadyCount == 1,
+                    TimeSpan.FromSeconds(5));
+            }
+            catch (TimeoutException exception)
+            {
+                throw new TimeoutException(
+                    transport.AdmissionDiagnostics,
+                    exception);
+            }
+            Assert.Equal(1, transport.PhysicalConnectionCount);
+            Assert.Contains(
+                "generation=1;",
+                transport.AdmissionDiagnostics,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
         }
     }
 
@@ -1955,6 +2080,7 @@ public sealed class ClientServerChannelRuntimeTests
                 firstHello.Parts, out _));
             ReplyAdmission(router, firstHello, endpoint);
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
             var clientRid = firstHello.RoutingId
@@ -1972,6 +2098,7 @@ public sealed class ClientServerChannelRuntimeTests
             Assert.Equal(0, transport.ReadyCount);
             ReplyAdmission(router, secondHello, endpoint);
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
 
@@ -2010,6 +2137,7 @@ public sealed class ClientServerChannelRuntimeTests
                     out _));
             ReplyAdmission(router, firstHello, endpoint);
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
 
@@ -2046,6 +2174,7 @@ public sealed class ClientServerChannelRuntimeTests
                 ReplyAdmission(router, secondHello, endpoint);
             }
             await WaitUntilAsync(
+                transport,
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
         }

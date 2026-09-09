@@ -1092,6 +1092,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             // from re-entering ApplyAdmission and the parent runtime callback
             // before that lock has been released.
             await Task.Yield();
+            var retryAdmission = false;
             try
             {
                 var hello = ZLinkClientServerControlProtocol.EncodeHello(
@@ -1129,6 +1130,23 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 when (cancellationToken.IsCancellationRequested)
             {
             }
+            catch (ZlinkRequestException exception)
+                when (exception.Result
+                    == ZlinkRequestException.ErrorCode.TimedOut)
+            {
+                // The request deadline itself paces the next service
+                // handshake; the physical connect intent remains Core-owned.
+                retryAdmission = RunState(() =>
+                {
+                    if (!IsCurrentAttempt(physicalGeneration, attempt))
+                        return false;
+                    _ready = false;
+                    _diagnostics =
+                        $"request:{exception.GetType().Name}:{exception.Message}";
+                    _onSelectionChanged();
+                    return true;
+                });
+            }
             catch (Exception exception)
             {
                 RunState(() =>
@@ -1144,11 +1162,15 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
             finally
             {
-                RunState(() =>
+                var shouldRetry = RunState(() =>
                 {
-                    if (IsCurrentAttempt(physicalGeneration, attempt))
-                        _admissionStarted = false;
+                    if (!IsCurrentAttempt(physicalGeneration, attempt))
+                        return false;
+                    _admissionStarted = false;
+                    return retryAdmission;
                 });
+                if (shouldRetry)
+                    TryStartAdmission();
             }
         }
 
