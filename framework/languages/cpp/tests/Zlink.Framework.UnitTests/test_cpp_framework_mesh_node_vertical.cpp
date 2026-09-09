@@ -437,31 +437,23 @@ bool reply_to_one_request (zlink::framework::detail::mesh_node_runtime_t &node,
 }
 
 bool receive_completion (zlink::framework::detail::mesh_node_runtime_t &node,
-                         const zlink::framework::runtime::host::call_id_t &operation_id,
+                         const zlink::framework::runtime::host::pending_operation_t &operation_id,
                          const std::string &expected_text)
 {
-    // v11: Core service pull batches are gone. The Framework MeshNode runtime
-    // pushes ready records through dispatch_ready, so the completion is matched
-    // on that callback instead of drain_ready/recv_batch claims.
+    auto completion = node.await_completion (operation_id);
     const auto deadline = std::chrono::steady_clock::now () + 5s;
-    while (std::chrono::steady_clock::now () < deadline) {
-        bool matched = false;
-        (void) std::move (node.dispatch_ready (
-          [&] (const zlink::framework::runtime::host::ready_record_t &,
-               const zlink::framework::runtime::host::receive_record_t &record,
-               std::vector<zlink::message_t> parts) {
-              matched =
-                matched
-                || (record.kind
-                      == zlink::framework::runtime::host::record_kind_t::completion
-                    && record.operation_id == operation_id && record.terminal_result == 0
-                    && !parts.empty () && parts.front ().to_string () == expected_text);
-          })).result ().value ();
-        if (matched)
-            return true;
-        std::this_thread::sleep_for (5ms);
+    while (!completion.await_ready () && std::chrono::steady_clock::now () < deadline) {
+        // Only the binding receive owner progresses. No host dispatch turn
+        // is needed between binding terminal and the registered result.
+        (void) node.native_node ().transport ().pump_one (
+          std::chrono::steady_clock::now (), false).result ().value ();
+        std::this_thread::yield ();
     }
-    return false;
+    if (!completion.await_ready () || !completion.result ())
+        return false;
+    const auto &settled = completion.result ().value ();
+    return settled.record.operation_id == operation_id.id && settled.record.terminal_result == 0
+           && !settled.parts.empty () && settled.parts.front ().to_string () == expected_text;
 }
 
 std::shared_ptr<zlink::framework::detail::mesh_node_builder_state_t>
@@ -496,6 +488,53 @@ make_named_node (std::string mesh_name, std::string routing_id)
     // The host admits object creation only for declared stable types.
     state->spot_state->snapshot.actor_types.emplace_back ("vertical.actor");
     return state;
+}
+
+void verify_local_join_timeout_releases_membership ()
+{
+    namespace host = zlink::framework::runtime::host;
+    using namespace std::chrono_literals;
+    auto state = make_node ("tcp://127.0.0.1:*", "join-timeout-owner");
+    zlink::framework::detail::mesh_node_runtime_t node (state);
+    node.start ();
+    auto &runtime = node.native_node ();
+    auto actor = runtime.create_actor ("vertical.actor", "join-timeout-actor");
+    auto target = runtime.get_or_create_spot ("join-timeout-spot");
+    const auto rid = runtime.status ().routing_id ();
+    const auto generation = target.status ().lifecycle_generation ();
+    host::pending_operation_t expired;
+    assert (actor.join_spot (rid, "join-timeout-spot", generation, {}, expired, 25ms)
+            == zlink::submit_result_t::ok);
+    assert (runtime.transport ().expire_requests (
+              std::chrono::steady_clock::now () + 1s) == 1);
+    auto first = expired.completion->task ();
+    assert (!first.result ());
+    assert (first.result ().error_kind ()
+            == zlink::framework::framework_error_kind_t::deadline_exceeded);
+    assert (zlink::framework::detail::boundary_state (*first.result ().error ())
+            == zlink::framework::detail::boundary_error_t::timed_out);
+
+    // The expired queued control is skipped, and the same Actor can start
+    // another membership move because the terminal owner released its token.
+    auto &retried = expired;
+    assert (actor.join_spot (rid, "join-timeout-spot", generation, {}, retried, 1s)
+            == zlink::submit_result_t::ok);
+    bool replied = false;
+    (void) runtime.dispatch_ready (
+      [&] (const host::ready_record_t &, const host::receive_record_t &record,
+           std::vector<zlink::message_t>) {
+          if (record.kind == host::record_kind_t::spot_control)
+              replied = host::actor_join_reply (
+                record.reply_token, host::actor_join_result_t::accepted, {});
+      }).result ().value ();
+    assert (replied);
+    auto second = retried.completion->task ();
+    assert (second.result ());
+    assert (second.result ().value ().record.join_completion);
+    assert (second.result ().value ().record.join_completion->join_result
+            == host::join_admission_t::accepted);
+    assert (!first.result ());
+    node.stop ();
 }
 
 void register_mesh_location_resolvers (
@@ -905,7 +944,7 @@ void verify_request_to_never_admitted_target_reports_not_found ()
       zlink::message_t::from (std::string ("request"))};
     const auto target =
       zlink::routing_id_t::from (std::string ("never-admitted-request-target"));
-    zlink::framework::runtime::host::call_id_t operation_id;
+    zlink::framework::runtime::host::pending_operation_t operation_id;
     const auto result =
       std::move (node->request_to_node (
                     target, parts, operation_id, std::chrono::milliseconds (25),
@@ -1744,7 +1783,7 @@ int run_cross_process_delivery ()
     assert (channel_ack == 1);
     const std::vector<zlink::message_t> request_parts{
       zlink::message_t::from (std::string ("request"))};
-    zlink::framework::runtime::host::call_id_t operation_id;
+    zlink::framework::runtime::host::pending_operation_t operation_id;
     assert (std::move (node.request_to_node (
               zlink::routing_id_t::from (std::string ("vertical-b")), request_parts,
               operation_id, 5s, metadata)).result ().value ()
@@ -1775,7 +1814,7 @@ int run_cross_process_delivery ()
     assert (spot_ack == 1);
     const std::vector<zlink::message_t> spot_request_parts{
       zlink::message_t::from (std::string ("spot-request"))};
-    zlink::framework::runtime::host::call_id_t spot_operation_id;
+    zlink::framework::runtime::host::pending_operation_t spot_operation_id;
     assert (std::move (node.request_to_spot (
               "source-spot",
               zlink::routing_id_t::from (std::string ("vertical-b")),
@@ -1839,8 +1878,10 @@ int run_cross_process_delivery ()
       })).result ().value ();
     assert (local_send_delivered);
 
-    zlink::framework::runtime::host::call_id_t local_timeout_operation;
+    zlink::framework::runtime::host::pending_operation_t local_timeout_operation;
     int local_timeout_callbacks = 0;
+    std::promise<void> local_timeout_delivered;
+    auto local_timeout_ready = local_timeout_delivered.get_future ();
     assert (std::move (local_source.request_to_spot (
               local_node_rid, "local-target", local_target_generation,
               local_request_parts, local_timeout_operation,
@@ -1850,6 +1891,7 @@ int run_cross_process_delivery ()
                   if (terminal
                       == zlink::framework::runtime::foundation::operation_terminal_t::timed_out)
                       ++local_timeout_callbacks;
+                  local_timeout_delivered.set_value ();
               }))
               .result ().value ()
             == zlink::submit_result_t::ok);
@@ -1858,9 +1900,12 @@ int run_cross_process_delivery ()
       [] (const zlink::framework::runtime::host::ready_record_t &,
           const zlink::framework::runtime::host::receive_record_t &,
           std::vector<zlink::message_t>) {})).result ().value ();
+    // Expiry claims the entry in this ingress turn; the already-reserved
+    // dispatcher delivers the callback in a new turn.
+    assert (local_timeout_ready.wait_for (1s) == std::future_status::ready);
     assert (local_timeout_callbacks == 1);
 
-    zlink::framework::runtime::host::call_id_t local_shutdown_operation;
+    zlink::framework::runtime::host::pending_operation_t local_shutdown_operation;
     int local_shutdown_callbacks = 0;
     assert (std::move (local_source.request_to_spot (
               local_node_rid, "local-target", local_target_generation,
@@ -1875,7 +1920,7 @@ int run_cross_process_delivery ()
               .result ().value ()
             == zlink::submit_result_t::ok);
 
-    zlink::framework::runtime::host::call_id_t callbackless_shutdown_operation;
+    zlink::framework::runtime::host::pending_operation_t callbackless_shutdown_operation;
     assert (std::move (local_source.request_to_spot (
               local_node_rid, "local-target", local_target_generation,
               local_request_parts, callbackless_shutdown_operation,
@@ -1902,7 +1947,7 @@ int run_cross_process_delivery ()
     std::atomic_int terminal_race_callbacks{0};
     std::thread race_submitter ([&] {
         while (submit_race.load (std::memory_order_acquire)) {
-            zlink::framework::runtime::host::call_id_t operation;
+            zlink::framework::runtime::host::pending_operation_t operation;
             const auto submitted = std::move (race_source.request_to_spot (
               race_node_rid, "race-target", race_target_generation, race_parts,
               operation, zlink::send_flags_t::none, 1s, {},
@@ -1950,8 +1995,13 @@ int run_cross_process_delivery ()
 #endif
 } // namespace
 
-int main ()
+int main (int argc, char **argv)
 {
+#if defined(__unix__)
+    if (argc == 2 && std::string_view (argv[1]) == "--cross-process")
+        return run_cross_process_delivery ();
+#endif
+    verify_local_join_timeout_releases_membership ();
     verify_automatic_identity_and_port_builder ();
     verify_public_runtime_surface ();
     verify_slow_observer_does_not_block_stop ();
@@ -1964,7 +2014,17 @@ int main ()
     verify_direct_target_falls_through_absent_location_store_entry ();
     verify_request_to_never_admitted_target_reports_not_found ();
 #if defined(__unix__)
-    return run_cross_process_delivery ();
+    // Fork the delivery peers before any runtime threads exist in their parent.
+    // A fork after the unit fixtures inherits dispatcher state, but not its worker.
+    const auto delivery = fork ();
+    assert (delivery >= 0);
+    if (delivery == 0) {
+        execl (argv[0], argv[0], "--cross-process", static_cast<char *> (nullptr));
+        _exit (127);
+    }
+    int delivery_status = 0;
+    assert (waitpid (delivery, &delivery_status, 0) == delivery);
+    return WIFEXITED (delivery_status) ? WEXITSTATUS (delivery_status) : 4;
 #else
     auto state = make_node ("tcp://127.0.0.1:*", "vertical-a");
     zlink::framework::detail::mesh_node_runtime_t node (state);

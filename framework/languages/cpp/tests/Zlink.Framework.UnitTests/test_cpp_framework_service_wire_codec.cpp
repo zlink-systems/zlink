@@ -533,6 +533,11 @@ int main ()
       "Probe", "application/json", {1, 2, 3}};
     const auto application_wire =
       protocol::encode_application_payload (application);
+    const std::vector<std::uint8_t> expected_application_wire{
+      1, 0, 0, 0, 30, 5, 'P', 'r', 'o', 'b', 'e',
+      16, 'a', 'p', 'p', 'l', 'i', 'c', 'a', 't', 'i', 'o', 'n', '/', 'j', 's', 'o', 'n',
+      0, 0, 0, 3, 1, 2, 3};
+    assert (application_wire == expected_application_wire);
     assert (protocol::decode_application_payload (application_wire)
             == application);
     assert (protocol::application_payload_hwm_bytes (application) == 3);

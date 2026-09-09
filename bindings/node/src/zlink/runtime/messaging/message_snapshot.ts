@@ -20,7 +20,8 @@ export function messageFromSnapshot(snapshot: MessageSnapshot): Message {
     snapshot.refCount ?? 1,
     snapshot.properties,
     snapshot.nativeMessage,
-    snapshot.metadata
+    snapshot.metadata,
+    snapshot.data === undefined && snapshot.nativeMessage !== undefined
   );
   return message;
 }
@@ -70,4 +71,17 @@ export function messageToSnapshot(message: Message): MessageSnapshot {
       ? { nativeMessage: state._nativeMessage }
       : {})
   };
+}
+
+export function messageToNativeValue(message: Message): unknown {
+  const state = message as unknown as {
+    _buffer: Buffer | undefined;
+    _nativeMessage?: unknown;
+  };
+  if (state._buffer === undefined
+      && canShareNativeMessage(message)
+      && state._nativeMessage !== undefined) {
+    return state._nativeMessage;
+  }
+  return messageToSnapshot(message);
 }

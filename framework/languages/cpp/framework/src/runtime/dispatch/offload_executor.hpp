@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <string>
 #include <stop_token>
@@ -48,7 +49,7 @@ class offload_executor_t
     struct work_item_t
     {
         std::function<void (std::stop_token)> work;
-        std::stop_source cancellation;
+        std::optional<std::stop_source> cancellation;
     };
 
     void worker_loop ();

@@ -1012,6 +1012,17 @@ class application_supply_slot_t final
         }
         previous.reset ();
 
+        // The queue owns FIFO fairness for both immediate acquisition and
+        // waiting. A supply already available to this ingress turn needs no
+        // waiter allocation or wake notification back to that same turn.
+        if (auto permit = _queue->try_reserve_supply ()) {
+            std::lock_guard lock (_state->mutex);
+            _state->waiting = false;
+            if (!_state->closed)
+                _state->permit = std::move (permit);
+            return;
+        }
+
         const auto state = _state;
         auto waiter = _queue->wait_for_supply (
           [state] (std::optional<application_job_queue_t::permit_t> permit) {
@@ -1037,7 +1048,8 @@ class application_supply_slot_t final
         {
             std::lock_guard lock (_state->mutex);
             permit = std::exchange (_state->permit, std::nullopt);
-            completed = std::exchange (_state->waiter, std::nullopt);
+            if (!_state->waiting)
+                completed = std::exchange (_state->waiter, std::nullopt);
         }
         completed.reset ();
         return permit;

@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -31,12 +32,14 @@ enum class operation_terminal_t
 
 class operation_completion_dispatcher_t;
 struct operation_completion_item_t;
+struct operation_registry_drain_state_t;
 
 class operation_registry_t
 {
   public:
     using clock_t = std::chrono::steady_clock;
     using callback_t = std::function<void (operation_terminal_t, std::vector<std::uint8_t>)>;
+    using before_dispatch_t = std::function<void ()>;
 
     explicit operation_registry_t (std::size_t capacity);
     ~operation_registry_t () noexcept;
@@ -49,11 +52,20 @@ class operation_registry_t
     std::size_t fail_target (const std::vector<std::uint8_t> &target_routing_id,
                             operation_terminal_t terminal);
     bool complete (const call_id_t &id, std::vector<std::uint8_t> payload);
+    bool complete (const call_id_t &id,
+                   std::vector<std::uint8_t> payload,
+                   before_dispatch_t before_dispatch);
     bool cancel (const call_id_t &id);
     bool fail (const call_id_t &id,
                operation_terminal_t terminal,
                std::vector<std::uint8_t> payload = {});
+    bool fail (const call_id_t &id,
+               operation_terminal_t terminal,
+               std::vector<std::uint8_t> payload,
+               before_dispatch_t before_dispatch);
+    bool unregister (const call_id_t &id);
     std::size_t expire (clock_t::time_point now);
+    std::optional<clock_t::time_point> next_deadline () const;
     std::size_t shutdown ();
     std::size_t size () const;
 
@@ -74,6 +86,7 @@ class operation_registry_t
     const std::size_t _capacity;
     std::shared_ptr<operation_completion_dispatcher_t>
       _completion_dispatcher;
+    std::shared_ptr<operation_registry_drain_state_t> _drain_state;
     mutable std::mutex _mutex;
     std::unordered_map<call_id_t, pending_t, id_hash_t> _pending;
     bool _closed = false;

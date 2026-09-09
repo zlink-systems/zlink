@@ -865,7 +865,7 @@ zlink::framework::result_t<void> one_way_native_submit_result (zlink::submit_res
 zlink::framework::task_t<
   zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>>
 await_mesh_request_completion (zlink::framework::detail::mesh_node_runtime_t &mesh,
-                               const zlink::framework::detail::host::call_id_t &operation,
+                               const zlink::framework::detail::host::pending_operation_t &operation,
                                std::string_view operation_name)
 {
     using namespace zlink::framework;
@@ -1947,7 +1947,7 @@ void app_t::_apply_zlink_framework ()
                                                        runtime::messaging::message_parts_t parts,
                                                        std::chrono::milliseconds timeout)
           -> task_t<result_t<runtime::messaging::message_parts_t>> {
-            detail::host::call_id_t operation;
+            detail::host::pending_operation_t operation;
             const auto submitted = co_await mesh->request_to_spot (
               source_spot_id, target_node, target_spot, target_spot_generation, parts.items (),
               operation, timeout);
@@ -1994,7 +1994,7 @@ void app_t::_apply_zlink_framework ()
           [mesh] (const zlink::routing_id_t &target, runtime::messaging::message_parts_t parts,
                   std::chrono::milliseconds timeout)
             -> task_t<result_t<runtime::messaging::message_parts_t>> {
-              detail::host::call_id_t operation;
+              detail::host::pending_operation_t operation;
               const auto submitted =
                 co_await mesh->request_to_node (target, parts.items (), operation, timeout);
               if (submitted != zlink::submit_result_t::ok) {
@@ -2025,7 +2025,7 @@ void app_t::_apply_zlink_framework ()
               [mesh, channel_name] (runtime::messaging::message_parts_t parts,
                                     std::chrono::milliseconds timeout)
                 -> task_t<result_t<runtime::messaging::message_parts_t>> {
-                  detail::host::call_id_t operation;
+                  detail::host::pending_operation_t operation;
                   const auto submitted = co_await mesh->request_to_channel (
                     channel_name, parts.items (), operation, timeout);
                   if (submitted != zlink::submit_result_t::ok) {

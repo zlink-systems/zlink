@@ -2978,24 +2978,25 @@ encode_application_payload (const application_payload_t &payload)
         > std::numeric_limits<std::uint32_t>::max ()) {
         throw service_wire_error_t ("application payload exceeds u32");
     }
-    std::vector<std::uint8_t> body;
-    append_text8 (body, payload.packet_name, "packet name");
-    append_text8 (body, payload.content_type, "content type");
-    append_u32 (body, static_cast<std::uint32_t> (payload.payload.size ()));
-    body.insert (body.end (), payload.payload.begin (), payload.payload.end ());
-    if (payload.flow_id) {
-        append_text8 (body, *payload.flow_id, "flow id");
-        body.push_back (static_cast<std::uint8_t> (*payload.flow_origin));
-    }
-    if (body.size () > std::numeric_limits<std::uint32_t>::max ()) {
+    const auto body_size = std::uint64_t{6} + payload.packet_name.size ()
+                           + payload.content_type.size () + payload.payload.size ()
+                           + (payload.flow_id ? 2 + payload.flow_id->size () : 0);
+    if (body_size > std::numeric_limits<std::uint32_t>::max ()) {
         throw service_wire_error_t ("application payload envelope exceeds u32");
     }
     std::vector<std::uint8_t> result;
-    result.reserve (5 + body.size ());
+    result.reserve (5 + body_size);
     result.push_back (payload.flow_id ? application_payload_flow_version
                                       : application_payload_version);
-    append_u32 (result, static_cast<std::uint32_t> (body.size ()));
-    result.insert (result.end (), body.begin (), body.end ());
+    append_u32 (result, static_cast<std::uint32_t> (body_size));
+    append_text8 (result, payload.packet_name, "packet name");
+    append_text8 (result, payload.content_type, "content type");
+    append_u32 (result, static_cast<std::uint32_t> (payload.payload.size ()));
+    result.insert (result.end (), payload.payload.begin (), payload.payload.end ());
+    if (payload.flow_id) {
+        append_text8 (result, *payload.flow_id, "flow id");
+        result.push_back (static_cast<std::uint8_t> (*payload.flow_origin));
+    }
     return result;
 }
 

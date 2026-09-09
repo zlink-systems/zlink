@@ -946,3 +946,37 @@ TEST (ZLinkFrameworkApplicationJobQueue,
       1u,
       queue.pressure_metrics_snapshot ().flow_state_config_failure_count);
 }
+
+TEST (ZLinkFrameworkApplicationJobQueue, ImmediateSupplyNeedsNoWakeAndWaitersRemainFifo)
+{
+    using zlink::framework::runtime::application_supply_slot_t;
+    auto queue = std::make_shared<queue_t> (limit_one_configuration ());
+    int first_wakes = 0;
+    int second_wakes = 0;
+    application_supply_slot_t first (queue, [&] { ++first_wakes; });
+    application_supply_slot_t second (queue, [&] { ++second_wakes; });
+    first.ensure_waiter ();
+    auto permit = first.take ();
+    ASSERT_TRUE (permit);
+    EXPECT_EQ (0, first_wakes);
+    second.ensure_waiter ();
+    first.ensure_waiter ();
+    EXPECT_EQ (2u, queue->snapshot ().capacity_waiters);
+    permit.reset ();
+    EXPECT_EQ (1, second_wakes);
+    EXPECT_EQ (0, first_wakes);
+    auto handed = second.take ();
+    ASSERT_TRUE (handed);
+    EXPECT_FALSE (first.take ());
+    EXPECT_EQ (1u, queue->snapshot ().capacity_waiters);
+    EXPECT_EQ (0, first_wakes);
+    handed.reset ();
+    EXPECT_EQ (1, first_wakes);
+    auto next = first.take ();
+    ASSERT_TRUE (next);
+    next.reset ();
+    first.close ();
+    second.close ();
+    EXPECT_EQ (0u, queue->snapshot ().permits_in_use);
+    EXPECT_EQ (0u, queue->snapshot ().capacity_waiters);
+}

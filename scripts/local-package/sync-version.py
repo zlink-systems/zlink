@@ -160,6 +160,11 @@ def node_internal_dependency_pattern() -> str:
 # directories to discover additional targets.
 FRAMEWORK_SCALAR_FIELDS = (
     FrameworkField(
+        "framework/languages/cpp/CMakeLists.txt",
+        "project(zlink_framework_cpp) version",
+        rf"(project\(zlink_framework_cpp VERSION )(?P<version>{SEMVER})( LANGUAGES C CXX\))",
+    ),
+    FrameworkField(
         "framework/languages/java/zlink-http-client/src/main/java/systems/zlink/httpclient/internal/HttpClientVersion.java",
         "HttpClientVersion.VERSION (drives zlink-http-client and zlink-http-client-kotlin Gradle versions)",
         rf'(public static final String VERSION = ")(?P<version>{SEMVER})(";)',

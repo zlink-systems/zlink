@@ -123,12 +123,12 @@ that has not been written.**
 | `scripts/local-package/package-cache.py`, `cache-prune.sh` | Shared cache for binding local packages, and its pruning (§4.1) | exists |
 | `scripts/perf/perf-ticket.sh`, `perf-queue-runner.sh` | Every measurement runs as one serialized ticket | exists |
 | `scripts/gate/*.sh` | Per-language gates | exists |
-| `scripts/dev/job.sh` | Start, inspect, watch every three minutes and stop codex sub-agent jobs. Checks the log right after start so a wrong model id or an auth failure is reported at once. Stops a job only by its recorded pid | Issue #33 |
-| `scripts/dev/worktree-sweep.sh` | Judge abandoned worktrees by safety (uncommitted, unpushed, contained in main, a running job) and remove the safe ones | Issue #34 |
-| `scripts/dev/session-setup.sh` | At session start, settle bench port reservation, tmpfs headroom, the measurement queue and local packages in one pass | Issue #35 |
-| `scripts/dev/release-check.sh` | Before tagging, check version synchronization, release notes, package metadata and the publish targets | Issue #36 |
+| `scripts/dev/job.sh` | Start, inspect, watch every three minutes and stop codex sub-agent jobs. Checks the log right after start so a wrong model id or an auth failure is reported at once. Stops a job only by its recorded pid | exists |
+| `scripts/dev/worktree-sweep.sh` | Judge abandoned worktrees by safety (uncommitted, unpushed, contained in main, a running job) and remove the safe ones | exists |
+| `scripts/dev/session-setup.sh` | At session start, settle bench port reservation, tmpfs headroom, the measurement queue and local packages in one pass | exists |
+| `scripts/dev/release-check.sh` | Before tagging, check version synchronization, release notes, package metadata and the publish targets | exists |
 | Bench result comparison tool | Turn two measurement sets into a scenario × payload table (throughput, latency, ratio, change) | Issue #37 |
-| `scripts/dev/ci-watch.sh` | Keep a single CI watcher and poll every ten minutes (GitHub API limits) | Issue #38 |
+| `scripts/dev/ci-watch.sh` | Keep a single CI watcher and poll every ten minutes (GitHub API limits) | exists |
 
 Three rules apply to all of them.
 

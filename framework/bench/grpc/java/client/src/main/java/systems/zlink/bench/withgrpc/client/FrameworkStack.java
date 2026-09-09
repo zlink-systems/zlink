@@ -2,7 +2,7 @@
 
 package systems.zlink.bench.withgrpc.client;
 
-import com.google.protobuf.ByteString;
+import com.google.protobuf.UnsafeByteOperations;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import org.springframework.boot.WebApplicationType;
@@ -86,7 +86,7 @@ public final class FrameworkStack implements AutoCloseable {
 
     private BenchPayload payload(int payloadSize, byte phase, long sequence) {
         return BenchPayload.newBuilder()
-            .setBody(ByteString.copyFrom(
+            .setBody(UnsafeByteOperations.unsafeWrap(
                 BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence)))
             .build();
     }
