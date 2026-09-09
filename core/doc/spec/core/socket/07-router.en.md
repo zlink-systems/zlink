@@ -408,21 +408,7 @@ the pause takes effect.
 The [Monitoring](../06-monitoring.en.md) status snapshot reports the current number of paused peers
 together with the applied-transition count, stale count, and pause duration for the whole socket.
 
-## 12. Internal structure
-
-> **Contract ownership for this section** — [Section 6](#6-directed-raw-send) and [section
-> 7](#7-raw-request-submit) own the public contracts for directed submit and request
-> submit. This section explains how a binding serializes multipart attempts on top of those
-> contracts.
-
-Because each part call has a separate public API scope, a binding holds a socket-local attempt gate
-only for one `DONTWAIT` attempt from the first part through FINAL. On failure, it releases the gate
-immediately after Core rolls back the sequence and does not hold it while waiting for
-`BACKPRESSURED` readiness. Request submit also makes one attempt from the first request part through
-FINAL under the same short socket-local attempt gate as raw send. This gate is neither a new Core
-multipart API nor a public FIFO contract.
-
-## 13. Implementation and contract test verification requirements
+## 12. Implementation and contract test verification requirements
 
 The following behaviors are verified using only the public surface: ROUTER send, request, receive,
 reply, and completion-pull functions; ROUTER option set and get; return values and errno; and event
