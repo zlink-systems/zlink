@@ -13,7 +13,7 @@ title: "Messaging hot path"
 > 같은 mesh의 node 사이에서 ChannelName으로 target을 고르는
 > [RouteMesh](../00-foundation/02-glossary.ko.md#routemesh) channel, Client가 ready Server 하나를 호출하는
 > [ClientServer channel](../00-foundation/02-glossary.ko.md#clientserver-channel), Spot ID로 current owner를
->호출하는 [Spot direct](../00-foundation/02-glossary.ko.md#spot-direct) call — 세 API가 같은 단계를 지난다(§5).
+> 호출하는 [Spot direct](../00-foundation/02-glossary.ko.md#spot-direct) call — 세 API가 같은 단계를 지난다(§5).
 
 ## 1. 이 문서가 답하는 질문과 책임
 
@@ -284,9 +284,9 @@ claim, I4의 전환, W1~W5의 묶음 처리라는 관찰 결과는 같으며, �
 §3·§4의 "내부 확인 조건"이 소유하며, 그 계측 지점과 테스트 식별자는 언어별 문서가 연결한다.
 
 - (a) **기다리는 방식**: readiness가 없는 동안 ingress owner가 busy poll이나 고정 간격의 데이터 확인을
-  하지 않는다. 측정할 CPU 범위, 관리 작업 포함 여부, 관측
-  구간, readiness 관측부터 claim까지의 지연 통계와 허용 오차의 계측 규격은 **확정 전 항목**이다 — 언어별
-  문서가 정한 뒤 이 절에서 그 절을 링크한다.
+  하지 않는다. 측정할 CPU 범위, 관리 작업 포함 여부, 관측 구간, readiness 관측부터 claim까지의 지연
+  통계와 허용 오차의 계측 규격은 **확정 전 항목**이다 — 언어별 문서가 정한 뒤 이 절에서 그 절을
+  링크한다.
 - (b) **묶음 claim**: byte·시간 한도에 닿지 않는 측정 조건에서 64건이 쌓여 있으면 한 회전이 64건을
   claim한다(permit이 충분할 때). permit이 부족하면 남은 permit만큼 claim하고 나머지는 Core queue에 둔다 —
   reject·drop이 없다.

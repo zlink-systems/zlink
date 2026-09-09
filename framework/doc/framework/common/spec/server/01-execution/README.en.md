@@ -112,7 +112,7 @@ owned by
 05-payload-ownership-and-codec.en.md         ownership and copying of a message
 06-state-ownership-and-lanes.en.md           the mechanism that guards a component's state
 07-serial-executor-layers.en.md              the serial execution units of Spot, Actor and Session
-08-messaging-hot-path.en.md                   the stages a send/request passes and the throughput requirement
+08-messaging-hot-path.en.md                  the stages a send/request passes and the throughput requirement
 ```
 
 For a developer reading this for the first time, the order is as follows: understanding

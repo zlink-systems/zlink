@@ -110,7 +110,7 @@ flowchart LR
 05-payload-ownership-and-codec.ko.md         message의 소유권과 복사
 06-state-ownership-and-lanes.ko.md           컴포넌트 상태를 지키는 메커니즘
 07-serial-executor-layers.ko.md              Spot·Actor·Session의 직렬 실행 단위
-08-messaging-hot-path.ko.md                   send·request가 지나는 단계와 처리량 요구
+08-messaging-hot-path.ko.md                  send·request가 지나는 단계와 처리량 요구
 ```
 
 처음 읽는 개발자는 이 순서대로 읽는다 — submit이 무엇을 완료로 보는지(01) 알아야
