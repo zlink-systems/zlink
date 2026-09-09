@@ -565,22 +565,19 @@ function validateChannelHeader(value: unknown, flowEnabled = true): ZLinkChannel
   }
   const correlationId = requireNullableString(header.correlationId, 'correlationId');
   validateCorrelationForKind(kind, correlationId);
-  return {
-    formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
-    kind,
-    channelName: requireString(header.channelName, 'channelName'),
-    messageName: requireString(header.messageName, 'messageName'),
-    contentType,
-    correlationId,
-    deadline: requireNullableString(header.deadline, 'deadline'),
-    topic: requireNullableString(header.topic, 'topic'),
-    errorCode: header.errorCode === undefined ? null : requireNullableString(header.errorCode, 'errorCode'),
-    errorMessage: header.errorMessage === undefined ? null : requireNullableString(header.errorMessage, 'errorMessage'),
-    source: header.source === undefined ? undefined : requireNullableString(header.source, 'source'),
-    metadata: requireApplicationMetadata(header.metadata),
-    flowId,
-    flowOrigin
-  };
+  requireString(header.channelName, 'channelName');
+  requireString(header.messageName, 'messageName');
+  requireNullableString(header.deadline, 'deadline');
+  requireNullableString(header.topic, 'topic');
+  // Parsing already gives this receive operation an owned object. Validate
+  // and normalize it here instead of allocating a second header per record.
+  header.errorCode = header.errorCode === undefined ? null : requireNullableString(header.errorCode, 'errorCode');
+  header.errorMessage = header.errorMessage === undefined ? null : requireNullableString(header.errorMessage, 'errorMessage');
+  header.source = header.source === undefined ? undefined : requireNullableString(header.source, 'source');
+  header.metadata = requireApplicationMetadata(header.metadata);
+  header.flowId = flowId;
+  header.flowOrigin = flowOrigin;
+  return header as unknown as ZLinkChannelEnvelopeHeader;
 }
 
 function correlationIdForOutboundKind(
