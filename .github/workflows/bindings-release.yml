@@ -162,10 +162,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No registry-url here: it would write an empty _authToken into .npmrc and
+      # npm would then use token auth (404) instead of OIDC trusted publishing.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
 
       - name: Install npm with Trusted Publishing support
         run: npm install -g npm@latest
