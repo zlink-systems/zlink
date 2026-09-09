@@ -13,6 +13,13 @@ Design decisions are in `doc/plan/c016-worklog/decisions.ko.md` (D-B…).
 
 ## [Unreleased]
 
+### Fixed (pending)
+
+- CPack NSIS icon path: `installer.ico` now lives in `core/packaging/`; the CMake path still
+  points at `core/installer.ico`, which never existed. Update the two `CPACK_NSIS_MUI_*ICON`
+  lines to `packaging\\installer.ico` in the next Core release (binding releases require the
+  checked-out `core/` sources to match the Core tag exactly, so the fix waits for a Core tag).
+
 ## [0.17.5] - 2026-09-09
 
 ### Fixed
