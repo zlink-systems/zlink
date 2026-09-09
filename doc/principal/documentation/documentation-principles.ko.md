@@ -164,14 +164,16 @@
 
 ### 7.1 독자가 아는 용어는 영어 그대로
 
-독자가 일상적으로 영어로 쓰는 전문 용어는 **영어 그대로 쓴다.** 표준 용어를 어색한
-한국어로 바꾸면 오히려 더 안 읽힌다.
+개발자라면 누구나 영어로 읽고 쓰는 용어는 **영어 그대로 쓴다.** 이런 용어를 어색한
+한국어로 바꾸면 오히려 더 안 읽힌다. 여기서 말하는 용어는 특정 분야의 전문어가 아니라
+개발자 공통의 일상 용어다.
 
-| 그대로 둘 용어(서버 개발자 기준 예시) |
+| 그대로 둘 용어(예시) |
 |----------------------|
-| socket, queue, thread, callback, dispatch, facade, payload, buffer, pipe, endpoint |
-| data plane, control plane, peer, router, routed, mesh, fanout, session |
-| HWM, backpressure, throughput, latency, poller, signaler, snapshot, profile, override |
+| spec, guide, sequence diagram, package, application, host, module, runtime, process, thread |
+| API, DI, lifecycle, handler, client, server, request, reply, socket, queue, callback |
+| payload, buffer, pipe, endpoint, session, peer, router, mesh, fanout, snapshot, profile, override |
+| dispatch, facade, data plane, control plane, HWM, backpressure, throughput, latency, poller, signaler |
 
 **한자 번역과 한글 음차 모두 영어 그대로로 되돌린다:**
 
@@ -214,8 +216,9 @@
 
 ### 7.3 익숙한 영어를 두거나 쉬운 말로 푼다
 
-영어 jargon은 익숙한 영어 그대로 두거나 **아예 쉬운 말로 풀어서** 쓴다. 또 다른 어려운
-한자어로 바꾸는 것은 윤문이 아니다.
+7.1의 공통 용어보다 덜 알려진 영어 용어 — zlink 고유 용어나 이 분야 안에서만 쓰는 말 — 는
+익숙한 영어 그대로 두거나 **아예 쉬운 말로 풀어서** 쓴다. 또 다른 어려운 한자어로 바꾸는
+것은 윤문이 아니다.
 
 | 이렇게 쓴다 | 흔한 이탈 |
 |-------------|-----------|
@@ -276,8 +279,8 @@
 
 문서는 말하듯 쓴 초안이 아니라 **전문기술문서**다. 개발자들이 회의·채팅에서 편하게
 쓰는 구어체 동사·어미가 산문에 그대로 남으면, 뜻은 통해도 격식 있는 문서로 읽히지
-않는다. 발견하면 **뜻을 풀어서 쉬운 표준 서술체로** 바꾼다 — 7.1의 전문 용어(영어
-그대로 두기)와는 별개 문제다. jargon은 그대로 두되 동사·어미·비유만 격식체로 고친다.
+않는다. 발견하면 **뜻을 풀어서 쉬운 표준 서술체로** 바꾼다 — 7.1의 영어 용어(영어
+그대로 두기)와는 별개 문제다. 영어 용어는 그대로 두되 동사·어미·비유만 격식체로 고친다.
 
 | 이렇게 쓴다 | 흔한 이탈 | 문제 |
 |---|---|---|
@@ -298,7 +301,7 @@
 쓰는 것을 장비·시스템에 그대로 옮겼는가", "축약형·강조어로 말투가 남아 있는가",
 "주어를 의인화했는가"로 판별한다.
 
-**7.1과의 구분:** 7.1은 *명사 jargon*(socket, dispatch, facade)을 한자
+**7.1과의 구분:** 7.1은 *영어 명사 용어*(socket, dispatch, facade)를 번역하지 말고
 영어 그대로 두라는 규칙이고, 7.7은 *동사·어미·비유*를 구어체에서
 격식체로 바꾸라는 규칙이다. 영어 전문 용어는 7.7 적용 후에도 그대로 남는다.
 
@@ -454,9 +457,9 @@
 
 산문을 한글로 쓰거나 윤문할 때(원칙 7):
 
-- [ ] 독자가 아는 jargon을 영어 그대로 두었는가? (7.1)
+- [ ] 개발자라면 바로 아는 영어 용어(spec, package, application, socket 등)를 영어 그대로 두었는가? (7.1)
 - [ ] 새 용어를 “그림 먼저, 이름은 꼬리표” 순서로 들였는가? (7.2)
-- [ ] 영어 jargon을 익숙한 영어 그대로 두거나 쉬운 말로 풀었는가? (7.3)
+- [ ] 덜 알려진 영어 용어를 익숙한 영어 그대로 두거나 쉬운 말로 풀었는가? (7.3)
 - [ ] 명사 나열식 영문투를 동작·인과 중심으로 풀고, 긴 문장을 끊었는가? (7.4)
 - [ ] 코드 식별자·타입·API명·enum은 그대로 보존했는가? (7.5)
 - [ ] 구어체 동사·어미·의인화 비유를 격식체로 풀었는가? (전문 용어는 유지) (7.7)
