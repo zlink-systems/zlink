@@ -162,6 +162,33 @@ int main ()
       id (4), foundation::operation_terminal_t::transport_failed));
     assert (failed_terminals.load (std::memory_order_acquire) == 1);
 
+    foundation::operation_registry_t abandoned_registry (1);
+    std::atomic_int abandoned_callbacks{0};
+    assert (abandoned_registry.register_operation (
+      foundation::call_id_t{8, 1}, now,
+      [&] (auto, auto) {
+          abandoned_callbacks.fetch_add (1, std::memory_order_release);
+      }));
+    assert (abandoned_registry.unregister (foundation::call_id_t{8, 1}));
+    assert (!abandoned_registry.unregister (foundation::call_id_t{8, 1}));
+    assert (abandoned_registry.register_operation (
+      foundation::call_id_t{8, 2}, now,
+      [&] (foundation::operation_terminal_t terminal, auto) {
+          assert (terminal == foundation::operation_terminal_t::completed);
+          abandoned_callbacks.fetch_add (1, std::memory_order_release);
+      }));
+    std::atomic_int prepared{0};
+    assert (abandoned_registry.complete (
+      foundation::call_id_t{8, 2}, {},
+      [&] { prepared.fetch_add (1, std::memory_order_release); }));
+    assert (!abandoned_registry.complete (
+      foundation::call_id_t{8, 2}, {},
+      [&] { prepared.fetch_add (1, std::memory_order_release); }));
+    assert (wait_until ([&] {
+        return abandoned_callbacks.load (std::memory_order_acquire) == 1;
+    }));
+    assert (prepared.load (std::memory_order_acquire) == 1);
+
     std::atomic_int shutdown_terminals{0};
     {
         foundation::operation_registry_t scoped_registry (2);
@@ -324,13 +351,20 @@ int main ()
     assert (wait_until ([&] {
         return blocked_callback_started.load (std::memory_order_acquire);
     }));
-    assert (dispatcher_bounded_registry.shutdown ()
-            == foundation::default_operation_capacity - 1);
+    std::atomic_bool dispatcher_shutdown_returned{false};
+    std::thread dispatcher_shutdown ([&] {
+        assert (dispatcher_bounded_registry.shutdown ()
+                == foundation::default_operation_capacity - 1);
+        dispatcher_shutdown_returned.store (true, std::memory_order_release);
+    });
 
     foundation::operation_registry_t backlog_probe_registry (1);
     assert (!backlog_probe_registry.register_operation (
       foundation::call_id_t{12, 1}, now, [] (auto, auto) {}));
+    assert (!dispatcher_shutdown_returned.load (std::memory_order_acquire));
     release_blocked_callback.store (true, std::memory_order_release);
+    dispatcher_shutdown.join ();
+    assert (dispatcher_shutdown_returned.load (std::memory_order_acquire));
     assert (wait_until ([&] {
         return dispatched.load (std::memory_order_acquire)
                == foundation::default_operation_capacity;

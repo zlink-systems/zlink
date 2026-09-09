@@ -1070,7 +1070,7 @@ void verify_mesh_stop_drains_admitted_request_completion ()
     assert (source.has_admitted_peer (
       target_status.routing_id (), target_status.lifecycle_generation ()));
 
-    host::call_id_t operation;
+    host::pending_operation_t operation;
     assert (source.request_to_node (
               target_status.routing_id (),
               {zlink::message_t::from (std::string ("message-follow"))},
@@ -1119,7 +1119,9 @@ void verify_mesh_stop_drains_admitted_request_completion ()
     const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
     while (completion.wait_for (0ms) != std::future_status::ready
            && std::chrono::steady_clock::now () < completion_deadline) {
-        (void) source.dispatch_ready (discard);
+        // E5 must settle while the host dispatch thread is not running.
+        (void) source.native_node ().transport ().pump_one (
+          std::chrono::steady_clock::now (), false).result ().value ();
         (void) target.dispatch_ready (discard);
         std::this_thread::sleep_for (1ms);
     }
@@ -3649,8 +3651,8 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
                source_status.routing_id ().to_bytes ()))
            && mesh::service_liveness_registry_t::clock_t::now ()
                 < connect_deadline) {
-        (void) source->dispatch_ready (noop_dispatch);
-        (void) target->dispatch_ready (noop_dispatch);
+        await_task (source->dispatch_ready (noop_dispatch));
+        await_task (target->dispatch_ready (noop_dispatch));
         std::this_thread::sleep_for (1ms);
     }
     assert (source->transport ().topology ().peer (
@@ -3700,17 +3702,253 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
         assert (parts.size () == 1);
         ++dispatched;
     };
-    (void) target->dispatch_ready (dispatch);
+    await_task (target->dispatch_ready (dispatch));
     assert (dispatched == 1);
     assert (target->transport ().mailbox ().pending_messages (
               mesh::service_mailbox_domain_t::application)
             == 1);
 
-    (void) target->dispatch_ready (dispatch);
+    await_task (target->dispatch_ready (dispatch));
     assert (dispatched == 2);
     assert (
       target->transport ().mailbox ().pending_messages (mesh::service_mailbox_domain_t::application)
       == 0);
+}
+
+void verify_public_host_batches_with_finite_permits ()
+{
+    auto source = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{
+        mesh::raw_mesh_node_options_t{
+          descriptor ("finite-permit-liveness-source")} });
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{
+        mesh::raw_mesh_node_options_t{
+          descriptor ("finite-permit-liveness-target")} });
+    source->start ();
+    target->start ();
+    const auto target_status = target->status ();
+    const auto source_status = source->status ();
+    assert (target->connect_peer (
+      source_status.local_endpoint (), source_status.routing_id ()));
+
+    const auto noop_dispatch = [] (const host::ready_record_t &,
+                                   const host::receive_record_t &,
+                                   std::vector<zlink::message_t>) {};
+    const auto connect_deadline =
+      mesh::service_liveness_registry_t::clock_t::now () + 5s;
+    while ((!source->transport ().topology ().peer (
+               target_status.routing_id ().to_bytes ())
+             || !target->transport ().topology ().peer (
+               source_status.routing_id ().to_bytes ()))
+           && mesh::service_liveness_registry_t::clock_t::now ()
+                < connect_deadline) {
+        await_task (source->dispatch_ready (noop_dispatch));
+        await_task (target->dispatch_ready (noop_dispatch));
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (source->transport ().topology ().peer (
+      target_status.routing_id ().to_bytes ()));
+    assert (target->transport ().topology ().peer (
+      source_status.routing_id ().to_bytes ()));
+
+    const std::array values{"first", "second", "third", "fourth",
+                            "fifth", "sixth", "seventh", "eighth"};
+    for (const auto value : values) {
+        assert (source->send_to_node (
+                  target_status.routing_id (),
+                  {zlink::message_t::from (std::string (value))})
+                  .result ()
+                  .value ()
+                == zlink::submit_result_t::ok);
+    }
+    const auto receive_deadline =
+      mesh::service_liveness_registry_t::clock_t::now () + 5s;
+    while (target->transport ().mailbox ().pending_messages (
+             mesh::service_mailbox_domain_t::application)
+             < values.size ()
+           && mesh::service_liveness_registry_t::clock_t::now ()
+                < receive_deadline) {
+        const auto pumped = target->transport ().pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ())
+          .result ()
+          .value ();
+        assert (pumped != mesh::raw_mesh_pump_result_t::protocol_error);
+        if (pumped == mesh::raw_mesh_pump_result_t::no_data)
+            std::this_thread::sleep_for (1ms);
+    }
+    assert (target->transport ().mailbox ().pending_messages (
+              mesh::service_mailbox_domain_t::application)
+            == values.size ());
+
+    std::vector<std::string> delivered;
+    std::size_t next_permit_calls = 0;
+    bool permit_denied = false;
+    const auto dispatch = [&] (const host::ready_record_t &owner,
+                               const host::receive_record_t &record,
+                               std::vector<zlink::message_t> parts) {
+        if (owner.domain != host::ready_domain_t::application)
+            return;
+        assert (!permit_denied);
+        assert (owner.owner_kind == host::owner_kind_t::node);
+        assert (record.kind == host::record_kind_t::node_send);
+        assert (parts.size () == 1);
+        delivered.push_back (parts.front ().to_string ());
+    };
+    constexpr std::size_t permit_limit = 6;
+    std::size_t permits_remaining = permit_limit;
+    std::size_t turns = 0;
+    while (permits_remaining != 0 && turns != permit_limit + 2
+           && delivered.size () < values.size ()) {
+        // Model the host service's initial permit for this bounded turn.
+        --permits_remaining;
+        permit_denied = false;
+        std::size_t handoffs = 0;
+        const auto next_application_receive = [&] {
+            ++next_permit_calls;
+            if (handoffs != 0 || permits_remaining == 0) {
+                permit_denied = true;
+                return false;
+            }
+            --permits_remaining;
+            ++handoffs;
+            return true;
+        };
+        const auto delivered_before = delivered.size ();
+        await_task (target->dispatch_ready (
+          dispatch, true, next_application_receive));
+        ++turns;
+        const auto delivered_this_turn = delivered.size () - delivered_before;
+        assert (delivered_this_turn <= 1 + handoffs);
+    }
+    assert (permits_remaining == 0);
+    assert (next_permit_calls <= permit_limit);
+    assert (delivered.size () >= 2);
+    for (std::size_t index = 0; index != delivered.size (); ++index)
+        assert (delivered[index] == values[index]);
+
+    // No initial permit means ordinary application receive is disabled for
+    // the turn, and the remaining FIFO stays untouched.
+    const auto delivered_before_no_permit = delivered.size ();
+    await_task (target->dispatch_ready (dispatch, false));
+    assert (delivered.size () == delivered_before_no_permit);
+    assert (target->transport ().mailbox ().pending_messages (
+              mesh::service_mailbox_domain_t::application)
+            == values.size () - delivered.size ());
+
+    source->close ();
+    target->close ();
+}
+
+void verify_public_host_fifo_drains_before_liveness_probe ()
+{
+    auto source = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{
+        mesh::raw_mesh_node_options_t{
+          descriptor ("fifo-liveness-source")} });
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{
+        mesh::raw_mesh_node_options_t{
+          descriptor ("fifo-liveness-target")} });
+    source->start ();
+    target->start ();
+    const auto target_status = target->status ();
+    const auto source_status = source->status ();
+    assert (target->connect_peer (
+      source_status.local_endpoint (), source_status.routing_id ()));
+
+    const auto noop_dispatch = [] (const host::ready_record_t &,
+                                   const host::receive_record_t &,
+                                   std::vector<zlink::message_t>) {};
+    const auto connect_deadline =
+      mesh::service_liveness_registry_t::clock_t::now () + 5s;
+    while ((!source->transport ().topology ().peer (
+               target_status.routing_id ().to_bytes ())
+             || !target->transport ().topology ().peer (
+               source_status.routing_id ().to_bytes ()))
+           && mesh::service_liveness_registry_t::clock_t::now ()
+                < connect_deadline) {
+        await_task (source->dispatch_ready (noop_dispatch));
+        await_task (target->dispatch_ready (noop_dispatch));
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (source->transport ().topology ().peer (
+      target_status.routing_id ().to_bytes ()));
+    assert (target->transport ().topology ().peer (
+      source_status.routing_id ().to_bytes ()));
+
+    const std::array values{"fifo-1", "fifo-2", "fifo-3", "fifo-4"};
+    for (const auto value : values) {
+        assert (source->send_to_node (
+                  target_status.routing_id (),
+                  {zlink::message_t::from (std::string (value))})
+                  .result ()
+                  .value ()
+                == zlink::submit_result_t::ok);
+    }
+
+    // Submit the probe after the application records.  The target must
+    // consume the transport FIFO's application prefix before seeing it.
+    const auto probe_time =
+      mesh::service_liveness_registry_t::clock_t::now () + 5s;
+    const auto tick = await_task (source->transport ().tick_liveness (
+      probe_time));
+    assert (tick.probes.size () == 1);
+
+    std::vector<std::string> consumed;
+    mesh::raw_mesh_pump_result_t probe_pump =
+      mesh::raw_mesh_pump_result_t::no_data;
+    const auto io_deadline =
+      mesh::service_liveness_registry_t::clock_t::now () + 5s;
+    while (consumed.size () < values.size ()
+           && mesh::service_liveness_registry_t::clock_t::now () < io_deadline) {
+        await_task (target->dispatch_ready (
+          [&] (const host::ready_record_t &owner, const host::receive_record_t &record,
+               std::vector<zlink::message_t> parts) {
+              assert (owner.domain == host::ready_domain_t::application);
+              assert (record.kind == host::record_kind_t::node_send);
+              assert (parts.size () == 1);
+              consumed.push_back (parts.front ().to_string ());
+          }));
+    }
+    assert (consumed.size () == values.size ());
+    for (std::size_t index = 0; index != values.size (); ++index)
+        assert (consumed[index] == values[index]);
+
+    while (probe_pump != mesh::raw_mesh_pump_result_t::infrastructure
+           && mesh::service_liveness_registry_t::clock_t::now ()
+                < io_deadline) {
+        probe_pump = await_task (target->transport ().pump_one (probe_time));
+        assert (probe_pump != mesh::raw_mesh_pump_result_t::protocol_error);
+        if (probe_pump == mesh::raw_mesh_pump_result_t::no_data)
+            std::this_thread::sleep_for (1ms);
+    }
+    assert (probe_pump == mesh::raw_mesh_pump_result_t::infrastructure);
+
+    mesh::raw_mesh_pump_result_t ack_pump =
+      mesh::raw_mesh_pump_result_t::no_data;
+    while (ack_pump != mesh::raw_mesh_pump_result_t::infrastructure
+           && mesh::service_liveness_registry_t::clock_t::now ()
+                < io_deadline) {
+        ack_pump = await_task (source->transport ().pump_one (probe_time));
+        assert (ack_pump != mesh::raw_mesh_pump_result_t::protocol_error);
+        if (ack_pump == mesh::raw_mesh_pump_result_t::no_data)
+            std::this_thread::sleep_for (1ms);
+    }
+    assert (ack_pump == mesh::raw_mesh_pump_result_t::infrastructure);
+
+    // The ACK refreshes the unchanged 15 second peer deadline.  Check just
+    // before that virtual deadline without adding a product timeout.
+    const auto after_ack = await_task (source->transport ().tick_liveness (
+      probe_time + 15s - 1ms));
+    assert (after_ack.timed_out_nodes.empty ());
+    assert (source->transport ().topology ().peer (
+      target_status.routing_id ().to_bytes ()));
+    assert (target->transport ().topology ().peer (
+      source_status.routing_id ().to_bytes ()));
+
+    source->close ();
+    target->close ();
 }
 
 void verify_logical_multicast_continues_after_one_target_failure ()
@@ -7052,6 +7290,8 @@ int main ()
     verify_terminal_journal_preserves_outstanding_entries ();
     verify_unbounded_actor_handoff_backlog ();
     verify_public_host_dispatches_one_application_record_per_turn ();
+    verify_public_host_batches_with_finite_permits ();
+    verify_public_host_fifo_drains_before_liveness_probe ();
     verify_logical_multicast_continues_after_one_target_failure ();
     verify_local_application_enqueue_wakes_dispatch_wait ();
     verify_root_location_session_seal_timeout_is_startup_snapshot ();
