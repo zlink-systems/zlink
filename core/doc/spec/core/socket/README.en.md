@@ -392,7 +392,6 @@ typedef enum zlink_option_t {
   ZLINK_OPT_CONFLATE                  = 0x301B,  // PUB/SUB keep only the latest message per topic (int; only 0 or 1 accepted; DEALER cannot enable it; default 0)
   ZLINK_OPT_TOS                       = 0x301C,  // IP Type-of-Service value (int; default 0)
   ZLINK_OPT_HANDSHAKE_IVL             = 0x301D,  // ZMTP handshake timeout (ms, int; default 30000)
-  ZLINK_OPT_BLOCKY                    = 0x301E,  // Identifier unsupported by the socket option API; see below
   ZLINK_OPT_INVERT_MATCHING           = 0x3020,  // Invert topic matching (int)
   ZLINK_OPT_CONNECT_TIMEOUT           = 0x3024,  // Connection timeout (ms, int; default 0=OS default)
   ZLINK_OPT_TCP_MAXRT                 = 0x3025,  // Maximum TCP retransmission timeout (ms, int; default 0=OS default)
@@ -431,12 +430,6 @@ options, and all four types keep the option storage for ABI compatibility.
 Getting or setting either option on another socket fails with
 `ZLINK_CONFIG_NOT_SUPPORTED` and `errno == ENOTSUP` without changing existing
 option state.
-
-`ZLINK_OPT_BLOCKY` is an identifier unsupported by the socket option API.
-`zlink_set_option()` / `zlink_get_option()` return
-`ZLINK_CONFIG_NOT_SUPPORTED` / `ENOTSUP`. Configure context-termination
-behavior with `ZLINK_CTX_OPT_BLOCKY` (`int`; 0=off, positive=on, getter returns
-0/1).
 
 #### Conflation
 
@@ -1491,8 +1484,6 @@ connection, options, send/receive/completion functions, return values, and
   `*optvallen_` remains `sizeof(uint64_t)`.
 - The unsupported socket option value `0x3034` fails with
   `ZLINK_CONFIG_INVALID_ARGUMENT` and `EINVAL`.
-- Passing `ZLINK_OPT_BLOCKY` to `zlink_set_option()` or `zlink_get_option()`
-  produces `ZLINK_CONFIG_NOT_SUPPORTED` / `ENOTSUP`.
 - On DEALER, `ZLINK_OPT_CONFLATE=1` produces `ZLINK_CONFIG_NOT_SUPPORTED` / `ENOTSUP`, setting `0`
   succeeds, and the getter remains `0`. PUB and SUB accept `1` and return `1` from the getter.
 - An unknown option, out-of-range value, or invalid byte-count size produces

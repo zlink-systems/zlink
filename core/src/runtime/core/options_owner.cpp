@@ -66,7 +66,6 @@ zlink::options_owner_t common_option_owner_lookup (zlink_option_t option_)
         case ZLINK_OPT_LAST_ENDPOINT:
             return zlink::options_owner_socket_specific;
 
-        case ZLINK_OPT_BLOCKY:
         default:
             return zlink::options_owner_unknown;
     }

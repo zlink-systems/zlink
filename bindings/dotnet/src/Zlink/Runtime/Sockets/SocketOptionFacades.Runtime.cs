@@ -84,12 +84,6 @@ public partial class CommonSocketOptions
         set => Socket.SetOption(SocketOptions.Conflate, value ? 1 : 0);
     }
 
-    internal bool Blocky
-    {
-        get => Socket.GetOption(SocketOptions.Blocky) != 0;
-        set => Socket.SetOption(SocketOptions.Blocky, value ? 1 : 0);
-    }
-
     internal bool InvertMatching
     {
         get => Socket.GetOption(SocketOptions.InvertMatching) != 0;

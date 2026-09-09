@@ -373,7 +373,6 @@ typedef enum zlink_option_t {
   ZLINK_OPT_CONFLATE                  = 0x301B,  // PUB/SUB에서 topic당 최신 message만 유지 (int; 0 또는 1만 허용; DEALER는 활성화 불가; 기본값 0)
   ZLINK_OPT_TOS                       = 0x301C,  // IP Type-of-Service 값 (int; 기본값 0)
   ZLINK_OPT_HANDSHAKE_IVL             = 0x301D,  // ZMTP handshake timeout (ms, int; 기본값 30000)
-  ZLINK_OPT_BLOCKY                    = 0x301E,  // socket option API가 지원하지 않는 식별자 — 아래 설명 참조
   ZLINK_OPT_INVERT_MATCHING           = 0x3020,  // topic 매칭 반전 (int)
   ZLINK_OPT_CONNECT_TIMEOUT           = 0x3024,  // 연결 timeout (ms, int; 기본값 0=OS 기본)
   ZLINK_OPT_TCP_MAXRT                 = 0x3025,  // 최대 TCP 재전송 timeout (ms, int; 기본값 0=OS 기본)
@@ -408,11 +407,6 @@ admission 전에 보관하지 않으므로 두 option이 제한할 pending recor
 두 option의 get/set은 PAIR·DEALER·ROUTER·STREAM에서만 지원하며, 네 type 모두 option 저장을
 ABI로 유지한다. 다른 socket의 get/set은
 `ZLINK_CONFIG_NOT_SUPPORTED`, `errno == ENOTSUP`로 실패하고 기존 option 상태를 바꾸지 않는다.
-
-`ZLINK_OPT_BLOCKY`는 socket option API가 지원하지 않는 식별자다.
-`zlink_set_option()`/`zlink_get_option()`은 `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`을
-반환하며, context 종료 동작은 `ZLINK_CTX_OPT_BLOCKY`로 설정한다 (`int`, 0=off, 양수=on,
-getter는 0/1 반환).
 
 #### Conflation
 
@@ -1334,7 +1328,6 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 **옵션**
 - `ZLINK_OPT_SNDHWM`·`ZLINK_OPT_RCVHWM`은 set·get 모두 정확히 `sizeof(uint64_t)` 크기만 받는다. 4-byte를 포함한 그 밖의 크기는 값을 잘라 쓰거나 일부만 채우지 않고 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로 실패하며, get 성공 시 `*optvallen_`은 `sizeof(uint64_t)`를 유지한다.
 - 제거된 socket option 값 `0x3034`는 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로 실패한다.
-- `ZLINK_OPT_BLOCKY`를 `zlink_set_option()`/`zlink_get_option()`에 주면 `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`이다.
 - DEALER에서 `ZLINK_OPT_CONFLATE=1`은 `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`이고, `0` 설정은
   성공하며 getter는 계속 `0`이다. PUB와 SUB는 `1`을 받아들이고 getter도 `1`을 반환한다.
 - 알 수 없는 옵션, 범위 밖 값, 잘못된 byte-count 크기는 `EINVAL`, 종료된 context는 `ETERM`이다.

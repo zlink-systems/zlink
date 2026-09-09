@@ -100,7 +100,6 @@ typedef enum zlink_option_t
     /* Delivery, buffering policy, and filter semantics */
     ZLINK_OPT_IMMEDIATE = 0x3019,
     ZLINK_OPT_CONFLATE = 0x301B,
-    ZLINK_OPT_BLOCKY = 0x301E,
     ZLINK_OPT_INVERT_MATCHING = 0x3020,
     ZLINK_OPT_SUBMIT_RETRY_MODE = 0x3037,
     ZLINK_OPT_SUBMIT_RETRY_TIMEOUT = 0x3038,
