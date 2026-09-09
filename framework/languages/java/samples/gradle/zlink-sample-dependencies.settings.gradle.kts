@@ -8,7 +8,11 @@ val packageMode = providers.gradleProperty("zlink.samples.packageMode")
     .map(String::toBoolean)
     .orElse(frameworkRoot == null)
     .get()
+val frameworkVersion = providers.gradleProperty("zlink.frameworkVersion")
+    .orElse("0.10.0")
+    .get()
 gradle.extensions.extraProperties["zlink.samples.effectivePackageMode"] = packageMode
+gradle.extensions.extraProperties["zlink.samples.frameworkVersion"] = frameworkVersion
 
 if (packageMode && !providers.environmentVariable("ZLINK_JAVA_BINDINGS_SOURCE").orNull.isNullOrBlank()) {
     error("Package mode cannot use ZLINK_JAVA_BINDINGS_SOURCE.")

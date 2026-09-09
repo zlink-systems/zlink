@@ -50,7 +50,8 @@ jobs:
           node_version=$(node -p "require('./framework/languages/node/packages/framework/package.json').version")
           java_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' framework/languages/java/build.gradle.kts | head -n1)
           cpp_version=$(node -p "require('./framework/languages/cpp/vcpkg.json')['version-string']")
-          for declared in "${node_version}" "${java_version}" "${cpp_version}"; do
+          framework_version=$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' FRAMEWORK_VERSION)
+          for declared in "${framework_version}" "${node_version}" "${java_version}" "${cpp_version}"; do
             if [ "${declared}" != "${version}" ]; then
               echo "Framework version mismatch: requested=${version}, declared=${declared}" >&2
               exit 1

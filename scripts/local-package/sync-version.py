@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Synchronize Core and first-party binding package versions."""
+"""Synchronize Core, binding package, and Framework package versions."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -59,6 +60,22 @@ def bindings_version() -> str:
     return version
 
 
+def framework_version() -> str:
+    """Read the independently released Framework package version."""
+    path = REPO_ROOT / "FRAMEWORK_VERSION"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if len(lines) != 1 or not lines[0].startswith("ZLINK_FRAMEWORK_VERSION="):
+        raise SyncError(
+            "FRAMEWORK_VERSION must contain exactly ZLINK_FRAMEWORK_VERSION=X.Y.Z"
+        )
+    key, version = lines[0].split("=", 1)
+    if key != "ZLINK_FRAMEWORK_VERSION" or not re.fullmatch(SEMVER, version):
+        raise SyncError(
+            "FRAMEWORK_VERSION must contain ZLINK_FRAMEWORK_VERSION=X.Y.Z"
+        )
+    return version
+
+
 def file_sha256(relative: str) -> str:
     return hashlib.sha256((REPO_ROOT / relative).read_bytes()).hexdigest()
 
@@ -96,6 +113,225 @@ class Synchronizer:
             return result
 
         self.transform(relative, apply)
+
+
+@dataclass(frozen=True)
+class FrameworkField:
+    """One explicitly owned Framework version field."""
+
+    relative: str
+    field: str
+    pattern: str
+    expected: int = 1
+
+
+def replace_version_group(match: re.Match[str], version: str) -> str:
+    start, end = match.span("version")
+    whole_start = match.start()
+    return (
+        match.group(0)[: start - whole_start]
+        + version
+        + match.group(0)[end - whole_start :]
+    )
+
+
+def node_package_version_pattern(package_name: str) -> str:
+    return (
+        rf'("name"\s*:\s*"{re.escape(package_name)}",\s*\n\s*'
+        rf'"version"\s*:\s*")(?P<version>{SEMVER})(")'
+    )
+
+
+FRAMEWORK_NODE_INTERNAL_NAME = (
+    r"@zlink-systems/(?:framework(?:-codec-(?:msgpack|protobuf)|-locations-redis)?|"
+    r"http-client|nestjs|stream-connector|stream-wire)"
+)
+
+
+def node_internal_dependency_pattern() -> str:
+    return (
+        rf'("{FRAMEWORK_NODE_INTERNAL_NAME}"\s*:\s*"(?:file:[^"]*-)?'
+        rf')(?P<version>{SEMVER})(?=(?:\.tgz)?")'
+    )
+
+
+# This registry is the complete ownership list for FRAMEWORK_VERSION. The
+# patterns identify fields within each listed file; synchronization never scans
+# directories to discover additional targets.
+FRAMEWORK_SCALAR_FIELDS = (
+    FrameworkField(
+        "framework/languages/dotnet/Directory.Build.props",
+        "PropertyGroup/Version default",
+        rf'(<Version Condition="\'\$\(Version\)\' == \'\'">)(?P<version>{SEMVER})(</Version>)',
+    ),
+    FrameworkField(
+        "framework/languages/dotnet/samples/Directory.Build.props",
+        "PropertyGroup/ZLinkSampleFrameworkVersion default",
+        rf"(<ZLinkSampleFrameworkVersion Condition=\"'\$\(ZLinkSampleFrameworkVersion\)' == ''\">)(?P<version>{SEMVER})(</ZLinkSampleFrameworkVersion>)",
+    ),
+    FrameworkField(
+        "framework/languages/dotnet/samples/Directory.Packages.props",
+        "PropertyGroup/ZLinkSampleFrameworkVersion default",
+        rf"(<ZLinkSampleFrameworkVersion Condition=\"'\$\(ZLinkSampleFrameworkVersion\)' == ''\">)(?P<version>{SEMVER})(</ZLinkSampleFrameworkVersion>)",
+    ),
+    FrameworkField(
+        "framework/languages/java/build.gradle.kts",
+        "root project version",
+        rf'(?m)^version = "(?P<version>{SEMVER})"$',
+    ),
+    FrameworkField(
+        "framework/languages/java/samples/gradle/zlink-sample-dependencies.settings.gradle.kts",
+        "zlink.frameworkVersion default",
+        rf'(providers\.gradleProperty\("zlink\.frameworkVersion"\)\s*\.orElse\(")(?P<version>{SEMVER})("\))',
+    ),
+    FrameworkField(
+        "framework/languages/cpp/vcpkg.json",
+        "version-string",
+        rf'("version-string"\s*:\s*")(?P<version>{SEMVER})(")',
+    ),
+    FrameworkField(
+        "framework/languages/cpp/packaging/conan/conandata.yml",
+        "release key and asset URL",
+        rf"(?P<version>{SEMVER})",
+        3,
+    ),
+)
+
+
+# path, package name, internal Framework dependency field count
+FRAMEWORK_NODE_PACKAGE_REGISTRY = (
+    ("framework/languages/node/package.json", "@zlink-systems/node-framework-workspace", 1),
+    ("framework/languages/node/packages/framework/package.json", "@zlink-systems/framework", 1),
+    ("framework/languages/node/packages/framework-codec-msgpack/package.json", "@zlink-systems/framework-codec-msgpack", 3),
+    ("framework/languages/node/packages/framework-codec-protobuf/package.json", "@zlink-systems/framework-codec-protobuf", 3),
+    ("framework/languages/node/packages/framework-locations-redis/package.json", "@zlink-systems/framework-locations-redis", 1),
+    ("framework/languages/node/packages/http-client/package.json", "@zlink-systems/http-client", 1),
+    ("framework/languages/node/packages/nestjs/package.json", "@zlink-systems/nestjs", 2),
+    ("framework/languages/node/packages/stream-connector/package.json", "@zlink-systems/stream-connector", 1),
+    ("framework/languages/node/packages/stream-wire/package.json", "@zlink-systems/stream-wire", 0),
+)
+
+
+# Sample package versions are sample metadata; only these internal dependency
+# fields are owned by FRAMEWORK_VERSION.
+FRAMEWORK_NODE_SAMPLE_REGISTRY = (
+    ("framework/languages/node/samples/Bingo.Ts/package.json", 6),
+    ("framework/languages/node/samples/DeliveryDispatch.Ts/package.json", 4),
+    ("framework/languages/node/samples/GameQuest.Ts/package.json", 4),
+    ("framework/languages/node/samples/ShoppingMall.Ts/package.json", 5),
+    ("framework/languages/node/samples/SupportChat.Ts/package.json", 4),
+    ("framework/languages/node/samples/TicTacToe.Ts/package.json", 4),
+    ("framework/languages/node/samples/ZoneWorld/package.json", 4),
+)
+
+
+# package-lock.json mirrors the root/workspace package versions and internal pins.
+FRAMEWORK_NODE_LOCK_PACKAGE_REGISTRY = (
+    ("@zlink-systems/node-framework-workspace", 2),
+    ("@zlink-systems/framework", 1),
+    ("@zlink-systems/framework-codec-msgpack", 1),
+    ("@zlink-systems/framework-codec-protobuf", 1),
+    ("@zlink-systems/framework-locations-redis", 1),
+    ("@zlink-systems/nestjs", 1),
+    ("@zlink-systems/stream-connector", 1),
+    ("@zlink-systems/stream-wire", 1),
+)
+
+
+FRAMEWORK_CPP_SAMPLE_VCPKG_REGISTRY = (
+    "framework/languages/cpp/samples/Bingo/vcpkg.json",
+    "framework/languages/cpp/samples/DeliveryDispatch/vcpkg.json",
+    "framework/languages/cpp/samples/GameQuest/vcpkg.json",
+    "framework/languages/cpp/samples/ShoppingMall/vcpkg.json",
+    "framework/languages/cpp/samples/SupportChat/vcpkg.json",
+    "framework/languages/cpp/samples/TicTacToe/vcpkg.json",
+    "framework/languages/cpp/samples/ZoneWorld/vcpkg.json",
+)
+
+
+FRAMEWORK_CPP_SAMPLE_CONAN_REGISTRY = (
+    "framework/languages/cpp/samples/Bingo/conanfile.txt",
+    "framework/languages/cpp/samples/DeliveryDispatch/conanfile.txt",
+    "framework/languages/cpp/samples/GameQuest/conanfile.txt",
+    "framework/languages/cpp/samples/ShoppingMall/conanfile.txt",
+    "framework/languages/cpp/samples/SupportChat/conanfile.txt",
+    "framework/languages/cpp/samples/TicTacToe/conanfile.txt",
+    "framework/languages/cpp/samples/ZoneWorld/conanfile.txt",
+)
+
+
+# path, systems.zlink Framework artifact coordinate count
+FRAMEWORK_JAVA_SAMPLE_REGISTRY = (
+    ("framework/languages/java/samples/java/Bingo/Client/build.gradle.kts", 3),
+    ("framework/languages/java/samples/java/Bingo/Server/Api/build.gradle.kts", 5),
+    ("framework/languages/java/samples/java/Bingo/Server/Configuration/build.gradle.kts", 1),
+    ("framework/languages/java/samples/java/Bingo/Server/Matchmaking/build.gradle.kts", 4),
+    ("framework/languages/java/samples/java/Bingo/Server/Play/build.gradle.kts", 5),
+    ("framework/languages/java/samples/java/Bingo/Server/Session/build.gradle.kts", 5),
+    ("framework/languages/java/samples/java/Bingo/Shared/build.gradle.kts", 1),
+    ("framework/languages/java/samples/java/DeliveryDispatch/Client/build.gradle.kts", 3),
+    ("framework/languages/java/samples/java/DeliveryDispatch/Server/Configuration/build.gradle.kts", 2),
+    ("framework/languages/java/samples/java/DeliveryDispatch/Server/CourierSession/build.gradle.kts", 3),
+    ("framework/languages/java/samples/java/DeliveryDispatch/Server/CourierSpotNode/build.gradle.kts", 2),
+    ("framework/languages/java/samples/java/DeliveryDispatch/Server/CustomerGateway/build.gradle.kts", 3),
+    ("framework/languages/java/samples/java/DeliveryDispatch/Server/Dispatch/build.gradle.kts", 2),
+    ("framework/languages/java/samples/java/DeliveryDispatch/Server/Tracking/build.gradle.kts", 2),
+    ("framework/languages/java/samples/java/DeliveryDispatch/Shared/build.gradle.kts", 1),
+    ("framework/languages/java/samples/java/GameQuest/Client/build.gradle.kts", 2),
+    ("framework/languages/java/samples/java/GameQuest/Server/Configuration/build.gradle.kts", 1),
+    ("framework/languages/java/samples/java/GameQuest/Server/GameApi/build.gradle.kts", 3),
+    ("framework/languages/java/samples/java/GameQuest/Server/QuestMission/build.gradle.kts", 2),
+    ("framework/languages/java/samples/java/ShoppingMall/Client/build.gradle.kts", 1),
+    ("framework/languages/java/samples/java/ShoppingMall/Server/CommerceApi/build.gradle.kts", 3),
+    ("framework/languages/java/samples/java/ShoppingMall/Server/Configuration/build.gradle.kts", 1),
+    ("framework/languages/java/samples/java/ShoppingMall/Server/OrderWorkflow/build.gradle.kts", 3),
+    ("framework/languages/java/samples/java/SupportChat/Client/build.gradle.kts", 1),
+    ("framework/languages/java/samples/java/SupportChat/Server/Api/build.gradle.kts", 3),
+    ("framework/languages/java/samples/java/SupportChat/Server/Configuration/build.gradle.kts", 1),
+    ("framework/languages/java/samples/java/SupportChat/Server/Session/build.gradle.kts", 3),
+    ("framework/languages/java/samples/java/SupportChat/Server/Support/build.gradle.kts", 3),
+    ("framework/languages/java/samples/java/SupportChat/Shared/build.gradle.kts", 1),
+    ("framework/languages/java/samples/java/TicTacToe/Client/build.gradle.kts", 3),
+    ("framework/languages/java/samples/java/TicTacToe/Server/build.gradle.kts", 4),
+    ("framework/languages/java/samples/java/ZoneWorld/Client/build.gradle.kts", 1),
+    ("framework/languages/java/samples/java/ZoneWorld/Server/build.gradle.kts", 4),
+    ("framework/languages/java/samples/kotlin/Bingo/Client/build.gradle.kts", 4),
+    ("framework/languages/java/samples/kotlin/Bingo/Server/Api/build.gradle.kts", 5),
+    ("framework/languages/java/samples/kotlin/Bingo/Server/Configuration/build.gradle.kts", 1),
+    ("framework/languages/java/samples/kotlin/Bingo/Server/Matchmaking/build.gradle.kts", 5),
+    ("framework/languages/java/samples/kotlin/Bingo/Server/Play/build.gradle.kts", 5),
+    ("framework/languages/java/samples/kotlin/Bingo/Server/Session/build.gradle.kts", 6),
+    ("framework/languages/java/samples/kotlin/Bingo/Shared/build.gradle.kts", 2),
+    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Client/build.gradle.kts", 3),
+    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Server/Configuration/build.gradle.kts", 2),
+    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Server/CourierSession/build.gradle.kts", 3),
+    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Server/CourierSpotNode/build.gradle.kts", 3),
+    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Server/CustomerGateway/build.gradle.kts", 3),
+    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Server/Dispatch/build.gradle.kts", 3),
+    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Server/Registry/build.gradle.kts", 3),
+    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Server/Tracking/build.gradle.kts", 3),
+    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Shared/build.gradle.kts", 2),
+    ("framework/languages/java/samples/kotlin/GameQuest/Client/build.gradle.kts", 3),
+    ("framework/languages/java/samples/kotlin/GameQuest/Server/Configuration/build.gradle.kts", 1),
+    ("framework/languages/java/samples/kotlin/GameQuest/Server/GameApi/build.gradle.kts", 4),
+    ("framework/languages/java/samples/kotlin/GameQuest/Server/QuestMission/build.gradle.kts", 3),
+    ("framework/languages/java/samples/kotlin/GameQuest/Shared/build.gradle.kts", 1),
+    ("framework/languages/java/samples/kotlin/ShoppingMall/Client/build.gradle.kts", 4),
+    ("framework/languages/java/samples/kotlin/ShoppingMall/Server/CommerceApi/build.gradle.kts", 3),
+    ("framework/languages/java/samples/kotlin/ShoppingMall/Server/Configuration/build.gradle.kts", 2),
+    ("framework/languages/java/samples/kotlin/ShoppingMall/Server/OrderWorkflow/build.gradle.kts", 3),
+    ("framework/languages/java/samples/kotlin/ShoppingMall/Shared/build.gradle.kts", 1),
+    ("framework/languages/java/samples/kotlin/SupportChat/Client/build.gradle.kts", 2),
+    ("framework/languages/java/samples/kotlin/SupportChat/Server/Api/build.gradle.kts", 4),
+    ("framework/languages/java/samples/kotlin/SupportChat/Server/Configuration/build.gradle.kts", 2),
+    ("framework/languages/java/samples/kotlin/SupportChat/Server/Session/build.gradle.kts", 4),
+    ("framework/languages/java/samples/kotlin/SupportChat/Server/Support/build.gradle.kts", 4),
+    ("framework/languages/java/samples/kotlin/SupportChat/Shared/build.gradle.kts", 2),
+    ("framework/languages/java/samples/kotlin/TicTacToe/Client/build.gradle.kts", 4),
+    ("framework/languages/java/samples/kotlin/TicTacToe/Server/build.gradle.kts", 5),
+    ("framework/languages/java/samples/kotlin/ZoneWorld/Client/build.gradle.kts", 2),
+    ("framework/languages/java/samples/kotlin/ZoneWorld/Server/build.gradle.kts", 5),
+)
 
 
 def update_framework_node_dependency(source: str, version: str, expected: int) -> str:
@@ -153,9 +389,97 @@ def update_framework_node_lock(source: str, version: str) -> str:
     return source[:start] + block + source[end:]
 
 
-def synchronize(write: bool) -> tuple[str, str, list[Path]]:
+def synchronize_framework(sync: Synchronizer, version: str) -> None:
+    for field in FRAMEWORK_SCALAR_FIELDS:
+        sync.regex(
+            field.relative,
+            field.pattern,
+            lambda match, version=version: replace_version_group(match, version),
+            field.expected,
+        )
+
+    internal_dependency_pattern = node_internal_dependency_pattern()
+    for relative, package_name, expected_dependencies in FRAMEWORK_NODE_PACKAGE_REGISTRY:
+        sync.regex(
+            relative,
+            node_package_version_pattern(package_name),
+            lambda match, version=version: replace_version_group(match, version),
+            1,
+        )
+        sync.regex(
+            relative,
+            internal_dependency_pattern,
+            lambda match, version=version: replace_version_group(match, version),
+            expected_dependencies,
+        )
+
+    for relative, expected_dependencies in FRAMEWORK_NODE_SAMPLE_REGISTRY:
+        sync.regex(
+            relative,
+            internal_dependency_pattern,
+            lambda match, version=version: replace_version_group(match, version),
+            expected_dependencies,
+        )
+
+    node_lock = "framework/languages/node/package-lock.json"
+    for package_name, expected in FRAMEWORK_NODE_LOCK_PACKAGE_REGISTRY:
+        sync.regex(
+            node_lock,
+            node_package_version_pattern(package_name),
+            lambda match, version=version: replace_version_group(match, version),
+            expected,
+        )
+    sync.regex(
+        node_lock,
+        rf'("node_modules/@zlink-systems/http-client"\s*:\s*{{\s*"version"\s*:\s*")(?P<version>{SEMVER})(")',
+        lambda match, version=version: replace_version_group(match, version),
+        1,
+    )
+    sync.regex(
+        node_lock,
+        internal_dependency_pattern,
+        lambda match, version=version: replace_version_group(match, version),
+        13,
+    )
+    sync.regex(
+        node_lock,
+        rf'("resolved"\s*:\s*"file:[^"]*zlink-systems-http-client-)(?P<version>{SEMVER})(\.tgz")',
+        lambda match, version=version: replace_version_group(match, version),
+        1,
+    )
+
+    java_dependency_pattern = (
+        rf"systems\.zlink:zlink-(?:framework-[^:\"')]+|stream-connector|"
+        rf"http-client(?:-kotlin)?):(?P<version>{SEMVER})"
+    )
+    for relative, expected in FRAMEWORK_JAVA_SAMPLE_REGISTRY:
+        sync.regex(
+            relative,
+            java_dependency_pattern,
+            lambda match, version=version: replace_version_group(match, version),
+            expected,
+        )
+
+    for relative in FRAMEWORK_CPP_SAMPLE_VCPKG_REGISTRY:
+        sync.regex(
+            relative,
+            rf'("version-string"\s*:\s*")(?P<version>{SEMVER})(")',
+            lambda match, version=version: replace_version_group(match, version),
+            1,
+        )
+    for relative in FRAMEWORK_CPP_SAMPLE_CONAN_REGISTRY:
+        sync.regex(
+            relative,
+            rf"(?m)^(zlink-framework/)(?P<version>{SEMVER})$",
+            lambda match, version=version: replace_version_group(match, version),
+            1,
+        )
+
+
+def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
     major, minor, patch, core_version = repository_version()
     binding_version = bindings_version()
+    framework_package_version = framework_version()
     version_path = f"{major}_{minor}_{patch}"
     sync = Synchronizer(write)
 
@@ -501,7 +825,15 @@ def synchronize(write: bool) -> tuple[str, str, list[Path]]:
         rf"\g<1>{binding_version}\2",
         1,
     )
-    return core_version, binding_version, sync.changed
+    framework_sync = Synchronizer(write)
+    synchronize_framework(framework_sync, framework_package_version)
+    return (
+        core_version,
+        binding_version,
+        framework_package_version,
+        sync.changed,
+        framework_sync.changed,
+    )
 
 
 def main() -> int:
@@ -511,23 +843,42 @@ def main() -> int:
     mode.add_argument("--check", action="store_true", help="fail if managed values differ")
     args = parser.parse_args()
     try:
-        core_version, binding_version, changed = synchronize(args.write)
+        (
+            core_version,
+            binding_version,
+            framework_package_version,
+            changed,
+            framework_changed,
+        ) = synchronize(args.write)
     except (OSError, SyncError) as error:
         print(f"version sync failed: {error}", file=sys.stderr)
         return 1
-    if args.check and changed:
-        print(
-            "Core/binding versions must be synchronized "
-            f"(Core={core_version}, bindings={binding_version}):",
-            file=sys.stderr,
-        )
-        for path in changed:
-            print(f"  {path.relative_to(REPO_ROOT)}", file=sys.stderr)
+    if args.check and (changed or framework_changed):
+        if changed:
+            print(
+                "Core/binding versions must be synchronized "
+                f"(Core={core_version}, bindings={binding_version}):",
+                file=sys.stderr,
+            )
+            for path in changed:
+                print(f"  {path.relative_to(REPO_ROOT)}", file=sys.stderr)
+        if framework_changed:
+            print(
+                "Framework versions must be synchronized "
+                f"(Framework={framework_package_version}):",
+                file=sys.stderr,
+            )
+            for path in framework_changed:
+                print(f"  {path.relative_to(REPO_ROOT)}", file=sys.stderr)
         return 1
     action = "synchronized" if args.write else "verified"
     print(
         f"Core {core_version}; binding packages {binding_version} {action} "
         f"({len(changed)} changed file(s))"
+    )
+    print(
+        f"Framework packages {framework_package_version} {action} "
+        f"({len(framework_changed)} changed file(s))"
     )
     return 0
 

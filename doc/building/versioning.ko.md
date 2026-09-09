@@ -11,7 +11,7 @@
 | --- | --- | --- | --- |
 | Core (`core/`) | `MAJOR.MINOR` | `VERSION` (`LIBZLINK_VERSION`) | `MAJOR.MINOR.0` |
 | Bindings (C++·Node·Java·.NET, 그리고 Python·Go·Rust) | `CORE_MAJOR.CORE_MINOR.N` | `BINDINGS_VERSION` | 그대로 |
-| Framework (C++·Node·JVM·.NET) | `MAJOR.MINOR.HOTFIX` | `FRAMEWORK_VERSION` (예정; 지금은 언어별 매니페스트) | 그대로 |
+| Framework (C++·Node·JVM·.NET) | `MAJOR.MINOR.HOTFIX` | `FRAMEWORK_VERSION` (`ZLINK_FRAMEWORK_VERSION`) | 그대로 |
 
 - **Core는 두 자리다.** 세 번째 자리를 쓰지 않는다. Core의 어떤 수정이든(버그 수정 포함) `MINOR`를
   올린다. npm·NuGet·Maven은 세 자리 semver를 요구하므로 게시할 때는 `.0`을 붙인다.
@@ -47,8 +47,8 @@
 
 - Core: `VERSION`만 수정한다.
 - Binding: `BINDINGS_VERSION`만 수정한다.
-- Framework: `FRAMEWORK_VERSION`(도입 예정)만 수정한다. 도입 전에는 .NET `Directory.Build.props`,
-  Node 패키지 8개, Java `build.gradle.kts`를 함께 맞춘다.
+- Framework: `FRAMEWORK_VERSION`만 수정한다. `sync-version.py --write`가 .NET props, Node 패키지·샘플·lockfile,
+  Java·Kotlin build 파일, C++ vcpkg·Conan 매니페스트의 107개 파일을 맞춘다(registry는 스크립트 안에 명시).
 - 그 뒤 `python3 scripts/local-package/sync-version.py --write`가 매니페스트·pin·헤더·스냅샷을
   한 번에 맞추고, `scripts/local-package/build-wsl.sh --verify-versions`로 누락을 확인한다.
   개별 파일을 손으로 찾아 고치지 않는다.

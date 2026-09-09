@@ -11,7 +11,7 @@ other documents only link here. Decided on 2026-09-09.
 | --- | --- | --- | --- |
 | Core (`core/`) | `MAJOR.MINOR` | `VERSION` (`LIBZLINK_VERSION`) | `MAJOR.MINOR.0` |
 | Bindings (C++, Node, Java, .NET; also Python, Go, Rust) | `CORE_MAJOR.CORE_MINOR.N` | `BINDINGS_VERSION` | as is |
-| Framework (C++, Node, JVM, .NET) | `MAJOR.MINOR.HOTFIX` | `FRAMEWORK_VERSION` (planned; per-language manifests today) | as is |
+| Framework (C++, Node, JVM, .NET) | `MAJOR.MINOR.HOTFIX` | `FRAMEWORK_VERSION` (`ZLINK_FRAMEWORK_VERSION`) | as is |
 
 - **Core has two components.** The third is never used. Any Core change, bug fixes included, bumps
   `MINOR`. npm, NuGet, and Maven require three-part semver, so `.0` is appended when publishing.
@@ -49,8 +49,8 @@ is the safer path. The full procedure is in [the release pipeline](./release-pip
 
 - Core: edit `VERSION` only.
 - Bindings: edit `BINDINGS_VERSION` only.
-- Framework: edit `FRAMEWORK_VERSION` (planned) only; until it exists, update .NET
-  `Directory.Build.props`, the eight Node packages, and Java `build.gradle.kts` together.
+- Framework: edit `FRAMEWORK_VERSION` only; `sync-version.py --write` aligns the 107 files (.NET props, Node
+  packages, samples and lockfile, Java/Kotlin build files, C++ vcpkg/Conan manifests) listed in the script's registry.
 - Then `python3 scripts/local-package/sync-version.py --write` aligns manifests, pins, headers, and
   snapshots at once, and `scripts/local-package/build-wsl.sh --verify-versions` checks for missing
   pins. Never hunt for pins by hand.

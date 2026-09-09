@@ -2,7 +2,8 @@
 
 이 디렉터리는 외부 registry에 publish하지 않고 Core release와 first-party
 binding을 package하는 경로다. Core version은 root `VERSION`, binding package
-version은 root `BINDINGS_VERSION`이 각각 소유한다. 기본 동작은 GitHub의
+version은 root `BINDINGS_VERSION`, Framework package version은 root
+`FRAMEWORK_VERSION`이 각각 소유한다. 기본 동작은 GitHub의
 `core/v<VERSION>` release asset을 다운로드하고 checksum과 provenance를 확인한
 뒤 binding이 사용할 Core prefix를 만드는 것이다. 기본 출력은
 `.artifacts/wsl/` 아래에 생성된다.
@@ -10,22 +11,26 @@ version은 root `BINDINGS_VERSION`이 각각 소유한다. 기본 동작은 GitH
 ## 버전 동기화
 
 root `VERSION`은 Core release·public header·native payload version의 유일한
-원본이고, root `BINDINGS_VERSION`은 first-party binding package release version의
-유일한 원본이다. package manager manifest와 Framework binding dependency pin은
-`BINDINGS_VERSION`을, Core prefix·provenance·versioned runtime은 `VERSION`을
-따른다. 다음 공식 진입점으로 동기화하고 검증한다.
+원본이고, root `BINDINGS_VERSION`은 first-party binding package release version,
+root `FRAMEWORK_VERSION`은 Framework package release version의 유일한 원본이다.
+package manager manifest와 Framework binding dependency pin은 `BINDINGS_VERSION`을,
+Core prefix·provenance·versioned runtime은 `VERSION`을, Framework manifest와 sample
+dependency pin은 `FRAMEWORK_VERSION`을 따른다. 다음 공식 진입점으로 동기화하고
+검증한다.
 
-Core release 또는 binding package release version을 변경할 때는 해당 root version
-파일만 수정한 뒤 `--sync-versions`를 실행한다. 언어별 manifest, Framework
-dependency와 sample runner의 local Core package 경로를 직접 찾아서 수정하지 않는다. 동기화 뒤에는
-`--verify-versions`로 누락된 pin이 없는지 확인하고 local package를 생성한다.
+Core, binding package 또는 Framework package release version을 변경할 때는 해당
+root version 파일만 수정한 뒤 `--sync-versions`를 실행한다. 언어별 manifest,
+Framework dependency, sample pin과 sample runner의 local Core package 경로를 직접
+찾아서 수정하지 않는다. 동기화 뒤에는 `--verify-versions`로 누락된 pin이 없는지
+확인하고 local package를 생성한다.
 
 ```bash
 scripts/local-package/build-wsl.sh --sync-versions
 scripts/local-package/build-wsl.sh --verify-versions
 ```
 
-일반 local-package build도 package 작업 전에 같은 sync와 verify를 실행한다. Framework package 자체 version은 이 동기화 대상이 아니다.
+일반 local-package build도 package 작업 전에 같은 sync와 verify를 실행한다.
+Framework package 자체 version과 언어별 sample pin도 같은 동기화 대상이다.
 
 ## 전체 빌드
 

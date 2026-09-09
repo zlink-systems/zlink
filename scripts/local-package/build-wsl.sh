@@ -21,8 +21,8 @@ is a prerequisite. There is no local-core bypass.
 
 Options:
   --core-version VERSION       Core release version (default: VERSION)
-  --sync-versions              Sync managed Core/binding values and exit
-  --verify-versions            Verify managed Core/binding values and exit
+  --sync-versions              Sync managed Core/binding/Framework values and exit
+  --verify-versions            Verify managed Core/binding/Framework values and exit
 EOF
 }
 
