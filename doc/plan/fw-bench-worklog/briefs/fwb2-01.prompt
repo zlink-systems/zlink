@@ -1,0 +1,38 @@
+# fwb2-01 — messaging bench 위치 통합: framework/bench/grpc/ (계획 S-1)
+
+저장소 /home/hep7/project/zlink, branch main. 한국어로 보고. 감독자(Claude)가 diff를 검토하고 커밋한다.
+계획: `doc/plan/framework-bench-with-grpc-s2s-plan.ko.md` §2.1(구조)·§8 S-1. 규격: `framework/doc/framework/common/bench/with-grpc-local.ko.md`(읽기만).
+금지: git commit/push; `doc/**`·`framework/doc/**`·`.github/**` 수정(규격·계획·문서 이동은 감독자가 S0에서 한다 — 이 job은 코드·runner·집계기·proto·로그 디렉터리만); 측정 조건 변경; Core·bindings 런타임 소스 수정; `rm -rf`·`git clean`·`git stash`·`git checkout --`·`git restore`; 앵커 없는 `pkill -f`. **벤치 실행(smoke 포함)은 반드시 티켓으로** `bash scripts/perf/perf-ticket.sh submit -p 2 -o sol-fwb2-01 -d "<설명>" -- <명령>`(완료 대기; 직접 실행 금지). 빌드는 티켓 밖에서 해도 되지만 load average 10 미만일 때 한 번에 하나. 임시 산출물은 `/tmp/zlink-sol-fwb2-01/`. 다른 job이 `framework/languages/cpp/CMakeLists.txt`·`bindings/cpp/**`·`vcpkg/ports/**`·`framework/languages/dotnet/**`(bench 제외)·`scripts/local-package/**`를 고치고 있으니 건드리지 않는다.
+
+## 목표
+언어별로 흩어진 bench를 한 곳으로 옮기고, 새 위치에서 각 언어가 빌드되며 1셀 smoke가 통과하게 한다. 이번 job은 **이동과 경로 수정만** 한다. server-driven 모델(A/B, HTTP trigger)로의 개정은 다음 job(S1~S3)이다.
+
+## 현재 → 목표
+| 현재 | 목표 |
+| --- | --- |
+| `framework/languages/dotnet/bench/with-grpc/` (tracked 파일만; bin/obj/log 산출물 제외) | `framework/bench/grpc/dotnet/` |
+| `framework/languages/node/bench/with-grpc/` (node_modules·log 제외) | `framework/bench/grpc/node/` |
+| `framework/languages/java/bench/with-grpc/` (build·log 제외; kotlin-client 포함) | `framework/bench/grpc/java/` |
+| `framework/languages/cpp/bench/with-grpc/` (build·log 제외) | `framework/bench/grpc/cpp/` |
+| `bindings/c/bench/with_grpc/` + `bindings/c/bench/BENCH_POLICY.md` | `framework/bench/grpc/c/` (정책 문장 유지) |
+| `framework/bench/tools/` (집계기, 테스트 28개, fixtures 유지) | `framework/bench/grpc/tools/` |
+| 언어별 `proto/`·`Shared`의 `bench.proto` 복제본 | `framework/bench/grpc/proto/bench.proto` 하나 + 각 언어 build가 그 경로를 참조 |
+| 언어별 `log/` | `framework/bench/grpc/log/<lang>/` (빈 디렉터리 `.gitkeep`, `.gitignore`로 원본은 커밋 제외) |
+
+- `git mv`로 옮긴다(이력 보존). 이동 뒤 각 언어 build 정의(csproj·`package.json`·`build.gradle.kts`/`settings.gradle.kts`·CMake)가 framework 소스·binding 로컬 패키지·Core prefix를 참조하는 상대 경로를 새 위치에 맞게 고친다. 샘플과 같은 원칙으로 bench는 framework 기본 빌드·sln·workspace·CI에 포함하지 않는다(현재 포함 여부를 확인하고 포함돼 있으면 뺀다).
+- `run_local.sh`(각 언어)와 집계기 `bench_aggregate.py --runs-glob` 기본 경로, `framework/bench/grpc/tools/README.ko.md`의 경로를 새 위치로 고친다(README는 tools 아래이므로 수정 가능).
+- 참조 grep: `grep -rn 'bench/with-grpc\|bench/with_grpc\|framework/bench/tools' --include=*.sh --include=*.py --include=*.json --include=*.kts --include=*.csproj --include=*.txt --include=*.cmake --include=*.mjs --include=*.js --include=*.md . | grep -v node_modules` 로 남은 참조를 모두 찾고, 문서(`doc/**`, `framework/doc/**`)의 참조는 목록으로 보고서에 적는다(감독자가 고친다).
+
+## 검증
+| 언어 | 명령 | 조건 |
+| --- | --- | --- |
+| dotnet | `dotnet build framework/bench/grpc/dotnet/WithGrpcBench.sln -c Release` | `ZLINK_LOCAL_PACKAGE_ROOT=/home/hep7/project/zlink/.artifacts/wsl` |
+| node | `cd framework/bench/grpc/node && npm ci && npm run build`(스크립트 이름은 현재 package.json 기준) | binding 0.17.6 |
+| java | `cd framework/bench/grpc/java && ./gradlew --no-daemon --max-workers=1 assemble` | |
+| cpp | `cmake -S framework/bench/grpc/cpp -B /tmp/zlink-sol-fwb2-01/cpp -G Ninja -DCMAKE_BUILD_TYPE=Release` + build | 로컬 prefix는 `.artifacts/wsl/install/zlink-{core,cpp}/0.17.3`(현재 이 머신 값; 버전 인자는 기존 CMake 옵션 관례대로) |
+| c | 기존 C bench 빌드 방식 그대로 | Core prefix `/home/hep7/.cache/zlink/core/0.17.5/linux-x64` |
+| 집계기 | `python3 -m pytest framework/bench/grpc/tools/tests -q` 또는 기존 테스트 실행 방식 | 28개 통과 |
+| smoke | 언어당 `request-serial @1024` 1셀, `DURATION_SECONDS=2`(smoke는 측정이 아니므로 짧게; 규격 조건 변경이 아니라 runner의 기존 환경 변수 사용) — **티켓으로** | rc=0, RESULT 라인 출력 |
+
+## 보고
+`doc/plan/fw-bench-worklog/fwb2-01-summary.md`: 이동 표(원→목표), 경로 수정 파일 목록, 남은 문서 참조 목록(감독자용), 검증 표(명령·rc·소요·티켓 이름), 새 구조에서 framework 기본 빌드에 bench가 포함되지 않음을 확인한 방법, BLOCKERS.

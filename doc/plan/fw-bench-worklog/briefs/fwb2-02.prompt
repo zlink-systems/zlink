@@ -1,0 +1,23 @@
+# fwb2-02 — 공용 집계기의 S2S(server-driven) 셀 스키마와 A/B 병합 (계획 S1)
+
+저장소 /home/hep7/project/zlink, branch main(HEAD 22c8dfe08d 이후). 한국어로 보고. 감독자(Claude)가 diff를 검토하고 커밋한다.
+계획: `doc/plan/framework-bench-with-grpc-s2s-plan.ko.md` §2·§4(집계기 행)·§6·§8 S1. 규격: `framework/bench/grpc/README.ko.md` §4(출력 형식과 새 필드 role·trigger·streams·target_stats), §5(단위 KOPS·KMSG/s, Source/Target 열), §7(해석), §9(포트), §10(server-driven 모델). 규격·계획·문서(`doc/**`, `framework/doc/**`, `framework/bench/grpc/README*`, `framework/bench/grpc/doc/**`)는 읽기만 한다. `framework/bench/grpc/tools/README.ko.md`는 tools 소유이므로 수정 가능.
+금지: git commit/push; `.github/**`; 측정·판정 조건(G5, §7.2 비율 기준) 완화; 언어 runner 수정(다른 job이 `framework/bench/grpc/dotnet/**`을 고치고 있으니 건드리지 않는다); `rm -rf`·`git clean`·`git stash`·`git checkout --`·`git restore`; 앵커 없는 `pkill -f`. 임시 산출물은 `/tmp/zlink-sol-fwb2-02/`. 자격 증명은 어디에도 쓰지 않는다.
+
+## 목표
+`framework/bench/grpc/tools/`(bench_aggregate.py, benchagg/, tests/)가 server-driven 셀 원본을 읽어 규격 §4 표와 RESULT 라인, 판정을 만들게 한다. 기존 client-driven 원본(C 기준 bench, 1차 fixture)도 계속 읽어야 한다(한 집계기, 두 입력 형식).
+
+## 할 일
+1. 셀 원본 스키마: 규격 §4의 추가 필드(`role`=source|target, `trigger`{runId,cellId,pattern,payloadBytes,durationMs,warmup,receivedAt}, `streams`{count,inFlightPerStream}, `target_stats`{received,errors,drainMs})를 reader가 읽고, A(source)와 B(target) 원본이 따로 있으면 runId·cellId로 한 셀로 병합한다. 병합 규칙과 누락 시 판정(예: target 원본 없음 → 셀 `incomplete`)을 코드와 tools/README에 적는다. 스키마의 정본은 규격 §4이며 다르게 필요하면 구현하지 말고 보고한다.
+2. 표: `client_*`→`Source CPU/Mem`, `server_*`→`Target CPU/Mem` 머리(규격 §5). 단위는 request 계열 `KOPS`, `send-saturation` `KMSG/s`, 값은 5초 active 평균(3-run 중앙값)과 p95/p99. 기존 단위 자동 판별(bandwidth로 배율 역산)은 유지.
+3. §7.1 동반 정보 출력에 stream 수·stream당 in-flight·trigger endpoint를 추가한다.
+4. 언어별 문서용 표 생성: `--format doc-table`(이름은 기존 `--format` 관례에 맞춰) 로 계획 §5-5·§6-2가 요구하는 언어 × 패턴 × payload 표를 Markdown으로 낸다. 문서는 쓰지 않고 표만 stdout/파일로 낸다.
+5. 테스트: 기존 50개 유지 + server-driven fixture(합성; A/B 원본 쌍, target 누락, client-driven 혼합)로 새 경로를 덮는다. `python3 -m unittest discover -s framework/bench/grpc/tools/tests -p 'test_*.py'`.
+
+## 검증
+- unittest 전체 통과(기존 50 + 신규), `python3 -m py_compile`, `git diff --check`.
+- 1차 fixture(`tools/tests/fixtures/`)로 기존 출력이 바뀌지 않음을 회귀로 확인(값·표 동일).
+- 새 fixture로 `--format spec4|result|judgement|doc-table` 각각 예시 출력을 보고서에 싣는다.
+
+## 보고
+`doc/plan/fw-bench-worklog/fwb2-02-summary.md`: 스키마·병합 규칙(파일:줄), 변경 파일과 diff 요지, 수정 전/후 규칙 수, 검증 표(명령·rc), 예시 출력, BLOCKERS. 감독자가 재검증할 명령을 그대로 적는다.

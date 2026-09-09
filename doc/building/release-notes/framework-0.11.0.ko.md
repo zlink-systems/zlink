@@ -17,8 +17,8 @@ Framework 0.11.0은 C++·.NET·Java·Node.js에서 ZLink binding 0.17.6(Core 0.1
 - .NET: ClientServer client의 admission `hello` request가 timeout(Core result 101)으로 끝나도
   terminal로 고정하지 않고 같은 physical generation/attempt fence 안에서 다음 `hello`를 재시작한다.
   느린 머신에서 1초 timeout 한 번이 connection intent를 영구 not-ready로 만들던 결함이다.
-- Java: ClientServer client의 admission `hello` timeout 뒤 같은 physical connection에서 다음
-  `hello`를 재시작한다(.NET과 같은 수정). manual/local 경로는 timeout을 transport 종료로,
+- Java·Node.js: ClientServer client의 admission `hello` timeout 뒤 같은 physical connection에서
+  다음 `hello`를 재시작한다(.NET과 같은 수정). manual/local 경로는 timeout을 transport 종료로,
   location 경로는 connection 제거로 처리하던 결함이다.
 - .NET: remote relay multipart prefix의 만료를 append 시점에도 monotonic clock으로 판정해 만료된
   prefix에 늦은 part가 결합되던 결함과, 이전 session request timeout이 replacement correlation을
@@ -74,7 +74,5 @@ prefix를 `CMAKE_PREFIX_PATH`에 함께 준다.
 
 ## 배포 전 확인
 
-- Node.js ClientServer admission timeout 뒤 재시작(진행 중) 결과를 반영한다. Java는 반영했고
-  C++는 이미 재시작한다.
 - macOS Node 계약 테스트의 hang 조사(진행 중) 결과를 반영한다. macOS .NET 타이밍 테스트는 반영했다.
 - `FRAMEWORK_VERSION`을 0.11.0으로 올리고 `sync-version.py --write`를 실행한다.

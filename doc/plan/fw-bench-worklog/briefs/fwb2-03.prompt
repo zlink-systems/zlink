@@ -1,0 +1,26 @@
+# fwb2-03 — .NET bench runner를 server-driven(A/B + HTTP trigger) 모델로 개정 (계획 S1)
+
+저장소 /home/hep7/project/zlink, branch main(HEAD 22c8dfe08d 이후). 한국어로 보고. 감독자(Claude)가 diff를 검토하고 커밋한다.
+계획: `doc/plan/framework-bench-with-grpc-s2s-plan.ko.md` §3(측정 모델)·§4(.NET 행)·§8 S1. 규격: `framework/bench/grpc/README.ko.md` §3(실행 조건), §4(출력·새 필드), §6(payload header), §9(포트 대역 — dotnet 5200-5219), §10(역할·trigger 계약·logical stream·셀 순서). 공통 perf 규격 `framework/doc/framework/common/perf/README.ko.md` §4.2·§5.1·§16(trigger/admin/stats 계약). 규격·계획·문서(`doc/**`, `framework/doc/**`, `framework/bench/grpc/README*`, `framework/bench/grpc/doc/**`)는 읽기만 한다. `framework/bench/grpc/dotnet/README.ko.md`는 감독자가 §5 형식으로 다시 쓰므로 수정하지 않는다(문서에 들어갈 표·값은 보고서에 제출).
+금지: git commit/push; `.github/**`; 측정 조건(payload 1024·4096, warmup, 5초 active, request_window 100, send concurrency 8, timeout) 변경; Core·bindings·framework 런타임 소스 수정(`framework/languages/dotnet/src/**` 등 — 결함이면 보고); 집계기 `framework/bench/grpc/tools/**` 수정(다른 job fwb2-02가 고치고 있다); `rm -rf`·`git clean`·`git stash`·`git checkout --`·`git restore`; 앵커 없는 `pkill -f`. **벤치 실행(smoke 포함)은 반드시 티켓으로** `bash scripts/perf/perf-ticket.sh submit -p 2 -o sol-fwb2-03 -d "<설명>" -- <명령>`(완료 대기; 직접 실행 금지). 빌드는 티켓 밖에서 load average 10 미만일 때 한 번에 하나. 임시 산출물은 `/tmp/zlink-sol-fwb2-03/`. 자격 증명은 어디에도 쓰지 않는다.
+
+## 목표
+`framework/bench/grpc/dotnet/`의 client-driven bench(Client + GrpcServer/ZLinkServer/ZLinkRawServer)를 규격 §10의 server-driven 모델로 바꾼다. 세 구현(`grpc-dotnet`, `zlink-dotnet`, `zlink-framework-dotnet`) 각각에 **source process A**(HTTP trigger listener + stats + B로 향하는 client + logical stream 부하)와 **target process B**(echo/count + stats)가 있고, `run_local.sh`가 규격 §10.4의 셀 순서(B→A→warmup trigger→active trigger→settle→원본 병합→종료, 셀마다 새 process 쌍)로 돌린다.
+
+## 설계 지침
+- A의 trigger/stats/admin은 canonical perf runner의 `framework/languages/dotnet/perf/ZLink.Framework.Perf.ServerSupport`를 **복제하지 말고 참조**한다(계획 §4). 참조가 어렵다면 그 이유와 최소 공유 위치 제안을 보고서에 적고, 복제는 하지 않는다.
+- 기존 Client의 부하 생성·계측(패턴 3종, payload header §6, 깊이·drain 계측, `[bench]` 라인, 원본 JSON)을 A 안으로 옮긴다. 측정 구간은 "A의 outbound call 직전부터 완료까지"(request) / B의 header 기반 수신 latency(send).
+- logical stream: `request-serial`=1×1, `request-window`=stream들이 window 100을 나눔(기본 1×100), `request-backpressure`=1×무제한, `send-saturation`=8×1(§10.3). stream 구현 방식(Task 등)은 원본 JSON `streams`에 기록.
+- 원본 JSON에 §4의 `role`·`trigger`·`streams`를 넣고, runner가 settle 뒤 B의 stats를 `target_stats`로 병합한다(집계기 스키마는 fwb2-02가 같은 규격 §4를 읽으므로 필드 이름을 정확히 §4대로).
+- 포트: §9 dotnet 대역(grpc A 5200/5201, B 5202/5203; raw A 5205/5206, B 5207/5208/5209; framework A 5212/5213, B 5214/5215). runner는 시작 전 대역이 비어 있는지 확인하고 사용 중이면 중단한다.
+- gRPC B는 기존 GrpcServer, A는 unary stub을 stream 수만큼. 언어 기본 server 구성 유지·기록(§8.2).
+- 기존 환경 변수(`PAYLOAD_SIZES`, `DURATION_SECONDS`, `WARMUP`, `SKIP_BUILD`, `OUTPUT`, `--scenario`, `--implementation`)는 유지한다.
+
+## 검증
+- `ZLINK_LOCAL_PACKAGE_ROOT=/home/hep7/project/zlink/.artifacts/wsl dotnet build framework/bench/grpc/dotnet/WithGrpcBench.sln -c Release` rc=0 (binding은 published 0.17.6, framework는 저장소 소스 참조 — 현재 csproj 관례 유지).
+- smoke(티켓): 세 구현 × `request-serial@1024` 1셀, `DURATION_SECONDS=2 WARMUP=100`. 그리고 `zlink-dotnet` × `send-saturation@1024`, `zlink-framework-dotnet` × `request-window@1024` 1셀씩. 각 rc=0, RESULT 라인, 원본 JSON에 role/trigger/streams/target_stats 존재, B stats의 수신 수와 A의 완료 수 일치(request) 확인.
+- 3-run 측정은 이 job에서 하지 않는다(집계기 fwb2-02 뒤 감독자가 티켓으로 낸다).
+- `bash -n run_local.sh`, `git diff --check`.
+
+## 보고
+`doc/plan/fw-bench-worklog/fwb2-03-summary.md`: 프로세스 구성 표(A/B/포트/모듈), ServerSupport 참조 방식, 변경 파일과 diff 요지, 수정 전/후 규칙 수, smoke 검증 표(티켓 이름·rc·RESULT), 언어별 문서(계획 §5 절 1~6)에 들어갈 표와 값(runner 명령·환경 변수 표·warmup·gRPC 구성·런타임 버전·결과 파일 구성), 발견한 런타임 결함(있으면 파일:줄), BLOCKERS. 감독자가 재검증할 명령을 그대로 적는다.
