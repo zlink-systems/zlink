@@ -52,7 +52,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             _completions,
             applicationJobQueue);
         _node.SetCompletionHandlerCore(
-            (record, parts) => _completions.Complete(record, parts));
+            (record, parts) => _completions.TryComplete(record, parts));
         _messageFollowIngress = new ActorMessageFollowIngressAdapter(_pump);
         _node.SetActorMessageFollowIngressTarget(_messageFollowIngress);
     }

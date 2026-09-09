@@ -728,7 +728,7 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
     IMeshNodeMonitor OpenMonitor(MeshMonitorEventMask events = MeshMonitorEventMask.All);
     void SetReadyHandler(Func<MeshReadyDomains, MeshReadyDomains> handler);
     void SetCompletionHandler(
-        Action<MeshReceiveRecord, IReadOnlyList<Message>> handler) { }
+        Func<MeshReceiveRecord, IReadOnlyList<Message>, bool> handler) { }
     bool DrainReady(MeshReadyDomains domains, MeshReadyBatch batch, RecvFlags flags = RecvFlags.None);
     ISpot CreateSpot();
     ISpot EntrySpot();

@@ -1182,7 +1182,7 @@ public sealed class ServiceRuntimeFoundationTests
         var rid = RoutingId.From("direct-completion");
         node.SetRoutingId(rid);
         var table = new ZLinkMeshCompletionTable();
-        node.SetCompletionHandlerCore(table.Complete);
+        node.SetCompletionHandlerCore(table.TryComplete);
         using var payload = Message.From(new byte[] { 1 });
         Assert.Equal(SubmitResult.Ok,
             node.RequestToNode(rid, [payload], out var operationId, TimeSpan.FromSeconds(3)));

@@ -136,7 +136,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private Task? _receiveLoop;
     private Task? _disposeTask;
     private Func<MeshReadyDomains, MeshReadyDomains>? _readyHandler;
-    private Action<MeshReceiveRecord, IReadOnlyList<Message>>?
+    private Func<MeshReceiveRecord, IReadOnlyList<Message>, bool>?
         _completionHandler;
     private IUserSpotOperationTarget? _userSpotOperationTarget;
     private IActorCreateOperationTarget? _actorCreateOperationTarget;
@@ -1956,11 +1956,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     }
 
     void IMeshNode.SetCompletionHandler(
-        Action<MeshReceiveRecord, IReadOnlyList<Message>> handler) =>
+        Func<MeshReceiveRecord, IReadOnlyList<Message>, bool> handler) =>
         SetCompletionHandlerCore(handler);
 
     internal void SetCompletionHandlerCore(
-        Action<MeshReceiveRecord, IReadOnlyList<Message>> handler)
+        Func<MeshReceiveRecord, IReadOnlyList<Message>, bool> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
         Volatile.Write(ref _completionHandler, handler);
@@ -10470,17 +10470,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             failure,
             kindData);
         var terminal = Volatile.Read(ref _completionHandler);
-        if (terminal is not null)
+        if (terminal is null || !terminal(completionRecord, parts))
         {
-            // A registered table owns the terminal and its dispatcher slot.
-            // Transfer directly from this completion context, without a host
-            // mailbox or application worker between it and the dispatcher.
-            terminal(completionRecord, parts);
-        }
-        else
-        {
-            // Standalone raw-service users consume diagnostic completions via
-            // the pull API instead of installing a Framework completion table.
+            // Registered Framework operations transfer directly from this
+            // context to their reserved dispatcher slot. Raw-service operations
+            // have no table entry and keep the diagnostic pull contract.
             var queued = new QueuedRecord(completionRecord, parts,
                 GetApplicationPayloadBytes(completionRecord, parts));
             if (TryEnqueueInfrastructureCompletion(queued))
