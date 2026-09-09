@@ -16,6 +16,7 @@ import { runWithApplicationJobPermit } from '../application-jobs/application-job
 const MESH_DISPATCH_TIMER_YIELD_BATCHES = 16;
 const MESH_DISPATCH_TIMER_YIELD_INTERVAL_MS = 2;
 const MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET = 4;
+const MESH_DISPATCH_RECEIVE_CAPACITY = 64;
 // Captured while the runtime module is loaded, before any application owner
 // exists. A ready callback may run inside a Spot turn; the shared Mesh pump
 // must enter like an independent receive-loop task, without inheriting that
@@ -191,9 +192,6 @@ export class ZLinkMeshDispatchPump {
         ? (this.options.readyCapacity ?? 32)
         : Math.min(this.options.readyCapacity ?? 32, claimBudget);
     const readyBatch = this.node.createReadyBatch(readyCapacity);
-    // One record per claim receive keeps one ordinary-ingress permit paired
-    // with exactly one dispatch turn. Terminal completion claims bypass it.
-    const receiveBatch = this.node.createReceiveBatch(1, this.options.partCapacity ?? 256);
     let receiveBatchesSinceTimerYield = 0;
     let timerYieldStartedAtMs = this.nowMs();
     let claimsDrained = 0;
@@ -215,10 +213,16 @@ export class ZLinkMeshDispatchPump {
         for (let index = 0; index < drained.records.length; index += 1) {
           const claim = readyBatch.takeClaim(index);
           claimsDrained += 1;
+          const owner = drained.records[index];
+          // Raw ingress already attached one host permit to each record.
+          // A claim that reserves admission here may receive only that permit's record.
+          const receiveBatch = this.node.createReceiveBatch(
+            owner.ordinaryIngressPreAdmitted === true ? MESH_DISPATCH_RECEIVE_CAPACITY : 1,
+            this.options.partCapacity ?? 256
+          );
           try {
             receiveBatch.reset();
             for (;;) {
-              const owner = drained.records[index];
               const claimPermit = owner.terminalCompletion === true
                 || owner.ordinaryIngressPreAdmitted === true
                 || domain === ReadyDomain.Infrastructure
@@ -236,13 +240,13 @@ export class ZLinkMeshDispatchPump {
               if (received.records.length === 0) {
                 claimPermit?.releaseAfterInternalProcessing();
               }
-              for (const record of received.records) {
-                const permit = record.applicationJobPermit ?? claimPermit;
-                if (owner.ordinaryIngressPreAdmitted === true && permit === undefined) {
-                  record.releaseRetainedIngress?.();
-                  throw new Error('Pre-admitted raw ingress record lost its Application Job Queue permit.');
-                }
-                try {
+              try {
+                for (const record of received.records) {
+                  if (this.disposed) break;
+                  const permit = record.applicationJobPermit ?? claimPermit;
+                  if (owner.ordinaryIngressPreAdmitted === true && permit === undefined) {
+                    throw new Error('Pre-admitted raw ingress record lost its Application Job Queue permit.');
+                  }
                   // A handler may synchronously submit an operation whose
                   // control/completion is owned by this same MeshNode (e.g. a
                   // native Completion record fed back through this node's own
@@ -283,10 +287,16 @@ export class ZLinkMeshDispatchPump {
                     ) permit.markApplicationQueued();
                     await runWithApplicationJobPermit(permit, dispatch);
                   }
-                } finally {
-                  for (const part of record.parts) {
-                    part.close();
+                  if (this.nowMs() - timerYieldStartedAtMs >= MESH_DISPATCH_TIMER_YIELD_INTERVAL_MS) {
+                    await yieldToEventLoop();
+                    timerYieldStartedAtMs = this.nowMs();
                   }
+                }
+              } finally {
+                // Batch ownership includes records whose dispatch never began,
+                // including on failure or shutdown in the middle of the batch.
+                for (const record of received.records) {
+                  for (const part of record.parts) part.close();
                   record.releaseRetainedIngress?.();
                 }
               }
@@ -305,6 +315,7 @@ export class ZLinkMeshDispatchPump {
               receiveBatch.reset();
             }
           } finally {
+            receiveBatch.close();
             claim.release();
           }
         }
@@ -316,7 +327,6 @@ export class ZLinkMeshDispatchPump {
         }
       }
     } finally {
-      receiveBatch.close();
       readyBatch.close();
     }
   }
