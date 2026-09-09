@@ -111,6 +111,7 @@ test('two in-process ClientServer nodes deliver a delayed reply to an awaited cl
   try {
     await server.start();
     await clientRuntime.start();
+    await waitForClientServerTargets(clientRuntime.clientServerRuntime, 'delayed', 1);
     const reply = await client.requestToChannel('delayed', typedPacket('Ping', { value: 'delayed' }))
       .timeout(1_000)
       .submit();
