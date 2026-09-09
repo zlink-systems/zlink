@@ -64,9 +64,62 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  prepare-dotnet-binding:
+    name: prepare-dotnet-binding
+    runs-on: ubuntu-24.04
+    outputs:
+      binding_version: ${{ steps.versions.outputs.binding_version }}
+      artifact_name: ${{ steps.versions.outputs.artifact_name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Pack the public .NET binding contract
+        id: versions
+        shell: bash
+        run: |
+          binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/dotnet/VERSION)
+          core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
+          test -n "${binding_version}" || { echo "::error::binding version is missing" >&2; exit 1; }
+          test -n "${core_version}" || { echo "::error::Core version is missing" >&2; exit 1; }
+          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
+            --version "${core_version}" \
+            --platform linux-x64 \
+            --cache-dir .artifacts/core-release)
+          package_root="${RUNNER_TEMP}/zlink-dotnet-binding"
+          mkdir -p "${package_root}"
+          dotnet pack bindings/dotnet/src/Zlink/Zlink.csproj \
+            -c Release \
+            -o "${package_root}" \
+            "-p:ZLinkCoreVersion=${core_version}" \
+            "-p:ZLinkCoreSource=local" \
+            "-p:ZLinkLinuxX64NativeRoot=${core_prefix}/lib" \
+            "-p:ZLinkCoreProvenancePath=${core_prefix}/share/zlink/core-package-provenance.json"
+          test -s "${package_root}/Zlink.${binding_version}.nupkg" || {
+            echo "::error::binding package was not created" >&2
+            exit 1
+          }
+          artifact_name="zlink-dotnet-binding-${binding_version}"
+          echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
+          echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload the binding package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.versions.outputs.artifact_name }}
+          path: ${{ runner.temp }}/zlink-dotnet-binding/Zlink.*.nupkg
+          if-no-files-found: error
+
   framework-dotnet:
     name: ${{ matrix.target.name }}
     runs-on: ${{ matrix.target.runner }}
+    needs:
+      - prepare-dotnet-binding
     strategy:
       fail-fast: false
       matrix:
@@ -110,6 +163,12 @@ jobs:
         with:
           node-version: 20
 
+      - name: Download the prepared .NET binding package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.prepare-dotnet-binding.outputs.artifact_name }}
+          path: ${{ runner.temp }}/zlink-local-packages/nuget
+
       - name: Prepare local dependency packages
         shell: bash
         run: |
@@ -124,33 +183,13 @@ jobs:
             echo "::error::Zlink binding version not found in bindings/dotnet/VERSION" >&2
             exit 1
           fi
-          core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
-          case "${RUNNER_OS}" in
-            Windows) package_core_platform=windows-x64 ;;
-            *) package_core_platform=linux-x64 ;;
-          esac
-          package_core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
-            --version "${core_version}" \
-            --platform "${package_core_platform}" \
-            --cache-dir .artifacts/core-release)
-          if [ "${RUNNER_OS}" = "Windows" ]; then
-            package_core_prefix=$(cygpath -w "${package_core_prefix}")
-          fi
-          pack_args=(
-            pack bindings/dotnet/src/Zlink/Zlink.csproj
-            -c Release
-            -o "${nuget_source}"
-            "-p:ZLinkCoreVersion=${core_version}"
-            "-p:ZLinkCoreSource=local"
-            "-p:ZLinkCoreProvenancePath=${package_core_prefix}/share/zlink/core-package-provenance.json"
-          )
-          case "${package_core_platform}" in
-            windows-*) pack_args+=("-p:ZLinkWindowsX64NativeRoot=${package_core_prefix}/bin") ;;
-            *) pack_args+=("-p:ZLinkLinuxX64NativeRoot=${package_core_prefix}/lib") ;;
-          esac
-          dotnet "${pack_args[@]}"
+          binding_artifact="${{ needs.prepare-dotnet-binding.outputs.artifact_name }}"
+          test -n "${binding_artifact}" || {
+            echo "::error::binding artifact name is missing" >&2
+            exit 1
+          }
           test -s "${nuget_source}/Zlink.${binding_version}.nupkg" \
-            || { echo "::error::Local Zlink ${binding_version} package was not created" >&2; exit 1; }
+            || { echo "::error::Downloaded Zlink ${binding_version} package is missing" >&2; exit 1; }
           dotnet pack framework/languages/dotnet/src/Zlink.HttpClient/Zlink.HttpClient.csproj -c Release -o "${nuget_source}"
           echo "ZLINK_LOCAL_PACKAGE_ROOT=${package_root}" >> "${GITHUB_ENV}"
           echo "ZLinkLocalPackageRoot=${package_root}" >> "${GITHUB_ENV}"
