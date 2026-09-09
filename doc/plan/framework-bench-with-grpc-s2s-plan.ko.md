@@ -23,6 +23,8 @@
 | Node framework 행 | codec `bytes` 미지원은 제품(framework Node codec) 결함이다. 수정 전까지 `unsupported`로 기록하고 codec 수정은 별도 작업 |
 | 보고서 | 새 공개 보고서를 쓰고 README와 zlink.systems에서 참조한다. 1차 결과는 병기하지 않는다 |
 | 버전 | 공개된 framework 0.10.0 + binding 0.17.6으로 시작하고, framework 0.11.0이 나오면 그 버전으로 다시 잰다 |
+| 1차 결과의 취급 | 1차(2026-09-07)는 binding 결함(.NET 깊이 8·Node 정지·Java reply 유실)이 window 셀을 무효로 만든 상태의 기록이다. 비교 보고서에 쓰지 않고 `fw-bench-worklog/`에 그대로 둔다 |
+| 측정 시점 | 위치 통합·규격 개정·runner 개정(S-1~S3)은 지금 하고, **실제 3-run 측정은 B 서버의 binding 완료 전달 수정이 main에 들어온 뒤** 한 번에 한다(두 번 재는 낭비 방지) |
 | 위치 | 언어별 `framework/languages/<lang>/bench/with-grpc/`에 흩어진 bench를 **`framework/bench/grpc/` 한 곳**으로 모은다. 문서·집계기·로그도 함께(§2.1) |
 
 ### 0.2 측정 모델의 해석
@@ -173,6 +175,12 @@ request·command endpoint가 분리되어 다섯), 언어당 세 구현이므로
 중이면 옮기지 않고 중단한다(현재 규격 §9와 같은 규칙).
 
 ### 3.2 측정 구간과 집계
+
+1차와 형식이 달라지는 점을 먼저 적는다. (1) 부하 위치가 client process에서 server A로 옮겨지고
+측정 구간이 A의 outbound call 기준이 된다. (2) 셀 결과에 A·B 두 process의 원본이 들어가므로
+`RESULT` 라인과 셀 JSON 스키마가 바뀌고 집계기를 그에 맞춘다. 1차 원본과 같은 표에 넣지 않는다.
+(3) 공개 보고서의 중심은 비율 판정식이 아니라 gRPC/raw/framework의 직접 비교 표다(§6).
+바뀌지 않는 것은 패턴 4종, payload 2크기, window 100, ROUTER↔ROUTER, 29바이트 header, 3-run·G5다.
 
 - 측정 operation은 **A의 outbound call 직전부터 완료(reply 수신 또는 send 완료 통지)까지**다.
   HTTP trigger 왕복은 세지 않는다(7축 규격 §4.2와 동일).
