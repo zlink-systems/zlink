@@ -249,6 +249,7 @@ contract first, then select a language implementation.
 | Goal | Document |
 |---|---|
 | Understand the documentation structure | [Documentation index](./doc/README.md) |
+| Contribution and operations rules (build, test, gates, release procedure) | [Contributor handbook](./CONTRIBUTING.md) |
 | Learn the Core API | [Core user guide](./core/doc/guide/01-overview.en.md) |
 | Read the formal Core contract | [Core specification](./core/doc/spec/README.en.md) |
 | Use a language Binding | [Bindings guide](./bindings/doc/guide/README.en.md) |
