@@ -929,8 +929,11 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 - Single 상태: `측정 완료(2026-09-09)` — 6 transport × 7 pattern, 42셀 complete(실패 0). 통과 23 / 미달 19.
   미달은 대부분 inproc·ipc(§2.1에 Java local-transport 예외가 없어 일반 목표로 판정; memory-copy
   상한 대비 목표가 높음 — 2단계에서 Java용 예외 필요성 검토)와 req/reply. 2단계 개선 대상.
-- Multi 상태: `미측정`
-- 다음 작업: Java Multi paired 측정(원샷).
+- Multi 상태: `측정 완료(2026-09-09, 원샷, harness 수정본)` — 4 transport × 7 pattern, clients=100,
+  실패 0. 통과 2 / 미달 26. Java multi 비율은 대체로 40~92%로 목표(simple 90 / routed 85 /
+  echo·reqrep 70)에 크게 미달(특히 routed req/reply 40~57%) — 2단계 개선 대상. C baseline은
+  이 job의 C multi report(harness 수정 후, 실패 0)를 사용했고, node부터는 이 C 0.17.5 baseline을
+  재사용해 바인딩만 측정한다.
 
 #### 9.3.1 Single suite
 
@@ -983,34 +986,34 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 64.4% | 66.2% | 69.6% | 64.3% | 40.4% | 38.2% | 미달 57.2%/lat0.29× · c0175-java-multi |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 63.8% | 53.2% | 48.8% | 34.4% | 51.1% | 61.6% | 미달 52.1%/lat292.61× · c0175-java-multi |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 44.0% | 50.0% | 56.0% | 56.2% | 17.1% | 21.1% | 미달 40.7%/lat1.02× · c0175-java-multi |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 62.2% | 95.2% | 96.3% | 42.3% | 52.9% | 65.5% | 미달 69.1%/lat3.92× · c0175-java-multi |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 65.0% | 52.3% | 53.4% | 55.2% | 16.0% | 20.2% | 미달 43.7%/lat1.21× · c0175-java-multi |
+| `tcp` | `MULTI_PUBSUB` | 57.3% | 67.1% | 71.8% | 81.4% | 120.5% | 156.1% | 통과 92.4%/lat0.93× · c0175-java-multi |
+| `tcp` | `MULTI_STREAM` | 62.0% | 77.9% | 82.5% | 해당 없음 | 104.1% | 해당 없음 | 미달 81.6%/lat1.25× · c0175-java-multi |
+| `ws` | `MULTI_DEALER_DEALER` | 84.7% | 74.8% | 72.3% | 110.0% | 48.0% | 42.9% | 미달 72.1%/lat0.24× · c0175-java-multi |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 51.7% | 56.6% | 60.5% | 63.8% | 100.1% | 160.7% | 미달 82.2%/lat16.96× · c0175-java-multi |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 51.9% | 47.0% | 51.9% | 81.4% | 20.9% | 19.8% | 미달 45.5%/lat3.25× · c0175-java-multi |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 101.1% | 66.3% | 57.2% | 13.0% | 58.4% | 70.8% | 미달 61.1%/lat3.92× · c0175-java-multi |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 47.7% | 51.2% | 70.8% | 100.7% | 34.0% | 35.6% | 미달 56.7%/lat2.12× · c0175-java-multi |
+| `ws` | `MULTI_PUBSUB` | 64.0% | 63.8% | 69.2% | 69.6% | 136.2% | 114.0% | 미달 86.1%/lat0.90× · c0175-java-multi |
+| `ws` | `MULTI_STREAM` | 86.7% | 77.8% | 73.1% | 해당 없음 | 85.8% | 해당 없음 | 미달 80.8%/lat1.23× · c0175-java-multi |
+| `wss` | `MULTI_DEALER_DEALER` | 59.9% | 64.5% | 78.4% | 55.1% | 58.4% | 73.6% | 미달 65.0%/lat0.29× · c0175-java-multi |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 87.6% | 100.2% | 103.8% | 76.4% | 56.2% | 49.4% | 통과 78.9%/lat1.31× · c0175-java-multi |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 38.2% | 37.8% | 57.3% | 82.5% | 36.0% | 58.4% | 미달 51.7%/lat1.95× · c0175-java-multi |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 63.8% | 63.2% | 70.8% | 99.2% | 49.3% | 36.4% | 미달 63.8%/lat1.35× · c0175-java-multi |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 38.0% | 42.0% | 53.9% | 82.1% | 33.0% | 43.3% | 미달 48.7%/lat1.60× · c0175-java-multi |
+| `wss` | `MULTI_PUBSUB` | 39.2% | 49.6% | 58.3% | 75.7% | 81.6% | 88.9% | 미달 65.5%/lat1.04× · c0175-java-multi |
+| `wss` | `MULTI_STREAM` | 59.8% | 70.0% | 67.1% | 해당 없음 | 80.5% | 해당 없음 | 미달 69.3%/lat1.46× · c0175-java-multi |
+| `tls` | `MULTI_DEALER_DEALER` | 66.3% | 79.9% | 101.1% | 50.0% | 69.5% | 56.6% | 미달 70.6%/lat0.44× · c0175-java-multi |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 72.6% | 69.2% | 66.5% | 47.0% | 46.6% | 46.7% | 미달 58.1%/lat7.31× · c0175-java-multi |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 46.7% | 53.8% | 53.2% | 93.9% | 27.3% | 37.7% | 미달 52.1%/lat0.80× · c0175-java-multi |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 42.6% | 51.4% | 63.6% | 104.1% | 48.5% | 70.3% | 미달 63.4%/lat1.83× · c0175-java-multi |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 45.9% | 41.8% | 44.0% | 48.7% | 25.9% | 38.5% | 미달 40.8%/lat0.83× · c0175-java-multi |
+| `tls` | `MULTI_PUBSUB` | 64.8% | 54.9% | 77.6% | 92.9% | 102.2% | 106.4% | 미달 83.1%/lat1.01× · c0175-java-multi |
+| `tls` | `MULTI_STREAM` | 52.6% | 58.4% | 59.8% | 해당 없음 | 72.7% | 해당 없음 | 미달 60.9%/lat1.69× · c0175-java-multi |
 
 ### 9.4 Node
 
