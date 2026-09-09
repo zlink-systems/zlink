@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+import { constants } from 'node:os';
 import { requireNative } from '../native/native';
 import { RecvFlags, SendFlags } from '../../contracts/sockets/socket_constants';
 import {
@@ -18,7 +19,7 @@ export function readErrno(): number {
 }
 
 export function isWouldBlock(errno = readErrno()): boolean {
-  return errno === 11;
+  return errno === constants.errno.EAGAIN;
 }
 
 export function nativeErrorMessage(error: unknown, fallbackMessage: string): string {

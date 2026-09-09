@@ -2,6 +2,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { constants } from 'node:os';
 
 const { CompletionOwner } = require('../../dist/zlink/runtime/messaging/completion_owner');
 const { SubmitResult } = require('../../dist/zlink/contracts/errors/errors');
@@ -28,12 +29,12 @@ for (const kind of ['send', 'request']) {
       submissions += 1;
       if (submissions === 1) {
         completions.push(writable(101n, token));
-        return { result: SubmitResult.Backpressured, nativeErrno: 11, completionId: 101n };
+        return { result: SubmitResult.Backpressured, nativeErrno: constants.errno.EAGAIN, completionId: 101n };
       }
       order.push(`resubmit-${submissions - 1}`);
       if (submissions === 2) {
         completions.push(writable(103n, token));
-        return { result: SubmitResult.Backpressured, nativeErrno: 11, completionId: 103n };
+        return { result: SubmitResult.Backpressured, nativeErrno: constants.errno.EAGAIN, completionId: 103n };
       }
       assert.equal(submissions, 3);
       if (kind === 'request') completions.push(reply(104n, token, 'retried'));
@@ -102,7 +103,7 @@ test('WRITABLE returned by the existing sync native bridge also waits for the ow
     socketSubmitSend: (_handle: unknown, _parts: unknown, _target: unknown, _flags: number, token: bigint) => {
       if (sendToken === 0n) {
         sendToken = token;
-        return { result: SubmitResult.Backpressured, nativeErrno: 11, completionId: 301n };
+        return { result: SubmitResult.Backpressured, nativeErrno: constants.errno.EAGAIN, completionId: 301n };
       }
       order.push('resubmit');
       return { result: SubmitResult.Ok, nativeErrno: 0, completionId: 0n };

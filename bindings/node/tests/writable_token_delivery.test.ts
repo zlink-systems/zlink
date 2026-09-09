@@ -2,6 +2,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { constants } from 'node:os';
 
 const { CompletionOwner } = require('../../dist/zlink/runtime/messaging/completion_owner');
 const { SubmitResult } = require('../../dist/zlink/contracts/errors/errors');
@@ -25,7 +26,7 @@ for (const kind of ['send', 'request']) {
             },
             sendResult: 0, terminalErrno: 0, requestResult: 0,
           });
-          return { result: SubmitResult.Backpressured, nativeErrno: 11, completionId: 71n };
+          return { result: SubmitResult.Backpressured, nativeErrno: constants.errno.EAGAIN, completionId: 71n };
         }
         assert.equal(submissions, 2, 'one WRITABLE authorizes one resubmission');
         if (kind === 'request') {
