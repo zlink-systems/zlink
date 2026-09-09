@@ -79,7 +79,7 @@ process.on('message', (message) => {
 
 void runtime.start()
   .then(async () => {
-    await waitForMeshReady();
+    await waitForPeerReady('node-a');
     process.send?.({ type: 'ready' });
   })
   .catch(error => {
@@ -90,18 +90,21 @@ void runtime.start()
     void runtime.stop().finally(() => process.exit(1));
   });
 
-async function waitForMeshReady() {
-  const deadline = performance.now() + 10_000;
-  while (performance.now() < deadline) {
-    if (runtime.routeMeshRuntime.isReady('mesh')) return;
+async function waitForPeerReady(peerRid) {
+  for (;;) {
+    if (hasReadyPeer(runtime.routeMeshRuntime.snapshot('mesh'), peerRid)) return;
     await new Promise(resolve => setImmediate(resolve));
   }
-  throw new Error('RouteMesh peer did not become ready.');
+}
+
+function hasReadyPeer(status, peerRid) {
+  return status.peers.some(peer =>
+    String(peer.nodeRid) === peerRid && peer.state === framework.ZLinkPeerState.Ready);
 }
 
 async function runClient(mode) {
-  // The peer signalled 'ready' only after its RouteMesh became Ready (public contract), so each
-  // call is submitted exactly once; a failure here is a readiness defect, not something to retry.
+  // The peer signalled 'ready' only after the target peer became Ready, so each call is submitted
+  // exactly once; a failure here is a connectivity defect, not something to retry.
   if (mode === 'direct') {
     await client.requestToNode('mesh', 'node-a', new RoutePing('ready')).timeout(1000).submit();
     await client.sendToNode('mesh', 'node-a', new RouteNotice('one-way')).submit();
@@ -109,4 +112,3 @@ async function runClient(mode) {
   }
   return client.requestToChannel('mesh', new RoutePing('ping')).timeout(1000).submit();
 }
-

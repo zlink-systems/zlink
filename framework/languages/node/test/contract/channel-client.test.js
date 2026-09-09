@@ -3720,6 +3720,7 @@ test('ZLinkModule route channel dispatches inbound routed handlers after bootstr
   try {
     await runtime.start();
     remote = await startRouteMeshPeer('client-direct', remoteEndpoint, endpoint);
+    await waitForRouteMeshPeerReady(runtime, 'mesh', 'node-b');
     remote.send({ type: 'run', mode: 'direct' });
     const reply = (await remote.next('result')).result;
     assert.deepEqual(reply, { value: 'pong' });
@@ -3777,6 +3778,7 @@ test('ZLinkModule routeMesh channel option dispatches inbound routed handlers af
   try {
     await runtime.start();
     remote = await startRouteMeshPeer('client-channel', remoteEndpoint, endpoint);
+    await waitForRouteMeshPeerReady(runtime, 'mesh', 'node-b');
     remote.send({ type: 'run', mode: 'channel' });
     const reply = (await remote.next('result')).result;
     assert.deepEqual(reply, { value: 'pong' });
@@ -4630,6 +4632,15 @@ async function startRouteMeshPeer(mode, bind, peer) {
       await once(child, 'exit');
     }
   };
+}
+
+async function waitForRouteMeshPeerReady(runtime, meshName, peerRid) {
+  for (;;) {
+    const status = runtime.routeMeshRuntime.snapshot(meshName);
+    if (status.peers.some(peer =>
+      String(peer.nodeRid) === peerRid && peer.state === framework.ZLinkPeerState.Ready)) return;
+    await new Promise(resolve => setImmediate(resolve));
+  }
 }
 
 async function submitWhenReachable(submit) {
