@@ -59,6 +59,11 @@ public sealed class MessagingHotPathWireTests
         var encoded = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart([header, body]);
 
         Assert.Equal(ReferenceMultipartFrame(headerBytes, payload), encoded);
+        using var native = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage([header, body]);
+        Assert.Equal(encoded, native.ToArray());
+        Assert.True(ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(native, out var view));
+        Assert.Equal(headerBytes, view.GetSpan(0).ToArray());
+        Assert.Equal(payload, view.GetSpan(1).ToArray());
         Assert.True(ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(encoded, out var decoded));
         try
         {

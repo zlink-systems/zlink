@@ -114,6 +114,32 @@ public sealed class MeshMailboxReadinessTests
         Assert.Equal(1, Drain(node));
     }
 
+    [Fact]
+    public async Task OneClaimDrains64RecordsAndLeavesTheNextRecordQueued()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "batch");
+        var rid = RoutingId.From("batch-owner");
+        node.SetRoutingId(rid);
+        node.Start();
+        using var payload = Message.From(new byte[] { 48 });
+        for (var index = 0; index < 65; index++)
+            Assert.Equal(SubmitResult.Ok, node.SendToNode(rid, [payload]));
+
+        using var ready = new MeshReadyBatch();
+        node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+        Assert.Equal(1, ready.Count);
+        using var claim = ready.TakeClaim(0);
+        using var received = new MeshReceiveBatch();
+        Assert.True(claim.Receive(received, RecvFlags.DontWait));
+        Assert.Equal(64, received.Count);
+        received.Reset();
+        Assert.True(claim.Receive(received, RecvFlags.DontWait));
+        Assert.Equal(1, received.Count);
+        received.Reset();
+        Assert.False(claim.Receive(received, RecvFlags.DontWait));
+    }
+
     private static ZLinkMeshQueuedRecord NewRecord(IDisposable? payloadOwner = null) =>
         new(MeshReceiveRecord.CompletionFailure(default, RequestResult.Ok), [],
             applicationPayloadBytes: 0, payloadOwner: payloadOwner);
