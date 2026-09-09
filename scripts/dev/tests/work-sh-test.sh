@@ -2,14 +2,14 @@
 
 set -euo pipefail
 
-TEST_ROOT=/tmp/zlink-sol-work-sh/work-sh-test.$$
+TEST_ROOT=/tmp/zlink-sol-work-sh-cache/work-sh-test.$$
 SOURCE_ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 WORK_SH="$SOURCE_ROOT/scripts/dev/work.sh"
 PASS=0
 export TEST_ROOT WORK_SH
 
 cleanup() {
-    [[ "$TEST_ROOT" == /tmp/zlink-sol-work-sh/work-sh-test.* ]] && rm -rf -- "$TEST_ROOT"
+    [[ "$TEST_ROOT" == /tmp/zlink-sol-work-sh-cache/work-sh-test.* ]] && rm -rf -- "$TEST_ROOT"
 }
 trap cleanup EXIT
 
@@ -201,7 +201,17 @@ make_repository() {
     git -C "$TEST_ROOT/seed" config user.name tester
     git -C "$TEST_ROOT/seed" config user.email tester@example.test
     printf 'fixture\n' >"$TEST_ROOT/seed/README"
-    git -C "$TEST_ROOT/seed" add README
+    mkdir -p "$TEST_ROOT/seed/scripts/local-package" "$TEST_ROOT/seed/scripts/dev"
+    printf 'current_milestone=1.0\n' >"$TEST_ROOT/seed/scripts/dev/work.conf"
+    cat >"$TEST_ROOT/seed/scripts/local-package/build-wsl.sh" <<'BUILD'
+#!/usr/bin/env bash
+set -euo pipefail
+root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+mkdir -p "$root/.artifacts/wsl/nuget"
+printf 'prepared\n' >"$root/.artifacts/wsl/nuget/binding.fixture"
+BUILD
+    printf '.artifacts/\n' >"$TEST_ROOT/seed/.gitignore"
+    git -C "$TEST_ROOT/seed" add README scripts .gitignore
     git -C "$TEST_ROOT/seed" commit -m 'seed: initial fixture' >/dev/null
     git -C "$TEST_ROOT/seed" remote add origin "$TEST_ROOT/remote.git"
     git -C "$TEST_ROOT/seed" push origin main >/dev/null
@@ -252,14 +262,17 @@ assert_success '신규 Issue start 실패' bash -c "cd '$TEST_ROOT/repo' && $(de
 [[ "$(cat "$TEST_ROOT/gh-state/created-number")" == 21 ]] || fail '신규 Issue 번호가 기록되지 않음'
 WT21="$TEST_ROOT/home/project/zlink-21-dev-test-automation"
 [[ -d "$WT21" ]] || fail '신규 worktree가 만들어지지 않음'
-[[ -L "$WT21/.artifacts/wsl" ]] || fail '임시 패키지 symlink가 만들어지지 않음'
-pass 'start가 신규 Issue·브랜치·worktree·패키지 링크를 만든다'
+[[ -d "$WT21/.artifacts/wsl" && ! -L "$WT21/.artifacts/wsl" ]] || fail '패키지 루트가 독립 디렉터리가 아님'
+[[ -f "$WT21/.artifacts/wsl/nuget/binding.fixture" ]] || fail '패키지 준비 스크립트가 실행되지 않음'
+assert_file_contains "$TEST_ROOT/gh-state/calls.log" '^issue edit 21 --milestone 1.0 '
+pass 'start가 신규 Issue·브랜치·worktree·패키지를 준비하고 기본 milestone을 설정한다'
 
 create_calls_before=$(grep -c '^issue create ' "$TEST_ROOT/gh-state/calls.log")
 assert_success 'start --issue 재실행 실패' bash -c "cd '$TEST_ROOT/repo' && $(declare -f work); work start --issue 21"
 create_calls_after=$(grep -c '^issue create ' "$TEST_ROOT/gh-state/calls.log")
 [[ "$create_calls_before" -eq "$create_calls_after" ]] || fail '재실행에서 Issue가 중복 생성됨'
 assert_file_contains "$TEST_ROOT/last.out" 'worktree 재사용'
+[[ $(grep -c '^issue edit 21 --milestone 1.0 ' "$TEST_ROOT/gh-state/calls.log") -eq 1 ]] || fail '같은 milestone을 중복 설정함'
 pass 'start --issue 재실행이 기존 Issue와 worktree를 재사용한다'
 
 assert_failure 'Issue body 빈 항목 거부 실패' 2 bash -c "cd '$TEST_ROOT/repo' && $(declare -f work); work start 'bad body' --area ci --kind chore --body '$TEST_ROOT/bad-issue.md'"
@@ -316,7 +329,9 @@ pass 'done의 Refs 분기가 Issue·브랜치·worktree를 유지한다'
 
 printf 'close cleanup fixture' >"$TEST_ROOT/gh-state/issue-22-title"
 assert_success 'Closes fixture start 실패' bash -c "cd '$TEST_ROOT/repo' && $(declare -f work); work start --issue 22 --no-packages"
+assert_file_contains "$TEST_ROOT/gh-state/calls.log" '^issue edit 22 --milestone 1.0 '
 WT22="$TEST_ROOT/home/project/zlink-22-close-cleanup-fixture"
+[[ ! -e "$WT22/.artifacts/wsl" ]] || fail '--no-packages가 패키지를 준비함'
 printf 'close\n' >"$WT22/close.txt"
 git -C "$WT22" add close.txt
 git -C "$WT22" commit -m 'dev: close fixture' >/dev/null
@@ -371,5 +386,22 @@ tail -n "+$((calls_before + 1))" "$TEST_ROOT/gh-state/calls.log" >"$TEST_ROOT/dr
 assert_file_not_contains "$TEST_ROOT/dry-run-calls.log" '^(issue create|issue edit|project item-add|project item-edit|pr create|pr edit|pr merge) '
 assert_file_contains "$TEST_ROOT/last.out" '^\[dry-run\] git fetch origin'
 pass '--dry-run이 gh·git·worktree 상태를 바꾸지 않는다'
+
+assert_file_not_contains "$TEST_ROOT/gh-state/calls.log" '^issue edit 24 '
+assert_success '명시 milestone 실패' bash -c "cd '$TEST_ROOT/repo' && $(declare -f work); work start 'explicit milestone' --area ci --kind chore --body '$TEST_ROOT/issue.md' --milestone 2.0 --no-packages"
+assert_file_contains "$TEST_ROOT/gh-state/calls.log" '--milestone 2.0 '
+pass '명시 milestone이 기본값보다 우선한다'
+
+rm "$TEST_ROOT/repo/scripts/dev/work.conf"
+calls_before=$(wc -l <"$TEST_ROOT/gh-state/calls.log")
+assert_success '설정 없는 start 실패' bash -c "cd '$TEST_ROOT/repo' && $(declare -f work); work start 'no milestone' --area ci --kind chore --body '$TEST_ROOT/issue.md' --no-packages"
+tail -n "+$((calls_before + 1))" "$TEST_ROOT/gh-state/calls.log" >"$TEST_ROOT/no-conf-calls.log"
+assert_file_not_contains "$TEST_ROOT/no-conf-calls.log" '--milestone'
+pass 'work.conf가 없으면 milestone을 설정하지 않는다'
+
+assert_success '패키지 dry-run 실패' bash -c "cd '$TEST_ROOT/repo' && $(declare -f work); work --dry-run start --issue 24"
+assert_file_contains "$TEST_ROOT/last.out" '^\[dry-run\] bash .*scripts/local-package/build-wsl.sh'
+[[ ! -e "$TEST_ROOT/home/project/zlink-24-dry-run-fixture" ]] || fail '패키지 dry-run이 디렉터리를 만듦'
+pass '패키지 dry-run은 빌드 명령만 출력한다'
 
 printf '1..%d\n' "$PASS"
