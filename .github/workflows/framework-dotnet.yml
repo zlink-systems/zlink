@@ -113,9 +113,9 @@ jobs:
       - name: Prepare local dependency packages
         shell: bash
         run: |
-          # The framework consumes the released binding package surface. The
-          # The binding package version is owned by bindings/dotnet/VERSION;
-          # the HttpClient package is packed from this checkout.
+          # The framework consumes the public binding package contract. During
+          # pre-release CI the package is packed from this checkout against the
+          # verified Core release instead of waiting for nuget.org publication.
           package_root="${RUNNER_TEMP}/zlink-local-packages"
           nuget_source="${package_root}/nuget"
           mkdir -p "${nuget_source}"
@@ -124,17 +124,26 @@ jobs:
             echo "::error::Zlink binding version not found in bindings/dotnet/VERSION" >&2
             exit 1
           fi
-          # nuget.org lists a freshly pushed package only after validation (minutes).
-          url="https://api.nuget.org/v3-flatcontainer/zlink/${binding_version}/zlink.${binding_version}.nupkg"
-          for attempt in $(seq 1 45); do
-            if curl -sSfL -o "${nuget_source}/Zlink.${binding_version}.nupkg" "${url}"; then
-              break
-            fi
-            echo "attempt ${attempt}: Zlink ${binding_version} not on nuget.org yet; waiting 60s"
-            sleep 60
-          done
+          core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
+          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
+            --version "${core_version}" \
+            --platform "${{ matrix.target.core_platform }}" \
+            --cache-dir .artifacts/core-release)
+          pack_args=(
+            pack bindings/dotnet/src/Zlink/Zlink.csproj
+            -c Release
+            -o "${nuget_source}"
+            "-p:ZLinkCoreVersion=${core_version}"
+            "-p:ZLinkCoreSource=local"
+            "-p:ZLinkCoreProvenancePath=${core_prefix}/share/zlink/core-package-provenance.json"
+          )
+          case "${{ matrix.target.core_platform }}" in
+            windows-*) pack_args+=("-p:ZLinkWindowsX64NativeRoot=${core_prefix}/bin") ;;
+            *) pack_args+=("-p:ZLinkLinuxX64NativeRoot=${core_prefix}/lib") ;;
+          esac
+          dotnet "${pack_args[@]}"
           test -s "${nuget_source}/Zlink.${binding_version}.nupkg" \
-            || { echo "::error::Zlink ${binding_version} is not available on nuget.org after 45 minutes" >&2; exit 1; }
+            || { echo "::error::Local Zlink ${binding_version} package was not created" >&2; exit 1; }
           dotnet pack framework/languages/dotnet/src/Zlink.HttpClient/Zlink.HttpClient.csproj -c Release -o "${nuget_source}"
           echo "ZLINK_LOCAL_PACKAGE_ROOT=${package_root}" >> "${GITHUB_ENV}"
           echo "ZLinkLocalPackageRoot=${package_root}" >> "${GITHUB_ENV}"
