@@ -146,6 +146,38 @@ final class ZLinkServiceM6AWireCodecTest {
     }
 
     @Test
+    void frameworkMultipartPreservesPreOptimizationWireBytes() {
+        // Independent fixed-layout oracle, including the complete application
+        // frame. Keep this independent of the production Writer and decoder.
+        for (int size : new int[] {0, 1, 1024, 4096}) {
+            byte[] body = new byte[size];
+            for (int index = 0; index < size; index++) {
+                body[index] = (byte) (index * 31 + 7);
+            }
+            byte[] header = hex("007fff80ff");
+            var multipart = java.nio.ByteBuffer.allocate(4 + 4 + header.length + 4 + size);
+            multipart.putInt(2).putInt(header.length).put(header).putInt(size).put(body);
+            byte[] packet = "ZLinkFrameworkMultipart".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] content = "application/x-zlink-multipart".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            int length = 1 + packet.length + 1 + content.length + 4 + multipart.capacity();
+            var frame = java.nio.ByteBuffer.allocate(5 + length);
+            frame.put((byte) 1).putInt(length)
+                .put((byte) packet.length).put(packet)
+                .put((byte) content.length).put(content)
+                .putInt(multipart.capacity()).put(multipart.array());
+            try (Message first = Message.from(header);
+                 Message second = Message.from(body)) {
+                var encoded = codec.encodeFrameworkMultipart(List.of(first, second));
+                assertArrayEquals(multipart.array(), encoded.payload(), "payload size " + size);
+                assertArrayEquals(frame.array(), codec.encodeApplicationPayload(encoded),
+                    "complete frame size " + size);
+                assertArrayEquals(header, first.toByteArray());
+                assertArrayEquals(body, second.toByteArray());
+            }
+        }
+    }
+
+    @Test
     void frameworkMultipartMatchesCanonicalProfileFixture() {
         try (Message first = Message.from(new byte[] {1, 2});
              Message second = Message.from(new byte[] {(byte) 0xaa, (byte) 0xbb,
