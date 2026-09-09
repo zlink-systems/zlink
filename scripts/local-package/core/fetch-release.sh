@@ -3,6 +3,10 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
+# Git Bash on Windows reports D:/... paths; tar treats "D:" as a remote host.
+if command -v cygpath >/dev/null 2>&1; then
+  repo_root="$(cygpath -u "$repo_root")"
+fi
 repo_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
 version="${ZLINK_CORE_RELEASE_VERSION:-$repo_version}"
 cache_root="${ZLINK_CORE_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/zlink/core}"
@@ -83,7 +87,9 @@ if [[ "$cache_root" != /* ]]; then
 fi
 # GNU realpath -m is not available on macOS; python3 is on every GitHub runner.
 normalize_path() {
-  if realpath -m / >/dev/null 2>&1; then
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$(realpath -m "$1")"
+  elif realpath -m / >/dev/null 2>&1; then
     realpath -m "$1"
   else
     python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$1"

@@ -54,10 +54,6 @@ jobs:
             runner: ubuntu-24.04-arm
             rid: linux-arm64
             core_platform: linux-arm64
-          - name: osx-x64
-            runner: macos-15-intel
-            rid: osx-x64
-            core_platform: macos-x64
           - name: osx-arm64
             runner: macos-15
             rid: osx-arm64
@@ -143,22 +139,22 @@ jobs:
         run: dotnet build ${{ env.FRAMEWORK_SOLUTION }} -c Release --no-restore
 
       - name: Run framework unit tests (Debug, net8.0)
-        run: dotnet test ${{ env.FRAMEWORK_UNIT_TESTS }} -c Debug -f net8.0 --no-build
+        run: bash scripts/ci/dotnet-test-retry.sh ${{ env.FRAMEWORK_UNIT_TESTS }} Debug net8.0
 
       - name: Run framework contract tests (Debug, net8.0)
-        run: dotnet test ${{ env.FRAMEWORK_CONTRACT_TESTS }} -c Debug -f net8.0 --no-build
+        run: bash scripts/ci/dotnet-test-retry.sh ${{ env.FRAMEWORK_CONTRACT_TESTS }} Debug net8.0
 
       - name: Run stream connector tests (Debug, net8.0)
-        run: dotnet test ${{ env.STREAM_CONNECTOR_TESTS }} -c Debug -f net8.0 --no-build
+        run: bash scripts/ci/dotnet-test-retry.sh ${{ env.STREAM_CONNECTOR_TESTS }} Debug net8.0
 
       - name: Run framework unit tests (Release, net10.0)
-        run: dotnet test ${{ env.FRAMEWORK_UNIT_TESTS }} -c Release -f net10.0 --no-build
+        run: bash scripts/ci/dotnet-test-retry.sh ${{ env.FRAMEWORK_UNIT_TESTS }} Release net10.0
 
       - name: Run framework contract tests (Release, net10.0)
-        run: dotnet test ${{ env.FRAMEWORK_CONTRACT_TESTS }} -c Release -f net10.0 --no-build
+        run: bash scripts/ci/dotnet-test-retry.sh ${{ env.FRAMEWORK_CONTRACT_TESTS }} Release net10.0
 
       - name: Run stream connector tests (Release, net10.0)
-        run: dotnet test ${{ env.STREAM_CONNECTOR_TESTS }} -c Release -f net10.0 --no-build
+        run: bash scripts/ci/dotnet-test-retry.sh ${{ env.STREAM_CONNECTOR_TESTS }} Release net10.0
 
   framework-dotnet-gate:
     name: release-gate
@@ -169,5 +165,5 @@ jobs:
       - name: Confirm matrix completed
         run: |
           echo "Framework .NET release gate passed."
-          echo "RID matrix: win-x64, win-arm64, linux-x64, linux-arm64, osx-x64, osx-arm64"
+          echo "RID matrix: win-x64, win-arm64, linux-x64, linux-arm64, osx-arm64 (Core ships no macOS Intel release)"
           echo "Test matrix: framework unit, contract, and stream connector tests on net8.0 Debug and net10.0 Release"

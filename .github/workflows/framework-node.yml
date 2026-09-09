@@ -59,9 +59,6 @@ jobs:
           - name: linux-arm64
             runner: ubuntu-24.04-arm
             core_platform: linux-arm64
-          - name: darwin-x64
-            runner: macos-15-intel
-            core_platform: macos-x64
           - name: darwin-arm64
             runner: macos-15
             core_platform: macos-arm64
@@ -118,13 +115,6 @@ jobs:
           echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
           echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
 
-      - name: Materialize the local-package pin of @zlink-systems/http-client used by the workspace manifest
-        shell: bash
-        run: |
-          mkdir -p .artifacts/wsl/npm
-          npm pack framework/languages/node/packages/http-client \
-            --pack-destination .artifacts/wsl/npm
-
       # framework CI often runs minutes after a binding publish; the registry
       # serves the package metadata before its tarball (up to ~30 min).
       - name: Wait for the binding package on npm
@@ -142,6 +132,22 @@ jobs:
           done
           echo "::error::@zlink-systems/zlink@${version} tarball is not available on npm after 45 minutes" >&2
           exit 1
+
+      - name: Build the local-package pin of @zlink-systems/http-client used by the workspace manifest
+        shell: bash
+        env:
+          # Git Bash: make ln -s create a real symlink for the compiler bootstrap.
+          MSYS: winsymlinks:nativestrict
+        run: |
+          # The workspace manifest pins http-client to a local tarball; build its
+          # dist with the same bootstrap the local-package flow uses, fed by the
+          # published binding tarball.
+          version="${{ steps.core.outputs.binding_version }}"
+          mkdir -p .artifacts/wsl/npm
+          curl -sSfL -o ".artifacts/wsl/npm/zlink-systems-zlink-${version}.tgz" \
+            "https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-${version}.tgz"
+          bash scripts/local-package/http-client/build-wsl.sh node
+          tar tzf .artifacts/wsl/npm/zlink-systems-http-client-*.tgz | grep -q 'package/dist/index.js'
 
       - name: Install framework dependencies
         working-directory: framework/languages/node
@@ -252,13 +258,6 @@ jobs:
           echo "ZLINK_LOCAL_PACKAGE_ROOT=${package_root}" >> "${GITHUB_ENV}"
           echo "ZLinkLocalPackageRoot=${package_root}" >> "${GITHUB_ENV}"
 
-      - name: Materialize the local-package pin of @zlink-systems/http-client used by the workspace manifest
-        shell: bash
-        run: |
-          mkdir -p .artifacts/wsl/npm
-          npm pack framework/languages/node/packages/http-client \
-            --pack-destination .artifacts/wsl/npm
-
       - name: Wait for the binding package on npm
         shell: bash
         run: |
@@ -274,6 +273,22 @@ jobs:
           done
           echo "::error::@zlink-systems/zlink@${version} tarball is not available on npm after 45 minutes" >&2
           exit 1
+
+      - name: Build the local-package pin of @zlink-systems/http-client used by the workspace manifest
+        shell: bash
+        env:
+          # Git Bash: make ln -s create a real symlink for the compiler bootstrap.
+          MSYS: winsymlinks:nativestrict
+        run: |
+          # The workspace manifest pins http-client to a local tarball; build its
+          # dist with the same bootstrap the local-package flow uses, fed by the
+          # published binding tarball.
+          version="${{ steps.core.outputs.binding_version }}"
+          mkdir -p .artifacts/wsl/npm
+          curl -sSfL -o ".artifacts/wsl/npm/zlink-systems-zlink-${version}.tgz" \
+            "https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-${version}.tgz"
+          bash scripts/local-package/http-client/build-wsl.sh node
+          tar tzf .artifacts/wsl/npm/zlink-systems-http-client-*.tgz | grep -q 'package/dist/index.js'
 
       - name: Install and build the Node framework workspace
         working-directory: framework/languages/node
@@ -295,6 +310,6 @@ jobs:
       - name: Confirm matrix completed
         run: |
           echo "Framework Node release gate passed."
-          echo "ABI matrix: win-x64, win-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64"
+          echo "ABI matrix: win-x64, win-arm64, linux-x64, linux-arm64, darwin-arm64 (Core ships no macOS Intel release)"
           echo "Node runtime matrix: node20, node22"
           echo "Cross-language smoke: Node <-> dotnet channel and stream paths"
