@@ -34,6 +34,13 @@ on:
 # verified Core release archive (scripts/local-package/core/fetch-release.sh),
 # which is also the runtime the tests load.
 
+# One run per ref: a newer push to the same branch/PR cancels the run still in
+# progress, so consecutive pushes do not pile up matrix jobs and starve the
+# release workflows of runners.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   framework-node:
     name: ${{ matrix.target.name }} / node${{ matrix.node-version }}
