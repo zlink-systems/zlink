@@ -26,7 +26,7 @@
         <developmentDependency>false</developmentDependency>
         <description>zlink is a modern messaging library that provides asynchronous message queues, multiple messaging patterns, message filtering (subscriptions), and seamless access to multiple transport protocols including TCP, IPC, inproc, WebSocket, and TLS.</description>
         <summary>zlink messaging library, packaged for specific Visual Studio compiler.</summary>
-        <releaseNotes>https://raw.githubusercontent.com/zlink-systems/zlink/main/CHANGELOG.md</releaseNotes>
+        <releaseNotes>https://raw.githubusercontent.com/zlink-systems/zlink/main/core/CHANGELOG.md</releaseNotes>
         <copyright>MPL-2.0</copyright>
         <tags>native, libzlink, zlink, messaging, sockets, C++</tags>
         <dependencies>

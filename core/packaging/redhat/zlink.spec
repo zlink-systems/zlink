@@ -143,7 +143,7 @@ autoreconf -fi
 %defattr(-,root,root,-)
 
 # docs in the main package
-%doc LICENSE CHANGELOG.md
+%doc LICENSE core/CHANGELOG.md
 
 # libraries
 %{_libdir}/libzlink.so.*

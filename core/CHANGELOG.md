@@ -2,7 +2,8 @@
 
 All notable changes to the Core library (`core/`, tags `core/vX.Y.Z`) are
 recorded here, one section per version, newest first. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.0.0/). The public C ABI
+[Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Entries before
+0.17.0 are in [`CHANGELOG-history.md`](./CHANGELOG-history.md). The public C ABI
 (`core/include/**`, `core/src/libzlink.vers`) is unchanged across the 0.17
 line unless a section says otherwise.
 

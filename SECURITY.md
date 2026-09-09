@@ -10,7 +10,7 @@ zlink는 최신 메이저/마이너 릴리스를 우선 지원합니다.
 | Previous minor release | :white_check_mark: |
 | Older releases | :x: |
 
-정확한 지원 범위는 릴리스 노트와 `CHANGELOG.md`를 기준으로 갱신됩니다.
+정확한 지원 범위는 릴리스 노트와 `core/CHANGELOG.md`와 `doc/building/release-notes/`를 기준으로 갱신됩니다.
 
 ## Reporting a Vulnerability
 

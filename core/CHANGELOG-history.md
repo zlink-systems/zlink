@@ -1,6 +1,9 @@
-# Changelog
+# Changelog (history before Core 0.17.0)
 
-All notable changes to zlink will be documented in this file.
+This file preserves the changelog that lived at the repository root until
+2026-09-09. Core releases from 0.17.0 onward are recorded in
+[`CHANGELOG.md`](./CHANGELOG.md); binding and framework releases have their own
+release notes under `doc/building/release-notes/`.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
