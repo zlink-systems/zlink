@@ -8,13 +8,16 @@ ARTIFACT_ROOT=""
 STARTING_PID=""
 STARTING_TICKS=""
 STATUS_ALL=0
+# job은 저장소를 고쳐야 하므로 기본은 승인·샌드박스 없이 실행한다.
+# 읽기 전용 조사에는 --read-only를 준다.
+SANDBOX_ARGS=(--dangerously-bypass-approvals-and-sandbox)
 # 로그 본문(코드 인용 등)의 우연한 일치를 막으려고 줄 머리의 오류 표시나 고유 문구만 본다.
 ERROR_PATTERN='^(ERROR|error)[: ]|^codex: |invalid_request_error|not supported when using Codex|(^|[[:space:]])(401|403) ?(Forbidden|forbidden|Unauthorized|unauthorized)|rate limit exceeded|No space left on device|panicked at|command not found'
 
 usage() {
     cat <<'EOF'
 사용법:
-  job.sh [--dry-run] start <이름> --worktree <경로> --brief <파일> [--model <모델>] [--effort high|medium|low] [--max-jobs N]
+  job.sh [--dry-run] start <이름> --worktree <경로> --brief <파일> [--read-only] [--model <모델>] [--effort high|medium|low] [--max-jobs N]
   job.sh [--dry-run] status [--all] [<이름>]
   job.sh [--dry-run] watch [--interval 180]
   job.sh [--dry-run] kill <이름>
@@ -267,6 +270,7 @@ print_start_dry_run() {
     local model=$1 effort=$2 worktree=$3 brief=$4 log=$5
     printf '[dry-run] '
     quote_command codex exec -C "$worktree" -m "$model" -c "model_reasoning_effort=\"$effort\"" \
+        "${SANDBOX_ARGS[@]}" \
         -o "${log%/job.log}/summary.md" -
     printf ' < '
     quote_command "$brief"
@@ -296,6 +300,7 @@ start_command() {
             --model) [[ $# -ge 2 ]] || die 2 "--model에 id가 필요합니다."; model=$2; shift 2 ;;
             --effort) [[ $# -ge 2 ]] || die 2 "--effort에 값이 필요합니다."; effort=$2; shift 2 ;;
             --max-jobs) [[ $# -ge 2 ]] || die 2 "--max-jobs에 값이 필요합니다."; max_jobs=$2; shift 2 ;;
+            --read-only) SANDBOX_ARGS=(--sandbox read-only); shift ;;
             --dry-run) DRY_RUN=1; shift ;;
             --*) die 2 "알 수 없는 start 옵션입니다: $1" ;;
             *) [[ -z "$name" ]] || die 2 "job 이름은 하나만 지정할 수 있습니다."; name=$1; shift ;;
@@ -361,6 +366,7 @@ start_command() {
         cd "$worktree"
         export ZLINK_JOB_DIR="$job_dir"
         exec codex exec -C "$worktree" -m "$model" -c "model_reasoning_effort=\"$effort\"" \
+            "${SANDBOX_ARGS[@]}" \
             -o "$job_dir/summary.md" - \
             <"$job_dir/brief.md"
     ) >"$log" 2>&1 &
