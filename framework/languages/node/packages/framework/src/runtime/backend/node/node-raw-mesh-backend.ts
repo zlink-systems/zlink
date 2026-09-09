@@ -1656,16 +1656,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       const owner = readyOwner(claim.owner, this.routingId, this.stateful, domain);
       batch.push(
         owner,
-        new MailboxClaim(runtime, claim, () => {
-          // A receive batch may intentionally consume fewer records than the
-          // mailbox claim. Releasing the claim re-queues the remainder, so
-          // expose that newly ready work to the dispatch pump.
-          if (runtime.mailbox.pendingMessages(domain) > 0) {
-            this.readyHandler?.(
-              domain === 'infrastructure' ? ReadyDomain.Infrastructure : ReadyDomain.Application
-            );
-          }
-        })
+        new MailboxClaim(runtime, claim)
       );
     }
   }
@@ -2109,8 +2100,7 @@ class MailboxClaim implements RawClaim {
 
   constructor(
     private readonly runtime: RawServiceMeshRuntime,
-    private readonly claim: ServiceMailboxClaim,
-    private readonly onRelease?: () => void
+    private readonly claim: ServiceMailboxClaim
   ) {}
 
   recvBatch(batch: ReceiveBatch) {
@@ -2154,7 +2144,6 @@ class MailboxClaim implements RawClaim {
     if (this.released) return;
     this.released = true;
     this.runtime.mailbox.release(this.claim, this.remaining);
-    this.onRelease?.();
   }
 }
 
