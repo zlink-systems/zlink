@@ -181,18 +181,24 @@ jobs:
           tar tzf .artifacts/wsl/npm/zlink-systems-http-client-*.tgz > "${RUNNER_TEMP}/http-client-files.txt"
           grep -q 'package/dist/index.js' "${RUNNER_TEMP}/http-client-files.txt"
 
+      - name: Pin framework install to the checkout Node binding package
+        working-directory: framework/languages/node
+        shell: bash
+        run: |
+          version="${{ steps.core.outputs.binding_version }}"
+          export BINDING_VERSION="${version}"
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const file = 'package.json';
+          const packageJson = JSON.parse(fs.readFileSync(file, 'utf8'));
+          packageJson.dependencies['@zlink-systems/zlink'] = `file:../../../.artifacts/wsl/npm/zlink-systems-zlink-${process.env.BINDING_VERSION}.tgz`;
+          fs.writeFileSync(file, `${JSON.stringify(packageJson, null, 2)}\n`);
+          NODE
+          BINDING_VERSION="${version}" npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+
       - name: Install framework dependencies
         working-directory: framework/languages/node
         run: npm ci
-
-      - name: Select and rebuild the checkout Node binding package
-        working-directory: framework/languages/node
-        shell: bash
-        env:
-          ZLINK_NODE_USE_BINDINGS_SOURCE: "1"
-        run: |
-          npm run use:bindings-source
-          (cd node_modules/@zlink-systems/zlink && npm rebuild)
 
       - name: Place the Core runtime beside a source-built addon
         shell: bash
