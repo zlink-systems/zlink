@@ -144,6 +144,11 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
         _registration.Locations.UseInMemoryStores = true;
     }
 
+    internal void UseTestTimeProvider(TimeProvider timeProvider)
+    {
+        _registration.TimeProvider = timeProvider;
+    }
+
     public void AddLocationStore(IZLinkLocationStore store)
     {
         ArgumentNullException.ThrowIfNull(store);

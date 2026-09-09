@@ -3956,10 +3956,12 @@ public sealed partial class StatefulServiceRuntimeTests
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var source = NewNode(context, "retention-source");
+        var deadlineTime = new AdjustableTimeProvider(DateTimeOffset.UtcNow);
         await using var target = NewNode(
             context,
             "retention-target",
-            TimeSpan.FromMilliseconds(500));
+            TimeSpan.FromMilliseconds(500),
+            deadlineTime);
         var suffix = Guid.NewGuid().ToString("N");
         var sourceEndpoint = $"inproc://retention-source-{suffix}";
         var targetEndpoint = $"inproc://retention-target-{suffix}";
@@ -3986,10 +3988,8 @@ public sealed partial class StatefulServiceRuntimeTests
             "retention-owner",
             107,
             1);
-        var deadlineStarted = Stopwatch.GetTimestamp();
-        var deadlineNow = DateTimeOffset.UtcNow;
         var deadline = checked(
-            (ulong)deadlineNow.AddMilliseconds(500)
+            (ulong)deadlineTime.GetUtcNow().AddMilliseconds(500)
                 .ToUnixTimeMilliseconds());
         const string spotId = "retention-spot";
         Assert.Equal(
@@ -4020,26 +4020,59 @@ public sealed partial class StatefulServiceRuntimeTests
                 reservation,
                 deadline),
             default);
-        var afterDeadline = DateTimeOffset.FromUnixTimeMilliseconds(
-            checked((long)deadline)).AddMilliseconds(25);
-        var wait = afterDeadline - deadlineNow
-            - Stopwatch.GetElapsedTime(deadlineStarted);
-        if (wait > TimeSpan.Zero)
-            await Task.Delay(wait);
+        deadlineTime.Advance(
+            wallClock: TimeSpan.FromMilliseconds(525),
+            monotonic: TimeSpan.FromMilliseconds(525));
         Assert.Equal(
             SubmitResult.Ok,
             source.ResubmitUserSpotOperation(target.RoutingId, replay));
-        await Task.Delay(TimeSpan.FromMilliseconds(50));
+        var closeFence = new UserSpotCloseFence(
+            spotId,
+            reservation.ObjectGeneration,
+            target.RoutingId,
+            targetGeneration,
+            reservation.AuthorityOwnerGeneration,
+            "retention-close-store");
+        var barrierDeadline = checked(
+            (ulong)deadlineTime.GetUtcNow().AddMilliseconds(250)
+                .ToUnixTimeMilliseconds());
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.CloseUserSpot(
+                target.RoutingId,
+                closeFence,
+                barrierDeadline,
+                out var retainedBarrier,
+                TimeSpan.FromSeconds(2)));
+        var retainedBarrierCompletion = DrainCompletion(source, retainedBarrier).Record;
+        Assert.Equal(MeshRecordKind.Completion, retainedBarrierCompletion.Kind);
         Assert.Equal(1, operationTarget.CreateCount);
-        Assert.Equal(1, target.RetainedUserSpotOperationCount);
+        Assert.Equal(1, operationTarget.CloseCount);
+        Assert.Equal(2, target.RetainedUserSpotOperationCount);
 
-        await WaitUntilAsync(() => target.RetainedUserSpotOperationCount == 0);
+        deadlineTime.Advance(
+            wallClock: TimeSpan.FromMilliseconds(475),
+            monotonic: TimeSpan.FromMilliseconds(475));
+        await WaitUntilAsync(() => target.RetainedUserSpotOperationCount == 1);
         Assert.Equal(
             SubmitResult.Ok,
             source.ResubmitUserSpotOperation(target.RoutingId, replay));
-        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        barrierDeadline = checked(
+            (ulong)deadlineTime.GetUtcNow().AddMilliseconds(250)
+                .ToUnixTimeMilliseconds());
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.CloseUserSpot(
+                target.RoutingId,
+                closeFence,
+                barrierDeadline,
+                out var expiredBarrier,
+                TimeSpan.FromSeconds(2)));
+        var expiredBarrierCompletion = DrainCompletion(source, expiredBarrier).Record;
+        Assert.Equal(MeshRecordKind.Completion, expiredBarrierCompletion.Kind);
         Assert.Equal(1, operationTarget.CreateCount);
-        Assert.Equal(0, target.RetainedUserSpotOperationCount);
+        Assert.Equal(2, operationTarget.CloseCount);
+        Assert.Equal(2, target.RetainedUserSpotOperationCount);
     }
 
     [Fact]

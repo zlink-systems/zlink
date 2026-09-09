@@ -492,6 +492,7 @@ public sealed class RelocationBehaviorConformanceTests
     public async Task ActorJoin_target_fallback_commits_after_one_second_and_late_cutover_is_inert()
     {
         var trace = new RelocationBehaviorTrace();
+        var targetTime = new ControllableTimeProvider();
         var cutover = new CanonicalRelocationTransportProbe(
             trace,
             holdTargetReady: true);
@@ -527,6 +528,7 @@ public sealed class RelocationBehaviorConformanceTests
             locationStore,
             relocationStore,
             registerTargetSpot: true,
+            timeProvider: targetTime,
             canonicalTransportProbe: cutover);
         await WaitUntilAsync(
             () => source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
@@ -559,16 +561,15 @@ public sealed class RelocationBehaviorConformanceTests
 
         try
         {
-            await cutover.PrepareCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await cutover.PrepareCallStarted.Task;
             cutover.ReleasePrepareCall.TrySetResult();
-            await cutover.TargetPreparedBeforeReadySend.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
-            await Task.Delay(TimeSpan.FromMilliseconds(1_100));
+            await cutover.TargetPreparedBeforeReadySend.Task;
+            targetTime.AdvanceMonotonic(TimeSpan.FromMilliseconds(1_100));
             Assert.False(trace.HasTargetAuthorityMutation);
             Assert.DoesNotContain("targetLifecycleStarted", trace.Events);
             cutover.ReleaseTargetReadySend.TrySetResult();
-            await cutover.ReadyReplyReceived.Task.WaitAsync(TimeSpan.FromSeconds(3));
-            await cutover.CutoverSendStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await cutover.ReadyReplyReceived.Task;
+            await cutover.CutoverSendStarted.Task;
             Assert.False(cutover.CutoverSendSubmitted.Task.IsCompleted);
             Assert.False(trace.HasTargetAuthorityMutation);
 
@@ -577,14 +578,9 @@ public sealed class RelocationBehaviorConformanceTests
                     CancellationToken.None,
                     TimeSpan.FromMilliseconds(500))
                 .AsTask();
-            await cutover.TargetReadyFailureInjected.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            await cutover.TargetReadyFailureInjected.Task;
 
-            var beforeFallback = TimeSpan.FromMilliseconds(900)
-                                 - Stopwatch.GetElapsedTime(
-                                     cutover.ReadyReplyTimestamp);
-            if (beforeFallback > TimeSpan.Zero)
-                await Task.Delay(beforeFallback);
+            targetTime.AdvanceMonotonic(TimeSpan.FromMilliseconds(900));
             Assert.False(trace.HasTargetAuthorityMutation);
             Assert.DoesNotContain("targetLifecycleStarted", trace.Events);
 
@@ -594,20 +590,12 @@ public sealed class RelocationBehaviorConformanceTests
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
                 duplicateFailure.Kind);
 
+            targetTime.AdvanceMonotonic(TimeSpan.FromMilliseconds(100));
             await trace.WaitForTargetAuthorityMutationAsync();
             await trace.WaitAsync("targetLifecycleStarted");
             Assert.False(cutover.CutoverSendSubmitted.Task.IsCompleted);
-            var fallbackDelay = Stopwatch.GetElapsedTime(
-                cutover.ReadyReplyTimestamp,
-                trace.TargetAuthorityMutationTimestamp);
-            Assert.InRange(
-                fallbackDelay,
-                TimeSpan.FromMilliseconds(900),
-                TimeSpan.FromSeconds(3));
-
             trace.ReleaseTargetLifecycle.TrySetResult();
-            await cutover.SourceLeaveSubmitted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            await cutover.SourceLeaveSubmitted.Task;
             await trace.WaitAsync("publicJoinCompleted");
             Assert.False(trace.ReleaseSourceLeave.Task.IsCompleted);
             await trace.WaitAsync("sourceMembershipLeaveStarted");
@@ -618,9 +606,7 @@ public sealed class RelocationBehaviorConformanceTests
                 static value => value == "publicJoinCompleted");
 
             cutover.ReleaseCutoverSend.TrySetResult();
-            await cutover.CutoverSendSubmitted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
-            await Task.Delay(100);
+            await cutover.CutoverSendSubmitted.Task;
             Assert.Equal(authorityMutations, trace.TargetAuthorityMutationCount);
             Assert.Equal(lifecycleAttempts, trace.TargetLifecycleAttemptCount);
             Assert.Equal(
@@ -628,7 +614,6 @@ public sealed class RelocationBehaviorConformanceTests
                 trace.Events.Count(static value => value == "publicJoinCompleted"));
 
             await cutover.ReplayCutoverAsync(CancellationToken.None);
-            await Task.Delay(100);
             Assert.Equal(authorityMutations, trace.TargetAuthorityMutationCount);
             Assert.Equal(lifecycleAttempts, trace.TargetLifecycleAttemptCount);
             Assert.Equal(
@@ -1360,6 +1345,7 @@ internal sealed class RelocationBehaviorTrace
     private readonly object _gate = new();
     private readonly List<string> _events = [];
     private readonly List<string> _deliveredMarkers = [];
+    private readonly HashSet<string> _targetAuthorityVersions = [];
     private readonly ConcurrentDictionary<string, TaskCompletionSource> _signals =
         new(StringComparer.Ordinal);
 
@@ -1444,12 +1430,16 @@ internal sealed class RelocationBehaviorTrace
             || authority.ActorId != ActorId
             || authority.NodeRid != TargetNodeRid)
             return;
-        Interlocked.Increment(ref TargetAuthorityMutationCount);
-        Interlocked.CompareExchange(
-            ref TargetAuthorityMutationTimestamp,
-            Stopwatch.GetTimestamp(),
-            0);
-        TargetAuthorityMutationObserved.TrySetResult();
+        lock (_gate)
+        {
+            if (!_targetAuthorityVersions.Add(snapshot.StoreVersion)) return;
+            Interlocked.Increment(ref TargetAuthorityMutationCount);
+            Interlocked.CompareExchange(
+                ref TargetAuthorityMutationTimestamp,
+                Stopwatch.GetTimestamp(),
+                0);
+            TargetAuthorityMutationObserved.TrySetResult();
+        }
     }
 
     internal void ObserveReadyActorAuthority(ZLinkAuthoritySnapshot snapshot)
@@ -1573,6 +1563,7 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
         IZLinkRelocationStore relocationStore,
         bool registerTargetSpot,
         TimeSpan? pollingInterval = null,
+        TimeProvider? timeProvider = null,
         CanonicalRelocationTransportProbe? canonicalTransportProbe = null)
     {
         var services = new ServiceCollection();
@@ -1588,6 +1579,8 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
         services.AddTransient<TargetBehaviorWorkHandler>();
         services.AddZLinkFramework(options =>
         {
+            if (timeProvider is not null)
+                options.UseTestTimeProvider(timeProvider);
             options.AddLocationStore(locationStore);
             options.AddRelocationStore(relocationStore);
             options.ConfigureLocations().PollingInterval =

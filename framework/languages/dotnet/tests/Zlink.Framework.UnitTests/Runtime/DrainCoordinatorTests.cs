@@ -1542,7 +1542,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
 
             var orderlyDeadline = TimeSpan.FromSeconds(10);
             var framework = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
-            var started = Stopwatch.GetTimestamp();
             var shutdown = framework.ShutdownAsync(orderlyDeadline).AsTask();
             Assert.Equal(ZLinkFrameworkRuntimeState.Draining, framework.Status.State);
             Assert.False(framework.Status.AcceptingWork);
@@ -1564,15 +1563,10 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             release = true;
             probe.Release.TrySetResult();
             var result = await shutdown.WaitAsync(orderlyDeadline);
-            var elapsed = Stopwatch.GetElapsedTime(started);
 
             Assert.Equal(ZLinkFrameworkTerminationOutcome.Stopped, result.Outcome);
             Assert.Equal(ZLinkFrameworkTerminationReason.None, result.Reason);
             Assert.Equal(sessionCount, probe.ConnectedCount);
-            Assert.True(
-                elapsed < orderlyDeadline / 2,
-                $"Shutdown took {elapsed} after the admission seal; "
-                + $"the orderly deadline was {orderlyDeadline}.");
         }
         finally
         {

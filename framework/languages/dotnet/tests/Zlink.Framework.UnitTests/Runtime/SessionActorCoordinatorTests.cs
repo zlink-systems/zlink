@@ -494,7 +494,10 @@ public sealed class SessionActorCoordinatorTests
     [Fact]
     public async Task Remote_Actor_Request_Timeout_Releases_The_Pending_Key()
     {
-        var runtime = CreateRuntime(defaultRequestTimeout: TimeSpan.FromMilliseconds(20));
+        var time = new ControllableTimeProvider();
+        var runtime = CreateRuntime(
+            defaultRequestTimeout: TimeSpan.FromMilliseconds(20),
+            timeProvider: time);
         var context = CreateSessionContext(runtime, "session-timeout-release");
         var actor = new ActorRef(
             "actor-timeout-release",
@@ -507,14 +510,33 @@ public sealed class SessionActorCoordinatorTests
             CancellationToken.None);
         Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, out var binding));
 
+        Assert.True(runtime.TryAcceptSessionActorFrame(
+            actor.ActorId,
+            binding.BindingToken,
+            out _));
         _ = runtime.TrackRemoteSessionActorRequest(actor.ActorId, 25, binding.BindingToken);
-        await Task.Delay(80);
+        time.AdvanceMonotonic(TimeSpan.FromMilliseconds(20));
+        await WaitUntilAsync(() =>
+            runtime.TryGetSessionActorBinding(actor.ActorId, out var current)
+            && current.ActiveFrames == 0);
         _ = runtime.TrackRemoteSessionActorRequest(actor.ActorId, 25, binding.BindingToken);
         runtime.CompleteRemoteSessionActorRequest(
             actor.ActorId,
             binding.ObjectGeneration,
             binding.BindingToken,
             25);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = System.Diagnostics.Stopwatch.GetTimestamp()
+                       + 5 * System.Diagnostics.Stopwatch.Frequency;
+        while (!condition())
+        {
+            if (System.Diagnostics.Stopwatch.GetTimestamp() >= deadline)
+                throw new TimeoutException("The session actor condition was not reached.");
+            await Task.Yield();
+        }
     }
 
     [Fact]

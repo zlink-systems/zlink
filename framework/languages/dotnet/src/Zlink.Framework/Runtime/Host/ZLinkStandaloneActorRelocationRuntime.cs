@@ -1289,6 +1289,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         {
             await Task.Delay(
                     registration.Locations.Options.RelocationCutoverWaitTimeout,
+                    registration.TimeProvider,
                     runtime.ShutdownToken)
                 .ConfigureAwait(false);
             var key = new AttemptKey(
