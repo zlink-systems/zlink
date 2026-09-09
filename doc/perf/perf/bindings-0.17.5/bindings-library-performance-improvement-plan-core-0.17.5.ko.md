@@ -856,6 +856,16 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   package provenance·console로 release 0.17.5 확인(양성).
 - 다음 작업: Java Single·Multi paired 측정.
 
+> **.NET routed request/reply 개선 시도 — 보류(2026-09-09).** DEALER_ROUTER_REQREP·ROUTER_ROUTER_REQREP가
+> C 대비 낮아(single tcp 63.1/56.4%) 진단했다. 병목은 요청당 managed 할당(RequestCompletionEntry·Task·
+> reply builder/collection·ReplyToken·ReceivedReplyContext 등, Gen0 GC 151~187 MB/s)과 **2-part 왕복당 약 30회의
+> P/Invoke 경계 + CLR object header/JIT/GC 고유 비용**이다(Core·wire·routing 결함 없음, 분류 B). 계약 보존
+> 할당 축소 pass(ReceivedReplyContext 제거·노출 안 된 multipart wrapper 재사용·indexed loop)를 구현해 allocation
+> rate는 −6.2% 줄였으나 **throughput이 오히려 회귀**(DEALER_ROUTER_REQREP −3.76%, ROUTER_ROUTER_REQREP −3.75%,
+> PAIR −5.02%)했다. 할당이 throughput 병목이 아니고 P/Invoke 경계 비용이 지배적이라, §7.7에 따라 변경을 되돌리고
+> 보류로 둔다. public 계약·테스트는 훼손하지 않았다(변경은 전량 revert). inproc/ipc routed는 §2.1 예외/memory-copy
+> 상한과 함께 재검토 대상.
+
 #### 9.2.1 Single suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
