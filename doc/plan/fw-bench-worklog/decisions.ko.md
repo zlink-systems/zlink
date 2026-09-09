@@ -742,6 +742,50 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
   `bc6c54d37a`에 함께 들어갔다(내용 변경 없는 순수 rename). history는 두고 `c57d6c26f2`의 메시지에
   적었다. 이후 감독자 커밋은 `git commit -- <경로>`로 지정 경로만 커밋한다.
 
+## FB-047 — .NET S1 3-run: framework 계층이 raw의 13~18%, request-backpressure는 오류·수십 초 지연 (2026-09-09, 원본 `log/dotnet/with_grpc_dotnet_s1{b_run2,c_run1,d_run3}_*`)
+
+집계기 중앙값(request KOPS, send KMSG/s; `--judgement-pattern request-window`):
+
+| 셀 @1024 | grpc-dotnet | zlink-dotnet | zlink-framework-dotnet | framework/raw |
+|---|---:|---:|---:|---:|
+| request-serial | 5.49 | 6.19 | 1.51 | 0.24 |
+| request-window | 117.40 | 85.47 | 12.21 | 0.14 |
+| request-backpressure | 44.95 | 32.29 | 0.71 (errors 2,511, mean 26.7 s, p99 53.8 s) | — |
+| send-saturation | 29.28 | 682.82 | 87.61 (mean 1.5 s, source 1.08 GB) | 0.13 |
+
+- formula 2(`zlink-framework-dotnet / zlink-dotnet ≥ 0.80`)는 모든 셀에서 실패한다. formula 1
+  (`zlink-dotnet / zlink-c`)도 window @1024에서 85.5/488.4 = 0.17로 실패(binding 캠페인 범위).
+- **판정 보류**: 이 3-run은 같은 시간대에 codex 빌드·테스트 job(Java/Kotlin, .NET)이 돌아 G5가
+  24행 중 13행에서 실패(10~20% 스프레드)했다. 공개 값으로 쓰지 않고, 큐가 조용한 창에서 3-run을
+  다시 낸다. 그러나 framework 계층의 배율(0.13~0.24)과 backpressure의 오류·지연은 부하로 설명되지
+  않는 크기라 제품 판정 대상으로 기록한다.
+- request-backpressure의 framework 오류 2,511건은 admission 거절이 request terminal로 표면화되는
+  경로(FB-042)에서 나온다. 규격대로 오류 셀은 처리량 판정에 쓰지 않는다(§5.2).
+- 위치: framework .NET runtime. 1.0 묶음의 성능 항목으로 넘긴다(측정은 벤치가, 수정은 제품이).
+
+## FB-048 — `zlink-c` 기준선 4096B의 두 모드는 Core의 연결별 I/O 스레드 배치 때문이다 (2026-09-09, fwb2-05)
+
+- 관측: request-window·backpressure @4096이 run마다 ~420 vs ~263 KOPS 두 모드로 갈린다(G5 58.9%).
+  1024B는 안정. 디버거 진단으로 낮은 모드에서 request socket의 application session·connecter·
+  completion session이 같은 I/O 스레드에 배치됨을 확인(`ctx_io_thread_registry.cpp:96`의
+  round-robin cursor를 application·connecter·completion이 함께 소비, 부하·기존 배치 미고려).
+- 판정: harness 결함 아님(Submitted=Completed, Errors 0, window 100 도달), 외부 부하는 보조 요인.
+  **Core(0.17.5)의 배치 재현성 문제.** 수정은 Core 소유이며 1.0 묶음의 Core 항목으로 넘긴다
+  (임시 connecter가 이미 선택된 session I/O 스레드를 재사용하는 안을 후속 검토).
+- 결과: formula 1의 4096B 분모는 게재 불가. 1024B 분모(G5 6.2%)만 쓴다. 보고서 §7.2 부록에
+  이 사실을 적는다. harness·측정 조건은 바꾸지 않았다.
+
+## FB-049 — Node raw `request-window @1024`에서 completion 100건 유실(binding 0.17.6) (2026-09-09, fwb2-04)
+
+- 관측: source 완료 220, 오류(30초 timeout) 100, target 수신 320. C·C++·.NET의 같은 깊이 100은
+  오류 0. 1차 캠페인 FB-026(0.17.5에서 수정됐다고 기록)이 published 0.17.6 smoke에서 재현됐다.
+- 소유: Node 관리형 binding의 completion owner(`completion_owner.ts` `ensureRuntimeWatch`/
+  `runtimeWake` 경계가 첫 조사 대상). Core 공통 경로보다 Node binding을 가리킨다. 사용자 결정에
+  따라 중간 binding 릴리스는 없으므로 1.0 묶음의 bindings 항목으로 넘기고, 벤치는 그 셀을
+  오류 셀로 기록한다(runner count 대조는 .NET과 같은 §5.2 불변식으로 통일).
+- Node framework 행: `framework-codec-protobuf`가 protobuf bytes를 보존하지 못해 전 셀
+  `unsupported`(run 원본 `unsupported.json`). 제품 결함, 별도 작업(사용자 결정).
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
@@ -762,3 +806,5 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
 | `fwb2-01` | S-1 | sol | 완료·커밋 `bc6c54d37a`(rename)·`c57d6c26f2` | `framework/bench/grpc/` 통합, 공통 `bench.proto` 하나, 5언어 빌드·집계기 50 테스트·언어별 1셀 smoke 티켓 통과 |
 | `fwb2-02` | S1 | sol | 완료·커밋 `eb24d66003`(+감독자 `59521bf2f4` trigger 필드 확정) | 집계기 S2S 스키마·(runId, cellId) 병합·incomplete·Source/Target·KOPS/KMSG/s·`doc-table`, 테스트 60 |
 | `fwb2-03` | S1 | sol | 완료·커밋 `d59e8a00e8` | .NET A/B runner, ServerSupport 재사용, 5셀 smoke rc=0. 3-run은 감독자 티켓(claude-fwb2-s1) |
+| `fwb2-04` | S2 | sol | 완료·커밋 예정 | Node A/B runner, unsupported manifest, raw window 결함 재현(FB-049) |
+| `fwb2-05` | S4 | astra | 완료·커밋 `7786eec28a`(보고서만) | zlink-c 4096B 두 모드 = Core I/O 배치(FB-048), 4096 분모 게재 불가 |
