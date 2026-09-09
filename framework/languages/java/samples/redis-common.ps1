@@ -174,9 +174,12 @@ function Invoke-ZlinkSampleGradleBuild {
     }
 
     try {
-        & $GradleExecutable @Arguments
+        $normalizedArguments = @($Arguments | ForEach-Object {
+            if ($_ -eq "--settings-file") { "-c" } else { $_ }
+        })
+        & $GradleExecutable @normalizedArguments
         if ($LASTEXITCODE -ne 0) {
-            throw "Gradle build failed: $($Arguments -join ' ')"
+            throw "Gradle build failed: $($normalizedArguments -join ' ')"
         }
         if ($Arguments -match ':installDist$') {
             Optimize-ZlinkSampleWindowsLaunchers -Root (Get-Location).Path
