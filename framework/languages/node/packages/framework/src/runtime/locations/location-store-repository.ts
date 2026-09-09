@@ -92,6 +92,7 @@ const MAX_CREATION_TERMINAL_BYTES = 1024 * 1024;
 const CREATION_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
 const AGGREGATE_COMMIT_RETRY_WINDOW_MS = 5_000;
 const MAX_AGGREGATE_COMMIT_CONFLICT_RETRIES = 64;
+const MAX_DESCRIPTOR_WRITE_RETRIES = 3;
 
 type StoredAuthoritySnapshot = Omit<
   ZLinkAuthoritySnapshot,
@@ -1603,67 +1604,15 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     intent: ZLinkLocationWriteIntent,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
-    const leaseKey = ownerKey(descriptor.ownerId);
-    const rowKey = meshKey(descriptor.meshName, descriptor.rid);
-    const [lease, current] = await Promise.all([
-      this.provider.read(leaseKey, signal),
-      this.provider.read(rowKey, signal)
-    ]);
-    if (lease.kind === 'missing') return rejected(lease.storeNow);
-    if (liveOwnerLeaseGeneration(lease) !== descriptor.leaseGeneration) {
-      return rejected(lease.value.storeNow);
-    }
-
-    let generation = 1n;
-    let rowCondition: ZLinkStoreCondition = { kind: 'missing', key: rowKey };
-    if (current.kind === 'found') {
-      const record = decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(current.value.bytes);
-      const stored = reviveMeshDescriptor(record.descriptor);
-      generation = descriptorStoreGeneration(record, current.value.version.value);
-      if (sameMeshDescriptor(stored, descriptor)) {
-        return { status: WriteStatus.Stored, generation, updatedAt: current.value.storeNow };
-      }
-      const currentLease = await this.provider.read(ownerKey(stored.ownerId), signal);
-      const currentLeaseGeneration = liveOwnerLeaseGeneration(currentLease);
-      const takeover = canTakeOverStoredLocation(
-        intent,
-        stored.ownerId,
-        stored.leaseGeneration,
-        descriptor.ownerId,
-        descriptor.leaseGeneration,
-        currentLeaseGeneration
-      );
-      const renew = intent === 2
-        && stored.ownerId === descriptor.ownerId
-        && stored.leaseGeneration === descriptor.leaseGeneration
-        && stored.lifecycleGeneration === descriptor.lifecycleGeneration
-        && descriptor.descriptorRevision > stored.descriptorRevision;
-      if (!takeover && !renew) {
-        return {
-          status: WriteStatus.IgnoredStale,
-          generation,
-          updatedAt: current.value.storeNow
-        };
-      }
-      if (takeover) generation += 1n;
-      rowCondition = { kind: 'version', key: rowKey, expected: current.value.version };
-    } else if (intent === 2) {
-      return rejected(lease.value.storeNow);
-    }
-
-    const result = await this.provider.write({
-      conditions: [
-        { kind: 'version', key: leaseKey, expected: lease.value.version },
-        rowCondition
-      ],
-      mutations: [{
-        kind: 'put',
-        key: rowKey,
-        bytes: encodeCanonicalDescriptorRecord(generation, persistMeshDescriptor(descriptor))
-      }]
-    }, signal);
-    if (result.kind === 'conflict') return rejected(result.storeNow);
-    return { status: WriteStatus.Stored, generation, updatedAt: result.storeNow };
+    return this.updateDescriptor(
+      meshKey(descriptor.meshName, descriptor.rid),
+      descriptor,
+      intent,
+      reviveMeshDescriptor,
+      sameMeshDescriptor,
+      canRenewMesh,
+      signal
+    );
   }
 
   override async removeMeshNode(
@@ -2253,12 +2202,15 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       this.provider.read(rowKey, signal)
     ]);
     if (lease.kind === 'missing') return rejected(lease.storeNow);
-    if (liveOwnerLeaseGeneration(lease) !== descriptor.leaseGeneration) {
+    if (!matchesLiveOwnerLease(
+      lease,
+      descriptor.ownerId,
+      descriptor.leaseGeneration
+    )) {
       return rejected(lease.value.storeNow);
     }
 
     let generation = 1n;
-    let rowCondition: ZLinkStoreCondition = { kind: 'missing', key: rowKey };
     if (current.kind === 'found') {
       const record = decodeCanonicalDescriptorRecord<T>(current.value.bytes);
       const stored = revive(record.descriptor);
@@ -2285,24 +2237,67 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         };
       }
       if (takeover) generation += 1n;
-      rowCondition = { kind: 'version', key: rowKey, expected: current.value.version };
     } else if (intent === 2) {
       return rejected(lease.value.storeNow);
     }
 
-    const result = await this.provider.write({
-      conditions: [
-        { kind: 'version', key: leaseKey, expected: lease.value.version },
-        rowCondition
-      ],
-      mutations: [{
-        kind: 'put',
-        key: rowKey,
-        bytes: encodeCanonicalDescriptorRecord(generation, descriptor)
-      }]
-    }, signal);
-    if (result.kind === 'conflict') return rejected(result.storeNow);
-    return { status: WriteStatus.Stored, generation, updatedAt: result.storeNow };
+    return this.writeDescriptorWithReconciliation(
+      leaseKey,
+      descriptor.ownerId,
+      descriptor.leaseGeneration,
+      lease,
+      rowKey,
+      current,
+      encodeCanonicalDescriptorRecord(generation, descriptor),
+      generation,
+      signal
+    );
+  }
+
+  private async writeDescriptorWithReconciliation(
+    leaseKey: ZLinkStoreKey,
+    ownerId: string,
+    leaseGeneration: bigint,
+    liveLease: Extract<ZLinkStoreReadResult, { kind: 'found' }>,
+    rowKey: ZLinkStoreKey,
+    predecessor: ZLinkStoreReadResult,
+    encodedDescriptor: Uint8Array,
+    generation: bigint,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteResult> {
+    let currentLease = liveLease;
+    let currentRow = predecessor;
+
+    for (let attempt = 0; attempt <= MAX_DESCRIPTOR_WRITE_RETRIES; attempt += 1) {
+      const rowCondition: ZLinkStoreCondition = currentRow.kind === 'found'
+        ? { kind: 'version', key: rowKey, expected: currentRow.value.version }
+        : { kind: 'missing', key: rowKey };
+      const result = await this.provider.write({
+        conditions: [
+          { kind: 'version', key: leaseKey, expected: currentLease.value.version },
+          rowCondition
+        ],
+        mutations: [{ kind: 'put', key: rowKey, bytes: encodedDescriptor }]
+      }, signal);
+      if (result.kind === 'applied') {
+        return { status: WriteStatus.Stored, generation, updatedAt: result.storeNow };
+      }
+      if (attempt === MAX_DESCRIPTOR_WRITE_RETRIES) return ignoredStale(result.storeNow);
+
+      const [refreshedLease, refreshedRow] = await Promise.all([
+        this.provider.read(leaseKey, signal),
+        this.provider.read(rowKey, signal)
+      ]);
+      if (refreshedLease.kind === 'missing'
+        || !matchesLiveOwnerLease(refreshedLease, ownerId, leaseGeneration)
+        || !sameDescriptorPredecessor(predecessor, refreshedRow)) {
+        return ignoredStale(result.storeNow);
+      }
+
+      currentLease = refreshedLease;
+      currentRow = refreshedRow;
+    }
+    throw new Error('Descriptor write retry loop exhausted unexpectedly.');
   }
 
   private async removeDescriptor<T extends OwnedDescriptor>(
@@ -3888,9 +3883,36 @@ function sameLiveOwner(
   lease: ZLinkStoreReadResult,
   snapshot: StoredAuthoritySnapshot
 ): boolean {
-  if (liveOwnerLeaseGeneration(lease) !== snapshot.ownerLeaseGeneration) return false;
-  const owner = decodeOwnerRecord((lease as Extract<ZLinkStoreReadResult, { kind: 'found' }>).value.bytes);
-  return owner.ownerId === snapshot.ownerId;
+  if (lease.kind === 'missing') return false;
+  return matchesLiveOwnerLease(
+    lease,
+    snapshot.ownerId,
+    snapshot.ownerLeaseGeneration
+  );
+}
+
+function matchesLiveOwnerLease(
+  lease: Extract<ZLinkStoreReadResult, { kind: 'found' }>,
+  ownerId: string,
+  leaseGeneration: bigint
+): boolean {
+  if (lease.value.expiresAt === undefined
+    || lease.value.expiresAt.getTime() <= lease.value.storeNow.getTime()) {
+    return false;
+  }
+  const owner = decodeOwnerRecord(lease.value.bytes);
+  return owner.ownerId === ownerId
+    && BigInt(owner.leaseGeneration) === leaseGeneration;
+}
+
+function sameDescriptorPredecessor(
+  expected: ZLinkStoreReadResult,
+  current: ZLinkStoreReadResult
+): boolean {
+  if (expected.kind === 'missing' || current.kind === 'missing') {
+    return expected.kind === current.kind;
+  }
+  return Buffer.from(expected.value.bytes).equals(Buffer.from(current.value.bytes));
 }
 
 function liveOwnerLeaseGeneration(
@@ -4113,6 +4135,14 @@ function sameFanoutDescriptor(
   return descriptorFingerprint(left, ['updatedAt']) === descriptorFingerprint(right, ['updatedAt']);
 }
 
+function canRenewMesh(
+  current: ZLinkMeshNodeDescriptor,
+  next: ZLinkMeshNodeDescriptor
+): boolean {
+  return sameOwnerGeneration(current, next)
+    && next.descriptorRevision > current.descriptorRevision;
+}
+
 function canRenewClientServer(
   current: ZLinkClientServerServerDescriptor,
   next: ZLinkClientServerServerDescriptor
@@ -4196,6 +4226,14 @@ function validateDescriptorGenerations(descriptor: OwnedDescriptor, kind: string
 function rejected(updatedAt: Date): ZLinkLocationWriteResult {
   return {
     status: WriteStatus.RejectedConflict,
+    generation: 0n,
+    updatedAt
+  };
+}
+
+function ignoredStale(updatedAt: Date): ZLinkLocationWriteResult {
+  return {
+    status: WriteStatus.IgnoredStale,
     generation: 0n,
     updatedAt
   };
