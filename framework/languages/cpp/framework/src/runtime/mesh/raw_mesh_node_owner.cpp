@@ -1066,9 +1066,7 @@ task_t<bool> raw_mesh_node_owner_t::request_to_channel (
   foundation::operation_registry_t::callback_t callback,
   std::optional<std::uint64_t> correlation)
 {
-    const auto selected = _lane.run ([this, &channel_name] {
-        return _topology.select (channel_name);
-    }).get ();
+    const auto selected = _topology.select (channel_name);
     if (!selected) {
         co_return false;
     }
@@ -1647,9 +1645,7 @@ bool raw_mesh_node_owner_t::reply_failure (
         throw std::invalid_argument (
           "raw mesh failed reply requires a request and terminal result");
     }
-    const auto local = _lane.run ([this] {
-        return _topology.local_descriptor ();
-    }).get ();
+    const auto local = _topology.local_descriptor ();
     if (request.source_routing_id == local.node_routing_id) {
         return _operations->fail (
           operation_id (
@@ -1694,9 +1690,7 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_channel_result (
   const std::string &channel_name,
   const protocol::application_payload_t &application_payload)
 {
-    const auto selected = _lane.run ([this, &channel_name] {
-        return _topology.select (channel_name);
-    }).get ();
+    const auto selected = _topology.select (channel_name);
     if (!selected) {
         co_return zlink::submit_result_t::not_found;
     }
@@ -1725,9 +1719,7 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_spot_result (
   const protocol::application_payload_t &application_payload)
 {
     const auto sequence = next_operation_sequence ();
-    const auto local = _lane.run ([this] {
-        return _topology.local_descriptor ();
-    }).get ();
+    const auto local = _topology.local_descriptor ();
     co_return co_await send_with_header_result (
       target_routing_id,
       protocol::encode_spot_message_header (
@@ -1746,9 +1738,7 @@ task_t<bool> raw_mesh_node_owner_t::request_to_spot (
   std::optional<protocol::wire_operation_id_t> operation,
   std::optional<std::uint64_t> correlation)
 {
-    const auto local = _lane.run ([this] {
-        return _topology.local_descriptor ();
-    }).get ();
+    const auto local = _topology.local_descriptor ();
     co_return co_await request_with_header (
       target_routing_id,
       [source_spot_id, target, local, operation] (std::uint64_t correlation) {
@@ -1785,9 +1775,7 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_actor_result (
     bound_session_source)
 {
     const auto sequence = next_operation_sequence ();
-    const auto local = _lane.run ([this] {
-        return _topology.local_descriptor ();
-    }).get ();
+    const auto local = _topology.local_descriptor ();
     co_return co_await send_with_header_result (
       target_routing_id,
       protocol::encode_actor_message_header (
@@ -1809,9 +1797,7 @@ task_t<bool> raw_mesh_node_owner_t::request_to_actor (
     bound_session_source,
   std::optional<std::uint64_t> correlation)
 {
-    const auto local = _lane.run ([this] {
-        return _topology.local_descriptor ();
-    }).get ();
+    const auto local = _topology.local_descriptor ();
     co_return co_await request_with_header (
       target_routing_id,
       [source_actor, target, local, operation,
@@ -2717,44 +2703,48 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
     catch (...) {
         co_return raw_mesh_pump_result_t::protocol_error;
     }
-    auto pending = _lane.run ([this] {
+    struct pending_pump_t
+    {
         std::optional<detail::backend::raw_received_t> received;
-        std::lock_guard lifecycle_lock (_lifecycle_mutex);
-        if (!_pending_admissions.empty ()) {
-            auto pending = std::move (_pending_admissions.front ());
-            _pending_admissions.pop_front ();
-            _pending_admission_bytes -= pending.bytes;
-            received.emplace (std::move (pending.received));
-            trace_mesh (
-              "admission-retry reason=connection-ready pending="
-                + std::to_string (_pending_admissions.size ()));
-        }
-        return received;
-    }).get ();
-    if (!pending && accept_application_receive) {
-        const auto accepted = _lane.run ([this] {
-            if (!_pending_received)
-                return std::optional<raw_mesh_pump_result_t>{};
-            const auto accepted_result = _pending_received->accepted_result;
-            for (const auto &part : _pending_received->record.parts)
-                _last_pump_bytes += part.size ();
-            if (!_mailbox.try_enqueue (std::move (_pending_received->record))) {
-                return std::optional{raw_mesh_pump_result_t::backpressured};
+        std::optional<raw_mesh_pump_result_t> result;
+    };
+    auto pending = _lane.run ([this, accept_application_receive] {
+        pending_pump_t value;
+        {
+            std::lock_guard lifecycle_lock (_lifecycle_mutex);
+            if (!_pending_admissions.empty ()) {
+                auto pending = std::move (_pending_admissions.front ());
+                _pending_admissions.pop_front ();
+                _pending_admission_bytes -= pending.bytes;
+                value.received.emplace (std::move (pending.received));
+                trace_mesh (
+                  "admission-retry reason=connection-ready pending="
+                    + std::to_string (_pending_admissions.size ()));
             }
-            _pending_received.reset ();
-            return std::optional{accepted_result};
-        }).get ();
-        if (accepted)
-            co_return *accepted;
-    }
-    if (!pending && !accept_application_receive) {
+        }
+        if (value.received || !accept_application_receive || !_pending_received)
+            return value;
+        const auto accepted_result = _pending_received->accepted_result;
+        for (const auto &part : _pending_received->record.parts)
+            _last_pump_bytes += part.size ();
+        if (!_mailbox.try_enqueue (std::move (_pending_received->record))) {
+            value.result = raw_mesh_pump_result_t::backpressured;
+            return value;
+        }
+        _pending_received.reset ();
+        value.result = accepted_result;
+        return value;
+    }).get ();
+    if (pending.result)
+        co_return *pending.result;
+    if (!pending.received && !accept_application_receive) {
         // The ROUTER carries every ordinary record, including control and
         // malformed input.  Without the host-wide supply permit none of
         // those records may be dequeued and classified after receive;
         // terminal reply/error completion progresses on its separate path.
         co_return raw_mesh_pump_result_t::no_data;
     }
-    auto received = std::move (pending);
+    auto received = std::move (pending.received);
     if (!received)
         received = port->receive_if_ready (readiness);
     if (!received) {
@@ -2974,9 +2964,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
             }).get ();
             co_return raw_mesh_pump_result_t::infrastructure;
         }
-        const auto admitted = _lane.run ([this, &received] {
-            return _topology.peer (received->source_routing_id);
-        }).get ();
+        const auto admitted = _topology.peer (received->source_routing_id);
         if (!admitted) {
             if (application_command (header.kind)
                 && header.flags == 0

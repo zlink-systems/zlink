@@ -2204,9 +2204,16 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                 application_supply_slot_t supply (
                   _application_jobs, [node] { node->native_node ().signal_dispatch_activity (); });
                 while (!_stop.load (std::memory_order_acquire)) {
-                    supply.ensure_waiter ();
-                    auto application_permit = supply.take ();
-                    const bool accept_application_receive = static_cast<bool> (application_permit);
+                    std::optional<application_job_queue_t::permit_t> application_permit;
+                    const auto next_application_receive = [&] {
+                        application_permit.reset ();
+                        if (_stop.load (std::memory_order_acquire))
+                            return false;
+                        supply.ensure_waiter ();
+                        application_permit = supply.take ();
+                        return static_cast<bool> (application_permit);
+                    };
+                    const bool accept_application_receive = next_application_receive ();
                     const auto count =
                       std::move (
                         node->dispatch_ready (
@@ -2419,7 +2426,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                   (void) dispatcher.dispatch (record, std::move (parts));
                               });
                           },
-                          accept_application_receive))
+                          accept_application_receive, next_application_receive))
                         .result ()
                         .value ();
                     application_permit.reset ();

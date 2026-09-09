@@ -443,7 +443,8 @@ class mesh_node_runtime_t
     task_t<std::size_t> dispatch_ready (const std::function<void (const host::ready_record_t &,
                                                           const host::receive_record_t &,
                                                           std::vector<zlink::message_t>)> &dispatch,
-                                bool accept_application_receive = true);
+                                bool accept_application_receive = true,
+      const std::function<bool ()> &next_application_receive = {});
     host::node_status_t status () const;
     void dispatch_message_follow (const runtime::protocol::message_follow_notice_t &notice);
     /* Admitted RouteMesh membership size. Vertical and E2E checks wait on this

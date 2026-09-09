@@ -4264,7 +4264,8 @@ task_t<std::size_t> mesh_node_runtime_t::dispatch_ready (
   const std::function<void (const host::ready_record_t &,
                             const host::receive_record_t &,
                             std::vector<zlink::message_t>)> &dispatch,
-  bool accept_application_receive)
+  bool accept_application_receive,
+  const std::function<bool ()> &next_application_receive)
 {
     if (!dispatch)
         throw configuration_error ("MeshNode dispatch callback is required");
@@ -4308,7 +4309,7 @@ task_t<std::size_t> mesh_node_runtime_t::dispatch_ready (
           }
           dispatch (ready_record, record, std::move (parts));
       },
-      accept_application_receive);
+      accept_application_receive, next_application_receive);
 }
 
 host::node_status_t mesh_node_runtime_t::status () const
