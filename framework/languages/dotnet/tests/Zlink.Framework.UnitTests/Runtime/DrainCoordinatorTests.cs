@@ -1390,7 +1390,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             });
         await connector.Connect.Async();
         await connector.Send(new DrainProbeMessage("active")).Async();
-        await sessionProbe.Connected.Task;
+        await sessionProbe.Connected.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         await host.StopAsync();
 
