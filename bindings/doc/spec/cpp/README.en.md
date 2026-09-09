@@ -539,13 +539,13 @@ A C++ caller never has to reason about cleaning up a C handle.
 
 - A resource class releases its native handle in the destructor, and supports an explicit `close` or an equivalent lifecycle method when close can fail.
 - A move-only resource class is preferred over shared ownership of a mutable handle.
-- A message value supports an efficient move; explicit payload share/transfer follow the
-  common contract's `Copy`/`Move` (C `zlink_msg_copy`/`zlink_msg_move`). The C++ signatures
-  are `message_t::copy()` (share, returns a new value) and `message_t::move(message_t&)`
-  (ownership transfer, caller left empty); `move` wraps the C API directly, separate from
-  C++ move semantics. C++ has no Message-returning deep-copy (`Clone`) method — materialize
-  the bytes into a new `message_t` if you need an independent buffer. See the
-  [common Message ownership contract](../draft/message-ownership.ko.md) §"명시적 Copy / Move / Clone".
+- A message value supports an efficient move; explicit payload share/transfer/duplicate
+  follow the common contract's `Copy`/`Move`/`Clone` (C `zlink_msg_copy`/`zlink_msg_move`
+  and a deep copy). The C++ signatures are `message_t::copy()` (share, returns a new value),
+  `message_t::move(message_t&)` (ownership transfer, caller left empty), and
+  `message_t::clone()` (independent deep copy); `move` wraps the C API directly, separate
+  from C++ move semantics. See the [common Message ownership contract](../draft/message-ownership.ko.md)
+  §"명시적 Copy / Move / Clone".
 - The data-plane receive and subscribe paths use caller-provided storage.
 - Receive-result lifetime APIs follow the C++ output-object description in
   [64-bit byte HWM and the monitoring contract](#64-bit-byte-hwm-and-the-monitoring-contract).

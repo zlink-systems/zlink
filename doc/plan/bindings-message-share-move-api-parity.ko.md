@@ -62,10 +62,11 @@ Java relay의 deep-copy가 고정 per-message 비용의 큰 부분).
 깊은 복사는 이름을 **`Clone`(독립 복제)** 으로 옮긴다. 그러면 세 동작이 이름만으로 구분된다:
 - `Copy` = ref-count 공유(같은 버퍼) — C `zlink_msg_copy`.
 - `Move` = 소유권 이전(원본 empty) — C `zlink_msg_move`.
-- `Clone` = 깊은 복사(독립 버퍼). **Node**는 기존 공개 `copy()`(깊은복사)를 `clone()`으로 이름 이동, **Java**는
-  독립 버퍼 `clone()`을 제공(테스트로 refcount=1·독립 mutation 검증). **C++·.NET**은 Message 반환 깊은복사 메서드가
-  없어 `Clone` 미제공(.NET `CopyTo(Span)`은 payload를 버퍼에 채우는 span-fill이라 대상 아님) — 필요 시 바이트를
-  materialize해 새 `Message`를 만든다.
+- `Clone` = 깊은 복사(독립 버퍼) — **네 언어 모두 제공해 API를 통일한다.** 반환된 사본은 refcount를 공유하지 않고
+  독립적으로 수정·close된다. **Node**는 기존 공개 `copy()`(깊은복사)를 `clone()`으로 이름 이동, **Java**는 독립 버퍼
+  `clone()` 제공(테스트로 refcount=1·독립 mutation 검증). **C++**은 `message_t clone() const`, **.NET**은
+  `Message Clone()`을 새로 추가(payload를 새 native frame에 깊은 복사). .NET 기존 `CopyTo(Span)`은 payload를 버퍼에
+  채우는 span-fill이라 별개로 유지된다.
 
 ### 3.3 언어별 시그니처 (두 함수 각각)
 언어별 관용 케이싱을 따르되 의미어(Copy/Move/Clone)는 동일하게 맞춘다.
@@ -73,8 +74,8 @@ Java relay의 deep-copy가 고정 per-message 비용의 큰 부분).
 | 언어 | `Copy` (= zlink_msg_copy, ref-share) | `Move` (= zlink_msg_move, 이전) | 기존 깊은복사 → `Clone` |
 |------|--------------------------------------|--------------------------------|------------------------|
 | **C** | `ZLINK_EXPORT zlink_config_result_t zlink_msg_copy(zlink_msg_t *dest, zlink_msg_t *src);` (기존) | `ZLINK_EXPORT zlink_config_result_t zlink_msg_move(zlink_msg_t *dest, zlink_msg_t *src);` (기존) | — (C엔 없음) |
-| **C++** | `message_t message_t::copy() const;` — 새 `message_t` 반환(버퍼 공유). 내부 `zlink_msg_copy(new, this)`. `this` 유효 유지. | `void message_t::move(message_t &dest);` — `zlink_msg_move(dest, this)`, `this`는 empty. **C++ move 시맨틱이 아니라 C API를 직접** 감쌈. | 현재 공개 깊은복사 있으면 `clone()`로 개명(없으면 미추가) |
-| **.NET** | `public Message Copy();` — 새 `Message` 반환. 내부 `zlink_msg_copy(ref dest, ref this)`(P/Invoke 존재, `Message.Native.cs`). | `public void Move(Message dest);` — `zlink_msg_move`, `this`는 empty. | — 없음. .NET `CopyTo(Span<byte>)`/`CopyTo(IBufferWriter)`는 span-fill이라 Message deep copy가 아님(유지). |
+| **C++** | `message_t message_t::copy() const;` — 새 `message_t` 반환(버퍼 공유). 내부 `zlink_msg_copy(new, this)`. `this` 유효 유지. | `void message_t::move(message_t &dest);` — `zlink_msg_move(dest, this)`, `this`는 empty. **C++ move 시맨틱이 아니라 C API를 직접** 감쌈. | `message_t message_t::clone() const;` — 독립 버퍼로 깊은 복사(신규 추가) |
+| **.NET** | `public Message Copy();` — 새 `Message` 반환. 내부 `zlink_msg_copy(ref dest, ref this)`(P/Invoke 존재, `Message.Native.cs`). | `public void Move(Message dest);` — `zlink_msg_move`, `this`는 empty. | `public Message Clone();` — 독립 버퍼로 깊은 복사(신규 추가). 기존 `CopyTo(Span/IBufferWriter)`는 span-fill이라 별개로 유지. |
 | **Node/TS** | `copy(): Message;` — 새 `Message` 반환. addon `zlink_msg_copy`(존재, `addon_core.cc`) 노출. | `move(dest: Message): void;` — addon `zlink_msg_move`, `this`는 empty. | 기존 `copy()`(깊은복사) → `clone(): Message`로 개명 |
 | **Java** | `public Message copy();` — 새 `Message` 반환(내부 `MH_MSG_COPY`=`zlink_msg_copy`). 기존 `sharedCopyOf`를 `copy`로 정렬. | `public void move(Message dest);` — `zlink_msg_move`. 기존 `moveInto`/`moveTo`를 `move`로 정렬. | 기존 깊은복사(있으면) → `clone`으로 정렬 |
 
