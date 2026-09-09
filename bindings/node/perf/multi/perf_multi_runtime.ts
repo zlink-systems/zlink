@@ -48,13 +48,30 @@ function appendMeasurement(op, payload) {
 }
 
 function submitReply(received, payload) {
-  return appendMeasurement(received.reply(), payload).submit();
+  const moved = moveRelayMessage(payload);
+  try {
+    return appendMeasurement(received.reply(), moved).submit();
+  } finally {
+    if (moved !== payload) moved.close();
+  }
 }
 
 function measurementPayload(parts) {
   if (!Array.isArray(parts) || parts.length !== measurementPartCount()) return null;
-  if (measurementPartCount() === 2 && parts[1].data().length !== 0) return null;
+  if (measurementPartCount() === 2 && parts[1].size() !== 0) return null;
   return parts[0];
+}
+
+function moveRelayMessage(message) {
+  if (!(message instanceof zlink.Message)) return message;
+  const moved = zlink.Message.allocate(0);
+  try {
+    message.move(moved);
+    return moved;
+  } catch (error) {
+    moved.close();
+    throw error;
+  }
 }
 
 function integerEnvPair(primary, fallbackName, fallback) {
@@ -393,6 +410,7 @@ module.exports = {
   appendMeasurement,
   measurementParts,
   measurementPayload,
+  moveRelayMessage,
   waitForRunnerStart,
   waitForConnectionReadyCount,
   waitForConnectionReady

@@ -1326,6 +1326,111 @@ napi_value message_frame_copy_data (napi_env env, napi_callback_info info)
     return create_received_message_buffer (env, &frame->message);
 }
 
+napi_value message_frame_copy (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 1) {
+        napi_throw_type_error (env, NULL, "messageFrameCopy requires a native message frame");
+        return NULL;
+    }
+    native_message_frame_t *source = get_native_message_frame (
+      env, argv[0], "messageFrameCopy requires a native message frame");
+    if (!source)
+        return NULL;
+
+    native_message_frame_t *copy = acquire_native_message_frame ();
+    if (!copy) {
+        napi_throw_error (env, NULL, "native message frame allocation failed");
+        return NULL;
+    }
+    if (zlink_msg_init (&copy->message) != 0) {
+        recycle_native_message_frame (copy);
+        return throw_last_error (env, "message copy destination init failed");
+    }
+    if (zlink_msg_copy (&copy->message, &source->message) != 0) {
+        zlink_msg_close (&copy->message);
+        recycle_native_message_frame (copy);
+        return throw_last_error (env, "message copy failed");
+    }
+    return create_native_message_value (env, copy, false);
+}
+
+static void detach_message_buffer (napi_env env, napi_value value)
+{
+    if (value == NULL)
+        return;
+    bool is_buffer = false;
+    if (napi_is_buffer (env, value, &is_buffer) != napi_ok || !is_buffer)
+        return;
+    napi_value array_buffer;
+    if (napi_get_named_property (env, value, "buffer", &array_buffer) == napi_ok)
+        napi_detach_arraybuffer (env, array_buffer);
+}
+
+napi_value message_frame_move (napi_env env, napi_callback_info info)
+{
+    napi_value argv[4];
+    size_t argc = 4;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 2) {
+        napi_throw_type_error (
+          env, NULL,
+          "messageFrameMove requires destination and source native message frames");
+        return NULL;
+    }
+    native_message_frame_t *destination = get_native_message_frame (
+      env, argv[0], "messageFrameMove destination is invalid");
+    if (!destination)
+        return NULL;
+    native_message_frame_t *source = get_native_message_frame (
+      env, argv[1], "messageFrameMove source is invalid");
+    if (!source)
+        return NULL;
+    if (destination == source) {
+        napi_throw_type_error (env, NULL, "messageFrameMove requires distinct frames");
+        return NULL;
+    }
+    if (zlink_msg_move (&destination->message, &source->message) != 0)
+        return throw_last_error (env, "message move failed");
+
+    // Any previously exposed Buffer points at the pre-move storage. Invalidate
+    // those views after the ownership transfer before JavaScript can observe
+    // either wrapper again.
+    if (argc > 2)
+        detach_message_buffer (env, argv[2]);
+    if (argc > 3)
+        detach_message_buffer (env, argv[3]);
+
+    napi_value out;
+    napi_get_undefined (env, &out);
+    return out;
+}
+
+napi_value message_frame_ref_count (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 1) {
+        napi_throw_type_error (
+          env, NULL, "messageFrameRefCount requires a native message frame");
+        return NULL;
+    }
+    native_message_frame_t *frame = get_native_message_frame (
+      env, argv[0], "messageFrameRefCount requires a native message frame");
+    if (!frame)
+        return NULL;
+    zlink_config_result_t error = ZLINK_CONFIG_OK;
+    const int ref_count = zlink_msg_refcnt (&frame->message, &error);
+    if (error != ZLINK_CONFIG_OK)
+        return throw_last_error (env, "message refcount failed");
+    napi_value out;
+    napi_create_int32 (env, ref_count, &out);
+    return out;
+}
+
 napi_value message_frame_size (napi_env env, napi_callback_info info)
 {
     napi_value argv[1];
@@ -1346,8 +1451,8 @@ napi_value message_frame_size (napi_env env, napi_callback_info info)
 
 napi_value message_frame_close (napi_env env, napi_callback_info info)
 {
-    napi_value argv[1];
-    size_t argc = 1;
+    napi_value argv[2];
+    size_t argc = 2;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     native_message_frame_handle_t *handle = NULL;
     if (argc < 1
@@ -1356,6 +1461,16 @@ napi_value message_frame_close (napi_env env, napi_callback_info info)
         || !handle) {
         napi_throw_type_error (env, NULL, "messageFrameClose requires a native message frame");
         return NULL;
+    }
+    if (argc > 1 && handle->frame) {
+        // A Buffer view retains the frame independently of its Message handle.
+        // Detach it and empty the frame now so close deterministically releases
+        // the Core payload/refcount instead of waiting for a later GC cycle.
+        detach_message_buffer (env, argv[1]);
+        if (zlink_msg_close (&handle->frame->message) != 0)
+            return throw_last_error (env, "message frame close failed");
+        if (zlink_msg_init (&handle->frame->message) != 0)
+            return throw_last_error (env, "message frame reinit failed");
     }
     release_native_message_frame (handle->frame);
     handle->frame = NULL;

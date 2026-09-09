@@ -20,6 +20,7 @@ import {
 import type { NativeHandle } from '../native/binding_types';
 import { requireNative } from '../native/native';
 import type { OperationPayloadValue } from './send_operation_base';
+import { messageToSnapshot, type MessageSnapshot } from './message_snapshot';
 import { messagesFromNativeBuffers } from './request_executor';
 
 const COMPLETION_REQUEST = 2;
@@ -60,8 +61,10 @@ interface RetryState {
 
 const RESOLVED_SEND = Promise.resolve();
 
-function snapshotRetryPart(part: MessageLike): Buffer {
-  return part instanceof Message ? part.toBytes() : Buffer.from(part);
+function snapshotRetryPart(part: MessageLike): Buffer | MessageSnapshot {
+  return part instanceof Message
+    ? messageToSnapshot(part.copy())
+    : Buffer.from(part);
 }
 
 function snapshotRetryPayload(

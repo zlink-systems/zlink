@@ -25,6 +25,7 @@ const {
   emitMultiSocketHwmDetail,
   measurementParts,
   measurementPayload,
+  moveRelayMessage,
   pollEvents,
   pollEventHas,
   recvNoWaitInto,
@@ -112,9 +113,11 @@ function sendPayload(socket, routerClient, payload) {
 }
 
 async function sendServerReply(received) {
+  const movedParts = [];
   try {
+    for (const part of received.parts) movedParts.push(moveRelayMessage(part));
     let reply = received.send();
-    for (const part of received.parts) {
+    for (const part of movedParts) {
       reply = reply.message(part);
     }
     await reply.submit();
@@ -126,6 +129,10 @@ async function sendServerReply(received) {
       return true;
     }
     throw error;
+  } finally {
+    for (let index = 0; index < movedParts.length; index += 1) {
+      if (movedParts[index] !== received.parts[index]) movedParts[index].close();
+    }
   }
 }
 
@@ -441,8 +448,8 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
           }
           const expectedParts = MEASUREMENT_PART_COUNT;
           if (received.parts.length !== expectedParts
-              || (expectedParts === 2 && received.parts[1].data().length !== 0)) {
-            const partSizes = received.parts.map((part) => part.data().length).join(',');
+              || (expectedParts === 2 && received.parts[1].size() !== 0)) {
+            const partSizes = received.parts.map((part) => part.size()).join(',');
             throw new Error(
               `invalid multipart echo request: expected=${expectedParts}, sizes=${partSizes}`
             );
