@@ -752,6 +752,13 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   실행돼 무효화하고 재측정했다.
 - 다음 작업: .NET Single·Multi paired 측정으로 이동(C++ 미달·실패는 2단계 개선에서 처리).
 
+> **C++ routed 개선 시도 — 개선 없음/보류(2026-09-09).** ws DEALER_ROUTER(76.2%) 등 작은-payload routed를 callgrind로
+> 프로파일했다. 비용은 Core 라우팅(msg_t::copy, router recv, routing-id copy)에 낮게 분산돼 있고 C++ **바인딩 런타임에는
+> 제거 가능한 지배적 hot spot이 없다**(이미 near-optimal, 전체 86~99%). 벤치마크 harness의 수신 객체 수명을 손대는
+> 변경을 시험했으나 (a) 측정 의미를 C와 다르게 만들 소지가 있고 (b) 실질 이득이 없어 **되돌렸다**. 수치만 올리는 harness
+> 튜닝은 목표가 아니다(동일 측정 의미로 라이브러리 성능을 개선하는 것이 목표). C++ pool 재도입 금지(§7.6) 준수. routed
+> 작은-payload 격차는 Core 라우팅 + 전송 framing 고유 비용으로 본다.
+
 #### 9.1.1 Single suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
@@ -855,6 +862,16 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   해소(통과). .NET report에 `META,core_version` 라인이 없어 status에 `core_meta_missing`을 부기했으나
   package provenance·console로 release 0.17.5 확인(양성).
 - 다음 작업: Java Single·Multi paired 측정.
+
+> **.NET routed request/reply 개선 시도 — 보류(2026-09-09).** DEALER_ROUTER_REQREP·ROUTER_ROUTER_REQREP가
+> C 대비 낮아(single tcp 63.1/56.4%) 진단했다. 병목은 요청당 managed 할당(RequestCompletionEntry·Task·
+> reply builder/collection·ReplyToken·ReceivedReplyContext 등, Gen0 GC 151~187 MB/s)과 **2-part 왕복당 약 30회의
+> P/Invoke 경계 + CLR object header/JIT/GC 고유 비용**이다(Core·wire·routing 결함 없음, 분류 B). 계약 보존
+> 할당 축소 pass(ReceivedReplyContext 제거·노출 안 된 multipart wrapper 재사용·indexed loop)를 구현해 allocation
+> rate는 −6.2% 줄였으나 **throughput이 오히려 회귀**(DEALER_ROUTER_REQREP −3.76%, ROUTER_ROUTER_REQREP −3.75%,
+> PAIR −5.02%)했다. 할당이 throughput 병목이 아니고 P/Invoke 경계 비용이 지배적이라, §7.7에 따라 변경을 되돌리고
+> 보류로 둔다. public 계약·테스트는 훼손하지 않았다(변경은 전량 revert). inproc/ipc routed는 §2.1 예외/memory-copy
+> 상한과 함께 재검토 대상.
 
 #### 9.2.1 Single suite
 
@@ -1049,6 +1066,15 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   포함) 후 재측정으로 해소(ws 39.6·wss 42.8·tls 39.3%). Core·바인딩 라이브러리 무변경. STREAM은 최초 job이
   비-STREAM partial 때문에 건너뛴 것을 재측정해 채움. routed echo·req/reply는 30~40%대로 목표 미달(2단계).
 - 다음 작업: 실패 셀 원인 진단·수정 후 재측정(§9.4 하단 메모).
+
+> **Node routed echo(SENDSEND) 개선 시도 — 보류(2026-09-09).** MULTI_DEALER_ROUTER_SENDSEND 등이 C 대비 매우 낮아
+> (tcp 24.9%) 프로파일했다. echo당 최소 recv 1회·submit 1회의 **JS↔native 경계가 CPU의 ~78%**(submitSend 41.7% + routed
+> recv 36.5%)를 차지하고 GC는 1.98%뿐이다. Java의 completion worker-queue 왕복 문제는 없었다(그 실험은 효과 없어 revert).
+> 근본 병목은 SENDSEND의 2-part(payload+빈 tail) multipart 바인딩 경계 비용이다(1-part 진단은 +65% 빨랐다). 권장 수정은
+> routed multipart part를 기존 `nativeReadOnly` 저장으로 materialize해 복사를 줄이는 것이나, 이는 **protected spec
+> `bindings/doc/spec/node/README.ko.md`의 routed lazy-materialization 예외와 비용 계약을 바꿔야** 가능하다. 계약/스펙 변경은
+> perf를 위해 우회하지 않으므로(§7.5·§8) **보류**로 둔다. 코드·테스트 무변경(routed contract test 12/12 통과). 스펙 개정을
+> 승인하면 별도 설계로 다룬다.
 
 #### 9.4.1 Single suite
 
