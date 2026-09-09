@@ -51,6 +51,9 @@ is the safer path. The full procedure is in [the release pipeline](./release-pip
 - Bindings: edit `BINDINGS_VERSION` only.
 - Framework: edit `FRAMEWORK_VERSION` only; `sync-version.py --write` aligns the 107 files (.NET props, Node
   packages, samples and lockfile, Java/Kotlin build files, C++ vcpkg/Conan manifests) listed in the script's registry.
+  Planned: .NET (MSBuild), Gradle and CMake will read `FRAMEWORK_VERSION` at build time, shrinking the sync
+  set to the npm, vcpkg and Conan manifests plus the standalone-sample defaults (about 30 files); those
+  tools read JSON/text verbatim and need literal versions.
 - Then `python3 scripts/local-package/sync-version.py --write` aligns manifests, pins, headers, and
   snapshots at once, and `scripts/local-package/build-wsl.sh --verify-versions` checks for missing
   pins. Never hunt for pins by hand.

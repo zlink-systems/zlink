@@ -49,6 +49,9 @@
 - Binding: `BINDINGS_VERSION`만 수정한다.
 - Framework: `FRAMEWORK_VERSION`만 수정한다. `sync-version.py --write`가 .NET props, Node 패키지·샘플·lockfile,
   Java·Kotlin build 파일, C++ vcpkg·Conan 매니페스트의 107개 파일을 맞춘다(registry는 스크립트 안에 명시).
+  예정: 빌드 시점에 파일을 읽을 수 있는 .NET(MSBuild)·Gradle·CMake는 `FRAMEWORK_VERSION`을 직접 읽게
+  바꿔 동기화 대상을 npm·vcpkg·Conan 매니페스트와 샘플 사용자 모드 기본값(약 30개)으로 줄인다.
+  이 도구들은 JSON·텍스트를 그대로 읽어 literal 버전이 필요하므로 동기화가 남는다.
 - 그 뒤 `python3 scripts/local-package/sync-version.py --write`가 매니페스트·pin·헤더·스냅샷을
   한 번에 맞추고, `scripts/local-package/build-wsl.sh --verify-versions`로 누락을 확인한다.
   개별 파일을 손으로 찾아 고치지 않는다.
