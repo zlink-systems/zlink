@@ -5,13 +5,10 @@ package systems.zlink.contracts.messaging;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.internal.ContractAccess;
 import io.netty.buffer.ByteBuf;
-import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
-import sun.misc.Unsafe;
 
 /**
  * Owns one native zlink frame and exposes canonical copy factories for Java
@@ -27,13 +24,6 @@ import sun.misc.Unsafe;
  * wrapper for a later native frame.
  */
 public final class Message implements AutoCloseable {
-    private static final Unsafe UNSAFE = UnsafeAccess.get();
-    private static final long NATIVE_MESSAGE_LAYOUT_SIZE =
-        ContractAccess.nativeMessageLayoutSize();
-    private static final long BYTE_ARRAY_BASE =
-        UNSAFE.arrayBaseOffset(byte[].class);
-    private static final boolean NATIVE_LITTLE_ENDIAN =
-        ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
     private static final ContractAccess.NativeMessageAccess NATIVE_ACCESS;
 
     private final Object scope;
@@ -291,8 +281,7 @@ public final class Message implements AutoCloseable {
         validateRange(data.length, offset, length, "data");
         Message msg = new Message(length);
         if (length > 0) {
-            UNSAFE.copyMemory(data, BYTE_ARRAY_BASE + offset, null,
-                msg.cachedAddress, length);
+            NATIVE_ACCESS.copyFromArray(data, offset, msg.cachedAddress, length);
         }
         return msg;
     }
@@ -303,8 +292,7 @@ public final class Message implements AutoCloseable {
         int size = source.size();
         Message msg = new Message(size);
         if (size > 0) {
-            UNSAFE.copyMemory(null, source.cachedAddress, null,
-                msg.cachedAddress, size);
+            NATIVE_ACCESS.copyMemory(source.cachedAddress, msg.cachedAddress, size);
         }
         msg.more = source.more;
         return msg;
@@ -354,8 +342,7 @@ public final class Message implements AutoCloseable {
         msg.more = false;
         msg.cachePayload(length);
         if (length > 0) {
-            UNSAFE.copyMemory(data, BYTE_ARRAY_BASE + offset, null,
-                msg.cachedAddress, length);
+            NATIVE_ACCESS.copyFromArray(data, offset, msg.cachedAddress, length);
         }
         return msg;
     }
@@ -411,14 +398,13 @@ public final class Message implements AutoCloseable {
         int readerIndex = data.readerIndex();
         Message msg = new Message(length);
         if (data.hasMemoryAddress()) {
-            UNSAFE.copyMemory(null, data.memoryAddress() + readerIndex, null,
+            NATIVE_ACCESS.copyMemory(data.memoryAddress() + readerIndex,
                 msg.cachedAddress, length);
             return msg;
         }
         if (data.hasArray()) {
-            UNSAFE.copyMemory(data.array(),
-                BYTE_ARRAY_BASE + data.arrayOffset() + readerIndex, null,
-                msg.cachedAddress, length);
+            NATIVE_ACCESS.copyFromArray(data.array(),
+                data.arrayOffset() + readerIndex, msg.cachedAddress, length);
             return msg;
         }
         try {
@@ -431,8 +417,7 @@ public final class Message implements AutoCloseable {
         } catch (UnsupportedOperationException ex) {
             byte[] tmp = new byte[length];
             data.getBytes(readerIndex, tmp);
-            UNSAFE.copyMemory(tmp, BYTE_ARRAY_BASE, null, msg.cachedAddress,
-                length);
+            NATIVE_ACCESS.copyFromArray(tmp, 0, msg.cachedAddress, length);
             return msg;
         }
     }
@@ -492,21 +477,19 @@ public final class Message implements AutoCloseable {
     public int readIntBe(int offset) {
         int size = size();
         validateRange(size, offset, Integer.BYTES, "offset");
-        int value = UNSAFE.getInt(null, cachedAddress + offset);
-        return NATIVE_LITTLE_ENDIAN ? Integer.reverseBytes(value) : value;
+        return NATIVE_ACCESS.readIntBe(cachedAddress + offset);
     }
 
     public byte readByte(int offset) {
         int size = size();
         validateRange(size, offset, 1, "offset");
-        return UNSAFE.getByte(null, cachedAddress + offset);
+        return NATIVE_ACCESS.readByte(cachedAddress + offset);
     }
 
     short readShortBe(int offset) {
         int size = size();
         validateRange(size, offset, Short.BYTES, "offset");
-        short value = UNSAFE.getShort(null, cachedAddress + offset);
-        return NATIVE_LITTLE_ENDIAN ? Short.reverseBytes(value) : value;
+        return NATIVE_ACCESS.readShortBe(cachedAddress + offset);
     }
 
     public boolean contentEquals(byte[] expected) {
@@ -514,20 +497,7 @@ public final class Message implements AutoCloseable {
         int size = size();
         if (size != expected.length)
             return false;
-        int i = 0;
-        for (; i + Long.BYTES <= size; i += Long.BYTES) {
-            long actual = UNSAFE.getLong(null, cachedAddress + i);
-            long wanted = UNSAFE.getLong(expected, BYTE_ARRAY_BASE + i);
-            if (actual != wanted)
-                return false;
-        }
-        for (; i < size; i++) {
-            if (UNSAFE.getByte(null, cachedAddress + i)
-                != UNSAFE.getByte(expected, BYTE_ARRAY_BASE + i)) {
-                return false;
-            }
-        }
-        return true;
+        return NATIVE_ACCESS.contentEquals(cachedAddress, expected);
     }
 
     public long readLongLe(int offset) {
@@ -537,13 +507,11 @@ public final class Message implements AutoCloseable {
     }
 
     private int readIntLeUnchecked(int offset) {
-        int value = UNSAFE.getInt(null, cachedAddress + offset);
-        return NATIVE_LITTLE_ENDIAN ? value : Integer.reverseBytes(value);
+        return NATIVE_ACCESS.readIntLe(cachedAddress + offset);
     }
 
     private long readLongLeUnchecked(int offset) {
-        long value = UNSAFE.getLong(null, cachedAddress + offset);
-        return NATIVE_LITTLE_ENDIAN ? value : Long.reverseBytes(value);
+        return NATIVE_ACCESS.readLongLe(cachedAddress + offset);
     }
 
     public ByteBuffer dataBuffer() {
@@ -592,7 +560,7 @@ public final class Message implements AutoCloseable {
         if (size <= 0)
             return new byte[0];
         byte[] out = new byte[size];
-        UNSAFE.copyMemory(null, cachedAddress, out, BYTE_ARRAY_BASE, size);
+        NATIVE_ACCESS.copyToArray(cachedAddress, out, 0, size);
         return out;
     }
 
@@ -606,8 +574,7 @@ public final class Message implements AutoCloseable {
         validateRange(destination.length, offset, size, "destination");
         if (size == 0)
             return 0;
-        UNSAFE.copyMemory(null, cachedAddress, destination,
-            BYTE_ARRAY_BASE + offset, size);
+        NATIVE_ACCESS.copyToArray(cachedAddress, destination, offset, size);
         return size;
     }
 
@@ -619,8 +586,8 @@ public final class Message implements AutoCloseable {
         validateRange(destination.length, destinationOffset, length, "destination");
         if (length == 0)
             return 0;
-        UNSAFE.copyMemory(null, cachedAddress + sourceOffset, destination,
-            BYTE_ARRAY_BASE + destinationOffset, length);
+        NATIVE_ACCESS.copyToArray(cachedAddress + sourceOffset, destination,
+            destinationOffset, length);
         return length;
     }
 
@@ -647,7 +614,7 @@ public final class Message implements AutoCloseable {
             return 0;
         if (destination.hasMemoryAddress()) {
             int writerIndex = destination.writerIndex();
-            UNSAFE.copyMemory(null, cachedAddress, null,
+            NATIVE_ACCESS.copyMemory(cachedAddress,
                 destination.memoryAddress() + writerIndex, size);
             destination.writerIndex(writerIndex + size);
             return size;
@@ -713,7 +680,7 @@ public final class Message implements AutoCloseable {
     public void writeByte(int offset, byte value) {
         int size = size();
         validateRange(size, offset, 1, "offset");
-        UNSAFE.putByte(null, cachedAddress + offset, value);
+        NATIVE_ACCESS.writeByte(cachedAddress + offset, value);
     }
 
     public void fill(byte value) {
@@ -725,35 +692,31 @@ public final class Message implements AutoCloseable {
         validateRange(size, offset, length, "offset");
         if (length == 0)
             return;
-        UNSAFE.setMemory(null, cachedAddress + offset, length, value);
+        NATIVE_ACCESS.fill(cachedAddress + offset, length, value);
     }
 
     public void writeIntLe(int offset, int value) {
         int size = size();
         validateRange(size, offset, Integer.BYTES, "offset");
-        int encoded = NATIVE_LITTLE_ENDIAN ? value : Integer.reverseBytes(value);
-        UNSAFE.putInt(null, cachedAddress + offset, encoded);
+        NATIVE_ACCESS.writeIntLe(cachedAddress + offset, value);
     }
 
     public void writeLongLe(int offset, long value) {
         int size = size();
         validateRange(size, offset, Long.BYTES, "offset");
-        long encoded = NATIVE_LITTLE_ENDIAN ? value : Long.reverseBytes(value);
-        UNSAFE.putLong(null, cachedAddress + offset, encoded);
+        NATIVE_ACCESS.writeLongLe(cachedAddress + offset, value);
     }
 
     public void writeShortBe(int offset, short value) {
         int size = size();
         validateRange(size, offset, Short.BYTES, "offset");
-        short encoded = NATIVE_LITTLE_ENDIAN ? Short.reverseBytes(value) : value;
-        UNSAFE.putShort(null, cachedAddress + offset, encoded);
+        NATIVE_ACCESS.writeShortBe(cachedAddress + offset, value);
     }
 
     public void writeIntBe(int offset, int value) {
         int size = size();
         validateRange(size, offset, Integer.BYTES, "offset");
-        int encoded = NATIVE_LITTLE_ENDIAN ? Integer.reverseBytes(value) : value;
-        UNSAFE.putInt(null, cachedAddress + offset, encoded);
+        NATIVE_ACCESS.writeIntBe(cachedAddress + offset, value);
     }
 
     public int copyFrom(byte[] source, int sourceOffset, int destinationOffset,
@@ -764,7 +727,7 @@ public final class Message implements AutoCloseable {
         validateRange(size, destinationOffset, length, "destination");
         if (length == 0)
             return 0;
-        UNSAFE.copyMemory(source, BYTE_ARRAY_BASE + sourceOffset, null,
+        NATIVE_ACCESS.copyFromArray(source, sourceOffset,
             cachedAddress + destinationOffset, length);
         return length;
     }
@@ -778,7 +741,7 @@ public final class Message implements AutoCloseable {
         validateRange(size, destinationOffset, length, "destination");
         if (length == 0)
             return 0;
-        UNSAFE.copyMemory(null, source.cachedAddress + sourceOffset, null,
+        NATIVE_ACCESS.copyMemory(source.cachedAddress + sourceOffset,
             cachedAddress + destinationOffset, length);
         return length;
     }
@@ -1057,28 +1020,6 @@ public final class Message implements AutoCloseable {
             throw new IndexOutOfBoundsException(name + " range out of bounds");
     }
 
-    private static final class UnsafeAccess {
-        private static final Unsafe INSTANCE = lookupUnsafe();
-
-        private UnsafeAccess() {
-        }
-
-        static Unsafe get() {
-            return INSTANCE;
-        }
-
-        private static Unsafe lookupUnsafe() {
-            try {
-                Field field = Unsafe.class.getDeclaredField("theUnsafe");
-                field.setAccessible(true);
-                return (Unsafe) field.get(null);
-            } catch (ReflectiveOperationException ex) {
-                throw new IllegalStateException(
-                    "Unable to access sun.misc.Unsafe", ex);
-            }
-        }
-    }
-
     /**
      * Bounded cache for the native message header storage owned by Java
      * Message instances. The native frame itself is always closed before a
@@ -1104,11 +1045,7 @@ public final class Message implements AutoCloseable {
                 slot = SHARED.poll();
             }
             if (slot == null) {
-                long address = UNSAFE.allocateMemory(
-                    NATIVE_MESSAGE_LAYOUT_SIZE);
-                UNSAFE.setMemory(address, NATIVE_MESSAGE_LAYOUT_SIZE,
-                    (byte) 0);
-                slot = new NativeMessageSlot(address);
+                slot = new NativeMessageSlot();
             }
             slot.ownerThreadId = Thread.currentThread().threadId();
             return slot;
@@ -1125,7 +1062,7 @@ public final class Message implements AutoCloseable {
             if (SHARED.offer(slot)) {
                 return;
             }
-            UNSAFE.freeMemory(slot.address);
+            NATIVE_ACCESS.closeMessageScope(slot.scope);
         }
 
         private static final class Pool {
@@ -1154,14 +1091,20 @@ public final class Message implements AutoCloseable {
     }
 
     private static final class NativeMessageSlot {
-        private final long address;
+        private final Object scope;
         private final Object handle;
         private long ownerThreadId;
 
-        private NativeMessageSlot(long address) {
-            this.address = address;
-            this.handle = ContractAccess.nativeMessageHandleFromAddress(
-                address);
+        private NativeMessageSlot() {
+            // Slots can be returned by a completion thread and acquired by
+            // another thread. Keep the shared arena until the pool evicts it.
+            this.scope = NATIVE_ACCESS.openSharedMessageScope();
+            Object storage = NATIVE_ACCESS.allocate(scope);
+            // Preserve the non-owning native handle: Message ownership already
+            // bounds its use, and a scoped handle adds shared-session atomics
+            // to every downcall. The slot alone owns and releases the storage.
+            this.handle = NATIVE_ACCESS.handleFromAddress(
+                NATIVE_ACCESS.address(storage));
         }
     }
 

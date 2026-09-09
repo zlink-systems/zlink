@@ -350,6 +350,36 @@ public final class ContractAccess {
 
         Message adoptOwnedMessage(Object nativeMsg);
 
+        byte readByte(long address);
+
+        short readShortBe(long address);
+
+        int readIntLe(long address);
+
+        int readIntBe(long address);
+
+        long readLongLe(long address);
+
+        void writeByte(long address, byte value);
+
+        void writeShortBe(long address, short value);
+
+        void writeIntLe(long address, int value);
+
+        void writeIntBe(long address, int value);
+
+        void writeLongLe(long address, long value);
+
+        void fill(long address, int length, byte value);
+
+        boolean contentEquals(long address, byte[] expected);
+
+        void copyFromArray(byte[] source, int offset, long destination, int length);
+
+        void copyToArray(long source, byte[] destination, int offset, int length);
+
+        void copyMemory(long source, long destination, int length);
+
         void copyFromSegment(Object source, long sourceOffset, Object destination,
                              long destinationOffset, long length);
 
