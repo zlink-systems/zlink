@@ -200,6 +200,13 @@ load_models() {
     local config=$1 default_model=$2 model
     local -A seen=()
     AVAILABLE_MODELS=()
+    # config는 TUI가 안내한 모델만 담아서 실제로 쓸 수 있는 id를 다 알지 못한다.
+    # 알려진 id를 먼저 넣고, 새 id는 ZLINK_JOB_MODELS로 더한다(공백 구분).
+    for model in ${ZLINK_JOB_MODELS:-gpt-6-astra gpt-5.6-sol gpt-5.6-terra gpt-5.6-luna}; do
+        [[ -n "$model" && -z "${seen[$model]+present}" ]] || continue
+        AVAILABLE_MODELS+=("$model")
+        seen["$model"]=1
+    done
     if [[ -n "$default_model" ]]; then
         AVAILABLE_MODELS+=("$default_model")
         seen["$default_model"]=1
