@@ -1,4 +1,4 @@
-assembly Systems.Zlink.HttpClient
+assembly Zlink.HttpClient
   type sealed-class Zlink.HttpClient.HttpResponse<T> required-members
     generic T variance=invariant nullable=nullable
     ctor HttpResponse()

@@ -45,7 +45,7 @@ class small_msg_storage_t
             stack_size_ = count;
             return true;
         }
-        if (count > std::numeric_limits<size_t>::max () / sizeof (zlink_msg_t)) {
+        if (count > (std::numeric_limits<size_t>::max) () / sizeof (zlink_msg_t)) {
             napi_throw_error (env, NULL, "message parts allocation failed");
             return false;
         }
@@ -106,9 +106,9 @@ class small_msg_storage_t
         }
 
         if (heap_size_ == heap_capacity_) {
-            if (heap_capacity_ > std::numeric_limits<size_t>::max () / 2
+            if (heap_capacity_ > (std::numeric_limits<size_t>::max) () / 2
                 || heap_capacity_ * 2
-                     > std::numeric_limits<size_t>::max () / sizeof (zlink_msg_t))
+                     > (std::numeric_limits<size_t>::max) () / sizeof (zlink_msg_t))
                 return false;
             const size_t capacity = heap_capacity_ * 2;
             std::unique_ptr<zlink_msg_t[]> candidate (

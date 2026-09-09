@@ -2,7 +2,7 @@
     <PropertyGroup>
         <IsPackable>true</IsPackable>
         <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
-        <AssemblyName>Systems.Zlink.Framework.AspNetCore</AssemblyName>
+        <AssemblyName>Zlink.Framework.AspNetCore</AssemblyName>
         <PackageId>Zlink.Framework.AspNetCore</PackageId>
         <RootNamespace>Zlink.Framework.AspNetCore</RootNamespace>
         <Description>ASP.NET Core integration layer for ZLink framework.</Description>

@@ -16,11 +16,11 @@ public sealed class MaintenanceRuntimeTests
         Assert.Same(coreAssembly, typeof(ZLinkDrainCoordinator).Assembly);
         Assert.Same(coreAssembly, typeof(ZLinkFrameworkDrainExecutor).Assembly);
         Assert.Null(Type.GetType(
-            "Zlink.Framework.AspNetCore.ZLinkFrameworkMaintenanceRuntime, Systems.Zlink.Framework.AspNetCore"));
+            "Zlink.Framework.AspNetCore.ZLinkFrameworkMaintenanceRuntime, Zlink.Framework.AspNetCore"));
         Assert.Null(Type.GetType(
-            "Zlink.Framework.AspNetCore.ZLinkDrainCoordinator, Systems.Zlink.Framework.AspNetCore"));
+            "Zlink.Framework.AspNetCore.ZLinkDrainCoordinator, Zlink.Framework.AspNetCore"));
         Assert.Null(Type.GetType(
-            "Zlink.Framework.AspNetCore.ZLinkFrameworkDrainExecutor, Systems.Zlink.Framework.AspNetCore"));
+            "Zlink.Framework.AspNetCore.ZLinkFrameworkDrainExecutor, Zlink.Framework.AspNetCore"));
     }
 
     [Fact]

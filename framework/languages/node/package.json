@@ -27,7 +27,9 @@
     "verify:runtime-matrix": "node scripts/verify_node_runtime_matrix.js",
     "verify:abi-matrix": "node scripts/verify_node_abi_matrix.js",
     "verify:cross-language": "./cross-language/run_cross_language_smoke.sh",
-    "verify:release": "npm run verify:abi-matrix && npm run verify:p0 && npm run verify:samples && npm run verify:runtime-matrix && npm run verify:cross-language"
+    "verify:release": "npm run verify:abi-matrix && npm run verify:p0 && npm run lint:samples && npm run test:samples && npm run verify:samples && npm run verify:runtime-matrix && npm run verify:cross-language",
+    "test:samples": "node --test --test-timeout=600000 test/contract/sample-*.test.js test/contract/tictactoe-*.test.js test/contract/node-sample-client-bundle.test.js",
+    "lint:samples": "node node_modules/eslint/bin/eslint.js samples/**/*.ts"
   },
   "workspaces": [
     "packages/framework",

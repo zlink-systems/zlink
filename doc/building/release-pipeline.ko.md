@@ -126,6 +126,9 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 
 배포와 별개로 `main` push·PR에서 도는 검증이다. framework CI는 공개된 binding 패키지와 Core 릴리스
 아카이브만 사용하며, e2e는 `cross-language`만 포함한다(언어별 시나리오 e2e는 각 `run_e2e.sh`로 opt-in).
+7개 샘플(Bingo·DeliveryDispatch·GameQuest·ShoppingMall·SupportChat·TicTacToe·ZoneWorld)도 framework
+빌드·CI·배포에 포함하지 않는다. 샘플은 로컬 gate(`scripts/gate/framework-gate.sh`)와 각 언어의
+`samples/run_samples.sh`, Node `npm run test:samples`로만 검증한다.
 
 | 워크플로우 | 대상 | 매트릭스 |
 | --- | --- | --- |

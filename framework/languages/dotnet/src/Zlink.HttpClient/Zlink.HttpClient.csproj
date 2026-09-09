@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
         <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
-        <AssemblyName>Systems.Zlink.HttpClient</AssemblyName>
+        <AssemblyName>Zlink.HttpClient</AssemblyName>
         <PackageId>Zlink.HttpClient</PackageId>
         <RootNamespace>Zlink.HttpClient</RootNamespace>
         <Description>ZLink-style fluent HTTP client wrapping System.Net.Http for the ZLink framework.</Description>

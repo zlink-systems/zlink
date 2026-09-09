@@ -130,8 +130,9 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   (timing asserts are load-sensitive). A test broken by load is judged by a solo rerun; tolerances
   are never widened.
 - The framework's default builds, solutions and CI include only the `cross-language` e2e. Per-language
-  scenario e2e (`framework/languages/<lang>/e2e/*`) runs only through its `run_e2e.sh` and is never
-  added to the sln, the default CMake targets or CI.
+  scenario e2e (`framework/languages/<lang>/e2e/*`) and the seven samples (`samples/*`) run only through
+  their `run_e2e.sh`, `run_samples.sh` and Node `npm run test:samples`, and are never added to the sln,
+  the default CMake targets, the Gradle root build, CI or releases.
 
 ### Interface boundary of Core tests
 

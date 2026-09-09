@@ -11,11 +11,8 @@ apply(from = generateSequence(settingsDir) { it.parentFile }
 
 rootProject.name = "zlink-framework-java"
 
-if (gradle.parent == null) {
-    includeBuild("samples") {
-        name = "zlink-framework-java-samples"
-    }
-}
+// The seven samples are not part of the framework build; they include this build
+// from samples/settings.gradle.kts and run through samples/run_samples.sh.
 
 include(
     "zlink-framework-provider-abstractions",

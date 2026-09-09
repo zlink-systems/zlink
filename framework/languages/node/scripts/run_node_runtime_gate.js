@@ -14,6 +14,11 @@ const skippedTestFiles = new Set(
     .map((value) => value.trim())
     .filter((value) => value.length > 0)
 );
+//  The seven framework samples (Bingo, DeliveryDispatch, GameQuest, ShoppingMall,
+//  SupportChat, TicTacToe, ZoneWorld) are not part of the framework build or CI;
+//  `npm run test:samples` / `verify:samples` cover them explicitly.
+const includeSamples = process.env.ZLINK_NODE_RUNTIME_GATE_INCLUDE_SAMPLES === '1';
+const sampleTestPattern = /^(sample-|tictactoe-|node-sample-client-bundle)/;
 const skipped = [];
 const failedTestFiles = [];
 let expectedTestCount = 0;
@@ -36,10 +41,11 @@ run('typecheck', process.execPath, [
 run('lint', process.execPath, [
   eslintEntry,
   'packages/*/src/**/*.ts',
-  'samples/**/*.ts'
+  ...(includeSamples ? ['samples/**/*.ts'] : [])
 ]);
 for (const testFile of listTestFiles(path.join(nodeRoot, 'test'))) {
   const relative = relativePath(nodeRoot, testFile);
+  if (!includeSamples && sampleTestPattern.test(path.basename(testFile))) continue;
   if (skippedTestFiles.has(relative) || skippedTestFiles.has(path.basename(testFile))) {
     console.log(`-- ${relative} # SKIP explicitly requested; skipped tests are not a pass`);
     skipped.push(relative);
@@ -84,7 +90,9 @@ function run(label, command, args) {
   const result = childProcess.spawnSync(command, args, {
     cwd: nodeRoot,
     stdio: 'inherit',
-    env: process.env
+    env: process.env,
+    //  Node 22 refuses to spawn .cmd shims without a shell (EINVAL).
+    shell: process.platform === 'win32' && command.endsWith('.cmd')
   });
   if (result.error) {
     console.error(`Failed to run ${label}: ${result.error.message}`);

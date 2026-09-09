@@ -54,11 +54,11 @@ ASSEMBLY_NAMES=(
   Zlink.Framework.Contracts
   Zlink.Framework.Provider.Abstractions
   Zlink.Framework
-  Systems.Zlink.Framework.AspNetCore
+  Zlink.Framework.AspNetCore
   Zlink.Framework.Codecs.MessagePack
   Zlink.Framework.Codecs.Protobuf
   Zlink.Framework.Locations.Redis
-  Systems.Zlink.HttpClient
+  Zlink.HttpClient
   Systems.Zlink.Stream.Connector
 )
 OUT_OF_SCOPE_PACKABLE_PROJECTS=()

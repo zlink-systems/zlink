@@ -120,7 +120,8 @@ public sealed class SourceLayoutContracts
         var current = new DirectoryInfo(AppContext.BaseDirectory);
         while (current is not null)
         {
-            if (File.Exists(Path.Combine(current.FullName, "AGENTS.md")))
+            if (File.Exists(Path.Combine(current.FullName, "AGENTS.md"))
+                && File.Exists(Path.Combine(current.FullName, "BINDINGS_VERSION")))
                 return current.FullName;
             current = current.Parent;
         }

@@ -124,7 +124,10 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 
 Separate from releases, these run on `main` pushes and PRs. Framework CI uses only the published
 binding packages and Core release archives, and includes only the `cross-language` e2e (per-language
-scenario e2e is opt-in through each `run_e2e.sh`).
+scenario e2e is opt-in through each `run_e2e.sh`). The seven samples (Bingo, DeliveryDispatch, GameQuest,
+ShoppingMall, SupportChat, TicTacToe, ZoneWorld) are likewise outside the framework build, CI and
+releases; they are verified only by the local gate (`scripts/gate/framework-gate.sh`), each language's
+`samples/run_samples.sh`, and Node `npm run test:samples`.
 
 | Workflow | Scope | Matrix |
 | --- | --- | --- |

@@ -16,6 +16,7 @@ public interface IZLinkFrameworkOptions
 {
     TimeSpan DefaultRequestTimeout { get; set; }
     TimeSpan DefaultSocketSendTimeout { get; set; }
+    TimeSpan SessionReplacementCallbackTimeout { get; set; }
     long ApplicationVersion { get; set; }
     string? MaintenanceWave { get; set; }
     IZLinkCodecRegistryBuilder Codecs { get; }
@@ -376,7 +377,9 @@ discovery 결과는 이 handle로 변경하지 않는다.
 `Client` 또는 `Server`인 Mesh와 Location Store가 없으면 startup이 실패한다. Global ActorId가 current Mesh와
 owner route를 결정하므로 이 설정은 MeshName을 받지 않는다.
 
-`DefaultRequestTimeout`의 기본값은 30초, `DefaultSocketSendTimeout`의 기본값은 1초다. `Worker`는 worker의
+`DefaultRequestTimeout`의 기본값은 30초, `DefaultSocketSendTimeout`의 기본값은 1초다.
+`SessionReplacementCallbackTimeout`은 actor binding 교체 callback이 실행될 수 있는 최대 시간이며 기본값은
+30초다. 이 시간을 넘기면 Framework가 물러난 session을 강제로 닫는다. `Worker`는 worker의
 최소·최대 thread 수, idle timeout과 queue 상한을 host startup 전에 설정한다.
 
 `ConfigureStreamCompression()`과 `IZLinkStreamCompressionBuilder`는 STREAM payload compression을 고른다.

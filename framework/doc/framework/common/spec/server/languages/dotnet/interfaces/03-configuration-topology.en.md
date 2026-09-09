@@ -18,6 +18,7 @@ public interface IZLinkFrameworkOptions
 {
  TimeSpan DefaultRequestTimeout { get; set; }
  TimeSpan DefaultSocketSendTimeout { get; set; }
+ TimeSpan SessionReplacementCallbackTimeout { get; set; }
  long ApplicationVersion { get; set; }
  string? MaintenanceWave { get; set; }
  IZLinkCodecRegistryBuilder Codecs { get; }
@@ -434,7 +435,9 @@ ActorId determines the current Mesh and owner route, this setting doesn't
 take a MeshName.
 
 `DefaultRequestTimeout`'s default is 30 seconds, and
-`DefaultSocketSendTimeout`'s default is 1 second. `Worker` sets the
+`DefaultSocketSendTimeout`'s default is 1 second.
+`SessionReplacementCallbackTimeout` is the maximum time an actor-binding replacement callback may
+run before Framework force-closes the retired session; its default is 30 seconds. `Worker` sets the
 worker's minimum/maximum thread count, idle timeout, and queue cap before
 host startup.
 

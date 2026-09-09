@@ -9,6 +9,7 @@ TMPDIR=/dev/shm/zlink-tmp-node run node-samples framework/languages/node bash sa
 ( dotnet_env; run dotnet-samples framework/languages/dotnet bash samples/run_samples.sh )
 ( dotnet_env; run dotnet-zoneworld-2 framework/languages/dotnet bash samples/ZoneWorld/run_sample.sh )
 TMPDIR=/dev/shm/zlink-tmp-node run node-npmtest framework/languages/node npm test
+TMPDIR=/dev/shm/zlink-tmp-node run node-sample-tests framework/languages/node npm run test:samples
 TMPDIR=/dev/shm/zlink-tmp-java run java-coretest framework/languages/java ./gradlew --no-daemon :zlink-framework-core:test contractTest --continue
 ( dotnet_env; run dotnet-sampleregression framework/languages/dotnet dotnet test tests/Zlink.Framework.SampleRegressionTests )
 ( dotnet_env; run dotnet-unit-main framework/languages/dotnet dotnet test tests/Zlink.Framework.UnitTests --filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests' --blame-hang --blame-hang-timeout 10m )

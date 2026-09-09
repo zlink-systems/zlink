@@ -132,8 +132,6 @@ public readonly record struct ZLinkCoreHwmStatus(
     ulong RetiredQueueCount,
     ulong DeferredOriginCreditBytes);
 
-public enum ZLinkApplicationJobQueuePressureState { Running, Paused }
-
 public readonly record struct ZLinkApplicationJobQueueStatus(
     ZLinkApplicationJobQueueProfile ConfiguredProfile,
     ulong? ConfiguredManualMax,
@@ -167,7 +165,8 @@ public sealed record ZLinkFrameworkRuntimeStatus(
     ZLinkFrameworkTerminationResult? TerminationResult,
     ulong Sequence,
     DateTimeOffset ObservedAt,
-    ZLinkHostCapacityStatus Capacity = default);
+    ZLinkHostCapacityStatus Capacity = default,
+    bool SafeToShutdown = true);
 
 public interface IZLinkFrameworkRuntime
 {
@@ -475,6 +474,11 @@ kind.
 instance. It can restart from 0 when the process restarts, and doesn't
 guarantee persistence or a global order.
 
+`SafeToShutdown` is the source's own observation that every relocation unit it
+started has reached the Message Follow route removal point (S4) and that its
+cutover retransmission window has ended. It is never a completion ACK from a
+target, and it is true when this source has not started a relocation.
+
 `CancellationToken` only ends that asynchronous enumeration. Once
 cancellation is recognized, no new status is delivered, and it doesn't
 affect other observers, topology connections, or host lifecycle.
@@ -537,6 +541,7 @@ public interface IZLinkInboundDispatchOptions
 public interface IZLinkDiagnosticsRuntime
 {
     ZLinkDiagnosticsLevel Level { get; set; }
+    Task SetLevelAsync(ZLinkDiagnosticsLevel level);
 }
 ```
 
@@ -546,6 +551,8 @@ payload size distribution to telemetry, without recording payload
 content.
 
 `IZLinkDiagnosticsRuntime` is a process singleton obtained from DI.
+`SetLevelAsync` is the canonical asynchronous control; the `Level` setter is the synchronous bridge over it.
+Use `SetLevelAsync` from framework execution contexts such as handlers and callbacks.
 Reading `Level` returns the level currently applied to the process.
 Changing the value applies the new level starting from message processing
 that begins afterward. The change is an atomic state change that doesn't

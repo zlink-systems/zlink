@@ -127,8 +127,6 @@ public readonly record struct ZLinkCoreHwmStatus(
     ulong RetiredQueueCount,
     ulong DeferredOriginCreditBytes);
 
-public enum ZLinkApplicationJobQueuePressureState { Running, Paused }
-
 public readonly record struct ZLinkApplicationJobQueueStatus(
     ZLinkApplicationJobQueueProfile ConfiguredProfile,
     ulong? ConfiguredManualMax,
@@ -162,7 +160,8 @@ public sealed record ZLinkFrameworkRuntimeStatus(
     ZLinkFrameworkTerminationResult? TerminationResult,
     ulong Sequence,
     DateTimeOffset ObservedAt,
-    ZLinkHostCapacityStatus Capacity = default);
+    ZLinkHostCapacityStatus Capacity = default,
+    bool SafeToShutdown = true);
 
 public interface IZLinkFrameworkRuntime
 {
@@ -427,6 +426,10 @@ Identifier에
 `Sequence`는 같은 runtime instance의 status 순서를 비교하는 값이다. Process가 다시 시작되면 0부터
 시작할 수 있으며 persistence나 전역 순서를 보장하지 않는다.
 
+`SafeToShutdown`은 이 source가 시작한 모든 relocation unit이 Message Follow route 제거 지점(S4)에
+도달했고 cutover 재전송 window가 끝났음을 source가 스스로 관찰한 값이다. target의 완료 ACK가 아니며,
+relocation을 시작한 적이 없으면 true다.
+
 `CancellationToken`은 해당 asynchronous enumeration만 종료한다. 취소를 인식한 뒤에는 새 status를
 전달하지 않으며 다른 observer, topology 연결과 host lifecycle에는 영향을 주지 않는다.
 
@@ -487,6 +490,7 @@ public interface IZLinkInboundDispatchOptions
 public interface IZLinkDiagnosticsRuntime
 {
     ZLinkDiagnosticsLevel Level { get; set; }
+    Task SetLevelAsync(ZLinkDiagnosticsLevel level);
 }
 ```
 
@@ -494,7 +498,9 @@ public interface IZLinkDiagnosticsRuntime
 `ArgumentOutOfRangeException`이 발생한다. Message size를 기록하면 payload 크기 분포가 telemetry에
 추가되며 payload 내용은 기록하지 않는다.
 
-`IZLinkDiagnosticsRuntime`은 DI에서 얻는 process singleton이다. `Level`을 읽으면 현재 process에
+`IZLinkDiagnosticsRuntime`은 DI에서 얻는 process singleton이다. `SetLevelAsync`가 정본 비동기 제어이고
+`Level` setter는 그 위의 동기 bridge다. handler나 callback 같은 Framework 실행 문맥에서는 setter 대신
+`SetLevelAsync`를 쓴다. `Level`을 읽으면 현재 process에
 적용하는 level을 반환한다. 값을 바꾸면 이후에 시작하는 message 처리부터 새 level을 적용한다.
 변경은 message 처리를 기다리지 않는 원자적 상태 변경이다. 이미 telemetry queue에 들어간 기록은
 전달하거나 버릴 수 있으며, 다시 켜도 이전 처리의 기록을 소급해서 만들지 않는다.

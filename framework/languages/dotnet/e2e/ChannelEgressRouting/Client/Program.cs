@@ -809,7 +809,8 @@ static string FindRepositoryRoot(string start)
     var directory = new DirectoryInfo(start);
     while (directory is not null)
     {
-        if (File.Exists(Path.Combine(directory.FullName, "AGENTS.md")))
+        if (File.Exists(Path.Combine(directory.FullName, "AGENTS.md"))
+            && File.Exists(Path.Combine(directory.FullName, "BINDINGS_VERSION")))
             return directory.FullName;
         directory = directory.Parent;
     }
