@@ -789,6 +789,20 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
 - Node framework 행: `framework-codec-protobuf`가 protobuf bytes를 보존하지 못해 전 셀
   `unsupported`(run 원본 `unsupported.json`). 제품 결함, 별도 작업(사용자 결정).
 
+## FB-050 — Java raw `request-window @1024`에서 reply completion 100건 전부 유실(binding 0.17.6) (2026-09-09, fwb2-06)
+
+- 관측: 1차 `repro/`(ROUTER↔ROUTER batch, per-iteration `Received.close()`)를 published 0.17.6에서
+  다시 돌리면 `outstanding=100 done=0/100`, 서버는 101건 수신·reply submit 완료. FB-026이 0.17.5에서
+  수정됐다고 기록했으나 재현된다(Node의 FB-049와 같은 계열, Java는 전부 유실).
+- 소유: Java binding의 caller-owned `Received` 수명 경계와 Core ROUTER reply lane
+  (`Received.java:621-642, 786-840`, `NativeRouterSocket.java:49-75`; 스펙 07-router §291-303,
+  321-324, 476-480). .NET은 reply context를 별도 객체로 capture해 같은 셀이 통과한다.
+- 결정: 계획 §9의 중단 조건 — Java raw `request-window` 3-run과 그 행의 판정은 결함 수정 전
+  진행하지 않는다. 수정은 1.0 묶음의 bindings 항목(FB-049와 함께).
+- 부수 관측(smoke 1-run, 판정 아님): `zlink-framework-java request-serial` 309 ops/s vs raw 5,598,
+  framework window 1,861 vs `grpc-kotlin` 64,433. Java framework 계층도 .NET(FB-047)과 같은 계열의
+  배율 문제로 보이며 3-run 뒤 판정한다.
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
@@ -809,5 +823,6 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
 | `fwb2-01` | S-1 | sol | 완료·커밋 `bc6c54d37a`(rename)·`c57d6c26f2` | `framework/bench/grpc/` 통합, 공통 `bench.proto` 하나, 5언어 빌드·집계기 50 테스트·언어별 1셀 smoke 티켓 통과 |
 | `fwb2-02` | S1 | sol | 완료·커밋 `eb24d66003`(+감독자 `59521bf2f4` trigger 필드 확정) | 집계기 S2S 스키마·(runId, cellId) 병합·incomplete·Source/Target·KOPS/KMSG/s·`doc-table`, 테스트 60 |
 | `fwb2-03` | S1 | sol | 완료·커밋 `d59e8a00e8` | .NET A/B runner, ServerSupport 재사용, 5셀 smoke rc=0. 3-run은 감독자 티켓(claude-fwb2-s1) |
-| `fwb2-04` | S2 | sol | 완료·커밋 예정 | Node A/B runner, unsupported manifest, raw window 결함 재현(FB-049) |
+| `fwb2-04` | S2 | sol | 완료·커밋 `b2aeda9f9d` | Node A/B runner, unsupported manifest, raw window 결함 재현(FB-049) |
+| `fwb2-06` | S2 | sol | 완료·커밋 예정 | Java A/B runner + Kotlin 보조 2셀, raw window reply 유실 재현(FB-050) |
 | `fwb2-05` | S4 | astra | 완료·커밋 `7786eec28a`(보고서만) | zlink-c 4096B 두 모드 = Core I/O 배치(FB-048), 4096 분모 게재 불가 |

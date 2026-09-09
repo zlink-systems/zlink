@@ -86,7 +86,7 @@ public final class StatsClient {
     }
 
     public record ServerSnapshot(
-        long activeMessages,
+        long received,
         long totalMessages,
         long errors,
         double meanMicros,
@@ -97,7 +97,8 @@ public final class StatsClient {
 
         static ServerSnapshot parse(String json) {
             return new ServerSnapshot(
-                (long) field(json, "activeMessages"),
+                (long) field(json, json.contains("\"received\":")
+                    ? "received" : "activeMessages"),
                 (long) field(json, "totalMessages"),
                 (long) field(json, "errors"),
                 field(json, "meanMicros"),
@@ -105,6 +106,10 @@ public final class StatsClient {
                 field(json, "p99Micros"),
                 field(json, "cpuSeconds"),
                 field(json, "workingSetMb"));
+        }
+
+        public long activeMessages() {
+            return received;
         }
 
         private static double field(String json, String name) {
