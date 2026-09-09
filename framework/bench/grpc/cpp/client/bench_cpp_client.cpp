@@ -546,10 +546,12 @@ class zlink_raw_driver_t : public driver_t
         const char *envelope = request_envelope ();
         zlink::message_t header = zlink::message_t::from (
           std::as_bytes (std::span<const char> (envelope, std::strlen (envelope))));
-        std::vector<unsigned char> encoded;
-        encode_bench_payload (encoded, payload_size, _run_id, phase, seq);
-        zlink::message_t body = zlink::message_t::from (
-          std::span<const uint8_t> (encoded.data (), encoded.size ()));
+        const size_t body_size = std::max (payload_size, k_header_size);
+        const size_t encoded_size = encoded_bench_payload_size (body_size);
+        zlink::message_t body = zlink::message_t::allocate (encoded_size);
+        auto *encoded = reinterpret_cast<unsigned char *> (body.data ());
+        encode_bench_payload (
+          std::span<unsigned char> (encoded, encoded_size), body_size, _run_id, phase, seq);
         return {std::move (header), std::move (body)};
     }
 
@@ -573,7 +575,7 @@ class zlink_raw_driver_t : public driver_t
             _counters->submitted.fetch_add (1, std::memory_order_relaxed);
             try {
                 std::vector<zlink::message_t> reply =
-                  co_await std::move (request_operation ())
+                  co_await request_operation ()
                     .message (parts.first)
                     .message (parts.second)
                     .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
@@ -599,7 +601,7 @@ class zlink_raw_driver_t : public driver_t
         _counters->submitted.fetch_add (1, std::memory_order_relaxed);
         try {
             std::vector<zlink::message_t> reply =
-              co_await std::move (request_operation ())
+              co_await request_operation ()
                 .message (parts.first)
                 .message (parts.second)
                 .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
@@ -623,7 +625,7 @@ class zlink_raw_driver_t : public driver_t
             _counters->enter ();
             _counters->submitted.fetch_add (1, std::memory_order_relaxed);
             try {
-                co_await std::move (send_operation ())
+                co_await send_operation ()
                   .message (parts.first)
                   .message (parts.second)
                   .async ();
