@@ -114,8 +114,6 @@ jobs:
 
       - name: Prepare the Core release runtime for this platform
         shell: bash
-        env:
-          ZLINK_CORE_CACHE_DIR: ${{ runner.temp }}/zlink-core
         run: |
           # The released binding package carries the linux-x64 runtime only; the
           # other RIDs run the tests against the verified Core release archive.
@@ -123,13 +121,16 @@ jobs:
           core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
             --version "${core_version}" \
             --platform "${{ matrix.target.core_platform }}" \
-            --cache-dir "${ZLINK_CORE_CACHE_DIR}")
+            --cache-dir .artifacts/core-release)
           case "${{ matrix.target.core_platform }}" in
             windows-*) library="${core_prefix}/bin/zlink.dll" ;;
             macos-*) library="${core_prefix}/lib/libzlink.dylib" ;;
             *) library="${core_prefix}/lib/libzlink.so.${core_version}" ;;
           esac
           test -f "${library}" || { echo "::error::Core runtime not found at ${library}" >&2; ls -R "${core_prefix}" >&2; exit 1; }
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            library=$(cygpath -w "${library}")
+          fi
           echo "ZLINK_LIBRARY_PATH=${library}" >> "${GITHUB_ENV}"
 
       - name: Restore framework solution

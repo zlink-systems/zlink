@@ -81,7 +81,22 @@ esac
 if [[ "$cache_root" != /* ]]; then
   cache_root="$repo_root/$cache_root"
 fi
-cache_root="$(realpath -m "$cache_root")"
+# GNU realpath -m is not available on macOS; python3 is on every GitHub runner.
+normalize_path() {
+  if realpath -m / >/dev/null 2>&1; then
+    realpath -m "$1"
+  else
+    python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$1"
+  fi
+}
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+cache_root="$(normalize_path "$cache_root")"
 prefix="$cache_root/$version/$platform"
 case "$prefix" in
   "$cache_root"/*) ;;
@@ -101,8 +116,8 @@ command -v curl >/dev/null 2>&1 || {
   echo "curl is required to download the Core release" >&2
   exit 1
 }
-command -v sha256sum >/dev/null 2>&1 || {
-  echo "sha256sum is required to verify the Core release" >&2
+command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || {
+  echo "sha256sum or shasum is required to verify the Core release" >&2
   exit 1
 }
 command -v node >/dev/null 2>&1 || {
@@ -156,13 +171,13 @@ read_release_value() {
   exit 1
 }
 expected_checksums_sha="$(read_release_value checksums_sha256)"
-actual_checksums_sha="$(sha256sum "$checksums" | awk '{print $1}')"
+actual_checksums_sha="$(sha256_of "$checksums")"
 [[ "$actual_checksums_sha" = "$expected_checksums_sha" ]] || {
   echo "Release checksums.txt SHA-256 mismatch" >&2
   exit 1
 }
 expected_source_sha="$(read_release_value source_archive_sha256)"
-actual_source_sha="$(sha256sum "$source_archive" | awk '{print $1}')"
+actual_source_sha="$(sha256_of "$source_archive")"
 [[ "$actual_source_sha" = "$expected_source_sha" ]] || {
   echo "Release source archive SHA-256 mismatch" >&2
   exit 1
@@ -171,11 +186,13 @@ actual_source_sha="$(sha256sum "$source_archive" | awk '{print $1}')"
 binary_root="$work/binary"
 mkdir -p "$binary_root"
 if [[ "$binary_archive_name" == *.zip ]]; then
-  command -v unzip >/dev/null 2>&1 || {
-    echo "unzip is required to extract the Windows Core release" >&2
-    exit 1
-  }
-  unzip -q "$binary_archive" -d "$binary_root"
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$binary_archive" -d "$binary_root"
+  elif command -v 7z >/dev/null 2>&1; then
+    7z x -y -o"$binary_root" "$binary_archive" >/dev/null
+  else
+    python3 -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$binary_archive" "$binary_root"
+  fi
 else
   tar -xzf "$binary_archive" -C "$binary_root"
 fi
@@ -191,7 +208,7 @@ grep "  \./${binary_name}/" "$checksums" >"$work/platform-checksums.txt" || {
 }
 (
   cd "$binary_root"
-  sha256sum -c "$work/platform-checksums.txt" >&2
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum -c "$work/platform-checksums.txt" >&2; else shasum -a 256 -c "$work/platform-checksums.txt" >&2; fi
 )
 
 source_root="$work/source"

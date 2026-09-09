@@ -6,26 +6,33 @@ on:
       - main
     paths:
       - ".github/workflows/framework-node.yml"
+      - ".github/actions/msvc-env/**"
+      - "scripts/local-package/core/fetch-release.sh"
       - "framework/languages/node/**"
       - "framework/doc/framework/common/spec/**"
       - "framework/doc/framework/common/e2e/**"
       - "framework/doc/framework/common/guide/**"
       - "framework/doc/plan/node-framework-spec-gap-ledger/**"
-      - "bindings/node/**"
       - "framework/languages/dotnet/cross-language/**"
   pull_request:
     branches:
       - main
     paths:
       - ".github/workflows/framework-node.yml"
+      - ".github/actions/msvc-env/**"
+      - "scripts/local-package/core/fetch-release.sh"
       - "framework/languages/node/**"
       - "framework/doc/framework/common/spec/**"
       - "framework/doc/framework/common/e2e/**"
       - "framework/doc/framework/common/guide/**"
       - "framework/doc/plan/node-framework-spec-gap-ledger/**"
-      - "bindings/node/**"
       - "framework/languages/dotnet/cross-language/**"
   workflow_dispatch:
+
+# The framework consumes the released @zlink-systems/zlink package. Platforms
+# without a prebuilt addon in that package build it from source against the
+# verified Core release archive (scripts/local-package/core/fetch-release.sh),
+# which is also the runtime the tests load.
 
 jobs:
   framework-node:
@@ -41,19 +48,23 @@ jobs:
           - name: win-x64
             runner: windows-latest
             msvc_arch: x64
-            vcpkg_triplet: x64-windows
+            core_platform: windows-x64
           - name: win-arm64
             runner: windows-11-arm
             msvc_arch: arm64
-            vcpkg_triplet: arm64-windows-static
+            core_platform: windows-arm64
           - name: linux-x64
             runner: ubuntu-24.04
+            core_platform: linux-x64
           - name: linux-arm64
             runner: ubuntu-24.04-arm
+            core_platform: linux-arm64
           - name: darwin-x64
             runner: macos-15-intel
+            core_platform: macos-x64
           - name: darwin-arm64
             runner: macos-15
+            core_platform: macos-arm64
 
     steps:
       - name: Checkout repository
@@ -70,74 +81,43 @@ jobs:
         with:
           arch: ${{ matrix.target.msvc_arch }}
 
-      - name: Install Linux core dependencies
+      - name: Normalize Visual Studio version for node-gyp
+        if: startsWith(matrix.target.name, 'win-')
+        shell: pwsh
+        run: |
+          # GitHub Windows runners expose the VS 2026 toolchain through a VS 18
+          # developer prompt. node-gyp maps MSVC toolsets by the Visual Studio
+          # major version and only accepts VS 2022 for v143, so keep the actual
+          # toolchain paths but present the prompt version as VS 2022.
+          echo "VSCMD_VER=17.0" >> $env:GITHUB_ENV
+          echo "VisualStudioVersion=17.0" >> $env:GITHUB_ENV
+
+      - name: Install Linux build dependencies
         if: startsWith(matrix.target.name, 'linux-')
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential
+          sudo apt-get install -y build-essential
 
-      - name: Install macOS core dependencies
-        if: startsWith(matrix.target.name, 'darwin-')
+      - name: Prepare the Core release runtime for this platform
+        id: core
+        shell: bash
         run: |
-          xcode-select --print-path
-
-      - name: Install Windows core dependencies
-        if: startsWith(matrix.target.name, 'win-')
-        shell: pwsh
-        run: |
-          vcpkg install openssl:${{ matrix.target.vcpkg_triplet }}
-          $opensslRoot = "$env:VCPKG_INSTALLATION_ROOT\installed\${{ matrix.target.vcpkg_triplet }}"
-          echo "OPENSSL_ROOT_DIR=$opensslRoot" >> $env:GITHUB_ENV
-          echo "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" >> $env:GITHUB_ENV
-          echo "VCPKG_TARGET_TRIPLET=${{ matrix.target.vcpkg_triplet }}" >> $env:GITHUB_ENV
-
-      - name: Use synced core runtime for Node addon
-        if: startsWith(matrix.target.name, 'linux-') || startsWith(matrix.target.name, 'darwin-')
-        run: |
-          if [[ "${{ matrix.target.name }}" == linux-* ]]; then
-            runtime="$GITHUB_WORKSPACE/bindings/node/prebuilds/${{ matrix.target.name }}/libzlink.so"
-            echo "ZLINK_LIB_PATH=$runtime" >> "$GITHUB_ENV"
-            echo "ZLINK_RUNTIME_PATH=$runtime" >> "$GITHUB_ENV"
-          else
-            runtime="$GITHUB_WORKSPACE/bindings/node/prebuilds/${{ matrix.target.name }}/libzlink.dylib"
-            echo "ZLINK_LIB_PATH=$runtime" >> "$GITHUB_ENV"
-            echo "ZLINK_RUNTIME_PATH=$runtime" >> "$GITHUB_ENV"
+          binding_version=$(node -p "require('./framework/languages/node/packages/framework/package.json').dependencies['@zlink-systems/zlink']")
+          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
+            --version "${binding_version}" \
+            --platform "${{ matrix.target.core_platform }}" \
+            --cache-dir .artifacts/core-release)
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            core_prefix=$(cygpath -w "${core_prefix}")
+            # The binding's Windows loader searches ZLINK_CORE_PREFIX\bin.
+            echo "ZLINK_CORE_PREFIX=${core_prefix}" >> "${GITHUB_ENV}"
+            echo "${core_prefix}\\bin" >> "${GITHUB_PATH}"
           fi
+          echo "ZLINK_CORE_SOURCE=release" >> "${GITHUB_ENV}"
+          echo "ZLINK_CORE_PACKAGE_PREFIX=${core_prefix}" >> "${GITHUB_ENV}"
+          echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
+          echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
 
-      - name: Build core library for Node addon
-        if: startsWith(matrix.target.name, 'win-')
-        shell: pwsh
-        run: |
-          cmake -S core -B core/build `
-            -G "Ninja" `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DBUILD_SHARED=ON `
-            -DBUILD_STATIC=OFF `
-            -DBUILD_TESTS=OFF `
-            -DZLINK_CXX_STANDARD=17 `
-            -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT_DIR" `
-            -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" `
-            -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET"
-          cmake --build core/build --parallel
-          $libPath = Join-Path $PWD "core/build/lib/zlink.lib"
-          $binPath = Join-Path $PWD "core/build/bin"
-          if (-not (Test-Path $libPath)) {
-            $libPath = Join-Path $PWD "core/build/lib/Release/zlink.lib"
-          }
-          if (-not (Test-Path $binPath)) {
-            $binPath = Join-Path $PWD "core/build/bin/Release"
-          }
-          $libPath = $libPath.Replace('\', '/')
-          echo "ZLINK_LIB_PATH=$libPath" >> $env:GITHUB_ENV
-          echo "$binPath" >> $env:GITHUB_PATH
-
-      - name: Install binding dependencies
-        working-directory: bindings/node
-        run: npm install --ignore-scripts
-
-      # framework CI often runs minutes after a binding publish; the registry
-      # serves the package metadata before its tarball (up to ~30 min).
       - name: Materialize the local-package pin of @zlink-systems/http-client used by the workspace manifest
         shell: bash
         run: |
@@ -145,10 +125,12 @@ jobs:
           npm pack framework/languages/node/packages/http-client \
             --pack-destination .artifacts/wsl/npm
 
+      # framework CI often runs minutes after a binding publish; the registry
+      # serves the package metadata before its tarball (up to ~30 min).
       - name: Wait for the binding package on npm
         shell: bash
         run: |
-          version=$(node -p "require('./framework/languages/node/packages/framework/package.json').dependencies['@zlink-systems/zlink']")
+          version="${{ steps.core.outputs.binding_version }}"
           url="https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-${version}.tgz"
           for attempt in $(seq 1 45); do
             if curl -sfIL -o /dev/null "${url}"; then
@@ -164,6 +146,25 @@ jobs:
       - name: Install framework dependencies
         working-directory: framework/languages/node
         run: npm ci
+
+      - name: Place the Core runtime beside a source-built addon
+        shell: bash
+        run: |
+          # Platforms without a prebuilt addon in the published package build
+          # it from source; the addon links libzlink through @loader_path /
+          # the addon directory, so copy the runtime next to it.
+          addon_dir=framework/languages/node/node_modules/@zlink-systems/zlink/build/Release
+          if [ ! -f "${addon_dir}/zlink.node" ]; then
+            echo "prebuilt addon in use; nothing to place"
+            exit 0
+          fi
+          prefix="${{ steps.core.outputs.prefix }}"
+          case "${{ matrix.target.core_platform }}" in
+            windows-*) cp "$(cygpath -u "${prefix}")"/bin/*.dll "${addon_dir}/" ;;
+            macos-*) cp "${prefix}"/lib/libzlink*.dylib "${addon_dir}/" ;;
+            *) cp -P "${prefix}"/lib/libzlink.so* "${addon_dir}/" ;;
+          esac
+          ls -la "${addon_dir}"
 
       - name: Cache Chromium for browser connector E2E
         if: matrix.node-version == 22 && (matrix.target.name == 'linux-x64' || matrix.target.name == 'win-x64')
@@ -181,39 +182,6 @@ jobs:
         if: matrix.node-version == 22 && matrix.target.name == 'win-x64'
         working-directory: framework/languages/node
         run: npm run browser:install
-
-      - name: Build Node binding JavaScript surface
-        working-directory: bindings/node
-        run: npm run build
-
-      - name: Normalize Visual Studio version for node-gyp
-        if: startsWith(matrix.target.name, 'win-')
-        shell: pwsh
-        run: |
-          # GitHub Windows runners currently expose the VS 2026 path through a
-          # VS 18 developer prompt. node-gyp still maps MSVC toolsets by the
-          # Visual Studio major version and only accepts VS 2022 for v143, so
-          # keep the actual toolchain paths from msvc-dev-cmd but present the
-          # prompt version as VS 2022 before node-gyp probes it.
-          echo "VSCMD_VER=17.0" >> $env:GITHUB_ENV
-          echo "VisualStudioVersion=17.0" >> $env:GITHUB_ENV
-
-      - name: Build Node binding native addon
-        working-directory: bindings/node
-        run: npm run rebuild-native
-
-      - name: Expose synced core runtime beside Node addon
-        if: startsWith(matrix.target.name, 'linux-') || startsWith(matrix.target.name, 'darwin-')
-        run: |
-          cp "$ZLINK_RUNTIME_PATH" bindings/node/build/Release/
-          if [[ "${{ matrix.target.name }}" == linux-* && -f "${ZLINK_RUNTIME_PATH}.8" ]]; then
-            cp "${ZLINK_RUNTIME_PATH}.8" bindings/node/build/Release/
-          fi
-          if [[ "${{ matrix.target.name }}" == darwin-* ]]; then
-            if ! otool -l bindings/node/build/Release/zlink.node | grep -q '@loader_path'; then
-              install_name_tool -add_rpath @loader_path bindings/node/build/Release/zlink.node
-            fi
-          fi
 
       - name: Run Node framework release gate
         working-directory: framework/languages/node
@@ -247,21 +215,43 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential
+          sudo apt-get install -y build-essential
 
-      - name: Use synced core runtime for Node addon
+      - name: Prepare the Core release runtime
+        id: core
+        shell: bash
         run: |
-          runtime="$GITHUB_WORKSPACE/bindings/node/prebuilds/linux-x64/libzlink.so"
-          echo "ZLINK_LIB_PATH=$runtime" >> "$GITHUB_ENV"
-          echo "ZLINK_RUNTIME_PATH=$runtime" >> "$GITHUB_ENV"
+          binding_version=$(node -p "require('./framework/languages/node/packages/framework/package.json').dependencies['@zlink-systems/zlink']")
+          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
+            --version "${binding_version}" \
+            --platform linux-x64 \
+            --cache-dir .artifacts/core-release)
+          echo "ZLINK_CORE_SOURCE=release" >> "${GITHUB_ENV}"
+          echo "ZLINK_CORE_PACKAGE_PREFIX=${core_prefix}" >> "${GITHUB_ENV}"
+          echo "ZLINK_LIBRARY_PATH=${core_prefix}/lib/libzlink.so.${binding_version}" >> "${GITHUB_ENV}"
+          echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
 
-      - name: Install binding dependencies
-        working-directory: bindings/node
-        run: npm install --ignore-scripts
+      - name: Prepare the .NET local packages for the cross-language test host
+        shell: bash
+        run: |
+          package_root="${RUNNER_TEMP}/zlink-local-packages"
+          nuget_source="${package_root}/nuget"
+          mkdir -p "${nuget_source}"
+          binding_version=$(sed -n 's/.*<ZLinkBindingsPackageVersion[^>]*>\(.*\)<\/ZLinkBindingsPackageVersion>.*/\1/p' framework/languages/dotnet/Directory.Packages.props | head -n1)
+          url="https://api.nuget.org/v3-flatcontainer/zlink/${binding_version}/zlink.${binding_version}.nupkg"
+          for attempt in $(seq 1 45); do
+            if curl -sSfL -o "${nuget_source}/Zlink.${binding_version}.nupkg" "${url}"; then
+              break
+            fi
+            echo "attempt ${attempt}: Zlink ${binding_version} not on nuget.org yet; waiting 60s"
+            sleep 60
+          done
+          test -s "${nuget_source}/Zlink.${binding_version}.nupkg" \
+            || { echo "::error::Zlink ${binding_version} is not available on nuget.org after 45 minutes" >&2; exit 1; }
+          dotnet pack framework/languages/dotnet/src/Zlink.HttpClient/Zlink.HttpClient.csproj -c Release -o "${nuget_source}"
+          echo "ZLINK_LOCAL_PACKAGE_ROOT=${package_root}" >> "${GITHUB_ENV}"
+          echo "ZLinkLocalPackageRoot=${package_root}" >> "${GITHUB_ENV}"
 
-      # framework CI often runs minutes after a binding publish; the registry
-      # serves the package metadata before its tarball (up to ~30 min).
       - name: Materialize the local-package pin of @zlink-systems/http-client used by the workspace manifest
         shell: bash
         run: |
@@ -272,7 +262,7 @@ jobs:
       - name: Wait for the binding package on npm
         shell: bash
         run: |
-          version=$(node -p "require('./framework/languages/node/packages/framework/package.json').dependencies['@zlink-systems/zlink']")
+          version="${{ steps.core.outputs.binding_version }}"
           url="https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-${version}.tgz"
           for attempt in $(seq 1 45); do
             if curl -sfIL -o /dev/null "${url}"; then
@@ -285,24 +275,11 @@ jobs:
           echo "::error::@zlink-systems/zlink@${version} tarball is not available on npm after 45 minutes" >&2
           exit 1
 
-      - name: Install framework dependencies
+      - name: Install and build the Node framework workspace
         working-directory: framework/languages/node
-        run: npm ci
-
-      - name: Build Node binding JavaScript surface
-        working-directory: bindings/node
-        run: npm run build
-
-      - name: Build Node binding native addon
-        working-directory: bindings/node
-        run: npm run rebuild-native
-
-      - name: Expose synced core runtime beside Node addon
         run: |
-          cp "$ZLINK_RUNTIME_PATH" bindings/node/build/Release/
-          if [[ -f "${ZLINK_RUNTIME_PATH}.8" ]]; then
-            cp "${ZLINK_RUNTIME_PATH}.8" bindings/node/build/Release/
-          fi
+          npm ci
+          npm run build
 
       - name: Run Node framework cross-language smoke
         working-directory: framework/languages/node
