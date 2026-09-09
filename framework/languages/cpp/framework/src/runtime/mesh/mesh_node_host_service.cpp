@@ -2460,8 +2460,13 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                      ? std::chrono::milliseconds::zero ()
                                      : std::chrono::ceil<std::chrono::milliseconds> (*next - now);
                         }
-                        (void) node->native_node ().wait_for_dispatch_activity (
-                          wait, accept_application_receive);
+                        // A pump may consume the wake for supply delivered after
+                        // this turn's take. Recheck its owner state before waiting.
+                        if (!_stop.load (std::memory_order_acquire)
+                            && !supply.has_supply ()) {
+                            (void) node->native_node ().wait_for_dispatch_activity (
+                              wait, accept_application_receive);
+                        }
                     }
                 }
                 supply.close ();

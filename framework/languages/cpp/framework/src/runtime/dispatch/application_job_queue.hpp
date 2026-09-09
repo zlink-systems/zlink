@@ -1055,6 +1055,12 @@ class application_supply_slot_t final
         return permit;
     }
 
+    bool has_supply () const
+    {
+        std::lock_guard lock (_state->mutex);
+        return !_state->closed && _state->permit.has_value ();
+    }
+
     void close () noexcept
     {
         std::optional<application_job_queue_t::waiter_t> waiter;
