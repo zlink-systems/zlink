@@ -190,7 +190,10 @@ received=(b.get("anyPhaseMessages", 0) if sys.argv[3] == "any"
 print(a.get("completed",0), in_flight, received, b.get("errors",0))
 ' "${source_body}" "${target_body}" "${target_counter}")"
     in_flight="$(awk '{print $2}' <<<"${counts}")"
-    if [[ "${counts}" == "${previous}" && "${in_flight}" == 0 ]]; then
+    # Settle = counts unchanged for COMMAND_SETTLE_MS (spec 3). Abandoned operations keep the
+    # source in-flight count above zero after the window; they are a recorded result, not a
+    # reason to wait for the bound.
+    if [[ "${counts}" == "${previous}" ]]; then
       stable=$((stable + 1))
       if ((stable >= stable_needed)); then
         printf '{"snapshot":%s}\n' "${target_body}" >"${target_file}"
@@ -379,8 +382,7 @@ for implementation in "${implementations[@]}"; do
       wait_for_idle "${source_stats_url}"
       if ! settle_and_capture "${source_stats_url}" "${target_stats_url}" \
         "${cell_dir}/warmup-target-stats.json" any; then
-        echo "warmup settle hit ${DRAIN_BOUND_MS}ms bound: ${cell_id}" >&2
-        exit 1
+        log "warmup settle hit ${DRAIN_BOUND_MS}ms bound: ${cell_id} (recorded; cell continues)"
       fi
       reset_target "${target_stats_url}"
       trigger_phase "${trigger_url}" "${STAMP}-${RUN_LABEL}" "${cell_id}" "${pattern}" \
@@ -401,9 +403,10 @@ PY
       settle_and_capture "${source_stats_url}" "${target_stats_url}" "${target_stats_file}" \
         received "${remaining_drain_ms}" || settle_rc=$?
       merge_target_stats "${result_file}" "${target_stats_file}" "${SETTLE_MS}" "${SETTLE_BOUND_HIT}"
+      # A bound hit is recorded in target_stats (drainBoundHit) and the cell is excluded by the
+      # aggregator's rules; the next cell starts a fresh process pair, so the run continues.
       if ((settle_rc != 0)); then
-        echo "cell settle hit ${DRAIN_BOUND_MS}ms total bound: ${cell_id}" >&2
-        exit "${settle_rc}"
+        log "cell settle hit ${DRAIN_BOUND_MS}ms total bound: ${cell_id} (recorded; run continues)"
       fi
       verify_counts "${result_file}"
       emit_final_results "${result_file}" | tee -a "${OVERALL_REPORT}"

@@ -959,14 +959,12 @@ class source_t
             _worker = std::thread ([this, phase, duration, trigger] {
                 try {
                     run_phase (phase, duration, trigger);
+                    // Errors and abandoned operations are cell results (spec 5.2: recorded,
+                    // excluded from the throughput judgement), not a phase failure. Only an
+                    // exception or a readiness timeout fails the phase, as in the .NET source.
                     std::lock_guard lock (_gate);
-                    if (_counters.outstanding != 0 || _counters.errors != 0) {
-                        _phase = "failed";
-                        _failure = "phase has errors or abandoned operations";
-                    } else {
-                        if (phase == "warmup") _warmed = true;
-                        _phase = "idle";
-                    }
+                    if (phase == "warmup") _warmed = true;
+                    _phase = "idle";
                 } catch (const std::exception &error) { fail (error.what ()); }
             });
             return {200, ack};
