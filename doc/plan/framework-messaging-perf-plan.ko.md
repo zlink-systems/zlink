@@ -49,3 +49,5 @@ serial의 2~8배에 그친다(raw는 13~23배). 즉 요청당 **ms 단위의 고
 | 2026-09-10 | Java | P1 완료 | FB-058: 1 ms park 폴링(+49% 단독)·요청당 state-lane park 5회·permit 전 receive/3회 복사/1건 claim·executor hop. P2 승인 → job `fwperf-java-p2` (Issue #6) |
 | 2026-09-10 | C++ | P2 1차 | 819e2185d2(branch 유지): window ×2.4(0.014), send 오류 0(FB-054 증상 해소), serial 불변 — 0.90 미달. 잔여: record별 동기 lane 왕복·completion bridge. 2차는 스펙 08-messaging-hot-path(Issue #21) 기준 |
 | 2026-09-10 | 공통 | 스펙 | `01-execution/08-messaging-hot-path.{ko,en}.md` 초안(branch docs/21-messaging-hot-path), codex 리뷰 중 |
+| 2026-09-10 | 공통 | 스펙 | 08장 codex 리뷰 3회(1차 20건·2차 3 blocker·3차 잔여 7건) 반영 중 — E2·E3는 소유자 turn 하나만 허용(다른 소유자 lane 왕복 금지), (c) 0.90은 확정 합격선, (d)·(e)는 측정 후보 |
+| 2026-09-10 | C++ | P2 2차 시작 | job `fwperf-cpp-p2-r2`(astra, branch 유지): 08장 단계대로 재구성 — E2 lane 왕복 0, E3 선등록 + E5 dispatcher 직결, I2 64건 claim, I3 control 처리, persistent worker. 1차 BLOCKER(04장 §3 충돌)는 08 §4 I3로 정리 |
