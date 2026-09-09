@@ -727,7 +727,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | cpp | 0.17.4 | 86.5% / 1.03× | 99.0% / 1.02× |
 | dotnet | 0.17.5 | 84.5% / 0.92× | 90.9% / 0.92× |
 | java | 0.17.5 | 88.5% / 1.01× | 63.6% / 1.13× |
-| node | 0.17.5 | 72.8% / 2.68× (42 NA) | 42.1% / 2.52× (7 NA) |
+| node | 0.17.5 | 72.8% / 2.68× (42 NA) | 41.6% / 2.83× |
 | go | 0.17.5 | 미측정 | 미측정 |
 | rust | 0.17.5 | 미측정 | 미측정 |
 | python | 0.17.5 | 미측정 | 미측정 |
@@ -1042,10 +1042,12 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 - Single 상태: `측정 완료(2026-09-09)` — 통과 16 / 미달 19 / 해당없음 7. **inproc는 바인딩 미지원**
   ("inproc context is worker-local", Node worker-thread 구조 제약 → 해당 없음, 수정 대상 아님).
   나머지 미달은 작은 payload와 req/reply. C baseline은 canonical 0.17.5 재사용(C 재측정 안 함).
-- Multi 상태: `측정 완료(2026-09-09)` — 5 pattern(REQREP 계열은 Node 러너 미등록 → 표 제외) × 4 transport.
-  통과 3 / 미달 14 / 미측정 3. **미측정 3(ws·wss·tls MULTI_DEALER_ROUTER_SENDSEND 작은 size)은
-  `multi routed send admission / echo drain timed out` 실패** — 원인 수정 대상(§9.4 하단). STREAM은
-  최초 job이 비-STREAM partial 때문에 건너뛴 것을 재측정해 채움. tcp SENDSEND는 8~38%로 매우 낮음(미달).
+- Multi 상태: `측정 완료(2026-09-09, 실패 수정 반영)` — 5 pattern(REQREP 계열은 Node 러너 미등록 → 표
+  제외) × 4 transport. 통과 3 / 미달 17 / 미측정 0. 최초 7셀(ws·wss·tls MULTI_DEALER_ROUTER_SENDSEND
+  작은 size)이 `send admission / echo drain timed out`으로 실패했으나 **원인이 Node perf harness의 커스텀
+  응답 큐가 비동기 admission을 잘못 관리한 것**임을 확인해 네이티브 reply API로 수정(802f1efab9, 회귀 테스트
+  포함) 후 재측정으로 해소(ws 39.6·wss 42.8·tls 39.3%). Core·바인딩 라이브러리 무변경. STREAM은 최초 job이
+  비-STREAM partial 때문에 건너뛴 것을 재측정해 채움. routed echo·req/reply는 30~40%대로 목표 미달(2단계).
 - 다음 작업: 실패 셀 원인 진단·수정 후 재측정(§9.4 하단 메모).
 
 #### 9.4.1 Single suite
@@ -1105,26 +1107,28 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `MULTI_PUBSUB` | 21.4% | 20.1% | 19.1% | 24.5% | 58.4% | 80.5% | 미달 37.3%/lat0.70× · c0175-node-multi |
 | `tcp` | `MULTI_STREAM` | 42.84% | 49.11% | 42.18% | 해당 없음 | 84.61% | 해당 없음 | 미달 54.7%/lat2.19× · c0175-node-multi |
 | `ws` | `MULTI_DEALER_DEALER` | 26.7% | 25.5% | 28.5% | 66.7% | 83.3% | 69.7% | 미달 50.1%/lat1.11× · c0175-node-multi |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 실패 | 실패 | 실패 | 24.7% | 48.9% | 70.9% | 미측정(불완전: 실패 64,256,1024B) 부분평균 48.2%/lat0.91× · c0175-node-multi |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 29.3% | 32.8% | 30.8% | 24.7% | 48.9% | 70.9% | 미달 39.6%/lat61.04× · c0175-node-multi |
 | `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 25.1% | 28.6% | 29.0% | 29.4% | 44.4% | 56.8% | 미달 35.6%/lat37.61× · c0175-node-multi |
 | `ws` | `MULTI_PUBSUB` | 23.7% | 24.3% | 21.8% | 20.3% | 93.4% | 102.9% | 미달 47.7%/lat0.49× · c0175-node-multi |
 | `ws` | `MULTI_STREAM` | 55.13% | 52.49% | 38.12% | 해당 없음 | 118.08% | 해당 없음 | 통과 66.0%/lat1.86× · c0175-node-multi |
 | `wss` | `MULTI_DEALER_DEALER` | 22.6% | 25.0% | 35.8% | 61.4% | 56.8% | 61.6% | 미달 43.9%/lat35.05× · c0175-node-multi |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 실패 | 실패 | 19.6% | 43.0% | 70.7% | 63.8% | 미측정(불완전: 실패 64,256B) 부분평균 49.3%/lat1.21× · c0175-node-multi |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 28.6% | 31.2% | 19.6% | 43.0% | 70.7% | 63.8% | 미달 42.8%/lat2.23× · c0175-node-multi |
 | `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 17.0% | 22.0% | 25.5% | 37.0% | 26.9% | 29.9% | 미달 26.4%/lat4.67× · c0175-node-multi |
 | `wss` | `MULTI_PUBSUB` | 19.8% | 23.3% | 20.9% | 40.3% | 70.6% | 73.0% | 미달 41.3%/lat0.43× · c0175-node-multi |
 | `wss` | `MULTI_STREAM` | 74.27% | 65.85% | 41.67% | 해당 없음 | 117.30% | 해당 없음 | 통과 74.8%/lat1.43× · c0175-node-multi |
 | `tls` | `MULTI_DEALER_DEALER` | 21.9% | 22.0% | 34.5% | 44.0% | 56.3% | 47.9% | 미달 37.8%/lat10.28× · c0175-node-multi |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 실패 | 실패 | 13.9% | 27.6% | 68.8% | 67.4% | 미측정(불완전: 실패 64,256B) 부분평균 44.4%/lat1.24× · c0175-node-multi |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 29.6% | 28.4% | 13.9% | 27.6% | 68.8% | 67.4% | 미달 39.3%/lat120.09× · c0175-node-multi |
 | `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 22.4% | 21.9% | 10.5% | 24.7% | 25.2% | 32.0% | 미달 22.8%/lat126.77× · c0175-node-multi |
 | `tls` | `MULTI_PUBSUB` | 23.1% | 20.9% | 23.1% | 45.3% | 67.5% | 65.9% | 미달 41.0%/lat0.52× · c0175-node-multi |
 | `tls` | `MULTI_STREAM` | 63.67% | 44.26% | 39.55% | 해당 없음 | 98.45% | 해당 없음 | 통과 61.5%/lat1.92× · c0175-node-multi |
 
-> **Node multi 실패 메모(수정 대상, 2026-09-09).** `MULTI_DEALER_ROUTER_SENDSEND`의 작은 payload에서
-> Node 바인딩 multi 러너가 `multi routed send admission / echo drain timed out`으로 7셀 실패(ws 64·256·1024B,
-> wss 64·256B, tls 64·256B). 고CCU(100) routed echo의 send admission 또는 echo drain 대기가 timeout에
-> 걸린다. 2단계에서 원인 계층(Node 바인딩 perf harness의 drain/admission 로직 vs 바인딩 라이브러리 vs Core)을
-> 진단하고 수정한 뒤 재측정해 기록한다. 넘어가지 않는다.
+> **Node multi 실패 — 해소됨(2026-09-09, 802f1efab9).** `MULTI_DEALER_ROUTER_SENDSEND`의 작은 payload
+> 7셀(ws 64·256·1024B, wss 64·256B, tls 64·256B, 100 CCU)이 `send admission / echo drain timed out
+> (echoes=…, admissions=0)`으로 실패했다. **근본 원인은 Core·바인딩이 아니라 Node perf harness**: 서버
+> 응답을 커스텀 `RoutedReplySender` 비동기 큐로 보내다 고메시지율에서 대기 응답이 다음 public submit을
+> gate해 send-admission이 진행되지 못했다. 서버 응답을 수신 메시지의 네이티브 reply 빌더
+> (`received.send().message(part).submit()`)로 바꾸고 커스텀 큐(~100줄)를 제거해 해소(회귀 테스트 추가).
+> timeout·HWM·client 수 불변(우회 아님). 재측정 결과 ws 39.6·wss 42.8·tls 39.3%(throughput은 목표 미달).
 
 ### 9.5 Go
 
