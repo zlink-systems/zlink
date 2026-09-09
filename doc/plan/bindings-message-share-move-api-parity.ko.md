@@ -46,57 +46,105 @@ Java relay의 deep-copy가 고정 per-message 비용의 큰 부분).
    (수치를 올리려는 게 아니라 C와 같은 연산을 하도록 맞추는 parity 교정이다.)
 3. 위를 **스펙 문서에 반영**하고 **교차언어 parity 테스트**를 추가한 뒤, SENDSEND(및 routed)를 재측정해 공정 비율을 기록한다.
 
-## 3. 이름 결정 (검토 필요)
+## 3. 이름·시그니처 명세 (언어별)
 
-- 네이티브 C 이름은 `copy`(공유)·`move`(이전)지만, 바인딩의 **깊은 복사**가 이미 `copy()`/`copyOf`/`from`을 쓰므로 `copy`를 그대로
-  쓰면 "깊은 복사"와 혼동된다(현재 혼란의 원인). 따라서 **공유는 깊은 복사와 구별되는 이름**을 권장한다.
-- 권장(감독 제안, 확정은 사용자):
-  - ref-count 공유(`zlink_msg_copy`) → **`share()`**(또는 `shared()`): "같은 버퍼를 참조하는 새 핸들을 만든다"는 의미.
-  - 이동(`zlink_msg_move`) → **`moveInto(target)`**/**`take()`**: 소유권 이전, 원본은 비워짐.
-- 전 언어 **동일 이름·동일 시맨틱**으로 맞춘다. Java `sharedCopyOf`는 `share()`로 정렬하되 기존 이름은 한 사이클 deprecate alias로 남긴다(호환).
+**C API 이름과 1:1로 통일한다** — `zlink_msg_copy → Copy`, `zlink_msg_move → Move`. 바인딩만의 별도 이름(`share`/`moveInto` 등)을
+만들지 않는다. "이 언어의 `Copy`는 곧 C의 `zlink_msg_copy`(=ref-count 공유)"가 자명해지고, 두 함수가 정확히 대칭이 된다.
+
+### 3.1 통일 시맨틱
+- **`Copy`** = `zlink_msg_copy`. **호출한 메시지의 네이티브 버퍼를 공유하는 새 메시지를 반환**한다(refcount++). 원본과 사본 모두
+  유효하며 각자 close한다. 원본은 비워지지 않는다. payload는 공유 중 immutable. (Core `msg_t::copy`와 일치.)
+- **`Move`** = `zlink_msg_move`. **호출한 메시지의 소유권을 대상으로 이전**한다. 대상의 이전 내용은 close되고, **호출한 메시지는
+  empty**가 된다. refcount는 증가하지 않는다.
+
+### 3.2 이름 충돌 해소 — 기존 "깊은 복사"는 `Clone`으로
+기존 바인딩은 `copy()`/`copyOf`/`CopyTo`를 **깊은 복사**(독립 버퍼)에 쓴다. `Copy`를 C와 동일한 ref-share로 확정하므로, 그 기존
+깊은 복사는 이름을 **`Clone`(독립 복제)** 으로 옮긴다. 그러면 세 동작이 이름만으로 구분된다:
+- `Copy` = ref-count 공유(같은 버퍼) — C `zlink_msg_copy`.
+- `Move` = 소유권 이전(원본 empty) — C `zlink_msg_move`.
+- `Clone` = 깊은 복사(독립 버퍼) — 있던 언어만, 이름만 이동. (없던 언어는 추가하지 않음.)
+
+### 3.3 언어별 시그니처 (두 함수 각각)
+언어별 관용 케이싱을 따르되 의미어(Copy/Move/Clone)는 동일하게 맞춘다.
+
+| 언어 | `Copy` (= zlink_msg_copy, ref-share) | `Move` (= zlink_msg_move, 이전) | 기존 깊은복사 → `Clone` |
+|------|--------------------------------------|--------------------------------|------------------------|
+| **C** | `ZLINK_EXPORT zlink_config_result_t zlink_msg_copy(zlink_msg_t *dest, zlink_msg_t *src);` (기존) | `ZLINK_EXPORT zlink_config_result_t zlink_msg_move(zlink_msg_t *dest, zlink_msg_t *src);` (기존) | — (C엔 없음) |
+| **C++** | `message_t message_t::copy() const;` — 새 `message_t` 반환(버퍼 공유). 내부 `zlink_msg_copy(new, this)`. `this` 유효 유지. | `void message_t::move(message_t &dest);` — `zlink_msg_move(dest, this)`, `this`는 empty. **C++ move 시맨틱이 아니라 C API를 직접** 감쌈. | 현재 공개 깊은복사 있으면 `clone()`로 개명(없으면 미추가) |
+| **.NET** | `public Message Copy();` — 새 `Message` 반환. 내부 `zlink_msg_copy(ref dest, ref this)`(P/Invoke 존재, `Message.Native.cs`). | `public void Move(Message dest);` — `zlink_msg_move`, `this`는 empty. | 기존 `CopyTo`(깊은복사) → `CloneTo`/`Clone`으로 개명 |
+| **Node/TS** | `copy(): Message;` — 새 `Message` 반환. addon `zlink_msg_copy`(존재, `addon_core.cc`) 노출. | `move(dest: Message): void;` — addon `zlink_msg_move`, `this`는 empty. | 기존 `copy()`(깊은복사) → `clone(): Message`로 개명 |
+| **Java** | `public Message copy();` — 새 `Message` 반환(내부 `MH_MSG_COPY`=`zlink_msg_copy`). 기존 `sharedCopyOf`를 `copy`로 정렬. | `public void move(Message dest);` — `zlink_msg_move`. 기존 `moveInto`/`moveTo`를 `move`로 정렬. | 기존 깊은복사(있으면) → `clone`으로 정렬 |
+
+- **반환형 규칙:** `Copy`/`Clone`은 **새 메시지를 값으로 반환**(C의 out-param `dest`는 반환형으로 감쌈). `Move`는 대상을 인자로
+  받고 **void**(호출 메시지를 비운다).
+- **에러:** 네이티브 실패는 각 언어 표준(C `zlink_config_result_t`, C++/Java/.NET/Node 예외)으로 전파. 조용한 성공/무시 금지.
+- **조회 API는 그대로:** `ref_count()`/`RefCount`/`_refCount`(내부)/`zlink_msg_refcnt` 유지(변경 없음).
+- **호환:** 이름이 바뀌는 기존 공개 멤버(`sharedCopyOf`·`moveInto`·`CopyTo`·Node `copy` 등)는 **한 릴리스 사이클 동안 deprecated
+  alias**로 남겨 breaking을 완충한다.
 
 ## 4. 언어별 변경 범위
 
-- **C++**: `message_t`에 `share()`(→ `zlink_msg_copy`) 공개 멤버 추가. move는 `zlink_msg_move`를 감싸는 명시적 API로 노출(C++ move 시맨틱에만 의존하지 않음 — 다른 바인딩과 동일 계약). 내부에서 이미 `zlink_msg_copy`를 쓰므로 파괴적 변경 아님.
-- **.NET**: `Message`에 `Share()`(→ `zlink_msg_copy`, 이미 `Message.Native.cs`에 P/Invoke 존재) 공개 멤버 추가. 이동 멤버도 추가.
-- **Node**: `Message`에 `share()`(→ addon `zlink_msg_copy`) 공개 멤버 추가. 이동 멤버도 추가.
-- **Java**: `sharedCopyOf`/`moveInto`/`takeParts`를 통일 이름으로 정렬(behavior 불변, alias로 호환).
+- **C++**: `message_t`에 `copy()`(→ `zlink_msg_copy`)·`move(dest)`(→ `zlink_msg_move`) 공개 멤버 추가. move는 C API를 직접 감싼다(C++ move 시맨틱에만 의존하지 않음). 공개 깊은복사가 있으면 `clone()`으로 개명.
+- **.NET**: `Message`에 `Copy()`(→ `zlink_msg_copy`, P/Invoke 존재)·`Move(dest)`(→ `zlink_msg_move`) 추가. 기존 `CopyTo`(깊은복사)→`Clone`.
+- **Node**: `Message`에 `copy()`(→ addon `zlink_msg_copy`)·`move(dest)`(→ addon `zlink_msg_move`) 추가. 기존 `copy()`(깊은복사)→`clone()`.
+- **Java**: `sharedCopyOf`→`copy`, `moveInto`/`moveTo`→`move`로 정렬(behavior 불변, deprecated alias로 호환).
 - **C**: 레퍼런스(변경 없음). perf relay는 이미 move/copy 사용.
 
-모두 **public interface 추가/이름 정렬**이며 ownership·error 계약은 유지한다. .NET·Node·C++ 추가는 non-breaking, Java 이름 정렬만 deprecation 주의.
+모두 **public interface 추가/이름 정렬**이며 ownership·error 계약은 유지한다. .NET·Node·C++ `Copy`/`Move` 추가는 non-breaking,
+기존 깊은복사·Java 이름 정렬만 deprecation 주의(§3.2·alias).
 
 ## 5. perf harness 정렬 (동일 측정 의미)
 
-- 각 언어 routed echo relay(SENDSEND server)와, 해당되면 reqrep server reply가 **C와 동일하게 받은 메시지를 `move`로 send에 넘기고**
-  (relay는 안 들고 있으므로), 재제출이 필요하면 `share`로 snapshot을 든다. **깊은 복사 제거.**
+- 각 언어 routed echo relay(SENDSEND server)와, 해당되면 reqrep server reply가 **C와 동일하게 받은 메시지를 `Move`로 send에 넘기고**
+  (relay는 안 들고 있으므로), 재제출이 필요하면 `Copy`로 snapshot을 든다. **깊은 복사 제거.**
 - 바꾸지 않는 것: 실패 처리·retry 로직·metric·sampler·timeout·HWM·client 수·duration·측정 흐름. (수치 조작 금지, §7.0.1 parity)
 - 공개 API로 zero-copy echo가 되면 관련 harness는 그 멤버를 쓴다.
 
-## 6. 반영 순서
+## 6. 문서 반영 계획 (spec·guide·README)
 
+이 API는 코드뿐 아니라 **문서 3계층**에 반영해야 한다. 각 대상 파일과 넣을 내용을 명시한다.
+
+### 6.1 스펙(`bindings/doc/spec/**`, 보호 경로 — 감독이 직접, 사용자 승인 범위)
+- **공통 Message ownership 계약** 절에 세 동작을 정식 정의: `Copy`(ref-share)·`Move`(이전)·`Clone`(깊은복사) — 각 refcount·수명·
+  payload immutability·empty 여부. 전 언어 동일 시맨틱임을 규범(normative)으로 기재.
+- 언어별 spec 문서의 `Message` API 절에 §3.3 시그니처 표를 반영(관용 케이싱·반환형·에러).
+- 기존 깊은복사 이름(`copy`/`CopyTo`) → `Clone` 개명과 **deprecated alias 유지 기간**을 명시.
+- 대상 파일은 실제 spec 트리를 확인 후 확정하되, 최소: 공통 messaging ownership 문서 1건 + 언어별 Message 절(cpp/dotnet/node/java) 4건.
+
+### 6.2 guide/사용법 문서 — **없으면 추가**
+- 각 바인딩 README(및 사용자 가이드)의 Message 절에 **사용 예제**를 추가: (a) `Copy`로 공유 후 양쪽 각자 close, (b) `Move`로 send에
+  넘기기(echo relay 패턴), (c) `Clone`으로 독립 복제가 필요한 경우. **"언제 어느 것을 쓰나"** 결정 가이드 한 단락 포함.
+- guide에 관련 서술이 **현재 없으면 신규 섹션으로 추가**(단순 시그니처 나열이 아니라 소유권·수명 관점 사용법).
+- 대상(존재 확인 후 확정): `bindings/cpp/README*`, `bindings/dotnet/README*`, `bindings/node/README*`, `bindings/java/README*`,
+  그리고 상위 사용자 가이드 문서가 있으면 그 Messaging 절.
+
+### 6.3 반영 순서
 1. (이 문서 검토·승인)
-2. 스펙 반영: `bindings/doc/spec/**`의 공통 수신 ownership 계약과 각 언어 README의 Message 절에 `share()`/이동 멤버와 그 수명 계약을 명시.
-   (보호 경로이므로 감독이 직접, 사용자 승인 범위에서.)
-3. 바인딩 코드: 언어별 `Message` 멤버 추가/정렬 + 단위·계약 테스트.
-4. 교차언어 parity 테스트: 같은 메시지를 share/move했을 때 refcount·payload·수명이 언어별로 동일하게 관측되는지.
-5. perf relay 정렬(deep-copy → move/share).
-6. 재측정: SENDSEND(및 routed) before/after를 canonical C baseline과 paired로 기록. 비대상 회귀 없음 확인.
+2. **스펙 반영**(§6.1) — 감독이 직접, 사용자 승인 경로/범위 확인 후.
+3. **guide/README 사용법 반영**(§6.2) — 없으면 추가.
+4. 바인딩 코드: 언어별 `Message` 멤버 추가/정렬(`Copy`/`Move`, 깊은복사→`Clone`) + 단위·계약 테스트.
+5. 교차언어 parity 테스트: 같은 메시지를 `Copy`/`Move`했을 때 refcount·payload·수명이 언어별 동일 관측.
+6. perf relay 정렬(deep-copy → `Move`/`Copy`).
+7. 재측정: SENDSEND(및 routed) before/after를 canonical C baseline과 paired로 기록. 비대상 회귀 없음 확인.
 
 ## 7. 계약·수명 의미 (스펙에 명시할 것)
 
-- `share()`: 반환 메시지는 원본과 **같은 payload 버퍼를 공유**하고 refcount가 증가한다. 원본·사본 모두 유효하며 각자 `close`한다.
+- `Copy`: 반환 메시지는 원본과 **같은 payload 버퍼를 공유**하고 refcount가 증가한다. 원본·사본 모두 유효하며 각자 `close`한다.
   payload는 immutable 관측(공유 중 변경 금지). Core `msg_t::copy` 시맨틱과 일치.
-- `move`/`take`: 원본의 소유권을 대상으로 **이전**하고 원본은 empty가 된다. refcount 불변.
+- `Move`: 원본의 소유권을 대상으로 **이전**하고 원본은 empty가 된다. refcount 불변.
+- `Clone`: **독립 버퍼**로 깊은 복사. 원본과 무관(refcount 공유 없음).
 - 이 계약은 전 언어 동일해야 한다(교차언어 대조 필수).
 
 ## 8. 리스크
 
-- Java 이름 정렬은 기존 `sharedCopyOf` 사용처에 영향 → deprecation alias로 완충.
-- 공유 후 수명 오사용(공유 중 원본을 mutate하거나, 한쪽만 close 후 다른 쪽 사용) 방지를 테스트로 강제.
-- perf relay가 move로 바뀌면 재제출/드레인 경로에서 소유권이 이미 이전됐음을 전제로 해야 하므로, 재제출이 필요한 언어는 C처럼 share snapshot을 병행.
+- 이름 정렬(`sharedCopyOf`·`moveInto`·`CopyTo`·Node `copy`)은 기존 사용처에 영향 → deprecation alias로 완충.
+- **`Copy` 의미 전환 주의**: Node/.NET에서 `copy`/`CopyTo`가 깊은복사였다가 `Copy`가 ref-share가 되므로, 개명 없이 의미만 바뀌면
+  조용한 오동작 위험 → 반드시 기존 깊은복사를 `Clone`으로 개명하고 alias는 이전 의미(깊은복사)를 가리키게 한다.
+- 공유 후 수명 오사용(공유 중 원본 mutate, 한쪽만 close 후 다른 쪽 사용) 방지를 테스트로 강제.
+- perf relay가 `Move`로 바뀌면 재제출/드레인 경로에서 소유권이 이미 이전됐음을 전제로 해야 하므로, 재제출이 필요한 언어는 C처럼 `Copy` snapshot을 병행.
 
 ## 9. 검증
 
-- 단위·계약 테스트(share/move 수명·refcount), 교차언어 parity 테스트 통과.
+- 단위·계약 테스트(`Copy`/`Move`/`Clone` 수명·refcount), 교차언어 parity 테스트 통과.
 - SENDSEND tcp 작은 size(64/256/1024) before→after 공정 비율 상승 확인, 큰 payload·PAIR 회귀 없음.
 - 결과는 `doc/perf/perf/bindings-0.17.5/`의 상세 표·요약표에 반영.
