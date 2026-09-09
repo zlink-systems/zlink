@@ -21,6 +21,7 @@ public final class BenchDrivers {
     private final BenchOptions options;
     private final StatsClient stats = new StatsClient();
     private volatile SourceMetrics metrics = new SourceMetrics(1);
+    private long warmupAbandoned;
 
     public BenchDrivers(BenchOptions options) {
         this.options = options;
@@ -58,9 +59,13 @@ public final class BenchDrivers {
         SourceMetrics warmupMetrics = new SourceMetrics(options.latencySampleLimit);
         metrics = warmupMetrics;
         runPattern(trigger, operation, BenchMetricHeader.PHASE_WARMUP, warmupMetrics, null);
-        if (warmupMetrics.abandoned() != 0) {
-            throw new IllegalStateException(
-                "warmup left " + warmupMetrics.abandoned() + " operations abandoned");
+        // Operations still open when the warmup drain bound expires are a recorded observation
+        // (spec 5.2: abandoned; the cell is excluded from the throughput judgement), not a phase
+        // failure. The .NET and C++ sources record the same way; grpc-java's unbounded
+        // request-backpressure warmup reaches this with about a million open calls.
+        warmupAbandoned = warmupMetrics.abandoned();
+        if (warmupAbandoned != 0) {
+            System.err.println("warmup left " + warmupAbandoned + " operations abandoned (recorded)");
         }
     }
 
@@ -109,6 +114,7 @@ public final class BenchDrivers {
         result.put("request_window",
             "request-window".equals(trigger.pattern()) ? trigger.requestWindow() : null);
         result.put("abandoned", activeMetrics.abandoned());
+        result.put("warmup_abandoned", warmupAbandoned);
         result.put("latency_samples", latency.count());
         result.put("server_received_at_close", target.received());
         return result;

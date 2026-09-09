@@ -866,6 +866,23 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
   오류 0이었으므로 그 오류는 부하(감독자의 Node 테스트가 겹침)로 본다. 3-run은 `s3r_run{1,2,3}`으로
   다시 낸다.
 
+## FB-055 — 3-run 중 드러난 runner 결함 3건: 오류·abandoned 셀에서 run 중단(C++·Java), load gate 즉시 실패(C++) (2026-09-09, 감독자 수정)
+
+- C++ source는 오류/abandoned가 있으면 phase를 `failed`로 보고했고 runner는 거기서 run을 끝냈다
+  (`s3q_run1` 21/24셀). Java source는 warmup drain 상한 뒤 남은 operation을 `IllegalStateException`으로
+  던졌다(`grpc-java request-backpressure @1024`: warmup 20초에 3.3M 제출, 1.06M in-flight 잔류 →
+  `s2q_run1` 중단). C++ runner의 load gate(2.0)는 이전 셀의 loadavg 잔상 때문에 다음 run을 시작 즉시
+  실패시켰다(`s3r_run2`·`s3r_run3`).
+- 규격 §5.2와 .NET source(`Program.cs:239-247`)의 규칙: abandoned는 기록하는 관측값이고 셀은 판정에서
+  빠진다; 예외·readiness timeout만 실패다. C++·Java source를 이 규칙으로 맞췄다(Java는
+  `warmup_abandoned` 필드로 기록). runner는 settle 상한 도달을 기록하고 다음 셀(새 process 쌍)로 간다.
+  load gate는 값을 낮추지 않고 상한 600초 안에서 기다린다.
+- 부수 관측(판정 아님): grpc-java future stub은 상한 없는 제출을 그대로 받아 in-flight가 백만 단위로
+  쌓인다(.NET gRPC는 flow control로 21 ms 지연에서 멈춤). request-backpressure의 "도달 깊이"가
+  구현마다 이렇게 다르다는 것이 이 패턴의 결과다.
+- 재측정: C++ `s3s_run{2,3}`, Java `s2r_run{1,2,3}`(rebuild 티켓 뒤). Node `s2q_run{1,2,3}`·Kotlin은
+  영향 없음.
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
