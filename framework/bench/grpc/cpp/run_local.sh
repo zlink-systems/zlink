@@ -26,6 +26,7 @@ DRAIN_BOUND_MS="${DRAIN_BOUND_MS:-30000}"
 COMMAND_SETTLE_MS="${COMMAND_SETTLE_MS:-200}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-300}"
 LOAD_GATE="${LOAD_GATE:-2.0}"
+LOAD_GATE_WAIT_SECONDS="${LOAD_GATE_WAIT_SECONDS:-600}"
 RAW_SOCKET="router"
 
 while (($# > 0)); do
@@ -107,13 +108,21 @@ wait_for_ports_free() {
   check_ports_free
 }
 
+# The gate value is a measurement condition and is not relaxed. A previous cell's load average
+# lingers for a minute or two, so wait (bounded) for the gate instead of failing the run.
 check_load() {
-  local load
-  load="$(awk '{print $1}' /proc/loadavg)"
-  log "loadavg1=${load} gate=${LOAD_GATE}"
-  printf '%s loadavg1=%s gate=%s at=%s\n' "${RUN_LABEL}" "${load}" "${LOAD_GATE}" "$(date -Is)" \
-    >>"${LOG_DIR}/load-gates.txt"
-  awk -v measured_load="${load}" -v gate="${LOAD_GATE}" 'BEGIN { exit !(measured_load < gate) }'
+  local load deadline=$((SECONDS + LOAD_GATE_WAIT_SECONDS))
+  while :; do
+    load="$(awk '{print $1}' /proc/loadavg)"
+    log "loadavg1=${load} gate=${LOAD_GATE}"
+    printf '%s loadavg1=%s gate=%s at=%s\n' "${RUN_LABEL}" "${load}" "${LOAD_GATE}" "$(date -Is)" \
+      >>"${LOG_DIR}/load-gates.txt"
+    if awk -v measured_load="${load}" -v gate="${LOAD_GATE}" 'BEGIN { exit !(measured_load < gate) }'; then
+      return 0
+    fi
+    ((SECONDS < deadline)) || { echo "load average ${load} stayed above gate ${LOAD_GATE} for ${LOAD_GATE_WAIT_SECONDS}s" >&2; return 1; }
+    sleep 10
+  done
 }
 
 wait_for_stats() {
