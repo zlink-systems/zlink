@@ -15,6 +15,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
 {
     private const string Prefix = "zlink:v11:";
     private const long MaximumGeneration = long.MaxValue;
+    private const int MaximumDescriptorWriteRetries = 3;
     private static readonly ZLinkStoreKey OwnerCounterKey =
         Key($"{Prefix}owner-counter");
 
@@ -258,13 +259,16 @@ internal sealed partial class ZLinkProviderLocationRepository(
             .ConfigureAwait(false);
         if (lease is not ZLinkStoreReadResult.Found liveLease)
             return ZLinkLocationWriteResult.IgnoredStale;
-        if (DecodeOwner(liveLease.Value.Bytes).LeaseGeneration
-            != descriptor.LeaseGeneration)
+        var liveOwner = DecodeOwner(liveLease.Value.Bytes);
+        if (!string.Equals(
+                liveOwner.OwnerId,
+                descriptor.OwnerId,
+                StringComparison.Ordinal)
+            || liveOwner.LeaseGeneration != descriptor.LeaseGeneration)
             return ZLinkLocationWriteResult.IgnoredStale;
 
         var current = await provider.ReadAsync(rowKey, cancellationToken)
             .ConfigureAwait(false);
-        ZLinkStoreCondition rowCondition;
         if (current is ZLinkStoreReadResult.Found found)
         {
             var record = DecodeDescriptor<ZLinkMeshNodeDescriptor>(found.Value.Bytes);
@@ -287,15 +291,11 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 if (previousOwner is ZLinkStoreReadResult.Found)
                     return ZLinkLocationWriteResult.IgnoredStale;
             }
-            rowCondition = new ZLinkStoreCondition.Version(
-                rowKey,
-                found.Value.Version);
         }
         else
         {
             if (intent == ZLinkLocationWriteIntent.Renew)
                 return ZLinkLocationWriteResult.IgnoredStale;
-            rowCondition = new ZLinkStoreCondition.Missing(rowKey);
         }
 
         var encodedDescriptor = JsonSerializer.SerializeToUtf8Bytes(
@@ -306,20 +306,12 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 descriptor),
             ZLinkJsonSerializerOptions.Default);
         return await WriteDescriptorWithReconciliationAsync(
+                leaseKey,
+                descriptor.OwnerId,
+                descriptor.LeaseGeneration,
+                liveLease,
                 rowKey,
-                new ZLinkStoreWriteRequest(
-                [
-                    new ZLinkStoreCondition.Version(
-                        leaseKey,
-                        liveLease.Value.Version),
-                    rowCondition
-                ],
-                [
-                    new ZLinkStoreMutation.Put(
-                        rowKey,
-                        encodedDescriptor,
-                        null)
-                ]),
+                current,
                 encodedDescriptor,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -600,14 +592,18 @@ internal sealed partial class ZLinkProviderLocationRepository(
         var leaseKey = OwnerKey(ownerId);
         var lease = await provider.ReadAsync(leaseKey, cancellationToken)
             .ConfigureAwait(false);
-        if (lease is not ZLinkStoreReadResult.Found liveLease
-            || DecodeOwner(liveLease.Value.Bytes).LeaseGeneration
-            != leaseGeneration)
+        if (lease is not ZLinkStoreReadResult.Found liveLease)
+            return ZLinkLocationWriteResult.IgnoredStale;
+        var liveOwner = DecodeOwner(liveLease.Value.Bytes);
+        if (!string.Equals(
+                liveOwner.OwnerId,
+                ownerId,
+                StringComparison.Ordinal)
+            || liveOwner.LeaseGeneration != leaseGeneration)
             return ZLinkLocationWriteResult.IgnoredStale;
 
         var current = await provider.ReadAsync(rowKey, cancellationToken)
             .ConfigureAwait(false);
-        ZLinkStoreCondition rowCondition;
         if (current is ZLinkStoreReadResult.Found found)
         {
             var record = DecodeDescriptor<T>(found.Value.Bytes);
@@ -630,15 +626,11 @@ internal sealed partial class ZLinkProviderLocationRepository(
                     || descriptorRevision <= record.DescriptorRevision
                     || !immutableFieldsEqual(record.Descriptor, descriptor)))
                 return ZLinkLocationWriteResult.IgnoredStale;
-            rowCondition = new ZLinkStoreCondition.Version(
-                rowKey,
-                found.Value.Version);
         }
         else
         {
             if (intent == ZLinkLocationWriteIntent.Renew)
                 return ZLinkLocationWriteResult.IgnoredStale;
-            rowCondition = new ZLinkStoreCondition.Missing(rowKey);
         }
 
         var encodedDescriptor = JsonSerializer.SerializeToUtf8Bytes(
@@ -649,20 +641,12 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 descriptor),
             ZLinkJsonSerializerOptions.Default);
         return await WriteDescriptorWithReconciliationAsync(
+                leaseKey,
+                ownerId,
+                leaseGeneration,
+                liveLease,
                 rowKey,
-                new ZLinkStoreWriteRequest(
-                [
-                    new ZLinkStoreCondition.Version(
-                        leaseKey,
-                        liveLease.Value.Version),
-                    rowCondition
-                ],
-                [
-                    new ZLinkStoreMutation.Put(
-                        rowKey,
-                        encodedDescriptor,
-                        null)
-                ]),
+                current,
                 encodedDescriptor,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -694,54 +678,132 @@ internal sealed partial class ZLinkProviderLocationRepository(
 
     private async ValueTask<ZLinkLocationWriteResult>
         WriteDescriptorWithReconciliationAsync(
+            ZLinkStoreKey leaseKey,
+            string ownerId,
+            long leaseGeneration,
+            ZLinkStoreReadResult.Found liveLease,
             ZLinkStoreKey rowKey,
-            ZLinkStoreWriteRequest request,
+            ZLinkStoreReadResult predecessor,
             ReadOnlyMemory<byte> encodedDescriptor,
             CancellationToken cancellationToken)
     {
-        ZLinkStoreWriteResult result;
-        try
+        var currentLease = liveLease;
+        var currentRow = predecessor;
+        var retriesRemaining = MaximumDescriptorWriteRetries;
+        while (true)
         {
-            result = await provider.WriteAsync(request, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (Exception failure) when (
-            failure is not OutOfMemoryException
-            and not StackOverflowException
-            and not AccessViolationException)
-        {
+            ZLinkStoreCondition rowCondition = currentRow switch
+            {
+                ZLinkStoreReadResult.Found found =>
+                    new ZLinkStoreCondition.Version(
+                        rowKey,
+                        found.Value.Version),
+                ZLinkStoreReadResult.Missing =>
+                    new ZLinkStoreCondition.Missing(rowKey),
+                _ => throw new InvalidOperationException()
+            };
+            var request = new ZLinkStoreWriteRequest(
+            [
+                new ZLinkStoreCondition.Version(
+                    leaseKey,
+                    currentLease.Value.Version),
+                rowCondition
+            ],
+            [
+                new ZLinkStoreMutation.Put(
+                    rowKey,
+                    encodedDescriptor,
+                    null)
+            ]);
+
+            ZLinkStoreWriteResult result;
             try
             {
-                using var deadline = new CancellationTokenSource(
-                    AmbiguousReconciliationTimeout);
-                var read = await provider.ReadAsync(rowKey, deadline.Token)
-                    .AsTask()
-                    .WaitAsync(deadline.Token)
+                result = await provider.WriteAsync(request, cancellationToken)
                     .ConfigureAwait(false);
-                if (read is ZLinkStoreReadResult.Found found
-                    && found.Value.Bytes.Span.SequenceEqual(
-                        encodedDescriptor.Span))
-                {
-                    return ZLinkLocationWriteResult.Stored(
-                        VersionOf(found.Value.Version),
-                        found.Value.StoreNow);
-                }
             }
-            catch
+            catch (Exception failure) when (
+                failure is not OutOfMemoryException
+                and not StackOverflowException
+                and not AccessViolationException)
             {
+                try
+                {
+                    using var deadline = new CancellationTokenSource(
+                        AmbiguousReconciliationTimeout);
+                    var read = await provider.ReadAsync(rowKey, deadline.Token)
+                        .AsTask()
+                        .WaitAsync(deadline.Token)
+                        .ConfigureAwait(false);
+                    if (read is ZLinkStoreReadResult.Found found
+                        && found.Value.Bytes.Span.SequenceEqual(
+                            encodedDescriptor.Span))
+                    {
+                        return ZLinkLocationWriteResult.Stored(
+                            VersionOf(found.Value.Version),
+                            found.Value.StoreNow);
+                    }
+                }
+                catch
+                {
+                    ExceptionDispatchInfo.Capture(failure).Throw();
+                }
+
                 ExceptionDispatchInfo.Capture(failure).Throw();
+                throw;
             }
 
-            ExceptionDispatchInfo.Capture(failure).Throw();
-            throw;
-        }
+            if (result is ZLinkStoreWriteResult.Applied applied)
+            {
+                return ZLinkLocationWriteResult.Stored(
+                    VersionOf(applied.PutVersions[rowKey]),
+                    applied.StoreNow);
+            }
 
-        return result is ZLinkStoreWriteResult.Applied applied
-            ? ZLinkLocationWriteResult.Stored(
-                VersionOf(applied.PutVersions[rowKey]),
-                applied.StoreNow)
-            : ZLinkLocationWriteResult.IgnoredStale;
+            if (retriesRemaining == 0)
+                return ZLinkLocationWriteResult.IgnoredStale;
+            retriesRemaining--;
+
+            var refreshedLease = await provider.ReadAsync(
+                    leaseKey,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (refreshedLease is not ZLinkStoreReadResult.Found foundLease)
+                return ZLinkLocationWriteResult.IgnoredStale;
+            var refreshedOwner = DecodeOwner(foundLease.Value.Bytes);
+            if (!string.Equals(
+                    refreshedOwner.OwnerId,
+                    ownerId,
+                    StringComparison.Ordinal)
+                || refreshedOwner.LeaseGeneration != leaseGeneration)
+            {
+                return ZLinkLocationWriteResult.IgnoredStale;
+            }
+
+            var refreshedRow = await provider.ReadAsync(
+                    rowKey,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (!IsSameDescriptorPredecessor(predecessor, refreshedRow))
+                return ZLinkLocationWriteResult.IgnoredStale;
+
+            currentLease = foundLease;
+            currentRow = refreshedRow;
+        }
     }
+
+    private static bool IsSameDescriptorPredecessor(
+        ZLinkStoreReadResult expected,
+        ZLinkStoreReadResult current) =>
+        (expected, current) switch
+        {
+            (ZLinkStoreReadResult.Missing, ZLinkStoreReadResult.Missing) => true,
+            (ZLinkStoreReadResult.Found expectedFound,
+                ZLinkStoreReadResult.Found currentFound) =>
+                expectedFound.Value.Bytes.Span.SequenceEqual(
+                    currentFound.Value.Bytes.Span),
+            _ => false
+        };
 
     private async ValueTask<ZLinkLocationWriteStatus> RemoveDescriptorAsync<T>(
         ZLinkStoreKey rowKey,

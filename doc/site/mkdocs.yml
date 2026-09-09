@@ -106,6 +106,15 @@ plugins:
             "18. DI container": "18. DI 컨테이너"
             "21. Execution and configuration model": "21. 실행·구성 모델"
 
+            # Framework messaging bench.
+            Bench: 벤치
+            gRPC comparison: gRPC 비교
+            Bench specification: 벤치 규격
+            .NET bench: .NET 벤치
+            Node.js bench: Node.js 벤치
+            Java bench: Java 벤치
+            C++ bench: C++ 벤치
+
             # Framework 공통 스펙.
             Common spec: 공통 스펙
             Conventions and glossary: 작성 기준과 공통 용어
@@ -419,6 +428,13 @@ nav:
               - "Runtime Metrics And Aggregation Rules": common/spec/server/06-observability/02-runtime-metrics.md
               - "Message Flow Tracing": common/spec/server/06-observability/03-message-flow-tracing.md
               - "Request Correlation And Business Flow Identification": common/spec/server/06-observability/04-flow-correlation.md
+      - Bench:
+          - "gRPC comparison": bench/comparison.md
+          - "Bench specification": common/bench/with-grpc-local.md
+          - ".NET bench": bench/dotnet.md
+          - "Node.js bench": bench/node.md
+          - "Java bench": bench/java.md
+          - "C++ bench": bench/cpp.md
   - Bindings:
       - Guide:
         - Overview: bindings/guide/README.md

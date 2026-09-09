@@ -4,7 +4,11 @@
 >
 > 작업 기준: `main` (별도 브랜치 없음; 검증된 단위마다 커밋·푸시)
 >
-> 현재 상태(2026-09-07 갱신): 러너 정합 작업 중. 호스트가 바뀌었고(16 논리 CPU / 11.7 GiB /
+> **현재 상태(2026-09-09 갱신): 캠페인 종결.** 사용자 결정 "측정은 하지 말고 배포" — 추가 측정 없이
+> 배포로 전환했고, 남은 개선·결함은 bindings 1.0.0 묶음으로 이월한다. 종결 시점 상태와 이월 목록은
+> §12.2, 그 직전(2026-09-08) 상태는 §12.1·§10.3.2.
+>
+> 이전 상태(2026-09-07 갱신): 러너 정합 작업 중. 호스트가 바뀌었고(16 논리 CPU / 11.7 GiB /
 > 홈 `/home/hep7hep7` → 20 논리 CPU / 94 GiB / 홈 `/home/hep7`) `core/build`(Release+LTO)를
 > 새로 빌드해 artifact를 고정했으며 새 환경 manifest(`log/2026-09-07-environment.ko.md`)를
 > 작성했다. **2026-09-05/06의 paired 판정과 개선 pass는 그대로 유지한다** — 같은 호스트·같은
@@ -1655,3 +1659,46 @@ C++ 10 + Java 3뿐이고 .NET·Node·Rust·Python·Go는 전 pattern 미달(격�
 비용, Node·Go·Rust·Java는 초 단위 latency 교차 현상과 64 KB 왕복 비용). (2) tls·ws·wss 108 cell은 0.17.4에서 1-run 기록 완료, 3-run 확정 진행 중(D-BP50; STREAM 28 cell은 0.17.3-alpha/0.17.3에서 측정 완료, §10.3.2). (3) Go RR SS 65536 B·Java RR SS 4096 B 러너 teardown 결함.
 (4) 평균 latency 한도(≤3~5x)는 Node·Rust·Java·Go SS/DD에서 100~2,500x로 미충족 — 처리량과 별개
 항목으로 §10.3.2 첫 이월 항목. 목록 전체는 §10.3.2.
+
+### 12.2 2026-09-09 캠페인 종결 상태 (사용자 결정 "측정은 하지 말고 배포")
+
+**결정**: 이 캠페인은 여기서 끝낸다. 추가 paired 측정·개선 pass는 하지 않는다. 남은 미달·보류·차단
+cell과 이월 항목은 **bindings 1.0.0**(Core 1.0·framework 1.0.0과 함께 배포, 중간 0.17.7 없음 —
+`doc/building/versioning.ko.md` §5)의 계획 입력이 된다. §12의 완료 조건은 문자 그대로 충족되지
+않았고(§12.1의 미충족 4건 그대로), 그 사실을 종결 근거로 기록한다.
+
+**배포로 전환한 결과(2026-09-09)**
+
+| 항목 | 상태 |
+|---|---|
+| Core | 0.17.5 공식 artifact(`~/.cache/zlink/core/0.17.5/linux-x64`, §11.9 STREAM CCU 10,000 통과) |
+| bindings | 0.17.6 게시(네 언어 공유 번호; Node EAGAIN·MSVC arm64 수정). 이 캠페인의 채택 개선은 모두 0.17.6 이하에 포함 |
+| framework | 0.11.0 태그·게시(GitHub Release, NuGet, Maven Central deployment; Node npm은 trusted publisher 등록 대기). 0.x 마지막 릴리스 |
+| tls·ws·wss 108 cell | §9.x 표의 `sec174x3` 3-run 확정값이 최종. 더 갱신하지 않는다 |
+
+**이 캠페인 뒤에 발견된 binding 결함(1.0.0 입력)** — framework messaging bench 2차
+(`framework/bench/grpc/doc/comparison.ko.md`, 결정 `doc/plan/fw-bench-worklog/decisions.ko.md`)가
+binding 0.17.6의 raw ROUTER↔ROUTER 경로에서 발견한 것이다. 이 문서의 perf 러너와는 다른 부하 모양
+(in-flight 100의 request window, 5초)이라 §9 표에는 넣지 않는다.
+
+- **FB-049 Node**: `request-window @1024`에서 completion 100건 전부 유실 — 3-run 처리량 75/32 ops/s
+  (G5 47.7%/769.9%), backpressure에서도 재현. 1차 캠페인 FB-026 계열.
+- **FB-050 Java**: 같은 셀에서 reply completion 전부 유실(caller-owned `Received.close()` 뒤 reply lane;
+  `Received.java:621-642, 786-840`). 0.17.5에서 고쳤다고 기록된 FB-026이 0.17.6에서 재현된다.
+- **FB-048 C 기준선**: `zlink-c` 4096 B(그리고 1024 B window)가 Core의 연결별 I/O 스레드 배치로
+  두 모드를 오가 3-run G5 10.6~13.3% 실패 — 이 문서 §7.3의 paired C 규칙이 의존하는 기준선 안정성
+  문제. Core 소관.
+- framework 계층 배율(FB-047·FB-052·FB-054)은 framework 소관이며 이 문서 범위 밖이다.
+
+**bindings 1.0.0 계획으로 넘기는 목록(우선순위 없음, 재개 시 정렬)**
+
+1. §10.3.2 이월 항목 전부(초 단위 latency 교차 현상, Java REQREP 65536 B, Java RR SS teardown,
+   Go RR SS 65536 B, Go DD 64 B, REQREP async terminal 왕복 비용, .NET tls RR SS 65536 B, wss DD C
+   러너, Node·Go·Rust·Python·Java REQREP 비용 지도).
+2. FB-049·FB-050 raw request-window 유실(위).
+3. 7개 binding의 STREAM `--clients 10000` 측정(§11.9 C만 완료).
+4. .NET·C++ 미달 cell은 공개 API 변경 없이는 움직이지 않으므로(D-BP26·D-BP31·D-BP38) 1.0에서
+   API 형태 결정이 있을 때만 다시 연다.
+
+**재개 절차**는 §11 끝의 2026-09-08 문구 그대로다: (1) Core 새 버전(1.0)을 §10.3의 재핀 절차로 고정,
+(2) C 기준을 전 transport 1-run으로 다시 잡고 G5(FB-048)를 먼저 확인, (3) 위 목록 순서대로.

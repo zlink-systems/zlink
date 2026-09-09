@@ -2,27 +2,18 @@
 
 package systems.zlink.bench.withgrpc.client;
 
-import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
 import systems.zlink.bench.withgrpc.shared.Args;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
 
-/** The common CLI of plan section 4, with the java-specific warmup control added. */
+/** Exact source-A cell configuration supplied by the runner. */
 public final class BenchOptions {
     public final String scenario;
     public final String implementation;
-    public final List<Integer> payloadSizes = new ArrayList<>();
+    public final List<Integer> payloadSizes;
     public final int requestWindow;
     public final int sendConcurrency;
     public final int latencySampleLimit;
-    /**
-     * spec section 8.2: warmup length is set per language and recorded. The java row warms
-     * up for a duration rather than for an iteration count, and it warms up through
-     * the SAME driver that the measured window uses, so the JIT sees the shape it
-     * will be measured on. The per-segment throughput of this window is reported
-     * with every cell as the evidence that the runtime had reached steady state.
-     */
     public final double warmupSeconds;
     public final double warmupSegmentSeconds;
     public final int warmup;
@@ -32,6 +23,11 @@ public final class BenchOptions {
     public final int windowSettleMs;
     public final int requestTimeoutMs;
     public final int routeReadyMs;
+    public final String triggerUrl;
+    public final String statsUrl;
+    public final String targetEndpoint;
+    public final String targetCommandEndpoint;
+    public final String targetStatsUrl;
     public final String grpcUrl;
     public final String grpcStatsUrl;
     public final String zlinkEndpoint;
@@ -40,68 +36,88 @@ public final class BenchOptions {
     public final String zlinkRawStatsUrl;
     public final String zlinkRawCommandEndpoint;
     public final String rawSocket;
+    public final String runIdText;
+    public final String cellId;
     public final int runId;
     public final String output;
     public final String reportFile;
 
     public BenchOptions(String[] argv) {
-        scenario = Args.value(argv, "--scenario", "all");
-        implementation = Args.value(argv, "--implementation", "all");
-        for (String piece : Args.value(argv, "--payload-sizes", "1024,4096").split(",")) {
-            int size = Integer.parseInt(piece.trim());
-            if (size < BenchMetricHeader.HEADER_SIZE) {
-                throw new IllegalArgumentException(
-                    "payload size must be at least " + BenchMetricHeader.HEADER_SIZE);
-            }
-            payloadSizes.add(size);
-        }
+        scenario = Args.value(argv, "--scenario", "");
+        implementation = Args.value(argv, "--implementation", "");
+        int payload = Args.integer(argv, "--payload-size", 1024);
+        payloadSizes = List.of(payload);
         requestWindow = Args.integer(argv, "--request-window", 100);
         sendConcurrency = Args.integer(argv, "--send-concurrency", 8);
-        latencySampleLimit = Args.integer(argv, "--latency-sample-limit", 200000);
+        latencySampleLimit = Args.integer(argv, "--latency-sample-limit", 200_000);
         warmupSeconds = Args.number(argv, "--warmup-seconds", 20.0);
         warmupSegmentSeconds = Args.number(argv, "--warmup-segment-seconds", 2.0);
         warmup = Args.integer(argv, "--warmup", 0);
         durationSeconds = Args.number(argv, "--duration-seconds", 5.0);
         commandSettleMs = Args.integer(argv, "--command-settle-ms", 200);
-        drainBoundMs = Args.integer(argv, "--drain-bound-ms", 30000);
-        windowSettleMs = Args.integer(argv, "--window-settle-ms", 5000);
-        requestTimeoutMs = Args.integer(argv, "--timeout-seconds", 30) * 1000;
-        routeReadyMs = Args.integer(argv, "--route-ready-ms", 15000);
-        grpcUrl = Args.value(argv, "--grpc-url", "127.0.0.1:5091");
-        grpcStatsUrl = Args.value(argv, "--grpc-stats-url", "http://127.0.0.1:5094");
-        zlinkEndpoint = Args.value(argv, "--zlink-endpoint", "tcp://127.0.0.1:5092");
-        zlinkStatsUrl = Args.value(argv, "--zlink-stats-url", "http://127.0.0.1:5093");
-        zlinkRawEndpoint = Args.value(argv, "--zlink-raw-endpoint", "tcp://127.0.0.1:5095");
-        zlinkRawStatsUrl = Args.value(argv, "--zlink-raw-stats-url", "http://127.0.0.1:5096");
-        zlinkRawCommandEndpoint =
-            Args.value(argv, "--zlink-raw-command-endpoint", "tcp://127.0.0.1:5097");
-        rawSocket = Args.value(argv, "--raw-socket",
-            System.getenv("RAW_SOCKET") == null ? "router" : System.getenv("RAW_SOCKET"));
-        runId = ThreadLocalRandom.current().nextInt(1, Integer.MAX_VALUE);
+        drainBoundMs = Args.integer(argv, "--drain-bound-ms", 30_000);
+        windowSettleMs = drainBoundMs;
+        requestTimeoutMs = Args.integer(argv, "--request-timeout-ms", 30_000);
+        routeReadyMs = Args.integer(argv, "--route-ready-ms", 30_000);
+        triggerUrl = Args.value(argv, "--trigger-url", "");
+        statsUrl = Args.value(argv, "--stats-url", "");
+        targetEndpoint = Args.value(argv, "--target-endpoint", "");
+        targetCommandEndpoint = Args.value(argv, "--target-command-endpoint", "");
+        targetStatsUrl = Args.value(argv, "--target-stats-url", "");
+        grpcUrl = targetEndpoint;
+        grpcStatsUrl = targetStatsUrl;
+        zlinkEndpoint = targetEndpoint;
+        zlinkStatsUrl = targetStatsUrl;
+        zlinkRawEndpoint = targetEndpoint;
+        zlinkRawStatsUrl = targetStatsUrl;
+        zlinkRawCommandEndpoint = targetCommandEndpoint;
+        rawSocket = Args.value(argv, "--raw-socket", "router");
+        runIdText = Args.value(argv, "--run-id", "");
+        cellId = Args.value(argv, "--cell-id", "");
+        runId = headerRunId(runIdText);
         output = Args.value(argv, "--output", "log/latest");
-        reportFile = Args.value(argv, "--report-file", "with_grpc_java.txt");
+        reportFile = Args.value(argv, "--report-file", "report.txt");
 
-        if (!"router".equals(rawSocket) && !"dealer".equals(rawSocket)) {
-            throw new IllegalArgumentException("raw socket must be router or dealer");
+        if (!List.of("request-serial", "request-window", "request-backpressure",
+            "send-saturation").contains(scenario)) {
+            throw new IllegalArgumentException("unknown scenario: " + scenario);
         }
-        for (String url : List.of(grpcStatsUrl, zlinkStatsUrl, zlinkRawStatsUrl)) {
-            if (!url.startsWith("http://127.0.0.1:")) {
-                throw new IllegalArgumentException("stats url must be loopback: " + url);
-            }
+        if (payload < BenchMetricHeader.HEADER_SIZE || requestWindow != 100
+            || sendConcurrency != 8 || latencySampleLimit <= 0 || drainBoundMs != 30_000
+            || requestTimeoutMs != 30_000 || routeReadyMs != 30_000) {
+            throw new IllegalArgumentException("fixed benchmark options are invalid");
         }
-        for (String endpoint
-            : List.of(zlinkEndpoint, zlinkRawEndpoint, zlinkRawCommandEndpoint)) {
-            if (!endpoint.startsWith("tcp://127.0.0.1:")) {
-                throw new IllegalArgumentException("endpoint must be loopback: " + endpoint);
-            }
+        if (!"router".equals(rawSocket)) {
+            throw new IllegalArgumentException("RAW_SOCKET must remain router");
+        }
+        if (runIdText.isBlank() || cellId.isBlank()) {
+            throw new IllegalArgumentException("run-id and cell-id are required");
+        }
+        requireLoopback(triggerUrl, "http://", "trigger URL");
+        requireLoopback(statsUrl, "http://", "stats URL");
+        requireLoopback(targetStatsUrl, "http://", "target stats URL");
+    }
+
+    private static void requireLoopback(String value, String scheme, String label) {
+        if (!value.startsWith(scheme + "127.0.0.1:")) {
+            throw new IllegalArgumentException(label + " must use IPv4 loopback: " + value);
         }
     }
 
     public boolean runsImplementation(String name) {
-        return "all".equals(implementation) || implementation.equals(name);
+        return implementation.equals(name);
     }
 
     public boolean runsPattern(String name) {
-        return "all".equals(scenario) || scenario.equals(name);
+        return scenario.equals(name);
+    }
+
+    private static int headerRunId(String text) {
+        long hash = 2_166_136_261L;
+        for (byte value : text.getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+            hash = ((hash ^ (value & 0xffL)) * 16_777_619L) & 0xffff_ffffL;
+        }
+        int result = (int) hash;
+        return result == 0 ? 1 : result;
     }
 }

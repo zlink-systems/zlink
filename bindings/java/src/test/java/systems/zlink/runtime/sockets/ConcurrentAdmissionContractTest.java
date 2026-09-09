@@ -34,7 +34,7 @@ class ConcurrentAdmissionContractTest {
                 dealer.send().message(Message.from("concurrent")).submit_sync();
                 return null;
             });
-            FutureTask<Integer> drain = new FutureTask<>(() -> owner.drain(null));
+            FutureTask<Integer> drain = new FutureTask<>(owner::drain);
             Thread second = null;
             Thread drainer = null;
             try {

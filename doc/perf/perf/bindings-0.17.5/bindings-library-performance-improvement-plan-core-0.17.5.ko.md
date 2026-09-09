@@ -726,7 +726,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 |------|------|------------------------------|------------------------------|
 | cpp | 0.17.4 | 86.5% / 1.03× | 99.0% / 1.02× |
 | dotnet | 0.17.5 | 84.5% / 0.92× | 90.9% / 0.92× |
-| java | 0.17.5 | 88.5% / 1.01× | 63.6% / 1.13× |
+| java | 0.17.5 | 92.7% / 1.00× | 70.5% / 1.21× |
 | node | 0.17.5 | 72.8% / 2.68× (42 해당없음) | 41.6% / 2.83× |
 | go | 0.17.5 | 미측정 | 미측정 |
 | rust | 0.17.5 | 미측정 | 미측정 |
@@ -751,6 +751,13 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   재측정으로 해소(75.6·82.8·72.6%). Core 버그 아님. 최초 측정은 외부 worktree perf와 동시
   실행돼 무효화하고 재측정했다.
 - 다음 작업: .NET Single·Multi paired 측정으로 이동(C++ 미달·실패는 2단계 개선에서 처리).
+
+> **C++ routed 개선 시도 — 개선 없음/보류(2026-09-09).** ws DEALER_ROUTER(76.2%) 등 작은-payload routed를 callgrind로
+> 프로파일했다. 비용은 Core 라우팅(msg_t::copy, router recv, routing-id copy)에 낮게 분산돼 있고 C++ **바인딩 런타임에는
+> 제거 가능한 지배적 hot spot이 없다**(이미 near-optimal, 전체 86~99%). 벤치마크 harness의 수신 객체 수명을 손대는
+> 변경을 시험했으나 (a) 측정 의미를 C와 다르게 만들 소지가 있고 (b) 실질 이득이 없어 **되돌렸다**. 수치만 올리는 harness
+> 튜닝은 목표가 아니다(동일 측정 의미로 라이브러리 성능을 개선하는 것이 목표). C++ pool 재도입 금지(§7.6) 준수. routed
+> 작은-payload 격차는 Core 라우팅 + 전송 framing 고유 비용으로 본다.
 
 #### 9.1.1 Single suite
 
@@ -856,6 +863,16 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   package provenance·console로 release 0.17.5 확인(양성).
 - 다음 작업: Java Single·Multi paired 측정.
 
+> **.NET routed request/reply 개선 시도 — 보류(2026-09-09).** DEALER_ROUTER_REQREP·ROUTER_ROUTER_REQREP가
+> C 대비 낮아(single tcp 63.1/56.4%) 진단했다. 병목은 요청당 managed 할당(RequestCompletionEntry·Task·
+> reply builder/collection·ReplyToken·ReceivedReplyContext 등, Gen0 GC 151~187 MB/s)과 **2-part 왕복당 약 30회의
+> P/Invoke 경계 + CLR object header/JIT/GC 고유 비용**이다(Core·wire·routing 결함 없음, 분류 B). 계약 보존
+> 할당 축소 pass(ReceivedReplyContext 제거·노출 안 된 multipart wrapper 재사용·indexed loop)를 구현해 allocation
+> rate는 −6.2% 줄였으나 **throughput이 오히려 회귀**(DEALER_ROUTER_REQREP −3.76%, ROUTER_ROUTER_REQREP −3.75%,
+> PAIR −5.02%)했다. 할당이 throughput 병목이 아니고 P/Invoke 경계 비용이 지배적이라, §7.7에 따라 변경을 되돌리고
+> 보류로 둔다. public 계약·테스트는 훼손하지 않았다(변경은 전량 revert). inproc/ipc routed는 §2.1 예외/memory-copy
+> 상한과 함께 재검토 대상.
+
 #### 9.2.1 Single suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
@@ -947,14 +964,29 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.3 Java
 
 - perf 경로: `bindings/java/perf` (core **0.17.5**, JDK 22 필수: `JAVA_HOME=~/.jdks/jdk-22.0.2+9`, FFM API)
-- Single 상태: `측정 완료(2026-09-09)` — 6 transport × 7 pattern, 42셀 complete(실패 0). 통과 23 / 미달 19.
-  미달은 대부분 inproc·ipc(§2.1에 Java local-transport 예외가 없어 일반 목표로 판정; memory-copy
-  상한 대비 목표가 높음 — 2단계에서 Java용 예외 필요성 검토)와 req/reply. 2단계 개선 대상.
-- Multi 상태: `측정 완료(2026-09-09, 원샷, harness 수정본)` — 4 transport × 7 pattern, clients=100,
-  실패 0. 통과 2 / 미달 26. Java multi 비율은 대체로 40~92%로 목표(simple 90 / routed 85 /
-  echo·reqrep 70)에 크게 미달(특히 routed req/reply 40~57%) — 2단계 개선 대상. C baseline은
-  이 job의 C multi report(harness 수정 후, 실패 0)를 사용했고, node부터는 이 C 0.17.5 baseline을
-  재사용해 바인딩만 측정한다.
+- Single 상태: `측정 완료(2026-09-09) + routed 개선 반영` — 6 transport × 7 pattern, 실패 0. 통과 24 / 미달 18.
+  **completion drain inline 정착 최적화(306b939a98) 후 routed req/reply 재측정**: ws/wss/tls
+  DEALER_ROUTER_REQREP 등 다수가 통과 전환(ws DEALER_ROUTER_REQREP 96.7%). tcp req/reply는 C tcp가 빨라
+  여전히 미달(43%대). 남은 미달은 inproc·ipc(§2.1 Java 예외 없음) + tcp req/reply.
+- Multi 상태: `측정 완료 + routed 개선 반영(2026-09-09)` — 4 transport × 7 pattern, clients=100, 실패 0.
+  통과 6 / 미달 22. completion 최적화(306b939a98) 후 routed(SENDSEND·REQREP) 재측정으로 통과 2→6.
+  routed req/reply·echo가 여전히 다수 미달(tcp req/reply가 특히 낮음) — 추가 개선 여지. C baseline은
+  canonical C 0.17.5 재사용(C 재측정 없음).
+
+> **Java routed 비율 심층 진단(2026-09-09, 프로파일 근거).** "req/reply가 async 세금으로 일률적으로 낮다"는 해석은
+> 틀렸다. 프로파일이 밝힌 사실:
+> - **REQREP 대형 붕괴는 Core 정책 절벽**이다. Core 0.17.5는 request 크기 B에 work-charge를 매기고(≤1KiB:B, 1~32KiB:
+>   ceil(B³/1KiB²), >32KiB:32MiB+1; pair 예산 32MiB — `core/src/runtime/core/transport_pair_policy.hpp:14`,
+>   `pipe_receive.cpp:624`, spec `06-auto-hwm.ko.md:629`), 그래서 **동시 미해결 request가 4KiB 512 → 16KiB 8 → 32KiB 1**로
+>   급감한다. 32KiB부터 파이프라인이 1건으로 막혀 CPU가 놀며(32KiB: server 31%·client 57%, POLLOUT 99% 대기) throughput이
+>   폭락한다(113→61→5 Kops/s). **C도 같은 절벽을 맞는다**(Core 계약). SENDSEND는 correlation 예약이 없어 절벽이 없다.
+>   절벽에서 Java가 C보다 더 낮은 건 Java가 backpressure 뒤 payload를 보존·재제출(`CompletionOwner`)하는 반면 C는 사전
+>   할당 slot flag/token만 갱신(`bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:290`)하기 때문 — **분류 A(문서화된
+>   Core 계약에 대한 Java 재제출 경로 적응)**. 단 절대 처리량은 Core가 캡하므로 절벽 자체는 못 넘는다.
+> - **SENDSEND 소형 저성능은 양쪽 CPU 포화**다(64B: server 364%·client 277%). Java 벤치 relay가 매 메시지 routing-id 방어
+>   복사 + payload 깊은 복사를 하는데 C relay는 `zlink_msg_move`로 소유권만 옮긴다(`perf_multi_relay_server.hpp:120`).
+>   즉 고정 per-message 비용(객체·FFM·ownership) + **Java harness relay의 copy↔C의 move 비대칭**이다. payload가 커지면 희석돼
+>   비율이 회복한다. 이 harness 비대칭은 parity로 정렬 검토 대상(수치만 올리는 게 아니라 동일 의미 정렬).
 
 #### 9.3.1 Single suite
 
@@ -963,76 +995,76 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `PAIR` | 69.9% | 71.4% | 108.8% | 170.4% | 139.7% | 107.2% | 통과 111.2%/lat1.00× · c0175-java-single |
 | `tcp` | `PUBSUB` | 64.8% | 71.6% | 99.3% | 99.4% | 100.2% | 102.3% | 미달 89.6%/lat1.36× · c0175-java-single |
 | `tcp` | `DEALER_DEALER` | 77.4% | 78.4% | 97.5% | 160.5% | 134.1% | 111.5% | 통과 109.9%/lat1.02× · c0175-java-single |
-| `tcp` | `DEALER_ROUTER` | 66.1% | 72.6% | 86.4% | 130.2% | 114.0% | 91.1% | 통과 93.4%/lat1.34× · c0175-java-single |
-| `tcp` | `DEALER_ROUTER_REQREP` | 27.0% | 26.6% | 32.0% | 36.8% | 38.3% | 46.8% | 미달 34.6%/lat2.11× · c0175-java-single |
-| `tcp` | `ROUTER_ROUTER` | 71.2% | 82.7% | 114.2% | 175.2% | 179.6% | 140.8% | 통과 127.3%/lat0.61× · c0175-java-single |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 24.6% | 24.4% | 34.4% | 31.7% | 37.4% | 40.1% | 미달 32.1%/lat3.21× · c0175-java-single |
+| `tcp` | `DEALER_ROUTER` | 77.9% | 87.3% | 108.5% | 157.1% | 141.1% | 115.3% | 통과 114.5%/lat1.04× · c0175-java-single |
+| `tcp` | `DEALER_ROUTER_REQREP` | 41.5% | 38.4% | 52.9% | 35.7% | 41.6% | 51.3% | 미달 43.6%/lat2.11× · c0175-java-single |
+| `tcp` | `ROUTER_ROUTER` | 72.6% | 81.9% | 108.9% | 157.9% | 161.7% | 121.7% | 통과 117.5%/lat0.67× · c0175-java-single |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 42.9% | 42.8% | 59.3% | 24.6% | 36.9% | 40.6% | 미달 41.2%/lat3.35× · c0175-java-single |
 | `ws` | `PAIR` | 66.3% | 75.9% | 106.6% | 147.9% | 122.2% | 109.8% | 통과 104.8%/lat0.14× · c0175-java-single |
 | `ws` | `PUBSUB` | 72.4% | 61.7% | 83.9% | 100.4% | 102.1% | 102.8% | 미달 87.2%/lat1.02× · c0175-java-single |
 | `ws` | `DEALER_DEALER` | 73.5% | 74.7% | 108.7% | 133.3% | 130.1% | 111.4% | 통과 105.3%/lat0.10× · c0175-java-single |
-| `ws` | `DEALER_ROUTER` | 82.1% | 68.1% | 101.0% | 125.6% | 130.2% | 119.9% | 통과 104.5%/lat0.11× · c0175-java-single |
-| `ws` | `DEALER_ROUTER_REQREP` | 52.9% | 70.8% | 51.6% | 81.9% | 83.3% | 105.9% | 통과 74.4%/lat0.91× · c0175-java-single |
-| `ws` | `ROUTER_ROUTER` | 91.9% | 89.6% | 127.4% | 165.5% | 163.7% | 145.0% | 통과 130.5%/lat0.06× · c0175-java-single |
-| `ws` | `ROUTER_ROUTER_REQREP` | 39.5% | 50.9% | 41.8% | 38.1% | 45.7% | 55.9% | 미달 45.3%/lat1.72× · c0175-java-single |
+| `ws` | `DEALER_ROUTER` | 81.8% | 79.1% | 112.2% | 127.7% | 128.4% | 112.3% | 통과 106.9%/lat0.10× · c0175-java-single |
+| `ws` | `DEALER_ROUTER_REQREP` | 92.7% | 112.6% | 95.4% | 80.3% | 86.4% | 112.9% | 통과 96.7%/lat0.94× · c0175-java-single |
+| `ws` | `ROUTER_ROUTER` | 89.4% | 78.8% | 120.4% | 154.5% | 152.6% | 142.1% | 통과 123.0%/lat0.06× · c0175-java-single |
+| `ws` | `ROUTER_ROUTER_REQREP` | 65.5% | 87.5% | 68.6% | 40.1% | 45.9% | 56.0% | 미달 60.6%/lat1.88× · c0175-java-single |
 | `wss` | `PAIR` | 71.5% | 72.3% | 122.6% | 130.7% | 135.3% | 134.5% | 통과 111.1%/lat0.14× · c0175-java-single |
 | `wss` | `PUBSUB` | 69.3% | 75.0% | 145.7% | 116.5% | 99.4% | 99.4% | 통과 100.9%/lat0.07× · c0175-java-single |
 | `wss` | `DEALER_DEALER` | 82.0% | 88.2% | 107.4% | 134.1% | 137.0% | 122.8% | 통과 111.9%/lat0.11× · c0175-java-single |
-| `wss` | `DEALER_ROUTER` | 77.8% | 91.2% | 144.5% | 152.9% | 152.9% | 143.6% | 통과 127.1%/lat0.10× · c0175-java-single |
-| `wss` | `DEALER_ROUTER_REQREP` | 43.3% | 75.3% | 89.1% | 97.4% | 180.1% | 218.0% | 통과 117.2%/lat0.47× · c0175-java-single |
-| `wss` | `ROUTER_ROUTER` | 90.2% | 115.2% | 177.6% | 199.8% | 194.4% | 184.1% | 통과 160.2%/lat0.06× · c0175-java-single |
-| `wss` | `ROUTER_ROUTER_REQREP` | 35.5% | 92.5% | 90.3% | 56.8% | 59.9% | 89.7% | 통과 70.8%/lat1.09× · c0175-java-single |
+| `wss` | `DEALER_ROUTER` | 78.1% | 91.2% | 134.9% | 145.1% | 146.6% | 136.9% | 통과 122.1%/lat0.12× · c0175-java-single |
+| `wss` | `DEALER_ROUTER_REQREP` | 75.2% | 135.8% | 170.9% | 104.0% | 193.6% | 229.1% | 통과 151.4%/lat0.47× · c0175-java-single |
+| `wss` | `ROUTER_ROUTER` | 89.0% | 108.3% | 162.6% | 169.5% | 185.4% | 177.5% | 통과 148.7%/lat0.07× · c0175-java-single |
+| `wss` | `ROUTER_ROUTER_REQREP` | 62.2% | 160.4% | 168.7% | 62.6% | 76.6% | 96.1% | 통과 104.4%/lat1.07× · c0175-java-single |
 | `tls` | `PAIR` | 65.9% | 77.4% | 177.4% | 148.3% | 154.3% | 153.3% | 미달 129.4%/lat4.42× · c0175-java-single |
 | `tls` | `PUBSUB` | 63.4% | 89.4% | 195.0% | 105.0% | 98.5% | 101.6% | 통과 108.8%/lat0.86× · c0175-java-single |
 | `tls` | `DEALER_DEALER` | 79.1% | 78.0% | 153.3% | 155.0% | 158.7% | 160.4% | 통과 130.8%/lat2.42× · c0175-java-single |
-| `tls` | `DEALER_ROUTER` | 72.5% | 88.9% | 150.8% | 145.9% | 143.2% | 140.3% | 통과 123.6%/lat2.14× · c0175-java-single |
-| `tls` | `DEALER_ROUTER_REQREP` | 34.6% | 25.6% | 67.5% | 62.9% | 74.4% | 87.2% | 미달 58.7%/lat1.12× · c0175-java-single |
-| `tls` | `ROUTER_ROUTER` | 94.2% | 110.4% | 173.0% | 195.7% | 190.7% | 163.7% | 통과 154.6%/lat0.35× · c0175-java-single |
-| `tls` | `ROUTER_ROUTER_REQREP` | 31.3% | 31.3% | 68.1% | 45.3% | 63.7% | 77.6% | 미달 52.9%/lat1.31× · c0175-java-single |
+| `tls` | `DEALER_ROUTER` | 74.8% | 89.9% | 160.8% | 152.4% | 147.3% | 150.3% | 통과 129.2%/lat2.55× · c0175-java-single |
+| `tls` | `DEALER_ROUTER_REQREP` | 58.8% | 45.2% | 124.7% | 60.5% | 76.4% | 88.8% | 통과 75.7%/lat1.18× · c0175-java-single |
+| `tls` | `ROUTER_ROUTER` | 88.4% | 100.1% | 152.5% | 175.7% | 181.7% | 164.9% | 통과 143.9%/lat0.35× · c0175-java-single |
+| `tls` | `ROUTER_ROUTER_REQREP` | 54.5% | 52.4% | 125.9% | 50.6% | 67.2% | 80.4% | 통과 71.8%/lat1.33× · c0175-java-single |
 | `inproc` | `PAIR` | 71.2% | 75.8% | 80.8% | 103.4% | 133.8% | 85.7% | 통과 91.8%/lat1.58× · c0175-java-single |
 | `inproc` | `PUBSUB` | 76.9% | 73.8% | 76.3% | 14.8% | 10.3% | 13.2% | 미달 44.2%/lat4.81× · c0175-java-single |
 | `inproc` | `DEALER_DEALER` | 70.5% | 75.0% | 68.4% | 42.8% | 38.8% | 43.7% | 미달 56.5%/lat1.84× · c0175-java-single |
-| `inproc` | `DEALER_ROUTER` | 62.0% | 60.8% | 65.2% | 41.5% | 42.2% | 43.8% | 미달 52.6%/lat1.81× · c0175-java-single |
-| `inproc` | `DEALER_ROUTER_REQREP` | 44.1% | 41.4% | 38.3% | 29.7% | 29.2% | 29.0% | 미달 35.3%/lat3.74× · c0175-java-single |
-| `inproc` | `ROUTER_ROUTER` | 78.3% | 83.6% | 82.8% | 130.0% | 168.4% | 139.3% | 통과 113.7%/lat2.59× · c0175-java-single |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 29.0% | 20.8% | 24.0% | 20.4% | 21.8% | 18.5% | 미달 22.4%/lat6.30× · c0175-java-single |
+| `inproc` | `DEALER_ROUTER` | 59.9% | 68.2% | 59.4% | 36.8% | 39.2% | 39.7% | 미달 50.5%/lat2.03× · c0175-java-single |
+| `inproc` | `DEALER_ROUTER_REQREP` | 72.4% | 74.4% | 54.4% | 34.9% | 36.2% | 36.7% | 미달 51.5%/lat3.70× · c0175-java-single |
+| `inproc` | `ROUTER_ROUTER` | 81.2% | 82.2% | 85.7% | 130.0% | 147.4% | 127.5% | 통과 109.0%/lat2.90× · c0175-java-single |
+| `inproc` | `ROUTER_ROUTER_REQREP` | 51.1% | 42.9% | 42.5% | 21.1% | 24.2% | 20.7% | 미달 33.8%/lat6.75× · c0175-java-single |
 | `ipc` | `PAIR` | 70.6% | 75.3% | 93.9% | 79.1% | 80.4% | 66.5% | 미달 77.6%/lat1.44× · c0175-java-single |
 | `ipc` | `PUBSUB` | 65.1% | 69.0% | 98.4% | 100.4% | 101.9% | 102.9% | 미달 89.6%/lat1.28× · c0175-java-single |
 | `ipc` | `DEALER_DEALER` | 76.2% | 75.9% | 89.8% | 111.8% | 82.1% | 66.6% | 미달 83.7%/lat1.34× · c0175-java-single |
-| `ipc` | `DEALER_ROUTER` | 67.2% | 75.1% | 94.6% | 110.1% | 80.4% | 63.4% | 미달 81.8%/lat1.18× · c0175-java-single |
-| `ipc` | `DEALER_ROUTER_REQREP` | 40.0% | 30.7% | 28.3% | 47.1% | 51.5% | 50.2% | 미달 41.3%/lat2.09× · c0175-java-single |
-| `ipc` | `ROUTER_ROUTER` | 73.2% | 76.6% | 92.8% | 116.2% | 83.4% | 72.3% | 통과 85.8%/lat1.20× · c0175-java-single |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 30.1% | 26.8% | 27.0% | 32.7% | 38.8% | 42.8% | 미달 33.0%/lat3.13× · c0175-java-single |
+| `ipc` | `DEALER_ROUTER` | 66.8% | 73.1% | 84.5% | 97.4% | 75.8% | 58.0% | 미달 75.9%/lat1.27× · c0175-java-single |
+| `ipc` | `DEALER_ROUTER_REQREP` | 64.5% | 55.4% | 52.3% | 52.3% | 60.4% | 56.6% | 미달 56.9%/lat2.00× · c0175-java-single |
+| `ipc` | `ROUTER_ROUTER` | 72.8% | 75.6% | 73.3% | 99.0% | 73.1% | 59.8% | 미달 75.6%/lat1.40× · c0175-java-single |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 51.9% | 51.2% | 45.5% | 36.3% | 39.5% | 46.5% | 미달 45.1%/lat2.94× · c0175-java-single |
 
 #### 9.3.2 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
 | `tcp` | `MULTI_DEALER_DEALER` | 64.4% | 66.2% | 69.6% | 64.3% | 40.4% | 38.2% | 미달 57.2%/lat0.29× · c0175-java-multi |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 63.8% | 53.2% | 48.8% | 34.4% | 51.1% | 61.6% | 미달 52.1%/lat292.61× · c0175-java-multi |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 44.0% | 50.0% | 56.0% | 56.2% | 17.1% | 21.1% | 미달 40.7%/lat1.02× · c0175-java-multi |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 62.2% | 95.2% | 96.3% | 42.3% | 52.9% | 65.5% | 미달 69.1%/lat3.92× · c0175-java-multi |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 65.0% | 52.3% | 53.4% | 55.2% | 16.0% | 20.2% | 미달 43.7%/lat1.21× · c0175-java-multi |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 50.6% | 51.0% | 45.8% | 30.0% | 52.4% | 55.7% | 미달 47.6%/lat241.14× · c0175-java-multi |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 63.8% | 69.6% | 74.2% | 72.2% | 15.9% | 20.5% | 미달 52.7%/lat1.50× · c0175-java-multi |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 63.7% | 108.8% | 106.7% | 47.6% | 71.2% | 60.9% | 통과 76.5%/lat2.86× · c0175-java-multi |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 89.7% | 86.2% | 96.5% | 96.8% | 22.7% | 28.1% | 통과 70.0%/lat1.27× · c0175-java-multi |
 | `tcp` | `MULTI_PUBSUB` | 57.3% | 67.1% | 71.8% | 81.4% | 120.5% | 156.1% | 통과 92.4%/lat0.93× · c0175-java-multi |
 | `tcp` | `MULTI_STREAM` | 62.0% | 77.9% | 82.5% | 해당 없음 | 104.1% | 해당 없음 | 미달 81.6%/lat1.25× · c0175-java-multi |
 | `ws` | `MULTI_DEALER_DEALER` | 84.7% | 74.8% | 72.3% | 110.0% | 48.0% | 42.9% | 미달 72.1%/lat0.24× · c0175-java-multi |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 51.7% | 56.6% | 60.5% | 63.8% | 100.1% | 160.7% | 미달 82.2%/lat16.96× · c0175-java-multi |
-| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 51.9% | 47.0% | 51.9% | 81.4% | 20.9% | 19.8% | 미달 45.5%/lat3.25× · c0175-java-multi |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 101.1% | 66.3% | 57.2% | 13.0% | 58.4% | 70.8% | 미달 61.1%/lat3.92× · c0175-java-multi |
-| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 47.7% | 51.2% | 70.8% | 100.7% | 34.0% | 35.6% | 미달 56.7%/lat2.12× · c0175-java-multi |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 54.2% | 65.9% | 67.2% | 66.6% | 98.9% | 163.8% | 미달 86.1%/lat16.22× · c0175-java-multi |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 74.1% | 86.3% | 79.5% | 161.9% | 35.5% | 38.2% | 미달 79.2%/lat4.25× · c0175-java-multi |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 97.0% | 77.8% | 47.4% | 19.3% | 47.7% | 80.1% | 미달 61.6%/lat4.22× · c0175-java-multi |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 91.6% | 91.2% | 114.4% | 152.7% | 38.7% | 39.2% | 통과 88.0%/lat2.96× · c0175-java-multi |
 | `ws` | `MULTI_PUBSUB` | 64.0% | 63.8% | 69.2% | 69.6% | 136.2% | 114.0% | 미달 86.1%/lat0.90× · c0175-java-multi |
 | `ws` | `MULTI_STREAM` | 86.7% | 77.8% | 73.1% | 해당 없음 | 85.8% | 해당 없음 | 미달 80.8%/lat1.23× · c0175-java-multi |
 | `wss` | `MULTI_DEALER_DEALER` | 59.9% | 64.5% | 78.4% | 55.1% | 58.4% | 73.6% | 미달 65.0%/lat0.29× · c0175-java-multi |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 87.6% | 100.2% | 103.8% | 76.4% | 56.2% | 49.4% | 통과 78.9%/lat1.31× · c0175-java-multi |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 38.2% | 37.8% | 57.3% | 82.5% | 36.0% | 58.4% | 미달 51.7%/lat1.95× · c0175-java-multi |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 63.8% | 63.2% | 70.8% | 99.2% | 49.3% | 36.4% | 미달 63.8%/lat1.35× · c0175-java-multi |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 38.0% | 42.0% | 53.9% | 82.1% | 33.0% | 43.3% | 미달 48.7%/lat1.60× · c0175-java-multi |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 89.4% | 100.5% | 99.2% | 80.9% | 62.5% | 54.3% | 통과 81.1%/lat1.23× · c0175-java-multi |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 76.7% | 70.0% | 98.2% | 57.8% | 38.7% | 54.1% | 미달 65.9%/lat2.48× · c0175-java-multi |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 51.5% | 60.0% | 73.0% | 110.9% | 50.6% | 56.7% | 미달 67.1%/lat1.21× · c0175-java-multi |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 58.0% | 57.5% | 66.3% | 94.0% | 32.2% | 41.1% | 미달 58.2%/lat3.21× · c0175-java-multi |
 | `wss` | `MULTI_PUBSUB` | 39.2% | 49.6% | 58.3% | 75.7% | 81.6% | 88.9% | 미달 65.5%/lat1.04× · c0175-java-multi |
 | `wss` | `MULTI_STREAM` | 59.8% | 70.0% | 67.1% | 해당 없음 | 80.5% | 해당 없음 | 미달 69.3%/lat1.46× · c0175-java-multi |
 | `tls` | `MULTI_DEALER_DEALER` | 66.3% | 79.9% | 101.1% | 50.0% | 69.5% | 56.6% | 미달 70.6%/lat0.44× · c0175-java-multi |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 72.6% | 69.2% | 66.5% | 47.0% | 46.6% | 46.7% | 미달 58.1%/lat7.31× · c0175-java-multi |
-| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 46.7% | 53.8% | 53.2% | 93.9% | 27.3% | 37.7% | 미달 52.1%/lat0.80× · c0175-java-multi |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 42.6% | 51.4% | 63.6% | 104.1% | 48.5% | 70.3% | 미달 63.4%/lat1.83× · c0175-java-multi |
-| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 45.9% | 41.8% | 44.0% | 48.7% | 25.9% | 38.5% | 미달 40.8%/lat0.83× · c0175-java-multi |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 69.3% | 73.2% | 68.7% | 47.7% | 47.3% | 54.1% | 미달 60.1%/lat3.96× · c0175-java-multi |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 69.8% | 73.0% | 74.0% | 113.1% | 27.5% | 38.3% | 미달 66.0%/lat1.22× · c0175-java-multi |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 67.3% | 75.0% | 67.7% | 110.0% | 54.4% | 57.9% | 통과 72.0%/lat1.38× · c0175-java-multi |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 51.1% | 70.3% | 69.8% | 80.2% | 36.0% | 59.2% | 미달 61.1%/lat1.15× · c0175-java-multi |
 | `tls` | `MULTI_PUBSUB` | 64.8% | 54.9% | 77.6% | 92.9% | 102.2% | 106.4% | 미달 83.1%/lat1.01× · c0175-java-multi |
 | `tls` | `MULTI_STREAM` | 52.6% | 58.4% | 59.8% | 해당 없음 | 72.7% | 해당 없음 | 미달 60.9%/lat1.69× · c0175-java-multi |
 
@@ -1049,6 +1081,15 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   포함) 후 재측정으로 해소(ws 39.6·wss 42.8·tls 39.3%). Core·바인딩 라이브러리 무변경. STREAM은 최초 job이
   비-STREAM partial 때문에 건너뛴 것을 재측정해 채움. routed echo·req/reply는 30~40%대로 목표 미달(2단계).
 - 다음 작업: 실패 셀 원인 진단·수정 후 재측정(§9.4 하단 메모).
+
+> **Node routed echo(SENDSEND) 개선 시도 — 보류(2026-09-09).** MULTI_DEALER_ROUTER_SENDSEND 등이 C 대비 매우 낮아
+> (tcp 24.9%) 프로파일했다. echo당 최소 recv 1회·submit 1회의 **JS↔native 경계가 CPU의 ~78%**(submitSend 41.7% + routed
+> recv 36.5%)를 차지하고 GC는 1.98%뿐이다. Java의 completion worker-queue 왕복 문제는 없었다(그 실험은 효과 없어 revert).
+> 근본 병목은 SENDSEND의 2-part(payload+빈 tail) multipart 바인딩 경계 비용이다(1-part 진단은 +65% 빨랐다). 권장 수정은
+> routed multipart part를 기존 `nativeReadOnly` 저장으로 materialize해 복사를 줄이는 것이나, 이는 **protected spec
+> `bindings/doc/spec/node/README.ko.md`의 routed lazy-materialization 예외와 비용 계약을 바꿔야** 가능하다. 계약/스펙 변경은
+> perf를 위해 우회하지 않으므로(§7.5·§8) **보류**로 둔다. 코드·테스트 무변경(routed contract test 12/12 통과). 스펙 개정을
+> 승인하면 별도 설계로 다룬다.
 
 #### 9.4.1 Single suite
 
