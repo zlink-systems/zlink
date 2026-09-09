@@ -107,8 +107,8 @@ jobs:
           # node-gyp 11 supports Node 20 and 22 (13 requires Node 22+). npm needs a
           # Windows-style path here: `npm root -g` prints a POSIX path in Git Bash.
           # The npm bundled with Node 20 ignores the node-gyp setting and forces its
-          # own node-gyp 10, so use a current npm first (npm 11 supports Node 20.17+).
-          npm install -g npm@latest
+          # own node-gyp 10, so use npm 11 first (npm 12 requires Node 22+).
+          npm install -g npm@11
           npm install -g node-gyp@11
           echo "npm_config_node_gyp=$(cygpath -w "$(npm root -g)/node-gyp/bin/node-gyp.js")" >> "${GITHUB_ENV}"
 
