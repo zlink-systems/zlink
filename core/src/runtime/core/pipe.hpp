@@ -652,7 +652,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     void flush_unlocked ();
     static uint64_t committed_frame_accounted_bytes_ref (const msg_t &msg_);
     static bool counted_pending_message_ref (const msg_t &msg_);
-    void publish_outbound_frame_unlocked (const msg_t &msg_, bool more_);
+    ypipe_replacement_accounting_t
+    publish_outbound_frame_unlocked (const msg_t &msg_, bool more_);
     void release_discarded_pipe_accounting (upipe_t *pipe_,
                                             const std::shared_ptr<physical_queue_record_t> &queue_);
     bool append_outbound_frame_bytes_unlocked (const msg_t *msg_);

@@ -416,6 +416,10 @@ getter는 0/1 반환).
 
 #### Conflation
 
+PUB/SUB의 topic과 payload는 하나의 complete record로 보관한다. 같은 topic의 아직 수신을
+시작하지 않은 record만 최신 record로 교체하며, 수신을 시작한 record는 마지막 part까지
+보존한다. 서로 다른 topic의 record는 각각 유지한다.
+
 `ZLINK_OPT_CONFLATE`는 PUB와 SUB에서 계속 활성화할 수 있고 getter가 `1`을 반환한다. DEALER에서
 `1`을 설정하면 `ZLINK_CONFIG_NOT_SUPPORTED`와 `ENOTSUP`이고, `0` 설정은 no-op으로 성공하며
 getter는 `0`을 반환한다.

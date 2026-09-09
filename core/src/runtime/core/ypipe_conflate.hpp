@@ -11,7 +11,7 @@ namespace zlink
 {
 //  Adapter for dbuffer, to plug it in instead of a queue for the sake
 //  of implementing the conflate socket option, which, if set, makes
-//  the receiving side to discard all incoming messages but the last one.
+//  the receiving side to keep the latest complete record per topic.
 
 template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T>
 {
@@ -28,9 +28,7 @@ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T
 #endif
     void write (const T &value_, bool incomplete_)
     {
-        (void) incomplete_;
-
-        dbuffer.write (value_);
+        dbuffer.write (value_, incomplete_);
     }
 
     void write_with_replacement_accounting (
@@ -40,10 +38,9 @@ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T
       bool (*counted_message_) (const T &),
       ypipe_replacement_accounting_t *replaced_) ZLINK_OVERRIDE
     {
-        (void) incomplete_;
         zlink_assert (replaced_);
         dbuffer.write_with_replacement_accounting (
-          value_, accounted_bytes_, counted_message_, &replaced_->bytes,
+          value_, incomplete_, accounted_bytes_, counted_message_, &replaced_->bytes,
           &replaced_->complete_messages);
     }
 
@@ -62,8 +59,8 @@ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T
 #pragma message restore
 #endif
 
-    // There are no incomplete items for conflate ypipe
-    bool unwrite (T *) { return false; }
+    //  Rollback only the producer-owned incomplete record.
+    bool unwrite (T *value_) { return dbuffer.unwrite (value_); }
 
     //  dbuffer has no atomic reader-sleep handshake. Requesting a wake for
     //  every publication prevents a writer from losing a concurrent empty
@@ -80,15 +77,7 @@ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T
     //  available.
     bool read (T *value_, bool *prefetched_batch_exhausted_ = NULL)
     {
-        if (prefetched_batch_exhausted_)
-            *prefetched_batch_exhausted_ = false;
-        if (!check_read ())
-            return false;
-
-        const bool consumed = dbuffer.read (value_);
-        if (consumed && prefetched_batch_exhausted_)
-            *prefetched_batch_exhausted_ = true;
-        return consumed;
+        return dbuffer.read (value_, prefetched_batch_exhausted_);
     }
 
     bool probe_if_published (void (*fn_) (const T &, void *),
@@ -103,13 +92,8 @@ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T
     read_if (T *value_, bool (*fn_) (const T &, void *), void *userdata_,
              bool *prefetched_batch_exhausted_ = NULL)
     {
-        if (prefetched_batch_exhausted_)
-            *prefetched_batch_exhausted_ = false;
-        const ypipe_read_result_t result =
-          dbuffer.read_if (value_, fn_, userdata_);
-        if (result == ypipe_read_consumed && prefetched_batch_exhausted_)
-            *prefetched_batch_exhausted_ = true;
-        return result;
+        return dbuffer.read_if (value_, fn_, userdata_,
+                                prefetched_batch_exhausted_);
     }
 
   protected:
