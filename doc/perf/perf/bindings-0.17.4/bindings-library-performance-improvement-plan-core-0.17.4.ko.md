@@ -1,23 +1,17 @@
-# Core 0.17.4 bindings 라이브러리 성능 개선 계획
+# core 0.17.4 bindings 라이브러리 성능 개선 계획
 
 > 시작일: 2026-09-09
 >
 > 작업 기준: `main` (별도 브랜치 없음; 검증된 단위마다 커밋·푸시)
 >
-> Core 기준 runtime: **0.17.4** — main `445e93ca4f`, tag `core/v0.17.4`,
-> GitHub Release 자산(2026-09-09 재빌드본, `checksums_sha256=f20fc086…`).
-> Linux 자산의 요구 glibc는 **2.34**이며 provenance의 `linux_x64_glibc_min` /
-> `linux_arm64_glibc_min`로 확인한다(0.17.3 자산은 2.38을 요구했다).
+> Core 기준 runtime: 0.17.4 — main `445e93ca4f`, tag `core/v0.17.4`, GitHub Release 자산
+> (2026-09-09 재빌드본, `checksums_sha256=f20fc086…`, Linux 요구 glibc 2.34).
 >
-> 이 문서는 Core 0.17.4를 기준으로 (가) 0.17.4의 성능 변화를 bindings 관점에서 확인하고
-> (나) 각 binding 라이브러리의 남은 격차를 개선하기 위한 실행 문서다. 측정 대상, 측정 조건,
-> report 경로, 비교값과 판정만 남기고 실행 명령·후보 검토·프로파일은 같은 폴더의 `log/`에
-> 기록한다. 0.17.0/0.17.3 문서의 완료 판정은 §1.2의 승계 규칙이 허용하는 범위에서만 참고하며,
-> 그 밖의 셀은 모두 `미측정`에서 시작한다.
->
-> 역할: 이 문서와 측정·개선은 bindings 담당(머신 A)이 진행한다. Core 쪽 결함·요청은
-> `doc/plan/c016-worklog/decisions.ko.md`에 `D-BP` 항목으로 적으면 Core 담당(머신 B)이
-> 받는다. Core 변경이 필요한 항목은 이 문서에서 직접 고치지 않는다.
+> 이 문서는 core 0.17.4를 기준으로 성능을 확인하고 bindings 라이브러리 성능 개선을 처음부터
+> 진행하기 위한 실행 문서다. 이전 계획 문서의 측정값과 완료 판정은 가져오지 않는다.
+> 새 C 기준 결과와 각 binding의 새 결과만 이 문서에 기록한다. 이 계획서에는 측정 대상,
+> 측정 조건, report 경로, 비교값과 판정만 남긴다. 실행 명령, 후보 검토, 프로파일과 같은
+> 과정 설명은 이 문서가 있는 폴더의 `log/`에 기록한다.
 
 ## 1. 기준 버전과 시작 상태
 
@@ -43,8 +37,7 @@ resolve하고 verify한다. `ZLINK_CORE_SOURCE`를 명시적으로 export한 경
 다른 버전의 local package나 오래된 runtime을 사용한 결과도 이 문서의 기준값으로 사용하지
 않는다.
 
-모든 성능 셀은 `미측정`에서 시작한다(§1.2가 허용한 승계 셀만 예외이며 그 근거를 함께
-적는다). 상세 표에는 현재 binding runner에 실제로 등록된
+모든 성능 셀은 `미측정`에서 시작한다. 상세 표에는 현재 binding runner에 실제로 등록된
 pattern만 포함한다. 공식 C runner에만 있고 binding runner에 없는 pattern은 이 계획의
 측정 대상에서 제외한다. 이전 문서와 이전 report는 병목 후보를 찾는 참고 자료로만 사용하며,
 core 0.17.4의 통과 비율이나 완료 근거로 사용하지 않는다.
@@ -54,52 +47,19 @@ core 0.17.4의 통과 비율이나 완료 근거로 사용하지 않는다.
 구현하고 등록한 측정 scenario가 다를 수 있다. 따라서 이 문서의 언어별 차이는 public API
 차이가 아니라 perf runner 구현 범위의 차이로 해석한다.
 
-### 1.1 Core 0.17.4에서 바뀐 것과 재측정 대상
+### 1.1 core 0.17.4에서 바뀐 것
 
-0.17.4는 0.17.3 대비 다음을 바꿨다(`core/CHANGELOG.md` [0.17.4],
-`doc/plan/c016-worklog/decisions.ko.md` D-B263~D-B303). "재측정" 열은 이 변경 때문에
-bindings 측정을 **반드시 다시 잡아야 하는 범위**다.
+성능 확인 대상이 되는 0.17.4의 변경은 다음과 같다(`core/CHANGELOG.md` [0.17.4]).
+각 항목은 어느 셀에서 관측되는지만 적는다. 판정은 §8의 규칙과 §9의 표로 한다.
 
-| Core 변경 | 관측되는 곳 | Core 자체 측정값 | 재측정 |
-|---|---|---|---|
-| attach 시 context 전체 Auto-HWM 동기 재계산 제거(증분 확장, 수렴은 debounce) | 연결 수립 구간, 고CCU Multi | STREAM 64 B CCU 4000: 실패 → 209 kops | **필수** — Multi clients 1,000 / 5,000 / 10,000, 모든 언어의 연결 준비 시간과 ready barrier |
-| STREAM decoder/encoder read target을 첫 full read에서 2배 성장 | 큰 payload 수신 | with_stream tcp 64 KiB 32.3 → 40.3 kops(+25 %), p99 −24 % | **필수** — 65536·131072·262144 B 셀 전부(tcp/ws/wss/tls) |
-| WS/WSS bounded 3-buffer gather(큰 body를 header batch와 한 write로) | ws·wss routed 큰 payload | ws round-trip Q64/Q1 게이트 0.53 FAIL → 0.85~1.30 PASS, DR ws 64 KiB 5.5 → ~30 kops | **필수** — ws·wss의 64 KiB 이상 routed 셀, latency 포함 |
-| ctx 종료를 monitor teardown보다 먼저 게시, blocking receive가 매 턴 ETERM 관측 | 러너 종료 protocol | macOS에서 13 ms 지연 창 제거 | **확인** — 각 러너의 종료·drain 경로가 조기 ETERM을 정상 종료로 처리하는지(측정값이 아니라 `status: complete` 판정) |
-| 효과 없던 STREAM gather env 3개 제거(`ZLINK_ASIO_STREAM_DISABLE_GATHER`, `..._GATHER_THRESHOLD`, `..._TINY_GATHER_THRESHOLD`) | 러너·스크립트 환경 | — | **점검** — 세 변수를 설정하는 러너/스크립트가 있으면 삭제한다. 남겨도 무시되지만 "설정했으니 적용됐다"는 잘못된 기록을 만든다 |
-| Linux release 자산을 Ubuntu 22.04에서 빌드(요구 glibc 2.38 → 2.34) | artifact 로드 | — | **점검** — 캐시된 0.17.4 자산을 재수신하고 sha256·provenance를 갱신한다 |
-| 동시 multipart 제출(0.17.2), receive 소유권 프로토콜(0.17.3) | 멀티스레드 send, STREAM pull | — | 이미 0.17.3 측정에 반영됨. 추가 재측정 없음 |
-
-Core 0.17.4에서 **기각**한 변경도 기록한다. B1(성공한 TCP read 뒤 readiness 재무장)은
-syscall을 메시지당 2.02 → 1.02로 줄였지만 실측 처리량이 1.6~3.9 % 낮고 p99가 16 % 나빠져
-채택하지 않았다(D-B291). bindings 측정에서 syscall 수를 근거로 같은 방향을 다시 제안하지
-않는다.
-
-### 1.2 0.17.3 결과의 승계 규칙
-
-0.17.3에서 같은 호스트·같은 시점에 C와 짝지어 완료한 판정은 아래 조건을 모두 만족할 때만
-이 문서에 `0.17.3 승계`로 옮길 수 있다.
-
-1. 셀이 §1.1의 "필수" 재측정 범위(고CCU Multi, 65536 B 이상, ws·wss routed 큰 payload)에
-   들어가지 않는다.
-2. 그 셀의 C와 binding report가 같은 pair tag로 남아 있고 둘 다 `status: complete`다.
-3. 승계 행에는 `0.17.3 승계(pair tag, report 경로)`를 메모에 적는다.
-
-그 외 셀은 0.17.4 공식 prefix로 다시 짝지어 측정한다. 승계한 셀도 언어별로 대표 셀
-1개는 0.17.4에서 spot-check해 ±5 % 안인지 확인하고, 벗어나면 그 언어의 승계를 전부 취소하고
-다시 측정한다.
-
-### 1.3 0.17.4 확인 우선순위
-
-성능 개선 작업(§7.4)에 들어가기 전에 아래 순서로 "0.17.4 성능 확인"을 먼저 끝낸다.
-
-| 순위 | 항목 | 판정 기준 |
-|---:|---|---|
-| 1 | C 기준 재측정: tcp/ws/wss/tls × 6 pattern, 64 B~262144 B, Single·Multi | 모든 report `status: complete`, 0.17.3 대비 65536 B 이상에서 개선 방향 확인 |
-| 2 | 고CCU: Multi STREAM tcp clients 1,000 / 5,000 / 10,000 | 10,000에서 ready barrier 도달(0.17.3에서 미도달, D-BP47) 및 처리량 기록 |
-| 3 | ws·wss 큰 payload routed 셀과 latency | 0.17.3 대비 개선 폭 기록, tcp 대비 배수를 §2.2 목표와 대조 |
-| 4 | 언어별 대표 셀 spot-check(§1.2) | 승계 유효성 확인 |
-| 5 | 언어별 전체 paired 측정과 개선 | §2 목표와 §7.4 순서 |
+| core 변경 | 관측되는 셀 |
+|---|---|
+| attach 시 context 전체 Auto-HWM 동기 재계산 제거(증분 확장, 수렴은 debounce 재계산) | 연결 수립 구간, client 수가 큰 Multi suite |
+| STREAM decoder/encoder read target이 첫 full read에서 2배 성장 | 65536 B 이상 수신 셀 (tcp·ws·wss·tls) |
+| WS/WSS bounded gather — 큰 body를 header batch와 한 write로 제출 | ws·wss의 routed 큰 payload 셀과 그 latency |
+| context 종료를 monitor teardown보다 먼저 게시, blocking receive가 매 턴 ETERM 관측 | 러너 종료·drain 경로(`status: complete` 판정) |
+| 효과가 없던 STREAM gather 환경변수 3개 제거(`ZLINK_ASIO_STREAM_DISABLE_GATHER`, `..._GATHER_THRESHOLD`, `..._TINY_GATHER_THRESHOLD`) | 이 변수를 설정하는 러너·스크립트 |
+| Linux release 자산을 Ubuntu 22.04에서 빌드(요구 glibc 2.38 → 2.34) | 자산 수신과 provenance 확인 |
 
 ## 2. 범위와 목표
 
@@ -1281,10 +1241,6 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 무시되는 runner option | 미확인 |  |
 | memory guard | 미확인 |  |
 | 재현 환경 manifest | 미확인 |  |
-| 0.17.4 release 자산 재수신·sha256 갱신 | 미확인 | `checksums_sha256=f20fc086…`, `source_sha=445e93ca4f` |
-| provenance glibc floor 확인(2.34) | 미확인 | `linux_x64_glibc_min` / `linux_arm64_glibc_min` |
-| 제거된 STREAM gather env 3개 미사용 | 미확인 | 러너·스크립트에서 삭제 |
-| 종료 protocol의 조기 ETERM 처리 | 미확인 | §1.1 ctx 종료 변경 |
 
 ### 10.2 Pattern별 paired 기준 측정
 
@@ -1315,8 +1271,7 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 
 | 날짜 | 언어 | suite / 범위 | pair tag | 측정 조건 | 결과 | report |
 |------|------|---------------|----------|----------------|------|---------------|
-| 2026-09-09 | 전체 | 계획 초기화 | - | Core 0.17.4 release(`445e93ca4f`), C 기준과 binding paired 비교, 단일 perf process 조건을 사용한다. | 계획 작성 | 이 문서 |
-| 2026-09-09 | 전체 | 0.17.4 변경 인수 | - | §1.1의 재측정 범위와 §1.2 승계 규칙을 확정했다. | 확인 대기 | `core/CHANGELOG.md` [0.17.4] |
+| 2026-09-09 | 전체 | 계획 초기화 | - | Core 0.17.4 release, C 기준과 binding paired 비교, 단일 perf process 조건을 사용한다. | 계획 작성 | 이 문서 |
 
 ## 12. 완료 기준
 
@@ -1337,6 +1292,3 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
   있지 않다.
 - 최종 리뷰에서 public interface가 더 복잡해지지 않았고 비용이 binding 내부에서
   줄었는지 확인했다.
-- §1.3의 0.17.4 확인 항목 1~4가 모두 끝났고, 고CCU(clients 10,000)와 65536 B 이상 셀의
-  0.17.3 대비 변화가 §11에 기록되어 있다.
-- §1.2로 승계한 셀은 승계 근거(pair tag·report)와 spot-check 결과가 함께 기록되어 있다.
