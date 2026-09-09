@@ -30,6 +30,8 @@ reply·timeout·cancellation·shutdown 가운데 먼저 확정된 결과로 완�
   상태를 어떤 메커니즘으로 지키는지를 다룬다.
 - [직렬 실행기 계층](07-serial-executor-layers.ko.md)은 Spot·Actor·Session이 각자의 작업을
   어떤 직렬 단위에서 실행하고 누가 그 수명을 소유하는지를 다룬다.
+- [Messaging hot path](08-messaging-hot-path.ko.md)는 send·request가 source 제출부터 target handler와
+  reply까지 지나는 실행 단계의 수·순서·대기 방식과, 그 결과로 요구하는 처리량(binding 직접 경로의 0.90 이상)을 다룬다.
 
 이 주제가 다루지 않는 것 — Spot이 등록하는 반복 callback은
 [Spot timer](../03-spot-actor/10-spot-timer.ko.md)가, Actor·Spot 모델 자체와 queue 구조는
@@ -95,6 +97,8 @@ flowchart LR
 | 한 소유자가 queue를 오래 점유하면 무엇이 막아 주는가 | [직렬 실행기 계층 「6.4 공정성」](07-serial-executor-layers.ko.md#64-공정성) |
 | 컴포넌트 상태는 왜 lock 대신 state lane으로 지키는가 | [상태 소유와 state lane 「3. 금지되는 형태」](06-state-ownership-and-lanes.ko.md#3-금지되는-형태) |
 | state lane과 Application lane은 무엇이 다른가 | [상태 소유와 state lane 「2. 용어 구분 — state lane과 Application/lifecycle lane」](06-state-ownership-and-lanes.ko.md#2-용어-구분--state-lane과-applicationlifecycle-lane) |
+| 요청 하나가 runtime 안에서 실행 자원을 몇 번 바꾸는가, target은 한 번에 몇 건을 받는가 | [Messaging hot path](08-messaging-hot-path.ko.md) |
+| Framework를 거친 처리량이 binding 직접 경로보다 얼마나 낮아도 되는가 | [Messaging hot path 「7. 검증 요구」](08-messaging-hot-path.ko.md#7-검증-요구) |
 
 ## 5. 문서와 읽는 순서
 
@@ -105,6 +109,8 @@ flowchart LR
 04-application-job-queue-and-backpressure.ko.md  handler 시작 전 capacity
 05-payload-ownership-and-codec.ko.md         message의 소유권과 복사
 06-state-ownership-and-lanes.ko.md           컴포넌트 상태를 지키는 메커니즘
+07-serial-executor-layers.ko.md              Spot·Actor·Session의 직렬 실행 단위
+08-messaging-hot-path.ko.md                  send·request가 지나는 단계와 처리량 요구
 ```
 
 처음 읽는 개발자는 이 순서대로 읽는다 — submit이 무엇을 완료로 보는지(01) 알아야

@@ -13,17 +13,28 @@ function nextTurn() {
 }
 test('REQREP perf server submits once and surfaces reply admission failures', () => {
     let submits = 0;
+    let submittedPart = null;
     const operation = {
-        message() { return this; },
+        message(part) {
+            submittedPart ??= part;
+            return this;
+        },
         submit() {
             submits += 1;
             throw new zlink.SubmitError(zlink.SubmitResult.Backpressured, 11);
         }
     };
-    assert.throws(() => submitReply({ reply: () => operation }, Buffer.alloc(1)), (error) => error instanceof zlink.SubmitError
-        && error.result
-            === zlink.SubmitResult.Backpressured);
-    assert.equal(submits, 1, 'the perf server must not create an application retry loop');
+    const payload = zlink.Message.allocate(1);
+    try {
+        assert.throws(() => submitReply({ reply: () => operation }, payload), (error) => error instanceof zlink.SubmitError
+            && error.result
+                === zlink.SubmitResult.Backpressured);
+        assert.strictEqual(submittedPart, payload, 'the reply builder must receive the original received Message');
+        assert.equal(submits, 1, 'the perf server must not create an application retry loop');
+    }
+    finally {
+        payload.close();
+    }
 });
 function within(promise, timeoutMs = 5_000) {
     return new Promise((resolve, reject) => {
@@ -273,25 +284,39 @@ test('routed server reply tracking has no 4096-operation application cap', async
 });
 test('routed relay submits replies concurrently without an application FIFO', async () => {
     const releases = [];
+    const receivedValues = [];
+    const submittedParts = [];
     let submits = 0;
     const received = () => {
         const operation = {
-            message() { return this; },
+            message(part) {
+                submittedParts.push(part);
+                return this;
+            },
             submit() {
                 submits += 1;
                 return new Promise((resolve) => releases.push(resolve));
             }
         };
-        return {
+        const value = {
             send: () => operation,
-            parts: [Buffer.alloc(64), Buffer.alloc(0)]
+            parts: [zlink.Message.allocate(64), zlink.Message.allocate(0)]
         };
+        receivedValues.push(value);
+        return value;
     };
-    const first = sendServerReply(received());
-    const second = sendServerReply(received());
-    assert.equal(submits, 2, 'a pending reply must not gate the next public submit');
-    releases.forEach((release) => release());
-    await Promise.all([first, second]);
+    try {
+        const first = sendServerReply(received());
+        const second = sendServerReply(received());
+        assert.equal(submits, 2, 'a pending reply must not gate the next public submit');
+        assert.deepEqual(submittedParts, receivedValues.flatMap((value) => value.parts), 'the send builder must receive the original received Messages');
+        releases.forEach((release) => release());
+        await Promise.all([first, second]);
+    }
+    finally {
+        receivedValues.flatMap((value) => value.parts)
+            .forEach((part) => part.close());
+    }
 });
 test('routed relay drain stays inside the server shutdown budget', () => {
     const savedSendDrain = process.env.PERF_MULTI_SEND_DRAIN_TIMEOUT_MS;

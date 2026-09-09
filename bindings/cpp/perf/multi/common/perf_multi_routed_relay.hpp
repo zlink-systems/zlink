@@ -63,11 +63,11 @@ inline perf::detached_async_task_t send_routed_replies_async (
         std::vector<zlink::message_t> &parts = received.parts ();
         try {
             if (parts.size () == 2) {
-                co_await std::move (server.send (*received.routing_id ()).message (parts[0]))
+                co_await server.send (*received.routing_id ()).message (parts[0])
                   .message (parts[1])
                   .async ();
             } else if (parts.size () == 1) {
-                co_await std::move (server.send (*received.routing_id ()))
+                co_await server.send (*received.routing_id ())
                   .message (parts[0])
                   .async ();
             } else {

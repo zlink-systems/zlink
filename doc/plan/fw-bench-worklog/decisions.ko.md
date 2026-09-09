@@ -973,3 +973,43 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
 | `fwb2-06` | S2 | sol | 완료·커밋 `f8b4fa98dd` | Java A/B runner + Kotlin 보조 2셀, raw window reply 유실 재현(FB-050) |
 | `fwb2-07` | S3 | astra | 완료·커밋 `3ad4d048c9` | C++ A/B runner + `zlink-framework-cpp`(RouteMesh typed protobuf), 6셀 smoke rc=0. FB-051(집계기 지적 기각)·FB-052·FB-053 |
 | `fwb2-05` | S4 | astra | 완료·커밋 `7786eec28a`(보고서만) | zlink-c 4096B 두 모드 = Core I/O 배치(FB-048), 4096 분모 게재 불가 |
+
+## FB-059 — Java framework P2 1차: 수신 폴링·중복 hop 제거로 serial ×3.9, 그래도 0.90 미달. 남은 비용은 요청마다 다시 만드는 envelope header (2026-09-10, Issue #6)
+
+- **결과(1-run, branch `framework-java/6-mesh-ingress`, 커밋 6ce6a0d90e, push 안 함)**: request-serial 1024 ratio 0.0719 → **0.2887**, 4096 0.0769 → 0.2802,
+  send-saturation 1024 0.0177 → 0.0251, 4096 0.0265 → 0.0426. request-window Framework 2,266 → 5,367 ops/s. 평균 지연 2.2 ms → 0.57 ms.
+  send drain 2,477 ms → 299 ms. 6개 셀 모두 errors 0·submitted=completed=received. Java 전체 test·contractTest 통과.
+- **제거한 것(규칙 7 → 3)**: 1 ms park 폴링 → `waitForReadable` + 64건/4 MiB/2 ms batch, receive 전 permit 확보,
+  service mailbox와 1건 claim drain 제거, topology/liveness의 요청별 executor 왕복 → 변경 시점 precompute한 WRR plan,
+  channel serial queue가 handler executor를 직접 소유(동기 완료 handler의 추가 hop 제거), `Inbound` 배열 clone 2회 제거.
+- **남은 병목(감독자 검증)**: `ZLinkChannelEnvelope.encodeHeader`가 message마다 Jackson `ObjectNode`를 만들고 `writeValueAsBytes`로
+  직렬화한다(`zlink-framework-core/.../messaging/ZLinkChannelEnvelope.java:155-185`). 수신 쪽은 같은 header를 JSON parse한다.
+  반면 raw 드라이버는 **같은 wire를 상수 byte 배열로 미리 만들어 둔다**(`framework/bench/grpc/java/shared/.../RawWire.java:21-38`).
+  즉 두 경로의 wire는 같고, 차이는 "요청마다 header를 다시 만드는 비용"이다. wire 계약을 바꾸지 않고도
+  (a) 채널·메시지·kind·contentType별 상수 prefix를 미리 인코딩해 재사용, (b) tree model 대신 streaming generator로 재사용 버퍼에 기록,
+  (c) 수신 쪽 streaming parse로 줄일 수 있다. **codec을 우회하거나 벤치 전용 경로를 만들지 않는다.**
+- **결정(감독자)**: P3 범위 = envelope header 인코딩/디코딩 비용 제거. 네 언어 공통 문제인지 먼저 확인하고 언어별로 같은 형태로 고친다.
+  sol의 "typed JSON serializer는 공개 계약이라 손댈 수 없다"는 판단은 **부분 수용** — wire 형식은 그대로 두되 인코딩 방법은 구현 재량이다.
+
+## FB-060 — gRPC 벤치의 raw 드라이버가 언어마다 다른 per-message 비용을 진다 (2026-09-10, Issue #25)
+
+- **계기**: bindings perf의 relay 과설계(빈 `Message` 할당 + `move` + `close`)를 고친 뒤(커밋 a7ffc3cf58·e7d97a9638·160a1fbefa,
+  기록 6fa350a0c2) 사용자가 같은 실수가 벤치에도 있는지 검토를 지시했다.
+- **판정: 같은 형태는 벤치에 없다.** 벤치의 raw 서버는 c/zlink와 wire 바이트를 맞추려고 응답을 새로 인코딩하므로 relay가 아니다.
+  cpp의 prvalue `std::move`만 관용형이 어긋난 채 남아 있다(`bench_zlink_cpp_server.cpp:67,69`, `bench_cpp_client.cpp:576,602,626`).
+- **대신 확인된 비대칭(감독자 재검증 완료)**: (1) .NET raw가 payload를 메시지마다 두 번 해석한다(`ZLinkRawServer/Program.cs:62,147-152,156`),
+  (2) Java raw가 응답마다 payload 크기 복사를 3회 더 한다(`ZLinkRawBenchServer.java:94-97,104`), (3) Java raw가 응답 경로에서
+  메시지마다 `System.getenv`를 호출한다(`:106`), (4) Node raw가 메시지마다 `Received.close()`를 응답 임계경로에서 부른다
+  (`node/zlink-raw-server/main.js:91`), (5) 클라이언트 payload 인코딩 복사가 언어별로 1~4회로 다르다.
+- **영향**: (1)~(4)는 모두 분모인 raw를 느리게 만든다. 따라서 **현재 보고된 framework/raw 비율은 낙관적이며 실제 격차는 더 크다.**
+  2차 캠페인 비교표(published)도 이 드라이버로 측정했다.
+- **결정(감독자)**: Issue #25로 등록. raw 드라이버의 per-message 작업을 (a) 수신 payload 1회 스캔, (b) 응답 payload 1회 복사,
+  (c) 계측 스위치는 시작 시 1회 조회로 통일하고 대조표를 벤치 문서에 남긴다. 수정 뒤 3-run 재측정으로 비교표를 갱신한다.
+  P2 판정(0.90)은 이 수정 뒤의 raw 기준으로 한다.
+- **추가 확인(framework 쪽, 2026-09-10)**: framework **서버**는 네 언어 모두 깨끗하다(계측이 디코딩된 객체를 읽고,
+  per-message env·로그가 없다). framework **클라이언트**에는 반대 방향의 하네스 비용이 있다 — C++가 완료 대기를
+  `await_ready` + `std::this_thread::yield()` spin으로 하고(`cpp/client/bench_cpp_client.cpp:795,821`; raw는 `_poller.wait` `:486`),
+  완료마다 vector 중간을 `erase`하며(`:817`, window 100이면 완료 1건당 최대 100회 이동; raw는 `remove_if` 한 번 `:471-474`),
+  Java·Kotlin이 payload를 한 번 더 복사한다(`FrameworkStack.java:88-90`). Node는 framework 클라이언트가 없어 행이 UNSUPPORTED다.
+  **즉 raw 쪽 결함은 비율을 높이고 framework 클라이언트 결함은 비율을 낮춘다 — 두 방향이 섞여 현재 숫자는 어느 쪽으로도
+  신뢰할 수 없다.** Issue #25의 완료 조건에 framework 클라이언트의 event 기반 대기·O(1) 완료 정리·복사 없는 payload를 더했다.

@@ -26,7 +26,7 @@ type MutableMessageState = {
 /** @internal */
 export interface MessageNativeOperations {
   allocate(size: number): { data?: Buffer; nativeMessage: unknown };
-  close(nativeMessage: unknown, data?: Buffer): void;
+  close(nativeMessage: unknown): void;
   copy(nativeMessage: unknown): { data?: Buffer; nativeMessage: unknown };
   data(nativeMessage: unknown): Buffer;
   copyData(nativeMessage: unknown): Buffer;
@@ -295,7 +295,7 @@ export class Message {
       return;
     }
     if (this._nativeMessage !== undefined) {
-      requireMessageNativeOperations().close(this._nativeMessage, this._buffer);
+      requireMessageNativeOperations().close(this._nativeMessage);
     }
     releaseMessageWrapper(this);
   }
@@ -373,7 +373,7 @@ export function refillMessageWrapper(
 ): Message {
   const state = message as unknown as MutableMessageState;
   if (state._nativeMessage !== undefined && state._nativeMessage !== nativeMessage) {
-    requireMessageNativeOperations().close(state._nativeMessage, state._buffer);
+    requireMessageNativeOperations().close(state._nativeMessage);
   }
   state._buffer = buffer;
   state._refCount = 1;
@@ -431,7 +431,7 @@ export function hasObservedManagedReceiveData(message: Message): boolean {
 export function consumeSubmittedMessage(message: Message): void {
   const state = message as unknown as MutableMessageState;
   if (state._nativeMessage !== undefined) {
-    requireMessageNativeOperations().close(state._nativeMessage, state._buffer);
+    requireMessageNativeOperations().close(state._nativeMessage);
   }
   markMessageConsumed(message);
 }

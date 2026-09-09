@@ -37,7 +37,8 @@ final class PerfMultiRoutedRelay {
         // the WRITABLE retry, exactly like the C relay's retry snapshot.
         PerfMultiRoutedReplyQueue<PendingReply> replies =
             new PerfMultiRoutedReplyQueue<>(
-                reply -> submitReply(server, reply),
+                reply -> submitReply(
+                    server, reply.routingId(), reply.parts()),
                 PendingReply::close,
                 cause -> isStaleRoute(cause) || stopRequested.get());
         try (Received received = new Received();
@@ -102,39 +103,26 @@ final class PerfMultiRoutedRelay {
                 received.getRoutingId().orElseThrow().toBytes());
             Message payload = PerfUtil.measurementPayload(received.parts());
             if (payload != null) {
-                // Keep receiving under send backpressure. The FIFO owns an
-                // immutable snapshot, so the next recv may refill `received`.
-                replies.enqueue(capture(routingId, payload));
+                // Public submit consumes the received parts before returning
+                // its admission stage, so closing and refilling the envelope
+                // cannot reclaim a part retained by the pending send.
+                replies.enqueue(new PendingReply(routingId, received.parts()));
             }
             received.close();
         }
     }
 
-    private static PendingReply capture(RoutingId routingId, Message source) {
-        Message payload = new Message();
-        Message tail = null;
-        try {
-            source.move(payload);
-            if (PerfUtil.measurementPartCount() == 2) {
-                tail = PerfUtil.measurementTail();
-            }
-        } catch (RuntimeException | Error error) {
-            payload.close();
-            throw error;
-        }
-        return new PendingReply(routingId, payload, tail);
-    }
-
-    private static CompletionStage<Void> submitReply(RouterSocket server,
-                                                     PendingReply reply) {
-        if (reply.tail() != null) {
-            return server.send(reply.routingId())
-                .message(reply.payload())
-                .message(reply.tail())
+    static CompletionStage<Void> submitReply(RouterSocket server,
+                                             RoutingId routingId,
+                                             List<Message> parts) {
+        if (parts.size() == 2) {
+            return server.send(routingId)
+                .message(parts.get(0))
+                .message(parts.get(1))
                 .submit();
         }
-        return server.send(reply.routingId())
-            .message(reply.payload())
+        return server.send(routingId)
+            .message(parts.get(0))
             .submit();
     }
 
@@ -174,13 +162,11 @@ final class PerfMultiRoutedRelay {
             || errno == EHOSTUNREACH_WIN;
     }
 
-    /** One immutable routed reply snapshot waiting for its admission turn. */
-    private record PendingReply(RoutingId routingId, Message payload,
-                                Message tail) {
+    /** One routed reply waiting for its public submit turn. */
+    private record PendingReply(RoutingId routingId, List<Message> parts) {
         void close() {
-            payload.close();
-            if (tail != null) {
-                tail.close();
+            for (Message part : parts) {
+                part.close();
             }
         }
     }
