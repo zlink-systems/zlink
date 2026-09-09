@@ -21,7 +21,7 @@ import systems.zlink.contracts.core.Zlink;
  * with-grpc local bench, java client. One client process and one server process per
  * implementation (spec section 3). Emits {@code cells.json} in the
  * {@code with-grpc-cell-v1} shape plus RESULT lines; every table, ratio and verdict is
- * produced by framework/bench/tools, not here (plan section 4.1, FB-020).
+ * produced by framework/bench/grpc/tools, not here (plan section 4.1, FB-020).
  */
 public final class BenchClient {
     private static final List<String> PATTERNS =

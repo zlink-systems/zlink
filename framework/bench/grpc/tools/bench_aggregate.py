@@ -6,8 +6,8 @@ measured: unit normalization, medians, G5 reproducibility, the spec 7.2 ratios,
 and the decision about whether a ratio may be published at all.
 
     bench_aggregate.py --lang dotnet \\
-        --run zlink-work/fwb-02/gated2/c-router-1 \\
-        --run zlink-work/fwb-02/gated2/dotnet-router-1 ...
+        --runs-glob framework/bench/grpc/log/c/<stamp>/c-router-* \\
+        --runs-glob framework/bench/grpc/log/dotnet/<stamp>/dotnet-router-*
 
 Runs given in one invocation form one comparison. Each run contributes only the
 implementations it measured, so the C reference runs and the language runs are

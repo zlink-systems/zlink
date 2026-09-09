@@ -30,14 +30,14 @@ void on_signal (int)
         g_server->Shutdown ();
 }
 
-class bench_service_t final : public zlink_cpp_bench_grpc::BenchService::Service
+class bench_service_t final : public zlink::framework::bench::withgrpc::BenchService::Service
 {
   public:
     explicit bench_service_t (zlink_cpp_bench::server_metrics_t &metrics) : _metrics (metrics) {}
 
     grpc::Status Echo (grpc::ServerContext *,
-                       const zlink_cpp_bench_grpc::BenchPayload *request,
-                       zlink_cpp_bench_grpc::BenchPayload *response) override
+                       const zlink::framework::bench::withgrpc::BenchPayload *request,
+                       zlink::framework::bench::withgrpc::BenchPayload *response) override
     {
         _metrics.record (request->body ().data (), request->body ().size ());
         response->set_body (request->body ());
@@ -45,8 +45,8 @@ class bench_service_t final : public zlink_cpp_bench_grpc::BenchService::Service
     }
 
     grpc::Status Command (grpc::ServerContext *,
-                          const zlink_cpp_bench_grpc::BenchPayload *request,
-                          zlink_cpp_bench_grpc::BenchEmpty *) override
+                          const zlink::framework::bench::withgrpc::BenchPayload *request,
+                          google::protobuf::Empty *) override
     {
         _metrics.record (request->body ().data (), request->body ().size ());
         return grpc::Status::OK;

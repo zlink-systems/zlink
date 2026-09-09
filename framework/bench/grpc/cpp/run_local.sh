@@ -22,7 +22,8 @@ BUILD_DIR="${BUILD_DIR:-${SCRIPT_DIR}/build}"
 RUN_LABEL="${1:-cpp-router-1}"
 shift || true
 STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
-LOG_DIR="${SCRIPT_DIR}/log/${STAMP}/${RUN_LABEL}"
+LOG_ROOT="${SCRIPT_DIR}/../log/cpp"
+LOG_DIR="${LOG_ROOT}/${STAMP}/${RUN_LABEL}"
 DRY_RUN="${DRY_RUN:-0}"
 LOAD_GATE="${LOAD_GATE:-2.0}"
 
@@ -59,7 +60,7 @@ check_load () {
   load="$(awk '{print $1}' /proc/loadavg)"
   log "loadavg1=${load} gate=${LOAD_GATE}"
   echo "${RUN_LABEL} loadavg1=${load} gate=${LOAD_GATE} at=$(date -Is)" \
-    >> "${SCRIPT_DIR}/log/${STAMP}/load-gates.txt"
+    >> "${LOG_ROOT}/${STAMP}/load-gates.txt"
   awk -v l="${load}" -v g="${LOAD_GATE}" 'BEGIN { exit !(l < g) }'
 }
 

@@ -18,7 +18,7 @@ import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
  *
  * <p>Each driver returns a cell record in the {@code with-grpc-cell-v1} shape the shared
  * aggregator reads (FB-021). Nothing here decides a verdict: medians, G5 and the
- * section 7.2 ratios belong to framework/bench/tools, never to a language harness.
+ * section 7.2 ratios belong to framework/bench/grpc/tools, never to a language harness.
  */
 public final class BenchDrivers {
     private final BenchOptions options;

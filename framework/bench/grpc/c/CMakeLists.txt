@@ -1,7 +1,20 @@
+cmake_minimum_required(VERSION 3.20)
+project(zlink_c_with_grpc_bench LANGUAGES C CXX)
+
+get_filename_component(BENCH_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
+set(ZLINK_C_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+set(ZLINK_C_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ZLINK_C_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+set(ZLINK_C_BUILD_BENCHES OFF CACHE BOOL "" FORCE)
+set(ZLINK_C_CORE_BUILD_DIR
+    "${BENCH_REPO_ROOT}/core/build" CACHE PATH
+    "Core build tree or installed prefix used by the C reference bench")
+add_subdirectory("${BENCH_REPO_ROOT}/bindings/c" "${CMAKE_CURRENT_BINARY_DIR}/zlink_c")
+
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 
-set(WG_PROTO_SRC "${CMAKE_CURRENT_SOURCE_DIR}/proto/bench.proto")
+set(WG_PROTO_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../proto/bench.proto")
 set(WG_PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/proto_gen")
 file(MAKE_DIRECTORY "${WG_PROTO_GEN_DIR}")
 
@@ -21,10 +34,11 @@ add_custom_command(
         --cpp_out=${WG_PROTO_GEN_DIR}
         --grpc_out=${WG_PROTO_GEN_DIR}
         --plugin=protoc-gen-grpc=${WG_GRPC_CPP_PLUGIN}
-        -I${CMAKE_CURRENT_SOURCE_DIR}/proto
+        -I${CMAKE_CURRENT_SOURCE_DIR}/../proto
+        -I${WG_PROTOBUF_INCLUDEDIR}
         ${WG_PROTO_SRC}
     DEPENDS ${WG_PROTO_SRC}
-    COMMENT "Generating bindings/c/bench/with_grpc protobuf sources")
+    COMMENT "Generating framework/bench/grpc/c protobuf sources")
 
 set(WG_CXX_FLAGS)
 if(NOT MSVC)
@@ -73,7 +87,7 @@ target_link_directories(bench_c_with_grpc_grpc_client PRIVATE
 target_compile_features(bench_c_with_grpc_grpc_client PRIVATE cxx_std_17)
 target_compile_options(bench_c_with_grpc_grpc_client PRIVATE ${WG_CXX_FLAGS})
 
-set(WG_LIBZMQ_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../with_zmq/libzmq/libzmq_dist/linux-x64")
+set(WG_LIBZMQ_ROOT "${BENCH_REPO_ROOT}/bindings/c/bench/with_zmq/libzmq/libzmq_dist/linux-x64")
 set(WG_LIBZMQ_INCLUDE_DIR "${WG_LIBZMQ_ROOT}/include")
 set(WG_LIBZMQ_LIBRARY "${WG_LIBZMQ_ROOT}/lib/libzmq.so")
 if(EXISTS "${WG_LIBZMQ_INCLUDE_DIR}/zmq.h" AND EXISTS "${WG_LIBZMQ_LIBRARY}")

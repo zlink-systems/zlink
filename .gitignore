@@ -366,5 +366,6 @@ framework/languages/*/e2e/**/log/
 framework/languages/*/e2e-kotlin/**/logs/
 framework/languages/*/e2e-kotlin/**/log/
 framework/bench/tools/log/
+framework/languages/*/bench/with-grpc/log/
 framework/languages/*/bench/with-grpc/log/verify-*/
 framework/languages/cpp/Testing/

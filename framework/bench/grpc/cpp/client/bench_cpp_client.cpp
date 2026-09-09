@@ -4,7 +4,7 @@
 // One client process drives the whole 18-cell grid (3 implementations x 3
 // patterns x 2 payload sizes) against three server processes, and emits cell
 // records only. Tables, medians, G5 and the spec 7.2 ratios belong to
-// framework/bench/tools (plan 4.1, FB-020): nothing in this file judges anything.
+// framework/bench/grpc/tools (plan 4.1, FB-020): nothing in this file judges anything.
 //
 // What the four earlier languages made mandatory, all present here:
 //   FB-013  send throughput is sampled at the ACTIVE WINDOW BOUNDARY
@@ -21,7 +21,7 @@
 // on ONE application thread, and concurrency is expressed as outstanding
 // operations rather than as threads. This is deliberate and it is what makes
 // formula 1 meaningful for C++: `zlink-c`, the denominator, is a single-threaded
-// submit loop (bindings/c/bench/with_grpc/zlink/bench_zlink_client.cpp), so a
+// submit loop (framework/bench/grpc/c/zlink/bench_zlink_client.cpp), so a
 // multi-threaded C++ numerator would divide two different experiments. The
 // declared submit parallelism is therefore 1 for every cell.
 #include "../common/bench_async.hpp"
@@ -287,7 +287,7 @@ class grpc_driver_t : public driver_t
         _options (options), _window (window), _command_path (command_path)
     {
         _channel = grpc::CreateChannel (options.grpc_endpoint, grpc::InsecureChannelCredentials ());
-        _stub = zlink_cpp_bench_grpc::BenchService::NewStub (_channel);
+        _stub = zlink::framework::bench::withgrpc::BenchService::NewStub (_channel);
     }
 
     const char *implementation () const override { return "grpc-cpp"; }
@@ -300,14 +300,14 @@ class grpc_driver_t : public driver_t
         while (clock_t_::now () < deadline) {
             grpc::ClientContext context;
             context.set_deadline (std::chrono::system_clock::now () + std::chrono::seconds (2));
-            zlink_cpp_bench_grpc::BenchPayload request;
+            zlink::framework::bench::withgrpc::BenchPayload request;
             std::vector<unsigned char> encoded;
             encode_bench_payload (encoded, 1024, 0, phase_warmup, 0);
             const unsigned char *body = nullptr;
             size_t body_size = 0;
             decode_bench_payload_body (encoded.data (), encoded.size (), &body, &body_size);
             request.set_body (body, body_size);
-            zlink_cpp_bench_grpc::BenchPayload reply;
+            zlink::framework::bench::withgrpc::BenchPayload reply;
             if (_stub->Echo (&context, request, &reply).ok ())
                 return true;
             std::this_thread::sleep_for (std::chrono::milliseconds (100));
@@ -323,10 +323,10 @@ class grpc_driver_t : public driver_t
     {
         _submit_threads = {current_tid ()};
         if (_command_path)
-            run_typed<zlink_cpp_bench_grpc::BenchEmpty> (deadline, payload_size, phase, counters,
+            run_typed<google::protobuf::Empty> (deadline, payload_size, phase, counters,
                                                          latency, false);
         else
-            run_typed<zlink_cpp_bench_grpc::BenchPayload> (deadline, payload_size, phase, counters,
+            run_typed<zlink::framework::bench::withgrpc::BenchPayload> (deadline, payload_size, phase, counters,
                                                            latency, true);
     }
 
@@ -354,7 +354,7 @@ class grpc_driver_t : public driver_t
         auto submit_one = [&] {
             const size_t body_offset =
               encode_bench_payload (encoded, payload_size, _run_id, phase, seq++);
-            zlink_cpp_bench_grpc::BenchPayload request;
+            zlink::framework::bench::withgrpc::BenchPayload request;
             request.set_body (encoded.data () + body_offset, encoded.size () - body_offset);
 
             auto *call = new grpc_call_t<TReply> ();
@@ -442,7 +442,7 @@ class grpc_driver_t : public driver_t
     template <typename TReply>
     std::unique_ptr<grpc::ClientAsyncResponseReader<TReply>> prepare (
       grpc::ClientContext *context,
-      const zlink_cpp_bench_grpc::BenchPayload &request,
+      const zlink::framework::bench::withgrpc::BenchPayload &request,
       grpc::CompletionQueue *cq);
 
     // G2: the reply's 29-byte header is validated, and failures are counted
@@ -455,33 +455,33 @@ class grpc_driver_t : public driver_t
     bool _command_path;
     uint32_t _run_id = static_cast<uint32_t> (now_ns ());
     std::shared_ptr<grpc::Channel> _channel;
-    std::unique_ptr<zlink_cpp_bench_grpc::BenchService::Stub> _stub;
+    std::unique_ptr<zlink::framework::bench::withgrpc::BenchService::Stub> _stub;
     std::vector<pid_t> _submit_threads;
 };
 
 template <>
-std::unique_ptr<grpc::ClientAsyncResponseReader<zlink_cpp_bench_grpc::BenchPayload>>
-grpc_driver_t::prepare<zlink_cpp_bench_grpc::BenchPayload> (
+std::unique_ptr<grpc::ClientAsyncResponseReader<zlink::framework::bench::withgrpc::BenchPayload>>
+grpc_driver_t::prepare<zlink::framework::bench::withgrpc::BenchPayload> (
   grpc::ClientContext *context,
-  const zlink_cpp_bench_grpc::BenchPayload &request,
+  const zlink::framework::bench::withgrpc::BenchPayload &request,
   grpc::CompletionQueue *cq)
 {
     return _stub->PrepareAsyncEcho (context, request, cq);
 }
 
 template <>
-std::unique_ptr<grpc::ClientAsyncResponseReader<zlink_cpp_bench_grpc::BenchEmpty>>
-grpc_driver_t::prepare<zlink_cpp_bench_grpc::BenchEmpty> (
+std::unique_ptr<grpc::ClientAsyncResponseReader<google::protobuf::Empty>>
+grpc_driver_t::prepare<google::protobuf::Empty> (
   grpc::ClientContext *context,
-  const zlink_cpp_bench_grpc::BenchPayload &request,
+  const zlink::framework::bench::withgrpc::BenchPayload &request,
   grpc::CompletionQueue *cq)
 {
     return _stub->PrepareAsyncCommand (context, request, cq);
 }
 
 template <>
-bool grpc_driver_t::validate<zlink_cpp_bench_grpc::BenchPayload> (
-  const zlink_cpp_bench_grpc::BenchPayload &reply, phase_t phase, counters_t &counters)
+bool grpc_driver_t::validate<zlink::framework::bench::withgrpc::BenchPayload> (
+  const zlink::framework::bench::withgrpc::BenchPayload &reply, phase_t phase, counters_t &counters)
 {
     decoded_header_t header {};
     if (!decode_payload (reply.body ().data (), reply.body ().size (), &header)
@@ -494,8 +494,8 @@ bool grpc_driver_t::validate<zlink_cpp_bench_grpc::BenchPayload> (
 }
 
 template <>
-bool grpc_driver_t::validate<zlink_cpp_bench_grpc::BenchEmpty> (
-  const zlink_cpp_bench_grpc::BenchEmpty &, phase_t, counters_t &)
+bool grpc_driver_t::validate<google::protobuf::Empty> (
+  const google::protobuf::Empty &, phase_t, counters_t &)
 {
     return true;
 }

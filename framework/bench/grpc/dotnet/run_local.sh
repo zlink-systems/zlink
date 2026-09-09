@@ -11,7 +11,7 @@ ZLINK_RAW_ENDPOINT="${ZLINK_RAW_ENDPOINT:-tcp://127.0.0.1:5075}"
 ZLINK_RAW_COMMAND_ENDPOINT="${ZLINK_RAW_COMMAND_ENDPOINT:-tcp://127.0.0.1:5077}"
 ZLINK_RAW_STATS_URL="${ZLINK_RAW_STATS_URL:-http://127.0.0.1:5076}"
 RUN_STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
-OUTPUT="${OUTPUT:-${ROOT_DIR}/log/with_grpc_dotnet_${RUN_STAMP}}"
+OUTPUT="${OUTPUT:-${ROOT_DIR}/../log/dotnet/with_grpc_dotnet_${RUN_STAMP}}"
 REPORT_FILE="${REPORT_FILE:-with_grpc_dotnet_${RUN_STAMP}.txt}"
 
 # SKIP_BUILD=1 keeps the build out of a measurement window (plan 3.2: no build

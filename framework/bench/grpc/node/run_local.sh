@@ -7,15 +7,21 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$HERE/../../../.." && pwd)"
 cd "$HERE"
 
+export NODE_PATH="${REPO}/framework/languages/node/node_modules${NODE_PATH:+:${NODE_PATH}}"
+
 RUNS="${RUNS:-3}"
+RUN_DEALER="${RUN_DEALER:-1}"
 DURATION="${DURATION:-5}"
 WARMUP="${WARMUP:-1000}"
 PAYLOADS="${PAYLOADS:-1024,4096}"
+SCENARIO="${SCENARIO:-all}"
+IMPLEMENTATION="${IMPLEMENTATION:-all}"
 WINDOW="${WINDOW:-100}"
 STAMP="${STAMP:-$(date +%Y%m%d_%H%M%S)}"
-OUTROOT="${OUTROOT:-$HERE/log/$STAMP}"
+OUTROOT="${OUTROOT:-$HERE/../log/node/$STAMP}"
 TIMELINE="$OUTROOT/timeline.txt"
 
 mkdir -p "$OUTROOT"
@@ -74,6 +80,8 @@ one_run() {
   set +e
   node client/main.js \
     --payload-sizes "$PAYLOADS" --duration-seconds "$DURATION" --warmup "$WARMUP" \
+    --scenario "$SCENARIO" \
+    --implementation "$IMPLEMENTATION" \
     --request-window "$WINDOW" --raw-socket "$socket" \
     --grpc-url 127.0.0.1:5081 --grpc-stats-url http://127.0.0.1:5084 \
     --zlink-endpoint tcp://127.0.0.1:5082 --zlink-stats-url http://127.0.0.1:5083 \
@@ -90,5 +98,7 @@ note "measured span begin: node=$(node --version) commit=$(git rev-parse --short
 for i in $(seq 1 "$RUNS"); do
   one_run "node-router-$i" router
 done
-one_run "node-dealer-1" dealer
+if [[ "$RUN_DEALER" == "1" ]]; then
+  one_run "node-dealer-1" dealer
+fi
 note "measured span end"

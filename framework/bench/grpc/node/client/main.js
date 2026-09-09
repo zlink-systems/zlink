@@ -4,7 +4,7 @@
 // with-grpc local bench, node client. One client process, one server process per
 // implementation (spec section 3). Emits `cells.json` in the `with-grpc-cell-v1` shape
 // plus RESULT lines; every table, ratio and verdict is produced by
-// framework/bench/tools, not here (plan section 4.1, FB-020).
+// framework/bench/grpc/tools, not here (plan section 4.1, FB-020).
 
 require('reflect-metadata');
 const fs = require('node:fs');
@@ -93,7 +93,7 @@ function shouldRunPattern(options, pattern) {
 // --- gRPC -----------------------------------------------------------------
 
 function createGrpcClient(options) {
-  const definition = protoLoader.loadSync(path.join(__dirname, '..', 'proto', 'bench.proto'), {
+  const definition = protoLoader.loadSync(path.join(__dirname, '..', '..', 'proto', 'bench.proto'), {
     keepCase: true, longs: String, enums: String, defaults: true, oneofs: true, bytes: Buffer
   });
   const proto = grpc.loadPackageDefinition(definition).zlink.framework.bench.withgrpc;

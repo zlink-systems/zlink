@@ -2,7 +2,7 @@
 // Shared measurement plumbing for the C++ with-grpc bench.
 //
 // Everything here is measurement scaffolding, never judgement: the shared
-// aggregator (framework/bench/tools/) owns tables, medians, G5 and the spec 7.2
+// aggregator (framework/bench/grpc/tools/) owns tables, medians, G5 and the spec 7.2
 // ratios. This header only produces the `with-grpc-cell-v1` records it reads
 // (FB-021) plus the spec 4 RESULT lines a human uses to eyeball one run.
 #ifndef ZLINK_CPP_BENCH_WITH_GRPC_COMMON_HPP
@@ -504,7 +504,7 @@ inline bool wait_ready (const std::string &host, int port, int timeout_ms)
 }
 
 // ---------------------------------------------------------------------------
-// one measured cell, in the shape framework/bench/tools reads (FB-021)
+// one measured cell, in the shape framework/bench/grpc/tools reads (FB-021)
 // ---------------------------------------------------------------------------
 
 struct cell_t

@@ -46,7 +46,7 @@ dependencies {
 // The same bench.proto the java row generates from. A second copy would let the two
 // rows drift apart, and then they could not be put next to each other.
 (sourceSets["main"].extensions.getByName("proto") as SourceDirectorySet)
-    .srcDir("$projectDir/../shared/src/main/proto")
+    .srcDir("$projectDir/../../proto")
 
 protobuf {
     protoc { artifact = "com.google.protobuf:protoc:4.30.2" }

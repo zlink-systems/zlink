@@ -11,7 +11,7 @@ import systems.zlink.bench.withgrpc.proto.BenchPayload;
  * Wire shape of the {@code zlink-<lang>} raw row.
  *
  * <p>The raw row is measured against {@code zlink-c} (spec section 7.2 formula 1), so it
- * must put the same bytes on the wire as {@code bindings/c/bench/with_grpc}. That
+ * must put the same bytes on the wire as {@code framework/bench/grpc/c}. That
  * bench sends a two-part message: an envelope header part and a protobuf-encoded
  * BenchPayload part (bench_zlink_client.cpp:14-16 and :130-140). The .NET and node
  * raw rows do the same. Sending a bare payload here would make formula 1 divide

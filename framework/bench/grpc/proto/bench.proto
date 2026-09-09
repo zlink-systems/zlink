@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package zlink.framework.bench.withgrpc;
 
+option csharp_namespace = "WithGrpcBench.Shared";
 option java_package = "systems.zlink.bench.withgrpc.proto";
 option java_outer_classname = "BenchProto";
 option java_multiple_files = true;

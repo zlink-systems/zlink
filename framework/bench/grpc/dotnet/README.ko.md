@@ -10,12 +10,12 @@
 
 payload 크기는 protobuf `bytes body` 전체 크기 기준으로 `1024`, `4096` bytes를 기본으로
 실행한다. 앞 29 bytes는 측정 header로 사용한다. 공통 기준은
-`framework/doc/framework/common/bench/with-grpc-local.ko.md`를 따른다.
+`framework/bench/grpc/README.ko.md`를 따른다.
 
 ## 실행
 
 ```bash
-./framework/languages/dotnet/bench/with-grpc/run_local.sh
+./framework/bench/grpc/dotnet/run_local.sh
 ```
 
 주요 환경 변수:
@@ -33,7 +33,7 @@ payload 크기는 protobuf `bytes body` 전체 크기 기준으로 `1024`, `4096
 특정 패턴만 실행하려면 client 인자를 그대로 넘긴다.
 
 ```bash
-./framework/languages/dotnet/bench/with-grpc/run_local.sh --scenario request-window
+./framework/bench/grpc/dotnet/run_local.sh --scenario request-window
 ```
 
 기본 포트:
@@ -47,7 +47,7 @@ payload 크기는 protobuf `bytes body` 전체 크기 기준으로 `1024`, `4096
 - ZLink binding command DEALER/ROUTER: `tcp://127.0.0.1:5077`
 
 결과는 콘솔 표, perf 형식의 `RESULT,current,...` 라인,
-`log/with_grpc_dotnet_YYYYMMDD_HHMMSS/` 아래에 기록된다. report 파일 이름은
+`framework/bench/grpc/log/dotnet/with_grpc_dotnet_YYYYMMDD_HHMMSS/` 아래에 기록된다. report 파일 이름은
 `with_grpc_dotnet_YYYYMMDD_HHMMSS.txt`처럼 실행 시각을 포함한다.
 `results.json`은 실행 환경과 설정을 담은 `metadata`와 측정값 목록인 `results`로 구성된다.
 

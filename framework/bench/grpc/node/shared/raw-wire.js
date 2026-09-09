@@ -4,7 +4,7 @@
 // Wire shape of the `zlink-<lang>` raw row.
 //
 // The raw row is measured against `zlink-c` (spec section 7.2 formula 1), so it must put
-// the same bytes on the wire as `bindings/c/bench/with_grpc`. That bench sends a
+// the same bytes on the wire as `framework/bench/grpc/c`. That bench sends a
 // two-part message: an envelope header part and a protobuf-encoded BenchPayload
 // part (bench_zlink_client.cpp:15 and :126-140). The .NET raw row does the same
 // (ZLinkRawServer/Program.cs RawEnvelopeHeaders). Sending a bare payload here

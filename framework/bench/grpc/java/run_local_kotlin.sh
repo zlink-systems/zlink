@@ -16,7 +16,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$HERE/../../../../.." && pwd)"
+REPO="$(cd "$HERE/../../../.." && pwd)"
 cd "$HERE"
 
 RUNS="${RUNS:-3}"
@@ -27,10 +27,12 @@ DURATION="${DURATION:-5}"
 WARMUP_SECONDS="${WARMUP_SECONDS:-20}"
 WARMUP_SEGMENT_SECONDS="${WARMUP_SEGMENT_SECONDS:-2}"
 PAYLOADS="${PAYLOADS:-1024,4096}"
+SCENARIO="${SCENARIO:-all}"
+IMPLEMENTATION="${IMPLEMENTATION:-all}"
 WINDOW="${WINDOW:-100}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 STAMP="${STAMP:-$(date +%Y%m%d_%H%M%S)}"
-OUTROOT="${OUTROOT:-$HERE/log/$STAMP}"
+OUTROOT="${OUTROOT:-$HERE/../log/java/$STAMP}"
 TIMELINE="$OUTROOT/timeline.txt"
 
 export ZLINK_LIBRARY_PATH="${ZLINK_LIBRARY_PATH:-$REPO/.artifacts/wsl/install/zlink-core/0.17.3/lib/libzlink.so}"
@@ -50,7 +52,7 @@ done
 if [[ "$SKIP_BUILD" != "1" ]]; then
   note "build begin (outside the measured span, under /tmp/zlink-jvm-gate.lock)"
   flock --exclusive --timeout 1800 /tmp/zlink-jvm-gate.lock \
-    "$REPO/framework/languages/java/gradlew" -p "$HERE" --no-daemon -q installDist
+    "$HERE/gradlew" --no-daemon -q installDist
   note "build end"
 fi
 
@@ -124,6 +126,8 @@ one_run() {
   set +e
   "$CLIENT_BIN" \
     --payload-sizes "$PAYLOADS" --duration-seconds "$DURATION" \
+    --scenario "$SCENARIO" \
+    --implementation "$IMPLEMENTATION" \
     --warmup-seconds "$WARMUP_SECONDS" \
     --warmup-segment-seconds "$WARMUP_SEGMENT_SECONDS" \
     --request-window "$WINDOW" --raw-socket "$socket" \

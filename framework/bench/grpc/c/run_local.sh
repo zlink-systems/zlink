@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${ROOT_DIR}/../../../.." && pwd)"
-BUILD_DIR="${BUILD_DIR:-${REPO_ROOT}/bindings/c/build}"
+BUILD_DIR="${BUILD_DIR:-${ROOT_DIR}/build}"
 RUN_STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
-OUTPUT="${OUTPUT:-${ROOT_DIR}/log/with_grpc_c_${RUN_STAMP}}"
+OUTPUT="${OUTPUT:-${ROOT_DIR}/../log/c/with_grpc_c_${RUN_STAMP}}"
 REPORT_FILE="${REPORT_FILE:-with_grpc_c_${RUN_STAMP}.txt}"
 REPORT_PATH="${OUTPUT}/${REPORT_FILE}"
 PAYLOAD_SIZES="${PAYLOAD_SIZES:-1024,4096}"
@@ -18,9 +18,8 @@ ENABLE_ZMQ_SEND_SEND="${ENABLE_ZMQ_SEND_SEND:-0}"
 # SKIP_BUILD=1 keeps the build out of a measurement window (plan 3.2: no build
 # may overlap a measurement). Pre-build with the same targets, then measure.
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
-cmake -S "${REPO_ROOT}/bindings/c" -B "${BUILD_DIR}" \
-  -DZLINK_C_BUILD_BENCHES=ON \
-  -DZLINK_C_BUILD_BENCH_GRPC_COMPARE=ON
+cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" \
+  -DZLINK_C_CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${REPO_ROOT}/core/build}"
 build_targets=(
   bench_c_with_grpc_zlink_server
   bench_c_with_grpc_zlink_client
@@ -39,12 +38,12 @@ fi
 mkdir -p "${OUTPUT}"
 : >"${REPORT_PATH}"
 
-zlink_server="${BUILD_DIR}/bench/with_grpc/bench_c_with_grpc_zlink_server"
-zlink_client="${BUILD_DIR}/bench/with_grpc/bench_c_with_grpc_zlink_client"
-grpc_server="${BUILD_DIR}/bench/with_grpc/bench_c_with_grpc_grpc_server"
-grpc_client="${BUILD_DIR}/bench/with_grpc/bench_c_with_grpc_grpc_client"
-zmq_server="${BUILD_DIR}/bench/with_grpc/bench_c_with_grpc_zmq_server"
-zmq_client="${BUILD_DIR}/bench/with_grpc/bench_c_with_grpc_zmq_client"
+zlink_server="${BUILD_DIR}/bench_c_with_grpc_zlink_server"
+zlink_client="${BUILD_DIR}/bench_c_with_grpc_zlink_client"
+grpc_server="${BUILD_DIR}/bench_c_with_grpc_grpc_server"
+grpc_client="${BUILD_DIR}/bench_c_with_grpc_grpc_client"
+zmq_server="${BUILD_DIR}/bench_c_with_grpc_zmq_server"
+zmq_client="${BUILD_DIR}/bench_c_with_grpc_zmq_client"
 
 export PAYLOAD_SIZES
 export DURATION_SECONDS

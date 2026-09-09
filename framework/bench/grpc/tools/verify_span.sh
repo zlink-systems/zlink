@@ -17,10 +17,11 @@
 #   rehearsed without measuring anything.
 set -uo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+GRPC_DIR="${REPO}/framework/bench/grpc"
 STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
 export RUN_STAMP="${STAMP}"
-SPAN_DIR="${REPO}/framework/bench/tools/log/verify-${STAMP}"
+SPAN_DIR="${GRPC_DIR}/log/tools/verify-${STAMP}"
 DRY_RUN="${DRY_RUN:-0}"
 LOAD_GATE="${LOAD_GATE:-2.0}"
 
@@ -30,11 +31,11 @@ GATES="${SPAN_DIR}/load-gates.txt"
 
 note () { printf '%s %s\n' "$(date -Is)" "$*" | tee -a "${TIMELINE}"; }
 
-DOTNET_DIR="${REPO}/framework/languages/dotnet/bench/with-grpc"
-NODE_DIR="${REPO}/framework/languages/node/bench/with-grpc"
-JAVA_DIR="${REPO}/framework/languages/java/bench/with-grpc"
-CPP_DIR="${REPO}/framework/languages/cpp/bench/with-grpc"
-C_DIR="${REPO}/bindings/c/bench/with_grpc"
+DOTNET_DIR="${GRPC_DIR}/dotnet"
+NODE_DIR="${GRPC_DIR}/node"
+JAVA_DIR="${GRPC_DIR}/java"
+CPP_DIR="${GRPC_DIR}/cpp"
+C_DIR="${GRPC_DIR}/c"
 
 # ---------------------------------------------------------------- preflight --
 
@@ -147,24 +148,24 @@ main () {
   # lock file descriptor and holding the lock past the run.
   run_language dotnet 'WithGrpcBench' \
     env MSBUILDDISABLENODEREUSE=1 SKIP_BUILD=1 \
-        OUTPUT="${DOTNET_DIR}/log/verify-${STAMP}/dotnet-router-1" \
+        OUTPUT="${GRPC_DIR}/log/dotnet/verify-${STAMP}/dotnet-router-1" \
         REPORT_FILE=report.txt RAW_SOCKET=router \
         "${DOTNET_DIR}/run_local.sh" || rc=1
 
   # Node. Its runner always appends one DEALER run after the ROUTER runs; that
   # extra run is recorded but the comparison uses node-router-1.
   run_language node 'node (client|grpc-server|zlink-raw-server|zlink-framework-server)/main.js' \
-    env RUNS=1 STAMP="verify-${STAMP}" OUTROOT="${NODE_DIR}/log/verify-${STAMP}" \
+    env RUNS=1 STAMP="verify-${STAMP}" OUTROOT="${GRPC_DIR}/log/node/verify-${STAMP}" \
         "${NODE_DIR}/run_local.sh" || rc=1
 
   run_language java 'bench-(client|grpc-server|zlink-raw-server|zlink-framework-server)' \
     env RUNS=1 RUN_DEALER=0 SKIP_BUILD=1 STAMP="verify-${STAMP}" \
-        OUTROOT="${JAVA_DIR}/log/verify-${STAMP}" \
+        OUTROOT="${GRPC_DIR}/log/java/verify-${STAMP}" \
         "${JAVA_DIR}/run_local.sh" || rc=1
 
   run_language kotlin 'bench-(kotlin-client|grpc-server|zlink-raw-server|zlink-framework-server)' \
     env RUNS=1 RUN_DEALER=0 SKIP_BUILD=1 STAMP="verify-${STAMP}" \
-        OUTROOT="${JAVA_DIR}/log/verify-${STAMP}" \
+        OUTROOT="${GRPC_DIR}/log/java/verify-${STAMP}" \
         "${JAVA_DIR}/run_local_kotlin.sh" || rc=1
 
   run_language cpp 'bench_cpp_(client|grpc_server|zlink_server)' \
@@ -178,7 +179,7 @@ main () {
   # inside this span is what makes the two judgements comparable to the rest.
   run_language cbase 'bench_c_with_grpc_(zlink|grpc)_(client|server)' \
     env SKIP_BUILD=1 \
-        OUTPUT="${C_DIR}/log/verify-${STAMP}/c-router-1" REPORT_FILE=report.txt \
+        OUTPUT="${GRPC_DIR}/log/c/verify-${STAMP}/c-router-1" REPORT_FILE=report.txt \
         "${C_DIR}/run_local.sh" || rc=1
 
   note "loadavg at span end: $(cat /proc/loadavg)"

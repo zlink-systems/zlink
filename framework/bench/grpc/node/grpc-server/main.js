@@ -16,7 +16,7 @@ const argv = process.argv.slice(2);
 const url = argValue(argv, '--url', '127.0.0.1:5081');
 const metricsUrl = argValue(argv, '--metrics-url', 'http://127.0.0.1:5084');
 
-const definition = protoLoader.loadSync(path.join(__dirname, '..', 'proto', 'bench.proto'), {
+const definition = protoLoader.loadSync(path.join(__dirname, '..', '..', 'proto', 'bench.proto'), {
   keepCase: true,
   longs: String,
   enums: String,

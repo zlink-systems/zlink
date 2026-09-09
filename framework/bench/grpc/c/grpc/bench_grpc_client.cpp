@@ -22,24 +22,24 @@ void fill_payload (std::string *body, size_t size, uint32_t run_id, uint64_t seq
 
 struct request_call_t
 {
-    zlink_c_bench_grpc::BenchPayload request;
-    zlink_c_bench_grpc::BenchPayload reply;
+    zlink::framework::bench::withgrpc::BenchPayload request;
+    zlink::framework::bench::withgrpc::BenchPayload reply;
     grpc::ClientContext context;
     grpc::Status status;
-    std::unique_ptr<grpc::ClientAsyncResponseReader<zlink_c_bench_grpc::BenchPayload>> reader;
+    std::unique_ptr<grpc::ClientAsyncResponseReader<zlink::framework::bench::withgrpc::BenchPayload>> reader;
 };
 
 struct send_call_t
 {
-    zlink_c_bench_grpc::BenchPayload request;
-    zlink_c_bench_grpc::BenchEmpty reply;
+    zlink::framework::bench::withgrpc::BenchPayload request;
+    google::protobuf::Empty reply;
     grpc::ClientContext context;
     grpc::Status status;
-    std::unique_ptr<grpc::ClientAsyncResponseReader<zlink_c_bench_grpc::BenchEmpty>> reader;
+    std::unique_ptr<grpc::ClientAsyncResponseReader<google::protobuf::Empty>> reader;
 };
 
 zlink_c_bench::result_t run_request_serial (
-  zlink_c_bench_grpc::BenchService::Stub *stub, size_t size)
+  zlink::framework::bench::withgrpc::BenchService::Stub *stub, size_t size)
 {
     const int duration_s = zlink_c_bench::env_int ("DURATION_SECONDS", 3);
     const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
@@ -51,8 +51,8 @@ zlink_c_bench::result_t run_request_serial (
     uint64_t errors = 0;
     double submit_wait_ms = 0.0;
     while (std::chrono::steady_clock::now () < deadline) {
-        zlink_c_bench_grpc::BenchPayload request;
-        zlink_c_bench_grpc::BenchPayload reply;
+        zlink::framework::bench::withgrpc::BenchPayload request;
+        zlink::framework::bench::withgrpc::BenchPayload reply;
         fill_payload (request.mutable_body (), size, run_id, completed + errors);
         grpc::ClientContext context;
         const uint64_t submit_start = zlink_c_bench::now_ns ();
@@ -94,7 +94,7 @@ zlink_c_bench::result_t run_request_serial (
 }
 
 zlink_c_bench::result_t run_request_async (
-  zlink_c_bench_grpc::BenchService::Stub *stub, size_t size, int max_outstanding, const char *scenario)
+  zlink::framework::bench::withgrpc::BenchService::Stub *stub, size_t size, int max_outstanding, const char *scenario)
 {
     const int duration_s = zlink_c_bench::env_int ("DURATION_SECONDS", 3);
     const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
@@ -196,7 +196,7 @@ zlink_c_bench::result_t run_request_async (
 }
 
 zlink_c_bench::result_t run_send_blocking (
-  zlink_c_bench_grpc::BenchService::Stub *stub, size_t size)
+  zlink::framework::bench::withgrpc::BenchService::Stub *stub, size_t size)
 {
     const int duration_s = zlink_c_bench::env_int ("DURATION_SECONDS", 3);
     const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
@@ -207,8 +207,8 @@ zlink_c_bench::result_t run_send_blocking (
     uint64_t errors = 0;
     double submit_wait_ms = 0.0;
     while (std::chrono::steady_clock::now () < deadline) {
-        zlink_c_bench_grpc::BenchPayload request;
-        zlink_c_bench_grpc::BenchEmpty reply;
+        zlink::framework::bench::withgrpc::BenchPayload request;
+        google::protobuf::Empty reply;
         fill_payload (request.mutable_body (), size, run_id, completed + errors);
         grpc::ClientContext context;
         const uint64_t submit_start = zlink_c_bench::now_ns ();
@@ -241,7 +241,7 @@ zlink_c_bench::result_t run_send_blocking (
 }
 
 zlink_c_bench::result_t run_send_async (
-  zlink_c_bench_grpc::BenchService::Stub *stub, size_t size, int max_outstanding)
+  zlink::framework::bench::withgrpc::BenchService::Stub *stub, size_t size, int max_outstanding)
 {
     const int duration_s = zlink_c_bench::env_int ("DURATION_SECONDS", 3);
     const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
@@ -322,7 +322,7 @@ int main ()
     args.SetMaxReceiveMessageSize (16 * 1024 * 1024);
     args.SetMaxSendMessageSize (16 * 1024 * 1024);
     auto channel = grpc::CreateCustomChannel (target, grpc::InsecureChannelCredentials (), args);
-    auto stub = zlink_c_bench_grpc::BenchService::NewStub (channel);
+    auto stub = zlink::framework::bench::withgrpc::BenchService::NewStub (channel);
     for (const size_t size : zlink_c_bench::parse_sizes ()) {
         std::fprintf (stderr, "[bench] request payload=%zu\n", size);
         if (zlink_c_bench::scenario_enabled (scenarios, "request-serial"))

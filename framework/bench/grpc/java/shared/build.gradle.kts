@@ -15,6 +15,14 @@ dependencies {
     api(zlinkLibs.zlink.bindings)
 }
 
+sourceSets {
+    main {
+        proto {
+            srcDir("../../proto")
+        }
+    }
+}
+
 protobuf {
     protoc { artifact = "com.google.protobuf:protoc:4.30.2" }
     plugins { id("grpc") { artifact = "io.grpc:protoc-gen-grpc-java:1.72.0" } }

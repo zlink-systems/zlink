@@ -25,7 +25,7 @@ import systems.zlink.contracts.core.Zlink
  * implementation (spec section 3), on the kotlin port band of spec section 9.
  *
  * <p>Emits `cells.json` in the `with-grpc-cell-v1` shape plus RESULT lines. Every table,
- * ratio and verdict is produced by framework/bench/tools, never here (plan section 4.1,
+ * ratio and verdict is produced by framework/bench/grpc/tools, never here (plan section 4.1,
  * FB-020). The drivers are the java row's: this file orchestrates cells and records
  * kotlin provenance, it does not measure.
  */

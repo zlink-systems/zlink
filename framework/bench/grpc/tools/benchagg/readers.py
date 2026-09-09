@@ -2,7 +2,7 @@
 
 Two report shapes exist today and they disagree about more than formatting.
 
-  ``bindings/c/bench/with_grpc``      throughput in KOPS, five patterns, extra
+  ``framework/bench/grpc/c``          throughput in KOPS, five patterns, extra
                                       columns (Submitted, Completed, Errors,
                                       Blocked, MaxOut, SubmitMs), CPU columns
                                       named ``C.CPU%``/``S.CPU%``, no server

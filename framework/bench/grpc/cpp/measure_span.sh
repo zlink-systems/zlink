@@ -10,7 +10,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
 export RUN_STAMP="${STAMP}"
-SPAN_DIR="${SCRIPT_DIR}/log/${STAMP}"
+SPAN_DIR="${SCRIPT_DIR}/../log/cpp/${STAMP}"
 mkdir -p "${SPAN_DIR}"
 TIMELINE="${SPAN_DIR}/timeline.txt"
 

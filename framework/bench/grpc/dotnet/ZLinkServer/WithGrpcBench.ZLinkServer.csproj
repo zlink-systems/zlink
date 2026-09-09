@@ -11,8 +11,8 @@
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Hosting"/>
         <ProjectReference Include="..\Shared\WithGrpcBench.Shared.csproj"/>
-        <ProjectReference Include="..\..\..\src\Zlink.Framework\Zlink.Framework.csproj"/>
-        <ProjectReference Include="..\..\..\src\Zlink.Framework.AspNetCore\Zlink.Framework.AspNetCore.csproj"/>
-        <ProjectReference Include="..\..\..\src\Zlink.Framework.Codecs.Protobuf\Zlink.Framework.Codecs.Protobuf.csproj"/>
+        <ProjectReference Include="..\..\..\..\languages\dotnet\src\Zlink.Framework\Zlink.Framework.csproj"/>
+        <ProjectReference Include="..\..\..\..\languages\dotnet\src\Zlink.Framework.AspNetCore\Zlink.Framework.AspNetCore.csproj"/>
+        <ProjectReference Include="..\..\..\..\languages\dotnet\src\Zlink.Framework.Codecs.Protobuf\Zlink.Framework.Codecs.Protobuf.csproj"/>
     </ItemGroup>
 </Project>

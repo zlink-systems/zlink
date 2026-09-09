@@ -14,19 +14,19 @@ namespace
 std::atomic<bool> g_stop {false};
 void on_signal (int) { g_stop.store (true); }
 
-class BenchService final : public zlink_c_bench_grpc::BenchService::Service
+class BenchService final : public zlink::framework::bench::withgrpc::BenchService::Service
 {
     grpc::Status Echo (grpc::ServerContext *,
-                       const zlink_c_bench_grpc::BenchPayload *request,
-                       zlink_c_bench_grpc::BenchPayload *reply) override
+                       const zlink::framework::bench::withgrpc::BenchPayload *request,
+                       zlink::framework::bench::withgrpc::BenchPayload *reply) override
     {
         reply->set_body (request->body ());
         return grpc::Status::OK;
     }
 
     grpc::Status Command (grpc::ServerContext *,
-                          const zlink_c_bench_grpc::BenchPayload *,
-                          zlink_c_bench_grpc::BenchEmpty *) override
+                          const zlink::framework::bench::withgrpc::BenchPayload *,
+                          google::protobuf::Empty *) override
     {
         return grpc::Status::OK;
     }

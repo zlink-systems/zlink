@@ -8,9 +8,9 @@
 ## 실행
 
 ```bash
-python3 framework/bench/tools/bench_aggregate.py --lang dotnet \
-    --runs-glob 'framework/languages/dotnet/bench/with-grpc/log/<stamp>/dotnet-*' \
-    --runs-glob 'bindings/c/bench/with_grpc/log/<stamp>/c-*' \
+python3 framework/bench/grpc/tools/bench_aggregate.py --lang dotnet \
+    --runs-glob 'framework/bench/grpc/log/dotnet/<stamp>/dotnet-*' \
+    --runs-glob 'framework/bench/grpc/log/c/<stamp>/c-*' \
     --json-out aggregate.json
 ```
 
@@ -22,7 +22,7 @@ C 기준 run과 대상 언어 run을 함께 넘기면 `zlink-<lang> / zlink-c` �
 
 ## 두 report 형식의 차이와 흡수 방법
 
-| 항목 | `bindings/c/bench/with_grpc` | `framework/languages/*/bench/with-grpc` |
+| 항목 | `framework/bench/grpc/c` | `framework/bench/grpc/{dotnet,node,java,cpp}` |
 |---|---|---|
 | `throughput` raw 값 | KOPS | 초당 완료 수 |
 | 패턴 | 5종(`request-saturation`, `send-blocking` 포함) | 규격 §2의 3종 |
@@ -159,7 +159,7 @@ binding I/O thread를 센다. 다섯 언어 중 넷이 프로세스 CPU가 아�
 ## test
 
 ```bash
-cd framework/bench/tools && python3 -m unittest discover -s tests -p 'test_*.py'
+cd framework/bench/grpc/tools && python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
 `tests/test_acceptance_gated2.py`가 Phase 0 원본(`tests/fixtures/gated2/`)을 집계기에 넣어
