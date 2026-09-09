@@ -4,28 +4,44 @@ on:
   push:
     branches:
       - main
+    # Production code only: workspace packages, runtime tests and the cross-language hosts.
+    # Docs, plans, bench, samples and scenario e2e never start this workflow (user decision 2026-09-09).
     paths:
       - ".github/workflows/framework-node.yml"
       - ".github/actions/msvc-env/**"
       - "scripts/local-package/core/fetch-release.sh"
-      - "framework/languages/node/**"
-      - "framework/doc/framework/common/spec/**"
-      - "framework/doc/framework/common/e2e/**"
-      - "framework/doc/framework/common/guide/**"
-      - "framework/doc/plan/node-framework-spec-gap-ledger/**"
+      - "scripts/local-package/http-client/**"
+      - "FRAMEWORK_VERSION"
+      - "BINDINGS_VERSION"
+      - "framework/runtime/**"
+      - "framework/languages/node/package.json"
+      - "framework/languages/node/package-lock.json"
+      - "framework/languages/node/tsconfig*.json"
+      - "framework/languages/node/packages/**"
+      - "framework/languages/node/scripts/**"
+      - "framework/languages/node/test/**"
+      - "framework/languages/node/cross-language/**"
       - "framework/languages/dotnet/cross-language/**"
   pull_request:
     branches:
       - main
+    # Production code only: workspace packages, runtime tests and the cross-language hosts.
+    # Docs, plans, bench, samples and scenario e2e never start this workflow (user decision 2026-09-09).
     paths:
       - ".github/workflows/framework-node.yml"
       - ".github/actions/msvc-env/**"
       - "scripts/local-package/core/fetch-release.sh"
-      - "framework/languages/node/**"
-      - "framework/doc/framework/common/spec/**"
-      - "framework/doc/framework/common/e2e/**"
-      - "framework/doc/framework/common/guide/**"
-      - "framework/doc/plan/node-framework-spec-gap-ledger/**"
+      - "scripts/local-package/http-client/**"
+      - "FRAMEWORK_VERSION"
+      - "BINDINGS_VERSION"
+      - "framework/runtime/**"
+      - "framework/languages/node/package.json"
+      - "framework/languages/node/package-lock.json"
+      - "framework/languages/node/tsconfig*.json"
+      - "framework/languages/node/packages/**"
+      - "framework/languages/node/scripts/**"
+      - "framework/languages/node/test/**"
+      - "framework/languages/node/cross-language/**"
       - "framework/languages/dotnet/cross-language/**"
   workflow_dispatch:
 
