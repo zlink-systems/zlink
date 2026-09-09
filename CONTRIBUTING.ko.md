@@ -165,8 +165,8 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 
 ## 9. 브랜치·커밋·PR·릴리스
 
-- 브랜치·commit·push·merge는 사용자가 명시적으로 요청할 때만 한다(`AGENTS.md` §1). 요청이
-  없으면 `main`에서 작업한다.
+- 브랜치·commit·push·merge는 사용자가 명시적으로 요청할 때만 하고, 작업 branch는 사용자가
+  지정한다(`AGENTS.md` §1).
 - 커밋 메시지: `<모듈>: <한 줄 요약>` + 본문에 원인·수정·근거 수치·gate 결과. 리팩토링은 항목
   (불필요 코드 제거 / 책임 분리 / 명명)이 diff에서 구분되게 한다.
 - 번호 규칙(Core `MAJOR.MINOR`, binding `CORE_MAJOR.CORE_MINOR.N`, framework `MAJOR.MINOR.HOTFIX`)은

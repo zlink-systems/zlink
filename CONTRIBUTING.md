@@ -172,8 +172,8 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 
 ## 9. Branches, commits, PRs, releases
 
-- Branches, commits, pushes and merges happen only on an explicit request (`AGENTS.md` §1);
-  otherwise work on `main`.
+- Branches, commits, pushes and merges happen only on an explicit request, and the working
+  branch is the one the user designates (`AGENTS.md` §1).
 - Commit message: `<module>: <one line>` plus a body with cause, fix, evidence numbers and
   gate results. Refactors keep their items (dead code removal / responsibility split /
   naming) distinguishable in the diff.

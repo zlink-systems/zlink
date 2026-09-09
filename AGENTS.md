@@ -6,10 +6,10 @@
 
 ## 1. 작업 시작과 변경 보호
 
-- 작업 전에 `git branch --show-current`를 확인한다. 사용자가 다른 branch를 지정하지 않으면
-  `main`에서만 수정, commit과 push를 수행한다.
-- 다른 branch이고 worktree가 clean하면 `main`으로 전환한다. 변경이 있으면 먼저 범위를
-  보고하며, 승인 없이 branch 전환, `reset`, `restore`, 강제 checkout 또는 삭제를 하지 않는다.
+- 작업 전에 `git branch --show-current`를 확인하고, 사용자가 지정한 branch에서만 수정, commit과
+  push를 수행한다. 어느 branch인지 분명하지 않으면 먼저 묻는다.
+- 변경이 있는 worktree에서는 먼저 범위를 보고하며, 승인 없이 branch 전환, `reset`, `restore`,
+  강제 checkout 또는 삭제를 하지 않는다.
 - 기존 변경과 untracked 파일은 사용자 작업이다. 요청 범위 밖의 변경을 수정하거나 정리하지 않는다.
 - branch 생성·전환·merge와 commit·push는 사용자가 명시적으로 요청한 경우에만 수행한다.
 
