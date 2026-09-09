@@ -11,10 +11,7 @@
     <ItemGroup>
         <ProjectReference Include="..\Shared\TicTacToe.Shared.csproj"/>
         <ProjectReference Include="..\..\Common\Logging\Zlink.Samples.Logging.csproj"/>
-        <ProjectReference Include="../../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj"/>
-        <PackageReference Include="Zlink.HttpClient"/>
         <PackageReference Include="Microsoft.Extensions.Configuration.Json"/>
         <PackageReference Include="Microsoft.Extensions.Configuration.Binder"/>
-        <ProjectReference Include="../../../src/Zlink.Framework/Zlink.Framework.csproj"/>
     </ItemGroup>
 </Project>

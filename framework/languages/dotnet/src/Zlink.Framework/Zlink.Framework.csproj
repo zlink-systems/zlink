@@ -11,7 +11,11 @@
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions"/>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions"/>
-        <PackageReference Include="Zlink"/>
+        <PackageReference Include="Zlink" Condition="'$(ZLinkUseBindingsSource)' != 'true'"/>
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(ZLinkUseBindingsSource)' == 'true'">
+        <ProjectReference Include="$(ZLinkBindingsProject)"/>
     </ItemGroup>
 
     <ItemGroup>

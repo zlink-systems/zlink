@@ -24,7 +24,9 @@ on:
 env:
   DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
-  FRAMEWORK_SOLUTION: framework/languages/dotnet/Zlink.Framework.sln
+  # CI builds the solution filter: src, tests, testapps and cross-language only.
+  # Zlink.Framework.sln also carries the seven samples for developers (never built in CI).
+  FRAMEWORK_SOLUTION: framework/languages/dotnet/Zlink.Framework.ci.slnf
   FRAMEWORK_UNIT_TESTS: framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Zlink.Framework.UnitTests.csproj
   FRAMEWORK_CONTRACT_TESTS: framework/languages/dotnet/tests/Zlink.Framework.ContractTests/Zlink.Framework.ContractTests.csproj
   STREAM_CONNECTOR_TESTS: framework/languages/dotnet/tests/Systems.Zlink.Stream.Connector.Tests/Systems.Zlink.Stream.Connector.Tests.csproj

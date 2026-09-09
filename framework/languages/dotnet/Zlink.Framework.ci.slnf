@@ -1,0 +1,23 @@
+{
+  "solution": {
+    "path": "Zlink.Framework.sln",
+    "projects": [
+      "cross-language\\Zlink.Framework.TestHost\\Zlink.Framework.TestHost.csproj",
+      "src\\Systems.Zlink.Stream.Connector\\Systems.Zlink.Stream.Connector.csproj",
+      "src\\Zlink.Framework.AspNetCore\\Zlink.Framework.AspNetCore.csproj",
+      "src\\Zlink.Framework.Codecs.MessagePack\\Zlink.Framework.Codecs.MessagePack.csproj",
+      "src\\Zlink.Framework.Codecs.Protobuf\\Zlink.Framework.Codecs.Protobuf.csproj",
+      "src\\Zlink.Framework.Contracts\\Zlink.Framework.Contracts.csproj",
+      "src\\Zlink.Framework.Locations.Redis\\Zlink.Framework.Locations.Redis.csproj",
+      "src\\Zlink.Framework.Provider.Abstractions\\Zlink.Framework.Provider.Abstractions.csproj",
+      "src\\Zlink.Framework\\Zlink.Framework.csproj",
+      "src\\Zlink.HttpClient\\Zlink.HttpClient.csproj",
+      "testapps\\Zlink.Framework.DocFixtures\\Zlink.Framework.DocFixtures.csproj",
+      "tests\\Systems.Zlink.Stream.Connector.Tests\\Systems.Zlink.Stream.Connector.Tests.csproj",
+      "tests\\Zlink.Framework.ContractTests\\Zlink.Framework.ContractTests.csproj",
+      "tests\\Zlink.Framework.Locations.Redis.Tests\\Zlink.Framework.Locations.Redis.Tests.csproj",
+      "tests\\Zlink.Framework.UnitTests\\Zlink.Framework.UnitTests.csproj",
+      "tests\\Zlink.HttpClient.UnitTests\\Zlink.HttpClient.UnitTests.csproj"
+    ]
+  }
+}

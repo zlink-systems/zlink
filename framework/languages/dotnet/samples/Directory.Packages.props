@@ -1,0 +1,34 @@
+<Project>
+  <Import Project="../Directory.Packages.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)../src/Zlink.Framework/Zlink.Framework.csproj') and Exists('$(MSBuildThisFileDirectory)../Directory.Packages.props')" />
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+    <ZLinkSampleFrameworkVersion Condition="'$(ZLinkSampleFrameworkVersion)' == ''">0.10.0</ZLinkSampleFrameworkVersion>
+    <ZLinkBindingsPackageVersion Condition="'$(ZLinkBindingsPackageVersion)' == ''">0.17.6</ZLinkBindingsPackageVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageVersion Include="Zlink.Framework" Version="$(ZLinkSampleFrameworkVersion)" />
+    <PackageVersion Include="Zlink.Framework.AspNetCore" Version="$(ZLinkSampleFrameworkVersion)" />
+    <PackageVersion Include="Zlink.Framework.Locations.Redis" Version="$(ZLinkSampleFrameworkVersion)" />
+    <PackageVersion Include="Zlink.Framework.Codecs.Protobuf" Version="$(ZLinkSampleFrameworkVersion)" />
+    <PackageVersion Include="Zlink.Stream.Connector" Version="$(ZLinkSampleFrameworkVersion)" />
+  </ItemGroup>
+
+  <ItemGroup Condition="!Exists('$(MSBuildThisFileDirectory)../src/Zlink.Framework/Zlink.Framework.csproj')">
+    <PackageVersion Include="Zlink" Version="$(ZLinkBindingsPackageVersion)" />
+    <PackageVersion Include="Zlink.HttpClient" Version="$(ZLinkSampleFrameworkVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="8.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="8.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
+    <PackageVersion Include="Google.Protobuf" Version="3.29.1" />
+    <PackageVersion Include="Grpc.Tools" Version="2.62.0" />
+    <PackageVersion Include="StackExchange.Redis" Version="2.8.31" />
+  </ItemGroup>
+</Project>

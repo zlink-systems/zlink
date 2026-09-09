@@ -12,9 +12,5 @@
         <ProjectReference Include="../../Shared/ShoppingMall.Shared.csproj"/>
         <ProjectReference Include="../Shared/ShoppingMall.Server.Shared.csproj"/>
         <ProjectReference Include="../../../Common/Logging/Zlink.Samples.Logging.csproj"/>
-        <ProjectReference Include="../../../../src/Zlink.Framework/Zlink.Framework.csproj"/>
-        <ProjectReference Include="../../../../src/Zlink.Framework.AspNetCore/Zlink.Framework.AspNetCore.csproj"/>
-        <ProjectReference Include="../../../../src/Zlink.Framework.Locations.Redis/Zlink.Framework.Locations.Redis.csproj"/>
-        <PackageReference Include="Zlink"/>
     </ItemGroup>
 </Project>

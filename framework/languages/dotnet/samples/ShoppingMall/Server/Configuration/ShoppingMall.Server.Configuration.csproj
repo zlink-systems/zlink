@@ -12,7 +12,5 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
-    <ProjectReference Include="..\..\..\..\src\Zlink.Framework\Zlink.Framework.csproj" />
-    <PackageReference Include="Zlink"/>
   </ItemGroup>
 </Project>

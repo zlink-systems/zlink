@@ -11,8 +11,6 @@
     <ItemGroup>
         <ProjectReference Include="..\Shared\Bingo.Shared.csproj"/>
         <ProjectReference Include="..\..\Common\Logging\Zlink.Samples.Logging.csproj"/>
-        <ProjectReference Include="../../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj"/>
-        <ProjectReference Include="../../../src/Zlink.Framework.Codecs.Protobuf/Zlink.Framework.Codecs.Protobuf.csproj"/>
         <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
         <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
     </ItemGroup>

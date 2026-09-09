@@ -13,6 +13,5 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
     <PackageReference Include="StackExchange.Redis" />
     <ProjectReference Include="..\..\Shared\GameQuest.Shared.csproj" />
-    <ProjectReference Include="..\..\..\..\src\Zlink.Framework\Zlink.Framework.csproj" />
   </ItemGroup>
 </Project>

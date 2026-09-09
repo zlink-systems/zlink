@@ -4,7 +4,6 @@
         <PackageReference Include="Microsoft.Extensions.Logging.Console"/>
         <PackageReference Include="Microsoft.Extensions.Configuration.Binder"/>
         <PackageReference Include="Microsoft.Extensions.Configuration.Json"/>
-        <PackageReference Include="Zlink"/>
         <ProjectReference Include="..\..\Shared\ZoneWorld.Shared.csproj"/>
     </ItemGroup>
 </Project>
