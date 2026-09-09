@@ -4,7 +4,10 @@ This document is the standard for comparing the relative cost of gRPC, the ZLink
 the ZLink framework in the same format on a local development machine. The target languages are
 the five `dotnet`, `node`, `java`, `kotlin`, and `cpp`, and a reference bench written in C is used
 alongside them as the floor value. It doesn't represent a production environment's mesh, TLS, L7
-load balancer, multi-node distribution, or network latency.
+load balancer, multi-node distribution, or network latency. The thing measured is **messaging
+from server process A to server process B (server-to-server)**, and the load is generated inside A
+after it receives an HTTP trigger (§10). The HTTP call is the start signal, not a measured
+operation.
 
 **This bench is a service-level comparison.** It measures the cost actually paid when the same
 task is implemented with each stack. It doesn't ask whether the two stacks use the same mechanism
@@ -35,7 +38,9 @@ the table shows the three implementations side by side under one pattern.
 `grpc-c` and `zlink-c` from `bindings/c/bench/with_grpc` are kept alongside as the floor
 reference. There's no framework layer in C, so only these two implementations exist there. The
 `zlink-c` `request-window` value is the reference value for judging where each language's raw
-binding stands (§7.2).
+binding stands (§7.2). The C reference bench stays client-driven; it isn't converted to the
+server-driven model of §10, because what's borrowed from it is the per-request cost, not the place
+where load is generated. That difference is noted next to the denominator in §7.2.
 
 ### 1.3 The ZLink Socket Axis
 
@@ -153,9 +158,13 @@ one-way send. Under this condition the difference was N times.
 
 ## 3. Execution Conditions
 
-- Run with 1 client process and 1 server process per comparison target.
-- The local runner brings up the gRPC server, ZLink raw binding server, and ZLink framework server
-  separately.
+- For each implementation (`grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>`) run one
+  **source process A** and one **target process B**. A has the HTTP trigger listener, a stats
+  endpoint, and the client toward B (gRPC stub, raw ROUTER, framework channel client). B has the
+  echo (request) or receive counter (send) and a stats endpoint. §10 defines the roles, the trigger
+  contract, and the cell order.
+- The local runner starts B then A for each cell and announces the phase start to A's trigger
+  endpoint over HTTP. The runner itself generates no load.
 - Only a loopback address (`127.0.0.1`) is used. Ports use the per-language bands in §9.
 - Runs as a Release build.
 - Runs a fixed-duration measured active window after warmup. The warmup length is set per language
@@ -239,6 +248,18 @@ The `metric` value uses `throughput`, `bandwidth`, `latency`, `latency_p95`, `la
 of `throughput` is completions per second, and the table displays it divided into `KOPS` or
 `KMSG/s`.
 
+In the server-driven model (§10) `client_*` is the value of **source process A** and `server_*` is
+the value of **target process B**. The metric names are kept for the aggregator and for older raw
+files; the table header shows them as `Source CPU` and `Target CPU`. The per-cell raw JSON carries
+the following in addition.
+
+| Field | Meaning |
+|-------|---------|
+| `role` | `source` or `target`. A and B each write their own raw file and the runner merges them into one cell |
+| `trigger` | The trigger request A received (`runId`, `cellId`, `pattern`, `payloadBytes`, `durationMs`, `warmup`) and the time it arrived |
+| `streams` | A's logical stream count and the per-stream in-flight ceiling (§10.3) |
+| `target_stats` | Receive count, error count, and drain time the runner read from B's stats endpoint after settle |
+
 ## 5. Metrics
 
 The required output is the metrics below. The throughput unit is separated to match the pattern's
@@ -248,13 +269,13 @@ character.
 |--------|------|
 | `Throughput` | Throughput during the measured window. The table shows the value and unit together in one cell, e.g. `10.000 KOPS`, `183.618 KMSG/s` |
 | `Bandwidth` | The transfer volume calculated from payload size and throughput. Shown as `MB/s` |
-| `Lat.Mean(ms)` | Mean latency. For request/reply this is the client round-trip latency; for send it's the receive latency the server calculates from the header |
+| `Lat.Mean(ms)` | Mean latency. For request/reply this runs from just before A's outbound call until the reply completes; for send it's the receive latency B calculates from the header |
 | `Lat.P95(ms)` | p95 latency |
 | `Lat.P99(ms)` | p99 latency |
-| `Client CPU` | The CPU percentage the client process used during the active window |
-| `Client Mem` | The client process's working set |
-| `Server CPU` | The CPU percentage that implementation's server process used during the active window |
-| `Server Mem` | That implementation's server process working set |
+| `Source CPU` (`client_cpu_percent`) | The CPU percentage source process A used during the active window |
+| `Source Mem` (`client_memory_mb`) | Source process A's working set |
+| `Target CPU` (`server_cpu_percent`) | The CPU percentage target process B used during the active window |
+| `Target Mem` (`server_memory_mb`) | Target process B's working set |
 
 `request-serial` and `request-window` calculate `KOPS` based on the number of completions where an
 echo reply came back. Here, `1 KOPS` means 1,000 request/reply completions per second.
@@ -263,9 +284,10 @@ echo reply came back. Here, `1 KOPS` means 1,000 request/reply completions per s
 active phase. Here, `1 KMSG/s` means 1,000 messages per second. Since a ZLink send doesn't wait for
 a reply, throughput isn't calculated from the client's submission call count alone.
 
-### 5.1 The Client Saturation Rule
+### 5.1 The Source Saturation Rule
 
-`Client CPU` is recorded for every cell. It isn't optional. A percentage alone cannot decide
+"Client" in this section means the process that generates the load, which in the server-driven
+model is **source process A**. `Source CPU` is recorded for every cell. It isn't optional. A percentage alone cannot decide
 saturation, so **the number of cores used is recorded alongside the percentage.** The percentage is
 taken against all of the machine's logical cores. On a machine with 20 logical cores, a
 single-threaded client that fully occupies one core still reads 5%, and no fixed percentage
@@ -376,9 +398,10 @@ information alongside it.
 - gRPC and ZLink endpoint
 - The request window value (`request-window` pattern) or the depth reached
   (`request-backpressure` pattern)
+- A's logical stream count, per-stream in-flight ceiling, and trigger endpoint (§10)
 - Per-cell `peak_in_flight`, depth, and `abandoned` (§5.2)
 - The send concurrency value
-- Client CPU and whether the cell was saturated (§5.1)
+- Source (A) CPU and whether the cell was saturated (§5.1), target (B) CPU
 - The original result JSON
 
 ### 7.2 Judgement Between Layers
@@ -439,6 +462,12 @@ does not hide a correctness observation.
 The second formula represents the framework layer cost only when the socket configuration in §1.3
 is observed.
 
+The denominator of the first formula, `zlink-c`, comes from the client-driven bench (§1.2) while
+the numerator comes from the server-driven model (§10). The two models generate load in different
+places, so read the ratio as "the same per-request cost measured under a different model" and say
+so in the report. The centre of the public comparison report isn't this ratio but the direct
+`grpc` · `zlink` · `zlink-framework` comparison within one language; the ratio goes in an appendix.
+
 ### 7.3 Cross-Language Reading Rules
 
 Absolute throughput isn't compared across languages. Placing `grpc-node` and `grpc-java` side by
@@ -474,7 +503,12 @@ production performance or superiority across every payload is made.
 | `kotlin` | grpc-kotlin coroutine stub | `zlink-framework-kotlin` | `bindings/kotlin` | Uses the same codec as Java |
 | `cpp` | system `libgrpc++` and `grpc_cpp_plugin` | `framework/languages/cpp/framework` | `bindings/cpp` | `zlink::framework_codec_protobuf` |
 
-Kotlin uses a suspend interface on the ZLink side, so the gRPC side uses the grpc-kotlin coroutine
+A's HTTP trigger listener uses each language's standard HTTP server (ASP.NET Core minimal API, Node
+`http`, the JDK `HttpServer`, C++ framework HTTP hosting). The listener sits outside the measured
+path and enters no cell's cost.
+
+Kotlin is excluded from the full matrix and only supplementary cells are measured (§10.5). Kotlin
+uses a suspend interface on the ZLink side, so the gRPC side uses the grpc-kotlin coroutine
 stub as well. Only when the coroutine stub can't be used is the grpc-java blocking stub used, and
 that reason is recorded in the result.
 
@@ -494,27 +528,101 @@ to leave the values used in the result.
 
 ## 9. Port Bands
 
-A per-language band is fixed so that ports don't collide even when five languages' server
-processes exist at the same time. The meaning of an offset within a band is the same in every
-language.
+One implementation needs four ports (A trigger, A stats, B endpoint, B stats; the raw binding needs
+five because B's request and command endpoints are separate) and each language has three
+implementations, so every language gets a band of 20. The meaning of an offset within a band is the
+same in every language.
 
-| Language | Band | gRPC | gRPC stats | framework endpoint | framework stats | raw request | raw stats | raw command |
-|------|------|------|------------|--------------------|-----------------|-------------|-----------|-------------|
-| `dotnet` | 5071-5079 | 5071 | 5074 | 5072 | 5073 | 5075 | 5076 | 5077 |
-| `node` | 5081-5089 | 5081 | 5084 | 5082 | 5083 | 5085 | 5086 | 5087 |
-| `java` | 5091-5099 | 5091 | 5094 | 5092 | 5093 | 5095 | 5096 | 5097 |
-| `kotlin` | 5101-5109 | 5101 | 5104 | 5102 | 5103 | 5105 | 5106 | 5107 |
-| `cpp` | 5111-5119 | 5111 | 5114 | 5112 | 5113 | 5115 | 5116 | 5117 |
-| C reference | 6071-6079 | 6071 | none | none | none | 6075 | none | 6077 |
+| Language | Band | grpc A trigger/stats, B endpoint/stats | zlink raw A trigger/stats, B request/command/stats | framework A trigger/stats, B endpoint/stats |
+|------|------|------|------|------|
+| `dotnet` | 5200-5219 | 5200/5201, 5202/5203 | 5205/5206, 5207/5208/5209 | 5212/5213, 5214/5215 |
+| `node` | 5220-5239 | 5220/5221, 5222/5223 | 5225/5226, 5227/5228/5229 | 5232/5233, 5234/5235 |
+| `java` | 5240-5259 | 5240/5241, 5242/5243 | 5245/5246, 5247/5248/5249 | 5252/5253, 5254/5255 |
+| `kotlin` (supplementary, §10.5) | 5260-5279 | 5260/5261, B uses the java band 5242/5243 | none | 5272/5273, B uses the java band 5254/5255 |
+| `cpp` | 5280-5299 | 5280/5281, 5282/5283 | 5285/5286, 5287/5288/5289 | 5292/5293, 5294/5295 |
+| C reference (client-driven) | 6200-6219 | 6200/6201, 6202/6203 | 6205/6206, 6207/6208/6209 | none |
 
-The last two ports of each band (`+8`, `+9`) are left in reserve.
+`+16` to `+19` of each band are reserved. The runner checks that its own band's ports are free
+before starting a measurement. If one is in use it stops instead of moving to another port. Moving a
+port would make the endpoint recorded in the result disagree with the endpoint actually used. The
+Kotlin supplementary cells reuse Java's B, so they never run at the same time as a Java measurement
+(one language at a time).
 
-The `dotnet` row is the set of values
-`framework/languages/dotnet/bench/with-grpc/run_local.sh` already uses, and the C reference row is
-the set of values the `bindings/c/bench/with_grpc` server and client already use. The C reference
-bench has no framework layer and no stats endpoint, and the optional ZMQ comparison server uses
-`6079`.
+## 10. The Server-Driven Execution Model
 
-The runner checks that its own band's ports are free before starting a measurement. If one is in
-use it stops instead of moving to another port. Moving a port would make the endpoint recorded in
-the result disagree with the endpoint actually used.
+### 10.1 Roles
+
+| Role | Processes | What it does |
+|------|-----------|--------------|
+| trigger client | 1 (the runner) | Sends HTTP `POST /bench/start` to A's trigger endpoint. Generates no load and counts no result |
+| source A | 1 per implementation | On trigger, repeats request or send toward B over the logical streams of §10.3, aggregates completions, latency, and errors itself, and writes the cell's raw JSON. Exposes progress on its stats endpoint |
+| target B | 1 per implementation | For request, echoes the same payload; for send, reads the header and counts received messages and receive latency. Exposes the values on its stats endpoint |
+
+The A·B pairs of the three implementations are independent process pairs. Even within one language
+only one pair is measured at a time.
+
+### 10.2 Trigger Contract
+
+The trigger and admin contract of the common perf specification
+(`framework/doc/framework/common/perf/README.en.md` §4.2, §5.1, §16) is used as is. Request and
+response are JSON and the five languages use the same fields.
+
+```text
+POST http://127.0.0.1:<A trigger>/bench/start
+{ "runId": "...", "cellId": "...", "pattern": "request-window",
+  "payloadBytes": 1024, "phase": "warmup" | "active",
+  "durationMs": 5000, "requestWindow": 100, "sendConcurrency": 8 }
+→ 200 { "accepted": true, "runId": "...", "cellId": "...", "phase": "active", "startedAt": <monotonic ns> }
+```
+
+- A phase starts once. A duplicate trigger with the same `runId`, `cellId`, and `phase` returns the
+  same start acknowledgement and generates no second load.
+- The trigger only **carries** pattern, payload, duration, window, and concurrency; it doesn't change
+  the specified values. The defaults are the values §3 sets.
+- `GET http://127.0.0.1:<A stats>/bench/stats` and `GET http://127.0.0.1:<B stats>/bench/stats`
+  return the phase, submitted/completed/error counts, received count, and current in-flight. They
+  are what settle (§3) polls.
+- The HTTP round trips of trigger and stats are not measured operations and don't enter
+  `throughput` or `latency`.
+
+### 10.3 Logical Streams and the Pattern Mapping
+
+A runs independent load flows toward B as **logical streams**. A pattern is expressed as a stream
+count and a per-stream in-flight ceiling.
+
+| Pattern | Streams | In-flight per stream | Meaning |
+|---------|---------|----------------------|---------|
+| `request-serial` | 1 | 1 | Send one request, then the next after the reply |
+| `request-window` | The streams share `request_window` (default 100). Default is 1 stream with in-flight 100 | Sum = `request_window` | Keep the incomplete request count at the window |
+| `request-backpressure` | 1 | No ceiling | Submit until admission backpressure is met |
+| `send-saturation` | `send_concurrency` (default 8) | 1 (until send completion notification) | The command path with no reply |
+
+The stream count and per-stream in-flight are recorded in the cell's raw file (§4). How a language
+harness implements a stream (thread, task, coroutine, event loop) differs per language and is left
+in the result as in §8.2.
+
+### 10.4 Cell Order
+
+1. The runner checks that its language band (§9) is free.
+2. Start the implementation's B and wait until its stats endpoint answers (30-second limit).
+3. Start the implementation's A and wait until A connects to B and reports route ready (30-second
+   limit). If A's stats say `ready=false`, the cell isn't started and that fact is recorded.
+4. `phase=warmup` trigger → wait until A finishes warmup and reports `phase=idle` on stats.
+5. `phase=active` trigger → A closes the measured window after `durationMs`.
+6. Settle: poll B's (and A's) stats until the received and completed counts stop growing (30-second
+   limit, the contamination rule of §3 unchanged).
+7. A writes the cell's raw JSON under `log/<lang>/<stamp>/` and emits the `RESULT` lines. The runner
+   merges B's stats into the same JSON as `target_stats`.
+8. Stop A and B. The next cell starts with a fresh process pair (a process is never reused across
+   cells, so a previous cell's residual state can't enter the next one).
+
+The gRPC implementation's A has the same trigger listener and runs as many unary stubs toward B as
+there are streams. The gRPC server configuration stays at the language default and is recorded
+(§8.2).
+
+### 10.5 Kotlin Supplementary Cells
+
+Kotlin shares the binding, server, and codec with Java, so it's excluded from the full matrix.
+Instead, two supplementary cells that show the cost of the Kotlin call layer — `grpc-kotlin`
+(coroutine stub) and `zlink-framework-kotlin` (suspend calls) at `request-window @1024` — are placed
+next to the Java rows. Only A is Kotlin; B is the Java binary on the Java band of §9, as is.

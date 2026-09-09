@@ -1,7 +1,9 @@
 # Messaging local bench 규격
 
 이 문서는 로컬 개발 머신에서 gRPC, ZLink raw binding, ZLink framework의 상대 비용을 같은
-형식으로 비교하기 위한 기준이다. 대상 언어는 `dotnet`, `node`, `java`, `kotlin`, `cpp` 다섯
+형식으로 비교하기 위한 기준이다. 측정 대상은 **server process A가 server process B에 보내는
+메시징(server-to-server)**이고, 부하는 A가 HTTP trigger를 받은 뒤 자기 안에서 만든다(§10).
+HTTP 호출은 시작 신호이며 측정 operation이 아니다. 대상 언어는 `dotnet`, `node`, `java`, `kotlin`, `cpp` 다섯
 개이고, 여기에 C로 작성한 기준 bench를 바닥 값으로 함께 사용한다. 운영 환경의 mesh, TLS,
 L7 load balancer, multi-node 분배, 네트워크 지연을 대표하지 않는다.
 
@@ -31,7 +33,9 @@ L7 load balancer, multi-node 분배, 네트워크 지연을 대표하지 않는�
 ### 1.2 C 기준 bench
 
 `bindings/c/bench/with_grpc`의 `grpc-c`와 `zlink-c`를 바닥 기준으로 함께 유지한다. framework
-계층은 C에 없으므로 C에는 이 두 구현만 존재한다. `zlink-c`의 `request-window` 값은 각 언어
+계층은 C에 없으므로 C에는 이 두 구현만 존재한다. C 기준 bench는 §10의 server-driven 모델로
+바꾸지 않고 client-driven 그대로 둔다. 기준값으로 쓰는 것은 요청당 비용이지 부하 생성 위치가
+아니기 때문이다. 이 차이는 §7.2의 분모를 읽을 때 함께 적는다. `zlink-c`의 `request-window` 값은 각 언어
 raw binding의 위치를 판정하는 기준값이다(§7.2).
 
 ### 1.3 ZLink 소켓 축
@@ -144,8 +148,12 @@ bench에서 옳은 비교인 이유는 아래와 같다.
 
 ## 3. 실행 조건
 
-- client process 1개와 비교 대상별 server process 1개로 실행한다.
-- 로컬 runner는 gRPC server, ZLink raw binding server, ZLink framework server를 각각 띄운다.
+- 구현(`grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>`)마다 **source process A**와
+  **target process B**를 각 1개 띄운다. A는 HTTP trigger listener와 stats endpoint를 갖고 B로
+  향하는 client(gRPC stub, raw ROUTER, framework channel client)를 품는다. B는 echo(request)
+  또는 수신 집계(send)와 stats endpoint를 갖는다. 역할·trigger 계약·셀 순서는 §10이 정한다.
+- 로컬 runner는 셀마다 B → A 순서로 띄우고, A의 trigger endpoint에 HTTP로 phase 시작을 알린다.
+  runner 자체는 부하를 만들지 않는다.
 - loopback 주소(`127.0.0.1`)만 사용한다. 포트는 §9의 언어별 대역을 사용한다.
 - Release build로 실행한다.
 - warmup 뒤 정해진 시간의 measured active 구간을 실행한다. warmup 길이는 언어마다 다르게
@@ -222,6 +230,17 @@ RESULT,current,zlink-framework-dotnet-request-window,local,1024,latency_p99,1.20
 `client_cpu_percent`, `client_memory_mb`, `server_cpu_percent`, `server_memory_mb`를 사용한다.
 `throughput`의 raw 값은 초당 완료 수이며, 표에서는 `KOPS` 또는 `KMSG/s`로 나누어 표시한다.
 
+server-driven 모델(§10)에서 `client_*`는 **source process A**, `server_*`는 **target process B**의
+값이다. metric 이름은 집계기·과거 원본과의 호환을 위해 그대로 두고, 표 머리에는 `Source CPU`·
+`Target CPU`로 표시한다. 셀 원본 JSON에는 다음이 추가로 들어간다.
+
+| 필드 | 의미 |
+|------|------|
+| `role` | `source` 또는 `target`. A와 B가 각자 원본을 쓰고 runner가 셀 하나로 합친다 |
+| `trigger` | A가 받은 trigger 요청(`runId`, `cellId`, `pattern`, `payloadBytes`, `durationMs`, `warmup`)과 수신 시각 |
+| `streams` | A의 logical stream 수와 stream당 in-flight 상한(§10.3) |
+| `target_stats` | settle 뒤 runner가 B의 stats endpoint에서 읽은 수신 수·오류 수·drain 시간 |
+
 ## 5. 메트릭
 
 필수 출력은 아래 메트릭이다. 처리량 단위는 패턴 성격에 맞춰 분리한다.
@@ -230,13 +249,13 @@ RESULT,current,zlink-framework-dotnet-request-window,local,1024,latency_p99,1.20
 |--------|------|
 | `Throughput` | measured 구간 처리량. 표에서는 `10.000 KOPS`, `183.618 KMSG/s`처럼 값과 단위를 한 칸에 함께 표시 |
 | `Bandwidth` | payload 크기와 처리량으로 계산한 전송량. `MB/s`로 표시 |
-| `Lat.Mean(ms)` | 평균 latency. request/reply는 client 왕복 latency, send는 server가 header로 계산한 수신 latency |
+| `Lat.Mean(ms)` | 평균 latency. request/reply는 A의 outbound call 직전부터 reply 완료까지, send는 B가 header로 계산한 수신 latency |
 | `Lat.P95(ms)` | p95 latency |
 | `Lat.P99(ms)` | p99 latency |
-| `Client CPU` | client process가 active 구간 동안 사용한 CPU 비율 |
-| `Client Mem` | client process working set |
-| `Server CPU` | 해당 구현의 server process가 active 구간 동안 사용한 CPU 비율 |
-| `Server Mem` | 해당 구현의 server process working set |
+| `Source CPU` (`client_cpu_percent`) | source process A가 active 구간 동안 사용한 CPU 비율 |
+| `Source Mem` (`client_memory_mb`) | source process A의 working set |
+| `Target CPU` (`server_cpu_percent`) | target process B가 active 구간 동안 사용한 CPU 비율 |
+| `Target Mem` (`server_memory_mb`) | target process B의 working set |
 
 `request-serial`과 `request-window`는 echo reply가 돌아온 완료 수를 기준으로 `KOPS`를 계산한다.
 여기서 `1 KOPS`는 초당 1,000건의 request/reply 완료를 뜻한다.
@@ -245,9 +264,10 @@ RESULT,current,zlink-framework-dotnet-request-window,local,1024,latency_p99,1.20
 여기서 `1 KMSG/s`는 초당 1,000개 메시지를 뜻한다. ZLink send는 reply를 기다리지 않으므로
 client의 제출 호출 수만으로 처리량을 계산하지 않는다.
 
-### 5.1 client 포화 규칙
+### 5.1 source 포화 규칙
 
-`Client CPU`는 모든 셀에서 기록한다. 선택 항목이 아니다. 다만 백분율 하나로는 포화를 판정할 수
+이 절의 "client"는 부하를 만드는 process, 곧 server-driven 모델의 **source process A**를 뜻한다.
+`Source CPU`는 모든 셀에서 기록한다. 선택 항목이 아니다. 다만 백분율 하나로는 포화를 판정할 수
 없으므로 **사용한 core 수를 백분율과 함께 기록한다.** 백분율은 머신의 논리 core 전체에 대한
 값이다. 논리 core가 20개인 머신에서 단일 스레드 client가 core 하나를 완전히 사용해도 그 값은
 5%이고, 어떤 고정 백분율 기준으로도 그 포화를 잡아낼 수 없다.
@@ -350,9 +370,10 @@ client stopwatch만으로 단방향 처리량을 과장하지 않기 위한 기�
 - warmup과 active duration 설정
 - gRPC와 ZLink endpoint
 - request window 값(`request-window` 패턴) 또는 도달 깊이(`request-backpressure` 패턴)
+- A의 logical stream 수, stream당 in-flight 상한, trigger endpoint(§10)
 - 셀마다의 `peak_in_flight`, 깊이, `abandoned`(§5.2)
 - send concurrency 값
-- client CPU와 포화 여부(§5.1)
+- source(A) CPU와 포화 여부(§5.1), target(B) CPU
 - 결과 JSON 원본
 
 ### 7.2 계층 간 판정
@@ -406,6 +427,11 @@ zlink-framework-<lang> / zlink-<lang>      >= 0.80   framework 추가 비용 통
 
 두 번째 식은 §1.3의 소켓 구성을 지켰을 때에만 framework 계층 비용을 나타낸다.
 
+첫 번째 식의 분모 `zlink-c`는 client-driven bench(§1.2)의 값이고 분자는 server-driven 모델(§10)의
+값이다. 두 모델은 부하 생성 위치가 다르므로, 이 비율은 "같은 요청당 비용을 다른 모델에서 잰 값"
+으로 읽고 보고서에 그 사실을 함께 적는다. 공개 비교 보고서의 중심은 이 비율이 아니라 같은
+언어 안의 `grpc` · `zlink` · `zlink-framework` 직접 비교이며, 비율은 부록에 둔다.
+
 ### 7.3 언어를 가로지른 읽기 규칙
 
 절대 처리량은 언어끼리 비교하지 않는다. `grpc-node`와 `grpc-java`를 나란히 놓은 값은 런타임
@@ -438,7 +464,12 @@ gRPC 라이브러리이고, 이 bench는 그 원인을 분리하지 않는다.
 | `kotlin` | grpc-kotlin coroutine stub | `zlink-framework-kotlin` | `bindings/kotlin` | Java와 같은 codec을 사용 |
 | `cpp` | 시스템 `libgrpc++`와 `grpc_cpp_plugin` | `framework/languages/cpp/framework` | `bindings/cpp` | `zlink::framework_codec_protobuf` |
 
-Kotlin은 ZLink 쪽에서 suspend 인터페이스를 사용하므로 gRPC 쪽도 grpc-kotlin coroutine stub을
+A의 HTTP trigger listener는 각 언어의 표준 HTTP 서버(ASP.NET Core minimal API, Node `http`,
+JDK `HttpServer`, C++ framework HTTP hosting)를 쓴다. 이 listener는 측정 경로 밖이며 어떤 셀의
+비용에도 들어가지 않는다.
+
+Kotlin은 전체 matrix에서 제외하고 보조 셀만 잰다(§10.5). Kotlin은 ZLink 쪽에서 suspend
+인터페이스를 사용하므로 gRPC 쪽도 grpc-kotlin coroutine stub을
 사용한다. coroutine stub을 사용할 수 없을 때에만 grpc-java blocking stub을 사용하고, 그 사유를
 결과에 기록한다.
 
@@ -458,24 +489,93 @@ version은 1.51.1이며, 오래된 version이므로 결과에 반드시 기록�
 
 ## 9. 포트 대역
 
-언어 다섯 개의 server process가 동시에 존재해도 포트가 겹치지 않도록 언어별 대역을 고정한다.
-같은 대역 안의 offset 의미는 모든 언어에서 같다.
+구현 하나에 A trigger, A stats, B endpoint, B stats 네 포트가 필요하고(raw binding은 B의 request·
+command endpoint가 분리되어 다섯), 언어당 세 구현이므로 언어마다 20개 대역을 잡는다. 같은
+대역 안의 offset 의미는 모든 언어에서 같다.
 
-| 언어 | 대역 | gRPC | gRPC stats | framework endpoint | framework stats | raw request | raw stats | raw command |
-|------|------|------|------------|--------------------|-----------------|-------------|-----------|-------------|
-| `dotnet` | 5071-5079 | 5071 | 5074 | 5072 | 5073 | 5075 | 5076 | 5077 |
-| `node` | 5081-5089 | 5081 | 5084 | 5082 | 5083 | 5085 | 5086 | 5087 |
-| `java` | 5091-5099 | 5091 | 5094 | 5092 | 5093 | 5095 | 5096 | 5097 |
-| `kotlin` | 5101-5109 | 5101 | 5104 | 5102 | 5103 | 5105 | 5106 | 5107 |
-| `cpp` | 5111-5119 | 5111 | 5114 | 5112 | 5113 | 5115 | 5116 | 5117 |
-| C 기준 | 6071-6079 | 6071 | 없음 | 없음 | 없음 | 6075 | 없음 | 6077 |
+| 언어 | 대역 | grpc A trigger/stats, B endpoint/stats | zlink raw A trigger/stats, B request/command/stats | framework A trigger/stats, B endpoint/stats |
+|------|------|------|------|------|
+| `dotnet` | 5200-5219 | 5200/5201, 5202/5203 | 5205/5206, 5207/5208/5209 | 5212/5213, 5214/5215 |
+| `node` | 5220-5239 | 5220/5221, 5222/5223 | 5225/5226, 5227/5228/5229 | 5232/5233, 5234/5235 |
+| `java` | 5240-5259 | 5240/5241, 5242/5243 | 5245/5246, 5247/5248/5249 | 5252/5253, 5254/5255 |
+| `kotlin`(보조, §10.5) | 5260-5279 | 5260/5261, B는 java 대역 5242/5243 | 없음 | 5272/5273, B는 java 대역 5254/5255 |
+| `cpp` | 5280-5299 | 5280/5281, 5282/5283 | 5285/5286, 5287/5288/5289 | 5292/5293, 5294/5295 |
+| C 기준(client-driven) | 6200-6219 | 6200/6201, 6202/6203 | 6205/6206, 6207/6208/6209 | 없음 |
 
-각 대역의 마지막 두 포트(`+8`, `+9`)는 예비로 남긴다.
+각 대역의 `+16`~`+19`는 예비다. runner는 측정 시작 전에 자기 대역의 포트가 비어 있는지 확인한다.
+사용 중이면 다른 포트로 옮기지 않고 중단한다. 포트를 옮기면 결과에 기록된 endpoint와 실제
+endpoint가 어긋난다. Kotlin 보조 셀은 Java의 B를 그대로 쓰므로 Java 측정과 같은 시간에 돌리지
+않는다(한 번에 한 언어).
 
-`dotnet` 행은 `framework/languages/dotnet/bench/with-grpc/run_local.sh`가 이미 사용하는 값이고,
-C 기준 행은 `bindings/c/bench/with_grpc`의 server와 client가 이미 사용하는 값이다. C 기준
-bench에는 framework 계층과 stats endpoint가 없고, 선택 항목인 ZMQ 비교 server가 `6079`를
-사용한다.
+## 10. server-driven 실행 모델
 
-runner는 측정 시작 전에 자기 대역의 포트가 비어 있는지 확인한다. 사용 중이면 다른 포트로
-옮기지 않고 중단한다. 포트를 옮기면 결과에 기록된 endpoint와 실제 endpoint가 어긋난다.
+### 10.1 역할
+
+| 역할 | process 수 | 하는 일 |
+|------|-----------|---------|
+| trigger client | 1 (runner) | A의 trigger endpoint에 HTTP `POST /bench/start`를 보낸다. 부하를 만들지 않고 결과도 세지 않는다 |
+| source A | 구현마다 1 | trigger를 받으면 §10.3의 logical stream으로 B에 request 또는 send를 반복하고, 완료·지연·오류를 자기가 집계해 셀 원본 JSON을 쓴다. stats endpoint로 진행 상태를 노출한다 |
+| target B | 구현마다 1 | request는 같은 payload로 echo하고, send는 header를 읽어 수신 수와 수신 latency를 센다. stats endpoint로 값을 노출한다 |
+
+세 구현의 A·B는 서로 독립된 process 쌍이다. 같은 언어 안에서도 한 번에 한 쌍만 측정한다.
+
+### 10.2 trigger 계약
+
+공통 perf 규격(`framework/doc/framework/common/perf/README.ko.md` §4.2, §5.1, §16)의 trigger·
+admin 계약을 그대로 쓴다. 요청과 응답은 JSON이고 다섯 언어가 같은 필드를 쓴다.
+
+```text
+POST http://127.0.0.1:<A trigger>/bench/start
+{ "runId": "...", "cellId": "...", "pattern": "request-window",
+  "payloadBytes": 1024, "phase": "warmup" | "active",
+  "durationMs": 5000, "requestWindow": 100, "sendConcurrency": 8 }
+→ 200 { "accepted": true, "runId": "...", "cellId": "...", "phase": "active", "startedAt": <monotonic ns> }
+```
+
+- 한 phase는 한 번만 시작한다. 같은 `runId`·`cellId`·`phase`의 중복 trigger는 같은 시작
+  acknowledgement를 돌려주고 두 번째 부하를 만들지 않는다.
+- trigger는 pattern·payload·duration·window·concurrency를 **전달만** 하고 규격 값을 바꾸지
+  않는다. 기본값은 §3이 정한 값이다.
+- `GET http://127.0.0.1:<A stats>/bench/stats`와 `GET http://127.0.0.1:<B stats>/bench/stats`는
+  phase, 제출·완료·오류 수, 수신 수, 현재 in-flight를 돌려준다. settle(§3)의 폴링 대상이다.
+- trigger·stats의 HTTP 왕복은 측정 operation이 아니며 `throughput`·`latency`에 들어가지 않는다.
+
+### 10.3 logical stream과 패턴 대응
+
+A는 B로 향하는 독립된 부하 흐름을 **logical stream**으로 돌린다. 패턴은 stream 수와 stream당
+in-flight로 표현한다.
+
+| 패턴 | stream 수 | stream당 in-flight | 의미 |
+|------|-----------|--------------------|------|
+| `request-serial` | 1 | 1 | 요청 하나를 보내고 reply 뒤 다음 요청 |
+| `request-window` | `request_window`(기본 100)을 stream들이 나눠 갖는다. 기본은 stream 1개에 in-flight 100 | 합계 = `request_window` | 미완료 request 수를 window로 유지 |
+| `request-backpressure` | 1 | 상한 없음 | admission backpressure를 만날 때까지 제출 |
+| `send-saturation` | `send_concurrency`(기본 8) | 1 (send는 완료 통지까지) | reply 없는 command 경로 |
+
+stream 수와 stream당 in-flight는 셀 원본에 기록한다(§4). 언어 harness가 stream을 어떻게
+구현하는지(thread, task, coroutine, event loop)는 언어마다 다르며 §8.2처럼 결과에 남긴다.
+
+### 10.4 셀 순서
+
+1. runner가 자기 언어 대역(§9)이 비어 있는지 확인한다.
+2. 구현의 B를 띄우고 stats endpoint가 응답할 때까지 기다린다(상한 30초).
+3. 구현의 A를 띄우고 A가 B에 연결해 route ready를 보고할 때까지 기다린다(상한 30초). A의 stats가
+   `ready=false`면 셀을 시작하지 않고 그 사실을 기록한다.
+4. `phase=warmup` trigger → A가 warmup을 끝내고 stats에 `phase=idle`을 보고할 때까지 기다린다.
+5. `phase=active` trigger → `durationMs` 뒤 A가 measured 구간을 닫는다.
+6. settle: B(그리고 A)의 stats를 폴링해 수신·완료 수가 더는 늘지 않을 때까지 기다린다(상한 30초,
+   §3의 오염 규칙 그대로).
+7. A가 셀 원본 JSON을 `log/<lang>/<stamp>/`에 쓰고 `RESULT` 라인을 낸다. runner가 B의 stats를
+   같은 JSON의 `target_stats`에 합친다.
+8. A·B를 종료한다. 다음 셀은 새 process 쌍으로 시작한다(같은 process를 여러 셀에 재사용하지
+   않는다 — 앞 셀의 잔여 상태가 다음 셀에 들어가는 것을 막기 위해).
+
+gRPC 구현의 A는 같은 trigger listener를 갖고, B로 향하는 unary stub을 stream 수만큼 돌린다.
+gRPC server 구성은 언어 기본값을 두고 결과에 기록한다(§8.2).
+
+### 10.5 Kotlin 보조 셀
+
+Kotlin은 Java와 같은 binding·server·codec을 쓰므로 전체 matrix에서 제외한다. 대신 Kotlin 호출
+층의 비용을 보여 주는 보조 셀 둘 — `grpc-kotlin`(coroutine stub)과 `zlink-framework-kotlin`
+(suspend 호출)의 `request-window @1024` — 을 Java 행 옆에 싣는다. A만 Kotlin이고 B는 Java
+바이너리를 §9의 Java 대역에서 그대로 쓴다.
