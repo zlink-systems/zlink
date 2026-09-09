@@ -4770,6 +4770,25 @@ committedQueuesAreRetiredAcrossActorReturnToPreviousSpot`·`ZLinkServiceOperatio
 timing 민감 테스트 2건(ActorDispatchSerials·ServiceOperationRegistry)과 Kotlin bounded queue는 다음 캠페인 항목으로 넘긴다(부하 아래
 재현·계약 기반 대기로 수정, 허용치 완화 금지). (3) framework Java CI를 별도 워크플로우로 둘지는 B와 협의.
 
+### D-BP52 (2026-09-09 09:50) STREAM CCU 10k — Core 결함 확정·수정·main 병합(`c72bc2dc63`): pipe 최소 예약 admission이 queue count 0의 초기 budget을 써 ENOBUFS
+
+**사실**(astra, log `doc/perf/perf/bindings-0.17.0/log/2026-09-09-core-ccu-10k.ko.md`): 0.17.4에서 5,000 connect는 전부 성공하지만 서버 monitor가
+`ACCEPT_FAILED/ENOBUFS(105)`를 받아 ready 3,517/5,000에서 barrier 중단 → 러너 STOP → client START wait `ECANCELED(125)` exit 2. 원인은
+`ctx_physical_queue_registry.cpp:432`의 pair 최소 예약 admission이 초기 plan(queue count 0, Balanced 512 MiB 고정 cap)의
+`effective_core_budget_bytes`를 그대로 써서, queue-count 기반 cap을 도입한 `2cea03c0161`에서 예약 경로가 빠진 기존 결함. CCU-2~5(`cabd63a9b8`)의
+attach O(N²) 수정과 별개. CppServer/Asio 대조군에는 이런 context budget 예약 단계가 없다.
+
+**수정:** 예약 상태를 `{bytes, directions}`로 관리하고 새 pair를 포함한 방향 수로 `auto_hwm_effective_budget_bytes()`를 계산(§06 §2 effective cap·
+pair 원자 예약 유지, manual budget·profile cap·양방향 원자 거부 유지). unit test 5개 추가. C perf 러너에 monitor 이벤트·START wait errno 진단과
+dirty provenance 표시 보강(측정 조건 불변).
+
+**검증**(astra 전용 prefix, Release/LTO): Core ctest 213/213(valgrind hotpath_gate 포함); STREAM tcp 64 B 1,000 = 452,459 ops/s(0.17.4 대비 +0.55 %),
+5,000 = 408,510, 10,000 = 396,601; 10,000 × 6 크기 전부 PASS; DD·DR REQREP tcp 64 B 회귀 없음. 계약 조건(connect concurrency 1024, ready timeout
+10 s, monitor HWM 4,096,000 B) 불변.
+
+**결정(사용자, 09:30·09:40):** B 전달 없이 여기서 완료 — 브랜치 `fix/core-ccu-10k`를 main에 fast-forward 병합(`c72bc2dc63`). 0.17.5 Core 릴리스에
+포함하고, 릴리스 뒤 공식 0.17.5 prefix로 STREAM 1k/5k/10k(6 크기)를 계획서 STREAM 행에 clients=10,000 값으로 별도 기록한다(D-BP47 종결).
+
 ## D-B251 (2026-09-08 15:25, 머신 B) 사용자 지시 — macOS 실패를 병렬로 미리 수정해 0.17.4가 바로 빌드되게: MAC-1(Claude) 착수
 
 **절차**: macOS 머신 없음 → 진단 workflow `core-macos-test.yml`(workflow_dispatch, macos-15, ctest 정규식 입력, serial -j1)을 브랜치 `wip/mac-1`(베이스 `wip/0.17.3-all2` + Intel 제거·build.sh gating 커밋 cherry-pick)에 추가하고 Actions로 재현·검증 loop. 진단 run 34190928956(main, 새 gating)의 macOS ARM64 실패 목록을 확정 입력으로. 알려진 실제 실패: auto-HWM applied limit −1(`test_ctx_options:657`), xpub NODROP blocking publish timeout(`test_xpub_nodrop:243`), `test_stream_packet_progress`; timeout군은 병렬 실행 제거 뒤 재판정. 수정은 `__APPLE__` 분기 최소, Linux 동작 불변. patch `all-artifacts/MAC-1.patch` → 0.17.4 병합.
