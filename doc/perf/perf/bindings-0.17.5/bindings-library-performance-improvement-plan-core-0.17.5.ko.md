@@ -718,6 +718,26 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 > 직접 확인하지 못한다. C·binding이 같은 release runtime과 같은 auto-HWM balanced 프로파일,
 > 같은 Effective Options로 실행되므로 effective HWM은 동일한 것으로 본다.
 
+<!--SUMMARY_START-->
+
+#### 언어별 C 대비 평균 (진행 요약, 자동 갱신)
+
+| 언어 | Core | Single 평균(tput% / lat중앙×) | Multi 평균(tput% / lat중앙×) |
+|------|------|------------------------------|------------------------------|
+| cpp | 0.17.4 | 86.5% / 1.03× | 99.4% / 1.02× (3 NA) |
+| dotnet | 0.17.5 | 84.5% / 0.92× | 90.9% / 0.92× |
+| java | 0.17.5 | 88.5% / 1.01× | 63.6% / 1.13× |
+| node | 0.17.5 | 미측정 | 미측정 |
+| go | 0.17.5 | 미측정 | 미측정 |
+| rust | 0.17.5 | 미측정 | 미측정 |
+| python | 0.17.5 | 미측정 | 미측정 |
+
+> 위는 각 (언어, suite)의 **모든 측정 셀** throughput ratio 산술평균과 latency ratio
+> 중앙값이다(전 transport·pattern·size 통합, 참고용 개괄). 셀별 판정과 pattern 그룹 목표는
+> §9의 상세 표를 따른다. C++는 0.17.4, 나머지는 0.17.5 baseline. NA는 실패/미측정 셀 수.
+
+<!--SUMMARY_END-->
+
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
