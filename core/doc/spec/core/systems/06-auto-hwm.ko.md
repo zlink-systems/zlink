@@ -119,6 +119,13 @@ DEALER-ROUTER single pipe도 Application 방향 한 개로 등록한다. 별도 
 Application water-filling의 방향 수를 추가하거나 줄이지 않는다.
 
 - application 방향: 역할별 하한을 원자적으로 예약한다. 두 방향을 모두 예약할 수 없으면 attach를 공개하기 전에 전체 예약을 거절하고 일부 방향만 등록하지 않는다.
+  이 admission이 쓰는 budget은 **지금 예약하려는 위상**으로 계산한다 — 명시적 Core budget이
+  있으면 그 값을, 없으면 이미 예약된 application 방향 수에 이번 쌍의 두 방향을 더한 수로
+  effective cap을 구해 그 budget을 쓴다. 이미 기록한 plan의 budget이나 방향 수가 0인 seed
+  budget으로 판정하지 않는다. plan snapshot은 pipe 생성보다 늦을 수 있고, 고정 cap만으로
+  판정하면 같은 planner가 나중에 정상적으로 배분할 연결을 `ENOBUFS`로 거절하게 된다.
+  registry는 이를 위해 예약된 byte 합계와 예약된 방향 수를 함께 들고 있으며, 방향이 은퇴해
+  drain을 마치면 두 값을 함께 되돌린다.
 - 수동 방향도 attach 전에는 역할별 하한을 예약한다. 유한한 수동 HWM은 admission에 즉시
   적용하고, 다음 plan의 수동 예약 합계와 aggregate HWM 통계에 반영한다.
 - 수동 HWM이 `0`인 방향: admission은 계속 무제한이되, 다음 plan의 계산용 예약에는 역할별
