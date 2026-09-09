@@ -1,18 +1,10 @@
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot/../redis-common.ps1"
-. "$PSScriptRoot/../sample-build-common.ps1"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$CppRoot = (Resolve-Path (Join-Path $ScriptDir "../..")).Path
-$SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRoot -RequiredBinaries @(
-    "sample_cpp_framework_bbingo_api",
-    "sample_cpp_framework_bingo_matchmaking",
-    "sample_cpp_framework_bingo_play",
-    "sample_cpp_framework_bingo_session",
-    "sample_cpp_framework_bingo_client"
-)
-$BuildDir = $SampleBuild.BuildDir
-$BuildConfiguration = $SampleBuild.Configuration
+$CppRoot = Resolve-Path (Join-Path $ScriptDir "../..")
+$BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Join-Path $CppRoot "build" }
+$BuildConfiguration = if ($env:ZLINK_CPP_BUILD_CONFIGURATION) { $env:ZLINK_CPP_BUILD_CONFIGURATION } else { "Release" }
 $CTestBin = if ($env:CTEST_BIN) { $env:CTEST_BIN } else { "ctest" }
 $LogDir = Join-Path $ScriptDir "build/sample-logs"
 
@@ -20,7 +12,20 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $LogDir "*.log")
 
 function Find-Binary([string]$Name) {
-    return Get-ZlinkCppSampleBinary -Build $SampleBuild -Name $Name
+    $candidates = @(
+        (Join-Path $BuildDir $Name),
+        (Join-Path $BuildDir "$Name.exe"),
+        (Join-Path $BuildDir "$BuildConfiguration/$Name"),
+        (Join-Path $BuildDir "$BuildConfiguration/$Name.exe"),
+        (Join-Path $BuildDir "linux-ninja-debug/$Name"),
+        (Join-Path $BuildDir "linux-ninja-debug/$Name.exe")
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+    throw "Missing executable: $Name. Build C++ samples first or set ZLINK_CPP_BUILD_DIR."
 }
 
 $ApiBin = Find-Binary "sample_cpp_framework_bingo_api"

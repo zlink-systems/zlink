@@ -2,20 +2,11 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 . "$PSScriptRoot/../redis-common.ps1"
-. "$PSScriptRoot/../sample-build-common.ps1"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$CppRoot = (Resolve-Path (Join-Path $ScriptDir "../..")).Path
-$SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRoot -RequiredBinaries @(
-    "sample_cpp_framework_deliverydispatch_dispatch",
-    "sample_cpp_framework_deliverydispatch_courier_actor_node",
-    "sample_cpp_framework_deliverydispatch_customer_gateway",
-    "sample_cpp_framework_deliverydispatch_courier_session",
-    "sample_cpp_framework_deliverydispatch_tracking",
-    "sample_cpp_framework_deliverydispatch_client"
-)
-$BuildDir = $SampleBuild.BuildDir
-$BuildConfiguration = $SampleBuild.Configuration
+$CppRoot = Resolve-Path (Join-Path $ScriptDir "../..")
+$BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Join-Path $CppRoot "build" }
+$BuildConfiguration = if ($env:ZLINK_CPP_BUILD_CONFIGURATION) { $env:ZLINK_CPP_BUILD_CONFIGURATION } else { "Release" }
 $WaitAttempts = 300
 $WaitMilliseconds = 100
 $Processes = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
@@ -27,7 +18,17 @@ $FlowLogDir = Join-Path $RunDir "flow-logs"
 New-Item -ItemType Directory -Force -Path $LogDir, $ConfigDir, $FlowLogDir | Out-Null
 
 function Find-Binary([string]$Name) {
-    return Get-ZlinkCppSampleBinary -Build $SampleBuild -Name $Name
+    foreach ($candidate in @(
+        (Join-Path $BuildDir $Name),
+        (Join-Path $BuildDir "$Name.exe"),
+        (Join-Path $BuildDir "$BuildConfiguration/$Name"),
+        (Join-Path $BuildDir "$BuildConfiguration/$Name.exe"),
+        (Join-Path $BuildDir "linux-ninja-debug/$Name"),
+        (Join-Path $BuildDir "linux-ninja-debug/$Name.exe")
+    )) {
+        if (Test-Path $candidate) { return $candidate }
+    }
+    throw "Missing executable: $Name"
 }
 
 function Wait-Endpoint([string]$Name, [string]$Endpoint) {

@@ -2,25 +2,24 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 . "$PSScriptRoot/../redis-common.ps1"
-. "$PSScriptRoot/../sample-build-common.ps1"
 
-$ScriptDir = $PSScriptRoot
 $CppRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
-$SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRoot -RequiredBinaries @(
-    "sample_cpp_framework_zoneworld_zone_node",
-    "sample_cpp_framework_zoneworld_gateway",
-    "sample_cpp_framework_zoneworld_ops",
-    "sample_cpp_framework_zoneworld_client"
-)
-$BuildDir = $SampleBuild.BuildDir
-$BuildConfiguration = $SampleBuild.Configuration
+$BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Join-Path $CppRoot "build" }
+$BuildConfiguration = if ($env:ZLINK_CPP_BUILD_CONFIGURATION) { $env:ZLINK_CPP_BUILD_CONFIGURATION } else { "Release" }
 $RunDir = Join-Path ([System.IO.Path]::GetTempPath()) "zoneworld-cpp-$PID-$([Guid]::NewGuid().ToString('N'))"
 $LogDir = Join-Path $RunDir "logs"
 $ConfigDir = Join-Path $RunDir "config"
 New-Item -ItemType Directory -Force -Path $LogDir, $ConfigDir | Out-Null
 
 function Find-Binary([string]$Name) {
-    return Get-ZlinkCppSampleBinary -Build $SampleBuild -Name $Name
+    foreach ($candidate in @(
+        (Join-Path $BuildDir $Name), (Join-Path $BuildDir "$Name.exe"),
+        (Join-Path $BuildDir "$BuildConfiguration/$Name"), (Join-Path $BuildDir "$BuildConfiguration/$Name.exe"),
+        (Join-Path $BuildDir "linux-ninja-debug/$Name"), (Join-Path $BuildDir "linux-ninja-debug/$Name.exe")
+    )) {
+        if (Test-Path $candidate) { return $candidate }
+    }
+    throw "Missing executable: $Name"
 }
 
 function Wait-Port([string]$Name, [string]$Endpoint, [int]$TimeoutSeconds = 30) {
