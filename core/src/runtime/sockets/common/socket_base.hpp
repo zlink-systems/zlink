@@ -1019,6 +1019,8 @@ class socket_base_t : public own_t,
     void arm_send_recovery_after_backpressure ();
 
   protected:
+    // The caller owns receive state (receive sync or the public receive lease).
+    void notify_receive_progress_locked ();
     // Transfer a monitor-started command executor lease to a longer-lived
     // async socket consumer before registering that consumer.
     void retain_async_command_processing ();
@@ -1249,7 +1251,6 @@ class socket_base_t : public own_t,
     void finish_close_reap ();
     void materialize_pending_inprocs_before_reap ();
     void process_async_mailbox ();
-    void notify_receive_progress_locked ();
     void notify_receive_progress ();
     int wait_receive_progress (uint64_t observed_epoch_, int timeout_ms_);
     //  Stage 1 (plan 7.1): poll readiness consults this once per socket per
