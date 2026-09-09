@@ -19,7 +19,7 @@
 | --- | --- |
 | 측정 모델 | HTTP call은 부하 시작 신호, 측정 대상은 server A → server B 메시징 (§0.2) |
 | 포트 | A/B 쌍 구조에 맞게 새로 정한다(§3.4). 기존 대역과 겹치지 않게 언어당 20개 |
-| Kotlin | 포함한다(2026-09-09 재결정). A(요청 측)만 Kotlin(grpc-kotlin coroutine stub, `zlink-framework-kotlin` suspend 호출), B는 Java 바이너리 공유. 1차와 같은 구성이며 답하는 질문은 Kotlin 호출 층의 비용이다 |
+| Kotlin | **전체 matrix에서 제외하고 보조 셀 하나만 잰다**(2026-09-09 확정). Kotlin은 Java와 같은 binding·server·codec을 쓰므로 차이는 A 쪽 호출 층뿐이다. 보고서에 그 사실을 명시하고, `grpc-kotlin`(coroutine stub)과 `zlink-framework-kotlin`(suspend 호출)의 `request-window @1024` 한 셀씩만 Java 행 옆에 보조로 싣는다. B는 Java 바이너리 공유 |
 | Node framework 행 | codec `bytes` 미지원은 제품(framework Node codec) 결함이다. 수정 전까지 `unsupported`로 기록하고 codec 수정은 별도 작업 |
 | 보고서 | 새 공개 보고서를 쓰고 README와 zlink.systems에서 참조한다. 1차 결과는 병기하지 않는다 |
 | 버전 | 공개된 framework 0.10.0 + binding 0.17.6으로 시작하고, framework 0.11.0이 나오면 그 버전으로 다시 잰다 |
@@ -123,12 +123,11 @@ framework/bench/grpc/
 ├── doc/
 │   ├── dotnet.ko.md / .md         # 언어별 bench 문서(§5 공통 형식)
 │   ├── node.ko.md / .md
-│   ├── java.ko.md / .md
-│   ├── kotlin.ko.md / .md
+│   ├── java.ko.md / .md          # Kotlin 보조 셀 포함
 │   ├── cpp.ko.md / .md
 │   └── comparison.ko.md / .md     # gRPC 비교 보고서(공개)
 ├── tools/                         # 공용 집계기(현재 framework/bench/tools 이동)
-├── dotnet/  node/  java/  kotlin/  cpp/   # 언어별 runner·A/B server(현재 with-grpc 이동; kotlin은 A만)
+├── dotnet/  node/  java/  cpp/    # 언어별 runner·A/B server(현재 with-grpc 이동; kotlin A client는 java/ 아래)
 ├── c/                             # C 기준 bench(현재 bindings/c/bench/with_grpc 이동)
 ├── proto/                         # 다섯 언어가 공유하는 bench.proto (언어별 복제본 제거)
 └── log/<lang>/<stamp>/            # 측정 원본
@@ -170,7 +169,7 @@ request·command endpoint가 분리되어 다섯), 언어당 세 구현이므로
 | `dotnet` | 5200-5219 | 5200/5201, 5202 | 5205/5206, 5207/5208/5209 | 5212/5213, 5214/5215 |
 | `node` | 5220-5239 | 5220/5221, 5222 | 5225/5226, 5227/5228/5229 | 5232/5233, 5234/5235 |
 | `java` | 5240-5259 | 5240/5241, 5242 | 5245/5246, 5247/5248/5249 | 5252/5253, 5254/5255 |
-| `kotlin` | 5260-5279 | 5260/5261, 5262 | 5265/5266, 5267/5268/5269 | 5272/5273, 5274/5275 |
+| `kotlin`(보조) | 5260-5279 | 5260/5261, (B는 java 대역 5242) | 없음 | 5272/5273, (B는 java 대역 5254/5255) |
 | `cpp` | 5280-5299 | 5280/5281, 5282 | 5285/5286, 5287/5288/5289 | 5292/5293, 5294/5295 |
 | C 기준 | 6200-6219 | 6200/6201, 6202 | 6205/6206, 6207/6208/6209 | 없음 |
 
@@ -207,7 +206,7 @@ gRPC 구현의 A는 같은 HTTP trigger listener를 갖고, B로 향하는 unary
 | `.NET` | client → server A로 재구성. canonical perf runner의 `ServerSupport`(trigger·admin·stats)를 재사용 | `Zlink.Framework.Perf.ServerSupport`를 bench가 참조할 수 있게 공유 위치로 이동 또는 복제 없이 참조 | sol 1 |
 | Node | 같음 | framework 행은 codec bytes 지원이 선행(제품 결함, 사용자 결정: 별도 작업) — 그 전에는 `unsupported`로 기록 | sol 1 |
 | Java | 같음 | 1차의 reply 유실 재현(`repro/`)이 0.17.6에서 사라졌는지 확인 | sol 1 |
-| Kotlin | A만 Kotlin(coroutine stub·suspend 호출), B는 Java 바이너리 공유 | 없음 | terra 1 |
+| Kotlin(보조) | A만 Kotlin, `request-window @1024` 두 셀(`grpc-kotlin`, `zlink-framework-kotlin`), B는 Java 바이너리 공유 | 없음 | Java job에 포함 |
 | C++ | 같음 + `zlink-framework-cpp` 6셀 구현 | framework C++ HTTP hosting(trigger listener)은 framework 자체 기능으로 있음 | astra 1 |
 | C 기준 | A/B 재구성 없이 유지(HTTP trigger 없음). formula 1 분모 안정화가 별도 항목 | 기준선 안정화 job | astra 1 |
 | 집계기 | S2S 셀 스키마·A/B 병합·언어별 문서 표 생성 | 테스트 유지 | sol 1 |
@@ -217,7 +216,7 @@ gRPC 구현의 A는 같은 HTTP trigger listener를 갖고, B로 향하는 unary
 
 ## 5. 언어별 bench 문서의 공통 형식
 
-다섯 문서(`dotnet`, `node`, `java`, `kotlin`, `cpp`)가 같은 절 번호와 제목을 갖는다. 현재 `.NET` README를
+네 문서(`dotnet`, `node`, `java`, `cpp`)가 같은 절 번호와 제목을 갖는다. Kotlin 보조 셀은 Java 문서의 한 절로 둔다. 현재 `.NET` README를
 이 형식으로 고쳐 기준으로 삼고 `framework/bench/grpc/doc/`에 둔다.
 
 1. 비교 대상 — 그 언어의 세 구현 이름과 사용하는 API(표)
@@ -261,10 +260,10 @@ gRPC 구현의 A는 같은 HTTP trigger listener를 갖고, B로 향하는 unary
 | S-1 | bench 위치 통합(§2.1): `git mv`, build 참조 경로 수정, 집계기 이동, 언어별 runner가 새 위치에서 빌드·1셀 smoke 통과 | `framework/bench/grpc/` | codex sol 1 |
 | S0 | 규격 개정(§3 실행 조건·§4 출력·§9 포트·새 §10 S2S 모델)과 이동, `.NET` 문서를 §5 형식으로, 사이트 nav | 규격 ko/en, .NET 문서 | 감독자 |
 | S1 | 집계기 S2S 스키마 + `.NET` runner 개정 + `.NET` 3-run | 원본·표 | codex sol ×2 |
-| S2 | Node·Java·Kotlin runner 개정과 3-run(1차 결함이 재현되면 회귀로 기록하고 멈춘다) | 원본·표 | codex sol/terra |
+| S2 | Node·Java runner 개정과 3-run + Kotlin 보조 셀 2개(1차 결함이 재현되면 회귀로 기록하고 멈춘다) | 원본·표 | codex sol |
 | S3 | C++ runner 개정 + `zlink-framework-cpp` 구현 + 3-run | 원본·표 | codex astra |
 | S4 | `zlink-c` 기준선 안정화(원인 규명 후 최소 수정) | 판정 게재 가능 여부 | codex astra |
-| S5 | 언어별 문서 4개(Node·Java·Kotlin·C++) + 비교 보고서 ko/en, README·사이트 링크 | 공개 문서 | 감독자 |
+| S5 | 언어별 문서 3개(Node·Java·C++; Java 문서에 Kotlin 보조 절) + 비교 보고서 ko/en, README·사이트 링크 | 공개 문서 | 감독자 |
 | S6 | bench를 로컬 gate(`scripts/gate/framework-gate.sh`)에 빌드만 편입 | 재파손 방지 | 감독자 |
 
 각 job은 원인 하나, 1.5시간 상한, 브리프는 `doc/plan/fw-bench-worklog/briefs/fwb2-<id>.prompt`,
