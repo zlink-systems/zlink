@@ -1370,7 +1370,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         _ = _node.CloseBoundSession(ToNativeActor(actor), 0, timeout);
     }
 
-    public void OnNodeRoute(Action<ZLinkBackendRouteReceived> handler)
+    public void OnNodeRoute(
+        Action<IReadOnlyList<ZLinkBackendRouteReceived>> handler)
     {
         _pump.SetNodeRouteHandler(handler);
     }

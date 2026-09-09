@@ -57,12 +57,17 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
     private readonly Queue<ZLinkMeshQueuedRecord> _records = new();
     private readonly ZLinkStateLane _lane = new();
     private ulong _pendingBytes;
+    private int _applicationAdmissionRecords;
     private bool _claimed;
 
     internal bool HasRecords => AwaitStateLane(
         _lane.RunAsync(() => _records.Count != 0));
 
     internal int Count => AwaitStateLane(_lane.RunAsync(() => _records.Count));
+
+    internal bool AllRecordsHaveApplicationAdmission => AwaitStateLane(
+        _lane.RunAsync(() => _records.Count != 0
+            && _applicationAdmissionRecords == _records.Count));
 
     internal bool TryEnqueue(
         ZLinkMeshQueuedRecord record,
@@ -80,6 +85,8 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
                     byteBudget))
                 return false;
             _records.Enqueue(record);
+            if (record.HasApplicationJobAdmission)
+                _applicationAdmissionRecords++;
             _pendingBytes = checked(_pendingBytes + pendingBytes);
 
             // Enqueue accounting must precede the callback. A dequeue can
@@ -133,6 +140,8 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
             return (null, 0);
 
         var record = _records.Dequeue();
+        if (record.HasApplicationJobAdmission)
+            _applicationAdmissionRecords--;
         var pendingBytes = record.PendingBytes;
         _pendingBytes -= pendingBytes;
         return (record, pendingBytes);
@@ -154,6 +163,7 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
                 removed.Add((record, record.PendingBytes));
             }
             _pendingBytes = 0;
+            _applicationAdmissionRecords = 0;
             _claimed = false;
         }));
 
@@ -207,6 +217,9 @@ internal sealed class ZLinkMeshQueuedRecord : IDisposable
     internal ulong PayloadBytes => _payloadBytes;
 
     internal ulong PendingBytes => _pendingBytes;
+
+    internal bool HasApplicationJobAdmission =>
+        _payloadOwner is ZLinkApplicationJobQueueRecordOwner;
 
     internal IReadOnlyList<Message> TakeParts() =>
         Interlocked.Exchange(ref _parts, null) ?? Array.Empty<Message>();

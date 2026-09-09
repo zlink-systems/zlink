@@ -1,6 +1,7 @@
 using Systems.Zlink;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Service;
 
@@ -453,7 +454,9 @@ internal interface IMeshNodeMonitor : IDisposable, IAsyncDisposable
 
 internal readonly record struct MeshReadyRecord(
     MeshOwnerKind OwnerKind, MeshReadyDomains Domain,
-    string SpotId, ActorRef Actor);
+    string SpotId, ActorRef Actor,
+    int AvailableRecords = 1,
+    bool ApplicationAdmissionReserved = false);
 
 internal sealed class MeshReadyBatch : IDisposable
 {
@@ -481,8 +484,13 @@ internal sealed class MeshReceiveBatch : IDisposable
     internal long Bytes { get; private set; }
     public int Count => _entries.Count;
     public MeshReceiveRecord this[int index] => _entries[index].Record;
-    public IReadOnlyList<Message> RetainMessage(int index) =>
-        _entries[index].Parts.Select(Message.From).ToArray();
+    public IReadOnlyList<Message> RetainMessage(int index)
+    {
+        var entry = _entries[index];
+        return entry.Record.ApplicationPayloadView is { } view
+            ? view.RetainMessages()
+            : entry.Parts.Select(Message.From).ToArray();
+    }
     internal bool CanAdd(long bytes)
     {
         if (Count == 0) return true;
@@ -577,7 +585,8 @@ internal struct MeshReceiveRecord
         byte messageFollowHopCount = 0,
         ulong replyRouteId = 0,
         ulong deadlineUnixMs = 0,
-        Func<RequestResult, uint, SubmitResult>? terminalReply = null)
+        Func<RequestResult, uint, SubmitResult>? terminalReply = null,
+        ZLinkMultipartPayloadView? applicationPayloadView = null)
     {
         Kind = kind; Domain = domain; SourceNodeRid = sourceNodeRid;
         SourceSpotId = sourceSpotId; SourceBindingGeneration = sourceBindingGeneration;
@@ -593,6 +602,7 @@ internal struct MeshReceiveRecord
         MessageFollowHopCount = messageFollowHopCount;
         ReplyRouteId = replyRouteId;
         DeadlineUnixMs = deadlineUnixMs;
+        ApplicationPayloadView = applicationPayloadView;
     }
     public MeshRecordKind Kind { get; }
     public MeshReadyDomains Domain { get; }
@@ -616,6 +626,7 @@ internal struct MeshReceiveRecord
     public ulong ReplyRouteId { get; }
     public ulong DeadlineUnixMs { get; }
     public MeshRecordPayload? KindData { get; }
+    internal ZLinkMultipartPayloadView? ApplicationPayloadView { get; }
     // Ingress records carry the payload size once it is known. This keeps the
     // mailbox and dispatch pump from rediscovering envelope boundaries.
     internal ulong? ApplicationPayloadBytes { get; set; }
