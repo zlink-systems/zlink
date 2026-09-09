@@ -54,7 +54,7 @@ core 0.17.4의 통과 비율이나 완료 근거로 사용하지 않는다.
 
 | core 변경 | 관측되는 셀 |
 |---|---|
-| attach 시 context 전체 Auto-HWM 동기 재계산 제거(증분 확장, 수렴은 debounce 재계산) | 연결 수립 구간, client 수가 큰 Multi suite |
+| attach 시 context 전체 Auto-HWM 동기 재계산 제거(증분 확장, 수렴은 debounce 재계산) | 연결 수립 구간(§3.3의 client 수 안에서) |
 | STREAM decoder/encoder read target이 첫 full read에서 2배 성장 | 65536 B 이상 수신 셀 (tcp·ws·wss·tls) |
 | WS/WSS bounded gather — 큰 body를 header batch와 한 write로 제출 | ws·wss의 routed 큰 payload 셀과 그 latency |
 | context 종료를 monitor teardown보다 먼저 게시, blocking receive가 매 턴 ETERM 관측 | 러너 종료·drain 경로(`status: complete` 판정) |
@@ -291,6 +291,13 @@ core 0.17.4의 현재 multi runner 기본값을 따른다. 이전 표의 256 KiB
 | 64 KiB | 65536 | 측정 |
 | 128 KiB | 131072 | 측정 |
 
+### 3.3 STREAM client 수
+
+`MULTI_STREAM`은 **client 100개로 측정한다**. 측정 호스트가 노트북이라 그 이상의 동시
+접속에서는 측정 자체가 무너진다. C와 binding 모두 같은 100으로 맞추고, report의 실제
+client 수가 100인지 확인한다(memory guard가 줄였으면 그 결과는 paired 비교에 쓰지 않는다).
+client 수를 늘려 잡은 결과는 이 문서의 판정에 사용하지 않는다.
+
 `MULTI_STREAM`의 현재 기본 크기는 64, 256, 1024, 65536 bytes다. 따라서 상세 표에서
 `MULTI_STREAM`의 4096과 131072 셀은 `해당 없음`으로 시작한다. runner 정책이
 변경되어 이 크기들이 공식 기본 측정 대상이 되면, C와 모든 binding의 조건을 함께 맞춘
@@ -368,7 +375,7 @@ C와 binding을 paired 측정할 때 같은 session tag를 사용하고 다음 �
 | host | OS, kernel, CPU model, 논리 CPU 수, memory |
 | CPU 상태 | governor, CPU pinning, 측정 중 다른 고부하 작업 유무 |
 | 명령 | C와 binding에 사용한 전체 명령과 성능 관련 환경 변수 |
-| 조건 | suite, pattern, transport, size, duration, runs, client 수, I/O thread 수 |
+| 조건 | suite, pattern, transport, size, duration, runs, client 수(STREAM은 §3.3의 100), I/O thread 수 |
 | 결과 | report 경로, `status`, Effective Options, auto-HWM detail |
 | pair | C와 binding에 공통으로 부여한 session tag |
 
@@ -685,6 +692,18 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 모든 언어는 같은 열과 같은 상태 규칙을 사용한다. 상세 표의 상태가 진행 상태 요약보다
 우선한다. 상세 표에 `미측정` 또는 `미달`이 하나라도 남아 있으면
 해당 언어는 완료가 아니다.
+
+> **측정 조건(2026-09-09~, 전 언어 공통).** 이번 캠페인의 paired 측정은 GitHub release
+> `core/v0.17.4` runtime(`~/.cache/zlink/core/0.17.4/linux-x64/lib/libzlink.so.0.17.4`,
+> `core_source=release`)으로, `--core-version 0.17.4 --duration 5 --runs 1`, io_threads=1,
+> auto-HWM balanced 조건에서 실행한다. C와 binding에 같은 pair tag(`c0174-<lang>-<suite>-<transport>`)를
+> 부여하고 순차(비병렬) 실행한다. 상세 표의 size 셀에는 throughput ratio(%)를, 메모 열에는
+> `판정 aggregate(mean tput%) / lat(median×) · pair tag · 결과 TSV`를 적는다. 원시 반복값·report
+> 경로·Effective Options는 `log/results-<lang>-<suite>.tsv`에 있다.
+> **caveat:** release runtime은 monitor snapshot ABI가 없어 러너가 auto-HWM Detail 출력을
+> 끈다(`PERF_PRINT_AUTO_HWM_DETAIL=0`). 따라서 이번 캠페인은 `MsgUnit(B)` 일치를 report로
+> 직접 확인하지 못한다. C·binding이 같은 release runtime과 같은 auto-HWM balanced 프로파일,
+> 같은 Effective Options로 실행되므로 effective HWM은 동일한 것으로 본다.
 
 ### 9.1 C++
 
