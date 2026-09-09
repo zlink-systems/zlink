@@ -390,6 +390,9 @@ nav:
               - "Cancellation And Shutdown": common/spec/server/01-execution/03-cancellation-and-shutdown.md
               - "Application Job Queue And Backpressure": common/spec/server/01-execution/04-application-job-queue-and-backpressure.md
               - "Payload Ownership And Codec": common/spec/server/01-execution/05-payload-ownership-and-codec.md
+              - "State Ownership And Lanes": common/spec/server/01-execution/06-state-ownership-and-lanes.md
+              - "Serial Executor Layers": common/spec/server/01-execution/07-serial-executor-layers.md
+              - "Messaging Hot Path": common/spec/server/01-execution/08-messaging-hot-path.md
           - Channel and transport:
               - "Channel and transport overview": common/spec/server/02-channel-transport/README.md
               - "RouteMesh Topology": common/spec/server/02-channel-transport/01-channel-topology.md
