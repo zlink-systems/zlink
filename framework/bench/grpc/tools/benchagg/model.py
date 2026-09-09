@@ -91,6 +91,21 @@ class Cell:
     run: str
     source: str = ""
 
+    #: ``None`` is the client-driven legacy shape. Server-driven records
+    #: name the process that wrote them and are joined by ``run_id`` / ``cell_id``.
+    role: str | None = None
+    run_id: str | None = None
+    cell_id: str | None = None
+    trigger: dict[str, Any] = field(default_factory=dict)
+    streams: dict[str, Any] = field(default_factory=dict)
+    target_stats: dict[str, Any] = field(default_factory=dict)
+
+    #: A server-driven source is complete only after target stats have either
+    #: been embedded by the runner or joined from a target record. Incomplete
+    #: records remain visible but never contribute to medians or judgements.
+    status: str = "complete"
+    incomplete_reason: str | None = None
+
     throughput_per_second: float | None = None
     bandwidth_mb_s: float | None = None
     latency_mean_ms: float | None = None
@@ -160,6 +175,7 @@ class Cell:
     drain_ms: float | None = None
     drain_bound_hit: bool | None = None
     server_received_at_close: int | None = None
+    target_errors: int | None = None
 
     contaminated: bool = False
     contamination_reason: str | None = None
@@ -225,6 +241,18 @@ class Cell:
             return None
         return self.server_received_at_close is not None
 
+    @property
+    def complete(self) -> bool:
+        return self.status == "complete"
+
+    @property
+    def stream_count(self) -> int | None:
+        return self.streams.get("count")
+
+    @property
+    def in_flight_per_stream(self) -> int | None:
+        return self.streams.get("inFlightPerStream")
+
 
 @dataclass
 class RunSet:
@@ -241,11 +269,17 @@ class RunSet:
             self.runs.append(cell.run)
 
     def for_key(self, key: CellKey) -> list[Cell]:
-        """Every run's copy of one cell, contaminated cells excluded (FB-008)."""
-        return [c for c in self.cells if c.key == key and not c.contaminated]
+        """Complete run copies, excluding contaminated and incomplete cells."""
+        return [
+            c for c in self.cells
+            if c.key == key and not c.contaminated and c.complete
+        ]
 
     def contaminated(self) -> list[Cell]:
         return [c for c in self.cells if c.contaminated]
+
+    def incomplete(self) -> list[Cell]:
+        return [c for c in self.cells if not c.complete]
 
     def keys(self) -> list[CellKey]:
         return sorted({c.key for c in self.cells})

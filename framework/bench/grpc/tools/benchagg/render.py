@@ -22,8 +22,8 @@ _SEND_PATTERN = "send-saturation"
 
 _SPEC4_HEADER = (
     "      | Implementation          | Size     |       Throughput |    Bandwidth "
-    "|  Lat.Mean(ms) |   Lat.P95(ms) |   Lat.P99(ms) | Client CPU | Client Mem "
-    "| Server CPU | Server Mem |"
+    "|  Lat.Mean(ms) |   Lat.P95(ms) |   Lat.P99(ms) | Source CPU | Source Mem "
+    "| Target CPU | Target Mem |"
 )
 _SPEC4_RULE = (
     "      |-------------------------|----------|------------------|--------------"
@@ -52,6 +52,15 @@ def _num(value: float | None, decimals: int, suffix: str = "") -> str:
     return f"{value:.{decimals}f}{suffix}"
 
 
+def _reportable_keys(rows, payload_sizes, implementations=None):
+    """Rows with at least one complete run; incomplete-only rows stay separate."""
+    return (
+        key
+        for key in ordered_keys(rows, payload_sizes, implementations)
+        if rows[key].run_count > 0
+    )
+
+
 def render_spec4_table(rows: dict[CellKey, Row], payload_sizes, implementations=None) -> str:
     """The spec 4 report table, in the column layout the spec fixes.
 
@@ -62,7 +71,11 @@ def render_spec4_table(rows: dict[CellKey, Row], payload_sizes, implementations=
     """
     lines: list[str] = []
     for pattern in PATTERNS:
-        keys = [k for k in ordered_keys(rows, payload_sizes, implementations) if k.pattern == pattern]
+        keys = [
+            key
+            for key in _reportable_keys(rows, payload_sizes, implementations)
+            if key.pattern == pattern
+        ]
         if not keys:
             continue
         lines.append(f"  > Benchmarking current for {pattern}...")
@@ -111,7 +124,7 @@ def render_result_lines(rows: dict[CellKey, Row], payload_sizes, implementations
         "server_memory_mb": "server_memory_mb",
     }
     lines = []
-    for key in ordered_keys(rows, payload_sizes, implementations):
+    for key in _reportable_keys(rows, payload_sizes, implementations):
         row = rows[key]
         for metric in RESULT_METRICS:
             value = row.values.get(field_of[metric])
@@ -127,11 +140,11 @@ def render_median_table(rows: dict[CellKey, Row], payload_sizes, implementations
     """Medians in markdown, the shape a language summary document carries."""
     header = (
         "| Pattern | Size | Implementation | Throughput | Lat.Mean(ms) | Lat.P95(ms) "
-        "| Lat.P99(ms) | Client CPU% | Client cores | Client MB | Server CPU% | Server MB "
+        "| Lat.P99(ms) | Source CPU% | Source cores | Source MB | Target CPU% | Target MB "
         "| drain ms |"
     )
-    lines = [header, "|" + "---|" * 15]
-    for key in ordered_keys(rows, payload_sizes, implementations):
+    lines = [header, "|" + "---|" * 13]
+    for key in _reportable_keys(rows, payload_sizes, implementations):
         row = rows[key]
         value = row.values
         throughput = value.get("throughput_per_second")
@@ -160,11 +173,12 @@ def render_diagnostics_table(rows: dict[CellKey, Row], payload_sizes, implementa
     """
     header = (
         "| Pattern | Size | Implementation | peak_in_flight | window | abandoned "
-        "| depth (thr x lat) | drain ms | drain bound hit | client cores "
-        "| saturation metric | reading | declared ceiling | saturated | send counted by |"
+        "| depth (thr x lat) | drain ms | drain bound hit | source cores "
+        "| saturation metric | reading | declared ceiling | saturated | target received "
+        "| errors | send counted by |"
     )
-    lines = [header, "|" + "---|" * 15]
-    for key in ordered_keys(rows, payload_sizes, implementations):
+    lines = [header, "|" + "---|" * 17]
+    for key in _reportable_keys(rows, payload_sizes, implementations):
         row = rows[key]
         depth = row.in_flight_depth
         drain = row.values.get("drain_ms")
@@ -185,7 +199,89 @@ def render_diagnostics_table(rows: dict[CellKey, Row], payload_sizes, implementa
             f"| {row.saturation_metric} "
             f"| {_num(row.saturation_value, 3)} "
             f"| {'—' if ceiling is None else f'{ceiling:g}'} "
-            f"| {row.saturation_text()} | {counted} |"
+            f"| {row.saturation_text()} "
+            f"| {_num(row.values.get('server_received_at_close'), 0)} "
+            f"| {'—' if row.errors is None else row.errors} | {counted} |"
+        )
+    return "\n".join(lines)
+
+
+def render_companion_table(rows: dict[CellKey, Row], payload_sizes, implementations=None) -> str:
+    """Server-driven companion data required by spec 7.1.
+
+    Spec 4 carries stream declarations but currently has no trigger endpoint
+    field. The endpoint therefore remains ``n/a`` instead of being guessed from
+    the port table or a file name.
+    """
+    lines = [
+        "| Pattern | Size | Implementation | Streams | In-flight/stream | Trigger endpoint |",
+        "|---|---|---|---|---|---|",
+    ]
+    for key in _reportable_keys(rows, payload_sizes, implementations):
+        row = rows[key]
+        if not row.streams_reported:
+            count = in_flight = "n/a"
+        else:
+            count = "mixed" if row.stream_count_mixed else str(row.stream_count)
+            in_flight = (
+                "mixed"
+                if row.in_flight_per_stream_mixed
+                else "unbounded" if row.in_flight_per_stream is None
+                else str(row.in_flight_per_stream)
+            )
+        lines.append(
+            f"| {key.pattern} | {key.payload_size} | `{key.implementation}` "
+            f"| {count} | {in_flight} | n/a |"
+        )
+    lines.append("")
+    lines.append(
+        "`n/a` trigger endpoint means the spec 4 cell schema does not carry an endpoint field; "
+        "the aggregator does not infer one from spec 9 ports."
+    )
+    return "\n".join(lines)
+
+
+def render_doc_table(
+    rows: dict[CellKey, Row], payload_sizes, language: str,
+) -> str:
+    """Markdown ready for one language document and the comparison report."""
+    implementations = sorted(
+        {key.implementation for key in rows if key.implementation.endswith(f"-{language}")}
+    )
+    lines = [
+        "| Language | Pattern | Payload | Implementation | Throughput (3-run median) "
+        "| Unit | Lat.Mean(ms) | Lat.P95(ms) | Lat.P99(ms) | Source CPU | Source Mem "
+        "| Target CPU | Target Mem | Runs | G5 |",
+        "|---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for key in _reportable_keys(rows, payload_sizes, implementations):
+        row = rows[key]
+        value = row.values
+        throughput = value.get("throughput_per_second")
+        lines.append(
+            f"| {language} | {key.pattern} | {key.payload_size}B | `{key.implementation}` "
+            f"| {_num(None if throughput is None else throughput / 1000.0, 3)} "
+            f"| {unit_of(key.pattern)} "
+            f"| {_num(value.get('latency_mean_ms'), 3)} "
+            f"| {_num(value.get('latency_p95_ms'), 3)} "
+            f"| {_num(value.get('latency_p99_ms'), 3)} "
+            f"| {_num(value.get('client_cpu_percent'), 1, '%')} "
+            f"| {_num(value.get('client_memory_mb'), 1, ' MB')} "
+            f"| {_num(value.get('server_cpu_percent'), 1, '%')} "
+            f"| {_num(value.get('server_memory_mb'), 1, ' MB')} "
+            f"| {row.run_count} | {row.g5_status} |"
+        )
+    return "\n".join(lines)
+
+
+def render_incomplete(cells: list[Cell]) -> str:
+    """Server-driven fragments excluded because their A/B cell is incomplete."""
+    if not cells:
+        return "None. Every server-driven source has target stats."
+    lines = ["| Run | Cell | Reason |", "|---|---|---|"]
+    for cell in sorted(cells, key=lambda item: (item.run, str(item.key))):
+        lines.append(
+            f"| {cell.run} | `{cell.key}` | {cell.incomplete_reason or 'unstated'} |"
         )
     return "\n".join(lines)
 
@@ -196,7 +292,7 @@ def render_g5_table(rows: dict[CellKey, Row], payload_sizes, implementations=Non
         "| Pattern | Size | Implementation | runs | spread | G5 |",
         "|---|---|---|---|---|---|",
     ]
-    for key in ordered_keys(rows, payload_sizes, implementations):
+    for key in _reportable_keys(rows, payload_sizes, implementations):
         row = rows[key]
         mark = {"pass": "pass", "fail": "**fail**"}.get(row.g5_status, "n/a")
         lines.append(

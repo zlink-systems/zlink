@@ -38,6 +38,7 @@ _MEDIAN_FIELDS = (
     "jvm_thread_cores",
     "submit_thread_cores",
     "drain_ms",
+    "server_received_at_close",
 )
 
 
@@ -72,8 +73,20 @@ class Row:
     abandoned: int | None = None
     drain_bound_hit: bool = False
     send_server_counted: bool | None = None
+    target_errors: int | None = None
+    errors: int | None = None
+
+    #: spec 7.1 companion information. These values are declarations, not
+    #: measurements, so the row keeps them only when all complete runs agree.
+    stream_count: int | None = None
+    in_flight_per_stream: int | None = None
+    streams_reported: bool = False
+    stream_count_mixed: bool = False
+    in_flight_per_stream_mixed: bool = False
 
     excluded_runs: list[str] = field(default_factory=list)
+    incomplete_runs: list[str] = field(default_factory=list)
+    incomplete_reasons: list[str] = field(default_factory=list)
 
     @property
     def g5_pass(self) -> bool:
@@ -152,11 +165,21 @@ def build_row(run_set: RunSet, key: CellKey, min_runs_for_g5: int = 3) -> Row | 
     measured badly, it is not measured at all, so it may not move a median.
     """
     cells = run_set.for_key(key)
-    if not cells:
+    all_cells = [c for c in run_set.cells if c.key == key]
+    if not all_cells:
         return None
-    excluded = [c.run for c in run_set.cells if c.key == key and c.contaminated]
+    excluded = [c.run for c in all_cells if c.contaminated]
+    incomplete = [c for c in all_cells if not c.complete]
 
-    row = Row(key=key, run_count=len(cells), excluded_runs=excluded)
+    row = Row(
+        key=key,
+        run_count=len(cells),
+        excluded_runs=excluded,
+        incomplete_runs=[c.run for c in incomplete],
+        incomplete_reasons=sorted(
+            {c.incomplete_reason or "unstated" for c in incomplete}
+        ),
+    )
     for name in _MEDIAN_FIELDS:
         row.values[name] = _median(cells, name)
 
@@ -184,6 +207,23 @@ def build_row(run_set: RunSet, key: CellKey, min_runs_for_g5: int = 3) -> Row | 
     elif metrics:
         row.client_saturation_metric = metrics.pop()
     row.drain_bound_hit = any(c.drain_bound_hit for c in cells)
+    target_errors = [c.target_errors for c in cells if c.target_errors is not None]
+    row.target_errors = max(target_errors) if target_errors else None
+    errors = [int(c.extra["errors"]) for c in cells if c.extra.get("errors") is not None]
+    errors.extend(target_errors)
+    row.errors = max(errors) if errors else None
+    reported_streams = [c for c in cells if c.streams]
+    row.streams_reported = bool(reported_streams)
+    stream_counts = {c.stream_count for c in reported_streams}
+    if len(stream_counts) == 1:
+        row.stream_count = stream_counts.pop()
+    elif stream_counts:
+        row.stream_count_mixed = True
+    in_flight_values = {c.in_flight_per_stream for c in reported_streams}
+    if len(in_flight_values) == 1:
+        row.in_flight_per_stream = in_flight_values.pop()
+    elif in_flight_values:
+        row.in_flight_per_stream_mixed = True
     counted = [c.send_throughput_server_counted for c in cells]
     counted = [c for c in counted if c is not None]
     row.send_server_counted = all(counted) if counted else None
@@ -226,6 +266,11 @@ class Judgement:
 
 def _block_reason(role: str, row: Row | None, key: CellKey) -> str | None:
     """Why a row may not carry a judgement, naming the row and its spread."""
+    if row is not None and row.run_count == 0 and row.incomplete_runs:
+        return (
+            f"{role} {key} is incomplete: "
+            + "; ".join(row.incomplete_reasons)
+        )
     if row is None or row.throughput is None:
         return f"{role} {key} was not measured"
     if row.excluded_runs and row.run_count == 0:
@@ -237,6 +282,10 @@ def _block_reason(role: str, row: Row | None, key: CellKey) -> str | None:
             f"{role} {key} fails G5 at {row.spread_percent:.1f}% "
             f"(limit {G5_SPREAD_LIMIT_PERCENT:.0f}%)"
         )
+    if row.abandoned:
+        return f"{role} {key} has {row.abandoned} abandoned request(s) (spec 5.2)"
+    if row.errors:
+        return f"{role} {key} has {row.errors} error(s) (spec 5.2)"
     if row.client_saturated:
         return (
             f"{role} {key} is client-saturated at {row.saturation_value:.2f} of "

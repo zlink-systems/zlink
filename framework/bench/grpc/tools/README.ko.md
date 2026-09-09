@@ -18,7 +18,9 @@ python3 framework/bench/grpc/tools/bench_aggregate.py --lang dotnet \
 C 기준 run과 대상 언어 run을 함께 넘기면 `zlink-<lang> / zlink-c` 비율이 두 run을 가로지른다.
 
 `--format`으로 구간을 고를 수 있다. `spec4`는 규격 §4 표, `result`는 `RESULT` 라인,
-`judgement`는 판정표, `full`(기본값)은 전부다.
+`judgement`는 판정표, `doc-table`은 `--lang`으로 고른 언어의 문서용 Markdown 표,
+`full`(기본값)은 나머지 구간을 전부 출력한다. `spec4`와 `doc-table`의 process 열은 내부 metric
+이름(`client_*`·`server_*`)과 관계없이 `Source`·`Target`으로 표시한다.
 
 ## 두 report 형식의 차이와 흡수 방법
 
@@ -44,21 +46,25 @@ C 기준 run과 대상 언어 run을 함께 넘기면 `zlink-<lang> / zlink-c` �
 깊이·drain·오염 표시와 spec §5.1의 core 수·선언 상한은 **자료로 전달한다**(FB-021). 집계기가
 run 디렉터리를 읽는 순서는 다음과 같다.
 
-1. `cells.json` — 아래 구조화 형식. 단위 추정도 문장 파싱도 필요 없다.
+1. run 디렉터리 바로 아래의 구조화 JSON — 최상위 `schema`가 `with-grpc-cell-v1`인 `cells`
+   문서와, 규격 §4의 `role`·`trigger`가 최상위에 있는 셀별 `results` 문서를 모두 읽는다.
+   source와 target이 여러 파일을 쓸 수 있지만 파일 이름은 병합 기준이 아니다.
 2. `results.json` — `metadata.diagnosticsSchema`가 `with-grpc-cell-v1`이면 진단값을 여기서 읽는다.
    측정값은 그대로 `report.txt`의 `RESULT` 라인에서 읽는다.
 3. stdout의 `[bench]` 라인 — FB-021 이전 출력에만 쓰는 fallback이다. 게재 여부를 결정하는 값을
    사람이 읽는 문장에서 되꺼내는 것은 전달 방식이 아니다.
 
-`.NET` harness는 1·2를 만족하도록 고쳤고, `report.txt`의 옵션 머리글에 `logical_cores`와
-`client_parallelism_ceiling`을 남긴다. 상한을 선언하지 않은 옛 결과는 포화를 **판정하지 않은**
+`report.txt`의 옵션 머리글에 `logical_cores`와 `client_parallelism_ceiling`을 남긴 원본은 이 값을
+포화 판정에 사용한다. 상한을 선언하지 않은 옛 결과는 포화를 **판정하지 않은**
 것으로 표시하며(`not judged`), 판정을 막지도 않는다. 막으면 FB-019 이전 결과가 전부 소급해서
 게재 불가가 된다.
 
-## 새 언어가 낼 셀 원본 (`cells.json`)
+## 셀 원본과 server-driven 병합
 
-run 디렉터리에 `cells.json`이 있으면 집계기는 `report.txt` 대신 그것을 읽는다. 이 형식에서는
-단위 추정도, 문장 파싱도 필요 없다.
+`role`이 없는 `with-grpc-cell-v1` 레코드는 기존 client-driven 원본으로 읽는다. `role`이 있는
+레코드는 규격 §4의 server-driven 형식이다. 기준 필드 이름을 바꾸거나 별칭을 만들지 않는다.
+source와 target이 별도 파일을 쓰더라도 집계기는 `trigger.runId`와 `trigger.cellId` 두 값이 모두
+같을 때만 한 셀로 합친다.
 
 ```json
 {
@@ -68,6 +74,17 @@ run 디렉터리에 `cells.json`이 있으면 집계기는 `report.txt` 대신 �
       "implementation": "zlink-framework-node",
       "pattern": "request-window",
       "payload_size": 1024,
+      "role": "source",
+      "trigger": {
+        "runId": "run-01",
+        "cellId": "framework-window-1024",
+        "pattern": "request-window",
+        "payloadBytes": 1024,
+        "durationMs": 5000,
+        "warmup": 1000,
+        "receivedAt": "2026-09-09T00:00:00Z"
+      },
+      "streams": {"count": 1, "inFlightPerStream": 100},
       "throughput_per_second": 3663.2,
       "bandwidth_mb_s": 3.751,
       "latency_mean_ms": 28.045,
@@ -75,26 +92,51 @@ run 디렉터리에 `cells.json`이 있으면 집계기는 `report.txt` 대신 �
       "latency_p99_ms": 174.524,
       "client_cpu_percent": 3.7,
       "client_memory_mb": 195.4,
-      "server_cpu_percent": 5.2,
-      "server_memory_mb": 486.1,
       "client_cores": 0.98,
       "client_parallelism_ceiling": 1,
       "peak_in_flight": 100,
       "request_window": 100,
-      "abandoned": 0,
-      "drain_ms": 16674,
-      "drain_bound_hit": false,
-      "server_received_at_close": 228385,
-      "contaminated": false,
-      "contamination_reason": null
+      "abandoned": 0
+    },
+    {
+      "implementation": "zlink-framework-node",
+      "pattern": "request-window",
+      "payload_size": 1024,
+      "role": "target",
+      "trigger": {
+        "runId": "run-01",
+        "cellId": "framework-window-1024",
+        "pattern": "request-window",
+        "payloadBytes": 1024,
+        "durationMs": 5000,
+        "warmup": 1000,
+        "receivedAt": "2026-09-09T00:00:00Z"
+      },
+      "server_cpu_percent": 5.2,
+      "server_memory_mb": 486.1,
+      "target_stats": {"received": 18316, "errors": 0, "drainMs": 16674}
     }
   ]
 }
 ```
 
-`throughput_per_second`는 request 계열이 완료 수, `send-saturation`이 **server 수신 수**다
-(규격 §5, G3). `server_received_at_close`가 없는 `send-saturation` 셀은 client 제출 수를 센
-것으로 보고 판정에서 제외한다(FB-014).
+병합 뒤 필드 소유권과 실패 처리는 다음 한 규칙으로 고정한다.
+
+| 항목 | 소유 원본과 처리 |
+|---|---|
+| workload 값, source 자원, `trigger`, `streams` | source A |
+| target 자원, `target_stats` | target B. runner가 이미 source 레코드에 합친 `target_stats`도 같은 값으로 읽음 |
+| `send-saturation` 처리량·bandwidth | `target_stats.received / trigger.durationMs`로 계산. source 제출 수는 사용하지 않음 |
+| source/target key 불일치, 같은 역할 중복 | 어느 원본을 택할 수 없으므로 입력 오류로 중단 |
+| target 원본과 source에 합쳐진 `target_stats`가 모두 없음 | 셀을 `incomplete`로 남기고 중앙값·`RESULT`·판정에서 제외 |
+| target 없이 target 레코드만 있음 | 같은 방식으로 `incomplete` 처리 |
+
+`target_stats.errors` 또는 `abandoned`가 0이 아닌 셀은 규격 §5.2에 따라 처리량 판정에 쓰지 않는다.
+완전한 `send-saturation` 셀은 target 수신 수를 가지므로 server-counted 조건도 함께 충족한다.
+
+규격 §7.1은 trigger endpoint를 결과와 함께 요구하지만, 규격 §4의 셀 스키마에는 endpoint 필드가
+없다. 집계기는 §9 포트로 실제 값을 추측하지 않고 동반 정보 표에 `n/a`를 출력한다. endpoint를
+원본에서 출력하려면 먼저 규격 §4가 그 필드의 위치와 이름을 정해야 한다.
 
 ## 게재 조건 (이 도구가 기계적으로 강제하는 것)
 
@@ -165,4 +207,6 @@ cd framework/bench/grpc/tools && python3 -m unittest discover -s tests -p 'test_
 `tests/test_acceptance_gated2.py`가 Phase 0 원본(`tests/fixtures/gated2/`)을 집계기에 넣어
 1차 캠페인의 `.NET` 요약(2026-09-09 제거)의
 18셀, 행별 G5, 네 판정을 그대로 재현하는지 확인한다. `tests/test_normalization.py`는 Phase 0
-원본에 없는 경로(오염, 포화, 단위 판별 실패)를 다룬다.
+원본에 없는 경로(오염, 포화, 단위 판별 실패)를 다룬다. `tests/test_server_driven.py`와
+`tests/fixtures/s2s/`는 별도 A/B 원본 병합, target 누락, 3-run 중앙값, client-driven 원본과의
+혼합, `doc-table` 형식을 검증한다.

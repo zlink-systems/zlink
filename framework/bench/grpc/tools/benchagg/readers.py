@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from glob import glob
 from typing import Any, Iterable
 
 from .model import PATTERNS, Cell, CellKey, RunSet
@@ -325,6 +326,101 @@ def _diagnostic_texts(run_dir: str) -> list[str]:
 
 CELL_JSON_VERSION = "with-grpc-cell-v1"
 
+_CELL_FIELDS = (
+    "throughput_per_second",
+    "bandwidth_mb_s",
+    "latency_mean_ms",
+    "latency_p95_ms",
+    "latency_p99_ms",
+    "client_cpu_percent",
+    "client_memory_mb",
+    "server_cpu_percent",
+    "server_memory_mb",
+    "client_cores",
+    "client_parallelism_ceiling",
+    "client_saturation_metric",
+    "event_loop_utilization",
+    "jvm_thread_cores",
+    "submit_thread_cores",
+    "peak_in_flight",
+    "request_window",
+    "abandoned",
+    "drain_ms",
+    "drain_bound_hit",
+    "server_received_at_close",
+    "contaminated",
+    "contamination_reason",
+)
+
+_TRIGGER_FIELDS = (
+    "runId",
+    "cellId",
+    "pattern",
+    "payloadBytes",
+    "durationMs",
+    "warmup",
+    "receivedAt",
+)
+
+
+def _server_identity(raw: dict[str, Any], source: str) -> tuple[dict[str, Any], CellKey]:
+    """Validate the spec 4 trigger and return its merge and table identities."""
+    trigger = raw.get("trigger")
+    if not isinstance(trigger, dict):
+        raise ReportError(f"{source}: server-driven cell has no trigger object")
+    missing = [name for name in _TRIGGER_FIELDS if name not in trigger]
+    if missing:
+        raise ReportError(f"{source}: trigger missing {', '.join(missing)}")
+    if trigger["runId"] in (None, "") or trigger["cellId"] in (None, ""):
+        raise ReportError(f"{source}: trigger runId and cellId must be non-empty")
+
+    implementation = raw.get("implementation")
+    if not implementation:
+        raise ReportError(f"{source}: server-driven cell has no implementation")
+    pattern = raw.get("pattern", trigger["pattern"])
+    payload_size = raw.get("payload_size", trigger["payloadBytes"])
+    if pattern != trigger["pattern"] or int(payload_size) != int(trigger["payloadBytes"]):
+        raise ReportError(f"{source}: cell key disagrees with trigger pattern/payloadBytes")
+    if pattern not in PATTERNS:
+        raise ReportError(f"{source}: unsupported server-driven pattern {pattern!r}")
+    return trigger, CellKey(str(implementation), str(pattern), int(payload_size))
+
+
+def _target_stats(raw: Any, source: str) -> dict[str, Any]:
+    """Validate the spec 4 target_stats object without inventing defaults."""
+    if not isinstance(raw, dict):
+        return {}
+    missing = [name for name in ("received", "errors", "drainMs") if name not in raw]
+    if missing:
+        raise ReportError(f"{source}: target_stats missing {', '.join(missing)}")
+    try:
+        received = int(raw["received"])
+        errors = int(raw["errors"])
+        drain_ms = float(raw["drainMs"])
+    except (TypeError, ValueError) as error:
+        raise ReportError(f"{source}: target_stats values must be numeric") from error
+    if received < 0 or errors < 0 or drain_ms < 0:
+        raise ReportError(f"{source}: target_stats values must be non-negative")
+    return {"received": received, "errors": errors, "drainMs": drain_ms}
+
+
+def _streams(raw: Any, source: str) -> dict[str, Any]:
+    """Validate source A's logical stream declaration from spec 4."""
+    if not isinstance(raw, dict):
+        raise ReportError(f"{source}: source cell has no streams object")
+    missing = [name for name in ("count", "inFlightPerStream") if name not in raw]
+    if missing:
+        raise ReportError(f"{source}: streams missing {', '.join(missing)}")
+    try:
+        count = int(raw["count"])
+        in_flight = raw["inFlightPerStream"]
+        in_flight = None if in_flight is None else int(in_flight)
+    except (TypeError, ValueError) as error:
+        raise ReportError(f"{source}: streams values must be integers or null") from error
+    if count <= 0 or (in_flight is not None and in_flight <= 0):
+        raise ReportError(f"{source}: streams values must be positive")
+    return {"count": count, "inFlightPerStream": in_flight}
+
 
 def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") -> list[Cell]:
     """Read the structured per-cell shape new language harnesses should emit.
@@ -335,43 +431,233 @@ def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") ->
     """
     if payload.get("schema") != CELL_JSON_VERSION:
         raise ReportError(f"unsupported cell schema {payload.get('schema')!r}")
+    raw_cells = payload.get("cells", [])
+    if not isinstance(raw_cells, list):
+        raise ReportError(f"{source or run}: cells must be an array")
     cells = []
-    for raw in payload.get("cells", []):
+    for index, raw in enumerate(raw_cells):
+        origin = f"{source or run}:cells[{index}]"
+        if not isinstance(raw, dict):
+            raise ReportError(f"{origin}: cell must be an object")
+        role = raw.get("role")
+        if role is not None and role not in ("source", "target"):
+            raise ReportError(f"{origin}: role must be source or target")
+        if role is None:
+            key = CellKey(raw["implementation"], raw["pattern"], int(raw["payload_size"]))
+            trigger: dict[str, Any] = {}
+        else:
+            trigger, key = _server_identity(raw, origin)
         cell = Cell(
-            key=CellKey(raw["implementation"], raw["pattern"], int(raw["payload_size"])),
+            key=key,
             run=run,
             source=source,
+            role=role,
+            run_id=None if role is None else str(trigger["runId"]),
+            cell_id=None if role is None else str(trigger["cellId"]),
+            trigger=trigger,
         )
-        for name in (
-            "throughput_per_second",
-            "bandwidth_mb_s",
-            "latency_mean_ms",
-            "latency_p95_ms",
-            "latency_p99_ms",
-            "client_cpu_percent",
-            "client_memory_mb",
-            "server_cpu_percent",
-            "server_memory_mb",
-            "client_cores",
-            "client_parallelism_ceiling",
-            "client_saturation_metric",
-            "event_loop_utilization",
-            "jvm_thread_cores",
-            "submit_thread_cores",
-            "peak_in_flight",
-            "request_window",
-            "abandoned",
-            "drain_ms",
-            "drain_bound_hit",
-            "server_received_at_close",
-            "contaminated",
-            "contamination_reason",
-        ):
+        for name in _CELL_FIELDS:
             if name in raw and raw[name] is not None:
                 setattr(cell, name, raw[name])
+        if role == "source":
+            cell.streams = _streams(raw.get("streams"), origin)
+        if "target_stats" in raw:
+            cell.target_stats = _target_stats(raw.get("target_stats"), origin)
         cell.extra.update(raw.get("extra", {}))
+        if raw.get("errors") is not None:
+            cell.extra["errors"] = float(raw["errors"])
         cells.append(cell)
     return cells
+
+
+def cells_from_server_document(payload: dict[str, Any], run: str, source: str = "") -> list[Cell]:
+    """Read a per-cell server-driven document with spec 4 fields at the root.
+
+    Existing runners keep measurements in ``results`` and add ``role``,
+    ``trigger``, ``streams`` and ``target_stats`` to that document. The same
+    canonical fields are accepted inside ``cells`` by ``cells_from_cell_json``;
+    only their container differs.
+    """
+    role = payload.get("role")
+    if role not in ("source", "target"):
+        raise ReportError(f"{source or run}: role must be source or target")
+    trigger = payload.get("trigger")
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    results = payload.get("results", [])
+    if not isinstance(results, list):
+        raise ReportError(f"{source or run}: results must be an array")
+    if not results:
+        results = [{}]
+
+    raw_cells: list[dict[str, Any]] = []
+    for result in results:
+        if not isinstance(result, dict):
+            raise ReportError(f"{source or run}: result must be an object")
+        implementation = (
+            result.get("implementation")
+            or payload.get("implementation")
+            or metadata.get("implementation")
+        )
+        pattern = result.get("pattern") or (trigger or {}).get("pattern")
+        payload_size = (
+            result.get("payload_size")
+            or result.get("payloadSize")
+            or (trigger or {}).get("payloadBytes")
+        )
+        raw: dict[str, Any] = {
+            "implementation": implementation,
+            "pattern": pattern,
+            "payload_size": payload_size,
+            "role": role,
+            "trigger": trigger,
+        }
+        if role == "source":
+            raw["streams"] = payload.get("streams")
+        if "target_stats" in payload:
+            raw["target_stats"] = payload["target_stats"]
+
+        for name in _CELL_FIELDS:
+            if name in result:
+                raw[name] = result[name]
+            elif name in payload:
+                raw[name] = payload[name]
+
+        throughput = result.get("throughput")
+        if throughput is not None:
+            raw["throughput_per_second"] = float(throughput)
+            raw.setdefault(
+                "bandwidth_mb_s",
+                float(throughput) * int(payload_size) / 1_000_000.0,
+            )
+        for source_name, target_name in (
+            ("clientWorkingSetMb", "client_memory_mb"),
+            ("serverWorkingSetMb", "server_memory_mb"),
+            ("clientCores", "client_cores"),
+            ("clientParallelismCeiling", "client_parallelism_ceiling"),
+            ("peakInFlight", "peak_in_flight"),
+            ("requestWindow", "request_window"),
+            ("abandoned", "abandoned"),
+        ):
+            if result.get(source_name) is not None:
+                raw[target_name] = result[source_name]
+
+        mean = result.get("serverMeanMicros")
+        p95 = result.get("serverP95Micros")
+        p99 = result.get("serverP99Micros")
+        for value, fallback, target_name in (
+            (mean, result.get("meanMicros"), "latency_mean_ms"),
+            (p95, result.get("p95Micros"), "latency_p95_ms"),
+            (p99, result.get("p99Micros"), "latency_p99_ms"),
+        ):
+            selected = fallback if value is None else value
+            if selected is not None:
+                raw[target_name] = float(selected) / 1000.0
+
+        duration = result.get("durationSeconds")
+        logical_cores = metadata.get("logicalCores")
+        if duration and logical_cores:
+            for seconds_name, target_name in (
+                ("clientCpuSeconds", "client_cpu_percent"),
+                ("serverCpuSeconds", "server_cpu_percent"),
+            ):
+                if result.get(seconds_name) is not None:
+                    raw[target_name] = (
+                        float(result[seconds_name]) / float(duration) / float(logical_cores) * 100.0
+                    )
+        if result.get("errors") is not None:
+            raw["errors"] = result["errors"]
+        raw_cells.append(raw)
+
+    return cells_from_cell_json(
+        {"schema": CELL_JSON_VERSION, "cells": raw_cells}, run, source
+    )
+
+
+def _apply_target(source: Cell, target: Cell | None) -> Cell:
+    """Finish one source cell from embedded or separately emitted target data."""
+    if target is not None:
+        if source.key != target.key:
+            raise ReportError(
+                f"runId={source.run_id} cellId={source.cell_id}: source/target cell keys differ"
+            )
+        for name in ("server_cpu_percent", "server_memory_mb"):
+            value = getattr(target, name)
+            if value is not None:
+                setattr(source, name, value)
+        if source.key.pattern == "send-saturation":
+            for name in ("latency_mean_ms", "latency_p95_ms", "latency_p99_ms"):
+                value = getattr(target, name)
+                if value is not None:
+                    setattr(source, name, value)
+        if target.target_stats:
+            if source.target_stats and source.target_stats != target.target_stats:
+                raise ReportError(
+                    f"runId={source.run_id} cellId={source.cell_id}: target_stats disagree"
+                )
+            source.target_stats = target.target_stats
+        source.source = ",".join(filter(None, (source.source, target.source)))
+
+    if not source.target_stats:
+        source.status = "incomplete"
+        source.incomplete_reason = "target record or embedded target_stats is missing"
+        return source
+
+    source.server_received_at_close = int(source.target_stats["received"])
+    source.target_errors = int(source.target_stats["errors"])
+    source.drain_ms = float(source.target_stats["drainMs"])
+    if source.key.pattern == "send-saturation":
+        duration_ms = float(source.trigger["durationMs"])
+        if duration_ms <= 0:
+            raise ReportError(
+                f"runId={source.run_id} cellId={source.cell_id}: durationMs must be positive"
+            )
+        source.throughput_per_second = source.server_received_at_close * 1000.0 / duration_ms
+        source.bandwidth_mb_s = (
+            source.throughput_per_second * source.key.payload_size / 1_000_000.0
+        )
+    source.status = "complete"
+    source.incomplete_reason = None
+    return source
+
+
+def merge_server_driven_cells(cells: Iterable[Cell]) -> list[Cell]:
+    """Join A/B records only by the spec key ``trigger.runId``/``cellId``.
+
+    Legacy records have no role and pass through unchanged. Server-driven source
+    metrics own the workload result; target records may supply only target
+    process resources and ``target_stats``. Missing counterparts are retained as
+    ``incomplete`` cells, while duplicate roles are rejected as ambiguous input.
+    """
+    legacy: list[Cell] = []
+    groups: dict[tuple[str, str], dict[str, Cell]] = {}
+    order: list[tuple[str, str]] = []
+    for cell in cells:
+        if cell.role is None:
+            legacy.append(cell)
+            continue
+        identity = (cell.run_id or "", cell.cell_id or "")
+        group = groups.setdefault(identity, {})
+        if not group:
+            order.append(identity)
+        if cell.role in group:
+            raise ReportError(
+                f"runId={identity[0]} cellId={identity[1]}: duplicate {cell.role} record"
+            )
+        group[cell.role] = cell
+
+    merged = list(legacy)
+    for identity in order:
+        group = groups[identity]
+        source = group.get("source")
+        target = group.get("target")
+        if source is not None:
+            merged.append(_apply_target(source, target))
+            continue
+        assert target is not None
+        target.status = "incomplete"
+        target.incomplete_reason = "source record is missing"
+        merged.append(target)
+    return merged
 
 
 #: ``results.json`` fields a harness writes when it carries diagnostics as data.
@@ -438,25 +724,51 @@ def contaminated_from_results_json(payload: dict[str, Any]) -> dict[str, str]:
     return out
 
 
-def read_run(run_dir: str, source: str = "") -> tuple[list[Cell], list[str]]:
-    """Read one run directory into normalized cells plus notes.
+def _structured_cells(run_dir: str, run: str, source: str) -> tuple[list[Cell], list[str]]:
+    """Read every structured cell document in a run directory.
 
-    Preference order for diagnostics: a fully structured ``cells.json``, then a
-    ``results.json`` that declares the v1 diagnostics schema, and only then the
-    printed ``[bench]`` lines. The last of those is what older output leaves
-    behind; it is a fallback, not a transport (FB-021).
+    A and B may write different JSON files. File names are deliberately not part
+    of the schema: either the v1 ``schema`` wrapper or a spec 4 ``role`` at the
+    document root identifies cell input; unrelated JSON is ignored.
+    """
+    cells: list[Cell] = []
+    paths: list[str] = []
+    for path in sorted(glob(os.path.join(run_dir, "*.json"))):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (json.JSONDecodeError, OSError) as error:
+            if os.path.basename(path) == "cells.json":
+                raise ReportError(f"{path}: invalid cell JSON: {error}") from error
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("schema") == CELL_JSON_VERSION:
+            paths.append(path)
+            cells.extend(cells_from_cell_json(payload, run, path))
+        elif payload.get("role") in ("source", "target"):
+            paths.append(path)
+            cells.extend(cells_from_server_document(payload, run, path))
+    notes = [f"{run}: read structured cell data from {len(paths)} file(s)"] if paths else []
+    return cells, notes
+
+
+def _read_run_fragments(run_dir: str, source: str = "") -> tuple[list[Cell], list[str]]:
+    """Read one directory without finalizing cross-file/cross-directory joins.
+
+    Preference order: structured ``cells`` or server-driven ``results`` JSON;
+    legacy ``report.txt`` with v1 diagnostics in ``results.json``; and finally
+    printed ``[bench]`` lines. The last is what older output leaves behind; it
+    is a fallback, not a transport (FB-021).
     """
     run = os.path.basename(os.path.normpath(run_dir))
-    cell_json = os.path.join(run_dir, "cells.json")
-    if os.path.isfile(cell_json):
-        with open(cell_json, encoding="utf-8") as handle:
-            return cells_from_cell_json(json.load(handle), run, source), [
-                f"{run}: read structured {CELL_JSON_VERSION}"
-            ]
+    structured_cells, structured_notes = _structured_cells(run_dir, run, source)
+    if structured_cells:
+        return structured_cells, structured_notes
 
     report = os.path.join(run_dir, "report.txt")
     if not os.path.isfile(report):
-        raise ReportError(f"{run_dir}: no cells.json and no report.txt")
+        raise ReportError(f"{run_dir}: no structured cell JSON and no report.txt")
     with open(report, encoding="utf-8", errors="replace") as handle:
         report_text = handle.read()
     cells, notes = cells_from_report(report_text, run, source)
@@ -535,12 +847,27 @@ def read_run(run_dir: str, source: str = "") -> tuple[list[Cell], list[str]]:
     return cells, notes
 
 
+def read_run(run_dir: str, source: str = "") -> tuple[list[Cell], list[str]]:
+    """Read and merge one run directory into normalized cells plus notes."""
+    cells, notes = _read_run_fragments(run_dir, source)
+    merged = merge_server_driven_cells(cells)
+    incomplete = [cell for cell in merged if not cell.complete]
+    if incomplete:
+        notes.append(f"{os.path.basename(run_dir)}: {len(incomplete)} incomplete cell(s)")
+    return merged, notes
+
+
 def read_runs(run_dirs: Iterable[str], source: str = "") -> RunSet:
-    """Read many run directories into one comparison set."""
+    """Read runs and merge server-driven records across every supplied file."""
     run_set = RunSet()
+    fragments: list[Cell] = []
     for run_dir in run_dirs:
-        cells, notes = read_run(run_dir, source)
-        for cell in cells:
-            run_set.add(cell)
+        cells, notes = _read_run_fragments(run_dir, source)
+        fragments.extend(cells)
         run_set.notes.extend(notes)
+    for cell in merge_server_driven_cells(fragments):
+        run_set.add(cell)
+    incomplete = run_set.incomplete()
+    if incomplete:
+        run_set.notes.append(f"{len(incomplete)} incomplete server-driven cell(s) excluded")
     return run_set

@@ -34,11 +34,14 @@ from benchagg.model import JUDGEMENT_PATTERN, PAYLOAD_SIZES  # noqa: E402
 from benchagg.readers import ReportError, read_runs  # noqa: E402
 from benchagg.render import (  # noqa: E402
     render_contaminated,
+    render_companion_table,
     render_diagnostics_table,
+    render_doc_table,
     render_g5_note,
     render_g5_table,
     render_judgement_table,
     render_median_table,
+    render_incomplete,
     render_result_lines,
     render_spec4_table,
 )
@@ -73,7 +76,7 @@ def parse_args(argv=None):
     parser.add_argument("--json-out", help="write the normalized cells and verdicts here")
     parser.add_argument(
         "--format",
-        choices=("full", "spec4", "result", "judgement"),
+        choices=("full", "spec4", "result", "judgement", "doc-table"),
         default="full",
         help="which sections to print",
     )
@@ -110,6 +113,8 @@ def build(args):
 
 def emit(args, run_set, rows, sizes, judgements) -> str:
     out: list[str] = []
+    if args.format == "doc-table":
+        return render_doc_table(rows, sizes, args.lang)
     if args.format in ("full", "spec4"):
         out.append("## Report table (spec 4)\n")
         out.append(render_spec4_table(rows, sizes))
@@ -122,12 +127,16 @@ def emit(args, run_set, rows, sizes, judgements) -> str:
         out.append(render_median_table(rows, sizes))
         out.append("\n## Diagnostics (FB-008, FB-017, G6, G8)\n")
         out.append(render_diagnostics_table(rows, sizes))
+        out.append("\n## Server-driven companion information (spec 7.1)\n")
+        out.append(render_companion_table(rows, sizes))
         out.append("\n## G5 reproducibility\n")
         out.append(render_g5_note())
         out.append("")
         out.append(render_g5_table(rows, sizes))
         out.append("\n## Contaminated cells (FB-008, excluded from tables and judgement)\n")
         out.append(render_contaminated(run_set.contaminated()))
+        out.append("\n## Incomplete server-driven cells (excluded from tables and judgement)\n")
+        out.append(render_incomplete(run_set.incomplete()))
     if args.format in ("full", "judgement"):
         out.append(f"\n## Judgement (spec 7.2) on `{args.judgement_pattern}`\n")
         out.append(render_judgement_table(judgements))
@@ -165,14 +174,36 @@ def as_json(args, run_set, rows, sizes, judgements) -> dict:
                 "client_saturated": rows[key].client_saturated,
                 "saturation_evaluated": rows[key].saturation_evaluated,
                 "drain_bound_hit": rows[key].drain_bound_hit,
+                "target_errors": rows[key].target_errors,
+                "errors": rows[key].errors,
                 "send_throughput_server_counted": rows[key].send_server_counted,
                 "excluded_runs": rows[key].excluded_runs,
+                "incomplete_runs": rows[key].incomplete_runs,
+                "incomplete_reasons": rows[key].incomplete_reasons,
+                "streams": (
+                    {
+                        "count": rows[key].stream_count,
+                        "inFlightPerStream": rows[key].in_flight_per_stream,
+                    }
+                    if rows[key].streams_reported
+                    else None
+                ),
             }
             for key in ordered_keys(rows, sizes)
         ],
         "contaminated": [
             {"run": cell.run, "cell": str(cell.key), "reason": cell.contamination_reason}
             for cell in run_set.contaminated()
+        ],
+        "incomplete": [
+            {
+                "run": cell.run,
+                "cell": str(cell.key),
+                "runId": cell.run_id,
+                "cellId": cell.cell_id,
+                "reason": cell.incomplete_reason,
+            }
+            for cell in run_set.incomplete()
         ],
         "judgements": [
             {
