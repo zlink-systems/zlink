@@ -350,35 +350,35 @@ public final class ContractAccess {
 
         Message adoptOwnedMessage(Object nativeMsg);
 
-        byte readByte(long address);
+        byte readByte(Object payload, int offset);
 
-        short readShortBe(long address);
+        short readShortBe(Object payload, int offset);
 
-        int readIntLe(long address);
+        int readIntLe(Object payload, int offset);
 
-        int readIntBe(long address);
+        int readIntBe(Object payload, int offset);
 
-        long readLongLe(long address);
+        long readLongLe(Object payload, int offset);
 
-        void writeByte(long address, byte value);
+        void writeByte(Object payload, int offset, byte value);
 
-        void writeShortBe(long address, short value);
+        void writeShortBe(Object payload, int offset, short value);
 
-        void writeIntLe(long address, int value);
+        void writeIntLe(Object payload, int offset, int value);
 
-        void writeIntBe(long address, int value);
+        void writeIntBe(Object payload, int offset, int value);
 
-        void writeLongLe(long address, long value);
+        void writeLongLe(Object payload, int offset, long value);
 
-        void fill(long address, int length, byte value);
+        void fill(Object payload, int offset, int length, byte value);
 
-        boolean contentEquals(long address, byte[] expected);
+        boolean contentEquals(Object payload, byte[] expected);
 
-        void copyFromArray(byte[] source, int offset, long destination, int length);
+        void copyFromArray(byte[] source, int sourceOffset, Object destination,
+                           int destinationOffset, int length);
 
-        void copyToArray(long source, byte[] destination, int offset, int length);
-
-        void copyMemory(long source, long destination, int length);
+        void copyToArray(Object source, int sourceOffset, byte[] destination,
+                         int destinationOffset, int length);
 
         void copyFromSegment(Object source, long sourceOffset, Object destination,
                              long destinationOffset, long length);

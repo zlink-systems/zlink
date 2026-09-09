@@ -163,95 +163,91 @@ final class NativeMessageRuntime {
             }
 
             @Override
-            public byte readByte(long address) {
-                return NativeMessageRuntime.segmentFromAddress(address, Byte.BYTES)
-                    .get(ValueLayout.JAVA_BYTE, 0);
+            public byte readByte(Object payload, int offset) {
+                return ((MemorySegment) payload)
+                    .get(ValueLayout.JAVA_BYTE, offset);
             }
 
             @Override
-            public void writeByte(long address, byte value) {
-                NativeMessageRuntime.segmentFromAddress(address, Byte.BYTES)
-                    .set(ValueLayout.JAVA_BYTE, 0, value);
+            public void writeByte(Object payload, int offset, byte value) {
+                ((MemorySegment) payload)
+                    .set(ValueLayout.JAVA_BYTE, offset, value);
             }
 
             @Override
-            public short readShortBe(long address) {
-                return NativeMessageRuntime.segmentFromAddress(address, Short.BYTES)
-                    .get(SHORT_BE, 0);
+            public short readShortBe(Object payload, int offset) {
+                return ((MemorySegment) payload)
+                    .get(SHORT_BE, offset);
             }
 
             @Override
-            public void writeShortBe(long address, short value) {
-                NativeMessageRuntime.segmentFromAddress(address, Short.BYTES)
-                    .set(SHORT_BE, 0, value);
+            public void writeShortBe(Object payload, int offset, short value) {
+                ((MemorySegment) payload)
+                    .set(SHORT_BE, offset, value);
             }
 
             @Override
-            public int readIntLe(long address) {
-                return NativeMessageRuntime.segmentFromAddress(address, Integer.BYTES)
-                    .get(INT_LE, 0);
+            public int readIntLe(Object payload, int offset) {
+                return ((MemorySegment) payload)
+                    .get(INT_LE, offset);
             }
 
             @Override
-            public void writeIntLe(long address, int value) {
-                NativeMessageRuntime.segmentFromAddress(address, Integer.BYTES)
-                    .set(INT_LE, 0, value);
+            public void writeIntLe(Object payload, int offset, int value) {
+                ((MemorySegment) payload)
+                    .set(INT_LE, offset, value);
             }
 
             @Override
-            public int readIntBe(long address) {
-                return NativeMessageRuntime.segmentFromAddress(address, Integer.BYTES)
-                    .get(INT_BE, 0);
+            public int readIntBe(Object payload, int offset) {
+                return ((MemorySegment) payload)
+                    .get(INT_BE, offset);
             }
 
             @Override
-            public void writeIntBe(long address, int value) {
-                NativeMessageRuntime.segmentFromAddress(address, Integer.BYTES)
-                    .set(INT_BE, 0, value);
+            public void writeIntBe(Object payload, int offset, int value) {
+                ((MemorySegment) payload)
+                    .set(INT_BE, offset, value);
             }
 
             @Override
-            public long readLongLe(long address) {
-                return NativeMessageRuntime.segmentFromAddress(address, Long.BYTES)
-                    .get(LONG_LE, 0);
+            public long readLongLe(Object payload, int offset) {
+                return ((MemorySegment) payload)
+                    .get(LONG_LE, offset);
             }
 
             @Override
-            public void writeLongLe(long address, long value) {
-                NativeMessageRuntime.segmentFromAddress(address, Long.BYTES)
-                    .set(LONG_LE, 0, value);
+            public void writeLongLe(Object payload, int offset, long value) {
+                ((MemorySegment) payload)
+                    .set(LONG_LE, offset, value);
             }
 
             @Override
-            public void fill(long address, int length, byte value) {
-                NativeMessageRuntime.segmentFromAddress(address, length).fill(value);
+            public void fill(Object payload, int offset, int length, byte value) {
+                ((MemorySegment) payload).asSlice(offset, length).fill(value);
             }
 
             @Override
-            public boolean contentEquals(long address, byte[] expected) {
-                return NativeMessageRuntime.segmentFromAddress(address, expected.length)
+            public boolean contentEquals(Object payload, byte[] expected) {
+                return ((MemorySegment) payload)
                     .mismatch(MemorySegment.ofArray(expected)) == -1;
             }
 
             @Override
-            public void copyFromArray(byte[] source, int offset,
-                                      long destination, int length) {
-                MemorySegment.copy(source, offset,
-                    NativeMessageRuntime.segmentFromAddress(destination, length),
-                    ValueLayout.JAVA_BYTE, 0, length);
+            public void copyFromArray(byte[] source, int sourceOffset,
+                                      Object destination, int destinationOffset,
+                                      int length) {
+                MemorySegment.copy(source, sourceOffset,
+                    (MemorySegment) destination, ValueLayout.JAVA_BYTE,
+                    destinationOffset, length);
             }
 
             @Override
-            public void copyToArray(long source, byte[] destination,
-                                    int offset, int length) {
-                MemorySegment.copy(NativeMessageRuntime.segmentFromAddress(source, length),
-                    ValueLayout.JAVA_BYTE, 0, destination, offset, length);
-            }
-
-            @Override
-            public void copyMemory(long source, long destination, int length) {
-                MemorySegment.copy(NativeMessageRuntime.segmentFromAddress(source, length), 0,
-                    NativeMessageRuntime.segmentFromAddress(destination, length), 0, length);
+            public void copyToArray(Object source, int sourceOffset,
+                                    byte[] destination, int destinationOffset,
+                                    int length) {
+                MemorySegment.copy((MemorySegment) source, ValueLayout.JAVA_BYTE,
+                    sourceOffset, destination, destinationOffset, length);
             }
 
             @Override
@@ -297,7 +293,7 @@ final class NativeMessageRuntime {
 
     private static MemorySegment segmentFromAddress(long address, long size) {
         // This view does not own the native payload. Message validates ranges
-        // and invalidates its address when Core consumes or closes the frame.
+        // and invalidates its cached view when Core consumes or closes the frame.
         return MemorySegment.ofAddress(address).reinterpret(size);
     }
 
