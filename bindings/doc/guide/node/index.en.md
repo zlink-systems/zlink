@@ -198,6 +198,33 @@ Error classes: `SubmitError`, `RequestError`, `RecvError`, `BindError`,
 `ConnectError`, `ConfigError`, `CloseError`, `HandlerError`.
 Each exposes the result code via a `.result` property.
 
+### Share / Move / Clone (copy / move / clone)
+
+Three explicit `Message` payload operations, with the same name and meaning across every
+binding, mapping 1:1 to the Core C API (`zlink_msg_copy`/`zlink_msg_move`).
+
+| Operation | Signature | Meaning | When |
+|------|----------|------|------|
+| `copy()` | `copy(): Message` | **ref-count share** — new `Message` on the same buffer, original stays valid | keep the same payload while still using the original |
+| `move(dest)` | `move(dest: Message): void` | **ownership transfer** — hands off to `dest`, caller left empty | re-send a received message with no copy (relay/echo) |
+| `clone()` | `clone(): Message` | **deep copy** — independent buffer | mutate the duplicate independently |
+
+```javascript
+const shared = msg.copy();
+await socket.send().message(shared).submit();  // shared is consumed
+// msg is still valid
+
+const out = new zlink.Message();
+receivedPart.move(out);                         // receivedPart becomes empty
+await socket.send(routingId).message(out).submit();
+
+const dup = msg.clone();
+```
+
+> **Note:** the former `copy()` was a deep copy and now aligns to `clone()`; the new
+> `copy()` is a ref-count share. Replace deep-copy-intent `copy()` calls with `clone()`.
+> `copy` stays a `@deprecated` alias for its prior (deep-copy) meaning for one release cycle.
+
 ---
 
 ## C API Mapping

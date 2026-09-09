@@ -54,7 +54,11 @@ context and before creating sockets.
 `Message.size` expose the canonical payload view. `Message.close()`,
 `Symbol.dispose`, and `Symbol.asyncDispose` are the cleanup hooks.
 `Message.getProperty(name)` and `Message.refCount()` expose diagnostic
-metadata on canonical receive results.
+metadata on canonical receive results. `Message.copy()` (ref-count share, a new
+`Message` on the same buffer), `Message.move(dest)` (ownership transfer, caller left
+empty), and `Message.clone()` (deep copy) map 1:1 to `zlink_msg_copy`/`zlink_msg_move`
+and a deep copy; the former deep-copy `copy()` is now `clone()`, with `copy` kept as a
+deprecated alias for its prior meaning for one release cycle.
 Canonical raw sockets intentionally hide opposite-direction methods, so
 `PubSocket` does not expose `send()` or `recv()`, `SubSocket` does not expose
 `send()`, and `StreamSocket` does not expose `connect()` or active stream

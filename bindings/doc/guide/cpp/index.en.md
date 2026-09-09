@@ -192,6 +192,35 @@ try {
 }
 ```
 
+### Share / Move / Clone (Copy / Move / Clone)
+
+Three explicit payload operations, with the same name and meaning across every binding,
+mapping 1:1 to the Core C API (`zlink_msg_copy`/`zlink_msg_move`).
+
+| Operation | Signature | Meaning | When |
+|------|----------|------|------|
+| `copy()` | `message_t copy() const` | **ref-count share** — new value pointing at the same buffer, original stays valid | keep the same payload while still using the original |
+| `move(dest)` | `void move(message_t& dest)` | **ownership transfer** — hands off to `dest`, caller left empty | re-send a received message with no copy (relay/echo) |
+| `clone()` | `message_t clone() const` | **deep copy** — independent buffer | mutate the duplicate independently |
+
+```cpp
+// Copy: a new handle sharing the same buffer; each is closed separately (refcount).
+zlink::message_t shared = msg.copy ();
+socket.send ().message (shared).submit ();   // shared is moved
+// msg is still valid
+
+// Move: echo a received message with no copy (most efficient)
+zlink::message_t out;
+received_part.move (out);                     // received_part becomes empty
+socket.send (routing_id).message (out).submit ();
+
+// Clone: independent duplicate to mutate
+zlink::message_t dup = msg.clone ();
+```
+
+`copy()` does not guarantee mutation isolation (shared buffer) — use `clone()` when you
+need an independently mutable payload.
+
 ---
 
 ## Error Handling

@@ -260,6 +260,37 @@ try (Message msg = Message.from("data")) {
 } // submit이 예외를 던지면 try-with-resources가 msg를 닫음
 ```
 
+### 공유·이전·복제 (copy / move / clone)
+
+`Message` payload를 다루는 세 가지 명시적 동작입니다. 이름과 의미는 모든 바인딩에서
+동일하며 Core C API(`zlink_msg_copy`/`zlink_msg_move`)와 1:1로 대응합니다.
+
+| 동작 | 시그니처 | 의미 | 언제 |
+|------|----------|------|------|
+| `copy()` | `Message copy()` | **ref-count 공유** — 같은 버퍼를 가리키는 새 `Message`, 원본 유효 유지 | 같은 payload를 보관하며 원본도 계속 써야 할 때 |
+| `move(dest)` | `void move(Message dest)` | **소유권 이전** — `dest`로 넘기고 호출자는 empty | 받은 메시지를 사본 없이 그대로 다시 보낼 때(relay/echo) |
+| `clone()` | `Message clone()` | **깊은 복사** — 독립 버퍼 | 복제 후 payload를 독립적으로 수정할 때 |
+
+```java
+// Copy: 같은 버퍼를 공유하는 새 핸들. 둘 다 각자 close.
+try (Message shared = msg.copy()) {
+    socket.send().message(shared).submit_sync();   // shared는 소비됨
+}
+// msg는 여전히 유효
+
+// Move: 받은 메시지를 사본 없이 그대로 echo (가장 효율적)
+Message out = new Message();
+receivedPart.move(out);                             // receivedPart는 empty가 됨
+socket.send(routingId).message(out).submit_sync();
+
+// Clone: 독립 복제 후 수정
+try (Message dup = msg.clone()) { /* ... */ }
+```
+
+> 기존 `sharedCopyOf`는 `copy`로, `moveInto`/`moveTo`는 `move`로 정렬되었습니다. 이전
+> 이름은 한 릴리스 사이클 동안 `@Deprecated` alias로 이전 의미를 가리킵니다. `copy()`는
+> ref-share이므로 mutation 격리를 보장하지 않습니다 — 독립 수정은 `clone()`.
+
 ---
 
 ## 에러 처리
