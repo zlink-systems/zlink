@@ -230,6 +230,15 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
+    ///     Creates a new message holding an independent copy of this payload.
+    /// </summary>
+    public Message Clone()
+    {
+        EnsureValid();
+        return new Message(AsReadOnlySpanCore());
+    }
+
+    /// <summary>
     ///     Moves this message's native payload into <paramref name="dest" />,
     ///     replacing its previous payload and leaving this message empty.
     /// </summary>

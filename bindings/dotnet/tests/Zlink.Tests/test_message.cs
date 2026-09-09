@@ -61,6 +61,22 @@ public sealed class test_message
     }
 
     [Fact]
+    public void message_clone_creates_independent_payload()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using Message source = Message.Allocate(512);
+        source.AsSpan().Fill(0x2A);
+        using Message clone = source.Clone();
+
+        source.AsSpan()[0] = 0x5C;
+        Assert.Equal(0x2A, clone.AsReadOnlySpan()[0]);
+        Assert.Equal(1, source.RefCount);
+        Assert.Equal(1, clone.RefCount);
+    }
+
+    [Fact]
     public void message_from_copy_preserves_snapshot_storage()
     {
         if (!CoreTestSupport.IsNativeAvailable())
