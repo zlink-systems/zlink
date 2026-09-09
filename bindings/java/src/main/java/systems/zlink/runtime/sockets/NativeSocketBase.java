@@ -93,10 +93,8 @@ abstract class NativeSocketBase implements Socket {
             }
 
             @Override
-            public int completionDrain(Socket socket,
-                                       java.util.List<Runnable> settlements) {
-                return nativeSocket(socket).runtime.completionOwner().drain(
-                    settlements);
+            public int completionDrain(Socket socket) {
+                return nativeSocket(socket).runtime.completionOwner().drain();
             }
 
             @Override

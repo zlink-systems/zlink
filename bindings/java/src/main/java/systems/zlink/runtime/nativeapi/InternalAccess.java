@@ -70,7 +70,7 @@ public final class InternalAccess {
         void setRouterIntOption(Socket socket, int option, int value);
         boolean completionTransferToPublic(Socket socket, Object claimant);
         void completionReleasePublic(Socket socket, Object claimant);
-        int completionDrain(Socket socket, java.util.List<Runnable> settlements);
+        int completionDrain(Socket socket);
         boolean inCallback();
         void enterCallback();
         void leaveCallback();
@@ -167,9 +167,8 @@ public final class InternalAccess {
         socketAccess().completionReleasePublic(socket, claimant);
     }
 
-    public static int completionDrain(Socket socket,
-                                      java.util.List<Runnable> settlements) {
-        return socketAccess().completionDrain(socket, settlements);
+    public static int completionDrain(Socket socket) {
+        return socketAccess().completionDrain(socket);
     }
 
     public static void socketSetOption(Socket socket,
