@@ -2,9 +2,10 @@
     <PropertyGroup>
         <ZLinkFrameworkTargetFrameworks Condition="'$(ZLinkFrameworkTargetFrameworks)' == ''">net8.0</ZLinkFrameworkTargetFrameworks>
         <ZLinkRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../..'))</ZLinkRepoRoot>
+        <ZLinkFrameworkVersionFile>$([System.IO.Path]::Combine('$(ZLinkRepoRoot)', 'FRAMEWORK_VERSION'))</ZLinkFrameworkVersionFile>
         <ZLinkUseBindingsSource Condition="'$(ZLinkUseBindingsSource)' == ''">false</ZLinkUseBindingsSource>
         <ZLinkBindingsProject>$([System.IO.Path]::GetFullPath('$(ZLinkRepoRoot)/bindings/dotnet/src/Zlink/Zlink.csproj'))</ZLinkBindingsProject>
-        <Version Condition="'$(Version)' == ''">0.10.0</Version>
+        <Version Condition="'$(Version)' == '' and Exists('$(ZLinkFrameworkVersionFile)')">$([System.IO.File]::ReadAllText('$(ZLinkFrameworkVersionFile)').Trim().Replace('ZLINK_FRAMEWORK_VERSION=', ''))</Version>
         <ZLinkLocalPackageRoot Condition="'$(ZLINK_LOCAL_PACKAGE_ROOT)' != ''">$(ZLINK_LOCAL_PACKAGE_ROOT)</ZLinkLocalPackageRoot>
         <ZLinkLocalNuGetSource Condition="'$(ZLinkLocalNuGetSource)' == '' and '$(ZLinkLocalPackageRoot)' != '' and Exists('$(ZLinkLocalPackageRoot)/nuget')">$(ZLinkLocalPackageRoot)/nuget</ZLinkLocalNuGetSource>
         <ZLinkLocalNuGetSource Condition="'$(ZLinkLocalNuGetSource)' == '' and Exists('$(ZLinkRepoRoot)/.artifacts/wsl/nuget')">$(ZLinkRepoRoot)/.artifacts/wsl/nuget</ZLinkLocalNuGetSource>
@@ -20,4 +21,9 @@
         <PackageLicenseFile>LICENSE</PackageLicenseFile>
         <PackageProjectUrl>https://github.com/zlink-systems/zlink</PackageProjectUrl>
     </PropertyGroup>
+
+    <Target Name="ValidateZLinkFrameworkVersionFile" BeforeTargets="PrepareForBuild">
+        <Error Condition="!Exists('$(ZLinkFrameworkVersionFile)')"
+               Text="Zlink Framework version file was not found: $(ZLinkFrameworkVersionFile)" />
+    </Target>
 </Project>

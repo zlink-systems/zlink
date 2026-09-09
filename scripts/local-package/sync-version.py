@@ -160,29 +160,14 @@ def node_internal_dependency_pattern() -> str:
 # directories to discover additional targets.
 FRAMEWORK_SCALAR_FIELDS = (
     FrameworkField(
-        "framework/languages/dotnet/Directory.Build.props",
-        "PropertyGroup/Version default",
-        rf'(<Version Condition="\'\$\(Version\)\' == \'\'">)(?P<version>{SEMVER})(</Version>)',
-    ),
-    FrameworkField(
         "framework/languages/dotnet/samples/Directory.Build.props",
         "PropertyGroup/ZLinkSampleFrameworkVersion default",
-        rf"(<ZLinkSampleFrameworkVersion Condition=\"'\$\(ZLinkSampleFrameworkVersion\)' == ''\">)(?P<version>{SEMVER})(</ZLinkSampleFrameworkVersion>)",
-    ),
-    FrameworkField(
-        "framework/languages/dotnet/samples/Directory.Packages.props",
-        "PropertyGroup/ZLinkSampleFrameworkVersion default",
-        rf"(<ZLinkSampleFrameworkVersion Condition=\"'\$\(ZLinkSampleFrameworkVersion\)' == ''\">)(?P<version>{SEMVER})(</ZLinkSampleFrameworkVersion>)",
-    ),
-    FrameworkField(
-        "framework/languages/java/build.gradle.kts",
-        "root project version",
-        rf'(?m)^version = "(?P<version>{SEMVER})"$',
+        rf"(<ZLinkSampleFrameworkVersion Condition=\"'\$\(ZLinkSampleFrameworkVersion\)' == '' and '\$\(ZLinkSampleRepositoryDetected\)' != 'true'\">)(?P<version>{SEMVER})(</ZLinkSampleFrameworkVersion>)",
     ),
     FrameworkField(
         "framework/languages/java/samples/gradle/zlink-sample-dependencies.settings.gradle.kts",
         "zlink.frameworkVersion default",
-        rf'(providers\.gradleProperty\("zlink\.frameworkVersion"\)\s*\.orElse\(")(?P<version>{SEMVER})("\))',
+        rf'(providers\.provider \{{ ")(?P<version>{SEMVER})(" \}})',
     ),
     FrameworkField(
         "framework/languages/cpp/vcpkg.json",
@@ -257,80 +242,6 @@ FRAMEWORK_CPP_SAMPLE_CONAN_REGISTRY = (
     "framework/languages/cpp/samples/SupportChat/conanfile.txt",
     "framework/languages/cpp/samples/TicTacToe/conanfile.txt",
     "framework/languages/cpp/samples/ZoneWorld/conanfile.txt",
-)
-
-
-# path, systems.zlink Framework artifact coordinate count
-FRAMEWORK_JAVA_SAMPLE_REGISTRY = (
-    ("framework/languages/java/samples/java/Bingo/Client/build.gradle.kts", 3),
-    ("framework/languages/java/samples/java/Bingo/Server/Api/build.gradle.kts", 5),
-    ("framework/languages/java/samples/java/Bingo/Server/Configuration/build.gradle.kts", 1),
-    ("framework/languages/java/samples/java/Bingo/Server/Matchmaking/build.gradle.kts", 4),
-    ("framework/languages/java/samples/java/Bingo/Server/Play/build.gradle.kts", 5),
-    ("framework/languages/java/samples/java/Bingo/Server/Session/build.gradle.kts", 5),
-    ("framework/languages/java/samples/java/Bingo/Shared/build.gradle.kts", 1),
-    ("framework/languages/java/samples/java/DeliveryDispatch/Client/build.gradle.kts", 3),
-    ("framework/languages/java/samples/java/DeliveryDispatch/Server/Configuration/build.gradle.kts", 2),
-    ("framework/languages/java/samples/java/DeliveryDispatch/Server/CourierSession/build.gradle.kts", 3),
-    ("framework/languages/java/samples/java/DeliveryDispatch/Server/CourierSpotNode/build.gradle.kts", 2),
-    ("framework/languages/java/samples/java/DeliveryDispatch/Server/CustomerGateway/build.gradle.kts", 3),
-    ("framework/languages/java/samples/java/DeliveryDispatch/Server/Dispatch/build.gradle.kts", 2),
-    ("framework/languages/java/samples/java/DeliveryDispatch/Server/Tracking/build.gradle.kts", 2),
-    ("framework/languages/java/samples/java/DeliveryDispatch/Shared/build.gradle.kts", 1),
-    ("framework/languages/java/samples/java/GameQuest/Client/build.gradle.kts", 2),
-    ("framework/languages/java/samples/java/GameQuest/Server/Configuration/build.gradle.kts", 1),
-    ("framework/languages/java/samples/java/GameQuest/Server/GameApi/build.gradle.kts", 3),
-    ("framework/languages/java/samples/java/GameQuest/Server/QuestMission/build.gradle.kts", 2),
-    ("framework/languages/java/samples/java/ShoppingMall/Client/build.gradle.kts", 1),
-    ("framework/languages/java/samples/java/ShoppingMall/Server/CommerceApi/build.gradle.kts", 3),
-    ("framework/languages/java/samples/java/ShoppingMall/Server/Configuration/build.gradle.kts", 1),
-    ("framework/languages/java/samples/java/ShoppingMall/Server/OrderWorkflow/build.gradle.kts", 3),
-    ("framework/languages/java/samples/java/SupportChat/Client/build.gradle.kts", 1),
-    ("framework/languages/java/samples/java/SupportChat/Server/Api/build.gradle.kts", 3),
-    ("framework/languages/java/samples/java/SupportChat/Server/Configuration/build.gradle.kts", 1),
-    ("framework/languages/java/samples/java/SupportChat/Server/Session/build.gradle.kts", 3),
-    ("framework/languages/java/samples/java/SupportChat/Server/Support/build.gradle.kts", 3),
-    ("framework/languages/java/samples/java/SupportChat/Shared/build.gradle.kts", 1),
-    ("framework/languages/java/samples/java/TicTacToe/Client/build.gradle.kts", 3),
-    ("framework/languages/java/samples/java/TicTacToe/Server/build.gradle.kts", 4),
-    ("framework/languages/java/samples/java/ZoneWorld/Client/build.gradle.kts", 1),
-    ("framework/languages/java/samples/java/ZoneWorld/Server/build.gradle.kts", 4),
-    ("framework/languages/java/samples/kotlin/Bingo/Client/build.gradle.kts", 4),
-    ("framework/languages/java/samples/kotlin/Bingo/Server/Api/build.gradle.kts", 5),
-    ("framework/languages/java/samples/kotlin/Bingo/Server/Configuration/build.gradle.kts", 1),
-    ("framework/languages/java/samples/kotlin/Bingo/Server/Matchmaking/build.gradle.kts", 5),
-    ("framework/languages/java/samples/kotlin/Bingo/Server/Play/build.gradle.kts", 5),
-    ("framework/languages/java/samples/kotlin/Bingo/Server/Session/build.gradle.kts", 6),
-    ("framework/languages/java/samples/kotlin/Bingo/Shared/build.gradle.kts", 2),
-    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Client/build.gradle.kts", 3),
-    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Server/Configuration/build.gradle.kts", 2),
-    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Server/CourierSession/build.gradle.kts", 3),
-    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Server/CourierSpotNode/build.gradle.kts", 3),
-    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Server/CustomerGateway/build.gradle.kts", 3),
-    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Server/Dispatch/build.gradle.kts", 3),
-    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Server/Registry/build.gradle.kts", 3),
-    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Server/Tracking/build.gradle.kts", 3),
-    ("framework/languages/java/samples/kotlin/DeliveryDispatch/Shared/build.gradle.kts", 2),
-    ("framework/languages/java/samples/kotlin/GameQuest/Client/build.gradle.kts", 3),
-    ("framework/languages/java/samples/kotlin/GameQuest/Server/Configuration/build.gradle.kts", 1),
-    ("framework/languages/java/samples/kotlin/GameQuest/Server/GameApi/build.gradle.kts", 4),
-    ("framework/languages/java/samples/kotlin/GameQuest/Server/QuestMission/build.gradle.kts", 3),
-    ("framework/languages/java/samples/kotlin/GameQuest/Shared/build.gradle.kts", 1),
-    ("framework/languages/java/samples/kotlin/ShoppingMall/Client/build.gradle.kts", 4),
-    ("framework/languages/java/samples/kotlin/ShoppingMall/Server/CommerceApi/build.gradle.kts", 3),
-    ("framework/languages/java/samples/kotlin/ShoppingMall/Server/Configuration/build.gradle.kts", 2),
-    ("framework/languages/java/samples/kotlin/ShoppingMall/Server/OrderWorkflow/build.gradle.kts", 3),
-    ("framework/languages/java/samples/kotlin/ShoppingMall/Shared/build.gradle.kts", 1),
-    ("framework/languages/java/samples/kotlin/SupportChat/Client/build.gradle.kts", 2),
-    ("framework/languages/java/samples/kotlin/SupportChat/Server/Api/build.gradle.kts", 4),
-    ("framework/languages/java/samples/kotlin/SupportChat/Server/Configuration/build.gradle.kts", 2),
-    ("framework/languages/java/samples/kotlin/SupportChat/Server/Session/build.gradle.kts", 4),
-    ("framework/languages/java/samples/kotlin/SupportChat/Server/Support/build.gradle.kts", 4),
-    ("framework/languages/java/samples/kotlin/SupportChat/Shared/build.gradle.kts", 2),
-    ("framework/languages/java/samples/kotlin/TicTacToe/Client/build.gradle.kts", 4),
-    ("framework/languages/java/samples/kotlin/TicTacToe/Server/build.gradle.kts", 5),
-    ("framework/languages/java/samples/kotlin/ZoneWorld/Client/build.gradle.kts", 2),
-    ("framework/languages/java/samples/kotlin/ZoneWorld/Server/build.gradle.kts", 5),
 )
 
 
@@ -447,18 +358,6 @@ def synchronize_framework(sync: Synchronizer, version: str) -> None:
         lambda match, version=version: replace_version_group(match, version),
         1,
     )
-
-    java_dependency_pattern = (
-        rf"systems\.zlink:zlink-(?:framework-[^:\"')]+|stream-connector|"
-        rf"http-client(?:-kotlin)?):(?P<version>{SEMVER})"
-    )
-    for relative, expected in FRAMEWORK_JAVA_SAMPLE_REGISTRY:
-        sync.regex(
-            relative,
-            java_dependency_pattern,
-            lambda match, version=version: replace_version_group(match, version),
-            expected,
-        )
 
     for relative in FRAMEWORK_CPP_SAMPLE_VCPKG_REGISTRY:
         sync.regex(

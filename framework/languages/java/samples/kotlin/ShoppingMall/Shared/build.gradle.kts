@@ -4,7 +4,7 @@ plugins {
 }
 
 dependencies {
-    api("systems.zlink:zlink-framework-core:0.10.0")
+    api(zlinkLibs.zlink.framework.core)
     implementation(kotlin("stdlib"))
 }
 

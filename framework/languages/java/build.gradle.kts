@@ -10,7 +10,16 @@ plugins {
 }
 
 group = "systems.zlink"
-version = "0.10.0"
+version = providers.fileContents(layout.projectDirectory.file("../../../FRAMEWORK_VERSION"))
+    .asText
+    .map { contents ->
+        requireNotNull(
+            Regex("""ZLINK_FRAMEWORK_VERSION=([0-9]+\.[0-9]+\.[0-9]+)""")
+                .matchEntire(contents.trim())
+        ) { "FRAMEWORK_VERSION must contain exactly ZLINK_FRAMEWORK_VERSION=X.Y.Z" }
+            .groupValues[1]
+    }
+    .get()
 
 idea {
     module {

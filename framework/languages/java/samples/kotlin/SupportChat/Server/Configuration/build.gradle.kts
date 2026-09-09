@@ -4,8 +4,8 @@ plugins {
 
 dependencies {
     implementation(project("${path.substringBefore(":Server")}:Shared"))
-    implementation("systems.zlink:zlink-framework-core:0.10.0")
-    implementation("systems.zlink:zlink-framework-locations-redis:0.10.0")
+    implementation(zlinkLibs.zlink.framework.core)
+    implementation(zlinkLibs.zlink.framework.locations.redis)
     implementation("org.springframework.boot:spring-boot:3.5.14")
 }
 

@@ -8,9 +8,9 @@ fun sampleProject(name: String) = project("${path.substringBeforeLast(":", "")}:
 dependencies {
     implementation(sampleProject("Shared"))
     implementation(sampleProject("Server:Configuration"))
-    implementation("systems.zlink:zlink-framework-kotlin:0.10.0")
-    implementation("systems.zlink:zlink-http-client-kotlin:0.10.0")
-    implementation("systems.zlink:zlink-stream-connector:0.10.0")
+    implementation(zlinkLibs.zlink.framework.kotlin)
+    implementation(zlinkLibs.zlink.http.client.kotlin)
+    implementation(zlinkLibs.zlink.stream.connector)
     implementation(zlinkLibs.zlink.bindings)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.9.0")

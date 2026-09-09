@@ -5,8 +5,8 @@ plugins {
 
 dependencies {
     api(project("${path.substringBefore(":Server")}:Shared"))
-    api("systems.zlink:zlink-framework-core:0.10.0")
-    api("systems.zlink:zlink-framework-locations-redis:0.10.0")
+    api(zlinkLibs.zlink.framework.core)
+    api(zlinkLibs.zlink.framework.locations.redis)
 }
 
 kotlin {

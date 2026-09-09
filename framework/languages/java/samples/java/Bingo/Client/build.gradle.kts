@@ -15,9 +15,9 @@ fun sampleRootPath(): String {
 
 dependencies {
     implementation(sampleProject("Shared"))
-    implementation("systems.zlink:zlink-framework-core:0.10.0")
-    implementation("systems.zlink:zlink-stream-connector:0.10.0")
-    implementation("systems.zlink:zlink-framework-codec-protobuf:0.10.0")
+    implementation(zlinkLibs.zlink.framework.core)
+    implementation(zlinkLibs.zlink.stream.connector)
+    implementation(zlinkLibs.zlink.framework.codec.protobuf)
     implementation(zlinkLibs.zlink.bindings)
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
     implementation("io.netty:netty-buffer:4.1.100.Final")

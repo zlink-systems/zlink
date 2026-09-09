@@ -6,7 +6,7 @@ fun sampleProject(name: String) = project("${path.substringBeforeLast(":", "")}:
 
 dependencies {
     implementation(sampleProject("Shared"))
-    implementation("systems.zlink:zlink-stream-connector:0.10.0")
+    implementation(zlinkLibs.zlink.stream.connector)
     implementation(zlinkLibs.zlink.bindings)
 }
 

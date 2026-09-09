@@ -5,7 +5,7 @@ plugins {
 dependencies {
     implementation(project("${path.substringBeforeLast(":Client")}:Shared"))
     implementation(project("${path.substringBeforeLast(":Client")}:Server:Configuration"))
-    implementation("systems.zlink:zlink-stream-connector:0.10.0")
+    implementation(zlinkLibs.zlink.stream.connector)
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
 }
 
