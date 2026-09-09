@@ -88,6 +88,7 @@ event별 `value`의 의미는 다음과 같다.
 | `MONITOR_STOPPED` | `0` |
 | `DISCONNECTED` | `zlink_disconnect_reason_t` 값 |
 | `HANDSHAKE_FAILED_PROTOCOL` | `zlink_protocol_error_t` 값 |
+| `HANDSHAKE_FAILED_AUTH` | TLS verify·client-cert 실패를 나타내는 `EACCES` |
 | `PEER_WEIGHT_CHANGED` | 새 `0..10000` weight |
 | `CONNECTION_READY` | 해당 monitor source의 ready logical peer 수 |
 | receive-flow event | 아래 receive-flow 표 |

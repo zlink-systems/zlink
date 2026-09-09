@@ -89,6 +89,7 @@ defines `value`, disconnect reasons, protocol errors, lanes, and event flag valu
 | `HANDSHAKE_FAILED_NO_DETAIL` | `1u << 11` | Handshake failure without protocol detail |
 | `CONNECTION_READY` | `1u << 12` | Logical peer ready transition or count snapshot on disconnect |
 | `HANDSHAKE_FAILED_PROTOCOL` | `1u << 13` | ZMP handshake protocol validation failed |
+| `HANDSHAKE_FAILED_AUTH` | `1u << 14` | TLS certificate verification or client-certificate authentication failed |
 | `PEER_WEIGHT_CHANGED` | `1u << 15` | Peer weight applied |
 
 ## 4. Receive-flow event

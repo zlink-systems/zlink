@@ -82,6 +82,7 @@ Event 식별자는 `ZLINK_EVENT_` 접두사를 쓰며 `ZLINK_SOCKET_MONITOR_EVEN
 | `HANDSHAKE_FAILED_NO_DETAIL` | `1u << 11` | 상세 protocol 값이 없는 handshake 실패 |
 | `CONNECTION_READY` | `1u << 12` | logical peer ready 전이 또는 disconnect에 따른 count snapshot |
 | `HANDSHAKE_FAILED_PROTOCOL` | `1u << 13` | ZMP handshake protocol 검증 실패 |
+| `HANDSHAKE_FAILED_AUTH` | `1u << 14` | TLS verify 또는 client-cert 인증 실패 |
 | `PEER_WEIGHT_CHANGED` | `1u << 15` | peer weight 적용 |
 
 ## 4. Receive-flow event

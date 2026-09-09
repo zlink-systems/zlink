@@ -96,6 +96,7 @@ Each event defines `value` as follows.
 | `MONITOR_STOPPED` | `0` |
 | `DISCONNECTED` | A `zlink_disconnect_reason_t` value |
 | `HANDSHAKE_FAILED_PROTOCOL` | A `zlink_protocol_error_t` value |
+| `HANDSHAKE_FAILED_AUTH` | `EACCES` for TLS verification or client-certificate failure |
 | `PEER_WEIGHT_CHANGED` | The new `0..10000` weight |
 | `CONNECTION_READY` | The current count of ready logical peers for this monitor source |
 | Receive-flow events | Receive-flow table below |
