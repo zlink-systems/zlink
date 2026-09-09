@@ -1,0 +1,22 @@
+# fwb2-06 — Java bench runner를 server-driven(A/B + HTTP trigger) 모델로 개정하고 Kotlin 보조 셀 2개를 붙인다 (계획 S2)
+
+저장소 /home/hep7/project/zlink, branch main. 한국어로 보고. 감독자(Claude)가 diff를 검토하고 커밋한다.
+계획: `doc/plan/framework-bench-with-grpc-s2s-plan.ko.md` §3·§4(Java·Kotlin 행)·§8 S2. 규격: `framework/bench/grpc/README.ko.md` §3, §4(셀 원본 role·trigger 8필드·streams·target_stats), §6, §9(java 대역 5240-5259: grpc A 5240/5241, B 5242/5243; raw A 5245/5246, B 5247/5248/5249; framework A 5252/5253, B 5254/5255; kotlin 보조 5260-5279: grpc A 5260/5261, framework A 5272/5273, B는 Java 대역 재사용), §10(§10.5 Kotlin 보조 셀). **참고 구현**: .NET(`framework/bench/grpc/dotnet/run_local.sh`, `Client/Program.cs`, 보고서 `doc/plan/fw-bench-worklog/fwb2-03-summary.md`)과 Node(`framework/bench/grpc/node/`, `fwb2-04-summary.md`)가 같은 모델로 이미 개정됐다. 셀 JSON은 집계기(`framework/bench/grpc/tools/`, fixture `tools/tests/fixtures/s2s/`)가 읽는 `with-grpc-cell-v1`. 규격·계획·문서는 읽기만 한다.
+금지: git commit/push; `.github/**`; 측정 조건 변경; Core·bindings·framework 런타임 소스 수정(결함이면 파일:줄로 보고); 집계기·다른 언어 bench 수정; `rm -rf`·`git clean`·`git stash`·`git checkout --`·`git restore`; 앵커 없는 `pkill -f`. **벤치 실행(smoke 포함)은 반드시 티켓으로** `bash scripts/perf/perf-ticket.sh submit -p 2 -o sol-fwb2-06 -d "<설명>" -- <명령>`(완료 대기; 직접 실행 금지). 빌드는 load average 10 미만일 때 한 번에 하나(`--no-daemon --max-workers=1`). 임시 산출물 `/tmp/zlink-sol-fwb2-06/`. 자격 증명 금지. JDK는 현재 main 기준(22; `/usr/lib/jvm/temurin-22-jdk-amd64`). 다른 worktree(`/home/hep7/project/zlink-jdk25`)는 건드리지 않는다.
+
+## 목표
+`framework/bench/grpc/java/`(client, kotlin-client, grpc-server, zlink-raw-server, zlink-framework-server, shared)를 규격 §10의 server-driven 모델로 바꾼다. 구현별 source A(HTTP trigger listener + stats + B로 향하는 client + logical stream 부하)와 target B(echo/count + stats), `run_local.sh`는 §10.4 셀 순서(B→A→warmup→active→settle→target_stats 병합·count 대조(§5.2 불변식: completed ≤ received ≤ completed+errors+abandoned; errors·abandoned 0이면 등식)→종료, 셀마다 새 process 쌍, 5240-5259 LISTEN preflight). Kotlin 보조: `run_local_kotlin.sh`가 `grpc-kotlin`(coroutine stub)과 `zlink-framework-kotlin`(suspend 호출)의 `request-window @1024` 두 셀만 A를 Kotlin으로 돌리고 B는 Java 바이너리를 Java 대역에서 쓴다(Java 측정과 동시에 돌리지 않는다).
+
+## 설계 지침
+- A의 trigger/stats는 JDK `com.sun.net.httpserver.HttpServer`. trigger 계약(중복 trigger 같은 acknowledgement, phase idle/warmup/active/failed, stats ready·submitted·completed·errors·inFlight)은 .NET `BenchHttpApplication`·Node `bench-http-application.js`와 같은 규칙으로 Java `shared`에 한 곳.
+- logical stream: serial 1×1, window 1×100(하나의 window를 virtual thread 100개 또는 CompletableFuture 100개가 공유), backpressure 1×무제한, send 8×1. 구현 방식을 `streams.implementation`에 기록.
+- gRPC B는 기존 grpc-server, A는 grpc-java unary stub(Kotlin은 grpc-kotlin coroutine stub). raw는 기존 zlink-raw-server(request/command ROUTER 분리). framework는 `zlink-framework-core`의 channel client. 1차 계획의 Java `repro/`(window 셀 reply 유실 재현)는 유지하고, 0.17.6에서 재현되는지 smoke 결과로 보고한다.
+- 기존 환경 변수(`RUNS`, `RUN_DEALER`(기본 0, ROUTER 계약), `DURATION`, `WARMUP_SECONDS`, `PAYLOADS`, `SCENARIO`, `IMPLEMENTATION`, `STAMP`, `OUTROOT`, `SKIP_BUILD`)는 유지.
+
+## 검증
+- `cd framework/bench/grpc/java && ./gradlew --no-daemon --max-workers=1 assemble installDist` rc=0.
+- smoke(티켓, `DURATION=2 WARMUP_SECONDS=1 PAYLOADS=1024`): `grpc-java`·`zlink-java`·`zlink-framework-java` × `request-serial`, `zlink-java` × `send-saturation`, `zlink-framework-java` × `request-window`, Kotlin 보조 2셀. 각 rc=0, RESULT 라인, 원본 JSON에 role/trigger/streams/target_stats, count 대조 통과. 집계기 `--lang java --format spec4`가 나오는지 확인.
+- `bash -n` runner 2개, `git diff --check`. 3-run 측정은 하지 않는다.
+
+## 보고
+`doc/plan/fw-bench-worklog/fwb2-06-summary.md`: 프로세스 구성 표(A/B/포트/모듈, Kotlin 보조 포함), 변경 파일과 diff 요지, 수정 전/후 규칙 수, smoke 검증 표(티켓·rc·RESULT), 언어별 문서(계획 §5 절 1~6; Java 문서에 Kotlin 보조 절)에 들어갈 표와 값(.NET 문서 `framework/bench/grpc/doc/dotnet.ko.md`와 같은 구성), 발견한 런타임 결함(파일:줄), BLOCKERS, 재검증 명령.
