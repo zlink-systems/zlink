@@ -109,7 +109,7 @@ jobs:
           echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload the binding package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.versions.outputs.artifact_name }}
           path: ${{ runner.temp }}/zlink-dotnet-binding/Zlink.*.nupkg
@@ -164,7 +164,7 @@ jobs:
           node-version: 20
 
       - name: Download the prepared .NET binding package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ${{ needs.prepare-dotnet-binding.outputs.artifact_name }}
           path: ${{ runner.temp }}/zlink-local-packages/nuget
