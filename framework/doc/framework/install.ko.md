@@ -98,7 +98,7 @@ windows-arm64다.
 
 ## Binding만 사용
 
-framework 없이 Core API를 언어별 package로 직접 쓰려면 [Bindings 가이드](bindings/guide/README.ko.md)에서
+framework 없이 Core API를 언어별 package로 직접 쓰려면 [Bindings 가이드](https://zlink.systems/ko/bindings/guide/)에서
 언어를 고른다. 7개 언어(C, C++, .NET, Java, Node.js, Python, Go, Rust)의 설치 절차와 5분 예제가 있다.
 
 ## 저장소에서 빌드

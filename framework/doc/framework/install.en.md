@@ -90,7 +90,7 @@ windows-arm64.
 ## Bindings only
 
 To use the Core API through a language package without the framework, pick a language in the
-[Bindings guide](bindings/guide/README.en.md). Seven languages (C, C++, .NET, Java, Node.js,
+[Bindings guide](https://zlink.systems/bindings/guide/). Seven languages (C, C++, .NET, Java, Node.js,
 Python, Go, Rust) have an installation procedure and a five-minute example there.
 
 ## Building from the repository
