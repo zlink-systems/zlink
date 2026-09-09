@@ -174,7 +174,7 @@ jobs:
         run: |
           # The workspace manifest pins http-client to a local tarball; build its
           # dist with the same bootstrap the local-package flow uses, fed by the
-          # published binding tarball.
+          # checkout-built local binding tarball.
           version="${{ steps.core.outputs.binding_version }}"
           mkdir -p .artifacts/wsl/npm
           bash scripts/local-package/http-client/build-wsl.sh node
@@ -326,7 +326,7 @@ jobs:
         run: |
           # The workspace manifest pins http-client to a local tarball; build its
           # dist with the same bootstrap the local-package flow uses, fed by the
-          # published binding tarball.
+          # checkout-built local binding tarball.
           version="${{ steps.core.outputs.binding_version }}"
           mkdir -p .artifacts/wsl/npm
           bash scripts/local-package/http-client/build-wsl.sh node
