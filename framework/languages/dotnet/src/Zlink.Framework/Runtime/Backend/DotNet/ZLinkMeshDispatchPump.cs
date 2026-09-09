@@ -460,7 +460,10 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             ref _reservedApplicationAdmission,
             null);
         if (reserved is not null)
+        {
+            Volatile.Write(ref _applicationAdmissionWaitActive, 0);
             return reserved;
+        }
         var queue = _applicationJobQueue;
         if (queue is not null && queue.TryAcquire(out var immediate))
             return immediate;
@@ -483,6 +486,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         ZLinkApplicationJobQueueLease? admission = null;
+        var transferred = false;
         try
         {
             admission = await queue.AcquireAsync(cancellationToken)
@@ -492,8 +496,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             Interlocked.Exchange(
                 ref _reservedApplicationAdmission,
                 admission)?.Dispose();
+            transferred = true;
             admission = null;
-            Volatile.Write(ref _applicationAdmissionWaitActive, 0);
             SignalReady(MeshReadyDomains.Application);
         }
         catch (OperationCanceledException)
@@ -503,7 +507,10 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         finally
         {
             admission?.Dispose();
-            Volatile.Write(ref _applicationAdmissionWaitActive, 0);
+            // A consumer can already have taken the published reservation and
+            // registered its successor while SignalReady is still returning.
+            if (!transferred)
+                Volatile.Write(ref _applicationAdmissionWaitActive, 0);
         }
     }
 

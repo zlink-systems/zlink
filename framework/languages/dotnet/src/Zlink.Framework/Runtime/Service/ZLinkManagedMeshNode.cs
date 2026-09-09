@@ -5066,6 +5066,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (queue is not null)
         {
             var reserved = Interlocked.Exchange(ref _reservedRawApplicationAdmission, null);
+            if (reserved is not null)
+                Volatile.Write(ref _rawApplicationAdmissionWaitActive, 0);
             count = reserved is null ? 0 : 1;
             admissions[0] = reserved;
             count += queue.TryAcquireBatch(admissions, count, ReceiveBatchSize - count);
@@ -5126,6 +5128,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CancellationToken cancellationToken)
     {
         ZLinkApplicationJobQueueLease? admission = null;
+        var transferred = false;
         try
         {
             admission = await queue.AcquireAsync(cancellationToken)
@@ -5135,6 +5138,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Interlocked.Exchange(
                 ref _reservedRawApplicationAdmission,
                 admission)?.Dispose();
+            transferred = true;
             admission = null;
             WakeIngress();
         }
@@ -5148,7 +5152,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         finally
         {
             admission?.Dispose();
-            Volatile.Write(ref _rawApplicationAdmissionWaitActive, 0);
+            // Once published, only the consumer taking that reservation may
+            // clear the flag. It can register a successor before this wake ends.
+            if (!transferred)
+                Volatile.Write(ref _rawApplicationAdmissionWaitActive, 0);
         }
     }
 
