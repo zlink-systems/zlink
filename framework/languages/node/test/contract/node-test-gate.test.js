@@ -59,6 +59,11 @@ test('standalone samples stay outside workspaces and carry package-mode build in
     path.join(workspaceRoot, 'scripts', 'browser-e2e', 'run-sample.mjs'),
     'utf8'
   );
+  // Samples pin the published framework version; the workspace manifest is the
+  // sync-version.py registry entry that carries the same number.
+  const frameworkVersion = JSON.parse(
+    fs.readFileSync(path.join(workspaceRoot, 'packages', 'framework', 'package.json'), 'utf8')
+  ).version;
   const browserSamples = new Set([
     'Bingo.Ts', 'DeliveryDispatch.Ts', 'GameQuest.Ts', 'SupportChat.Ts', 'TicTacToe.Ts'
   ]);
@@ -67,7 +72,7 @@ test('standalone samples stay outside workspaces and carry package-mode build in
     const sampleRoot = path.join(workspaceRoot, 'samples', sampleName);
     const manifest = JSON.parse(fs.readFileSync(path.join(sampleRoot, 'package.json'), 'utf8'));
     const tsconfig = JSON.parse(fs.readFileSync(path.join(sampleRoot, 'tsconfig.json'), 'utf8'));
-    assert.equal(manifest.dependencies['@zlink-systems/framework'], '0.10.0', sampleName);
+    assert.equal(manifest.dependencies['@zlink-systems/framework'], frameworkVersion, sampleName);
     assert.equal(manifest.scripts.prebuild, 'node scripts/prepare-dependencies.mjs', sampleName);
     assert.equal(manifest.scripts.sample, 'node scripts/run-sample.mjs Runner/sample-runner.mjs', sampleName);
     assert.doesNotMatch(manifest.scripts.build, /\.\.\/\.\.\/(?:node_modules|scripts)/, sampleName);
