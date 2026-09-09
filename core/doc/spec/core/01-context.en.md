@@ -103,7 +103,7 @@ typedef enum zlink_ctx_option_t
     ZLINK_IO_THREADS              = 1,  // Number of I/O threads in the context
     ZLINK_MAX_SOCKETS             = 2,  // Maximum number of sockets allowed
     ZLINK_SOCKET_LIMIT            = 3,  // Hard upper limit on socket count (read-only)
-    ZLINK_THREAD_PRIORITY         = 3,  // I/O thread scheduling priority
+    ZLINK_THREAD_PRIORITY         = 22,  // I/O thread scheduling priority
     ZLINK_THREAD_SCHED_POLICY     = 4,  // I/O thread scheduling policy
     ZLINK_MSG_T_SIZE              = 6,  // Size of zlink_msg_t (bytes, read-only)
     ZLINK_THREAD_AFFINITY_CPU_ADD      = 7,  // Add a CPU to the I/O thread affinity set
@@ -132,11 +132,6 @@ typedef enum zlink_auto_hwm_profile_t
 
 The exact memory share, fixed cap, and per-role bounds of each profile are
 owned by [Auto HWM §2](systems/06-auto-hwm.en.md#2-auto-hwm-budget-calculation).
-
-> **Note:** `ZLINK_SOCKET_LIMIT` and `ZLINK_THREAD_PRIORITY` share the enum
-> value `3`. In the current public C ABI the option lookup resolves value `3`
-> to the read-only `ZLINK_SOCKET_LIMIT`, so `ZLINK_THREAD_PRIORITY` cannot be
-> set or queried through `zlink_ctx_set` / `zlink_ctx_get`.
 
 What budget the three Auto HWM byte options (`MEMORY_LIMIT_BYTES`,
 `RUNTIME_MEMORY_LIMIT_BYTES`, and `CORE_BUDGET_BYTES`) compute and how it is
@@ -398,7 +393,7 @@ test.
 
 **Options**
 - `zlink_ctx_set` with an unknown option or an invalid value produces `EINVAL`; with an invalid handle it produces `EFAULT` (`ZLINK_CONFIG_INVALID_HANDLE`).
-- Querying value `3` with `zlink_ctx_get` resolves to the read-only `ZLINK_SOCKET_LIMIT`; `ZLINK_THREAD_PRIORITY` cannot be queried through this path.
+- `ZLINK_THREAD_PRIORITY` uses unique value `22` for set/get and does not change the read-only contract of `ZLINK_SOCKET_LIMIT` value `3`.
 - Attempting to set any of the three Auto HWM byte options through `zlink_ctx_set` produces `EINVAL` (only `zlink_ctx_set_data` may set them).
 - Querying an Auto HWM byte option through `zlink_ctx_get_data` with a size other than exactly `sizeof(uint64_t)` produces `EINVAL` and writes the required size into `*optvallen_`.
 - Writing a context option value that is not in the enum through `zlink_ctx_set_data` produces `ZLINK_CONFIG_INVALID_ARGUMENT`.

@@ -7,7 +7,7 @@ internal enum ContextOption
     IoThreads = 1,
     MaxSockets = 2,
     SocketLimit = 3,
-    ThreadPriority = 3,
+    ThreadPriority = 22,
     ThreadSchedPolicy = 4,
     MsgTSize = 6,
     ThreadAffinityCpuAdd = 7,

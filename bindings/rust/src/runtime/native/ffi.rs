@@ -197,6 +197,7 @@ pub enum zlink_ctx_option_t {
     ZLINK_IO_THREADS = 1,
     ZLINK_MAX_SOCKETS = 2,
     ZLINK_SOCKET_LIMIT = 3,
+    ZLINK_THREAD_PRIORITY = 22,
     ZLINK_THREAD_SCHED_POLICY = 4,
     ZLINK_MSG_T_SIZE = 6,
     ZLINK_THREAD_AFFINITY_CPU_ADD = 7,
@@ -209,10 +210,6 @@ pub enum zlink_ctx_option_t {
     ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES = 19,
     ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES = 20,
     ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES = 21,
-}
-
-impl zlink_ctx_option_t {
-    pub const ZLINK_THREAD_PRIORITY: Self = Self::ZLINK_SOCKET_LIMIT;
 }
 
 #[repr(C)]

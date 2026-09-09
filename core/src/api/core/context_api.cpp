@@ -220,15 +220,13 @@ int zlink_ctx_get (void *ctx_, zlink_ctx_option_t option_, zlink_config_result_t
             *error_out_ = ZLINK_CONFIG_INVALID_HANDLE;
         return -1;
     }
-    const int result = (static_cast<zlink::ctx_t *> (ctx_))->get (option_);
-    if (result < 0) {
-        if (error_out_)
-            *error_out_ = zlink::config_result_internal::from_errno (errno);
-    } else {
-        if (error_out_)
-            *error_out_ = ZLINK_CONFIG_OK;
-    }
-    return result;
+    int value = 0;
+    size_t value_size = sizeof (value);
+    const int rc = (static_cast<zlink::ctx_t *> (ctx_))->get (
+      option_, &value, &value_size);
+    if (error_out_)
+        *error_out_ = zlink::config_result_internal::from_rc (rc);
+    return rc == 0 ? value : -1;
 }
 
 zlink_config_result_t zlink_ctx_auto_hwm_recalculate (void *ctx_)

@@ -39,7 +39,7 @@ enum class context_option : int
     io_threads = 1,
     max_sockets = 2,
     socket_limit = 3,
-    thread_priority = 3,
+    thread_priority = 22,
     thread_sched_policy = 4,
     msg_t_size = 6,
     thread_affinity_cpu_add = 7,

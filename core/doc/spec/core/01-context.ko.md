@@ -90,7 +90,7 @@ typedef enum zlink_ctx_option_t
     ZLINK_IO_THREADS              = 1,  // Context의 I/O thread 수
     ZLINK_MAX_SOCKETS             = 2,  // 허용되는 최대 socket 수
     ZLINK_SOCKET_LIMIT            = 3,  // socket 수 하드 상한 (읽기 전용)
-    ZLINK_THREAD_PRIORITY         = 3,  // I/O thread 스케줄링 우선순위
+    ZLINK_THREAD_PRIORITY         = 22,  // I/O thread 스케줄링 우선순위
     ZLINK_THREAD_SCHED_POLICY     = 4,  // I/O thread 스케줄링 정책
     ZLINK_MSG_T_SIZE              = 6,  // zlink_msg_t 크기 (byte, 읽기 전용)
     ZLINK_THREAD_AFFINITY_CPU_ADD      = 7,  // I/O thread 어피니티에 CPU 추가
@@ -119,11 +119,6 @@ typedef enum zlink_auto_hwm_profile_t
 
 각 profile의 정확한 memory 비율, 고정 cap과 역할별 하한·상한은
 [Auto HWM §2](systems/06-auto-hwm.ko.md#2-auto-hwm-budget-계산)가 소유한다.
-
-> **참고:** `ZLINK_SOCKET_LIMIT`과 `ZLINK_THREAD_PRIORITY`는 enum 값 `3`을
-> 공유한다. 현재 공개 C ABI의 옵션 조회는 값 `3`을 읽기 전용
-> `ZLINK_SOCKET_LIMIT`으로 먼저 해석하므로, `ZLINK_THREAD_PRIORITY`는
-> `zlink_ctx_set` / `zlink_ctx_get`으로 설정하거나 조회할 수 없다.
 
 Auto HWM byte 옵션 세 개(`MEMORY_LIMIT_BYTES`, `RUNTIME_MEMORY_LIMIT_BYTES`,
 `CORE_BUDGET_BYTES`)가 어떤 budget을 계산하고 어떻게 admission에 쓰이는지는
@@ -372,7 +367,7 @@ unit test 하나로 이어진다.
 
 **옵션**
 - `zlink_ctx_set`에 알 수 없는 옵션이나 유효하지 않은 값을 주면 `EINVAL`, 유효하지 않은 핸들이면 `EFAULT`(`ZLINK_CONFIG_INVALID_HANDLE`)다.
-- 값 `3`을 `zlink_ctx_get`으로 조회하면 읽기 전용 `ZLINK_SOCKET_LIMIT`으로 해석되며, `ZLINK_THREAD_PRIORITY`는 이 경로로 조회할 수 없다.
+- `ZLINK_THREAD_PRIORITY`는 고유 값 `22`로 설정·조회하고 `ZLINK_SOCKET_LIMIT` 값 `3`의 읽기 전용 계약에 영향을 주지 않는다.
 - 세 Auto HWM byte 옵션을 `zlink_ctx_set`으로 설정하려 하면 `EINVAL`이다(설정은 `zlink_ctx_set_data`만 허용).
 - Auto HWM byte 옵션을 `zlink_ctx_get_data`로 정확히 `sizeof(uint64_t)`가 아닌 크기로 조회하면 `EINVAL`이고 필요한 크기를 `*optvallen_`에 기록한다.
 - enum에 없는 context 옵션 값을 `zlink_ctx_set_data`로 쓰면 `ZLINK_CONFIG_INVALID_ARGUMENT`다.

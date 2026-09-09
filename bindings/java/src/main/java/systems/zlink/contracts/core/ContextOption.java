@@ -6,7 +6,7 @@ package systems.zlink.contracts.core;
 /** Context configuration option keys used by the native socket API. */
 public enum ContextOption {
     IO_THREADS(1), MAX_SOCKETS(2), SOCKET_LIMIT(3),
-    THREAD_PRIORITY(3), THREAD_SCHED_POLICY(4),
+    THREAD_PRIORITY(22), THREAD_SCHED_POLICY(4),
     MSG_T_SIZE(6), THREAD_AFFINITY_CPU_ADD(7),
     THREAD_AFFINITY_CPU_REMOVE(8), THREAD_NAME_PREFIX(9), BLOCKY(10),
     AUTO_HWM_ENABLE(12),

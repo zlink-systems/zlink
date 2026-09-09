@@ -4,7 +4,7 @@ export const ContextOption = Object.freeze({
   IO_THREADS: 1,
   MAX_SOCKETS: 2,
   SOCKET_LIMIT: 3,
-  THREAD_PRIORITY: 3,
+  THREAD_PRIORITY: 22,
   THREAD_SCHED_POLICY: 4,
   MSG_T_SIZE: 6,
   THREAD_AFFINITY_CPU_ADD: 7,

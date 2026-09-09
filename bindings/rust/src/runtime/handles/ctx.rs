@@ -254,11 +254,11 @@ impl ContextStorage {
     }
 
     pub(crate) fn thread_priority(&self) -> Result<i32, ConfigError> {
-        self.get_int_option(3)
+        self.get_int_option(ffi::zlink_ctx_option_t::ZLINK_THREAD_PRIORITY as i32)
     }
 
     pub(crate) fn set_thread_priority(&self, priority: i32) -> Result<(), ConfigError> {
-        self.set_int_option(3, priority)
+        self.set_int_option(ffi::zlink_ctx_option_t::ZLINK_THREAD_PRIORITY as i32, priority)
     }
 
     pub(crate) fn thread_scheduling_policy(&self) -> Result<i32, ConfigError> {
