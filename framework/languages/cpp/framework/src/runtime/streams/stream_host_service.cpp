@@ -506,12 +506,12 @@ std::string stream_listener_advertised_endpoint (
 
 std::optional<std::string> socket_endpoint_text (const tcp::endpoint &endpoint)
 {
-    boost::system::error_code address_error;
-    const auto address = endpoint.address ().to_string (address_error);
-    if (address_error) {
+    try {
+        return endpoint.address ().to_string () + ":" + std::to_string (endpoint.port ());
+    }
+    catch (const boost::system::system_error &) {
         return std::nullopt;
     }
-    return address + ":" + std::to_string (endpoint.port ());
 }
 
 std::optional<std::string> local_endpoint_text (tcp::socket &socket)
