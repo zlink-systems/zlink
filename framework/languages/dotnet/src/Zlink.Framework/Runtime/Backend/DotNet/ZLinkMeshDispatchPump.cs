@@ -348,7 +348,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             return;
         }
 
-        var nodeRoutes = new List<ZLinkBackendRouteReceived>(
+        List<ZLinkBackendRouteReceived>? nodeRoutes = new(
             ZLinkReceiveBatchBudget.MaximumRecords);
         try
         {
@@ -409,7 +409,9 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             // result remains with the worker, while the claim returns for the
             // next bounded batch and other owners run on their own workers.
             var dispatch = DispatchNodeRoutes(nodeRoutes, cancellationToken);
-            nodeRoutes.Clear();
+            // The asynchronous handler owns this list until its result completes.
+            // Clearing it here invalidates an enumerator suspended inside the handler.
+            nodeRoutes = null;
             if (dispatch.IsCompletedSuccessfully)
                 dispatch.GetAwaiter().GetResult();
             else
@@ -424,9 +426,6 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            foreach (var received in nodeRoutes)
-                received.Dispose();
-            nodeRoutes.Clear();
             if (_applicationTaskRunner is null)
                 throw;
             _applicationTaskRunner.ErrorSink.ReportRuntimeTaskException(
@@ -434,8 +433,9 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         }
         finally
         {
-            foreach (var received in nodeRoutes)
-                received.Dispose();
+            if (nodeRoutes is not null)
+                foreach (var received in nodeRoutes)
+                    received.Dispose();
             DisposeAdmissions(admissions);
             claim.Dispose();
         }
