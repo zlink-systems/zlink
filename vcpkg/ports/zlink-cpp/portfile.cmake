@@ -20,6 +20,7 @@ vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}"
     OPTIONS
         -DZLINK_CPP_CORE_VERSION=0.17.5
+        -DZLINK_CPP_CORE_PACKAGE_PREFIX=${CURRENT_INSTALLED_DIR}
         -DZLINK_CPP_BUILD_TESTS=OFF
         -DZLINK_CPP_BUILD_SAMPLES=OFF
         -DZLINK_CPP_BUILD_BENCHMARKS=OFF
@@ -28,6 +29,12 @@ vcpkg_cmake_install()
 vcpkg_copy_pdbs()
 vcpkg_cmake_config_fixup(PACKAGE_NAME zlink_cpp CONFIG_PATH lib/cmake/zlink_cpp)
 file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include")
+file(REMOVE_RECURSE
+    "${CURRENT_PACKAGES_DIR}/include/zlink/core"
+    "${CURRENT_PACKAGES_DIR}/include/zlink/eventing"
+    "${CURRENT_PACKAGES_DIR}/include/zlink/message"
+    "${CURRENT_PACKAGES_DIR}/include/zlink/socket"
+)
 vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/LICENSE")
 file(INSTALL "${CMAKE_CURRENT_LIST_DIR}/usage"
     DESTINATION "${CURRENT_PACKAGES_DIR}/share/${PORT}")

@@ -150,6 +150,13 @@ set(ZLINK_FRAMEWORK_CPP_M6C_RUNTIME_SOURCES
 # objects, which halves the compile count for these files without changing
 # archive contents, link order, or the installed export set (zlink_framework
 # stays the only exported target).
+function(zlink_framework_cpp_configure_msvc_target target_name)
+  if(MSVC)
+    target_compile_definitions(${target_name} PUBLIC NOMINMAX)
+    target_compile_options(${target_name} PUBLIC /bigobj)
+  endif()
+endfunction()
+
 function(zlink_framework_cpp_configure_m6_objects target_name)
   target_compile_features(${target_name} PUBLIC cxx_std_20)
   target_include_directories(${target_name} PRIVATE
@@ -159,6 +166,7 @@ function(zlink_framework_cpp_configure_m6_objects target_name)
   target_link_libraries(${target_name} PRIVATE
     zlink::cpp
     Threads::Threads)
+  zlink_framework_cpp_configure_msvc_target(${target_name})
 endfunction()
 
 add_library(zlink_framework_m6a_objects OBJECT
@@ -251,6 +259,13 @@ add_library(zlink_framework STATIC
 add_library(zlink::framework ALIAS zlink_framework)
 set_target_properties(zlink_framework PROPERTIES EXPORT_NAME framework)
 target_compile_features(zlink_framework PUBLIC cxx_std_20)
+zlink_framework_cpp_configure_msvc_target(zlink_framework)
+if(MSVC)
+  set_property(SOURCE framework/src/runtime/spots/spot_runtime.cpp APPEND PROPERTY
+    COMPILE_OPTIONS
+      "$<$<CONFIG:Release>:/O1>"
+      "$<$<CONFIG:Release>:/Oi->")
+endif()
 target_include_directories(zlink_framework PUBLIC
   $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/framework/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
@@ -343,6 +358,7 @@ add_library(zlink_http_client STATIC
 add_library(zlink::http_client ALIAS zlink_http_client)
 set_target_properties(zlink_http_client PROPERTIES EXPORT_NAME http_client)
 target_compile_features(zlink_http_client PUBLIC cxx_std_20)
+zlink_framework_cpp_configure_msvc_target(zlink_http_client)
 target_include_directories(zlink_http_client PUBLIC
   $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/http-client/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
@@ -412,6 +428,7 @@ add_library(zlink::stream_connector ALIAS zlink_stream_connector)
 set_target_properties(zlink_stream_connector PROPERTIES
   EXPORT_NAME stream_connector)
 target_compile_features(zlink_stream_connector PUBLIC cxx_std_20)
+zlink_framework_cpp_configure_msvc_target(zlink_stream_connector)
 target_include_directories(zlink_stream_connector PUBLIC
   $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/connector/core/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)

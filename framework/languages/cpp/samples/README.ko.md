@@ -1,5 +1,14 @@
 # ZLink C++ Framework Samples
 
+## 독립 다운로드 제한
+
+샘플 디렉터리만 별도로 내려받으면 기본 vcpkg registry에서는 `zlink`와
+`zlink-framework` port를 찾을 수 없습니다. 이 저장소의 overlay port를 지정해도 현재 공개된
+`zlink-cpp` 0.17.6 자산에는 헤더만 있고 CMake project와 source가 없어 설치가 중단됩니다.
+따라서 현재는 독립 package mode 설치를 완료할 수 없습니다. 완결된 `zlink-cpp` 1.0.0 자산이
+게시된 뒤 설치, 빌드와 실행을 다시 검증해야 하며, 그전에는 저장소 workspace의 source mode를
+사용합니다.
+
 C++ 샘플은 0.10.0 framework의 공개 API로 여러 서버 역할을 구성하는 방법을 보여 준다. 업무 흐름과
 검증 기준은 [공통 sample 문서](../../../doc/framework/common/sample/README.ko.md)를 따르며, C++ 코드는
 runtime reflection 대신 compile-time 타입으로 handler를 등록한다.
