@@ -47,7 +47,7 @@ this tree must update the table.
 
 ## 3. What the hot path must not do
 
-Code on the hot path does none of the following. The only exception is the fallback path of §4.
+Code on the hot path does none of the following. Exceptions are the opaque reply token lookup below and the fallback path of §4.
 
 1. **Heap allocation.** No per-message temporary `std::vector` or `std::string`, no `new`, no
    `make_shared`. Buffers that are needed reuse member scratch owned by the socket, the load
@@ -57,7 +57,9 @@ Code on the hot path does none of the following. The only exception is the fallb
    within the same send scope.
 3. **Socket-level table lookups and their mutexes.** Socket-level containers — the transport pair
    table, pending queue maps, route history — are not searched per message. The state the message
-   path asks for is answered by the caches of §4.
+   path asks for is answered by the caches of §4. The lookup and mutex in
+   `checkout_router_reply_target` that resolve an opaque reply token are an exception. The Core
+   request/reply owner uses this lookup to validate the reply target and ownership.
 4. **Unconditional side work.** Work that is only occasionally needed — releasing a hold,
    reclassifying a head, flushing deferred controls — first checks an atomic flag and takes a lock
    only when the flag says so.

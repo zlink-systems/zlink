@@ -43,7 +43,7 @@ path다. 이 표는 규범이다: 표의 함수(또는 그 callee)를 고치는 
 
 ## 3. Hot path 안에서 금지되는 동작
 
-Hot path 안의 코드는 다음을 하지 않는다. 예외는 §4의 후퇴 경로뿐이다.
+Hot path 안의 코드는 다음을 하지 않는다. 예외는 아래 opaque reply token 조회와 §4의 후퇴 경로다.
 
 1. **Heap 할당.** `std::vector`·`std::string`의 임시 생성, `new`, `make_shared`를 message마다
    하지 않는다. 필요한 버퍼는 socket·load balancer·pipe의 멤버 scratch를 재사용한다.
@@ -51,7 +51,8 @@ Hot path 안의 코드는 다음을 하지 않는다. 예외는 §4의 후퇴 �
    않는다. 선택 시점에 얻은 `pipe_t*`를 같은 send scope 안에서 그대로 사용한다.
 3. **Socket 단위 table 조회와 그 mutex.** Transport pair table, pending queue map, route history
    같은 socket 단위 컨테이너를 message마다 찾지 않는다. Message 경로가 묻는 상태는 §4의 캐시로
-   답한다.
+   답한다. Opaque reply token을 해석하는 `checkout_router_reply_target`의 조회와 mutex는
+   예외다. 이 조회는 reply의 대상과 소유권을 확인하며 Core request/reply owner가 담당한다.
 4. **조건 없는 부가 작업.** Hold 해제, head 재분류, deferred control flush처럼 "가끔 필요한" 작업은
    먼저 atomic 플래그로 필요 여부를 확인하고, 필요할 때만 lock을 잡는다.
 5. **Reader를 재우는 미리보기.** 수신 경로에서 pipe head를 미리 보는 코드는 prefetch된 범위
