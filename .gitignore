@@ -359,3 +359,12 @@ bindings/python/src/zlink/_native/_zlink_perf_native.cpython-*.so
 # 세션 임시 조사물 (2026-08-27 — git add -A로 실수 유입된 이력 있음)
 scratchpad/
 framework/languages/shared_sample/zoneworld/client/.cache/
+
+## Framework runtime outputs (e2e evidence, bench verify runs, CTest data) are never tracked
+framework/languages/*/e2e/**/logs/
+framework/languages/*/e2e/**/log/
+framework/languages/*/e2e-kotlin/**/logs/
+framework/languages/*/e2e-kotlin/**/log/
+framework/bench/tools/log/
+framework/languages/*/bench/with-grpc/log/verify-*/
+framework/languages/cpp/Testing/
