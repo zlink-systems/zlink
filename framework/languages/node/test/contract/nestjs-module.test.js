@@ -72,6 +72,12 @@ function fakeSpotRouteBridge(calls, reply) {
   };
 }
 
+async function waitForClientServerTargets(runtime, channelName, expectedCount) {
+  while (runtime.snapshot(channelName).readyTargetCount !== expectedCount) {
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
+
 function exposeLegacyTestSpotAsMeshNode(spotNode) {
   const connectPeer = spotNode.connectPeer?.bind(spotNode);
   const connectPeerRid = spotNode.connectPeerRid?.bind(spotNode);
@@ -517,6 +523,7 @@ test('ZLinkModule.forRoot maps zlinkRequestHandler providers from NestJS DI', as
 });
 
 test('request-scoped handler filters share the channel dispatch scope with the handler', async () => {
+  const apiEndpoint = await reserveTcpEndpoint();
   let dispatchSequence = 0;
   let singletonFilterSequence = 0;
   let singletonHandlerSequence = 0;
@@ -600,8 +607,7 @@ test('request-scoped handler filters share the channel dispatch scope with the h
   const frameworkOptions = nestjs.zlinkFramework()
     .options({ filters: [RequestScopeFilter, SingletonFilter] });
   const apiChannel = frameworkOptions.addClientServerChannel('api');
-  apiChannel.client();
-  apiChannel.server().listen().addHandlerGroup('api');
+  apiChannel.server().listen(Number(new URL(apiEndpoint).port)).addHandlerGroup('api');
 
   class HandlerModule {}
   Module({
@@ -616,8 +622,17 @@ test('request-scoped handler filters share the channel dispatch scope with the h
   })(HandlerModule);
 
   const app = await NestFactory.createApplicationContext(HandlerModule, { logger: false, abortOnError: false });
+  const clientRegistration = framework.createFrameworkRegistration({
+    channels: { api: { client: { manualConnections: [apiEndpoint] } } }
+  });
+  const clientRuntime = new framework.ZLinkFrameworkRuntimeHost({ registration: clientRegistration });
   try {
-    const client = app.get(nestjs.ZLINK_CHANNEL_CLIENT);
+    await clientRuntime.start();
+    await waitForClientServerTargets(clientRuntime.clientServerRuntime, 'api', 1);
+    const client = new framework.DefaultZLinkChannelClient(
+      clientRegistration,
+      clientRuntime.channelTransport
+    );
     class GetProfile {
       constructor(profileId) {
         this.profileId = profileId;
@@ -656,6 +671,7 @@ test('request-scoped handler filters share the channel dispatch scope with the h
     assert.equal(singletonHandlerDisposals, 2);
     assert.equal(singletonFilterDisposals, 4);
   } finally {
+    await clientRuntime.stop();
     await app.close();
   }
 });

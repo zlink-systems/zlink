@@ -2782,14 +2782,13 @@ test('CH-002 manual endpoint round-robin distributes requests across three serve
     }
     await clientRuntime.start();
     const client = new framework.DefaultZLinkChannelClient(clientRegistration, clientRuntime.channelTransport);
+    await waitForClientServerTargets(clientRuntime.clientServerRuntime, 'round-robin', 3);
     const seenServers = new Set();
     for (let i = 0; i < 30 && seenServers.size < 3; i++) {
-      const reply = await submitWhenReachable(() =>
-        client
-          .requestToChannel('round-robin', typedPacket('RoundRobinProbe', { requestId: `warmup-${i}` }))
-          .timeout(1000)
-          .submit()
-      );
+      const reply = await client
+        .requestToChannel('round-robin', typedPacket('RoundRobinProbe', { requestId: `warmup-${i}` }))
+        .timeout(1000)
+        .submit();
       seenServers.add(reply.serverId);
     }
     assert.deepEqual([...seenServers].sort(), ['server-a', 'server-b', 'server-c']);
@@ -4648,6 +4647,12 @@ async function submitWhenReachable(submit) {
     }
   }
   throw lastError;
+}
+
+async function waitForClientServerTargets(runtime, channelName, expectedCount) {
+  while (runtime.snapshot(channelName).readyTargetCount !== expectedCount) {
+    await new Promise(resolve => setImmediate(resolve));
+  }
 }
 
 function createScaleoutProvider(locationStore, bindEndpoint, providerId, routingId) {
