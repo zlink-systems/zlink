@@ -116,6 +116,17 @@ void test_explicit_copy_shares_and_move_transfers_payload ()
     assert (destination.ref_count () == 1);
 }
 
+void test_clone_owns_independent_payload ()
+{
+    zlink::message_t original = zlink::message_t::from (std::string (1024, 'd'));
+    zlink::message_t clone = original.clone ();
+
+    original.bytes ()[0] = std::byte{'m'};
+    assert (std::to_integer<char> (clone.bytes ()[0]) == 'd');
+    assert (original.ref_count () == 1);
+    assert (clone.ref_count () == 1);
+}
+
 void test_large_owned_payload_survives_reuse_and_copy ()
 {
     constexpr size_t payload_size = 262144;
@@ -203,6 +214,7 @@ int main ()
     test_copy_helpers_copy_payload ();
     test_copy_and_move_preserve_payload ();
     test_explicit_copy_shares_and_move_transfers_payload ();
+    test_clone_owns_independent_payload ();
     test_large_owned_payload_survives_reuse_and_copy ();
     test_external_message_uses_caller_owned_storage_until_close ();
     test_diagnostic_surface_uses_canonical_names ();

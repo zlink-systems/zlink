@@ -213,6 +213,23 @@ void message_t::move (message_t &dest_)
     _has_payload = false;
 }
 
+message_t message_t::clone () const
+{
+    if (!_valid)
+        throw config_error_t (config_result_t::invalid_handle, EFAULT);
+
+    const size_t payload_size = size ();
+    message_t result{no_init_t ()};
+    const config_result_t rc = static_cast<config_result_t> (
+      zlink_msg_init_size (detail::native_handle (result), payload_size));
+    detail::throw_if_failed<config_error_t> (rc);
+    result._valid = true;
+    result._has_payload = payload_size > 0;
+    if (payload_size > 0)
+        std::memcpy (result.data (), data (), payload_size);
+    return result;
+}
+
 std::vector<uint8_t> message_t::to_bytes () const
 {
     const uint8_t *ptr = reinterpret_cast<const uint8_t *> (data ());

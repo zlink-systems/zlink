@@ -85,6 +85,8 @@ class message_t
     message_t copy () const;
     /// @brief Moves this message's native payload into @p dest_, leaving this empty.
     void move (message_t &dest_);
+    /// @brief Returns a new message holding an independent copy of this payload.
+    message_t clone () const;
 
     std::vector<uint8_t> to_bytes () const;
     size_t copy_to (std::span<std::byte> destination_) const;
