@@ -131,8 +131,10 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   are never widened.
 - The framework's default builds, solutions and CI include only the `cross-language` e2e. Per-language
   scenario e2e (`framework/languages/<lang>/e2e/*`) and the seven samples (`samples/*`) run only through
-  their `run_e2e.sh`, `run_samples.sh` and Node `npm run test:samples`, and are never added to the sln,
-  the default CMake targets, the Gradle root build, CI or releases.
+  their `run_e2e.sh`, `run_samples.sh` and Node `npm run test:samples`, and are never added to the CI
+  solution filter (`Zlink.Framework.ci.slnf`), the default CMake targets, the Gradle root build, CI or
+  releases. The per-language layout, the two sample modes, the bindings source switches and the C++
+  presets are owned by [`doc/building/framework-workspace.md`](doc/building/framework-workspace.md).
 
 ### Interface boundary of Core tests
 

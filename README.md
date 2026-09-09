@@ -352,6 +352,7 @@ contract first, then select a language implementation.
 | Enter a Framework runtime source/build lane | [C++](./framework/languages/cpp/) · [.NET](./framework/languages/dotnet/) · [JVM](./framework/languages/java/) · [Node.js](./framework/languages/node/) |
 | Prepare release packages | [Packaging guide](./doc/building/packaging.md) |
 | Find the build scripts and the release path | [Build and release pipeline](./doc/building/release-pipeline.md) |
+| See what the framework builds by default, the two sample modes and the C++ presets | [Framework workspace layout](./doc/building/framework-workspace.md) |
 | Review licensing | [License guide](./doc/license/README.md) |
 | Report a security issue | [Security policy](./SECURITY.md) |
 

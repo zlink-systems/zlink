@@ -341,6 +341,7 @@ Framework sample은 단순 API 호출뿐 아니라 여러 역할의 server와 cl
 | Framework runtime source/build 진입점 | [C++](./framework/languages/cpp/) · [.NET](./framework/languages/dotnet/) · [JVM](./framework/languages/java/) · [Node.js](./framework/languages/node/) |
 | 릴리스 package 구성 | [패키징 가이드](./doc/building/packaging.ko.md) |
 | 빌드 스크립트 위치와 배포 경로 파악 | [빌드·배포 파이프라인](./doc/building/release-pipeline.ko.md) |
+| framework 기본 빌드 범위, 샘플 두 모드, C++ preset 확인 | [Framework 작업 공간 구성](./doc/building/framework-workspace.ko.md) |
 | 라이선스 정책 | [라이선스 안내](./doc/license/README.ko.md) |
 | 보안 취약점 보고 | [보안 정책](./SECURITY.md) |
 
