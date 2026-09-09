@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 'use strict';
 
+const zlink = require('@zlink-systems/zlink');
+
 // Wire shape of the `zlink-<lang>` raw row.
 //
 // The raw row is measured against `zlink-c` (spec section 7.2 formula 1), so it must put
@@ -46,11 +48,12 @@ function writeVarint(buffer, offset, value) {
 }
 
 /** `BenchPayload { bytes body = 1 }` around an already-stamped payload. */
-function encodeBenchPayload(payload) {
-  const encoded = Buffer.allocUnsafe(1 + varintSize(payload.length) + payload.length);
-  encoded[0] = 0x0a;
-  const offset = writeVarint(encoded, 1, payload.length);
-  payload.copy(encoded, offset);
+function encodeBenchPayloadMessage(payload) {
+  const encoded = zlink.Message.allocate(1 + varintSize(payload.length) + payload.length);
+  const bytes = encoded.data();
+  bytes[0] = 0x0a;
+  const offset = writeVarint(bytes, 1, payload.length);
+  payload.copy(bytes, offset);
   return encoded;
 }
 
@@ -94,6 +97,6 @@ module.exports = {
   REQUEST_ENVELOPE,
   RESPONSE_ENVELOPE,
   ROUTING_IDS,
-  encodeBenchPayload,
+  encodeBenchPayloadMessage,
   decodeBenchPayloadBody
 };

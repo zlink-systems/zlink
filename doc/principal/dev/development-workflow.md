@@ -113,6 +113,33 @@ on failure, prints the created IDs, URLs and paths together with the resume comm
 - Until `work.sh` exists (§8) the manual procedure is the command list in §8.
 - On Windows, run the same subcommands and options with `powershell -File scripts/dev/work.ps1 ...`.
 
+### 4.3 The other development scripts
+
+`work.sh` covers the flow of a single Issue. The work that repeats outside it belongs to the scripts
+below. What exists and what does not is stated explicitly — **the document never describes a script
+that has not been written.**
+
+| Script | What it does | Status |
+|---|---|---|
+| `scripts/dev/work.sh` | Issue → branch and worktree → PR → merge and cleanup (§4.2) | exists |
+| `scripts/local-package/package-cache.py`, `cache-prune.sh` | Shared cache for binding local packages, and its pruning (§4.1) | exists |
+| `scripts/perf/perf-ticket.sh`, `perf-queue-runner.sh` | Every measurement runs as one serialized ticket | exists |
+| `scripts/gate/*.sh` | Per-language gates | exists |
+| `scripts/dev/job.sh` | Start, inspect, watch every three minutes and stop codex sub-agent jobs. Checks the log right after start so a wrong model id or an auth failure is reported at once. Stops a job only by its recorded pid | exists |
+| `scripts/dev/worktree-sweep.sh` | Judge abandoned worktrees by safety (uncommitted, unpushed, contained in main, a running job) and remove the safe ones | exists |
+| `scripts/dev/session-setup.sh` | At session start, settle bench port reservation, tmpfs headroom, the measurement queue and local packages in one pass | exists |
+| `scripts/dev/release-check.sh` | Before tagging, check version synchronization, release notes, package metadata and the publish targets | exists |
+| Bench result comparison tool | Turn two measurement sets into a scenario × payload table (throughput, latency, ratio, change) | Issue #37 |
+| `scripts/dev/ci-watch.sh` | Keep a single CI watcher and poll every ten minutes (GitHub API limits) | exists |
+
+Three rules apply to all of them.
+
+- **Safe to re-run**: running the same command again never leaves the state inconsistent.
+- **No silent failure**: a script that starts a background process checks that it is alive right
+  after starting, and shows the last error from its log when it is not.
+- **Stop by pid**: process termination uses the recorded pid only. A pattern search such as
+  `pkill -f` also kills the calling shell.
+
 ## 5. PRs and merging
 
 - PR title: `<module>: <one line>`. The first body line is `Closes #N` (done) or `Refs #N` (partial).

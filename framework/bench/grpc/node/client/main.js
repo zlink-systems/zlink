@@ -154,7 +154,7 @@ function createRawTransport(options) {
     request: async (_stream, payload) => {
       const parts = await requestSocket.socket.request(requestSocket.peer)
         .message(rawWire.REQUEST_ENVELOPE)
-        .message(rawWire.encodeBenchPayload(payload))
+        .message(rawWire.encodeBenchPayloadMessage(payload))
         .timeout(options.requestTimeoutMs)
         .submit();
       try {
@@ -170,7 +170,7 @@ function createRawTransport(options) {
       const socket = sendSockets[stream % sendSockets.length];
       await socket.socket.send(socket.peer)
         .message(rawWire.REQUEST_ENVELOPE)
-        .message(rawWire.encodeBenchPayload(payload))
+        .message(rawWire.encodeBenchPayloadMessage(payload))
         .submit();
     },
     close: async () => {

@@ -64,30 +64,34 @@ public final class RawStack implements AutoCloseable {
 
     public BenchOperation request() {
         return (payloadSize, phase, sequence) -> {
-            byte[] payload =
-                BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence);
             var operation = router != null ? router.request(peer) : dealer.request();
-            return operation
-                .message(Message.from(RawWire.REQUEST_ENVELOPE))
-                .message(Message.from(RawWire.encodeBenchPayload(payload)))
-                .timeout(timeout)
-                .submit()
-                .toCompletableFuture()
-                .thenAccept(parts -> validate(parts, runId, phase, payloadSize, sequence));
+            try (Message header = Message.from(RawWire.REQUEST_ENVELOPE);
+                 Message body = RawWire.encodeBenchPayloadMessage(
+                     payloadSize, runId, phase, sequence)) {
+                return operation
+                    .message(header)
+                    .message(body)
+                    .timeout(timeout)
+                    .submit()
+                    .toCompletableFuture()
+                    .thenAccept(parts -> validate(parts, runId, phase, payloadSize, sequence));
+            }
         };
     }
 
     public BenchOperation send() {
         return (payloadSize, phase, sequence) -> {
-            byte[] payload =
-                BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence);
             var operation = router != null ? router.send(peer) : dealer.send();
-            return operation
-                .message(Message.from(RawWire.REQUEST_ENVELOPE))
-                .message(Message.from(RawWire.encodeBenchPayload(payload)))
-                .submit()
-                .toCompletableFuture()
-                .thenApply(ignored -> (Void) null);
+            try (Message header = Message.from(RawWire.REQUEST_ENVELOPE);
+                 Message body = RawWire.encodeBenchPayloadMessage(
+                     payloadSize, runId, phase, sequence)) {
+                return operation
+                    .message(header)
+                    .message(body)
+                    .submit()
+                    .toCompletableFuture()
+                    .thenApply(ignored -> (Void) null);
+            }
         };
     }
 

@@ -19,6 +19,8 @@
 #include <mutex>
 #include <optional>
 #include <sstream>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -206,21 +208,40 @@ inline bool decode_bench_payload_body (const void *data,
     return false;
 }
 
-// Encodes BenchPayload{body} into `out` and stamps the spec 6 header into the
-// body. Returns the offset of the body inside `out`.
-inline size_t encode_bench_payload (std::vector<unsigned char> &out,
+inline size_t encoded_bench_payload_size (size_t payload_size)
+{
+    const size_t body_size = std::max (payload_size, k_header_size);
+    return 1 + varint_size (body_size) + body_size;
+}
+
+// Encodes BenchPayload{body} into final writable storage and stamps the spec 6
+// header into the body. Returns the offset of the body inside `out`.
+inline size_t encode_bench_payload (std::span<unsigned char> out,
                                     size_t payload_size,
                                     uint32_t run_id,
                                     phase_t phase,
                                     uint64_t seq)
 {
     const size_t body_size = std::max (payload_size, k_header_size);
-    out.assign (1 + varint_size (body_size) + body_size, 0xab);
+    if (out.size () != encoded_bench_payload_size (body_size))
+        throw std::invalid_argument ("encoded BenchPayload storage has the wrong size");
+    std::fill (out.begin (), out.end (), 0xab);
     out[0] = 0x0a;
     unsigned char *body = write_varint (out.data () + 1, body_size);
     std::memset (body, 0xab, body_size);
     stamp_payload (body, body_size, run_id, phase, seq);
     return static_cast<size_t> (body - out.data ());
+}
+
+inline size_t encode_bench_payload (std::vector<unsigned char> &out,
+                                    size_t payload_size,
+                                    uint32_t run_id,
+                                    phase_t phase,
+                                    uint64_t seq)
+{
+    out.resize (encoded_bench_payload_size (payload_size));
+    return encode_bench_payload (
+      std::span<unsigned char> (out.data (), out.size ()), payload_size, run_id, phase, seq);
 }
 
 // ---------------------------------------------------------------------------

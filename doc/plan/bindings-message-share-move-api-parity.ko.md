@@ -178,6 +178,17 @@ C++·.NET·Java의 추가는 non-breaking(이름 정렬 alias 불필요). **Node
 - **결과(quiet, runs=3):** Node REQREP 64 6~9% → **39.8%**, 1024 → **47.7%**; Node SENDSEND 18~23% → **29~39%**(회귀 해소 + 원래보다
   개선). Java REQREP → **101~137%**, SENDSEND 64 → **104%**(직접 빌더가 기존 대비 대폭 개선). C++ 정상(REQREP 95~108%, SENDSEND 88~120%),
   .NET 무변경. **비대상 회귀 0.**
+### 8.2 전 바인딩 relay anti-pattern 확산 정리 (go/rust/python 포함)
+- 같은 anti-pattern이 **cpp single/stream, java single, go multi-routed, rust routed/reqrep, python multi-routed**에도 있었다(사용자
+  지적). 받은 파트를 깊은복사(`append([]byte)`/`as_bytes().to_vec()`/`try_clone()`/`bytes(part.data)`/`Message.from(received)`)하거나
+  불필요한 `std::move`로 감싸 재전송하던 것을 **공개 빌더에 받은 파트를 직접 제출**로 통일. .NET·Node는 이미 clean. backpressure retry
+  스냅샷과 stream wire-framing 복사는 유지(정당). 각 바인딩 계약 테스트(소비 파트 close 안전 포함) 통과.
+- **before→after 측정(ROUTER_ROUTER/DEALER_ROUTER SENDSEND, tcp, runs=3, quiet, C 대비 %):**
+  - **Go**: 전 항목 개선. RR 64 36→44%·4096 33→62%(+90%); DR 64 36→50%·4096 30→61%(+102%). 깊은복사 제거 효과가 큰 payload일수록 큼.
+  - **Rust**: DR 전 크기 개선(64 78→87%, 4096 54→78%, +45%), RR 4096 +6%(64/1024 노이즈 내). (before도 이미 70~78%로 높음.)
+  - **Python**: 전 항목 ±5% 이내(무변화). Python 인터프리터/N-API 오버헤드가 지배적이라 byte-copy 제거 효과가 미미(전 구간 8~17%).
+  - cpp single·java single 변경은 perf-neutral(불필요 std::move 제거)/개선(임시 wrapper 제거)이라 별도 회귀 없음.
+
 - **곁가지 결정:** Node `close()`는 단일 release 경로(노출 Buffer는 GC/finalize 정리)로 유지한다 — 이는 회귀와 무관한 단순화이며, 그 결과
   `copy()` 후 close 시 `refCount()`가 즉시 안 떨어지고 버퍼 GC 후 반영된다(진단용 표시에만 영향, 안전/정확성 무관). 계약 테스트는 "즉시 refcount
   하락" 대신 "소유권 독립"을 검증. Node spec/guide에 이 타이밍을 문서화했다.

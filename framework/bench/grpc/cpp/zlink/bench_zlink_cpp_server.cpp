@@ -64,9 +64,9 @@ void request_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metri
             zlink::message_t echo =
               zlink::message_t::from (std::span<const std::byte> (body.data (), body.size ()));
             if (received.reply_token ())
-                std::move (received.reply ()).message (header).message (echo).submit ();
+                received.reply ().message (header).message (echo).submit ();
             else
-                std::move (received.send ()).message (header).message (echo).submit ();
+                received.send ().message (header).message (echo).submit ();
         }
         catch (const std::exception &error) {
             std::fprintf (stderr, "zlink-cpp request loop: %s\n", error.what ());
