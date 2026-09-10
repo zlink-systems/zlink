@@ -595,8 +595,7 @@ receive function. DEALER neither receives typed REQUEST records nor replies to t
 
 ### zlink_recv and zlink_router_recv
 
-Receive every part of one record in a single call into a caller-provided array. Coexists with
-`*_recv_part` (one part at a time).
+Receive every part of one record in a single call into a caller-provided array.
 
 ```c
 ZLINK_EXPORT zlink_recv_result_t zlink_recv (

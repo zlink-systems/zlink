@@ -556,8 +556,7 @@ queue에 들어간다. DEALER는 inbound typed REQUEST를 받거나 reply하는 
 
 ### zlink_recv 와 zlink_router_recv
 
-한 record의 모든 part를 한 번의 호출로 caller-제공 배열에 받는다. `*_recv_part`(part 하나씩)와
-공존한다.
+한 record의 모든 part를 한 번의 호출로 caller-제공 배열에 받는다.
 
 ```c
 ZLINK_EXPORT zlink_recv_result_t zlink_recv (
