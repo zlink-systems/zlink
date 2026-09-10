@@ -187,12 +187,12 @@ final class ZLinkFanoutLocationRuntimeTest {
                     CompletableFuture.completedFuture(null),
                 (channel, node, spot, generation,
                  authorityOwnerGeneration, ownerLeaseGeneration, parts,
-                 timeout) ->
+                 timeout, operations, operationId) ->
                     CompletableFuture.completedFuture(List.of()));
-            CompletableFuture<Void> request = new CompletableFuture<>();
             try {
                 long startedNanos = System.nanoTime();
-                calls.track(request, Duration.ofMillis(40));
+                CompletableFuture<Void> request = calls.submit(Duration.ofMillis(40),
+                    CompletableFuture<Void>::new, ignored -> { });
 
                 ExecutionException failure = assertThrows(
                     ExecutionException.class,

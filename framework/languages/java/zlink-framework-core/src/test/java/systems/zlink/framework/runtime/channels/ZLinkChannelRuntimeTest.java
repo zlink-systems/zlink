@@ -247,6 +247,8 @@ final class ZLinkChannelRuntimeTest {
                 ZlinkSubmitException.class, failure.getCause());
             assertEquals(SubmitResult.NOT_CONNECTED, terminal.getResult());
             assertEquals(1, backend.spotNode.requestAttempts);
+            assertEquals(0, backend.spotNode.channelClassifications,
+                "channel submission must not preflight the selector before actual selection");
         }
     }
 
@@ -277,6 +279,7 @@ final class ZLinkChannelRuntimeTest {
                 ZLinkFrameworkErrorKind.NOT_FOUND,
                 ((ZLinkFrameworkException) error.getCause()).kind());
             assertEquals(0, backend.spotNode.requestAttempts);
+            assertEquals(0, backend.spotNode.channelClassifications);
         }
     }
 
@@ -2201,6 +2204,7 @@ final class ZLinkChannelRuntimeTest {
         private final CompletableFuture<Void> metadataObserved =
             new CompletableFuture<>();
         private int requestAttempts;
+        private int channelClassifications;
         private int requestFailuresRemaining;
         private SubmitResult requestFailureResult = SubmitResult.NOT_CONNECTED;
         private Optional<Integer> channelTargetClassification = Optional.empty();
@@ -2244,6 +2248,7 @@ final class ZLinkChannelRuntimeTest {
             return Optional.of(CompletableFuture.completedFuture(status));
         }
         @Override public Optional<Integer> classifyChannelTarget(String channelName) {
+            channelClassifications++;
             return channelTargetClassification;
         }
         void signalLocalNodeReady() {
@@ -2281,6 +2286,11 @@ final class ZLinkChannelRuntimeTest {
             byte[] metadata,
             List<Message> parts,
             Duration timeout) {
+            // The backend's selection result owns absence classification.
+            if (channelTargetClassification.isPresent()) {
+                return CompletableFuture.failedFuture(ZLinkOneWayCalls.failureForStatus(
+                    channelTargetClassification.orElseThrow()));
+            }
             requestAttempts++;
             if (requestFailuresRemaining > 0) {
                 requestFailuresRemaining--;

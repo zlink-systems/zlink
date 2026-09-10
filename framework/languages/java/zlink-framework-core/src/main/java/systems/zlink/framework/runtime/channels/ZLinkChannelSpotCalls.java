@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -43,6 +44,7 @@ import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.ZLinkHandlerFilter;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.channels.ZLinkClient;
 import systems.zlink.framework.channels.ZLinkFanoutClient;
@@ -567,10 +569,12 @@ final class RouteSpotRequestCall
     private <TReply> CompletionStage<TReply> submitExisting(
         SpotTransportAddress address,
         Class<TReply> replyType) {
+            UUID operationId = ZLinkServiceOperationIds.next();
             List<Message> requestParts = ZLinkChannelCallRuntime.copyEnvelopeParts(
                 systems.zlink.framework.runtime.messaging
                     .ZLinkChannelEnvelope.KIND_REQUEST,
-                channelName, packetName, payload, contentType, metadata.values());
+                channelName, packetName, payload, contentType, metadata.values(),
+                operationId);
             return runtime.requestToSpot(
                 address.routerChannelId(),
                 address.targetNodeRid(),
@@ -579,7 +583,8 @@ final class RouteSpotRequestCall
                 address.authorityOwnerGeneration(),
                 address.ownerLeaseGeneration(),
                 requestParts,
-                timeout)
+                timeout,
+                operationId)
                 .thenApply(replyParts -> {
                     try {
                         return runtime.decodeSpotReply(replyParts, replyType);

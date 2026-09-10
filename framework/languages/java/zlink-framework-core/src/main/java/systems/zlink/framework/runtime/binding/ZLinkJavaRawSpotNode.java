@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.binding;
+
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import java.util.ArrayList;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -347,6 +349,30 @@ final class ZLinkJavaRawSpotNode
         Duration timeout) {
         return owner.requestNode(
             targetNodeRid, metadata, parts, timeout);
+    }
+
+    @Override
+    public CompletionStage<ZLinkBackendReceived> requestToNode(
+        RoutingId targetNodeRid,
+        byte[] metadata,
+        List<Message> parts,
+        Duration timeout,
+        ZLinkServiceOperationRegistry operations,
+        java.util.UUID operationId) {
+        return owner.requestNode(
+            targetNodeRid, metadata, parts, timeout, operations, operationId);
+    }
+
+    @Override
+    public CompletionStage<ZLinkBackendReceived> requestToChannel(
+        String channelName,
+        byte[] metadata,
+        List<Message> parts,
+        Duration timeout,
+        ZLinkServiceOperationRegistry operations,
+        java.util.UUID operationId) {
+        return owner.requestChannel(
+            channelName, metadata, parts, timeout, operations, operationId);
     }
 
     @Override
@@ -3009,12 +3035,48 @@ final class ZLinkJavaRawSpotNode
                 parts,
                 timeout);
         }
-        ZLinkJavaRawSpot target = localSpot(
-            targetNodeRid, targetSpotId, targetGeneration);
-        if (target == null) {
-            return CompletableFuture.failedFuture(
-                new ZlinkRequestException(RequestResult.NOT_FOUND));
+        return requestToLocalSpot(
+            source, targetNodeRid, targetSpotId, targetGeneration,
+            metadata, parts, timeout, null, null);
+    }
+
+    CompletionStage<ZLinkBackendReceived> requestToSpot(
+        ZLinkJavaRawSpot source,
+        RoutingId targetNodeRid,
+        String targetSpotId,
+        long targetGeneration,
+        byte[] metadata,
+        List<Message> parts,
+        Duration timeout,
+        ZLinkServiceOperationRegistry operations,
+        UUID operationId) {
+        if (!routingId().equals(targetNodeRid)) {
+            return owner.requestSpot(
+                source.spotId(),
+                targetNodeRid,
+                targetSpotId,
+                targetGeneration,
+                metadata,
+                parts,
+                timeout,
+                operations,
+                operationId);
         }
+        return requestToLocalSpot(
+            source, targetNodeRid, targetSpotId, targetGeneration,
+            metadata, parts, timeout, operations, operationId);
+    }
+
+    private CompletionStage<ZLinkBackendReceived> requestToLocalSpot(
+        ZLinkJavaRawSpot source,
+        RoutingId targetNodeRid,
+        String targetSpotId,
+        long targetGeneration,
+        byte[] metadata,
+        List<Message> parts,
+        Duration timeout,
+        ZLinkServiceOperationRegistry operations,
+        UUID operationId) {
         long sequence = nextRequestSequence.getAndIncrement();
         byte[] acceptedRecord = owner.encodeLocalSpotAccepted(
             source.spotId(),
@@ -3023,12 +3085,16 @@ final class ZLinkJavaRawSpotNode
             metadata,
             parts,
             sequence);
+        ZLinkJavaRawSpot target = localSpot(
+            targetNodeRid, targetSpotId, targetGeneration);
+        if (target == null) {
+            return CompletableFuture.failedFuture(
+                new ZlinkRequestException(RequestResult.NOT_FOUND));
+        }
         ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
         CompletableFuture<ZLinkBackendReceived> completion =
             new CompletableFuture<>();
-        CompletionStage<Void> enqueued = target.enqueueRoute(
-            new systems.zlink.framework.runtime.internal.backend
-            .ZLinkBackendReceived(
+        ZLinkBackendReceived request = new ZLinkBackendReceived(
                 systems.zlink.framework.runtime.internal.backend
                     .ZLinkBackendRequestResult.OK,
                 Optional.of(routingId()),
@@ -3050,14 +3116,34 @@ final class ZLinkJavaRawSpotNode
                             ZLinkJavaRawSpot.copy(reply)));
                 },
                 () -> { },
-                  ZLinkChannelContentTypeFrame.decode(parts)));
-        enqueued.whenComplete((ignored, failure) -> {
-            if (failure != null
-                && terminal.tryWin(ZLinkTerminalWinner.Cause.FAILURE)) {
-                completion.completeExceptionally(failure);
+                  ZLinkChannelContentTypeFrame.decode(parts));
+        // The local ingress takes the prepared record; rejected registration
+        // leaves that ownership here. Payload preparation stays outside E3.
+        boolean[] handedOff = {false};
+        Supplier<CompletionStage<ZLinkBackendReceived>> enqueue = () -> {
+            handedOff[0] = true;
+            target.enqueueRoute(request).whenComplete((ignored, failure) -> {
+                if (failure != null
+                    && terminal.tryWin(ZLinkTerminalWinner.Cause.FAILURE)) {
+                    completion.completeExceptionally(failure);
+                }
+            });
+            return completion;
+        };
+        if (operations != null) {
+            try {
+                return operations.submit(operationId, timeout, enqueue,
+                    ZLinkBackendReceived::close);
+            } finally {
+                if (!handedOff[0]) {
+                    request.close();
+                }
             }
-        });
-        if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
+        }
+        enqueue.get();
+        if (timeout != null
+            && !timeout.isNegative()
+            && !timeout.isZero()) {
             CompletableFuture.delayedExecutor(
                 timeout.toNanos(),
                 TimeUnit.NANOSECONDS).execute(() -> {

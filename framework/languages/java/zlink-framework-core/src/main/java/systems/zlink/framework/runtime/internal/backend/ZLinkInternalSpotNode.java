@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.internal.backend;
+
+import java.util.UUID;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import java.util.Map;
 import java.util.Optional;
 
@@ -175,6 +178,19 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         throw new UnsupportedOperationException("MeshNode node request metadata is unavailable");
     }
 
+    /** Uses the caller's operation lifetime for registration and submission. */
+    default CompletionStage<ZLinkBackendReceived> requestToNode(
+        RoutingId targetNodeRid,
+        byte[] metadata,
+        List<Message> parts,
+        Duration timeout,
+        ZLinkServiceOperationRegistry operations,
+        UUID operationId) {
+        return operations.submit(operationId, timeout,
+            () -> requestToNode(targetNodeRid, metadata, parts, timeout),
+            ZLinkBackendReceived::close);
+    }
+
     default CompletionStage<Void> sendToChannel(
         String channelName,
         List<Message> parts) {
@@ -208,6 +224,19 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         }
         throw new UnsupportedOperationException(
             "MeshNode channel request metadata is unavailable");
+    }
+
+    /** Uses the caller's operation lifetime; selector implementations select before this turn. */
+    default CompletionStage<ZLinkBackendReceived> requestToChannel(
+        String channelName,
+        byte[] metadata,
+        List<Message> parts,
+        Duration timeout,
+        ZLinkServiceOperationRegistry operations,
+        UUID operationId) {
+        return operations.submit(operationId, timeout,
+            () -> requestToChannel(channelName, metadata, parts, timeout),
+            ZLinkBackendReceived::close);
     }
 
     default void publish(
