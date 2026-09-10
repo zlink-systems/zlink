@@ -22,6 +22,10 @@ public final class BenchClient {
             throw new IllegalArgumentException("unknown Java implementation");
         }
 
+        if ("request-window".equals(options.scenario)) {
+            throw new IllegalArgumentException("request-window is not a Java gRPC comparison pattern");
+        }
+
         BenchDrivers drivers = new BenchDrivers(options);
         AtomicBoolean ready = new AtomicBoolean(false);
         SourceTransport[] transport = new SourceTransport[1];
@@ -97,8 +101,6 @@ public final class BenchClient {
     private static String streamImplementation(String pattern) {
         return switch (pattern) {
             case "request-serial" -> "one Java platform submit thread; sequential CompletableFuture";
-            case "request-window" ->
-                "one Java platform submit thread; 100 CompletableFutures share one logical window";
             case "request-backpressure" ->
                 "one Java platform submit thread; uncapped CompletableFuture set";
             case "send-saturation" ->
