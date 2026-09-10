@@ -248,6 +248,7 @@ jobs:
   framework-node-cross-language:
     name: cross-language smoke
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     needs:
       - framework-node
 
@@ -350,6 +351,16 @@ jobs:
           BINDING_VERSION="${version}" npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           npm ci
           npm run build
+
+      - name: Cache Chromium for browser connector E2E
+        uses: actions/cache@v5
+        with:
+          path: framework/languages/node/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('framework/languages/node/package-lock.json') }}
+
+      - name: Install Chromium and Linux dependencies
+        working-directory: framework/languages/node
+        run: npm run browser:install:ci
 
       - name: Run Node framework cross-language smoke
         working-directory: framework/languages/node
