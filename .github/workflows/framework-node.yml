@@ -284,7 +284,7 @@ jobs:
       - name: Prepare the .NET local packages for the cross-language test host
         shell: bash
         run: |
-          package_root="${RUNNER_TEMP}/zlink-local-packages"
+          package_root="${GITHUB_WORKSPACE}/.artifacts/wsl"
           nuget_source="${package_root}/nuget"
           mkdir -p "${nuget_source}"
           binding_version=$(sed -n 's/.*<ZLinkBindingsPackageVersion[^>]*>\(.*\)<\/ZLinkBindingsPackageVersion>.*/\1/p' framework/languages/dotnet/Directory.Packages.props | head -n1)
