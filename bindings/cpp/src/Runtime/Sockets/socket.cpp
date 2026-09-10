@@ -248,8 +248,10 @@ int socket_t::receive_impl (
     const bool use_router_recv = _type == socket_type::router;
     int rc = -1;
     try {
-        rc = detail::recv_envelope (
-          detail::native_handle (*this), flags_, envelope, use_router_recv);
+        rc = _type == socket_type::stream
+               ? detail::recv_part_envelope (detail::native_handle (*this), flags_, envelope)
+               : detail::recv_whole_envelope (
+                   detail::native_handle (*this), flags_, envelope, use_router_recv);
     }
     catch (...) {
         // A failed binding-side allocation must not leave earlier multipart

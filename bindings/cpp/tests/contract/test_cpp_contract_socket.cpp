@@ -651,7 +651,7 @@ void test_router_direct_recv_multipart_failure_preserves_output ()
     assert (inbound.to_string () == "keep");
 }
 
-void test_pair_send_recv_multipart ()
+void test_pair_send_recv_multipart_capacity_retry ()
 {
     zlink::context_t ctx;
     zlink::pair_socket_t left (ctx);
@@ -668,15 +668,25 @@ void test_pair_send_recv_multipart ()
       right_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
 
     std::vector<zlink::message_t> outbound;
-    outbound.push_back (zlink_cpp_contract::make_message ("one"));
-    outbound.push_back (zlink_cpp_contract::make_message ("two"));
-    right.send ().message (outbound[0]).message (outbound[1]).submit ();
+    for (size_t i = 0; i < 9; ++i)
+        outbound.push_back (zlink_cpp_contract::make_message ("part-" + std::to_string (i)));
+    right.send ()
+      .message (outbound[0])
+      .message (outbound[1])
+      .message (outbound[2])
+      .message (outbound[3])
+      .message (outbound[4])
+      .message (outbound[5])
+      .message (outbound[6])
+      .message (outbound[7])
+      .message (outbound[8])
+      .submit ();
 
     zlink::received_t inbound;
     assert (left.recv (inbound) == 0);
-    assert (inbound.parts ().size () == 2);
-    assert (inbound.parts ()[0].to_string () == "one");
-    assert (inbound.parts ()[1].to_string () == "two");
+    assert (inbound.parts ().size () == outbound.size ());
+    for (size_t i = 0; i < inbound.parts ().size (); ++i)
+        assert (inbound.parts ()[i].to_string () == "part-" + std::to_string (i));
 }
 
 void test_pair_multipart_invalid_part_returns_lvalues ()
@@ -956,7 +966,7 @@ int main ()
     test_router_recv_received_multipart ();
     test_router_direct_recv_no_data_preserves_output ();
     test_router_direct_recv_multipart_failure_preserves_output ();
-    test_pair_send_recv_multipart ();
+    test_pair_send_recv_multipart_capacity_retry ();
     test_pair_multipart_invalid_part_returns_lvalues ();
     test_concurrent_pair_multipart_exposes_core_rejection_and_returns_lvalues ();
     test_publisher_synchronous_multipart ();

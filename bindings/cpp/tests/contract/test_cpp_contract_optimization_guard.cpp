@@ -106,6 +106,9 @@ int main ()
     for (const auto &symbol : required_part_symbols)
         assert (all.find (symbol) != std::string::npos);
 
+    assert (contains_aggregate_call (all, "zlink_recv"));
+    assert (contains_aggregate_call (all, "zlink_router_recv"));
+
     // Awaitable SEND treats WRITABLE as retry readiness. A normal admitted
     // SEND has no synthetic or native SEND completion in the binding path.
     assert (all.find ("ZLINK_COMPLETION_WRITABLE") != std::string::npos);
