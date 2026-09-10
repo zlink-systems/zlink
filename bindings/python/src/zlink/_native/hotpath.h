@@ -59,6 +59,7 @@
     X(_valid) \
     X(_value) \
     X(acquire) \
+    X(admitted) \
     X(await_writable) \
     X(byref) \
     X(call_soon_threadsafe) \
@@ -445,7 +446,7 @@ static PyObject *entry_init (PyObject *entry, PyObject *args, PyObject *kwargs)
     if (!PyArg_ParseTupleAndKeywords (args, kwargs, "i|O$O", keywords,
                                      &kind, &loop, &condition))
         return NULL;
-    PyObject *owned_condition = NULL, *future = NULL;
+    PyObject *owned_condition = NULL, *future = NULL, *admitted = NULL;
     if (condition == Py_None) {
         PyObject *threading = PyImport_ImportModule ("threading");
         owned_condition = threading ? hot_call (threading, hp_Condition, NULL) : NULL;
@@ -454,15 +455,19 @@ static PyObject *entry_init (PyObject *entry, PyObject *args, PyObject *kwargs)
             return NULL;
         condition = owned_condition;
     }
-    future = loop != Py_None && kind != ZLINK_COMPLETION_SEND
+    admitted = loop != Py_None
       ? hot_call (loop, hp_create_future, NULL) : Py_NewRef (Py_None);
+    future = !admitted ? NULL : kind == ZLINK_COMPLETION_SEND
+      ? Py_NewRef (admitted)
+      : loop != Py_None ? hot_call (loop, hp_create_future, NULL) : Py_NewRef (Py_None);
     PyObject *kind_obj = PyLong_FromLong (kind);
     PyObject *zero = PyLong_FromLong (0);
-    if (!future || !kind_obj || !zero)
+    if (!admitted || !future || !kind_obj || !zero)
         goto done;
     if (PyObject_SetAttr (entry, hp_kind, kind_obj) < 0
         || PyObject_SetAttr (entry, hp_loop, loop) < 0
         || PyObject_SetAttr (entry, hp_future, future) < 0
+        || PyObject_SetAttr (entry, hp_admitted, admitted) < 0
         || PyObject_SetAttr (entry, hp_condition, condition) < 0)
         goto done;
     PyObject *false_fields[] = {hp__published, hp__captured, hp__settled, hp__detached, hp__native_wait, NULL};
@@ -480,6 +485,7 @@ static PyObject *entry_init (PyObject *entry, PyObject *args, PyObject *kwargs)
 done:
     Py_XDECREF (owned_condition);
     Py_XDECREF (future);
+    Py_XDECREF (admitted);
     Py_XDECREF (kind_obj);
     Py_XDECREF (zero);
     if (PyErr_Occurred ())
@@ -714,8 +720,41 @@ static PyObject *entry_finish_delivery (PyObject *state, PyObject *Py_UNUSED (un
     if (detached < 0)
         return NULL;
     PyObject *future = PyObject_GetAttr (entry, hp_future);
-    if (!future)
+    PyObject *admitted = PyObject_GetAttr (entry, hp_admitted);
+    if (!future || !admitted) {
+        Py_XDECREF (future);
+        Py_XDECREF (admitted);
         return NULL;
+    }
+    PyObject *admitted_done = hot_call (admitted, hp_done, NULL);
+    if (!admitted_done) {
+        Py_DECREF (future);
+        Py_DECREF (admitted);
+        return NULL;
+    }
+    int admission_completed = PyObject_IsTrue (admitted_done);
+    Py_DECREF (admitted_done);
+    if (!detached && !admission_completed) {
+        PyObject *admission_result = PyObject_CallMethod (
+          admitted, error == Py_None ? "set_result" : "set_exception",
+          "O", error == Py_None ? Py_None : error);
+        if (!admission_result) {
+            Py_DECREF (future);
+            Py_DECREF (admitted);
+            return NULL;
+        }
+        Py_DECREF (admission_result);
+        if (error != Py_None && admitted != future) {
+            PyObject *observed = PyObject_CallMethod (admitted, "exception", NULL);
+            if (!observed) {
+                Py_DECREF (future);
+                Py_DECREF (admitted);
+                return NULL;
+            }
+            Py_DECREF (observed);
+        }
+    }
+    Py_DECREF (admitted);
     PyObject *done = hot_call (future, hp_done, NULL);
     if (!done) {
         Py_DECREF (future);
@@ -1188,6 +1227,7 @@ static PyObject *owner_attempt_send (PyObject *owner, PyObject *entry)
 {
     PyObject *guard = lock_attribute (owner, hp__lock);
     PyObject *parts = NULL, *submitted = NULL, *result = NULL;
+    int attempt_rc = -1;
     if (!guard)
         return NULL;
     int stopped = owner_stopped (owner, entry);
@@ -1262,6 +1302,7 @@ static PyObject *owner_attempt_send (PyObject *owner, PyObject *entry)
     unsigned long long completion_id;
     if (!PyArg_ParseTuple (submitted, "iiK", &rc, &err, &completion_id))
         goto done;
+    attempt_rc = rc;
     if (completion_id) {
         PyObject *entries = PyObject_GetAttr (owner, hp__entries);
         PyObject *context = PyObject_GetAttr (entry, hp_context);
@@ -1321,6 +1362,10 @@ static PyObject *owner_attempt_send (PyObject *owner, PyObject *entry)
         PyObject *loop = PyObject_GetAttr (entry, hp_loop);
         result = loop ? hot_call (owner, hp__schedule_runtime_owner_locked, "(O)", loop) : NULL;
         Py_XDECREF (loop);
+    }
+    if (!PyErr_Occurred ()) {
+        Py_CLEAR (result);
+        result = PyLong_FromLong (attempt_rc);
     }
 done:
     if (guard)
@@ -1401,8 +1446,10 @@ static PyObject *py_start_send (PyObject *self, PyObject *args)
         Py_DECREF (entry);
         return NULL;
     }
+    PyObject *result = PyTuple_Pack (2, submitted, entry);
     Py_DECREF (submitted);
-    return entry;
+    Py_DECREF (entry);
+    return result;
 }
 
 static int call_entry_method (PyObject *object, const char *name, PyObject *argument)
@@ -1536,7 +1583,7 @@ static PyObject *py_start_request (PyObject *self, PyObject *args)
         } else if (call_entry_method (owner, "_schedule_runtime_owner_locked", loop) < 0)
             goto done;
     }
-    result = Py_NewRef (entry);
+    result = Py_BuildValue ("iO", rc, entry);
 done:
     if (guard)
         unlock_entry (guard);

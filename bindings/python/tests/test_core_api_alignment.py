@@ -1,6 +1,7 @@
 import asyncio
 import ctypes
 import importlib.util
+import inspect
 import os
 import time
 import unittest
@@ -57,6 +58,8 @@ class CoreApiAlignmentTests(unittest.TestCase):
             "StreamPacket",
             "StreamRecvMode",
             "CompletionKind",
+            "SendSubmission",
+            "RequestSubmission",
         ):
             self.assertTrue(hasattr(zlink, name), name)
         self.assertFalse(hasattr(zlink.Message, "get_property"))
@@ -173,11 +176,14 @@ class CoreApiAlignmentTests(unittest.TestCase):
                     # Immediate DONTWAIT admission has ID 0 and no SEND
                     # completion; the managed awaitable only waits when Core
                     # returns a WRITABLE token.
-                    self.assertIsNone(
-                        asyncio.run(
-                            left.send().messages(b"first", b"second").submit()
-                        )
-                    )
+                    async def send_parts():
+                        submission = left.send().messages(
+                            b"first", b"second"
+                        ).submit()
+                        self.assertEqual(submission.result, zlink.SubmitResult.OK)
+                        return await submission.admitted
+
+                    self.assertIsNone(asyncio.run(send_parts()))
                     received = zlink.create_received()
                     self.assertTrue(right.recv_into(received))
                     with received:
@@ -191,9 +197,10 @@ class CoreApiAlignmentTests(unittest.TestCase):
                     left.bind("inproc://python-core-11-message-builder")
                     right.connect("inproc://python-core-11-message-builder")
                     with zlink.Message.from_(b"builder-payload") as message:
-                        self.assertIsNone(
-                            asyncio.run(left.send().message(message).submit())
-                        )
+                        async def send_message():
+                            return await left.send().message(message).submit().admitted
+
+                        self.assertIsNone(asyncio.run(send_message()))
                     received = zlink.create_received()
                     self.assertTrue(right.recv_into(received))
                     with received:
@@ -206,10 +213,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
 
                     async def exchange():
                         with zlink.Message.from_(b"request-payload") as request:
-                            pending = asyncio.create_task(
-                                dealer.request().message(request).submit()
-                            )
-                            await asyncio.sleep(0)
+                            submission = dealer.request().message(request).submit()
                         request_received = zlink.create_received()
                         self.assertTrue(router.recv_into(request_received))
                         with request_received:
@@ -219,7 +223,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
                             )
                             with zlink.Message.from_(b"reply-payload") as reply:
                                 request_received.reply().message(reply).submit()
-                        parts = await pending
+                        parts = await submission.reply
                         try:
                             self.assertEqual(
                                 [part.to_bytes() for part in parts],
@@ -239,16 +243,13 @@ class CoreApiAlignmentTests(unittest.TestCase):
                     dealer.connect("inproc://python-core-11-pending-close")
 
                     async def close_pending():
-                        pending = asyncio.create_task(
-                            dealer.request().message(b"pending").submit()
-                        )
-                        await asyncio.sleep(0)
+                        submission = dealer.request().message(b"pending").submit()
                         received = zlink.create_received()
                         self.assertTrue(router.recv_into(received))
                         received.close()
                         dealer.close()
                         with self.assertRaises(zlink.RequestError) as raised:
-                            await pending
+                            await submission.reply
                         self.assertEqual(
                             raised.exception.result,
                             zlink.RequestResult.TERMINATED,
@@ -256,7 +257,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
 
                     asyncio.run(close_pending())
 
-    def test_routed_request_has_only_the_canonical_coroutine_terminal(self):
+    def test_routed_request_has_only_the_canonical_async_terminal(self):
         with zlink.create_context() as ctx:
             with zlink.create_dealer_socket(ctx) as dealer:
                 request = dealer.request().message(b"payload")
@@ -264,8 +265,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
                 self.assertFalse(hasattr(request, "submit_async"))
                 with self.assertRaises(TypeError):
                     request.submit(None)
-                coroutine = request.submit()
-                coroutine.close()
+                self.assertEqual(tuple(inspect.signature(request.submit).parameters), ())
 
     def test_dealer_router_request_reply_uses_raw_routing_metadata(self):
         with zlink.create_context() as ctx:
@@ -275,10 +275,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
                     dealer.connect("inproc://python-core-11-request")
 
                     async def exchange():
-                        pending = asyncio.create_task(
-                            dealer.request().message(b"ping").submit()
-                        )
-                        await asyncio.sleep(0)
+                        submission = dealer.request().message(b"ping").submit()
                         received = zlink.create_received()
                         self.assertTrue(router.recv_into(received))
                         with received:
@@ -286,7 +283,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
                             self.assertIsInstance(received.reply_token, zlink.ReplyToken)
                             self.assertEqual(received.to_bytes_list(), [b"ping"])
                             received.reply().message(b"pong").submit()
-                        parts = await pending
+                        parts = await submission.reply
                         try:
                             self.assertEqual(
                                 [part.to_bytes() for part in parts], [b"pong"]
@@ -316,7 +313,8 @@ class CoreApiAlignmentTests(unittest.TestCase):
                         # A pre-attach DEALER attempt receives a WRITABLE wait
                         # token. The managed awaitable resumes on POLLOUT,
                         # drains that exact token, and resubmits this packet.
-                        return await dealer.send().message(b"first").submit()
+                        submission = dealer.send().message(b"first").submit()
+                        return await submission.admitted
 
                     self.assertIsNone(asyncio.run(send_first_record_when_connected()))
                     self.assertTrue(router.recv_into(received))
@@ -332,11 +330,11 @@ class CoreApiAlignmentTests(unittest.TestCase):
                     )
                     self.assertEqual(received.to_bytes_list(), [b"first"])
 
-                    self.assertIsNone(
-                        asyncio.run(
-                            dealer.send().message(b"replacement").submit()
-                        )
-                    )
+                    async def send_replacement():
+                        submission = dealer.send().message(b"replacement").submit()
+                        return await submission.admitted
+
+                    self.assertIsNone(asyncio.run(send_replacement()))
                     self.assertTrue(router.recv_into(received))
                     self.assertEqual(snapshot.tobytes(), b"first")
                     received.close()

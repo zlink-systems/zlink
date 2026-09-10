@@ -1,8 +1,57 @@
 # SPDX-License-Identifier: MPL-2.0
 
-from typing import Awaitable, Protocol, runtime_checkable
+from typing import Awaitable, Protocol, final, runtime_checkable
 
 from ..messaging.message import Message
+from .codes import SubmitResult
+
+
+@final
+class SendSubmission:
+    """Initial send result and its admission stage."""
+
+    __slots__ = ("_result", "_admitted")
+
+    def __init__(self, result: SubmitResult, admitted: Awaitable[None]):
+        self._result = result
+        self._admitted = admitted
+
+    @property
+    def result(self) -> SubmitResult:
+        return self._result
+
+    @property
+    def admitted(self) -> Awaitable[None]:
+        return self._admitted
+
+
+@final
+class RequestSubmission:
+    """Initial request result, admission stage, and reply stage."""
+
+    __slots__ = ("_result", "_admitted", "_reply")
+
+    def __init__(
+        self,
+        result: SubmitResult,
+        admitted: Awaitable[None],
+        reply: Awaitable[list["Message"]],
+    ):
+        self._result = result
+        self._admitted = admitted
+        self._reply = reply
+
+    @property
+    def result(self) -> SubmitResult:
+        return self._result
+
+    @property
+    def admitted(self) -> Awaitable[None]:
+        return self._admitted
+
+    @property
+    def reply(self) -> Awaitable[list["Message"]]:
+        return self._reply
 
 
 @runtime_checkable
@@ -26,8 +75,8 @@ class SendOp(_FluentMessageOp, Protocol):
 
     def messages(self, *payloads) -> "SendOp": ...
 
-    def submit(self) -> Awaitable[None]:
-        """Submit with event-loop-managed DONTWAIT backpressure retry.
+    def submit(self) -> SendSubmission:
+        """Submit and return the initial result plus admission stage.
 
         Each attempt is nonblocking. Immediate admission completes without a
         SEND completion; ``BACKPRESSURED``/``EAGAIN`` waits for the matching
@@ -52,8 +101,8 @@ class RequestOp(_FluentMessageOp, Protocol):
         """Set the reply timeout."""
         ...
 
-    def submit(self) -> Awaitable[list["Message"]]:
-        """Wait for admission through WRITABLE retries, then for the reply."""
+    def submit(self) -> RequestSubmission:
+        """Submit and return separate admission and reply stages."""
         ...
 
     def submit_sync(self) -> list["Message"]:
@@ -91,4 +140,11 @@ class PublishOp(_FluentMessageOp, Protocol):
         ...
 
 
-__all__ = ["PublishOp", "ReplyOp", "RequestOp", "SendOp"]
+__all__ = [
+    "PublishOp",
+    "ReplyOp",
+    "RequestOp",
+    "RequestSubmission",
+    "SendOp",
+    "SendSubmission",
+]
