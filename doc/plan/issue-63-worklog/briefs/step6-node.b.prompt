@@ -1,0 +1,35 @@
+Coding sub-agent for zlink Issue #63. Work ONLY in this worktree; commit to its detached HEAD. Do NOT
+touch core/doc/** or bindings/doc/**. Do NOT push/PR. Keep input tight; grep before reading.
+
+READ: doc/plan/issue-63-worklog/binding-migration-ref.ko.md (removal→replacement map, D63-6..8).
+Core is whole-message only; core/build-dev (symlink) has the new-only API. Reference recv idiom:
+bindings/cpp (already migrated).
+
+TASK (node): migrate BOTH send and recv internals in the N-API addon to the whole-message Core API.
+Public TS recv(result,flags)/send builder surface UNCHANGED.
+- bindings/node/native/src/addon_core.cc: replace uses of REMOVED symbols (zlink_*_part send&recv,
+  zlink_xpub_recv_part, ZLINK_PART_*) with zlink_send/send_rid/request/reply/publish, zlink_recv/
+  router_recv/subscribe/xpub_recv. recv paths (collect_recv_parts ~:182, router_recv_message_value
+  ~:782) → one whole-message call into a reusable native zlink_msg_t array (grow on
+  ZLINK_RECV_BUFFER_TOO_SMALL, retry; record preserved), build the Received parts once. send paths →
+  one whole-message call over the array.
+- Ownership: each native part owned by exactly one JS message, closed once; close remaining on failure.
+  STREAM RAW recv via zlink_recv; send count==1. Keep single-part fast path if correct.
+Find all: grep -rn "zlink_.*_part\|ZLINK_PART_\|part_flag" bindings/node.
+
+TEST (new-only local Core; do NOT rebuild Core):
+  ZLINK_CORE_SOURCE=local ZLINK_LIBRARY_PATH="$PWD/core/build-dev/lib/libzlink.so.0.17.5" \
+    LD_LIBRARY_PATH="$PWD/core/build-dev/lib" bash bindings/node/tests/run_tests.sh
+All node contract tests must pass. Update per-message-boundary assertions to the new observable
+behavior (no public-contract weakening; explain each).
+
+COMMIT (detached HEAD):
+  bindings(node): whole-message send+recv (drop part API)
+
+  <what changed>. Public recv/send surface unchanged. Refs #63.
+  Test: ZLINK_CORE_SOURCE=local ... bindings/node/tests/run_tests.sh — <pass summary>
+
+  Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01Df7vbMq5yraG6siDn8PAUH
+
+REPORT: files changed, capacity/retry+ownership, tests updated & why, exact node test pass summary.
