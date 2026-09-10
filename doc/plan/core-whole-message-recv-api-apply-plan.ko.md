@@ -104,10 +104,13 @@ title: "whole-message recv 공개 API — 적용 plan (문서·코드·perf 반�
 
 | 지금 | 어떻게 |
 |---|---|
-| `zlink_send_part`, `zlink_send_part_rid`, `zlink_request_part`, `zlink_reply_part`, `zlink_publish_part` | **제거.** parts 배열 + count를 받는 whole-message send로 대체 |
-| `zlink_recv_part`, `zlink_router_recv_part`, `zlink_subscribe_part` | **제거.** §3의 whole-message recv로 대체(`zlink_subscribe_part`는 §3 목록에 빠져 있었다 — draft §7.2 Q3) |
+| `zlink_send_part`(:238), `zlink_send_part_rid`(:245), `zlink_request_part`(:262), `zlink_reply_part`(:274), `zlink_publish_part`(:297) | **제거.** parts 배열 + count를 받는 whole-message send로 대체 |
+| `zlink_recv_part`(:292), `zlink_router_recv_part`(:286), `zlink_subscribe_part`(:309) | **제거.** whole-message recv로 대체(`zlink_subscribe_part`는 §3 목록에 빠져 있었다 — draft §7.2 Q3) |
 | `zlink_xpub_recv_part` | **유지.** `zlink_msg_t`를 받지 않는 구독 이벤트 리더이며 이름만 `_part`다 |
 | `zlink_stream_recv_packet` | **유지.** header/body 고정 2슬롯 framing이라 일반 배열 API와 의미가 다르다 |
+
+제거 8개와 대체 관계, 현재 시그니처 전문, 유지 대상(`zlink_xpub_recv_part`·`zlink_stream_recv_packet`)은
+draft §7.3.1이 목록으로 갖는다. `zlink_part_flag_t`도 공개 표면에서 사라진다.
 
 ### 10.2 먼저 정할 계약 셋
 

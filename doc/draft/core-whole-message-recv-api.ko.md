@@ -229,6 +229,120 @@ Framework Java의 send 지연 수정 과정에서 **`BUSY`가 반복되는 현�
 비용은 거의 전부 기계적이다. `core/doc` 약 1,000줄과 `core/tests` 약 450줄, 바인딩 내부 약 180줄이다.
 **Core 내부에는 part API 호출자가 없고, framework에는 0건이다.**
 
+### 7.3.1 제거 대상 전체 목록 (현재 시그니처 그대로)
+
+`core/include/zlink/socket/api.h` 기준. 아래 **8개를 제거**한다.
+
+```c
+/* ── 제출(send) 계열 5개 ───────────────────────────────────────────── */
+
+/* :238 */
+ZLINK_EXPORT zlink_submit_result_t zlink_send_part (void *s_,
+                                                    zlink_msg_t *part_,
+                                                    zlink_send_flags_t flags_,
+                                                    zlink_part_flag_t part_flag_,
+                                                    void *user_context_,
+                                                    zlink_completion_id_t *completion_id_out_);
+
+/* :245 */
+ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid (void *s_,
+                                                        const zlink_routing_id_t *target_rid_,
+                                                        zlink_msg_t *part_,
+                                                        zlink_send_flags_t flags_,
+                                                        zlink_part_flag_t part_flag_,
+                                                        void *user_context_,
+                                                        zlink_completion_id_t *completion_id_out_);
+
+/* :262 — MORE는 timeout_ms_ == 0, user_context_ == NULL 제약이 있었다. 신설 API에서는 사라진다. */
+ZLINK_EXPORT zlink_submit_result_t zlink_request_part (
+  void *s_,
+  const zlink_routing_id_t *target_router_rid_or_null_,
+  zlink_msg_t *part_,
+  zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_,
+  uint32_t timeout_ms_,
+  void *user_context_,
+  zlink_completion_id_t *completion_id_out_);
+
+/* :274 */
+ZLINK_EXPORT zlink_submit_result_t zlink_reply_part (
+  void *router_,
+  const zlink_routing_id_t *source_rid_,
+  zlink_reply_token_t reply_token_,
+  zlink_msg_t *part_,
+  zlink_part_flag_t part_flag_);
+
+/* :297 */
+ZLINK_EXPORT zlink_submit_result_t zlink_publish_part (void *subject_,
+                                                       const char *topic_id_,
+                                                       zlink_msg_t *part_,
+                                                       zlink_send_flags_t flags_,
+                                                       zlink_part_flag_t part_flag_);
+
+/* ── 수신(recv) 계열 3개 ───────────────────────────────────────────── */
+
+/* :286 */
+ZLINK_EXPORT zlink_recv_result_t
+zlink_router_recv_part (void *router_,
+                        const zlink_routing_id_t **source_rid_out_,
+                        zlink_reply_token_t *reply_token_out_,
+                        zlink_msg_t *part_out_,
+                        zlink_part_flag_t *has_more_out_,
+                        zlink_recv_flags_t flags_);
+
+/* :292 */
+ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (void *s_,
+                                                  const zlink_routing_id_t **source_rid_out_,
+                                                  zlink_msg_t *part_out_,
+                                                  zlink_part_flag_t *has_more_out_,
+                                                  zlink_recv_flags_t flags_);
+
+/* :309 */
+ZLINK_EXPORT zlink_recv_result_t zlink_subscribe_part (void *sub_,
+                                                       const zlink_routing_id_t **source_rid_out_,
+                                                       char *topic_id_buf_,
+                                                       size_t topic_id_capacity_,
+                                                       size_t *topic_id_len_out_,
+                                                       zlink_msg_t *part_out_,
+                                                       zlink_part_flag_t *has_more_out_,
+                                                       zlink_recv_flags_t flags_);
+```
+
+**대체 관계**
+
+| 제거 | 대체 |
+|---|---|
+| `zlink_send_part` | `zlink_send` |
+| `zlink_send_part_rid` | `zlink_send_rid` |
+| `zlink_request_part` | `zlink_request` |
+| `zlink_reply_part` | `zlink_reply` |
+| `zlink_publish_part` | `zlink_publish` |
+| `zlink_router_recv_part` | `zlink_router_recv` |
+| `zlink_recv_part` | `zlink_recv` |
+| `zlink_subscribe_part` | `zlink_subscribe` |
+
+**유지하는 것 (이름에 `_part`가 있어도 대상이 아니다)**
+
+```c
+/* :317 — zlink_msg_t를 받지 않는다. 구독 이벤트(subscribed + topic bytes) 리더이며
+ * 단일 프레임이다. 통합할 multipart가 없다. */
+ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
+                                                       const zlink_routing_id_t **source_rid_out_,
+                                                       int *subscribed_out_,
+                                                       char *topic_id_buf_,
+                                                       size_t topic_id_capacity_,
+                                                       size_t *topic_id_len_out_,
+                                                       zlink_recv_flags_t flags_);
+```
+
+`zlink_stream_recv_packet`(:328)도 유지한다. header/body 고정 2슬롯 framing이라 "record = parts 배열"과
+의미가 다르다(§7.2 Q3). STREAM send는 단일 part 계약이므로 신설 API에서 `part_count_ == 1`만 허용하거나
+기존 단일 msg 시그니처를 유지한다.
+
+**함께 사라지는 타입**: `zlink_part_flag_t`(MORE/FINAL). send에서는 배열 순서가, recv에서는
+`part_count_out_`이 그 역할을 대신한다. 공개 헤더에서 이 타입이 없어지는지, 아니면 내부에만 남는지는
+구현 단계에서 확정한다.
+
 ### 7.4 신설 send 시그니처 (초안)
 
 recv와 같은 관용을 따른다 — caller-제공 배열, `parts_capacity_`, `part_count_out_`. 한 번의 호출이 record
