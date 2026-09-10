@@ -19,6 +19,13 @@ final class ZLinkChannelFlowFrame {
             .getBytes(StandardCharsets.UTF_8));
     }
 
+    static ZLinkFlowContext.State fromEnvelopeHeader(
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
+        return header.flowId() == null
+            ? null
+            : new ZLinkFlowContext.State(header.flowId(), header.flowOrigin());
+    }
+
     static ZLinkFlowContext.State decode(List<Message> parts) {
         if (systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
                 .looksLikeEnvelope(parts)) {

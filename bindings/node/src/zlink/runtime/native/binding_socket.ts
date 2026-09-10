@@ -37,7 +37,7 @@ export interface SocketNativeBinding {
   socketCompletionRecv: (socket: NativeHandle, flags: number) => NativeCompletion | null;
   socketReadableWatchStart: (
     socket: NativeHandle,
-    callback: (status: number) => void
+    callback: (status: number, nativeErrno?: number) => void
   ) => NativeHandle;
   socketReadableWatchStop: (watch: NativeHandle) => void;
   socketReply: (socket: NativeHandle, sourceRid: Buffer, replyToken: bigint, parts: unknown) => void;
