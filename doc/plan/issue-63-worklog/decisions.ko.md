@@ -59,5 +59,19 @@ title: "Issue #63 — whole-message recv 신설 + router recv 네이밍 정정 �
   옛 이름 0건, 213/214 ctest 통과. 단일 실패 `158-hotpath_gate`는 dev(LTO OFF) 빌드에서
   LTO 캘리브레이션 reference 대비 Ir 1.12–1.37×로 나오는 **build-mode 아티팩트**(release-gate 전용
   게이트, origin/main도 동일 실패, rename 무관)로 판정 → 커밋 본문에 근거 기록.
-- 2026-09-10: ② Core 스펙(감독 직접) 착수. hot-path 스펙의 옛 이름 참조
-  (`core/doc/spec/core/systems/10-hot-path.{ko,en}.md`)도 이 단계에서 `recv_dealer_record`로 정정.
+- 2026-09-10: ② Core 스펙(감독 직접) 완료·커밋(0c98bd5e34). hot-path 스펙 옛 이름도 `recv_dealer_record`로
+  정정. 링크·앵커·prose·tabs 검사 통과.
+- 2026-09-10: **③ Core 구현 완료·커밋**(fdcc870e20, codex sol/high). 공개 `zlink_recv`/`zlink_router_recv`
+  + 헤더 4-mirror + libzlink.vers export + integration 테스트 6케이스. dev 빌드 OK, ctest 214/215
+  (유일 실패 `159-hotpath_gate`, dev LTO-OFF 아티팩트 — ① 이후 새 테스트 등록으로 #158→#159 번호 이동).
+  sync-version --check clean. 감독 재검증: 시그니처·capacity-miss staging(비소비)·혼용 EBUSY·hot-path
+  staging 우회 모두 스펙과 일치.
+
+## D63-5 (2026-09-10) whole-message fill은 move가 아니라 adopt
+- 감독 리뷰에서 발견: hot-path·staged-drain의 caller 슬롯 채우기가 `zlink_msg_move`를 썼는데,
+  `msg_t::move`는 dest를 `check()`(validity_signature+type) 후 유효하면 `close()`한다. caller 슬롯은
+  스펙상 **미초기화 허용**(D63-4)이라, move는 미초기화 메모리를 읽는다(valgrind/MSAN "uninitialised
+  value"). validity_signature 덕에 우발적 close는 사실상 없어 **기능 버그는 아니나**, 목적에 정확히
+  맞는 `zlink_msg_adopt`(`*dest=*src; src->init()`, dest 미검사·미close)로 교체 → uninit 읽기 제거,
+  behavior-preserving. 3개 지점: `socket_request_reply_router_api.cpp`, `socket_message_api.cpp`,
+  `part_helper_api.cpp`(try_take_staged_recv_record). recv_part의 초기화된 `part_out_` move는 유지.

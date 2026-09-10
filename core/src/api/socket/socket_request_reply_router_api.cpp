@@ -454,9 +454,12 @@ zlink_recv_result_t zlink_router_recv (
         return ZLINK_RECV_BUFFER_TOO_SMALL;
     }
 
+    // Caller slots are uninitialized (the contract does not require init), so
+    // adopt into them rather than move: adopt overwrites without inspecting or
+    // closing the destination, avoiding an uninitialized read.
     for (size_t i = 0; i < part_count; ++i) {
-        const int move_rc = zlink_msg_move (&parts_out_[i], &parts[i]);
-        errno_assert (move_rc == 0);
+        const int adopt_rc = zlink_msg_adopt (&parts_out_[i], &parts[i]);
+        errno_assert (adopt_rc == 0);
     }
     zlink_multipart_close (parts, part_count);
     export_router_recv_part_metadata_view (

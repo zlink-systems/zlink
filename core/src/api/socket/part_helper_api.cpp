@@ -572,10 +572,13 @@ zlink::part_helper_internal::try_take_staged_recv_record (
         metadata_out_->transport_pair_id = recv.transport_pair_id;
         metadata_out_->transport_pair_generation =
           recv.transport_pair_generation;
+        // Caller slots are uninitialized (whole-message recv does not require
+        // init), so adopt rather than move: adopt overwrites without inspecting
+        // or closing the destination, avoiding an uninitialized read.
         for (size_t i = 0; i < part_count; ++i) {
-            const int move_rc =
-              zlink_msg_move (&parts_out_[i], &recv.buffered_parts[i]);
-            errno_assert (move_rc == 0);
+            const int adopt_rc =
+              zlink_msg_adopt (&parts_out_[i], &recv.buffered_parts[i]);
+            errno_assert (adopt_rc == 0);
         }
         *part_count_out_ = part_count;
         held_socket = reset_recv_sequence (&recv);
