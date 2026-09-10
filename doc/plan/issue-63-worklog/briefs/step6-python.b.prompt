@@ -1,0 +1,34 @@
+Coding sub-agent for zlink Issue #63. Work ONLY in this worktree; commit to its detached HEAD. Do NOT
+touch core/doc/** or bindings/doc/**. Do NOT push/PR. Keep input tight; grep before reading.
+
+READ: doc/plan/issue-63-worklog/binding-migration-ref.ko.md (removal→replacement map, D63-6..8 contracts).
+Core is whole-message ONLY now; the removed part symbols no longer exist, so this binding will NOT
+compile until every use is migrated. core/build-dev (symlink) has the new-only API. Reference impl:
+bindings/cpp/src/Runtime/Native/native_receive.hpp (reusable array + grow-on-ENOBUFS retry) and the
+new send contract comments in core/include/zlink/socket/api.h.
+
+TASK (python): migrate BOTH send and recv C-extension internals to whole-message; public Python API
+UNCHANGED.
+- bindings/python/src/zlink/_native/_zlink_native.c: replace removed zlink_*_part (send&recv)+
+  zlink_xpub_recv_part with whole-message functions (array+count). Internal send/recv loops → one
+  whole-message call with a reusable zlink_msg_t array (grow on ZLINK_RECV_BUFFER_TOO_SMALL, retry).
+  Ownership: each native part → one Python message closed once. STREAM RAW recv via zlink_recv; send
+  count==1. Drop part_flag/MORE/FINAL (the part-flag computation at ~:199).
+grep: grep -rn "zlink_.*_part\|ZLINK_PART_\|part_flag" bindings/python.
+
+TEST (new-only local Core; do NOT rebuild Core):
+  ZLINK_CORE_SOURCE=local ZLINK_LIBRARY_PATH="$PWD/core/build-dev/lib/libzlink.so" \
+    PYTHON_EXECUTABLE="$HOME/project/zlink/.artifacts/wsl/python-build-venv/bin/python" \
+    bash bindings/python/tests/run_tests.sh
+All python tests must pass. Explain any test updated.
+
+COMMIT (detached HEAD):
+  bindings(python): whole-message send+recv (drop part API)
+
+  <what changed>. Public Python surface unchanged. Refs #63.
+  Test: ... bindings/python/tests/run_tests.sh — <pass summary>
+
+  Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01Df7vbMq5yraG6siDn8PAUH
+
+REPORT: files changed, ownership/retry, tests updated & why, exact python test pass summary.
