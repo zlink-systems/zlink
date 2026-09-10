@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const test = require('node:test');
-const { closeBrowser, closeServer, stopChild } = require('./bounded-cleanup');
+const { closeBrowser, closeBrowserServer, closeContext, closeServer, stopChild } = require('./bounded-cleanup');
 
 test('stopChild waits for a normally exiting child', async () => {
   const child = new EventEmitter();
@@ -26,12 +26,31 @@ test('stopChild force-kills a child that does not exit', async () => {
   assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
 });
 
+test('stopChild destroys streams from an already exited child', async () => {
+  const child = { exitCode: 0, signalCode: null, stdout: { destroyCalled: false, destroy() { this.destroyCalled = true; } }, stderr: { destroyCalled: false, destroy() { this.destroyCalled = true; } } };
+  await stopChild(child);
+  assert.equal(child.stdout.destroyCalled, true);
+  assert.equal(child.stderr.destroyCalled, true);
+});
+
 test('closeServer is bounded when its close callback hangs', async () => {
-  const server = { listening: true, close: () => {}, closeAllConnections() {} };
+  const server = { listening: true, close: () => {}, closeAllConnections() {}, unrefCalled: false, unref() { this.unrefCalled = true; } };
   assert.deepEqual(await closeServer(server, 5), { timedOut: true, forced: true });
+  assert.equal(server.unrefCalled, true);
 });
 
 test('closeBrowser is bounded when browser.close hangs', async () => {
   const browser = { close: () => new Promise(() => {}) };
   assert.deepEqual(await closeBrowser(browser, 5), { timedOut: true, forced: false });
+});
+
+test('closeContext is bounded when context.close hangs', async () => {
+  assert.deepEqual(await closeContext({ close: () => new Promise(() => {}) }, 5), { timedOut: true, forced: false });
+});
+
+test('closeBrowserServer kills when BrowserServer.close hangs', async () => {
+  let killed = false;
+  const server = { close: () => new Promise(() => {}), kill: () => { killed = true; } };
+  assert.deepEqual(await closeBrowserServer(server, 5), { timedOut: true, forced: true });
+  assert.equal(killed, true);
 });

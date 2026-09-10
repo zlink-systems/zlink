@@ -5,7 +5,7 @@ const net = require('node:net');
 const path = require('node:path');
 const test = require('node:test');
 const { build } = require('esbuild');
-const { closeBrowser, closeServer, stopChild } = require('./support/bounded-cleanup');
+const { closeBrowser, closeBrowserServer, closeContext, closeServer, stopChild } = require('./support/bounded-cleanup');
 
 const workspaceRoot = path.resolve(__dirname, '../..');
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= path.join(workspaceRoot, '.cache/ms-playwright');
@@ -15,26 +15,39 @@ const certificate = path.join(workspaceRoot, 'test/fixtures/tls/server-cert.pem'
 const key = path.join(workspaceRoot, 'test/fixtures/tls/server-key.pem');
 
 test('actual Chromium uses ws/wss, explicit flow, reconnect, drain, and browser trust', { timeout: 120_000 }, async (t) => {
+  let staticServer;
+  let wsServer;
+  let wssServer;
+  let untrustedWssServer;
+  let browserServer;
+  let browser;
+  let context;
+  let secureContext;
+  t.after(async () => {
+    await cleanup(t, 'browser context', () => closeContext(context));
+    await cleanup(t, 'secure browser context', () => closeContext(secureContext));
+    await cleanup(t, 'browser', () => closeBrowser(browser));
+    await cleanup(t, 'browser server', () => closeBrowserServer(browserServer));
+    await cleanup(t, 'ws server', () => stopStreamServer(wsServer));
+    await cleanup(t, 'wss server', () => stopStreamServer(wssServer));
+    await cleanup(t, 'untrusted wss server', () => stopStreamServer(untrustedWssServer));
+    await cleanup(t, 'static server', () => closeServer(staticServer));
+  });
   const [wsPort, wssPort, untrustedWssPort] = await freePorts(3);
-  const staticServer = await startStaticServer();
-  t.after(() => cleanup(t, 'static server', () => closeServer(staticServer)));
-  let wsServer = await startStreamServer(`ws://127.0.0.1:${wsPort}`);
-  t.after(() => cleanup(t, 'ws server', () => stopStreamServer(wsServer)));
-  const wssServer = await startStreamServer(`wss://127.0.0.1:${wssPort}`, certificate, key);
-  t.after(() => cleanup(t, 'wss server', () => stopStreamServer(wssServer)));
-  const untrustedWssServer = await startStreamServer(
+  staticServer = await startStaticServer();
+  wsServer = await startStreamServer(`ws://127.0.0.1:${wsPort}`);
+  wssServer = await startStreamServer(`wss://127.0.0.1:${wssPort}`, certificate, key);
+  untrustedWssServer = await startStreamServer(
     `wss://127.0.0.1:${untrustedWssPort}`,
     certificate,
     key
   );
   t.after(() => cleanup(t, 'untrusted wss server', () => stopStreamServer(untrustedWssServer)));
-  const browser = await chromium.launch({ headless: true });
-  t.after(() => cleanup(t, 'browser', () => closeBrowser(browser)));
-  const context = await browser.newContext();
-  t.after(() => cleanup(t, 'browser context', () => closeBrowserContext(context)));
+  browserServer = await chromium.launchServer({ headless: true });
+  browser = await chromium.connect({ wsEndpoint: browserServer.wsEndpoint() });
+  context = await browser.newContext();
   const page = await context.newPage();
-  const secureContext = await browser.newContext({ ignoreHTTPSErrors: true });
-  t.after(() => cleanup(t, 'secure browser context', () => closeBrowserContext(secureContext)));
+  secureContext = await browser.newContext({ ignoreHTTPSErrors: true });
   const securePage = await secureContext.newPage();
   const untrustedPage = await context.newPage();
   try {
@@ -167,14 +180,14 @@ async function stopStreamServer(child) {
 }
 
 async function cleanup(t, resource, action) {
-  const result = await action();
-  if (result.timedOut) t.diagnostic(`${resource} cleanup exceeded its grace period; forced=${result.forced}`);
+  try {
+    const result = await action();
+    if (result.timedOut) t.diagnostic(`${resource} cleanup exceeded its grace period; forced=${result.forced}`);
+  } catch (error) {
+    t.diagnostic(`${resource} cleanup failed: ${error.message}`);
+  }
 }
 
-async function closeBrowserContext(context) {
-  await context.close();
-  return { timedOut: false, forced: false };
-}
 
 async function freePorts(count) {
   const servers = await Promise.all(Array.from({ length: count }, () => new Promise((resolve, reject) => {
