@@ -170,10 +170,16 @@ jobs:
       - name: C++ binding smoke
         run: bash bindings/cpp/tests/run_tests.sh
 
+      # run_tests.sh는 이미 빌드된 native extension을 전제한다. in-place로 먼저 만든다.
       - name: Python binding smoke
         run: |
           python3 -m venv "${RUNNER_TEMP}/pyvenv"
-          "${RUNNER_TEMP}/pyvenv/bin/pip" install --quiet --upgrade pip pytest
+          "${RUNNER_TEMP}/pyvenv/bin/pip" install --quiet --upgrade pip pytest setuptools
+          (cd bindings/python \
+            && ZLINK_CORE_SOURCE=local \
+               ZLINK_CORE_INCLUDE_DIR="${GITHUB_WORKSPACE}/core/include" \
+               ZLINK_CORE_LIB_DIR="${GITHUB_WORKSPACE}/core/build/lib" \
+               "${RUNNER_TEMP}/pyvenv/bin/python" setup.py build_ext --inplace --force)
           ZLINK_CORE_SOURCE=local \
           PYTHON_EXECUTABLE="${RUNNER_TEMP}/pyvenv/bin/python" \
             bash bindings/python/tests/run_tests.sh
