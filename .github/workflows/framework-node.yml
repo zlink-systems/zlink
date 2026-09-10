@@ -244,7 +244,7 @@ jobs:
   framework-node-cross-language:
     name: cross-language smoke
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     needs:
       - framework-node
 

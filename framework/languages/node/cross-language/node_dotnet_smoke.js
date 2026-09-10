@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
-const { stopChild } = require('../test/browser/support/bounded-cleanup');
+const { stopChildGracefully } = require('../test/support/bounded-cleanup');
 const { createClient } = require('redis');
 const { Injectable, Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
@@ -846,8 +846,7 @@ function startDotnetHost(tempDir, name, args) {
     ready: waitForReadyFile(readyFile, exit, output, 30000),
     output: () => output.join(''),
     async stop() {
-      if (child.exitCode === null) await fs.writeFile(stopFile, 'STOP');
-      const result = await stopChild(child, 10000);
+      const result = await stopChildGracefully(child, () => fs.writeFile(stopFile, 'STOP'), 10000, 5000);
       if (result.timedOut) {
         throw new Error(`${name} did not exit after bounded termination`);
       }
