@@ -628,24 +628,33 @@ export class RawServiceMeshRuntime {
     return this.receiveOne(nowMs, observe);
   }
 
-  /** One ingress round owns its receive budget and management work. */
-  async pumpBatch(): Promise<boolean> {
+  setReadableHandler(handler: () => void): void {
+    this.requireStarted().setReadableHandler(handler);
+  }
+
+  /** Returns whether a receive budget ended before no-data; idle ticks only maintain peers. */
+  async pumpBatch(receiveReady = true): Promise<boolean> {
     await this.drainMonitorEvents();
     const startedAtMs = performance.now();
     let messages = 0;
     let bytes = 0;
     const observe: RawServicePumpObserver = (_source, byteCount) => { bytes += byteCount; };
-    while (messages < 64) {
+    while (receiveReady && messages < 64 && !this.closed) {
       const result = await this.receiveOne(performance.now(), observe);
-      if (result === 'noData') break;
+      if (result === 'noData') {
+        receiveReady = false;
+        break;
+      }
       messages += 1;
       // Core owns the per-peer fair-queue cursor. The Framework limit bounds
       // the entire round, so changing peers does not renew its byte/count budget.
       if (bytes >= 4 * 1024 * 1024 || performance.now() - startedAtMs >= 2) break;
     }
-    await this.announceExpectedPeers();
-    await this.tickLiveness();
-    return messages > 0;
+    if (!this.closed) {
+      await this.announceExpectedPeers();
+      await this.tickLiveness();
+    }
+    return receiveReady && messages > 0;
   }
 
   private async receiveOne(
@@ -659,6 +668,10 @@ export class RawServiceMeshRuntime {
     } catch (error) {
       if (this.closed || this.applicationJobStop.signal.aborted) return 'noData';
       throw error;
+    }
+    if (this.closed) {
+      permit.releaseAfterInternalProcessing();
+      return 'noData';
     }
     let received: ZLinkRawReceivedRecord | undefined;
     try {
