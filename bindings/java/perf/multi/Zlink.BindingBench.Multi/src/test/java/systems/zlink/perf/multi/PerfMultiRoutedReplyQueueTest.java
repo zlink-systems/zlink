@@ -4,8 +4,9 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
+import systems.zlink.contracts.messaging.SendSubmission;
+import systems.zlink.contracts.sockets.SubmitResult;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -29,7 +30,7 @@ class PerfMultiRoutedReplyQueueTest {
             submitted.add(reply);
             CompletableFuture<Void> stage = new CompletableFuture<>();
             stages.add(stage);
-            return stage;
+            return backpressured(stage);
         }, new ArrayList<>());
 
         replies.enqueue(1);
@@ -58,7 +59,7 @@ class PerfMultiRoutedReplyQueueTest {
         CompletableFuture<Void> first = new CompletableFuture<>();
         var replies = queue(reply -> {
             submitted.add(reply);
-            return reply == 0 ? first : CompletableFuture.completedStage(null);
+            return reply == 0 ? backpressured(first) : ok();
         }, new ArrayList<>());
 
         for (int index = 0; index < depth; index++) {
@@ -86,7 +87,7 @@ class PerfMultiRoutedReplyQueueTest {
             submitted.add(reply);
             CompletableFuture<Void> stage = new CompletableFuture<>();
             stages.add(stage);
-            return stage;
+            return backpressured(stage);
         }, new ArrayList<>());
 
         replies.enqueue(1);
@@ -110,7 +111,7 @@ class PerfMultiRoutedReplyQueueTest {
             if (reply == 1) {
                 throw stale;
             }
-            return CompletableFuture.completedStage(null);
+            return ok();
         }, released::add, cause -> cause == stale);
 
         replies.enqueue(1);
@@ -130,9 +131,9 @@ class PerfMultiRoutedReplyQueueTest {
         List<Integer> released = new ArrayList<>();
         var replies = new PerfMultiRoutedReplyQueue<Integer>(reply -> {
             submitted.add(reply);
-            CompletionStage<Void> stage = new CompletableFuture<>();
-            ((CompletableFuture<Void>) stage).completeExceptionally(terminal);
-            return stage;
+            CompletableFuture<Void> stage = new CompletableFuture<>();
+            stage.completeExceptionally(terminal);
+            return backpressured(stage);
         }, released::add, cause -> false);
 
         replies.enqueue(1);
@@ -142,5 +143,39 @@ class PerfMultiRoutedReplyQueueTest {
         assertSame(terminal, replies.failure());
         assertFalse(replies.drain(Duration.ofMillis(20)));
         assertEquals(List.of(2), released);
+    }
+
+    private static SendSubmission ok() {
+        return new SendSubmission() {
+            @Override
+            public SubmitResult result() {
+                return SubmitResult.OK;
+            }
+
+            @Override
+            public java.util.concurrent.CompletionStage<Void> admitted() {
+                throw new AssertionError("OK admission stage was inspected");
+            }
+        };
+    }
+
+    private static SendSubmission backpressured(
+            CompletableFuture<Void> admitted) {
+        return submission(SubmitResult.BACKPRESSURED, admitted);
+    }
+
+    private static SendSubmission submission(
+            SubmitResult result, CompletableFuture<Void> admitted) {
+        return new SendSubmission() {
+            @Override
+            public SubmitResult result() {
+                return result;
+            }
+
+            @Override
+            public java.util.concurrent.CompletionStage<Void> admitted() {
+                return admitted;
+            }
+        };
     }
 }
