@@ -5311,6 +5311,12 @@ public final class ZLinkSpotRuntime
         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header =
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
                 .decodeDispatchHeader(parts, false);
+        return parsePacket(parts, header);
+    }
+
+    static ParsedPacket parsePacket(
+        List<Message> parts,
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
         if (header != null) {
             return new ParsedPacket(header.messageName(), parts.get(1), header);
         }
