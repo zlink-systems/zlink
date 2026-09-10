@@ -295,56 +295,50 @@ final class ZLinkChannelSocketRegistry {
         // This operation's timeout is fixed on its first turn, even if channel
         // registration changes during the existing bounded readiness wait.
         Duration[] timeout = {null};
-        ZLinkFlowContext.State flow = ZLinkFlowContext.current();
         while (true) {
             boolean interrupted = Thread.currentThread().isInterrupted();
             Supplier<CompletionStage<T>> attempt = () -> {
-                try (var ignored = flow == null ? ZLinkFlowContext.suppress() : ZLinkFlowContext.enter(flow)) {
-                    ChannelRegistration registration = registrations.get(channelName);
-                    if (timeout[0] == null) {
-                        timeout[0] = timeoutOverride != null ? timeoutOverride
-                            : registration != null && registration.defaultRequestTimeout() != null
-                                ? registration.defaultRequestTimeout() : defaultTimeout;
-                    }
-                    boolean client = registration != null
-                        && registration.kind() == ChannelKind.CLIENT_SERVER
-                        && registration.clientEnabled();
-                    if (client) {
-                        if (metadataSpecified) {
-                            throw new UnsupportedOperationException("ClientServer metadata is not available");
-                        }
-                        ZLinkBackendDealerSocket target = clientForOutboundCore(channelName);
-                        Duration remaining = timeout[0].minusNanos(nanoTime.getAsLong() - started);
-                        if (target != null) {
-                            return clientSubmit.apply(target, remaining);
-                        }
-                        long readyBound = Math.min(timeout[0].toNanos(), TimeUnit.SECONDS.toNanos(5));
-                        if (nanoTime.getAsLong() - started >= readyBound
-                            || interrupted) {
-                            boolean unavailable = hasUnavailableClientServerConnectionCore(channelName);
-                            throw new ZLinkFrameworkException(
-                                unavailable ? ZLinkFrameworkErrorKind.UNAVAILABLE
-                                    : ZLinkFrameworkErrorKind.NOT_FOUND,
-                                unavailable ? "client/server channel target is unavailable: " + channelName
-                                    : "client/server channel has no known server: " + channelName);
-                        }
-                        return null;
-                    }
-                    ZLinkInternalSpotNode node = spotRouterNodes.get(channelName);
-                    if (node != null) {
-                        return meshSubmit.apply(node, timeout[0]);
-                    }
-                    if (registration != null && registration.kind() == ChannelKind.CLIENT_SERVER
-                        && registration.clientServerServerEnabled()) {
-                        throw new ZLinkConfigurationException(ZLinkFrameworkErrorKind.NOT_CONFIGURED,
-                            "ClientServer Client role is not registered for this channel: " + channelName);
-                    }
-                    throw new ZLinkConfigurationException(ZLinkFrameworkErrorKind.NOT_FOUND,
-                        "channel has no request route: " + channelName);
+                ChannelRegistration registration = registrations.get(channelName);
+                if (timeout[0] == null) {
+                    timeout[0] = requestTimeoutCore(channelName, timeoutOverride, defaultTimeout);
                 }
+                boolean client = registration != null
+                    && registration.kind() == ChannelKind.CLIENT_SERVER
+                    && registration.clientEnabled();
+                if (client) {
+                    if (metadataSpecified) {
+                        throw new UnsupportedOperationException("ClientServer metadata is not available");
+                    }
+                    ZLinkBackendDealerSocket target = clientForOutboundCore(channelName);
+                    Duration remaining = timeout[0].minusNanos(nanoTime.getAsLong() - started);
+                    if (target != null) {
+                        return clientSubmit.apply(target, remaining);
+                    }
+                    long readyBound = Math.min(timeout[0].toNanos(), TimeUnit.SECONDS.toNanos(5));
+                    if (nanoTime.getAsLong() - started >= readyBound
+                        || interrupted) {
+                        boolean unavailable = hasUnavailableClientServerConnectionCore(channelName);
+                        throw new ZLinkFrameworkException(
+                            unavailable ? ZLinkFrameworkErrorKind.UNAVAILABLE
+                                : ZLinkFrameworkErrorKind.NOT_FOUND,
+                            unavailable ? "client/server channel target is unavailable: " + channelName
+                                : "client/server channel has no known server: " + channelName);
+                    }
+                    return null;
+                }
+                ZLinkInternalSpotNode node = spotRouterNodes.get(channelName);
+                if (node != null) {
+                    return meshSubmit.apply(node, timeout[0]);
+                }
+                if (registration != null && registration.kind() == ChannelKind.CLIENT_SERVER
+                    && registration.clientServerServerEnabled()) {
+                    throw new ZLinkConfigurationException(ZLinkFrameworkErrorKind.NOT_CONFIGURED,
+                        "ClientServer Client role is not registered for this channel: " + channelName);
+                }
+                throw new ZLinkConfigurationException(ZLinkFrameworkErrorKind.NOT_FOUND,
+                    "channel has no request route: " + channelName);
             };
-            CompletionStage<T> submitted = stateLane.isOnLane()
-                ? attempt.get() : inStateLane(attempt);
+            CompletionStage<T> submitted = submitInStateLane(attempt);
             if (submitted != null) {
                 return submitted;
             }
@@ -355,6 +349,108 @@ final class ZLinkChannelSocketRegistry {
             parkNanos.accept(Math.min(TimeUnit.MILLISECONDS.toNanos(READY_POLL_INTERVAL_MILLIS),
                 Math.max(0, remaining)));
         }
+    }
+
+    /** Starts a direct node operation without exporting the selected transport. */
+    <T> CompletionStage<T> submitToNode(
+        String channelName,
+        Duration timeoutOverride,
+        Duration defaultTimeout,
+        BiFunction<ZLinkBackendRouterSocket, Duration, CompletionStage<T>> routerSubmit,
+        BiFunction<ZLinkInternalSpotNode, Duration, CompletionStage<T>> nodeSubmit) {
+        return submitInStateLane(() -> {
+            Duration timeout = requestTimeoutCore(channelName, timeoutOverride, defaultTimeout);
+            ZLinkBackendRouterSocket router = routeRouters.get(channelName);
+            if (router != null) {
+                return routerSubmit.apply(router, timeout);
+            }
+            ZLinkInternalSpotNode node = spotRouterNodes.get(channelName);
+            if (node != null) {
+                return nodeSubmit.apply(node, timeout);
+            }
+            throw new ZLinkConfigurationException(
+                "route mesh channel is not configured: " + channelName);
+        });
+    }
+
+    /** Local owner, configured bridge, and registered node keep their existing precedence. */
+    <T> CompletionStage<T> submitToSpot(
+        String channelName,
+        RoutingId targetNodeRid,
+        Supplier<ZLinkInternalSpotNode> bridgeOwner,
+        Duration timeoutOverride,
+        Duration defaultTimeout,
+        BiFunction<ZLinkBackendSpotRouteBridge, Duration, CompletionStage<T>> bridgeSubmit,
+        BiFunction<ZLinkInternalSpotNode, Duration, CompletionStage<T>> nodeSubmit) {
+        return submitInStateLane(() -> {
+            Duration timeout = requestTimeoutCore(channelName, timeoutOverride, defaultTimeout);
+            if (bridgeOwner != null) {
+                ZLinkInternalSpotNode localNode = bridgeOwner.get();
+                if (localNode != null && localNode.routingId().equals(targetNodeRid)) {
+                    return nodeSubmit.apply(localNode, timeout);
+                }
+            }
+            ChannelRegistration registration = registrations.get(channelName);
+            if (registration != null && registration.kind() == ChannelKind.ROUTE_MESH) {
+                return bridgeSubmit.apply(requireSpotRouteBridgeCore(channelName, bridgeOwner), timeout);
+            }
+            ZLinkInternalSpotNode node = spotRouterNodes.get(channelName);
+            if (node != null) {
+                return nodeSubmit.apply(node, timeout);
+            }
+            throw new ZLinkConfigurationException(
+                "route mesh channel is not configured: " + channelName);
+        });
+    }
+
+    private Duration requestTimeoutCore(
+        String channelName, Duration timeoutOverride, Duration defaultTimeout) {
+        ChannelRegistration registration = registrations.get(channelName);
+        return timeoutOverride != null ? timeoutOverride
+            : registration != null && registration.defaultRequestTimeout() != null
+                ? registration.defaultRequestTimeout() : defaultTimeout;
+    }
+
+    private <T> CompletionStage<T> submitInStateLane(Supplier<CompletionStage<T>> submission) {
+        ZLinkFlowContext.State flow = ZLinkFlowContext.current();
+        Supplier<CompletionStage<T>> work = () -> {
+            try (var ignored = flow == null ? ZLinkFlowContext.suppress() : ZLinkFlowContext.enter(flow)) {
+                return submission.get();
+            }
+        };
+        return stateLane.isOnLane() ? work.get() : inStateLane(work);
+    }
+
+    ZLinkBackendSpotRouteBridge requireSpotRouteBridge(
+        String channelName, Supplier<ZLinkInternalSpotNode> bridgeOwner) {
+        return stateLane.isOnLane() ? requireSpotRouteBridgeCore(channelName, bridgeOwner)
+            : inStateLane(() -> requireSpotRouteBridgeCore(channelName, bridgeOwner));
+    }
+
+    private ZLinkBackendSpotRouteBridge requireSpotRouteBridgeCore(
+        String channelName, Supplier<ZLinkInternalSpotNode> bridgeOwner) {
+        ZLinkBackendSpotRouteBridge existing = spotRouteBridges.get(channelName);
+        if (existing != null) {
+            return existing;
+        }
+        if (bridgeOwner == null) {
+            throw new ZLinkConfigurationException(
+                "routed SPOT egress requires a router-capable SPOT node");
+        }
+        ChannelRegistration registration = registrations.get(channelName);
+        if (registration == null || registration.kind() != ChannelKind.ROUTE_MESH) {
+            throw new ZLinkConfigurationException(
+                "SPOT route bridge requires a router channel: " + channelName);
+        }
+        ZLinkBackendRouterSocket router = routeRouters.get(channelName);
+        if (router == null) {
+            throw new ZLinkConfigurationException(
+                "route mesh channel is not configured: " + channelName);
+        }
+        ZLinkBackendSpotRouteBridge bridge = bridgeOwner.get().createRouteBridge();
+        bridge.attachRouterChannel(channelName, router);
+        spotRouteBridges.put(channelName, bridge);
+        return bridge;
     }
 
     void addClientServerConnection(
