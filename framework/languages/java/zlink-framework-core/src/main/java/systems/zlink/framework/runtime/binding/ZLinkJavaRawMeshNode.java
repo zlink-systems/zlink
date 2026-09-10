@@ -4741,14 +4741,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                         "service request already has a terminal reply");
                 }
                 try {
-                    List<byte[]> replyFrames = List.of(
-                        wire.encodeReplyHeader(requestCorrelation, 0, 0),
-                        wire.encodeFrameworkMultipartFrame(replyParts));
-                    port.reply(
+                    port.replyMessages(
                         requireStarted(),
                         inbound.source(),
                         inbound.requestSequence(),
-                        replyFrames);
+                        encodeApplicationFrames(
+                            wire.encodeReplyHeader(requestCorrelation, 0, 0),
+                            null, replyParts));
                 } finally {
                     replyParts.forEach(Message::close);
                 }
@@ -4855,13 +4854,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             }
             List<Message> replyParts = List.of(Message.from(reply));
             try {
-                port.reply(
+                port.replyMessages(
                     requireStarted(),
                     inbound.source(),
                     inbound.requestSequence(),
-                    List.of(
+                    encodeApplicationFrames(
                         wire.encodeReplyHeader(correlation, 0, 0),
-                        wire.encodeFrameworkMultipartFrame(replyParts)));
+                        null, replyParts));
             } finally {
                 replyParts.forEach(Message::close);
             }
@@ -5291,14 +5290,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                             return;
                         }
                         try {
-                            port.reply(
+                            port.replyMessages(
                                 requireStarted(),
                                 inbound.source(),
                                 inbound.requestSequence(),
-                                List.of(
+                                encodeApplicationFrames(
                                     wire.encodeReplyHeader(
                                         header.correlation(), 0, 0),
-                                    wire.encodeFrameworkMultipartFrame(replyParts)));
+                                    null, replyParts));
                         } finally {
                             replyParts.forEach(Message::close);
                         }
@@ -5489,14 +5488,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                         return;
                     }
                     try {
-                        port.reply(
+                        port.replyMessages(
                             requireStarted(),
                             inbound.source(),
                             inbound.requestSequence(),
-                            List.of(
+                            encodeApplicationFrames(
                                 wire.encodeReplyHeader(
                                     header.replyRouteId(), 0, 0),
-                                wire.encodeFrameworkMultipartFrame(replyParts)));
+                                null, replyParts));
                     } finally {
                         replyParts.forEach(Message::close);
                     }
@@ -6214,14 +6213,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                             return;
                         }
                         try {
-                            port.reply(
+                            port.replyMessages(
                                 requireStarted(),
                                 inbound.source(),
                                 inbound.requestSequence(),
-                                List.of(
+                                encodeApplicationFrames(
                                     wire.encodeReplyHeader(
                                         header.correlation(), 0, 0),
-                                    wire.encodeFrameworkMultipartFrame(replyParts)));
+                                    null, replyParts));
                         } finally {
                             replyParts.forEach(Message::close);
                         }
