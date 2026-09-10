@@ -35,7 +35,9 @@ package_version="$(sed -n 's/^project(zlink_cpp VERSION \([0-9.]*\).*/\1/p' "$re
   exit 1
 }
 prefix="$artifact_root/install/zlink-cpp/$binding_version"
-build_dir="$artifact_root/build/bindings-cpp-$binding_version"
+# See the note in scripts/local-package/c/build-wsl.sh: the build tree must be
+# addressed by its real path, not the per-run <staging>/build alias.
+build_dir="$(readlink -f "$artifact_root/build")/bindings-cpp-$binding_version"
 rm -rf "$prefix"
 cmake -S "$repo_root/bindings/cpp" -B "$build_dir" \
   -DCMAKE_BUILD_TYPE="$configuration" \
