@@ -72,6 +72,23 @@ test('stream connector protobuf codec uses supplied protobuf type', () => {
   );
 });
 
+test('framework protobuf serializer preserves bytes bodies', () => {
+  const serializer = protobufFramework.createProtobufMessageSerializer();
+  const cases = [
+    Buffer.alloc(0),
+    Buffer.from([0x7f]),
+    Buffer.from({ length: 64 * 1024 }, (_, index) => index % 251)
+  ];
+
+  for (const body of cases) {
+    const payload = serializer.serialize({ body });
+    const decoded = serializer.deserialize(payload);
+
+    assert.ok(Buffer.isBuffer(decoded.body));
+    assert.deepEqual(decoded.body, body);
+  }
+});
+
 test('stream connector protobuf codec dispatches typed payloads through connector', async () => {
   const type = createLengthPrefixedJsonType();
   const transportFactory = new MemoryTransportFactory();
