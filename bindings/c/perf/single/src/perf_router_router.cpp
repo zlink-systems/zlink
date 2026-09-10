@@ -74,26 +74,21 @@ bool perform_router_router_handshake (void *receiver_,
             const zlink_routing_id_t *source_rid = NULL;
             uint64_t request_seq = 0;
             zlink_msg_t part;
-            zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-            if (zlink_msg_init (&part) != 0)
-                return false;
-            const int recv_rc =
-              zlink_router_recv_part (receiver_, &source_rid, &request_seq, &part,
-                                      &has_more, ZLINK_RECV_FLAGS_DONTWAIT);
+            size_t part_count = 0;
+            const int recv_rc = zlink_router_recv (
+              receiver_, &source_rid, &request_seq, &part, 1, &part_count,
+              ZLINK_RECV_FLAGS_DONTWAIT);
             if (recv_rc == 0) {
                 connected = source_rid && source_rid->size > 0 && request_seq == 0
-                            && has_more == ZLINK_PART_FINAL && zlink_msg_size (&part) == 4
+                            && part_count == 1 && zlink_msg_size (&part) == 4
                             && std::memcmp (zlink_msg_data (&part), "PING", 4) == 0;
                 if (connected)
                     assign_routing_id (&sender_actual_rid,
                                        reinterpret_cast<const char *> (source_rid->data),
                                        source_rid->size);
-                zlink_msg_close (&part);
+                zlink_multipart_close (&part, part_count);
             } else if (zlink_errno () != EAGAIN && zlink_errno () != EINTR) {
-                zlink_msg_close (&part);
                 return false;
-            } else {
-                zlink_msg_close (&part);
             }
         }
 
@@ -124,24 +119,21 @@ bool perform_router_router_handshake (void *receiver_,
     const zlink_routing_id_t *source_rid = NULL;
     uint64_t request_seq = 0;
     zlink_msg_t part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    if (zlink_msg_init (&part) != 0)
-        return false;
-    if (zlink_router_recv_part (sender_, &source_rid, &request_seq, &part,
-                                &has_more, ZLINK_RECV_FLAGS_NONE)
+    size_t part_count = 0;
+    if (zlink_router_recv (sender_, &source_rid, &request_seq, &part, 1,
+                           &part_count, ZLINK_RECV_FLAGS_NONE)
         != 0) {
-        zlink_msg_close (&part);
         return false;
     }
 
     const bool ok = source_rid && source_rid->size > 0 && request_seq == 0
-                    && has_more == ZLINK_PART_FINAL && zlink_msg_size (&part) == 4
+                    && part_count == 1 && zlink_msg_size (&part) == 4
                     && std::memcmp (zlink_msg_data (&part), "PONG", 4) == 0;
     if (ok && target_rid_out_) {
         assign_routing_id (target_rid_out_, reinterpret_cast<const char *> (source_rid->data),
                            source_rid->size);
     }
-    zlink_msg_close (&part);
+    zlink_multipart_close (&part, part_count);
     return ok;
 }
 
@@ -154,18 +146,15 @@ void drain_router_socket (void *socket_)
         const zlink_routing_id_t *source_rid = NULL;
         uint64_t request_seq = 0;
         zlink_msg_t part;
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-        if (zlink_msg_init (&part) != 0)
-            return;
-        if (zlink_router_recv_part (socket_, &source_rid, &request_seq, &part,
-                                    &has_more, ZLINK_RECV_FLAGS_DONTWAIT)
+        size_t part_count = 0;
+        if (zlink_router_recv (socket_, &source_rid, &request_seq, &part, 1,
+                               &part_count, ZLINK_RECV_FLAGS_DONTWAIT)
             != 0) {
-            zlink_msg_close (&part);
             if (zlink_errno () == EAGAIN || zlink_errno () == EINTR)
                 return;
             return;
         }
-        zlink_msg_close (&part);
+        zlink_multipart_close (&part, part_count);
     }
 }
 
@@ -275,20 +264,18 @@ int recv_router_router_header_flags (void *receiver_,
 
     const zlink_routing_id_t *source_rid = NULL;
     uint64_t request_seq = 0;
-    zlink_msg_t part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    if (zlink_msg_init (&part) != 0)
-        return -1;
-    const int rc =
-      zlink_router_recv_part (receiver_, &source_rid, &request_seq, &part,
-                              &has_more, static_cast<zlink_recv_flags_t> (flags_));
+    zlink_msg_t parts[2];
+    size_t part_count = 0;
+    const int rc = zlink_router_recv (
+      receiver_, &source_rid, &request_seq, parts, 2u, &part_count,
+      static_cast<zlink_recv_flags_t> (flags_));
     if (rc != 0) {
         const int err = zlink_errno ();
-        zlink_msg_close (&part);
         if (err == EAGAIN || err == EINTR)
             return 0;
         return -1;
     }
+    zlink_msg_t &part = parts[0];
 
     const bool rid_ok = source_rid && source_rid->size > 0;
     const bool shape_ok = rid_ok && request_seq == 0;
@@ -297,25 +284,23 @@ int recv_router_router_header_flags (void *receiver_,
             std::cerr << "[perf-router-router] invalid routed recv"
                       << " rid_size=" << static_cast<int> (source_rid ? source_rid->size : 0)
                       << " request_seq=" << request_seq
-                      << " has_more=" << static_cast<int> (has_more) << std::endl;
+                      << " part_count=" << part_count << std::endl;
         }
-        zlink_msg_close (&part);
+        zlink_multipart_close (parts, part_count);
         return -1;
     }
 
     const size_t actual_size = zlink_msg_size (&part);
     if (is_stop_token (zlink_msg_data (&part), actual_size)) {
-        if (has_more != ZLINK_PART_FINAL) {
-            zlink_msg_close (&part);
+        if (part_count != 1u) {
+            zlink_multipart_close (parts, part_count);
             return -1;
         }
-        zlink_msg_close (&part);
+        zlink_multipart_close (parts, part_count);
         return 2; // stop token
     }
-    if (!perf_zlink_recv_measurement_tail (
-          receiver_, has_more, static_cast<zlink_recv_flags_t> (flags_),
-          perf_zlink_recv_next_router)) {
-        zlink_msg_close (&part);
+    if (!perf_zlink_measurement_parts_valid (parts, part_count)) {
+        zlink_multipart_close (parts, part_count);
         return -1;
     }
     // PERF_SINGLE_TEST_POLICY § 2.1: a wire frame whose byte length differs
@@ -327,7 +312,7 @@ int recv_router_router_header_flags (void *receiver_,
         header_ok = perf_single_metric::decode_payload_header (zlink_msg_data (&part), actual_size,
                                                                header_out_);
     }
-    zlink_msg_close (&part);
+    zlink_multipart_close (parts, part_count);
     if (!size_ok && bench_debug_enabled ()) {
         std::cerr << "[perf-router-router] excluded payload size=" << actual_size
                   << " expected=" << payload_size_ << std::endl;

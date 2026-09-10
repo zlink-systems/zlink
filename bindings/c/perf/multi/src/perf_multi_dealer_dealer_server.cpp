@@ -75,15 +75,12 @@ inline recv_result_t receive_one_message (void *server,
         return recv_fatal;
 
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_msg_t part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    if (zlink_msg_init (&part) != 0)
-        return recv_fatal;
-    const int rc = zlink_recv_part (server, &source_rid, &part, &has_more,
-                                    static_cast<zlink_recv_flags_t> (flags));
+    zlink_msg_t parts[2];
+    size_t part_count = 0;
+    const int rc = zlink_recv (server, &source_rid, parts, 2u, &part_count,
+                               static_cast<zlink_recv_flags_t> (flags));
     if (rc != 0) {
         const int err = zlink_errno ();
-        zlink_msg_close (&part);
         if (err == EAGAIN || err == EINTR || err == ETIMEDOUT)
             return recv_none;
         if (bench_transition_debug_enabled ()) {
@@ -93,33 +90,32 @@ inline recv_result_t receive_one_message (void *server,
         }
         return recv_fatal;
     }
+    zlink_msg_t &part = parts[0];
 
     if (source_rid) {
         if (bench_transition_debug_enabled ()) {
             std::cerr << "[multi-dealer-dealer-server] unexpected recv metadata"
                       << " rid=" << (source_rid ? 1 : 0)
-                      << " has_more=" << static_cast<int> (has_more)
+                      << " part_count=" << part_count
                       << " size=" << expected_msg_size << " run=" << expected_run_id
                       << " phase=" << static_cast<unsigned int> (expected_phase) << std::endl;
         }
-        zlink_msg_close (&part);
+        zlink_multipart_close (parts, part_count);
         return recv_fatal;
     }
 
     if (is_stop_token_message (part)) {
-        if (has_more != ZLINK_PART_FINAL) {
-            zlink_msg_close (&part);
+        if (part_count != 1u) {
+            zlink_multipart_close (parts, part_count);
             return recv_fatal;
         }
-        zlink_msg_close (&part);
+        zlink_multipart_close (parts, part_count);
         return recv_stop;
     }
-    // This socket multiplexes parts from all connected DEALER pipes. The
-    // next zlink_recv_part() call may select another ready pipe, so it cannot
-    // be used to validate the empty measurement tail for the part just read.
-    // Drain every part independently and let the metric header identify the
-    // one payload frame that contributes to throughput and latency. Empty
-    // tails and other non-metric parts are consumed without being counted.
+    if (!perf_zlink_measurement_parts_valid (parts, part_count)) {
+        zlink_multipart_close (parts, part_count);
+        return recv_fatal;
+    }
 
     perf_multi_metric::header_t header;
     const bool matched =
@@ -152,7 +148,7 @@ inline recv_result_t receive_one_message (void *server,
         }
     }
 
-    zlink_msg_close (&part);
+    zlink_multipart_close (parts, part_count);
     return recv_ok;
 }
 
