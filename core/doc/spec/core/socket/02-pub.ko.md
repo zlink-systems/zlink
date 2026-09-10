@@ -19,7 +19,7 @@ PUB는 발행 전용 [socket](../glossary.ko.md#socket)이다. message 앞에 �
 모든 subscriber에게 message를 나눠 보내는 fan-out 전달을 수행한다. PUB는 송신 전용이며
 수신 함수는 적용되지 않는다.
 
-이 문서는 PUB 고유 계약 — topic 발행(`zlink_publish_part`), PUB/XPUB 전용 옵션과 전달
+이 문서는 PUB 고유 계약 — topic 발행(`zlink_publish`), PUB/XPUB 전용 옵션과 전달
 손실 정책 — 을 정의한다. socket 생성, 공통 옵션과 송신 flag처럼 모든 socket 타입에
 공통인 계약은 [Socket 공통](README.ko.md)이 소유한다.
 
@@ -37,7 +37,7 @@ PUB는 발행 전용 [socket](../glossary.ko.md#socket)이다. message 앞에 �
 ## 2. 전달 손실과 backpressure
 
 fanout 전달은 손실을 허용한다. 송신 queue가 유지할 byte 상한인
-[HWM](../glossary.ko.md#hwm)이 찼을 때 `zlink_publish_part()`는 해당 subscriber에 대한
+[HWM](../glossary.ko.md#hwm)이 찼을 때 `zlink_publish()`는 해당 subscriber에 대한
 message를 버리고 성공을 보고한다. 이 동작을 제어하는 옵션이 `ZLINK_PUB_OPT_NODROP`이며,
 기본값은 `0`이다.
 
@@ -56,42 +56,26 @@ topic의 filter에 맞는 pipe(subscriber 하나로 가는 전달 queue)만 HWM�
 subscriber 속도에 의존하면 안 되는 신뢰 전달은 PUB/SUB가 아니라 request-reply socket이
 담당한다.
 
-## 3. Multipart 발행과 publish record
+## 3. Whole-message 발행과 publish record
 
-여러 frame(part)을 하나의 논리적 message로 묶어 전송하는 방식을
-[multipart](../02-message.ko.md#4-multipart)라 한다. Core는 성공한 중간 part를
-`ZLINK_PART_FINAL`이 성공할 때까지 하나의 publish record — subscriber에 한 단위로
-공개되는 발행 기록 — 로 임시로 보관한다.
+여러 frame(part)을 하나의 논리적 message로 묶는 방식을
+[multipart](../02-message.ko.md#4-multipart)라 한다. `zlink_publish()`는 `parts_` 배열의 모든
+part를 배열 순서대로 publish record 하나로 제출한다. Subscriber는 이 record를 한 단위로 받는다.
 
-실제 send 단계에 진입한 중간 또는 마지막 part가 HWM, 크기 제한 등으로 실패하면
-이전에 임시로 보관한 part와 실패한 part를 원자적으로 폐기하고 sequence를 닫는다.
-subscriber에는 그 record의 어떤 part도 보이지 않는다. 실패한 호출의 `part_`도 소비되며
-다음 publish는 새 record의 첫 part로 시작한다. 따라서 backpressure를 포함한 send 단계
-실패 뒤에는 보관해 둔 전체 record를 첫 part부터 다시 제출해야 한다.
-
-topic이나 send flag를 바꾸거나, 다른 send helper를 사용하거나, 다른 thread에서 호출해
-제출 전 sequence 검증이 실패하면 그 호출의 `part_`만 소비한다. 이 실패는 기존에
-임시로 보관한 part를 폐기하거나 열린 sequence를 닫지 않는다. 원래 sequence를 소유한
-thread에서 같은 topic과 send flag를 사용해 `zlink_publish_part`로 후속 part를 제출하면
-기존 publish record를 계속할 수 있다.
+Core는 publish record 전체를 원자적으로 admission한다. HWM, 크기 제한이나 다른 오류로 호출이
+실패하면 subscriber에는 어느 part도 보이지 않는다. 성공·실패와 관계없이 모든 입력 슬롯을
+소비하므로, 다시 시도하려면 caller가 호출 전에 보관한 record 전체를 제출해야 한다.
 
 ```mermaid
 sequenceDiagram
     participant App as Application
     participant Core as Core (PUB)
     participant Sub as Subscriber
-    App->>Core: zlink_publish_part(part 1, ZLINK_PART_MORE)
-    Note over Core: publish record에 임시 보관
-    App->>Core: zlink_publish_part(part 2, ZLINK_PART_MORE)
-    Note over Core: 같은 record에 임시 보관
-    alt 마지막 submit 성공
-        App->>Core: zlink_publish_part(part N, ZLINK_PART_FINAL)
+    App->>Core: zlink_publish(topic, parts, part_count, flags)
+    alt record admission 성공
         Core-->>Sub: record 전체를 한 단위로 전달
-    else 제출 전 sequence 검증 실패
-        Note over Core: 호출 part만 소비하고<br/>열린 sequence는 유지
-        Note over App,Core: 원래 thread·topic·flag로 기존 record 계속 가능
-    else send 단계의 중간 또는 마지막 submit 실패
-        Note over Core: 임시로 보관한 part와 실패한 part를<br/>원자적으로 폐기하고 sequence를 닫음
+    else record admission 실패
+        Core-->>App: submit 오류
         Note over Sub: 그 record의 어떤 part도 보이지 않음
     end
 ```
@@ -189,16 +173,14 @@ PUB/XPUB socket 옵션의 현재 값을 가져온다.
 
 ---
 
-### zlink_publish_part
+### zlink_publish
 
-raw `PUB` 또는 `XPUB` socket에서 message part 하나를 발행한다.
+raw `PUB` 또는 `XPUB` socket에서 message record 하나를 발행한다.
 
 ```c
-ZLINK_EXPORT zlink_submit_result_t zlink_publish_part (void *subject_,
-                                                       const char *topic_id_,
-                                                       zlink_msg_t *part_,
-                                                       zlink_send_flags_t flags_,
-                                                       zlink_part_flag_t part_flag_);
+ZLINK_EXPORT zlink_submit_result_t zlink_publish (
+  void *subject_, const char *topic_id_, zlink_msg_t *parts_,
+  size_t part_count_, zlink_send_flags_t flags_);
 ```
 
 적용 타입은 raw `PUB`, raw `XPUB`다. 다른 raw socket 타입은
@@ -211,33 +193,27 @@ NUL 앞의 모든 byte가 topic이며 Core가 이 byte를 message 앞의 topic f
 포함된다. 크기 제한을 넘으면 `ZLINK_SUBMIT_INVALID_ARGUMENT`와 `EMSGSIZE`, topic
 frame용 storage를 확보하지 못하면 `ZLINK_SUBMIT_OUT_OF_MEMORY`와 `ENOMEM`을 반환한다.
 
-`ZLINK_PART_MORE`로 시작한 multipart message는 `ZLINK_PART_FINAL`까지 같은 thread에서
-이 함수로 계속 보내야 하며, 중간에 다른 send helper를 호출하거나 topic과 flag를 바꿀
-수 없다. Core가 진행 중인 part를 하나의 publish record로 임시 보관하고 실패 시 원자적으로
-폐기하는 동작은 [§3 Multipart 발행과 publish record](#3-multipart-발행과-publish-record)가
-설명한다.
-이 topic·flag·helper·thread 조건을 위반해 제출 전 검증에서 실패하면 호출한 `part_`만
-소비하고 열린 sequence는 유지한다. 원래 thread에서 기존 topic과 flag로 이 함수를 다시
-호출하면 기존 publish record를 계속할 수 있다. 반면 검증을 통과해 send 단계에 진입한
-뒤 HWM·크기 제한 등으로 실패하면 실패 part와 임시로 보관한 part를 폐기하고 sequence를 닫는다.
+`parts_` 배열과 `part_count_`가 publish record를 구성한다. `part_count_`는 양수여야 하며 `0`은
+`ZLINK_SUBMIT_INVALID_ARGUMENT`+`EINVAL`이다. Core가 record 전체를 원자적으로 admission하는
+동작은 [§3 Whole-message 발행과 publish record](#3-whole-message-발행과-publish-record)가 설명한다.
 
-이 함수는 성공과 실패 모두에서 `part_`의 내용을 소비한다. 호출자는 반환값과 관계없이
-같은 내용을 다시 보내려면 호출 전에 별도 복사본을 만들어야 한다. 소비된 `zlink_msg_t`는
+이 함수는 성공과 실패 모두에서 모든 입력 슬롯을 소비한다. 호출자는 반환값과 관계없이 같은
+record를 다시 보내려면 호출 전에 전체 복사본을 만들어야 한다. 소비된 각 `zlink_msg_t`는
 초기화된 빈 message로 남으므로 그대로 close하거나 다시 쓸 수 있다.
 
 non-blocking 발행은 `flags_`에 `ZLINK_DONTWAIT`를 전달한다. 즉시 진행할 수 없으면
-`ZLINK_SUBMIT_BACKPRESSURED`를 반환한다. 반환 결과와 관계없이 `part_`가 소비된다는
+`ZLINK_SUBMIT_BACKPRESSURED`를 반환한다. 반환 결과와 관계없이 모든 입력 슬롯을 소비한다는
 소유권 규칙은 동일하다. 전체 결과 대응은
 [errno map](../03-errors.ko.md#result와-errno-대응)을 따른다.
 
 ## 8. 구현 및 contract test 검증 요구
 
-공개 표면(`zlink_publish_part`, `zlink_set_pub_option`·`zlink_get_pub_option`,
+공개 표면(`zlink_publish`, `zlink_set_pub_option`·`zlink_get_pub_option`,
 반환값·errno, subscriber 쪽 수신 결과)만으로 다음을 확인한다. 각 항목은 contract test
 하나로 이어진다.
 
 **적용 타입**
-- raw `PUB`, raw `XPUB`가 아닌 raw socket 타입에 `zlink_publish_part`를 호출하면 `ZLINK_SUBMIT_NOT_SUPPORTED`이고 `errno`는 `ENOTSUP`다.
+- raw `PUB`, raw `XPUB`가 아닌 raw socket 타입에 `zlink_publish`를 호출하면 `ZLINK_SUBMIT_NOT_SUPPORTED`이고 `errno`는 `ENOTSUP`다.
 
 **topic 발행**
 - `topic_id_ != NULL`이면 종료 NUL 앞의 모든 byte가 topic frame으로 message 앞에 추가되어 subscriber에 전달된다.
@@ -245,15 +221,15 @@ non-blocking 발행은 `flags_`에 `ZLINK_DONTWAIT`를 전달한다. 즉시 진�
 - topic byte를 포함한 크기가 message·storage 크기 제한을 넘으면 `ZLINK_SUBMIT_INVALID_ARGUMENT`와 `EMSGSIZE`다.
 - topic frame용 storage를 확보하지 못하면 `ZLINK_SUBMIT_OUT_OF_MEMORY`와 `ENOMEM`이다.
 
-**part 소유권**
-- 성공·실패·backpressure 어느 반환 결과에서도 `part_`의 내용은 소비된다 — 반환 뒤 `zlink_msg_size(part_)`는 `0`이고, 그 `zlink_msg_t`는 다시 초기화하지 않고 그대로 close하거나 다음 publish에 쓸 수 있다.
+**입력 배열 ownership**
+- 성공·실패·backpressure 어느 반환 결과에서도 모든 `parts_` 슬롯은 소비된다 — 반환 뒤 각 `zlink_msg_size`는 `0`이고, 각 슬롯은 다시 초기화하지 않고 그대로 close하거나 다음 publish에 쓸 수 있다.
 
 **publish record 원자성**
-- 제출 전 sequence 검증을 통과한 중간 또는 마지막 part가 HWM·크기 제한 등으로 send 단계에서 실패하면 subscriber는 그 record의 어떤 part도 수신하지 않고, 다음 `zlink_publish_part` 호출은 새 record의 첫 part로 처리된다.
-- topic·flag 변경, 다른 send helper 사용, 다른 thread 호출로 제출 전 sequence 검증이 실패하면 그 호출의 `part_`만 소비되고 열린 sequence는 유지된다. 원래 thread가 기존 topic·flag로 `zlink_publish_part`를 호출하면 기존 publish record를 계속할 수 있다.
+- `parts_` 배열의 part는 배열 순서대로 하나의 publish record로 전달된다.
+- HWM·크기 제한 등으로 호출이 실패하면 subscriber는 그 record의 어떤 part도 수신하지 않으며, caller는 보관한 record 전체를 다시 제출할 수 있다.
 
 **drop과 backpressure**
-- `ZLINK_PUB_OPT_NODROP`이 기본값 `0`일 때 HWM이 찬 subscriber에 대한 message는 버려지고 `zlink_publish_part`는 성공을 보고한다.
+- `ZLINK_PUB_OPT_NODROP`이 기본값 `0`일 때 HWM이 찬 subscriber에 대한 message는 버려지고 `zlink_publish`는 성공을 보고한다.
 - `ZLINK_PUB_OPT_NODROP`을 `1`로 설정하면 한 pipe가 찬 동안 같은 socket의 모든 subscriber에 대한 전달이 멈춘다.
 - `ZLINK_DONTWAIT`를 준 호출과 send timeout이 `0`인 호출은 즉시 진행할 수 없으면 `ZLINK_SUBMIT_BACKPRESSURED`와 `EAGAIN`을 반환한다. 양수 timeout 대기가 만료한 경우도 같다.
 - `ZLINK_DONTWAIT`를 주지 않은 blocking 호출은 send timeout 범위에서 writable이 될 때까지 대기하며, 대기 중 writable이 되면 성공할 수 있다.

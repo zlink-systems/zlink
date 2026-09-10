@@ -5,7 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 C_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ROOT_DIR="$(cd "${C_DIR}/../.." && pwd)"
 source "${ROOT_DIR}/bindings/tools/local_core_runtime.sh"
-if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+if [[ -n "${ZLINK_C_CORE_BUILD_DIR:-}" ]]; then
+  CORE_BUILD_DIR="${ZLINK_C_CORE_BUILD_DIR}"
+elif [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
   CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX}"
 else
   CORE_BUILD_DIR="${ROOT_DIR}/core/build"

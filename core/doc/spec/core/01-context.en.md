@@ -60,11 +60,10 @@ A Context's lifecycle proceeds in the order **create → use → shutdown signal
 - **Shutdown signal** — `zlink_ctx_shutdown` only signals that every
   blocking operation on sockets belonging to this Context should
   immediately unwind with `ETERM`. It is a non-blocking call that does not
-  release resources. A `zlink_recv_part` unwound this way returns
-  `ZLINK_RECV_TERMINATED` and leaves the caller-initialized receive destination
-  and part flag unchanged. A `zlink_send_part` unwound this way returns
-  `ZLINK_SUBMIT_TERMINATED`, consumes the passed part like any other submit
-  failure (leaving it in the empty initialized state), and yields completion
+  release resources. A `zlink_recv` unwound this way returns
+  `ZLINK_RECV_TERMINATED` and leaves receive outputs unchanged. A `zlink_send`
+  unwound this way returns `ZLINK_SUBMIT_TERMINATED`, consumes every input slot
+  like any other submit failure (leaving each empty and initialized), and yields completion
   ID `0`.
 - **Resource release** — `zlink_ctx_term` destroys the Context. This call
   may block until every socket created within the Context has closed. Each

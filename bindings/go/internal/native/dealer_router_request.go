@@ -7,30 +7,30 @@ package native
 #include <stdint.h>
 #include "zlink.h"
 
-static inline zlink_submit_result_t zlink_go_send_part_with_context(
-    void *socket_, zlink_msg_t *part_, zlink_send_flags_t flags_,
-    zlink_part_flag_t part_flag_, uintptr_t user_context_,
+static inline zlink_submit_result_t zlink_go_send_with_context(
+    void *socket_, zlink_msg_t *parts_, size_t part_count_,
+    zlink_send_flags_t flags_, uintptr_t user_context_,
     zlink_completion_id_t *completion_id_out_) {
-    return zlink_send_part(socket_, part_, flags_, part_flag_,
-                           (void *)user_context_, completion_id_out_);
+    return zlink_send(socket_, parts_, part_count_, flags_,
+                      (void *)user_context_, completion_id_out_);
 }
 
-static inline zlink_submit_result_t zlink_go_send_part_rid_with_context(
-    void *socket_, const zlink_routing_id_t *target_rid_, zlink_msg_t *part_,
-    zlink_send_flags_t flags_, zlink_part_flag_t part_flag_,
+static inline zlink_submit_result_t zlink_go_send_rid_with_context(
+    void *socket_, const zlink_routing_id_t *target_rid_,
+    zlink_msg_t *parts_, size_t part_count_, zlink_send_flags_t flags_,
     uintptr_t user_context_, zlink_completion_id_t *completion_id_out_) {
-    return zlink_send_part_rid(socket_, target_rid_, part_, flags_, part_flag_,
-                               (void *)user_context_, completion_id_out_);
+    return zlink_send_rid(socket_, target_rid_, parts_, part_count_, flags_,
+                          (void *)user_context_, completion_id_out_);
 }
 
-static inline zlink_submit_result_t zlink_go_request_part_with_context(
-    void *socket_, const zlink_routing_id_t *target_rid_, zlink_msg_t *part_,
-    zlink_send_flags_t flags_, zlink_part_flag_t part_flag_,
+static inline zlink_submit_result_t zlink_go_request_with_context(
+    void *socket_, const zlink_routing_id_t *target_rid_,
+    zlink_msg_t *parts_, size_t part_count_, zlink_send_flags_t flags_,
     uint32_t timeout_ms_, uintptr_t user_context_,
     zlink_completion_id_t *completion_id_out_) {
-    return zlink_request_part(socket_, target_rid_, part_, flags_, part_flag_,
-                              timeout_ms_, (void *)user_context_,
-                              completion_id_out_);
+    return zlink_request(socket_, target_rid_, parts_, part_count_, flags_,
+                         timeout_ms_, (void *)user_context_,
+                         completion_id_out_);
 }
 */
 import "C"
@@ -104,21 +104,15 @@ func (s *sendRetryState) attempt(userContext uintptr) (uint64, error) {
 		value := s.target.toC()
 		rid = &value
 	}
-	err := submitMultipartFromClones(s.payload.owned, false, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-		var finalContext C.uintptr_t
-		var completionOut *C.zlink_completion_id_t
-		if partFlag == C.ZLINK_PART_FINAL {
-			finalContext = C.uintptr_t(userContext)
-			completionOut = &completionID
-		}
+	err := submitMultipartFromClones(s.payload.owned, false, func(native *C.zlink_msg_t, count C.size_t) error {
 		if !s.hasTarget {
-			return submitErrorFromResult(C.zlink_go_send_part_with_context(
-				s.core.raw(), part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
-				finalContext, completionOut))
+			return submitErrorFromResult(C.zlink_go_send_with_context(
+				s.core.raw(), native, count, C.ZLINK_SEND_FLAGS_DONTWAIT,
+				C.uintptr_t(userContext), &completionID))
 		}
-		return submitErrorFromResult(C.zlink_go_send_part_rid_with_context(
-			s.core.raw(), rid, part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
-			finalContext, completionOut))
+		return submitErrorFromResult(C.zlink_go_send_rid_with_context(
+			s.core.raw(), rid, native, count, C.ZLINK_SEND_FLAGS_DONTWAIT,
+			C.uintptr_t(userContext), &completionID))
 	})
 	return uint64(completionID), err
 }
@@ -134,18 +128,10 @@ func (s *requestRetryState) attempt(userContext uintptr) (uint64, error) {
 		rid := s.target.toC()
 		ridPointer = &rid
 	}
-	err := submitMultipartFromClones(s.payload.owned, false, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-		var partTimeout C.uint32_t
-		var finalContext C.uintptr_t
-		var completionOut *C.zlink_completion_id_t
-		if partFlag == C.ZLINK_PART_FINAL {
-			partTimeout = C.uint32_t(s.timeout)
-			finalContext = C.uintptr_t(userContext)
-			completionOut = &completionID
-		}
-		return submitErrorFromResult(C.zlink_go_request_part_with_context(
-			s.core.raw(), ridPointer, part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
-			partTimeout, finalContext, completionOut))
+	err := submitMultipartFromClones(s.payload.owned, false, func(native *C.zlink_msg_t, count C.size_t) error {
+		return submitErrorFromResult(C.zlink_go_request_with_context(
+			s.core.raw(), ridPointer, native, count, C.ZLINK_SEND_FLAGS_DONTWAIT,
+			C.uint32_t(s.timeout), C.uintptr_t(userContext), &completionID))
 	})
 	return uint64(completionID), err
 }
@@ -325,18 +311,10 @@ func submitCompletionRequest(
 		rid := target.toC()
 		ridPointer = &rid
 	}
-	err = submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-		var partTimeout C.uint32_t
-		var userContext C.uintptr_t
-		var completionOut *C.zlink_completion_id_t
-		if partFlag == C.ZLINK_PART_FINAL {
-			partTimeout = C.uint32_t(timeoutMillis)
-			userContext = C.uintptr_t(entry.handleKey)
-			completionOut = &completionID
-		}
-		return submitErrorFromResult(C.zlink_go_request_part_with_context(
-			core.raw(), ridPointer, part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
-			partTimeout, userContext, completionOut))
+	err = submitMultipartFromBuilderParts(parts, func(native *C.zlink_msg_t, count C.size_t) error {
+		return submitErrorFromResult(C.zlink_go_request_with_context(
+			core.raw(), ridPointer, native, count, C.ZLINK_SEND_FLAGS_DONTWAIT,
+			C.uint32_t(timeoutMillis), C.uintptr_t(entry.handleKey), &completionID))
 	})
 	if err == nil {
 		if completionID == 0 {

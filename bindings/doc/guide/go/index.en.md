@@ -294,8 +294,8 @@ if !ok { /* no message */ }
 | `zlink_close(socket)` | `socket.Close()` |
 | `zlink_bind(socket, ep)` | `socket.Bind(ep)` |
 | `zlink_connect(socket, ep)` | `socket.Connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.Send().Message(m).Flags(flag).Submit(ctx)` |
-| `zlink_recv_part(...)` | `socket.Recv(&received, flags)` |
+| `zlink_send(..., parts, count, ...)` / `zlink_send_rid(..., parts, count, ...)` | `socket.Send().Message(m).Flags(flag).Submit(ctx)` |
+| `zlink_recv(..., parts_out, capacity, count_out, ...)` | `socket.Recv(&received, flags)` |
 | `zlink_msg_data(msg)` | `msg.Data()` |
 | `zlink_msg_size(msg)` | `msg.Size()` |
 | `zlink_msg_close(msg)` | `msg.Close()` |

@@ -53,27 +53,26 @@ int main (void)
     CHECK (make_part (&request, "ping") == 0);
     /* This test covers completion delivery, not pre-admission readiness. The
        blocking variant waits for admission and still completes asynchronously. */
-    CHECK (zlink_request_part (dealer, NULL, &request, ZLINK_SEND_FLAGS_NONE,
-                               ZLINK_PART_FINAL, 2000, &context_tag, &completion_id)
+    CHECK (zlink_request (dealer, NULL, &request, 1, ZLINK_SEND_FLAGS_NONE,
+                          2000, &context_tag, &completion_id)
            == ZLINK_SUBMIT_OK);
     CHECK (completion_id != 0);
 
     const zlink_routing_id_t *source_rid = NULL;
     zlink_reply_token_t reply_token = 0;
     zlink_msg_t received;
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
-    CHECK (zlink_msg_init (&received) == ZLINK_CONFIG_OK);
-    CHECK (zlink_router_recv_part (router, &source_rid, &reply_token, &received, &has_more,
-                                   ZLINK_RECV_FLAGS_NONE)
+    size_t received_count = 0;
+    CHECK (zlink_router_recv (router, &source_rid, &reply_token, &received, 1,
+                              &received_count, ZLINK_RECV_FLAGS_NONE)
            == ZLINK_RECV_OK);
     CHECK (source_rid != NULL);
     CHECK (reply_token != 0);
-    CHECK (has_more == ZLINK_PART_FINAL);
-    CHECK (zlink_msg_close (&received) == ZLINK_CONFIG_OK);
+    CHECK (received_count == 1);
+    zlink_multipart_close (&received, received_count);
 
     zlink_msg_t reply;
     CHECK (make_part (&reply, "pong") == 0);
-    CHECK (zlink_reply_part (router, source_rid, reply_token, &reply, ZLINK_PART_FINAL)
+    CHECK (zlink_reply (router, source_rid, reply_token, &reply, 1)
            == ZLINK_SUBMIT_OK);
 
     zlink_poller_event_t first;

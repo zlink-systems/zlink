@@ -851,7 +851,7 @@ where
             );
             sequence = sequence.wrapping_add(1);
             // `RequestOp::submit` is lazy: admission happens on the first poll,
-            // which is where the C runner calls zlink_request_part(DONTWAIT).
+            // which is where the C runner calls zlink_request(DONTWAIT).
             let mut task = submit(payload, request_timeout);
             match task.as_mut().poll(&mut task_context) {
                 Poll::Ready(outcome) => {

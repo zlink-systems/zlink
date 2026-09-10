@@ -18,9 +18,6 @@ static PyObject *Py_NewRef (PyObject *object)
 }
 #endif
 
-typedef int (*publish_part_fn) (
-  void *, const char *, zlink_msg_t *, zlink_send_flags_t, zlink_part_flag_t);
-
 static int copy_routing_id (Py_buffer *view, zlink_routing_id_t *rid);
 
 typedef struct prepared_parts_t
@@ -192,11 +189,6 @@ static int prepare_parts (PyObject *payload, prepared_parts_t *prepared)
 
     PyMem_Free (items);
     return 0;
-}
-
-static zlink_part_flag_t part_flag (Py_ssize_t index, Py_ssize_t count)
-{
-    return (index + 1 < count) ? ZLINK_PART_MORE : ZLINK_PART_FINAL;
 }
 
 static PyObject *result_tuple (int rc, int err)
@@ -620,14 +612,12 @@ static PyObject *submit_single_part (void *handle,
     if (payload_size > 0)
         memcpy (zlink_msg_data (&part), payload_data, (size_t) payload_size);
 
-    Py_BEGIN_ALLOW_THREADS if (routing_id) rc = zlink_send_part_rid (
-      handle, routing_id, &part, (zlink_send_flags_t) flags, ZLINK_PART_FINAL, NULL, NULL);
-    else rc = zlink_send_part (
-      handle, &part, (zlink_send_flags_t) flags, ZLINK_PART_FINAL, NULL, NULL);
-    if (rc != ZLINK_SUBMIT_OK) {
+    Py_BEGIN_ALLOW_THREADS if (routing_id) rc = zlink_send_rid (
+      handle, routing_id, &part, 1, (zlink_send_flags_t) flags, NULL, NULL);
+    else rc = zlink_send (
+      handle, &part, 1, (zlink_send_flags_t) flags, NULL, NULL);
+    if (rc != ZLINK_SUBMIT_OK)
         err = zlink_errno ();
-        zlink_msg_close (&part);
-    }
     Py_END_ALLOW_THREADS
 
       if (has_view) PyBuffer_Release (&view);
@@ -726,17 +716,11 @@ static PyObject *socket_send_op_submit (socket_send_op_t *op, PyObject *Py_UNUSE
         return NULL;
     close_from = prepared.count;
 
-    Py_BEGIN_ALLOW_THREADS for (Py_ssize_t i = 0; i < prepared.count; ++i)
-    {
-        rc = zlink_send_part (op->handle, &prepared.parts[i], (zlink_send_flags_t) op->flags,
-                              part_flag (i, prepared.count), NULL, NULL);
-        if (rc != ZLINK_SUBMIT_OK) {
-            err = zlink_errno ();
-            for (Py_ssize_t j = i; j < prepared.count; ++j)
-                zlink_msg_close (&prepared.parts[j]);
-            break;
-        }
-    }
+    Py_BEGIN_ALLOW_THREADS rc = zlink_send (
+      op->handle, prepared.parts, (size_t) prepared.count,
+      (zlink_send_flags_t) op->flags, NULL, NULL);
+    if (rc != ZLINK_SUBMIT_OK)
+        err = zlink_errno ();
     Py_END_ALLOW_THREADS
 
       release_prepared_parts (&prepared, close_from);
@@ -870,18 +854,11 @@ static PyObject *routed_send_op_submit (routed_send_op_t *op, PyObject *Py_UNUSE
         return NULL;
     close_from = prepared.count;
 
-    Py_BEGIN_ALLOW_THREADS for (Py_ssize_t i = 0; i < prepared.count; ++i)
-    {
-        rc = zlink_send_part_rid (op->handle, &op->routing_id, &prepared.parts[i],
-                                  (zlink_send_flags_t) op->flags,
-                                  part_flag (i, prepared.count), NULL, NULL);
-        if (rc != ZLINK_SUBMIT_OK) {
-            err = zlink_errno ();
-            for (Py_ssize_t j = i; j < prepared.count; ++j)
-                zlink_msg_close (&prepared.parts[j]);
-            break;
-        }
-    }
+    Py_BEGIN_ALLOW_THREADS rc = zlink_send_rid (
+      op->handle, &op->routing_id, prepared.parts, (size_t) prepared.count,
+      (zlink_send_flags_t) op->flags, NULL, NULL);
+    if (rc != ZLINK_SUBMIT_OK)
+        err = zlink_errno ();
     Py_END_ALLOW_THREADS
 
       release_prepared_parts (&prepared, close_from);
@@ -1086,12 +1063,10 @@ static PyObject *publisher_send_op_submit (publisher_send_op_t *op, PyObject *Py
             memcpy (zlink_msg_data (&part), payload_data, (size_t) payload_size);
 
         topic = PyBytes_AS_STRING (op->topic);
-        Py_BEGIN_ALLOW_THREADS rc = zlink_publish_part (
-          op->handle, topic, &part, (zlink_send_flags_t) op->flags, ZLINK_PART_FINAL);
-        if (rc != ZLINK_SUBMIT_OK) {
+        Py_BEGIN_ALLOW_THREADS rc = zlink_publish (
+          op->handle, topic, &part, 1, (zlink_send_flags_t) op->flags);
+        if (rc != ZLINK_SUBMIT_OK)
             err = zlink_errno ();
-            zlink_msg_close (&part);
-        }
         Py_END_ALLOW_THREADS
 
           if (has_view) PyBuffer_Release (&view);
@@ -1109,17 +1084,11 @@ static PyObject *publisher_send_op_submit (publisher_send_op_t *op, PyObject *Py
     topic = PyBytes_AS_STRING (op->topic);
     op->submitted = 1;
 
-    Py_BEGIN_ALLOW_THREADS for (Py_ssize_t i = 0; i < prepared.count; ++i)
-    {
-        rc = zlink_publish_part (op->handle, topic, &prepared.parts[i],
-                                 (zlink_send_flags_t) op->flags, part_flag (i, prepared.count));
-        if (rc != ZLINK_SUBMIT_OK) {
-            err = zlink_errno ();
-            for (Py_ssize_t j = i; j < prepared.count; ++j)
-                zlink_msg_close (&prepared.parts[j]);
-            break;
-        }
-    }
+    Py_BEGIN_ALLOW_THREADS rc = zlink_publish (
+      op->handle, topic, prepared.parts, (size_t) prepared.count,
+      (zlink_send_flags_t) op->flags);
+    if (rc != ZLINK_SUBMIT_OK)
+        err = zlink_errno ();
     Py_END_ALLOW_THREADS
 
       release_prepared_parts (&prepared, close_from);
@@ -1188,29 +1157,28 @@ static void close_received_parts (received_parts_t *received)
     received->capacity = 0;
 }
 
-static int append_received_part (received_parts_t *received, zlink_msg_t *part)
+static int ensure_received_capacity (received_parts_t *received, size_t required)
 {
-    if (received->capacity == 0) {
+    if (required == 0)
+        required = 1;
+    if (required > (size_t) PY_SSIZE_T_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    if ((size_t) received->capacity >= required)
+        return 0;
+    if (received->capacity == 0 && required == 1) {
         received->parts = &received->inline_part;
         received->capacity = 1;
+        return 0;
     }
-    if (received->count == received->capacity) {
-        Py_ssize_t next_capacity = received->capacity < 4 ? 4 : received->capacity * 2;
-        zlink_msg_t *next = NULL;
-        if (received->parts == &received->inline_part) {
-            next = malloc ((size_t) next_capacity * sizeof (zlink_msg_t));
-            if (next)
-                next[0] = received->inline_part;
-        } else {
-            next = realloc (received->parts,
-                            (size_t) next_capacity * sizeof (zlink_msg_t));
-        }
-        if (!next)
-            return -1;
-        received->parts = next;
-        received->capacity = next_capacity;
-    }
-    received->parts[received->count++] = *part;
+    zlink_msg_t *next = received->parts == &received->inline_part
+                          ? malloc (required * sizeof (zlink_msg_t))
+                          : realloc (received->parts, required * sizeof (zlink_msg_t));
+    if (!next)
+        return -1;
+    received->parts = next;
+    received->capacity = (Py_ssize_t) required;
     return 0;
 }
 
@@ -1232,17 +1200,11 @@ static PyObject *py_send_parts (PyObject *self, PyObject *args)
     close_from = prepared.count;
 
     void *handle = (void *) (uintptr_t) handle_value;
-    Py_BEGIN_ALLOW_THREADS for (Py_ssize_t i = 0; i < prepared.count; ++i)
-    {
-        rc = zlink_send_part (handle, &prepared.parts[i], (zlink_send_flags_t) flags,
-                              part_flag (i, prepared.count), NULL, NULL);
-        if (rc != ZLINK_SUBMIT_OK) {
-            err = zlink_errno ();
-            for (Py_ssize_t j = i; j < prepared.count; ++j)
-                zlink_msg_close (&prepared.parts[j]);
-            break;
-        }
-    }
+    Py_BEGIN_ALLOW_THREADS rc = zlink_send (
+      handle, prepared.parts, (size_t) prepared.count,
+      (zlink_send_flags_t) flags, NULL, NULL);
+    if (rc != ZLINK_SUBMIT_OK)
+        err = zlink_errno ();
     Py_END_ALLOW_THREADS
 
       release_prepared_parts (&prepared, close_from);
@@ -1288,17 +1250,11 @@ static PyObject *py_send_parts_rid (PyObject *self, PyObject *args)
     close_from = prepared.count;
 
     void *handle = (void *) (uintptr_t) handle_value;
-    Py_BEGIN_ALLOW_THREADS for (Py_ssize_t i = 0; i < prepared.count; ++i)
-    {
-        rc = zlink_send_part_rid (handle, &rid, &prepared.parts[i], (zlink_send_flags_t) flags,
-                                  part_flag (i, prepared.count), NULL, NULL);
-        if (rc != ZLINK_SUBMIT_OK) {
-            err = zlink_errno ();
-            for (Py_ssize_t j = i; j < prepared.count; ++j)
-                zlink_msg_close (&prepared.parts[j]);
-            break;
-        }
-    }
+    Py_BEGIN_ALLOW_THREADS rc = zlink_send_rid (
+      handle, &rid, prepared.parts, (size_t) prepared.count,
+      (zlink_send_flags_t) flags, NULL, NULL);
+    if (rc != ZLINK_SUBMIT_OK)
+        err = zlink_errno ();
     Py_END_ALLOW_THREADS
 
       release_prepared_parts (&prepared, close_from);
@@ -1329,16 +1285,10 @@ static PyObject *py_publish_parts (PyObject *self, PyObject *args)
     PyThreadState *_save = NULL;
     if (release_gil)
         _save = PyEval_SaveThread ();
-    for (Py_ssize_t i = 0; i < prepared.count; ++i) {
-        rc = zlink_publish_part (handle, topic, &prepared.parts[i], (zlink_send_flags_t) flags,
-                                 part_flag (i, prepared.count));
-        if (rc != ZLINK_SUBMIT_OK) {
-            err = zlink_errno ();
-            for (Py_ssize_t j = i; j < prepared.count; ++j)
-                zlink_msg_close (&prepared.parts[j]);
-            break;
-        }
-    }
+    rc = zlink_publish (handle, topic, prepared.parts, (size_t) prepared.count,
+                        (zlink_send_flags_t) flags);
+    if (rc != ZLINK_SUBMIT_OK)
+        err = zlink_errno ();
     if (release_gil)
         PyEval_RestoreThread (_save);
 
@@ -1407,41 +1357,43 @@ static PyObject *py_recv_parts (PyObject *self, PyObject *args)
     memset (&routing_copy, 0, sizeof (routing_copy));
     if (!PyArg_ParseTuple (args, "Ki", &handle_value, &flags))
         return NULL;
+    if (ensure_received_capacity (&received, 1) != 0) {
+        PyErr_NoMemory ();
+        return NULL;
+    }
 
     void *handle = (void *) (uintptr_t) handle_value;
     Py_BEGIN_ALLOW_THREADS while (1)
     {
         const zlink_routing_id_t *source_rid = NULL;
-        zlink_msg_t part;
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-        zlink_recv_flags_t recv_flags =
-          received.count == 0 ? (zlink_recv_flags_t) flags : ZLINK_DONTWAIT;
-
-        if (zlink_msg_init (&part) != ZLINK_CONFIG_OK) {
+        size_t part_count = 0;
+        rc = zlink_recv (handle, &source_rid, received.parts,
+                         (size_t) received.capacity, &part_count,
+                         (zlink_recv_flags_t) flags);
+        if (rc == ZLINK_RECV_BUFFER_TOO_SMALL) {
+            if (part_count <= (size_t) received.capacity
+                || ensure_received_capacity (&received, part_count) != 0) {
+                err = part_count <= (size_t) received.capacity ? EPROTO : errno;
+                rc = ZLINK_RECV_INTERNAL_ERROR;
+                break;
+            }
+            continue;
+        }
+        if (rc != ZLINK_RECV_OK) {
             err = zlink_errno ();
-            if (err == 0)
-                err = ENOMEM;
+            break;
+        }
+        if (part_count == 0 || part_count > (size_t) received.capacity) {
+            err = EPROTO;
             rc = ZLINK_RECV_INTERNAL_ERROR;
             break;
         }
-        rc = zlink_recv_part (handle, &source_rid, &part, &has_more, recv_flags);
-        if (rc != ZLINK_RECV_OK) {
-            err = zlink_errno ();
-            zlink_msg_close (&part);
-            break;
-        }
-        if (received.count == 0 && source_rid && source_rid->size > 0) {
+        received.count = (Py_ssize_t) part_count;
+        if (source_rid && source_rid->size > 0) {
             routing_copy = *source_rid;
             has_routing = 1;
         }
-        if (append_received_part (&received, &part) != 0) {
-            zlink_msg_close (&part);
-            rc = ZLINK_RECV_INTERNAL_ERROR;
-            err = ENOMEM;
-            break;
-        }
-        if (has_more == ZLINK_PART_FINAL)
-            break;
+        break;
     }
     Py_END_ALLOW_THREADS
 
@@ -1464,6 +1416,10 @@ static PyObject *py_recv_owner (PyObject *self, PyObject *args)
     memset (&routing_copy, 0, sizeof (routing_copy));
     if (!PyArg_ParseTuple (args, "Ki", &handle_value, &flags))
         return NULL;
+    if (ensure_received_capacity (&received, 1) != 0) {
+        PyErr_NoMemory ();
+        return NULL;
+    }
 
     void *handle = (void *) (uintptr_t) handle_value;
     const int release_gil = (flags & ZLINK_DONTWAIT) == 0;
@@ -1472,36 +1428,34 @@ static PyObject *py_recv_owner (PyObject *self, PyObject *args)
         _save = PyEval_SaveThread ();
     while (1) {
         const zlink_routing_id_t *source_rid = NULL;
-        zlink_msg_t part;
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-        zlink_recv_flags_t recv_flags =
-          received.count == 0 ? (zlink_recv_flags_t) flags : ZLINK_DONTWAIT;
-
-        if (zlink_msg_init (&part) != ZLINK_CONFIG_OK) {
+        size_t part_count = 0;
+        rc = zlink_recv (handle, &source_rid, received.parts,
+                         (size_t) received.capacity, &part_count,
+                         (zlink_recv_flags_t) flags);
+        if (rc == ZLINK_RECV_BUFFER_TOO_SMALL) {
+            if (part_count <= (size_t) received.capacity
+                || ensure_received_capacity (&received, part_count) != 0) {
+                err = part_count <= (size_t) received.capacity ? EPROTO : errno;
+                rc = ZLINK_RECV_INTERNAL_ERROR;
+                break;
+            }
+            continue;
+        }
+        if (rc != ZLINK_RECV_OK) {
             err = zlink_errno ();
-            if (err == 0)
-                err = ENOMEM;
+            break;
+        }
+        if (part_count == 0 || part_count > (size_t) received.capacity) {
+            err = EPROTO;
             rc = ZLINK_RECV_INTERNAL_ERROR;
             break;
         }
-        rc = zlink_recv_part (handle, &source_rid, &part, &has_more, recv_flags);
-        if (rc != ZLINK_RECV_OK) {
-            err = zlink_errno ();
-            zlink_msg_close (&part);
-            break;
-        }
-        if (received.count == 0 && source_rid && source_rid->size > 0) {
+        received.count = (Py_ssize_t) part_count;
+        if (source_rid && source_rid->size > 0) {
             routing_copy = *source_rid;
             has_routing = 1;
         }
-        if (append_received_part (&received, &part) != 0) {
-            zlink_msg_close (&part);
-            rc = ZLINK_RECV_INTERNAL_ERROR;
-            err = ENOMEM;
-            break;
-        }
-        if (has_more == ZLINK_PART_FINAL)
-            break;
+        break;
     }
     if (release_gil)
         PyEval_RestoreThread (_save);
@@ -1549,6 +1503,10 @@ static PyObject *py_router_recv_owner (PyObject *self, PyObject *args)
     memset (&routing_copy, 0, sizeof (routing_copy));
     if (!PyArg_ParseTuple (args, "Ki", &handle_value, &flags))
         return NULL;
+    if (ensure_received_capacity (&received, 1) != 0) {
+        PyErr_NoMemory ();
+        return NULL;
+    }
 
     void *handle = (void *) (uintptr_t) handle_value;
     const int release_gil = (flags & ZLINK_DONTWAIT) == 0;
@@ -1557,37 +1515,34 @@ static PyObject *py_router_recv_owner (PyObject *self, PyObject *args)
         _save = PyEval_SaveThread ();
     while (1) {
         const zlink_routing_id_t *source_rid = NULL;
-        zlink_msg_t part;
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-        zlink_recv_flags_t recv_flags =
-          received.count == 0 ? (zlink_recv_flags_t) flags : ZLINK_DONTWAIT;
-
-        if (zlink_msg_init (&part) != ZLINK_CONFIG_OK) {
+        size_t part_count = 0;
+        rc = zlink_router_recv (handle, &source_rid, &reply_token,
+                                received.parts, (size_t) received.capacity,
+                                &part_count, (zlink_recv_flags_t) flags);
+        if (rc == ZLINK_RECV_BUFFER_TOO_SMALL) {
+            if (part_count <= (size_t) received.capacity
+                || ensure_received_capacity (&received, part_count) != 0) {
+                err = part_count <= (size_t) received.capacity ? EPROTO : errno;
+                rc = ZLINK_RECV_INTERNAL_ERROR;
+                break;
+            }
+            continue;
+        }
+        if (rc != ZLINK_RECV_OK) {
             err = zlink_errno ();
-            if (err == 0)
-                err = ENOMEM;
+            break;
+        }
+        if (part_count == 0 || part_count > (size_t) received.capacity) {
+            err = EPROTO;
             rc = ZLINK_RECV_INTERNAL_ERROR;
             break;
         }
-        rc = zlink_router_recv_part (
-          handle, &source_rid, &reply_token, &part, &has_more, recv_flags);
-        if (rc != ZLINK_RECV_OK) {
-            err = zlink_errno ();
-            zlink_msg_close (&part);
-            break;
-        }
-        if (received.count == 0 && source_rid && source_rid->size > 0) {
+        received.count = (Py_ssize_t) part_count;
+        if (source_rid && source_rid->size > 0) {
             routing_copy = *source_rid;
             has_routing = 1;
         }
-        if (append_received_part (&received, &part) != 0) {
-            zlink_msg_close (&part);
-            rc = ZLINK_RECV_INTERNAL_ERROR;
-            err = ENOMEM;
-            break;
-        }
-        if (has_more == ZLINK_PART_FINAL)
-            break;
+        break;
     }
     if (release_gil)
         PyEval_RestoreThread (_save);
@@ -1644,48 +1599,45 @@ static PyObject *py_subscribe_parts (PyObject *self, PyObject *args)
     memset (topic, 0, sizeof (topic));
     if (!PyArg_ParseTuple (args, "Ki", &handle_value, &flags))
         return NULL;
+    if (ensure_received_capacity (&received, 1) != 0) {
+        PyErr_NoMemory ();
+        return NULL;
+    }
 
     void *handle = (void *) (uintptr_t) handle_value;
     Py_BEGIN_ALLOW_THREADS while (1)
     {
         const zlink_routing_id_t *source_rid = NULL;
-        zlink_msg_t part;
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-        char next_topic[256];
-        size_t next_topic_len = 0;
-        zlink_recv_flags_t recv_flags =
-          received.count == 0 ? (zlink_recv_flags_t) flags : ZLINK_DONTWAIT;
-
-        if (zlink_msg_init (&part) != ZLINK_CONFIG_OK) {
-            err = zlink_errno ();
-            if (err == 0)
-                err = ENOMEM;
-            rc = ZLINK_RECV_INTERNAL_ERROR;
-            break;
+        size_t part_count = 0;
+        rc = zlink_subscribe (handle, &source_rid, topic, sizeof (topic),
+                              &topic_len, received.parts,
+                              (size_t) received.capacity, &part_count,
+                              (zlink_recv_flags_t) flags);
+        if (rc == ZLINK_RECV_BUFFER_TOO_SMALL) {
+            if (part_count <= (size_t) received.capacity
+                || ensure_received_capacity (&received, part_count) != 0) {
+                err = part_count <= (size_t) received.capacity ? EPROTO : errno;
+                rc = ZLINK_RECV_INTERNAL_ERROR;
+                break;
+            }
+            continue;
         }
-        rc = zlink_subscribe_part (handle, &source_rid, next_topic, sizeof (next_topic),
-                                   &next_topic_len, &part, &has_more, recv_flags);
         if (rc != ZLINK_RECV_OK) {
             err = zlink_errno ();
-            zlink_msg_close (&part);
             break;
         }
-        if (received.count == 0) {
-            if (source_rid && source_rid->size > 0) {
-                routing_copy = *source_rid;
-                has_routing = 1;
-            }
-            topic_len = next_topic_len < sizeof (topic) ? next_topic_len : sizeof (topic);
-            memcpy (topic, next_topic, topic_len);
-        }
-        if (append_received_part (&received, &part) != 0) {
-            zlink_msg_close (&part);
+        if (part_count == 0 || part_count > (size_t) received.capacity
+            || topic_len > sizeof (topic)) {
+            err = EPROTO;
             rc = ZLINK_RECV_INTERNAL_ERROR;
-            err = ENOMEM;
             break;
         }
-        if (has_more == ZLINK_PART_FINAL)
-            break;
+        received.count = (Py_ssize_t) part_count;
+        if (source_rid && source_rid->size > 0) {
+            routing_copy = *source_rid;
+            has_routing = 1;
+        }
+        break;
     }
     Py_END_ALLOW_THREADS
 
@@ -1758,6 +1710,10 @@ static PyObject *py_subscribe_owner (PyObject *self, PyObject *args)
     memset (topic, 0, sizeof (topic));
     if (!PyArg_ParseTuple (args, "Ki", &handle_value, &flags))
         return NULL;
+    if (ensure_received_capacity (&received, 1) != 0) {
+        PyErr_NoMemory ();
+        return NULL;
+    }
 
     void *handle = (void *) (uintptr_t) handle_value;
     const int release_gil = (flags & ZLINK_DONTWAIT) == 0;
@@ -1766,43 +1722,36 @@ static PyObject *py_subscribe_owner (PyObject *self, PyObject *args)
         _save = PyEval_SaveThread ();
     while (1) {
         const zlink_routing_id_t *source_rid = NULL;
-        zlink_msg_t part;
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-        char next_topic[256];
-        size_t next_topic_len = 0;
-        zlink_recv_flags_t recv_flags =
-          received.count == 0 ? (zlink_recv_flags_t) flags : ZLINK_DONTWAIT;
-
-        if (zlink_msg_init (&part) != ZLINK_CONFIG_OK) {
-            err = zlink_errno ();
-            if (err == 0)
-                err = ENOMEM;
-            rc = ZLINK_RECV_INTERNAL_ERROR;
-            break;
+        size_t part_count = 0;
+        rc = zlink_subscribe (handle, &source_rid, topic, sizeof (topic),
+                              &topic_len, received.parts,
+                              (size_t) received.capacity, &part_count,
+                              (zlink_recv_flags_t) flags);
+        if (rc == ZLINK_RECV_BUFFER_TOO_SMALL) {
+            if (part_count <= (size_t) received.capacity
+                || ensure_received_capacity (&received, part_count) != 0) {
+                err = part_count <= (size_t) received.capacity ? EPROTO : errno;
+                rc = ZLINK_RECV_INTERNAL_ERROR;
+                break;
+            }
+            continue;
         }
-        rc = zlink_subscribe_part (handle, &source_rid, next_topic, sizeof (next_topic),
-                                   &next_topic_len, &part, &has_more, recv_flags);
         if (rc != ZLINK_RECV_OK) {
             err = zlink_errno ();
-            zlink_msg_close (&part);
             break;
         }
-        if (received.count == 0) {
-            if (source_rid && source_rid->size > 0) {
-                routing_copy = *source_rid;
-                has_routing = 1;
-            }
-            topic_len = next_topic_len < sizeof (topic) ? next_topic_len : sizeof (topic);
-            memcpy (topic, next_topic, topic_len);
-        }
-        if (append_received_part (&received, &part) != 0) {
-            zlink_msg_close (&part);
+        if (part_count == 0 || part_count > (size_t) received.capacity
+            || topic_len > sizeof (topic)) {
+            err = EPROTO;
             rc = ZLINK_RECV_INTERNAL_ERROR;
-            err = ENOMEM;
             break;
         }
-        if (has_more == ZLINK_PART_FINAL)
-            break;
+        received.count = (Py_ssize_t) part_count;
+        if (source_rid && source_rid->size > 0) {
+            routing_copy = *source_rid;
+            has_routing = 1;
+        }
+        break;
     }
     if (release_gil)
         PyEval_RestoreThread (_save);
@@ -1930,19 +1879,19 @@ static PyMethodDef zlink_native_methods[] = {
   {"publisher_send_op", py_publisher_send_op, METH_VARARGS,
    "Create a native publisher send builder."},
   {"send_parts", py_send_parts, METH_VARARGS,
-   "Submit multipart payload parts through zlink_send_part."},
+   "Submit multipart payload parts through zlink_send."},
   {"send_parts_rid", py_send_parts_rid, METH_VARARGS,
-   "Submit routed multipart payload parts through zlink_send_part_rid."},
+   "Submit routed multipart payload parts through zlink_send_rid."},
   {"publish_parts", py_publish_parts, METH_VARARGS,
-   "Submit topic multipart payload parts through zlink_publish_part."},
+   "Submit topic multipart payload parts through zlink_publish."},
   {"recv_parts", py_recv_parts, METH_VARARGS,
-   "Receive multipart payload parts through zlink_recv_part."},
+   "Receive multipart payload parts through zlink_recv."},
   {"recv_owner", py_recv_owner, METH_VARARGS,
    "Receive multipart payload parts as a native bytes owner."},
   {"router_recv_owner", py_router_recv_owner, METH_VARARGS,
    "Receive routed multipart payload parts as a native owner."},
   {"subscribe_parts", py_subscribe_parts, METH_VARARGS,
-   "Receive topic multipart payload parts through zlink_subscribe_part."},
+   "Receive topic multipart payload parts through zlink_subscribe."},
   {"subscribe_owner", py_subscribe_owner, METH_VARARGS,
    "Receive topic multipart payload parts as a native owner."},
   {NULL, NULL, 0, NULL},

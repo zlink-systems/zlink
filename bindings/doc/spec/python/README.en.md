@@ -125,6 +125,9 @@ The [common receive ownership contract](../README.en.md#receive-ownership) defin
   completion joins and cancellation follow the [async execution model](../async-execution-model.en.md).
 - Reply and publish end with synchronous `submit()`. Only a separate `PublishOp` provides publish
   flags.
+- The runtime submits every part collected by a builder to the Core whole-message API once as a native array and count.
+  Receive uses a reusable native array, capacity, and count; when the array is too small, it grows
+  to the required size and retries the same unconsumed record.
 - Caller-provided receive with `RecvFlags.DONT_WAIT` returns `False` when no message is available.
 - Direct-return control APIs such as timer and monitor return `None` when no value is pending.
 - An actual native failure is delivered through its corresponding error type and is not hidden as

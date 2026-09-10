@@ -83,9 +83,8 @@ zlink_completion_id_t send_request (void *socket_, const zlink_routing_id_t *rid
     zlink_completion_id_t completion_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_request_part (socket_, rid_, &request, ZLINK_SEND_FLAGS_DONTWAIT,
-                          ZLINK_PART_FINAL, timeout_ms_, NULL,
-                          &completion_id));
+      zlink_request (socket_, rid_, &request, 1, ZLINK_SEND_FLAGS_DONTWAIT,
+                     timeout_ms_, NULL, &completion_id));
     TEST_ASSERT_NOT_EQUAL (0, completion_id);
     assert_consumed (&request);
     return completion_id;
@@ -122,25 +121,25 @@ int read_budget_snapshot_unchecked (
     return zlink_ctx_get_auto_hwm_budget_snapshot (get_test_context (),
                                                    snapshot_);
 }
-struct received_router_part_t
+struct received_router_record_t
 {
     zlink_routing_id_t source_rid;
     zlink_reply_token_t reply_token;
-    zlink_part_flag_t part_flag;
     std::string payload;
 };
 
-received_router_part_t receive_router_part (void *socket_)
+received_router_record_t receive_router_record (void *socket_)
 {
     contract_socket_pair_t::pump_owner (as_socket_handle (socket_).socket);
     zlink_msg_t part;
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
+    size_t part_count = 0;
     const zlink_routing_id_t *rid = NULL;
-    received_router_part_t result;
+    received_router_record_t result;
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
-      zlink_router_recv_part (socket_, &rid, &result.reply_token, &part,
-                              &result.part_flag, ZLINK_RECV_FLAGS_DONTWAIT));
+      zlink_router_recv (socket_, &rid, &result.reply_token, &part, 1,
+                         &part_count, ZLINK_RECV_FLAGS_DONTWAIT));
     TEST_ASSERT_NOT_NULL (rid);
+    TEST_ASSERT_EQUAL_UINT64 (1, part_count);
     result.source_rid = *rid;
     result.payload = part_text (&part);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
@@ -173,7 +172,7 @@ void test_sl_flow_snapshot_accounts_dr_reply_as_application ()
     TEST_ASSERT_TRUE (dr.cores[0]->acquire_completion_poller (&dr));
     const zlink_completion_id_t request_id =
       send_request (dealer, NULL, "snapshot-request", 3000);
-    const received_router_part_t request = receive_router_part (router);
+    const received_router_record_t request = receive_router_record (router);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
       zlink_socket_set_receive_flow_state (dealer,
@@ -182,49 +181,15 @@ void test_sl_flow_snapshot_accounts_dr_reply_as_application ()
     TEST_ASSERT_TRUE (dr.cores[1]->application_pipe_remote_flow_paused (1, 1));
     const zlink_auto_hwm_budget_snapshot_t baseline = read_budget_snapshot ();
 
-    zlink_msg_t prefix;
-    init_sized_part (&prefix, 1024, 'p');
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_reply_part (router, &request.source_rid,
-                        request.reply_token, &prefix, ZLINK_PART_MORE));
-    assert_consumed (&prefix);
-    // MORE is socket-local staging. Physical provisional accounting begins
-    // only after FINAL selects the current route and moves the prefix.
-    const zlink_auto_hwm_budget_snapshot_t staged =
-      read_budget_snapshot ();
-    TEST_ASSERT_EQUAL_UINT64 (
-      baseline.core_queue_accounted_bytes, staged.core_queue_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (
-      baseline.current_accounted_bytes, staged.current_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (
-      baseline.provisional_accounted_bytes, staged.provisional_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (baseline.total_messaging_accounted_bytes,
-                              staged.total_messaging_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (
-      baseline.completion_current_accounted_bytes,
-      staged.completion_current_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (
-      baseline.completion_peak_accounted_bytes,
-      staged.completion_peak_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (
-      baseline.completion_pending_message_count,
-      staged.completion_pending_message_count);
-    TEST_ASSERT_EQUAL_UINT64 (baseline.active_directional_queue_count,
-                              staged.active_directional_queue_count);
-    TEST_ASSERT_EQUAL_UINT64 (
-      baseline.active_completion_directional_queue_count,
-      staged.active_completion_directional_queue_count);
-    TEST_ASSERT_EQUAL_UINT64 (0, staged.application_accounted_bytes);
-
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
       zlink_socket_set_receive_flow_state (dealer,
                                            ZLINK_RECEIVE_FLOW_RUNNING));
     dr.pump ();
     TEST_ASSERT_FALSE (dr.cores[1]->application_pipe_remote_flow_paused (1, 1));
-    zlink_msg_t final;
-    init_sized_part (&final, 1024, 'f');
+    zlink_msg_t reply[2];
+    init_sized_part (&reply[0], 1024, 'p');
+    init_sized_part (&reply[1], 1024, 'f');
     reply_prefix_accounting_gate_t prefix_gate;
     bool prefix_entered = false;
     int provisional_snapshot_rc = -1;
@@ -239,16 +204,16 @@ void test_sl_flow_snapshot_accounts_dr_reply_as_application ()
               read_budget_snapshot_unchecked (&provisional);
         release_reply_prefix_gate (&prefix_gate);
     });
-    const zlink_submit_result_t final_result = zlink_reply_part (
-      router, &request.source_rid, request.reply_token, &final,
-      ZLINK_PART_FINAL);
+    const zlink_submit_result_t reply_result = zlink_reply (
+      router, &request.source_rid, request.reply_token, reply, 2);
     prefix_observer.join ();
     zlink::socket_reqrep_internal::test_set_request_reply_write_after_prefix_hook (
       NULL, NULL);
     TEST_ASSERT_TRUE (prefix_entered);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, provisional_snapshot_rc);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, final_result);
-    assert_consumed (&final);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, reply_result);
+    assert_consumed (&reply[0]);
+    assert_consumed (&reply[1]);
     TEST_ASSERT_TRUE (provisional.core_queue_accounted_bytes
                       > baseline.core_queue_accounted_bytes);
     TEST_ASSERT_TRUE (provisional.current_accounted_bytes
@@ -328,47 +293,14 @@ void test_sl_flow_snapshot_accounts_dr_reply_as_application ()
     TEST_ASSERT_TRUE (rr.cores[0]->acquire_completion_poller (&rr));
     const zlink_completion_id_t rr_request_id = send_request (
       first, &rr.rids[1], "snapshot-rr-request", 3000);
-    const received_router_part_t rr_request = receive_router_part (second);
+    const received_router_record_t rr_request = receive_router_record (second);
     const zlink_auto_hwm_budget_snapshot_t rr_baseline = read_budget_snapshot ();
     TEST_ASSERT_TRUE (
       rr_baseline.active_completion_directional_queue_count > 0);
 
-    zlink_msg_t rr_prefix;
-    init_sized_part (&rr_prefix, 1024, 'c');
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_reply_part (second, &rr_request.source_rid,
-                        rr_request.reply_token, &rr_prefix, ZLINK_PART_MORE));
-    assert_consumed (&rr_prefix);
-    const zlink_auto_hwm_budget_snapshot_t rr_staged =
-      read_budget_snapshot ();
-    TEST_ASSERT_EQUAL_UINT64 (rr_baseline.core_queue_accounted_bytes,
-                              rr_staged.core_queue_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (rr_baseline.current_accounted_bytes,
-                              rr_staged.current_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (rr_baseline.provisional_accounted_bytes,
-                              rr_staged.provisional_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (
-      rr_baseline.completion_current_accounted_bytes,
-      rr_staged.completion_current_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (
-      rr_baseline.completion_peak_accounted_bytes,
-      rr_staged.completion_peak_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (
-      rr_baseline.completion_pending_message_count,
-      rr_staged.completion_pending_message_count);
-    TEST_ASSERT_EQUAL_UINT64 (
-      rr_baseline.total_messaging_accounted_bytes,
-      rr_staged.total_messaging_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (rr_baseline.active_directional_queue_count,
-                              rr_staged.active_directional_queue_count);
-    TEST_ASSERT_EQUAL_UINT64 (
-      rr_baseline.active_completion_directional_queue_count,
-      rr_staged.active_completion_directional_queue_count);
-    TEST_ASSERT_EQUAL_UINT64 (0, rr_staged.application_accounted_bytes);
-
-    zlink_msg_t rr_final;
-    init_sized_part (&rr_final, 1024, 'd');
+    zlink_msg_t rr_reply[2];
+    init_sized_part (&rr_reply[0], 1024, 'c');
+    init_sized_part (&rr_reply[1], 1024, 'd');
     reply_prefix_accounting_gate_t rr_prefix_gate;
     bool rr_prefix_entered = false;
     int rr_provisional_snapshot_rc = -1;
@@ -383,16 +315,16 @@ void test_sl_flow_snapshot_accounts_dr_reply_as_application ()
               read_budget_snapshot_unchecked (&rr_provisional);
         release_reply_prefix_gate (&rr_prefix_gate);
     });
-    const zlink_submit_result_t rr_final_result = zlink_reply_part (
-      second, &rr_request.source_rid, rr_request.reply_token, &rr_final,
-      ZLINK_PART_FINAL);
+    const zlink_submit_result_t rr_reply_result = zlink_reply (
+      second, &rr_request.source_rid, rr_request.reply_token, rr_reply, 2);
     rr_prefix_observer.join ();
     zlink::socket_reqrep_internal::test_set_request_reply_write_after_prefix_hook (
       NULL, NULL);
     TEST_ASSERT_TRUE (rr_prefix_entered);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, rr_provisional_snapshot_rc);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, rr_final_result);
-    assert_consumed (&rr_final);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, rr_reply_result);
+    assert_consumed (&rr_reply[0]);
+    assert_consumed (&rr_reply[1]);
     TEST_ASSERT_EQUAL_UINT64 (rr_baseline.core_queue_accounted_bytes,
                               rr_provisional.core_queue_accounted_bytes);
     TEST_ASSERT_EQUAL_UINT64 (rr_baseline.current_accounted_bytes,
@@ -518,7 +450,7 @@ void test_single_lane_topology_is_owned_by_the_pair ()
     }
 }
 
-void test_backpressured_final_releases_the_helper_sequence ()
+void test_backpressured_whole_send_consumes_record ()
 {
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
@@ -536,36 +468,18 @@ void test_backpressured_final_releases_the_helper_sequence ()
         zlink_msg_t part;
         init_sized_part (&part, 1024, 'x');
         zlink_completion_id_t completion_id = 0;
-        const zlink_submit_result_t result = zlink_send_part_rid (
-          router, &pair.rids[0], &part, ZLINK_SEND_FLAGS_DONTWAIT,
-          ZLINK_PART_FINAL, NULL, &completion_id);
+        const zlink_submit_result_t result = zlink_send_rid (
+          router, &pair.rids[0], &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL,
+          &completion_id);
         assert_consumed (&part);
         if (result == ZLINK_SUBMIT_BACKPRESSURED) {
+            TEST_ASSERT_NOT_EQUAL (0, completion_id);
             reached_backpressure = true;
             break;
         }
         TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, result);
     }
     TEST_ASSERT_TRUE (reached_backpressure);
-    bool routed_send_sequence_still_active = false;
-    int routed_send_sequence_family = -1;
-    const std::shared_ptr<zlink::part_helper_internal::handle_state_t>
-      helper_state = zlink::part_helper_internal::find_socket_state (pair.cores[1]);
-    if (helper_state) {
-        std::lock_guard<std::mutex> lock (helper_state->mutex);
-        zlink::part_helper_internal::send_sequence_state_t *const sequence =
-          zlink::part_helper_internal::find_current_send_sequence_locked (
-            helper_state.get ());
-        routed_send_sequence_still_active = sequence && sequence->active;
-        if (sequence)
-            routed_send_sequence_family =
-              static_cast<int> (sequence->spec.family);
-    }
-    char diagnostic[96];
-    snprintf (diagnostic, sizeof (diagnostic),
-              "failed FINAL retained send sequence family=%d",
-              routed_send_sequence_family);
-    TEST_ASSERT_FALSE_MESSAGE (routed_send_sequence_still_active, diagnostic);
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
 }
@@ -587,8 +501,8 @@ void test_application_hwm_and_remote_pause_remain_independent_blockers ()
     for (; accepted != 256; ++accepted) {
         zlink_msg_t part;
         init_sized_part (&part, 1024, 'h');
-        const zlink_submit_result_t result = zlink_send_part (
-          dealer, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
+        const zlink_submit_result_t result = zlink_send (
+          dealer, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
         assert_consumed (&part);
         if (result == ZLINK_SUBMIT_BACKPRESSURED)
             break;
@@ -623,7 +537,7 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (test_sl_flow_snapshot_accounts_dr_reply_as_application);
     RUN_TEST (test_single_lane_topology_is_owned_by_the_pair);
-    RUN_TEST (test_backpressured_final_releases_the_helper_sequence);
+    RUN_TEST (test_backpressured_whole_send_consumes_record);
     RUN_TEST (test_application_hwm_and_remote_pause_remain_independent_blockers);
     return UNITY_END ();
 }

@@ -777,14 +777,12 @@ void test_dealer_router_perf_like_client_monitor_preserves_bidirectional_deliver
     zlink_msg_t incoming;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&incoming));
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     uint64_t request_seq = UINT64_MAX;
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv_part (
-      server, &source_rid, &request_seq, &incoming, &has_more,
-      ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv (server, &source_rid, &request_seq, &incoming, 1, &has_more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
     TEST_ASSERT_NOT_NULL (source_rid);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     unsigned char rid_buf[255];
     const int rid_size = source_rid->size;
     memcpy (rid_buf, source_rid->data, source_rid->size);
@@ -847,14 +845,12 @@ void test_router_router_perf_like_client_monitor_preserves_bidirectional_deliver
     zlink_msg_t incoming;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&incoming));
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     uint64_t request_seq = UINT64_MAX;
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv_part (
-      server, &source_rid, &request_seq, &incoming, &has_more,
-      ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv (server, &source_rid, &request_seq, &incoming, 1, &has_more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
     TEST_ASSERT_NOT_NULL (source_rid);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     unsigned char rid_buf[255];
     const int rid_size = source_rid->size;
     memcpy (rid_buf, source_rid->data, source_rid->size);
@@ -873,12 +869,10 @@ void test_router_router_perf_like_client_monitor_preserves_bidirectional_deliver
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&incoming));
     source_rid = NULL;
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv_part (
-      client, &source_rid, &request_seq, &incoming, &has_more,
-      ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv (client, &source_rid, &request_seq, &incoming, 1, &has_more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
     TEST_ASSERT_NOT_NULL (source_rid);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     const unsigned char *reply_rid = source_rid->data;
     const int reply_rid_size = source_rid->size;
     TEST_ASSERT_EQUAL_INT (sizeof (server_id) - 1, reply_rid_size);

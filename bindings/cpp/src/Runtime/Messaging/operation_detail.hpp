@@ -29,7 +29,6 @@ using zlink::detail::restore_parts_from_native;
 using zlink::detail::submit_borrowed_message_array;
 using zlink::detail::submit_message_parts;
 using zlink::detail::submit_message_parts_close_on_failure;
-using zlink::detail::submit_native_parts;
 using zlink::detail::take_parts_from_native;
 using zlink::detail::throw_if_failed;
 

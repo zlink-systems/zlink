@@ -72,7 +72,8 @@ than polling I/O directly.
 **What this means for the user**: I/O completions are handled inside the I/O
 threads the Context owns, and user code never runs there — Core has no
 application callbacks; the application waits for readiness with a poller and
-then **pulls** results with `*_recv_part()` / `zlink_completion_recv()`.
+then **pulls** results with a socket-specific whole-message receive function or
+`zlink_completion_recv()`.
 Multiple sockets are grouped under one
 loop with a poller (the concept is in [02 Core API](02-core-api.en.md); the
 per-language surface is in each

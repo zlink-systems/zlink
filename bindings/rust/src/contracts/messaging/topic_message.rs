@@ -16,6 +16,7 @@ pub struct TopicMessage {
     /// The message parts, owned by this envelope.
     parts: Vec<Message>,
     receive_scratch: Vec<Message>,
+    native_receive_scratch: Vec<crate::ffi::zlink_msg_t>,
 }
 
 impl TopicMessage {
@@ -26,11 +27,14 @@ impl TopicMessage {
             topic: smol_str::SmolStr::default(),
             parts: Vec::new(),
             receive_scratch: Vec::new(),
+            native_receive_scratch: Vec::new(),
         }
     }
 
-    pub(crate) fn receive_scratch(&mut self) -> &mut Vec<Message> {
-        &mut self.receive_scratch
+    pub(crate) fn receive_scratch(
+        &mut self,
+    ) -> (&mut Vec<Message>, &mut Vec<crate::ffi::zlink_msg_t>) {
+        (&mut self.receive_scratch, &mut self.native_receive_scratch)
     }
 
     pub(crate) fn replace_received_parts(

@@ -198,8 +198,8 @@ class zlink_stream_packet_echo_server_t
         }
 
         recv_msgs.fetch_add (1, std::memory_order_relaxed);
-        if (zlink_send_part_rid (server, rid_, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-                                 NULL, NULL)
+        if (zlink_send_rid (server, rid_, &reply, 1, ZLINK_SEND_FLAGS_NONE,
+                            NULL, NULL)
             != 0) {
             send_error.fetch_add (1, std::memory_order_relaxed);
         }

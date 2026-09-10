@@ -58,17 +58,16 @@ void receive_router_payload (void *router_, const char *payload_)
 {
     zlink_msg_t part;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
-    zlink_part_flag_t more = ZLINK_PART_MORE;
+    size_t more = 0;
     const zlink_routing_id_t *rid = NULL;
     uint64_t request_seq = 0;
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
-                           zlink_router_recv_part (router_, &rid, &request_seq, &part, &more,
-                                             ZLINK_RECV_FLAGS_NONE));
+                           zlink_router_recv (router_, &rid, &request_seq, &part, 1, &more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (rid);
     TEST_ASSERT_GREATER_THAN_INT (0, rid->size);
     TEST_ASSERT_EQUAL_UINT (strlen (payload_), zlink_msg_size (&part));
     TEST_ASSERT_EQUAL_MEMORY (payload_, zlink_msg_data (&part), strlen (payload_));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
+    TEST_ASSERT_EQUAL_INT (1, more);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
 }
 
@@ -149,8 +148,7 @@ zlink_submit_result_t try_send_flow_filler (void *socket_, size_t size_)
     zlink_msg_t part;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_size (&part, size_));
     memset (zlink_msg_data (&part), 'h', size_);
-    return zlink_send_part (socket_, &part, ZLINK_SEND_FLAGS_NONE,
-                            ZLINK_PART_FINAL, NULL, NULL);
+    return zlink_send (socket_, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
 }
 
 size_t fill_flow_pipe_until_backpressured (void *socket_)
@@ -569,17 +567,16 @@ void test_paused_pair_lifecycle_keeps_gauge_and_events_matched ()
             (void) zlink_send (dealer, "hello", 5, ZLINK_DONTWAIT);
             zlink_msg_t part;
             TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
-            zlink_part_flag_t more = ZLINK_PART_FINAL;
+            size_t more = 1;
             const zlink_routing_id_t *rid = NULL;
             uint64_t request_seq = 0;
-            const zlink_recv_result_t result = zlink_router_recv_part (
-              router, &rid, &request_seq, &part, &more, ZLINK_RECV_FLAGS_NONE);
+            const zlink_recv_result_t result = zlink_router_recv (router, &rid, &request_seq, &part, 1, &more, ZLINK_RECV_FLAGS_NONE);
             if (result == ZLINK_RECV_OK) {
                 TEST_ASSERT_NOT_NULL (rid);
                 TEST_ASSERT_GREATER_THAN_INT (0, rid->size);
                 TEST_ASSERT_EQUAL_UINT (5, zlink_msg_size (&part));
                 TEST_ASSERT_EQUAL_MEMORY ("hello", zlink_msg_data (&part), 5);
-                TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
+                TEST_ASSERT_EQUAL_INT (1, more);
                 received = true;
             } else {
                 TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, result);

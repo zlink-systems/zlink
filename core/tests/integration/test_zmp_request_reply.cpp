@@ -40,14 +40,13 @@ received_request_t receive_request (void *router_)
     zlink_msg_t part;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
-      zlink_router_recv_part (router_, &source_rid, &result.reply_token,
-                              &part, &has_more, ZLINK_RECV_FLAGS_NONE));
+      zlink_router_recv (router_, &source_rid, &result.reply_token, &part, 1, &has_more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source_rid);
     TEST_ASSERT_NOT_EQUAL (0, result.reply_token);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     result.source_rid = *source_rid;
     result.payload.assign (
       static_cast<const char *> (zlink_msg_data (&part)),
@@ -124,9 +123,7 @@ void run_transport_round_trip (const char *transport_)
     zlink_completion_id_t request_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_request_part (dealer, NULL, &request, ZLINK_SEND_FLAGS_NONE,
-                          ZLINK_PART_FINAL, 5000, &request_context,
-                          &request_id));
+      zlink_request (dealer, NULL, &request, 1, ZLINK_SEND_FLAGS_NONE, 5000, &request_context, &request_id));
     TEST_ASSERT_NOT_EQUAL (0, request_id);
 
     const received_request_t received = receive_request (router);
@@ -141,8 +138,7 @@ void run_transport_round_trip (const char *transport_)
     init_part (&reply, std::string (transport_) + "-reply");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_reply_part (router, &received.source_rid, received.reply_token,
-                        &reply, ZLINK_PART_FINAL));
+      zlink_reply (router, &received.source_rid, received.reply_token, &reply, 1));
 
     zlink_completion_t completion = receive_completion (dealer);
     TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, completion.kind);
@@ -191,8 +187,7 @@ void test_out_of_order_replies_match_completion_ids ()
         zlink_completion_id_t id = 0;
         TEST_ASSERT_EQUAL_INT (
           ZLINK_SUBMIT_OK,
-          zlink_request_part (dealer, NULL, &request, ZLINK_SEND_FLAGS_NONE,
-                              ZLINK_PART_FINAL, 3000, NULL, &id));
+          zlink_request (dealer, NULL, &request, 1, ZLINK_SEND_FLAGS_NONE, 3000, NULL, &id));
         ids[payload] = id;
     }
 
@@ -205,14 +200,12 @@ void test_out_of_order_replies_match_completion_ids ()
     init_part (&second_reply, "reply-second");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_reply_part (router, &second.source_rid, second.reply_token,
-                        &second_reply, ZLINK_PART_FINAL));
+      zlink_reply (router, &second.source_rid, second.reply_token, &second_reply, 1));
     zlink_msg_t first_reply;
     init_part (&first_reply, "reply-first");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_reply_part (router, &first.source_rid, first.reply_token,
-                        &first_reply, ZLINK_PART_FINAL));
+      zlink_reply (router, &first.source_rid, first.reply_token, &first_reply, 1));
 
     zlink_completion_t completion = receive_completion (dealer);
     TEST_ASSERT_EQUAL_UINT64 (ids["second"], completion.completion_id);

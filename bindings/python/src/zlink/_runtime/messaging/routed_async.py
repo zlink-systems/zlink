@@ -13,8 +13,6 @@ from ..._native.ffi import (
     ZLINK_COMPLETION_SEND,
     ZLINK_COMPLETION_WRITABLE,
     ZLINK_DONTWAIT,
-    ZLINK_PART_FINAL,
-    ZLINK_PART_MORE,
     ZLINK_SEND_ADMITTED,
     ZLINK_SEND_TERMINAL,
     ZlinkCompletion,
@@ -963,50 +961,44 @@ class CompletionOwner:
             raise
         completion_id = ctypes.c_uint64(0)
         part_count = len(native_parts)
-        for index, native in enumerate(native_parts):
-            final = index == part_count - 1
-            part_flag = ZLINK_PART_FINAL if final else ZLINK_PART_MORE
-            context = ctypes.c_void_p(entry.context) if final and entry is not None else None
-            completion_out = ctypes.byref(completion_id) if final and entry is not None else None
-            try:
-                if timeout_ms is not None:
-                    rc = lib().zlink_request_part(
-                        self._socket._handle,
-                        None if native_rid is None else ctypes.byref(native_rid),
-                        ctypes.byref(native),
-                        flags,
-                        part_flag,
-                        int(timeout_ms) if final else 0,
-                        context,
-                        completion_out,
-                    )
-                elif native_rid is None:
-                    rc = lib().zlink_send_part(
-                        self._socket._handle,
-                        ctypes.byref(native),
-                        flags,
-                        part_flag,
-                        context,
-                        completion_out,
-                    )
-                else:
-                    rc = lib().zlink_send_part_rid(
-                        self._socket._handle,
-                        ctypes.byref(native_rid),
-                        ctypes.byref(native),
-                        flags,
-                        part_flag,
-                        context,
-                        completion_out,
-                    )
-            except BaseException:
-                self._close_unsubmitted(native_parts, index)
-                raise
-            if rc != int(SubmitResult.OK):
-                native_errno = lib().zlink_errno()
-                self._close_unsubmitted(native_parts, index)
-                return int(rc), native_errno, int(completion_id.value)
-        return int(SubmitResult.OK), 0, int(completion_id.value)
+        context = ctypes.c_void_p(entry.context) if entry is not None else None
+        completion_out = ctypes.byref(completion_id) if entry is not None else None
+        try:
+            if timeout_ms is not None:
+                rc = lib().zlink_request(
+                    self._socket._handle,
+                    None if native_rid is None else ctypes.byref(native_rid),
+                    native_parts,
+                    part_count,
+                    flags,
+                    int(timeout_ms),
+                    context,
+                    completion_out,
+                )
+            elif native_rid is None:
+                rc = lib().zlink_send(
+                    self._socket._handle,
+                    native_parts,
+                    part_count,
+                    flags,
+                    context,
+                    completion_out,
+                )
+            else:
+                rc = lib().zlink_send_rid(
+                    self._socket._handle,
+                    ctypes.byref(native_rid),
+                    native_parts,
+                    part_count,
+                    flags,
+                    context,
+                    completion_out,
+                )
+        except BaseException:
+            self._close_unsubmitted(native_parts)
+            raise
+        native_errno = lib().zlink_errno() if rc != int(SubmitResult.OK) else 0
+        return int(rc), native_errno, int(completion_id.value)
 
     def _attempt_send(self, entry):
         with self._lock:

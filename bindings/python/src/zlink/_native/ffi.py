@@ -175,8 +175,6 @@ class ZlinkPollerEvent(ctypes.Structure):
     ]
 
 
-ZLINK_PART_FINAL = 0
-ZLINK_PART_MORE = 1
 ZLINK_DONTWAIT = 1
 
 
@@ -267,21 +265,21 @@ class _Lib:
             ("zlink_unbind", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_disconnect", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_disconnect_rid", [ctypes.c_void_p, p_rid], ctypes.c_int),
-            ("zlink_send_part", [ctypes.c_void_p, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_void_p, p_completion_id], ctypes.c_int),
-            ("zlink_send_part_rid", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_void_p, p_completion_id], ctypes.c_int),
-            ("zlink_request_part", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, p_completion_id], ctypes.c_int),
-            ("zlink_reply_part", [ctypes.c_void_p, p_rid, ctypes.c_uint64, p_msg, ctypes.c_int], ctypes.c_int),
-            ("zlink_router_recv_part", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_uint64), p_msg, p_int, ctypes.c_int], ctypes.c_int),
-            ("zlink_recv_part", [ctypes.c_void_p, p_rid_ptr, p_msg, p_int, ctypes.c_int], ctypes.c_int),
+            ("zlink_send", [ctypes.c_void_p, p_msg, ctypes.c_size_t, ctypes.c_int, ctypes.c_void_p, p_completion_id], ctypes.c_int),
+            ("zlink_send_rid", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_size_t, ctypes.c_int, ctypes.c_void_p, p_completion_id], ctypes.c_int),
+            ("zlink_request", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_size_t, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, p_completion_id], ctypes.c_int),
+            ("zlink_reply", [ctypes.c_void_p, p_rid, ctypes.c_uint64, p_msg, ctypes.c_size_t], ctypes.c_int),
+            ("zlink_router_recv", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_uint64), p_msg, ctypes.c_size_t, p_size, ctypes.c_int], ctypes.c_int),
+            ("zlink_recv", [ctypes.c_void_p, p_rid_ptr, p_msg, ctypes.c_size_t, p_size, ctypes.c_int], ctypes.c_int),
             ("zlink_stream_recv_packet", [ctypes.c_void_p, p_rid_ptr, p_msg, p_msg, ctypes.c_int], ctypes.c_int),
             ("zlink_completion_recv", [ctypes.c_void_p, ctypes.POINTER(ZlinkCompletion), ctypes.c_int], ctypes.c_int),
             ("zlink_completion_close", [ctypes.POINTER(ZlinkCompletion)], None),
-            ("zlink_publish_part", [ctypes.c_void_p, ctypes.c_char_p, p_msg, ctypes.c_int, ctypes.c_int], ctypes.c_int),
+            ("zlink_publish", [ctypes.c_void_p, ctypes.c_char_p, p_msg, ctypes.c_size_t, ctypes.c_int], ctypes.c_int),
             ("zlink_set_subscription", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_unset_subscription", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_subscription_at", [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, p_size, p_int], ctypes.c_int),
-            ("zlink_subscribe_part", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_char), ctypes.c_size_t, p_size, p_msg, p_int, ctypes.c_int], ctypes.c_int),
-            ("zlink_xpub_recv_part", [ctypes.c_void_p, p_rid_ptr, p_int, ctypes.POINTER(ctypes.c_char), ctypes.c_size_t, p_size, ctypes.c_int], ctypes.c_int),
+            ("zlink_subscribe", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_char), ctypes.c_size_t, p_size, p_msg, ctypes.c_size_t, p_size, ctypes.c_int], ctypes.c_int),
+            ("zlink_xpub_recv", [ctypes.c_void_p, p_rid_ptr, p_int, ctypes.POINTER(ctypes.c_char), ctypes.c_size_t, p_size, ctypes.c_int], ctypes.c_int),
             ("zlink_socket_monitor_open", [ctypes.c_void_p, ctypes.POINTER(ZlinkSocketMonitorOpenOptions)], ctypes.c_void_p),
             ("zlink_socket_monitor_recv", [ctypes.c_void_p, ctypes.POINTER(ZlinkMonitorEvent), ctypes.c_int], ctypes.c_int),
             ("zlink_monitor_status", [ctypes.c_void_p, ctypes.POINTER(ZlinkMonitorStatus)], ctypes.c_int),

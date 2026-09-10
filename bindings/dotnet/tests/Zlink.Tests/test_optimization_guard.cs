@@ -59,13 +59,13 @@ public sealed class test_optimization_guard
     }
 
     [Fact]
-    public void request_uses_unified_core_part_api_without_binding_registry()
+    public void request_uses_whole_message_core_api_without_binding_registry()
     {
         string path = Path.Combine(BindingRoot(), "src", "Zlink", "Runtime",
             "Messaging", "CompletionOwner.cs");
         string source = File.ReadAllText(path);
 
-        Assert.Contains("NativeMethods.zlink_request_part(", source,
+        Assert.Contains("NativeMethods.zlink_request(", source,
             StringComparison.Ordinal);
         Assert.DoesNotContain("SelectRouterTarget", source,
             StringComparison.Ordinal);

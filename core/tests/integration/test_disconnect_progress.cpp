@@ -113,16 +113,14 @@ struct fixture_t
         zlink_msg_t part;
         init_part (&part, "admitted");
         TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
-          zlink_send_part (dealer, &part, ZLINK_SEND_FLAGS_NONE,
-                           ZLINK_PART_FINAL, NULL, NULL));
+          zlink_send (dealer, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
         const zlink_routing_id_t *source = NULL;
         zlink_reply_token_t token = 0;
-        zlink_part_flag_t more;
+        size_t more;
         TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
-          zlink_router_recv_part (router, &source, &token, &part, &more,
-                                  ZLINK_RECV_FLAGS_NONE));
+          zlink_router_recv (router, &source, &token, &part, 1, &more, ZLINK_RECV_FLAGS_NONE));
         client_rid = *source;
         TEST_ASSERT_EQUAL_UINT64 (0, token);
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
@@ -197,9 +195,7 @@ void run_case (const char *transport_, bool waiting_, bool completion_,
         connect_result = zlink_connect (fixture.dealer, fixture.endpoint);
         zlink_msg_t request;
         init_part (&request, "new-pipe-request");
-        submit_result = zlink_request_part (
-          fixture.dealer, NULL, &request, ZLINK_SEND_FLAGS_NONE,
-          ZLINK_PART_FINAL, progress_timeout_ms, NULL, &request_id);
+        submit_result = zlink_request (fixture.dealer, NULL, &request, 1, ZLINK_SEND_FLAGS_NONE, progress_timeout_ms, NULL, &request_id);
         zlink_msg_close (&request);
     }
 
@@ -272,18 +268,17 @@ void run_case (const char *transport_, bool waiting_, bool completion_,
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
         const zlink_routing_id_t *source = NULL;
         zlink_reply_token_t token = 0;
-        zlink_part_flag_t more;
+        size_t more;
         TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
-          zlink_router_recv_part (fixture.router, &source, &token, &part, &more,
-                                  ZLINK_RECV_FLAGS_NONE));
+          zlink_router_recv (fixture.router, &source, &token, &part, 1, &more, ZLINK_RECV_FLAGS_NONE));
         TEST_ASSERT_EQUAL_UINT (16, zlink_msg_size (&part));
         TEST_ASSERT_EQUAL_MEMORY ("new-pipe-request", zlink_msg_data (&part), 16);
-        TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
+        TEST_ASSERT_EQUAL_INT (1, more);
         TEST_ASSERT_NOT_EQUAL (0, token);
         zlink_msg_close (&part);
         init_part (&part, "reply");
         TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
-          zlink_reply_part (fixture.router, source, token, &part, ZLINK_PART_FINAL));
+          zlink_reply (fixture.router, source, token, &part, 1));
         zlink_msg_close (&part);
         zlink_completion_t completion = {};
         completion.struct_size = sizeof (completion);

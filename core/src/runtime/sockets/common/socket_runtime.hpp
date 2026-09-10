@@ -636,7 +636,6 @@ class socket_lifecycle_coordinator_t
         async_quiesce_pending (false),
         async_processing_started (false),
         async_quiesce_completed (false),
-        public_multipart_control_boundary (false),
         deferred_peer_controls_pending (false),
         _previous_thread_public_api_sync_owner (NULL)
     {
@@ -663,13 +662,7 @@ class socket_lifecycle_coordinator_t
     bool begin_close_or_fail_busy ();
     bool public_close_requested () const;
     bool public_multipart_send_active () const;
-    void hold_public_multipart_control_boundary ();
-    void release_public_multipart_control_boundary ();
     void mark_deferred_peer_controls ();
-    bool deferred_peer_controls_pending_cached () const
-    {
-        return deferred_peer_controls_pending.load (std::memory_order_acquire);
-    }
     bool take_deferred_peer_controls ();
     bool public_api_sync_held () const;
     bool public_api_sync_owned_by_current_thread () const;
@@ -718,7 +711,6 @@ class socket_lifecycle_coordinator_t
     // Completion-aware part APIs stage a multipart locally.  Keep the
     // control-ordering boundary alive while the multipart marker is handed
     // off to the complete-record submit.
-    std::atomic<bool> public_multipart_control_boundary;
     std::atomic<bool> deferred_peer_controls_pending;
     mutex_t async_done_mu;
     condition_variable_t async_done_cv;

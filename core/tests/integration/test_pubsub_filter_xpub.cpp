@@ -86,9 +86,7 @@ void test_pubsub_xpub_xsub_inproc ()
     int subscribed = 0;
     char topic[16];
     size_t topic_size = 0;
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_xpub_recv_part (
-      xpub, NULL, &subscribed, topic, sizeof (topic), &topic_size,
-      ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_xpub_recv (xpub, NULL, &subscribed, topic, sizeof (topic), &topic_size, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_EQUAL_INT (1, subscribed);
     TEST_ASSERT_EQUAL_UINT64 (0, topic_size);
 

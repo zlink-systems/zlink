@@ -41,22 +41,24 @@ def test_raw_runtime_does_not_use_dynamic_ffi_or_service_fallbacks():
         assert forbidden not in text, forbidden
 
 
-def test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup():
+def test_raw_hot_path_keeps_gil_release_and_whole_message_calls():
     native_text = (SRC / "_native" / "_zlink_native.c").read_text(encoding="utf-8")
+    hotpath_text = (SRC / "_native" / "hotpath.h").read_text(encoding="utf-8")
     socket_text = (SRC / "_runtime" / "sockets" / "socket_base.py").read_text(
         encoding="utf-8"
     )
     assert "Py_BEGIN_ALLOW_THREADS" in native_text
-    assert "zlink_send_part" in native_text
-    assert "zlink_recv_part" in native_text
-    assert "zlink_router_recv_part" in native_text
+    assert "zlink_send (" in native_text
+    assert "zlink_recv (" in native_text
+    assert "zlink_router_recv (" in native_text
+    assert "ZLINK_RECV_BUFFER_TOO_SMALL" in native_text
     assert "_recv_owner_via_native_bridge" in socket_text
     completion_text = (
         SRC / "_runtime" / "messaging" / "routed_async.py"
     ).read_text(encoding="utf-8")
     assert "class CompletionOwner" in completion_text
     assert "self._entries[entry.context] = entry" in completion_text
-    assert "for (Py_ssize_t j = i; j < prepared.count; ++j)" in native_text
+    assert "zlink_multipart_close (native_parts, (size_t) moved)" in hotpath_text
 
 
 def test_async_completion_runtime_uses_blocking_event_wait_without_timer_polling():

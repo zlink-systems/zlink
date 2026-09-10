@@ -20,8 +20,8 @@ func (s *directSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 	}
 	reuse := out.beginReceive()
 	var sourceRID *C.zlink_routing_id_t
-	clonedParts, err := recvMultipart(reuse, flags, func(part *C.zlink_msg_t, hasMore *C.zlink_part_flag_t, recvFlags C.zlink_recv_flags_t) error {
-		return recvErrorFromResult(C.zlink_recv_part(s.raw(), &sourceRID, part, hasMore, recvFlags))
+	parts, err := recvMultipart(&out.nativeParts, reuse, flags, func(native *C.zlink_msg_t, capacity C.size_t, count *C.size_t, recvFlags C.zlink_recv_flags_t) C.zlink_recv_result_t {
+		return C.zlink_recv(s.raw(), &sourceRID, native, capacity, count, recvFlags)
 	})
 	if err != nil {
 		if isNoData(err) {
@@ -29,6 +29,6 @@ func (s *directSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 		}
 		return false, err
 	}
-	out.replace(routingIDFromCPtr(sourceRID), clonedParts, ReplyToken{}, nil, nil)
+	out.replace(routingIDFromCPtr(sourceRID), parts, ReplyToken{}, nil, nil)
 	return true, nil
 }

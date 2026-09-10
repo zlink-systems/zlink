@@ -536,7 +536,8 @@ struct socket_request_reply_state_t : public zlink::request_reply_runtime::seque
     bool closing;
 };
 
-int recv_router_message_direct (const socket_handle_t &handle_,
+// General whole-record ROUTER receive for both DATA and REQUEST records.
+int recv_router_record (const socket_handle_t &handle_,
                                 const zlink_routing_id_t **source_node_rid_out_,
                                 uint64_t *reply_token_out_,
                                 zlink_msg_t **parts_out_,
@@ -546,7 +547,8 @@ int recv_router_message_direct (const socket_handle_t &handle_,
                                 bool *terminal_part_returned_out_ = NULL,
                                 uint64_t *transport_pair_id_out_ = NULL,
                                 uint64_t *transport_pair_generation_out_ = NULL);
-int recv_dealer_message_direct (const socket_handle_t &handle_,
+// General whole-record DEALER receive for both DATA and REQUEST records.
+int recv_dealer_record (const socket_handle_t &handle_,
                                 zlink_msg_t **parts_out_,
                                 size_t *part_count_out_,
                                 int flags_,
@@ -678,8 +680,6 @@ typedef void (*completion_pipe_budget_exhausted_test_hook_fn) (
 enum request_reply_allocation_failpoint_t
 {
     request_reply_allocation_none = 0,
-    request_reply_allocation_stage_payload,
-    request_reply_allocation_reply_key,
     request_reply_allocation_pending_insert,
     request_reply_allocation_lazy_state_create,
     request_reply_allocation_receive_spill,

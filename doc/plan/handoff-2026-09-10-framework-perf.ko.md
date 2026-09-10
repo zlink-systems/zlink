@@ -8,6 +8,24 @@ title: "Handoff 2026-09-10 — framework 메시징 성능 캠페인·작업 방�
 > `doc/plan/fw-bench-worklog/decisions.ko.md` FB-056~FB-064가 소유하고, 이 문서는 **지금 어디까지 왔고
 > 무엇을 다음에 해야 하는지**만 적는다. 읽는 순서: §1 → §2 → §4 → 나머지.
 
+## 0. 2026-09-10 저녁 갱신 — 지금 상태가 이 절이다 (아래 절은 오전 기준)
+
+- **Core 0.18.0 릴리스 진행 중(Issue #87, PR #103)**: PR #86(#63 whole-message API) 머지(570da59651) → 버전 범프 PR #103.
+  태그 조건인 `hotpath_gate`가 2셀 초과(dealer_dealer_inproc 1.08, router_router_tcp 1.12) → **Issue #102** job `core-hotpath-102`가
+  0.17.5와 callgrind 비교 중. 결과가 (b) Core 내부면 수정 후 태그, (a) 하네스면 사용자 결정으로 reference 재보정 뒤 태그.
+  태그 뒤 순서: `core/v0.18.0` + `build.yml` dispatch → 4언어 `<lang>/v0.18.0` → framework-dotnet·node CI 초록 확인 → Conan·vcpkg SHA.
+- **다음 캠페인: 바인딩 submit 종결자 결과 객체(`result`·`admitted`·`reply`)** — 설계 `doc/draft/bindings-submit-result-terminal.ko.md`,
+  plan `doc/plan/bindings-submit-result-terminal-plan.ko.md`. G0 결정 완료(정책 §6 이름, `TrySubmit` 제거, Go `Submit(ctx)` 즉시 반환 +
+  대기 메서드, Rust boxed future, framework F1·F2·F2-a). Issue #88(스펙) → #89(Java) → #90(Java perf/벤치) → #91~#96(6언어) →
+  #97~#100(framework 4) → #101(재측정·릴리스 노트). **bindings 0.18.0에 싣는다**(사용자, milestone 0.18.0). 순서: Core 태그(#102 뒤) → 캠페인 → binding 태그.
+- **오늘 밝혀진 것(FB-065)**: raw request-backpressure 붕괴는 벤치 클라이언트가 backpressure를 못 봐서 쏟아부은 것. binding·Core 결함
+  아님(perf clients=1 8.5k/s = 벤치 1 socket). 근본은 request `submit()`이 admission 결과를 숨기는 것 → 위 캠페인. `#12` 브랜치의
+  perf 구조 1차(`e1272851bd`)는 #90이 흡수.
+- **#85(ToNode lane 1회)**: job 완료 `dcd82163eb`(171→38 µs, request-serial +40%). 감독자 재검증은 공유 Maven에 0.17.7이 없어 미완 →
+  0.18.0 binding 뒤 재검증·PR.
+- **worktree**: `zlink-87-*`(릴리스), `zlink-102-*`(hotpath job), `zlink-12-*`(#90 base), `zlink-85-*`(PR 대기), `zlink-13-bench-pairing`·
+  `zlink-fwclient-completion`(정리 가능).
+
 ## 1. 30초 요약
 
 - **목표(사용자)**: framework send·request 처리량이 같은 언어 binding 직접 경로의 **0.90 이상**. 1.0 릴리스는

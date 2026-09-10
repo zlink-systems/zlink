@@ -23,14 +23,12 @@ void init_part (zlink_msg_t *part_, const std::string &payload_)
 
 zlink_recv_result_t recv_pair_part_eventually (
   void *socket_, const zlink_routing_id_t **source_rid_out_,
-  zlink_msg_t *part_out_, zlink_part_flag_t *has_more_out_)
+  zlink_msg_t *part_out_, size_t *has_more_out_)
 {
     const std::chrono::steady_clock::time_point deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (3);
     while (std::chrono::steady_clock::now () < deadline) {
-        const zlink_recv_result_t result = zlink_recv_part (
-          socket_, source_rid_out_, part_out_, has_more_out_,
-          static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
+        const zlink_recv_result_t result = zlink_recv (socket_, source_rid_out_, part_out_, 1, has_more_out_, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
         if (result == ZLINK_RECV_OK)
             return result;
         TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, result);
@@ -47,8 +45,7 @@ void send_final (void *socket_, const std::string &payload_)
     init_part (&part, payload_);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (socket_, &part, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL, NULL, NULL));
+      zlink_send (socket_, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&part));
 }
 
@@ -58,12 +55,12 @@ void expect_final (void *socket_, const std::string &payload_)
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
     const zlink_routing_id_t *source_rid =
       reinterpret_cast<const zlink_routing_id_t *> (0x1);
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
       recv_pair_part_eventually (socket_, &source_rid, &part, &has_more));
     TEST_ASSERT_NULL (source_rid);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_UINT64 (payload_.size (), zlink_msg_size (&part));
     TEST_ASSERT_EQUAL_MEMORY (payload_.data (), zlink_msg_data (&part),
                               payload_.size ());
@@ -76,8 +73,7 @@ zlink_submit_result_t try_send_sized (void *socket_, size_t size_, char fill_)
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_size (&part, size_));
     if (size_ != 0)
         memset (zlink_msg_data (&part), fill_, size_);
-    return zlink_send_part (socket_, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                            ZLINK_PART_FINAL, NULL, NULL);
+    return zlink_send (socket_, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL, NULL);
 }
 
 size_t fill_pair_until_backpressured (void *sender_, size_t payload_size_)
@@ -99,17 +95,15 @@ bool drain_one_pair_part (void *receiver_)
 {
     zlink_msg_t part;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    const zlink_recv_result_t result = zlink_recv_part (
-      receiver_, NULL, &part, &has_more,
-      static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
+    size_t has_more = 1;
+    const zlink_recv_result_t result = zlink_recv (receiver_, NULL, &part, 1, &has_more, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
     if (result == ZLINK_RECV_NO_DATA) {
         TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
         return false;
     }
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, result);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
     return true;
 }
@@ -140,11 +134,10 @@ void test_pair_bidirectional_parts_have_null_source_and_exclusive_peer ()
 
     zlink_msg_t absent;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&absent));
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_NO_DATA,
-      zlink_recv_part (second, NULL, &absent, &has_more,
-                       static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+      zlink_recv (second, NULL, &absent, 1, &has_more, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&absent));
 
@@ -153,7 +146,7 @@ void test_pair_bidirectional_parts_have_null_source_and_exclusive_peer ()
     test_context_socket_close_zero_linger (bound);
 }
 
-void test_pair_failed_staged_record_is_atomic_and_next_submit_restarts ()
+void test_pair_failed_whole_record_is_atomic_and_next_submit_succeeds ()
 {
     const char *endpoint = "inproc://gap-h3-pair-record-atomic";
     const int64_t max_message_size = 1024;
@@ -166,30 +159,23 @@ void test_pair_failed_staged_record_is_atomic_and_next_submit_restarts ()
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_bind (receiver, endpoint));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_connect (sender, endpoint));
 
-    zlink_msg_t head;
-    init_part (&head, std::string (400, 'h'));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &head, ZLINK_SEND_FLAGS_DONTWAIT,
-                       ZLINK_PART_MORE, NULL, NULL));
-    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&head));
-
-    zlink_msg_t oversized_tail;
-    init_part (&oversized_tail, std::string (700, 't'));
+    zlink_msg_t invalid_record[2];
+    init_part (&invalid_record[0], std::string (400, 'h'));
+    init_part (&invalid_record[1], std::string (700, 't'));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_INVALID_ARGUMENT,
-      zlink_send_part (sender, &oversized_tail, ZLINK_SEND_FLAGS_DONTWAIT,
-                       ZLINK_PART_FINAL, NULL, NULL));
+      zlink_send (sender, invalid_record, 2, ZLINK_SEND_FLAGS_DONTWAIT, NULL,
+                  NULL));
     TEST_ASSERT_EQUAL_INT (EMSGSIZE, zlink_errno ());
-    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&oversized_tail));
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&invalid_record[0]));
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&invalid_record[1]));
 
     zlink_msg_t absent;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&absent));
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_NO_DATA,
-      zlink_recv_part (receiver, NULL, &absent, &has_more,
-                       static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+      zlink_recv (receiver, NULL, &absent, 1, &has_more, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&absent));
 
@@ -198,18 +184,18 @@ void test_pair_failed_staged_record_is_atomic_and_next_submit_restarts ()
     zlink_msg_t observed_part;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&observed_part));
     const zlink_routing_id_t *source_rid = NULL;
-    has_more = ZLINK_PART_MORE;
+    has_more = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
       recv_pair_part_eventually (receiver, &source_rid, &observed_part,
                                  &has_more));
-    const zlink_part_flag_t observed_has_more = has_more;
+    const size_t observed_has_more = has_more;
     const std::string observed_payload (
       static_cast<const char *> (zlink_msg_data (&observed_part)),
       zlink_msg_size (&observed_part));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
                            zlink_msg_close (&observed_part));
-    while (has_more == ZLINK_PART_MORE) {
+    while (has_more == 0) {
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
                                zlink_msg_init (&observed_part));
         TEST_ASSERT_EQUAL_INT (
@@ -223,9 +209,8 @@ void test_pair_failed_staged_record_is_atomic_and_next_submit_restarts ()
     test_context_socket_close_zero_linger (sender);
     test_context_socket_close_zero_linger (receiver);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE (
-      ZLINK_PART_FINAL, observed_has_more,
-      "failed staged PAIR record leaked into the next record");
+    TEST_ASSERT_EQUAL_INT_MESSAGE (1, observed_has_more,
+                                   "failed PAIR record leaked payload");
     TEST_ASSERT_EQUAL_STRING ("fresh-record", observed_payload.c_str ());
 }
 
@@ -298,7 +283,7 @@ int main ()
 
     UNITY_BEGIN ();
     RUN_TEST (test_pair_bidirectional_parts_have_null_source_and_exclusive_peer);
-    RUN_TEST (test_pair_failed_staged_record_is_atomic_and_next_submit_restarts);
+    RUN_TEST (test_pair_failed_whole_record_is_atomic_and_next_submit_succeeds);
     RUN_TEST (test_pair_receive_flow_is_unsupported_without_monitor_side_effects);
     const int rc = UNITY_END ();
     fflush (NULL);

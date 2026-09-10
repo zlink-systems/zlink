@@ -492,17 +492,15 @@ void test_dealer_router_monitor_ready_implies_first_bidirectional_delivery ()
     uint64_t request_seq = UINT64_MAX;
     zlink_msg_t incoming;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&incoming));
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv_part (
-      server, &source_rid, &request_seq, &incoming, &has_more,
-      ZLINK_RECV_FLAGS_NONE));
+    size_t has_more = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv (server, &source_rid, &request_seq, &incoming, 1, &has_more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source_rid);
     TEST_ASSERT_EQUAL_UINT (server_monitor_probe.ready.routing_id.size,
                             source_rid->size);
     TEST_ASSERT_EQUAL_MEMORY (server_monitor_probe.ready.routing_id.data,
                               source_rid->data, source_rid->size);
     TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_UINT64 (10, zlink_msg_size (&incoming));
     TEST_ASSERT_EQUAL_MEMORY ("dealer-msg", zlink_msg_data (&incoming), 10);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&incoming));

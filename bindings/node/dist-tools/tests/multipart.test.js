@@ -6,7 +6,6 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const zlink = require('@zlink-systems/zlink');
 const nativeTestHooks = require(path.resolve(__dirname, '../../build/Release/zlink.node'));
-const { getNativeHandle } = require(path.resolve(__dirname, '../../dist/zlink/runtime/handles/native_handle.js'));
 test('pair sockets send and receive multipart through canonical api', () => {
     const ctx = zlink.createContext();
     const left = zlink.createPairSocket(ctx);

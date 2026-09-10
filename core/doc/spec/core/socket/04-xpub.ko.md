@@ -22,7 +22,7 @@ topic을 요청하는 subscriber가 더는 남지 않게 한 마지막 unsubscri
 topic의 중복 subscribe나 다른 subscriber가 아직 남은 unsubscribe는 `ZLINK_PUB_OPT_VERBOSE` /
 `ZLINK_PUB_OPT_VERBOSER`를 켜야 event로 보인다([§4](#4-pub-옵션-zlink_pub_option_t)).
 
-이 문서는 XPUB 고유의 공개 계약 — PUB/XPUB 전용 옵션, message part 발행, 구독 이벤트
+이 문서는 XPUB 고유의 공개 계약 — PUB/XPUB 전용 옵션, whole-message 발행, 구독 이벤트
 수신 — 을 정의한다.
 
 관련 계약의 소유 문서는 다음과 같다.
@@ -37,10 +37,10 @@ topic의 중복 subscribe나 다른 subscriber가 아직 남은 unsubscribe는 `
 ## 2. 구독 이벤트 흐름
 
 subscriber가 보낸 구독·해제 요청은 XPUB에 구독 이벤트 message로 도착한다. application은
-[`zlink_xpub_recv_part`](#zlink_xpub_recv_part)로 이 이벤트를 하나씩 꺼내며, 각 이벤트에서
+[`zlink_xpub_recv`](#zlink_xpub_recv)로 이 이벤트를 하나씩 꺼내며, 각 이벤트에서
 어느 peer가 보냈는지(routing ID), 구독인지 해제인지, 어느 topic인지를 관찰한다. 구독 이벤트는
 단일 frame이다 — 첫 byte가 subscribe면 `0x01`, unsubscribe면 `0x00`이고 나머지 byte가 topic(구독
-대상을 구분하는 byte 열)이다. 빈 topic의 이벤트도 첫 byte 하나를 가진다. `zlink_xpub_recv_part`가
+대상을 구분하는 byte 열)이다. 빈 topic의 이벤트도 첫 byte 하나를 가진다. `zlink_xpub_recv`가
 첫 byte를 `*subscribed_out_`로, 나머지를 topic output으로 나눠 돌려주므로 application이 frame을
 직접 해석할 일은 없다.
 
@@ -55,9 +55,9 @@ sequenceDiagram
     participant XPub as XPUB socket
     participant App as Application
     Sub->>XPub: topic 구독 요청
-    App->>XPub: zlink_xpub_recv_part()
+    App->>XPub: zlink_xpub_recv()
     XPub-->>App: 구독 이벤트 (peer routing ID, subscribe=1, topic byte)
-    App->>XPub: zlink_publish_part(topic, part)
+    App->>XPub: zlink_publish(topic, parts, part_count, flags)
     XPub-->>Sub: 발행 message 전달
 ```
 
@@ -65,10 +65,10 @@ sequenceDiagram
 
 `ZLINK_PUB_OPT_NODROP`의 기본값은 `0`이다. fanout 전달은 손실을 허용한다. 송신 queue가
 유지할 byte 상한인 [HWM](../glossary.ko.md#hwm)(High-Water Mark)에 도달했을 때
-`zlink_publish_part()`는 해당 subscriber에 대한 message를 버리고 성공을 보고한다. 송신
+`zlink_publish()`는 해당 subscriber에 대한 message를 버리고 성공을 보고한다. 송신
 queue가 찼을 때 drop 대신 publisher의 추가 제출을 제한하는
 [backpressure](../glossary.ko.md#backpressure)를 주려면 명시적으로 `1`로 설정해야 하며,
-이때 `zlink_publish_part()`는 `ZLINK_SUBMIT_BACKPRESSURED`를 반환한다. HWM 검사 대상은 현재
+이때 `zlink_publish()`는 `ZLINK_SUBMIT_BACKPRESSURED`를 반환한다. HWM 검사 대상은 현재
 topic의 filter에 맞는 pipe뿐이다 — 그중 하나라도 차 있으면 그 record를 filter가 맞는 어떤
 subscriber에도 전달하지 않고, filter가 맞지 않는 subscriber의 pipe 상태는 이 publish에 영향을
 주지 않는다.
@@ -151,17 +151,14 @@ PUB/XPUB socket 옵션의 현재 값을 가져온다.
 
 ---
 
-### zlink_publish_part
+### zlink_publish
 
-raw `XPUB` socket에서 message part 하나를 발행한다.
+raw `XPUB` socket에서 message record 하나를 발행한다.
 
 ```c
-ZLINK_EXPORT zlink_submit_result_t zlink_publish_part (
-  void *subject_,
-  const char *topic_id_,
-  zlink_msg_t *part_,
-  zlink_send_flags_t flags_,
-  zlink_part_flag_t part_flag_);
+ZLINK_EXPORT zlink_submit_result_t zlink_publish (
+  void *subject_, const char *topic_id_, zlink_msg_t *parts_,
+  size_t part_count_, zlink_send_flags_t flags_);
 ```
 
 `topic_id_ == NULL`이면 첫 message frame이 wire prefix 규칙에 따라 topic을
@@ -174,42 +171,40 @@ message 앞의 topic frame으로 추가한다.
 topic frame용 storage를 확보하지 못하면 `ZLINK_SUBMIT_OUT_OF_MEMORY`와 `ENOMEM`을
 반환한다.
 
-`ZLINK_PART_MORE`로 시작한 multipart message는 같은 thread에서 같은 topic과
-flag를 사용해 `ZLINK_PART_FINAL`까지 이어서 전송한다.
+`parts_` 배열과 `part_count_`가 publish record를 구성한다. `part_count_`는 양수여야 하며 `0`은
+`ZLINK_SUBMIT_INVALID_ARGUMENT`+`EINVAL`이다. Part는 배열 순서대로 전달된다.
 
-이 함수는 성공과 실패 모두에서 `part_`의 내용을 소비한다. 같은 내용을
-다시 사용할 가능성이 있으면 호출 전에 복사한다. 소비된 `zlink_msg_t`는 초기화된 빈
+이 함수는 성공과 실패 모두에서 모든 입력 슬롯을 소비한다. 같은 record를
+다시 사용할 가능성이 있으면 호출 전에 전체를 복사한다. 소비된 각 `zlink_msg_t`는 초기화된 빈
 message로 남으므로 그대로 close하거나 다시 쓸 수 있다.
 
 non-blocking 발행은 `flags_`에
 `ZLINK_DONTWAIT`를 전달하며, 즉시 진행할 수 없으면
 `ZLINK_SUBMIT_BACKPRESSURED`를 반환한다.
 
-Core는 성공한 중간 part를 `ZLINK_PART_FINAL`이 성공할 때까지 하나의 publish
-record로 임시로 보관한다. 실패 처리는 PUB와 같은 경로이며 [PUB §3](02-pub.ko.md#3-multipart-발행과-publish-record)이
-소유한다: 제출 전 sequence 검증 실패는 호출 part만 소비하고 열린 record를 유지하며, send 단계의
-중간·마지막 submit 실패는 임시로 보관한 part와 실패한 part를 원자적으로 폐기하고 sequence를 닫는다.
+Core는 record 전체를 원자적으로 admission한다. 실패하면 subscriber에는 어느 part도 보이지 않으며,
+caller는 보관한 record 전체를 다시 제출한다. 이 계약은
+[PUB §3](02-pub.ko.md#3-whole-message-발행과-publish-record)이 소유한다.
 
 적용 타입은 raw `PUB`, raw `XPUB`다. 다른 타입은
 `ZLINK_SUBMIT_NOT_SUPPORTED`, `errno == ENOTSUP`이다. 전체 결과 대응은
 [errno map](../03-errors.ko.md#result와-errno-대응)을 따른다.
 
-**참고:** `zlink_xpub_recv_part`
+**참고:** `zlink_xpub_recv`
 
 ---
 
-### zlink_xpub_recv_part
+### zlink_xpub_recv
 
 XPUB socket에서 구독 이벤트를 수신한다.
 
 ```c
-ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
-                               const zlink_routing_id_t **source_rid_out_,
-                               int *subscribed_out_,
-                               char *topic_id_buf_,
-                               size_t topic_id_capacity_,
-                               size_t *topic_id_len_out_,
-                               zlink_recv_flags_t flags_);
+ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv (
+  void *xpub_,
+  const zlink_routing_id_t **source_rid_out_,
+  int *subscribed_out_,
+  char *topic_id_buf_, size_t topic_id_capacity_, size_t *topic_id_len_out_,
+  zlink_recv_flags_t flags_);
 ```
 
 recv 모드에서 다음 구독 이벤트를 수신한다. `subscribed_out_`과 `topic_id_len_out_`은 필수
@@ -243,7 +238,7 @@ subscribe이면 1, unsubscribe이면 0이다. `topic_id_buf_` /
 이벤트가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`. topic이 `topic_id_capacity_`보다 길면
 `ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`. subject가 XPUB가 아니면 `ZLINK_RECV_NOT_SUPPORTED`와 `ENOTSUP`.
 
-**참고:** `zlink_publish_part`
+**참고:** `zlink_publish`
 
 ---
 
@@ -259,8 +254,8 @@ low water mark와 transport backpressure는 그대로 유지된다. XPUB socket�
 
 ## 7. 구현 및 contract test 검증 요구
 
-공개 표면(`zlink_set_pub_option`·`zlink_get_pub_option`, `zlink_publish_part`,
-`zlink_xpub_recv_part`, `zlink_socket_set_receive_flow_state`, 반환값·errno)만으로 다음을
+공개 표면(`zlink_set_pub_option`·`zlink_get_pub_option`, `zlink_publish`,
+`zlink_xpub_recv`, `zlink_socket_set_receive_flow_state`, 반환값·errno)만으로 다음을
 확인한다. 각 항목은 unit test 하나로 이어진다.
 
 **옵션**
@@ -269,7 +264,7 @@ low water mark와 transport backpressure는 그대로 유지된다. XPUB socket�
 - 초기에 `VERBOSE`, `VERBOSER`, `MANUAL`, `MANUAL_LAST_VALUE`, `TOPICS_COUNT`는 `0`이고, 빈 `WELCOME_MSG`는 새 subscriber pipe에 message를 전송하지 않는다.
 - `ZLINK_PUB_OPT_MANUAL_LAST_VALUE`를 활성화하면 manual 모드가 활성화되고, 다음 발행은 마지막 구독 event pipe에만 전달된다.
 
-**구독 이벤트 수신 (`zlink_xpub_recv_part`)**
+**구독 이벤트 수신 (`zlink_xpub_recv`)**
 - raw XPUB에 구독 이벤트가 있으면 `ZLINK_RECV_OK`와 함께 `*subscribed_out_`(subscribe=1, unsubscribe=0), 구독 peer의 routing ID pointer, topic byte(binary-safe)가 관찰된다.
 - `source_rid_out_`은 NULL을 허용하는 선택 output이다.
 - 아직 연결된 peer의 이벤트에서 `*source_rid_out_`의 routing ID view는 같은 socket의 다음 data receive API 진입 또는 close까지 유효하며, 다른 socket의 receive는 이를 바꾸지 않는다. 값을 보관하려면 반환 즉시 복사한다.
@@ -279,20 +274,20 @@ low water mark와 transport backpressure는 그대로 유지된다. XPUB socket�
 - subject가 raw XPUB가 아니면 `ZLINK_RECV_NOT_SUPPORTED`와 `ENOTSUP`이다.
 - `xpub_`가 NULL이면 `EFAULT`다.
 
-**발행과 topic (`zlink_publish_part`)**
+**발행과 topic (`zlink_publish`)**
 - `topic_id_`가 NULL이 아니면 종료 NUL 앞의 byte가 topic frame으로 message 앞에 추가되고, NULL이면 첫 message frame이 wire prefix 규칙에 따라 topic을 운반한다.
 - topic byte를 포함한 크기 제한을 넘으면 `ZLINK_SUBMIT_INVALID_ARGUMENT`와 `EMSGSIZE`, topic frame용 storage를 확보하지 못하면 `ZLINK_SUBMIT_OUT_OF_MEMORY`와 `ENOMEM`이다.
 - raw `PUB`·raw `XPUB`가 아닌 타입에 호출하면 `ZLINK_SUBMIT_NOT_SUPPORTED`, `errno == ENOTSUP`이다.
-- `part_`는 성공·실패 모두 소비되며 초기화된 빈 message로 남는다 — 그대로 close하거나 다시 쓸 수 있다.
+- 모든 `parts_` 슬롯은 성공·실패 모두 소비되며 초기화된 빈 message로 남는다 — 그대로 close하거나 다시 쓸 수 있다.
 - `ZLINK_DONTWAIT`로 즉시 진행할 수 없으면 `ZLINK_SUBMIT_BACKPRESSURED`다.
 
-**multipart publish record**
-- 열린 sequence의 중간 또는 마지막 submit이 send 단계에서 실패하면 subscriber에는 그 record의 어떤 part도 보이지 않고 다음 publish는 새 record의 첫 part로 시작하며, 제출 전 sequence 검증 실패(topic·flag·thread 불일치)는 호출 part만 소비하고 원래 thread에서 같은 topic·flag로 record를 계속할 수 있다([PUB §3](02-pub.ko.md#3-multipart-발행과-publish-record)).
-- 실패한 호출의 `part_`도 소비되며, backpressure를 포함한 실패 뒤에는 보관해 둔 전체 record를 첫 part부터 다시 제출해야 한다.
+**Whole-message publish record**
+- `parts_` 배열의 part는 배열 순서대로 하나의 publish record로 전달된다.
+- Backpressure를 포함해 호출이 실패하면 subscriber에는 그 record의 어떤 part도 보이지 않고 모든 입력 슬롯은 소비되며, caller는 보관한 record 전체를 다시 제출한다([PUB §3](02-pub.ko.md#3-whole-message-발행과-publish-record)).
 
 **HWM 도달 시 drop과 NODROP**
-- `ZLINK_PUB_OPT_NODROP`이 기본값 `0`이면 HWM에 도달한 subscriber에 대한 message를 버리고 `zlink_publish_part()`는 성공을 보고한다.
-- `1`로 설정하면 송신 queue가 찼을 때 `zlink_publish_part()`가 `ZLINK_SUBMIT_BACKPRESSURED`를 반환한다.
+- `ZLINK_PUB_OPT_NODROP`이 기본값 `0`이면 HWM에 도달한 subscriber에 대한 message를 버리고 `zlink_publish()`는 성공을 보고한다.
+- `1`로 설정하면 송신 queue가 찼을 때 `zlink_publish()`가 `ZLINK_SUBMIT_BACKPRESSURED`를 반환한다.
 
 **Receive flow state**
 - `zlink_socket_set_receive_flow_state()`는 XPUB socket에 대해 `ZLINK_CONFIG_NOT_SUPPORTED`와 `errno == ENOTSUP`을 반환하고 아무것도 바꾸지 않는다.

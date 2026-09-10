@@ -1,0 +1,124 @@
+You are a coding sub-agent for the zlink repository (GitHub Issue #63). You work ONLY inside the
+worktree given to you (branch core/63-core-c-api-whole-message-recv-router-rec). Commit to that
+branch only. Do NOT touch spec documents (core/doc/spec/**, bindings/doc/spec/**) — the supervisor
+owns those and they are already finalized (commit 0c98bd5e34). Do NOT push or open PRs.
+
+== Authoritative documents (read first) ==
+- Design draft: doc/draft/core-whole-message-recv-api.ko.md
+- Apply plan:   doc/plan/core-whole-message-recv-api-apply-plan.ko.md  (§3 Core code targets)
+- Decisions:    doc/plan/issue-63-worklog/decisions.ko.md  (D63-1..D63-4 — the binding contract)
+- Contract (authoritative): core/doc/spec/core/socket/README.{ko,en}.md section
+  "zlink_recv 와 zlink_router_recv" / "zlink_recv and zlink_router_recv", plus 07-router / 06-dealer /
+  01-pair / 02-message §4. READ THESE — they define the exact contract you must implement.
+- Rules: CONTRIBUTING.ko.md §9 (commits, version bump checklist), §10 (agent forbidden scope);
+  AGENTS.md §2.1.
+
+== Principles ==
+- Implement exactly what the committed spec says. No public-surface additions beyond the two new
+  functions. Keep thread-safety / single-consumer contract. Match surrounding code style/idiom.
+  recv_part family stays (coexists). No numbers fabrication.
+
+== TASK (apply-plan step ③): implement public whole-message recv + tests ==
+
+Add two public C functions that receive one whole record (all parts) in a single call into a
+caller-provided array. They COEXIST with the existing *_recv_part family (do not remove or change it).
+
+Signatures (add to core/include/zlink/socket/api.h next to the recv_part family, with doc comments):
+
+  ZLINK_EXPORT zlink_recv_result_t zlink_recv (
+    void *s_,
+    const zlink_routing_id_t **source_rid_out_,
+    zlink_msg_t *parts_out_, size_t parts_capacity_, size_t *part_count_out_,
+    zlink_recv_flags_t flags_);
+
+  ZLINK_EXPORT zlink_recv_result_t zlink_router_recv (
+    void *router_,
+    const zlink_routing_id_t **source_rid_out_,
+    zlink_reply_token_t *reply_token_out_,
+    zlink_msg_t *parts_out_, size_t parts_capacity_, size_t *part_count_out_,
+    zlink_recv_flags_t flags_);
+
+  zlink_recv: raw PAIR/DEALER. zlink_router_recv: ROUTER. Other types -> ZLINK_RECV_NOT_SUPPORTED
+  (ENOTSUP), matching how zlink_recv_part / zlink_router_recv_part reject unsupported types.
+
+Implementation (reuse the internal whole-record pull — do NOT add a second copy of pull logic):
+- Router impl in core/src/api/socket/socket_request_reply_router_api.cpp; PAIR/DEALER impl in
+  core/src/api/socket/socket_message_api.cpp. Share validation helpers with the *_recv_part impls.
+- The internal whole-record pull already exists and is what recv_part builds on:
+    reqrep::recv_router_record(handle, &src_rid, &reply_token, &parts_out, &part_count_out, flags, ...)
+      (socket_request_reply_runtime_io.cpp:951, decl socket_request_reply_internal.hpp:540)
+    reqrep::recv_dealer_record(handle, &parts_out, &part_count_out, flags, ...)
+      (runtime_io.cpp:1186, decl internal.hpp:551)
+  These return a Core-owned zlink_msg_t* array + count for one whole record.
+- Study how router_recv_part_impl (same file, ~:120) already: checks recv_sequence_active(helper_state),
+  pulls a whole record via recv_router_record, returns the first part, and stages the rest with
+  stage_router_recv_sequence -> stage_recv_sequence into handle_state.recv (take_recv_part drains one
+  at a time). socket_message_api.cpp does the DEALER analog. Reuse these exact building blocks.
+
+Contract to implement (from spec + decisions D63-3/D63-4):
+1. Hot path (capacity sufficient): pull one whole record, MOVE its parts into the caller's parts_out_
+   slots (each slot becomes a caller-owned zlink_msg_t; caller closes via zlink_multipart_close — slots
+   need NOT be pre-initialized), write *part_count_out_, publish source_rid (borrowed view; router also
+   reply_token: 0 for DATA, nonzero for REQUEST). PAIR/DEALER fill source_rid_out_ with NULL (optional
+   for zlink_recv). NO staging on this path (that is the whole point: bypass the per-part sequence
+   cursor/buffer on the common path).
+2. Capacity too small (parts_capacity_ < record part count): do NOT lose data and do NOT truncate.
+   Stage the entire pulled record (cursor at 0, nothing delivered) using the existing staging path,
+   write the needed count to *part_count_out_, and return ZLINK_RECV_BUFFER_TOO_SMALL (ENOBUFS). Other
+   outputs unchanged. A later whole-message recv with adequate capacity drains the SAME record exactly
+   once; a later *_recv_part also drains it correctly (cursor 0). This mirrors the subscribe_part
+   topic-buffer-too-small idiom.
+3. If a *_recv_part sequence is already mid-record (some parts already delivered, cursor > 0) when a
+   whole-message recv is entered, return ZLINK_RECV_BUSY (EBUSY) — a coherent whole record cannot be
+   delivered mid-sequence. (A fully-staged, nothing-delivered record from case 2 is drainable, not
+   EBUSY.) Foreign-thread / concurrent entry keeps the existing EBUSY behavior.
+4. DONTWAIT: no record -> ZLINK_RECV_NO_DATA (EAGAIN) immediately; a present record returns the whole
+   record (never a half record — record atomicity guarantees no partial record exists). NONE: same
+   RCVTIMEO / termination / ESHUTDOWN behavior as zlink_recv_part.
+5. Failure leaves outputs and message content unchanged. Borrowed source-RID lifetime identical to
+   recv_part (valid until the same socket's next data-recv entry or close).
+6. NULL required handle/output -> ZLINK_RECV_INVALID_HANDLE (EFAULT). Unknown flags bit ->
+   ZLINK_RECV_INVALID_STATE (EINVAL). parts_out_ and part_count_out_ are required; zlink_router_recv
+   also requires source_rid_out_ and reply_token_out_; zlink_recv's source_rid_out_ is optional.
+
+Public header mirror: adding to core/include/zlink/socket/api.h — if the raw header mirror
+(bindings/{c,cpp,go,rust}/include) must match, sync it. Run
+`python3 scripts/local-package/sync-version.py --check` and, if it reports the mirror is stale for the
+new symbols, `--write`, then re-check. Do NOT bump any version (VERSION/BINDINGS_VERSION unchanged).
+
+== Tests (core/tests/unittest and/or contract tests) ==
+Add unit/contract tests for BOTH zlink_recv (PAIR and DEALER) and zlink_router_recv (ROUTER):
+- multipart record: exact part count, byte-exact part order/content.
+- router DATA -> reply_token 0; router REQUEST -> same nonzero token, same source RID on the record.
+- capacity too small -> ZLINK_RECV_BUFFER_TOO_SMALL, *part_count_out_ = needed count, record NOT
+  consumed; retry with adequate capacity yields the identical record exactly once (part-for-part).
+- DONTWAIT with no data -> ZLINK_RECV_NO_DATA/EAGAIN; with a queued record -> whole record.
+- ownership: each returned slot closes exactly once (zlink_multipart_close); no leak, no double free.
+- record atomicity: whole record or nothing (no half record on DONTWAIT).
+- mixing: after a *_recv_part has taken part 1 of a multi-part record, a whole-message recv returns
+  EBUSY; and a capacity-miss stage followed by *_recv_part drains the staged record correctly.
+- single-part record via whole-message recv (count == 1).
+Follow the existing test style. If you move/rename any shared test helper, keep assertions intact.
+
+== Build & test (JOBS capped at 4 — do NOT exceed, WSL memory) ==
+  JOBS=4 scripts/build-core.sh dev
+  ctest --test-dir core/build-dev --output-on-failure
+NOTE: test `158 - hotpath_gate` is a callgrind Ir-ratio gate calibrated for Release+LTO; under the dev
+build (LTO OFF) it reports ~1.1-1.4x and FAILS as a build-mode artifact unrelated to your change —
+IGNORE it. Every OTHER test (the functional unit/integration/contract suite, including your new tests)
+MUST pass. Do not modify hotpath_reference.json or the gate.
+
+== Commit (to the issue branch only) ==
+  core: add whole-message recv (zlink_recv / zlink_router_recv)
+
+  <what changed: header decls, router + pair/dealer impls reusing recv_router_record /
+   recv_dealer_record, capacity-miss staging for non-consuming retry, new tests>. Public recv_part
+  family unchanged. Refs #63.
+
+  Build: JOBS=4 scripts/build-core.sh dev — OK
+  Test:  ctest core/build-dev — <N-1>/N passed; only 158-hotpath_gate fails (dev LTO-OFF artifact).
+         New whole-message recv tests: <names> — all pass.
+
+== Deliverable ==
+Committed on the branch. Report: files changed, the exact ctest summary, the new test names and what
+each asserts, and confirmation that recv_part paths are unchanged and sync-version --check is clean.

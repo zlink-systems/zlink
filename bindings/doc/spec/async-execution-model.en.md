@@ -87,7 +87,7 @@ creates a separate drain thread.
 - **The binding keeps the context passed to Core valid, completes the language terminal exactly once even when submit results race with completions, and releases any remaining native payload exactly once.**
   A completion can be read before submit returns, so return order must not cause a lost result,
   duplicate completion, or duplicate release. Native context lifetime belongs to
-  [Core part send](../../../core/doc/spec/core/socket/README.en.md#part-send-and-pending-admission) and
+  [Core whole-message send](../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission) and
   the [request contract](../../../core/doc/spec/core/socket/README.en.md#request-and-reply).
   The internal check is that each native payload has exactly one release or transfer to language ownership.
 

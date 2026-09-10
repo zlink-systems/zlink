@@ -11,9 +11,9 @@
 int main (void)
 {
     CHECK (ZLINK_VERSION_MAJOR == 0);
-    CHECK (ZLINK_VERSION_MINOR == 17);
-    CHECK (ZLINK_VERSION_PATCH == 5);
-    CHECK (ZLINK_VERSION == ZLINK_MAKE_VERSION (0, 17, 5));
+    CHECK (ZLINK_VERSION_MINOR == 18);
+    CHECK (ZLINK_VERSION_PATCH == 0);
+    CHECK (ZLINK_VERSION == ZLINK_MAKE_VERSION (0, 18, 0));
 
     CHECK (ZLINK_SOCKET_PAIR == 0x1001);
     CHECK (ZLINK_SOCKET_STREAM == 0x1008);
@@ -37,11 +37,11 @@ int main (void)
     CHECK (minor == ZLINK_VERSION_MINOR);
     CHECK (patch == ZLINK_VERSION_PATCH);
 
-    CHECK (zlink_send_part != NULL);
-    CHECK (zlink_send_part_rid != NULL);
-    CHECK (zlink_recv_part != NULL);
-    CHECK (zlink_publish_part != NULL);
-    CHECK (zlink_subscribe_part != NULL);
+    CHECK (zlink_send != NULL);
+    CHECK (zlink_send_rid != NULL);
+    CHECK (zlink_recv != NULL);
+    CHECK (zlink_publish != NULL);
+    CHECK (zlink_subscribe != NULL);
 
     void *ctx = zlink_ctx_new ();
     CHECK (ctx != NULL);

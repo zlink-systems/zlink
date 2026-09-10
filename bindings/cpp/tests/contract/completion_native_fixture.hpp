@@ -63,22 +63,22 @@ struct fixture_t
 inline fixture_t *active = nullptr;
 
 inline zlink_submit_result_t submit (
-  void *socket_, const zlink_routing_id_t *rid_, zlink_msg_t *part_,
-  zlink_send_flags_t flags_, zlink_part_flag_t part_flag_, void *context_,
+  void *socket_, const zlink_routing_id_t *rid_, zlink_msg_t *parts_, size_t part_count_,
+  zlink_send_flags_t flags_, void *context_,
   zlink_completion_id_t *id_, bool request_)
 {
     auto &fixture = *active;
     assert (socket_ == zlink::detail::native_handle (fixture.socket));
     assert (flags_ == ZLINK_SEND_FLAGS_DONTWAIT);
-    assert (part_flag_ == ZLINK_PART_FINAL);
+    assert (part_count_ == 1u);
     assert (context_ && id_);
     const std::string target = rid_
       ? std::string (reinterpret_cast<const char *> (rid_->data), rid_->size)
       : std::string ();
     const std::string payload (
-      static_cast<const char *> (zlink_msg_data (part_)), zlink_msg_size (part_));
-    assert (zlink_msg_close (part_) == ZLINK_CONFIG_OK);
-    assert (zlink_msg_init (part_) == ZLINK_CONFIG_OK);
+      static_cast<const char *> (zlink_msg_data (&parts_[0])), zlink_msg_size (&parts_[0]));
+    assert (zlink_msg_close (&parts_[0]) == ZLINK_CONFIG_OK);
+    assert (zlink_msg_init (&parts_[0]) == ZLINK_CONFIG_OK);
     const bool first = ++fixture.counts[context_] == 1;
     *id_ = first || request_ ? fixture.attempts.size () + 1 : 0;
     fixture.attempts.push_back ({context_, *id_, target, payload, request_});
@@ -102,21 +102,21 @@ inline zlink_submit_result_t submit (
 }
 } // namespace completion_test
 
-extern "C" zlink_submit_result_t __wrap_zlink_send_part_rid (
-  void *socket_, const zlink_routing_id_t *rid_, zlink_msg_t *part_,
-  zlink_send_flags_t flags_, zlink_part_flag_t part_flag_, void *context_,
+extern "C" zlink_submit_result_t __wrap_zlink_send_rid (
+  void *socket_, const zlink_routing_id_t *rid_, zlink_msg_t *parts_, size_t part_count_,
+  zlink_send_flags_t flags_, void *context_,
   zlink_completion_id_t *id_)
 {
-    return completion_test::submit (socket_, rid_, part_, flags_, part_flag_,
+    return completion_test::submit (socket_, rid_, parts_, part_count_, flags_,
                                      context_, id_, false);
 }
 
-extern "C" zlink_submit_result_t __wrap_zlink_request_part (
-  void *socket_, const zlink_routing_id_t *rid_, zlink_msg_t *part_,
-  zlink_send_flags_t flags_, zlink_part_flag_t part_flag_, uint32_t,
+extern "C" zlink_submit_result_t __wrap_zlink_request (
+  void *socket_, const zlink_routing_id_t *rid_, zlink_msg_t *parts_, size_t part_count_,
+  zlink_send_flags_t flags_, uint32_t,
   void *context_, zlink_completion_id_t *id_)
 {
-    return completion_test::submit (socket_, rid_, part_, flags_, part_flag_,
+    return completion_test::submit (socket_, rid_, parts_, part_count_, flags_,
                                      context_, id_, true);
 }
 

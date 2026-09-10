@@ -35,14 +35,18 @@ def test_ffi_layouts_are_the_core_0_17_layouts():
     assert (ctypes.sizeof(ZlinkPollerEvent), ctypes.alignment(ZlinkPollerEvent)) == (48, 8)
 
 
-def test_pull_completion_and_raw_part_symbols_are_bound_directly():
+def test_whole_message_and_completion_symbols_are_bound_directly():
     native = lib()
     for name in (
-        "zlink_send_part",
-        "zlink_send_part_rid",
-        "zlink_request_part",
-        "zlink_reply_part",
-        "zlink_router_recv_part",
+        "zlink_send",
+        "zlink_send_rid",
+        "zlink_request",
+        "zlink_reply",
+        "zlink_recv",
+        "zlink_router_recv",
+        "zlink_publish",
+        "zlink_subscribe",
+        "zlink_xpub_recv",
         "zlink_stream_recv_packet",
         "zlink_completion_recv",
         "zlink_completion_close",

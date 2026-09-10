@@ -54,14 +54,13 @@ static int receive_part (void *dealer, const void *expected, size_t expected_siz
     CHECK (wait_socket (dealer, ZLINK_POLLIN) == 0);
 
     zlink_msg_t part;
-    zlink_part_flag_t part_flag = ZLINK_PART_MORE;
-    CHECK (zlink_msg_init (&part) == ZLINK_CONFIG_OK);
-    CHECK (zlink_recv_part (dealer, NULL, &part, &part_flag, ZLINK_RECV_FLAGS_DONTWAIT)
+    size_t part_count = 0;
+    CHECK (zlink_recv (dealer, NULL, &part, 1, &part_count, ZLINK_RECV_FLAGS_DONTWAIT)
            == ZLINK_RECV_OK);
-    CHECK (part_flag == ZLINK_PART_FINAL);
+    CHECK (part_count == 1);
     CHECK (zlink_msg_size (&part) == expected_size);
     CHECK (memcmp (zlink_msg_data (&part), expected, expected_size) == 0);
-    CHECK (zlink_msg_close (&part) == ZLINK_CONFIG_OK);
+    zlink_multipart_close (&part, part_count);
     return 0;
 }
 
@@ -96,8 +95,8 @@ static int fill_until_backpressured (void *router,
 
         errno = 0;
         const zlink_submit_result_t result =
-          zlink_send_part_rid (router, target, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                               ZLINK_PART_FINAL, user_context, &completion_id);
+          zlink_send_rid (router, target, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT,
+                          user_context, &completion_id);
         const int submit_errno = zlink_errno ();
         const int system_errno = errno;
         CHECK (check_part_consumed (&part) == 0);
@@ -134,8 +133,8 @@ static int fill_until_backpressured_null_id (void *router,
 
         errno = 0;
         const zlink_submit_result_t result =
-          zlink_send_part_rid (router, target, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                               ZLINK_PART_FINAL, NULL, NULL);
+          zlink_send_rid (router, target, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT,
+                          NULL, NULL);
         const int submit_errno = zlink_errno ();
         CHECK (check_part_consumed (&part) == 0);
 
@@ -166,9 +165,9 @@ static int fill_requests_until_backpressured (
         CHECK (init_part (&part, payload, payload_size) == 0);
 
         errno = 0;
-        const zlink_submit_result_t result = zlink_request_part (
-          dealer, NULL, &part, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
-          120000, user_context, &completion_id);
+        const zlink_submit_result_t result = zlink_request (
+          dealer, NULL, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, 120000,
+          user_context, &completion_id);
         const int submit_errno = zlink_errno ();
         CHECK (check_part_consumed (&part) == 0);
 
@@ -195,15 +194,14 @@ static int receive_request (void *router,
     CHECK (wait_socket (router, ZLINK_POLLIN) == 0);
     const zlink_routing_id_t *source_rid = NULL;
     zlink_msg_t part;
-    zlink_part_flag_t part_flag = ZLINK_PART_MORE;
-    CHECK (zlink_msg_init (&part) == ZLINK_CONFIG_OK);
-    CHECK (zlink_router_recv_part (router, &source_rid, reply_token_out, &part,
-                                   &part_flag, ZLINK_RECV_FLAGS_DONTWAIT)
+    size_t part_count = 0;
+    CHECK (zlink_router_recv (router, &source_rid, reply_token_out, &part, 1,
+                              &part_count, ZLINK_RECV_FLAGS_DONTWAIT)
            == ZLINK_RECV_OK);
     CHECK (source_rid != NULL);
     CHECK (source_rid->size != 0);
     CHECK (*reply_token_out != 0);
-    CHECK (part_flag == ZLINK_PART_FINAL);
+    CHECK (part_count == 1);
     CHECK (zlink_msg_size (&part) == expected_size);
     CHECK (memcmp (zlink_msg_data (&part), expected, expected_size) == 0);
     if (source_rid_out != NULL) {
@@ -211,7 +209,7 @@ static int receive_request (void *router,
         source_rid_out->size = source_rid->size;
         memcpy (source_rid_out->data, source_rid->data, source_rid->size);
     }
-    CHECK (zlink_msg_close (&part) == ZLINK_CONFIG_OK);
+    zlink_multipart_close (&part, part_count);
     return 0;
 }
 
@@ -280,9 +278,9 @@ static int test_request_wait_token_flow (void *dealer,
     zlink_msg_t retry;
     zlink_completion_id_t request_id = 0;
     CHECK (init_part (&retry, payload, payload_size) == 0);
-    CHECK (zlink_request_part (dealer, NULL, &retry,
-                               ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
-                               5000, &request_context, &request_id)
+    CHECK (zlink_request (dealer, NULL, &retry, 1,
+                          ZLINK_SEND_FLAGS_DONTWAIT, 5000,
+                          &request_context, &request_id)
            == ZLINK_SUBMIT_OK);
     CHECK (request_id != 0);
     CHECK (request_id != wait_token);
@@ -301,8 +299,8 @@ static int test_request_wait_token_flow (void *dealer,
                             &reply_token) == 0);
     zlink_msg_t reply;
     CHECK (init_part (&reply, payload, payload_size) == 0);
-    CHECK (zlink_reply_part (router, &source_rid, reply_token, &reply,
-                             ZLINK_PART_FINAL) == ZLINK_SUBMIT_OK);
+    CHECK (zlink_reply (router, &source_rid, reply_token, &reply, 1)
+           == ZLINK_SUBMIT_OK);
     CHECK (check_part_consumed (&reply) == 0);
 
     zlink_poller_event_t event;
@@ -397,8 +395,8 @@ int main (void)
     zlink_msg_t prime;
     zlink_completion_id_t prime_id = UINT64_MAX;
     CHECK (init_part (&prime, prime_payload, strlen (prime_payload)) == 0);
-    CHECK (zlink_send_part (dealer, &prime, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL,
-                            &prime_id) == ZLINK_SUBMIT_OK);
+    CHECK (zlink_send (dealer, &prime, 1, ZLINK_SEND_FLAGS_NONE, NULL,
+                       &prime_id) == ZLINK_SUBMIT_OK);
     CHECK (prime_id == 0);
     CHECK (check_part_consumed (&prime) == 0);
 
@@ -406,16 +404,15 @@ int main (void)
     const zlink_routing_id_t *source_rid = NULL;
     zlink_reply_token_t reply_token = UINT64_MAX;
     zlink_msg_t received_prime;
-    zlink_part_flag_t prime_flag = ZLINK_PART_MORE;
-    CHECK (zlink_msg_init (&received_prime) == ZLINK_CONFIG_OK);
-    CHECK (zlink_router_recv_part (router, &source_rid, &reply_token, &received_prime,
-                                   &prime_flag, ZLINK_RECV_FLAGS_DONTWAIT) == ZLINK_RECV_OK);
+    size_t prime_count = 0;
+    CHECK (zlink_router_recv (router, &source_rid, &reply_token, &received_prime, 1,
+                              &prime_count, ZLINK_RECV_FLAGS_DONTWAIT) == ZLINK_RECV_OK);
     CHECK (source_rid != NULL);
     CHECK (source_rid->size == strlen (dealer_name));
     CHECK (memcmp (source_rid->data, dealer_name, strlen (dealer_name)) == 0);
     CHECK (reply_token == 0);
-    CHECK (prime_flag == ZLINK_PART_FINAL);
-    CHECK (zlink_msg_close (&received_prime) == ZLINK_CONFIG_OK);
+    CHECK (prime_count == 1);
+    zlink_multipart_close (&received_prime, prime_count);
 
     zlink_routing_id_t target;
     memset (&target, 0, sizeof (target));
@@ -503,8 +500,8 @@ int main (void)
     zlink_msg_t retry;
     zlink_completion_id_t retry_id = UINT64_MAX;
     CHECK (init_part (&retry, logical_payload, sizeof (logical_payload)) == 0);
-    CHECK (zlink_send_part_rid (router, &target, &retry, ZLINK_SEND_FLAGS_DONTWAIT,
-                                ZLINK_PART_FINAL, NULL, &retry_id) == ZLINK_SUBMIT_OK);
+    CHECK (zlink_send_rid (router, &target, &retry, 1, ZLINK_SEND_FLAGS_DONTWAIT,
+                           NULL, &retry_id) == ZLINK_SUBMIT_OK);
     CHECK (retry_id == 0);
     CHECK (check_part_consumed (&retry) == 0);
     CHECK (receive_part (dealer, logical_payload, sizeof (logical_payload)) == 0);

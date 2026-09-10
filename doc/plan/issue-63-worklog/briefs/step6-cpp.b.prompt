@@ -1,0 +1,37 @@
+Coding sub-agent for zlink Issue #63. Work ONLY in this worktree; commit to its detached HEAD. Do NOT
+touch core/doc/** or bindings/doc/**. Do NOT push/PR. Keep input tight; grep before reading.
+
+READ: doc/plan/issue-63-worklog/binding-migration-ref.ko.md (removal→replacement map, D63-6..8 contracts).
+Core is whole-message only; core/build-dev (symlink) has the new-only API.
+
+TASK (cpp): recv(received_t&) is ALREADY on whole-message (commit b7363590f3) — keep it. Now finish cpp:
+- Migrate the SEND path to the new whole-message zlink_send/zlink_send_rid/zlink_request/zlink_reply/
+  zlink_publish (one call over the parts array, not a per-part loop). Public cpp send/builder surface
+  UNCHANGED.
+- Replace every use of the now-REMOVED Core symbols so cpp compiles against new-only Core:
+  zlink_*_part (send & recv), zlink_xpub_recv_part->zlink_xpub_recv, zlink_part_flag_t/MORE/FINAL.
+  Find them: grep -rn "zlink_.*_part\|ZLINK_PART_\|zlink_part_flag_t" bindings/cpp/src bindings/cpp/include.
+- STREAM: RAW recv via zlink_recv (1 part); PACKET keeps zlink_stream_recv_packet; send via zlink_send/
+  send_rid with one part (empty part to a valid RID still disconnects that peer).
+- native_receive.hpp already has the recv array/adopt idiom — mirror it for send (reusable array,
+  ownership: every input slot consumed by the send call).
+- Public single-part convenience overloads (recv(message_t&), send single msg) stay as public API but
+  now implement over the whole-message Core call internally (count==1).
+Run sync-version.py --check if you touch headers (should be none — headers are Core-owned).
+
+TEST (new-only local Core; do NOT rebuild Core):
+  ZLINK_CORE_SOURCE=local ZLINK_CPP_CORE_BUILD_DIR="$PWD/core/build-dev" ZLINK_BUILD_JOBS=4 \
+    bash bindings/cpp/tests/run_tests.sh
+All cpp contract tests must pass. Update tests that counted per-part native calls to the new
+observable behavior (no public-contract weakening; explain each).
+
+COMMIT (detached HEAD):
+  bindings(cpp): whole-message send + drop removed part API usage
+
+  <what changed>. Public cpp surface unchanged. Refs #63.
+  Test: ZLINK_CORE_SOURCE=local ... bindings/cpp/tests/run_tests.sh — <pass summary>
+
+  Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01Df7vbMq5yraG6siDn8PAUH
+
+REPORT: files changed, send ownership/retry handling, tests updated & why, exact cpp test pass summary.
