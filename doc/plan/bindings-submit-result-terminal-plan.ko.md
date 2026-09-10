@@ -21,7 +21,7 @@
 | G2 | **Java 파일럿**: 종결자·CompletionOwner·contract test·Kotlin 확장 | job `java-submit-result` | contract 통과, 성공 기준 1 |
 | G3 | Java perf multi/single reqrep·sendsend 클라이언트를 §5 규칙으로; gRPC 벤치 Java raw 드라이버 | job `java-perf-submit-result` | 성공 기준 2·3 |
 | G4 | 나머지 6언어 병렬(cpp·dotnet·node·go·rust·python): 종결자·owner·contract test·perf 클라이언트 | job 6개(동시 ≤5, `env-job-concurrency-cap`) | 언어별 contract·perf 통과 |
-| G5 | framework 4언어 호출부 `.reply()` 전환, samples·guide 코드 블록 | job 4개 또는 G4 job에 포함 | framework 테스트·e2e(cross-language) |
+| G5 | framework 4언어: 내부 binding 소비를 결과 객체로(F1), 동기 blocking 종결자 추가(F2·F2-a), samples·guide 코드 블록 | job 4개 | framework 테스트·e2e(cross-language)·F2-a 회귀 |
 | G6 | 전체 perf 재측정(multi 전 패턴, 4 size, tcp) 전후 비교; gRPC 벤치 Java 3-run | 감독자 ticket | 성공 기준 4 |
 | G7 | 릴리스 노트(breaking), 문서 검사(`check_doc_links`, `check_prose_neutrality`) | 감독자 | 완료 기준 |
 
@@ -86,31 +86,54 @@ G2 결과가 설계를 바꾸면 G4 전에 draft를 갱신한다. G4 언어별 j
 
 framework의 hot path(08장 E1~E5)는 `.reply()`만 쓰므로 hop이 늘지 않는다. 결과 객체 할당 1회는 E2 측정에 포함해 확인한다.
 
-### 6.1 framework 스펙 검토 (`framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md`, 2026-09-10)
+### 6.1 framework 스펙 검토와 결정 (`framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md`, 2026-09-10, 사용자 결정)
 
-framework는 binding 정책을 따르므로 두 층으로 나눠 본다.
+framework는 binding 정책을 따르되, 다음 두 결정으로 범위를 정한다.
 
-**(a) 반드시 바뀌는 것 — binding 소비 규칙.** §15 "Binding send terminal 소비": framework는 binding **async terminal만** 쓴다고
-정하고, 예외로 "즉시 backpressure 관찰은 `DONTWAIT` sync terminal이 유일한 표면"이라 적었다. 결과 객체 뒤에는 async terminal이
-`result`로 즉시 backpressure를 주므로 그 예외 문장은 지운다. 호출부는 `.reply()`(request)·`.admitted()`(send)를 쓴다.
-§5 "Core HWM으로 binding operation이 대기하면 Core가 재시도를 소유하고 operation별 completion awaitable을 완료한다"는 그대로
-성립한다(`admitted`가 그 awaitable). 공개 terminal은 건드리지 않아도 된다.
+**결정 F1 — framework 메시징 공개 terminal은 backpressure를 노출하지 않는다.** 내부 socket을 숨기는 layer가 admission 상태를
+돌려주면 호출자가 socket 수준 제어를 떠안는다. 공개 계약(§2 terminator 완료 의미, §4 one-way admission 경계, §5 "`Backpressured`는
+public terminal result가 아니다", 04 §8 3단계 backpressure)은 그대로다. **framework 내부 구현**이 binding 결과 객체의
+`result`·`admitted`를 소비해 "HWM에 걸렸을 때만 기다린다"를 정확히 구현한다. 지금까지는 stage 하나로 admission과 reply를 구분할
+수 없어 3단계 대기가 정확하지 않았다. gRPC 벤치 framework 행의 깊이가 permit으로 정해지는 것은 이 설계의 결과이며 규격 §5.2대로
+깊이와 함께 읽는다.
 
-**(b) 결정이 필요한 것 — framework 공개 terminal.** 현재 계약(§2·§4·§5·§16): one-way 비동기 terminal은 source-local admission에서
-완료, request terminal은 application 결과에서 완료, `Backpressured`는 **public terminal result가 아니다**(§5, 04 §8 3단계
-backpressure). 그래서 framework 호출자는 binding 호출자와 같은 문제를 갖는다 — one-way는 "반환 시 이미 완료됐는가"로 admission을
-간접 판정할 수 있지만, request는 admission과 reply가 stage 하나라 producer가 멈출 지점을 알 수 없다. gRPC 벤치 framework 행이
-permit(10)으로만 깊이가 정해지는 이유다.
+**결정 F2 — framework 메시징 call에 동기 blocking 종결자를 추가한다.** §4의 "동기 `TrySubmit` 계열을 제공하지 않는다"는
+nonblocking try를 막은 것이고 blocking 동기 종결자는 별개다. nonblocking 완료를 주는 유일한 대안은 callback인데 복잡하고 혼동을
+주므로 동기 종결자는 **blocking만** 제공한다. 이름은 binding 정책 `bindings/doc/spec/async-coroutine-policy.ko.md` §6을 따른다.
 
-| 선택 | 내용 | 스펙 영향 |
+| 언어 | 비동기(현행) | 동기 blocking(추가) |
 |---|---|---|
-| B1 | framework 공개 terminal 불변. (a)만 반영 | §15 한 문단. 언어별 interface 문서 불변 |
-| B2 | framework one-way·request call도 결과 객체(`result`·`admitted`·`reply`)를 돌려준다. `result`는 framework source-local admission(Application Job Queue permit + Core admission)의 즉시 결과. **`Backpressured`는 여전히 실패가 아니며**(§5 유지) 대기 중 상태를 알리는 값이 된다 | §2 표(terminator 완료 의미에 admission stage 추가), §4(one-way의 반환값), §5(`Backpressured`를 "public terminal result가 아니다"에서 "결과 객체의 상태값이며 실패로 끝나지 않는다"로), §16 표와 5개 언어 interface 문서, 08장 E2 문구 |
+| Java·Node | `submit()` | `submit_sync()` |
+| Kotlin | 전용 wrapper `await()` | 추가 없음(Java 표면의 `submit_sync()` 그대로 노출) |
+| .NET | `Async()` | `Submit()` |
+| C++ | `async()` | `submit()` |
 
-권고: **B2.** framework가 binding 정책을 따른다는 원칙과, request-backpressure 패턴을 framework 행에서도 같은 규칙으로 재려면
-producer가 admission을 봐야 한다는 점 때문이다. §5의 "Backpressured로 실패하지 않는다"와 04 §8 3단계(permit 대기 → deadline)는
-그대로 두고, 결과 객체는 그 대기 중임을 알려 줄 뿐이다. 결정되면 G5를 "호출부 이관 + 공개 terminal 변경"으로 넓히고 언어별
-interface 문서 5개(dotnet·java·kotlin·node·cpp)를 §3에 추가한다.
+**규칙 F2-a — blocking 종결자는 runtime 실행 문맥에서 부를 수 없다.** handler turn·Spot turn·state lane 위에서 blocking하면 gate를
+쥔 채 완료를 기다려 교착한다. 스펙 06 §5(반환 전 완료 보장)·02(handler turn)와 같은 원칙으로, runtime 실행 문맥에서 동기
+종결자를 부르면 `InvalidOperation`으로 즉시 실패한다. 동기 종결자의 용도는 application thread(main·테스트·스크립트)다.
+
+**framework 스펙 수정 대상 (G1에 포함, ko+en, 감독자)**
+
+| 파일 | 절 | 수정 |
+|---|---|---|
+| `01-submit-and-completion.ko.md` | §2 terminator 표 | 동기 blocking 종결자 행 추가: "application 결과(또는 one-way admission)까지 호출 thread를 막는다; runtime 실행 문맥에서는 `InvalidOperation`" |
+| 같은 파일 | §4 | "동기 `TrySubmit` 계열을 제공하지 않는다" → "nonblocking try 계열을 제공하지 않는다. 동기 blocking 종결자는 §2 표와 같다"; F2-a 규칙 |
+| 같은 파일 | §5 | 변경 없음(`Backpressured`는 public result가 아님 유지). "Core가 재시도를 소유하고 operation별 completion awaitable을 완료한다"에 "(binding 결과 객체의 `admitted`)" 명시 |
+| 같은 파일 | §15 | "즉시 backpressure 관찰은 `DONTWAIT` sync terminal이 유일한 표면" 예외 삭제. framework는 binding async terminal의 결과 객체를 소비: `result`로 즉시 판정, `BACKPRESSURED`면 `admitted`를 기다림, request는 `reply` |
+| 같은 파일 | §16 | 표에 동기 blocking 열 추가; C++ 문단("blocking `submit()`과 coroutine terminal을 함께 제공하지 않는다") 삭제하고 `submit()`+`async()` 둘 제공으로 |
+| `../languages/{dotnet,java,kotlin,node,cpp}/interfaces/*` | messaging call 시그니처 | 동기 종결자 추가, F2-a 오류 |
+| `08-messaging-hot-path.ko.md` | E2(제출) | binding 종결자 결과 객체 소비 문구(hop 수 불변) |
+
+**framework 코드 수정 대상 (G5)**
+
+| 언어 | 내부 소비 | 동기 종결자 |
+|---|---|---|
+| java | `ZLinkJavaRawServicePort.java:211-219` 등 `router.request/send` 호출부 → `.reply()`/`.admitted()`; 3단계 backpressure가 `result`를 사용 | `ZLinkSendCall`·`ZLinkRequestCall`에 `submit_sync()`; runtime 문맥 검사 |
+| dotnet | `TrySubmit()` 호출부 2곳(`ZLinkBackendStreamSocketWrapper.cs:356`, `ZLinkManagedMeshNode.cs:12447`) + raw 호출부 → `Async()` 결과 객체 | `Submit()` blocking; 문맥 검사 |
+| node | raw 호출부 → 결과 객체 | `submit_sync()`; 문맥 검사 |
+| cpp | raw 호출부 → `send_submission_t`/`request_submission_t` | `submit()` blocking; 문맥 검사 |
+
+G5 게이트: framework 테스트·cross-language e2e 통과 + F2-a 회귀 테스트(handler turn 안에서 `submit_sync()` → `InvalidOperation`) 4언어.
 
 ## 7. 검증·측정 (G6)
 
@@ -129,6 +152,7 @@ interface 문서 5개(dotnet·java·kotlin·node·cpp)를 §3에 추가한다.
 ## 9. 진행 로그
 
 - 2026-09-10: 사용자 결정으로 draft·plan 작성. G0 결정 반영(§2: 정책 §6 이름 유지, `TrySubmit` 제거, 같은 모양 원칙). Go 형태만 확인 대기.
+- 2026-09-10: framework 검토 결정 F1(공개 terminal은 backpressure 미노출, 내부 구현만)·F2(동기 blocking 종결자 추가, 이름은 binding 정책 §6)·F2-a(runtime 문맥에서 호출 금지). §6.1.
 - 2026-09-10: #86 CI 재실행 결과 — framework-dotnet 단위 테스트 4플랫폼 588건 실패. 원인은 코드가 아니라 구성:
   `DllNotFoundException: Loaded zlink library is missing required export 'zlink_publish'`. 워크플로가 `VERSION`의
   `LIBZLINK_VERSION=0.17.5` **릴리스 아카이브**를 내려받아 쓰는데 PR의 바인딩은 새 whole-message export를 요구한다

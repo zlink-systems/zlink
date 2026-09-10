@@ -259,10 +259,18 @@ send에서는 `result == BACKPRESSURED`로 바뀐다. publish는 `void`·완료 
 | Rust | `operations.rs` `submit` | `send_ops.rs`/`routed_async.rs` `SendAttempt::Waiting` 경로에 admitted future |
 | Python | `operations.py` `submit` | `socket_base_impl.py` bridge가 `(result, awaitable)` 반환 |
 
-### 6.3 호출부
+### 6.3 framework (사용자 결정 2026-09-10, plan §6.1)
 
-- framework 4언어의 binding 호출부(예 Java `ZLinkJavaRawServicePort.java:211-219`): `submit()` → `.reply()`.
-  의미 변화 없음. .NET·Node·C++ 동일 위치는 plan에 목록.
+- **F1**: framework 메시징 공개 terminal은 backpressure를 노출하지 않는다(01 §5 유지). framework 내부가 binding 결과 객체를 소비해
+  3단계 backpressure(04 §8)를 "`BACKPRESSURED`일 때만 `admitted` 대기"로 정확히 구현한다.
+- **F2**: framework 메시징 call에 동기 **blocking** 종결자를 추가한다. 이름은 binding 정책 §6(Java·Node `submit_sync()`, .NET `Submit()`,
+  C++ `submit()`). nonblocking try·callback 종결자는 만들지 않는다.
+- **F2-a**: blocking 종결자를 handler turn·Spot turn·state lane 등 runtime 실행 문맥에서 부르면 `InvalidOperation`.
+
+### 6.4 호출부
+
+- framework 4언어의 binding 호출부(예 Java `ZLinkJavaRawServicePort.java:211-219`): `submit()` → `.reply()`/`.admitted()`.
+  공개 의미 변화 없음(F1). .NET `TrySubmit()` 호출부 2곳 포함. 위치는 plan §6.
 - bindings perf multi·single의 send·request 클라이언트 7언어(§5).
 - gRPC 벤치 raw 드라이버 4언어(Java `RawStack`·`BenchDrivers.runRaw` 외).
 - samples·tests·guide 코드 블록.
