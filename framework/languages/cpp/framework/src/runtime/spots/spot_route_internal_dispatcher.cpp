@@ -103,19 +103,20 @@ bool spot_route_internal_dispatcher_t::can_handle_request (std::string_view pack
 
 result_t<void>
 spot_route_internal_dispatcher_t::dispatch_send (const route_received_packet_t &received,
+                                                 const runtime::messaging::envelope_header_t &header,
                                                  service_provider_t &services) const
 {
-    return dispatch_send (received, services, {}, 0);
+    return dispatch_send (received, header, services, {}, 0);
 }
 
 result_t<void>
 spot_route_internal_dispatcher_t::dispatch_send (
   const route_received_packet_t &received,
+  const runtime::messaging::envelope_header_t &header,
   service_provider_t &services,
   std::function<void ()> transfer_owner_reservation,
   std::size_t transferred_owner_byte_cost) const
 {
-    (void) received;
     (void) services;
     auto body = runtime::messaging::envelope_codec_t{}.decode_body (received.parts);
     if (!body) {
@@ -124,14 +125,7 @@ spot_route_internal_dispatcher_t::dispatch_send (
                                                               : "actor route send body missing");
     }
     try {
-        /* Internal control packets never consume the flow pair. */
-        const auto header = runtime::messaging::envelope_codec_t{}
-          .decode_header (received.parts, false);
-        if (!header) {
-            return detail::propagate_failure<void> (
-              header, "SPOT route send header is invalid");
-        }
-        if (header.value ().message_name
+        if (header.message_name
               == spot_multicast_route_send_t::packet_name) {
                 auto request = _serializers
                   ->get<spot_multicast_route_send_t> ()
@@ -146,7 +140,7 @@ spot_route_internal_dispatcher_t::dispatch_send (
                          : detail::propagate_failure<void> (
                              dispatched, "SPOT multicast route dispatch failed");
         }
-        if (header.value ().message_name
+        if (header.message_name
             == spot_actor_commit_route_request_t::packet_name) {
             auto request =
               _serializers->get<spot_actor_commit_route_request_t> ().deserialize (
@@ -157,14 +151,14 @@ spot_route_internal_dispatcher_t::dispatch_send (
                   "remote Actor cutover command shape is invalid");
             }
             dispatch_actor_commit_request (
-              std::move (request), received, header.value (), services,
+              std::move (request), received, header, services,
               [] (result_t<zlink::message_t>) {
                   // Cutover is one-way. Target lifecycle/completion owns the
                   // terminal Actor Join outcome; there is no source reply leg.
               });
             return result_t<void>::success ();
         }
-        if (header.value ().message_name
+        if (header.message_name
             == spot_actor_leave_route_command_t::packet_name) {
             const auto command = _serializers
               ->get<spot_actor_leave_route_command_t> ()

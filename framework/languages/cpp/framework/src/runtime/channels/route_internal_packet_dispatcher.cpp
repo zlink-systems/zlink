@@ -19,9 +19,11 @@ bool no_route_internal_packet_dispatcher_t::can_handle_request (std::string_view
 
 result_t<void>
 no_route_internal_packet_dispatcher_t::dispatch_send (const route_received_packet_t &received,
+                                                      const runtime::messaging::envelope_header_t &header,
                                                       service_provider_t &services) const
 {
     (void) received;
+    (void) header;
     (void) services;
     return result_t<void>::failure (framework_error_kind_t::not_found,
                                     "no routed internal send dispatcher is configured");
