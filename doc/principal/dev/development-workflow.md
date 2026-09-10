@@ -30,6 +30,13 @@ The procedure exists for **changes that land in main**. Not every task carries t
 | **A defect found** | yes (stays open until fixed) | when fixing | when fixing | listed |
 | **A throwaway experiment or measurement** | **no** | a temporary one if code must change, not on the board | **no** | not listed |
 
+**When an experiment produces something worth keeping, open a PR from it directly, with no Issue.**
+Branch protection asks for a PR, not for an Issue. Naming the report path and the measurements in the
+PR body is traceability enough. An Issue is for the other cases — work that spans sessions or people,
+work deferred rather than done now, and work that has to appear in a release-scope decision. So the
+default path is **experiment → (if good) PR**, and an Issue is created when the work must be handed
+over or postponed.
+
 An experiment leaves only its brief and report under `.artifacts/codex/<name>/`. When it must change
 code it gets a worktree without an Issue, a PR or a board entry, and that worktree is removed
 afterwards with the sweep in [§4.3](#43-the-other-development-scripts). When an experiment **finds a
