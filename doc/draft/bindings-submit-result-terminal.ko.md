@@ -169,22 +169,29 @@ void / std::vector<message_t> submit () &&;              // 불변
 ### Go
 
 ```go
-type SendSubmission struct {
-    Result   SubmitResult
-    Admitted <-chan error          // 닫히거나 error 하나
+// 결과 객체: 대기는 ctx를 받는 메서드가 한다(Go 관용). 채널 필드는 쓰지 않는다.
+type SendSubmission interface {
+    Result() SubmitResult                 // OK | BACKPRESSURED, 제출 시점 스냅샷
+    Admitted(ctx context.Context) error   // OK면 즉시 nil; BACKPRESSURED면 재제출 admission까지 block
 }
-type RequestSubmission struct {
-    Result   SubmitResult
-    Admitted <-chan error
-    Reply    <-chan RequestReply   // {Parts []*Message; Err error}
+type RequestSubmission interface {
+    Result() SubmitResult
+    Admitted(ctx context.Context) error
+    Reply(ctx context.Context) ([]*Message, error)   // reply까지 block; 지금의 Submit 결과와 같음
 }
-func (b *sendBuilder)    Submit(ctx context.Context) (SendSubmission, error)     // 이전: error
-func (b *requestBuilder) Submit(ctx context.Context) (RequestSubmission, error)  // 이전: ([]*Message, error)
+func (b *sendBuilder)    Submit(ctx context.Context) (SendSubmission, error)     // 이전: error (admission까지 block)
+func (b *requestBuilder) Submit(ctx context.Context) (RequestSubmission, error)  // 이전: ([]*Message, error) (reply까지 block)
 ```
 
-Go의 종결자 이름은 정책(`async-coroutine-policy.ko.md` §6)대로 `Submit(context.Context)` 하나만 둔다. 새 이름을 만들지
-않는다. 제안은 `Submit(ctx)`가 결과 객체를 돌려주고 reply는 채널로 받는 것이며(`<-sub.Reply`가 지금의 블로킹 결과),
-정책 §6 Go 행을 그렇게 고친다. 사용자 확인 대기(plan §2 #5).
+- 이름은 정책 §6대로 `Submit(context.Context)` 하나다. `Submit`은 native 제출 한 번을 하고 **즉시** 돌려준다. `ctx`는 제출 시도에만
+  적용되고, 각 대기 메서드는 자기 `ctx`로 취소·deadline을 받는다.
+- 기존 호출부 변환: `parts, err := op.Submit(ctx)` → `sub, err := op.Submit(ctx); parts, err := sub.Reply(ctx)`.
+- 즉시 실패는 `Submit`의 `error`로(다른 언어의 예외와 같은 자리). `Admitted`·`Reply`의 error는 토큰 종료·timeout·취소.
+- publish(`PublishSubmitOp.Submit(ctx) (bool, error)`)와 reply(`Submit(ctx) error`)는 불변.
+- perf reqrep는 goroutine당 요청 대신 한 goroutine에서 `Submit` → `Result()==BACKPRESSURED`면 `Admitted(ctx)` → 계속 제출하고,
+  reply는 별도 goroutine에서 `Reply(ctx)`를 모은다(C reference 모양).
+- Go 스펙(`bindings/doc/spec/go/README.ko.md:132, :265`)의 "Submit이 완료를 기다린다"는 "Submit은 제출을 시작하고 결과 객체를
+  돌려주며 완료 대기는 결과 객체의 메서드가 한다"로 바꾼다.
 
 ### Rust
 

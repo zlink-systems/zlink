@@ -35,7 +35,7 @@ G2 결과가 설계를 바꾸면 G4 전에 draft를 갱신한다. G4 언어별 j
 | 2 | 필드 이름 | `result`, `admitted`, `reply` (언어 관례 대소문자) |
 | 3 | 즉시 실패의 전달 | 예외/에러 유지(draft §3.1) |
 | 4 | 종결자 이름 | **`bindings/doc/spec/async-coroutine-policy.ko.md` §6 표 그대로.** 새 이름을 만들지 않는다. 비동기 종결자(Java·Node·Python·Rust `submit()`, .NET `Async()`, C++ `async()`)의 반환형만 결과 객체로 바꾼다. 동기 종결자(`submit_sync()`, .NET·C++ `submit()`) 불변 |
-| 5 | Go | 정책 §6의 Go 종결자는 `Submit(context.Context)` 하나(동기). 제안: `Submit(ctx)`가 `(RequestSubmission, error)`를 돌려주고 `Reply`는 채널로 받는다(`<-sub.Reply`가 지금의 블로킹 결과). 정책 §6 Go 행을 이렇게 고친다. **확인 필요** |
+| 5 | Go | **결정(2026-09-10)**: 정책 §6 이름 `Submit(context.Context)` 하나 유지. `Submit(ctx)`는 native 제출 한 번을 하고 **즉시** 결과 객체를 돌려주며, 대기는 결과 객체의 메서드가 한다 — `Result() SubmitResult`, `Admitted(ctx) error`(OK면 즉시 nil), request는 `Reply(ctx) ([]*Message, error)`. 채널 필드 대안(B-1)은 ctx 취소·채널 수명 부담으로 기각. 기존 호출부는 `parts, err := op.Submit(ctx)` → `sub, err := op.Submit(ctx); parts, err := sub.Reply(ctx)`. Go 스펙 `README.ko.md:132, :265`와 정책 §6 Go 행 수정. publish·reply 불변 |
 | 6 | .NET `TrySubmit()` (send·reply, `OperationContracts.cs:54`) | **제거.** 결과 enum이 대체한다. 호출부 2곳 이관: `framework/languages/dotnet/.../ZLinkBackendStreamSocketWrapper.cs:356`, `ZLinkManagedMeshNode.cs:12447` |
 | 7 | Rust `admitted`/`reply` 타입 | `Pin<Box<dyn Future<Output = …> + Send>>`로 시작. perf에서 회귀가 보이면 명명 타입으로 바꾼다 |
 | 8 | Python `result` | 결과 객체 속성. publish는 불변 |
@@ -63,7 +63,7 @@ G2 결과가 설계를 바꾸면 G4 전에 draft를 갱신한다. G4 언어별 j
 | dotnet | `Contracts/Messaging/OperationContracts.cs` `Async()`; `TrySubmit()` 제거(send·reply) | `Runtime/Messaging/CompletionOwner.cs` entry `Arm*`/`Retry`, `TrySend` 경로 삭제 | contract |
 | node | `contracts/messaging/operations.ts` | `runtime/messaging/completion_owner.ts` | contract |
 | cpp | `include/zlink/Contracts/Messaging/operation_contracts.hpp` `async()` | `src/Runtime/Messaging/completion_owner.cpp`, `send_operations.cpp` | `tests/contract` |
-| go | `internal/native/operations.go`, `root_projection.go` | writable retry 경로 | `writable_retry_test.go` 확장 |
+| go | `internal/native/operations.go` `sendBuilder.Submit`/`requestBuilder.Submit` → `(SendSubmission, error)`/`(RequestSubmission, error)`, `root_projection.go` 노출 | writable retry 경로가 `Admitted(ctx)`를 완성; `Reply(ctx)`는 기존 reply 대기 | `writable_retry_test.go` 확장, surface_test 갱신 |
 | rust | `src/contracts/messaging/operations.rs` | `runtime/messaging/operations/{send_ops,routed_async}.rs` | `tests/contract_tests.rs` |
 | python | `contracts/sockets/operations.py` | `_runtime/sockets/socket_base_impl.py` bridge | tests |
 
@@ -152,6 +152,7 @@ G5 게이트: framework 테스트·cross-language e2e 통과 + F2-a 회귀 테�
 ## 9. 진행 로그
 
 - 2026-09-10: 사용자 결정으로 draft·plan 작성. G0 결정 반영(§2: 정책 §6 이름 유지, `TrySubmit` 제거, 같은 모양 원칙). Go 형태만 확인 대기.
+- 2026-09-10: Go 결정 — `Submit(ctx)` 즉시 반환 + `Result()`/`Admitted(ctx)`/`Reply(ctx)` 대기 메서드(§2 #5). G0 결정표 완료.
 - 2026-09-10: framework 검토 결정 F1(공개 terminal은 backpressure 미노출, 내부 구현만)·F2(동기 blocking 종결자 추가, 이름은 binding 정책 §6)·F2-a(runtime 문맥에서 호출 금지). §6.1.
 - 2026-09-10: #86 CI 재실행 결과 — framework-dotnet 단위 테스트 4플랫폼 588건 실패. 원인은 코드가 아니라 구성:
   `DllNotFoundException: Loaded zlink library is missing required export 'zlink_publish'`. 워크플로가 `VERSION`의
