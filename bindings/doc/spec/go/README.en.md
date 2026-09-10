@@ -303,11 +303,24 @@ type SendOp interface {
     Bytes([]byte) SendSubmitOp
 }
 
+// Waiting is done by the result object's methods (Go idiom). Submit does one
+// native submission and returns immediately.
+type SendSubmission interface {
+    Result() SubmitResult                 // OK | BACKPRESSURED, submit-time snapshot
+    Admitted(ctx context.Context) error   // nil immediately when OK; blocks until resubmission admission when BACKPRESSURED
+}
+
+type RequestSubmission interface {
+    Result() SubmitResult
+    Admitted(ctx context.Context) error
+    Reply(ctx context.Context) ([]*Message, error)   // blocks until the reply; same as the prior Submit result
+}
+
 type SendSubmitOp interface {
     Message(*Message) SendSubmitOp
     MoveMessage(*Message) SendSubmitOp
     Bytes([]byte) SendSubmitOp
-    Submit(context.Context) error
+    Submit(context.Context) (SendSubmission, error)
 }
 
 type RequestOp interface {
@@ -319,7 +332,7 @@ type RequestSubmitOp interface {
     Message(*Message) RequestSubmitOp
     Bytes([]byte) RequestSubmitOp
     Timeout(time.Duration) RequestSubmitOp
-    Submit(context.Context) ([]*Message, error)
+    Submit(context.Context) (RequestSubmission, error)
 }
 
 type ReplyOp interface {

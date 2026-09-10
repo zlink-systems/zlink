@@ -1020,16 +1020,27 @@ first bind/connect, the `recvMode` setter accepts only `RAW` and `PACKET` and re
 ### Public interface
 
 ```java
+public interface SendSubmission {
+    SubmitResult result();              // OK | BACKPRESSURED, submit-time snapshot
+    CompletionStage<Void> admitted();   // completed when result is OK
+}
+
+public interface RequestSubmission {
+    SubmitResult result();
+    CompletionStage<Void> admitted();
+    CompletionStage<List<Message>> reply();   // completes after successful admission
+}
+
 public interface SendSubmitOperation {
     SendSubmitOperation message(Message part);
-    CompletionStage<Void> submit();
+    SendSubmission submit();
     void submit_sync();
 }
 
 public interface RequestSubmitOperation {
     RequestSubmitOperation message(Message part);
     RequestSubmitOperation timeout(Duration timeout);
-    CompletionStage<List<Message>> submit();
+    RequestSubmission submit();
     List<Message> submit_sync();
 }
 
