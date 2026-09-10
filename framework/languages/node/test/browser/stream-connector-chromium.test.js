@@ -161,7 +161,7 @@ async function connectFromPage(page, endpoint, server) {
 }
 
 async function stopStreamServer(child) {
-  await stopChild(child);
+  return stopChild(child);
 }
 
 async function cleanup(t, resource, action) {
