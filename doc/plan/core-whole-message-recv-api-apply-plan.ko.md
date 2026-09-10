@@ -123,7 +123,9 @@ title: "whole-message recv 공개 API — 적용 plan (문서·코드·perf 반�
 - 2단계(네이밍 정정) 뒤, **Core spec에 send whole-message와 제거를 함께 반영**한다(§2 대상표에 send 절 추가).
 - 4단계(Core 코드)에서 신설과 제거를 **같은 커밋 계열**로 처리하되, 심볼 제거는 마지막 커밋으로 분리해
   되돌리기 쉽게 한다. `libzlink.vers`도 함께 정리한다.
-- 6단계(바인딩 코드)에서 **각 바인딩의 내부 send 루프를 배열 한 번 호출로 교체**한다. 공개 시그니처는 불변이다.
+- 6단계(바인딩 코드)에서 **각 바인딩의 내부 send 루프를 배열 한 번 호출로 교체**한다. **공개 시그니처는
+  recv와 마찬가지로 불변이다** — 사용자는 지금처럼 파트를 builder에 얹고 한 번 submit한다. 바뀌는 것은
+  그 안에서 Core를 파트 수만큼 부르던 루프가 1회 호출이 되는 것뿐이다. 언어별 대상 위치는 draft §7.4.1.
 - 8단계(perf 하네스)에 `bindings/c/perf/single/common/perf_single_reqrep.hpp:635,647-664`를 더한다. 빈 `FINAL`만
   재시도하는 유일한 경로이며 whole-record 재시도로 바꾼다(draft §7.2 Q1).
 

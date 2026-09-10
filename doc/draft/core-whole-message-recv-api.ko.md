@@ -229,7 +229,108 @@ Framework Java의 send 지연 수정 과정에서 **`BUSY`가 반복되는 현�
 비용은 거의 전부 기계적이다. `core/doc` 약 1,000줄과 `core/tests` 약 450줄, 바인딩 내부 약 180줄이다.
 **Core 내부에는 part API 호출자가 없고, framework에는 0건이다.**
 
-### 7.4 결정해야 할 것 셋
+### 7.4 신설 send 시그니처 (초안)
+
+recv와 같은 관용을 따른다 — caller-제공 배열, `parts_capacity_`, `part_count_out_`. 한 번의 호출이 record
+하나를 원자적으로 제출하며 part 중간 상태가 남지 않는다. **모든 슬롯의 msg는 호출이 소비한다**(현재
+`zlink_send_part`의 "Every call consumes part_"와 같다). 부분 소비는 없다 — 실패하면 전부 소비되지 않았거나
+전부 소비된 것 중 하나이며, 어느 쪽인지는 결과 코드가 정한다(§7.4의 계약 3).
+
+```c
+/* PAIR·DEALER: record 하나(모든 part)를 한 번에 제출. parts_는 caller-제공 배열(길이 part_count_).
+ * 성공·backpressure 판정은 record 단위다. 부분 제출 상태는 남지 않는다. */
+ZLINK_EXPORT zlink_submit_result_t
+zlink_send (void *s_,
+            zlink_msg_t *parts_, size_t part_count_,
+            zlink_send_flags_t flags_,
+            void *user_context_,
+            zlink_completion_id_t *completion_id_out_);
+
+/* ROUTER: 대상 RID를 지정해 record 하나를 제출. */
+ZLINK_EXPORT zlink_submit_result_t
+zlink_send_rid (void *s_,
+                const zlink_routing_id_t *target_rid_,
+                zlink_msg_t *parts_, size_t part_count_,
+                zlink_send_flags_t flags_,
+                void *user_context_,
+                zlink_completion_id_t *completion_id_out_);
+
+/* REQUEST: record 하나를 제출하고 reply를 기다리는 완료를 등록한다.
+ * 현재 zlink_request_part의 "MORE는 timeout_ms_ == 0, user_context_ == NULL" 제약이 사라진다 —
+ * record가 한 번에 제출되므로 timeout·context를 나눠 줄 이유가 없다. */
+ZLINK_EXPORT zlink_submit_result_t
+zlink_request (void *s_,
+               const zlink_routing_id_t *target_router_rid_or_null_,
+               zlink_msg_t *parts_, size_t part_count_,
+               zlink_send_flags_t flags_,
+               uint32_t timeout_ms_,
+               void *user_context_,
+               zlink_completion_id_t *completion_id_out_);
+
+/* REPLY: 받은 record의 reply token으로 응답 record 하나를 제출. */
+ZLINK_EXPORT zlink_submit_result_t
+zlink_reply (void *s_,
+             const zlink_routing_id_t *source_rid_,
+             zlink_reply_token_t reply_token_,
+             zlink_msg_t *parts_, size_t part_count_);
+
+/* PUBLISH: topic으로 record 하나를 발행. */
+ZLINK_EXPORT zlink_submit_result_t
+zlink_publish (void *subject_,
+               const char *topic_id_,
+               zlink_msg_t *parts_, size_t part_count_,
+               zlink_send_flags_t flags_);
+```
+
+대응하는 recv 쪽 추가분(§3.3의 두 개에 더한다):
+
+```c
+/* SUB·XSUB: topic과 record 하나(모든 part)를 함께 수신. zlink_subscribe_part를 대체한다.
+ * topic 버퍼 관용은 기존과 같다(capacity + len_out). */
+ZLINK_EXPORT zlink_recv_result_t
+zlink_subscribe (void *sub_,
+                 const zlink_routing_id_t **source_rid_out_,
+                 char *topic_id_buf_, size_t topic_id_capacity_, size_t *topic_id_len_out_,
+                 zlink_msg_t *parts_out_, size_t parts_capacity_, size_t *part_count_out_,
+                 zlink_recv_flags_t flags_);
+```
+
+**이름**: 기존 이름에서 `_part`만 떼는 형태로 맞춘다 — `send_part`→`send`, `send_part_rid`→`send_rid`,
+`request_part`→`request`, `reply_part`→`reply`, `publish_part`→`publish`, `recv_part`→`recv`,
+`router_recv_part`→`router_recv`, `subscribe_part`→`subscribe`. §3.3의 "이름 확정 검토"는 이 규칙으로 닫는다.
+
+**STREAM**: `zlink_stream_send`는 단일 part 계약이므로(§7.2 Q3) `part_count_ == 1`만 허용하거나 기존 단일 msg
+시그니처를 유지한다. 유효한 RID로 보내는 길이 0 part의 "peer 끊기" 의미를 보존해야 한다.
+
+**바뀌는 것 하나 더**: `zlink_part_flag_t`(MORE/FINAL)는 send 경로에서 사라진다. recv 쪽 `has_more_out_`도
+`part_count_out_`로 대체된다. 즉 공개 표면에서 part flag 개념 자체가 없어진다.
+
+### 7.4.1 바인딩 매핑 — send도 "내부 구현"만 바뀐다 (공개 시그니처 불변)
+
+§4가 recv에 대해 정한 것과 **완전히 같다.**
+
+- 각 바인딩의 공개 send·request·reply·publish는 이미 **parts 컬렉션을 받는 형태**다. 사용자는 파트 목록을
+  builder에 얹고 한 번 `submit()`한다(`.message(a).message(b).submit()`). **공개 시그니처는 바뀌지 않는다.**
+- **바뀌는 것은 그 함수의 내부 구현뿐**이다. 지금은 바인딩이 파트마다 `part_flag_`를 계산해 Core를
+  `part_count_`번 호출하는 루프를 돈다. 신설 후에는 **Core whole-message send를 1회 호출**한다
+  (루프·파트별 경계 왕복·flag 계산 제거).
+- **언어별 내부 변경 지점**(적용 plan §10.3의 6단계 대상):
+
+  | 바인딩 | send 내부 루프 위치(변경 대상) |
+  |---|---|
+  | Java | `bindings/java/src/main/java/systems/zlink/runtime/sockets/SocketSendPlane.java:372-383`(`submitBlockingParts`), `:398-412`(`submitNoWaitPartsAttempt`), `:430-440` |
+  | .NET | `bindings/dotnet/src/Zlink/Runtime/Messaging/RequestReplySupport.cs:241` 및 같은 파일의 part 루프 |
+  | Rust | `bindings/rust/src/runtime/messaging/operations/send_ops.rs:100,128-147,366-383`(`submit_part_sequence`) |
+  | Python | `bindings/python/src/zlink/_native/_zlink_native.c:729-732,875,1114,1237,1293,1333`(part flag 계산 `:199`) |
+  | C++·Node·Go | 각 언어 send 경로의 동일 루프(적용 plan에서 파일:줄 확정) |
+
+- **없어지는 것**: 파트마다 하는 `part_flag_` 계산, 파트별 네이티브 경계 왕복, 파트 도중 실패 시의 부분 상태
+  처리. 재시도는 record 단위 한 번이 된다.
+- **유지되는 것**: 각 파트 msg의 소유권 이전 의미(제출이 소비한다), 단건 fast path, 공개 오류 분류.
+- 이득의 크기: .NET 진단에서 메시지당 네이티브 경계가 14회로 집계됐다. send·recv를 모두 1회로 줄이면
+  그 대부분이 사라진다. perf 하네스는 이미 공개 API를 쓰므로 **재작성 없이 자동 반영**된다.
+
+### 7.5 결정해야 할 것 셋
 
 1. **제거 범위**: `zlink_reply_part`·`zlink_publish_part`·`zlink_subscribe_part`까지 포함한다(§3의 6개 목록은
    불완전하다).
@@ -237,7 +338,7 @@ Framework Java의 send 지연 수정 과정에서 **`BUSY`가 반복되는 현�
 3. **`count > capacity` 계약을 정한다.** 지금의 드레인 루프에는 이 실패가 없다. record를 잃지 않으면서
    필요한 개수를 알려주는 방식이어야 한다(§3의 capacity 초과 완료 조건과 같은 규칙).
 
-### 7.5 왜 지금인가
+### 7.6 왜 지금인가
 
 1.0 전이라 제거가 가능하다. 이후에는 호환성 문제가 된다. 그리고 표면이 하나가 되면
 "한 record는 같은 thread" 제약과 미완성 record 상태, 그로 인한 `BUSY`·재시도 규칙이 함께 사라진다.
