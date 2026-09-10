@@ -183,14 +183,14 @@ public final class BenchDrivers {
                 submission = operation.submitRaw(
                     trigger.payloadBytes(), phase, sequence++);
             } catch (RuntimeException error) {
-                source.complete(started, false);
+                source.complete(started, error);
                 continue;
             }
 
             CompletableFuture<Void> completion = submission.completion();
             pending.add(completion);
             completion.whenComplete((ignored, error) -> {
-                source.complete(started, error == null);
+                source.complete(started, error);
                 pending.remove(completion);
             });
 
