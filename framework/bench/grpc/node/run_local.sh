@@ -24,7 +24,6 @@ DRAIN_BOUND_MS=30000
 REQUEST_TIMEOUT_MS=30000
 ROUTE_READY_MS=30000
 LATENCY_SAMPLE_LIMIT=200000
-UNSUPPORTED_REASON='framework-codec-protobuf has no bytes value kind; protobuf bytes body is encoded as an object and does not round-trip as bytes'
 
 [[ "${RUNS}" =~ ^[1-9][0-9]*$ ]] || { echo "RUNS must be a positive integer" >&2; exit 2; }
 [[ "${RUN_DEALER}" == "0" ]] || { echo "RUN_DEALER is unsupported; raw comparison is ROUTER<->ROUTER" >&2; exit 2; }
@@ -41,9 +40,9 @@ for payload in "${payloads[@]}"; do
 done
 
 case "${SCENARIO}" in
-  all) patterns=(request-serial request-window request-backpressure send-saturation) ;;
-  request) patterns=(request-serial request-window request-backpressure) ;;
-  request-serial|request-window|request-backpressure|send-saturation) patterns=("${SCENARIO}") ;;
+  all) patterns=(request-serial request-backpressure send-saturation) ;;
+  request) patterns=(request-serial request-backpressure) ;;
+  request-serial|request-backpressure|send-saturation) patterns=("${SCENARIO}") ;;
   send|command) patterns=(send-saturation) ;;
   *) echo "unknown SCENARIO: ${SCENARIO}" >&2; exit 2 ;;
 esac
@@ -210,38 +209,6 @@ if errors == 0 and abandoned == 0 and completed != received:
 PY
 }
 
-record_unsupported() {
-  local run_id="$1" cell_id="$2" pattern="$3" payload="$4"
-  python3 - "${OUTROOT}/unsupported.json" "${run_id}" "${cell_id}" "${pattern}" \
-    "${payload}" "${UNSUPPORTED_REASON}" <<'PY'
-import json
-import os
-import sys
-
-path, run_id, cell_id, pattern, payload, reason = sys.argv[1:]
-if os.path.exists(path):
-    with open(path, encoding="utf-8") as handle:
-        document = json.load(handle)
-else:
-    document = {"schema": "with-grpc-unsupported-v1", "cells": []}
-document["cells"].append({
-    "implementation": "zlink-framework-node",
-    "pattern": pattern,
-    "payload_size": int(payload),
-    "runId": run_id,
-    "cellId": cell_id,
-    "status": "unsupported",
-    "reason": reason,
-})
-temporary = path + ".write"
-with open(temporary, "w", encoding="utf-8") as handle:
-    json.dump(document, handle, indent=2)
-    handle.write("\n")
-os.replace(temporary, path)
-PY
-  echo "UNSUPPORTED,zlink-framework-node-${pattern},${payload},${UNSUPPORTED_REASON}" | tee -a "${overall_report}"
-}
-
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   load_average="$(cut -d' ' -f1 /proc/loadavg)"
   awk -v load_avg="${load_average}" 'BEGIN { exit !(load_avg < 10.0) }' || {
@@ -309,13 +276,13 @@ for run in $(seq 1 "${RUNS}"); do
           --command-endpoint "${target_command_endpoint}" --metrics-url "${target_stats_url}")
         ;;
       zlink-framework-node)
-        for pattern in "${patterns[@]}"; do
-          for payload in "${payloads[@]}"; do
-            cell_id="${impl}-${pattern}-${payload}"
-            record_unsupported "${run_id}" "${cell_id}" "${pattern}" "${payload}"
-          done
-        done
-        continue
+        trigger_url="http://127.0.0.1:5232"
+        source_stats_url="http://127.0.0.1:5233"
+        target_endpoint="tcp://127.0.0.1:5234"
+        target_command_endpoint=""
+        target_stats_url="http://127.0.0.1:5235"
+        target_command=(node zlink-framework-server/main.js --endpoint "${target_endpoint}" \
+          --metrics-url "${target_stats_url}")
         ;;
     esac
 
