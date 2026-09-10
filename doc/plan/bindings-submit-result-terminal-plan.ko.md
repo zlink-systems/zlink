@@ -29,20 +29,23 @@ G2 결과가 설계를 바꾸면 G4 전에 draft를 갱신한다. G4 언어별 j
 
 ## 2. 먼저 정할 것 (G0 결정표)
 
-| # | 항목 | 후보 | 결정 |
-|---|---|---|---|
-| 1 | 결과 객체 이름 | `SendSubmission`/`RequestSubmission` | (대기) |
-| 2 | 필드 이름 | `result`, `admitted`, `reply` | (대기) |
-| 3 | 즉시 실패의 전달 | 예외/에러 유지(draft §3.1) | (대기) |
-| 4 | Go 비동기 종결자 | (a) `Submit(ctx)`를 비동기로 바꾸고 동기는 `SubmitSync` (b) `SubmitAsync` 신설 | (대기) |
-| 5 | .NET `TrySend` | (a) 유지 (b) 제거(결과 enum이 대체) | (대기) |
-| 6 | Rust `admitted`/`reply` 타입 | (a) `Pin<Box<dyn Future>>` (b) 명명 future 타입 | (대기) |
-| 7 | Python `result` 노출 | 결과 객체 속성 | (대기) |
+| # | 항목 | 결정 (2026-09-10, 사용자) |
+|---|---|---|
+| 1 | 결과 객체 이름 | `SendSubmission`/`RequestSubmission` (draft §4) |
+| 2 | 필드 이름 | `result`, `admitted`, `reply` (언어 관례 대소문자) |
+| 3 | 즉시 실패의 전달 | 예외/에러 유지(draft §3.1) |
+| 4 | 종결자 이름 | **`bindings/doc/spec/async-coroutine-policy.ko.md` §6 표 그대로.** 새 이름을 만들지 않는다. 비동기 종결자(Java·Node·Python·Rust `submit()`, .NET `Async()`, C++ `async()`)의 반환형만 결과 객체로 바꾼다. 동기 종결자(`submit_sync()`, .NET·C++ `submit()`) 불변 |
+| 5 | Go | 정책 §6의 Go 종결자는 `Submit(context.Context)` 하나(동기). 제안: `Submit(ctx)`가 `(RequestSubmission, error)`를 돌려주고 `Reply`는 채널로 받는다(`<-sub.Reply`가 지금의 블로킹 결과). 정책 §6 Go 행을 이렇게 고친다. **확인 필요** |
+| 6 | .NET `TrySubmit()` (send·reply, `OperationContracts.cs:54`) | **제거.** 결과 enum이 대체한다. 호출부 2곳 이관: `framework/languages/dotnet/.../ZLinkBackendStreamSocketWrapper.cs:356`, `ZLinkManagedMeshNode.cs:12447` |
+| 7 | Rust `admitted`/`reply` 타입 | `Pin<Box<dyn Future<Output = …> + Send>>`로 시작. perf에서 회귀가 보이면 명명 타입으로 바꾼다 |
+| 8 | Python `result` | 결과 객체 속성. publish는 불변 |
+| 9 | 원칙 | 가능한 한 7언어가 같은 모양(객체·필드·대기 규칙)을 가진다 |
 
 ## 3. 스펙·정책 수정 대상 (G1, ko+en)
 
 | 파일 | 절 | 수정 |
 |---|---|---|
+| `bindings/doc/spec/async-coroutine-policy.ko.md`·`.en.md` | §6 terminal interface 표 | 비동기 종결자 반환형을 결과 객체로; Go 행; §7 검증 요구에 `result`·`admitted` 항목 |
 | `bindings/doc/spec/README.ko.md`·`.en.md` | `#submit-result-projection` 표 | `BACKPRESSURED` 행: 보관·WRITABLE 대기 유지 + "종결자는 `BACKPRESSURED`와 admission stage를 돌려준다"; `OK` 행: "`OK`와 완료된 admission stage" |
 | 같은 파일 | 도메인 모델 `SubmitResult` 항목 | "exception 언어는 예외 `.code`로만" → "비동기 종결자의 결과 객체 `result`로도 노출" |
 | 같은 파일 | send·request terminal 절, 언어별 § | 결과 객체 시그니처(draft §4) |
@@ -57,7 +60,7 @@ G2 결과가 설계를 바꾸면 G4 전에 draft를 갱신한다. G4 언어별 j
 | 언어 | 공개 | 내부 | 테스트 |
 |---|---|---|---|
 | java | `contracts/messaging/{Send,Request}SubmitOperation.java`, 새 `{Send,Request}Submission.java`, Kotlin 확장 | `runtime/sockets/CompletionOwner.java` `submitSend/submitRequest/retrySend/retryRequest`, `Pending`에 admitted future | `contract/*Completion*`, 새 `SubmitResultTerminalContractTest` |
-| dotnet | `Contracts/Messaging/OperationContracts.cs` `Async()` | `Runtime/Messaging/CompletionOwner.cs` entry `Arm*`/`Retry` | contract |
+| dotnet | `Contracts/Messaging/OperationContracts.cs` `Async()`; `TrySubmit()` 제거(send·reply) | `Runtime/Messaging/CompletionOwner.cs` entry `Arm*`/`Retry`, `TrySend` 경로 삭제 | contract |
 | node | `contracts/messaging/operations.ts` | `runtime/messaging/completion_owner.ts` | contract |
 | cpp | `include/zlink/Contracts/Messaging/operation_contracts.hpp` `async()` | `src/Runtime/Messaging/completion_owner.cpp`, `send_operations.cpp` | `tests/contract` |
 | go | `internal/native/operations.go`, `root_projection.go` | writable retry 경로 | `writable_retry_test.go` 확장 |
@@ -78,7 +81,8 @@ G2 결과가 설계를 바꾸면 G4 전에 draft를 갱신한다. G4 언어별 j
 | 언어 | 위치(예) | 변경 |
 |---|---|---|
 | java | `ZLinkJavaRawServicePort.java:211-219` 외 `router.request(...)`/`send(...)` 호출부 | `.submit()` → `.submit().reply()` / `.admitted()` |
-| dotnet, node, cpp | 같은 역할의 raw mesh node/service port | 동일 |
+| dotnet | `ZLinkBackendStreamSocketWrapper.cs:356`, `ZLinkManagedMeshNode.cs:12447` (`TrySubmit()` 사용) + raw mesh node/service port | `TrySubmit()` → `Async()` 결과의 `Result`/`Admitted`; 나머지 `.Reply` |
+| node, cpp | 같은 역할의 raw mesh node/service port | 동일 |
 
 framework의 hot path(08장 E1~E5)는 `.reply()`만 쓰므로 hop이 늘지 않는다. 결과 객체 할당 1회는 E2 측정에 포함해 확인한다.
 
@@ -98,4 +102,9 @@ framework의 hot path(08장 E1~E5)는 `.reply()`만 쓰므로 hop이 늘지 않�
 
 ## 9. 진행 로그
 
-- 2026-09-10: 사용자 결정으로 draft·plan 작성. #86 검토 중(CI dotnet prepare curl 오류 재실행). G0 대기.
+- 2026-09-10: 사용자 결정으로 draft·plan 작성. G0 결정 반영(§2: 정책 §6 이름 유지, `TrySubmit` 제거, 같은 모양 원칙). Go 형태만 확인 대기.
+- 2026-09-10: #86 CI 재실행 결과 — framework-dotnet 단위 테스트 4플랫폼 588건 실패. 원인은 코드가 아니라 구성:
+  `DllNotFoundException: Loaded zlink library is missing required export 'zlink_publish'`. 워크플로가 `VERSION`의
+  `LIBZLINK_VERSION=0.17.5` **릴리스 아카이브**를 내려받아 쓰는데 PR의 바인딩은 새 whole-message export를 요구한다
+  (`.github/workflows/framework-dotnet.yml:87-99, :205-213`). Core ABI가 깨지는 변경이므로 Core 버전을 올리고 릴리스를
+  낸 뒤에야 framework CI가 초록이 된다(버전 정책: Core MAJOR.MINOR). 이 plan의 G0 전제(#86 머지)에 "Core 버전 결정·릴리스"가 붙는다.

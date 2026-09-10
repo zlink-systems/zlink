@@ -99,8 +99,9 @@ producer가 필요한 신호는 "다음을 내도 되는가"(admission)이고, c
 
 ## 4. 언어별 시그니처 (초안)
 
-`Stage`는 각 언어의 관용 비동기 타입이다. 이름은 언어 관례를 따르되 `Submission`·`result`·`admitted`·`reply`
-어휘를 공유한다.
+`Stage`는 각 언어의 관용 비동기 타입이다. **종결자 이름은 `bindings/doc/spec/async-coroutine-policy.ko.md` §6 표를 그대로
+쓴다**(비동기: Java·Node·Python·Rust `submit()`, .NET `Async()`, C++ `async()`; 동기 종결자 불변). 바뀌는 것은 비동기
+종결자의 **반환형**뿐이며, 결과 객체·필드 이름(`Submission`·`result`·`admitted`·`reply`)은 7언어가 공유한다.
 
 ### Java
 
@@ -134,7 +135,7 @@ RequestSubmission RequestSubmitOperation.Async(CancellationToken ct = default); 
 void / IReadOnlyList<Message> Submit();                                           // 불변
 ```
 
-`ct`는 `Admitted`·`Reply` 둘 다에 적용한다. 기존 `TrySend`(send·reply)는 이 변경과 별개로 유지 여부를 plan에서 정한다.
+`ct`는 `Admitted`·`Reply` 둘 다에 적용한다. 기존 `TrySubmit()`(send·reply, `OperationContracts.cs:54`)은 **제거**한다(사용자 결정). `Result == BACKPRESSURED`가 그 역할을 대신한다.
 
 ### Node
 
@@ -181,8 +182,9 @@ func (b *sendBuilder)    Submit(ctx context.Context) (SendSubmission, error)    
 func (b *requestBuilder) Submit(ctx context.Context) (RequestSubmission, error)  // 이전: ([]*Message, error)
 ```
 
-Go의 `Submit`은 지금 동기 대기다. 비동기 종결자 이름은 plan에서 정한다(`SubmitAsync` 또는 기존 `Submit`을
-비동기로 바꾸고 동기는 `SubmitSync`).
+Go의 종결자 이름은 정책(`async-coroutine-policy.ko.md` §6)대로 `Submit(context.Context)` 하나만 둔다. 새 이름을 만들지
+않는다. 제안은 `Submit(ctx)`가 결과 객체를 돌려주고 reply는 채널로 받는 것이며(`<-sub.Reply`가 지금의 블로킹 결과),
+정책 §6 Go 행을 그렇게 고친다. 사용자 확인 대기(plan §2 #5).
 
 ### Rust
 
@@ -201,7 +203,7 @@ pub fn submit(self) -> Result<RequestSubmission, ZlinkError>;    // 이전: impl
 pub fn submit_sync(self) -> …;                                    // 불변
 ```
 
-`impl Trait` 필드는 안정 Rust에서 불가하므로 실제로는 `Pin<Box<dyn Future…>>` 또는 명명 타입으로 둔다(plan).
+`impl Trait` 필드는 안정 Rust에서 불가하므로 `Pin<Box<dyn Future<Output = …> + Send>>`로 시작한다(plan §2 #7).
 `SubmitRetryMode`(`socket_options.rs:64`)는 local failure 재시도 옵션이며 backpressure와 무관하다. 그대로 둔다.
 
 ### Python
