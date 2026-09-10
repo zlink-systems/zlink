@@ -449,7 +449,7 @@ def test_public_routed_send_without_route_has_no_wait_token():
                     patch.object(owner, "_submit_parts", side_effect=observe),
                     pytest.raises(zlink.SubmitError) as raised,
                 ):
-                    await router.send(missing).message(b"payload").submit()
+                    router.send(missing).message(b"payload").submit()
 
                 assert raised.value.result == zlink.SubmitResult.NOT_CONNECTED
                 assert raised.value.native_errno == errno.EHOSTUNREACH
@@ -569,16 +569,14 @@ def test_public_managed_routed_send_retries_after_exact_writable_completion():
                         index.to_bytes(4, "little") + b"x" * 60
                     )
                     expected = bytes(payload)
-                    task = asyncio.create_task(
-                        router.send(target).message(payload).submit()
-                    )
-                    tasks.append(task)
-                    await _next_event_loop_turn()
-                    if task.done():
-                        await task
+                    submission = router.send(target).message(payload).submit()
+                    tasks.append(submission.admitted)
+                    if submission.result == zlink.SubmitResult.OK:
+                        assert submission.admitted.done()
                         accepted.append(expected)
                         continue
-                    pending = task
+                    assert submission.result == zlink.SubmitResult.BACKPRESSURED
+                    pending = submission.admitted
                     blocked_source = payload
                     blocked_payload = expected
                     break
@@ -714,8 +712,6 @@ def test_public_send_request_reply_and_publish_shapes_are_flag_free():
             assert not hasattr(request, "flags")
             assert hasattr(request, "timeout")
             assert hasattr(publish, "flags")
-            send.submit().close()
-            request.submit().close()
         finally:
             publisher.close()
             router.close()
