@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.execution;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -17,6 +18,34 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 final class ZLinkStateLaneTest {
+    @Test
+    void defaultLanesShareExecutorButKeepIndependentTurnsAndClose() throws Exception {
+        ZLinkStateLane first = new ZLinkStateLane();
+        ZLinkStateLane second = new ZLinkStateLane();
+        var executor = ZLinkStateLane.class.getDeclaredField("executor");
+        executor.setAccessible(true);
+        assertSame(executor.get(first), executor.get(second));
+
+        CompletableFuture<Void> entered = new CompletableFuture<>();
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        var blocked = first.runAsync(() -> {
+            entered.complete(null);
+            release.join();
+        });
+        try {
+            entered.get(3, TimeUnit.SECONDS);
+            assertEquals(42, second.runAsync(() -> 42)
+                .toCompletableFuture().get(3, TimeUnit.SECONDS));
+        } finally {
+            release.complete(null);
+        }
+        blocked.toCompletableFuture().get(3, TimeUnit.SECONDS);
+        first.closeAsync().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        assertEquals(43, second.runAsync(() -> 43)
+            .toCompletableFuture().get(3, TimeUnit.SECONDS));
+        second.closeAsync().toCompletableFuture().get(3, TimeUnit.SECONDS);
+    }
+
     @Test
     void runAsyncReturnsTheResultOfTheWork() throws Exception {
         ZLinkStateLane lane = new ZLinkStateLane();

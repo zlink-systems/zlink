@@ -666,12 +666,11 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
             return ZLinkSerialExecutionQueue
                 .manageCurrent(result);
         }
-        result.whenComplete((ignored, failure) -> payload.close());
         List<Message> parts = ZLinkChannelCallRuntime.envelopeParts(
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
             channelName,
             packetName,
-            Message.from(payload),
+            payload,
             contentType,
             metadata.values());
         node.requestToChannel(

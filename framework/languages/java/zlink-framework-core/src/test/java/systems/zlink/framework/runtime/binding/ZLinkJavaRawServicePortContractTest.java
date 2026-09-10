@@ -18,8 +18,66 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 
 final class ZLinkJavaRawServicePortContractTest {
+    @Test
+    void oneOrderedRegistryOwnsSocketsAndRejectsForeignSockets() throws Exception {
+        try (ZLinkJavaRawServicePort owner = new ZLinkJavaRawServicePort();
+             ZLinkJavaRawServicePort foreign = new ZLinkJavaRawServicePort()) {
+            var first = owner.openRouter(RoutingId.from("owner-first"));
+            var second = owner.openRouter(RoutingId.from("owner-second"));
+            var other = foreign.openRouter(RoutingId.from("owner-first"));
+            var registryField = ZLinkJavaRawServicePort.class
+                .getDeclaredField("receivePollers");
+            registryField.setAccessible(true);
+            var registry = (java.util.SequencedMap<?, ?>) registryField.get(owner);
+            assertEquals(List.of(second, first),
+                List.copyOf(registry.reversed().keySet()));
+            assertFalse(java.util.Arrays.stream(ZLinkJavaRawServicePort.class.getDeclaredFields())
+                .anyMatch(field -> List.class.isAssignableFrom(field.getType())),
+                "socket ownership must not also be kept in a linear list");
+            assertThrows(IllegalArgumentException.class,
+                () -> owner.receiveNow(other));
+            assertThrows(IllegalArgumentException.class,
+                () -> owner.send(other, RoutingId.from("target"), List.of(new byte[] {1})));
+            owner.close();
+            assertTrue(registry.isEmpty());
+            assertThrows(IllegalStateException.class, () -> owner.receiveNow(first));
+        }
+    }
+
+    @Test
+    void requestDecoderReadsNativeReplyBeforeThePortClosesItsOwner() throws Exception {
+        RoutingId callerId = RoutingId.from("native-reply-caller");
+        RoutingId targetId = RoutingId.from("native-reply-target");
+        try (ZLinkJavaRawServicePort port = new ZLinkJavaRawServicePort()) {
+            var target = port.openRouter(targetId);
+            var caller = port.openRouter(callerId);
+            String endpoint = "inproc://native-reply-" + System.nanoTime();
+            target.bind(endpoint);
+            caller.connect(endpoint);
+            var reply = port.request(caller, targetId,
+                List.of(new byte[] {1}), Duration.ofSeconds(2), parts -> {
+                    assertEquals(1, parts.size());
+                    var view = parts.getFirst().dataBuffer();
+                    assertTrue(view.isDirect());
+                    assertEquals(3, view.remaining());
+                    return view.get(0) + view.get(1) + view.get(2);
+                }).toCompletableFuture();
+            assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
+            try (var incoming = port.receiveNow(target).orElseThrow()) {
+                Message original = incoming.received().parts().getFirst();
+                // The byte-array control view is lazy and shares the receive owner.
+                original.mutableDataBuffer().put(0, (byte) 7);
+                assertArrayEquals(new byte[] {7}, incoming.frames().getFirst());
+                port.reply(target, incoming.source(), incoming.requestSequence(),
+                    List.of(new byte[] {2, 3, 4}));
+            }
+            assertEquals(9, reply.get(2, TimeUnit.SECONDS));
+        }
+    }
+
     @Test
     void blockingReadinessSleepsUntilArrivalAndWakesImmediately() throws Exception {
         RoutingId leftRid = RoutingId.from("readiness-left");

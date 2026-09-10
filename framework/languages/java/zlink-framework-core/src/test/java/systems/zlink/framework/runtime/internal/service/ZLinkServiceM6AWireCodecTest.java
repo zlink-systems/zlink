@@ -146,6 +146,82 @@ final class ZLinkServiceM6AWireCodecTest {
     }
 
     @Test
+    void frameworkMultipartPreservesPreOptimizationWireBytes() {
+        // Independent fixed-layout oracle, including the complete application
+        // frame. Keep this independent of the production Writer and decoder.
+        for (int size : new int[] {0, 1, 1024, 4096}) {
+            byte[] body = new byte[size];
+            for (int index = 0; index < size; index++) {
+                body[index] = (byte) (index * 31 + 7);
+            }
+            byte[] header = hex("007fff80ff");
+            var multipart = java.nio.ByteBuffer.allocate(4 + 4 + header.length + 4 + size);
+            multipart.putInt(2).putInt(header.length).put(header).putInt(size).put(body);
+            byte[] packet = "ZLinkFrameworkMultipart".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] content = "application/x-zlink-multipart".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            int length = 1 + packet.length + 1 + content.length + 4 + multipart.capacity();
+            var frame = java.nio.ByteBuffer.allocate(5 + length);
+            frame.put((byte) 1).putInt(length)
+                .put((byte) packet.length).put(packet)
+                .put((byte) content.length).put(content)
+                .putInt(multipart.capacity()).put(multipart.array());
+            try (Message first = Message.from(header);
+                 Message second = Message.from(body)) {
+                var encoded = codec.encodeFrameworkMultipart(List.of(first, second));
+                assertArrayEquals(multipart.array(), encoded.payload(), "payload size " + size);
+                assertArrayEquals(frame.array(), codec.encodeApplicationPayload(encoded),
+                    "complete frame size " + size);
+                assertArrayEquals(frame.array(),
+                    codec.encodeFrameworkMultipartFrame(List.of(first, second)),
+                    "direct frame size " + size);
+                assertArrayEquals(header, first.toByteArray());
+                assertArrayEquals(body, second.toByteArray());
+            }
+        }
+    }
+
+    @Test
+    void nativeFrameDecodeBorrowsInputAndReturnsIndependentlyOwnedParts() {
+        byte[] body = new byte[4096];
+        Arrays.fill(body, (byte) 0xa7);
+        List<Message> decoded;
+        try (Message header = Message.from(new byte[] {0, 127, -1});
+             Message payload = Message.from(body);
+             Message frame = Message.from(codec.encodeFrameworkMultipartFrame(
+                 List.of(header, payload)))) {
+            var view = frame.dataBuffer();
+            int position = view.position();
+            int limit = view.limit();
+            decoded = codec.decodeFrameworkMultipartFrame(view);
+            assertEquals(position, view.position());
+            assertEquals(limit, view.limit());
+        }
+        try {
+            assertArrayEquals(new byte[] {0, 127, -1}, decoded.getFirst().toByteArray());
+            assertArrayEquals(body, decoded.get(1).toByteArray());
+        } finally {
+            Message.closeAll(decoded);
+        }
+    }
+
+    @Test
+    void directFrameDecodeRejectsTruncationAndInvalidPartLengths() {
+        byte[] frame;
+        try (Message part = Message.from(new byte[] {1, 2, 3})) {
+            frame = codec.encodeFrameworkMultipartFrame(List.of(part));
+        }
+        for (int size = 0; size < frame.length; size++) {
+            var truncated = java.nio.ByteBuffer.wrap(Arrays.copyOf(frame, size));
+            assertThrows(ZLinkServiceWireException.class,
+                () -> codec.decodeFrameworkMultipartFrame(truncated));
+        }
+        // The final part's length starts immediately before its three bytes.
+        java.nio.ByteBuffer.wrap(frame).putInt(frame.length - 7, Integer.MAX_VALUE);
+        assertThrows(ZLinkServiceWireException.class,
+            () -> codec.decodeFrameworkMultipartFrame(java.nio.ByteBuffer.wrap(frame)));
+    }
+
+    @Test
     void frameworkMultipartMatchesCanonicalProfileFixture() {
         try (Message first = Message.from(new byte[] {1, 2});
              Message second = Message.from(new byte[] {(byte) 0xaa, (byte) 0xbb,

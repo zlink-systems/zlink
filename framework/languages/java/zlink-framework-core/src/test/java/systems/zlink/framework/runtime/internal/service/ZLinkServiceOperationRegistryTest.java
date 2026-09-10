@@ -3,6 +3,8 @@ package systems.zlink.framework.runtime.internal.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -23,6 +25,47 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 final class ZLinkServiceOperationRegistryTest {
+    @Test
+    void wireIdentityIsTheRegistryKeyAndInvalidIdentityDoesNotReserveCapacity() {
+        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
+             var registry = new ZLinkServiceOperationRegistry(scheduler, 2)) {
+            UUID firstId = new UUID(Long.MIN_VALUE, 7);
+            UUID secondId = new UUID(Long.MAX_VALUE, 7);
+            var first = registry.register(firstId, Duration.ofSeconds(1));
+            assertSame(firstId, first.id());
+            assertThrows(IllegalArgumentException.class,
+                () -> registry.register(firstId, Duration.ofSeconds(1)));
+            assertThrows(IllegalArgumentException.class,
+                () -> registry.register(new UUID(0, 0), Duration.ofSeconds(1)));
+            assertEquals(1, registry.pendingCount());
+            var second = registry.register(secondId, Duration.ofSeconds(1));
+            assertTrue(registry.complete(secondId, "second"));
+            assertTrue(registry.complete(firstId, "first"));
+            assertEquals("first", first.completion().join());
+            assertEquals("second", second.completion().join());
+        }
+    }
+
+    @Test
+    void pendingEntryDoesNotAllocateAnExceptionForASuccessfulRequest() throws Exception {
+        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
+             var registry = new ZLinkServiceOperationRegistry(scheduler)) {
+            var operation = registry.register(Duration.ofSeconds(1));
+            var entriesField = ZLinkServiceOperationRegistry.class.getDeclaredField("entries");
+            entriesField.setAccessible(true);
+            var entries = (java.util.Map<?, ?>) entriesField.get(registry);
+            Object entry = entries.get(operation.id());
+            for (var field : entry.getClass().getDeclaredFields()) {
+                if (Throwable.class.isAssignableFrom(field.getType())) {
+                    field.setAccessible(true);
+                    assertNull(field.get(entry), field.getName());
+                }
+            }
+            assertTrue(registry.complete(operation.id(), "success"));
+            assertEquals("success", operation.completion().join());
+        }
+    }
+
     @Test
     void firstTerminalPathWinsAndDetachesDeadline() {
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
