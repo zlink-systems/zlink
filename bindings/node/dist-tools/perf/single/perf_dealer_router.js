@@ -18,6 +18,7 @@ async function runDealerRouterBenchmark(msgSize, options) {
     const ctx = zlink.createContext();
     applyContextPolicy(ctx);
     const router = zlink.createRouterSocket(ctx);
+    const routerMonitor = router.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
     const endpoint = await benchmarkEndpoint(options.transport, `dealer-router-${msgSize}`);
     let worker = null;
     try {
@@ -55,11 +56,12 @@ async function runDealerRouterBenchmark(msgSize, options) {
         drainRouterRecvInto(router, msgSize, Object.assign(collector, { runId, activeStartNs }), { recordUntilNs: activeStopNs });
         waitForWorkerStatus(worker, 4);
         const result = collector.finish();
-        emitSingleSocketHwmDetail(router, 'DEALER_ROUTER', options.transport, 'receiver', msgSize);
+        emitSingleSocketHwmDetail(routerMonitor, router, 'DEALER_ROUTER', options.transport, 'receiver', msgSize);
         return result;
     }
     finally {
         await closeSenderWorker(worker);
+        routerMonitor.close();
         router.close();
         ctx.close();
     }
