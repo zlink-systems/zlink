@@ -1,0 +1,49 @@
+Coding sub-agent for zlink Issue #63. Work ONLY in this worktree; commit to its detached HEAD. Do NOT
+touch core/doc/** or bindings/doc/**. Do NOT push/PR. Do NOT rebuild Core (core/build-dev is a shared
+symlink, read-only). Keep input tight; grep before reading.
+
+CONTEXT: Core now exposes ONLY the whole-message API; the part API was removed. bindings/c (the C
+reference perf harness, bench, samples, tests, and the std_compat shim) still calls the REMOVED
+symbols and therefore will NOT compile against the new Core. Migrate all of it.
+
+READ: doc/plan/issue-63-worklog/binding-migration-ref.ko.md (removal→replacement map + D63-6..8);
+core/include/zlink/socket/api.h (the new signatures + contract comments). Already-migrated C++ ref for
+the array/ownership idiom: bindings/cpp/src/Runtime/Native/native_receive.hpp (on this branch).
+
+REMOVED → replacement (array + count; no part_flag; no MORE/FINAL):
+  zlink_send_part→zlink_send, zlink_send_part_rid→zlink_send_rid, zlink_request_part→zlink_request,
+  zlink_reply_part→zlink_reply, zlink_publish_part→zlink_publish, zlink_recv_part→zlink_recv,
+  zlink_router_recv_part→zlink_router_recv, zlink_subscribe_part→zlink_subscribe,
+  zlink_xpub_recv_part→zlink_xpub_recv. zlink_part_flag_t/ZLINK_PART_MORE/FINAL are gone. KEEP
+  zlink_stream_recv_packet, zlink_multipart_close.
+
+TASK: migrate every bindings/c file that uses the removed API (≈42 files: perf/**, bench/**,
+samples/**, tests/**, bench/with_zmq/std_compat/zlink.h). For each:
+- send: build the parts array and submit once with zlink_send/send_rid/request/reply/publish (no
+  per-part MORE/FINAL loop). recv: call zlink_recv/router_recv/subscribe once into a reusable
+  zlink_msg_t array; on ZLINK_RECV_BUFFER_TOO_SMALL grow to the returned count and retry (record
+  preserved). Close received parts with zlink_multipart_close. STREAM RAW recv via zlink_recv (1
+  part); STREAM/single send via zlink_send/send_rid with count 1.
+- **perf harness: PRESERVE measurement semantics (Issue §7.0.1 parity)** — do not change metrics,
+  retry/backpressure handling, HWM, client/duration, warmup, or reported numbers; only the API call
+  shape changes (assemble-once instead of part loop). Fix the empty-FINAL retry in
+  perf/single/common/perf_single_reqrep.hpp to a whole-record retry.
+- Keep C tests meaningful; update assertions that named removed symbols/part behavior to the new
+  observable behavior without weakening the contract; explain each.
+
+BUILD & TEST against the shared new-only Core (do NOT rebuild Core):
+  ZLINK_C_CORE_BUILD_DIR="$PWD/core/build-dev" ZLINK_CORE_INCLUDE_DIR="$PWD/core/include" \
+    bash bindings/c/tests/run_tests.sh
+All C tests must pass, and the perf/bench/samples must build. Report the exact pass summary.
+
+COMMIT (detached HEAD):
+  bindings(c): migrate perf/bench/samples/tests to whole-message API
+
+  <what changed>. Measurement semantics preserved (§7.0.1). Refs #63.
+  Test: ZLINK_C_CORE_BUILD_DIR=... bash bindings/c/tests/run_tests.sh — <pass summary>
+
+  Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01Df7vbMq5yraG6siDn8PAUH
+
+REPORT: files changed, how measurement semantics were preserved, tests updated & why, exact C test
+pass summary, and confirmation that no removed symbol remains in bindings/c.
