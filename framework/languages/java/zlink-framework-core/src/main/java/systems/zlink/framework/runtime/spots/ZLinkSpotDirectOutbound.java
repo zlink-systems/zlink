@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
@@ -450,6 +451,7 @@ final class ZLinkSpotDirectSendCall implements ZLinkSendCall {
             submitGate);
     }
 
+
     @Override
     public CompletionStage<Void> submit() {
         CompletionStage<Void> duplicate =
@@ -629,6 +631,7 @@ final class ZLinkSpotDirectRequestCall implements ZLinkRequestCall {
             metadata,
             submitGate);
     }
+
 
     @Override
     public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
