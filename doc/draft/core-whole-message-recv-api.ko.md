@@ -113,6 +113,17 @@ zlink_recv (void *s_,
 - thread-safety·single-consumer 계약은 기존과 동일(완화 금지).
 - 공개 표면 단순성 유지: 편의를 늘리되 계약을 파편화하지 않는다.
 
+## 5.5 이득 (기대 효과)
+1. **native 호출 횟수 감소**: 멀티파트 record 수신이 part당 recv 호출(N회) → **1회**로. 바인딩은 per-part P/Invoke·N-API 경계·`msg_init`·컬렉션
+   append가 사라진다.
+2. **멀티파트 시퀀스 mutex/버퍼 우회**: `recv_part` 경로는 Core `part_helper`의 시퀀스 상태(`recv.active`/`owner_thread`)를 매번 `helper_state->mutex`
+   아래에서 다루고, 남은 part를 버퍼(`stage_recv_sequence`)에 담았다가 `take_recv_part`로 꺼낸다. **whole-message recv는 한 record를 한 번에
+   반환**하므로 시퀀스 커서·버퍼·그 mutex 경로를 **아예 타지 않는다**(단일 스레드 pull에서 uncontended라도 제거되는 고정비). 이 lock은 perf가 아니라
+   Core에 있고 recv_part를 타는 **모든 언어**(C perf 직접 + cpp/dotnet/java/node 바인딩 내부 루프)가 통과하던 것이다.
+3. **C 레퍼런스 perf·바인딩 내부 단순화**: C perf는 `zlink_router_recv_part`+has_more 수동 조립을 제거, 바인딩은 recv_part while 루프를 1회 호출로 교체.
+4. **호출측 단순화**: 대부분-멀티파트 워크로드에서 "record→part로 쪼갬→다시 합침"의 양방향 낭비 제거. 공개 시그니처는 불변.
+- 주의: thread-safety·single-consumer 계약은 그대로 유지된다(이득은 계약 완화가 아니라 경로 제거에서 온다).
+
 ## 6. 성공 기준(요약)
 - 멀티파트 수신을 한 번의 호출·컬렉션으로 받는 공개 경로 제공, `recv_part` 병존.
 - 바인딩 내부 per-message 경계·할당 감소 → routed 목표 갭 축소(§ perf 재측정), 비대상 회귀 없음.
