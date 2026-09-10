@@ -113,9 +113,12 @@ function(bench_grpc_target name)
 endfunction()
 
 # --- servers -----------------------------------------------------------------
-add_executable(bench_cpp_zlink_server zlink/bench_zlink_cpp_server.cpp)
+add_executable(bench_cpp_zlink_server zlink/bench_zlink_cpp_server.cpp ${BENCH_PROTO_CC})
 target_link_libraries(bench_cpp_zlink_server PRIVATE zlink::cpp Threads::Threads)
 bench_target(bench_cpp_zlink_server)
+target_include_directories(bench_cpp_zlink_server PRIVATE ${BENCH_PROTO_GEN_DIR} ${BENCH_PROTOBUF_INCLUDE_DIRS})
+target_link_directories(bench_cpp_zlink_server PRIVATE ${BENCH_PROTOBUF_LIBRARY_DIRS})
+target_link_libraries(bench_cpp_zlink_server PRIVATE ${BENCH_PROTOBUF_LIBRARIES})
 
 add_executable(bench_cpp_grpc_server grpc/bench_grpc_cpp_server.cpp ${BENCH_PROTO_CC} ${BENCH_GRPC_CC})
 target_link_libraries(bench_cpp_grpc_server PRIVATE Threads::Threads)
@@ -133,3 +136,10 @@ target_include_directories(bench_cpp_framework_server PRIVATE ${BENCH_PROTO_GEN_
 target_link_libraries(bench_cpp_framework_server PRIVATE zlink::framework_codec_protobuf)
 bench_target(bench_cpp_framework_server)
 target_link_libraries(bench_cpp_client PRIVATE zlink::framework_codec_protobuf)
+
+enable_testing()
+add_executable(bench_cpp_raw_wire_test tests/raw_wire_test.cpp ${BENCH_PROTO_CC})
+target_include_directories(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTO_GEN_DIR} ${BENCH_PROTOBUF_INCLUDE_DIRS})
+target_link_directories(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTOBUF_LIBRARY_DIRS})
+target_link_libraries(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTOBUF_LIBRARIES})
+add_test(NAME bench_cpp_raw_wire_identity COMMAND bench_cpp_raw_wire_test)

@@ -1,6 +1,6 @@
 #include "../common/bench_common.hpp"
 
-#include <zlink.h>
+#include "raw_wire.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -17,72 +17,6 @@ constexpr const char *k_response_envelope =
 
 void on_signal (int) { g_stop.store (true); }
 
-size_t varint_size (size_t value)
-{
-    size_t n = 1;
-    while (value >= 0x80) {
-        value >>= 7;
-        ++n;
-    }
-    return n;
-}
-
-unsigned char *write_varint (unsigned char *dst, size_t value)
-{
-    while (value >= 0x80) {
-        *dst++ = static_cast<unsigned char> ((value & 0x7fU) | 0x80U);
-        value >>= 7;
-    }
-    *dst++ = static_cast<unsigned char> (value);
-    return dst;
-}
-
-bool read_varint (const unsigned char *&p, const unsigned char *end, size_t *value)
-{
-    size_t result = 0;
-    unsigned shift = 0;
-    while (p < end && shift < sizeof (size_t) * 8) {
-        const unsigned char byte = *p++;
-        result |= static_cast<size_t> (byte & 0x7fU) << shift;
-        if ((byte & 0x80U) == 0) {
-            *value = result;
-            return true;
-        }
-        shift += 7;
-    }
-    return false;
-}
-
-bool decode_bench_payload_body (const zlink_msg_t *msg,
-                                const unsigned char **body,
-                                size_t *body_size)
-{
-    if (!msg || !body || !body_size)
-        return false;
-    const unsigned char *p =
-      static_cast<const unsigned char *> (zlink_msg_data (const_cast<zlink_msg_t *> (msg)));
-    const unsigned char *end = p + zlink_msg_size (msg);
-    while (p < end) {
-        size_t key = 0;
-        if (!read_varint (p, end, &key))
-            return false;
-        const size_t field = key >> 3;
-        const size_t wire_type = key & 0x07U;
-        if (wire_type != 2)
-            return false;
-        size_t len = 0;
-        if (!read_varint (p, end, &len) || static_cast<size_t> (end - p) < len)
-            return false;
-        if (field == 1) {
-            *body = p;
-            *body_size = len;
-            return true;
-        }
-        p += len;
-    }
-    return false;
-}
-
 bool make_response_header (zlink_msg_t *msg)
 {
     const size_t size = std::strlen (k_response_envelope);
@@ -94,19 +28,13 @@ bool make_response_header (zlink_msg_t *msg)
 
 bool make_response_body (const zlink_msg_t *request_body, zlink_msg_t *reply_body)
 {
-    const unsigned char *payload = nullptr;
-    size_t payload_size = 0;
-    if (!decode_bench_payload_body (request_body, &payload, &payload_size))
+    zlink::framework::bench::withgrpc::BenchPayload request;
+    if (!request.ParseFromArray (zlink_msg_data (const_cast<zlink_msg_t *> (request_body)),
+                                 static_cast<int> (zlink_msg_size (request_body))))
         return false;
-
-    const size_t encoded_size = 1 + varint_size (payload_size) + payload_size;
-    if (zlink_msg_init_size (reply_body, encoded_size) != ZLINK_CONFIG_OK)
-        return false;
-    unsigned char *encoded = static_cast<unsigned char *> (zlink_msg_data (reply_body));
-    encoded[0] = 0x0a;
-    unsigned char *body = write_varint (encoded + 1, payload_size);
-    std::memcpy (body, payload, payload_size);
-    return true;
+    zlink::framework::bench::withgrpc::BenchPayload reply;
+    reply.set_body (request.body ());
+    return serialize_bench_payload (reply, reply_body);
 }
 
 bool recv_multipart_body (void *router,
@@ -228,7 +156,11 @@ void send_loop (void *router)
         zlink_msg_t body;
         if (zlink_msg_init (&body) != 0)
             continue;
-        (void) recv_multipart_body (router, &rid, &reply_token, &body);
+        if (recv_multipart_body (router, &rid, &reply_token, &body)) {
+            zlink::framework::bench::withgrpc::BenchPayload payload;
+            (void) payload.ParseFromArray (zlink_msg_data (&body),
+                                          static_cast<int> (zlink_msg_size (&body)));
+        }
         zlink_msg_close (&body);
     }
 }

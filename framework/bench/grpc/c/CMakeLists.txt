@@ -45,8 +45,14 @@ if(NOT MSVC)
     list(APPEND WG_CXX_FLAGS -O3)
 endif()
 
+add_library(bench_c_raw_proto STATIC ${WG_PROTO_CC})
+target_include_directories(bench_c_raw_proto PUBLIC
+    ${WG_PROTO_GEN_DIR} ${WG_PROTOBUF_INCLUDE_DIRS})
+target_link_libraries(bench_c_raw_proto PUBLIC ${WG_PROTOBUF_LIBRARIES})
+target_link_directories(bench_c_raw_proto PUBLIC ${WG_PROTOBUF_LIBRARY_DIRS})
+
 add_executable(bench_c_with_grpc_zlink_server zlink/bench_zlink_server.cpp)
-target_link_libraries(bench_c_with_grpc_zlink_server PRIVATE zlink_c Threads::Threads)
+target_link_libraries(bench_c_with_grpc_zlink_server PRIVATE zlink_c Threads::Threads bench_c_raw_proto)
 target_include_directories(bench_c_with_grpc_zlink_server PRIVATE common)
 target_compile_features(bench_c_with_grpc_zlink_server PRIVATE cxx_std_17)
 target_compile_options(bench_c_with_grpc_zlink_server PRIVATE ${WG_CXX_FLAGS})
@@ -54,12 +60,25 @@ set_target_properties(bench_c_with_grpc_zlink_server PROPERTIES
     BUILD_RPATH "${ZLINK_C_CORE_RUNTIME_DIR}")
 
 add_executable(bench_c_with_grpc_zlink_client zlink/bench_zlink_client.cpp)
-target_link_libraries(bench_c_with_grpc_zlink_client PRIVATE zlink_c Threads::Threads)
+target_link_libraries(bench_c_with_grpc_zlink_client PRIVATE zlink_c Threads::Threads bench_c_raw_proto)
 target_include_directories(bench_c_with_grpc_zlink_client PRIVATE common)
 target_compile_features(bench_c_with_grpc_zlink_client PRIVATE cxx_std_17)
 target_compile_options(bench_c_with_grpc_zlink_client PRIVATE ${WG_CXX_FLAGS})
 set_target_properties(bench_c_with_grpc_zlink_client PROPERTIES
     BUILD_RPATH "${ZLINK_C_CORE_RUNTIME_DIR}")
+
+enable_testing()
+foreach(role client server)
+    set(wire_test "bench_c_raw_wire_${role}_test")
+    add_executable(${wire_test} EXCLUDE_FROM_ALL zlink/raw_wire_test.cpp)
+    target_link_libraries(${wire_test} PRIVATE zlink_c Threads::Threads bench_c_raw_proto)
+    target_compile_features(${wire_test} PRIVATE cxx_std_17)
+    if(role STREQUAL "server")
+        target_compile_definitions(${wire_test} PRIVATE RAW_WIRE_SERVER_TEST)
+    endif()
+    set_target_properties(${wire_test} PROPERTIES BUILD_RPATH "${ZLINK_C_CORE_RUNTIME_DIR}")
+    add_test(NAME ${wire_test} COMMAND ${wire_test})
+endforeach()
 
 add_executable(bench_c_with_grpc_grpc_server
     grpc/bench_grpc_server.cpp

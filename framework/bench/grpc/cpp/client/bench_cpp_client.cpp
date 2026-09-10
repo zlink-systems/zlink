@@ -191,12 +191,8 @@ class grpc_driver_t : public driver_t
             grpc::ClientContext context;
             context.set_deadline (std::chrono::system_clock::now () + std::chrono::seconds (2));
             zlink::framework::bench::withgrpc::BenchPayload request;
-            std::vector<unsigned char> encoded;
-            encode_bench_payload (encoded, 1024, 0, phase_warmup, 0);
-            const unsigned char *body = nullptr;
-            size_t body_size = 0;
-            decode_bench_payload_body (encoded.data (), encoded.size (), &body, &body_size);
-            request.set_body (body, body_size);
+            request.mutable_body ()->assign (1024, '\xab');
+            stamp_payload (request.mutable_body ()->data (), 1024, 0, phase_warmup, 0);
             zlink::framework::bench::withgrpc::BenchPayload reply;
             if (_stubs.front ()->Echo (&context, request, &reply).ok ())
                 return true;
@@ -232,7 +228,6 @@ class grpc_driver_t : public driver_t
         uint64_t seq = 0;
         long long open = 0;
         std::vector<bool> busy (_stubs.size (), false);
-        std::vector<unsigned char> encoded;
 
         // spec 2 request-backpressure: _window <= 0 means no application
         // ceiling. gRPC returns no admission refusal to the caller, so this is
@@ -242,10 +237,9 @@ class grpc_driver_t : public driver_t
         const bool uncapped = _window <= 0;
 
         auto submit_one = [&] {
-            const size_t body_offset =
-              encode_bench_payload (encoded, payload_size, _run_id, phase, seq++);
             zlink::framework::bench::withgrpc::BenchPayload request;
-            request.set_body (encoded.data () + body_offset, encoded.size () - body_offset);
+            request.mutable_body ()->assign (payload_size, '\xab');
+            stamp_payload (request.mutable_body ()->data (), payload_size, _run_id, phase, seq++);
 
             auto *call = new grpc_call_t<TReply> ();
             call->seq = seq - 1;
@@ -409,8 +403,7 @@ bool grpc_driver_t::validate<google::protobuf::Empty> (
 // spec 1.3 / FB-001: ROUTER<->ROUTER. The client creates a ROUTER of its own and
 // addresses the server ROUTER by routing id.
 // FB-024 / spec 3: two parts on the wire -- a JSON envelope header and a
-// hand-encoded protobuf `BenchPayload` -- byte-identical to `zlink-c`, because
-// formula 1 divides one by the other.
+// typed protobuf `BenchPayload`, serialized for every message (Issue #66).
 // ---------------------------------------------------------------------------
 
 class zlink_raw_driver_t : public driver_t
@@ -579,11 +572,12 @@ class zlink_raw_driver_t : public driver_t
         zlink::message_t header = zlink::message_t::from (
           std::as_bytes (std::span<const char> (envelope, std::strlen (envelope))));
         const size_t body_size = std::max (payload_size, k_header_size);
-        const size_t encoded_size = encoded_bench_payload_size (body_size);
-        zlink::message_t body = zlink::message_t::allocate (encoded_size);
-        auto *encoded = reinterpret_cast<unsigned char *> (body.data ());
-        encode_bench_payload (
-          std::span<unsigned char> (encoded, encoded_size), body_size, _run_id, phase, seq);
+        zlink::framework::bench::withgrpc::BenchPayload payload;
+        payload.mutable_body ()->assign (body_size, '\xab');
+        stamp_payload (payload.mutable_body ()->data (), body_size, _run_id, phase, seq);
+        const std::string encoded = encode_bench_payload (payload);
+        zlink::message_t body = zlink::message_t::from (
+          std::as_bytes (std::span<const char> (encoded.data (), encoded.size ())));
         return {std::move (header), std::move (body)};
     }
 
@@ -683,13 +677,12 @@ class zlink_raw_driver_t : public driver_t
             return;
         }
         const zlink::message_t &body = reply.back ();
-        const unsigned char *payload = nullptr;
-        size_t payload_size = 0;
+        zlink::framework::bench::withgrpc::BenchPayload payload;
         decoded_header_t header {};
-        if (!decode_bench_payload_body (static_cast<const void *> (body.data ()), body.size (),
-                                        &payload, &payload_size)
-            || !decode_payload (payload, payload_size, &header) || header.run_id != _run_id || header.phase != _phase
-            || header.payload_size != _payload_size || payload_size != _payload_size || header.seq != seq) {
+        if (!payload.ParseFromArray (body.data (), static_cast<int> (body.size ()))
+            || !decode_payload (payload.body ().data (), payload.body ().size (), &header)
+            || header.run_id != _run_id || header.phase != _phase
+            || header.payload_size != _payload_size || payload.body ().size () != _payload_size || header.seq != seq) {
             _counters->header_failures.fetch_add (1, std::memory_order_relaxed);
             _counters->errors.fetch_add (1, std::memory_order_relaxed);
             return;
