@@ -2964,6 +2964,63 @@ decode_channel_send_header (std::span<const std::uint8_t> bytes)
     return channel_name;
 }
 
+application_payload_t application_payload_t::from_parts (const multipart_t &parts)
+{
+    if (parts.empty ())
+        throw std::invalid_argument ("framework multipart requires at least one part");
+    auto retained = std::make_shared<multipart_t> ();
+    retained->reserve (parts.size ());
+    for (const auto &part : parts)
+        retained->push_back (part.copy ());
+    application_payload_t result;
+    result.packet_name = framework_multipart_packet_name;
+    result.content_type = framework_multipart_content_type;
+    result._body = std::move (retained);
+    return result;
+}
+
+bool operator== (const application_payload_t &left, const application_payload_t &right)
+{
+    if (left.packet_name != right.packet_name || left.content_type != right.content_type
+        || left.flow_id != right.flow_id || left.flow_origin != right.flow_origin)
+        return false;
+    const auto *left_parts = left.parts ();
+    const auto *right_parts = right.parts ();
+    if (!left_parts && !right_parts)
+        return left.payload_bytes () == right.payload_bytes ();
+    if (left_parts && right_parts) {
+        if (left_parts == right_parts)
+            return true;
+        if (left_parts->size () != right_parts->size ())
+            return false;
+        for (std::size_t index = 0; index < left_parts->size (); ++index) {
+            const auto left_bytes = (*left_parts)[index].bytes ();
+            const auto right_bytes = (*right_parts)[index].bytes ();
+            if (left_bytes.size () != right_bytes.size ()
+                || !std::equal (left_bytes.begin (), left_bytes.end (), right_bytes.begin ()))
+                return false;
+        }
+        return true;
+    }
+    const auto &parts = left_parts ? *left_parts : *right_parts;
+    const auto &bytes = left_parts ? right.payload_bytes () : left.payload_bytes ();
+    std::size_t offset = 0;
+    if (bytes.size () < 4 || read_u32 (bytes, offset) != parts.size ())
+        return false;
+    for (const auto &part : parts) {
+        if (bytes.size () - offset < 4 || read_u32 (bytes, offset) != part.size ()
+            || bytes.size () - offset < part.size ())
+            return false;
+        const auto stored = std::as_bytes (std::span<const std::uint8_t> (bytes).subspan (
+          offset, part.size ()));
+        const auto source = part.bytes ();
+        if (!std::equal (source.begin (), source.end (), stored.begin ()))
+            return false;
+        offset += part.size ();
+    }
+    return offset == bytes.size ();
+}
+
 std::vector<std::uint8_t>
 encode_application_payload (const application_payload_t &payload)
 {
@@ -2974,12 +3031,24 @@ encode_application_payload (const application_payload_t &payload)
     if (payload.flow_id && !valid_flow_id (*payload.flow_id)) {
         throw service_wire_error_t ("application payload flow id is invalid");
     }
-    if (payload.payload.size ()
-        > std::numeric_limits<std::uint32_t>::max ()) {
-        throw service_wire_error_t ("application payload exceeds u32");
+    const auto *parts = payload.parts ();
+    std::uint64_t payload_size = 0;
+    if (parts) {
+        if (parts->size () > std::numeric_limits<std::uint32_t>::max ())
+            throw std::length_error ("framework multipart part count is too large");
+        payload_size = 4;
+        for (const auto &part : *parts) {
+            if (part.size () > std::numeric_limits<std::uint32_t>::max ())
+                throw std::length_error ("framework multipart part is too large");
+            payload_size += 4 + part.size ();
+            if (payload_size > std::numeric_limits<std::uint32_t>::max ())
+                throw service_wire_error_t ("application payload exceeds u32");
+        }
+    } else {
+        payload_size = payload.payload_bytes ().size ();
     }
     const auto body_size = std::uint64_t{6} + payload.packet_name.size ()
-                           + payload.content_type.size () + payload.payload.size ()
+                           + payload.content_type.size () + payload_size
                            + (payload.flow_id ? 2 + payload.flow_id->size () : 0);
     if (body_size > std::numeric_limits<std::uint32_t>::max ()) {
         throw service_wire_error_t ("application payload envelope exceeds u32");
@@ -2991,8 +3060,21 @@ encode_application_payload (const application_payload_t &payload)
     append_u32 (result, static_cast<std::uint32_t> (body_size));
     append_text8 (result, payload.packet_name, "packet name");
     append_text8 (result, payload.content_type, "content type");
-    append_u32 (result, static_cast<std::uint32_t> (payload.payload.size ()));
-    result.insert (result.end (), payload.payload.begin (), payload.payload.end ());
+    append_u32 (result, static_cast<std::uint32_t> (payload_size));
+    if (parts) {
+        append_u32 (result, static_cast<std::uint32_t> (parts->size ()));
+        for (const auto &part : *parts) {
+            append_u32 (result, static_cast<std::uint32_t> (part.size ()));
+            const auto bytes = part.bytes ();
+            if (!bytes.empty ()) {
+                const auto *begin = reinterpret_cast<const std::uint8_t *> (bytes.data ());
+                result.insert (result.end (), begin, begin + bytes.size ());
+            }
+        }
+    } else {
+        const auto &bytes = payload.payload_bytes ();
+        result.insert (result.end (), bytes.begin (), bytes.end ());
+    }
     if (payload.flow_id) {
         append_text8 (result, *payload.flow_id, "flow id");
         result.push_back (static_cast<std::uint8_t> (*payload.flow_origin));
@@ -3024,7 +3106,7 @@ decode_application_payload (std::span<const std::uint8_t> bytes,
         throw service_wire_error_t (
           "application payload length does not match frame");
     }
-    result.payload.assign (bytes.begin () + static_cast<std::ptrdiff_t> (offset),
+    result.payload_bytes ().assign (bytes.begin () + static_cast<std::ptrdiff_t> (offset),
                            bytes.begin () + static_cast<std::ptrdiff_t> (offset + payload_length));
     offset += payload_length;
     if (has_flow) {
@@ -3058,9 +3140,11 @@ application_payload_hwm_bytes (const application_payload_t &payload)
 {
     if (payload.packet_name != framework_multipart_packet_name
         || payload.content_type != framework_multipart_content_type) {
-        return payload.payload.size ();
+        return payload.payload_bytes ().size ();
     }
-    const std::span<const std::uint8_t> encoded (payload.payload);
+    if (const auto *parts = payload.parts ())
+        return parts->back ().size ();
+    const std::span<const std::uint8_t> encoded (payload.payload_bytes ());
     std::size_t offset = 0;
     const auto count = read_u32 (encoded, offset);
     if (count == 0

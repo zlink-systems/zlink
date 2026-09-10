@@ -365,6 +365,57 @@ zlink::framework::task_t<int> await_timeout_task ()
     co_return co_await task;
 }
 
+struct filter_copy_probe_t
+{
+    explicit filter_copy_probe_t (int &copies) : copies (&copies) {}
+    filter_copy_probe_t (const filter_copy_probe_t &other) : copies (other.copies)
+    {
+        ++*copies;
+    }
+    filter_copy_probe_t (filter_copy_probe_t &&) noexcept = default;
+
+    zlink::framework::task_t<void> operator() (
+      zlink::framework::service_provider_t &,
+      zlink::framework::serializer_registry_t &,
+      const zlink::framework::handler_filter_context_t &,
+      zlink::framework::handler_next_t next) const
+    {
+        co_await next ();
+    }
+    int *copies;
+};
+
+bool verify_filter_snapshot_reuse (zlink::framework::service_provider_t &provider,
+                                    zlink::framework::serializer_registry_t &serializers)
+{
+    using namespace zlink::framework;
+    handler_registry_t registry;
+    registry.on_request<handler_t, request_t, reply_t> (
+      "game", "snapshot", &handler_t::get_reply, {.packet_name = "request"});
+    int copies = 0;
+    registry.add_filter (filter_copy_probe_t (copies));
+    const auto registered_copies = copies;
+    for (int i = 0; i < 2; ++i) {
+        auto result = registry.invoke ("game", "snapshot", "request", provider, serializers,
+                                       zlink::message_t::from (std::string ("7")));
+        if (!result || result.value ().to_string () != "8")
+            return false;
+    }
+    if (copies != registered_copies)
+        return false;
+    handler_registry_t no_filters;
+    no_filters.on_request<handler_t, request_t, reply_t> (
+      "game", "snapshot", &handler_t::get_reply, {.packet_name = "request"});
+    detail::inbound_message_context_t inbound;
+    inbound.before_application_handler = [] { throw std::runtime_error ("terminal failure"); };
+    const auto failure = no_filters.invoke (
+      "game", "snapshot", "request", provider, serializers,
+      zlink::message_t::from (std::string ("7")), inbound);
+    return !failure && failure.error ()
+           && failure.error ()->kind () == framework_error_kind_t::internal_failure
+           && std::string (failure.error ()->what ()) == "terminal failure";
+}
+
 } // namespace
 
 int main ()
@@ -757,6 +808,10 @@ int main ()
         || projected_publish_context.topic != "spot-topic"
         || projected_publish_context.source.value_or ("") != "node-b") {
         return 45;
+    }
+
+    if (!verify_filter_snapshot_reuse (provider, serializers)) {
+        return 46;
     }
 
     return 0;

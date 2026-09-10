@@ -1213,7 +1213,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                   request_envelope.flow_id,
                   request_envelope.flow_origin};
                 const auto message =
-                  zlink::message_t::from (payload.payload);
+                  zlink::message_t::from (payload.payload_bytes ());
                 detail::inbound_message_context_t
                   inbound;
                 inbound.before_application_handler =

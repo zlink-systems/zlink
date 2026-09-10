@@ -66,12 +66,20 @@ inline std::vector<zlink::message_t> copy_binding_messages (
 }
 
 inline std::vector<zlink::message_t> materialize_binding_parts (
-  const raw_message_t &parts)
+  raw_message_t parts)
 {
     std::vector<zlink::message_t> result;
     result.reserve (parts.size ());
-    for (const auto &part : parts) {
-        result.push_back (zlink::message_t::from (part));
+    for (auto &part : parts) {
+        auto storage = std::make_unique<raw_bytes_t> (std::move (part));
+        auto message = zlink::advanced::external_message_t::from (
+          std::span<std::uint8_t> (*storage),
+          [] (void *, void *hint) { delete static_cast<raw_bytes_t *> (hint); },
+          storage.get ());
+        if (!message.valid ())
+            throw std::bad_alloc ();
+        storage.release ();
+        result.push_back (std::move (message));
     }
     return result;
 }
