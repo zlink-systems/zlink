@@ -4,6 +4,7 @@ set -euo pipefail
 
 DRY_RUN=0
 RELEASE_TARGET=""
+RELEASE_LANGUAGE=""
 RELEASE_VERSION=""
 RESUME_COMMAND=""
 FAILURES=0
@@ -15,7 +16,9 @@ CHECK_DETAILS=()
 usage() {
     cat <<'EOF'
 사용법:
-  release-check.sh [--dry-run] <core|bindings|framework> <X.Y.Z>
+  release-check.sh [--dry-run] core <X.Y.Z>
+  release-check.sh [--dry-run] bindings <cpp|node|java|dotnet> <X.Y.Z>
+  release-check.sh [--dry-run] framework <cpp|node|java|dotnet> <X.Y.Z>
 EOF
 }
 
@@ -33,6 +36,7 @@ die() {
     shift
     printf '오류: %s\n' "$*" >&2
     [[ -n "$RELEASE_TARGET" ]] && printf '  대상: %s\n' "$RELEASE_TARGET" >&2
+    [[ -n "$RELEASE_LANGUAGE" ]] && printf '  언어: %s\n' "$RELEASE_LANGUAGE" >&2
     [[ -n "$RELEASE_VERSION" ]] && printf '  버전: %s\n' "$RELEASE_VERSION" >&2
     [[ -n "$RESUME_COMMAND" ]] && printf '재개 명령: %s\n' "$RESUME_COMMAND" >&2
     exit "$code"
@@ -74,8 +78,8 @@ check_version_sync() {
     local root=$1 version_file version_field declared
     case "$RELEASE_TARGET" in
         core) version_file=VERSION; version_field=LIBZLINK_VERSION ;;
-        bindings) version_file=BINDINGS_VERSION; version_field=ZLINK_BINDINGS_VERSION ;;
-        framework) version_file=FRAMEWORK_VERSION; version_field=ZLINK_FRAMEWORK_VERSION ;;
+        bindings) version_file="bindings/$RELEASE_LANGUAGE/VERSION"; version_field=ZLINK_BINDING_VERSION ;;
+        framework) version_file="framework/languages/$RELEASE_LANGUAGE/VERSION"; version_field=ZLINK_FRAMEWORK_VERSION ;;
     esac
 
     if python3 "$root/scripts/local-package/sync-version.py" --check >/dev/null; then
@@ -86,27 +90,31 @@ check_version_sync() {
 
     declared=$(sed -n "s/^${version_field}=//p" "$root/$version_file")
     if [[ "$declared" == "$RELEASE_VERSION" ]]; then
-        record_check 버전 "$RELEASE_TARGET" PASS "$version_file=$RELEASE_VERSION"
+        record_check 버전 "${RELEASE_TARGET}${RELEASE_LANGUAGE:+/$RELEASE_LANGUAGE}" PASS "$version_file=$RELEASE_VERSION"
     else
-        record_check 버전 "$RELEASE_TARGET" FAIL "$version_file=${declared:-<없음>} (요청 $RELEASE_VERSION)"
+        record_check 버전 "${RELEASE_TARGET}${RELEASE_LANGUAGE:+/$RELEASE_LANGUAGE}" FAIL "$version_file=${declared:-<없음>} (요청 $RELEASE_VERSION)"
     fi
 }
 
 check_release_notes() {
     local root=$1 base missing=()
-    base="$root/doc/building/release-notes/$RELEASE_TARGET-$RELEASE_VERSION"
+    if [[ "$RELEASE_TARGET" == core ]]; then
+        base="$root/doc/building/release-notes/core-$RELEASE_VERSION"
+    else
+        base="$root/doc/building/release-notes/$RELEASE_TARGET-$RELEASE_LANGUAGE-$RELEASE_VERSION"
+    fi
     [[ -f "$base.ko.md" ]] || missing+=("${base#"$root/"}.ko.md")
     [[ -f "$base.md" ]] || missing+=("${base#"$root/"}.md")
     if ((${#missing[@]} == 0)); then
-        record_check '릴리스 노트' "$RELEASE_TARGET" PASS "${base#"$root/"}.{ko,}.md"
+        record_check '릴리스 노트' "${RELEASE_TARGET}${RELEASE_LANGUAGE:+/$RELEASE_LANGUAGE}" PASS "${base#"$root/"}.{ko,}.md"
     else
-        record_check '릴리스 노트' "$RELEASE_TARGET" FAIL "누락: ${missing[*]}"
+        record_check '릴리스 노트' "${RELEASE_TARGET}${RELEASE_LANGUAGE:+/$RELEASE_LANGUAGE}" FAIL "누락: ${missing[*]}"
     fi
 }
 
 validate_metadata() {
     local root=$1 mode=$2
-    python3 - "$root" "$RELEASE_TARGET" "$RELEASE_VERSION" "$mode" <<'PY'
+    python3 - "$root" "$RELEASE_TARGET" "$RELEASE_LANGUAGE" "$RELEASE_VERSION" "$mode" <<'PY'
 import json
 import re
 import sys
@@ -114,8 +122,9 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 target = sys.argv[2]
-version = sys.argv[3]
-mode = sys.argv[4]
+language = sys.argv[3]
+version = sys.argv[4]
+mode = sys.argv[5]
 errors = []
 
 
@@ -197,7 +206,8 @@ def validate_nuget():
         project = "bindings/dotnet/src/Zlink/Zlink.csproj"
         contains(
             project,
-            f"<Version>{version}</Version>",
+            "ZLinkBindingVersionFile",
+            "ZLINK_BINDING_VERSION=",
             "<PackageId>Zlink</PackageId>",
             "<Description>",
         )
@@ -217,7 +227,7 @@ def validate_nuget():
     contains(
         props,
         "ZLinkFrameworkVersionFile",
-        "FRAMEWORK_VERSION",
+        "ZLINK_FRAMEWORK_VERSION=",
         "<PackageLicenseFile>LICENSE</PackageLicenseFile>",
         "<PackageProjectUrl>https://github.com/zlink-systems/zlink</PackageProjectUrl>",
     )
@@ -269,7 +279,7 @@ def validate_maven():
             "centralStaging",
         )
         script = "bindings/java/scripts/upload-central-bundle.sh"
-        contains(script, "ZLINK_BINDINGS_VERSION", "zlink-java-$version-central-bundle.zip")
+        contains(script, "ZLINK_BINDING_VERSION", '"$java_root/VERSION"', "zlink-java-$version-central-bundle.zip")
         contains(
             "bindings/java/codec/zlink-ext-netty/build.gradle",
             "maven-publish",
@@ -280,7 +290,7 @@ def validate_maven():
         contains(
             build,
             'group = "systems.zlink"',
-            "FRAMEWORK_VERSION",
+            'layout.projectDirectory.file("VERSION")',
             'url.set("https://github.com/zlink-systems/zlink")',
             "licenses {",
             "developers {",
@@ -290,7 +300,7 @@ def validate_maven():
             'name = "centralStaging"',
         )
         script = "framework/languages/java/scripts/upload-central-bundle.sh"
-        contains(script, "ZLINK_FRAMEWORK_VERSION", "zlink-framework-java-$version-central-bundle.zip")
+        contains(script, "ZLINK_FRAMEWORK_VERSION", '"$java_root/VERSION"', "zlink-framework-java-$version-central-bundle.zip")
         expected_names = {
             "zlink-framework-provider-abstractions",
             "zlink-framework-binding-internal",
@@ -376,7 +386,7 @@ def validate_cpp():
     else:
         prefix = "framework/languages/cpp/packaging/conan"
         port = "zlink-framework"
-        tag = f"framework/v{version}"
+        tag = f"framework-cpp/v{version}"
         asset = f"zlink-framework-cpp-{version}.tar.gz"
     vcpkg_port(
         f"vcpkg/ports/{port}/vcpkg.json",
@@ -418,16 +428,20 @@ check_package_metadata() {
             check_metadata_item "$root" cpp 'Conan·vcpkg' 'Core recipe·port 버전과 SHA'
             ;;
         bindings)
-            check_metadata_item "$root" npm npm '@zlink-systems/zlink repository·homepage'
-            check_metadata_item "$root" nuget NuGet 'Zlink nupkg 메타데이터'
-            check_metadata_item "$root" maven Maven 'systems.zlink 2개·Central bundle'
-            check_metadata_item "$root" cpp 'Conan·vcpkg' 'zlink-cpp recipe·port 버전과 SHA'
+            case "$RELEASE_LANGUAGE" in
+                node) check_metadata_item "$root" npm npm '@zlink-systems/zlink repository·homepage' ;;
+                dotnet) check_metadata_item "$root" nuget NuGet 'Zlink nupkg 메타데이터' ;;
+                java) check_metadata_item "$root" maven Maven 'systems.zlink 2개·Central bundle' ;;
+                cpp) check_metadata_item "$root" cpp 'Conan·vcpkg' 'zlink-cpp recipe·port 버전과 SHA' ;;
+            esac
             ;;
         framework)
-            check_metadata_item "$root" npm npm '@zlink-systems/* 8개 repository·homepage'
-            check_metadata_item "$root" nuget NuGet 'Zlink.* 9개 nupkg 메타데이터'
-            check_metadata_item "$root" maven Maven 'systems.zlink 13개·Central bundle'
-            check_metadata_item "$root" cpp 'Conan·vcpkg' 'zlink-framework recipe·port 버전과 SHA'
+            case "$RELEASE_LANGUAGE" in
+                node) check_metadata_item "$root" npm npm '@zlink-systems/* 8개 repository·homepage' ;;
+                dotnet) check_metadata_item "$root" nuget NuGet 'Zlink.* 9개 nupkg 메타데이터' ;;
+                java) check_metadata_item "$root" maven Maven 'systems.zlink 13개·Central bundle' ;;
+                cpp) check_metadata_item "$root" cpp 'Conan·vcpkg' 'zlink-framework recipe·port 버전과 SHA' ;;
+            esac
             ;;
     esac
 }
@@ -455,16 +469,20 @@ print_deployment_targets() {
             printf '| 3 | zlink port | microsoft/vcpkg PR |\n'
             ;;
         bindings)
-            printf '| 1 | cpp/v%s | GitHub Release + ConanCenter·vcpkg PR |\n' "$RELEASE_VERSION"
-            printf '| 2 | node/v%s | npm |\n' "$RELEASE_VERSION"
-            printf '| 3 | java/v%s | Maven Central |\n' "$RELEASE_VERSION"
-            printf '| 4 | dotnet/v%s | nuget.org |\n' "$RELEASE_VERSION"
+            case "$RELEASE_LANGUAGE" in
+                cpp) printf '| 1 | cpp/v%s | GitHub Release + ConanCenter·vcpkg PR |\n' "$RELEASE_VERSION" ;;
+                node) printf '| 1 | node/v%s | npm |\n' "$RELEASE_VERSION" ;;
+                java) printf '| 1 | java/v%s | Maven Central |\n' "$RELEASE_VERSION" ;;
+                dotnet) printf '| 1 | dotnet/v%s | nuget.org |\n' "$RELEASE_VERSION" ;;
+            esac
             ;;
         framework)
-            printf '| 1 | framework/v%s C++ | GitHub Release + ConanCenter·vcpkg PR |\n' "$RELEASE_VERSION"
-            printf '| 2 | framework/v%s Node | npm (8개) |\n' "$RELEASE_VERSION"
-            printf '| 3 | framework/v%s JVM | Maven Central (13개) |\n' "$RELEASE_VERSION"
-            printf '| 4 | framework/v%s .NET | nuget.org (9개) |\n' "$RELEASE_VERSION"
+            case "$RELEASE_LANGUAGE" in
+                cpp) printf '| 1 | framework-cpp/v%s | GitHub Release + ConanCenter·vcpkg PR |\n' "$RELEASE_VERSION" ;;
+                node) printf '| 1 | framework-node/v%s | npm (8개) |\n' "$RELEASE_VERSION" ;;
+                java) printf '| 1 | framework-java/v%s | Maven Central (13개) |\n' "$RELEASE_VERSION" ;;
+                dotnet) printf '| 1 | framework-dotnet/v%s | nuget.org (9개) |\n' "$RELEASE_VERSION" ;;
+            esac
             ;;
     esac
 }
@@ -480,23 +498,41 @@ main() {
             *) positional+=("$1"); shift ;;
         esac
     done
-    ((${#positional[@]} == 2)) || { usage >&2; die 2 '대상과 버전을 지정해야 합니다.'; }
+    ((${#positional[@]} >= 2 && ${#positional[@]} <= 3)) \
+        || { usage >&2; die 2 '대상, 선택 언어와 버전을 지정해야 합니다.'; }
     RELEASE_TARGET=${positional[0]}
-    RELEASE_VERSION=${positional[1]}
     case "$RELEASE_TARGET" in
-        core|bindings|framework) ;;
+        core)
+            ((${#positional[@]} == 2)) \
+                || { usage >&2; die 2 'Core는 core <X.Y.Z> 형식으로 지정합니다.'; }
+            RELEASE_VERSION=${positional[1]}
+            ;;
+        bindings|framework)
+            ((${#positional[@]} == 3)) \
+                || { usage >&2; die 2 "$RELEASE_TARGET 릴리스에는 언어가 필요합니다."; }
+            RELEASE_LANGUAGE=${positional[1]}
+            case "$RELEASE_LANGUAGE" in
+                cpp|node|java|dotnet) ;;
+                *) usage >&2; die 2 "지원하지 않는 $RELEASE_TARGET 언어입니다: $RELEASE_LANGUAGE" ;;
+            esac
+            RELEASE_VERSION=${positional[2]}
+            ;;
         *) usage >&2; die 2 "지원하지 않는 릴리스 대상입니다: $RELEASE_TARGET" ;;
     esac
     [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
         || die 2 "버전은 X.Y.Z 형식이어야 합니다: $RELEASE_VERSION"
 
-    RESUME_COMMAND=$(quote_command "${BASH_SOURCE[0]}" "$RELEASE_TARGET" "$RELEASE_VERSION")
+    if [[ "$RELEASE_TARGET" == core ]]; then
+        RESUME_COMMAND=$(quote_command "${BASH_SOURCE[0]}" "$RELEASE_TARGET" "$RELEASE_VERSION")
+    else
+        RESUME_COMMAND=$(quote_command "${BASH_SOURCE[0]}" "$RELEASE_TARGET" "$RELEASE_LANGUAGE" "$RELEASE_VERSION")
+    fi
     require_command python3
     root=$(repo_root)
     if ((DRY_RUN)); then
         printf 'dry-run: 읽기 전용 검사를 동일하게 수행하며 파일이나 외부 상태를 바꾸지 않습니다.\n'
     fi
-    printf '릴리스 사전 검사: %s %s\n' "$RELEASE_TARGET" "$RELEASE_VERSION"
+    printf '릴리스 사전 검사: %s%s %s\n' "$RELEASE_TARGET" "${RELEASE_LANGUAGE:+/$RELEASE_LANGUAGE}" "$RELEASE_VERSION"
 
     check_version_sync "$root"
     check_release_notes "$root"
@@ -507,7 +543,7 @@ main() {
     if ((FAILURES > 0)); then
         die 1 "$FAILURES개 검사가 실패했습니다. 수정한 뒤 같은 명령으로 재개하십시오."
     fi
-    printf '\n릴리스 사전 검사 통과: %s %s\n' "$RELEASE_TARGET" "$RELEASE_VERSION"
+    printf '\n릴리스 사전 검사 통과: %s%s %s\n' "$RELEASE_TARGET" "${RELEASE_LANGUAGE:+/$RELEASE_LANGUAGE}" "$RELEASE_VERSION"
 }
 
 main "$@"

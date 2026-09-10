@@ -3,14 +3,12 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 java_root="$(cd "$script_dir/.." && pwd)"
-# The Gradle build reads the root FRAMEWORK_VERSION file (since 0.11.0); read the same source.
-repo_root="$(cd "$java_root/../../.." && pwd)"
-version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' "$repo_root/FRAMEWORK_VERSION" | head -n1)"
+version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' "$java_root/VERSION" | head -n1)"
 staging_dir="${MAVEN_CENTRAL_BUNDLE_DIR:-$java_root/build/central-staging}"
 bundle_path="${MAVEN_CENTRAL_BUNDLE_PATH:-$java_root/build/zlink-framework-java-$version-central-bundle.zip}"
 
 if [[ -z "$version" ]]; then
-  echo "framework version is missing from $repo_root/FRAMEWORK_VERSION" >&2
+  echo "framework version is missing from $java_root/VERSION" >&2
   exit 1
 fi
 if [[ ! -d "$staging_dir" ]]; then

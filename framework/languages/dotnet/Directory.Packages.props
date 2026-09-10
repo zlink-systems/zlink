@@ -2,10 +2,10 @@
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
-    <ZLinkBindingsPackageVersion Condition="'$(ZLinkBindingsPackageVersion)' == ''">0.17.6</ZLinkBindingsPackageVersion>
-    <!-- e2e/sample consumers pin the local http-client snapshot; bump deliberately after
-         republishing (framework/doc/http-client/http-client-unification-plan.ko.md Phase 2). -->
-    <ZLinkHttpClientPackageVersion Condition="'$(ZLinkHttpClientPackageVersion)' == ''">0.10.0</ZLinkHttpClientPackageVersion>
+    <ZLinkBindingsVersionFile>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../bindings/dotnet/VERSION'))</ZLinkBindingsVersionFile>
+    <ZLinkBindingsPackageVersion Condition="'$(ZLinkBindingsPackageVersion)' == '' and Exists('$(ZLinkBindingsVersionFile)')">$([System.IO.File]::ReadAllText('$(ZLinkBindingsVersionFile)').Trim().Replace('ZLINK_BINDING_VERSION=', ''))</ZLinkBindingsPackageVersion>
+    <ZLinkFrameworkVersionFile>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)VERSION'))</ZLinkFrameworkVersionFile>
+    <ZLinkHttpClientPackageVersion Condition="'$(ZLinkHttpClientPackageVersion)' == '' and Exists('$(ZLinkFrameworkVersionFile)')">$([System.IO.File]::ReadAllText('$(ZLinkFrameworkVersionFile)').Trim().Replace('ZLINK_FRAMEWORK_VERSION=', ''))</ZLinkHttpClientPackageVersion>
   </PropertyGroup>
 
   <ItemGroup>

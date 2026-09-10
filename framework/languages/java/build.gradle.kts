@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "systems.zlink"
-version = providers.fileContents(layout.projectDirectory.file("../../../FRAMEWORK_VERSION"))
+version = providers.fileContents(layout.projectDirectory.file("VERSION"))
     .asText
     .map { contents ->
         requireNotNull(

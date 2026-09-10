@@ -2,7 +2,7 @@
 
 `build-wsl.sh`는 `bindings/go`를 현재 Core `<VERSION>` runtime과 함께 source
 archive로 만든다. Go module path는 `zlink.systems/zlink`이고 release version은
-`<BINDINGS_VERSION>`이다.
+`bindings/go/VERSION`의 `<GO_BINDING_VERSION>`이다.
 
 ```bash
 scripts/local-package/go/build-wsl.sh \
@@ -12,7 +12,7 @@ scripts/local-package/go/build-wsl.sh \
 출력은 다음 파일이다.
 
 ```text
-.artifacts/wsl/go/zlink-go-<BINDINGS_VERSION>.tar.gz
+.artifacts/wsl/go/zlink-go-<GO_BINDING_VERSION>.tar.gz
 ```
 
 빌드 전에 Go binding test를 실행하며, archive에는 Linux x86_64 native

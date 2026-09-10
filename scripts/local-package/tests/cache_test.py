@@ -103,6 +103,12 @@ class CacheTests(unittest.TestCase):
             self.env.pop(key, None)
         (self.root / 'bindings').mkdir()
         (self.root / 'bindings/input').write_text('original\n')
+        for language in cache.LANGUAGES:
+            if language == 'c':
+                continue
+            version_dir = self.root / 'bindings' / language
+            version_dir.mkdir()
+            (version_dir / 'VERSION').write_text('ZLINK_BINDING_VERSION=1.0.0\n')
         scripts = self.root / 'scripts/local-package'
         scripts.mkdir(parents=True)
         for name in ['build-wsl.sh', 'package-cache.py', 'cache-prune.sh']:
@@ -120,7 +126,6 @@ if os.environ.get('CHECK_FAIL'):
         (scripts / 'core').mkdir()
         (scripts / 'core/fetch-release.sh').write_text('#!/bin/sh\nprintf "%s\\n" "' + str(core) + '"\n')
         (self.root / '.gitignore').write_text('.artifacts/\n')
-        (self.root / 'BINDINGS_VERSION').write_text('ZLINK_BINDINGS_VERSION=1.0.0\n')
         (self.root / 'VERSION').write_text('LIBZLINK_VERSION=1.0.0\n')
         self.git('init', '-b', 'main')
         self.git('config', 'user.name', 'cache fixture')
@@ -158,6 +163,7 @@ if os.environ.get('CHECK_FAIL'):
         self.assertRegex(self.builds()[0], rf'{entry.name}\.staging-\d+$')
         self.assertFalse(list(self.entries.glob('*.staging-*')))
         manifest = json.loads((entry / '.complete').read_text())
+        self.assertEqual(manifest['binding_versions'], {language: '1.0.0' for language in cache.LANGUAGES})
         self.assertEqual({v['language'] for v in manifest['files'].values()}, set(cache.LANGUAGES))
         self.assertFalse((entry / 'build').exists())
         self.assertFalse((entry / 'install/zlink-core').exists())
@@ -287,11 +293,11 @@ if os.environ.get('CHECK_FAIL'):
         original = cache.cache_key(self.root, 'tools-1', 'linux-x64')
         other = self.worktree()
         self.assertEqual(cache.cache_key(other, 'tools-1', 'linux-x64'), original)
-        for name in ['BINDINGS_VERSION', 'VERSION', 'bindings/input',
+        for name in ['bindings/cpp/VERSION', 'bindings/java/VERSION', 'VERSION', 'bindings/input',
                      'scripts/local-package/build-wsl.sh']:
             path = self.root / name
             before = path.read_bytes()
-            path.write_bytes(before.replace(b'1.0.0', b'2.0.0') if name in ['BINDINGS_VERSION', 'VERSION'] else before + b'\n# edit')
+            path.write_bytes(before.replace(b'1.0.0', b'2.0.0') if name.endswith('VERSION') else before + b'\n# edit')
             self.assertNotEqual(cache.cache_key(self.root, 'tools-1', 'linux-x64'), original, name)
             path.write_bytes(before)
         self.assertNotEqual(cache.cache_key(self.root, 'tools-1', 'linux-arm64'), original)

@@ -13,7 +13,7 @@ required_conan_version = ">=2.1"
 
 class ZlinkCppConan(ConanFile):
     name = "zlink-cpp"
-    version = "0.17.6"
+    version = "0.17.7"
     package_type = "static-library"
     license = "MPL-2.0"
     homepage = "https://github.com/zlink-systems/zlink"

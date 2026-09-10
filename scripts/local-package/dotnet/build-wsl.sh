@@ -12,7 +12,7 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Creates Zlink.<BINDINGS_VERSION>.nupkg with the exact Core VERSION
+Creates Zlink.<bindings/dotnet/VERSION>.nupkg with the exact Core VERSION
 Linux runtime.
 EOF
 }
@@ -28,7 +28,7 @@ done
 [[ "$core_prefix" = /* ]] || { echo "--core-prefix must be absolute" >&2; exit 2; }
 core_prefix="$(readlink -f "$core_prefix")"
 core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
-binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
+binding_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$repo_root/bindings/dotnet/VERSION")"
 manifest="$core_prefix/share/zlink/core-package-provenance.json"
 out_dir="$artifact_root/nuget"
 mkdir -p "$out_dir"

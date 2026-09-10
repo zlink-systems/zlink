@@ -18,10 +18,10 @@ Every release runs in GitHub Actions; nothing is published from a local machine.
 | Binding Node | `@zlink-systems/zlink` (with linux-x64 prebuild) | npm | `bindings-release.yml` | `node/v*` tag or dispatch | npm Trusted Publishing (OIDC, provenance) |
 | Binding Java | `systems.zlink:zlink`, `zlink-ext-netty` | Maven Central, GitHub Packages | `bindings-release.yml` | `java/v*` tag or dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` (GPG) |
 | Binding .NET | `Zlink` nupkg (+snupkg) | nuget.org | `release-dotnet.yml` (target `binding`) | `dotnet/v*` tag or dispatch | nuget Trusted Publishing (`NuGet/login`, policy `zlink-dotnet-release`) |
-| Framework C++ | source archive + sha256 (`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol headers verified with `--check`) | GitHub Release `framework/vA.B.C` | `framework-release.yml` | `framework/v*` tag or dispatch | `GITHUB_TOKEN` |
-| Framework Node | 8 `@zlink-systems/*` packages | npm | `framework-release.yml` | same | npm Trusted Publishing (registered per package) |
-| Framework JVM | 13 `systems.zlink:zlink-framework-*` artifacts (incl. Kotlin) | Maven Central | `framework-release.yml` | same | `MAVEN_CENTRAL_*`, `SIGNING_*` |
-| Framework .NET | 9 packages (`Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector`, ...) | nuget.org | `release-dotnet.yml` (target `framework`) | `framework/v*` tag or dispatch | nuget Trusted Publishing |
+| Framework C++ | source archive + sha256 (`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol headers verified with `--check`) | GitHub Release `framework-cpp/vA.B.C` | `framework-release.yml` | `framework-cpp/v*` tag or `target=cpp` dispatch | `GITHUB_TOKEN` |
+| Framework Node | 8 `@zlink-systems/*` packages | npm | `framework-release.yml` | `framework-node/v*` tag or `target=node` dispatch | npm Trusted Publishing (registered per package) |
+| Framework JVM | 13 `systems.zlink:zlink-framework-*` artifacts (incl. Kotlin) | Maven Central | `framework-release.yml` | `framework-java/v*` tag or `target=java` dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` |
+| Framework .NET | 9 packages (`Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector`, ...) | nuget.org | `release-dotnet.yml` (target `framework`) | `framework-dotnet/v*` tag or dispatch | nuget Trusted Publishing |
 | Documentation site | mkdocs static site | GitHub Pages | `docs.yml` | push to `main` (doc paths) | `GITHUB_TOKEN` |
 
 Python, Go, and Rust bindings have jobs in `bindings-release.yml` but are outside the public release
@@ -34,7 +34,7 @@ scope. `core-conan-release.yml` is a legacy workflow for a private Conan remote 
 | Core | `scripts/build-core.sh dev\|release\|release-gate` (trees `core/build-dev`, `core/build-release`). Direct CMake: [build guide](./build-guide.md), [CMake options](./cmake-options.md) | the platform jobs of `build.yml` build `core/` with CMake and archive `core/dist/<platform>/` | GitHub Release `core/vX.Y.Z` assets |
 | Core local prefix | `scripts/local-package/core/fetch-release.sh --version V --platform P` (release archive → `~/.cache/zlink/core/<V>/<P>`), `scripts/gate/materialize-local-core-prefix.sh` (dev build → prefix) | every binding and framework job uses the same `fetch-release.sh` | `~/.cache/zlink/core/`; CI uses `.artifacts/core-release/` |
 | Bindings (7 languages) | `scripts/local-package/build-wsl.sh [cpp\|node\|java\|dotnet\|python\|go\|rust\|c]` (Windows: `build-windows.ps1`); per-language tests `bindings/<lang>/tests/run_tests.sh` | the "Build and test" step of each `bindings-release.yml` / `release-dotnet.yml` job | `.artifacts/wsl/{npm,nuget,maven,install}/` |
-| Framework C++ | presets in `framework/languages/cpp/CMakePresets.json`, Windows `build-windows.ps1`; samples `samples/run_samples.sh`; scenario e2e `e2e/<name>/run_e2e.sh` (opt-in) | `framework-release.yml` only produces the source archive | GitHub Release `framework/vA.B.C` |
+| Framework C++ | presets in `framework/languages/cpp/CMakePresets.json`, Windows `build-windows.ps1`; samples `samples/run_samples.sh`; scenario e2e `e2e/<name>/run_e2e.sh` (opt-in) | `framework-release.yml` only produces the source archive | GitHub Release `framework-cpp/vA.B.C` |
 | Framework .NET | `dotnet build framework/languages/dotnet/Zlink.Framework.sln` (needs `ZLINK_LOCAL_PACKAGE_ROOT`); samples `samples/<name>/<name>.sln` | `framework-dotnet.yml` (verification), `release-dotnet.yml` target `framework` (pack and push) | nuget.org |
 | Framework JVM | `framework/languages/java/gradlew assemble` (`test` for tests); Central bundle via `scripts/upload-central-bundle.sh` | `framework-release.yml` `release-java` | Maven Central |
 | Framework Node | `npm ci && npm run build` in `framework/languages/node`; the http-client local tarball via `scripts/local-package/http-client/build-wsl.sh node`; gate `npm run verify:ci`, release gate `verify:release` | `framework-node.yml` (verification), `framework-release.yml` `release-node` (pack and publish) | npm |
@@ -46,29 +46,31 @@ scope. `core-conan-release.yml` is a legacy workflow for a private Conan remote 
 
 ## 3. Order
 
-Number rules and compatibility are owned by the [versioning policy](./versioning.md). `VERSION` (Core) and `BINDINGS_VERSION` are the version files; `scripts/local-package/sync-version.py
---write` propagates pins across the repository. The order is always **Core → 4 bindings → 4
-frameworks**; framework packages pin the published binding packages, so the order never inverts.
+Number rules and compatibility are owned by the [versioning policy](./versioning.md). The sources of truth
+are `VERSION` (Core), `bindings/<language>/VERSION`, and `framework/languages/<language>/VERSION`;
+`scripts/local-package/sync-version.py --write` aligns manifests and pins with those sources. Per-language
+order is always **Core → that binding → that framework**. Framework packages pin published binding packages,
+so the order never inverts.
 
 1. Core: update `VERSION`, add a `core/CHANGELOG.md` section, push `core/vX.Y.Z`, dispatch `build.yml`
    on that ref. Check the release assets, `checksums.txt`, and `release-provenance.txt`.
-2. Bindings: after `sync-version.py --write`, push `cpp/v`, `node/v`, `java/v` (→
-   `bindings-release.yml`) and `dotnet/v` (→ `release-dotnet.yml`). Each job verifies that the
-   checkout's `VERSION` and Core sources match the tag exactly, fetches the Core release archive
+2. Bindings: update the target language VERSION, run `sync-version.py --write`, and push
+   `<language>/vX.Y.N` (`bindings-release.yml`; .NET uses `release-dotnet.yml`). Each job verifies that
+   the selected VERSION and the checkout's Core `VERSION` and sources match their tags exactly, then fetches the Core release archive
    (`scripts/local-package/core/fetch-release.sh`), then builds, tests, and packs. CI never rebuilds Core.
-3. Framework: one `framework/vA.B.C` tag runs `framework-release.yml` (C++, Node, JVM) and
-   `release-dotnet.yml` (.NET). Both wait (up to 45 minutes) until the pinned binding package is really
-   served by its registry.
+3. Framework: update the target language VERSION and push `framework-<language>/vA.B.C`.
+   `framework-release.yml` publishes only the selected C++, Node, or JVM packages; .NET uses
+   `release-dotnet.yml`. The workflow waits until the pinned binding package is served by its registry.
 4. Conan and vcpkg: update `core/packaging/conan/conandata.yml` and
    `vcpkg/ports/zlink/portfile.cmake` with the source tarball hashes and open PRs upstream. Draft
    bodies are in `doc/building/pr-drafts/`.
 
 ```bash
 gh workflow run build.yml --ref core/v0.17.5 -f libzlink_version=0.17.5
-gh workflow run bindings-release.yml -f target=node -f version=0.17.5 -f create_release=true -f publish_registry=true
-gh workflow run release-dotnet.yml -f target=binding -f version=0.17.5
-gh workflow run framework-release.yml -f version=0.10.0 -f publish_registry=true
-gh workflow run release-dotnet.yml -f target=framework -f version=0.10.0
+gh workflow run bindings-release.yml -f target=node -f version=0.17.7 -f create_release=true -f publish_registry=true
+gh workflow run release-dotnet.yml -f target=binding -f version=0.17.7
+gh workflow run framework-release.yml -f target=node -f version=0.11.1 -f publish_registry=true
+gh workflow run release-dotnet.yml -f target=framework -f version=0.11.1
 ```
 
 ## 4. How each channel works
