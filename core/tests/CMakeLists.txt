@@ -113,6 +113,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_public_inproc_multipart_send
   ${INTEGRATION_TEST_ROOT}/test_helper_send_part_basic
   ${INTEGRATION_TEST_ROOT}/test_helper_recv_part_basic
+  ${INTEGRATION_TEST_ROOT}/test_whole_message_recv
   ${INTEGRATION_TEST_ROOT}/test_helper_ownership
   ${INTEGRATION_TEST_ROOT}/test_helper_more_bad_send
   ${INTEGRATION_TEST_ROOT}/test_helper_interleave

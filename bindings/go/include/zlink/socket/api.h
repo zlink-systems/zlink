@@ -294,6 +294,28 @@ ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (void *s_,
                                                   zlink_msg_t *part_out_,
                                                   zlink_part_flag_t *has_more_out_,
                                                   zlink_recv_flags_t flags_);
+/* Receives one complete PAIR or DEALER record into caller-owned slots. The
+ * slots need not be initialized. On success, close the returned prefix with
+ * zlink_multipart_close(). If capacity is insufficient, only
+ * part_count_out_ is changed and the record remains available for retry. */
+ZLINK_EXPORT zlink_recv_result_t zlink_recv (
+  void *s_,
+  const zlink_routing_id_t **source_rid_out_,
+  zlink_msg_t *parts_out_,
+  size_t parts_capacity_,
+  size_t *part_count_out_,
+  zlink_recv_flags_t flags_);
+/* Receives one complete ROUTER DATA or REQUEST record into caller-owned
+ * slots. The source RID is borrowed under the same lifetime as recv_part;
+ * DATA has reply token 0 and REQUEST has a nonzero opaque reply token. */
+ZLINK_EXPORT zlink_recv_result_t zlink_router_recv (
+  void *router_,
+  const zlink_routing_id_t **source_rid_out_,
+  zlink_reply_token_t *reply_token_out_,
+  zlink_msg_t *parts_out_,
+  size_t parts_capacity_,
+  size_t *part_count_out_,
+  zlink_recv_flags_t flags_);
 ZLINK_EXPORT zlink_submit_result_t zlink_publish_part (void *subject_,
                                                        const char *topic_id_,
                                                        zlink_msg_t *part_,

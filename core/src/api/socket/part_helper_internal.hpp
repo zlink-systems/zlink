@@ -128,6 +128,22 @@ struct handle_state_t
     recv_sequence_state_t recv;
 };
 
+struct recv_record_metadata_t
+{
+    bool return_source_rid_as_null;
+    zlink_routing_id_t source_node_rid;
+    uint64_t request_seq;
+    uint64_t transport_pair_id;
+    uint64_t transport_pair_generation;
+};
+
+enum staged_recv_record_result_t
+{
+    staged_recv_record_error = -1,
+    staged_recv_record_none = 0,
+    staged_recv_record_taken = 1
+};
+
 int validate_send_flags (zlink_send_flags_t flags_);
 int validate_part_flag (zlink_part_flag_t part_flag_);
 bool routing_id_equals (const zlink_routing_id_t &lhs_, const zlink_routing_id_t &rhs_);
@@ -141,6 +157,13 @@ void trace_routed_part_send_failed (send_family_t family_, bool first_part_, int
 std::shared_ptr<handle_state_t> find_or_create_socket_state (zlink::socket_base_t *socket_);
 std::shared_ptr<handle_state_t> find_socket_state (zlink::socket_base_t *socket_);
 bool recv_sequence_active (const std::shared_ptr<handle_state_t> &state_);
+staged_recv_record_result_t try_take_staged_recv_record (
+  const std::shared_ptr<handle_state_t> &state_,
+  recv_family_t family_,
+  zlink_msg_t *parts_out_,
+  size_t parts_capacity_,
+  size_t *part_count_out_,
+  recv_record_metadata_t *metadata_out_);
 int stage_recv_sequence (const std::shared_ptr<handle_state_t> &state_,
                          recv_family_t family_,
                          zlink::socket_base_t *source_socket_,

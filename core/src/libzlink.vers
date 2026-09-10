@@ -59,7 +59,9 @@
     zlink_poller_wait;
     zlink_proxy;
     zlink_publish_part;
+    zlink_recv;
     zlink_recv_part;
+    zlink_router_recv;
     zlink_router_recv_part;
     zlink_reply_part;
     zlink_request_part;

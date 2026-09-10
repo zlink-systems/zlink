@@ -532,6 +532,60 @@ bool zlink::part_helper_internal::recv_sequence_active (
     return state_->recv.active;
 }
 
+zlink::part_helper_internal::staged_recv_record_result_t
+zlink::part_helper_internal::try_take_staged_recv_record (
+  const std::shared_ptr<handle_state_t> &state_, recv_family_t family_,
+  zlink_msg_t *parts_out_, size_t parts_capacity_, size_t *part_count_out_,
+  recv_record_metadata_t *metadata_out_)
+{
+    if (!state_)
+        return staged_recv_record_none;
+    if (!parts_out_ || !part_count_out_ || !metadata_out_) {
+        errno = EFAULT;
+        return staged_recv_record_error;
+    }
+
+    socket_base_t *held_socket = NULL;
+    {
+        std::lock_guard<std::mutex> lock (state_->mutex);
+        recv_sequence_state_t &recv = state_->recv;
+        if (!recv.active)
+            return staged_recv_record_none;
+        if (recv.family != family_
+            || recv.owner_thread != std::this_thread::get_id ()
+            || recv.next_part_index != 0) {
+            errno = EBUSY;
+            return staged_recv_record_error;
+        }
+
+        const size_t part_count = recv.buffered_parts.size ();
+        if (parts_capacity_ < part_count) {
+            *part_count_out_ = part_count;
+            errno = ENOBUFS;
+            return staged_recv_record_error;
+        }
+
+        metadata_out_->return_source_rid_as_null =
+          recv.return_source_rid_as_null;
+        metadata_out_->source_node_rid = recv.source_node_rid;
+        metadata_out_->request_seq = recv.request_seq;
+        metadata_out_->transport_pair_id = recv.transport_pair_id;
+        metadata_out_->transport_pair_generation =
+          recv.transport_pair_generation;
+        for (size_t i = 0; i < part_count; ++i) {
+            const int move_rc =
+              zlink_msg_move (&parts_out_[i], &recv.buffered_parts[i]);
+            errno_assert (move_rc == 0);
+        }
+        *part_count_out_ = part_count;
+        held_socket = reset_recv_sequence (&recv);
+    }
+    if (held_socket)
+        held_socket->end_public_part_receive_delivery_hold ();
+    errno = 0;
+    return staged_recv_record_taken;
+}
+
 int zlink::part_helper_internal::stage_recv_sequence (const std::shared_ptr<handle_state_t> &state_,
                                                       recv_family_t family_,
                                                       zlink::socket_base_t *source_socket_,
