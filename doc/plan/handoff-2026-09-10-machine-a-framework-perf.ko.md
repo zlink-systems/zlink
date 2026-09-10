@@ -148,6 +148,31 @@ G4 이후 **패키지 신선도** 문제가 연달아 작업을 막았다. 전�
 
 **규칙: 바인딩이 바뀐 뒤에는 `build-wsl.sh`를 돌리고, NuGet은 캐시까지 지운다.** 버전이 같으면 아무것도 갱신되지 않는다.
 
+### 벤치는 CI에 넣지 않는다 (사용자 결정 2026-09-11)
+
+`framework/bench/**`는 **필요할 때만 구동한다.** CI paths 필터에 넣지 않는다.
+
+대신 `framework/bench/grpc/build_all.sh`가 그 자리를 대신한다 — 스크립트 주석 그대로
+*"the local framework gate calls this so a runtime/API change that breaks a bench is caught
+before a measurement window"*. **이번 세션의 사고는 이걸 안 돌린 탓이다.**
+
+**측정 전 절차 (반드시)**
+
+```bash
+# 1) 바인딩·Core가 바뀌었으면 로컬 패키지부터
+bash scripts/local-package/build-wsl.sh
+rm -rf ~/.nuget/packages/zlink/<VERSION>      # 같은 버전이면 캐시가 안 바뀐다
+
+# 2) 벤치가 지금 빌드되는지 먼저 확인 (측정 창을 낭비하지 않는다)
+BENCH_LANGS="java" bash framework/bench/grpc/build_all.sh
+
+# 3) 그다음 측정 티켓
+bash scripts/perf/perf-ticket.sh submit -p 1 -o supervisor -d '<설명>' -- <명령>
+```
+
+2026-09-11에 이 순서를 지키지 않아 #137(C++ 벤치)·#148(Java 벤치)을 **측정하려는 순간에** 발견했다.
+둘 다 G4 바인딩 변경 뒤 벤치가 적응되지 않은 것이었다.
+
 ## 7. 환경 (이 세션에서 확인·수정)
 
 - **framework Java 로컬 검증**: 소스 빌드 Core + `ZLINK_JAVA_BINDINGS_SOURCE` includeBuild. 1,518 테스트 1분 20초.
