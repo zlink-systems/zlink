@@ -67,14 +67,40 @@ G2 결과가 설계를 바꾸면 G4 전에 draft를 갱신한다. G4 언어별 j
 | rust | `src/contracts/messaging/operations.rs` | `runtime/messaging/operations/{send_ops,routed_async}.rs` | `tests/contract_tests.rs` |
 | python | `contracts/sockets/operations.py` | `_runtime/sockets/socket_base_impl.py` bridge | tests |
 
-## 5. perf·벤치 수정 대상 (G3·G4)
+## 5. bindings perf·벤치 수정 대상 (G3·G4) — 바인딩 API 변경과 같은 Issue·PR로
 
-| 위치 | 변경 |
-|---|---|
-| `bindings/java/perf/multi/.../PerfMultiSocketReqRep.java` | poll pacing 제거. `result==BACKPRESSURED`면 `admitted` 뒤 재개; reply는 `reply` stage로 진행 |
-| `bindings/java/perf/multi/.../PerfMultiRoutedSendCoordinator.java`, `PerfMultiAsyncSendLoop.java` | stage `isDone` 판정 → `result` 판정 |
-| `bindings/{node,dotnet,cpp,go,rust,python}/perf/multi/*reqrep*`, `*sendsend*`, single | 같은 규칙 |
-| `framework/bench/grpc/{java,node,dotnet,cpp}` raw 드라이버 | request-backpressure·send-saturation을 같은 규칙으로. Java는 Issue #12 브랜치(`e1272851bd` perf 구조) 위에서 |
+바인딩 종결자가 바뀌면 그 언어의 perf 클라이언트(multi·single)는 컴파일이 깨지거나 의미가 어긋나므로 **언어별 binding Issue(#89~#96)에
+perf 수정을 포함**한다. 규칙은 draft §5: `result == OK`면 즉시 다음 제출, `BACKPRESSURED`면 그 socket만 `admitted`를 기다렸다가 재개,
+request의 reply는 `reply` stage로 별도 진행, **turn당 1건 pacing·완료 poll 대기·"stage `isDone`" 판정은 없앤다.** 서버 쪽(reply·recv
+루프)과 PUBSUB·STREAM·monitor 클라이언트는 종결자를 쓰지 않으므로 변경 없음.
+
+### 5.1 언어별 perf 클라이언트 파일
+
+| 언어 | multi | single |
+|---|---|---|
+| java (#89·#90) | `perf/multi/.../PerfMultiSocketReqRep.java`(reqrep), `PerfMultiRoutedSendCoordinator.java`·`PerfMultiAsyncSendLoop.java`(send 공통), `PerfMultiDealerDealer.java`, `PerfMultiDealerRouter.java`, `PerfMultiRouterRouter.java` | `perf/single/.../PerfSocketReqRep.java`, `PerfDealerRouter.java`, `PerfRouterRouter.java`, `PerfDealerDealer.java`, `PerfPair.java` |
+| node (#93) | `perf/multi/perf_multi_socket_reqrep.ts`, `perf_multi_routed_sendsend.ts`, `perf_multi_dealer_dealer_client.ts`, `perf_multi_dealer_router_client.ts`, `perf_multi_router_router_client.ts` | `perf/single/perf_socket_reqrep.ts`, `perf_dealer_router_reqrep.ts`, `perf_router_router_reqrep.ts`, `perf_dealer_router.ts`, `perf_router_router.ts`, `perf_dealer_dealer.ts`, `perf_pair.ts`, `perf_single_sender_worker.ts` |
+| dotnet (#92) | `perf/multi/.../PerfMultiSocketReqRep.cs`, `PerfMultiDealerDealerClient.cs`, `PerfMultiDealerRouterClient.cs`, `PerfMultiRouterRouterClient.cs`, `common/PerfClientHelpers.cs`, `common/PerfClientEntry.cs` | `perf/single/.../PerfReqRep.cs`, `PerfDealerRouter.cs`, `PerfRouterRouter.cs`, `PerfDealerDealer.cs`, `PerfPair.cs` |
+| cpp (#91) | `perf/multi/common/perf_multi_reqrep.hpp`, `common/perf_client_helpers.hpp`, `src/perf_dealer_router_reqrep_client.cpp`, `src/perf_router_router_reqrep_client.cpp`, `src/perf_dealer_dealer_client.cpp`, `src/perf_dealer_router_client.cpp`, `src/perf_router_router_client.cpp` | `perf/single/common/perf_single_reqrep.hpp`, `src/perf_dealer_router_reqrep.cpp`, `src/perf_router_router_reqrep.cpp`, `src/perf_dealer_router.cpp`, `src/perf_router_router.cpp`, `src/perf_dealer_dealer.cpp`, `src/perf_pair.cpp` |
+| go (#94) | `perf/multi/perf_multi_socket_reqrep.go`(goroutine당 요청 → `Submit`+`Admitted(ctx)` 루프와 `Reply(ctx)` 수집 goroutine), `perf_multi_dealer_dealer.go`, `perf_multi_dealer_router.go`, `perf_multi_router_router.go` | `perf/single/perf_reqrep.go`, `perf_dealer_router_reqrep.go`, `perf_router_router_reqrep.go`, `perf_dealer_router.go`, `perf_router_router.go`, `perf_dealer_dealer.go`, `perf_pair.go` |
+| rust (#95) | `perf/multi/src/perf_multi_socket_reqrep.rs`, `perf_multi_dealer_router_reqrep_client.rs`, `perf_multi_router_router_reqrep_client.rs`, `perf_multi_dealer_dealer_client.rs`, `perf_multi_dealer_router_client.rs`, `perf_multi_router_router_client.rs` | `perf/single/src/perf_dealer_router_reqrep.rs`, `perf_router_router_reqrep.rs`, `perf_dealer_router.rs`, `perf_router_router.rs`, `perf_dealer_dealer.rs`, `perf_pair.rs` |
+| python (#96) | `perf/multi/perf_multi_reqrep_client.py`, `perf_multi_dealer_router_reqrep_client.py`, `perf_multi_router_router_reqrep_client.py`, `perf_multi_dealer_dealer_client.py`, `perf_multi_dealer_router_client.py`, `perf_multi_router_router_client.py` | `perf/single/perf_single_reqrep.py`, `perf_dealer_router_reqrep.py`, `perf_router_router_reqrep.py`, `perf_dealer_router.py`, `perf_router_router.py`, `perf_dealer_dealer.py`, `perf_pair.py` |
+| c | 변경 없음(이미 `BACKPRESSURED`+WRITABLE 루프, reference) | — |
+
+### 5.2 gRPC 비교 벤치 raw 드라이버
+
+| 위치 | Issue | 변경 |
+|---|---|---|
+| `framework/bench/grpc/java/client` (`RawStack`, `BenchDrivers.runRaw`) | #90 | Issue #12 브랜치(`e1272851bd`, perf 구조 1차) 위에서 request-backpressure·send-saturation을 §5 규칙으로 |
+| `framework/bench/grpc/{node,dotnet,cpp}` raw 드라이버 | #93·#92·#91 | 같은 규칙 |
+
+### 5.3 검증
+
+- 언어별: `bindings/<lang>/perf/multi/run_benchmarks.sh --pattern ALL --transports tcp --msg-sizes 64,1024,4096,65536 --runs 3`
+  전후 비교(D-B 판정: 사이즈별 −5% 이내, gate geomean 하락 시 개선 대상). `ROUTER_ROUTER_REQREP clients=1`이 깊이 1을 벗어나는지
+  (기준 2026-09-10: clients=100 248k/s, clients=1 8.5k/s)를 반드시 포함.
+- 정책 문서 `doc/perf/PERF_MULTI_TEST_POLICY.md`·`PERF_POLICY.md`는 G1(#88)에서 먼저 고친다. perf 코드가 정책보다 앞서지 않는다.
+- 측정은 `scripts/perf/perf-ticket.sh submit -p 2`(codex) / `-p 1`(감독자 판정).
 
 ## 6. framework 호출부 (G5)
 
