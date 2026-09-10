@@ -1429,15 +1429,9 @@ public sealed class ServiceRuntimeFoundationTests
         using var replyPart = Message.From(new byte[] { 9, 8, 7 });
         Assert.Equal(SubmitResult.Ok, received[0].Reply([replyPart]));
 
-        var reply = await request;
-        try
-        {
-            Assert.Equal(new byte[] { 9, 8, 7 }, Assert.Single(reply).ToArray());
-        }
-        finally
-        {
-            ZLinkMessageParts.DisposeAll(reply);
-        }
+        using var reply = await request;
+        Assert.Equal(1, reply.PartCount);
+        Assert.Equal(new byte[] { 9, 8, 7 }, reply.ApplicationPayloadView!.GetSpan(0).ToArray());
     }
 
     [Fact]

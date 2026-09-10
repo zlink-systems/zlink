@@ -579,7 +579,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             ownerLeaseGeneration);
     }
 
-    internal async ValueTask<IReadOnlyList<Message>> RequestToNodeAsync(
+    internal async ValueTask<ZLinkBackendRouteReceived> RequestToNodeAsync(
         RoutingId targetNodeRid,
         IReadOnlyList<Message> parts,
         TimeSpan timeout,

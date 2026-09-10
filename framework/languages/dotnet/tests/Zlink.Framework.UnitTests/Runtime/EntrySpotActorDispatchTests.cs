@@ -9987,7 +9987,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     (ZlinkSubmitException.ErrorCode)(int)result));
         }
 
-        public ValueTask<IReadOnlyList<Message>> RequestToSpotAsync(
+        public ValueTask<ZLinkBackendRouteReceived> RequestToSpotAsync(
             RoutingId targetRid,
             string targetSpotId,
             ulong spotGeneration,
@@ -10002,7 +10002,7 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = timeout;
             _ = metadata;
             if (SpotRequestHandler is null)
-                return ValueTask.FromException<IReadOnlyList<Message>>(
+                return ValueTask.FromException<ZLinkBackendRouteReceived>(
                     new ZlinkSubmitException(
                         ZlinkSubmitException.ErrorCode.NotConnected));
             SpotRequests.Add((targetRid, targetSpotId, spotGeneration));
@@ -10010,8 +10010,9 @@ public sealed partial class EntrySpotActorDispatchTests
                 ? configured
                 : RequestResult.Ok;
             return result == RequestResult.Ok
-                ? ValueTask.FromResult(SpotRequestHandler(parts))
-                : ValueTask.FromException<IReadOnlyList<Message>>(
+                ? ValueTask.FromResult(new ZLinkBackendRouteReceived(
+                    SpotRequestHandler(parts), null, null, null, null))
+                : ValueTask.FromException<ZLinkBackendRouteReceived>(
                     new ZlinkRequestException(
                         (ZlinkRequestException.ErrorCode)(int)result));
         }
@@ -10929,7 +10930,7 @@ public sealed partial class EntrySpotActorDispatchTests
                   ?? new NotSupportedException("No node request result was configured for this test.");
         }
 
-        public ValueTask<IReadOnlyList<Message>> RequestToNodeAsync(
+        public ValueTask<ZLinkBackendRouteReceived> RequestToNodeAsync(
             RoutingId targetNodeRid,
             IReadOnlyList<Message> parts,
             SendFlags flags,
@@ -10943,7 +10944,7 @@ public sealed partial class EntrySpotActorDispatchTests
             LastNodeRequestFlags = flags;
             _ = timeout;
             LastNodeRequestMetadata = metadata.ToArray();
-            return ValueTask.FromException<IReadOnlyList<Message>>(
+            return ValueTask.FromException<ZLinkBackendRouteReceived>(
                 NodeRequestFailure
                 ?? new NotSupportedException(
                     "No node request result was configured for this test."));

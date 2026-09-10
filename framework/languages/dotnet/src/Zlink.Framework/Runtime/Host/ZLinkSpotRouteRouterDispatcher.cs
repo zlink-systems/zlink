@@ -54,7 +54,7 @@ internal sealed class ZLinkSpotRouteRouterDispatcher(
             metadata);
     }
 
-    public async ValueTask<IReadOnlyList<Message>> RequestAsync(
+    public async ValueTask<ZLinkBackendRouteReceived> RequestAsync(
         string routerChannelId,
         RoutingId targetNodeRid,
         string targetSpotId,

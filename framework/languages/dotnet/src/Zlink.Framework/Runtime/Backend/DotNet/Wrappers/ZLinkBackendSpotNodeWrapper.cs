@@ -1211,7 +1211,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         return true;
     }
 
-    public ValueTask<IReadOnlyList<Message>> RequestToNodeAsync(
+    public ValueTask<ZLinkBackendRouteReceived> RequestToNodeAsync(
         RoutingId targetNodeRid,
         IReadOnlyList<Message> parts,
         SendFlags flags,

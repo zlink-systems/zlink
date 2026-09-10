@@ -86,20 +86,31 @@ internal static class ZLinkClientCallCodec
         string emptyMessage,
         string errorMessage,
         ZLinkCodecRegistryBuilder? codecs,
+        bool validateFlow = true) =>
+        DecodeEnvelopeReplyAndDispose<TReply>(
+            new ZLinkBackendRouteReceived(reply, null, null, null, null),
+            emptyMessage, errorMessage, codecs, validateFlow);
+
+    public static TReply DecodeEnvelopeReplyAndDispose<TReply>(
+        ZLinkBackendRouteReceived reply,
+        string emptyMessage,
+        string errorMessage,
+        ZLinkCodecRegistryBuilder? codecs,
         bool validateFlow = true)
     {
         try
         {
             return ZLinkEnvelopeReplyDecoder.Decode<TReply>(
-                reply,
+                reply.Parts,
                 emptyMessage,
                 errorMessage,
                 codecs,
-                validateFlow);
+                validateFlow,
+                reply.ApplicationPayloadView);
         }
         finally
         {
-            ZLinkMessageParts.DisposeAll(reply);
+            reply.Dispose();
         }
     }
 
@@ -112,9 +123,11 @@ internal static class ZLinkEnvelopeReplyDecoder
         string emptyMessage,
         string errorMessage,
         ZLinkCodecRegistryBuilder? codecs,
-        bool validateFlow = true)
+        bool validateFlow = true,
+        ZLinkMultipartPayloadView? applicationPayloadView = null)
     {
-        if (reply.Count == 0)
+        var partCount = applicationPayloadView?.Count ?? reply.Count;
+        if (partCount == 0)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
                 emptyMessage);
@@ -122,7 +135,9 @@ internal static class ZLinkEnvelopeReplyDecoder
         ZLinkEnvelopeHeader replyHeader;
         try
         {
-            replyHeader = ZLinkEnvelopeCodec.DecodeHeader(reply, validateFlow);
+            replyHeader = applicationPayloadView is { } view
+                ? ZLinkEnvelopeCodec.DecodeHeader(view, validateFlow)
+                : ZLinkEnvelopeCodec.DecodeHeader(reply, validateFlow);
         }
         catch (ZLinkFrameworkException)
         {
@@ -141,18 +156,17 @@ internal static class ZLinkEnvelopeReplyDecoder
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
                 $"Reply envelope kind '{replyHeader.Kind}' is not a response.");
-        if (reply.Count < 2)
+        if (partCount < 2)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
                 "Reply envelope body is missing.");
 
         try
         {
-            return (TReply?)ZLinkEnvelopeCodec.DecodeBody(
-                       reply,
-                       typeof(TReply),
-                       replyHeader.ContentType,
-                       codecs)
+            var body = applicationPayloadView is { } view
+                ? ZLinkEnvelopeCodec.DecodeBody(view, typeof(TReply), replyHeader.ContentType, codecs)
+                : ZLinkEnvelopeCodec.DecodeBody(reply, typeof(TReply), replyHeader.ContentType, codecs);
+            return (TReply?)body
                    ?? throw new ZLinkFrameworkException(
                        ZLinkFrameworkErrorKind.ProtocolError,
                        "Reply body is null.");

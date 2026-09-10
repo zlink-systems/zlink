@@ -183,14 +183,14 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         throw new NotSupportedException("This MeshNode backend does not support node requests.");
     }
 
-    ValueTask<IReadOnlyList<Message>> RequestToNodeAsync(
+    ValueTask<ZLinkBackendRouteReceived> RequestToNodeAsync(
         RoutingId targetNodeRid,
         IReadOnlyList<Message> parts,
         SendFlags flags,
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default) =>
-        ValueTask.FromException<IReadOnlyList<Message>>(new NotSupportedException(
+        ValueTask.FromException<ZLinkBackendRouteReceived>(new NotSupportedException(
             "This MeshNode backend does not support direct node requests."));
 
     ZLinkBackendActorRef CreateActor(string actorId, Message createRequest);
@@ -492,14 +492,14 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
         ValueTask.FromException(new NotSupportedException(
             "This Spot backend does not support direct channel sends."));
 
-    ValueTask<IReadOnlyList<Message>> RequestToChannelAsync(
+    ValueTask<ZLinkBackendRouteReceived> RequestToChannelAsync(
         string channelName,
         IReadOnlyList<Message> parts,
         SendFlags flags,
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default) =>
-        ValueTask.FromException<IReadOnlyList<Message>>(new NotSupportedException(
+        ValueTask.FromException<ZLinkBackendRouteReceived>(new NotSupportedException(
             "This Spot backend does not support direct channel requests."));
 
     void Publish(
@@ -545,7 +545,7 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
         ValueTask.FromException(new NotSupportedException(
             "This Spot backend does not support direct Spot sends."));
 
-    ValueTask<IReadOnlyList<Message>> RequestToSpotAsync(
+    ValueTask<ZLinkBackendRouteReceived> RequestToSpotAsync(
         RoutingId targetRid,
         string spotId,
         ulong spotGeneration,
@@ -554,7 +554,7 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default) =>
-        ValueTask.FromException<IReadOnlyList<Message>>(new NotSupportedException(
+        ValueTask.FromException<ZLinkBackendRouteReceived>(new NotSupportedException(
             "This Spot backend does not support direct Spot requests."));
 
     bool RequestToSpot(

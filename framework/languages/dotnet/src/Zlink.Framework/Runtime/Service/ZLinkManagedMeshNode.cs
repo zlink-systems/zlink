@@ -3771,7 +3771,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: targetRid);
     }
 
-    internal async ValueTask<IReadOnlyList<Message>> RequestToSpotDirectAsync(
+    internal async ValueTask<ZLinkBackendRouteReceived> RequestToSpotDirectAsync(
         string sourceSpotId,
         RoutingId targetRid,
         string spotId,
@@ -3834,7 +3834,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     completion.Result,
                     completion.FailureErrno);
             }
-            return completion.Parts;
+            return new ZLinkBackendRouteReceived(
+                completion.Parts, null, null, null, null);
         }
         var peer = RequireDirectSpotPeer(targetRid, spotId, spotGeneration, out var authority);
         var operationId = NextStandaloneOperationId();
@@ -9043,7 +9044,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: targetRid);
     }
 
-    internal async ValueTask<IReadOnlyList<Message>> RequestToNodeDirectAsync(
+    internal async ValueTask<ZLinkBackendRouteReceived> RequestToNodeDirectAsync(
         RoutingId targetRid,
         IReadOnlyList<Message> parts,
         SendFlags flags,
@@ -9107,7 +9108,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             channelName: channelName);
     }
 
-    internal async ValueTask<IReadOnlyList<Message>> RequestToChannelDirectAsync(
+    internal async ValueTask<ZLinkBackendRouteReceived> RequestToChannelDirectAsync(
         string sourceSpotId,
         string channelName,
         IReadOnlyList<Message> parts,
@@ -9355,7 +9356,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private static IReadOnlyList<Message> DecodeDirectApplicationReply(
+    private static ZLinkBackendRouteReceived DecodeDirectApplicationReply(
         ulong correlation,
         IReadOnlyList<Message> replyParts)
     {
@@ -9386,15 +9387,18 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     checked((int)reply.FailureCode));
             }
             if (replyParts.Count != 2
-                || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
+                || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
                     replyParts[1], out var decoded))
                 throw new ZlinkRequestException(
                     ZlinkRequestException.ErrorCode.ProtocolError);
-            return decoded;
+            return new ZLinkBackendRouteReceived(
+                replyParts, null, null, null, null,
+                applicationPayloadView: decoded);
         }
-        finally
+        catch
         {
             DisposeParts(replyParts);
+            throw;
         }
     }
 

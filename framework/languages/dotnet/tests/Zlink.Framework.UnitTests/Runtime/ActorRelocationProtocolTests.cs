@@ -1015,7 +1015,7 @@ public sealed class ActorRelocationProtocolTests
         try
         {
             var decoded = ZLinkRemoteActorJoinPackets.DecodeAdmissionReplyAndDispose(
-                parts,
+                new ZLinkBackendRouteReceived(parts, null, null, null, null),
                 "actor-1",
                 "target-spot");
             Assert.Equal(
@@ -1055,7 +1055,7 @@ public sealed class ActorRelocationProtocolTests
         try
         {
             var decoded = ZLinkRemoteActorJoinPackets.DecodeAdmissionReplyAndDispose(
-                parts,
+                new ZLinkBackendRouteReceived(parts, null, null, null, null),
                 "actor-1",
                 "target-spot");
             Assert.Equal(0UL, decoded.ReceiveChunkLimitBytes);
