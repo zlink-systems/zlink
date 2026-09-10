@@ -47,8 +47,8 @@ public sealed class MeshNodeShutdownSealTests
             context,
             MeshName,
             routedSubmitScheduler: scheduler,
-            decorateSocketMonitor: (monitor, wake) =>
-                transportMonitor = new DeferredReadyMonitor(monitor, wake));
+            decorateSocketMonitor: monitor =>
+                transportMonitor = new DeferredReadyMonitor(monitor));
         var suffix = Guid.NewGuid().ToString("N");
         node.SetRoutingId(RoutingId.From($"ready-node-{suffix}"));
         node.SetBind(EphemeralTcpEndpoint);
@@ -208,8 +208,8 @@ public sealed class MeshNodeShutdownSealTests
         await using var node = new ZLinkManagedMeshNode(
             context,
             MeshName,
-            decorateSocketMonitor: (monitor, wake) =>
-                transportMonitor = new DeferredReadyMonitor(monitor, wake));
+            decorateSocketMonitor: monitor =>
+                transportMonitor = new DeferredReadyMonitor(monitor));
         var suffix = Guid.NewGuid().ToString("N");
         node.SetRoutingId(RoutingId.From($"same-connection-node-{suffix}"));
         node.SetBind(EphemeralTcpEndpoint);
@@ -263,8 +263,8 @@ public sealed class MeshNodeShutdownSealTests
             context,
             MeshName,
             routedSubmitScheduler: scheduler,
-            decorateSocketMonitor: (monitor, wake) =>
-                transportMonitor = new DeferredReadyMonitor(monitor, wake));
+            decorateSocketMonitor: monitor =>
+                transportMonitor = new DeferredReadyMonitor(monitor));
         var suffix = Guid.NewGuid().ToString("N");
         node.SetRoutingId(RoutingId.From($"late-ready-node-{suffix}"));
         node.SetBind(EphemeralTcpEndpoint);
@@ -596,7 +596,7 @@ public sealed class MeshNodeShutdownSealTests
             ThreadPool.QueueUserWorkItem(_ => TryExecuteTask(task));
     }
 
-    private sealed class DeferredReadyMonitor(ISocketMonitor inner, Action wake) : ISocketMonitor
+    private sealed class DeferredReadyMonitor(ISocketMonitor inner) : ISocketMonitor
     {
         private readonly Queue<MonitorEvent> _ready = new();
         private readonly TaskCompletionSource _captured =
@@ -611,7 +611,6 @@ public sealed class MeshNodeShutdownSealTests
         internal void ReleaseReady()
         {
             Volatile.Write(ref _release, 1);
-            wake();
         }
 
         public MonitorEvent? Recv(RecvFlags flags = RecvFlags.None)
@@ -634,8 +633,6 @@ public sealed class MeshNodeShutdownSealTests
                 {
                     _ready.Enqueue(value);
                     _captured.TrySetResult();
-                    if (Volatile.Read(ref _release) != 0)
-                        wake();
                     continue;
                 }
                 return value;

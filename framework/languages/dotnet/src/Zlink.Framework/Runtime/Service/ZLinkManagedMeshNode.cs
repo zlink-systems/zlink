@@ -32,11 +32,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         TimeSpan.FromSeconds(2);
     private static readonly TimeSpan DefaultRemoteUserSpotTerminalRetention =
         TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan TransportShutdownGrace = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan TransportShutdownGrace = PollInterval + PollInterval;
     private static readonly TimeSpan AdmissionRetryInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan RelocationAckRetryInterval =
         TimeSpan.FromMilliseconds(100);
-    private static readonly TimeSpan NativeReplyRetryInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan NativeReplySubmissionTimeout =
         TimeSpan.FromSeconds(5);
 
@@ -61,7 +61,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         MaxRoutedAdmissionWaiters,
         MaxRoutedAdmissionWaiters);
     private readonly ConcurrentExclusiveSchedulerPair _routedSubmitScheduler;
-    private readonly Func<ISocketMonitor, Action, ISocketMonitor>? _decorateSocketMonitor;
+    private readonly Func<ISocketMonitor, ISocketMonitor>? _decorateSocketMonitor;
     private readonly Dictionary<ZLinkChannelName, uint> _channels = new();
     private readonly Dictionary<ulong, Peer> _peersByIntent = new();
     private readonly Dictionary<RoutingId, Peer> _peersByRid = new();
@@ -135,7 +135,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private IDisposable? _receiveFlowRegistration;
     private ISocketMonitor? _socketMonitor;
     private IPoller? _poller;
-    private IZlinkTimer? _ingressWake;
     private CancellationTokenSource? _stop;
     private Task? _receiveLoop;
     private Task? _disposeTask;
@@ -199,7 +198,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Func<ReplySubmitOperation, SubmitResult>?
             nativeTerminalReplySubmitOverride = null,
         TaskScheduler? routedSubmitScheduler = null,
-        Func<ISocketMonitor, Action, ISocketMonitor>? decorateSocketMonitor = null)
+        Func<ISocketMonitor, ISocketMonitor>? decorateSocketMonitor = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
@@ -343,7 +342,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
                 var nativeMonitor = socket.MonitorOpen(
                     SocketEvent.ConnectionReady | SocketEvent.Disconnected);
-                socketMonitor = _decorateSocketMonitor?.Invoke(nativeMonitor, WakeIngress)
+                socketMonitor = _decorateSocketMonitor?.Invoke(nativeMonitor)
                     ?? nativeMonitor;
 
                 poller = Systems.Zlink.Zlink.CreatePoller();
@@ -351,11 +350,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     socket,
                     PollEventFlags.PollIn
                     | PollEventFlags.PollErr
+                    | PollEventFlags.PollOut
                     | PollEventFlags.PollCompletion,
                     1);
-                poller.Add(nativeMonitor, PollEventFlags.PollIn, 2);
-                _ingressWake = Systems.Zlink.Zlink.CreateTimer();
-                poller.Add(_ingressWake, 3);
                 _socket = socket;
                 _receiveFlowRegistration = receiveFlowRegistration;
                 receiveFlowRegistration = null;
@@ -374,15 +371,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             () => ReceiveLoop(_stop.Token),
                             CancellationToken.None,
                             TaskCreationOptions.LongRunning,
-                            TaskScheduler.Default);
+                            TaskScheduler.Default)
+                        .Unwrap();
             }
             catch
             {
                 _poller?.Dispose();
                 _poller = null;
                 poller?.Dispose();
-                _ingressWake?.Dispose();
-                _ingressWake = null;
                 _receiveFlowRegistration?.Dispose();
                 _receiveFlowRegistration = null;
                 receiveFlowRegistration?.Dispose();
@@ -2913,8 +2909,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 // even when the receive loop does not observe cancellation.
             }
 
-        // Cancellation wakes the native poller. Give an in-progress receive
-        // turn the existing final bounded window before its owner is closed;
+        // The native poller wait is bounded by PollInterval, but the caller's
+        // shutdown token can be shorter. Preserve the existing final bounded
+        // window for the receive loop before its owner is closed;
         // otherwise poller destruction reports ZLINK_CLOSE_BUSY (401) even
         // though the loop is already on its way out.
         if (receiveLoop is not null && !receiveLoop.IsCompleted)
@@ -2984,8 +2981,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
         receiveFlowRegistration?.Dispose();
         poller?.Dispose();
-        _ingressWake?.Dispose();
-        _ingressWake = null;
         socketMonitor?.Dispose();
         socket?.Dispose();
         _stop?.Dispose();
@@ -4978,67 +4973,27 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             part.Dispose();
     }
 
-    private void WakeIngress()
+    private async Task ReceiveLoop(CancellationToken cancellationToken)
     {
-        try
-        {
-            // A one-shot native source wakes the existing poller for permit
-            // return or cancellation. It never periodically checks for data.
-            _ingressWake?.Start(TimeSpan.FromTicks(1), 1);
-        }
-        catch (ObjectDisposedException) when (Volatile.Read(ref _disposed) != 0)
-        {
-        }
-    }
-
-    private void ReceiveLoop(CancellationToken cancellationToken)
-    {
-        var events = new PollEvent[3];
+        var events = new PollEvent[1];
         var admissions = new ZLinkApplicationJobQueueLease?[ReceiveBatchSize];
-        using var cancellation = cancellationToken.UnsafeRegister(
-            static state => ((ZLinkManagedMeshNode)state!).WakeIngress(), this);
-        var wait = TimeSpan.Zero;
-        var currentMask = PollEventFlags.PollIn | PollEventFlags.PollErr | PollEventFlags.PollCompletion;
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
-                var permitBlocked = Volatile.Read(ref _rawApplicationAdmissionWaitActive) != 0
-                    && Volatile.Read(ref _reservedRawApplicationAdmission) is null;
-                var mask = PollEventFlags.PollErr | PollEventFlags.PollCompletion;
-                if (!permitBlocked)
-                    mask |= PollEventFlags.PollIn;
-                if (!_pendingNativeTerminalReplies.IsEmpty)
-                    mask |= PollEventFlags.PollOut;
-                if (mask != currentMask)
-                {
-                    _poller!.Modify(_socket!, mask);
-                    currentMask = mask;
-                }
-                var count = _poller!.Wait(events, wait);
-                var readable = false;
-                var wake = false;
-                for (var index = 0; index < count; index++)
-                {
-                    if (events[index].Slot == 3)
-                    {
-                        _ingressWake!.Recv();
-                        wake = true;
-                    }
-                    else if (events[index].Slot == 1
-                             && (events[index].Revents & PollEventFlags.PollIn) != 0)
-                        readable = true;
-                }
-                if (cancellationToken.IsCancellationRequested)
-                    return;
+                var count = _poller!.Wait(events, PollInterval);
                 var now = Stopwatch.GetTimestamp();
+                // Apply already-delivered exact disconnects before dispatching
+                // more work. Ingress itself carries the authoritative pair
+                // identity, so correctness does not depend on monitor timing.
                 DrainSocketMonitorEvents();
                 DrainTransportDisconnects(now);
-                if (readable || wake && !permitBlocked)
+                if (count > 0)
                     DrainRawSocket(cancellationToken, admissions);
-                wait = ProcessInfrastructure(now);
+                ProcessInfrastructure(now);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
             {
                 return;
             }
@@ -5055,6 +5010,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 RunState(() => _state = MeshNodeState.Error);
                 Publish(MeshMonitorEventKind.ProtocolError);
             }
+            await Task.Yield();
         }
     }
 
@@ -5141,7 +5097,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 admission)?.Dispose();
             transferred = true;
             admission = null;
-            WakeIngress();
         }
         catch (OperationCanceledException)
             when (cancellationToken.IsCancellationRequested)
@@ -5154,7 +5109,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             admission?.Dispose();
             // Once published, only the consumer taking that reservation may
-            // clear the flag. It can register a successor before this wake ends.
+            // clear the flag, even if it consumes the reservation before this
+            // producer returns.
             if (!transferred)
                 Volatile.Write(ref _rawApplicationAdmissionWaitActive, 0);
         }
@@ -8626,16 +8582,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private TimeSpan ProcessInfrastructure(long now)
+    private void ProcessInfrastructure(long now)
     {
         RetryPendingNativeTerminalReplies();
         var peers = RunState(() => _peersByIntent.Values.ToArray());
         bool? admissionSealed = null;
-        // The former 100ms poll also scheduled pending native reply upkeep.
-        // Preserve that management deadline only while such work exists.
-        var nextDeadline = _pendingNativeTerminalReplies.IsEmpty
-            ? long.MaxValue
-            : Add(now, NativeReplyRetryInterval);
 
         foreach (var peer in peers)
         {
@@ -8670,7 +8621,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     if (shouldSendAdmission)
                         SendAdmission(peer, ServiceWireConstants.Command.Hello);
                 }
-                nextDeadline = Math.Min(nextDeadline, peer.NextAdmissionTimestamp);
                 continue;
             }
             var liveness = peer.Liveness;
@@ -8697,7 +8647,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 });
                 if (closed)
                     Publish(MeshMonitorEventKind.PeerClosed, peerRid: peer.RoutingId);
-                nextDeadline = Math.Min(nextDeadline, now);
                 continue;
             }
             if (liveness.TryGetProbe(now, out var probeId))
@@ -8710,12 +8659,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         ServiceWireConstants.Command.LivenessProbe,
                         probeId));
             }
-            nextDeadline = Math.Min(nextDeadline, liveness.NextManagementTimestamp);
         }
-        return nextDeadline == long.MaxValue
-            ? Timeout.InfiniteTimeSpan
-            : TimeSpan.FromSeconds(Math.Max(0, nextDeadline - Stopwatch.GetTimestamp())
-                / (double)Stopwatch.Frequency);
     }
 
     private void RetryPendingNativeTerminalReplies()
@@ -10119,7 +10063,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (CanRetryNativeTerminalReply(pending))
             {
                 _pendingNativeTerminalReplies.Enqueue(pending);
-                WakeIngress();
             }
             else
                 FinishNativeTerminalReply(

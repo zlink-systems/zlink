@@ -23,7 +23,6 @@ internal sealed class ZLinkServiceLiveness
 
     internal ulong OutstandingProbeId => _outstandingProbeId;
     internal long DeadlineTimestamp => _deadlineTimestamp;
-    internal long NextManagementTimestamp => Math.Min(_nextProbeTimestamp, _deadlineTimestamp);
 
     internal bool TryGetProbe(long timestamp, out ulong probeId)
     {
