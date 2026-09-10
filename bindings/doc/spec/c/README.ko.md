@@ -112,8 +112,7 @@ C 바인딩은 네이티브 ABI 형태를 유지한다.
 - send 경로는 `zlink_submit_result_t` 또는 문서화된 request 결과를 반환한다.
 - recv 경로는 `zlink_recv_result_t`를 반환하고 헤더 계약에 따라 호출자
   소유의 출력 저장소를 채운다.
-- 멀티파트 페이로드는 반복되는 `zlink_msg_t *part` 호출과
-  `zlink_part_flag_t`를 사용한다.
+- 멀티파트 페이로드는 `zlink_msg_t` 배열과 part 수를 사용해 한 번에 주고받는다.
 - 라우팅 API는 명시적인 routing id 매개변수와 명시적인 출력 routing id
   저장소를 사용한다.
 - 콜백 API는 공개 헤더가 선언한 경우에만 C 함수 포인터와 userdata를
@@ -231,8 +230,8 @@ C 바인딩은 공개 결과를 예외가 아니라 C result 도메인으로 보
 
 C 바인딩은 다른 바인딩의 성능 기준선이다.
 
-- 핫 패스는 공개 part substrate가 파트를 그대로 스트리밍할 수 있을 때
-  aggregate materialization을 추가하지 않는다.
+- 핫 패스는 호출자가 준비한 whole-message 배열을 그대로 사용하며, 같은 payload를
+  담은 중간 collection을 추가로 만들지 않는다.
 - send/recv, request, dispatch, poller, timer, stream, SPOT, actor 경로에
   숨겨진 sleep, busy wait, thread join, 리플렉션 같은 동적 디스패치, 거친
   글로벌 락, 피할 수 있는 복사를 추가하지 않는다.
@@ -277,7 +276,7 @@ C는 REQUEST·WRITABLE을 `zlink_completion_t` output으로 노출한다. Comple
 함수, readiness와 단일 drain owner는
 [Core completion pull과 ownership](../../../../core/doc/spec/core/socket/README.ko.md#completion-pull과-ownership)이 소유한다.
 SEND·REQUEST의 result·ID·대기 토큰·입력 보관 및 재제출 조건은
-[Core part send](../../../../core/doc/spec/core/socket/README.ko.md#part-send와-pending-admission)와
+[Core whole-message send](../../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)와
 [Core request](../../../../core/doc/spec/core/socket/README.ko.md#request와-reply)를 따른다.
 C는 언어 terminal이나 completion registry를 추가하지 않는다.
 
@@ -319,39 +318,39 @@ typedef struct zlink_completion_t {
   size_t reply_part_count;
 } zlink_completion_t;
 
-ZLINK_EXPORT zlink_submit_result_t zlink_send_part(
+ZLINK_EXPORT zlink_submit_result_t zlink_send(
   void *s_,
-  zlink_msg_t *part_,
+  zlink_msg_t *parts_,
+  size_t part_count_,
   zlink_send_flags_t flags_,
-  zlink_part_flag_t part_flag_,
   void *user_context_,
   zlink_completion_id_t *completion_id_out_);
 
-ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid(
+ZLINK_EXPORT zlink_submit_result_t zlink_send_rid(
   void *s_,
   const zlink_routing_id_t *target_rid_,
-  zlink_msg_t *part_,
+  zlink_msg_t *parts_,
+  size_t part_count_,
   zlink_send_flags_t flags_,
-  zlink_part_flag_t part_flag_,
   void *user_context_,
   zlink_completion_id_t *completion_id_out_);
 
-ZLINK_EXPORT zlink_submit_result_t zlink_request_part(
+ZLINK_EXPORT zlink_submit_result_t zlink_request(
   void *s_,
   const zlink_routing_id_t *target_router_rid_or_null_,
-  zlink_msg_t *part_,
+  zlink_msg_t *parts_,
+  size_t part_count_,
   zlink_send_flags_t flags_,
-  zlink_part_flag_t part_flag_,
   uint32_t timeout_ms_,
   void *user_context_,
   zlink_completion_id_t *completion_id_out_);
 
-ZLINK_EXPORT zlink_submit_result_t zlink_reply_part(
+ZLINK_EXPORT zlink_submit_result_t zlink_reply(
   void *router_,
   const zlink_routing_id_t *source_rid_,
   zlink_reply_token_t reply_token_,
-  zlink_msg_t *part_,
-  zlink_part_flag_t part_flag_);
+  zlink_msg_t *parts_,
+  size_t part_count_);
 
 ZLINK_EXPORT zlink_recv_result_t zlink_completion_recv(
   void *s_,
@@ -361,12 +360,13 @@ ZLINK_EXPORT zlink_recv_result_t zlink_completion_recv(
 ZLINK_EXPORT void zlink_completion_close(
   zlink_completion_t *completion_);
 
-ZLINK_EXPORT zlink_recv_result_t zlink_router_recv_part(
+ZLINK_EXPORT zlink_recv_result_t zlink_router_recv(
   void *router_,
   const zlink_routing_id_t **source_rid_out_,
   zlink_reply_token_t *reply_token_out_,
-  zlink_msg_t *part_out_,
-  zlink_part_flag_t *has_more_out_,
+  zlink_msg_t *parts_out_,
+  size_t parts_capacity_,
+  size_t *part_count_out_,
   zlink_recv_flags_t flags_);
 
 typedef enum zlink_stream_recv_mode_t {

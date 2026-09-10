@@ -286,18 +286,18 @@ C 코어(`zlink.h`)에서 넘어오거나 다른 언어 바인딩과 비교할 �
 | 메시지 생성 | `zlink_msg_init` / `_init_size` / `_init_data` | `new Message(size)` / `Message.From(...)` |
 | 메시지 접근 | `zlink_msg_data` / `zlink_msg_size` | `Message.AsReadOnlySpan()` / `Message.Size` |
 | 메시지 해제 | `zlink_msg_close` / `zlink_multipart_close` | `Message.Dispose()` / `Zlink.MultipartClose(parts)` |
-| 동기 송신 | `zlink_send_part` (+`_rid`) + NONE | `socket.Send().Message(...).Submit()` |
+| 동기 송신 | `zlink_send` / `zlink_send_rid` (part 배열 + count, NONE) | `socket.Send().Message(...).Submit()` |
 | 비동기 송신 | DONTWAIT send + completion pull | `await socket.Send().Message(...).Async()` |
-| 수신 | `zlink_recv_part` | `socket.Recv(Received)` |
-| 요청 / 응답 | `zlink_request_part` / `zlink_reply_part` | `dealer.Request()....Async()` / `router.Reply(rid, token)` |
-| 구독 | `zlink_set_subscription` / `zlink_subscribe_part` | `socket.SetSubscription(...)` / `socket.Subscribe(TopicMessage)` |
+| 수신 | `zlink_recv` (출력 배열 + capacity + count) | `socket.Recv(Received)` |
+| 요청 / 응답 | `zlink_request` / `zlink_reply` | `dealer.Request()....Async()` / `router.Reply(rid, token)` |
+| 구독 | `zlink_set_subscription` / `zlink_subscribe` | `socket.SetSubscription(...)` / `socket.Subscribe(TopicMessage)` |
 | 모니터 | `zlink_socket_monitor_open` / `_recv` | `socket.MonitorOpen(...)` / `monitor.Recv()` |
 | 폴러 / 타이머 | `zlink_poller_*` / `zlink_timer_*` | `Zlink.CreatePoller()` / `Zlink.CreateTimer()` |
 | 프록시 | `zlink_proxy` | `Zlink.Proxy(...)` |
 
-> **이름 규칙**: C의 `snake_case`는 .NET에서 `PascalCase`가 됩니다. C의 `*_part`
-> 계열(멀티파트 substrate)은 .NET에서 플루언트 빌더의 `.Message(...)` 누적으로
-> 표현됩니다 — public 모양은 언어 관례를 따르되 의미 계약은 동일합니다.
+> **이름 규칙**: C의 `snake_case`는 .NET에서 `PascalCase`가 됩니다. C의
+> whole-message 배열과 count는 .NET에서 플루언트 빌더의 `.Message(...)` 누적으로
+> 표현됩니다. Public 모양은 언어 관례를 따르되 의미 계약은 동일합니다.
 
 ---
 

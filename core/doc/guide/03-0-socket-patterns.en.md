@@ -18,23 +18,23 @@ Choose the pattern from message direction, peer selection, and framing needs.
 
 ## Common receive model
 
-Raw sockets normally use part-wise receive with a poller. Register the socket
-for `ZLINK_POLLIN`, wait, then call its typed receive function until the
-multipart message reaches `ZLINK_PART_FINAL`.
+Raw sockets normally use whole-message receive with a poller. Register the
+socket for `ZLINK_POLLIN`, wait, then call the socket-specific receive function
+once to receive the complete record.
 
-- PAIR uses `zlink_recv_part()`.
-- SUB uses `zlink_subscribe_part()` and returns the topic separately.
-- XPUB uses `zlink_xpub_recv_part()` for subscription notifications.
-- DEALER uses `zlink_recv_part()` for ordinary DATA; request replies arrive through
+- PAIR uses `zlink_recv()`.
+- SUB uses `zlink_subscribe()` and returns the topic separately.
+- XPUB uses `zlink_xpub_recv()` for subscription notifications.
+- DEALER uses `zlink_recv()` for ordinary DATA; request replies arrive through
   `zlink_completion_recv()`.
-- ROUTER uses `zlink_router_recv_part()` and returns the peer and an opaque reply token.
-- STREAM selects RAW (`zlink_recv_part()`) or PACKET
+- ROUTER uses `zlink_router_recv()` and returns the peer and an opaque reply token.
+- STREAM selects RAW (`zlink_recv()`) or PACKET
   (`zlink_stream_recv_packet()`) before its first bind or connect.
 
-To take a multipart record in one call instead of a per-part loop, use whole-message
-receive: `zlink_recv()` for PAIR/DEALER and `zlink_router_recv()` for ROUTER fill every
-part of a record into a caller-provided `zlink_msg_t` array (on insufficient capacity the
-record is preserved and `ZLINK_RECV_BUFFER_TOO_SMALL` returns). The contract is owned by
+`zlink_recv()` for PAIR/DEALER, `zlink_router_recv()` for ROUTER, and
+`zlink_subscribe()` for SUB/XSUB fill every part of a record into a caller-provided
+`zlink_msg_t` array. If capacity is insufficient, the record is preserved and
+`ZLINK_RECV_BUFFER_TOO_SMALL` returns. The contract is owned by
 [Socket Common](../spec/core/socket/README.en.md#zlink_recv-and-zlink_router_recv).
 
 Monitor handles and generic timers can be registered with the same poller.

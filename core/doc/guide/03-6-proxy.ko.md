@@ -77,23 +77,23 @@ zlink_proxy(xsub, xpub, capture);      /* blocking */
 ### 3.2 수동 프록시 구성
 
 중간에 로깅, 필터링, 토픽 변환 같은 맞춤 로직이 필요하면
-공개 per-socket API인 `zlink_subscribe_part()` / `zlink_publish_part()`(데이터)와
-`zlink_xpub_recv_part()` / `zlink_set_subscription()`(구독)으로 수동 프록시를
+공개 per-socket API인 `zlink_subscribe()` / `zlink_publish()`(데이터)와
+`zlink_xpub_recv()` / `zlink_set_subscription()`(구독)으로 수동 프록시를
 구성할 수 있다.
 
 #### 데이터 흐름
 
 | 단계 | 소켓 | API | 설명 |
 |------|------|-----|------|
-| 1 | XSUB | `zlink_subscribe_part(xsub, ...)` | payload part 하나 수신 (토픽은 별도 반환) |
+| 1 | XSUB | `zlink_subscribe(xsub, ...)` | payload 전체를 배열로 수신 (토픽은 별도 반환) |
 | 2 | 앱 | 커스텀 로직 | 필터링, 변환, 로깅 등 |
-| 3 | XPUB | `zlink_publish_part(xpub, topic, ...)` | 그 part 발행 |
+| 3 | XPUB | `zlink_publish(xpub, topic, ...)` | payload 배열 전체 발행 |
 
 #### 구독 전파 흐름
 
 | 단계 | 소켓 | API | 설명 |
 |------|------|-----|------|
-| 1 | XPUB | `zlink_xpub_recv_part(xpub, ...)` | SUB의 구독/해제 이벤트 수신 |
+| 1 | XPUB | `zlink_xpub_recv(xpub, ...)` | SUB의 구독/해제 이벤트 수신 |
 | 2 | 앱 | 커스텀 로직 | 구독 인가, 토픽 재매핑 등 |
 | 3 | XSUB | `zlink_set_subscription(xsub, topic)` | upstream PUB에 구독 전파 |
 
@@ -106,21 +106,20 @@ zlink_bind(xsub, "tcp://*:5556");
 zlink_bind(xpub, "tcp://*:5557");
 
 while (running) {
-    /* Data relay: XSUB -> app -> XPUB, part 단위로 처리 */
+    /* Data relay: XSUB -> app -> XPUB, record 전체를 한 번에 처리 */
     char topic[256];
     size_t topic_len = 0;
-    zlink_msg_t part;
-    zlink_part_flag_t more;
+    zlink_msg_t parts[16];
+    size_t part_count = 0;
 
-    zlink_msg_init(&part);
-    zlink_recv_result_t rc = zlink_subscribe_part(
-        xsub, NULL, topic, sizeof(topic), &topic_len, &part, &more,
+    zlink_recv_result_t rc = zlink_subscribe(
+        xsub, NULL, topic, sizeof(topic), &topic_len,
+        parts, 16, &part_count,
         ZLINK_RECV_FLAGS_DONTWAIT);
     if (rc == ZLINK_RECV_OK) {
         /* Insert custom logic here (filtering, logging, etc.) */
-        /* `more`를 그대로 넘기므로 XSUB에서 받은 멀티파트 record가
-           XPUB에서도 하나의 record로 유지된다. */
-        zlink_publish_part(xpub, topic, &part, ZLINK_SEND_FLAGS_NONE, more);
+        /* 받은 배열 전체를 한 호출로 넘겨 record 경계를 유지한다. */
+        zlink_publish(xpub, topic, parts, part_count, ZLINK_SEND_FLAGS_NONE);
     }
 
     /* Subscription propagation: XPUB -> app -> XSUB */
@@ -128,7 +127,7 @@ while (running) {
     int subscribed = 0;
     char sub_topic[256];
     size_t sub_len = 0;
-    zlink_recv_result_t sub_rc = zlink_xpub_recv_part(
+    zlink_recv_result_t sub_rc = zlink_xpub_recv(
         xpub, &sub_rid, &subscribed, sub_topic, sizeof(sub_topic), &sub_len,
         ZLINK_RECV_FLAGS_DONTWAIT);
     if (sub_rc == ZLINK_RECV_OK) {
@@ -146,15 +145,15 @@ while (running) {
 | 질문 | SUB/PUB 사용 시 | XSUB/XPUB 사용 시 |
 |------|----------------|-------------------|
 | 데이터 통과 | SUB 로컬 필터 켜짐 — 구독해야 통과 | XSUB 로컬 필터 꺼짐 — **무조건 통과** |
-| 구독 이벤트 관찰 | PUB이 노출 안 함 | XPUB이 `zlink_xpub_recv_part()`로 노출 |
+| 구독 이벤트 관찰 | PUB이 노출 안 함 | XPUB이 `zlink_xpub_recv()`로 노출 |
 | 프록시 적합성 | 프록시가 토픽을 직접 관리해야 함 | **중계만 하면 되므로 적합** |
 
 > **핵심:** `zlink_proxy()`는 raw socket API와 동일한 내부 recv/send 경로를
-> 쓰며, 공개 `zlink_send_part()`/`zlink_recv_part()` 표면을 쓰지 않는다.
-> 그 공개 표면으로는 여전히 XSUB에서 `zlink_send_part()`가
-> `ZLINK_SUBMIT_NOT_SUPPORTED`를, XPUB에서 `zlink_recv_part()`가
+> 쓰며, 공개 `zlink_send()`/`zlink_recv()` 표면을 쓰지 않는다.
+> 그 공개 표면으로는 여전히 XSUB에서 `zlink_send()`가
+> `ZLINK_SUBMIT_NOT_SUPPORTED`를, XPUB에서 `zlink_recv()`가
 > `ZLINK_RECV_NOT_SUPPORTED`를 반환한다. 프록시 동작은 `zlink_proxy()` 함수나
-> 위의 수동 구성(전용 `zlink_subscribe_part()`, `zlink_publish_part()` 등
+> 위의 수동 구성(전용 `zlink_subscribe()`, `zlink_publish()` 등
 > API 조합)으로만 가능하다.
 
 ## 4. 요청/응답 프록시 — ROUTER/DEALER
@@ -174,10 +173,9 @@ zlink_proxy(frontend, backend, NULL);  /* blocking */
 ```
 
 ROUTER/DEALER 프록시는 구독 전파가 없으므로 `zlink_proxy()`만으로 충분하다.
-ROUTER 쪽을 수동으로 구성하려면 `zlink_router_recv_part()` →
-`zlink_send_part_rid()` 조합을 사용한다(전체 시그니처와 예제는
-[ROUTER 가이드](03-4-router.ko.md#2-기본-사용법) 참고). 멀티파트 record를 한 번에 받아
-relay하려면 part 루프 대신 whole-message
+ROUTER 쪽을 수동으로 구성하려면 `zlink_router_recv()` →
+`zlink_send_rid()` 조합을 사용한다(전체 시그니처와 예제는
+[ROUTER 가이드](03-4-router.ko.md#2-기본-사용법) 참고). 멀티파트 record를 relay하려면 whole-message
 [`zlink_router_recv()`](../spec/core/socket/README.ko.md#zlink_recv-와-zlink_router_recv)로
 배열에 받아 그대로 되보낸다.
 

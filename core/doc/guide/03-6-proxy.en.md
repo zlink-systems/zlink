@@ -76,23 +76,23 @@ zlink_proxy(xsub, xpub, capture);      /* blocking */
 ### 3.2 Manual Proxy
 
 When custom logic (logging, filtering, topic transformation) is needed,
-build a manual proxy using the public per-socket APIs: `zlink_subscribe_part()`
-/ `zlink_publish_part()` for data, `zlink_xpub_recv_part()` /
+build a manual proxy using the public per-socket APIs: `zlink_subscribe()`
+/ `zlink_publish()` for data, `zlink_xpub_recv()` /
 `zlink_set_subscription()` for subscriptions.
 
 #### Data Flow
 
 | Step | Socket | API | Description |
 |------|--------|-----|-------------|
-| 1 | XSUB | `zlink_subscribe_part(xsub, ...)` | Receive one payload part (topic returned separately) |
+| 1 | XSUB | `zlink_subscribe(xsub, ...)` | Receive the complete payload into an array (topic returned separately) |
 | 2 | App | Custom logic | Filtering, transformation, logging |
-| 3 | XPUB | `zlink_publish_part(xpub, topic, ...)` | Publish that part |
+| 3 | XPUB | `zlink_publish(xpub, topic, ...)` | Publish the complete payload array |
 
 #### Subscription Propagation
 
 | Step | Socket | API | Description |
 |------|--------|-----|-------------|
-| 1 | XPUB | `zlink_xpub_recv_part(xpub, ...)` | Receive SUB subscribe/unsubscribe events |
+| 1 | XPUB | `zlink_xpub_recv(xpub, ...)` | Receive SUB subscribe/unsubscribe events |
 | 2 | App | Custom logic | Authorization, topic remapping |
 | 3 | XSUB | `zlink_set_subscription(xsub, topic)` | Propagate to upstream PUB |
 
@@ -105,21 +105,20 @@ zlink_bind(xsub, "tcp://*:5556");
 zlink_bind(xpub, "tcp://*:5557");
 
 while (running) {
-    /* Data relay: XSUB -> app -> XPUB, one part at a time */
+    /* Data relay: XSUB -> app -> XPUB, one complete record at a time */
     char topic[256];
     size_t topic_len = 0;
-    zlink_msg_t part;
-    zlink_part_flag_t more;
+    zlink_msg_t parts[16];
+    size_t part_count = 0;
 
-    zlink_msg_init(&part);
-    zlink_recv_result_t rc = zlink_subscribe_part(
-        xsub, NULL, topic, sizeof(topic), &topic_len, &part, &more,
+    zlink_recv_result_t rc = zlink_subscribe(
+        xsub, NULL, topic, sizeof(topic), &topic_len,
+        parts, 16, &part_count,
         ZLINK_RECV_FLAGS_DONTWAIT);
     if (rc == ZLINK_RECV_OK) {
         /* Insert custom logic here (filtering, logging, etc.) */
-        /* `more` carries ZLINK_PART_MORE / ZLINK_PART_FINAL straight through,
-           so a multipart record on XSUB stays one record on XPUB. */
-        zlink_publish_part(xpub, topic, &part, ZLINK_SEND_FLAGS_NONE, more);
+        /* Forward the complete array in one call to preserve the record boundary. */
+        zlink_publish(xpub, topic, parts, part_count, ZLINK_SEND_FLAGS_NONE);
     }
 
     /* Subscription propagation: XPUB -> app -> XSUB */
@@ -127,7 +126,7 @@ while (running) {
     int subscribed = 0;
     char sub_topic[256];
     size_t sub_len = 0;
-    zlink_recv_result_t sub_rc = zlink_xpub_recv_part(
+    zlink_recv_result_t sub_rc = zlink_xpub_recv(
         xpub, &sub_rid, &subscribed, sub_topic, sizeof(sub_topic), &sub_len,
         ZLINK_RECV_FLAGS_DONTWAIT);
     if (sub_rc == ZLINK_RECV_OK) {
@@ -145,16 +144,16 @@ while (running) {
 | Question | With SUB/PUB | With XSUB/XPUB |
 |----------|-------------|-----------------|
 | Data pass-through | SUB local filter on — must subscribe | XSUB local filter off — **passes all** |
-| Subscription events | PUB doesn't expose | XPUB exposes them via `zlink_xpub_recv_part()` |
+| Subscription events | PUB doesn't expose | XPUB exposes them via `zlink_xpub_recv()` |
 | Proxy suitability | Proxy must manage topics itself | **Relay only — ideal for proxy** |
 
 > **Key point:** `zlink_proxy()` uses the same internal recv/send paths as the
-> raw socket APIs, not the public `zlink_send_part()`/`zlink_recv_part()`
-> surface. Through that public surface, `zlink_send_part()` on XSUB still
-> returns `ZLINK_SUBMIT_NOT_SUPPORTED` and `zlink_recv_part()` on XPUB still
+> raw socket APIs, not the public `zlink_send()`/`zlink_recv()`
+> surface. Through that public surface, `zlink_send()` on XSUB still
+> returns `ZLINK_SUBMIT_NOT_SUPPORTED` and `zlink_recv()` on XPUB still
 > returns `ZLINK_RECV_NOT_SUPPORTED`. Proxy operation is only possible via
 > `zlink_proxy()` or the manual approach above (using the dedicated
-> `zlink_subscribe_part()`, `zlink_publish_part()`, etc. APIs).
+> `zlink_subscribe()`, `zlink_publish()`, etc. APIs).
 
 ## 4. Request/Reply Proxy — ROUTER/DEALER
 
@@ -174,12 +173,11 @@ zlink_proxy(frontend, backend, NULL);  /* blocking */
 
 ROUTER/DEALER proxy has no subscription propagation, so `zlink_proxy()`
 alone is sufficient. For manual construction of the ROUTER-facing side, use
-`zlink_router_recv_part()` → `zlink_send_part_rid()` (see the
+`zlink_router_recv()` → `zlink_send_rid()` (see the
 [ROUTER guide](03-4-router.en.md#2-basic-usage) for the full signature and a
-worked example). To take a multipart record in one call and relay it, use the
-whole-message
+worked example). To relay a multipart record, use the whole-message
 [`zlink_router_recv()`](../spec/core/socket/README.en.md#zlink_recv-and-zlink_router_recv)
-into an array instead of a per-part loop.
+to receive it into an array and send that array unchanged.
 
 ## 5. Why Use a Proxy?
 

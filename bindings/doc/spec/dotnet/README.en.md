@@ -191,7 +191,7 @@ The contract/runtime boundary meets these requirements:
 
 The following .NET-specific shortcuts are not allowed.
 
-- The public contract never mentions P/Invoke, `SafeHandle`, a native struct, a raw option id, callback userdata, request pump state, or a part-loop helper.
+- The public contract never mentions P/Invoke, `SafeHandle`, a native struct, a raw option id, callback userdata, request pump state, or whole-message array handling.
 - A runtime class never introduces public behavior that can't be found in `Contracts/`.
 - Framework adapters, samples, perf, and tests never use reflection, `NonPublic` lookup, or a private runtime shortcut.
 - A compatibility-only wrapper is not part of the public shape.
@@ -206,7 +206,7 @@ The .NET binding uses a contract/runtime split.
 - DTO, value, result, option, enum, and exception types stay concrete types. They use ordinary .NET convention — `record`, `sealed class`, `readonly struct`, `enum`. An envelope that owns and must dispose a message part is a `sealed class`, not a `record`.
 - An operation builder is an interface, so it can hide staged native request state and multipart accumulation.
 - A public static facade, extension method, or builder convenience helper is part of the contract when the caller can call it directly. Even when the implementation delegates to runtime code, its definition lives under the owning `Contracts/` category.
-- A native handle, request pump, callback bridge state, part-loop sequencing, or raw option id stays in `Runtime/` or an `internal` implementation type.
+- A native handle, request pump, callback bridge state, whole-message array handling, or raw option id stays in `Runtime/` or an `internal` implementation type.
 - A disposable native resource implements both `IDisposable` and `IAsyncDisposable`.
 
 DTOs such as `Message`, `RoutingId`, `Received`, and `TopicMessage` are not
@@ -378,7 +378,7 @@ the same.
 - SPOT node, SPOT handle, topology snapshot, actor ref, actor operations, actor lifecycle, stream actor binding.
 - Typed exceptions for submit, request, recv, handler, close, bind, connect, config failures.
 
-A native helper function that exists only to support the part loop,
+A native helper function that exists only to support whole-message array handling,
 callback userdata, interop marshalling, or request progress stays
 internal.
 
@@ -512,7 +512,7 @@ State, result, and monitor projection follow the [common receive-flow contract](
 ## Performance policy
 
 - The hot path never uses reflection, dynamic invocation, repeated boxing, avoidable allocation, avoidable buffer copies, hidden sleeps, busy waits, thread joins, or broad locks.
-- Native interop creates `Message`, `Received`, and `TopicMessage` values managed directly from the core part substrate. A public, caller-owned `Received` buffer is created with `Received.Create()`.
+- Native interop creates `Message`, `Received`, and `TopicMessage` values from the array filled by one Core whole-message receive call. A public, caller-owned `Received` buffer is created with `Received.Create()`.
 - A caller that drains repeated publishes may call `TopicMessage.ReleaseForReuse()` after the
   current consumers finish. This avoids reallocating the topic receive buffers without changing
   the ownership of the current message parts.

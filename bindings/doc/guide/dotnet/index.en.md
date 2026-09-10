@@ -294,18 +294,18 @@ for the full list of C functions.
 | Message creation | `zlink_msg_init` / `_init_size` / `_init_data` | `new Message(size)` / `Message.From(...)` |
 | Message access | `zlink_msg_data` / `zlink_msg_size` | `Message.AsReadOnlySpan()` / `Message.Size` |
 | Message release | `zlink_msg_close` / `zlink_multipart_close` | `Message.Dispose()` / `Zlink.MultipartClose(parts)` |
-| Synchronous send | `zlink_send_part` (+`_rid`) with NONE | `socket.Send().Message(...).Submit()` |
+| Synchronous send | `zlink_send` / `zlink_send_rid` (part array + count, NONE) | `socket.Send().Message(...).Submit()` |
 | Asynchronous send | DONTWAIT send + completion pull | `await socket.Send().Message(...).Async()` |
-| Receive | `zlink_recv_part` | `socket.Recv(Received)` |
-| Request / reply | `zlink_request_part` / `zlink_reply_part` | `dealer.Request()....Async()` / `router.Reply(rid, token)` |
-| Subscribe | `zlink_set_subscription` / `zlink_subscribe_part` | `socket.SetSubscription(...)` / `socket.Subscribe(TopicMessage)` |
+| Receive | `zlink_recv` (output array + capacity + count) | `socket.Recv(Received)` |
+| Request / reply | `zlink_request` / `zlink_reply` | `dealer.Request()....Async()` / `router.Reply(rid, token)` |
+| Subscribe | `zlink_set_subscription` / `zlink_subscribe` | `socket.SetSubscription(...)` / `socket.Subscribe(TopicMessage)` |
 | Monitor | `zlink_socket_monitor_open` / `_recv` | `socket.MonitorOpen(...)` / `monitor.Recv()` |
 | Poller / timer | `zlink_poller_*` / `zlink_timer_*` | `Zlink.CreatePoller()` / `Zlink.CreateTimer()` |
 | Proxy | `zlink_proxy` | `Zlink.Proxy(...)` |
 
-> **Naming convention**: C's `snake_case` becomes `PascalCase` in .NET. The C
-> `*_part` family (the multipart substrate) is represented in .NET as accumulated
-> `.Message(...)` calls on a fluent builder — the public shape follows language
+> **Naming convention**: C's `snake_case` becomes `PascalCase` in .NET. C's
+> whole-message array and count are represented in .NET as accumulated
+> `.Message(...)` calls on a fluent builder. The public shape follows language
 > convention, but the semantic contract is the same.
 
 ---

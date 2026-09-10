@@ -204,9 +204,9 @@ Each exposes the result code enum via a `code()` method.
 | `zlink_socket(ctx, type)` | `ctx.pair_socket()`, etc. |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(m).submit_sync(flags)` |
+| `zlink_send(..., parts, count, ...)` / `zlink_send_rid(..., parts, count, ...)` | `socket.send().message(m).submit_sync(flags)` |
 | DONTWAIT send + completion pull | `socket.send().message(m).submit().await` |
-| `zlink_recv_part(...)` | `socket.recv(&mut received, flags)` |
+| `zlink_recv(..., parts_out, capacity, count_out, ...)` | `socket.recv(&mut received, flags)` |
 | `zlink_msg_data(msg)` | `part.as_bytes()` |
 | `zlink_routing_id_t` | `RoutingId` |
 | `zlink_socket_monitor_open(...)` | `SocketMonitor::open(&socket)` |

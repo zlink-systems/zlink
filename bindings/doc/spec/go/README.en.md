@@ -169,8 +169,8 @@ publish provides `Flags(SendFlags)`, on a separate `PublishOp`. The
 | PAIR, DEALER, ROUTER, STREAM | `Recv` filling `Received` storage |
 | SUB, XSUB | `Subscribe` filling `TopicMessage` storage |
 
-Core part functions are the internal substrate for these multipart receive APIs and are not exposed as
-public Go methods.
+The binding implements these multipart receive APIs with one Core whole-message
+receive call. Native array and capacity handling are not exposed as public Go methods.
 
 ## Receive and eventing
 

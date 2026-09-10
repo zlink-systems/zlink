@@ -611,7 +611,7 @@ Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`의 time
 - hot path에서는 reflection, dynamic invocation, 반복 boxing, 피할 수 있는
   할당, 피할 수 있는 버퍼 복사, 숨은 sleep, busy wait, thread join, 광범위한
   락을 사용하지 않는다.
-- 네이티브 interop은 core part 기판에서 직접 관리되는 `Message`, `Received`,
+- 네이티브 interop은 Core whole-message API가 한 번의 호출로 채운 배열에서 `Message`, `Received`,
   `TopicMessage` 값을 만든다. 공개 호출자 소유 `Received` 버퍼는
   `Received.Create()`로 만든다.
 - 반복 publish를 drain하는 호출자는 현재 소비자가 작업을 마친 뒤

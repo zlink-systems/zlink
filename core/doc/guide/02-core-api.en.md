@@ -24,39 +24,27 @@ routing id or TLS before the connection handshake needs it.
 
 ## Message I/O
 
-Core uses part-wise multipart APIs:
+Core sends and receives one complete message record per call. Array order and
+part count define the multipart boundary.
 
-- `zlink_send_part()` sends ordinary raw traffic.
-- `zlink_send_part_rid()` selects a routed peer.
-- `zlink_publish_part()` publishes a topic and payload.
-- Typed receive functions return one part and a `ZLINK_PART_MORE` or
-  `ZLINK_PART_FINAL` flag.
+- `zlink_send()` sends every part of ordinary raw traffic as an array.
+- `zlink_send_rid()` selects a routed peer and sends every part as an array.
+- `zlink_publish()` publishes a topic and an array of payload parts.
+- `zlink_recv()`, `zlink_router_recv()`, and `zlink_subscribe()` fill a
+  caller-provided array with the complete record and return its part count.
+  `zlink_xpub_recv()` receives subscription events.
 - DEALER and ROUTER requests return nonzero completion IDs; receive their replies
   and terminal results with `zlink_completion_recv()` and release each record with
   `zlink_completion_close()`.
 
-Receive comes in two shapes.
+If the receive array is smaller than the record's part count, the record is not
+consumed and `ZLINK_RECV_BUFFER_TOO_SMALL` (`ENOBUFS`) returns the needed count.
+Grow the array and retry to receive the same record exactly once. Close the filled
+array with [`zlink_multipart_close()`](../spec/core/02-message.en.md#zlink_multipart_close).
 
-- **Per-part** `*_recv_part()` — returns one part and `has_more` per call. Use it for
-  single-part records, for streaming parts one at a time (partial consumption), and
-  for the lowest-allocation path.
-- **Whole-message** `zlink_recv()` (PAIR/DEALER) and `zlink_router_recv()` (ROUTER) —
-  fill every part of a record into a caller-provided `zlink_msg_t` array in a single
-  call, cutting call and boundary counts on mostly-multipart workloads. If the array
-  capacity is smaller than the record's part count, the record is not consumed and
-  `ZLINK_RECV_BUFFER_TOO_SMALL` (`ENOBUFS`) returns the needed count, so retrying with
-  a larger array receives the same record exactly once. Close the filled array at once
-  with [`zlink_multipart_close()`](../spec/core/02-message.en.md#zlink_multipart_close).
-
-Which to use: whole-message `recv` for mostly-multipart records (fewer calls and
-allocations), `recv_part` for single-part, streaming, or lowest-allocation needs. The
-two coexist on the same socket and share the same contract (single-consumer, record
-atomicity).
-
-A message part passed to a `*_part` send is consumed by Core whether the call
-succeeds or fails — afterwards the part is left in the empty initialized state,
-so copy it before the call if you may need to send it again. A received part
-must be closed or moved exactly once.
+Core consumes every message part in a send array on both success and failure.
+Each slot is left empty and initialized, so retain a copy of the complete record
+before the call if it may need to be sent again.
 
 ## Eventing
 

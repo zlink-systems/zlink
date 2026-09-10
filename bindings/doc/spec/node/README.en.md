@@ -77,7 +77,7 @@ casing, or file names when a TypeScript idiom is clearer.
 - Package projection: symbols exported from the package entrypoint and
   declared in the published TypeScript definitions.
 - Internal implementation: native addon modules, private source modules, N-API handles, completion-drain
-  owners and provisional registries, converters, and raw part-loop helpers.
+  owners and provisional registries, converters, and whole-message array helpers.
 - Package boundary: `package.json` exports expose only documented public
   entrypoints.
 - Documentation role: this README defines shape and semantic coverage. The
@@ -281,7 +281,7 @@ This binding feels like a TypeScript package with a native backend.
 - Operation builders use public contract interfaces because they hide staged
   native request state and multipart accumulation.
 - Native addon handles, raw pointers, callback userdata, request pumps, and
-  part-loop sequencing are never exposed.
+  whole-message array handling are never exposed.
 
 Do not introduce an interface for a pure DTO/value object only for symmetry.
 `Message`, `RoutingId`, `Received`, `TopicMessage`, route results, snapshots,
@@ -323,7 +323,7 @@ native objects faster.
   runtime factory module so contract files do not import runtime
   implementations.
 - JavaScript runtime implementations, native handle owners, request pumps,
-  callback adapters, and part-loop helpers belong in `src/zlink/runtime`.
+  callback adapters, and whole-message array helpers belong in `src/zlink/runtime`.
 - N-API bindings, native addon handles, marshalling helpers, and platform
   loading code belong in `src/zlink/runtime/native`.
 - Package exports and the published `.d.ts` file must project contract
