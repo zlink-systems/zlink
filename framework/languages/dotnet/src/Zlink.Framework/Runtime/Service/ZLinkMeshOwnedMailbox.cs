@@ -58,7 +58,9 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
     private readonly ZLinkStateLane _lane = new();
     private ulong _pendingBytes;
     private int _applicationAdmissionRecords;
-    private bool _claimed;
+    // An active claim owns only the FIFO prefix present when it was granted.
+    // Zero still holds that claim until Release; -1 means no active claim.
+    private int _claimedRecordCount = -1;
 
     internal bool HasRecords => AwaitStateLane(
         _lane.RunAsync(() => _records.Count != 0));
@@ -98,10 +100,11 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
         var result = AwaitStateLane(_lane.RunAsync(() =>
         {
             var admitted = _applicationAdmissionRecords == _records.Count;
-            if (_claimed || _records.Count == 0 || (requireApplicationAdmission && !admitted))
+            if (_claimedRecordCount >= 0 || _records.Count == 0
+                || (requireApplicationAdmission && !admitted))
                 return (Ready: false, Count: 0, Admitted: false);
             if (claim)
-                _claimed = true;
+                _claimedRecordCount = _records.Count;
             return (Ready: true, Count: _records.Count, Admitted: admitted);
         }));
         count = result.Count;
@@ -114,12 +117,14 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
         return AwaitStateLane(_lane.RunAsync(() =>
         {
             var count = 0;
-            while (count < maximumRecords && _records.Count != 0)
+            var limit = Math.Min(maximumRecords, _claimedRecordCount);
+            while (count < limit && _records.Count != 0)
             {
                 var candidate = _records.Peek();
                 if (!batch.CanAdd(checked((long)candidate.PayloadBytes)))
                     break;
                 var record = _records.Dequeue();
+                _claimedRecordCount--;
                 if (record.HasApplicationJobAdmission)
                     _applicationAdmissionRecords--;
                 _pendingBytes -= record.PendingBytes;
@@ -135,7 +140,7 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
     {
         return AwaitStateLane(_lane.RunAsync(() =>
         {
-            _claimed = false;
+            _claimedRecordCount = -1;
             return _records.Count != 0;
         }));
     }
@@ -153,7 +158,7 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
             }
             _pendingBytes = 0;
             _applicationAdmissionRecords = 0;
-            _claimed = false;
+            _claimedRecordCount = -1;
         }));
 
         foreach (var record in removed)

@@ -366,27 +366,32 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             if (!claim.Receive(receiveBatch, RecvFlags.DontWait))
                 return;
 
-            _applicationJobQueue?.MarkQueuedBatch(admissions, Math.Min(receiveBatch.Count, admissions.Length));
             var count = receiveBatch.Count;
+            var externalAdmissions = 0;
+            if (admissionCount != 0)
+            {
+                for (var record = 0; record < count; record++)
+                    if (RequiresApplicationAdmission(receiveBatch[record].Kind)
+                        && receiveBatch.GetApplicationJobAdmission(record) is null)
+                        externalAdmissions++;
+                _applicationJobQueue!.MarkQueuedBatch(admissions, externalAdmissions);
+            }
+            // Reservations have no record identity. Assign the required prefix
+            // to application records; unused and embedded-owner duplicates stay
+            // in this same array for one ReleaseBatch below.
+            var externalIndex = 0;
             for (var record = 0; record < count; record++)
             {
-                var admission = admissionCount == 0
-                    ? null
-                    : admissions[record];
-                if (admissionCount != 0)
-                    admissions[record] = null;
+                ZLinkApplicationJobQueueLease? admission = null;
+                if (admissionCount != 0
+                    && RequiresApplicationAdmission(receiveBatch[record].Kind)
+                    && receiveBatch.GetApplicationJobAdmission(record) is null)
+                {
+                    admission = admissions[externalIndex];
+                    admissions[externalIndex++] = null;
+                }
                 try
                 {
-                    var embeddedAdmission = receiveBatch
-                        .GetApplicationJobAdmission(record);
-                    if (embeddedAdmission is not null
-                        || !RequiresApplicationAdmission(
-                            receiveBatch[record].Kind))
-                    {
-                        admission?.Dispose();
-                        admission = null;
-                    }
-
                     if (DispatchRecord(
                             receiveBatch,
                             record,

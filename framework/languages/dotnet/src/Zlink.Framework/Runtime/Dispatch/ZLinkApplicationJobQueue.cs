@@ -331,6 +331,7 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
 
     internal void MarkQueuedBatch(IReadOnlyList<ZLinkApplicationJobQueueLease?> leases, int count)
     {
+        if (count == 0) return;
         AwaitStateLane(_lane.RunAsync(() =>
         {
             for (var index = 0; index < count; index++)
