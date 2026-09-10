@@ -18,6 +18,16 @@ public interface IZLinkSendCall : IZLinkMetadataCall<IZLinkSendCall>
 {
     ValueTask Async(
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Blocks the application thread until source-local admission completes.
+    /// Fails with InvalidOperation before submission in a runtime execution context.
+    /// </summary>
+    void Submit()
+    {
+        ZLinkApplicationExecutionContext.EnsureBlockingSubmitAllowed();
+        Async().AsTask().GetAwaiter().GetResult();
+    }
 }
 
 public interface IZLinkRequestCall : IZLinkMetadataCall<IZLinkRequestCall>
@@ -25,6 +35,16 @@ public interface IZLinkRequestCall : IZLinkMetadataCall<IZLinkRequestCall>
     IZLinkRequestCall Timeout(TimeSpan timeout);
 
     ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Blocks the application thread until the request's application result completes.
+    /// Fails with InvalidOperation before submission in a runtime execution context.
+    /// </summary>
+    TReply Submit<TReply>()
+    {
+        ZLinkApplicationExecutionContext.EnsureBlockingSubmitAllowed();
+        return Async<TReply>().AsTask().GetAwaiter().GetResult();
+    }
 
     ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default);
 }
