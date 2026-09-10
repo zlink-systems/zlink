@@ -281,11 +281,20 @@ static PyObject *py_submit_storage (PyObject *self, PyObject *args)
     Py_ssize_t count = PyList_GET_SIZE (parts);
     Py_buffer inline_views[8] = {{0}};
     Py_buffer *views = count <= 8 ? inline_views : PyMem_Calloc (count, sizeof (Py_buffer));
-    if (!views) {
+    zlink_msg_t inline_parts[8];
+    zlink_msg_t *native_parts = count <= 8
+                                  ? inline_parts
+                                  : PyMem_Malloc ((size_t) count * sizeof (zlink_msg_t));
+    if (!views || !native_parts) {
+        if (views != inline_views)
+            PyMem_Free (views);
+        if (native_parts != inline_parts)
+            PyMem_Free (native_parts);
         PyErr_NoMemory ();
         goto fail;
     }
     Py_ssize_t acquired = 0;
+    Py_ssize_t moved = 0;
     for (; acquired < count; ++acquired) {
         if (PyObject_GetBuffer (PyList_GET_ITEM (parts, acquired), &views[acquired],
                                 PyBUF_WRITABLE) != 0)
@@ -295,45 +304,48 @@ static PyObject *py_submit_storage (PyObject *self, PyObject *args)
             PyErr_SetString (PyExc_ValueError, "invalid native message storage");
             break;
         }
+        int move_rc = zlink_msg_move (&native_parts[acquired],
+                                      (zlink_msg_t *) views[acquired].buf);
+        if (move_rc != ZLINK_CONFIG_OK) {
+            ++acquired;
+            errno = zlink_errno ();
+            PyErr_SetFromErrnoWithFilename (PyExc_OSError, NULL);
+            break;
+        }
+        ++moved;
     }
     int rc = ZLINK_SUBMIT_OK, err = 0;
     uint64_t completion_id = 0;
     if (!PyErr_Occurred ()) {
-        /* Preserve the per-part ctypes GIL boundary, including submit_sync.
-         * Moving the release outside this loop changes the opportunities for
-         * concurrent public multipart senders to enter the Core staging lane. */
-        for (Py_ssize_t i = 0; i < count; ++i) {
-            int final = i + 1 == count;
-            void *ctx = final ? (void *) (uintptr_t) context : NULL;
-            uint64_t *out = final && context ? &completion_id : NULL;
-            zlink_msg_t *msg = (zlink_msg_t *) views[i].buf;
-            Py_BEGIN_ALLOW_THREADS
-            if (is_reply)
-                rc = zlink_reply_part ((void *) (uintptr_t) handle, rid_ptr,
-                       reply_token, msg, part_flag (i, count));
-            else if (timeout != Py_None)
-                rc = zlink_request_part ((void *) (uintptr_t) handle, rid_ptr, msg,
-                       flags, part_flag (i, count), final ? timeout_ms : 0, ctx, out);
-            else if (rid_ptr)
-                rc = zlink_send_part_rid ((void *) (uintptr_t) handle, rid_ptr,
-                       msg, flags, part_flag (i, count), ctx, out);
-            else
-                rc = zlink_send_part ((void *) (uintptr_t) handle, msg,
-                       flags, part_flag (i, count), ctx, out);
-            if (rc != ZLINK_SUBMIT_OK)
-                err = zlink_errno ();
-            Py_END_ALLOW_THREADS
-            if (rc != ZLINK_SUBMIT_OK) {
-                for (Py_ssize_t j = i; j < count; ++j)
-                    zlink_msg_close ((zlink_msg_t *) views[j].buf);
-                break;
-            }
-        }
+        void *ctx = context ? (void *) (uintptr_t) context : NULL;
+        uint64_t *out = context ? &completion_id : NULL;
+        Py_BEGIN_ALLOW_THREADS
+        if (is_reply)
+            rc = zlink_reply ((void *) (uintptr_t) handle, rid_ptr,
+                              reply_token, native_parts, (size_t) count);
+        else if (timeout != Py_None)
+            rc = zlink_request ((void *) (uintptr_t) handle, rid_ptr,
+                                native_parts, (size_t) count, flags,
+                                (uint32_t) timeout_ms, ctx, out);
+        else if (rid_ptr)
+            rc = zlink_send_rid ((void *) (uintptr_t) handle, rid_ptr,
+                                 native_parts, (size_t) count, flags, ctx, out);
+        else
+            rc = zlink_send ((void *) (uintptr_t) handle, native_parts,
+                             (size_t) count, flags, ctx, out);
+        if (rc != ZLINK_SUBMIT_OK)
+            err = zlink_errno ();
+        Py_END_ALLOW_THREADS
+        moved = 0;
     }
     for (Py_ssize_t i = 0; i < acquired; ++i)
         PyBuffer_Release (&views[i]);
     if (views != inline_views)
         PyMem_Free (views);
+    if (moved > 0)
+        zlink_multipart_close (native_parts, (size_t) moved);
+    if (native_parts != inline_parts)
+        PyMem_Free (native_parts);
     if (PyErr_Occurred ())
         goto fail;
     return Py_BuildValue ("iiK", rc, err, (unsigned long long) completion_id);
