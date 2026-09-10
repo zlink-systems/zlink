@@ -31,6 +31,12 @@ multipart message reaches `ZLINK_PART_FINAL`.
 - STREAM selects RAW (`zlink_recv_part()`) or PACKET
   (`zlink_stream_recv_packet()`) before its first bind or connect.
 
+To take a multipart record in one call instead of a per-part loop, use whole-message
+receive: `zlink_recv()` for PAIR/DEALER and `zlink_router_recv()` for ROUTER fill every
+part of a record into a caller-provided `zlink_msg_t` array (on insufficient capacity the
+record is preserved and `ZLINK_RECV_BUFFER_TOO_SMALL` returns). The contract is owned by
+[Socket Common](../spec/core/socket/README.en.md#zlink_recv-and-zlink_router_recv).
+
 Monitor handles and generic timers can be registered with the same poller.
 
 ## Routing-id disconnect

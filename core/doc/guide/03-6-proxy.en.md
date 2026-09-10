@@ -176,7 +176,10 @@ ROUTER/DEALER proxy has no subscription propagation, so `zlink_proxy()`
 alone is sufficient. For manual construction of the ROUTER-facing side, use
 `zlink_router_recv_part()` → `zlink_send_part_rid()` (see the
 [ROUTER guide](03-4-router.en.md#2-basic-usage) for the full signature and a
-worked example).
+worked example). To take a multipart record in one call and relay it, use the
+whole-message
+[`zlink_router_recv()`](../spec/core/socket/README.en.md#zlink_recv-and-zlink_router_recv)
+into an array instead of a per-part loop.
 
 ## 5. Why Use a Proxy?
 

@@ -36,7 +36,8 @@ Close는 더 엄격한 lifecycle gate를 사용한다. 다른 thread가 같은 h
 ## Pull 모델 — 콜백이 없다
 
 Core는 application 콜백을 등록받지 않는다. socket data, completion, monitor event, timer fire는 모두
-application thread가 poller로 readiness를 기다린 뒤 `*_recv_part()`·`zlink_completion_recv()`·
-`zlink_socket_monitor_recv()`·`zlink_timer_recv()`로 직접 꺼낸다. 따라서 "콜백을 짧게 유지한다"
-같은 규칙은 없고, 어느 thread에서 받을지는 application이 정한다 — 한 socket의 receive 소비자는
-하나로 유지한다.
+application thread가 poller로 readiness를 기다린 뒤 `*_recv_part()`·whole-message
+`zlink_recv()`/`zlink_router_recv()`·`zlink_completion_recv()`·`zlink_socket_monitor_recv()`·
+`zlink_timer_recv()`로 직접 꺼낸다. 따라서 "콜백을 짧게 유지한다" 같은 규칙은 없고, 어느 thread에서
+받을지는 application이 정한다 — 한 socket의 receive 소비자는 하나로 유지한다. whole-message 수신도
+같은 single-consumer 계약을 따르며 이 모델을 바꾸지 않는다.

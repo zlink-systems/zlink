@@ -37,6 +37,11 @@ receive 함수를 호출한다.
 - STREAM은 첫 bind 또는 connect 전에 RAW(`zlink_recv_part()`)와
   PACKET(`zlink_stream_recv_packet()`) 중 하나를 고른다.
 
+멀티파트 record를 한 번에 받으려면 part 루프 대신 whole-message 수신을 쓴다. PAIR·DEALER는
+`zlink_recv()`, ROUTER는 `zlink_router_recv()`가 record의 모든 part를 caller-제공 `zlink_msg_t`
+배열에 채운다(용량 부족 시 record 보존·`ZLINK_RECV_BUFFER_TOO_SMALL`). 계약은
+[Socket 공통](../spec/core/socket/README.ko.md#zlink_recv-와-zlink_router_recv)이 소유한다.
+
 Monitor handle과 generic timer도 같은 poller에 등록할 수 있다.
 
 ## Routing id로 연결 종료

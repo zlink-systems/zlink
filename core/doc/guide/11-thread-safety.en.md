@@ -36,7 +36,9 @@ is accepted, new entries return `ESHUTDOWN`.
 
 Core registers no application callbacks. Socket data, completions, monitor
 events, and timer fires are all pulled by an application thread: wait for
-readiness with a poller, then call `*_recv_part()`, `zlink_completion_recv()`,
+readiness with a poller, then call `*_recv_part()`, the whole-message
+`zlink_recv()` / `zlink_router_recv()`, `zlink_completion_recv()`,
 `zlink_socket_monitor_recv()`, or `zlink_timer_recv()`. There is therefore no
 "keep callbacks short" rule; the application decides which thread receives —
-keep one socket's receive to a single consumer.
+keep one socket's receive to a single consumer. Whole-message receive follows the
+same single-consumer contract and does not change this model.

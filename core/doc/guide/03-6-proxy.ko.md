@@ -176,7 +176,10 @@ zlink_proxy(frontend, backend, NULL);  /* blocking */
 ROUTER/DEALER 프록시는 구독 전파가 없으므로 `zlink_proxy()`만으로 충분하다.
 ROUTER 쪽을 수동으로 구성하려면 `zlink_router_recv_part()` →
 `zlink_send_part_rid()` 조합을 사용한다(전체 시그니처와 예제는
-[ROUTER 가이드](03-4-router.ko.md#2-기본-사용법) 참고).
+[ROUTER 가이드](03-4-router.ko.md#2-기본-사용법) 참고). 멀티파트 record를 한 번에 받아
+relay하려면 part 루프 대신 whole-message
+[`zlink_router_recv()`](../spec/core/socket/README.ko.md#zlink_recv-와-zlink_router_recv)로
+배열에 받아 그대로 되보낸다.
 
 ## 5. 프록시가 필요한 이유
 
