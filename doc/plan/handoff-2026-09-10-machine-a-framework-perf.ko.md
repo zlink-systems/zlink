@@ -14,9 +14,9 @@
 
 | 언어 | 바인딩 G4 | framework 상태 | 처리 |
 |---|---|---|---|
-| Java | #119 머지 | 컴파일 실패 | **복구 완료** — PR #125 (`.submit().admitted()` / `.submit().reply()`) |
-| Node | #123 머지 | **조용히 깨짐** — 컴파일·`npm test` 1,639건 전부 통과하는데 admission 대기가 사라졌다 | job `node-g5-99` 진행 중 |
-| C++ | #122 머지 | 컴파일 실패 (`.async().result()`; 새 `send_submission_t`는 `result`가 멤버다) | `cpp-submit-r3` 머지 뒤 착수 |
+| Java | #119 머지 | 컴파일 실패 | **복구 완료** — PR #125 |
+| Node | #123 머지 | **조용히 깨짐** — 컴파일·`npm test` 전부 통과하는데 admission 대기가 사라졌다 | **복구 완료** — PR #135. `await-thenable` lint 게이트 포함 |
+| C++ | #122 머지 | 컴파일 실패 (`.async().result()`; 새 `send_submission_t`는 `result`가 멤버다) | **복구 완료** — PR #134 |
 | .NET | #92 **OPEN** | 아직 정상 | #92 머지 뒤 착수 |
 
 **Node가 가장 위험하다.** `SendSubmission`은 thenable이 아니라 `await op.submit()`이 즉시 그 객체를 돌려준다.
@@ -95,8 +95,8 @@ request-backpressure 4096의 **꼬리가 무너진다**.
 | Issue | 무엇 | 왜 A가 맡았나 | 상태 |
 |---|---|---|---|
 | **#97** framework-java G5 | 새 submit 종결자 적응 | main이 깨졌고 B는 브랜치조차 없었다. 사용자 승인 2026-09-10 | **완료** (PR #125, 컴파일·의미 복구까지) |
-| **#99** framework-node G5 | 같음 + `await-thenable` lint 게이트 | 같음. Node는 **조용히** 깨져 더 급했다 | job 완료, 감독 수정 중 |
-| **#100** framework-cpp G5 | 같음 | 같음 | job 완료(검증 차단 → 패키지 재빌드 중) |
+| **#99** framework-node G5 | 같음 + `await-thenable` lint 게이트 | 같음. Node는 **조용히** 깨져 더 급했다 | **완료** (PR #135). 감독이 job의 hot-path wrapper를 제거하고 계약 중복도 합쳤다 |
+| **#100** framework-cpp G5 | 같음 | 같음 | **완료** (PR #134). 공유 cpp 패키지가 G4 이전이라 막혀 있던 것을 감독이 재빌드 |
 | **#98** framework-dotnet G5 | 같음 | 같음. 단 바인딩 #92가 아직 OPEN이라 **아직 안 깨졌다** | #92 머지 뒤 착수 |
 | **#108** | #85 registry turn 1회 회귀 고정 테스트 | 감독 리뷰에서 발견 | 미착수 |
 | **#110** | Rust 테스트 sleep 의존 | 로컬 패키징을 3번 막았다 | 미착수 |
@@ -106,7 +106,9 @@ request-backpressure 4096의 **꼬리가 무너진다**.
 | **#117** | framework C++ PR CI | #16 범위에서 분리 | 미착수 |
 | **#120** | stream 테스트가 러너에서만 hang | 새 CI가 발견 | 미착수(비차단 격리 중) |
 | **#126** | 바인딩 스펙 산문이 옛 Promise 계약을 말한다 | framework 파손 조사 중 발견. **잘못된 호출을 문서가 승인하고 있었다** | **완료 (머신 B, PR #128·#129)** — 7언어 per-lang README + policy·model 산문을 결과 객체 계약으로 정합 |
-| — | 로컬 패키지 post-G4 재빌드 | 공유 0.18.0 C++ 패키지가 G4 이전 헤더였다 | 진행 중 |
+| **#133** | 벤치 클라이언트가 예외를 버리고 개수만 센다 | #48의 `client errors=2` 원인을 확정할 수 없었다 | 미착수 |
+| — | tooling contract smoke가 Core prefix를 전달하지 않는다 | #100 검증 중 발견 | 미보고(#117에 합칠 것) |
+| — | 로컬 패키지 post-G4 재빌드 | 공유 0.18.0 C++ 패키지가 G4 이전 헤더였다 | **완료** |
 
 **G4 성능 활용**(`OK`면 admission 대기 없이 연속 제출)은 아직 **아무에게도 할당되지 않았다.** 언어별 G5가 끝난 뒤 A가 맡는다.
 
