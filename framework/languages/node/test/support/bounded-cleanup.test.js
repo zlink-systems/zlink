@@ -4,21 +4,29 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const http = require('node:http');
 const test = require('node:test');
-const { closeBrowser, closeBrowserServer, closeContext, closeServer, stopChild, stopChildGracefully } = require('../../support/bounded-cleanup');
+const { closeBrowser, closeBrowserServer, closeContext, closeServer, stopChild, stopChildGracefully } = require('./bounded-cleanup');
 
 test('stopChildGracefully does not signal a normally exiting child', async () => {
   const child = new EventEmitter(); child.exitCode = null; child.signalCode = null;
+  child.stdout = { destroyCalled: false, destroy() { this.destroyCalled = true; } };
+  child.stderr = { destroyCalled: false, destroy() { this.destroyCalled = true; } };
   const signals = []; child.kill = (signal) => signals.push(signal);
   const result = stopChildGracefully(child, async () => { child.exitCode = 0; child.emit('exit', 0); }, 20, 5);
   assert.deepEqual(await result, { timedOut: false, forced: false });
   assert.deepEqual(signals, []);
+  assert.equal(child.stdout.destroyCalled, true);
+  assert.equal(child.stderr.destroyCalled, true);
 });
 
 test('stopChildGracefully falls back to TERM/KILL after graceful timeout', async () => {
   const child = new EventEmitter(); child.exitCode = null; child.signalCode = null;
+  child.stdout = { destroyCalled: false, destroy() { this.destroyCalled = true; } };
+  child.stderr = { destroyCalled: false, destroy() { this.destroyCalled = true; } };
   const signals = []; child.kill = (signal) => { signals.push(signal); if (signal === 'SIGKILL') { child.exitCode = 137; child.emit('exit', 137); } };
   assert.deepEqual(await stopChildGracefully(child, async () => {}, 5, 5), { timedOut: true, forced: true });
   assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+  assert.equal(child.stdout.destroyCalled, true);
+  assert.equal(child.stderr.destroyCalled, true);
 });
 
 test('stopChild waits for a normally exiting child', async () => {
