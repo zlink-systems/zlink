@@ -24,11 +24,11 @@
     },
     {
       "path": "include/zlink/socket/api.h",
-      "sha256": "257ea1f9af25f402087f8052750131030fb89273b12944713ef0a50eded89dad"
+      "sha256": "ef1b12934329252b50e449054896cc870538cb4b767f8051173c3970495d867b"
     },
     {
       "path": "include/zlink_enum.h",
-      "sha256": "a7d0fec0f0c6a35cd21d8a25adda44d4ec2ab4bcd66854fbd9271c6445ee3e22"
+      "sha256": "bf5c8298c86224d9a1864756d30631439cf975006b74c31678191cb7389bf427"
     },
     {
       "path": "include/zlink_errno.h",
@@ -89,7 +89,6 @@
     "zlink_msg_t",
     "zlink_multipart_close",
     "zlink_option_t",
-    "zlink_part_flag_t",
     "zlink_poll",
     "zlink_poller_add",
     "zlink_poller_destroy",
@@ -104,14 +103,14 @@
     "zlink_pollitem_t",
     "zlink_proxy",
     "zlink_pub_option_t",
-    "zlink_publish_part",
+    "zlink_publish",
     "zlink_receive_flow_state_t",
     "zlink_recv_flags_t",
-    "zlink_recv_part",
+    "zlink_recv",
     "zlink_recv_result_t",
-    "zlink_reply_part",
+    "zlink_reply",
     "zlink_reply_token_t",
-    "zlink_router_recv_part",
+    "zlink_router_recv",
     "zlink_routing_id_t",
     "zlink_send_complete_result_t",
     "zlink_send_flags_t",
@@ -139,7 +138,7 @@
     "zlink_stream_recv_packet",
     "zlink_strerror",
     "zlink_sub_option_t",
-    "zlink_subscribe_part",
+    "zlink_subscribe",
     "zlink_subscription_at",
     "zlink_thread_join",
     "zlink_timer_destroy",
@@ -150,16 +149,16 @@
     "zlink_unbind",
     "zlink_unset_subscription",
     "zlink_version",
-    "zlink_xpub_recv_part"
+    "zlink_xpub_recv"
   ],
   "localSymbols": [
     "zlink_go_poller_add_fd_slot",
     "zlink_go_poller_add_slot",
     "zlink_go_poller_add_timer_slot",
     "zlink_go_poller_wait",
-    "zlink_go_request_part_with_context",
-    "zlink_go_send_part_rid_with_context",
-    "zlink_go_send_part_with_context",
+    "zlink_go_request_with_context",
+    "zlink_go_send_rid_with_context",
+    "zlink_go_send_with_context",
     "zlink_thread_start_go"
   ],
   "forbiddenPaths": [

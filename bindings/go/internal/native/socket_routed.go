@@ -24,9 +24,9 @@ func (s *routedSocket) reply(rid RoutingID, token ReplyToken, parts ...*Message)
 		return &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}
 	target := rid.toC()
-	return submitMultipartFromClones(parts, true, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-		return submitErrorFromResult(C.zlink_reply_part(
-			s.raw(), &target, C.zlink_reply_token_t(token.value), part, partFlag))
+	return submitMultipartFromClones(parts, true, func(native *C.zlink_msg_t, count C.size_t) error {
+		return submitErrorFromResult(C.zlink_reply(
+			s.raw(), &target, C.zlink_reply_token_t(token.value), native, count))
 	})
 }
 
@@ -34,15 +34,16 @@ func (s *routedSocket) recvInto(out *Received, flags RecvFlags) error {
 	reuse := out.beginReceive()
 	var sourceRID *C.zlink_routing_id_t
 	var replyToken C.zlink_reply_token_t
-	parts, err := recvMultipart(reuse, flags, func(part *C.zlink_msg_t, hasMore *C.zlink_part_flag_t, recvFlags C.zlink_recv_flags_t) error {
-		return recvErrorFromResult(C.zlink_router_recv_part(
+	parts, err := recvMultipart(&out.nativeParts, reuse, flags, func(native *C.zlink_msg_t, capacity C.size_t, count *C.size_t, recvFlags C.zlink_recv_flags_t) C.zlink_recv_result_t {
+		return C.zlink_router_recv(
 			s.raw(),
 			&sourceRID,
 			&replyToken,
-			part,
-			hasMore,
+			native,
+			capacity,
+			count,
 			recvFlags,
-		))
+		)
 	})
 	if err != nil {
 		return err

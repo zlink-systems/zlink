@@ -129,6 +129,52 @@ func TestPairMultipartBytesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPairMultipartReceiveGrowsNativeBuffer(t *testing.T) {
+	ctx := newContext(t)
+	defer ctx.Close()
+
+	endpoint := inprocEndpoint("pair-multipart-grow")
+	server, _ := ctx.PairSocket()
+	client, _ := ctx.PairSocket()
+	defer server.Close()
+	defer client.Close()
+
+	if err := server.Bind(endpoint); err != nil {
+		t.Fatalf("Bind() error = %v", err)
+	}
+	if err := client.Connect(endpoint); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+
+	const partCount = 9
+	var send zlink.SendSubmitOp
+	for i := 0; i < partCount; i++ {
+		payload := []byte{byte(i)}
+		if i == 0 {
+			send = client.Send().Bytes(payload)
+		} else {
+			send = send.Bytes(payload)
+		}
+	}
+	if err := send.Submit(context.Background()); err != nil {
+		t.Fatalf("multipart Send() error = %v", err)
+	}
+
+	var received zlink.Received
+	if _, err := server.Recv(&received, zlink.RecvFlagsNone); err != nil {
+		t.Fatalf("Recv() error = %v", err)
+	}
+	defer received.Close()
+	if len(received.Parts()) != partCount {
+		t.Fatalf("multipart parts = %d, want %d", len(received.Parts()), partCount)
+	}
+	for i, part := range received.Parts() {
+		if got := part.Data(); len(got) != 1 || got[0] != byte(i) {
+			t.Fatalf("part[%d] = %v, want [%d]", i, got, i)
+		}
+	}
+}
+
 func TestPollerWaitWritesCallerOwnedEvents(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
