@@ -155,7 +155,7 @@ type multiStreamRouteDispatch struct {
 func newMultiStreamRouteDispatch(server *zlink.StreamSocket) *multiStreamRouteDispatch {
 	return newMultiStreamRouteDispatchWithSubmit(
 		func(source zlink.RoutingID, packet *zlink.Message) (bool, error) {
-			err := server.SendTo(source).MoveMessage(packet).Submit(context.Background())
+			err := perfcommon.SubmitSend(context.Background(), server.SendTo(source).MoveMessage(packet))
 			return err == nil, err
 		},
 	)

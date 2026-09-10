@@ -221,24 +221,19 @@ internal static class PerfMultiSocketReqRep
         int msgSize, int durationSeconds, int latencyCap)
     {
         int payloadSize = Math.Max(msgSize, PerfMetricHeaderSize);
-        var requests = new List<Task>();
         var samples = new List<double>(Math.Max(0, latencyCap));
         object gate = new();
+        var admissionSignal = new SemaphoreSlim(0);
+        var replySignal = new SemaphoreSlim(0);
         Exception? completionError = null;
         int hasCompletionError = 0;
+        long pendingReplies = 0;
         long completed = 0;
         long sampleSeen = 0;
         double sampleSum = 0.0;
         uint rng = 0xA341316Cu;
         long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
         TimeSpan requestTimeout = ResolveReqRepTimeout();
-        using var completionPoller = Zlink.CreatePoller();
-        var completionEvents = new PollEvent[Math.Max(1, slots.Count)];
-        for (int i = 0; i < slots.Count; ++i)
-        {
-            completionPoller.Add(slots[i].Socket,
-                PollEventFlags.PollCompletion, (nuint)i);
-        }
         bool HasCompletionError() => Volatile.Read(ref hasCompletionError) != 0;
 
         void RecordCompletionError(Exception ex)
@@ -250,7 +245,7 @@ internal static class PerfMultiSocketReqRep
             }
         }
 
-        Task<IReadOnlyList<Message>> SubmitAsync(ClientSlot slot)
+        RequestSubmission Submit(ClientSlot slot)
         {
             using Message message = Message.Allocate(payloadSize);
             long sentTicks = Stopwatch.GetTimestamp();
@@ -259,14 +254,14 @@ internal static class PerfMultiSocketReqRep
                 msgSize, seq, EpochNsFromTimestamp(sentTicks));
             using Message? tail = PerfSocketIo.MeasurementPartCount == 2
                 ? Message.Allocate(0) : null;
-            Task<IReadOnlyList<Message>> requestTask;
+            RequestSubmission submission;
             if (routerRouter)
             {
                 var request = ((IRouterSocket)slot.Socket)
                     .Request(ServerRoutingId).Message(message);
                 if (tail != null)
                     request = request.Message(tail);
-                requestTask = request.Timeout(requestTimeout).Async();
+                submission = request.Timeout(requestTimeout).Async();
             }
             else
             {
@@ -274,13 +269,13 @@ internal static class PerfMultiSocketReqRep
                     .Message(message);
                 if (tail != null)
                     request = request.Message(tail);
-                requestTask = request.Timeout(requestTimeout).Async();
+                submission = request.Timeout(requestTimeout).Async();
             }
             slot.NextSeq = seq + 1;
             if (s_debugEnabled)
                 DebugLogLimited(ref s_debugClientSubmitLogs,
                     $"socket_reqrep_client: submitted seq={seq}");
-            return requestTask;
+            return submission;
         }
 
         async Task ObserveRequestAsync(Task<IReadOnlyList<Message>> requestTask)
@@ -335,70 +330,84 @@ internal static class PerfMultiSocketReqRep
             {
                 if (parts != null)
                     Zlink.MultipartClose(parts);
+                Interlocked.Decrement(ref pendingReplies);
+                replySignal.Release();
+            }
+        }
+
+        async Task AwaitAdmissionAsync(ClientSlot slot, Task admission)
+        {
+            try
+            {
+                await admission.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                RecordCompletionError(ex);
+            }
+            finally
+            {
+                slot.CompleteAdmission();
+                admissionSignal.Release();
             }
         }
 
         while (Stopwatch.GetTimestamp() < deadlineTicks && !HasCompletionError())
         {
-            for (int i = requests.Count - 1; i >= 0; --i)
-            {
-                if (!requests[i].IsCompleted)
-                    continue;
-                await requests[i].ConfigureAwait(false);
-                requests.RemoveAt(i);
-            }
-
+            bool submittedAny = false;
             for (int i = 0; i < slots.Count; i++)
             {
                 ClientSlot slot = slots[i];
-                try
+                if (slot.AdmissionPending)
+                    continue;
+                while (Stopwatch.GetTimestamp() < deadlineTicks
+                       && !HasCompletionError())
                 {
-                    Task<IReadOnlyList<Message>> requestTask =
-                        SubmitAsync(slot);
-                    requests.Add(ObserveRequestAsync(requestTask));
-                }
-                catch (Exception ex)
-                {
-                    RecordCompletionError(ex);
+                    try
+                    {
+                        RequestSubmission submission = Submit(slot);
+                        Interlocked.Increment(ref pendingReplies);
+                        _ = ObserveRequestAsync(submission.Reply);
+                        submittedAny = true;
+                        if (submission.Result == SubmitResult.Backpressured)
+                        {
+                            slot.BeginAdmission();
+                            _ = AwaitAdmissionAsync(slot,
+                                submission.Admitted);
+                            break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        RecordCompletionError(ex);
+                    }
                 }
             }
-            // A single completion-only wait owns WRITABLE/request progress for
-            // every requester and paces an all-backpressured turn without a
-            // POLLOUT level-triggered spin.
-            long remainingTicks = Math.Max(0,
-                deadlineTicks - Stopwatch.GetTimestamp());
-            int waitMs = Math.Min(50, Math.Max(1, (int)Math.Ceiling(
-                remainingTicks * 1000.0 / Stopwatch.Frequency)));
-            _ = completionPoller.Wait(completionEvents,
-                TimeSpan.FromMilliseconds(waitMs));
+            if (!submittedAny && !HasCompletionError())
+            {
+                long remainingTicks = deadlineTicks
+                    - Stopwatch.GetTimestamp();
+                if (remainingTicks <= 0)
+                    break;
+                await admissionSignal.WaitAsync(TimeSpan.FromSeconds(
+                    remainingTicks / (double)Stopwatch.Frequency))
+                    .ConfigureAwait(false);
+            }
         }
 
         long drainDeadline = Stopwatch.GetTimestamp()
             + (long)(ResolveReqRepDrainTimeout().TotalSeconds
                 * Stopwatch.Frequency);
-        while (requests.Count > 0
-               && Stopwatch.GetTimestamp() < drainDeadline)
+        while (Volatile.Read(ref pendingReplies) > 0)
         {
-            for (int i = requests.Count - 1; i >= 0; --i)
-            {
-                if (!requests[i].IsCompleted)
-                    continue;
-                await requests[i].ConfigureAwait(false);
-                requests.RemoveAt(i);
-            }
-            if (requests.Count > 0)
-            {
-                long remainingTicks = Math.Max(0,
-                    drainDeadline - Stopwatch.GetTimestamp());
-                int waitMs = Math.Min(50, Math.Max(1, (int)Math.Ceiling(
-                    remainingTicks * 1000.0 / Stopwatch.Frequency)));
-                _ = completionPoller.Wait(completionEvents,
-                    TimeSpan.FromMilliseconds(waitMs));
-            }
+            long remainingTicks = drainDeadline - Stopwatch.GetTimestamp();
+            if (remainingTicks <= 0
+                || !await replySignal.WaitAsync(TimeSpan.FromSeconds(
+                        remainingTicks / (double)Stopwatch.Frequency))
+                    .ConfigureAwait(false))
+                throw new TimeoutException(
+                    "multi request/reply operations did not drain");
         }
-        if (requests.Count != 0)
-            throw new TimeoutException(
-                "multi request/reply operations did not drain");
 
         lock (gate)
         {
@@ -557,6 +566,22 @@ internal static class PerfMultiSocketReqRep
 
         internal IZlinkSocket Socket { get; }
         internal ulong NextSeq { get; set; } = 1;
+        private int _admissionPending;
+
+        internal bool AdmissionPending =>
+            Volatile.Read(ref _admissionPending) != 0;
+
+        internal void BeginAdmission()
+        {
+            if (Interlocked.Exchange(ref _admissionPending, 1) != 0)
+                throw new InvalidOperationException(
+                    "The socket already has a pending admission.");
+        }
+
+        internal void CompleteAdmission()
+        {
+            Volatile.Write(ref _admissionPending, 0);
+        }
 
     }
 

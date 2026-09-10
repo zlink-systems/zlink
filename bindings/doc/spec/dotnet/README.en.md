@@ -563,7 +563,7 @@ commands from `bindings/dotnet/`.
 
 .NET package information follows its [distribution metadata](../../../dotnet/src/Zlink/Zlink.csproj); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-.NET provides blocking `Submit()` and `Async(CancellationToken)` returning `Task`.
+.NET provides blocking `Submit()` and `Async(CancellationToken)` returning a result object (`SendSubmission`/`RequestSubmission`: `Result` and `Admitted`, plus `Reply` for a request).
 The caller wait cancellation input is `CancellationToken`.
 
 Native completion IDs, `user_context`, and raw drain are not public APIs.
@@ -582,11 +582,24 @@ rejects `Unspecified`.
 ### Public interface
 
 ```csharp
+public readonly struct SendSubmission
+{
+    public SubmitResult Result { get; }   // OK | BACKPRESSURED, submit-time snapshot
+    public Task Admitted { get; }          // completed when Result is OK
+}
+
+public readonly struct RequestSubmission
+{
+    public SubmitResult Result { get; }
+    public Task Admitted { get; }
+    public Task<IReadOnlyList<Message>> Reply { get; }   // completes after successful admission
+}
+
 public interface SendSubmitOperation
 {
     SendSubmitOperation Message(Message message);
     void Submit();
-    Task Async(CancellationToken cancellationToken = default);
+    SendSubmission Async(CancellationToken cancellationToken = default);
 }
 
 public interface RequestSubmitOperation
@@ -594,8 +607,7 @@ public interface RequestSubmitOperation
     RequestSubmitOperation Message(Message message);
     RequestSubmitOperation Timeout(TimeSpan timeout);
     IReadOnlyList<Message> Submit();
-    Task<IReadOnlyList<Message>> Async(
-        CancellationToken cancellationToken = default);
+    RequestSubmission Async(CancellationToken cancellationToken = default);
 }
 
 public interface ReplySubmitOperation

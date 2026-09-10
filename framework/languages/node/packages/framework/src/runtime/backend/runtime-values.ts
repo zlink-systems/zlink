@@ -75,9 +75,15 @@ export function isBackendRequestTimeoutError(error: unknown): boolean {
     && error.result === RequestResult.TimedOut;
 }
 export type ZLinkBackendMessageLike = Message | Buffer | Uint8Array | string;
+/** Binding의 SendSubmission과 구조적으로 호환된다. binding 타입을 import 하지 않는다. */
+export interface ZLinkBackendSendSubmission {
+  readonly admitted: Promise<void>;
+}
+
 export interface ZLinkBackendSendSubmitBuilder {
   message(message: ZLinkBackendMessageLike): ZLinkBackendSendSubmitBuilder;
-  submit(): Promise<void>;
+  // 제출 스냅샷을 그대로 돌려준다. admission을 기다리려면 .admitted를 await 한다.
+  submit(): ZLinkBackendSendSubmission;
 }
 
 export interface ZLinkBackendSendBuilder {

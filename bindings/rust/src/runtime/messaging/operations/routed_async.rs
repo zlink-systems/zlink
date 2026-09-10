@@ -11,7 +11,9 @@ use crate::error::{SubmitError, SubmitResult, ZlinkError};
 use crate::ffi;
 use crate::internal::{CompletionEntry, CompletionOwner, RoutedHandle};
 use crate::message::{Message, RoutingId};
-use crate::messaging_operations::{Empty, MessageParts, RequestOp, RequestOpStorage};
+use crate::messaging_operations::{
+    Empty, MessageParts, RequestOp, RequestOpStorage, RequestSubmission,
+};
 use crate::native_errors::{submit_error_from_errno, submit_error_from_rc};
 
 use super::send_ops::{check_submit_result, submit_shared_message};
@@ -50,15 +52,42 @@ pub(crate) fn router_request_op(
 }
 
 pub(crate) fn submit_routed_request(
-    operation: RequestOpStorage,
-) -> impl Future<Output = Result<Vec<Message>, ZlinkError>> + Send {
-    RequestFuture {
-        operation: Some(operation),
-        entry: None,
-        owner: None,
-        context: std::ptr::null_mut(),
-        waiting_for_writable: false,
-        finished: false,
+    mut operation: RequestOpStorage,
+) -> Result<RequestSubmission, ZlinkError> {
+    validate_request(&operation)?;
+    let owner = Arc::clone(&operation.completion_owner);
+    let (entry, context) = owner.register_request()?;
+    match submit_request_attempt(&mut operation, &entry, context) {
+        Ok(RequestAttempt::Admitted) => {
+            entry.admission_succeeded();
+            Ok(RequestSubmission {
+                result: SubmitResult::Ok,
+                admitted: Box::pin(std::future::ready(Ok(()))),
+                reply: Box::pin(RequestReplyFuture::new(entry, owner, context)),
+            })
+        }
+        Ok(RequestAttempt::Waiting) => Ok(RequestSubmission {
+            result: SubmitResult::Backpressured,
+            admitted: Box::pin(RequestAdmissionFuture {
+                operation: Some(operation),
+                entry: Arc::clone(&entry),
+                owner: Arc::clone(&owner),
+                context,
+                waiting_for_writable: true,
+                finished: false,
+            }),
+            reply: Box::pin(RequestReplyFuture::new(entry, owner, context)),
+        }),
+        Err(failure) => {
+            if failure.live_token {
+                if entry.detach() {
+                    owner.unregister(context);
+                }
+            } else {
+                owner.unregister(context);
+            }
+            Err(failure.error.into())
+        }
     }
 }
 
@@ -89,127 +118,122 @@ pub(crate) fn submit_routed_request_sync(
 /// stack-local Core shared message descriptors. A refusal with a nonzero token
 /// arms a WRITABLE wait; only that token permits the next attempt. Once admitted,
 /// the same entry changes phase and waits for the REQUEST reply or terminal.
-struct RequestFuture {
+struct RequestAdmissionFuture {
     operation: Option<RequestOpStorage>,
-    entry: Option<Arc<CompletionEntry>>,
-    owner: Option<Arc<CompletionOwner>>,
+    entry: Arc<CompletionEntry>,
+    owner: Arc<CompletionOwner>,
     context: *mut c_void,
     waiting_for_writable: bool,
     finished: bool,
 }
 
-unsafe impl Send for RequestFuture {}
+unsafe impl Send for RequestAdmissionFuture {}
 
-impl Future for RequestFuture {
-    type Output = Result<Vec<Message>, ZlinkError>;
+impl Future for RequestAdmissionFuture {
+    type Output = Result<(), SubmitError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if self.finished {
-            panic!("request Future polled after completion");
-        }
-        if self.entry.is_none() {
-            let operation = self.operation.as_ref().expect("active request");
-            if let Err(error) = validate_request(operation) {
-                return self.finish(Err(error.into()));
-            }
-            let owner = Arc::clone(&operation.completion_owner);
-            let (entry, user_context) = match owner.register_request() {
-                Ok(registered) => registered,
-                Err(error) => return self.finish(Err(error.into())),
-            };
-            self.owner = Some(owner);
-            self.entry = Some(entry);
-            self.context = user_context;
+            panic!("request admission Future polled after completion");
         }
 
         loop {
             if self.waiting_for_writable {
-                let entry = self.entry.as_ref().expect("request retry entry");
-                match entry.poll_writable(cx.waker()) {
+                match self.entry.poll_writable(cx.waker()) {
                     Poll::Ready(Ok(())) => self.waiting_for_writable = false,
-                    Poll::Ready(Err(error)) => return self.finish(Err(error.into())),
+                    Poll::Ready(Err(error)) => return self.finish(Err(error)),
                     Poll::Pending => return Poll::Pending,
                 }
             }
 
-            if self.operation.is_some() {
-                let context = self.context;
-                let entry = Arc::clone(self.entry.as_ref().expect("request completion entry"));
-                let attempt = {
-                    let operation = self.operation.as_mut().expect("active request");
-                    submit_request_attempt(operation, &entry, context)
-                };
-                match attempt {
-                    Ok(RequestAttempt::Admitted) => {
-                        self.operation.take();
-                    }
-                    Ok(RequestAttempt::Waiting) => {
-                        self.waiting_for_writable = true;
-                        continue;
-                    }
-                    Err(failure) if failure.live_token => {
-                        return self.finish_detached(Err(failure.error.into()));
-                    }
-                    Err(failure) => return self.finish(Err(failure.error.into())),
-                }
-            }
-
-            let outcome = self
-                .entry
-                .as_ref()
-                .expect("request completion")
-                .poll_request(cx.waker());
-            return match outcome {
-                Poll::Ready(Ok(parts)) => self.finish(Ok(parts)),
-                Poll::Ready(Err(error)) => self.finish(Err(error.into())),
-                Poll::Pending => Poll::Pending,
+            let context = self.context;
+            let entry = Arc::clone(&self.entry);
+            let attempt = {
+                let operation = self.operation.as_mut().expect("active request");
+                submit_request_attempt(operation, &entry, context)
             };
-        }
-    }
-}
-
-impl RequestFuture {
-    fn finish(
-        &mut self,
-        result: Result<Vec<Message>, ZlinkError>,
-    ) -> Poll<Result<Vec<Message>, ZlinkError>> {
-        if self.entry.take().is_some() {
-            if let Some(owner) = &self.owner {
-                owner.unregister(self.context);
-            }
-        }
-        self.operation.take();
-        self.waiting_for_writable = false;
-        self.finished = true;
-        Poll::Ready(result)
-    }
-
-    fn finish_detached(
-        &mut self,
-        result: Result<Vec<Message>, ZlinkError>,
-    ) -> Poll<Result<Vec<Message>, ZlinkError>> {
-        self.detach_entry();
-        self.operation.take();
-        self.waiting_for_writable = false;
-        self.finished = true;
-        Poll::Ready(result)
-    }
-
-    fn detach_entry(&mut self) {
-        if let Some(entry) = self.entry.take() {
-            if entry.detach() {
-                if let Some(owner) = &self.owner {
-                    owner.unregister(self.context);
+            match attempt {
+                Ok(RequestAttempt::Admitted) => {
+                    self.operation.take();
+                    self.entry.admission_succeeded();
+                    self.finished = true;
+                    return Poll::Ready(Ok(()));
                 }
+                Ok(RequestAttempt::Waiting) => {
+                    self.waiting_for_writable = true;
+                }
+                Err(failure) => return self.finish(Err(failure.error)),
             }
         }
     }
 }
 
-impl Drop for RequestFuture {
+impl RequestAdmissionFuture {
+    fn finish(&mut self, result: Result<(), SubmitError>) -> Poll<Result<(), SubmitError>> {
+        if let Err(error) = result {
+            if self.entry.fail_admission(error) {
+                self.owner.unregister(self.context);
+            }
+        }
+        self.operation.take();
+        self.waiting_for_writable = false;
+        self.finished = true;
+        Poll::Ready(result)
+    }
+}
+
+impl Drop for RequestAdmissionFuture {
     fn drop(&mut self) {
         if !self.finished {
-            self.detach_entry();
+            let error = SubmitError::new(SubmitResult::Terminated, libc::ECANCELED);
+            if self.entry.fail_admission(error) {
+                self.owner.unregister(self.context);
+            }
+        }
+    }
+}
+
+struct RequestReplyFuture {
+    entry: Arc<CompletionEntry>,
+    owner: Arc<CompletionOwner>,
+    context: *mut c_void,
+    finished: bool,
+}
+
+unsafe impl Send for RequestReplyFuture {}
+
+impl RequestReplyFuture {
+    fn new(entry: Arc<CompletionEntry>, owner: Arc<CompletionOwner>, context: *mut c_void) -> Self {
+        Self {
+            entry,
+            owner,
+            context,
+            finished: false,
+        }
+    }
+}
+
+impl Future for RequestReplyFuture {
+    type Output = Result<Vec<Message>, ZlinkError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.finished {
+            panic!("request reply Future polled after completion");
+        }
+        match self.entry.poll_request(cx.waker()) {
+            Poll::Ready(result) => {
+                self.finished = true;
+                Poll::Ready(result)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl Drop for RequestReplyFuture {
+    fn drop(&mut self) {
+        if !self.finished && self.entry.detach_reply() {
+            self.owner.unregister(self.context);
         }
     }
 }

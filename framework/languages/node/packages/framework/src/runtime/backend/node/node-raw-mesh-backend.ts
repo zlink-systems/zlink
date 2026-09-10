@@ -1942,7 +1942,7 @@ class RawStreamSessionService implements StreamSessionService {
       submit = submit.message(parts[index]!);
     }
     try {
-      await submit.submit();
+      await submit.submit().admitted;
       return true;
     } catch (error) {
       if (!(error instanceof SubmitError)) throw error;

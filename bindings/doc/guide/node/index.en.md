@@ -49,7 +49,7 @@ server.recv(received);
 console.log(received.parts[0].data().toString()); // PING
 received.close();
 
-await server.send().message(Buffer.from('ACK')).submit();
+await server.send().message(Buffer.from('ACK')).submit().admitted;
 
 server.close();
 ctx.close();
@@ -61,7 +61,7 @@ const ctx = zlink.createContext();
 const client = zlink.createPairSocket(ctx);
 client.connect('tcp://127.0.0.1:5555');
 
-await client.send().message(Buffer.from('PING')).submit();
+await client.send().message(Buffer.from('PING')).submit().admitted;
 
 const received = new zlink.Received();
 client.recv(received);
@@ -90,8 +90,8 @@ The Node binding uses `Buffer` directly as a message. `message()` makes a copy,
 so you're free to reuse the original Buffer.
 
 ```javascript
-await socket.send().message(Buffer.from('hello')).submit();
-await socket.send().message(Buffer.from([0x01, 0x02])).submit();
+await socket.send().message(Buffer.from('hello')).submit().admitted;
+await socket.send().message(Buffer.from([0x01, 0x02])).submit().admitted;
 
 // access the payload after receiving
 const received = new zlink.Received();
@@ -102,18 +102,22 @@ received.close();
 ```
 
 HWM-managed sends provide asynchronous `submit()` and synchronous
-`submit_sync()` terminals. On Node's event loop, use the Promise-returning
-`submit()` by default; it uses DONTWAIT and settles from the socket completion
-queue. `submit_sync()` blocks in Core until local admission.
+`submit_sync()` terminals. On Node's event loop, use the result-object-returning
+`submit()` by default; it returns a `SendSubmission` (`result`: `OK`|`BACKPRESSURED`
+as a synchronous field, `admitted: Promise<void>`), uses DONTWAIT, and settles
+admission from the socket completion queue. `submit_sync()` blocks in Core until
+local admission.
 
 ```javascript
-await socket.send().message(Buffer.from('data')).submit(); // asynchronous
+const send = socket.send().message(Buffer.from('data')).submit(); // result object
+if (send.result === SubmitResult.BACKPRESSURED) await send.admitted; // wait only at HWM
 socket.send().message(Buffer.from('data')).submit_sync();  // synchronous Core admission
 ```
 
-Request provides `submit_sync()` to block until the reply and `submit()` to
-return a `Promise<Message[]>` settled from the socket completion queue. The
-reply is that terminal result, not DATA received separately.
+Request provides `submit_sync()` to block until the reply and `submit()` to return a
+`RequestSubmission` (`result`, `admitted`, plus `reply: Promise<Message[]>`). When
+`result` is `OK` you can await `reply` directly; the reply is that terminal result, not
+DATA received separately.
 
 Core owns retry after accepting a pre-admission operation; do not add a caller
 retry queue or resubmit its payload. The shared native
@@ -182,7 +186,7 @@ The Node binding throws per-operation error classes.
 
 ```javascript
 try {
-  await socket.send().message(Buffer.from('data')).submit();
+  await socket.send().message(Buffer.from('data')).submit().admitted;
 } catch (error) {
   if (error instanceof zlink.SubmitError) {
     if (error.result === zlink.SubmitResult.Backpressured) {
@@ -211,12 +215,12 @@ binding, mapping 1:1 to the Core C API (`zlink_msg_copy`/`zlink_msg_move`).
 
 ```javascript
 const shared = msg.copy();
-await socket.send().message(shared).submit();  // shared is consumed
+await socket.send().message(shared).submit().admitted;  // shared is consumed
 // msg is still valid
 
 const out = new zlink.Message();
 receivedPart.move(out);                         // receivedPart becomes empty
-await socket.send(routingId).message(out).submit();
+await socket.send(routingId).message(out).submit().admitted;
 
 const dup = msg.clone();
 ```
@@ -244,7 +248,7 @@ const dup = msg.clone();
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
 | `zlink_send(..., parts, count, ...)` / `zlink_send_rid(..., parts, count, ...)` + NONE | `socket.send().message(buf).submit_sync()` |
-| DONTWAIT send + completion pull | `await socket.send().message(buf).submit()` |
+| DONTWAIT send + completion pull | `await socket.send().message(buf).submit().admitted` |
 | `zlink_recv(..., parts_out, capacity, count_out, ...)` | `socket.recv(received)` |
 | `zlink_msg_data(msg)` | `part.data()` (Buffer) |
 | `zlink_routing_id_t` | `zlink.RoutingId` |

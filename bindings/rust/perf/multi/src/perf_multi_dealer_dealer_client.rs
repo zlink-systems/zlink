@@ -70,15 +70,22 @@ fn main() {
                 if tasks.is_pending(slot) {
                     continue;
                 }
-                let mut msg = Message::with_size(payload_size).expect("msg");
-                common::encode_header(
-                    msg.data_mut(),
-                    common::PHASE_ACTIVE,
-                    args.msg_size as u32,
-                    sequence,
-                );
-                sequence += 1;
-                tasks.insert(slot, perf_submit_measurement_async!(socket.send(), msg));
+                while Instant::now() < deadline {
+                    let mut msg = Message::with_size(payload_size).expect("msg");
+                    common::encode_header(
+                        msg.data_mut(),
+                        common::PHASE_ACTIVE,
+                        args.msg_size as u32,
+                        sequence,
+                    );
+                    sequence += 1;
+                    let submission = perf_submit_measurement_async!(socket.send(), msg)
+                        .unwrap_or_else(|err| panic!("send failed: {err}"));
+                    if submission.result == zlink::SubmitResult::Backpressured {
+                        tasks.insert(slot, submission.admitted);
+                        break;
+                    }
+                }
             }
         }
         let ready = tasks.poll_ready();
@@ -113,6 +120,8 @@ fn main() {
                 .send()
                 .message(Message::try_from(common::STOP_TOKEN).expect("stop token"))
                 .submit()
+                .expect("stop token submit")
+                .admitted
         })
         .collect();
     for result in common::block_on_all(stop_futures) {

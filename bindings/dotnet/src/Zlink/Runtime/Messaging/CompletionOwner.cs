@@ -33,14 +33,13 @@ internal sealed class CompletionOwner
         _socketType = socketType;
     }
 
-    internal Task SendAsync(RoutingId? target,
+    internal SendSubmission SendAsync(RoutingId? target,
         IReadOnlyList<Message> parts, CancellationToken cancellationToken)
     {
         lock (_submitSync)
         {
             ValidateSend(parts);
-            if (cancellationToken.IsCancellationRequested)
-                return Task.FromCanceled(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             EnsureOpenForSubmit();
 
             // Keep cancellation registration before admission for cancelable
@@ -60,16 +59,17 @@ internal sealed class CompletionOwner
                 if (attempt.CompletionId != 0)
                 {
                     var failure = CreateProtocolFailure();
-                    if (entry is null)
-                        return Task.FromException(failure);
-                    entry.CompleteInitialFailure(failure);
-                    return entry.Task;
+                    entry?.AbortBeforeNativeWait(failure);
+                    throw failure;
                 }
 
-                if (entry is null)
-                    return Task.CompletedTask;
-                entry.CompleteInitialSuccess();
-                return entry.Task;
+                Task admitted = Task.CompletedTask;
+                if (entry is not null)
+                {
+                    entry.CompleteInitialSuccess();
+                    admitted = entry.Task;
+                }
+                return new SendSubmission(SubmitResult.Ok, admitted);
             }
 
             if (IsBackpressured(attempt.Failure)
@@ -97,7 +97,8 @@ internal sealed class CompletionOwner
                     throw;
                 }
                 StartRuntimePump();
-                return entry.Task;
+                return new SendSubmission(SubmitResult.Backpressured,
+                    entry.Task);
             }
 
             entry?.AbortBeforeNativeWait(attempt.Failure);
@@ -116,52 +117,14 @@ internal sealed class CompletionOwner
             throw CreateProtocolFailure();
     }
 
-    internal bool TrySend(RoutingId? target, IReadOnlyList<Message> parts)
-    {
-        lock (_submitSync)
-        {
-            EnsureOpenForSubmit();
-            ValidateSend(parts);
-
-            // Even a caller-visible false result has a native WRITABLE waiter.
-            // Keep a payload-free sink alive until that exact token is pulled.
-            var context = NextContext();
-            var attempt = SubmitSend(target, parts, DontWait, context);
-            if (attempt.Failure is null)
-            {
-                if (attempt.CompletionId != 0)
-                {
-                    var failure = CreateProtocolFailure();
-                    throw failure;
-                }
-
-                return true;
-            }
-
-            if (IsBackpressured(attempt.Failure)
-                && attempt.CompletionId != 0)
-            {
-                var entry = new SendCompletionEntry(this, target);
-                Register(entry, context, admittedSubmit: true);
-                entry.Arm(attempt.CompletionId);
-                StartRuntimePump();
-                return false;
-            }
-
-            throw attempt.Failure;
-        }
-    }
-
-    internal Task<IReadOnlyList<Message>> RequestAsync(RoutingId? target,
+    internal RequestSubmission RequestAsync(RoutingId? target,
         IReadOnlyList<Message> parts, uint timeoutMs,
         CancellationToken cancellationToken)
     {
         lock (_submitSync)
         {
             RequestReplySupport.EnsureParts(parts, nameof(parts));
-            if (cancellationToken.IsCancellationRequested)
-                return Task.FromCanceled<IReadOnlyList<Message>>(
-                    cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
 
             var entry = new RequestCompletionEntry(this, target, timeoutMs,
                 cancellationToken);
@@ -179,7 +142,8 @@ internal sealed class CompletionOwner
 
                 entry.PublishRequest(attempt.CompletionId);
                 StartRuntimePump();
-                return entry.Task;
+                return new RequestSubmission(SubmitResult.Ok,
+                    entry.Admitted, entry.Task);
             }
 
             if (IsBackpressured(attempt.Failure)
@@ -201,7 +165,8 @@ internal sealed class CompletionOwner
                     throw;
                 }
                 StartRuntimePump();
-                return entry.Task;
+                return new RequestSubmission(SubmitResult.Backpressured,
+                    entry.Admitted, entry.Task);
             }
 
             entry.AbortBeforeNativeWait(attempt.Failure);
@@ -825,7 +790,7 @@ internal sealed class CompletionOwner
         private readonly RoutingId? _target;
         private Message[]? _retained;
         private readonly CancellationToken _cancellationToken;
-        private readonly TaskCompletionSource? _completion;
+        private readonly TaskCompletionSource _completion;
         private CancellationTokenRegistration _cancellationRegistration;
         private SendEntryState _state;
         private ulong _token;
@@ -843,15 +808,7 @@ internal sealed class CompletionOwner
                 TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
-        // Payload-free sink used by TrySubmit(false) until WRITABLE is pulled.
-        internal SendCompletionEntry(CompletionOwner owner, RoutingId? target)
-        {
-            Owner = owner;
-            _target = target;
-            _state = SendEntryState.Registered;
-        }
-
-        internal Task Task => _completion!.Task;
+        internal Task Task => _completion.Task;
 
         public void EnableCancellation()
         {
@@ -976,12 +933,6 @@ internal sealed class CompletionOwner
                     _state = SendEntryState.Terminal;
                     ReleasePayloadLocked();
                     SetExceptionLocked(terminalFailure);
-                }
-                else if (_completion is null)
-                {
-                    // TrySubmit(false) owns no payload and only drains the
-                    // token that Core necessarily published.
-                    _state = SendEntryState.Terminal;
                 }
                 else if (_cancelClaimed)
                 {
@@ -1110,7 +1061,7 @@ internal sealed class CompletionOwner
 
         private void SetResultLocked()
         {
-            if (_taskSettled || _completion is null)
+            if (_taskSettled)
                 return;
             _taskSettled = true;
             if (_cancelClaimed)
@@ -1121,7 +1072,7 @@ internal sealed class CompletionOwner
 
         private void SetExceptionLocked(Exception exception)
         {
-            if (_taskSettled || _completion is null)
+            if (_taskSettled)
                 return;
             _taskSettled = true;
             if (_cancelClaimed)
@@ -1132,7 +1083,7 @@ internal sealed class CompletionOwner
 
         private void SetCanceledLocked()
         {
-            if (_taskSettled || _completion is null)
+            if (_taskSettled)
                 return;
             _taskSettled = true;
             _completion.TrySetCanceled(_cancellationToken);
@@ -1154,6 +1105,8 @@ internal sealed class CompletionOwner
         private readonly RoutingId? _target;
         private readonly uint _timeoutMs;
         private readonly CancellationToken _cancellationToken;
+        private readonly TaskCompletionSource _admitted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         private CancellationTokenRegistration _cancellationRegistration;
         private IReadOnlyList<Message> _reply = Array.Empty<Message>();
         private Message[]? _retained;
@@ -1171,6 +1124,8 @@ internal sealed class CompletionOwner
             _timeoutMs = timeoutMs;
             _cancellationToken = cancellationToken;
         }
+
+        internal Task Admitted => _admitted.Task;
 
         public void EnableCancellation()
         {
@@ -1196,6 +1151,8 @@ internal sealed class CompletionOwner
                 Monitor.PulseAll(this);
                 if (_cancelClaimed)
                     SetCanceledLocked();
+                else
+                    SetAdmittedResultLocked();
             }
         }
 
@@ -1382,6 +1339,8 @@ internal sealed class CompletionOwner
                     ReleasePayloadLocked();
                     if (_cancelClaimed)
                         SetCanceledLocked();
+                    else
+                        SetAdmittedResultLocked();
                 }
                 else if (attempt.Failure is not null
                          && IsBackpressured(attempt.Failure)
@@ -1517,8 +1476,14 @@ internal sealed class CompletionOwner
             TrySetResult(_reply);
         }
 
+        private void SetAdmittedResultLocked()
+        {
+            _admitted.TrySetResult();
+        }
+
         private void SetExceptionLocked(Exception exception)
         {
+            _admitted.TrySetException(exception);
             if (Task.IsCompleted)
                 return;
             TrySetException(exception);
@@ -1526,6 +1491,7 @@ internal sealed class CompletionOwner
 
         private void SetCanceledLocked()
         {
+            _admitted.TrySetCanceled(_cancellationToken);
             if (Task.IsCompleted)
                 return;
             TrySetCanceled(_cancellationToken);

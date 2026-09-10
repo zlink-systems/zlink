@@ -178,6 +178,7 @@ func (e *completionEntry) attemptSend() bool {
 				e.mu.Lock()
 				if !e.publicDone {
 					e.err = activateErr
+					e.finishAdmittedLocked(activateErr)
 					e.publicDone = true
 					close(e.done)
 				}
@@ -200,24 +201,24 @@ func submitManagedSend(
 	core *socketCore,
 	target *RoutingID,
 	parts []sendBuilderPart,
-) error {
+) (SendSubmission, error) {
 	if err := contextError(ctx); err != nil {
-		return err
+		return nil, err
 	}
 	if core == nil || core.isClosed() {
-		return &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return nil, &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	if target != nil && target.Size() == 0 {
-		return &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return nil, &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}
 
 	send, err := newSendRetryState(core, target, parts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := contextError(ctx); err != nil {
 		send.payload.close()
-		return err
+		return nil, err
 	}
 	// Only the nonblocking native admission and wait-token publication share
 	// the drain owner's lock. No completion wait or payload preparation holds it.
@@ -227,14 +228,14 @@ func submitManagedSend(
 	if owner.shutdown {
 		owner.mu.Unlock()
 		send.payload.close()
-		return &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.ESHUTDOWN)}
+		return nil, &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.ESHUTDOWN)}
 	}
 	completionID, err := send.attempt(key)
 	if err == nil && completionID == 0 {
 		owner.mu.Unlock()
 		send.payload.takeSourceOwnership()
 		send.payload.close()
-		return nil
+		return &sendSubmission{result: SubmitOK}, nil
 	}
 	var submitErr *SubmitError
 	if !errors.As(err, &submitErr) || submitErr.Result != SubmitBackpressured ||
@@ -242,15 +243,15 @@ func submitManagedSend(
 		owner.mu.Unlock()
 		send.payload.close()
 		if err == nil || (submitErr != nil && submitErr.Result == SubmitBackpressured) {
-			return &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
+			return nil, &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
 		}
-		return err
+		return nil, err
 	}
 	// A token now exists. Publish the entry before a drain can look it up;
 	// immediate admission has no entry, channel, or global handle registration.
 	retry := new(sendRetryState)
 	*retry = send
-	entry := newSendCompletionEntry(nil, retry, key)
+	entry := newSendCompletionEntry(retry, key)
 	entry.owner = owner
 	entry.attemptMu.Lock()
 	owner.entries[key] = entry
@@ -260,14 +261,14 @@ func submitManagedSend(
 	if activateErr := entry.setWritableWaiting(true); activateErr != nil {
 		entry.mu.Lock()
 		entry.err = activateErr
+		entry.finishAdmittedLocked(activateErr)
 		entry.publicDone = true
 		close(entry.done)
 		entry.mu.Unlock()
 		send.payload.close()
 	}
 	entry.attemptMu.Unlock()
-	entry.enableCancellation(ctx)
-	return entry.waitSend()
+	return &sendSubmission{result: SubmitBackpressured, entry: entry}, nil
 }
 
 func submitCompletionRequest(
@@ -276,7 +277,7 @@ func submitCompletionRequest(
 	target *RoutingID,
 	timeout time.Duration,
 	parts []requestBuilderPart,
-) ([]*Message, error) {
+) (RequestSubmission, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
@@ -291,7 +292,7 @@ func submitCompletionRequest(
 		return nil, err
 	}
 
-	entry := newCompletionEntry(completionRequest, ctx)
+	entry := newCompletionEntry(completionRequest)
 	if err := core.completion.register(entry); err != nil {
 		entry.failSubmit()
 		return nil, err
@@ -323,9 +324,10 @@ func submitCompletionRequest(
 			core.completion.unregister(entry)
 			return nil, &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
 		}
+		entry.finishAdmitted(nil)
 		entry.publish(uint64(completionID))
 		entry.attemptMu.Unlock()
-		return entry.waitRequest()
+		return &requestSubmission{result: SubmitOK, entry: entry}, nil
 	}
 
 	var submitErr *SubmitError
@@ -345,6 +347,7 @@ func submitCompletionRequest(
 			entry.mu.Lock()
 			if !entry.publicDone {
 				entry.err = snapshotErr
+				entry.finishAdmittedLocked(snapshotErr)
 				entry.publicDone = true
 				close(entry.done)
 			}
@@ -354,7 +357,7 @@ func submitCompletionRequest(
 			}
 		}
 		entry.attemptMu.Unlock()
-		return entry.waitRequest()
+		return &requestSubmission{result: SubmitBackpressured, entry: entry}, nil
 	}
 
 	entry.attemptMu.Unlock()

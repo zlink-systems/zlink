@@ -508,7 +508,7 @@ public sealed class test_pair_tcp
 
         using Message message = Message.From("no-route");
         var ex = await Assert.ThrowsAsync<ZlinkSubmitException>(() =>
-            router.Send(RoutingId.From("UNKNOWN"u8)).Message(message).Async());
+            router.Send(RoutingId.From("UNKNOWN"u8)).Message(message).Async().Admitted);
         Assert.Equal(ZlinkSubmitException.ErrorCode.NotConnected, ex.Result);
     }
 }

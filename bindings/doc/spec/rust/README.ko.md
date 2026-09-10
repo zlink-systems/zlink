@@ -593,7 +593,7 @@ Rust는 Actor와 Spot route 조회 결과를 공개 값 타입으로 노출한�
 
 Rust package 정보는 [배포 metadata](../../../rust/Cargo.toml)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Rust는 blocking `Result`를 반환하는 `submit_sync()`와 runtime-independent `Future`를 반환하는 `submit()`을 제공한다.
+Rust는 blocking `Result`를 반환하는 `submit_sync()`와 결과 객체(`Result<SendSubmission>`/`Result<RequestSubmission>`: `result`와 boxed `admitted` future, request는 `reply` future)를 돌려주는 `submit()`을 제공한다.
 완료 대기 객체의 수명 종료는 Future drop 또는 executor task abort로 표현한다.
 
 Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
@@ -628,18 +628,26 @@ impl std::fmt::Debug for ReplyToken {
     }
 }
 
+// impl Trait 필드는 안정 Rust에서 불가하므로 boxed future로 시작한다.
+pub struct SendSubmission {
+    pub result: SubmitResult,   // OK | BACKPRESSURED, 제출 시점 스냅샷
+    pub admitted: Pin<Box<dyn Future<Output = Result<(), SubmitError>> + Send>>,
+}
+
+pub struct RequestSubmission {
+    pub result: SubmitResult,
+    pub admitted: Pin<Box<dyn Future<Output = Result<(), SubmitError>> + Send>>,
+    pub reply: Pin<Box<dyn Future<Output = Result<Vec<Message>, ZlinkError>> + Send>>,
+}
+
 impl SendOp<Ready> {
-    pub fn submit(
-        self,
-    ) -> impl Future<Output = Result<(), SubmitError>> + Send;
+    pub fn submit(self) -> Result<SendSubmission, SubmitError>;
     pub fn submit_sync(self) -> Result<(), SubmitError>;
 }
 
 impl RequestOp<Ready> {
     pub fn timeout(self, timeout: Duration) -> Self;
-    pub fn submit(
-        self,
-    ) -> impl Future<Output = Result<Vec<Message>, ZlinkError>> + Send;
+    pub fn submit(self) -> Result<RequestSubmission, ZlinkError>;
     pub fn submit_sync(self) -> Result<Vec<Message>, ZlinkError>;
 }
 

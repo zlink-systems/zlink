@@ -51,7 +51,7 @@ internal static class Program
         IReadOnlyList<Message> replyReceived = await dealerSocket.Request()
             .Message(sent)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
+            .Async().Reply;
         using Message replyPart = replyReceived[0];
         SampleSupport.EnsureEqual("pong", replyPart.GetString(), "reply");
         for (int i = 1; i < replyReceived.Count; i++)

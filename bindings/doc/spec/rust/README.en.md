@@ -517,7 +517,7 @@ Rust exposes Actor and Spot route lookup results as public value types.
 
 Rust package information follows its [distribution metadata](../../../rust/Cargo.toml); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-Rust provides `submit_sync()` returning a blocking `Result` and `submit()` returning a runtime-independent `Future`.
+Rust provides `submit_sync()` returning a blocking `Result` and `submit()` returning a result object (`Result<SendSubmission>`/`Result<RequestSubmission>`: `result` and a boxed `admitted` future, plus a `reply` future for a request).
 Completion-wait lifetime ends through Future drop or executor task abort.
 
 Native completion IDs, `user_context`, and raw drain are not public APIs.
@@ -552,18 +552,26 @@ impl std::fmt::Debug for ReplyToken {
     }
 }
 
+// `impl Trait` fields are not allowed on stable Rust, so start with boxed futures.
+pub struct SendSubmission {
+    pub result: SubmitResult,   // OK | BACKPRESSURED, submit-time snapshot
+    pub admitted: Pin<Box<dyn Future<Output = Result<(), SubmitError>> + Send>>,
+}
+
+pub struct RequestSubmission {
+    pub result: SubmitResult,
+    pub admitted: Pin<Box<dyn Future<Output = Result<(), SubmitError>> + Send>>,
+    pub reply: Pin<Box<dyn Future<Output = Result<Vec<Message>, ZlinkError>> + Send>>,
+}
+
 impl SendOp<Ready> {
-    pub fn submit(
-        self,
-    ) -> impl Future<Output = Result<(), SubmitError>> + Send;
+    pub fn submit(self) -> Result<SendSubmission, SubmitError>;
     pub fn submit_sync(self) -> Result<(), SubmitError>;
 }
 
 impl RequestOp<Ready> {
     pub fn timeout(self, timeout: Duration) -> Self;
-    pub fn submit(
-        self,
-    ) -> impl Future<Output = Result<Vec<Message>, ZlinkError>> + Send;
+    pub fn submit(self) -> Result<RequestSubmission, ZlinkError>;
     pub fn submit_sync(self) -> Result<Vec<Message>, ZlinkError>;
 }
 

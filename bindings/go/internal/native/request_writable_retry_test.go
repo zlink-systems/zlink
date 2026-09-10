@@ -54,7 +54,9 @@ func testPublicRequestRetriesExactPacketAfterWritable(t *testing.T, run int) {
 	// The receive side drives the connect-before-ready WRITABLE if the inproc
 	// pipe has not attached yet; the completed exchange is the readiness barrier.
 	primeDone := make(chan error, 1)
-	go func() { primeDone <- dealer.Send().Bytes([]byte("route-prime")).Submit(context.Background()) }()
+	go func() {
+		primeDone <- submitNativeSend(context.Background(), dealer.Send().Bytes([]byte("route-prime")))
+	}()
 	var prime Received
 	if ok, err := router.Recv(&prime, RecvFlagsNone); err != nil || !ok {
 		t.Fatalf("prime Recv() = (%v, %v), want (true, nil)", ok, err)
@@ -177,19 +179,30 @@ func TestPublicRequestCloseCleansWritableToken(t *testing.T) {
 		if err := dealer.Connect(endpoint); err != nil {
 			t.Fatalf("Connect() error = %v", err)
 		}
-		done := make(chan requestTestResult, 1)
-		go submitTestRequest(dealer, []byte("close-token"), done)
+		submission, err := dealer.Request().Bytes([]byte("close-token")).Timeout(5 * time.Second).Submit(context.Background())
+		if err != nil {
+			t.Fatalf("Submit() error = %v", err)
+		}
+		if submission.Result() != SubmitBackpressured {
+			t.Fatalf("Submit() result = %v, want SubmitBackpressured", submission.Result())
+		}
 		waitForManagedRequestToken(t, dealer.socketCore.completion)
 		if err := dealer.Close(); err != nil {
 			t.Fatalf("Close() error = %v", err)
 		}
-		result := <-done
-		var requestErr *RequestError
-		if result.parts != nil || !errors.As(result.err, &requestErr) || requestErr.Result != RequestTerminated {
-			t.Fatalf("closed request = (%v, %v), want RequestTerminated", result.parts, result.err)
+		admittedErr := submission.Admitted(context.Background())
+		parts, replyErr := submission.Reply(context.Background())
+		var admittedRequestErr *RequestError
+		var replyRequestErr *RequestError
+		if parts != nil || !errors.As(admittedErr, &admittedRequestErr) || admittedRequestErr.Result != RequestTerminated ||
+			!errors.As(replyErr, &replyRequestErr) || replyRequestErr.Result != RequestTerminated {
+			t.Fatalf("closed request = admitted %v, reply (%v, %v), want RequestTerminated", admittedErr, parts, replyErr)
 		}
-		if !errors.Is(result.err, syscall.ESHUTDOWN) {
-			t.Fatalf("closed request error = %v, want ESHUTDOWN", result.err)
+		if admittedErr != replyErr {
+			t.Fatalf("admitted and reply errors are different objects: %p != %p", admittedRequestErr, replyRequestErr)
+		}
+		if !errors.Is(admittedErr, syscall.ESHUTDOWN) || !errors.Is(replyErr, syscall.ESHUTDOWN) {
+			t.Fatalf("closed request errors = (%v, %v), want ESHUTDOWN", admittedErr, replyErr)
 		}
 		dealer.socketCore.completion.mu.Lock()
 		remaining := len(dealer.socketCore.completion.entries)
@@ -214,7 +227,7 @@ func TestPublicRequestAndSendWritableTokensCoexist(t *testing.T) {
 		requestDone := make(chan requestTestResult, 1)
 		go submitTestRequest(dealer, []byte("mixed-request"), requestDone)
 		sendDone := make(chan error, 1)
-		go func() { sendDone <- dealer.Send().Bytes([]byte("mixed-send")).Submit(context.Background()) }()
+		go func() { sendDone <- submitNativeSend(context.Background(), dealer.Send().Bytes([]byte("mixed-send"))) }()
 		requestEntry, requestToken := waitForManagedRequestToken(t, dealer.socketCore.completion)
 		sendEntry, sendToken := waitForManagedSendToken(t, dealer.socketCore.completion)
 		if requestEntry.handleKey == sendEntry.handleKey || requestToken == sendToken {
@@ -267,7 +280,11 @@ type requestTestResult struct {
 }
 
 func submitTestRequest(dealer *DealerSocket, payload []byte, done chan<- requestTestResult) {
-	parts, err := dealer.Request().Bytes(payload).Timeout(5 * time.Second).Submit(context.Background())
+	submission, err := dealer.Request().Bytes(payload).Timeout(5 * time.Second).Submit(context.Background())
+	var parts []*Message
+	if err == nil {
+		parts, err = submission.Reply(context.Background())
+	}
 	done <- requestTestResult{parts: parts, err: err}
 }
 

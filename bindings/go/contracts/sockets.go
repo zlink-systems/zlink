@@ -38,11 +38,15 @@ type (
 	SendOp = impl.SendOp
 	// SendSubmitOp accepts further parts and a terminal that retries the retained packet after its exact WRITABLE token.
 	SendSubmitOp = impl.SendSubmitOp
-	// RequestOp builds a request; submitting consumes the parts and awaits a reply.
+	// SendSubmission exposes the initial admission result and its completion.
+	SendSubmission = impl.SendSubmission
+	// RequestOp builds a request; submitting consumes the parts and returns its admission snapshot.
 	RequestOp = impl.RequestOp
 	// RequestSubmitOp accepts further parts, a timeout, and a terminal that retries
 	// after its exact WRITABLE token before awaiting the reply result.
 	RequestSubmitOp = impl.RequestSubmitOp
+	// RequestSubmission exposes admission separately from the eventual reply.
+	RequestSubmission = impl.RequestSubmission
 	// ReplyOp builds a reply; submitting consumes the parts.
 	ReplyOp = impl.ReplyOp
 	// ReplySubmitOp accepts further parts and the flag-free synchronous terminal.

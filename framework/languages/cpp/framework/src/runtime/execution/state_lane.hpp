@@ -150,6 +150,7 @@ class state_lane_t
           })) {
             throw std::runtime_error ("state lane is closed");
         }
+        schedule_drain (true);
         return result;
     }
 
@@ -179,11 +180,10 @@ class state_lane_t
 
     bool enqueue (std::function<void ()> work,
                   std::function<void (std::exception_ptr)> abandon);
-    void schedule_drain ();
+    void schedule_drain (bool inline_drain);
     void drain_loop ();
     void abandon_pending (std::exception_ptr error) noexcept;
 
-    static constexpr std::size_t drain_batch_limit = 100;
     static thread_local state_lane_t *_current_lane;
 
     offload_executor_t &_executor;

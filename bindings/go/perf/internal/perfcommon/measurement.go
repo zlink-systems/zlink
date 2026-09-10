@@ -50,6 +50,17 @@ func SubmitMeasurementSend(op zlink.SendOp, message *zlink.Message) error {
 }
 
 func SubmitMeasurementSendContext(ctx context.Context, op zlink.SendOp, message *zlink.Message) error {
+	submission, err := SubmitMeasurementSendSubmission(ctx, op, message)
+	if err != nil {
+		return err
+	}
+	if submission.Result() == zlink.SubmitBackpressured {
+		return submission.Admitted(ctx)
+	}
+	return nil
+}
+
+func SubmitMeasurementSendSubmission(ctx context.Context, op zlink.SendOp, message *zlink.Message) (zlink.SendSubmission, error) {
 	submit := op.MoveMessage(message)
 	if MeasurementPartCount() == 2 {
 		tail := NewMessageWithSize(0)
@@ -57,6 +68,17 @@ func SubmitMeasurementSendContext(ctx context.Context, op zlink.SendOp, message 
 		submit = submit.Message(tail)
 	}
 	return submit.Submit(ctx)
+}
+
+func SubmitSend(ctx context.Context, submit zlink.SendSubmitOp) error {
+	submission, err := submit.Submit(ctx)
+	if err != nil {
+		return err
+	}
+	if submission.Result() == zlink.SubmitBackpressured {
+		return submission.Admitted(ctx)
+	}
+	return nil
 }
 
 func MeasurementPayload(parts []*zlink.Message) (*zlink.Message, error) {

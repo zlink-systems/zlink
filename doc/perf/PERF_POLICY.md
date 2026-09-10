@@ -256,22 +256,20 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
       backpressure와 전송 순서를 처리한다. operation id `0`은 즉시 완료이며 callback이
       없고, nonzero id만 completion callback으로 한 번 완료된다.
     - **C 이외의 binding (async admission 경로)**: HWM-managed send/request는 각
-      언어의 async terminal로 제출한다. ownership을 받은 terminal은 backpressure
-      동안 async 작업을 suspend하고 Core의 writable/completion 진행에 따라
-      resume한다. public async terminal이 ownership 이전의 backpressure를 즉시
-      알리는 경우에는 같은 coroutine/task가 cooperative yield 또는 public
-      readiness를 기다린 뒤 같은 logical operation을 다시 제출한다. 어느 경우든
-      다른 소켓의 submit은 계속 진행해야 하며, sync `DONTWAIT`와 binding-local
+      언어의 async terminal 결과 객체로 제출한다. 종결자는 제출 시점 `result`
+      (`OK`|`BACKPRESSURED`)를 돌려주며, `result == OK`면 기다릴 것 없이 즉시 다음을
+      제출하고 `BACKPRESSURED`면 그 socket의 `admitted`를 기다렸다가 재개한다. 어느
+      경우든 다른 소켓의 submit은 계속 진행해야 하며, sync `DONTWAIT`와 binding-local
       `POLLOUT` pending table로 C reference를 복제하지 않는다.
     binding multi 오버헤드는 coroutine/async runtime 또는 언어별 동등한 비동기
     실행 모델의 suspend/resume과 scheduling 오버헤드를
-    포함한 값으로 정의한다. send coroutine은 admission 완료를 await한 뒤 즉시 다음
-    send를 제출할 수 있다. 이 대기는 echo 수신 대기가 아니므로 HWM까지 admitted
-    message가 누적된다. 반면 echo 수신이나 request reply completion을 기다린 뒤 다음
-    작업을 제출하여 왕복을 inflight 1로 직렬화하면 정책 위반이다. request/reply는
-    여러 async request를 동시에 진행한다. app 고정 window를 두지 않으며, HWM은
-    send admission queue를 제한하고 reply를 기다리는 request 수는 실제 admission과
-    completion 속도로 정해진다.
+    포함한 값으로 정의한다. send는 `OK`면 echo 수신을 기다리지 않고 즉시 다음 send를
+    제출하므로 HWM까지 admitted message가 누적된다. 반면 echo 수신이나 request reply
+    completion을 기다린 뒤 다음 작업을 제출하여 왕복을 inflight 1로 직렬화하면 정책
+    위반이다. request/reply는 `reply` stage로 여러 응답을 동시에 진행하며 제출을 막지
+    않는다. 비동기 대기는 `BACKPRESSURED`일 때만 하고 turn당 1건 pacing·완료 poll 대기는
+    없앤다. app 고정 window를 두지 않으며, HWM은 send admission queue를 제한하고 reply를
+    기다리는 request 수는 실제 admission과 completion 속도로 정해진다.
     `MULTI_STREAM` 외부 raw client는 이 연속 제출 규칙의 STREAM 전용 예외다.
     raw peer의 송신은 Core HWM admission을 통과하지 않으므로 연결별 unresolved
     echo를 최대 1개로 고정한다. 이 제한은 측정 대상 zlink server가 아니라 transport
