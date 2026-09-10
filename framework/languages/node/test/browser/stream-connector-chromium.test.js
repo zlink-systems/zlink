@@ -31,7 +31,7 @@ test('actual Chromium uses ws/wss, explicit flow, reconnect, drain, and browser 
     await cleanup(t, 'ws server', () => stopStreamServer(wsServer));
     await cleanup(t, 'wss server', () => stopStreamServer(wssServer));
     await cleanup(t, 'untrusted wss server', () => stopStreamServer(untrustedWssServer));
-    await cleanup(t, 'static server', () => closeServer(staticServer));
+    await cleanup(t, 'static server', () => closeServer(staticServer?.server));
   });
   const [wsPort, wssPort, untrustedWssPort] = await freePorts(3);
   staticServer = await startStaticServer();
@@ -119,6 +119,7 @@ async function startStaticServer() {
   const address = server.address();
   return {
     url: `http://127.0.0.1:${address.port}`,
+    server,
     close: () => new Promise((resolve) => server.close(resolve))
   };
 }
