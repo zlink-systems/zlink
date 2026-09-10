@@ -134,3 +134,110 @@ zlink_recv (void *s_,
 - 멀티파트 수신을 한 번의 호출·컬렉션으로 받는 공개 경로 제공, `recv_part` 병존.
 - 바인딩 내부 per-message 경계·할당 감소 → routed 목표 갭 축소(§ perf 재측정), 비대상 회귀 없음.
 - 공개 계약·thread-safety·측정 의미 보존.
+
+---
+
+## 7. 범위 확대 검토 — send도 whole-message로, part API는 제거 (2026-09-10)
+
+### 7.1 왜 send까지 보게 됐나
+
+Framework Java의 send 지연 수정 과정에서 **`BUSY`가 반복되는 현상**이 관측됐다. 원인 후보를 좁히며
+확인한 것은 다음이다.
+
+- Core 공개 send API는 전부 part 단위다 — `zlink_send_part`, `zlink_send_part_rid`, `zlink_request_part`
+  (`core/include/zlink/socket/api.h:238,245,262`). 배열과 개수를 받는 형태가 없다.
+- 그래서 바인딩이 파트마다 네이티브를 호출하는 루프를 돈다
+  (`bindings/java/src/main/java/systems/zlink/runtime/sockets/SocketSendPlane.java:372-383`).
+- 그 루프가 **"한 record의 첫 part부터 FINAL까지 같은 thread"** 라는 계약을 만든다
+  (`core/doc/spec/core/socket/README.ko.md` §2 스레드 안전성). 이 조건을 어기면 `BUSY`다.
+
+즉 recv에서 해결하려는 것과 **같은 뿌리**다. record 하나를 여러 번의 호출로 만드는 표면이
+미완성 record 상태를 만들고, 그 상태가 스레드 계약·오류 경로·재시도 규칙을 낳는다.
+
+### 7.2 조사 결과 — 제거해도 되는가
+
+감독자 지시로 저장소 전체를 조사했다(2026-09-10). 세 질문과 답이다.
+
+**Q1. send에서 part를 나중에 만드는 곳이 있는가 → 없다.**
+모든 multipart 제출이 이미 만들어진 배열을 인덱스로 도는 루프다. 마지막 part 표시는 언제나
+`index == count-1`이며 데이터에 따라 동적으로 정해지지 않는다.
+- `bindings/c/perf/common/perf_zlink_part_helpers.hpp:57-64,76-83,121-127`
+- `bindings/python/src/zlink/_native/_zlink_native.c:729-732`(part flag는 `:199`에서 `(index, count)`로 계산)
+- `bindings/rust/src/runtime/messaging/operations/send_ops.rs:100,128-147,366-383`
+- `bindings/dotnet/src/Zlink/Runtime/Messaging/RequestReplySupport.cs:241`
+- relay/echo 전달 경로도 받은 parts를 **먼저 전부 담은 뒤** 루프를 돈다
+  (`bindings/c/perf/multi/common/perf_multi_relay_server.hpp:206-243`).
+- framework의 header-then-body도 lazy가 아니다. 헤더를 인코딩해 목록 앞에 붙인 **하나의 목록**을 제출한다
+  (`framework/languages/java/.../ZLinkChannelRouteCalls.java:534,669`,
+  `framework/languages/cpp/.../mesh_node_host_service.cpp:528`,
+  `framework/languages/node/.../node-raw-binding-port.ts:384-392`).
+
+예외 하나: `bindings/c/perf/single/common/perf_single_reqrep.hpp:635,647-664`가 payload를 `MORE`로 보낸 뒤
+**빈 `FINAL`만 backpressure 루프로 재시도**한다. 이는 "실패한 FINAL은 staged prefix를 버린다"는 문서 규칙
+(`core/doc/spec/core/socket/README.en.md:1078`)과도 어긋난다. whole-record 재시도로 바꿔야 하며,
+**제품 코드가 아니라 perf 하네스**다.
+
+**Q2. recv에서 part 단위 수신에 의존하는 곳이 있는가 → 없다.**
+결정적 근거: **Core는 첫 part를 내주기 전에 이미 물리 record 전체를 버퍼링한다**
+(`core/src/runtime/sockets/common/socket_base.hpp:816`). 따라서 part 0만 먼저 보는 것으로 아끼는 비용이 없고,
+배열로 받는 것은 복사가 아니라 소유권 이전이다.
+- framework ingress 분류는 **이미 전부 materialize된 벡터** 위에서 돈다
+  (`framework/languages/cpp/.../backend/raw_route_port.hpp:34-39`, 분류 `raw_mesh_node_owner.cpp:2976`,
+  거절 `:3179`). `framework/languages`에는 part API 호출이 **0건**이다.
+- Node의 단일 part fast path(`bindings/node/native/src/addon_core.cc:2848-2870`)는 의미상 필요가 아니라
+  최적화다. capacity 기반 whole-recv에 작은 배열을 쓰면 같은 효과다.
+- 나머지를 건너뛰거나 버리는 기능은 **지금도 없다.** owner는 `FINAL`까지 드레인해야 하고, 중간에 다른
+  주체가 들어오면 `BUSY`/`EBUSY`다(`README.en.md:575-577`). 즉 whole-message recv는 기능을 없애는 것이
+  아니라 **함정을 없앤다**.
+
+**Q3. STREAM·XPUB은 다른가 → 둘 다 이미 part 단위가 아니다.**
+- STREAM send는 계약상 단일 part다. `ZLINK_PART_MORE`는 `NOT_SUPPORTED`/`ENOTSUP`
+  (`core/doc/spec/core/socket/08-stream.en.md:116-119`). **주의**: 유효한 RID로 보내는 길이 0 part는
+  "그 peer를 끊는다"는 별도 의미다(`:151-153`). 1-element 배열이 이 의미를 보존해야 한다.
+- STREAM RAW recv는 항상 `FINAL` 한 개(`08-stream.en.md:178-180`). STREAM PACKET recv는 이미 header+body를
+  함께 돌려주는 별도 진입점(`core/include/zlink/socket/api.h:328-334`)이며 "record = parts 배열"이 아니라
+  고정 2슬롯 framing이다(`08-stream.en.md:120-123`). **일반 배열 API로 접지 말고 별도 호출로 유지한다.**
+- XPUB의 `zlink_xpub_recv_part`는 `zlink_msg_t`를 받지 않는다. 구독 이벤트(subscribed + topic bytes)를 읽는
+  단일 프레임 API이며(`core/doc/spec/core/socket/04-xpub.en.md:40-43`) 이름만 `_part`다. 통합 대상이 아니다.
+- 반면 **SUB/XSUB의 multipart는 실재한다**(`03-sub.en.md:211-212,303-304`,
+  `core/src/runtime/sockets/pubsub/xsub.cpp:284-343`의 `_recv_part_index`). 따라서 `zlink_subscribe_part`도
+  같은 처리가 필요하다 — **§3의 6개 심볼 목록에 빠져 있다.**
+
+### 7.3 작업 규모 (호출 지점 수, `build/`·`dist/`·`target/`·`node_modules/` 제외)
+
+| 영역 | 지정 6개 심볼 | part 계열 전체* |
+|---|---:|---:|
+| `core/src` | 13 (10은 api shim·`libzlink.vers`, **내부 호출자 0**) | 21 |
+| `core/include` | 6 | 11 |
+| `core/tests` | 411 | 566 |
+| `core/doc` | 489 | 756 |
+| `bindings/c` | 96 | 140 |
+| `bindings/cpp` | 29 | 42 |
+| `bindings/dotnet` | 37 | 63 |
+| `bindings/java/src` | 28 | 45 |
+| `bindings/node` | 14 | 19 |
+| `bindings/go` | 33 | 54 |
+| `bindings/python` | 35 | 54 |
+| `bindings/rust` | 16 | 24 |
+| `bindings/doc` | 53 | 68 |
+| `framework/languages` | **0** | **0** |
+| `framework/bench` | 18 | 20 |
+| `framework/doc` | 1 | 7 |
+
+\* `zlink_reply_part`, `zlink_publish_part`, `zlink_subscribe_part`, `zlink_stream_recv_packet` 포함.
+
+비용은 거의 전부 기계적이다. `core/doc` 약 1,000줄과 `core/tests` 약 450줄, 바인딩 내부 약 180줄이다.
+**Core 내부에는 part API 호출자가 없고, framework에는 0건이다.**
+
+### 7.4 결정해야 할 것 셋
+
+1. **제거 범위**: `zlink_reply_part`·`zlink_publish_part`·`zlink_subscribe_part`까지 포함한다(§3의 6개 목록은
+   불완전하다).
+2. **`zlink_stream_recv_packet`은 유지**한다. header/body 고정 2슬롯이라 일반 배열 API와 의미가 다르다.
+3. **`count > capacity` 계약을 정한다.** 지금의 드레인 루프에는 이 실패가 없다. record를 잃지 않으면서
+   필요한 개수를 알려주는 방식이어야 한다(§3의 capacity 초과 완료 조건과 같은 규칙).
+
+### 7.5 왜 지금인가
+
+1.0 전이라 제거가 가능하다. 이후에는 호환성 문제가 된다. 그리고 표면이 하나가 되면
+"한 record는 같은 thread" 제약과 미완성 record 상태, 그로 인한 `BUSY`·재시도 규칙이 함께 사라진다.
