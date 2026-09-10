@@ -58,7 +58,7 @@ final class PullCompletionContractTest {
             assertThrows(IllegalArgumentException.class, () ->
                 other.reply(dealerRid, token));
             request.reply().message(Message.from("pong")).submit();
-            List<Message> reply = completion.toCompletableFuture().get(
+            List<Message> reply = completion.reply().toCompletableFuture().get(
                 TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             Message.closeAll(reply);
         }

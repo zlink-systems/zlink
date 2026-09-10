@@ -3,11 +3,10 @@
 package systems.zlink.contracts.messaging;
 
 import java.time.Duration;
-import java.util.concurrent.CompletionStage;
 
 /** Common stage for builders that set a timeout and then submit. */
-public interface TimeoutSubmitOperation<TResult> {
-    TimeoutSubmitOperation<TResult> timeout(Duration timeout);
+public interface TimeoutSubmitOperation<TSubmission> {
+    TimeoutSubmitOperation<TSubmission> timeout(Duration timeout);
 
-    CompletionStage<TResult> submit();
+    TSubmission submit();
 }

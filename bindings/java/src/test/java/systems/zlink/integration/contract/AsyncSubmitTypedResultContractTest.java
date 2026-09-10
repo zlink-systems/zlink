@@ -150,7 +150,7 @@ class AsyncSubmitTypedResultContractTest {
                     assertEquals(dealerId, received.getRoutingId().orElseThrow());
                 }
                 CompletableFuture<Void> pending = router.send(dealerId)
-                    .message(Message.from(payload(0))).submit().toCompletableFuture();
+                    .message(Message.from(payload(0))).submit().admitted().toCompletableFuture();
                 assertFalse(pending.isDone(), "zero-weight target must retain its wait token");
                 router.disconnectRid(dealerId);
 
@@ -192,7 +192,7 @@ class AsyncSubmitTypedResultContractTest {
         for (int sequence = 0; sequence < MAX_FILL_RECORDS; sequence++) {
             try (Message candidate = Message.from(payload(sequence))) {
                 CompletableFuture<Void> completion = router.send(target)
-                    .message(candidate).submit().toCompletableFuture();
+                    .message(candidate).submit().admitted().toCompletableFuture();
                 if (!completion.isDone()) {
                     return new PendingSend(completion, sequence, sequence);
                 }

@@ -32,7 +32,7 @@ public class NativeContractTest {
 
             byte[] payload = "native".getBytes(StandardCharsets.UTF_8);
             try (Message outbound = Message.from(payload)) {
-                right.send().message(outbound).submit()
+                right.send().message(outbound).submit().admitted()
                     .toCompletableFuture().get(
                         TestSupport.DEFAULT_TIMEOUT_MS,
                         TimeUnit.MILLISECONDS);

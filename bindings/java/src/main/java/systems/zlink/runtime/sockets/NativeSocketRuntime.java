@@ -9,6 +9,8 @@ import systems.zlink.internal.ContractAccess;
 
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.RequestSubmission;
+import systems.zlink.contracts.messaging.SendSubmission;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.messaging.Received;
@@ -39,7 +41,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.CompletionStage;
 
 /**
  * Abstract common socket base for zlink typed socket facades.
@@ -287,7 +288,7 @@ final class NativeSocketRuntime implements AutoCloseable {
         return send(parts, SendFlag.NONE);
     }
 
-    CompletionStage<Void> submitSend(RoutingId target, List<Message> parts) {
+    SendSubmission submitSend(RoutingId target, List<Message> parts) {
         ensureOpen();
         return socketCore.completionOwner().submitSend(target, parts);
     }
@@ -297,9 +298,8 @@ final class NativeSocketRuntime implements AutoCloseable {
         socketCore.completionOwner().submitSendBlocking(target, parts);
     }
 
-    CompletionStage<List<Message>> submitRequest(RoutingId target,
-                                                  List<Message> parts,
-                                                  Duration timeout) {
+    RequestSubmission submitRequest(RoutingId target, List<Message> parts,
+                                    Duration timeout) {
         ensureOpen();
         return socketCore.completionOwner().submitRequest(target, parts,
             timeout);
