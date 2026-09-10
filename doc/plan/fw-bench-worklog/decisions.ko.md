@@ -1102,3 +1102,23 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
   무제한 내부 큐가 되어 HWM이 흐름 제어를 잃어 폐기됐다(D-B71~D-B79, D-B85). 관리형 런타임은 콜백을 받아도 자기 루프로
   넘겨야 하므로 큐+wake가 필요하고, 그것이 현재의 POLLCOMPLETION pull이다. 남는 완화는 binding public API에 perf 샘플의
   completion 루프 형태를 유틸로 제공하는 것(1.0 뒤 후보).
+
+### FB-065 추가 (2026-09-10 저녁) — 깊이 사다리와 사용자 판정: 벤치가 backpressure를 보지 않은 것이 잘못, binding 결함 아님
+
+- perf 구조 1차 결과: raw 6셀 오류 0으로 완료했으나 socket 1개라 `peak_in_flight=1`, request-serial과 같은 8k/s.
+- 깊이 사다리(`.artifacts/codex/java-raw-depth-ladder/K-*`, 1024B, socket 1개, turn당 K건 제출):
+
+  | K | 처리량/s | p95 | peak_in_flight | 오류 |
+  |---:|---:|---:|---:|---:|
+  | 1 | 8,568 | 0.17 ms | 1 | 0 |
+  | 10 | 69,714 | 0.21 ms | 30 | 0 |
+  | 100 | 361,520 | 0.58 ms | 699 | 0 |
+  | 1,000 | 4,688 | 30.5 s | 26,288 | 6,558 timeout |
+  | 10,000 / 100,000 | 128 / 102 | 38 s / 34 s | 24k / 30k | 포기·timeout 수만 건 |
+
+  K=10은 bindings perf multi(socket 100개, 69,272/s)와 같다. HWM 아래 깊이에서는 socket 하나로 361k/s(gRPC 209k~258k보다 높다).
+  HWM(1 MiB ≈ 1,000건)을 넘겨 대기 토큰을 쌓으면 요청이 timeout(30 s)으로 실패한다.
+- 감독자는 HWM 초과 구간의 붕괴를 binding 결함 후보로 올렸으나 **사용자 판정: binding에는 문제가 없고 벤치가 잘못 작성됐다.**
+  올바른 클라이언트는 admission backpressure(POLLOUT 거짓)에서 제출을 멈추고 재개 신호에서 이어간다(규격 §2,
+  `PERF_MULTI_TEST_POLICY.md` §1.1; C reference `perf_multi_socket_reqrep.hpp:832-870`). HWM을 넘겨 토큰을 수만 건 쌓는 것은
+  지원하는 사용 방식이 아니다. 2차 job `bench-java-raw-pollout`: public poller `POLLOUT|POLLCOMPLETION`, POLLOUT이 참인 동안 제출.
