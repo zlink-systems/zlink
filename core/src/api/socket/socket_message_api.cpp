@@ -9,6 +9,7 @@
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "core/recv_internal.hpp"
+#include "core/scoped_msg.hpp"
 
 namespace
 {
@@ -172,20 +173,40 @@ zlink_recv_result_t zlink_recv (
       handle.socket);
     zlink_msg_t *parts = NULL;
     size_t part_count = 0;
-    zlink_routing_id_t source_rid = {};
-    const int recv_rc =
-      type == ZLINK_CORE_SOCKET_DEALER
-        ? zlink::socket_reqrep_internal::recv_dealer_record (
-            handle, &parts, &part_count, static_cast<int> (flags_), NULL,
-            NULL, true, &public_part_delivery_hold_acquired)
-        : zlink_socket_recv_handle_internal (
-            handle, type == ZLINK_CORE_SOCKET_STREAM ? &source_rid : NULL,
-            &parts, &part_count,
-            static_cast<zlink_send_flags_t> (flags_));
+    // Only STREAM returns a source RID; PAIR/DEALER never use this storage.
+    zlink_routing_id_t source_rid;
+    if (type == ZLINK_CORE_SOCKET_STREAM)
+        memset (&source_rid, 0, sizeof (source_rid));
+    int recv_rc;
+    if (type == ZLINK_CORE_SOCKET_DEALER) {
+        // Keep caller slots untouched until the complete record is accepted.
+        // A single part needs no intermediate TLS multipart export.
+        zlink::scoped_msg_t terminal_part;
+        bool terminal_part_returned = false;
+        recv_rc = zlink::socket_reqrep_internal::recv_dealer_record (
+          handle, &parts, &part_count, static_cast<int> (flags_),
+          parts_capacity_ > 0 ? terminal_part.get () : NULL,
+          &terminal_part_returned, true,
+          &public_part_delivery_hold_acquired);
+        public_delivery_hold_owner.activate (
+          public_part_delivery_hold_acquired);
+        if (recv_rc == 0 && terminal_part_returned) {
+            const int adopt_rc =
+              zlink_msg_adopt (&parts_out_[0], terminal_part.get ());
+            errno_assert (adopt_rc == 0);
+            if (source_rid_out_)
+                *source_rid_out_ = NULL;
+            *part_count_out_ = 1;
+            errno = 0;
+            return ZLINK_RECV_OK;
+        }
+    } else {
+        recv_rc = zlink_socket_recv_handle_internal (
+          handle, type == ZLINK_CORE_SOCKET_STREAM ? &source_rid : NULL,
+          &parts, &part_count, static_cast<zlink_send_flags_t> (flags_));
+    }
     if (recv_rc != 0)
         return zlink::recv_result_internal::from_errno (errno);
-    public_delivery_hold_owner.activate (
-      public_part_delivery_hold_acquired);
 
     if (!parts || part_count == 0) {
         zlink_multipart_close (parts, part_count);

@@ -8,6 +8,7 @@
 #include "api/message/recv_result_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "api/socket/socket_request_reply_submit_internal.hpp"
+#include "core/scoped_msg.hpp"
 
 namespace reqrep = zlink::socket_reqrep_internal;
 
@@ -165,12 +166,30 @@ zlink_recv_result_t zlink_router_recv (
     size_t part_count = 0;
     uint64_t transport_pair_id = 0;
     uint64_t transport_pair_generation = 0;
+    // The local slot preserves failure outputs and accepts uninitialized
+    // caller slots without exporting a single part through TLS storage.
+    zlink::scoped_msg_t terminal_part;
+    bool terminal_part_returned = false;
     if (reqrep::recv_router_record (
           handle, &source_node_rid, &reply_token, &parts, &part_count,
-          static_cast<int> (flags_), NULL, NULL, &transport_pair_id,
+          static_cast<int> (flags_),
+          parts_capacity_ > 0 ? terminal_part.get () : NULL,
+          &terminal_part_returned, &transport_pair_id,
           &transport_pair_generation)
         != 0)
         return zlink::recv_result_internal::from_errno (errno);
+
+    if (terminal_part_returned) {
+        const int adopt_rc =
+          zlink_msg_adopt (&parts_out_[0], terminal_part.get ());
+        errno_assert (adopt_rc == 0);
+        // recv_router_record already published the socket-owned RID view.
+        *source_node_rid_out_ = source_node_rid;
+        *reply_token_out_ = reply_token;
+        *part_count_out_ = 1;
+        errno = 0;
+        return ZLINK_RECV_OK;
+    }
 
     if (!parts || part_count == 0) {
         zlink_multipart_close (parts, part_count);

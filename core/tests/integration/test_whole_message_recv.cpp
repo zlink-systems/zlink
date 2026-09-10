@@ -4,11 +4,17 @@
 #include "testutil_unity.hpp"
 
 #include <cstring>
+#include <atomic>
 
 SETUP_TEARDOWN_TESTCONTEXT
 
 namespace
 {
+void count_payload_release (void *, void *hint_)
+{
+    static_cast<std::atomic<int> *> (hint_)->fetch_add (1);
+}
+
 void init_part (zlink_msg_t *part_, const char *text_)
 {
     const size_t size = strlen (text_);
@@ -470,6 +476,109 @@ void test_router_whole_recv_capacity_retries_preserve_records ()
     test_context_socket_close_zero_linger (router);
 }
 
+void test_dealer_router_single_part_ownership_and_zero_capacity ()
+{
+    for (int routed = 0; routed != 2; ++routed) {
+        void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+        void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_BIND_OK,
+          zlink_bind (router, "inproc://whole-recv-single-ownership"));
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONNECT_OK,
+          zlink_connect (dealer, "inproc://whole-recv-single-ownership"));
+        const zlink_routing_id_t route = establish_router_route (router, dealer);
+        void *receiver = routed ? router : dealer;
+
+        // Check both the direct single-part return and a retained record
+        // after a zero-capacity receive. The payload must outlive both calls.
+        for (int zero_capacity = 0; zero_capacity != 2; ++zero_capacity) {
+            unsigned char payload[256];
+            memset (payload, 0x5a, sizeof (payload));
+            std::atomic<int> releases (0);
+            zlink_msg_t sent;
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_CONFIG_OK,
+              zlink_msg_init_data (&sent, payload, sizeof (payload),
+                                   &count_payload_release, &releases));
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_SUBMIT_OK,
+              routed ? zlink_send (dealer, &sent, 1, ZLINK_SEND_FLAGS_NONE,
+                                    NULL, NULL)
+                     : zlink_send_rid (router, &route, &sent, 1,
+                                        ZLINK_SEND_FLAGS_NONE, NULL, NULL));
+            TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&sent));
+            wait_readable (receiver);
+
+            zlink_msg_t received;
+            memset (&received, 0xa5, sizeof (received));
+            unsigned char untouched[sizeof (received)];
+            memcpy (untouched, &received, sizeof (received));
+            const zlink_routing_id_t *source = &route;
+            zlink_reply_token_t token = UINT64_MAX;
+            size_t count = 77;
+            if (zero_capacity) {
+                TEST_ASSERT_EQUAL_INT (
+                  ZLINK_RECV_BUFFER_TOO_SMALL,
+                  routed ? zlink_router_recv (
+                             receiver, &source, &token, &received, 0, &count,
+                             ZLINK_RECV_FLAGS_DONTWAIT)
+                         : zlink_recv (receiver, &source, &received, 0,
+                                        &count, ZLINK_RECV_FLAGS_DONTWAIT));
+                TEST_ASSERT_EQUAL_INT (ENOBUFS, errno);
+                TEST_ASSERT_EQUAL_UINT64 (1, count);
+                TEST_ASSERT_EQUAL_MEMORY (untouched, &received,
+                                          sizeof (received));
+                TEST_ASSERT_EQUAL_PTR (&route, source);
+                TEST_ASSERT_EQUAL_UINT64 (UINT64_MAX, token);
+                TEST_ASSERT_EQUAL_INT (0, releases.load ());
+            }
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_RECV_OK,
+              routed ? zlink_router_recv (
+                         receiver, &source, &token, &received, 1, &count,
+                         ZLINK_RECV_FLAGS_DONTWAIT)
+                     : zlink_recv (receiver, &source, &received, 1, &count,
+                                    ZLINK_RECV_FLAGS_DONTWAIT));
+            TEST_ASSERT_EQUAL_UINT64 (1, count);
+            TEST_ASSERT_EQUAL_UINT64 (sizeof (payload),
+                                      zlink_msg_size (&received));
+            TEST_ASSERT_EQUAL_PTR (payload, zlink_msg_data (&received));
+            TEST_ASSERT_EQUAL_MEMORY (payload, zlink_msg_data (&received),
+                                      sizeof (payload));
+            TEST_ASSERT_EQUAL_INT (0, releases.load ());
+            if (routed) {
+                TEST_ASSERT_NOT_NULL (source);
+                TEST_ASSERT_EQUAL_UINT64 (0, token);
+            } else
+                TEST_ASSERT_NULL (source);
+            TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                                   zlink_msg_close (&received));
+            TEST_ASSERT_EQUAL_INT (1, releases.load ());
+
+            memcpy (&received, untouched, sizeof (received));
+            source = &route;
+            token = UINT64_MAX;
+            count = 77;
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_RECV_NO_DATA,
+              routed ? zlink_router_recv (
+                         receiver, &source, &token, &received, 1, &count,
+                         ZLINK_RECV_FLAGS_DONTWAIT)
+                     : zlink_recv (receiver, &source, &received, 1, &count,
+                                    ZLINK_RECV_FLAGS_DONTWAIT));
+            TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+            TEST_ASSERT_EQUAL_UINT64 (77, count);
+            TEST_ASSERT_EQUAL_PTR (&route, source);
+            TEST_ASSERT_EQUAL_UINT64 (UINT64_MAX, token);
+            TEST_ASSERT_EQUAL_MEMORY (untouched, &received, sizeof (received));
+        }
+
+        test_context_socket_close_zero_linger (dealer);
+        test_context_socket_close_zero_linger (router);
+    }
+}
+
 void test_whole_recv_validates_required_outputs_flags_and_socket_type ()
 {
     void *pair = test_context_socket (ZLINK_SOCKET_PAIR);
@@ -540,6 +649,7 @@ int main ()
     RUN_TEST (test_router_whole_recv_returns_data_and_request_metadata);
     RUN_TEST (test_pair_whole_recv_capacity_retry_without_loss);
     RUN_TEST (test_router_whole_recv_capacity_retries_preserve_records);
+    RUN_TEST (test_dealer_router_single_part_ownership_and_zero_capacity);
     RUN_TEST (
       test_whole_recv_validates_required_outputs_flags_and_socket_type);
     const int rc = UNITY_END ();
