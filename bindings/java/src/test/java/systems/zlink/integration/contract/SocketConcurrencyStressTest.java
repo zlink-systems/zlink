@@ -164,7 +164,7 @@ public class SocketConcurrencyStressTest {
                 if (multipart) {
                     operation = operation.message(second).message(third);
                 }
-                completion = operation.submit().toCompletableFuture();
+                completion = operation.submit().admitted().toCompletableFuture();
             } catch (ZlinkSubmitException | IllegalStateException failure) {
                 if (!closeStarted.get()
                     && !(failure instanceof ZlinkSubmitException)) {

@@ -60,7 +60,7 @@ class RoutedMultipartAdmissionContractTest {
                 .message(Message.from("second"))
                 .message(Message.from("third"))
                 .timeout(Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS))
-                .submit()
+                .submit().reply()
                 .toCompletableFuture()
                 .get(TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             try {
@@ -101,7 +101,7 @@ class RoutedMultipartAdmissionContractTest {
                 router.recv(request, RecvFlags.NONE);
                 request.reply().message(Message.from("ready")).submit();
             }
-            List<Message> warmupReply = warmup.toCompletableFuture().get(
+            List<Message> warmupReply = warmup.reply().toCompletableFuture().get(
                 TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             Message.closeAll(warmupReply);
 
@@ -145,7 +145,7 @@ class RoutedMultipartAdmissionContractTest {
             }
             CompletableFuture<List<Message>> completion = operation
                 .timeout(Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS))
-                .submit().toCompletableFuture();
+                .submit().reply().toCompletableFuture();
             return completion;
         } finally {
             Message.closeAll(parts);
