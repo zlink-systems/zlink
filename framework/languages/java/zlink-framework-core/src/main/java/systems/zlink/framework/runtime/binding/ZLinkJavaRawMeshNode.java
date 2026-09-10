@@ -4279,7 +4279,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
 
     private void startPump() {
         RouterSocket pumpSocket = requireStarted();
-        pump = Executors.newSingleThreadExecutor(Thread.ofVirtual()
+        // 수신 pump는 platform thread다. 가상 thread로 두면 blocking 수신에서 지연이 쌓인다.
+        // 같은 커밋을 두 변형으로 잰 1-run 비교(1024 B, .artifacts/vt-compare/):
+        //   send-saturation  가상 14,356 msg/s·지연 125.5 ms → platform 67,712 msg/s·지연 0.247 ms
+        //   request-serial   가상  1,928 ops/s·지연 0.518 ms → platform  2,233 ops/s·지연 0.447 ms
+        // 이 pump는 한 socket을 blocking으로 기다리는 전용 실행 단위이므로 가상 thread의
+        // 이점(대기 중 carrier 반납)이 없고 비용만 남는다. Issue #75에 근거를 남겼다.
+        pump = Executors.newSingleThreadExecutor(Thread.ofPlatform()
             .name("zlink-jvm-raw-mesh-" + meshName)
             .factory());
         pump.execute(() -> {
