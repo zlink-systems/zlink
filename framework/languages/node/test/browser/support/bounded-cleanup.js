@@ -1,7 +1,7 @@
 'use strict';
 
 function waitForExit(child, timeoutMs) {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve({ forced: false });
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve({ timedOut: false, forced: false });
   return new Promise((resolve) => {
     let settled = false;
     const finish = (forced) => {
@@ -9,7 +9,7 @@ function waitForExit(child, timeoutMs) {
       settled = true;
       clearTimeout(timer);
       child.removeListener('exit', onExit);
-      resolve({ forced });
+      resolve({ timedOut: forced, forced });
     };
     const onExit = () => finish(false);
     const timer = setTimeout(() => {
@@ -20,47 +20,46 @@ function waitForExit(child, timeoutMs) {
 }
 
 async function stopChild(child, timeoutMs = 5_000) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return { forced: false };
+  if (!child || child.exitCode !== null || child.signalCode !== null) return { timedOut: false, forced: false };
   child.kill('SIGTERM');
   return waitForExit(child, timeoutMs);
 }
 
 async function closeServer(server, timeoutMs = 5_000) {
-  if (!server || !server.listening) return { forced: false };
-  let forced = false;
+  if (!server || !server.listening) return { timedOut: false, forced: false };
+  let timedOut = false;
   let timer;
   try {
     await Promise.race([
       new Promise((resolve) => server.close(resolve)),
       new Promise((resolve) => { timer = setTimeout(() => {
-      forced = true;
-      server.closeAllConnections?.();
-      resolve();
-      }, timeoutMs); })
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-  return { forced };
-}
-
-async function closeBrowser(browser, timeoutMs = 5_000) {
-  if (!browser) return { forced: false };
-  let timer;
-  try {
-    let forced = false;
-    await Promise.race([
-      browser.close(),
-      new Promise((resolve) => { timer = setTimeout(() => {
-        forced = true;
-        browser.process?.()?.kill('SIGKILL');
+        timedOut = true;
+        server.closeAllConnections?.();
         resolve();
       }, timeoutMs); })
     ]);
-    return { forced };
   } finally {
     clearTimeout(timer);
   }
+  return { timedOut, forced: timedOut };
+}
+
+async function closeBrowser(browser, timeoutMs = 5_000) {
+  if (!browser) return { timedOut: false, forced: false };
+  let timer;
+  let timedOut = false;
+  try {
+    await Promise.race([
+      browser.close(),
+      new Promise((resolve) => { timer = setTimeout(() => {
+        timedOut = true;
+        resolve();
+      }, timeoutMs); })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  return { timedOut, forced: false };
 }
 
 module.exports = { closeBrowser, closeServer, stopChild, waitForExit };

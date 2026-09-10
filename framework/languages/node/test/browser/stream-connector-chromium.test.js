@@ -17,19 +17,19 @@ const key = path.join(workspaceRoot, 'test/fixtures/tls/server-key.pem');
 test('actual Chromium uses ws/wss, explicit flow, reconnect, drain, and browser trust', { timeout: 120_000 }, async (t) => {
   const [wsPort, wssPort, untrustedWssPort] = await freePorts(3);
   const staticServer = await startStaticServer();
-  t.after(() => closeServer(staticServer));
+  t.after(() => cleanup(t, 'static server', () => closeServer(staticServer)));
   let wsServer = await startStreamServer(`ws://127.0.0.1:${wsPort}`);
-  t.after(() => stopStreamServer(wsServer));
+  t.after(() => cleanup(t, 'ws server', () => stopStreamServer(wsServer)));
   const wssServer = await startStreamServer(`wss://127.0.0.1:${wssPort}`, certificate, key);
-  t.after(() => stopStreamServer(wssServer));
+  t.after(() => cleanup(t, 'wss server', () => stopStreamServer(wssServer)));
   const untrustedWssServer = await startStreamServer(
     `wss://127.0.0.1:${untrustedWssPort}`,
     certificate,
     key
   );
-  t.after(() => stopStreamServer(untrustedWssServer));
+  t.after(() => cleanup(t, 'untrusted wss server', () => stopStreamServer(untrustedWssServer)));
   const browser = await chromium.launch({ headless: true });
-  t.after(() => closeBrowser(browser));
+  t.after(() => cleanup(t, 'browser', () => closeBrowser(browser)));
   const context = await browser.newContext();
   const page = await context.newPage();
   const secureContext = await browser.newContext({ ignoreHTTPSErrors: true });
@@ -162,6 +162,11 @@ async function connectFromPage(page, endpoint, server) {
 
 async function stopStreamServer(child) {
   await stopChild(child);
+}
+
+async function cleanup(t, resource, action) {
+  const result = await action();
+  if (result.timedOut) t.diagnostic(`${resource} cleanup exceeded its grace period; forced=${result.forced}`);
 }
 
 async function freePorts(count) {
