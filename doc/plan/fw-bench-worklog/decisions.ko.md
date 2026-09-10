@@ -1128,3 +1128,93 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
   1 socket(7.7~8.8k/s)과 clients=1이 같다 — binding에 문제 없음 확인. **사용자 결정: gRPC 비교는 socket 1개로 한다.** 2차 job
   `bench-java-raw-pollout`(POLLOUT 게이트) 착수. 완료 구간 프로파일(`.artifacts/codex/java-completion-profile/`): 완료 구간 차이는
   15 µs뿐이고 `requestToNode` 제출 구간이 194 µs(왕복 3회) → Issue #85, job `java-tonode-lane`.
+
+## FB-066 — #85 채택. registry turn 3→1은 맞으나 그 개선을 고정하는 테스트가 없다 (2026-09-10, 감독 검증, PR #107, Issue #108)
+
+job 보고를 감독이 직접 재검증했다.
+
+- **채택.** 감독이 이 기계에서 직접 실행: `zlink-framework-core:test` 1,374 + contractTest 27 + kotlin
+  contractTest 17 + provider-abstractions 4 + spring-boot-starter 48 + testkit 48 = **1,518 테스트, 실패 0**
+  (skip 1). Core 0.18.0 release prefix, binding은 `ZLINK_JAVA_BINDINGS_SOURCE` includeBuild.
+- **flow context는 제거된 것이 아니라 이동했다.** diff만 보면 `ZLinkFlowContext.current()/enter/suppress`
+  래핑이 사라진 것처럼 보이나, `submitInStateLane` 하나로 옮겨져 세 제출 경로에 균일하게 적용된다.
+  spec 26/27의 `flow`·`corr` 상관은 유지된다. 규칙이 3곳 중복 → 1곳 소유로 줄었다.
+- **원래 블로커는 오진이었다.** "공유 Maven에 binding 0.18.0이 없어 막힘"으로 기록돼 있었으나, 실제
+  원인은 worktree가 main보다 447파일 뒤처져 pin이 **0.17.7**(존재하지 않는 버전)이었던 것이다.
+  main 병합으로 풀렸다.
+- **남은 것**: 새 `ZLinkNodeSubmitTurnTest`(586줄)는 라우팅·timeout·metadata·오류 경로를 검증하지만
+  **lane turn 횟수를 assert 하지 않는다** — 3 turn으로 되돌아가도 통과한다. Issue #108로 분리했다.
+
+## FB-067 — Node의 1 ms ingress 타이머는 spec gap이 아니다. 메커니즘은 이미 있고 공개돼 있지 않을 뿐이다 (2026-09-10, 감독 재검증, Issue #50 → #111)
+
+Issue #50의 job(astra)이 "Node binding에 비동기 ordinary receive readiness 공개 계약이 없다"며
+**D(계약 부재)** 로 보고하고 코드 변경 없이 종료했다. 감독이 인용 코드를 직접 열어 **기각**했다.
+
+- `bindings/node/native/src/addon_core.cc:2114-2196` `socket_readable_watch_start(socket, callback)`이
+  `ZLINK_OPT_FD`로 fd를 얻어 `uv_poll_init_socket` + `uv_poll_start(UV_READABLE)`를 건다. 폴링도
+  타이머도 없는 진짜 libuv readiness다.
+- `addon_exports.cc:80-81`이 `socketReadableWatchStart`/`Stop`으로 내보낸다.
+- **이미 제품 경로에서 쓰인다**: `completion_owner.ts:662-668` `ensureRuntimeWatch()`가 completion
+  소켓에 걸고 `runtimeWake(status)`에서 drain 한다. async resource 이름도 `"zlink:completion"`이다.
+- 막힌 것은 `bindings/node/src/index.ts` 공개 export에 없다는 것뿐이다. framework는 공개
+  `@zlink-systems/zlink`만 쓰므로 닿을 수 없고, 그래서 `node-raw-mesh-backend.ts:1504-1515`가
+  `setTimeout`으로 깨어난다.
+
+따라서 분류는 D가 아니라 **B(기존 결함) + 공개 API 추가 하나**다. AGENTS.md §3에 따라 공개 API
+추가는 설계 변경으로 분리해 사용자에게 보고한다 → **Issue #111**, 사용자 결정 대기.
+
+검토한 대안: ① framework가 `setImmediate` spin(raw 벤치 방식) — 스펙 08 §4 I0·§7(a) busy polling
+금지 위반, 코어 하나 소모. ② `Poller`에 fd를 넣고 `wait` — 동기 차단이라 Node 이벤트 루프를 막는다.
+둘 다 기각.
+
+**Node는 이것 없이 0.90에 도달할 수 없다.** 왕복마다 1 ms가 고정으로 붙는다.
+
+## FB-068 — #48 진단 승인. dispatch별 DI scope 제거는 공개 계약 위반이므로 제외한다 (2026-09-10, 감독 승인, Issue #48)
+
+job이 AGENTS.md §3의 2단계 규칙대로 1단계 진단만 내고 승인을 기다렸다. 감독이 인용 근거를 직접
+확인하고 **승인**했다.
+
+- `git cherry origin/main framework-dotnet/5-dispatch-batch` → 11개 커밋 전부 `-`(patch-equivalent).
+  그 브랜치를 merge·cherry-pick 할 것이 없다. 감독이 직접 실행해 확인했다.
+- `Runtime/Execution/ZLinkStateLane.cs:208`의 `Interlocked.Exchange(ref _scheduled, 0)` 존재 확인 —
+  FB-061 lost-wakeup 수정은 유지한다.
+- **항목 7(b) 제외**: 인용된 공개 계약
+  `framework/doc/framework/common/spec/server/languages/dotnet/interfaces/03-configuration-topology.ko.md` §4가
+  "Node direct·Channel send/request와 classic fanout 구독 handler를 **실행할 때마다 DI scope를 하나
+  만든다**"를 명시한다. 감독이 직접 열어 확인했다. scope 자체 제거는 **D**이므로 구현 금지.
+  허용되는 것은 7(a) — activation 경로를 등록 시점에 compile/cache 하고 scope 의미는 유지.
+- 구현 승인 범위: 항목 1·2·3·4·6·7(a)·8·9 (전부 B). 항목 5는 이미 해결됨.
+
+진단 표는 `.artifacts/codex/dotnet-lane-48/diagnosis.md`에 보존했다(job.log에만 있던 것을 꺼냈다).
+
+## FB-069 — 환경 결함 셋을 고쳤다: local-package 경로 별칭, job.sh xhigh, Rust 테스트의 sleep 의존 (2026-09-10, 감독)
+
+캠페인 진행을 실제로 막던 것들이다.
+
+- **local-package가 두 번째 실행부터 항상 실패했다**(Issue #112, PR #113). `package-cache.py:267-269`가
+  `<staging>/build`를 영속 build tree로 가는 심볼릭 링크로 만드는데 staging 이름에 pid가 들어간다.
+  C·C++ 스크립트가 그 별칭을 CMake에 넘겨 `CMAKE_CACHEFILE_DIR`에 박혔고, 다음 실행은 경로 불일치로
+  반드시 죽었다. `readlink -f`로 실제 경로를 넘기게 고쳤다 — build tree 하나에 이름 하나. 보정 분기는
+  넣지 않았다. 수정 뒤 8개 언어 전부 패키징 성공.
+- **Rust 바인딩 테스트가 부하에서 깨진다**(Issue #110). `ownership_tests.rs:217`과
+  `contract_tests.rs:388`이 `NotConnected`(errno 107)로 실패했으나 단독 실행은 각각 9/9·26/26 통과.
+  원인은 inproc 연결 완료를 `thread::sleep(50ms)`로 추정하는 것(CONTRIBUTING §5 금지). 이 flake로
+  로컬 패키징이 세 번 막혔다. **Core 0.18.0 회귀가 아니다.**
+- **job.sh가 `--effort xhigh`를 거절했다**(Issue #115, PR #116). 사용자 결정(2026-09-10)은 astra를
+  쓸 때 항상 xhigh다.
+
+## FB-070 — PR 검증 워크플로우를 냈다. framework C++은 부트스트랩 때문에 분리한다 (2026-09-10, Issue #16, PR #118 / #117)
+
+`build.yml`은 dispatch 전용이라 PR을 받지 않고, framework .NET·Node만 PR CI가 있었다. Core·binding·
+framework Java에는 **PR 검증이 전혀 없었다** — 네 언어의 framework 런타임을 동시에 고치는 중에
+회귀가 그대로 들어온다.
+
+`pr-verify.yml`을 냈다. GitHub의 paths 필터가 workflow 단위인 문제는 union 필터 + `changes` job의
+`git diff --name-only`로 풀었다(외부 action 없음). core job은 CONTRIBUTING §1·§6의 명령 그대로
+(ctest 전체, single_lane ×2, header mirror 대조, `git diff --check`, C++·Python 스모크). framework-java
+job은 체크아웃 Core를 소스 빌드하고 binding을 `ZLINK_JAVA_BINDINGS_SOURCE`로 includeBuild 하므로
+릴리스 자산이나 공개 Maven에 의존하지 않는다 — **VERSION을 올리는 PR도 검증된다.**
+
+framework C++은 ① apt 의존성 8종 ② hiredis·redis-plus-plus 소스 빌드(Debian `libhiredis-dev`에
+`hiredis-config.cmake`가 없다) ③ `find_package(zlink_cpp ... CONFIG REQUIRED)`용 binding package가
+선행이라 같은 PR에 넣으면 경량 워크플로우가 아니게 된다. Issue #117로 분리했다.
