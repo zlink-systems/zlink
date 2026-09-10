@@ -1516,12 +1516,17 @@ IDs, part consumption, and wait-token conditions belong to
 [Core whole-message send](../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission) and
 [Core REQUEST DONTWAIT](../../../core/doc/spec/core/socket/README.en.md#request-and-reply).
 
+Async terminals return a **result object** (`SendSubmission`/`RequestSubmission`). `result` is a submit-time
+snapshot (`OK`|`BACKPRESSURED`) and the `admitted` stage (SEND and REQUEST) plus the `reply` stage (REQUEST)
+carry completion. Synchronous terminals (`submit_sync()`, …) are unchanged. Wait rules and per-language
+signatures belong to [async-coroutine-policy §6](async-coroutine-policy.en.md#6-per-language-terminal-interfaces).
+
 | Native submission result | High-level binding outcome |
 |---|---|
-| SEND `OK`, ID `0` | Complete the terminal with immediate admission success. |
-| REQUEST `OK`, nonzero ID | Connect the corresponding REQUEST completion to the language result. |
-| `BACKPRESSURED`, `EAGAIN`, nonzero wait token | Retain the input for resubmission and wait for WRITABLE. Continue the same operation according to Core's drain and resubmission contract. |
-| Submit failure without a wait token | Complete the terminal with that submit error. |
+| SEND `OK`, ID `0` | End the terminal with `result == OK` and a completed `admitted` stage. |
+| REQUEST `OK`, nonzero ID | Return `result == OK` with a completed `admitted`, and connect the corresponding REQUEST completion to the `reply` stage. |
+| `BACKPRESSURED`, `EAGAIN`, nonzero wait token | Retain the input for resubmission and wait for WRITABLE. Continue the same operation according to Core's drain and resubmission contract; the terminal returns `result == BACKPRESSURED` and an `admitted` stage that completes on resubmission admission. |
+| Submit failure without a wait token | Complete the terminal with that submit error (raised as an exception/error, not through the result object). |
 
 - **The binding delivers a WRITABLE found by socket-local context and token to its waiter without rechecking Core's guaranteed submit RID echo.**
   The [Core completion record contract](../../../core/doc/spec/core/socket/README.en.md#completion-pull-and-ownership)
@@ -2263,9 +2268,9 @@ defines.
   - `Received`
   - `TopicMessage`
   - `SubscriptionEvent`
-  - `SubmitResult` (C / Go / Rust — included in the return object/error
-    for return-based languages; exposed as the exception object's
-    `.code` for exception languages)
+  - `SubmitResult` (exposed by every language through the async terminal's result object `result`
+    (`OK`|`BACKPRESSURED`). Other submit failures surface as an error in return-based languages and as the
+    exception object's `.code` in exception languages)
 - A result object must describe payload shape, ownership, and optional
   routing metadata together.
 - A convenience feature is a method on the result object.

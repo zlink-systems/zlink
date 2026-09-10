@@ -628,18 +628,26 @@ impl std::fmt::Debug for ReplyToken {
     }
 }
 
+// impl Trait 필드는 안정 Rust에서 불가하므로 boxed future로 시작한다.
+pub struct SendSubmission {
+    pub result: SubmitResult,   // OK | BACKPRESSURED, 제출 시점 스냅샷
+    pub admitted: Pin<Box<dyn Future<Output = Result<(), SubmitError>> + Send>>,
+}
+
+pub struct RequestSubmission {
+    pub result: SubmitResult,
+    pub admitted: Pin<Box<dyn Future<Output = Result<(), SubmitError>> + Send>>,
+    pub reply: Pin<Box<dyn Future<Output = Result<Vec<Message>, ZlinkError>> + Send>>,
+}
+
 impl SendOp<Ready> {
-    pub fn submit(
-        self,
-    ) -> impl Future<Output = Result<(), SubmitError>> + Send;
+    pub fn submit(self) -> Result<SendSubmission, SubmitError>;
     pub fn submit_sync(self) -> Result<(), SubmitError>;
 }
 
 impl RequestOp<Ready> {
     pub fn timeout(self, timeout: Duration) -> Self;
-    pub fn submit(
-        self,
-    ) -> impl Future<Output = Result<Vec<Message>, ZlinkError>> + Send;
+    pub fn submit(self) -> Result<RequestSubmission, ZlinkError>;
     pub fn submit_sync(self) -> Result<Vec<Message>, ZlinkError>;
 }
 

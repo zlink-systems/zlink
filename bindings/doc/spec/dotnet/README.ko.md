@@ -697,11 +697,24 @@ Token은 numeric constructor, raw accessor, ordering, serialization과 `IDisposa
 ### Public interface
 
 ```csharp
+public readonly struct SendSubmission
+{
+    public SubmitResult Result { get; }   // OK | BACKPRESSURED, 제출 시점 스냅샷
+    public Task Admitted { get; }          // OK면 완료 상태
+}
+
+public readonly struct RequestSubmission
+{
+    public SubmitResult Result { get; }
+    public Task Admitted { get; }
+    public Task<IReadOnlyList<Message>> Reply { get; }   // Admitted 성공 뒤 완료
+}
+
 public interface SendSubmitOperation
 {
     SendSubmitOperation Message(Message message);
     void Submit();
-    Task Async(CancellationToken cancellationToken = default);
+    SendSubmission Async(CancellationToken cancellationToken = default);
 }
 
 public interface RequestSubmitOperation
@@ -709,8 +722,7 @@ public interface RequestSubmitOperation
     RequestSubmitOperation Message(Message message);
     RequestSubmitOperation Timeout(TimeSpan timeout);
     IReadOnlyList<Message> Submit();
-    Task<IReadOnlyList<Message>> Async(
-        CancellationToken cancellationToken = default);
+    RequestSubmission Async(CancellationToken cancellationToken = default);
 }
 
 public interface ReplySubmitOperation

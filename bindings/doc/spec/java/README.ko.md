@@ -621,8 +621,13 @@ Builder 시작 메서드는 대상 식별자와 reply token만 받는다:
 - `sendBoundActor(sessionRid, actorId)`
 
 PAIR·DEALER·ROUTER·STREAM send builder는 `SendOperation` family를 사용한다. Send는 비동기
-`submit()`과 동기 `submit_sync()`를 제공한다. Request는 `submit()`과 `submit_sync()`를 제공하고
-reply timeout을 builder에서 설정한다.
+`submit()`과 동기 `submit_sync()`를 제공한다. 비동기 `submit()`은 `CompletionStage`를 직접 돌려주지 않고
+결과 객체 `SendSubmission`(`SubmitResult result()`, `CompletionStage<Void> admitted()`)을 돌려준다.
+Request는 `submit()`과 `submit_sync()`를 제공하고 reply timeout을 builder에서 설정한다. Request의 비동기
+`submit()`은 `RequestSubmission`(`result()`·`admitted()`에 `CompletionStage<List<Message>> reply()` 추가)을
+돌려준다. `result()`는 제출 시점 `OK`|`BACKPRESSURED` 스냅샷이고, 그 밖의 제출 실패는 지금처럼
+`ZlinkSubmitException`으로 던진다. 결과 객체의 구조와 합류는
+[공통 결과 투영](../README.ko.md#submit-result-projection)과 [async-coroutine-policy §6](../async-coroutine-policy.ko.md#6-언어별-terminal-interface)이 소유한다.
 PUB/XPUB publish도 같은 staged message builder를 사용하지만 `submit()`은
 동기 `void`이며, 성공하지 못하면 즉시 `ZlinkSubmitException`을 던진다.
 
@@ -991,16 +996,27 @@ Token은 raw accessor, ordering, serialization과 `AutoCloseable`을 제공하�
 ### Public interface
 
 ```java
+public interface SendSubmission {
+    SubmitResult result();              // OK | BACKPRESSURED, 제출 시점 스냅샷
+    CompletionStage<Void> admitted();   // OK면 완료 상태
+}
+
+public interface RequestSubmission {
+    SubmitResult result();
+    CompletionStage<Void> admitted();
+    CompletionStage<List<Message>> reply();   // admitted 성공 뒤 완료
+}
+
 public interface SendSubmitOperation {
     SendSubmitOperation message(Message part);
-    CompletionStage<Void> submit();
+    SendSubmission submit();
     void submit_sync();
 }
 
 public interface RequestSubmitOperation {
     RequestSubmitOperation message(Message part);
     RequestSubmitOperation timeout(Duration timeout);
-    CompletionStage<List<Message>> submit();
+    RequestSubmission submit();
     List<Message> submit_sync();
 }
 
