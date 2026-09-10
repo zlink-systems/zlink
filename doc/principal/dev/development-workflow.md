@@ -20,6 +20,26 @@ One branch = one Issue = one worktree. One Issue may have several PRs (§5).
 
 ## 2. Registering work — GitHub Issues
 
+### 2.0 Three kinds of work
+
+The procedure exists for **changes that land in main**. Not every task carries the same weight.
+
+| Kind | Issue | Branch and worktree | PR | Board |
+|---|---|---|---|---|
+| **A change that lands in main** | yes | yes | yes | listed |
+| **A defect found** | yes (stays open until fixed) | when fixing | when fixing | listed |
+| **A throwaway experiment or measurement** | **no** | a temporary one if code must change, not on the board | **no** | not listed |
+
+An experiment leaves only its brief and report under `.artifacts/codex/<name>/`. When it must change
+code it gets a worktree without an Issue, a PR or a board entry, and that worktree is removed
+afterwards with the sweep in [§4.3](#43-the-other-development-scripts). When an experiment **finds a
+defect, that is when an Issue is created** — the experiment itself never becomes one.
+
+There is one test: **does the result of this work stay in main?** When it does not, the procedure
+does not apply.
+
+### 2.1 Writing the Issue
+
 - Every piece of work is an Issue before it starts. The title is a one-line outcome; the body has
   three sections — **scope / done criteria / evidence** — and none may be empty. Evidence names the
   decision record number (`FB-nnn`, `D-nnn`) **with its file path and anchor**
