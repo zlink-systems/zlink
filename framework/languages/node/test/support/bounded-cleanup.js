@@ -36,23 +36,37 @@ async function stopChildGracefully(child, requestStop, gracefulTimeoutMs = 10_00
     return { timedOut: false, forced: false };
   }
   let exited = false;
-  const exit = new Promise((resolve) => child.once('exit', () => { exited = true; resolve(true); }));
-  await requestStop();
-  if (child.exitCode !== null || child.signalCode !== null || exited) {
-    child.stdout?.destroy(); child.stderr?.destroy();
-    return { timedOut: false, forced: false };
-  }
   let timer;
-  const graceful = await Promise.race([
-    exit,
-    new Promise((resolve) => { timer = setTimeout(() => resolve(false), gracefulTimeoutMs); })
-  ]);
-  clearTimeout(timer);
-  if (graceful) {
-    child.stdout?.destroy(); child.stderr?.destroy();
-    return { timedOut: false, forced: false };
+  const onExit = () => { exited = true; };
+  child.once('exit', onExit);
+  try {
+    try {
+      await requestStop();
+    } catch (error) {
+      await stopChild(child, forceTimeoutMs);
+      throw error;
+    }
+    if (child.exitCode !== null || child.signalCode !== null || exited) {
+      child.stdout?.destroy(); child.stderr?.destroy();
+      return { timedOut: false, forced: false };
+    }
+    let gracefulResolve;
+    const onGracefulExit = () => gracefulResolve?.(true);
+    const gracefulExit = new Promise((resolve) => { gracefulResolve = resolve; child.once('exit', onGracefulExit); });
+    const graceful = await Promise.race([
+      gracefulExit,
+      new Promise((resolve) => { timer = setTimeout(() => resolve(false), gracefulTimeoutMs); })
+    ]);
+    child.removeListener('exit', onGracefulExit);
+    if (graceful) {
+      child.stdout?.destroy(); child.stderr?.destroy();
+      return { timedOut: false, forced: false };
+    }
+    return stopChild(child, forceTimeoutMs);
+  } finally {
+    clearTimeout(timer);
+    child.removeListener('exit', onExit);
   }
-  return stopChild(child, forceTimeoutMs);
 }
 
 async function closeContext(context, timeoutMs = 5_000) {

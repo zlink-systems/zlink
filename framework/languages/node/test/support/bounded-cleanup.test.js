@@ -29,6 +29,21 @@ test('stopChildGracefully falls back to TERM/KILL after graceful timeout', async
   assert.equal(child.stderr.destroyCalled, true);
 });
 
+test('stopChildGracefully terminates and rethrows a stop request failure', async () => {
+  const child = new EventEmitter(); child.exitCode = null; child.signalCode = null;
+  child.stdout = { destroyed: false, destroy() { this.destroyed = true; } };
+  child.stderr = { destroyed: false, destroy() { this.destroyed = true; } };
+  const signals = [];
+  child.kill = (signal) => { signals.push(signal); if (signal === 'SIGKILL') { child.exitCode = 137; child.emit('exit', 137); } };
+  await assert.rejects(
+    () => stopChildGracefully(child, async () => { throw new Error('STOP write failed'); }, 5, 5),
+    /STOP write failed/
+  );
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+  assert.equal(child.stdout.destroyed, true);
+  assert.equal(child.stderr.destroyed, true);
+});
+
 test('stopChild waits for a normally exiting child', async () => {
   const child = new EventEmitter();
   child.exitCode = null;
