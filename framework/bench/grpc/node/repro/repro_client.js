@@ -39,7 +39,7 @@ const nowNs = () => process.hrtime.bigint();
   const request = () => {
     let op = router.request(peer);
     if (partCount === 2) op = op.message(header);
-    return op.message(payload).timeout(timeoutMs).submit();
+    return op.message(payload).timeout(timeoutMs).submit().reply;
   };
 
   const once = async () => {

@@ -60,7 +60,7 @@ task_t<bool> raw_dealer_port_t::send (const raw_message_t &parts)
             for (std::size_t index = 1; index < messages.size (); ++index) {
                 operation = std::move (operation).message (messages[index]);
             }
-            pending.emplace (std::move (operation).async ());
+            pending.emplace (std::move (operation).async ().admitted);
         }
         co_await std::move (*pending);
         co_return true;
@@ -94,7 +94,7 @@ task_t<zlink::submit_result_t> raw_dealer_port_t::send (
             const auto configured_timeout = _socket->options ().send_timeout ();
             _socket->options ().send_timeout (timeout);
             try {
-                pending.emplace (std::move (operation).async ());
+                pending.emplace (std::move (operation).async ().admitted);
             }
             catch (...) {
                 _socket->options ().send_timeout (configured_timeout);
@@ -132,7 +132,7 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (
         for (std::size_t index = 1; index < messages.size (); ++index) {
             operation = std::move (operation).message (messages[index]);
         }
-        pending.emplace (std::move (operation).timeout (timeout).async ());
+        pending.emplace (std::move (operation).timeout (timeout).async ().reply);
     }
     try {
         auto reply = co_await std::move (*pending);

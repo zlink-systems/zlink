@@ -10,7 +10,7 @@ use crate::error::{SubmitError, SubmitResult};
 use crate::ffi;
 use crate::internal::{CompletionEntry, CompletionEntryKind, CompletionOwner, RoutedHandle};
 use crate::messaging_operations::{
-    Empty, MessageParts, PublishOp, PublishOpStorage, SendOp, SendOpStorage,
+    Empty, MessageParts, PublishOp, PublishOpStorage, SendOp, SendOpStorage, SendSubmission,
 };
 use crate::native_errors::{submit_error_from_errno, submit_error_from_rc};
 
@@ -103,15 +103,52 @@ pub(crate) fn submit_publish(mut op: PublishOpStorage) -> Result<(), SubmitError
     check_submit_result(rc, errno)
 }
 
-pub(crate) fn submit_send(
-    op: SendOpStorage,
-) -> impl Future<Output = Result<(), SubmitError>> + Send {
-    SendFuture {
-        operation: Some(op),
-        context: std::ptr::null_mut(),
-        entry: None,
-        waiting_for_writable: false,
-        finished: false,
+pub(crate) fn submit_send(mut op: SendOpStorage) -> Result<SendSubmission, SubmitError> {
+    if op.parts.is_empty() {
+        return Err(SubmitError::new(
+            SubmitResult::InvalidArgument,
+            libc::EINVAL,
+        ));
+    }
+    live_handle(&op)?;
+
+    let context = op.completion_owner.next_context();
+    match submit_send_attempt(&mut op, context) {
+        Ok(SendAttempt::Admitted) => Ok(SendSubmission {
+            result: SubmitResult::Ok,
+            admitted: Box::pin(std::future::ready(Ok(()))),
+        }),
+        Ok(SendAttempt::Waiting(completion_id)) => {
+            let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
+            let owner = Arc::clone(&op.completion_owner);
+            if let Err(error) = owner.register_send_token(context, &entry, completion_id) {
+                if entry.detach() {
+                    owner.unregister(context);
+                }
+                return Err(error);
+            }
+            Ok(SendSubmission {
+                result: SubmitResult::Backpressured,
+                admitted: Box::pin(SendFuture {
+                    operation: Some(op),
+                    context,
+                    entry: Some(entry),
+                    waiting_for_writable: true,
+                    finished: false,
+                }),
+            })
+        }
+        Err(failure) => {
+            if let Some(completion_id) = failure.live_token {
+                let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
+                let owner = Arc::clone(&op.completion_owner);
+                let _ = owner.register_send_token(context, &entry, completion_id);
+                if entry.detach() {
+                    owner.unregister(context);
+                }
+            }
+            Err(failure.error)
+        }
     }
 }
 
@@ -173,20 +210,6 @@ impl Future for SendFuture {
         if self.finished {
             panic!("send Future polled after completion");
         }
-        if self.context.is_null() {
-            let operation = self.operation.as_ref().expect("active send");
-            if operation.parts.is_empty() {
-                return self.finish(Err(SubmitError::new(
-                    SubmitResult::InvalidArgument,
-                    libc::EINVAL,
-                )));
-            }
-            if let Err(error) = live_handle(operation) {
-                return self.finish(Err(error));
-            }
-            self.context = operation.completion_owner.next_context();
-        }
-
         loop {
             if self.waiting_for_writable {
                 let entry = self.entry.as_ref().expect("send retry entry");

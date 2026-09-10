@@ -9,21 +9,14 @@ mod test_support;
 
 use zlink::{
     AtomicCounter, CompletionKind, Context, Message, MonitorEvent, Received, RecvError, RecvFlags,
-    RidDuplicatePolicy, RoutingId, SendFlags, SendResult, SocketMonitor, Stopwatch, StreamSocket,
-    SubmitRetryMode, SubscriptionEvent, Thread, TopicMessage, XPubSocket,
+    RequestSubmission, RidDuplicatePolicy, RoutingId, SendFlags, SendResult, SendSubmission,
+    SocketMonitor, Stopwatch, StreamSocket, SubmitRetryMode, SubscriptionEvent, Thread,
+    TopicMessage, XPubSocket,
 };
 
-fn assert_routed_send_future<F>(_: F)
-where
-    F: std::future::Future<Output = Result<(), zlink::SubmitError>> + Send,
-{
-}
+fn assert_send_submission(_: Result<SendSubmission, zlink::SubmitError>) {}
 
-fn assert_routed_request_future<F>(_: F)
-where
-    F: std::future::Future<Output = Result<Vec<Message>, zlink::ZlinkError>> + Send,
-{
-}
+fn assert_request_submission(_: Result<RequestSubmission, zlink::ZlinkError>) {}
 
 // ---------------------------------------------------------------------------
 // Socket type capability separation
@@ -37,7 +30,7 @@ fn pair_socket_has_send_recv() {
 
     // PairSocket exposes: send (async terminal), recv
     let msg = Message::try_from(b"test").unwrap();
-    assert_routed_send_future(sock.send().message(msg).submit());
+    assert_send_submission(sock.send().message(msg).submit());
     let mut received = Received::empty();
     let _ = sock.recv(&mut received, RecvFlags::DONT_WAIT);
 }
@@ -99,8 +92,8 @@ fn router_socket_send_requires_routing_id() {
     // RouterSocket::send takes a RoutingId and returns a builder.
     let rid = RoutingId::from(b"peer-001");
     let msg = Message::try_from(b"response").unwrap();
-    assert_routed_send_future(sock.send(&rid).message(msg).submit());
-    assert_routed_request_future(
+    assert_send_submission(sock.send(&rid).message(msg).submit());
+    assert_request_submission(
         sock.request(&rid)
             .message(Message::try_from(b"request").unwrap())
             .submit(),
@@ -110,15 +103,15 @@ fn router_socket_send_requires_routing_id() {
 }
 
 #[test]
-fn dealer_routed_submit_returns_future() {
+fn dealer_routed_submit_returns_submission() {
     let ctx = Context::new().unwrap();
     let sock = ctx.dealer_socket().unwrap();
-    assert_routed_send_future(
+    assert_send_submission(
         sock.send()
             .message(Message::try_from(b"send").unwrap())
             .submit(),
     );
-    assert_routed_request_future(
+    assert_request_submission(
         sock.request()
             .message(Message::try_from(b"request").unwrap())
             .submit(),
@@ -136,7 +129,9 @@ fn stream_socket_send_requires_routing_id() {
 
     let rid = RoutingId::from(b"client-001");
     let msg = Message::try_from(b"data").unwrap();
-    let _ = test_support::block_on(sock.send(&rid).message(msg).submit());
+    if let Ok(submission) = sock.send(&rid).message(msg).submit() {
+        let _ = test_support::block_on(submission.admitted);
+    }
 }
 
 #[test]

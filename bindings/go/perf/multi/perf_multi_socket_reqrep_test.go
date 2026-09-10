@@ -24,13 +24,27 @@ func (r *barrierRequest) Bytes(data []byte) zlink.RequestSubmitOp {
 	return r
 }
 func (r *barrierRequest) Timeout(time.Duration) zlink.RequestSubmitOp { return r }
-func (r *barrierRequest) Submit(context.Context) ([]*zlink.Message, error) {
+func (r *barrierRequest) Submit(context.Context) (zlink.RequestSubmission, error) {
 	select {
 	case r.arrived <- struct{}{}:
 	default:
 	}
-	<-r.release
-	body, err := zlink.NewMessage(r.payload)
+	return &barrierSubmission{release: r.release, payload: r.payload}, nil
+}
+
+type barrierSubmission struct {
+	release <-chan struct{}
+	payload []byte
+}
+
+func (s *barrierSubmission) Result() zlink.SubmitResult { return zlink.SubmitBackpressured }
+func (s *barrierSubmission) Admitted(context.Context) error {
+	<-s.release
+	return nil
+}
+func (s *barrierSubmission) Reply(context.Context) ([]*zlink.Message, error) {
+	<-s.release
+	body, err := zlink.NewMessage(s.payload)
 	if err != nil {
 		return nil, err
 	}

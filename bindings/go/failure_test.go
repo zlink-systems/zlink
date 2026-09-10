@@ -28,7 +28,7 @@ func TestSubmitContextCancellationUsesStandardErrors(t *testing.T) {
 	message := newMessage(t, "context-canceled")
 	defer message.Close()
 
-	if err := socket.Send().Message(message).Submit(canceled); !errors.Is(err, context.Canceled) {
+	if _, err := socket.Send().Message(message).Submit(canceled); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Send().Submit(canceled) error = %v, want context.Canceled", err)
 	}
 	if got := string(message.Data()); got != "context-canceled" {
@@ -48,7 +48,7 @@ func TestRequestContextDeadlineUsesStandardErrors(t *testing.T) {
 
 	deadline, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	parts, err := socket.Request().Bytes([]byte("context-deadline")).Submit(deadline)
+	parts, err := requestAndWait(deadline, socket.Request().Bytes([]byte("context-deadline")))
 	if parts != nil || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Request().Submit(expired) = (%v, %v), want (nil, context.DeadlineExceeded)", parts, err)
 	}
@@ -97,7 +97,7 @@ func TestRequestSubmitReturnsReply(t *testing.T) {
 		serverDone <- request.Reply().Message(reply).Submit(context.Background())
 	}()
 
-	parts, err := dealer.Request().Bytes([]byte("channel-request")).Timeout(2 * time.Second).Submit(context.Background())
+	parts, err := requestAndWait(context.Background(), dealer.Request().Bytes([]byte("channel-request")).Timeout(2*time.Second))
 	defer zlink.MultipartClose(parts)
 	if err != nil {
 		t.Fatalf("request error = %v", err)
@@ -169,7 +169,7 @@ func TestPollerModifyCompletionDoesNotDisableRequestCompletion(t *testing.T) {
 		serverDone <- request.Reply().Message(reply).Submit(context.Background())
 	}()
 
-	parts, err := dealer.Request().Bytes([]byte("ping")).Timeout(time.Second).Submit(context.Background())
+	parts, err := requestAndWait(context.Background(), dealer.Request().Bytes([]byte("ping")).Timeout(time.Second))
 	if err != nil {
 		t.Fatalf("request error after owner transfer = %v", err)
 	}
@@ -258,7 +258,7 @@ func TestPollerCompletionOwnsRequestProgressAndTransfersBack(t *testing.T) {
 	}
 	completion := make(chan requestResult, 1)
 	go func() {
-		parts, err := dealer.Request().Bytes([]byte("poller-request")).Timeout(2 * time.Second).Submit(context.Background())
+		parts, err := requestAndWait(context.Background(), dealer.Request().Bytes([]byte("poller-request")).Timeout(2*time.Second))
 		completion <- requestResult{parts: parts, err: err}
 	}()
 
@@ -301,7 +301,7 @@ firstComplete:
 	registered = false
 
 	serverDone = serveRequest("internal-reply")
-	second, err := dealer.Request().Bytes([]byte("internal-request")).Timeout(2 * time.Second).Submit(context.Background())
+	second, err := requestAndWait(context.Background(), dealer.Request().Bytes([]byte("internal-request")).Timeout(2*time.Second))
 	if err != nil {
 		t.Fatalf("request completion did not continue after RemoveSocket: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestSendDoesNotExposeFlags(t *testing.T) {
 	defer socket.Close()
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := socket.Send().Message(newMessage(t, "data")).Submit(canceled)
+	_, err := socket.Send().Message(newMessage(t, "data")).Submit(canceled)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Send() cancellation error = %v", err)
 	}
@@ -411,7 +411,7 @@ func TestTargetedSendFailureSurfacesError(t *testing.T) {
 	rid := zlink.NewRoutingID([]byte("missing-peer"))
 	message := newMessage(t, "data")
 	defer message.Close()
-	err := router.SendTo(rid).Message(message).Submit(context.Background())
+	err := submitAndWait(context.Background(), router.SendTo(rid).Message(message))
 	var submitErr *zlink.SubmitError
 	if !errors.As(err, &submitErr) || submitErr.Result != zlink.SubmitNotConnected {
 		t.Fatalf("SendTo(missing RID) error = %v, want SubmitNotConnected", err)
@@ -440,7 +440,7 @@ func TestTargetedSendFailurePreservesMessagePayload(t *testing.T) {
 	msg := newMessage(t, "preserve-me")
 	defer msg.Close()
 
-	if err := router.SendTo(rid).Message(msg).Submit(context.Background()); err == nil {
+	if err := submitAndWait(context.Background(), router.SendTo(rid).Message(msg)); err == nil {
 		t.Fatalf("SendTo() should surface an error when no peer exists")
 	}
 	if got := string(msg.Data()); got != "preserve-me" {
@@ -465,7 +465,7 @@ func TestTargetedSendFailurePreservesBytesPayload(t *testing.T) {
 	rid := zlink.NewRoutingID([]byte("missing-peer"))
 	payload := []byte("preserve-bytes")
 
-	if err := router.SendTo(rid).Bytes(payload).Submit(context.Background()); err == nil {
+	if err := submitAndWait(context.Background(), router.SendTo(rid).Bytes(payload)); err == nil {
 		t.Fatalf("SendTo().Bytes() should surface an error when no peer exists")
 	}
 	if got := string(payload); got != "preserve-bytes" {
@@ -492,7 +492,7 @@ func TestMoveMessageFailureConsumesMessagePayload(t *testing.T) {
 	msg := newMessage(t, "consume-me")
 	defer msg.Close()
 
-	if err := router.SendTo(rid).MoveMessage(msg).Submit(context.Background()); err == nil {
+	if err := submitAndWait(context.Background(), router.SendTo(rid).MoveMessage(msg)); err == nil {
 		t.Fatalf("MoveMessage SendTo() should surface an error when no peer exists")
 	}
 	if got := msg.Data(); got != nil {
@@ -509,7 +509,7 @@ func TestSendDoesNotSwallowClosedSocketErrors(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	if err := socket.Send().Message(newMessage(t, "data")).Submit(context.Background()); err == nil {
+	if err := submitAndWait(context.Background(), socket.Send().Message(newMessage(t, "data"))); err == nil {
 		t.Fatalf("Send() on closed socket should surface an error")
 	}
 }
@@ -637,7 +637,7 @@ func TestStreamPacketPullCanUseManagedSend(t *testing.T) {
 		t.Fatalf("RecvPacket() = (%v, %v), want (true, nil)", ok, err)
 	}
 	packet := frameStreamPacketMessage(t, received.Header(), received.Body())
-	if err := server.SendTo(received.RoutingID()).Message(packet).Submit(context.Background()); err != nil {
+	if err := submitAndWait(context.Background(), server.SendTo(received.RoutingID()).Message(packet)); err != nil {
 		t.Fatalf("packet Send() error = %v", err)
 	}
 

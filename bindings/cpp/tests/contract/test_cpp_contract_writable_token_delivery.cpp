@@ -11,8 +11,8 @@ int main ()
     auto request = fixture.socket.request (target)
                      .message (zlink::message_t::from ("request"))
                      .timeout (std::chrono::seconds (5)).async ();
-    auto send_wait = std::move (send).operator co_await ();
-    auto request_wait = std::move (request).operator co_await ();
+    auto send_wait = std::move (send.admitted).operator co_await ();
+    auto request_wait = std::move (request.reply).operator co_await ();
     assert (!send_wait.await_ready () && !request_wait.await_ready ());
 
     // Core owns the RID echo contract. The binding dispatches the exact token

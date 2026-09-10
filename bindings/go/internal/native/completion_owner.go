@@ -42,8 +42,10 @@ type completionEntry struct {
 	parts           []*Message
 	err             error
 	done            chan struct{}
+	admittedDone    chan struct{}
+	admittedErr     error
+	admittedSettled bool
 	settledDone     chan struct{}
-	stopCancel      func() bool
 	attemptMu       sync.Mutex
 	owner           *completionOwner
 	writableWaiting bool
@@ -61,43 +63,27 @@ func nextCompletionContext() uintptr {
 	return key
 }
 
-func newCompletionEntry(kind completionOperationKind, ctx context.Context) *completionEntry {
+func newCompletionEntry(kind completionOperationKind) *completionEntry {
 	entry := &completionEntry{
-		kind:        kind,
-		done:        make(chan struct{}),
-		settledDone: make(chan struct{}),
+		kind:         kind,
+		done:         make(chan struct{}),
+		admittedDone: make(chan struct{}),
+		settledDone:  make(chan struct{}),
 	}
 	entry.handleKey = nextCompletionContext()
-	entry.enableCancellation(ctx)
 	return entry
 }
 
-func newSendCompletionEntry(ctx context.Context, send *sendRetryState, key uintptr) *completionEntry {
+func newSendCompletionEntry(send *sendRetryState, key uintptr) *completionEntry {
 	entry := &completionEntry{
-		kind:        completionSendRetry,
-		send:        send,
-		done:        make(chan struct{}),
-		settledDone: make(chan struct{}),
+		kind:         completionSendRetry,
+		send:         send,
+		done:         make(chan struct{}),
+		admittedDone: make(chan struct{}),
+		settledDone:  make(chan struct{}),
 	}
 	entry.handleKey = key
-	entry.enableCancellation(ctx)
 	return entry
-}
-
-func (e *completionEntry) enableCancellation(ctx context.Context) {
-	if ctx != nil && ctx.Done() != nil {
-		stop := context.AfterFunc(ctx, func() {
-			e.cancel(ctx.Err())
-		})
-		e.mu.Lock()
-		if e.publicDone || e.settled {
-			e.mu.Unlock()
-			stop()
-			return
-		}
-		e.stopCancel = stop
-		e.mu.Unlock()
-	}
 }
 
 func (e *completionEntry) publish(completionID uint64) {
@@ -127,18 +113,29 @@ func (e *completionEntry) finishSend(err error) {
 	}
 	e.published = true
 	e.settled = true
+	e.finishAdmittedLocked(err)
 	if !e.publicDone {
 		e.err = err
 		e.publicDone = true
 		close(e.done)
 	}
 	close(e.settledDone)
-	stop := e.stopCancel
-	e.stopCancel = nil
 	e.mu.Unlock()
-	if stop != nil {
-		stop()
+}
+
+func (e *completionEntry) finishAdmitted(err error) {
+	e.mu.Lock()
+	e.finishAdmittedLocked(err)
+	e.mu.Unlock()
+}
+
+func (e *completionEntry) finishAdmittedLocked(err error) {
+	if e.admittedSettled {
+		return
 	}
+	e.admittedErr = err
+	e.admittedSettled = true
+	close(e.admittedDone)
 }
 
 func (e *completionEntry) setWritableWaiting(waiting bool) error {
@@ -156,12 +153,7 @@ func (e *completionEntry) failSubmit() {
 		e.settled = true
 		close(e.settledDone)
 	}
-	stop := e.stopCancel
-	e.stopCancel = nil
 	e.mu.Unlock()
-	if stop != nil {
-		stop()
-	}
 }
 
 func (e *completionEntry) cancel(err error) {
@@ -175,6 +167,7 @@ func (e *completionEntry) cancel(err error) {
 	e.attemptMu.Lock()
 	defer e.attemptMu.Unlock()
 	e.mu.Lock()
+	e.finishAdmittedLocked(err)
 	if !e.publicDone {
 		e.err = err
 		e.publicDone = true
@@ -196,6 +189,7 @@ func (e *completionEntry) cancelSend(err error) {
 		return
 	}
 	e.err = err
+	e.finishAdmittedLocked(err)
 	e.publicDone = true
 	close(e.done)
 	waiting := e.published && !e.settled
@@ -203,8 +197,6 @@ func (e *completionEntry) cancelSend(err error) {
 		e.settled = true
 		close(e.settledDone)
 	}
-	stop := e.stopCancel
-	e.stopCancel = nil
 	e.mu.Unlock()
 
 	// A canceled caller no longer owns a logical send to retry. If Core already
@@ -212,9 +204,6 @@ func (e *completionEntry) cancelSend(err error) {
 	// the matching WRITABLE record is pulled.
 	if e.send != nil && e.send.payload != nil {
 		e.send.payload.close()
-	}
-	if stop != nil {
-		stop()
 	}
 }
 
@@ -248,11 +237,6 @@ func (e *completionEntry) settleIfJoinedLocked() {
 		close(e.done)
 	}
 	close(e.settledDone)
-	stop := e.stopCancel
-	e.stopCancel = nil
-	if stop != nil {
-		go stop()
-	}
 }
 
 func (e *completionEntry) shutdown() {
@@ -278,10 +262,9 @@ func (e *completionEntry) shutdown() {
 		e.publicDone = true
 		close(e.done)
 	}
+	e.finishAdmittedLocked(shutdownErr)
 	e.settled = true
 	close(e.settledDone)
-	stop := e.stopCancel
-	e.stopCancel = nil
 	e.mu.Unlock()
 	if e.send != nil && e.send.payload != nil {
 		e.send.payload.close()
@@ -290,21 +273,46 @@ func (e *completionEntry) shutdown() {
 		e.request.payload.close()
 	}
 	MultipartClose(parts)
-	if stop != nil {
-		stop()
-	}
 }
 
-func (e *completionEntry) waitSend() error {
-	<-e.done
+func (e *completionEntry) waitAdmitted(ctx context.Context) error {
+	select {
+	case <-e.admittedDone:
+		e.mu.Lock()
+		err := e.admittedErr
+		e.mu.Unlock()
+		return err
+	default:
+	}
+	if ctx == nil {
+		<-e.admittedDone
+	} else {
+		select {
+		case <-e.admittedDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	e.mu.Lock()
-	err := e.err
+	err := e.admittedErr
 	e.mu.Unlock()
 	return err
 }
 
-func (e *completionEntry) waitRequest() ([]*Message, error) {
-	<-e.done
+func (e *completionEntry) waitRequest(ctx context.Context) ([]*Message, error) {
+	select {
+	case <-e.done:
+	default:
+		if ctx == nil {
+			<-e.done
+		} else {
+			select {
+			case <-e.done:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
 	e.mu.Lock()
 	parts := e.parts
 	e.parts = nil
@@ -660,17 +668,14 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 		// outlive its matching wait token.
 		e.mu.Lock()
 		if !e.publicDone {
-			e.err = &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
+			err := error(&SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)})
+			e.err = err
+			e.finishAdmittedLocked(err)
 			e.publicDone = true
 			close(e.done)
 		}
-		stop := e.stopCancel
-		e.stopCancel = nil
 		e.mu.Unlock()
 		e.send.payload.close()
-		if stop != nil {
-			stop()
-		}
 		e.attemptMu.Unlock()
 		return false, false
 	}
@@ -752,7 +757,9 @@ func (e *completionEntry) captureRequestWritable(completion *C.zlink_completion_
 			if !publicDone {
 				e.mu.Lock()
 				if !e.publicDone {
-					e.err = &RequestError{Result: RequestInternalError, nativeErrno: int(C.EPROTO)}
+					err := error(&RequestError{Result: RequestInternalError, nativeErrno: int(C.EPROTO)})
+					e.err = err
+					e.finishAdmittedLocked(err)
 					e.publicDone = true
 					close(e.done)
 				}
@@ -837,6 +844,7 @@ func (e *completionEntry) attemptRequest() bool {
 			return true
 		}
 		e.request.payload.close()
+		e.finishAdmitted(nil)
 		e.publish(completionID)
 		return false
 	}

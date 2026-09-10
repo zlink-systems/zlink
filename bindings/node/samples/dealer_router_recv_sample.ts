@@ -27,7 +27,7 @@ async function main() {
     }
 
     const sent = 'ping';
-    await dealer.send().message(Buffer.from(sent)).submit();
+    await dealer.send().message(Buffer.from(sent)).submit().admitted;
 
     const reply = 'pong';
     const request = new zlink.Received();

@@ -1489,7 +1489,7 @@ class stream_host_service_t::listener_t
                 _core_socket->options ().send_timeout (*timeout);
             try {
                 pending.emplace (
-                  _core_socket->send (rid).message (std::move (frame)).async ());
+                  _core_socket->send (rid).message (std::move (frame)).async ().admitted);
             }
             catch (...) {
                 if (timeout)

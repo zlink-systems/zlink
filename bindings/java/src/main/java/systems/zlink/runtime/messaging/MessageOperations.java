@@ -7,15 +7,16 @@ import java.util.AbstractList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.PublishOperation;
 import systems.zlink.contracts.messaging.PublishSubmitOperation;
 import systems.zlink.contracts.messaging.ReplyOperation;
 import systems.zlink.contracts.messaging.ReplySubmitOperation;
 import systems.zlink.contracts.messaging.RequestOperation;
+import systems.zlink.contracts.messaging.RequestSubmission;
 import systems.zlink.contracts.messaging.RequestSubmitOperation;
 import systems.zlink.contracts.messaging.SendOperation;
+import systems.zlink.contracts.messaging.SendSubmission;
 import systems.zlink.contracts.messaging.SendSubmitOperation;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.runtime.nativeapi.MessagePartsBuffer;
@@ -47,7 +48,7 @@ public final class MessageOperations {
 
     @FunctionalInterface
     public interface SendAwaitableInvoker {
-        CompletionStage<Void> submit(List<Message> parts);
+        SendSubmission submit(List<Message> parts);
     }
 
     @FunctionalInterface
@@ -57,8 +58,7 @@ public final class MessageOperations {
 
     @FunctionalInterface
     public interface RequestAwaitableInvoker {
-        CompletionStage<List<Message>> submit(List<Message> parts,
-                                              Duration timeout);
+        RequestSubmission submit(List<Message> parts, Duration timeout);
     }
 
     @FunctionalInterface
@@ -97,7 +97,7 @@ public final class MessageOperations {
         }
 
         @Override
-        public CompletionStage<Void> submit() {
+        public SendSubmission submit() {
             finishBuilding();
             return awaitable.submit(parts.asList());
         }
@@ -168,7 +168,7 @@ public final class MessageOperations {
         }
 
         @Override
-        public CompletionStage<List<Message>> submit() {
+        public RequestSubmission submit() {
             finishBuilding();
             return awaitable.submit(requestParts(), timeout);
         }

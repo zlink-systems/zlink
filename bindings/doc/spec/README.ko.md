@@ -1291,12 +1291,17 @@ Binding은 Framework의 application job queue count를 Core byte snapshot에 합
 대기 토큰의 조건은 [Core whole-message send](../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)와
 [Core REQUEST DONTWAIT](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)가 소유한다.
 
+비동기 종결자는 **결과 객체**를 돌려준다(`SendSubmission`·`RequestSubmission`). `result`는 제출 시점
+`OK`|`BACKPRESSURED` 스냅샷이고 `admitted`(SEND·REQUEST 공통)·`reply`(REQUEST) stage가 완료를 나른다.
+동기 종결자(`submit_sync()` 등)는 바뀌지 않는다. 대기 규칙과 언어별 시그니처는
+[async-coroutine-policy §6](async-coroutine-policy.ko.md#6-언어별-terminal-interface)가 소유한다.
+
 | Native 제출 결과 | 고수준 바인딩의 결과 |
 |---|---|
-| SEND `OK`·ID `0` | 즉시 admission 성공으로 terminal을 끝낸다. |
-| REQUEST `OK`·nonzero ID | 해당 REQUEST completion을 언어 결과에 연결한다. |
-| `BACKPRESSURED`·`EAGAIN`·nonzero 대기 토큰 | 바인딩이 재제출할 입력을 보관하고 WRITABLE을 기다린다. Core의 drain·재제출 계약에 따라 같은 operation을 계속한다. |
-| 대기 토큰 없는 submit 실패 | 해당 submit error로 terminal을 끝낸다. |
+| SEND `OK`·ID `0` | `result == OK`와 완료된 `admitted` stage로 terminal을 끝낸다. |
+| REQUEST `OK`·nonzero ID | `result == OK`·완료된 `admitted`를 돌려주고 해당 REQUEST completion을 `reply` stage에 연결한다. |
+| `BACKPRESSURED`·`EAGAIN`·nonzero 대기 토큰 | 바인딩이 재제출할 입력을 보관하고 WRITABLE을 기다린다. Core의 drain·재제출 계약에 따라 같은 operation을 계속하며, 종결자는 `result == BACKPRESSURED`와 재제출 admission에서 완료되는 `admitted` stage를 돌려준다. |
+| 대기 토큰 없는 submit 실패 | 해당 submit error로 terminal을 끝낸다(결과 객체가 아니라 예외/에러). |
 
 - **바인딩은 socket-local context·token으로 찾은 WRITABLE을 해당 waiter에 전달하며 Core가 보장한 submit RID echo를 다시 판정하지 않는다.**
   RID echo의 소유자는 [Core completion record 계약](../../../core/doc/spec/core/socket/README.ko.md#completion-pull과-ownership)이기 때문이다.
@@ -1937,8 +1942,8 @@ SPOT operation builder 대상의 작업 시작점은 `requestToChannel` /
   - `Received`
   - `TopicMessage`
   - `SubscriptionEvent`
-  - `SubmitResult` (C / Go / Rust — return-based 언어에서 반환 객체/에러에
-    포함. exception 언어에서는 예외 객체 `.code` 로 노출)
+  - `SubmitResult` (비동기 종결자의 결과 객체 `result`(`OK`|`BACKPRESSURED`)로 모든 언어가 노출한다.
+    그 밖의 제출 실패는 return-based 언어에서는 에러로, exception 언어에서는 예외 객체 `.code`로 낸다)
 - 결과 객체는 payload shape, ownership, optional routing metadata를 함께
   설명해야 한다.
 - 편의 기능은 결과 객체 메서드로 둔다.

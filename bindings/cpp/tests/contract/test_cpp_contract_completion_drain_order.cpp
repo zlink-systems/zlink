@@ -11,8 +11,8 @@ void test_queued_send_and_request ()
     auto request = fixture.socket.request (target)
                      .message (zlink::message_t::from ("request"))
                      .timeout (std::chrono::seconds (5)).async ();
-    auto send_wait = std::move (send).operator co_await ();
-    auto request_wait = std::move (request).operator co_await ();
+    auto send_wait = std::move (send.admitted).operator co_await ();
+    auto request_wait = std::move (request.reply).operator co_await ();
     fixture.writable (0, "peer");
     fixture.writable (1, "peer");
     fixture.events.clear ();
@@ -57,7 +57,7 @@ void test_writable_before_send_registration ()
     };
     auto send = fixture.socket.send (zlink::routing_id_t::from ("peer"))
                   .message (zlink::message_t::from ("early-send")).async ();
-    auto wait = std::move (send).operator co_await ();
+    auto wait = std::move (send.admitted).operator co_await ();
     assert (at_no_data_future.wait_for (std::chrono::seconds (5))
             == std::future_status::ready);
     assert (!wait.await_ready ());

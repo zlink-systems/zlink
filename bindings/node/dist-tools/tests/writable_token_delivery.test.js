@@ -55,12 +55,13 @@ for (const kind of ['send', 'request']) {
                 },
             };
             try {
-                const pending = kind === 'send'
+                const submission = kind === 'send'
                     ? owner.submitSend(Buffer.from('payload'), target)
                     : owner.submitRequest(Buffer.from('payload'), target, 1000);
+                strict_1.default.equal(submission.result, SubmitResult.Backpressured);
                 owner.drain(publicOwner);
                 owner.drain(publicOwner);
-                const reply = await pending;
+                const reply = await (kind === 'send' ? submission.admitted : submission.reply);
                 strict_1.default.equal(submissions, 2);
                 strict_1.default.equal(owner.hasManagedWritableWait(), false);
                 if (kind === 'request') {

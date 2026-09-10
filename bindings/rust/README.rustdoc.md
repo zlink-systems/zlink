@@ -40,20 +40,23 @@ runtime has passed the Core package provenance and clean-consumer checks.
   `SubmitResult::NotConnected` without a wait token.
 
 `SendOp::submit()` and `RequestOp::submit()` implement the managed asynchronous
-form. Each retains the exact multipart packet, pulls completion records through
-NO_DATA after `POLLOUT`, matches the token, user context, and routed target,
-then resubmits that packet. A repeated backpressure result arms the new token
-and repeats the same state transition. After REQUEST admission, its future
-waits for the existing REQUEST reply or terminal completion. Without a public
-poller the socket's completion queue is drained by one binding reactor thread
-per socket that blocks in a native poller on `POLLCOMPLETION`, starts with the
-first wait token or REQUEST, and retires when no operation is outstanding;
-parked futures are woken by that thread, never by executor re-polling.
+form. They return a submission with the initial `result` snapshot and an
+`admitted` stage; REQUEST also returns a separate `reply` stage. Under
+backpressure the admission stage retains the exact multipart packet, pulls
+completion records through NO_DATA after `POLLOUT`, matches the token, user
+context, and routed target, then resubmits that packet. A repeated backpressure
+result arms the new token and repeats the same state transition. After REQUEST
+admission, its reply stage waits for the existing REQUEST reply or terminal
+completion. Without a public poller the socket's completion queue is drained by
+one binding reactor thread per socket that blocks in a native poller on
+`POLLCOMPLETION`, starts with the first wait token or REQUEST, and retires when
+no operation is outstanding; parked stages are woken by that thread, never by
+executor re-polling.
 
 Registering a socket with a public `Poller` for `POLLCOMPLETION` transfers
 completion-queue ownership to that poller. Include `POLLOUT` in the mask and
 keep calling `Poller::wait()` while it drives backpressured SEND or REQUEST
-futures.
+admission stages.
 Register a `SocketMonitor` with `Poller::add_monitor`; monitors accept only `POLLIN` and are drained with `recv_with_flags(RecvFlags::DONT_WAIT)` after readiness.
 REQUEST admission can use the same WRITABLE path. A successful REQUEST FINAL
 reserves a different nonzero completion ID and then completes with its reply or

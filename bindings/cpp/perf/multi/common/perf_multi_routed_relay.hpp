@@ -63,13 +63,23 @@ inline perf::detached_async_task_t send_routed_replies_async (
         std::vector<zlink::message_t> &parts = received.parts ();
         try {
             if (parts.size () == 2) {
-                co_await server.send (*received.routing_id ()).message (parts[0])
+                zlink::send_submission_t submission =
+                  server.send (*received.routing_id ()).message (parts[0])
                   .message (parts[1])
                   .async ();
+                if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
+                    co_await std::move (submission.admitted);
+                else if (submission.result != ZLINK_SUBMIT_OK)
+                    throw std::logic_error ("unexpected send submit result");
             } else if (parts.size () == 1) {
-                co_await server.send (*received.routing_id ())
+                zlink::send_submission_t submission =
+                  server.send (*received.routing_id ())
                   .message (parts[0])
                   .async ();
+                if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
+                    co_await std::move (submission.admitted);
+                else if (submission.result != ZLINK_SUBMIT_OK)
+                    throw std::logic_error ("unexpected send submit result");
             } else {
                 state.error.store (EPROTO, std::memory_order_release);
                 state.failed.store (true, std::memory_order_release);

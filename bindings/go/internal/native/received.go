@@ -25,7 +25,7 @@ type Received struct {
 	nativeParts []C.zlink_msg_t
 	token       ReplyToken
 	reply       func([]*Message) error
-	send        func(context.Context, []sendBuilderPart) error
+	send        func(context.Context, []sendBuilderPart) (SendSubmission, error)
 }
 
 func (r *Received) RoutingID() RoutingID {
@@ -69,7 +69,7 @@ func (r *Received) replace(
 	parts []*Message,
 	token ReplyToken,
 	reply func([]*Message) error,
-	send func(context.Context, []sendBuilderPart) error,
+	send func(context.Context, []sendBuilderPart) (SendSubmission, error),
 ) {
 	r.routingID = routingID
 	r.parts = parts
@@ -130,14 +130,14 @@ func (r *Received) Reply() ReplyOp {
 // the sender of this Received. The source routing ID is encapsulated.
 func (r *Received) Send() SendOp {
 	if r == nil {
-		return newSendBuilder(func(context.Context, []sendBuilderPart) error {
-			return &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return newSendBuilder(func(context.Context, []sendBuilderPart) (SendSubmission, error) {
+			return nil, &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
 		})
 	}
 	send := r.send
-	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
+	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) (SendSubmission, error) {
 		if send == nil {
-			return &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
+			return nil, &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
 		}
 		return send(ctx, parts)
 	})

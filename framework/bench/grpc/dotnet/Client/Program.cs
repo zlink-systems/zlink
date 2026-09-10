@@ -594,10 +594,9 @@ internal sealed class RawBenchTransport : IBenchTransport
         {
             header = Message.From(RawEnvelopeHeaders.Request);
             body = EncodeRawPayload(payload);
-            parts = await request!.Request()
-                .Message(header)
-                .Message(body)
-                .Async(cancellationToken);
+            RequestSubmission submission = await request!.SubmitRequestAsync(
+                header, body, cancellationToken);
+            parts = await submission.Reply;
             if (parts.Count == 0) throw new InvalidOperationException("Raw request returned no reply parts.");
             return RawWire.Decode(parts.Count == 1 ? parts[0].AsReadOnlySpan() : parts[^1].AsReadOnlySpan());
         }
@@ -617,10 +616,8 @@ internal sealed class RawBenchTransport : IBenchTransport
         {
             header = Message.From(RawEnvelopeHeaders.Request);
             body = EncodeRawPayload(payload);
-            await commands[stream % commands.Length].Send()
-                .Message(header)
-                .Message(body)
-                .Async(cancellationToken);
+            await commands[stream % commands.Length].SubmitSendAsync(
+                header, body, cancellationToken);
         }
         finally
         {
@@ -658,6 +655,7 @@ internal sealed class RawBenchSocket : IDisposable
     private readonly IDealerSocket? dealer;
     private readonly IRouterSocket? router;
     private readonly RoutingId peer;
+    private readonly SemaphoreSlim submissionGate = new(1, 1);
 
     private RawBenchSocket(IDealerSocket? dealer, IRouterSocket? router, RoutingId peer)
     {
@@ -688,10 +686,47 @@ internal sealed class RawBenchSocket : IDisposable
 
     public RequestOperation Request() => router is null ? dealer!.Request() : router.Request(peer);
     public SendOperation Send() => router is null ? dealer!.Send() : router.Send(peer);
+
+    public async ValueTask<RequestSubmission> SubmitRequestAsync(
+        Message header, Message body, CancellationToken cancellationToken)
+    {
+        await submissionGate.WaitAsync(cancellationToken);
+        try
+        {
+            RequestSubmission submission = Request().Message(header)
+                .Message(body).Async(cancellationToken);
+            if (submission.Result == SubmitResult.Backpressured)
+                await submission.Admitted;
+            return submission;
+        }
+        finally
+        {
+            submissionGate.Release();
+        }
+    }
+
+    public async ValueTask SubmitSendAsync(Message header, Message body,
+        CancellationToken cancellationToken)
+    {
+        await submissionGate.WaitAsync(cancellationToken);
+        try
+        {
+            SendSubmission submission = Send().Message(header).Message(body)
+                .Async(cancellationToken);
+            if (submission.Result == SubmitResult.Backpressured)
+                await submission.Admitted;
+        }
+        finally
+        {
+            submissionGate.Release();
+        }
+    }
+
     public void Dispose()
     {
         dealer?.Dispose();
         router?.Dispose();
+        submissionGate.Dispose();
     }
 }
 

@@ -54,7 +54,7 @@ public class SocketPollingContractTest {
 
             Received first = new Received();
             try (Message outbound = Message.from("first")) {
-                client.send().message(outbound).submit()
+                client.send().message(outbound).submit().admitted()
                     .toCompletableFuture().join();
             }
             assertTrue(server.recv(first, RecvFlags.NONE));
@@ -63,7 +63,7 @@ public class SocketPollingContractTest {
             first.close();
 
             try (Message outbound = Message.from("second")) {
-                client.send().message(outbound).submit()
+                client.send().message(outbound).submit().admitted()
                     .toCompletableFuture().join();
             }
             assertTrue(server.recv(second, RecvFlags.NONE));
@@ -72,7 +72,7 @@ public class SocketPollingContractTest {
             assertEquals("second", retained.toUtf8String());
 
             try (Message outbound = Message.from("third")) {
-                client.send().message(outbound).submit()
+                client.send().message(outbound).submit().admitted()
                     .toCompletableFuture().join();
             }
             assertTrue(server.recv(third, RecvFlags.NONE));
@@ -81,7 +81,7 @@ public class SocketPollingContractTest {
             assertEquals("third", third.singlePartOrThrow().toUtf8String());
 
             try (Message outbound = Message.from("fourth")) {
-                client.send().message(outbound).submit()
+                client.send().message(outbound).submit().admitted()
                     .toCompletableFuture().join();
             }
             assertTrue(server.recv(fourth, RecvFlags.NONE));
@@ -89,7 +89,7 @@ public class SocketPollingContractTest {
             directlyClosed.close();
 
             try (Message outbound = Message.from("fifth")) {
-                client.send().message(outbound).submit()
+                client.send().message(outbound).submit().admitted()
                     .toCompletableFuture().join();
             }
             assertTrue(server.recv(fifth, RecvFlags.NONE));
@@ -113,7 +113,7 @@ public class SocketPollingContractTest {
             poller.add(server, 7L, PollEventFlags.POLLIN);
 
             try (Message outbound = Message.from("poller")) {
-                client.send().message(outbound).submit()
+                client.send().message(outbound).submit().admitted()
                     .toCompletableFuture().join();
             }
 
@@ -147,7 +147,7 @@ public class SocketPollingContractTest {
             poller.add(server, 8L, PollEventFlags.POLLIN);
 
             try (Message outbound = Message.from("router-poller")) {
-                client.send().message(outbound).submit()
+                client.send().message(outbound).submit().admitted()
                     .toCompletableFuture().join();
             }
 
@@ -186,7 +186,7 @@ public class SocketPollingContractTest {
                 client.request()
                     .message(request)
                     .timeout(Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS))
-                    .submit()
+                    .submit().reply()
                     .whenComplete((received, error) -> {
                         try {
                             if (error != null)
@@ -326,9 +326,9 @@ public class SocketPollingContractTest {
 
             try (Message a = Message.from("a");
                  Message b = Message.from("b")) {
-                sender1.send().message(a).submit()
+                sender1.send().message(a).submit().admitted()
                     .toCompletableFuture().join();
-                sender2.send().message(b).submit()
+                sender2.send().message(b).submit().admitted()
                     .toCompletableFuture().join();
             }
 
@@ -370,7 +370,7 @@ public class SocketPollingContractTest {
             poller.modify(receiver);
 
             try (Message hidden = Message.from("hidden")) {
-                sender.send().message(hidden).submit()
+                sender.send().message(hidden).submit().admitted()
                     .toCompletableFuture().join();
             }
 
@@ -385,7 +385,7 @@ public class SocketPollingContractTest {
 
             assertTrue(poller.remove(receiver));
             try (Message removed = Message.from("removed")) {
-                sender.send().message(removed).submit()
+                sender.send().message(removed).submit().admitted()
                     .toCompletableFuture().join();
             }
             assertEquals(0, poller.wait(events, Duration.ZERO));
@@ -408,7 +408,7 @@ public class SocketPollingContractTest {
             poller.add(timer, 42L);
 
             try (Message socket = Message.from("socket")) {
-                sender.send().message(socket).submit()
+                sender.send().message(socket).submit().admitted()
                     .toCompletableFuture().join();
             }
             timer.start(Duration.ofMillis(5), 1L);

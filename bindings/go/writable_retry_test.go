@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -56,8 +55,12 @@ func TestPublicSendRetriesExactPacketAfterWritable(t *testing.T) {
 
 	// This blocking exchange is the route-adoption barrier; no scheduling
 	// delay is needed before the routed send.
-	if err := dealer.Send().Bytes([]byte("route-prime")).Submit(context.Background()); err != nil {
+	primeSubmission, err := dealer.Send().Bytes([]byte("route-prime")).Submit(context.Background())
+	if err != nil {
 		t.Fatalf("dealer prime Submit() error = %v", err)
+	}
+	if err := primeSubmission.Admitted(context.Background()); err != nil {
+		t.Fatalf("dealer prime Admitted() error = %v", err)
 	}
 	var prime zlink.Received
 	if ok, err := router.Recv(&prime, zlink.RecvFlagsNone); err != nil || !ok {
@@ -69,8 +72,12 @@ func TestPublicSendRetriesExactPacketAfterWritable(t *testing.T) {
 	_ = prime.Close()
 
 	filler := bytes.Repeat([]byte{'f'}, 64)
-	if err := router.SendTo(dealerRID).Bytes(filler).Submit(context.Background()); err != nil {
+	fillerSubmission, err := router.SendTo(dealerRID).Bytes(filler).Submit(context.Background())
+	if err != nil {
 		t.Fatalf("HWM filler Submit() error = %v", err)
+	}
+	if err := fillerSubmission.Admitted(context.Background()); err != nil {
+		t.Fatalf("HWM filler Admitted() error = %v", err)
 	}
 
 	poller, err := zlink.NewPoller()
@@ -84,14 +91,18 @@ func TestPublicSendRetriesExactPacketAfterWritable(t *testing.T) {
 	}
 
 	retryPayload := bytes.Repeat([]byte{'r'}, 64)
-	started := make(chan struct{})
-	sendDone := make(chan error, 1)
-	go func() {
-		close(started)
-		sendDone <- router.SendTo(dealerRID).Bytes(retryPayload).Submit(context.Background())
-	}()
-	<-started
-	assertSendRemainsBackpressured(t, sendDone)
+	retrySubmission, err := router.SendTo(dealerRID).Bytes(retryPayload).Submit(context.Background())
+	if err != nil {
+		t.Fatalf("backpressured Submit() error = %v", err)
+	}
+	if retrySubmission.Result() != zlink.SubmitBackpressured {
+		t.Fatalf("backpressured Submit() result = %v", retrySubmission.Result())
+	}
+	pendingCtx, cancelPending := context.WithCancel(context.Background())
+	cancelPending()
+	if err := retrySubmission.Admitted(pendingCtx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Admitted() before peer drain error = %v, want context.Canceled", err)
+	}
 
 	events := make([]zlink.PollEvent, 1)
 	if n, err := poller.Wait(events, 0); err != nil || n != 0 {
@@ -110,8 +121,8 @@ func TestPublicSendRetriesExactPacketAfterWritable(t *testing.T) {
 		t.Fatalf("WRITABLE retry leaked as a successful-SEND completion: %+v", events[0])
 	}
 
-	if err, ok := awaitSendResult(sendDone); !ok || err != nil {
-		t.Fatalf("retried Submit() result = (%v, %v), want (nil, true)", err, ok)
+	if err := retrySubmission.Admitted(context.Background()); err != nil {
+		t.Fatalf("retried Admitted() error = %v", err)
 	}
 	assertReceivedPayload(t, dealer, retryPayload)
 	var duplicate zlink.Received
@@ -155,66 +166,47 @@ func TestPublicBackpressuredSendReportsRouteRemoval(t *testing.T) {
 	if err := dealer.Connect(endpoint); err != nil {
 		t.Fatalf("dealer Connect() error = %v", err)
 	}
-	if err := dealer.Send().Bytes([]byte("route-prime")).Submit(context.Background()); err != nil {
+	primeSubmission, err := dealer.Send().Bytes([]byte("route-prime")).Submit(context.Background())
+	if err != nil {
 		t.Fatalf("dealer prime Submit() error = %v", err)
+	}
+	if err := primeSubmission.Admitted(context.Background()); err != nil {
+		t.Fatalf("dealer prime Admitted() error = %v", err)
 	}
 	var prime zlink.Received
 	if ok, err := router.Recv(&prime, zlink.RecvFlagsNone); err != nil || !ok {
 		t.Fatalf("router prime Recv() = (%v, %v), want (true, nil)", ok, err)
 	}
 	_ = prime.Close()
-	if err := router.SendTo(dealerRID).Bytes(bytes.Repeat([]byte{'f'}, 64)).Submit(context.Background()); err != nil {
+	fillerSubmission, err := router.SendTo(dealerRID).Bytes(bytes.Repeat([]byte{'f'}, 64)).Submit(context.Background())
+	if err != nil {
 		t.Fatalf("HWM filler Submit() error = %v", err)
 	}
+	if err := fillerSubmission.Admitted(context.Background()); err != nil {
+		t.Fatalf("HWM filler Admitted() error = %v", err)
+	}
 
-	sendDone := make(chan error, 1)
-	started := make(chan struct{})
-	go func() {
-		close(started)
-		sendDone <- router.SendTo(dealerRID).Bytes([]byte("must-not-send")).Submit(context.Background())
-	}()
-	<-started
-	assertSendRemainsBackpressured(t, sendDone)
+	retrySubmission, err := router.SendTo(dealerRID).Bytes([]byte("must-not-send")).Submit(context.Background())
+	if err != nil {
+		t.Fatalf("backpressured Submit() error = %v", err)
+	}
+	if retrySubmission.Result() != zlink.SubmitBackpressured {
+		t.Fatalf("backpressured Submit() result = %v", retrySubmission.Result())
+	}
 	if err := router.DisconnectRID(dealerRID); err != nil {
 		t.Fatalf("DisconnectRID() error = %v", err)
 	}
 
-	select {
-	case err := <-sendDone:
-		var submitErr *zlink.SubmitError
-		if !errors.As(err, &submitErr) || submitErr.Result != zlink.SubmitNotFound {
-			t.Fatalf("terminal send error = %v, want SubmitNotFound", err)
-		}
-		if !errors.Is(err, syscall.ENOENT) {
-			t.Fatalf("terminal send error = %v, want ENOENT", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("backpressured send remained blocked after route removal")
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelWait()
+	err = retrySubmission.Admitted(waitCtx)
+	var submitErr *zlink.SubmitError
+	if !errors.As(err, &submitErr) || submitErr.Result != zlink.SubmitNotFound {
+		t.Fatalf("terminal send error = %v, want SubmitNotFound", err)
 	}
-}
-
-func assertSendRemainsBackpressured(t testing.TB, done <-chan error) {
-	t.Helper()
-	for attempt := 0; attempt < 100_000; attempt++ {
-		select {
-		case err := <-done:
-			t.Fatalf("backpressured Submit() completed before peer drain: %v", err)
-		default:
-			runtime.Gosched()
-		}
+	if !errors.Is(err, syscall.ENOENT) {
+		t.Fatalf("terminal send error = %v, want ENOENT", err)
 	}
-}
-
-func awaitSendResult(done <-chan error) (error, bool) {
-	for attempt := 0; attempt < 100_000; attempt++ {
-		select {
-		case err := <-done:
-			return err, true
-		default:
-			runtime.Gosched()
-		}
-	}
-	return nil, false
 }
 
 func assertReceivedPayload(t testing.TB, socket *zlink.DealerSocket, want []byte) {

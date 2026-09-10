@@ -156,7 +156,7 @@ void test_async_request_public_poller_progress_and_owner_transfer ()
     assert (event.slot == 17);
     assert ((static_cast<short> (event.revents)
              & static_cast<short> (zlink::poll_event_flag_t::pollcompletion)) != 0);
-    auto reply = await_reply (std::move (result)).get ();
+    auto reply = await_reply (std::move (result.reply)).get ();
     assert (reply.size () == 1 && reply[0].to_string () == "async-reply");
     responder.join ();
 
@@ -281,7 +281,7 @@ void test_runtime_continuation_can_close_socket ()
     zlink::message_t request = zlink_cpp_contract::make_message ("close-request");
     close_task_t task = close_from_runtime_continuation (
       dealer, dealer.request ().message (request)
-                .timeout (std::chrono::seconds (2)).async ());
+                .timeout (std::chrono::seconds (2)).async ().reply);
     task.get ();
     responder.join ();
     assert (!dealer.valid ());

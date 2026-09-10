@@ -55,7 +55,8 @@ final class CompletionOwnershipContractTest {
             assertThrows(IllegalStateException.class, () ->
                 sender.submitSend(null, List.of(first, closed)));
             assertEquals("first", first.toUtf8String());
-            sender.submitSend(null, List.of(first)).toCompletableFuture().get(
+            sender.submitSend(null, List.of(first)).admitted()
+                .toCompletableFuture().get(
                 TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
         }
     }
@@ -73,7 +74,7 @@ final class CompletionOwnershipContractTest {
             router.bind(endpoint);
             dealer.connect(endpoint);
             var stage = dealer.request().message(Message.from("timeout"))
-                .timeout(Duration.ofMillis(20)).submit().toCompletableFuture();
+                .timeout(Duration.ofMillis(20)).submit().reply().toCompletableFuture();
             router.recv(request, RecvFlags.NONE);
             assertFalse(stage.isDone());
             stage.cancel(false);

@@ -227,45 +227,30 @@ func runMultiDealerDealerSendWindow(clients []dealerDealerClient, cfg multiConfi
 		return
 	}
 
-	// Match the C round: submit at most once per available socket, then service
-	// WRITABLE before the next round. The binding retains and resubmits the exact
-	// packet while a socket's public terminal remains pending.
-	poller, err := zlink.NewPoller()
-	perfcommon.Must(err)
-	defer poller.Close()
-	events := make([]zlink.PollEvent, len(clients))
-	for index := range clients {
-		perfcommon.Must(poller.AddSocket(clients[index].socket, zlink.PollCompletion, uintptr(index)))
-	}
-
-	submit := func(index int) error {
+	submit := func(index int) (zlink.SendSubmission, error) {
 		client := clients[index]
 		var sendErr error
+		var submission zlink.SendSubmission
 		if perfcommon.MeasurementPartCount() == 2 {
 			message := perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt)
-			sendErr = perfcommon.SubmitMeasurementSend(client.socket.Send(), message)
+			submission, sendErr = perfcommon.SubmitMeasurementSendSubmission(context.Background(), client.socket.Send(), message)
 		} else {
 			_, sendErr = perfcommon.SubmitRoutedWindowPayload(cfg.msgSize, window.ActiveAt, func(message *zlink.Message) error {
 				if !useMultiDealerDealerMoveMessage(cfg.transport, cfg.msgSize) {
-					return client.socket.Send().Message(message).Submit(context.Background())
+					submission, sendErr = client.socket.Send().Message(message).Submit(context.Background())
+					return sendErr
 				}
-				return client.socket.Send().MoveMessage(message).Submit(context.Background())
+				submission, sendErr = client.socket.Send().MoveMessage(message).Submit(context.Background())
+				return sendErr
 			})
 		}
 		if sendErr != nil {
-			return fmt.Errorf("multi dealer/dealer client send: %w", sendErr)
+			return nil, fmt.Errorf("multi dealer/dealer client send: %w", sendErr)
 		}
-		return nil
-	}
-	progress := func(wait time.Duration) error {
-		_, waitErr := poller.Wait(events, wait)
-		if waitErr != nil && !perfcommon.IsTransient(waitErr) {
-			return fmt.Errorf("multi dealer/dealer client poll: %w", waitErr)
-		}
-		return nil
+		return submission, nil
 	}
 	perfcommon.Must(runMultiSendTurns(
-		len(clients), window, "multi dealer/dealer", submit, progress, nil, nil))
+		len(clients), window, "multi dealer/dealer", submit, nil, nil, nil))
 }
 
 func useMultiDealerDealerMoveMessage(transport string, msgSize int) bool {
@@ -288,7 +273,7 @@ func useMultiDealerDealerMoveMessage(transport string, msgSize int) bool {
 func sendMultiDealerStopToken(socket *zlink.DealerSocket) {
 	for attempt := 0; attempt < perfcommon.StopTokenSendAttempts; attempt++ {
 		sent, err := perfcommon.SubmitRoutedPayload(perfcommon.StopToken, func(message *zlink.Message) error {
-			return socket.Send().MoveMessage(message).Submit(context.Background())
+			return perfcommon.SubmitSend(context.Background(), socket.Send().MoveMessage(message))
 		})
 		if err == nil && sent {
 			return

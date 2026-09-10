@@ -57,7 +57,7 @@ func TestManagedSendRetriesExactPacketAfterWritable(t *testing.T) {
 	}
 
 	// The blocking prime synchronizes route adoption without a sleep.
-	if err := dealer.Send().Bytes([]byte("route-prime")).Submit(context.Background()); err != nil {
+	if err := submitNativeSend(context.Background(), dealer.Send().Bytes([]byte("route-prime"))); err != nil {
 		t.Fatalf("dealer prime Submit() error = %v", err)
 	}
 	var prime Received
@@ -70,7 +70,7 @@ func TestManagedSendRetriesExactPacketAfterWritable(t *testing.T) {
 	_ = prime.Close()
 
 	filler := bytes.Repeat([]byte{'f'}, 64)
-	if err := router.SendTo(dealerRID).Bytes(filler).Submit(context.Background()); err != nil {
+	if err := submitNativeSend(context.Background(), router.SendTo(dealerRID).Bytes(filler)); err != nil {
 		t.Fatalf("HWM filler Submit() error = %v", err)
 	}
 
@@ -87,7 +87,7 @@ func TestManagedSendRetriesExactPacketAfterWritable(t *testing.T) {
 	retryPayload := bytes.Repeat([]byte{'r'}, 64)
 	sendDone := make(chan error, 1)
 	go func() {
-		sendDone <- router.SendTo(dealerRID).Bytes(retryPayload).Submit(context.Background())
+		sendDone <- submitNativeSend(context.Background(), router.SendTo(dealerRID).Bytes(retryPayload))
 	}()
 
 	entry, waitToken := waitForManagedSendToken(t, router.socketCore.completion)

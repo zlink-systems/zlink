@@ -65,6 +65,81 @@ TEST (ZLinkStateLane, RunReturnsTheResultOfTheWork)
     EXPECT_EQ (42, lane.run ([] { return 42; }).get ());
 }
 
+TEST (ZLinkStateLane, AnAvailableLaneDoesNotWaitForUnrelatedExecutorWork)
+{
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    executor.submit ([&] {
+        entered.set_value ();
+        released.wait ();
+    });
+    entered.get_future ().wait ();
+
+    auto result = lane.run ([&] {
+        EXPECT_TRUE (lane.is_on_lane ());
+        return 42;
+    });
+    const auto ready = result.wait_for (std::chrono::milliseconds::zero ());
+    release.set_value ();
+
+    EXPECT_EQ (std::future_status::ready, ready);
+    EXPECT_EQ (42, result.get ());
+    EXPECT_EQ (nullptr, state_lane_t::current ());
+}
+
+TEST (ZLinkStateLane, ConcurrentSubmissionsKeepTheirPlaceBehindTheCurrentTurn)
+{
+    offload_executor_t executor (2);
+    state_lane_t lane (executor);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    std::vector<int> order;
+    std::thread owner ([&] {
+        lane.run ([&] {
+            entered.set_value ();
+            released.wait ();
+            order.push_back (0);
+        }).get ();
+    });
+    entered.get_future ().wait ();
+    auto second = lane.run ([&] { order.push_back (1); });
+    auto third = lane.run ([&] { order.push_back (2); });
+    release.set_value ();
+    second.get ();
+    third.get ();
+    owner.join ();
+
+    EXPECT_EQ ((std::vector<int>{0, 1, 2}), order);
+    EXPECT_EQ (nullptr, state_lane_t::current ());
+}
+
+TEST (ZLinkStateLane, TryPostKeepsItsNoWaitExecutionContract)
+{
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    executor.submit ([&] {
+        entered.set_value ();
+        released.wait ();
+    });
+    entered.get_future ().wait ();
+    std::atomic_bool called = false;
+
+    EXPECT_TRUE (lane.try_post ([&] { called = true; }));
+    const auto called_before_release = called.load ();
+    release.set_value ();
+    lane.close ();
+
+    EXPECT_FALSE (called_before_release);
+    EXPECT_TRUE (called.load ());
+}
+
 TEST (ZLinkStateLane, RunTransfersAMoveConstructibleNonAssignableSnapshot)
 {
     offload_executor_t executor (2);
@@ -224,6 +299,35 @@ TEST (ZLinkStateLane, CloseWaitsForQueuedWork)
     lane.close ();
 
     EXPECT_EQ (200, completed);
+}
+
+TEST (ZLinkStateLane, CloseRejectsNewWorkWhileDrainingAcceptedTurns)
+{
+    offload_executor_t executor (2);
+    state_lane_t lane (executor);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    std::vector<int> order;
+    std::thread owner ([&] {
+        lane.run ([&] {
+            entered.set_value ();
+            released.wait ();
+            order.push_back (0);
+        }).get ();
+    });
+    entered.get_future ().wait ();
+    EXPECT_TRUE (lane.try_post ([&] { order.push_back (1); }));
+    std::thread closer ([&] { lane.close (); });
+    while (!lane.closed ()) {
+        std::this_thread::yield ();
+    }
+    EXPECT_FALSE (lane.try_post ([&] { order.push_back (2); }));
+    release.set_value ();
+    owner.join ();
+    closer.join ();
+
+    EXPECT_EQ ((std::vector<int>{0, 1}), order);
 }
 
 TEST (ZLinkStateLane, RunAfterCloseThrows)

@@ -5588,7 +5588,7 @@ void verify_unadmitted_request_is_rejected_without_framework_queue ()
     auto request = std::move (
       source.request ().message (header).message (body))
                      .timeout (5s)
-                     .async ();
+                     .async ().reply;
 
     mesh::raw_mesh_pump_result_t pumped =
       mesh::raw_mesh_pump_result_t::no_data;

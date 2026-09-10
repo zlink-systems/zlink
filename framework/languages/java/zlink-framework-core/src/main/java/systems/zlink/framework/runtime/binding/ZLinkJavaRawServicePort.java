@@ -114,7 +114,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             }
             CompletionStage<Void> completion;
             try {
-                completion = submit.submit();
+                completion = submit.submit().admitted();
             } catch (RuntimeException failure) {
                 completion = CompletableFuture.failedFuture(failure);
             }
@@ -216,6 +216,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             }
             CompletionStage<T> completion = submit.timeout(timeout)
                 .submit()
+                .reply()
                 .thenApply(reply -> {
                     try {
                         return decodeReply.apply(reply);

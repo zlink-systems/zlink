@@ -6827,8 +6827,8 @@ function createFakeStream(
         pending.push(Buffer.from(part));
         return submit;
       },
-      async submit() {
-        await submitPending();
+      submit() {
+        return { result: SubmitResult.Backpressured, admitted: submitPending() };
       },
       submit_sync() {
         throw new Error('bound-session delivery must use the binding async terminal');

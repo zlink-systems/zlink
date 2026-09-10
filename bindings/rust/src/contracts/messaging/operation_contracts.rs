@@ -1,8 +1,9 @@
 /// Legacy one-shot send classification retained for source compatibility.
 ///
-/// Current SEND builders return `Result<(), SubmitError>`: managed
-/// [`SendOp::submit`](crate::SendOp::submit) retries after WRITABLE, while
-/// terminal failures use [`SubmitResult`](crate::SubmitResult).
+/// Current SEND builders expose [`SubmitResult`](crate::SubmitResult) through
+/// [`SendSubmission`](crate::SendSubmission): managed
+/// [`SendOp::submit`](crate::SendOp::submit) retries after WRITABLE through its
+/// admission stage, while terminal failures remain [`SubmitError`](crate::SubmitError).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendResult {
     /// The message was queued for sending.

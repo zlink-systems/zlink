@@ -12,6 +12,11 @@ internal Java `Class<TReply>` when building the wrapper. The application
 doesn't pass the reply type again at the terminal, or write
 `.submit().await()`.
 
+The synchronous blocking terminator adds no Kotlin-specific wrapper and exposes the Java surface's
+`submit_sync()` as is. A blocking call is not a suspend, so it is not wrapped in `await()`; it is for
+application threads and fails with `InvalidOperation` when called from a runtime execution context
+([Submit And Completion §4 F2-a](../../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary)).
+
 The Kotlin filter uses the same applicable scope as the Java runtime.
 It's applied to RouteMesh/ClientServer Channel send/request, Node direct
 send/request, and classic fanout subscription handlers, and isn't

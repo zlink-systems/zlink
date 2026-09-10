@@ -56,16 +56,17 @@ for (const [platform, again, deadlock] of [['linux', 11, 35], ['darwin', 35, 11]
                     socketCompletionRecv: () => queue.shift() ?? null,
                 };
                 try {
-                    const pending = kind === 'send'
+                    const submission = kind === 'send'
                         ? owner.submitSend(Buffer.from('retained'), null)
                         : owner.submitRequest(Buffer.from('retained'), null, 1000);
+                    strict_1.default.equal(submission.result, SubmitResult.Backpressured);
                     strict_1.default.equal(owner.hasManagedWritableWait(), true);
                     owner.drain(publicOwner);
                     strict_1.default.equal(owner.hasManagedWritableWait(), true, 'second refusal keeps the replacement token');
                     owner.drain(publicOwner);
                     if (kind === 'request')
                         owner.drain(publicOwner);
-                    await pending;
+                    await (kind === 'send' ? submission.admitted : submission.reply);
                     strict_1.default.equal(calls, 3);
                     strict_1.default.equal(owner.hasManagedWritableWait(), false);
                     // A real missing token must still fail; platform handling must not
@@ -73,7 +74,7 @@ for (const [platform, again, deadlock] of [['linux', 11, 35], ['darwin', 35, 11]
                     owner.native.socketSubmitSend = owner.native.socketSubmitRequest = () => ({
                         result: SubmitResult.Backpressured, nativeErrno: again, completionId: 0n,
                     });
-                    await strict_1.default.rejects(kind === 'send'
+                    strict_1.default.throws(() => kind === 'send'
                         ? owner.submitSend(Buffer.from('invalid'), null)
                         : owner.submitRequest(Buffer.from('invalid'), null, 1000), { result: SubmitResult.Backpressured, nativeErrno: again });
                 }

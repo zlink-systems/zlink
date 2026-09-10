@@ -53,7 +53,9 @@ final class ZLinkJavaSocketSupport {
         for (int i = 1; i < parts.size(); i++) {
             submit.message(parts.get(i));
         }
-        return submit.submit();
+        // submit()은 이제 스냅샷을 담은 SendSubmission을 돌려준다. 이전 계약은
+        // admission에서 완료되는 stage였으므로 admitted()가 같은 의미다.
+        return submit.submit().admitted();
     }
 
     static boolean submitSync(
@@ -94,7 +96,7 @@ final class ZLinkJavaSocketSupport {
         for (int i = 1; i < parts.size(); i++) {
             submit.message(parts.get(i));
         }
-        return submit.submit().thenApply(replyParts -> {
+        return submit.submit().reply().thenApply(replyParts -> {
             try {
                 return new ZLinkBackendReceived(
                 ZLinkBackendRequestResult.OK,

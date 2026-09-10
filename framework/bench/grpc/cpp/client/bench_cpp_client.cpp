@@ -24,6 +24,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -463,12 +464,6 @@ class zlink_raw_driver_t : public driver_t
             run_slots (deadline, payload_size, phase, counters, latency, _window);
     }
 
-    // The cooperative-yield variant of request-backpressure. The public async
-    // request terminal absorbs admission backpressure instead of returning it,
-    // so nothing here can submit "until refused". What it does instead is
-    // submit continuously and hand control to the completion pump after every
-    // submission, so depth settles where the submission and completion rates
-    // balance rather than at a number this harness chose.
     void run_unbounded (clock_t_::time_point deadline,
                         size_t payload_size,
                         phase_t phase,
@@ -481,33 +476,26 @@ class zlink_raw_driver_t : public driver_t
         _counters = &counters;
         _latency = latency;
 
-        std::vector<task_t> live;
+        std::vector<task_t> replies;
+        task_t submitter = request_submitter (replies);
         const auto hard_stop = deadline + std::chrono::milliseconds (_options.drain_bound_ms);
         std::vector<zlink::poll_event_t> events (4);
         for (;;) {
             const auto now = clock_t_::now ();
             close_window (deadline);
-            if (now < deadline)
-                live.push_back (request_once (_seq++));
-
-            // Run every continuation that is ready, then drop the finished
-            // tasks so an uncapped run does not grow this vector without bound.
             const size_t resumed = _ready.run_ready_round ();
-            live.erase (std::remove_if (live.begin (), live.end (),
-                                        [] (const task_t &t) { return t.done (); }),
-                        live.end ());
+            replies.erase (std::remove_if (replies.begin (), replies.end (),
+                                           [] (const task_t &t) { return t.done (); }),
+                           replies.end ());
 
-            if (now >= deadline && live.empty ())
+            if (submitter.done () && replies.empty ())
                 break;
             if (now >= hard_stop)
                 break;
 
-            // Never block while submission is still possible; that would cap
-            // the submission rate at one per timeout and impose a ceiling by
-            // the back door.
             const std::chrono::milliseconds wait =
-              (now < deadline || resumed != 0) ? std::chrono::milliseconds (0)
-                                               : std::chrono::milliseconds (1);
+              resumed != 0 ? std::chrono::milliseconds (0)
+                           : std::chrono::milliseconds (1);
             _poller.wait (events.data (), events.size (), wait);
         }
 
@@ -600,12 +588,18 @@ class zlink_raw_driver_t : public driver_t
             _counters->enter ();
             _counters->submitted.fetch_add (1, std::memory_order_relaxed);
             try {
-                std::vector<zlink::message_t> reply =
-                  co_await request_operation ()
+                zlink::request_submission_t submission =
+                  request_operation ()
                     .message (parts.first)
                     .message (parts.second)
                     .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
                     .async ();
+                if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
+                    co_await std::move (submission.admitted);
+                else if (submission.result != ZLINK_SUBMIT_OK)
+                    throw std::logic_error ("unexpected request submit result");
+                std::vector<zlink::message_t> reply =
+                  co_await std::move (submission.reply);
                 _counters->leave ();
                 record_reply (reply, seq);
             }
@@ -617,21 +611,13 @@ class zlink_raw_driver_t : public driver_t
         }
     }
 
-    // One request, then the coroutine finishes. request_slot loops forever and
-    // so is a fixed slot; this is what an uncapped submitter spawns.
-    task_t request_once (uint64_t seq)
+    task_t observe_request_reply (zlink::async_result_t<std::vector<zlink::message_t>> reply_,
+                                  uint64_t seq)
     {
         co_await _ready.schedule ();
-        auto parts = make_parts (_payload_size, _phase, seq);
-        _counters->enter ();
-        _counters->submitted.fetch_add (1, std::memory_order_relaxed);
         try {
             std::vector<zlink::message_t> reply =
-              co_await request_operation ()
-                .message (parts.first)
-                .message (parts.second)
-                .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
-                .async ();
+              co_await std::move (reply_);
             _counters->leave ();
             record_reply (reply, seq);
         }
@@ -639,6 +625,52 @@ class zlink_raw_driver_t : public driver_t
                 if (_counters->errors.load () == 0) std::fprintf (stderr, "raw operation failed: %s\n", error.what ());
             _counters->leave ();
             _counters->errors.fetch_add (1, std::memory_order_relaxed);
+        }
+    }
+
+    task_t request_submitter (std::vector<task_t> &replies)
+    {
+        co_await _ready.schedule ();
+        size_t submitted_since_progress = 0;
+        while (clock_t_::now () < _deadline) {
+            const uint64_t seq = _seq++;
+            auto parts = make_parts (_payload_size, _phase, seq);
+            _counters->enter ();
+            _counters->submitted.fetch_add (1, std::memory_order_relaxed);
+            try {
+                zlink::request_submission_t submission =
+                  request_operation ()
+                    .message (parts.first)
+                    .message (parts.second)
+                    .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
+                    .async ();
+                const bool backpressured =
+                  submission.result == ZLINK_SUBMIT_BACKPRESSURED;
+                if (submission.result != ZLINK_SUBMIT_OK && !backpressured)
+                    throw std::logic_error ("unexpected request submit result");
+                replies.push_back (
+                  observe_request_reply (std::move (submission.reply), seq));
+                if (backpressured) {
+                    try {
+                        co_await std::move (submission.admitted);
+                    }
+                    catch (...) {
+                        co_return;
+                    }
+                }
+            }
+            catch (const std::exception &error) {
+                if (_counters->errors.load () == 0)
+                    std::fprintf (stderr, "raw operation failed: %s\n", error.what ());
+                _counters->leave ();
+                _counters->errors.fetch_add (1, std::memory_order_relaxed);
+                co_await _ready.schedule ();
+                continue;
+            }
+            if (++submitted_since_progress == 64) {
+                submitted_since_progress = 0;
+                co_await _ready.schedule ();
+            }
         }
     }
 
@@ -651,10 +683,14 @@ class zlink_raw_driver_t : public driver_t
             _counters->enter ();
             _counters->submitted.fetch_add (1, std::memory_order_relaxed);
             try {
-                co_await send_operation ()
+                zlink::send_submission_t submission = send_operation ()
                   .message (parts.first)
                   .message (parts.second)
                   .async ();
+                if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
+                    co_await std::move (submission.admitted);
+                else if (submission.result != ZLINK_SUBMIT_OK)
+                    throw std::logic_error ("unexpected send submit result");
                 _counters->leave ();
                 _counters->completed.fetch_add (1, std::memory_order_relaxed);
             }
@@ -663,9 +699,6 @@ class zlink_raw_driver_t : public driver_t
                 _counters->leave ();
                 _counters->errors.fetch_add (1, std::memory_order_relaxed);
             }
-            // A send can complete synchronously. Yield each stream's turn so
-            // that the first coroutine cannot consume all eight streams' time.
-            co_await _ready.schedule ();
         }
     }
 

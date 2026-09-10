@@ -533,8 +533,8 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - **Node는 JS thread 하나이므로 동기 terminal이 실행되는 동안 그 호출이 completion 소비자다.**
   지정 owner(public poller)가 같은 thread에서 동시에 진행할 수 없기 때문이다. 동기 호출이
   받은 다른 completion은 반환 뒤 owner의 drain 규칙(NO_DATA 뒤 재제출)으로 전달한다.
-- DEALER/ROUTER request는 `submit_sync(): Message[]`와 `submit(): Promise<Message[]>`를
-  제공하고 builder의 reply timeout을 유지한다.
+- DEALER/ROUTER request는 `submit_sync(): Message[]`와 `submit(): RequestSubmission`(`result`·
+  `admitted`에 `reply: Promise<Message[]>` 추가)을 제공하고 builder의 reply timeout을 유지한다.
 - Raw ROUTER/`Received` reply의 terminal은
   `ReplySubmitOperation.submit(): void`인 동기 one-shot이다. Promise를 반환하지 않고
   terminal reply 또는 error reply를 native 호출 한 번으로 제출한다. DEALER peer에는 Application
@@ -775,8 +775,8 @@ Node는 Actor와 Spot route 조회 결과를 공개 JavaScript 객체와 일치�
 
 Node package 정보는 [배포 metadata](../../../node/package.json)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Node는 blocking `submit_sync()`와 `Promise`를 반환하는 `submit()`을 제공한다.
-Promise를 더 이상 기다리지 않는 경우에도 아래 공통 완료 수명 계약을 따른다.
+Node는 blocking `submit_sync()`와 결과 객체(`SendSubmission`/`RequestSubmission`: `result`와 `admitted`, request는 `reply`)를 돌려주는 `submit()`을 제공한다.
+`admitted`/`reply` Promise를 더 이상 기다리지 않는 경우에도 아래 공통 완료 수명 계약을 따른다.
 
 Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
 제출 결과는 [공통 결과 투영](../README.ko.md#submit-result-projection)을, 완료 합류·수명과
@@ -793,9 +793,20 @@ Token은 raw conversion, ordering, serialization과 `close()`를 제공하지 �
 ### Public interface
 
 ```ts
+export interface SendSubmission {
+  result: SubmitResult;        // OK | BACKPRESSURED, 제출 시점 스냅샷 (동기 필드)
+  admitted: Promise<void>;     // OK면 완료 상태
+}
+
+export interface RequestSubmission {
+  result: SubmitResult;
+  admitted: Promise<void>;
+  reply: Promise<Message[]>;   // admitted 성공 뒤 완료
+}
+
 export interface SendSubmitOperation {
   message(message: MessageLike): SendSubmitOperation;
-  submit(): Promise<void>;
+  submit(): SendSubmission;
   submit_sync(): void;
 }
 
@@ -811,7 +822,7 @@ export class ReplyToken {
 export interface RequestSubmitOperation {
   message(message: MessageLike): RequestSubmitOperation;
   timeout(timeoutMs: number): RequestSubmitOperation;
-  submit(): Promise<Message[]>;
+  submit(): RequestSubmission;
   submit_sync(): Message[];
 }
 

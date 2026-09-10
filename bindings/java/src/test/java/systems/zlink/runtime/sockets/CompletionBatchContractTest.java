@@ -51,9 +51,9 @@ class CompletionBatchContractTest {
             assertTrue(occupied.await(TestSupport.DEFAULT_TIMEOUT_MS,
                 TimeUnit.MILLISECONDS));
             var a = first.request().message(Message.from("a"))
-                .timeout(Duration.ofSeconds(2)).submit().toCompletableFuture();
+                .timeout(Duration.ofSeconds(2)).submit().reply().toCompletableFuture();
             var b = second.request().message(Message.from("b"))
-                .timeout(Duration.ofSeconds(2)).submit().toCompletableFuture();
+                .timeout(Duration.ofSeconds(2)).submit().reply().toCompletableFuture();
             b.whenComplete((parts, error) -> release.countDown());
             for (int i = 0; i < 2; i++) {
                 assertTrue(router.recv(request, RecvFlags.NONE));
@@ -106,7 +106,7 @@ class CompletionBatchContractTest {
                     for (int i = 0; i < 1000; i++) {
                         try (Message message = new Message(256)) {
                             message.writeIntLe(0, i);
-                            pending = sender.send().message(message).submit()
+                            pending = sender.send().message(message).submit().admitted()
                                 .toCompletableFuture();
                         }
                         submitted++;
@@ -152,7 +152,7 @@ class CompletionBatchContractTest {
                 for (int i = 1; i < count; i++) {
                     request.message(Message.from("part-" + i));
                 }
-                var future = request.submit().toCompletableFuture();
+                var future = request.submit().reply().toCompletableFuture();
                 assertTrue(router.recv(received, RecvFlags.NONE));
                 assertEquals(count, received.parts().size());
                 var reply = received.reply().message(received.firstPart());
@@ -174,7 +174,7 @@ class CompletionBatchContractTest {
                     Message.closeAll(parts);
                 }
                 dealer.send().message(Message.from("send-after-request"))
-                    .submit().toCompletableFuture().get(
+                    .submit().admitted().toCompletableFuture().get(
                         TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
                 assertTrue(router.recv(received, RecvFlags.NONE));
                 assertTrue(received.replyToken().isEmpty());

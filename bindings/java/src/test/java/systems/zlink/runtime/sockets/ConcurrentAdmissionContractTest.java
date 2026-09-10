@@ -22,7 +22,7 @@ class ConcurrentAdmissionContractTest {
              DealerSocket dealer = context.createDealerSocket()) {
             CompletionOwner owner = CompletionNativeFixture.claim((NativeSocketBase) dealer);
             core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.OK, 0, 51));
-            var request = dealer.request().message(Message.from("request")).timeout(Duration.ofSeconds(2)).submit().toCompletableFuture();
+            var request = dealer.request().message(Message.from("request")).timeout(Duration.ofSeconds(2)).submit().reply().toCompletableFuture();
             core.requestResult(core.submissions.getLast(), RequestResult.OK);
             core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.OK, 0, 0, true));
             FutureTask<Void> blocked = new FutureTask<>(() -> {

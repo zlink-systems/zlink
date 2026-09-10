@@ -12,6 +12,8 @@ import {
   closeMessages
 } from './channel-envelope';
 import { tryDecodeChannelHeader } from './channel-envelope-inspection';
+// 같은 계약을 두 곳에 두지 않는다 — channel-multipart가 소유한다.
+import type { ZLinkMultipartAsyncSubmitOperation } from './channel-multipart';
 import type { ZLinkChannelEnvelopeHeader } from './channel-envelope';
 import {
   ZLinkReceiveTaskTracker,
@@ -37,10 +39,6 @@ interface ZLinkMultipartOperation<TNext> {
 
 interface ZLinkMultipartSubmitOperation extends ZLinkMultipartOperation<ZLinkMultipartSubmitOperation> {
   submit(): unknown;
-}
-
-interface ZLinkMultipartAsyncSubmitOperation extends ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation> {
-  submit(): Promise<void>;
 }
 
 type ZLinkMultipartReplyOperation = ZLinkMultipartSubmitOperation;

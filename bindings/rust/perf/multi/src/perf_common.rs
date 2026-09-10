@@ -346,18 +346,13 @@ pub fn measurement_part_count() -> usize {
 #[macro_export]
 macro_rules! perf_submit_measurement_async {
     ($operation:expr, $payload:expr) => {{
-        async move {
-            let operation = $operation.message($payload);
-            if $crate::common::measurement_part_count() == 2 {
-                operation
-                    .message(
-                        zlink::Message::try_from(&[] as &[u8]).expect("empty measurement tail"),
-                    )
-                    .submit()
-                    .await
-            } else {
-                operation.submit().await
-            }
+        let operation = $operation.message($payload);
+        if $crate::common::measurement_part_count() == 2 {
+            operation
+                .message(zlink::Message::try_from(&[] as &[u8]).expect("empty measurement tail"))
+                .submit()
+        } else {
+            operation.submit()
         }
     }};
 }
@@ -365,7 +360,7 @@ macro_rules! perf_submit_measurement_async {
 type RoutedReplyFuture = Pin<Box<dyn Future<Output = Result<(), SubmitError>>>>;
 
 /// C-parity routed relay queue: received envelopes may accumulate, but only the
-/// FIFO head is submitted until its Core admission Future completes.
+/// FIFO head waits when Core reports backpressure.
 pub struct RoutedReplySender {
     pending: VecDeque<Received>,
     active: ConcurrentTasks<RoutedReplyFuture>,
@@ -406,15 +401,24 @@ impl RoutedReplySender {
             };
             let send = received.send();
             let parts = received.into_parts();
-            self.active.push(Box::pin(async move {
-                let mut parts = parts.into_iter();
-                let first = parts.next().expect("routed reply payload");
-                let mut operation = send.message(first);
-                for part in parts {
-                    operation = operation.message(part);
+            let mut parts = parts.into_iter();
+            let first = parts.next().expect("routed reply payload");
+            let mut operation = send.message(first);
+            for part in parts {
+                operation = operation.message(part);
+            }
+            match operation.submit() {
+                Ok(submission) if submission.result == SubmitResult::Ok => {}
+                Ok(submission) => {
+                    self.active.push(submission.admitted);
                 }
-                operation.submit().await
-            }));
+                Err(err)
+                    if matches!(
+                        err.code(),
+                        SubmitResult::NotConnected | SubmitResult::NotFound
+                    ) => {}
+                Err(err) => panic!("routed reply failed: {err}"),
+            }
         }
     }
 
