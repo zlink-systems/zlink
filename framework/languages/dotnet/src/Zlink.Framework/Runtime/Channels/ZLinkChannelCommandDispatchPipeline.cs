@@ -10,6 +10,87 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
 {
     public async Task DispatchAsync(
         string channelName,
+        ZLinkMultipartPayloadView parts,
+        ZLinkEnvelopeHeader header,
+        CancellationToken cancellationToken,
+        ZLinkMessageMetadata? metadata = null,
+        RoutingId? sourceNodeRid = null)
+    {
+        var scope = new ZLinkDispatchFlowScope(
+            ZLinkDispatchErrorSurface.Channel,
+            dispatchErrors.Flow.CaptureEnabled,
+            ZLinkDispatchMessageKind.Send,
+            header.MessageName,
+            channelName,
+            header.ContentType,
+            header.CorrelationId);
+        if (!handlerRegistry.TryGetCommand(
+                channelName,
+                resolveMappedGroups(channelName),
+                header.MessageName,
+                out var endpoint)
+            || endpoint is null)
+        {
+            scope.Dropped(dispatchErrors);
+            return;
+        }
+
+        if (!scope.TryDecode(
+                parts,
+                endpoint.MessageType,
+                header.ContentType,
+                codecs,
+                dispatchErrors,
+                ZLinkDispatchErrorAction.Drop,
+                out var message))
+            return;
+
+        var rawMessage = message as Message;
+        try
+        {
+            IZLinkMessageContext context = sourceNodeRid is { } source
+                ? new ZLinkRouteMessageContext(
+                    meshName,
+                    channelName,
+                    source,
+                    header.MessageName,
+                    header.ContentType,
+                    metadata,
+                    header.CorrelationId)
+                : new ZLinkMessageContext(
+                    meshName,
+                    channelName,
+                    header.MessageName,
+                    header.ContentType,
+                    metadata,
+                    header.CorrelationId);
+            try
+            {
+                await dispatcher.DispatchAsync(
+                        endpoint,
+                        message,
+                        context,
+                        ZLinkHandlerDispatchKind.ChannelSend,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
+            }
+            catch (Exception ex)
+            {
+                scope.HandlerException(
+                    dispatchErrors,
+                    ZLinkDispatchErrorAction.Drop,
+                    ex);
+            }
+        }
+        finally
+        {
+            rawMessage?.Dispose();
+        }
+    }
+
+    public async Task DispatchAsync(
+        string channelName,
         IReadOnlyList<Message> parts,
         ZLinkEnvelopeHeader header,
         CancellationToken cancellationToken,

@@ -1284,6 +1284,7 @@ public sealed class ClientServerChannelRuntimeTests
                 transport,
                 () => transport.ReadyCount == 2,
                 TimeSpan.FromSeconds(10));
+            var buildsBeforeCalls = transport.ReadySelectionPlanBuildCount;
 
             var route = local.GetRequiredService<IZLinkRouteClient>();
             var selected = new HashSet<string>(StringComparer.Ordinal);
@@ -1300,6 +1301,9 @@ public sealed class ClientServerChannelRuntimeTests
             Assert.Equal(
                 new[] { "local", "remote" },
                 selected.OrderBy(static value => value, StringComparer.Ordinal));
+            Assert.Equal(
+                buildsBeforeCalls,
+                transport.ReadySelectionPlanBuildCount);
 
             Assert.True(
                 await local.GetRequiredService<ZLinkLocationAutoConnectHost>()
@@ -1308,12 +1312,18 @@ public sealed class ClientServerChannelRuntimeTests
                 transport,
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
+            var buildsAfterCandidateChange =
+                transport.ReadySelectionPlanBuildCount;
+            Assert.True(buildsAfterCandidateChange > buildsBeforeCalls);
             var afterDrain = await route.RequestToChannel(
                     "work",
                     new EchoRequest("after-drain"))
                 .Timeout(TimeSpan.FromSeconds(5))
                 .Async<EchoReply>();
             Assert.Equal("remote:after-drain", afterDrain.Value);
+            Assert.Equal(
+                buildsAfterCandidateChange,
+                transport.ReadySelectionPlanBuildCount);
         }
         finally
         {

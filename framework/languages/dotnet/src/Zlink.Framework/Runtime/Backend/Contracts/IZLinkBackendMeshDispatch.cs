@@ -1,5 +1,6 @@
 using Zlink.Framework.Contracts.Streams;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Backend.Contracts;
 
@@ -42,7 +43,8 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         ulong sourceNodeGeneration = 0,
         ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
         ulong deadlineUnixMs = 0,
-        IDisposable? payloadOwner = null)
+        IDisposable? payloadOwner = null,
+        ZLinkMultipartPayloadView? applicationPayloadView = null)
     {
         Parts = parts;
         SourceNodeRid = sourceNodeRid;
@@ -59,10 +61,15 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         SourceNodeGeneration = sourceNodeGeneration;
         RequestSource = requestSource;
         DeadlineUnixMs = deadlineUnixMs;
+        ApplicationPayloadView = applicationPayloadView;
         _payloadOwner = payloadOwner;
     }
 
     public IReadOnlyList<Message> Parts { get; }
+
+    internal ZLinkMultipartPayloadView? ApplicationPayloadView { get; }
+
+    internal int PartCount => ApplicationPayloadView?.Count ?? Parts.Count;
 
     // The immutable application-metadata snapshot decoded from the record's
     // application-metadata frame (S8-06A). Empty when the sender attached none.

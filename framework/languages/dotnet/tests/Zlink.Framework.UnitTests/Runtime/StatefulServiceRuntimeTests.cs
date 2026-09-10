@@ -1594,10 +1594,9 @@ public sealed partial class StatefulServiceRuntimeTests
         using var reply = Message.From(new byte[] { 10 });
         Assert.Equal(SubmitResult.Ok, received[0].Reply([reply]));
 
-        var replyParts = await request;
-        Assert.Single(replyParts);
-        Assert.Equal(new byte[] { 10 }, replyParts[0].AsReadOnlyMemory().ToArray());
-        foreach (var part in replyParts) part.Dispose();
+        using var replyParts = await request;
+        Assert.Single(replyParts.Parts);
+        Assert.Equal(new byte[] { 10 }, replyParts.Parts[0].AsReadOnlyMemory().ToArray());
     }
 
     [Fact]

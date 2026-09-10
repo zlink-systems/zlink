@@ -9,6 +9,8 @@ using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Streams;
 using System.Reflection;
+using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Handlers;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -164,6 +166,56 @@ public sealed class SharedAsyncDisposalTests
         handler.Release.TrySetResult();
         await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, handler.DisposeCount);
+    }
+
+    [Fact]
+    public async Task HandlerOwner_Disposes_Synchronous_Handler_Outside_Lane_Without_A_ThreadPool_Hop()
+    {
+        await using var services = new ServiceCollection().BuildServiceProvider();
+        var owner = new ZLinkScopedHandlerInstanceOwner(services);
+        var handler = (SynchronousThreadCapturingHandler)owner.Resolve(
+            typeof(SynchronousThreadCapturingHandler));
+        var completion = new TaskCompletionSource<(bool Completed, int CallerThreadId, Task Task)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var caller = new Thread(() =>
+        {
+            try
+            {
+                var callerThreadId = Environment.CurrentManagedThreadId;
+                var task = owner.DisposeAsync().AsTask();
+                completion.TrySetResult((task.IsCompleted, callerThreadId, task));
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+        });
+
+        caller.Start();
+        var result = await completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        caller.Join();
+        await result.Task;
+
+        Assert.True(result.Completed);
+        Assert.Equal(result.CallerThreadId, handler.DisposeThreadId);
+        Assert.Null(handler.LaneDuringDispose);
+    }
+
+    [Fact]
+    public async Task HandlerOwner_Aggregates_Disposal_Failures_After_The_Async_Cleanup_Path()
+    {
+        await using var services = new ServiceCollection().BuildServiceProvider();
+        var owner = new ZLinkScopedHandlerInstanceOwner(services);
+        _ = owner.Resolve(typeof(FirstFailingAsyncHandler));
+        _ = owner.Resolve(typeof(SecondFailingDisposableHandler));
+
+        var exception = await Assert.ThrowsAsync<AggregateException>(() =>
+            owner.DisposeAsync().AsTask());
+
+        Assert.Collection(
+            exception.InnerExceptions,
+            first => Assert.Equal("second", first.Message),
+            second => Assert.Equal("first", second.Message));
     }
 
     [Fact]
@@ -484,6 +536,30 @@ public sealed class SharedAsyncDisposalTests
             Started.TrySetResult();
             await Release.Task.ConfigureAwait(false);
         }
+    }
+
+    public sealed class SynchronousThreadCapturingHandler : IDisposable
+    {
+        internal int DisposeThreadId { get; private set; }
+
+        internal ZLinkStateLane? LaneDuringDispose { get; private set; }
+
+        public void Dispose()
+        {
+            DisposeThreadId = Environment.CurrentManagedThreadId;
+            LaneDuringDispose = ZLinkStateLane.Current;
+        }
+    }
+
+    public sealed class FirstFailingAsyncHandler : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.FromException(
+            new InvalidOperationException("first"));
+    }
+
+    public sealed class SecondFailingDisposableHandler : IDisposable
+    {
+        public void Dispose() => throw new InvalidOperationException("second");
     }
 
 }

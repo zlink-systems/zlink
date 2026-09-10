@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -130,6 +132,28 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         return EncodeFrameworkMultipartCore(parts);
     }
 
+    internal static Message EncodeFrameworkMultipartMessage(
+        IReadOnlyList<Message> parts)
+    {
+        ArgumentNullException.ThrowIfNull(parts);
+        var encodedLength = GetFrameworkMultipartEncodedLength(parts);
+        EnsureRepresentableEncodedLength(encodedLength);
+        var result = Message.Allocate(checked((int)encodedLength));
+        try
+        {
+            WriteFrameworkMultipartEnvelope(
+                result.AsSpan(),
+                parts,
+                encodedLength);
+            return result;
+        }
+        catch
+        {
+            result.Dispose();
+            throw;
+        }
+    }
+
     internal static long GetFrameworkMultipartEncodedLength(
         IReadOnlyList<Message> parts)
     {
@@ -160,7 +184,68 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
                 StringComparison.Ordinal))
             return false;
 
-        return TryDecodeMultipart(envelope.Payload, out parts);
+        return TryDecodeMultipart(envelope.Payload.Span, out parts);
+    }
+
+    internal static bool TryDecodeFrameworkMultipart(
+        Message frame,
+        out Message[] parts)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        parts = [];
+        var span = frame.AsReadOnlySpan();
+        if (!TryGetFrameworkMultipartPayloadOffset(span, out var offset))
+            return false;
+        return TryDecodeMultipart(span.Slice(offset), out parts);
+    }
+
+    internal static bool TryDecodeFrameworkMultipartView(
+        Message frame,
+        [NotNullWhen(true)] out ZLinkMultipartPayloadView? parts)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        parts = null;
+        var span = frame.AsReadOnlySpan();
+        if (!TryGetFrameworkMultipartPayloadOffset(
+                span,
+                out var offset))
+            return false;
+        return TryDecodeMultipartView(frame, span, offset, out parts);
+    }
+
+    private static bool TryGetFrameworkMultipartPayloadOffset(
+        ReadOnlySpan<byte> span,
+        out int offset)
+    {
+        offset = 0;
+        if (span.Length < 11 || span[0] != Version)
+            return false;
+        var bodyLength = BinaryPrimitives.ReadUInt32BigEndian(
+            span.Slice(1, sizeof(uint)));
+        if (bodyLength != span.Length - 1 - sizeof(uint))
+            return false;
+
+        offset = 1 + sizeof(uint);
+        var packetLength = span[offset++];
+        if (packetLength != MultipartPacketNameUtf8.Length
+            || span.Length - offset < packetLength + 1
+            || !span.Slice(offset, packetLength)
+                .SequenceEqual(MultipartPacketNameUtf8))
+            return false;
+        offset += packetLength;
+
+        var typeLength = span[offset++];
+        if (typeLength != MultipartContentTypeUtf8.Length
+            || span.Length - offset < typeLength + sizeof(uint)
+            || !span.Slice(offset, typeLength)
+                .SequenceEqual(MultipartContentTypeUtf8))
+            return false;
+        offset += typeLength;
+
+        var payloadLength = BinaryPrimitives.ReadUInt32BigEndian(
+            span.Slice(offset, sizeof(uint)));
+        offset += sizeof(uint);
+        return payloadLength == span.Length - offset;
     }
 
     private static byte[] EncodeFrameworkMultipartCore(
@@ -229,7 +314,7 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
     }
 
     private static void WriteFrameworkMultipartEnvelope(
-        byte[] result,
+        Span<byte> result,
         IReadOnlyList<Message> parts,
         long encodedLength)
     {
@@ -243,7 +328,7 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
     }
 
     private static void WriteFrameworkMultipartEnvelope(
-        byte[] result,
+        Span<byte> result,
         IReadOnlyList<ReadOnlyMemory<byte>> parts,
         long encodedLength)
     {
@@ -256,79 +341,78 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         WriteMultipartPayload(result, payloadOffset, parts);
     }
 
-    private static void WriteEnvelopeHeader(byte[] result, int encodedLength)
+    private static void WriteEnvelopeHeader(Span<byte> result, int encodedLength)
     {
         result[0] = Version;
         BinaryPrimitives.WriteUInt32BigEndian(
-            result.AsSpan(1, sizeof(uint)),
+            result.Slice(1, sizeof(uint)),
             checked((uint)(encodedLength - 1 - sizeof(uint))));
     }
 
     private static int WriteMultipartEnvelopeFields(
-        byte[] result,
+        Span<byte> result,
         int offset,
         uint payloadLength)
     {
         result[offset++] = checked((byte)MultipartPacketNameUtf8.Length);
-        MultipartPacketNameUtf8.CopyTo(result, offset);
+        MultipartPacketNameUtf8.CopyTo(result.Slice(offset));
         offset += MultipartPacketNameUtf8.Length;
         result[offset++] = checked((byte)MultipartContentTypeUtf8.Length);
-        MultipartContentTypeUtf8.CopyTo(result, offset);
+        MultipartContentTypeUtf8.CopyTo(result.Slice(offset));
         offset += MultipartContentTypeUtf8.Length;
         BinaryPrimitives.WriteUInt32BigEndian(
-            result.AsSpan(offset, sizeof(uint)),
+            result.Slice(offset, sizeof(uint)),
             payloadLength);
         return offset + sizeof(uint);
     }
 
     private static void WriteMultipartPayload(
-        byte[] result,
+        Span<byte> result,
         int offset,
         IReadOnlyList<Message> parts)
     {
         BinaryPrimitives.WriteUInt32BigEndian(
-            result.AsSpan(offset, sizeof(uint)),
+            result.Slice(offset, sizeof(uint)),
             checked((uint)parts.Count));
         offset += sizeof(uint);
         for (var index = 0; index < parts.Count; index++)
         {
             var part = parts[index];
             BinaryPrimitives.WriteUInt32BigEndian(
-                result.AsSpan(offset, sizeof(uint)),
+                result.Slice(offset, sizeof(uint)),
                 checked((uint)part.Size));
             offset += sizeof(uint);
-            part.AsReadOnlyMemory().Span.CopyTo(result.AsSpan(offset, part.Size));
+            part.AsReadOnlySpan().CopyTo(result.Slice(offset, part.Size));
             offset += part.Size;
         }
     }
 
     private static void WriteMultipartPayload(
-        byte[] result,
+        Span<byte> result,
         int offset,
         IReadOnlyList<ReadOnlyMemory<byte>> parts)
     {
         BinaryPrimitives.WriteUInt32BigEndian(
-            result.AsSpan(offset, sizeof(uint)),
+            result.Slice(offset, sizeof(uint)),
             checked((uint)parts.Count));
         offset += sizeof(uint);
         for (var index = 0; index < parts.Count; index++)
         {
             var part = parts[index];
             BinaryPrimitives.WriteUInt32BigEndian(
-                result.AsSpan(offset, sizeof(uint)),
+                result.Slice(offset, sizeof(uint)),
                 checked((uint)part.Length));
             offset += sizeof(uint);
-            part.Span.CopyTo(result.AsSpan(offset, part.Length));
+            part.Span.CopyTo(result.Slice(offset, part.Length));
             offset += part.Length;
         }
     }
 
     private static bool TryDecodeMultipart(
-        ReadOnlyMemory<byte> payload,
+        ReadOnlySpan<byte> span,
         out Message[] parts)
     {
         parts = [];
-        var span = payload.Span;
         if (span.Length < sizeof(uint))
             return false;
 
@@ -379,6 +463,45 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
                 for (var index = 0; index < created; index++)
                     decoded[index].Dispose();
         }
+    }
+
+    private static bool TryDecodeMultipartView(
+        Message frame,
+        ReadOnlySpan<byte> span,
+        int payloadOffset,
+        out ZLinkMultipartPayloadView? parts)
+    {
+        parts = null;
+        if (span.Length - payloadOffset < sizeof(uint))
+            return false;
+
+        var count = BinaryPrimitives.ReadUInt32BigEndian(
+            span.Slice(payloadOffset, sizeof(uint)));
+        if (count == 0
+            || count > int.MaxValue / 2
+            || count > (span.Length - payloadOffset - sizeof(uint)) / sizeof(uint))
+            return false;
+
+        var ranges = new int[checked((int)count * 2)];
+        var offset = payloadOffset + sizeof(uint);
+        for (var index = 0; index < checked((int)count); index++)
+        {
+            if (span.Length - offset < sizeof(uint))
+                return false;
+            var length = BinaryPrimitives.ReadUInt32BigEndian(
+                span.Slice(offset, sizeof(uint)));
+            offset += sizeof(uint);
+            if (length > (uint)(span.Length - offset))
+                return false;
+            ranges[index * 2] = offset;
+            ranges[index * 2 + 1] = checked((int)length);
+            offset += checked((int)length);
+        }
+        if (offset != span.Length)
+            return false;
+
+        parts = new ZLinkMultipartPayloadView(frame, ranges);
+        return true;
     }
 }
 

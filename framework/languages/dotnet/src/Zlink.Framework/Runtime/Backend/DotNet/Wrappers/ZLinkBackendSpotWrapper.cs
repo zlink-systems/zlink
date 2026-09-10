@@ -173,7 +173,7 @@ internal sealed class ZLinkBackendSpotWrapper :
         RequireManagedNode().SendToChannelDirectAsync(
             SpotId, channelName, parts, flags, metadata, cancellationToken);
 
-    public ValueTask<IReadOnlyList<Message>> RequestToChannelAsync(
+    public ValueTask<ZLinkBackendRouteReceived> RequestToChannelAsync(
         string channelName,
         IReadOnlyList<Message> parts,
         SendFlags flags,
@@ -231,7 +231,7 @@ internal sealed class ZLinkBackendSpotWrapper :
             metadata,
             cancellationToken);
 
-    public ValueTask<IReadOnlyList<Message>> RequestToSpotAsync(
+    public ValueTask<ZLinkBackendRouteReceived> RequestToSpotAsync(
         RoutingId targetRid,
         string spotId,
         ulong spotGeneration,

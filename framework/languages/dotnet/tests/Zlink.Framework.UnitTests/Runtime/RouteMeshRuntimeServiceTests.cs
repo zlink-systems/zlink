@@ -243,6 +243,38 @@ public sealed class RouteMeshRuntimeServiceTests
         Assert.Equal(ZLinkRetryAdvice.RetryAfterBackoff, error.RetryAdvice);
     }
 
+    [Fact]
+    public async Task Channel_Request_Reselection_Serializes_NormalJson_Body_Once()
+    {
+        var targetEndpoint = RuntimeFixture.ReserveTcpEndpoint();
+        await using var target = await RuntimeFixture.StartAsync(
+            ZLinkMeshNodeObjectRole.Server,
+            routingIdPrefix: "zz-reselection-target",
+            listenEndpoint: targetEndpoint,
+            registerServerChannel: true);
+        await using var source = await RuntimeFixture.StartManualAsync(
+            ZLinkMeshNodeObjectRole.Server,
+            target.LocalNodeRid,
+            target.ListenEndpoint,
+            registerServerChannel: true);
+        await WaitForStatusAsync(
+            source.Runtime,
+            status => status.Peers.Any(peer =>
+                peer.NodeRid == target.LocalNodeRid
+                && peer.State == ZLinkPeerState.Ready));
+        target.SealApplicationAdmissionsForDrain();
+
+        var request = new SerializationCountingRouteRequest("once");
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(
+            async () => await source.RouteClient
+                .RequestToChannel(RuntimeFixture.MeshName, request)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Async<RouteProbe>());
+
+        Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, error.Kind);
+        Assert.Equal(1, request.SerializeReads);
+    }
+
     [Theory]
     [InlineData(0, 0, 0, true)]
     [InlineData(4, 5, 10, true)]
@@ -849,6 +881,10 @@ public sealed class RouteMeshRuntimeServiceTests
                 .DisposeAsync();
         }
 
+        internal void SealApplicationAdmissionsForDrain() =>
+            _provider.GetRequiredService<ZLinkFrameworkRuntime>()
+                .SealApplicationAdmissionsForDrain(CancellationToken.None);
+
         public async ValueTask DisposeAsync()
         {
             try
@@ -863,4 +899,20 @@ public sealed class RouteMeshRuntimeServiceTests
     }
 
     private sealed record RouteProbe(string Value);
+
+    private sealed class SerializationCountingRouteRequest(string value)
+    {
+        private int _serializeReads;
+
+        public string Value
+        {
+            get
+            {
+                _serializeReads++;
+                return value;
+            }
+        }
+
+        internal int SerializeReads => _serializeReads;
+    }
 }

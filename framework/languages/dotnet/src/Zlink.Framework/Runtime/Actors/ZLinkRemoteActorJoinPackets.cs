@@ -570,7 +570,7 @@ internal static class ZLinkRemoteActorJoinPackets
     }
 
     public static ZLinkRemoteActorJoinReply DecodeJoinReplyAndDispose(
-        IReadOnlyList<Message> parts,
+        ZLinkBackendRouteReceived parts,
         string actorId,
         string targetSpotId)
     {
@@ -582,7 +582,7 @@ internal static class ZLinkRemoteActorJoinPackets
     }
 
     public static ZLinkRemoteActorAdmissionReply DecodeAdmissionReplyAndDispose(
-        IReadOnlyList<Message> parts,
+        ZLinkBackendRouteReceived parts,
         string actorId,
         string targetSpotId)
     {
