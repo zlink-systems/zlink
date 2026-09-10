@@ -1218,3 +1218,25 @@ job은 체크아웃 Core를 소스 빌드하고 binding을 `ZLINK_JAVA_BINDINGS_
 framework C++은 ① apt 의존성 8종 ② hiredis·redis-plus-plus 소스 빌드(Debian `libhiredis-dev`에
 `hiredis-config.cmake`가 없다) ③ `find_package(zlink_cpp ... CONFIG REQUIRED)`용 binding package가
 선행이라 같은 PR에 넣으면 경량 워크플로우가 아니게 된다. Issue #117로 분리했다.
+
+## FB-071 — submit 결과 객체 캠페인 G6 perf 판정: criterion 2·4 PASS, 회귀 없음. ccu=1>ccu=100 역전은 harness 단일스레드 특성(C control·3언어·Core 버전·과거 결과로 4중 확증) (2026-09-11, 머신 B 감독)
+
+바인딩 submit 결과 객체 캠페인(#88~#96, #90 머지 완료)의 G6 perf 재측정. Core는 0.18.0 released prefix로 고정(`~/.cache/zlink/core/0.18.0/linux-x64`), `ROUTER_ROUTER_REQREP` tcp/1024, runs=3.
+
+**criterion 2 (ccu=1 깊이 1 탈출) — PASS.** cpp ccu=1: 옛 루프 **7,933/s**(깊이 1, 0.17.5에서도 재현·문서 "8.5k"와 일치) → 새 §5 루프 **300,108/s** (약 38×). C reference(275k)와 동급. §5가 "`OK`면 즉시 연속 제출, `BACKPRESSURED`만 `admitted` 대기"로 단일 소켓을 HWM 깊이까지 파이프라인.
+
+**criterion 4 (회귀 없음) — PASS.** same-Core(0.18.0) 전후 cpp ccu=100 tcp/1024: 옛 루프 150,518 → 새 §5 156,979 (+4.3%). 과거 저장 결과와 cpp-to-cpp 교차(clients=100):
+- tcp/1024: 과거 0.17.5(커밋 6edf7b95) 97,403 → 0.18.0 현재 150~157k (상승)
+- tcp/64: 과거 0.17.5 137,755 → 0.18.0 현재 ~142,323 (동급)
+Core 0.17.5→0.18.0 전환도 회귀 아님(C RR/1024/c100 185k→223k, cpp 97k→157k 상승).
+
+**ccu=1 > ccu=100 역전 조사(사용자 제기).** cpp 새 §5: ccu=1=300k > ccu=100=157k. "ccu=100이 더 높아야 정상" 직관과 반대라 §5 버그·Core 회귀를 의심해 4중 검증:
+1. **C reference(이 캠페인 미변경) control**: ccu=1=275k > ccu=100=223k — 미변경 코드도 동일 역전 → §5 버그 아님.
+2. **3언어(C·C++·go)**: 전부 ccu=1 > ccu=100 (go 125k>92k) → 언어 공통 = harness 특성.
+3. **Core 버전(0.17.5 vs 0.18.0)**: ccu=100 하락 없음(상승) → Core 회귀 아님.
+4. **과거 저장 결과**: size축 확인(논의는 1024B, 사용자가 64B로 오인). 전 size·버전에서 c100 유지·개선.
+원인: 벤치 harness가 **단일 협조 런타임 스레드**로 모든 클라 구동(PERF §1.3). 옛 루프는 ccu=1이 depth-1(7.9k)로 스레드를 굶겨 ccu=100이 필요했으나, §5가 ccu=1을 300k로 고쳐 **단일 클라가 이미 스레드 천장 포화** → ccu=100은 100코루틴 코디네이션 오버헤드만 추가. **ccu=100 자체는 저하 없음.** 벤치 버그 아님 — harness는 의도적 단일 런타임(멀티코어 스케일이 아니라 binding async 효율 측정).
+
+**남은 관찰(§5 무관·선재)**: cpp ccu=100(157k)이 C ccu=100(223k)보다 낮음(c100/c1: cpp 52% vs C 81%) — 바인딩 async 런타임 per-client 오버헤드가 C reference보다 큼. baseline(150k)부터 있던 선재 특성, 별도 최적화 영역.
+
+**criterion 3 (gRPC Java raw 3-run)**: raw 드라이버 코드(RawStack·BenchDrivers.runRaw)는 #90(#141)으로 머지·assemble 검증됨. 전체 gRPC 3-stack 비교 실행은 `systems.zlink:zlink:0.18.0` 공유 Maven 로컬 패키지(handoff §5 전제) 발행이 선행 — 후속으로 처리. 바인딩 캠페인 판정의 blocker 아님.
