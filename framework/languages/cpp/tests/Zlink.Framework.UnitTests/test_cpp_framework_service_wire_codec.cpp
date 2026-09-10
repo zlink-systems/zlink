@@ -19,6 +19,10 @@
 #include <type_traits>
 #include <vector>
 
+#ifdef NDEBUG
+#error "Service wire characterization requires active assertions"
+#endif
+
 namespace protocol = zlink::framework::runtime::protocol;
 namespace mesh = zlink::framework::runtime::mesh;
 namespace messaging = zlink::framework::runtime::messaging;
@@ -531,9 +535,47 @@ static void test_application_payload_wire_bytes ()
     }
 }
 
+// Round 3 baseline: retain an in-flight multipart payload after its source
+// messages have gone away, and compare every byte with the original wire
+// layout. Include empty parts and both small-message and heap storage sizes.
+static void test_retained_multipart_wire_bytes ()
+{
+    for (const auto count : {1u, 2u, 7u}) {
+        for (const auto size : {0u, 1u, 32u, 1024u, 4096u}) {
+            std::vector<std::uint8_t> frozen_parts;
+            put_u32 (frozen_parts, count);
+            auto retained = [&] {
+                std::vector<zlink::message_t> parts;
+                for (std::size_t part = 0; part < count; ++part) {
+                    const auto length = part % 2 == 0 ? size : 0;
+                    std::vector<std::uint8_t> bytes (length);
+                    for (std::size_t i = 0; i < length; ++i)
+                        bytes[i] = static_cast<std::uint8_t> (i + 17 * part);
+                    put_u32 (frozen_parts, length);
+                    frozen_parts.insert (frozen_parts.end (), bytes.begin (), bytes.end ());
+                    parts.push_back (zlink::message_t::from (bytes));
+                }
+                return protocol::application_payload_t::from_parts (parts);
+            } ();
+            std::vector<std::uint8_t> frozen_body;
+            put_text8 (frozen_body, "ZLinkFrameworkMultipart");
+            put_text8 (frozen_body, "application/x-zlink-multipart");
+            put_u32 (frozen_body, frozen_parts.size ());
+            frozen_body.insert (frozen_body.end (), frozen_parts.begin (), frozen_parts.end ());
+            std::vector<std::uint8_t> expected{1};
+            put_u32 (expected, frozen_body.size ());
+            expected.insert (expected.end (), frozen_body.begin (), frozen_body.end ());
+            const auto in_flight = retained;
+            assert (protocol::encode_application_payload (retained) == expected);
+            assert (protocol::encode_application_payload (in_flight) == expected);
+        }
+    }
+}
+
 int main ()
 {
     test_application_payload_wire_bytes ();
+    test_retained_multipart_wire_bytes ();
     {
         zlink::framework::detail::backend::raw_message_t wire;
         wire.emplace_back (4096, 0x5a);
