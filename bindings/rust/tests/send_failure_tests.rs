@@ -22,8 +22,9 @@ fn sync_blocking_terminal_admits_a_send() {
     let receiver = ctx.pair_socket().unwrap();
     let sender = ctx.pair_socket().unwrap();
     receiver.bind("inproc://rust-sync-send-admit").unwrap();
-    sender.connect("inproc://rust-sync-send-admit").unwrap();
-    thread::sleep(Duration::from_millis(50));
+    test_support::connect_pair_and_confirm(&receiver, &sender, || {
+        sender.connect("inproc://rust-sync-send-admit").unwrap()
+    });
 
     sender
         .send()
@@ -52,10 +53,11 @@ fn async_terminal_still_completes_after_sync_terminal_is_added() {
     receiver
         .bind("inproc://rust-async-send-regression")
         .unwrap();
-    sender
-        .connect("inproc://rust-async-send-regression")
-        .unwrap();
-    thread::sleep(Duration::from_millis(50));
+    test_support::connect_pair_and_confirm(&receiver, &sender, || {
+        sender
+            .connect("inproc://rust-async-send-regression")
+            .unwrap()
+    });
 
     await_send(
         sender

@@ -176,7 +176,9 @@ static async Task<BenchResult> RunActiveAsync(
         target.WorkingSetMb,
         snapshot.PeakInFlight,
         trigger.pattern == "request-window" ? trigger.requestWindow : null,
-        snapshot.CurrentInFlight);
+        snapshot.CurrentInFlight,
+        snapshot.ErrorSummary,
+        snapshot.OtherErrors);
 }
 
 static async Task RunRequestWorkersAsync(
@@ -242,6 +244,10 @@ static async Task RunRequestBackpressureAsync(
         {
             await Task.WhenAll(pending).WaitAsync(TimeSpan.FromSeconds(5));
         }
+        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
+        {
+            // The drain-bound cancellation is already represented by abandoned.
+        }
         catch (TimeoutException)
         {
             // The recorded abandoned count is the bounded observation result.
@@ -275,9 +281,14 @@ static async Task RunSendWorkersAsync(
                 await transport.SendAsync(stream, payload, cancellationToken);
                 metrics.Complete(started, true);
             }
-            catch
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                metrics.Complete(started, false);
+                metrics.Cancel(started);
+                throw;
+            }
+            catch (Exception error)
+            {
+                metrics.Complete(started, false, error);
             }
         }
     }, cancellationToken));
@@ -305,9 +316,14 @@ static async Task ExecuteRequestAsync(
         ValidateReply(reply, runId, BenchPhase.Active, trigger.payloadBytes, sequence);
         metrics.Complete(started, true);
     }
-    catch
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
     {
-        metrics.Complete(started, false);
+        metrics.Cancel(started);
+        throw;
+    }
+    catch (Exception error)
+    {
+        metrics.Complete(started, false, error);
     }
 }
 
@@ -369,6 +385,11 @@ static string FormatText(BenchResult result, BenchMetadata metadata)
     lines.AppendLine($"payload_size: {result.PayloadSize}");
     lines.AppendLine($"warmup: {metadata.Warmup}");
     lines.AppendLine($"duration_seconds: {result.DurationSeconds:F3}");
+    foreach (var error in result.ErrorSummary)
+    {
+        lines.AppendLine($"client_error: {error.Type}: {error.Message} ({error.Count})");
+    }
+    if (result.OtherErrors != 0) lines.AppendLine($"client_error_other: {result.OtherErrors}");
     foreach (var line in result.PerfLines) lines.AppendLine(line);
     return lines.ToString();
 }
@@ -480,6 +501,7 @@ internal sealed class GrpcBenchTransport : IBenchTransport
 
 internal sealed class FrameworkBenchTransport : IBenchTransport
 {
+    private static readonly RoutingId Target = RoutingId.From("bench-server");
     private readonly IHost host;
     private readonly IZLinkRouteClient client;
 
@@ -513,8 +535,7 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
             var mesh = framework.AddRouteMesh("bench")
                 .Listen("tcp://127.0.0.1:0")
                 .SetRoutingId(RoutingId.From($"bench-source-{Environment.ProcessId}"));
-            mesh.Channel("bench").Client();
-            mesh.PeerConnections.Connect(RoutingId.From("bench-server"), options.TargetEndpoint);
+            mesh.PeerConnections.Connect(Target, options.TargetEndpoint);
         });
         var host = builder.Build();
         await host.StartAsync();
@@ -525,10 +546,10 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
 
     public async ValueTask<BenchPayload> RequestAsync(
         int stream, BenchPayload payload, CancellationToken cancellationToken) =>
-        await client.RequestToChannel("bench", payload).Async<BenchPayload>(cancellationToken);
+        await client.RequestToNode("bench", Target, payload).Async<BenchPayload>(cancellationToken);
 
     public async ValueTask SendAsync(int stream, BenchPayload payload, CancellationToken cancellationToken) =>
-        await client.SendToChannel("bench", payload).Async(cancellationToken);
+        await client.SendToNode("bench", Target, payload).Async(cancellationToken);
 
     public async ValueTask DisposeAsync()
     {
@@ -642,7 +663,7 @@ internal sealed class RawBenchTransport : IBenchTransport
             RawWire.Encode(payload, body.AsSpan());
             return body;
         }
-        catch
+        catch (Exception)
         {
             body.Dispose();
             throw;
@@ -732,8 +753,11 @@ internal sealed class RawBenchSocket : IDisposable
 
 internal sealed class SourceMetrics(int sampleLimit)
 {
+    private const int ErrorKindLimit = 8;
+    private const int ErrorMessageLimit = 200;
     private readonly object gate = new();
     private readonly List<long> samples = new(sampleLimit);
+    private readonly Dictionary<(string Type, string Message), long> errorSummary = [];
     private long submitted;
     private long completed;
     private long errors;
@@ -742,6 +766,7 @@ internal sealed class SourceMetrics(int sampleLimit)
     private long abandoned;
     private long sampleCount;
     private long sampleSum;
+    private long otherErrors;
 
     public void Reset()
     {
@@ -750,6 +775,8 @@ internal sealed class SourceMetrics(int sampleLimit)
             submitted = completed = errors = inFlight = peakInFlight = abandoned = 0;
             sampleCount = sampleSum = 0;
             samples.Clear();
+            errorSummary.Clear();
+            otherErrors = 0;
         }
     }
 
@@ -765,16 +792,56 @@ internal sealed class SourceMetrics(int sampleLimit)
         return started;
     }
 
-    public void Complete(long started, bool success)
+    public void Complete(long started, bool success, Exception? error = null)
     {
         var elapsed = (long)((Stopwatch.GetTimestamp() - started) * 1_000_000.0 / Stopwatch.Frequency);
         lock (gate)
         {
             inFlight--;
-            if (success) completed++; else errors++;
+            if (success)
+            {
+                completed++;
+            }
+            else
+            {
+                errors++;
+                if (error is not null) RecordError(error);
+            }
             sampleSum += elapsed;
             sampleCount++;
             if (samples.Count < sampleLimit) samples.Add(elapsed);
+        }
+    }
+
+    public void Cancel(long started)
+    {
+        var elapsed = (long)((Stopwatch.GetTimestamp() - started) * 1_000_000.0 / Stopwatch.Frequency);
+        lock (gate)
+        {
+            inFlight--;
+            sampleSum += elapsed;
+            sampleCount++;
+            if (samples.Count < sampleLimit) samples.Add(elapsed);
+        }
+    }
+
+    private void RecordError(Exception error)
+    {
+        var type = error.GetType().FullName ?? error.GetType().Name;
+        var message = error.Message.Replace('\r', ' ').Replace('\n', ' ');
+        if (message.Length > ErrorMessageLimit) message = message[..ErrorMessageLimit];
+        var key = (type, message);
+        if (errorSummary.TryGetValue(key, out var count))
+        {
+            errorSummary[key] = count + 1;
+        }
+        else if (errorSummary.Count < ErrorKindLimit)
+        {
+            errorSummary.Add(key, 1);
+        }
+        else
+        {
+            otherErrors++;
         }
     }
 
@@ -800,6 +867,9 @@ internal sealed class SourceMetrics(int sampleLimit)
                 inFlight,
                 peakInFlight,
                 abandoned,
+                errorSummary.Select(static entry => new ClientErrorSummary(
+                    entry.Key.Type, entry.Key.Message, entry.Value)).ToArray(),
+                otherErrors,
                 sampleCount == 0 ? 0 : (double)sampleSum / sampleCount,
                 Percentile(sorted, 0.95),
                 Percentile(sorted, 0.99));
@@ -825,9 +895,13 @@ internal readonly record struct SourceResultSnapshot(
     long CurrentInFlight,
     long PeakInFlight,
     long Abandoned,
+    IReadOnlyList<ClientErrorSummary> ErrorSummary,
+    long OtherErrors,
     double MeanMicros,
     long P95Micros,
     long P99Micros);
+
+internal sealed record ClientErrorSummary(string Type, string Message, long Count);
 
 internal readonly record struct ResourceSample(TimeSpan CpuStart)
 {
@@ -896,7 +970,9 @@ internal sealed record BenchCell(
     long peak_in_flight,
     int? request_window,
     long abandoned,
-    long? server_received_at_close)
+    long? server_received_at_close,
+    IReadOnlyList<ClientErrorSummary> client_error_summary,
+    long client_error_other_count)
 {
     public static BenchCell From(
         BenchResult result,
@@ -927,7 +1003,9 @@ internal sealed record BenchCell(
         result.PeakInFlight,
         result.RequestWindow,
         result.Abandoned,
-        result.Pattern == "send-saturation" ? result.Completed : null);
+        result.Pattern == "send-saturation" ? result.Completed : null,
+        result.ErrorSummary,
+        result.OtherErrors);
 }
 
 internal sealed record BenchMetadata(
@@ -1003,7 +1081,7 @@ internal sealed record BenchMetadata(
             await process.WaitForExitAsync();
             return process.ExitCode == 0 ? output.Trim() : "unknown";
         }
-        catch
+        catch (Exception)
         {
             return "unknown";
         }
@@ -1047,7 +1125,9 @@ internal sealed record BenchResult(
     double ServerWorkingSetMb,
     long PeakInFlight,
     int? RequestWindow,
-    long Abandoned)
+    long Abandoned,
+    IReadOnlyList<ClientErrorSummary> ErrorSummary,
+    long OtherErrors)
 {
     public string Pattern => Scenario[(Implementation.Length + 1)..];
     public string Implementation => Scenario.StartsWith("zlink-framework-dotnet-", StringComparison.Ordinal)

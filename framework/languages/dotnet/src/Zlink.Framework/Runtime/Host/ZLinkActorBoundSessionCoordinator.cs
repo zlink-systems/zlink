@@ -846,7 +846,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         }
     }
 
-    public bool Send(string actorId, IReadOnlyList<Message> parts, SendFlags flags)
+    public bool Send(string actorId, IReadOnlyList<Message> parts)
     {
         var state = _getState(actorId);
         if (state.TryGetBoundSessionForOutbound(out var session))
@@ -917,7 +917,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             return RequireNodeForMesh(
                     session.MeshName.Value,
                     "Actor bound session send requires its stored Mesh route.")
-                .SendActorBoundSession(nativeActorRef, parts, flags);
+                .SendActorBoundSession(nativeActorRef, parts);
         }
 
         var actorRef = state.NativeActorRef
@@ -925,19 +925,18 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                            $"Actor '{actorId}' does not have a native Actor ref.",
                            ZLinkRetryAdvice.DoNotRetry);
         return RequireNode("Actor bound session send requires a router-capable SpotNode.")
-            .SendActorBoundSession(actorRef, parts, flags);
+            .SendActorBoundSession(actorRef, parts);
     }
 
     public bool SendIfBoundTo(
         string actorId,
         string expectedBindingToken,
-        IReadOnlyList<Message> parts,
-        SendFlags flags)
+        IReadOnlyList<Message> parts)
     {
         var state = _getState(actorId);
         return state.TryUseBoundSession(
             expectedBindingToken,
-            _ => Send(actorId, parts, flags));
+            _ => Send(actorId, parts));
     }
 
     public ValueTask<ZLinkOneWaySubmitResult> SendIfBoundToAsync(
@@ -1121,7 +1120,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             .ReplyActorNoBind(actor, sourceNodeRid, sourceSessionRid, requestId, flags, parts);
 
     public bool ForwardPart(ZLinkBackendActorRef actorRef, RoutingId sourceNodeRid, RoutingId sourceSessionRid,
-        Message message, bool hasMore, SendFlags flags, string? meshName = null,
+        Message message, bool hasMore, string? meshName = null,
         IZLinkBackendSpotNode? selectedNode = null,
         ulong targetNodeGeneration = 0,
         ulong authorityOwnerGeneration = 0,
@@ -1263,7 +1262,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                     ZLinkFrameworkErrorKind.NotFound,
                     "Actor session forward requires a router-capable SpotNode.",
                     ZLinkRetryAdvice.DoNotRetry))
-            .ForwardActorBoundSessionPart(actorRef, sourceNodeRid, sourceSessionRid, message, hasMore, flags);
+            .ForwardActorBoundSessionPart(actorRef, sourceNodeRid, sourceSessionRid, message, hasMore);
     }
 
     private bool TryRelayRemotePush(string actorId, ZLinkActorBoundSession session, byte[] frame)
@@ -1413,7 +1412,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         // actor is remote and writes the native bound session when it is local.
         if (!ForwardPart(
                 actorRef, sourceNodeRid, sourceSessionRid, headerPart, true,
-                SendFlags.DontWait, binding.MeshName, node,
+                binding.MeshName, node,
                 binding.TargetNodeGeneration,
                 binding.AuthorityOwnerGeneration,
                 binding.OwnerLeaseGeneration,
@@ -1424,7 +1423,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             throw new InvalidOperationException("Actor session disconnect header forward failed.");
         if (!ForwardPart(
                 actorRef, sourceNodeRid, sourceSessionRid, bodyPart, false,
-                SendFlags.DontWait, binding.MeshName, node,
+                binding.MeshName, node,
                 binding.TargetNodeGeneration,
                 binding.AuthorityOwnerGeneration,
                 binding.OwnerLeaseGeneration,

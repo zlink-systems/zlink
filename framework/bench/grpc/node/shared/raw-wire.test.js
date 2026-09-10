@@ -8,6 +8,7 @@ const protoLoader = require('@grpc/proto-loader');
 const raw = require('./raw-wire');
 const header = require('./bench-metric-header');
 const { BenchPayload } = require('./framework-bench-contract');
+const { createBenchPayloadSerializer } = require('./framework-protobuf');
 
 const service = protoLoader.loadSync(path.join(__dirname, '../../proto/bench.proto'), {
   keepCase: true, longs: String, enums: String, defaults: true, oneofs: true, bytes: Buffer
@@ -35,6 +36,15 @@ test('raw request and response preserve the pre-protobuf 29-byte wire dump', () 
   } finally {
     encoded.close();
   }
+});
+
+test('framework schema serializer preserves the same protobuf body bytes', () => {
+  const body = Buffer.from(bodyHex, 'hex');
+  const serializer = createBenchPayloadSerializer();
+  const encoded = serializer.serialize(new BenchPayload(body));
+  assert.equal(Buffer.from(encoded.data()).toString('hex'), wireHex);
+  const decoded = serializer.deserialize(encoded);
+  assert.deepEqual(decoded.body, body);
 });
 
 for (const size of [127, 128, 1024, 4096]) {

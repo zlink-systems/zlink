@@ -158,6 +158,7 @@ async function runRouterRouterBenchmark(msgSize, options) {
   const ctx = zlink.createContext();
   applyContextPolicy(ctx);
   const receiver = zlink.createRouterSocket(ctx);
+  const receiverMonitor = receiver.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
   const endpoint = await benchmarkEndpoint(options.transport, `router-router-${msgSize}`);
   let worker = null;
 
@@ -207,11 +208,14 @@ async function runRouterRouterBenchmark(msgSize, options) {
     );
     waitForWorkerStatus(worker, 4);
     const result = collector.finish();
-    emitSingleSocketHwmDetail(receiver, 'ROUTER_ROUTER', options.transport, 'receiver', msgSize);
+    emitSingleSocketHwmDetail(
+      receiverMonitor, receiver, 'ROUTER_ROUTER', options.transport, 'receiver', msgSize
+    );
     return result;
   } finally {
     trace('closing');
     await closeSenderWorker(worker);
+    receiverMonitor.close();
     receiver.close();
     trace('receiver closed');
     ctx.close();

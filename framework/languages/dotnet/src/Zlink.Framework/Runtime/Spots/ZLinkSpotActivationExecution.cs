@@ -486,9 +486,9 @@ internal abstract partial class ZLinkSpotActivation
             throw new ArgumentException(
                 "Application metadata is malformed.",
                 nameof(metadata));
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? replyCallback = null;
+        Func<IReadOnlyList<Message>, SubmitResult>? replyCallback = null;
         if (request)
-            replyCallback = (reply, _) =>
+            replyCallback = reply =>
             {
                 completion.TrySetResult(new InstanceSpotActivationTerminal(
                     RequestResult.Ok,
@@ -1749,7 +1749,7 @@ internal abstract partial class ZLinkSpotActivation
                         && RemainingRequestTimeout(
                             received,
                             DateTimeOffset.UtcNow) != TimeSpan.Zero)
-                        _ = received.Reply(parts, SendFlags.None);
+                        _ = received.Reply(parts);
                 }
                 finally
                 {
@@ -1987,11 +1987,11 @@ internal abstract partial class ZLinkSpotActivation
                 .Select(static part => Message.From(part.Span))
                 .ToArray();
             byte[][]? capturedReply = null;
-            Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? reply = null;
+            Func<IReadOnlyList<Message>, SubmitResult>? reply = null;
             if (journal.ReplyRouteId != 0
                 && journal.SourceNodeRid is { } sourceNodeRid)
             {
-                reply = (replyParts, _) =>
+                reply = replyParts =>
                 {
                     capturedReply = replyParts
                         .Select(static part => part.ToArray())

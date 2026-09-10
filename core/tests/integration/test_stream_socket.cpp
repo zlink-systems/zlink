@@ -828,13 +828,13 @@ static bool wait_stream_ready_for_routing_id (void *monitor_,
     const int slice_ms = 20;
     const int loops = timeout_ms_ > 0 ? timeout_ms_ / slice_ms + 1 : 1;
     for (int i = 0; i < loops; ++i) {
-        collect_stream_ordering_monitor_events (monitor_, probe_, slice_ms);
         {
             std::lock_guard<std::mutex> lk (probe_->mu);
             if (probe_->ready_routing_ids.find (key) != probe_->ready_routing_ids.end ()) {
                 return true;
             }
         }
+        collect_stream_ordering_monitor_events (monitor_, probe_, slice_ms);
     }
 
     collect_stream_ordering_monitor_events (monitor_, probe_, 0);
@@ -1377,41 +1377,53 @@ void test_stream_recv_multiclient_strict_ready_gating_regression ()
     }
 
     stream_ordering_probe_t ordering_probe;
-    int received = 0;
+    // RAW receive boundaries need not match the client's split writes. Echo
+    // every byte of all length-prefixed frames before waiting for the clients.
+    const size_t expected_bytes = client_count * (sizeof (uint32_t) + payload_size);
+    size_t received_bytes = 0;
     int send_fail = 0;
-    while (received < client_count) {
+    while (received_bytes < expected_bytes) {
         zlink_routing_id_t rid;
         zlink_msg_t payload_msg;
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&payload_msg));
-        TEST_ASSERT_TRUE (recv_stream_routing_id_and_payload (server, &rid, &payload_msg, 0));
+        if (!recv_stream_routing_id_and_payload (server, &rid, &payload_msg, 0)
+            || !wait_stream_ready_for_routing_id (monitor, &ordering_probe, &rid, 5000)
+            || !mark_stream_payload_begin (&ordering_probe, &rid, true)) {
+            TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&payload_msg));
+            break;
+        }
 
-        TEST_ASSERT_TRUE (wait_stream_ready_for_routing_id (monitor, &ordering_probe, &rid, 5000));
-        TEST_ASSERT_TRUE (mark_stream_payload_begin (&ordering_probe, &rid, true));
-
+        received_bytes += zlink_msg_size (&payload_msg);
         if (test_stream_send_single_msg (server, &rid, &payload_msg, 0) < 0) {
             ++send_fail;
         }
         mark_stream_payload_end (&ordering_probe, &rid);
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&payload_msg));
-        ++received;
     }
 
     for (size_t i = 0; i < clients.size (); ++i)
         clients[i].join ();
 
-    TEST_ASSERT_TRUE (wait_stream_ordering_sets_with_monitor (monitor, &ordering_probe,
-                                                              client_count, client_count, 10000));
+    const bool ordering_complete = wait_stream_ordering_sets_with_monitor (
+      monitor, &ordering_probe, client_count, client_count, 10000);
+
+    // Unity assertions jump to tearDown; the separately opened monitor must
+    // be closed first so a client failure does not strand context termination.
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
+    test_context_socket_close_zero_linger (server);
+
+    TEST_ASSERT_TRUE (ordering_complete);
+    TEST_ASSERT_EQUAL_UINT64 (expected_bytes, received_bytes);
     TEST_ASSERT_EQUAL_INT (0, client_failures.load (std::memory_order_acquire));
     TEST_ASSERT_EQUAL_INT (0, ordering_probe.payload_before_ready.load (std::memory_order_acquire));
     TEST_ASSERT_EQUAL_INT (
       0, ordering_probe.disconnect_during_payload.load (std::memory_order_acquire));
     TEST_ASSERT_EQUAL_INT (0, ordering_probe.strict_drop_count.load (std::memory_order_acquire));
-    TEST_ASSERT_EQUAL_INT (client_count,
-                           ordering_probe.strict_accept_count.load (std::memory_order_acquire));
+    TEST_ASSERT_EQUAL_UINT64 (client_count, ordering_probe.seen_payload_routing_ids.size ());
+    TEST_ASSERT_EQUAL_INT (
+      ordering_probe.payloads_seen.load (std::memory_order_acquire),
+      ordering_probe.strict_accept_count.load (std::memory_order_acquire));
     TEST_ASSERT_EQUAL_INT (0, send_fail);
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
-    test_context_socket_close_zero_linger (server);
 }
 #endif
 

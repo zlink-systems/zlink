@@ -7,17 +7,17 @@ internal sealed class ZLinkSessionStreamTransport(
     public bool Write(Message payload)
     {
         if (stream is ZLinkManagedStream managedStream)
-            return managedStream.WriteRaw(payload, SendFlags.DontWait);
+            return managedStream.WriteRaw(payload);
 
-        return stream.Write(ZLinkMessage.From(payload.ToArray()), SendFlags.DontWait);
+        return stream.Write(ZLinkMessage.From(payload.ToArray()));
     }
 
-    public ValueTask SubmitAsync(
+    public Task SubmitAsync(
         Message payload,
         CancellationToken cancellationToken)
         => SubmitAsync(stream, payload, cancellationToken);
 
-    internal static ValueTask SubmitAsync(
+    internal static Task SubmitAsync(
         IZLinkStream stream,
         Message payload,
         CancellationToken cancellationToken)
@@ -28,17 +28,15 @@ internal sealed class ZLinkSessionStreamTransport(
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
-            if (!stream.Write(
-                    ZLinkMessage.From(payload.ToArray()),
-                    SendFlags.DontWait))
+            if (!stream.Write(ZLinkMessage.From(payload.ToArray())))
                 throw new ZlinkSubmitException(
-                    ZlinkSubmitException.ErrorCode.Backpressured);
+                    ZlinkSubmitException.ErrorCode.NotConnected);
         }
         finally
         {
             payload.Dispose();
         }
-        return ValueTask.CompletedTask;
+        return Task.CompletedTask;
     }
 
     public ValueTask ReplyRawAsync(

@@ -248,7 +248,7 @@ internal readonly record struct ActorMessageFollowIngress(
     ulong DeadlineUnixMs,
     ReadOnlyMemory<byte> ApplicationMetadata,
     IReadOnlyList<Message> Parts,
-    Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? Reply)
+    Func<IReadOnlyList<Message>, SubmitResult>? Reply)
 {
     // A stale Actor route is admitted by the follow target before the payload is
     // materialized. The adapter decodes this envelope only after it accepts the
@@ -567,7 +567,7 @@ internal sealed class MeshClaim : IDisposable
 
 internal struct MeshReceiveRecord
 {
-    private readonly Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? _reply;
+    private readonly Func<IReadOnlyList<Message>, SubmitResult>? _reply;
     private readonly Func<RequestResult, uint, SubmitResult>? _terminalReply;
     private readonly Func<ActorJoinResult, IReadOnlyList<Message>, SendFlags, SubmitResult>?
         _joinReply;
@@ -578,7 +578,7 @@ internal struct MeshReceiveRecord
         string? channelName, string? topic, byte[]? applicationMetadata,
         int partOffset, int partCount, int terminalResult, int failureErrno,
         MeshRecordPayload? kindData,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? reply = null,
+        Func<IReadOnlyList<Message>, SubmitResult>? reply = null,
         Func<ActorJoinResult, IReadOnlyList<Message>, SendFlags, SubmitResult>?
             joinReply = null,
         ulong targetNodeGeneration = 0,
@@ -644,17 +644,17 @@ internal struct MeshReceiveRecord
     public ActorDestroyCompletion? ActorDestroyCompletion =>
         KindData as ActorDestroyCompletion;
     public MeshSendReadyData? SendReady => KindData as MeshSendReadyData;
-    internal Func<IReadOnlyList<Message>, SendFlags, SubmitResult>?
+    internal Func<IReadOnlyList<Message>, SubmitResult>?
         CaptureReplyRoute() => _reply;
-    public SubmitResult Reply(IReadOnlyList<Message> parts, SendFlags flags = SendFlags.None) =>
-        _reply?.Invoke(parts, flags) ?? SubmitResult.Terminated;
+    public SubmitResult Reply(IReadOnlyList<Message> parts) =>
+        _reply?.Invoke(parts) ?? SubmitResult.Terminated;
     public SubmitResult ReplyTerminal(RequestResult result, uint failureCode) =>
         _terminalReply?.Invoke(result, failureCode) ?? SubmitResult.Terminated;
     public SubmitResult ReplyJoin(
         ActorJoinResult result,
         IReadOnlyList<Message> parts,
         SendFlags flags = SendFlags.None) =>
-        _joinReply?.Invoke(result, parts, flags) ?? Reply(parts, flags);
+        _joinReply?.Invoke(result, parts, flags) ?? Reply(parts);
 
     internal static MeshReceiveRecord CompletionFailure(
         MeshOperationId operationId,
@@ -765,7 +765,7 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
     SubmitResult SendToActor(ActorRef actor, IReadOnlyList<Message> parts, SendFlags flags = SendFlags.None);
     SubmitResult RequestToActor(ActorRef actor, IReadOnlyList<Message> parts,
         out MeshOperationId operationId, TimeSpan timeout = default);
-    SubmitResult SendBoundSession(ActorRef actor, IReadOnlyList<Message> parts, SendFlags flags = SendFlags.None);
+    SubmitResult SendBoundSession(ActorRef actor, IReadOnlyList<Message> parts);
     MeshOperationId CloseBoundSession(ActorRef actor, ulong expectedBindingGeneration, TimeSpan timeout = default);
     void SetUserSpotOperationTarget(IUserSpotOperationTarget target);
     void SetActorCreateOperationTarget(IActorCreateOperationTarget target);

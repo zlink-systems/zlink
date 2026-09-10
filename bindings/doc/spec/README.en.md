@@ -206,6 +206,7 @@ The representative canonical semantic names are:
 |------|----------------|
 | Registering a raw STREAM packet handler | `setPacketHandler` |
 | Registering a SPOT dispatch event handler | `setDispatchHandler` |
+| socket receive readiness handler registration | `setReadableHandler` |
 | SPOT routed receive | `recvRouted` |
 | SPOT Actor lifecycle receive | `recvActorLifecycle` |
 

@@ -67,7 +67,7 @@ async function runDealerDealerBenchmark(msgSize, options) {
         }, { recordUntilNs: activeStopNs });
         waitForWorkerStatus(worker, 4);
         const result = collector.finish();
-        emitSingleSocketHwmDetail(server, 'DEALER_DEALER', options.transport, 'receiver', msgSize);
+        emitSingleSocketHwmDetail(serverMonitor, server, 'DEALER_DEALER', options.transport, 'receiver', msgSize);
         return result;
     }
     finally {

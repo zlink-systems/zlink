@@ -4,11 +4,11 @@ package systems.zlink.perf.single;
 
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.SendSubmission;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.sockets.PairSocket;
 import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.messaging.Received;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.SubmitResult;
@@ -130,8 +130,16 @@ final class PerfPair {
                     // the application does not register level-triggered
                     // POLLOUT or resubmit the stop token.
                     try (Message stop = PerfStopToken.newMessage()) {
-                        sender.send().message(stop).submit()
-                            .toCompletableFuture().join();
+                        SendSubmission submission = sender.send().message(stop)
+                            .submit();
+                        if (submission.result()
+                            == SubmitResult.BACKPRESSURED) {
+                            submission.admitted().toCompletableFuture().join();
+                        } else if (submission.result() != SubmitResult.OK) {
+                            throw new IllegalStateException(
+                                "async stop send returned "
+                                    + submission.result());
+                        }
                     }
                 } catch (Throwable ex) {
                     failure.compareAndSet(null, ex);

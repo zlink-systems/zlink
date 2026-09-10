@@ -14,7 +14,7 @@ STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
 LOG_ROOT="${SCRIPT_DIR}/../log/cpp"
 LOG_DIR="${OUTPUT_DIR:-${LOG_ROOT}/${STAMP}/${RUN_LABEL}}"
 IMPLEMENTATIONS="${IMPLEMENTATIONS:-grpc-cpp,zlink-cpp,zlink-framework-cpp}"
-PATTERNS="${PATTERNS:-request-serial,request-window,request-backpressure,send-saturation}"
+PATTERNS="${PATTERNS:-request-serial,request-backpressure,send-saturation}"
 PAYLOAD_SIZES="${PAYLOAD_SIZES:-1024,4096}"
 DURATION_SECONDS="${DURATION_SECONDS:-5}"
 WARMUP_SECONDS="${WARMUP_SECONDS:-${WARMUP:-5}}"
@@ -68,7 +68,7 @@ done
 IFS=',' read -r -a patterns <<<"${PATTERNS}"
 for pattern in "${patterns[@]}"; do
   case "${pattern}" in
-    request-serial|request-window|request-backpressure|send-saturation) ;;
+    request-serial|request-backpressure|send-saturation) ;;
     *) echo "unknown pattern: ${pattern}" >&2; exit 2 ;;
   esac
 done

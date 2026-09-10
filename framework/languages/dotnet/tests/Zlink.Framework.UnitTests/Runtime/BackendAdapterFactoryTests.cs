@@ -104,7 +104,7 @@ public sealed class BackendAdapterFactoryTests
             requestTask = dealer.Request()
                 .Message(request)
                 .Timeout(TimeSpan.FromSeconds(2))
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Reply;
         }
 
         using var received = await ReceiveAsync(router, TimeSpan.FromSeconds(2));
@@ -170,7 +170,7 @@ public sealed class BackendAdapterFactoryTests
             requestTask = dealer.Request()
                 .Message(request)
                 .Timeout(TimeSpan.FromSeconds(2))
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Reply;
         }
 
         using (var received = Received.Create())

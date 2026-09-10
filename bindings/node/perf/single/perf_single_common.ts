@@ -188,20 +188,10 @@ function singleAutoHwmSnapshotVisible(snapshot) {
     || BigInt(snapshot.rcvPendingBytes ?? 0) > 0n;
 }
 
-function emitSingleSocketHwmDetail(socket, pattern, transport, component, msgSize) {
-  if (!socket || !pattern || !component) {
+function emitSingleSocketHwmDetail(monitor, socket, pattern, transport, component, msgSize) {
+  if (!monitor || !socket || !pattern || !component) {
     return;
   }
-  // Objects without a monitor surface do not emit this optional diagnostic.
-  if (typeof socket.monitorOpen !== 'function') {
-    return;
-  }
-  // PERF_POLICY § 1.1.4: do not silently swallow real failures. A failed
-  // `monitorOpen` on a socket that DOES support it means a broken/closed
-  // socket — a real benchmark fault that must surface. Only the snapshot
-  // read + diagnostic emission itself is best-effort (it never affects
-  // the measured RESULT).
-  const monitor = socket.monitorOpen([MonitorEventType.ConnectionReady]);
   try {
     const snapshot = monitor.status();
     if (!singleAutoHwmSnapshotVisible(snapshot)) {
@@ -227,8 +217,6 @@ function emitSingleSocketHwmDetail(socket, pattern, transport, component, msgSiz
     );
   } catch (err) {
     // Snapshot/emit is diagnostic only; keep the benchmark result primary.
-  } finally {
-    monitor?.close();
   }
 }
 
@@ -279,36 +267,6 @@ function isStopTokenPayload(buffer, size) {
     }
   }
   return true;
-}
-
-function waitForConnectionReady(
-  socket,
-  connectFn = null,
-  timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 1000)
-) {
-  const monitor = socket.monitorOpen([MonitorEventType.ConnectionReady]);
-  try {
-    if (typeof connectFn === 'function') {
-      connectFn();
-    }
-    const deadline = monotonicMs() + timeoutMs;
-    while (monotonicMs() < deadline) {
-      try {
-        const event = monitor.recv(RecvFlags.DontWait);
-        if (event && event.event === MonitorEventType.ConnectionReady) {
-          return;
-        }
-      } catch (error) {
-        if (!(error instanceof zlink.RecvError && error.result === RecvResult.NoData)) {
-          throw error;
-        }
-      }
-      sleepMillisSync(1);
-    }
-    throw new Error(`connection ready timeout after ${timeoutMs}ms`);
-  } finally {
-    monitor.close();
-  }
 }
 
 function waitForMonitorConnectionReady(
@@ -668,7 +626,6 @@ module.exports = {
   spawnSenderWorker,
   waitForWorkerStatus,
   waitForPostReadySettle,
-  waitForConnectionReady,
   waitForMonitorConnectionReady,
 };
 
@@ -691,6 +648,5 @@ export {
   spawnSenderWorker,
   waitForWorkerStatus,
   waitForPostReadySettle,
-  waitForConnectionReady,
   waitForMonitorConnectionReady,
 };
