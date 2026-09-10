@@ -1,0 +1,77 @@
+You are a coding sub-agent for the zlink repository (GitHub Issue #63). Work ONLY inside the given
+worktree (branch core/63-core-c-api-whole-message-recv-router-rec). Commit to that branch only. Do
+NOT touch spec/guide docs (core/doc/**, bindings/doc/**) — the supervisor owns those. Do NOT push or
+open PRs.
+
+== Authoritative documents (read first) ==
+- Core contract (just added, authoritative): core/doc/spec/core/socket/README.{ko,en}.md section
+  "zlink_recv 와 zlink_router_recv" — the whole-message recv contract (caller array + capacity +
+  count, atomic whole-record, ZLINK_RECV_BUFFER_TOO_SMALL non-consuming retry, EBUSY mixing).
+- Design: doc/draft/core-whole-message-recv-api.ko.md §4, §5 (binding internal change, public
+  signature unchanged). Apply plan: doc/plan/core-whole-message-recv-api-apply-plan.ko.md §5.
+- Decisions: doc/plan/issue-63-worklog/decisions.ko.md (D63-1..D63-5).
+- Rules: CONTRIBUTING.ko.md §9 (commits), §10 (agent scope); AGENTS.md §2.1.
+- New public C API is available in the local Core (core/include + core/build-dev/lib):
+    zlink_recv(void* s, const zlink_routing_id_t** rid_out, zlink_msg_t* parts_out,
+               size_t parts_capacity, size_t* part_count_out, zlink_recv_flags_t flags)   // PAIR/DEALER
+    zlink_router_recv(void* r, const zlink_routing_id_t** rid_out, zlink_reply_token_t* token_out,
+               zlink_msg_t* parts_out, size_t parts_capacity, size_t* part_count_out,
+               zlink_recv_flags_t flags)                                                    // ROUTER
+
+== Principles ==
+- Public binding surface is UNCHANGED. `int recv(received_t&, recv_flags_t)` and its return/parity
+  contract stay identical. Only the INTERNAL fill of received_t._parts changes. No numbers
+  fabrication. Match surrounding cpp style/idiom. Keep thread-safety/single-consumer.
+
+== TASK (apply-plan step ⑤, cpp binding) ==
+Replace the internal per-part receive loop that fills received_t with a SINGLE whole-message recv
+call into a reusable/growable array, then move those parts into received_t._parts.
+
+Current internals (re-verify with grep before editing):
+- bindings/cpp/src/Runtime/Sockets/detail.hpp — receive-into-received helpers with recv_part loops
+  (~lines 98, 124, 151 use zlink_recv_part / zlink_router_recv_part in a has_more loop).
+- bindings/cpp/src/Runtime/Native/native_receive.hpp — thin wrappers over zlink_*_recv_part.
+- bindings/cpp/src/Runtime/Sockets/{pair,dealer,router}.cpp — recv(received_t&) call the helpers.
+
+Transition:
+- PAIR/DEALER recv(received_t&): call zlink_recv once into a caller-owned zlink_msg_t array; fill
+  received_t (no routing id). ROUTER recv(received_t&): call zlink_router_recv once; fill parts +
+  routing_id + reply token.
+- Capacity: use a growable buffer (e.g. a std::vector<message_t>/raw zlink_msg_t array the socket or
+  received_t already owns). On ZLINK_RECV_BUFFER_TOO_SMALL (ENOBUFS), the returned count is the
+  needed size — grow to that and retry; the record is preserved so the retry gets the same record.
+  Prefer reusing an existing per-socket/per-received buffer to keep this zero/low-alloc.
+- Preserve the exact public parity: same return values for success / non-blocking no-data (EAGAIN) /
+  errors; same received_t contents (parts order/bytes, routing id, reply token); same ownership
+  (each part closed exactly once — reuse received_t's existing close path). Keep any existing
+  single-part fast path if it stays correct.
+- native_receive.hpp: add thin wrappers over zlink_recv / zlink_router_recv (mirroring the existing
+  recv_part wrappers). Do NOT remove the recv_part wrappers if other code (e.g. the single-part
+  recv(message_t&) overload) still uses them — those per-part public overloads stay.
+- The raw header mirror bindings/cpp/include/zlink/socket/api.h already has the new declarations
+  (synced). Do not edit headers by hand; if a mismatch appears, run
+  `python3 scripts/local-package/sync-version.py --check`.
+
+== Build & test against LOCAL Core (new symbols live in core/build-dev) ==
+Core is already built (core/build-dev has zlink_recv/zlink_router_recv). Run the cpp contract suite
+against it:
+  JOBS=4 scripts/build-core.sh dev        # only if core/build-dev is stale; otherwise skip
+  ZLINK_CORE_SOURCE=local ZLINK_CPP_CORE_BUILD_DIR="$PWD/core/build-dev" ZLINK_BUILD_JOBS=4 \
+    bash bindings/cpp/tests/run_tests.sh
+All cpp contract tests must pass. If a test asserts internal behavior that legitimately changed
+(e.g. a per-message native-call count), update it to assert the new observable behavior WITHOUT
+weakening the public contract, and explain each such change.
+
+== Commit (to the issue branch only) ==
+  bindings(cpp): fill received_t via whole-message recv (one call, reusable array)
+
+  <what changed: detail.hpp/native_receive.hpp/pair·dealer·router.cpp internal recv fill switched
+   from a zlink_*_recv_part has_more loop to a single zlink_recv/zlink_router_recv call with a
+   growable buffer and BUFFER_TOO_SMALL retry>. Public recv(received_t&) surface unchanged. Refs #63.
+
+  Test: ZLINK_CORE_SOURCE=local ... bindings/cpp/tests/run_tests.sh — <pass summary>
+
+== Deliverable ==
+Committed on the branch. Report: files changed, how capacity/retry + ownership are handled, any test
+updated and why, and the exact cpp contract-test pass summary. Confirm the public recv surface and
+per-part recv overloads are unchanged.
