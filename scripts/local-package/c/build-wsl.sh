@@ -23,7 +23,10 @@ export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
 export ZLINK_CORE_VERSION="$core_version"
 "$repo_root/scripts/local-package/native/sync-local-core-libs.sh" c
 
-build_dir="$artifact_root/build/bindings-c-$core_version"
+# package-cache.py links <staging>/build to this worktree's build tree, and that
+# alias changes every run. CMake records the path it is configured with, so an
+# alias makes the next run fail on a mismatched CMakeCache. Use the real path.
+build_dir="$(readlink -f "$artifact_root/build")/bindings-c-$core_version"
 cmake -S "$repo_root/bindings/c" -B "$build_dir" \
   -DCMAKE_BUILD_TYPE="$configuration" \
   -DZLINK_C_CORE_BUILD_DIR="$core_prefix" \
