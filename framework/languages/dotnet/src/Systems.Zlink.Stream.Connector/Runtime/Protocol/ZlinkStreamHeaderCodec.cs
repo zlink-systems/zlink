@@ -20,14 +20,14 @@ internal sealed class ZlinkStreamHeaderCodec
         ValidateOutboundPacketName(header.Kind, header.Name);
         ValidateEnum(header.Kind, header.Codec, header.Flags);
 
-        var nameBytes = Encoding.UTF8.GetBytes(header.Name);
+        var nameLength = Encoding.UTF8.GetByteCount(header.Name);
         var hasRequestSeq = header.RequestSeq is not null;
         var hasMetadata = header.Metadata.Count > 0;
         var hasCorrelationId = !string.IsNullOrEmpty(header.CorrelationId);
-        var correlationBytes = hasCorrelationId
-            ? Encoding.UTF8.GetBytes(header.CorrelationId!)
-            : Array.Empty<byte>();
-        if (correlationBytes.Length > byte.MaxValue)
+        var correlationLength = hasCorrelationId
+            ? Encoding.UTF8.GetByteCount(header.CorrelationId!)
+            : 0;
+        if (correlationLength > byte.MaxValue)
             throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.ValidationFailed, "Correlation id is too long.");
         var hasFlowId = header.FlowId is not null || header.FlowOrigin is not null;
         if (hasFlowId && (header.FlowId is null || header.FlowOrigin is null))
@@ -58,9 +58,9 @@ internal sealed class ZlinkStreamHeaderCodec
                 ZlinkStreamErrorCode.ValidationFailed,
                 $"Metadata payload exceeds fixed limit ({MaxMetadataPayloadSize}).");
 
-        var size = 4 + (hasRequestSeq ? 8 : 0) + 1 + nameBytes.Length
+        var size = 4 + (hasRequestSeq ? 8 : 0) + 1 + nameLength
                    + (hasMetadata ? 2 + metadataSize : 0)
-                   + (hasCorrelationId ? 1 + correlationBytes.Length : 0)
+                   + (hasCorrelationId ? 1 + correlationLength : 0)
                    + (hasFlowId ? ZlinkStreamFlowId.EncodedLength + 1 : 0);
         var buffer = new byte[size];
         var offset = 0;
@@ -79,9 +79,9 @@ internal sealed class ZlinkStreamHeaderCodec
             offset += 8;
         }
 
-        buffer[offset++] = (byte)nameBytes.Length;
-        nameBytes.CopyTo(buffer.AsSpan(offset));
-        offset += nameBytes.Length;
+        buffer[offset++] = (byte)nameLength;
+        Encoding.UTF8.GetBytes(header.Name, buffer.AsSpan(offset, nameLength));
+        offset += nameLength;
 
         if (hasMetadata)
         {
@@ -93,9 +93,9 @@ internal sealed class ZlinkStreamHeaderCodec
 
         if (hasCorrelationId)
         {
-            buffer[offset++] = (byte)correlationBytes.Length;
-            correlationBytes.CopyTo(buffer.AsSpan(offset));
-            offset += correlationBytes.Length;
+            buffer[offset++] = (byte)correlationLength;
+            Encoding.UTF8.GetBytes(header.CorrelationId!, buffer.AsSpan(offset, correlationLength));
+            offset += correlationLength;
         }
 
         if (hasFlowId)

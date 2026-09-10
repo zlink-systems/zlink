@@ -176,9 +176,9 @@ internal sealed partial class ZLinkEntrySpotActivation
         return ValueTask.CompletedTask;
     }
 
-    public async ValueTask DispatchRouteDrainAsync(CancellationToken cancellationToken)
+    public ValueTask DispatchRouteDrainAsync(CancellationToken cancellationToken)
     {
-        await DispatchRouteDrainTurnAsync(cancellationToken).ConfigureAwait(false);
+        return DispatchRouteDrainTurnAsync(cancellationToken);
     }
 
     internal ValueTask DispatchRouteDrainAsync(
@@ -192,14 +192,14 @@ internal sealed partial class ZLinkEntrySpotActivation
             out drain);
     }
 
-    public async ValueTask DispatchRouteAsync(
+    public ValueTask DispatchRouteAsync(
         ZLinkBackendRouteReceived received,
         CancellationToken cancellationToken)
     {
-        await ExecuteAsync(
+        return ExecuteAsync(
             static (activation, state, ct) => activation._dispatcher.DispatchRouteAsync(state, ct),
             received,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken);
     }
 
     internal ValueTask DispatchRouteAsync(
@@ -227,9 +227,9 @@ internal sealed partial class ZLinkEntrySpotActivation
         }
     }
 
-    public async ValueTask DispatchActorJoinDrainAsync(CancellationToken cancellationToken)
+    public ValueTask DispatchActorJoinDrainAsync(CancellationToken cancellationToken)
     {
-        await DispatchActorJoinDrainTurnAsync(cancellationToken).ConfigureAwait(false);
+        return DispatchActorJoinDrainTurnAsync(cancellationToken);
     }
 
     private async ValueTask DispatchRouteDrainTurnAsync(

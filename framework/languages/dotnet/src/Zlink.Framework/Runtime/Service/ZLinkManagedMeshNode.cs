@@ -5604,189 +5604,228 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
             return false;
         }
-        if (ZLinkServiceWireCodec.TryDecodeStateful(
-                head,
-                _meshName,
-                out var stateful,
-                out _))
+        if (!ZLinkServiceWireCodec.TryDecodePrefix(
+                head, out var recordCommand, out var recordFlags, out _))
         {
-            return ProcessStateful(
-                sourceRid,
-                stateful,
-                ownership);
-        }
-        if (IsCanonicalActorJoinHeader(head))
-        {
-            if (received.MessageType != ReceivedMessageType.Request
-                || received.ReplyToken is null)
-            {
-                // Command 28 owns a Core request window. A one-way ingress has
-                // no opaque reply capability on which command 20 can terminate it.
-                Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
-                return false;
-            }
-            var nativeReply = received.Reply();
-            var canonical = ZLinkMeshRecordAdapters.TryDecodeCanonicalActorJoin(
-                received.Parts,
-                _meshName);
-            if (canonical is null)
-            {
-                if (TryReadCanonicalActorJoinCorrelation(head, out var correlation))
-                    SendCanonicalActorJoinTerminal(
-                        sourceRid,
-                        nativeReply,
-                        correlation,
-                        RequestResult.ProtocolError,
-                        (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError);
-                return false;
-            }
-            return ProcessCanonicalActorJoin(
-                sourceRid,
-                nativeReply,
-                canonical.Request,
-                ownership);
-        }
-        if (ZLinkServiceWireCodec.TryDecodeInstanceSpotActivation(
-                head,
-                out var instanceActivation,
-                out _))
-        {
-            ProcessInstanceSpotActivation(sourceRid, instanceActivation, received);
+            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
             return false;
         }
-        if (ZLinkServiceWireCodec.TryDecodeUserSpotOperation(
-                head,
-                out var userSpotOperation,
-                out _))
+        switch (recordCommand)
         {
-            if (received.MessageType != ReceivedMessageType.Request
-                || received.ReplyToken is null)
+            case ServiceWireConstants.Command.SpotSend:
+            case ServiceWireConstants.Command.SpotRequest:
+            case ServiceWireConstants.Command.ActorSend:
+            case ServiceWireConstants.Command.ActorRequest:
             {
-                Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
-                return false;
+                if (!ZLinkServiceWireCodec.TryDecodeStateful(
+                    head,
+                    recordCommand,
+                    recordFlags,
+                    _meshName,
+                    out var stateful,
+                    out _))
+                    break;
+                return ProcessStateful(
+                    sourceRid,
+                    stateful,
+                    ownership);
             }
-            ProcessUserSpotOperation(
-                sourceRid,
-                received.Reply(),
-                ownership.TakeApplicationOwner(),
-                userSpotOperation);
-            return true;
-        }
-        if (ZLinkServiceWireCodec.TryDecodeActorCreateOperation(
-                head,
-                out var actorCreateOperation,
-                out _))
-        {
-            if (received.MessageType != ReceivedMessageType.Request
-                || received.ReplyToken is null)
+            case ServiceWireConstants.Command.ActorJoin:
             {
-                Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
-                return false;
-            }
-            ProcessActorCreateOperation(
-                sourceRid,
-                received.Reply(),
-                ownership.TakeApplicationOwner(),
-                actorCreateOperation);
-            return true;
-        }
-        if (ZLinkServiceWireCodec.TryDecodeActorDestroy(
-                head,
-                _meshName,
-                out var actorDestroyOperation,
-                out _))
-        {
-            ProcessActorDestroyOperation(
-                sourceRid,
-                actorDestroyOperation,
-                received.Parts.Count);
-            return false;
-        }
-        if (ZLinkServiceWireCodec.TryDecodeLogicalMulticast(
-                head,
-                out var logicalMulticast,
-                out _))
-        {
-            var multicastPayloadOffset = logicalMulticast.HasMetadata ? 2 : 1;
-            if (received.Parts.Count != multicastPayloadOffset + 1
-                || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
-                    received.Parts[multicastPayloadOffset],
-                    out var decodedMulticastParts))
-            {
-                Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
-                return false;
-            }
-            var multicastMetadata = logicalMulticast.HasMetadata
-                ? received.Parts[1].ToArray()
-                : null;
-            var matchingSpots = _spots.Values
-                .Where(spot => spot.Matches(
-                    logicalMulticast.ChannelName,
-                    logicalMulticast.Topic))
-                .OrderBy(
-                    static spot => spot.RoutingId.ToHex(),
-                    StringComparer.Ordinal)
-                .ToArray();
-            var envelopeOwner = ownership.ShareEnvelope();
-            var delivered = false;
-            try
-            {
-                for (var index = 0; index < matchingSpots.Length; index++)
+                if (received.MessageType != ReceivedMessageType.Request
+                    || received.ReplyToken is null)
                 {
-                    var spot = matchingSpots[index];
-                    ZLinkApplicationJobQueueLease? childAdmission = null;
-                    IDisposable? childRecordOwner = null;
-                    try
+                    // Command 28 owns a Core request window. A one-way ingress has
+                    // no opaque reply capability on which command 20 can terminate it.
+                    Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+                    return false;
+                }
+                var nativeReply = received.Reply();
+                var canonical = ZLinkMeshRecordAdapters.TryDecodeCanonicalActorJoin(
+                    received.Parts,
+                    _meshName);
+                if (canonical is null)
+                {
+                    if (TryReadCanonicalActorJoinCorrelation(head, out var correlation))
+                        SendCanonicalActorJoinTerminal(
+                            sourceRid,
+                            nativeReply,
+                            correlation,
+                            RequestResult.ProtocolError,
+                            (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError);
+                    return false;
+                }
+                return ProcessCanonicalActorJoin(
+                    sourceRid,
+                    nativeReply,
+                    canonical.Request,
+                    ownership);
+            }
+            case ServiceWireConstants.Command.InstanceSpot:
+            {
+                if (!ZLinkServiceWireCodec.TryDecodeInstanceSpotActivation(
+                    head,
+                    recordCommand,
+                    recordFlags,
+                    out var instanceActivation,
+                    out _))
+                    break;
+                ProcessInstanceSpotActivation(sourceRid, instanceActivation, received);
+                return false;
+            }
+            case ServiceWireConstants.Command.UserSpotCreate:
+            case ServiceWireConstants.Command.UserSpotClose:
+            {
+                if (!ZLinkServiceWireCodec.TryDecodeUserSpotOperation(
+                    head,
+                    recordCommand,
+                    recordFlags,
+                    out var userSpotOperation,
+                    out _))
+                    break;
+                if (received.MessageType != ReceivedMessageType.Request
+                    || received.ReplyToken is null)
+                {
+                    Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+                    return false;
+                }
+                ProcessUserSpotOperation(
+                    sourceRid,
+                    received.Reply(),
+                    ownership.TakeApplicationOwner(),
+                    userSpotOperation);
+                return true;
+            }
+            case ServiceWireConstants.Command.ActorCreate:
+            {
+                if (!ZLinkServiceWireCodec.TryDecodeActorCreateOperation(
+                    head,
+                    recordCommand,
+                    recordFlags,
+                    out var actorCreateOperation,
+                    out _))
+                    break;
+                if (received.MessageType != ReceivedMessageType.Request
+                    || received.ReplyToken is null)
+                {
+                    Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+                    return false;
+                }
+                ProcessActorCreateOperation(
+                    sourceRid,
+                    received.Reply(),
+                    ownership.TakeApplicationOwner(),
+                    actorCreateOperation);
+                return true;
+            }
+            case ServiceWireConstants.Command.ActorDestroy:
+            {
+                if (!ZLinkServiceWireCodec.TryDecodeActorDestroy(
+                    head,
+                    recordCommand,
+                    recordFlags,
+                    _meshName,
+                    out var actorDestroyOperation,
+                    out _))
+                    break;
+                ProcessActorDestroyOperation(
+                    sourceRid,
+                    actorDestroyOperation,
+                    received.Parts.Count);
+                return false;
+            }
+            case ServiceWireConstants.Command.LogicalMulticast:
+            {
+                if (!ZLinkServiceWireCodec.TryDecodeLogicalMulticast(
+                    head,
+                    recordCommand,
+                    recordFlags,
+                    out var logicalMulticast,
+                    out _))
+                    break;
+                var multicastPayloadOffset = logicalMulticast.HasMetadata ? 2 : 1;
+                if (received.Parts.Count != multicastPayloadOffset + 1
+                    || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
+                        received.Parts[multicastPayloadOffset],
+                        out var decodedMulticastParts))
+                {
+                    Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+                    return false;
+                }
+                var multicastMetadata = logicalMulticast.HasMetadata
+                    ? received.Parts[1].ToArray()
+                    : null;
+                var matchingSpots = _spots.Values
+                    .Where(spot => spot.Matches(
+                        logicalMulticast.ChannelName,
+                        logicalMulticast.Topic))
+                    .OrderBy(
+                        static spot => spot.RoutingId.ToHex(),
+                        StringComparer.Ordinal)
+                    .ToArray();
+                var envelopeOwner = ownership.ShareEnvelope();
+                var delivered = false;
+                try
+                {
+                    for (var index = 0; index < matchingSpots.Length; index++)
                     {
-                        childAdmission = null;
-                        childRecordOwner = AttachApplicationAdmission(
-                            envelopeOwner.Retain(),
-                            childAdmission);
-                        childAdmission = null;
-                        var multicastParts = CloneParts(decodedMulticastParts);
-                        if (EnqueueOwned(
-                                MailboxKey.ForSpot(spot, MeshReadyDomains.Application),
-                                new MeshReceiveRecord(
-                                    MeshRecordKind.SpotMulticast,
-                                    MeshReadyDomains.Application,
-                                    sourceRid,
-                                    logicalMulticast.SourceSpotId,
-                                    ResolvePeerGeneration(sourceRid),
-                                    default,
-                                    default,
-                                    default,
-                                    logicalMulticast.ChannelName,
-                                    logicalMulticast.Topic,
-                                    multicastMetadata,
-                                    0,
-                                    multicastParts.Count,
-                                    0,
-                                    0,
-                                    null),
-                                multicastParts,
-                                true,
-                                childRecordOwner))
+                        var spot = matchingSpots[index];
+                        ZLinkApplicationJobQueueLease? childAdmission = null;
+                        IDisposable? childRecordOwner = null;
+                        try
                         {
-                            delivered = true;
-                            childRecordOwner = null;
+                            childAdmission = null;
+                            childRecordOwner = AttachApplicationAdmission(
+                                envelopeOwner.Retain(),
+                                childAdmission);
+                            childAdmission = null;
+                            var multicastParts = CloneParts(decodedMulticastParts);
+                            if (EnqueueOwned(
+                                    MailboxKey.ForSpot(spot, MeshReadyDomains.Application),
+                                    new MeshReceiveRecord(
+                                        MeshRecordKind.SpotMulticast,
+                                        MeshReadyDomains.Application,
+                                        sourceRid,
+                                        logicalMulticast.SourceSpotId,
+                                        ResolvePeerGeneration(sourceRid),
+                                        default,
+                                        default,
+                                        default,
+                                        logicalMulticast.ChannelName,
+                                        logicalMulticast.Topic,
+                                        multicastMetadata,
+                                        0,
+                                        multicastParts.Count,
+                                        0,
+                                        0,
+                                        null),
+                                    multicastParts,
+                                    true,
+                                    childRecordOwner))
+                            {
+                                delivered = true;
+                                childRecordOwner = null;
+                            }
+                        }
+                        finally
+                        {
+                            childRecordOwner?.Dispose();
+                            childAdmission?.Dispose();
                         }
                     }
-                    finally
-                    {
-                        childRecordOwner?.Dispose();
-                        childAdmission?.Dispose();
-                    }
                 }
+                finally
+                {
+                    envelopeOwner.Dispose();
+                    DisposeParts(decodedMulticastParts);
+                }
+                return delivered;
             }
-            finally
-            {
-                envelopeOwner.Dispose();
-                DisposeParts(decodedMulticastParts);
-            }
-            return delivered;
         }
         if (!ZLinkServiceWireCodec.TryDecodeApplication(
             head,
+            recordCommand,
+            recordFlags,
             out var application,
             out _))
         {
@@ -6041,13 +6080,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             (uint)ServiceWireConstants.FrameworkErrorCode.None);
         return false;
     }
-
-    private static bool IsCanonicalActorJoinHeader(ReadOnlySpan<byte> head) =>
-        head.Length >= 5
-        && head[0] == ServiceWireConstants.Magic0
-        && head[1] == ServiceWireConstants.Magic1
-        && head[2] == ServiceWireConstants.WireMajor
-        && head[3] == (byte)ServiceWireConstants.Command.ActorJoin;
 
     private static bool TryReadCanonicalActorJoinCorrelation(
         ReadOnlySpan<byte> head,

@@ -11,6 +11,20 @@ namespace Zlink.Framework.UnitTests;
 public sealed class StreamWireInteropTests
 {
     [Fact]
+    public void CorrelationText_IsWrittenIntoTheFinalHeaderWithIdenticalUtf8Bytes()
+    {
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Send, ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.None, null, "packet",
+            ZlinkStreamMetadata.Empty, "a한é");
+        byte[] expected = [0xf2, 1, 1, 8, 6, 0x70, 0x61, 0x63, 0x6b, 0x65, 0x74,
+            6, 0x61, 0xed, 0x95, 0x9c, 0xc3, 0xa9];
+        var codec = new ConnectorHeaderCodec();
+        Assert.Equal(expected, codec.Encode(header).ToArray());
+        Assert.Equal("a한é", codec.Decode(expected).CorrelationId);
+    }
+
+    [Fact]
     public void Framework_error_wire_code_preserves_the_public_error_kind()
     {
         var error = ZLinkStreamWireError.FromException(
