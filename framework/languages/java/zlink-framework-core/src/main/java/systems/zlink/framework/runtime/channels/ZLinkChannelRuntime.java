@@ -114,7 +114,6 @@ public final class ZLinkChannelRuntime
     implements ZLinkClient, ZLinkFanoutClient, ZLinkRouteClient, ZLinkChannelRuntimeOptions,
         AutoCloseable {
     private static final Logger LOGGER = Logger.getLogger(ZLinkChannelRuntime.class.getName());
-    private static final Duration CLIENT_SERVER_READY_WAIT_CAP = Duration.ofSeconds(5);
     private static final String SPOT_ROUTE_BRIDGE_SEND_PACKET_NAME =
         "__zlink.routed_spot.egress.send";
     private static final String SPOT_ROUTE_BRIDGE_REQUEST_PACKET_NAME =
@@ -1032,53 +1031,10 @@ public final class ZLinkChannelRuntime
         rejectAfterRelocationReady("Channel send");
         ZLinkPayloadEncoding.EncodedPayload encoded =
             encodePayload(message);
-        ZLinkBackendDealerSocket client = sockets.clientForOutbound(channelName);
-        if (client != null) {
-            return new SendCall(
-                callRuntime,
-                client,
-                encoded.payload(),
-                Optional.of(encoded.packetName()),
-                encoded.contentType());
-        }
-        ZLinkInternalSpotNode node = sockets.spotRouterNode(channelName);
-        if (node != null) {
-            return new MeshChannelRouteSendCall(
-                callRuntime,
-                channelName,
-                node,
-                encoded.payload(),
-                Optional.of(encoded.packetName()),
-                encoded.contentType(),
-                ZLinkApplicationMetadata.empty());
-        }
-        if (sockets.hasClientRegistration(channelName)) {
-            try {
-                return new SendCall(
-                    callRuntime,
-                    awaitClientServerTarget(channelName, defaultRequestTimeout(channelName)),
-                    encoded.payload(),
-                    Optional.of(encoded.packetName()),
-                    encoded.contentType());
-            } catch (RuntimeException failure) {
-                encoded.payload().close();
-                throw failure;
-            }
-        }
-        encoded.payload().close();
-        if (sockets.hasServerRegistration(channelName)) {
-            // A registered ClientServer Server without the Client role is a
-            // missing-role configuration, not a missing target: a Server can't
-            // start an outbound business call (spec 09-client-server-channel),
-            // so NotConfigured, not NotFound.
-            throw new ZLinkConfigurationException(
-                ZLinkFrameworkErrorKind.NOT_CONFIGURED,
-                "ClientServer Client role is not registered for this channel: "
-                    + channelName);
-        }
-        throw new ZLinkConfigurationException(
-            ZLinkFrameworkErrorKind.NOT_FOUND,
-            "channel has no request route: " + channelName);
+        return new ChannelSendCall(
+            callRuntime, channelName, sockets, defaultRequestTimeout,
+            encoded.payload(), Optional.of(encoded.packetName()),
+            encoded.contentType(), null);
     }
 
     private ZLinkPayloadEncoding.EncodedPayload encodePayload(Object message) {
@@ -1094,62 +1050,10 @@ public final class ZLinkChannelRuntime
         rejectAfterRelocationReady("Channel request");
         ZLinkPayloadEncoding.EncodedPayload encoded =
             encodePayload(message);
-        if (sockets.hasClientRegistration(channelName)) {
-            return new RequestCall(
-                callRuntime,
-                remaining -> awaitClientServerTarget(channelName, remaining),
-                encoded.payload(),
-                Optional.of(encoded.packetName()),
-                defaultRequestTimeout(channelName),
-                ZLinkRequestMetricTags.forChannel(channelName),
-                encoded.contentType());
-        }
-        ZLinkInternalSpotNode node = sockets.spotRouterNode(channelName);
-        if (node != null) {
-            return new MeshChannelRouteRequestCall(
-                callRuntime,
-                channelName,
-                node,
-                encoded.payload(),
-                Optional.of(encoded.packetName()),
-                defaultRequestTimeout(channelName),
-                encoded.contentType(),
-                ZLinkApplicationMetadata.empty());
-        }
-        encoded.payload().close();
-        if (sockets.hasServerRegistration(channelName)) {
-            // A registered ClientServer Server without the Client role is a
-            // missing-role configuration, not a missing target.
-            throw new ZLinkConfigurationException(
-                ZLinkFrameworkErrorKind.NOT_CONFIGURED,
-                "ClientServer Client role is not registered for this channel: "
-                    + channelName);
-        }
-        throw new ZLinkConfigurationException(
-            ZLinkFrameworkErrorKind.NOT_FOUND,
-            "channel has no request route: " + channelName);
-    }
-
-    // Channel messaging §3.2 bounds readiness by this operation's remaining
-    // time and the fixed five-second cap; admission progresses independently.
-    private ZLinkBackendDealerSocket awaitClientServerTarget(
-        String channelName,
-        Duration remaining) {
-        Duration bound = remaining.compareTo(CLIENT_SERVER_READY_WAIT_CAP) < 0
-            ? remaining
-            : CLIENT_SERVER_READY_WAIT_CAP;
-        ZLinkBackendDealerSocket ready = sockets.awaitClientForOutbound(channelName, bound);
-        if (ready != null) {
-            return ready;
-        }
-        boolean knownUnavailableTarget = sockets.hasUnavailableClientServerConnection(channelName);
-        throw new ZLinkFrameworkException(
-            knownUnavailableTarget
-                ? ZLinkFrameworkErrorKind.UNAVAILABLE
-                : ZLinkFrameworkErrorKind.NOT_FOUND,
-            knownUnavailableTarget
-                ? "client/server channel target is unavailable: " + channelName
-                : "client/server channel has no known server: " + channelName);
+        return new ChannelRequestCall(
+            callRuntime, channelName, sockets, defaultRequestTimeout,
+            encoded.payload(), Optional.of(encoded.packetName()), null,
+            encoded.contentType(), null);
     }
 
     @Override

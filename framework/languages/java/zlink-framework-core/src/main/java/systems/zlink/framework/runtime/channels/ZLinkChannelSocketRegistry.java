@@ -51,6 +51,11 @@ import systems.zlink.framework.runtime.internal.dispatch
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import java.util.function.Supplier;
+import java.util.function.BiFunction;
+import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 
@@ -275,32 +280,80 @@ final class ZLinkChannelSocketRegistry {
     }
 
     /**
-     * Waits for a ClientServer target within the caller's remaining budget.
-     * Admission callbacks update this registry on the
-     * monitor lane, so the wait never holds this registry's monitor.
+     * Resolves and starts an outbound operation in the registry turn. Only the
+     * operation completion leaves the turn; selected sockets and nodes do not.
+     * A cold ClientServer wait releases the lane between readiness checks.
      */
-    ZLinkBackendDealerSocket awaitClientForOutbound(
+    <T> CompletionStage<T> submitToChannel(
         String channelName,
-        Duration bound) {
-        long deadline = nanoTime.getAsLong() + bound.toNanos();
+        Duration timeoutOverride,
+        Duration defaultTimeout,
+        boolean metadataSpecified,
+        BiFunction<ZLinkBackendDealerSocket, Duration, CompletionStage<T>> clientSubmit,
+        BiFunction<ZLinkInternalSpotNode, Duration, CompletionStage<T>> meshSubmit) {
+        long started = nanoTime.getAsLong();
+        // This operation's timeout is fixed on its first turn, even if channel
+        // registration changes during the existing bounded readiness wait.
+        Duration[] timeout = {null};
+        ZLinkFlowContext.State flow = ZLinkFlowContext.current();
         while (true) {
-            ZLinkBackendDealerSocket ready = clientForOutbound(channelName);
-            if (ready != null) {
-                return ready;
+            boolean interrupted = Thread.currentThread().isInterrupted();
+            Supplier<CompletionStage<T>> attempt = () -> {
+                try (var ignored = flow == null ? ZLinkFlowContext.suppress() : ZLinkFlowContext.enter(flow)) {
+                    ChannelRegistration registration = registrations.get(channelName);
+                    if (timeout[0] == null) {
+                        timeout[0] = timeoutOverride != null ? timeoutOverride
+                            : registration != null && registration.defaultRequestTimeout() != null
+                                ? registration.defaultRequestTimeout() : defaultTimeout;
+                    }
+                    boolean client = registration != null
+                        && registration.kind() == ChannelKind.CLIENT_SERVER
+                        && registration.clientEnabled();
+                    if (client) {
+                        if (metadataSpecified) {
+                            throw new UnsupportedOperationException("ClientServer metadata is not available");
+                        }
+                        ZLinkBackendDealerSocket target = clientForOutboundCore(channelName);
+                        Duration remaining = timeout[0].minusNanos(nanoTime.getAsLong() - started);
+                        if (target != null) {
+                            return clientSubmit.apply(target, remaining);
+                        }
+                        long readyBound = Math.min(timeout[0].toNanos(), TimeUnit.SECONDS.toNanos(5));
+                        if (nanoTime.getAsLong() - started >= readyBound
+                            || interrupted) {
+                            boolean unavailable = hasUnavailableClientServerConnectionCore(channelName);
+                            throw new ZLinkFrameworkException(
+                                unavailable ? ZLinkFrameworkErrorKind.UNAVAILABLE
+                                    : ZLinkFrameworkErrorKind.NOT_FOUND,
+                                unavailable ? "client/server channel target is unavailable: " + channelName
+                                    : "client/server channel has no known server: " + channelName);
+                        }
+                        return null;
+                    }
+                    ZLinkInternalSpotNode node = spotRouterNodes.get(channelName);
+                    if (node != null) {
+                        return meshSubmit.apply(node, timeout[0]);
+                    }
+                    if (registration != null && registration.kind() == ChannelKind.CLIENT_SERVER
+                        && registration.clientServerServerEnabled()) {
+                        throw new ZLinkConfigurationException(ZLinkFrameworkErrorKind.NOT_CONFIGURED,
+                            "ClientServer Client role is not registered for this channel: " + channelName);
+                    }
+                    throw new ZLinkConfigurationException(ZLinkFrameworkErrorKind.NOT_FOUND,
+                        "channel has no request route: " + channelName);
+                }
+            };
+            CompletionStage<T> submitted = stateLane.isOnLane()
+                ? attempt.get() : inStateLane(attempt);
+            if (submitted != null) {
+                return submitted;
             }
-            long remaining = deadline - nanoTime.getAsLong();
-            if (remaining <= 0) {
-                return null;
-            }
-            parkNanos.accept(
-                Math.min(
-                    TimeUnit.MILLISECONDS.toNanos(
-                        READY_POLL_INTERVAL_MILLIS),
-                    remaining));
-            if (Thread.currentThread().isInterrupted()) {
-                Thread.currentThread().interrupt();
-                return clientForOutbound(channelName);
-            }
+            // An existing turn cannot block admission callbacks queued behind it.
+            stateLane.throwIfReentrant();
+            long remaining = Math.min(timeout[0].toNanos(), TimeUnit.SECONDS.toNanos(5))
+                - (nanoTime.getAsLong() - started);
+            parkNanos.accept(Math.min(TimeUnit.MILLISECONDS.toNanos(READY_POLL_INTERVAL_MILLIS),
+                Math.max(0, remaining)));
         }
     }
 
@@ -594,9 +647,13 @@ final class ZLinkChannelSocketRegistry {
     }
 
     boolean hasUnavailableClientServerConnection(String channelName) {
-        return inStateLane(() -> clientServerConnections.values().stream()
+        return inStateLane(() -> hasUnavailableClientServerConnectionCore(channelName));
+    }
+
+    private boolean hasUnavailableClientServerConnectionCore(String channelName) {
+        return clientServerConnections.values().stream()
             .anyMatch(connection -> connection.descriptor().channelName().equals(channelName)
-                && !connection.ready()));
+                && !connection.ready());
     }
 
     List<ClientServerTargetSnapshot>
