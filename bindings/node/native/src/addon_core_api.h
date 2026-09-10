@@ -32,8 +32,6 @@ napi_value ctx_reset_auto_hwm_budget_metrics (napi_env env, napi_callback_info i
 
 napi_value socket_new (napi_env env, napi_callback_info info);
 napi_value socket_close (napi_env env, napi_callback_info info);
-napi_value test_begin_held_routed_multipart (napi_env env, napi_callback_info info);
-napi_value test_end_held_routed_multipart (napi_env env, napi_callback_info info);
 napi_value test_run_send_close_stress (napi_env env, napi_callback_info info);
 napi_value socket_bind (napi_env env, napi_callback_info info);
 napi_value socket_unbind (napi_env env, napi_callback_info info);
