@@ -14,9 +14,23 @@ concept has_async_t = requires (T &&operation) { std::move (operation).async ();
 
 static_assert (std::is_move_constructible_v<zlink::async_result_t<void>>);
 static_assert (!std::is_copy_constructible_v<zlink::async_result_t<void>>);
+static_assert (std::is_same_v<decltype (zlink::send_submission_t::result),
+                              zlink_submit_result_t>);
+static_assert (std::is_same_v<decltype (zlink::request_submission_t::result),
+                              zlink_submit_result_t>);
+static_assert (std::is_move_constructible_v<zlink::send_submission_t>);
+static_assert (!std::is_copy_constructible_v<zlink::send_submission_t>);
+static_assert (std::is_move_constructible_v<zlink::request_submission_t>);
+static_assert (!std::is_copy_constructible_v<zlink::request_submission_t>);
 static_assert (std::is_same_v<
                decltype (std::declval<zlink::send_submit_operation_t &&> ().submit ()),
                void>);
+static_assert (std::is_same_v<
+               decltype (std::declval<zlink::send_submit_operation_t &&> ().async ()),
+               zlink::send_submission_t>);
+static_assert (std::is_same_v<
+               decltype (std::declval<zlink::request_submit_operation_t &&> ().async ()),
+               zlink::request_submission_t>);
 static_assert (has_async_t<zlink::send_submit_operation_t>);
 static_assert (!has_async_t<zlink::publish_submit_operation_t>);
 static_assert (std::is_move_constructible_v<zlink::stream_packet_t>);
