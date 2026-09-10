@@ -72,6 +72,14 @@
         <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
         <Compile Include="Runtime/ActorClientTests.cs"/>
         <Compile Include="Runtime/StateLaneTests.cs"/>
+        <Compile Include="Runtime/ProtobufNativePayloadTests.cs"/>
+        <Compile Include="Runtime/MeshMailboxReadinessTests.cs"/>
+        <Compile Include="Runtime/MeshPermitHandoffTests.cs"/>
+        <Compile Include="Runtime/MeshReplyPayloadOwnershipTests.cs"/>
+        <Compile Include="Runtime/MeshMonitorHotPathTests.cs"/>
+        <Compile Include="Runtime/MeshChannelSelectionHotPathTests.cs"/>
+        <Compile Include="Runtime/EnvelopeHeaderCacheHotPathTests.cs"/>
+        <Compile Include="Runtime/MeshApplicationWorkerTests.cs"/>
         <Compile Include="Runtime/SmallStateOwnershipMechanismTests.cs"/>
         <Compile Include="Runtime/ActorBoundSessionRelayTests.cs"/>
         <Compile Include="Runtime/ApplicationJobQueueTests.cs"/>
@@ -98,6 +106,7 @@
         <Compile Include="Runtime/RuntimeIdentifierTests.cs"/>
         <Compile Include="Runtime/FanoutAutomaticDiscoveryTests.cs"/>
         <Compile Include="Runtime/EnvelopeCodecTests.cs"/>
+        <Compile Include="Runtime/MessagingHotPathWireTests.cs"/>
         <Compile Include="Runtime/ErrorReplyWireConvergenceTests.cs"/>
         <Compile Include="Runtime/EndpointConnectionsTests.cs"/>
         <Compile Include="Runtime/EndpointNotationTests.cs"/>

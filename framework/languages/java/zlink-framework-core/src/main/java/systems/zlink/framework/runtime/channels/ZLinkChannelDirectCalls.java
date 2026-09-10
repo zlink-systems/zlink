@@ -357,10 +357,6 @@ final class RequestCall implements ZLinkRequestCall {
                         "channel request deadline expired during ready wait",
                         new TimeoutException("channel request deadline expired"));
                 }
-                runtime.track(result, remaining);
-                if (result.isDone()) {
-                    return ZLinkSerialExecutionQueue.manageCurrent(result);
-                }
                 ZLinkMessageFlowTracer.TracePoint sent =
                     runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
                 if (sent != null) {
@@ -374,7 +370,7 @@ final class RequestCall implements ZLinkRequestCall {
                     .whenComplete((reply, failure) -> {
                         if (failure != null) {
                             result.completeExceptionally(
-                                ZLinkChannelCallRuntime.unwrap(failure));
+                                ZLinkChannelCallRuntime.requestFailure(failure));
                             return;
                         }
                         if (result.isDone()) {

@@ -3,7 +3,9 @@
 #include <zlink/framework.hpp>
 #include "runtime/configuration/service_scope.hpp"
 
+#include <array>
 #include <memory>
+#include <utility>
 #include <typeindex>
 
 namespace
@@ -38,6 +40,34 @@ struct second_dependent_t
     }
     int value;
 };
+
+template <std::size_t Index> struct indexed_scoped_t
+{
+    static inline int destroyed = 0;
+    ~indexed_scoped_t () { ++destroyed; }
+};
+
+template <std::size_t... Indices>
+bool verify_independent_scoped_cache (std::index_sequence<Indices...>)
+{
+    zlink::framework::service_collection_t registrations;
+    (registrations.add_scoped<indexed_scoped_t<Indices>> (), ...);
+    auto provider = registrations.build_provider ();
+    auto first = zlink::framework::detail::service_scope_t::create (provider);
+    auto second = zlink::framework::detail::service_scope_t::create (provider);
+    const bool isolated =
+      ((&first.get_required<indexed_scoped_t<Indices>> ()
+          != &second.get_required<indexed_scoped_t<Indices>> ()) && ...);
+    const std::array<const void *, sizeof...(Indices)> retained{
+      &second.get_required<indexed_scoped_t<Indices>> ()...};
+    first.close ();
+    const bool released = ((indexed_scoped_t<Indices>::destroyed == 1) && ...);
+    const bool stable =
+      ((retained[Indices] == &second.get_required<indexed_scoped_t<Indices>> ()) && ...);
+    second.close ();
+    return isolated && released && stable
+           && ((indexed_scoped_t<Indices>::destroyed == 2) && ...);
+}
 
 struct logger_dependent_t
 {
@@ -215,6 +245,10 @@ int main ()
     handler_logging_provider.get_required<inferred_logger_handler_t> ().write ();
     if (logging.captured_records ().size () != records_before_handler + 1) {
         return 16;
+    }
+
+    if (!verify_independent_scoped_cache (std::make_index_sequence<32>{})) {
+        return 17;
     }
 
     return 0;

@@ -1914,7 +1914,7 @@ void app_t::_apply_zlink_framework ()
                             dispatch_message_kind_t::response, *trace_context);
                       }
                       completion->complete (result_t<zlink::message_t>::success (
-                        zlink::message_t::from (std::move (application_reply->payload))));
+                        zlink::message_t::from (std::move (application_reply->payload_bytes ()))));
                   });
               if (!submitted) {
                   if (trace_context) {

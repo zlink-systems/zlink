@@ -15,6 +15,7 @@ import systems.zlink.framework.spots.ZLinkSpotSendCall;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
 import systems.zlink.framework.runtime.internal.backend.*;
 
@@ -1390,10 +1391,10 @@ public final class ZLinkChannelRuntime
         Duration timeout) {
         CompletableFuture<Message> result = new CompletableFuture<>();
         Duration effectiveTimeout = effectiveRouteTimeout(timeout);
-        callRuntime.track(result, effectiveTimeout);
         List<Message> requestParts = ZLinkChannelCallRuntime.parts(
             Optional.of(packetName), payload);
         callRuntime.requestRoute(
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds.next(),
                 requireRouteRouter(channelName),
                 target,
                 requestParts,
@@ -1402,7 +1403,7 @@ public final class ZLinkChannelRuntime
                 requestParts.forEach(Message::close);
                 if (failure != null) {
                     result.completeExceptionally(
-                        ZLinkChannelCallRuntime.unwrap(failure));
+                        ZLinkChannelCallRuntime.requestFailure(failure));
                     return;
                 }
                 if (result.isDone()) {
@@ -1477,25 +1478,14 @@ public final class ZLinkChannelRuntime
         }
         Duration timeout = effectiveRouteTimeout(
             defaultRequestTimeout(routerChannelId));
-        CompletableFuture<Void> result = new CompletableFuture<>();
-        callRuntime.track(result, timeout);
-        if (result.isDone()) {
-            return result;
-        }
-        try {
+        return callRuntime.submit(timeout, () -> {
+            CompletableFuture<Void> result = new CompletableFuture<>();
             ZLinkBackendSpotRouteBridge bridge = requireSpotRouteBridge(routerChannelId);
             ZLinkSpotRouteBridgeDispatcher.submitSend(
-                bridge,
-                routerChannelId,
-                targetNodeRid,
-                targetSpotId,
-                copyMessages(spotParts),
-                result);
+                bridge, routerChannelId, targetNodeRid, targetSpotId,
+                copyMessages(spotParts), result);
             return result;
-        } catch (RuntimeException ex) {
-            result.completeExceptionally(ex);
-            return result;
-        }
+        }, ignored -> { });
     }
 
     public CompletionStage<List<Message>> requestToSpotViaRouterChannel(
@@ -1520,7 +1510,7 @@ public final class ZLinkChannelRuntime
         long targetSpotGeneration,
         List<Message> spotParts,
         Duration timeout) {
-        return requestToSpotViaRouterChannel(
+        return callRuntime.requestToSpot(
             routerChannelId,
             targetNodeRid,
             targetSpotId,
@@ -1539,7 +1529,9 @@ public final class ZLinkChannelRuntime
         long authorityOwnerGeneration,
         long ownerLeaseGeneration,
         List<Message> spotParts,
-        Duration timeout) {
+        Duration timeout,
+        ZLinkServiceOperationRegistry operations,
+        UUID operationId) {
         trace(STREAM_TRACE ? "spot-route request-start router=" + routerChannelId
             + " targetNode=" + targetNodeRid
             + " targetSpot=" + targetSpotId
@@ -1558,32 +1550,21 @@ public final class ZLinkChannelRuntime
                 authorityOwnerGeneration,
                 ownerLeaseGeneration,
                 spotParts,
-                timeout);
+                timeout,
+                operations,
+                operationId);
         }
-        CompletableFuture<List<Message>> result = new CompletableFuture<>();
-        callRuntime.track(result, timeout);
-        try {
+        return operations.submit(operationId, timeout, () -> {
+            CompletableFuture<List<Message>> result = new CompletableFuture<>();
             ZLinkBackendSpotRouteBridge bridge = requireSpotRouteBridge(routerChannelId);
             trace(STREAM_TRACE ? "spot-route request-path=route-bridge router=" + routerChannelId
                 + " targetNode=" + targetNodeRid
                 + " targetSpot=" + targetSpotId : null);
             ZLinkSpotRouteBridgeDispatcher.submitRequest(
-                bridge,
-                routerChannelId,
-                targetNodeRid,
-                targetSpotId,
-                copyMessages(spotParts),
-                timeout,
-                result);
+                bridge, routerChannelId, targetNodeRid, targetSpotId,
+                copyMessages(spotParts), timeout, result);
             return result;
-        } catch (RuntimeException ex) {
-            trace(STREAM_TRACE ? "spot-route request-exception router=" + routerChannelId
-                + " targetNode=" + targetNodeRid
-                + " targetSpot=" + targetSpotId
-                + " error=" + ex : null);
-            result.completeExceptionally(ex);
-            return result;
-        }
+        }, Message::closeAll);
     }
 
     private ZLinkSpotRouteTarget resolveSpotRouteTarget(
@@ -1617,7 +1598,8 @@ public final class ZLinkChannelRuntime
         long authorityOwnerGeneration,
         long ownerLeaseGeneration,
         List<Message> spotParts) {
-        return ZLinkSpotRouterNodeDispatcher.send(
+        Duration timeout = effectiveRouteTimeout(defaultRequestTimeout(routerChannelId));
+        return callRuntime.submit(timeout, () -> ZLinkSpotRouterNodeDispatcher.send(
             routerChannelId,
             node,
             targetNodeRid,
@@ -1626,8 +1608,7 @@ public final class ZLinkChannelRuntime
             authorityOwnerGeneration,
             ownerLeaseGeneration,
             spotParts,
-            effectiveRouteTimeout(defaultRequestTimeout(routerChannelId)),
-            callRuntime::track);
+            timeout), ignored -> { });
     }
 
     private CompletionStage<List<Message>> requestToSpotViaSpotRouterNode(
@@ -1639,7 +1620,9 @@ public final class ZLinkChannelRuntime
         long authorityOwnerGeneration,
         long ownerLeaseGeneration,
         List<Message> spotParts,
-        Duration timeout) {
+        Duration timeout,
+        ZLinkServiceOperationRegistry operations,
+        UUID operationId) {
         return ZLinkSpotRouterNodeDispatcher.request(
             routerChannelId,
             node,
@@ -1650,7 +1633,8 @@ public final class ZLinkChannelRuntime
             ownerLeaseGeneration,
             spotParts,
             timeout,
-            callRuntime::track);
+            operations,
+            operationId);
     }
 
     static void trace(String message) {

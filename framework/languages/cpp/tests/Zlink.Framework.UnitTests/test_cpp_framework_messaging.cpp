@@ -23,6 +23,9 @@
 #include <chrono>
 #include <atomic>
 #include <condition_variable>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -85,6 +88,86 @@ struct envelope_payload_t
 
 int main ()
 {
+    {
+        namespace msg = zlink::framework::runtime::messaging;
+        const auto timeout = std::chrono::hours (27);
+        const auto format = [&] (std::chrono::system_clock::time_point now) {
+            const auto seconds = std::chrono::time_point_cast<std::chrono::seconds> (now + timeout);
+            const auto time = std::chrono::system_clock::to_time_t (seconds);
+            std::tm tm{};
+#if defined(_WIN32)
+            gmtime_s (&tm, &time);
+#else
+            gmtime_r (&time, &tm);
+#endif
+            std::ostringstream output;
+            output << std::put_time (&tm, "%Y-%m-%dT%H:%M:%SZ");
+            return output.str ();
+        };
+        const auto before = format (std::chrono::system_clock::now ());
+        const auto header = msg::client_call_codec_t{}.create_envelope (
+          msg::message_kind_t::request, "channel", "message", timeout);
+        const auto after = format (std::chrono::system_clock::now ());
+        if (!header.deadline || *header.deadline < before || *header.deadline > after)
+            return 174;
+        const auto no_deadline = msg::client_call_codec_t{}.create_envelope (
+          msg::message_kind_t::command, "channel", "message", std::chrono::milliseconds (0));
+        if (no_deadline.deadline)
+            return 175;
+    }
+    // Pin the pre-streaming encoder's sorted fields, escaping, and null shape.
+    {
+        namespace msg = zlink::framework::runtime::messaging;
+        msg::envelope_codec_t codec;
+        msg::envelope_header_t header;
+        const std::string empty_wire =
+          R"({"channelName":"","contentType":"application/json","correlationId":null,"deadline":null,"errorCode":null,"errorMessage":null,"flowId":null,"flowOrigin":null,"formatMarker":242,"kind":1,"messageName":"","metadata":{},"source":null,"topic":null})";
+        if (codec.encode_header (header).to_string () != empty_wire)
+            return 170;
+        header.kind = msg::message_kind_t::error;
+        header.channel_name = "a\"\\\n\t\b\f\r";
+        header.message_name = "한글/😀";
+        header.content_type = "application/octet-stream";
+        header.correlation_id = "corr";
+        header.deadline = "2026-09-10T00:00:00Z";
+        header.error_code = "internal_failure";
+        header.error_message = std::string ("N\0", 2) + '\x1f';
+        header.flow_id = "01890a5d-ac96-774b-bcce-b302099a8057";
+        header.flow_origin = zlink::framework::flow_origin_t::inbound;
+        header.metadata = {{"z", ""}, {"a\"", "한글"}};
+        header.source = "";
+        header.topic = "topic";
+        const std::string full_wire =
+          R"({"channelName":"a\"\\\n\t\b\f\r","contentType":"application/octet-stream","correlationId":"corr","deadline":"2026-09-10T00:00:00Z","errorCode":"internal_failure","errorMessage":"N\u0000\u001f","flowId":"01890a5d-ac96-774b-bcce-b302099a8057","flowOrigin":1,"formatMarker":242,"kind":5,"messageName":"한글/😀","metadata":{"a\"":"한글","z":""},"source":"","topic":"topic"})";
+        if (codec.encode_header (header).to_string () != full_wire)
+            return 171;
+        // Exercise all ASCII escapes and valid UTF-8 boundaries against the
+        // original JSON serializer, including embedded NUL and long strings.
+        std::string text;
+        for (int value = 0; value < 128; ++value)
+            text.push_back (static_cast<char> (value));
+        text += "\xc2\x80\xdf\xbf\xe0\xa0\x80\xed\x9f\xbf\xef\xbf\xbf"
+                "\xf0\x90\x80\x80\xf4\x8f\xbf\xbf";
+        text += std::string (2048, 'x');
+        header.channel_name = text;
+        auto expected = nlohmann::json::parse (full_wire);
+        expected["channelName"] = text;
+        if (codec.encode_header (header).to_string () != expected.dump ())
+            return 172;
+        for (const std::string invalid : {"\x80", "\xc0\x80", "\xc2", "\xe0\x80\x80",
+                                          "\xed\xa0\x80", "\xf4\x90\x80\x80", "\xf5\x80\x80\x80"}) {
+            header.channel_name = invalid;
+            bool rejected = false;
+            try {
+                (void) codec.encode_header (header);
+            } catch (const nlohmann::json::type_error &error) {
+                rejected = error.id == 316;
+            }
+            if (!rejected)
+                return 173;
+        }
+    }
+
     {
         zlink::framework::runtime::messaging::envelope_header_t request;
         request.message_name = "ActorRequest";

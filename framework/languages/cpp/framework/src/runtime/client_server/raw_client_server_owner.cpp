@@ -741,7 +741,7 @@ bool raw_client_server_server_t::reply (
     header.content_type = payload.content_type;
     auto parts = envelope_wire_parts (
       writer.reply_raw_envelope (
-        header, zlink::message_t::from (payload.payload)));
+        header, zlink::message_t::from (payload.payload_bytes ())));
     const auto delivered = port->reply (
       {request.source_routing_id, request.reply_token, {}},
       parts);
@@ -1510,7 +1510,7 @@ task_t<zlink::submit_result_t> raw_client_server_client_t::send (
     header.content_type = payload.content_type;
     const auto wire = envelope_wire_parts (
       messaging::envelope_codec_t{}.encode_raw_body_parts (
-        header, zlink::message_t::from (payload.payload)));
+        header, zlink::message_t::from (payload.payload_bytes ())));
     trace_client_server_lazy (
       "client-send-wire",
       [&] {
@@ -1584,7 +1584,7 @@ raw_client_server_client_t::request (
       });
     const auto wire = envelope_wire_parts (
       messaging::envelope_codec_t{}.encode_raw_body_parts (
-        header, zlink::message_t::from (payload.payload)));
+        header, zlink::message_t::from (payload.payload_bytes ())));
     trace_client_server_lazy (
       "client-request-wire",
       [&] {

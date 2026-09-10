@@ -980,3 +980,31 @@ TEST (ZLinkFrameworkApplicationJobQueue, ImmediateSupplyNeedsNoWakeAndWaitersRem
     EXPECT_EQ (0u, queue->snapshot ().permits_in_use);
     EXPECT_EQ (0u, queue->snapshot ().capacity_waiters);
 }
+
+TEST (ZLinkFrameworkApplicationJobQueue, SupplyArrivingAfterTakeSurvivesConsumedWake)
+{
+    using zlink::framework::runtime::application_supply_slot_t;
+    auto queue = std::make_shared<queue_t> (limit_one_configuration ());
+    auto occupied = queue->try_reserve_supply ();
+    ASSERT_TRUE (occupied);
+    bool wake_pending = false;
+    application_supply_slot_t supply (queue, [&] { wake_pending = true; });
+    supply.ensure_waiter ();
+    EXPECT_FALSE (supply.take ());
+    EXPECT_FALSE (supply.has_supply ());
+
+    // Handoff occurs after ingress has taken this turn's supply. Its pump can
+    // consume the wake before reaching the blocking wait, but not the permit.
+    occupied.reset ();
+    ASSERT_TRUE (std::exchange (wake_pending, false));
+    EXPECT_FALSE (wake_pending);
+    EXPECT_TRUE (supply.has_supply ());
+    auto permit = supply.take ();
+    ASSERT_TRUE (permit);
+    EXPECT_FALSE (supply.has_supply ());
+    permit.reset ();
+    supply.close ();
+    EXPECT_FALSE (supply.has_supply ());
+    EXPECT_EQ (0u, queue->snapshot ().permits_in_use);
+    EXPECT_EQ (0u, queue->snapshot ().capacity_waiters);
+}

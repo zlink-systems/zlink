@@ -93,14 +93,13 @@ public final class ZLinkRawBenchServer {
                         continue;
                     }
                     metrics.record(body);
-                    Message requestBody = received.parts().get(received.parts().size() - 1);
                     // The two reply wrappers are closed after submit, as the .NET
                     // reference server does with `using` (ZLinkRawServer/Program.cs
                     // ReplyMultipart). A successful submit consumes them; an
                     // unsuccessful one leaves them caller-owned, and leaking a wrapper
                     // per reply is what starves the reply path at depth.
                     try (Message header = Message.from(RawWire.RESPONSE_ENVELOPE);
-                         Message replyBody = Message.from(requestBody)) {
+                         Message replyBody = RawWire.encodeBenchPayloadMessage(body)) {
                         boolean hasToken = received.replyToken().isPresent();
                         if (replyProbe && probeCount.getAndIncrement() < 5) {
                             System.err.println("[probe] reply branch hasToken=" + hasToken

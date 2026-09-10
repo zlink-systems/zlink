@@ -17,6 +17,11 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 /** Closed M6A codec for admission, Node/Channel messaging and reply records. */
 public final class ZLinkServiceM6AWireCodec {
     private static final int PREFIX_BYTES = 5;
+    private static final int APPLICATION_PREFIX_BYTES = 1 + Integer.BYTES;
+    private static final byte[] FRAMEWORK_MULTIPART_PROFILE_FIELDS =
+        applicationProfileFields(
+            ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME,
+            ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE);
 
     public byte[] encodeAdmission(
         int command,
@@ -292,21 +297,10 @@ public final class ZLinkServiceM6AWireCodec {
 
     private static ByteBuffer applicationFrame(
         String packet, String content, int payloadLength) {
-        byte[] packetName = Writer.text(packet, "packetName");
-        byte[] contentType = Writer.text(content, "contentType");
-        if (packetName.length > 0xff || contentType.length > 0xff) {
-            throw protocol("application payload text exceeds text8");
-        }
-        long frameLength = 5L + 1 + packetName.length + 1 + contentType.length
-            + Integer.BYTES + payloadLength;
-        if (frameLength > Integer.MAX_VALUE) {
-            throw protocol("application payload is too large");
-        }
-        ByteBuffer result = ByteBuffer.allocate((int) frameLength);
-        result.put((byte) 1).putInt((int) frameLength - 5);
-        result.put((byte) packetName.length).put(packetName);
-        result.put((byte) contentType.length).put(contentType);
-        result.putInt(payloadLength);
+        byte[] profileFields = applicationProfileFields(packet, content);
+        ByteBuffer result = ByteBuffer.allocate(
+            applicationFrameSize(profileFields, payloadLength));
+        writeApplicationFrameHeader(result, profileFields, payloadLength);
         return result;
     }
 
@@ -328,12 +322,86 @@ public final class ZLinkServiceM6AWireCodec {
 
     /** Writes the complete application frame without an intermediate payload. */
     public static byte[] encodeFrameworkMultipartFrame(List<Message> parts) {
-        ByteBuffer frame = applicationFrame(
-            ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME,
-            ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE,
-            multipartSize(parts));
-        writeMultipart(frame, parts);
+        int multipartSize = multipartSize(parts);
+        ByteBuffer frame = ByteBuffer.allocate(
+            frameworkMultipartFrameSize(multipartSize));
+        writeFrameworkMultipartFrame(frame, parts, multipartSize);
         return frame.array();
+    }
+
+    /** Allocates and writes the complete application frame in native storage. */
+    public static Message encodeFrameworkMultipartMessage(List<Message> parts) {
+        int multipartSize = multipartSize(parts);
+        Message frame = Message.allocate(
+            frameworkMultipartFrameSize(multipartSize));
+        boolean encoded = false;
+        try {
+            writeFrameworkMultipartFrame(
+                frame.mutableDataBuffer().order(ByteOrder.BIG_ENDIAN),
+                parts,
+                multipartSize);
+            encoded = true;
+            return frame;
+        } finally {
+            if (!encoded) {
+                frame.close();
+            }
+        }
+    }
+
+    private static int frameworkMultipartFrameSize(int multipartSize) {
+        return applicationFrameSize(
+            FRAMEWORK_MULTIPART_PROFILE_FIELDS, multipartSize);
+    }
+
+    private static void writeFrameworkMultipartFrame(
+        ByteBuffer target,
+        List<Message> parts,
+        int multipartSize) {
+        writeApplicationFrameHeader(
+            target, FRAMEWORK_MULTIPART_PROFILE_FIELDS, multipartSize);
+        writeMultipart(target, parts);
+    }
+
+    private static int applicationFrameSize(
+        byte[] profileFields,
+        int payloadLength) {
+        if (payloadLength < 0) {
+            throw protocol("application payload length is invalid");
+        }
+        long frameSize = APPLICATION_PREFIX_BYTES
+            + profileFields.length + Integer.BYTES + payloadLength;
+        if (frameSize > Integer.MAX_VALUE) {
+            throw protocol("application payload is too large");
+        }
+        return (int) frameSize;
+    }
+
+    private static void writeApplicationFrameHeader(
+        ByteBuffer target,
+        byte[] profileFields,
+        int payloadLength) {
+        int frameSize = applicationFrameSize(profileFields, payloadLength);
+        target.put((byte) 1).putInt(
+            frameSize - APPLICATION_PREFIX_BYTES);
+        target.put(profileFields);
+        target.putInt(payloadLength);
+    }
+
+    private static byte[] applicationProfileFields(
+        String packet,
+        String content) {
+        byte[] packetName = Writer.text(packet, "packetName");
+        byte[] contentType = Writer.text(content, "contentType");
+        if (packetName.length > 0xff || contentType.length > 0xff) {
+            throw protocol("application payload text exceeds text8");
+        }
+        return ByteBuffer.allocate(1 + packetName.length + 1 + contentType.length)
+            .put((byte) packetName.length)
+            .put(packetName)
+            .put((byte) contentType.length)
+            .put(contentType)
+            .array();
     }
 
     private static int multipartSize(List<Message> parts) {

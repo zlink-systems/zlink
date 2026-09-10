@@ -191,6 +191,7 @@ class mesh_node_runtime_t
 
     void start ();
     void stop () noexcept;
+    void signal_dispatch_activity ();
     void bind_serializers (serializer_registry_t &serializers) noexcept;
     void bind_descriptor_publisher (
       std::function<void (const std::map<std::string, int> &, int, std::uint64_t)> publisher);

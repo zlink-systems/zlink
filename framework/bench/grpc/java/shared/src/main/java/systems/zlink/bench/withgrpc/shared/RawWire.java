@@ -2,7 +2,10 @@
 
 package systems.zlink.bench.withgrpc.shared;
 
+import com.google.protobuf.ByteString;
+import com.google.protobuf.InvalidProtocolBufferException;
 import java.nio.ByteBuffer;
+import systems.zlink.bench.withgrpc.proto.BenchPayload;
 import java.nio.charset.StandardCharsets;
 import systems.zlink.contracts.messaging.Message;
 
@@ -35,92 +38,30 @@ public final class RawWire {
     private RawWire() {
     }
 
-    /** Builds the final native frame for {@code BenchPayload { bytes body = 1 }}. */
+    /** Creates and serializes a typed payload for every raw send/request. */
     public static Message encodeBenchPayloadMessage(
         int payloadSize, int runId, byte phase, long sequence) {
-        if (payloadSize < BenchMetricHeader.HEADER_SIZE) {
-            throw new IllegalArgumentException(
-                "payload size must be at least " + BenchMetricHeader.HEADER_SIZE);
-        }
-        int prefixSize = 1 + varintSize(payloadSize);
-        Message encoded = Message.allocate(prefixSize + payloadSize);
-        try {
-            encoded.fill((byte) 0xab);
-            encoded.writeByte(0, (byte) 0x0a);
-            writeVarint(encoded, 1, payloadSize);
-            BenchMetricHeader.stamp(encoded, prefixSize, runId, phase, payloadSize, sequence);
-            return encoded;
-        } catch (Throwable error) {
-            encoded.close();
-            throw error;
-        }
+        return encodeBenchPayloadMessage(ByteBuffer.wrap(
+            BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence)));
     }
 
-    /** Field 1 of the encoded BenchPayload, or {@code null} when it is absent. */
+    /** Replies preserve the received measurement header, including its timestamp. */
+    public static Message encodeBenchPayloadMessage(ByteBuffer body) {
+        BenchPayload payload = BenchPayload.newBuilder()
+            .setBody(ByteString.copyFrom(body.duplicate()))
+            .build();
+        return Message.from(payload.toByteArray());
+    }
+
+    /** Parses BenchPayload with the same protobuf runtime used by the typed stacks. */
     public static ByteBuffer decodeBenchPayloadBody(ByteBuffer encoded) {
         if (encoded == null) {
             return null;
         }
-        ByteBuffer view = encoded.duplicate();
-        while (view.hasRemaining()) {
-            long key = readVarint(view);
-            if (key < 0) {
-                return null;
-            }
-            int field = (int) (key >>> 3);
-            int wireType = (int) (key & 0x07);
-            if (wireType != 2) {
-                return null;
-            }
-            long length = readVarint(view);
-            if (length < 0 || length > view.remaining()) {
-                return null;
-            }
-            if (field == 1) {
-                ByteBuffer body = view.duplicate();
-                body.limit(body.position() + (int) length);
-                return body.slice();
-            }
-            view.position(view.position() + (int) length);
+        try {
+            return BenchPayload.parseFrom(encoded.duplicate()).getBody().asReadOnlyByteBuffer();
+        } catch (InvalidProtocolBufferException error) {
+            return null;
         }
-        return null;
-    }
-
-    private static long readVarint(ByteBuffer buffer) {
-        long value = 0;
-        int shift = 0;
-        while (shift < 64) {
-            if (!buffer.hasRemaining()) {
-                return -1;
-            }
-            int b = buffer.get() & 0xff;
-            value |= ((long) (b & 0x7f)) << shift;
-            if ((b & 0x80) == 0) {
-                return value;
-            }
-            shift += 7;
-        }
-        return -1;
-    }
-
-    private static int varintSize(int value) {
-        int size = 1;
-        int remaining = value;
-        while (remaining >= 0x80) {
-            remaining >>>= 7;
-            size++;
-        }
-        return size;
-    }
-
-    private static int writeVarint(Message message, int offset, int value) {
-        int index = offset;
-        int remaining = value;
-        while (remaining >= 0x80) {
-            message.writeByte(index++, (byte) ((remaining & 0x7f) | 0x80));
-            remaining >>>= 7;
-        }
-        message.writeByte(index++, (byte) remaining);
-        return index;
     }
 }

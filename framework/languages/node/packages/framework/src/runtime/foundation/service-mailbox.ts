@@ -125,8 +125,8 @@ export class ServiceMailbox {
     if (!queue.claimed && !target.indexed.has(record.owner)) {
       target.indexed.add(record.owner);
       target.ready.push(record.owner);
+      this.onReady?.(record.domain);
     }
-    this.onReady?.(record.domain);
     return true;
   }
 
@@ -186,6 +186,7 @@ export class ServiceMailbox {
     } else if (!target.indexed.has(claim.owner)) {
       target.indexed.add(claim.owner);
       target.ready.push(claim.owner);
+      this.onReady?.(claim.domain);
     }
     return true;
   }

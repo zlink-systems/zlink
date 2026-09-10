@@ -43,6 +43,8 @@ class application_dispatch_terminal_owner_t final
       std::function<void ()> complete_stateful_dispatch,
       std::function<void ()> release_mailbox_reservation);
     ~application_dispatch_terminal_owner_t () noexcept;
+    application_dispatch_terminal_owner_t (
+      application_dispatch_terminal_owner_t &&other) noexcept;
 
     application_dispatch_terminal_owner_t (
       const application_dispatch_terminal_owner_t &) = delete;
@@ -140,6 +142,20 @@ class mesh_node_host_service_t final : public hosted_service_t,
     result_t<void> finalize_local_actor_destroy (const actor_ref_t &actor);
     task_t<bool> destroy_actor (actor_ref_t actor);
 
+    static void dispatch_application (
+      const std::shared_ptr<detail::mesh_node_runtime_t> &node,
+      const std::shared_ptr<detail::mesh_node_builder_state_t> &registration,
+      const host::ready_record_t &owner, const host::receive_record_t &record,
+      std::vector<zlink::message_t> parts, bool reject_only,
+      service_provider_t *services, serializer_registry_t *serializers,
+      const handler_registry_t *filters, const dispatch_options_t &dispatch_options);
+    static void drain_application_owner (
+      const std::shared_ptr<detail::mesh_node_runtime_t> &node,
+      const std::shared_ptr<detail::mesh_node_builder_state_t> &registration,
+      const std::string &owner, bool reject_only,
+      service_provider_t *services, serializer_registry_t *serializers,
+      const handler_registry_t *filters, const dispatch_options_t &dispatch_options);
+
     std::vector<std::shared_ptr<detail::mesh_node_builder_state_t>> _registrations;
     serializer_registry_t *_serializers;
     handler_registry_t *_filters;
@@ -156,7 +172,7 @@ class mesh_node_host_service_t final : public hosted_service_t,
     mutable std::mutex _dispatch_gate_mutex;
     std::condition_variable _dispatch_gate_changed;
     std::uint64_t _active_direct_dispatch = 0;
-    std::unique_ptr<offload_executor_t> _application_dispatch;
+    std::shared_ptr<offload_executor_t> _application_dispatch;
     std::shared_ptr<application_job_queue_t> _application_jobs;
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
     std::shared_ptr<actor_destroy_callback_gate_t> _actor_destroy_gate;

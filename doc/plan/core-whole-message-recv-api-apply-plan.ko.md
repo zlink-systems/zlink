@@ -9,7 +9,14 @@ title: "whole-message recv 공개 API — 적용 plan (문서·코드·perf 반�
 > (라인 앵커는 조사 시점 기준이며 편집 직전 재확인. spec 문서는 보호 경로 → 감독(머신 B)이 직접, 사용자 승인 범위. en/ko 동기화.)
 
 ## 0. 범위·전제
-- 신설: whole-message `recv`(ROUTER/PAIR/DEALER 우선) — draft §3. `*_recv_part`는 유지.
+
+> **2026-09-10 범위 확대.** send도 whole-message로 신설하고 **part 단위 공개 API는 제거**한다(draft §7).
+> 근거는 draft §7.2의 저장소 전수 조사다 — lazy send 없음, part 단위 수신 의존 없음(Core가 첫 part 공개 전에
+> record 전체를 버퍼링), STREAM·XPUB은 이미 part 단위가 아님, `framework/languages`의 part API 호출 0건.
+> 아래 §0~§9의 "recv"는 **send·recv 양방향**으로 읽는다. 단계별 대상은 §10에 더한다.
+
+- 신설: whole-message `recv`(ROUTER/PAIR/DEALER 우선) — draft §3. ~~`*_recv_part`는 유지.~~
+  → **part 계열 공개 API 제거**(draft §7.4). 제거 대상은 §10.1.
 - 부수: `reqrep::recv_router_message_direct` **네이밍 정정**(Core 내부, 저위험, perf 영향 없음).
 - 원칙: 공개 계약·thread-safety·측정 의미 보존, 수치 조작 금지(§7.0.1), 공개 표면 단순성 유지.
 
@@ -87,3 +94,76 @@ title: "whole-message recv 공개 API — 적용 plan (문서·코드·perf 반�
 - 문서: Core spec·guide, 바인딩 spec·guide(ko/en) 모두 whole-message recv 반영, en/ko 동기.
 - 바인딩: 내부 수신 whole-message 전환, 계약 테스트 통과, 공개 표면 파편화 없음.
 - perf: routed 목표 갭 축소·비대상 무회귀, before/after 기록, 채택분 커밋·푸시.
+
+
+## 10. 범위 확대 — send whole-message 신설과 part API 제거 (2026-09-10)
+
+설계와 조사 근거는 draft `doc/draft/core-whole-message-recv-api.ko.md` §7이 소유한다. 여기서는 반영 대상만 적는다.
+
+### 10.1 제거 대상과 신설 대상
+
+| 지금 | 어떻게 |
+|---|---|
+| `zlink_send_part`(:238), `zlink_send_part_rid`(:245), `zlink_request_part`(:262), `zlink_reply_part`(:274), `zlink_publish_part`(:297) | **제거.** parts 배열 + count를 받는 whole-message send로 대체 |
+| `zlink_recv_part`(:292), `zlink_router_recv_part`(:286), `zlink_subscribe_part`(:309) | **제거.** whole-message recv로 대체(`zlink_subscribe_part`는 §3 목록에 빠져 있었다 — draft §7.2 Q3) |
+| `zlink_xpub_recv_part` | **계약 유지, 이름만 `zlink_xpub_recv`로 변경.** `zlink_msg_t`를 받지 않는 구독 이벤트 리더다. 인자·동작은 그대로이며, 다른 심볼이 모두 `_part` 없는 이름이 되므로 여기만 남기지 않는다 |
+| `zlink_stream_recv_packet` | **유지.** header/body 고정 2슬롯 framing이라 일반 배열 API와 의미가 다르다 |
+
+제거 8개와 대체 관계, 현재 시그니처 전문, 유지 대상(`zlink_xpub_recv_part`·`zlink_stream_recv_packet`)은
+draft §7.3.1이 목록으로 갖는다. `zlink_part_flag_t`도 공개 표면에서 사라진다.
+
+### 10.2 먼저 정할 계약 셋
+
+1. **`count > capacity`**: record를 잃지 않으면서 필요한 개수를 알려주는 방식. 지금의 드레인 루프에는 이 실패가
+   없으므로 새로 정의한다. §3의 capacity 초과 규칙과 같은 형태로 맞춘다.
+2. **STREAM의 길이 0 part 의미 보존**: 유효한 RID로 보내는 빈 part는 "그 peer를 끊는다"는 별도 의미다
+   (`core/doc/spec/core/socket/08-stream.en.md:151-153`). 1-element 배열이 이 의미를 유지해야 한다.
+3. **재시도 단위**: 실패한 제출은 **whole-record 재시도**다. part 단위 부분 재시도는 없어진다
+   (지금도 실패한 `FINAL`은 staged prefix를 버린다 — `README.en.md:1078`).
+
+### 10.3 §1 단계 게이트에 더하는 것
+
+- 2단계(네이밍 정정) 뒤, **Core spec에 send whole-message와 제거를 함께 반영**한다(§2 대상표에 send 절 추가).
+- 4단계(Core 코드)에서 신설과 제거를 **같은 커밋 계열**로 처리하되, 심볼 제거는 마지막 커밋으로 분리해
+  되돌리기 쉽게 한다. `libzlink.vers`도 함께 정리한다.
+- 6단계(바인딩 코드)에서 **각 바인딩의 내부 send 루프를 배열 한 번 호출로 교체**한다. **공개 시그니처는
+  recv와 마찬가지로 불변이다** — 사용자는 지금처럼 파트를 builder에 얹고 한 번 submit한다. 바뀌는 것은
+  그 안에서 Core를 파트 수만큼 부르던 루프가 1회 호출이 되는 것뿐이다. 언어별 대상 위치는 draft §7.4.1.
+- 8단계(perf 하네스)에 `bindings/c/perf/single/common/perf_single_reqrep.hpp:635,647-664`를 더한다. 빈 `FINAL`만
+  재시도하는 유일한 경로이며 whole-record 재시도로 바꾼다(draft §7.2 Q1).
+
+### 10.3.1 문서·심볼 반영에서 빠지기 쉬운 것
+
+§2~§7의 표는 recv 신설을 전제로 쓰였다. 제거까지 포함하면 아래가 더 필요하다.
+
+| 대상 | 무엇을 |
+|---|---|
+| `core/src/libzlink.vers:61-67,90,102` | 제거하는 8개 심볼을 빼고 `zlink_xpub_recv_part`(:102)를 `zlink_xpub_recv`로 바꾼다. `zlink_multipart_close`(:46)는 **유지**한다 — 배열 해제 헬퍼라 whole-message에서 오히려 더 쓰인다 |
+| `core/doc/spec/core/socket/README` §2 스레드 안전성 | **"한 record의 첫 part부터 FINAL까지 같은 thread" 규칙을 삭제**한다. 표면에 part 시퀀스가 없어지면 이 제약의 근거가 사라진다. 이번 확대의 핵심 결과다 |
+| 같은 문서의 `BUSY`·`EBUSY` 절(`README.en.md:575-577`) | 진행 중 part 시퀀스에 다른 주체가 들어와 생기는 `BUSY`가 없어진다. 남는 `BUSY` 사유만 남긴다 |
+| `README.en.md:1078` (실패한 `FINAL`은 staged prefix를 버린다) | 부분 제출 상태가 없어지므로 규칙 자체를 삭제하고 **whole-record 재시도**로 대체한다 |
+| `core/doc/spec/core/socket/08-stream` | STREAM send의 `ZLINK_PART_MORE` → `NOT_SUPPORTED` 규칙을 `part_count_ == 1` 규칙으로 바꾼다. 길이 0 part의 "peer 끊기" 의미(`:151-153`)는 보존한다 |
+| `core/doc/spec/core/socket/03-sub`, `05-xsub` | SUB·XSUB의 multipart 수신을 `zlink_subscribe`로 바꾼다. §2 표의 "(2차)"를 이번 범위로 올린다 |
+| `core/doc/spec/core/02-message` | `zlink_part_flag_t`가 공개 표면에서 사라지는 것을 반영한다 |
+| 바인딩 spec·guide(§6) | recv뿐 아니라 **send 절도** 같은 문장을 넣는다 — 공개 시그니처 불변, 내부가 Core whole-message send 1회 호출 |
+| `bindings/doc/spec/README.ko.md` 등 공통 문서 | part flag를 언급하는 곳이 있으면 정리 |
+
+### 10.3.2 이미 whole-message인 선례
+
+`zlink_completion_t`가 **이미 `reply_parts` 배열과 `reply_part_count`를 갖는다**
+(`core/include/zlink/socket/api.h:64-65`). 즉 REQUEST 응답은 지금도 파트 배열로 한 번에 돌아온다.
+신설 API는 새 관용을 만드는 것이 아니라 **이미 공개된 관용을 나머지 경로에 맞추는 것**이다.
+`zlink_multipart_close`(`core/include/zlink/message/*.h:117`)도 그 배열을 닫는 기존 헬퍼다.
+설계·문서에서 이 선례를 근거로 쓴다.
+
+### 10.4 작업 규모
+
+draft §7.3의 표를 따른다. 요약하면 **Core 내부 호출자 0건, `framework/languages` 0건**이고, 비용은
+`core/doc` 약 1,000줄과 `core/tests` 약 450줄, 바인딩 내부 약 180줄로 거의 기계적이다.
+
+### 10.5 이 확대가 푸는 문제
+
+part 단위 표면은 "한 record의 첫 part부터 FINAL까지 같은 thread"라는 계약을 만든다
+(`core/doc/spec/core/socket/README.ko.md` §2). Framework Java의 send 지연 수정 중 관측된 `BUSY` 반복이
+이 계약과 부딪힌 결과였다. 표면을 한 번의 호출로 바꾸면 미완성 record 상태 자체가 없어지고, 그에 딸린
+thread 계약·오류 경로·부분 재시도 규칙이 함께 사라진다.

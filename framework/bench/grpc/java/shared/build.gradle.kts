@@ -30,3 +30,12 @@ protobuf {
         all().forEach { it.plugins { id("grpc") } }
     }
 }
+
+val rawWireTest by tasks.registering(JavaExec::class) {
+    description = "Compare raw BenchPayload wire bytes with protobuf and the fixed pre-change dump"
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("systems.zlink.bench.withgrpc.shared.RawWireTest")
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    dependsOn(tasks.testClasses)
+}
+tasks.check { dependsOn(rawWireTest) }

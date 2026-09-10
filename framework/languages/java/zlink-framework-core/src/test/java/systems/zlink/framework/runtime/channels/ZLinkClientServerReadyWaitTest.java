@@ -118,6 +118,9 @@ final class ZLinkClientServerReadyWaitTest {
             fixture.time.advanceBy(Duration.ofMillis(250).toNanos() - 1);
             assertFalse(reply.isDone(), "the request must remain pending before its original deadline");
             fixture.time.advanceBy(1);
+            // E5 publishes the due terminal on the shared completion dispatcher.
+            // Keep virtual time at the exact deadline while that turn completes.
+            reply.handle((value, failure) -> null).get(1, TimeUnit.SECONDS);
             assertTrue(reply.isDone(), "the original call deadline must settle the request");
             CompletionException failure = assertThrows(CompletionException.class, reply::join);
             assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
@@ -299,6 +302,15 @@ final class ZLinkClientServerReadyWaitTest {
             return task;
         }
 
+        @Override
+        public ScheduledFuture<?> scheduleAtFixedRate(
+            Runnable command, long initialDelay, long period, TimeUnit unit) {
+            TimedTask task = new TimedTask(command,
+                nowNanos + unit.toNanos(initialDelay), unit.toNanos(period));
+            tasks.add(task);
+            return task;
+        }
+
         private void advanceBy(long nanos) {
             assertTrue(nanos >= 0, "the monotonic clock must not move backwards");
             long target = nowNanos + nanos;
@@ -318,11 +330,27 @@ final class ZLinkClientServerReadyWaitTest {
         }
 
         private final class TimedTask extends FutureTask<Void> implements ScheduledFuture<Void> {
-            private final long deadlineNanos;
+            private long deadlineNanos;
+            private final long periodNanos;
 
             private TimedTask(Runnable command, long deadlineNanos) {
+                this(command, deadlineNanos, 0);
+            }
+
+            private TimedTask(Runnable command, long deadlineNanos, long periodNanos) {
                 super(command, null);
                 this.deadlineNanos = deadlineNanos;
+                this.periodNanos = periodNanos;
+            }
+
+            @Override
+            public void run() {
+                if (periodNanos == 0) {
+                    super.run();
+                } else if (runAndReset()) {
+                    deadlineNanos += periodNanos;
+                    tasks.add(this);
+                }
             }
 
             @Override

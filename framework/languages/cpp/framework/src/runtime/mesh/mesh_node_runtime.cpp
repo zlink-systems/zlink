@@ -196,9 +196,9 @@ std::vector<std::uint8_t> unwrap_canonical_actor_join_application_reply_impl (
 {
     if (payload.packet_name != runtime::protocol::framework_multipart_packet_name
         || payload.content_type != runtime::protocol::framework_multipart_content_type)
-        return payload.payload;
+        return payload.payload_bytes ();
 
-    const auto &encoded = payload.payload;
+    const auto &encoded = payload.payload_bytes ();
     std::size_t offset = 0;
     const auto read_u32 = [&] {
         if (encoded.size () - offset < sizeof (std::uint32_t))
@@ -602,7 +602,7 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
             zlink::routing_id_t::from (request.actor.target_node_routing_id).to_string ()),
           {}, request.actor.actor_id, request.actor.object_generation);
         const auto payload_message =
-          payload ? zlink::message_t::from (payload->payload) : zlink::message_t{};
+          payload ? zlink::message_t::from (payload->payload_bytes ()) : zlink::message_t{};
         spot_id_t target_spot_id;
         if (request.entry) {
             const auto entry_spot_id = spot.resolve_entry_spot_id ();
@@ -1855,6 +1855,7 @@ void mesh_node_runtime_t::stop () noexcept
         spot_runtime.release_native_handles ();
         return;
     }
+    _node->transport ().mailbox ().bind_application_dispatch ({}, {});
     try {
         _peer_connection_intent_lane.run ([&] {
             _peer_connection_intents.clear ();
@@ -2119,6 +2120,12 @@ mesh_node_runtime_t::admitted_peer_epoch (const zlink::routing_id_t &peer_rid,
         || peer->descriptor.state != runtime::mesh::service_node_state_t::serving)
         return std::nullopt;
     return peer->admission_epoch;
+}
+
+void mesh_node_runtime_t::signal_dispatch_activity ()
+{
+    if (_node)
+        _node->signal_dispatch_activity ();
 }
 
 host::public_host_runtime_t &mesh_node_runtime_t::native_node ()

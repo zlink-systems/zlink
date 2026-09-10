@@ -515,6 +515,35 @@ that reason is recorded in the result.
 C++ uses the `libgrpc++` installed on the system. gRPC isn't built through vcpkg. This machine's
 version is 1.51.1, and since it's an old version it must be recorded in the result.
 
+### 8.1.1 Per-message Payload Work
+
+For every request/send submission, each supported client creates a body containing the 29-byte
+measurement header and a message object matching the `BenchPayload` schema, then serializes it
+with that language's protobuf runtime. Raw uses constant
+wire envelope header parts. Received payloads are parsed with protobuf; request replies serialize
+a typed payload and preserve the request's measurement header and timestamp. Sends have no
+payload reply; gRPC `Command` serializes its existing `Empty` response.
+
+| Language | Raw request/reply serialization and receive parsing | gRPC | Framework |
+|---|---|---|---|
+| Java | A fresh `BenchPayload`: `toByteArray` / `parseFrom` | grpc-java serializes/parses the same generated type | `ZLinkProtobufCodec` serializes/parses the same generated type |
+| .NET | A fresh `BenchPayload`: `WriteTo` / `Parser.ParseFrom` | Google.Protobuf based gRPC serializes/parses the same generated type | Protobuf codec serializes/parses the same generated type |
+| C++ | A fresh `BenchPayload`: protobuf serialization / `ParseFromArray` | libgrpc++ serializes/parses the same generated type | Protobuf codec serializes/parses the same generated type |
+| Node | A fresh `BenchPayload` DTO through the existing proto-loader serializer / deserializer | Uses the same proto-loader protobuf serializer / deserializer | Runner reports `unsupported`: existing framework protobuf codec limitation for `bytes` |
+| C binding | C++ driver creates a generated `BenchPayload` per message and uses existing libprotobuf | Same generated type and libprotobuf | No C framework row |
+
+The C binding bench uses `.cpp` drivers and already depends on protobuf. Raw shares that dependency;
+there is no manual protobuf framing exception. This table compares payload work, not transport calls,
+envelope processing, or buffer copy counts. Java raw and gRPC use `ByteString.copyFrom`, while
+Framework retains its existing `UnsafeByteOperations.unsafeWrap` path.
+
+Run `tools/test_raw_wire.sh` to compare the frozen pre-change 29-byte payload dump with protobuf
+output, check length varint boundaries, and verify request reply body preservation.
+
+Results including raw serialization cost form a new baseline. Do not compare performance trends
+with `framework/raw` ratios from raw drivers that bypassed serialization. A lower raw throughput
+can raise this ratio; that reflects corrected measurement conditions, not improved framework performance.
+
 ### 8.2 Values Set Per Language That Must Be Recorded
 
 The three values below are set differently per language. The goal isn't to make them identical but

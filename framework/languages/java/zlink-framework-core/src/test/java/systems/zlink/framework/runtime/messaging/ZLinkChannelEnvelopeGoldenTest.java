@@ -1,7 +1,9 @@
 package systems.zlink.framework.runtime.messaging;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -11,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -45,6 +48,15 @@ final class ZLinkChannelEnvelopeGoldenTest {
             FLOW_ID,
             ZLinkFlowOrigin.APPLICATION);
         try (Message encoded = ZLinkChannelEnvelope.encodeHeader(header)) {
+            assertArrayEquals(
+                ("{\"formatMarker\":242,\"flowId\":\"" + FLOW_ID
+                    + "\",\"flowOrigin\":3,\"kind\":1,\"channelName\":\"orders-route\","
+                    + "\"messageName\":\"PlaceOrder\",\"contentType\":\"application/json\","
+                    + "\"correlationId\":\"abc123\",\"deadline\":null,\"topic\":null,"
+                    + "\"errorCode\":null,\"errorMessage\":null,\"source\":null,"
+                    + "\"metadata\":{\"tenant\":\"blue\"}}")
+                    .getBytes(StandardCharsets.UTF_8),
+                encoded.toByteArray());
             JsonNode json = JSON.readTree(encoded.toByteArray());
             assertEquals(0xF2, json.get("formatMarker").asInt());
             assertEquals(242, json.get("formatMarker").asInt());
@@ -61,6 +73,98 @@ final class ZLinkChannelEnvelopeGoldenTest {
             assertEquals("blue", json.get("metadata").get("tenant").asText());
             assertEquals(FLOW_ID, json.get("flowId").asText());
             assertEquals(3, json.get("flowOrigin").asInt());
+        }
+    }
+
+    @Test
+    void requestWithoutFlowKeepsTheExactCanonicalBytes() {
+        var header = ZLinkChannelEnvelope.create(
+            ZLinkChannelEnvelope.KIND_REQUEST, "orders", "Request", "application/json",
+            null, Map.of(), null,
+            UUID.fromString("01234567-89ab-cdef-fedc-ba9876543210"));
+        try (Message encoded = ZLinkChannelEnvelope.encodeHeader(header)) {
+            assertArrayEquals((
+                "{\"formatMarker\":242,\"flowId\":null,\"flowOrigin\":null,\"kind\":1,"
+                    + "\"channelName\":\"orders\",\"messageName\":\"Request\","
+                    + "\"contentType\":\"application/json\","
+                    + "\"correlationId\":\"0123456789abcdeffedcba9876543210\","
+                    + "\"deadline\":null,\"topic\":null,\"errorCode\":null,"
+                    + "\"errorMessage\":null,\"source\":null,\"metadata\":{}}")
+                .getBytes(StandardCharsets.UTF_8), encoded.toByteArray());
+        }
+    }
+
+    @Test
+    void streamingEncoderPreservesEscapesUnicodeMetadataAndFlowBytes() {
+        ZLinkChannelEnvelope.Header header = new ZLinkChannelEnvelope.Header(
+            ZLinkChannelEnvelope.KIND_REQUEST,
+            "route\"\\\n☃",
+            "Place\tOrder\u0001",
+            "application/x-test; profile=\"v1\"",
+            "0123456789abcdef0123456789abcdef",
+            "2030-01-02T03:04:05Z",
+            "topic\u2028next",
+            null,
+            null,
+            null,
+            Map.of("meta\"\\\n", "blue\t☃"),
+            FLOW_ID,
+            ZLinkFlowOrigin.TIMER);
+        try (Message encoded = ZLinkChannelEnvelope.encodeHeader(header)) {
+            assertArrayEquals(
+                ("{\"formatMarker\":242,\"flowId\":\"" + FLOW_ID
+                    + "\",\"flowOrigin\":2,\"kind\":1,\"channelName\":\"route\\\"\\\\\\n☃\","
+                    + "\"messageName\":\"Place\\tOrder\\u0001\","
+                    + "\"contentType\":\"application/x-test; profile=\\\"v1\\\"\","
+                    + "\"correlationId\":\"0123456789abcdef0123456789abcdef\","
+                    + "\"deadline\":\"2030-01-02T03:04:05Z\",\"topic\":\"topic next\","
+                    + "\"errorCode\":null,\"errorMessage\":null,\"source\":null,"
+                    + "\"metadata\":{\"meta\\\"\\\\\\n\":\"blue\\t☃\"}}")
+                    .getBytes(StandardCharsets.UTF_8),
+                encoded.toByteArray());
+        }
+    }
+
+    @Test
+    void explicitOperationIdentityUsesFixedLowercaseCorrelationHex() {
+        UUID operationId = UUID.fromString("01234567-89ab-cdef-fedc-ba9876543210");
+        ZLinkChannelEnvelope.Header header = ZLinkChannelEnvelope.create(
+            ZLinkChannelEnvelope.KIND_REQUEST,
+            "route",
+            "Request",
+            "application/json",
+            null,
+            Map.of(),
+            null,
+            operationId);
+
+        assertEquals("0123456789abcdeffedcba9876543210", header.correlationId());
+    }
+
+    @Test
+    void encodeRetainsTheCallerOwnedPayloadMessage() {
+        ZLinkChannelEnvelope.Header header = new ZLinkChannelEnvelope.Header(
+            ZLinkChannelEnvelope.KIND_COMMAND,
+            "route",
+            "Notify",
+            "application/json",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            null,
+            null);
+        try (Message payload = Message.from(new byte[] {7, 8, 9})) {
+            List<Message> parts = ZLinkChannelEnvelope.encode(header, payload);
+            try {
+                assertSame(payload, parts.get(1));
+                assertArrayEquals(new byte[] {7, 8, 9}, parts.get(1).toByteArray());
+            } finally {
+                parts.getFirst().close();
+            }
         }
     }
 

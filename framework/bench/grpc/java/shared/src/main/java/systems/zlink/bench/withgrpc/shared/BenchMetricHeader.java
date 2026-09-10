@@ -4,7 +4,6 @@ package systems.zlink.bench.withgrpc.shared;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import systems.zlink.contracts.messaging.Message;
 
 /**
  * Bench spec section 6: a 29-byte measurement header at the front of the payload body.
@@ -57,16 +56,6 @@ public final class BenchMetricHeader {
         buffer.putInt(9, payloadSize);
         buffer.putLong(13, sequence);
         buffer.putLong(21, nowNs());
-    }
-
-    public static void stamp(
-        Message message, int offset, int runId, byte phase, int payloadSize, long sequence) {
-        message.writeIntLe(offset, MAGIC);
-        message.writeIntLe(offset + 4, runId);
-        message.writeByte(offset + 8, phase);
-        message.writeIntLe(offset + 9, payloadSize);
-        message.writeLongLe(offset + 13, sequence);
-        message.writeLongLe(offset + 21, nowNs());
     }
 
     /** Decoded header, or {@code null} when the bytes are not a bench header. */

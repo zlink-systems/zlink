@@ -89,27 +89,28 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         RouterSocket router,
         RoutingId target,
         List<byte[]> frames) {
-        ensureOwned(router);
-        return sendOnLane(router, target, frames);
+        return sendMessages(router, target,
+            copyMessages(frames, "service multipart must not be empty"));
     }
 
-    private CompletionStage<Void> sendOnLane(
+    /** Consumes every message on every return or throw path. */
+    CompletionStage<Void> sendMessages(
         RouterSocket router,
         RoutingId target,
-        List<byte[]> frames) {
-        Objects.requireNonNull(target, "target");
-        if (frames.isEmpty()) {
-            throw new IllegalArgumentException("service multipart must not be empty");
-        }
-        List<Message> messages = frames.stream()
-            .map(frame -> Message.from(Objects.requireNonNull(frame, "frame")))
-            .toList();
-        boolean submitted = false;
+        List<Message> messages) {
+        List<Message> ownedMessages = claimMessages(messages);
+        boolean completionOwns = false;
         try {
+            ensureOwned(router);
+            Objects.requireNonNull(target, "target");
+            if (ownedMessages.isEmpty()) {
+                throw new IllegalArgumentException(
+                    "service multipart must not be empty");
+            }
             var send = router.send(target);
-            var submit = send.message(messages.getFirst());
-            for (int index = 1; index < messages.size(); index++) {
-                submit.message(messages.get(index));
+            var submit = send.message(ownedMessages.getFirst());
+            for (int index = 1; index < ownedMessages.size(); index++) {
+                submit.message(ownedMessages.get(index));
             }
             CompletionStage<Void> completion;
             try {
@@ -118,13 +119,43 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 completion = CompletableFuture.failedFuture(failure);
             }
             completion = completion.whenComplete((ignored, failure) ->
-                Message.closeAll(messages));
-            submitted = true;
+                Message.closeAll(ownedMessages));
+            completionOwns = true;
             return completion;
         } finally {
-            if (!submitted) {
-                Message.closeAll(messages);
+            if (!completionOwns) {
+                Message.closeAll(ownedMessages);
             }
+        }
+    }
+
+    private static List<Message> claimMessages(List<Message> messages) {
+        Objects.requireNonNull(messages, "messages");
+        try {
+            return List.copyOf(messages);
+        } catch (RuntimeException | Error failure) {
+            Message.closeAll(messages);
+            throw failure;
+        }
+    }
+
+    private static List<Message> copyMessages(
+        List<byte[]> frames,
+        String emptyMessage) {
+        Objects.requireNonNull(frames, "frames");
+        if (frames.isEmpty()) {
+            throw new IllegalArgumentException(emptyMessage);
+        }
+        var messages = new java.util.ArrayList<Message>(frames.size());
+        try {
+            for (byte[] frame : frames) {
+                messages.add(Message.from(
+                    Objects.requireNonNull(frame, "frame")));
+            }
+            return List.copyOf(messages);
+        } catch (RuntimeException | Error failure) {
+            Message.closeAll(messages);
+            throw failure;
         }
     }
 
@@ -153,22 +184,35 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         List<byte[]> frames,
         Duration timeout,
         Function<List<Message>, T> decodeReply) {
-        ensureOwned(router);
-        Objects.requireNonNull(decodeReply, "decodeReply");
-        Objects.requireNonNull(target, "target");
-        Objects.requireNonNull(timeout, "timeout");
-        if (frames.isEmpty()) {
-            throw new IllegalArgumentException("service request must not be empty");
-        }
-        List<Message> messages = frames.stream()
-            .map(frame -> Message.from(Objects.requireNonNull(frame, "frame")))
-            .toList();
-        boolean submitted = false;
+        return requestMessages(router, target,
+            copyMessages(frames, "service request must not be empty"),
+            timeout,
+            decodeReply);
+    }
+
+    /** Consumes every request message on every return or throw path. */
+    <T> CompletionStage<T> requestMessages(
+        RouterSocket router,
+        RoutingId target,
+        List<Message> messages,
+        Duration timeout,
+        Function<List<Message>, T> decodeReply) {
+        List<Message> ownedMessages = claimMessages(messages);
+        boolean completionOwns = false;
         try {
+            ensureOwned(router);
+            Objects.requireNonNull(decodeReply, "decodeReply");
+            Objects.requireNonNull(target, "target");
+            Objects.requireNonNull(timeout, "timeout");
+            if (ownedMessages.isEmpty()) {
+                throw new IllegalArgumentException(
+                    "service request must not be empty");
+            }
             var request = router.request(target);
-            RequestSubmitOperation submit = request.message(messages.getFirst());
-            for (int index = 1; index < messages.size(); index++) {
-                submit.message(messages.get(index));
+            RequestSubmitOperation submit = request.message(
+                ownedMessages.getFirst());
+            for (int index = 1; index < ownedMessages.size(); index++) {
+                submit.message(ownedMessages.get(index));
             }
             CompletionStage<T> completion = submit.timeout(timeout)
                 .submit()
@@ -180,12 +224,12 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                     }
                 })
                 .whenComplete((ignored, failure) ->
-                    Message.closeAll(messages));
-            submitted = true;
+                    Message.closeAll(ownedMessages));
+            completionOwns = true;
             return completion;
         } finally {
-            if (!submitted) {
-                Message.closeAll(messages);
+            if (!completionOwns) {
+                Message.closeAll(ownedMessages);
             }
         }
     }

@@ -230,7 +230,7 @@ int main ()
                        && actual.record.application->content_type
                             == payload.at ("contentType")
                                  .get<std::string> ()
-                       && actual.record.application->payload
+                       && actual.record.application->payload_bytes ()
                             == fixture_bytes (
                               payload.at ("payloadUtf8Fixture")),
                      "record application payload must match");

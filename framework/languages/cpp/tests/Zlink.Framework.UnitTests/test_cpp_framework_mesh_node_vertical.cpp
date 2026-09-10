@@ -705,6 +705,12 @@ void verify_local_node_submit_bridge ()
     registration->handlers.on_send<local_route_probe_handler_t, local_route_probe_message_t> (
       "vertical-mesh", "LocalRouteProbe", &local_route_probe_handler_t::handle);
 
+    auto independent_registration =
+      make_named_node ("independent-mesh", "independent-route-node");
+    independent_registration->max_pending = 1;
+    independent_registration->handlers.on_send<local_route_probe_handler_t, local_route_probe_message_t> (
+      "independent-mesh", "LocalRouteProbe", &local_route_probe_handler_t::handle);
+
     zlink::framework::serializer_registry_t serializers;
     serializers.add<local_route_probe_message_t> (
       [] (const local_route_probe_message_t &message) {
@@ -730,23 +736,26 @@ void verify_local_node_submit_bridge ()
     auto provider = services.build_provider ();
     // The MeshNode publishes its descriptor under an owner lease, so the
     // Location runtime starts first just as the host does in production.
-    provider.get_required<zlink::framework::runtime::location_runtime_t> ().start (
-      *registration->routing_id);
+    auto &location_runtime =
+      provider.get_required<zlink::framework::runtime::location_runtime_t> ();
+    location_runtime.start (*registration->routing_id);
     auto application_jobs = std::make_shared<
       zlink::framework::runtime::application_job_queue_t> (
         zlink::framework::runtime::application_job_queue_configuration_t{
           zlink::framework::application_job_queue_profile_t::balanced,
           std::uint32_t{1}, 1, 1});
     zlink::framework::runtime::mesh_node_host_service_t service (
-      {registration}, serializers, {}, {}, application_jobs);
+      {registration, independent_registration}, serializers, {}, {}, application_jobs);
     service.start (provider);
     const auto node = service.nodes ().front ();
+    const auto independent_node = service.nodes ().back ();
 
-    auto encode = [&serializers] (std::string value) {
+    auto encode = [&serializers] (std::string value,
+                                  std::string mesh_name = "vertical-mesh") {
         zlink::framework::runtime::messaging::client_call_codec_t codec;
         const auto header = codec.create_envelope (
           zlink::framework::runtime::messaging::message_kind_t::command,
-          "vertical-mesh", "LocalRouteProbe");
+          std::move (mesh_name), "LocalRouteProbe");
         return codec.encode_envelope_parts (
           header, local_route_probe_message_t{std::move (value)}, serializers);
     };
@@ -761,20 +770,10 @@ void verify_local_node_submit_bridge ()
         assert (probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 1; }));
         assert (probe->completed == 0);
     }
-    auto progresses = encode ("progress-after-entry");
-    assert (service.submit_local_node_send (node, progresses.items ())
-            == zlink::submit_result_t::ok);
-    {
-        std::unique_lock lock (probe->mutex);
-        assert (probe->changed.wait_for (lock, 1s, [&] {
-            return probe->entered == 2;
-        }));
-        assert (probe->completed == 0);
-    }
     {
         // The receive pump shares this queue and can reserve the released
-        // permit. Acquire it through the same FIFO to prove that neither
-        // pending handler retains capacity, independent of pump scheduling.
+        // permit. Acquire it through the same FIFO to prove that the running
+        // handler returned capacity at entry, independent of pump scheduling.
         using permit_t =
           zlink::framework::runtime::application_job_queue_t::permit_t;
         auto released_capacity =
@@ -796,6 +795,33 @@ void verify_local_node_submit_bridge ()
         assert (capacity_while_handlers_are_pending.permits_in_use == 1);
     }
 
+    // A different node owns a different gate and must enter while the first
+    // handler is blocked. The same-node successor retains its permit until
+    // that node's first handler reaches terminal completion (02 §2).
+    auto independent = encode ("independent-owner", "independent-mesh");
+    assert (service.submit_local_node_send (independent_node, independent.items ())
+            == zlink::submit_result_t::ok);
+    {
+        std::unique_lock lock (probe->mutex);
+        assert (probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 2; }));
+        assert (probe->completed == 0);
+    }
+    auto progresses = encode ("progress-after-entry");
+    assert (service.submit_local_node_send (node, progresses.items ())
+            == zlink::submit_result_t::ok);
+    {
+        std::unique_lock lock (probe->mutex);
+        assert (!probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 3; }));
+        assert (probe->completed == 0);
+        assert (node->pending_application_callbacks () == 1);
+        assert (node->active_application_callbacks () == 1);
+        assert (independent_node->active_application_callbacks () == 1);
+        const auto queued = application_jobs->snapshot ();
+        assert (queued.effective_max_queued_application_jobs == 1);
+        assert (queued.queued_application_jobs == 1);
+        assert (queued.permits_in_use == 1);
+    }
+
     {
         std::lock_guard lock (probe->mutex);
         probe->gate_open = true;
@@ -803,9 +829,10 @@ void verify_local_node_submit_bridge ()
     probe->changed.notify_all ();
     {
         std::unique_lock lock (probe->mutex);
-        assert (probe->changed.wait_for (lock, 1s, [&] { return probe->completed == 2; }));
+        assert (probe->changed.wait_for (lock, 1s, [&] { return probe->completed == 3; }));
         assert ((probe->values
                  == std::vector<std::string>{"owned-after-return",
+                                             "independent-owner",
                                              "progress-after-entry"}));
         assert (probe->last_mesh_name == "vertical-mesh");
         assert (probe->last_channel_name == "<none>");
@@ -827,7 +854,7 @@ void verify_local_node_submit_bridge ()
             == zlink::submit_result_t::ok);
     {
         std::unique_lock lock (probe->mutex);
-        assert (probe->changed.wait_for (lock, 1s, [&] { return probe->completed == 3; }));
+        assert (probe->changed.wait_for (lock, 1s, [&] { return probe->completed == 4; }));
     }
     assert (service.wait_for_accepted_callbacks_until (
       std::chrono::steady_clock::now () + 1s));
@@ -839,6 +866,8 @@ void verify_local_node_submit_bridge ()
     assert (service.submit_local_node_send (node, after_seal.items ())
             == zlink::submit_result_t::terminated);
     service.stop ();
+    location_runtime.stop ();
+    assert (!location_runtime.current_owner_token ());
 }
 
 // Regression pin for mesh_node_runtime_t::classify_node_direct_target's
@@ -1449,6 +1478,55 @@ void verify_fixed_drain_callback_barrier ()
     assert (node->active_application_callbacks () == 0);
 }
 
+void verify_local_and_wire_application_owner_keys_match ()
+{
+    using namespace zlink::framework;
+    namespace runtime = zlink::framework::runtime;
+    using runtime::host::owner_kind_t;
+    runtime::host::ready_record_t local;
+    assert (runtime::mesh::service_mailbox_t::application_owner (local)
+            == runtime::mesh::service_mailbox_t::application_owner (owner_kind_t::node));
+    local.owner_kind = owner_kind_t::channel;
+    local.channel_name = "same";
+    const auto channel = runtime::mesh::service_mailbox_t::application_owner (local);
+    assert (channel == runtime::mesh::service_mailbox_t::application_owner (
+                         owner_kind_t::channel, "same"));
+    local.owner_kind = owner_kind_t::spot;
+    local.spot_id = "same";
+    const auto spot = runtime::mesh::service_mailbox_t::application_owner (local);
+    assert (spot == "spot:same");
+    assert (spot == runtime::mesh::service_mailbox_t::application_owner (
+                      owner_kind_t::spot, "same"));
+    local.owner_kind = owner_kind_t::actor;
+    local.actor.emplace (actor_id_t ("same"), 1, "mesh", node_rid_t::from_string ("node"));
+    const auto actor = runtime::mesh::service_mailbox_t::application_owner (local);
+    assert (actor == runtime::mesh::service_mailbox_t::application_owner (
+                       owner_kind_t::actor, "same"));
+    assert (channel != spot && spot != actor && actor != channel);
+}
+
+void verify_owner_drain_continuation_during_executor_shutdown ()
+{
+    namespace runtime = zlink::framework::runtime;
+    runtime::offload_executor_t executor (1);
+    std::promise<void> started;
+    std::promise<void> release;
+    auto release_wait = release.get_future ().share ();
+    std::atomic_int completed{0};
+    assert (executor.try_submit_internal ([&] {
+        started.set_value ();
+        release_wait.wait ();
+        assert (executor.try_submit_internal ([&] { ++completed; }));
+    }));
+    started.get_future ().wait ();
+    assert (!executor.drain_until (std::chrono::steady_clock::now ()));
+    assert (!executor.try_submit ([] {}));
+    release.set_value ();
+    executor.drain ();
+    assert (completed.load () == 1);
+    assert (!executor.try_submit_internal ([] {}));
+}
+
 void verify_deferred_application_terminal_ownership ()
 {
     using namespace zlink::framework;
@@ -1518,6 +1596,23 @@ void verify_deferred_application_terminal_ownership ()
     }
     assert (inline_stateful.load () == 1);
     assert (inline_mailbox.load () == 1);
+    assert (node->active_application_callbacks () == 0);
+
+    node->application_work_enqueued ();
+    node->application_work_started ();
+    std::atomic_int moved_mailbox{0};
+    std::shared_ptr<runtime::application_dispatch_terminal_owner_t> deferred;
+    {
+        runtime::application_dispatch_terminal_owner_t inline_owner (
+          node, {}, [&moved_mailbox] { ++moved_mailbox; });
+        deferred = std::make_shared<runtime::application_dispatch_terminal_owner_t> (
+          std::move (inline_owner));
+        inline_owner.settle ();
+        assert (moved_mailbox.load () == 0);
+    }
+    assert (node->active_application_callbacks () == 1);
+    deferred.reset ();
+    assert (moved_mailbox.load () == 1);
     assert (node->active_application_callbacks () == 0);
 }
 
@@ -2008,6 +2103,8 @@ int main (int argc, char **argv)
     verify_object_client_registration_boundary ();
     verify_host_shutdown_seal_reaches_raw_mesh ();
     verify_fixed_drain_callback_barrier ();
+    verify_local_and_wire_application_owner_keys_match ();
+    verify_owner_drain_continuation_during_executor_shutdown ();
     verify_deferred_application_terminal_ownership ();
     verify_descriptor_retire_order_and_pre_seal_rollback ();
     verify_local_node_submit_bridge ();

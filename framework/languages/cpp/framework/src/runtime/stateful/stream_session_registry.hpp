@@ -118,7 +118,8 @@ class stream_session_registry_t
   public:
     using authority_resolver_t = std::function<std::optional<object_ref_t> (const std::string &)>;
 
-    explicit stream_session_registry_t (authority_resolver_t resolver);
+    explicit stream_session_registry_t (authority_resolver_t resolver,
+                                         std::function<void ()> activity_handler = {});
 
     stream_connection_t open (std::string connection_id,
                               std::function<void ()> close_connection = {});
@@ -261,6 +262,7 @@ class stream_session_registry_t
     void notify_changed () noexcept;
 
     authority_resolver_t _resolver;
+    const std::function<void ()> _activity_handler;
     offload_executor_t _lane_executor;
     mutable state_lane_t _lane;
     std::mutex _changed_mutex;
