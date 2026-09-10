@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -418,6 +419,11 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
     }
 
     @Override
+    public void submit_sync() {
+        ZLinkBlockingCalls.submit(this::submit);
+    }
+
+    @Override
     public CompletionStage<Void> submit() {
         CompletionStage<Void> duplicate =
             ZLinkOneWayCalls.beginOneWay(submitGate);
@@ -596,6 +602,11 @@ final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
             timeout,
             metadata,
             submitGate);
+    }
+
+    @Override
+    public <TReply> TReply submit_sync(Class<TReply> replyType) {
+        return ZLinkBlockingCalls.submit(() -> submit(replyType));
     }
 
     @Override

@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
@@ -451,6 +452,11 @@ final class ZLinkSpotDirectSendCall implements ZLinkSendCall {
     }
 
     @Override
+    public void submit_sync() {
+        ZLinkBlockingCalls.submit(this::submit);
+    }
+
+    @Override
     public CompletionStage<Void> submit() {
         CompletionStage<Void> duplicate =
             ZLinkOneWayCalls.beginOneWay(submitGate);
@@ -628,6 +634,11 @@ final class ZLinkSpotDirectRequestCall implements ZLinkRequestCall {
             timeout,
             metadata,
             submitGate);
+    }
+
+    @Override
+    public <TReply> TReply submit_sync(Class<TReply> replyType) {
+        return ZLinkBlockingCalls.submit(() -> submit(replyType));
     }
 
     @Override

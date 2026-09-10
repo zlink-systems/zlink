@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
@@ -138,6 +139,11 @@ final class RouteSendCall implements ZLinkSendCall {
         return new RouteSendCall(runtime, channelName, sockets, target, payload,
             packetName, contentType,
             (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).withAll(values), submitGate);
+    }
+
+    @Override
+    public void submit_sync() {
+        ZLinkBlockingCalls.submit(this::submit);
     }
 
     @Override
@@ -291,6 +297,11 @@ final class RouteRequestCall implements ZLinkRequestCall {
         Objects.requireNonNull(value, "timeout");
         return new RouteRequestCall(runtime, channelName, sockets, defaultTimeout, target,
             payload, packetName, value, contentType, metadata, submitGate);
+    }
+
+    @Override
+    public <TReply> TReply submit_sync(Class<TReply> replyType) {
+        return ZLinkBlockingCalls.submit(() -> submit(replyType));
     }
 
     @Override
@@ -532,6 +543,11 @@ final class ChannelSendCall implements ZLinkSendCall {
     }
 
     @Override
+    public void submit_sync() {
+        ZLinkBlockingCalls.submit(this::submit);
+    }
+
+    @Override
     public CompletionStage<Void> submit() {
         CompletionStage<Void> duplicate =
             ZLinkOneWayCalls.beginOneWay(submitGate);
@@ -682,6 +698,11 @@ final class ChannelRequestCall implements ZLinkRequestCall {
         return new ChannelRequestCall(
             runtime, channelName, sockets, defaultTimeout, payload, packetName, value, contentType, metadata,
             submitGate);
+    }
+
+    @Override
+    public <TReply> TReply submit_sync(Class<TReply> replyType) {
+        return ZLinkBlockingCalls.submit(() -> submit(replyType));
     }
 
     @Override

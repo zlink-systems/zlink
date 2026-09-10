@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import systems.zlink.framework.spots.ZLinkSpotRequestCall;
@@ -209,6 +210,11 @@ final class RouteSpotSendCall
         return new RouteSpotSendCall(runtime, channelName, resolver, instanceSpots,
             target, payload, packetName, contentType, instanceIntent, stableType, selectedMesh,
             metadata.withAll(values), submitGate);
+    }
+
+    @Override
+    public void submit_sync() {
+        ZLinkBlockingCalls.submit(this::submit);
     }
 
     @Override
@@ -460,6 +466,11 @@ final class RouteSpotRequestCall
             timeout,
             contentType,
             instanceIntent, stableType, selectedMesh, metadata, submitGate);
+    }
+
+    @Override
+    public <TReply> TReply submit_sync(Class<TReply> replyType) {
+        return ZLinkBlockingCalls.submit(() -> submit(replyType));
     }
 
     @Override

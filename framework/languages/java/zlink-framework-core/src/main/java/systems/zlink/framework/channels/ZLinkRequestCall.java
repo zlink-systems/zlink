@@ -18,6 +18,13 @@ public interface ZLinkRequestCall {
     /** For {@code requestToChannel}, channel validation (including metadata support) and the default timeout are resolved when {@code submit} is called. */
     <TReply> CompletionStage<TReply> submit(Class<TReply> replyType);
 
+    /**
+     * Blocks the calling application thread until the application reply completes.
+     * @throws systems.zlink.framework.errors.ZLinkFrameworkException with
+     *     {@code INVALID_OPERATION} before submission if called from a runtime execution context
+     */
+    <TReply> TReply submit_sync(Class<TReply> replyType);
+
     <TReply> CompletionStage<TReply> yield(Class<TReply> replyType);
 
 }
