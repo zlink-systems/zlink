@@ -343,6 +343,21 @@ ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
 `part_count_out_`이 그 역할을 대신한다. 공개 헤더에서 이 타입이 없어지는지, 아니면 내부에만 남는지는
 구현 단계에서 확정한다.
 
+### 7.3.2 이미 whole-message인 선례 — `zlink_completion_t`
+
+`core/include/zlink/socket/api.h:62-65`:
+
+```c
+    /* Core-owned contiguous REQUEST reply array; release with
+       zlink_multipart_close. */
+    zlink_msg_t *reply_parts;
+    size_t reply_part_count;
+```
+
+REQUEST 응답은 **지금도 파트 배열로 한 번에** 돌아온다. 해제 헬퍼 `zlink_multipart_close`도 이미 공개돼
+있다. 그러므로 신설 API는 새 관용을 도입하는 것이 아니라 **이미 공개된 관용을 send와 나머지 recv에
+맞추는 것**이다. 지금은 응답만 배열이고 요청은 파트 단위라 방향이 어긋나 있다.
+
 ### 7.4 신설 send 시그니처 (초안)
 
 recv와 같은 관용을 따른다 — caller-제공 배열, `parts_capacity_`, `part_count_out_`. 한 번의 호출이 record

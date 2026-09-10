@@ -132,6 +132,30 @@ draft §7.3.1이 목록으로 갖는다. `zlink_part_flag_t`도 공개 표면에
 - 8단계(perf 하네스)에 `bindings/c/perf/single/common/perf_single_reqrep.hpp:635,647-664`를 더한다. 빈 `FINAL`만
   재시도하는 유일한 경로이며 whole-record 재시도로 바꾼다(draft §7.2 Q1).
 
+### 10.3.1 문서·심볼 반영에서 빠지기 쉬운 것
+
+§2~§7의 표는 recv 신설을 전제로 쓰였다. 제거까지 포함하면 아래가 더 필요하다.
+
+| 대상 | 무엇을 |
+|---|---|
+| `core/src/libzlink.vers:61-67,90` | 제거하는 8개 심볼을 버전 스크립트에서 뺀다. `zlink_multipart_close`(:46)는 **유지**한다 — 배열 해제 헬퍼라 whole-message에서 오히려 더 쓰인다 |
+| `core/doc/spec/core/socket/README` §2 스레드 안전성 | **"한 record의 첫 part부터 FINAL까지 같은 thread" 규칙을 삭제**한다. 표면에 part 시퀀스가 없어지면 이 제약의 근거가 사라진다. 이번 확대의 핵심 결과다 |
+| 같은 문서의 `BUSY`·`EBUSY` 절(`README.en.md:575-577`) | 진행 중 part 시퀀스에 다른 주체가 들어와 생기는 `BUSY`가 없어진다. 남는 `BUSY` 사유만 남긴다 |
+| `README.en.md:1078` (실패한 `FINAL`은 staged prefix를 버린다) | 부분 제출 상태가 없어지므로 규칙 자체를 삭제하고 **whole-record 재시도**로 대체한다 |
+| `core/doc/spec/core/socket/08-stream` | STREAM send의 `ZLINK_PART_MORE` → `NOT_SUPPORTED` 규칙을 `part_count_ == 1` 규칙으로 바꾼다. 길이 0 part의 "peer 끊기" 의미(`:151-153`)는 보존한다 |
+| `core/doc/spec/core/socket/03-sub`, `05-xsub` | SUB·XSUB의 multipart 수신을 `zlink_subscribe`로 바꾼다. §2 표의 "(2차)"를 이번 범위로 올린다 |
+| `core/doc/spec/core/02-message` | `zlink_part_flag_t`가 공개 표면에서 사라지는 것을 반영한다 |
+| 바인딩 spec·guide(§6) | recv뿐 아니라 **send 절도** 같은 문장을 넣는다 — 공개 시그니처 불변, 내부가 Core whole-message send 1회 호출 |
+| `bindings/doc/spec/README.ko.md` 등 공통 문서 | part flag를 언급하는 곳이 있으면 정리 |
+
+### 10.3.2 이미 whole-message인 선례
+
+`zlink_completion_t`가 **이미 `reply_parts` 배열과 `reply_part_count`를 갖는다**
+(`core/include/zlink/socket/api.h:64-65`). 즉 REQUEST 응답은 지금도 파트 배열로 한 번에 돌아온다.
+신설 API는 새 관용을 만드는 것이 아니라 **이미 공개된 관용을 나머지 경로에 맞추는 것**이다.
+`zlink_multipart_close`(`core/include/zlink/message/*.h:117`)도 그 배열을 닫는 기존 헬퍼다.
+설계·문서에서 이 선례를 근거로 쓴다.
+
 ### 10.4 작업 규모
 
 draft §7.3의 표를 따른다. 요약하면 **Core 내부 호출자 0건, `framework/languages` 0건**이고, 비용은
