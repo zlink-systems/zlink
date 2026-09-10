@@ -188,6 +188,48 @@ def link_packages(entry, output, files):
         if digest(target) != record['sha256']:
             raise ValueError(f'Linked package digest mismatch: {target}')
     print(f'-- verified {len(files)} binding file digests (including NuGet/npm/Maven)')
+    invalidate_consumer_caches(versions_from(files))
+
+
+def versions_from(files):
+    """Package version per language, read back from the linked output names."""
+    found = {}
+    for name in files:
+        match = re.search(r'nuget/Zlink\.(?P<v>[0-9][^/]*)\.nupkg$', name)
+        if match:
+            found['dotnet'] = match.group('v')
+        match = re.search(r'npm/zlink-systems-zlink-(?P<v>[0-9][^/]*)\.tgz$', name)
+        if match:
+            found['node'] = match.group('v')
+    return found
+
+
+def invalidate_consumer_caches(versions):
+    """A package rebuilt at the same version must not be served from a stale cache.
+
+    Development rebuilds keep the version and change the content, but every consumer
+    caches by version.  The side that produced the package owns invalidating what it
+    just made stale; otherwise each consumer has to remember a different cleanup.
+    Maven and the C++ prefix read the linked path directly and need nothing here.
+    """
+    version = versions.get('dotnet')
+    if version:
+        cached = Path.home() / '.nuget/packages/zlink' / version
+        if cached.is_dir():
+            shutil.rmtree(cached)
+            print(f'-- invalidated stale NuGet cache: {cached}', flush=True)
+    version = versions.get('node')
+    if version:
+        # npm keys cacache by the tarball URL; a file: install re-reads the file, but
+        # a registry-style entry for the same version would shadow it.
+        result = subprocess.run(
+            ['npm', 'cache', 'ls', f'@zlink-systems/zlink@{version}'],
+            capture_output=True, text=True, check=False)
+        if result.returncode == 0 and result.stdout.strip():
+            subprocess.run(['npm', 'cache', 'clean', '--force'],
+                           capture_output=True, check=False)
+            print(f'-- invalidated npm cache entry for @zlink-systems/zlink@{version}',
+                  flush=True)
 
 
 def source_copy(root, destination):
