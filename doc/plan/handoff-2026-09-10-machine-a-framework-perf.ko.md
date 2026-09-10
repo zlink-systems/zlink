@@ -186,6 +186,11 @@ G4 이후 **패키지 신선도** 문제가 연달아 작업을 막았다. 전�
 | bench C++ `request_submission_t is not a member` | job-local 패키지(0.17.6)에 고정 | 캐시 지우고 `ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT`로 재설정 |
 | `tooling_contract` 실패 | smoke가 **Core prefix를 전달하지 않음** | `CMAKE_PREFIX_PATH` 환경변수로 전달 |
 
+**`hotpath_gate`는 반드시 `scripts/build-core.sh release-gate`(LTO ON)로 빌드한 트리에서 돌린다.**
+기준값이 LTO ON에서 만들어졌다. LTO OFF로 돌리면 4~5개 cell이 23~32% 초과로 나오고, 그것은
+회귀가 아니라 **조건 차이**다. 2026-09-11에 이 한 줄을 몰라 "0.18.0 릴리스 차단"으로 잘못
+보고했다(#159, 정정 후 닫음).
+
 **규칙: 바인딩이 바뀐 뒤에는 `build-wsl.sh`를 돌리고, NuGet은 캐시까지 지운다.** 버전이 같으면 아무것도 갱신되지 않는다.
 
 ### 벤치는 CI에 넣지 않는다 (사용자 결정 2026-09-11)
