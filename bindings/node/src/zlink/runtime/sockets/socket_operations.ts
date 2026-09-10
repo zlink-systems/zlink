@@ -223,20 +223,20 @@ export class RoutedMessageSocket extends ConnectableSocket {
     // HOT PATH: terminal readers repeatedly materialize data(), whereas
     // relays consume the movable native frame. Use the previous refill to
     // select the next internal storage mode without changing the public API.
-    const preferManagedSinglePart = routedReceivedPrefersManagedBuffer(result);
+    const preferManagedParts = routedReceivedPrefersManagedBuffer(result);
     const routingIdStorage = routedReceivedRoutingBytes(result);
     let raw;
     try {
       raw = ((flags | 0) & (RecvFlags.DontWait | 0))
         ? native.routerRecvMessageNoWait(
             getNativeHandle(this),
-            preferManagedSinglePart,
+            preferManagedParts,
             routingIdStorage
           )
         : native.routerRecvMessage(
             getNativeHandle(this),
             flags | 0,
-            preferManagedSinglePart,
+            preferManagedParts,
             routingIdStorage
           );
     } catch (error) {

@@ -55,12 +55,12 @@ export interface SocketNativeBinding {
   routerRecvMessage: (
     socket: NativeHandle,
     flags: number,
-    preferManagedSinglePart?: boolean,
+    preferManagedParts?: boolean,
     routingIdStorage?: Buffer | null
   ) => NativeReceivedRaw | null;
   routerRecvMessageNoWait: (
     socket: NativeHandle,
-    preferManagedSinglePart?: boolean,
+    preferManagedParts?: boolean,
     routingIdStorage?: Buffer | null
   ) => NativeReceivedRaw | null;
   socketBind: (socket: NativeHandle, endpoint: string) => void;
