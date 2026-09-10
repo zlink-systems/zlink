@@ -17,8 +17,8 @@ title: "Bindings Send and Async Completion Surface Policy"
 
 Send and request can wait for local send queue admission. A high-level binding uses Core `NONE` for a
 blocking terminal and Core `DONTWAIT` for an awaitable terminal. Go exposes one public
-`Submit(context.Context)` terminal, submits with Core `DONTWAIT`, and then waits for the internal
-completion.
+`Submit(context.Context)` terminal, submits with Core `DONTWAIT`, and returns a result object
+immediately; the internal completion is awaited by the object's `Admitted(ctx)`/`Reply(ctx)`.
 
 | Operation | Public completion boundary |
 |---|---|

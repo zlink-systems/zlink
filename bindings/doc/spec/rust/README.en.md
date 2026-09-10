@@ -517,7 +517,7 @@ Rust exposes Actor and Spot route lookup results as public value types.
 
 Rust package information follows its [distribution metadata](../../../rust/Cargo.toml); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-Rust provides `submit_sync()` returning a blocking `Result` and `submit()` returning a runtime-independent `Future`.
+Rust provides `submit_sync()` returning a blocking `Result` and `submit()` returning a result object (`Result<SendSubmission>`/`Result<RequestSubmission>`: `result` and a boxed `admitted` future, plus a `reply` future for a request).
 Completion-wait lifetime ends through Future drop or executor task abort.
 
 Native completion IDs, `user_context`, and raw drain are not public APIs.

@@ -157,7 +157,7 @@ Core result를 반환하는 호출은 Python의 대응 error에 `result`, `code`
 
 Python package 정보는 [배포 metadata](../../../python/pyproject.toml)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Python은 blocking `submit_sync()`와 awaitable을 반환하는 `submit()`을 제공한다.
+Python은 blocking `submit_sync()`와 결과 객체(`SendSubmission`/`RequestSubmission`: `result()`와 `admitted()`, request는 `reply()`)를 돌려주는 `submit()`을 제공한다.
 Caller wait 취소는 awaitable cancellation으로 표현한다.
 
 Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.

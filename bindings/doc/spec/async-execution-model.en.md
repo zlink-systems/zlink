@@ -56,7 +56,7 @@ completion.
 | Node | `Promise<T>` |
 | Python | `Awaitable[T]` |
 | Rust | `Future<Output = T>` |
-| Go | The goroutine executing `Submit(context.Context)` waits for an internal completion. |
+| Go | `Submit(context.Context)` returns a result object immediately; the goroutine executing `Admitted(ctx)`/`Reply(ctx)` waits for an internal completion. |
 
 A synchronous terminal's return value is not an awaitable. It conveys the result determined within the
 call as `void`, a collection, `Result`, `error`, or a language-specific exception.

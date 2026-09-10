@@ -604,7 +604,7 @@ types.
 
 C++ package information follows its [distribution metadata](../../../cpp/CMakeLists.txt); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-C++ provides blocking `submit()` and `async()` returning `async_result_t`.
+C++ provides blocking `submit()` and `async()` returning a result object (`send_submission_t`/`request_submission_t`: `result` and `admitted`, plus `reply` for a request).
 Completion-wait lifetime ends through `async_result_t` drop.
 
 Native completion IDs, `user_context`, and raw drain are not public APIs.

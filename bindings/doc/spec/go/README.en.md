@@ -138,8 +138,10 @@ Send, publish, request, and reply use multipart builders. A builder collects its
 options allowed for that operation, then executes once at the terminal `Submit`. Submitting the same
 builder twice completes the second submission with a state error.
 
-Send and request `Submit(context.Context)` wait for a Core `DONTWAIT` completion. Reply checks the
-Context before call entry, and socket `SNDTIMEO` owns the admission wait after the native call. Only
+Send and request `Submit(context.Context)` submit once with Core `DONTWAIT` and return a result object
+immediately. Completion waiting is done by the object's `Admitted(ctx)`/`Reply(ctx)`, and `Admitted` is
+nil immediately when `result == OK`. Reply checks the Context before call entry, and socket `SNDTIMEO`
+owns the admission wait after the native call. Only
 publish provides `Flags(SendFlags)`, on a separate `PublishOp`. The
 [Pull completion public contract](#pull-completion-public-contract) contains the exact interface.
 
@@ -278,8 +280,10 @@ and `bindings/go/samples/run_samples.sh`.
 
 Go package information follows its [distribution metadata](../../../go/go.mod); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-Go provides one `Submit(context.Context)` terminal that waits for completion on the calling goroutine.
-The caller wait cancellation input is `context.Context`, and a canceled request returns `(nil, ctx.Err())`.
+Go provides one `Submit(context.Context)` terminal. `Submit` does one native submission and returns a
+result object (`SendSubmission`/`RequestSubmission`) immediately; waiting is done by the object's
+`Result()`/`Admitted(ctx)`/`Reply(ctx)` methods. Each waiting method takes a `context.Context` for
+cancellation, and a canceled request returns `(nil, ctx.Err())`.
 
 Native completion IDs, `user_context`, and raw drain are not public APIs.
 Submission results follow the [common result projection](../README.en.md#submit-result-projection);

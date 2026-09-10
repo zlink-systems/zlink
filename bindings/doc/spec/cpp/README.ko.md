@@ -648,7 +648,7 @@ C++는 Actor와 Spot 라우트 조회 결과를 구체 계약 타입으로 노�
 
 C++ package 정보는 [배포 metadata](../../../cpp/CMakeLists.txt)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-C++는 blocking `submit()`과 `async_result_t`를 반환하는 `async()`를 제공한다.
+C++는 blocking `submit()`과 결과 객체(`send_submission_t`/`request_submission_t`: `result`와 `admitted`, request는 `reply`)를 돌려주는 `async()`를 제공한다.
 완료 대기 객체의 수명 종료는 `async_result_t` drop으로 표현한다.
 
 Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
