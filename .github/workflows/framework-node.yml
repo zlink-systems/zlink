@@ -328,11 +328,13 @@ jobs:
           # dist with the same bootstrap the local-package flow uses, fed by the
           # published binding tarball.
           version="${{ steps.core.outputs.binding_version }}"
-          mkdir -p .artifacts/wsl/npm
-          curl -sSfL -o ".artifacts/wsl/npm/zlink-systems-zlink-${version}.tgz" \
+          package_root="${ZLINK_LOCAL_PACKAGE_ROOT}"
+          npm_root="${package_root}/npm"
+          mkdir -p "${npm_root}"
+          curl -sSfL -o "${npm_root}/zlink-systems-zlink-${version}.tgz" \
             "https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-${version}.tgz"
-          bash scripts/local-package/http-client/build-wsl.sh node
-          tar tzf .artifacts/wsl/npm/zlink-systems-http-client-*.tgz > "${RUNNER_TEMP}/http-client-files.txt"
+          ZLINK_LOCAL_PACKAGE_ROOT="${package_root}" bash scripts/local-package/http-client/build-wsl.sh node
+          tar tzf "${npm_root}"/zlink-systems-http-client-*.tgz > "${RUNNER_TEMP}/http-client-files.txt"
           grep -q 'package/dist/index.js' "${RUNNER_TEMP}/http-client-files.txt"
 
       - name: Install and build the Node framework workspace
