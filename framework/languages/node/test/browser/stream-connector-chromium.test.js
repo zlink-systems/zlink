@@ -119,8 +119,7 @@ async function startStaticServer() {
   const address = server.address();
   return {
     url: `http://127.0.0.1:${address.port}`,
-    server,
-    close: () => new Promise((resolve) => server.close(resolve))
+    server
   };
 }
 
@@ -187,7 +186,6 @@ async function cleanup(t, resource, action) {
     t.diagnostic(`${resource} cleanup failed: ${error.message}`);
   }
 }
-
 
 async function freePorts(count) {
   const servers = await Promise.all(Array.from({ length: count }, () => new Promise((resolve, reject) => {
