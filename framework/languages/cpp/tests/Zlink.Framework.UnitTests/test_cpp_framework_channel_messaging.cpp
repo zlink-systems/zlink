@@ -1787,7 +1787,7 @@ int main ()
                                   .message (native_request_header)
                                   .message (native_request_body)
                                   .timeout (std::chrono::milliseconds (2000))
-                                  .async ();
+                                  .async ().reply;
     const auto native_client_reply = copy_message_parts (
       await_native_reply (std::move (native_client_future)).result ().value ());
     const int native_server_result = native_server_done.get ();
@@ -1975,7 +1975,7 @@ int main ()
                              .message (attempt_header)
                              .message (attempt_body)
                              .timeout (std::chrono::milliseconds (200))
-                             .async ();
+                             .async ().reply;
             routed_hosted_reply =
               await_native_reply (std::move (pending)).result ().value ();
             routed_request_completed = true;
