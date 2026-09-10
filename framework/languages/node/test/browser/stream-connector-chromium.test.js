@@ -5,6 +5,7 @@ const net = require('node:net');
 const path = require('node:path');
 const test = require('node:test');
 const { build } = require('esbuild');
+const { closeBrowser, closeServer, stopChild } = require('./support/bounded-cleanup');
 
 const workspaceRoot = path.resolve(__dirname, '../..');
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= path.join(workspaceRoot, '.cache/ms-playwright');
@@ -16,7 +17,7 @@ const key = path.join(workspaceRoot, 'test/fixtures/tls/server-key.pem');
 test('actual Chromium uses ws/wss, explicit flow, reconnect, drain, and browser trust', { timeout: 120_000 }, async (t) => {
   const [wsPort, wssPort, untrustedWssPort] = await freePorts(3);
   const staticServer = await startStaticServer();
-  t.after(() => staticServer.close());
+  t.after(() => closeServer(staticServer));
   let wsServer = await startStreamServer(`ws://127.0.0.1:${wsPort}`);
   t.after(() => stopStreamServer(wsServer));
   const wssServer = await startStreamServer(`wss://127.0.0.1:${wssPort}`, certificate, key);
@@ -28,7 +29,7 @@ test('actual Chromium uses ws/wss, explicit flow, reconnect, drain, and browser 
   );
   t.after(() => stopStreamServer(untrustedWssServer));
   const browser = await chromium.launch({ headless: true });
-  t.after(() => browser.close());
+  t.after(() => closeBrowser(browser));
   const context = await browser.newContext();
   const page = await context.newPage();
   const secureContext = await browser.newContext({ ignoreHTTPSErrors: true });
@@ -160,9 +161,7 @@ async function connectFromPage(page, endpoint, server) {
 }
 
 async function stopStreamServer(child) {
-  if (!child || child.exitCode !== null) return;
-  child.kill('SIGTERM');
-  await new Promise((resolve) => child.once('exit', resolve));
+  await stopChild(child);
 }
 
 async function freePorts(count) {
