@@ -105,27 +105,12 @@ jobs:
 
       # CONTRIBUTING §6: 부하로 깨진 테스트는 단독 재실행 1회로 판정한다. 허용치를
       # 넓히거나 TIMEOUT을 늘리지 않는다. 재실행도 실패하면 그대로 red다.
-      #
-      # QUARANTINE: test_stream_socket_recv_multiclient_ready_regression은 이 러너에서만
-      # 60초 TIMEOUT으로 hang한다(Issue #120). 개발 기계에서는 0.68초에 통과하고 taskset으로
-      # 2코어에 묶어도 통과한다. 원인이 제품인지 테스트인지 아직 갈리지 않았다. 게이트 전체를
-      # 영구 red로 두면 나머지 213개가 무의미해지므로 여기서만 빼고, 아래에서 비차단으로
-      # 따로 돌려 가시성은 유지한다. **#120이 닫히면 이 -E와 아래 단계를 함께 지운다.**
       - name: ctest
-        env:
-          QUARANTINED: '^test_stream_socket_recv_multiclient_ready_regression$'
         run: |
-          ctest --test-dir core/build -j2 --output-on-failure -E "${QUARANTINED}" \
+          ctest --test-dir core/build -j2 --output-on-failure \
             || ctest --test-dir core/build --rerun-failed --output-on-failure
 
-      # 격리한 테스트를 계속 돌려 상태를 본다. 실패해도 PR을 막지 않는다(Issue #120).
-      - name: Quarantined test (non-blocking, Issue #120)
-        continue-on-error: true
-        run: |
-          ctest --test-dir core/build --output-on-failure \
-            -R '^test_stream_socket_recv_multiclient_ready_regression$'
-
-      # 러너에서만 나는 실패를 다음 조사가 쫓을 수 있게 환경을 남긴다(Issue #120).
+      # 러너에서만 나는 실패를 다음 조사가 쫓을 수 있게 환경을 남긴다.
       - name: Runner environment on failure
         if: always()
         run: |
