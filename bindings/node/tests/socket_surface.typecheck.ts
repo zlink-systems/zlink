@@ -7,6 +7,13 @@ const pub = zlink.createPubSocket(ctx);
 const dealer = zlink.createDealerSocket(ctx);
 const router = zlink.createRouterSocket(ctx);
 const stream = zlink.createStreamSocket(ctx);
+const readableHandler: zlink.ZLinkReadableHandler = () => {};
+const baseSocket: zlink.BaseSocket = pair;
+const readableRegistration: void = baseSocket.setReadableHandler(readableHandler);
+dealer.setReadableHandler(readableHandler);
+router.setReadableHandler(readableHandler);
+stream.setReadableHandler(readableHandler);
+void readableRegistration;
 const monitor = pair.monitorOpen();
 const monitorSource: zlink.SocketMonitor = monitor;
 const pollableMonitor: zlink.Pollable = monitorSource;
@@ -99,6 +106,10 @@ stream.trySend(routingId);
 stream.setPacketHandler(() => {});
 // @ts-expect-error monitor is pull-only
 monitor.onEvent(() => {});
+// @ts-expect-error readable handlers have no error argument
+pair.setReadableHandler((error: Error) => {});
+// @ts-expect-error readiness has no separate removal surface
+pair.removeReadableHandler();
 // @ts-expect-error timer is pull-only
 timer.onFire(() => {});
 // @ts-expect-error reply tokens have no public constructor

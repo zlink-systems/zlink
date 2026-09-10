@@ -9,6 +9,9 @@ import type { PubSocket, SubSocket, XPubSocket, XSubSocket } from './pubsub_sock
 import type { RouterSocket } from './router_socket';
 import type { StreamSocket } from './stream_socket';
 
+/** Notify the caller to drain the socket's receive surface until no data remains. */
+export type ZLinkReadableHandler = () => void;
+
 /** Base contract shared by every socket type: lifetime, binding, TLS, and monitoring. */
 export interface Socket {
   /**
@@ -20,6 +23,13 @@ export interface Socket {
   unbind(endpoint: string): void;
   /** Close the socket and release its native resources. */
   close(): void;
+  /**
+   * Register the socket's receive readiness handler. Replaces the previous
+   * handler and keeps the Node event loop active until the socket is closed.
+   * Drain with DontWait until no data remains; notifications do not count messages.
+   * A watch failure is reported by the next receive, never as a handler argument.
+   */
+  setReadableHandler(handler: ZLinkReadableHandler): void;
   /**
    * Open a monitor reporting the selected lifecycle `events`. The caller owns
    * the returned monitor and must close it.

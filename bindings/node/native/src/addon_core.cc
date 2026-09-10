@@ -2028,6 +2028,7 @@ struct socket_readable_watch_t
 {
     uv_poll_t poll;
     napi_env env;
+    void *socket;
     napi_ref callback;
     napi_async_context async_context;
     bool closing;
@@ -2088,16 +2089,32 @@ static void socket_readable_watch_ready (
       static_cast<socket_readable_watch_t *> (poll->data);
     if (watch->closing || !watch->callback)
         return;
+    int native_errno = 0;
+    if (status >= 0) {
+        // FD is the mailbox notification source, not a message count. Retire
+        // its edge without dequeuing application data before notifying JS;
+        // a caller may still be waiting for an application queue permit.
+        int events = 0;
+        size_t events_size = sizeof (events);
+        if (zlink_get_option (
+              watch->socket, ZLINK_OPT_EVENTS, &events, &events_size)
+            != ZLINK_CONFIG_OK) {
+            native_errno = zlink_errno ();
+            status = UV_EIO;
+        }
+    }
     napi_handle_scope scope;
     if (napi_open_handle_scope (watch->env, &scope) != napi_ok)
         return;
     napi_value callback;
     napi_value receiver;
     napi_value status_value;
+    napi_value errno_value;
     napi_get_reference_value (watch->env, watch->callback, &callback);
     napi_get_global (watch->env, &receiver);
     napi_create_int32 (watch->env, status, &status_value);
-    napi_value argv[] = {status_value};
+    napi_create_int32 (watch->env, native_errno, &errno_value);
+    napi_value argv[] = {status_value, errno_value};
     napi_value ignored;
     // This callback enters JavaScript from libuv, not from a JavaScript call.
     // MakeCallback completes the Node callback scope, including its Promise
@@ -2149,6 +2166,7 @@ napi_value socket_readable_watch_start (napi_env env, napi_callback_info info)
     }
     memset (&watch->poll, 0, sizeof (watch->poll));
     watch->env = env;
+    watch->socket = socket;
     watch->callback = NULL;
     watch->async_context = NULL;
     watch->closing = false;

@@ -5,10 +5,7 @@ import {
   RoutingId as BindingRoutingId,
   createContext,
   createDealerSocket,
-  createPollEvents,
-  createPoller,
   createRouterSocket,
-  PollEventFlag,
   ReceiveFlowState,
   type Context,
   type DealerSocket,
@@ -24,7 +21,7 @@ import {
   type SendSubmitOperation,
   type Socket
 } from '@zlink-systems/zlink';
-import { isPollerInterruptedError, translateBindingResultError } from './node-backend-adapter-support';
+import { translateBindingResultError } from './node-backend-adapter-support';
 import { isEndpointCloseIgnorableError } from './node-socket-backend-adapter';
 import type {
   ZLinkRawBindingPort,
@@ -122,12 +119,13 @@ class NodeRawHostPort implements ZLinkRawHostPort {
 abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSocketPort {
   private readonly endpoints = new Set<string>();
   private readonly monitors = new Set<NodeRawMonitorPort>();
-  private readonly readablePoller = createPoller();
-  private readonly readableEvents = createPollEvents(1);
   private closed = false;
 
-  protected constructor(protected readonly socket: TSocket) {
-    this.readablePoller.add(socket as never, [PollEventFlag.PollIn], 0);
+  protected constructor(protected readonly socket: TSocket) {}
+
+  setReadableHandler(handler: () => void): void {
+    this.requireOpen();
+    this.socket.setReadableHandler(handler);
   }
 
   bind(endpoint: string): void {
@@ -193,21 +191,6 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
     }
     this.endpoints.clear();
     try {
-      this.readablePoller.remove(this.socket as never);
-    } catch (error) {
-      failures.push(error);
-    }
-    try {
-      this.readableEvents.close();
-    } catch (error) {
-      failures.push(error);
-    }
-    try {
-      this.readablePoller.close();
-    } catch (error) {
-      failures.push(error);
-    }
-    try {
       this.socket.close();
     } catch (error) {
       failures.push(error);
@@ -221,24 +204,6 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
 
   protected requireOpen(): void {
     if (this.closed) throw new Error('Raw socket is closed.');
-  }
-
-  protected receiveRecord(
-    dontWait: boolean
-  ): ZLinkRawReceivedRecord | undefined {
-    const timeoutMs = dontWait ? 0 : -1;
-    try {
-      if (
-        this.readablePoller.wait(this.readableEvents, timeoutMs) <= 0
-        || !this.readableEvents.hasEvent(0, PollEventFlag.PollIn)
-      ) {
-        return undefined;
-      }
-    } catch (error) {
-      if (isPollerInterruptedError(error)) return undefined;
-      throw error;
-    }
-    return receiveRecord(this.socket as never, true);
   }
 }
 
@@ -343,7 +308,7 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
 
   receive(dontWait = false): ZLinkRawReceivedRecord | undefined {
     this.requireOpen();
-    return this.receiveRecord(dontWait);
+    return receiveRecord(this.socket, dontWait);
   }
 }
 
