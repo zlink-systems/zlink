@@ -251,7 +251,7 @@ fn request_reply_surface_exists() {
 }
 
 #[test]
-fn concurrent_multipart_publish_exposes_core_rejection_and_releases_parts() {
+fn concurrent_multipart_publish_submits_whole_records_and_releases_parts() {
     const WORKERS: usize = 8;
     const PER_WORKER: usize = 500;
 
@@ -285,40 +285,31 @@ fn concurrent_multipart_publish_exposes_core_rejection_and_releases_parts() {
             let start = Arc::clone(&start);
             thread::spawn(move || {
                 let mut accepted = 0usize;
-                let mut rejected = 0usize;
                 start.wait();
                 for (publish, first, second, first_bytes, second_bytes) in requests {
                     match publish.submit() {
-                        Err(error)
-                            if error.code() == SubmitResult::InvalidArgument
-                                && error.native_errno() == libc::EINVAL =>
-                        {
+                        Ok(()) => {
                             assert_eq!(first.as_bytes(), first_bytes);
                             assert_eq!(second.as_bytes(), second_bytes);
                             assert_eq!(first.ref_count(), 1);
                             assert_eq!(second.ref_count(), 1);
-                            rejected += 1;
+                            accepted += 1;
                         }
-                        Ok(()) => accepted += 1,
                         Err(error) => panic!("unexpected concurrent publish error: {error}"),
                     }
                 }
-                (accepted, rejected)
+                accepted
             })
         })
         .collect::<Vec<_>>();
 
-    let (accepted, rejected) = handles
+    let accepted = handles
         .into_iter()
         .map(|handle| handle.join().unwrap())
-        .fold((0usize, 0usize), |total, result| {
-            (total.0 + result.0, total.1 + result.1)
-        });
-    assert!(accepted > 0, "Core accepted no multipart publish");
-    assert!(rejected > 0, "Core exposed no competing-attempt rejection");
-    assert_eq!(accepted + rejected, WORKERS * PER_WORKER);
+        .sum::<usize>();
+    assert_eq!(accepted, WORKERS * PER_WORKER);
     eprintln!(
-        "concurrent multipart publishes: attempts={} accepted={accepted} rejected={rejected}",
+        "concurrent whole-record publishes: attempts={} accepted={accepted}",
         WORKERS * PER_WORKER
     );
 }

@@ -76,7 +76,8 @@ impl crate::internal::SocketStorage {
     /// finds no data, and `Err(_)` on hard error. See
     /// `doc/spec/bindings/README.md` for the caller-provided receive shape.
     pub(crate) fn recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
-        let routing_id = recv_basic_parts(self.handle, flags.bits(), out.receive_scratch())?;
+        let (parts, native_parts) = out.receive_scratch();
+        let routing_id = recv_basic_parts(self.handle, flags.bits(), parts, native_parts)?;
         match routing_id {
             Some(routing_id) => {
                 out.replace_received_parts(routing_id);
@@ -91,7 +92,8 @@ impl crate::internal::SocketStorage {
         out: &mut Received,
         flags: RecvFlags,
     ) -> Result<bool, RecvError> {
-        let routing_id = recv_basic_parts(self.handle, flags.bits(), out.receive_scratch())?;
+        let (parts, native_parts) = out.receive_scratch();
+        let routing_id = recv_basic_parts(self.handle, flags.bits(), parts, native_parts)?;
         match routing_id {
             Some(routing_id) => {
                 out.replace_received_parts(routing_id);
@@ -109,11 +111,13 @@ impl crate::internal::SocketStorage {
         flags: RecvFlags,
     ) -> Result<bool, RecvError> {
         let mut topic_buf = [0i8; 256];
+        let (parts, native_parts) = out.receive_scratch();
         let received = recv_subscribed_parts(
             self.handle,
             &mut topic_buf,
             flags.bits(),
-            out.receive_scratch(),
+            parts,
+            native_parts,
         )?;
         match received {
             Some((routing_id, topic)) => {
@@ -202,7 +206,7 @@ impl crate::internal::SocketStorage {
         let mut source_rid_ptr = ptr::null();
 
         let rc = unsafe {
-            ffi::zlink_xpub_recv_part(
+            ffi::zlink_xpub_recv(
                 self.handle,
                 &mut source_rid_ptr,
                 &mut subscribed,
