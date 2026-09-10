@@ -89,11 +89,21 @@ zlink_recv (void *s_,
 - **변경 지점은 내부뿐**: 각 바인딩이 `Received.parts`를 채울 때 Core `*_recv_part` 루프 대신 **신설 Core whole-message recv 1회 호출 + 재사용 배열**을
   사용한다(per-message 경계·할당 감소). 신규 공개 메서드 추가는 원칙적으로 없음(필요 시 언어별로 판단하고 문서화).
 
-## 4. 바인딩 매핑 개념
-- 각 바인딩 수신은 이미 `Received{ parts:[...], routingId, replyToken }` 컬렉션을 앱에 준다. 지금은 내부에서 `recv_part` 루프로 채운다.
-- 신설 후: 바인딩은 **whole-message `recv`로 `Received.parts`를 한 번에 채운다**(재사용 배열 → zero-alloc). part 루프·per-part 경계 제거.
-- **공개 바인딩 표면은 크게 바뀌지 않을 수 있다**(이미 컬렉션 반환). 내부 비용만 감소(= .NET/Node routed 진단의 목표 지렛대). 단, 필요하면
-  각 바인딩에 whole-message 수신 편의 메서드(예: `recv(): Received`)를 명시적으로 노출할지 적용 plan에서 결정.
+## 4. 바인딩 매핑 — **바인딩 라이브러리 recv의 "내부 구현" 변경** (공개 시그니처 불변)
+- 각 바인딩의 공개 `recv(Received)`는 이미 `Received{ parts:[...], routingId, replyToken }` 컬렉션을 반환한다. **공개 시그니처는 바뀌지 않는다.**
+- **바뀌는 것은 그 함수의 내부 구현뿐**: 지금은 바인딩 라이브러리가 Core `*_recv_part`를 **`has_more==0`까지 while 루프**로 돌려 `Received.parts`를
+  채운다(part마다 msg_init + P/Invoke/N-API 경계 + 컬렉션 append). 신설 후에는 **Core whole-message `recv`를 1회 호출**해 재사용 배열로 채운다
+  (루프·part별 init/경계/append 제거). 단건 fast-path(예: .NET `AdoptNativeFromPool`)는 유지.
+- **언어별 내부 변경 지점(=적용 plan §5 대상):**
+  | 바인딩 | recv(Received) 내부 루프 위치(변경 대상) |
+  |--------|------------------------------------------|
+  | .NET | `bindings/dotnet/src/Zlink/Runtime/Sockets/SocketKernel.ReceiveCore.cs` — `ReceiveRouterParts`(:187, `while` :201, `zlink_router_recv_part[_nowait]` :217/220, `AppendNativePart` :250) |
+  | C++ | `bindings/cpp/src/Runtime/...`의 `socket_t::recv(received_t&)` 내부 part 루프(구현 파일 확인) |
+  | Node | addon 수신(`bindings/node/native/src/addon_core.cc`)의 router recv_part 루프 + `Received` 채우기 |
+  | Java | `bindings/java/.../runtime/sockets/NativeRouterReceiveSupport`(또는 대응) recv_part 루프 |
+- **공개 편의 메서드 추가는 원칙적으로 없음**(이미 `recv(Received)` 존재). 필요 시 언어별 판단·문서화(적용 plan).
+- 이득: 바인딩 내부 per-message 경계·할당 감소(= .NET/Node routed 진단의 목표 지렛대). perf는 이미 `recv(Received)`를 호출하므로 **하네스 변경 없이
+  자동 반영**. C 레퍼런스 perf는 신설 Core `recv`로 바꾸면 조립 제거·단순화.
 
 ## 5. 리스크·주의
 - 공개 C ABI 추가 → 되돌리기 어려움. 시그니처·capacity·원자성 규칙을 spec에서 먼저 확정한다.

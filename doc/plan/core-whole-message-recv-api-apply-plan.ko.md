@@ -68,10 +68,12 @@ title: "whole-message recv 공개 API — 적용 plan (문서·코드·perf 반�
 | `bindings/doc/spec/{cpp,dotnet,java,node}/README.ko.md` / `.en.md` (recv/Received 절) | 내부 수신이 Core whole-message recv를 사용함, `Received` 컬렉션 채우기 계약(소유권/부분/실패), 노출 시 편의 메서드 |
 | `bindings/doc/guide/{cpp,dotnet,java,node}/index.ko.md` / `.en.md` (수신 절) | recv 사용 예제(멀티파트를 한 번에 받는 `Received`), 소유권·close, recv_part류와의 관계 |
 
-## 7. perf 하네스 수정 대상 (`bindings/<lang>/perf`)
-| 바인딩 | 변경 |
-|--------|------|
-| cpp/dotnet/java/node | routed relay/echo·reqrep 서버 수신을 whole-message recv 경로로(이미 `Received.parts` 직접 제출 관용형과 결합). 측정 의미(§7.0.1)·실패/retry/metric/HWM/client·duration 불변 |
+## 7. perf 하네스 (대부분 변경 없음 — 이미 recv(Received) 사용)
+- **바인딩 perf(cpp/dotnet/java/node)는 변경 불필요.** 이미 바인딩 라이브러리 `recv(Received)`를 호출한다(§5의 내부 구현이 바뀌면 **하네스 코드
+  변경 없이 자동 반영**). 확인만: `cpp perf_multi_routed_relay.hpp:172 server.recv(received)`, `node perf_multi_runtime.ts:207 socket.recv(received)`,
+  `dotnet PerfMultiRoutedRelayServer.cs:280 socket.Recv(result)`, `java PerfMultiRoutedRelay.java:90 server.recv(received)`.
+- **C 레퍼런스 perf(`bindings/c/perf`)만 선택적 정리**: 신설 Core `zlink_recv`/`zlink_router_recv`로 바꾸면 `zlink_router_recv_part`+has_more
+  수동 조립을 제거해 단순화(예: `perf_multi_socket_reqrep.hpp:916`, `perf_multi_relay_server.hpp`). 측정 의미(§7.0.1)·실패/retry/metric/HWM/client·duration 불변.
 - go/rust/python은 이번 범위 밖(추후). 측정은 cpp/node/java/dotnet만(사용자 지정).
 
 ## 8. perf 재측정·검증
