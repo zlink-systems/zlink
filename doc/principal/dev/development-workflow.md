@@ -35,7 +35,10 @@ Branch protection asks for a PR, not for an Issue. Naming the report path and th
 PR body is traceability enough. An Issue is for the other cases — work that spans sessions or people,
 work deferred rather than done now, and work that has to appear in a release-scope decision. So the
 default path is **experiment → (if good) PR**, and an Issue is created when the work must be handed
-over or postponed.
+over or postponed. **The moment an Issue becomes useful is when the PR goes up** — there is no reason
+to create one earlier. Start in a worktree, and register the Issue at PR time when the work needs
+tracking. Only two cases justify creating it up front: work long enough that it should be visible on
+the board while it runs, and work someone else will pick up.
 
 An experiment leaves only its brief and report under `.artifacts/codex/<name>/`. When it must change
 code it gets a worktree without an Issue, a PR or a board entry, and that worktree is removed
