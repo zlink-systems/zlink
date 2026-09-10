@@ -3,7 +3,6 @@
 package systems.zlink.perf.multi;
 
 import java.util.List;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkException;
@@ -12,6 +11,7 @@ import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
+import systems.zlink.contracts.messaging.SendSubmission;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RouterSocket;
@@ -52,7 +52,8 @@ final class PerfMultiRoutedRelay {
                 }
                 drainRequests(server, received, stopRequested, replies);
             }
-            if (!replies.drain(PerfMultiTargetCoordinator.sendDrainTimeout())
+            if (!replies.drain(
+                    PerfMultiRoutedSendCoordinator.sendDrainTimeout())
                 && !replies.hasFailure()) {
                 System.err.println("RELAY_DRAIN_DETAIL,timed_out,pending="
                     + replies.pendingCount() + ",sending=" + replies.sending());
@@ -112,9 +113,9 @@ final class PerfMultiRoutedRelay {
         }
     }
 
-    static CompletionStage<Void> submitReply(RouterSocket server,
-                                             RoutingId routingId,
-                                             List<Message> parts) {
+    static SendSubmission submitReply(RouterSocket server,
+                                      RoutingId routingId,
+                                      List<Message> parts) {
         if (parts.size() == 2) {
             return server.send(routingId)
                 .message(parts.get(0))
