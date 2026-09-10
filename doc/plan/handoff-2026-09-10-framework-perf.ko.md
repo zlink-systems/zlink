@@ -93,6 +93,67 @@ job 결과는 두 곳에 남는다.
 6. **모델 비교 벤치 별도 이슈.** DEALER→ROUTER, ToChannel vs ToNode(=채널 선택 비용), ClientServer. gRPC 표에 섞지 않는다.
 7. 릴리스 판단: 4언어 3-run은 #13 반영 + 조용한 기계에서만. `request-window`는 gRPC 비교에서 제외.
 
+## 4.5 따로 알아야 할 두 건
+
+### 4.5.1 Java 수신 pump — platform thread로 바꿨고, 가상 thread 문제는 반만 확인됐다 (Issue #75, PR #80, FB-062)
+
+**경위.** send 지연 수정(#68) 작업자가 "가상 thread에서 멀티파트 수신이 실패한다"고 보고했다. 3-part record 100건을 받는 재현에서
+platform thread는 100건, 가상 thread는 7건 뒤 `ZlinkRecvException`(`NativeRouterReceiveSupport.recvRemainingMultipartParts`).
+그래서 수신 pump(`ZLinkJavaRawMeshNode.startPump`)를 platform thread로 바꾸는 **임시 우회**로 시작했다.
+
+**그런데 재현이 현재 main에서는 안 난다.** 감독자가 같은 재현을 직접 돌리니 네 조합(virtual/platform × forceYield on/off) 모두 100건 정상이었다.
+그 실패는 당시 작업 branch 상태나 계측 에이전트(`carrier-probe.jar`)에 의존했던 것으로 보인다. **정확성 결함은 미확정이다.**
+
+**성능 차이는 실재한다.** 같은 커밋을 pump 종류만 바꿔 재니(1-run, 1024 B, `.artifacts/vt-compare/`):
+
+| 패턴 | 가상 thread | platform thread | 차이 |
+|---|---:|---:|---:|
+| send-saturation 처리량 | 14,356 msg/s | 67,712 msg/s | **4.7배** |
+| send-saturation 지연 | 125.462 ms | 0.247 ms | **1/508** |
+| request-serial 처리량 | 1,927.8 ops/s | 2,233.2 ops/s | +15.8% |
+
+이 pump는 socket 하나를 blocking으로 기다리는 전용 실행 단위라 가상 thread의 이점(대기 중 carrier 반납)이 없고 비용만 남는다.
+그래서 **우회가 아니라 성능 수정으로 채택**했다(PR #80, 주석에 측정값 기록).
+
+**남은 것(#75 열어 둠):**
+- 가상 thread에서 blocking 수신이 왜 이렇게 느린지 원인 미확정. 다른 언어의 수신 pump가 그린 스레드·task 기반이면 같은 확인이 필요하다.
+- 멀티파트 실패 보고가 무엇이었는지. 재현 코드는 `.artifacts/codex/java-send-latency/binding-repro/`에 있다(`run.sh`가 에이전트와
+  `-Dissue68.forceYield=true`를 쓴다 — 그 조건에서만 나는지 확인).
+- 근본 해결은 #63이다. part 루프 자체가 없어지면 carrier 이동 여부와 무관해진다.
+
+### 4.5.2 Core C API를 whole-message로 통일 (Issue #63, 다른 머신 진행 중)
+
+**결정(사용자, 2026-09-10).** part 단위 공개 API를 없애고 send·recv 모두 parts 배열 + count를 받는 whole-message API로 통일한다.
+
+**왜.** part 단위 표면이 "한 record의 첫 part부터 FINAL까지 같은 thread"라는 계약을 만들고, 그 계약이 미완성 record 상태·`BUSY`·
+부분 재시도 규칙·thread 이동 민감성을 낳는다. #75가 그 사례다. 한 번의 호출로 record를 다루면 이 조건이 통째로 사라진다.
+성능으로도 메시지당 native 경계 왕복(.NET 진단 14회)이 send·recv 각 1회로 줄어든다.
+
+**조사 결과(저장소 전수, draft §7.2):** lazy send 없음, part 단위 수신 의존 없음(Core가 첫 part 공개 전에 record 전체를 버퍼링 —
+`core/src/runtime/sockets/common/socket_base.hpp:816`), STREAM·XPUB은 이미 part 단위가 아님, `framework/languages`의 part API 호출 **0건**,
+Core 내부 호출자 **0건**. 예외는 perf 하네스 한 곳(`bindings/c/perf/single/common/perf_single_reqrep.hpp:647-664`, 빈 FINAL만 재시도)뿐.
+
+**공개 표면 변화:**
+
+| 구분 | 개수 | 내용 |
+|---|---:|---|
+| 제거 후 대체 | 8 | send 5(`zlink_send_part`·`_rid`·`zlink_request_part`·`zlink_reply_part`·`zlink_publish_part`), recv 3(`zlink_recv_part`·`zlink_router_recv_part`·`zlink_subscribe_part`) |
+| 이름만 변경 | 1 | `zlink_xpub_recv_part` → `zlink_xpub_recv` (계약·인자 불변) |
+| 그대로 유지 | 1 | `zlink_stream_recv_packet` (header/body 고정 2슬롯) |
+| 사라지는 타입 | 1 | `zlink_part_flag_t` (MORE/FINAL) |
+
+결과적으로 공개 헤더에 `_part`로 끝나는 함수가 남지 않는다. **바인딩 공개 시그니처는 send·recv 모두 불변** — 내부 루프가 1회 호출로 바뀔 뿐.
+선례: `zlink_completion_t`가 이미 `reply_parts` 배열 + `reply_part_count`를 공개한다(`api.h:64-65`). 새 관용이 아니라 기존 관용을 나머지에 맞추는 것.
+
+**먼저 정할 계약 셋(plan §10.2):** `count > capacity` 처리, STREAM의 길이 0 part "peer 끊기" 의미 보존, 실패 시 whole-record 재시도.
+**함께 삭제되는 스펙 규칙:** "한 record는 같은 thread", 진행 중 시퀀스에서 오는 `BUSY`, "실패한 FINAL은 staged prefix를 버린다".
+
+**문서:** 설계 `doc/draft/core-whole-message-recv-api.ko.md` §7(제거 8개의 현재 시그니처 전문·대체 표·신설 시그니처 초안·바인딩 매핑),
+계획 `doc/plan/core-whole-message-recv-api-apply-plan.ko.md` §10(제거·신설 대상, 계약 셋, 단계 게이트 추가분, `libzlink.vers`, 삭제할 스펙 규칙).
+
+**이 세션이 할 일은 없다.** 다른 머신이 진행한다. 끝나면 #75 우회(platform pump)를 되돌릴지 다시 판단한다 — 다만 platform pump는
+성능 근거로 채택한 것이라 #63과 무관하게 유지될 가능성이 크다.
+
 ## 5. 각 언어의 현재 위치와 남은 것
 
 | 언어 | 마지막 1-run(1024) | 남은 큰 것 |
