@@ -32,6 +32,16 @@ internal static class ZLinkApplicationExecutionContext
             ? current
             : null;
 
+    public static void EnsureBlockingSubmitAllowed()
+    {
+        if (ZLinkApplicationJobQueueInvocation.IsActive
+            || ZLinkSpotAmbientContext.CurrentOrDefault is not null
+            || ZLinkStateLane.Current is not null)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                "Blocking Submit is only valid on an application thread outside a runtime execution context.");
+    }
+
     public static IDisposable Push(ZLinkApplicationExecutionScope scope)
     {
         var previous = CurrentScope.Value;
