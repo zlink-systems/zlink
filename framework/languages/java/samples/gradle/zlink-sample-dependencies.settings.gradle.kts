@@ -45,7 +45,7 @@ if (packageMode && !providers.environmentVariable("ZLINK_JAVA_BINDINGS_SOURCE").
 
 if (packageMode) {
     val bindingsVersion = providers.gradleProperty("zlink.bindingsVersion")
-        .orElse("0.17.7")
+        .orElse("0.18.0")
         .get()
     dependencyResolutionManagement {
         versionCatalogs {
