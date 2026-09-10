@@ -135,9 +135,10 @@ final class ZLinkChannelRuntimeTest {
             options.registration(),
             new ZLinkJsonMessageSerializer(),
             handlers())) {
+            var call = runtime.requestToChannel("missing", new TestRequest("missing"));
             ZLinkFrameworkException failure = assertThrows(
                 ZLinkFrameworkException.class,
-                () -> runtime.requestToChannel("missing", new TestRequest("missing")));
+                () -> call.submit(TestReply.class));
 
             assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, failure.kind());
         }
@@ -198,9 +199,10 @@ final class ZLinkChannelRuntimeTest {
             // NotConfigured = "required role isn't registered"; 09-client-server
             // -channel: a Server can't start an outbound business call), not a
             // missing target (NotFound).
+            var call = runtime.requestToChannel("api", new TestRequest("server-only"));
             ZLinkFrameworkException failure = assertThrows(
                 ZLinkFrameworkException.class,
-                () -> runtime.requestToChannel("api", new TestRequest("server-only")));
+                () -> call.submit(TestReply.class));
 
             assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, failure.kind());
         }
@@ -216,9 +218,10 @@ final class ZLinkChannelRuntimeTest {
             options.registration(),
             new ZLinkJsonMessageSerializer(),
             handlers())) {
+            var call = runtime.sendToChannel("api", new TestRequest("server-only"));
             ZLinkFrameworkException failure = assertThrows(
                 ZLinkFrameworkException.class,
-                () -> runtime.sendToChannel("api", new TestRequest("server-only")));
+                () -> call.submit());
 
             assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, failure.kind());
         }

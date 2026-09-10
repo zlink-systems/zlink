@@ -88,7 +88,7 @@ final class ZLinkChannelSubmissionFailureTest {
             ZLinkChannelCallRuntime runtime = runtime(scheduler);
             try {
                 CompletionException failure = assertThrows(CompletionException.class,
-                    () -> new MeshChannelRouteRequestCall(runtime, "orders", node, payload,
+                    () -> new ChannelRequestCall(runtime, "orders", sockets(node), TIMEOUT, payload,
                         Optional.of("request"), TIMEOUT)
                         .submit(String.class).toCompletableFuture().join());
 
@@ -113,7 +113,7 @@ final class ZLinkChannelSubmissionFailureTest {
                 pending = exhaustCapacity(runtime);
 
                 ZLinkFrameworkException failure = requestFailure(
-                    new MeshChannelRouteRequestCall(runtime, "orders", node, payload,
+                    new ChannelRequestCall(runtime, "orders", sockets(node), TIMEOUT, payload,
                         Optional.of("request"), TIMEOUT).submit(String.class));
 
                 assertEquals(ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED, failure.kind());
@@ -169,10 +169,11 @@ final class ZLinkChannelSubmissionFailureTest {
             try {
                 IllegalStateException failure = assertThrows(
                     IllegalStateException.class,
-                    () -> new MeshChannelRouteSendCall(
+                    () -> new ChannelSendCall(
                         runtime,
                         "orders",
-                        node,
+                        sockets(node),
+                        TIMEOUT,
                         payload,
                         Optional.of("command")).submit());
 
@@ -184,6 +185,12 @@ final class ZLinkChannelSubmissionFailureTest {
                 close(runtime, List.of());
             }
         }
+    }
+
+    private static ZLinkChannelSocketRegistry sockets(ZLinkInternalSpotNode node) {
+        ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
+        sockets.registerSpotRouterNode("orders", node);
+        return sockets;
     }
 
     private static ZLinkChannelCallRuntime runtime(
