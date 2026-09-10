@@ -17,7 +17,7 @@ on:
           - binding
           - framework
       version:
-        description: 'Version to release (binding 0.17.3 or framework 0.10.0)'
+        description: 'Version to release; must match the target binding or framework VERSION file'
         required: true
         type: string
 
