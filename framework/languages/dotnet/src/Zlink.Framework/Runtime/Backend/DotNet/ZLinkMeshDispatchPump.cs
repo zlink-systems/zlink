@@ -144,7 +144,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 
     public void SetDispatchHandler(
         string spotId,
-        Action<ZLinkBackendSpotDispatchInfo> handler)
+        Func<ZLinkBackendSpotDispatchInfo, (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain)> handler)
     {
         var state = RegisterSpot(spotId);
         state.DispatchHandler = handler;
@@ -239,6 +239,25 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             _applicationTaskRunner.ErrorSink.ReportRuntimeTaskException(
                 "mesh-application-worker", exception);
         }
+    }
+
+    private static void ObserveDispatchResult(ValueTask result, List<Task> pending)
+    {
+        if (result.IsCompletedSuccessfully)
+            result.GetAwaiter().GetResult();
+        else
+            pending.Add(result.AsTask());
+    }
+
+    private static void ObserveDispatchResult(
+        (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain) result,
+        List<Task> pending)
+    {
+        // Submission has returned. The queue reserved this wake while committing
+        // its first item; this worker now owns that same drain and its async result.
+        if (result.Drain is { } drain)
+            ObserveDispatchResult(drain(CancellationToken.None), pending);
+        ObserveDispatchResult(result.Completion, pending);
     }
 
     private void DrainResidue(
@@ -351,6 +370,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 
         List<ZLinkBackendRouteReceived>? nodeRoutes = new(
             ZLinkReceiveBatchBudget.MaximumRecords);
+        SpotDispatchState? routeDispatch = null;
         try
         {
             receiveBatch.Reset();
@@ -380,37 +400,48 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             // to application records; unused and embedded-owner duplicates stay
             // in this same array for one ReleaseBatch below.
             var externalIndex = 0;
-            for (var record = 0; record < count; record++)
+            try
             {
-                ZLinkApplicationJobQueueLease? admission = null;
-                if (admissionCount != 0
-                    && RequiresApplicationAdmission(receiveBatch[record].Kind)
-                    && receiveBatch.GetApplicationJobAdmission(record) is null)
+                for (var record = 0; record < count; record++)
                 {
-                    admission = admissions[externalIndex];
-                    admissions[externalIndex++] = null;
-                }
-                try
-                {
-                    if (DispatchRecord(
-                            receiveBatch,
-                            record,
-                            ownerSpotId,
-                            readyRecord.Actor,
-                            admission,
-                            nodeRoutes))
-                        admission = null;
+                    ZLinkApplicationJobQueueLease? admission = null;
+                    if (admissionCount != 0
+                        && RequiresApplicationAdmission(receiveBatch[record].Kind)
+                        && receiveBatch.GetApplicationJobAdmission(record) is null)
+                    {
+                        admission = admissions[externalIndex];
+                        admissions[externalIndex++] = null;
+                    }
+                    try
+                    {
+                        if (DispatchRecord(
+                                receiveBatch,
+                                record,
+                                ownerSpotId,
+                                readyRecord.Actor,
+                                admission,
+                                nodeRoutes,
+                                pending,
+                                ref routeDispatch))
+                            admission = null;
 
-                    // A malformed or unsupported pre-admitted record may not
-                    // transfer its owner. Return both the payload owner and the queued
-                    // permit in this same bounded turn.
-                    if (receiveBatch.GetApplicationJobAdmission(record) is not null)
-                        receiveBatch.TakePayloadOwner(record)?.Dispose();
+                        // A malformed or unsupported pre-admitted record may not
+                        // transfer its owner. Return both the payload owner and the queued
+                        // permit in this same bounded turn.
+                        if (receiveBatch.GetApplicationJobAdmission(record) is not null)
+                            receiveBatch.TakePayloadOwner(record)?.Dispose();
+                    }
+                    finally
+                    {
+                        admission?.Dispose();
+                    }
                 }
-                finally
-                {
-                    admission?.Dispose();
-                }
+            }
+            finally
+            {
+                if (routeDispatch is not null)
+                    ObserveDispatchResult(
+                        routeDispatch.Raise(ZLinkBackendSpotDispatchEvent.RouteReadable), pending);
             }
             // Start this owner's records in claim order. A suspended handler's
             // result remains with the worker, while the claim returns for the
@@ -419,10 +450,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             // The asynchronous handler owns this list until its result completes.
             // Clearing it here invalidates an enumerator suspended inside the handler.
             nodeRoutes = null;
-            if (dispatch.IsCompletedSuccessfully)
-                dispatch.GetAwaiter().GetResult();
-            else
-                pending.Add(dispatch.AsTask());
+            ObserveDispatchResult(dispatch, pending);
         }
         catch (OperationCanceledException)
             when (cancellationToken.IsCancellationRequested)
@@ -526,7 +554,9 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         string ownerSpotId,
         ActorRef ownerActor,
         ZLinkApplicationJobQueueLease? admission,
-        List<ZLinkBackendRouteReceived> nodeRoutes)
+        List<ZLinkBackendRouteReceived> nodeRoutes,
+        List<Task> pending,
+        ref SpotDispatchState? routeDispatch)
     {
         var record = batch[index];
         switch (record.Kind)
@@ -546,11 +576,11 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                     nodeRoutes);
             case MeshRecordKind.SpotSend:
             case MeshRecordKind.SpotRequest:
-                return EnqueueRoute(batch, index, record, ownerSpotId, admission);
+                return EnqueueRoute(batch, index, record, ownerSpotId, admission, ref routeDispatch);
             case MeshRecordKind.SpotMulticast:
-                return EnqueueSubscribe(batch, index, record, ownerSpotId, admission);
+                return EnqueueSubscribe(batch, index, record, ownerSpotId, admission, pending);
             case MeshRecordKind.SpotControl:
-                return EnqueueSpotControl(batch, index, record, ownerSpotId, admission);
+                return EnqueueSpotControl(batch, index, record, ownerSpotId, admission, pending);
             case MeshRecordKind.ActorSend:
             case MeshRecordKind.ActorRequest:
                 return EnqueueActor(
@@ -559,7 +589,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                     record,
                     ownerSpotId,
                     ownerActor,
-                    admission);
+                    admission,
+                    pending);
             default:
                 return false;
         }
@@ -578,7 +609,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         int index,
         MeshReceiveRecord record,
         string ownerSpotId,
-        ZLinkApplicationJobQueueLease? admission)
+        ZLinkApplicationJobQueueLease? admission,
+        ref SpotDispatchState? routeDispatch)
     {
         // Malformed application metadata is a protocol error: reject the ingress
         // and do not deliver it to a handler (spec 03 §3). The batch reset
@@ -621,7 +653,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 ZLinkMeshRecordAdapters.NormalizeDeadline(record.DeadlineUnixMs),
             payloadOwner: payloadOwner);
         state.Routes.Enqueue(route);
-        state.Raise(ZLinkBackendSpotDispatchEvent.RouteReadable);
+        routeDispatch = state;
         return admission is not null;
     }
 
@@ -706,7 +738,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         int index,
         MeshReceiveRecord record,
         string ownerSpotId,
-        ZLinkApplicationJobQueueLease? admission)
+        ZLinkApplicationJobQueueLease? admission,
+        List<Task> pending)
     {
         // Malformed application metadata is a protocol error: reject the ingress
         // (spec 03 §3). The same publish snapshot is delivered to every matching
@@ -726,7 +759,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             metadata,
             AttachAdmission(batch.TakePayloadOwner(index), admission));
         state.Subscriptions.Enqueue(message);
-        state.Raise(ZLinkBackendSpotDispatchEvent.SubscribeReadable);
+        ObserveDispatchResult(state.Raise(ZLinkBackendSpotDispatchEvent.SubscribeReadable), pending);
         return admission is not null;
     }
 
@@ -751,7 +784,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         int index,
         MeshReceiveRecord record,
         string ownerSpotId,
-        ZLinkApplicationJobQueueLease? admission)
+        ZLinkApplicationJobQueueLease? admission,
+        List<Task> pending)
     {
         var state = ResolveSpotState(
             string.IsNullOrEmpty(ownerSpotId) ? record.SourceSpotId : ownerSpotId);
@@ -766,7 +800,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             if (payloadOwner is not null)
                 join.AttachPayloadOwner(payloadOwner);
             state.ActorJoins.Enqueue(join);
-            state.Raise(ZLinkBackendSpotDispatchEvent.ActorJoinReadable);
+            ObserveDispatchResult(state.Raise(ZLinkBackendSpotDispatchEvent.ActorJoinReadable), pending);
             return admission is not null;
         }
 
@@ -780,7 +814,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 {
                     ApplicationJobAdmission = admission
                 });
-                state.Raise(ZLinkBackendSpotDispatchEvent.ActorLifecycleReadable);
+                ObserveDispatchResult(state.Raise(ZLinkBackendSpotDispatchEvent.ActorLifecycleReadable), pending);
                 return admission is not null;
             }
         }
@@ -791,7 +825,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         MeshReceiveBatch batch, int index, MeshReceiveRecord record,
         string ownerSpotId,
         ActorRef ownerActor,
-        ZLinkApplicationJobQueueLease? admission)
+        ZLinkApplicationJobQueueLease? admission,
+        List<Task> pending)
     {
         var requestId = record.Kind == MeshRecordKind.ActorRequest
             ? record.ReplyRouteId
@@ -814,9 +849,11 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             directReply);
         if (parts.Count == 0) return false;
         admission?.MarkQueued();
-        state.RaiseActor(
-            parts,
-            AttachAdmission(batch.TakePayloadOwner(index), admission));
+        ObserveDispatchResult(
+            state.RaiseActor(
+                parts,
+                AttachAdmission(batch.TakePayloadOwner(index), admission)),
+            pending);
         return admission is not null;
     }
 
@@ -890,7 +927,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     // Per-spot decoded-record queues plus the registered dispatch-event handler.
     internal sealed class SpotDispatchState
     {
-        public Action<ZLinkBackendSpotDispatchInfo>? DispatchHandler { get; set; }
+        public Func<ZLinkBackendSpotDispatchInfo, (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain)>? DispatchHandler { get; set; }
 
         public ConcurrentQueue<ZLinkBackendRouteReceived> Routes { get; } = new();
 
@@ -900,12 +937,14 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 
         public ConcurrentQueue<ZLinkBackendSpotActorLifecycleEvent> Lifecycles { get; } = new();
 
-        public void Raise(ZLinkBackendSpotDispatchEvent kind)
+        public (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain) Raise(
+            ZLinkBackendSpotDispatchEvent kind)
         {
-            DispatchHandler?.Invoke(new ZLinkBackendSpotDispatchInfo(kind));
+            return DispatchHandler?.Invoke(new ZLinkBackendSpotDispatchInfo(kind))
+                ?? (ValueTask.CompletedTask, null);
         }
 
-        public void RaiseActor(
+        public (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain) RaiseActor(
             IReadOnlyList<ZLinkBackendActorPart> parts,
             IDisposable? payloadOwner)
         {
@@ -915,11 +954,11 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 foreach (var part in parts)
                     part.Message.Dispose();
                 payloadOwner?.Dispose();
-                return;
+                return (ValueTask.CompletedTask, null);
             }
             try
             {
-                handler(new ZLinkBackendSpotDispatchInfo(
+                return handler(new ZLinkBackendSpotDispatchInfo(
                     ZLinkBackendSpotDispatchEvent.ActorReadable,
                     ActorParts: parts,
                     ActorPayloadOwner: payloadOwner));

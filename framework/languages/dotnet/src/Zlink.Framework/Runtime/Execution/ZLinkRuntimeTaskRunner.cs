@@ -21,6 +21,8 @@ internal sealed class ZLinkRuntimeTaskRunner
 
     internal object ExecutionOwner => _executionOwner;
 
+    internal CancellationToken ShutdownToken => _shutdownToken;
+
     // Runner admission state is owned by the fixed supervisor lane. These
     // accessors must only be used from a supervisor-lane turn.
     internal bool AcceptingOnSupervisorLane

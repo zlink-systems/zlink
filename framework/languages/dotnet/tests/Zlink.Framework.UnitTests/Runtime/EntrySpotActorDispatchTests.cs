@@ -3580,9 +3580,9 @@ public sealed partial class EntrySpotActorDispatchTests
 
         var actorParts = CreateActorRequestParts(actorRef, "request", "discard", requestId: 99, flags: 1);
         var actorBody = actorParts[1].Message;
-        spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
+        await spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
             ZLinkBackendSpotDispatchEvent.ActorReadable,
-            ActorParts: actorParts));
+            ActorParts: actorParts)).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.True(SpinWait.SpinUntil(
             () =>
@@ -3623,9 +3623,9 @@ public sealed partial class EntrySpotActorDispatchTests
             flags: 1);
         var body = parts[1].Message;
 
-        spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
+        await spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
             ZLinkBackendSpotDispatchEvent.ActorReadable,
-            ActorParts: parts));
+            ActorParts: parts)).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.True(SpinWait.SpinUntil(
             () => IsDisposed(body),
@@ -3666,7 +3666,7 @@ public sealed partial class EntrySpotActorDispatchTests
             runner);
         pump.Attach(spot);
 
-        spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
+        await spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
             ZLinkBackendSpotDispatchEvent.ActorReadable,
             ActorParts: CreateActorRequestParts(
                 actorA,
@@ -3674,7 +3674,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 "first",
                 requestId: 0,
                 flags: 0,
-                kind: ZlinkStreamMessageKind.Send)));
+                kind: ZlinkStreamMessageKind.Send))).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await probe.ActorAFirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var overflowParts = CreateActorRequestParts(
@@ -3685,13 +3685,13 @@ public sealed partial class EntrySpotActorDispatchTests
             flags: 0,
             kind: ZlinkStreamMessageKind.Send);
         var overflowBody = overflowParts[1].Message;
-        spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
+        await spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
             ZLinkBackendSpotDispatchEvent.ActorReadable,
-            ActorParts: overflowParts));
+            ActorParts: overflowParts)).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(IsDisposed(overflowBody));
         Assert.False(probe.ActorASecondStarted.Task.IsCompleted);
 
-        spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
+        await spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
             ZLinkBackendSpotDispatchEvent.ActorReadable,
             ActorParts: CreateActorRequestParts(
                 actorB,
@@ -3699,7 +3699,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 "first",
                 requestId: 0,
                 flags: 0,
-                kind: ZlinkStreamMessageKind.Send)));
+                kind: ZlinkStreamMessageKind.Send))).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await probe.ActorBStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         probe.ReleaseActorAFirst.TrySetResult();
@@ -3779,13 +3779,101 @@ public sealed partial class EntrySpotActorDispatchTests
         pump.Attach(spot);
 
         var received = CreateRoutedReceived("routed-ok");
-        spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
+        await spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
             ZLinkBackendSpotDispatchEvent.RouteReadable,
-            RoutedMessages: [received]));
+            RoutedMessages: [received])).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(
             "routed-ok",
             await probe.Message.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task EntrySpotRouteDispatch_ReturnsOwnedResultWithoutRecordRunnerTask(
+        bool alreadyDrained)
+    {
+        var probe = new EntryTimerSerialProbe();
+        var services = new ServiceCollection()
+            .AddSingleton(probe)
+            .AddTransient<BlockingProbeRouteHandler>()
+            .BuildServiceProvider();
+        var spot = new CapturingSpot();
+        var (activation, runtime) = CreateActivationWithRuntime(
+            services, spot, typeof(TimerProbeEntrySpot));
+        await using var cleanup = activation.ConfigureAwait(false);
+        activation.Configure();
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ThrowingRuntimeErrorSink(), CancellationToken.None);
+        await using var pump = new ZLinkEntrySpotDispatchPump(runtime, activation, runner);
+        pump.Attach(spot);
+        var first = CreateRoutedReceived("first");
+        if (!alreadyDrained)
+        {
+            spot.Routes.Enqueue(first);
+        }
+        var submitted = spot.SubmitDispatch(new ZLinkBackendSpotDispatchInfo(
+            ZLinkBackendSpotDispatchEvent.RouteReadable,
+            RoutedMessages: alreadyDrained ? [first] : null));
+        Assert.False(probe.RouteStarted.Task.IsCompleted);
+        Assert.NotNull(submitted.Drain);
+        Assert.False(submitted.Completion.IsCompleted);
+        var drain = submitted.Drain(CancellationToken.None);
+        var dispatched = submitted.Completion;
+        try
+        {
+            await probe.RouteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(dispatched.IsCompleted);
+            Assert.Empty(runner.ActiveOnSupervisorLane);
+            Assert.True(first.Parts[0].Size > 0);
+            Assert.Equal(new[] { "route:start" }, probe.Events.ToArray());
+        }
+        finally
+        {
+            probe.ReleaseRoute.TrySetResult();
+        }
+        await dispatched.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await drain.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(
+            new[] { "route:start", "route:end" },
+            probe.Events.ToArray());
+        Assert.Throws<ObjectDisposedException>(() => first.Parts[0].Size);
+        await runner.StopAsync();
+    }
+
+    [Fact]
+    public async Task EntrySpotRouteDispatch_CancelledSubmissionReleasesEveryUnacceptedRecord()
+    {
+        var probe = new EntryTimerSerialProbe();
+        using var services = new ServiceCollection()
+            .AddSingleton(probe)
+            .AddTransient<BlockingProbeRouteHandler>()
+            .BuildServiceProvider();
+        var spot = new CapturingSpot();
+        var (activation, runtime) = CreateActivationWithRuntime(
+            services, spot, typeof(TimerProbeEntrySpot));
+        await using var cleanup = activation.ConfigureAwait(false);
+        activation.Configure();
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ThrowingRuntimeErrorSink(), new CancellationToken(canceled: true));
+        await using var pump = new ZLinkEntrySpotDispatchPump(runtime, activation, runner);
+        pump.Attach(spot);
+        using var first = CreateRoutedReceived("first");
+        using var second = CreateRoutedReceived("second");
+
+        var submitted = spot.SubmitDispatch(new ZLinkBackendSpotDispatchInfo(
+            ZLinkBackendSpotDispatchEvent.RouteReadable,
+            RoutedMessages: [first, second]));
+
+        Assert.Null(submitted.Drain);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => submitted.Completion.AsTask());
+        Assert.False(probe.RouteStarted.Task.IsCompleted);
+        Assert.Empty(runner.ActiveOnSupervisorLane);
+        Assert.Throws<ObjectDisposedException>(() => first.Parts[0].Size);
+        Assert.Throws<ObjectDisposedException>(() => second.Parts[0].Size);
+        await runner.StopAsync();
     }
 
     [Fact]
@@ -9799,7 +9887,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public ulong LifecycleGeneration { get; set; } = 1;
 
-        private Action<ZLinkBackendSpotDispatchInfo>? _dispatchHandler;
+        private Func<ZLinkBackendSpotDispatchInfo, (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain)>? _dispatchHandler;
 
         public RoutingId RoutingId { get; private set; } = RoutingId.From("entry-spot");
 
@@ -9888,19 +9976,29 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public ZLinkBackendSubscribeMessage? Subscribe(RecvFlags flags) => null;
 
-        public ZLinkBackendRouteReceived? RecvRoute(RecvFlags flags) => null;
+        public ConcurrentQueue<ZLinkBackendRouteReceived> Routes { get; } = new();
 
-        public void OnDispatchEvent(Action<ZLinkBackendSpotDispatchInfo> handler)
+        public ZLinkBackendRouteReceived? RecvRoute(RecvFlags flags) =>
+            Routes.TryDequeue(out var received) ? received : null;
+
+        public void OnDispatchEvent(Func<ZLinkBackendSpotDispatchInfo, (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain)> handler)
         {
             _dispatchHandler = handler;
         }
 
         public bool DispatchHandlerAttached => _dispatchHandler is not null;
 
-        public void RaiseDispatch(ZLinkBackendSpotDispatchInfo info)
+        public async ValueTask RaiseDispatch(ZLinkBackendSpotDispatchInfo info)
         {
-            (_dispatchHandler ?? throw new InvalidOperationException("Dispatch handler was not attached.")).Invoke(info);
+            var dispatch = SubmitDispatch(info);
+            if (dispatch.Drain is { } drain)
+                await drain(CancellationToken.None).ConfigureAwait(false);
+            await dispatch.Completion.ConfigureAwait(false);
         }
+
+        public (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain) SubmitDispatch(
+            ZLinkBackendSpotDispatchInfo info) =>
+            (_dispatchHandler ?? throw new InvalidOperationException("Dispatch handler was not attached.")).Invoke(info);
 
         public bool RequestToChannel(
             string channelName,

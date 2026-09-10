@@ -181,6 +181,17 @@ internal sealed partial class ZLinkEntrySpotActivation
         await DispatchRouteDrainTurnAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    internal ValueTask DispatchRouteDrainAsync(
+        CancellationToken cancellationToken,
+        out Func<CancellationToken, ValueTask>? drain)
+    {
+        return _serial.RunLifecycleAsync(
+            ct => RunOnLineAsync(
+                static (activation, innerCt) => activation.DispatchRouteDrainTurnAsync(innerCt), ct),
+            cancellationToken,
+            out drain);
+    }
+
     public async ValueTask DispatchRouteAsync(
         ZLinkBackendRouteReceived received,
         CancellationToken cancellationToken)
@@ -189,6 +200,31 @@ internal sealed partial class ZLinkEntrySpotActivation
             static (activation, state, ct) => activation._dispatcher.DispatchRouteAsync(state, ct),
             received,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    internal ValueTask DispatchRouteAsync(
+        ZLinkBackendRouteReceived received,
+        CancellationToken cancellationToken,
+        out Func<CancellationToken, ValueTask>? drain)
+    {
+        try
+        {
+            return _serial.RunAsync(
+                async ct =>
+                {
+                    using (received)
+                        await RunOnLineAsync(
+                            (activation, innerCt) => activation._dispatcher.DispatchRouteAsync(
+                                received, innerCt), ct).ConfigureAwait(false);
+                },
+                cancellationToken,
+                out drain);
+        }
+        catch
+        {
+            received.Dispose();
+            throw;
+        }
     }
 
     public async ValueTask DispatchActorJoinDrainAsync(CancellationToken cancellationToken)
@@ -227,14 +263,18 @@ internal sealed partial class ZLinkEntrySpotActivation
     private void QueueRouteDrainTurn()
     {
         _ = _serial.TryPostNextWithAdmission(
-            ct => DispatchRouteDrainTurnAsync(ct),
+            ct => RunOnLineAsync(
+                static (activation, innerCt) => activation.DispatchRouteDrainTurnAsync(innerCt),
+                ct),
             out _);
     }
 
     private void QueueActorJoinDrainTurn()
     {
         _ = _serial.TryPostNextWithAdmission(
-            ct => DispatchActorJoinDrainTurnAsync(ct),
+            ct => RunOnLineAsync(
+                static (activation, innerCt) => activation.DispatchActorJoinDrainTurnAsync(innerCt),
+                ct),
             out _);
     }
 

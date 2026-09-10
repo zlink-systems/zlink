@@ -2530,8 +2530,16 @@ public sealed class ServiceRuntimeFoundationTests
 
         var firstState = pump.RegisterSpot(firstSpot.SpotId);
         var secondState = pump.RegisterSpot(secondSpot.SpotId);
-        pump.SetDispatchHandler(firstSpot.SpotId, _ => Capture(firstState));
-        pump.SetDispatchHandler(secondSpot.SpotId, _ => Capture(secondState));
+        pump.SetDispatchHandler(firstSpot.SpotId, _ =>
+        {
+            Capture(firstState);
+            return (ValueTask.CompletedTask, null);
+        });
+        pump.SetDispatchHandler(secondSpot.SpotId, _ =>
+        {
+            Capture(secondState);
+            return (ValueTask.CompletedTask, null);
+        });
 
         target.Start();
         pump.EnsureStarted();
@@ -2620,8 +2628,16 @@ public sealed class ServiceRuntimeFoundationTests
         }
         var firstState = pump.RegisterSpot(firstSpot.SpotId);
         var secondState = pump.RegisterSpot(secondSpot.SpotId);
-        pump.SetDispatchHandler(firstSpot.SpotId, _ => Capture(firstState));
-        pump.SetDispatchHandler(secondSpot.SpotId, _ => Capture(secondState));
+        pump.SetDispatchHandler(firstSpot.SpotId, _ =>
+        {
+            Capture(firstState);
+            return (ValueTask.CompletedTask, null);
+        });
+        pump.SetDispatchHandler(secondSpot.SpotId, _ =>
+        {
+            Capture(secondState);
+            return (ValueTask.CompletedTask, null);
+        });
 
         target.Start();
         pump.EnsureStarted();

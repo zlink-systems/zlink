@@ -449,7 +449,7 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
 
     ZLinkBackendRouteReceived? RecvRoute(RecvFlags flags);
 
-    void OnDispatchEvent(Action<ZLinkBackendSpotDispatchInfo> handler);
+    void OnDispatchEvent(Func<ZLinkBackendSpotDispatchInfo, (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain)> handler);
 
     //  Submit surfaces return the binding SubmitResult (not a flattened bool)
     //  so the exact call contract can report Backpressured, TargetNotFound and

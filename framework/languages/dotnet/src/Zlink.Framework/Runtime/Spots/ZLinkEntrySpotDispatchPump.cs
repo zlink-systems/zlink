@@ -53,63 +53,21 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
         _actorLanes.Clear();
     }
 
-    private void OnDispatchEvent(ZLinkBackendSpotDispatchInfo info)
+    private (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain) OnDispatchEvent(
+        ZLinkBackendSpotDispatchInfo info)
     {
         if (_activation is not null)
             switch (info.Event)
             {
                 case ZLinkBackendSpotDispatchEvent.RouteReadable:
                     if (info.RoutedMessages is { Count: > 0 } routedMessages)
-                    {
-                        foreach (var received in routedMessages)
-                        {
-                            if (ZLinkSpotActivationDispatcher.IsInfrastructureRoute(received))
-                            {
-                                if (!_taskRunner.TryRunDetached(
-                                        "entry-spot-route-dispatch",
-                                        ct => _activation.DispatchRouteAsync(received, ct)))
-                                    received.Dispose();
-                                continue;
-                            }
-
-                            var admission = _runtime.TryEnterInboundOperation(received.CanReply);
-                            if (!admission.Accepted)
-                            {
-                                ZLinkSpotActivationDispatcher.RejectApplicationRouteForDrain(
-                                    received,
-                                    _activation.ChannelName,
-                                    ZLinkAcceptedWorkAdmission.Closed,
-                                    received.SourceNodeRid is null
-                                    || received.SourceNodeRid == _activation.NodeRid,
-                                    _runtime.Flow.CaptureEnabled);
-                                continue;
-                            }
-
-                            if (!_taskRunner.TryRunDetached(
-                                    "entry-spot-route-dispatch",
-                                    async ct =>
-                                    {
-                                        using (admission.Lease)
-                                            await _activation.DispatchRouteAsync(received, ct)
-                                                .ConfigureAwait(false);
-                                    }))
-                            {
-                                admission.Lease.Dispose();
-                                received.Dispose();
-                            }
-                        }
-                    }
-                    else
-                    {
-                        _taskRunner.RunDetached(
-                            "entry-spot-route-dispatch",
-                            ct => _activation.DispatchRouteDrainAsync(ct));
-                    }
-
-                    return;
+                        return DispatchRoutes(routedMessages);
+                    var completion = _activation.DispatchRouteDrainAsync(
+                        _taskRunner.ShutdownToken, out var drain);
+                    return (completion, drain);
                 case ZLinkBackendSpotDispatchEvent.ChannelReplyReadable:
                     info.DrainChannelReply?.Invoke();
-                    return;
+                    return (ValueTask.CompletedTask, null);
                 case ZLinkBackendSpotDispatchEvent.SubscribeReadable:
                     var subscriptionAdmission = _runtime.TryEnterInboundOperation(
                         countAsRequest: false);
@@ -118,7 +76,7 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
                         _taskRunner.RunDetached(
                             "entry-spot-subscription-discard",
                             ct => _activation.DiscardSubscriptionsAsync(ct));
-                        return;
+                        return (ValueTask.CompletedTask, null);
                     }
                     _taskRunner.RunDetached(
                         "entry-spot-subscription-dispatch",
@@ -127,22 +85,22 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
                             using (subscriptionAdmission.Lease)
                                 await _activation.DispatchSubscriptionsAsync(ct).ConfigureAwait(false);
                         });
-                    return;
+                    return (ValueTask.CompletedTask, null);
                 case ZLinkBackendSpotDispatchEvent.ActorJoinReadable:
                     _taskRunner.RunDetached(
                         "entry-spot-actor-join-dispatch",
                         ct => _activation.DispatchActorJoinDrainAsync(ct));
-                    return;
+                    return (ValueTask.CompletedTask, null);
                 case ZLinkBackendSpotDispatchEvent.ActorLifecycleReadable:
                     _taskRunner.RunDetached(
                         "entry-spot-actor-lifecycle-dispatch",
                         DispatchActorLifecycleDrainAsync);
-                    return;
+                    return (ValueTask.CompletedTask, null);
             }
 
         if (info.Event != ZLinkBackendSpotDispatchEvent.ActorReadable
             || info.ActorParts is not { Count: > 0 } actorParts)
-            return;
+            return (ValueTask.CompletedTask, null);
 
         var dispatchable = ZLinkActorHandoffIngress.CaptureMovingFrames(
             _runtime,
@@ -151,17 +109,85 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
         if (dispatchable.Count == 0)
         {
             dispatchable.Dispose();
-            return;
+            return (ValueTask.CompletedTask, null);
         }
 
         var actorAdmission = _runtime.TryEnterInboundOperation(countAsRequest: false);
         if (!actorAdmission.Accepted)
         {
             dispatchable.Dispose();
-            return;
+            return (ValueTask.CompletedTask, null);
         }
 
         EnqueueActorBatch(dispatchable.WithCompletion(actorAdmission.Lease.Dispose));
+        return (ValueTask.CompletedTask, null);
+    }
+
+    private (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain) DispatchRoutes(
+        IReadOnlyList<ZLinkBackendRouteReceived> routedMessages)
+    {
+        List<Task>? pending = null;
+        Func<CancellationToken, ValueTask>? drain = null;
+        foreach (var received in routedMessages)
+        {
+            ValueTask completion;
+            try
+            {
+                completion = DispatchRoute(received, out var reservedDrain);
+                drain ??= reservedDrain;
+            }
+            catch (Exception exception)
+            {
+                completion = ValueTask.FromException(exception);
+            }
+            if (completion.IsCompletedSuccessfully)
+                completion.GetAwaiter().GetResult();
+            else
+                (pending ??= []).Add(completion.AsTask());
+        }
+        return (pending is null
+            ? ValueTask.CompletedTask
+            : new ValueTask(Task.WhenAll(pending)), drain);
+    }
+
+    private ValueTask DispatchRoute(
+        ZLinkBackendRouteReceived received,
+        out Func<CancellationToken, ValueTask>? drain)
+    {
+        drain = null;
+        if (ZLinkSpotActivationDispatcher.IsInfrastructureRoute(received))
+            return _activation!.DispatchRouteAsync(
+                received, _taskRunner.ShutdownToken, out drain);
+
+        var admission = _runtime.TryEnterInboundOperation(received.CanReply);
+        if (!admission.Accepted)
+        {
+            ZLinkSpotActivationDispatcher.RejectApplicationRouteForDrain(
+                received,
+                _activation!.ChannelName,
+                ZLinkAcceptedWorkAdmission.Closed,
+                received.SourceNodeRid is null
+                || received.SourceNodeRid == _activation.NodeRid,
+                _runtime.Flow.CaptureEnabled);
+            return ValueTask.CompletedTask;
+        }
+
+        try
+        {
+            return CompleteRouteAsync(_activation!.DispatchRouteAsync(
+                received, _taskRunner.ShutdownToken, out drain), admission.Lease);
+        }
+        catch
+        {
+            admission.Lease.Dispose();
+            throw;
+        }
+    }
+
+    private static async ValueTask CompleteRouteAsync(ValueTask completion, IDisposable inboundAdmission)
+    {
+        using (inboundAdmission)
+            await completion.ConfigureAwait(false);
     }
 
     private void EnqueueActorBatch(ZLinkSpotActorFrameBatch frames)
