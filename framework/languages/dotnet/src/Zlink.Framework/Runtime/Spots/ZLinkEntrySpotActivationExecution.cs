@@ -9,6 +9,7 @@ internal sealed partial class ZLinkEntrySpotActivation
         CancellationToken cancellationToken = default)
         where THandler : class
     {
+        _handlerInstances.Prepare(typeof(THandler));
         return _timers.AddAsync(
             name,
             period,

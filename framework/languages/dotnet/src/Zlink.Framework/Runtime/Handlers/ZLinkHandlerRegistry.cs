@@ -40,6 +40,12 @@ internal sealed class ZLinkHandlerRegistry
         _publishes = Freeze(publishes);
     }
 
+    internal void PrepareInstances(IServiceProvider services) =>
+        ZLinkScopedHandlerInstanceOwner.Prepare(services,
+            _requests.Values.Concat(_commands.Values).Concat(_publishes.Values)
+                .SelectMany(static endpoints => endpoints)
+                .Select(static endpoint => endpoint.DeclaringType));
+
     public ZLinkHandlerEndpointDescriptor GetRequest(
         string channelName,
         IReadOnlySet<string> mappedGroups,
