@@ -4,6 +4,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { listenOnBrowserSafeLoopbackPort } from './browser-safe-listen.mjs';
+import { closeBrowser, closeContext, closeServer } from '../../test/support/bounded-cleanup.js';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(scriptDir, '../..');
@@ -21,7 +22,11 @@ async function createBrowserConnectorDriver(options = {}) {
       target: 'es2022'
     })
   ]);
-  const server = http.createServer((request, response) => {
+  let server;
+  let browser;
+  let context;
+  try {
+    server = http.createServer((request, response) => {
     if (request.url === '/client.mjs') {
       response.writeHead(200, { 'content-type': 'text/javascript' });
       response.end(output.outputFiles[0].contents);
@@ -29,15 +34,15 @@ async function createBrowserConnectorDriver(options = {}) {
     }
     response.writeHead(200, { 'content-type': 'text/html' });
     response.end('<script type="module" src="/client.mjs"></script>');
-  });
-  await listenOnBrowserSafeLoopbackPort(server);
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ ignoreHTTPSErrors: options.ignoreHTTPSErrors === true });
-  const page = await context.newPage();
-  const address = server.address();
-  await page.goto(`http://127.0.0.1:${address.port}`);
-  await page.waitForFunction(() => window.zlinkBrowserConnector !== undefined);
-  return {
+    });
+    await listenOnBrowserSafeLoopbackPort(server);
+    browser = await chromium.launch({ headless: true });
+    context = await browser.newContext({ ignoreHTTPSErrors: options.ignoreHTTPSErrors === true });
+    const page = await context.newPage();
+    const address = server.address();
+    await page.goto(`http://127.0.0.1:${address.port}`);
+    await page.waitForFunction(() => window.zlinkBrowserConnector !== undefined);
+    return {
     connect: (endpoint, reconnect = false) => page.evaluate(
       ([value, enabled]) => window.zlinkBrowserConnector.connect(value, enabled),
       [endpoint, reconnect]
@@ -54,12 +59,22 @@ async function createBrowserConnectorDriver(options = {}) {
         { timeout: timeoutMs }
       );
     },
-    close: async () => {
+      close: async () => {
       await page.evaluate(() => window.zlinkBrowserConnector.close()).catch(() => undefined);
-      await browser.close();
-      await new Promise((resolve) => server.close(resolve));
-    }
-  };
+      await closeContext(context);
+      await closeBrowser(browser);
+      await closeServer(server);
+      context = undefined;
+      browser = undefined;
+      server = undefined;
+      }
+    };
+  } catch (error) {
+    await closeContext(context);
+    await closeBrowser(browser);
+    await closeServer(server);
+    throw error;
+  }
 }
 
 export { createBrowserConnectorDriver };

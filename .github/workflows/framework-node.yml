@@ -344,6 +344,10 @@ jobs:
           npm ci
           npm run build
 
+      - name: Install Chromium and Linux dependencies
+        working-directory: framework/languages/node
+        run: npx playwright install --with-deps chromium
+
       - name: Run Node framework cross-language smoke
         working-directory: framework/languages/node
         run: npm run verify:cross-language
