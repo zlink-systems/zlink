@@ -48,7 +48,7 @@ internal sealed partial class SocketKernel : IDisposable
             : null;
     }
 
-    internal Task<IReadOnlyList<Message>> RequestAsync(
+    internal RequestSubmission RequestAsync(
         RoutingId? routerRoutingId, IReadOnlyList<Message> parts,
         uint timeoutMs, CancellationToken cancellationToken)
     {

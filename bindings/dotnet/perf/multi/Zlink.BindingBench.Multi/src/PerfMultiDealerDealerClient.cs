@@ -100,8 +100,10 @@ internal static class PerfMultiDealerDealerClient
                 ulong currentSeq = unchecked((ulong)Interlocked.Increment(ref seq));
                 StampMetricHeader(message.AsSpan(), runId,
                     PerfPhase.Active, msgSize, currentSeq, EpochNs());
-                await PerfSocketIo.SendMeasurementAsync(socket, message,
-                    SendFlags.None).ConfigureAwait(false);
+                SendSubmission submission = PerfSocketIo.SendMeasurementAsync(
+                    socket, message, SendFlags.None);
+                if (submission.Result == SubmitResult.Backpressured)
+                    await submission.Admitted.ConfigureAwait(false);
                 Interlocked.Increment(ref sent);
             }
         }

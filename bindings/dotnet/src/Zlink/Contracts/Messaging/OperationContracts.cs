@@ -2,6 +2,45 @@
 
 namespace Systems.Zlink;
 
+/// <summary>Snapshot and admission completion for an asynchronous send.</summary>
+public readonly struct SendSubmission
+{
+    internal SendSubmission(SubmitResult result, Task admitted)
+    {
+        Result = result;
+        Admitted = admitted;
+    }
+
+    /// <summary>The immutable initial submit result.</summary>
+    public SubmitResult Result { get; }
+
+    /// <summary>Completes when the send is admitted to the local queue.</summary>
+    public Task Admitted { get; }
+}
+
+/// <summary>
+///     Snapshot, admission completion, and reply for an asynchronous request.
+/// </summary>
+public readonly struct RequestSubmission
+{
+    internal RequestSubmission(SubmitResult result, Task admitted,
+        Task<IReadOnlyList<Message>> reply)
+    {
+        Result = result;
+        Admitted = admitted;
+        Reply = reply;
+    }
+
+    /// <summary>The immutable initial submit result.</summary>
+    public SubmitResult Result { get; }
+
+    /// <summary>Completes when the request is admitted to the local queue.</summary>
+    public Task Admitted { get; }
+
+    /// <summary>Completes with the reply after successful admission.</summary>
+    public Task<IReadOnlyList<Message>> Reply { get; }
+}
+
 /// <summary>
 ///     Builds a multipart send: add one or more parts, then
 ///     <see cref="SendSubmitOperation.Submit" />.
@@ -12,8 +51,7 @@ namespace Systems.Zlink;
 ///     instance is left empty; reading a consumed part's payload afterward throws,
 ///     though disposing it stays safe and is still required to return pooled
 ///     instances. If the submit fails, ownership of every part is restored to the
-///     caller for retry or disposal. <see cref="SendSubmitOperation.TrySubmit" />
-///     also leaves the parts with the caller when it returns <c>false</c>.
+///     caller for retry or disposal.
 ///     <see cref="SendSubmitOperation.Async" /> transfers the parts to the
 ///     operation once its initial attempt succeeds or obtains a WRITABLE wait
 ///     token. The request, reply, and actor-join builders in this file share the
@@ -46,14 +84,6 @@ public interface SendSubmitOperation
     void Submit();
 
     /// <summary>
-    ///     Makes one non-blocking admission attempt. Returns <c>false</c> only
-    ///     when Core reports <see cref="SubmitResult.Backpressured" /> with
-    ///     <c>EAGAIN</c>; in that case Core retained no payload and every message
-    ///     remains owned by the caller.
-    /// </summary>
-    bool TrySubmit();
-
-    /// <summary>
     ///     Makes non-blocking admission attempts. If Core reports backpressure,
     ///     the operation retains an exact packet snapshot, waits for the matching
     ///     <see cref="CompletionKind.Writable" /> token on <c>POLLOUT</c>, and
@@ -65,7 +95,7 @@ public interface SendSubmitOperation
     ///     this method consumes the caller's message wrappers and the operation
     ///     owns its retained packet until success, cancellation, or failure.
     /// </remarks>
-    Task Async(CancellationToken cancellationToken = default);
+    SendSubmission Async(CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -173,7 +203,7 @@ public interface RequestSubmitOperation
     ///     Core retains no request payload before admission; the binding takes a
     ///     retained packet snapshot only if the first attempt is refused.
     /// </remarks>
-    Task<IReadOnlyList<Message>> Async(
+    RequestSubmission Async(
         CancellationToken cancellationToken = default);
 }
 
