@@ -58,11 +58,12 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
       const parts = [];
       const operation = {
         message(part) { parts.push(Buffer.from(part)); return operation; },
-        async submit() {
+        submit() {
           if (dropped && String(rid) === String(routingId)) {
             throw new zlink.SubmitError(zlink.SubmitResult.NotFound, 2);
           }
           delivered.push(...parts);
+          return { result: zlink.SubmitResult.Ok, admitted: Promise.resolve() };
         }
       };
       return operation;

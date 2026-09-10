@@ -28,4 +28,10 @@ export default tseslint.config({
       allowString: false
     }]
   }
+}, {
+  // Binding submissions are snapshots; backend adapters must await their stages.
+  files: ['packages/framework/src/runtime/backend/**/*.ts'],
+  rules: {
+    '@typescript-eslint/await-thenable': 'error'
+  }
 });
