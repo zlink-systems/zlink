@@ -41,9 +41,9 @@ for payload in "${payloads[@]}"; do
   }
 done
 case "${SCENARIO}" in
-  all) patterns=(request-serial request-window request-backpressure send-saturation) ;;
-  request) patterns=(request-serial request-window request-backpressure) ;;
-  request-serial|request-window|request-backpressure|send-saturation) patterns=("${SCENARIO}") ;;
+  all) patterns=(request-serial request-backpressure send-saturation) ;;
+  request) patterns=(request-serial request-backpressure) ;;
+  request-serial|request-backpressure|send-saturation) patterns=("${SCENARIO}") ;;
   send|command) patterns=(send-saturation) ;;
   *) echo "unknown SCENARIO: ${SCENARIO}" >&2; exit 2 ;;
 esac

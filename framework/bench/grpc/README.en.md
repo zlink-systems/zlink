@@ -37,40 +37,49 @@ the table shows the three implementations side by side under one pattern.
 
 `grpc-c` and `zlink-c` from `framework/bench/grpc/c` are kept alongside as the floor
 reference. There's no framework layer in C, so only these two implementations exist there. The
-`zlink-c` `request-window` value is the reference value for judging where each language's raw
+`zlink-c` `request-backpressure` value is the reference value for judging where each language's raw
 binding stands (§7.2). The C reference bench stays client-driven; it isn't converted to the
 server-driven model of §10, because what's borrowed from it is the per-request cost, not the place
 where load is generated. That difference is noted next to the denominator in §7.2.
 
 ### 1.3 The ZLink Socket Axis
 
-Both ZLink rows use **RouteMesh ROUTER↔ROUTER**. This condition isn't optional; it's the contract
-that makes the judgement formula hold.
+Both ZLink rows use **ROUTER↔ROUTER and address the peer node directly by RID**. This condition
+isn't optional; it's the contract that makes the judgement formula hold. Every cell has one
+server (B).
 
 | Row | Socket Configuration |
 |-----|----------------------|
-| `zlink-framework-<lang>` | RouteMesh's channel request handler and send handler. RouteMesh connects as ROUTER↔ROUTER |
-| `zlink-<lang>` | The raw binding's ROUTER↔ROUTER. The client side also creates a ROUTER and sends by specifying the peer ROUTER's routing id |
+| `zlink-framework-<lang>` | RouteMesh's direct node calls `requestToNode` / `sendToNode`, naming the server node's RID. RouteMesh connects as ROUTER↔ROUTER |
+| `zlink-<lang>` | The raw binding's ROUTER↔ROUTER. The client side also creates a ROUTER and requests/sends by specifying the peer ROUTER's routing id |
 | `zlink-c` | The same ROUTER↔ROUTER configuration as the raw binding row above |
 
 ```mermaid
 flowchart LR
-    FC[framework channel client] <--> FS[framework channel server]
+    FC[framework RouteMesh ToNode client] <--> FS[framework node handler server]
     RC[raw binding ROUTER] <--> RS[raw binding ROUTER]
 ```
 
 This contract is needed because of the judgement formula in §7.2.
 `zlink-framework-<lang> / zlink-<lang>` is the ratio for looking at the cost the framework layer
-additionally requires. Only when both rows use the same socket pattern does this ratio isolate the
-framework layer. If the raw row is DEALER→ROUTER, the division result contains both the framework
-layer cost and the socket pattern difference, and that value isn't the framework layer cost.
+additionally requires. Only when both rows use the same socket pattern and the same way of naming
+the target does this ratio isolate the framework layer. If the raw row is DEALER→ROUTER, or the
+framework row sends by channel name through `requestToChannel`/`sendToChannel` (which includes
+node selection), the division result contains the framework layer cost together with the socket
+pattern and target selection difference, and that value isn't the framework layer cost. The gRPC
+row is one channel attached 1:1 to one server, and the configuration above has the same shape.
 
-The current implementation state is recorded alongside. The `.NET` client's raw path and the C
-reference bench's client still create a DEALER
-(`framework/bench/grpc/dotnet/Client/Program.cs:493,512,530`,
-`framework/bench/grpc/c/zlink/bench_zlink_client.cpp:530-531`). That change is done in a
-separate task. The table above prescribes the configuration to be used for measurement, and a
-value obtained before that change completes isn't a value that satisfies this specification.
+Comparisons between ZLink models — DEALER→ROUTER versus ROUTER↔ROUTER, `ToChannel` (with node
+selection) versus `ToNode`, ClientServer versus RouteMesh — are not items of this bench; they
+belong to a separate ZLink model-comparison bench. This bench compares only the 1:1 request path
+that has the same shape as gRPC.
+
+The current implementation state is recorded alongside. Java has moved to this configuration
+(Issue #13). The `.NET`, C++, and Node raw and framework paths and the C reference bench's client
+have not yet (`.NET` raw is DEALER,
+`framework/bench/grpc/c/zlink/bench_zlink_client.cpp:530-531`). The table above prescribes the
+configuration to be used for measurement, and a value obtained before that change completes
+isn't a value that satisfies this specification.
 
 ## 2. Measurement Patterns
 
@@ -82,22 +91,16 @@ ZMP header aren't included in this size.
 
 | Pattern Name | gRPC | ZLink raw binding | ZLink framework | Interpretation |
 |-----------|------|-------------------|-----------------|------|
-| `request-serial` | unary `Echo` RPC | raw request send and reply receive | channel request call | Sends one request and sends the next only after the reply completes |
-| `request-window` | unary `Echo` RPC | raw request send and reply receive | channel request call | Keeps up to `request_window` incomplete requests |
-| `request-backpressure` | unary `Echo` RPC | raw request send and reply receive | channel request call | Puts no ceiling on incomplete requests. Submits continuously until admission backpressure |
-| `send-saturation` | unary `Command` RPC, replying `Empty` | raw one-way send submission | channel send submission | Compares the command path, which has no reply payload |
+| `request-serial` | unary `Echo` RPC | raw request send and reply receive | node request call | Sends one request and sends the next only after the reply completes |
+| `request-backpressure` | unary `Echo` RPC | raw request send and reply receive | node request call | Puts no ceiling on incomplete requests. Submits continuously until admission backpressure |
+| `send-saturation` | unary `Command` RPC, replying `Empty` | raw one-way send submission | node send submission | Compares the command path, which has no reply payload |
 
 The API names the three implementations use differ per language, but the contract is the same. In
-`.NET`, the framework channel request is `RequestToChannel(...).Async<TReply>()` and the channel
-send is `SendToChannel(...).Submit()`. The per-language modules are in §8.
+Java, the framework node request is `requestToNode(mesh, rid, message)` and the node send is
+`sendToNode(mesh, rid, message)` (§1.3). The per-language modules are in §8.
 
 `request-serial`'s throughput is decided by a single request's round-trip latency. This value is
 meant to show the cost of a "process one at a time" usage pattern.
-
-`request-window` reflects that a ZLink request can submit the next request without waiting for the
-reply. During the active phase, the client keeps up to `request_window` incomplete requests. As
-soon as one reply arrives, the next request is sent immediately in that slot. The default
-`request_window` is `100`.
 
 `request-backpressure` puts no application ceiling on the number of incomplete requests. Without
 waiting for replies, the client submits requests continuously until it meets admission
@@ -113,23 +116,12 @@ async requests continuously without waiting for a reply and then hands the turn 
 pump. All six rows use the same shape, and the gRPC side is treated the same way: unary calls are
 submitted continuously rather than awaited one at a time.
 
-The two request patterns answer different questions, and neither replaces the other.
-
-| Pattern | The question it answers |
-|---|---|
-| `request-window` | How does this stack behave when an externally chosen depth is imposed on it |
-| `request-backpressure` | What does a service actually get when it submits as fast as the transport allows |
-
-Because `request-window` fixes depth as a condition, a stack that cannot sustain that condition
-makes the throughput ratio report the depth reached rather than the per-request cost.
-`request-backpressure` removes that fixing, but it does not remove the depth difference. Both
-patterns must be read together with the depth metrics of §5.2.
-
 This repository's perf convention already requires that inflight depth not be fixed artificially
 and that requests be submitted continuously until admission backpressure (the request/reply client
 items in `doc/perf/PERF_MULTI_TEST_POLICY.md`, and the fixed application window item in
-`doc/perf/PERF_POLICY.md`). This bench having only `request-window` was a divergence from that
-convention, and `request-backpressure` closes the gap.
+`doc/perf/PERF_POLICY.md`). The fixed-window pattern (`request-window`) diverges from that
+convention, so it is excluded from this bench. Behaviour at a fixed depth is an item of the ZLink
+model-comparison bench.
 
 `send-saturation` isn't averaged together with request/reply. This pattern exists to look at the
 command family's relative cost separately.
@@ -170,10 +162,9 @@ one-way send. Under this condition the difference was N times.
 - Runs a fixed-duration measured active window after warmup. The warmup length is set per language
   and the value used is recorded in the result (§8.2).
 - The default payload size is `1024,4096` bytes.
-- The default `request_window` is `100`, and it applies only to the `request-window` pattern.
-  The `request-backpressure` pattern has no incomplete-request ceiling setting. In that
+- The `request-backpressure` pattern has no incomplete-request ceiling setting. In that
   pattern depth is not a condition that is set but a result that is measured and recorded
-  (§5.2).
+  (§5.2). This bench has no `request_window` setting.
 - The default send concurrency is `8`.
 - gRPC and ZLink framework use the same protobuf DTO. The ZLink raw binding skips the framework but
   puts the same shape on the wire: two parts, an envelope header part and a protobuf-encoded
@@ -216,7 +207,7 @@ The report table is grouped by pattern, with the implementation name shown on ea
 example follows the format below.
 
 ```text
-  > Benchmarking current for request-window...
+  > Benchmarking current for request-backpressure...
     Testing local:
       | Implementation          | Size     |       Throughput |    Bandwidth |  Lat.Mean(ms) |   Lat.P95(ms) |   Lat.P99(ms) | Client CPU | Client Mem | Server CPU | Server Mem |
       |-------------------------|----------|------------------|--------------|--------------|--------------|--------------|------------|------------|------------|------------|
@@ -235,13 +226,13 @@ RESULT,current,<scenario>,local,<payload_size>,<metric>,<value>
 An example follows.
 
 ```text
-RESULT,current,grpc-dotnet-request-window,local,1024,throughput,10000.000
-RESULT,current,zlink-dotnet-request-window,local,1024,latency,0.300
-RESULT,current,zlink-framework-dotnet-request-window,local,1024,latency_p99,1.200
+RESULT,current,grpc-dotnet-request-backpressure,local,1024,throughput,10000.000
+RESULT,current,zlink-dotnet-request-backpressure,local,1024,latency,0.300
+RESULT,current,zlink-framework-dotnet-request-backpressure,local,1024,latency_p99,1.200
 ```
 
 `<scenario>` is `<implementation name>-<pattern name>`, so the language is part of the name. For
-example, Node's equivalent cell is `zlink-framework-node-request-window`.
+example, Node's equivalent cell is `zlink-framework-node-request-backpressure`.
 
 The `metric` value uses `throughput`, `bandwidth`, `latency`, `latency_p95`, `latency_p99`,
 `client_cpu_percent`, `client_memory_mb`, `server_cpu_percent`, `server_memory_mb`. The raw value
@@ -277,7 +268,7 @@ character.
 | `Target CPU` (`server_cpu_percent`) | The CPU percentage target process B used during the active window |
 | `Target Mem` (`server_memory_mb`) | Target process B's working set |
 
-`request-serial` and `request-window` calculate `KOPS` based on the number of completions where an
+`request-serial` and `request-backpressure` calculate `KOPS` based on the number of completions where an
 echo reply came back. Here, `1 KOPS` means 1,000 request/reply completions per second.
 
 `send-saturation` calculates `KMSG/s` based on the number of messages the server received during the
@@ -324,7 +315,7 @@ three different reasons: in Node process CPU also counted the binding's native I
 it counted GC and JIT threads, and in C++ it again counted the binding's I/O threads. Four of the
 five languages declare something other than process CPU. The problem is not the threshold but
 **whether the two rows a judgement divides are commensurate**. Measured in C++,
-`zlink-cpp` request-window reads 0.950 on its declared instrument but 1.90 in process cores, while
+`zlink-cpp` request-backpressure reads 0.950 on its declared instrument but 1.90 in process cores, while
 `grpc-cpp` in the same run reads 0.700 and 0.70 — effectively the same value. Judged on process
 cores, that difference reports which row links Core rather than which row was client-bound.
 
@@ -342,11 +333,6 @@ Request-family cells record the three values below for every cell. The three are
 | `peak_in_flight` | The maximum number of incomplete requests observed during the active window |
 | Depth | The mean incomplete count calculated as throughput x mean latency (Little's law) |
 | `abandoned` | The number of requests that did not complete by the drain bound |
-
-In `request-window` these three decide **whether the stack actually sustained the depth that was
-set**. A cell whose `peak_in_flight` never reached the configured value has to be separated into
-"the harness could not fill the window" and "the stack only reaches this depth"; without recording
-both values, a wrong premise survives.
 
 In `request-backpressure` these three **are the result**. Since no depth is configured, the depth a
 stack reaches is an outcome its design decides, and it goes into the table with the same standing
@@ -372,7 +358,7 @@ protobuf `bytes body` or the raw ZLink message body.
 | 13 | 8 | sequence |
 | 21 | 8 | send timestamp ns |
 
-For `request-serial` and `request-window`, the client validates the header that came back in the
+For `request-serial` and `request-backpressure`, the client validates the header that came back in the
 reply payload, and calculates `KOPS` from the active-phase reply count. `send-saturation` has the
 server read the header to calculate the active-phase message count and server-side receive
 latency. This approach puts the measurement value inside the payload so a one-way throughput isn't
@@ -396,8 +382,7 @@ information alongside it.
 - Payload size
 - Warmup and active duration configuration
 - gRPC and ZLink endpoint
-- The request window value (`request-window` pattern) or the depth reached
-  (`request-backpressure` pattern)
+- The depth reached (`request-backpressure` pattern, §5.2)
 - A's logical stream count, per-stream in-flight ceiling, and trigger endpoint (§10)
 - Per-cell `peak_in_flight`, depth, and `abandoned` (§5.2)
 - The send concurrency value
@@ -407,7 +392,7 @@ information alongside it.
 ### 7.2 Judgement Between Layers
 
 Performance judgment compares within the same ZLink layer, not against gRPC. The raw binding is
-judged against the `zlink-c` request-window result under the same conditions. If the raw binding
+judged against the `zlink-c` request-backpressure result under the same conditions. If the raw binding
 reaches 80% or more of the C result, the binding layer's baseline performance is judged as
 passing. The framework is judged against the same language's raw binding result. If the framework
 reaches 80% or more of the raw binding result, the framework's added cost is judged as passing.
@@ -431,9 +416,7 @@ give the same guarantee, namely confirmation that the server processed the messa
 process-one-at-a-time usage pattern.
 
 **The reference pattern for judgement is `request-backpressure`.** Whether a language passes is
-decided by that pattern satisfying the criterion at both payload sizes. The same two formulas
-computed on `request-window` are calculated separately and recorded alongside, but they do not
-decide whether a language passes.
+decided by that pattern satisfying the criterion at both payload sizes.
 
 The grounds for choosing the reference pattern this way are below.
 
@@ -453,11 +436,9 @@ backpressure still produces a low ratio in this pattern, and the ratio alone sti
 separate per-request cost from depth reached. **So for either pattern, a ratio published without
 the three depth values of §5.2 beside it is not published at all.**
 
-**Loss and non-completion observed under a fixed window are not superseded by this judgement.** A
-stack that produced `abandoned` requests or errors under `request-window` has a defect in the
-correctness category, and that defect remains even if the same stack passes the criterion under
-`request-backpressure`. The two results are recorded separately so that a performance judgement
-does not hide a correctness observation.
+There is no fixed-window pattern in this bench. How a stack behaves at an externally chosen depth is
+an item of the ZLink model-comparison bench, and loss and non-completion observed there are
+recorded separately as correctness items.
 
 The second formula represents the framework layer cost only when the socket configuration in §1.3
 is observed.
@@ -598,7 +579,7 @@ response are JSON and the five languages use the same fields.
 
 ```text
 POST http://127.0.0.1:<A trigger>/bench/start
-{ "runId": "...", "cellId": "...", "pattern": "request-window",
+{ "runId": "...", "cellId": "...", "pattern": "request-backpressure",
   "payloadBytes": 1024, "phase": "warmup" | "active",
   "durationMs": 5000, "requestWindow": 100, "sendConcurrency": 8 }
 → 200 { "accepted": true, "runId": "...", "cellId": "...", "phase": "active", "startedAt": <monotonic ns> }
@@ -622,7 +603,6 @@ count and a per-stream in-flight ceiling.
 | Pattern | Streams | In-flight per stream | Meaning |
 |---------|---------|----------------------|---------|
 | `request-serial` | 1 | 1 | Send one request, then the next after the reply |
-| `request-window` | The streams share `request_window` (default 100). Default is 1 stream with in-flight 100 | Sum = `request_window` | Keep the incomplete request count at the window |
 | `request-backpressure` | 1 | No ceiling | Submit until admission backpressure is met |
 | `send-saturation` | `send_concurrency` (default 8) | 1 (until send completion notification) | The command path with no reply |
 
@@ -653,5 +633,5 @@ there are streams. The gRPC server configuration stays at the language default a
 
 Kotlin shares the binding, server, and codec with Java, so it's excluded from the full matrix.
 Instead, two supplementary cells that show the cost of the Kotlin call layer — `grpc-kotlin`
-(coroutine stub) and `zlink-framework-kotlin` (suspend calls) at `request-window @1024` — are placed
+(coroutine stub) and `zlink-framework-kotlin` (suspend calls) at `request-backpressure @1024` — are placed
 next to the Java rows. Only A is Kotlin; B is the Java binary on the Java band of §9, as is.

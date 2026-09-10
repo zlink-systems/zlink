@@ -5,6 +5,13 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="$(cd "${HERE}/../../.." && pwd)"
 
+if [[ "${1:-}" == --java-only ]]; then
+  "${HERE}/java/gradlew" --no-daemon --max-workers=1 :shared:rawWireTest
+  echo RAW_WIRE_JAVA_OK
+  exit 0
+fi
+[[ $# == 0 ]] || { echo "usage: $0 [--java-only]" >&2; exit 2; }
+
 cmake --build "${HERE}/c/build" --target \
   bench_c_raw_wire_client_test bench_c_raw_wire_server_test --parallel 2
 ctest --test-dir "${HERE}/c/build" -R '^bench_c_raw_wire_' --output-on-failure
