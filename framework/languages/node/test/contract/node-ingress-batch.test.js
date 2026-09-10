@@ -76,6 +76,79 @@ test('mesh owner drains 64 pre-admitted records in one receive batch without los
   }
 });
 
+test('idle application worker registration is reused across sparse ready edges', async t => {
+  let ready;
+  let queued;
+  const node = {
+    setReadyHandler(handler) { ready = handler; },
+    createReadyBatch() {
+      return {
+        reset() {},
+        takeClaim() {
+          let consumed = false;
+          const record = queued;
+          queued = undefined;
+          return {
+            recvBatch() {
+              if (consumed) return { ok: false, records: [] };
+              consumed = true;
+              return {
+                ok: true,
+                records: [{
+                  sequence: record.sequence,
+                  parts: [],
+                  applicationJobPermit: { releaseAfterInternalProcessing() {} }
+                }]
+              };
+            },
+            release() {}
+          };
+        },
+        close() {}
+      };
+    },
+    createReceiveBatch() { return { reset() {}, close() {} }; },
+    drainReady() {
+      return queued === undefined
+        ? { ok: false, hasResidue: false, records: [] }
+        : { ok: true, hasResidue: false, records: [{ ordinaryIngressPreAdmitted: true }] };
+    }
+  };
+  let areaEntries = 0;
+  const run = AsyncLocalStorage.prototype.run;
+  t.mock.method(AsyncLocalStorage.prototype, 'run', function (store, ...args) {
+    if (store === 'application') areaEntries++;
+    return run.call(this, store, ...args);
+  });
+  let dispatched;
+  const pump = new backend.ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: { acquire() { throw new Error('records are pre-admitted'); } },
+    dispatch(_owner, record) { dispatched(record.sequence); }
+  });
+  try {
+    pump.start();
+    await new Promise(resolve => setImmediate(resolve));
+    const workerRegistrations = areaEntries;
+    assert.equal(workerRegistrations, 1);
+    for (let sequence = 0; sequence < 16; sequence++) {
+      const completed = new Promise(resolve => { dispatched = resolve; });
+      queued = { sequence };
+      ready(ReadyDomain.Application);
+      assert.equal(await completed, sequence);
+      // Let the same persistent worker return to its idle wait before the next
+      // empty-to-ready transition.
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(
+      areaEntries,
+      workerRegistrations,
+      'sparse records do not create new application worker registrations'
+    );
+  } finally {
+    await pump.dispose();
+  }
+});
+
 test('a failed handler releases every record retained by its receive batch', async () => {
   const closed = Array(64).fill(0);
   const released = Array(64).fill(0);

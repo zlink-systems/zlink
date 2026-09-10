@@ -682,7 +682,7 @@ class zlink_raw_driver_t : public driver_t
             auto parts = make_parts (_payload_size, _phase, seq);
             _counters->enter ();
             _counters->submitted.fetch_add (1, std::memory_order_relaxed);
-            bool failed = false;
+            bool yield_after_error = false;
             try {
                 zlink::request_submission_t submission =
                   request_operation ()
@@ -707,10 +707,13 @@ class zlink_raw_driver_t : public driver_t
             }
             catch (const std::exception &error) {
                 _counters->leave ();
+                // record_exception이 개수와 (타입, 메시지)를 함께 집계한다(#133).
                 _counters->record_exception (error);
-                failed = true;
+                yield_after_error = true;
             }
-            if (failed) {
+            // co_await는 예외 handler 안에서 쓸 수 없다. 집계는 handler가 하고
+            // 양보는 handler를 벗어난 뒤에 한다. 의미는 같다(#137).
+            if (yield_after_error) {
                 co_await _ready.schedule ();
                 continue;
             }

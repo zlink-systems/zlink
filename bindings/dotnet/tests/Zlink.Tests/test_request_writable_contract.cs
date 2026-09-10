@@ -37,9 +37,9 @@ public sealed class test_request_writable_contract
         using Message firstPart = Message.From(LargePayload + "-first");
         using Message retriedPart = Message.From(LargePayload + "-retry");
         Task<IReadOnlyList<Message>> first = dealer.Request()
-            .Message(firstPart).Timeout(TimeSpan.FromSeconds(3)).Async();
+            .Message(firstPart).Timeout(TimeSpan.FromSeconds(3)).Async().Reply;
         Task<IReadOnlyList<Message>> retried = dealer.Request()
-            .Message(retriedPart).Timeout(TimeSpan.FromSeconds(3)).Async();
+            .Message(retriedPart).Timeout(TimeSpan.FromSeconds(3)).Async().Reply;
 
         using Received firstReceived = Receive(router);
         Assert.Equal(LargePayload + "-first",
@@ -77,7 +77,7 @@ public sealed class test_request_writable_contract
 
         using Message part = Message.From("connect-before-bind");
         Task<IReadOnlyList<Message>> pending = dealer.Request()
-            .Message(part).Timeout(TimeSpan.FromSeconds(3)).Async();
+            .Message(part).Timeout(TimeSpan.FromSeconds(3)).Async().Reply;
         Assert.False(pending.IsCompleted);
 
         router.Bind(endpoint);
@@ -105,14 +105,20 @@ public sealed class test_request_writable_contract
         dealer.Connect(endpoint);
 
         using Message part = Message.From("close-before-admission");
-        Task<IReadOnlyList<Message>> pending = dealer.Request()
+        RequestSubmission pending = dealer.Request()
             .Message(part).Timeout(TimeSpan.FromSeconds(3)).Async();
-        Assert.False(pending.IsCompleted);
+        Assert.Equal(SubmitResult.Backpressured, pending.Result);
+        Assert.False(pending.Admitted.IsCompleted);
+        Assert.False(pending.Reply.IsCompleted);
 
         dealer.Dispose();
-        ZlinkSubmitException error = await Assert.ThrowsAsync<
-            ZlinkSubmitException>(() => pending);
-        Assert.Equal(ZlinkSubmitException.ErrorCode.Terminated, error.Result);
+        ZlinkSubmitException admittedError = await Assert.ThrowsAsync<
+            ZlinkSubmitException>(() => pending.Admitted);
+        ZlinkSubmitException replyError = await Assert.ThrowsAsync<
+            ZlinkSubmitException>(() => pending.Reply);
+        Assert.Same(admittedError, replyError);
+        Assert.Equal(ZlinkSubmitException.ErrorCode.Terminated,
+            admittedError.Result);
     }
 
     [Fact]
@@ -143,16 +149,23 @@ public sealed class test_request_writable_contract
         using Message admittedPart = Message.From(LargePayload + "-admitted");
         using Message waitingPart = Message.From(LargePayload + "-waiting");
         Task<IReadOnlyList<Message>> admitted = client.Request(serverRid)
-            .Message(admittedPart).Timeout(TimeSpan.FromSeconds(3)).Async();
-        Task<IReadOnlyList<Message>> pending = client.Request(serverRid)
+            .Message(admittedPart).Timeout(TimeSpan.FromSeconds(3)).Async().Reply;
+        RequestSubmission pending = client.Request(serverRid)
             .Message(waitingPart).Timeout(TimeSpan.FromSeconds(3)).Async();
-        Assert.False(pending.IsCompleted);
+        Assert.Equal(SubmitResult.Backpressured, pending.Result);
+        Assert.False(pending.Admitted.IsCompleted);
+        Assert.False(pending.Reply.IsCompleted);
 
         client.DisconnectRid(serverRid);
-        ZlinkSubmitException error = await Assert.ThrowsAsync<
-            ZlinkSubmitException>(() => pending.WaitAsync(
+        ZlinkSubmitException admittedError = await Assert.ThrowsAsync<
+            ZlinkSubmitException>(() => pending.Admitted.WaitAsync(
                 TimeSpan.FromSeconds(3)));
-        Assert.Equal(ZlinkSubmitException.ErrorCode.NotFound, error.Result);
+        ZlinkSubmitException replyError = await Assert.ThrowsAsync<
+            ZlinkSubmitException>(() => pending.Reply.WaitAsync(
+                TimeSpan.FromSeconds(3)));
+        Assert.Same(admittedError, replyError);
+        Assert.Equal(ZlinkSubmitException.ErrorCode.NotFound,
+            admittedError.Result);
         _ = admitted.ContinueWith(static task => _ = task.Exception,
             TaskScheduler.Default);
     }
@@ -172,9 +185,9 @@ public sealed class test_request_writable_contract
 
         using Message sendPart = Message.From("mixed-send");
         using Message requestPart = Message.From("mixed-request");
-        Task send = dealer.Send().Message(sendPart).Async();
+        Task send = dealer.Send().Message(sendPart).Async().Admitted;
         Task<IReadOnlyList<Message>> request = dealer.Request()
-            .Message(requestPart).Timeout(TimeSpan.FromSeconds(3)).Async();
+            .Message(requestPart).Timeout(TimeSpan.FromSeconds(3)).Async().Reply;
         Assert.False(send.IsCompleted);
         Assert.False(request.IsCompleted);
 

@@ -197,7 +197,8 @@ internal static class PerfMultiRoutedRelayServer
                 Task reply;
                 try
                 {
-                    reply = received.Send().Messages(received.Parts).Async();
+                    reply = received.Send().Messages(received.Parts).Async()
+                        .Admitted;
                 }
                 catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))
                 {

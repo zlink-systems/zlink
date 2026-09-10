@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongArray;
@@ -132,6 +133,12 @@ public final class BenchDrivers {
         byte headerPhase,
         SourceMetrics source,
         ClientResources resources) throws Exception {
+        if (operation instanceof RawStack.RawOperation raw
+            && ("request-backpressure".equals(trigger.pattern())
+                || "send-saturation".equals(trigger.pattern()))) {
+            runRaw(trigger, raw, headerPhase, source, resources);
+            return 1;
+        }
         return switch (trigger.pattern()) {
             case "request-serial" -> {
                 runWorkers(1, trigger, operation, headerPhase, source, resources);
@@ -152,6 +159,76 @@ public final class BenchDrivers {
             }
             default -> throw new IllegalArgumentException("unknown pattern " + trigger.pattern());
         };
+    }
+
+    /**
+     * Drives the raw socket until Core reports BACKPRESSURED. Request replies
+     * settle independently and never gate the next submission.
+     */
+    private void runRaw(
+        BenchHttpApplication.Trigger trigger,
+        RawStack.RawOperation operation,
+        byte phase,
+        SourceMetrics source,
+        ClientResources resources) throws InterruptedException {
+        long deadline = BenchMetricHeader.nowNs()
+            + trigger.durationMs() * 1_000_000L;
+        long sequence = 0;
+        long cpuStart = ClientResources.currentThreadCpuNs();
+        Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
+        while (BenchMetricHeader.nowNs() < deadline) {
+            long started = source.begin();
+            RawStack.RawSubmission submission;
+            try {
+                submission = operation.submitRaw(
+                    trigger.payloadBytes(), phase, sequence++);
+            } catch (RuntimeException error) {
+                source.complete(started, false);
+                continue;
+            }
+
+            CompletableFuture<Void> completion = submission.completion();
+            pending.add(completion);
+            completion.whenComplete((ignored, error) -> {
+                source.complete(started, error == null);
+                pending.remove(completion);
+            });
+
+            if (submission.result()
+                == systems.zlink.contracts.sockets.SubmitResult.OK) {
+                continue;
+            }
+            if (submission.result()
+                != systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED) {
+                throw new IllegalStateException(
+                    "raw submit returned " + submission.result());
+            }
+
+            long remainingNanos = deadline - BenchMetricHeader.nowNs();
+            if (remainingNanos <= 0L) {
+                break;
+            }
+            try {
+                submission.admitted().get(remainingNanos,
+                    TimeUnit.NANOSECONDS);
+            } catch (TimeoutException | ExecutionException stopped) {
+                break;
+            }
+        }
+        if (resources != null) {
+            resources.addSubmitCpuNs(
+                ClientResources.currentThreadCpuNs() - cpuStart);
+        }
+
+        CompletableFuture<Void> settled = CompletableFuture.allOf(
+            pending.toArray(CompletableFuture[]::new));
+        try {
+            settled.get(options.drainBoundMs, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException | ExecutionException ignored) {
+            // Per-operation callbacks own success/error accounting. A timeout
+            // is recorded below as abandoned work.
+        }
+        source.recordAbandoned(source.inFlight());
     }
 
     private void runWorkers(

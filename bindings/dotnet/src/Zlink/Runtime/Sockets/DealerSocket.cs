@@ -35,7 +35,7 @@ internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
         return new DealerRequestOperation(this);
     }
 
-    internal Task<IReadOnlyList<Message>> RequestCore(
+    internal RequestSubmission RequestCore(
         IReadOnlyList<Message> parts, TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {

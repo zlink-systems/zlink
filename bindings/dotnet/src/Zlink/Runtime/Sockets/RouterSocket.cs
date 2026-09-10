@@ -66,7 +66,7 @@ internal sealed class RouterSocket : RoutedReceivingSocketBase, IRouterSocket
         return new RouterPeerReplyOperation(this, rid, replyToken);
     }
 
-    internal Task<IReadOnlyList<Message>> RequestCore(RoutingId peerRid,
+    internal RequestSubmission RequestCore(RoutingId peerRid,
         IReadOnlyList<Message> parts, TimeSpan timeout, CancellationToken ct)
     {
         var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(

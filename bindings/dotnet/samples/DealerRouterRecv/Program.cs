@@ -20,7 +20,7 @@ internal static class Program
         SampleSupport.WaitConnected(routerMonitor, dealerMonitor);
 
         using (Message request = Message.From("ping"))
-            await dealer.Send().Message(request).Async();
+            await dealer.Send().Message(request).Async().Admitted;
         using var received = Received.Create();
         if (!router.Recv(received))
             throw new InvalidOperationException("recv failed");

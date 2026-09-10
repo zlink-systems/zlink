@@ -29,7 +29,9 @@ public static class PerfSocketIo
         Message message = CreatePooledMessage(payload);
         try
         {
-            await socket.Send().Message(message).Async().ConfigureAwait(false);
+            SendSubmission submission = socket.Send().Message(message).Async();
+            if (submission.Result == SubmitResult.Backpressured)
+                await submission.Admitted.ConfigureAwait(false);
             return payload.Length;
         }
         finally
@@ -38,7 +40,7 @@ public static class PerfSocketIo
         }
     }
 
-    public static Task SendMeasurementAsync(IDealerSocket socket, byte[] payload,
+    public static SendSubmission SendMeasurementAsync(IDealerSocket socket, byte[] payload,
         SendFlags flags = SendFlags.None)
     {
         _ = flags;
@@ -46,10 +48,12 @@ public static class PerfSocketIo
         Message? tail = MeasurementPartCount == 2 ? MeasurementTail() : null;
         try
         {
-            Task submit = tail != null
+            SendSubmission submission = tail != null
                 ? socket.Send().Message(message).Message(tail).Async()
                 : socket.Send().Message(message).Async();
-            return CompleteMeasurementSend(submit, tail, message);
+            tail?.Dispose();
+            message.Dispose();
+            return submission;
         }
         catch
         {
@@ -64,21 +68,24 @@ public static class PerfSocketIo
     {
         _ = flags;
         int size = message.Size;
-        await socket.Send().Message(message).Async().ConfigureAwait(false);
+        SendSubmission submission = socket.Send().Message(message).Async();
+        if (submission.Result == SubmitResult.Backpressured)
+            await submission.Admitted.ConfigureAwait(false);
         return size;
     }
 
-    public static Task SendMeasurementAsync(IDealerSocket socket,
+    public static SendSubmission SendMeasurementAsync(IDealerSocket socket,
         Message message, SendFlags flags = SendFlags.None)
     {
         _ = flags;
         Message? tail = MeasurementPartCount == 2 ? MeasurementTail() : null;
         try
         {
-            Task submit = tail != null
+            SendSubmission submission = tail != null
                 ? socket.Send().Message(message).Message(tail).Async()
                 : socket.Send().Message(message).Async();
-            return CompleteMeasurementSend(submit, tail, ownedMessage: null);
+            tail?.Dispose();
+            return submission;
         }
         catch
         {
@@ -94,13 +101,14 @@ public static class PerfSocketIo
         Message message = CreatePooledMessage(payload);
         try
         {
-            Task submit = socket.Send(routingId).Message(message).Async();
-            if (submit.IsCompletedSuccessfully)
+            SendSubmission submission = socket.Send(routingId).Message(message)
+                .Async();
+            message.Dispose();
+            if (submission.Result == SubmitResult.Ok)
             {
-                message.Dispose();
                 return new ValueTask<int>(payload.Length);
             }
-            return AwaitTargetedSendAsync(submit, message, payload.Length);
+            return AwaitTargetedSendAsync(submission.Admitted, payload.Length);
         }
         catch
         {
@@ -109,17 +117,18 @@ public static class PerfSocketIo
         }
     }
 
-    public static Task SendMeasurementAsync(IRouterSocket socket,
+    public static SendSubmission SendMeasurementAsync(IRouterSocket socket,
         RoutingId routingId, Message message, SendFlags flags = SendFlags.None)
     {
         _ = flags;
         Message? tail = MeasurementPartCount == 2 ? MeasurementTail() : null;
         try
         {
-            Task submit = tail != null
+            SendSubmission submission = tail != null
                 ? socket.Send(routingId).Message(message).Message(tail).Async()
                 : socket.Send(routingId).Message(message).Async();
-            return CompleteMeasurementSend(submit, tail, ownedMessage: null);
+            tail?.Dispose();
+            return submission;
         }
         catch
         {
@@ -128,7 +137,7 @@ public static class PerfSocketIo
         }
     }
 
-    public static Task SendMeasurementAsync(IRouterSocket socket,
+    public static SendSubmission SendMeasurementAsync(IRouterSocket socket,
         RoutingId routingId, byte[] payload, SendFlags flags = SendFlags.None)
     {
         _ = flags;
@@ -136,55 +145,18 @@ public static class PerfSocketIo
         Message? tail = MeasurementPartCount == 2 ? MeasurementTail() : null;
         try
         {
-            Task submit = tail != null
+            SendSubmission submission = tail != null
                 ? socket.Send(routingId).Message(message).Message(tail).Async()
                 : socket.Send(routingId).Message(message).Async();
-            return CompleteMeasurementSend(submit, tail, message);
+            tail?.Dispose();
+            message.Dispose();
+            return submission;
         }
         catch
         {
             tail?.Dispose();
             message.Dispose();
             throw;
-        }
-    }
-
-    private static Task CompleteMeasurementSend(Task submit, Message? tail,
-        Message? ownedMessage)
-    {
-        if (!submit.IsCompletedSuccessfully)
-            return AwaitMeasurementSendAsync(submit, tail, ownedMessage);
-
-        tail?.Dispose();
-        ownedMessage?.Dispose();
-        return Task.CompletedTask;
-    }
-
-    private static async Task AwaitMeasurementSendAsync(Task submit,
-        Message? tail, Message? ownedMessage)
-    {
-        try
-        {
-            await submit.ConfigureAwait(false);
-        }
-        finally
-        {
-            tail?.Dispose();
-            ownedMessage?.Dispose();
-        }
-    }
-
-    private static async ValueTask<int> AwaitTargetedSendAsync(Task submit,
-        Message message, int size)
-    {
-        try
-        {
-            await submit.ConfigureAwait(false);
-            return size;
-        }
-        finally
-        {
-            message.Dispose();
         }
     }
 
@@ -194,10 +166,11 @@ public static class PerfSocketIo
     {
         _ = flags;
         int size = message.Size;
-        Task submit = socket.Send(routingId).Message(message).Async();
-        if (submit.IsCompletedSuccessfully)
+        SendSubmission submission = socket.Send(routingId).Message(message)
+            .Async();
+        if (submission.Result == SubmitResult.Ok)
             return new ValueTask<int>(size);
-        return AwaitTargetedSendAsync(submit, size);
+        return AwaitTargetedSendAsync(submission.Admitted, size);
     }
 
     private static async ValueTask<int> AwaitTargetedSendAsync(Task submit,
