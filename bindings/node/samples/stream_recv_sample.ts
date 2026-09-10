@@ -31,7 +31,7 @@ async function main() {
       const recv = received.parts[0].data().toString();
       assert.equal(recv, sent);
 
-      await received.send().message(Buffer.from(sent)).submit();
+      await received.send().message(Buffer.from(sent)).submit().admitted;
       const [reply] = await once(client, 'data');
       assert.equal(reply.toString(), sent);
       console.log(`[stream/recv] send: "${sent}" \u2192 recv: "${recv}"`);

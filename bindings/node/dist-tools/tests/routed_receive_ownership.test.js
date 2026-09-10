@@ -20,7 +20,7 @@ const zlink = require('@zlink-systems/zlink');
             const dealer = dealers[index];
             dealer.setRoutingId(zlink.RoutingId.from(`peer-${index}`));
             dealer.connect('inproc://routed-receive-ownership');
-            requests.push(dealer.request().message(`body-${index}`).message('').timeout(1000).submit());
+            requests.push(dealer.request().message(`body-${index}`).message('').timeout(1000).submit().reply);
             strict_1.default.equal(router.recv(received), true);
             const parts = received.parts;
             strict_1.default.ok(Object.isFrozen(parts));

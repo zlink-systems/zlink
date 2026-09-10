@@ -26,7 +26,8 @@ const rounds = num('--rounds', 3);
 
   const header = Buffer.alloc(64, 0x5a);
   const payload = Buffer.alloc(payloadSize, 0xab);
-  const one = () => router.request(peer).message(header).message(payload).timeout(timeoutMs).submit();
+  const one = () => router.request(peer).message(header).message(payload)
+    .timeout(timeoutMs).submit().reply;
 
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {

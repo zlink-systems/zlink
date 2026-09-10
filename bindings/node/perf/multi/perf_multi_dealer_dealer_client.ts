@@ -51,9 +51,9 @@ async function runDealerDealerSendRounds({
   let seq = 1n;
   let turns = 0;
   let nextSocket = 0;
-  let pendingCount = 0;
   let failure = null;
   const available = dealers.map(() => true);
+  const blocked = new Map();
   // Each socket owns one stable JS measurement record. The first Buffer is
   // stamped only while that socket has no admission in flight; the empty
   // second part is the process-wide immutable-length tail.
@@ -61,19 +61,22 @@ async function runDealerDealerSendRounds({
 
   const submitOne = (index) => {
     available[index] = false;
-    pendingCount += 1;
-    let admission;
+    let submission;
     try {
-      admission = submit(dealers[index], records[index]);
+      submission = submit(dealers[index], records[index]);
     } catch (error) {
-      pendingCount -= 1;
       failure = error;
       return;
     }
-    Promise.resolve(admission).then(
-      () => { available[index] = true; pendingCount -= 1; },
-      (error) => { failure = error; pendingCount -= 1; }
-    );
+    if (submission.result === zlink.SubmitResult.Ok) {
+      available[index] = true;
+      return;
+    }
+    const admission = submission.admitted.then(
+      () => { available[index] = true; },
+      (error) => { failure = error; }
+    ).finally(() => blocked.delete(index));
+    blocked.set(index, admission);
   };
 
   while (turns < maxTurns && currentEpochNs() < activeStopNs) {
@@ -86,24 +89,25 @@ async function runDealerDealerSendRounds({
       stampPayload(payloads[index], {
         phase: 1, runId, msgSize, seq: currentSeq
       });
-      // Keep exactly one public async admission per socket. Promise settlement
-      // only republishes availability; it must not gate another socket's submit.
+      // Immediate admission keeps this socket runnable. Only a backpressured
+      // socket leaves the round-robin set until its admission stage resolves.
       submitOne(index);
       if (failure) throw failure;
     }
     nextSocket = (nextSocket + 1) % dealers.length;
     turns += 1;
-    // Immediately admitted Promises resume as microtasks. A real event-loop
-    // turn keeps managed WRITABLE retries and I/O delivery progressing while a
-    // backpressured socket remains pending independently of its peers.
-    await yieldTurn();
+    if (blocked.size === dealers.length) {
+      await Promise.race(blocked.values());
+    } else if (maxTurns !== Number.POSITIVE_INFINITY) {
+      await yieldTurn();
+    }
     if (failure) throw failure;
   }
 
   // The active deadline stops new payloads. Finish managed admissions that the
   // binding may still be retrying before emitting each wire-level stop token.
-  while (pendingCount > 0) {
-    await yieldTurn();
+  while (blocked.size > 0) {
+    await Promise.race(blocked.values());
     if (failure) throw failure;
   }
 
@@ -152,7 +156,11 @@ async function main() {
       msgSize: options.msgSize,
       activeStopNs
     });
-    await Promise.all(dealers.map((dealer) => sendRouted(dealer, [STOP_TOKEN_BYTES])));
+    const stopAdmissions = dealers.map((dealer) =>
+      sendRouted(dealer, [STOP_TOKEN_BYTES])).filter((submission) =>
+      submission.result === zlink.SubmitResult.Backpressured).map((submission) =>
+      submission.admitted);
+    await Promise.all(stopAdmissions);
     console.log(`CLIENT_DONE,${options.msgSize}`);
   } finally {
     rl?.close();
