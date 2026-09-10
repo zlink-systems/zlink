@@ -30,7 +30,37 @@ title: "Handoff 2026-09-10 — framework 메시징 성능 캠페인·작업 방�
 | `bench-pairing` | `~/project/zlink-13-bench-pairing` | #13 | Java 벤치 행을 core ROUTER↔ROUTER·framework ToNode로, 패턴 3개, 3-run | 보고서 읽고 → 문서(`framework/bench/grpc/README.*`, `doc/comparison.*`) 감독자가 반영 → PR(Refs #13) → 나머지 언어 확대 여부 결정 |
 | `java-lane-lookup` (3차) | `~/project/zlink-78-lane-lookup` | #78 | 제출 경로 조회 3회 왕복을 turn 1회로. 검증·timeout 확정을 `submit()`으로 옮기는 것은 **감독자가 허용함**(#78 코멘트) | 테스트 직접 재실행 → 제출 구간 µs·turn 진입 횟수 전후 확인 → PR(Closes #78) |
 
-상태 확인: `bash scripts/dev/job.sh status` (실행 중은 `.artifacts/codex/<job>/.pid`, 보고서는 `summary.md`).
+### 결과를 어디서 받나
+
+job 결과는 두 곳에 남는다.
+
+**1. 보고서 파일** — job이 끝나면 여기에 쓴다. 같은 폴더에 PR 본문 초안 `pr-body.md`, 측정 원본, 로그가 있다.
+
+| job | 보고서 |
+|---|---|
+| `bench-pairing` | `.artifacts/codex/bench-pairing/summary.md` |
+| `java-lane-lookup` | `.artifacts/codex/java-lane-lookup/summary.md` |
+
+**2. 코드** — 작업 worktree의 branch에 커밋으로 남는다. **push는 하지 않으므로** 감독자가 검증한 뒤 PR을 올려야 main에 들어간다.
+
+| job | worktree | branch |
+|---|---|---|
+| `bench-pairing` | `~/project/zlink-13-bench-pairing` | `bench/13-pairing` |
+| `java-lane-lookup` | `~/project/zlink-78-lane-lookup` | `framework-java/78-lane-lookup` |
+
+**끝났는지 보는 법**: `bash scripts/dev/job.sh status` — 상태가 `완료`, summary 열이 `있음`이 되면 끝난 것이다.
+`실패`면 `.artifacts/codex/<job>/job.log` 끝을 본다. `죽음`(summary 없이 종료)이면 로그 끝의 마지막 오류를 본다.
+
+**받은 뒤 감독자가 하는 순서**(오늘 매번 한 절차):
+1. `summary.md`를 읽고 BLOCKERS부터 본다. 작업자가 스펙 충돌로 멈췄으면 그 판단이 옳은지 스펙을 직접 읽고 판정한다.
+2. worktree에서 `git fetch && git rebase origin/main` 뒤 **테스트를 직접 돌린다**(작업자 결과를 그대로 믿지 않는다).
+   Java: `JAVA_HOME=/home/hep7/.cache/zlink/jdk/temurin-25 ./gradlew --no-daemon :zlink-framework-core:test contractTest --continue`.
+3. diff를 읽는다. 특히 스펙 06(state lane)·08(hot path)과 충돌하는 형태가 없는지.
+4. `pr-body.md`를 바탕으로 PR 본문을 쓰되, **감독자가 직접 확인한 것과 작업자 보고를 구분해 적는다.** 측정값은 표로.
+5. 작업 worktree 안에서 `work.sh pr --body <파일> --closes|--refs` → `work.sh done --verified $(git rev-parse HEAD)`.
+   `Refs`면 worktree가 남고 `Closes`면 지워진다. `done` 뒤에는 `cd ~/project/zlink`(셸이 지워진 디렉터리에 남는다).
+6. 결과가 결정 기록에 남을 만하면 `doc/plan/fw-bench-worklog/decisions.ko.md`에 FB-nnn으로 적는다.
+
 3분 주기 감시는 새 세션에서 다시 건다 — Monitor로 `scripts/dev/job.sh watch` 또는 scratchpad의 watch-jobs.sh 형태.
 
 **다른 머신이 맡은 것(건드리지 않는다)**: #63(whole-message API), #60, #61, #65, #77, #79, 그리고 Windows #22·#23·#24.
