@@ -103,8 +103,26 @@ jobs:
             -DWITH_DOCS=OFF
           cmake --build core/build --parallel 2
 
+      # CONTRIBUTING §6: 부하로 깨진 테스트는 단독 재실행 1회로 판정한다. 허용치를
+      # 넓히거나 TIMEOUT을 늘리지 않는다. 재실행도 실패하면 그대로 red다.
       - name: ctest
-        run: ctest --test-dir core/build -j2 --output-on-failure
+        run: |
+          ctest --test-dir core/build -j2 --output-on-failure \
+            || ctest --test-dir core/build --rerun-failed --output-on-failure
+
+      # 러너에서만 나는 실패를 다음 조사가 쫓을 수 있게 환경을 남긴다(Issue #120).
+      - name: Runner environment on failure
+        if: failure()
+        run: |
+          set +e
+          echo '--- nproc / loadavg ---'; nproc; cat /proc/loadavg
+          echo '--- ulimit -a ---'; ulimit -a
+          echo '--- socket summary ---'; ss -s
+          echo '--- sysctl ---'
+          for k in net.core.somaxconn net.ipv4.ip_local_port_range \
+                   net.netfilter.nf_conntrack_max fs.file-max kernel.threads-max; do
+            printf '%s = ' "$k"; sysctl -n "$k" 2>/dev/null || echo '(없음)'
+          done
 
       # 알려진 load flake는 단독 재실행 1회로 판정한다(CONTRIBUTING §5).
       - name: Single-lane suite twice
