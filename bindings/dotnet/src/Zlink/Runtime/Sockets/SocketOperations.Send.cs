@@ -30,14 +30,7 @@ internal sealed class SocketSendOperation : SendOperation,
         _socket.Kernel.Completion.Send(_target, _parts.Parts);
     }
 
-    public bool TrySubmit()
-    {
-        EnsureReady();
-        _submission.MarkSubmittedAfterValidation();
-        return _socket.Kernel.Completion.TrySend(_target, _parts.Parts);
-    }
-
-    public Task Async(CancellationToken cancellationToken = default)
+    public SendSubmission Async(CancellationToken cancellationToken = default)
     {
         EnsureReady();
         _submission.MarkSubmittedAfterValidation();
@@ -83,14 +76,7 @@ internal sealed class ReceivedSendOperationImpl : SendOperation,
         _context.SendCore(_parts.Parts);
     }
 
-    public bool TrySubmit()
-    {
-        EnsureReady();
-        _submission.MarkSubmittedAfterValidation();
-        return _context.TrySendCore(_parts.Parts);
-    }
-
-    public Task Async(CancellationToken cancellationToken = default)
+    public SendSubmission Async(CancellationToken cancellationToken = default)
     {
         EnsureReady();
         _submission.MarkSubmittedAfterValidation();

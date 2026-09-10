@@ -205,7 +205,7 @@ internal static class CoreTestSupport
             using Message message = Message.From(payload);
             try
             {
-                socket.Send().Message(message).Async()
+                socket.Send().Message(message).Async().Admitted
                     .WaitAsync(TimeSpan.FromMilliseconds(timeoutMs))
                     .GetAwaiter().GetResult();
                 return;

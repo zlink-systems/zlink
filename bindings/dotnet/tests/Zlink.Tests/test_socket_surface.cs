@@ -24,11 +24,9 @@ public sealed class test_socket_surface
         Assert.Contains(sendTerminals, method => method.Name == "Submit"
             && method.ReturnType == typeof(void)
             && method.GetParameters().Length == 0);
-        Assert.Contains(sendTerminals, method => method.Name == "TrySubmit"
-            && method.ReturnType == typeof(bool)
-            && method.GetParameters().Length == 0);
+        Assert.DoesNotContain(sendTerminals, method => method.Name == "TrySubmit");
         Assert.Contains(sendTerminals, method => method.Name == "Async"
-            && method.ReturnType == typeof(Task)
+            && method.ReturnType == typeof(SendSubmission)
             && method.GetParameters().Select(p => p.ParameterType)
                 .SequenceEqual([typeof(CancellationToken)]));
         Assert.DoesNotContain(sendTerminals, method => method.Name == "Flags");
@@ -39,9 +37,27 @@ public sealed class test_socket_surface
             && method.ReturnType == typeof(IReadOnlyList<Message>)
             && method.GetParameters().Length == 0);
         Assert.Contains(requestTerminals, method => method.Name == "Async"
-            && method.ReturnType == typeof(Task<IReadOnlyList<Message>>));
+            && method.ReturnType == typeof(RequestSubmission)
+            && method.GetParameters().Select(p => p.ParameterType)
+                .SequenceEqual([typeof(CancellationToken)]));
         Assert.DoesNotContain(requestTerminals, method =>
             method.Name is "Flags" or "Callback");
+
+        Assert.Equal(typeof(SubmitResult),
+            typeof(SendSubmission).GetProperty(nameof(SendSubmission.Result))!
+                .PropertyType);
+        Assert.Equal(typeof(Task),
+            typeof(SendSubmission).GetProperty(nameof(SendSubmission.Admitted))!
+                .PropertyType);
+        Assert.Equal(typeof(SubmitResult),
+            typeof(RequestSubmission).GetProperty(
+                nameof(RequestSubmission.Result))!.PropertyType);
+        Assert.Equal(typeof(Task),
+            typeof(RequestSubmission).GetProperty(
+                nameof(RequestSubmission.Admitted))!.PropertyType);
+        Assert.Equal(typeof(Task<IReadOnlyList<Message>>),
+            typeof(RequestSubmission).GetProperty(
+                nameof(RequestSubmission.Reply))!.PropertyType);
     }
 
     [Fact]
