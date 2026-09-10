@@ -97,7 +97,7 @@ request-backpressure 4096의 **꼬리가 무너진다**.
 | **#97** framework-java G5 | 새 submit 종결자 적응 | main이 깨졌고 B는 브랜치조차 없었다. 사용자 승인 2026-09-10 | **완료** (PR #125, 컴파일·의미 복구까지) |
 | **#99** framework-node G5 | 같음 + `await-thenable` lint 게이트 | 같음. Node는 **조용히** 깨져 더 급했다 | **완료** (PR #135). 감독이 job의 hot-path wrapper를 제거하고 계약 중복도 합쳤다 |
 | **#100** framework-cpp G5 | 같음 | 같음 | **완료** (PR #134). 공유 cpp 패키지가 G4 이전이라 막혀 있던 것을 감독이 재빌드 |
-| **#98** framework-dotnet G5 | 같음 | #92(PR #136)가 머지되며 깨졌다 | **차단** — Issue #140 결정 필요. 적응 47곳은 worktree에 준비됨 |
+| **#98** framework-dotnet G5 | 같음 | #92(PR #136)가 머지되며 깨졌다 | **F1 완료** (PR #155). #140은 오판이라 닫았다 |
 | **#108** | #85 registry turn 1회 회귀 고정 테스트 | 감독 리뷰에서 발견 | 미착수 |
 | **#110** | Rust 테스트 sleep 의존 | 로컬 패키징을 3번 막았다 | 미착수 |
 | **#111** | Node 수신 readiness 공개 API | job의 D 판정을 감독이 기각하고 재정의. **사용자 승인 완료** | 스펙 문안 대기(감독) |
@@ -108,11 +108,110 @@ request-backpressure 4096의 **꼬리가 무너진다**.
 | **#126** | 바인딩 스펙 산문이 옛 Promise 계약을 말한다 | framework 파손 조사 중 발견. **잘못된 호출을 문서가 승인하고 있었다** | **완료 (머신 B, PR #128·#129)** — 7언어 per-lang README + policy·model 산문을 결과 객체 계약으로 정합 |
 | **#133** | 벤치 클라이언트가 예외를 버리고 개수만 센다 | #48의 `client errors=2` 원인을 확정할 수 없었다 | job 진행 중 |
 | **#137** | C++ 벤치가 `catch` 안에서 `co_await` 해 main에서 컴파일 안 됨 | G4(#122)가 컴파일 못 한 채 머지. `framework/bench/**`는 어떤 CI도 안 봄 | **완료** (PR #139) |
-| **#140** | `TrySubmit` 제거로 `SendFlags.DontWait` 대응 수단 없음 | framework .NET 컴파일 차단. 상위 보상은 AGENTS §3 위반 | **B 결정 대기** |
+| **#140** | `TrySubmit` 제거로 `SendFlags.DontWait` 대응 수단 없음 | framework .NET 컴파일 차단이라고 봤다 | **감독 오판 — 닫음.** 제거는 설계였고(스펙 `01-submit-and-completion.ko.md:446`), framework 2곳이 순간 backpressure를 terminal 거부로 바꿔 메시지를 잃던 쪽이 결함이었다 |
 | — | tooling contract smoke가 Core prefix를 전달하지 않는다 | #100 검증 중 발견 | 미보고(#117에 합칠 것) |
 | — | 로컬 패키지 post-G4 재빌드 | 공유 0.18.0 C++ 패키지가 G4 이전 헤더였다 | **완료** |
 
-**G4 성능 활용**(`OK`면 admission 대기 없이 연속 제출)은 아직 **아무에게도 할당되지 않았다.** 언어별 G5가 끝난 뒤 A가 맡는다.
+### G5의 정확한 잔여 — F1은 끝났고 **F2·F2-a만 남았다** (2026-09-11 감독 확인)
+
+#97~#100이 아직 OPEN인 이유를 오해하기 쉽다. 세 가지를 구분한다.
+
+| 조각 | 무엇 | 상태 |
+|---|---|---|
+| **F1** | 내부 binding 호출을 결과 객체 소비로 (`.reply()`/`.admitted()`) | **4언어 완료** — PR #125·#155·#135·#134 |
+| **G1(스펙)** | `01-submit-and-completion.{ko,en}.md` §2·§4·§5·§15·§16 + **5개 언어 interfaces 문서** | **완료.** 시그니처가 이미 문서에 확정돼 있다 |
+| **F2·F2-a** | framework 공개 표면에 **동기 blocking 종결자** 추가, runtime 실행 문맥에서는 `InvalidOperation` | **미착수 — 이것이 #97~#100의 잔여 전부다** |
+
+확정된 이름(스펙 §16, `async-coroutine-policy.ko.md` §6):
+
+| 언어 | 비동기(현행) | 동기 blocking(추가) |
+|---|---|---|
+| Java·Node | `submit()` | `submit_sync()` |
+| Kotlin | wrapper `await()` | 추가 없음 — Java 표면 그대로 |
+| .NET | `Async()` | `Submit()` |
+| C++ | `async()` | `submit()` |
+
+F2-a 판정 술어는 **언어마다 한 곳에 모은다.** 이미 있는 표지를 합쳐 쓰고 새로 만들지 않는다 —
+application job context(handler turn) · Spot activation(Spot turn) · state lane current.
+실패는 **부작용 전에** 나야 한다. 제출한 뒤 던지면 메시지를 잃는다.
+
+**Node 주의** — Node는 단일 스레드다. 문서가 정의한 blocking 의미를 event loop 위에서 정직하게
+만족시킬 수 없으면 **억지로 구현하지 말고 D(스펙 공백)로 보고**하게 했다. busy-wait·event loop
+thread의 `Atomics.wait`은 금지다.
+
+**G4 성능 활용**(`OK`면 admission 대기 없이 연속 제출)은 **#151**로 열려 있다. 언어별 G5가 끝난 뒤 A가 맡는다.
+**#47 재판정의 선행 조건이다.**
+
+### 2026-09-11 추가 할당 (계속)
+
+| Issue | 무엇 | 상태 |
+|---|---|---|
+| **#45** | envelope header를 message마다 새로 만들지 않는다 (4언어) | job `envelope-45` 진행 중 |
+| **#60** | .NET oversized server reply가 `CapacityExceeded` 대신 deadline까지 남는다 | job `dotnet-oversized-60` 진행 중 |
+| **#82** | Node application `Rejected`가 .NET spot-route client에서 `internal_failure`로 바뀐다 | job `node-rejected-82` 진행 중. **본문이 비어 있어 재현이 1단계** |
+| **#111** | Node 수신 readiness 공개 API | 스펙 문안 **완료**(PR #163). job `node-readiness-111` 구현 진행 중 |
+| **#158** | C++ send-saturation에서 owner FIFO가 53% 버린다 | phase 1 판정 완료(거부 자체는 스펙 허용, **drop 지표 부재와 벤치의 `completed == received` 가정이 결함**). job `cpp-ownercap-158b` 진행 중 |
+| **#97~#100** | 위 F2·F2-a | 브리프 4개 작성 완료, 슬롯 대기 |
+
+### 2026-09-11 오후 판정·환경 (계속)
+
+**#164/#165 — main이 4일간 red였고 아무도 몰랐다.** `bindings/python/tests/test_perf_multi_runner.py`
+단언 2건이 2026-09-07 러너 정책 정합(`b93b176061`, `d634417a37`) 이전 값을 들고 있었다.
+**이 테스트를 돌리는 CI가 없었다.** #16의 PR 검증이 처음 찾아냈다. 구현은 옳고 테스트가 낡았다 —
+C 레퍼런스(`bindings/c/perf/run_comparison.py:1255`, `:3830-3845`)가 근거다. PR #165 머지.
+
+**#82 닫음 — 재현되지 않는다.** Node ↔ .NET 양방향 5회씩 10/10에서 `kind=rejected|origin=application`이
+보존된다. 그 경로에는 이미 교차언어 단언이 있다(`node_dotnet_smoke.js:531`). 4언어가 모두
+"framework exception이면 그 kind, 아니면 `internal_failure`"로 동일하며, `internal_failure`가
+나오는 유일한 조건은 오류 모델 §5 마지막 항목이 정한 그대로다.
+
+**#143 순서 결정** — 세 언어의 선행 조건이 다르다. C++(#49)만 CLOSED라 지금 가능하고,
+.NET(#48)·Node(#50)은 그 이슈가 머지된 뒤다. 한 job으로 묶지 않는다.
+
+**#15는 아직 선행 조건이 없다** — `ZLINK_CTX_OPT_BLOCKY`가 Core header에 살아 있고 binding이
+`MaxMessageSize`를 아직 노출한다. binding 1.0.0에서 실제로 제거된 뒤의 정리 작업이므로
+1.0.0 마일스톤으로 옮길 것을 제안했다. **0.18.0을 막지 않는다.**
+
+**#87 Core 릴리스 사전 검사는 이미 PASS다.** `scripts/dev/release-check.sh core 0.18.0` →
+버전·릴리스 노트·Conan/vcpkg SHA 전부 PASS. `hotpath_gate`도 release-gate 빌드에서 PASS.
+남은 것은 태그·dispatch(외부 공개 행위)와 바인딩 4언어 릴리스(머신 B)다.
+
+### 환경 — 이 머신에 없던 것 두 가지 (2026-09-11에 찾아 고침)
+
+**1. JDK 25가 없어서 framework Java가 아예 빌드되지 않았다.**
+`zlink-jvm-baseline.settings.gradle.kts`가 `zlinkJavaLanguageVersion = 25`를 강제하는데
+(`b6b5fcaa97`, 2026-09-09) toolchain auto-download repository가 설정돼 있지 않다. 그래서
+컴파일 오류가 아니라 **의존성 해석 단계에서 죽는다.**
+
+```
+Cannot find a Java installation ... matching: {languageVersion=25, ...}
+Toolchain download repositories have not been configured.
+```
+
+**이 증상을 코드 문제로 오진하기 쉽다** — `envelope-45` job이 "binding API에
+`toCompletableFuture()`가 없다"고 보고했는데 실제 원인은 이것이었다(binding jar는 class file
+version 69 = Java 25로 빌드돼 있고 API는 정상이다). Temurin 25를 `/usr/lib/jvm`에 풀어 해결.
+
+**2. framework C++ 빌드에는 환경변수 두 개가 필요하다.**
+```bash
+export VCPKG_ROOT=/home/hep7/.cache/zlink/pr/vcpkg
+export ZLINK_LOCAL_PACKAGE_ROOT=/home/hep7/project/zlink/.artifacts/wsl
+```
+`base` preset의 toolchain이 `$env{VCPKG_ROOT}`이고 `CMakeLists.txt:63`이
+`$ENV{ZLINK_LOCAL_PACKAGE_ROOT}`로 zlink_cpp prefix를 만든다. worktree의 빈
+`.artifacts/wsl`로 fallback 하면 `zlink_cpp 0.18.0`을 못 찾는다.
+**설정을 바꿔 재configure 할 때는 `rm -rf build/<preset>` 부터 한다.**
+
+### 이 머신에서 판정할 수 없는 것 (플랫폼 차단)
+
+WSL x64에서는 재현도 검증도 불가능하다. 0.18.0 마감 때 **별도로 분류**한다.
+
+| Issue | 플랫폼 |
+|---|---|
+| #17 .NET DrainCoordinator hang | macOS |
+| #77 Node RouteMesh bootstrap 102 | macOS ARM |
+| #18 Node Chromium Stream Connector E2E | Windows CI |
+| #23 framework C++ sample preset | Windows |
 
 **머신 B 바인딩 현황 알림 (2026-09-11, B 감독)** — A의 G5 계획용:
 - G4 바인딩 머지: cpp #122 · node #123 · python #121 · **go #94(#130)**. → main에 0.18.0 바인딩 소스 반영.
@@ -185,6 +284,11 @@ G4 이후 **패키지 신선도** 문제가 연달아 작업을 막았다. 전�
 | Node에서 `Property 'admitted' does not exist` | worktree가 자체 `.artifacts/wsl`을 갖고 옛 tgz 사용 | 공유로 symlink + tarball 재설치 |
 | bench C++ `request_submission_t is not a member` | job-local 패키지(0.17.6)에 고정 | 캐시 지우고 `ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT`로 재설정 |
 | `tooling_contract` 실패 | smoke가 **Core prefix를 전달하지 않음** | `CMAKE_PREFIX_PATH` 환경변수로 전달 |
+
+**`hotpath_gate`는 반드시 `scripts/build-core.sh release-gate`(LTO ON)로 빌드한 트리에서 돌린다.**
+기준값이 LTO ON에서 만들어졌다. LTO OFF로 돌리면 4~5개 cell이 23~32% 초과로 나오고, 그것은
+회귀가 아니라 **조건 차이**다. 2026-09-11에 이 한 줄을 몰라 "0.18.0 릴리스 차단"으로 잘못
+보고했다(#159, 정정 후 닫음).
 
 **규칙: 바인딩이 바뀐 뒤에는 `build-wsl.sh`를 돌리고, NuGet은 캐시까지 지운다.** 버전이 같으면 아무것도 갱신되지 않는다.
 

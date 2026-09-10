@@ -475,11 +475,25 @@ napi_value create_router_recv_message_value (napi_env env,
                                              uint64_t reply_token,
                                              zlink_msg_t *parts,
                                              size_t part_count,
-                                             bool prefer_managed_single_part,
+                                             bool prefer_managed_parts,
                                              napi_value routing_id_storage)
 {
     napi_value obj;
-    if (part_count == 1 && !prefer_managed_single_part) {
+    if (prefer_managed_parts) {
+        // Terminal readers own JS Buffers for the whole record. Materialize
+        // every part before returning so payload access and close stay on the
+        // JS side regardless of multipart width.
+        napi_create_array_with_length (env, part_count, &obj);
+        for (size_t i = 0; i < part_count; ++i) {
+            napi_value data = create_received_message_buffer (env, &parts[i]);
+            if (!data)
+                return NULL;
+            napi_set_element (env, obj, static_cast<uint32_t> (i), data);
+        }
+        napi_value rid = create_routing_id_value_reusing (
+          env, routing_id, routing_id_storage);
+        napi_set_named_property (env, obj, "routingId", rid);
+    } else if (part_count == 1) {
         napi_create_object (env, &obj);
         napi_value native_message = move_message_to_native_frame_value (env, &parts[0]);
         if (!native_message)
@@ -505,7 +519,7 @@ napi_value create_router_recv_message_value (napi_env env,
 int router_recv_message_value (napi_env env,
                                void *router,
                                int32_t flags,
-                               bool prefer_managed_single_part,
+                               bool prefer_managed_parts,
                                napi_value routing_id_storage,
                                napi_value *out)
 {
@@ -524,7 +538,7 @@ int router_recv_message_value (napi_env env,
     copy_routing_id (&peer_rid, peer_rid_ptr);
     *out = create_router_recv_message_value (
       env, peer_rid, reply_token, parts.data (), parts.size (),
-      prefer_managed_single_part, routing_id_storage);
+      prefer_managed_parts, routing_id_storage);
     parts.close ();
     return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
 }
@@ -2950,14 +2964,14 @@ napi_value router_recv_message (napi_env env, napi_callback_info info)
     int32_t flags = 0;
     if (argc >= 2)
         napi_get_value_int32 (env, argv[1], &flags);
-    bool prefer_managed_single_part = false;
+    bool prefer_managed_parts = false;
     if (argc >= 3)
-        napi_get_value_bool (env, argv[2], &prefer_managed_single_part);
+        napi_get_value_bool (env, argv[2], &prefer_managed_parts);
     napi_value routing_id_storage = argc >= 4 ? argv[3] : NULL;
 
     napi_value out = NULL;
     const int rc = router_recv_message_value (
-      env, router, flags, prefer_managed_single_part, routing_id_storage, &out);
+      env, router, flags, prefer_managed_parts, routing_id_storage, &out);
     if (rc != ZLINK_RECV_OK)
         return throw_last_error (env, "routerRecvMessage failed");
     return out;
@@ -2970,14 +2984,14 @@ napi_value router_try_recv_message (napi_env env, napi_callback_info info)
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     void *router = NULL;
     napi_get_value_external (env, argv[0], &router);
-    bool prefer_managed_single_part = false;
+    bool prefer_managed_parts = false;
     if (argc >= 2)
-        napi_get_value_bool (env, argv[1], &prefer_managed_single_part);
+        napi_get_value_bool (env, argv[1], &prefer_managed_parts);
     napi_value routing_id_storage = argc >= 3 ? argv[2] : NULL;
 
     napi_value out = NULL;
     const int rc = router_recv_message_value (
-      env, router, ZLINK_RECV_FLAGS_DONTWAIT, prefer_managed_single_part,
+      env, router, ZLINK_RECV_FLAGS_DONTWAIT, prefer_managed_parts,
       routing_id_storage, &out);
     if (rc != ZLINK_RECV_OK) {
         if (zlink_errno () == EAGAIN) {
