@@ -577,7 +577,8 @@ using TypeScript spelling.
   Other completions the synchronous call receives are handed to the owner's drain rule (resubmit after
   NO_DATA) once it returns.
 - DEALER/ROUTER request provides `submit_sync(): Message[]` and
-  `submit(): Promise<Message[]>` and retains the builder's reply timeout.
+  `submit(): RequestSubmission` (`result`, `admitted`, plus `reply: Promise<Message[]>`) and retains
+  the builder's reply timeout.
 - The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
   `ReplySubmitOperation.submit(): void`. It returns no Promise and submits a
   terminal reply or error reply with one native call. A DEALER peer is subject
@@ -863,9 +864,20 @@ references remain valid only until the next recv entry or `close()`. Before the 
 ### Public interface
 
 ```ts
+export interface SendSubmission {
+  result: SubmitResult;        // OK | BACKPRESSURED, submit-time snapshot (synchronous field)
+  admitted: Promise<void>;     // completed when result is OK
+}
+
+export interface RequestSubmission {
+  result: SubmitResult;
+  admitted: Promise<void>;
+  reply: Promise<Message[]>;   // completes after successful admission
+}
+
 export interface SendSubmitOperation {
   message(message: MessageLike): SendSubmitOperation;
-  submit(): Promise<void>;
+  submit(): SendSubmission;
   submit_sync(): void;
 }
 
@@ -881,7 +893,7 @@ export class ReplyToken {
 export interface RequestSubmitOperation {
   message(message: MessageLike): RequestSubmitOperation;
   timeout(timeoutMs: number): RequestSubmitOperation;
-  submit(): Promise<Message[]>;
+  submit(): RequestSubmission;
   submit_sync(): Message[];
 }
 

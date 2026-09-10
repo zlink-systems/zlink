@@ -533,8 +533,8 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - **Node는 JS thread 하나이므로 동기 terminal이 실행되는 동안 그 호출이 completion 소비자다.**
   지정 owner(public poller)가 같은 thread에서 동시에 진행할 수 없기 때문이다. 동기 호출이
   받은 다른 completion은 반환 뒤 owner의 drain 규칙(NO_DATA 뒤 재제출)으로 전달한다.
-- DEALER/ROUTER request는 `submit_sync(): Message[]`와 `submit(): Promise<Message[]>`를
-  제공하고 builder의 reply timeout을 유지한다.
+- DEALER/ROUTER request는 `submit_sync(): Message[]`와 `submit(): RequestSubmission`(`result`·
+  `admitted`에 `reply: Promise<Message[]>` 추가)을 제공하고 builder의 reply timeout을 유지한다.
 - Raw ROUTER/`Received` reply의 terminal은
   `ReplySubmitOperation.submit(): void`인 동기 one-shot이다. Promise를 반환하지 않고
   terminal reply 또는 error reply를 native 호출 한 번으로 제출한다. DEALER peer에는 Application
