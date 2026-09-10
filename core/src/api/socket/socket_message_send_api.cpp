@@ -587,6 +587,24 @@ extern "C" int zlink_socket_publish_internal (void *socket_,
     return publish_socket_parts (handle, topic_id_, parts_, part_count_, flags_);
 }
 
+zlink_submit_result_t zlink_send (
+  void *s_, zlink_msg_t *parts_, size_t part_count_,
+  zlink_send_flags_t flags_, void *user_context_,
+  zlink_completion_id_t *completion_id_out_)
+{
+    if (completion_id_out_)
+        *completion_id_out_ = 0;
+    socket_handle_t handle = as_socket_handle (s_);
+    return zlink::part_helper_internal::submit_whole_record (
+      handle.socket, parts_, part_count_, 0,
+      [=] (zlink_msg_t *part_, zlink_part_flag_t part_flag_) {
+          return zlink_send_part (
+            s_, part_, flags_, part_flag_,
+            part_flag_ == ZLINK_PART_FINAL ? user_context_ : NULL,
+            part_flag_ == ZLINK_PART_FINAL ? completion_id_out_ : NULL);
+      });
+}
+
 zlink_submit_result_t zlink_send_part (void *s_,
                                        zlink_msg_t *part_,
                                        zlink_send_flags_t flags_,
@@ -672,6 +690,24 @@ zlink_submit_result_t zlink_send_part (void *s_,
     return submit_completion_aware_part (
       s_, socket_guard, NULL, part_, part_flag_, user_context_,
       completion_id_out_, spec);
+}
+
+zlink_submit_result_t zlink_send_rid (
+  void *s_, const zlink_routing_id_t *target_rid_,
+  zlink_msg_t *parts_, size_t part_count_, zlink_send_flags_t flags_,
+  void *user_context_, zlink_completion_id_t *completion_id_out_)
+{
+    if (completion_id_out_)
+        *completion_id_out_ = 0;
+    socket_handle_t handle = as_socket_handle (s_);
+    return zlink::part_helper_internal::submit_whole_record (
+      handle.socket, parts_, part_count_, !target_rid_ ? EFAULT : 0,
+      [=] (zlink_msg_t *part_, zlink_part_flag_t part_flag_) {
+          return zlink_send_part_rid (
+            s_, target_rid_, part_, flags_, part_flag_,
+            part_flag_ == ZLINK_PART_FINAL ? user_context_ : NULL,
+            part_flag_ == ZLINK_PART_FINAL ? completion_id_out_ : NULL);
+      });
 }
 
 zlink_submit_result_t zlink_send_part_rid (void *s_,
@@ -770,6 +806,19 @@ zlink_submit_result_t zlink_send_part_rid (void *s_,
     return submit_completion_aware_part (
       s_, socket_guard, target_rid_, part_, part_flag_, user_context_,
       completion_id_out_, spec);
+}
+
+zlink_submit_result_t zlink_publish (
+  void *subject_, const char *topic_id_, zlink_msg_t *parts_,
+  size_t part_count_, zlink_send_flags_t flags_)
+{
+    socket_handle_t handle = as_socket_handle (subject_);
+    return zlink::part_helper_internal::submit_whole_record (
+      handle.socket, parts_, part_count_, !topic_id_ ? EFAULT : 0,
+      [=] (zlink_msg_t *part_, zlink_part_flag_t part_flag_) {
+          return zlink_publish_part (
+            subject_, topic_id_, part_, flags_, part_flag_);
+      });
 }
 
 zlink_submit_result_t zlink_publish_part (void *subject_,

@@ -1095,6 +1095,32 @@ zlink_submit_result_t request_part_common (
 }
 }
 
+zlink_submit_result_t zlink_request (
+  void *s_, const zlink_routing_id_t *target_router_rid_or_null_,
+  zlink_msg_t *parts_, size_t part_count_, zlink_send_flags_t flags_,
+  uint32_t timeout_ms_, void *user_context_,
+  zlink_completion_id_t *completion_id_out_)
+{
+    if (completion_id_out_)
+        *completion_id_out_ = 0;
+    socket_handle_t handle = as_socket_handle (s_);
+    const int argument_errno =
+      handle.socket && socket_type (handle) == ZLINK_CORE_SOCKET_ROUTER
+          && !target_router_rid_or_null_
+        ? EFAULT : 0;
+    return zlink::part_helper_internal::submit_whole_record (
+      handle.socket, parts_, part_count_, argument_errno,
+      [=] (zlink_msg_t *part_, zlink_part_flag_t part_flag_) {
+          // Timeout and context describe the whole request. Only its final
+          // internal step creates the completion and starts the timeout.
+          const bool final = part_flag_ == ZLINK_PART_FINAL;
+          return zlink_request_part (
+            s_, target_router_rid_or_null_, part_, flags_, part_flag_,
+            final ? timeout_ms_ : 0, final ? user_context_ : NULL,
+            final ? completion_id_out_ : NULL);
+      });
+}
+
 zlink_submit_result_t zlink_request_part (
   void *s_, const zlink_routing_id_t *target_router_rid_or_null_,
   zlink_msg_t *part_, zlink_send_flags_t flags_,
@@ -1185,6 +1211,19 @@ zlink_submit_result_t zlink_request_part (
         && completion_id_out_)
         *completion_id_out_ = accepted_completion_id;
     return result;
+}
+
+zlink_submit_result_t zlink_reply (
+  void *router_, const zlink_routing_id_t *source_rid_,
+  zlink_reply_token_t reply_token_, zlink_msg_t *parts_, size_t part_count_)
+{
+    socket_handle_t handle = as_socket_handle (router_);
+    return zlink::part_helper_internal::submit_whole_record (
+      handle.socket, parts_, part_count_, !source_rid_ ? EFAULT : 0,
+      [=] (zlink_msg_t *part_, zlink_part_flag_t part_flag_) {
+          return zlink_reply_part (
+            router_, source_rid_, reply_token_, part_, part_flag_);
+      });
 }
 
 zlink_submit_result_t zlink_reply_part (

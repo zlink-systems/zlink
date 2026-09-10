@@ -14,6 +14,7 @@
 
 #include "sockets/common/socket_runtime.hpp"
 #include "api/socket/inline_msg_buffer_internal.hpp"
+#include "api/message/submit_result_internal.hpp"
 #include <zlink.h>
 
 namespace zlink
@@ -248,6 +249,42 @@ void abort_send_step (const std::shared_ptr<handle_state_t> &state_,
 void abort_current_non_publish_send_sequence (void *handle_);
 void abort_recv_step (const std::shared_ptr<handle_state_t> &state_);
 void cleanup_socket (zlink::socket_base_t *socket_);
+
+int validate_whole_send (zlink::socket_base_t *socket_, zlink_msg_t *parts_,
+                         size_t part_count_, int argument_errno_);
+
+template <typename SubmitPart>
+zlink_submit_result_t submit_whole_record (
+  zlink::socket_base_t *socket_, zlink_msg_t *parts_, size_t part_count_,
+  int argument_errno_, SubmitPart submit_part_)
+{
+    if (validate_whole_send (socket_, parts_, part_count_, argument_errno_)
+        != 0) {
+        const int saved_errno = errno;
+        if (parts_)
+            for (size_t i = 0; i < part_count_; ++i)
+                consume_send_part (&parts_[i]);
+        errno = saved_errno;
+        return zlink::submit_result_internal::from_errno (saved_errno);
+    }
+
+    for (size_t i = 0; i < part_count_; ++i) {
+        const zlink_submit_result_t result = submit_part_ (
+          &parts_[i], i + 1 == part_count_ ? ZLINK_PART_FINAL
+                                         : ZLINK_PART_MORE);
+        if (result != ZLINK_SUBMIT_OK) {
+            // The submit path discards its staged prefix on failure. Consume
+            // the unvisited suffix too: retries always rebuild a whole record.
+            const int saved_errno = errno;
+            for (++i; i < part_count_; ++i)
+                consume_send_part (&parts_[i]);
+            errno = saved_errno;
+            return result;
+        }
+    }
+    return ZLINK_SUBMIT_OK;
+}
+
 #ifdef ZLINK_BUILD_TESTS
 void test_fail_next_send_caller_identity_allocation ();
 #endif

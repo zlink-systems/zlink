@@ -459,6 +459,30 @@ void zlink::part_helper_internal::consume_send_part (zlink_msg_t *part_)
     zlink::request_reply::consume_send_frame (part_);
 }
 
+int zlink::part_helper_internal::validate_whole_send (
+  zlink::socket_base_t *socket_, zlink_msg_t *parts_, size_t part_count_,
+  int argument_errno_)
+{
+    if (!parts_ || argument_errno_ != 0) {
+        errno = !parts_ ? EFAULT : argument_errno_;
+        return -1;
+    }
+    if (part_count_ == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!socket_)
+        return -1;
+    // Whole records cannot complete a prefix staged through the additive
+    // part API. Other threads' logical send slots remain independent.
+    if (current_send_sequence_active (socket_)
+        || socket_->part_helper_send_active ()) {
+        errno = EBUSY;
+        return -1;
+    }
+    return 0;
+}
+
 bool zlink::part_helper_internal::try_rollback_send_scope_locked (
   send_sequence_state_t *state_)
 {

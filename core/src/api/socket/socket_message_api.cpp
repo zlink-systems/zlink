@@ -460,14 +460,17 @@ zlink_recv_result_t zlink_recv (
     return ZLINK_RECV_OK;
 }
 
-zlink_recv_result_t zlink_subscribe_part (void *subject_,
+static zlink_recv_result_t subscribe_recv (void *subject_,
                                           const zlink_routing_id_t **source_rid_out_,
                                           char *topic_id_buf_,
                                           size_t topic_id_capacity_,
                                           size_t *topic_id_len_out_,
                                           zlink_msg_t *part_out_,
                                           zlink_part_flag_t *has_more_out_,
-                                          zlink_recv_flags_t flags_)
+                                          zlink_recv_flags_t flags_,
+                                          bool whole_record_,
+                                          size_t parts_capacity_,
+                                          size_t *part_count_out_)
 {
     if (!subject_) {
         errno = EFAULT;
@@ -479,7 +482,8 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
         return zlink::recv_result_internal::from_errno (errno);
     handle.socket->clear_last_recv_source_rid ();
 
-    if (!topic_id_len_out_ || !part_out_ || !has_more_out_
+    if (!topic_id_len_out_ || !part_out_
+        || (whole_record_ ? !part_count_out_ : !has_more_out_)
         || (topic_id_capacity_ > 0 && !topic_id_buf_)) {
         errno = EFAULT;
         return zlink::recv_result_internal::from_errno (errno);
@@ -501,7 +505,8 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
         sequence_active = helper_state->recv.active;
         if (sequence_active
             && (helper_state->recv.family != zlink::part_helper_internal::recv_family_subscribe
-                || helper_state->recv.owner_thread != std::this_thread::get_id ())) {
+                || helper_state->recv.owner_thread != std::this_thread::get_id ()
+                || (whole_record_ && helper_state->recv.next_part_index != 0))) {
             errno = EBUSY;
             return zlink::recv_result_internal::from_errno (errno);
         }
@@ -551,21 +556,29 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
           (reinterpret_cast<const zlink::msg_t *> (&first_payload)->flags ()
            & zlink::msg_t::more)
           != 0;
-        if (!first_payload_has_more && topic_id_capacity_ >= topic_id.size ()) {
+        if (!first_payload_has_more && topic_id_capacity_ >= topic_id.size ()
+            && (!whole_record_ || parts_capacity_ >= 1)) {
             // A terminal payload has no continuation state to own. Return it
             // directly and reserve the buffered sequence machinery for actual
             // multipart subscriptions.
             *topic_id_len_out_ = topic_id.size ();
             if (!topic_id.empty ())
                 memcpy (topic_id_buf_, topic_id.data (), topic_id.size ());
-            if (zlink_msg_move (part_out_, &first_payload) != 0) {
+            const int transfer_rc = whole_record_
+                                      ? zlink_msg_adopt (part_out_, &first_payload)
+                                      : zlink_msg_move (part_out_, &first_payload);
+            if (transfer_rc != 0) {
                 zlink_msg_close (&first_payload);
                 errno = EFAULT;
                 return zlink::recv_result_internal::from_errno (errno);
             }
             if (source_rid_out_)
                 *source_rid_out_ = NULL;
-            *has_more_out_ = ZLINK_PART_FINAL;
+            if (whole_record_)
+                *part_count_out_ = 1;
+            else
+                *has_more_out_ = ZLINK_PART_FINAL;
+            errno = 0;
             return ZLINK_RECV_OK;
         }
 
@@ -658,7 +671,11 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
     {
         std::lock_guard<std::mutex> lock (helper_state->mutex);
         *topic_id_len_out_ = helper_state->recv.topic_id.size ();
-        if (topic_id_capacity_ < helper_state->recv.topic_id.size ())
+        if (whole_record_)
+            *part_count_out_ = helper_state->recv.buffered_parts.size ();
+        if (topic_id_capacity_ < helper_state->recv.topic_id.size ()
+            || (whole_record_
+                && parts_capacity_ < helper_state->recv.buffered_parts.size ()))
             copy_errno = ENOBUFS;
         else if (!helper_state->recv.topic_id.empty ())
             memcpy (topic_id_buf_, helper_state->recv.topic_id.data (),
@@ -667,6 +684,22 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
     if (copy_errno != 0) {
         errno = copy_errno;
         return zlink::recv_result_internal::from_errno (errno);
+    }
+
+    if (whole_record_) {
+        zlink::part_helper_internal::recv_record_metadata_t metadata;
+        const zlink::part_helper_internal::staged_recv_record_result_t rc =
+          zlink::part_helper_internal::try_take_staged_recv_record (
+            helper_state, zlink::part_helper_internal::recv_family_subscribe,
+            part_out_, parts_capacity_, part_count_out_, &metadata);
+        if (rc != zlink::part_helper_internal::staged_recv_record_taken)
+            return zlink::recv_result_internal::from_errno (errno);
+        for (size_t i = 0; i < *part_count_out_; ++i)
+            zlink::request_reply::clear_request_reply_metadata (&part_out_[i]);
+        if (source_rid_out_)
+            *source_rid_out_ = NULL;
+        errno = 0;
+        return ZLINK_RECV_OK;
     }
 
     if (zlink::part_helper_internal::take_recv_part (
@@ -683,4 +716,27 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
         *source_rid_out_ = NULL;
     zlink::part_helper_internal::complete_recv_step (helper_state, *has_more_out_);
     return ZLINK_RECV_OK;
+}
+
+zlink_recv_result_t zlink_subscribe (
+  void *sub_, const zlink_routing_id_t **source_rid_out_,
+  char *topic_id_buf_, size_t topic_id_capacity_, size_t *topic_id_len_out_,
+  zlink_msg_t *parts_out_, size_t parts_capacity_, size_t *part_count_out_,
+  zlink_recv_flags_t flags_)
+{
+    return subscribe_recv (
+      sub_, source_rid_out_, topic_id_buf_, topic_id_capacity_,
+      topic_id_len_out_, parts_out_, NULL, flags_, true, parts_capacity_,
+      part_count_out_);
+}
+
+zlink_recv_result_t zlink_subscribe_part (
+  void *sub_, const zlink_routing_id_t **source_rid_out_,
+  char *topic_id_buf_, size_t topic_id_capacity_, size_t *topic_id_len_out_,
+  zlink_msg_t *part_out_, zlink_part_flag_t *has_more_out_,
+  zlink_recv_flags_t flags_)
+{
+    return subscribe_recv (
+      sub_, source_rid_out_, topic_id_buf_, topic_id_capacity_,
+      topic_id_len_out_, part_out_, has_more_out_, flags_, false, 0, NULL);
 }
