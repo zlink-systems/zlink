@@ -309,7 +309,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         // SourceSpotId is the remote sender's spot (or empty for
         // session-relayed actor sends), so it cannot address the local consumer.
         var readyRecord = readyBatch[index];
-        var admissions = new List<ZLinkApplicationJobQueueLease?>();
+        ZLinkApplicationJobQueueLease?[] admissions = [];
+        var admissionCount = 0;
         if (readyRecord.Domain == MeshReadyDomains.Application
             && !readyRecord.ApplicationAdmissionReserved
             && _applicationJobQueue is not null)
@@ -317,13 +318,13 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             var first = TryTakeApplicationAdmission(cancellationToken);
             if (first is null)
                 return;
-            admissions.Add(first);
             var admissionBudget = Math.Min(
                 readyRecord.AvailableRecords,
                 ZLinkReceiveBatchBudget.MaximumRecords);
-            while (admissions.Count < admissionBudget
-                   && _applicationJobQueue.TryAcquire(out var next))
-                admissions.Add(next);
+            admissions = new ZLinkApplicationJobQueueLease?[admissionBudget];
+            admissions[0] = first;
+            admissionCount = 1 + _applicationJobQueue.TryAcquireBatch(
+                admissions, 1, admissionBudget - 1);
         }
         var ownerSpotId = readyRecord.SpotId;
         if (string.IsNullOrEmpty(ownerSpotId)
@@ -357,21 +358,22 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             // claims reserve only the number of records this turn can publish;
             // a record that already carries receive-side admission returns the
             // corresponding extra reservation below.
-            receiveBatch.MaximumRecords = admissions.Count == 0
+            receiveBatch.MaximumRecords = admissionCount == 0
                 ? ZLinkReceiveBatchBudget.MaximumRecords
-                : admissions.Count;
+                : admissionCount;
             receiveBatch.MaximumBytes = ZLinkReceiveBatchBudget.MaximumBytes;
             receiveBatch.StartedAt = Stopwatch.GetTimestamp();
             if (!claim.Receive(receiveBatch, RecvFlags.DontWait))
                 return;
 
+            _applicationJobQueue?.MarkQueuedBatch(admissions, Math.Min(receiveBatch.Count, admissions.Length));
             var count = receiveBatch.Count;
             for (var record = 0; record < count; record++)
             {
-                var admission = admissions.Count == 0
+                var admission = admissionCount == 0
                     ? null
                     : admissions[record];
-                if (admissions.Count != 0)
+                if (admissionCount != 0)
                     admissions[record] = null;
                 try
                 {
@@ -441,11 +443,10 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         }
     }
 
-    private static void DisposeAdmissions(
-        IReadOnlyList<ZLinkApplicationJobQueueLease?> admissions)
+    private void DisposeAdmissions(IReadOnlyList<ZLinkApplicationJobQueueLease?> admissions)
     {
-        for (var index = 0; index < admissions.Count; index++)
-            admissions[index]?.Dispose();
+        if (admissions.Count != 0)
+            _applicationJobQueue!.ReleaseBatch(admissions);
     }
 
     internal static bool RequiresApplicationAdmission(

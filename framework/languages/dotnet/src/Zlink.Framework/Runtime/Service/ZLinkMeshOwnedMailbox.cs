@@ -63,14 +63,7 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
     internal bool HasRecords => AwaitStateLane(
         _lane.RunAsync(() => _records.Count != 0));
 
-    internal bool IsReady => AwaitStateLane(
-        _lane.RunAsync(() => !_claimed && _records.Count != 0));
-
     internal int Count => AwaitStateLane(_lane.RunAsync(() => _records.Count));
-
-    internal bool AllRecordsHaveApplicationAdmission => AwaitStateLane(
-        _lane.RunAsync(() => _records.Count != 0
-            && _applicationAdmissionRecords == _records.Count));
 
     internal bool TryEnqueue(
         ZLinkMeshQueuedRecord record,
@@ -99,55 +92,52 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
         }));
     }
 
-    internal bool TryClaim()
+    internal bool TryClaim(bool requireApplicationAdmission, bool claim, out int count,
+        out bool applicationAdmissionReserved)
+    {
+        var result = AwaitStateLane(_lane.RunAsync(() =>
+        {
+            var admitted = _applicationAdmissionRecords == _records.Count;
+            if (_claimed || _records.Count == 0 || (requireApplicationAdmission && !admitted))
+                return (Ready: false, Count: 0, Admitted: false);
+            if (claim)
+                _claimed = true;
+            return (Ready: true, Count: _records.Count, Admitted: admitted);
+        }));
+        count = result.Count;
+        applicationAdmissionReserved = result.Admitted;
+        return result.Ready;
+    }
+
+    internal bool Drain(MeshReceiveBatch batch, int maximumRecords)
     {
         return AwaitStateLane(_lane.RunAsync(() =>
         {
-            if (_claimed || _records.Count == 0)
-                return false;
-            _claimed = true;
-            return true;
+            var count = 0;
+            while (count < maximumRecords && _records.Count != 0)
+            {
+                var candidate = _records.Peek();
+                if (!batch.CanAdd(checked((long)candidate.PayloadBytes)))
+                    break;
+                var record = _records.Dequeue();
+                if (record.HasApplicationJobAdmission)
+                    _applicationAdmissionRecords--;
+                _pendingBytes -= record.PendingBytes;
+                onRecordDequeued(record.PendingBytes);
+                batch.Add(record.Record, record.TakeParts(), record.TakePayloadOwner());
+                count++;
+            }
+            return count != 0;
         }));
     }
 
-    internal bool TryDequeue(
-        MeshReceiveBatch batch,
-        out ZLinkMeshQueuedRecord record)
+    internal bool Release()
     {
-        var dequeued = AwaitStateLane(
-            _lane.RunAsync(() => TryDequeueOnLane(batch)));
-
-        if (dequeued is null)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
-            record = null!;
-            return false;
-        }
-
-        record = dequeued;
-        return true;
-    }
-
-    private ZLinkMeshQueuedRecord? TryDequeueOnLane(
-        MeshReceiveBatch batch)
-    {
-        if (_records.Count == 0)
-            return null;
-        var candidate = _records.Peek();
-        if (!batch.CanAdd(checked((long)candidate.PayloadBytes)))
-            return null;
-
-        var record = _records.Dequeue();
-        if (record.HasApplicationJobAdmission)
-            _applicationAdmissionRecords--;
-        var pendingBytes = record.PendingBytes;
-        _pendingBytes -= pendingBytes;
-        onRecordDequeued(pendingBytes);
-        return record;
-    }
-
-    internal void Release()
-    {
-        AwaitStateLane(_lane.RunAsync(() => _claimed = false));
+            _claimed = false;
+            return _records.Count != 0;
+        }));
     }
 
     internal void Dispose()

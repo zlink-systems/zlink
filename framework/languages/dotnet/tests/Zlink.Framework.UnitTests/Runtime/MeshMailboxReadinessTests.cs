@@ -7,6 +7,39 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshMailboxReadinessTests
 {
     [Fact]
+    public void BoundedMailboxTurn_KeepsClaimExclusiveAndRearmsResidue()
+    {
+        var queued = 0;
+        var mailbox = new ZLinkMeshNodeOwnedMailbox(_ => queued++, _ => queued--);
+        try
+        {
+            for (var index = 0; index < 65; index++)
+                Assert.True(mailbox.TryEnqueue(NewRecord(), 65, 65536));
+            Assert.False(mailbox.TryClaim(true, true, out _, out _));
+            Assert.True(mailbox.TryClaim(false, true, out var available, out var admitted));
+            Assert.Equal(65, available);
+            Assert.False(admitted);
+            Assert.False(mailbox.TryClaim(false, true, out _, out _));
+            using var batch = new MeshReceiveBatch();
+            Assert.True(mailbox.Drain(batch, 64));
+            Assert.Equal(64, batch.Count);
+            Assert.Equal(1, queued);
+            Assert.False(mailbox.TryClaim(false, true, out _, out _));
+            Assert.True(mailbox.Release());
+            Assert.True(mailbox.TryClaim(false, true, out available, out _));
+            Assert.Equal(1, available);
+            batch.Reset();
+            Assert.True(mailbox.Drain(batch, 64));
+            Assert.Equal(0, queued);
+            Assert.False(mailbox.Release());
+        }
+        finally
+        {
+            mailbox.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task EnqueueAccountingCommitsBeforeACompetingDequeue()
     {
         var transitions = new ConcurrentQueue<long>();
@@ -25,8 +58,7 @@ public sealed class MeshMailboxReadinessTests
                     {
                         consumerStarted.Set();
                         using var batch = new MeshReceiveBatch();
-                        Assert.True(mailbox!.TryDequeue(batch, out var dequeued));
-                        dequeued.Dispose();
+                        Assert.True(mailbox!.Drain(batch, 64));
                     });
                 Assert.True(consumerStarted.Wait(TimeSpan.FromSeconds(3)));
                 transitions.Enqueue(Interlocked.Increment(ref count));

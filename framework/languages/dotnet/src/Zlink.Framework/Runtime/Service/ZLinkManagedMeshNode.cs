@@ -1990,28 +1990,24 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                          .ThenBy(static entry => entry.Key.OwnerKind)
                          .ThenBy(static entry => entry.Key.Identity, StringComparer.Ordinal))
             {
-                if (batch.RequireReservedApplicationAdmission
-                    && entry.Key.Domain == MeshReadyDomains.Application
-                    && !entry.Value.AllRecordsHaveApplicationAdmission)
-                    continue;
-                if (batch.Count >= batch.MaximumRecords)
-                {
-                    if (entry.Value.IsReady)
-                        return true;
-                    continue;
-                }
-                if (!entry.Value.TryClaim())
-                    continue;
                 var mailbox = entry.Value;
+                var canClaim = batch.Count < batch.MaximumRecords;
+                if (!mailbox.TryClaim(
+                        batch.RequireReservedApplicationAdmission
+                            && entry.Key.Domain == MeshReadyDomains.Application,
+                        canClaim, out var availableRecords, out var admissionReserved))
+                    continue;
+                if (!canClaim)
+                    return true;
                 batch.Add(
                     new MeshReadyRecord(
                         entry.Key.OwnerKind,
                         entry.Key.Domain,
                         entry.Key.SpotId,
                         entry.Key.Actor,
-                        Math.Min(mailbox.Count, ReceiveBatchSize),
+                        Math.Min(availableRecords, ReceiveBatchSize),
                         entry.Key.Domain == MeshReadyDomains.Application
-                        && mailbox.AllRecordsHaveApplicationAdmission),
+                        && admissionReserved),
                     new MeshClaim
                     {
                         Receiver = (receiveBatch, receiveFlags) =>
@@ -5072,11 +5068,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         finally
         {
-            for (var index = 0; index < count; index++)
-            {
-                admissions[index]?.Dispose();
-                admissions[index] = null;
-            }
+            queue?.ReleaseBatch(admissions);
+            Array.Clear(admissions);
         }
     }
 
@@ -10581,24 +10574,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         MeshReceiveBatch batch,
         RecvFlags flags)
     {
-        var count = 0;
-        var maximumRecords = Math.Min(ReceiveBatchSize, batch.MaximumRecords);
-        while (count < maximumRecords
-               && mailbox.TryDequeue(batch, out var queued))
-        {
-            batch.Add(
-                queued.Record,
-                queued.TakeParts(),
-                queued.TakePayloadOwner());
-            count++;
-        }
-        return count > 0;
+        return mailbox.Drain(batch, Math.Min(ReceiveBatchSize, batch.MaximumRecords));
     }
 
     private void ReleaseOwnedMailbox(OwnedMailbox mailbox)
     {
-        mailbox.Release();
-        if (mailbox.HasRecords)
+        if (mailbox.Release())
             SignalReadyIfNeeded();
     }
 
