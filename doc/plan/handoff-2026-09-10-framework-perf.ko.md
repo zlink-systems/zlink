@@ -17,7 +17,7 @@ title: "Handoff 2026-09-10 — framework 메시징 성능 캠페인·작업 방�
 - **다음 캠페인: 바인딩 submit 종결자 결과 객체(`result`·`admitted`·`reply`)** — 설계 `doc/draft/bindings-submit-result-terminal.ko.md`,
   plan `doc/plan/bindings-submit-result-terminal-plan.ko.md`. G0 결정 완료(정책 §6 이름, `TrySubmit` 제거, Go `Submit(ctx)` 즉시 반환 +
   대기 메서드, Rust boxed future, framework F1·F2·F2-a). Issue #88(스펙) → #89(Java) → #90(Java perf/벤치) → #91~#96(6언어) →
-  #97~#100(framework 4) → #101(재측정·릴리스 노트). 0.18.0 릴리스 뒤 착수, 결과는 1.0.0에 싣는다(사용자).
+  #97~#100(framework 4) → #101(재측정·릴리스 노트). **bindings 0.18.0에 싣는다**(사용자, milestone 0.18.0). 순서: Core 태그(#102 뒤) → 캠페인 → binding 태그.
 - **오늘 밝혀진 것(FB-065)**: raw request-backpressure 붕괴는 벤치 클라이언트가 backpressure를 못 봐서 쏟아부은 것. binding·Core 결함
   아님(perf clients=1 8.5k/s = 벤치 1 socket). 근본은 request `submit()`이 admission 결과를 숨기는 것 → 위 캠페인. `#12` 브랜치의
   perf 구조 1차(`e1272851bd`)는 #90이 흡수.

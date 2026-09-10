@@ -2,7 +2,7 @@
 
 > 설계: [`../draft/bindings-submit-result-terminal.ko.md`](../draft/bindings-submit-result-terminal.ko.md).
 > 사용자 결정(2026-09-10): 호환성 없이 변경, 7언어 동시, perf는 `BACKPRESSURED`일 때만 비동기 대기.
-> 선행: PR #86(Issue #63 whole-message API) 머지 뒤 그 위에서 시작한다.
+> 릴리스: **bindings 0.18.0에 들어간다**(사용자 결정 2026-09-10). 순서는 Core `core/v0.18.0` 태그(Core는 이 캠페인과 무관) → 이 캠페인(#88~#101) → binding 4언어 `<lang>/v0.18.0` 태그 → framework 릴리스. Milestone `0.18.0`.
 > 작업 방식: `doc/principal/dev/development-workflow.ko.md`. 스펙·정책·문서는 감독자, 코드는 codex job, 측정은 `perf-ticket.sh`.
 
 ## 0. 범위·전제
@@ -10,7 +10,7 @@
 - 대상: `bindings/{cpp,dotnet,go,java,node,python,rust}` 공개 send·request 비동기 종결자, 그 내부 completion owner,
   contract test, perf multi·single 클라이언트, gRPC 벤치 raw 드라이버 4언어, framework 4언어의 binding 호출부, 스펙·정책·guide.
 - 비대상: C API·Core(변경 없음), `submit_sync()`, publish, reply, STREAM.
-- 기준 트리: PR #86 머지 커밋. binding 버전은 다음 릴리스에서 CORE.N+1로 올린다(`project-versioning-policy`).
+- 기준 트리: PR #103(0.18.0 버전 범프) 머지 커밋. binding 버전은 이미 0.18.0이며 이 캠페인이 그 릴리스 내용이다.
 
 ## 1. 반영 순서 (단계 게이트)
 
@@ -159,4 +159,4 @@ G5 게이트: framework 테스트·cross-language e2e 통과 + F2-a 회귀 테�
   `LIBZLINK_VERSION=0.17.5` **릴리스 아카이브**를 내려받아 쓰는데 PR의 바인딩은 새 whole-message export를 요구한다
   (`.github/workflows/framework-dotnet.yml:87-99, :205-213`). Core ABI가 깨지는 변경이므로 Core 버전을 올리고 릴리스를
   낸 뒤에야 framework CI가 초록이 된다(버전 정책: Core MAJOR.MINOR). 이 plan의 G0 전제(#86 머지)에 "Core 버전 결정·릴리스"가 붙는다.
-- 2026-09-10: Issue 등록 — G1 #88, G2 #89, G3 #90, G4 #91~#96, G5 #97~#100, G6·G7 #101 (milestone 1.0). 선행: Core 0.18.0 릴리스(#87).
+- 2026-09-10: Issue 등록 — G1 #88, G2 #89, G3 #90, G4 #91~#96, G5 #97~#100, G6·G7 #101. **milestone 0.18.0**(사용자: 1.0.0이 아니라 0.18.0에 싣는다). Core 태그는 #102 뒤 먼저, binding 태그는 캠페인 뒤.
