@@ -55,18 +55,6 @@ zlink::socket_base_t::part_helper_state () const
     return _request_reply_bridge.part_helper_state;
 }
 
-zlink::part_helper_internal::handle_state_t *
-zlink::socket_base_t::borrow_part_helper_state () const
-{
-    if (!_request_reply_bridge.part_helper_state_present.load (
-          std::memory_order_acquire))
-        return NULL;
-
-    // The public-handle pin keeps this socket and its immutable shared owner
-    // alive. Avoid a shared_ptr refcount round trip in each helper part call.
-    return _request_reply_bridge.part_helper_state.get ();
-}
-
 std::shared_ptr<zlink::part_helper_internal::handle_state_t>
 zlink::socket_base_t::set_part_helper_state (
   const std::shared_ptr<zlink::part_helper_internal::handle_state_t> &state_)
@@ -90,18 +78,6 @@ void zlink::socket_base_t::clear_part_helper_state ()
       false, std::memory_order_release);
     _request_reply_bridge.part_helper_state_present.store (
       false, std::memory_order_release);
-}
-
-bool zlink::socket_base_t::part_helper_send_active () const
-{
-    return _request_reply_bridge.part_helper_send_active_flag.load (
-      std::memory_order_acquire);
-}
-
-void zlink::socket_base_t::set_part_helper_send_active (bool active_)
-{
-    _request_reply_bridge.part_helper_send_active_flag.store (
-      active_, std::memory_order_release);
 }
 
 bool zlink::socket_base_t::part_helper_recv_ready () const

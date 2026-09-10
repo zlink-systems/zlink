@@ -49,23 +49,21 @@ int send_routed_payload_expect_maybe_eagain (
 int send_routed_multipart_expect_maybe_eagain (
   void *router_, const zlink_routing_id_t *rid_, const void *buf_, size_t size_)
 {
-    zlink_msg_t envelope;
-    if (zlink_msg_init_size (&envelope, 32) != 0)
+    zlink_msg_t parts[2];
+    if (zlink_msg_init_size (&parts[0], 32) != 0)
         return -1;
-    memset (zlink_msg_data (&envelope), 0xA5, zlink_msg_size (&envelope));
-    zlink_submit_result_t rc =
-      zlink_send_part_rid (router_, rid_, &envelope, ZLINK_SEND_FLAGS_DONTWAIT,
-                           ZLINK_PART_MORE, NULL, NULL);
-    if (rc != ZLINK_SUBMIT_OK)
-        return -1;
+    memset (zlink_msg_data (&parts[0]), 0xA5, zlink_msg_size (&parts[0]));
 
-    zlink_msg_t payload;
-    if (zlink_msg_init_size (&payload, size_) != 0)
+    if (zlink_msg_init_size (&parts[1], size_) != 0) {
+        zlink_msg_close (&parts[0]);
         return -1;
+    }
     if (size_ > 0 && buf_)
-        memcpy (zlink_msg_data (&payload), buf_, size_);
-    rc = zlink_send_part_rid (router_, rid_, &payload, ZLINK_SEND_FLAGS_DONTWAIT,
-                              ZLINK_PART_FINAL, NULL, NULL);
+        memcpy (zlink_msg_data (&parts[1]), buf_, size_);
+    const zlink_submit_result_t rc =
+      zlink_send_rid (router_, rid_, parts, 2, ZLINK_SEND_FLAGS_DONTWAIT,
+                      NULL, NULL);
+    zlink_multipart_close (parts, 2);
     return rc == ZLINK_SUBMIT_OK ? 0 : -1;
 }
 }

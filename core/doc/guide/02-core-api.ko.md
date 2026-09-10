@@ -28,18 +28,24 @@ handshake가 값을 사용하기 전에 설정한다.
 
 ## Message I/O
 
-Core는 part 단위 multipart API를 사용한다.
+Core는 한 호출에 message record 전체를 주고받는다. Multipart 경계는 `zlink_msg_t` 배열의
+순서와 part 수로 표현한다.
 
-- `zlink_send_part()`는 일반 raw traffic을 보낸다.
-- `zlink_send_part_rid()`는 routed peer를 선택한다.
-- `zlink_publish_part()`는 topic과 payload를 발행한다.
-- Typed receive 함수는 part 하나와 `ZLINK_PART_MORE` 또는 `ZLINK_PART_FINAL`을 반환한다.
+- `zlink_send()`는 일반 raw traffic의 모든 part를 배열로 보낸다.
+- `zlink_send_rid()`는 routed peer를 선택하고 모든 part를 배열로 보낸다.
+- `zlink_publish()`는 topic과 payload part 배열을 발행한다.
+- `zlink_recv()`·`zlink_router_recv()`·`zlink_subscribe()`는 record 전체를 caller가 제공한
+  배열에 채우고 part 수를 반환한다. `zlink_xpub_recv()`는 subscription event를 받는다.
 - DEALER와 ROUTER request는 0이 아닌 completion ID를 반환한다. Reply와 terminal 결과는
   `zlink_completion_recv()`로 받고 각 record를 `zlink_completion_close()`로 해제한다.
 
-`*_part` send에 전달한 message part는 성공·실패와 관계없이 Core가 소비한다 — 호출 뒤 그 part는
-빈 초기화 상태로 남으므로 다시 보내려면 호출 전에 복사해 둔다. 수신한 part는 정확히 한 번 close하거나
-move해야 한다.
+수신 배열의 용량이 record의 part 수보다 작으면 record를 소비하지 않고
+`ZLINK_RECV_BUFFER_TOO_SMALL`(`ENOBUFS`)과 필요한 수를 반환한다. 배열을 키워 다시 호출하면 같은
+record를 정확히 한 번 받는다. 받은 배열은
+[`zlink_multipart_close()`](../spec/core/02-message.ko.md#zlink_multipart_close)로 닫는다.
+
+Send에 전달한 배열의 모든 message part는 성공·실패와 관계없이 Core가 소비한다. 호출 뒤 각 슬롯은
+빈 초기화 상태로 남으므로 다시 보내려면 호출 전에 record 전체를 복사해 둔다.
 
 ## Eventing
 

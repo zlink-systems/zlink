@@ -147,15 +147,13 @@ void listener_release (const char *transport_, bool unbind_, int iterations_)
         const char payload[] = "new-listener";
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&part, sizeof (payload)));
         memcpy (zlink_msg_data (&part), payload, sizeof (payload));
-        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_send_part (
-          client, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL));
+        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_send (client, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
         const zlink_routing_id_t *source = NULL;
-        zlink_part_flag_t more = ZLINK_PART_MORE;
-        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_recv_part (
-          replacement, &source, &part, &more, ZLINK_RECV_FLAGS_NONE));
-        TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
+        size_t more = 0;
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_recv (replacement, &source, &part, 1, &more, ZLINK_RECV_FLAGS_NONE));
+        TEST_ASSERT_EQUAL_INT (1, more);
         TEST_ASSERT_EQUAL_UINT64 (sizeof (payload), zlink_msg_size (&part));
         TEST_ASSERT_EQUAL_MEMORY (payload, zlink_msg_data (&part), sizeof (payload));
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
@@ -225,16 +223,13 @@ void test_inproc_unbind_disconnected_and_not_found ()
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&part, 1));
         *static_cast<unsigned char *> (zlink_msg_data (&part)) = 1;
         zlink_completion_id_t id = 0;
-        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_request_part (
-          bound, &peer_rid, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-          3000, NULL, &id));
+        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_request (bound, &peer_rid, &part, 1, ZLINK_SEND_FLAGS_NONE, 3000, NULL, &id));
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
         const zlink_routing_id_t *source = NULL;
         zlink_reply_token_t token = 0;
-        zlink_part_flag_t more = ZLINK_PART_MORE;
-        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv_part (
-          peer, &source, &token, &part, &more, ZLINK_RECV_FLAGS_NONE));
+        size_t more = 0;
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv (peer, &source, &token, &part, 1, &more, ZLINK_RECV_FLAGS_NONE));
         TEST_ASSERT_NOT_EQUAL (0, token);
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
 

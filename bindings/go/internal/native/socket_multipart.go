@@ -34,8 +34,8 @@ type preparedMultipart struct {
 	parts  []*Message
 }
 
-type multipartSubmitFunc func(*C.zlink_msg_t, C.zlink_part_flag_t) error
-type multipartRecvFunc func(*C.zlink_msg_t, *C.zlink_part_flag_t, C.zlink_recv_flags_t) error
+type multipartSubmitFunc func(*C.zlink_msg_t, C.size_t) error
+type multipartRecvFunc func(*C.zlink_msg_t, C.size_t, *C.size_t, C.zlink_recv_flags_t) C.zlink_recv_result_t
 
 func (p *preparedMultipart) restore() error {
 	if p == nil {
@@ -58,20 +58,9 @@ func submitPreparedMultipart(prepared *preparedMultipart, submit multipartSubmit
 	if prepared == nil || len(prepared.native) == 0 {
 		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}
-	for i := range prepared.native {
-		partFlag := C.zlink_part_flag_t(C.ZLINK_PART_FINAL)
-		if i+1 < len(prepared.native) {
-			partFlag = C.ZLINK_PART_MORE
-		}
-		if err := submit(&prepared.native[i], partFlag); err != nil {
-			// Core consumes the attempted native part on ordinary rejection. The
-			// binding owns this prepared copy, so release the now-empty attempted
-			// slot together with every later part that was never attempted.
-			closeNativeMultipart(prepared.native[i:], len(prepared.native)-i)
-			return err
-		}
-	}
-	return nil
+	// Whole-message submission consumes every native slot on both success and
+	// failure, so this prepared array has no ownership after the call returns.
+	return submit(&prepared.native[0], C.size_t(len(prepared.native)))
 }
 
 func initNativeMessageFromBytes(native *C.zlink_msg_t, data []byte) error {
@@ -140,9 +129,8 @@ func submitSinglePartFromCopy(part *Message, submit multipartSubmitFunc) error {
 		_ = configErrorFromResult(C.zlink_msg_close(&native))
 		return err
 	}
-	err := submit(&native, C.zlink_part_flag_t(C.ZLINK_PART_FINAL))
+	err := submit(&native, 1)
 	if err != nil {
-		_ = configErrorFromResult(C.zlink_msg_close(&native))
 		return err
 	}
 	_ = configErrorFromResult(C.zlink_msg_close(&part.msg))
@@ -168,10 +156,7 @@ func submitSinglePartMoved(part *Message, submit multipartSubmitFunc) error {
 		_ = configErrorFromResult(C.zlink_msg_close(&native))
 		return err
 	}
-	err := submit(&native, C.zlink_part_flag_t(C.ZLINK_PART_FINAL))
-	if err != nil {
-		_ = configErrorFromResult(C.zlink_msg_close(&native))
-	}
+	err := submit(&native, 1)
 	part.moved()
 	return err
 }
@@ -181,11 +166,7 @@ func submitSinglePartFromBytes(data []byte, submit multipartSubmitFunc) error {
 	if err := initNativeMessageFromBytes(&native, data); err != nil {
 		return err
 	}
-	err := submit(&native, C.zlink_part_flag_t(C.ZLINK_PART_FINAL))
-	if err != nil {
-		_ = configErrorFromResult(C.zlink_msg_close(&native))
-	}
-	return err
+	return submit(&native, 1)
 }
 
 func submitMultipartFromBuilderParts(parts []sendBuilderPart, submit multipartSubmitFunc) error {

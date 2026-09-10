@@ -136,9 +136,8 @@ internal sealed partial class SocketKernel
         public static int Submit(ref SendSingleSubmitter submitter,
             ref ZlinkMsg nativePart)
         {
-            return NativeMethods.zlink_send_part(submitter._handle,
-                ref nativePart, submitter._flags,
-                NativeMethods.ZlinkPartFlag.Final);
+            return NativeMethods.zlink_send(submitter._handle,
+                ref nativePart, 1, submitter._flags);
         }
     }
 
@@ -157,9 +156,8 @@ internal sealed partial class SocketKernel
             ref ZlinkMsg nativePart)
         {
             // DONT_WAIT-only critical variant: contractually non-blocking.
-            return NativeMethods.zlink_send_part_nowait(submitter._handle,
-                ref nativePart, DontWaitFlag,
-                NativeMethods.ZlinkPartFlag.Final);
+            return NativeMethods.zlink_send_nowait(submitter._handle,
+                ref nativePart, 1, DontWaitFlag);
         }
     }
 
@@ -182,9 +180,8 @@ internal sealed partial class SocketKernel
         public static int Submit(ref PublishSingleSubmitter submitter,
             ref ZlinkMsg nativePart)
         {
-            return NativeMethods.zlink_publish_part_utf8(submitter._handle,
-                submitter._topicPtr, ref nativePart, submitter._flags,
-                NativeMethods.ZlinkPartFlag.Final);
+            return NativeMethods.zlink_publish_utf8(submitter._handle,
+                submitter._topicPtr, ref nativePart, 1, submitter._flags);
         }
     }
 
@@ -208,12 +205,11 @@ internal sealed partial class SocketKernel
             ref ZlinkMsg nativePart)
         {
             return (submitter._flags & DontWaitFlag) != 0
-                ? NativeMethods.zlink_send_part_rid_nowait(submitter._handle,
-                    ref *submitter._routingId, ref nativePart, submitter._flags,
-                    NativeMethods.ZlinkPartFlag.Final)
-                : NativeMethods.zlink_send_part_rid(submitter._handle,
-                    ref *submitter._routingId, ref nativePart,
-                    submitter._flags, NativeMethods.ZlinkPartFlag.Final);
+                ? NativeMethods.zlink_send_rid_nowait(submitter._handle,
+                    ref *submitter._routingId, ref nativePart, 1, submitter._flags)
+                : NativeMethods.zlink_send_rid(submitter._handle,
+                    ref *submitter._routingId, ref nativePart, 1,
+                    submitter._flags);
         }
     }
 
@@ -234,9 +230,8 @@ internal sealed partial class SocketKernel
         public static int Submit(ref TargetedSendSingleNoWaitSubmitter submitter,
             ref ZlinkMsg nativePart)
         {
-            return NativeMethods.zlink_send_part_rid_nowait(submitter._handle,
-                ref *submitter._routingId, ref nativePart, DontWaitFlag,
-                NativeMethods.ZlinkPartFlag.Final);
+            return NativeMethods.zlink_send_rid_nowait(submitter._handle,
+                ref *submitter._routingId, ref nativePart, 1, DontWaitFlag);
         }
     }
 }

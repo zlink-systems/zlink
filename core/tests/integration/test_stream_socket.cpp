@@ -166,10 +166,8 @@ static bool recv_stream_routing_id_and_payload (void *socket_,
     }
 
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
-    const zlink_recv_result_t recv_rc = zlink_recv_part (
-      socket_, &source_rid, payload_out_, &has_more,
-      static_cast<zlink_recv_flags_t> (flags_));
+    size_t has_more = 0;
+    const zlink_recv_result_t recv_rc = zlink_recv (socket_, &source_rid, payload_out_, 1, &has_more, static_cast<zlink_recv_flags_t> (flags_));
     if (recv_rc != ZLINK_RECV_OK)
         return false;
 
@@ -182,7 +180,7 @@ static bool recv_stream_routing_id_and_payload (void *socket_,
     }
 
     *rid_out_ = *source_rid;
-    if (has_more != ZLINK_PART_FINAL) {
+    if (has_more != 1) {
         const int close_rc = zlink_msg_close (payload_out_);
         TEST_ASSERT_SUCCESS_ERRNO (close_rc);
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (payload_out_));
@@ -200,14 +198,12 @@ static bool wait_stream_notify_record (
         zlink_msg_t part;
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
         const zlink_routing_id_t *source_rid = NULL;
-        zlink_part_flag_t has_more = ZLINK_PART_MORE;
-        const zlink_recv_result_t rc = zlink_recv_part (
-          socket_, &source_rid, &part, &has_more,
-          static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
+        size_t has_more = 0;
+        const zlink_recv_result_t rc = zlink_recv (socket_, &source_rid, &part, 1, &has_more, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
         if (rc == ZLINK_RECV_OK) {
             const bool valid = source_rid && source_rid->size == stream_routing_id_size
                                && zlink_msg_size (&part) == 0
-                               && has_more == ZLINK_PART_FINAL;
+                               && has_more == 1;
             if (valid)
                 memcpy (routing_id_, source_rid->data, stream_routing_id_size);
             TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
@@ -890,15 +886,14 @@ void test_stream_no_data_recv_part_locks_raw_mode ()
     memcpy (zlink_msg_data (&part), retained_payload, sizeof (retained_payload));
     const zlink_routing_id_t retained_rid = {};
     const zlink_routing_id_t *source_rid = &retained_rid;
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_NO_DATA,
-      zlink_recv_part (stream, &source_rid, &part, &has_more,
-                       ZLINK_RECV_FLAGS_DONTWAIT));
+      zlink_recv (stream, &source_rid, &part, 1, &has_more, ZLINK_RECV_FLAGS_DONTWAIT));
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
     TEST_ASSERT_EQUAL_PTR (&retained_rid, source_rid);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, has_more);
+    TEST_ASSERT_EQUAL_INT (0, has_more);
     TEST_ASSERT_EQUAL_UINT64 (sizeof (retained_payload), zlink_msg_size (&part));
     TEST_ASSERT_EQUAL_MEMORY (retained_payload, zlink_msg_data (&part),
                               sizeof (retained_payload));
@@ -937,19 +932,28 @@ void test_stream_successful_recv_part_locks_raw_mode ()
       0, send_stream_packet (client_fd, payload, sizeof (payload) - 1));
 
     zlink_msg_t part;
+    const zlink_routing_id_t retained_rid = {};
+    const zlink_routing_id_t *source_rid = &retained_rid;
+    size_t part_count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_BUFFER_TOO_SMALL,
+      zlink_recv (stream, &source_rid, &part, 0, &part_count,
+                  ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ENOBUFS, zlink_errno ());
+    TEST_ASSERT_EQUAL_UINT64 (1, part_count);
+    TEST_ASSERT_EQUAL_PTR (&retained_rid, source_rid);
+
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
-    const zlink_routing_id_t *source_rid = NULL;
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
-      zlink_recv_part (stream, &source_rid, &part, &has_more,
-                       ZLINK_RECV_FLAGS_NONE));
+      zlink_recv (stream, &source_rid, &part, 1, &part_count,
+                  ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source_rid);
     TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, source_rid->size);
     TEST_ASSERT_EQUAL_UINT64 (sizeof (payload) - 1, zlink_msg_size (&part));
     TEST_ASSERT_EQUAL_MEMORY (payload, zlink_msg_data (&part),
                               sizeof (payload) - 1);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, part_count);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
 
     close_raw_fd (client_fd);
@@ -977,19 +981,25 @@ void test_stream_raw_inproc_parts_are_independent_final_chunks ()
 
     const char *const payloads[] = {"multipart-head", "multipart-tail",
                                     "independent-final"};
-    const zlink_part_flag_t send_flags[] = {
-      ZLINK_PART_MORE, ZLINK_PART_FINAL, ZLINK_PART_FINAL};
-    for (size_t i = 0; i != 3; ++i) {
-        zlink_msg_t part;
+    zlink_msg_t multipart[2];
+    for (size_t i = 0; i != 2; ++i) {
         TEST_ASSERT_SUCCESS_ERRNO (
-          zlink_msg_init_size (&part, strlen (payloads[i])));
-        memcpy (zlink_msg_data (&part), payloads[i], strlen (payloads[i]));
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_SUBMIT_OK,
-          zlink_send_part (peer, &part, ZLINK_SEND_FLAGS_NONE,
-                           send_flags[i], NULL, NULL));
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+          zlink_msg_init_size (&multipart[i], strlen (payloads[i])));
+        memcpy (zlink_msg_data (&multipart[i]), payloads[i],
+                strlen (payloads[i]));
     }
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send (peer, multipart, 2, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
+    zlink_multipart_close (multipart, 2);
+    zlink_msg_t independent;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_msg_init_size (&independent, strlen (payloads[2])));
+    memcpy (zlink_msg_data (&independent), payloads[2], strlen (payloads[2]));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send (peer, &independent, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&independent));
 
     zlink_routing_id_t expected_rid;
     memset (&expected_rid, 0, sizeof (expected_rid));
@@ -997,11 +1007,10 @@ void test_stream_raw_inproc_parts_are_independent_final_chunks ()
         zlink_msg_t part;
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
         const zlink_routing_id_t *source_rid = NULL;
-        zlink_part_flag_t has_more = ZLINK_PART_MORE;
+        size_t has_more = 0;
         TEST_ASSERT_EQUAL_INT (
           ZLINK_RECV_OK,
-          zlink_recv_part (stream, &source_rid, &part, &has_more,
-                           ZLINK_RECV_FLAGS_NONE));
+          zlink_recv (stream, &source_rid, &part, 1, &has_more, ZLINK_RECV_FLAGS_NONE));
         TEST_ASSERT_NOT_NULL (source_rid);
         TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, source_rid->size);
         if (i == 0)
@@ -1013,7 +1022,7 @@ void test_stream_raw_inproc_parts_are_independent_final_chunks ()
                                   zlink_msg_size (&part));
         TEST_ASSERT_EQUAL_MEMORY (payloads[i], zlink_msg_data (&part),
                                   strlen (payloads[i]));
-        TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+        TEST_ASSERT_EQUAL_INT (1, has_more);
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
     }
 
@@ -1054,11 +1063,10 @@ void test_stream_rejects_unsupported_send_without_poisoning_routed_final ()
     zlink_msg_t incoming;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&incoming));
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
-      zlink_recv_part (stream, &source_rid, &incoming, &has_more,
-                       ZLINK_RECV_FLAGS_NONE));
+      zlink_recv (stream, &source_rid, &incoming, 1, &has_more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source_rid);
     TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, source_rid->size);
     zlink_routing_id_t target = *source_rid;
@@ -1070,8 +1078,7 @@ void test_stream_rejects_unsupported_send_without_poisoning_routed_final ()
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_NOT_SUPPORTED,
-      zlink_send_part (stream, &unrouted, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL, NULL, NULL));
+      zlink_send (stream, &unrouted, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&unrouted));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&unrouted));
@@ -1079,19 +1086,22 @@ void test_stream_rejects_unsupported_send_without_poisoning_routed_final ()
     const zlink_send_flags_t flags[] = {
       ZLINK_SEND_FLAGS_NONE, ZLINK_SEND_FLAGS_DONTWAIT};
     for (size_t i = 0; i < sizeof (flags) / sizeof (flags[0]); ++i) {
-        zlink_msg_t prefix;
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&prefix, 3));
-        memcpy (zlink_msg_data (&prefix), "BAD", 3);
+        zlink_msg_t unsupported[2];
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&unsupported[0], 3));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&unsupported[1], 4));
+        memcpy (zlink_msg_data (&unsupported[0]), "BAD", 3);
+        memcpy (zlink_msg_data (&unsupported[1]), "SEND", 4);
         zlink_completion_id_t completion_id = 99;
         errno = 0;
         TEST_ASSERT_EQUAL_INT (
           ZLINK_SUBMIT_NOT_SUPPORTED,
-          zlink_send_part_rid (stream, &target, &prefix, flags[i],
-                               ZLINK_PART_MORE, NULL, &completion_id));
+          zlink_send_rid (stream, &target, unsupported, 2, flags[i], NULL,
+                          &completion_id));
         TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
         TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
-        TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&prefix));
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&prefix));
+        TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&unsupported[0]));
+        TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&unsupported[1]));
+        zlink_multipart_close (unsupported, 2);
     }
 
     const unsigned char expected[] = "GOOD";
@@ -1101,8 +1111,7 @@ void test_stream_rejects_unsupported_send_without_poisoning_routed_final ()
     memcpy (zlink_msg_data (&routed), expected, sizeof (expected) - 1);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part_rid (stream, &target, &routed, ZLINK_SEND_FLAGS_NONE,
-                           ZLINK_PART_FINAL, NULL, NULL));
+      zlink_send_rid (stream, &target, &routed, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&routed));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&routed));
 
@@ -1110,6 +1119,17 @@ void test_stream_rejects_unsupported_send_without_poisoning_routed_final ()
     TEST_ASSERT_EQUAL_INT (
       0, recv_exact (client_fd, received, sizeof (received)));
     TEST_ASSERT_EQUAL_UINT8_ARRAY (expected, received, sizeof (received));
+
+    zlink_msg_t disconnect;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&disconnect));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_rid (stream, &target, &disconnect, 1, ZLINK_SEND_FLAGS_NONE,
+                      NULL, NULL));
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&disconnect));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&disconnect));
+    unsigned char eof_probe;
+    TEST_ASSERT_EQUAL_INT (0, recv (client_fd, &eof_probe, 1, 0));
 
     close_raw_fd (client_fd);
     test_context_socket_close_zero_linger (stream);
@@ -1770,12 +1790,11 @@ void test_stream_phase3_packet_pull_contract ()
 
     zlink_msg_t wrong_family;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&wrong_family));
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+    size_t has_more = 1;
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_NOT_SUPPORTED,
-      zlink_recv_part (server, &source_rid, &wrong_family, &has_more,
-                       ZLINK_RECV_FLAGS_DONTWAIT));
+      zlink_recv (server, &source_rid, &wrong_family, 1, &has_more, ZLINK_RECV_FLAGS_DONTWAIT));
     TEST_ASSERT_EQUAL_INT (ENOTSUP, zlink_errno ());
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&wrong_family));
 

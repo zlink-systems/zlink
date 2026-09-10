@@ -24,18 +24,23 @@ Message 방향, peer 선택 방식과 framing 요구를 기준으로 pattern을 
 
 ## 공통 수신 방식
 
-Raw socket은 일반적으로 poller와 part 단위 receive를 함께 사용한다. Socket을
-`ZLINK_POLLIN`으로 등록해 기다린 뒤 multipart가 `ZLINK_PART_FINAL`에 도달할 때까지 typed
-receive 함수를 호출한다.
+Raw socket은 일반적으로 poller와 whole-message receive를 함께 사용한다. Socket을
+`ZLINK_POLLIN`으로 등록해 기다린 뒤 socket 종류에 맞는 receive 함수를 한 번 호출해
+record 전체를 받는다.
 
-- PAIR는 `zlink_recv_part()`를 사용한다.
-- SUB는 topic을 별도로 반환하는 `zlink_subscribe_part()`를 사용한다.
-- XPUB은 subscription 알림에 `zlink_xpub_recv_part()`를 사용한다.
-- DEALER는 일반 DATA에 `zlink_recv_part()`를 사용하고 request reply는
+- PAIR는 `zlink_recv()`를 사용한다.
+- SUB는 topic을 별도로 반환하는 `zlink_subscribe()`를 사용한다.
+- XPUB은 subscription 알림에 `zlink_xpub_recv()`를 사용한다.
+- DEALER는 일반 DATA에 `zlink_recv()`를 사용하고 request reply는
   `zlink_completion_recv()`로 받는다.
-- ROUTER는 peer와 불투명 reply token을 반환하는 `zlink_router_recv_part()`를 사용한다.
-- STREAM은 첫 bind 또는 connect 전에 RAW(`zlink_recv_part()`)와
+- ROUTER는 peer와 불투명 reply token을 반환하는 `zlink_router_recv()`를 사용한다.
+- STREAM은 첫 bind 또는 connect 전에 RAW(`zlink_recv()`)와
   PACKET(`zlink_stream_recv_packet()`) 중 하나를 고른다.
+
+PAIR·DEALER는 `zlink_recv()`, ROUTER는 `zlink_router_recv()`, SUB·XSUB는
+`zlink_subscribe()`가 record의 모든 part를 caller가 제공한 `zlink_msg_t` 배열에 채운다.
+용량이 부족하면 record를 보존하고 `ZLINK_RECV_BUFFER_TOO_SMALL`을 반환한다. 계약은
+[Socket 공통](../spec/core/socket/README.ko.md#zlink_recv-와-zlink_router_recv)이 소유한다.
 
 Monitor handle과 generic timer도 같은 poller에 등록할 수 있다.
 

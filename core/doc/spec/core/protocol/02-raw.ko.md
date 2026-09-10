@@ -79,12 +79,12 @@ message 두 개로 전달된다.
 ### STREAM routing ID와 수신 metadata
 
 STREAM은 연결된 각 client를 `stream_t`가 할당·직렬화한 4 byte routing ID(`uint32`)로
-식별한다. 공개 송신 API는 target RID와 `FINAL` payload 하나를 별도 인자로 받으며,
+식별한다. 공개 송신 API는 target RID와 part 하나가 든 배열을 별도 인자로 받으며,
 wire에는 payload byte만 전송한다.
 
 수신 시 `stream_t`는 source RID와 payload를 한 번의 routed receive에서 별도 출력으로
-반환한다. 공개 `zlink_recv_part()`는 RID를 `source_rid_out_`으로 제공하고 payload를
-`FINAL` 단일 part로 반환한다.
+반환한다. 공개 `zlink_recv()`는 RID를 `source_rid_out_`으로 제공하고 payload part 하나를
+배열에 반환하며 `*part_count_out_ == 1`로 설정한다.
 
 ### 엔진 구성
 

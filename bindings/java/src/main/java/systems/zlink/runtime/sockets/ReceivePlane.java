@@ -2,10 +2,8 @@
 
 package systems.zlink.runtime.sockets;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.util.ArrayList;
 import java.util.Objects;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkException;
@@ -14,7 +12,6 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.internal.ContractAccess;
-import systems.zlink.runtime.messaging.ReceivedPartCursor;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeErrno;
@@ -22,15 +19,12 @@ import systems.zlink.runtime.nativeapi.NativeRoutingIds;
 import systems.zlink.runtime.nativeapi.RecvScratch;
 
 final class ReceivePlane {
-    // HOT PATH: resolve the contract bridge once. Each nonblocking frame then
-    // writes caller-owned Received storage without a volatile lookup.
     private static final ContractAccess.ReceivedAccess RECEIVED_ACCESS =
         ContractAccess.receivedAccessForRuntime();
     private final NativeSocketRuntime socket;
     private final ThreadLocal<MultipartReceiveState> multipartReceiveState =
         ThreadLocal.withInitial(MultipartReceiveState::new);
-    private final ThreadLocal<Received> activeLazyReceive =
-        new ThreadLocal<>();
+    private final ThreadLocal<Received> activeLazyReceive = new ThreadLocal<>();
 
     ReceivePlane(NativeSocketRuntime socket) {
         this.socket = socket;
@@ -39,106 +33,22 @@ final class ReceivePlane {
     boolean recvInto(Received result, ReceiveFlag flags) {
         Objects.requireNonNull(result, "result");
         Objects.requireNonNull(flags, "flags");
-        if (socket.resolveSocketType()
-            == systems.zlink.contracts.sockets.SocketType.DEALER) {
-            return recvDealerInto(result, flags);
-        }
-        MultipartReceiveState state = multipartReceiveState.get();
-        if (flags == ReceiveFlag.DONTWAIT && !state.hasPending()) {
-            return recvIntoNoWait(result, state);
-        }
-        Message frame = nextRecvFrame(flags, flags == ReceiveFlag.DONTWAIT);
-        if (frame == null) {
+        prepareRecvLikeOperation();
+        RecvScratch scratch = socket.recvScratch();
+        Message[] parts = receivePartsOrNull(scratch, flags,
+            flags == ReceiveFlag.DONTWAIT);
+        if (parts == null) {
             return false;
         }
-        if (!frame.more()) {
-            RECEIVED_ACCESS.populateRoutedSinglePart(result, null, frame,
-                0L, false, null, null);
-            return true;
-        }
-
-        Received fresh = InternalAccess.receivedLazy((byte[]) null, frame,
-            new BasicReceiveCursor(flags.getValue()), 0L, false, null, null);
-        ContractAccess.receivedAdoptFrom(result, fresh);
-        return true;
-    }
-
-    private boolean recvDealerInto(Received result, ReceiveFlag flags) {
-        prepareRecvLikeOperation();
-
-        ArrayList<Message> parts = null;
-        Message firstPart = null;
-        Message secondPart = null;
+        boolean adopted = false;
         try {
-            RecvScratch scratch = socket.recvScratch();
-            firstPart = recvDealerPartOrNull(scratch, flags,
-                flags == ReceiveFlag.DONTWAIT);
-            if (firstPart == null)
-                return false;
-
-            long replyTokenValue = scratch.replyTokenValueOut.get(
-                ValueLayout.JAVA_LONG, 0);
-            boolean hasReplyToken = replyTokenValue != 0L;
-            if (!firstPart.more()) {
-                ContractAccess.receivedPopulateRoutedSinglePart(result,
-                    null, firstPart, replyTokenValue,
-                    hasReplyToken, null, null);
-                firstPart = null;
-                return true;
-            }
-
-            secondPart = recvDealerPartOrNull(scratch, flags, false);
-            if (secondPart == null)
-                throw new ZlinkRecvException(RecvResult.NO_DATA,
-                    NativeErrno.EAGAIN);
-            if (!secondPart.more()) {
-                RECEIVED_ACCESS.populateRoutedTwoParts(result, null,
-                    firstPart, secondPart, replyTokenValue,
-                    hasReplyToken, null, null);
-                firstPart = null;
-                secondPart = null;
-                return true;
-            }
-
-            parts = new ArrayList<>(4);
-            parts.add(firstPart);
-            parts.add(secondPart);
-            firstPart = null;
-            secondPart = null;
-            while (parts.get(parts.size() - 1).more()) {
-                Message next = recvDealerPartOrNull(scratch, flags, false);
-                if (next == null)
-                    throw new ZlinkRecvException(RecvResult.NO_DATA,
-                        NativeErrno.EAGAIN);
-                parts.add(next);
-            }
-
-            Received fresh = InternalAccess.received((byte[]) null,
-                parts.toArray(Message[]::new), true, replyTokenValue,
-                hasReplyToken, null, null);
-            parts = null;
-            try {
-                ContractAccess.receivedAdoptFrom(result, fresh);
-            } catch (RuntimeException | Error ex) {
-                fresh.close();
-                throw ex;
-            }
+            populate(result, parts, null, 0L, false);
+            adopted = true;
             return true;
         } finally {
-            if (firstPart != null) {
-                try {
-                    firstPart.close();
-                } catch (RuntimeException ignored) {
-                }
-            }
-            if (secondPart != null) {
-                try {
-                    secondPart.close();
-                } catch (RuntimeException ignored) {
-                }
-            }
-            if (parts != null)
+            if (!adopted) {
                 Message.closeAll(parts);
+            }
         }
     }
 
@@ -160,8 +70,9 @@ final class ReceivePlane {
         Objects.requireNonNull(segment, "segment");
         NativeSocketRuntime.validateRange(segment.byteSize(), offset, length,
             "segment");
-        if (length == 0)
+        if (length == 0) {
             return 0;
+        }
         try (Message frame = nextRecvFrame(flags, false)) {
             int rc = Math.min(NativeSocketRuntime.toIntLength(length),
                 frame.size());
@@ -178,11 +89,13 @@ final class ReceivePlane {
         Objects.requireNonNull(segment, "segment");
         NativeSocketRuntime.validateRange(segment.byteSize(), offset, length,
             "segment");
-        if (length == 0)
+        if (length == 0) {
             return 0;
+        }
         try (Message frame = nextRecvFrame(flags, true)) {
-            if (frame == null)
+            if (frame == null) {
                 return -1;
+            }
             int rc = Math.min(NativeSocketRuntime.toIntLength(length),
                 frame.size());
             if (rc > 0) {
@@ -204,10 +117,12 @@ final class ReceivePlane {
 
     int recvMessageFrameNoWait(Message message, ReceiveFlag flag) {
         Message frame = nextRecvFrame(flag, true);
-        if (frame == null)
+        if (frame == null) {
             return -1;
+        }
         try {
-            return InternalAccess.messageMoveInto(frame, message, frame.more());
+            return InternalAccess.messageMoveInto(frame, message,
+                frame.more());
         } finally {
             frame.close();
         }
@@ -215,28 +130,28 @@ final class ReceivePlane {
 
     Message nextRecvFrame(ReceiveFlag flags, boolean nonBlocking) {
         Objects.requireNonNull(flags, "flags");
-        prepareRecvLikeOperation();
         MultipartReceiveState state = multipartReceiveState.get();
         if (state.hasPending()) {
             return state.poll();
         }
+        prepareRecvLikeOperation(state);
         RecvScratch scratch = socket.recvScratch();
-        Message firstPart = recvSocketPartOrNull(scratch, flags, nonBlocking);
-        if (firstPart == null) {
+        Message[] parts = receivePartsOrNull(scratch, flags, nonBlocking);
+        if (parts == null) {
             return null;
         }
-        boolean hasMore = firstPart.more();
         Message routingFrame = NativeRoutingIds.readRoutingFrameOut(
             scratch.sourceRidOut);
-        if (routingFrame == null) {
-            return firstPart;
+        if (routingFrame != null) {
+            state.replace(parts);
+            InternalAccess.messageSetMore(routingFrame, true);
+            return routingFrame;
         }
-        if (hasMore) {
-            InternalAccess.messageSetMore(firstPart, true);
+        if (parts.length == 1) {
+            return parts[0];
         }
-        state.replace(new Message[] {firstPart});
-        InternalAccess.messageSetMore(routingFrame, true);
-        return routingFrame;
+        state.replace(parts);
+        return state.poll();
     }
 
     void prepareRecvLikeOperation() {
@@ -272,235 +187,71 @@ final class ReceivePlane {
         return multipartReceiveState.get().pendingCount();
     }
 
-    private boolean recvIntoNoWait(Received result,
-                                   MultipartReceiveState state) {
-        prepareRecvLikeOperation(state);
-        RecvScratch scratch = socket.recvScratch();
-        while (true) {
-            Message frame = InternalAccess.messageAcquireReceive();
-            boolean success = false;
-            try {
-                int rc = Native.recvPartNoWaitCritical(socket.handle(),
-                    scratch.sourceRidOut,
-                    InternalAccess.messageNativeHandle(frame),
-                    scratch.hasMoreOut, ReceiveFlag.DONTWAIT.getValue());
-                if (rc == 0) {
-                    success = true;
-                    boolean hasMore =
-                        scratch.hasMoreOut.get(ValueLayout.JAVA_INT, 0) != 0;
-                    InternalAccess.messageFinishReceive(frame, hasMore);
-                    if (!hasMore) {
-                        RECEIVED_ACCESS.populateRoutedSinglePart(result,
-                            null, frame, 0L, false, null, null);
-                    } else {
-                        Received fresh = InternalAccess.receivedLazy(
-                            (byte[]) null, frame,
-                            new BasicReceiveCursor(
-                                ReceiveFlag.DONTWAIT.getValue()),
-                            0L, false, null, null);
-                        RECEIVED_ACCESS.adoptFrom(result, fresh);
-                    }
-                    return true;
-                }
-            } finally {
-                if (!success) {
-                    try {
-                        frame.close();
-                    } catch (RuntimeException ignored) {
-                    }
-                }
-            }
-
-            int errno = Native.errno();
-            if (errno == NativeErrno.EINTR) {
-                continue;
-            }
-            if (errno == NativeErrno.EAGAIN
-                || errno == NativeErrno.EWOULDBLOCK_WIN) {
-                return false;
-            }
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.RECV);
-        }
-    }
-
     private Received recvLazyOrNull(ReceiveFlag flags, boolean allowNoData) {
         Objects.requireNonNull(flags, "flags");
         prepareRecvLikeOperation();
         RecvScratch scratch = socket.recvScratch();
-        Message firstPart = recvSocketPartOrNull(scratch, flags, allowNoData);
-        if (firstPart == null) {
+        Message[] parts = receivePartsOrNull(scratch, flags, allowNoData);
+        if (parts == null) {
             return null;
         }
-        boolean hasMore = firstPart.more();
-        RoutingId routingId = NativeRoutingIds.readOut(
-            scratch.sourceRidOut);
-        ReceivedPartCursor cursor = hasMore
-            ? new BasicReceiveCursor(flags.getValue())
-            : null;
-        Received[] ref = new Received[1];
-        Runnable onTerminal = () -> {
-            Received active = activeLazyReceive.get();
-            if (active == ref[0]) {
-                activeLazyReceive.remove();
+        boolean adopted = false;
+        try {
+            RoutingId routingId = NativeRoutingIds.readOut(
+                scratch.sourceRidOut);
+            Received received = InternalAccess.received(routingId, parts,
+                true, 0L, false, null, null);
+            adopted = true;
+            return received;
+        } finally {
+            if (!adopted) {
+                Message.closeAll(parts);
             }
-        };
-        Received received = InternalAccess.receivedLazy(
-            routingId, firstPart, cursor, 0L, false,
-            null, onTerminal);
-        ref[0] = received;
-        return registerLazyReceive(received, hasMore);
+        }
     }
 
-    private Message recvSocketPartOrNull(RecvScratch scratch,
+    private Message[] receivePartsOrNull(RecvScratch scratch,
                                          ReceiveFlag flags,
                                          boolean allowNoData) {
         while (true) {
-            Message part = InternalAccess.messageAcquireReceive();
-            boolean success = false;
-            try {
-                int rc = Native.recv(socket.handle(), scratch.sourceRidOut,
-                    InternalAccess.messageNativeHandle(part),
-                    scratch.hasMoreOut, flags.getValue());
-                if (rc == 0) {
-                    success = true;
-                    boolean hasMore =
-                        scratch.hasMoreOut.get(ValueLayout.JAVA_INT, 0) != 0;
-                    InternalAccess.messageFinishReceive(part, hasMore);
-                    return part;
-                }
-            } finally {
-                if (!success) {
-                    try {
-                        part.close();
-                    } catch (RuntimeException ignored) {
-                    }
-                }
+            int rc = flags == ReceiveFlag.DONTWAIT
+                ? Native.recvNoWaitCritical(socket.handle(),
+                    scratch.sourceRidOut, scratch.partsOut,
+                    scratch.partCountOut, flags.getValue())
+                : Native.recv(socket.handle(), scratch.sourceRidOut,
+                    scratch.partsOut, scratch.partCountOut, flags.getValue());
+            if (rc == RecvResult.OK.value()) {
+                return InternalAccess.messageFromOwnedMessageVector(
+                    scratch.partsOut.get(ValueLayout.ADDRESS, 0),
+                    scratch.partCountOut.get(ValueLayout.JAVA_LONG, 0));
             }
-
             int errno = Native.errno();
-            if (errno == NativeErrno.EINTR)
+            if (errno == NativeErrno.EINTR) {
                 continue;
-            if (allowNoData
-                && (errno == NativeErrno.EAGAIN
-                    || errno == NativeErrno.EWOULDBLOCK_WIN)) {
+            }
+            RecvResult result = RecvResult.fromValue(rc);
+            if (allowNoData && (result == RecvResult.NO_DATA
+                || result == RecvResult.BUSY)) {
                 return null;
             }
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.RECV);
+            throw new ZlinkRecvException(result, errno);
         }
     }
 
-    private Message recvDealerPartOrNull(RecvScratch scratch,
-                                         ReceiveFlag flags,
-                                         boolean allowNoData) {
-        while (true) {
-            Message part = InternalAccess.messageAcquireReceive();
-            boolean success = false;
-            scratch.dealerMessageTypeOut.set(ValueLayout.JAVA_BYTE, 0,
-                (byte) 0);
-            scratch.replyTokenValueOut.set(ValueLayout.JAVA_LONG, 0, 0L);
-            try {
-                int rc = Native.recv(socket.handle(), scratch.sourceRidOut,
-                    InternalAccess.messageNativeHandle(part),
-                    scratch.hasMoreOut, flags.getValue());
-                if (rc == RecvResult.OK.value()) {
-                    boolean hasMore =
-                        scratch.hasMoreOut.get(ValueLayout.JAVA_INT, 0) != 0;
-                    InternalAccess.messageFinishReceive(part, hasMore);
-                    success = true;
-                    return part;
-                }
-
-                int errno = Native.errno();
-                if (errno == NativeErrno.EINTR)
-                    continue;
-                RecvResult result = RecvResult.fromValue(rc);
-                if (allowNoData && result == RecvResult.NO_DATA)
-                    return null;
-                throw new ZlinkRecvException(result, errno);
-            } finally {
-                if (!success) {
-                    try {
-                        part.close();
-                    } catch (RuntimeException ignored) {
-                    }
-                }
-            }
-        }
-    }
-
-    private final class BasicReceiveCursor implements ReceivedPartCursor {
-        private final int flags;
-        private final Arena arena = Arena.ofConfined();
-        private final MemorySegment sourceRidOut = arena.allocate(
-            ValueLayout.ADDRESS);
-        private final MemorySegment hasMoreOut = arena.allocate(
-            ValueLayout.JAVA_INT);
-        private boolean hasMore = true;
-        private boolean closed;
-
-        private BasicReceiveCursor(int flags) {
-            this.flags = flags;
-        }
-
-        @Override
-        public Message nextPartOrNull() {
-            if (closed || !hasMore)
-                return null;
-            while (true) {
-                Message next = InternalAccess.messageAcquireReceive();
-                boolean success = false;
-                try {
-                    int rc = Native.recv(socket.handle(), sourceRidOut,
-                        InternalAccess.messageNativeHandle(next), hasMoreOut,
-                        flags);
-                    if (rc == 0) {
-                        success = true;
-                        hasMore = hasMoreOut.get(ValueLayout.JAVA_INT, 0) != 0;
-                        InternalAccess.messageFinishReceive(next, hasMore);
-                        if (!hasMore) {
-                            closeArena();
-                        }
-                        return next;
-                    }
-                } finally {
-                    if (!success) {
-                        try {
-                            next.close();
-                        } catch (RuntimeException ignored) {
-                        }
-                    }
-                }
-
-                int errno = Native.errno();
-                if (errno == NativeErrno.EINTR)
-                    continue;
-                closeArena();
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.RECV);
-            }
-        }
-
-        @Override
-        public void close() {
-            if (closed)
-                return;
-            while (hasMore) {
-                Message next = nextPartOrNull();
-                if (next == null)
-                    break;
-                try {
-                    next.close();
-                } catch (RuntimeException ignored) {
-                }
-            }
-            closed = true;
-            closeArena();
-        }
-
-        private void closeArena() {
-            hasMore = false;
-            if (arena.scope().isAlive()) {
-                arena.close();
-            }
+    private static void populate(Received target, Message[] parts,
+                                 byte[] routingIdBytes,
+                                 long replyTokenValue,
+                                 boolean hasReplyToken) {
+        if (parts.length == 1) {
+            RECEIVED_ACCESS.populateRoutedSinglePart(target, routingIdBytes,
+                parts[0], replyTokenValue, hasReplyToken, null, null);
+        } else if (parts.length == 2) {
+            RECEIVED_ACCESS.populateRoutedTwoParts(target, routingIdBytes,
+                parts[0], parts[1], replyTokenValue, hasReplyToken, null,
+                null);
+        } else {
+            RECEIVED_ACCESS.populateRoutedParts(target, routingIdBytes, parts,
+                replyTokenValue, hasReplyToken, null, null);
         }
     }
 }

@@ -306,8 +306,25 @@ public final class InternalAccess {
 
     public static Message[] messageFromOwnedMessageVector(MemorySegment partsAddr,
                                                       long count) {
+        if (count <= 0) {
+            return new Message[0];
+        }
+        if (count > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException(
+                "message vector too large: " + count);
+        }
+        Message[] reusable = new Message[(int) count];
+        int acquired = 0;
+        try {
+            for (; acquired < reusable.length; acquired++) {
+                reusable[acquired] = MESSAGE_ACCESS.acquireReceive();
+            }
+        } catch (RuntimeException | Error failure) {
+            Message.closeAll(reusable);
+            throw failure;
+        }
         return ContractAccess.nativeMessageMaterializeVector(partsAddr, count,
-            null, false);
+            reusable, false);
     }
 
     public static Message[] messageFromOwnedMessageVectorShared(

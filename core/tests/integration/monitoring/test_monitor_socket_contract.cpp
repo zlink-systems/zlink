@@ -674,10 +674,9 @@ bool recv_stream_routing_id_and_payload (void *socket_,
                                          zlink_msg_t *payload_out_)
 {
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     const zlink_recv_result_t recv_rc =
-      zlink_recv_part (socket_, &source_rid, payload_out_, &has_more,
-                       ZLINK_RECV_FLAGS_NONE);
+      zlink_recv (socket_, &source_rid, payload_out_, 1, &has_more, ZLINK_RECV_FLAGS_NONE);
     if (recv_rc != ZLINK_RECV_OK)
         return false;
 
@@ -690,7 +689,7 @@ bool recv_stream_routing_id_and_payload (void *socket_,
     }
 
     *rid_out_ = *source_rid;
-    if (has_more != ZLINK_PART_FINAL) {
+    if (has_more != 1) {
         const int close_rc = zlink_msg_close (payload_out_);
         TEST_ASSERT_SUCCESS_ERRNO (close_rc);
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (payload_out_));

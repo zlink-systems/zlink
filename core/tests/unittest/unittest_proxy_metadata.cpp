@@ -65,45 +65,46 @@ static void metadata_proxy_task (void *arg_)
     data->changed.notify_all ();
 }
 
-static void assert_raw_dealer_part (void *socket_,
-                                    const char *expected_,
-                                    zlink_part_flag_t expected_more_)
+static void assert_raw_dealer_record (void *socket_,
+                                      const char *const *expected_,
+                                      size_t expected_count_)
 {
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    zlink_msg_t part;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
+    zlink_msg_t parts[2];
+    size_t part_count = 0;
 
     const int timeout = 1000;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
       socket_, ZLINK_OPT_RCVTIMEO, &timeout, sizeof (timeout)));
-    const zlink_recv_result_t result = zlink_recv_part (
-      socket_, NULL, &part, &has_more, ZLINK_RECV_FLAGS_NONE);
+    const zlink_recv_result_t result = zlink_recv (
+      socket_, NULL, parts, 2, &part_count, ZLINK_RECV_FLAGS_NONE);
 
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, result);
-    TEST_ASSERT_EQUAL_INT (expected_more_, has_more);
-    TEST_ASSERT_EQUAL_STRING_LEN (
-      expected_, static_cast<const char *> (zlink_msg_data (&part)),
-      strlen (expected_));
+    TEST_ASSERT_EQUAL_UINT64 (expected_count_, part_count);
+    for (size_t i = 0; i < part_count; ++i) {
+        TEST_ASSERT_EQUAL_STRING_LEN (
+          expected_[i], static_cast<const char *> (zlink_msg_data (&parts[i])),
+          strlen (expected_[i]));
 
-    unsigned char retained_kind = 0xff;
-    uint64_t retained_sequence = UINT64_MAX;
-    TEST_ASSERT_FALSE (
-      reinterpret_cast<zlink::msg_t *> (&part)
-        ->get_request_reply_metadata (&retained_kind, &retained_sequence));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+        unsigned char retained_kind = 0xff;
+        uint64_t retained_sequence = UINT64_MAX;
+        TEST_ASSERT_FALSE (
+          reinterpret_cast<zlink::msg_t *> (&parts[i])
+            ->get_request_reply_metadata (&retained_kind, &retained_sequence));
+    }
+    zlink_multipart_close (parts, part_count);
 }
 
 // Supply the proxy's private input directly: public send deliberately validates
 // request/reply metadata before it reaches this component boundary.
 static void inject_proxy_part (zlink::pipe_t *source_, zlink_msg_t *part_,
-                                zlink_part_flag_t more_)
+                               bool more_)
 {
     zlink::msg_t *const internal = reinterpret_cast<zlink::msg_t *> (part_);
-    if (more_ == ZLINK_PART_MORE)
+    if (more_)
         internal->set_flags (zlink::msg_t::more);
     TEST_ASSERT_TRUE (source_->write (internal));
     TEST_ASSERT_SUCCESS_ERRNO (internal->init ());
-    if (more_ == ZLINK_PART_FINAL)
+    if (!more_)
         source_->flush ();
 }
 
@@ -117,15 +118,14 @@ static bool wait_for_proxy_exit (proxy_thread_data *data_)
 static void assert_raw_pair_part (void *socket_, const char *expected_)
 {
     zlink_msg_t part;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t part_count = 0;
     const int timeout = 1000;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
       socket_, ZLINK_OPT_RCVTIMEO, &timeout, sizeof (timeout)));
-    const zlink_recv_result_t result = zlink_recv_part (
-      socket_, NULL, &part, &has_more, ZLINK_RECV_FLAGS_NONE);
+    const zlink_recv_result_t result = zlink_recv (
+      socket_, NULL, &part, 1, &part_count, ZLINK_RECV_FLAGS_NONE);
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, result);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_UINT64 (1, part_count);
     TEST_ASSERT_EQUAL_STRING_LEN (
       expected_, static_cast<const char *> (zlink_msg_data (&part)),
       strlen (expected_));
@@ -176,17 +176,16 @@ void test_proxy_and_capture_clear_request_reply_metadata ()
       reinterpret_cast<zlink::msg_t *> (&head)
         ->set_request_reply_metadata (zlink::request_reply::request_type,
                                       0x1122334455667788ULL));
-    inject_proxy_part (source_pair.application[0], &head, ZLINK_PART_MORE);
+    inject_proxy_part (source_pair.application[0], &head, true);
 
     zlink_msg_t tail;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&tail, 4));
     memcpy (zlink_msg_data (&tail), "tail", 4);
-    inject_proxy_part (source_pair.application[0], &tail, ZLINK_PART_FINAL);
+    inject_proxy_part (source_pair.application[0], &tail, false);
 
-    assert_raw_dealer_part (sink, "head", ZLINK_PART_MORE);
-    assert_raw_dealer_part (sink, "tail", ZLINK_PART_FINAL);
-    assert_raw_dealer_part (capture_sink, "head", ZLINK_PART_MORE);
-    assert_raw_dealer_part (capture_sink, "tail", ZLINK_PART_FINAL);
+    const char *expected[] = {"head", "tail"};
+    assert_raw_dealer_record (sink, expected, 2);
+    assert_raw_dealer_record (capture_sink, expected, 2);
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_shutdown (context));
     zlink_thread_join (proxy_thread);
@@ -237,14 +236,14 @@ void test_proxy_rejects_request_reply_metadata_after_first_part ()
     zlink_msg_t head;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&head, 4));
     memcpy (zlink_msg_data (&head), "head", 4);
-    inject_proxy_part (source_pair.application[0], &head, ZLINK_PART_MORE);
+    inject_proxy_part (source_pair.application[0], &head, true);
     zlink_msg_t tail;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&tail, 4));
     memcpy (zlink_msg_data (&tail), "tail", 4);
     TEST_ASSERT_SUCCESS_ERRNO (
       reinterpret_cast<zlink::msg_t *> (&tail)
         ->set_request_reply_metadata (zlink::request_reply::reply_type, 45));
-    inject_proxy_part (source_pair.application[0], &tail, ZLINK_PART_FINAL);
+    inject_proxy_part (source_pair.application[0], &tail, false);
 
     const bool completed_before_shutdown = wait_for_proxy_exit (&proxy_data);
     if (!completed_before_shutdown)
@@ -259,15 +258,13 @@ void test_proxy_rejects_request_reply_metadata_after_first_part ()
     void *const receivers[] = {sink, capture_sink};
     for (size_t i = 0; i < sizeof (receivers) / sizeof (receivers[0]); ++i) {
         zlink_msg_t part;
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+        size_t part_count = 0;
         TEST_ASSERT_EQUAL_INT (
           ZLINK_RECV_NO_DATA,
-          zlink_recv_part (receivers[i], NULL, &part, &has_more,
-                           ZLINK_RECV_FLAGS_DONTWAIT));
+          zlink_recv (receivers[i], NULL, &part, 1, &part_count,
+                      ZLINK_RECV_FLAGS_DONTWAIT));
         TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-        TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&part));
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+        TEST_ASSERT_EQUAL_UINT64 (0, part_count);
     }
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_shutdown (context));
@@ -317,20 +314,14 @@ void test_proxy_rolls_back_capture_after_destination_send_failure ()
       zlink_thread_start (&metadata_proxy_task, &first_proxy);
     TEST_ASSERT_NOT_NULL (first_proxy_thread);
 
-    zlink_msg_t orphan_head;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&orphan_head, 6));
-    memcpy (zlink_msg_data (&orphan_head), "orphan", 6);
+    zlink_msg_t orphan[2];
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&orphan[0], 6));
+    memcpy (zlink_msg_data (&orphan[0]), "orphan", 6);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&orphan[1], 4));
+    memcpy (zlink_msg_data (&orphan[1]), "tail", 4);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (first_source, &orphan_head, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_MORE, NULL, NULL));
-    zlink_msg_t orphan_tail;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&orphan_tail, 4));
-    memcpy (zlink_msg_data (&orphan_tail), "tail", 4);
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (first_source, &orphan_tail, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL, NULL, NULL));
+      zlink_send (first_source, orphan, 2, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
 
     TEST_ASSERT_TRUE_MESSAGE (
       wait_for_proxy_exit (&first_proxy),
@@ -349,8 +340,7 @@ void test_proxy_rolls_back_capture_after_destination_send_failure ()
     memcpy (zlink_msg_data (&fresh), "fresh", 5);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (second_source, &fresh, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL, NULL, NULL));
+      zlink_send (second_source, &fresh, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
 
     assert_raw_pair_part (sink, "fresh");
     assert_raw_pair_part (capture_sink, "fresh");

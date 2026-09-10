@@ -163,13 +163,14 @@ inline send_status_t submit_retained_message (dd_send_slot_t *slot)
         return send_status_fatal;
     }
 
-    zlink_msg_t part;
+    zlink_msg_t parts[2];
+    zlink_msg_t &part = parts[0];
     if (zlink_msg_init_size (&part, slot->retained_payload.size ()) != 0)
         return send_status_fatal;
     std::memcpy (zlink_msg_data (&part), slot->retained_payload.data (),
                  slot->retained_payload.size ());
 
-    zlink_msg_t tail;
+    zlink_msg_t &tail = parts[1];
     const bool multipart = perf_measurement_part_count () != 1u;
     if (multipart && zlink_msg_init (&tail) != 0) {
         zlink_msg_close (&part);
@@ -177,23 +178,12 @@ inline send_status_t submit_retained_message (dd_send_slot_t *slot)
     }
 
     zlink_completion_id_t wait_token = 0;
-    zlink_submit_result_t rc = ZLINK_SUBMIT_INVALID_ARGUMENT;
-    if (!multipart) {
-        rc = zlink_send_part (slot->socket, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                              ZLINK_PART_FINAL, slot->socket, &wait_token);
-    } else {
-        rc = zlink_send_part (slot->socket, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                              ZLINK_PART_MORE, NULL, NULL);
-        if (rc == ZLINK_SUBMIT_OK) {
-            rc = zlink_send_part (slot->socket, &tail, ZLINK_SEND_FLAGS_DONTWAIT,
-                                  ZLINK_PART_FINAL, slot->socket, &wait_token);
-        }
-    }
+    const zlink_submit_result_t rc =
+      zlink_send (slot->socket, parts, multipart ? 2u : 1u,
+                  ZLINK_SEND_FLAGS_DONTWAIT, slot->socket, &wait_token);
 
     const int err = rc == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
-    zlink_msg_close (&part);
-    if (multipart)
-        zlink_msg_close (&tail);
+    zlink_multipart_close (parts, multipart ? 2u : 1u);
 
     if (rc == ZLINK_SUBMIT_OK && wait_token == 0) {
         clear_retained_message (slot);

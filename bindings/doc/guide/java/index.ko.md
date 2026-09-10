@@ -337,9 +337,9 @@ try (Message msg = Message.from("data")) {
 | `zlink_close(socket)` | `socket.close()` |
 | `zlink_bind(socket, ep)` | `socket.bind(ep)` |
 | `zlink_connect(socket, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + NONE | `socket.send().message(m).submit_sync()` |
+| `zlink_send(..., parts, count, ...)` / `zlink_send_rid(..., parts, count, ...)` + NONE | `socket.send().message(m).submit_sync()` |
 | DONTWAIT send + completion pull | `socket.send().message(m).submit()` (`CompletionStage`) |
-| `zlink_recv_part(...)` | `socket.recv(received, flags)` |
+| `zlink_recv(..., parts_out, capacity, count_out, ...)` | `socket.recv(received, flags)` |
 | `zlink_msg_data(msg)` | `msg.data()` |
 | `zlink_msg_size(msg)` | `msg.size()` |
 | `zlink_msg_close(msg)` | `msg.close()` |

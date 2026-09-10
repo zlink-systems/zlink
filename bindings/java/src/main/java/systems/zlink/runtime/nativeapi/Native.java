@@ -1,8 +1,5 @@
 package systems.zlink.runtime.nativeapi;
-import systems.zlink.contracts.errors.ZlinkConfigException;
-import systems.zlink.contracts.errors.ConfigResult;
 import systems.zlink.contracts.errors.ZlinkRecvException;
-import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.eventing.MonitorEvent;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.sockets.SubmitResult;
@@ -13,11 +10,7 @@ import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
-import java.util.ArrayList;
-import java.util.List;
 public final class Native {
-    public static final int PART_FINAL = 0;
-    public static final int PART_MORE = 1;
     private static final int SEND_DONT_WAIT = 1;
     private static final ThreadLocal<NativeMultipartScratch>
         MULTIPART_RECEIVE_SCRATCH =
@@ -80,56 +73,58 @@ public final class Native {
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
     private static final MethodHandle MH_DISCONNECT_RID = downcall("zlink_disconnect_rid",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-    private static final MethodHandle MH_SEND_PART = downcall("zlink_send_part",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-                    ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
-                    ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-                    ValueLayout.ADDRESS));
-    // DONT_WAIT-only critical variant. zlink_send_part is non-blocking when
-    // called with DONT_WAIT, so the JVM can elide GC safepoint transitions.
-    private static final MethodHandle MH_SEND_PART_CRITICAL =
-            downcallCritical("zlink_send_part",
-                    FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                            ValueLayout.ADDRESS, ValueLayout.ADDRESS,
-                            ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
-                            ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-    private static final MethodHandle MH_SEND_PART_RID = downcall(
-            "zlink_send_part_rid",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-                    ValueLayout.ADDRESS, ValueLayout.ADDRESS,
-                    ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
-                    ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-    // DONT_WAIT-only critical variant for routed send.
-    private static final MethodHandle MH_SEND_PART_RID_CRITICAL =
-            downcallCritical("zlink_send_part_rid",
-                    FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                            ValueLayout.ADDRESS, ValueLayout.ADDRESS,
-                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
-                            ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-                            ValueLayout.ADDRESS));
-    private static final MethodHandle MH_REQUEST_PART = downcall(
-            "zlink_request_part",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-                    ValueLayout.ADDRESS, ValueLayout.ADDRESS,
-                    ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
-                    ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-                    ValueLayout.ADDRESS));
-    private static final MethodHandle MH_REPLY_PART = downcall(
-            "zlink_reply_part",
+    private static final MethodHandle MH_SEND = downcall("zlink_send",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
-                    ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-    private static final MethodHandle MH_RECV_PART = downcall("zlink_recv_part",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-                    ValueLayout.ADDRESS, ValueLayout.ADDRESS,
-                    ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-    // DONT_WAIT-only critical variant. Caller MUST guarantee DONT_WAIT so
-    // zlink_recv_part cannot block while the JVM elides safepoint transitions.
-    private static final MethodHandle MH_RECV_PART_CRITICAL =
-            downcallCritical("zlink_recv_part",
+                    ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.ADDRESS));
+    // DONT_WAIT-only critical variant. zlink_send is non-blocking when
+    // called with DONT_WAIT, so the JVM can elide GC safepoint transitions.
+    private static final MethodHandle MH_SEND_CRITICAL =
+            downcallCritical("zlink_send",
                     FunctionDescriptor.of(ValueLayout.JAVA_INT,
                             ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                            ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
+                            ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+    private static final MethodHandle MH_SEND_RID = downcall(
+            "zlink_send_rid",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                    ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
+                    ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+    // DONT_WAIT-only critical variant for routed send.
+    private static final MethodHandle MH_SEND_RID_CRITICAL =
+            downcallCritical("zlink_send_rid",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT,
                             ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                            ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                            ValueLayout.ADDRESS));
+    private static final MethodHandle MH_REQUEST = downcall(
+            "zlink_request",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                    ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
+                    ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.ADDRESS));
+    private static final MethodHandle MH_REPLY = downcall(
+            "zlink_reply",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
+    private static final MethodHandle MH_RECV = downcall("zlink_recv",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                    ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
+                    ValueLayout.JAVA_INT));
+    // DONT_WAIT-only critical variant. Caller MUST guarantee DONT_WAIT so
+    // zlink_recv cannot block while the JVM elides safepoint transitions.
+    private static final MethodHandle MH_RECV_CRITICAL =
+            downcallCritical("zlink_recv",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                            ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS,
                             ValueLayout.JAVA_INT));
     private static final MethodHandle MH_STREAM_RECV_PACKET = downcall(
             "zlink_stream_recv_packet",
@@ -212,40 +207,42 @@ public final class Native {
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                     ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-    private static final MethodHandle MH_PUBLISH_PART = downcall(
-            "zlink_publish_part",
+    private static final MethodHandle MH_PUBLISH = downcall(
+            "zlink_publish",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.ADDRESS,
-                    ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
-    // DONT_WAIT-only critical variant. zlink_publish_part is non-blocking when
+                    ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
+    // DONT_WAIT-only critical variant. zlink_publish is non-blocking when
     // called with DONT_WAIT, so the JVM can elide GC safepoint transitions on
-    // the publish hot path (parity with MH_SEND_PART_CRITICAL).
-    private static final MethodHandle MH_PUBLISH_PART_CRITICAL =
-            downcallCritical("zlink_publish_part",
+    // the publish hot path (parity with MH_SEND_CRITICAL).
+    private static final MethodHandle MH_PUBLISH_CRITICAL =
+            downcallCritical("zlink_publish",
                     FunctionDescriptor.of(ValueLayout.JAVA_INT,
                             ValueLayout.ADDRESS, ValueLayout.ADDRESS,
-                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
                             ValueLayout.JAVA_INT));
-    private static final MethodHandle MH_SUBSCRIBE_PART = downcall(
-            "zlink_subscribe_part",
+    private static final MethodHandle MH_SUBSCRIBE = downcall(
+            "zlink_subscribe",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.ADDRESS,
                     ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
-                    ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                    ValueLayout.ADDRESS,
                     ValueLayout.JAVA_INT));
-    // DONT_WAIT-only critical variant. zlink_subscribe_part is non-blocking
+    // DONT_WAIT-only critical variant. zlink_subscribe is non-blocking
     // when called with DONT_WAIT, so the JVM can elide GC safepoint
     // transitions on the subscribe hot path (parity with
-    // MH_RECV_PART_CRITICAL).
-    private static final MethodHandle MH_SUBSCRIBE_PART_CRITICAL =
-            downcallCritical("zlink_subscribe_part",
+    // MH_RECV_CRITICAL).
+    private static final MethodHandle MH_SUBSCRIBE_CRITICAL =
+            downcallCritical("zlink_subscribe",
                     FunctionDescriptor.of(ValueLayout.JAVA_INT,
                             ValueLayout.ADDRESS, ValueLayout.ADDRESS,
                             ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
                             ValueLayout.ADDRESS, ValueLayout.ADDRESS,
-                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-    private static final MethodHandle MH_XPUB_RECV_PART = downcall(
-            "zlink_xpub_recv_part",
+                            ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
+                            ValueLayout.JAVA_INT));
+    private static final MethodHandle MH_XPUB_RECV = downcall(
+            "zlink_xpub_recv",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
@@ -333,20 +330,20 @@ public final class Native {
       "zlink_thread_join",
       FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
 
-    private static final MethodHandle MH_ROUTER_RECV_PART = downcall(
-      "zlink_router_recv_part",
+    private static final MethodHandle MH_ROUTER_RECV = downcall(
+      "zlink_router_recv",
       FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
         ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS,
-        ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-    // DONT_WAIT-only critical variant. zlink_router_recv_part is non-blocking
+        ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+    // DONT_WAIT-only critical variant. zlink_router_recv is non-blocking
     // when called with DONT_WAIT flag, so the JVM can elide GC safepoint
     // transition for this call. Caller must guarantee DONT_WAIT bit is set.
-    private static final MethodHandle MH_ROUTER_RECV_PART_CRITICAL =
+    private static final MethodHandle MH_ROUTER_RECV_CRITICAL =
       downcallCritical(
-        "zlink_router_recv_part",
+        "zlink_router_recv",
         FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
           ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS,
-          ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+          ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
 
     private Native() {}
 
@@ -357,42 +354,13 @@ public final class Native {
             || parts.address() == 0;
     }
 
-    static MemorySegment nthPart(MemorySegment parts, long index) {
-        long messageSize = NativeLayouts.MESSAGE_LAYOUT.byteSize();
-        return parts.asSlice(index * messageSize, messageSize);
-    }
-
-    private static int sendMultipartLoop(MemorySegment socket,
-                                         MemorySegment routingId,
-                                         MemorySegment parts,
-                                         long partCount,
-                                         int flags) {
-        if (invalidMultipart(parts, partCount)) {
-            return SubmitResult.INVALID_ARGUMENT.value();
-        }
-        if ((flags & SEND_DONT_WAIT) != 0) {
-            throw new IllegalArgumentException(
-                "DONTWAIT multipart send requires token-aware FINAL submission");
-        }
-        for (long i = 0; i < partCount; i++) {
-            int partFlag = i + 1 < partCount ? PART_MORE : PART_FINAL;
-            int rc = routingId == null || routingId.address() == 0
-                ? sendPart(socket, nthPart(parts, i), flags, partFlag)
-                : sendPartRid(socket, routingId, nthPart(parts, i), flags,
-                    partFlag);
-            if (rc != 0) {
-                return rc;
-            }
-        }
-        return 0;
-    }
-
     private static void copyRoutingIdOut(MemorySegment target,
                                          MemorySegment routingIdPtr) {
         if (target == null || target.address() == 0) {
             return;
         }
-        NativeRoutingIds.copyTo(target, routingIdPtr);
+        target.set(ValueLayout.ADDRESS, 0,
+            routingIdPtr == null ? MemorySegment.NULL : routingIdPtr);
     }
 
     public static int[] version() {
@@ -559,123 +527,75 @@ public final class Native {
 
     public static int sendMultipart(MemorySegment socket, MemorySegment parts,
                                     long partCount, int flags) {
-        try {
-            return sendMultipartLoop(socket, MemorySegment.NULL, parts,
-                partCount, flags);
-        } catch (Throwable t) {
-            throw new RuntimeException("zlink_send_part failed", t);
-        }
-    }
-
-    public static int sendPart(MemorySegment socket, MemorySegment part,
-                               int flags, int partFlag) {
         rejectUntrackedDontWait(flags);
-        return sendPart(socket, part, flags, partFlag, MemorySegment.NULL,
+        return send(socket, parts, partCount, flags, MemorySegment.NULL,
             MemorySegment.NULL);
     }
 
-    public static int sendPart(MemorySegment socket, MemorySegment part,
-                               int flags, int partFlag,
-                               MemorySegment userContext,
-                               MemorySegment completionIdOut) {
-        requireTrackedDontWaitFinal(flags, partFlag, userContext,
-            completionIdOut);
+    public static int send(MemorySegment socket, MemorySegment parts,
+                           long partCount, int flags,
+                           MemorySegment userContext,
+                           MemorySegment completionIdOut) {
+        requireTrackedDontWait(flags, userContext, completionIdOut);
         try {
-            return (int) MH_SEND_PART.invokeExact(socket, part, flags, partFlag,
+            return (int) MH_SEND.invokeExact(socket, parts, partCount, flags,
                 userContext, completionIdOut);
         } catch (Throwable t) {
-            throw new RuntimeException("zlink_send_part failed", t);
+            throw new RuntimeException("zlink_send failed", t);
         }
     }
 
     // DONT_WAIT-only critical variant. Caller MUST guarantee DONT_WAIT bit set.
-    public static int sendPartNoWaitCritical(MemorySegment socket,
-                                             MemorySegment part,
-                                             int flags, int partFlag) {
-        rejectUntrackedDontWait(flags);
-        return sendPartNoWaitCritical(socket, part, flags, partFlag,
-            MemorySegment.NULL, MemorySegment.NULL);
-    }
-
-    public static int sendPartNoWaitCritical(MemorySegment socket,
-                                             MemorySegment part,
-                                             int flags, int partFlag,
-                                             MemorySegment userContext,
-                                             MemorySegment completionIdOut) {
-        requireTrackedDontWaitFinal(flags, partFlag, userContext,
-            completionIdOut);
+    public static int sendNoWaitCritical(MemorySegment socket,
+                                         MemorySegment parts,
+                                         long partCount, int flags,
+                                         MemorySegment userContext,
+                                         MemorySegment completionIdOut) {
+        requireTrackedDontWait(flags, userContext, completionIdOut);
         try {
-            return (int) MH_SEND_PART_CRITICAL.invokeExact(socket, part, flags,
-                partFlag, userContext, completionIdOut);
+            return (int) MH_SEND_CRITICAL.invokeExact(socket, parts, partCount,
+                flags, userContext, completionIdOut);
         } catch (Throwable t) {
-            throw new RuntimeException("zlink_send_part (critical) failed", t);
+            throw new RuntimeException("zlink_send (critical) failed", t);
         }
     }
 
     public static int sendMultipart(MemorySegment socket, MemorySegment routingId,
                                     MemorySegment parts, long partCount,
                                     int flags) {
-        try {
-            return sendMultipartLoop(socket, routingId, parts, partCount,
-                flags);
-        } catch (Throwable t) {
-            throw new RuntimeException("zlink_send_part_rid failed", t);
-        }
-    }
-
-    public static int sendPartRid(MemorySegment socket,
-                                  MemorySegment routingId,
-                                  MemorySegment part,
-                                  int flags,
-                                  int partFlag) {
         rejectUntrackedDontWait(flags);
-        return sendPartRid(socket, routingId, part, flags, partFlag,
+        return sendRid(socket, routingId, parts, partCount, flags,
             MemorySegment.NULL, MemorySegment.NULL);
     }
 
-    public static int sendPartRid(MemorySegment socket,
-                                  MemorySegment routingId,
-                                  MemorySegment part,
-                                  int flags,
-                                  int partFlag,
-                                  MemorySegment userContext,
-                                  MemorySegment completionIdOut) {
-        requireTrackedDontWaitFinal(flags, partFlag, userContext,
-            completionIdOut);
+    public static int sendRid(MemorySegment socket,
+                              MemorySegment routingId,
+                              MemorySegment parts, long partCount,
+                              int flags, MemorySegment userContext,
+                              MemorySegment completionIdOut) {
+        requireTrackedDontWait(flags, userContext, completionIdOut);
         try {
-            return (int) MH_SEND_PART_RID.invokeExact(socket, routingId, part,
-                flags, partFlag, userContext, completionIdOut);
+            return (int) MH_SEND_RID.invokeExact(socket, routingId, parts,
+                partCount, flags, userContext, completionIdOut);
         } catch (Throwable t) {
-            throw new RuntimeException("zlink_send_part_rid failed", t);
+            throw new RuntimeException("zlink_send_rid failed", t);
         }
     }
 
     // DONT_WAIT-only critical variant for routed send.
-    public static int sendPartRidNoWaitCritical(MemorySegment socket,
-                                                MemorySegment routingId,
-                                                MemorySegment part,
-                                                int flags,
-                                                int partFlag) {
-        rejectUntrackedDontWait(flags);
-        return sendPartRidNoWaitCritical(socket, routingId, part, flags,
-            partFlag, MemorySegment.NULL, MemorySegment.NULL);
-    }
-
-    public static int sendPartRidNoWaitCritical(MemorySegment socket,
-                                                MemorySegment routingId,
-                                                MemorySegment part,
-                                                int flags,
-                                                int partFlag,
-                                                MemorySegment userContext,
-                                                MemorySegment completionIdOut) {
-        requireTrackedDontWaitFinal(flags, partFlag, userContext,
-            completionIdOut);
+    public static int sendRidNoWaitCritical(MemorySegment socket,
+                                            MemorySegment routingId,
+                                            MemorySegment parts,
+                                            long partCount, int flags,
+                                            MemorySegment userContext,
+                                            MemorySegment completionIdOut) {
+        requireTrackedDontWait(flags, userContext, completionIdOut);
         try {
-            return (int) MH_SEND_PART_RID_CRITICAL.invokeExact(socket,
-                routingId, part, flags, partFlag, userContext,
+            return (int) MH_SEND_RID_CRITICAL.invokeExact(socket,
+                routingId, parts, partCount, flags, userContext,
                 completionIdOut);
         } catch (Throwable t) {
-            throw new RuntimeException("zlink_send_part_rid (critical) failed",
+            throw new RuntimeException("zlink_send_rid (critical) failed",
                 t);
         }
     }
@@ -705,17 +625,17 @@ public final class Native {
         }
     }
 
-    private static void requireTrackedDontWaitFinal(
-            int flags, int partFlag, MemorySegment userContext,
+    private static void requireTrackedDontWait(
+            int flags, MemorySegment userContext,
             MemorySegment completionIdOut) {
-        if ((flags & SEND_DONT_WAIT) == 0 || partFlag != PART_FINAL) {
+        if ((flags & SEND_DONT_WAIT) == 0) {
             return;
         }
         if (userContext == null || userContext.address() == 0L
                 || completionIdOut == null
                 || completionIdOut.address() == 0L) {
             throw new IllegalArgumentException(
-                "DONTWAIT FINAL send requires user context and completion ID output");
+                "DONTWAIT send requires user context and completion ID output");
         }
     }
 
@@ -727,57 +647,85 @@ public final class Native {
     }
 
     public static int recv(MemorySegment socket, MemorySegment sourceRidOut,
-                               MemorySegment partOut,
-                               MemorySegment hasMoreOut,
-                               int flags) {
+                           MemorySegment partsOut,
+                           MemorySegment partCountOut,
+                           int flags) {
+        NativeMultipartScratch scratch = MULTIPART_RECEIVE_SCRATCH.get();
         try {
-            return (int) MH_RECV_PART.invokeExact(socket, sourceRidOut, partOut,
-                hasMoreOut, flags);
+            scratch.reset();
+            for (;;) {
+                int rc = (int) MH_RECV.invokeExact(socket,
+                    scratch.nodeRidPtrOut, scratch.parts(), scratch.capacity(),
+                    scratch.countOut, flags);
+                if (rc != RecvResult.BUFFER_TOO_SMALL.value()) {
+                    if (rc == RecvResult.OK.value()) {
+                        copyRoutingIdOut(sourceRidOut,
+                            scratch.nodeRidPtrOut.get(ValueLayout.ADDRESS, 0));
+                        partsOut.set(ValueLayout.ADDRESS, 0, scratch.parts());
+                        partCountOut.set(ValueLayout.JAVA_LONG, 0,
+                            scratch.requiredCount());
+                    }
+                    return rc;
+                }
+                scratch.grow(scratch.requiredCount());
+            }
         } catch (Throwable t) {
-            throw new RuntimeException("zlink_recv_part failed", t);
+            throw new RuntimeException("zlink_recv failed", t);
         }
     }
 
-    public static int recvPartNoWaitCritical(MemorySegment socket,
-                                             MemorySegment sourceRidOut,
-                                             MemorySegment partOut,
-                                             MemorySegment hasMoreOut,
-                                             int flags) {
+    public static int recvNoWaitCritical(MemorySegment socket,
+                                         MemorySegment sourceRidOut,
+                                         MemorySegment partsOut,
+                                         MemorySegment partCountOut,
+                                         int flags) {
+        NativeMultipartScratch scratch = MULTIPART_RECEIVE_SCRATCH.get();
         try {
-            return (int) MH_RECV_PART_CRITICAL.invokeExact(socket,
-                sourceRidOut, partOut, hasMoreOut, flags);
+            scratch.reset();
+            for (;;) {
+                int rc = (int) MH_RECV_CRITICAL.invokeExact(socket,
+                    scratch.nodeRidPtrOut, scratch.parts(), scratch.capacity(),
+                    scratch.countOut, flags);
+                if (rc != RecvResult.BUFFER_TOO_SMALL.value()) {
+                    if (rc == RecvResult.OK.value()) {
+                        copyRoutingIdOut(sourceRidOut,
+                            scratch.nodeRidPtrOut.get(ValueLayout.ADDRESS, 0));
+                        partsOut.set(ValueLayout.ADDRESS, 0, scratch.parts());
+                        partCountOut.set(ValueLayout.JAVA_LONG, 0,
+                            scratch.requiredCount());
+                    }
+                    return rc;
+                }
+                scratch.grow(scratch.requiredCount());
+            }
         } catch (Throwable t) {
-            throw new RuntimeException("zlink_recv_part (critical) failed", t);
+            throw new RuntimeException("zlink_recv (critical) failed", t);
         }
     }
 
-    public static int requestPart(MemorySegment socket,
-                                  MemorySegment targetOrNull,
-                                  MemorySegment part,
-                                  int flags,
-                                  int partFlag,
-                                  int timeoutMs,
-                                  MemorySegment userContext,
-                                  MemorySegment completionIdOut) {
+    public static int request(MemorySegment socket,
+                              MemorySegment targetOrNull,
+                              MemorySegment parts, long partCount,
+                              int flags, int timeoutMs,
+                              MemorySegment userContext,
+                              MemorySegment completionIdOut) {
         try {
-            return (int) MH_REQUEST_PART.invokeExact(socket, targetOrNull,
-                part, flags, partFlag, timeoutMs, userContext,
+            return (int) MH_REQUEST.invokeExact(socket, targetOrNull,
+                parts, partCount, flags, timeoutMs, userContext,
                 completionIdOut);
         } catch (Throwable t) {
-            throw new RuntimeException("zlink_request_part failed", t);
+            throw new RuntimeException("zlink_request failed", t);
         }
     }
 
-    public static int replyPart(MemorySegment router,
-                                MemorySegment sourceRid,
-                                long replyToken,
-                                MemorySegment part,
-                                int partFlag) {
+    public static int reply(MemorySegment router, MemorySegment sourceRid,
+                            long replyToken, MemorySegment parts,
+                            long partCount) {
         try {
-            return (int) MH_REPLY_PART.invokeExact(router, sourceRid,
-                replyToken, part, partFlag);
+            return (int) MH_REPLY.invokeExact(router, sourceRid,
+                replyToken, parts, partCount);
         } catch (Throwable t) {
-            throw new RuntimeException("zlink_reply_part failed", t);
+            throw new RuntimeException("zlink_reply failed", t);
         }
     }
 
@@ -994,41 +942,22 @@ public final class Native {
             if (invalidMultipart(parts, partCount)) {
                 return SubmitResult.INVALID_ARGUMENT.value();
             }
-            for (long i = 0; i < partCount; i++) {
-                int partFlag = i + 1 < partCount ? PART_MORE : PART_FINAL;
-                int rc = publishPart(subject, topicId,
-                    nthPart(parts, i), flags, partFlag);
-                if (rc != 0) {
-                    return rc;
-                }
-            }
-            return 0;
+            return (int) MH_PUBLISH.invokeExact(subject, topicId, parts,
+                partCount, flags);
         } catch (Throwable t) {
-            throw new RuntimeException("zlink_publish_part failed", t);
+            throw new RuntimeException("zlink_publish failed", t);
         }
     }
 
-    public static int publishPart(MemorySegment subject, MemorySegment topicId,
-                                  MemorySegment part, int flags,
-                                  int partFlag) {
+    public static int publishNoWaitCritical(MemorySegment subject,
+                                            MemorySegment topicId,
+                                            MemorySegment parts,
+                                            long partCount, int flags) {
         try {
-            return (int) MH_PUBLISH_PART.invokeExact(subject, topicId, part,
-              flags, partFlag);
+            return (int) MH_PUBLISH_CRITICAL.invokeExact(subject, topicId,
+                parts, partCount, flags);
         } catch (Throwable t) {
-            throw new RuntimeException("zlink_publish_part failed", t);
-        }
-    }
-
-    // DONT_WAIT-only critical variant. Caller MUST guarantee DONT_WAIT bit set.
-    public static int publishPartNoWaitCritical(MemorySegment subject,
-                                                MemorySegment topicId,
-                                                MemorySegment part, int flags,
-                                                int partFlag) {
-        try {
-            return (int) MH_PUBLISH_PART_CRITICAL.invokeExact(subject, topicId,
-              part, flags, partFlag);
-        } catch (Throwable t) {
-            throw new RuntimeException("zlink_publish_part (critical) failed",
+            throw new RuntimeException("zlink_publish (critical) failed",
               t);
         }
     }
@@ -1042,107 +971,32 @@ public final class Native {
         try {
             NativeMultipartScratch scratch = MULTIPART_RECEIVE_SCRATCH.get();
             scratch.reset();
-            return NativeErrno.retryWhileInterrupted(
-                () -> subscribeOnce(subject, sourceRidOut, partsOut,
-                    partCountOut, topicIdOut, topicIdLenOut, flags, scratch),
-                result -> result != 0);
-        } catch (Throwable t) {
-            throw new RuntimeException("zlink_subscribe_part failed", t);
-        }
-    }
-
-    private static int subscribeOnce(MemorySegment subject,
-                                     MemorySegment sourceRidOut,
-                                     MemorySegment partsOut,
-                                     MemorySegment partCountOut,
-                                     MemorySegment topicIdOut,
-                                     MemorySegment topicIdLenOut,
-                                     int flags,
-                                     NativeMultipartScratch scratch) {
-        List<Message> receivedParts = new ArrayList<>();
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment routingIdPtrOut = arena.allocate(
-                ValueLayout.ADDRESS);
-            MemorySegment hasMoreOut = arena.allocate(
-                ValueLayout.JAVA_INT);
             long topicCapacity = topicIdLenOut == null
                 || topicIdLenOut.address() == 0
-                ? 0L
-                : Math.max(0L,
+                ? 0L : Math.max(0L,
                     topicIdLenOut.get(ValueLayout.JAVA_LONG, 0));
-            while (true) {
-                Message part = InternalAccess.messageAcquireReceive();
-                boolean success = false;
-                try {
-                    int rc = subscribePart(subject, routingIdPtrOut,
-                        topicIdOut, topicCapacity, topicIdLenOut,
-                        InternalAccess.messageNativeHandle(part),
-                        hasMoreOut, flags);
-                    if (rc != 0) {
-                        Message.closeAll(receivedParts);
-                        return rc;
-                    }
-                    success = true;
-                    if (receivedParts.isEmpty()) {
+            MethodHandle receiver = (flags & SEND_DONT_WAIT) != 0
+                ? MH_SUBSCRIBE_CRITICAL : MH_SUBSCRIBE;
+            for (;;) {
+                int rc = (int) receiver.invokeExact(subject,
+                    scratch.nodeRidPtrOut, topicIdOut, topicCapacity,
+                    topicIdLenOut, scratch.parts(), scratch.capacity(),
+                    scratch.countOut, flags);
+                if (rc != RecvResult.BUFFER_TOO_SMALL.value()
+                    || scratch.requiredCount() <= scratch.capacity()) {
+                    if (rc == RecvResult.OK.value()) {
                         copyRoutingIdOut(sourceRidOut,
-                            routingIdPtrOut.get(ValueLayout.ADDRESS, 0));
-                    }
-                    InternalAccess.messageFinishReceive(part,
-                        hasMoreOut.get(ValueLayout.JAVA_INT, 0) != 0);
-                    receivedParts.add(part);
-                    if (!InternalAccess.messageMore(part)) {
-                        MemorySegment parts =
-                            scratch.materializeParts(receivedParts);
-                        partsOut.set(ValueLayout.ADDRESS, 0, parts);
+                            scratch.nodeRidPtrOut.get(ValueLayout.ADDRESS, 0));
+                        partsOut.set(ValueLayout.ADDRESS, 0, scratch.parts());
                         partCountOut.set(ValueLayout.JAVA_LONG, 0,
-                            scratch.partCount());
-                        return 0;
+                            scratch.requiredCount());
                     }
-                } finally {
-                    if (!success) {
-                        try {
-                            part.close();
-                        } catch (RuntimeException ignored) {
-                        }
-                    }
+                    return rc;
                 }
+                scratch.grow(scratch.requiredCount());
             }
-        }
-    }
-
-    public static int subscribePart(MemorySegment subject,
-                                    MemorySegment sourceRidOut,
-                                    MemorySegment topicIdOut,
-                                    long topicCapacity,
-                                    MemorySegment topicIdLenOut,
-                                    MemorySegment partOut,
-                                    MemorySegment hasMoreOut,
-                                    int flags) {
-        try {
-            return (int) MH_SUBSCRIBE_PART.invokeExact(subject, sourceRidOut,
-              topicIdOut, topicCapacity, topicIdLenOut, partOut, hasMoreOut,
-              flags);
         } catch (Throwable t) {
-            throw new RuntimeException("zlink_subscribe_part failed", t);
-        }
-    }
-
-    // DONT_WAIT-only critical variant. Caller MUST guarantee DONT_WAIT set.
-    public static int subscribePartNoWaitCritical(MemorySegment subject,
-                                    MemorySegment sourceRidOut,
-                                    MemorySegment topicIdOut,
-                                    long topicCapacity,
-                                    MemorySegment topicIdLenOut,
-                                    MemorySegment partOut,
-                                    MemorySegment hasMoreOut,
-                                    int flags) {
-        try {
-            return (int) MH_SUBSCRIBE_PART_CRITICAL.invokeExact(subject,
-              sourceRidOut, topicIdOut, topicCapacity, topicIdLenOut, partOut,
-              hasMoreOut, flags);
-        } catch (Throwable t) {
-            throw new RuntimeException("zlink_subscribe_part (critical) failed",
-              t);
+            throw new RuntimeException("zlink_subscribe failed", t);
         }
     }
 
@@ -1152,13 +1006,20 @@ public final class Native {
                                         MemorySegment topicIdOut,
                                         MemorySegment topicIdLenOut,
                                         int flags) {
+        NativeMultipartScratch scratch = MULTIPART_RECEIVE_SCRATCH.get();
         try {
-            return (int) MH_XPUB_RECV_PART.invokeExact(subject, sourceRidOut,
+            int rc = (int) MH_XPUB_RECV.invokeExact(subject,
+              scratch.nodeRidPtrOut,
               subscribedOut, topicIdOut,
               topicIdLenOut.get(ValueLayout.JAVA_LONG, 0), topicIdLenOut,
               flags);
+            if (rc == RecvResult.OK.value()) {
+                NativeRoutingIds.copyTo(sourceRidOut,
+                    scratch.nodeRidPtrOut.get(ValueLayout.ADDRESS, 0));
+            }
+            return rc;
         } catch (Throwable t) {
-            throw new RuntimeException("zlink_xpub_recv_part failed", t);
+            throw new RuntimeException("zlink_xpub_recv failed", t);
         }
     }
 
@@ -1434,35 +1295,63 @@ public final class Native {
         }
     }
 
-    public static int routerRecvPart(MemorySegment router,
-                                     MemorySegment sourceNodeRidOut,
-                                     MemorySegment replyTokenValueOut,
-                                     MemorySegment partOut,
-                                     MemorySegment hasMoreOut,
-                                     int flags) {
+    public static int routerRecv(MemorySegment router,
+                                 MemorySegment sourceNodeRidOut,
+                                 MemorySegment replyTokenValueOut,
+                                 MemorySegment partsOut,
+                                 MemorySegment partCountOut,
+                                 int flags) {
+        NativeMultipartScratch scratch = MULTIPART_RECEIVE_SCRATCH.get();
         try {
-            return (int) MH_ROUTER_RECV_PART.invokeExact(router,
-                sourceNodeRidOut, replyTokenValueOut, partOut,
-                hasMoreOut, flags);
+            scratch.reset();
+            for (;;) {
+                int rc = (int) MH_ROUTER_RECV.invokeExact(router,
+                    scratch.nodeRidPtrOut, replyTokenValueOut, scratch.parts(),
+                    scratch.capacity(), scratch.countOut, flags);
+                if (rc != RecvResult.BUFFER_TOO_SMALL.value()) {
+                    if (rc == RecvResult.OK.value()) {
+                        copyRoutingIdOut(sourceNodeRidOut,
+                            scratch.nodeRidPtrOut.get(ValueLayout.ADDRESS, 0));
+                        partsOut.set(ValueLayout.ADDRESS, 0, scratch.parts());
+                        partCountOut.set(ValueLayout.JAVA_LONG, 0,
+                            scratch.requiredCount());
+                    }
+                    return rc;
+                }
+                scratch.grow(scratch.requiredCount());
+            }
         } catch (Throwable t) {
-            throw new RuntimeException("zlink_router_recv_part failed", t);
+            throw new RuntimeException("zlink_router_recv failed", t);
         }
     }
 
     // DONT_WAIT-only critical variant. Caller MUST guarantee the DONT_WAIT
     // bit is set in flags so that the underlying call is non-blocking.
-    public static int routerRecvPartNoWaitCritical(MemorySegment router,
-                                                   MemorySegment sourceNodeRidOut,
-                                                   MemorySegment replyTokenValueOut,
-                                                   MemorySegment partOut,
-                                                   MemorySegment hasMoreOut,
-                                                   int flags) {
+    public static int routerRecvNoWaitCritical(
+            MemorySegment router, MemorySegment sourceNodeRidOut,
+            MemorySegment replyTokenValueOut, MemorySegment partsOut,
+            MemorySegment partCountOut, int flags) {
+        NativeMultipartScratch scratch = MULTIPART_RECEIVE_SCRATCH.get();
         try {
-            return (int) MH_ROUTER_RECV_PART_CRITICAL.invokeExact(router,
-                sourceNodeRidOut, replyTokenValueOut, partOut,
-                hasMoreOut, flags);
+            scratch.reset();
+            for (;;) {
+                int rc = (int) MH_ROUTER_RECV_CRITICAL.invokeExact(router,
+                    scratch.nodeRidPtrOut, replyTokenValueOut, scratch.parts(),
+                    scratch.capacity(), scratch.countOut, flags);
+                if (rc != RecvResult.BUFFER_TOO_SMALL.value()) {
+                    if (rc == RecvResult.OK.value()) {
+                        copyRoutingIdOut(sourceNodeRidOut,
+                            scratch.nodeRidPtrOut.get(ValueLayout.ADDRESS, 0));
+                        partsOut.set(ValueLayout.ADDRESS, 0, scratch.parts());
+                        partCountOut.set(ValueLayout.JAVA_LONG, 0,
+                            scratch.requiredCount());
+                    }
+                    return rc;
+                }
+                scratch.grow(scratch.requiredCount());
+            }
         } catch (Throwable t) {
-            throw new RuntimeException("zlink_router_recv_part (critical) failed", t);
+            throw new RuntimeException("zlink_router_recv (critical) failed", t);
         }
     }
 

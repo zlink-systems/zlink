@@ -12,10 +12,9 @@ use crate::ffi;
 use crate::internal::{CompletionEntry, CompletionOwner, RoutedHandle};
 use crate::message::{Message, RoutingId};
 use crate::messaging_operations::{Empty, MessageParts, RequestOp, RequestOpStorage};
-use crate::native_errors::{check_submit_rc, submit_error_from_errno, submit_error_from_rc};
-use crate::socket::submit_part_sequence;
+use crate::native_errors::{submit_error_from_errno, submit_error_from_rc};
 
-use super::send_ops::submit_shared_part_sequence;
+use super::send_ops::{check_submit_result, submit_shared_message};
 
 pub(crate) fn dealer_request_op(
     routed: Arc<RoutedHandle>,
@@ -265,29 +264,18 @@ fn submit_request_attempt(
             if handle.is_null() {
                 return Err(submit_error_from_errno(libc::ECANCELED));
             }
-            let (rc, errno) = submit_shared_part_sequence(
-                &mut operation.parts,
-                |part, part_flag, is_final| unsafe {
-                    ffi::zlink_request_part(
-                        handle,
-                        target,
-                        part,
-                        ffi::ZLINK_DONTWAIT,
-                        part_flag,
-                        if is_final { timeout_ms } else { 0 },
-                        if is_final {
-                            user_context
-                        } else {
-                            std::ptr::null_mut()
-                        },
-                        if is_final {
-                            &mut completion_id
-                        } else {
-                            std::ptr::null_mut()
-                        },
-                    )
-                },
-            )?;
+            let (rc, errno) = submit_shared_message(&mut operation.parts, |parts, count| unsafe {
+                ffi::zlink_request(
+                    handle,
+                    target,
+                    parts,
+                    count,
+                    ffi::ZLINK_DONTWAIT,
+                    timeout_ms,
+                    user_context,
+                    &mut completion_id,
+                )
+            })?;
 
             if rc == SubmitResult::Ok as i32 && completion_id != 0 {
                 entry.publish_request(completion_id);
@@ -329,27 +317,19 @@ fn submit_request_parts(
         .map_or(std::ptr::null(), |rid| rid.as_raw() as *const _);
     let timeout_ms = duration_to_timeout_ms(operation.timeout);
     let mut completion_id = 0;
-    let rc = submit_part_sequence(&mut operation.parts, |part, part_flag, is_final| unsafe {
-        ffi::zlink_request_part(
+    let (rc, errno) = submit_shared_message(&mut operation.parts, |parts, count| unsafe {
+        ffi::zlink_request(
             handle,
             target,
-            part,
+            parts,
+            count,
             flags,
-            part_flag,
-            if is_final { timeout_ms } else { 0 },
-            if is_final {
-                user_context
-            } else {
-                std::ptr::null_mut()
-            },
-            if is_final {
-                &mut completion_id
-            } else {
-                std::ptr::null_mut()
-            },
+            timeout_ms,
+            user_context,
+            &mut completion_id,
         )
     })?;
-    check_submit_rc(rc)?;
+    check_submit_result(rc, errno)?;
     Ok(completion_id)
 }
 

@@ -37,11 +37,11 @@ int main (void)
     CHECK (minor == ZLINK_VERSION_MINOR);
     CHECK (patch == ZLINK_VERSION_PATCH);
 
-    CHECK (zlink_send_part != NULL);
-    CHECK (zlink_send_part_rid != NULL);
-    CHECK (zlink_recv_part != NULL);
-    CHECK (zlink_publish_part != NULL);
-    CHECK (zlink_subscribe_part != NULL);
+    CHECK (zlink_send != NULL);
+    CHECK (zlink_send_rid != NULL);
+    CHECK (zlink_recv != NULL);
+    CHECK (zlink_publish != NULL);
+    CHECK (zlink_subscribe != NULL);
 
     void *ctx = zlink_ctx_new ();
     CHECK (ctx != NULL);

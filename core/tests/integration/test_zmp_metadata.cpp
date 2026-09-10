@@ -179,30 +179,21 @@ void test_raw_wire_sendsend_and_reqrep_match_multipart_frame_count ()
       sizeof (second_payload));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (dealer, &ordinary[0], ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_MORE, NULL, NULL));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (dealer, &ordinary[1], ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL, NULL, NULL));
+      zlink_send (dealer, ordinary, 2, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
     TEST_ASSERT_EQUAL_UINT64 (
       0, assert_raw_two_part_application_record (
            application, test_zmp_wire::zmp_kind_data, 0, first_payload,
            sizeof (first_payload), second_payload, sizeof (second_payload)));
 
     zlink_msg_t request[2];
+    zlink_completion_id_t completion_id = 0;
     init_two_part_application_record (
       request, first_payload, sizeof (first_payload), second_payload,
       sizeof (second_payload));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_request_part (dealer, NULL, &request[0], ZLINK_SEND_FLAGS_NONE,
-                          ZLINK_PART_MORE, 0, NULL, NULL));
-    zlink_completion_id_t completion_id = 0;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_request_part (dealer, NULL, &request[1], ZLINK_SEND_FLAGS_NONE,
-                          ZLINK_PART_FINAL, 5000, NULL, &completion_id));
+      zlink_request (dealer, NULL, request, 2, ZLINK_SEND_FLAGS_NONE, 5000,
+                     NULL, &completion_id));
     TEST_ASSERT_TRUE (completion_id != 0);
 
     const uint64_t request_sequence = assert_raw_two_part_application_record (
@@ -264,17 +255,16 @@ void test_raw_wire_public_router_reply_keeps_kind_and_sequence ()
     const zlink_routing_id_t *source_rid = NULL;
     zlink_reply_token_t reply_token = 0;
     zlink_msg_t request;
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&request));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
-      zlink_router_recv_part (router, &source_rid, &reply_token, &request,
-                              &has_more, ZLINK_RECV_FLAGS_NONE));
+      zlink_router_recv (router, &source_rid, &reply_token, &request, 1, &has_more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source_rid);
     // The public value is a socket-owned opaque reply token. The original
     // wire sequence is restored only when the reply is encoded below.
     TEST_ASSERT_TRUE (reply_token != 0);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_UINT64 (sizeof (request_payload),
                               zlink_msg_size (&request));
     TEST_ASSERT_EQUAL_MEMORY (request_payload, zlink_msg_data (&request),
@@ -288,8 +278,7 @@ void test_raw_wire_public_router_reply_keeps_kind_and_sequence ()
     memcpy (zlink_msg_data (&reply), reply_payload, sizeof (reply_payload));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_reply_part (router, source_rid, reply_token, &reply,
-                        ZLINK_PART_FINAL));
+      zlink_reply (router, source_rid, reply_token, &reply, 1));
 
     unsigned char flags = 0;
     unsigned char kind = 0;
@@ -502,14 +491,11 @@ void test_tcp_decoder_hwm_isolated_by_origin_connection ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&pending));
     const zlink_routing_id_t *pending_source_rid = NULL;
     uint64_t pending_request_seq = 0;
-    zlink_part_flag_t pending_has_more = ZLINK_PART_FINAL;
+    size_t pending_has_more = 1;
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_NO_DATA,
-      zlink_router_recv_part (
-        server, &pending_source_rid, &pending_request_seq, &pending,
-        &pending_has_more,
-        static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+      zlink_router_recv (server, &pending_source_rid, &pending_request_seq, &pending, 1, &pending_has_more, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
     TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&pending));
     TEST_ASSERT_TRUE (wait_for_current_accounted_bytes (0));
@@ -540,12 +526,10 @@ void test_tcp_decoder_hwm_isolated_by_origin_connection ()
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
         const zlink_routing_id_t *source_rid = NULL;
         uint64_t request_seq = 0;
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+        size_t has_more = 1;
         TEST_ASSERT_EQUAL_INT (
           ZLINK_RECV_OK,
-          zlink_router_recv_part (
-            server, &source_rid, &request_seq, &msg, &has_more,
-            static_cast<zlink_recv_flags_t> (0)));
+          zlink_router_recv (server, &source_rid, &request_seq, &msg, 1, &has_more, static_cast<zlink_recv_flags_t> (0)));
         TEST_ASSERT_EQUAL_UINT64 (payload_size, zlink_msg_size (&msg));
         const unsigned char marker =
           *static_cast<unsigned char *> (zlink_msg_data (&msg));
@@ -775,9 +759,7 @@ void test_completion_lane_rejects_data_and_request_kinds_without_completing_them
           make_text_routing_id ("invalid-completion-kind");
         TEST_ASSERT_EQUAL_INT (
           ZLINK_SUBMIT_OK,
-          zlink_request_part (server, &target_rid, &request,
-                              ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, 250,
-                              NULL, &completion_id));
+          zlink_request (server, &target_rid, &request, 1, ZLINK_SEND_FLAGS_NONE, 250, NULL, &completion_id));
         TEST_ASSERT_TRUE (completion_id != 0);
         const uint64_t request_sequence =
           read_raw_request_sequence (application);

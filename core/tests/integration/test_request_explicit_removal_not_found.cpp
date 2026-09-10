@@ -109,22 +109,19 @@ void run_case (bool router_, bool tcp_, removal_t removal_)
           static_cast<unsigned char> (i);
         TEST_ASSERT_EQUAL_INT (
           ZLINK_SUBMIT_OK,
-          zlink_request_part (source, router_ ? &target_rid : NULL, &part,
-                              ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-                              request_timeout_ms, &contexts[i], &ids[i]));
+          zlink_request (source, router_ ? &target_rid : NULL, &part, 1, ZLINK_SEND_FLAGS_NONE, request_timeout_ms, &contexts[i], &ids[i]));
         TEST_ASSERT_NOT_EQUAL (0, ids[i]);
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
 
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
         const zlink_routing_id_t *rid = NULL;
         zlink_reply_token_t token = 0;
-        zlink_part_flag_t more = ZLINK_PART_MORE;
+        size_t more = 0;
         TEST_ASSERT_EQUAL_INT (
           ZLINK_RECV_OK,
-          zlink_router_recv_part (target, &rid, &token, &part, &more,
-                                  ZLINK_RECV_FLAGS_NONE));
+          zlink_router_recv (target, &rid, &token, &part, 1, &more, ZLINK_RECV_FLAGS_NONE));
         TEST_ASSERT_NOT_EQUAL (0, token);
-        TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
+        TEST_ASSERT_EQUAL_INT (1, more);
         TEST_ASSERT_EQUAL_UINT64 (1, zlink_msg_size (&part));
         TEST_ASSERT_EQUAL_INT (i, *static_cast<unsigned char *> (
                                    zlink_msg_data (&part)));

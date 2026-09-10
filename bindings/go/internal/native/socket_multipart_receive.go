@@ -14,49 +14,76 @@ import (
 	"unsafe"
 )
 
-func recvMultipart(reuse []*Message, flags RecvFlags, recv multipartRecvFunc) ([]*Message, error) {
-	// Core owns a multipart receive sequence per native thread until the final
-	// part is consumed. A Go goroutine may migrate between cgo calls, so pin it
-	// while draining this one logical message.
+const nativeRecvInitialCapacity = 8
+
+func recvMultipart(nativeBuffer *[]C.zlink_msg_t, reuse []*Message, flags RecvFlags, recv multipartRecvFunc) ([]*Message, error) {
+	// Keep errno and a possible ENOBUFS retry on the same native thread.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	if reuse == nil {
-		reuse = make([]*Message, 0, 1)
+	if len(*nativeBuffer) == 0 {
+		*nativeBuffer = make([]C.zlink_msg_t, nativeRecvInitialCapacity)
 	}
-	parts := reuse[:0]
-	recvFlags := C.zlink_recv_flags_t(flags)
+	native := *nativeBuffer
 	for {
-		var msg *Message
-		if len(parts) < len(reuse) {
-			msg = reuse[len(parts)]
-			if msg == nil || msg.closed {
-				msg = &Message{}
-				reuse[len(parts)] = msg
+		var partCount C.size_t
+		result := recv(
+			&native[0], C.size_t(len(native)), &partCount,
+			C.zlink_recv_flags_t(flags),
+		)
+		if result == C.ZLINK_RECV_BUFFER_TOO_SMALL {
+			if partCount <= C.size_t(len(native)) {
+				return nil, &RecvError{Result: RecvInternalError, nativeErrno: int(C.EPROTO)}
 			}
-		} else {
+			required := int(partCount)
+			if required <= 0 {
+				return nil, &RecvError{Result: RecvInternalError, nativeErrno: int(C.EOVERFLOW)}
+			}
+			if cap(native) >= required {
+				native = native[:required]
+			} else {
+				native = make([]C.zlink_msg_t, required)
+			}
+			*nativeBuffer = native
+			continue
+		}
+		if err := recvErrorFromResult(result); err != nil {
+			return nil, err
+		}
+		if partCount == 0 || partCount > C.size_t(len(native)) {
+			return nil, &RecvError{Result: RecvInternalError, nativeErrno: int(C.EPROTO)}
+		}
+		return adoptReceivedParts(native, int(partCount), reuse)
+	}
+}
+
+func adoptReceivedParts(native []C.zlink_msg_t, count int, reuse []*Message) ([]*Message, error) {
+	parts := reuse[:0]
+	for i := 0; i < count; i++ {
+		var msg *Message
+		if i < len(reuse) {
+			msg = reuse[i]
+		}
+		if msg == nil {
 			msg = &Message{}
 		}
 		if err := configErrorFromResult(C.zlink_msg_init(&msg.msg)); err != nil {
 			closeMessageSlice(parts)
+			closeNativeMultipart(native, count)
 			return nil, err
 		}
-		var hasMore C.zlink_part_flag_t
-		if err := recv(&msg.msg, &hasMore, recvFlags); err != nil {
+		if err := configErrorFromResult(C.zlink_msg_move(&msg.msg, &native[i])); err != nil {
 			_ = configErrorFromResult(C.zlink_msg_close(&msg.msg))
 			msg.closed = true
 			closeMessageSlice(parts)
+			closeNativeMultipart(native, count)
 			return nil, err
 		}
 		msg.closed = false
 		parts = append(parts, msg)
-
-		if hasMore == 0 {
-			break
-		}
-		recvFlags = C.zlink_recv_flags_t(C.ZLINK_DONTWAIT)
 	}
-	for i := len(parts); i < len(reuse); i++ {
+	closeNativeMultipart(native, count)
+	for i := count; i < len(reuse); i++ {
 		reuse[i] = nil
 	}
 	return parts, nil

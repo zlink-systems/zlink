@@ -157,14 +157,13 @@ bool raw_send (void *socket_, zlink_msg_t *message_,
                const zlink_routing_id_t *target_)
 {
     const zlink_submit_result_t result =
-      target_ ? zlink_send_part_rid (socket_, target_, message_,
-                                     ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-                                     NULL, NULL)
-              : zlink_send_part (socket_, message_, ZLINK_SEND_FLAGS_NONE,
-                                 ZLINK_PART_FINAL, NULL, NULL);
+      target_ ? zlink_send_rid (socket_, target_, message_, 1,
+                                ZLINK_SEND_FLAGS_NONE, NULL, NULL)
+              : zlink_send (socket_, message_, 1, ZLINK_SEND_FLAGS_NONE, NULL,
+                            NULL);
     return result == ZLINK_SUBMIT_OK
              ? true
-             : api_error (target_ ? "zlink_send_part_rid" : "zlink_send_part",
+             : api_error (target_ ? "zlink_send_rid" : "zlink_send",
                           result);
 }
 
@@ -172,18 +171,17 @@ bool raw_receive (void *socket_, zlink_msg_t *message_, bool router_)
 {
     const zlink_routing_id_t *source = NULL;
     zlink_reply_token_t token = 0;
-    zlink_part_flag_t part_flag = ZLINK_PART_MORE;
+    size_t part_count = 0;
     const zlink_recv_result_t result =
-      router_ ? zlink_router_recv_part (socket_, &source, &token, message_,
-                                        &part_flag, ZLINK_RECV_FLAGS_NONE)
-              : zlink_recv_part (socket_, NULL, message_, &part_flag,
-                                 ZLINK_RECV_FLAGS_NONE);
+      router_ ? zlink_router_recv (socket_, &source, &token, message_, 1,
+                                   &part_count, ZLINK_RECV_FLAGS_NONE)
+              : zlink_recv (socket_, NULL, message_, 1, &part_count,
+                            ZLINK_RECV_FLAGS_NONE);
     if (result != ZLINK_RECV_OK)
-        return api_error (router_ ? "zlink_router_recv_part"
-                                  : "zlink_recv_part",
+        return api_error (router_ ? "zlink_router_recv" : "zlink_recv",
                           result);
-    if (part_flag != ZLINK_PART_FINAL) {
-        std::fprintf (stderr, "receive returned a non-FINAL part\n");
+    if (part_count != 1) {
+        std::fprintf (stderr, "receive returned an invalid part count\n");
         return false;
     }
     if (router_ && (!source || token != 0)) {
@@ -384,7 +382,7 @@ bool raw_client_connect (const char *endpoint_, int *fd_out_)
     return true;
 }
 
-// STREAM RAW receive delivers one complete record per zlink_recv_part() call,
+// STREAM RAW receive delivers one complete record per zlink_recv() call,
 // but a record may be shorter than the application-level packet if the
 // kernel/transport happened to split the write; accumulate until the full
 // fixed-size payload has arrived and confirm every record names the same
@@ -400,12 +398,12 @@ bool stream_recv_exact (void *stream_, zlink_routing_id_t *rid_out_,
         zlink_msg_t message;
         if (zlink_msg_init (&message) != ZLINK_CONFIG_OK)
             return api_error ("zlink_msg_init(stream)", -1);
-        zlink_part_flag_t part_flag = ZLINK_PART_MORE;
-        const zlink_recv_result_t result = zlink_recv_part (
-          stream_, &source, &message, &part_flag, ZLINK_RECV_FLAGS_NONE);
+        size_t part_count = 0;
+        const zlink_recv_result_t result = zlink_recv (
+          stream_, &source, &message, 1, &part_count, ZLINK_RECV_FLAGS_NONE);
         if (result != ZLINK_RECV_OK)
-            return api_error ("zlink_recv_part(stream)", result);
-        if (part_flag != ZLINK_PART_FINAL || !source) {
+            return api_error ("zlink_recv(stream)", result);
+        if (part_count != 1 || !source) {
             std::fprintf (stderr,
                           "STREAM data receive returned invalid metadata\n");
             (void) zlink_msg_close (&message);
@@ -446,12 +444,11 @@ bool stream_send_echo (void *stream_, const zlink_routing_id_t *rid_,
     if (zlink_msg_init_size (&message, size_) != ZLINK_CONFIG_OK)
         return api_error ("zlink_msg_init_size(stream echo)", -1);
     std::memcpy (zlink_msg_data (&message), data_, size_);
-    const zlink_submit_result_t result = zlink_send_part_rid (
-      stream_, rid_, &message, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL,
-      NULL);
+    const zlink_submit_result_t result = zlink_send_rid (
+      stream_, rid_, &message, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
     return result == ZLINK_SUBMIT_OK
              ? true
-             : api_error ("zlink_send_part_rid(stream)", result);
+             : api_error ("zlink_send_rid(stream)", result);
 }
 
 bool client_send_payload (int fd_, unsigned char fill_,
@@ -605,29 +602,29 @@ bool request_reply_once (void *dealer_, void *router_, zlink_msg_t *request_,
                          zlink_completion_t *completion_,
                          zlink_completion_id_t *completion_id_)
 {
-    const zlink_submit_result_t request_result = zlink_request_part (
-      dealer_, NULL, request_, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-      120000, NULL, completion_id_);
+    const zlink_submit_result_t request_result = zlink_request (
+      dealer_, NULL, request_, 1, ZLINK_SEND_FLAGS_NONE, 120000, NULL,
+      completion_id_);
     if (request_result != ZLINK_SUBMIT_OK)
-        return api_error ("zlink_request_part", request_result);
+        return api_error ("zlink_request", request_result);
 
     const zlink_routing_id_t *source = NULL;
     zlink_reply_token_t token = 0;
-    zlink_part_flag_t part_flag = ZLINK_PART_MORE;
-    const zlink_recv_result_t receive_result = zlink_router_recv_part (
-      router_, &source, &token, router_receive_, &part_flag,
+    size_t part_count = 0;
+    const zlink_recv_result_t receive_result = zlink_router_recv (
+      router_, &source, &token, router_receive_, 1, &part_count,
       ZLINK_RECV_FLAGS_NONE);
     if (receive_result != ZLINK_RECV_OK)
-        return api_error ("zlink_router_recv_part(request)", receive_result);
-    if (!source || token == 0 || part_flag != ZLINK_PART_FINAL) {
+        return api_error ("zlink_router_recv(request)", receive_result);
+    if (!source || token == 0 || part_count != 1) {
         std::fprintf (stderr, "invalid request metadata\n");
         return false;
     }
 
     const zlink_submit_result_t reply_result =
-      zlink_reply_part (router_, source, token, reply_, ZLINK_PART_FINAL);
+      zlink_reply (router_, source, token, reply_, 1);
     if (reply_result != ZLINK_SUBMIT_OK)
-        return api_error ("zlink_reply_part", reply_result);
+        return api_error ("zlink_reply", reply_result);
 
     const zlink_recv_result_t completion_result = zlink_completion_recv (
       dealer_, completion_, ZLINK_RECV_FLAGS_NONE);

@@ -103,8 +103,7 @@ zlink_completion_id_t submit_request (void *dealer_)
     zlink_completion_id_t id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_request_part (dealer_, NULL, &part, ZLINK_SEND_FLAGS_NONE,
-                          ZLINK_PART_FINAL, 1000, dealer_, &id));
+      zlink_request (dealer_, NULL, &part, 1, ZLINK_SEND_FLAGS_NONE, 1000, dealer_, &id));
     TEST_ASSERT_EQUAL_INT (0, zlink_msg_close (&part));
     TEST_ASSERT_NOT_EQUAL (0, id);
     return id;
@@ -116,18 +115,16 @@ void receive_and_reply (void *server_)
     TEST_ASSERT_EQUAL_INT (0, zlink_msg_init (&received));
     const zlink_routing_id_t *source = NULL;
     zlink_reply_token_t token = 0;
-    zlink_part_flag_t more = ZLINK_PART_MORE;
+    size_t more = 0;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_OK, zlink_router_recv_part (
-        server_, &source, &token, &received, &more, ZLINK_RECV_FLAGS_NONE));
+      ZLINK_RECV_OK, zlink_router_recv (server_, &source, &token, &received, 1, &more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source);
     TEST_ASSERT_NOT_EQUAL (0, token);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
+    TEST_ASSERT_EQUAL_INT (1, more);
     TEST_ASSERT_EQUAL_INT (4, zlink_msg_size (&received));
     TEST_ASSERT_EQUAL_MEMORY ("ping", zlink_msg_data (&received), 4);
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK, zlink_reply_part (
-        server_, source, token, &received, ZLINK_PART_FINAL));
+      ZLINK_SUBMIT_OK, zlink_reply (server_, source, token, &received, 1));
     TEST_ASSERT_EQUAL_INT (0, zlink_msg_close (&received));
 }
 
@@ -299,9 +296,8 @@ void run_transient_disconnect (bool tcp_)
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&request));
     const zlink_routing_id_t *source = NULL;
     zlink_reply_token_t token = 0;
-    zlink_part_flag_t more = ZLINK_PART_MORE;
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv_part (
-      server, &source, &token, &request, &more, ZLINK_RECV_FLAGS_NONE));
+    size_t more = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv (server, &source, &token, &request, 1, &more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_EQUAL (0, token);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&request));
 
@@ -314,11 +310,8 @@ void run_transient_disconnect (bool tcp_)
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_size (&request, 4));
         memcpy (zlink_msg_data (&request), "ping", 4);
         const zlink_submit_result_t result = i == 0
-          ? zlink_send_part (dealer, &request, ZLINK_SEND_FLAGS_DONTWAIT,
-                             ZLINK_PART_FINAL, dealer, &writable_ids[i])
-          : zlink_request_part (dealer, NULL, &request,
-                                ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
-                                1000, dealer, &writable_ids[i]);
+          ? zlink_send (dealer, &request, 1, ZLINK_SEND_FLAGS_DONTWAIT, dealer, &writable_ids[i])
+          : zlink_request (dealer, NULL, &request, 1, ZLINK_SEND_FLAGS_DONTWAIT, 1000, dealer, &writable_ids[i]);
         TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_BACKPRESSURED, result);
         TEST_ASSERT_NOT_EQUAL (0, writable_ids[i]);
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&request));
@@ -327,9 +320,7 @@ void run_transient_disconnect (bool tcp_)
     // The request terminal must not wait for the application's DATA drain.
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_size (&request, 4));
     memcpy (zlink_msg_data (&request), "data", 4);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_send_part_rid (
-      server, source, &request, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-      NULL, NULL));
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_send_rid (server, source, &request, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&request));
     zlink_pollitem_t readable = {dealer, 0, ZLINK_POLLIN, 0};
     TEST_ASSERT_EQUAL_INT (1, zlink_poll (&readable, 1, wait_ms, NULL));
@@ -348,14 +339,12 @@ void run_transient_disconnect (bool tcp_)
         clock_type::now () - started).count ());
     TEST_ASSERT_LESS_OR_EQUAL_INT (rejected_request_limit_ms, elapsed);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&request));
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_recv_part (
-      dealer, NULL, &request, &more, ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_recv (dealer, NULL, &request, 1, &more, ZLINK_RECV_FLAGS_DONTWAIT));
     TEST_ASSERT_EQUAL_INT (4, zlink_msg_size (&request));
     TEST_ASSERT_EQUAL_MEMORY ("data", zlink_msg_data (&request), 4);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&request));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&request));
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, zlink_recv_part (
-      dealer, NULL, &request, &more, ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, zlink_recv (dealer, NULL, &request, 1, &more, ZLINK_RECV_FLAGS_DONTWAIT));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&request));
     wait_event (monitor, ZLINK_EVENT_DISCONNECTED);
     expect_no_completion (dealer, 0);
@@ -430,9 +419,7 @@ void test_rejected_pending_request_inproc ()
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_size (&blocked, 4));
     memcpy (zlink_msg_data (&blocked), "data", 4);
     zlink_completion_id_t writable_id = 0;
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_BACKPRESSURED, zlink_send_part_rid (
-      server, &target, &blocked, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
-      server, &writable_id));
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_BACKPRESSURED, zlink_send_rid (server, &target, &blocked, 1, ZLINK_SEND_FLAGS_DONTWAIT, server, &writable_id));
     TEST_ASSERT_NOT_EQUAL (0, writable_id);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&blocked));
 

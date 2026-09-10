@@ -38,7 +38,7 @@ typedef enum zlink_send_complete_result_t
 
 typedef uint64_t zlink_completion_id_t;
 /* Opaque socket-local capability. Applications only test zero/nonzero and
- * pass the value back to zlink_reply_part(). */
+ * pass the value back to zlink_reply(). */
 typedef uint64_t zlink_reply_token_t;
 
 typedef enum zlink_completion_kind_t
@@ -65,11 +65,6 @@ typedef struct zlink_completion_t
     size_t reply_part_count;
 } zlink_completion_t;
 
-typedef enum zlink_part_flag_t
-{
-    ZLINK_PART_FINAL = 0,
-    ZLINK_PART_MORE = 1
-} zlink_part_flag_t;
 
 /**
  * @brief Create a socket.
@@ -222,83 +217,69 @@ ZLINK_EXPORT zlink_connect_result_t zlink_disconnect (void *s_, const char *addr
 ZLINK_EXPORT zlink_connect_result_t zlink_disconnect_rid (void *s_,
                                                           const zlink_routing_id_t *peer_rid_);
 
-/* ========== Raw part send/receive ========== */
-/* Every part call consumes part_ on success and failure. DONTWAIT FINAL makes
- * one admission attempt. Admission returns ZLINK_SUBMIT_OK with ID 0 and no
- * completion. Backpressure or an unready target returns
- * ZLINK_SUBMIT_BACKPRESSURED with EAGAIN and a nonzero wait token; Core retains
- * the token, target, and user_context_, but not the payload. When write credit
- * becomes available, Core reports ZLINK_COMPLETION_WRITABLE with that token and
- * context (send_result ZLINK_SEND_ADMITTED). A ROUTER/STREAM RID with no route
- * returns ZLINK_SUBMIT_NOT_CONNECTED with no token; a DEALER with no peers
- * still receives a token. Explicit target removal, socket close, or context
- * termination retires a live token as WRITABLE with ZLINK_SEND_TERMINAL and
- * the cause errno. PUB/XPUB publish has no SEND completion. MORE and
- * synchronous NONE FINAL reject a non-NULL user_context_. */
-ZLINK_EXPORT zlink_submit_result_t zlink_send_part (void *s_,
-                                                    zlink_msg_t *part_,
-                                                    zlink_send_flags_t flags_,
-                                                    zlink_part_flag_t part_flag_,
-                                                    void *user_context_,
-                                                    zlink_completion_id_t *completion_id_out_);
-
-ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid (void *s_,
-                                                        const zlink_routing_id_t *target_rid_,
-                                                        zlink_msg_t *part_,
-                                                        zlink_send_flags_t flags_,
-                                                        zlink_part_flag_t part_flag_,
-                                                        void *user_context_,
-                                                        zlink_completion_id_t *completion_id_out_);
-
-/* Request MORE requires timeout_ms_ == 0 and user_context_ == NULL. DONTWAIT
- * FINAL makes one admission attempt. Admission returns ZLINK_SUBMIT_OK with a
- * nonzero REQUEST completion ID, and its reply timeout starts then.
- * Backpressure or an unready target returns ZLINK_SUBMIT_BACKPRESSURED with
- * EAGAIN and a nonzero payload-free WRITABLE wait token. Credit recovery
- * reports ZLINK_COMPLETION_WRITABLE with the same token and user context; the
- * caller then submits the request again. A missing mandatory ROUTER route
- * returns ZLINK_SUBMIT_NOT_CONNECTED without a token. Every call consumes
- * part_. */
-ZLINK_EXPORT zlink_submit_result_t zlink_request_part (
-  void *s_,
-  const zlink_routing_id_t *target_router_rid_or_null_,
-  zlink_msg_t *part_,
-  zlink_send_flags_t flags_,
-  zlink_part_flag_t part_flag_,
-  uint32_t timeout_ms_,
-  void *user_context_,
+/* ========== Whole-message send ========== */
+/* Each call consumes every input slot on success and failure. The array is
+ * one atomic record; retry by rebuilding and resubmitting the entire record.
+ * part_count_ must be positive (EINVAL); required NULL arguments give EFAULT.
+ * DONTWAIT makes one admission attempt: success returns ID 0 without a
+ * completion; backpressure returns EAGAIN and a nonzero payload-free WRITABLE
+ * wait token retaining the target and user_context_. Credit recovery reports
+ * ZLINK_SEND_ADMITTED; target removal, close or context termination reports
+ * ZLINK_SEND_TERMINAL with the cause errno. A missing ROUTER/STREAM route
+ * returns NOT_CONNECTED without a token; a DEALER with no peers gets a token.
+ * NONE send/send_rid require user_context_ == NULL. Publish has no completion.
+ * STREAM uses send_rid with exactly one part; a zero-length part disconnects
+ * its target peer. Multipart STREAM sends return ENOTSUP. */
+ZLINK_EXPORT zlink_submit_result_t zlink_send (
+  void *s_, zlink_msg_t *parts_, size_t part_count_,
+  zlink_send_flags_t flags_, void *user_context_,
   zlink_completion_id_t *completion_id_out_);
-
-/* The opaque token comes from every part of one received ROUTER REQUEST.
- * Successful FINAL alone consumes it. Every call consumes part_. */
-ZLINK_EXPORT zlink_submit_result_t zlink_reply_part (
-  void *router_,
-  const zlink_routing_id_t *source_rid_,
-  zlink_reply_token_t reply_token_,
-  zlink_msg_t *part_,
-  zlink_part_flag_t part_flag_);
+ZLINK_EXPORT zlink_submit_result_t zlink_send_rid (
+  void *s_, const zlink_routing_id_t *target_rid_,
+  zlink_msg_t *parts_, size_t part_count_, zlink_send_flags_t flags_,
+  void *user_context_, zlink_completion_id_t *completion_id_out_);
+/* A DEALER uses a NULL target; a ROUTER requires a target RID. The timeout
+ * starts at admission of the whole request. user_context_ belongs to its
+ * REQUEST completion or, on backpressure, its WRITABLE wait token. */
+ZLINK_EXPORT zlink_submit_result_t zlink_request (
+  void *s_, const zlink_routing_id_t *target_router_rid_or_null_,
+  zlink_msg_t *parts_, size_t part_count_, zlink_send_flags_t flags_,
+  uint32_t timeout_ms_, void *user_context_,
+  zlink_completion_id_t *completion_id_out_);
+/* Successful submission alone consumes the opaque reply token. */
+ZLINK_EXPORT zlink_submit_result_t zlink_reply (
+  void *router_, const zlink_routing_id_t *source_rid_,
+  zlink_reply_token_t reply_token_, zlink_msg_t *parts_, size_t part_count_);
+ZLINK_EXPORT zlink_submit_result_t zlink_publish (
+  void *subject_, const char *topic_id_, zlink_msg_t *parts_,
+  size_t part_count_, zlink_send_flags_t flags_);
 
 /* source_rid_out_ values are socket-owned borrowed views. They remain valid
  * until the same socket's next data-recv entry (success or failure) or close;
  * recv on another socket and completion/monitor/poller operations do not
  * invalidate them. */
-ZLINK_EXPORT zlink_recv_result_t
-zlink_router_recv_part (void *router_,
-                        const zlink_routing_id_t **source_rid_out_,
-                        zlink_reply_token_t *reply_token_out_,
-                        zlink_msg_t *part_out_,
-                        zlink_part_flag_t *has_more_out_,
-                        zlink_recv_flags_t flags_);
-ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (void *s_,
-                                                  const zlink_routing_id_t **source_rid_out_,
-                                                  zlink_msg_t *part_out_,
-                                                  zlink_part_flag_t *has_more_out_,
-                                                  zlink_recv_flags_t flags_);
-ZLINK_EXPORT zlink_submit_result_t zlink_publish_part (void *subject_,
-                                                       const char *topic_id_,
-                                                       zlink_msg_t *part_,
-                                                       zlink_send_flags_t flags_,
-                                                       zlink_part_flag_t part_flag_);
+/* Receives one complete PAIR, DEALER or RAW STREAM record into caller-owned slots. The
+ * slots need not be initialized. On success, close the returned prefix with
+ * zlink_multipart_close(). If capacity is insufficient, only
+ * part_count_out_ is changed and the record remains available for retry. */
+ZLINK_EXPORT zlink_recv_result_t zlink_recv (
+  void *s_,
+  const zlink_routing_id_t **source_rid_out_,
+  zlink_msg_t *parts_out_,
+  size_t parts_capacity_,
+  size_t *part_count_out_,
+  zlink_recv_flags_t flags_);
+/* Receives one complete ROUTER DATA or REQUEST record into caller-owned
+ * slots. The source RID is borrowed under the same lifetime as zlink_recv;
+ * DATA has reply token 0 and REQUEST has a nonzero opaque reply token. */
+ZLINK_EXPORT zlink_recv_result_t zlink_router_recv (
+  void *router_,
+  const zlink_routing_id_t **source_rid_out_,
+  zlink_reply_token_t *reply_token_out_,
+  zlink_msg_t *parts_out_,
+  size_t parts_capacity_,
+  size_t *part_count_out_,
+  zlink_recv_flags_t flags_);
 
 /* ========== Raw subscription configuration ========== */
 ZLINK_EXPORT zlink_config_result_t zlink_set_subscription (void *handle_, const char *filter_);
@@ -306,21 +287,23 @@ ZLINK_EXPORT zlink_config_result_t zlink_unset_subscription (void *handle_, cons
 ZLINK_EXPORT zlink_config_result_t zlink_subscription_at (
   void *handle_, size_t index_, char *filter_out_, size_t *filter_len_inout_, int *is_pattern_out_);
 
-ZLINK_EXPORT zlink_recv_result_t zlink_subscribe_part (void *sub_,
-                                                       const zlink_routing_id_t **source_rid_out_,
-                                                       char *topic_id_buf_,
-                                                       size_t topic_id_capacity_,
-                                                       size_t *topic_id_len_out_,
-                                                       zlink_msg_t *part_out_,
-                                                       zlink_part_flag_t *has_more_out_,
-                                                       zlink_recv_flags_t flags_);
-ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
-                                                       const zlink_routing_id_t **source_rid_out_,
-                                                       int *subscribed_out_,
-                                                       char *topic_id_buf_,
-                                                       size_t topic_id_capacity_,
-                                                       size_t *topic_id_len_out_,
-                                                       zlink_recv_flags_t flags_);
+/* Receives a topic and complete payload into caller-owned, uninitialized
+ * slots. On insufficient topic or parts capacity, returns BUFFER_TOO_SMALL
+ * with the required lengths; buffers and source RID remain unchanged and
+ * the same record is retained for retry. Close the returned parts prefix
+ * with zlink_multipart_close(). Topic bytes are not NUL-terminated. */
+ZLINK_EXPORT zlink_recv_result_t zlink_subscribe (
+  void *sub_, const zlink_routing_id_t **source_rid_out_,
+  char *topic_id_buf_, size_t topic_id_capacity_, size_t *topic_id_len_out_,
+  zlink_msg_t *parts_out_, size_t parts_capacity_, size_t *part_count_out_,
+  zlink_recv_flags_t flags_);
+/* Receives one subscription event. The source RID follows the borrowed view
+ * lifetime above; topic bytes are not NUL-terminated. */
+ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv (
+  void *xpub_, const zlink_routing_id_t **source_rid_out_,
+  int *subscribed_out_, char *topic_id_buf_, size_t topic_id_capacity_,
+  size_t *topic_id_len_out_, zlink_recv_flags_t flags_);
+
 
 /* A returned source RID is borrowed from the socket until that same socket's
  * next data-recv entry or close. STREAM receive mode must be set to RAW or

@@ -20,14 +20,14 @@ void test_stream_fastpath_tcp_basic ()
 
     zlink_msg_t msg;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_NO_DATA,
-      zlink_recv_part (server, NULL, &msg, &has_more, ZLINK_RECV_FLAGS_DONTWAIT));
+      zlink_recv (server, NULL, &msg, 1, &has_more, ZLINK_RECV_FLAGS_DONTWAIT));
     TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&msg));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, has_more);
+    TEST_ASSERT_EQUAL_INT (0, has_more);
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
 

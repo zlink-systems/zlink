@@ -32,22 +32,20 @@ void process_socket_commands (void *socket_)
 }
 
 zlink_routing_id_t recv_payload (void *socket_, const char *payload_,
-                                zlink_part_flag_t expected_more_ = ZLINK_PART_FINAL,
                                 bool router_ = true)
 {
     zlink_msg_t part;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
     const zlink_routing_id_t *rid = NULL;
-    zlink_part_flag_t more = ZLINK_PART_FINAL;
+    size_t more = 1;
     uint64_t request_seq = 0;
     const zlink_recv_result_t result_code = router_
-      ? zlink_router_recv_part (socket_, &rid, &request_seq, &part, &more,
-                                 ZLINK_RECV_FLAGS_NONE)
-      : zlink_recv_part (socket_, &rid, &part, &more, ZLINK_RECV_FLAGS_NONE);
+      ? zlink_router_recv (socket_, &rid, &request_seq, &part, 1, &more, ZLINK_RECV_FLAGS_NONE)
+      : zlink_recv (socket_, &rid, &part, 1, &more, ZLINK_RECV_FLAGS_NONE);
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, result_code);
     TEST_ASSERT_EQUAL_UINT (strlen (payload_), zlink_msg_size (&part));
     TEST_ASSERT_EQUAL_MEMORY (payload_, zlink_msg_data (&part), strlen (payload_));
-    TEST_ASSERT_EQUAL_INT (expected_more_, more);
+    TEST_ASSERT_EQUAL_INT (1, more);
     zlink_routing_id_t result;
     memset (&result, 0, sizeof (result));
     if (rid)
@@ -57,17 +55,16 @@ zlink_routing_id_t recv_payload (void *socket_, const char *payload_,
 }
 
 zlink_submit_result_t send_payload (void *socket_, const char *payload_,
-                                    const zlink_routing_id_t *rid_ = NULL,
-                                    zlink_part_flag_t more_ = ZLINK_PART_FINAL)
+                                    const zlink_routing_id_t *rid_ = NULL)
 {
     zlink_msg_t part;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
                            zlink_msg_init_size (&part, strlen (payload_)));
     memcpy (zlink_msg_data (&part), payload_, strlen (payload_));
-    return rid_ ? zlink_send_part_rid (socket_, rid_, &part,
-                                       ZLINK_SEND_FLAGS_DONTWAIT, more_, NULL, NULL)
-                : zlink_send_part (socket_, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                                    more_, NULL, NULL);
+    return rid_ ? zlink_send_rid (socket_, rid_, &part, 1,
+                                  ZLINK_SEND_FLAGS_DONTWAIT, NULL, NULL)
+                : zlink_send (socket_, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT,
+                              NULL, NULL);
 }
 
 struct paired_fixture_t
@@ -244,7 +241,7 @@ void test_no_application_recv_returns_a_flow_frame ()
     TEST_ASSERT_GREATER_THAN_INT (0, rid.size);
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
                            send_payload (fixture.router, "reply", &rid));
-    recv_payload (fixture.dealer, "reply", ZLINK_PART_FINAL, false);
+    recv_payload (fixture.dealer, "reply", false);
 }
 
 void test_peer_weight_change_does_not_leak_to_public_receive ()
@@ -259,9 +256,7 @@ void test_peer_weight_change_does_not_leak_to_public_receive ()
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_size (&request, 4));
     memcpy (zlink_msg_data (&request), "ping", 4);
     zlink_completion_id_t completion_id = 0;
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_request_part (
-      fixture.dealer, NULL, &request, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-      1500, NULL, &completion_id));
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_request (fixture.dealer, NULL, &request, 1, ZLINK_SEND_FLAGS_NONE, 1500, NULL, &completion_id));
     TEST_ASSERT_TRUE (completion_id != 0);
     const zlink_routing_id_t *peer_rid = NULL;
     uint64_t request_seq = 0;
@@ -276,8 +271,7 @@ void test_peer_weight_change_does_not_leak_to_public_receive ()
     zlink_msg_t reply;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_size (&reply, 4));
     memcpy (zlink_msg_data (&reply), "pong", 4);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_reply_part (
-      fixture.router, &reply_rid, request_seq, &reply, ZLINK_PART_FINAL));
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_reply (fixture.router, &reply_rid, request_seq, &reply, 1));
     bool completed = false;
     zlink_completion_t completion;
     memset (&completion, 0, sizeof (completion));

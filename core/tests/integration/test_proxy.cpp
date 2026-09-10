@@ -63,16 +63,15 @@ static int receive_control (void *socket_, char *data_, size_t capacity_,
 {
     zlink_msg_t part;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
-    zlink_part_flag_t more = ZLINK_PART_MORE;
+    size_t more = 0;
     size_t topic_size = 0;
-    const zlink_recv_result_t rc = zlink_subscribe_part (
-      socket_, NULL, NULL, 0, &topic_size, &part, &more, flags_);
+    const zlink_recv_result_t rc = zlink_subscribe (socket_, NULL, NULL, 0, &topic_size, &part, 1, &more, flags_);
     if (rc != ZLINK_RECV_OK) {
         zlink_msg_close (&part);
         return -1;
     }
     TEST_ASSERT_EQUAL_UINT64 (0, topic_size);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
+    TEST_ASSERT_EQUAL_INT (1, more);
     const size_t size = zlink_msg_size (&part);
     TEST_ASSERT_LESS_THAN_UINT64 (capacity_, size);
     memcpy (data_, zlink_msg_data (&part), size);
@@ -150,7 +149,7 @@ static void client_task (void *db_)
             if (items[0].revents & ZLINK_POLLIN) {
                 zlink_msg_t msg;
                 TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
-                zlink_part_flag_t has_more = ZLINK_PART_MORE;
+                size_t has_more = 0;
                 int rc = TEST_ASSERT_SUCCESS_ERRNO (
                   test_recv_single_msg (&msg, client, 0, &has_more));
                 TEST_ASSERT_EQUAL_INT (CONTENT_SIZE, rc);
@@ -161,7 +160,7 @@ static void client_task (void *db_)
                             content);
                 //  Check that message is still the same
                 TEST_ASSERT_EQUAL_STRING_LEN ("request #", content, 9);
-                TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+                TEST_ASSERT_EQUAL_INT (1, has_more);
                 TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
             }
             if (items[1].revents & ZLINK_POLLIN) {
@@ -321,10 +320,21 @@ static void server_worker (void * /*unused_*/)
         }
         // The DEALER socket gives us the reply envelope and message
         // if we don't poll, we have to use ZLINK_DONTWAIT, if we poll, we can block-receive with 0
-        rc = zlink_recv (worker, routing_id, ROUTING_ID_SIZE_MAX, ZLINK_DONTWAIT);
-        if (rc == ROUTING_ID_SIZE) {
-            rc = zlink_recv (worker, content, CONTENT_SIZE_MAX, 0);
-            TEST_ASSERT_EQUAL_INT (CONTENT_SIZE, rc);
+        zlink_msg_t incoming[2];
+        size_t incoming_count = 0;
+        const zlink_recv_result_t recv_result =
+          zlink_recv (worker, NULL, incoming, 2, &incoming_count,
+                      ZLINK_RECV_FLAGS_DONTWAIT);
+        if (recv_result == ZLINK_RECV_OK) {
+            TEST_ASSERT_EQUAL_UINT64 (2, incoming_count);
+            TEST_ASSERT_EQUAL_UINT64 (ROUTING_ID_SIZE,
+                                      zlink_msg_size (&incoming[0]));
+            TEST_ASSERT_EQUAL_UINT64 (CONTENT_SIZE,
+                                      zlink_msg_size (&incoming[1]));
+            memcpy (routing_id, zlink_msg_data (&incoming[0]),
+                    ROUTING_ID_SIZE);
+            memcpy (content, zlink_msg_data (&incoming[1]), CONTENT_SIZE);
+            zlink_multipart_close (incoming, incoming_count);
             if (is_verbose)
                 printf ("server receive - routing_id = %s    content = %s\n", routing_id, content);
 
@@ -340,12 +350,24 @@ static void server_worker (void * /*unused_*/)
                         printf ("server send - routing_id = %s    reply\n", routing_id);
                     zlink_atomic_counter_inc (g_workers_pkts_out);
 
-                    rc = zlink_send (worker, routing_id, ROUTING_ID_SIZE, ZLINK_SNDMORE);
-                    TEST_ASSERT_EQUAL_INT (ROUTING_ID_SIZE, rc);
-                    rc = zlink_send (worker, content, CONTENT_SIZE, 0);
-                    TEST_ASSERT_EQUAL_INT (CONTENT_SIZE, rc);
+                    zlink_msg_t reply_parts[2];
+                    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (
+                      &reply_parts[0], ROUTING_ID_SIZE));
+                    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (
+                      &reply_parts[1], CONTENT_SIZE));
+                    memcpy (zlink_msg_data (&reply_parts[0]), routing_id,
+                            ROUTING_ID_SIZE);
+                    memcpy (zlink_msg_data (&reply_parts[1]), content,
+                            CONTENT_SIZE);
+                    TEST_ASSERT_EQUAL_INT (
+                      ZLINK_SUBMIT_OK,
+                      zlink_send (worker, reply_parts, 2,
+                                  ZLINK_SEND_FLAGS_NONE, NULL, NULL));
                 }
             }
+        } else {
+            TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, recv_result);
+            TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
         }
     }
     TEST_ASSERT_SUCCESS_ERRNO (zlink_close (worker));

@@ -200,8 +200,8 @@ inline reply_send_status_t try_send_reply_now (void *server,
     if (wait_state->wait_token != 0)
         return reply_send_backpressured;
 
-    // Every part submit consumes its input even on failure and discards an
-    // already staged prefix. Send from a fresh shared-storage copy so the
+    // Whole-record submit consumes every input even on failure. Send from a
+    // fresh shared-storage copy so the
     // pending record remains an immutable retry snapshot.
     std::vector<zlink_msg_t> attempt (part_count);
     size_t initialized_count = 0;
@@ -224,24 +224,12 @@ inline reply_send_status_t try_send_reply_now (void *server,
     }
 
     zlink_submit_result_t send_rc = ZLINK_SUBMIT_INTERNAL_ERROR;
-    int err = 0;
     zlink_completion_id_t wait_token = 0;
-    bool final_attempted = false;
-    for (size_t i = 0; i < part_count; ++i) {
-        const bool is_final = i + 1 == part_count;
-        final_attempted = is_final;
-        send_rc = zlink_send_part_rid (
-          server, source_rid, &attempt[i],
-          static_cast<zlink_send_flags_t> (ZLINK_SEND_FLAGS_DONTWAIT),
-          is_final ? ZLINK_PART_FINAL : ZLINK_PART_MORE,
-          is_final ? server : NULL,
-          is_final ? &wait_token : NULL);
-        if (send_rc != ZLINK_SUBMIT_OK)
-            err = zlink_errno ();
-
-        if (send_rc != ZLINK_SUBMIT_OK)
-            break;
-    }
+    send_rc = zlink_send_rid (
+      server, source_rid, attempt.data (), attempt.size (),
+      static_cast<zlink_send_flags_t> (ZLINK_SEND_FLAGS_DONTWAIT),
+      server, &wait_token);
+    int err = send_rc == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
 
     reply_send_status_t status = send_rc == ZLINK_SUBMIT_OK
                                    ? reply_send_ok
@@ -250,8 +238,7 @@ inline reply_send_status_t try_send_reply_now (void *server,
         status = reply_send_failed;
         err = EPROTO;
     } else if (status == reply_send_backpressured) {
-        if (!final_attempted || wait_token == 0
-            || (err != EAGAIN && err != EWOULDBLOCK)) {
+        if (wait_token == 0 || (err != EAGAIN && err != EWOULDBLOCK)) {
             status = reply_send_failed;
             err = EPROTO;
         } else {

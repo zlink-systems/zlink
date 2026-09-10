@@ -17,19 +17,18 @@ static void stream_server_thread (void *arg_)
     stream_recv_sample_t *sample = (stream_recv_sample_t *) arg_;
     const zlink_routing_id_t *rid = NULL;
     zlink_msg_t part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+    size_t part_count = 0;
 
-    assert (zlink_msg_init (&part) == 0);
-    assert (zlink_recv_part (sample->server, &rid, &part, &has_more, 0) == ZLINK_RECV_OK);
+    assert (zlink_recv (sample->server, &rid, &part, 1, &part_count, 0) == ZLINK_RECV_OK);
     assert (rid != NULL);
     assert (rid->size > 0);
-    assert (has_more == ZLINK_PART_FINAL);
+    assert (part_count == 1);
 
     sample->payload_len = zlink_msg_size (&part);
     assert (sample->payload_len == strlen (k_stream_payload));
     memcpy (sample->payload, zlink_msg_data (&part), sample->payload_len);
     sample->payload[sample->payload_len] = '\0';
-    zlink_msg_close (&part);
+    zlink_multipart_close (&part, part_count);
 }
 
 static void stream_client_thread (void *arg_)

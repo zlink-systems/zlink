@@ -85,7 +85,7 @@ blocking terminal을 직렬로 호출하지 않는다. Binding은 blocking termi
 - **바인딩은 Core에 전달한 context의 유효 수명을 보장하고 submit 결과와 completion이 경합해도 언어 terminal을 정확히 한 번 끝내며 남은 native payload를 정확히 한 번 정리한다.**
   Completion은 submit 반환 전에 읽힐 수 있으므로, 반환 순서가 결과 유실·중복 완료·중복
   해제로 이어져서는 안 된다. Context의 native 수명은
-  [Core part send](../../../core/doc/spec/core/socket/README.ko.md#part-send와-pending-admission)와
+  [Core whole-message send](../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)와
   [request 계약](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)이 소유한다.
   내부 확인 조건은 각 native payload에 해제 또는 언어 소유권 이전이 한 번만 대응하는 것이다.
 

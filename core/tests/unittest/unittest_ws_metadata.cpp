@@ -5,7 +5,9 @@
 #include "core/msg.hpp"
 #include "protocol/zmp_protocol.hpp"
 #include "contract_zmp_engine_fixture.hpp"
+#include "api/socket/socket_message_api_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
+#include "api/socket/socket_message_api_internal.hpp"
 
 SETUP_TEARDOWN_TESTCONTEXT
 
@@ -64,33 +66,23 @@ void send_invalid_middle_metadata_record (void *sender_,
                                           void *receiver_,
                                           message_engine_pair_t &pair_)
 {
-    zlink_msg_t first;
-    zlink_msg_t invalid_one;
-    zlink_msg_t invalid_two;
-    zlink_msg_t final;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&first, 5));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&invalid_one, 7));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&invalid_two, 7));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&final, 5));
-    memcpy (zlink_msg_data (&first), "first", 5);
-    memcpy (zlink_msg_data (&invalid_one), "invalid", 7);
-    memcpy (zlink_msg_data (&invalid_two), "invalid", 7);
-    memcpy (zlink_msg_data (&final), "final", 5);
-    TEST_ASSERT_SUCCESS_ERRNO (reinterpret_cast<zlink::msg_t *> (&invalid_one)
+    zlink_msg_t parts[4];
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&parts[0], 5));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&parts[1], 7));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&parts[2], 7));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&parts[3], 5));
+    memcpy (zlink_msg_data (&parts[0]), "first", 5);
+    memcpy (zlink_msg_data (&parts[1]), "invalid", 7);
+    memcpy (zlink_msg_data (&parts[2]), "invalid", 7);
+    memcpy (zlink_msg_data (&parts[3]), "final", 5);
+    TEST_ASSERT_SUCCESS_ERRNO (reinterpret_cast<zlink::msg_t *> (&parts[1])
                                  ->set_request_reply_metadata (zlink::zmp_kind_request, 91));
-    TEST_ASSERT_SUCCESS_ERRNO (reinterpret_cast<zlink::msg_t *> (&invalid_two)
+    TEST_ASSERT_SUCCESS_ERRNO (reinterpret_cast<zlink::msg_t *> (&parts[2])
                                  ->set_request_reply_metadata (zlink::zmp_kind_reply, 92));
 
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_send_part (sender_, &first, ZLINK_SEND_FLAGS_NONE,
-                                                             ZLINK_PART_MORE, NULL, NULL));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (sender_, &invalid_one, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (sender_, &invalid_two, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL));
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_send_part (sender_, &final, ZLINK_SEND_FLAGS_NONE,
-                                                             ZLINK_PART_FINAL, NULL, NULL));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_socket_send_internal (
+      sender_, parts, 4, ZLINK_SEND_FLAGS_NONE));
+    zlink_multipart_close (parts, 4);
 
     // The first frame has already established encoder multipart state. A
     // batching fallback could discard both invalid continuations, encode the

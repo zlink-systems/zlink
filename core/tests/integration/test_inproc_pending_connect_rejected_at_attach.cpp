@@ -85,9 +85,8 @@ void pump (void *router_)
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
         const zlink_routing_id_t *source = NULL;
         zlink_reply_token_t token = 0;
-        zlink_part_flag_t more = ZLINK_PART_MORE;
-        const zlink_recv_result_t rc = zlink_router_recv_part (
-          router_, &source, &token, &msg, &more, ZLINK_RECV_FLAGS_DONTWAIT);
+        size_t more = 0;
+        const zlink_recv_result_t rc = zlink_router_recv (router_, &source, &token, &msg, 1, &more, ZLINK_RECV_FLAGS_DONTWAIT);
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
         if (rc == ZLINK_RECV_NO_DATA)
             return;
@@ -146,8 +145,7 @@ void round_trip (void *client_, const char *server_rid_, void *server_)
     zlink_completion_id_t id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_request_part (client_, &target, &msg, ZLINK_SEND_FLAGS_NONE,
-                          ZLINK_PART_FINAL, request_timeout_ms, NULL, &id));
+      zlink_request (client_, &target, &msg, 1, ZLINK_SEND_FLAGS_NONE, request_timeout_ms, NULL, &id));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
     TEST_ASSERT_NOT_EQUAL (0, id);
 
@@ -155,18 +153,17 @@ void round_trip (void *client_, const char *server_rid_, void *server_)
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received));
     const zlink_routing_id_t *source = NULL;
     zlink_reply_token_t token = 0;
-    zlink_part_flag_t more = ZLINK_PART_MORE;
+    size_t more = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
-      zlink_router_recv_part (server_, &source, &token, &received, &more,
-                              ZLINK_RECV_FLAGS_NONE));
+      zlink_router_recv (server_, &source, &token, &received, 1, &more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
+    TEST_ASSERT_EQUAL_INT (1, more);
     TEST_ASSERT_EQUAL_UINT64 (4, zlink_msg_size (&received));
     TEST_ASSERT_EQUAL_MEMORY ("ping", zlink_msg_data (&received), 4);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_reply_part (server_, source, token, &received, ZLINK_PART_FINAL));
+      zlink_reply (server_, source, token, &received, 1));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&received));
 
     zlink_completion_t completion;

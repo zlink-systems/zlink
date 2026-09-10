@@ -551,8 +551,8 @@ if(ZLINK_CPP_BUILD_TESTS)
       add_cpp_contract_test(${test_name} "tests/contract/${test_name}.cpp")
       target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src)
       target_link_options(${test_name} PRIVATE
-        "LINKER:--wrap=zlink_send_part_rid"
-        "LINKER:--wrap=zlink_request_part"
+        "LINKER:--wrap=zlink_send_rid"
+        "LINKER:--wrap=zlink_request"
         "LINKER:--wrap=zlink_completion_recv")
     endforeach()
   endif()

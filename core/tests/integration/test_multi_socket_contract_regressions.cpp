@@ -451,14 +451,12 @@ void recv_subscribe_expect_payload_after_topic_size_query (void *sub_, const std
 
     zlink_msg_t queried_part;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&queried_part));
-    zlink_part_flag_t queried_more = ZLINK_PART_MORE;
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_BUFFER_TOO_SMALL, zlink_subscribe_part (
-      sub_, NULL, NULL, 0, &topic_len, &queried_part, &queried_more,
-      ZLINK_RECV_FLAGS_NONE));
+    size_t queried_more = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_BUFFER_TOO_SMALL, zlink_subscribe (sub_, NULL, NULL, 0, &topic_len, &queried_part, 1, &queried_more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_EQUAL_INT (ENOBUFS, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (std::strlen (k_pubsub_topic), topic_len);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&queried_part));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, queried_more);
+    TEST_ASSERT_EQUAL_INT (1, queried_more);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&queried_part));
 
     std::vector<char> topic (topic_len);
@@ -483,14 +481,12 @@ void recv_subscribe_expect_payload_parts_after_topic_size_query (void *sub_,
 
     zlink_msg_t queried_part;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&queried_part));
-    zlink_part_flag_t queried_more = ZLINK_PART_MORE;
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_BUFFER_TOO_SMALL, zlink_subscribe_part (
-      sub_, NULL, NULL, 0, &topic_len, &queried_part, &queried_more,
-      ZLINK_RECV_FLAGS_NONE));
+    size_t queried_more = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_BUFFER_TOO_SMALL, zlink_subscribe (sub_, NULL, NULL, 0, &topic_len, &queried_part, 1, &queried_more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_EQUAL_INT (ENOBUFS, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (std::strlen (k_pubsub_topic), topic_len);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&queried_part));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, queried_more);
+    TEST_ASSERT_EQUAL_INT (2, queried_more);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&queried_part));
 
     std::vector<char> topic (topic_len);

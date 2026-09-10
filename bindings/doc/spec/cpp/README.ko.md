@@ -328,7 +328,7 @@ C++가 노출하는 모든 안정 코어 기능은 다음 소유 규칙을 따�
 2. `bindings/cpp/include/zlink.hpp`와 의도적으로 설치하는 투영 헤더를 갱신한다.
 3. C++ 도메인 소유자를 결정한다: context, message, socket, monitor, timer, service,
    SPOT, actor, error, option 중 하나.
-4. raw C 핸들 접근, `*_part` 루프, callback userdata, 트램펄린 상태, 네이티브 marshalling
+4. raw C 핸들 접근, whole-message 배열 marshalling, callback userdata, 트램펄린 상태, 네이티브 marshalling
    헬퍼는 `src/Runtime/` 헤더와 `.cpp` 파일에 둔다.
 5. 새로운 기능이 사용자 워크플로 또는 측정에 영향을 줄 때는 공개 헤더 테스트와 최소 하나의
    샘플/perf 갱신을 추가한다.
@@ -452,12 +452,11 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
 - Send의 blocking `submit()`은 Core `NONE` admission을 사용하고 `async()`는 Core
   `DONTWAIT` completion을 기다린다. Socket `SNDTIMEO`는 blocking admission wait의
   상한이다. Binding은 payload 재전송 queue를 만들지 않는다.
-- C++ binding은 outbound 경로에 자체 lock이나 gate를 두지 않는다. Core는 socket별
-  transaction state로 이미 열린 sequence에 다른 sender의 part가 들어오지 않게 막는다.
-  열린 sequence와 경합하는 attempt는 peer에 부분 record를 남기지 않고 통째로 거부한다.
-  거부된 native part도 Core의 동기 send 계약에 따라 소비되지만, binding의 별도 native view가
-  공개 C++ message를 보존한다. 같은 socket에 동시에 multipart를 제출할 때 직렬화할 책임은
-  어플리케이션에 있다. binding은 직렬화하거나 대기하거나 재시도하지 않는다. close와
+- C++ binding은 outbound 경로에 자체 lock이나 gate를 두지 않는다. Builder가 모은 모든 part를
+  native 배열로 만든 뒤 Core whole-message API를 한 번 호출한다. Core는 배열 전체를 하나의
+  record로 원자적으로 제출하고 모든 슬롯을 소비하지만, binding의 별도 native view가 공개 C++
+  message를 보존한다. 여러 thread의 독립된 제출은 Core가 처리하며 binding은 직렬화하거나
+  대기하거나 재시도하지 않는다. close와
   in-flight 제출의 경합도 Core lifecycle gate가 담당한다.
 - Request는 blocking `submit()`과 `async()`를 제공하고 builder의 reply timeout을 유지한다.
   Target은 operation 생성 때 capture하며 physical connection identity를 public target으로
@@ -561,7 +560,7 @@ native result를 담은 `config_error_t`를 던진다.
   actor 생명주기, actor operation.
 - Errors: 코어 result 도메인을 보존하는 타입 지정 예외 또는 error-result 표면.
 
-C++ 표면은 raw 네이티브 핸들, `*_part` 루프, callback userdata, 내부 inproc endpoint,
+C++ 표면은 raw 네이티브 핸들, whole-message 배열 marshalling, callback userdata, 내부 inproc endpoint,
 request 펌프 객체를 공개 개념으로 노출하지 않는다.
 
 ## 수명과 ownership
@@ -598,7 +597,7 @@ C++ 호출자는 C 핸들 정리를 추론하지 않아도 된다.
 
 ## 성능 정책
 
-- multipart 값은 코어 part substrate에서 직접 만든다.
+- multipart 값은 Core whole-message receive가 채운 배열에서 직접 만든다.
 - hot path에서 불필요한 힙 할당, 회피 가능한 복사, reflection 같은 동적 dispatch, 숨겨진
   대기, sleep, busy wait, 광범위한 lock, join을 피한다.
 - perf와 샘플은 설치되는 공개 헤더만 include한다.

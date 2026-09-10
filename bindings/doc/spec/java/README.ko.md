@@ -90,7 +90,7 @@ Java package 구조는 다음 조건을 만족한다.
 - factory가 contract 타입을 반환하고 runtime 클래스를 감춘다;
 - public contract 파일은 `systems.zlink.runtime.*`을 import하지 않는다;
 - 샘플, perf runner와 테스트는 runtime package를 import하지 않는다;
-- native handle, raw part loop, completion drain state와 native struct mirror는 public contract
+- native handle, whole-message 배열 처리, completion drain state와 native struct mirror는 public contract
   source 밖에 있다.
 
 Contract/runtime 분리는 helper뿐 아니라 resource 경계에도 적용한다.
@@ -520,7 +520,7 @@ constructor는 목표 contract의 일부가 아니다.
 ## Contract File Requirements
 
 Contract 파일은 Panama, JNI, native handle, native struct layout, completion
-registry와 raw `*_part` loop를 몰라도 읽을 수 있어야 한다.
+registry와 whole-message 배열 처리를 몰라도 읽을 수 있어야 한다.
 
 Contract 파일이 import할 수 있는 것:
 
@@ -563,7 +563,7 @@ Runtime이 소유하는 것:
 - 메시지 marshalling;
 - socket-local completion operation state와 drain owner;
 - receive cursor;
-- part-loop sequencing;
+- whole-message 배열 marshalling;
 - native error mapping;
 - typed option mapping;
 - native resource 채택과 해제;
@@ -599,8 +599,8 @@ Typed socket contract는 해당 socket 타입에 의미 있는 기능만 더한�
 - `StreamSocket`: RAW recv, PACKET recv, stream send, actor gateway, bound actor
   operation.
 
-Protocol envelope helper, raw native part submission과 native routing-ID pointer는
-public contract가 아니다.
+Runtime은 record마다 Core whole-message API를 한 번 호출하며 native part 배열과 count를 내부에서
+관리한다. Protocol envelope helper와 native routing-ID pointer도 public contract가 아니다.
 
 ## Operation Builder Shape
 
@@ -901,7 +901,7 @@ Java 바인딩은 다음 경계를 지킨다:
 5. factory 진입점을 public contract 타입으로 옮기고 contract interface를
    반환하게 한다.
 6. native-backed resource의 직접 public constructor를 제거한다.
-7. native handle, Panama/JNI 호출, completion drain, marshalling helper, part loop는
+7. native handle, Panama/JNI 호출, completion drain, marshalling helper, whole-message 배열 처리는
    runtime/nativeapi 또는 runtime support 클래스가 소유한다.
 8. 샘플, perf, 테스트, 문서 예시를 `systems.zlink.contracts.*`만 import하도록
    업데이트한다.
@@ -924,7 +924,7 @@ concrete contract resource에서 helper 클래스만 추출하는 것으로 시�
 - 좁게 정당화된 factory 와이어링을 제외하면 contract 파일이
   `systems.zlink.runtime.*`을 import하지 않는다.
 - public signature가 native handle, Panama memory segment, native bridge 타입,
-  completion registry state, raw part loop를 언급하지 않는다.
+  completion registry state, whole-message 배열 처리를 언급하지 않는다.
 - DTO/값/record/enum/result/exception 타입이 concrete로 유지된다.
 - Operation builder가 public contract이며 staged 상태를 감춘다.
 - 샘플, perf, 테스트, 애플리케이션이 `systems.zlink.contracts.*`만 import한다.

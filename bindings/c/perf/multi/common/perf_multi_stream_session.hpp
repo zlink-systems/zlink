@@ -263,9 +263,9 @@ inline bool submit_packet_async (session_t *session,
     }
 
     zlink_completion_id_t wait_token = 0;
-    const zlink_submit_result_t result = zlink_send_part_rid (
-      session->send_socket, rid, packet, ZLINK_SEND_FLAGS_DONTWAIT,
-      ZLINK_PART_FINAL, session->send_socket, &wait_token);
+    const zlink_submit_result_t result = zlink_send_rid (
+      session->send_socket, rid, packet, 1, ZLINK_SEND_FLAGS_DONTWAIT,
+      session->send_socket, &wait_token);
     const int submit_errno = result == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
     if (result == ZLINK_SUBMIT_OK && wait_token == 0) {
         record_immediate_admission (session);
@@ -311,10 +311,9 @@ inline bool retry_retained_packet (session_t *session)
                  session->retained_packet.size ());
 
     zlink_completion_id_t wait_token = 0;
-    const zlink_submit_result_t result = zlink_send_part_rid (
-      session->send_socket, &session->retained_rid, &packet,
-      ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, session->send_socket,
-      &wait_token);
+    const zlink_submit_result_t result = zlink_send_rid (
+      session->send_socket, &session->retained_rid, &packet, 1,
+      ZLINK_SEND_FLAGS_DONTWAIT, session->send_socket, &wait_token);
     const int submit_errno = result == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
     zlink_msg_close (&packet);
 

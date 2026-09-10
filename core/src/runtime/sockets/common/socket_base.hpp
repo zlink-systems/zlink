@@ -96,7 +96,6 @@ struct socket_request_reply_bridge_t
     socket_request_reply_bridge_t () :
         request_reply_state_present (false),
         part_helper_state_present (false),
-        part_helper_send_active_flag (false),
         part_helper_recv_ready_flag (false)
     {
     }
@@ -105,7 +104,6 @@ struct socket_request_reply_bridge_t
     std::shared_ptr<part_helper_internal::handle_state_t> part_helper_state;
     std::atomic<bool> request_reply_state_present;
     std::atomic<bool> part_helper_state_present;
-    std::atomic<bool> part_helper_send_active_flag;
     std::atomic<bool> part_helper_recv_ready_flag;
 };
 
@@ -453,9 +451,6 @@ class socket_base_t : public own_t,
       std::optional<socket_public_api_scope_t> *scope_out_);
     bool begin_complete_send_scope (
       std::optional<socket_public_send_scope_t> *scope_out_);
-    void notify_incremental_send_released ();
-    void hold_incremental_send_control_boundary ();
-    void clear_incremental_send_control_boundary ();
     int rollback ();
     int rollback_scoped (socket_public_send_scope_t &scope_);
     int recv (zlink::msg_t *msg_, int flags_,
@@ -802,20 +797,13 @@ class socket_base_t : public own_t,
     void revoke_router_reply_targets_for_rid (
       const zlink_routing_id_t *peer_rid_);
     std::shared_ptr<part_helper_internal::handle_state_t> part_helper_state () const;
-    // Borrowed helper state is valid only while the caller pins this socket's
-    // public handle. The socket keeps the immutable shared owner until final
-    // destruction; close only withdraws the publication bit.
-    part_helper_internal::handle_state_t *borrow_part_helper_state () const;
     std::shared_ptr<part_helper_internal::handle_state_t>
     set_part_helper_state (const std::shared_ptr<part_helper_internal::handle_state_t> &state_);
     void clear_part_helper_state ();
-    bool part_helper_send_active () const;
-    void set_part_helper_send_active (bool active_);
     bool part_helper_recv_ready () const;
     void set_part_helper_recv_ready (bool ready_);
-    //  zlink_recv_part() buffers a complete physical DATA record before it
-    //  publishes the first part. On a count-1 pair, keep the following REPLY
-    //  private until that buffered public record reaches its FINAL part.
+    // Keep a following REPLY private until a DATA record retained after
+    // BUFFER_TOO_SMALL is delivered to its caller.
     int begin_public_part_receive_delivery_hold ();
     void bind_public_part_receive_delivery_hold (pipe_t *source_pipe_);
     void end_public_part_receive_delivery_hold ();

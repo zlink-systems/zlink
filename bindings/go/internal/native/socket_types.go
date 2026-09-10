@@ -96,8 +96,8 @@ func newPubSocket(ctx *Context, socketType C.zlink_socket_type_t) (*PubSocket, e
 func (s *PubSocket) Publish(topic string) PublishOp {
 	return newPublishBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
 		return s.withCString(topic, func(cstr *C.char) error {
-			return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-				return submitErrorFromResult(C.zlink_publish_part(s.raw(), cstr, part, C.zlink_send_flags_t(flags), partFlag))
+			return submitMultipartFromBuilderParts(parts, func(native *C.zlink_msg_t, count C.size_t) error {
+				return submitErrorFromResult(C.zlink_publish(s.raw(), cstr, native, count, C.zlink_send_flags_t(flags)))
 			})
 		})
 	})
@@ -291,8 +291,8 @@ func newXPubSocket(ctx *Context) (*XPubSocket, error) {
 func (s *XPubSocket) Publish(topic string) PublishOp {
 	return newPublishBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
 		return s.withCString(topic, func(cstr *C.char) error {
-			return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-				return submitErrorFromResult(C.zlink_publish_part(s.raw(), cstr, part, C.zlink_send_flags_t(flags), partFlag))
+			return submitMultipartFromBuilderParts(parts, func(native *C.zlink_msg_t, count C.size_t) error {
+				return submitErrorFromResult(C.zlink_publish(s.raw(), cstr, native, count, C.zlink_send_flags_t(flags)))
 			})
 		})
 	})

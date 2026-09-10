@@ -22,7 +22,7 @@ performs the filtering on the publisher side. XSUB delivers every message that
 actually arrives to the application.
 
 This document defines the public contract for registering, removing, and querying
-subscriptions on XSUB and for receiving topic messages one part at a time. Its
+subscriptions on XSUB and for receiving the topic and complete payload record. Its
 intended audience is developers who map this contract to the C API and each
 language binding.
 
@@ -49,8 +49,8 @@ XSUB subscriptions operate on topic filters.
    still succeeds — that pipe never receives the subscription. [XPUB](04-xpub.en.md)
    owns the contract for observing and manually managing subscription events.
 3. XSUB does not apply its own filter matching. It delivers every message that
-   actually arrives so that the application can receive it one part at a time
-   with [`zlink_subscribe_part`](#zlink_subscribe_part).
+   actually arrives so that the application can receive the complete record
+   with [`zlink_subscribe`](#zlink_subscribe).
 4. [`zlink_unset_subscription`](#zlink_unset_subscription) decrements the
    reference count of a registered subscription. XSUB sends an upstream
    unsubscribe message only when the last registration is removed. Removing an
@@ -65,8 +65,8 @@ sequenceDiagram
     XSUB->>Up: Forward subscription message
     Note over Up: XPUB filters by subscription
     Up-->>XSUB: Message selected and sent by upstream
-    App->>XSUB: zlink_subscribe_part()
-    XSUB-->>App: Copy topic bytes + transfer payload part ownership
+    App->>XSUB: zlink_subscribe()
+    XSUB-->>App: Copy topic bytes + return the complete payload record
 ```
 
 Query the number of currently subscribed topics with the
@@ -148,7 +148,7 @@ Applicable types: raw SUB, raw XSUB.
 **Errors:** `EFAULT` if `handle_` is NULL. `EINVAL` if `filter_` is NULL or the
 handle type does not support subscriptions.
 
-**See also:** `zlink_unset_subscription`, `zlink_subscribe_part`
+**See also:** `zlink_unset_subscription`, `zlink_subscribe`
 
 ---
 
@@ -180,43 +180,39 @@ handle type does not support unsubscription.
 
 ---
 
-### zlink_subscribe_part
+### zlink_subscribe
 
-Receives one payload part of a topic message from a raw `XSUB` socket.
+Receives the topic and complete payload record from a raw `XSUB` socket.
 
 ```c
-ZLINK_EXPORT zlink_recv_result_t zlink_subscribe_part (
+ZLINK_EXPORT zlink_recv_result_t zlink_subscribe (
   void *sub_,
   const zlink_routing_id_t **source_rid_out_,
-  char *topic_id_buf_,
-  size_t topic_id_capacity_,
-  size_t *topic_id_len_out_,
-  zlink_msg_t *part_out_,
-  zlink_part_flag_t *has_more_out_,
+  char *topic_id_buf_, size_t topic_id_capacity_, size_t *topic_id_len_out_,
+  zlink_msg_t *parts_out_, size_t parts_capacity_, size_t *part_count_out_,
   zlink_recv_flags_t flags_);
 ```
 
-`topic_id_len_out_`, an initialized `part_out_`, and `has_more_out_` are
-required. `source_rid_out_` is optional and receives `NULL` on success for raw
-XSUB. On success, the function copies the binary topic bytes into the caller's
-buffer without a NUL and transfers ownership of the payload part to the caller.
-The caller must close the received part exactly once with
-`zlink_msg_close(part_out_)`.
+`topic_id_len_out_`, `parts_out_`, and `part_count_out_` are required. The array slots need not be
+initialized. `source_rid_out_` is optional and receives `NULL` on success for raw XSUB. On success,
+the function copies the binary topic bytes into the caller's buffer without a NUL and fills the
+array with the complete payload record. The caller closes the leading `*part_count_out_` slots
+exactly once with `zlink_multipart_close`.
 
 If `topic_id_capacity_` is smaller than the topic length (a zero-length topic
 succeeds with capacity 0), the function writes the required topic length to `*topic_id_len_out_` and returns
 `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`. Core keeps that message's topic
-and payload internally, and leaves `part_out_` and every output other than
-`topic_id_len_out_` unchanged. It also does not transfer part ownership; calling
+and payload internally, and leaves `parts_out_` and every output other than
+`topic_id_len_out_` unchanged. It also does not transfer slot ownership; calling
 again with a sufficient buffer returns the same retained message. If capacity
 is greater than zero but `topic_id_buf_` is NULL, the function returns
 `ZLINK_RECV_INVALID_HANDLE` with `EFAULT` before inspecting or consuming the
-queue and leaves every output and `part_out_` unchanged.
+queue and leaves every output and `parts_out_` unchanged.
 
-Receive every part of one multipart message, from the first payload part
-through the last, on the same thread with this function. `*has_more_out_` is
-`ZLINK_PART_MORE` when another part follows and `ZLINK_PART_FINAL` for the last
-part. This function applies to raw SUB and raw XSUB.
+If `parts_capacity_` is smaller than the payload part count, the record is not consumed, the needed
+count is written to `*part_count_out_`, and the call returns `ZLINK_RECV_BUFFER_TOO_SMALL` with
+`ENOBUFS`. Other outputs and array slots are unchanged; retrying with a large enough array receives
+the same record. This function applies to raw SUB and raw XSUB.
 
 ---
 
@@ -273,7 +269,7 @@ backpressure remain in effect. An XSUB socket monitor does not set
 
 Verify the following through only the public surface
 (`zlink_set_sub_option`/`zlink_get_sub_option`, the subscription registration,
-removal, and query functions, `zlink_subscribe_part`,
+removal, and query functions, `zlink_subscribe`,
 `zlink_socket_set_receive_flow_state`, return values, and errno). Each item maps
 to one unit test.
 
@@ -321,28 +317,27 @@ to one unit test.
 - An out-of-range `index_` reports `ENOENT`; a handle type that does not support
   subscription queries reports `ENOTSUP`.
 
-**Topic Part Receive**
+**Topic and Payload-Record Receive**
 
-- When `zlink_subscribe_part` succeeds, it copies the binary topic bytes into
-  the caller's buffer without a NUL and transfers ownership of the payload part
-  to the caller. The caller closes the received part exactly once with
-  `zlink_msg_close(part_out_)`. On raw XSUB, `source_rid_out_` receives `NULL`
+- When `zlink_subscribe` succeeds, it copies the binary topic bytes into
+  the caller's buffer without a NUL and fills the array with the complete payload record. The caller
+  closes the leading `*part_count_out_` slots exactly once with `zlink_multipart_close`. On raw XSUB, `source_rid_out_` receives `NULL`
   on success.
 - If `topic_id_capacity_` is smaller than the topic length (a zero-length topic
   succeeds with capacity 0), the function writes the required topic length to `*topic_id_len_out_` and returns
   `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`. Core retains that message's
-  topic and payload internally, leaves `part_out_` and every output other than
-  `topic_id_len_out_` unchanged, and does not transfer part ownership, so
+  topic and payload internally, leaves `parts_out_` and every output other than
+  `topic_id_len_out_` unchanged, and does not transfer slot ownership, so
   calling again with a sufficient buffer receives the same message.
+- If `parts_capacity_` is smaller than the payload part count, the call writes the needed count to
+  `*part_count_out_` and returns `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`. The record and other
+  outputs remain unchanged, and retrying with a large enough array receives the same record.
 - A record whose topic frame is not followed by a payload part (the topic frame
   lacks `MORE`) returns `ZLINK_RECV_INTERNAL_ERROR` with `EPROTO`.
 - If capacity is greater than zero but `topic_id_buf_` is NULL, the function
   returns `ZLINK_RECV_INVALID_HANDLE` with `EFAULT` before inspecting or
-  consuming the queue and leaves every output and `part_out_` unchanged.
-- Receive one multipart message continuously on the same thread with this
-  function from the first payload part through the last. `*has_more_out_` is
-  `ZLINK_PART_MORE` when another part follows and `ZLINK_PART_FINAL` for the
-  last part.
+  consuming the queue and leaves every output and `parts_out_` unchanged.
+- All payload parts of a multipart message are returned in array order in one call, with no partial-record state.
 
 **No Receive Flow State**
 

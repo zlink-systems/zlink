@@ -51,9 +51,9 @@ Context의 수명은 **만들기 → 사용 → 종료 신호 → 자원 해제*
 - **만들기** — `zlink_ctx_new`가 기본 옵션 값으로 Context를 만든다.
 - **종료 신호** — `zlink_ctx_shutdown`은 이 Context에 속한 socket의 모든 blocking 작업이 즉시
   `ETERM`으로 풀리도록 신호만 보낸다. 자원은 해제하지 않는 non-blocking 호출이다. 이렇게 풀린
-  `zlink_recv_part`는 `ZLINK_RECV_TERMINATED`를 반환하고 caller가 초기화해 둔 receive
-  destination과 part flag를 바꾸지 않는다. 풀린 `zlink_send_part`는 `ZLINK_SUBMIT_TERMINATED`를
-  반환하고 다른 submit 실패와 같이 전달한 part를 소비하며(빈 초기화 상태로 남음) completion
+  `zlink_recv`는 `ZLINK_RECV_TERMINATED`를 반환하고 receive output을 바꾸지 않는다. 풀린
+  `zlink_send`는 `ZLINK_SUBMIT_TERMINATED`를 반환하고 다른 submit 실패와 같이 모든 입력 슬롯을
+  소비해 빈 initialized 상태로 두며 completion
   ID `0`을 돌려준다.
 - **자원 해제** — `zlink_ctx_term`이 Context를 파괴한다. 이 호출은 Context 안에서 만든 모든
   socket이 닫힐 때까지 blocking될 수 있다. 각 Context는 정확히 한 번만 term한다.

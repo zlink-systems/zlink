@@ -343,51 +343,42 @@ final class CompletionOwner implements AutoCloseable {
         // part; Core consumes each staged header when it is submitted.
         MemorySegment nativeParts = scratch.parts(originals.size());
         int initialized = 0;
-        int consumed = 0;
+        boolean submitted = false;
         try {
             for (; initialized < originals.size(); initialized++) {
                 InternalAccess.messageCopyTo(originals.get(initialized),
                     nativeParts.asSlice(partSize * initialized, partSize));
             }
-            for (; consumed < originals.size(); consumed++) {
-                MemorySegment nativePart = nativeParts.asSlice(
-                    partSize * consumed, partSize);
-                int partFlag = consumed + 1 < originals.size()
-                    ? Native.PART_MORE : Native.PART_FINAL;
-                boolean last = partFlag == Native.PART_FINAL;
-                MemorySegment context = last
-                    ? userContext : MemorySegment.NULL;
-                MemorySegment output = last
-                    ? idOut : MemorySegment.NULL;
-                int rc;
-                if (!request && replyToken == 0L) {
-                    rc = target == null
-                        ? Native.sendPart(socket.handle(), nativePart,
-                            flags, partFlag, context, output)
-                        : Native.sendPartRid(socket.handle(), nativeTarget,
-                            nativePart, flags, partFlag, context, output);
-                } else if (request) {
-                    rc = Native.requestPart(socket.handle(), nativeTarget,
-                        nativePart, flags, partFlag, last ? timeoutMs : 0,
-                        context, output);
-                } else {
-                    rc = Native.replyPart(socket.handle(), nativeTarget,
-                        replyToken, nativePart, partFlag);
-                }
-                if (rc != SubmitResult.OK.value()) {
-                    int errno = Native.errno();
-                    long id = completion
-                        ? idOut.get(ValueLayout.JAVA_LONG, 0) : 0L;
-                    consumed++;
-                    return new SubmitAttempt(SubmitResult.fromValue(rc),
-                        errno, id);
-                }
+            submitted = true;
+            int rc;
+            if (!request && replyToken == 0L) {
+                rc = target == null
+                    ? Native.send(socket.handle(), nativeParts,
+                        originals.size(), flags, userContext, idOut)
+                    : Native.sendRid(socket.handle(), nativeTarget,
+                        nativeParts, originals.size(), flags, userContext,
+                        idOut);
+            } else if (request) {
+                rc = Native.request(socket.handle(), nativeTarget,
+                    nativeParts, originals.size(), flags, timeoutMs,
+                    userContext, idOut);
+            } else {
+                rc = Native.reply(socket.handle(), nativeTarget,
+                    replyToken, nativeParts, originals.size());
+            }
+            if (rc != SubmitResult.OK.value()) {
+                int errno = Native.errno();
+                long id = completion
+                    ? idOut.get(ValueLayout.JAVA_LONG, 0) : 0L;
+                return new SubmitAttempt(SubmitResult.fromValue(rc), errno,
+                    id);
             }
             long id = completion
                 ? idOut.get(ValueLayout.JAVA_LONG, 0) : 0L;
             return new SubmitAttempt(SubmitResult.OK, 0, id);
         } finally {
-            for (int index = consumed; index < initialized; index++) {
+            for (int index = submitted ? initialized : 0;
+                 index < initialized; index++) {
                 NativeMessage.messageClose(nativeParts.asSlice(
                     partSize * index, partSize));
             }

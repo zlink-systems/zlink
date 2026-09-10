@@ -230,8 +230,7 @@ zlink_submit_result_t try_send_flow_filler (void *socket_, size_t size_)
     zlink_msg_t part;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_size (&part, size_));
     memset (zlink_msg_data (&part), 'h', size_);
-    return zlink_send_part (socket_, &part, ZLINK_SEND_FLAGS_NONE,
-                            ZLINK_PART_FINAL, NULL, NULL);
+    return zlink_send (socket_, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
 }
 
 size_t fill_flow_pipe_until_backpressured (void *socket_)

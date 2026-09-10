@@ -67,7 +67,7 @@ The per-target retry signal is the wait token's `ZLINK_COMPLETION_WRITABLE`
 record, not the `ZLINK_POLLOUT` bit. When a `ZLINK_SEND_FLAGS_DONTWAIT` submit
 returns `ZLINK_SUBMIT_BACKPRESSURED`, the nonzero value in `completion_id_out` is
 the wait token. When the resource that refused that submit recovers (the wake
-condition is owned by the [socket README](socket/README.en.md#part-send-and-pending-admission)), Core enqueues one
+condition is owned by the [socket README](socket/README.en.md#whole-message-send-and-pending-admission)), Core enqueues one
 WRITABLE record carrying the same token, the same `user_context`, and, for
 ROUTER and STREAM, the submitted RID into the socket-local completion queue.
 The application pulls that record with `zlink_completion_recv()` and uses the
@@ -104,7 +104,7 @@ never published. The bit can be registered alone or OR-ed with `ZLINK_POLLIN`
 and `ZLINK_POLLOUT`. Readiness remains set while records remain in the queue.
 
 On a DEALER-ROUTER single connection, a REPLY behind a preceding DATA record is not the physical head
-until the last part of that DATA record is dequeued. At that point only `ZLINK_POLLIN` may be ready and
+until that DATA record is dequeued. At that point only `ZLINK_POLLIN` may be ready and
 `ZLINK_POLLCOMPLETION` may not be ready. After the REPLY reaches the physical head and moves to the
 socket-local completion queue, the level-triggering and drain-through-`ZLINK_RECV_NO_DATA` rules above
 apply.
@@ -334,7 +334,7 @@ and event-array contents. Each item maps to one unit test.
 - Completions are neither lost nor merged when their count exceeds event-array capacity; the caller drains each ready socket until `ZLINK_RECV_NO_DATA`.
 - If the physical head on a DEALER-ROUTER connection is multipart DATA, `ZLINK_POLLIN` can be ready while
   `ZLINK_POLLCOMPLETION` for a following REPLY is not ready. Completion readiness is raised after the
-  DATA `FINAL` part is dequeued and the REPLY moves to the socket-local completion queue.
+  DATA record is dequeued and the REPLY moves to the socket-local completion queue.
 
 **Lifetime**
 

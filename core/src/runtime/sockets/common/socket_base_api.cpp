@@ -1039,10 +1039,8 @@ int zlink::socket_base_t::socket_type () const
 
 bool zlink::socket_base_t::has_in ()
 {
-    //  Public part receive owns the complete physical record, then returns
-    //  one buffered part per call. Once a multipart prefix is exposed, the
-    //  remaining parts stay level-ready even though xhas_in() has already
-    //  advanced to the next physical record (which may be a private REPLY).
+    // A record retained after BUFFER_TOO_SMALL remains level-ready even
+    // though the physical receive queue has already advanced.
     if (part_helper_recv_ready ()) {
         const std::shared_ptr<part_helper_internal::handle_state_t> state =
           part_helper_state ();
