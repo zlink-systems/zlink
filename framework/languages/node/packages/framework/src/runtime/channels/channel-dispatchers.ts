@@ -115,7 +115,7 @@ export class ZLinkChannelRequestDispatcher {
       if (received.send === undefined) {
         throw new ZLinkConfigurationException('Routed SPOT packet is missing a local SPOT delivery context.');
       }
-      await appendParts(received.send(), received.parts).submit();
+      await appendParts(received.send(), received.parts).submit().admitted;
       return true;
     }
     if (received.parts.length === 0 || received.parts[0].data().length === 0) {
@@ -523,7 +523,7 @@ export class ZLinkRoutePacketDispatcher {
       if (received.send === undefined) {
         throw new ZLinkConfigurationException('Routed SPOT packet is missing a local SPOT delivery context.');
       }
-      return appendParts(received.send(), received.parts).submit();
+      return appendParts(received.send(), received.parts).submit().admitted;
     }
     return false;
   }

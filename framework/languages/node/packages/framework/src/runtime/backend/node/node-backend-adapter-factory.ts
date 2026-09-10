@@ -25,7 +25,6 @@ import {
   closeWithBusyRetry,
   isContextTerminatedError,
   isPollerInterruptedError,
-  wrapBindingReceived,
   zlink,
   type ZLinkBindingModule
 } from './node-backend-adapter-support';
@@ -37,7 +36,7 @@ export { isDisconnectRouteNotFoundError } from './node-socket-backend-adapter';
 
 export class ZLinkNodeBackendAdapterFactory implements ZLinkBackendAdapterFactory {
   createReceived(): ZLinkBackendReceived {
-    return wrapBindingReceived(new zlink.Received());
+    return new zlink.Received();
   }
 
   createTopicMessage(): TopicMessage {

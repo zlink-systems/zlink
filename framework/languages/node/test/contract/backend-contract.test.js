@@ -16,7 +16,6 @@ const {
   isPollerInterruptedError,
   submitBindingRequest,
   submitBindingSyncSend,
-  wrapBindingReceived
 } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
 const { wrapSocket } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
 const {
@@ -207,7 +206,8 @@ test('received send preserves admission waiting and envelope ownership', async (
     }
   };
   let closed = false;
-  const received = wrapBindingReceived({
+  // 바인딩 Received를 그대로 쓴다. framework는 wrapper 없이 소비한다.
+  const received = ({
     parts,
     routingId: 'sender',
     replyToken: null,
@@ -217,7 +217,7 @@ test('received send preserves admission waiting and envelope ownership', async (
   });
   try {
     let settled = false;
-    const pending = received.send().message(parts[0]).message('tail').submit().then(() => {
+    const pending = received.send().message(parts[0]).message('tail').submit().admitted.then(() => {
       settled = true;
     });
     await new Promise((resolve) => setImmediate(resolve));

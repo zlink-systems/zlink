@@ -1,33 +1,8 @@
 import { loadBinding } from '../node-backend-adapter';
-import { ZLinkBackendResultError, type ZLinkBackendReceived } from '../runtime-values';
+import { ZLinkBackendResultError } from '../runtime-values';
 
 export type ZLinkBindingModule = typeof import('@zlink-systems/zlink');
 export const zlink = loadBinding() as ZLinkBindingModule;
-
-export function wrapBindingReceived(received: import('@zlink-systems/zlink').Received): ZLinkBackendReceived {
-  return {
-    get parts() { return received.parts; },
-    get routingId() { return received.routingId; },
-    get replyToken() { return received.replyToken; },
-    reply: () => received.reply(),
-    close: () => received.close(),
-    send() {
-      const operation = received.send();
-      return {
-        message(part) {
-          let current = operation.message(part as import('@zlink-systems/zlink').MessageLike);
-          return {
-            message(next) {
-              current = current.message(next as import('@zlink-systems/zlink').MessageLike);
-              return this;
-            },
-            submit: () => current.submit().admitted
-          };
-        }
-      };
-    }
-  };
-}
 
 export type ZLinkBindingOperation = { [key: string]: (...args: unknown[]) => unknown };
 

@@ -11,7 +11,6 @@ import {
   submitBindingAsyncSend,
   submitBindingSyncSend,
   toNativeRoutingId,
-  wrapBindingReceived,
   zlink,
   type ZLinkBindingRequestOperation,
   type ZLinkBindingPublishOperation,
@@ -222,7 +221,7 @@ export function wrapSocket<T extends { close(): void }>(
         received.close();
         return undefined;
       }
-      return wrapBindingReceived(received);
+      return received;
     },
     recvPacket(packet: unknown, flags?: number): boolean {
       if (!hasStream) throw new TypeError('Packet receive requires a STREAM socket.');

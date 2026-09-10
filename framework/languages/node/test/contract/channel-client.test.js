@@ -474,8 +474,16 @@ test('Node-direct operations classify Object Client targets as NotFound', async 
 function fakeSpotRouteBridge() {
   return {
     attachRouterChannel() {},
-    send() { return { message() { return this; }, async submit() {} }; },
-    request() { return { message() { return this; }, timeout() { return this; }, async submit() { return []; } }; },
+    send() {
+      return { message() { return this; }, submit: () => ({ admitted: Promise.resolve() }) };
+    },
+    request() {
+      return {
+        message() { return this; },
+        timeout() { return this; },
+        submit: () => ({ admitted: Promise.resolve(), reply: Promise.resolve([]) })
+      };
+    },
     handleRouterReceived() { return false; },
     async dispose() {}
   };
@@ -5115,7 +5123,9 @@ function captureRawMultipart(parts, submit = async () => undefined) {
       parts.push(part);
       return this;
     },
-    submit
+    // 바인딩 계약: submit()은 제출 스냅샷을 돌려주고 admission은 .admitted다.
+    // admission 전 terminal 실패도 .admitted로 전달된다(bindings-node G4).
+    submit: () => ({ admitted: (async () => { await submit(); })() })
   };
 }
 
