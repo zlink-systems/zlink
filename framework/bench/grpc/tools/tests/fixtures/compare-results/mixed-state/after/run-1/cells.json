@@ -1,0 +1,18 @@
+{
+  "schema": "with-grpc-cell-v1",
+  "cells": [
+    {
+      "implementation": "zlink-framework-node",
+      "pattern": "request-window",
+      "payload_size": 1024,
+      "throughput_per_second": 102000,
+      "bandwidth_mb_s": 104.448,
+      "latency_mean_ms": 1.02,
+      "latency_p95_ms": 2.04,
+      "peak_in_flight": 100,
+      "abandoned": 3,
+      "drain_bound_hit": true,
+      "errors": 2
+    }
+  ]
+}
