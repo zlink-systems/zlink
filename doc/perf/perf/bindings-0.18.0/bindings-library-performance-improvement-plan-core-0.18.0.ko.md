@@ -950,11 +950,11 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 - perf 경로: `bindings/node/perf`
 - Single 상태: `측정 완료 + routed 수신 개선 반영(2026-09-11)` — tcp·ws·wss·tls·ipc × {PAIR,PUBSUB,DEALER_DEALER,DEALER_ROUTER,ROUTER_ROUTER} paired(C 0.18.0 release baseline 재사용).
   - **routed 수신 개선 채택**(commit 28fdce3c10, N-API 왕복 5→1): `DEALER_ROUTER`·`ROUTER_ROUTER`의 소형 throughput ~2×, aggregate throughput가 전 transport 60% 목표 **통과**(ipc 56.8→72.1%, tcp 62→80%대, wss·tls ~100%). PAIR/DEALER_DEALER/PUBSUB(base recv, 개선 무관)은 clean 수치 유지.
-  - **잔존 latency**: ws·wss·(tcp·tls의 ROUTER_ROUTER)는 5× cap 통과. `tcp·tls의 DEALER_ROUTER`와 `ipc`는 aggregate lat 8~24×로 `미달` 표기 — 단 이는 64/256B에서 C 평균 latency가 sub-µs라 비율이 불안정한 데서 오는 값이다(§2.2, 형제 패턴 간 2.5× vs 23× 편차가 근거). Node napi+libuv per-op floor + near-zero-C-baseline artifact → **3회 재측정 확인 또는 §2.2 Node 소형-셀 latency 예외**로 판정 예정(수치 완화로 통과시키지 않음).
+  - **잔존 latency (3회 재측정으로 확정, artifact 아님)**: `tcp·tls의 DEALER_ROUTER`와 `ipc`(DEALER_ROUTER·ROUTER_ROUTER)의 aggregate 평균 latency ratio는 median-of-3에서 각각 25.4×·14.9×·11.4×·8.4×로 5× cap 초과 = **실제 미달**. C 평균 latency는 0.13~2.4ms로 sub-µs가 아니어서 near-zero-baseline artifact가 아니다(초기 1-run의 형제-패턴 편차는 단순 노이즈였음). 소형(64/256/1024B)에서 Node 평균 latency가 51~325ms로 큼(C 1~2ms) = **Node per-message 처리 속도가 만드는 큐 잔류 latency**. throughput 개선(2×)으로도 남는 부분은 napi+libuv per-op floor에 가깝다. ws·wss·(tcp·tls ROUTER_ROUTER)는 5× 통과. → 이 셀들은 **`보류`**(throughput 통과·개선 반영, latency는 확정 미달). §2.2 Node 소형-셀 latency 예외는 runtime-floor 근거의 spec 결정으로 별도 판단(수치 완화 목적 아님).
   - `inproc`: Node 러너 미지원 → 전 pattern `해당 없음`.
   - `DEALER_ROUTER_REQREP`·`ROUTER_ROUTER_REQREP`: `미측정` — Core reqrep backpressure 결함(소형 payload submit 실패). [[node-reqrep-backpressure-token-bug]], 수정=Core(A) 조율.
 - Multi 상태: `미측정`
-- 다음 작업: (1) routed latency 소형 셀 3회 확인/§2.2 예외 판단, (2) reqrep Core 결함 A 조율, (3) Node Multi 측정.
+- 다음 작업: (1) reqrep Core 결함 A 조율, (2) Node Multi 측정. (routed latency 보류 셀의 §2.2 예외는 감독 spec 판단 대기.)
 
 #### 9.4.1 Single suite
 
