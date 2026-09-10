@@ -34,7 +34,10 @@ bool state_lane_t::try_post (std::function<void ()> work)
     if (_closed.load (std::memory_order_acquire)) {
         return false;
     }
-    return enqueue (std::move (work), [] (std::exception_ptr) {});
+    if (!enqueue (std::move (work), [] (std::exception_ptr) {}))
+        return false;
+    schedule_drain (false);
+    return true;
 }
 
 void state_lane_t::throw_if_reentrant () const
@@ -60,14 +63,7 @@ void state_lane_t::close ()
 {
     throw_if_reentrant ();
     _closed.store (true, std::memory_order_release);
-    {
-        std::lock_guard lock (_mailbox_mutex);
-        if (_mailbox.empty () && !_scheduled.load (std::memory_order_acquire)) {
-            _drained.notify_all ();
-            return;
-        }
-    }
-    schedule_drain ();
+    schedule_drain (true);
 
     std::unique_lock lock (_mailbox_mutex);
     _drained.wait (lock, [this] {
@@ -87,20 +83,24 @@ bool state_lane_t::enqueue (
         }
         _mailbox.push_back ({std::move (work), std::move (abandon)});
     }
-    schedule_drain ();
     return true;
 }
 
-void state_lane_t::schedule_drain ()
+void state_lane_t::schedule_drain (bool inline_drain)
 {
     bool expected = false;
     if (!_scheduled.compare_exchange_strong (
           expected, true, std::memory_order_acq_rel, std::memory_order_acquire)) {
         return;
     }
-    if (_executor.try_submit_internal ([this] { drain_loop (); })) {
+    // Run and Close may execute the FIFO they own. TryPost keeps its existing
+    // no-wait contract by transferring that same ownership to the executor.
+    if (inline_drain) {
+        drain_loop ();
         return;
     }
+    if (_executor.try_submit_internal ([this] { drain_loop (); }))
+        return;
 
     _scheduled.store (false, std::memory_order_release);
     _closed.store (true, std::memory_order_release);
@@ -112,44 +112,30 @@ void state_lane_t::drain_loop ()
 {
     auto *previous_lane = _current_lane;
     _current_lane = this;
-    std::size_t processed = 0;
-    try {
-        while (processed < drain_batch_limit) {
-            mailbox_item_t item;
-            {
-                std::lock_guard lock (_mailbox_mutex);
-                if (_mailbox.empty ()) {
-                    break;
-                }
-                item = std::move (_mailbox.front ());
-                _mailbox.pop_front ();
+    for (;;) {
+        mailbox_item_t item;
+        {
+            std::lock_guard lock (_mailbox_mutex);
+            if (_mailbox.empty ()) {
+                _current_lane = previous_lane;
+                // Publish the idle transition with the empty-queue check so
+                // a concurrent enqueue must either join this drain or claim
+                // the next one. There is no resubmission queue between turns.
+                _scheduled.store (false, std::memory_order_release);
+                if (_closed.load (std::memory_order_acquire))
+                    _drained.notify_all ();
+                return;
             }
-            try {
-                item.work ();
-            }
-            catch (...) {
-                // run() completes its own promise.  A try_post callback owns
-                // its own failures, so it must not tear down this lane.
-            }
-            ++processed;
+            item = std::move (_mailbox.front ());
+            _mailbox.pop_front ();
         }
-    }
-    catch (...) {
-        // The loop itself has no caller.  Preserve liveness for the mailbox.
-    }
-    _current_lane = previous_lane;
-
-    _scheduled.store (false, std::memory_order_release);
-    bool has_more = false;
-    {
-        std::lock_guard lock (_mailbox_mutex);
-        has_more = !_mailbox.empty ();
-        if (!has_more && _closed.load (std::memory_order_acquire)) {
-            _drained.notify_all ();
+        try {
+            item.work ();
         }
-    }
-    if (has_more) {
-        schedule_drain ();
+        catch (...) {
+            // run() reports through its promise; a failed fire-and-forget
+            // post must not strand later accepted turns.
+        }
     }
 }
 
