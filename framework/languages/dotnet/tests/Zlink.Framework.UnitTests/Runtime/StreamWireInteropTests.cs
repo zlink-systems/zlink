@@ -10,6 +10,32 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class StreamWireInteropTests
 {
+    [Theory]
+    [InlineData(0L)]
+    [InlineData(1L)]
+    [InlineData(15L)]
+    [InlineData(16L)]
+    [InlineData(long.MaxValue)]
+    [InlineData(long.MinValue)]
+    [InlineData(-1L)]
+    public void CorrelationCounterSpan_PreservesLegacyHexWireIncludingWraparound(long counter)
+    {
+        var legacyCorrelation = Convert.ToString(counter, 16);
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Request, ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.HasRequestSeq, new ZlinkStreamRequestSeq(7), "packet",
+            ZlinkStreamMetadata.Empty.With("key", "value"), legacyCorrelation);
+        var codec = new ConnectorHeaderCodec();
+        var expected = CoreHeaderCodec.Encode(header);
+        Span<char> correlation = stackalloc char[16];
+        Assert.True(counter.TryFormat(correlation, out var written, "x"));
+
+        var actual = codec.Encode(header with { CorrelationId = null }, correlation[..written]);
+
+        Assert.Equal(expected.ToArray(), actual.ToArray());
+        Assert.Equal(legacyCorrelation, CoreHeaderCodec.Decode(actual).CorrelationId);
+    }
+
     [Fact]
     public void CorrelationText_IsWrittenIntoTheFinalHeaderWithIdenticalUtf8Bytes()
     {

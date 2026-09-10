@@ -15,7 +15,10 @@ internal sealed class ZlinkStreamHeaderCodec
         ZlinkStreamHeaderFlags.HasCorrelationId |
         ZlinkStreamHeaderFlags.HasFlowId;
 
-    public ReadOnlyMemory<byte> Encode(ZlinkStreamHeader header)
+    public ReadOnlyMemory<byte> Encode(ZlinkStreamHeader header) =>
+        Encode(header, header.CorrelationId.AsSpan());
+
+    internal ReadOnlyMemory<byte> Encode(ZlinkStreamHeader header, ReadOnlySpan<char> correlationId)
     {
         ValidateOutboundPacketName(header.Kind, header.Name);
         ValidateEnum(header.Kind, header.Codec, header.Flags);
@@ -23,9 +26,9 @@ internal sealed class ZlinkStreamHeaderCodec
         var nameLength = Encoding.UTF8.GetByteCount(header.Name);
         var hasRequestSeq = header.RequestSeq is not null;
         var hasMetadata = header.Metadata.Count > 0;
-        var hasCorrelationId = !string.IsNullOrEmpty(header.CorrelationId);
+        var hasCorrelationId = !correlationId.IsEmpty;
         var correlationLength = hasCorrelationId
-            ? Encoding.UTF8.GetByteCount(header.CorrelationId!)
+            ? Encoding.UTF8.GetByteCount(correlationId)
             : 0;
         if (correlationLength > byte.MaxValue)
             throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.ValidationFailed, "Correlation id is too long.");
@@ -94,7 +97,7 @@ internal sealed class ZlinkStreamHeaderCodec
         if (hasCorrelationId)
         {
             buffer[offset++] = (byte)correlationLength;
-            Encoding.UTF8.GetBytes(header.CorrelationId!, buffer.AsSpan(offset, correlationLength));
+            Encoding.UTF8.GetBytes(correlationId, buffer.AsSpan(offset, correlationLength));
             offset += correlationLength;
         }
 

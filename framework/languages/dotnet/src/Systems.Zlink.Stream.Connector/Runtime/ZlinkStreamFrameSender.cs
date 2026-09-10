@@ -33,9 +33,11 @@ internal sealed class ZlinkStreamFrameSender(
         // Correlation ids are protocol information linking a request with its terminal
         // reply, so requests carry one at every diagnostics level. One-way sends have
         // no reply and therefore never carry a correlation id (flow-correlation spec §2).
-        var correlationId = kind == ZlinkStreamMessageKind.Request
-            ? ZlinkStreamCorrelation.Next()
-            : null;
+        Span<char> correlationId = stackalloc char[16];
+        var correlationLength = 0;
+        if (kind == ZlinkStreamMessageKind.Request)
+            // Every Int64, including counter wraparound, fits in 16 hex digits.
+            ZlinkStreamCorrelation.NextValue().TryFormat(correlationId, out correlationLength, "x");
 
         // Flow fields are trace-only: at Off nothing is created or attached and the
         // ambient flow context is not even read.
@@ -56,10 +58,11 @@ internal sealed class ZlinkStreamFrameSender(
             requestSeq,
             name,
             metadata,
-            correlationId,
+            null,
             flowId,
             flowOrigin);
-        return new ZlinkStreamOutboundFrame(EncodeHeaderForSend(header), payloadBytes);
+        return new ZlinkStreamOutboundFrame(
+            headerCodec.Encode(header, correlationId[..correlationLength]), payloadBytes);
     }
 
     public async ValueTask SendControlAsync(string name, CancellationToken cancellationToken)
@@ -169,11 +172,6 @@ internal sealed class ZlinkStreamFrameSender(
         {
             throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.DecompressionFailed, "Decompression failed.", ex);
         }
-    }
-
-    private ReadOnlyMemory<byte> EncodeHeaderForSend(ZlinkStreamHeader header)
-    {
-        return headerCodec.Encode(header);
     }
 
     private ReadOnlyMemory<byte> CompressPayload(ReadOnlyMemory<byte> payload)
