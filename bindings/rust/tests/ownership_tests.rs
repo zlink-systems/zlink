@@ -21,8 +21,9 @@ fn send_consumes_message_ownership() {
     a.bind("inproc://own-send-consume").unwrap();
 
     let b = ctx.pair_socket().unwrap();
-    b.connect("inproc://own-send-consume").unwrap();
-    thread::sleep(Duration::from_millis(50));
+    test_support::connect_pair_and_confirm(&a, &b, || {
+        b.connect("inproc://own-send-consume").unwrap()
+    });
 
     // After send, the message is consumed (moved into native).
     // Rust's move semantics prevent reuse at compile time.
@@ -42,8 +43,9 @@ fn send_multipart_consumes_all_parts() {
     a.bind("inproc://own-multi-consume").unwrap();
 
     let b = ctx.pair_socket().unwrap();
-    b.connect("inproc://own-multi-consume").unwrap();
-    thread::sleep(Duration::from_millis(50));
+    test_support::connect_pair_and_confirm(&a, &b, || {
+        b.connect("inproc://own-multi-consume").unwrap()
+    });
 
     let parts = vec![
         Message::try_from(b"part-a").unwrap(),
@@ -66,8 +68,9 @@ fn recv_ownership_transfers_to_caller() {
     a.bind("inproc://own-recv-transfer").unwrap();
 
     let b = ctx.pair_socket().unwrap();
-    b.connect("inproc://own-recv-transfer").unwrap();
-    thread::sleep(Duration::from_millis(50));
+    test_support::connect_pair_and_confirm(&a, &b, || {
+        b.connect("inproc://own-recv-transfer").unwrap()
+    });
 
     let msg = Message::try_from(b"recv-test").unwrap();
     await_send(b.send().message(msg).submit()).unwrap();
@@ -118,8 +121,9 @@ fn repeated_multipart_recv_preserves_shape() {
     let a1 = ctx.pair_socket().unwrap();
     a1.bind("inproc://own-shape-direct").unwrap();
     let b1 = ctx.pair_socket().unwrap();
-    b1.connect("inproc://own-shape-direct").unwrap();
-    thread::sleep(Duration::from_millis(50));
+    test_support::connect_pair_and_confirm(&a1, &b1, || {
+        b1.connect("inproc://own-shape-direct").unwrap()
+    });
 
     let parts = vec![
         Message::try_from(b"frame-x").unwrap(),
@@ -146,8 +150,9 @@ fn repeated_multipart_recv_preserves_shape() {
     a2.bind("inproc://own-shape-repeat").unwrap();
 
     let b2 = ctx.pair_socket().unwrap();
-    b2.connect("inproc://own-shape-repeat").unwrap();
-    thread::sleep(Duration::from_millis(50));
+    test_support::connect_pair_and_confirm(&a2, &b2, || {
+        b2.connect("inproc://own-shape-repeat").unwrap()
+    });
 
     let parts = vec![
         Message::try_from(b"frame-x").unwrap(),
@@ -180,8 +185,9 @@ fn pull_receive_owns_parts() {
     server.bind("inproc://own-pull-receive").unwrap();
 
     let client = ctx.pair_socket().unwrap();
-    client.connect("inproc://own-pull-receive").unwrap();
-    thread::sleep(Duration::from_millis(50));
+    test_support::connect_pair_and_confirm(&server, &client, || {
+        client.connect("inproc://own-pull-receive").unwrap()
+    });
 
     let msg = Message::try_from(b"cb-payload").unwrap();
     await_send(client.send().message(msg).submit()).unwrap();
@@ -196,34 +202,26 @@ fn request_future_preserves_more_than_1024_reply_parts() {
 
     let ctx = Context::new().unwrap();
     let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
     router.bind("inproc://own-request-many-parts").unwrap();
-    dealer.connect("inproc://own-request-many-parts").unwrap();
-    thread::sleep(Duration::from_millis(50));
 
-    let server = thread::spawn(move || {
-        let mut request = Received::empty();
-        router.recv(&mut request, RecvFlags::NONE).unwrap();
-        let mut reply = request
-            .reply()
-            .message(Message::try_from(0_u32.to_le_bytes().as_slice()).unwrap());
-        for index in 1..PART_COUNT as u32 {
-            reply = reply.message(Message::try_from(index.to_le_bytes().as_slice()).unwrap());
-        }
-        reply.submit().unwrap();
-    });
+    let (_dealer, _, future, request) = test_support::request_until_received(
+        &ctx,
+        &router,
+        "inproc://own-request-many-parts",
+        b"many-parts",
+        Duration::from_secs(5),
+    );
+    let mut reply = request
+        .reply()
+        .message(Message::try_from(0_u32.to_le_bytes().as_slice()).unwrap());
+    for index in 1..PART_COUNT as u32 {
+        reply = reply.message(Message::try_from(index.to_le_bytes().as_slice()).unwrap());
+    }
+    reply.submit().unwrap();
 
-    let submission = dealer
-        .request()
-        .message(Message::try_from(b"many-parts").unwrap())
-        .timeout(Duration::from_secs(5))
-        .submit()
-        .expect("request submit failed");
-    test_support::block_on(submission.admitted).expect("request admission failed");
-    let parts = test_support::block_on(submission.reply).expect("request failed");
+    let parts = test_support::block_on(future).expect("request failed");
     assert_eq!(parts.len(), PART_COUNT);
     assert_eq!(parts[1024].as_bytes(), 1024_u32.to_le_bytes());
-    server.join().unwrap();
 }
 
 #[test]

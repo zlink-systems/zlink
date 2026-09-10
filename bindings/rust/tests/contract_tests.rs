@@ -336,55 +336,26 @@ fn poller_modify_transfers_completion_ownership() {
 fn pollcompletion_reports_only_after_request_future_is_settled() {
     let ctx = Context::new().unwrap();
     let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
     router
         .bind("inproc://rust-public-completion-owner")
         .unwrap();
-    dealer
-        .connect("inproc://rust-public-completion-owner")
-        .unwrap();
-    dealer
-        .common_options()
-        .set_send_timeout(std::time::Duration::from_secs(5))
-        .unwrap();
-    router
-        .common_options()
-        .set_receive_timeout(std::time::Duration::from_secs(5))
-        .unwrap();
-
-    // Complete a blocking data handshake before the first DONTWAIT REQUEST.
-    // This removes transport attachment from the completion-owner assertion.
-    dealer
-        .send()
-        .message(Message::try_from(b"ready").unwrap())
-        .submit_sync()
-        .unwrap();
-    let mut ready = Received::empty();
-    assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
-    assert_eq!(ready.single_part().unwrap().as_bytes(), b"ready");
+    let (dealer, result, mut future, request) = test_support::request_until_received(
+        &ctx,
+        &router,
+        "inproc://rust-public-completion-owner",
+        b"poller-request",
+        Duration::from_secs(2),
+    );
+    assert_eq!(result, SubmitResult::Ok);
 
     let poller = Poller::new().unwrap();
     poller.add_socket(&dealer, POLLCOMPLETION, 17).unwrap();
-    let responder = thread::spawn(move || {
-        let mut request = Received::empty();
-        assert!(router.recv(&mut request, RecvFlags::NONE).unwrap());
-        request
-            .reply()
-            .message(Message::try_from(b"poller-reply").unwrap())
-            .submit()
-            .unwrap();
-    });
-
-    let submission = dealer
-        .request()
-        .message(Message::try_from(b"poller-request").unwrap())
-        .timeout(std::time::Duration::from_secs(2))
+    assert!(test_support::poll_once(&mut future).is_pending());
+    request
+        .reply()
+        .message(Message::try_from(b"poller-reply").unwrap())
         .submit()
         .unwrap();
-    assert_eq!(submission.result, SubmitResult::Ok);
-    assert!(test_support::block_on(submission.admitted).is_ok());
-    let mut future = submission.reply;
-    assert!(test_support::poll_once(&mut future).is_pending());
     let mut events = [zlink::PollEvent::default()];
     assert_eq!(poller.wait(&mut events, 5_000).unwrap(), 1);
     assert_eq!(events[0].slot, 17);
@@ -395,7 +366,6 @@ fn pollcompletion_reports_only_after_request_future_is_settled() {
     poller.modify_socket(&dealer, POLLIN).unwrap();
     poller.modify_socket(&dealer, POLLCOMPLETION).unwrap();
     poller.remove_socket(&dealer).unwrap();
-    responder.join().unwrap();
 }
 
 #[test]
