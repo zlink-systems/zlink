@@ -1,5 +1,47 @@
 #!/usr/bin/env bash
 
+select_java_home() {
+  local candidate root
+  local -a candidates=(
+    "${HOME}/.cache/zlink/jdk/temurin-25"
+    "/usr/lib/jvm/temurin-25-jdk-amd64"
+    "/usr/lib/jvm/java-25-openjdk-amd64"
+  )
+
+  if [[ -n "${JAVA_HOME:-}" ]]; then
+    if [[ -x "${JAVA_HOME}/bin/javac" ]]; then
+      export JAVA_HOME
+      return 0
+    fi
+    echo "JAVA_HOME is set to ${JAVA_HOME}, but ${JAVA_HOME}/bin/javac was not found or is not executable" >&2
+    return 1
+  fi
+
+  for root in /usr/lib/jvm /usr/java /opt; do
+    [[ -d "${root}" ]] || continue
+    while IFS= read -r candidate; do
+      candidates+=("${candidate}")
+    done < <(find -L "${root}" -mindepth 1 -maxdepth 2 -type d -iname '*25*' -print 2>/dev/null | sort)
+  done
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "${candidate}/bin/javac" ]]; then
+      export JAVA_HOME="${candidate}"
+      return 0
+    fi
+  done
+
+  echo "JAVA_HOME is not set; searched these JDK 25 candidates for executable bin/javac:" >&2
+  for candidate in "${candidates[@]}"; do
+    if [[ -e "${candidate}/bin/javac" ]]; then
+      echo "  ${candidate}/bin/javac (present but not executable)" >&2
+    else
+      echo "  ${candidate}/bin/javac (not found)" >&2
+    fi
+  done
+  return 1
+}
+
 check_ports_free() {
   local low="$1" high="$2" used
   used="$(ss -H -ltn | awk -v low="${low}" -v high="${high}" '
