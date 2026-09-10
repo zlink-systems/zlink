@@ -82,10 +82,12 @@ G2 결과가 설계를 바꾸면 G4 브리프 전에 draft를 고치고 A에 알
 |---|---|
 | G1 #88 스펙·정책 문안 | **완료·머지** PR #124, 보완 #128(per-lang en 쌍)·#129(#126 산문 정합). 옛 종결자 시그니처·산문 0건. |
 | G2 #89 Java 파일럿 | **완료·머지** PR #119 (참조 구현). |
-| G4 바인딩 | cpp #91(#122)·node #93(#123)·python #96(#121)·**go #94(#130)** 머지. **dotnet #92**·rust #95 codex 진행 중. |
-| G3 #90 Java perf·gRPC Java raw | codex 진행 중. **main 기준**(handoff의 Issue #12 `e1272851bd`는 origin에 없음→소멸). 코드만, 측정 G6. |
+| G4 바인딩 #91~#96 | **전부 머지·CLOSED**: cpp #91(#122)·dotnet #92(#136)·node #93(#123)·go #94(#130)·rust #95(#132)·python #96(#121). API+contract+perf클라이언트. |
+| G3 #90 Java perf·gRPC Java raw | **완료·머지** PR #141. §5 루프 + gRPC raw 드라이버(RawStack.java·BenchDrivers·repro). |
 | G5 #97~#100 framework | **→ 머신 A** (사용자 재할당 2026-09-10). B는 착수 안 함. |
-| G6/G7 #101 | 미착수. 전 바인딩/Java perf 측정(전후·clients=1 깊이·gRPC 3-run)과 릴리스 노트·decisions FB. Core 0.18.0 prefix(published)·perf-queue-runner 필요. |
+| G6 perf 판정 | **criterion 2·4 PASS (2026-09-11, FB-071·PR #145).** cpp ccu=1 8.5k→**300k**(깊이 탈출, C ref 275k 동급), ccu=100 회귀 없음(옛 150k→새 157k; 과거 0.17.5 97k·64B 137k 대비 유지·상승). ccu=1>ccu=100 역전은 harness 단일스레드 특성(C control·3언어·Core 버전·과거결과 4중 확증, §5/Core 회귀 아님). **criterion 3(gRPC perf 3-run)은 A 서버 job**(사용자 2026-09-11) — gRPC 벤치 kotlin raw 스택(RawKotlinStack.kt)은 #90이 놓쳐 아직 옛 API, A가 gRPC perf 적응 시 함께 처리. |
+| G7 #101 릴리스 노트 | **완료·머지** PR #146 (`bindings-0.18.0.{ko,}.md`, breaking). decisions FB-071 기록 완료. |
+| 릴리스 #87 바인딩 0.18.0 태그 | **사용자 승인 대기** — `<lang>/v0.18.0` 4언어 태그 → Actions 배포(외부·비가역). A의 Core 릴리스·framework G5와 순서 조율 필요. |
 
 **신규/재할당 이슈 기록**:
 - #126 (신규, area:docs kind:bug) — 바인딩 스펙 산문이 옛 계약 자기모순. B 감독 직접 처리, PR #128·#129로 완료·CLOSED.
@@ -96,3 +98,6 @@ G2 결과가 설계를 바꾸면 G4 브리프 전에 draft를 고치고 A에 알
 - Python 결과 객체는 Java 참조처럼 method 접근(`result()/admitted()/reply()`)으로 통일(draft §4 Python의 field 표기 대신 7언어 일관).
 - JDK 25 위치 `/home/hep7hep7/.jdks/jdk-25.0.4.1+1` (gradle 자동 탐지). handoff §5의 `/home/hep7/.cache/zlink/jdk/temurin-25`는 틀림 — "JDK 25 부재"는 오판.
 - G4·G5 병행: 바인딩(G4)과 framework(G5) 디렉터리 분리라 동시 진행 가능(계약 확정).
+- #147(gRPC raw 스택 적응)은 stale worktree 기반·A의 gRPC 벤치 active 작업과 충돌로 **닫음**. RawStack.java는 이미 main에 적응됨(#141), RawKotlinStack.kt 잔여는 A 도메인.
+
+**캠페인 완료 상태 (2026-09-11):** 머신 B 몫 G1·G2·G3·G4·G6·G7(릴리스 노트)는 전부 완료·머지됐다. 완료 기준 충족 — 7언어 contract 통과, 스펙·guide 옛 시그니처 0건, 릴리스 노트 breaking 기록, decisions FB-071. 남은 것은 ① **바인딩 0.18.0 태그 발행(#87, 사용자 승인+A 순서 조율 대기)**, ② criterion 3 gRPC perf·G5 framework·RawKotlinStack 적응(전부 **A**). B가 독립적으로 끝낼 작업은 없다.
