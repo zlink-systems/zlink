@@ -27,8 +27,10 @@ title: "Handoff 2026-09-10 — framework 메시징 성능 캠페인·작업 방�
 
 | job | worktree | 이슈 | 하는 일 | 끝나면 |
 |---|---|---|---|---|
-| `bench-pairing` | `~/project/zlink-13-bench-pairing` | #13 | Java 벤치 행을 core ROUTER↔ROUTER·framework ToNode로, 패턴 3개, 3-run | 보고서 읽고 → 문서(`framework/bench/grpc/README.*`, `doc/comparison.*`) 감독자가 반영 → PR(Refs #13) → 나머지 언어 확대 여부 결정 |
-| `java-lane-lookup` (3차) | `~/project/zlink-78-lane-lookup` | #78 | 제출 경로 조회 3회 왕복을 turn 1회로. 검증·timeout 확정을 `submit()`으로 옮기는 것은 **감독자가 허용함**(#78 코멘트) | 테스트 직접 재실행 → 제출 구간 µs·turn 진입 횟수 전후 확인 → PR(Closes #78) |
+| `bench-java-raw-perfshape` | `~/project/zlink-12-bench-grpc-java-raw-bindings-perf-perfmu` | #12 | Java gRPC 벤치 raw 클라이언트를 bindings perf `PerfMultiSocketReqRep` 구조로(public poller POLLCOMPLETION drain, turn당 socket당 submit 1, 상한 없음) | 보고서 `.artifacts/codex/bench-java-raw-perfshape/summary.md` → PR #84(#13) 머지 뒤 rebase → PR(Closes #12) → 다른 언어 raw 드라이버도 각 perf 샘플 대비 확인 |
+
+끝난 것(같은 날 저녁): `bench-pairing`(#13) → PR #84(Refs #13, 규격 README ko/en도 같이 고침). `java-lane-lookup`(#78) →
+PR #83(Closes #78; 감독자가 channels 테스트 159건 재실행 통과). 둘 다 CI 대기(`ci-watch.sh status`).
 
 ### 결과를 어디서 받나
 
@@ -77,11 +79,15 @@ job 결과는 두 곳에 남는다.
 | Java | #29, #62, #74, #76, #80 | 수신 폴링 제거, 복사·실행기·활성화, 클라이언트 정리(+7.4%뿐), send 지연 120→0.3 ms, platform pump |
 | .NET | #71 | lane 왕복·지속 worker·batch (send 3배, window 2배). I0 대기는 미완 |
 | Node | #72 | 64건 batch·복사 제거. 대기는 여전히 1 ms 타이머(#50 코멘트에 perf 참조 구현 있음) |
-| 계획 | (직접) | FB-059~064, draft §7 / plan §10 |
+| 계획 | (직접) | FB-059~065, draft §7 / plan §10 |
+| 열린 PR | #83(#78), #84(#13) | CI 뒤 머지. #84가 먼저 들어가야 #12 브랜치가 rebase된다(둘 다 `RawStack.java`를 고친다) |
 
 ## 4. 다음에 할 일 — 우선순위
 
-1. **#78 결과 확인·머지.** 예상: 제출 구간 193 → ~16 µs, request-serial 1,989 → ~3,000 ops/s(binding 대비 0.31 → 0.48).
+1. **PR #83(#78)·#84(#13) CI 확인·머지.** #78 결과: turn 진입 3→1회, 제출 구간 181→32 µs, request-serial 2,088→3,143/s.
+   그 다음 **#12 job 결과 검토 → rebase → PR**. 첫 보고(20분 시점): raw request-backpressure 3-run 완료, 오류·warmup 포기 0,
+   1024B 7,738/s·4096B 7,944/s. peak_in_flight를 반드시 같이 보라 — perf 구조는 turn당 submit 1이라 socket 1개면 깊이가
+   작게 유지되어 request-serial과 비슷한 값이 나올 수 있다. 그 해석은 사용자와 확인.
 2. **완료 구간 프로파일.** 제출 구간만 쟀다. 응답 도착 → caller continuation 구간이 미측정이고, 요청당 스레드 전달
    12회 중 대부분이 여기로 추정. 방법은 `.artifacts/codex/java-client-profile/brief.md`와 같게, 구간만 바꾼다.
    **#78 머지 뒤에** 잰다(섞이면 안 된다).
@@ -93,7 +99,22 @@ job 결과는 두 곳에 남는다.
 6. **모델 비교 벤치 별도 이슈.** DEALER→ROUTER, ToChannel vs ToNode(=채널 선택 비용), ClientServer. gRPC 표에 섞지 않는다.
 7. 릴리스 판단: 4언어 3-run은 #13 반영 + 조용한 기계에서만. `request-window`는 gRPC 비교에서 제외.
 
-## 4.5 따로 알아야 할 두 건
+## 4.5 따로 알아야 할 세 건
+
+### 4.5.0 raw ROUTER↔ROUTER request-backpressure 붕괴의 정체와 send_ready 콜백 결정 (Issue #12, FB-065)
+
+- raw 행 request-backpressure 0.2~0.4/s(3-run 전부, 9/9부터 동일)는 **벤치 raw 클라이언트 구조** 때문이다. poller 없이
+  tight loop로 submit만 하고 완료는 binding runtime pump에 맡겼다. bindings perf의 같은 구성 `PerfMultiSocketReqRep`
+  (public poller `POLLCOMPLETION`을 자기 poll 루프에서 drain, turn당 socket당 submit 1, 상한 없음)은 정상이다.
+  Core는 HWM에 막힌 submit마다 **토큰만** 보관하고 payload는 호출자가 든다(0.17 계약 B, D-B79/D-B85).
+- 감독자가 처음 낸 두 설명은 철회됐다: (a) "Core가 대기 전부를 깨우고 binding이 전부 재시도" — 4개 binding 코드 조사에서
+  token-matched 재시도만 확인됨, (b) "벤치 raw 행에 상한을 두자" — 결함을 가리는 것(사용자). **규칙: raw 클라이언트가
+  무너지면 이론을 세우기 전에 bindings perf 샘플과 비교한다.**
+- 사용자 질문 "send_ready 콜백을 되살릴까"에 대한 결론: 하지 않는다. 0.13에서 hint 콜백은 admission 정책을 세울 수 없고
+  콜백 안 재개는 EINVAL 69~88%·Core 스레드 블로킹으로 폐기(`doc/plan/archive/core-send-completion-design.ko.md:29-32`),
+  0.16 Core pending pool은 무제한 내부 큐가 되어 HWM이 흐름 제어를 잃어 폐기(D-B71~D-B79, D-B85). 관리형 런타임은
+  콜백을 받아도 자기 루프로 넘겨야 하므로 결국 큐+wake = 지금의 pull. 남는 완화는 binding public API에 perf 샘플의
+  completion 루프 형태를 유틸로 제공하는 것(1.0 뒤).
 
 ### 4.5.1 Java 수신 pump — platform thread로 바꿨고, 가상 thread 문제는 반만 확인됐다 (Issue #75, PR #80, FB-062)
 
