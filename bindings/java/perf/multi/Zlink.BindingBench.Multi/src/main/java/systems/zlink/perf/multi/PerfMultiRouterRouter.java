@@ -4,6 +4,7 @@ package systems.zlink.perf.multi;
 
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.SendSubmission;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.eventing.PollEventFlags;
@@ -20,7 +21,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 final class PerfMultiRouterRouter {
@@ -132,17 +132,17 @@ final class PerfMultiRouterRouter {
                 socketsAsBase, PollEventFlags.POLLIN)) {
             long activeEnd = System.nanoTime()
                 + (long) durationSeconds * 1_000_000_000L;
-            PerfMultiTargetCoordinator.run(n, activeEnd, pollSet,
+            PerfMultiRoutedSendCoordinator.run(n, activeEnd, pollSet,
                 index -> sendPayload(clients.get(index), msgSize, activeEnd),
                 index -> drainReplies(clients.get(index), msgSize, metrics,
                     replyBuffer, activeEnd),
                 index -> drainRepliesForTeardown(clients.get(index),
                     replyBuffer),
                 // C echo client: teardown window max(env, 3 s per active second).
-                PerfMultiTargetCoordinator.sendDrainTimeout().compareTo(
+                PerfMultiRoutedSendCoordinator.sendDrainTimeout().compareTo(
                     java.time.Duration.ofSeconds(
                         Math.max(1L, (long) config.durationSeconds()) * 3L)) >= 0
-                    ? PerfMultiTargetCoordinator.sendDrainTimeout()
+                    ? PerfMultiRoutedSendCoordinator.sendDrainTimeout()
                     : java.time.Duration.ofSeconds(
                         Math.max(1L, (long) config.durationSeconds()) * 3L),
                 "multi router/router async sends");
@@ -206,9 +206,9 @@ final class PerfMultiRouterRouter {
         return drained;
     }
 
-    private static CompletionStage<Void> sendPayload(RouterSocket client,
-                                                     int msgSize,
-                                                     long activeEnd) {
+    private static SendSubmission sendPayload(RouterSocket client,
+                                              int msgSize,
+                                              long activeEnd) {
         try (Message payload = PerfUtil.payload(msgSize,
                  (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
              Message tail = PerfUtil.measurementPartCount() == 2

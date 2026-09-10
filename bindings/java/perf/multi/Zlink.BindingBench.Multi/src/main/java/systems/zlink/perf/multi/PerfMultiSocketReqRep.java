@@ -9,12 +9,13 @@ import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
+import systems.zlink.contracts.messaging.RequestSubmission;
 import systems.zlink.contracts.sockets.DealerSocket;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.Socket;
-import systems.zlink.contracts.sockets.SendFlags;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfSocketPollSet;
@@ -24,11 +25,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 
 final class PerfMultiSocketReqRep {
     private static final RoutingId SERVER_RID = RoutingId.from(
@@ -36,9 +38,8 @@ final class PerfMultiSocketReqRep {
     /** C reference perf_aux_poll_wait_ms() (perf_multi_poll.hpp:39). */
     private static final int AUX_POLL_WAIT_MS = 100;
     /**
-     * Opt-in submit/readiness instrumentation. Off by default so a measured
-     * run keeps the plain POLLCOMPLETION registration and the plain completion
-     * consumer. Set PERF_MULTI_REQREP_DIAG=1 to enable.
+     * Opt-in submit instrumentation. Off by default so measured runs keep the
+     * plain submission and completion callbacks.
      */
     private static final boolean DIAGNOSTICS = diagnosticsEnabled();
 
@@ -186,7 +187,11 @@ final class PerfMultiSocketReqRep {
                                    PerfUtil.Metrics metrics) {
         AtomicReference<Throwable> failure = new AtomicReference<>();
         AtomicLong outstanding = new AtomicLong();
+        AtomicLong pendingAdmissions = new AtomicLong();
         AtomicLong timeouts = new AtomicLong();
+        AtomicIntegerArray backpressured = new AtomicIntegerArray(
+            clients.size());
+        Thread submitThread = Thread.currentThread();
         long activeEnd = System.nanoTime()
             + config.durationSeconds() * 1_000_000_000L;
         int requestTimeoutMs = resolveRequestTimeoutMs();
@@ -220,56 +225,90 @@ final class PerfMultiSocketReqRep {
                     Message.closeAll(parts);
                 }
                 outstanding.decrementAndGet();
+                LockSupport.unpark(submitThread);
             }
         };
 
         SubmitDiagnostics diagnostics = DIAGNOSTICS
             ? new SubmitDiagnostics(clientCount, completion) : null;
-        PollEventFlags[] pollEvents = DIAGNOSTICS
-            ? new PollEventFlags[] {PollEventFlags.POLLCOMPLETION,
-                                    PollEventFlags.POLLOUT}
-            : new PollEventFlags[] {PollEventFlags.POLLCOMPLETION};
 
-        // PERF_MULTI_TEST_POLICY.md:164-168 — do not fix the inflight request
-        // count and do not serialize the round trip 1:1. Each turn submits one
-        // new logical request per client socket and never waits for the
-        // previous reply; the binding owns any WRITABLE admission retry and
-        // the completion poller progresses replies concurrently. Same submit
-        // cadence as the C reference submit cursor
-        // (bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:577-590).
+        // PERF_MULTI_TEST_POLICY.md 1.2: OK immediately leaves the socket
+        // eligible for the next sweep. Only BACKPRESSURED makes that socket
+        // unavailable, until its exact admitted() stage completes. Reply
+        // stages progress independently on the binding runtime.
         try (RequestPayloadTemplates payloadTemplates =
-                 new RequestPayloadTemplates(config.size(), clients.size());
-             PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(
-                 clients, pollEvents)) {
+                 new RequestPayloadTemplates(config.size(), clients.size())) {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
+                boolean submitted = false;
                 for (int i = 0; i < clients.size(); i++) {
                     if (System.nanoTime() >= activeEnd) {
                         break;
                     }
+                    if (backpressured.get(i) != 0) {
+                        continue;
+                    }
                     payloadTemplates.prepare(i, (byte) PerfUtil.PHASE_ACTIVE,
                         System.nanoTime());
-                    submit(clients.get(i), routedClients,
+                    RequestSubmission submission = submit(clients.get(i),
+                        routedClients,
                         payloadTemplates.copyForSubmit(i), timeout,
                         outstanding,
                         diagnostics == null ? completion
                                             : diagnostics.beforeSubmit(i));
+                    submitted = true;
+                    SubmitResult result = submission.result();
+                    if (result == SubmitResult.OK) {
+                        continue;
+                    }
+                    if (result != SubmitResult.BACKPRESSURED) {
+                        throw new IllegalStateException(
+                            "async request returned " + result);
+                    }
+                    backpressured.set(i, 1);
+                    pendingAdmissions.incrementAndGet();
+                    if (diagnostics != null) {
+                        diagnostics.recordBackpressure();
+                    }
+                    int socketIndex = i;
+                    submission.admitted().whenComplete((ignored, error) -> {
+                        if (error != null) {
+                            failure.compareAndSet(null,
+                                PerfMultiAsyncSendLoop.completionCause(error));
+                        }
+                        backpressured.set(socketIndex, 0);
+                        pendingAdmissions.decrementAndGet();
+                        LockSupport.unpark(submitThread);
+                    });
                 }
 
-                // Completion callbacks are dispatched only by this poller.
-                // One bounded wait paces every submit/progress turn, including
-                // intervals where every submit is suspended by backpressure.
-                int ready = completionPoller.poll(Math.min(50,
-                    remainingTimeoutMs(activeEnd)));
-                if (diagnostics != null) {
-                    diagnostics.afterPoll(completionPoller, ready);
+                if (!submitted && failure.get() == null) {
+                    long remainingNanos = activeEnd - System.nanoTime();
+                    if (remainingNanos > 0L) {
+                        // Every socket is BACKPRESSURED. Its admitted()
+                        // completion is the only event that resumes submits.
+                        LockSupport.parkNanos(PerfMultiSocketReqRep.class,
+                            remainingNanos);
+                    }
+                    if (Thread.currentThread().isInterrupted()) {
+                        throw new IllegalStateException(
+                            "multi socket reqrep interrupted");
+                    }
                 }
             }
             long drainEnd = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
                 Math.max(1_000, requestTimeoutMs * 4));
-            while (outstanding.get() > 0 && System.nanoTime() < drainEnd) {
-                completionPoller.poll(remainingTimeoutMs(drainEnd));
+            while ((outstanding.get() > 0 || pendingAdmissions.get() > 0)
+                   && failure.get() == null
+                   && System.nanoTime() < drainEnd) {
+                LockSupport.parkNanos(PerfMultiSocketReqRep.class,
+                    Math.max(1L, drainEnd - System.nanoTime()));
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new IllegalStateException(
+                        "multi socket reqrep drain interrupted");
+                }
             }
-            if (outstanding.get() != 0 || failure.get() != null) {
+            if (outstanding.get() != 0 || pendingAdmissions.get() != 0
+                || failure.get() != null) {
                 System.err.println("TIMEOUTS," + timeouts.get());
                 if (diagnostics != null) {
                     diagnostics.report(config, System.err);
@@ -291,10 +330,8 @@ final class PerfMultiSocketReqRep {
     }
 
     /**
-     * Opt-in counters that answer two questions without changing the submit
-     * cadence: how deep the per-socket inflight queue grows, and whether the
-     * public POLLOUT readiness ever reports the sockets this loop is about to
-     * submit on.
+     * Opt-in counters that expose the per-socket inflight depth and exact
+     * BACKPRESSURED result count without changing the submit loop.
      */
     private static final class SubmitDiagnostics {
         private final java.util.function.BiConsumer<List<Message>, Throwable>[]
@@ -302,11 +339,7 @@ final class PerfMultiSocketReqRep {
         private final AtomicLong[] inflight;
         private final long[] maxInflight;
         private long submits;
-        private long turns;
-        private long idleTurns;
-        private long readySockets;
-        private long polloutSockets;
-        private long completionSockets;
+        private long backpressured;
 
         @SuppressWarnings("unchecked")
         private SubmitDiagnostics(int clientCount,
@@ -338,22 +371,8 @@ final class PerfMultiSocketReqRep {
             return consumers[index];
         }
 
-        private void afterPoll(PerfSocketPollSet poller, int ready) {
-            turns++;
-            if (ready <= 0) {
-                idleTurns++;
-                return;
-            }
-            readySockets += ready;
-            for (int offset = 0; offset < ready; offset++) {
-                int mask = poller.readyMaskAt(offset);
-                if ((mask & PollEventFlags.POLLOUT.mask()) != 0) {
-                    polloutSockets++;
-                }
-                if ((mask & PollEventFlags.POLLCOMPLETION.mask()) != 0) {
-                    completionSockets++;
-                }
-            }
+        private void recordBackpressure() {
+            backpressured++;
         }
 
         private void report(PerfUtil.Config config, java.io.PrintStream out) {
@@ -366,45 +385,45 @@ final class PerfMultiSocketReqRep {
             out.println("REQREP_DIAG,size=" + config.size()
                 + ",clients=" + inflight.length
                 + ",submits=" + submits
-                + ",turns=" + turns
-                + ",idle_turns=" + idleTurns
-                + ",ready_sockets=" + readySockets
-                + ",pollcompletion_sockets=" + completionSockets
-                + ",pollout_sockets=" + polloutSockets
+                + ",backpressured=" + backpressured
                 + ",max_inflight_per_socket=" + deepest
                 + ",residual_inflight=" + residual);
         }
     }
 
-    private static void submit(Socket client, boolean routedClients,
-                               Message payload, Duration timeout,
-                               AtomicLong outstanding,
-                               java.util.function.BiConsumer<List<Message>,
-                                   Throwable> completion) {
-        CompletionStage<List<Message>> stage;
+    private static RequestSubmission submit(Socket client,
+                                            boolean routedClients,
+                                            Message payload,
+                                            Duration timeout,
+                                            AtomicLong outstanding,
+                                            java.util.function.BiConsumer<
+                                                List<Message>, Throwable>
+                                                completion) {
+        RequestSubmission submission;
         try (payload;
              Message tail = PerfUtil.measurementPartCount() == 2
                  ? PerfUtil.measurementTail() : null) {
             if (routedClients) {
                 if (tail != null) {
-                    stage = ((RouterSocket) client).request(SERVER_RID)
+                    submission = ((RouterSocket) client).request(SERVER_RID)
                         .message(payload).message(tail).timeout(timeout)
                         .submit();
                 } else {
-                    stage = ((RouterSocket) client).request(SERVER_RID)
+                    submission = ((RouterSocket) client).request(SERVER_RID)
                         .message(payload).timeout(timeout).submit();
                 }
             } else if (tail != null) {
-                stage = ((DealerSocket) client).request().message(payload)
+                submission = ((DealerSocket) client).request().message(payload)
                     .message(tail).timeout(timeout).submit();
             } else {
-                stage = ((DealerSocket) client).request().message(payload)
+                submission = ((DealerSocket) client).request().message(payload)
                     .timeout(timeout).submit();
             }
         }
 
         outstanding.incrementAndGet();
-        stage.whenComplete(completion);
+        submission.reply().whenComplete(completion);
+        return submission;
     }
 
     /** One native template per requester supplies independently owned submits. */
@@ -438,15 +457,6 @@ final class PerfMultiSocketReqRep {
     private static boolean isExpectedRequestFailure(Throwable error) {
         return error instanceof ZlinkRequestException request
             && request.getResult() == RequestResult.TIMED_OUT;
-    }
-
-    private static int remainingTimeoutMs(long deadline) {
-        long remainingNs = deadline - System.nanoTime();
-        if (remainingNs <= 0) {
-            return 0;
-        }
-        return (int) Math.min(Integer.MAX_VALUE,
-            (remainingNs + 999_999L) / 1_000_000L);
     }
 
     private static boolean diagnosticsEnabled() {

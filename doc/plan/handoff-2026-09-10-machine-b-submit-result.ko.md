@@ -85,7 +85,9 @@ G2 결과가 설계를 바꾸면 G4 브리프 전에 draft를 고치고 A에 알
 | G4 바인딩 | cpp #91(#122)·node #93(#123)·python #96(#121)·**go #94(#130)** 머지. **dotnet #92**·rust #95 codex 진행 중. |
 | G3 #90 Java perf·gRPC Java raw | codex 진행 중. **main 기준**(handoff의 Issue #12 `e1272851bd`는 origin에 없음→소멸). 코드만, 측정 G6. |
 | G5 #97~#100 framework | **→ 머신 A** (사용자 재할당 2026-09-10). B는 착수 안 함. |
-| G6/G7 #101 | 미착수. 전 바인딩/Java perf 측정(전후·clients=1 깊이·gRPC 3-run)과 릴리스 노트·decisions FB. Core 0.18.0 prefix(published)·perf-queue-runner 필요. |
+| G3 #90 Java perf·gRPC Java raw | **완료·머지** PR #141. §5 루프 + gRPC raw 드라이버. |
+| G6 perf 판정 | **criterion 2·4 PASS (2026-09-11, FB-071).** cpp ccu=1 8.5k→**300k**(깊이 탈출, C ref 275k 동급), ccu=100 회귀 없음(옛 150k→새 157k; 과거 0.17.5 97k·64B 137k 대비 유지·상승). ccu=1>ccu=100 역전은 harness 단일스레드 특성(C control·3언어·Core 버전·과거결과 4중 확증, §5/Core 회귀 아님). criterion 3(gRPC Java 3-run)은 `zlink:0.18.0` 공유 Maven 로컬 패키지(§5 전제) 발행 후속 — 판정 blocker 아님. |
+| G7 #101 | 릴리스 노트(breaking)·바인딩 0.18.0 태그 남음. decisions FB-071 기록 완료. |
 
 **신규/재할당 이슈 기록**:
 - #126 (신규, area:docs kind:bug) — 바인딩 스펙 산문이 옛 계약 자기모순. B 감독 직접 처리, PR #128·#129로 완료·CLOSED.

@@ -295,6 +295,12 @@ async function writeResult(options, observedTrigger, result) {
     `# warmup: ${options.warmup}`,
     ''
   ];
+  for (const error of result.client_error_summary) {
+    lines.push(`client_error: ${error.type}: ${error.message} (${error.count})`);
+  }
+  if (result.client_error_other_count !== 0) {
+    lines.push(`client_error_other: ${result.client_error_other_count}`);
+  }
   const metrics = {
     throughput: result.throughput_per_second,
     bandwidth: result.bandwidth_mb_s,
