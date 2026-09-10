@@ -174,6 +174,13 @@ final class ZLinkServiceM6AWireCodecTest {
                 assertArrayEquals(frame.array(),
                     codec.encodeFrameworkMultipartFrame(List.of(first, second)),
                     "direct frame size " + size);
+                try (Message nativeFrame =
+                         codec.encodeFrameworkMultipartMessage(
+                             List.of(first, second))) {
+                    assertTrue(nativeFrame.dataBuffer().isDirect());
+                    assertArrayEquals(frame.array(), nativeFrame.toByteArray(),
+                        "native frame size " + size);
+                }
                 assertArrayEquals(header, first.toByteArray());
                 assertArrayEquals(body, second.toByteArray());
             }

@@ -10,12 +10,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CountDownLatch;
 import java.util.ArrayList;
 import java.util.List;
@@ -25,6 +31,174 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 final class ZLinkServiceOperationRegistryTest {
+    @Test
+    void oneMaintenanceTaskServesEveryPendingDeadlineAndExpiresAtTheBoundary() {
+        AtomicLong clock = new AtomicLong(100);
+        try (var scheduler = new CountingScheduler();
+             var registry = new ZLinkServiceOperationRegistry(
+                 scheduler,
+                 2,
+                 new IllegalStateException("closed"),
+                 clock::get)) {
+            var first = registry.register(Duration.ofNanos(10));
+            var second = registry.register(Duration.ofNanos(10));
+
+            assertEquals(1, scheduler.fixedRateSchedules.get());
+            assertEquals(0, scheduler.otherSchedules.get());
+            assertEquals(0, registry.expire(109));
+            assertEquals(2, registry.expire(110));
+            assertEquals(0, registry.pendingCount());
+            assertTrue(assertThrows(
+                CompletionException.class,
+                first.completion()::join).getCause() instanceof TimeoutException);
+            assertTrue(assertThrows(
+                CompletionException.class,
+                second.completion()::join).getCause() instanceof TimeoutException);
+        }
+    }
+
+    @Test
+    void deadlineComparisonSurvivesNanoTimeWraparound() {
+        AtomicLong clock = new AtomicLong(Long.MAX_VALUE - 2);
+        try (var scheduler = new CountingScheduler();
+             var registry = new ZLinkServiceOperationRegistry(
+                 scheduler, 1, new IllegalStateException("closed"), clock::get)) {
+            var operation = registry.register(Duration.ofNanos(5));
+
+            assertEquals(0, registry.expire(Long.MAX_VALUE));
+            assertEquals(1, registry.expire(Long.MIN_VALUE + 2));
+            assertTrue(assertThrows(CompletionException.class,
+                operation.completion()::join).getCause() instanceof TimeoutException);
+        }
+    }
+
+    @Test
+    void registrationsDoNotCreateAdditionalScheduledTasks() {
+        try (var scheduler = new CountingScheduler();
+             var registry = new ZLinkServiceOperationRegistry(scheduler)) {
+            for (int index = 0; index < 100; index++) {
+                var operation = registry.register(Duration.ofHours(1));
+                assertTrue(registry.discard(operation.id()));
+            }
+
+            assertEquals(1, scheduler.fixedRateSchedules.get());
+            assertEquals(0, scheduler.otherSchedules.get());
+        }
+    }
+
+    @Test
+    void submitSerializesRegistrationAndBindingStartAgainstClose() throws Exception {
+        var closeFailure = new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+            "channel runtime is closed");
+        CountDownLatch submissionEntered = new CountDownLatch(1);
+        CountDownLatch releaseSubmission = new CountDownLatch(1);
+        CountDownLatch closeStarted = new CountDownLatch(1);
+        CountDownLatch closeReturned = new CountDownLatch(1);
+        AtomicReference<CompletableFuture<String>> submittedResult =
+            new AtomicReference<>();
+        AtomicReference<String> discarded = new AtomicReference<>();
+        CompletableFuture<String> transport = new CompletableFuture<>();
+        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
+             var registry = new ZLinkServiceOperationRegistry(
+                 scheduler, 4, closeFailure)) {
+            Thread submitter = Thread.ofPlatform().start(() ->
+                submittedResult.set(registry.submit(
+                    ZLinkServiceOperationIds.next(),
+                    Duration.ofHours(1),
+                    () -> {
+                        submissionEntered.countDown();
+                        await(releaseSubmission);
+                        return transport;
+                    },
+                    discarded::set)));
+            assertTrue(submissionEntered.await(1, TimeUnit.SECONDS));
+            Thread closer = Thread.ofPlatform().start(() -> {
+                closeStarted.countDown();
+                registry.close();
+                closeReturned.countDown();
+            });
+            assertTrue(closeStarted.await(1, TimeUnit.SECONDS));
+            assertFalse(closeReturned.await(20, TimeUnit.MILLISECONDS));
+
+            releaseSubmission.countDown();
+            submitter.join();
+            closer.join();
+
+            CompletionException closed = assertThrows(
+                CompletionException.class,
+                submittedResult.get()::join);
+            assertSame(closeFailure, closed.getCause());
+            assertTrue(transport.complete("late reply"));
+            assertEquals("late reply", discarded.get());
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void reentrantCloseWinsOverASubsequentSubmissionFailure() {
+        var closed = new IllegalStateException("closed during binding submission");
+        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
+             var registry = new ZLinkServiceOperationRegistry(scheduler, 1, closed)) {
+            CompletableFuture<String> result = registry.submit(
+                ZLinkServiceOperationIds.next(), Duration.ofSeconds(1), () -> {
+                    registry.close();
+                    throw new IllegalArgumentException("late submission failure");
+                }, ignored -> { });
+            assertSame(closed, assertThrows(CompletionException.class, result::join).getCause());
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void synchronousSubmissionFailureUsesTheReservedCompletion() {
+        RuntimeException expected = new RuntimeException("submit failed");
+        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
+             var registry = new ZLinkServiceOperationRegistry(scheduler)) {
+            CompletableFuture<String> result = registry.submit(
+                ZLinkServiceOperationIds.next(),
+                Duration.ofSeconds(1),
+                () -> {
+                    throw expected;
+                },
+                ignored -> { });
+
+            CompletionException failure = assertThrows(
+                CompletionException.class,
+                result::join);
+            assertSame(expected, failure.getCause());
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void submitAfterCloseReturnsTheConfiguredFailureWithoutStartingBinding() {
+        var closeFailure = new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+            "channel runtime is closed");
+        AtomicInteger starts = new AtomicInteger();
+        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
+             var registry = new ZLinkServiceOperationRegistry(
+                 scheduler, 4, closeFailure)) {
+            registry.close();
+
+            CompletableFuture<String> result = registry.submit(
+                ZLinkServiceOperationIds.next(),
+                Duration.ofSeconds(1),
+                () -> {
+                    starts.incrementAndGet();
+                    return CompletableFuture.completedFuture("unexpected");
+                },
+                ignored -> { });
+
+            CompletionException failure = assertThrows(
+                CompletionException.class,
+                result::join);
+            assertSame(closeFailure, failure.getCause());
+            assertEquals(0, starts.get());
+        }
+    }
+
     @Test
     void wireIdentityIsTheRegistryKeyAndInvalidIdentityDoesNotReserveCapacity() {
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
@@ -310,6 +484,54 @@ final class ZLinkServiceOperationRegistryTest {
                 operation.completion().orTimeout(1, TimeUnit.SECONDS).join());
         } finally {
             scheduler.shutdownNow();
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(interrupted);
+        }
+    }
+
+    private static final class CountingScheduler
+        extends ScheduledThreadPoolExecutor {
+        private final AtomicInteger fixedRateSchedules = new AtomicInteger();
+        private final AtomicInteger otherSchedules = new AtomicInteger();
+
+        private CountingScheduler() {
+            super(1);
+        }
+
+        @Override
+        public ScheduledFuture<?> scheduleAtFixedRate(
+            Runnable command,
+            long initialDelay,
+            long period,
+            TimeUnit unit) {
+            fixedRateSchedules.incrementAndGet();
+            return super.scheduleAtFixedRate(command, initialDelay, period, unit);
+        }
+
+        @Override
+        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            otherSchedules.incrementAndGet();
+            return super.schedule(command, delay, unit);
+        }
+
+        @Override
+        public <V> ScheduledFuture<V> schedule(Callable<V> command, long delay, TimeUnit unit) {
+            otherSchedules.incrementAndGet();
+            return super.schedule(command, delay, unit);
+        }
+
+        @Override
+        public ScheduledFuture<?> scheduleWithFixedDelay(
+            Runnable command, long initialDelay, long delay, TimeUnit unit) {
+            otherSchedules.incrementAndGet();
+            return super.scheduleWithFixedDelay(command, initialDelay, delay, unit);
         }
     }
 }

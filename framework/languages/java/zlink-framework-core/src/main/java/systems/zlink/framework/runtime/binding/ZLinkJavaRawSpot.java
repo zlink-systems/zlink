@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
@@ -27,6 +28,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatch
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDispatchHandler;
 import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
 /**
  * Framework-owned local Spot mailbox. Raw bindings provide transport only;
@@ -209,6 +211,28 @@ final class ZLinkJavaRawSpot
             new byte[0],
             parts,
             timeout);
+    }
+
+    @Override
+    public CompletionStage<ZLinkBackendReceived> requestToSpot(
+        RoutingId targetNodeRid,
+        String spotId,
+        long spotGeneration,
+        byte[] metadata,
+        List<Message> parts,
+        Duration timeout,
+        ZLinkServiceOperationRegistry operations,
+        UUID operationId) {
+        return owner.requestToSpot(
+            this,
+            targetNodeRid,
+            spotId,
+            spotGeneration,
+            metadata,
+            parts,
+            timeout,
+            operations,
+            operationId);
     }
 
     @Override

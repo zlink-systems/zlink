@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -269,10 +270,10 @@ final class RouteRequestCall implements ZLinkRequestCall {
                     target.toString(), null, null, null));
             }
         });
-        runtime.track(result, timeout);
+        var operationId = ZLinkServiceOperationIds.next();
         List<Message> requestParts = ZLinkChannelCallRuntime.envelopeParts(
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
-            channelName, packetName, payload, contentType, Map.of());
+            channelName, packetName, payload, contentType, Map.of(), operationId);
         ZLinkMessageFlowTracer.TracePoint sent =
             runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
         if (sent != null) {
@@ -283,12 +284,12 @@ final class RouteRequestCall implements ZLinkRequestCall {
                 packetName.orElse(null), channelName, null, null,
                 target.toString(), null, null, null));
         }
-        runtime.requestRoute(router, target, requestParts, timeout)
+        runtime.requestRoute(operationId, router, target, requestParts, timeout)
             .whenComplete((reply, failure) -> {
                 requestParts.forEach(Message::close);
                 if (failure != null) {
                     result.completeExceptionally(
-                        ZLinkChannelCallRuntime.unwrap(failure));
+                        ZLinkChannelCallRuntime.requestFailure(failure));
                     return;
                 }
                 if (result.isDone()) {
@@ -419,10 +420,15 @@ final class MeshNodeRouteSendCall implements ZLinkSendCall {
             sendParts.forEach(Message::close);
             return ZLinkOneWayCalls.oneWayStatus(classified.orElseThrow());
         }
-        return ZLinkOneWayCalls.adaptOneWay(
-                node.sendToNode(target, metadata.encode(), sendParts))
-            .whenComplete((ignored, failure) ->
-                sendParts.forEach(Message::close));
+        try {
+            return ZLinkOneWayCalls.adaptOneWay(
+                    node.sendToNode(target, metadata.encode(), sendParts))
+                .whenComplete((ignored, failure) ->
+                    sendParts.forEach(Message::close));
+        } catch (RuntimeException | Error failure) {
+            sendParts.forEach(Message::close);
+            throw failure;
+        }
         }
     }
 
@@ -522,22 +528,18 @@ final class MeshChannelRouteSendCall implements ZLinkSendCall {
             return duplicate;
         }
         try (var flowScope = runtime.enterApplicationFlow()) {
-        Optional<Integer> classified =
-            node.classifyChannelTarget(channelName);
-        if (classified.isPresent()) {
-            payload.close();
-            ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ?
-                "route-channel target=none channel=" + channelName
-                    + " status=" + classified.orElseThrow() : null);
-            return ZLinkOneWayCalls.oneWayStatus(classified.orElseThrow());
-        }
         List<Message> parts = ZLinkChannelCallRuntime.envelopeParts(
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_COMMAND,
             channelName, packetName, payload, contentType, metadata.values());
-        return ZLinkOneWayCalls.adaptOneWay(
-                node.sendToChannel(channelName, metadata.encode(), parts))
-            .whenComplete((ignored, failure) ->
-                parts.forEach(Message::close));
+        try {
+            return ZLinkOneWayCalls.adaptOneWay(
+                    node.sendToChannel(channelName, metadata.encode(), parts))
+                .whenComplete((ignored, failure) ->
+                    parts.forEach(Message::close));
+        } catch (RuntimeException | Error failure) {
+            parts.forEach(Message::close);
+            throw failure;
+        }
         }
     }
 }
@@ -653,35 +655,23 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
                     null, null, null, null));
             }
         });
-        runtime.track(result, timeout);
-        Optional<Integer> classified =
-            node.classifyChannelTarget(channelName);
-        if (classified.isPresent()) {
-            payload.close();
-            ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ?
-                "route-channel target=none channel=" + channelName
-                    + " status=" + classified.orElseThrow() : null);
-            result.completeExceptionally(
-                ZLinkOneWayCalls.failureForStatus(classified.orElseThrow()));
-            return ZLinkSerialExecutionQueue
-                .manageCurrent(result);
-        }
+        var operationId = ZLinkServiceOperationIds.next();
         List<Message> parts = ZLinkChannelCallRuntime.envelopeParts(
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
             channelName,
             packetName,
             payload,
             contentType,
-            metadata.values());
-        node.requestToChannel(
-                channelName,
+            metadata.values(), operationId);
+        runtime.requestChannel(
+                operationId, node, channelName,
                 metadata.encode(),
                 parts,
                 timeout)
             .whenComplete((reply, failure) -> {
                 parts.forEach(Message::close);
                 if (failure != null) {
-                    result.completeExceptionally(failure);
+                    result.completeExceptionally(ZLinkChannelCallRuntime.requestFailure(failure));
                     return;
                 }
                 try {
@@ -823,10 +813,10 @@ final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
                     target.toString(), null, null, null));
             }
         });
-        runtime.track(result, timeout);
+        var operationId = ZLinkServiceOperationIds.next();
         List<Message> requestParts = ZLinkChannelCallRuntime.envelopeParts(
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
-            channelName, packetName, payload, contentType, metadata.values());
+            channelName, packetName, payload, contentType, metadata.values(), operationId);
         ZLinkMessageFlowTracer.TracePoint sent =
             runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
         if (sent != null) {
@@ -861,14 +851,14 @@ final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
                 return systems.zlink.framework.execution
                     .ZLinkSerialExecutionQueue.manageCurrent(result);
             }
-            node.requestToNode(
-                    target,
+            runtime.requestNode(
+                    operationId, node, target,
                     metadata.encode(),
                     requestParts,
                     timeout)
                 .whenComplete((reply, failure) -> {
                     if (failure != null) {
-                        result.completeExceptionally(failure);
+                        result.completeExceptionally(ZLinkChannelCallRuntime.requestFailure(failure));
                         return;
                     }
                     try {
