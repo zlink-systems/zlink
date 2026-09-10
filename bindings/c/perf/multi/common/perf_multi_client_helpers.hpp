@@ -340,7 +340,8 @@ inline send_status_t send_echo_message_flags (void *socket,
     if (payload_size > payload.size ())
         return send_error;
 
-    zlink_msg_t part;
+    zlink_msg_t parts[2];
+    zlink_msg_t &part = parts[0];
     (void) per_socket_payload;
     if (zlink_msg_init_size (&part, payload_size) != 0)
         return send_error;
@@ -349,54 +350,33 @@ inline send_status_t send_echo_message_flags (void *socket,
     }
 
     const bool multipart = perf_measurement_part_count () != 1u;
-    zlink_msg_t empty_part;
-    bool empty_part_initialized = false;
+    zlink_msg_t &empty_part = parts[1];
     if (multipart) {
         if (zlink_msg_init (&empty_part) != 0) {
             zlink_msg_close (&part);
             return send_error;
         }
-        empty_part_initialized = true;
     }
 
     zlink_submit_result_t rc = ZLINK_SUBMIT_INVALID_ARGUMENT;
     if (router_send && (!target_rid || target_rid->size == 0)) {
         errno = EINVAL;
     } else if (router_send) {
-        rc = zlink_send_part_rid (
-          socket, target_rid, &part, base_flags,
-          multipart ? ZLINK_PART_MORE : ZLINK_PART_FINAL,
-          multipart ? NULL : completion_context,
-          multipart ? NULL : completion_id_out);
-        if (rc == ZLINK_SUBMIT_OK && multipart) {
-            rc = zlink_send_part_rid (socket, target_rid, &empty_part, base_flags,
-                                      ZLINK_PART_FINAL, completion_context,
-                                      completion_id_out);
-        }
+        rc = zlink_send_rid (socket, target_rid, parts, multipart ? 2u : 1u,
+                             base_flags, completion_context, completion_id_out);
     } else {
-        rc = zlink_send_part (socket, &part, base_flags,
-                              multipart ? ZLINK_PART_MORE : ZLINK_PART_FINAL,
-                              multipart ? NULL : completion_context,
-                              multipart ? NULL : completion_id_out);
-        if (rc == ZLINK_SUBMIT_OK && multipart) {
-            rc = zlink_send_part (socket, &empty_part, base_flags, ZLINK_PART_FINAL,
-                                  completion_context, completion_id_out);
-        }
+        rc = zlink_send (socket, parts, multipart ? 2u : 1u, base_flags,
+                         completion_context, completion_id_out);
     }
 
-    // Every part submission consumes its input into an empty initialized
-    // message, on both success and failure. Close those handles exactly once;
-    // the preinitialized FINAL also makes allocation failure impossible after
-    // a MORE prefix has already been staged.
+    // Whole-record submission consumes every input on success and failure.
     const int send_errno = rc == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
     const zlink_completion_id_t wait_token = completion_id_out ? *completion_id_out : 0;
     const send_status_t status = classify_send_result (rc, send_errno, wait_token);
     const int result_errno = status == send_ok
                                ? 0
                                : (status == send_blocked ? send_errno : errno);
-    zlink_msg_close (&part);
-    if (empty_part_initialized)
-        zlink_msg_close (&empty_part);
+    zlink_multipart_close (parts, multipart ? 2u : 1u);
     if (result_errno != 0)
         errno = result_errno;
     return status;
@@ -509,44 +489,37 @@ inline int recv_one_message (
         return -1;
 
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_msg_t part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    if (zlink_msg_init (&part) != 0)
-        return -1;
+    zlink_msg_t parts[2];
+    size_t part_count = 0;
 
     int rc = -1;
     zlink_reply_token_t reply_token = 0;
     if (router_surface) {
-        rc = ::zlink_router_recv_part (socket, &source_rid, &reply_token, &part,
-                                       &has_more, static_cast<zlink_recv_flags_t> (flags));
+        rc = ::zlink_router_recv (socket, &source_rid, &reply_token, parts, 2u,
+                                  &part_count, static_cast<zlink_recv_flags_t> (flags));
     } else {
-        rc = ::zlink_recv_part (socket, &source_rid, &part, &has_more,
-                                static_cast<zlink_recv_flags_t> (flags));
+        rc = ::zlink_recv (socket, &source_rid, parts, 2u, &part_count,
+                           static_cast<zlink_recv_flags_t> (flags));
     }
     if (rc != 0) {
         const int err = zlink_errno ();
-        zlink_msg_close (&part);
         if (err == EAGAIN || err == EINTR)
             return 0;
         return -1;
     }
+    zlink_msg_t &part = parts[0];
 
-    const perf_zlink_recv_next_fn recv_next = router_surface
-                                                ? ::perf_zlink_recv_next_router
-                                                : ::perf_zlink_recv_next_plain;
     if (router_surface
         && ((source_rid && source_rid->size == 0) || reply_token != 0
-            || !::perf_zlink_recv_measurement_tail (
-              socket, has_more, static_cast<zlink_recv_flags_t> (flags), recv_next))) {
-        zlink_msg_close (&part);
+            || !::perf_zlink_measurement_parts_valid (parts, part_count))) {
+        zlink_multipart_close (parts, part_count);
         errno = EPROTO;
         return -1;
     }
 
     if (!router_surface
-        && (source_rid || !::perf_zlink_recv_measurement_tail (
-          socket, has_more, static_cast<zlink_recv_flags_t> (flags), recv_next))) {
-        zlink_msg_close (&part);
+        && (source_rid || !::perf_zlink_measurement_parts_valid (parts, part_count))) {
+        zlink_multipart_close (parts, part_count);
         errno = EPROTO;
         return -1;
     }
@@ -559,7 +532,7 @@ inline int recv_one_message (
         }
     }
 
-    zlink_msg_close (&part);
+    zlink_multipart_close (parts, part_count);
     return 1;
 }
 
@@ -864,41 +837,35 @@ inline int recv_one_message_header (void *socket,
 
     const zlink_routing_id_t *source_rid = NULL;
     zlink_reply_token_t reply_token = 0;
-    zlink_msg_t part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    if (zlink_msg_init (&part) != 0)
-        return -1;
+    zlink_msg_t parts[2];
+    size_t part_count = 0;
     int rc = -1;
     if (router_surface) {
-        rc = ::zlink_router_recv_part (socket, &source_rid, &reply_token, &part,
-                                       &has_more, static_cast<zlink_recv_flags_t> (flags));
+        rc = ::zlink_router_recv (socket, &source_rid, &reply_token, parts, 2u,
+                                  &part_count, static_cast<zlink_recv_flags_t> (flags));
     } else {
-        rc = ::zlink_recv_part (socket, &source_rid, &part, &has_more,
-                                static_cast<zlink_recv_flags_t> (flags));
+        rc = ::zlink_recv (socket, &source_rid, parts, 2u, &part_count,
+                           static_cast<zlink_recv_flags_t> (flags));
     }
     if (rc != 0) {
         const int err = zlink_errno ();
-        zlink_msg_close (&part);
         if (err == EAGAIN || err == EINTR)
             return 0;
         return -1;
     }
+    zlink_msg_t &part = parts[0];
 
-    const perf_zlink_recv_next_fn recv_next = router_surface
-                                                ? ::perf_zlink_recv_next_router
-                                                : ::perf_zlink_recv_next_plain;
     if (router_surface
-        && (reply_token != 0 || !::perf_zlink_recv_measurement_tail (
-          socket, has_more, static_cast<zlink_recv_flags_t> (flags), recv_next))) {
-        zlink_msg_close (&part);
+        && (reply_token != 0
+            || !::perf_zlink_measurement_parts_valid (parts, part_count))) {
+        zlink_multipart_close (parts, part_count);
         errno = EPROTO;
         return -1;
     }
 
     if (!router_surface
-        && (source_rid || !::perf_zlink_recv_measurement_tail (
-          socket, has_more, static_cast<zlink_recv_flags_t> (flags), recv_next))) {
-        zlink_msg_close (&part);
+        && (source_rid || !::perf_zlink_measurement_parts_valid (parts, part_count))) {
+        zlink_multipart_close (parts, part_count);
         errno = EPROTO;
         return -1;
     }
@@ -923,7 +890,7 @@ inline int recv_one_message_header (void *socket,
     if (decoded_out)
         *decoded_out = decoded;
 
-    zlink_msg_close (&part);
+    zlink_multipart_close (parts, part_count);
     return 1;
 }
 

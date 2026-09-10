@@ -52,26 +52,12 @@ const char bounce_content[] = "12345678ABCDEFGH12345678abcdefgh";
 
 static void send_bounce_msg (void *socket_)
 {
-    send_string_expect_success (socket_, bounce_content, ZLINK_SNDMORE);
-    send_string_expect_success (socket_, bounce_content, 0);
+    s_send_seq (socket_, bounce_content, bounce_content, SEQ_END);
 }
 
 static void recv_bounce_msg (void *socket_)
 {
-    zlink_msg_t msg;
-    zlink_msg_init (&msg);
-
-    zlink_part_flag_t more = ZLINK_PART_FINAL;
-    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, socket_, 0, &more));
-    TEST_ASSERT_EQUAL_STRING (bounce_content, static_cast<const char *> (zlink_msg_data (&msg)));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, more);
-    zlink_msg_close (&msg);
-
-    zlink_msg_init (&msg);
-    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, socket_, 0, &more));
-    TEST_ASSERT_EQUAL_STRING (bounce_content, static_cast<const char *> (zlink_msg_data (&msg)));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
-    zlink_msg_close (&msg);
+    s_recv_seq (socket_, bounce_content, bounce_content, SEQ_END);
 }
 
 void bounce (void *server_, void *client_)
@@ -95,10 +81,15 @@ static void send_bounce_msg_may_fail (void *socket_)
     int timeout = 250;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (socket_, ZLINK_OPT_SNDTIMEO, &timeout, sizeof (int)));
-    int rc = zlink_send (socket_, bounce_content, 32, ZLINK_SNDMORE);
-    TEST_ASSERT_TRUE ((rc == 32) || ((rc == -1) && (errno == EAGAIN)));
-    rc = zlink_send (socket_, bounce_content, 32, 0);
-    TEST_ASSERT_TRUE ((rc == 32) || ((rc == -1) && (errno == EAGAIN)));
+    zlink_msg_t parts[2];
+    for (size_t i = 0; i < 2; ++i) {
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&parts[i], 32));
+        memcpy (zlink_msg_data (&parts[i]), bounce_content, 32);
+    }
+    const zlink_submit_result_t rc = zlink_send (
+      socket_, parts, 2, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
+    TEST_ASSERT_TRUE (rc == ZLINK_SUBMIT_OK
+                      || (rc == ZLINK_SUBMIT_BACKPRESSURED && errno == EAGAIN));
 }
 
 static void recv_bounce_msg_fail (void *socket_)
@@ -138,57 +129,42 @@ char *s_recv (void *socket_)
 
 void s_send_seq (void *socket_, ...)
 {
+    std::vector<zlink_msg_t> parts;
     va_list ap;
     va_start (ap, socket_);
-    const char *data = va_arg (ap, const char *);
-    while (true) {
-        const char *prev = data;
-        data = va_arg (ap, const char *);
-        bool end = data == SEQ_END;
-
-        if (!prev) {
-            TEST_ASSERT_SUCCESS_ERRNO (
-              zlink_send (socket_, static_cast<const void *> (NULL), 0, end ? 0 : ZLINK_SNDMORE));
-        } else {
-            TEST_ASSERT_SUCCESS_ERRNO (
-              zlink_send (socket_, prev, strlen (prev) + 1, end ? 0 : ZLINK_SNDMORE));
-        }
-        if (end)
-            break;
+    const char *data;
+    while ((data = va_arg (ap, const char *)) != SEQ_END) {
+        parts.emplace_back ();
+        const size_t size = data ? strlen (data) + 1 : 0;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&parts.back (), size));
+        if (size)
+            memcpy (zlink_msg_data (&parts.back ()), data, size);
     }
     va_end (ap);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_send (
+      socket_, parts.data (), parts.size (), ZLINK_SEND_FLAGS_NONE, NULL, NULL));
 }
 
 void s_recv_seq (void *socket_, ...)
 {
-    zlink_msg_t msg;
-    zlink_msg_init (&msg);
-
-    zlink_part_flag_t more = ZLINK_PART_FINAL;
-
+    zlink_msg_t *parts = NULL;
+    size_t count = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_recv (socket_, NULL, &parts, &count, 0));
     va_list ap;
     va_start (ap, socket_);
-    const char *data = va_arg (ap, const char *);
-
-    while (true) {
-        TEST_ASSERT_SUCCESS_ERRNO (
-          test_recv_single_msg (&msg, socket_, 0, &more));
-
+    const char *data;
+    size_t index = 0;
+    while ((data = va_arg (ap, const char *)) != SEQ_END) {
+        TEST_ASSERT_LESS_THAN_UINT64 (count, index);
         if (!data)
-            TEST_ASSERT_EQUAL_INT (0, zlink_msg_size (&msg));
+            TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&parts[index]));
         else
-            TEST_ASSERT_EQUAL_STRING (data, (const char *) zlink_msg_data (&msg));
-
-        data = va_arg (ap, const char *);
-        bool end = data == SEQ_END;
-
-        TEST_ASSERT_TRUE (!more == end);
-        if (end)
-            break;
+            TEST_ASSERT_EQUAL_STRING (data, (const char *) zlink_msg_data (&parts[index]));
+        ++index;
     }
     va_end (ap);
-
-    zlink_msg_close (&msg);
+    TEST_ASSERT_EQUAL_UINT64 (count, index);
+    zlink_multipart_close (parts, count);
 }
 
 void close_zero_linger (void *socket_)

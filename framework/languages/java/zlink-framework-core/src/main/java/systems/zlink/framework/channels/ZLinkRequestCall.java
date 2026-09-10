@@ -15,6 +15,7 @@ public interface ZLinkRequestCall {
 
     ZLinkRequestCall timeout(Duration timeout);
 
+    /** For {@code requestToChannel}, channel validation (including metadata support) and the default timeout are resolved when {@code submit} is called. */
     <TReply> CompletionStage<TReply> submit(Class<TReply> replyType);
 
     <TReply> CompletionStage<TReply> yield(Class<TReply> replyType);

@@ -59,16 +59,13 @@ class ReceiveFlowStateDealerRouterTests(unittest.TestCase):
                 import asyncio
 
                 async def exchange():
-                    pending = asyncio.create_task(
-                        dealer.request().message(b"ping").submit()
-                    )
-                    await asyncio.sleep(0)
+                    submission = dealer.request().message(b"ping").submit()
                     received = zlink.create_received()
                     self.assertTrue(router.recv_into(received))
                     with received:
                         self.assertEqual(received.to_bytes_list(), [b"ping"])
                         received.reply().message(b"pong").submit()
-                    parts = await pending
+                    parts = await submission.reply
                     try:
                         self.assertEqual(
                             [part.to_bytes() for part in parts], [b"pong"]
@@ -102,9 +99,11 @@ class ReceiveFlowStateUnsupportedSocketTests(unittest.TestCase):
                     # Existing send/recv behavior is unchanged by the rejected call.
                     # PAIR `submit()` admits inline without a SEND completion,
                     # or waits for WRITABLE and retries when backpressured.
-                    self.assertIsNone(
-                        asyncio.run(left.send().message(b"still-works").submit())
-                    )
+                    async def send_once():
+                        submission = left.send().message(b"still-works").submit()
+                        return await submission.admitted
+
+                    self.assertIsNone(asyncio.run(send_once()))
                     received = zlink.create_received()
                     self.assertTrue(right.recv_into(received))
                     with received:

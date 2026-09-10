@@ -10,11 +10,9 @@ internal sealed partial class SocketKernel : IDisposable
 {
     private bool SubscribeInto(TopicMessage result, int flags)
     {
-        var topicBuffer = result.GetWritableTopicBuffer(TopicBufferSize);
         var allowNoData = (flags & DontWaitFlag) != 0;
-        var candidate = result.PrepareReusableSinglePart();
-        var received = ReceiveSubscribedParts(flags, topicBuffer, candidate,
-            out var routingId, out var topicLength,
+        var received = ReceiveParts(flags, true, result,
+            out var routingId, out _, out var topicLength,
             out var singlePart, out var parts, allowNoData);
         if (!received)
             return false;
@@ -69,7 +67,7 @@ internal sealed partial class SocketKernel : IDisposable
         var topicBuffer = ArrayPool<byte>.Shared.Rent(TopicBufferSize);
         try
         {
-            var rc = NativeMethods.zlink_xpub_recv_part(Handle,
+            var rc = NativeMethods.zlink_xpub_recv(Handle,
                 out var sourceRoutingId, out var subscribedInt, topicBuffer,
                 (nuint)topicBuffer.Length, out var topicLength, flags);
             if (rc != 0)

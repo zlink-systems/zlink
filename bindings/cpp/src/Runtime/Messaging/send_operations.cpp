@@ -27,7 +27,7 @@ struct send_completion_bundle_t
     detail::completion_entry_t entry;
 };
 
-async_result_t<void> submit_send_awaitable (
+send_submission_t submit_send_awaitable (
   std::unique_ptr<detail::operation_state_t> state_)
 {
     if (!state_ || (state_->kind != detail::operation_kind_t::raw_send
@@ -78,8 +78,9 @@ async_result_t<void> submit_send_awaitable (
         // async() owns every source object once the packet is admitted.
         detail::detach_async_send_sources (*state_);
         detail::release_state (std::move (state_));
-        return detail::async_result_access_t::make<void> (
-          std::make_shared<detail::immediate_send_result_t> ());
+        return {ZLINK_SUBMIT_OK,
+                detail::async_result_access_t::make<void> (
+                  std::make_shared<detail::immediate_send_result_t> ())};
     }
 
     // Rejected. Only now does the operation need a completion identity, an
@@ -112,9 +113,10 @@ async_result_t<void> submit_send_awaitable (
         throw;
     }
     detail::async_result_state_t<void> *const result = &bundle->result;
-    return detail::async_result_access_t::make<void> (
-      std::shared_ptr<detail::async_result_state_t<void>> (
-        std::move (bundle), result));
+    return {ZLINK_SUBMIT_BACKPRESSURED,
+            detail::async_result_access_t::make<void> (
+              std::shared_ptr<detail::async_result_state_t<void>> (
+                std::move (bundle), result))};
 }
 
 } // namespace
@@ -163,7 +165,7 @@ void send_submit_operation_t::submit () &&
         throw submit_error_t (submit_result_t::backpressured, EAGAIN);
 }
 
-async_result_t<void> send_submit_operation_t::async () &&
+send_submission_t send_submit_operation_t::async () &&
 {
     auto &operation = state ();
     if (!detail::has_send_parts (operation))

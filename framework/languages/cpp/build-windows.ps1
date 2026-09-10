@@ -61,8 +61,8 @@ function Get-StableBuildToken {
 $CppRoot = $PSScriptRoot
 $RepositoryRoot = (Resolve-Path (Join-Path $CppRoot "../../..")).Path
 $CoreVersion = Get-ZlinkVersion -Path (Join-Path $RepositoryRoot "VERSION") -Key "LIBZLINK_VERSION"
-$BindingVersion = Get-ZlinkVersion -Path (Join-Path $RepositoryRoot "BINDINGS_VERSION") -Key "ZLINK_BINDINGS_VERSION"
-$FrameworkVersion = Get-ZlinkVersion -Path (Join-Path $RepositoryRoot "FRAMEWORK_VERSION") -Key "ZLINK_FRAMEWORK_VERSION"
+$BindingVersion = Get-ZlinkVersion -Path (Join-Path $RepositoryRoot "bindings/cpp/VERSION") -Key "ZLINK_BINDING_VERSION"
+$FrameworkVersion = Get-ZlinkVersion -Path (Join-Path $CppRoot "VERSION") -Key "ZLINK_FRAMEWORK_VERSION"
 $CleanPackageRoot = Join-Path $RepositoryRoot ".artifacts/cpp-clean-$BindingVersion-package"
 
 if (-not $BuildDir) {

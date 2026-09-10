@@ -9,10 +9,11 @@ package native
 import "C"
 
 type TopicMessage struct {
-	routingID RoutingID
-	topic     string
-	parts     []*Message
-	topicBuf  []byte
+	routingID   RoutingID
+	topic       string
+	parts       []*Message
+	topicBuf    []byte
+	nativeParts []C.zlink_msg_t
 }
 
 func (t *TopicMessage) RoutingID() RoutingID {

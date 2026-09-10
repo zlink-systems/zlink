@@ -4,11 +4,20 @@ on:
   push:
     tags:
       - 'framework/v*'
+      - 'framework-cpp/v*'
+      - 'framework-java/v*'
+      - 'framework-node/v*'
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Framework version to release (for example, 0.10.0)'
+      target:
+        description: 'Framework language (dotnet uses release-dotnet.yml)'
         required: true
+        default: all
+        type: choice
+        options: [cpp, java, node, all]
+      version:
+        description: 'Target version; omitted uses framework/languages/<target>/VERSION'
+        required: false
         type: string
       publish_registry:
         description: 'Publish Node and Java packages to public registries'
@@ -24,7 +33,10 @@ jobs:
     name: Resolve framework version
     runs-on: ubuntu-24.04
     outputs:
-      version: ${{ steps.version.outputs.version }}
+      target: ${{ steps.version.outputs.target }}
+      node_version: ${{ steps.version.outputs.node_version }}
+      java_version: ${{ steps.version.outputs.java_version }}
+      cpp_version: ${{ steps.version.outputs.cpp_version }}
       publish_registry: ${{ steps.version.outputs.publish_registry }}
     steps:
       - uses: actions/checkout@v5
@@ -32,37 +44,53 @@ jobs:
       - id: version
         shell: bash
         env:
+          REQUESTED_TARGET: ${{ inputs.target }}
           REQUESTED_VERSION: ${{ inputs.version }}
           REQUESTED_PUBLISH: ${{ inputs.publish_registry }}
         run: |
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
-            version="${GITHUB_REF_NAME#framework/v}"
+            version="${GITHUB_REF_NAME##*/v}"
+            case "${GITHUB_REF_NAME}" in
+              framework/v*) target=all ;;
+              framework-cpp/v*) target=cpp ;;
+              framework-java/v*) target=java ;;
+              framework-node/v*) target=node ;;
+              *) echo "Unsupported framework tag" >&2; exit 1 ;;
+            esac
             publish_registry=true
           else
+            target="${REQUESTED_TARGET:-all}"
             version="${REQUESTED_VERSION}"
             publish_registry="${REQUESTED_PUBLISH}"
           fi
-          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Invalid framework version: ${version:-<missing>}" >&2
-            exit 1
-          fi
-
-          # .NET and Gradle read FRAMEWORK_VERSION at build time; only the
-          # Node and C++ manifests still carry a literal to cross-check.
-          node_version=$(node -p "require('./framework/languages/node/packages/framework/package.json').version")
-          cpp_version=$(node -p "require('./framework/languages/cpp/vcpkg.json')['version-string']")
-          framework_version=$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' FRAMEWORK_VERSION)
-          for declared in "${framework_version}" "${node_version}" "${cpp_version}"; do
-            if [ "${declared}" != "${version}" ]; then
-              echo "Framework version mismatch: requested=${version}, declared=${declared}" >&2
-              exit 1
+          case "${target}" in cpp|java|node|all) ;; *) echo "Invalid target: ${target}" >&2; exit 1 ;; esac
+          for language in cpp java node; do
+            if [ "${target}" != "${language}" ] && [ "${target}" != "all" ]; then
+              continue
             fi
+            version_file="framework/languages/${language}/VERSION"
+            declared=$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' "${version_file}")
+            if ! [[ "${declared}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Invalid framework version in ${version_file}" >&2; exit 1
+            fi
+            if [ -n "${version}" ] && [ "${declared}" != "${version}" ]; then
+              echo "Framework version mismatch: requested=${version}, ${version_file}=${declared}" >&2; exit 1
+            fi
+            case "${language}" in
+              node) manifest=$(node -p "require('./framework/languages/node/packages/framework/package.json').version") ;;
+              cpp) manifest=$(node -p "require('./framework/languages/cpp/vcpkg.json')['version-string']") ;;
+              java) manifest="${declared}" ;;
+            esac
+            if [ "${manifest}" != "${declared}" ]; then
+              echo "Framework manifest mismatch for ${language}" >&2; exit 1
+            fi
+            echo "${language}_version=${declared}" >> "${GITHUB_OUTPUT}"
           done
-
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "target=${target}" >> "${GITHUB_OUTPUT}"
           echo "publish_registry=${publish_registry}" >> "${GITHUB_OUTPUT}"
 
   release-node:
+    if: needs.resolve.outputs.target == 'node' || needs.resolve.outputs.target == 'all'
     name: Build and publish Node framework packages
     runs-on: ubuntu-24.04
     needs: resolve
@@ -152,11 +180,12 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: framework-node-${{ needs.resolve.outputs.version }}
+          name: framework-node-${{ needs.resolve.outputs.node_version }}
           path: dist/framework-node/*.tgz
           if-no-files-found: error
 
   release-java:
+    if: needs.resolve.outputs.target == 'java' || needs.resolve.outputs.target == 'all'
     name: Build and stage Java framework packages
     runs-on: ubuntu-24.04
     needs: resolve
@@ -219,7 +248,7 @@ jobs:
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
           SIGNING_PASSPHRASE: ${{ secrets.SIGNING_PASSPHRASE }}
           MAVEN_CENTRAL_BUNDLE_DIR: ${{ runner.temp }}/zlink-framework-java-central-staging
-          MAVEN_CENTRAL_BUNDLE_PATH: ${{ github.workspace }}/dist/framework-java/zlink-framework-java-${{ needs.resolve.outputs.version }}-central-bundle.zip
+          MAVEN_CENTRAL_BUNDLE_PATH: ${{ github.workspace }}/dist/framework-java/zlink-framework-java-${{ needs.resolve.outputs.java_version }}-central-bundle.zip
         working-directory: framework/languages/java
         run: |
           ./gradlew --no-daemon publishAllPublicationsToCentralStagingRepository -Pzlink.includeSamples=false
@@ -232,7 +261,7 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: framework-java-${{ needs.resolve.outputs.version }}
+          name: framework-java-${{ needs.resolve.outputs.java_version }}
           path: |
             framework/languages/java/*/build/libs/*.jar
             framework/languages/java/*/build/repo/**
@@ -240,6 +269,7 @@ jobs:
           if-no-files-found: error
 
   release-cpp:
+    if: needs.resolve.outputs.target == 'cpp' || needs.resolve.outputs.target == 'all'
     name: Package C++ framework sources
     runs-on: ubuntu-24.04
     needs: resolve
@@ -260,21 +290,21 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist/framework-cpp
-          stage="${RUNNER_TEMP}/zlink-framework-cpp-${{ needs.resolve.outputs.version }}"
+          stage="${RUNNER_TEMP}/zlink-framework-cpp-${{ needs.resolve.outputs.cpp_version }}"
           cmake -DZLINK_SOURCE_DIR="${PWD}" -DZLINK_STAGE_DIR="${stage}" \
             -P framework/languages/cpp/cmake/prepare-source-archive.cmake
           for required in CMakeLists.txt runtime/protocol/generated/cpp/service_wire_constants.hpp runtime/protocol/generated/cpp/service_wire_pilot_codec.hpp LICENSE; do
             test -f "${stage}/${required}" || { echo "missing ${required} in the framework C++ source archive" >&2; exit 1; }
           done
-          archive="dist/framework-cpp/zlink-framework-cpp-${{ needs.resolve.outputs.version }}.tar.gz"
+          archive="dist/framework-cpp/zlink-framework-cpp-${{ needs.resolve.outputs.cpp_version }}.tar.gz"
           tar -C "${RUNNER_TEMP}" -czf "${archive}" \
-            "zlink-framework-cpp-${{ needs.resolve.outputs.version }}"
+            "zlink-framework-cpp-${{ needs.resolve.outputs.cpp_version }}"
           sha256sum "${archive}" >"${archive}.sha256"
           sha512sum "${archive}"
 
       - uses: actions/upload-artifact@v6
         with:
-          name: framework-cpp-${{ needs.resolve.outputs.version }}
+          name: framework-cpp-${{ needs.resolve.outputs.cpp_version }}
           path: dist/framework-cpp/*
           if-no-files-found: error
 
@@ -282,8 +312,8 @@ jobs:
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: framework/v${{ needs.resolve.outputs.version }}
-          name: ZLink Framework v${{ needs.resolve.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          name: ZLink Framework v${{ needs.resolve.outputs.cpp_version }}
           files: dist/framework-cpp/*
 
 # The .NET framework packages are intentionally not pushed here. nuget.org's

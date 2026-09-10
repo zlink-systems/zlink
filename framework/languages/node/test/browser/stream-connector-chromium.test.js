@@ -5,7 +5,7 @@ const net = require('node:net');
 const path = require('node:path');
 const test = require('node:test');
 const { build } = require('esbuild');
-const { closeBrowser, closeBrowserServer, closeContext, closeServer, stopChild } = require('./support/bounded-cleanup');
+const { closeBrowser, closeBrowserServer, closeContext, closeServer, stopChild } = require('../support/bounded-cleanup');
 
 const workspaceRoot = path.resolve(__dirname, '../..');
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= path.join(workspaceRoot, '.cache/ms-playwright');

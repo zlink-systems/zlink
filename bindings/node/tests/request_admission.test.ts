@@ -72,7 +72,7 @@ async function hwmRequestRound(round: number): Promise<void> {
       return Buffer.from(value);
     });
     const pending = payloads.map((payload) =>
-      dealer.request().message(payload).timeout(5_000).submit());
+      dealer.request().message(payload).timeout(5_000).submit().reply);
     for (const payload of payloads) payload.fill(0x7a);
 
     const initiallyAdmitted = recvAndReplyAvailable(router, received);
@@ -122,7 +122,7 @@ test('connect-before-bind REQUEST resumes from WRITABLE and then awaits its repl
     zlink.PollEventFlag.PollCompletion,
   ], 92);
   try {
-    const pending = dealer.request().message('before-bind').timeout(5_000).submit();
+    const pending = dealer.request().message('before-bind').timeout(5_000).submit().reply;
     router.bind(address);
     assert.ok(poller.wait(events, 1_000) > 0,
       'binding the peer must publish the request wait token as WRITABLE');
@@ -147,13 +147,30 @@ test('socket close releases a connect-before-bind REQUEST token', async () => {
   const dealer = zlink.createDealerSocket(context);
   dealer.options.immediate = true;
   dealer.connect(endpoint('close-token'));
-  const pending = dealer.request().message('close-me').timeout(30_000).submit();
-  const rejection = assert.rejects(pending, (error: unknown) =>
-    error instanceof zlink.RequestError
-      && (error as { result: number }).result === zlink.RequestResult.Terminated);
+  const submission = dealer.request().message('close-me').timeout(30_000).submit();
+  assert.equal(submission.result, zlink.SubmitResult.Backpressured);
+  let admittedFailures = 0;
+  let replyFailures = 0;
+  let admittedError: unknown;
+  let replyError: unknown;
+  const admitted = submission.admitted.catch((error: unknown) => {
+    admittedFailures += 1;
+    admittedError = error;
+  });
+  const reply = submission.reply.catch((error: unknown) => {
+    replyFailures += 1;
+    replyError = error;
+  });
   dealer.close();
   try {
-    await rejection;
+    await Promise.all([admitted, reply]);
+    assert.equal(admittedFailures, 1);
+    assert.equal(replyFailures, 1);
+    assert.strictEqual(admittedError, replyError,
+      'admitted and reply must reject with the same terminal cause');
+    assert.ok(replyError instanceof zlink.RequestError);
+    assert.equal((replyError as { result: number }).result,
+      zlink.RequestResult.Terminated);
   } finally {
     context.close();
   }
@@ -174,7 +191,7 @@ test('context shutdown terminates a REQUEST wait token as typed Terminated', asy
     ready.close();
     const outcomes: unknown[] = [];
     const pending = Array.from({ length: 64 }, (_, index) =>
-      dealer.request().message(Buffer.alloc(64, index)).timeout(30_000).submit().then(
+      dealer.request().message(Buffer.alloc(64, index)).timeout(30_000).submit().reply.then(
         () => outcomes.push(null),
         (error: unknown) => outcomes.push(error)
       ));
@@ -222,8 +239,8 @@ test('SEND and REQUEST WRITABLE tokens share one completion owner', async () => 
     const requests: Promise<any[]>[] = [];
     for (let index = 0; index < operationCount; index += 1) {
       const value = `${index.toString().padStart(3, '0')}:${'m'.repeat(52)}`;
-      if ((index & 1) === 0) sends.push(dealer.send().message(value).submit());
-      else requests.push(dealer.request().message(value).timeout(5_000).submit());
+      if ((index & 1) === 0) sends.push(dealer.send().message(value).submit().admitted);
+      else requests.push(dealer.request().message(value).timeout(5_000).submit().reply);
     }
 
     while (dataCount + requestCount < operationCount) {

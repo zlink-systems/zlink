@@ -44,11 +44,10 @@ boundary without exposing allocator selection.
 
 ## 4. Multipart atomicity
 
-A multipart send sequence that groups multiple frames (parts) into one logical message remains one logical
-queue operation. The send code for each [socket](../glossary.en.md#socket) type delegates the handling of this
-sequence as a single unit, start to finish, to the common multipart path. If a sequence fails midway, the
-common path disposes of the parts it has not yet sent, so each socket type's send code does not need to
-implement that cleanup separately.
+A multipart array that groups multiple frames (parts) into one logical message remains one call and one
+logical queue operation. The send code for each [socket](../glossary.en.md#socket) type delegates admission
+and ownership of the complete array to the common multipart path. If the call fails, the common path consumes
+every input slot and exposes no part to the peer, so each socket type's send code needs no partial-submit cleanup.
 
 ## 5. Typed socket surface
 

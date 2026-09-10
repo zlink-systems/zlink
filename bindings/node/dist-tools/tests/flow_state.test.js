@@ -212,11 +212,11 @@ test('existing HWM options and DEALER/ROUTER traffic are unchanged by receive-fl
     // Idempotent RUNNING no-op transition should not disturb ordinary traffic.
     router.setReceiveFlowState(zlink.ReceiveFlowState.RUNNING);
     dealer.setReceiveFlowState(zlink.ReceiveFlowState.RUNNING);
-    await dealer.send().message('flow-state-smoke').submit();
+    await dealer.send().message('flow-state-smoke').submit().admitted;
     const received = new zlink.Received();
     router.recv(received);
     assert.equal(received.parts[0].data().toString(), 'flow-state-smoke');
-    await router.send(received.routingId).message('reply').submit();
+    await router.send(received.routingId).message('reply').submit().admitted;
     const reply = new zlink.Received();
     dealer.recv(reply);
     assert.equal(reply.parts[0].data().toString(), 'reply');

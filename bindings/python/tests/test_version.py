@@ -34,10 +34,11 @@ class VersionTests(unittest.TestCase):
                     s1.bind(endpoint)
                     s2.connect(endpoint)
                     payload = b"ping"
-                    # PAIR `submit()` is managed: immediate admission has no
-                    # completion, while backpressure waits for WRITABLE and
-                    # retries the same packet.
-                    asyncio.run(s1.send().message(payload).submit())
+                    async def send():
+                        submission = s1.send().message(payload).submit()
+                        await submission.admitted
+
+                    asyncio.run(send())
                     received = zlink.create_received()
                     self.assertTrue(s2.recv_into(received))
                     with received:
@@ -52,7 +53,11 @@ class VersionTests(unittest.TestCase):
                     s1.bind(endpoint)
                     s2.connect(endpoint)
                     payload = b"header-and-body-payload"
-                    asyncio.run(s1.send().message(payload).submit())
+                    async def send():
+                        submission = s1.send().message(payload).submit()
+                        await submission.admitted
+
+                    asyncio.run(send())
                     received = zlink.create_received()
                     self.assertTrue(s2.recv_into(received))
                     with received:

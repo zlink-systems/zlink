@@ -611,7 +611,7 @@ Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`의 time
 - hot path에서는 reflection, dynamic invocation, 반복 boxing, 피할 수 있는
   할당, 피할 수 있는 버퍼 복사, 숨은 sleep, busy wait, thread join, 광범위한
   락을 사용하지 않는다.
-- 네이티브 interop은 core part 기판에서 직접 관리되는 `Message`, `Received`,
+- 네이티브 interop은 Core whole-message API가 한 번의 호출로 채운 배열에서 `Message`, `Received`,
   `TopicMessage` 값을 만든다. 공개 호출자 소유 `Received` 버퍼는
   `Received.Create()`로 만든다.
 - 반복 publish를 drain하는 호출자는 현재 소비자가 작업을 마친 뒤
@@ -679,7 +679,7 @@ Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`의 time
 
 .NET package 정보는 [배포 metadata](../../../dotnet/src/Zlink/Zlink.csproj)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-.NET은 blocking `Submit()`과 `Task`를 반환하는 `Async(CancellationToken)`을 제공한다.
+.NET은 blocking `Submit()`과 결과 객체(`SendSubmission`/`RequestSubmission`: `Result`와 `Admitted`, request는 `Reply`)를 돌려주는 `Async(CancellationToken)`을 제공한다.
 Caller wait 취소 입력은 `CancellationToken`이다.
 
 Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
@@ -697,11 +697,24 @@ Token은 numeric constructor, raw accessor, ordering, serialization과 `IDisposa
 ### Public interface
 
 ```csharp
+public readonly struct SendSubmission
+{
+    public SubmitResult Result { get; }   // OK | BACKPRESSURED, 제출 시점 스냅샷
+    public Task Admitted { get; }          // OK면 완료 상태
+}
+
+public readonly struct RequestSubmission
+{
+    public SubmitResult Result { get; }
+    public Task Admitted { get; }
+    public Task<IReadOnlyList<Message>> Reply { get; }   // Admitted 성공 뒤 완료
+}
+
 public interface SendSubmitOperation
 {
     SendSubmitOperation Message(Message message);
     void Submit();
-    Task Async(CancellationToken cancellationToken = default);
+    SendSubmission Async(CancellationToken cancellationToken = default);
 }
 
 public interface RequestSubmitOperation
@@ -709,8 +722,7 @@ public interface RequestSubmitOperation
     RequestSubmitOperation Message(Message message);
     RequestSubmitOperation Timeout(TimeSpan timeout);
     IReadOnlyList<Message> Submit();
-    Task<IReadOnlyList<Message>> Async(
-        CancellationToken cancellationToken = default);
+    RequestSubmission Async(CancellationToken cancellationToken = default);
 }
 
 public interface ReplySubmitOperation

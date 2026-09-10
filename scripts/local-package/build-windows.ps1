@@ -1,11 +1,13 @@
 param(
-  [Parameter(Mandatory = $true)]
-  [string]$CorePrefix,
+  [string]$CorePrefix = "",
   [string]$RepositoryRoot = "",
   [ValidateSet("cpp", "dotnet", "java", "node")]
   [string[]]$Language = @("cpp", "dotnet", "java", "node"),
   [ValidateSet("Release", "Debug")]
-  [string]$Configuration = "Release"
+  [string]$Configuration = "Release",
+  [string]$PythonExecutable = "",
+  [switch]$SyncVersions,
+  [switch]$VerifyVersions
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,16 +17,49 @@ if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
 } else {
   $RepositoryRoot = (Resolve-Path $RepositoryRoot).Path
 }
+$syncScript = Join-Path $RepositoryRoot "scripts\local-package\sync-version.py"
+if ([string]::IsNullOrWhiteSpace($PythonExecutable)) {
+  $pythonCommand = Get-Command python.exe, python3.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($pythonCommand) {
+    $PythonExecutable = $pythonCommand.Source
+  } else {
+    $pythonRoot = Join-Path $env:LOCALAPPDATA "Programs\Python"
+    $PythonExecutable = Get-ChildItem -LiteralPath $pythonRoot -Filter python.exe -Recurse -File -ErrorAction SilentlyContinue |
+      Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+  }
+}
+if ([string]::IsNullOrWhiteSpace($PythonExecutable) -or -not (Test-Path -LiteralPath $PythonExecutable -PathType Leaf)) {
+  throw "Python 3 is required for version synchronization; pass -PythonExecutable"
+}
+$python = (Resolve-Path -LiteralPath $PythonExecutable).Path
+if ($SyncVersions -and $VerifyVersions) {
+  throw "Use only one of -SyncVersions or -VerifyVersions"
+}
+if ($SyncVersions) {
+  & $python $syncScript --write
+  if ($LASTEXITCODE -ne 0) { throw "Version synchronization failed" }
+  & $python $syncScript --check
+  if ($LASTEXITCODE -ne 0) { throw "Version verification failed after synchronization" }
+  return
+}
+if ($VerifyVersions) {
+  & $python $syncScript --check
+  if ($LASTEXITCODE -ne 0) { throw "Version verification failed" }
+  return
+}
+& $python $syncScript --check
+if ($LASTEXITCODE -ne 0) { throw "Version verification failed" }
+if ([string]::IsNullOrWhiteSpace($CorePrefix)) {
+  throw "CorePrefix is required when building Windows packages"
+}
 $CorePrefix = (Resolve-Path $CorePrefix).Path
 $artifactRoot = Join-Path $RepositoryRoot ".artifacts\windows"
 $versionFile = Join-Path $RepositoryRoot "VERSION"
-$bindingsVersionFile = Join-Path $RepositoryRoot "BINDINGS_VERSION"
 $coreVersion = (Select-String -LiteralPath $versionFile -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
-$bindingVersion = (Select-String -LiteralPath $bindingsVersionFile -Pattern "^ZLINK_BINDINGS_VERSION=(.+)$").Matches.Groups[1].Value
 $manifest = Join-Path $CorePrefix "share\zlink\core-package-provenance.json"
 
-if ([string]::IsNullOrWhiteSpace($coreVersion) -or [string]::IsNullOrWhiteSpace($bindingVersion)) {
-  throw "Unable to read Core or binding version from $RepositoryRoot"
+if ([string]::IsNullOrWhiteSpace($coreVersion)) {
+  throw "Unable to read Core version from $RepositoryRoot"
 }
 if (-not (Test-Path -LiteralPath (Join-Path $CorePrefix "include\zlink.h"))) {
   throw "Core prefix is missing public headers: $CorePrefix"
@@ -48,15 +83,29 @@ New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 
 function Invoke-Checked([string]$FileName, [string[]]$Arguments, [string]$WorkingDirectory = $RepositoryRoot) {
   Push-Location $WorkingDirectory
+  $previousErrorAction = $ErrorActionPreference
   try {
+    # PowerShell 5 can surface a successful native tool's stderr as
+    # NativeCommandError. Native exit status remains the authoritative result.
+    $ErrorActionPreference = "Continue"
     & $FileName @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "$FileName failed with exit code $LASTEXITCODE" }
+    $exitCode = $LASTEXITCODE
   } finally {
+    $ErrorActionPreference = $previousErrorAction
     Pop-Location
   }
+  if ($exitCode -ne 0) { throw "$FileName failed with exit code $exitCode" }
+}
+
+function Get-BindingVersion([string]$Name) {
+  $path = Join-Path $RepositoryRoot "bindings\$Name\VERSION"
+  $match = Select-String -LiteralPath $path -Pattern "^ZLINK_BINDING_VERSION=([0-9]+\.[0-9]+\.[0-9]+)$"
+  if (-not $match) { throw "Unable to read $Name binding version from $path" }
+  return $match.Matches[0].Groups[1].Value
 }
 
 foreach ($item in $Language) {
+  $bindingVersion = Get-BindingVersion $item
   switch ($item) {
     "cpp" {
       $prefix = Join-Path $artifactRoot "install\zlink-cpp\$bindingVersion"
@@ -103,10 +152,12 @@ foreach ($item in $Language) {
       } | ConvertTo-Json -Compress
       $previousPrefix = $env:ZLINK_CORE_PACKAGE_PREFIX
       $previousSummary = $env:ZLINK_CORE_PACKAGE_SUMMARY
+      $previousCoreVersion = $env:ZLINK_CORE_VERSION
       $previousRepository = $env:MAVEN_REPOSITORY_URL
       try {
         $env:ZLINK_CORE_PACKAGE_PREFIX = $CorePrefix
         $env:ZLINK_CORE_PACKAGE_SUMMARY = $summary
+        $env:ZLINK_CORE_VERSION = $coreVersion
         $env:MAVEN_REPOSITORY_URL = ([Uri]$maven).AbsoluteUri
         Invoke-Checked (Join-Path $RepositoryRoot "bindings\java\gradlew.bat") @(
           "--no-daemon",
@@ -116,6 +167,7 @@ foreach ($item in $Language) {
       } finally {
         $env:ZLINK_CORE_PACKAGE_PREFIX = $previousPrefix
         $env:ZLINK_CORE_PACKAGE_SUMMARY = $previousSummary
+        $env:ZLINK_CORE_VERSION = $previousCoreVersion
         $env:MAVEN_REPOSITORY_URL = $previousRepository
       }
       $jar = Join-Path $maven "systems\zlink\zlink\$bindingVersion\zlink-$bindingVersion.jar"

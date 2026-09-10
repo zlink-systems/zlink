@@ -77,7 +77,7 @@ void test_pubsub_publish_rollback_preserves_next_topic_boundary ()
     int subscribed = 0;
     char subscription_topic[16];
     size_t subscription_topic_size = 0;
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_xpub_recv_part (
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_xpub_recv (
       pub, NULL, &subscribed, subscription_topic, sizeof (subscription_topic),
       &subscription_topic_size, ZLINK_RECV_FLAGS_DONTWAIT));
     TEST_ASSERT_EQUAL_INT (1, subscribed);

@@ -126,33 +126,4 @@ internal abstract class RoutedMessageSocketBase : RoutedReceivingSocketBase
     {
         return Kernel.SendNoWaitResult(routingId, parts);
     }
-
-    /// <summary>
-    ///     Receive one routed wire part into <paramref name="result" />.
-    /// </summary>
-    /// <param name="result">
-    ///     Reusable message storage that is overwritten on
-    ///     success. With <see cref="RecvFlags.DontWait" />, it is left unchanged
-    ///     when no part is available.
-    /// </param>
-    /// <param name="routingId">
-    ///     Source routing id for the first received
-    ///     part.
-    /// </param>
-    /// <param name="hasMore">
-    ///     True when more parts remain for the current
-    ///     routed message.
-    /// </param>
-    /// <param name="flags">Receive flags.</param>
-    /// <returns>
-    ///     true on success, false when DontWait is set and no data is
-    ///     available.
-    /// </returns>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal bool RecvPart(Message result, out RoutingId? routingId,
-        out bool hasMore, RecvFlags flags = RecvFlags.None)
-    {
-        return Kernel.ReceiveRoutedPartInto(result, out routingId, out hasMore,
-            (int)flags);
-    }
 }

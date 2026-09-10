@@ -63,8 +63,7 @@ void wait_subscription (void *xpub_)
     //  Blocking (RCVTIMEO-bounded) read: the SUB's subscription reaching the
     //  XPUB proves the connection is ready in both directions.
     const zlink_recv_result_t rc =
-      zlink_xpub_recv_part (xpub_, &source_rid, &subscribed, topic,
-                            sizeof (topic), &topic_len, ZLINK_RECV_FLAGS_NONE);
+      zlink_xpub_recv (xpub_, &source_rid, &subscribed, topic, sizeof (topic), &topic_len, ZLINK_RECV_FLAGS_NONE);
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, rc);
     TEST_ASSERT_EQUAL_INT (1, subscribed);
     TEST_ASSERT_EQUAL_UINT (strlen (kTopic), topic_len);

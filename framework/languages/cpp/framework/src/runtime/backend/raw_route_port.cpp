@@ -232,7 +232,7 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (
             for (std::size_t index = 1; index < messages.size (); ++index) {
                 operation = std::move (operation).message (messages[index]);
             }
-            pending.emplace (std::move (operation).async ());
+            pending.emplace (std::move (operation).async ().admitted);
         }
         observe_send_completion (
           std::move (*pending), std::move (trace), source);
@@ -329,7 +329,7 @@ task_t<raw_request_completion_t> raw_route_port_t::request (
             for (std::size_t index = 1; index < messages.size (); ++index) {
                 operation = std::move (operation).message (messages[index]);
             }
-            pending.emplace (std::move (operation).timeout (timeout).async ());
+            pending.emplace (std::move (operation).timeout (timeout).async ().reply);
         }
         observe_request_completion (std::move (*pending), source);
     }

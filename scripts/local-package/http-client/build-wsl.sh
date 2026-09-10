@@ -49,7 +49,7 @@ build_java() {
 
 build_node() {
   local out_dir="$artifact_root/npm"
-  local zlink_package="$out_dir/zlink-systems-zlink-$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION").tgz"
+  local zlink_package="$out_dir/zlink-systems-zlink-$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$repo_root/bindings/node/VERSION").tgz"
   mkdir -p "$out_dir"
   out_dir="$(cd "$out_dir" && pwd -P)"
   [[ -f "$zlink_package" ]] || {

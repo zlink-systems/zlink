@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
+const { stopChildGracefully } = require('../test/support/bounded-cleanup');
 const { createClient } = require('redis');
 const { Injectable, Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
@@ -49,7 +50,9 @@ async function main() {
   await runInTempDir(async (tempDir) => {
     for (const [label, stage] of stages) {
       if (stageFilter && !label.includes(stageFilter)) continue;
+      console.log(`[cross-stage] start ${label}`);
       const outcome = await runStage(label, () => stage(tempDir));
+      console.log(`[cross-stage] pass ${label}`);
       results.push(...(Array.isArray(outcome) ? outcome : [outcome]));
     }
   });
@@ -625,9 +628,10 @@ async function nodeConnectorToDotnetStreamServer(tempDir) {
     '--stream-endpoint', endpoint,
     '--event-file', eventFile
   ]);
-  const instance = await createBrowserConnectorDriver();
+  let instance;
 
   try {
+    instance = await createBrowserConnectorDriver();
     await host.ready;
     await instance.connect(endpoint);
     const reply = await withTimeout(
@@ -641,8 +645,11 @@ async function nodeConnectorToDotnetStreamServer(tempDir) {
     await assertFlowLog(`${eventFile}.flow`, 'RawPing', 'Browser TypeScript -> dotnet');
     return 'Browser TypeScript connector -> dotnet stream server flow-wire and JSON codec';
   } finally {
-    await instance.close();
-    await host.stop();
+    try {
+      await instance?.close();
+    } finally {
+      await host.stop();
+    }
   }
 }
 
@@ -843,13 +850,12 @@ function startDotnetHost(tempDir, name, args) {
     ready: waitForReadyFile(readyFile, exit, output, 30000),
     output: () => output.join(''),
     async stop() {
-      if (child.exitCode !== null) {
-        return;
+      const result = await stopChildGracefully(child, () => fs.writeFile(stopFile, 'STOP'), 10000, 5000);
+      if (result.timedOut) {
+        throw new Error(`${name} did not exit after bounded termination`);
       }
-      await fs.writeFile(stopFile, 'STOP');
-      const result = await withTimeout(exit, 10000, `stop ${name}`);
-      if (result.code !== 0) {
-        throw new Error(`${name} exited with ${result.code ?? result.signal}\n${output.join('')}`);
+      if (child.exitCode !== 0) {
+        throw new Error(`${name} exited with ${child.exitCode ?? child.signalCode}\n${output.join('')}`);
       }
     }
   };
@@ -940,6 +946,7 @@ async function runStage(label, operation) {
   try {
     return await operation();
   } catch (error) {
+    console.error(`[cross-stage] fail ${label}: ${error.message}`);
     throw new Error(`${label} failed`, { cause: error });
   }
 }

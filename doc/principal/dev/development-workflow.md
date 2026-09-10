@@ -76,7 +76,8 @@ does not apply.
 - **Project** = the board `ZLink` (https://github.com/users/zlink-systems/projects/1, also linked in the
   repository's Projects tab). Board rows are **Issues only** (PRs appear as linked information). Status
   `Todo → In progress → Review → Done`, fields `area` (same values as the label, filled automatically)
-  and `runner` (`astra` / `sol` / `direct` / empty; optional). **Only `work.sh` moves the status**
+  and `runner` (`astra` / `sol` / `direct` / empty; optional). **Only `work.sh` and its equivalent Windows
+  `work.ps1` entry point move the status**
   (built-in GitHub workflows that touch the same field stay off). A failed Project update is a warning
   and never blocks the work (§4.2).
 - Labels stop at the two axes in §2; status and runner live only in Project fields.
@@ -99,7 +100,7 @@ Binding local packages (nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `syst
 C++ `install/zlink-cpp`) have equal outputs for equal inputs, so they are shared by hash (the same
 principle as the vcpkg binary cache and the Conan cache). Rules:
 
-- **Key** = first 16 characters of `sha256(tree hash of bindings/ ‖ BINDINGS_VERSION ‖ Core version ‖
+- **Key** = first 16 characters of `sha256(tree hash of bindings/ ‖ map of per-language bindings/<language>/VERSION values ‖ Core version ‖
   tree hash of scripts/local-package/ ‖ platform <os>-<arch> ‖ toolchain id)`. The toolchain id is one
   line combining the compiler, SDK, Node and JDK versions `build-wsl.sh` uses (the script prints it).
 - **Share only from a clean tree**: with staged, unstaged or untracked changes under `bindings/` or
@@ -122,7 +123,7 @@ principle as the vcpkg binary cache and the Conan cache). Rules:
   links only, never cache entries.
 - Issues that need no packages (documentation work) start with `work.sh start --no-packages`.
 
-### 4.2 One command per step — `scripts/dev/work.sh`
+### 4.2 One command per step — `scripts/dev/work.sh` / Windows `scripts/dev/work.ps1`
 
 Each step is one command so that nothing is forgotten; people and the supervisor start, submit and
 finish work only through it. **Every command is safe to re-run**: it inspects the existing
@@ -140,6 +141,7 @@ on failure, prints the created IDs, URLs and paths together with the resume comm
 - Project and milestone updates are best-effort: without permission or connectivity a warning is
   printed and the local steps continue. `status` always shows the local information.
 - Until `work.sh` exists (§8) the manual procedure is the command list in §8.
+- On Windows, run the same subcommands and options with `powershell -File scripts/dev/work.ps1 ...`.
 
 ### 4.3 The other development scripts
 

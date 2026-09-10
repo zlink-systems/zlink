@@ -140,13 +140,15 @@ final class ZLinkClientServerReadinessTest {
             var runtime = context.getBean(ZLinkFrameworkRuntime.class);
 
             assertTrue(runtime.clientServerRuntime().isReady("work"));
+            var send = runtime.client().sendToChannel("work", new Probe("send"));
+            var request = runtime.client().requestToChannel("work", new Probe("request"));
             assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED,
                 assertThrows(ZLinkConfigurationException.class,
-                    () -> runtime.client().sendToChannel("work", new Probe("send")))
+                    send::submit)
                     .kind());
             assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED,
                 assertThrows(ZLinkConfigurationException.class,
-                    () -> runtime.client().requestToChannel("work", new Probe("request")))
+                    () -> request.submit(Probe.class))
                     .kind());
         }
     }

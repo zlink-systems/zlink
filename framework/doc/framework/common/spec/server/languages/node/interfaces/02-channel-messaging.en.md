@@ -261,6 +261,7 @@ export interface ZLinkRequestCall {
  metadata(metadata: ZLinkMessageMetadata): this;
  timeout(timeoutMs: number): this;
  submit<TReply>(signal?: AbortSignal): Promise<TReply>;
+ submit_sync<TReply>(): TReply;   // synchronous blocking; InvalidOperation in a runtime execution context (F2-a)
 }
 
 export interface ZLinkChannelRequestCall {
@@ -268,6 +269,7 @@ export interface ZLinkChannelRequestCall {
  metadata(metadata: ZLinkMessageMetadata): this;
  timeout(timeoutMs: number): this;
  submit<TReply>(signal?: AbortSignal): Promise<TReply>;
+ submit_sync<TReply>(): TReply;   // synchronous blocking; InvalidOperation in a runtime execution context (F2-a)
  yield<TReply>(signal?: AbortSignal): Promise<TReply>;
 }
 
@@ -343,6 +345,7 @@ export interface ZLinkSendCall {
  metadata(key: string, value: string): this;
  metadata(metadata: ZLinkMessageMetadata): this;
  submit(signal?: AbortSignal): Promise<void>;
+ submit_sync(): void;   // synchronous blocking; InvalidOperation in a runtime execution context (F2-a)
 }
 
 export interface ZLinkSendHandler<TMessage> {

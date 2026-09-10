@@ -948,7 +948,7 @@ static int export_payload_parts (zlink_msg_t *parts_,
     return zlink::recv_tls_view::commit (parts_out_, part_count_out_);
 }
 
-int recv_router_message_direct (const socket_handle_t &handle_,
+int recv_router_record (const socket_handle_t &handle_,
                                 const zlink_routing_id_t **source_node_rid_out_,
                                 uint64_t *reply_token_out_,
                                 zlink_msg_t **parts_out_,
@@ -1183,7 +1183,7 @@ int recv_router_message_direct (const socket_handle_t &handle_,
     return export_rc;
 }
 
-int recv_dealer_message_direct (
+int recv_dealer_record (
   const socket_handle_t &handle_,
   zlink_msg_t **parts_out_,
   size_t *part_count_out_,

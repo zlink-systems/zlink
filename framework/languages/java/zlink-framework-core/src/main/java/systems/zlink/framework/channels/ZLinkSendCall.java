@@ -12,5 +12,6 @@ public interface ZLinkSendCall {
         throw new UnsupportedOperationException("send metadata is not available");
     }
 
+    /** For {@code sendToChannel}, channel validation (including metadata support) and any default readiness timeout are resolved when {@code submit} is called. */
     CompletionStage<Void> submit();
 }

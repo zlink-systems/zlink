@@ -69,7 +69,12 @@ template <typename TSocket>
             co_return false;
 
         try {
-            co_await std::move (socket_->send ()).message (part).async ();
+            zlink::send_submission_t submission =
+              std::move (socket_->send ()).message (part).async ();
+            if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
+                co_await std::move (submission.admitted);
+            else if (submission.result != ZLINK_SUBMIT_OK)
+                co_return false;
             co_return true;
         }
         catch (const zlink::submit_error_t &error_) {

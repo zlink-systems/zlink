@@ -1,0 +1,67 @@
+You are a coding sub-agent for zlink (GitHub Issue #63). Work ONLY in the given worktree (branch
+core/63-core-c-api-whole-message-recv-router-rec); commit to that branch. Do NOT touch spec/guide
+docs (core/doc/spec/**, core/doc/guide/**, bindings/doc/**) — the supervisor owns those and updates
+them separately. Do NOT push/PR. Keep input tight (astra token budget): work file-by-file, grep before
+reading, do not read whole trees at once.
+
+== Context ==
+The whole-message API is fully present on this branch: send/send_rid/request/reply/publish/subscribe/
+xpub_recv (added additively) and recv/router_recv (earlier). Design/rationale/removal list:
+doc/draft/core-whole-message-recv-api.ko.md §7; contracts D63-6..D63-8 and the STREAM decision below
+in doc/plan/issue-63-worklog/scope-expansion.ko.md.
+
+== TASK: REMOVE the part-based public API; migrate to whole-message only ==
+1. Remove these 8 public functions — decls in core/include/zlink/socket/api.h AND the raw header
+   mirror bindings/{c,cpp,go,rust}/include/zlink/socket/api.h, their impls, and their libzlink.vers
+   exports:
+     zlink_send_part, zlink_send_part_rid, zlink_request_part, zlink_reply_part, zlink_publish_part,
+     zlink_recv_part, zlink_router_recv_part, zlink_subscribe_part
+   Also remove zlink_xpub_recv_part (its replacement zlink_xpub_recv already exists — delete the old
+   name + its export).
+2. Remove zlink_part_flag_t (ZLINK_PART_MORE/FINAL) from the PUBLIC header. If internal code still
+   needs a MORE/FINAL notion, keep it as an internal type (not in core/include). Update any public
+   references.
+3. STREAM (supervisor decisions, implement + verify):
+   - STREAM RAW receive (was zlink_recv_part) → route through zlink_recv (returns exactly one part
+     for RAW). Ensure zlink_recv supports raw STREAM and returns the single FINAL part.
+   - STREAM PACKET receive keeps zlink_stream_recv_packet (unchanged).
+   - STREAM send keeps single-part semantics: zlink_send with part_count_ == 1 (reject >1 with
+     ENOTSUP for STREAM). A zero-length part to a valid RID MUST keep its "disconnect that peer"
+     meaning. Verify with STREAM tests.
+4. Keep: zlink_stream_recv_packet, zlink_multipart_close, zlink_completion_* .
+5. Migrate ALL of core/tests from the removed part API to the whole-message API (send + recv). Tests
+   that asserted part-sequence-only semantics that no longer exist — the "same thread from first part
+   to FINAL" rule, mid-sequence interleave BUSY, failed-FINAL-discards-staged-prefix — convert to the
+   whole-record equivalent (whole-record submit/retry) or remove if the scenario is now impossible.
+   Preserve every still-meaningful assertion (rid/token, ownership, backpressure, DONTWAIT, capacity
+   BUFFER_TOO_SMALL retry, record atomicity).
+6. Remove part-adapter code that is genuinely DEAD after removal. NOTE: the recv sequence staging
+   (stage_recv_sequence / take_recv_part in part_helper) is STILL USED by whole-message recv's
+   capacity-too-small retry path — do NOT remove that. Only delete code with zero remaining callers.
+7. After editing core/include, run `python3 scripts/local-package/sync-version.py --check` (and
+   --write if it reports the mirror stale), then re-check clean.
+
+== Build & test (JOBS capped at 4) ==
+  JOBS=4 scripts/build-core.sh dev
+  ctest --test-dir core/build-dev --output-on-failure -E hotpath_gate
+EXPECTED still-failing: `contract_public_surface` — it compares the formal spec (core/doc/spec, which
+the SUPERVISOR updates separately) against exported symbols; it will fail until the spec is updated.
+That is OK. Every OTHER test MUST pass (all migrated tests green). hotpath_gate is excluded (dev
+LTO-OFF artifact). Report contract_public_surface's exact message so the supervisor can align the spec.
+
+== Commit (issue branch) ==
+  core: remove part-based public API; whole-message send/recv only
+
+  Remove 8 part functions + zlink_xpub_recv_part + zlink_part_flag_t from the public surface;
+  migrate core/tests to the whole-message API; STREAM RAW recv via zlink_recv, STREAM send
+  part_count==1. libzlink.vers trimmed; header mirror synced. Refs #63.
+  Build OK. Test: ctest -E hotpath_gate — all pass except contract_public_surface (spec pending,
+  supervisor-owned). <paste its message>.
+
+  Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01Df7vbMq5yraG6siDn8PAUH
+
+== Deliverable ==
+Committed. Report: exact symbols/types removed, STREAM handling, how many test call sites migrated and
+any tests removed (with reason), dead code removed, sync-version --check clean, and the exact
+contract_public_surface message.

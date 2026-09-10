@@ -77,7 +77,7 @@ casing, or file names when a TypeScript idiom is clearer.
 - Package projection: symbols exported from the package entrypoint and
   declared in the published TypeScript definitions.
 - Internal implementation: native addon modules, private source modules, N-API handles, completion-drain
-  owners and provisional registries, converters, and raw part-loop helpers.
+  owners and provisional registries, converters, and whole-message array helpers.
 - Package boundary: `package.json` exports expose only documented public
   entrypoints.
 - Documentation role: this README defines shape and semantic coverage. The
@@ -281,7 +281,7 @@ This binding feels like a TypeScript package with a native backend.
 - Operation builders use public contract interfaces because they hide staged
   native request state and multipart accumulation.
 - Native addon handles, raw pointers, callback userdata, request pumps, and
-  part-loop sequencing are never exposed.
+  whole-message array handling are never exposed.
 
 Do not introduce an interface for a pure DTO/value object only for symmetry.
 `Message`, `RoutingId`, `Received`, `TopicMessage`, route results, snapshots,
@@ -323,7 +323,7 @@ native objects faster.
   runtime factory module so contract files do not import runtime
   implementations.
 - JavaScript runtime implementations, native handle owners, request pumps,
-  callback adapters, and part-loop helpers belong in `src/zlink/runtime`.
+  callback adapters, and whole-message array helpers belong in `src/zlink/runtime`.
 - N-API bindings, native addon handles, marshalling helpers, and platform
   loading code belong in `src/zlink/runtime/native`.
 - Package exports and the published `.d.ts` file must project contract
@@ -567,8 +567,8 @@ using TypeScript spelling.
   `Map`/`WeakMap` lookup. A wrapper that has not been returned is not reused for
   another ownership.
 - Operation-start naming follows the Function Naming Rules above. A
-  builder's terminal method keeps using `submit(...)` even on a
-  Promise-returning surface. Do not add a separate `submitAsync` terminal
+  builder's terminal method keeps using `submit(...)` even though it now
+  returns a result object. Do not add a separate `submitAsync` terminal
   name.
 - PAIR, DEALER, ROUTER, and STREAM send use one `SendOperation` family that captures the target.
   `submit_sync()` uses Core `NONE`; `submit()` uses Core `DONTWAIT` completion.
@@ -577,7 +577,8 @@ using TypeScript spelling.
   Other completions the synchronous call receives are handed to the owner's drain rule (resubmit after
   NO_DATA) once it returns.
 - DEALER/ROUTER request provides `submit_sync(): Message[]` and
-  `submit(): Promise<Message[]>` and retains the builder's reply timeout.
+  `submit(): RequestSubmission` (`result`, `admitted`, plus `reply: Promise<Message[]>`) and retains
+  the builder's reply timeout.
 - The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
   `ReplySubmitOperation.submit(): void`. It returns no Promise and submits a
   terminal reply or error reply with one native call. A DEALER peer is subject
@@ -845,8 +846,8 @@ objects with matching TypeScript declarations.
 
 Node package information follows its [distribution metadata](../../../node/package.json); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-Node provides blocking `submit_sync()` and `submit()` returning `Promise`.
-No longer waiting for a Promise follows the common completion-lifetime contract below.
+Node provides blocking `submit_sync()` and `submit()` returning a result object (`SendSubmission`/`RequestSubmission`: `result` and `admitted`, plus `reply` for a request).
+Not waiting for the `admitted`/`reply` Promise still follows the common completion-lifetime contract below.
 
 Native completion IDs, `user_context`, and raw drain are not public APIs.
 Submission results follow the [common result projection](../README.en.md#submit-result-projection);
@@ -863,9 +864,20 @@ references remain valid only until the next recv entry or `close()`. Before the 
 ### Public interface
 
 ```ts
+export interface SendSubmission {
+  result: SubmitResult;        // OK | BACKPRESSURED, submit-time snapshot (synchronous field)
+  admitted: Promise<void>;     // completed when result is OK
+}
+
+export interface RequestSubmission {
+  result: SubmitResult;
+  admitted: Promise<void>;
+  reply: Promise<Message[]>;   // completes after successful admission
+}
+
 export interface SendSubmitOperation {
   message(message: MessageLike): SendSubmitOperation;
-  submit(): Promise<void>;
+  submit(): SendSubmission;
   submit_sync(): void;
 }
 
@@ -881,7 +893,7 @@ export class ReplyToken {
 export interface RequestSubmitOperation {
   message(message: MessageLike): RequestSubmitOperation;
   timeout(timeoutMs: number): RequestSubmitOperation;
-  submit(): Promise<Message[]>;
+  submit(): RequestSubmission;
   submit_sync(): Message[];
 }
 

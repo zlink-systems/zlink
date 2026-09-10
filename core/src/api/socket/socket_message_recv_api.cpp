@@ -124,7 +124,7 @@ int recv_socket_parts (const socket_handle_t &handle_,
     // token, and rejects a later kind consistently with the wire decoder.
     if (type == ZLINK_CORE_SOCKET_DEALER) {
         reset_routing_id_output (source_rid_out_);
-        return zlink::socket_reqrep_internal::recv_dealer_message_direct (
+        return zlink::socket_reqrep_internal::recv_dealer_record (
           handle_, parts_out_, part_count_out_, static_cast<int> (flags_));
     }
 
@@ -248,7 +248,7 @@ extern "C" int zlink_socket_xpub_recv_internal (void *socket_,
     return 0;
 }
 
-zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
+static zlink_recv_result_t xpub_recv (void *xpub_,
                                           const zlink_routing_id_t **source_rid_out_,
                                           int *subscribed_out_,
                                           char *topic_id_buf_,
@@ -391,6 +391,15 @@ zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
       helper_state, ZLINK_PART_FINAL);
     errno = 0;
     return ZLINK_RECV_OK;
+}
+
+zlink_recv_result_t zlink_xpub_recv (
+  void *xpub_, const zlink_routing_id_t **source_rid_out_,
+  int *subscribed_out_, char *topic_id_buf_, size_t topic_id_capacity_,
+  size_t *topic_id_len_out_, zlink_recv_flags_t flags_)
+{
+    return xpub_recv (xpub_, source_rid_out_, subscribed_out_, topic_id_buf_,
+                       topic_id_capacity_, topic_id_len_out_, flags_);
 }
 
 extern "C" int zlink_socket_recv_internal (void *socket_,

@@ -14,12 +14,12 @@ test('router can send reply in a request-reply exchange', async () => {
   router.bind('inproc://dealer-router-callback');
   dealer.connect('inproc://dealer-router-callback');
 
-  await dealer.send().message('request').submit();
+  await dealer.send().message('request').submit().admitted;
   const request = new zlink.Received();
   router.recv(request);
   assert.ok(request.routingId instanceof zlink.RoutingId);
   assert.equal(request.parts[0].data().toString(), 'request');
-  await router.send(request.routingId).message('reply').submit();
+  await router.send(request.routingId).message('reply').submit().admitted;
 
   const response = new zlink.Received();
   dealer.recv(response);
@@ -42,12 +42,12 @@ test('router can send multiple replies in a request-reply loop', async () => {
   let roundsCompleted = 0;
 
   for (let i = 0; i < ROUND_COUNT; i += 1) {
-    await dealer.send().message(`request-${i}`).submit();
+    await dealer.send().message(`request-${i}`).submit().admitted;
     const request = new zlink.Received();
     router.recv(request);
     assert.ok(request.routingId instanceof zlink.RoutingId);
     assert.equal(request.parts[0].data().toString(), `request-${i}`);
-    await router.send(request.routingId).message(`reply-${i}`).submit();
+    await router.send(request.routingId).message(`reply-${i}`).submit().admitted;
     const reply = new zlink.Received();
     dealer.recv(reply);
     assert.equal(reply.parts[0].data().toString(), `reply-${i}`);
@@ -61,7 +61,7 @@ test('router can send multiple replies in a request-reply loop', async () => {
   ctx.close();
 });
 
-test('router recv + send works with the Promise submit terminal', async () => {
+test('router recv + send works with the submission-result terminal', async () => {
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
@@ -69,14 +69,14 @@ test('router recv + send works with the Promise submit terminal', async () => {
   router.bind('inproc://dealer-router-sync-rr');
   dealer.connect('inproc://dealer-router-sync-rr');
 
-  await dealer.send().message('sync-request').submit();
+  await dealer.send().message('sync-request').submit().admitted;
 
   const request = new zlink.Received();
   router.recv(request);
   assert.ok(request.routingId instanceof zlink.RoutingId);
   assert.equal(request.parts[0].data().toString(), 'sync-request');
 
-  await router.send(request.routingId).message('sync-reply').submit();
+  await router.send(request.routingId).message('sync-reply').submit().admitted;
 
   const response = new zlink.Received();
   dealer.recv(response);

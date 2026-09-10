@@ -1,6 +1,7 @@
 package zlink_test
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -12,6 +13,22 @@ import (
 
 	zlink "zlink.systems/zlink"
 )
+
+func submitAndWait(ctx context.Context, op zlink.SendSubmitOp) error {
+	submission, err := op.Submit(ctx)
+	if err != nil {
+		return err
+	}
+	return submission.Admitted(ctx)
+}
+
+func requestAndWait(ctx context.Context, op zlink.RequestSubmitOp) ([]*zlink.Message, error) {
+	submission, err := op.Submit(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return submission.Reply(ctx)
+}
 
 var endpointCounter uint64
 

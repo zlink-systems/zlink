@@ -31,7 +31,7 @@ public class RawSocketIntegrationTest {
 
             byte[] payload = "raw-jvm-11".getBytes(StandardCharsets.UTF_8);
             try (Message message = Message.from(payload)) {
-                sender.send().message(message).submit()
+                sender.send().message(message).submit().admitted()
                     .toCompletableFuture().join();
             }
 
@@ -57,7 +57,7 @@ public class RawSocketIntegrationTest {
             receiver.connect(endpoint);
 
             CompletableFuture<Void> completion = sender.send()
-                .message(message).submit().toCompletableFuture();
+                .message(message).submit().admitted().toCompletableFuture();
             assertTrue(completion.isDone(),
                 "ordinary SEND success must complete inline without a completion");
             assertFalse(completion.isCompletedExceptionally());
@@ -78,7 +78,7 @@ public class RawSocketIntegrationTest {
 
             try (Message first = Message.from("first");
                  Message second = Message.from("second")) {
-                sender.send().message(first).message(second).submit()
+                sender.send().message(first).message(second).submit().admitted()
                     .toCompletableFuture().join();
             }
 
@@ -106,7 +106,7 @@ public class RawSocketIntegrationTest {
             receiver.connect(endpoint);
 
             try (Message first = Message.from("first")) {
-                sender.send().message(first).submit()
+                sender.send().message(first).submit().admitted()
                     .toCompletableFuture().join();
             }
             assertTrue(receiver.recv(received, RecvFlags.DONT_WAIT));
@@ -118,7 +118,7 @@ public class RawSocketIntegrationTest {
                 received.singlePartOrThrow().toByteArray());
 
             try (Message second = Message.from("second")) {
-                sender.send().message(second).submit()
+                sender.send().message(second).submit().admitted()
                     .toCompletableFuture().join();
             }
             assertTrue(receiver.recv(received, RecvFlags.DONT_WAIT));
@@ -127,7 +127,7 @@ public class RawSocketIntegrationTest {
 
             try (Message third = Message.from("third");
                  Message fourth = Message.from("fourth")) {
-                sender.send().message(third).message(fourth).submit()
+                sender.send().message(third).message(fourth).submit().admitted()
                     .toCompletableFuture().join();
             }
             assertTrue(receiver.recv(received, RecvFlags.DONT_WAIT));

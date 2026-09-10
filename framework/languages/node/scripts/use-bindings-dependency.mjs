@@ -27,7 +27,7 @@ function useSourcePackage() {
     }
     throw new Error(`A bindings package backup exists without an active package at ${backupPath}. Run npm run use:bindings-package.`);
   }
-  const version = readVersion(path.join(repoRoot, 'BINDINGS_VERSION'), 'ZLINK_BINDINGS_VERSION');
+  const version = readVersion(path.join(repoRoot, 'bindings', 'node', 'VERSION'), 'ZLINK_BINDING_VERSION');
   const archive = findArchive(version);
   requireInstalledPackage(version);
 

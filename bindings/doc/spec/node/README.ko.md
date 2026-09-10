@@ -73,7 +73,7 @@ camelCase 메서드, PascalCase 공개 타입, TypeScript에 어울리는 곳에
 - 패키지 projection: 패키지 entrypoint에서 export되고 발행된 TypeScript 정의에
   선언된 심볼.
 - 내부 구현: 네이티브 addon 모듈, 비공개 소스 모듈, N-API 핸들,
-  completion drain owner와 completion operation state, 컨버터, raw part-loop 헬퍼.
+  completion drain owner와 completion operation state, 컨버터, whole-message 배열 헬퍼.
 - 패키지 경계: `package.json` exports는 문서화된 공개 entrypoint만 노출한다.
 - 문서 역할: 이 README는 형태와 의미적 범위(semantic coverage)를 정의한다. 정확한
   공개 멤버 목록은 패키지 entrypoint와 선언이 소유한다.
@@ -268,8 +268,8 @@ Contract/runtime 경계는 다음 요구를 만족한다.
   구조적(structural)으로 남는다.
 - Operation 빌더는 단계적 네이티브 요청 상태와 multipart 누적을 감추므로 공개
   계약 인터페이스를 사용한다.
-- 네이티브 addon 핸들, raw 포인터, 콜백 userdata, request pump, part-loop
-  시퀀싱은 절대 노출되지 않는다.
+- 네이티브 addon 핸들, raw 포인터, 콜백 userdata, request pump, whole-message 배열
+  처리는 절대 노출되지 않는다.
 
 순수 DTO/값 객체에 대해 대칭성만을 위해 인터페이스를 도입하지 않는다.
 `Message`, `RoutingId`, `Received`, `TopicMessage`, route 결과, 스냅샷, 옵션
@@ -305,7 +305,7 @@ perf나 샘플이 네이티브 객체에 더 빨리 접근하도록 문서화되
   구현은 계약 파일이 런타임 구현을 import하지 않도록 패키지 entrypoint나
   런타임 팩토리 모듈에 둔다.
 - JavaScript 런타임 구현, 네이티브 핸들 owner, request pump, 콜백 어댑터,
-  part-loop 헬퍼는 `src/zlink/runtime`에 속한다.
+  whole-message 배열 헬퍼는 `src/zlink/runtime`에 속한다.
 - N-API 바인딩, 네이티브 addon 핸들, 마샬링 헬퍼, 플랫폼 로딩 코드는
   `src/zlink/runtime/native`에 속한다.
 - 패키지 export와 발행된 `.d.ts` 파일은 계약 소스를 projection 해야 하며 런타임
@@ -533,8 +533,8 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - **Node는 JS thread 하나이므로 동기 terminal이 실행되는 동안 그 호출이 completion 소비자다.**
   지정 owner(public poller)가 같은 thread에서 동시에 진행할 수 없기 때문이다. 동기 호출이
   받은 다른 completion은 반환 뒤 owner의 drain 규칙(NO_DATA 뒤 재제출)으로 전달한다.
-- DEALER/ROUTER request는 `submit_sync(): Message[]`와 `submit(): Promise<Message[]>`를
-  제공하고 builder의 reply timeout을 유지한다.
+- DEALER/ROUTER request는 `submit_sync(): Message[]`와 `submit(): RequestSubmission`(`result`·
+  `admitted`에 `reply: Promise<Message[]>` 추가)을 제공하고 builder의 reply timeout을 유지한다.
 - Raw ROUTER/`Received` reply의 terminal은
   `ReplySubmitOperation.submit(): void`인 동기 one-shot이다. Promise를 반환하지 않고
   terminal reply 또는 error reply를 native 호출 한 번으로 제출한다. DEALER peer에는 Application
@@ -775,8 +775,8 @@ Node는 Actor와 Spot route 조회 결과를 공개 JavaScript 객체와 일치�
 
 Node package 정보는 [배포 metadata](../../../node/package.json)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Node는 blocking `submit_sync()`와 `Promise`를 반환하는 `submit()`을 제공한다.
-Promise를 더 이상 기다리지 않는 경우에도 아래 공통 완료 수명 계약을 따른다.
+Node는 blocking `submit_sync()`와 결과 객체(`SendSubmission`/`RequestSubmission`: `result`와 `admitted`, request는 `reply`)를 돌려주는 `submit()`을 제공한다.
+`admitted`/`reply` Promise를 더 이상 기다리지 않는 경우에도 아래 공통 완료 수명 계약을 따른다.
 
 Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
 제출 결과는 [공통 결과 투영](../README.ko.md#submit-result-projection)을, 완료 합류·수명과
@@ -793,9 +793,20 @@ Token은 raw conversion, ordering, serialization과 `close()`를 제공하지 �
 ### Public interface
 
 ```ts
+export interface SendSubmission {
+  result: SubmitResult;        // OK | BACKPRESSURED, 제출 시점 스냅샷 (동기 필드)
+  admitted: Promise<void>;     // OK면 완료 상태
+}
+
+export interface RequestSubmission {
+  result: SubmitResult;
+  admitted: Promise<void>;
+  reply: Promise<Message[]>;   // admitted 성공 뒤 완료
+}
+
 export interface SendSubmitOperation {
   message(message: MessageLike): SendSubmitOperation;
-  submit(): Promise<void>;
+  submit(): SendSubmission;
   submit_sync(): void;
 }
 
@@ -811,7 +822,7 @@ export class ReplyToken {
 export interface RequestSubmitOperation {
   message(message: MessageLike): RequestSubmitOperation;
   timeout(timeoutMs: number): RequestSubmitOperation;
-  submit(): Promise<Message[]>;
+  submit(): RequestSubmission;
   submit_sync(): Message[];
 }
 

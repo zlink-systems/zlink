@@ -3,32 +3,21 @@ package native
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"testing"
 )
 
-var aggregateHotPathSymbols = []string{
+var requiredWholeMessageSymbols = []string{
 	"zlink_send",
+	"zlink_send_rid",
 	"zlink_recv",
 	"zlink_publish",
 	"zlink_subscribe",
 	"zlink_router_recv",
-	"zlink_dealer_request",
-	"zlink_router_request",
-	"zlink_router_reply",
-}
-
-var requiredPartSymbols = []string{
-	"zlink_send_part",
-	"zlink_recv_part",
-	"zlink_publish_part",
-	"zlink_subscribe_part",
-	"zlink_router_recv_part",
-	"zlink_send_part_rid",
-	"zlink_request_part",
-	"zlink_reply_part",
+	"zlink_request",
+	"zlink_reply",
+	"zlink_xpub_recv",
 	"zlink_completion_recv",
 	"zlink_completion_close",
 	"zlink_stream_recv_packet",
@@ -42,9 +31,9 @@ func TestRequestUsesUnifiedCoreTargetContract(t *testing.T) {
 	}
 	body := string(bodyBytes)
 
-	if !strings.Contains(body, "C.zlink_go_request_part_with_context(") ||
-		!strings.Contains(body, "return zlink_request_part(") {
-		t.Fatal("send/request adapter must use the uintptr-safe zlink_request_part wrapper")
+	if !strings.Contains(body, "C.zlink_go_request_with_context(") ||
+		!strings.Contains(body, "return zlink_request(") {
+		t.Fatal("send/request adapter must use the uintptr-safe whole-message zlink_request wrapper")
 	}
 }
 
@@ -126,7 +115,7 @@ func goFilesUnder(t *testing.T, roots ...string) []string {
 	return files
 }
 
-func TestOptimizationGuardUsesPartSubstrate(t *testing.T) {
+func TestOptimizationGuardUsesWholeMessageSubstrate(t *testing.T) {
 	files := implementationGoFiles(t)
 	var all strings.Builder
 	for _, path := range files {
@@ -138,31 +127,28 @@ func TestOptimizationGuardUsesPartSubstrate(t *testing.T) {
 		all.WriteByte('\n')
 	}
 	source := all.String()
-	for _, symbol := range requiredPartSymbols {
+	for _, symbol := range requiredWholeMessageSymbols {
 		if !strings.Contains(source, symbol) {
 			t.Fatalf("missing required helper substrate symbol %s", symbol)
 		}
 	}
 
 	var violations []string
+	part := "part"
 	for _, path := range files {
 		bodyBytes, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		body := string(bodyBytes)
-		for _, symbol := range aggregateHotPathSymbols {
-			pattern := regexp.MustCompile(`\bC\.` + regexp.QuoteMeta(symbol) + `\s*\(`)
-			for _, loc := range pattern.FindAllStringIndex(body, -1) {
-				if strings.HasPrefix(body[loc[0]:], "C."+symbol+"_part") {
-					continue
-				}
-				violations = append(violations, filepath.Base(path)+":"+symbol)
+		for _, token := range []string{"_" + part + "_with_context", "_" + part + "_rid", "_" + part + "(", "ZLINK_" + strings.ToUpper(part) + "_", "zlink_" + part + "_flag_t"} {
+			if strings.Contains(body, token) {
+				violations = append(violations, filepath.Base(path)+":"+token)
 			}
 		}
 	}
 	if len(violations) != 0 {
-		t.Fatalf("aggregate hot-path calls found: %v", violations)
+		t.Fatalf("removed part API references found: %v", violations)
 	}
 }
 

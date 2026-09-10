@@ -110,7 +110,7 @@ test('STREAM packet target can be captured for managed send', async () => {
     const operation = stream.send(packet.routingId).message('echo');
     packet.close();
     const echoed = once(client, 'data');
-    await operation.submit();
+    await operation.submit().admitted;
     assert.equal((await echoed)[0].toString(), 'echo');
   } finally {
     packet.close(); client?.destroy(); stream.close(); ctx.close();

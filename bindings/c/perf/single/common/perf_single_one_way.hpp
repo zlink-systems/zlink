@@ -60,63 +60,39 @@ inline int recv_single_part_header_flags (void *socket_,
         *header_ok_out_ = false;
 
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_msg_t part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    if (zlink_msg_init (&part) != 0)
-        return recv_result_error;
-    const int rc = zlink_recv_part (socket_, &source_rid, &part, &has_more,
-                                    static_cast<zlink_recv_flags_t> (flags_));
+    zlink_msg_t parts[2];
+    size_t part_count = 0;
+    const int rc = zlink_recv (socket_, &source_rid, parts, 2u, &part_count,
+                               static_cast<zlink_recv_flags_t> (flags_));
     if (rc != 0) {
         const int err = zlink_errno ();
-        zlink_msg_close (&part);
         if (err == EAGAIN || err == EINTR)
             return recv_result_again;
         return recv_result_error;
     }
+    zlink_msg_t &part = parts[0];
 
     if (source_rid) {
         if (bench_debug_enabled ()) {
             std::cerr << "[" << (trace_label_ ? trace_label_ : "perf-single")
-                      << "] unexpected recv metadata has_more=" << static_cast<int> (has_more)
+                      << "] unexpected recv metadata part_count=" << part_count
                       << std::endl;
         }
-        zlink_msg_close (&part);
+        zlink_multipart_close (parts, part_count);
         return recv_result_error;
     }
 
     const size_t actual_size = zlink_msg_size (&part);
     if (is_stop_token (zlink_msg_data (&part), actual_size)) {
-        if (has_more != ZLINK_PART_FINAL) {
-            zlink_msg_close (&part);
+        if (part_count != 1u) {
+            zlink_multipart_close (parts, part_count);
             return recv_result_error;
         }
-        zlink_msg_close (&part);
+        zlink_multipart_close (parts, part_count);
         return recv_result_stop;
     }
-    if (perf_measurement_part_count () == 2u) {
-        if (has_more != ZLINK_PART_MORE) {
-            zlink_msg_close (&part);
-            return recv_result_error;
-        }
-        zlink_msg_t empty_part;
-        zlink_part_flag_t tail_more = ZLINK_PART_FINAL;
-        if (zlink_msg_init (&empty_part) != 0) {
-            zlink_msg_close (&part);
-            return recv_result_error;
-        }
-        const zlink_recv_result_t tail_rc = zlink_recv_part (
-          socket_, &source_rid, &empty_part, &tail_more,
-          static_cast<zlink_recv_flags_t> (flags_));
-        const bool tail_ok = tail_rc == ZLINK_RECV_OK && !source_rid
-                             && tail_more == ZLINK_PART_FINAL
-                             && zlink_msg_size (&empty_part) == 0;
-        zlink_msg_close (&empty_part);
-        if (!tail_ok) {
-            zlink_msg_close (&part);
-            return recv_result_error;
-        }
-    } else if (has_more != ZLINK_PART_FINAL) {
-        zlink_msg_close (&part);
+    if (!perf_zlink_measurement_parts_valid (parts, part_count)) {
+        zlink_multipart_close (parts, part_count);
         return recv_result_error;
     }
     // PERF_SINGLE_TEST_POLICY § 2.1: a wire frame whose byte length differs
@@ -128,7 +104,7 @@ inline int recv_single_part_header_flags (void *socket_,
         header_ok = perf_single_metric::decode_payload_header (zlink_msg_data (&part), actual_size,
                                                                header_out_);
     }
-    zlink_msg_close (&part);
+    zlink_multipart_close (parts, part_count);
     if (!size_ok && bench_debug_enabled ()) {
         std::cerr << "[" << (trace_label_ ? trace_label_ : "perf-single")
                   << "] excluded payload size=" << actual_size

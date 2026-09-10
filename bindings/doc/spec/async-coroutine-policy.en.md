@@ -17,8 +17,8 @@ title: "Bindings Send and Async Completion Surface Policy"
 
 Send and request can wait for local send queue admission. A high-level binding uses Core `NONE` for a
 blocking terminal and Core `DONTWAIT` for an awaitable terminal. Go exposes one public
-`Submit(context.Context)` terminal, submits with Core `DONTWAIT`, and then waits for the internal
-completion.
+`Submit(context.Context)` terminal, submits with Core `DONTWAIT`, and returns a result object
+immediately; the internal completion is awaited by the object's `Admitted(ctx)`/`Reply(ctx)`.
 
 | Operation | Public completion boundary |
 |---|---|
@@ -88,15 +88,31 @@ Node, Python, and Rust reply builders also accept no flags.
 The following declarations summarize the complete signatures in each language README. Each README owns
 its language-specific overloads, visibility, and ownership.
 
+Async terminals return a **submission result object** captured at submit time. `SendSubmission` carries
+`result` (a submit-time snapshot, `OK`|`BACKPRESSURED`) and the admission stage; `RequestSubmission` adds
+the reply stage. When `result` is `OK` the admission is already complete (SEND ends there; REQUEST's reply
+completes from the completion queue); when `BACKPRESSURED` the binding retains the input and completes
+admission via WRITABLE resubmission. Other submit failures (`NOT_CONNECTED`, `NOT_FOUND`, `NOT_ADMITTED`,
+`INVALID_ARGUMENT`, `TERMINATED`, `OUT_OF_MEMORY`, `INTERNAL_ERROR`, …) are raised as exceptions/errors, not
+through the result object (the caller does not watch two places). The object and field names
+(`Submission`, `result`, `admitted`, `reply`) are shared across the seven languages. The structure and join
+rules belong to [the common result projection](README.en.md#submit-result-projection) and
+[async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). Synchronous
+terminals (`submit_sync()`, .NET/C++ `Submit()`/`submit()`) are unchanged.
+
 | Binding | Send terminal | Request terminal | Reply terminal |
 |---|---|---|---|
-| C++ | `void submit() &&`, `async_result_t<void> async() &&` | `vector<message_t> submit() &&`, `async_result_t<vector<message_t>> async() &&` | `void submit() &&` |
-| .NET | `void Submit()`, `Task Async(CancellationToken)` | `IReadOnlyList<Message> Submit()`, `Task<IReadOnlyList<Message>> Async(CancellationToken)` | `void Submit()` |
-| Java/Kotlin | `CompletionStage<Void> submit()`, `void submit_sync()` | `CompletionStage<List<Message>> submit()`, `List<Message> submit_sync()` | `void submit()` |
-| Node | `Promise<void> submit()`, `void submit_sync()` | `Promise<Message[]> submit()`, `Message[] submit_sync()` | `void submit()` |
-| Python | `Awaitable[None] submit()`, `None submit_sync()` | `Awaitable[list[Message]] submit()`, `list[Message] submit_sync()` | `None submit()` |
-| Go | `Submit(context.Context) error` | `Submit(context.Context) ([]*Message, error)` | `Submit(context.Context) error` |
-| Rust | `Future<Output = Result<(), SubmitError>> submit()`, `Result<(), SubmitError> submit_sync()` | `Future<Output = Result<Vec<Message>, ZlinkError>> submit()`, `Result<Vec<Message>, ZlinkError> submit_sync()` | `Result<(), SubmitError> submit()` |
+| C++ | `void submit() &&`, `send_submission_t async() &&` | `vector<message_t> submit() &&`, `request_submission_t async() &&` | `void submit() &&` |
+| .NET | `void Submit()`, `SendSubmission Async(CancellationToken)` | `IReadOnlyList<Message> Submit()`, `RequestSubmission Async(CancellationToken)` | `void Submit()` |
+| Java/Kotlin | `SendSubmission submit()`, `void submit_sync()` | `RequestSubmission submit()`, `List<Message> submit_sync()` | `void submit()` |
+| Node | `SendSubmission submit()`, `void submit_sync()` | `RequestSubmission submit()`, `Message[] submit_sync()` | `void submit()` |
+| Python | `SendSubmission submit()`, `None submit_sync()` | `RequestSubmission submit()`, `list[Message] submit_sync()` | `None submit()` |
+| Go | `Submit(context.Context) (SendSubmission, error)` | `Submit(context.Context) (RequestSubmission, error)` | `Submit(context.Context) error` |
+| Rust | `Result<SendSubmission, SubmitError> submit()`, `Result<(), SubmitError> submit_sync()` | `Result<RequestSubmission, ZlinkError> submit()`, `Result<Vec<Message>, ZlinkError> submit_sync()` | `Result<(), SubmitError> submit()` |
+
+The Kotlin suspend surface maps to extensions that `await()` `admitted()`/`reply()`. In Go the waiting is
+done by the object's `Result()`/`Admitted(ctx)`/`Reply(ctx)` methods (the `Submit(ctx)` in the Go row only
+submits and returns immediately).
 
 Go and Python publish use the following separate operation families.
 
@@ -118,6 +134,11 @@ item maps to one contract test.
   operation family, and preserves the target in the builder.
 - Send and request terminals expose only the signatures in section 6. They do not expose send/request
   flags, a send timeout, or a request callback terminal.
+- Async terminals return a result object. `result` is a submit-time `OK`|`BACKPRESSURED` snapshot; when `OK`
+  the `admitted` stage is already complete, and when `BACKPRESSURED` `admitted` completes after WRITABLE
+  resubmission. A REQUEST's `reply` completes only after `admitted` succeeds and fails with the same cause
+  when `admitted` fails (exactly once). Contract tests confirm that submit failures other than
+  `OK`|`BACKPRESSURED` surface as exceptions/errors and that `admitted` and `reply` each complete exactly once.
 - Publish in Go and Python provides publish flags and synchronous submit results on a separate `PublishOp`.
 - The reply terminal has no flags and returns the result of synchronous `NONE` admission.
 

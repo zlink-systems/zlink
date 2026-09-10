@@ -19,4 +19,17 @@ public final class SendScratch {
     // every message.
     public String lastTopicId;
     public MemorySegment lastNativeTopic;
+    private MemorySegment parts = arena.allocate(
+        2 * NativeLayouts.MESSAGE_LAYOUT.byteSize(),
+        NativeLayouts.MESSAGE_LAYOUT.byteAlignment());
+
+    public MemorySegment parts(int count) {
+        long bytes = Math.multiplyExact((long) count,
+            NativeLayouts.MESSAGE_LAYOUT.byteSize());
+        if (parts.byteSize() < bytes) {
+            parts = Arena.ofAuto().allocate(bytes,
+                NativeLayouts.MESSAGE_LAYOUT.byteAlignment());
+        }
+        return parts;
+    }
 }

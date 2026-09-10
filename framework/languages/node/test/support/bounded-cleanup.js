@@ -4,15 +4,17 @@ function waitForExit(child, timeoutMs) {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve({ timedOut: false, forced: false });
   return new Promise((resolve) => {
     let settled = false;
+    let forceIssued = false;
     const finish = (forced) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       child.removeListener('exit', onExit);
-      resolve({ timedOut: forced, forced });
+      resolve({ timedOut: forced || forceIssued, forced: forced || forceIssued });
     };
     const onExit = () => finish(false);
     const timer = setTimeout(() => {
+      forceIssued = true;
       try { child.kill('SIGKILL'); } finally { finish(true); }
     }, timeoutMs);
     child.once('exit', onExit);
@@ -26,6 +28,45 @@ async function stopChild(child, timeoutMs = 5_000) {
   child.stdout?.destroy();
   child.stderr?.destroy();
   return result;
+}
+
+async function stopChildGracefully(child, requestStop, gracefulTimeoutMs = 10_000, forceTimeoutMs = 5_000) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    child?.stdout?.destroy(); child?.stderr?.destroy();
+    return { timedOut: false, forced: false };
+  }
+  let exited = false;
+  let timer;
+  const onExit = () => { exited = true; };
+  child.once('exit', onExit);
+  try {
+    try {
+      await requestStop();
+    } catch (error) {
+      await stopChild(child, forceTimeoutMs);
+      throw error;
+    }
+    if (child.exitCode !== null || child.signalCode !== null || exited) {
+      child.stdout?.destroy(); child.stderr?.destroy();
+      return { timedOut: false, forced: false };
+    }
+    let gracefulResolve;
+    const onGracefulExit = () => gracefulResolve?.(true);
+    const gracefulExit = new Promise((resolve) => { gracefulResolve = resolve; child.once('exit', onGracefulExit); });
+    const graceful = await Promise.race([
+      gracefulExit,
+      new Promise((resolve) => { timer = setTimeout(() => resolve(false), gracefulTimeoutMs); })
+    ]);
+    child.removeListener('exit', onGracefulExit);
+    if (graceful) {
+      child.stdout?.destroy(); child.stderr?.destroy();
+      return { timedOut: false, forced: false };
+    }
+    return stopChild(child, forceTimeoutMs);
+  } finally {
+    clearTimeout(timer);
+    child.removeListener('exit', onExit);
+  }
 }
 
 async function closeContext(context, timeoutMs = 5_000) {
@@ -104,4 +145,4 @@ async function closeBrowser(browser, timeoutMs = 5_000) {
   return { timedOut, forced: false };
 }
 
-module.exports = { closeBrowser, closeBrowserServer, closeContext, closeServer, stopChild, waitForExit };
+module.exports = { closeBrowser, closeBrowserServer, closeContext, closeServer, stopChild, stopChildGracefully, waitForExit };

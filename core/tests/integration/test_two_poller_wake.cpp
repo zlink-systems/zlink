@@ -66,7 +66,7 @@ bool send_message (void *socket_, const std::string &payload_)
         memcpy (zlink_msg_data (&part), payload_.data (), payload_.size ());
 
     const zlink_submit_result_t result =
-      zlink_send_part (socket_, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
+      zlink_send (socket_, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
     const int saved_errno = zlink_errno ();
     zlink_msg_close (&part);
     errno = saved_errno;
@@ -74,17 +74,16 @@ bool send_message (void *socket_, const std::string &payload_)
 }
 
 zlink_recv_result_t
-receive_message_result (void *socket_, bool router_, zlink_msg_t *part_, zlink_part_flag_t *more_)
+receive_message_result (void *socket_, bool router_, zlink_msg_t *part_, size_t *more_)
 {
     if (router_) {
         const zlink_routing_id_t *source = NULL;
         zlink_reply_token_t reply_token = UINT64_MAX;
-        return zlink_router_recv_part (socket_, &source, &reply_token, part_, more_,
-                                       ZLINK_RECV_FLAGS_DONTWAIT);
+        return zlink_router_recv (socket_, &source, &reply_token, part_, 1, more_, ZLINK_RECV_FLAGS_DONTWAIT);
     }
 
     const zlink_routing_id_t *source = NULL;
-    return zlink_recv_part (socket_, &source, part_, more_, ZLINK_RECV_FLAGS_DONTWAIT);
+    return zlink_recv (socket_, &source, part_, 1, more_, ZLINK_RECV_FLAGS_DONTWAIT);
 }
 
 bool receive_message (void *socket_, bool router_, const std::string &expected_)
@@ -92,10 +91,10 @@ bool receive_message (void *socket_, bool router_, const std::string &expected_)
     zlink_msg_t part;
     if (zlink_msg_init (&part) != ZLINK_CONFIG_OK)
         return false;
-    zlink_part_flag_t more = ZLINK_PART_MORE;
+    size_t more = 0;
     const zlink_recv_result_t result = receive_message_result (socket_, router_, &part, &more);
     const bool ok =
-      result == ZLINK_RECV_OK && more == ZLINK_PART_FINAL
+      result == ZLINK_RECV_OK && more == 1
       && zlink_msg_size (&part) == expected_.size ()
       && (expected_.empty ()
           || memcmp (zlink_msg_data (&part), expected_.data (), expected_.size ()) == 0);
@@ -108,7 +107,7 @@ bool message_receiver_is_empty (void *socket_, bool router_)
     zlink_msg_t part;
     if (zlink_msg_init (&part) != ZLINK_CONFIG_OK)
         return false;
-    zlink_part_flag_t more = ZLINK_PART_MORE;
+    size_t more = 0;
     const zlink_recv_result_t result = receive_message_result (socket_, router_, &part, &more);
     zlink_msg_close (&part);
     return result == ZLINK_RECV_NO_DATA;

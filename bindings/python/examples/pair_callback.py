@@ -17,7 +17,11 @@ def main():
                         client.connect(endpoint)
                         wait_connected(srv_mon, cli_mon)
 
-                asyncio.run(client.send().message(b"hello-pair").submit())
+                async def send():
+                    submission = client.send().message(b"hello-pair").submit()
+                    await submission.admitted
+
+                asyncio.run(send())
                 received = zlink.create_received()
                 if not server.recv_into(received):
                     raise RuntimeError("expected pair payload")

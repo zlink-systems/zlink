@@ -13,6 +13,12 @@ use zlink::{
     StreamRecvMode, SubscriptionEvent, TopicMessage,
 };
 
+fn await_send(
+    submission: Result<zlink::SendSubmission, zlink::SubmitError>,
+) -> Result<(), zlink::SubmitError> {
+    test_support::block_on(submission?.admitted)
+}
+
 #[test]
 fn pair_send_recv_roundtrip() {
     let ctx = Context::new().unwrap();
@@ -23,7 +29,7 @@ fn pair_send_recv_roundtrip() {
     client.connect("inproc://beh-pair").unwrap();
 
     let msg = Message::try_from(b"pair-payload-42").unwrap();
-    test_support::block_on(client.send().message(msg).submit()).unwrap();
+    await_send(client.send().message(msg).submit()).unwrap();
 
     let mut received = Received::empty();
     server.recv(&mut received, RecvFlags::NONE).unwrap();
@@ -32,7 +38,7 @@ fn pair_send_recv_roundtrip() {
 }
 
 #[test]
-fn pair_multipart_send_recv() {
+fn pair_multipart_send_recv_grows_whole_message_buffer() {
     let ctx = Context::new().unwrap();
     let a = ctx.pair_socket().unwrap();
     a.bind("inproc://beh-pair-multi").unwrap();
@@ -40,23 +46,27 @@ fn pair_multipart_send_recv() {
     let b = ctx.pair_socket().unwrap();
     b.connect("inproc://beh-pair-multi").unwrap();
 
-    let parts = vec![
-        Message::try_from(b"frame-1").unwrap(),
-        Message::try_from(b"frame-2").unwrap(),
-    ];
+    let payloads = (0..10)
+        .map(|index| format!("frame-{index}"))
+        .collect::<Vec<_>>();
+    let parts = payloads
+        .iter()
+        .map(|payload| Message::try_from(payload.as_bytes()).unwrap())
+        .collect::<Vec<_>>();
     let mut iter = parts.into_iter();
     let first = iter.next().unwrap();
     let mut op = b.send().message(first);
     for part in iter {
         op = op.message(part);
     }
-    test_support::block_on(op.submit()).unwrap();
+    await_send(op.submit()).unwrap();
 
     let mut received = Received::empty();
     a.recv(&mut received, RecvFlags::NONE).unwrap();
-    assert_eq!(received.parts().len(), 2);
-    assert_eq!(received.parts()[0].as_bytes(), b"frame-1");
-    assert_eq!(received.parts()[1].as_bytes(), b"frame-2");
+    assert_eq!(received.parts().len(), payloads.len());
+    for (part, payload) in received.parts().iter().zip(&payloads) {
+        assert_eq!(part.as_bytes(), payload.as_bytes());
+    }
 }
 
 #[test]
@@ -84,7 +94,7 @@ fn dealer_router_roundtrip() {
 
     // Dealer sends to Router
     let msg = Message::try_from(b"request-payload").unwrap();
-    test_support::block_on(dealer.send().message(msg).submit()).unwrap();
+    await_send(dealer.send().message(msg).submit()).unwrap();
 
     // Router receives with the dealer's routing id
     let mut received = Received::empty();
@@ -93,7 +103,7 @@ fn dealer_router_roundtrip() {
 
     // Router sends back to the dealer using the received routing id
     let reply = Message::try_from(b"response-payload").unwrap();
-    test_support::block_on(
+    await_send(
         router
             .send(received.routing_id().expect("missing routing id"))
             .message(reply)
@@ -117,7 +127,7 @@ fn dealer_recv_reuse_keeps_ordinary_messages_non_replyable() {
     dealer.connect("inproc://beh-dealer-request-seq").unwrap();
     thread::sleep(Duration::from_millis(50));
 
-    test_support::block_on(
+    await_send(
         dealer
             .send()
             .message(Message::try_from(b"ready").unwrap())
@@ -127,7 +137,7 @@ fn dealer_recv_reuse_keeps_ordinary_messages_non_replyable() {
     let mut router_received = Received::empty();
     assert!(router.recv(&mut router_received, RecvFlags::NONE).unwrap());
 
-    test_support::block_on(
+    await_send(
         router
             .send(&dealer_rid)
             .message(Message::try_from(b"ordinary").unwrap())
@@ -153,7 +163,7 @@ fn router_recv_preserves_routing_id_and_multipart_payload() {
     dealer.connect("inproc://beh-router-part").unwrap();
     thread::sleep(Duration::from_millis(50));
 
-    test_support::block_on(
+    await_send(
         dealer
             .send()
             .message(Message::try_from(b"part-1").unwrap())
@@ -219,7 +229,9 @@ fn send_without_peer_retains_packet_until_writable_or_drop() {
     // owns the packet until it is retried or dropped.
 
     let msg = Message::try_from(b"test").unwrap();
-    let mut future = Box::pin(sock.send().message(msg).submit());
+    let submission = sock.send().message(msg).submit().unwrap();
+    assert_eq!(submission.result, zlink::SubmitResult::Backpressured);
+    let mut future = submission.admitted;
     assert_eq!(test_support::poll_once(&mut future), Poll::Pending);
     drop(future);
 }
@@ -339,7 +351,8 @@ fn stream_backpressure_retries_the_retained_packet_after_writable() {
     let payload = vec![0x73; PAYLOAD_SIZE];
     for _ in 0..4096 {
         let message = Message::try_from(payload.as_slice()).unwrap();
-        let mut future = Box::pin(stream.send(&target).message(message).submit());
+        let submission = stream.send(&target).message(message).submit().unwrap();
+        let mut future = submission.admitted;
         match test_support::poll_once(&mut future) {
             Poll::Ready(result) => {
                 result.unwrap();
@@ -393,7 +406,7 @@ fn dealer_router_pull_receive_then_send() {
     drop(dealer_mon);
 
     // Dealer sends request.
-    test_support::block_on(
+    await_send(
         dealer
             .send()
             .message(Message::try_from(b"request-42").unwrap())
@@ -405,7 +418,7 @@ fn dealer_router_pull_receive_then_send() {
     router.recv(&mut received, RecvFlags::NONE).unwrap();
     assert_eq!(received.parts()[0].as_bytes(), b"request-42");
     let reply = Message::try_from(b"reply-42").unwrap();
-    test_support::block_on(
+    await_send(
         router
             .send(received.routing_id().expect("missing routing id"))
             .message(reply)
@@ -441,7 +454,7 @@ fn pair_pull_receive_then_send() {
     drop(client_mon);
 
     // Client sends and receives.
-    test_support::block_on(
+    await_send(
         client
             .send()
             .message(Message::try_from(b"ping-pair").unwrap())
@@ -452,7 +465,7 @@ fn pair_pull_receive_then_send() {
     server.recv(&mut received, RecvFlags::NONE).unwrap();
     assert_eq!(received.parts()[0].as_bytes(), b"ping-pair");
     let reply = Message::try_from(b"pong-pair").unwrap();
-    test_support::block_on(server.send().message(reply).submit()).unwrap();
+    await_send(server.send().message(reply).submit()).unwrap();
     client
         .common_options()
         .set_receive_timeout(Duration::from_secs(5))

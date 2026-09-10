@@ -249,11 +249,8 @@ void submit_thread (harness_t *harness_, void *server_, uint64_t expected_,
         zlink_msg_init_size (&part, item.wire.size ());
         memcpy (zlink_msg_data (&part), item.wire.data (), item.wire.size ());
         const zlink_submit_result_t rc = routed_
-          ? zlink_send_part_rid (server_, &item.rid, &part,
-                                ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL,
-                                NULL)
-          : zlink_send_part (server_, &part, ZLINK_SEND_FLAGS_NONE,
-                             ZLINK_PART_FINAL, NULL, NULL);
+          ? zlink_send_rid (server_, &item.rid, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL)
+          : zlink_send (server_, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
         zlink_msg_close (&part);
         if (rc != ZLINK_SUBMIT_OK) {
             ++harness_->submit_failures;
@@ -371,13 +368,11 @@ void message_pull_thread (harness_t *harness_, void *server_, uint64_t expected_
             zlink_msg_t part;
             zlink_msg_init (&part);
             const zlink_routing_id_t *rid = NULL;
-            zlink_part_flag_t more = ZLINK_PART_FINAL;
+            size_t more = 1;
             zlink_reply_token_t reply_token = 0;
             const zlink_recv_result_t rc = router_
-              ? zlink_router_recv_part (server_, &rid, &reply_token, &part,
-                                         &more, ZLINK_RECV_FLAGS_DONTWAIT)
-              : zlink_recv_part (server_, &rid, &part, &more,
-                                 ZLINK_RECV_FLAGS_DONTWAIT);
+              ? zlink_router_recv (server_, &rid, &reply_token, &part, 1, &more, ZLINK_RECV_FLAGS_DONTWAIT)
+              : zlink_recv (server_, &rid, &part, 1, &more, ZLINK_RECV_FLAGS_DONTWAIT);
             if (rc != ZLINK_RECV_OK) {
                 zlink_msg_close (&part);
                 if (rc != ZLINK_RECV_NO_DATA) {
@@ -392,7 +387,7 @@ void message_pull_thread (harness_t *harness_, void *server_, uint64_t expected_
             item.wire.assign (static_cast<const char *> (zlink_msg_data (&part)),
                               zlink_msg_size (&part));
             zlink_msg_close (&part);
-            if (more != ZLINK_PART_FINAL) {
+            if (more != 1) {
                 ++harness_->client_failures;
                 break;
             }
@@ -416,19 +411,17 @@ void message_client_thread (harness_t *harness_, void *client_,
         zlink_msg_t part;
         zlink_msg_init_size (&part, expected.size ());
         memcpy (zlink_msg_data (&part), expected.data (), expected.size ());
-        const zlink_submit_result_t sent = zlink_send_part (
-          client_, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
+        const zlink_submit_result_t sent = zlink_send (client_, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
         zlink_msg_close (&part);
         if (sent != ZLINK_SUBMIT_OK) {
             ++harness_->client_failures;
             return;
         }
         zlink_msg_init (&part);
-        zlink_part_flag_t more = ZLINK_PART_FINAL;
-        const zlink_recv_result_t received = zlink_recv_part (
-          client_, NULL, &part, &more, ZLINK_RECV_FLAGS_NONE);
+        size_t more = 1;
+        const zlink_recv_result_t received = zlink_recv (client_, NULL, &part, 1, &more, ZLINK_RECV_FLAGS_NONE);
         const bool matches = received == ZLINK_RECV_OK
-          && more == ZLINK_PART_FINAL
+          && more == 1
           && zlink_msg_size (&part) == expected.size ()
           && memcmp (zlink_msg_data (&part), expected.data (), expected.size ()) == 0;
         zlink_msg_close (&part);

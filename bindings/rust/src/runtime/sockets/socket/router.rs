@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 use std::ptr;
 
-use super::{SocketInner, recv_part_sequence};
+use super::{SocketInner, recv_whole_message};
 use crate::core_context::Context;
 use crate::domain::Received;
 use crate::error::{ConfigError, RecvError};
@@ -38,23 +38,26 @@ pub(crate) fn recv_router_once(
 ) -> Result<bool, RecvError> {
     let mut routing_id = RoutingId::from_raw(ffi::zlink_routing_id_t::empty());
     let mut reply_token = 0u64;
-    let received = recv_part_sequence(
-        out.receive_scratch(),
+    let (parts, native_parts) = out.receive_scratch();
+    let received = recv_whole_message(
+        parts,
+        native_parts,
         flags,
-        |part, has_more, recv_flags, first| {
+        |buffer, capacity, count, recv_flags| {
             let mut source_rid = ptr::null();
             let mut current_reply_token = 0u64;
             let rc = unsafe {
-                ffi::zlink_router_recv_part(
+                ffi::zlink_router_recv(
                     handle,
                     &mut source_rid,
                     &mut current_reply_token,
-                    part,
-                    has_more,
+                    buffer,
+                    capacity,
+                    count,
                     recv_flags,
                 )
             };
-            if first && rc == 0 {
+            if rc == 0 {
                 if !source_rid.is_null() {
                     routing_id = unsafe { RoutingId::from_raw(*source_rid) };
                 }

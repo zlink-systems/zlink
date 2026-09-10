@@ -6,6 +6,7 @@ import {
   StreamPacket,
   type Message,
   type SendOperation,
+  type SendSubmission,
 } from '../../contracts';
 import { streamPacketState } from '../../contracts/messaging/stream_packet';
 import { RecvFlags, SocketType as NativeSocketType } from '../../contracts/sockets/socket_constants';
@@ -57,8 +58,8 @@ export class StreamSocket extends SocketBase {
       if (!routingId) throw new Error('missing routed send target');
       completionOwnerOf(this).sendSync(parts, routingId);
     };
-    const sendManaged = (parts: readonly Message[]): Promise<void> => {
-      if (!routingId) return Promise.reject(new Error('missing routed send target'));
+    const sendManaged = (parts: readonly Message[]): SendSubmission => {
+      if (!routingId) throw new Error('missing routed send target');
       return completionOwnerOf(this).submitSend(parts, routingId);
     };
     materializeReceivedInto(result, raw, sendSync, sendManaged);

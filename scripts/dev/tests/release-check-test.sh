@@ -129,9 +129,11 @@ make_fixture() {
         "$TEST_ROOT/repo/scripts/dev" \
         "$TEST_ROOT/repo/scripts/local-package" \
         "$TEST_ROOT/repo/doc/building/release-notes" \
+        "$TEST_ROOT/repo/bindings/cpp" \
         "$TEST_ROOT/repo/bindings/dotnet/src/Zlink" \
         "$TEST_ROOT/repo/bindings/java/scripts" \
         "$TEST_ROOT/repo/bindings/java/codec/zlink-ext-netty" \
+        "$TEST_ROOT/repo/bindings/node" \
         "$TEST_ROOT/repo/framework/languages/dotnet/src" \
         "$TEST_ROOT/repo/framework/languages/java/scripts"
     cp "$SOURCE_ROOT/scripts/dev/release-check.sh" "$RELEASE_CHECK"
@@ -143,11 +145,18 @@ LIBZLINK_VERSION_MINOR=2
 LIBZLINK_VERSION_PATCH=3
 LIBZLINK_VERSION=1.2.3
 EOF
-    printf 'ZLINK_BINDINGS_VERSION=1.2.3\n' >"$TEST_ROOT/repo/BINDINGS_VERSION"
-    printf 'ZLINK_FRAMEWORK_VERSION=1.2.3\n' >"$TEST_ROOT/repo/FRAMEWORK_VERSION"
-    for package in core bindings framework; do
-        printf '# %s 1.2.3\n' "$package" >"$TEST_ROOT/repo/doc/building/release-notes/$package-1.2.3.ko.md"
-        printf '# %s 1.2.3\n' "$package" >"$TEST_ROOT/repo/doc/building/release-notes/$package-1.2.3.md"
+    printf '# core 1.2.3\n' >"$TEST_ROOT/repo/doc/building/release-notes/core-1.2.3.ko.md"
+    printf '# core 1.2.3\n' >"$TEST_ROOT/repo/doc/building/release-notes/core-1.2.3.md"
+    for language in cpp node java dotnet; do
+        mkdir -p "$TEST_ROOT/repo/bindings/$language" "$TEST_ROOT/repo/framework/languages/$language"
+        printf 'ZLINK_BINDING_VERSION=1.2.3\n' >"$TEST_ROOT/repo/bindings/$language/VERSION"
+        printf 'ZLINK_FRAMEWORK_VERSION=1.2.3\n' >"$TEST_ROOT/repo/framework/languages/$language/VERSION"
+        for target in bindings framework; do
+            printf '# %s %s 1.2.3\n' "$target" "$language" \
+                >"$TEST_ROOT/repo/doc/building/release-notes/$target-$language-1.2.3.ko.md"
+            printf '# %s %s 1.2.3\n' "$target" "$language" \
+                >"$TEST_ROOT/repo/doc/building/release-notes/$target-$language-1.2.3.md"
+        done
     done
 
     write_node_package bindings/node/package.json @zlink-systems/zlink bindings/node
@@ -161,7 +170,9 @@ EOF
 
     cat >"$TEST_ROOT/repo/bindings/dotnet/src/Zlink/Zlink.csproj" <<'EOF'
 <Project><PropertyGroup>
-<Version>1.2.3</Version><PackageId>Zlink</PackageId><Description>binding</Description>
+<ZLinkBindingVersionFile>../../VERSION</ZLinkBindingVersionFile>
+<Version>$([System.IO.File]::ReadAllText('$(ZLinkBindingVersionFile)').Trim().Replace('ZLINK_BINDING_VERSION=', ''))</Version>
+<PackageId>Zlink</PackageId><Description>binding</Description>
 </PropertyGroup></Project>
 EOF
     cat >"$TEST_ROOT/repo/bindings/dotnet/Directory.Build.targets" <<'EOF'
@@ -174,7 +185,8 @@ EOF
 EOF
     cat >"$TEST_ROOT/repo/framework/languages/dotnet/Directory.Build.props" <<'EOF'
 <Project><PropertyGroup>
-<ZLinkFrameworkVersionFile>FRAMEWORK_VERSION</ZLinkFrameworkVersionFile>
+<ZLinkFrameworkVersionFile>VERSION</ZLinkFrameworkVersionFile>
+<Version>$([System.IO.File]::ReadAllText('$(ZLinkFrameworkVersionFile)').Trim().Replace('ZLINK_FRAMEWORK_VERSION=', ''))</Version>
 <PackageLicenseFile>LICENSE</PackageLicenseFile>
 <PackageProjectUrl>https://github.com/zlink-systems/zlink</PackageProjectUrl>
 </PropertyGroup></Project>
@@ -204,7 +216,8 @@ withJavadocJar()
 name = 'centralStaging'
 EOF
     cat >"$TEST_ROOT/repo/bindings/java/scripts/upload-central-bundle.sh" <<'EOF'
-version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' BINDINGS_VERSION)"
+java_root="bindings/java"
+version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$java_root/VERSION")"
 bundle="zlink-java-$version-central-bundle.zip"
 EOF
     cat >"$TEST_ROOT/repo/bindings/java/codec/zlink-ext-netty/build.gradle" <<'EOF'
@@ -213,7 +226,7 @@ description = 'Netty codec'
 EOF
     cat >"$TEST_ROOT/repo/framework/languages/java/build.gradle.kts" <<'EOF'
 group = "systems.zlink"
-version = providers.fileContents(file("FRAMEWORK_VERSION"))
+version = providers.fileContents(layout.projectDirectory.file("VERSION"))
 url.set("https://github.com/zlink-systems/zlink")
 licenses { }
 developers { }
@@ -223,7 +236,8 @@ withJavadocJar()
 name = "centralStaging"
 EOF
     cat >"$TEST_ROOT/repo/framework/languages/java/scripts/upload-central-bundle.sh" <<'EOF'
-version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' FRAMEWORK_VERSION)"
+java_root="framework/languages/java"
+version="$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' "$java_root/VERSION")"
 bundle="zlink-framework-java-$version-central-bundle.zip"
 EOF
     for package in zlink-framework-binding-internal zlink-framework-codec-msgpack \
@@ -242,7 +256,7 @@ EOF
     write_cpp_metadata core zlink core/packaging/conan core/v1.2.3 zlink-1.2.3-source.tar.gz
     write_cpp_metadata bindings zlink-cpp bindings/cpp/packaging/conan cpp/v1.2.3 zlink-cpp-1.2.3.tar.gz
     write_cpp_metadata framework zlink-framework framework/languages/cpp/packaging/conan \
-        framework/v1.2.3 zlink-framework-cpp-1.2.3.tar.gz
+        framework-cpp/v1.2.3 zlink-framework-cpp-1.2.3.tar.gz
 }
 
 release_check() {
@@ -253,30 +267,36 @@ mkdir -p "$TEST_ROOT"
 make_fake_commands
 make_fixture
 
-for target in core bindings framework; do
-    assert_success "$target 정상 검사 실패" release_check "$target" 1.2.3
-    assert_file_contains "$TEST_ROOT/last.out" "릴리스 사전 검사 통과: $target 1.2.3"
+assert_success 'Core 정상 검사 실패' release_check core 1.2.3
+assert_file_contains "$TEST_ROOT/last.out" '릴리스 사전 검사 통과: core 1.2.3'
+for target in bindings framework; do
+    for language in cpp node java dotnet; do
+        assert_success "$target/$language 정상 검사 실패" release_check "$target" "$language" 1.2.3
+        assert_file_contains "$TEST_ROOT/last.out" "릴리스 사전 검사 통과: $target/$language 1.2.3"
+    done
 done
-[[ $(wc -l <"$TEST_ROOT/sync-calls.log") -eq 3 ]] || fail 'sync-version.py --check 호출 수가 다름'
+[[ $(wc -l <"$TEST_ROOT/sync-calls.log") -eq 9 ]] || fail 'sync-version.py --check 호출 수가 다름'
 [[ ! -e "$TEST_ROOT/network-calls.log" ]] || fail '검사 중 네트워크 명령을 호출함'
-pass '세 릴리스 대상의 버전·노트·메타데이터와 배포 표를 오프라인으로 검사한다'
+pass 'Core와 언어별 binding/framework 버전·노트·메타데이터·배포 표를 오프라인으로 검사한다'
 
-assert_success 'dry-run 검사 실패' release_check framework --dry-run 1.2.3
+assert_success 'dry-run 검사 실패' release_check framework --dry-run dotnet 1.2.3
 assert_file_contains "$TEST_ROOT/last.out" '^dry-run: 읽기 전용 검사를 동일하게 수행'
-assert_file_contains "$TEST_ROOT/last.out" '^\| 4 \| framework/v1.2.3 \.NET \| nuget.org \(9개\) \|$'
+assert_file_contains "$TEST_ROOT/last.out" '^\| 1 \| framework-dotnet/v1.2.3 \| nuget.org \(9개\) \|$'
 pass '전역 --dry-run도 같은 읽기 전용 검사와 배포 대상 표를 제공한다'
 
 assert_failure '인자 누락 거부 실패' 2 release_check bindings
+assert_failure '언어 누락 거부 실패' 2 release_check framework 1.2.3
+assert_failure '잘못된 언어 거부 실패' 2 release_check bindings ruby 1.2.3
 assert_failure '잘못된 대상 거부 실패' 2 release_check unknown 1.2.3
 assert_failure '잘못된 버전 거부 실패' 2 release_check core v1.2.3
 pass '잘못된 인자는 exit 2로 거부한다'
 
-rm "$TEST_ROOT/repo/doc/building/release-notes/bindings-1.2.3.md"
-assert_failure '릴리스 노트 누락 검출 실패' 1 release_check bindings 1.2.3
-assert_file_contains "$TEST_ROOT/last.out" '^\| 릴리스 노트 \| bindings \| FAIL \|'
+rm "$TEST_ROOT/repo/doc/building/release-notes/bindings-java-1.2.3.md"
+assert_failure '릴리스 노트 누락 검출 실패' 1 release_check bindings java 1.2.3
+assert_file_contains "$TEST_ROOT/last.out" '^\| 릴리스 노트 \| bindings/java \| FAIL \|'
 assert_file_contains "$TEST_ROOT/last.err" '^재개 명령:'
-printf '# bindings 1.2.3\n' >"$TEST_ROOT/repo/doc/building/release-notes/bindings-1.2.3.md"
-pass '두 언어 릴리스 노트 중 하나라도 없으면 실패하고 재개 명령을 출력한다'
+printf '# bindings java 1.2.3\n' >"$TEST_ROOT/repo/doc/building/release-notes/bindings-java-1.2.3.md"
+pass '선택 언어의 두 릴리스 노트 중 하나라도 없으면 실패하고 재개 명령을 출력한다'
 
 touch "$TEST_ROOT/repo/sync-fail"
 assert_failure '버전 동기화 실패 전파 실패' 1 release_check core 1.2.3
@@ -286,14 +306,15 @@ pass 'sync-version.py --check 실패를 집계한다'
 
 cp "$TEST_ROOT/repo/bindings/node/package.json" "$TEST_ROOT/node-package.backup"
 sed -i 's#https://zlink.systems/#https://wrong.example/#' "$TEST_ROOT/repo/bindings/node/package.json"
-assert_failure 'npm 메타데이터 실패 검출 실패' 1 release_check bindings 1.2.3
+assert_success '선택하지 않은 언어 메타데이터가 검사를 막음' release_check bindings java 1.2.3
+assert_failure 'npm 메타데이터 실패 검출 실패' 1 release_check bindings node 1.2.3
 assert_file_contains "$TEST_ROOT/last.out" '^\| 패키지 메타데이터 \| npm \| FAIL \|'
 mv "$TEST_ROOT/node-package.backup" "$TEST_ROOT/repo/bindings/node/package.json"
-pass 'npm repository와 homepage 오류를 거부한다'
+pass '선택 언어 metadata만 검사하고 선택한 npm의 repository/homepage 오류를 거부한다'
 
 cp "$TEST_ROOT/repo/bindings/dotnet/Directory.Build.targets" "$TEST_ROOT/dotnet-targets.backup"
 sed -i 's#<RepositoryUrl>#<MissingRepositoryUrl>#' "$TEST_ROOT/repo/bindings/dotnet/Directory.Build.targets"
-assert_failure 'NuGet 메타데이터 실패 검출 실패' 1 release_check bindings 1.2.3
+assert_failure 'NuGet 메타데이터 실패 검출 실패' 1 release_check bindings dotnet 1.2.3
 assert_file_contains "$TEST_ROOT/last.out" '^\| 패키지 메타데이터 \| NuGet \| FAIL \|'
 mv "$TEST_ROOT/dotnet-targets.backup" "$TEST_ROOT/repo/bindings/dotnet/Directory.Build.targets"
 pass 'NuGet 필수 패키지 메타데이터 오류를 거부한다'
@@ -301,7 +322,7 @@ pass 'NuGet 필수 패키지 메타데이터 오류를 거부한다'
 cp "$TEST_ROOT/repo/framework/languages/java/scripts/upload-central-bundle.sh" "$TEST_ROOT/central-script.backup"
 sed -i 's/ZLINK_FRAMEWORK_VERSION/LITERAL_VERSION/' \
     "$TEST_ROOT/repo/framework/languages/java/scripts/upload-central-bundle.sh"
-assert_failure 'Maven bundle 버전 실패 검출 실패' 1 release_check framework 1.2.3
+assert_failure 'Maven bundle 버전 실패 검출 실패' 1 release_check framework java 1.2.3
 assert_file_contains "$TEST_ROOT/last.out" '^\| 패키지 메타데이터 \| Maven \| FAIL \|'
 mv "$TEST_ROOT/central-script.backup" \
     "$TEST_ROOT/repo/framework/languages/java/scripts/upload-central-bundle.sh"
@@ -310,7 +331,7 @@ pass 'Maven Central bundle 스크립트의 버전 파일 연결 누락을 거부
 cp "$TEST_ROOT/repo/vcpkg/ports/zlink-framework/portfile.cmake" "$TEST_ROOT/portfile.backup"
 sed -i 's/SHA512 [0-9a-f]*/SHA512 short/' \
     "$TEST_ROOT/repo/vcpkg/ports/zlink-framework/portfile.cmake"
-assert_failure 'vcpkg SHA 실패 검출 실패' 1 release_check framework 1.2.3
+assert_failure 'vcpkg SHA 실패 검출 실패' 1 release_check framework cpp 1.2.3
 assert_file_contains "$TEST_ROOT/last.out" '^\| 패키지 메타데이터 \| Conan·vcpkg \| FAIL \|'
 mv "$TEST_ROOT/portfile.backup" "$TEST_ROOT/repo/vcpkg/ports/zlink-framework/portfile.cmake"
 pass 'vcpkg port 버전과 SHA 형식을 검사한다'
@@ -319,7 +340,7 @@ cp "$TEST_ROOT/repo/core/packaging/conan/conandata.yml" "$TEST_ROOT/conandata.ba
 sed -i 's/sha256: "[0-9a-f]*"/sha256: "short"/' \
     "$TEST_ROOT/repo/core/packaging/conan/conandata.yml"
 assert_failure 'Conan SHA 실패 검출 실패' 1 release_check core 1.2.3
-assert_file_contains "$TEST_ROOT/last.err" 'sha256이 64자리'
+assert_file_contains "$TEST_ROOT/last.out" '^\| 패키지 메타데이터 \| Conan·vcpkg \| FAIL \|'
 mv "$TEST_ROOT/conandata.backup" "$TEST_ROOT/repo/core/packaging/conan/conandata.yml"
 pass 'Conan recipe 버전·자산 URL·SHA 형식을 검사한다'
 

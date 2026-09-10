@@ -485,7 +485,7 @@ class channel_native_client_t
                     .timeout (remaining > std::chrono::milliseconds::zero ()
                                 ? remaining
                                 : std::chrono::milliseconds (1))
-                    .async ());
+                    .async ().reply);
             }
             auto wait_state = std::make_shared<native_request_wait_state_t> ();
             auto terminal = wait_state->completion.task ();
@@ -582,7 +582,7 @@ class channel_native_client_t
                     pending.emplace (transport->socket->send ()
                                        .message (send_header)
                                        .message (send_body)
-                                       .async ());
+                                       .async ().admitted);
                 }
                 catch (...) {
                     transport->socket->options ().send_timeout (configured_timeout);

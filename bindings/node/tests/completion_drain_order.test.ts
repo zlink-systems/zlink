@@ -63,13 +63,15 @@ for (const kind of ['send', 'request']) {
       },
     };
     try {
-      const pending = kind === 'send'
+      const submission = kind === 'send'
         ? owner.submitSend(Buffer.from('retained'), null)
         : owner.submitRequest(Buffer.from('retained'), null, 1000);
       const other = owner.submitRequest(Buffer.from('other'), null, 1000);
+      assert.equal(submission.result, SubmitResult.Backpressured);
+      assert.equal(other.result, SubmitResult.Ok);
       assert.equal(owner.drain(publicOwner), 2);
       assert.deepEqual(order, ['completion-101', 'completion-202', 'NO_DATA', 'resubmit-1']);
-      const otherParts = await other;
+      const otherParts = await other.reply;
       try { assert.equal(otherParts[0].getString(), 'other reply'); }
       finally { otherParts.forEach((part: any) => part.close()); }
       assert.equal(completions.length, 1, 'the retry WRITABLE belongs to the next drain');
@@ -82,7 +84,7 @@ for (const kind of ['send', 'request']) {
         assert.equal(completions.length, 1, 'the admitted reply also belongs to the next drain');
         assert.equal(owner.drain(publicOwner), 1);
       }
-      const parts = await pending;
+      const parts = await (kind === 'send' ? submission.admitted : submission.reply);
       if (kind === 'request') {
         try { assert.equal(parts[0].getString(), 'retried'); }
         finally { parts.forEach((part: any) => part.close()); }
@@ -128,8 +130,8 @@ test('WRITABLE returned by the existing sync native bridge also waits for the ow
     try { assert.equal(syncParts[0].getString(), 'sync reply'); }
     finally { syncParts.forEach((part: any) => part.close()); }
     assert.deepEqual(order, ['other completion', 'NO_DATA', 'resubmit']);
-    await send;
-    const otherParts = await other;
+    await send.admitted;
+    const otherParts = await other.reply;
     try { assert.equal(otherParts[0].getString(), 'other reply'); }
     finally { otherParts.forEach((part: any) => part.close()); }
   } finally { owner.close(); }

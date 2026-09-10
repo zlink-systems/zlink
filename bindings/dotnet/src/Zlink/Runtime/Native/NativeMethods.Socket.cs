@@ -30,69 +30,54 @@ internal static partial class NativeMethods
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static unsafe partial int zlink_send_part(IntPtr socket,
-        ref ZlinkMsg part, int flags, ZlinkPartFlag partFlag,
+    internal static unsafe partial int zlink_send(IntPtr socket,
+        ref ZlinkMsg parts, nuint partCount, int flags,
         IntPtr userContext = default, ulong* completionIdOut = null);
 
     // DONT_WAIT-only variant: same C function, kept as a separate entry point
     // so managed code can choose the non-blocking path explicitly.
-    [LibraryImport(LibraryName, EntryPoint = "zlink_send_part")]
+    [LibraryImport(LibraryName, EntryPoint = "zlink_send")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static unsafe partial int zlink_send_part_nowait(IntPtr socket,
-        ref ZlinkMsg part, int flags, ZlinkPartFlag partFlag,
+    internal static unsafe partial int zlink_send_nowait(IntPtr socket,
+        ref ZlinkMsg parts, nuint partCount, int flags,
         IntPtr userContext = default, ulong* completionIdOut = null);
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static partial int zlink_recv_part(IntPtr socket,
-        out IntPtr sourceRoutingId, ref ZlinkMsg part, out int hasMore,
-        int flags);
-
-    // DONT_WAIT-only variant: same C function, kept as a separate entry point
-    // so managed code can choose the non-blocking path explicitly.
-    [LibraryImport(LibraryName, EntryPoint = "zlink_recv_part")]
-    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static partial int zlink_recv_part_nowait(IntPtr socket,
-        out IntPtr sourceRoutingId, ref ZlinkMsg part, out int hasMore,
-        int flags);
+    internal static partial int zlink_recv(IntPtr socket,
+        out IntPtr sourceRoutingId, ref ZlinkMsg parts, nuint partsCapacity,
+        out nuint partCount, int flags);
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int zlink_router_recv_part(IntPtr router,
+    internal static extern int zlink_router_recv(IntPtr router,
         out IntPtr sourceNodeRoutingId, out ulong replyToken,
-        ref ZlinkMsg part, out int hasMore, int flags);
-
-    // DONT_WAIT-only fast variant.
-    [DllImport(LibraryName, EntryPoint = "zlink_router_recv_part",
-        CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int zlink_router_recv_part_nowait(IntPtr router,
-        out IntPtr sourceNodeRoutingId, out ulong replyToken,
-        ref ZlinkMsg part, out int hasMore, int flags);
+        ref ZlinkMsg parts, nuint partsCapacity, out nuint partCount, int flags);
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static unsafe partial int zlink_send_part_rid(IntPtr handle,
-        ref ZlinkRoutingId targetRoutingId, ref ZlinkMsg part, int flags,
-        ZlinkPartFlag partFlag, IntPtr userContext = default,
+    internal static unsafe partial int zlink_send_rid(IntPtr handle,
+        ref ZlinkRoutingId targetRoutingId, ref ZlinkMsg parts, nuint partCount,
+        int flags, IntPtr userContext = default,
         ulong* completionIdOut = null);
 
     // DONT_WAIT-only fast variant.
-    [LibraryImport(LibraryName, EntryPoint = "zlink_send_part_rid")]
+    [LibraryImport(LibraryName, EntryPoint = "zlink_send_rid")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static unsafe partial int zlink_send_part_rid_nowait(IntPtr handle,
-        ref ZlinkRoutingId targetRoutingId, ref ZlinkMsg part, int flags,
-        ZlinkPartFlag partFlag, IntPtr userContext = default,
+    internal static unsafe partial int zlink_send_rid_nowait(IntPtr handle,
+        ref ZlinkRoutingId targetRoutingId, ref ZlinkMsg parts, nuint partCount,
+        int flags, IntPtr userContext = default,
         ulong* completionIdOut = null);
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern unsafe int zlink_request_part(IntPtr socket,
-        ZlinkRoutingId* targetRouterRoutingIdOrNull, ref ZlinkMsg part,
-        int flags, ZlinkPartFlag partFlag, uint timeoutMs,
+    internal static extern unsafe int zlink_request(IntPtr socket,
+        ZlinkRoutingId* targetRouterRoutingIdOrNull, ref ZlinkMsg parts,
+        nuint partCount, int flags, uint timeoutMs,
         IntPtr userContext, ulong* completionIdOut);
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int zlink_reply_part(IntPtr router,
+    internal static extern int zlink_reply(IntPtr router,
         ref ZlinkRoutingId sourceRoutingId, ulong replyToken,
-        ref ZlinkMsg part, ZlinkPartFlag partFlag);
+        ref ZlinkMsg parts, nuint partCount);
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern unsafe int zlink_stream_recv_packet(IntPtr stream,

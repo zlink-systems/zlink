@@ -1,0 +1,43 @@
+Coding sub-agent for zlink Issue #63. Work ONLY in this worktree; commit to its detached HEAD. Do NOT
+push/PR. Do NOT rebuild Core. This task edits GUIDE and binding docs (supervisor-delegated for speed).
+
+READ: committed core/doc/spec/core/socket/README.{ko,en}.md (the new whole-message contract — source
+of truth for names/wording); doc/plan/issue-63-worklog/binding-migration-ref.ko.md (removal→
+replacement); writing principles doc/principal/documentation/{guide-writing-guide,spec-writing-guide,
+documentation-principles}.ko.md (plain/easy language, concept-first, inline decl comments).
+
+API change: the part API is REMOVED. Nowhere in guide/binding docs may these appear except as history:
+zlink_send_part, zlink_send_part_rid, zlink_request_part, zlink_reply_part, zlink_publish_part,
+zlink_recv_part, zlink_router_recv_part, zlink_subscribe_part, zlink_xpub_recv_part, zlink_part_flag_t,
+ZLINK_PART_MORE/FINAL, and the "same thread first-part-to-FINAL" rule. Replacements: zlink_send,
+zlink_send_rid, zlink_request, zlink_reply, zlink_publish, zlink_recv, zlink_router_recv,
+zlink_subscribe, zlink_xpub_recv (array + count). KEPT: zlink_stream_recv_packet, zlink_multipart_close.
+
+TASK — update these docs so they match the new API (edit BOTH .ko and .en of each):
+1. Core guide: core/doc/guide/**  — grep for `zlink_.*_part|ZLINK_PART_|part_flag|MORE|FINAL|recv vs
+   recv_part` and rewrite each to whole-message. Remove any "when to use recv vs recv_part" text
+   (recv_part is gone); show whole-message send/recv usage. Files include (verify with grep):
+   02-core-api, 03-0-socket-patterns, 03-1-pair, 03-2-pubsub, 03-6-proxy, 08-routing-id,
+   11-thread-safety, design-rationale, scenarios.
+2. Binding spec: bindings/doc/spec/{c,cpp,dotnet,go,java,node,python,rust}/**  — the public binding
+   surface (recv(Received) / send builder) is UNCHANGED; update any wording that describes the
+   internal use of the Core part API to say it now uses the Core whole-message API (one call, array),
+   and remove references to the removed Core part symbols / part_flag / MORE / FINAL.
+3. Binding guide: bindings/doc/guide/**  — same as (2) for usage/receive/send sections.
+Keep public binding signatures and examples' public shape unchanged. Plain, easy language. Do not
+invent contracts; mirror the committed spec.
+
+VERIFY:
+  grep -rnE "zlink_(send|recv|router_recv|subscribe|xpub_recv|request|reply|publish)_part|zlink_part_flag_t|ZLINK_PART_MORE|ZLINK_PART_FINAL" core/doc/guide bindings/doc
+  → must return ZERO hits (except inside doc/plan history, which is out of scope). Run `git diff --check`.
+
+COMMIT (detached HEAD; per-area commits fine):
+  docs(guide): whole-message API across Core guide and binding spec/guide
+
+  <files>. Public binding surface unchanged; internals now use Core whole-message. part API removed
+  from docs. Refs #63.
+
+  Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01Df7vbMq5yraG6siDn8PAUH
+
+REPORT: files changed, grep-zero confirmation, and any spot the source didn't determine (BLOCKERS).

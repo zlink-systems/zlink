@@ -317,8 +317,8 @@ public final class CompletionPump implements AutoCloseable {
                     initialized = true;
                     NativeMessage.messageData(message).reinterpret(1)
                         .set(ValueLayout.JAVA_BYTE, 0, (byte) 1);
-                    int result = Native.sendPart(writer, message,
-                        SendFlags.NONE.value(), Native.PART_FINAL,
+                    int result = Native.send(writer, message, 1L,
+                        SendFlags.NONE.value(),
                         MemorySegment.NULL, MemorySegment.NULL);
                     initialized = false;
                     if (result != SubmitResult.OK.value()) {
@@ -339,24 +339,21 @@ public final class CompletionPump implements AutoCloseable {
             if (closed.get())
                 return;
             try (Arena arena = Arena.ofConfined()) {
-                MemorySegment message = arena.allocate(
-                    NativeLayouts.MESSAGE_LAYOUT);
                 MemorySegment source = arena.allocate(ValueLayout.ADDRESS);
-                MemorySegment more = arena.allocate(ValueLayout.JAVA_INT);
+                MemorySegment partsOut = arena.allocate(ValueLayout.ADDRESS);
+                MemorySegment partCountOut = arena.allocate(
+                    ValueLayout.JAVA_LONG);
                 while (true) {
-                    if (NativeMessage.messageInit(message) != 0) {
-                        throw ZlinkException.fromLastError(
-                            ErrorCategory.CONFIG);
-                    }
                     int result;
                     int errno;
-                    try {
-                        result = Native.recv(reader, source, message, more,
-                            RECV_DONT_WAIT);
-                        errno = result == RecvResult.OK.value()
-                            ? 0 : Native.errno();
-                    } finally {
-                        NativeMessage.messageClose(message);
+                    result = Native.recv(reader, source, partsOut,
+                        partCountOut, RECV_DONT_WAIT);
+                    errno = result == RecvResult.OK.value()
+                        ? 0 : Native.errno();
+                    if (result == RecvResult.OK.value()) {
+                        NativeMessage.multipartClose(
+                            partsOut.get(ValueLayout.ADDRESS, 0),
+                            partCountOut.get(ValueLayout.JAVA_LONG, 0));
                     }
                     if (result == RecvResult.NO_DATA.value()) {
                         signalled.set(false);

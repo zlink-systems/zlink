@@ -1,9 +1,11 @@
 use std::ffi::c_void;
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::error::{SubmitError, ZlinkError};
+use crate::error::{SubmitError, SubmitResult, ZlinkError};
 use crate::flags::SendFlags;
 use crate::message::{Message, RoutingId};
 
@@ -86,6 +88,24 @@ pub(crate) struct RequestOpStorage {
 
 unsafe impl Send for RequestOpStorage {}
 
+/// The result of starting an asynchronous SEND.
+pub struct SendSubmission {
+    /// Core's admission result from the initial submit attempt.
+    pub result: SubmitResult,
+    /// Completes when a backpressured packet is eventually admitted.
+    pub admitted: Pin<Box<dyn Future<Output = Result<(), SubmitError>> + Send>>,
+}
+
+/// The result of starting an asynchronous REQUEST.
+pub struct RequestSubmission {
+    /// Core's admission result from the initial submit attempt.
+    pub result: SubmitResult,
+    /// Completes when a backpressured request is eventually admitted.
+    pub admitted: Pin<Box<dyn Future<Output = Result<(), SubmitError>> + Send>>,
+    /// Completes with the request reply after admission succeeds.
+    pub reply: Pin<Box<dyn Future<Output = Result<Vec<Message>, ZlinkError>> + Send>>,
+}
+
 /// A ROUTER reply builder.
 pub struct ReplyOp<State> {
     pub(crate) inner: ReplyOpStorage,
@@ -140,14 +160,13 @@ first_part!(ReplyOp);
 more_parts!(ReplyOp);
 
 impl SendOp<Ready> {
-    /// Starts nonblocking admission attempts and resolves when Core admits the
-    /// packet.
+    /// Starts a nonblocking admission attempt and returns its result.
     ///
     /// An immediately admitted SEND has completion ID zero and resolves on the
     /// first poll. Under backpressure the future retains the packet, waits for
     /// its exact WRITABLE token through the socket poller, and retries the same
     /// packet. No ordinary SEND completion is produced.
-    pub fn submit(self) -> impl std::future::Future<Output = Result<(), SubmitError>> + Send {
+    pub fn submit(self) -> Result<SendSubmission, SubmitError> {
         crate::operations::submit_send(self.inner)
     }
 
@@ -173,14 +192,13 @@ impl RequestOp<Ready> {
         self
     }
 
-    /// Starts nonblocking REQUEST admission and resolves with the reply.
+    /// Starts nonblocking REQUEST admission and returns its admission and reply
+    /// stages.
     ///
     /// Under backpressure the future retains the multipart request, waits for
     /// its exact WRITABLE token, and resubmits it once. Repeated refusals repeat
     /// that transition. The reply timeout starts only after admission.
-    pub fn submit(
-        self,
-    ) -> impl std::future::Future<Output = Result<Vec<Message>, ZlinkError>> + Send {
+    pub fn submit(self) -> Result<RequestSubmission, ZlinkError> {
         crate::operations::submit_routed_request(self.inner)
     }
 

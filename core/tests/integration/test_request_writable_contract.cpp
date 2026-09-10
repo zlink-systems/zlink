@@ -83,13 +83,12 @@ received_request_t receive_request (void *router_)
     zlink_reply_token_t token = 0;
     zlink_msg_t part;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
-    zlink_part_flag_t flag = ZLINK_PART_MORE;
+    size_t flag = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
-      zlink_router_recv_part (router_, &source, &token, &part, &flag,
-                              ZLINK_RECV_FLAGS_NONE));
+      zlink_router_recv (router_, &source, &token, &part, 1, &flag, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, flag);
+    TEST_ASSERT_EQUAL_INT (1, flag);
     received_request_t received;
     received.source = *source;
     received.token = token;
@@ -106,8 +105,7 @@ void reply (void *router_, const received_request_t &request_)
     init_part (&part, "reply");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_reply_part (router_, &request_.source, request_.token, &part,
-                        ZLINK_PART_FINAL));
+      zlink_reply (router_, &request_.source, request_.token, &part, 1));
     assert_part_consumed (&part);
 }
 
@@ -193,12 +191,8 @@ void prime_route (void *sender_, void *receiver_,
     init_part (&part, "prime");
     zlink_completion_id_t id = UINT64_MAX;
     const zlink_submit_result_t result =
-      target_ ? zlink_send_part_rid (
-                  sender_, target_, &part, ZLINK_SEND_FLAGS_NONE,
-                  ZLINK_PART_FINAL, NULL, &id)
-              : zlink_send_part (
-                  sender_, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-                  NULL, &id);
+      target_ ? zlink_send_rid (sender_, target_, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, &id)
+              : zlink_send (sender_, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, &id);
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, result);
     TEST_ASSERT_EQUAL_UINT64 (0, id);
     assert_part_consumed (&part);
@@ -218,9 +212,7 @@ size_t fill_requests (
         init_part (&part, payload);
         zlink_completion_id_t id = 0;
         errno = 0;
-        const zlink_submit_result_t result = zlink_request_part (
-          sender_, target_, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-          ZLINK_PART_FINAL, 120000, wait_context_, &id);
+        const zlink_submit_result_t result = zlink_request (sender_, target_, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, 120000, wait_context_, &id);
         assert_part_consumed (&part);
         if (result == ZLINK_SUBMIT_OK) {
             TEST_ASSERT_NOT_EQUAL (0, id);
@@ -291,9 +283,7 @@ void run_hwm_request_retry (
     zlink_completion_id_t request_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_request_part (sender_, target_, &retry,
-                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 120000,
-                          &request_context, &request_id));
+      zlink_request (sender_, target_, &retry, 1, ZLINK_SEND_FLAGS_DONTWAIT, 120000, &request_context, &request_id));
     TEST_ASSERT_NOT_EQUAL (0, request_id);
     TEST_ASSERT_NOT_EQUAL (wait_id, request_id);
     assert_part_consumed (&retry);
@@ -398,9 +388,7 @@ void test_connect_before_bind_and_mixed_tokens_are_independent ()
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_BACKPRESSURED,
-      zlink_request_part (dealer, NULL, &request,
-                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 1,
-                          &request_context, &request_wait_id));
+      zlink_request (dealer, NULL, &request, 1, ZLINK_SEND_FLAGS_DONTWAIT, 1, &request_context, &request_wait_id));
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
     TEST_ASSERT_NOT_EQUAL (0, request_wait_id);
     assert_part_consumed (&request);
@@ -412,8 +400,7 @@ void test_connect_before_bind_and_mixed_tokens_are_independent ()
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_BACKPRESSURED,
-      zlink_send_part (dealer, &send, ZLINK_SEND_FLAGS_DONTWAIT,
-                       ZLINK_PART_FINAL, &send_context, &send_wait_id));
+      zlink_send (dealer, &send, 1, ZLINK_SEND_FLAGS_DONTWAIT, &send_context, &send_wait_id));
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
     TEST_ASSERT_NOT_EQUAL (0, send_wait_id);
     TEST_ASSERT_NOT_EQUAL (request_wait_id, send_wait_id);
@@ -466,9 +453,7 @@ void test_connect_before_bind_and_mixed_tokens_are_independent ()
     zlink_completion_id_t request_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_request_part (dealer, NULL, &retry,
-                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 40,
-                          &request_context, &request_id));
+      zlink_request (dealer, NULL, &retry, 1, ZLINK_SEND_FLAGS_DONTWAIT, 40, &request_context, &request_id));
     TEST_ASSERT_NOT_EQUAL (0, request_id);
     assert_part_consumed (&retry);
     const received_request_t received = receive_request (router);
@@ -482,9 +467,7 @@ void test_connect_before_bind_and_mixed_tokens_are_independent ()
     zlink_completion_id_t timeout_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_request_part (dealer, NULL, &timeout_request,
-                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 20,
-                          &request_context, &timeout_id));
+      zlink_request (dealer, NULL, &timeout_request, 1, ZLINK_SEND_FLAGS_DONTWAIT, 20, &request_context, &timeout_id));
     TEST_ASSERT_NOT_EQUAL (0, timeout_id);
     assert_part_consumed (&timeout_request);
     const received_request_t timeout_received = receive_request (router);
@@ -524,9 +507,7 @@ void test_request_wait_token_is_reclaimed_by_close ()
     zlink_completion_id_t wait_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_BACKPRESSURED,
-      zlink_request_part (dealer, NULL, &request,
-                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 1,
-                          &context_value, &wait_id));
+      zlink_request (dealer, NULL, &request, 1, ZLINK_SEND_FLAGS_DONTWAIT, 1, &context_value, &wait_id));
     TEST_ASSERT_NOT_EQUAL (0, wait_id);
     assert_part_consumed (&request);
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (dealer));
@@ -598,9 +579,7 @@ void test_missing_router_route_has_no_wait_token ()
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_NOT_CONNECTED,
-      zlink_request_part (router, &missing, &request,
-                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 100,
-                          NULL, &id));
+      zlink_request (router, &missing, &request, 1, ZLINK_SEND_FLAGS_DONTWAIT, 100, NULL, &id));
     TEST_ASSERT_EQUAL_INT (EHOSTUNREACH, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (0, id);
     assert_part_consumed (&request);

@@ -64,9 +64,13 @@ func TestReplyTokenRejectsZeroAndDifferentRouterOwner(t *testing.T) {
 		serverDone <- router.Reply(received.RoutingID(), token).Message(newMessage(t, "ok")).Submit(context.Background())
 	}()
 
-	parts, err := dealer.Request().Bytes([]byte("request")).Timeout(2 * time.Second).Submit(context.Background())
+	submission, err := dealer.Request().Bytes([]byte("request")).Timeout(2 * time.Second).Submit(context.Background())
 	if err != nil {
 		t.Fatalf("Request() error = %v", err)
+	}
+	parts, err := submission.Reply(context.Background())
+	if err != nil {
+		t.Fatalf("Reply() error = %v", err)
 	}
 	defer zlink.MultipartClose(parts)
 	if len(parts) != 1 || string(parts[0].Data()) != "ok" {
@@ -106,8 +110,17 @@ func TestOrdinaryAdmittedSendsReturnAndDeliver(t *testing.T) {
 		recvDone <- nil
 	}()
 	for i := 0; i < count; i++ {
-		if err := client.Send().Bytes([]byte{byte(i)}).Submit(context.Background()); err != nil {
+		submission, err := client.Send().Bytes([]byte{byte(i)}).Submit(context.Background())
+		if err != nil {
 			t.Fatalf("Submit(%d) error = %v", i, err)
+		}
+		if submission.Result() != zlink.SubmitOK {
+			t.Fatalf("Submit(%d) result = %v, want SubmitOK", i, submission.Result())
+		}
+		canceled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := submission.Admitted(canceled); err != nil {
+			t.Fatalf("Submit(%d) admitted error = %v", i, err)
 		}
 	}
 	if err := <-recvDone; err != nil {
@@ -153,13 +166,21 @@ func TestCanceledRequestLateResultIsCleanedAndOwnerContinues(t *testing.T) {
 
 	waitCtx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	parts, err := dealer.Request().Bytes([]byte("cancelled")).Timeout(time.Second).Submit(waitCtx)
+	submission, err := dealer.Request().Bytes([]byte("cancelled")).Timeout(time.Second).Submit(context.Background())
+	if err != nil {
+		t.Fatalf("cancelled request Submit() error = %v", err)
+	}
+	parts, err := submission.Reply(waitCtx)
 	if parts != nil || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("cancelled request = (%v, %v), want (nil, deadline exceeded)", parts, err)
 	}
-	parts, err = dealer.Request().Bytes([]byte("next")).Timeout(time.Second).Submit(context.Background())
+	submission, err = dealer.Request().Bytes([]byte("next")).Timeout(time.Second).Submit(context.Background())
 	if err != nil {
 		t.Fatalf("request after late result error = %v", err)
+	}
+	parts, err = submission.Reply(context.Background())
+	if err != nil {
+		t.Fatalf("request after late result Reply() error = %v", err)
 	}
 	defer zlink.MultipartClose(parts)
 	if len(parts) != 1 || string(parts[0].Data()) != "reply-1" {

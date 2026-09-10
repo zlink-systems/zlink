@@ -96,15 +96,17 @@ socket.send().message(msg).submit_sync(SendFlags::NONE).unwrap();
 // reusing msg is a compile error → ownership safety is enforced by the type system
 ```
 
-HWM-managed sends provide an asynchronous `submit()` future and synchronous
-`submit_sync(SendFlags)`. In async code, use
-`socket.send().message(msg).submit().await?`. On a plain thread,
+HWM-managed sends provide a result-object `submit()` and synchronous
+`submit_sync(SendFlags)`. `submit()` returns `Result<SendSubmission, _>`, where
+`SendSubmission` carries `result` (`OK`|`BACKPRESSURED`) and an `admitted` future.
+In async code, use `socket.send().message(msg).submit()?.admitted.await?` to wait
+for admission (already complete when `result` is `OK`). On a plain thread,
 `submit_sync(SendFlags::NONE)` is available; pass `SendFlags::DONT_WAIT`
 when immediate back-pressure is required.
 
-Request provides `submit_sync()` to block until the reply and `submit()` to
-return a Future whose `Vec<Message>` is settled from the socket completion
-queue. The reply is that terminal result, not DATA received separately.
+Request provides `submit_sync()` to block until the reply and `submit()` to return a
+`RequestSubmission` (`result`, `admitted`, plus a `reply` future). When `result` is `OK`
+you can await `reply` directly; the reply is that terminal result, not DATA received separately.
 
 Core owns retry after accepting a pre-admission operation; do not add a caller
 retry queue or resubmit its payload. The shared native
@@ -204,9 +206,9 @@ Each exposes the result code enum via a `code()` method.
 | `zlink_socket(ctx, type)` | `ctx.pair_socket()`, etc. |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(m).submit_sync(flags)` |
-| DONTWAIT send + completion pull | `socket.send().message(m).submit().await` |
-| `zlink_recv_part(...)` | `socket.recv(&mut received, flags)` |
+| `zlink_send(..., parts, count, ...)` / `zlink_send_rid(..., parts, count, ...)` | `socket.send().message(m).submit_sync(flags)` |
+| DONTWAIT send + completion pull | `socket.send().message(m).submit()?.admitted.await` |
+| `zlink_recv(..., parts_out, capacity, count_out, ...)` | `socket.recv(&mut received, flags)` |
 | `zlink_msg_data(msg)` | `part.as_bytes()` |
 | `zlink_routing_id_t` | `RoutingId` |
 | `zlink_socket_monitor_open(...)` | `SocketMonitor::open(&socket)` |
@@ -235,7 +237,7 @@ println!("zlink {major}.{minor}.{patch}");
 
 `submit_sync(SendFlags::NONE)` stops its calling thread while waiting for
 HWM admission. This only parks that plain thread. In an async executor that must
-keep running other tasks, use `submit().await`; use
+keep running other tasks, use `submit()?.admitted.await`; use
 `submit_sync(SendFlags::DONT_WAIT)` for immediate back-pressure.
 
 ```rust

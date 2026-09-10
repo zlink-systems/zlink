@@ -40,6 +40,7 @@ import {
 import type {
   SubscriptionEntry,
   SendOperation,
+  SendSubmission,
   PublishOperation as PublishOperationContract,
 } from '../../contracts/messaging';
 import {
@@ -208,11 +209,11 @@ export class RoutedMessageSocket extends ConnectableSocket {
   protected sendReceivedManaged(
     _routingId: Buffer,
     _parts: readonly Message[],
-  ): Promise<void> {
-    return Promise.reject(submitErrorFromResult(
+  ): SendSubmission {
+    throw submitErrorFromResult(
       SubmitResult.InvalidState,
       'managed received send is not supported by this socket'
-    ));
+    );
   }
 
   /**

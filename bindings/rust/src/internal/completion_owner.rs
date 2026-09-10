@@ -21,6 +21,7 @@ use std::thread::JoinHandle;
 
 use crate::error::{
     ConfigError, ConfigResult, RecvError, RequestError, RequestResult, SubmitError, SubmitResult,
+    ZlinkError,
 };
 use crate::ffi;
 use crate::message::Message;
@@ -51,7 +52,7 @@ enum CompletionOutcome {
 
 struct CaptureResult {
     detached: bool,
-    waker: Option<Waker>,
+    wakers: [Option<Waker>; 2],
 }
 
 /// A WRITABLE record pulled before its SEND registration landed.
@@ -70,8 +71,11 @@ struct EntryState {
     detached: bool,
     owner_shutdown: bool,
     awaiting_writable: bool,
+    admission_failure: Option<SubmitError>,
+    reply_detached: bool,
     outcome: Option<CompletionOutcome>,
-    waker: Option<Waker>,
+    writable_waker: Option<Waker>,
+    request_waker: Option<Waker>,
 }
 
 /// One provisional send or request operation.
@@ -93,8 +97,11 @@ impl CompletionEntry {
                 detached: false,
                 owner_shutdown: false,
                 awaiting_writable: kind == CompletionEntryKind::SendRetry,
+                admission_failure: None,
+                reply_detached: false,
                 outcome: None,
-                waker: None,
+                writable_waker: None,
+                request_waker: None,
             }),
             changed: Condvar::new(),
         })
@@ -127,7 +134,7 @@ impl CompletionEntry {
             Self::settle_if_joined(&mut state)
         };
         self.changed.notify_all();
-        if let Some(waker) = waker {
+        for waker in waker.into_iter().flatten() {
             waker.wake();
         }
     }
@@ -161,7 +168,7 @@ impl CompletionEntry {
             if state.captured {
                 return CaptureResult {
                     detached: state.detached,
-                    waker: None,
+                    wakers: [None, None],
                 };
             }
             if matches!(
@@ -176,7 +183,7 @@ impl CompletionEntry {
                 // until that expected token is retired.
                 return CaptureResult {
                     detached: false,
-                    waker: None,
+                    wakers: [None, None],
                 };
             }
             state.captured = true;
@@ -186,15 +193,30 @@ impl CompletionEntry {
             (Self::settle_if_joined(&mut state), state.detached)
         };
         self.changed.notify_all();
-        CaptureResult { detached, waker }
+        CaptureResult {
+            detached,
+            wakers: waker,
+        }
     }
 
-    fn settle_if_joined(state: &mut EntryState) -> Option<Waker> {
+    fn settle_if_joined(state: &mut EntryState) -> [Option<Waker>; 2] {
         if !state.published || !state.captured || state.settled {
-            return None;
+            return [None, None];
         }
         state.settled = true;
-        state.waker.take()
+        let mut wakers = [None, None];
+        if state.awaiting_writable {
+            wakers[0] = state.writable_waker.take();
+            if matches!(
+                state.outcome.as_ref(),
+                Some(CompletionOutcome::Writable { result: Err(_), .. })
+            ) {
+                wakers[1] = state.request_waker.take();
+            }
+        } else {
+            wakers[0] = state.request_waker.take();
+        }
+        wakers
     }
 
     pub(crate) fn poll_writable(&self, waker: &Waker) -> Poll<Result<(), SubmitError>> {
@@ -211,26 +233,82 @@ impl CompletionEntry {
             state.awaiting_writable = false;
             return Poll::Ready(outcome);
         }
-        if state.waker.as_ref().is_none_or(|old| !old.will_wake(waker)) {
-            state.waker = Some(waker.clone());
+        if state
+            .writable_waker
+            .as_ref()
+            .is_none_or(|old| !old.will_wake(waker))
+        {
+            state.writable_waker = Some(waker.clone());
         }
         Poll::Pending
     }
 
-    pub(crate) fn poll_request(&self, waker: &Waker) -> Poll<Result<Vec<Message>, RequestError>> {
+    pub(crate) fn poll_request(&self, waker: &Waker) -> Poll<Result<Vec<Message>, ZlinkError>> {
         let mut state = self.state.lock().expect("completion entry");
-        if state.settled {
-            return match state.outcome.take().expect("live request outcome") {
-                CompletionOutcome::Request(outcome) => Poll::Ready(outcome),
-                CompletionOutcome::Writable { .. } => {
-                    unreachable!("writable outcome in request entry")
-                }
-            };
+        if let Some(error) = state.admission_failure {
+            return Poll::Ready(Err(error.into()));
         }
-        if state.waker.as_ref().is_none_or(|old| !old.will_wake(waker)) {
-            state.waker = Some(waker.clone());
+        if state.settled {
+            match state.outcome.as_ref().expect("live request outcome") {
+                CompletionOutcome::Request(_) => {
+                    return match state.outcome.take().expect("live request outcome") {
+                        CompletionOutcome::Request(outcome) => {
+                            Poll::Ready(outcome.map_err(Into::into))
+                        }
+                        CompletionOutcome::Writable { .. } => unreachable!(),
+                    };
+                }
+                CompletionOutcome::Writable {
+                    result: Err(error), ..
+                } => return Poll::Ready(Err((*error).into())),
+                CompletionOutcome::Writable { result: Ok(()), .. } => {}
+            }
+        }
+        if state
+            .request_waker
+            .as_ref()
+            .is_none_or(|old| !old.will_wake(waker))
+        {
+            state.request_waker = Some(waker.clone());
         }
         Poll::Pending
+    }
+
+    pub(crate) fn fail_admission(&self, error: SubmitError) -> bool {
+        let (waker, removable) = {
+            let mut state = self.state.lock().expect("completion entry");
+            state.admission_failure.get_or_insert(error);
+            state.detached = true;
+            state.outcome = None;
+            (
+                state.request_waker.take(),
+                state.captured || !state.published,
+            )
+        };
+        self.changed.notify_all();
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+        removable
+    }
+
+    pub(crate) fn admission_succeeded(&self) {
+        let mut state = self.state.lock().expect("completion entry");
+        if state.reply_detached {
+            state.detached = true;
+            state.outcome = None;
+        }
+    }
+
+    pub(crate) fn detach_reply(&self) -> bool {
+        let mut state = self.state.lock().expect("completion entry");
+        state.reply_detached = true;
+        state.request_waker = None;
+        if state.admission_failure.is_some() || !state.awaiting_writable {
+            state.detached = true;
+            state.outcome = None;
+        }
+        state.captured || !state.published
     }
 
     /// Blocks the calling thread until the REQUEST settles.
@@ -261,8 +339,9 @@ impl CompletionEntry {
         let mut state = self.state.lock().expect("completion entry");
         state.detached = true;
         state.outcome = None;
-        state.waker = None;
-        state.captured
+        state.writable_waker = None;
+        state.request_waker = None;
+        state.captured || !state.published
     }
 
     fn shutdown(&self) {
@@ -293,7 +372,7 @@ impl CompletionEntry {
             Self::settle_if_joined(&mut state)
         };
         self.changed.notify_all();
-        if let Some(waker) = waker {
+        for waker in waker.into_iter().flatten() {
             waker.wake();
         }
     }
@@ -412,7 +491,7 @@ impl CompletionOwner {
             if captured.detached {
                 self.unregister(context);
             }
-            if let Some(waker) = captured.waker {
+            for waker in captured.wakers.into_iter().flatten() {
                 waker.wake();
             }
         }
@@ -474,9 +553,7 @@ impl CompletionOwner {
                 .cloned();
             if let Some(entry) = entry {
                 let captured = entry.capture(&mut completion);
-                if let Some(waker) = captured.waker {
-                    wakers.push(waker);
-                }
+                wakers.extend(captured.wakers.into_iter().flatten());
                 let request_completion =
                     completion.kind == ffi::zlink_completion_kind_t::ZLINK_COMPLETION_REQUEST;
                 if public_owner && entry.kind() == CompletionEntryKind::Request {
@@ -1041,11 +1118,17 @@ mod tests {
     }
 
     #[test]
-    fn request_writable_shutdown_is_a_typed_submit_failure() {
+    fn request_writable_shutdown_fails_both_stages_with_the_same_cause() {
         let entry = CompletionEntry::new(CompletionEntryKind::Request);
         entry.publish_writable(56);
         entry.shutdown();
         let waker = Waker::noop();
+        assert!(matches!(
+            entry.poll_request(waker),
+            Poll::Ready(Err(ZlinkError::Submit(error)))
+                if error.code() == SubmitResult::Terminated
+                    && error.native_errno() == libc::ESHUTDOWN
+        ));
         assert!(matches!(
             entry.poll_writable(waker),
             Poll::Ready(Err(error))

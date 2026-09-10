@@ -39,9 +39,7 @@ void send_request_to_exercise_completion_path (void *client_,
         zlink_msg_t ready;
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&ready, 5));
         memcpy (zlink_msg_data (&ready), "ready", 5);
-        const zlink_submit_result_t submit = zlink_send_part_rid (
-          client_, &peer_rid, &ready, ZLINK_SEND_FLAGS_NONE,
-          ZLINK_PART_FINAL, NULL, NULL);
+        const zlink_submit_result_t submit = zlink_send_rid (client_, &peer_rid, &ready, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&ready));
         if (submit != ZLINK_SUBMIT_OK) {
             msleep (10);
@@ -52,14 +50,12 @@ void send_request_to_exercise_completion_path (void *client_,
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received));
         const zlink_routing_id_t *source = NULL;
         zlink_reply_token_t token = UINT64_MAX;
-        zlink_part_flag_t has_more = ZLINK_PART_MORE;
-        const zlink_recv_result_t recv_rc = zlink_router_recv_part (
-          server_, &source, &token, &received, &has_more,
-          ZLINK_RECV_FLAGS_NONE);
+        size_t has_more = 0;
+        const zlink_recv_result_t recv_rc = zlink_router_recv (server_, &source, &token, &received, 1, &has_more, ZLINK_RECV_FLAGS_NONE);
         if (recv_rc == ZLINK_RECV_OK) {
             TEST_ASSERT_NOT_NULL (source);
             TEST_ASSERT_EQUAL_UINT64 (0, token);
-            TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+            TEST_ASSERT_EQUAL_INT (1, has_more);
             TEST_ASSERT_EQUAL_STRING_LEN (
               "ready", static_cast<const char *> (zlink_msg_data (&received)),
               5);
@@ -76,21 +72,19 @@ void send_request_to_exercise_completion_path (void *client_,
     zlink_completion_id_t completion_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_request_part (client_, &peer_rid, &request, ZLINK_SEND_FLAGS_NONE,
-                          ZLINK_PART_FINAL, 30000, NULL, &completion_id));
+      zlink_request (client_, &peer_rid, &request, 1, ZLINK_SEND_FLAGS_NONE, 30000, NULL, &completion_id));
     TEST_ASSERT_NOT_EQUAL (0, completion_id);
 
     const zlink_routing_id_t *source_rid = NULL;
     zlink_reply_token_t reply_token = 0;
     zlink_msg_t received;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received));
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
-      zlink_router_recv_part (server_, &source_rid, &reply_token, &received,
-                              &has_more, ZLINK_RECV_FLAGS_NONE));
+      zlink_router_recv (server_, &source_rid, &reply_token, &received, 1, &has_more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_EQUAL (0, reply_token);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     if (expected_source_rid_) {
         TEST_ASSERT_NOT_NULL (source_rid);
         TEST_ASSERT_EQUAL_UINT8 (static_cast<uint8_t> (strlen (expected_source_rid_)),
@@ -104,8 +98,7 @@ void send_request_to_exercise_completion_path (void *client_,
     memcpy (zlink_msg_data (&reply), "pong", 4);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_reply_part (server_, source_rid, reply_token, &reply,
-                        ZLINK_PART_FINAL));
+      zlink_reply (server_, source_rid, reply_token, &reply, 1));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&received));
 
     zlink_completion_t completion;
@@ -392,10 +385,7 @@ void test_async_handshake_preserves_outgoing_direction ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&unavailable_request, 1));
     *static_cast<unsigned char *> (zlink_msg_data (&unavailable_request)) = 0;
     zlink_completion_id_t unavailable_completion_id = 0;
-    (void) zlink_request_part (
-      client, &unavailable_rid, &unavailable_request,
-      ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 1, NULL,
-      &unavailable_completion_id);
+    (void) zlink_request (client, &unavailable_rid, &unavailable_request, 1, ZLINK_SEND_FLAGS_DONTWAIT, 1, NULL, &unavailable_completion_id);
 
     // Start the connection before the peer exists so its routing id cannot be
     // available when the locally initiated pipe is first attached.

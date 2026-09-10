@@ -46,6 +46,7 @@ function Invoke-Checked {
 $frameworkManifest = Get-Content -Raw -Encoding utf8 (Join-Path $nodeRoot "packages/framework/package.json") | ConvertFrom-Json
 $httpManifest = Get-Content -Raw -Encoding utf8 (Join-Path $nodeRoot "packages/http-client/package.json") | ConvertFrom-Json
 $bindingVersion = $frameworkManifest.dependencies.'@zlink-systems/zlink'
+$coreVersion = (Select-String -LiteralPath (Join-Path $RepositoryRoot "VERSION") -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
 $httpVersion = $httpManifest.version
 $bindingPackage = Join-Path $npmRoot "zlink-systems-zlink-$bindingVersion.tgz"
 $httpPackage = Join-Path $npmRoot "zlink-systems-http-client-$httpVersion.tgz"
@@ -78,12 +79,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const manifestPath = path.join(path.dirname(require.resolve('@zlink-systems/zlink')), '..', 'package.json');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-const expected = '__ZLINK_BINDING_VERSION__';
+const expectedCore = '__ZLINK_CORE_VERSION__';
+const expectedBinding = '__ZLINK_BINDING_VERSION__';
 const nativeVersion = binding.version().join('.');
-if (manifest.version !== expected || nativeVersion !== expected) {
-  throw new Error('Expected Node binding ' + expected + ', package=' + manifest.version + ', native=' + nativeVersion);
+if (manifest.version !== expectedBinding || nativeVersion !== expectedCore) {
+  throw new Error('Expected Node binding package ' + expectedBinding + ' / Core ' + expectedCore + ', package=' + manifest.version + ', native=' + nativeVersion);
 }
-'@.Replace('__ZLINK_BINDING_VERSION__', $bindingVersion)
+'@.Replace('__ZLINK_CORE_VERSION__', $coreVersion).Replace('__ZLINK_BINDING_VERSION__', $bindingVersion)
 Invoke-Checked $node @("-e", $bindingVerification) $nodeRoot
 Invoke-Checked $npm @("run", "build") $nodeRoot
 Invoke-Checked $node @("--test", "test/smoke/binding-smoke.test.js") $nodeRoot

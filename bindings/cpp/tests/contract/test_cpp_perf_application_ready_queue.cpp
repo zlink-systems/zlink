@@ -68,7 +68,7 @@ void test_immediately_admitted_async_send ()
     assert (received_probe.to_string () == "ready");
 
     zlink::message_t outbound = zlink_cpp_contract::make_message ("async");
-    await_send (sender.send ().message (outbound).async ()).get ();
+    await_send (sender.send ().message (outbound).async ().admitted).get ();
     assert (!outbound.valid ());
     zlink::message_t inbound;
     assert (receiver.recv (inbound) == 0);
@@ -142,7 +142,8 @@ void test_backpressured_async_send_retries_from_public_poller ()
     std::string expected = "async-backpressure-exact-retry";
     expected.resize (payload_size, 'r');
     zlink::message_t outbound = zlink_cpp_contract::make_message (expected);
-    void_task_t pending = await_send (sender.send ().message (outbound).async ());
+    void_task_t pending =
+      await_send (sender.send ().message (outbound).async ().admitted);
     assert (!outbound.valid ());
     assert (!pending.ready ());
 
@@ -301,7 +302,8 @@ void test_pending_send_socket_close_is_typed_terminal ()
     zlink::poller_t poller;
     poller.add (sender, zlink::poll_event_flag_t::pollcompletion, 92);
     zlink::message_t outbound = zlink_cpp_contract::make_message ("pending-close");
-    void_task_t pending = await_send (sender.send ().message (outbound).async ());
+    void_task_t pending =
+      await_send (sender.send ().message (outbound).async ().admitted);
     assert (!pending.ready ());
     sender.close ();
 
@@ -362,7 +364,7 @@ void test_pending_routed_send_target_removal_is_not_found ()
     poller.add (router, zlink::poll_event_flag_t::pollcompletion, 93);
     zlink::message_t outbound = zlink_cpp_contract::make_message ("removed-target");
     void_task_t pending = await_send (
-      router.send (dealer_id).message (outbound).async ());
+      router.send (dealer_id).message (outbound).async ().admitted);
     assert (!pending.ready ());
 
     router.disconnect_rid (dealer_id);

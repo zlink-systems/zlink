@@ -11,8 +11,8 @@ on:
       - ".github/actions/msvc-env/**"
       - "scripts/local-package/core/fetch-release.sh"
       - "scripts/local-package/http-client/**"
-      - "FRAMEWORK_VERSION"
-      - "BINDINGS_VERSION"
+      - "framework/languages/node/VERSION"
+      - "bindings/node/VERSION"
       - "framework/runtime/**"
       - "framework/languages/node/package.json"
       - "framework/languages/node/package-lock.json"
@@ -32,8 +32,8 @@ on:
       - ".github/actions/msvc-env/**"
       - "scripts/local-package/core/fetch-release.sh"
       - "scripts/local-package/http-client/**"
-      - "FRAMEWORK_VERSION"
-      - "BINDINGS_VERSION"
+      - "framework/languages/node/VERSION"
+      - "bindings/node/VERSION"
       - "framework/runtime/**"
       - "framework/languages/node/package.json"
       - "framework/languages/node/package-lock.json"
@@ -157,23 +157,14 @@ jobs:
           echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
           echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
 
-      # framework CI often runs minutes after a binding publish; the registry
-      # serves the package metadata before its tarball (up to ~30 min).
-      - name: Wait for the binding package on npm
+      - name: Build the checkout Node binding package
         shell: bash
         run: |
           version="${{ steps.core.outputs.binding_version }}"
-          url="https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-${version}.tgz"
-          for attempt in $(seq 1 45); do
-            if curl -sfIL -o /dev/null "${url}"; then
-              echo "@zlink-systems/zlink@${version} is available"
-              exit 0
-            fi
-            echo "attempt ${attempt}: ${url} not served yet; waiting 60s"
-            sleep 60
-          done
-          echo "::error::@zlink-systems/zlink@${version} tarball is not available on npm after 45 minutes" >&2
-          exit 1
+          mkdir -p .artifacts/wsl/npm
+          (cd bindings/node && npm ci --ignore-scripts && npm run build)
+          npm pack --silent ./bindings/node --pack-destination .artifacts/wsl/npm
+          test -f ".artifacts/wsl/npm/zlink-systems-zlink-${version}.tgz"
 
       - name: Build the local-package pin of @zlink-systems/http-client used by the workspace manifest
         shell: bash
@@ -183,14 +174,27 @@ jobs:
         run: |
           # The workspace manifest pins http-client to a local tarball; build its
           # dist with the same bootstrap the local-package flow uses, fed by the
-          # published binding tarball.
+          # checkout-built local binding tarball.
           version="${{ steps.core.outputs.binding_version }}"
           mkdir -p .artifacts/wsl/npm
-          curl -sSfL -o ".artifacts/wsl/npm/zlink-systems-zlink-${version}.tgz" \
-            "https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-${version}.tgz"
           bash scripts/local-package/http-client/build-wsl.sh node
           tar tzf .artifacts/wsl/npm/zlink-systems-http-client-*.tgz > "${RUNNER_TEMP}/http-client-files.txt"
           grep -q 'package/dist/index.js' "${RUNNER_TEMP}/http-client-files.txt"
+
+      - name: Pin framework install to the checkout Node binding package
+        working-directory: framework/languages/node
+        shell: bash
+        run: |
+          version="${{ steps.core.outputs.binding_version }}"
+          export BINDING_VERSION="${version}"
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const file = 'package.json';
+          const packageJson = JSON.parse(fs.readFileSync(file, 'utf8'));
+          packageJson.dependencies['@zlink-systems/zlink'] = `file:../../../.artifacts/wsl/npm/zlink-systems-zlink-${process.env.BINDING_VERSION}.tgz`;
+          fs.writeFileSync(file, `${JSON.stringify(packageJson, null, 2)}\n`);
+          NODE
+          BINDING_VERSION="${version}" npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 
       - name: Install framework dependencies
         working-directory: framework/languages/node
@@ -244,6 +248,7 @@ jobs:
   framework-node-cross-language:
     name: cross-language smoke
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     needs:
       - framework-node
 
@@ -280,6 +285,8 @@ jobs:
           echo "ZLINK_CORE_PACKAGE_PREFIX=${core_prefix}" >> "${GITHUB_ENV}"
           echo "ZLINK_LIBRARY_PATH=${core_prefix}/lib/libzlink.so.${core_version}" >> "${GITHUB_ENV}"
           echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
+          echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
+          echo "core_version=${core_version}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare the .NET local packages for the cross-language test host
         shell: bash
@@ -287,36 +294,30 @@ jobs:
           package_root="${GITHUB_WORKSPACE}/.artifacts/wsl"
           nuget_source="${package_root}/nuget"
           mkdir -p "${nuget_source}"
-          binding_version=$(sed -n 's/.*<ZLinkBindingsPackageVersion[^>]*>\(.*\)<\/ZLinkBindingsPackageVersion>.*/\1/p' framework/languages/dotnet/Directory.Packages.props | head -n1)
-          url="https://api.nuget.org/v3-flatcontainer/zlink/${binding_version}/zlink.${binding_version}.nupkg"
-          for attempt in $(seq 1 45); do
-            if curl -sSfL -o "${nuget_source}/Zlink.${binding_version}.nupkg" "${url}"; then
-              break
-            fi
-            echo "attempt ${attempt}: Zlink ${binding_version} not on nuget.org yet; waiting 60s"
-            sleep 60
-          done
+          binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/dotnet/VERSION)
+          core_version="${{ steps.core.outputs.core_version }}"
+          core_prefix="${{ steps.core.outputs.prefix }}"
+          dotnet pack bindings/dotnet/src/Zlink/Zlink.csproj \
+            -c Release \
+            -o "${nuget_source}" \
+            "-p:ZLinkCoreVersion=${core_version}" \
+            "-p:ZLinkCoreSource=local" \
+            "-p:ZLinkLinuxX64NativeRoot=${core_prefix}/lib" \
+            "-p:ZLinkCoreProvenancePath=${core_prefix}/share/zlink/core-package-provenance.json"
           test -s "${nuget_source}/Zlink.${binding_version}.nupkg" \
-            || { echo "::error::Zlink ${binding_version} is not available on nuget.org after 45 minutes" >&2; exit 1; }
+            || { echo "::error::Local Zlink ${binding_version} package was not created" >&2; exit 1; }
           dotnet pack framework/languages/dotnet/src/Zlink.HttpClient/Zlink.HttpClient.csproj -c Release -o "${nuget_source}"
           echo "ZLINK_LOCAL_PACKAGE_ROOT=${package_root}" >> "${GITHUB_ENV}"
           echo "ZLinkLocalPackageRoot=${package_root}" >> "${GITHUB_ENV}"
 
-      - name: Wait for the binding package on npm
+      - name: Build the checkout Node binding package
         shell: bash
         run: |
           version="${{ steps.core.outputs.binding_version }}"
-          url="https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-${version}.tgz"
-          for attempt in $(seq 1 45); do
-            if curl -sfIL -o /dev/null "${url}"; then
-              echo "@zlink-systems/zlink@${version} is available"
-              exit 0
-            fi
-            echo "attempt ${attempt}: ${url} not served yet; waiting 60s"
-            sleep 60
-          done
-          echo "::error::@zlink-systems/zlink@${version} tarball is not available on npm after 45 minutes" >&2
-          exit 1
+          mkdir -p .artifacts/wsl/npm
+          (cd bindings/node && npm ci --ignore-scripts && npm run build)
+          npm pack --silent ./bindings/node --pack-destination .artifacts/wsl/npm
+          test -f ".artifacts/wsl/npm/zlink-systems-zlink-${version}.tgz"
 
       - name: Build the local-package pin of @zlink-systems/http-client used by the workspace manifest
         shell: bash
@@ -326,13 +327,11 @@ jobs:
         run: |
           # The workspace manifest pins http-client to a local tarball; build its
           # dist with the same bootstrap the local-package flow uses, fed by the
-          # published binding tarball.
+          # checkout-built local binding tarball.
           version="${{ steps.core.outputs.binding_version }}"
           package_root="${ZLINK_LOCAL_PACKAGE_ROOT}"
           npm_root="${package_root}/npm"
           mkdir -p "${npm_root}"
-          curl -sSfL -o "${npm_root}/zlink-systems-zlink-${version}.tgz" \
-            "https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-${version}.tgz"
           ZLINK_LOCAL_PACKAGE_ROOT="${package_root}" bash scripts/local-package/http-client/build-wsl.sh node
           tar tzf "${npm_root}"/zlink-systems-http-client-*.tgz > "${RUNNER_TEMP}/http-client-files.txt"
           grep -q 'package/dist/index.js' "${RUNNER_TEMP}/http-client-files.txt"
@@ -340,8 +339,28 @@ jobs:
       - name: Install and build the Node framework workspace
         working-directory: framework/languages/node
         run: |
+          version="${{ steps.core.outputs.binding_version }}"
+          export BINDING_VERSION="${version}"
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const file = 'package.json';
+          const packageJson = JSON.parse(fs.readFileSync(file, 'utf8'));
+          packageJson.dependencies['@zlink-systems/zlink'] = `file:../../../.artifacts/wsl/npm/zlink-systems-zlink-${process.env.BINDING_VERSION}.tgz`;
+          fs.writeFileSync(file, `${JSON.stringify(packageJson, null, 2)}\n`);
+          NODE
+          BINDING_VERSION="${version}" npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           npm ci
           npm run build
+
+      - name: Cache Chromium for browser connector E2E
+        uses: actions/cache@v5
+        with:
+          path: framework/languages/node/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('framework/languages/node/package-lock.json') }}
+
+      - name: Install Chromium and Linux dependencies
+        working-directory: framework/languages/node
+        run: npm run browser:install:ci
 
       - name: Run Node framework cross-language smoke
         working-directory: framework/languages/node

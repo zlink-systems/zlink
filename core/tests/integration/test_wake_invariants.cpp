@@ -238,15 +238,11 @@ struct fixture_t
           dontwait_ ? ZLINK_SEND_FLAGS_DONTWAIT : ZLINK_SEND_FLAGS_NONE;
         zlink_submit_result_t result;
         if (pattern == router_router) {
-            result = zlink_send_part_rid (
-              sender, &receiver_rid, &part, flags, ZLINK_PART_FINAL, NULL,
-              NULL);
+            result = zlink_send_rid (sender, &receiver_rid, &part, 1, flags, NULL, NULL);
         } else if (pattern == pub_sub) {
-            result = zlink_publish_part (sender, "wake", &part, flags,
-                                         ZLINK_PART_FINAL);
+            result = zlink_publish (sender, "wake", &part, 1, flags);
         } else {
-            result = zlink_send_part (sender, &part, flags,
-                                      ZLINK_PART_FINAL, NULL, NULL);
+            result = zlink_send (sender, &part, 1, flags, NULL, NULL);
         }
         const int saved_errno = zlink_errno ();
         zlink_msg_close (&part);
@@ -259,28 +255,23 @@ struct fixture_t
         zlink_msg_t part;
         if (zlink_msg_init (&part) != ZLINK_CONFIG_OK)
             return false;
-        zlink_part_flag_t more = ZLINK_PART_MORE;
+        size_t more = 0;
         zlink_recv_result_t result = ZLINK_RECV_INTERNAL_ERROR;
         if (pattern == dealer_router || pattern == router_router) {
             const zlink_routing_id_t *source = NULL;
             zlink_reply_token_t token = UINT64_MAX;
-            result = zlink_router_recv_part (
-              receiver, &source, &token, &part, &more,
-              ZLINK_RECV_FLAGS_DONTWAIT);
+            result = zlink_router_recv (receiver, &source, &token, &part, 1, &more, ZLINK_RECV_FLAGS_DONTWAIT);
         } else if (pattern == pub_sub) {
             const zlink_routing_id_t *source = NULL;
             char topic[32];
             size_t topic_size = 0;
-            result = zlink_subscribe_part (
-              receiver, &source, topic, sizeof (topic), &topic_size, &part,
-              &more, ZLINK_RECV_FLAGS_DONTWAIT);
+            result = zlink_subscribe (receiver, &source, topic, sizeof (topic), &topic_size, &part, 1, &more, ZLINK_RECV_FLAGS_DONTWAIT);
         } else {
             const zlink_routing_id_t *source = NULL;
-            result = zlink_recv_part (receiver, &source, &part, &more,
-                                      ZLINK_RECV_FLAGS_DONTWAIT);
+            result = zlink_recv (receiver, &source, &part, 1, &more, ZLINK_RECV_FLAGS_DONTWAIT);
         }
         const bool ok = result == ZLINK_RECV_OK
-                        && more == ZLINK_PART_FINAL;
+                        && more == 1;
         zlink_msg_close (&part);
         return ok;
     }
@@ -496,8 +487,7 @@ zlink_submit_result_t submit_dontwait_part_copy (
 
     errno = 0;
     const zlink_submit_result_t result =
-      zlink_send_part (socket_, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                       ZLINK_PART_FINAL, user_context_, completion_id_);
+      zlink_send (socket_, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, user_context_, completion_id_);
     const int submit_errno = zlink_errno ();
     // The public part object is consumed on every result. The logical record
     // remains in the application buffer passed to this copy helper.

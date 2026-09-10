@@ -13,8 +13,6 @@ from ..._native.ffi import (
     ZLINK_COMPLETION_SEND,
     ZLINK_COMPLETION_WRITABLE,
     ZLINK_DONTWAIT,
-    ZLINK_PART_FINAL,
-    ZLINK_PART_MORE,
     ZLINK_SEND_ADMITTED,
     ZLINK_SEND_TERMINAL,
     ZlinkCompletion,
@@ -76,6 +74,7 @@ class _CompletionEntry:
         "kind",
         "loop",
         "future",
+        "admitted",
         "condition",
         "_published",
         "_captured",
@@ -92,11 +91,11 @@ class _CompletionEntry:
     def __init__(self, kind, loop=None, *, condition=None):
         self.kind = kind
         self.loop = loop
-        # SEND needs an awaitable only after admission actually parks.
+        self.admitted = loop.create_future() if loop is not None else None
         self.future = (
-            loop.create_future()
-            if loop is not None and kind != ZLINK_COMPLETION_SEND
-            else None
+            self.admitted
+            if kind == ZLINK_COMPLETION_SEND
+            else loop.create_future() if loop is not None else None
         )
         self.condition = threading.Condition() if condition is None else condition
         self._published = False
@@ -140,6 +139,10 @@ class _CompletionEntry:
         self._deliver(deliver)
         return True
 
+    def publish_request(self, completion_id):
+        self.succeed_admission()
+        return self.publish(completion_id)
+
     def fail_submit(self):
         with self.condition:
             if self._settled:
@@ -151,6 +154,8 @@ class _CompletionEntry:
             self.condition.notify_all()
             if self.future is not None and not self.future.done():
                 self.future.cancel()
+            if self.admitted is not None and not self.admitted.done():
+                self.admitted.cancel()
 
     def succeed_send(self):
         with self.condition:
@@ -161,6 +166,23 @@ class _CompletionEntry:
             self._native_wait = False
             deliver = self._settle_if_joined_locked()
         self._deliver(deliver)
+
+    def succeed_admission(self):
+        future = self.admitted
+        if future is None or future.done():
+            return
+
+        def finish():
+            if not future.done():
+                future.set_result(None)
+
+        if getattr(self.loop, "_thread_id", None) == threading.get_ident():
+            finish()
+            return
+        try:
+            self.loop.call_soon_threadsafe(finish)
+        except RuntimeError:
+            pass
 
     def fail(self, error):
         with self.condition:
@@ -307,13 +329,24 @@ class _CompletionEntry:
         def finish():
             with self.condition:
                 detached_now = self._detached
-            if detached_now or self.future.done():
+            if detached_now:
                 _close_messages(value)
                 return
-            if error is not None:
-                self.future.set_exception(error)
-            else:
-                self.future.set_result(value)
+            if self.admitted is not None and not self.admitted.done():
+                if error is not None:
+                    self.admitted.set_exception(error)
+                    if self.admitted is not self.future:
+                        self.admitted.exception()
+                else:
+                    self.admitted.set_result(None)
+            if self.future.done():
+                _close_messages(value)
+                return
+            if not self.future.done():
+                if error is not None:
+                    self.future.set_exception(error)
+                else:
+                    self.future.set_result(value)
 
         if getattr(self.loop, "_thread_id", None) == threading.get_ident():
             finish()
@@ -334,6 +367,12 @@ class _CompletionEntry:
                 except BaseException:
                     pass
         _close_messages(value)
+        for future in (self.admitted, self.future):
+            if future is not None and future.done() and not future.cancelled():
+                try:
+                    future.exception()
+                except BaseException:
+                    pass
 
     async def wait_async(self):
         with self.condition:
@@ -467,7 +506,7 @@ class _RequestEntry(_CompletionEntry):
 
     def publish_request(self, completion_id):
         self._release_payload()
-        return super().publish(completion_id)
+        return super().publish_request(completion_id)
 
     def fail(self, error):
         self._release_payload()
@@ -963,70 +1002,64 @@ class CompletionOwner:
             raise
         completion_id = ctypes.c_uint64(0)
         part_count = len(native_parts)
-        for index, native in enumerate(native_parts):
-            final = index == part_count - 1
-            part_flag = ZLINK_PART_FINAL if final else ZLINK_PART_MORE
-            context = ctypes.c_void_p(entry.context) if final and entry is not None else None
-            completion_out = ctypes.byref(completion_id) if final and entry is not None else None
-            try:
-                if timeout_ms is not None:
-                    rc = lib().zlink_request_part(
-                        self._socket._handle,
-                        None if native_rid is None else ctypes.byref(native_rid),
-                        ctypes.byref(native),
-                        flags,
-                        part_flag,
-                        int(timeout_ms) if final else 0,
-                        context,
-                        completion_out,
-                    )
-                elif native_rid is None:
-                    rc = lib().zlink_send_part(
-                        self._socket._handle,
-                        ctypes.byref(native),
-                        flags,
-                        part_flag,
-                        context,
-                        completion_out,
-                    )
-                else:
-                    rc = lib().zlink_send_part_rid(
-                        self._socket._handle,
-                        ctypes.byref(native_rid),
-                        ctypes.byref(native),
-                        flags,
-                        part_flag,
-                        context,
-                        completion_out,
-                    )
-            except BaseException:
-                self._close_unsubmitted(native_parts, index)
-                raise
-            if rc != int(SubmitResult.OK):
-                native_errno = lib().zlink_errno()
-                self._close_unsubmitted(native_parts, index)
-                return int(rc), native_errno, int(completion_id.value)
-        return int(SubmitResult.OK), 0, int(completion_id.value)
+        context = ctypes.c_void_p(entry.context) if entry is not None else None
+        completion_out = ctypes.byref(completion_id) if entry is not None else None
+        try:
+            if timeout_ms is not None:
+                rc = lib().zlink_request(
+                    self._socket._handle,
+                    None if native_rid is None else ctypes.byref(native_rid),
+                    native_parts,
+                    part_count,
+                    flags,
+                    int(timeout_ms),
+                    context,
+                    completion_out,
+                )
+            elif native_rid is None:
+                rc = lib().zlink_send(
+                    self._socket._handle,
+                    native_parts,
+                    part_count,
+                    flags,
+                    context,
+                    completion_out,
+                )
+            else:
+                rc = lib().zlink_send_rid(
+                    self._socket._handle,
+                    ctypes.byref(native_rid),
+                    native_parts,
+                    part_count,
+                    flags,
+                    context,
+                    completion_out,
+                )
+        except BaseException:
+            self._close_unsubmitted(native_parts)
+            raise
+        native_errno = lib().zlink_errno() if rc != int(SubmitResult.OK) else 0
+        return int(rc), native_errno, int(completion_id.value)
 
     def _attempt_send(self, entry):
         with self._lock:
             if self._shutdown or entry.settled:
-                return
+                return None
         try:
             native_parts = entry.clone_payload()
         except Exception as error:
             with self._lock:
                 if self._shutdown or entry.settled:
-                    return
+                    return None
             entry.fail(error)
             self._unregister(entry)
-            return
+            return None
         if native_parts is None:
-            return
+            return None
         with self._lock:
             if self._shutdown or entry.settled:
                 self._close_unsubmitted(native_parts)
-                return
+                return None
             try:
                 rc, native_errno, completion_id = self._submit_parts(
                     entry.target, native_parts, ZLINK_DONTWAIT, entry
@@ -1034,7 +1067,7 @@ class CompletionOwner:
             except BaseException as error:
                 entry.fail(error)
                 self._unregister(entry)
-                return
+                return None
             # Admission and token publication share the drain owner's lock.
             # A successful SEND never enters either completion registry.
             if completion_id != 0:
@@ -1063,6 +1096,7 @@ class CompletionOwner:
                     self._unregister(entry)
             else:
                 self._schedule_runtime_owner_locked(entry.loop)
+            return rc
 
     def _attempt_request(self, entry):
         with self._lock:
@@ -1119,28 +1153,38 @@ class CompletionOwner:
             else:
                 self._schedule_runtime_owner_locked(entry.loop)
 
-    async def submit_send(self, target, payload):
+    def submit_send(self, target, payload):
+        loop = asyncio.get_running_loop()
         if _native_extension is not None:
-            entry = _native_extension.start_send(
-                self, target, payload, asyncio.get_running_loop()
+            rc, entry = _native_extension.start_send(
+                self, target, payload, loop
             )
-            return await entry.wait_async()
-        native_parts = _materialize_native_parts(payload)
-        entry = _SendEntry(
-            asyncio.get_running_loop(),
-            target,
-            native_parts,
-            condition=self._state_changed,
-        )
-        with self._lock:
-            if self._shutdown:
-                entry._release_payload()
-                raise SubmitError(
-                    SubmitResult.INVALID_STATE,
-                    getattr(errno, "ESHUTDOWN", errno.ECANCELED),
-                )
-            self._attempt_send(entry)
-        await entry.wait_async()
+        else:
+            native_parts = _materialize_native_parts(payload)
+            entry = _SendEntry(
+                loop,
+                target,
+                native_parts,
+                condition=self._state_changed,
+            )
+            with self._lock:
+                if self._shutdown:
+                    entry._release_payload()
+                    raise SubmitError(
+                        SubmitResult.INVALID_STATE,
+                        getattr(errno, "ESHUTDOWN", errno.ECANCELED),
+                    )
+                rc = self._attempt_send(entry)
+        if rc not in (
+            int(SubmitResult.OK),
+            int(SubmitResult.BACKPRESSURED),
+        ):
+            error = entry._error
+            entry.detach()
+            if error is not None:
+                raise error
+            raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EIO)
+        return SubmitResult(rc), entry.admitted
 
     def submit_send_sync(self, target, payload):
         native_parts = _materialize_native_parts(payload)
@@ -1151,7 +1195,7 @@ class CompletionOwner:
             raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO)
 
     def _finish_request_submit(self, entry, completion_id, *, schedule):
-        if not entry.publish(completion_id):
+        if not entry.publish_request(completion_id):
             return
         with self._lock:
             if self._shutdown or self._entries.get(entry.context) is not entry:
@@ -1163,62 +1207,74 @@ class CompletionOwner:
             if schedule:
                 self._schedule_runtime_owner_locked(entry.loop)
 
-    async def submit_request(self, target, payload, timeout_ms):
+    def submit_request(self, target, payload, timeout_ms):
+        loop = asyncio.get_running_loop()
         if _native_extension is not None:
-            entry = _native_extension.start_request(
-                self, target, payload, asyncio.get_running_loop(), int(timeout_ms)
+            rc, entry = _native_extension.start_request(
+                self, target, payload, loop, int(timeout_ms)
             )
-            return await entry.wait_async()
-        native_parts = _materialize_native_parts(payload)
-        entry = _RequestEntry(asyncio.get_running_loop(), timeout_ms)
-        with self._lock:
-            if self._shutdown:
-                self._close_unsubmitted(native_parts)
-                raise SubmitError(
-                    SubmitResult.INVALID_STATE,
-                    getattr(errno, "ESHUTDOWN", errno.ECANCELED),
-                )
-            self._entries[entry.context] = entry
-            try:
-                rc, native_errno, completion_id = self._submit_parts(
-                    target, native_parts, ZLINK_DONTWAIT, entry, int(timeout_ms)
-                )
-            except BaseException:
-                entry.fail_submit()
-                self._unregister(entry)
-                raise
-            if rc == int(SubmitResult.OK):
-                if completion_id == 0:
+        else:
+            native_parts = _materialize_native_parts(payload)
+            entry = _RequestEntry(loop, timeout_ms)
+            with self._lock:
+                if self._shutdown:
+                    self._close_unsubmitted(native_parts)
+                    raise SubmitError(
+                        SubmitResult.INVALID_STATE,
+                        getattr(errno, "ESHUTDOWN", errno.ECANCELED),
+                    )
+                self._entries[entry.context] = entry
+                try:
+                    rc, native_errno, completion_id = self._submit_parts(
+                        target, native_parts, ZLINK_DONTWAIT, entry, int(timeout_ms)
+                    )
+                except BaseException:
                     entry.fail_submit()
                     self._unregister(entry)
-                    raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO)
-                self._finish_request_submit(entry, completion_id, schedule=True)
-            elif (
-                rc == int(SubmitResult.BACKPRESSURED)
-                and native_errno == errno.EAGAIN
-                and completion_id != 0
-            ):
-                entry.await_writable(completion_id)
-                self._track_native_wait_locked(entry)
-                try:
-                    entry.retain_retry(target, payload)
-                except BaseException as error:
-                    entry.fail(error)
-                if entry.releasable:
-                    self._unregister(entry)
-                else:
-                    self._schedule_runtime_owner_locked(entry.loop)
-            else:
-                if completion_id != 0:
+                    raise
+                if rc == int(SubmitResult.OK):
+                    if completion_id == 0:
+                        entry.fail_submit()
+                        self._unregister(entry)
+                        raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO)
+                    self._finish_request_submit(entry, completion_id, schedule=True)
+                elif (
+                    rc == int(SubmitResult.BACKPRESSURED)
+                    and native_errno == errno.EAGAIN
+                    and completion_id != 0
+                ):
                     entry.await_writable(completion_id)
                     self._track_native_wait_locked(entry)
-                    entry.fail(self._submit_error(rc, native_errno))
-                    self._schedule_runtime_owner_locked(entry.loop)
+                    try:
+                        entry.retain_retry(target, payload)
+                    except BaseException as error:
+                        entry.fail(error)
+                    if entry.releasable:
+                        self._unregister(entry)
+                    else:
+                        self._schedule_runtime_owner_locked(entry.loop)
                 else:
-                    entry.fail_submit()
-                    self._unregister(entry)
-                    _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
-        return await entry.wait_async()
+                    if completion_id != 0:
+                        entry.await_writable(completion_id)
+                        self._track_native_wait_locked(entry)
+                        entry.fail(self._submit_error(rc, native_errno))
+                        self._schedule_runtime_owner_locked(entry.loop)
+                    else:
+                        entry.fail_submit()
+                        self._unregister(entry)
+                        _raise_result_error(
+                            SubmitError, SubmitResult, rc, native_errno
+                        )
+        if rc not in (
+            int(SubmitResult.OK),
+            int(SubmitResult.BACKPRESSURED),
+        ):
+            error = entry._error
+            entry.detach()
+            if error is not None:
+                raise error
+            raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EIO)
+        return SubmitResult(rc), entry.admitted, entry.future
 
     def submit_request_sync(self, target, payload, timeout_ms):
         native_parts = _materialize_native_parts(payload)

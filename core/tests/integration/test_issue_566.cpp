@@ -45,11 +45,17 @@ void test_issue_566 ()
         //  a very slow system).
         for (int attempt = 0; attempt < 500; attempt++) {
             zlink_poll (NULL, 0, 2, NULL);
-            int rc = zlink_send (router, routing_id, 10, ZLINK_SNDMORE);
-            if (rc == -1 && errno == EHOSTUNREACH)
+            zlink_routing_id_t target = {};
+            target.size = 10;
+            memcpy (target.data, routing_id, target.size);
+            zlink_msg_t payload;
+            TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&payload, 5));
+            memcpy (zlink_msg_data (&payload), "HELLO", 5);
+            const zlink_submit_result_t rc = zlink_send_rid (
+              router, &target, &payload, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
+            if (rc == ZLINK_SUBMIT_NOT_CONNECTED && errno == EHOSTUNREACH)
                 continue;
-            TEST_ASSERT_EQUAL (10, rc);
-            send_string_expect_success (router, "HELLO", 0);
+            TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, rc);
             break;
         }
         recv_string_expect_success (dealer, "HELLO", 0);

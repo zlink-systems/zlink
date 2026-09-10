@@ -8,6 +8,12 @@ use std::time::Duration;
 
 use zlink::{Context, Message, Poller, Received, RecvFlags, RoutingId, Timer};
 
+fn await_send(
+    submission: Result<zlink::SendSubmission, zlink::SubmitError>,
+) -> Result<(), zlink::SubmitError> {
+    test_support::block_on(submission?.admitted)
+}
+
 #[test]
 fn send_consumes_message_ownership() {
     let ctx = Context::new().unwrap();
@@ -21,7 +27,7 @@ fn send_consumes_message_ownership() {
     // After send, the message is consumed (moved into native).
     // Rust's move semantics prevent reuse at compile time.
     let msg = Message::try_from(b"owned-data").unwrap();
-    test_support::block_on(a.send().message(msg).submit()).unwrap();
+    await_send(a.send().message(msg).submit()).unwrap();
     // `msg` cannot be used here – Rust ownership enforced
 
     let mut received = Received::empty();
@@ -50,7 +56,7 @@ fn send_multipart_consumes_all_parts() {
     for part in iter {
         op = op.message(part);
     }
-    test_support::block_on(op.submit()).unwrap();
+    await_send(op.submit()).unwrap();
 }
 
 #[test]
@@ -64,7 +70,7 @@ fn recv_ownership_transfers_to_caller() {
     thread::sleep(Duration::from_millis(50));
 
     let msg = Message::try_from(b"recv-test").unwrap();
-    test_support::block_on(b.send().message(msg).submit()).unwrap();
+    await_send(b.send().message(msg).submit()).unwrap();
 
     let mut received = Received::empty();
     a.recv(&mut received, RecvFlags::NONE).unwrap();
@@ -100,7 +106,7 @@ fn send_failure_does_not_leak() {
 
     let rid = RoutingId::from(b"ghost");
     let msg = Message::try_from(b"will-fail").unwrap();
-    let _ = test_support::block_on(router.send(&rid).message(msg).submit());
+    let _ = await_send(router.send(&rid).message(msg).submit());
     // msg is consumed regardless of success/failure – no native leak
 }
 
@@ -125,7 +131,7 @@ fn repeated_multipart_recv_preserves_shape() {
     for part in iter {
         op = op.message(part);
     }
-    test_support::block_on(op.submit()).unwrap();
+    await_send(op.submit()).unwrap();
     let mut direct = Received::empty();
     a1.recv(&mut direct, RecvFlags::NONE).unwrap();
     let direct_count = direct.parts().len();
@@ -153,7 +159,7 @@ fn repeated_multipart_recv_preserves_shape() {
     for part in iter {
         op = op.message(part);
     }
-    test_support::block_on(op.submit()).unwrap();
+    await_send(op.submit()).unwrap();
     let mut repeated = Received::empty();
     a2.recv(&mut repeated, RecvFlags::NONE).unwrap();
     let repeated_data: Vec<Vec<u8>> = repeated
@@ -178,7 +184,7 @@ fn pull_receive_owns_parts() {
     thread::sleep(Duration::from_millis(50));
 
     let msg = Message::try_from(b"cb-payload").unwrap();
-    test_support::block_on(client.send().message(msg).submit()).unwrap();
+    await_send(client.send().message(msg).submit()).unwrap();
     let mut received = Received::empty();
     server.recv(&mut received, RecvFlags::NONE).unwrap();
     assert_eq!(received.parts()[0].as_bytes(), b"cb-payload");
@@ -207,14 +213,14 @@ fn request_future_preserves_more_than_1024_reply_parts() {
         reply.submit().unwrap();
     });
 
-    let parts = test_support::block_on(
-        dealer
-            .request()
-            .message(Message::try_from(b"many-parts").unwrap())
-            .timeout(Duration::from_secs(5))
-            .submit(),
-    )
-    .expect("request failed");
+    let submission = dealer
+        .request()
+        .message(Message::try_from(b"many-parts").unwrap())
+        .timeout(Duration::from_secs(5))
+        .submit()
+        .expect("request submit failed");
+    test_support::block_on(submission.admitted).expect("request admission failed");
+    let parts = test_support::block_on(submission.reply).expect("request failed");
     assert_eq!(parts.len(), PART_COUNT);
     assert_eq!(parts[1024].as_bytes(), 1024_u32.to_le_bytes());
     server.join().unwrap();

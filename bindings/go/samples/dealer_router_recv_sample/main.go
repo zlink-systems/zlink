@@ -33,14 +33,19 @@ func main() {
 	samplecommon.Must(dealer.Connect(endpoint))
 	samplecommon.WaitConnected(routerMon, dealerMon)
 
-	samplecommon.Must(dealer.Send().Message(
-		samplecommon.Message("ping")).Submit(context.Background()))
+	submission, err := dealer.Send().Message(
+		samplecommon.Message("ping")).Submit(context.Background())
+	samplecommon.Must(err)
+	samplecommon.Must(submission.Admitted(context.Background()))
 
 	var request zlink.Received
 	_, err = router.Recv(&request, zlink.RecvFlagsNone)
 	samplecommon.Must(err)
 	defer request.Close()
-	err = request.Send().Message(samplecommon.Message("pong")).Submit(context.Background())
+	submission, err = request.Send().Message(samplecommon.Message("pong")).Submit(context.Background())
+	if err == nil {
+		err = submission.Admitted(context.Background())
+	}
 	samplecommon.Must(err)
 
 	var reply zlink.Received

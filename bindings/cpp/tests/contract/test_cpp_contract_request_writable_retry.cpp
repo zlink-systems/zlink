@@ -170,7 +170,7 @@ void test_hwm_request_waits_for_its_writable_and_retries ()
         zlink::message_t request = zlink_cpp_contract::make_message (payload);
         tasks.push_back (await_reply (
           dealer.request ().message (request)
-            .timeout (std::chrono::seconds (30)).async ()));
+            .timeout (std::chrono::seconds (30)).async ().reply));
         assert (!request.valid ());
     }
 
@@ -219,11 +219,11 @@ void test_connect_before_bind_mixes_request_and_send_tokens ()
       zlink_cpp_contract::make_message ("connect-before-bind-request");
     value_task_t<reply_parts_t> request_task = await_reply (
       dealer.request ().message (request)
-        .timeout (std::chrono::seconds (10)).async ());
+        .timeout (std::chrono::seconds (10)).async ().reply);
     zlink::message_t data =
       zlink_cpp_contract::make_message ("connect-before-bind-send");
     void_task_t send_task = await_send (
-      dealer.send ().message (data).async ());
+      dealer.send ().message (data).async ().admitted);
     assert (!request_task.ready ());
     assert (!send_task.ready ());
     assert (!request.valid () && !data.valid ());
@@ -275,23 +275,38 @@ void test_close_settles_request_wait_token_as_typed_terminal ()
     dealer.connect (zlink_cpp_contract::unique_tcp ("request-close-token"));
 
     zlink::message_t request = zlink_cpp_contract::make_message ("close-token");
-    value_task_t<reply_parts_t> task = await_reply (
+    zlink::request_submission_t submission =
       dealer.request ().message (request)
-        .timeout (std::chrono::seconds (10)).async ());
-    assert (!task.ready ());
+        .timeout (std::chrono::seconds (10)).async ();
+    assert (submission.result == ZLINK_SUBMIT_BACKPRESSURED);
+    void_task_t admitted = await_send (std::move (submission.admitted));
+    value_task_t<reply_parts_t> reply =
+      await_reply (std::move (submission.reply));
+    assert (!admitted.ready ());
+    assert (!reply.ready ());
     assert (!request.valid ());
 
     dealer.close ();
-    assert (task.ready ());
-    bool terminated = false;
+    assert (admitted.ready ());
+    assert (reply.ready ());
+    bool admitted_terminated = false;
     try {
-        (void) task.get ();
+        admitted.get ();
     }
     catch (const zlink::submit_error_t &error) {
-        terminated = error.result () == zlink::submit_result_t::terminated
+        admitted_terminated =
+          error.result () == zlink::submit_result_t::terminated
           && error.internal_errno () == ESHUTDOWN;
     }
-    assert (terminated);
+    bool reply_terminated = false;
+    try {
+        (void) reply.get ();
+    }
+    catch (const zlink::submit_error_t &error) {
+        reply_terminated = error.result () == zlink::submit_result_t::terminated
+          && error.internal_errno () == ESHUTDOWN;
+    }
+    assert (admitted_terminated && reply_terminated);
 }
 
 } // namespace

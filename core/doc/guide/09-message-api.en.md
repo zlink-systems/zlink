@@ -6,9 +6,9 @@
 # Message API and ownership
 
 `zlink_msg_t` owns one message part. Initialize it before use and close it once
-unless ownership was moved or the part was consumed by a send. A `*_part` send
-consumes the part on both success and failure; the consumed part is left in the
-empty initialized state and can be closed or reused as is.
+unless ownership was moved or the part was consumed by a send. A whole-message
+send consumes every array slot on both success and failure; each consumed slot
+is left empty and initialized and can be closed or reused as is.
 
 ## Create a part
 
@@ -19,25 +19,26 @@ empty initialized state and can be closed or reused as is.
 
 ## Multipart send
 
-Send each part with the typed part API. Use `ZLINK_PART_MORE` until the final
-part and `ZLINK_PART_FINAL` for the last part. The content of a part consumed
-by a send is gone on both success and failure, so copy it before the call if
-the same content must be sent again.
+Place all parts in array order and send the complete record with one
+`zlink_send()` call. The array contents are consumed on both success and
+failure, so copy the complete record before the call if it may need to be sent
+again.
 
 ```c
-zlink_msg_t part;
-zlink_msg_init_size(&part, payload_size);
-memcpy(zlink_msg_data(&part), payload, payload_size);
-/* A send consumes the part on success and failure — the part is empty afterwards. */
-zlink_send_part(socket, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-                NULL, NULL);
+zlink_msg_t parts[1];
+zlink_msg_init_size(&parts[0], payload_size);
+memcpy(zlink_msg_data(&parts[0]), payload, payload_size);
+/* A send consumes the full array on success and failure; the slot is empty afterwards. */
+zlink_send(socket, parts, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
 ```
 
 ## Receive
 
-Typed receive functions fill a caller-initialized `zlink_msg_t` and report
-whether another part follows. Close or move every received part exactly once.
-Routing ids and topics are returned as metadata rather than payload frames.
+Typed receive functions fill a caller-provided `zlink_msg_t` array with a
+complete record and return its part count. The slots need not be initialized.
+Close a successful array with `zlink_multipart_close()` or move each part
+exactly once. Routing ids and topics are returned as metadata rather than
+payload frames.
 
 For a successful REQUEST completion, `zlink_completion_recv()` transfers a
 Core-owned contiguous reply array into `zlink_completion_t`. Read or move its

@@ -261,7 +261,13 @@ sample.matchmakingRouterEndpoint=tcp://$($matchmakingRouter.Host):$($matchmaking
     Wait-LogCount @((Join-Path $LogDir "session-b.log")) "bingo-ready kind=mesh-route node=session-b mesh=room" 1
 
     $clientLog = Join-Path $LogDir "client.log"
-    & (Get-AppBin "Client" "Client") --config $clientConfig *> $clientLog
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & (Get-AppBin "Client" "Client") --config $clientConfig *> $clientLog
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "Client run failed."
     }

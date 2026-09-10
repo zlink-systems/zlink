@@ -62,14 +62,14 @@ fn main() {
         router_thread
     });
 
-    let reply = sample_support::block_on(
-        dealer_socket
-            .request()
-            .message(Message::try_from(b"ping").expect("request message failed"))
-            .timeout(Duration::from_secs(2))
-            .submit(),
-    )
-    .expect("dealer request submit failed");
+    let submission = dealer_socket
+        .request()
+        .message(Message::try_from(b"ping").expect("request message failed"))
+        .timeout(Duration::from_secs(2))
+        .submit()
+        .expect("dealer request submit failed");
+    sample_support::block_on(submission.admitted).expect("request admission failed");
+    let reply = sample_support::block_on(submission.reply).expect("request reply failed");
     assert_eq!(reply[0].as_str().unwrap_or("?"), "pong");
     drop(request_handler.join().expect("request handler failed"));
 

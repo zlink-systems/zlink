@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -101,19 +102,19 @@ func runMultiDealerRouterEchoWindow(
 	events := make([]zlink.PollEvent, len(dealers))
 	for i, dealer := range dealers {
 		perfcommon.Must(poller.AddSocket(
-			dealer.socket, perfcommon.ZLinkPollIn|zlink.PollCompletion, uintptr(i)))
+			dealer.socket, perfcommon.ZLinkPollIn, uintptr(i)))
 	}
 
 	payloads := make([][]byte, len(dealers))
 	for index := range payloads {
 		payloads[index] = perfcommon.PreparePayload(msgSize)
 	}
-	submit := func(index int) error {
-		if sendErr := sendMultiDealerRouterRequest(
-			dealers[index].socket, payloads[index], window); sendErr != nil {
-			return fmt.Errorf("multi dealer/router client send: %w", sendErr)
+	submit := func(index int) (zlink.SendSubmission, error) {
+		submission, sendErr := sendMultiDealerRouterRequest(dealers[index].socket, payloads[index], window)
+		if sendErr != nil {
+			return nil, fmt.Errorf("multi dealer/router client send: %w", sendErr)
 		}
-		return nil
+		return submission, nil
 	}
 	pendingReplies := 0
 	progress := func(wait time.Duration) error {
@@ -150,10 +151,10 @@ func sendMultiDealerRouterRequest(
 	socket *zlink.DealerSocket,
 	payload []byte,
 	window perfcommon.BenchmarkWindow,
-) error {
+) (zlink.SendSubmission, error) {
 	perfcommon.StampWindowPayload(payload, window.ActiveAt)
 	message := perfcommon.NewMessage(payload)
-	return perfcommon.SubmitMeasurementSend(socket.Send(), message)
+	return perfcommon.SubmitMeasurementSendSubmission(context.Background(), socket.Send(), message)
 }
 
 func drainMultiDealerRouterReplies(

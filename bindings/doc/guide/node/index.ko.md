@@ -48,7 +48,7 @@ server.recv(received);
 console.log(received.parts[0].data().toString()); // PING
 received.close();
 
-await server.send().message(Buffer.from('ACK')).submit();
+await server.send().message(Buffer.from('ACK')).submit().admitted;
 
 server.close();
 ctx.close();
@@ -60,7 +60,7 @@ const ctx = zlink.createContext();
 const client = zlink.createPairSocket(ctx);
 client.connect('tcp://127.0.0.1:5555');
 
-await client.send().message(Buffer.from('PING')).submit();
+await client.send().message(Buffer.from('PING')).submit().admitted;
 
 const received = new zlink.Received();
 client.recv(received);
@@ -89,8 +89,8 @@ Node 바인딩은 `Buffer`를 메시지로 직접 씁니다. `message()`를 호�
 만들기 때문에 원본 Buffer를 마음껏 재사용할 수 있습니다.
 
 ```javascript
-await socket.send().message(Buffer.from('hello')).submit();
-await socket.send().message(Buffer.from([0x01, 0x02])).submit();
+await socket.send().message(Buffer.from('hello')).submit().admitted;
+await socket.send().message(Buffer.from([0x01, 0x02])).submit().admitted;
 
 // 수신 후 페이로드 접근
 const received = new zlink.Received();
@@ -101,18 +101,20 @@ received.close();
 ```
 
 HWM 대기 가능 send는 비동기 `submit()`과 동기 `submit_sync()` terminal을
-제공합니다. Node 이벤트 루프에서는 Promise를 반환하는 `submit()`을 기본으로 사용합니다.
-이 terminal은 DONTWAIT을 사용하고 socket completion queue에서 settle됩니다.
+제공합니다. Node 이벤트 루프에서는 결과 객체를 돌려주는 `submit()`을 기본으로 사용합니다.
+`submit()`은 `SendSubmission`(`result`: `OK`|`BACKPRESSURED` 동기 필드, `admitted: Promise<void>`)을
+돌려주며 DONTWAIT을 사용하고 admission은 socket completion queue에서 settle됩니다.
 `submit_sync()`은 local admission까지 Core 안에서 blocking합니다.
 
 ```javascript
-await socket.send().message(Buffer.from('data')).submit(); // 비동기
+const send = socket.send().message(Buffer.from('data')).submit(); // 결과 객체
+if (send.result === SubmitResult.BACKPRESSURED) await send.admitted; // HWM일 때만 대기
 socket.send().message(Buffer.from('data')).submit_sync();  // 동기 Core admission
 ```
 
-Request는 reply까지 blocking하는 `submit_sync()`과 socket completion queue에서 settle되는
-`Promise<Message[]>`를 반환하는 `submit()`을 제공합니다. Reply는 terminal 결과이며 별도
-DATA receive가 아닙니다.
+Request는 reply까지 blocking하는 `submit_sync()`과, `RequestSubmission`(`result`·`admitted`에
+`reply: Promise<Message[]>` 추가)을 돌려주는 `submit()`을 제공합니다. `result`가 `OK`면 바로
+`reply`를 기다리면 되고, reply는 terminal 결과이며 별도 DATA receive가 아닙니다.
 
 Core가 pre-admission operation을 접수한 뒤 retry를 소유하므로 caller retry queue를 만들거나
 payload를 재전송하지 않습니다. 공용 native `ZLINK_OPT_PENDING_MAX_MSGS/BYTES` 제한은 pending
@@ -185,13 +187,13 @@ try {
 ```javascript
 // Copy: 같은 버퍼를 공유하는 새 핸들. 둘 다 각자 close.
 const shared = msg.copy();
-await socket.send().message(shared).submit();  // shared는 소비됨
+await socket.send().message(shared).submit().admitted;  // shared는 소비됨
 // msg는 여전히 유효
 
 // Move: 받은 메시지를 사본 없이 그대로 echo (가장 효율적)
 const out = new zlink.Message();
 receivedPart.move(out);                         // receivedPart는 empty가 됨
-await socket.send(routingId).message(out).submit();
+await socket.send(routingId).message(out).submit().admitted;
 
 // Clone: 독립 복제 후 수정
 const dup = msg.clone();
@@ -215,7 +217,7 @@ Node 바인딩은 작업별 에러 클래스를 던집니다.
 
 ```javascript
 try {
-  await socket.send().message(Buffer.from('data')).submit();
+  await socket.send().message(Buffer.from('data')).submit().admitted;
 } catch (error) {
   if (error instanceof zlink.SubmitError) {
     if (error.result === zlink.SubmitResult.Backpressured) {
@@ -242,9 +244,9 @@ try {
 | `zlink_socket(ctx, type)` | `zlink.createPairSocket(ctx)` 등 |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + NONE | `socket.send().message(buf).submit_sync()` |
-| DONTWAIT send + completion pull | `await socket.send().message(buf).submit()` |
-| `zlink_recv_part(...)` | `socket.recv(received)` |
+| `zlink_send(..., parts, count, ...)` / `zlink_send_rid(..., parts, count, ...)` + NONE | `socket.send().message(buf).submit_sync()` |
+| DONTWAIT send + completion pull | `await socket.send().message(buf).submit().admitted` |
+| `zlink_recv(..., parts_out, capacity, count_out, ...)` | `socket.recv(received)` |
 | `zlink_msg_data(msg)` | `part.data()` (Buffer) |
 | `zlink_routing_id_t` | `zlink.RoutingId` |
 | `zlink_socket_monitor_open(...)` | `socket.monitorOpen([...])` |
