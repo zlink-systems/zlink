@@ -637,6 +637,7 @@ class zlink_raw_driver_t : public driver_t
             auto parts = make_parts (_payload_size, _phase, seq);
             _counters->enter ();
             _counters->submitted.fetch_add (1, std::memory_order_relaxed);
+            bool yield_after_error = false;
             try {
                 zlink::request_submission_t submission =
                   request_operation ()
@@ -664,6 +665,11 @@ class zlink_raw_driver_t : public driver_t
                     std::fprintf (stderr, "raw operation failed: %s\n", error.what ());
                 _counters->leave ();
                 _counters->errors.fetch_add (1, std::memory_order_relaxed);
+                yield_after_error = true;
+            }
+            // co_await는 예외 handler 안에서 쓸 수 없다. 집계는 handler가 하고
+            // 양보는 handler를 벗어난 뒤에 한다. 의미는 같다.
+            if (yield_after_error) {
                 co_await _ready.schedule ();
                 continue;
             }
