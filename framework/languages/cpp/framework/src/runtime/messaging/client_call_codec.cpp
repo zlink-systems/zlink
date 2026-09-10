@@ -4,7 +4,6 @@
 
 #include <atomic>
 #include <ctime>
-#include <iomanip>
 
 namespace zlink::framework::runtime::messaging
 {
@@ -37,9 +36,9 @@ std::string format_utc_deadline (std::chrono::system_clock::time_point deadline)
 #else
     gmtime_r (&time, &tm);
 #endif
-    std::ostringstream output;
-    output << std::put_time (&tm, "%Y-%m-%dT%H:%M:%SZ");
-    return output.str ();
+    char output[64];
+    const auto size = std::strftime (output, sizeof (output), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    return std::string (output, size);
 }
 
 } // namespace

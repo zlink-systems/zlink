@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -41,6 +42,31 @@ public sealed class ServiceRuntimeFoundationTests
         {
             ZLinkMessageParts.DisposeAll(decoded);
         }
+    }
+
+    [Fact]
+    public void FrameworkMultipart_Message_Preserves_Wire_And_Decodes_Shared_Views()
+    {
+        using var header = Message.From(new byte[] { 1, 2, 3 });
+        using var body = Message.From(new byte[] { 4, 5, 6, 7 });
+        IReadOnlyList<Message> parts = [header, body];
+        var expectedWire = ZLinkApplicationPayloadEnvelopeCodec
+            .EncodeFrameworkMultipart(parts);
+
+        using var encoded = ZLinkApplicationPayloadEnvelopeCodec
+            .EncodeFrameworkMultipartMessage(parts);
+
+        Assert.Equal(expectedWire, encoded.ToArray());
+        Assert.True(
+            ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                encoded,
+                out var decoded));
+        Assert.NotNull(decoded);
+        Assert.Equal(new byte[] { 1, 2, 3 }, decoded.GetSpan(0).ToArray());
+        Assert.Equal(new byte[] { 4, 5, 6, 7 }, decoded.GetSpan(1).ToArray());
+        Assert.True(MemoryMarshal.TryGetArray(decoded.GetMemory(0), out var first));
+        Assert.True(MemoryMarshal.TryGetArray(decoded.GetMemory(1), out var second));
+        Assert.Same(first.Array, second.Array);
     }
 
     [Fact]
@@ -1149,6 +1175,51 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
+    public async Task ManagedNode_RegisteredTerminal_ReachesDispatcherWithoutHostMailboxDrain()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "direct-completion");
+        var rid = RoutingId.From("direct-completion");
+        node.SetRoutingId(rid);
+        var table = new ZLinkMeshCompletionTable();
+        node.SetCompletionHandlerCore(table.TryComplete);
+        using var payload = Message.From(new byte[] { 1 });
+        Assert.Equal(SubmitResult.Ok,
+            node.RequestToNode(rid, [payload], out var operationId, TimeSpan.FromSeconds(3)));
+        var completed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.True(table.Register(operationId, (record, parts) =>
+        {
+            try
+            {
+                Assert.True(ZLinkCompletionDispatcher.IsCurrentExecution);
+                Assert.Equal(operationId, record.OperationId);
+                Assert.Equal((int)RequestResult.Ok, record.TerminalResult);
+                completed.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                completed.TrySetException(exception);
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+            }
+        }));
+        using var ready = new MeshReadyBatch();
+        node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+        using var claim = ready.TakeClaim(0);
+        using var received = new MeshReceiveBatch();
+        Assert.True(claim.Receive(received, RecvFlags.DontWait));
+        Assert.Equal(SubmitResult.Ok, received[0].Reply([payload]));
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await table.CompletionDrained;
+        ready.Reset();
+        node.DrainReady(MeshReadyDomains.Infrastructure, ready, RecvFlags.DontWait);
+        Assert.Equal(0, ready.Count);
+    }
+
+    [Fact]
     public async Task ManagedNode_Status_RemainsReadable_DuringConcurrentQueueDrain()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -1358,15 +1429,9 @@ public sealed class ServiceRuntimeFoundationTests
         using var replyPart = Message.From(new byte[] { 9, 8, 7 });
         Assert.Equal(SubmitResult.Ok, received[0].Reply([replyPart]));
 
-        var reply = await request;
-        try
-        {
-            Assert.Equal(new byte[] { 9, 8, 7 }, Assert.Single(reply).ToArray());
-        }
-        finally
-        {
-            ZLinkMessageParts.DisposeAll(reply);
-        }
+        using var reply = await request;
+        Assert.Equal(1, reply.PartCount);
+        Assert.Equal(new byte[] { 9, 8, 7 }, reply.ApplicationPayloadView!.GetSpan(0).ToArray());
     }
 
     [Fact]
@@ -2122,7 +2187,9 @@ public sealed class ServiceRuntimeFoundationTests
         await Task.Delay(100);
         await WaitUntilAsync(() =>
             applicationJobQueue.GetStatus().CapacityWaiters == 1);
-        Assert.Equal(1UL, target.Status().PendingApplicationMessages);
+        // Ordinary ingress waits before the binding receive, so saturation
+        // cannot create an unaccounted owner-mailbox backlog.
+        Assert.Equal(0UL, target.Status().PendingApplicationMessages);
 
         occupied.ReleaseForHandlerStart();
         await WaitUntilAsync(() =>
@@ -2137,6 +2204,77 @@ public sealed class ServiceRuntimeFoundationTests
             0UL,
             applicationJobQueue.GetPressureMetrics()
                 .FlowStateConfigFailures);
+    }
+
+    [Fact]
+    public async Task Managed_mesh_pump_claims_a_preadmitted_batch_within_shared_capacity()
+    {
+        const int capacity = 8;
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var applicationJobQueue = new ZLinkApplicationJobQueue(
+            new ZLinkApplicationJobQueueCapacity(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                ConfiguredManualMax: capacity,
+                EffectiveProcessorCount: capacity,
+                EffectiveMaxQueuedApplicationJobs: capacity));
+        await using var source = new ZLinkManagedMeshNode(context, "orders");
+        await using var target = new ZLinkManagedMeshNode(
+            context,
+            "orders",
+            applicationJobQueue: applicationJobQueue);
+        await using var pump = new ZLinkMeshDispatchPump(
+            target,
+            new ZLinkMeshCompletionTable(),
+            applicationJobQueue);
+        var completed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var receivedCount = 0;
+        var maximumBatch = 0;
+        pump.SetNodeRouteHandler((records, _) =>
+        {
+            maximumBatch = Math.Max(maximumBatch, records.Count);
+            receivedCount += records.Count;
+            foreach (var record in records)
+                record.Dispose();
+            if (receivedCount == capacity)
+                completed.TrySetResult();
+            return ValueTask.CompletedTask;
+        });
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceEndpoint = $"inproc://orders-batch-source-{suffix}";
+        var targetEndpoint = $"inproc://orders-batch-target-{suffix}";
+        var sourceRid = RoutingId.From("orders-batch-source");
+        var targetRid = RoutingId.From("orders-batch-target");
+
+        source.SetRoutingId(sourceRid);
+        source.SetBind(sourceEndpoint);
+        source.ConnectPeer(targetEndpoint, targetRid);
+        target.SetRoutingId(targetRid);
+        target.SetBind(targetEndpoint);
+        target.Start();
+        source.Start();
+
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1
+            && target.Status().AdmittedPeerCount == 1);
+        for (var index = 0; index < capacity; index++)
+        {
+            using var payload = Message.From(new byte[] { checked((byte)index) });
+            Assert.Equal(SubmitResult.Ok, source.SendToNode(targetRid, [payload]));
+        }
+
+        await WaitUntilAsync(() =>
+            target.Status().PendingApplicationMessages == capacity);
+        Assert.Equal((ulong)capacity, applicationJobQueue.GetStatus().PermitsInUse);
+        pump.EnsureStarted();
+
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.InRange(maximumBatch, 2, capacity);
+        await WaitUntilAsync(() =>
+            applicationJobQueue.GetStatus().PermitsInUse == 0);
+        Assert.Equal(
+            (ulong)capacity,
+            applicationJobQueue.GetStatus().PeakPermitsInUse);
     }
 
     [Fact]
@@ -2197,7 +2335,7 @@ public sealed class ServiceRuntimeFoundationTests
             1UL);
         var ordinaryCapacityWaiters =
             applicationJobQueue.GetStatus().CapacityWaiters;
-        Assert.Equal(1UL, requester.Status().PendingApplicationMessages);
+        Assert.Equal(0UL, requester.Status().PendingApplicationMessages);
 
         //  The saturated requester issues a request; the replier answers.
         using var requestPart = Message.From(new byte[] { 4, 5, 6 });
@@ -2244,7 +2382,7 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(
             ordinaryCapacityWaiters,
             applicationJobQueue.GetStatus().CapacityWaiters);
-        Assert.Equal(1UL, requester.Status().PendingApplicationMessages);
+        Assert.Equal(0UL, requester.Status().PendingApplicationMessages);
         using var completionClaim = completionReady.TakeClaim(0);
         using var completionBatch = new MeshReceiveBatch();
         Assert.True(completionClaim.Receive(completionBatch, RecvFlags.DontWait));
@@ -2269,7 +2407,7 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public async Task Managed_mesh_node_bypasses_shared_permit_for_control_and_malformed_records()
+    public async Task Managed_mesh_node_releases_shared_permit_after_control_and_malformed_records()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         using var applicationJobQueue = new ZLinkApplicationJobQueue(
@@ -2313,7 +2451,7 @@ public sealed class ServiceRuntimeFoundationTests
         await WaitUntilAsync(() =>
             applicationJobQueue.GetStatus().PermitsInUse == 0);
         var controlStatus = applicationJobQueue.GetStatus();
-        Assert.Equal(0UL, controlStatus.PeakPermitsInUse);
+        Assert.Equal(1UL, controlStatus.PeakPermitsInUse);
         Assert.Equal(0UL, controlStatus.ReservedSupplyPermits);
         Assert.Equal(0UL, controlStatus.QueuedApplicationJobs);
 
@@ -2328,7 +2466,7 @@ public sealed class ServiceRuntimeFoundationTests
         await WaitUntilAsync(() =>
             applicationJobQueue.GetStatus().PermitsInUse == 0);
         var malformedStatus = applicationJobQueue.GetStatus();
-        Assert.Equal(0UL, malformedStatus.PeakPermitsInUse);
+        Assert.Equal(1UL, malformedStatus.PeakPermitsInUse);
         Assert.Equal(0UL, malformedStatus.ReservedSupplyPermits);
         Assert.Equal(0UL, malformedStatus.QueuedApplicationJobs);
     }

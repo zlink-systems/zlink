@@ -713,7 +713,7 @@ void fanout_location_runtime_t::pump ()
             if (status == fanout_receive_status_t::no_data)
                 break;
             budget.account (
-              received ? received->payload.payload.size () : 0);
+              received ? received->payload.payload_bytes ().size () : 0);
             if (status != fanout_receive_status_t::application
                 || !received) {
                 if (budget.exhausted ())
@@ -724,7 +724,7 @@ void fanout_location_runtime_t::pump ()
                 application_permit->mark_queued ();
                 const auto message =
                   zlink::message_t::from (
-                    received->payload.payload);
+                    received->payload.payload_bytes ());
                 detail::inbound_message_context_t
                   inbound;
                 inbound.before_application_handler =

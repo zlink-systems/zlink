@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/foundation/operation_registry.hpp"
+#include "runtime/dispatch/application_record.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
@@ -147,60 +148,6 @@ using call_id_t = runtime::call_id_t;
 using spot_request_completion_t =
   std::function<void (foundation::operation_terminal_t, result_t<std::vector<zlink::message_t>>)>;
 
-enum class record_kind_t
-{
-    node_send,
-    node_request,
-    channel_send,
-    channel_request,
-    spot_send,
-    spot_request,
-    actor_send,
-    actor_request,
-    completion,
-    send_ready,
-    spot_control,
-    spot_multicast
-};
-
-enum class ready_domain_t
-{
-    application,
-    infrastructure
-};
-
-enum class owner_kind_t
-{
-    node,
-    channel,
-    spot,
-    actor
-};
-
-enum class operation_kind_t
-{
-    none,
-    actor_join
-};
-
-enum class lifecycle_kind_t
-{
-    joined,
-    left
-};
-
-enum class actor_join_result_t
-{
-    accepted,
-    rejected
-};
-
-enum class join_admission_t
-{
-    accepted,
-    rejected
-};
-
 using route_fence_t = std::pair<std::uint64_t, std::uint64_t>;
 using spot_route_fence_resolver_t = std::function<std::optional<route_fence_t> (
   const zlink::routing_id_t &, std::string_view, std::uint64_t)>;
@@ -228,82 +175,6 @@ classify_bound_session_bind_admission (bool local_actor_matches) noexcept;
 framework_error_kind_t classify_relocation_failure_code (std::uint32_t wire_code) noexcept;
 stateful::relocation_reason_t classify_relocation_failure_reason (std::uint32_t wire_code) noexcept;
 
-struct actor_join_completion_t
-{
-    join_admission_t join_result = join_admission_t::rejected;
-    actor_ref_t current_actor;
-};
-
-struct actor_control_t
-{
-    lifecycle_kind_t kind = lifecycle_kind_t::joined;
-    actor_ref_t current_actor;
-};
-
-struct send_ready_data_t
-{
-    enum class destination_kind_t
-    {
-        node,
-        channel,
-        spot,
-        actor,
-        bound_session
-    };
-
-    destination_kind_t destination_kind = destination_kind_t::node;
-    zlink::routing_id_t target_node_rid = zlink::routing_id_t::from (std::uint32_t{0});
-    std::string target_spot_id;
-    std::string channel_name;
-    actor_ref_t target_actor;
-};
-
-class public_host_runtime_t;
-
-struct reply_token_t
-{
-    std::weak_ptr<public_host_runtime_t> host;
-    std::shared_ptr<mesh::service_mailbox_record_t> request;
-    std::function<bool (const std::vector<zlink::message_t> &)> local_reply;
-    std::function<bool (actor_join_result_t, const std::vector<zlink::message_t> &)>
-      local_actor_join;
-};
-
-struct receive_record_t
-{
-    record_kind_t kind = record_kind_t::node_send;
-    ready_domain_t domain = ready_domain_t::application;
-    call_id_t operation_id;
-    operation_kind_t operation_kind = operation_kind_t::none;
-    zlink::routing_id_t source_node_rid = zlink::routing_id_t::from (std::uint32_t{0});
-    std::optional<zlink::routing_id_t> source_session_rid;
-    std::uint64_t source_binding_generation = 0;
-    std::uint64_t source_session_sequence = 0;
-    /* Preserve the target fence until the Spot owner admits the message.
-     * The owner must be able to reject stale work before body deserialization. */
-    std::optional<protocol::spot_route_fence_t> spot_route;
-    std::optional<protocol::actor_route_fence_t> actor_route;
-    std::uint8_t message_follow_hop_count = 0;
-    std::uint64_t reply_route_id = 0;
-    std::string channel_name;
-    std::string topic;
-    int terminal_result = 0;
-    int failure_errno = 0;
-    reply_token_t reply_token;
-    std::optional<actor_join_completion_t> join_completion;
-    std::optional<actor_control_t> actor_control;
-    std::optional<send_ready_data_t> send_ready;
-    /* An application mailbox claim remains reserved until it transfers into
-     * the owner execution queue. The queue accounts this exact byte cost
-     * without a second capacity decision, then invokes the release callback.
-     * The terminal path retains the callback only as a failure fallback.
-     * Infrastructure and local records leave these fields empty. */
-    std::size_t transferred_owner_byte_cost = 0;
-    std::function<void ()> retain_mailbox_reservation;
-    std::function<void ()> release_mailbox_reservation;
-    std::function<void ()> complete_stateful_dispatch;
-};
-
 // The caller owns the result from before submission. It is not a second
 // pending/terminal table: the transport operation registry owns that entry.
 struct operation_completion_t
@@ -329,15 +200,6 @@ struct pending_operation_t
     // Local replies have typed records rather than service-wire bytes. Only
     // the registry's terminal winner fills this value before dispatcher post.
     std::shared_ptr<operation_completion_t> local_result;
-};
-
-struct ready_record_t
-{
-    owner_kind_t owner_kind = owner_kind_t::node;
-    ready_domain_t domain = ready_domain_t::application;
-    std::string spot_id;
-    std::optional<actor_ref_t> actor;
-    std::string channel_name;
 };
 
 struct node_status_t
@@ -859,6 +721,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch,
       bool accept_application_receive = true,
       const std::function<bool ()> &next_application_receive = {});
+    bool dispatch_application_owner (
+      const std::string &owner,
+      const std::function<void (const ready_record_t &, const receive_record_t &,
+                               std::vector<zlink::message_t>)> &dispatch,
+      const std::function<void ()> &started, const std::function<void ()> &rejected);
     bool wait_for_dispatch_activity (std::chrono::milliseconds timeout,
                                      bool accept_application_receive = true) noexcept;
     void signal_dispatch_activity () noexcept;
@@ -941,6 +808,10 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              foundation::operation_terminal_t terminal,
                              std::vector<std::uint8_t> payload);
     task_t<std::size_t> dispatch_user_spot_operations ();
+    std::size_t dispatch_application_claim (
+      mesh::service_mailbox_claim_t claim,
+      const std::function<void (const ready_record_t &, const receive_record_t &,
+                               std::vector<zlink::message_t>)> &dispatch);
     bool dispatch_bound_session_send (const mesh::service_mailbox_record_t &record,
                                       std::function<void ()> retain_mailbox_reservation = {},
                                       std::function<void ()> release_mailbox_reservation = {});
@@ -1063,7 +934,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         std::vector<session_route_state_t> session_routes;
         bool ready = false;
         bool cutover_received = false;
-        std::chrono::steady_clock::time_point ready_fallback_at{};
+        // Starts at the cutover fallback, becomes due on cutover, and advances
+        // at each management attempt without changing Restore's expiry.
+        std::chrono::steady_clock::time_point next_finalize_at{};
         bool target_finalized = false;
         std::chrono::steady_clock::time_point attempt_expires_at{};
         /* Pre-boundary relay verification: count and running CRC-32C over
@@ -1169,12 +1042,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     runtime::offload_executor_t _local_dispatch_completion_lane_executor;
     mutable runtime::state_lane_t
       _local_dispatch_completion_lane{_local_dispatch_completion_lane_executor};
-    struct local_application_dispatch_t
-    {
-        ready_record_t owner;
-        receive_record_t record;
-        std::vector<zlink::message_t> parts;
-    };
     std::deque<local_application_dispatch_t> _local_application_dispatches;
     std::map<std::string, stateful::object_ref_t> _spots;
     std::map<std::string, std::pair<std::string, stateful::object_ref_t>> _actors;

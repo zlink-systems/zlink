@@ -61,21 +61,23 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
         DirectBridge bridge = new DirectBridge();
         CompletableFuture<Void> result = new CompletableFuture<>();
         try {
-            calls.track(result, Duration.ofSeconds(1));
-            ZLinkSpotRouteBridgeDispatcher.submitSend(
+            CompletableFuture<Void> operation = calls.submit(Duration.ofSeconds(1), () -> {
+                ZLinkSpotRouteBridgeDispatcher.submitSend(
                 bridge,
                 "play.route",
                 RoutingId.from("play-node"),
                 "room-spot",
                 List.of(Message.from("payload")),
                 result);
+                return result;
+            }, ignored -> { });
 
             calls.beginClose();
             bridge.sendAdmission.complete(null);
 
             ZLinkFrameworkException failure = assertInstanceOf(
                 ZLinkFrameworkException.class,
-                completionFailure(result));
+                completionFailure(operation));
             assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN, failure.kind());
             assertEquals(1, bridge.sendAttempts.get());
         } finally {

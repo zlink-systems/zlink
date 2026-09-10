@@ -35,7 +35,11 @@ internal sealed class ZLinkCompletionDispatcher
             IsBackground = true,
             Name = "zlink-framework-completion"
         };
-        worker.Start();
+        if (ExecutionContext.IsFlowSuppressed())
+            worker.Start();
+        else
+            using (ExecutionContext.SuppressFlow())
+                worker.Start();
     }
 
     internal static bool IsCurrentExecution => _isCurrentExecution;

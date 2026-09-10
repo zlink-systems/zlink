@@ -24,6 +24,9 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 
 - 상세 빌드·플랫폼·CMake 옵션: [`doc/building/build-guide.ko.md`](doc/building/build-guide.ko.md),
   [`doc/building/cmake-options.ko.md`](doc/building/cmake-options.ko.md).
+- 릴리스 없이 **로컬 Core(작업 중 브랜치)로 바인딩을 링크해 테스트·perf**를 돌리는 방법(계약
+  테스트는 라이브 `core/build-dev` + `ZLINK_CORE_SOURCE=local`, perf는 고정 prefix +
+  `ZLINK_CORE_PACKAGE_PREFIX`)은 [`doc/building/local-core-bindings.ko.md`](doc/building/local-core-bindings.ko.md).
 - 빌드 트리는 `scripts/build-core.sh`로 고정한다: `dev`(`core/build-dev`, no-LTO, 테스트 ON) —
   평소 개발·ctest; `release`(`core/build`, LTO, 테스트 OFF) — 출하 라이브러리·perf 측정(라이브러리
   LTO 링크 1회, 2분대); `release-gate`(`core/build`, LTO, 테스트 ON) — 릴리스 직전 `hotpath_gate`와

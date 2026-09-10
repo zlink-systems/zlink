@@ -11,9 +11,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -21,6 +26,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 final class ZLinkSerialExecutionQueueTest {
@@ -40,6 +48,163 @@ final class ZLinkSerialExecutionQueueTest {
 
         started.get(3, TimeUnit.SECONDS);
         assertFalse(ranOnSubmitterStack.get());
+    }
+
+    @Test
+    void synchronousBacklogUsesOneConfiguredExecutorTask() throws Exception {
+        AtomicInteger submissions = new AtomicInteger();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Executor executor = command -> {
+            if (submissions.incrementAndGet() == 1) {
+                entered.countDown();
+                try {
+                    assertTrue(release.await(3, TimeUnit.SECONDS));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(interrupted);
+                }
+            }
+            command.run();
+        };
+        ZLinkSerialExecutionQueue queue = batchQueue(executor, Duration.ofSeconds(10));
+        List<Integer> order = new ArrayList<>();
+        List<CompletableFuture<Void>> results = new ArrayList<>();
+        try {
+            for (int index = 0; index < 64; index++) {
+                int sequence = index;
+                results.add(queue.enqueue(() -> {
+                    order.add(sequence);
+                    return CompletableFuture.completedFuture(null);
+                }).toCompletableFuture());
+                if (index == 0) {
+                    assertTrue(entered.await(3, TimeUnit.SECONDS));
+                }
+            }
+        } finally {
+            release.countDown();
+        }
+        queue.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
+
+        assertTrue(results.stream().allMatch(CompletableFuture::isDone));
+        assertEquals(java.util.stream.IntStream.range(0, 64).boxed().toList(), order);
+        assertEquals(1, submissions.get());
+    }
+
+    @Test
+    void incompleteStageEndsTheBatchUntilItsGateCompletes() throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        ZLinkSerialExecutionQueue queue = batchQueue(executor, Duration.ofSeconds(10));
+        CompletableFuture<Void> gate = new CompletableFuture<>();
+        CompletableFuture<Void> first = queue.enqueue(() -> gate).toCompletableFuture();
+        CompletableFuture<Void> next = queue.enqueue(
+            () -> CompletableFuture.completedFuture(null)).toCompletableFuture();
+
+        executor.take().run();
+        assertFalse(first.isDone());
+        assertFalse(next.isDone());
+        assertEquals(1, executor.submissions.get());
+        gate.complete(null);
+        executor.take().run();
+
+        assertTrue(first.isDone());
+        assertTrue(next.isDone());
+        assertEquals(2, executor.submissions.get());
+    }
+
+    @Test
+    void expiredBatchLetsAnotherOwnerUseTheConfiguredExecutor() throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        ZLinkSerialExecutionQueue first = batchQueue(executor, Duration.ofNanos(1));
+        ZLinkSerialExecutionQueue second = batchQueue(executor, Duration.ofSeconds(10));
+        List<String> order = new ArrayList<>();
+        first.enqueue(() -> {
+            order.add("first-1");
+            return CompletableFuture.completedFuture(null);
+        });
+        Runnable firstBatch = executor.take();
+        first.enqueue(() -> {
+            order.add("first-2");
+            return CompletableFuture.completedFuture(null);
+        });
+        second.enqueue(() -> {
+            order.add("second");
+            return CompletableFuture.completedFuture(null);
+        });
+        Runnable secondOwner = executor.take();
+
+        firstBatch.run();
+        assertEquals(List.of("first-1"), order);
+        secondOwner.run();
+        executor.take().run();
+
+        assertEquals(List.of("first-1", "second", "first-2"), order);
+        assertEquals(3, executor.submissions.get());
+    }
+
+    @Test
+    void oneOwnersSynchronousBatchDoesNotBlockAnotherOwner() throws Exception {
+        CountingExecutor executor = new CountingExecutor();
+        ZLinkSerialExecutionQueue first = batchQueue(executor, Duration.ofSeconds(10));
+        ZLinkSerialExecutionQueue second = batchQueue(executor, Duration.ofSeconds(10));
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CompletableFuture<Void> blocked = first.enqueue(() -> {
+            entered.countDown();
+            try {
+                assertTrue(release.await(3, TimeUnit.SECONDS));
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(interrupted);
+            }
+            return CompletableFuture.completedFuture(null);
+        }).toCompletableFuture();
+        Thread worker = Thread.ofVirtual().start(executor.take());
+        try {
+            assertTrue(entered.await(3, TimeUnit.SECONDS));
+            CompletableFuture<Void> independent = second.enqueue(
+                () -> CompletableFuture.completedFuture(null)).toCompletableFuture();
+            executor.take().run();
+            assertTrue(independent.isDone());
+            assertFalse(blocked.isDone());
+        } finally {
+            release.countDown();
+            worker.join(3_000);
+        }
+        blocked.get(3, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void rejectedBatchReleasesTheClaimAndItsIngressPermit() throws Exception {
+        RejectedExecutionException rejection = new RejectedExecutionException("rejected batch");
+        AtomicBoolean reject = new AtomicBoolean(true);
+        CountingExecutor accepted = new CountingExecutor();
+        ZLinkSerialExecutionQueue queue = batchQueue(command -> {
+            if (reject.get()) {
+                throw rejection;
+            }
+            accepted.execute(command);
+        }, Duration.ofSeconds(10));
+        try (ZLinkApplicationJobQueue jobs = new ZLinkApplicationJobQueue(
+                 ZLinkApplicationJobQueueProfile.BALANCED, OptionalLong.of(1),
+                 new ZLinkApplicationJobQueue.ProcessorCandidates(1, 1, 1, 1))) {
+            CompletableFuture<Void> result;
+            var permit = jobs.acquireBlocking();
+            try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+                result = queue.enqueue(() -> {
+                    throw new AssertionError("rejected work must not run");
+                }).toCompletableFuture();
+            }
+            assertEquals(rejection, assertThrows(ExecutionException.class,
+                () -> result.get(3, TimeUnit.SECONDS)).getCause());
+            queue.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertEquals(0, jobs.snapshot().permitsInUse());
+            reject.set(false);
+            CompletableFuture<Void> next = queue.enqueue(
+                () -> CompletableFuture.completedFuture(null)).toCompletableFuture();
+            accepted.take().run();
+            assertTrue(next.isDone());
+        }
     }
 
     @Test
@@ -942,6 +1107,36 @@ final class ZLinkSerialExecutionQueueTest {
             queue.trySealRelocation().orElseThrow();
         assertFalse(queue.abortRelocation(first));
         assertTrue(queue.abortRelocation(second));
+    }
+
+    private static ZLinkSerialExecutionQueue batchQueue(
+        Executor executor, Duration budget) {
+        return new ZLinkSerialExecutionQueue(
+            executor, ZLinkExecutionLanePolicy.generic(),
+            ZLinkSerialExecutionQueue.DEFAULT_APPLICATION_MESSAGE_CAPACITY,
+            ZLinkSerialExecutionQueue.DEFAULT_APPLICATION_BYTE_CAPACITY,
+            ZLinkSerialExecutionQueue.DEFAULT_LIFECYCLE_MESSAGE_CAPACITY,
+            ZLinkSerialExecutionQueue.DEFAULT_LIFECYCLE_BYTE_CAPACITY,
+            ZLinkSerialExecutionQueue.DEFAULT_FIXED_WORK_BYTE_COST,
+            ZLinkSerialExecutionQueue.DEFAULT_LIFECYCLE_BURST_LIMIT,
+            budget);
+    }
+
+    private static final class CountingExecutor implements Executor {
+        private final LinkedBlockingQueue<Runnable> pending = new LinkedBlockingQueue<>();
+        private final AtomicInteger submissions = new AtomicInteger();
+
+        @Override
+        public void execute(Runnable command) {
+            submissions.incrementAndGet();
+            pending.add(command);
+        }
+
+        private Runnable take() throws InterruptedException {
+            Runnable task = pending.poll(3, TimeUnit.SECONDS);
+            assertTrue(task != null, "the configured executor must receive a drain task");
+            return task;
+        }
     }
 
     private static void waitForSize(

@@ -51,8 +51,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             node,
             _completions,
             applicationJobQueue);
-        _node.SetCompletionOverflowHandlerCore(
-            (record, parts) => _completions.Complete(record, parts));
+        _node.SetCompletionHandlerCore(
+            (record, parts) => _completions.TryComplete(record, parts));
         _messageFollowIngress = new ActorMessageFollowIngressAdapter(_pump);
         _node.SetActorMessageFollowIngressTarget(_messageFollowIngress);
     }
@@ -1211,7 +1211,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         return true;
     }
 
-    public ValueTask<IReadOnlyList<Message>> RequestToNodeAsync(
+    public ValueTask<ZLinkBackendRouteReceived> RequestToNodeAsync(
         RoutingId targetNodeRid,
         IReadOnlyList<Message> parts,
         SendFlags flags,
@@ -1370,9 +1370,11 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         _ = _node.CloseBoundSession(ToNativeActor(actor), 0, timeout);
     }
 
-    public void OnNodeRoute(Action<ZLinkBackendRouteReceived> handler)
+    public void OnNodeRoute(
+        Func<IReadOnlyList<ZLinkBackendRouteReceived>, CancellationToken, ValueTask> handler,
+        ZLinkRuntimeTaskRunner taskRunner)
     {
-        _pump.SetNodeRouteHandler(handler);
+        _pump.SetNodeRouteHandler(handler, taskRunner);
     }
 
     public async ValueTask DisposeAsync()

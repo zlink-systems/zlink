@@ -115,7 +115,7 @@ task_t<void> raw_fanout_publisher_t::publish (
     header.content_type = payload.content_type;
     header.topic = topic;
     auto parts = messaging::envelope_codec_t{}.encode_raw_body_parts (
-      header, zlink::message_t::from (std::move (payload.payload)));
+      header, zlink::message_t::from (std::move (payload.payload_bytes ())));
     auto items = std::move (parts).take_items ();
     {
         std::lock_guard lock (_mutex);

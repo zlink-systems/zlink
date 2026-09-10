@@ -579,7 +579,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             ownerLeaseGeneration);
     }
 
-    internal async ValueTask<IReadOnlyList<Message>> RequestToNodeAsync(
+    internal async ValueTask<ZLinkBackendRouteReceived> RequestToNodeAsync(
         RoutingId targetNodeRid,
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
@@ -1115,7 +1115,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             _runtime,
             _taskRunner);
         if (_nodeRouteDispatcher is not null)
-            Node.OnNodeRoute(_nodeRouteDispatcher.Dispatch);
+            Node.OnNodeRoute(_nodeRouteDispatcher.DispatchBatchAsync, _taskRunner);
     }
 
     private bool ShouldAttachActorDispatchPump()

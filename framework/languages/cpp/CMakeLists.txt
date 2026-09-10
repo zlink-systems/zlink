@@ -893,6 +893,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink::cpp
     nlohmann_json::nlohmann_json
     Threads::Threads)
+  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_service_wire_codec)
   add_test(NAME test_cpp_framework_service_wire_codec
     COMMAND test_cpp_framework_service_wire_codec)
   set_tests_properties(test_cpp_framework_service_wire_codec PROPERTIES

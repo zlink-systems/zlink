@@ -82,13 +82,13 @@ class raw_route_port_t
 
     task_t<zlink::submit_result_t> send_result (
       const raw_bytes_t &target_routing_id,
-      const raw_message_t &parts,
+      raw_message_t parts,
       raw_send_stage_trace_t trace = {});
     task_t<bool> send (const raw_bytes_t &target_routing_id,
-                       const raw_message_t &parts);
+                       raw_message_t parts);
     task_t<raw_request_completion_t> request (
       const raw_bytes_t &target_routing_id,
-      const raw_message_t &parts,
+      raw_message_t parts,
       std::chrono::milliseconds timeout);
     zlink::poll_event_flag_t poll (std::chrono::milliseconds timeout,
                                    bool accept_application_receive = true);
@@ -97,7 +97,7 @@ class raw_route_port_t
       zlink::poll_event_flag_t revents);
     std::optional<raw_received_t> try_receive ();
     bool reply (const raw_received_t &request,
-                const raw_message_t &parts);
+                raw_message_t parts);
     void close () noexcept;
 
   private:

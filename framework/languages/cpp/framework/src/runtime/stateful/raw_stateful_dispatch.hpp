@@ -262,6 +262,7 @@ class raw_relocation_replay_coordinator_t
       raw_relocation_terminal_target_registration_t registration);
     task_t<std::size_t> retry_terminal_relays (clock_t::time_point now);
     std::size_t reap_terminal_tombstones (clock_t::time_point now);
+    std::optional<clock_t::time_point> next_activity () const;
     bool confirm_terminal_source_lease_expired (
       const protocol::relocation_id_t &relocation,
       const protocol::wire_operation_id_t &operation,

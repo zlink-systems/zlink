@@ -69,6 +69,35 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         if (Volatile.Read(ref _closed) != 0)
             throw new ObjectDisposedException(nameof(ZLinkStateLane));
 
+        // Claim the same drain ownership used by queued work before inspecting
+        // the queue. An earlier enqueue must run first, even if its producer has
+        // not reached ScheduleDrain yet. With no predecessor, the caller owns
+        // this turn and can return its value without a completion allocation.
+        if (Interlocked.CompareExchange(ref _scheduled, 1, 0) == 0)
+        {
+            if (_mailbox.IsEmpty)
+            {
+                var previous = CurrentLane.Value;
+                try
+                {
+                    ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
+                    CurrentLane.Value = this;
+                    return ValueTask.FromResult(work());
+                }
+                catch (Exception error)
+                {
+                    return ValueTask.FromException<T>(error);
+                }
+                finally
+                {
+                    CurrentLane.Value = previous;
+                    ReleaseDrain();
+                }
+            }
+
+            ReleaseDrain();
+        }
+
         var completion = new TaskCompletionSource<T>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         _mailbox.Enqueue(() =>
@@ -84,7 +113,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
 
             return ValueTask.CompletedTask;
         });
-        ScheduleDrain();
+        ScheduleDrain(inline: true);
         return new ValueTask<T>(completion.Task);
     }
 
@@ -92,8 +121,13 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     internal ValueTask RunAsync(Action work)
     {
         ArgumentNullException.ThrowIfNull(work);
-        return new ValueTask(
-            RunAsync(() => { work(); return true; }).AsTask());
+        var operation = RunAsync(() => { work(); return true; });
+        if (operation.IsCompletedSuccessfully)
+        {
+            operation.GetAwaiter().GetResult();
+            return ValueTask.CompletedTask;
+        }
+        return new ValueTask(operation.AsTask());
     }
 
     /// <summary>
@@ -125,11 +159,15 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
                 + "surface.");
     }
 
-    private void ScheduleDrain()
+    private void ScheduleDrain(bool inline = false)
     {
         //  Exactly one drain runs at a time. The drain clears the flag and re-checks the mailbox
         //  before exiting, so an item enqueued during that window is never left unscheduled.
-        if (Interlocked.CompareExchange(ref _scheduled, 1, 0) == 0)
+        if (Interlocked.CompareExchange(ref _scheduled, 1, 0) != 0)
+            return;
+        if (inline)
+            _ = DrainAsync();
+        else
             ThreadPool.UnsafeQueueUserWorkItem(
                 static state => _ = state.DrainAsync(), this, preferLocal: true);
     }
@@ -159,12 +197,20 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         finally
         {
             CurrentLane.Value = null;
-            Volatile.Write(ref _scheduled, 0);
-            if (!_mailbox.IsEmpty)
-                ScheduleDrain();
-            else if (Volatile.Read(ref _closed) != 0)
-                _completed.TrySetResult();
+            ReleaseDrain();
         }
+    }
+
+    private void ReleaseDrain()
+    {
+        // The full fence orders the ownership release before the queue check;
+        // otherwise a racing producer and drainer can both miss the wakeup.
+        Interlocked.Exchange(ref _scheduled, 0);
+        if (!_mailbox.IsEmpty)
+            ScheduleDrain();
+        else if (Volatile.Read(ref _closed) != 0
+                 && Volatile.Read(ref _scheduled) == 0)
+            _completed.TrySetResult();
     }
 
     public async ValueTask DisposeAsync()

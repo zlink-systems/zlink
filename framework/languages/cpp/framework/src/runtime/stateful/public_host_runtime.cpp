@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include "runtime/diagnostics/mesh_trace.hpp"
+
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
@@ -62,11 +64,7 @@ namespace
 constexpr std::string_view multipart_packet_name = protocol::framework_multipart_packet_name;
 constexpr std::string_view multipart_content_type = protocol::framework_multipart_content_type;
 
-bool mesh_trace_enabled ()
-{
-    const char *value = std::getenv ("ZLINK_CPP_MESH_TRACE");
-    return value != nullptr && *value != '\0' && std::string_view (value) != "0";
-}
+using ::zlink::framework::detail::mesh_trace_enabled;
 
 void trace_mesh_host_enabled (std::string_view stage, std::string_view detail)
 {
@@ -208,30 +206,6 @@ std::uint32_t read_u32 (const std::vector<std::uint8_t> &bytes, std::size_t &off
                        | static_cast<std::uint32_t> (bytes[offset + 3]);
     offset += 4;
     return value;
-}
-
-std::vector<std::uint8_t> encode_parts (const std::vector<zlink::message_t> &parts)
-{
-    if (parts.empty ()) {
-        throw std::invalid_argument ("framework multipart requires at least one part");
-    }
-    if (parts.size () > std::numeric_limits<std::uint32_t>::max ()) {
-        throw std::length_error ("framework multipart part count is too large");
-    }
-    std::vector<std::uint8_t> encoded;
-    append_u32 (encoded, static_cast<std::uint32_t> (parts.size ()));
-    for (const auto &part : parts) {
-        const auto bytes = part.bytes ();
-        if (bytes.size () > std::numeric_limits<std::uint32_t>::max ()) {
-            throw std::length_error ("framework multipart part is too large");
-        }
-        append_u32 (encoded, static_cast<std::uint32_t> (bytes.size ()));
-        if (!bytes.empty ()) {
-            const auto *data = reinterpret_cast<const std::uint8_t *> (bytes.data ());
-            encoded.insert (encoded.end (), data, data + bytes.size ());
-        }
-    }
-    return encoded;
 }
 
 std::vector<zlink::message_t> decode_parts (const std::vector<std::uint8_t> &encoded)
@@ -861,7 +835,7 @@ zlink::submit_result_t spot_handle_t::publish (const std::string &channel_name,
     _host->_local_dispatch_completion_lane
       .run ([&] {
         _host->_local_application_dispatches.push_back (
-          public_host_runtime_t::local_application_dispatch_t{std::move (owner), std::move (local),
+          local_application_dispatch_t{std::move (owner), std::move (local),
                                                               parts});
       })
       .get ();
@@ -1004,7 +978,7 @@ public_host_runtime_t::public_host_runtime_t (host_options_t options) :
                                              : std::make_optional (found->second.second);
           })
           .get ();
-    })
+    }, [this] { _transport->signal_activity (); })
 {
     if (_options.session_relocation_seal_timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument (
@@ -1681,6 +1655,8 @@ public_host_runtime_t::admit_session_relocation_seal (
           const auto [stored, was_inserted] =
             _session_seal_terminals.emplace (relocation_key, std::move (record));
           inserted = was_inserted;
+          if (inserted)
+              _transport->signal_activity ();
           if (!inserted) {
               if (stored->second.seal != seal) {
                   immediate.reset ();
@@ -2837,9 +2813,8 @@ void public_host_runtime_t::poll_relocation_target_attempts ()
       .run ([&] {
           for (const auto &[key, attempt] : _relocation_target_attempts) {
               if (!attempt.target_finalized && attempt.ready
-                  && (attempt.cutover_received
-                      || (attempt.ready_fallback_at != std::chrono::steady_clock::time_point{}
-                          && attempt.ready_fallback_at <= now))) {
+                  && attempt.next_finalize_at != std::chrono::steady_clock::time_point{}
+                  && attempt.next_finalize_at <= now) {
                   pending.push_back (key);
               }
           }
@@ -3274,12 +3249,13 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
                                        } else {
                                            const auto now = std::chrono::steady_clock::now ();
                                            if (!found->second.ready
-                                               || (!found->second.cutover_received
-                                                   && (found->second.ready_fallback_at
-                                                         == std::chrono::steady_clock::time_point{}
-                                                       || now < found->second.ready_fallback_at)))
+                                               || found->second.next_finalize_at
+                                                    == std::chrono::steady_clock::time_point{}
+                                               || now < found->second.next_finalize_at)
                                                return false;
                                            attempt = found->second;
+                                           found->second.next_finalize_at =
+                                             now + dispatch_limits::management_retry_interval;
                                        }
                                        return true;
                                    })
@@ -3549,7 +3525,7 @@ void public_host_runtime_t::activate_relocation_assembly (
           .run ([&] {
               const auto found = _relocation_target_attempts.find (key);
               if (found != _relocation_target_attempts.end ())
-                  found->second.ready_fallback_at =
+                  found->second.next_finalize_at =
                     std::chrono::steady_clock::now () + _relocation_cutover_wait;
           })
           .get ();
@@ -4198,7 +4174,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                               .run ([&] {
                                   const auto found = _relocation_target_attempts.find (key);
                                   if (found != _relocation_target_attempts.end ())
-                                      found->second.ready_fallback_at =
+                                      found->second.next_finalize_at =
                                         std::chrono::steady_clock::now ()
                                         + _relocation_cutover_wait;
                               })
@@ -4332,6 +4308,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                          && found->second.boundary_accumulator.value ()
                                               == cutover->boundary_checksum_crc32c) {
                                   found->second.cutover_received = true;
+                                  found->second.next_finalize_at = std::chrono::steady_clock::now ();
                                   accepted = true;
                               } else {
                                 /* Ordered connection: the boundary record
@@ -5679,9 +5656,11 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
         }
         if (pumped != mesh::raw_mesh_pump_result_t::no_data)
             ++count;
-        bool application_dispatch_started = false;
+        bool application_dispatch_started =
+          pumped == mesh::raw_mesh_pump_result_t::application
+          && _transport->mailbox ().has_application_dispatch ();
 
-        if (accept_application_receive) {
+        if (accept_application_receive && !application_dispatch_started) {
             for (;;) {
                 std::optional<local_application_dispatch_t> pending;
                 bool skip = false;
@@ -5828,143 +5807,16 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
             }
         }
 
-        while (accept_application_receive && !application_dispatch_started) {
-            auto claim =
-              _transport->mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1,
-                                                dispatch_limits::application_mailbox_bytes);
+        while (accept_application_receive && !application_dispatch_started
+               && !_transport->mailbox ().has_application_dispatch ()) {
+            auto claim = _transport->mailbox ().try_claim (
+              mesh::service_mailbox_domain_t::application, 1,
+              dispatch_limits::application_mailbox_bytes);
             if (!claim)
                 break;
-            trace_mesh_host ("mailbox-claim",
-                             std::string ("records=") + std::to_string (claim->records.size ()));
-            auto claim_holder = std::make_shared<mesh::service_mailbox_claim_t> (std::move (*claim));
-            auto claim_released = std::make_shared<std::atomic_bool> (false);
-            auto claim_retained = std::make_shared<std::atomic_bool> (false);
-            const auto retain_mailbox_reservation = [claim_retained] {
-                claim_retained->store (true, std::memory_order_release);
-            };
-            const auto release_mailbox_reservation = [weak = weak_from_this (), claim_holder,
-                                                      claim_released] {
-                if (claim_released->exchange (true, std::memory_order_acq_rel)) {
-                    return;
-                }
-                if (const auto host = weak.lock ()) {
-                    (void) host->_transport->mailbox ().release (*claim_holder);
-                }
-            };
-            for (auto &mailbox_record : claim_holder->records) {
-                try {
-                    const auto wire = protocol::decode_header (mailbox_record.parts.front ());
-                    if (wire.kind == protocol::command::boundSessionSend) {
-                        (void) dispatch_bound_session_send (mailbox_record, retain_mailbox_reservation,
-                                                            release_mailbox_reservation);
-                        ++count;
-                        application_dispatch_started = true;
-                        continue;
-                    }
-                    const auto kind = record_kind (wire.kind);
-                    ready_record_t owner;
-                    owner.domain = ready_domain_t::application;
-                    receive_record_t record;
-                    record.kind = kind;
-                    record.domain = ready_domain_t::application;
-                    record.operation_kind = operation_kind (kind);
-                    record.source_node_rid =
-                      zlink::routing_id_t::from (mailbox_record.source_routing_id);
-                    if (mailbox_record.operation) {
-                        record.operation_id = {mailbox_record.operation->first,
-                                               mailbox_record.operation->second};
-                    } else if (mailbox_record.correlation) {
-                        record.operation_id = {_options.mesh.descriptor.lifecycle_generation,
-                                               *mailbox_record.correlation};
-                    }
-                    if (is_request (kind)) {
-                        record.reply_token = {
-                          weak_from_this (),
-                          std::make_shared<mesh::service_mailbox_record_t> (mailbox_record)};
-                    }
-                    if (kind == record_kind_t::channel_send || kind == record_kind_t::channel_request) {
-                        owner.owner_kind = owner_kind_t::channel;
-                        owner.channel_name =
-                          kind == record_kind_t::channel_send
-                            ? protocol::decode_channel_send_header (mailbox_record.parts.front ())
-                            : protocol::decode_channel_request_header (mailbox_record.parts.front ())
-                                .channel_name;
-                        record.channel_name = owner.channel_name;
-                    } else if (kind == record_kind_t::spot_send
-                               || kind == record_kind_t::spot_request) {
-                        owner.owner_kind = owner_kind_t::spot;
-                        const auto spot = protocol::decode_spot_message_header (
-                          mailbox_record.parts.front (), wire.kind);
-                        owner.spot_id = spot.target.spot_id;
-                        record.spot_route = spot.target;
-                    } else if (kind == record_kind_t::actor_send
-                               || kind == record_kind_t::actor_request) {
-                        owner.owner_kind = owner_kind_t::actor;
-                        const auto actor = protocol::decode_actor_message_header (
-                          mailbox_record.parts.front (), wire.kind);
-                        record.actor_route = actor.target;
-                        record.message_follow_hop_count = actor.message_follow_hop_count;
-                        record.reply_route_id = actor.correlation.value_or (0);
-                        if (mailbox_record.bound_session_source) {
-                            record.source_session_rid = zlink::routing_id_t::from (
-                              mailbox_record.bound_session_source->session_routing_id);
-                            record.source_binding_generation =
-                              mailbox_record.bound_session_source->binding_generation;
-                            record.source_session_sequence =
-                              mailbox_record.bound_session_source->session_sequence;
-                        }
-                        const auto actor_type = _spot_actor_index_lane
-                          .run ([&] {
-                            std::string actor_type;
-                            const auto found = _actors.find (actor.target.actor_id);
-                            if (found != _actors.end ()) {
-                                actor_type = found->second.first;
-                            }
-                            return actor_type;
-                          })
-                          .get ();
-                        owner.actor = ::zlink::framework::detail::actor_ref_access_t::make (
-                          node_rid_t::from_string (status ().routing_id ().to_string ()),
-                          std::move (actor_type), actor.target.actor_id,
-                          actor.target.object_generation);
-                    } else {
-                        owner.owner_kind = owner_kind_t::node;
-                    }
-                    const auto payload =
-                      protocol::decode_application_payload (mailbox_record.parts[1], capture_flow ());
-                    auto source = std::string ("-");
-                    if (!mailbox_record.source_routing_id.empty ()) {
-                        source =
-                          zlink::routing_id_t::from (mailbox_record.source_routing_id).to_string ();
-                    }
-                    trace_mesh_host ("dispatch",
-                                     std::string ("kind=") + std::to_string (static_cast<int> (kind))
-                                       + " source=" + source
-                                       + " parts=" + std::to_string (mailbox_record.parts.size ()));
-                    record.release_mailbox_reservation = release_mailbox_reservation;
-                    record.retain_mailbox_reservation = retain_mailbox_reservation;
-                    record.transferred_owner_byte_cost = claim_holder->claimed_bytes;
-                    dispatch (owner, record, decode_application (payload));
-                    ++count;
-                    application_dispatch_started = true;
-                }
-                catch (const protocol::service_wire_error_t &) {
-                    if (mailbox_record.reply_token && mailbox_record.correlation) {
-                        (void) _transport->reply_failure (
-                          mailbox_record, 104,
-                          static_cast<std::uint32_t> (
-                            protocol::framework_error_code::requestProtocolError));
-                    }
-                    release_mailbox_reservation ();
-                }
-                catch (...) {
-                    release_mailbox_reservation ();
-                    throw;
-                }
-            }
-            if (!claim_retained->load (std::memory_order_acquire)) {
-                release_mailbox_reservation ();
-            }
+            const auto dispatched = dispatch_application_claim (std::move (*claim), dispatch);
+            count += dispatched;
+            application_dispatch_started = dispatched != 0;
         }
         // Management and completion collection belong to the bounded receive
         // turn. Each additional ordinary record still needs a fresh host permit.
@@ -5987,6 +5839,187 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
     co_return count;
 }
 
+std::size_t public_host_runtime_t::dispatch_application_claim (
+  mesh::service_mailbox_claim_t claim,
+  const std::function<void (const ready_record_t &, const receive_record_t &,
+                           std::vector<zlink::message_t>)> &dispatch)
+{
+    std::size_t count = 0;
+    trace_mesh_host ("mailbox-claim",
+                     std::string ("records=") + std::to_string (claim.records.size ()));
+    auto claim_holder = std::make_shared<mesh::service_mailbox_claim_t> (std::move (claim));
+    auto claim_released = std::make_shared<std::atomic_bool> (false);
+    auto claim_retained = std::make_shared<std::atomic_bool> (false);
+    const auto retain_mailbox_reservation = [claim_retained] {
+        claim_retained->store (true, std::memory_order_release);
+    };
+    const auto release_mailbox_reservation = [weak = weak_from_this (), claim_holder,
+                                              claim_released] {
+        if (claim_released->exchange (true, std::memory_order_acq_rel)) {
+            return;
+        }
+        if (const auto host = weak.lock ()) {
+            (void) host->_transport->mailbox ().release (*claim_holder);
+        }
+    };
+    for (auto &mailbox_record : claim_holder->records) {
+        try {
+            if (mailbox_record.application) {
+                auto application = std::move (*mailbox_record.application);
+                application.record.before_application_handler =
+                  mailbox_record.before_application_handler;
+                application.record.release_mailbox_reservation = release_mailbox_reservation;
+                application.record.retain_mailbox_reservation = retain_mailbox_reservation;
+                application.record.transferred_owner_byte_cost = claim_holder->claimed_bytes;
+                dispatch (application.owner, application.record, std::move (application.parts));
+                ++count;
+                continue;
+            }
+            const auto wire = protocol::decode_header (mailbox_record.parts.front ());
+            if (wire.kind == protocol::command::boundSessionSend) {
+                // The outbound stream delivery is a transport handoff, not an application handler.
+                mailbox_record.before_application_handler = {};
+                (void) dispatch_bound_session_send (mailbox_record, retain_mailbox_reservation,
+                                                    release_mailbox_reservation);
+                ++count;
+                continue;
+            }
+            const auto kind = record_kind (wire.kind);
+            ready_record_t owner;
+            owner.domain = ready_domain_t::application;
+            receive_record_t record;
+            record.before_application_handler = mailbox_record.before_application_handler;
+            record.kind = kind;
+            record.domain = ready_domain_t::application;
+            record.operation_kind = operation_kind (kind);
+            record.source_node_rid =
+              zlink::routing_id_t::from (mailbox_record.source_routing_id);
+            if (mailbox_record.operation) {
+                record.operation_id = {mailbox_record.operation->first,
+                                       mailbox_record.operation->second};
+            } else if (mailbox_record.correlation) {
+                record.operation_id = {_options.mesh.descriptor.lifecycle_generation,
+                                       *mailbox_record.correlation};
+            }
+            if (is_request (kind)) {
+                record.reply_token = {
+                  weak_from_this (),
+                  std::shared_ptr<mesh::service_mailbox_record_t> (claim_holder, &mailbox_record)};
+            }
+            if (kind == record_kind_t::channel_send || kind == record_kind_t::channel_request) {
+                owner.owner_kind = owner_kind_t::channel;
+                owner.channel_name =
+                  kind == record_kind_t::channel_send
+                    ? protocol::decode_channel_send_header (mailbox_record.parts.front ())
+                    : protocol::decode_channel_request_header (mailbox_record.parts.front ())
+                        .channel_name;
+                record.channel_name = owner.channel_name;
+            } else if (kind == record_kind_t::spot_send
+                       || kind == record_kind_t::spot_request) {
+                owner.owner_kind = owner_kind_t::spot;
+                const auto spot = protocol::decode_spot_message_header (
+                  mailbox_record.parts.front (), wire.kind);
+                owner.spot_id = spot.target.spot_id;
+                record.spot_route = spot.target;
+            } else if (kind == record_kind_t::actor_send
+                       || kind == record_kind_t::actor_request) {
+                owner.owner_kind = owner_kind_t::actor;
+                const auto actor = protocol::decode_actor_message_header (
+                  mailbox_record.parts.front (), wire.kind);
+                record.actor_route = actor.target;
+                record.message_follow_hop_count = actor.message_follow_hop_count;
+                record.reply_route_id = actor.correlation.value_or (0);
+                if (mailbox_record.bound_session_source) {
+                    record.source_session_rid = zlink::routing_id_t::from (
+                      mailbox_record.bound_session_source->session_routing_id);
+                    record.source_binding_generation =
+                      mailbox_record.bound_session_source->binding_generation;
+                    record.source_session_sequence =
+                      mailbox_record.bound_session_source->session_sequence;
+                }
+                const auto actor_type = _spot_actor_index_lane
+                  .run ([&] {
+                    std::string actor_type;
+                    const auto found = _actors.find (actor.target.actor_id);
+                    if (found != _actors.end ()) {
+                        actor_type = found->second.first;
+                    }
+                    return actor_type;
+                  })
+                  .get ();
+                owner.actor = ::zlink::framework::detail::actor_ref_access_t::make (
+                  node_rid_t::from_string (status ().routing_id ().to_string ()),
+                  std::move (actor_type), actor.target.actor_id,
+                  actor.target.object_generation);
+            } else {
+                owner.owner_kind = owner_kind_t::node;
+            }
+            const auto payload =
+              protocol::decode_application_payload (mailbox_record.parts[1], capture_flow ());
+            trace_mesh_host ("dispatch",
+                             std::string ("kind=") + std::to_string (static_cast<int> (kind))
+                               + " source=" + (mailbox_record.source_routing_id.empty ()
+                                                 ? std::string ("-")
+                                                 : record.source_node_rid.to_string ())
+                               + " parts=" + std::to_string (mailbox_record.parts.size ()));
+            record.release_mailbox_reservation = release_mailbox_reservation;
+            record.retain_mailbox_reservation = retain_mailbox_reservation;
+            record.transferred_owner_byte_cost = claim_holder->claimed_bytes;
+            dispatch (owner, record, decode_application (payload));
+            ++count;
+        }
+        catch (const protocol::service_wire_error_t &) {
+            if (mailbox_record.reply_token && mailbox_record.correlation) {
+                (void) _transport->reply_failure (
+                  mailbox_record, 104,
+                  static_cast<std::uint32_t> (
+                    protocol::framework_error_code::requestProtocolError));
+            }
+            release_mailbox_reservation ();
+        }
+        catch (...) {
+            release_mailbox_reservation ();
+            throw;
+        }
+    }
+    if (!claim_retained->load (std::memory_order_acquire)) {
+        release_mailbox_reservation ();
+    }
+    return count;
+}
+
+bool public_host_runtime_t::dispatch_application_owner (
+  const std::string &owner,
+  const std::function<void (const ready_record_t &, const receive_record_t &,
+                           std::vector<zlink::message_t>)> &dispatch,
+  const std::function<void ()> &started,
+  const std::function<void ()> &rejected)
+{
+    auto claim = _transport->mailbox ().try_claim_owner (
+      mesh::service_mailbox_domain_t::application, owner, 1,
+      dispatch_limits::application_mailbox_bytes);
+    if (!claim)
+        return false;
+    started ();
+    bool handed_off = false;
+    try {
+        dispatch_application_claim (std::move (*claim),
+          [&] (const ready_record_t &ready, const receive_record_t &record,
+               std::vector<zlink::message_t> parts) {
+              dispatch (ready, record, std::move (parts));
+              handed_off = true;
+          });
+    }
+    catch (...) {
+        if (!handed_off)
+            rejected ();
+        throw;
+    }
+    if (!handed_off)
+        rejected ();
+    return true;
+}
+
 bool public_host_runtime_t::wait_for_dispatch_activity (std::chrono::milliseconds timeout,
                                                         bool accept_application_receive) noexcept
 {
@@ -5996,6 +6029,36 @@ bool public_host_runtime_t::wait_for_dispatch_activity (std::chrono::millisecond
                   .run ([&] { return !_local_application_dispatches.empty (); })
                   .get ())
                 return true;
+        }
+        auto next = _relocation_wire->next_activity ();
+        _relocation_session_terminal_lane.run ([&] {
+            const auto include = [&] (std::chrono::steady_clock::time_point deadline) {
+                if (!next || deadline < *next)
+                    next = deadline;
+            };
+            for (const auto &[key, assembly] : _relocation_assemblies)
+                include (assembly.expires_at);
+            for (const auto &[key, attempt] : _relocation_target_attempts) {
+                if (!attempt.target_finalized) {
+                    if (attempt.attempt_expires_at != std::chrono::steady_clock::time_point{})
+                        include (attempt.attempt_expires_at);
+                    if (attempt.ready
+                        && attempt.next_finalize_at != std::chrono::steady_clock::time_point{})
+                        include (attempt.next_finalize_at);
+                }
+            }
+            for (const auto &[key, seal] : _session_seal_terminals) {
+                if (!seal.consumed)
+                    include (seal.expires_at);
+            }
+        }).get ();
+        if (next) {
+            const auto now = std::chrono::steady_clock::now ();
+            const auto remaining = *next <= now
+                                     ? std::chrono::milliseconds::zero ()
+                                     : std::chrono::ceil<std::chrono::milliseconds> (*next - now);
+            if (timeout < std::chrono::milliseconds::zero () || remaining < timeout)
+                timeout = remaining;
         }
         return _transport->wait_for_activity (timeout, accept_application_receive);
     }
@@ -6091,8 +6154,7 @@ protocol::application_payload_t
 public_host_runtime_t::encode_application (const std::vector<zlink::message_t> &parts,
                                            std::span<const std::uint8_t>) const
 {
-    return {std::string (multipart_packet_name), std::string (multipart_content_type),
-            encode_parts (parts)};
+    return protocol::application_payload_t::from_parts (parts);
 }
 
 std::vector<zlink::message_t>
@@ -6103,7 +6165,14 @@ public_host_runtime_t::decode_application (const protocol::application_payload_t
         throw protocol::service_wire_error_t (
           "framework application payload profile is unsupported");
     }
-    return decode_parts (payload.payload);
+    if (const auto *parts = payload.parts ()) {
+        std::vector<zlink::message_t> result;
+        result.reserve (parts->size ());
+        for (const auto &part : *parts)
+            result.push_back (part.copy ());
+        return result;
+    }
+    return decode_parts (payload.payload_bytes ());
 }
 
 actor_ref_t public_host_runtime_t::framework_actor_ref (const stateful::object_ref_t &object,

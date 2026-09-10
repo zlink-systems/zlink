@@ -476,6 +476,34 @@ Kotlin은 전체 matrix에서 제외하고 보조 셀만 잰다(§10.5). Kotlin�
 C++는 시스템에 설치된 `libgrpc++`를 사용한다. vcpkg로 gRPC를 빌드하지 않는다. 이 머신의
 version은 1.51.1이며, 오래된 version이므로 결과에 반드시 기록한다.
 
+### 8.1.1 메시지당 payload 작업 대조
+
+각 지원 행의 클라이언트는 request/send 제출마다 29바이트 측정 header를 포함한 body와
+`BenchPayload` 스키마의 메시지 객체를 만들고, 해당 언어의 protobuf 런타임으로 직렬화한다. raw의 envelope header part는 wire 규격에 따른
+상수를 사용한다. 수신한 payload는 protobuf로 역직렬화하고, request 응답도 typed payload를
+직렬화한다. 응답의 측정 header와 timestamp는 요청의 값을 보존한다. send는 payload 응답이
+없으며, gRPC `Command`만 기존 계약대로 `Empty` 응답을 직렬화한다.
+
+| 언어 | raw 요청·응답 직렬화 / 수신 역직렬화 | gRPC | framework |
+|---|---|---|---|
+| Java | 매번 생성한 `BenchPayload`의 `toByteArray` / `parseFrom` | 같은 generated 타입을 grpc-java가 직렬화·역직렬화 | 같은 generated 타입을 `ZLinkProtobufCodec`이 직렬화·역직렬화 |
+| .NET | 매번 생성한 `BenchPayload`의 `WriteTo` / `Parser.ParseFrom` | 같은 generated 타입을 Google.Protobuf 기반 gRPC가 직렬화·역직렬화 | 같은 generated 타입을 protobuf codec이 직렬화·역직렬화 |
+| C++ | 매번 생성한 `BenchPayload`의 protobuf 직렬화 / `ParseFromArray` | 같은 generated 타입을 libgrpc++가 직렬화·역직렬화 | 같은 generated 타입을 protobuf codec이 직렬화·역직렬화 |
+| Node | 매번 생성한 `BenchPayload` DTO를 기존 proto-loader serializer / deserializer로 처리 | 같은 proto-loader의 protobuf serializer / deserializer 사용 | runner에서 `unsupported`: 기존 framework protobuf codec의 `bytes` 지원 제약 |
+| C binding | C++ 드라이버에서 매번 generated `BenchPayload`를 생성해 기존 libprotobuf로 직렬화·역직렬화 | 같은 generated 타입과 libprotobuf 사용 | C framework 행 없음 |
+
+C binding bench는 `.cpp` 드라이버이며 protobuf가 이미 빌드 의존성이다. raw도 이를 공유하므로
+수동 protobuf 프레이밍 예외를 사용하지 않는다. 표의 동등성은 payload 작업을 뜻하며,
+transport 호출·envelope 처리·buffer 복사 횟수가 같다는 뜻은 아니다. Java raw와 gRPC는
+`ByteString.copyFrom`을, framework는 기존 `UnsafeByteOperations.unsafeWrap`을 사용한다.
+
+wire 동일성은 `tools/test_raw_wire.sh`로 확인한다. 고정 29바이트 payload의 기존 dump와
+protobuf 결과를 비교하며, 길이 varint 경계와 request 응답의 body 보존도 검증한다.
+
+raw 직렬화 비용을 포함한 결과를 새 기준으로 사용한다. 직렬화를 우회한 raw 기준의
+`framework/raw` 비율과 성능 추세를 비교하지 않는다. raw 처리량이 낮아져 비율이 높아지는
+것은 측정 조건의 정정이며 framework 성능 개선을 뜻하지 않는다.
+
 ### 8.2 언어마다 다르게 두되 반드시 기록하는 값
 
 아래 세 값은 언어마다 다르게 설정한다. 같게 맞추는 것이 목적이 아니라, 사용한 값을 결과에

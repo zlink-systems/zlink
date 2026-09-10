@@ -1,8 +1,11 @@
 package systems.zlink.framework.runtime.messaging;
 
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.io.SerializedString;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -13,6 +16,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 
 /**
  * Shared cross-language channel/SPOT-route wire envelope: a two-part frame of
@@ -36,6 +40,31 @@ public final class ZLinkChannelEnvelope {
     public static final String DEFAULT_CONTENT_TYPE = "application/json";
 
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final int HEADER_INITIAL_CAPACITY = 256;
+    // Reuse canonical fixed-header tokens; metadata keys remain dynamic and
+    // are never cached.
+    private static final SerializedString FORMAT_MARKER_FIELD =
+        new SerializedString("formatMarker");
+    private static final SerializedString FLOW_ID_FIELD = new SerializedString("flowId");
+    private static final SerializedString FLOW_ORIGIN_FIELD =
+        new SerializedString("flowOrigin");
+    private static final SerializedString KIND_FIELD = new SerializedString("kind");
+    private static final SerializedString CHANNEL_NAME_FIELD =
+        new SerializedString("channelName");
+    private static final SerializedString MESSAGE_NAME_FIELD =
+        new SerializedString("messageName");
+    private static final SerializedString CONTENT_TYPE_FIELD =
+        new SerializedString("contentType");
+    private static final SerializedString CORRELATION_ID_FIELD =
+        new SerializedString("correlationId");
+    private static final SerializedString DEADLINE_FIELD = new SerializedString("deadline");
+    private static final SerializedString TOPIC_FIELD = new SerializedString("topic");
+    private static final SerializedString ERROR_CODE_FIELD =
+        new SerializedString("errorCode");
+    private static final SerializedString ERROR_MESSAGE_FIELD =
+        new SerializedString("errorMessage");
+    private static final SerializedString SOURCE_FIELD = new SerializedString("source");
+    private static final SerializedString METADATA_FIELD = new SerializedString("metadata");
 
     private ZLinkChannelEnvelope() {
     }
@@ -78,7 +107,7 @@ public final class ZLinkChannelEnvelope {
     }
 
     public static String newCorrelationId() {
-        return UUID.randomUUID().toString().replace("-", "");
+        return ZLinkServiceOperationIds.correlationId(ZLinkServiceOperationIds.next());
     }
 
     /** Outbound request/command/publish header with an explicit flow value. */
@@ -90,12 +119,35 @@ public final class ZLinkChannelEnvelope {
         String topic,
         Map<String, String> metadata,
         ZLinkFlowContext.State flowState) {
+        return create(
+            kind,
+            channelName,
+            messageName,
+            contentType,
+            topic,
+            metadata,
+            flowState,
+            kind == KIND_REQUEST ? ZLinkServiceOperationIds.next() : null);
+    }
+
+    /** Internal request identity overload for the operation owner. */
+    public static Header create(
+        int kind,
+        String channelName,
+        String messageName,
+        String contentType,
+        String topic,
+        Map<String, String> metadata,
+        ZLinkFlowContext.State flowState,
+        UUID operationId) {
         return new Header(
             kind,
             channelName,
             messageName,
             contentType,
-            kind == KIND_REQUEST ? newCorrelationId() : null,
+            kind == KIND_REQUEST
+                ? ZLinkServiceOperationIds.correlationId(operationId)
+                : null,
             null,
             topic,
             null,
@@ -154,30 +206,40 @@ public final class ZLinkChannelEnvelope {
 
     public static Message encodeHeader(Header header) {
         validateFlowPair(header.flowId(), header.flowOrigin());
-        ObjectNode json = JSON.createObjectNode();
-        json.put("formatMarker", FORMAT_MARKER);
-        if (header.flowId() == null) {
-            json.putNull("flowId");
-            json.putNull("flowOrigin");
-        } else {
-            json.put("flowId", header.flowId());
-            json.put("flowOrigin", flowOriginWireValue(header.flowOrigin()));
-        }
-        json.put("kind", header.kind());
-        json.put("channelName", header.channelName());
-        json.put("messageName", header.messageName());
-        json.put("contentType", header.contentType());
-        putNullable(json, "correlationId", header.correlationId());
-        putNullable(json, "deadline", header.deadline());
-        putNullable(json, "topic", header.topic());
-        putNullable(json, "errorCode", header.errorCode());
-        putNullable(json, "errorMessage", header.errorMessage());
-        putNullable(json, "source", header.source());
-        ObjectNode metadata = json.putObject("metadata");
-        header.metadata().forEach(metadata::put);
-        try {
-            return Message.from(JSON.writeValueAsBytes(json));
-        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+        try (ByteArrayOutputStream bytes = new ByteArrayOutputStream(HEADER_INITIAL_CAPACITY);
+             JsonGenerator json = JSON.getFactory().createGenerator(bytes)) {
+            json.writeStartObject();
+            json.writeFieldName(FORMAT_MARKER_FIELD);
+            json.writeNumber(FORMAT_MARKER);
+            writeNullableString(json, FLOW_ID_FIELD, header.flowId());
+            if (header.flowId() == null) {
+                json.writeFieldName(FLOW_ORIGIN_FIELD);
+                json.writeNull();
+            } else {
+                json.writeFieldName(FLOW_ORIGIN_FIELD);
+                json.writeNumber(flowOriginWireValue(header.flowOrigin()));
+            }
+            json.writeFieldName(KIND_FIELD);
+            json.writeNumber(header.kind());
+            writeNullableString(json, CHANNEL_NAME_FIELD, header.channelName());
+            writeNullableString(json, MESSAGE_NAME_FIELD, header.messageName());
+            writeNullableString(json, CONTENT_TYPE_FIELD, header.contentType());
+            writeNullableString(json, CORRELATION_ID_FIELD, header.correlationId());
+            writeNullableString(json, DEADLINE_FIELD, header.deadline());
+            writeNullableString(json, TOPIC_FIELD, header.topic());
+            writeNullableString(json, ERROR_CODE_FIELD, header.errorCode());
+            writeNullableString(json, ERROR_MESSAGE_FIELD, header.errorMessage());
+            writeNullableString(json, SOURCE_FIELD, header.source());
+            json.writeFieldName(METADATA_FIELD);
+            json.writeStartObject();
+            for (Map.Entry<String, String> entry : header.metadata().entrySet()) {
+                json.writeStringField(entry.getKey(), entry.getValue());
+            }
+            json.writeEndObject();
+            json.writeEndObject();
+            json.flush();
+            return Message.from(bytes.toByteArray());
+        } catch (IOException ex) {
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
                 "ZLink envelope header could not be encoded",
@@ -424,11 +486,15 @@ public final class ZLinkChannelEnvelope {
         return node.asText();
     }
 
-    private static void putNullable(ObjectNode json, String field, String value) {
+    private static void writeNullableString(
+        JsonGenerator json,
+        SerializedString field,
+        String value) throws IOException {
+        json.writeFieldName(field);
         if (value == null) {
-            json.putNull(field);
+            json.writeNull();
         } else {
-            json.put(field, value);
+            json.writeString(value);
         }
     }
 

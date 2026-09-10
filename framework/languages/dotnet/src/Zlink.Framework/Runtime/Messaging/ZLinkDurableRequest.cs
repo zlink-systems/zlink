@@ -5,12 +5,12 @@ namespace Zlink.Framework.Runtime.Messaging;
 // replay before decoding, including rejected and malformed terminal replies.
 internal static class ZLinkDurableRequest
 {
-    internal static async ValueTask<IReadOnlyList<Message>> RequestAsync(
+    internal static async ValueTask<TReply> RequestAsync<TReply>(
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
         long startTimestamp,
         TimeSpan timeout,
         Func<IReadOnlyList<ReadOnlyMemory<byte>>, TimeSpan, CancellationToken,
-            ValueTask<IReadOnlyList<Message>>> submit,
+            ValueTask<TReply>> submit,
         CancellationToken cancellationToken,
         TimeProvider? timeProvider = null)
     {

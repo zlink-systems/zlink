@@ -1384,6 +1384,61 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
+    void channelRequestUsesOnlyTheCallerRegistryAndKeepsItsEnvelopeIdentity() throws Exception {
+        String endpoint = "inproc://jvm-single-operation-" + System.nanoTime();
+        RoutingId targetRid = RoutingId.from("single-operation-target");
+        try (var context = Zlink.createContext();
+             var target = meshNode(context);
+             var source = meshNode(context);
+             var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+             var caller = new systems.zlink.framework.runtime.internal.service
+                 .ZLinkServiceOperationRegistry(scheduler)) {
+            target.setRoutingId(targetRid);
+            target.setBind(endpoint);
+            target.addChannel("orders");
+            target.setChannelWeight("orders", 100);
+            source.setRoutingId(RoutingId.from("single-operation-source"));
+            source.setBind("inproc://jvm-single-operation-source-" + System.nanoTime());
+            target.start();
+            source.start();
+            source.connectPeer(endpoint, targetRid);
+            awaitAdmitted(source);
+            CompletableFuture<ZLinkMeshDispatchRecord> incoming = new CompletableFuture<>();
+            target.startDispatch(incoming::complete);
+            var id = systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds.next();
+            var header = systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.create(
+                1, "orders", "request", "application/json", null,
+                java.util.Map.of(), null, id);
+            try (Message encodedHeader = systems.zlink.framework.runtime.messaging
+                    .ZLinkChannelEnvelope.encodeHeader(header);
+                 Message body = Message.from("request")) {
+                var result = source.spotNode().requestToChannel("orders", new byte[0],
+                    List.of(encodedHeader, body), Duration.ofSeconds(2), caller, id)
+                    .toCompletableFuture();
+                try (var record = incoming.get(2, TimeUnit.SECONDS)) {
+                    assertEquals(1, caller.pendingCount());
+                    var field = ZLinkJavaRawMeshNode.class.getDeclaredField("operations");
+                    field.setAccessible(true);
+                    var meshRegistry = (systems.zlink.framework.runtime.internal.service
+                        .ZLinkServiceOperationRegistry) field.get(source);
+                    assertEquals(0, meshRegistry.pendingCount(),
+                        "the service node must not register the channel operation again");
+                    assertEquals(header.correlationId(), systems.zlink.framework.runtime.messaging
+                        .ZLinkChannelEnvelope.decodeHeader(record.parts().getFirst(), false)
+                        .correlationId());
+                    try (Message reply = Message.from("reply")) {
+                        record.reply(List.of(reply));
+                    }
+                }
+                try (var reply = result.get(2, TimeUnit.SECONDS)) {
+                    assertEquals("reply", reply.parts().getFirst().toUtf8String());
+                    assertEquals(0, caller.pendingCount());
+                }
+            }
+        }
+    }
+
+    @Test
     void nodeRequestCompletesExactlyOnceThroughFrameworkReply() throws Exception {
         String endpoint = "inproc://jvm-m6a-request-" + System.nanoTime();
         RoutingId leftRid = RoutingId.from("jvm-m6a-request-left");

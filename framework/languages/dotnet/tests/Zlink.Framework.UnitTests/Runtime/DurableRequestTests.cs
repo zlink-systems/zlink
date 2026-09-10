@@ -71,7 +71,7 @@ public sealed class DurableRequestTests
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-            await ZLinkDurableRequest.RequestAsync([], Stopwatch.GetTimestamp(),
+            await ZLinkDurableRequest.RequestAsync<IReadOnlyList<Message>>([], Stopwatch.GetTimestamp(),
                 TimeSpan.FromSeconds(1), (_, _, _) =>
                     throw new Xunit.Sdk.XunitException("Cancelled operation submitted."),
                 cancellation.Token));

@@ -15,7 +15,9 @@ import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
     private final ZLinkHandlerActivator.Activation activation;
     private final Map<Class<?>, Object> instances = new LinkedHashMap<>();
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    // Keep synchronous activation on the caller's execution resource; the lane
+    // still owns FIFO and non-reentrant access to the scope's state.
+    private final ZLinkStateLane stateLane = new ZLinkStateLane(Runnable::run);
     private boolean closed;
 
     public ZLinkHandlerInstanceOwner(ZLinkHandlerActivator activator) {

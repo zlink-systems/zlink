@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/protocol/service_wire_codec.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/protocol/actor_join_recovery_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
@@ -424,8 +425,126 @@ void verify_generated_adoption_goldens ()
 }
 }
 
+// Frozen pre-Issue-49 encoder: the final wire, including multipart lengths,
+// is the compatibility boundary rather than an encode/decode round trip.
+static void test_application_payload_wire_bytes ()
+{
+    for (const auto size : {0u, 1u, 1024u, 4096u}) {
+        for (const bool multipart : {false, true}) {
+            for (const bool traced : {false, true}) {
+                std::vector<std::uint8_t> bytes (size);
+                for (std::size_t i = 0; i < bytes.size (); ++i)
+                    bytes[i] = static_cast<std::uint8_t> (i);
+                if (multipart) {
+                    std::vector<std::uint8_t> parts;
+                    put_u32 (parts, 3);
+                    put_u32 (parts, 3);
+                    parts.insert (parts.end (), {'h', 0, 255});
+                    put_u32 (parts, 0);
+                    put_u32 (parts, size);
+                    parts.insert (parts.end (), bytes.begin (), bytes.end ());
+                    bytes = std::move (parts);
+                }
+                protocol::application_payload_t payload{
+                  multipart ? protocol::framework_multipart_packet_name : "Packet",
+                  multipart ? protocol::framework_multipart_content_type
+                            : "application/x-protobuf",
+                  bytes};
+                if (traced) {
+                    payload.flow_id = "019fc5b9-9df3-786b-bb69-d55358f6d48b";
+                    payload.flow_origin = zlink::framework::flow_origin_t::application;
+                }
+                std::vector<std::uint8_t> body;
+                put_text8 (body, payload.packet_name);
+                put_text8 (body, payload.content_type);
+                put_u32 (body, static_cast<std::uint32_t> (bytes.size ()));
+                body.insert (body.end (), bytes.begin (), bytes.end ());
+                if (traced) {
+                    put_text8 (body, *payload.flow_id);
+                    body.push_back (static_cast<std::uint8_t> (*payload.flow_origin));
+                }
+                std::vector<std::uint8_t> expected{static_cast<std::uint8_t> (traced ? 2 : 1)};
+                put_u32 (expected, static_cast<std::uint32_t> (body.size ()));
+                expected.insert (expected.end (), body.begin (), body.end ());
+                assert (protocol::encode_application_payload (payload) == expected);
+                if (multipart) {
+                    auto native = [&] {
+                        std::vector<zlink::message_t> parts;
+                        parts.push_back (zlink::message_t::from (
+                          std::vector<std::uint8_t>{'h', 0, 255}));
+                        parts.push_back (zlink::message_t::allocate (0));
+                        auto body = zlink::message_t::allocate (size);
+                        for (std::size_t i = 0; i < size; ++i)
+                            body.data ()[i] = static_cast<std::byte> (i);
+                        const auto *body_storage = body.data ();
+                        parts.push_back (std::move (body));
+                        auto retained = protocol::application_payload_t::from_parts (parts);
+                        if (size >= 1024)
+                            assert (retained.parts ()->back ().data () == body_storage);
+                        return retained;
+                    } ();
+                    native.flow_id = payload.flow_id;
+                    native.flow_origin = payload.flow_origin;
+                    assert (protocol::encode_application_payload (native) == expected);
+                    assert (protocol::application_payload_hwm_bytes (native) == size);
+                    const auto retained_copy = native;
+                    assert (retained_copy.parts () == native.parts ());
+                    assert (native == retained_copy);
+                    assert (native == payload && payload == native);
+                    auto separate_parts = protocol::application_payload_t::from_parts (*native.parts ());
+                    separate_parts.flow_id = native.flow_id;
+                    separate_parts.flow_origin = native.flow_origin;
+                    assert (separate_parts.parts () != native.parts ());
+                    assert (native == separate_parts);
+                    auto mismatched_parts = protocol::application_payload_t::from_parts (
+                      std::vector<zlink::message_t>{zlink::message_t::from (std::string ("different"))});
+                    mismatched_parts.flow_id = native.flow_id;
+                    mismatched_parts.flow_origin = native.flow_origin;
+                    assert (!(native == mismatched_parts));
+                    auto changed_metadata = native;
+                    changed_metadata.packet_name += "!";
+                    assert (!(native == changed_metadata));
+                    for (const auto length : {std::size_t{0}, std::size_t{3}, std::size_t{7},
+                                               payload.payload_bytes ().size () - 1}) {
+                        auto truncated = payload;
+                        truncated.payload_bytes ().resize (length);
+                        assert (!(native == truncated) && !(truncated == native));
+                    }
+                    auto trailing = payload;
+                    trailing.payload_bytes ().push_back (0);
+                    assert (!(native == trailing) && !(trailing == native));
+                    for (const auto offset : {std::size_t{0}, std::size_t{4}, std::size_t{8}}) {
+                        auto corrupted = payload;
+                        corrupted.payload_bytes ()[offset] ^= 1;
+                        assert (!(native == corrupted) && !(corrupted == native));
+                    }
+                    auto changed_parts = *native.parts ();
+                    changed_parts[0] = zlink::message_t::from (
+                      std::vector<std::uint8_t>{'x', 0, 255});
+                    auto different = protocol::application_payload_t::from_parts (changed_parts);
+                    different.flow_id = native.flow_id;
+                    different.flow_origin = native.flow_origin;
+                    assert (!(native == different));
+                }
+            }
+        }
+    }
+}
+
 int main ()
 {
+    test_application_payload_wire_bytes ();
+    {
+        zlink::framework::detail::backend::raw_message_t wire;
+        wire.emplace_back (4096, 0x5a);
+        const auto *storage = wire.front ().data ();
+        auto messages = zlink::framework::detail::backend::materialize_binding_parts (
+          std::move (wire));
+        assert (reinterpret_cast<const std::uint8_t *> (messages.front ().data ()) == storage);
+        auto retained = messages.front ().copy ();
+        messages.clear ();
+        assert (retained.size () == 4096 && retained.bytes ().back () == std::byte{0x5a});
+    }
     verify_generated_adoption_goldens ();
     const protocol::actor_route_fence_t bound_actor{
       .actor_id = "actor-a",
@@ -555,7 +674,7 @@ int main ()
       protocol::encode_application_payload (multipart_application);
     assert (protocol::application_payload_hwm_bytes (multipart_wire) == 4);
     auto truncated_multipart = multipart_application;
-    truncated_multipart.payload.pop_back ();
+    truncated_multipart.payload_bytes ().pop_back ();
     bool truncated_multipart_rejected = false;
     try {
         (void) protocol::application_payload_hwm_bytes (
@@ -593,7 +712,7 @@ int main ()
           protocol::decode_application_payload (traced_application_wire, false);
         assert (!stripped.flow_id && !stripped.flow_origin);
         assert (stripped.packet_name == traced_application.packet_name
-                && stripped.payload == traced_application.payload);
+                && stripped.payload_bytes () == traced_application.payload_bytes ());
         auto corrupted_wire = traced_application_wire;
         /* Corrupt the first flow-id byte (after the 1-byte text8 length). */
         const auto flow_position = corrupted_wire.size () - 37;
@@ -609,11 +728,11 @@ int main ()
         const auto corrupted_stripped =
           protocol::decode_application_payload (corrupted_wire, false);
         assert (!corrupted_stripped.flow_id
-                && corrupted_stripped.payload == traced_application.payload);
+                && corrupted_stripped.payload_bytes () == traced_application.payload_bytes ());
         /* HWM accounting stays mode-independent and structural. */
         assert (protocol::application_payload_hwm_bytes (
                   std::span<const std::uint8_t> (corrupted_wire))
-                == traced_application.payload.size ());
+                == traced_application.payload_bytes ().size ());
     }
     auto admission_descriptor = mesh::service_node_descriptor_t{
       "codec-mesh", std::vector<std::uint8_t>{'n', 'o', 'd', 'e'},

@@ -599,9 +599,7 @@ internal sealed class RawBenchTransport : IBenchTransport
                 .Message(body)
                 .Async(cancellationToken);
             if (parts.Count == 0) throw new InvalidOperationException("Raw request returned no reply parts.");
-            var reply = new BenchPayload();
-            reply.MergeFrom(parts.Count == 1 ? parts[0].AsReadOnlySpan() : parts[^1].AsReadOnlySpan());
-            return reply;
+            return RawWire.Decode(parts.Count == 1 ? parts[0].AsReadOnlySpan() : parts[^1].AsReadOnlySpan());
         }
         finally
         {
@@ -644,7 +642,7 @@ internal sealed class RawBenchTransport : IBenchTransport
         var body = Message.Allocate(payload.CalculateSize());
         try
         {
-            payload.WriteTo(body.AsSpan());
+            RawWire.Encode(payload, body.AsSpan());
             return body;
         }
         catch

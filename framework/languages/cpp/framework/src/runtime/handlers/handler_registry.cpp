@@ -259,7 +259,8 @@ class handler_registry_state_t
 {
   public:
     std::map<handler_key_t, handler_entry_t> handlers;
-    std::vector<handler_registry_t::filter_invoker_t> filters;
+    std::shared_ptr<const filter_list_t> filters =
+      std::make_shared<const filter_list_t> ();
     handler_registry_t::failure_observer_t failure_observer;
 };
 
@@ -301,7 +302,9 @@ handler_registry_t &handler_registry_t::observe_failures (failure_observer_t obs
 
 handler_registry_t &handler_registry_t::add_filter (filter_invoker_t filter)
 {
-    _state->filters.push_back (std::move (filter));
+    auto filters = std::make_shared<filter_list_t> (*_state->filters);
+    filters->push_back (std::move (filter));
+    _state->filters = std::move (filters);
     return *this;
 }
 
@@ -312,8 +315,18 @@ handler_registry_t::invoke_filters_async (handler_dispatch_kind_t dispatch_kind,
                                           const message_context_t &context,
                                           terminal_invoker_t terminal) const
 {
+    const auto filters = _state->filters;
+    if (filters->empty ()) {
+        try {
+            return terminal ();
+        }
+        catch (...) {
+            task_t<zlink::message_t>::promise_type failure;
+            failure.unhandled_exception ();
+            return failure.get_return_object ();
+        }
+    }
     auto filter_context = handler_filter_context_t{context, dispatch_kind};
-    auto filters = std::make_shared<const filter_list_t> (_state->filters);
     auto owned_terminal =
       std::make_shared<filter_terminal_t> (std::move (terminal));
     return invoke_filter_level (filters, 0, &services, &serializers, std::move (filter_context),

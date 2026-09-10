@@ -83,21 +83,29 @@ route_packet_dispatcher_t::dispatch (const route_received_packet_t &received) co
         return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (header, "route envelope header decode failed");
     }
 
+    return dispatch (received, std::move (header.value ()));
+}
+
+result_t<std::optional<route_dispatch_reply_t>>
+route_packet_dispatcher_t::dispatch (
+  const route_received_packet_t &received,
+  runtime::messaging::envelope_header_t header) const
+{
     auto flow_scope = runtime::flow_context_t::enter (
-      header.value ().flow_id, header.value ().flow_origin,
+      header.flow_id, header.flow_origin,
       message_flow_tracer_t (_dispatch_options).mode (),
       flow_origin_t::inbound);
     trace_flow (message_flow_outcome_t::received,
-                header.value ().kind == runtime::messaging::message_kind_t::request
+                header.kind == runtime::messaging::message_kind_t::request
                   ? dispatch_message_kind_t::request
                   : dispatch_message_kind_t::send,
-                received, header.value ());
+                received, header);
 
-    switch (header.value ().kind) {
+    switch (header.kind) {
         case runtime::messaging::message_kind_t::command:
-            return dispatch_send (received, std::move (header.value ()));
+            return dispatch_send (received, std::move (header));
         case runtime::messaging::message_kind_t::request:
-            return dispatch_request (received, std::move (header.value ()));
+            return dispatch_request (received, std::move (header));
         default:
             return result_t<std::optional<route_dispatch_reply_t>>::failure (
               framework_error_kind_t::protocol_error, "unsupported route message kind");

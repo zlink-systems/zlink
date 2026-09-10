@@ -68,7 +68,10 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
 {
     {
         std::lock_guard lock (_mutex);
-        if (_stopping) {
+        // Already-admitted owner queues keep draining through scheduler
+        // continuations. Teardown closes this path only after quiescence;
+        // public work submission remains sealed as soon as stopping begins.
+        if (_stopping && _active == 0 && _queue.empty ()) {
             return false;
         }
         _queue.push (work_item_t{

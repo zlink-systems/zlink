@@ -1029,3 +1029,54 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
 - **결정(감독자)**: 2차 범위 = (1) persistent application worker, (2) **send-saturation 4096 회귀와 target backlog 원인 규명 우선**
   — 프레임워크 target이 4096에서 소비하지 못하는 이유를 계측으로 특정한다(raw는 361k msg/s인데 framework는 814 msg/s),
   (3) 스펙 08 §3~§4 순서 준수. 수치를 맞추려고 벤치 조건·HWM·timeout을 바꾸지 않는다.
+
+## FB-062 — Java 수신 pump는 platform thread여야 한다. 가상 thread면 send 지연이 125 ms (2026-09-10, Issue #75, PR #80)
+
+- 같은 커밋을 pump 종류만 바꿔 잰 1-run(1024 B, `.artifacts/vt-compare/`):
+
+  | 패턴 | 가상 thread | platform thread | 차이 |
+  |---|---:|---:|---:|
+  | send-saturation 처리량 | 14,356 msg/s | 67,712 msg/s | **4.7배** |
+  | send-saturation 지연 | 125.462 ms | 0.247 ms | **1/508** |
+  | request-serial 처리량 | 1,927.8 ops/s | 2,233.2 ops/s | +15.8% |
+
+- 이 pump는 socket 하나를 blocking으로 기다리는 전용 실행 단위다. 가상 thread의 이점(대기 중 carrier 반납)이
+  없고 mount/unmount 비용만 남는다.
+- **경위 정정**: 처음에는 "가상 thread에서 멀티파트 수신이 실패한다"는 보고로 임시 우회를 시작했다.
+  감독자가 그 재현을 현재 main에서 다시 돌리니 **네 조합(virtual/platform × forceYield on/off) 모두 정상**이었다.
+  정확성 문제는 재현되지 않는다. 성능 차이만 실재하므로 성능 수정으로 채택했다.
+- **남은 질문**: 가상 thread에서 blocking 수신이 왜 이렇게 느린지, 멀티파트 실패 보고가 무엇이었는지(Issue #75 유지).
+  다른 언어에도 같은 형태가 있는지 확인이 필요하다.
+
+## FB-063 — Java 제출 경로의 읽기 전용 조회 3회가 177 µs를 쓴다. 본문은 0.57 µs (2026-09-10, Issue #78)
+
+- 프로파일(`.artifacts/codex/java-client-profile/`):
+
+  | 구간 | framework | raw binding |
+  |---|---:|---:|
+  | 제출 진입 → binding submit | **193.20 µs** | 1.35 µs |
+  | 요청당 Java 스레드 전달 | 12회 | 3회 |
+
+  193 µs 중 **177.55 µs가 registry 조회 3회의 lane 왕복**, 조회 본문 합계는 **0.57 µs**다. 300배다.
+- 문제 코드: `ZLinkChannelRuntime.java:1097,1106`이 제출 전에 `hasClientRegistration`·`spotRouterNode`를 부르고,
+  둘 다 맵 조회 하나를 `inStateLane`으로 감싼다(`ZLinkChannelSocketRegistry.java:642-648`, `:1368-1370`).
+  `sendToChannel`도 같은 경로다 — **채널 API 전체가 이 비용을 낸다.**
+- **이 발견이 앞선 라운드의 결과를 설명한다.** 감사로 뽑은 클라이언트 항목 7개(요청별 timer 2개, UUID 2개,
+  이중 등록, 이중 진입, 여분 continuation, 복사)를 모두 없앴는데 +7.4%였다(PR #74). 그 항목들은 0.57 µs 쪽에
+  속한 비용이었다. **문제는 무엇을 하느냐가 아니라 그 일을 어디서 하느냐였다.**
+- 같은 처방이 이미 통했다: Issue #68(PR #76)에서 handler scope 조회의 스레드 왕복을 없애 send 지연을
+  120.4 ms → 0.301 ms로 줄였다.
+- 스펙 08 E2는 선택이 "선택 소유자의 turn 하나 안에서 상수 시간"이어야 한다고 정한다. 지금은 turn을 세 번 왕복한다.
+
+## FB-064 — gRPC 벤치의 비교 짝이 어긋나 있었다 (2026-09-10, 사용자 지적, Issue #13 재정의)
+
+- 세 스택이 서로 다른 토폴로지·주소 지정을 쓴다: gRPC는 특정 대상과 1:1, zlink core(raw)는 **DEALER→ROUTER**,
+  zlink framework는 **RouteMesh `sendToChannel`**(ROUTER↔ROUTER 위 채널 단위 라운드로빈)이다.
+  그래서 비율이 "framework 계층의 비용"이 아니라 "토폴로지 차이 + framework 비용"을 섞어 보고한다.
+- **결정(사용자)**: gRPC 벤치는 gRPC와 비교하는 것이 목적이므로 셋을 맞춘다 — core는 **ROUTER↔ROUTER**,
+  framework는 **`sendToNode`/`requestToNode`**(RID 직접). 패턴은 `request-serial`·`request-backpressure`·
+  `send-saturation` 셋으로 줄인다. `request-window`는 깊이를 밖에서 강제해 도달 깊이를 보고하므로 뺀다.
+  서버는 1개 유지.
+- 모델 사이 비교(DEALER→ROUTER, `ToChannel`, ClientServer)는 **별도 벤치**로 분리한다. 특히 `ToChannel`과
+  `ToNode`를 나란히 재면 채널 선택 비용이 그 차이로 드러난다 — 가치는 있으나 gRPC 비교표에 섞을 값이 아니다.
+- 재측정 뒤 이전 숫자와 직접 비교하지 않는다. 분모가 달라진다.

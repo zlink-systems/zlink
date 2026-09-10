@@ -6040,6 +6040,24 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
       actor_join_reply_t{0, committed, framework_reply_or_empty (response.reply, serializers)});
 }
 
+std::optional<std::chrono::steady_clock::time_point>
+spot_node_runtime_t::next_management_activity () const
+{
+    auto next = _state->actor_transfer_coordinator.next_activity ();
+    return _state->lane.run ([&] {
+        for (const auto &cleanup : _state->pending_remote_source_cleanups) {
+            if (_state->actor_transfer_coordinator.blocks_dispatch (actor_key (cleanup.source_actor)))
+                continue;
+            const auto deadline = cleanup.leave_completed
+                                    ? cleanup.not_before
+                                    : std::max (cleanup.not_before, cleanup.leave_deadline);
+            if (!next || deadline < *next)
+                next = deadline;
+        }
+        return next;
+    }).get ();
+}
+
 std::size_t spot_node_runtime_t::cleanup_expired_actor_admissions ()
 {
     return cleanup_expired_actor_admissions_at (std::chrono::steady_clock::now ());
@@ -6178,7 +6196,7 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
     // adopt a visible target commit or fail the parked requests Unavailable.
     // A source-owner snapshot cannot authorize replay: the target may still
     // commit within its Restore validity.
-    const auto expired_reconciles = _state->actor_transfer_coordinator.reconcile_keys_expired (now);
+    const auto expired_reconciles = _state->actor_transfer_coordinator.take_due_reconciles (now);
     for (const auto &expired : expired_reconciles) {
         const auto &key = expired.actor_key;
         const auto separator = key.find (':');
@@ -7105,8 +7123,11 @@ bool spot_node_runtime_t::materialize_relocation_state (
                               source_admission->second.on_leave_actor;
                         }
                     }
-                    if (!return_remnant->leave_callback)
+                    if (!return_remnant->leave_callback) {
                         cleanup->leave_completed = true;
+                        if (const auto host = _state->native_node.lock ())
+                            host->signal_dispatch_activity ();
+                    }
                 }
             }
         }
@@ -7128,8 +7149,11 @@ bool spot_node_runtime_t::materialize_relocation_state (
                   return candidate.transfer_id == return_remnant->transfer_id
                          && candidate.source_fence == return_remnant->source_fence;
               });
-            if (cleanup != _state->pending_remote_source_cleanups.end ())
+            if (cleanup != _state->pending_remote_source_cleanups.end ()) {
                 cleanup->leave_completed = true;
+                if (const auto host = _state->native_node.lock ())
+                    host->signal_dispatch_activity ();
+            }
         }).get ();
     }
 
@@ -8561,6 +8585,8 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
             // this transfer's source cleanup is already unblocked.
             if (!leave_callback)
                 cleanup->leave_completed = true;
+                if (const auto host = _state->native_node.lock ())
+                    host->signal_dispatch_activity ();
         } else if (!_state->actor_transfer_coordinator.try_submit_source_leave (key, transfer_id))
             return false;
 
@@ -8629,6 +8655,8 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
                   if (found != state->pending_remote_source_cleanups.end ()
                       && callback_invoked->load (std::memory_order_acquire)) {
                       found->leave_completed = true;
+                      if (const auto host = state->native_node.lock ())
+                          host->signal_dispatch_activity ();
                   }
               }).get ();
           }, {}, {}, {}, selected_owner_reservation.release (), selected_owner_byte_cost);
@@ -8761,6 +8789,8 @@ task_t<void> spot_node_runtime_t::complete_remote_actor_transfer (
             .leave_submitted = source_leave_submitted,
             .leave_completed = false,
             .leave_deadline = now + _state->message_follow_duration});
+        if (const auto host = _state->native_node.lock ())
+            host->signal_dispatch_activity ();
         const auto pending_leave = std::find_if (
           _state->pending_remote_actor_leaves.begin (),
           _state->pending_remote_actor_leaves.end (), [&] (const auto &candidate) {
@@ -12404,6 +12434,11 @@ void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node
         bool create_idle_timer = false;
     };
     const auto native = node;
+    _state->actor_transfer_coordinator.set_activity_handler (
+      [weak = std::weak_ptr<service::mesh_node_t> (node)] {
+          if (const auto host = weak.lock ())
+              host->signal_dispatch_activity ();
+      });
     const auto plan = _state->lane.run ([&] {
         attach_plan_t result;
         _state->stopping.store (false, std::memory_order_release);

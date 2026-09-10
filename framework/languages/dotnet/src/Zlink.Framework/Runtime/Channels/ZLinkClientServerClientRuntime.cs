@@ -20,10 +20,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private readonly Dictionary<string, Connection> _connections =
         new(StringComparer.Ordinal);
     private readonly List<Task> _retired = [];
-    private ZLinkWeightedSelectionPlan<Connection, string>?
+    private ZLinkWeightedSelectionPlan<ReadyTarget, string>?
         _readySelectionPlan;
-    private long _selectionRevision;
-    private long _readySelectionPlanRevision = -1;
+    private long _readySelectionPlanBuildCount;
     private int _pendingRequests;
     private bool _disposed;
     private IDisposable? _manualConnectionAttachment;
@@ -184,7 +183,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     ZLinkDispatchMessageKind.Send,
                     sentPacketName,
                     _channelName.Value,
-                    ServerRid: target.SelectionServerRid?.ToString()));
+                    ServerRid: target.SelectionServerRid.ToString()));
             return new ZLinkOneWaySubmitResult(
                 ZLinkOneWaySubmitStatus.Submitted);
         }
@@ -265,7 +264,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     sentHeader.MessageName,
                     _channelName.Value,
                     CorrelationId: sentHeader.CorrelationId,
-                    ServerRid: target.SelectionServerRid?.ToString()));
+                    ServerRid: target.SelectionServerRid.ToString()));
             return await ZLinkRawRequestSubmitter.SubmitAsync(
                     parts,
                     (pending, nativeTimeout, token) => target.Socket.Request()
@@ -292,6 +291,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     }
 
     internal int PendingRequestCount => Volatile.Read(ref _pendingRequests);
+
+    internal long ReadySelectionPlanBuildCount =>
+        RunState(() => _readySelectionPlanBuildCount);
 
     internal IReadOnlyList<ZLinkClientServerConnectionSnapshot>
         SnapshotConnections() =>
@@ -459,10 +461,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 _stopToken,
                 _applicationJobQueue,
                 OnAdmitted,
-                InvalidateSelectionCache,
+                ScheduleStateChanged,
                 _time);
             _connections[key] = created;
-            InvalidateSelectionCache();
+            ScheduleStateChanged(selectionChanged: true);
             retirePrevious = previous is not null
                 && !IsReferenced(previous);
             if (retirePrevious)
@@ -480,7 +482,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 return;
             if (!_connections.Remove(key, out removed))
                 return;
-            InvalidateSelectionCache();
+            ScheduleStateChanged(selectionChanged: true);
             if (IsReferenced(removed))
                 return;
             RegisterRetirement(removed);
@@ -494,44 +496,50 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         _retired.Add(task);
     }
 
-    private Connection? SelectReady()
+    private ReadyTarget? SelectReady()
     {
-        return RunState(() =>
+        return RunState(() => _readySelectionPlan?.Select());
+    }
+
+    private void ScheduleStateChanged(bool selectionChanged)
+    {
+        _lane.TryPost(() =>
         {
-            var revision = Volatile.Read(ref _selectionRevision);
-            if (_readySelectionPlanRevision != revision)
-            {
-                var retainedCurrents = _readySelectionPlan?.CaptureCurrents();
-                var candidates = DistinctConnections()
-                    .Where(static value => value.Ready && value.Weight > 0)
-                    .OrderBy(
-                        static value => value.SelectionServerRid?.ToHex(),
-                        StringComparer.Ordinal)
-                    .ToArray();
-                _readySelectionPlan = new ZLinkWeightedSelectionPlan<
-                    Connection,
-                    string>(
-                    candidates,
-                    static value => value.Weight,
-                    static value => value.SelectionServerRid?.ToHex()
-                        ?? throw new InvalidOperationException(
-                            "A ready ClientServer connection has no Server RID."),
-                    retainedCurrents,
-                    StringComparer.Ordinal,
-                    StringComparer.Ordinal);
-                _readySelectionPlanRevision = revision;
-            }
-            return _readySelectionPlan!.Select();
+            if (!_disposed && selectionChanged)
+                RebuildReadySelectionPlanUnderLock();
+            SignalStateChanged();
+            return ValueTask.CompletedTask;
         });
     }
 
-    private void InvalidateSelectionCache()
+    private void RebuildReadySelectionPlanUnderLock()
     {
-        Interlocked.Increment(ref _selectionRevision);
-        SignalStateChanged();
+        var retainedCurrents = _readySelectionPlan?.CaptureCurrents();
+        var candidates = DistinctConnections()
+            .Select(static connection => connection.ReadyTarget)
+            .Where(static target => target is not null)
+            .Select(static target => target!)
+            .OrderBy(
+                static target => target.SelectionServerRid.ToHex(),
+                StringComparer.Ordinal)
+            .ToArray();
+        _readySelectionPlan = new ZLinkWeightedSelectionPlan<ReadyTarget, string>(
+            candidates,
+            static target => target.Weight,
+            static target => target.SelectionServerRid.ToHex(),
+            retainedCurrents,
+            StringComparer.Ordinal,
+            StringComparer.Ordinal);
+        _readySelectionPlanBuildCount++;
     }
 
     private void SignalStateChanged() => StateChanged?.Invoke();
+
+    private sealed record ReadyTarget(
+        IDealerSocket Socket,
+        uint AdmittedMaximumMessageBytes,
+        RoutingId SelectionServerRid,
+        int Weight);
 
     private IEnumerable<Connection> DistinctConnections() =>
         _connections.Values.Distinct(
@@ -583,14 +591,14 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private static void AwaitStateLane(ValueTask operation) =>
         operation.GetAwaiter().GetResult();
 
-    private async ValueTask<Connection?> WaitForReadyAsync(
+    private async ValueTask<ReadyTarget?> WaitForReadyAsync(
         CancellationToken cancellationToken) =>
         await WaitForReadyAsync(
                 _requestTimeout,
                 cancellationToken)
             .ConfigureAwait(false);
 
-    private async ValueTask<Connection?> WaitForReadyAsync(
+    private async ValueTask<ReadyTarget?> WaitForReadyAsync(
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
@@ -639,7 +647,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private Task? _monitorTask;
         private bool _terminationRequested;
         private readonly Action<Connection, string> _onAdmitted;
-        private readonly Action _onSelectionChanged;
+        private readonly Action<bool> _onStateChanged;
+        private ReadyTarget? _readyTarget;
         private ulong _nextProbeId = 1;
         private ulong? _outstandingProbeId;
         private long _lastPeerActivity;
@@ -661,7 +670,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             CancellationToken stopToken,
             ZLinkApplicationJobQueue applicationJobQueue,
             Action<Connection, string> onAdmitted,
-            Action onSelectionChanged,
+            Action<bool> onStateChanged,
             TimeProvider timeProvider)
         {
             _channelName = channelName;
@@ -671,7 +680,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 ?? TimeSpan.FromSeconds(1);
             _stopToken = stopToken;
             _onAdmitted = onAdmitted;
-            _onSelectionChanged = onSelectionChanged;
+            _onStateChanged = onStateChanged;
             _time = timeProvider;
             _admissionStop =
                 CancellationTokenSource.CreateLinkedTokenSource(stopToken);
@@ -688,22 +697,11 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         }
 
         internal IDealerSocket Socket { get; }
+        internal ReadyTarget? ReadyTarget => Volatile.Read(ref _readyTarget);
         internal bool Ready => RunState(() => _ready && !_disposed);
-        internal uint AdmittedMaximumMessageBytes
-        {
-            get => RunState(() =>
-                _currentAdmission?.NormalizedEffectiveMaxMessageBytes
-                ?? _normalizedEffectiveMaxMessageBytes);
-        }
         internal bool AdmissionCompleted
         {
             get => RunState(() => _admissionCompleted);
-        }
-        internal int Weight => RunState(() => _weight);
-        internal RoutingId? SelectionServerRid
-        {
-            get => RunState(() =>
-                _currentAdmission?.ServerRid ?? _expected?.ServerRid);
         }
         internal string Diagnostics
         {
@@ -803,8 +801,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     else if (_currentAdmission is not null)
                         _ready = true;
                 }
+                PublishReadyTargetUnderLock();
             });
-            _onSelectionChanged();
         }
 
         internal void MergeExpected(
@@ -826,8 +824,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 _ready = _currentAdmission is not null
                     && expected.State == ZLinkFrameworkRuntimeState.Serving
                     && expected.Weight > 0;
+                PublishReadyTargetUnderLock();
             });
-            _onSelectionChanged();
         }
 
         internal void Start()
@@ -865,7 +863,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 {
                     _disposed = true;
                     _ready = false;
-                    _onSelectionChanged();
+                    PublishReadyTargetUnderLock();
                     start = new TaskCompletionSource(
                         TaskCreationOptions.RunContinuationsAsynchronously);
                     using (ExecutionContext.SuppressFlow())
@@ -987,7 +985,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             _ready = false;
                             _rejected = true;
                             _admissionCompleted = true;
-                            _onSelectionChanged();
+                            PublishReadyTargetUnderLock();
                             return false;
                         }
                         return true;
@@ -1143,7 +1141,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     _ready = false;
                     _diagnostics =
                         $"request:{exception.GetType().Name}:{exception.Message}";
-                    _onSelectionChanged();
+                    PublishReadyTargetUnderLock();
                     return true;
                 });
             }
@@ -1157,7 +1155,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     _admissionCompleted = true;
                     _diagnostics =
                         $"request:{exception.GetType().Name}:{exception.Message}";
-                    _onSelectionChanged();
+                    PublishReadyTargetUnderLock();
                 });
             }
             finally
@@ -1232,7 +1230,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             ? "invalid:empty"
                             : $"invalid:{Convert.ToHexString(
                                 reply[0].AsReadOnlyMemory().Span)}";
-                        _onSelectionChanged();
+                        PublishReadyTargetUnderLock();
                         return false;
                     });
                 }
@@ -1265,13 +1263,13 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             _livenessTask ??=
                                 RunLivenessLoopAsync(_admissionStop.Token);
                         }
+                        PublishReadyTargetUnderLock();
                         return true;
                     }
                     return false;
                 });
                 if (!accepted)
                     return false;
-                _onSelectionChanged();
             }
             catch
             {
@@ -1281,7 +1279,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         return false;
                     _ready = false;
                     _diagnostics = "invalid:exception";
-                    _onSelectionChanged();
+                    PublishReadyTargetUnderLock();
                     return false;
                 });
             }
@@ -1376,7 +1374,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         _ready = false;
                         _diagnostics =
                             $"control:{exception.GetType().Name}:{exception.Message}";
-                        _onSelectionChanged();
+                        PublishReadyTargetUnderLock();
                     });
                     throw;
                 }
@@ -1474,12 +1472,50 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         Weight: > 0
                     })
                     _ready = true;
+                PublishReadyTargetUnderLock();
                 return true;
             });
             if (!accepted)
                 return;
-            _onSelectionChanged();
             Interlocked.Increment(ref _livenessAckCount);
+        }
+
+        private void PublishReadyTargetUnderLock()
+        {
+            var current = Volatile.Read(ref _readyTarget);
+            if (!_ready || _disposed || _weight <= 0)
+            {
+                if (current is null)
+                {
+                    _onStateChanged(false);
+                    return;
+                }
+                Volatile.Write(ref _readyTarget, null);
+                _onStateChanged(true);
+                return;
+            }
+
+            var serverRid = _currentAdmission?.ServerRid
+                ?? _expected?.ServerRid
+                ?? throw new InvalidOperationException(
+                    "A ready ClientServer connection has no Server RID.");
+            var maximumMessageBytes = _currentAdmission
+                ?.NormalizedEffectiveMaxMessageBytes
+                ?? _normalizedEffectiveMaxMessageBytes;
+            if (current is not null
+                && ReferenceEquals(current.Socket, Socket)
+                && current.AdmittedMaximumMessageBytes == maximumMessageBytes
+                && current.SelectionServerRid == serverRid
+                && current.Weight == _weight)
+            {
+                _onStateChanged(false);
+                return;
+            }
+
+            Volatile.Write(
+                ref _readyTarget,
+                new ReadyTarget(Socket, maximumMessageBytes, serverRid, _weight));
+            _onStateChanged(true);
         }
 
         private bool IsCurrentAttempt(
@@ -1499,7 +1535,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             _currentAdmission = null;
             _outstandingProbeId = null;
             _diagnostics = diagnostics;
-            _onSelectionChanged();
+            PublishReadyTargetUnderLock();
         }
 
         private void RequestEndpointTermination(string diagnostics)
@@ -1539,7 +1575,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 {
                     _ready = false;
                     _diagnostics = "invalid:update-identity";
-                    _onSelectionChanged();
+                    PublishReadyTargetUnderLock();
                     return;
                 }
                 if (update.DescriptorRevision < current.DescriptorRevision)
@@ -1550,7 +1586,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     {
                         _ready = false;
                         _diagnostics = "invalid:update-conflict";
-                        _onSelectionChanged();
+                        PublishReadyTargetUnderLock();
                     }
                     return;
                 }
@@ -1559,7 +1595,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 _ready = update.State == ZLinkFrameworkRuntimeState.Serving
                     && update.Weight > 0;
                 _diagnostics = _ready ? "ready" : "update:not-ready";
-                _onSelectionChanged();
+                PublishReadyTargetUnderLock();
             });
         }
 
