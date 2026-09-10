@@ -50,19 +50,19 @@ void request_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metri
                 continue;
             }
             zlink::message_t &body = parts.back ();
-            const unsigned char *payload = nullptr;
-            size_t payload_size = 0;
-            if (zlink_cpp_bench::decode_bench_payload_body (
-                  static_cast<const void *> (body.data ()), body.size (), &payload, &payload_size))
-                metrics.record (payload, payload_size);
-            else
-                metrics.record_error ();
+            zlink::framework::bench::withgrpc::BenchPayload payload;
+            if (!payload.ParseFromArray (body.data (), static_cast<int> (body.size ())))
+                throw std::runtime_error ("invalid raw protobuf payload");
+            metrics.record (payload.body ().data (), payload.body ().size ());
 
             const char *envelope = zlink_cpp_bench::response_envelope ();
             zlink::message_t header = zlink::message_t::from (std::as_bytes (
               std::span<const char> (envelope, std::strlen (envelope))));
-            zlink::message_t echo =
-              zlink::message_t::from (std::span<const std::byte> (body.data (), body.size ()));
+            zlink::framework::bench::withgrpc::BenchPayload reply;
+            reply.set_body (payload.body ());
+            const std::string encoded = zlink_cpp_bench::encode_bench_payload (reply);
+            zlink::message_t echo = zlink::message_t::from (
+              std::as_bytes (std::span<const char> (encoded.data (), encoded.size ())));
             if (received.reply_token ())
                 received.reply ().message (header).message (echo).submit ();
             else
@@ -93,13 +93,10 @@ void command_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metri
                 continue;
             }
             zlink::message_t &body = parts.back ();
-            const unsigned char *payload = nullptr;
-            size_t payload_size = 0;
-            if (zlink_cpp_bench::decode_bench_payload_body (
-                  static_cast<const void *> (body.data ()), body.size (), &payload, &payload_size))
-                metrics.record (payload, payload_size);
-            else
-                metrics.record_error ();
+            zlink::framework::bench::withgrpc::BenchPayload payload;
+            if (!payload.ParseFromArray (body.data (), static_cast<int> (body.size ())))
+                throw std::runtime_error ("invalid raw protobuf payload");
+            metrics.record (payload.body ().data (), payload.body ().size ());
         }
         catch (const std::exception &error) {
             std::fprintf (stderr, "zlink-cpp command loop: %s\n", error.what ());
