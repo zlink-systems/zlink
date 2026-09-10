@@ -13,12 +13,56 @@ Design decisions are in `doc/plan/c016-worklog/decisions.ko.md` (D-B…).
 
 ## [Unreleased]
 
-### Fixed (pending)
+## [0.18.0] - 2026-09-10
 
-- CPack NSIS icon path: `installer.ico` now lives in `core/packaging/`; the CMake path still
-  points at `core/installer.ico`, which never existed. Update the two `CPACK_NSIS_MUI_*ICON`
-  lines to `packaging\\installer.ico` in the next Core release (binding releases require the
-  checked-out `core/` sources to match the Core tag exactly, so the fix waits for a Core tag).
+The public C ABI changes in this release (symbols removed and added; SONAME
+compatibility with 0.17 is not preserved). Bindings restart at 0.18.0.
+
+### Changed
+
+- Send and receive are whole-message calls: the caller passes a `zlink_msg_t[]`
+  array plus a count (send) or a capacity (receive) and one call moves one
+  complete record. New public functions: `zlink_send`, `zlink_send_rid`,
+  `zlink_request`, `zlink_reply`, `zlink_publish`, `zlink_recv`,
+  `zlink_router_recv`, `zlink_subscribe`, `zlink_xpub_recv` (renamed from
+  `zlink_xpub_recv_part`). `zlink_stream_recv_packet` and
+  `zlink_multipart_close` are unchanged; STREAM RAW receive is `zlink_recv` with
+  one part and STREAM send uses count 1. The per-part state a record spread over
+  several calls used to leave behind (the "first part to FINAL on one thread"
+  rule, `BUSY`, partial retry) no longer exists (Issue #63, PR #86; decisions
+  D63-1..D63-8 in `doc/plan/issue-63-worklog/decisions.ko.md`).
+- Whole-message receive with a caller capacity smaller than the record's part
+  count returns `ZLINK_RECV_BUFFER_TOO_SMALL` (`errno == ENOBUFS`) without
+  consuming the record and writes the required part count; retrying with enough
+  capacity receives the same record exactly once (D63-3). On success the first
+  `count` slots of the caller array are caller-owned messages closed once with
+  `zlink_multipart_close` (D63-4).
+- Internal: `recv_router_message_direct` / `recv_dealer_message_direct` are
+  `recv_router_record` / `recv_dealer_record` (D63-2).
+
+### Removed
+
+- `zlink_send_part`, `zlink_send_part_rid`, `zlink_request_part`,
+  `zlink_reply_part`, `zlink_publish_part`, `zlink_recv_part`,
+  `zlink_router_recv_part`, `zlink_subscribe_part`, `zlink_xpub_recv_part` and
+  the public `zlink_part_flag_t` / `ZLINK_PART_MORE` / `ZLINK_PART_FINAL`.
+
+### Fixed
+
+- CPack NSIS icon path: the two `CPACK_NSIS_MUI_*ICON` lines now point at
+  `core/packaging/installer.ico` (the previous `core/installer.ico` never
+  existed).
+
+### Verification
+
+- Core ctest 214/214 on the release-gate build (LTO ON); public-surface check
+  (`check_public_surface.py`) PASS, 99 functions, exports match. Binding contract
+  tests for cpp, rust, java, node, dotnet, go PASS against this Core. The
+  `hotpath_gate` result for this tag is recorded in Issue #102.
+- Bindings perf (multi routed, tcp) versus the 0.17.4 baseline improved in all
+  four measured languages (cpp +8..+187 %, java +16..+240 %, dotnet
+  +27..+187 %, node +18..+284 %); see
+  `doc/plan/issue-63-worklog/perf-results.ko.md`.
 
 ## [0.17.5] - 2026-09-09
 
