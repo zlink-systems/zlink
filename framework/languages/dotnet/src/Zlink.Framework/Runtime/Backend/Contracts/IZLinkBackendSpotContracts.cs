@@ -235,8 +235,7 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 
     bool SendActorBoundSession(
         ZLinkBackendActorRef actor,
-        IReadOnlyList<Message> parts,
-        SendFlags flags);
+        IReadOnlyList<Message> parts);
 
     ValueTask SendActorBoundSessionAsync(
         ZLinkBackendActorRef actor,
@@ -278,8 +277,7 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         RoutingId sourceNodeRid,
         RoutingId sourceSessionRid,
         Message message,
-        bool hasMore,
-        SendFlags flags);
+        bool hasMore);
 
     void CloseActorBoundSession(
         ZLinkBackendActorRef actor,

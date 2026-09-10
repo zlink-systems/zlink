@@ -2800,15 +2800,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     public SubmitResult SendBoundSession(
         ActorRef actor,
-        IReadOnlyList<Message> parts,
-        SendFlags flags = SendFlags.None)
+        IReadOnlyList<Message> parts)
     {
         if (!TryGetActor(actor, out var current))
             return SubmitResult.NotFound;
         var binding = current.Binding;
         if (binding is null)
             return SubmitResult.NotConnected;
-        return binding.Service.SendToSession(binding.SessionRid, parts, flags);
+        try
+        {
+            _ = binding.Service.SendToSessionAsync(binding.SessionRid, parts);
+            return SubmitResult.Ok;
+        }
+        catch (ZlinkException)
+        {
+            return SubmitResult.NotConnected;
+        }
     }
 
     internal ValueTask SendBoundSessionAsync(
@@ -2827,10 +2834,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (binding.Generation != expectedBindingGeneration)
             return ValueTask.FromException(new ZlinkSubmitException(
                 ZlinkSubmitException.ErrorCode.InvalidState));
-        return binding.Service.SendToSessionAsync(
+        return new ValueTask(binding.Service.SendToSessionAsync(
             binding.SessionRid,
             parts,
-            cancellationToken);
+            cancellationToken));
     }
 
     public MeshOperationId CloseBoundSession(
@@ -3955,9 +3962,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 spot.AuthorityOwnerGeneration,
                 checked((ulong)Volatile.Read(ref _localOwnerLeaseGeneration)));
 
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? reply = null;
+        Func<IReadOnlyList<Message>, SubmitResult>? reply = null;
         if (request && operation is not null)
-            reply = (replyParts, _) =>
+            reply = replyParts =>
             {
                 CompleteManagedOperation(
                     operation,
@@ -4199,9 +4206,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 actor.AuthorityOwnerGeneration,
                 checked((ulong)Volatile.Read(ref _localOwnerLeaseGeneration)));
         acceptedSequence = actor.NextSequence();
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? reply = null;
+        Func<IReadOnlyList<Message>, SubmitResult>? reply = null;
         if (request && operation is not null)
-            reply = (replyParts, _) =>
+            reply = replyParts =>
             {
                 CompleteManagedOperation(
                     operation,
@@ -4419,7 +4426,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     .Messages(wire)
                     .Timeout(remaining);
                 ownershipTransferred = true;
-                request = requestOperation.Async(cancellationToken);
+                request = requestOperation.Async(cancellationToken).Reply;
             }
 
             Publish(
@@ -5833,14 +5840,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ServiceWireConstants.Command.ChannelRequest => MeshRecordKind.ChannelRequest,
             _ => throw new InvalidOperationException()
         };
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? replyHandler = null;
+        Func<IReadOnlyList<Message>, SubmitResult>? replyHandler = null;
         if (request)
         {
             var nativeReply = received.Reply();
             ReplySubmitOperation? preparedReply = null;
             Message[]? preparedReplyWire = null;
             var replied = 0;
-            replyHandler = (replyParts, _) =>
+            replyHandler = replyParts =>
             {
                 if (Interlocked.CompareExchange(ref replied, 1, 0) != 0)
                     return SubmitResult.InvalidState;
@@ -7079,9 +7086,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             {
                 var messageFollowTarget =
                     RunState(() => _actorMessageFollowIngressTarget);
-                Func<IReadOnlyList<Message>, SendFlags, SubmitResult>?
+                Func<IReadOnlyList<Message>, SubmitResult>?
                     messageFollowReply = request
-                        ? (replyParts, _) =>
+                        ? replyParts =>
                             Reply(
                                 RequestResult.Ok,
                                 0,
@@ -7158,9 +7165,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             or ServiceWireConstants.Command.SpotRequest))
             admittedActor!.NextSequence();
 
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? reply = null;
+        Func<IReadOnlyList<Message>, SubmitResult>? reply = null;
         if (request)
-            reply = (replyParts, _) =>
+            reply = replyParts =>
                 Reply(
                     RequestResult.Ok,
                     0,
@@ -9140,7 +9147,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 var socket = _socket;
                 if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
                     throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
-                admission = socket.Send(target).Messages(messages).Async(cancellationToken);
+                admission = socket.Send(target).Messages(messages).Async(cancellationToken).Admitted;
                 ownershipTransferred = true;
             }
             await admission.ConfigureAwait(false);
@@ -9167,7 +9174,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 var socket = _socket;
                 if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
                     throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
-                admission = socket.Send(target).Messages(messages).Async(cancellationToken);
+                admission = socket.Send(target).Messages(messages).Async(cancellationToken).Admitted;
                 ownershipTransferred = true;
             }
             await admission.ConfigureAwait(false);
@@ -9198,7 +9205,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 request = socket.Request(target)
                     .Messages(messages)
                     .Timeout(timeout)
-                    .Async(cancellationToken);
+                    .Async(cancellationToken).Reply;
                 ownershipTransferred = true;
             }
             return await request.ConfigureAwait(false);
@@ -9228,7 +9235,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 request = socket.Request(target)
                     .Messages(messages)
                     .Timeout(timeout)
-                    .Async(cancellationToken);
+                    .Async(cancellationToken).Reply;
                 ownershipTransferred = true;
             }
             return await request.ConfigureAwait(false);
@@ -9369,7 +9376,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     .Messages(messages)
                     .Timeout(timeout);
                 ownershipTransferred = true;
-                request = operation.Async(cancellationToken);
+                request = operation.Async(cancellationToken).Reply;
             }
 
             var replies = await request.ConfigureAwait(false);
@@ -9499,7 +9506,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 request = socket.Request(target)
                     .Messages(messages)
                     .Timeout(timeout)
-                    .Async(cancellationToken);
+                    .Async(cancellationToken).Reply;
                 ownershipTransferred = true;
             }
 
@@ -9892,9 +9899,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 _ => throw new ArgumentOutOfRangeException(nameof(command))
             };
             var retained = CloneParts(parts);
-            Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? reply = null;
+            Func<IReadOnlyList<Message>, SubmitResult>? reply = null;
             if (correlation != 0)
-                reply = (replyParts, _) =>
+                reply = replyParts =>
                 {
                     CompleteLocalOperation(correlation, replyParts);
                     return SubmitResult.Ok;
@@ -10061,12 +10068,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (CanRetryNativeTerminalReply(pending))
             {
                 _pendingNativeTerminalReplies.Enqueue(pending);
+                return submit;
             }
-            else
-                FinishNativeTerminalReply(
-                    pending,
-                    SubmitResult.Terminated);
-            return submit;
+            FinishNativeTerminalReply(
+                pending,
+                SubmitResult.Terminated);
+            return SubmitResult.Terminated;
         }
 
         FinishNativeTerminalReply(pending, submit);
@@ -11034,7 +11041,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         try
         {
             message = Message.From(head);
-            var admission = exactSend.Message(message).Async(cancellationToken);
+            var admission = exactSend.Message(message).Async(cancellationToken).Admitted;
             if (admission.IsCanceled)
                 return;
             message = null;
@@ -11312,7 +11319,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
                 var operation = socket.Send(target).Messages(messages);
                 ownershipTransferred = true;
-                admission = operation.Async(cancellationToken);
+                admission = operation.Async(cancellationToken).Admitted;
             }
             await admission.ConfigureAwait(false);
         }
@@ -12433,57 +12440,21 @@ internal sealed class ZLinkManagedStreamSessionService(
             _bindings.TryRemove(sessionRid, out _);
     }
 
-    internal SubmitResult SendToSession(
+    internal Task SendToSessionAsync(
         RoutingId sessionRid,
         IReadOnlyList<Message> parts,
-        SendFlags flags)
+        CancellationToken cancellationToken = default)
     {
         EnsureStarted();
         var retained = parts.Select(Message.From).ToArray();
         try
         {
-            var operation = stream.Send(sessionRid).Messages(retained);
-            if (flags == SendFlags.DontWait)
-                return operation.TrySubmit()
-                    ? SubmitResult.Ok
-                    : SubmitResult.Backpressured;
-            if (flags != SendFlags.None)
-                throw new ArgumentOutOfRangeException(nameof(flags));
-            operation.Submit();
-            return SubmitResult.Ok;
-        }
-        catch (ZlinkException)
-        {
-            return SubmitResult.NotConnected;
+            return stream.Send(sessionRid).Messages(retained).Async(cancellationToken).Admitted;
         }
         finally
         {
             foreach (var part in retained)
                 part.Dispose();
-        }
-    }
-
-    internal async ValueTask SendToSessionAsync(
-        RoutingId sessionRid,
-        IReadOnlyList<Message> parts,
-        CancellationToken cancellationToken)
-    {
-        EnsureStarted();
-        var retained = parts.Select(Message.From).ToArray();
-        var ownershipTransferred = false;
-        try
-        {
-            var terminal = stream.Send(sessionRid)
-                .Messages(retained)
-                .Async(cancellationToken);
-            ownershipTransferred = true;
-            await terminal.ConfigureAwait(false);
-        }
-        finally
-        {
-            if (!ownershipTransferred)
-                foreach (var part in retained)
-                    part.Dispose();
         }
     }
 

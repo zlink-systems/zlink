@@ -14,7 +14,7 @@ internal sealed class ZLinkSpotActorFrame(
     Message body,
     ulong sourceNodeGeneration = 0,
     ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
-    Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? directReply = null,
+    Func<IReadOnlyList<Message>, SubmitResult>? directReply = null,
     ReadOnlyMemory<byte> applicationMetadata = default,
     long? handoffArrivalIndex = null) : IDisposable
 {
@@ -39,7 +39,7 @@ internal sealed class ZLinkSpotActorFrame(
     public ZLinkServiceWireCodec.RequestSourceFence? RequestSource { get; } =
         requestSource;
 
-    public Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? DirectReply { get; private set; } =
+    public Func<IReadOnlyList<Message>, SubmitResult>? DirectReply { get; private set; } =
         directReply;
 
     public ReadOnlyMemory<byte> ApplicationMetadata { get; } =
@@ -64,7 +64,7 @@ internal sealed class ZLinkSpotActorFrame(
 
     internal void BindRelocationReplyCapability(
         string replyCapability,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult> directReply)
+        Func<IReadOnlyList<Message>, SubmitResult> directReply)
     {
         if (string.IsNullOrWhiteSpace(replyCapability)
             || RouteContext.ReplyCapability is not null)

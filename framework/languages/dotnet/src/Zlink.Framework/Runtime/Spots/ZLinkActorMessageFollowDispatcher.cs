@@ -39,7 +39,7 @@ internal static class ZLinkActorMessageFollowDispatcher
         Message body,
         ulong sourceNodeGeneration = 0,
         ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? directReply = null,
+        Func<IReadOnlyList<Message>, SubmitResult>? directReply = null,
         ReadOnlyMemory<byte> applicationMetadata = default)
     {
         var resolution = actorState.Handoff.RouteFrame(
@@ -77,7 +77,7 @@ internal static class ZLinkActorMessageFollowDispatcher
         Message body,
         ulong sourceNodeGeneration = 0,
         ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? directReply = null,
+        Func<IReadOnlyList<Message>, SubmitResult>? directReply = null,
         ReadOnlyMemory<byte> applicationMetadata = default)
     {
         var route = resolution.Route;

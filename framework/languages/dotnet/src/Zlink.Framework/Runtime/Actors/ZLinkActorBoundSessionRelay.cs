@@ -151,7 +151,7 @@ internal static class ZLinkActorBoundSessionRelay
         uint flags,
         string? replyCapability,
         ZlinkStreamHeader requestHeader,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? directReply = null,
+        Func<IReadOnlyList<Message>, SubmitResult>? directReply = null,
         CancellationToken cancellationToken = default)
     {
         if (requestHeader.Kind != ZlinkStreamMessageKind.Request
@@ -190,7 +190,7 @@ internal static class ZLinkActorBoundSessionRelay
         ZlinkStreamHeader requestHeader,
         ZLinkActorReply reply,
         CancellationToken cancellationToken,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? directReply = null)
+        Func<IReadOnlyList<Message>, SubmitResult>? directReply = null)
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"actor_reply_begin actor={actorId} request_id={requestId} "
@@ -230,7 +230,7 @@ internal static class ZLinkActorBoundSessionRelay
         ZlinkStreamHeader requestHeader,
         ZLinkFrameworkException exception,
         CancellationToken cancellationToken,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? directReply = null)
+        Func<IReadOnlyList<Message>, SubmitResult>? directReply = null)
     {
         if (requestHeader.Kind != ZlinkStreamMessageKind.Request
             || requestHeader.RequestSeq is null)
@@ -278,7 +278,7 @@ internal static class ZLinkActorBoundSessionRelay
         string? replyCapability,
         ZlinkStreamHeader requestHeader,
         ZLinkActorReply reply,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? directReply,
+        Func<IReadOnlyList<Message>, SubmitResult>? directReply,
         CancellationToken cancellationToken)
     {
         var frame = reply.ToFrame(requestHeader);
@@ -291,8 +291,8 @@ internal static class ZLinkActorBoundSessionRelay
         {
             cancellationToken.ThrowIfCancellationRequested();
             using var replyMessage = Message.From(frame);
-            var result = directReply([replyMessage], SendFlags.DontWait);
-            if (result != SubmitResult.Ok)
+            var result = directReply([replyMessage]);
+            if (result is not (SubmitResult.Ok or SubmitResult.Backpressured))
                 throw new ZlinkSubmitException(
                     (ZlinkSubmitException.ErrorCode)(int)result);
         }

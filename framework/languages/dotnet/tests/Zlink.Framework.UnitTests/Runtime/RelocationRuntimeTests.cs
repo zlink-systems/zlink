@@ -406,7 +406,7 @@ public sealed class RelocationRuntimeTests
                    RoutingId.From("source"),
                    "caller",
                    7,
-                   static (_, _) => SubmitResult.Ok,
+                   static _ => SubmitResult.Ok,
                    operationId: new MeshOperationId(1, 7),
                    targetNodeGeneration: 3,
                    authorityOwnerGeneration: 4,
@@ -622,7 +622,7 @@ public sealed class RelocationRuntimeTests
                    RoutingId.From("source"),
                    "caller",
                    7,
-                   static (_, _) => SubmitResult.Ok,
+                   static _ => SubmitResult.Ok,
                    operationId: new MeshOperationId(1, 7),
                    targetNodeGeneration: 3,
                    authorityOwnerGeneration: 4,
@@ -2237,7 +2237,7 @@ public sealed class RelocationRuntimeTests
             RoutingId.From("caller-node"),
             "source-spot",
             7,
-            static (_, _) => SubmitResult.Ok,
+            static _ => SubmitResult.Ok,
             operationId: new MeshOperationId(1, 2));
         var failure = new ZlinkSubmitException(
             ZlinkSubmitException.ErrorCode.NotConnected);
@@ -2264,7 +2264,7 @@ public sealed class RelocationRuntimeTests
             RoutingId.From("caller-node"),
             "source-spot",
             7,
-            static (_, _) => SubmitResult.Ok,
+            static _ => SubmitResult.Ok,
             operationId: new MeshOperationId(1, 2),
             deadlineUnixMs: deadline);
         Assert.Equal(
@@ -2295,7 +2295,7 @@ public sealed class RelocationRuntimeTests
             RoutingId.From("caller-node"),
             "source-spot",
             8,
-            (_, _) =>
+            _ =>
             {
                 replyCount++;
                 return SubmitResult.Ok;
@@ -2340,7 +2340,7 @@ public sealed class RelocationRuntimeTests
             RoutingId.From("caller-node"),
             "source-spot",
             7,
-            (parts, _) =>
+            parts =>
             {
                 replyHeader = ZLinkEnvelopeCodec.DecodeHeader(parts);
                 return SubmitResult.Ok;
@@ -2363,7 +2363,7 @@ public sealed class RelocationRuntimeTests
         RoutingId.From("caller-node"),
         "source-spot",
         7,
-        static (_, _) => SubmitResult.Ok,
+        static _ => SubmitResult.Ok,
         operationId: new MeshOperationId(1, 2),
         targetNodeGeneration: 11,
         authorityOwnerGeneration: 7,
@@ -3305,7 +3305,7 @@ public sealed class RelocationRuntimeTests
             RoutingId.From("source-node"),
             "spot-7",
             44,
-            static (_, _) => SubmitResult.Ok,
+            static _ => SubmitResult.Ok,
             operationId: new MeshOperationId(11, 44),
             targetNodeGeneration: 12,
             authorityOwnerGeneration: 13,
@@ -3324,7 +3324,7 @@ public sealed class RelocationRuntimeTests
             RoutingId.From("source-node"),
             "spot-7",
             44,
-            static (_, _) => SubmitResult.Ok,
+            static _ => SubmitResult.Ok,
             operationId: new MeshOperationId(11, 44),
             targetNodeGeneration: 12,
             authorityOwnerGeneration: 13,
@@ -3346,7 +3346,7 @@ public sealed class RelocationRuntimeTests
             RoutingId.From("source-node"),
             "spot-7",
             44,
-            static (_, _) => SubmitResult.Ok,
+            static _ => SubmitResult.Ok,
             operationId: new MeshOperationId(11, 44),
             targetNodeGeneration: 12,
             authorityOwnerGeneration: 13,
@@ -3405,7 +3405,7 @@ public sealed class RelocationRuntimeTests
             requestSource.NodeRid,
             "spot-7",
             44,
-            static (_, _) => SubmitResult.Ok,
+            static _ => SubmitResult.Ok,
             operationId: new MeshOperationId(11, 44),
             targetNodeGeneration: 12,
             authorityOwnerGeneration: 13,

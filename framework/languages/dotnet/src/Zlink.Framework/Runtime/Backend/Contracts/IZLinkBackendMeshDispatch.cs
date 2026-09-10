@@ -23,7 +23,7 @@ namespace Zlink.Framework.Runtime.Backend.Contracts;
 /// </summary>
 internal sealed class ZLinkBackendRouteReceived : IDisposable
 {
-    private readonly Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? _reply;
+    private readonly Func<IReadOnlyList<Message>, SubmitResult>? _reply;
     private readonly IDisposable? _payloadOwner;
     private int _disposed;
 
@@ -32,7 +32,7 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         RoutingId? sourceNodeRid,
         string? spotId,
         ulong? requestSeq,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? reply,
+        Func<IReadOnlyList<Message>, SubmitResult>? reply,
         string? channelName = null,
         ZLinkMessageMetadata? metadata = null,
         MeshOperationId operationId = default,
@@ -107,12 +107,12 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
 
     public bool CanReply => _reply is not null;
 
-    public SubmitResult Reply(IReadOnlyList<Message> parts, SendFlags flags = SendFlags.None)
+    public SubmitResult Reply(IReadOnlyList<Message> parts)
     {
         if (_reply is null)
             throw new InvalidOperationException(
                 "This route record does not carry a reply token.");
-        return _reply(parts, flags);
+        return _reply(parts);
     }
 
     public void Dispose()
