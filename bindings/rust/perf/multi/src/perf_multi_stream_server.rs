@@ -120,7 +120,18 @@ fn main() {
                 let routing_id = *packet.routing_id().expect("stream packet routing id");
                 let header = packet.header().expect("stream packet header").as_bytes();
                 let msg = build_packet_frame(header, body);
-                tasks.push(stream.send(&routing_id).message(msg).submit());
+                match stream.send(&routing_id).message(msg).submit() {
+                    Ok(submission) if submission.result == SubmitResult::Ok => {}
+                    Ok(submission) => {
+                        tasks.push(submission.admitted);
+                    }
+                    Err(err)
+                        if matches!(
+                            err.code(),
+                            SubmitResult::NotConnected | SubmitResult::NotFound
+                        ) => {}
+                    Err(err) => panic!("stream echo submit failed: {err}"),
+                }
             }
         }
 
