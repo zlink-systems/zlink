@@ -160,6 +160,12 @@ jobs:
         run: |
           python3 -m venv "${RUNNER_TEMP}/pyvenv"
           "${RUNNER_TEMP}/pyvenv/bin/pip" install --quiet --upgrade pip pytest setuptools
+          # run_tests.sh는 native extension과 그 옆의 Core 런타임 payload를 모두
+          # 전제한다. sync-local-core-libs.sh가 payload를 배치한다.
+          ZLINK_CORE_SOURCE=local \
+          ZLINK_CORE_PACKAGE_PREFIX= \
+          ZLINK_CORE_VERSION="$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)" \
+            bash scripts/local-package/native/sync-local-core-libs.sh python
           (cd bindings/python \
             && ZLINK_CORE_SOURCE=local \
                ZLINK_CORE_INCLUDE_DIR="${GITHUB_WORKSPACE}/core/include" \
