@@ -666,12 +666,23 @@ Public numeric constructor, raw accessor, ordering, serialization과 close를 �
 ### Public interface
 
 ```cpp
+struct send_submission_t {
+    zlink_submit_result_t result;        // OK | BACKPRESSURED, 제출 시점 스냅샷
+    async_result_t<void> admitted;       // OK면 완료 상태
+};
+
+struct request_submission_t {
+    zlink_submit_result_t result;
+    async_result_t<void> admitted;
+    async_result_t<std::vector<message_t>> reply;   // admitted 성공 뒤 완료
+};
+
 class send_submit_operation_t {
 public:
     send_submit_operation_t&& message(message_t&) &&;
     send_submit_operation_t&& message(message_t&&) &&;
     void submit() &&;
-    async_result_t<void> async() &&;
+    send_submission_t async() &&;
 };
 
 class request_submit_operation_t {
@@ -680,7 +691,7 @@ public:
     request_submit_operation_t&& message(message_t&&) &&;
     request_submit_operation_t&& timeout(std::chrono::milliseconds) &&;
     std::vector<message_t> submit() &&;
-    async_result_t<std::vector<message_t>> async() &&;
+    request_submission_t async() &&;
 };
 
 class reply_token_t final {

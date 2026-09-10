@@ -97,6 +97,14 @@ joins the corresponding submit result. A `wait()` that processes an early comple
 return `PollCompletion` progress before that join and settlement or cleanup finish.
 Blocking send and reply have no completion to join.
 
+The result object returned by async terminals exposes this join as two stages. `result` is a snapshot
+taken at terminal return (`OK`|`BACKPRESSURED`) and does not change; any later resubmission result is
+observed only through `admitted`. `admitted` completes at admission (already complete at return when `OK`;
+after WRITABLE resubmission is admitted when `BACKPRESSURED`), and a REQUEST's `reply` can complete only
+after `admitted` succeeds. When `admitted` fails, `reply` fails with the same cause. Each stage completes
+exactly once — never reporting the same failure twice and never leaving one side unfinished — so the
+exactly-once and lifetime guarantees above still hold after the stages are split.
+
 **Language discretion** — Each implementation chooses registration timing and data structures.
 Registration before submit returns, serialization of drain with registration, and retention of early
 records are equivalent only when they preserve the completion and lifetime results above.

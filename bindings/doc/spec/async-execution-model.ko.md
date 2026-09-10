@@ -95,6 +95,13 @@ Submit 반환값과 대기 토큰을 언어 결과로 연결하는 기준은
 `wait()`도 합류 후 settle 또는 cleanup이 끝나기 전에는 `PollCompletion` progress를 반환하지
 않는다. Blocking send와 reply에는 completion을 기다리는 합류가 없다.
 
+비동기 종결자가 돌려주는 결과 객체는 이 합류를 두 stage로 나눠 노출한다. `result`는 종결자 반환
+시점 스냅샷(`OK`|`BACKPRESSURED`)이며 바뀌지 않고, 그 뒤의 재제출 결과는 `admitted`로만 관측된다.
+`admitted`는 admission에서 완료되고(`OK`면 반환 시 이미 완료, `BACKPRESSURED`면 WRITABLE 재제출이
+admission된 뒤 완료), REQUEST의 `reply`는 `admitted` 성공 뒤에만 완료될 수 있다. `admitted`가
+실패하면 `reply`도 같은 원인으로 실패한다. 두 stage는 각각 정확히 한 번 끝나며, 같은 실패를 두 번
+보고하거나 한쪽만 끝나지 않는다 — 위 정확히 한 번·수명 결과가 stage 분리 뒤에도 그대로 성립한다.
+
 **언어별 재량** — 등록 시점과 자료구조는 구현이 정한다. Submit 반환 전 등록, drain과 등록의
 직렬화, 조기 record 보관은 모두 위 완료·수명 결과를 보존할 때만 동등한 방법이다.
 동등성은 [검증 요구](#7-구현-및-contract-test-검증-요구)의 terminal 결과·오류·완료 횟수와

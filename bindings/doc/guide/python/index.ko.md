@@ -57,15 +57,16 @@ with received:
 `RecvFlags.DONT_WAIT`를 지정한 receive는 message가 없으면 `False`를 반환한다. timer나 monitor처럼
 pending value를 직접 반환하는 control API는 값이 없을 때 `None`을 반환한다.
 
-HWM 대기 가능 send는 async `submit()`과 sync
-`submit_sync()`을 제공한다. async 코드에서는
-`await socket.send().message(message).submit()`을 사용한다. 이 terminal은 DONTWAIT을
-사용하고 socket completion queue에서 settle된다. Plain thread의 `submit_sync()`은 local
+HWM 대기 가능 send는 결과 객체를 돌려주는 `submit()`과 sync `submit_sync()`을 제공한다.
+`submit()`은 `SendSubmission`(`result()`: `OK`|`BACKPRESSURED`, `admitted()`: awaitable)을
+즉시 돌려주며, async 코드에서는 `await socket.send().message(message).submit().admitted()`로
+admission을 기다린다(`result()`가 `OK`면 이미 완료 상태). 이 terminal은 DONTWAIT을 사용하고
+admission은 socket completion queue에서 settle된다. Plain thread의 `submit_sync()`은 local
 admission까지 Core 안에서 blocking한다.
 
-Request는 reply까지 blocking하는 `submit_sync()`과 socket completion queue에서 settle되는
-awaitable `list[Message]`를 반환하는 `submit()`을 제공한다. Reply는 terminal 결과이며 별도
-DATA receive가 아니다.
+Request는 reply까지 blocking하는 `submit_sync()`과 `RequestSubmission`(`result()`·`admitted()`에
+`reply()` awaitable 추가)을 돌려주는 `submit()`을 제공한다. `result()`가 `OK`면 바로 `reply()`를
+`await`하면 되고, reply는 terminal 결과이며 별도 DATA receive가 아니다.
 
 Core가 pre-admission operation을 접수한 뒤 retry를 소유하므로 caller retry queue를 만들거나
 payload를 재전송하지 않는다. 공용 native `ZLINK_OPT_PENDING_MAX_MSGS/BYTES` cap은 pending
@@ -119,7 +120,7 @@ except zlink.SubmitError as exc:
 `submit_sync()`은 HWM admission을 기다리는 동안 호출 thread를 멈춘다.
 plain thread에서는 그 thread만 대기하므로 사용할 수 있다. 그러나 asyncio 이벤트 루프
 안에서 호출하면 루프 전체가 멈춰 다른 task와 send completion도 진행되지 않는다.
-asyncio 코드에서는 async `submit()`을 `await`한다.
+asyncio 코드에서는 `submit()`이 돌려준 결과 객체의 `admitted()`/`reply()`를 `await`한다.
 
 ## Sample와 perf
 

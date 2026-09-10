@@ -287,11 +287,23 @@ type SendOp interface {
     Bytes([]byte) SendSubmitOp
 }
 
+// 대기는 결과 객체의 메서드가 한다(Go 관용). Submit은 native 제출 한 번을 하고 즉시 돌려준다.
+type SendSubmission interface {
+    Result() SubmitResult                 // OK | BACKPRESSURED, 제출 시점 스냅샷
+    Admitted(ctx context.Context) error   // OK면 즉시 nil; BACKPRESSURED면 재제출 admission까지 block
+}
+
+type RequestSubmission interface {
+    Result() SubmitResult
+    Admitted(ctx context.Context) error
+    Reply(ctx context.Context) ([]*Message, error)   // reply까지 block; 이전 Submit 결과와 같음
+}
+
 type SendSubmitOp interface {
     Message(*Message) SendSubmitOp
     MoveMessage(*Message) SendSubmitOp
     Bytes([]byte) SendSubmitOp
-    Submit(context.Context) error
+    Submit(context.Context) (SendSubmission, error)
 }
 
 type RequestOp interface {
@@ -303,7 +315,7 @@ type RequestSubmitOp interface {
     Message(*Message) RequestSubmitOp
     Bytes([]byte) RequestSubmitOp
     Timeout(time.Duration) RequestSubmitOp
-    Submit(context.Context) ([]*Message, error)
+    Submit(context.Context) (RequestSubmission, error)
 }
 
 type ReplyOp interface {
