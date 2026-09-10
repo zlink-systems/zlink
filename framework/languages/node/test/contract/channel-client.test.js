@@ -1205,7 +1205,13 @@ test('ZLinkDealerChannelClientTransport maps native request connectivity failure
   const transport = new framework.ZLinkDealerChannelClientTransport({
     request() {
       return createMultipartRequestOperation({
-        async submit() { throw nativeError; }
+        submit() {
+          return {
+            result: zlink.SubmitResult.Ok,
+            admitted: Promise.resolve(),
+            reply: Promise.reject(nativeError)
+          };
+        }
       });
     }
   });
@@ -5065,7 +5071,7 @@ function submitRawReplyMultipart(operation, parts) {
 }
 
 async function submitAsyncMultipart(operation, parts) {
-  await appendMultipart(operation, parts).submit();
+  await appendMultipart(operation, parts).submit().admitted;
 }
 
 function noDispatchErrorReporter() {
@@ -5134,7 +5140,7 @@ function submitRequestMultipart(operation, parts) {
   for (let index = 1; index < parts.length; index++) {
     current = current.message(parts[index]);
   }
-  return current.timeout(1000).submit();
+  return current.timeout(1000).submit().reply;
 }
 
 function withTimeout(promise, timeoutMs, label) {

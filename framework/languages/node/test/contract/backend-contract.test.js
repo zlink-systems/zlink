@@ -14,7 +14,9 @@ const {
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const {
   isPollerInterruptedError,
-  submitBindingSyncSend
+  submitBindingRequest,
+  submitBindingSyncSend,
+  wrapBindingReceived
 } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
 const { wrapSocket } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
 const {
@@ -166,7 +168,7 @@ test('backend DONTWAIT Spot send awaits managed binding admission', async () => 
     },
     submit() {
       asyncCalls += 1;
-      return admission;
+      return { result: zlink.SubmitResult.Backpressured, admitted: admission };
     },
     submit_sync() {
       syncCalls += 1;
@@ -183,7 +185,7 @@ test('backend DONTWAIT Spot send awaits managed binding admission', async () => 
   ).then(() => {
     settled = true;
   });
-  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(asyncCalls, 1);
   assert.equal(syncCalls, 0);
@@ -194,6 +196,105 @@ test('backend DONTWAIT Spot send awaits managed binding admission', async () => 
   assert.equal(settled, true);
 });
 
+test('received send preserves admission waiting and envelope ownership', async () => {
+  const admission = Promise.withResolvers();
+  const sent = [];
+  const parts = [zlink.Message.from('received')];
+  const operation = {
+    message(part) { sent.push(part); return this; },
+    submit() {
+      return { result: zlink.SubmitResult.Backpressured, admitted: admission.promise };
+    }
+  };
+  let closed = false;
+  const received = wrapBindingReceived({
+    parts,
+    routingId: 'sender',
+    replyToken: null,
+    send: () => operation,
+    reply() { throw new Error('not a request'); },
+    close() { closed = true; parts.forEach((part) => part.close()); }
+  });
+  try {
+    let settled = false;
+    const pending = received.send().message(parts[0]).message('tail').submit().then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, false);
+    assert.equal(received.parts, parts);
+    assert.deepEqual(sent, [parts[0], 'tail']);
+    assert.equal(closed, false);
+
+    admission.resolve();
+    await pending;
+    assert.equal(settled, true);
+    assert.equal(closed, false);
+  } finally {
+    received.close();
+  }
+  assert.equal(closed, true);
+});
+
+test('binding request waits for reply after admission', async () => {
+  const admission = Promise.withResolvers();
+  const reply = Promise.withResolvers();
+  const operation = {
+    message() { return this; },
+    timeout() { return this; },
+    submit() {
+      return {
+        result: zlink.SubmitResult.Backpressured,
+        admitted: admission.promise,
+        reply: reply.promise
+      };
+    }
+  };
+  let settled = false;
+  const pending = submitBindingRequest(operation, Buffer.from('request'), 1000).then((parts) => {
+    settled = true;
+    return parts;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+
+  admission.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+
+  const parts = [zlink.Message.from('reply')];
+  try {
+    reply.resolve(parts);
+    assert.equal(await pending, parts);
+  } finally {
+    parts.forEach((part) => part.close());
+  }
+});
+
+test('binding request preserves terminal reply failure after admission', async () => {
+  const terminal = new zlink.RequestError(zlink.RequestResult.Timeout, 110);
+  const operation = {
+    message() { return this; },
+    timeout() { return this; },
+    submit() {
+      return {
+        result: zlink.SubmitResult.Ok,
+        admitted: Promise.resolve(),
+        reply: Promise.reject(terminal)
+      };
+    }
+  };
+
+  await assert.rejects(
+    submitBindingRequest(operation, Buffer.from('request'), 1000),
+    (error) => error instanceof backend.ZLinkBackendResultError
+      && error.operation === 'request'
+      && error.result === zlink.RequestResult.Timeout
+      && error.nativeErrno === 110
+      && error.cause === terminal
+  );
+});
+
 test('backend managed DONTWAIT Spot send surfaces terminal binding failure', async () => {
   const terminal = new zlink.SubmitError(zlink.SubmitResult.NotFound, 2);
   const submit = {
@@ -201,7 +302,7 @@ test('backend managed DONTWAIT Spot send surfaces terminal binding failure', asy
       return this;
     },
     submit() {
-      return Promise.reject(terminal);
+      return { result: zlink.SubmitResult.Backpressured, admitted: Promise.reject(terminal) };
     },
     submit_sync() {
       throw new Error('managed DONTWAIT send must not use submit_sync');

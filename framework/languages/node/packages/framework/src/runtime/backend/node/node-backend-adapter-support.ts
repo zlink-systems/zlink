@@ -1,8 +1,33 @@
 import { loadBinding } from '../node-backend-adapter';
-import { ZLinkBackendResultError } from '../runtime-values';
+import { ZLinkBackendResultError, type ZLinkBackendReceived } from '../runtime-values';
 
 export type ZLinkBindingModule = typeof import('@zlink-systems/zlink');
 export const zlink = loadBinding() as ZLinkBindingModule;
+
+export function wrapBindingReceived(received: import('@zlink-systems/zlink').Received): ZLinkBackendReceived {
+  return {
+    get parts() { return received.parts; },
+    get routingId() { return received.routingId; },
+    get replyToken() { return received.replyToken; },
+    reply: () => received.reply(),
+    close: () => received.close(),
+    send() {
+      const operation = received.send();
+      return {
+        message(part) {
+          let current = operation.message(part as import('@zlink-systems/zlink').MessageLike);
+          return {
+            message(next) {
+              current = current.message(next as import('@zlink-systems/zlink').MessageLike);
+              return this;
+            },
+            submit: () => current.submit().admitted
+          };
+        }
+      };
+    }
+  };
+}
 
 export type ZLinkBindingOperation = { [key: string]: (...args: unknown[]) => unknown };
 
@@ -30,7 +55,7 @@ interface ZLinkBindingReplySubmitOperation {
 
 interface ZLinkBindingAsyncSendSubmitOperation {
   message(message: unknown): ZLinkBindingAsyncSendSubmitOperation;
-  submit(): Promise<void>;
+  submit(): import('@zlink-systems/zlink').SendSubmission;
   submit_sync(): void;
 }
 
@@ -41,7 +66,7 @@ export interface ZLinkBindingRequestOperation {
 interface ZLinkBindingRequestSubmitOperation {
   message(message: unknown): ZLinkBindingRequestSubmitOperation;
   timeout(timeoutMs: number): ZLinkBindingRequestSubmitOperation;
-  submit(): Promise<readonly unknown[]>;
+  submit(): import('@zlink-systems/zlink').RequestSubmission;
 }
 
 export function isBindingNotFound(error: unknown): boolean {
@@ -113,7 +138,7 @@ export async function submitBindingAsyncSend(
       current = current === undefined ? operation.message(nativePart) : current.message(nativePart);
     }
     current ??= operation.message(Buffer.alloc(0));
-    await current.submit();
+    await current.submit().admitted;
   } catch (error) {
     throw translateBindingResultError(error);
   }
@@ -156,7 +181,7 @@ export async function submitBindingRequest(
     if (timeoutMs !== undefined) {
       current = current.timeout(timeoutMs);
     }
-    return await current.submit();
+    return await current.submit().reply;
   } catch (error) {
     throw translateBindingResultError(error);
   }
