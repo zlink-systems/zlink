@@ -23,7 +23,7 @@ async function flushImmediateTurns(count = 64) {
         await new Promise((resolve) => setImmediate(resolve));
     }
 }
-test('send submit is Promise-based while submit_sync is flag-free', async () => {
+test('send submit returns an admission result while submit_sync is flag-free', async () => {
     const context = zlink.createContext();
     const sender = zlink.createPairSocket(context);
     const receiver = zlink.createPairSocket(context);
@@ -31,7 +31,7 @@ test('send submit is Promise-based while submit_sync is flag-free', async () => 
     receiver.connect(sender.options.lastEndpoint);
     try {
         const managed = zlink.Message.from('managed');
-        await sender.send().message(managed).submit();
+        await sender.send().message(managed).submit().admitted;
         assert.equal(managed.size(), 0);
         sender.send().message('blocking').submit_sync();
         const first = new zlink.Received();
@@ -53,7 +53,7 @@ test('routed send without a route fails immediately and preserves Message owners
     const payload = zlink.Message.from('no-route');
     router.options.mandatory = true;
     try {
-        await assert.rejects(router.send(zlink.RoutingId.from('missing-peer')).message(payload).submit(), (error) => error instanceof zlink.SubmitError
+        assert.throws(() => router.send(zlink.RoutingId.from('missing-peer')).message(payload).submit(), (error) => error instanceof zlink.SubmitError
             && error.result === zlink.SubmitResult.NotConnected);
         assert.equal(payload.getString(), 'no-route');
     }
@@ -69,7 +69,7 @@ test('request Promise settles from a pulled completion', async () => {
     router.bind(endpoint('request'));
     dealer.connect(router.options.lastEndpoint);
     try {
-        const pending = dealer.request().message('question').timeout(1_000).submit();
+        const pending = dealer.request().message('question').timeout(1_000).submit().reply;
         const request = new zlink.Received();
         assert.equal(router.recv(request), true);
         assert.ok(request.replyToken instanceof zlink.ReplyToken);
@@ -126,7 +126,7 @@ test('public Poller owns completion draining and reports PollCompletion', async 
     dealer.connect(router.options.lastEndpoint);
     poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 73);
     try {
-        const pending = dealer.request().message('poll-question').timeout(1_000).submit();
+        const pending = dealer.request().message('poll-question').timeout(1_000).submit().reply;
         const request = new zlink.Received();
         assert.equal(router.recv(request), true);
         request.reply().message('poll-answer').submit();
@@ -161,7 +161,7 @@ test('PollOut-only observer cannot drain another Poller completion owner', async
     try {
         assert.equal(observer.wait(observerEvents, 0), 0, 'ordinary connectivity must not masquerade as writable credit');
         const pending = dealer.request().message('owner-isolation').timeout(30_000)
-            .submit().then((parts) => {
+            .submit().reply.then((parts) => {
             settled = true;
             return parts;
         });
@@ -203,7 +203,7 @@ test('duplicate socket add failure preserves the original completion owner', asy
         assert.throws(() => poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 84), (error) => error instanceof zlink.ConfigError);
         assert.equal(poller.size, 1, 'failed duplicate add must leave the original registration installed');
         const pending = dealer.request().message('duplicate-owner').timeout(30_000)
-            .submit().then((parts) => {
+            .submit().reply.then((parts) => {
             settled = true;
             return parts;
         });
@@ -241,7 +241,7 @@ test('second PollCompletion owner is rejected without displacing the first', asy
         assert.throws(() => contender.add(dealer, [zlink.PollEventFlag.PollCompletion], 85), (error) => error instanceof zlink.ConfigError
             && error.result === zlink.ConfigResult.InvalidState);
         const pending = dealer.request().message('owner-conflict').timeout(30_000)
-            .submit().then((parts) => {
+            .submit().reply.then((parts) => {
             settled = true;
             return parts;
         });
@@ -282,12 +282,12 @@ test('duplicate public slots drain only the socket named by the native event', a
     poller.add(dealerB, [zlink.PollEventFlag.PollCompletion], 85);
     try {
         const pendingA = dealerA.request().message('question-a').timeout(30_000)
-            .submit().then((parts) => {
+            .submit().reply.then((parts) => {
             settledA = true;
             return parts;
         });
         const pendingB = dealerB.request().message('question-b').timeout(30_000)
-            .submit().then((parts) => {
+            .submit().reply.then((parts) => {
             settledB = true;
             return parts;
         });
@@ -325,7 +325,7 @@ test('request non-OK completion rejects with typed RequestError only', async () 
     router.bind(endpoint('timeout'));
     dealer.connect(router.options.lastEndpoint);
     try {
-        const pending = dealer.request().message('never-replied').timeout(20).submit();
+        const pending = dealer.request().message('never-replied').timeout(20).submit().reply;
         const request = new zlink.Received();
         assert.equal(router.recv(request), true);
         await assert.rejects(pending, (error) => error instanceof zlink.RequestError
@@ -343,7 +343,7 @@ test('closing a socket rejects its live request with typed RequestError', async 
     router.bind(endpoint('request-close'));
     dealer.connect(router.options.lastEndpoint);
     try {
-        const pending = dealer.request().message('close-before-reply').timeout(1_000).submit();
+        const pending = dealer.request().message('close-before-reply').timeout(1_000).submit().reply;
         const request = new zlink.Received();
         assert.equal(router.recv(request), true);
         dealer.close();

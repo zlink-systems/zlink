@@ -59,7 +59,7 @@ test('managed send snapshots a backpressured Buffer and retries it after peer dr
             expected.push(text);
             payloads.push(payload);
             settledByIndex.push(false);
-            sends.push(sender.send().message(payload).submit().then(() => { settledByIndex[index] = true; settled += 1; }, (error) => {
+            sends.push(sender.send().message(payload).submit().admitted.then(() => { settledByIndex[index] = true; settled += 1; }, (error) => {
                 settledByIndex[index] = true;
                 settled += 1;
                 failure ??= error;
@@ -148,7 +148,7 @@ test('retry completion does not consume a Message wrapper reused by the caller',
         for (let index = 0; index < 64; index += 1) {
             const text = `${index.toString().padStart(4, '0')}:${'m'.repeat(59)}`;
             expected.push(text);
-            sends.push(sender.send().message(Buffer.from(text)).submit().then(() => { settled += 1; }, (error) => {
+            sends.push(sender.send().message(Buffer.from(text)).submit().admitted.then(() => { settled += 1; }, (error) => {
                 settled += 1;
                 failure ??= error;
             }));
@@ -158,7 +158,7 @@ test('retry completion does not consume a Message wrapper reused by the caller',
         const released = zlink.Message.from('wrapper-packet');
         messages.push(released);
         expected.push('wrapper-packet');
-        sends.push(sender.send().message(released).submit().then(() => { wrapperSettled = true; settled += 1; }, (error) => {
+        sends.push(sender.send().message(released).submit().admitted.then(() => { wrapperSettled = true; settled += 1; }, (error) => {
             wrapperSettled = true;
             settled += 1;
             failure ??= error;
@@ -215,7 +215,7 @@ test('context shutdown rejects a backpressured managed send as Terminated', asyn
                 settled: false,
                 done: Promise.resolve(),
             };
-            state.done = sender.send().message(Buffer.alloc(64, index)).submit().then(() => { state.settled = true; }, (error) => {
+            state.done = sender.send().message(Buffer.alloc(64, index)).submit().admitted.then(() => { state.settled = true; }, (error) => {
                 state.error = error;
                 state.settled = true;
             });
@@ -275,7 +275,7 @@ test('managed routed send retries the same target and packet after HWM drain', a
             expected.push(text);
             payloads.push(payload);
             settledByIndex.push(false);
-            sends.push(router.send(target).message(payload).submit().then(() => { settledByIndex[index] = true; settled += 1; }, (error) => {
+            sends.push(router.send(target).message(payload).submit().admitted.then(() => { settledByIndex[index] = true; settled += 1; }, (error) => {
                 settledByIndex[index] = true;
                 settled += 1;
                 failure ??= error;

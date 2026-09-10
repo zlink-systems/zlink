@@ -16,7 +16,7 @@ test('multipart receive reuse preserves captured reply routes and collection ide
       const dealer = dealers[index];
       dealer.setRoutingId(zlink.RoutingId.from(`peer-${index}`));
       dealer.connect('inproc://routed-receive-ownership');
-      requests.push(dealer.request().message(`body-${index}`).message('').timeout(1000).submit());
+      requests.push(dealer.request().message(`body-${index}`).message('').timeout(1000).submit().reply);
       assert.equal(router.recv(received), true);
       const parts = received.parts;
       assert.ok(Object.isFrozen(parts));

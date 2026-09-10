@@ -64,13 +64,15 @@ for (const kind of ['send', 'request']) {
             },
         };
         try {
-            const pending = kind === 'send'
+            const submission = kind === 'send'
                 ? owner.submitSend(Buffer.from('retained'), null)
                 : owner.submitRequest(Buffer.from('retained'), null, 1000);
             const other = owner.submitRequest(Buffer.from('other'), null, 1000);
+            strict_1.default.equal(submission.result, SubmitResult.Backpressured);
+            strict_1.default.equal(other.result, SubmitResult.Ok);
             strict_1.default.equal(owner.drain(publicOwner), 2);
             strict_1.default.deepEqual(order, ['completion-101', 'completion-202', 'NO_DATA', 'resubmit-1']);
-            const otherParts = await other;
+            const otherParts = await other.reply;
             try {
                 strict_1.default.equal(otherParts[0].getString(), 'other reply');
             }
@@ -86,7 +88,7 @@ for (const kind of ['send', 'request']) {
                 strict_1.default.equal(completions.length, 1, 'the admitted reply also belongs to the next drain');
                 strict_1.default.equal(owner.drain(publicOwner), 1);
             }
-            const parts = await pending;
+            const parts = await (kind === 'send' ? submission.admitted : submission.reply);
             if (kind === 'request') {
                 try {
                     strict_1.default.equal(parts[0].getString(), 'retried');
@@ -142,8 +144,8 @@ for (const kind of ['send', 'request']) {
             syncParts.forEach((part) => part.close());
         }
         strict_1.default.deepEqual(order, ['other completion', 'NO_DATA', 'resubmit']);
-        await send;
-        const otherParts = await other;
+        await send.admitted;
+        const otherParts = await other.reply;
         try {
             strict_1.default.equal(otherParts[0].getString(), 'other reply');
         }
