@@ -1,8 +1,8 @@
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO zlink-systems/zlink
-    REF core/v0.17.5
-    SHA512 f733101cd4ac38500f7becf8791dc658a95e2399ef9d692bbe72aca3f06b6268d04fa7c064d30efbf65babf26d45564d1721fbd85969f30b66c33860c3b26579
+    REF core/v0.18.0
+    SHA512 fe7b4c3d83b348b4f9c27831d72910194bafac1f6c9c0f48d945b0a6b94711354b39ea2c1e5b2368efb8e5afd2b643975a6dc743022bfc2ff05773b5277cb878
     HEAD_REF main
 )
 
