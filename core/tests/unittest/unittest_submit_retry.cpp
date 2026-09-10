@@ -91,7 +91,7 @@ void blocking_directed_send_times_out_as_backpressured ()
     test_context_socket_close_zero_linger (server);
 }
 
-void blocking_directed_send_retries_multipart_final_frame ()
+void blocking_directed_send_retries_whole_record ()
 {
     void *server = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *client = test_context_socket (ZLINK_SOCKET_ROUTER);
@@ -115,23 +115,31 @@ void blocking_directed_send_retries_multipart_final_frame ()
     zlink_routing_id_t rid;
     make_rid ("S", &rid);
 
-    zlink_msg_t first;
-    init_string_msg (&first, "one");
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK, zlink_send_part_rid (client, &rid, &first,
-                                            static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE,
-                                            NULL, NULL));
-
     zlink_test_set_submit_retry_fault (1, ENOTCONN);
-    zlink_msg_t second;
-    init_string_msg (&second, "two");
+    zlink_msg_t parts[2];
+    init_string_msg (&parts[0], "one");
+    init_string_msg (&parts[1], "two");
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK, zlink_send_part_rid (client, &rid, &second,
-                                            static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL,
-                                            NULL, NULL));
+      ZLINK_SUBMIT_OK,
+      zlink_send_rid (client, &rid, parts, 2,
+                      static_cast<zlink_send_flags_t> (0), NULL, NULL));
 
-    recv_routed_string_expect_success (server, "one", NULL, ZLINK_PART_MORE);
-    recv_routed_string_expect_success (server, "two");
+    const zlink_routing_id_t *source = NULL;
+    zlink_reply_token_t token = 0;
+    zlink_msg_t received[2];
+    size_t part_count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_router_recv (server, &source, &token, received, 2, &part_count,
+                         ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_NOT_NULL (source);
+    TEST_ASSERT_EQUAL_UINT64 (0, token);
+    TEST_ASSERT_EQUAL_UINT64 (2, part_count);
+    TEST_ASSERT_EQUAL_UINT64 (3, zlink_msg_size (&received[0]));
+    TEST_ASSERT_EQUAL_MEMORY ("one", zlink_msg_data (&received[0]), 3);
+    TEST_ASSERT_EQUAL_UINT64 (3, zlink_msg_size (&received[1]));
+    TEST_ASSERT_EQUAL_MEMORY ("two", zlink_msg_data (&received[1]), 3);
+    zlink_multipart_close (received, part_count);
 
     zlink_test_set_submit_retry_fault (0, 0);
     test_context_socket_close_zero_linger (client);
@@ -189,7 +197,7 @@ int main ()
     setup_test_environment ();
     UNITY_BEGIN ();
     RUN_TEST (blocking_directed_send_times_out_as_backpressured);
-    RUN_TEST (blocking_directed_send_retries_multipart_final_frame);
+    RUN_TEST (blocking_directed_send_retries_whole_record);
     RUN_TEST (dontwait_local_admission_wakes_when_first_target_attaches);
     return UNITY_END ();
 }

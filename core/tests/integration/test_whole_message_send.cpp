@@ -194,9 +194,7 @@ void subscribe_event (void *xpub_, bool old_name_, int expected_, const char *to
     const zlink_routing_id_t *source = NULL;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
-      old_name_ ? zlink_xpub_recv_part (xpub_, &source, &subscribed, topic,
-                                       sizeof (topic), &length,
-                                       ZLINK_RECV_FLAGS_DONTWAIT)
+      old_name_ ? zlink_xpub_recv (xpub_, &source, &subscribed, topic, sizeof (topic), &length, ZLINK_RECV_FLAGS_DONTWAIT)
                 : ::zlink_xpub_recv (xpub_, &source, &subscribed, topic,
                                      sizeof (topic), &length,
                                      ZLINK_RECV_FLAGS_DONTWAIT));
@@ -549,7 +547,7 @@ void test_whole_publish_subscribe_capacity_retry_and_array_reuse ()
     }
 }
 
-void test_whole_subscribe_validation_and_part_interleave ()
+void test_whole_subscribe_validation_and_capacity_retry ()
 {
     void *pub = make_socket (ZLINK_SOCKET_XPUB, "pub");
     void *sub = make_socket (ZLINK_SOCKET_SUB, "sub");
@@ -583,24 +581,27 @@ void test_whole_subscribe_validation_and_part_interleave ()
     TEST_ASSERT_EQUAL_INT (EINVAL, errno);
     TEST_ASSERT_EQUAL_UINT64 (99, topic_length);
     TEST_ASSERT_EQUAL_UINT64 (99, count);
-    zlink_msg_t part;
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
-    for (size_t i = 0; i < 5; ++i) {
-        zlink_part_flag_t more = ZLINK_PART_FINAL;
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_RECV_OK,
-          zlink_subscribe_part (sub, NULL, topic, sizeof (topic), &topic_length,
-                                &part, &more, ZLINK_RECV_FLAGS_DONTWAIT));
-        assert_parts (&part, payloads + i, 1);
-        if (i == 0) {
-            TEST_ASSERT_EQUAL_INT (
-              ZLINK_RECV_BUSY,
-              ::zlink_subscribe (sub, NULL, topic, sizeof (topic), &topic_length,
-                                  parts, 5, &count, ZLINK_RECV_FLAGS_DONTWAIT));
-            TEST_ASSERT_EQUAL_INT (EBUSY, errno);
-        }
-    }
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
+    zlink_msg_t preserved;
+    init_part (&preserved, "preserved");
+    count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_BUFFER_TOO_SMALL,
+      zlink_subscribe (sub, NULL, topic, sizeof (topic), &topic_length,
+                       &preserved, 1, &count, ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (ENOBUFS, errno);
+    TEST_ASSERT_EQUAL_UINT64 (5, count);
+    const std::string preserved_payload[] = {"preserved"};
+    assert_parts (&preserved, preserved_payload, 1);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&preserved));
+    zlink_msg_t received[5];
+    count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_subscribe (sub, NULL, topic, sizeof (topic), &topic_length,
+                       received, 5, &count, ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_UINT64 (5, count);
+    assert_parts (received, payloads, count);
+    zlink_multipart_close (received, count);
     test_context_socket_close_zero_linger (sub);
     test_context_socket_close_zero_linger (pub);
 }
@@ -629,8 +630,7 @@ void test_whole_xpub_recv_alias_and_capacity_retry ()
     TEST_ASSERT_EACH_EQUAL_UINT8 ('k', topic, sizeof (topic));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
-      zlink_xpub_recv_part (pub, &source, &subscribed, topic, sizeof (topic),
-                            &length, ZLINK_RECV_FLAGS_DONTWAIT));
+      zlink_xpub_recv (pub, &source, &subscribed, topic, sizeof (topic), &length, ZLINK_RECV_FLAGS_DONTWAIT));
     TEST_ASSERT_EQUAL_INT (1, subscribed);
     TEST_ASSERT_NOT_NULL (source);
     TEST_ASSERT_EQUAL_UINT64 (3, source->size);
@@ -647,7 +647,7 @@ void test_whole_xpub_recv_alias_and_capacity_retry ()
     test_context_socket_close_zero_linger (pub);
 }
 
-void test_whole_send_preserves_existing_part_sequence ()
+void test_whole_send_accepts_consecutive_atomic_records ()
 {
     void *sender = make_socket (ZLINK_SOCKET_PAIR, "sender");
     void *receiver = make_socket (ZLINK_SOCKET_PAIR, "receiver");
@@ -655,22 +655,17 @@ void test_whole_send_preserves_existing_part_sequence ()
     zlink_msg_t part;
     init_part (&part, payloads[0]);
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK, zlink_send_part (sender, &part, ZLINK_SEND_FLAGS_NONE,
-                                       ZLINK_PART_MORE, NULL, NULL));
+      ZLINK_SUBMIT_OK,
+      zlink_send (sender, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
     assert_consumed (&part, 1);
     zlink_msg_t parts[3];
     init_parts (parts, payloads, 3);
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_INVALID_STATE,
+      ZLINK_SUBMIT_OK,
       ::zlink_send (sender, parts, 3, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
-    TEST_ASSERT_EQUAL_INT (EBUSY, errno);
     assert_consumed (parts, 3);
-    init_part (&part, payloads[1]);
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK, zlink_send_part (sender, &part, ZLINK_SEND_FLAGS_NONE,
-                                       ZLINK_PART_FINAL, NULL, NULL));
-    assert_consumed (&part, 1);
-    receive_record (receiver, false, payloads, 2);
+    receive_record (receiver, false, payloads, 1);
+    receive_record (receiver, false, payloads, 3);
     assert_no_record (receiver, false);
     test_context_socket_close_zero_linger (sender);
     test_context_socket_close_zero_linger (receiver);
@@ -870,9 +865,9 @@ int main ()
     RUN_TEST (test_whole_send_failed_middle_discards_prefix_and_consumes_suffix);
     RUN_TEST (test_whole_send_backpressure_retries_entire_record);
     RUN_TEST (test_whole_publish_subscribe_capacity_retry_and_array_reuse);
-    RUN_TEST (test_whole_subscribe_validation_and_part_interleave);
+    RUN_TEST (test_whole_subscribe_validation_and_capacity_retry);
     RUN_TEST (test_whole_xpub_recv_alias_and_capacity_retry);
-    RUN_TEST (test_whole_send_preserves_existing_part_sequence);
+    RUN_TEST (test_whole_send_accepts_consecutive_atomic_records);
     RUN_TEST (test_whole_send_concurrent_callers_keep_record_boundaries);
     RUN_TEST (test_whole_reply_backpressure_preserves_token_for_record_retry);
     RUN_TEST (test_whole_publish_backpressure_retries_entire_record);

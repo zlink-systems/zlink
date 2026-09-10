@@ -402,15 +402,6 @@ zlink_recv_result_t zlink_xpub_recv (
                        topic_id_capacity_, topic_id_len_out_, flags_);
 }
 
-zlink_recv_result_t zlink_xpub_recv_part (
-  void *xpub_, const zlink_routing_id_t **source_rid_out_,
-  int *subscribed_out_, char *topic_id_buf_, size_t topic_id_capacity_,
-  size_t *topic_id_len_out_, zlink_recv_flags_t flags_)
-{
-    return xpub_recv (xpub_, source_rid_out_, subscribed_out_, topic_id_buf_,
-                       topic_id_capacity_, topic_id_len_out_, flags_);
-}
-
 extern "C" int zlink_socket_recv_internal (void *socket_,
                                            zlink_routing_id_t *source_rid_out_,
                                            zlink_msg_t **parts_out_,

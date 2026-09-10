@@ -59,18 +59,11 @@
     zlink_poller_wait;
     zlink_proxy;
     zlink_publish;
-    zlink_publish_part;
     zlink_recv;
-    zlink_recv_part;
     zlink_router_recv;
-    zlink_router_recv_part;
     zlink_reply;
-    zlink_reply_part;
     zlink_request;
-    zlink_request_part;
     zlink_send;
-    zlink_send_part;
-    zlink_send_part_rid;
     zlink_send_rid;
     zlink_completion_close;
     zlink_completion_recv;
@@ -95,7 +88,6 @@
     zlink_stream_recv_packet;
     zlink_strerror;
     zlink_subscribe;
-    zlink_subscribe_part;
     zlink_subscription_at;
     zlink_thread_join;
     zlink_thread_start;
@@ -108,6 +100,5 @@
     zlink_unset_subscription;
     zlink_version;
     zlink_xpub_recv;
-    zlink_xpub_recv_part;
   local: *;
 };

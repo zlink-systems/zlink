@@ -256,13 +256,12 @@ void test_raw_wire_peer_weight_waits_for_exact_pair_readiness ()
         const zlink_routing_id_t *rid = NULL;
         uint64_t sequence = 0;
         zlink_msg_t part;
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
-        zlink_part_flag_t more = ZLINK_PART_FINAL;
+        size_t part_count = 0;
         TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA,
-                               zlink_router_recv_part (router, &rid, &sequence, &part, &more,
-                                                       ZLINK_RECV_FLAGS_DONTWAIT));
+                               zlink_router_recv (router, &rid, &sequence,
+                                                  &part, 1, &part_count,
+                                                  ZLINK_RECV_FLAGS_DONTWAIT));
         TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
     }
     test_context_socket_close_zero_linger (router);
 }
@@ -282,8 +281,9 @@ void test_stale_application_connection_cannot_complete_reconnected_request ()
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&first_request, 1));
         zlink_completion_id_t first_id = 0;
         TEST_ASSERT_EQUAL_INT (
-          ZLINK_SUBMIT_OK, zlink_request_part (server, NULL, &first_request, ZLINK_SEND_FLAGS_NONE,
-                                               ZLINK_PART_FINAL, 250, NULL, &first_id));
+          ZLINK_SUBMIT_OK,
+          zlink_request (server, NULL, &first_request, 1,
+                         ZLINK_SEND_FLAGS_NONE, 250, NULL, &first_id));
         TEST_ASSERT_TRUE (first_id != 0);
         TEST_ASSERT_TRUE (request_sequence (old_application) != 0);
         // Keep the already installed read callback to deliver the stale result
@@ -307,8 +307,9 @@ void test_stale_application_connection_cannot_complete_reconnected_request ()
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&second_request, 1));
         zlink_completion_id_t second_id = 0;
         TEST_ASSERT_EQUAL_INT (
-          ZLINK_SUBMIT_OK, zlink_request_part (server, NULL, &second_request, ZLINK_SEND_FLAGS_NONE,
-                                               ZLINK_PART_FINAL, 5000, NULL, &second_id));
+          ZLINK_SUBMIT_OK,
+          zlink_request (server, NULL, &second_request, 1,
+                         ZLINK_SEND_FLAGS_NONE, 5000, NULL, &second_id));
         TEST_ASSERT_TRUE (second_id != 0);
         const uint64_t sequence = request_sequence (application);
         // The weak engine lifetime guard must reject even a successful old
@@ -411,9 +412,10 @@ void test_error_reply_payload_export_allocation_failure_is_payloadless ()
         *static_cast<unsigned char *> (zlink_msg_data (&request)) = 'q';
         int user_context = 17;
         zlink_completion_id_t id = 0;
-        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
-                               zlink_request_part (server, NULL, &request, ZLINK_SEND_FLAGS_NONE,
-                                                   ZLINK_PART_FINAL, 5000, &user_context, &id));
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_SUBMIT_OK,
+          zlink_request (server, NULL, &request, 1, ZLINK_SEND_FLAGS_NONE,
+                         5000, &user_context, &id));
         TEST_ASSERT_TRUE (id != 0);
         const uint64_t sequence = request_sequence (application);
         unsigned char error[4];

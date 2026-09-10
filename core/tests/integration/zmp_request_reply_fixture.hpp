@@ -35,14 +35,8 @@ void exercise_request_reply (void *router_,
     zlink_completion_id_t request_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_request_part (dealer_, NULL, &request[0],
-                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, 0, NULL,
-                          NULL));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_request_part (dealer_, NULL, &request[1],
-                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, 5000,
-                          NULL, &request_id));
+      zlink_request (dealer_, NULL, request, 2, ZLINK_SEND_FLAGS_NONE, 5000,
+                     NULL, &request_id));
     TEST_ASSERT_NOT_EQUAL (0, request_id);
     if (progress_)
         progress_ (progress_data_);
@@ -50,37 +44,29 @@ void exercise_request_reply (void *router_,
     zlink_routing_id_t reply_rid;
     memset (&reply_rid, 0, sizeof (reply_rid));
     zlink_reply_token_t reply_token = 0;
-    for (size_t i = 0; i != 2; ++i) {
-        const zlink_routing_id_t *source_rid = NULL;
-        zlink_reply_token_t token = 0;
-        zlink_msg_t part;
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_RECV_OK,
-          zlink_router_recv_part (router_, &source_rid, &token, &part,
-                                  &has_more, ZLINK_RECV_FLAGS_NONE));
-        TEST_ASSERT_NOT_NULL (source_rid);
-        TEST_ASSERT_NOT_EQUAL (0, token);
-        if (i == 0) {
-            reply_rid = *source_rid;
-            reply_token = token;
-            TEST_ASSERT_EQUAL_STRING_LEN (
-              request_payload_,
-              static_cast<const char *> (zlink_msg_data (&part)),
-              strlen (request_payload_));
-            TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, has_more);
-        } else {
-            TEST_ASSERT_EQUAL_UINT64 (reply_token, token);
-            TEST_ASSERT_EQUAL_STRING_LEN (
-              "request-tail",
-              static_cast<const char *> (zlink_msg_data (&part)), 12);
-            TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
-        }
-        if (inspect_part_)
-            inspect_part_ (&part);
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+    const zlink_routing_id_t *source_rid = NULL;
+    zlink_msg_t received[2];
+    size_t received_count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_router_recv (router_, &source_rid, &reply_token, received, 2,
+                         &received_count, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_NOT_NULL (source_rid);
+    TEST_ASSERT_NOT_EQUAL (0, reply_token);
+    TEST_ASSERT_EQUAL_UINT64 (2, received_count);
+    reply_rid = *source_rid;
+    TEST_ASSERT_EQUAL_STRING_LEN (
+      request_payload_,
+      static_cast<const char *> (zlink_msg_data (&received[0])),
+      strlen (request_payload_));
+    TEST_ASSERT_EQUAL_STRING_LEN (
+      "request-tail",
+      static_cast<const char *> (zlink_msg_data (&received[1])), 12);
+    if (inspect_part_) {
+        inspect_part_ (&received[0]);
+        inspect_part_ (&received[1]);
     }
+    zlink_multipart_close (received, received_count);
 
     zlink_msg_t reply[2];
     TEST_ASSERT_SUCCESS_ERRNO (
@@ -91,12 +77,7 @@ void exercise_request_reply (void *router_,
     memcpy (zlink_msg_data (&reply[1]), "reply-tail", 10);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_reply_part (router_, &reply_rid, reply_token, &reply[0],
-                        ZLINK_PART_MORE));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_reply_part (router_, &reply_rid, reply_token, &reply[1],
-                        ZLINK_PART_FINAL));
+      zlink_reply (router_, &reply_rid, reply_token, reply, 2));
 
     if (progress_)
         progress_ (progress_data_);

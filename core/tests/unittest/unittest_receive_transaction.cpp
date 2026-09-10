@@ -247,23 +247,22 @@ void init_payload (zlink_msg_t *part_, const std::string &payload_)
 void send_request_record (void *sender_, uint64_t sequence_,
                           const char *prefix_)
 {
+    zlink_msg_t parts[2];
     for (size_t i = 0; i < 2; ++i) {
         const std::string payload =
           std::string (prefix_) + "-" + static_cast<char> ('0' + i);
-        zlink_msg_t part;
-        init_payload (&part, payload);
+        init_payload (&parts[i], payload);
         if (i == 0) {
             TEST_ASSERT_SUCCESS_ERRNO (
-              reinterpret_cast<zlink::msg_t *> (&part)
+              reinterpret_cast<zlink::msg_t *> (&parts[i])
                 ->set_request_reply_metadata (
                   zlink::request_reply::request_type, sequence_));
         }
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_SUBMIT_OK,
-          zlink_send_part (sender_, &part, ZLINK_SEND_FLAGS_NONE,
-                           i == 0 ? ZLINK_PART_MORE : ZLINK_PART_FINAL, NULL, NULL));
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
     }
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send (sender_, parts, 2, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
+    zlink_multipart_close (parts, 2);
 }
 
 void write_internal_router_identity (zlink::pipe_t *pipe_,
@@ -780,8 +779,7 @@ void test_pair_commands_fence_every_command_drain ()
         zlink_msg_t part;
         init_payload (&part, "pair-sync-gate");
         send_result.store (
-          zlink_send_part (pair, &part, ZLINK_SEND_FLAGS_NONE,
-                           ZLINK_PART_FINAL, NULL, NULL),
+          zlink_send (pair, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL),
           std::memory_order_release);
         (void) zlink_msg_close (&part);
     });
@@ -860,8 +858,7 @@ void test_pair_commands_fence_every_command_drain ()
         zlink_msg_t part;
         init_payload (&part, "pair-term-sync-gate");
         terminating_send_result.store (
-          zlink_send_part (pair, &part, ZLINK_SEND_FLAGS_NONE,
-                           ZLINK_PART_FINAL, NULL, NULL),
+          zlink_send (pair, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL),
           std::memory_order_release);
         (void) zlink_msg_close (&part);
     });

@@ -50,8 +50,7 @@ void close_with_pending_writable_wait (bool with_monitor_)
         zlink_completion_id_t token = 0;
         TEST_ASSERT_EQUAL_INT (
           ZLINK_SUBMIT_BACKPRESSURED,
-          zlink_send_part (socket, &msg, ZLINK_SEND_FLAGS_DONTWAIT,
-                           ZLINK_PART_FINAL, NULL, &token));
+          zlink_send (socket, &msg, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL, &token));
         TEST_ASSERT_TRUE (token != 0);
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
         if (monitor)

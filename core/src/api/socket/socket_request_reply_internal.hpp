@@ -680,8 +680,6 @@ typedef void (*completion_pipe_budget_exhausted_test_hook_fn) (
 enum request_reply_allocation_failpoint_t
 {
     request_reply_allocation_none = 0,
-    request_reply_allocation_stage_payload,
-    request_reply_allocation_reply_key,
     request_reply_allocation_pending_insert,
     request_reply_allocation_lazy_state_create,
     request_reply_allocation_receive_spill,

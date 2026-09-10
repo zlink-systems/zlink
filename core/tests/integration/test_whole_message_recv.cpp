@@ -28,34 +28,29 @@ void assert_part (const zlink_msg_t *part_, const char *expected_)
 
 void send_record (void *socket_, const char *const *parts_, size_t part_count_)
 {
+    std::vector<zlink_msg_t> parts (part_count_);
     for (size_t i = 0; i < part_count_; ++i) {
-        zlink_msg_t part;
-        init_part (&part, parts_[i]);
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_SUBMIT_OK,
-          zlink_send_part (socket_, &part, ZLINK_SEND_FLAGS_NONE,
-                           i + 1 < part_count_ ? ZLINK_PART_MORE
-                                             : ZLINK_PART_FINAL,
-                           NULL, NULL));
-        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
+        init_part (&parts[i], parts_[i]);
     }
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send (socket_, parts.data (), parts.size (), ZLINK_SEND_FLAGS_NONE,
+                  NULL, NULL));
+    zlink_multipart_close (parts.data (), parts.size ());
 }
 
 void send_routed_record (void *router_, const zlink_routing_id_t *target_,
                          const char *const *parts_, size_t part_count_)
 {
+    std::vector<zlink_msg_t> parts (part_count_);
     for (size_t i = 0; i < part_count_; ++i) {
-        zlink_msg_t part;
-        init_part (&part, parts_[i]);
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_SUBMIT_OK,
-          zlink_send_part_rid (router_, target_, &part,
-                               ZLINK_SEND_FLAGS_NONE,
-                               i + 1 < part_count_ ? ZLINK_PART_MORE
-                                                 : ZLINK_PART_FINAL,
-                               NULL, NULL));
-        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
+        init_part (&parts[i], parts_[i]);
     }
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_rid (router_, target_, parts.data (), parts.size (),
+                      ZLINK_SEND_FLAGS_NONE, NULL, NULL));
+    zlink_multipart_close (parts.data (), parts.size ());
 }
 
 zlink_completion_id_t send_request_record (void *dealer_,
@@ -63,18 +58,15 @@ zlink_completion_id_t send_request_record (void *dealer_,
                                            size_t part_count_)
 {
     zlink_completion_id_t completion_id = 0;
+    std::vector<zlink_msg_t> parts (part_count_);
     for (size_t i = 0; i < part_count_; ++i) {
-        zlink_msg_t part;
-        init_part (&part, parts_[i]);
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_SUBMIT_OK,
-          zlink_request_part (
-            dealer_, NULL, &part, ZLINK_SEND_FLAGS_NONE,
-            i + 1 < part_count_ ? ZLINK_PART_MORE : ZLINK_PART_FINAL,
-            i + 1 < part_count_ ? 0 : 3000, NULL,
-            i + 1 < part_count_ ? NULL : &completion_id));
-        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
+        init_part (&parts[i], parts_[i]);
     }
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_request (dealer_, NULL, parts.data (), parts.size (),
+                     ZLINK_SEND_FLAGS_NONE, 3000, NULL, &completion_id));
+    zlink_multipart_close (parts.data (), parts.size ());
     TEST_ASSERT_NOT_EQUAL (0, completion_id);
     return completion_id;
 }
@@ -118,43 +110,6 @@ zlink_routing_id_t establish_router_route (void *router_, void *dealer_)
     return source_copy;
 }
 
-void assert_recv_part (void *socket_, const char *expected_,
-                       zlink_part_flag_t expected_more_)
-{
-    zlink_msg_t part;
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
-    const zlink_routing_id_t *source =
-      reinterpret_cast<const zlink_routing_id_t *> (1);
-    zlink_part_flag_t more = ZLINK_PART_FINAL;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_OK,
-      zlink_recv_part (socket_, &source, &part, &more,
-                       ZLINK_RECV_FLAGS_DONTWAIT));
-    TEST_ASSERT_NULL (source);
-    TEST_ASSERT_EQUAL_INT (expected_more_, more);
-    assert_part (&part, expected_);
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
-}
-
-void assert_router_recv_part (void *router_, const char *expected_,
-                              const char *expected_rid_,
-                              zlink_part_flag_t expected_more_)
-{
-    zlink_msg_t part;
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
-    const zlink_routing_id_t *source = NULL;
-    zlink_reply_token_t token = UINT64_MAX;
-    zlink_part_flag_t more = ZLINK_PART_FINAL;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_OK,
-      zlink_router_recv_part (router_, &source, &token, &part, &more,
-                              ZLINK_RECV_FLAGS_DONTWAIT));
-    assert_rid (source, expected_rid_);
-    TEST_ASSERT_EQUAL_UINT64 (0, token);
-    TEST_ASSERT_EQUAL_INT (expected_more_, more);
-    assert_part (&part, expected_);
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
-}
 }
 
 void test_pair_whole_recv_is_atomic_and_supports_single_part ()
@@ -345,15 +300,14 @@ void test_router_whole_recv_returns_data_and_request_metadata ()
     init_part (&reply, "done");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_reply_part (router, request_source, request_token, &reply,
-                        ZLINK_PART_FINAL));
+      zlink_reply (router, request_source, request_token, &reply, 1));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&reply));
 
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
 }
 
-void test_pair_whole_recv_mixes_with_recv_part_without_loss ()
+void test_pair_whole_recv_capacity_retry_without_loss ()
 {
     void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
     void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
@@ -367,22 +321,16 @@ void test_pair_whole_recv_mixes_with_recv_part_without_loss ()
     const char *const first[] = {"first-0", "first-1", "first-2"};
     send_record (sender, first, 3);
     wait_readable (receiver);
-    assert_recv_part (receiver, first[0], ZLINK_PART_MORE);
-
-    zlink_msg_t busy_parts[3];
-    init_part (&busy_parts[0], "busy-keep");
-    size_t busy_count = 23;
-    errno = 0;
+    zlink_msg_t first_received[3];
+    size_t first_count = 0;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_BUSY,
-      ::zlink_recv (receiver, NULL, busy_parts, 3, &busy_count,
+      ZLINK_RECV_OK,
+      ::zlink_recv (receiver, NULL, first_received, 3, &first_count,
                     ZLINK_RECV_FLAGS_DONTWAIT));
-    TEST_ASSERT_EQUAL_INT (EBUSY, errno);
-    TEST_ASSERT_EQUAL_UINT64 (23, busy_count);
-    assert_part (&busy_parts[0], "busy-keep");
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&busy_parts[0]));
-    assert_recv_part (receiver, first[1], ZLINK_PART_MORE);
-    assert_recv_part (receiver, first[2], ZLINK_PART_FINAL);
+    TEST_ASSERT_EQUAL_UINT64 (3, first_count);
+    for (size_t i = 0; i != first_count; ++i)
+        assert_part (&first_received[i], first[i]);
+    zlink_multipart_close (first_received, first_count);
 
     const char *const second[] = {"second-0", "second-1", "second-2"};
     send_record (sender, second, 3);
@@ -399,15 +347,22 @@ void test_pair_whole_recv_mixes_with_recv_part_without_loss ()
     TEST_ASSERT_EQUAL_UINT64 (3, needed);
     assert_part (&too_small[0], "capacity-keep");
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&too_small[0]));
-    assert_recv_part (receiver, second[0], ZLINK_PART_MORE);
-    assert_recv_part (receiver, second[1], ZLINK_PART_MORE);
-    assert_recv_part (receiver, second[2], ZLINK_PART_FINAL);
+    zlink_msg_t second_received[3];
+    size_t second_count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      ::zlink_recv (receiver, NULL, second_received, 3, &second_count,
+                    ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_UINT64 (3, second_count);
+    for (size_t i = 0; i != second_count; ++i)
+        assert_part (&second_received[i], second[i]);
+    zlink_multipart_close (second_received, second_count);
 
     test_context_socket_close_zero_linger (sender);
     test_context_socket_close_zero_linger (receiver);
 }
 
-void test_router_whole_recv_capacity_retry_and_recv_part_mix ()
+void test_router_whole_recv_capacity_retries_preserve_records ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
@@ -460,24 +415,30 @@ void test_router_whole_recv_capacity_retry_and_recv_part_mix ()
     const char *const mixed[] = {"mix-0", "mix-1", "mix-2"};
     send_record (dealer, mixed, 3);
     wait_readable (router);
-    assert_router_recv_part (router, mixed[0], "router-mix",
-                             ZLINK_PART_MORE);
-    zlink_msg_t busy[3];
-    init_part (&busy[0], "busy-router");
-    count = 31;
+    zlink_msg_t mixed_small[1];
+    init_part (&mixed_small[0], "busy-router");
+    count = 0;
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_BUSY,
-      ::zlink_router_recv (router, &source, &token, busy, 3, &count,
+      ZLINK_RECV_BUFFER_TOO_SMALL,
+      ::zlink_router_recv (router, &source, &token, mixed_small, 1, &count,
                            ZLINK_RECV_FLAGS_DONTWAIT));
-    TEST_ASSERT_EQUAL_INT (EBUSY, errno);
-    TEST_ASSERT_EQUAL_UINT64 (31, count);
-    assert_part (&busy[0], "busy-router");
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&busy[0]));
-    assert_router_recv_part (router, mixed[1], "router-mix",
-                             ZLINK_PART_MORE);
-    assert_router_recv_part (router, mixed[2], "router-mix",
-                             ZLINK_PART_FINAL);
+    TEST_ASSERT_EQUAL_INT (ENOBUFS, errno);
+    TEST_ASSERT_EQUAL_UINT64 (3, count);
+    assert_part (&mixed_small[0], "busy-router");
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&mixed_small[0]));
+    zlink_msg_t mixed_received[3];
+    count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      ::zlink_router_recv (router, &source, &token, mixed_received, 3, &count,
+                           ZLINK_RECV_FLAGS_DONTWAIT));
+    assert_rid (source, "router-mix");
+    TEST_ASSERT_EQUAL_UINT64 (0, token);
+    TEST_ASSERT_EQUAL_UINT64 (3, count);
+    for (size_t i = 0; i != count; ++i)
+        assert_part (&mixed_received[i], mixed[i]);
+    zlink_multipart_close (mixed_received, count);
 
     const char *const staged[] = {"stage-0", "stage-1"};
     send_record (dealer, staged, 2);
@@ -492,10 +453,18 @@ void test_router_whole_recv_capacity_retry_and_recv_part_mix ()
     TEST_ASSERT_EQUAL_UINT64 (2, count);
     assert_part (&preserve, "preserve");
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&preserve));
-    assert_router_recv_part (router, staged[0], "router-mix",
-                             ZLINK_PART_MORE);
-    assert_router_recv_part (router, staged[1], "router-mix",
-                             ZLINK_PART_FINAL);
+    zlink_msg_t staged_received[2];
+    count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      ::zlink_router_recv (router, &source, &token, staged_received, 2,
+                           &count, ZLINK_RECV_FLAGS_DONTWAIT));
+    assert_rid (source, "router-mix");
+    TEST_ASSERT_EQUAL_UINT64 (0, token);
+    TEST_ASSERT_EQUAL_UINT64 (2, count);
+    for (size_t i = 0; i != count; ++i)
+        assert_part (&staged_received[i], staged[i]);
+    zlink_multipart_close (staged_received, count);
 
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
@@ -569,8 +538,8 @@ int main ()
     RUN_TEST (test_pair_whole_recv_is_atomic_and_supports_single_part);
     RUN_TEST (test_dealer_whole_recv_capacity_retry_preserves_record);
     RUN_TEST (test_router_whole_recv_returns_data_and_request_metadata);
-    RUN_TEST (test_pair_whole_recv_mixes_with_recv_part_without_loss);
-    RUN_TEST (test_router_whole_recv_capacity_retry_and_recv_part_mix);
+    RUN_TEST (test_pair_whole_recv_capacity_retry_without_loss);
+    RUN_TEST (test_router_whole_recv_capacity_retries_preserve_records);
     RUN_TEST (
       test_whole_recv_validates_required_outputs_flags_and_socket_type);
     const int rc = UNITY_END ();

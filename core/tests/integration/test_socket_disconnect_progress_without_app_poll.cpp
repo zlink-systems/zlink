@@ -404,14 +404,13 @@ bool receive_request_and_reply (void *server_, const char *expected_,
     const zlink_routing_id_t *source = NULL;
     zlink_reply_token_t token = 0;
     zlink_msg_t request;
-    zlink_part_flag_t more = ZLINK_PART_MORE;
+    size_t more = 0;
     if (zlink_msg_init (&request) != ZLINK_CONFIG_OK)
         return false;
-    const zlink_recv_result_t recv_result = zlink_router_recv_part (
-      server_, &source, &token, &request, &more, ZLINK_RECV_FLAGS_DONTWAIT);
+    const zlink_recv_result_t recv_result = zlink_router_recv (server_, &source, &token, &request, 1, &more, ZLINK_RECV_FLAGS_DONTWAIT);
     const bool payload_ok =
       recv_result == ZLINK_RECV_OK && source && token != 0
-      && more == ZLINK_PART_FINAL && zlink_msg_size (&request) == strlen (expected_)
+      && more == 1 && zlink_msg_size (&request) == strlen (expected_)
       && memcmp (zlink_msg_data (&request), expected_, strlen (expected_)) == 0;
     zlink_msg_close (&request);
     if (!payload_ok)
@@ -419,7 +418,7 @@ bool receive_request_and_reply (void *server_, const char *expected_,
 
     zlink_msg_t reply;
     init_message (&reply, "reply-new-connection");
-    return zlink_reply_part (server_, source, token, &reply, ZLINK_PART_FINAL)
+    return zlink_reply (server_, source, token, &reply, 1)
            == ZLINK_SUBMIT_OK;
 }
 
@@ -452,10 +451,7 @@ void run_immediate_reconnect_request_case (transport_t transport_,
     zlink_msg_t first_attempt;
     init_message (&first_attempt, "request-new-connection");
     zlink_completion_id_t completion_id = 0;
-    const zlink_submit_result_t first_result = zlink_request_part (
-      client, NULL, &first_attempt, ZLINK_SEND_FLAGS_DONTWAIT,
-      ZLINK_PART_FINAL, 500, reinterpret_cast<void *> (0x4),
-      &completion_id);
+    const zlink_submit_result_t first_result = zlink_request (client, NULL, &first_attempt, 1, ZLINK_SEND_FLAGS_DONTWAIT, 500, reinterpret_cast<void *> (0x4), &completion_id);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&first_attempt));
     zlink_msg_close (&first_attempt);
 
@@ -482,10 +478,7 @@ void run_immediate_reconnect_request_case (transport_t transport_,
         init_message (&retry, "request-new-connection");
         TEST_ASSERT_EQUAL_INT (
           ZLINK_SUBMIT_OK,
-          zlink_request_part (client, NULL, &retry,
-                              ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
-                              500, reinterpret_cast<void *> (0x4),
-                              &request_id));
+          zlink_request (client, NULL, &retry, 1, ZLINK_SEND_FLAGS_DONTWAIT, 500, reinterpret_cast<void *> (0x4), &request_id));
         zlink_msg_close (&retry);
     } else {
         TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, first_result);

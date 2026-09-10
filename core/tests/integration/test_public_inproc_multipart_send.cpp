@@ -311,25 +311,20 @@ void test_dealer_multipart_size_failure_rolls_back_and_preserves_errno ()
       zlink_connect (sender, "inproc://dealer-multipart-size-rollback"));
     msleep (SETTLE_TIME);
 
-    zlink_msg_t first;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&first, 3));
-    memcpy (zlink_msg_data (&first), "abc", 3);
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &first, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_MORE, NULL, NULL));
-
-    zlink_msg_t final_part;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&final_part, 3));
-    memcpy (zlink_msg_data (&final_part), "def", 3);
+    zlink_msg_t invalid_record[2];
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&invalid_record[0], 3));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&invalid_record[1], 3));
+    memcpy (zlink_msg_data (&invalid_record[0]), "abc", 3);
+    memcpy (zlink_msg_data (&invalid_record[1]), "def", 3);
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_INVALID_ARGUMENT,
-      zlink_send_part (sender, &final_part, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL, NULL, NULL));
+      zlink_send (sender, invalid_record, 2, ZLINK_SEND_FLAGS_NONE, NULL,
+                  NULL));
     TEST_ASSERT_EQUAL_INT (EMSGSIZE, errno);
-    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&final_part));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&final_part));
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&invalid_record[0]));
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&invalid_record[1]));
+    zlink_multipart_close (invalid_record, 2);
 
     zlink_msg_t *received = NULL;
     size_t part_count = 0;
@@ -344,8 +339,7 @@ void test_dealer_multipart_size_failure_rolls_back_and_preserves_errno ()
     *static_cast<char *> (zlink_msg_data (&fresh)) = 'z';
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &fresh, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL, NULL, NULL));
+      zlink_send (sender, &fresh, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
       zlink_recv (receiver, NULL, &received, &part_count,
@@ -563,23 +557,17 @@ void test_public_inproc_router_recv_keeps_source_rid_across_reset ()
 
     zlink_msg_t received_storage[2];
     zlink_msg_t *received = received_storage;
-    zlink_part_flag_t received_more[2];
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received[0]));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received[1]));
+    size_t received_count = 0;
     const zlink_routing_id_t *source_rid_a = NULL;
     uint64_t request_seq_a = 0;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_router_recv_part (
-      router, &source_rid_a, &request_seq_a, &received[0], &received_more[0],
-      ZLINK_RECV_FLAGS_NONE));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_router_recv_part (
-      router, &source_rid_a, &request_seq_a, &received[1], &received_more[1],
-      ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_router_recv (router, &source_rid_a, &request_seq_a, received, 2,
+                         &received_count, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source_rid_a);
     TEST_ASSERT_EQUAL_UINT64 (0, request_seq_a);
     TEST_ASSERT_EQUAL_UINT64 (sizeof (routing_id) - 1, source_rid_a->size);
     TEST_ASSERT_EQUAL_MEMORY (routing_id, source_rid_a->data, sizeof (routing_id) - 1);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, received_more[0]);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, received_more[1]);
+    TEST_ASSERT_EQUAL_UINT64 (2, received_count);
     TEST_ASSERT_EQUAL_UINT64 (sizeof (head) - 1, zlink_msg_size (&received[0]));
     TEST_ASSERT_EQUAL_MEMORY (head, zlink_msg_data (&received[0]), sizeof (head) - 1);
     TEST_ASSERT_EQUAL_UINT64 (sizeof (body) - 1, zlink_msg_size (&received[1]));
@@ -594,15 +582,15 @@ void test_public_inproc_router_recv_keeps_source_rid_across_reset ()
 
     const zlink_routing_id_t *source_rid_c = NULL;
     uint64_t request_seq_c = 0;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received[0]));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_router_recv_part (
-      router, &source_rid_c, &request_seq_c, &received[0], &received_more[0],
-      ZLINK_RECV_FLAGS_NONE));
+    received_count = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_router_recv (router, &source_rid_c, &request_seq_c, &received[0],
+                         1, &received_count, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source_rid_c);
     TEST_ASSERT_EQUAL_UINT64 (0, request_seq_c);
     TEST_ASSERT_EQUAL_UINT64 (sizeof (routing_id) - 1, source_rid_c->size);
     TEST_ASSERT_EQUAL_MEMORY (routing_id, source_rid_c->data, sizeof (routing_id) - 1);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, received_more[0]);
+    TEST_ASSERT_EQUAL_UINT64 (1, received_count);
     TEST_ASSERT_EQUAL_UINT64 (sizeof (payload) - 1, zlink_msg_size (&received[0]));
     TEST_ASSERT_EQUAL_MEMORY (payload, zlink_msg_data (&received[0]), sizeof (payload) - 1);
     zlink_multipart_close (received, 1);
@@ -831,10 +819,11 @@ void test_nonblocking_send_close_race_is_lifetime_safe ()
                     gate.cv.wait (lock, [&] () { return gate.go; });
                 }
 
-                uint64_t part_index = 0;
                 while (!stop.load (std::memory_order_acquire)) {
-                    zlink_msg_t part;
-                    if (zlink_msg_init_size (&part, 64) != ZLINK_CONFIG_OK) {
+                    zlink_msg_t parts[2];
+                    if (zlink_msg_init_size (&parts[0], 64) != ZLINK_CONFIG_OK
+                        || zlink_msg_init_size (&parts[1], 64)
+                             != ZLINK_CONFIG_OK) {
                         const int init_errno = zlink_errno ();
                         const int observed_errno = init_errno != 0
                                                      ? init_errno
@@ -846,22 +835,21 @@ void test_nonblocking_send_close_race_is_lifetime_safe ()
                           std::memory_order_acquire);
                         return;
                     }
-                    memset (zlink_msg_data (&part), 0x5a, 64);
-                    const zlink_part_flag_t part_flag =
-                      (part_index++ & 1) == 0 ? ZLINK_PART_MORE
-                                              : ZLINK_PART_FINAL;
-                    const zlink_submit_result_t rc = zlink_send_part (
-                      socket, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                      part_flag, NULL, NULL);
+                    memset (zlink_msg_data (&parts[0]), 0x5a, 64);
+                    memset (zlink_msg_data (&parts[1]), 0x5a, 64);
+                    const zlink_submit_result_t rc =
+                      zlink_send (socket, parts, 2, ZLINK_SEND_FLAGS_DONTWAIT,
+                                  NULL, NULL);
                     const int err = zlink_errno ();
-                    const size_t remaining_size = zlink_msg_size (&part);
+                    const size_t remaining_size =
+                      zlink_msg_size (&parts[0]) + zlink_msg_size (&parts[1]);
                     if (remaining_size != 0) {
                         size_t expected_size = 0;
                         unconsumed_part_size.compare_exchange_strong (
                           expected_size, remaining_size,
                           std::memory_order_acq_rel,
                           std::memory_order_acquire);
-                        zlink_msg_close (&part);
+                        zlink_multipart_close (parts, 2);
                         return;
                     }
                     if (rc == ZLINK_SUBMIT_OK
@@ -983,45 +971,34 @@ void run_four_caller_two_part_submit (
                 multipart_identity_payload_t payload = {
                   static_cast<uint32_t> (caller),
                   static_cast<uint32_t> (sequence), 0};
-                zlink_msg_t more;
-                if (zlink_msg_init_size (&more, sizeof (payload)) != 0) {
+                zlink_msg_t parts[2];
+                if (zlink_msg_init_size (&parts[0], sizeof (payload)) != 0) {
                     failures.fetch_add (1, std::memory_order_relaxed);
                     more_barrier.wait ();
                     final_barrier.wait ();
                     continue;
                 }
-                memcpy (zlink_msg_data (&more), &payload, sizeof (payload));
-                const zlink_submit_result_t more_result = target_rid_
-                  ? zlink_send_part_rid (
-                      sender_, target_rid_, &more, ZLINK_SEND_FLAGS_NONE,
-                      ZLINK_PART_MORE, NULL, NULL)
-                  : zlink_send_part (
-                      sender_, &more, ZLINK_SEND_FLAGS_NONE,
-                      ZLINK_PART_MORE, NULL, NULL);
-                if (more_result != ZLINK_SUBMIT_OK)
-                    failures.fetch_add (1, std::memory_order_relaxed);
-                zlink_msg_close (&more);
-                more_barrier.wait ();
-
+                memcpy (zlink_msg_data (&parts[0]), &payload,
+                        sizeof (payload));
                 payload.part = 1;
-                zlink_msg_t final_part;
-                if (zlink_msg_init_size (&final_part, sizeof (payload)) != 0) {
+                if (zlink_msg_init_size (&parts[1], sizeof (payload)) != 0) {
                     failures.fetch_add (1, std::memory_order_relaxed);
+                    zlink_msg_close (&parts[0]);
+                    more_barrier.wait ();
                     final_barrier.wait ();
                     continue;
                 }
-                memcpy (zlink_msg_data (&final_part), &payload,
+                memcpy (zlink_msg_data (&parts[1]), &payload,
                         sizeof (payload));
-                const zlink_submit_result_t final_result = target_rid_
-                  ? zlink_send_part_rid (
-                      sender_, target_rid_, &final_part,
-                      ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL)
-                  : zlink_send_part (
-                      sender_, &final_part, ZLINK_SEND_FLAGS_NONE,
-                      ZLINK_PART_FINAL, NULL, NULL);
-                if (final_result != ZLINK_SUBMIT_OK)
+                more_barrier.wait ();
+                const zlink_submit_result_t result = target_rid_
+                  ? zlink_send_rid (sender_, target_rid_, parts, 2,
+                                    ZLINK_SEND_FLAGS_NONE, NULL, NULL)
+                  : zlink_send (sender_, parts, 2, ZLINK_SEND_FLAGS_NONE,
+                                NULL, NULL);
+                if (result != ZLINK_SUBMIT_OK)
                     failures.fetch_add (1, std::memory_order_relaxed);
-                zlink_msg_close (&final_part);
+                zlink_multipart_close (parts, 2);
                 final_barrier.wait ();
             }
         });
@@ -1073,7 +1050,7 @@ void run_four_caller_two_part_submit (
     TEST_ASSERT_EQUAL_INT (0, failures.load (std::memory_order_relaxed));
 }
 
-void test_pair_four_callers_stage_two_parts_independently ()
+void test_pair_four_callers_submit_two_part_records_concurrently ()
 {
     void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
     void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
@@ -1084,7 +1061,7 @@ void test_pair_four_callers_stage_two_parts_independently ()
     run_four_caller_two_part_submit (sender, receiver, NULL, false);
 }
 
-void test_dealer_four_callers_stage_two_parts_independently ()
+void test_dealer_four_callers_submit_two_part_records_concurrently ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
@@ -1096,7 +1073,7 @@ void test_dealer_four_callers_stage_two_parts_independently ()
     run_four_caller_two_part_submit (dealer, router, NULL, true);
 }
 
-void test_router_four_callers_stage_two_parts_independently ()
+void test_router_four_callers_submit_two_part_records_concurrently ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
@@ -1166,26 +1143,26 @@ void test_router_two_callers_use_different_rids_concurrently ()
     std::thread callers[2];
     for (int caller = 0; caller != 2; ++caller) {
         callers[caller] = std::thread ([&, caller] {
+            zlink_msg_t parts[2];
             for (int part_index = 0; part_index != 2; ++part_index) {
-                zlink_msg_t part;
-                if (zlink_msg_init_size (&part, 1) != ZLINK_CONFIG_OK) {
+                if (zlink_msg_init_size (&parts[part_index], 1)
+                    != ZLINK_CONFIG_OK) {
                     failures.fetch_add (1, std::memory_order_relaxed);
-                    if (part_index == 0)
-                        more_barrier.wait ();
+                    if (part_index != 0)
+                        zlink_msg_close (&parts[0]);
+                    more_barrier.wait ();
                     return;
                 }
-                *static_cast<unsigned char *> (zlink_msg_data (&part)) =
+                *static_cast<unsigned char *> (
+                  zlink_msg_data (&parts[part_index])) =
                   static_cast<unsigned char> ('A' + caller * 2 + part_index);
-                if (zlink_send_part_rid (
-                      router, &targets[caller], &part, ZLINK_SEND_FLAGS_NONE,
-                      part_index == 0 ? ZLINK_PART_MORE : ZLINK_PART_FINAL,
-                      NULL, NULL)
-                    != ZLINK_SUBMIT_OK)
-                    failures.fetch_add (1, std::memory_order_relaxed);
-                zlink_msg_close (&part);
-                if (part_index == 0)
-                    more_barrier.wait ();
             }
+            more_barrier.wait ();
+            if (zlink_send_rid (router, &targets[caller], parts, 2,
+                                ZLINK_SEND_FLAGS_NONE, NULL, NULL)
+                != ZLINK_SUBMIT_OK)
+                failures.fetch_add (1, std::memory_order_relaxed);
+            zlink_multipart_close (parts, 2);
         });
     }
     for (int caller = 0; caller != 2; ++caller) {
@@ -1226,9 +1203,9 @@ int main (void)
     RUN_TEST (test_public_inproc_pair_send_is_safe_from_multiple_threads);
     RUN_TEST (test_public_inproc_dealer_send_is_safe_from_multiple_threads);
     RUN_TEST (test_nonblocking_send_close_race_is_lifetime_safe);
-    RUN_TEST (test_pair_four_callers_stage_two_parts_independently);
-    RUN_TEST (test_dealer_four_callers_stage_two_parts_independently);
-    RUN_TEST (test_router_four_callers_stage_two_parts_independently);
+    RUN_TEST (test_pair_four_callers_submit_two_part_records_concurrently);
+    RUN_TEST (test_dealer_four_callers_submit_two_part_records_concurrently);
+    RUN_TEST (test_router_four_callers_submit_two_part_records_concurrently);
     RUN_TEST (test_router_two_callers_use_different_rids_concurrently);
     RUN_TEST (test_public_inproc_router_send_rid_blocking);
     RUN_TEST (test_public_inproc_router_send_rid_multipart_blocking);
