@@ -13,9 +13,10 @@ import type {
 } from '../application-jobs/contracts';
 import { runWithApplicationJobPermit } from '../application-jobs/application-job-queue-scope';
 
-const MESH_DISPATCH_TIMER_YIELD_BATCHES = 16;
-const MESH_DISPATCH_TIMER_YIELD_INTERVAL_MS = 2;
+const MESH_DISPATCH_YIELD_RECORDS = 16;
+const MESH_DISPATCH_YIELD_INTERVAL_MS = 2;
 const MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET = 4;
+const MESH_DISPATCH_RECEIVE_CAPACITY = 64;
 // Captured while the runtime module is loaded, before any application owner
 // exists. A ready callback may run inside a Spot turn; the shared Mesh pump
 // must enter like an independent receive-loop task, without inheriting that
@@ -59,6 +60,8 @@ export class ZLinkMeshDispatchPump {
   private infrastructureDrainPromise?: Promise<void>;
   private readonly activeDrains = new Set<Promise<void>>();
   private readonly capacityStop = new AbortController();
+  private recordsSinceYield = 0;
+  private yieldStartedAtMs = 0;
 
   constructor(
     private readonly node: ZLinkBackendMeshNode,
@@ -90,8 +93,12 @@ export class ZLinkMeshDispatchPump {
   }
 
   private schedule(): void {
-    if ((this.pendingDomains & ReadyDomain.Infrastructure) !== 0) {
-      this.scheduleInfrastructure();
+    const infrastructureReady = (this.pendingDomains & ReadyDomain.Infrastructure) !== 0;
+    if ((!infrastructureReady || this.infrastructureScheduled)
+        && ((this.pendingDomains & ReadyDomain.Application) === 0 || this.scheduled)) return;
+    const startTurn = this.yieldIfNeeded() ?? Promise.resolve();
+    if (infrastructureReady) {
+      this.scheduleInfrastructure(startTurn);
     }
     if ((this.pendingDomains & ReadyDomain.Application) === 0) {
       return;
@@ -100,8 +107,12 @@ export class ZLinkMeshDispatchPump {
       return;
     }
     this.scheduled = true;
-    const drain = yieldToEventLoop()
-      .then(() => detachedMeshDispatchScope(() => this.drain()))
+    // Let the bounded lifecycle turn start first when both domains wake.
+    // Waiting for its start (not its handlers) preserves independent progress.
+    const applicationTurn = infrastructureReady ? startTurn.then(yieldToEventLoop) : startTurn;
+    const drain = applicationTurn
+      .then(() => detachedMeshDispatchScope(() =>
+        runZLinkExecutionArea('application', () => this.drain())))
       .catch((error) => {
         if (error instanceof ZLinkMeshDispatchFailure) {
           this.options.reportError?.(error.dispatchCause, error.context);
@@ -130,13 +141,14 @@ export class ZLinkMeshDispatchPump {
    * the infrastructure mailbox and prevent the relocation coordinator from
    * completing the drain that releases the application work.
    */
-  private scheduleInfrastructure(): void {
+  private scheduleInfrastructure(startTurn?: Promise<void>): void {
     if (this.infrastructureScheduled) {
       return;
     }
     this.infrastructureScheduled = true;
-    const drain = yieldToEventLoop()
-      .then(() => detachedMeshDispatchScope(() => this.drainInfrastructure()))
+    const drain = (startTurn ?? this.yieldIfNeeded() ?? Promise.resolve())
+      .then(() => detachedMeshDispatchScope(() =>
+        runZLinkExecutionArea('infrastructure', () => this.drainInfrastructure())))
       .catch((error) => {
         if (error instanceof ZLinkMeshDispatchFailure) {
           this.options.reportError?.(error.dispatchCause, error.context);
@@ -180,6 +192,7 @@ export class ZLinkMeshDispatchPump {
       );
       if (lifecycleBudgetExhausted) {
         this.pendingDomains |= ReadyDomain.Infrastructure;
+        await yieldToEventLoop();
       }
     }
   }
@@ -191,11 +204,6 @@ export class ZLinkMeshDispatchPump {
         ? (this.options.readyCapacity ?? 32)
         : Math.min(this.options.readyCapacity ?? 32, claimBudget);
     const readyBatch = this.node.createReadyBatch(readyCapacity);
-    // One record per claim receive keeps one ordinary-ingress permit paired
-    // with exactly one dispatch turn. Terminal completion claims bypass it.
-    const receiveBatch = this.node.createReceiveBatch(1, this.options.partCapacity ?? 256);
-    let receiveBatchesSinceTimerYield = 0;
-    let timerYieldStartedAtMs = this.nowMs();
     let claimsDrained = 0;
     try {
       for (;;) {
@@ -215,10 +223,16 @@ export class ZLinkMeshDispatchPump {
         for (let index = 0; index < drained.records.length; index += 1) {
           const claim = readyBatch.takeClaim(index);
           claimsDrained += 1;
+          const owner = drained.records[index];
+          // Raw ingress already attached one host permit to each record.
+          // A claim that reserves admission here may receive only that permit's record.
+          const receiveBatch = this.node.createReceiveBatch(
+            owner.ordinaryIngressPreAdmitted === true ? MESH_DISPATCH_RECEIVE_CAPACITY : 1,
+            this.options.partCapacity ?? 256
+          );
           try {
             receiveBatch.reset();
             for (;;) {
-              const owner = drained.records[index];
               const claimPermit = owner.terminalCompletion === true
                 || owner.ordinaryIngressPreAdmitted === true
                 || domain === ReadyDomain.Infrastructure
@@ -236,44 +250,37 @@ export class ZLinkMeshDispatchPump {
               if (received.records.length === 0) {
                 claimPermit?.releaseAfterInternalProcessing();
               }
-              for (const record of received.records) {
-                const permit = record.applicationJobPermit ?? claimPermit;
-                if (owner.ordinaryIngressPreAdmitted === true && permit === undefined) {
-                  record.releaseRetainedIngress?.();
-                  throw new Error('Pre-admitted raw ingress record lost its Application Job Queue permit.');
-                }
-                try {
-                  // A handler may synchronously submit an operation whose
-                  // control/completion is owned by this same MeshNode (e.g. a
-                  // native Completion record fed back through this node's own
-                  // Infrastructure claim). The active lane's scheduling state
-                  // must be released here, or a nested re-entrant drain can
-                  // never start to deliver that completion, and the awaiting
-                  // handler deadlocks against its own claim (spec
-                  // 46-internal-dispatch-loop, receive/dispatch wake/ordering).
-                  this.scheduled = false;
-                  this.drainPromise = undefined;
-                  if (domain === ReadyDomain.Infrastructure) {
-                    this.infrastructureScheduled = false;
-                    this.infrastructureDrainPromise = undefined;
+              // This owner keeps its claim while it drains. Other owners and
+              // infrastructure may progress if one of its handlers suspends.
+              if (domain === ReadyDomain.Infrastructure) {
+                this.infrastructureScheduled = false;
+                this.infrastructureDrainPromise = undefined;
+              } else {
+                this.scheduled = false;
+                this.drainPromise = undefined;
+              }
+              if (this.pendingDomains !== ReadyDomain.None) {
+                this.schedule();
+              }
+              try {
+                for (const record of received.records) {
+                  if (this.disposed) break;
+                  const permit = record.applicationJobPermit ?? claimPermit;
+                  if (owner.ordinaryIngressPreAdmitted === true && permit === undefined) {
+                    throw new Error('Pre-admitted raw ingress record lost its Application Job Queue permit.');
                   }
-                  if (this.pendingDomains !== ReadyDomain.None) {
-                    this.schedule();
-                  }
-                  const dispatch = () => runZLinkExecutionArea(
-                    domain === ReadyDomain.Infrastructure ? 'infrastructure' : 'application',
-                    async () => {
-                      try {
-                        await this.options.dispatch(drained.records[index], record);
-                      } catch (error) {
-                        throw new ZLinkMeshDispatchFailure(
-                          meshDispatchFailureContext(record),
-                          error
-                        );
-                      }
-                      await record.onTerminalCompletion?.();
+                  this.recordsSinceYield += 1;
+                  const dispatch = async () => {
+                    try {
+                      await this.options.dispatch(drained.records[index], record);
+                    } catch (error) {
+                      throw new ZLinkMeshDispatchFailure(
+                        meshDispatchFailureContext(record),
+                        error
+                      );
                     }
-                  );
+                    await record.onTerminalCompletion?.();
+                  };
                   if (permit === undefined) {
                     await dispatch();
                   } else {
@@ -283,42 +290,46 @@ export class ZLinkMeshDispatchPump {
                     ) permit.markApplicationQueued();
                     await runWithApplicationJobPermit(permit, dispatch);
                   }
-                } finally {
-                  for (const part of record.parts) {
-                    part.close();
-                  }
+                  const yieldTurn = this.yieldIfNeeded();
+                  if (yieldTurn !== undefined) await yieldTurn;
+                }
+              } finally {
+                // Batch ownership includes records whose dispatch never began,
+                // including on failure or shutdown in the middle of the batch.
+                for (const record of received.records) {
+                  for (const part of record.parts) part.close();
                   record.releaseRetainedIngress?.();
                 }
-              }
-              // A continuously readable owner must not keep the timers phase
-              // from running, but a timer turn for every single record adds a
-              // Promise, closure, and timer allocation to the hot path.
-              receiveBatchesSinceTimerYield += 1;
-              if (
-                receiveBatchesSinceTimerYield >= MESH_DISPATCH_TIMER_YIELD_BATCHES
-                || this.nowMs() - timerYieldStartedAtMs >= MESH_DISPATCH_TIMER_YIELD_INTERVAL_MS
-              ) {
-                receiveBatchesSinceTimerYield = 0;
-                await yieldToTimers();
-                timerYieldStartedAtMs = this.nowMs();
               }
               receiveBatch.reset();
             }
           } finally {
+            receiveBatch.close();
             claim.release();
           }
         }
-        await yieldToTimers();
-        receiveBatchesSinceTimerYield = 0;
-        timerYieldStartedAtMs = this.nowMs();
+        // Empty ready claims also count as work, so they cannot monopolize
+        // the microtask queue without giving I/O and deadlines a turn.
+        this.recordsSinceYield += 1;
+        const yieldTurn = this.yieldIfNeeded();
+        if (yieldTurn !== undefined) await yieldTurn;
         if (!drained.hasResidue) {
           return false;
         }
       }
     } finally {
-      receiveBatch.close();
       readyBatch.close();
     }
+  }
+
+  private yieldIfNeeded(): Promise<void> | undefined {
+    const nowMs = this.nowMs();
+    if (this.recordsSinceYield < MESH_DISPATCH_YIELD_RECORDS
+        && nowMs - this.yieldStartedAtMs < MESH_DISPATCH_YIELD_INTERVAL_MS) return undefined;
+    this.recordsSinceYield = 0;
+    return yieldToTimers().then(() => {
+      this.yieldStartedAtMs = this.nowMs();
+    });
   }
 
   private nowMs(): number {
@@ -357,6 +368,7 @@ function serviceWireCommand(record: ReceiveRecord): number | undefined {
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
+
 
 function yieldToTimers(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
