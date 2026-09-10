@@ -17,9 +17,9 @@ title: "Socket — PAIR"
 PAIR is a bidirectional socket type in which two [socket](../glossary.en.md#socket) instances form an exclusive
 1:1 connection and both sides send and receive messages. Because there is exactly one peer—the socket
 at the other end of the connection—there is no input for selecting a destination peer, and a received
-part has no source routing ID. PAIR has no type-specific options.
+record has no source routing ID. PAIR has no type-specific options.
 
-This document defines only the PAIR-specific contract: how the part send and receive functions behave
+This document defines only the PAIR-specific contract: how the whole-message send and receive functions behave
 with PAIR, the asynchronous send rules for admission—the decision to accept a send request into the
 Core send queue—and the absence of receive-flow state. It does not redefine contracts shared by all
 socket types.
@@ -33,42 +33,33 @@ The following documents own the related contracts.
 | message lifecycle, ownership, and multipart | [Message](../02-message.en.md) |
 | result-to-errno mapping | [Errors](../03-errors.en.md#result-and-errno-mapping) |
 
-## 2. Multipart sends and record atomicity
+## 2. Whole-message sends and record atomicity
 
-A PAIR socket submits a message one part at a time. Send a single-part message with
-`ZLINK_PART_FINAL`. A [multipart](../02-message.en.md#4-multipart) message groups multiple parts into
-one logical message: start it with `ZLINK_PART_MORE`, then continue through `ZLINK_PART_FINAL` on the
-same thread, using the same function and the same `flags_`.
+A PAIR socket passes a `parts_` array and `part_count_` to one `zlink_send()` call to submit one
+record. The part order of a [multipart](../02-message.en.md#4-multipart) message is the array order.
+A single-part message uses an array of length one.
 
-Core stages successful intermediate parts as one group until `ZLINK_PART_FINAL` succeeds. This group
-is called a record. If any intermediate or final submit in an open sequence fails, Core atomically
-discards the previously staged parts and the failed part, then closes the sequence. The peer sees no
-part of that record.
+Core admits the complete record atomically. If the call fails, the peer sees none of its parts and
+the caller must resubmit the complete record from a retained copy. Every input slot is consumed on
+both success and failure and is left as an initialized empty message.
 
 ```mermaid
 sequenceDiagram
     participant App as Application
     participant Core as Core
-    App->>Core: zlink_send_part(part 1, ZLINK_PART_MORE)
-    Note over Core: Stage the successful intermediate part in the record
-    App->>Core: zlink_send_part(part 2, ZLINK_PART_MORE)
-    alt All submits, including the final submit, succeed
-        App->>Core: zlink_send_part(part 3, ZLINK_PART_FINAL)
-        Note over Core: The record is complete
-    else An intermediate or final submit fails
-        App--xCore: zlink_send_part(part N, ...) fails
-        Note over Core: Atomically discard the staged parts and failed part,<br/>then close the sequence<br/>The peer sees no part of the record
+    App->>Core: zlink_send(parts, part_count, flags)
+    alt Record admission succeeds
+        Core-->>App: ZLINK_SUBMIT_OK
+        Note over Core: Submit the complete record as one unit
+    else Record admission fails
+        Core-->>App: Submit error
+        Note over Core: The peer sees no part of the record
     end
 ```
 
-The failed call also consumes its `part_` according to the consumption rules of
-[`zlink_send_part`](#zlink_send_part), and the next submit starts the first part of a new record. A retry
-therefore must resubmit the entire record from its first part using copies retained before the calls.
-
-PAIR receive uses either the per-part [`zlink_recv_part`](README.en.md#zlink_recv_part) or the
-whole-record [`zlink_recv`](README.en.md#zlink_recv-and-zlink_router_recv).
-Because there is exactly one peer, both leave the source routing ID unset (`NULL`). Ownership, close,
-capacity, and record-atomicity rules are owned by [Socket Common](README.en.md).
+PAIR receive uses [`zlink_recv`](README.en.md#zlink_recv-and-zlink_router_recv) to receive a complete
+record in one call. Because there is exactly one peer, the source routing ID is `NULL`. Ownership,
+close, capacity, and record-atomicity rules are owned by [Socket Common](README.en.md).
 
 ## 3. Receive flow state
 
@@ -86,73 +77,64 @@ lists the observable detail.
 
 ## 4. Functions
 
-### zlink_send_part
+### zlink_send
 
-Sends one message part.
+Sends one message record.
 
 ```c
-ZLINK_EXPORT zlink_submit_result_t zlink_send_part (
-  void *s_,
-  zlink_msg_t *part_,
-  zlink_send_flags_t flags_,
-  zlink_part_flag_t part_flag_,
-  void *user_context_,
+ZLINK_EXPORT zlink_submit_result_t zlink_send (
+  void *s_, zlink_msg_t *parts_, size_t part_count_,
+  zlink_send_flags_t flags_, void *user_context_,
   zlink_completion_id_t *completion_id_out_);
 ```
 
-[Section 2](#2-multipart-sends-and-record-atomicity) defines single-part sends with
-`ZLINK_PART_FINAL`, the rules for starting and continuing a multipart message, and record-level
-atomicity.
-
-This function consumes the content of `part_` on both success and failure. If the same content may be
-needed again, copy it before the call. A consumed `zlink_msg_t` is left as an initialized empty
-message, so it can be closed or reused as is ([Socket Common part ownership](README.en.md#part-send-and-pending-admission)). Pass
-`ZLINK_SEND_FLAGS_NONE` or `ZLINK_SEND_FLAGS_DONTWAIT` in `flags_`. A `NONE FINAL` call snapshots
-`SNDTIMEO` on entry and waits through local queue admission; a `DONTWAIT FINAL` call does not wait.
-[§5 ("Part flow")](#5-implementation-and-contract-test-verification-requirements) states the ID and
-completion each path observably returns. [Socket Common](README.en.md#part-send-and-pending-admission)
+The `parts_` array and `part_count_` form the record. This function consumes every input slot on both
+success and failure. Retain a copy of the complete record before the call if it may be needed again.
+`part_count_ == 0` returns `ZLINK_SUBMIT_INVALID_ARGUMENT` with `EINVAL`. Pass
+`ZLINK_SEND_FLAGS_NONE` or `ZLINK_SEND_FLAGS_DONTWAIT` in `flags_`. `NONE` snapshots `SNDTIMEO` on
+entry and waits through local queue admission; `DONTWAIT` does not wait. [Socket Common](README.en.md#whole-message-send-and-pending-admission)
 owns the exact optional ID-output and context rules.
 
 **Returns:** `ZLINK_SUBMIT_OK` on success; otherwise a `zlink_submit_result_t` value that identifies
 the cause. The full mapping follows the [errno map](../03-errors.en.md#result-and-errno-mapping).
 
-**See also:** `zlink_recv_part`, `zlink_completion_recv`
+**See also:** `zlink_recv`, `zlink_completion_recv`
 
 ---
 
-### zlink_recv_part
+### zlink_recv
 
-Receives one message part.
+Receives one message record.
 
 ```c
-ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (
+ZLINK_EXPORT zlink_recv_result_t zlink_recv (
   void *s_,
   const zlink_routing_id_t **source_rid_out_,
-  zlink_msg_t *part_out_,
-  zlink_part_flag_t *has_more_out_,
+  zlink_msg_t *parts_out_,
+  size_t parts_capacity_,
+  size_t *part_count_out_,
   zlink_recv_flags_t flags_);
 ```
 
-`part_out_` must be an initialized message and is required together with `has_more_out_`.
-`source_rid_out_` is optional and, when provided, receives `NULL` on success for PAIR. On success,
-ownership of the received part transfers to the caller, which must call `zlink_msg_close(part_out_)`
-exactly once. A failure before a part is received does not transfer ownership.
+`parts_out_` and `part_count_out_` are required, and the array slots need not be initialized.
+`source_rid_out_` is optional and receives `NULL` on success. On success, ownership of the leading
+`*part_count_out_` slots transfers to the caller, which closes them exactly once with
+`zlink_multipart_close(parts_out_, *part_count_out_)`.
 
-`*has_more_out_` is `ZLINK_PART_MORE` when another part follows and `ZLINK_PART_FINAL` for the last
-part. Receive all parts of one multipart message on the same thread with this function, from the first
-part through the last part. The normal path is to call it after observing `ZLINK_POLLIN` with a poller.
-A `ZLINK_RECV_FLAGS_DONTWAIT` call with no available data returns `ZLINK_RECV_NO_DATA`
-with `EAGAIN`.
+If `parts_capacity_` is smaller than the record's part count, the record is not consumed, the needed
+count is written to `*part_count_out_`, and the call returns `ZLINK_RECV_BUFFER_TOO_SMALL` with
+`ENOBUFS`. Retrying with a large enough array receives the same record. A
+`ZLINK_RECV_FLAGS_DONTWAIT` call with no available record returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
 
 **Returns:** `ZLINK_RECV_OK` on success; otherwise a `zlink_recv_result_t` value.
 
-**See also:** `zlink_send_part`, `zlink_msg_close`
+**See also:** `zlink_send`, `zlink_msg_close`
 
 ---
 
 ### PAIR logical route and reconnect
 
-A PAIR socket has one logical route. A `DONTWAIT FINAL` makes exactly one admission attempt. If
+A PAIR socket has one logical route. A `DONTWAIT` send makes exactly one admission attempt. If
 it is admitted immediately, the result is `ZLINK_SUBMIT_OK` with ID `0`, and no completion is
 produced. If HWM or byte credit prevents admission, or the physical connection is not ready yet,
 the call returns `ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN` and a nonzero wait token in
@@ -171,7 +153,7 @@ A wait token ends only in one of these ways: the WRITABLE record above; a WRITAB
 explicitly removed with `zlink_disconnect()`; or socket close or context termination, where Core
 ends the token internally and delivers no record. A physical disconnect alone does not
 end the token; when the same logical route reconnects, the pipe attach publishes the WRITABLE
-record. A `NONE FINAL` call that waits for admission does not terminate solely because of a
+record. A `NONE` send that waits for admission does not terminate solely because of a
 physical disconnect. When the same PAIR logical route reconnects, Core retries local queue
 admission, and `NONE` uses only the remaining budget from the `SNDTIMEO` snapshot.
 
@@ -182,32 +164,32 @@ A WRITABLE record is a write-credit notification, not admission of a record.
 
 ## 5. Implementation and contract-test verification requirements
 
-Verify the following using only the public surface (`zlink_send_part`, `zlink_recv_part`,
+Verify the following using only the public surface (`zlink_send`, `zlink_recv`,
 `zlink_completion_recv`, `zlink_socket_set_receive_flow_state`, monitor observations, return values,
 and errno). Each item maps to one test.
 
 **1:1 send and receive**
-- Both connected PAIR sockets can send with `zlink_send_part` and receive with `zlink_recv_part`.
-- When `zlink_recv_part` succeeds, a caller that provides `source_rid_out_` receives `NULL`.
-- After a successful receive, the caller owns the part and calls `zlink_msg_close(part_out_)` exactly once. A failure before a part is received does not transfer ownership.
+- Both connected PAIR sockets can send with `zlink_send` and receive with `zlink_recv`.
+- When `zlink_recv` succeeds, a caller that provides `source_rid_out_` receives `NULL`.
+- After a successful receive, the caller owns the leading `*part_count_out_` slots and closes them exactly once with `zlink_multipart_close`. A failure does not transfer slot ownership.
+- If `parts_capacity_` is smaller than the record's part count, the call returns `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS` and the needed count without consuming the record; retrying with a large enough array receives the same record.
 
-**Part flow**
-- When a single-part message is sent with `ZLINK_PART_FINAL`, the receiver observes `ZLINK_PART_FINAL` in `*has_more_out_`.
-- For a multipart message, the receiver observes `ZLINK_PART_MORE` on every part before the last and `ZLINK_PART_FINAL` on the last part.
-- If `DONTWAIT FINAL` is admitted immediately, it returns ID `0` and no completion.
-- If `DONTWAIT FINAL` is refused because of HWM, byte credit, or a pipe that is not ready, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token; Core does not retain the payload, and the caller resubmits its retained copy.
+**Whole-message send**
+- Sending an array of length one produces a one-part record; sending a multipart array returns all parts to the receiver in the same order and in one call.
+- If `DONTWAIT` is admitted immediately, it returns ID `0` and no completion.
+- If `DONTWAIT` is refused because of HWM, byte credit, or a pipe that is not ready, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token; Core does not retain the payload, and the caller resubmits its retained complete record.
 - When the single pipe gains write credit, exactly one `ZLINK_COMPLETION_WRITABLE` record (`ZLINK_SEND_ADMITTED`, the same `user_context`, empty `peer_rid`) is returned for that token, and `ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION` are level-held until it is read.
 - If the completion reservations are exhausted so that no wait token can be created, the result is `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM` and ID `0`.
 - A `ZLINK_RECV_FLAGS_DONTWAIT` receive with no available data returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
 
-**Record atomicity**
-- If any submit in an open multipart sequence fails, the peer receives no part of that record.
-- Both successful and failed calls consume `part_`, including the failed call's `part_` — after return `zlink_msg_size(part_)` is `0`, and that `zlink_msg_t` can be closed or used for the next send as is, without initializing it again.
-- The next submit after a failure starts the first part of a new record—the entire record retained before the calls can be resubmitted from its first part for a retry.
+**Record atomicity and ownership**
+- If a send fails, the peer receives no part of that record.
+- Both successful and failed calls consume every `parts_` slot — after return each `zlink_msg_size` is `0`, and each slot can be closed or used for the next send without reinitialization.
+- A failed record leaves no partial state; the complete record retained before the call can be resubmitted for retry.
 
 **Logical reconnect and completion**
 - If the connection disconnects while a wait token is live and the same PAIR logical route reconnects, the pipe attach publishes the WRITABLE record for that token, and the disconnect alone does not produce a TERMINAL record.
-- `NONE FINAL` waits for reconnect of the same logical route within the snapshotted `SNDTIMEO`; expiration returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, ID `0`, and no completion.
+- A `NONE` send waits for reconnect of the same logical route within the snapshotted `SNDTIMEO`; expiration returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, ID `0`, and no completion.
 - Disconnecting and reconnecting after ID `0` does not replay the same application record; the retransmission after a WRITABLE record is a record the application submitted again.
 - Removing the endpoint with `zlink_disconnect()` ends the token with a WRITABLE record carrying `ZLINK_SEND_TERMINAL` and `ENOENT`. After socket close no record for that token can be received — close ends the token internally and delivers no record.
 

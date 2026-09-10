@@ -17,7 +17,7 @@ title: "Message"
 A zlink message is the basic unit for transferring an arbitrary binary payload between
 [sockets](glossary.en.md#socket). The user data bytes carried by a message are called its
 payload. Messages support zero-copy transfer, which sends only a pointer or reference without
-copying the data, and multipart sequences, which send multiple frames (parts) as one logical
+copying the data, and multipart messages, which group multiple frames (parts) as one logical
 message.
 
 This document defines the public contracts for message creation, payload access, ownership, and
@@ -103,10 +103,9 @@ with `zlink_msg_copy()`.
 This section applies to sockets that support multipart. STREAM uses
 [single-part sends and RAW/PACKET receive](socket/08-stream.en.md).
 
-Multipart is the transfer of multiple frames (parts) as one logical message. Core treats the
-parts from `ZLINK_PART_MORE` through `ZLINK_PART_FINAL` as one logical multipart sequence. The
-internal structure that prevents another sender's parts from being inserted into this sequence
-is described in [§7 Internals](#7-internals).
+Multipart is the transfer of multiple frames (parts) as one logical message. A send API receives a
+contiguous `zlink_msg_t` array and its part count in one call and submits it atomically as one record.
+No part from another sender is inserted into that record.
 
 Use [`zlink_multipart_close`](#zlink_multipart_close) to close all parts of a multipart message
 stored as a contiguous array of `zlink_msg_t` structures at once. Whole-message receive
@@ -120,10 +119,9 @@ record is not consumed and only the needed count is written to `*part_count_out_
 remains from partial consumption.
 
 Multipart messages have the following relationship with threads. On PAIR, DEALER, and ROUTER,
-multiple threads may each send independent multipart messages to the same socket concurrently,
-but a single multipart message
-must not be split across threads. Receive
-follows a single-consumer contract.
+multiple threads may each submit independent multipart arrays to the same socket concurrently. No
+other thread may access an array or its slots until the call using them returns. Receive follows a
+single-consumer contract.
 
 ## 5. Types and constants
 
@@ -453,39 +451,30 @@ of `zlink_msg_t` structures.
 
 **See also:** `zlink_msg_close`
 
-## 7. Internals
+## 7. Internal invariants
 
-> **Contract ownership for this section** — The [Multipart](#4-multipart) section and
-> [Verification requirements](#8-implementation-and-contract-test-verification-requirements)
-> section of this document own the public contract for multipart framing. This section explains
-> how the internals prevent another sender's message parts from being inserted into a sequence.
-
-As defined by [§4](#4-multipart), Core treats the parts from `ZLINK_PART_MORE` through
-`ZLINK_PART_FINAL` as one logical multipart sequence. Per-socket transaction state protects the
-send path so that another sender's message parts cannot be inserted into this sequence.
+> **Result** — The internal send, queue, and receive paths preserve the record boundary and metadata
+> of each submitted multipart array. [Multipart](#4-multipart) and
+> [Verification requirements](#8-implementation-and-contract-test-verification-requirements) own
+> the public contract.
 
 ### Send
 
-The first part starts the transaction, and the final part commits it. When a part call fails, it
-consumes the part passed to that call and clears the already-submitted staging per that API's abort
-contract ([Socket Common](socket/README.en.md#part-send-and-pending-admission)); caller-owned parts
-not yet submitted are left unchanged. The internal transaction state is cleared so that the next
-message does not continue the previous sequence. Consumed storage is left as an initialized empty
-message, so it may be closed or reused as is. To send the message again, the caller resubmits it
-from the first part using a retained copy.
+The send path admits the complete `parts_` array from one call as one record. It consumes every input
+slot on both success and failure and leaves the slots empty and initialized. If submit fails, the peer
+sees no part. Retry uses a complete record retained before the call. [Socket Common](socket/README.en.md#whole-message-send-and-pending-admission)
+owns the detailed contract.
 
 ### Receive
 
-The typed receive API returns one part plus either `ZLINK_PART_MORE` or `ZLINK_PART_FINAL`. The
-receive helper verifies that the socket family and owner thread do not change during the
-sequence, and it returns the source saved from the first part unchanged for subsequent parts. If
-the sequence is interrupted, it closes the buffered part and resets the helper state.
+The typed receive API returns every part of one complete record in the caller's array. If capacity is
+too small, it does not consume the record and returns only the needed count, so no partial receive
+state exists. On success, record outputs such as source and reply token are determined together.
 
 ### Request/reply
 
-The request or reply kind and sequence travel with the first application part as internal
-metadata in the same transaction. Pipes and queues preserve that metadata. The typed receive path
-moves the sequence or local token and routing context needed for a reply into separate state and
+The request or reply kind travels with the record as internal metadata. Pipes and queues preserve
+that metadata. The typed receive path moves the local token and routing context needed for a reply into separate state and
 outputs, then removes the metadata
 from the public message. No request-reply protocol part is added before the application payload.
 
@@ -530,11 +519,12 @@ Verify the following only through the public surface: the `zlink_msg_*` and
 **Multipart**
 - `zlink_multipart_close` leaves the same result as calling `zlink_msg_close` on every array
   element.
-- If a multipart send fails partway through, the part passed to that call is consumed and left in
-  an empty initialized state, parts not yet submitted are unchanged, and the next message does not
-  continue the previous sequence.
-- The receiver obtains the parts from `ZLINK_PART_MORE` through `ZLINK_PART_FINAL` as one
-  multipart sequence, with no part from another sender interleaved between them.
+- A multipart send consumes every input slot on both success and failure and leaves it empty and
+  initialized. If it fails, the peer sees no part.
+- Receive returns every part of one complete multipart record in one call, with no part from another
+  sender interleaved.
+- If receive capacity is too small, the call returns the needed part count and
+  `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS` without consuming the record.
 
 **Common return convention**
 - Each `zlink_msg_*` function returning `zlink_config_result_t` returns `ZLINK_CONFIG_OK` on

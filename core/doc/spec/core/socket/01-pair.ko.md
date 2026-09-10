@@ -16,10 +16,10 @@ title: "Socket — PAIR"
 
 PAIR는 두 [socket](../glossary.ko.md#socket)이 1:1로 독점 연결되어 양쪽 모두 message를
 송수신하는 양방향 socket 타입이다. 연결의 반대쪽 socket인 peer가 정확히 하나이므로 어느
-peer로 보낼지 고르는 입력이 없고, 수신 part의 source routing ID도 채워지지 않는다. PAIR에는
+peer로 보낼지 고르는 입력이 없고, 수신 record의 source routing ID도 채워지지 않는다. PAIR에는
 타입 전용 옵션이 없다.
 
-이 문서는 PAIR 고유의 계약만 정의한다 — part 송수신 함수가 PAIR에서 어떻게 동작하는지,
+이 문서는 PAIR 고유의 계약만 정의한다 — whole-message 송수신 함수가 PAIR에서 어떻게 동작하는지,
 송신 요청을 Core 송신 queue에 받아들이는 판정인 admission의 비동기 송신 규칙, 그리고
 receive-flow 상태가 없다는 사실이다. 모든 socket 타입이 공유하는 계약은 이 문서에서 다시
 정의하지 않는다.
@@ -33,41 +33,32 @@ receive-flow 상태가 없다는 사실이다. 모든 socket 타입이 공유하
 | message lifecycle·ownership과 multipart | [Message](../02-message.ko.md) |
 | result와 errno 대응 | [Errors](../03-errors.ko.md#result와-errno-대응) |
 
-## 2. Multipart 송신과 record 원자성
+## 2. Whole-message 송신과 record 원자성
 
-PAIR socket은 message를 part 단위로 제출한다. 단일 part message는 `ZLINK_PART_FINAL`로
-전송한다. 여러 part를 하나의 논리적 message로 묶는
-[multipart](../02-message.ko.md#4-multipart) message는 `ZLINK_PART_MORE`로 시작해 같은
-thread에서 같은 함수와 같은 `flags_`를 사용하여 `ZLINK_PART_FINAL`까지 이어서 전송한다.
+PAIR socket은 `parts_` 배열과 `part_count_`를 한 번의 `zlink_send()` 호출에 넘겨 record 하나를
+제출한다. [Multipart](../02-message.ko.md#4-multipart) message의 part 순서는 배열 순서와 같다.
+단일 part message도 길이 1인 배열로 제출한다.
 
-Core는 성공한 중간 part를 `ZLINK_PART_FINAL`이 성공할 때까지 하나의 묶음으로 임시로 보관한다.
-이 묶음을 record라 한다. 열린 sequence에서 중간 또는 마지막 submit 하나라도 실패하면 Core는
-이전에 임시로 보관한 part와 실패한 part를 원자적으로 폐기하고 sequence를 닫는다. peer에는 그
-record의 어떤 part도 보이지 않는다.
+Core는 record 전체를 원자적으로 admission한다. 호출이 실패하면 어느 part도 peer에 보이지 않으며,
+caller가 보관한 record 전체를 다시 제출해야 한다. 성공·실패와 관계없이 모든 입력 슬롯은 소비되어
+초기화된 빈 message가 된다.
 
 ```mermaid
 sequenceDiagram
     participant App as Application
     participant Core as Core
-    App->>Core: zlink_send_part(part 1, ZLINK_PART_MORE)
-    Note over Core: 성공한 중간 part를 record로 임시 보관
-    App->>Core: zlink_send_part(part 2, ZLINK_PART_MORE)
-    alt 마지막 submit까지 성공
-        App->>Core: zlink_send_part(part 3, ZLINK_PART_FINAL)
-        Note over Core: record가 완성된다
-    else 중간 또는 마지막 submit 실패
-        App--xCore: zlink_send_part(part N, ...) 실패
-        Note over Core: 임시로 보관한 part와 실패한 part를<br/>원자적으로 폐기하고 sequence를 닫는다<br/>peer에는 그 record의 어떤 part도 보이지 않는다
+    App->>Core: zlink_send(parts, part_count, flags)
+    alt record admission 성공
+        Core-->>App: ZLINK_SUBMIT_OK
+        Note over Core: record 전체가 하나의 단위로 제출된다
+    else record admission 실패
+        Core-->>App: submit 오류
+        Note over Core: peer에는 record의 어떤 part도 보이지 않는다
     end
 ```
 
-실패한 호출의 `part_`도 [`zlink_send_part`](#zlink_send_part)의 소비 규칙대로 소비되며, 다음
-submit은 새 record의 첫 part로 시작한다. 따라서 재시도하려면 호출 전에 보관한 전체 record를
-첫 part부터 다시 제출해야 한다.
-
-PAIR 수신은 part 단위 [`zlink_recv_part`](README.ko.md#zlink_recv_part) 또는 record 전체를 한 번에
-받는 [`zlink_recv`](README.ko.md#zlink_recv-와-zlink_router_recv)를 쓴다. peer가 하나
-뿐이므로 두 함수 모두 source routing ID를 채우지 않는다(`NULL`). 소유권·close·capacity·record 원자성
+PAIR 수신은 [`zlink_recv`](README.ko.md#zlink_recv-와-zlink_router_recv)로 record 전체를 한 번에
+받는다. Peer가 하나뿐이므로 source routing ID는 `NULL`이다. 소유권·close·capacity·record 원자성
 규칙은 [Socket 공통](README.ko.md)이 소유한다.
 
 ## 3. Receive flow state
@@ -86,72 +77,65 @@ PAIR은 receive-flow 대상 socket type이 아니다.
 
 ## 4. 함수
 
-### zlink_send_part
+### zlink_send
 
-message part 하나를 전송한다.
+message record 하나를 전송한다.
 
 ```c
-ZLINK_EXPORT zlink_submit_result_t zlink_send_part (
-  void *s_,
-  zlink_msg_t *part_,
-  zlink_send_flags_t flags_,
-  zlink_part_flag_t part_flag_,
-  void *user_context_,
+ZLINK_EXPORT zlink_submit_result_t zlink_send (
+  void *s_, zlink_msg_t *parts_, size_t part_count_,
+  zlink_send_flags_t flags_, void *user_context_,
   zlink_completion_id_t *completion_id_out_);
 ```
 
-단일 part의 `ZLINK_PART_FINAL` 전송, multipart의 시작·연결 규칙과 record 단위 원자성은
-[§2](#2-multipart-송신과-record-원자성)가 정의한다.
-
-이 함수는 성공과 실패 모두에서 `part_`의 내용을 소비한다. 같은 내용을 다시 사용할 가능성이
-있으면 호출 전에 복사해야 한다. 소비된 `zlink_msg_t`는 초기화된 빈 message로 남으므로 그대로
-close하거나 다시 쓸 수 있다([Socket 공통의 part ownership](README.ko.md#part-send와-pending-admission)). `flags_`에는 `ZLINK_SEND_FLAGS_NONE` 또는 `ZLINK_SEND_FLAGS_DONTWAIT`를 전달한다. `NONE
-FINAL`은 호출 진입 시 `SNDTIMEO`를 snapshot해 local queue admission까지 기다리고, `DONTWAIT
-FINAL`은 기다리지 않는다. 두 경로가 반환하는 ID와 completion은
-[§5 「part 흐름」](#5-구현-및-contract-test-검증-요구)이 관찰 결과로 정리한다. Optional ID
-output과 context의 정확한 규칙은 [Socket 공통](README.ko.md#part-send와-pending-admission)을
-따른다.
+`parts_` 배열과 `part_count_`가 record를 구성한다. 함수는 성공과 실패 모두에서 모든 입력 슬롯을
+소비한다. 같은 내용을 다시 사용할 가능성이 있으면 호출 전에 record 전체를 복사해야 한다.
+`part_count_ == 0`은 `ZLINK_SUBMIT_INVALID_ARGUMENT`+`EINVAL`이다. `flags_`에는
+`ZLINK_SEND_FLAGS_NONE` 또는 `ZLINK_SEND_FLAGS_DONTWAIT`를 전달한다. `NONE`은 호출 진입 시
+`SNDTIMEO`를 snapshot해 local queue admission까지 기다리고, `DONTWAIT`은 기다리지 않는다.
+Optional ID output과 context의 정확한 규칙은
+[Socket 공통](README.ko.md#whole-message-send와-pending-admission)을 따른다.
 
 **반환값:** 성공 시 `ZLINK_SUBMIT_OK`, 실패 시 원인을 나타내는 `zlink_submit_result_t` 값.
 전체 대응은 [errno map](../03-errors.ko.md#result와-errno-대응)을 따른다.
 
-**참고:** `zlink_recv_part`, `zlink_completion_recv`
+**참고:** `zlink_recv`, `zlink_completion_recv`
 
 ---
 
-### zlink_recv_part
+### zlink_recv
 
-message part 하나를 수신한다.
+message record 하나를 수신한다.
 
 ```c
-ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (
+ZLINK_EXPORT zlink_recv_result_t zlink_recv (
   void *s_,
   const zlink_routing_id_t **source_rid_out_,
-  zlink_msg_t *part_out_,
-  zlink_part_flag_t *has_more_out_,
+  zlink_msg_t *parts_out_,
+  size_t parts_capacity_,
+  size_t *part_count_out_,
   zlink_recv_flags_t flags_);
 ```
 
-`part_out_`은 초기화된 message여야 하며 `has_more_out_`과 함께 필수다. `source_rid_out_`은
-선택 사항이고 PAIR에서는 성공 시 `NULL`을 받는다. 성공하면 수신 part의 소유권이 호출자에게
-이전되므로 `zlink_msg_close(part_out_)`를 정확히 한 번 호출해야 한다. 수신 part를 얻기 전에
-실패하면 소유권은 이전되지 않는다.
+`parts_out_`과 `part_count_out_`은 필수이고, 배열 슬롯은 미리 초기화할 필요가 없다.
+`source_rid_out_`은 선택 사항이며 성공 시 `NULL`을 받는다. 성공하면 앞의
+`*part_count_out_`개 슬롯의 소유권이 caller에게 이전된다. Caller는
+`zlink_multipart_close(parts_out_, *part_count_out_)`로 이를 정확히 한 번 닫는다.
 
-`*has_more_out_`은 다음 part가 있으면 `ZLINK_PART_MORE`, 마지막 part이면
-`ZLINK_PART_FINAL`이다. 한 multipart message는 첫 part부터 마지막 part까지 같은 thread에서
-이 함수로 계속 수신한다. 일반적인 경로는 poller에서 `ZLINK_POLLIN`을 관찰한 뒤 호출하는
-방식이다. `ZLINK_RECV_FLAGS_DONTWAIT` 호출에 수신할 데이터가 없으면 `ZLINK_RECV_NO_DATA`와
-`EAGAIN`을 반환한다.
+`parts_capacity_`가 record의 part 수보다 작으면 record를 소비하지 않고 필요한 수를
+`*part_count_out_`에 쓴 뒤 `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`를 반환한다. 충분한 배열로
+재시도하면 같은 record를 받는다. `ZLINK_RECV_FLAGS_DONTWAIT` 호출에 수신할 record가 없으면
+`ZLINK_RECV_NO_DATA`+`EAGAIN`이다.
 
 **반환값:** 성공 시 `ZLINK_RECV_OK`, 실패 시 `zlink_recv_result_t` 값.
 
-**참고:** `zlink_send_part`, `zlink_msg_close`
+**참고:** `zlink_send`, `zlink_msg_close`
 
 ---
 
 ### PAIR의 논리 route와 reconnect
 
-PAIR socket에는 단일 logical route가 있다. `DONTWAIT FINAL`은 admission을 한 번만 시도한다.
+PAIR socket에는 단일 logical route가 있다. `DONTWAIT` 송신은 admission을 한 번만 시도한다.
 즉시 admission되면 `ZLINK_SUBMIT_OK`, ID `0`이며 completion을 만들지 않는다. HWM·byte credit
 때문에 admission하지 못하거나 물리 connection이 아직 준비되지 않았으면
 `ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`과 함께 nonzero wait token을
@@ -170,8 +154,8 @@ Wait token은 다음 중 하나로만 끝난다: 위 WRITABLE record, `zlink_dis
 명시적으로 제거할 때의 WRITABLE record(`send_result == ZLINK_SEND_TERMINAL`,
 `send_terminal_errno == ENOENT`), 또는 socket close·context 종료 — 이때 Core는 token을 내부에서
 끝내며 record를 전달하지 않는다. 물리 connection이 끊기는 것만으로는 token이 끝나지
-않으며, 같은 logical route가 다시 연결되면 pipe attach가 WRITABLE record를 발행한다. `NONE
-FINAL`이 admission을 기다리는 동안 물리 connection이 끊겨도 terminal로 끝내지 않는다. Core는
+않으며, 같은 logical route가 다시 연결되면 pipe attach가 WRITABLE record를 발행한다. `NONE`
+송신이 admission을 기다리는 동안 물리 connection이 끊겨도 terminal로 끝내지 않는다. Core는
 같은 PAIR logical route가 다시 연결되면 local queue admission을 다시 시도하며, `NONE`은
 snapshot한 `SNDTIMEO`의 남은 budget만 사용한다.
 
@@ -182,34 +166,34 @@ record의 admission이 아니다.
 
 ## 5. 구현 및 contract test 검증 요구
 
-공개 표면(`zlink_send_part`·`zlink_recv_part`·`zlink_completion_recv`,
+공개 표면(`zlink_send`·`zlink_recv`·`zlink_completion_recv`,
 `zlink_socket_set_receive_flow_state`, monitor 관찰, 반환값·errno)만으로 다음을 확인한다.
 각 항목은 test 하나로 이어진다.
 
 **1:1 송수신**
-- 연결된 PAIR socket 양쪽 모두 `zlink_send_part`로 송신하고 `zlink_recv_part`로 수신할 수 있다.
-- `zlink_recv_part`가 성공하면 `source_rid_out_`을 전달한 호출자는 `NULL`을 받는다.
-- 성공한 수신 뒤 part 소유권은 호출자에게 있어 `zlink_msg_close(part_out_)`를 정확히 한 번 호출한다. 수신 part를 얻기 전에 실패하면 소유권은 이전되지 않는다.
+- 연결된 PAIR socket 양쪽 모두 `zlink_send`로 송신하고 `zlink_recv`로 수신할 수 있다.
+- `zlink_recv`가 성공하면 `source_rid_out_`을 전달한 호출자는 `NULL`을 받는다.
+- 성공한 수신 뒤 앞의 `*part_count_out_`개 슬롯은 caller가 소유하며 `zlink_multipart_close`로 정확히 한 번 닫는다. 실패하면 슬롯 소유권은 이전되지 않는다.
+- `parts_capacity_`가 record의 part 수보다 작으면 `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`와 필요한 수를 반환하고 record를 소비하지 않으며, 충분한 배열로 재시도하면 같은 record를 받는다.
 
-**part 흐름**
-- 단일 part message를 `ZLINK_PART_FINAL`로 보내면 수신 측 `*has_more_out_`은 `ZLINK_PART_FINAL`이다.
-- multipart message를 보내면 수신 측은 마지막 part 이전의 모든 part에서 `ZLINK_PART_MORE`를, 마지막 part에서 `ZLINK_PART_FINAL`을 관찰한다.
-- `DONTWAIT FINAL`이 즉시 admission되면 ID `0`과 completion 없음이다.
-- `DONTWAIT FINAL`이 HWM·byte credit 또는 준비되지 않은 pipe 때문에 거절되면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 nonzero wait token이며, Core는 payload를 유지하지 않고 호출자가 보관한 사본을 다시 제출한다.
+**Whole-message 송신**
+- 길이 1인 배열을 보내면 수신 측은 part 하나인 record를 받고, multipart 배열을 보내면 같은 순서의 모든 part를 한 번에 받는다.
+- `DONTWAIT`이 즉시 admission되면 ID `0`과 completion 없음이다.
+- `DONTWAIT`이 HWM·byte credit 또는 준비되지 않은 pipe 때문에 거절되면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 nonzero wait token이며, Core는 payload를 유지하지 않고 호출자가 보관한 record 전체를 다시 제출한다.
 - 단일 pipe에 write credit이 생기면 그 token의 `ZLINK_COMPLETION_WRITABLE` record(`ZLINK_SEND_ADMITTED`, 같은 `user_context`, 빈 `peer_rid`)를 정확히 한 번 반환하고, 읽기 전까지 `ZLINK_POLLOUT`과 `ZLINK_POLLCOMPLETION`이 level로 유지된다.
 - Completion reservation이 소진되어 wait token을 만들지 못하면 `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, ID `0`이다.
 - `ZLINK_RECV_FLAGS_DONTWAIT` 수신에 데이터가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`을 반환한다.
 
-**record 원자성**
-- 열린 multipart sequence에서 submit 하나가 실패하면 peer는 그 record의 어떤 part도 수신하지 않는다.
-- 실패한 호출의 `part_`를 포함해 성공·실패 모두에서 `part_`는 소비된다 — 반환 뒤 `zlink_msg_size(part_)`는 `0`이고, 그 `zlink_msg_t`는 다시 초기화하지 않고 그대로 close하거나 다음 send에 쓸 수 있다.
-- 실패 후 다음 submit은 새 record의 첫 part로 시작한다 — 호출 전에 보관한 전체 record를 첫 part부터 다시 제출해 재시도할 수 있다.
+**Record 원자성과 ownership**
+- 송신이 실패하면 peer는 그 record의 어떤 part도 수신하지 않는다.
+- 성공·실패 모두에서 모든 `parts_` 슬롯은 소비된다 — 반환 뒤 각 `zlink_msg_size`는 `0`이고, 각 슬롯은 다시 초기화하지 않고 close하거나 다음 send에 쓸 수 있다.
+- 실패한 record는 부분 상태 없이 끝나며, 호출 전에 보관한 record 전체를 다시 제출해 재시도할 수 있다.
 
 **Logical reconnect와 completion**
 - Wait token이 있는 상태에서 connection을 끊었다가 같은 PAIR logical route를 reconnect하면
   pipe attach가 그 token의 WRITABLE record를 발행하고, disconnect만으로 TERMINAL record가
   생기지 않는다.
-- `NONE FINAL`은 snapshot한 `SNDTIMEO` 안에서 같은 logical route의 reconnect를 기다리며,
+- `NONE` 송신은 snapshot한 `SNDTIMEO` 안에서 같은 logical route의 reconnect를 기다리며,
   만료하면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음이다.
 - ID `0` 뒤 connection을 끊고 다시 연결해도 같은 application record가 replay되지 않으며,
   WRITABLE record 뒤의 재전송은 application이 다시 제출한 record다.

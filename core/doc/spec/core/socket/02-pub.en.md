@@ -21,7 +21,7 @@ subscribers based on the topic. PUB is send-only, so receive functions do not
 apply.
 
 This document defines the PUB-specific contract: topic publishing
-(`zlink_publish_part`), PUB/XPUB-specific options, and the delivery-loss policy.
+(`zlink_publish`), PUB/XPUB-specific options, and the delivery-loss policy.
 The [Socket Common Specification](README.en.md) owns contracts shared by all
 socket types, including socket creation, common options, and send flags.
 
@@ -39,7 +39,7 @@ The following documents own the related contracts.
 ## 2. Delivery Loss and Backpressure
 
 Fan-out delivery allows loss. When the [HWM](../glossary.en.md#hwm), the byte
-limit retained by a send queue, is full, `zlink_publish_part()` drops the
+limit retained by a send queue, is full, `zlink_publish()` drops the
 message for the affected subscriber and reports success. The
 `ZLINK_PUB_OPT_NODROP` option controls this behavior and defaults to `0`.
 
@@ -60,45 +60,26 @@ backpressure is returned. A full pipe of a subscriber whose filter does not
 match does not block this publish. Request-reply sockets, rather than
 PUB/SUB, provide reliable delivery that must not depend on subscriber speed.
 
-## 3. Multipart Publishing and the Publish Record
+## 3. Whole-message publishing and the publish record
 
-[Multipart](../02-message.en.md#4-multipart) sends multiple frames (parts) as
-one logical message. Core stages successful intermediate parts as one publish
-record—a publication record exposed to subscribers as a single unit—until
-`ZLINK_PART_FINAL` succeeds.
+[Multipart](../02-message.en.md#4-multipart) groups multiple frames (parts) into one logical
+message. `zlink_publish()` submits every part in the `parts_` array, in array order, as one publish
+record. Subscribers receive that record as one unit.
 
-If an intermediate or final part that has entered the actual send stage fails
-because of the HWM, a size limit, or another condition, Core atomically
-discards the previously staged parts and the failed part and closes the
-sequence. Subscribers see no part of that record. The failed call also consumes
-its `part_`, and the next publish starts with the first part of a new record.
-After a send-stage failure, including backpressure, the caller must therefore
-resubmit a retained copy of the entire record from its first part.
-
-If changing the topic or send flags, using another send helper, or calling from
-another thread causes pre-submit sequence validation to fail, only the call's
-`part_` is consumed. This failure neither discards the parts already staged nor
-closes the open sequence. The thread that owns the original sequence can
-continue the existing publish record by submitting subsequent parts through
-`zlink_publish_part` with the same topic and send flags.
+Core admits the complete publish record atomically. If the call fails because of HWM, a size limit,
+or another error, subscribers see none of its parts. Every input slot is consumed on both success
+and failure, so a retry submits the complete record from a copy retained before the call.
 
 ```mermaid
 sequenceDiagram
     participant App as Application
     participant Core as Core (PUB)
     participant Sub as Subscriber
-    App->>Core: zlink_publish_part(part 1, ZLINK_PART_MORE)
-    Note over Core: Stage in the publish record
-    App->>Core: zlink_publish_part(part 2, ZLINK_PART_MORE)
-    Note over Core: Stage in the same record
-    alt Final submit succeeds
-        App->>Core: zlink_publish_part(part N, ZLINK_PART_FINAL)
+    App->>Core: zlink_publish(topic, parts, part_count, flags)
+    alt Record admission succeeds
         Core-->>Sub: Deliver the entire record as one unit
-    else Pre-submit sequence validation fails
-        Note over Core: Consume only the call's part<br/>and keep the sequence open
-        Note over App,Core: The original thread can continue the existing<br/>record with the original topic and flags
-    else Intermediate or final submit fails in the send stage
-        Note over Core: Atomically discard the staged and failed parts<br/>and close the sequence
+    else Record admission fails
+        Core-->>App: Submit error
         Note over Sub: No part of the record is visible
     end
 ```
@@ -207,16 +188,14 @@ errno for diagnostics.
 
 ---
 
-### zlink_publish_part
+### zlink_publish
 
-Publish one message part from a raw `PUB` or `XPUB` socket.
+Publish one message record from a raw `PUB` or `XPUB` socket.
 
 ```c
-ZLINK_EXPORT zlink_submit_result_t zlink_publish_part (void *subject_,
-                                                       const char *topic_id_,
-                                                       zlink_msg_t *part_,
-                                                       zlink_send_flags_t flags_,
-                                                       zlink_part_flag_t part_flag_);
+ZLINK_EXPORT zlink_submit_result_t zlink_publish (
+  void *subject_, const char *topic_id_, zlink_msg_t *parts_,
+  size_t part_count_, zlink_send_flags_t flags_);
 ```
 
 The applicable types are raw `PUB` and raw `XPUB`. Other raw socket types
@@ -231,39 +210,30 @@ toward the message and storage size limits. Exceeding a size limit returns
 `ZLINK_SUBMIT_INVALID_ARGUMENT` with `EMSGSIZE`. Failure to allocate storage
 for the topic frame returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM`.
 
-A multipart message started with `ZLINK_PART_MORE` must continue through
-`ZLINK_PART_FINAL` on the same thread, through this function, without calling
-another send helper or changing the topic or flags. The staging of in-progress
-parts into one publish record and their atomic discard on failure are described
-in [§3 Multipart Publishing and the Publish Record](#3-multipart-publishing-and-the-publish-record).
-If violating the topic, flag, helper, or thread condition causes pre-submit
-validation to fail, only the call's `part_` is consumed and the open sequence
-remains intact. Calling this function again from the original thread with the
-existing topic and flags continues the existing publish record. In contrast,
-if a failure caused by the HWM, a size limit, or another condition occurs after
-validation passes and the call enters the send stage, Core discards the failed
-part and the staged parts and closes the sequence.
+The `parts_` array and `part_count_` form the publish record. `part_count_` must be positive; `0`
+returns `ZLINK_SUBMIT_INVALID_ARGUMENT` with `EINVAL`. [§3 Whole-message publishing and the publish
+record](#3-whole-message-publishing-and-the-publish-record) describes atomic admission of the
+complete record.
 
-This function consumes the content of `part_` on both success and failure. If
-the same content may need to be sent again, the caller must make a separate
-copy before the call regardless of the return value. A consumed `zlink_msg_t`
-is left as an initialized empty message, so it can be closed or reused as is.
+This function consumes every input slot on both success and failure. To send the same record again,
+the caller retains a complete copy before the call regardless of the return value. Each consumed
+`zlink_msg_t` is left as an initialized empty message and can be closed or reused as is.
 
 Pass `ZLINK_DONTWAIT` in `flags_` for non-blocking publishing. A call that
 cannot proceed immediately returns `ZLINK_SUBMIT_BACKPRESSURED`. The ownership
-rule that consumes `part_` is the same regardless of the result. See the
+rule that consumes every input slot is the same regardless of the result. See the
 [errno map](../03-errors.en.md#result-and-errno-mapping) for the complete result
 mapping.
 
 ## 8. Implementation and Contract-Test Verification Requirements
 
 Verify the following solely through the public surface
-(`zlink_publish_part`, `zlink_set_pub_option`/`zlink_get_pub_option`, return
+(`zlink_publish`, `zlink_set_pub_option`/`zlink_get_pub_option`, return
 values and errno, and the subscriber-side receive result). Each item maps to
 one contract test.
 
 **Applicable types**
-- Calling `zlink_publish_part` on a raw socket type other than raw `PUB` or raw `XPUB` returns `ZLINK_SUBMIT_NOT_SUPPORTED` and sets `errno` to `ENOTSUP`.
+- Calling `zlink_publish` on a raw socket type other than raw `PUB` or raw `XPUB` returns `ZLINK_SUBMIT_NOT_SUPPORTED` and sets `errno` to `ENOTSUP`.
 
 **Topic publishing**
 - When `topic_id_ != NULL`, every byte before the terminating NUL is prepended to the message as a topic frame and delivered to the subscriber.
@@ -271,15 +241,15 @@ one contract test.
 - When the size including the topic bytes exceeds a message or storage size limit, the result is `ZLINK_SUBMIT_INVALID_ARGUMENT` with `EMSGSIZE`.
 - Failure to allocate storage for the topic frame returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM`.
 
-**Part ownership**
-- The content of `part_` is consumed for every return result, including success, failure, and backpressure — after return `zlink_msg_size(part_)` is `0`, and that `zlink_msg_t` can be closed or used for the next publish as is, without initializing it again.
+**Input-array ownership**
+- Every `parts_` slot is consumed for every return result, including success, failure, and backpressure — after return each `zlink_msg_size` is `0`, and each slot can be closed or used for the next publish without reinitialization.
 
 **Publish-record atomicity**
-- If an intermediate or final part that passed pre-submit sequence validation fails in the send stage because of the HWM, a size limit, or another condition, the subscriber receives no part of that record, and the next `zlink_publish_part` call is treated as the first part of a new record.
-- If changing the topic or flags, using another send helper, or calling from another thread causes pre-submit sequence validation to fail, only that call's `part_` is consumed and the open sequence remains intact. Calling `zlink_publish_part` from the original thread with the existing topic and flags continues the existing publish record.
+- The parts in `parts_` are delivered in array order as one publish record.
+- If the call fails because of HWM, a size limit, or another condition, the subscriber receives no part of the record and the caller can resubmit the complete retained record.
 
 **Drop and backpressure**
-- When `ZLINK_PUB_OPT_NODROP` has its default value of `0`, the message for a subscriber whose HWM is full is dropped and `zlink_publish_part` reports success.
+- When `ZLINK_PUB_OPT_NODROP` has its default value of `0`, the message for a subscriber whose HWM is full is dropped and `zlink_publish` reports success.
 - When `ZLINK_PUB_OPT_NODROP` is set to `1`, delivery to every subscriber on the same socket stops while one pipe is full.
 - Calls with `ZLINK_DONTWAIT` and calls whose send timeout is `0` return `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` if they cannot proceed immediately. The same result applies when a positive timeout expires.
 - A blocking call without `ZLINK_DONTWAIT` waits for writability within the send timeout and can succeed if the pipe becomes writable while the call is waiting.

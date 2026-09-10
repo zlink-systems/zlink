@@ -83,12 +83,12 @@ delivered as two zero-length messages per the
 ### STREAM routing ID and receive metadata
 
 STREAM identifies each connected client with a four-byte routing ID (`uint32`) assigned
-and serialized by `stream_t`. The public send API takes the target RID and one `FINAL`
-payload as separate arguments; only payload bytes are transmitted on the wire.
+and serialized by `stream_t`. The public send API takes the target RID and an array containing one
+payload part as separate arguments; only payload bytes are transmitted on the wire.
 
 On receive, `stream_t` returns the source RID and payload as separate outputs from one
-routed receive. Public `zlink_recv_part()` exposes the RID through `source_rid_out_`
-and returns the payload as one `FINAL` part.
+routed receive. Public `zlink_recv()` exposes the RID through `source_rid_out_`, returns the single
+payload part in the array, and sets `*part_count_out_ == 1`.
 
 ### Engine composition
 
