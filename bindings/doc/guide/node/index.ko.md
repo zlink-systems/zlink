@@ -242,9 +242,9 @@ try {
 | `zlink_socket(ctx, type)` | `zlink.createPairSocket(ctx)` 등 |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + NONE | `socket.send().message(buf).submit_sync()` |
+| `zlink_send(..., parts, count, ...)` / `zlink_send_rid(..., parts, count, ...)` + NONE | `socket.send().message(buf).submit_sync()` |
 | DONTWAIT send + completion pull | `await socket.send().message(buf).submit()` |
-| `zlink_recv_part(...)` | `socket.recv(received)` |
+| `zlink_recv(..., parts_out, capacity, count_out, ...)` | `socket.recv(received)` |
 | `zlink_msg_data(msg)` | `part.data()` (Buffer) |
 | `zlink_routing_id_t` | `zlink.RoutingId` |
 | `zlink_socket_monitor_open(...)` | `socket.monitorOpen([...])` |

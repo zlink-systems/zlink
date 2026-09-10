@@ -113,9 +113,10 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_public_inproc_multipart_send
   ${INTEGRATION_TEST_ROOT}/test_helper_send_part_basic
   ${INTEGRATION_TEST_ROOT}/test_helper_recv_part_basic
+  ${INTEGRATION_TEST_ROOT}/test_whole_message_recv
+  ${INTEGRATION_TEST_ROOT}/test_whole_message_send
   ${INTEGRATION_TEST_ROOT}/test_helper_ownership
   ${INTEGRATION_TEST_ROOT}/test_helper_more_bad_send
-  ${INTEGRATION_TEST_ROOT}/test_helper_interleave
   ${INTEGRATION_TEST_ROOT}/test_proxy
   ${INTEGRATION_TEST_ROOT}/test_pubsub
   ${INTEGRATION_TEST_ROOT}/test_pubsub_churn_dist
@@ -822,7 +823,7 @@ set(DEALER_ROUTER_SINGLE_LANE_CONTRACT_TEST_SPECS
     test_single_lane_flow_dr_application_path=test_sl_flow_dr_application_control_is_not_public_data
     test_single_lane_flow_rr_completion_path=test_sl_flow_rr_completion_control_progresses_under_pause
     test_single_lane_flow_normal_kind_gate=test_sl_flow_dr_normal_kinds_share_pause_and_hwm_gate
-    test_single_lane_flow_control_boundary=test_sl_controls_progress_during_public_staging
+    test_single_lane_flow_control_boundary=test_sl_controls_progress_before_whole_record_submit
     test_single_lane_flow_stale_generation=test_sl_flow_stale_generation_is_fenced
     test_single_lane_flow_reconnect_resync=test_sl_flow_reconnect_resynchronizes_absolute_state
     test_single_lane_flow_snapshot_accounting=test_sl_flow_snapshot_accounts_dr_reply_as_application

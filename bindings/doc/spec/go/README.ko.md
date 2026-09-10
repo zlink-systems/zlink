@@ -159,8 +159,8 @@ Send와 request는 `Submit(context.Context)`가 Core `DONTWAIT` completion을 �
 | PAIR, DEALER, ROUTER, STREAM | `Received` 저장소를 채우는 `Recv` |
 | SUB, XSUB | `TopicMessage` 저장소를 채우는 `Subscribe` |
 
-Core의 part 함수는 이 multipart 수신 API를 구현하기 위한 internal 기반이며 Go
-public method로 노출하지 않는다.
+Binding은 Core whole-message 수신 함수를 한 번 호출해 받은 배열로 이 multipart 수신 API를
+구현한다. Native 배열과 capacity 관리는 Go public method로 노출하지 않는다.
 
 ## Receive와 eventing
 

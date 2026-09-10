@@ -116,6 +116,9 @@ framing을 보존하고 `close()`, context manager 종료 또는 저장소 재�
   완료 합류와 cancellation은 [비동기 실행 모델](../async-execution-model.ko.md)을 따른다.
 - Reply와 publish는 synchronous `submit()`으로 끝난다. Publish flags는 별도 `PublishOp`만
   제공한다.
+- Runtime은 builder가 모은 모든 part를 native 배열과 count로 Core whole-message API에 한 번 제출한다.
+  Receive는 재사용 가능한 native 배열, capacity와 count를 사용하고, 배열이 작으면
+  필요한 크기로 늘린 뒤 소비되지 않은 같은 record를 다시 받는다.
 - `RecvFlags.DONT_WAIT`를 사용한 caller-provided receive는 message가 없을 때 `False`를 반환한다.
 - timer, monitor와 같은 직접 반환 control API는 pending value가 없을 때 `None`을 반환한다.
 - 실제 native failure는 해당 error type으로 전달하며 no-data로 숨기지 않는다.

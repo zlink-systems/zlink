@@ -364,51 +364,32 @@ class _BytesReceivedPartsOwner:
 
 
 def _recv_native_parts(handle, flags):
-    # Fast path for single-part messages (the common case): allocate the
-    # owner's `ZlinkMsg * 1` array directly and read into its first slot.
-    # When `has_more` reports no additional parts we return that array
-    # unchanged, skipping the list-then-copy pattern needed for multi-part.
     routing_id = ctypes.POINTER(ZlinkRoutingId)()
-    parts_array = (ZlinkMsg * 1)()
-    has_more = ctypes.c_int()
-    rc = lib().zlink_recv_part(
-        handle,
-        ctypes.byref(routing_id),
-        ctypes.byref(parts_array[0]),
-        ctypes.byref(has_more),
-        int(flags),
-    )
-    if rc != 0:
-        _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
-
-    if has_more.value == 0:
-        routing = _routing_id_bytes(routing_id.contents) if routing_id else None
-        return routing, _ReceivedPartsOwner(parts_array, 1)
-
-    native_parts = [parts_array[0]]
-    try:
-        while True:
-            native_part = ZlinkMsg()
-            rc = lib().zlink_recv_part(
-                handle,
-                ctypes.byref(routing_id),
-                ctypes.byref(native_part),
-                ctypes.byref(has_more),
-                1,
+    capacity = 1
+    parts_array = (ZlinkMsg * capacity)()
+    while True:
+        part_count = ctypes.c_size_t()
+        rc = lib().zlink_recv(
+            handle,
+            ctypes.byref(routing_id),
+            parts_array,
+            capacity,
+            ctypes.byref(part_count),
+            int(flags),
+        )
+        if rc != int(RecvResult.BUFFER_TOO_SMALL):
+            break
+        if part_count.value <= capacity:
+            _raise_result_error(
+                RecvError, RecvResult, RecvResult.INTERNAL_ERROR, _errno.EPROTO
             )
-            if rc != 0:
-                _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
-            native_parts.append(native_part)
-            if has_more.value == 0:
-                break
-    except Exception:
-        for native_part in native_parts:
-            lib().zlink_msg_close(ctypes.byref(native_part))
-        raise
-
-    part_count = len(native_parts)
-    final_array = (ZlinkMsg * part_count)()
-    for index, native_part in enumerate(native_parts):
-        final_array[index] = native_part
+        capacity = part_count.value
+        parts_array = (ZlinkMsg * capacity)()
+    if rc != int(RecvResult.OK):
+        _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
+    if part_count.value == 0 or part_count.value > capacity:
+        _raise_result_error(
+            RecvError, RecvResult, RecvResult.INTERNAL_ERROR, _errno.EPROTO
+        )
     routing = _routing_id_bytes(routing_id.contents) if routing_id else None
-    return routing, _ReceivedPartsOwner(final_array, part_count)
+    return routing, _ReceivedPartsOwner(parts_array, part_count.value)

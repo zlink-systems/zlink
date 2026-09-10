@@ -1117,8 +1117,14 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
   | 10,000 / 100,000 | 128 / 102 | 38 s / 34 s | 24k / 30k | 포기·timeout 수만 건 |
 
   K=10은 bindings perf multi(socket 100개, 69,272/s)와 같다. HWM 아래 깊이에서는 socket 하나로 361k/s(gRPC 209k~258k보다 높다).
-  HWM(1 MiB ≈ 1,000건)을 넘겨 대기 토큰을 쌓으면 요청이 timeout(30 s)으로 실패한다.
+  send HWM을 넘겨 대기 토큰을 쌓으면 요청이 timeout(30 s)으로 실패한다. HWM은 accounted **byte** 기준(manual 기본 4,096,000 bytes,
+  auto HWM은 context budget의 water-filling)이며 메시지 건수로 환산하지 않는다(사용자 지적, 감독자의 "1 MiB ≈ 1,000건"은 오류).
 - 감독자는 HWM 초과 구간의 붕괴를 binding 결함 후보로 올렸으나 **사용자 판정: binding에는 문제가 없고 벤치가 잘못 작성됐다.**
   올바른 클라이언트는 admission backpressure(POLLOUT 거짓)에서 제출을 멈추고 재개 신호에서 이어간다(규격 §2,
   `PERF_MULTI_TEST_POLICY.md` §1.1; C reference `perf_multi_socket_reqrep.hpp:832-870`). HWM을 넘겨 토큰을 수만 건 쌓는 것은
   지원하는 사용 방식이 아니다. 2차 job `bench-java-raw-pollout`: public poller `POLLOUT|POLLCOMPLETION`, POLLOUT이 참인 동안 제출.
+- 기준값(감독자 직접 실행, `bindings/java/perf/multi/run_benchmarks.sh --pattern ROUTER_ROUTER_REQREP --transports tcp --msg-sizes 1024
+  --duration 5`, Core 0.17.5, JDK 25): clients=100 **248,159/s**(p95 0.450 ms), clients=1 **8,542/s**(p95 0.081 ms). 벤치 raw
+  1 socket(7.7~8.8k/s)과 clients=1이 같다 — binding에 문제 없음 확인. **사용자 결정: gRPC 비교는 socket 1개로 한다.** 2차 job
+  `bench-java-raw-pollout`(POLLOUT 게이트) 착수. 완료 구간 프로파일(`.artifacts/codex/java-completion-profile/`): 완료 구간 차이는
+  15 µs뿐이고 `requestToNode` 제출 구간이 194 µs(왕복 3회) → Issue #85, job `java-tonode-lane`.

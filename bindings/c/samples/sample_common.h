@@ -256,8 +256,8 @@ static inline int wait_for_subscription_event (void *subject_,
             continue;
 
         const zlink_routing_id_t *source_rid = NULL;
-        rc = zlink_xpub_recv_part (subject_, &source_rid, subscribed_out_, topic_id_out_,
-                                   *topic_id_len_out_, topic_id_len_out_, ZLINK_DONTWAIT);
+        rc = zlink_xpub_recv (subject_, &source_rid, subscribed_out_, topic_id_out_,
+                              *topic_id_len_out_, topic_id_len_out_, ZLINK_DONTWAIT);
         if (rc == ZLINK_RECV_OK) {
             zlink_poller_destroy (&poller);
             return 1;

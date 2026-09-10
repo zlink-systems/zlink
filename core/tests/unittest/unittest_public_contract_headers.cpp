@@ -124,8 +124,7 @@ void test_phase2_wrapper_boundary_contracts ()
     zlink_completion_id_t id = 66;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_INVALID_HANDLE,
-      zlink_send_part (pair, NULL, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-                       NULL, &id));
+      zlink_send (pair, NULL, 1, ZLINK_SEND_FLAGS_NONE, NULL, &id));
     TEST_ASSERT_EQUAL_INT (EFAULT, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (0, id);
 
@@ -134,8 +133,8 @@ void test_phase2_wrapper_boundary_contracts ()
     id = 77;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_INVALID_ARGUMENT,
-      zlink_send_part (pair, &part, static_cast<zlink_send_flags_t> (0x40),
-                       ZLINK_PART_FINAL, NULL, &id));
+      zlink_send (pair, &part, 1, static_cast<zlink_send_flags_t> (0x40),
+                  NULL, &id));
     TEST_ASSERT_EQUAL_INT (EINVAL, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (0, id);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
@@ -144,8 +143,7 @@ void test_phase2_wrapper_boundary_contracts ()
     id = 88;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_INVALID_HANDLE,
-      zlink_send_part (NULL, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-                       NULL, &id));
+      zlink_send (NULL, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, &id));
     TEST_ASSERT_EQUAL_INT (EFAULT, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (0, id);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
@@ -154,9 +152,8 @@ void test_phase2_wrapper_boundary_contracts ()
     id = 99;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_INVALID_ARGUMENT,
-      zlink_request_part (pair, NULL, &part,
-                          static_cast<zlink_send_flags_t> (0x80),
-                          ZLINK_PART_FINAL, 0, NULL, &id));
+      zlink_request (pair, NULL, &part, 1,
+                     static_cast<zlink_send_flags_t> (0x80), 0, NULL, &id));
     TEST_ASSERT_EQUAL_INT (EINVAL, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (0, id);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));

@@ -238,7 +238,7 @@ internal sealed class CompletionOwner
         IReadOnlyList<Message> parts)
     {
         EnsureOpenForSubmit();
-        var submitter = new ReplyPartSubmitter
+        var submitter = new ReplyMessageSubmitter
         {
             Handle = _handle,
             Target = target.ToNative(),
@@ -249,16 +249,16 @@ internal sealed class CompletionOwner
 
     // Like send and request, synchronous reply keeps its native arguments on
     // the stack. The submitter never escapes SubmitPreservingOnFailure.
-    private struct ReplyPartSubmitter : INativePartSubmitter<ReplyPartSubmitter>
+    private struct ReplyMessageSubmitter : INativeMessageSubmitter<ReplyMessageSubmitter>
     {
         internal IntPtr Handle;
         internal ZlinkRoutingId Target;
         internal ulong ReplyToken;
 
-        public static int Submit(ref ReplyPartSubmitter self,
-            ref ZlinkMsg part, NativeMethods.ZlinkPartFlag flag) =>
-            NativeMethods.zlink_reply_part(self.Handle, ref self.Target,
-                self.ReplyToken, ref part, flag);
+        public static int Submit(ref ReplyMessageSubmitter self,
+            Span<ZlinkMsg> parts) =>
+            NativeMethods.zlink_reply(self.Handle, ref self.Target,
+                self.ReplyToken, ref parts[0], (nuint)parts.Length);
     }
 
     internal bool TransferToPublic(object pollerOwner)
@@ -488,7 +488,7 @@ internal sealed class CompletionOwner
     private SendAttempt SubmitSend(RoutingId? target,
         IReadOnlyList<Message> parts, int flags, IntPtr userContext)
     {
-        var submitter = new SendPartSubmitter
+        var submitter = new SendMessageSubmitter
         {
             Handle = _handle,
             Target = target.HasValue ? target.Value.ToNative() : default,
@@ -507,7 +507,7 @@ internal sealed class CompletionOwner
         }
     }
 
-    private unsafe struct SendPartSubmitter : INativePartSubmitter<SendPartSubmitter>
+    private unsafe struct SendMessageSubmitter : INativeMessageSubmitter<SendMessageSubmitter>
     {
         internal IntPtr Handle, Context;
         internal ZlinkRoutingId Target;
@@ -515,19 +515,19 @@ internal sealed class CompletionOwner
         internal int Flags;
         internal ulong CompletionId;
 
-        public static int Submit(ref SendPartSubmitter self,
-            ref ZlinkMsg part, NativeMethods.ZlinkPartFlag flag)
+        public static int Submit(ref SendMessageSubmitter self,
+            Span<ZlinkMsg> parts)
         {
-            var final = flag == NativeMethods.ZlinkPartFlag.Final;
-            var context = final ? self.Context : IntPtr.Zero;
             fixed (ulong* id = &self.CompletionId)
             {
-                var idOut = final && context != IntPtr.Zero ? id : null;
+                var idOut = self.Context != IntPtr.Zero ? id : null;
                 return self.Routed
-                    ? NativeMethods.zlink_send_part_rid(self.Handle,
-                        ref self.Target, ref part, self.Flags, flag, context, idOut)
-                    : NativeMethods.zlink_send_part(self.Handle,
-                        ref part, self.Flags, flag, context, idOut);
+                    ? NativeMethods.zlink_send_rid(self.Handle,
+                        ref self.Target, ref parts[0], (nuint)parts.Length,
+                        self.Flags, self.Context, idOut)
+                    : NativeMethods.zlink_send(self.Handle,
+                        ref parts[0], (nuint)parts.Length, self.Flags,
+                        self.Context, idOut);
             }
         }
     }
@@ -536,7 +536,7 @@ internal sealed class CompletionOwner
         IReadOnlyList<Message> parts, uint timeoutMs, int flags,
         IntPtr userContext)
     {
-        var submitter = new RequestPartSubmitter
+        var submitter = new RequestMessageSubmitter
         {
             Handle = _handle,
             Target = target.HasValue ? target.Value.ToNative() : default,
@@ -556,7 +556,7 @@ internal sealed class CompletionOwner
         }
     }
 
-    private unsafe struct RequestPartSubmitter : INativePartSubmitter<RequestPartSubmitter>
+    private unsafe struct RequestMessageSubmitter : INativeMessageSubmitter<RequestMessageSubmitter>
     {
         internal IntPtr Handle, Context;
         internal ZlinkRoutingId Target;
@@ -565,16 +565,14 @@ internal sealed class CompletionOwner
         internal uint TimeoutMs;
         internal ulong CompletionId;
 
-        public static int Submit(ref RequestPartSubmitter self,
-            ref ZlinkMsg part, NativeMethods.ZlinkPartFlag flag)
+        public static int Submit(ref RequestMessageSubmitter self,
+            Span<ZlinkMsg> parts)
         {
-            var final = flag == NativeMethods.ZlinkPartFlag.Final;
             fixed (ZlinkRoutingId* target = &self.Target)
             fixed (ulong* id = &self.CompletionId)
-                return NativeMethods.zlink_request_part(self.Handle,
-                    self.Routed ? target : null, ref part, self.Flags, flag,
-                    final ? self.TimeoutMs : 0,
-                    final ? self.Context : IntPtr.Zero, final ? id : null);
+                return NativeMethods.zlink_request(self.Handle,
+                    self.Routed ? target : null, ref parts[0], (nuint)parts.Length,
+                    self.Flags, self.TimeoutMs, self.Context, id);
         }
     }
 

@@ -7,7 +7,7 @@ cd "${HERE}"
 # shellcheck source=runner_common.sh
 source "${HERE}/runner_common.sh"
 
-export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/temurin-22-jdk-amd64}"
+select_java_home
 export PATH="${JAVA_HOME}/bin:${PATH}"
 
 RUNS="${RUNS:-3}"

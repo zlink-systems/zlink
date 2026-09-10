@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <string.h>
 
 #include <zlink.h>
@@ -32,23 +33,54 @@ int main (void)
 
     const zlink_routing_id_t *rid = NULL;
     zlink_msg_t empty_part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    CHECK (zlink_recv_part (receiver, &rid, &empty_part, &has_more, ZLINK_RECV_FLAGS_DONTWAIT)
+    size_t part_count = 0;
+    CHECK (zlink_recv (receiver, &rid, &empty_part, 1, &part_count,
+                       ZLINK_RECV_FLAGS_DONTWAIT)
            == ZLINK_RECV_NO_DATA);
 
     zlink_msg_t outbound;
     CHECK (make_part (&outbound, "hello-c") == 0);
-    CHECK (zlink_send_part (sender, &outbound, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-                            NULL, NULL)
+    CHECK (zlink_send (sender, &outbound, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL)
            == ZLINK_SUBMIT_OK);
 
     zlink_msg_t inbound;
-    CHECK (zlink_recv_part (receiver, &rid, &inbound, &has_more, ZLINK_RECV_FLAGS_NONE)
+    CHECK (zlink_recv (receiver, &rid, &inbound, 1, &part_count, ZLINK_RECV_FLAGS_NONE)
            == ZLINK_RECV_OK);
-    CHECK (has_more == ZLINK_PART_FINAL);
+    CHECK (part_count == 1);
     CHECK (zlink_msg_size (&inbound) == strlen ("hello-c"));
     CHECK (memcmp (zlink_msg_data (&inbound), "hello-c", strlen ("hello-c")) == 0);
-    CHECK (zlink_msg_close (&inbound) == ZLINK_CONFIG_OK);
+    zlink_multipart_close (&inbound, part_count);
+
+    zlink_msg_t multipart[2];
+    CHECK (make_part (&multipart[0], "first") == 0);
+    CHECK (make_part (&multipart[1], "second") == 0);
+    CHECK (zlink_send (sender, multipart, 2, ZLINK_SEND_FLAGS_NONE, NULL, NULL)
+           == ZLINK_SUBMIT_OK);
+    zlink_multipart_close (multipart, 2);
+
+    zlink_msg_t preserved;
+    CHECK (make_part (&preserved, "preserved") == 0);
+    part_count = 0;
+    errno = 0;
+    CHECK (zlink_recv (receiver, &rid, &preserved, 1, &part_count,
+                       ZLINK_RECV_FLAGS_NONE)
+           == ZLINK_RECV_BUFFER_TOO_SMALL);
+    CHECK (zlink_errno () == ENOBUFS);
+    CHECK (part_count == 2);
+    CHECK (zlink_msg_size (&preserved) == strlen ("preserved"));
+    CHECK (memcmp (zlink_msg_data (&preserved), "preserved", strlen ("preserved")) == 0);
+    CHECK (zlink_msg_close (&preserved) == ZLINK_CONFIG_OK);
+
+    zlink_msg_t received_multipart[2];
+    CHECK (zlink_recv (receiver, &rid, received_multipart, 2, &part_count,
+                       ZLINK_RECV_FLAGS_NONE)
+           == ZLINK_RECV_OK);
+    CHECK (part_count == 2);
+    CHECK (zlink_msg_size (&received_multipart[0]) == strlen ("first"));
+    CHECK (memcmp (zlink_msg_data (&received_multipart[0]), "first", strlen ("first")) == 0);
+    CHECK (zlink_msg_size (&received_multipart[1]) == strlen ("second"));
+    CHECK (memcmp (zlink_msg_data (&received_multipart[1]), "second", strlen ("second")) == 0);
+    zlink_multipart_close (received_multipart, part_count);
 
     CHECK (zlink_close (sender) == ZLINK_CLOSE_OK);
     CHECK (zlink_close (receiver) == ZLINK_CLOSE_OK);

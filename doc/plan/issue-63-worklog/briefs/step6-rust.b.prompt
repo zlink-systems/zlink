@@ -1,0 +1,32 @@
+Coding sub-agent for zlink Issue #63. Work ONLY in this worktree; commit to its detached HEAD. Do NOT
+touch core/doc/** or bindings/doc/**. Do NOT push/PR. Keep input tight; grep before reading.
+
+READ: doc/plan/issue-63-worklog/binding-migration-ref.ko.md (removal→replacement map, D63-6..8 contracts).
+Core is whole-message ONLY now; the removed part symbols no longer exist, so this binding will NOT
+compile until every use is migrated. core/build-dev (symlink) has the new-only API. Reference impl:
+bindings/cpp/src/Runtime/Native/native_receive.hpp (reusable array + grow-on-ENOBUFS retry) and the
+new send contract comments in core/include/zlink/socket/api.h.
+
+TASK (rust): migrate BOTH send and recv FFI internals to whole-message; public Rust API UNCHANGED.
+- bindings/rust/src/runtime/messaging/operations/send_ops.rs and the recv path: replace removed
+  zlink_*_part (send&recv)+zlink_xpub_recv_part with whole-message functions (array+count). Internal
+  send/recv loops → one whole-message call with a reusable Vec<zlink_msg_t> (grow on
+  ZLINK_RECV_BUFFER_TOO_SMALL, retry). Ownership: each native part → one Rust Message closed once.
+  STREAM RAW recv via zlink_recv; send count==1. Drop part_flag/MORE/FINAL.
+grep: grep -rn "zlink_.*_part\|ZLINK_PART_\|part_flag" bindings/rust.
+
+TEST (new-only local Core; do NOT rebuild Core):
+  LD_LIBRARY_PATH="$PWD/core/build-dev/lib" \
+    RUSTFLAGS="-L $PWD/core/build-dev/lib" bash bindings/rust/tests/run_tests.sh
+All rust tests must pass. Explain any test updated.
+
+COMMIT (detached HEAD):
+  bindings(rust): whole-message send+recv (drop part API)
+
+  <what changed>. Public Rust surface unchanged. Refs #63.
+  Test: ... bindings/rust/tests/run_tests.sh — <pass summary>
+
+  Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01Df7vbMq5yraG6siDn8PAUH
+
+REPORT: files changed, ownership/retry, tests updated & why, exact rust test pass summary.

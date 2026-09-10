@@ -50,8 +50,7 @@ void publish_once (void *pub_)
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&m, 4));
     memcpy (zlink_msg_data (&m), "beac", 4);
     //  DONTWAIT: the publisher never blocks on the churning subscribers.
-    (void) zlink_publish_part (pub_, kTopic, &m, ZLINK_SEND_FLAGS_DONTWAIT,
-                               ZLINK_PART_FINAL);
+    (void) zlink_publish (pub_, kTopic, &m, 1, ZLINK_SEND_FLAGS_DONTWAIT);
     zlink_msg_close (&m);
 }
 

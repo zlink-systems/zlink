@@ -20,11 +20,12 @@ type ReplyToken struct {
 }
 
 type Received struct {
-	routingID RoutingID
-	parts     []*Message
-	token     ReplyToken
-	reply     func([]*Message) error
-	send      func(context.Context, []sendBuilderPart) error
+	routingID   RoutingID
+	parts       []*Message
+	nativeParts []C.zlink_msg_t
+	token       ReplyToken
+	reply       func([]*Message) error
+	send        func(context.Context, []sendBuilderPart) error
 }
 
 func (r *Received) RoutingID() RoutingID {

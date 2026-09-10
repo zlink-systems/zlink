@@ -29,24 +29,25 @@ zlink_set_routing_id(socket, id, sizeof(id) - 1);
 
 ## 수신과 응답
 
-`zlink_recv_part()`, `zlink_subscribe_part()`, `zlink_router_recv_part()`는 socket-owned
+`zlink_recv()`, `zlink_subscribe()`, `zlink_router_recv()`는 socket-owned
 routing-id view의 pointer를 반환한다. 같은 socket에서 다음 data receive 함수에 진입하면 성공 여부와
-관계없이 이 view가 무효화된다.
+관계없이 이 view가 무효화된다. 각 함수는 payload record 전체를 caller가 제공한 배열에 채운다.
 
 ```c
 const zlink_routing_id_t *source_rid = NULL;
 zlink_reply_token_t reply_token = 0;
-zlink_msg_t part;
-zlink_part_flag_t more;
+zlink_msg_t parts[8];
+size_t part_count = 0;
 
-zlink_msg_init(&part);
-zlink_router_recv_part(
-    router, &source_rid, &reply_token, &part, &more, ZLINK_RECV_FLAGS_NONE);
-/* 같은 router에서 다음 data receive 전에 source_rid를 즉시 복사한다. */
+if (zlink_router_recv(router, &source_rid, &reply_token,
+                     parts, 8, &part_count, ZLINK_RECV_FLAGS_NONE) == ZLINK_RECV_OK) {
+    /* 같은 router에서 다음 data receive 전에 source_rid를 즉시 복사한다. */
+    zlink_multipart_close(parts, part_count);
+}
 ```
 
-일반 routed message는 수신한 routing id와 `zlink_send_part_rid()`를 사용한다. Request에
-응답할 때는 반환된 불투명 token을 함께 전달해 `zlink_reply_part()`를 호출한다. 일반 DATA의
+일반 routed message는 수신한 routing id와 `zlink_send_rid()`를 사용한다. Request에
+응답할 때는 반환된 불투명 token과 reply part 배열을 `zlink_reply()`에 전달한다. 일반 DATA의
 token은 `0`이다.
 
 ## Peer 연결 종료

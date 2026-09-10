@@ -177,7 +177,7 @@ class OwnershipContractTests(unittest.TestCase):
                     if failures:
                         raise failures[0]
 
-    def test_concurrent_multipart_binding_staging_preserves_public_parts(self):
+    def test_concurrent_whole_message_send_preserves_public_parts(self):
         endpoint = f"inproc://python-concurrent-multipart-{uuid.uuid4()}"
         with zlink.create_context() as context:
             with zlink.create_pair_socket(context) as sender:
@@ -193,13 +193,10 @@ class OwnershipContractTests(unittest.TestCase):
                     )
                     lock = threading.Lock()
                     successes = set()
-                    rejected = 0
                     failures = []
 
                     def submit_records(worker):
-                        nonlocal rejected
                         local_successes = set()
-                        local_rejected = 0
                         try:
                             for index in range(500):
                                 prefix = f"record-{worker}-{index:03d}"
@@ -210,26 +207,14 @@ class OwnershipContractTests(unittest.TestCase):
                                     (prefix + "-b").encode()
                                 )
                                 try:
-                                    sender.send().messages(
-                                        first, second
-                                    ).submit_sync()
+                                    sender.send().messages(first, second).submit_sync()
+                                    self.assertEqual(
+                                        first.to_bytes(), (prefix + "-a").encode()
+                                    )
+                                    self.assertEqual(
+                                        second.to_bytes(), (prefix + "-b").encode()
+                                    )
                                     local_successes.add(prefix)
-                                except zlink.SubmitError as error:
-                                    if (
-                                        error.result
-                                        != zlink.SubmitResult.INVALID_ARGUMENT
-                                        or error.native_errno != errno.EINVAL
-                                    ):
-                                        raise
-                                    if first.to_bytes() != (
-                                        prefix + "-a"
-                                    ).encode() or second.to_bytes() != (
-                                        prefix + "-b"
-                                    ).encode():
-                                        raise AssertionError(
-                                            "binding staging lost caller-owned parts after Core rejection"
-                                        )
-                                    local_rejected += 1
                                 finally:
                                     first.close()
                                     second.close()
@@ -239,7 +224,6 @@ class OwnershipContractTests(unittest.TestCase):
                             return
                         with lock:
                             successes.update(local_successes)
-                            rejected += local_rejected
 
                     threads = [
                         threading.Thread(target=submit_records, args=(worker,))
@@ -252,8 +236,7 @@ class OwnershipContractTests(unittest.TestCase):
 
                     if failures:
                         raise failures[0]
-                    self.assertGreater(len(successes), 0)
-                    self.assertGreater(rejected, 0)
+                    self.assertEqual(len(successes), 8 * 500)
 
                     received_prefixes = set()
                     received = zlink.create_received()

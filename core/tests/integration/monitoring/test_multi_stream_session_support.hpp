@@ -168,9 +168,7 @@ inline send_result_t try_send (queued_message_t &queued_, void *send_socket_)
     if (!send_socket_)
         return send_result_failed;
 
-    const zlink_submit_result_t rc = zlink_send_part_rid (
-      send_socket_, &queued_.routing_id, &queued_.msg, ZLINK_SEND_FLAGS_NONE,
-      ZLINK_PART_FINAL, NULL, NULL);
+    const zlink_submit_result_t rc = zlink_send_rid (send_socket_, &queued_.routing_id, &queued_.msg, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
     if (rc == ZLINK_SUBMIT_OK)
         return send_result_sent;
 
@@ -232,9 +230,7 @@ try_send_packet_now (void *stream_socket_, const zlink_routing_id_t *rid_, zlink
     if (!stream_socket_ || !rid_ || !packet_)
         return send_result_failed;
 
-    const zlink_submit_result_t rc = zlink_send_part_rid (
-      stream_socket_, rid_, packet_, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-      NULL, NULL);
+    const zlink_submit_result_t rc = zlink_send_rid (stream_socket_, rid_, packet_, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
     if (rc == ZLINK_SUBMIT_OK)
         return send_result_sent;
 

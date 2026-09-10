@@ -64,20 +64,23 @@ public sealed class test_hot_path_ownership_contract
     [InlineData(2)]
     [InlineData(9)]
     [InlineData(33)]
-    public void native_final_failure_preserves_all_originals(int count)
+    public void native_record_failure_preserves_all_originals(int count)
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
         using var context = Zlink.CreateContext();
         using var router = context.CreateRouterSocket();
         router.Options.Mandatory = true;
-        using Message source = Message.From("preserved");
+        string payload = new string('p', 512);
+        using Message source = Message.From(payload);
+        using Message observer = source.Copy();
         var operation = router.Send(RoutingId.From("missing"u8)).Message(source);
         for (var i = 1; i < count; i++)
             operation.Message(source);
         var error = Assert.Throws<ZlinkSubmitException>(() => operation.TrySubmit());
         Assert.Equal(ZlinkSubmitException.ErrorCode.NotConnected, error.Result);
-        Assert.Equal("preserved", source.GetString());
+        Assert.Equal(payload, source.GetString());
+        Assert.Equal(2, observer.RefCount);
     }
     [Theory]
     [InlineData(1)]

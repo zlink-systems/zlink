@@ -75,11 +75,9 @@ router_part_t receive_router_part_eventually (void *router_)
         zlink_reply_token_t reply_token = 0;
         zlink_msg_t part;
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
-        zlink_part_flag_t part_flag = ZLINK_PART_FINAL;
+        size_t part_flag = 1;
         errno = 0;
-        const zlink_recv_result_t result = zlink_router_recv_part (
-          router_, &source_rid, &reply_token, &part, &part_flag,
-          ZLINK_RECV_FLAGS_DONTWAIT);
+        const zlink_recv_result_t result = zlink_router_recv (router_, &source_rid, &reply_token, &part, 1, &part_flag, ZLINK_RECV_FLAGS_DONTWAIT);
         if (result == ZLINK_RECV_OK) {
             TEST_ASSERT_NOT_NULL (source_rid);
             router_part_t received;
@@ -109,17 +107,16 @@ void send_reply_with_parts (void *router_, const router_part_t &request_,
                             size_t part_count_)
 {
     TEST_ASSERT_TRUE (part_count_ >= 1);
+    std::vector<zlink_msg_t> parts (part_count_);
     for (size_t i = 0; i < part_count_; ++i) {
-        zlink_msg_t part;
-        init_part (&part, expected_reply_payload (i));
-        const zlink_part_flag_t flag =
-          (i + 1 == part_count_) ? ZLINK_PART_FINAL : ZLINK_PART_MORE;
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_SUBMIT_OK,
-          zlink_reply_part (router_, &request_.source_rid,
-                            request_.reply_token, &part, flag));
-        assert_part_consumed (&part);
+        init_part (&parts[i], expected_reply_payload (i));
     }
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_reply (router_, &request_.source_rid, request_.reply_token,
+                   parts.data (), parts.size ()));
+    for (size_t i = 0; i < part_count_; ++i)
+        assert_part_consumed (&parts[i]);
 }
 
 zlink_completion_t receive_completion_eventually (void *dealer_,
@@ -216,8 +213,7 @@ void run_case (const char *endpoint_kind_, size_t part_count_,
     zlink_completion_id_t request_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_request_part (dealer, NULL, &request, ZLINK_SEND_FLAGS_NONE,
-                          ZLINK_PART_FINAL, 120000, NULL, &request_id));
+      zlink_request (dealer, NULL, &request, 1, ZLINK_SEND_FLAGS_NONE, 120000, NULL, &request_id));
     TEST_ASSERT_NOT_EQUAL (0, request_id);
     assert_part_consumed (&request);
 

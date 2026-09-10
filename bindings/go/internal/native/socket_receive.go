@@ -20,7 +20,7 @@ func reusableTopicBuffer(buffer []byte) []byte {
 
 func recvTopicMessageInto(
 	out *TopicMessage,
-	call func(**C.zlink_routing_id_t, *C.char, *C.size_t, *C.zlink_msg_t, *C.zlink_part_flag_t, C.zlink_recv_flags_t) error,
+	call func(**C.zlink_routing_id_t, *C.char, *C.size_t, *C.zlink_msg_t, C.size_t, *C.size_t, C.zlink_recv_flags_t) C.zlink_recv_result_t,
 	flags RecvFlags,
 ) error {
 	var sourceRID *C.zlink_routing_id_t
@@ -29,15 +29,15 @@ func recvTopicMessageInto(
 	topicLen := C.size_t(len(topicBuf))
 	reuse := out.parts
 	_ = out.Close()
-	clonedParts, err := recvMultipart(reuse, flags, func(part *C.zlink_msg_t, hasMore *C.zlink_part_flag_t, recvFlags C.zlink_recv_flags_t) error {
-		return call(&sourceRID, (*C.char)(unsafe.Pointer(&topicBuf[0])), &topicLen, part, hasMore, recvFlags)
+	parts, err := recvMultipart(&out.nativeParts, reuse, flags, func(native *C.zlink_msg_t, capacity C.size_t, count *C.size_t, recvFlags C.zlink_recv_flags_t) C.zlink_recv_result_t {
+		return call(&sourceRID, (*C.char)(unsafe.Pointer(&topicBuf[0])), &topicLen, native, capacity, count, recvFlags)
 	})
 	if err != nil {
 		return err
 	}
 	out.routingID = routingIDFromCPtr(sourceRID)
 	out.topic = string(topicBuf[:int(topicLen)])
-	out.parts = clonedParts
+	out.parts = parts
 	return nil
 }
 

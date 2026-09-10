@@ -32,7 +32,7 @@ fn pair_send_recv_roundtrip() {
 }
 
 #[test]
-fn pair_multipart_send_recv() {
+fn pair_multipart_send_recv_grows_whole_message_buffer() {
     let ctx = Context::new().unwrap();
     let a = ctx.pair_socket().unwrap();
     a.bind("inproc://beh-pair-multi").unwrap();
@@ -40,10 +40,13 @@ fn pair_multipart_send_recv() {
     let b = ctx.pair_socket().unwrap();
     b.connect("inproc://beh-pair-multi").unwrap();
 
-    let parts = vec![
-        Message::try_from(b"frame-1").unwrap(),
-        Message::try_from(b"frame-2").unwrap(),
-    ];
+    let payloads = (0..10)
+        .map(|index| format!("frame-{index}"))
+        .collect::<Vec<_>>();
+    let parts = payloads
+        .iter()
+        .map(|payload| Message::try_from(payload.as_bytes()).unwrap())
+        .collect::<Vec<_>>();
     let mut iter = parts.into_iter();
     let first = iter.next().unwrap();
     let mut op = b.send().message(first);
@@ -54,9 +57,10 @@ fn pair_multipart_send_recv() {
 
     let mut received = Received::empty();
     a.recv(&mut received, RecvFlags::NONE).unwrap();
-    assert_eq!(received.parts().len(), 2);
-    assert_eq!(received.parts()[0].as_bytes(), b"frame-1");
-    assert_eq!(received.parts()[1].as_bytes(), b"frame-2");
+    assert_eq!(received.parts().len(), payloads.len());
+    for (part, payload) in received.parts().iter().zip(&payloads) {
+        assert_eq!(part.as_bytes(), payload.as_bytes());
+    }
 }
 
 #[test]

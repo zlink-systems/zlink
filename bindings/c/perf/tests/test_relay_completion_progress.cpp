@@ -66,8 +66,8 @@ bool send_request (void *client, uint64_t sequence)
                  payload_size);
     std::memcpy (zlink_msg_data (&part), &sequence, sizeof (sequence));
 
-    const zlink_submit_result_t result = zlink_send_part (
-      client, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
+    const zlink_submit_result_t result = zlink_send (
+      client, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
     const int submit_errno = zlink_errno ();
     const bool consumed = zlink_msg_size (&part) == 0;
     const bool closed = zlink_msg_close (&part) == ZLINK_CONFIG_OK;
@@ -84,19 +84,17 @@ bool drain_echoes (void *client, size_t *next_sequence)
     REQUIRE_TRUE (next_sequence != NULL);
     for (;;) {
         zlink_msg_t part;
-        REQUIRE_TRUE (zlink_msg_init (&part) == ZLINK_CONFIG_OK);
         const zlink_routing_id_t *source_rid = NULL;
-        zlink_part_flag_t part_flag = ZLINK_PART_MORE;
-        const zlink_recv_result_t result = zlink_recv_part (
-          client, &source_rid, &part, &part_flag, ZLINK_RECV_FLAGS_DONTWAIT);
+        size_t part_count = 0;
+        const zlink_recv_result_t result = zlink_recv (
+          client, &source_rid, &part, 1, &part_count, ZLINK_RECV_FLAGS_DONTWAIT);
         const int recv_errno = zlink_errno ();
         if (result == ZLINK_RECV_NO_DATA) {
-            REQUIRE_TRUE (zlink_msg_close (&part) == ZLINK_CONFIG_OK);
             REQUIRE_TRUE (recv_errno == EAGAIN || recv_errno == EWOULDBLOCK);
             return true;
         }
         REQUIRE_TRUE (result == ZLINK_RECV_OK);
-        REQUIRE_TRUE (part_flag == ZLINK_PART_FINAL);
+        REQUIRE_TRUE (part_count == 1);
         REQUIRE_TRUE (zlink_msg_size (&part) == payload_size);
         REQUIRE_TRUE (*next_sequence < request_count);
 
@@ -104,7 +102,7 @@ bool drain_echoes (void *client, size_t *next_sequence)
         std::memcpy (&sequence, zlink_msg_data (&part), sizeof (sequence));
         REQUIRE_TRUE (sequence == *next_sequence);
         ++*next_sequence;
-        REQUIRE_TRUE (zlink_msg_close (&part) == ZLINK_CONFIG_OK);
+        zlink_multipart_close (&part, part_count);
     }
 }
 

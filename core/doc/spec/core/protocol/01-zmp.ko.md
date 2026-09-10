@@ -241,9 +241,8 @@ Bind나 connect 전에 설정한 weight는 Application pipe가 준비된 뒤에�
 Network `WEIGHT` command는 queue admission을 제한하는 application
 [HWM](../glossary.ko.md#hwm)과 remote PAUSE를 우회할 수 있다. 그러나 logical-ready
 hold와 한 Application multipart의 part 사이에 다른 record를 넣지 않는 atomic 경계는 우회하지
-않는다. 열린 Application multipart는 첫 frame이 pipe에 쓰인 뒤 FINAL commit 또는 rollback 전인
-record를 뜻한다. public `MORE` 조립 buffer만 있는 동안은 열린 multipart가 아니며 control 전달을
-보류하지 않는다. Application multipart가 열린 동안 sender는 가장 최근 weight 하나만 고정된 `uint32`
+않는다. 열린 Application multipart는 첫 frame이 pipe에 쓰인 뒤 wire record가 commit되거나 rollback되기
+전인 record를 뜻한다. Application multipart가 열린 동안 sender는 가장 최근 weight 하나만 고정된 `uint32`
 상태로 보관한다. FINAL이 multipart를 commit하거나 rollback이 multipart를 제거한 뒤, 그 결과로
 생긴 다음 message 경계에서만 가장 최근 command를 append하고 publish한다.
 
@@ -473,8 +472,8 @@ Inbound request의 reply target은 public receive 역할에 따라 다르게 보
 
 Core는 outbound request를 wire에 공개하기 전에 socket당 65,536개인 SEND·REQUEST 공유
 completion slot과 nonzero completion ID를 예약한다. Slot은 public completion receive가 record를
-queue에서 제거할 때까지 유지한다. Admission이 거절된 request payload를 보관하는 상태는 없고,
-`MORE`와 `FINAL` 사이의 thread별 조립 buffer는 이 규칙의 대상이 아니다
+queue에서 제거할 때까지 유지한다. Admission이 거절된 request payload를 보관하는 상태는 없으며,
+whole-message 입력 배열을 Core에 남기는 pending 상태도 없다
 (`ZLINK_OPT_PENDING_MAX_MSGS/BYTES`는 ABI 보존 전용 — [socket README](../socket/README.ko.md#5-옵션)).
 Admission 뒤에는 request payload를 replay용으로 보관하지 않으며 reply timeout과 correlation만 유지한다.
 
@@ -507,7 +506,7 @@ target까지만 만들며, 남은 frame은 다음 batch로 이어진다. 이 규
 ## 10. 구현 및 contract test 검증 요구
 
 다른 구현과의 상호운용은 wire에서 관찰하는 byte로, request-reply 완료는 공개
-`zlink_router_recv_part`·`zlink_reply_part`·`zlink_completion_recv` 결과로 확인한다. 각 항목은
+`zlink_router_recv`·`zlink_reply`·`zlink_completion_recv` 결과로 확인한다. 각 항목은
 test 하나로 이어진다.
 
 **Frame header와 flags**
@@ -587,7 +586,7 @@ test 하나로 이어진다.
   completion에 전달하지 않는다.
 - Base header, sequence extension 또는 payload를 끝내지 않고 stream을 닫으면 `EPROTO`이며 application receive나 completion에 부분 payload를 전달하지 않고 connection을 종료한다.
 - DEALER-ROUTER에서 ROUTER가 multipart DATA를 먼저 보내고 같은 request의 REPLY를 보내면 DEALER가
-  DATA의 `FINAL` part를 dequeue하기 전에는 completion이 없다. 마지막 DATA part 뒤 REPLY는 정확히
+  DATA record를 dequeue하기 전에는 completion이 없다. 그 뒤 REPLY는 정확히
   한 completion으로 나오며 reply payload는 DATA receive에 나타나지 않는다.
 - 앞선 DATA와 PAUSED 또는 HWM 때문에 request timeout이 먼저 끝나면 timeout completion 하나만
   만들고, 이후 도착한 late reply는 두 번째 completion을 만들지 않는다.

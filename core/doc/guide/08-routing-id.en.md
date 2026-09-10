@@ -23,25 +23,27 @@ zlink_set_routing_id(socket, id, sizeof(id) - 1);
 
 ## Receive and reply
 
-`zlink_recv_part()`, `zlink_subscribe_part()`, and
-`zlink_router_recv_part()` return a pointer to a socket-owned routing-id view.
-The next data-receive entry on that same socket, successful or not, invalidates it.
+`zlink_recv()`, `zlink_subscribe()`, and `zlink_router_recv()` return a pointer
+to a socket-owned routing-id view. Each function fills a caller-provided array
+with the complete payload record. The next data-receive entry on that same
+socket, successful or not, invalidates the view.
 
 ```c
 const zlink_routing_id_t *source_rid = NULL;
 zlink_reply_token_t reply_token = 0;
-zlink_msg_t part;
-zlink_part_flag_t more;
+zlink_msg_t parts[8];
+size_t part_count = 0;
 
-zlink_msg_init(&part);
-zlink_router_recv_part(
-    router, &source_rid, &reply_token, &part, &more, ZLINK_RECV_FLAGS_NONE);
-/* Copy source_rid now if another data receive on router may run first. */
+if (zlink_router_recv(router, &source_rid, &reply_token,
+                     parts, 8, &part_count, ZLINK_RECV_FLAGS_NONE) == ZLINK_RECV_OK) {
+    /* Copy source_rid now if another data receive on router may run first. */
+    zlink_multipart_close(parts, part_count);
+}
 ```
 
-Use a received routing id with `zlink_send_part_rid()` for ordinary routed
-traffic. For a request, combine it with the returned opaque token and call
-`zlink_reply_part()`; ordinary DATA has token `0`.
+Use a received routing id with `zlink_send_rid()` for ordinary routed traffic.
+For a request, pass the returned opaque token and an array of reply parts to
+`zlink_reply()`; ordinary DATA has token `0`.
 
 ## Disconnect a peer
 

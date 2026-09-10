@@ -190,55 +190,6 @@ inline std::vector<message_t> take_parts_from_native (zlink_msg_t *parts_, size_
     return parts;
 }
 
-template <typename SubmitFn>
-inline int submit_native_parts (std::vector<zlink_msg_t> &parts_native_,
-                                size_t &failed_index_out_,
-                                SubmitFn submit_)
-{
-    failed_index_out_ = 0;
-    if (parts_native_.empty ()) {
-        errno = EFAULT;
-        return ZLINK_SUBMIT_INVALID_HANDLE;
-    }
-
-    for (size_t i = 0; i < parts_native_.size (); ++i) {
-        const zlink_part_flag_t part_flag =
-          i + 1 < parts_native_.size () ? ZLINK_PART_MORE : ZLINK_PART_FINAL;
-        const int rc = submit_ (&parts_native_[i], part_flag, i + 1 == parts_native_.size ());
-        if (rc != ZLINK_SUBMIT_OK) {
-            failed_index_out_ = i;
-            return rc;
-        }
-    }
-
-    return ZLINK_SUBMIT_OK;
-}
-
-template <typename SubmitFn>
-inline int submit_native_parts (zlink_msg_t *parts_native_,
-                                size_t part_count_,
-                                size_t &failed_index_out_,
-                                SubmitFn submit_)
-{
-    failed_index_out_ = 0;
-    if (!parts_native_ || part_count_ == 0) {
-        errno = EFAULT;
-        return ZLINK_SUBMIT_INVALID_HANDLE;
-    }
-
-    for (size_t i = 0; i < part_count_; ++i) {
-        const zlink_part_flag_t part_flag =
-          i + 1 < part_count_ ? ZLINK_PART_MORE : ZLINK_PART_FINAL;
-        const int rc = submit_ (&parts_native_[i], part_flag, i + 1 == part_count_);
-        if (rc != ZLINK_SUBMIT_OK) {
-            failed_index_out_ = i;
-            return rc;
-        }
-    }
-
-    return ZLINK_SUBMIT_OK;
-}
-
 template <typename SubmitFn> inline int submit_one_message_part (message_t &part_, SubmitFn submit_)
 {
     if (!part_.valid ()) {
@@ -251,7 +202,7 @@ template <typename SubmitFn> inline int submit_one_message_part (message_t &part
     if (part_.valid ())
         return -1;
 
-    const int rc = submit_ (&native_part, ZLINK_PART_FINAL);
+    const int rc = submit_ (&native_part, 1u);
     if (rc != 0)
         restore_part_from_native (part_, native_part);
     return rc;
@@ -275,7 +226,7 @@ inline int submit_borrowed_message_part (message_t &part_, SubmitFn submit_)
         return -1;
     }
 
-    const int rc = submit_ (&native_view, ZLINK_PART_FINAL);
+    const int rc = submit_ (&native_view, 1u);
     const int saved_errno = errno;
     (void) zlink_msg_close (&native_view);
     if (rc == ZLINK_SUBMIT_OK)
@@ -307,12 +258,7 @@ inline int submit_message_parts_close_on_failure (std::vector<message_t> &parts_
 {
     return detail::with_moved_native_parts (
       parts_, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
-          size_t failed_index = 0;
-          const int rc = detail::submit_native_parts (native_parts_, part_count_, failed_index,
-                                                      std::move (submit_));
-          if (rc != 0)
-              detail::close_native_parts (native_parts_, part_count_, failed_index);
-          return rc;
+          return submit_ (native_parts_, part_count_);
       });
 }
 
@@ -390,12 +336,7 @@ inline int submit_borrowed_message_array (const std::vector<message_t> &parts_, 
 template <typename SubmitFn>
 inline int submit_message_parts (std::vector<message_t> &parts_, SubmitFn submit_)
 {
-    const int rc = detail::submit_borrowed_message_array (
-      parts_, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
-          size_t failed_index = 0;
-          return detail::submit_native_parts (native_parts_, part_count_, failed_index,
-                                              std::move (submit_));
-      });
+    const int rc = detail::submit_borrowed_message_array (parts_, std::move (submit_));
     if (rc == ZLINK_SUBMIT_OK) {
         for (message_t &part : parts_)
             detail::message_access_t::close_noexcept (part);

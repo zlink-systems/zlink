@@ -465,7 +465,7 @@ void run_router_multipart_pipe_termination_does_not_join_next_peer_record (
         zlink_msg_t *aborted_parts = NULL;
         size_t aborted_part_count = 0;
         TEST_ASSERT_EQUAL_INT (
-          -1, zlink::socket_reqrep_internal::recv_router_message_direct (
+          -1, zlink::socket_reqrep_internal::recv_router_record (
                 router_pin, &aborted_source_rid, &aborted_request_seq,
                 &aborted_parts, &aborted_part_count, ZLINK_DONTWAIT));
         TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
@@ -476,7 +476,7 @@ void run_router_multipart_pipe_termination_does_not_join_next_peer_record (
     zlink_msg_t *parts = NULL;
     size_t part_count = 0;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::socket_reqrep_internal::recv_router_message_direct (
+      zlink::socket_reqrep_internal::recv_router_record (
         router_pin, &next_source_rid, &request_seq, &parts, &part_count,
         ZLINK_DONTWAIT));
     TEST_ASSERT_NOT_NULL (next_source_rid);

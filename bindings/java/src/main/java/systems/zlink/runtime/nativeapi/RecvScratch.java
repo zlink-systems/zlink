@@ -14,10 +14,8 @@ public final class RecvScratch {
     public final MemorySegment routingIdOut = arena.allocate(
         NativeLayouts.ROUTING_ID_LAYOUT);
     public final MemorySegment subscribedOut = arena.allocate(ValueLayout.JAVA_INT);
-    public final MemorySegment hasMoreOut = arena.allocate(ValueLayout.JAVA_INT);
-    public final MemorySegment dealerMessageTypeOut =
-        arena.allocate(ValueLayout.JAVA_BYTE);
-    public final MemorySegment replyTokenValueOut =
+    public final MemorySegment partsOut = arena.allocate(ValueLayout.ADDRESS);
+    public final MemorySegment partCountOut =
         arena.allocate(ValueLayout.JAVA_LONG);
 
     // Subscribe hot path: keep the native topic-out buffer thread-local so

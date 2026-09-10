@@ -19,7 +19,7 @@ documents. The C binding does not do this. Per the
 `core/include/zlink.h` **is** the C binding's public contract, verbatim — the same header core's
 own 18-category reference tree
 ([`core/doc/reference/`](../../../../core/doc/reference/README.en.md)) already documents function
-by function: `zlink_ctx_new`, `zlink_send_part`, `zlink_socket`, `zlink_poller_wait`, and every
+by function: `zlink_ctx_new`, `zlink_send`, `zlink_socket`, `zlink_poller_wait`, and every
 other exported symbol. Writing a second `bindings/doc/reference/c/01-*.md` through `05-*.md` set
 here would either duplicate that tree's content under different headings, or thin it out to a
 cross-reference index — neither adds information the reader can't already get from

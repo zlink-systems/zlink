@@ -50,7 +50,7 @@ typedef enum zlink_stream_option_t
 
 typedef enum zlink_stream_recv_mode_t {
   ZLINK_STREAM_RECV_MODE_UNSPECIFIED = 0, // Initial value; bind/connect is not allowed
-  ZLINK_STREAM_RECV_MODE_RAW = 1,         // Use zlink_recv_part()
+  ZLINK_STREAM_RECV_MODE_RAW = 1,         // Use zlink_recv()
   ZLINK_STREAM_RECV_MODE_PACKET = 2       // Use zlink_stream_recv_packet()
 } zlink_stream_recv_mode_t;
 
@@ -91,38 +91,34 @@ One STREAM handle explicitly selects one of the following modes before bind or c
 
 | When to use it | Receive mode | Activation | Delivery form |
 |---|---|---|---|
-| The application handles a framing-free raw byte stream directly | RAW | Set `ZLINK_STREAM_RECV_MODE_RAW` | Receive raw byte records with `zlink_recv_part()` |
+| The application handles a framing-free raw byte stream directly | RAW | Set `ZLINK_STREAM_RECV_MODE_RAW` | Receive raw byte records with `zlink_recv()` |
 | An application protocol with `header + body` framing needs packet-sized delivery | PACKET | Set `ZLINK_STREAM_RECV_MODE_PACKET` | Receive header/body packets with `zlink_stream_recv_packet()` |
 
-RAW permits only `zlink_recv_part()`, and PACKET permits only
+RAW permits only `zlink_recv()`, and PACKET permits only
 `zlink_stream_recv_packet()`. The other receive family returns
 `ZLINK_RECV_NOT_SUPPORTED` with `ENOTSUP`. Receive mode does not change
 `ZLINK_POLLOUT` or the send contract.
 
-## 4. Routed part send
+## 4. Routed send
 
 ```c
-ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid (
-  void *s_,
-  const zlink_routing_id_t *target_rid_,
-  zlink_msg_t *part_,
-  zlink_send_flags_t flags_,
-  zlink_part_flag_t part_flag_,
-  void *user_context_,
-  zlink_completion_id_t *completion_id_out_);
+ZLINK_EXPORT zlink_submit_result_t zlink_send_rid (
+  void *s_, const zlink_routing_id_t *target_rid_,
+  zlink_msg_t *parts_, size_t part_count_, zlink_send_flags_t flags_,
+  void *user_context_, zlink_completion_id_t *completion_id_out_);
 ```
 
 `target_rid_` is a valid four-byte logical routing ID assigned by STREAM to a connection.
-A STREAM send submits one part with `ZLINK_PART_FINAL`. After common argument validation
-succeeds, `ZLINK_PART_MORE` returns
-`ZLINK_SUBMIT_NOT_SUPPORTED`, `errno == ENOTSUP`, and completion ID `0`; it consumes the input
-part without transmitting it. Every call consumes `part_` on both success and failure.
+A STREAM send permits only `part_count_ == 1`. Any other count returns
+`ZLINK_SUBMIT_NOT_SUPPORTED`, `errno == ENOTSUP`, and completion ID `0`; it consumes every input
+slot without transmitting it. Every call leaves every input slot empty and initialized on both
+success and failure.
 
 A send-call boundary does not guarantee a matching receive boundary at the peer. Application
 message boundaries come from wire framing. The header and body returned by PACKET receive form
-one packet under [§6](#6-packet-receive-and-framing), not a multipart send sequence.
+one packet under [§6](#6-packet-receive-and-framing).
 
-`NONE FINAL` snapshots `SNDTIMEO` and waits for local queue admission of the same RID. A `DONTWAIT FINAL` makes exactly one admission attempt. If admitted immediately, it has ID
+`NONE` snapshots `SNDTIMEO` and waits for local queue admission of the same RID. A `DONTWAIT` call makes exactly one admission attempt. If admitted immediately, it has ID
 `0` and no completion. If HWM or byte credit prevents admission, or the connection exists but is
 not ready yet, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token
 bound to that RID, and Core does not retain the payload. If no connection matches `target_rid_`,
@@ -136,7 +132,7 @@ resubmits its retained record to the same RID with `DONTWAIT`. Explicitly removi
 `ZLINK_SEND_TERMINAL` and `ENOTCONN`. Reconnection uses a new RID. Socket close or context
 termination ends the token internally and delivers no record
 ([§7](#7-completion-and-thread-safety)). After ID `0`, Core does not replay the application payload.
-[Socket Common](README.en.md#part-send-and-pending-admission) owns detailed ownership, result, and
+[Socket Common](README.en.md#whole-message-send-and-pending-admission) owns detailed ownership, result, and
 errno rules.
 
 With multiple clients connected to a STREAM socket, `ZLINK_POLLOUT` is
@@ -148,38 +144,38 @@ record identified by `peer_rid`; while an unread WRITABLE record exists,
 `ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION` are level-held. That record is
 received through `zlink_completion_recv()`.
 
-Routed sending of a zero-length part to a valid `target_rid_` requests
+Routed sending of one zero-length part to a valid `target_rid_` requests
 termination of that peer connection instead of sending a byte record. Success
-also consumes this zero-length part.
+also consumes this input slot.
 
 If the connection cannot be found, the function returns
 `ZLINK_SUBMIT_NOT_CONNECTED`. See the [errno map](../03-errors.en.md#result-and-errno-mapping)
 for the complete result mapping.
 
-## 5. Raw part receive
+## 5. Raw receive
 
 ```c
-ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (
+ZLINK_EXPORT zlink_recv_result_t zlink_recv (
   void *s_,
   const zlink_routing_id_t **source_rid_out_,
-  zlink_msg_t *part_out_,
-  zlink_part_flag_t *has_more_out_,
+  zlink_msg_t *parts_out_,
+  size_t parts_capacity_,
+  size_t *part_count_out_,
   zlink_recv_flags_t flags_);
 ```
 
-`part_out_` must be an initialized message and is required together with
-`has_more_out_`. `source_rid_out_` is optional. On success, it receives a
+`parts_out_` and `part_count_out_` are required. `source_rid_out_` is optional. On success, it receives a
 Core-owned borrowed view—a reference for temporarily reading memory owned by
 Core—of the source client's routing ID. Copy this view before entry to the next
 data-recv API on the same socket if it must remain valid after that receive.
 
-On success, ownership of the received part transfers to the caller, which
-must call `zlink_msg_close(part_out_)` exactly once. A failure before a part is
-received does not transfer ownership. A RAW receive record has one part, and a successful
-receive sets `*has_more_out_` to `ZLINK_PART_FINAL`. A
+Each RAW receive record has one part. On success, `*part_count_out_ == 1` and ownership of the first
+slot transfers to the caller, which releases it with `zlink_multipart_close()`. Failure does not
+transfer ownership. If `parts_capacity_ < 1`, the call does not consume the record and returns the
+needed count `1` with `ZLINK_RECV_BUFFER_TOO_SMALL` and `ENOBUFS`. A
 `ZLINK_RECV_FLAGS_DONTWAIT` call with no data returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
 Timeout and termination for `NONE`, and output invariance, follow the data-recv contract in
-[Socket Common](README.en.md#zlink_recv_part).
+[Socket Common](README.en.md#zlink_recv).
 
 ## 6. Packet receive and framing
 
@@ -319,7 +315,7 @@ sequenceDiagram
     participant Eng as Engine
     participant Tr as Transport
 
-    App->>SS: zlink_send_part_rid(rid, data)
+    App->>SS: zlink_send_rid(rid, data)
     SS->>Eng: pipe_t::write()
     Eng->>Tr: raw_encode (passthrough bytes, no framing)
     Tr->>Tr: ws::write
@@ -463,7 +459,7 @@ item maps to one test.
 - Bind and connect in the default `UNSPECIFIED` state fail without side effects as
   `ZLINK_BIND_INVALID_ARGUMENT` with `EINVAL` and `ZLINK_CONNECT_INVALID_ARGUMENT` with `EINVAL`,
   respectively.
-- Selecting RAW before bind or connect succeeds and permits only `zlink_recv_part()`; PACKET recv
+- Selecting RAW before bind or connect succeeds and permits only `zlink_recv()`; PACKET recv
   returns `ZLINK_RECV_NOT_SUPPORTED` with `ENOTSUP`.
 - Selecting PACKET before bind or connect succeeds and permits only `zlink_stream_recv_packet()`;
   raw recv returns `ZLINK_RECV_NOT_SUPPORTED` with `ENOTSUP`.
@@ -474,17 +470,15 @@ item maps to one test.
 - With `NOTIFY=1` in RAW, connect and disconnect are returned as zero-length DATA records with source
   RIDs. PACKET observes connection state and RID through monitor pull.
 
-**Routed part send**
+**Routed send**
 
-- An otherwise-valid `ZLINK_PART_MORE` send returns `ZLINK_SUBMIT_NOT_SUPPORTED` with `ENOTSUP` and ID `0`,
-  and consumes its input. The rejected bytes are not transmitted, and the next `FINAL` send
-  succeeds independently.
-- Sending a zero-length part to a valid target routing ID requests peer
-  connection termination and consumes the part.
-- Success and failure both consume `part_` and leave it empty and initialized.
-- `NONE FINAL` snapshots `SNDTIMEO`, waits for same-logical-RID local admission, and finishes with
+- If `part_count_ != 1`, the call returns `ZLINK_SUBMIT_NOT_SUPPORTED` with `ENOTSUP` and ID `0`,
+  consumes every input slot, and transmits no bytes.
+- Sending one zero-length part to a valid target routing ID requests peer connection termination.
+- Success and failure both consume every input slot and leave it empty and initialized.
+- `NONE` snapshots `SNDTIMEO`, waits for same-logical-RID local admission, and finishes with
   ID `0` and no completion.
-- A `DONTWAIT FINAL` admitted immediately has ID `0` and no completion. If it is refused because
+- A `DONTWAIT` call admitted immediately has ID `0` and no completion. If it is refused because
   of HWM, credit, or a connection that is not ready, it returns `ZLINK_SUBMIT_BACKPRESSURED` with
   `EAGAIN` and a nonzero wait token for that RID, and the payload is not retained.
 - When the same RID gains write credit, exactly one `ZLINK_COMPLETION_WRITABLE` record
@@ -497,12 +491,12 @@ item maps to one test.
 - If the connection cannot be found, the result is `ZLINK_SUBMIT_NOT_CONNECTED` immediately with
   ID `0` and no token.
 
-**Raw part receive**
+**Raw receive**
 
-- On success, ownership of the part transfers to the caller, which must call
-  `zlink_msg_close` exactly once. A failure before a part is received does not
-  transfer ownership.
-- A successful RAW receive sets `*has_more_out_` to `ZLINK_PART_FINAL`.
+- On success, `*part_count_out_ == 1` and ownership of the first slot transfers to the caller, which
+  releases it with `zlink_multipart_close()`. Failure does not transfer ownership.
+- If `parts_capacity_ < 1`, the call returns the needed count `1` and
+  `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS` without consuming the record.
 - DONTWAIT or a `NONE` timeout with no data returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
 - The borrowed view from `source_rid_out_` remains valid until entry to the next data recv on the
   same socket or close; poller, completion, and monitor recv and data recv on another socket do not

@@ -8,7 +8,7 @@ package completiontest
 
 /*
 #cgo CFLAGS: -I../../../include
-#cgo LDFLAGS: -Wl,--wrap=zlink_completion_recv -Wl,--wrap=zlink_send_part -Wl,--wrap=zlink_send_part_rid -Wl,--wrap=zlink_request_part
+#cgo LDFLAGS: -Wl,--wrap=zlink_completion_recv -Wl,--wrap=zlink_send -Wl,--wrap=zlink_send_rid -Wl,--wrap=zlink_request
 #include <stdint.h>
 #include <stdlib.h>
 void fixture_start(void *socket);

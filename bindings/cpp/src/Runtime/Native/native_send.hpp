@@ -19,10 +19,8 @@ template <typename NativeSubmit>
 inline submit_result_t submit_received_parts_restore (std::vector<message_t> &parts_,
                                                       NativeSubmit submit_)
 {
-    return static_cast<submit_result_t> (detail::submit_message_parts (
-      parts_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
-          return submit_ (part_out_, part_flag_, part_flag_ == ZLINK_PART_FINAL);
-      }));
+    return static_cast<submit_result_t> (
+      detail::submit_message_parts (parts_, std::move (submit_)));
 }
 
 template <typename NativeSubmit>
@@ -30,10 +28,8 @@ inline bool submit_received_send_parts (std::vector<message_t> &send_parts_,
                                         send_flags_t flags_,
                                         NativeSubmit submit_)
 {
-    const submit_result_t result = detail::submit_received_parts_restore (
-      send_parts_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
-          return submit_ (part_out_, part_flag_);
-      });
+    const submit_result_t result =
+      detail::submit_received_parts_restore (send_parts_, std::move (submit_));
     if (result == submit_result_t::ok)
         return true;
 
@@ -48,10 +44,8 @@ inline void submit_received_reply_parts (std::vector<message_t> &reply_parts_,
                                          NativeSubmit submit_)
 {
     detail::throw_if_reply_flags_unsupported (flags_);
-    const submit_result_t result = detail::submit_received_parts_restore (
-      reply_parts_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
-          return submit_ (part_out_, part_flag_);
-      });
+    const submit_result_t result =
+      detail::submit_received_parts_restore (reply_parts_, std::move (submit_));
     if (result != submit_result_t::ok)
         throw submit_error_t (result, zlink_errno ());
 }

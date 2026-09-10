@@ -92,7 +92,7 @@ The Java package structure meets these conditions.
 - a factory returns a contract type and hides the runtime class;
 - a public contract file does not import `systems.zlink.runtime.*`;
 - samples, perf runners, and tests do not import runtime packages;
-- native handles, raw part loops, completion-drain state, and native struct mirrors remain outside public
+- native handles, whole-message array handling, completion-drain state, and native struct mirrors remain outside public
   contract source.
 
 The contract/runtime split applies at resource boundaries as well as helper boundaries.
@@ -535,8 +535,7 @@ classes are not part of the target contract.
 ## Contract File Requirements
 
 Contract files must be readable without knowing Panama, JNI, native handles,
-native struct layouts, the completion registry, or raw
-`*_part` loops.
+native struct layouts, the completion registry, or whole-message array handling.
 
 Contract files may import:
 
@@ -582,7 +581,7 @@ Runtime owns:
 - message marshalling;
 - socket-local completion operation state and drain owner;
 - receive cursors;
-- part-loop sequencing;
+- whole-message array marshalling;
 - native error mapping;
 - typed option mapping;
 - native resource adoption and release;
@@ -618,8 +617,9 @@ A typed socket contract adds only behavior meaningful for that socket type:
 - `XSubSocket`: send and subscription control defined by the public binding contract.
 - `StreamSocket`: RAW recv, PACKET recv, stream send, actor gateway, and bound-actor operations.
 
-Protocol envelope helpers, raw native part submission, and native routing-ID pointers are not public
-contract members.
+The runtime makes one Core whole-message call per record and manages the native
+part array and count internally. Protocol envelope helpers and native routing-ID
+pointers are not public contract members.
 
 ## Operation Builder Shape
 
@@ -928,7 +928,7 @@ The Java binding maintains these boundaries:
    contract interfaces.
 6. Native-backed resources have no direct public constructors.
 7. Runtime/nativeapi or runtime support classes own native handles, Panama/JNI calls, completion drain,
-   marshalling helpers, and part loops.
+   marshalling helpers, and whole-message array handling.
 8. Samples, perf, tests, and documentation examples import only
    `systems.zlink.contracts.*`.
 9. Compatibility aliases and deprecated wrappers for a direct-concrete shape are not part of the
@@ -951,7 +951,7 @@ The Java binding is aligned only when all items are true:
 - Contract files, except narrowly justified factory wiring, do not import
   `systems.zlink.runtime.*`.
 - Public signatures do not mention native handles, Panama memory segments,
-  native bridge types, completion-registry state, or raw part loops.
+  native bridge types, completion-registry state, or whole-message array handling.
 - DTO/value/record/enum/result/exception types remain concrete.
 - Operation builders are public contracts and hide staged state.
 - Samples, perf, tests, and applications import only

@@ -71,6 +71,7 @@ pub struct Received {
     route: Option<ReceivedRoute>,
     reply_token: Option<ReplyToken>,
     receive_scratch: Vec<Message>,
+    native_receive_scratch: Vec<crate::ffi::zlink_msg_t>,
 }
 
 impl Default for Received {
@@ -87,11 +88,14 @@ impl Received {
             route: None,
             reply_token: None,
             receive_scratch: Vec::new(),
+            native_receive_scratch: Vec::new(),
         }
     }
 
-    pub(crate) fn receive_scratch(&mut self) -> &mut Vec<Message> {
-        &mut self.receive_scratch
+    pub(crate) fn receive_scratch(
+        &mut self,
+    ) -> (&mut Vec<Message>, &mut Vec<crate::ffi::zlink_msg_t>) {
+        (&mut self.receive_scratch, &mut self.native_receive_scratch)
     }
 
     pub(crate) fn replace_received_parts(&mut self, routing_id: Option<RoutingId>) {

@@ -43,12 +43,11 @@ transport connection 하나를 나타내는 내부 객체다. Engine과 session�
 
 ## 4. Multipart atomicity
 
-여러 frame(part)을 하나의 논리적 message로 묶어 보내는 multipart send sequence는 하나의
+여러 frame(part)을 하나의 논리적 message로 묶은 multipart 배열은 한 번의 호출과 하나의
 논리적 queue operation으로 유지된다. message를 주고받는 endpoint인
-[socket](../glossary.ko.md#socket) 종류별 send code는 이 sequence를 시작부터 끝까지 하나의
-단위로 다루는 처리를 공통 multipart 경로에 맡긴다. sequence가 중간에 실패하면 공통 경로가
-아직 보내지 않은 나머지 part를 정리하므로, 각 socket 종류의 send code가 그 정리를 따로
-구현하지 않아도 된다.
+[socket](../glossary.ko.md#socket) 종류별 send code는 배열 전체의 admission과 ownership 처리를
+공통 multipart 경로에 맡긴다. 호출이 실패하면 공통 경로가 모든 입력 슬롯을 소비하고 peer에는
+어떤 part도 공개하지 않으므로 각 socket 종류의 send code가 부분 제출 정리를 따로 구현하지 않는다.
 
 ## 5. Typed socket surface
 

@@ -45,49 +45,41 @@ zlink_bind(router, "tcp://*:5558");
 
 ### 메시지 수신
 
-`zlink_router_recv_part()`는 payload를 part 단위로 반환한다. Routing id view는 같은
+`zlink_router_recv()`는 payload record 전체를 caller가 제공한 배열에 반환한다. Routing id view는 같은
 socket에서 다음 data receive 함수에 진입하기 전까지만 유효하다. 그 이후에도 사용해야
 하면 복사한다.
 
 ```c
 const zlink_routing_id_t *source_rid = NULL;
 zlink_reply_token_t reply_token = 0;
-zlink_msg_t part;
-zlink_part_flag_t more;
-
-zlink_msg_init(&part);
-zlink_recv_result_t rc = zlink_router_recv_part(
-    router, &source_rid, &reply_token, &part, &more, ZLINK_RECV_FLAGS_NONE);
+zlink_msg_t parts[8];
+size_t part_count = 0;
+zlink_recv_result_t rc = zlink_router_recv(
+    router, &source_rid, &reply_token, parts, 8, &part_count, ZLINK_RECV_FLAGS_NONE);
 if (rc == ZLINK_RECV_OK) {
-    /* source_rid는 peer를 식별하고, more == ZLINK_PART_MORE이면 같은
-       record의 다음 part가 이어진다. */
-    zlink_msg_close(&part);
+    /* source_rid는 peer를 식별한다. 배열 전체를 처리한 뒤 닫는다. */
+    zlink_multipart_close(parts, part_count);
 }
 /* 그 밖의 rc 값: ZLINK_RECV_NO_DATA (EAGAIN), TERMINATED, INVALID_HANDLE */
 ```
 
-일반 routed DATA에서는 `reply_token`이 0이다. 0이 아닌 token은 `zlink_send_part_rid()`가
-아니라 `zlink_reply_part()`([§4](#4-request와-reply) 참고)로 응답해야 하는 REQUEST다.
+일반 routed DATA에서는 `reply_token`이 0이다. 0이 아닌 token은 `zlink_send_rid()`가
+아니라 `zlink_reply()`([§4](#4-request와-reply) 참고)로 응답해야 하는 REQUEST다.
 Application은 token을 해석하지 않는다.
 
 ### Routed message 송신
 
-`zlink_send_part_rid()`는 `target_rid_`가 지정하는 peer에게 part 하나를 보낸다. 마지막
-전 part에는 `ZLINK_PART_MORE`, 마지막 part에는 `ZLINK_PART_FINAL`을 사용한다. 한 record의
-모든 part는 같은 target을 써야 한다.
+`zlink_send_rid()`는 `target_rid_`가 지정하는 peer에게 part 배열 전체를 record 하나로 보낸다.
 
 ```c
-zlink_msg_t header, body;
-zlink_msg_init_size(&header, 6);
-memcpy(zlink_msg_data(&header), "header", 6);
-zlink_msg_init_size(&body, 4);
-memcpy(zlink_msg_data(&body), "body", 4);
+zlink_msg_t parts[2];
+zlink_msg_init_size(&parts[0], 6);
+memcpy(zlink_msg_data(&parts[0]), "header", 6);
+zlink_msg_init_size(&parts[1], 4);
+memcpy(zlink_msg_data(&parts[1]), "body", 4);
 
-zlink_submit_result_t rc = zlink_send_part_rid(
-    router, source_rid, &header, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL);
-if (rc == ZLINK_SUBMIT_OK)
-    rc = zlink_send_part_rid(
-        router, source_rid, &body, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
+zlink_submit_result_t rc = zlink_send_rid(
+    router, source_rid, parts, 2, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
 ```
 
 ## 3. 옵션
@@ -129,8 +121,8 @@ zlink_set_router_option(router, ZLINK_ROUTER_OPT_MANDATORY, &mandatory, sizeof(m
 zlink_msg_t part;
 zlink_msg_init_size(&part, 4);
 memcpy(zlink_msg_data(&part), "data", 4);
-zlink_submit_result_t rc = zlink_send_part_rid(
-    router, target_rid, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
+zlink_submit_result_t rc = zlink_send_rid(
+    router, target_rid, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
 /* MANDATORY가 켜져 있으므로 rc == ZLINK_SUBMIT_NOT_CONNECTED */
 ```
 
@@ -149,10 +141,10 @@ zlink_connect(router, "tcp://127.0.0.1:5559");
 
 ## 4. Request와 reply
 
-`zlink_request_part()`는 routed request를 제출하고 0이 아닌 completion ID를 반환한다. Reply
+`zlink_request()`는 routed request를 제출하고 0이 아닌 completion ID를 반환한다. Reply
 또는 terminal 결과는 일반 DATA receive가 아니라 `zlink_completion_recv()`로 pull한다.
 수신한 REQUEST(0이 아닌 reply token)는 receive 결과가 반환한 source RID와 token을 사용해
-`zlink_reply_part()`로 응답한다.
+`zlink_reply()`로 응답한다.
 
 ```c
 zlink_msg_t req;
@@ -160,8 +152,8 @@ zlink_msg_init_size(&req, 4);
 memcpy(zlink_msg_data(&req), "ping", 4);
 
 zlink_completion_id_t id = 0;
-zlink_submit_result_t rc = zlink_request_part(
-    router, peer_rid, &req, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
+zlink_submit_result_t rc = zlink_request(
+    router, peer_rid, &req, 1, ZLINK_SEND_FLAGS_NONE,
     0 /* ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS 사용 */, NULL, &id);
 if (rc == ZLINK_SUBMIT_OK) {
     zlink_completion_t completion = {0};
@@ -177,25 +169,24 @@ if (rc == ZLINK_SUBMIT_OK) {
 ```c
 const zlink_routing_id_t *source_rid = NULL;
 zlink_reply_token_t reply_token = 0;
-zlink_msg_t part;
-zlink_part_flag_t more;
-
-zlink_msg_init(&part);
-zlink_router_recv_part(router, &source_rid, &reply_token, &part, &more, ZLINK_RECV_FLAGS_NONE);
+zlink_msg_t parts[8];
+size_t part_count = 0;
+zlink_router_recv(router, &source_rid, &reply_token,
+                  parts, 8, &part_count, ZLINK_RECV_FLAGS_NONE);
 
 if (reply_token != 0) {
     /* 이 record는 directed send가 아니라 reply를 기대한다. */
     zlink_msg_t reply;
     zlink_msg_init_size(&reply, 5);
     memcpy(zlink_msg_data(&reply), "World", 5);
-    zlink_reply_part(router, source_rid, reply_token, &reply, ZLINK_PART_FINAL);
+    zlink_reply(router, source_rid, reply_token, &reply, 1);
 }
-zlink_msg_close(&part);
+zlink_multipart_close(parts, part_count);
 ```
 
 DEALER peer로 보내는 reply는 DEALER-ROUTER Application connection의 FIFO, HWM과 PAUSED
 state를 공유하므로 `ZLINK_SUBMIT_BACKPRESSURED`가 될 수 있다. ROUTER peer로 보내는 reply는
-ROUTER-ROUTER Completion lane을 사용한다. 성공한 FINAL만 reply token을 소비하며 request
+ROUTER-ROUTER Completion lane을 사용한다. 성공한 reply 제출만 token을 소비하며 request
 lifecycle이 유효하면 실패한 완전한 시도를 재시도할 수 있다.
 
 > 참고: `core/tests/integration/test_zmp_request_reply.cpp`,
@@ -225,7 +216,7 @@ zlink_set_routing_id(dealer2, "D2", 2);
 zlink_connect(dealer2, endpoint);
 
 /* router의 recv는 source_rid로 "D1"과 "D2"를 구분하고,
-   zlink_send_part_rid(router, source_rid, ...)로 해당 peer에만 응답한다. */
+   zlink_send_rid(router, source_rid, ...)로 해당 peer에만 응답한다. */
 ```
 
 > 참고: `core/tests/integration/test_router_multiple_dealers.cpp`
@@ -233,7 +224,7 @@ zlink_connect(dealer2, endpoint);
 ### 패턴 2: 상관관계가 있는 request-reply
 
 호출자가 자유 형식 send/recv 대신 전달 확인과 상관된 응답이 필요할 때
-`zlink_request_part()` / `zlink_reply_part()`([§4](#4-request와-reply) 참고)를 사용한다.
+`zlink_request()` / `zlink_reply()`([§4](#4-request와-reply) 참고)를 사용한다.
 Completion ID가 origin 결과를 상관시키고, 불투명한 0이 아닌 reply token이 responder에게
 REQUEST 하나를 응답할 권한을 준다. 일반 DATA의 token은 `0`이다.
 
@@ -261,10 +252,10 @@ ROUTER를 frontend로, DEALER를 backend로 써서 멀티스레드 서버를 구
 
 ### Routing ID 수명
 
-`zlink_router_recv_part()`가 반환하는 `source_rid`는 socket-owned view다. 같은 socket의
+`zlink_router_recv()`가 반환하는 `source_rid`는 socket-owned view다. 같은 socket의
 다음 data receive 진입 전까지만 유효하며 성공 여부와 관계없이 무효화되므로, 그 이후에도
-id가 필요하면 byte를 복사한다. 한 multipart record의 모든 part는 같은 routing id와 reply
-token을 반환한다. 전체 수명·복사 규칙은 [Routing ID](08-routing-id.ko.md)를 참고한다.
+id가 필요하면 byte를 복사한다. Record 전체와 함께 routing id와 reply token 하나를 반환한다.
+전체 수명·복사 규칙은 [Routing ID](08-routing-id.ko.md)를 참고한다.
 
 ### peer 없음 vs HWM 배압
 
@@ -275,7 +266,7 @@ DEALER와 마찬가지로 둘은 별개의 결과다. `ZLINK_ROUTER_OPT_MANDATOR
 
 ### Logical RID 지정
 
-`zlink_send_part_rid()`와 `zlink_request_part()`는 logical routing id만 받는다. Physical pair
+`zlink_send_rid()`와 `zlink_request()`는 logical routing id만 받는다. Physical pair
 ID와 generation은 public send selector가 아니다. Core가 DONTWAIT record를 admission 전에
 보관하면 transient reconnect 동안 같은 logical RID를 유지하고 completion ID로 terminal을
 보고한다. Local admission 뒤에는 새 connection에 payload를 replay하지 않는다.
@@ -284,9 +275,8 @@ ID와 generation은 public send selector가 아니다. Core가 DONTWAIT record�
 
 ROUTER의 public handle은 [Thread Safety](../spec/core/systems/04-thread-safety.ko.md)가
 설명하는 계층적 동시성 계약을 따른다. send/publish 경로는 같은 handle의 동시 사용을
-허용하지만, 옵션 변경과 close는 정확성을 위해 직렬화된다. 하나의 handle에는 열린
-multipart send sequence(`ZLINK_PART_MORE` ... `ZLINK_PART_FINAL`)가 한 번에 하나만
-진행될 수 있으며, 다음 sequence를 시작하기 전에 같은 routing id 계열로 완료돼야 한다.
+허용하지만, 옵션 변경과 close는 정확성을 위해 직렬화된다. 각 send 호출은 완성된 record
+하나를 원자적으로 제출하므로 여러 thread가 같은 handle에 독립된 record를 제출할 수 있다.
 
 ---
 [← DEALER](03-3-dealer.ko.md) | [STREAM →](03-5-stream.ko.md)

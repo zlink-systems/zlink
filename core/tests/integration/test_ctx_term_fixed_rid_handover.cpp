@@ -85,8 +85,7 @@ void send_marker (void *dealer_, char marker_)
     zlink_msg_t msg;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&msg, 1));
     *static_cast<char *> (zlink_msg_data (&msg)) = marker_;
-    const zlink_submit_result_t rc = zlink_send_part (
-      dealer_, &msg, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL, NULL);
+    const zlink_submit_result_t rc = zlink_send (dealer_, &msg, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL, NULL);
     if (rc != ZLINK_SUBMIT_OK)
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
 }
@@ -95,17 +94,16 @@ bool recv_marker (void *router_, char marker_)
 {
     const zlink_routing_id_t *source = NULL;
     zlink_reply_token_t token = 0;
-    zlink_part_flag_t part_flag = ZLINK_PART_MORE;
+    size_t part_flag = 0;
     zlink_msg_t msg;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
-    const zlink_recv_result_t rc = zlink_router_recv_part (
-      router_, &source, &token, &msg, &part_flag, ZLINK_RECV_FLAGS_NONE);
+    const zlink_recv_result_t rc = zlink_router_recv (router_, &source, &token, &msg, 1, &part_flag, ZLINK_RECV_FLAGS_NONE);
     bool matched = false;
     if (rc == ZLINK_RECV_OK) {
         TEST_ASSERT_NOT_NULL (source);
         TEST_ASSERT_EQUAL_UINT8 (strlen (fixed_rid), source->size);
         TEST_ASSERT_EQUAL_MEMORY (fixed_rid, source->data, source->size);
-        TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, part_flag);
+        TEST_ASSERT_EQUAL_INT (1, part_flag);
         matched = zlink_msg_size (&msg) == 1
                   && *static_cast<const char *> (zlink_msg_data (&msg))
                        == marker_;

@@ -32,9 +32,7 @@ zlink_submit_result_t submit (void *client_, char payload_,
 {
     zlink_msg_t msg;
     message (&msg, payload_);
-    const zlink_submit_result_t rc = zlink_request_part (
-      client_, NULL, &msg, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
-      request_timeout_ms, NULL, id_);
+    const zlink_submit_result_t rc = zlink_request (client_, NULL, &msg, 1, ZLINK_SEND_FLAGS_DONTWAIT, request_timeout_ms, NULL, id_);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
     TEST_ASSERT_TRUE (rc == ZLINK_SUBMIT_OK || rc == ZLINK_SUBMIT_BACKPRESSURED);
     TEST_ASSERT_NOT_EQUAL (0, *id_);
@@ -66,9 +64,8 @@ bool receive_request (void *server_, char expected_, bool reply_)
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
     const zlink_routing_id_t *source = NULL;
     zlink_reply_token_t token = 0;
-    zlink_part_flag_t more = ZLINK_PART_MORE;
-    const zlink_recv_result_t rc = zlink_router_recv_part (
-      server_, &source, &token, &msg, &more, ZLINK_RECV_FLAGS_DONTWAIT);
+    size_t more = 0;
+    const zlink_recv_result_t rc = zlink_router_recv (server_, &source, &token, &msg, 1, &more, ZLINK_RECV_FLAGS_DONTWAIT);
     if (rc == ZLINK_RECV_NO_DATA) {
         zlink_msg_close (&msg);
         return false;
@@ -76,14 +73,13 @@ bool receive_request (void *server_, char expected_, bool reply_)
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, rc);
     TEST_ASSERT_NOT_NULL (source);
     TEST_ASSERT_NOT_EQUAL (0, token);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
+    TEST_ASSERT_EQUAL_INT (1, more);
     TEST_ASSERT_EQUAL_UINT64 (1, zlink_msg_size (&msg));
     TEST_ASSERT_EQUAL_MEMORY (&expected_, zlink_msg_data (&msg), 1);
     zlink_msg_close (&msg);
     if (reply_) {
         message (&msg, expected_);
-        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_reply_part (
-          server_, source, token, &msg, ZLINK_PART_FINAL));
+        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_reply (server_, source, token, &msg, 1));
         zlink_msg_close (&msg);
     }
     return true;

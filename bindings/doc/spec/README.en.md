@@ -27,8 +27,8 @@ title: "Bindings API Policy"
 | [Binding Runtime Category Policy](#binding-runtime-category-policy) | Runtime category classification |
 | [Actor/Spot Route Surface](#actorspot-route-surface) | Route lookup result types, and Actor-targeted send/request |
 | [High-Performance Binding Policy](#high-performance-binding-policy) | Hot-path constraints |
-| [Substrate vs Public Binding Surface](#substrate-vs-public-binding-surface) | The boundary between the part substrate and the aggregate public surface |
-| [`*_part` Substrate Usage Requirement (Required)](#_part-substrate-usage-requirement-required) | Why an aggregate implementation must use the `*_part` API |
+| [Core Whole-Message API and Public Binding Surface](#core-whole-message-api-and-public-binding-surface) | The boundary between Core's array API and the public surface |
+| [Whole-Message API Usage Requirement (Required)](#whole-message-api-usage-requirement-required) | The internal array-and-count rule |
 | [Spot Get-Or-Create Mapping](#spot-get-or-create-mapping) | The `zlink_spot_node_spot_get_or_new` mapping rule |
 | [Public vs Internal API Boundary](#public-vs-internal-api-boundary) | The contract/runtime separation principle and its test |
 | [Core Alignment Rules](#core-alignment-rules) | Alignment rules against the core contract |
@@ -536,10 +536,9 @@ principles below.
   on the callback, dispatch, poller, timer, or request-completion
   progress path. Only a call explicitly documented as a blocking API may
   wait.
-- A binding uses core's `*_part` substrate to build language objects part
-  by part. Double materialization — building a native aggregate array and
-  then converting it again into a language-specific collection — is
-  forbidden.
+- A binding passes a reusable native array and count to the Core whole-message
+  API. It moves received slots directly into language-owned `Message` objects
+  without creating another intermediate collection with the same content.
 - Perf, sample, and test code used for performance verification must also
   use only the public binding entrypoint, and must not break the cost
   model above.
@@ -549,60 +548,23 @@ recommendation — it's a public binding conformance requirement. If review
 finds a reflection hot path, unnecessary allocation/copy, thread
 contention, or a hidden wait, that binding is considered non-compliant.
 
-## Substrate vs Public Binding Surface
+## Core Whole-Message API and Public Binding Surface
 
-A bindings implementation sits on top of the helper substrate C API core
-provides (the `*_part` family). The public API exposed to a bindings user
-does not have to follow that helper's signature shape. What is fixed by
-the rule below is which core functions the internal implementation is
-allowed to call.
+A binding runtime uses the whole-message API in `core/include/zlink.h` as its
+internal foundation. A send, request, reply, or publish builder submits every
+collected part in one call with an array and count. Receive, routed receive,
+and subscribe pass a caller-provided array, capacity, and count to receive the
+complete record. When the array is too small, the runtime grows it to the
+required count after `ZLINK_RECV_BUFFER_TOO_SMALL` and retries the same record.
 
-This document interprets the following boundary:
-
-- The `*_part` helper substrate contract in `core/include/zlink.h` is the
-  native substrate a bindings implementation must use.
-- A document under `doc/spec/bindings/` defines only the
-  **public convenience contract** each language binding provides
-  externally.
-
-In other words, the binding's public API can look different from the
-helper substrate. But how it calls core internally must not differ.
-
-For example, the following structure is required.
-
-- The core substrate has a primitive surface such as `*_part`,
-  `has_more`, and a caller-provided `zlink_msg_t`.
-- Java, `.NET`, `Go`, `Rust`, `Python`, `Node`, `C++`, and C bindings
-  layer a language-friendly public API on top — `Received`, `Message`,
-  collections, and request/reply convenience.
-- Any path inside the public API that calls core directly must use the
-  `*_part` substrate. It must not call an aggregate-shaped core function
-  (`zlink_send`, `zlink_recv`, `zlink_publish`, and so on) from inside a
-  binding.
-
-The following conditions must always hold:
-
-- A binding's public API semantic contract must be explainable in terms
-  of the core contract.
-- A binding must not directly expose a low-level detail that exists only
-  in the helper substrate.
-- A binding must not expose part-by-part receive as a public binding
-  API, such as `RecvPart`, `RecvRoutedPart`, `SubscribePart`,
-  `recv_part`, `recv_routed_part`, or `subscribe_part`. The binding
-  runtime absorbs the part loop, `has_more`, request sequence, and reply
-  context into an aggregate result storage internally.
-- A document under `doc/spec/bindings/` does not document the helper
-  substrate signature itself as a public contract.
-- The helper substrate is treated only as a foundation layer for
-  bindings implementation and performance optimization.
-
-In other words, the bindings policy documents are governed not by "what
-the helper looks like" but by "what public contract a binding user
-ultimately sees."
+The public `Received`, `Message`, collection, and request/reply builder shapes
+for Java, .NET, Go, Rust, Python, Node, and C++ stay unchanged. Native arrays,
+capacity growth, and retry remain inside the runtime. The C binding uses the
+array-based `zlink.h` ABI directly.
 
 ### Request-Reply Protocol Metadata Boundary
 
-A binding passes only application payload to the request and reply `*_part` APIs. Core owns the ZMP
+A binding passes only application payload arrays to the request and reply whole-message APIs. Core owns the ZMP
 kind, wire sequence, and header extension, so a binding neither constructs a protocol envelope nor
 header nor adds one as a payload part. If an application supplies N multipart request or reply
 parts, its handler and completion also observe exactly N application parts.
@@ -617,11 +579,11 @@ Public receive and request completion aggregate only payload after Core removes 
 metadata. A binding neither reads ZMP kind from a raw message nor exposes it as a public metadata
 field.
 
-## `*_part` Substrate Usage Requirement (Required)
+## Whole-Message API Usage Requirement (Required)
 
-The internal implementation of the send, request, reply, publish, and
-subscribe function families must use core's `*_part` helper substrate.
-This is a `Required` rule.
+The internal implementation of send, request, reply, publish, and receive
+families must make one Core whole-message call per record. This is a
+`Required` rule.
 
 ### Scope
 
@@ -635,27 +597,14 @@ following families.
 - publish
 - subscribe (including SPOT subscribe)
 
-### Reason
+### Array Handling
 
-Back when core provided both aggregate functions and the `*_part`
-substrate, calling the aggregate function directly was allowed. But that
-structure creates the following cost:
-
-- Core first builds a native aggregate (a parts array).
-- The binding then converts that aggregate again into a language-specific
-  object (`Message[]`, `Received`, a value object).
-- The result is a back-to-back "build the native aggregate → build the
-  language-object aggregate" sequence, and this double-conversion cost
-  becomes a real bottleneck on the hot path.
-
-Using the `*_part` substrate directly lets a binding convert each part
-straight into a language object one at a time, eliminating the native
-aggregate-construction step entirely. This produces a measurable
-performance difference especially in languages like Java and .NET, where
-object materialization is expensive.
-
-This rule is not for the sake of structural tidiness — it is a
-requirement meant to **substantially reduce runtime performance cost**.
+- A send family materializes builder payloads in a reusable native array and
+  submits it once.
+- A receive family passes a reusable caller array. If capacity is insufficient,
+  it grows the array to the required count and retries the unconsumed record.
+- Successful receive slots move into language-owned objects without copying an
+  intermediate aggregate.
 
 ### The Public API Shape Stays The Same
 
@@ -665,21 +614,14 @@ regardless of this rule.
 
 - A user still uses a language-friendly API such as
   `send(List<Message>)`, `recv()`, or `request(...)`.
-- The `*_part` call sequence is a binding-internal implementation detail
-  and is not exposed to the user.
 - A public binding's receive surface offers only an aggregate
-  result-storage API such as `recv`, `subscribe`, or `recvRouted`. The
-  `RecvPart`/`SubscribePart` family is a name for the performance
-  optimization substrate, not a public contract name.
+  result-storage API such as `recv`, `subscribe`, or `recvRouted`.
 
-### Multipart attempt serialization
+### Multipart Submission
 
-Because each part call has a separate public API scope, a binding holds a socket-local attempt gate
-only for one `DONTWAIT` attempt from the first part through FINAL. On failure, it releases the gate
-immediately after Core rolls back the sequence and does not hold it while waiting for
-`BACKPRESSURED` readiness. Request submit also makes one attempt from the first request part through
-FINAL under the same short socket-local attempt gate as raw send. This gate is neither a new Core
-multipart API nor a public FIFO contract.
+One Core call atomically submits the complete record, so a binding does not add
+a socket-local gate for a part sequence. Independent concurrent records follow
+Core's same-handle concurrency contract.
 
 ## Spot Get-Or-Create Mapping
 
@@ -710,17 +652,13 @@ normal Spot lifetime rules.
 
 Confirm the following during implementation review and verification.
 
-- No path in the binding source directly calls an aggregate symbol
-  (`zlink_send`, `zlink_recv`, `zlink_send_rid`, `zlink_publish`,
-  `zlink_subscribe`, `zlink_router_recv`, `zlink_dealer_request`,
-  `zlink_router_request`, `zlink_router_reply`, `zlink_spot_send_*`,
-  `zlink_spot_request_*`, `zlink_spot_reply_*`, `zlink_spot_subscribe`,
-  and so on).
-- The matching `*_part` symbol is used instead
-  (`zlink_send_part`, `zlink_recv_part`, `zlink_send_part_rid`,
-  `zlink_publish_part`, `zlink_subscribe_part`, `zlink_router_recv_part`,
-  `zlink_dealer_request_part`, `zlink_router_request_part`,
-  `zlink_router_reply_part`, `zlink_spot_*_part`, and so on).
+- Raw-socket paths in binding source use `zlink_send`, `zlink_send_rid`,
+  `zlink_request`, `zlink_reply`, `zlink_publish`, `zlink_recv`,
+  `zlink_router_recv`, `zlink_subscribe`, and `zlink_xpub_recv` according to
+  their contracts.
+- Send families make one native call per record. Receive families pass an array
+  and capacity for the complete record and grow to the required count before
+  retrying on `ENOBUFS`.
 - Non-compliance blocks the review.
 
 ## Public vs Internal API Boundary
@@ -829,7 +767,7 @@ implementation.
 | A public builder convenience method or helper | The matching category in public contract source |
 | A DTO, value object, enum, or public error/result type | The matching category in public contract source |
 | A runtime concrete class, socket kernel, or handle owner | The matching category in runtime/internal source |
-| A request progress pump, callback trampoline, or part-loop helper | The matching category in runtime/internal source |
+| A request progress pump, callback trampoline, or whole-message array helper | The matching category in runtime/internal source |
 | A native handle wrapper, FFI declaration, struct mirror, or marshalling helper | Native bridge source |
 | Generated native loading code, platform artifact lookup | Native bridge source |
 
@@ -1067,25 +1005,24 @@ to it.
 ### The Send/Recv Public Shape Is Fixed
 
 The public `send`/`recv` shape of the bindings is not something to
-redecide every time the substrate helper's shape changes. It is fixed to
+redecide every time the Core ABI changes. It is fixed to
 the public shape this document and each per-language binding spec
 define.
 
-In other words, even if the helper substrate's shape changes — `*_part`,
-`has_more`, caller-provided message storage — the binding's public API
-must keep the following principles.
+In other words, even if Core's whole-message array, count, and capacity
+shape changes, the binding's public API must keep the following principles.
 
 - A binding user sees the `send`, `recv`, request/reply, and callback
   shape defined in the language document.
 - Multipart can continue to be offered through whatever aggregate
   convenience model each language document defines.
-- A binding's public `send`/`recv` shape must not be shaken up just
-  because the helper substrate changed.
+- A binding's public `send`/`recv` shape must not be changed just
+  because the Core ABI changed.
 - Changing the public shape must be treated as a public API change
-  separate from introducing the helper, and the `doc/spec/bindings/`
+  separate from a Core ABI change, and the `doc/spec/bindings/`
   document must be updated first.
 
-In other words, even if a helper C API is introduced going forward, a
+In other words, even if the Core C API changes, a
 binding's `send`/`recv` is "the implementation foundation changing," not
 "the shape the user sees changing automatically."
 
@@ -1162,8 +1099,8 @@ are examples keyed on the `Received` result type; `TopicMessage` and
 | Rust | `pub fn recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>;` `pub fn subscribe(&self, out: &mut TopicMessage, flags: RecvFlags) -> Result<bool, RecvError>;` `pub fn receive_subscription_event(&self, out: &mut SubscriptionEvent, flags: RecvFlags) -> Result<bool, RecvError>;` |
 
 A C ABI binding is not in scope for this section. The C binding exposes
-`zlink.h`'s typed substrate (`zlink_router_recv_part`,
-`zlink_subscribe_part`, and so on) as-is.
+`zlink.h`'s typed substrate (`zlink_router_recv`,
+`zlink_subscribe`, and so on) as-is.
 
 #### Unifying `Received` Envelope Meaning
 
@@ -1196,7 +1133,7 @@ The rules below are `Required`.
 
 The C ABI binding is an exception. C does not build a managed/object
 result storage; it exposes the same envelope components through typed
-out-params such as `zlink_router_recv_part()`, `zlink_spot_recv_part()`,
+out-params such as `zlink_router_recv()`, `zlink_spot_recv_part()`,
 and `zlink_dealer_recv_part()`. Do not add a public aggregate object such
 as `zlink_received_t` to C — doing so would grow message-part ownership,
 init/close/reset, and reply-context retention into a new public lifetime
@@ -1423,7 +1360,7 @@ is the baseline.
 - A binding must not publicly expose an `onSubscribe`-style direct topic
   callback for raw `SUB`, `XSUB`, or SPOT subscribe receive.
 - `ROUTER` inbound routed traffic is received through a single routed
-  recv surface. The binding runtime uses `zlink_router_recv_part()`
+  recv surface. The binding runtime uses `zlink_router_recv()`
   internally, and exposes only aggregate routed recv and the
   [common request completion surface](async-coroutine-policy.en.md#6-per-language-terminal-interfaces). It does not provide a
   direct receive callback.
@@ -1576,7 +1513,7 @@ A binding does not add Framework application-job queue counts to Core byte snaps
 
 A high-level binding connects native submission results to the language outcomes below. Native results,
 IDs, part consumption, and wait-token conditions belong to
-[Core part send](../../../core/doc/spec/core/socket/README.en.md#part-send-and-pending-admission) and
+[Core whole-message send](../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission) and
 [Core REQUEST DONTWAIT](../../../core/doc/spec/core/socket/README.en.md#request-and-reply).
 
 | Native submission result | High-level binding outcome |
@@ -1592,9 +1529,9 @@ IDs, part consumption, and wait-token conditions belong to
 
 Completion consumption and submit races follow the [async execution model's join contract](async-execution-model.en.md#5-joining-submit-results-and-completions).
 
-A binding that uses part-level Core APIs adds **no lock or gate of its own on the send path.**
-[Core part send](../../../core/doc/spec/core/socket/README.en.md#part-send-and-pending-admission)
-owns multipart atomicity, part consumption, and concurrent-submission results;
+A binding that uses Core's whole-message API adds **no lock or gate of its own on the send path.**
+[Core whole-message send](../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission)
+owns record atomicity, consumption of the complete array, and concurrent-submission results;
 [Core thread safety](../../../core/doc/spec/core/socket/README.en.md#2-thread-safety)
 owns the race between close and an in-flight submission. A binding whose public API preserves a
 message on failure submits an independently owned staging copy to Core to implement that contract.
@@ -1680,7 +1617,7 @@ Each binding maps HWM values as follows.
 
 - Send outcomes follow [Submit result projection](#submit-result-projection);
   `PollCompletion` and completion delivery follow the [async execution model](async-execution-model.en.md#4-pollers-and-completion-drain).
-  [Core part send](../../../core/doc/spec/core/socket/README.en.md#part-send-and-pending-admission)
+  [Core whole-message send](../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission)
   owns the relationship between raw `ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION`.
 - A binding must expose the peer-weight surface as a per-language typed
   option/property. It applies to `ROUTER` and `DEALER`; the value range
@@ -1689,7 +1626,7 @@ Each binding maps HWM values as follows.
   `ZLINK_SUBMIT_NOT_ADMITTED` (value 13), and it must be included in
   every binding's `SubmitError` mapping.
 - Core's raw `STREAM` can select only one of three receive modes at a
-  time: (a) blocking/non-blocking recv based on `zlink_recv_part()`,
+  time: (a) blocking/non-blocking recv based on `zlink_recv()`,
   (b) the raw direct callback `zlink_recv_handler()`, or (c) the packet
   callback `zlink_stream_packet_handler()`, which uses big-endian
   `u16 header_size + u32 body_size + header + body` framing. A second
@@ -1825,10 +1762,11 @@ placement follows the `Actor Dispatch Policy` section below.
   document body.
 
 ## Core Principles
-- The core contract's single baseline is `zlink.h`'s `*_part` substrate.
+- The core contract's single baseline is the whole-message API in `zlink.h`.
 - The internal implementation of the send/recv/request/reply/publish/
-  subscribe family must use the core `*_part` substrate. It does not call
-  an aggregate-shaped core function directly from inside a binding.
+  subscribe family calls Core once per record with an array and count. A
+  receive family grows an undersized array to the required capacity and
+  retries the same unconsumed record.
 - The public API is designed around a multipart model.
 - Blocking and non-blocking can be distinguished by name.
 - The same capability is not exposed redundantly through multiple paths.
@@ -2430,11 +2368,10 @@ Rules:
 
 #### `TopicMessage`
 
-The recv result for raw `SUB`/`XSUB` and `Spot subscribe`. Raw pub/sub
-wraps C API `zlink_subscribe_part()`, and Spot subscribe wraps
-`zlink_spot_subscribe_part()`, into a single binding domain object. The
-binding's public API assembles the part-helper call result into a
-per-language multipart object and returns it.
+The recv result for raw `SUB`/`XSUB` and `Spot subscribe`. Raw pub/sub wraps
+the complete payload array returned by C API `zlink_subscribe()`, while Spot
+subscribe wraps the result of `zlink_spot_subscribe_part()`. The binding's
+public API returns either result as one per-language multipart object.
 
 | Member | Type | Meaning |
 |------|------|------|
@@ -3039,7 +2976,7 @@ field meaning does not change.
 | `ActorRef` | `node_rid`, `actor_id`, `generation` |
 | `ActorRoute` | The routed target Actor, current Spot routing id, current Spot kind |
 | `ActorRecvInfo` | The receiving Actor, source node/session routing id, flags |
-| `ActorReceived` | `ActorRecvInfo` plus payload parts. The name can change per language convention, but the part-by-part loop and `has_more` are not exposed as public fields. In a language that owns the payload parts, expose it as a disposable envelope, not a cloneable record/value |
+| `ActorReceived` | `ActorRecvInfo` plus payload parts. The name can change per language convention, but the native array, capacity, and count are not exposed as public fields. In a language that owns the payload parts, expose it as a disposable envelope, not a cloneable record/value |
 | `ActorJoinInfo` + join message | The `source_actor`, `target_actor`, `source_node_rid`, `source_spot_rid`, `target_node_rid`, `target_spot_rid`, `join_epoch`, `flags`, and join message needed to judge and respond to a join request. Can be grouped into an `ActorJoinRequest` wrapper or a tuple/pair per language convention. A wrapper that owns the join message must be disposable. The native reply context is kept only inside the binding and is not exposed as a public field |
 | `ActorJoinResult` | Delivered on join completion. `result`, the final `actor` ref (the target node's ref for a remote join), `joined_spot_rid`, `join_epoch`, `flags` |
 | `ActorJoinEntrySpotResult` | Delivered on Entry Spot join completion. `result`, the final `actor` ref, `target_node_rid`, `join_epoch`, `flags`. No join message or reply payload |
@@ -3580,32 +3517,13 @@ SPOT pub/sub is a publish/subscribe model based on the channel a `Spot`
 handle belongs to and a `topic`. The publish caller does not pass the
 channel name as a separate argument.
 
-```c
-/* publish */
-zlink_submit_result_t zlink_spot_publish_part(void *spot,
-    const char *topic_id, zlink_msg_t *part, zlink_send_flags_t flags,
-    zlink_part_flag_t part_flag);
-
-/* subscribe receive */
-zlink_recv_result_t zlink_spot_subscribe_part(void *spot,
-    const zlink_routing_id_t **source_rid_out,
-    char *topic_id_buf, size_t topic_id_capacity,
-    size_t *topic_id_len_out, zlink_msg_t *part_out,
-    zlink_part_flag_t *has_more_out, zlink_recv_flags_t flags);
-
-/* subscription filter */
-zlink_config_result_t zlink_set_subscription(
-    void *handle,
-    const char *filter);
-zlink_config_result_t zlink_unset_subscription(
-    void *handle,
-    const char *filter);
-```
+The binding runtime submits the payload collected by a publish builder to Core
+once as an array and count. Subscribe receive also gets the topic and complete
+payload array in one Core call, then fills the language-level object.
 
 Binding rules:
-- The C API does not have a separate no-wait function name for publish.
-- A non-blocking publish calls
-  `zlink_spot_publish_part(..., ZLINK_DONTWAIT, ...)` and classifies
+- A binding does not have a separate no-wait function name for publish.
+- A non-blocking publish is selected through the builder flag and classifies
   errno into `zlink_submit_result_t`. A binding does not add a separate
   `tryPublish` or `publishNoWait`.
 - A `subscribe` receive is exposed as a typed receive surface that
@@ -3624,31 +3542,15 @@ Binding rules:
 #### Routed Direct Messaging
 
 SPOT routed direct messaging sends a message directly to a specific Spot
-or Router peer, or a routed reply target. The core substrate is
-expressed through the part-based C functions below. Both the high-level
+or Router peer, or a routed reply target. All payload parts accumulated by
+the builder are submitted to Core once as an array and count. Both the high-level
 binding's `Spot` facade and `RouterSocket`'s router-to-spot helper expose
 this capability as an operation builder start point that fits the
 `Operation Builder Policy`. A raw socket's ordinary send/request/reply
 also follows the same builder pattern.
 
-```c
-/* spot -> spot */
-zlink_submit_result_t zlink_spot_send_spot_part(void *spot,
-    const zlink_routing_id_t *dest_node_rid,
-    const zlink_routing_id_t *dest_spot_rid,
-    zlink_msg_t *part, zlink_send_flags_t flags,
-    zlink_part_flag_t part_flag);
-
-/* router -> spot */
-zlink_submit_result_t zlink_router_send_spot_part(void *router,
-    const zlink_routing_id_t *dest_node_rid,
-    const zlink_routing_id_t *dest_spot_rid,
-    zlink_msg_t *part, zlink_send_flags_t flags,
-    zlink_part_flag_t part_flag);
-```
-
 Binding rules:
-- The C ABI keeps a part-based functional contract.
+- The binding runtime makes one Core whole-message call per operation.
 - The high-level binding's `Spot` endpoint, `RouterSocket`'s
   router-to-spot helper, and every ordinary send/request/reply/publish
   surface on raw `DealerSocket`/`RouterSocket`/`PubSocket`/`StreamSocket`
@@ -3980,9 +3882,9 @@ able to drain the plane the event announced.
 
 | Socket type | Receive path |
 |-----------|----------|
-| `PAIR` / `DEALER` | The runtime uses `zlink_recv_part()`; the public surface is aggregate recv |
-| `SUB` / `XSUB` | The runtime uses `zlink_subscribe_part()`; the public surface is aggregate topic recv |
-| `ROUTER` | Runtime uses `zlink_router_recv_part()` and the public surface is aggregate routed recv. Request completion follows the [common execution model](async-execution-model.en.md#4-pollers-and-completion-drain). |
+| `PAIR` / `DEALER` | The runtime uses `zlink_recv()`; the public surface is aggregate recv |
+| `SUB` / `XSUB` | The runtime uses `zlink_subscribe()`; the public surface is aggregate topic recv |
+| `ROUTER` | Runtime uses `zlink_router_recv()` and the public surface is aggregate routed recv. Request completion follows the [common execution model](async-execution-model.en.md#4-pollers-and-completion-drain). |
 | `STREAM` | One of three modes below (mutually exclusive). Raw recv / `zlink_recv_handler()` / `zlink_stream_packet_handler()` |
 | `SPOT` | `zlink_spot_recv_part()` + `zlink_spot_subscribe_part()` + `zlink_spot_recv_subscription_event()` + `zlink_spot_recv_actor_lifecycle()` + `zlink_spot_dispatch_event_handler()`. Does not expose a direct routed callback |
 
@@ -4023,7 +3925,7 @@ SPOT-specific routing context belongs to a separate service-layer API.
 
 - Raw `SUB`, `XSUB` are receive-only topic sockets.
 - A binding exposes a per-language aggregate topic receive surface on
-  top of the `zlink_subscribe_part()` typed receive substrate.
+  top of the `zlink_subscribe()` typed receive substrate.
 - A direct topic callback install surface is not placed on the raw
   pub/sub family.
 
@@ -5187,10 +5089,9 @@ following criteria.
 ### Required: Optimization Guard Tests
 - Verify the hot path continues to satisfy the High-Performance Binding
   Policy.
-- Confirm the internal send/recv/request/reply/publish/subscribe path
-  uses the `*_part` substrate.
-- Confirm an aggregate native function call, hidden double
-  materialization, an unnecessary eager copy, or a per-call closure/
+- Confirm the internal send/recv/request/reply/publish/subscribe path makes
+  one Core whole-message call per record.
+- Confirm hidden double materialization, an unnecessary eager copy, or a per-call closure/
   boxing/allocation hasn't crept back in.
 - Confirm a hidden blocking wait, sleep, busy wait, or thread join
   hasn't appeared on the callback, dispatch, poller, or request-

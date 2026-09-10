@@ -304,7 +304,7 @@ public:
 
 Runtime detail lives behind the facade. A public header may name an
 opaque implementation state, but never exposes a native handle, a
-callback trampoline, the part loop, the request pump, or a marshalling
+callback trampoline, whole-message array handling, the request pump, or a marshalling
 helper.
 
 ```cpp
@@ -340,7 +340,7 @@ Every stable core feature C++ exposes follows this ownership rule.
 1. Add the public type or method to the correct `bindings/cpp/include/zlink/Contracts/` category.
 2. Update `bindings/cpp/include/zlink.hpp` and any intentionally installed projection header.
 3. Decide the C++ domain owner: one of context, message, socket, monitor, timer, service, SPOT, actor, error, option.
-4. Put raw C handle access, the `*_part` loop, callback userdata, trampoline state, and native marshalling helpers in `src/Runtime/` headers and `.cpp` files.
+4. Put raw C handle access, whole-message array handling, callback userdata, trampoline state, and native marshalling helpers in `src/Runtime/` headers and `.cpp` files.
 5. Add a public header test and update at least one sample/perf case when the new feature affects a user workflow or a measurement.
 6. Confirm the new public API isn't just a thin C wrapper. Keep it internal if it merely delegates without improving ownership, validation, or shape.
 7. Never leave behind a public name that's fallen out of use. Do not keep an aliasing deprecated form, a forwarding overload, or an alternate public header, unless a later document explicitly changes this C++ policy.
@@ -370,7 +370,7 @@ the core C contract.
 
 - Public declarations and user-visible behavior live in `Contracts/`.
 - A public free function, static helper, extension-style helper, or builder convenience helper lives in `Contracts/` when the caller can call it directly.
-- Runtime handle owners, the socket kernel, the request pump, callback trampolines, and part-loop helpers live in `src/Runtime/`.
+- Runtime handle owners, the socket kernel, the request pump, callback trampolines, and whole-message array helpers live in `src/Runtime/`.
 - FFI declarations, raw C handles, native struct mirrors, marshalling helpers, and platform loading code live in `src/Runtime/Native/`.
 - `zlink.hpp` projects `Contracts/`. A `Runtime/` helper path is never given a public-include style.
 - A contract header never includes a private runtime header. If a public class needs implementation state, it exposes only an incomplete `impl` type or another opaque private member, and defines behavior in the `.cpp` file.
@@ -418,14 +418,12 @@ artifact. The finished binding therefore keeps the following build rules.
 - Send's blocking `submit()` uses Core `NONE` admission, while `async()` waits for a Core
   `DONTWAIT` completion. Socket `SNDTIMEO` bounds the blocking admission wait. The binding does not
   create a payload retransmission queue.
-- The C++ binding adds no lock or gate of its own to an outbound path. Core's
-  per-socket transaction state keeps another sender's parts out of an open
-  sequence and rejects a racing attempt as a whole, without exposing a partial
-  record to the peer. The rejected native part is still consumed under Core's
-  synchronous send contract; the binding's separate native view preserves the
-  public C++ message. Concurrent multipart submits on one socket are the
-  application's responsibility: the binding does not serialize, wait, or
-  retry. Core's lifecycle gate likewise owns races between close and an
+- The C++ binding adds no lock or gate of its own to an outbound path. It
+  materializes every builder part in one native array and calls the Core
+  whole-message API once. Core atomically submits the array as one record and
+  consumes every slot, while the binding's separate native view preserves the
+  public C++ message. Core handles independent concurrent submits; the binding
+  does not serialize, wait, or retry. Core's lifecycle gate likewise owns races between close and an
   in-flight submit.
 - Request provides blocking `submit()` and `async()` and retains the builder's reply timeout. It captures
   the target when the operation is created and does not use physical connection identity as a public target.
@@ -529,7 +527,7 @@ The finished C++ binding's public headers cover the following groups.
 - Services: SPOT node, SPOT handle, topology snapshot, actor ref, actor lifecycle, actor operations.
 - Errors: a typed exception or error-result surface that preserves the core result domain.
 
-The C++ surface never exposes a raw native handle, a `*_part` loop,
+The C++ surface never exposes a raw native handle, whole-message array handling,
 callback userdata, an internal inproc endpoint, or a request pump object
 as a public concept.
 
@@ -564,7 +562,7 @@ public shape preserves the core meaning.
 
 ## Performance policy
 
-- A multipart value is created directly from the core part substrate.
+- A multipart value is created directly from the array filled by Core whole-message receive.
 - The hot path avoids unnecessary heap allocation, avoidable copies, reflection-like dynamic dispatch, hidden waits, sleeps, busy waits, broad locks, and joins.
 - Perf and samples include only the installed public headers.
 - Perf and samples link against the public C++ binding target — never against a private runtime object file or a helper source directory.
@@ -581,7 +579,7 @@ The finished C++ binding satisfies the following requirements.
 - The public headers and the compiled C++ binding target alone give an application, perf, sample, or framework adapter everything it needs.
 - A user never needs a private helper header or a private runtime source path.
 - A value type stays concrete unless an abstraction genuinely reduces complexity.
-- The public API hides the native part loop, raw handles, and callback userdata.
+- The public API hides native whole-message array handling, raw handles, and callback userdata.
 - Handler registration uses the `set_..._handler` name, and no public `on_...` alias is kept.
 - A public helper/free function and a builder convenience method are declared in `Contracts/`, not as a runtime helper.
 - An exception where service control/admission receive differs from the data plane's caller-provided storage is documented.

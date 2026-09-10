@@ -19,7 +19,7 @@ builder, 명명 규칙을 갖는다 — 각 언어 레퍼런스 트리가 문서
 `core/include/zlink.h`가 **곧** C binding의 public contract다, 그대로 — 같은 header를
 core 자신의 18-category 레퍼런스 트리
 ([`core/doc/reference/`](../../../../core/doc/reference/README.ko.md))가 이미 함수 단위로
-문서화하고 있다: `zlink_ctx_new`, `zlink_send_part`, `zlink_socket`, `zlink_poller_wait`,
+문서화하고 있다: `zlink_ctx_new`, `zlink_send`, `zlink_socket`, `zlink_poller_wait`,
 그리고 export되는 다른 모든 심볼. 여기 `bindings/doc/reference/c/01-*.md`부터 `05-*.md`까지
 두 번째 세트를 쓰면 그 트리의 내용을 다른 제목 아래 중복시키거나, 얇게 만들어 cross-reference
 색인으로 만드는 것밖엔 안 된다 — 어느 쪽도 독자가 `core/doc/reference/`에서 직접 얻을 수 없는

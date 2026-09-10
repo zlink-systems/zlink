@@ -18,24 +18,21 @@ bool recv_ping (void *server_, zlink_routing_id_t *client_rid_out_)
     const zlink_routing_id_t *source_rid = NULL;
     uint64_t reply_token = 0;
     zlink_msg_t part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    if (zlink_msg_init (&part) != 0)
-        return false;
-    const int rc = zlink_router_recv_part (server_, &source_rid, &reply_token,
-                                           &part, &has_more, ZLINK_RECV_FLAGS_DONTWAIT);
+    size_t part_count = 0;
+    const int rc = zlink_router_recv (server_, &source_rid, &reply_token,
+                                      &part, 1, &part_count, ZLINK_RECV_FLAGS_DONTWAIT);
     if (rc != 0) {
-        zlink_msg_close (&part);
         return false;
     }
     const bool ok = source_rid && source_rid->size > 0 && reply_token == 0
-                    && has_more == ZLINK_PART_FINAL && zlink_msg_size (&part) == 4
+                    && part_count == 1 && zlink_msg_size (&part) == 4
                     && std::memcmp (zlink_msg_data (&part), "PING", 4) == 0;
     if (ok && client_rid_out_) {
         std::memset (client_rid_out_, 0, sizeof (*client_rid_out_));
         client_rid_out_->size = source_rid->size;
         std::memcpy (client_rid_out_->data, source_rid->data, source_rid->size);
     }
-    zlink_msg_close (&part);
+    zlink_multipart_close (&part, part_count);
     return ok;
 }
 
@@ -85,21 +82,18 @@ bool perform_handshake (void *server_,
     const zlink_routing_id_t *source_rid = NULL;
     uint64_t reply_token = 0;
     zlink_msg_t part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    if (zlink_msg_init (&part) != 0)
-        return false;
-    if (zlink_router_recv_part (client_, &source_rid, &reply_token, &part,
-                                &has_more, ZLINK_RECV_FLAGS_NONE)
+    size_t part_count = 0;
+    if (zlink_router_recv (client_, &source_rid, &reply_token, &part, 1,
+                           &part_count, ZLINK_RECV_FLAGS_NONE)
         != 0) {
-        zlink_msg_close (&part);
         return false;
     }
     const bool ok = source_rid && source_rid->size == server_rid_->size
                     && std::memcmp (source_rid->data, server_rid_->data, source_rid->size) == 0
                     && reply_token == 0
-                    && has_more == ZLINK_PART_FINAL && zlink_msg_size (&part) == 4
+                    && part_count == 1 && zlink_msg_size (&part) == 4
                     && std::memcmp (zlink_msg_data (&part), "PONG", 4) == 0;
-    zlink_msg_close (&part);
+    zlink_multipart_close (&part, part_count);
     return ok;
 }
 

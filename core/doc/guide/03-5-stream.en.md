@@ -19,7 +19,7 @@ Core rules:
   stream (the encoder/decoder pass bytes through unchanged). For
   length-delimited packets, use PACKET mode, which frames as
   2-byte BE header size + 4-byte BE body size + header + body.
-- At the zlink API level: raw `zlink_recv_part()` exposes the source
+- At the zlink API level, RAW `zlink_recv()` returns a one-part byte record and exposes the source
   client's 4-byte `routing_id` through its own `source_rid_out_`
   out-parameter, and packet `zlink_stream_recv_packet()` exposes the same
   Core-owned borrowed view through `source_rid_out_`.
@@ -58,8 +58,8 @@ Supported transports (bind and connect):
 STREAM is the only exception type in the raw socket family. Exactly one of
 two receive modes must be selected before the first successful bind.
 
-- **RAW**: `zlink_recv_part()` pulls transport fragments directly, one
-  part at a time, with the source routing id returned through its
+- **RAW**: `zlink_recv()` pulls one transport byte record. The record has one
+  part, with the source routing id returned through its
   `source_rid_out_` out-parameter. Pair it with a poller watching
   `ZLINK_POLLIN`.
 - **PACKET**: `zlink_stream_recv_packet()` pulls packets
@@ -81,7 +81,7 @@ STREAM-specific behavior:
   `ZLINK_EVENT_CONNECTION_READY` / `ZLINK_EVENT_DISCONNECTED`, each carrying
   the 4-byte `routing_id`. A raw payload that happens to be a single
   `0x00`/`0x01` byte is delivered as ordinary data. If `ZLINK_STREAM_OPT_NOTIFY`
-  is set to `1` before bind/connect in RAW mode, `zlink_recv_part()` additionally
+  is set to `1` before bind/connect in RAW mode, `zlink_recv()` additionally
   returns a **zero-length record** with the affected `source_rid` for every
   connect and disconnect, so a zero-length part must then be treated as a
   notification rather than data.
@@ -102,17 +102,15 @@ zlink_set_stream_option(stream, ZLINK_STREAM_OPT_RECV_MODE,
 zlink_bind(stream, "tcp://0.0.0.0:8080");
 
 const zlink_routing_id_t *source_rid = NULL;
-zlink_msg_t part;
-zlink_msg_init(&part);
-zlink_part_flag_t more = ZLINK_PART_FINAL;
-if (zlink_recv_part(stream, &source_rid, &part, &more,
-                    ZLINK_RECV_FLAGS_NONE) == ZLINK_RECV_OK) {
+zlink_msg_t parts[1];
+size_t part_count = 0;
+if (zlink_recv(stream, &source_rid, parts, 1, &part_count,
+               ZLINK_RECV_FLAGS_NONE) == ZLINK_RECV_OK) {
     zlink_msg_t reply;
-    zlink_msg_init_size(&reply, zlink_msg_size(&part));
-    memcpy(zlink_msg_data(&reply), zlink_msg_data(&part), zlink_msg_size(&part));
-    zlink_send_part_rid(stream, source_rid, &reply, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL, NULL, NULL);
-    zlink_msg_close(&part);
+    zlink_msg_init_size(&reply, zlink_msg_size(&parts[0]));
+    memcpy(zlink_msg_data(&reply), zlink_msg_data(&parts[0]), zlink_msg_size(&parts[0]));
+    zlink_send_rid(stream, source_rid, &reply, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
+    zlink_multipart_close(parts, part_count);
 }
 ```
 
@@ -120,13 +118,13 @@ if (zlink_recv_part(stream, &source_rid, &part, &more,
 
 | Item | Description |
 |---|---|
-| Receive API | `zlink_recv_part()` |
+| Receive API | `zlink_recv()` |
 | Readiness | A poller reports `ZLINK_POLLIN`; the application then drains receives |
 | Lifetime | `source_rid` remains valid until the same socket's next data-recv entry or close |
 | Framing | Raw bytes as received from the transport |
-| Send | `zlink_send_part_rid()` |
+| Send | `zlink_send_rid()` |
 
-> When the send queue is full (HWM), `zlink_send_part_rid()` blocks
+> When the send queue is full (HWM), `zlink_send_rid()` blocks
 > (default) or returns `ZLINK_SUBMIT_BACKPRESSURED` with `ZLINK_DONTWAIT`. For advanced
 > backpressure patterns, see [Performance Guide](10-performance.en.md).
 
@@ -169,7 +167,7 @@ Rules for PACKET mode:
   still delivered as valid `zlink_msg_t` objects.
 - Ownership of `header` and `body` is transferred to the caller. The
   caller must close or consume each `msg_t` exactly once.
-- In PACKET mode, raw receive (`zlink_recv_part()`) fails with `ENOTSUP`.
+- In PACKET mode, whole-message RAW receive (`zlink_recv()`) fails with `ENOTSUP`.
   In RAW mode, `zlink_stream_recv_packet()` fails the same way.
 - Malformed packets (length exceeding implementation limits, assembly
   failure, premature close, etc.) result in the connection being closed
