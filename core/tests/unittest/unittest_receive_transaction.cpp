@@ -319,7 +319,7 @@ void receive_router_record (const socket_handle_t &handle_,
     const zlink_routing_id_t *source_rid = NULL;
     zlink_msg_t *parts = NULL;
     size_t part_count = 0;
-    result_->rc = zlink::socket_reqrep_internal::recv_router_message_direct (
+    result_->rc = zlink::socket_reqrep_internal::recv_router_record (
       handle_, &source_rid, &result_->sequence, &parts, &part_count,
       ZLINK_DONTWAIT);
     result_->errnum = result_->rc == 0 ? 0 : errno;

@@ -157,7 +157,7 @@ static zlink_recv_result_t router_recv_part_impl (
                                        bool *terminal_part_returned_out,
                                        uint64_t *transport_pair_id_out,
                                        uint64_t *transport_pair_generation_out) -> zlink_recv_result_t {
-        return reqrep::recv_router_message_direct (
+        return reqrep::recv_router_record (
                  handle, source_node_rid_out, reply_token_out, parts_out, part_count_out,
                  static_cast<int> (flags_), terminal_part_out,
                  terminal_part_returned_out, transport_pair_id_out,

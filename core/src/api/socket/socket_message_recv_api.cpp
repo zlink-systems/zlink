@@ -124,7 +124,7 @@ int recv_socket_parts (const socket_handle_t &handle_,
     // token, and rejects a later kind consistently with the wire decoder.
     if (type == ZLINK_CORE_SOCKET_DEALER) {
         reset_routing_id_output (source_rid_out_);
-        return zlink::socket_reqrep_internal::recv_dealer_message_direct (
+        return zlink::socket_reqrep_internal::recv_dealer_record (
           handle_, parts_out_, part_count_out_, static_cast<int> (flags_));
     }
 

@@ -44,7 +44,7 @@ void test_router_direct_single_part_uses_owned_source_rid_storage ()
     zlink_msg_t *parts = NULL;
     size_t part_count = 0;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::socket_reqrep_internal::recv_router_message_direct (
+      zlink::socket_reqrep_internal::recv_router_record (
         as_socket_handle (router), &source_rid, &request_seq, &parts,
         &part_count, 0));
 

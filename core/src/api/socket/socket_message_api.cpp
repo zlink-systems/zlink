@@ -157,7 +157,7 @@ zlink_recv_result_t zlink_recv_part (void *s_,
         if (dealer_request_surface) {
             if (source_rid_)
                 source_rid_->size = 0;
-            return zlink::socket_reqrep_internal::recv_dealer_message_direct (
+            return zlink::socket_reqrep_internal::recv_dealer_record (
               handle, parts_, part_count_, static_cast<int> (recv_flags_), terminal_part_out_,
               terminal_part_returned_out_, true,
               &public_part_delivery_hold_acquired);
