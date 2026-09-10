@@ -15,7 +15,7 @@ detail::sample_task_t run_request (zlink::dealer_socket_t &dealer,
       co_await dealer.request ()
         .message (std::move (request))
         .timeout (std::chrono::milliseconds (2000))
-        .async ();
+        .async ().reply;
 
     assert (!reply_parts.empty ());
     reply_payload_out = reply_parts.front ().to_string ();

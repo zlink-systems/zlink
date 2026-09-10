@@ -232,6 +232,46 @@ async function requestWorkers(count, transport, metrics, trigger, runId, nextSeq
 async function requestBackpressure(
   transport, metrics, options, trigger, runId, nextSequence, deadline
 ) {
+  if (typeof transport.requestSubmission === 'function') {
+    const pending = new Set();
+    while (header.nowNs() < deadline) {
+      const sequence = nextSequence();
+      const payload = header.createPayloadBytes(
+        trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence
+      );
+      const started = metrics.begin();
+      let submission;
+      try {
+        submission = transport.requestSubmission(0, payload);
+      } catch (error) {
+        metrics.complete(started, false);
+        continue;
+      }
+      const reply = (async () => {
+        try {
+          const value = await submission.reply;
+          validateReply(value, runId, header.PHASE_ACTIVE, trigger.payloadBytes, sequence);
+          metrics.complete(started, true);
+        } catch (error) {
+          metrics.complete(started, false);
+        }
+      })();
+      pending.add(reply);
+      reply.finally(() => pending.delete(reply));
+      if (submission.result === transport.backpressuredResult) {
+        await submission.admitted.catch(() => {});
+      }
+    }
+    if (pending.size === 0) return;
+    let drained = false;
+    await Promise.race([
+      Promise.all([...pending]).then(() => { drained = true; }),
+      delay(options.drainBoundMs)
+    ]);
+    if (!drained) metrics.recordAbandoned(metrics.inFlight);
+    return;
+  }
+
   const pending = new Set();
   let issuedSinceYield = 0;
   while (header.nowNs() < deadline) {
@@ -262,7 +302,14 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
       );
       const started = metrics.begin();
       try {
-        await transport.send(stream, payload);
+        if (typeof transport.sendSubmission === 'function') {
+          const submission = transport.sendSubmission(stream, payload);
+          if (submission.result === transport.backpressuredResult) {
+            await submission.admitted;
+          }
+        } else {
+          await transport.send(stream, payload);
+        }
         metrics.complete(started, true);
       } catch (error) {
         metrics.complete(started, false);
@@ -308,14 +355,14 @@ function streamDescription(pattern, requestWindow, sendConcurrency) {
     return {
       count: 1,
       inFlightPerStream: null,
-      implementation: 'Node event loop; uncapped Promises with cooperative completion yields'
+      implementation: 'Node event loop; reply stages separate; pause only on BACKPRESSURED admission'
     };
   }
   if (pattern === 'send-saturation') {
     return {
       count: sendConcurrency,
       inFlightPerStream: 1,
-      implementation: 'Node Promise per logical stream; one submit awaiting completion'
+      implementation: 'Node loop per logical stream; pause only on BACKPRESSURED admission'
     };
   }
   throw new Error(`unknown pattern ${pattern}`);

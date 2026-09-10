@@ -103,7 +103,7 @@ final class ReceiveFlowStateContractTest {
                 () -> left.options().receiveFlowState(ReceiveFlowState.PAUSED));
 
             try (Message outbound = Message.from("still-works")) {
-                left.send().message(outbound).submit()
+                left.send().message(outbound).submit().admitted()
                     .toCompletableFuture().join();
             }
             Received received = new Received();

@@ -28,13 +28,13 @@ from perf_multi_common import (
 )
 
 
-async def submit_managed_request(
+def submit_managed_request(
     sock, payload_parts, *, routing_id=None, timeout_s
 ):
     """Submit once through the binding-owned WRITABLE retry machine."""
 
     operation = sock.request() if routing_id is None else sock.request(routing_id)
-    return await operation.messages(*payload_parts).timeout(timeout_s).submit()
+    return operation.messages(*payload_parts).timeout(timeout_s).submit()
 
 
 def _wait_for_runner_stop_after_done():
@@ -105,18 +105,13 @@ async def run_reqrep_client(argv, *, pattern, routed_request):
             active_deadline = perf_counter() + args.duration
             expected_part_count = measurement_part_count()
 
-            async def request_once(index, stamped_parts):
+            async def receive_reply(index, reply):
                 nonlocal completed
                 reply_parts = None
 
                 try:
                     try:
-                        reply_parts = await submit_managed_request(
-                            sockets[index],
-                            stamped_parts,
-                            routing_id=b"SERVER" if routed_request else None,
-                            timeout_s=timeout_s,
-                        )
+                        reply_parts = await reply
                     except zlink.RequestError:
                         # Mirrors the C callback contract: a timed-out or
                         # otherwise terminal request is drained but is not an
@@ -156,91 +151,52 @@ async def run_reqrep_client(argv, *, pattern, routed_request):
                 except Exception as exc:
                     failures.append(exc)
 
-            # Own request completion dispatch on this event-loop thread. If
-            # Core dispatches each reply from its worker, the ctypes callback
-            # must repeatedly contend for the GIL with this submit loop. A
-            # completion poller keeps the public request API unchanged while
-            # making callback and Future progression single-threaded.
-            with zlink.create_poller() as completion_poller:
-                completion_events = zlink.create_poll_events(
-                    max(1, len(sockets))
+            async def submit_loop(index):
+                while perf_counter() < active_deadline and not failures:
+                    stamped = bytes(
+                        stamp_payload(
+                            payloads[index],
+                            phase=1,
+                            run_id=run_id,
+                            seq=seqs[index],
+                        )
+                    )
+                    seqs[index] += 1
+                    stamped_parts = (
+                        (stamped,)
+                        if expected_part_count == 1
+                        else (stamped, b"")
+                    )
+                    submission = submit_managed_request(
+                        sockets[index],
+                        stamped_parts,
+                        routing_id=b"SERVER" if routed_request else None,
+                        timeout_s=timeout_s,
+                    )
+                    task = asyncio.ensure_future(
+                        receive_reply(index, submission.reply)
+                    )
+                    pending.add(task)
+                    task.add_done_callback(observe_done)
+                    if submission.result == zlink.SubmitResult.BACKPRESSURED:
+                        await submission.admitted
+
+            with scoped_relay_eager_task_factory():
+                await asyncio.gather(
+                    *(submit_loop(index) for index in range(len(sockets)))
                 )
-                registered_sockets = []
+
+            if pending:
+                still_pending = tuple(pending)
                 try:
-                    for index, sock in enumerate(sockets):
-                        completion_poller.add_socket(
-                            sock,
-                            zlink.PollEventFlag.POLLCOMPLETION,
-                            index,
-                        )
-                        registered_sockets.append(sock)
-
-                    # Python 3.12 starts each request coroutine immediately,
-                    # matching Node Promise construction and removing one
-                    # scheduler turn plus the old nested Task. Keep each
-                    # logical payload immutable until its managed request has
-                    # either completed or retained its refusal-time snapshot.
-                    with scoped_relay_eager_task_factory():
-                        while perf_counter() < active_deadline and not failures:
-                            for index in range(len(sockets)):
-                                if perf_counter() >= active_deadline:
-                                    break
-                                stamped = stamp_payload(
-                                    payloads[index],
-                                    phase=1,
-                                    run_id=run_id,
-                                    seq=seqs[index],
-                                )
-                                seqs[index] += 1
-                                stamped = bytes(stamped)
-                                stamped_parts = (
-                                    (stamped,)
-                                    if expected_part_count == 1
-                                    else (stamped, b"")
-                                )
-                                task = asyncio.create_task(
-                                    request_once(index, stamped_parts)
-                                )
-                                if task.done():
-                                    observe_done(task)
-                                else:
-                                    pending.add(task)
-                                    task.add_done_callback(observe_done)
-                            # Non-blocking progress avoids both a timer and a
-                            # binding-owned inflight window. The following
-                            # cooperative turn resumes the completed Futures.
-                            completion_poller.wait(completion_events, 0)
-                            await asyncio.sleep(0)
-
-                    drain_deadline = perf_counter() + drain_timeout_s
-                    while (
-                        pending
-                        and perf_counter() < drain_deadline
-                        and not failures
-                    ):
-                        completion_poller.wait(completion_events, 0)
-                        await asyncio.sleep(0)
-
-                    if pending:
-                        still_pending = tuple(pending)
-                        for task in still_pending:
-                            task.cancel()
-                        await asyncio.gather(
-                            *still_pending, return_exceptions=True
-                        )
-                        await asyncio.sleep(0)
-                finally:
-                    # A poller must release every registered requester before
-                    # the outer socket cleanup; closing registered sockets can
-                    # otherwise leave completion dispatch waiting on teardown.
-                    for sock in registered_sockets:
-                        try:
-                            completion_poller.remove_socket(sock)
-                        except Exception as exc:
-                            print(
-                                f"[perf] completion poller remove failed: {exc}",
-                                file=sys.stderr,
-                            )
+                    await asyncio.wait_for(
+                        asyncio.gather(*still_pending), drain_timeout_s
+                    )
+                except asyncio.TimeoutError:
+                    for task in still_pending:
+                        task.cancel()
+                    await asyncio.gather(*still_pending, return_exceptions=True)
+                    raise RuntimeError("request completion drain timed out")
 
             if failures:
                 raise failures[0]

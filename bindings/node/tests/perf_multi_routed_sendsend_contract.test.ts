@@ -160,7 +160,7 @@ async function runRoutedSendSendContract({
           await dealer.send()
             .message(payload)
             .message(Buffer.alloc(0))
-            .submit();
+            .submit().admitted;
         } finally {
           inFlightByClient[clientIndex] -= 1;
         }
@@ -183,7 +183,7 @@ async function runRoutedSendSendContract({
           for (const part of sourceParts) {
             replyOperation = replyOperation.message(part);
           }
-          const reply = replyOperation.submit();
+          const reply = replyOperation.submit().admitted;
           // Admission consumes these Messages immediately. If admission is
           // backpressured, submit() first takes an immutable packet snapshot,
           // consumes the wrappers, and later retries without retaining them.
@@ -261,32 +261,43 @@ test('routed scheduler advances available sockets while one admission remains pe
       admissions[index] += 1;
       inFlight[index] += 1;
       maxInFlight[index] = Math.max(maxInFlight[index], inFlight[index]);
-      const admission = index === 0 && admissions[index] === 1
-        ? slowAdmission
-        : Promise.resolve();
+      const backpressured = index === 0 && admissions[index] === 1;
+      const admission = backpressured ? slowAdmission : Promise.resolve();
       if (index === 0 && admissions[index] === 1) {
         slowOwnedPayload = Buffer.from(payloads[index]);
       }
-      return admission.finally(() => { inFlight[index] -= 1; });
+      now += 1n;
+      if (!backpressured) inFlight[index] -= 1;
+      return {
+        result: backpressured
+          ? zlink.SubmitResult.Backpressured
+          : zlink.SubmitResult.Ok,
+        admitted: backpressured
+          ? admission.finally(() => { inFlight[index] -= 1; })
+          : admission,
+      };
     },
-    drainReplies: async () => { replyDrains += 1; },
-    yieldTurn: async () => {
-      turns += 1;
-      if (turns === 3) {
+    drainReplies: async () => {
+      replyDrains += 1;
+      if (beforeSlowRelease === null) {
         beforeSlowRelease = admissions.slice();
         assert.deepEqual(payloads[0], slowOwnedPayload);
         releaseSlow();
       }
-      now += 1n;
+    },
+    yieldTurn: async () => {
+      turns += 1;
       await nextTurn();
     }
   });
 
-  assert.deepEqual(beforeSlowRelease, [1, 3, 3]);
-  assert.deepEqual(admissions, [2, 4, 4]);
+  assert.equal(beforeSlowRelease[0], 1);
+  assert.ok(beforeSlowRelease[1] + beforeSlowRelease[2] > 2,
+    'an available peer must advance while socket 0 waits for admission');
+  assert.equal(admissions[0], 1);
   assert.deepEqual(maxInFlight, [1, 1, 1]);
-  assert.equal(result.sent, 10n);
-  assert.ok(replyDrains >= 4);
+  assert.equal(result.sent, 4n);
+  assert.ok(replyDrains >= 1);
 });
 
 test('routed scheduler stops new submits at deadline and drains owned admission', async () => {
@@ -310,11 +321,17 @@ test('routed scheduler stops new submits at deadline and drains owned admission'
     nowNs: () => now,
     submit: () => {
       submitTimes.push(now);
-      return pending;
+      return {
+        result: zlink.SubmitResult.Backpressured,
+        admitted: pending,
+      };
+    },
+    drainReplies: async () => {
+      now = 4n;
+      releasePending();
     },
     yieldTurn: async () => {
       now += 1n;
-      if (now === 4n) releasePending();
       await nextTurn();
     }
   });
@@ -360,7 +377,10 @@ test('routed relay submits replies concurrently without an application FIFO', as
       },
       submit() {
         submits += 1;
-        return new Promise<void>((resolve) => releases.push(resolve));
+        return {
+          result: zlink.SubmitResult.Backpressured,
+          admitted: new Promise<void>((resolve) => releases.push(resolve)),
+        };
       }
     };
     const value = {
@@ -466,7 +486,7 @@ test('routed async multipart boundary preserves inline and overflow part storage
       );
       let send = dealer.send();
       for (const part of expected) send = send.message(part);
-      await send.submit();
+      await send.submit().admitted;
 
       const routedDeadline = Date.now() + 5_000;
       let routedReady = router.recv(routed, zlink.RecvFlags.DontWait);
@@ -492,7 +512,7 @@ test('routed async multipart boundary preserves inline and overflow part storage
       const sourceParts = routed.parts.slice();
       let reply = routed.send();
       for (const part of sourceParts) reply = reply.message(part);
-      const admission = reply.submit();
+      const admission = reply.submit().admitted;
       for (const part of sourceParts) assert.equal(part.size(), 0);
       await admission;
 
@@ -538,7 +558,7 @@ test('received routed send preserves stale-route ownership across immediate or w
     await dealer.send()
       .message(Buffer.alloc(64, 0x61))
       .message(Buffer.alloc(0))
-      .submit();
+      .submit().admitted;
 
     const receiveDeadline = Date.now() + 5_000;
     while (!router.recv(received, zlink.RecvFlags.DontWait)
@@ -552,26 +572,33 @@ test('received routed send preserves stale-route ownership across immediate or w
     await waitForMonitorEvent(disconnected, zlink.MonitorEventType.Disconnected);
 
     const sourceParts = received.parts.slice();
-    const submission = received.send()
-      .message(sourceParts[0])
-      .message(sourceParts[1])
-      .submit();
-    if (sourceParts[0].size() === 0) {
+    let submission = null;
+    let immediateError: unknown;
+    try {
+      submission = received.send()
+        .message(sourceParts[0])
+        .message(sourceParts[1])
+        .submit();
+    } catch (error) {
+      immediateError = error;
+    }
+    if (submission !== null) {
       // A stale physical pipe may first report BACKPRESSURED. The binding has
       // already snapshotted the record, so closing its sender terminates the
       // WRITABLE wait without retaining the caller's Message wrappers.
+      assert.equal(submission.result, zlink.SubmitResult.Backpressured);
+      assert.equal(sourceParts[0].size(), 0);
       assert.equal(sourceParts[1].size(), 0);
       router.close();
-      await assert.rejects(submission, (error: unknown) =>
+      await assert.rejects(submission.admitted, (error: unknown) =>
         error instanceof zlink.SubmitError
         && (error as { result: number }).result === zlink.SubmitResult.Terminated);
     } else {
       // If Core has already retired the route, target selection fails before
       // snapshot/acceptance and Received keeps its parts for close or refill.
-      await assert.rejects(submission, (error: unknown) =>
-        error instanceof zlink.SubmitError
-        && ((error as { result: number }).result === zlink.SubmitResult.NotConnected
-          || (error as { result: number }).result === zlink.SubmitResult.NotFound));
+      assert.ok(immediateError instanceof zlink.SubmitError);
+      assert.ok((immediateError as { result: number }).result === zlink.SubmitResult.NotConnected
+        || (immediateError as { result: number }).result === zlink.SubmitResult.NotFound);
       assert.equal(sourceParts[0].size(), 64);
       assert.equal(sourceParts[1].size(), 0);
     }

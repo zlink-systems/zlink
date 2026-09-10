@@ -29,13 +29,13 @@ test('routed multipart captures its target and preserves part boundaries', async
     try {
         router.bind('inproc://node-routed-multipart-contract');
         dealer.connect('inproc://node-routed-multipart-contract');
-        await dealer.send().message('route-probe').submit();
+        await dealer.send().message('route-probe').submit().admitted;
         assert.equal(router.recv(inbound), true);
         assert.ok(inbound.routingId);
         const operation = router.send(inbound.routingId)
             .message('first').message('second');
         inbound.close();
-        await operation.submit();
+        await operation.submit().admitted;
         assert.equal(dealer.recv(outbound), true);
         assert.deepEqual(outbound.parts.map((part) => part.getString()), ['first', 'second']);
     }

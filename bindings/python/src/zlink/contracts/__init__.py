@@ -78,7 +78,14 @@ from .eventing import (
     PollEvents,
     Timer,
 )
-from .sockets.operations import PublishOp, ReplyOp, RequestOp, SendOp
+from .sockets.operations import (
+    PublishOp,
+    ReplyOp,
+    RequestOp,
+    RequestSubmission,
+    SendOp,
+    SendSubmission,
+)
 from .sockets import (
     CommonSocketOptions,
     DealerSocketOptions,
@@ -149,7 +156,9 @@ __all__ = [
     "SendOp",
     "PublishOp",
     "RequestOp",
+    "RequestSubmission",
     "ReplyOp",
+    "SendSubmission",
     "MonitorEvent",
     "MonitorStatus",
     "MonitorSocket",

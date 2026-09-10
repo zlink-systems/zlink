@@ -54,15 +54,16 @@ for (const [platform, again, deadlock] of [['linux', 11, 35], ['darwin', 35, 11]
           socketCompletionRecv: () => queue.shift() ?? null,
         };
         try {
-          const pending = kind === 'send'
+          const submission = kind === 'send'
             ? owner.submitSend(Buffer.from('retained'), null)
             : owner.submitRequest(Buffer.from('retained'), null, 1000);
+          assert.equal(submission.result, SubmitResult.Backpressured);
           assert.equal(owner.hasManagedWritableWait(), true);
           owner.drain(publicOwner);
           assert.equal(owner.hasManagedWritableWait(), true, 'second refusal keeps the replacement token');
           owner.drain(publicOwner);
           if (kind === 'request') owner.drain(publicOwner);
-          await pending;
+          await (kind === 'send' ? submission.admitted : submission.reply);
           assert.equal(calls, 3);
           assert.equal(owner.hasManagedWritableWait(), false);
 
@@ -71,7 +72,7 @@ for (const [platform, again, deadlock] of [['linux', 11, 35], ['darwin', 35, 11]
           owner.native.socketSubmitSend = owner.native.socketSubmitRequest = () => ({
             result: SubmitResult.Backpressured, nativeErrno: again, completionId: 0n,
           });
-          await assert.rejects(kind === 'send'
+          assert.throws(() => kind === 'send'
             ? owner.submitSend(Buffer.from('invalid'), null)
             : owner.submitRequest(Buffer.from('invalid'), null, 1000),
           { result: SubmitResult.Backpressured, nativeErrno: again });

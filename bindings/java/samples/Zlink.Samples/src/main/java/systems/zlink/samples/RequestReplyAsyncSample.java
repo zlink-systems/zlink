@@ -66,7 +66,7 @@ public final class RequestReplyAsyncSample {
                 roundTrip = dealerSocket.request()
                     .message(request)
                     .timeout(Duration.ofSeconds(2))
-                    .submit()
+                    .submit().reply()
                     .thenAccept(reply -> {
                         try {
                             String value = reply.get(0).toUtf8String();

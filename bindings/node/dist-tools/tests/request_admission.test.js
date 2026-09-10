@@ -68,7 +68,7 @@ async function hwmRequestRound(round) {
             const value = `${round}:${index.toString().padStart(3, '0')}:${'q'.repeat(48)}`;
             return Buffer.from(value);
         });
-        const pending = payloads.map((payload) => dealer.request().message(payload).timeout(5_000).submit());
+        const pending = payloads.map((payload) => dealer.request().message(payload).timeout(5_000).submit().reply);
         for (const payload of payloads)
             payload.fill(0x7a);
         const initiallyAdmitted = recvAndReplyAvailable(router, received);
@@ -113,7 +113,7 @@ test('connect-before-bind REQUEST resumes from WRITABLE and then awaits its repl
         zlink.PollEventFlag.PollCompletion,
     ], 92);
     try {
-        const pending = dealer.request().message('before-bind').timeout(5_000).submit();
+        const pending = dealer.request().message('before-bind').timeout(5_000).submit().reply;
         router.bind(address);
         assert.ok(poller.wait(events, 1_000) > 0, 'binding the peer must publish the request wait token as WRITABLE');
         const request = new zlink.Received();
@@ -137,12 +137,28 @@ test('socket close releases a connect-before-bind REQUEST token', async () => {
     const dealer = zlink.createDealerSocket(context);
     dealer.options.immediate = true;
     dealer.connect(endpoint('close-token'));
-    const pending = dealer.request().message('close-me').timeout(30_000).submit();
-    const rejection = assert.rejects(pending, (error) => error instanceof zlink.RequestError
-        && error.result === zlink.RequestResult.Terminated);
+    const submission = dealer.request().message('close-me').timeout(30_000).submit();
+    assert.equal(submission.result, zlink.SubmitResult.Backpressured);
+    let admittedFailures = 0;
+    let replyFailures = 0;
+    let admittedError;
+    let replyError;
+    const admitted = submission.admitted.catch((error) => {
+        admittedFailures += 1;
+        admittedError = error;
+    });
+    const reply = submission.reply.catch((error) => {
+        replyFailures += 1;
+        replyError = error;
+    });
     dealer.close();
     try {
-        await rejection;
+        await Promise.all([admitted, reply]);
+        assert.equal(admittedFailures, 1);
+        assert.equal(replyFailures, 1);
+        assert.strictEqual(admittedError, replyError, 'admitted and reply must reject with the same terminal cause');
+        assert.ok(replyError instanceof zlink.RequestError);
+        assert.equal(replyError.result, zlink.RequestResult.Terminated);
     }
     finally {
         context.close();
@@ -162,7 +178,7 @@ test('context shutdown terminates a REQUEST wait token as typed Terminated', asy
         assert.equal(router.recv(ready), true);
         ready.close();
         const outcomes = [];
-        const pending = Array.from({ length: 64 }, (_, index) => dealer.request().message(Buffer.alloc(64, index)).timeout(30_000).submit().then(() => outcomes.push(null), (error) => outcomes.push(error)));
+        const pending = Array.from({ length: 64 }, (_, index) => dealer.request().message(Buffer.alloc(64, index)).timeout(30_000).submit().reply.then(() => outcomes.push(null), (error) => outcomes.push(error)));
         context.shutdown();
         for (let turn = 0; turn < 1_000
             && !outcomes.some((error) => error instanceof zlink.SubmitError); turn += 1) {
@@ -206,9 +222,9 @@ test('SEND and REQUEST WRITABLE tokens share one completion owner', async () => 
         for (let index = 0; index < operationCount; index += 1) {
             const value = `${index.toString().padStart(3, '0')}:${'m'.repeat(52)}`;
             if ((index & 1) === 0)
-                sends.push(dealer.send().message(value).submit());
+                sends.push(dealer.send().message(value).submit().admitted);
             else
-                requests.push(dealer.request().message(value).timeout(5_000).submit());
+                requests.push(dealer.request().message(value).timeout(5_000).submit().reply);
         }
         while (dataCount + requestCount < operationCount) {
             for (;;) {
