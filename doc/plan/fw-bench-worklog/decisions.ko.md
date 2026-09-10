@@ -1080,3 +1080,25 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
 - 모델 사이 비교(DEALER→ROUTER, `ToChannel`, ClientServer)는 **별도 벤치**로 분리한다. 특히 `ToChannel`과
   `ToNode`를 나란히 재면 채널 선택 비용이 그 차이로 드러난다 — 가치는 있으나 gRPC 비교표에 섞을 값이 아니다.
 - 재측정 뒤 이전 숫자와 직접 비교하지 않는다. 분모가 달라진다.
+
+## FB-065 — raw ROUTER↔ROUTER request-backpressure 붕괴는 벤치 raw 클라이언트가 bindings perf 구조를 따르지 않은 것; send_ready 콜백 부활은 하지 않는다 (2026-09-10, 사용자 결정)
+
+- 증상: Java raw ROUTER↔ROUTER `request-backpressure` 0.2~0.4/s(warmup 포기 4만 건대, 3-run 전부, 2026-09-09
+  `s2r_run{1,2,3}`부터 동일), 이전 `request-window`(100) raw 0(Issue #12/FB-050). 서버는 받은 요청을 전부 응답, 오류 0,
+  CPU 0.7%. 같은 binding으로 framework ToNode 5,457/s, request-serial raw 6,153/s는 정상.
+- 확인한 것: 벤치 raw 클라이언트(`RawStack`, `BenchDrivers.runBackpressure`)는 poller 없이 tight loop로 제출만 하고
+  완료는 binding runtime pump에 맡긴다. bindings perf의 같은 구성 `PerfMultiSocketReqRep`(ROUTER↔ROUTER request,
+  상한 없음)은 client socket을 public poller에 `POLLCOMPLETION`으로 등록해 자기 poll 루프에서 완료를 drain하고 turn마다
+  socket당 요청 하나를 제출한다. Core는 HWM에 막힌 submit마다 대기 토큰만 보관하고 payload는 호출자가 든다(0.17 계약 B,
+  D-B79/D-B85). 감독자가 처음 제시한 "Core가 대기 전부를 깨우고 binding이 전부 재시도한다"는 설명은 4개 binding 코드 조사
+  결과(token-matched 재시도만 수행) 뒷받침되지 않아 철회했다. 벤치 raw 행에 application 상한을 두자는 제안도 결함을 가리는
+  것이라 철회했다(사용자).
+- 결정(사용자): 벤치 raw 클라이언트를 perf 구현(best practice)대로 다시 쓴다. Issue #12를 그 내용으로 다시 썼고 job
+  `bench-java-raw-perfshape`가 수행한다. 통과 기준은 raw request-backpressure 3-run warmup 포기 0·오류 0, 다른 패턴 회귀 없음.
+  다른 언어 raw 드라이버도 각 언어 perf 샘플 대비 확인해 같은 Issue 아래 후속.
+- send_ready 콜백 부활 검토(사용자 질문): 하지 않는다. 0.13에서 hint 콜백은 "재시도해볼 만하다"는 뜻뿐이라 admission 정책을
+  세울 수 없고, 콜백 안 재개는 콜백 내 submit 금지·send-sequence gate로 EINVAL 69~88%·Core 스레드 블로킹을 요구해
+  폐기됐다(`doc/plan/archive/core-send-completion-design.ko.md:29-32`, 커밋 2cea03c016). 0.16의 Core 소유 pending pool은
+  무제한 내부 큐가 되어 HWM이 흐름 제어를 잃어 폐기됐다(D-B71~D-B79, D-B85). 관리형 런타임은 콜백을 받아도 자기 루프로
+  넘겨야 하므로 큐+wake가 필요하고, 그것이 현재의 POLLCOMPLETION pull이다. 남는 완화는 binding public API에 perf 샘플의
+  completion 루프 형태를 유틸로 제공하는 것(1.0 뒤 후보).
