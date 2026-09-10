@@ -73,6 +73,22 @@ zlink_recv (void *s_,
   `recv_part`는 계속 어댑터 경로. 즉 **시퀀스 mutex·버퍼는 recv_part 경로에만** 남고 whole-message 경로엔 그 오버헤드가 없다.
 - 같은 소켓에서 두 API 혼용 시 규칙(진행 중 part 시퀀스가 있으면 whole `recv`는 EBUSY 등)은 spec에 명시.
 
+### 3.5 바인딩 recv 시그니처 (이미 whole-message 형태 — 공개 표면 유지)
+핵심: **바인딩 공개 API는 이미 `recv(Received)` whole-message 형태**로, `Received{ parts:[...], routingId, replyToken }` 컬렉션을 채운다.
+따라서 이번 작업으로 **공개 시그니처는 바뀌지 않고**, 내부 채우기만 Core whole-message recv로 전환한다(part 루프 → 1회 호출).
+
+| 바인딩 | 현재(=유지) whole-message recv 시그니처 | 채우는 컬렉션 |
+|--------|------------------------------------------|---------------|
+| **C** (Core) | `zlink_recv(s, rid_out, parts_out[], cap, count_out, flags)` / `zlink_router_recv(r, rid_out, token_out, parts_out[], cap, count_out, flags)` **(신설)** | caller-제공 `zlink_msg_t[]` |
+| **C++** | `int recv(received_t& out, recv_flags_t = none)` (+ 값반환 `received_t recv()`) — `message_socket_contracts.hpp:46/69`, `routed_socket_contracts.hpp:21` | `received_t`(parts/rid/reply token) |
+| **.NET** | `bool Recv(Received result, RecvFlags flags = None)` — `MessageSocketContracts.cs:25` | `Received` |
+| **Java** | `boolean recv(Received result, RecvFlags flags)` — `PairSocket/DealerSocket/RouterSocket.java` | `Received` |
+| **Node/TS** | `recv(result: Received, flags?: RecvFlags): boolean` — `pair/dealer/router_socket.ts` | `Received` |
+
+- 반환 관용: 성공 `true`/`0`, non-blocking no-data는 `false`/no-data 결과(기존과 동일). rid/reply token은 `Received`(또는 값 객체)에 담김.
+- **변경 지점은 내부뿐**: 각 바인딩이 `Received.parts`를 채울 때 Core `*_recv_part` 루프 대신 **신설 Core whole-message recv 1회 호출 + 재사용 배열**을
+  사용한다(per-message 경계·할당 감소). 신규 공개 메서드 추가는 원칙적으로 없음(필요 시 언어별로 판단하고 문서화).
+
 ## 4. 바인딩 매핑 개념
 - 각 바인딩 수신은 이미 `Received{ parts:[...], routingId, replyToken }` 컬렉션을 앱에 준다. 지금은 내부에서 `recv_part` 루프로 채운다.
 - 신설 후: 바인딩은 **whole-message `recv`로 `Received.parts`를 한 번에 채운다**(재사용 배열 → zero-alloc). part 루프·per-part 경계 제거.
