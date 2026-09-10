@@ -17,13 +17,13 @@
 | 단계 | 내용 | 담당 | 게이트 |
 |---|---|---|---|
 | G0 | #86 머지. 이름 확정: `SendSubmission`/`RequestSubmission`, `result`/`admitted`/`reply`; Go 비동기 종결자 이름; .NET `TrySend` 유지 여부 | 사용자·감독자 | 이 문서 §2 결정표 채움 |
-| G1 | 스펙·정책 문안(§3) 커밋 | 감독자 | 표·문장 diff 검토 |
-| G2 | **Java 파일럿**: 종결자·CompletionOwner·contract test·Kotlin 확장 | job `java-submit-result` | contract 통과, 성공 기준 1 |
-| G3 | Java perf multi/single reqrep·sendsend 클라이언트를 §5 규칙으로; gRPC 벤치 Java raw 드라이버 | job `java-perf-submit-result` | 성공 기준 2·3 |
-| G4 | 나머지 6언어 병렬(cpp·dotnet·node·go·rust·python): 종결자·owner·contract test·perf 클라이언트 | job 6개(동시 ≤5, `env-job-concurrency-cap`) | 언어별 contract·perf 통과 |
-| G5 | framework 4언어: 내부 binding 소비를 결과 객체로(F1), 동기 blocking 종결자 추가(F2·F2-a), samples·guide 코드 블록 | job 4개 | framework 테스트·e2e(cross-language)·F2-a 회귀 |
-| G6 | 전체 perf 재측정(multi 전 패턴, 4 size, tcp) 전후 비교; gRPC 벤치 Java 3-run | 감독자 ticket | 성공 기준 4 |
-| G7 | 릴리스 노트(breaking), 문서 검사(`check_doc_links`, `check_prose_neutrality`) | 감독자 | 완료 기준 |
+| G1 (#88) | 스펙·정책 문안(§3) 커밋 | 감독자 | 표·문장 diff 검토 |
+| G2 (#89) | **Java 파일럿**: 종결자·CompletionOwner·contract test·Kotlin 확장 | job `java-submit-result` | contract 통과, 성공 기준 1 |
+| G3 (#90) | Java perf multi/single reqrep·sendsend 클라이언트를 §5 규칙으로; gRPC 벤치 Java raw 드라이버 | job `java-perf-submit-result` | 성공 기준 2·3 |
+| G4 (#91 cpp · #92 dotnet · #93 node · #94 go · #95 rust · #96 python) | 나머지 6언어 병렬: 종결자·owner·contract test·perf 클라이언트 | job 6개(동시 ≤5, `env-job-concurrency-cap`) | 언어별 contract·perf 통과 |
+| G5 (#97 java · #98 dotnet · #99 node · #100 cpp) | framework 4언어: 내부 binding 소비를 결과 객체로(F1), 동기 blocking 종결자 추가(F2·F2-a), samples·guide 코드 블록 | job 4개 | framework 테스트·e2e(cross-language)·F2-a 회귀 |
+| G6 (#101) | 전체 perf 재측정(multi 전 패턴, 4 size, tcp) 전후 비교; gRPC 벤치 Java 3-run | 감독자 ticket | 성공 기준 4 |
+| G7 (#101) | 릴리스 노트(breaking), 문서 검사(`check_doc_links`, `check_prose_neutrality`) | 감독자 | 완료 기준 |
 
 G2 결과가 설계를 바꾸면 G4 전에 draft를 갱신한다. G4 언어별 job은 G2 커밋을 참조 구현으로 받는다.
 
@@ -159,3 +159,4 @@ G5 게이트: framework 테스트·cross-language e2e 통과 + F2-a 회귀 테�
   `LIBZLINK_VERSION=0.17.5` **릴리스 아카이브**를 내려받아 쓰는데 PR의 바인딩은 새 whole-message export를 요구한다
   (`.github/workflows/framework-dotnet.yml:87-99, :205-213`). Core ABI가 깨지는 변경이므로 Core 버전을 올리고 릴리스를
   낸 뒤에야 framework CI가 초록이 된다(버전 정책: Core MAJOR.MINOR). 이 plan의 G0 전제(#86 머지)에 "Core 버전 결정·릴리스"가 붙는다.
+- 2026-09-10: Issue 등록 — G1 #88, G2 #89, G3 #90, G4 #91~#96, G5 #97~#100, G6·G7 #101 (milestone 1.0). 선행: Core 0.18.0 릴리스(#87).
