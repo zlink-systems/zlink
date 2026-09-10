@@ -30,7 +30,7 @@ async function main() {
             routerMonitor.close();
             dealerMonitor.close();
         }
-        const pendingReply = dealerSocket.request()
+        const submission = dealerSocket.request()
             .message(Buffer.from('ping'))
             .timeout(2000)
             .submit();
@@ -46,7 +46,7 @@ async function main() {
         finally {
             request.close();
         }
-        const reply = await pendingReply;
+        const reply = await submission.reply;
         try {
             assert.equal(reply[0].data().toString(), 'pong');
         }

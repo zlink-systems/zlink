@@ -27,7 +27,7 @@ async function main() {
     }
 
     const sent = 'hello-pair';
-    client.send().message(Buffer.from(sent)).submit();
+    await client.send().message(Buffer.from(sent)).submit().admitted;
 
     const received = new zlink.Received();
     server.recv(received);

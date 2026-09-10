@@ -51,31 +51,6 @@ function measurementPayload(parts) {
   return parts[0];
 }
 
-// PERF_SINGLE_TEST_POLICY.md 1.1.3 (D-BP40): the un-settled request set is
-// bounded by the socket's own admission window - the SNDHWM bytes Core applied
-// to this socket divided by one request's wire size - and never by a fixed
-// number. That window is the boundary the C runner observes as
-// ZLINK_SUBMIT_BACKPRESSURED (perf_single_reqrep.hpp run_request_phase), so the
-// runner keeps no window of its own. A manual PERF_SINGLE_SNDHWM override does
-// not appear in the auto-HWM snapshot and is read back from the socket option.
-function resolveAdmissionWindow(client, monitor, wireSize) {
-  let hwmBytes = 0n;
-  try {
-    hwmBytes = BigInt(monitor.status().autoHwmAppliedSndHwmBytes ?? 0n);
-  } catch (error) {
-    hwmBytes = 0n;
-  }
-  if (hwmBytes <= 0n) hwmBytes = BigInt(client.options.sendHwm ?? 0n);
-  if (hwmBytes <= 0n) {
-    throw new Error(
-      'requester socket reports no send high-water mark, so the admission '
-      + 'window is unknown'
-    );
-  }
-  const window = hwmBytes / BigInt(Math.max(1, wireSize));
-  return window > 0n ? Number(window) : 1;
-}
-
 function requestOperation(client, routedClient, payload, timeoutMs) {
   const operation = routedClient ? client.request(SERVER_RID) : client.request();
   return appendMeasurement(operation, payload).timeout(timeoutMs);
@@ -110,8 +85,6 @@ async function runSocketReqRep(msgSize, options, routedClient) {
                               : zlink.createDealerSocket(ctx);
   const clientMonitor = client.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
   let worker = null;
-  let completionPoller = null;
-  let completionEvents = null;
 
   try {
     applySocketPolicy(client, options);
@@ -142,10 +115,6 @@ async function runSocketReqRep(msgSize, options, routedClient) {
     if (!routingProbe(client, routedClient, requestTimeoutMs)) {
       throw new Error('request-reply routing probe failed');
     }
-    completionPoller = zlink.createPoller();
-    completionEvents = zlink.createPollEvents(1);
-    completionPoller.add(client, [zlink.PollEventFlag.PollCompletion], 0);
-
     const runId = createRunId(options.runId ?? 1);
     const activeStartNs = currentEpochNs();
     const activeStopNs = activeStartNs
@@ -158,17 +127,16 @@ async function runSocketReqRep(msgSize, options, routedClient) {
       roundTrip: false,
     });
     const payloadTemplate = createPayload(msgSize);
-    // `submit()` transfers the request to the binding-owned admission and
-    // completion path. Keep its Promise only for settlement and draining.
+    // Reply completion is independent from admission. Only a backpressured
+    // submission pauses this socket's producer loop.
     const pending = new Set();
     let requestFailure = null;
     let seq = 1n;
 
-    const submitRequest = async (payload) => {
+    const collectReply = async (reply) => {
       let parts = null;
       try {
-        parts = await requestOperation(client, routedClient, payload, requestTimeoutMs)
-          .submit();
+        parts = await reply;
         const replyPayload = measurementPayload(parts);
         collector.recordPayload(replyPayload ? replyPayload.data() : null, currentEpochNs());
       } catch (error) {
@@ -180,44 +148,27 @@ async function runSocketReqRep(msgSize, options, routedClient) {
       }
     };
 
-    const admissionWindow = resolveAdmissionWindow(
-      client, clientMonitor, payloadTemplate.length
-    );
     const submitOne = () => {
       const payload = Buffer.from(payloadTemplate);
       stampPayload(payload, { phase: 1, runId, msgSize, seq });
       seq += 1n;
-      const task = submitRequest(payload);
+      const submission = requestOperation(
+        client, routedClient, payload, requestTimeoutMs
+      ).submit();
+      const task = collectReply(submission.reply);
       pending.add(task);
       task.catch((error) => { requestFailure = error; })
         .finally(() => pending.delete(task));
+      return submission;
     };
 
-    // A turn submits until the un-settled set fills the admission window, then
-    // progresses completions on this same thread. Nothing here waits for a
-    // reply before submitting the next request, and the window - not a runner
-    // constant - is what stops the submit loop.
+    // Core's result is the only admission window. OK immediately advances to
+    // the next request; BACKPRESSURED waits for admission, never for reply.
     while (currentEpochNs() < activeStopNs && !requestFailure) {
-      let submittedSinceProgress = 0;
-      let submittedAny = false;
-      while (currentEpochNs() < activeStopNs && !requestFailure
-             && pending.size < admissionWindow) {
-        submitOne();
-        submittedAny = true;
-        // Same progress cadence as the C submit cursor (64 submissions per
-        // round). Settling a Promise needs one loop turn on this thread.
-        if (++submittedSinceProgress >= 64) {
-          submittedSinceProgress = 0;
-          completionPoller.wait(completionEvents, 0);
-          await sleepImmediate();
-        }
+      const submission = submitOne();
+      if (submission.result === zlink.SubmitResult.Backpressured) {
+        await submission.admitted;
       }
-      // A bounded wait is reached only when the admission window is full,
-      // matching C's blocking poll after backpressure. This thread owns the
-      // completion drain, so waiting here is this runner progressing its own
-      // requests, not a yield to another scheduler.
-      completionPoller.wait(completionEvents, submittedAny ? 0 : 50);
-      await sleepImmediate();
     }
     if (requestFailure) throw requestFailure;
     // Bounded completion drain of requests submitted before the deadline; the
@@ -226,7 +177,6 @@ async function runSocketReqRep(msgSize, options, routedClient) {
     const drainStopNs = currentEpochNs()
       + BigInt(Math.max(1_000, requestTimeoutMs * 4)) * 1_000_000n;
     while (pending.size > 0 && currentEpochNs() < drainStopNs && !requestFailure) {
-      completionPoller.wait(completionEvents, 0);
       await sleepImmediate();
     }
     if (pending.size > 0) {
@@ -235,23 +185,14 @@ async function runSocketReqRep(msgSize, options, routedClient) {
     if (requestFailure) throw requestFailure;
 
     const stopOperation = routedClient ? client.send(SERVER_RID) : client.send();
-    let stopSettled = false;
-    let stopFailure = null;
-    stopOperation.message(STOP_TOKEN_BYTES).submit()
-      .catch((error) => { stopFailure = error; })
-      .finally(() => { stopSettled = true; });
-    while (!stopSettled) {
-      completionPoller.wait(completionEvents, 0);
-      await sleepImmediate();
+    const stopSubmission = stopOperation.message(STOP_TOKEN_BYTES).submit();
+    if (stopSubmission.result === zlink.SubmitResult.Backpressured) {
+      await stopSubmission.admitted;
     }
-    if (stopFailure) throw stopFailure;
     waitForWorkerStatus(worker, 4, 10_000);
     return collector.finish();
   } finally {
     await closeSenderWorker(worker);
-    try { completionPoller?.remove?.(client); } catch (_) { /* preserve the benchmark failure */ }
-    try { completionEvents?.close?.(); } catch (_) { /* preserve the benchmark failure */ }
-    try { completionPoller?.close?.(); } catch (_) { /* preserve the benchmark failure */ }
     for (const resource of [clientMonitor, client, ctx]) {
       try { resource?.close?.(); } catch (_) { /* preserve the benchmark failure */ }
     }

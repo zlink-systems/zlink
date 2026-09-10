@@ -27,8 +27,8 @@ class WritableTokenDeliveryContractTest {
             RoutingId rid = RoutingId.from(new byte[] {1, 2, 3});
             core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.BACKPRESSURED, NativeErrno.EAGAIN, 11));
             core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.BACKPRESSURED, NativeErrno.EAGAIN, 12));
-            var first = router.send(rid).message(Message.from("first")).submit().toCompletableFuture();
-            var second = router.send(rid).message(Message.from("second")).submit().toCompletableFuture();
+            var first = router.send(rid).message(Message.from("first")).submit().admitted().toCompletableFuture();
+            var second = router.send(rid).message(Message.from("second")).submit().admitted().toCompletableFuture();
             core.writable(core.submissions.get(1), 0);
             core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.OK, 0, 0));
             assertEquals(1, owner.drain());

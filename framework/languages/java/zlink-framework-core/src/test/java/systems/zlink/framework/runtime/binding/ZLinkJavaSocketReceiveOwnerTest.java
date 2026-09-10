@@ -209,7 +209,7 @@ final class ZLinkJavaSocketReceiveOwnerTest {
 
     private static void send(DealerSocket socket, String value) throws Exception {
         try (Message message = Message.from(value)) {
-            socket.send().message(message).submit()
+            socket.send().message(message).submit().admitted()
                 .toCompletableFuture()
                 .get(OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         }
@@ -220,7 +220,7 @@ final class ZLinkJavaSocketReceiveOwnerTest {
         RoutingId target,
         String value) throws Exception {
         try (Message message = Message.from(value)) {
-            socket.send(target).message(message).submit()
+            socket.send(target).message(message).submit().admitted()
                 .toCompletableFuture()
                 .get(OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         }

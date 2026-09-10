@@ -318,7 +318,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
                        descriptorRevision: 1,
                        new Dictionary<string, uint>(StringComparer.Ordinal),
                        objectRole: (byte)ZLinkMeshNodeObjectRole.Server)))
-            await source.Send().Message(hello).Async(CancellationToken.None);
+            await source.Send().Message(hello).Async(CancellationToken.None).Admitted;
 
         await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
         using var admission = await ReceiveAsync(source);
@@ -430,7 +430,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             await source.Send()
                 .Message(head)
                 .Message(payload)
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Admitted;
         await WaitUntilAsync(() =>
             monitor.Status().ProtocolErrors > protocolErrors);
         Assert.Equal(0UL, target.Status().PendingApplicationMessages);
@@ -1002,7 +1002,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             .Message(head)
             .Message(payload)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async(CancellationToken.None);
+            .Async(CancellationToken.None).Reply;
     }
 
     private static Task<IReadOnlyList<Message>> SendActorCreateRequestAsync(
@@ -1014,7 +1014,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         return source.Request()
             .Message(head)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async(CancellationToken.None);
+            .Async(CancellationToken.None).Reply;
     }
 
     private static ZLinkServiceWireCodec.ReplyRecord DecodeReply(
@@ -1165,7 +1165,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
                         descriptorRevision: 1,
                         new Dictionary<string, uint>(StringComparer.Ordinal),
                         objectRole: (byte)ZLinkMeshNodeObjectRole.Server));
-                await source.Send().Message(hello).Async(CancellationToken.None);
+                await source.Send().Message(hello).Async(CancellationToken.None).Admitted;
                 return;
             }
             catch (ZlinkSubmitException) when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)

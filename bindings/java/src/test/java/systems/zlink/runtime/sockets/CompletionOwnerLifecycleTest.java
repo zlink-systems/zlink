@@ -53,7 +53,7 @@ class CompletionOwnerLifecycleTest {
                     for (int i = 0; i < 1000; i++) {
                         try (Message message = new Message(256)) {
                             message.writeIntLe(0, i);
-                            pending = sender.send().message(message).submit()
+                            pending = sender.send().message(message).submit().admitted()
                                 .toCompletableFuture();
                         }
                         submitted++;
@@ -115,7 +115,7 @@ class CompletionOwnerLifecycleTest {
                     senders.add(sender);
                     sender.connect(endpoint);
                     var future = sender.request().message(Message.from("request"))
-                        .timeout(Duration.ofSeconds(2)).submit().toCompletableFuture();
+                        .timeout(Duration.ofSeconds(2)).submit().reply().toCompletableFuture();
                     assertTrue(router.recv(received, RecvFlags.NONE));
                     received.reply().message(received.firstPart()).submit();
                     received.close();
@@ -135,7 +135,7 @@ class CompletionOwnerLifecycleTest {
                     assertSame(wake, field(runtime, "wake"));
                     publicPoller.add(sender, i, PollEventFlags.POLLCOMPLETION);
                     var publicFuture = sender.request().message(Message.from("public"))
-                        .timeout(Duration.ofSeconds(2)).submit().toCompletableFuture();
+                        .timeout(Duration.ofSeconds(2)).submit().reply().toCompletableFuture();
                     assertTrue(router.recv(received, RecvFlags.NONE));
                     received.reply().message(received.firstPart()).submit();
                     received.close();

@@ -244,8 +244,6 @@ fn socket_monitor_event_exposes_full_payload_fields() {
     let client = ctx.pair_socket().unwrap();
     client.connect("inproc://mon-full-payload").unwrap();
 
-    thread::sleep(Duration::from_millis(100));
-
     let mut saw_event = false;
     for _ in 0..20 {
         if let Ok(ev) = mon.recv() {
@@ -276,9 +274,6 @@ fn socket_monitor_observes_connection() {
 
     let client = ctx.pair_socket().unwrap();
     client.connect("inproc://mon-connect").unwrap();
-
-    // Wait for events and drain
-    thread::sleep(Duration::from_millis(100));
 
     let mut found_event = false;
     for _ in 0..20 {

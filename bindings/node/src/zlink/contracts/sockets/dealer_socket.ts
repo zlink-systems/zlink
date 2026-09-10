@@ -17,7 +17,7 @@ import type { ConnectableSocket } from './socket';
 export interface DealerSocket extends ConnectableSocket {
   /** The DEALER-specific typed options facade. */
   readonly options: DealerSocketOptions;
-  /** Begin a managed send; `submit()` resolves after Core accepts the record. */
+  /** Begin a managed send; `submit()` returns its result and admission stage. */
   send(): SendOperation;
   /** Receive a message into `result`; false for non-blocking no-data. */
   recv(result: Received, flags?: RecvFlags): boolean;

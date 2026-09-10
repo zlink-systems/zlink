@@ -14,10 +14,12 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
@@ -163,6 +165,41 @@ final class ZLinkNodeSubmitTurnTest {
                 assertTerminal(reply);
                 admission.toCompletableFuture().join();
                 assertEquals(2, node.nodeCalls());
+            }
+        }
+    }
+
+    @Test
+    void nodeAndDirectSpotSubmissionsUseExactlyOneRegistryTurn() throws Exception {
+        for (boolean alreadyOnLane : new boolean[] {false, true}) {
+            CountingDirectExecutor executor = new CountingDirectExecutor();
+            try (Fixture f = new Fixture(executor);
+                 Message requestPart = Message.from("spot-request");
+                 Message sendPart = Message.from("spot-send")) {
+                NodeProbe node = new NodeProbe(f.lane);
+                f.runtime.registerSpotRouterNode(CHANNEL, node.node);
+
+                CompletionStage<String> nodeReply = submitAndAssertOneRegistryTurn(
+                    f, executor, alreadyOnLane, "requestToNode",
+                    () -> f.request().submit(String.class));
+                assertTerminal(nodeReply);
+
+                CompletionStage<Void> nodeAdmission = submitAndAssertOneRegistryTurn(
+                    f, executor, alreadyOnLane, "sendToNode", () -> f.send().submit());
+                nodeAdmission.toCompletableFuture().join();
+
+                CompletionStage<List<Message>> spotReply = submitAndAssertOneRegistryTurn(
+                    f, executor, alreadyOnLane, "requestToSpotViaRouterChannel",
+                    () -> f.runtime.requestToSpotViaRouterChannel(
+                        CHANNEL, TARGET, "target-spot", List.of(requestPart),
+                        Duration.ofSeconds(3)));
+                assertTerminal(spotReply);
+
+                CompletionStage<Void> spotAdmission = submitAndAssertOneRegistryTurn(
+                    f, executor, alreadyOnLane, "sendToSpotViaRouterChannel",
+                    () -> f.runtime.sendToSpotViaRouterChannel(
+                        CHANNEL, TARGET, "target-spot", List.of(sendPart)));
+                spotAdmission.toCompletableFuture().join();
             }
         }
     }
@@ -350,6 +387,21 @@ final class ZLinkNodeSubmitTurnTest {
             () -> stage.toCompletableFuture().join()).getCause());
     }
 
+    private static <T> T submitAndAssertOneRegistryTurn(
+        Fixture fixture,
+        CountingDirectExecutor executor,
+        boolean alreadyOnLane,
+        String operation,
+        Supplier<T> submission) {
+        int before = executor.turns();
+        T result = alreadyOnLane
+            ? fixture.lane.runAsync(submission).toCompletableFuture().join()
+            : submission.get();
+        assertEquals(before + 1, executor.turns(),
+            operation + (alreadyOnLane ? " inline" : " off-lane"));
+        return result;
+    }
+
     private static void await(CountDownLatch latch) {
         try {
             assertTrue(latch.await(5, TimeUnit.SECONDS));
@@ -372,6 +424,12 @@ final class ZLinkNodeSubmitTurnTest {
         Field field = object.getClass().getDeclaredField(name);
         field.setAccessible(true);
         return field.get(object);
+    }
+
+    private static void setField(Object object, String name, Object value) throws Exception {
+        Field field = object.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(object, value);
     }
 
     private static Object defaultValue(Class<?> type) {
@@ -399,12 +457,21 @@ final class ZLinkNodeSubmitTurnTest {
         final ZLinkStateLane lane;
 
         Fixture() throws Exception {
+            this(null);
+        }
+
+        Fixture(Executor laneExecutor) throws Exception {
             DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
             options.setDefaultRequestTimeout(DEFAULT_TIMEOUT);
             runtime = new ZLinkChannelRuntime(
                 new EmptyBackend(), options.registration(), new ZLinkJsonMessageSerializer());
             sockets = (ZLinkChannelSocketRegistry) field(runtime, "sockets");
-            lane = (ZLinkStateLane) field(sockets, "stateLane");
+            if (laneExecutor == null) {
+                lane = (ZLinkStateLane) field(sockets, "stateLane");
+            } else {
+                lane = new ZLinkStateLane(laneExecutor);
+                setField(sockets, "stateLane", lane);
+            }
         }
 
         void register(Duration timeout) {
@@ -424,6 +491,35 @@ final class ZLinkNodeSubmitTurnTest {
         @Override
         public void close() {
             runtime.close();
+        }
+    }
+
+    private static final class CountingDirectExecutor implements Executor {
+        private final AtomicInteger turns = new AtomicInteger();
+        private final ThreadLocal<Integer> depth = ThreadLocal.withInitial(() -> 0);
+
+        @Override
+        public void execute(Runnable command) {
+            int currentDepth = depth.get();
+            // A completed lane item schedules its drain continuation recursively.
+            // Both executor calls belong to the same externally submitted turn.
+            if (currentDepth == 0) {
+                turns.incrementAndGet();
+            }
+            depth.set(currentDepth + 1);
+            try {
+                command.run();
+            } finally {
+                if (currentDepth == 0) {
+                    depth.remove();
+                } else {
+                    depth.set(currentDepth);
+                }
+            }
+        }
+
+        int turns() {
+            return turns.get();
         }
     }
 

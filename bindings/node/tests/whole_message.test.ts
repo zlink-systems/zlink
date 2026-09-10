@@ -56,7 +56,7 @@ test('whole-message REQUEST growth preserves the route, reply token, and indepen
     dealer.connect('inproc://whole-message-request');
     for (const count of [33, 2]) {
       const expected = payloads(count);
-      const pending = withParts(dealer.request(), expected).timeout(1000).submit();
+      const pending = withParts(dealer.request(), expected).timeout(1000).submit().reply;
       assert.equal(router.recv(received), true);
       assert.ok(received.routingId.equals(peer));
       assert.ok(received.replyToken);
@@ -74,7 +74,7 @@ test('whole-message REQUEST growth preserves the route, reply token, and indepen
       assert.deepEqual(retained.map(part => part.data()), expected);
       retained.forEach(part => { part.close(); part.close(); });
 
-      await dealer.send().message('data-after-request').submit();
+      await dealer.send().message('data-after-request').submit().admitted;
       assert.equal(router.recv(received), true);
       assert.ok(received.routingId.equals(peer));
       assert.equal(received.replyToken, null);

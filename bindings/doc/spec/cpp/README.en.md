@@ -604,7 +604,7 @@ types.
 
 C++ package information follows its [distribution metadata](../../../cpp/CMakeLists.txt); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-C++ provides blocking `submit()` and `async()` returning `async_result_t`.
+C++ provides blocking `submit()` and `async()` returning a result object (`send_submission_t`/`request_submission_t`: `result` and `admitted`, plus `reply` for a request).
 Completion-wait lifetime ends through `async_result_t` drop.
 
 Native completion IDs, `user_context`, and raw drain are not public APIs.
@@ -623,12 +623,23 @@ the next recv entry or `close()`. Before the first bind/connect, the receive-mod
 ### Public interface
 
 ```cpp
+struct send_submission_t {
+    zlink_submit_result_t result;        // OK | BACKPRESSURED, submit-time snapshot
+    async_result_t<void> admitted;       // completed when result is OK
+};
+
+struct request_submission_t {
+    zlink_submit_result_t result;
+    async_result_t<void> admitted;
+    async_result_t<std::vector<message_t>> reply;   // completes after successful admission
+};
+
 class send_submit_operation_t {
 public:
     send_submit_operation_t&& message(message_t&) &&;
     send_submit_operation_t&& message(message_t&&) &&;
     void submit() &&;
-    async_result_t<void> async() &&;
+    send_submission_t async() &&;
 };
 
 class request_submit_operation_t {
@@ -637,7 +648,7 @@ public:
     request_submit_operation_t&& message(message_t&&) &&;
     request_submit_operation_t&& timeout(std::chrono::milliseconds) &&;
     std::vector<message_t> submit() &&;
-    async_result_t<std::vector<message_t>> async() &&;
+    request_submission_t async() &&;
 };
 
 class reply_token_t final {

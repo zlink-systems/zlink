@@ -168,7 +168,7 @@ internal sealed record ZLinkBackendActorPart(
     ZLinkBackendActorRouteContext RouteContext = default,
     ulong SourceNodeGeneration = 0,
     ZLinkServiceWireCodec.RequestSourceFence? RequestSource = null,
-    Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? DirectReply = null,
+    Func<IReadOnlyList<Message>, SubmitResult>? DirectReply = null,
     ReadOnlyMemory<byte> ApplicationMetadata = default);
 
 internal interface IZLinkBackendActorMessageFollowIngress

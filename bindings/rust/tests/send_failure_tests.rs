@@ -10,14 +10,21 @@ use zlink::{
     Context, Message, Received, RecvFlags, RoutingId, SendFlags, SubmitResult, ZlinkError,
 };
 
+fn await_send(
+    submission: Result<zlink::SendSubmission, zlink::SubmitError>,
+) -> Result<(), zlink::SubmitError> {
+    test_support::block_on(submission?.admitted)
+}
+
 #[test]
 fn sync_blocking_terminal_admits_a_send() {
     let ctx = Context::new().unwrap();
     let receiver = ctx.pair_socket().unwrap();
     let sender = ctx.pair_socket().unwrap();
     receiver.bind("inproc://rust-sync-send-admit").unwrap();
-    sender.connect("inproc://rust-sync-send-admit").unwrap();
-    thread::sleep(Duration::from_millis(50));
+    test_support::connect_pair_and_confirm(&receiver, &sender, || {
+        sender.connect("inproc://rust-sync-send-admit").unwrap()
+    });
 
     sender
         .send()
@@ -46,12 +53,13 @@ fn async_terminal_still_completes_after_sync_terminal_is_added() {
     receiver
         .bind("inproc://rust-async-send-regression")
         .unwrap();
-    sender
-        .connect("inproc://rust-async-send-regression")
-        .unwrap();
-    thread::sleep(Duration::from_millis(50));
+    test_support::connect_pair_and_confirm(&receiver, &sender, || {
+        sender
+            .connect("inproc://rust-async-send-regression")
+            .unwrap()
+    });
 
-    test_support::block_on(
+    await_send(
         sender
             .send()
             .message(Message::try_from(b"async-still-works").unwrap())
@@ -69,11 +77,9 @@ fn routed_send_to_missing_target_is_immediately_not_connected() {
     router.router_options().set_mandatory(true).unwrap();
     let rid = RoutingId::from(b"nonexistent-peer");
     let msg = Message::try_from(b"will-fail").unwrap();
-    let mut future = Box::pin(router.send(&rid).message(msg).submit());
-    let error = match test_support::poll_once(&mut future) {
-        std::task::Poll::Ready(Err(error)) => error,
-        std::task::Poll::Ready(Ok(())) => panic!("missing route was admitted"),
-        std::task::Poll::Pending => panic!("missing route incorrectly returned a wait token"),
+    let error = match router.send(&rid).message(msg).submit() {
+        Err(error) => error,
+        Ok(_) => panic!("missing route was admitted"),
     };
     assert_eq!(error.code(), SubmitResult::NotConnected);
 }
@@ -98,17 +104,16 @@ fn router_request_to_a_dealer_is_immediately_not_admitted() {
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
 
-    let mut request = Box::pin(
-        router
-            .request(&dealer_rid)
-            .message(Message::try_from(b"wrong-peer-type").unwrap())
-            .submit(),
-    );
-    let error = match test_support::poll_once(&mut request) {
-        std::task::Poll::Ready(Err(ZlinkError::Submit(error))) => error,
-        std::task::Poll::Ready(Err(other)) => panic!("unexpected request error: {other}"),
-        std::task::Poll::Ready(Ok(_)) => panic!("request to DEALER was admitted"),
-        std::task::Poll::Pending => panic!("request to DEALER returned a wait token"),
+    let error = match match router
+        .request(&dealer_rid)
+        .message(Message::try_from(b"wrong-peer-type").unwrap())
+        .submit()
+    {
+        Err(error) => error,
+        Ok(_) => panic!("request to DEALER was admitted"),
+    } {
+        ZlinkError::Submit(error) => error,
+        other => panic!("unexpected request error: {other}"),
     };
     assert_eq!(error.code(), SubmitResult::NotAdmitted);
 }
@@ -149,7 +154,9 @@ fn send_without_peer_keeps_only_a_payload_free_token_after_drop() {
     // payload until this explicit drop.
 
     let msg = Message::try_from(b"data").unwrap();
-    let mut future = Box::pin(sock.send().message(msg).submit());
+    let submission = sock.send().message(msg).submit().unwrap();
+    assert_eq!(submission.result, SubmitResult::Backpressured);
+    let mut future = submission.admitted;
     assert_eq!(
         test_support::poll_once(&mut future),
         std::task::Poll::Pending
@@ -218,7 +225,7 @@ fn try_send_non_eagain_error_not_swallowed() {
     ctx.shutdown().unwrap();
 
     let msg = Message::try_from(b"after-shutdown").unwrap();
-    let result = test_support::block_on(sock.send().message(msg).submit());
+    let result = await_send(sock.send().message(msg).submit());
     // ETERM is not EAGAIN – must be Err
     assert!(result.is_err(), "non-EAGAIN error must surface as Err");
 }

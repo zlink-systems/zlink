@@ -154,7 +154,7 @@ int main ()
     assert (completion_owner.find ("_early_send_completions.emplace")
             != std::string::npos);
     const std::size_t request_attempt = completion_owner.find (
-      "submit_request_attempt (bool initial_)");
+      "submit_request_attempt (bool initial_,");
     const std::size_t request_refused = completion_owner.find (
       "if (!admitted)", request_attempt);
     const std::size_t request_snapshot = completion_owner.find (

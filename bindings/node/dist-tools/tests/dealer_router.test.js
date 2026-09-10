@@ -12,7 +12,7 @@ test('dealer/router send captures target and refills Received', async () => {
     dealer.setRoutingId(dealerRid);
     dealer.connect('inproc://dealer-router-pull-completion');
     try {
-        await dealer.send().message('hello').submit();
+        await dealer.send().message('hello').submit().admitted;
         const received = new zlink.Received();
         assert.equal(router.recv(received), true);
         assert.equal(received.parts[0].getString(), 'hello');
@@ -21,7 +21,7 @@ test('dealer/router send captures target and refills Received', async () => {
         assert.ok(captured);
         const operation = router.send(captured).message('world');
         received.close();
-        await operation.submit();
+        await operation.submit().admitted;
         assert.equal(dealer.recv(received), true);
         assert.equal(received.parts[0].getString(), 'world');
         received.close();
@@ -39,11 +39,11 @@ test('request receive exposes opaque ReplyToken and reusable state resets', asyn
     router.bind('inproc://dealer-router-reply-token');
     dealer.connect('inproc://dealer-router-reply-token');
     try {
-        await dealer.send().message('plain').submit();
+        await dealer.send().message('plain').submit().admitted;
         const received = new zlink.Received();
         assert.equal(router.recv(received), true);
         assert.equal(received.replyToken, null);
-        const pending = dealer.request().message('request').timeout(1_000).submit();
+        const pending = dealer.request().message('request').timeout(1_000).submit().reply;
         assert.equal(router.recv(received), true);
         assert.ok(received.replyToken instanceof zlink.ReplyToken);
         assert.equal(received.replyToken.toString(), 'ReplyToken');
@@ -67,7 +67,7 @@ test('ReplyToken from another RouterSocket is rejected before native submit', as
     first.bind('inproc://reply-token-owner');
     dealer.connect('inproc://reply-token-owner');
     try {
-        const pending = dealer.request().message('request').timeout(50).submit();
+        const pending = dealer.request().message('request').timeout(50).submit().reply;
         const request = new zlink.Received();
         assert.equal(first.recv(request), true);
         assert.ok(request.routingId && request.replyToken);

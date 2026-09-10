@@ -54,7 +54,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
         true,
         metadata
       )
-    ).submit());
+    ).submit().admitted);
     return { status: ZLinkSubmitStatus.Submitted };
   }
 
@@ -83,7 +83,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
       )
     ));
     if (timeoutMs !== undefined) operation.timeout(timeoutMs);
-    const reply = await submitRequestOperation(operation, 'channel request');
+    const reply = await submitRequestOperation({ submit: () => operation.submit().reply }, 'channel request');
     try {
       return decodeChannelReply<TReply>(reply);
     } finally {

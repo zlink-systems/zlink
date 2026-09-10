@@ -130,10 +130,9 @@ internal static class PerfMultiDealerRouterClient
 
         while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
         {
-            // One active async runtime advances every socket once per round.
-            // A socket can submit again only after its prior public async
-            // admission completes; echoed replies are drained independently
-            // below and never gate the next send.
+            // Keep submitting on each socket until Core reports backpressure.
+            // Only that socket pauses on its admission stage; echoed replies
+            // are drained independently and never gate the next send.
             bool submittedAny = false;
             int start = roundStart;
             for (int attempts = 0; attempts < slots.Length; attempts++)
@@ -143,14 +142,18 @@ internal static class PerfMultiDealerRouterClient
 
                 int slotIndex = (start + attempts) % slots.Length;
                 DealerRouterClientSlot slot = slots[slotIndex];
-                if (!TryCompletePendingAdmission(slot))
+                slot.ThrowAdmissionError();
+                if (slot.AdmissionPending)
                     continue;
-
-                ulong currentSeq = unchecked((ulong)++seq);
-                StampMetricHeader(slot.Payload.AsSpan(), runId,
-                    PerfPhase.Active, msgSize, currentSeq, EpochNs());
-                StartAdmission(slot, admissionSignal, replies);
-                submittedAny = true;
+                while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
+                {
+                    ulong currentSeq = unchecked((ulong)++seq);
+                    StampMetricHeader(slot.Payload.AsSpan(), runId,
+                        PerfPhase.Active, msgSize, currentSeq, EpochNs());
+                    submittedAny = true;
+                    if (StartAdmission(slot, admissionSignal, replies))
+                        break;
+                }
             }
             if (slots.Length > 0)
                 roundStart = (start + 1) % slots.Length;
@@ -181,7 +184,7 @@ internal static class PerfMultiDealerRouterClient
         // Keep receiving every admitted echo inside the configured drain
         // deadline while the binding runtime completes async admissions.
         await replies.WaitAsync(drainDeadlineTicks, admissionSignal,
-            () => CompletePendingAdmissions(slots),
+            static () => { },
             () => HasPendingAdmissions(slots),
             timeoutMs => PollSocketEvents(pollManager, sockets, eventMasks,
                 timeoutMs),
@@ -194,6 +197,8 @@ internal static class PerfMultiDealerRouterClient
                         runId, PerfPhase.Active, metrics,
                         benchDeadlineTicks, replies);
             }).ConfigureAwait(false);
+        for (int i = 0; i < slots.Length; i++)
+            slots[i].ThrowAdmissionError();
 
         long benchEndTicks = Stopwatch.GetTimestamp();
 
@@ -214,7 +219,7 @@ internal static class PerfMultiDealerRouterClient
             metrics.MeasureCount, metrics.SampleSeen);
     }
 
-    private static void StartAdmission(DealerRouterClientSlot slot,
+    private static bool StartAdmission(DealerRouterClientSlot slot,
         PerfMultiAdmissionSignal admissionSignal,
         PerfMultiEchoReplyDrain replies)
     {
@@ -223,18 +228,19 @@ internal static class PerfMultiDealerRouterClient
         replies.Submitted();
         try
         {
-            Task admission = PerfSocketIo.SendMeasurementAsync(
+            SendSubmission submission = PerfSocketIo.SendMeasurementAsync(
                 (IDealerSocket)slot.Socket, message, SendFlags.None);
-            if (admission.IsCompletedSuccessfully)
+            if (submission.Result == SubmitResult.Ok)
             {
                 message.Dispose();
-                return;
+                return false;
             }
 
-            Task tracked = AwaitAdmissionAndDisposeAsync(admission, message,
-                replies);
-            slot.PendingAdmission = tracked;
+            slot.BeginAdmission();
+            Task tracked = AwaitAdmissionAndDisposeAsync(submission.Admitted,
+                message, replies, slot);
             admissionSignal.Track(tracked);
+            return true;
         }
         catch
         {
@@ -242,58 +248,34 @@ internal static class PerfMultiDealerRouterClient
             message.Dispose();
             throw;
         }
-    }
-
-    private static bool TryCompletePendingAdmission(
-        DealerRouterClientSlot slot)
-    {
-        Task? admission = slot.PendingAdmission;
-        if (admission == null)
-            return true;
-        if (!admission.IsCompleted)
-            return false;
-
-        slot.PendingAdmission = null;
-        admission.GetAwaiter().GetResult();
-        return true;
     }
 
     private static bool HasPendingAdmissions(DealerRouterClientSlot[] slots)
     {
         for (int i = 0; i < slots.Length; i++)
-            if (slots[i].PendingAdmission != null)
+            if (slots[i].AdmissionPending)
                 return true;
         return false;
     }
 
-    private static void CompletePendingAdmissions(
-        DealerRouterClientSlot[] slots)
-    {
-        for (int i = 0; i < slots.Length; i++)
-        {
-            Task? admission = slots[i].PendingAdmission;
-            if (admission == null || !admission.IsCompleted)
-                continue;
-            slots[i].PendingAdmission = null;
-            admission.GetAwaiter().GetResult();
-        }
-    }
-
     private static async Task AwaitAdmissionAndDisposeAsync(Task admission,
-        Message message, PerfMultiEchoReplyDrain replies)
+        Message message, PerfMultiEchoReplyDrain replies,
+        DealerRouterClientSlot slot)
     {
+        Exception? failure = null;
         try
         {
             await admission.ConfigureAwait(false);
         }
-        catch
+        catch (Exception exception)
         {
             replies.AdmissionRejected();
-            throw;
+            failure = exception;
         }
         finally
         {
             message.Dispose();
+            slot.CompleteAdmission(failure);
         }
     }
 
@@ -385,9 +367,32 @@ internal static class PerfMultiDealerRouterClient
         // The binding overwrites the internal state in place, avoiding the
         // per-recv Received allocation.
         internal Received ReusableReceived { get; }
-        // At most one public async admission may own this socket's next record.
-        // Echo receipt never participates in this state.
-        internal Task? PendingAdmission { get; set; }
+        private int _admissionPending;
+        private Exception? _admissionError;
+
+        internal bool AdmissionPending =>
+            Volatile.Read(ref _admissionPending) != 0;
+
+        internal void BeginAdmission()
+        {
+            if (Interlocked.Exchange(ref _admissionPending, 1) != 0)
+                throw new InvalidOperationException(
+                    "The socket already has a pending admission.");
+        }
+
+        internal void CompleteAdmission(Exception? failure)
+        {
+            if (failure is not null)
+                Interlocked.CompareExchange(ref _admissionError, failure, null);
+            Volatile.Write(ref _admissionPending, 0);
+        }
+
+        internal void ThrowAdmissionError()
+        {
+            Exception? failure = Interlocked.Exchange(ref _admissionError, null);
+            if (failure is not null)
+                throw failure;
+        }
     }
 
     private sealed class DealerRouterMetrics

@@ -49,7 +49,7 @@ func runRouterRouterReqRep(cfg benchmarkConfig) perfcommon.Result {
 		replier,
 		func() zlink.RequestOp { return requester.Request(targetID) },
 		func(message *zlink.Message) (bool, error) {
-			err := requester.SendTo(targetID).MoveMessage(message).Submit(context.Background())
+			err := perfcommon.SubmitSend(context.Background(), requester.SendTo(targetID).MoveMessage(message))
 			return err == nil, err
 		},
 	)

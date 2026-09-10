@@ -14,6 +14,7 @@ import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.DealerSocket;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RouterSocket;
+import systems.zlink.contracts.sockets.SubmitResult;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -49,7 +50,12 @@ class PerfMultiRoutedRelayContractTest {
             assertEquals(0, sourceParts.get(1).size());
             routed.close();
             routed.close();
-            admission.toCompletableFuture().get(2, TimeUnit.SECONDS);
+            if (admission.result() == SubmitResult.BACKPRESSURED) {
+                admission.admitted().toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
+            } else {
+                assertEquals(SubmitResult.OK, admission.result());
+            }
 
             assertTrue(dealer.recv(echoed, RecvFlags.NONE));
             assertEquals(2, echoed.parts().size());

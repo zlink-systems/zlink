@@ -30,7 +30,7 @@ interface ZLinkBindingReplySubmitOperation {
 
 interface ZLinkBindingAsyncSendSubmitOperation {
   message(message: unknown): ZLinkBindingAsyncSendSubmitOperation;
-  submit(): Promise<void>;
+  submit(): import('@zlink-systems/zlink').SendSubmission;
   submit_sync(): void;
 }
 
@@ -41,7 +41,7 @@ export interface ZLinkBindingRequestOperation {
 interface ZLinkBindingRequestSubmitOperation {
   message(message: unknown): ZLinkBindingRequestSubmitOperation;
   timeout(timeoutMs: number): ZLinkBindingRequestSubmitOperation;
-  submit(): Promise<readonly unknown[]>;
+  submit(): import('@zlink-systems/zlink').RequestSubmission;
 }
 
 export function isBindingNotFound(error: unknown): boolean {
@@ -113,7 +113,7 @@ export async function submitBindingAsyncSend(
       current = current === undefined ? operation.message(nativePart) : current.message(nativePart);
     }
     current ??= operation.message(Buffer.alloc(0));
-    await current.submit();
+    await current.submit().admitted;
   } catch (error) {
     throw translateBindingResultError(error);
   }
@@ -156,7 +156,7 @@ export async function submitBindingRequest(
     if (timeoutMs !== undefined) {
       current = current.timeout(timeoutMs);
     }
-    return await current.submit();
+    return await current.submit().reply;
   } catch (error) {
     throw translateBindingResultError(error);
   }

@@ -61,7 +61,7 @@ public class ReceivedContractTest {
             dealer.send()
                 .message(Message.from("part-1"))
                 .message(Message.from("part-2"))
-                .submit()
+                .submit().admitted()
                 .toCompletableFuture().join();
 
             try (systems.zlink.contracts.messaging.Received inbound = new systems.zlink.contracts.messaging.Received()) {
@@ -131,7 +131,7 @@ public class ReceivedContractTest {
                 .message(Message.from("forwarded-request"))
                 .timeout(Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS))
                 .submit();
-            targetPending.whenComplete((reply, failure) -> {
+            targetPending.reply().whenComplete((reply, failure) -> {
                 completionThread.set(Thread.currentThread().getName());
                 if (failure != null) {
                     forwardedTerminal.completeExceptionally(failure);
@@ -158,7 +158,7 @@ public class ReceivedContractTest {
             forwardedTerminal.get(TestSupport.DEFAULT_TIMEOUT_MS,
                 TimeUnit.MILLISECONDS);
             assertEquals("zlink-send-completion", completionThread.get());
-            List<Message> reply = callerPending.toCompletableFuture().get(
+            List<Message> reply = callerPending.reply().toCompletableFuture().get(
                 TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             try {
                 assertEquals("target-reply", reply.getFirst().toUtf8String());

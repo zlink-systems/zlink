@@ -14,8 +14,8 @@ export interface StreamSocket extends Socket {
   /** The STREAM-specific typed options facade. */
   readonly options: StreamSocketOptions;
   /**
-   * Begin an exact-target managed send. `submit()` resolves only after Core
-   * accepts the record for the routing id captured by this builder.
+   * Begin an exact-target managed send. `submit()` returns the native result
+   * and admission stage for the routing id captured by this builder.
    */
   send(routingId: RoutingId): SendOperation;
   /** Receive a message into `result`; false when `RecvFlags.DontWait` is set and none is available. */

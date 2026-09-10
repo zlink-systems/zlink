@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { ReplyToken, RoutingId, type MessageLike } from '../../contracts';
-import type { ReplyOperation, RequestOperation, SendOperation } from '../../contracts/messaging';
+import type {
+  ReplyOperation,
+  RequestOperation,
+  SendOperation,
+  SendSubmission,
+} from '../../contracts/messaging';
 import {
   replyTokenNativeValue,
   replyTokenOwnerMatches,
@@ -78,7 +83,7 @@ export class RouterSocket extends RoutedMessageSocket {
   protected sendReceivedManaged(
     routingId: Buffer,
     parts: readonly import('../../contracts').Message[]
-  ): Promise<void> {
+  ): SendSubmission {
     return completionOwnerOf(this).submitSend(parts, routingId);
   }
 

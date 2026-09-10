@@ -20,12 +20,6 @@ internal sealed class PerfMultiAdmissionSignal
     internal void Track(Task admission)
     {
         ArgumentNullException.ThrowIfNull(admission);
-        if (admission.IsCompleted)
-        {
-            Signal();
-            return;
-        }
-
         // Register a callback without allocating another continuation Task.
         // The tracked Task is already terminal before this callback runs, so a
         // woken coordinator can observe and retire the matching socket state.

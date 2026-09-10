@@ -621,7 +621,7 @@ public sealed class MeshNodeShutdownSealTests
             try
             {
                 using var message = Message.From(head);
-                await socket.Send().Message(message).Async(CancellationToken.None);
+                await socket.Send().Message(message).Async(CancellationToken.None).Admitted;
                 return;
             }
             catch (ZlinkSubmitException) when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)

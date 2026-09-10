@@ -5,10 +5,10 @@ package systems.zlink.perf.multi;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Objects;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import systems.zlink.contracts.messaging.SendSubmission;
 
 /**
  * Pending routed replies whose single sender awaits the preceding admission.
@@ -46,7 +46,7 @@ final class PerfMultiRoutedReplyQueue<T> {
     @FunctionalInterface
     interface Submitter<T> {
         /** Submits one reply; the submit consumes the reply it is given. */
-        CompletionStage<Void> submit(T reply);
+        SendSubmission submit(T reply);
     }
 
     void enqueue(T reply) {
@@ -145,10 +145,9 @@ final class PerfMultiRoutedReplyQueue<T> {
         pending.clear();
     }
 
-    // Caller holds `lock`. Submits one reply at a time; the completion of that
-    // submit releases the next. Core settles an immediate admission inline on
-    // this thread, so the re-entrancy guard keeps this loop the single driver
-    // instead of recursing once per admitted reply.
+    // Caller holds `lock`. Only a BACKPRESSURED admission suspends this pump;
+    // OK continues the FIFO inline. The re-entrancy guard keeps the admission
+    // callback from recursively growing the stack.
     private void pump() {
         if (pumping) {
             return;
@@ -158,10 +157,10 @@ final class PerfMultiRoutedReplyQueue<T> {
             while (!sending && !hasFailure() && !pending.isEmpty()) {
                 T reply = pending.pollFirst();
                 sending = true;
-                CompletionStage<Void> stage;
+                SendSubmission submission;
                 try {
-                    stage = Objects.requireNonNull(submitter.submit(reply),
-                        "async submit stage");
+                    submission = Objects.requireNonNull(submitter.submit(reply),
+                        "async send submission");
                 } catch (Throwable error) {
                     sending = false;
                     disposer.accept(reply);
@@ -170,16 +169,22 @@ final class PerfMultiRoutedReplyQueue<T> {
                     recordFailure(error);
                     continue;
                 }
-                stage.whenComplete((ignored, error) -> {
-                    synchronized (lock) {
-                        sending = false;
-                        if (error != null) {
-                            recordFailure(error);
+                if (!PerfMultiAsyncSendLoop.isBackpressured(submission)) {
+                    sending = false;
+                    continue;
+                }
+                Objects.requireNonNull(submission.admitted(),
+                    "backpressured admission stage").whenComplete(
+                    (ignored, error) -> {
+                        synchronized (lock) {
+                            sending = false;
+                            if (error != null) {
+                                recordFailure(error);
+                            }
+                            lock.notifyAll();
+                            pump();
                         }
-                        lock.notifyAll();
-                        pump();
-                    }
-                });
+                    });
             }
         } finally {
             pumping = false;

@@ -229,6 +229,7 @@ export interface ZLinkRequestCall {
  metadata(metadata: ZLinkMessageMetadata): this;
  timeout(timeoutMs: number): this;
  submit<TReply>(signal?: AbortSignal): Promise<TReply>;
+ submit_sync<TReply>(): TReply;   // 동기 blocking; runtime 문맥에서 InvalidOperation (F2-a)
 }
 
 export interface ZLinkChannelRequestCall {
@@ -236,6 +237,7 @@ export interface ZLinkChannelRequestCall {
  metadata(metadata: ZLinkMessageMetadata): this;
  timeout(timeoutMs: number): this;
  submit<TReply>(signal?: AbortSignal): Promise<TReply>;
+ submit_sync<TReply>(): TReply;   // 동기 blocking; runtime 문맥에서 InvalidOperation (F2-a)
  yield<TReply>(signal?: AbortSignal): Promise<TReply>;
 }
 
@@ -307,6 +309,7 @@ export interface ZLinkSendCall {
  metadata(key: string, value: string): this;
  metadata(metadata: ZLinkMessageMetadata): this;
  submit(signal?: AbortSignal): Promise<void>;
+ submit_sync(): void;   // 동기 blocking; runtime 문맥에서 InvalidOperation (F2-a)
 }
 
 export interface ZLinkSendHandler<TMessage> {

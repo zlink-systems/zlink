@@ -280,6 +280,7 @@ internal sealed class ZLinkClientServerServerIdentity(
             await router.Send(routingId)
                 .Message(message)
                 .Async(cancellationToken)
+                .Admitted
                 .ConfigureAwait(false);
             return true;
         }

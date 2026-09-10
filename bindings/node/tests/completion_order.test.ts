@@ -15,7 +15,7 @@ for (const transport of ['inproc', 'tcp']) {
     dealer.connect(router.options.lastEndpoint);
     try {
       // Complete the handshake before submitting a burst on this socket.
-      await dealer.send().message('ready').submit();
+      await dealer.send().message('ready').submit().admitted;
       assert.equal(router.recv(received), true);
       received.close();
       const expected = Array.from({ length: 128 }, (_, index) => index);
@@ -23,7 +23,7 @@ for (const transport of ['inproc', 'tcp']) {
       const pending = expected.map(index => dealer.send()
         .message(Buffer.from(String(index)))
         .message(Buffer.from(`payload-${index}`))
-        .submit().then(() => { completed.push(index); }));
+        .submit().admitted.then(() => { completed.push(index); }));
       for (const index of expected) {
         assert.equal(router.recv(received), true);
         assert.deepEqual(received.parts.map(part => part.getString()),
@@ -37,7 +37,7 @@ for (const transport of ['inproc', 'tcp']) {
       // completion callback delivery without adding a public poller owner.
       completed.length = 0;
       const requests = expected.map(index => dealer.request()
-        .message(String(index)).timeout(1000).submit().then(parts => {
+        .message(String(index)).timeout(1000).submit().reply.then(parts => {
           try {
             assert.equal(parts[0].getString(), String(index));
             completed.push(index);

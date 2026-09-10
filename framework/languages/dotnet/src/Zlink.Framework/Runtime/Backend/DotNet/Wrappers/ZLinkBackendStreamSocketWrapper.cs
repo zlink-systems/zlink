@@ -123,47 +123,15 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         }
     }
 
-    public bool Send(RoutingId routingId, Message payload, SendFlags flags)
-    {
-        try
-        {
-            return AwaitStateLane(_lane.RunAsync(
-                () => SubmitSend(
-                    _socket.Send(routingId).Message(payload),
-                    flags)));
-        }
-        catch (ZlinkSubmitException exception)
-            when (exception.Result == ZlinkSubmitException.ErrorCode.Backpressured)
-        {
-            return false;
-        }
-    }
-
-    public async ValueTask SendAsync(
+    public Task SendAsync(
         RoutingId routingId,
         Message payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken = default)
     {
-        await _socket.Send(routingId)
+        return _socket.Send(routingId)
             .Message(payload)
             .Async(cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    public bool Send(RoutingId routingId, IReadOnlyList<Message> parts, SendFlags flags)
-    {
-        try
-        {
-            return AwaitStateLane(_lane.RunAsync(
-                () => SubmitSend(
-                    _socket.Send(routingId).Messages(parts),
-                    flags)));
-        }
-        catch (ZlinkSubmitException exception)
-            when (exception.Result == ZlinkSubmitException.ErrorCode.Backpressured)
-        {
-            return false;
-        }
+            .Admitted;
     }
 
     public void DisconnectPeer(RoutingId routingId)
@@ -347,18 +315,6 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
-
-    private static bool SubmitSend(
-        SendSubmitOperation operation,
-        SendFlags flags)
-    {
-        if (flags == SendFlags.DontWait)
-            return operation.TrySubmit();
-        if (flags != SendFlags.None)
-            throw new ArgumentOutOfRangeException(nameof(flags));
-        operation.Submit();
-        return true;
-    }
 
     private static void AwaitStateLane(ValueTask operation) =>
         operation.GetAwaiter().GetResult();

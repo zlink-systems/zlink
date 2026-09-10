@@ -126,8 +126,12 @@ class ReplyNativeTests(unittest.TestCase):
 
                         with concurrent.futures.ThreadPoolExecutor(1) as executor:
                             server_done = executor.submit(serve)
-                            cancelled = asyncio.create_task(
-                                client.request().messages(b"cancel", b"").timeout(2).submit()
+                            cancelled = asyncio.ensure_future(
+                                client.request()
+                                .messages(b"cancel", b"")
+                                .timeout(2)
+                                .submit()
+                                .reply
                             )
                             try:
                                 await asyncio.wait_for(arrived.wait(), 2)
@@ -139,7 +143,13 @@ class ReplyNativeTests(unittest.TestCase):
 
                             async def request(index):
                                 expected = [str(index).encode(), b""]
-                                parts = await client.request().messages(*expected).timeout(2).submit()
+                                submission = (
+                                    client.request()
+                                    .messages(*expected)
+                                    .timeout(2)
+                                    .submit()
+                                )
+                                parts = await submission.reply
                                 try:
                                     self.assertEqual([part.to_bytes() for part in parts], expected)
                                 finally:

@@ -17,11 +17,12 @@ struct request_completion_bundle_t
 {
     explicit request_completion_bundle_t (
       std::unique_ptr<detail::operation_state_t> operation_) :
-        result (), entry (&result, std::move (operation_))
+        admitted (), reply (), entry (&reply, &admitted, std::move (operation_))
     {
     }
 
-    detail::async_operation_state_t<std::vector<message_t>> result;
+    detail::async_operation_state_t<void> admitted;
+    detail::async_operation_state_t<std::vector<message_t>> reply;
     detail::completion_entry_t entry;
 };
 
@@ -97,7 +98,7 @@ std::vector<message_t> request_submit_operation_t::submit () &&
     return entry->wait_request ();
 }
 
-async_result_t<std::vector<message_t>> request_submit_operation_t::async () &&
+request_submission_t request_submit_operation_t::async () &&
 {
     auto &operation = state ();
     if (!detail::has_send_parts (operation))
@@ -113,7 +114,8 @@ async_result_t<std::vector<message_t>> request_submit_operation_t::async () &&
     try {
         bundle = std::make_shared<request_completion_bundle_t> (
           std::move (operation_state));
-        bundle->result.bind_lifetime (bundle);
+        bundle->admitted.bind_lifetime (bundle);
+        bundle->reply.bind_lifetime (bundle);
         entry = std::shared_ptr<detail::completion_entry_t> (
           bundle, &bundle->entry);
     }
@@ -126,18 +128,24 @@ async_result_t<std::vector<message_t>> request_submit_operation_t::async () &&
     }
     runtime->completion->register_entry (entry);
     try {
-        entry->start_request ();
+        const bool admitted = entry->start_request ();
+        detail::async_result_state_t<void> *const admitted_result =
+          &bundle->admitted;
+        detail::async_result_state_t<std::vector<message_t>> *const reply_result =
+          &bundle->reply;
+        return {admitted ? ZLINK_SUBMIT_OK : ZLINK_SUBMIT_BACKPRESSURED,
+                detail::async_result_access_t::make<void> (
+                  std::shared_ptr<detail::async_result_state_t<void>> (
+                    bundle, admitted_result)),
+                detail::async_result_access_t::make<std::vector<message_t>> (
+                  std::shared_ptr<detail::async_result_state_t<std::vector<message_t>>> (
+                    std::move (bundle), reply_result))};
     }
     catch (...) {
         entry->fail_submit ();
         runtime->completion->unregister_entry (entry->context ());
         throw;
     }
-    detail::async_result_state_t<std::vector<message_t>> *const result =
-      &bundle->result;
-    return detail::async_result_access_t::make<std::vector<message_t>> (
-      std::shared_ptr<detail::async_result_state_t<std::vector<message_t>>> (
-        std::move (bundle), result));
 }
 
 } // namespace zlink

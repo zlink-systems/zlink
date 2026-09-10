@@ -8,6 +8,10 @@ import {
   SubmitResult,
 } from '../../contracts/errors/errors';
 import { consumeSubmittedMessage } from '../../contracts/messaging/message';
+import type {
+  RequestSubmission,
+  SendSubmission,
+} from '../../contracts/messaging/operations';
 import { normalizeOperationPayload } from '../buffers/message_conversion';
 import { createError } from '../errors/error_mapping';
 import { withRuntimeErrorMessage } from '../errors/error_state';
@@ -99,6 +103,7 @@ export class CompletionEntry<T> {
   readonly kind: CompletionKind;
   readonly expectsUserContext: boolean;
   readonly promise: Promise<T>;
+  readonly admitted: Promise<void>;
   completionId = 0n;
   published = false;
   captured = false;
@@ -108,6 +113,8 @@ export class CompletionEntry<T> {
   private capturedCompletionId = 0n;
   private resolvePromise!: (value: T) => void;
   private rejectPromise!: (error: unknown) => void;
+  private resolveAdmitted!: () => void;
+  private rejectAdmitted!: (error: unknown) => void;
 
   constructor(token: bigint, kind: CompletionKind, expectsUserContext = true) {
     this.token = token;
@@ -117,6 +124,23 @@ export class CompletionEntry<T> {
       this.resolvePromise = resolve;
       this.rejectPromise = reject;
     });
+    if (kind === 'send') {
+      this.admitted = this.promise as Promise<void>;
+    } else {
+      this.admitted = new Promise<void>((resolve, reject) => {
+        this.resolveAdmitted = resolve;
+        this.rejectAdmitted = reject;
+      });
+    }
+    // A caller may intentionally observe only one request stage. Keep both
+    // promises awaitable without turning the unobserved sibling into an
+    // unhandled rejection.
+    void this.promise.catch(() => {});
+    if (this.admitted !== this.promise) void this.admitted.catch(() => {});
+  }
+
+  admit(): void {
+    if (this.kind === 'request') this.resolveAdmitted();
   }
 
   publish(completionId: bigint): void {
@@ -163,8 +187,9 @@ export class CompletionEntry<T> {
     this.settleIfJoined();
   }
 
-  fail(error: unknown): void {
+  fail(error: unknown, admissionPending = false): void {
     if (this.settled) return;
+    if (this.kind === 'request' && admissionPending) this.rejectAdmitted(error);
     this.published = true;
     this.captured = true;
     this.error = error;
@@ -208,14 +233,14 @@ export class CompletionOwner {
   submitSend(
     payload: OperationPayloadValue<MessageLike>,
     routingId: Buffer | null
-  ): Promise<void> {
+  ): SendSubmission {
     if (this.closed) throw submitError(SubmitResult.InvalidState, 0, 'socket is closed');
     const token = this.nextToken++;
     let nativePayload: ReturnType<typeof normalizeOperationPayload>;
     try {
       nativePayload = normalizeOperationPayload(payload);
     } catch (error) {
-      return Promise.reject(submitNativeError(error, DONTWAIT, 'send submit failed'));
+      throw submitNativeError(error, DONTWAIT, 'send submit failed');
     }
 
     let result: NativeSubmitResult;
@@ -228,38 +253,38 @@ export class CompletionOwner {
         token
       ) as NativeSubmitResult;
     } catch (error) {
-      return Promise.reject(submitNativeError(error, DONTWAIT, 'send submit failed'));
+      throw submitNativeError(error, DONTWAIT, 'send submit failed');
     }
 
     if (result.result === SubmitResult.Ok) {
       try {
         consumeSubmittedMessages(payload);
       } catch (error) {
-        return Promise.reject(error);
+        throw error;
       }
       if (result.completionId !== 0n) {
-        return Promise.reject(submitError(
+        throw submitError(
           SubmitResult.InternalError,
           result.nativeErrno,
           'successful send returned a completion token'
-        ));
+        );
       }
-      return RESOLVED_SEND;
+      return { result: SubmitResult.Ok, admitted: RESOLVED_SEND };
     }
 
     if (result.result !== SubmitResult.Backpressured) {
-      return Promise.reject(submitError(
+      throw submitError(
         result.result,
         result.nativeErrno,
         'send submit failed'
-      ));
+      );
     }
     if (!isWouldBlock(result.nativeErrno) || result.completionId === 0n) {
-      return Promise.reject(submitError(
+      throw submitError(
         SubmitResult.Backpressured,
         result.nativeErrno,
         'backpressured send did not return an EAGAIN wait token'
-      ));
+      );
     }
 
     let retryPayload: ReturnType<typeof normalizeOperationPayload>;
@@ -269,7 +294,7 @@ export class CompletionOwner {
       retryPayload = snapshotRetryPayload(payload);
       consumeSubmittedMessages(payload);
     } catch (error) {
-      return Promise.reject(error);
+      throw error;
     }
 
     const entry = new CompletionEntry<void>(token, 'send', false);
@@ -284,21 +309,21 @@ export class CompletionOwner {
     });
     this.managedWritableWaitCount += 1;
     this.ensureRuntimeWatch();
-    return entry.promise;
+    return { result: SubmitResult.Backpressured, admitted: entry.admitted };
   }
 
   submitRequest(
     payload: OperationPayloadValue<MessageLike>,
     target: Buffer | null,
     timeoutMs: number
-  ): Promise<Message[]> {
+  ): RequestSubmission {
     if (this.closed) throw submitError(SubmitResult.InvalidState, 0, 'socket is closed');
     const token = this.nextToken++;
     let nativePayload: ReturnType<typeof normalizeOperationPayload>;
     try {
       nativePayload = normalizeOperationPayload(payload);
     } catch (error) {
-      return Promise.reject(submitNativeError(error, DONTWAIT, 'request submit failed'));
+      throw submitNativeError(error, DONTWAIT, 'request submit failed');
     }
 
     let result: NativeSubmitResult;
@@ -312,41 +337,46 @@ export class CompletionOwner {
         token
       ) as NativeSubmitResult;
     } catch (error) {
-      return Promise.reject(submitNativeError(error, DONTWAIT, 'request submit failed'));
+      throw submitNativeError(error, DONTWAIT, 'request submit failed');
     }
 
     if (result.result === SubmitResult.Ok) {
       if (result.completionId === 0n) {
-        return Promise.reject(submitError(
+        throw submitError(
           SubmitResult.InternalError,
           result.nativeErrno,
           'successful request returned no completion id'
-        ));
+        );
       }
       try {
         consumeSubmittedMessages(payload);
       } catch (error) {
-        return Promise.reject(error);
+        throw error;
       }
       const entry = this.createEntry<Message[]>('request', token);
+      entry.admit();
       this.publish(entry, result.completionId);
       this.ensureRuntimeWatch();
-      return entry.promise;
+      return {
+        result: SubmitResult.Ok,
+        admitted: entry.admitted,
+        reply: entry.promise,
+      };
     }
 
     if (result.result !== SubmitResult.Backpressured) {
-      return Promise.reject(submitError(
+      throw submitError(
         result.result,
         result.nativeErrno,
         'request submit failed'
-      ));
+      );
     }
     if (!isWouldBlock(result.nativeErrno) || result.completionId === 0n) {
-      return Promise.reject(submitError(
+      throw submitError(
         SubmitResult.Backpressured,
         result.nativeErrno,
         'backpressured request did not return an EAGAIN wait token'
-      ));
+      );
     }
 
     let retryPayload: ReturnType<typeof normalizeOperationPayload>;
@@ -356,7 +386,7 @@ export class CompletionOwner {
       retryPayload = snapshotRetryPayload(payload);
       consumeSubmittedMessages(payload);
     } catch (error) {
-      return Promise.reject(error);
+      throw error;
     }
 
     const entry = this.createEntry<Message[]>('request', token);
@@ -370,7 +400,11 @@ export class CompletionOwner {
     });
     this.managedWritableWaitCount += 1;
     this.ensureRuntimeWatch();
-    return entry.promise;
+    return {
+      result: SubmitResult.Backpressured,
+      admitted: entry.admitted,
+      reply: entry.promise,
+    };
   }
 
   requestSync(
@@ -482,7 +516,8 @@ export class CompletionOwner {
     for (const entry of this.byToken.values()) {
       entry.fail(entry.kind === 'request'
         ? requestError(RequestResult.Terminated, 'socket closed')
-        : submitError(SubmitResult.Terminated, 0, 'socket closed'));
+        : submitError(SubmitResult.Terminated, 0, 'socket closed'),
+      this.retries.has(entry.token));
     }
     this.byToken.clear();
     this.byId.clear();
@@ -565,11 +600,12 @@ export class CompletionOwner {
   private attemptRetry(entry: CompletionEntry<unknown>): void {
     const retry = this.retries.get(entry.token);
     if (!retry) {
-      this.failEntry(entry, submitError(
+      entry.fail(submitError(
         SubmitResult.InternalError,
         0,
         'pending operation payload is missing'
-      ));
+      ), true);
+      this.removeIfSettled(entry);
       return;
     }
 
@@ -613,6 +649,7 @@ export class CompletionOwner {
         entry.succeed(undefined);
         this.removeIfSettled(entry);
       } else {
+        entry.admit();
         entry.publish(result.completionId);
         this.byId.set(result.completionId, entry);
         this.ensureRuntimeWatch();
@@ -644,7 +681,7 @@ export class CompletionOwner {
   }
 
   private failEntry(entry: CompletionEntry<unknown>, error: unknown): void {
-    entry.fail(error);
+    entry.fail(error, this.retries.has(entry.token));
     this.removeIfSettled(entry);
   }
 
@@ -687,7 +724,8 @@ export class CompletionOwner {
               : createError('request', nativeErrno, message))
           : (nativeErrno === 0
               ? submitError(SubmitResult.InternalError, 0, message)
-              : createError('submit', nativeErrno, message)));
+              : createError('submit', nativeErrno, message)),
+        this.retries.has(entry.token));
       }
       this.byToken.clear();
       this.byId.clear();

@@ -1,5 +1,4 @@
 import asyncio
-import os
 import sys
 import threading
 import time
@@ -31,20 +30,6 @@ from perf_metrics import HEADER_MAGIC, LatencySampler, decode_header
 
 
 _PROBE_TOKEN = b"__zlink_perf_reqrep_probe__"
-
-# Read once at import: PERF_POLICY.md § 8 diagnostic knob, never consulted on
-# the measured path.
-_DEBUG = os.environ.get("PERF_DEBUG") == "1"
-
-# C parity (bindings/c/perf/single/common/perf_single_reqrep.hpp
-# run_request_phase 396-443): drain completions without waiting every 64
-# submissions so one long submission burst still settles replies as it goes.
-_SUBMIT_PROGRESS_INTERVAL = 64
-
-# C parity: the requester blocks bounded on the completion poller only when the
-# admission window is full, so a saturated interval cannot spin.
-_SATURATED_PROGRESS_WAIT_MS = 50
-
 
 def _close_messages(parts):
     for part in parts:
@@ -98,48 +83,13 @@ def _routing_probe(requester, routing_id, timeout_s):
         _close_messages(reply)
 
 
-async def _request_operation(requester, routing_id, parts, timeout_s):
+def _request_operation(requester, routing_id, parts, timeout_s):
     operation = requester.request() if routing_id is None else requester.request(routing_id)
-    return await operation.messages(*parts).timeout(timeout_s).submit()
-
-
-def _applied_send_hwm_bytes(monitor):
-    """Applied SNDHWM bytes from the socket's own auto-HWM snapshot."""
-
-    status = monitor.status()
-    return int(getattr(status, "auto_hwm_applied_sndhwm_bytes", 0) or 0)
-
-
-def _admission_window_requests(applied_sndhwm_bytes, socket_send_hwm_bytes, wire_size):
-    """PERF_SINGLE_TEST_POLICY.md § 1.1.3 (D-BP40).
-
-    The public request terminal is one awaitable over admission and reply, so
-    the runner never sees the admission boundary itself. It reproduces the C
-    reference boundary instead: the un-settled request set is bounded by the
-    admission window Core applied to this socket - the applied SNDHWM bytes
-    divided by one request's wire size (header included) - which is exactly the
-    window whose exhaustion makes the C runner see ZLINK_SUBMIT_BACKPRESSURED
-    (bindings/c/perf/single/common/perf_single_reqrep.hpp run_request_phase).
-    It is not a fixed number and no runner-side cap is added on top of it.
-    A manual PERF_SINGLE_SNDHWM override never reaches the auto-HWM snapshot, so
-    the socket option is the only fallback; with neither value the window is
-    unknown and the benchmark fails instead of inventing one.
-    """
-
-    hwm_bytes = int(applied_sndhwm_bytes or 0)
-    if hwm_bytes <= 0:
-        hwm_bytes = int(socket_send_hwm_bytes or 0)
-    if hwm_bytes <= 0:
-        raise RuntimeError(
-            "requester socket reports no send high-water mark, "
-            "so the admission window is unknown"
-        )
-    window = hwm_bytes // max(1, int(wire_size))
-    return window if window > 0 else 1
+    return operation.messages(*parts).timeout(timeout_s).submit()
 
 
 async def _run_requester_async(
-    requester, routing_id, payload, *, run_id, msg_size, duration_s, admission_window
+    requester, routing_id, payload, *, run_id, msg_size, duration_s
 ):
     timeout_s = max(0.001, resolve_single_reqrep_timeout_ms() / 1000.0)
     drain_timeout_s = max(
@@ -152,14 +102,13 @@ async def _run_requester_async(
     pending = set()
     failures = []
     expected_part_count = len(measurement_parts(b""))
-    async def request_once(stamped_parts):
+
+    async def receive_reply(reply):
         nonlocal completed
         parts = None
         try:
             try:
-                parts = await _request_operation(
-                    requester, routing_id, stamped_parts, timeout_s
-                )
+                parts = await reply
             except zlink.RequestError as exc:
                 if exc.result == zlink.RequestResult.TIMED_OUT:
                     return
@@ -200,75 +149,34 @@ async def _run_requester_async(
         except BaseException as exc:
             failures.append(exc)
 
-    with zlink.create_poller() as completion_poller:
-        completion_events = zlink.create_poll_events(1)
-        completion_poller.add_socket(
-            requester,
-            zlink.PollEventFlag.POLLCOMPLETION,
-            0,
+    while time.perf_counter() < active_end and not failures:
+        stamped = bytes(
+            stamp_payload(payload, phase=1, run_id=run_id, seq=seq)
         )
-        try:
-            # A turn submits until the un-settled set fills the admission window,
-            # then progresses completions on this same thread. Nothing here waits
-            # for a reply before submitting the next request, and the window -
-            # not a runner constant - is what stops the submit loop
-            # (§ 1.1.3, D-BP40; C run_request_phase 396-443).
-            while time.perf_counter() < active_end and not failures:
-                submitted_any = False
-                submitted_since_progress = 0
-                while (
-                    time.perf_counter() < active_end
-                    and not failures
-                    and len(pending) < admission_window
-                ):
-                    stamped = bytes(
-                        stamp_payload(payload, phase=1, run_id=run_id, seq=seq)
-                    )
-                    seq += 1
-                    stamped_parts = (
-                        (stamped,) if expected_part_count == 1 else (stamped, b"")
-                    )
-                    task = asyncio.create_task(request_once(stamped_parts))
-                    pending.add(task)
-                    task.add_done_callback(observe_done)
-                    submitted_any = True
-                    submitted_since_progress += 1
-                    if submitted_since_progress >= _SUBMIT_PROGRESS_INTERVAL:
-                        submitted_since_progress = 0
-                        completion_poller.wait(completion_events, 0)
-                        await asyncio.sleep(0)
-                # Blocking bounded progress is reached only when the window is
-                # full (or the deadline passed), matching C's poll(50) after
-                # backpressure. This thread owns the completion drain, so the
-                # wait is this runner progressing its own requests.
-                completion_poller.wait(
-                    completion_events,
-                    0 if submitted_any else _SATURATED_PROGRESS_WAIT_MS,
-                )
-                await asyncio.sleep(0)
+        seq += 1
+        stamped_parts = (
+            (stamped,) if expected_part_count == 1 else (stamped, b"")
+        )
+        submission = _request_operation(
+            requester, routing_id, stamped_parts, timeout_s
+        )
+        task = asyncio.ensure_future(receive_reply(submission.reply))
+        pending.add(task)
+        task.add_done_callback(observe_done)
+        if submission.result == zlink.SubmitResult.BACKPRESSURED:
+            await submission.admitted
 
-            # Bounded completion drain of requests submitted before the deadline;
-            # every one of them is bounded by its own reply timeout and no new
-            # request is submitted here.
-            drain_deadline = time.perf_counter() + drain_timeout_s
-            drain_wait_ms = 0
-            while pending and time.perf_counter() < drain_deadline and not failures:
-                outstanding = len(pending)
-                completion_poller.wait(completion_events, drain_wait_ms)
-                await asyncio.sleep(0)
-                drain_wait_ms = (
-                    0
-                    if len(pending) != outstanding
-                    else _SATURATED_PROGRESS_WAIT_MS
-                )
-            if pending:
-                still_pending = tuple(pending)
-                for task in still_pending:
-                    task.cancel()
-                await asyncio.gather(*still_pending, return_exceptions=True)
-                raise RuntimeError("request completion drain timed out")
-        finally:
-            completion_poller.remove_socket(requester)
+    if pending:
+        still_pending = tuple(pending)
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*still_pending), drain_timeout_s
+            )
+        except asyncio.TimeoutError:
+            for task in still_pending:
+                task.cancel()
+            await asyncio.gather(*still_pending, return_exceptions=True)
+            raise RuntimeError("request completion drain timed out")
 
     if failures:
         raise failures[0]
@@ -287,19 +195,11 @@ async def _run_requester_async(
 def _run_requester_thread(requester, routing_id, payload, options, state):
     """Drive the requester on its own OS thread and its own private loop.
 
-    PERF_SINGLE_TEST_POLICY.md § 1.1.5 judges the progress driver, not the
-    awaitable type. The public Python request terminal is
-    `RequestOp.submit()`, an `async def` that calls `asyncio.get_running_loop()`
-    before it touches the socket (bindings/python/src/zlink/_runtime/messaging/
-    routed_async.py submit_request), so the awaitable cannot be polled by a
-    plain thread: driving the coroutine without a running loop raises
-    `RuntimeError: no running event loop`. The only other public terminal,
-    `submit_sync()`, blocks until the reply and would pin in-flight to 1.
-    This loop is therefore created by the runner, lives only inside this
-    dedicated thread, and is stepped only by it - the requester submits,
-    drains its own completions through its own POLLCOMPLETION poller, and
-    yields exactly one turn of its own loop to settle them. No shared pool,
-    executor, or other thread's loop participates.
+    The public request terminal creates its admission and reply stages on the
+    current event loop. This runner-owned loop therefore lives on the same
+    dedicated thread as the requester socket. Each socket keeps submitting
+    after immediate admission and suspends only while its own backpressured
+    admission stage is pending; reply stages progress independently.
     """
 
     loop = asyncio.new_event_loop()
@@ -360,20 +260,6 @@ def run_reqrep_pattern(argv, *, pattern, routed_request):
                         ready_timeout = resolve_single_connect_ready_timeout_ms()
                         wait_monitor_event(requester_monitor, event, timeout_ms=ready_timeout)
                         wait_monitor_event(replier_monitor, event, timeout_ms=ready_timeout)
-                        # Read the applied admission window while the requester
-                        # monitor is still open (§ 1.1.3, D-BP40).
-                        admission_window = _admission_window_requests(
-                            _applied_send_hwm_bytes(requester_monitor),
-                            requester.options.send_high_water_mark,
-                            len(payload),
-                        )
-                if _DEBUG:
-                    print(
-                        "single_reqrep_debug:"
-                        f"admission_window={admission_window}:"
-                        f"wire_size={len(payload)}",
-                        file=sys.stderr,
-                    )
 
                 state = {"replied": 0, "error": None, "stop": False}
                 replier_thread = threading.Thread(
@@ -398,7 +284,6 @@ def run_reqrep_pattern(argv, *, pattern, routed_request):
                                 "run_id": run_id,
                                 "msg_size": args.msg_size,
                                 "duration_s": args.duration,
-                                "admission_window": admission_window,
                             },
                             requester_state,
                         ),

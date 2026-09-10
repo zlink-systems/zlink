@@ -690,6 +690,7 @@ public:
     request_call_t &timeout(std::chrono::milliseconds timeout);
     request_call_t &metadata(std::string key, std::string value);
     task_t<TReply> async();
+    TReply submit();   // 동기 blocking; runtime 실행 문맥에서 InvalidOperation (F2-a)
     task_t<TReply> yield();
 };
 
@@ -702,6 +703,9 @@ public:
     task_t<TReply> async();
 
     template <typename TReply>
+    TReply submit();   // 동기 blocking; runtime 실행 문맥에서 InvalidOperation (F2-a)
+
+    template <typename TReply>
     task_t<TReply> yield();
 };
 
@@ -709,12 +713,14 @@ class send_call_t {
 public:
     send_call_t &metadata(std::string key, std::string value);
     task_t<void> async();
+    void submit();   // 동기 blocking; runtime 실행 문맥에서 InvalidOperation (F2-a)
 };
 
 class bound_session_send_call_t {
 public:
     bound_session_send_call_t &metadata(std::string key, std::string value);
     task_t<void> async();
+    void submit();   // 동기 blocking; runtime 실행 문맥에서 InvalidOperation (F2-a)
 };
 
 class stream_send_call_t {
@@ -730,6 +736,7 @@ public:
     stream_send_call_t &compress();
     stream_send_call_t &timeout(std::chrono::milliseconds timeout);
     task_t<void> async();
+    void submit();   // 동기 blocking; runtime 실행 문맥에서 InvalidOperation (F2-a)
 };
 
 class stream_write_call_t {
@@ -745,6 +752,7 @@ public:
     stream_write_call_t &metadata(std::string key, std::string value);
     stream_write_call_t &compress();
     task_t<void> async();
+    void submit();   // 동기 blocking; runtime 실행 문맥에서 InvalidOperation (F2-a)
 };
 
 template <typename TActor>

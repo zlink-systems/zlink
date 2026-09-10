@@ -91,7 +91,7 @@ public final class RequestReplyTerminationProbe {
                 List<Message> reply = dealerSocket.request()
                     .message(request)
                     .timeout(Duration.ofSeconds(2))
-                    .submit()
+                    .submit().reply()
                     .toCompletableFuture()
                     .get(2, TimeUnit.SECONDS);
                 try {
