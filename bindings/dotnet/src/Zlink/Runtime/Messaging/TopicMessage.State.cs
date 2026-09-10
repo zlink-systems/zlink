@@ -185,7 +185,6 @@ public sealed partial class TopicMessage
             candidate = Message.RentForNativeReceive();
             _reusableSinglePart = candidate;
         }
-        candidate.PrepareForNativeReceive();
         return candidate;
     }
 

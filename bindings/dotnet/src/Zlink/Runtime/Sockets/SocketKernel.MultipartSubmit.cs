@@ -83,54 +83,29 @@ internal sealed partial class SocketKernel
             var publishTopicUtf8 = kind == MultipartSubmitKind.Publish
                 ? PublishTopicEncoding.GetNullTerminatedUtf8(topic!)
                 : null;
-            for (var i = 0; i < built; i++)
-            {
-                var partFlag = i + 1 < built
-                    ? NativeMethods.ZlinkPartFlag.More
-                    : NativeMethods.ZlinkPartFlag.Final;
-                int rc;
-                if (kind == MultipartSubmitKind.Publish)
-                    fixed (byte* topicPtr = publishTopicUtf8)
-                    {
-                        rc = NativeMethods.zlink_publish_part_utf8(Handle,
-                            topicPtr, ref nativeParts[i], flags, partFlag);
-                    }
-                else
-                    rc = kind switch
-                    {
-                        MultipartSubmitKind.Send => NativeMethods.zlink_send_part(
-                            Handle, ref nativeParts[i], flags, partFlag),
-                        MultipartSubmitKind.TargetedSend =>
-                            NativeMethods.zlink_send_part_rid(Handle,
-                                ref routingId, ref nativeParts[i], flags, partFlag),
-                        _ => throw new InvalidOperationException()
-                    };
-
-                if (rc == 0)
+            int rc;
+            if (kind == MultipartSubmitKind.Publish)
+                fixed (byte* topicPtr = publishTopicUtf8)
                 {
-                    consumed = i + 1;
-                    continue;
+                    rc = NativeMethods.zlink_publish_utf8(Handle,
+                        topicPtr, ref nativeParts[0], (nuint)built, flags);
                 }
-
-                // Every returned Core result consumes the submitted native
-                // part, including DONTWAIT backpressure on STREAM.
-                consumed = i + 1;
-
-                if (mapNoWaitResult)
+            else
+                rc = kind switch
                 {
-                    var result = (SubmitResult)rc;
-                    var sendResult = SendResultErrno.TryMap(result);
-                    if (sendResult != null)
-                    {
-                        NativeMessageParts.RestoreManaged(parts, nativeParts,
-                            consumed, built - consumed);
-                        consumed = built;
-                        return sendResult.Value;
-                    }
-                }
+                    MultipartSubmitKind.Send => NativeMethods.zlink_send(
+                        Handle, ref nativeParts[0], (nuint)built, flags),
+                    MultipartSubmitKind.TargetedSend => NativeMethods.zlink_send_rid(
+                        Handle, ref routingId, ref nativeParts[0], (nuint)built, flags),
+                    _ => throw new InvalidOperationException()
+                };
 
+            // Every returned Core result consumes the entire native record.
+            consumed = built;
+            if (mapNoWaitResult)
+                return MapSendResult(rc);
+            if (rc != 0)
                 throw ZlinkException.CreateSubmitException((SubmitResult)rc);
-            }
 
             return SendResult.Sent;
         }
