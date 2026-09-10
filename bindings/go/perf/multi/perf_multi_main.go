@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"strconv"
 	"time"
 
+	zlink "zlink.systems/zlink"
 	"zlink.systems/zlink/perf/internal/perfcommon"
 )
 
@@ -55,10 +57,10 @@ func newMultiSendTurnCoordinator(socketCount int) *multiSendTurnCoordinator {
 
 func (c *multiSendTurnCoordinator) submitRound(
 	stopAt time.Time,
-	submit func(int) error,
-) int {
+	submit func(int) (zlink.SendSubmission, error),
+) (int, error) {
 	if len(c.available) == 0 {
-		return 0
+		return 0, nil
 	}
 	start := c.next
 	c.next = (c.next + 1) % len(c.available)
@@ -71,14 +73,20 @@ func (c *multiSendTurnCoordinator) submitRound(
 		if !c.available[index] {
 			continue
 		}
-		c.available[index] = false
-		c.pending++
+		submission, err := submit(index)
+		if err != nil {
+			return submitted, err
+		}
 		submitted++
-		go func() {
-			c.completed <- multiSendTurnResult{index: index, err: submit(index)}
-		}()
+		if submission.Result() == zlink.SubmitBackpressured {
+			c.available[index] = false
+			c.pending++
+			go func() {
+				c.completed <- multiSendTurnResult{index: index, err: submission.Admitted(context.Background())}
+			}()
+		}
 	}
-	return submitted
+	return submitted, nil
 }
 
 func (c *multiSendTurnCoordinator) drainReady() (bool, error) {
@@ -98,18 +106,38 @@ func (c *multiSendTurnCoordinator) drainReady() (bool, error) {
 	}
 }
 
+func (c *multiSendTurnCoordinator) waitReady(deadline time.Time) error {
+	wait := time.Until(deadline)
+	if wait <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case result := <-c.completed:
+		c.available[result.index] = true
+		c.pending--
+		return result.err
+	case <-timer.C:
+		return nil
+	}
+}
+
 func runMultiSendTurns(
 	socketCount int,
 	window perfcommon.BenchmarkWindow,
 	label string,
-	submit func(int) error,
+	submit func(int) (zlink.SendSubmission, error),
 	progress func(time.Duration) error,
 	onSubmitted func(int),
 	hasDrainWork func() bool,
 ) error {
 	coordinator := newMultiSendTurnCoordinator(socketCount)
 	for time.Now().Before(window.StopAt) {
-		submitted := coordinator.submitRound(window.StopAt, submit)
+		submitted, err := coordinator.submitRound(window.StopAt, submit)
+		if err != nil {
+			return err
+		}
 		if onSubmitted != nil {
 			onSubmitted(submitted)
 		}
@@ -119,8 +147,14 @@ func runMultiSendTurns(
 			return err
 		}
 		progressed = progressed || drained
-		if err := progress(multiSendTurnWait(window.StopAt, progressed)); err != nil {
-			return err
+		if progress != nil {
+			if err := progress(multiSendTurnWait(window.StopAt, progressed)); err != nil {
+				return err
+			}
+		} else if !progressed && coordinator.pending > 0 {
+			if err := coordinator.waitReady(window.StopAt); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -141,14 +175,20 @@ func runMultiSendTurns(
 		if err != nil {
 			return err
 		}
-		if coordinator.pending == 0 {
+		if coordinator.pending == 0 && (hasDrainWork == nil || !hasDrainWork()) {
 			break
 		}
 		if !time.Now().Before(drainDeadline) {
 			return fmt.Errorf("%s send drain timed out", label)
 		}
-		if err := progress(multiSendTurnWait(drainDeadline, progressed)); err != nil {
-			return err
+		if progress != nil {
+			if err := progress(multiSendTurnWait(drainDeadline, progressed)); err != nil {
+				return err
+			}
+		} else if !progressed && coordinator.pending > 0 {
+			if err := coordinator.waitReady(drainDeadline); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

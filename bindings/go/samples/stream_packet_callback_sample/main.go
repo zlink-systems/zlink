@@ -33,7 +33,9 @@ func main() {
 		samplecommon.Must(fmt.Errorf("unexpected packet body"))
 	}
 	packet := samplecommon.FrameStreamPacketMessage(received.Header(), received.Body())
-	samplecommon.Must(server.SendTo(received.RoutingID()).Message(packet).Submit(context.Background()))
+	submission, err := server.SendTo(received.RoutingID()).Message(packet).Submit(context.Background())
+	samplecommon.Must(err)
+	samplecommon.Must(submission.Admitted(context.Background()))
 
 	buffer := samplecommon.ReadStreamPacketBody(conn)
 

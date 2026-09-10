@@ -37,7 +37,7 @@ func runPair(cfg benchmarkConfig) perfcommon.Result {
 		err := perfcommon.SubmitMeasurementSend(client.Send(), message)
 		return err == nil, err
 	}, func(message *zlink.Message) error {
-		return client.Send().MoveMessage(message).Submit(context.Background())
+		return perfcommon.SubmitSend(context.Background(), client.Send().MoveMessage(message))
 	})
 	perfcommon.PrintSingleAutoHWMDetail(serverMon, cfg.pattern, cfg.transport, "receiver", zlink.SocketTypePair, cfg.msgSize)
 	perfcommon.PrintSingleAutoHWMDetail(clientMon, cfg.pattern, cfg.transport, "sender", zlink.SocketTypePair, cfg.msgSize)

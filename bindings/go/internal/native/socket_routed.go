@@ -65,9 +65,9 @@ func (s *routedSocket) replaceRoutedReceived(
 		token = ReplyToken{owner: s.replyOwner, value: tokenValue}
 		reply = func(parts []*Message) error { return s.reply(routingID, token, parts...) }
 	}
-	var send func(context.Context, []sendBuilderPart) error
+	var send func(context.Context, []sendBuilderPart) (SendSubmission, error)
 	if routingID.Size() > 0 {
-		send = func(ctx context.Context, builderParts []sendBuilderPart) error {
+		send = func(ctx context.Context, builderParts []sendBuilderPart) (SendSubmission, error) {
 			return submitManagedSend(ctx, s.socketCore, &routingID, builderParts)
 		}
 	}
@@ -88,13 +88,13 @@ func (s *routedSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 }
 
 func (s *RouterSocket) SendTo(target RoutingID) SendOp {
-	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
+	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) (SendSubmission, error) {
 		return submitManagedSend(ctx, s.socketCore, &target, parts)
 	})
 }
 
 func (s *RouterSocket) Request(peerRID RoutingID) RequestOp {
-	return newRequestBuilder(func(ctx context.Context, parts []requestBuilderPart, timeout time.Duration) ([]*Message, error) {
+	return newRequestBuilder(func(ctx context.Context, parts []requestBuilderPart, timeout time.Duration) (RequestSubmission, error) {
 		return submitCompletionRequest(ctx, s.socketCore, &peerRID, timeout, parts)
 	})
 }
