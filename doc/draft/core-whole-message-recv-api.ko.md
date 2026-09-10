@@ -106,10 +106,16 @@ zlink_recv (void *s_,
   자동 반영**. C 레퍼런스 perf는 신설 Core `recv`로 바꾸면 조립 제거·단순화.
 
 ## 5. 리스크·주의
-- 공개 C ABI 추가 → 되돌리기 어려움. 시그니처·capacity·원자성 규칙을 spec에서 먼저 확정한다.
-- **record 원자성**: whole-message는 한 record를 한 번에 소비. capacity 부족·DONTWAIT 도중 데이터 없음 시 **프레임 상태(보존/폐기)** 규칙을
-  명확히(부분 소비로 시퀀스가 어정쩡하게 남지 않도록).
-- `recv_part`와의 상태 상호작용 규칙 명시(혼용 시 EBUSY 등).
+> **record 원자성은 Core가 이미 보장한다** — 따라서 아래 "부분 수신/DONTWAIT 절반/혼용" 관련 우려는 새 설계 결정이 아니라 기존 계약으로 커버된다.
+> 근거: `core/doc/spec/core/socket/README.ko.md:414`("수신을 시작한 record는 마지막 part까지 보존"), `recv_router_message_direct`가
+> `collect_multipart_payload_parts`(`socket_request_reply_runtime_io.cpp:525`)로 **한 record의 모든 part를 모아서** 반환.
+- **DONTWAIT 부분-record: 해당 없음.** record를 시작하면 마지막 part까지 받으므로 "절반 record" 상태가 존재하지 않는다 → whole-message recv는
+  **전체 record 또는 no-data**만 반환. 별도 규칙 불필요.
+- **capacity: 데이터 무결성 이슈 아님(구현 디테일).** record는 Core가 통째로 확보하며, 바인딩은 재사용 growable 배열(현 `MultipartMessageCollection`
+  방식)로 채운다. C 공개 API 형태(caller 배열+capacity)만 "충분한 크기 제공 / count 반환"으로 정하면 되고, 부분 소비로 시퀀스가 남는 위험은 없다.
+- **recv_part 혼용: record 원자성으로 커버.** 진행 중 반쪽 시퀀스가 존재하지 않으므로 새 규칙 신설 불필요. 필요 시 기존 `ZLINK_RECV_BUSY`(EBUSY,
+  "another receive owner active", `zlink_enum` 202) 시맨틱을 그대로 재사용.
+- 공개 C ABI 추가 → 되돌리기 어려움(시그니처만 spec에서 확정).
 - thread-safety·single-consumer 계약은 기존과 동일(완화 금지).
 - 공개 표면 단순성 유지: 편의를 늘리되 계약을 파편화하지 않는다.
 
