@@ -16,11 +16,13 @@ const driver = fs.readFileSync(
 
 test('cross-language browser stage owns host cleanup when driver creation fails', () => {
   assert.match(smoke, /let instance;[\s\S]*instance = await createBrowserConnectorDriver\(\);/);
-  assert.match(smoke, /finally \{[\s\S]*await instance\?\.close\(\);[\s\S]*await host\.stop\(\);/);
+  assert.match(smoke, /finally \{[\s\S]*try \{[\s\S]*await instance\?\.close\(\);[\s\S]*finally \{[\s\S]*await host\.stop\(\);/);
 });
 
 test('browser connector driver bounds partial and normal cleanup', () => {
   assert.match(driver, /closeBrowser, closeContext, closeServer/);
-  assert.match(driver, /catch \(error\) \{[\s\S]*await closeContext\(context\);[\s\S]*await closeBrowser\(browser\);[\s\S]*await closeServer\(server\);/);
+  assert.match(driver, /async function cleanupResources[\s\S]*for \(const \[name, cleanup\]/);
+  assert.match(driver, /catch \(error\) \{[\s\S]*const cleanupErrors = await cleanupResources\(context, browser, server\);[\s\S]*throw error;/);
+  assert.match(driver, /AggregateError\(errors, 'browser connector cleanup failed'\)/);
   assert.doesNotMatch(driver, /new Promise\(\(resolve\) => server\.close\(resolve\)\)/);
 });

@@ -645,8 +645,11 @@ async function nodeConnectorToDotnetStreamServer(tempDir) {
     await assertFlowLog(`${eventFile}.flow`, 'RawPing', 'Browser TypeScript -> dotnet');
     return 'Browser TypeScript connector -> dotnet stream server flow-wire and JSON codec';
   } finally {
-    await instance?.close();
-    await host.stop();
+    try {
+      await instance?.close();
+    } finally {
+      await host.stop();
+    }
   }
 }
 
