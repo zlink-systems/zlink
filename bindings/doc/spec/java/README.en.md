@@ -1001,7 +1001,7 @@ bridge details.
 
 Java package information follows its [distribution metadata](../../../java/build.gradle); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-Java provides blocking `submit_sync()` and `submit()` returning `CompletionStage`.
+Java provides blocking `submit_sync()` and `submit()` returning a result object (`SendSubmission`/`RequestSubmission`: `result` and `admitted`, plus `reply` for a request).
 Kotlin uses the same Java contract without an independent native ABI or token wrapper.
 Caller wait cancellation is expressed through stage cancellation.
 

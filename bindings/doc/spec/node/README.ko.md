@@ -775,8 +775,8 @@ Node는 Actor와 Spot route 조회 결과를 공개 JavaScript 객체와 일치�
 
 Node package 정보는 [배포 metadata](../../../node/package.json)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Node는 blocking `submit_sync()`와 `Promise`를 반환하는 `submit()`을 제공한다.
-Promise를 더 이상 기다리지 않는 경우에도 아래 공통 완료 수명 계약을 따른다.
+Node는 blocking `submit_sync()`와 결과 객체(`SendSubmission`/`RequestSubmission`: `result`와 `admitted`, request는 `reply`)를 돌려주는 `submit()`을 제공한다.
+`admitted`/`reply` Promise를 더 이상 기다리지 않는 경우에도 아래 공통 완료 수명 계약을 따른다.
 
 Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
 제출 결과는 [공통 결과 투영](../README.ko.md#submit-result-projection)을, 완료 합류·수명과

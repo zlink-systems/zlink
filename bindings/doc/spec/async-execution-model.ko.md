@@ -53,7 +53,7 @@ Awaitable은 비동기 완료를 담는 언어별 값을 함께 가리키는 문
 | Node | `Promise<T>` |
 | Python | `Awaitable[T]` |
 | Rust | `Future<Output = T>` |
-| Go | `Submit(context.Context)` 호출을 실행하는 goroutine이 internal completion을 기다린다 |
+| Go | `Submit(context.Context)`는 즉시 결과 객체를 돌려주고, `Admitted(ctx)`·`Reply(ctx)`를 실행하는 goroutine이 internal completion을 기다린다 |
 
 동기 terminal의 반환값은 awaitable이 아니다. `void`, collection, `Result`, `error` 또는
 언어별 exception으로 호출 안에서 결정한 결과를 전달한다.

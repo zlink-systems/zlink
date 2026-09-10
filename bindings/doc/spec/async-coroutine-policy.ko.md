@@ -17,7 +17,8 @@ title: "바인딩 전송과 비동기 완료 표면 정책"
 
 Send와 request는 local send queue admission에서 기다릴 수 있다. 고수준 binding의 blocking
 terminal은 Core `NONE`, awaitable terminal은 Core `DONTWAIT`를 사용한다. Go는 public
-`Submit(context.Context)` 하나에서 Core `DONTWAIT`로 제출한 뒤 internal completion을 기다린다.
+`Submit(context.Context)` 하나에서 Core `DONTWAIT`로 제출하고 결과 객체를 즉시 돌려주며,
+internal completion 대기는 결과 객체의 `Admitted(ctx)`·`Reply(ctx)`가 한다.
 
 | Operation | Public 완료 경계 |
 |---|---|

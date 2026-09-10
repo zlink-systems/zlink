@@ -977,7 +977,7 @@ interface나 operation contract가 native bridge 세부에 의존하는 결과�
 
 Java package 정보는 [배포 metadata](../../../java/build.gradle)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Java는 blocking `submit_sync()`와 `CompletionStage`를 반환하는 `submit()`을 제공한다.
+Java는 blocking `submit_sync()`와 결과 객체(`SendSubmission`/`RequestSubmission`: `result`와 `admitted`, request는 `reply`)를 돌려주는 `submit()`을 제공한다.
 Kotlin은 독립 native ABI나 token wrapper 없이 같은 Java 계약을 사용한다.
 Caller wait 취소는 stage cancellation으로 표현한다.
 

@@ -171,7 +171,7 @@ checking targets the Python 3.9 target `pyrightconfig.json` specifies, and
 
 Python package information follows its [distribution metadata](../../../python/pyproject.toml); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-Python provides blocking `submit_sync()` and `submit()` returning an awaitable.
+Python provides blocking `submit_sync()` and `submit()` returning a result object (`SendSubmission`/`RequestSubmission`: `result()` and `admitted()`, plus `reply()` for a request).
 Caller wait cancellation is expressed through awaitable cancellation.
 
 Native completion IDs, `user_context`, and raw drain are not public APIs.

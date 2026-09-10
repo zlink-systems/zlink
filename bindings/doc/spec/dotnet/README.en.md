@@ -563,7 +563,7 @@ commands from `bindings/dotnet/`.
 
 .NET package information follows its [distribution metadata](../../../dotnet/src/Zlink/Zlink.csproj); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-.NET provides blocking `Submit()` and `Async(CancellationToken)` returning `Task`.
+.NET provides blocking `Submit()` and `Async(CancellationToken)` returning a result object (`SendSubmission`/`RequestSubmission`: `Result` and `Admitted`, plus `Reply` for a request).
 The caller wait cancellation input is `CancellationToken`.
 
 Native completion IDs, `user_context`, and raw drain are not public APIs.

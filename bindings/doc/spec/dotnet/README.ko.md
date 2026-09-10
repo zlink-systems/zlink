@@ -679,7 +679,7 @@ Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`의 time
 
 .NET package 정보는 [배포 metadata](../../../dotnet/src/Zlink/Zlink.csproj)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-.NET은 blocking `Submit()`과 `Task`를 반환하는 `Async(CancellationToken)`을 제공한다.
+.NET은 blocking `Submit()`과 결과 객체(`SendSubmission`/`RequestSubmission`: `Result`와 `Admitted`, request는 `Reply`)를 돌려주는 `Async(CancellationToken)`을 제공한다.
 Caller wait 취소 입력은 `CancellationToken`이다.
 
 Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.

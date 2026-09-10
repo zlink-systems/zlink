@@ -593,7 +593,7 @@ Rust는 Actor와 Spot route 조회 결과를 공개 값 타입으로 노출한�
 
 Rust package 정보는 [배포 metadata](../../../rust/Cargo.toml)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Rust는 blocking `Result`를 반환하는 `submit_sync()`와 runtime-independent `Future`를 반환하는 `submit()`을 제공한다.
+Rust는 blocking `Result`를 반환하는 `submit_sync()`와 결과 객체(`Result<SendSubmission>`/`Result<RequestSubmission>`: `result`와 boxed `admitted` future, request는 `reply` future)를 돌려주는 `submit()`을 제공한다.
 완료 대기 객체의 수명 종료는 Future drop 또는 executor task abort로 표현한다.
 
 Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.

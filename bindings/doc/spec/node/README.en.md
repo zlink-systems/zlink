@@ -567,8 +567,8 @@ using TypeScript spelling.
   `Map`/`WeakMap` lookup. A wrapper that has not been returned is not reused for
   another ownership.
 - Operation-start naming follows the Function Naming Rules above. A
-  builder's terminal method keeps using `submit(...)` even on a
-  Promise-returning surface. Do not add a separate `submitAsync` terminal
+  builder's terminal method keeps using `submit(...)` even though it now
+  returns a result object. Do not add a separate `submitAsync` terminal
   name.
 - PAIR, DEALER, ROUTER, and STREAM send use one `SendOperation` family that captures the target.
   `submit_sync()` uses Core `NONE`; `submit()` uses Core `DONTWAIT` completion.
@@ -846,8 +846,8 @@ objects with matching TypeScript declarations.
 
 Node package information follows its [distribution metadata](../../../node/package.json); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-Node provides blocking `submit_sync()` and `submit()` returning `Promise`.
-No longer waiting for a Promise follows the common completion-lifetime contract below.
+Node provides blocking `submit_sync()` and `submit()` returning a result object (`SendSubmission`/`RequestSubmission`: `result` and `admitted`, plus `reply` for a request).
+Not waiting for the `admitted`/`reply` Promise still follows the common completion-lifetime contract below.
 
 Native completion IDs, `user_context`, and raw drain are not public APIs.
 Submission results follow the [common result projection](../README.en.md#submit-result-projection);
