@@ -129,7 +129,8 @@ nonblocking try를 막은 것이고 blocking 동기 종결자는 별개다. nonb
 
 | 언어 | 비동기(현행) | 동기 blocking(추가) |
 |---|---|---|
-| Java·Node | `submit()` | `submit_sync()` |
+| Java | `submit()` | `submit_sync()` |
+| Node | `submit()` | **제공하지 않는다** — 사용자 결정 2026-09-11, 단일 JS 스레드에서 로컬 대상 request가 교착한다. 스펙 `01-submit-and-completion` §4.1 |
 | Kotlin | 전용 wrapper `await()` | 추가 없음(Java 표면의 `submit_sync()` 그대로 노출) |
 | .NET | `Async()` | `Submit()` |
 | C++ | `async()` | `submit()` |
@@ -179,6 +180,7 @@ G5 게이트: framework 테스트·cross-language e2e 통과 + F2-a 회귀 테�
 
 - 2026-09-10: 사용자 결정으로 draft·plan 작성. G0 결정 반영(§2: 정책 §6 이름 유지, `TrySubmit` 제거, 같은 모양 원칙). Go 형태만 확인 대기.
 - 2026-09-10: Go 결정 — `Submit(ctx)` 즉시 반환 + `Result()`/`Admitted(ctx)`/`Reply(ctx)` 대기 메서드(§2 #5). G0 결정표 완료.
+- 2026-09-11: **결정 F2-b — Node.js framework는 동기 blocking 종결자를 제공하지 않는다**(사용자 결정). Node는 단일 JS 스레드라 완료를 나르는 실행 문맥이 호출 thread와 같다. request 대상이 같은 process의 handler면 호출자가 기다리는 응답을 호출자가 만들어야 해 교착한다. 대상이 로컬인지 원격인지 제출 시점에 늘 알 수 없어 "로컬일 때만"이라는 규칙도 세울 수 없다. binding Node의 `submit_sync()`는 그대로 둔다 — binding은 framework runtime의 완료 배달에 의존하지 않는다. 스펙 §4.1.
 - 2026-09-10: framework 검토 결정 F1(공개 terminal은 backpressure 미노출, 내부 구현만)·F2(동기 blocking 종결자 추가, 이름은 binding 정책 §6)·F2-a(runtime 문맥에서 호출 금지). §6.1.
 - 2026-09-10: #86 CI 재실행 결과 — framework-dotnet 단위 테스트 4플랫폼 588건 실패. 원인은 코드가 아니라 구성:
   `DllNotFoundException: Loaded zlink library is missing required export 'zlink_publish'`. 워크플로가 `VERSION`의

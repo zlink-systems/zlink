@@ -53,9 +53,9 @@ single-use, 중복 option과 terminal 재호출 오류는
 언어별 일반 비동기 terminal 이름은 .NET `Async`, C++ `async`, Java·Node.js `submit`, Kotlin
 전용 wrapper의 `await`다. 동기 blocking 종결자 이름은 binding 정책
 [async-coroutine-policy §6](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md#6-언어별-terminal-interface)을
-따른다 — Java·Node `submit_sync()`, .NET `Submit()`, C++ `submit()`(Kotlin은 추가 없이 Java 표면의
-`submit_sync()`를 노출한다). 실제 shared Spot gate를 반납하는 terminal만 `Yield`·`yield`라는 이름을
-사용한다.
+따른다 — Java `submit_sync()`, .NET `Submit()`, C++ `submit()`(Kotlin은 추가 없이 Java 표면의
+`submit_sync()`를 노출한다). **Node.js는 동기 blocking 종결자를 제공하지 않는다(§4.1).** 실제 shared
+Spot gate를 반납하는 terminal만 `Yield`·`yield`라는 이름을 사용한다.
 
 `Yield`를 제공하는 실행 문맥과 call 목록은
 [Handler turn과 execution gate §16](02-handler-turn-and-execution-gate.ko.md#yield-call-eligibility)이 소유한다.
@@ -98,6 +98,21 @@ Send, publish, bound session send, session Actor relay와 명시적인 STREAM se
 종결자는 blocking만 제공한다. 정상 완료 값은 없으며 operation family가 정의한 source-local admission
 boundary가 message를 수락했다는 뜻이다. Remote handler 실행, subscriber 수신, remote Spot queue
 수락 또는 application callback 완료는 기다리지 않는다.
+
+<a id="41-nodejs는-동기-blocking-종결자를-제공하지-않는다"></a>
+### 4.1 Node.js는 동기 blocking 종결자를 제공하지 않는다 (사용자 결정 2026-09-11)
+
+Node.js runtime은 **단일 JS 스레드**다. 그 스레드를 막으면 framework가 완료를 배달할 방법이
+없다. request의 대상 handler가 같은 process 안에 있으면 **호출자가 기다리는 응답을 호출자가
+만들어야 하는 상태**가 되어 교착한다. Java·.NET·C++은 완료를 나르는 실행 문맥이 호출 thread와
+분리돼 있어 이 문제가 없다(Java는 전용 platform-thread pump).
+
+대상이 로컬인지 원격인지는 제출 시점에 항상 알 수 있는 것이 아니므로, "로컬일 때만 막는다"는
+규칙도 세울 수 없다. **지킬 수 없는 약속을 표면에 두지 않는다** — Node.js framework 표면에는
+동기 blocking 종결자가 없다. Node application은 비동기 종결자(`submit(...)` → `Promise`)를 쓴다.
+
+이 결정은 framework 표면에만 적용된다. **binding Node의 `submit_sync()`는 그대로 있다**
+([async-coroutine-policy §6](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md#6-언어별-terminal-interface)) — binding은 framework runtime의 완료 배달에 의존하지 않는다.
 
 **동기 blocking 종결자는 runtime 실행 문맥에서 부를 수 없다(F2-a).** handler turn·Spot turn·state
 lane 위에서 blocking하면 gate를 쥔 채 완료를 기다려 교착한다. [상태 소유와 state lane §5](06-state-ownership-and-lanes.ko.md#반환-전-완료-보장)(반환 전 완료 보장)·[handler turn §2](02-handler-turn-and-execution-gate.ko.md)과 같은 원칙으로, runtime 실행 문맥에서 동기
@@ -484,7 +499,7 @@ interface가 소유한다.
 | .NET | `Async(...)`가 `ValueTask` 또는 `ValueTask<T>`를 반환한다 | `Submit(...)` | `Yield(...)` | [언어별 interface 목차](../languages/dotnet/interfaces/README.ko.md) |
 | Java | `submit(...)`이 `CompletionStage<T>`를 반환한다 | `submit_sync(...)` | `yield(...)` | [Channel messaging](../languages/java/interfaces/channel-messaging.ko.md) |
 | Kotlin | 전용 call wrapper의 suspending `await()`를 사용한다 | Java 표면의 `submit_sync(...)` | 전용 wrapper의 `yield()` | [Channel messaging](../languages/kotlin/interfaces/channel-messaging.ko.md) |
-| Node.js | `submit(...)`이 `Promise<T>`를 반환한다 | `submit_sync(...)` | `yield(...)` | [인터페이스 목차](../languages/node/interfaces/README.ko.md) |
+| Node.js | `submit(...)`이 `Promise<T>`를 반환한다 | **제공하지 않는다(§4.1)** | `yield(...)` | [인터페이스 목차](../languages/node/interfaces/README.ko.md) |
 | C++ | `async(...)`가 `task_t<T>`를 반환한다 | `submit(...)` | `yield(...)` | [framework 인터페이스](../languages/cpp/interfaces/README.ko.md) |
 
 동기 blocking 종결자는 runtime 실행 문맥에서 `InvalidOperation`으로 실패한다(§4 F2-a).
