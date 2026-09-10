@@ -86,6 +86,32 @@ G2 결과가 설계를 바꾸면 G4 전에 draft를 갱신한다. G4 언어별 j
 
 framework의 hot path(08장 E1~E5)는 `.reply()`만 쓰므로 hop이 늘지 않는다. 결과 객체 할당 1회는 E2 측정에 포함해 확인한다.
 
+### 6.1 framework 스펙 검토 (`framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md`, 2026-09-10)
+
+framework는 binding 정책을 따르므로 두 층으로 나눠 본다.
+
+**(a) 반드시 바뀌는 것 — binding 소비 규칙.** §15 "Binding send terminal 소비": framework는 binding **async terminal만** 쓴다고
+정하고, 예외로 "즉시 backpressure 관찰은 `DONTWAIT` sync terminal이 유일한 표면"이라 적었다. 결과 객체 뒤에는 async terminal이
+`result`로 즉시 backpressure를 주므로 그 예외 문장은 지운다. 호출부는 `.reply()`(request)·`.admitted()`(send)를 쓴다.
+§5 "Core HWM으로 binding operation이 대기하면 Core가 재시도를 소유하고 operation별 completion awaitable을 완료한다"는 그대로
+성립한다(`admitted`가 그 awaitable). 공개 terminal은 건드리지 않아도 된다.
+
+**(b) 결정이 필요한 것 — framework 공개 terminal.** 현재 계약(§2·§4·§5·§16): one-way 비동기 terminal은 source-local admission에서
+완료, request terminal은 application 결과에서 완료, `Backpressured`는 **public terminal result가 아니다**(§5, 04 §8 3단계
+backpressure). 그래서 framework 호출자는 binding 호출자와 같은 문제를 갖는다 — one-way는 "반환 시 이미 완료됐는가"로 admission을
+간접 판정할 수 있지만, request는 admission과 reply가 stage 하나라 producer가 멈출 지점을 알 수 없다. gRPC 벤치 framework 행이
+permit(10)으로만 깊이가 정해지는 이유다.
+
+| 선택 | 내용 | 스펙 영향 |
+|---|---|---|
+| B1 | framework 공개 terminal 불변. (a)만 반영 | §15 한 문단. 언어별 interface 문서 불변 |
+| B2 | framework one-way·request call도 결과 객체(`result`·`admitted`·`reply`)를 돌려준다. `result`는 framework source-local admission(Application Job Queue permit + Core admission)의 즉시 결과. **`Backpressured`는 여전히 실패가 아니며**(§5 유지) 대기 중 상태를 알리는 값이 된다 | §2 표(terminator 완료 의미에 admission stage 추가), §4(one-way의 반환값), §5(`Backpressured`를 "public terminal result가 아니다"에서 "결과 객체의 상태값이며 실패로 끝나지 않는다"로), §16 표와 5개 언어 interface 문서, 08장 E2 문구 |
+
+권고: **B2.** framework가 binding 정책을 따른다는 원칙과, request-backpressure 패턴을 framework 행에서도 같은 규칙으로 재려면
+producer가 admission을 봐야 한다는 점 때문이다. §5의 "Backpressured로 실패하지 않는다"와 04 §8 3단계(permit 대기 → deadline)는
+그대로 두고, 결과 객체는 그 대기 중임을 알려 줄 뿐이다. 결정되면 G5를 "호출부 이관 + 공개 terminal 변경"으로 넓히고 언어별
+interface 문서 5개(dotnet·java·kotlin·node·cpp)를 §3에 추가한다.
+
 ## 7. 검증·측정 (G6)
 
 - contract test 7언어(성공 기준 1).
