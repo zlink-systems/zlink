@@ -970,10 +970,10 @@ class socket_t
 
     // Public asynchronous routed-send terminal for coroutine consumers. The
     // caller must keep POLLCOMPLETION registered until it completes.
-    async_result_t<void> send_routed_async (const routing_id_t &routing_id_,
-                                            message_t &part_)
+    send_submission_t send_routed_async (const routing_id_t &routing_id_,
+                                         message_t &part_)
     {
-        return visit ([&] (auto &socket_) -> async_result_t<void> {
+        return visit ([&] (auto &socket_) -> send_submission_t {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
                 return std::move (socket_.send (routing_id_)).message (part_).async ();
@@ -983,11 +983,11 @@ class socket_t
         });
     }
 
-    async_result_t<void> send_routed_async (const routing_id_t &routing_id_,
-                                             message_t &first_,
-                                             message_t &second_)
+    send_submission_t send_routed_async (const routing_id_t &routing_id_,
+                                         message_t &first_,
+                                         message_t &second_)
     {
-        return visit ([&] (auto &socket_) -> async_result_t<void> {
+        return visit ([&] (auto &socket_) -> send_submission_t {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
                 return std::move (socket_.send (routing_id_).message (first_)).message (second_).async ();
@@ -1092,10 +1092,10 @@ class socket_t
         });
     }
 
-    async_result_t<std::vector<message_t>>
+    request_submission_t
     request (message_t &part_, std::chrono::milliseconds timeout_)
     {
-        return visit ([&] (auto &socket_) -> async_result_t<std::vector<message_t>> {
+        return visit ([&] (auto &socket_) -> request_submission_t {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, dealer_socket_t>::value) {
                 return std::move (socket_.request ())
@@ -1108,10 +1108,10 @@ class socket_t
         });
     }
 
-    async_result_t<std::vector<message_t>>
+    request_submission_t
     request (message_t &first_, message_t &second_, std::chrono::milliseconds timeout_)
     {
-        return visit ([&] (auto &socket_) -> async_result_t<std::vector<message_t>> {
+        return visit ([&] (auto &socket_) -> request_submission_t {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, dealer_socket_t>::value) {
                 return std::move (socket_.request ()).message (first_).message (second_)
@@ -1122,12 +1122,12 @@ class socket_t
         });
     }
 
-    async_result_t<std::vector<message_t>>
+    request_submission_t
     request (const routing_id_t &target_rid_,
              message_t &part_,
              std::chrono::milliseconds timeout_)
     {
-        return visit ([&] (auto &socket_) -> async_result_t<std::vector<message_t>> {
+        return visit ([&] (auto &socket_) -> request_submission_t {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
                 return std::move (socket_.request (target_rid_))
@@ -1235,13 +1235,13 @@ class socket_t
         });
     }
 
-    async_result_t<std::vector<message_t>>
+    request_submission_t
     request (const routing_id_t &target_rid_,
              message_t &first_,
              message_t &second_,
              std::chrono::milliseconds timeout_)
     {
-        return visit ([&] (auto &socket_) -> async_result_t<std::vector<message_t>> {
+        return visit ([&] (auto &socket_) -> request_submission_t {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
                 return std::move (socket_.request (target_rid_)).message (first_).message (second_)

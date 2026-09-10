@@ -477,11 +477,15 @@ int test_admitted_async_send_leaves_no_waiter_identity ()
         zlink::message_t payload =
           zlink_cpp_contract::make_message ("admitted-" + std::to_string (i));
         auto result = dealer.send ().message (payload).async ();
+        if (result.result != ZLINK_SUBMIT_OK) {
+            std::fprintf (stderr, "an admitted send must report OK\n");
+            return 1;
+        }
         if (payload.valid ()) {
             std::fprintf (stderr, "an admitted send must consume the part\n");
             return 1;
         }
-        auto awaiter = std::move (result).operator co_await ();
+        auto awaiter = std::move (result.admitted).operator co_await ();
         if (!awaiter.await_ready ()) {
             std::fprintf (stderr, "an admitted send must complete inline\n");
             return 2;
@@ -498,7 +502,11 @@ int test_admitted_async_send_leaves_no_waiter_identity ()
     zlink::message_t rejected =
       zlink_cpp_contract::make_message ("resumed-after-admitted");
     auto pending = dealer.send ().message (rejected).async ();
-    auto pending_awaiter = std::move (pending).operator co_await ();
+    if (pending.result != ZLINK_SUBMIT_BACKPRESSURED) {
+        std::fprintf (stderr, "a send without credit must report backpressure\n");
+        return 4;
+    }
+    auto pending_awaiter = std::move (pending.admitted).operator co_await ();
     if (pending_awaiter.await_ready ()) {
         std::fprintf (stderr, "a send without credit must not be terminal\n");
         return 4;

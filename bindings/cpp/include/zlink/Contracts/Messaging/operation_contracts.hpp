@@ -6,6 +6,8 @@
 #include "../Sockets/results.hpp"
 #include "operation_builder_base.hpp"
 
+#include <zlink_errno.h>
+
 #include <chrono>
 #include <coroutine>
 #include <exception>
@@ -164,6 +166,19 @@ struct async_result_access_t
 };
 } // namespace detail
 
+struct send_submission_t
+{
+    zlink_submit_result_t result;
+    async_result_t<void> admitted;
+};
+
+struct request_submission_t
+{
+    zlink_submit_result_t result;
+    async_result_t<void> admitted;
+    async_result_t<std::vector<message_t>> reply;
+};
+
 class dealer_socket_t;
 class pair_socket_t;
 class pub_socket_t;
@@ -197,9 +212,9 @@ class send_submit_operation_t : private detail::operation_builder_base_t<
     /// Submits the part sequence to Core on the calling thread. The wait
     /// bound is `SNDTIMEO` on the socket; the binding owns no deadline.
     void submit () &&;
-    /// Uses Core DONTWAIT admission and completes after the socket-local
-    /// completion drain has processed the native result.
-    async_result_t<void> async () &&;
+    /// Uses Core DONTWAIT admission and returns its snapshot with the
+    /// socket-local admission stage.
+    send_submission_t async () &&;
 
   private:
     using base_t::base_t;
@@ -319,9 +334,9 @@ class request_submit_operation_t : private detail::operation_builder_base_t<
     request_submit_operation_t &&timeout (std::chrono::milliseconds timeout_) &&;
     /// Makes one DONTWAIT admission attempt. On backpressure, retains the
     /// request and resumes only from its exact WRITABLE token before retrying.
-    /// After admission, Core completes the suspension with the reply or request
+    /// After admission, Core completes the reply stage with the reply or request
     /// terminal. The binding owns no retry timer or worker.
-    async_result_t<std::vector<message_t>> async () &&;
+    request_submission_t async () &&;
     /// Blocks the caller until Core's reply callback completes. The caller
     /// owns this wait; the binding creates no thread. Destroying the socket or
     /// context from a resumed continuation or callback deadlocks.
