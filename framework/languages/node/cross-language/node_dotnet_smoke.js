@@ -817,6 +817,7 @@ async function dotnetConnectorObservesNodeSessionClosing(tempDir) {
 }
 
 function startDotnetHost(tempDir, name, args) {
+  const readyFile = path.join(tempDir, `${name}.ready.json`);
   const stopFile = path.join(tempDir, `${name}.stop`);
   const child = spawn('dotnet', [
     'run',
@@ -824,6 +825,7 @@ function startDotnetHost(tempDir, name, args) {
     '--framework', 'net8.0',
     ...(process.env.ZLINK_DOTNET_TESTHOST_NO_BUILD === '1' ? ['--no-build'] : []),
     '--',
+    '--ready-file', readyFile,
     '--stop-file', stopFile,
     ...args
   ], {
@@ -841,7 +843,7 @@ function startDotnetHost(tempDir, name, args) {
   });
 
   return {
-    ready: waitForReadySignal(exit, output, 30000),
+    ready: waitForReadyFile(readyFile, exit, output, 30000),
     output: () => output.join(''),
     async stop() {
       const result = await stopChildGracefully(child, () => fs.writeFile(stopFile, 'STOP'), 10000, 5000);
@@ -855,23 +857,21 @@ function startDotnetHost(tempDir, name, args) {
   };
 }
 
-async function waitForReadySignal(exit, output, timeoutMs) {
+async function waitForReadyFile(readyFile, exit, output, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const readyLine = output.join('').split(/\r?\n/).find((line) => line.startsWith('READY:'));
-    if (readyLine !== undefined) {
-      try {
-        const payload = JSON.parse(readyLine.slice('READY:'.length));
-        if (payload?.app === 'Zlink.Framework.TestHost') return payload;
-      } catch {}
+    try {
+      await fs.access(readyFile);
+      return;
+    } catch {
+      const exited = await pollExit(exit);
+      if (exited !== undefined) {
+        throw new Error(`dotnet test host exited before ready: ${exited.code ?? exited.signal}\n${output.join('')}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    const exited = await pollExit(exit);
-    if (exited !== undefined) {
-      throw new Error(`dotnet test host exited before ready: ${exited.code ?? exited.signal}\n${output.join('')}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error(`dotnet test host did not emit READY signal\n${output.join('')}`);
+  throw new Error(`dotnet test host did not become ready\n${output.join('')}`);
 }
 
 async function waitForFileText(filePath, predicate, timeoutMs) {
