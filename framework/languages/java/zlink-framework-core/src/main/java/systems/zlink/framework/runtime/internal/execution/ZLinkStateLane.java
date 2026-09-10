@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.execution;
 
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
@@ -63,20 +64,21 @@ public final class ZLinkStateLane {
         CompletableFuture<T> result = new CompletableFuture<>();
         mailbox.add(() -> {
             try {
-                T value = work.get();
-                // CompletableFuture's non-async dependents run on the completing thread. Complete
-                // this future asynchronously so caller continuations never inherit the lane's
-                // ThreadLocal ownership marker.
-                result.completeAsync(() -> value);
+                result.complete(callWithCurrent(this, work));
             } catch (RuntimeException | Error error) {
-                result.completeAsync(() -> {
-                    throw error;
-                });
+                result.completeExceptionally(error instanceof CompletionException
+                    ? error : new CompletionException(error));
             }
             return CompletableFuture.completedFuture(null);
         });
         scheduleDrain();
-        return result;
+        // No caller can observe the private result before submission returns.
+        // A completed turn needs no completion task; a pending turn must still
+        // publish outside the lane so a dependent can reenter it and wait.
+        if (result.isDone()) {
+            return result;
+        }
+        return result.handleAsync((value, error) -> result.join());
     }
 
     public CompletionStage<Void> runAsync(Runnable work) {
@@ -95,7 +97,8 @@ public final class ZLinkStateLane {
 
         mailbox.add(() -> {
             try {
-                return Objects.requireNonNull(work.get(), "work result");
+                return callWithCurrent(this,
+                    () -> Objects.requireNonNull(work.get(), "work result"));
             } catch (RuntimeException | Error error) {
                 return CompletableFuture.failedFuture(error);
             }
@@ -167,7 +170,7 @@ public final class ZLinkStateLane {
 
         CompletionStage<Void> execution;
         try {
-            execution = callWithCurrent(this, work::run);
+            execution = work.run();
         } catch (RuntimeException | Error error) {
             execution = CompletableFuture.failedFuture(error);
         }
