@@ -182,20 +182,20 @@ socket_t::socket_t (context_t &ctx_, socket_type type_) :
 int socket_t::send (message_t &part_, send_flags_t flags_)
 {
     return detail::submit_borrowed_message_part (
-      part_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_) {
-          return zlink_send_part (detail::native_handle (*this), part_out_,
-                                  static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
-                                  part_flag_, nullptr, nullptr);
+      part_, [&] (zlink_msg_t *parts_, size_t part_count_) {
+          return zlink_send (detail::native_handle (*this), parts_, part_count_,
+                             static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
+                             nullptr, nullptr);
       });
 }
 
 int socket_t::send (std::vector<message_t> &parts_, send_flags_t flags_)
 {
     return detail::submit_message_parts (
-      parts_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
-          return zlink_send_part (detail::native_handle (*this), part_out_,
-                                  static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
-                                  part_flag_, nullptr, nullptr);
+      parts_, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
+          return zlink_send (detail::native_handle (*this), native_parts_, part_count_,
+                             static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
+                             nullptr, nullptr);
       });
 }
 
@@ -203,11 +203,10 @@ int socket_t::send (const routing_id_t &target_rid_, message_t &part_, send_flag
 {
     const zlink_routing_id_t target_rid = zlink::detail::routing_id_native_value (target_rid_);
     return detail::submit_borrowed_message_part (
-      part_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_) {
-          return zlink_send_part_rid (
-            detail::native_handle (*this), &target_rid, part_out_,
-            static_cast<zlink_send_flags_t> (static_cast<int> (flags_)), part_flag_, nullptr,
-            nullptr);
+      part_, [&] (zlink_msg_t *parts_, size_t part_count_) {
+          return zlink_send_rid (
+            detail::native_handle (*this), &target_rid, parts_, part_count_,
+            static_cast<zlink_send_flags_t> (static_cast<int> (flags_)), nullptr, nullptr);
       });
 }
 
@@ -217,11 +216,10 @@ int socket_t::send (const routing_id_t &target_rid_,
 {
     const zlink_routing_id_t target_rid = zlink::detail::routing_id_native_value (target_rid_);
     return detail::submit_message_parts (
-      parts_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
-          return zlink_send_part_rid (
-            detail::native_handle (*this), &target_rid, part_out_,
-            static_cast<zlink_send_flags_t> (static_cast<int> (flags_)), part_flag_, nullptr,
-            nullptr);
+      parts_, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
+          return zlink_send_rid (
+            detail::native_handle (*this), &target_rid, native_parts_, part_count_,
+            static_cast<zlink_send_flags_t> (static_cast<int> (flags_)), nullptr, nullptr);
       });
 }
 
@@ -248,10 +246,8 @@ int socket_t::receive_impl (
     const bool use_router_recv = _type == socket_type::router;
     int rc = -1;
     try {
-        rc = _type == socket_type::stream
-               ? detail::recv_part_envelope (detail::native_handle (*this), flags_, envelope)
-               : detail::recv_whole_envelope (
-                   detail::native_handle (*this), flags_, envelope, use_router_recv);
+        rc = detail::recv_whole_envelope (
+          detail::native_handle (*this), flags_, envelope, use_router_recv);
     }
     catch (...) {
         // A failed binding-side allocation must not leave earlier multipart
@@ -281,10 +277,10 @@ int socket_t::publish (const std::string &topic_id_, message_t &part_, send_flag
 {
     detail::validate_no_embedded_null (topic_id_, "topic");
     return detail::submit_borrowed_message_part (
-      part_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_) {
-          return zlink_publish_part (detail::native_handle (*this), topic_id_.c_str (), part_out_,
-                                     static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
-                                     part_flag_);
+      part_, [&] (zlink_msg_t *parts_, size_t part_count_) {
+          return zlink_publish (detail::native_handle (*this), topic_id_.c_str (), parts_,
+                                part_count_, static_cast<zlink_send_flags_t> (
+                                               static_cast<int> (flags_)));
       });
 }
 
@@ -294,23 +290,28 @@ int socket_t::publish (const std::string &topic_id_,
 {
     detail::validate_no_embedded_null (topic_id_, "topic");
     return detail::submit_message_parts (
-      parts_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
-          return zlink_publish_part (detail::native_handle (*this), topic_id_.c_str (), part_out_,
-                                     static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
-                                     part_flag_);
+      parts_, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
+          return zlink_publish (detail::native_handle (*this), topic_id_.c_str (), native_parts_,
+                                part_count_, static_cast<zlink_send_flags_t> (
+                                               static_cast<int> (flags_)));
       });
 }
 
 int socket_t::subscribe (topic_message_t &message_, recv_flags_t flags_)
 {
     message_.close ();
+    if (_receive_envelope && _receive_envelope->has_subscription_part ()) {
+        _receive_envelope->take_subscription_message (message_);
+        return ZLINK_RECV_OK;
+    }
     return detail::read_subscription_message (
       message_,
       [&] (const zlink_routing_id_t **source_rid_out_, char *topic_out_, size_t topic_capacity_,
-           size_t *topic_size_out_, zlink_msg_t *part_out_, zlink_part_flag_t *has_more_out_) {
-           return static_cast<int> (zlink_subscribe_part (
+           size_t *topic_size_out_, zlink_msg_t *parts_out_, size_t parts_capacity_,
+           size_t *part_count_out_) {
+           return static_cast<int> (zlink_subscribe (
              detail::native_handle (*this), source_rid_out_, topic_out_,
-             topic_capacity_, topic_size_out_, part_out_, has_more_out_,
+             topic_capacity_, topic_size_out_, parts_out_, parts_capacity_, part_count_out_,
              static_cast<zlink_recv_flags_t> (static_cast<int> (flags_))));
        });
 }
@@ -321,66 +322,41 @@ int socket_t::subscribe_part (std::optional<routing_id_t> &source_rid_out_,
                               bool &has_more_out_,
                               recv_flags_t flags_)
 {
-    char topic_buffer[256];
-    size_t topic_size = sizeof (topic_buffer);
-    const zlink_routing_id_t *source_rid = nullptr;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-
-    // The common benchmark and receive pattern supplies a valid empty output
-    // message. Receive directly into that storage to avoid a temporary native
-    // message and an ownership handoff. Keep the existing temporary path for
-    // non-empty output so failure and allocation-error handling remain intact.
-    if (part_out_.valid () && zlink_msg_size (detail::native_handle (part_out_)) == 0) {
-        const int rc = zlink_subscribe_part (
-          detail::native_handle (*this), &source_rid, topic_buffer, sizeof (topic_buffer),
-          &topic_size, detail::native_handle (part_out_), &has_more,
-          static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
+    if (!_receive_envelope)
+        _receive_envelope = std::make_unique<detail::recv_envelope_t> ();
+    if (!_receive_envelope->has_subscription_part ()) {
+        topic_message_t message;
+        const int rc = subscribe (message, flags_);
         if (rc != ZLINK_RECV_OK)
-            return static_cast<int> (rc);
-
-        detail::message_access_t::valid (part_out_) = true;
-        detail::assign_subscription_metadata (&source_rid_out_, topic_out_, has_more_out_,
-                                              source_rid, topic_buffer, topic_size,
-                                              sizeof (topic_buffer), has_more);
-        return 0;
+            return rc;
+        _receive_envelope->stage_subscription (message);
     }
 
-    detail::scoped_native_message_t native_part;
-    if (!native_part.init ())
-        return -1;
-
-    const int rc = zlink_subscribe_part (
-      detail::native_handle (*this), &source_rid, topic_buffer, sizeof (topic_buffer), &topic_size,
-      native_part.get (), &has_more, static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
-    if (rc != ZLINK_RECV_OK)
-        return static_cast<int> (rc);
-
-    detail::assign_subscription_part (&source_rid_out_, topic_out_, part_out_, has_more_out_,
-                                      source_rid, topic_buffer, topic_size, sizeof (topic_buffer),
-                                      native_part.get (), has_more);
+    _receive_envelope->take_subscription_part (
+      source_rid_out_, topic_out_, part_out_, has_more_out_);
     return 0;
 }
 
 int socket_t::subscription_event (subscription_event_t &event_, recv_flags_t flags_)
 {
-    detail::scoped_native_message_t part;
-    if (!part.init ())
-        return -1;
-
     const zlink_routing_id_t *source_rid = nullptr;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    const int rc =
-      zlink_recv_part (detail::native_handle (*this), &source_rid, part.get (), &has_more,
-                       static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
-    if (rc != 0)
+    zlink_msg_t native_part;
+    size_t part_count = 0;
+    const int rc = zlink_recv (
+      detail::native_handle (*this), &source_rid, &native_part, 1u, &part_count,
+      static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
+    if (rc != ZLINK_RECV_OK)
         return rc;
-
-    const unsigned char *data = static_cast<const unsigned char *> (zlink_msg_data (part.get ()));
-    const size_t size = zlink_msg_size (part.get ());
-    if (has_more) {
-        errno = EMSGSIZE;
+    if (part_count != 1u) {
+        if (part_count > 0)
+            detail::close_message_array (&native_part, 1u);
+        errno = EPROTO;
         return -1;
     }
+
+    const unsigned char *data =
+      static_cast<const unsigned char *> (zlink_msg_data (&native_part));
+    const size_t size = zlink_msg_size (&native_part);
 
     event_.routing_id = std::nullopt;
     event_.topic.clear ();
@@ -390,6 +366,7 @@ int socket_t::subscription_event (subscription_event_t &event_, recv_flags_t fla
         event_.routing_id = source;
     event_.topic.assign (size > 1 ? reinterpret_cast<const char *> (data + 1) : "",
                          size > 0 ? size - 1 : 0);
+    detail::close_message_array (&native_part, 1u);
     return 0;
 }
 

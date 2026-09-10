@@ -90,7 +90,7 @@ int main ()
     for (const auto &file : files)
         all += read_file (file) + "\n";
 
-    const std::vector<std::string> required_part_symbols = {
+    const std::vector<std::string> removed_part_symbols = {
       "zlink_send_part",
       "zlink_recv_part",
       "zlink_publish_part",
@@ -98,12 +98,29 @@ int main ()
       "zlink_router_recv_part",
       "zlink_request_part",
       "zlink_reply_part",
+      "zlink_xpub_recv_part",
+      "ZLINK_PART_",
+      "zlink_part_flag_t",
+    };
+    for (const auto &symbol : removed_part_symbols)
+        assert (all.find (symbol) == std::string::npos);
+
+    const std::vector<std::string> required_whole_message_symbols = {
+      "zlink_send",
+      "zlink_send_rid",
+      "zlink_request",
+      "zlink_reply",
+      "zlink_publish",
+      "zlink_recv",
+      "zlink_router_recv",
+      "zlink_subscribe",
+      "zlink_xpub_recv",
       "zlink_completion_recv",
       "zlink_completion_close",
       "zlink_stream_recv_packet",
       "submit_borrowed_message_array",
     };
-    for (const auto &symbol : required_part_symbols)
+    for (const auto &symbol : required_whole_message_symbols)
         assert (all.find (symbol) != std::string::npos);
 
     assert (contains_aggregate_call (all, "zlink_recv"));

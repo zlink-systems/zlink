@@ -56,23 +56,22 @@ inline bool submit_raw_send_state (operation_state_t &state_,
             throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
 
         const int direct_rc = zlink::detail::submit_borrowed_message_part (
-          part, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_) {
+          part, [&] (zlink_msg_t *parts_, size_t part_count_) {
               switch (state_.kind) {
                   case operation_kind_t::raw_send:
-                      return zlink_send_part (
-                        state_.raw.socket, part_out_,
+                      return zlink_send (
+                        state_.raw.socket, parts_, part_count_,
                         static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
-                        part_flag_, user_context_, completion_id_out_);
+                        user_context_, completion_id_out_);
                   case operation_kind_t::raw_routed_send:
-                      return zlink_send_part_rid (
-                        state_.raw.socket, first_rid, part_out_,
+                      return zlink_send_rid (
+                        state_.raw.socket, first_rid, parts_, part_count_,
                         static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
-                        part_flag_, user_context_, completion_id_out_);
+                        user_context_, completion_id_out_);
                   case operation_kind_t::raw_publish:
-                      return zlink_publish_part (
-                        state_.raw.socket, state_.raw.topic.c_str (), part_out_,
-                        static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
-                        part_flag_);
+                      return zlink_publish (
+                        state_.raw.socket, state_.raw.topic.c_str (), parts_, part_count_,
+                        static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)));
                   default:
                       return ZLINK_SUBMIT_INVALID_ARGUMENT;
               }
@@ -101,25 +100,22 @@ inline bool submit_raw_send_state (operation_state_t &state_,
     // the state pool is intended to retain it for the next builder chain.
     std::vector<message_t> &parts = state_.message.parts;
     const int raw_rc = zlink::detail::submit_message_parts (
-      parts, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool is_final_) {
-          void *const context = is_final_ ? user_context_ : nullptr;
-          zlink_completion_id_t *const completion_id =
-            is_final_ ? completion_id_out_ : nullptr;
+      parts, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
           switch (state_.kind) {
               case operation_kind_t::raw_send:
-                  return zlink_send_part (
-                    state_.raw.socket, part_out_,
-                    static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)), part_flag_,
-                    context, completion_id);
+                  return zlink_send (
+                    state_.raw.socket, native_parts_, part_count_,
+                    static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
+                    user_context_, completion_id_out_);
               case operation_kind_t::raw_routed_send:
-                  return zlink_send_part_rid (
-                    state_.raw.socket, first_rid, part_out_,
-                    static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)), part_flag_,
-                    context, completion_id);
+                  return zlink_send_rid (
+                    state_.raw.socket, first_rid, native_parts_, part_count_,
+                    static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
+                    user_context_, completion_id_out_);
               case operation_kind_t::raw_publish:
-                  return zlink_publish_part (
-                    state_.raw.socket, state_.raw.topic.c_str (), part_out_,
-                    static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)), part_flag_);
+                  return zlink_publish (
+                    state_.raw.socket, state_.raw.topic.c_str (), native_parts_, part_count_,
+                    static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)));
               default:
                   return ZLINK_SUBMIT_INVALID_ARGUMENT;
           }
@@ -178,14 +174,11 @@ inline bool submit_raw_request_state (
         ? native_timeout_ms (state_.timeout)
         : 0u;
     *completion_id_out_ = 0;
-    auto submit_part = [&] (zlink_msg_t *part_, zlink_part_flag_t part_flag_,
-                            bool is_final_) {
-        return zlink_request_part (
-          state_.raw.socket, target, part_,
+    auto submit_record = [&] (zlink_msg_t *parts_, size_t part_count_) {
+        return zlink_request (
+          state_.raw.socket, target, parts_, part_count_,
           static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
-          part_flag_, is_final_ ? timeout : 0u,
-          is_final_ ? user_context_ : nullptr,
-          is_final_ ? completion_id_out_ : nullptr);
+          timeout, user_context_, completion_id_out_);
     };
 
     int raw_result = -1;
@@ -194,16 +187,9 @@ inline bool submit_raw_request_state (
         message_t &part = send_single_part (state_);
         if (!part.valid ())
             throw_invalid_argument ();
-        raw_result = submit_borrowed_message_part (
-          part, [&] (zlink_msg_t *native_, zlink_part_flag_t flag_) {
-              return submit_part (native_, flag_, true);
-          });
+        raw_result = submit_borrowed_message_part (part, submit_record);
     } else {
-        raw_result = submit_message_parts (
-          state_.message.parts,
-          [&] (zlink_msg_t *native_, zlink_part_flag_t flag_, bool final_) {
-              return submit_part (native_, flag_, final_);
-          });
+        raw_result = submit_message_parts (state_.message.parts, submit_record);
     }
 
     const int submit_errno = zlink_errno ();
