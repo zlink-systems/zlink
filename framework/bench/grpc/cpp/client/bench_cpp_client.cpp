@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <csignal>
 #include <condition_variable>
+#include <cxxabi.h>
 
 #include "bench.grpc.pb.h"
 #include "bench.pb.h"
@@ -26,6 +27,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <typeinfo>
 #include <type_traits>
 #include <vector>
 
@@ -96,14 +98,25 @@ struct options_t
 // per-cell measurement state
 // ---------------------------------------------------------------------------
 
+struct error_record_t
+{
+    std::string type;
+    std::string message;
+    long long count = 0;
+};
+
 struct counters_t
 {
+    static constexpr size_t error_kind_limit = 8;
+    static constexpr size_t error_message_limit = 200;
     std::atomic<long long> completed {0};
     std::atomic<long long> errors {0};
     std::atomic<long long> submitted {0};
     std::atomic<long long> header_failures {0};
     std::atomic<long long> outstanding {0};
     std::atomic<long long> peak_in_flight {0};
+    std::vector<error_record_t> error_summary;
+    long long other_errors = 0;
 
     void enter ()
     {
@@ -116,6 +129,34 @@ struct counters_t
 
     void leave () { outstanding.fetch_sub (1, std::memory_order_acq_rel); }
 
+    void record_error (std::string type, std::string message)
+    {
+        errors.fetch_add (1, std::memory_order_relaxed);
+        std::replace (message.begin (), message.end (), '\r', ' ');
+        std::replace (message.begin (), message.end (), '\n', ' ');
+        if (message.size () > error_message_limit)
+            message.resize (error_message_limit);
+        const auto found = std::find_if (
+          error_summary.begin (), error_summary.end (), [&] (const error_record_t &entry) {
+              return entry.type == type && entry.message == message;
+          });
+        if (found != error_summary.end ())
+            ++found->count;
+        else if (error_summary.size () < error_kind_limit)
+            error_summary.push_back ({std::move (type), std::move (message), 1});
+        else
+            ++other_errors;
+    }
+
+    void record_exception (const std::exception &error)
+    {
+        int status = 0;
+        std::unique_ptr<char, decltype (&std::free)> demangled (
+          abi::__cxa_demangle (typeid (error).name (), nullptr, nullptr, &status), &std::free);
+        record_error (status == 0 && demangled ? demangled.get () : typeid (error).name (),
+                      error.what ());
+    }
+
     void reset ()
     {
         completed.store (0);
@@ -123,6 +164,8 @@ struct counters_t
         submitted.store (0);
         header_failures.store (0);
         peak_in_flight.store (0);
+        error_summary.clear ();
+        other_errors = 0;
         // `outstanding` is deliberately NOT reset: requests issued during warmup
         // that are still open are genuinely still open when the active window
         // starts, and zeroing the counter here would hide them.
@@ -279,7 +322,11 @@ class grpc_driver_t : public driver_t
                     counters.completed.fetch_add (1, std::memory_order_relaxed);
                 }
             } else {
-                counters.errors.fetch_add (1, std::memory_order_relaxed);
+                const std::string message = ok
+                  ? "code " + std::to_string (call->status.error_code ()) + ": "
+                      + call->status.error_message ()
+                  : "completion queue event was not ok";
+                counters.record_error ("grpc::Status", message);
             }
             delete call;
         };
@@ -385,7 +432,7 @@ bool grpc_driver_t::validate<zlink::framework::bench::withgrpc::BenchPayload> (
         || header.run_id != _run_id || header.phase != static_cast<uint8_t> (phase) || header.seq != seq
         || header.payload_size != size || reply.body ().size () != size) {
         counters.header_failures.fetch_add (1, std::memory_order_relaxed);
-        counters.errors.fetch_add (1, std::memory_order_relaxed);
+        counters.record_error ("ValidationError", "gRPC reply header mismatch");
         return false;
     }
     return true;
@@ -604,9 +651,8 @@ class zlink_raw_driver_t : public driver_t
                 record_reply (reply, seq);
             }
             catch (const std::exception &error) {
-                if (_counters->errors.load () == 0) std::fprintf (stderr, "raw operation failed: %s\n", error.what ());
                 _counters->leave ();
-                _counters->errors.fetch_add (1, std::memory_order_relaxed);
+                _counters->record_exception (error);
             }
         }
     }
@@ -622,9 +668,8 @@ class zlink_raw_driver_t : public driver_t
             record_reply (reply, seq);
         }
         catch (const std::exception &error) {
-                if (_counters->errors.load () == 0) std::fprintf (stderr, "raw operation failed: %s\n", error.what ());
             _counters->leave ();
-            _counters->errors.fetch_add (1, std::memory_order_relaxed);
+            _counters->record_exception (error);
         }
     }
 
@@ -637,6 +682,7 @@ class zlink_raw_driver_t : public driver_t
             auto parts = make_parts (_payload_size, _phase, seq);
             _counters->enter ();
             _counters->submitted.fetch_add (1, std::memory_order_relaxed);
+            bool failed = false;
             try {
                 zlink::request_submission_t submission =
                   request_operation ()
@@ -660,10 +706,11 @@ class zlink_raw_driver_t : public driver_t
                 }
             }
             catch (const std::exception &error) {
-                if (_counters->errors.load () == 0)
-                    std::fprintf (stderr, "raw operation failed: %s\n", error.what ());
                 _counters->leave ();
-                _counters->errors.fetch_add (1, std::memory_order_relaxed);
+                _counters->record_exception (error);
+                failed = true;
+            }
+            if (failed) {
                 co_await _ready.schedule ();
                 continue;
             }
@@ -695,9 +742,8 @@ class zlink_raw_driver_t : public driver_t
                 _counters->completed.fetch_add (1, std::memory_order_relaxed);
             }
             catch (const std::exception &error) {
-                if (_counters->errors.load () == 0) std::fprintf (stderr, "raw operation failed: %s\n", error.what ());
                 _counters->leave ();
-                _counters->errors.fetch_add (1, std::memory_order_relaxed);
+                _counters->record_exception (error);
             }
         }
     }
@@ -706,7 +752,7 @@ class zlink_raw_driver_t : public driver_t
     void record_reply (const std::vector<zlink::message_t> &reply, uint64_t seq)
     {
         if (reply.empty ()) {
-            _counters->errors.fetch_add (1, std::memory_order_relaxed);
+            _counters->record_error ("ValidationError", "raw request returned no reply parts");
             return;
         }
         const zlink::message_t &body = reply.back ();
@@ -717,7 +763,7 @@ class zlink_raw_driver_t : public driver_t
             || header.run_id != _run_id || header.phase != _phase
             || header.payload_size != _payload_size || payload.body ().size () != _payload_size || header.seq != seq) {
             _counters->header_failures.fetch_add (1, std::memory_order_relaxed);
-            _counters->errors.fetch_add (1, std::memory_order_relaxed);
+            _counters->record_error ("ValidationError", "raw reply header mismatch");
             return;
         }
         const uint64_t now = now_ns ();
@@ -900,9 +946,10 @@ class framework_driver_t final : public driver_t
                     ++counters.completed;
                     if (latency) latency->add_us (static_cast<double> (now_ns () - item.sent_ns) / 1000.0);
                 } else {
-                    ++counters.errors;
-                    if (counters.errors.load () == 1 && !result)
-                        std::fprintf (stderr, "framework operation failed: %s\n", result.error ()->what ());
+                    if (result)
+                        counters.record_error ("ValidationError", "Framework reply header mismatch");
+                    else
+                        counters.record_exception (*result.error ());
                 }
                 counters.leave ();
                 pending[slot].reset ();
@@ -1173,11 +1220,21 @@ class source_t
              : "one application thread; Framework task completion notifications"}};
         value["completed_at_close"] = completed_at_close;
         value["active_elapsed_ms"] = elapsed * 1000;
+        value["client_error_summary"] = json::array ();
+        for (const auto &error : _counters.error_summary)
+            value["client_error_summary"].push_back (
+              {{"type", error.type}, {"message", error.message}, {"count", error.count}});
+        value["client_error_other_count"] = _counters.other_errors;
         std::ofstream output (temporary, std::ios::trunc);
         output << record.dump (2) << '\n';
         output.close ();
         if (!output) throw std::runtime_error ("cannot write source result");
         std::filesystem::rename (temporary, _options.output_file);
+        for (const auto &error : _counters.error_summary)
+            std::fprintf (stdout, "client_error: %s: %s (%lld)\n", error.type.c_str (),
+                          error.message.c_str (), error.count);
+        if (_counters.other_errors != 0)
+            std::fprintf (stdout, "client_error_other: %lld\n", _counters.other_errors);
         print_result_lines (stdout, cell);
         std::fflush (stdout);
     }
