@@ -9,7 +9,7 @@ import (
 
 func TestImmediateSendRegistrationDoesNotStartRuntimeDrain(t *testing.T) {
 	owner := newCompletionOwner(nil)
-	entry := newSendCompletionEntry(context.Background(), nil, nextCompletionContext())
+	entry := newSendCompletionEntry(nil, nextCompletionContext())
 	if err := owner.register(entry); err != nil {
 		t.Fatalf("register(send) error = %v", err)
 	}
@@ -62,7 +62,7 @@ func TestRequestTerminalErrorPreservesCauseCategory(t *testing.T) {
 }
 
 func TestRequestCompletionEntryJoinsCaptureBeforePublish(t *testing.T) {
-	entry := newCompletionEntry(completionRequest, context.Background())
+	entry := newCompletionEntry(completionRequest)
 	entry.capture(nil, nil)
 	select {
 	case <-entry.done:
@@ -70,17 +70,17 @@ func TestRequestCompletionEntryJoinsCaptureBeforePublish(t *testing.T) {
 	default:
 	}
 	entry.publish(42)
-	if parts, err := entry.waitRequest(); err != nil || len(parts) != 0 {
+	if parts, err := entry.waitRequest(context.Background()); err != nil || len(parts) != 0 {
 		t.Fatalf("waitRequest() = (%v, %v), want (empty, nil)", parts, err)
 	}
 	entry.waitSettled()
 }
 
-func TestCompletionEntryDropsLateRequestPartsAfterCallerCancellation(t *testing.T) {
+func TestCompletionEntryPreservesLateRequestAfterWaitCancellation(t *testing.T) {
 	waitCtx, cancel := context.WithCancel(context.Background())
-	entry := newCompletionEntry(completionRequest, waitCtx)
+	entry := newCompletionEntry(completionRequest)
 	cancel()
-	if _, err := entry.waitRequest(); !errors.Is(err, context.Canceled) {
+	if _, err := entry.waitRequest(waitCtx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("waitRequest() error = %v, want context.Canceled", err)
 	}
 	part, err := NewMessage([]byte("late"))
@@ -90,9 +90,11 @@ func TestCompletionEntryDropsLateRequestPartsAfterCallerCancellation(t *testing.
 	entry.capture([]*Message{part}, nil)
 	entry.publish(43)
 	entry.waitSettled()
-	if part.Data() != nil {
-		t.Fatal("late request payload was not closed")
+	parts, err := entry.waitRequest(context.Background())
+	if err != nil || len(parts) != 1 || string(parts[0].Data()) != "late" {
+		t.Fatalf("late request result = (%v, %v)", parts, err)
 	}
+	MultipartClose(parts)
 }
 
 func TestRuntimeOwnerReusesPollerAcrossCompletedRequests(t *testing.T) {
@@ -138,7 +140,11 @@ func TestRuntimeOwnerReusesPollerAcrossCompletedRequests(t *testing.T) {
 	}()
 	var first *runtimeCompletionDrain
 	for i := 0; i < 20; i++ {
-		parts, err := client.Request().Bytes([]byte("echo")).Submit(context.Background())
+		var parts []*Message
+		submission, err := client.Request().Bytes([]byte("echo")).Submit(context.Background())
+		if err == nil {
+			parts, err = submission.Reply(context.Background())
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -204,7 +210,7 @@ func TestImmediateManagedSendAllocationBudget(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err = sender.Send().MoveMessage(body).Message(tail).Submit(context.Background()); err != nil {
+		if err = submitNativeSend(context.Background(), sender.Send().MoveMessage(body).Message(tail)); err != nil {
 			t.Fatal(err)
 		}
 		var received Received
@@ -223,4 +229,12 @@ func TestImmediateManagedSendAllocationBudget(t *testing.T) {
 	if allocations := testing.AllocsPerRun(100, exchange); allocations > 22 {
 		t.Fatalf("immediate two-part send/receive allocated %.0f objects, budget 22", allocations)
 	}
+}
+
+func submitNativeSend(ctx context.Context, op SendSubmitOp) error {
+	submission, err := op.Submit(ctx)
+	if err != nil {
+		return err
+	}
+	return submission.Admitted(ctx)
 }

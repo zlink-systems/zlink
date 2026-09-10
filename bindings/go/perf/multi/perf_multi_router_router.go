@@ -232,19 +232,19 @@ func runMultiRouterRouterEchoWindow(
 	events := make([]zlink.PollEvent, len(clients))
 	for i, client := range clients {
 		perfcommon.Must(poller.AddSocket(
-			client.socket, perfcommon.ZLinkPollIn|zlink.PollCompletion, uintptr(i)))
+			client.socket, perfcommon.ZLinkPollIn, uintptr(i)))
 	}
 
 	payloads := make([][]byte, len(clients))
 	for index := range payloads {
 		payloads[index] = perfcommon.PreparePayload(cfg.msgSize)
 	}
-	submit := func(index int) error {
-		if sendErr := sendMultiRouterRouterRequest(
-			clients[index].socket, serverID, payloads[index], window); sendErr != nil {
-			return fmt.Errorf("multi router/router send: %w", sendErr)
+	submit := func(index int) (zlink.SendSubmission, error) {
+		submission, sendErr := sendMultiRouterRouterRequest(clients[index].socket, serverID, payloads[index], window)
+		if sendErr != nil {
+			return nil, fmt.Errorf("multi router/router send: %w", sendErr)
 		}
-		return nil
+		return submission, nil
 	}
 	pendingReplies := 0
 	progress := func(wait time.Duration) error {
@@ -282,10 +282,10 @@ func sendMultiRouterRouterRequest(
 	serverID zlink.RoutingID,
 	payload []byte,
 	window perfcommon.BenchmarkWindow,
-) error {
+) (zlink.SendSubmission, error) {
 	perfcommon.StampWindowPayload(payload, window.ActiveAt)
 	message := perfcommon.NewMessage(payload)
-	return perfcommon.SubmitMeasurementSend(socket.SendTo(serverID), message)
+	return perfcommon.SubmitMeasurementSendSubmission(context.Background(), socket.SendTo(serverID), message)
 }
 
 func recvMultiRouterRouterReply(
@@ -481,7 +481,7 @@ func submitMultiRouterReply(
 	for _, part := range parts[1:] {
 		reply = reply.MoveMessage(part)
 	}
-	err := reply.Submit(ctx)
+	err := perfcommon.SubmitSend(ctx, reply)
 	if err == nil || perfcommon.IsStaleRoute(err) {
 		return nil
 	}
@@ -494,7 +494,7 @@ func submitMultiRouterReply(
 func sendMultiRouterStopToken(socket *zlink.RouterSocket, serverID zlink.RoutingID) {
 	for attempt := 0; attempt < perfcommon.StopTokenSendAttempts; attempt++ {
 		sent, err := perfcommon.SubmitRoutedPayload(perfcommon.StopToken, func(message *zlink.Message) error {
-			return socket.SendTo(serverID).MoveMessage(message).Submit(context.Background())
+			return perfcommon.SubmitSend(context.Background(), socket.SendTo(serverID).MoveMessage(message))
 		})
 		if err == nil && sent {
 			return

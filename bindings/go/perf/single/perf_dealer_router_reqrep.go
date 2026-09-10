@@ -42,7 +42,7 @@ func runDealerRouterReqRep(cfg benchmarkConfig) perfcommon.Result {
 		replier,
 		func() zlink.RequestOp { return requester.Request() },
 		func(message *zlink.Message) (bool, error) {
-			err := requester.Send().MoveMessage(message).Submit(context.Background())
+			err := perfcommon.SubmitSend(context.Background(), requester.Send().MoveMessage(message))
 			return err == nil, err
 		},
 	)

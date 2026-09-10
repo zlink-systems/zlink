@@ -148,7 +148,11 @@ func TestRequestReplyCanonicalDealerRouterRoundTrip(t *testing.T) {
 	}()
 
 	requestPayload := []byte("ping")
-	reply, err := dealerSocket.Request().Bytes(requestPayload).Timeout(2 * time.Second).Submit(context.Background())
+	var reply []*zlink.Message
+	submission, err := dealerSocket.Request().Bytes(requestPayload).Timeout(2 * time.Second).Submit(context.Background())
+	if err == nil {
+		reply, err = submission.Reply(context.Background())
+	}
 	if !bytes.Equal(requestPayload, []byte("ping")) {
 		t.Fatalf("Request().Bytes() mutated caller payload = %q", string(requestPayload))
 	}
@@ -198,7 +202,7 @@ func TestRouterRequestSupportPreservesDataReceiveSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMessage() error = %v", err)
 	}
-	if err := dealerSocket.Send().Message(payload).Submit(context.Background()); err != nil {
+	if err := submitAndWait(context.Background(), dealerSocket.Send().Message(payload)); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 	var received zlink.Received
@@ -272,7 +276,7 @@ func TestStreamRecvCanonicalRoundTrip(t *testing.T) {
 	}
 
 	reply := newMessage(t, "hello-stream")
-	if err := stream.SendTo(received.RoutingID()).Message(reply).Submit(context.Background()); err != nil {
+	if err := submitAndWait(context.Background(), stream.SendTo(received.RoutingID()).Message(reply)); err != nil {
 		t.Fatalf("SendTo() error = %v", err)
 	}
 
@@ -331,7 +335,7 @@ func TestStreamPacketPullCanonicalRoundTrip(t *testing.T) {
 		t.Fatalf("packet body = %q, want %q", got, "hello-stream")
 	}
 	framed := frameStreamPacketMessage(t, packet.Header(), packet.Body())
-	if err := stream.SendTo(packet.RoutingID()).Message(framed).Submit(context.Background()); err != nil {
+	if err := submitAndWait(context.Background(), stream.SendTo(packet.RoutingID()).Message(framed)); err != nil {
 		t.Fatalf("packet reply error = %v", err)
 	}
 

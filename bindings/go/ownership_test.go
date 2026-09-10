@@ -25,7 +25,7 @@ func TestSendConsumesMessageOwnership(t *testing.T) {
 	_ = client.Connect(endpoint)
 
 	msg := newMessage(t, "owned")
-	if err := client.Send().Message(msg).Submit(context.Background()); err != nil {
+	if err := submitAndWait(context.Background(), client.Send().Message(msg)); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 	if data := msg.Data(); data != nil {
@@ -45,7 +45,7 @@ func TestRecvOwnershipCanBeExplicitlyReleased(t *testing.T) {
 
 	_ = server.Bind(endpoint)
 	_ = client.Connect(endpoint)
-	_ = client.Send().Message(newMessage(t, "recv-owned")).Submit(context.Background())
+	_ = submitAndWait(context.Background(), client.Send().Message(newMessage(t, "recv-owned")))
 
 	var received zlink.Received
 	if _, err := server.Recv(&received, zlink.RecvFlagsNone); err != nil {
