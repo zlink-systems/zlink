@@ -15,7 +15,7 @@ namespace Zlink.Framework.UnitTests;
 public sealed class SessionActorCoordinatorTests
 {
     [Fact]
-    public async Task Session_Send_Submit_Reports_Nonblocking_Transport_Backpressure()
+    public async Task Session_Send_Submit_Reports_Terminal_Transport_Refusal()
     {
         var runtime = CreateRuntime();
         var stream = new TestStream(RoutingId.From("session-node"), acceptsWrites: false);
@@ -29,8 +29,8 @@ public sealed class SessionActorCoordinatorTests
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await context.Client.Send(new SessionPush("value")).Async());
 
-        Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
-        Assert.Equal(SendFlags.DontWait, stream.LastWriteFlags);
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+        Assert.Equal(SendFlags.None, stream.LastWriteFlags);
     }
 
     [Fact]
@@ -170,11 +170,9 @@ public sealed class SessionActorCoordinatorTests
         using var payload = Message.From(new byte[] { 1, 2, 3 });
         Assert.True(runtime.SendActorBoundSession(
             actor.ActorId,
-            new[] { payload },
-            SendFlags.DontWait));
+            new[] { payload }));
 
         var frame = Assert.Single(stream.Writes);
-        Assert.Equal(SendFlags.DontWait, frame.Flags);
         Assert.NotEmpty(frame.Payload);
     }
 
@@ -219,7 +217,6 @@ public sealed class SessionActorCoordinatorTests
 
         var written = Assert.Single(stream.Writes);
         Assert.Equal(replyFrame, written.Payload);
-        Assert.Equal(SendFlags.DontWait, written.Flags);
     }
 
     [Fact]
@@ -557,8 +554,7 @@ public sealed class SessionActorCoordinatorTests
         var exception = Assert.Throws<ZLinkFrameworkException>(() =>
             runtime.SendActorBoundSession(
                 "actor-1",
-                new[] { payload },
-                SendFlags.DontWait));
+                new[] { payload }));
 
         Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, exception.Kind);
     }

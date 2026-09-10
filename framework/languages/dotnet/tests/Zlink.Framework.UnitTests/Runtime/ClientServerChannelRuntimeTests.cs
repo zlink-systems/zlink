@@ -1711,7 +1711,7 @@ public sealed class ClientServerChannelRuntimeTests
         var admissionTask = dealer.Request()
             .Message(hello)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async(CancellationToken.None);
+            .Async(CancellationToken.None).Reply;
         using var inbound = await PollReceivedAsync(
             storage => router.Recv(storage, RecvFlags.DontWait),
             TimeSpan.FromSeconds(2));
@@ -1735,7 +1735,7 @@ public sealed class ClientServerChannelRuntimeTests
             ZLinkClientServerControlProtocol.EncodeLivenessProbe(17);
         await router.Send(sourceRid)
             .Message(probe)
-            .Async(CancellationToken.None);
+            .Async(CancellationToken.None).Admitted;
         using var delivered = await PollReceivedAsync(
             storage => dealer.Recv(storage, RecvFlags.DontWait),
             TimeSpan.FromSeconds(2));
@@ -1780,7 +1780,7 @@ public sealed class ClientServerChannelRuntimeTests
                 ZLinkClientServerControlProtocol.EncodeLivenessProbe(17);
             await router.Send(clientRid)
                 .Message(probe)
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Admitted;
             using var reply = await PollReceivedAsync(
                 storage => TryReceive(router, storage),
                 TimeSpan.FromSeconds(3));
@@ -1804,7 +1804,7 @@ public sealed class ClientServerChannelRuntimeTests
                         endpoint));
             await router.Send(clientRid)
                 .Message(draining)
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Admitted;
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 0,
@@ -2154,7 +2154,7 @@ public sealed class ClientServerChannelRuntimeTests
                         ?? throw new InvalidOperationException(
                             "missing client routing id"))
                     .Message(malformed)
-                    .Async(CancellationToken.None);
+                    .Async(CancellationToken.None).Admitted;
 
             Received secondHello;
             try
@@ -2242,7 +2242,7 @@ public sealed class ClientServerChannelRuntimeTests
                 new byte[] { 0x5a, 0x4d, 0x01, 0xff, 0x00 });
             await dealer.Send()
                 .Message(malformed)
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Admitted;
             await Task.Delay(250);
             Assert.False(
                 server.GetRequiredService<EchoProbe>().Received.Task.IsCompleted);

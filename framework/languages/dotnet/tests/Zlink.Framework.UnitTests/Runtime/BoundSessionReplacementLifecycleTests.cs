@@ -830,21 +830,16 @@ public sealed class BoundSessionReplacementLifecycleTests
             return false;
         }
 
-        public bool Send(RoutingId routingId, Message payload, SendFlags flags)
-        {
-            Interlocked.Increment(ref _sendCount);
-            FrameSent.TrySetResult();
-            return true;
-        }
-
-        public bool Send(
+        public Task SendAsync(
             RoutingId routingId,
-            IReadOnlyList<Message> parts,
-            SendFlags flags)
+            Message payload,
+            CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref _sendCount);
             FrameSent.TrySetResult();
-            return true;
+            payload.Dispose();
+            return Task.CompletedTask;
         }
 
         public void DisconnectPeer(RoutingId routingId)

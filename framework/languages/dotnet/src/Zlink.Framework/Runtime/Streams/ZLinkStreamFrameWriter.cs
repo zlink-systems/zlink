@@ -3,7 +3,7 @@ namespace Zlink.Framework.Runtime.Streams;
 internal static class ZLinkStreamFrameWriter
 {
     public static async ValueTask WriteAsync(
-        Func<Message, CancellationToken, ValueTask> submit,
+        Func<Message, CancellationToken, Task> submit,
         ZlinkStreamHeader header,
         ReadOnlyMemory<byte> payload,
         CancellationToken cancellationToken)
@@ -69,9 +69,9 @@ internal static class ZLinkStreamFrameWriter
     private static bool WriteRaw(IZLinkStream stream, Message message)
     {
         if (stream is ZLinkManagedStream managedStream)
-            return managedStream.WriteRaw(message, SendFlags.DontWait);
+            return managedStream.WriteRaw(message);
 
-        return stream.Write(ZLinkMessage.From(message.ToArray()), SendFlags.DontWait);
+        return stream.Write(ZLinkMessage.From(message.ToArray()));
     }
 
 }
