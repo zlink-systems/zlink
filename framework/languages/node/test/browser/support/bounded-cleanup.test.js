@@ -50,7 +50,12 @@ test('closeContext is bounded when context.close hangs', async () => {
 
 test('closeBrowserServer kills when BrowserServer.close hangs', async () => {
   let killed = false;
-  const server = { close: () => new Promise(() => {}), kill: () => { killed = true; } };
-  assert.deepEqual(await closeBrowserServer(server, 5), { timedOut: true, forced: true });
+  let killResolved = false;
+  const server = { close: () => new Promise(() => {}), kill: () => new Promise((resolve) => {
+    killed = true;
+    setTimeout(() => { killResolved = true; resolve(); }, 2);
+  }) };
+  assert.deepEqual(await closeBrowserServer(server, 10), { timedOut: true, forced: true, killTimedOut: false });
   assert.equal(killed, true);
+  assert.equal(killResolved, true);
 });

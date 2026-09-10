@@ -42,7 +42,6 @@ test('actual Chromium uses ws/wss, explicit flow, reconnect, drain, and browser 
     certificate,
     key
   );
-  t.after(() => cleanup(t, 'untrusted wss server', () => stopStreamServer(untrustedWssServer)));
   browserServer = await chromium.launchServer({ headless: true });
   browser = await chromium.connect({ wsEndpoint: browserServer.wsEndpoint() });
   context = await browser.newContext();

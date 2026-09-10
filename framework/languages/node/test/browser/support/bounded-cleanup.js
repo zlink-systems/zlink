@@ -50,9 +50,19 @@ async function closeBrowserServer(server, timeoutMs = 5_000) {
       server.close(),
       new Promise((resolve) => { timer = setTimeout(() => { timedOut = true; resolve(); }, timeoutMs); })
     ]);
-    if (timedOut) server.kill();
+    if (timedOut) {
+      let killTimedOut = false;
+      let killTimer;
+      try {
+        await Promise.race([
+          Promise.resolve(server.kill()),
+          new Promise((resolve) => { killTimer = setTimeout(() => { killTimedOut = true; resolve(); }, timeoutMs); })
+        ]);
+      } finally { clearTimeout(killTimer); }
+      return { timedOut: true, forced: !killTimedOut, killTimedOut };
+    }
   } finally { clearTimeout(timer); }
-  return { timedOut, forced: timedOut };
+  return { timedOut, forced: false };
 }
 
 async function closeServer(server, timeoutMs = 5_000) {
