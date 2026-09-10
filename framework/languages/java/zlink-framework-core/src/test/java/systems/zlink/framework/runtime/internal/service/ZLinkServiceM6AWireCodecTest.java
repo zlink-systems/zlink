@@ -188,6 +188,74 @@ final class ZLinkServiceM6AWireCodecTest {
     }
 
     @Test
+    void applicationPayloadByteArrayBoundariesRemainDefensive() {
+        byte[] source = new byte[] {1, 2, 3};
+        var payload = new ZLinkServiceM6AWireCodec.ApplicationPayload(
+            "packet", "application/json", source);
+        source[0] = 9;
+        byte[] exposed = payload.payload();
+        exposed[1] = 9;
+        assertArrayEquals(new byte[] {1, 2, 3}, payload.payload());
+
+        byte[] frame = codec.encodeApplicationPayload(payload);
+        var decoded = codec.decodeApplicationPayload(frame);
+        Arrays.fill(frame, (byte) 0);
+        assertEquals("packet", decoded.packetName());
+        assertEquals("application/json", decoded.contentType());
+        assertArrayEquals(new byte[] {1, 2, 3}, decoded.payload());
+    }
+
+    @Test
+    void applicationPayloadBorrowsTheNativeFrameUntilDelayedDecodeOrFreeze() {
+        byte[] body = new byte[4096];
+        Arrays.fill(body, (byte) 0xa7);
+        byte[] encoded;
+        try (Message original = Message.from(body)) {
+            encoded = codec.encodeFrameworkMultipartFrame(List.of(original));
+        }
+        List<Message> decoded;
+        try (Message frame = Message.allocate(encoded.length + 11)) {
+            var window = frame.mutableDataBuffer();
+            window.position(7).put(encoded).position(7).limit(7 + encoded.length);
+            var payload = codec.decodeApplicationPayload(window);
+            assertEquals(7, window.position());
+            assertEquals(7 + encoded.length, window.limit());
+
+            // Changing the still-owned native storage must be visible to both
+            // delayed multipart decoding and relocation freeze encoding.
+            window.put(window.limit() - 1, (byte) 0x36);
+            encoded[encoded.length - 1] = 0x36;
+            body[body.length - 1] = 0x36;
+            decoded = codec.decodeFrameworkMultipart(payload);
+            assertArrayEquals(encoded, codec.encodeApplicationPayload(payload));
+            assertArrayEquals(encoded, codec.encodeApplicationPayload(payload));
+            assertEquals(7, window.position());
+        }
+        try {
+            assertEquals(1, decoded.size());
+            assertArrayEquals(body, decoded.getFirst().toByteArray());
+        } finally {
+            Message.closeAll(decoded);
+        }
+    }
+
+    @Test
+    void applicationPayloadNativeViewPreservesOuterFrameValidation() {
+        byte[] frame = codec.encodeApplicationPayload(
+            new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                "packet", "application/json", new byte[] {1, 2, 3}));
+        for (int size = 0; size < frame.length; size++) {
+            var truncated = java.nio.ByteBuffer.wrap(Arrays.copyOf(frame, size));
+            assertThrows(ZLinkServiceWireException.class,
+                () -> codec.decodeApplicationPayload(truncated));
+            assertEquals(0, truncated.position());
+        }
+        java.nio.ByteBuffer.wrap(frame).putInt(frame.length - 7, Integer.MAX_VALUE);
+        assertThrows(ZLinkServiceWireException.class,
+            () -> codec.decodeApplicationPayload(java.nio.ByteBuffer.wrap(frame)));
+    }
+
+    @Test
     void nativeFrameDecodeBorrowsInputAndReturnsIndependentlyOwnedParts() {
         byte[] body = new byte[4096];
         Arrays.fill(body, (byte) 0xa7);
