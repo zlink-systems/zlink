@@ -119,6 +119,46 @@ request-backpressure 4096의 **꼬리가 무너진다**.
 - 진행 중(codex): **dotnet #92**(A의 #98 dotnet G5 전제 — 이제 OPEN 아님, 머지 임박 시 알림) · rust #95 · **G3 #90 Java perf·gRPC Java raw**(main 기준; handoff의 Issue #12 `e1272851bd` 브랜치는 origin에 없어 소멸 → main에서 진행).
 - G5(#97~#100)는 A 소유 재확인. B는 G6(perf 재측정)·G7(릴리스 노트)만 남음. 바인딩 4언어 태그는 G4·G3 전부 머지 후.
 
+## 4.7 2026-09-11 판정 요약
+
+### 닫은 이슈 (근거와 함께)
+
+| # | 판정 |
+|---|---|
+| **#69** Java ROUTE_NOT_CONNECTED 449,143건 | framework가 아니라 **구 Java binding의 multipart 수신 결함**이었다. native 호출 사이에서 virtual thread carrier가 바뀌어 `BUSY → 수신 정체 → liveness 만료` 연쇄. **물리 연결은 내내 READY.** `cde62f8300`의 whole-message 전환이 기제를 제거했고 현재 **413,595건 완료·오류 0**. #75와 같은 뿌리 |
+| **#11** Node completion 100건 유실 | G4가 completion owner를 재작성하며 사라졌다. 5회 독립 실행 **각 400/400, 유실 0** |
+| **#8** C++ send target 소실 | 재현 안 됨(20초 실행, probe/ACK 유지). 대신 **#158**을 분리 |
+| **#140** TrySubmit 제거 | **내가 오독했다.** 스펙 `:446-447`이 그 경로를 "없앤다"고 이미 정했다. framework 쪽 문제였고 #98이 고쳤다 |
+
+### 기각한 산출물
+
+**#47 (Java 복사 제거)** — 처리량은 좋으나(serial +5.8%, saturation +8.4%) **흐름 제어가 느슨해졌다.**
+
+| request-backpressure 4096 | run1 | run2 | run3 |
+|---|---:|---:|---:|
+| before peak in-flight | 25 | 31 | 25 |
+| after peak in-flight | 25 | 23 | **1,101** |
+| after p99 (ms) | 0.496 | 0.477 | **138.88** |
+
+처리량은 세 run이 0.7% 안에서 같다 — Little의 법칙(1,101÷11,355≈97 ms)이 138 ms를 설명한다. **느려진 게 아니라 큐가 깊어졌다.** 누적 after 7 run 중 3회, before 4 run 중 0회. `#133` 덕에 `client_error_summary = []`로 오류가 아님을 확인했다.
+
+**#151(G4 성능 활용)이 같은 구조를 통째로 바꾸므로 그것을 먼저 넣고 재측정한다.** 지금 고치면 곧 다시 바뀔 코드를 고치게 된다.
+
+### 새로 연 이슈
+
+| # | 내용 |
+|---|---|
+| **#159** | **hotpath_gate가 4개 cell에서 23~32% 초과 — 0.18.0 릴리스 차단.** 허용치는 ±5%. 4개가 비슷한 비율로 함께 올라 공통 경로 한 곳으로 보인다. **framework 캠페인의 분모도 흔들린다** |
+| **#158** | C++ send-saturation에서 도착한 330,164건 중 **173,549건(53%)을 owner FIFO가 버린다.** 전송 실패가 아니라 도착 후 폐기 |
+| **#151** | G4 결과 객체의 성능 활용 — `OK`면 admission 대기 없음. **아직 아무도 안 썼다** |
+| **#153** | 같은 버전으로 다시 만들면 소비자 캐시가 갱신되지 않는다(4언어가 각각 다르게 깨짐) |
+| **#154** | .NET Redis 테스트 2건 — A/B가 #153 때문에 불가능 |
+| **#143** | .NET·C++·Node의 turn 수 고정 테스트(#108의 확장) |
+| **#148**·**#137** | Java·C++ 벤치가 컴파일되지 않던 것(둘 다 머지) |
+
+### build_all.sh 사용 시 주의
+worktree에서 돌리면 `.artifacts/wsl`이 없어 C++가 `zlink_cpp`를 못 찾는다. **`ZLINK_LOCAL_PACKAGE_ROOT=/home/hep7/project/zlink/.artifacts/wsl`를 함께 준다.**
+
 ## 5. 착수 순서 권고
 
 1. **G5 나머지** — Node(#99, 진행 중) → C++(#100, `cpp-submit-r3` 머지 뒤) → .NET(#98, #92 머지 뒤).
