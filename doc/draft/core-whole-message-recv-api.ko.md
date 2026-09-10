@@ -320,13 +320,15 @@ ZLINK_EXPORT zlink_recv_result_t zlink_subscribe_part (void *sub_,
 | `zlink_router_recv_part` | `zlink_router_recv` |
 | `zlink_recv_part` | `zlink_recv` |
 | `zlink_subscribe_part` | `zlink_subscribe` |
+| `zlink_xpub_recv_part` | `zlink_xpub_recv` (**이름만** 변경, 계약 불변) |
 
-**유지하는 것 (이름에 `_part`가 있어도 대상이 아니다)**
+**계약은 유지하되 이름만 바꾸는 것 1개**
 
 ```c
 /* :317 — zlink_msg_t를 받지 않는다. 구독 이벤트(subscribed + topic bytes) 리더이며
- * 단일 프레임이다. 통합할 multipart가 없다. */
-ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
+ * 단일 프레임이다. 통합할 multipart가 없다. 계약과 인자는 그대로 두고
+ * 이름만 zlink_xpub_recv로 바꾼다. */
+ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,   /* → zlink_xpub_recv */
                                                        const zlink_routing_id_t **source_rid_out_,
                                                        int *subscribed_out_,
                                                        char *topic_id_buf_,
@@ -334,6 +336,13 @@ ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
                                                        size_t *topic_id_len_out_,
                                                        zlink_recv_flags_t flags_);
 ```
+
+이름에 `_part`가 남으면 "part 단위 API"라는 오해를 부른다. 실제로는 part 개념이 없는 함수이고,
+다른 심볼이 모두 `_part` 없는 이름이 되는 상황에서 이것만 남으면 왜 예외인지 매번 설명해야 한다.
+**계약·인자·동작은 전혀 바뀌지 않는다. 이름만 바꾼다.**
+
+`zlink_stream_recv_packet`은 이름을 바꾸지 않는다. `_part`가 없고 `_packet`이 header/body 2슬롯이라는
+실제 의미를 정확히 담고 있다.
 
 `zlink_stream_recv_packet`(:328)도 유지한다. header/body 고정 2슬롯 framing이라 "record = parts 배열"과
 의미가 다르다(§7.2 Q3). STREAM send는 단일 part 계약이므로 신설 API에서 `part_count_ == 1`만 허용하거나

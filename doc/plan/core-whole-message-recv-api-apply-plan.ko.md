@@ -106,7 +106,7 @@ title: "whole-message recv 공개 API — 적용 plan (문서·코드·perf 반�
 |---|---|
 | `zlink_send_part`(:238), `zlink_send_part_rid`(:245), `zlink_request_part`(:262), `zlink_reply_part`(:274), `zlink_publish_part`(:297) | **제거.** parts 배열 + count를 받는 whole-message send로 대체 |
 | `zlink_recv_part`(:292), `zlink_router_recv_part`(:286), `zlink_subscribe_part`(:309) | **제거.** whole-message recv로 대체(`zlink_subscribe_part`는 §3 목록에 빠져 있었다 — draft §7.2 Q3) |
-| `zlink_xpub_recv_part` | **유지.** `zlink_msg_t`를 받지 않는 구독 이벤트 리더이며 이름만 `_part`다 |
+| `zlink_xpub_recv_part` | **계약 유지, 이름만 `zlink_xpub_recv`로 변경.** `zlink_msg_t`를 받지 않는 구독 이벤트 리더다. 인자·동작은 그대로이며, 다른 심볼이 모두 `_part` 없는 이름이 되므로 여기만 남기지 않는다 |
 | `zlink_stream_recv_packet` | **유지.** header/body 고정 2슬롯 framing이라 일반 배열 API와 의미가 다르다 |
 
 제거 8개와 대체 관계, 현재 시그니처 전문, 유지 대상(`zlink_xpub_recv_part`·`zlink_stream_recv_packet`)은
@@ -138,7 +138,7 @@ draft §7.3.1이 목록으로 갖는다. `zlink_part_flag_t`도 공개 표면에
 
 | 대상 | 무엇을 |
 |---|---|
-| `core/src/libzlink.vers:61-67,90` | 제거하는 8개 심볼을 버전 스크립트에서 뺀다. `zlink_multipart_close`(:46)는 **유지**한다 — 배열 해제 헬퍼라 whole-message에서 오히려 더 쓰인다 |
+| `core/src/libzlink.vers:61-67,90,102` | 제거하는 8개 심볼을 빼고 `zlink_xpub_recv_part`(:102)를 `zlink_xpub_recv`로 바꾼다. `zlink_multipart_close`(:46)는 **유지**한다 — 배열 해제 헬퍼라 whole-message에서 오히려 더 쓰인다 |
 | `core/doc/spec/core/socket/README` §2 스레드 안전성 | **"한 record의 첫 part부터 FINAL까지 같은 thread" 규칙을 삭제**한다. 표면에 part 시퀀스가 없어지면 이 제약의 근거가 사라진다. 이번 확대의 핵심 결과다 |
 | 같은 문서의 `BUSY`·`EBUSY` 절(`README.en.md:575-577`) | 진행 중 part 시퀀스에 다른 주체가 들어와 생기는 `BUSY`가 없어진다. 남는 `BUSY` 사유만 남긴다 |
 | `README.en.md:1078` (실패한 `FINAL`은 staged prefix를 버린다) | 부분 제출 상태가 없어지므로 규칙 자체를 삭제하고 **whole-record 재시도**로 대체한다 |
