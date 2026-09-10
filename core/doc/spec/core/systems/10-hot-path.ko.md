@@ -36,7 +36,7 @@ path다. 이 표는 규범이다: 표의 함수(또는 그 callee)를 고치는 
 | `zlink_send_part_rid` (ROUTER·STREAM) | 위와 같되 `send_direct_with_retry` 분기 |
 | `zlink_request_part` FINAL (DEALER·ROUTER) | `request_part_common` → `submit_pull_blocking_request` → `request_admission_submit_blocking` → `try_admit_send_parts_scoped` → `arm_socket_pending_request_timeout` |
 | `zlink_reply_part` FINAL (ROUTER) | `public_router_reply_submit` → `checkout_router_reply_target` → `send_public_router_reply_with_wait` → `retain_reply_transport_pipe` → `send_completion_staged_frames_on_pipe` |
-| `zlink_recv_part` / `zlink_router_recv_part` | `recv_dealer_message_direct` / `router_recv_part_impl` → `recv_common` / `recv_routed` → `fq_t::recvpipe` → `pipe_t::read` → `reclassify_transport_pair_application_head` → `end_public_part_receive_delivery_hold` |
+| `zlink_recv_part` / `zlink_router_recv_part` | `recv_dealer_record` / `router_recv_part_impl` → `recv_common` / `recv_routed` → `fq_t::recvpipe` → `pipe_t::read` → `reclassify_transport_pair_application_head` → `end_public_part_receive_delivery_hold` |
 | `zlink_completion_recv` | `process_submit_commands` → blocking이고 timeout이 0이 아니면 `prepare_completion_pull` → `socket_completion::recv` |
 | `zlink_poll` / `zlink_poller_wait` | `get_events_internal` → `process_commands` → `xhas_in` / `xhas_out` |
 | I/O thread → socket 전달 | `pipe_t::flush` → `activate_read` command → `xread_activated` → `fq_t::activated`; `process_async_mailbox` |

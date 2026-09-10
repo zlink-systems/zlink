@@ -109,7 +109,15 @@ internal structure that prevents another sender's parts from being inserted into
 is described in [§7 Internals](#7-internals).
 
 Use [`zlink_multipart_close`](#zlink_multipart_close) to close all parts of a multipart message
-stored as a contiguous array of `zlink_msg_t` structures at once.
+stored as a contiguous array of `zlink_msg_t` structures at once. Whole-message receive
+([`zlink_recv` and `zlink_router_recv`](socket/README.en.md#zlink_recv-and-zlink_router_recv))
+is the path that fills such an array: the caller passes a `zlink_msg_t` array and its capacity, and
+Core fills the record's parts from the front and writes the count to `*part_count_out_`. On success
+each slot is a caller-owned part (no pre-initialization required), closed exactly once with
+`zlink_multipart_close(parts, count)`. When the capacity is smaller than the record's part count, the
+record is not consumed and only the needed count is written to `*part_count_out_` before
+`ZLINK_RECV_BUFFER_TOO_SMALL` (`errno == ENOBUFS`) is returned, so no half-filled record state
+remains from partial consumption.
 
 Multipart messages have the following relationship with threads. On PAIR, DEALER, and ROUTER,
 multiple threads may each send independent multipart messages to the same socket concurrently,

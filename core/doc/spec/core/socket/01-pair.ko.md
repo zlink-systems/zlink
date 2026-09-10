@@ -65,6 +65,11 @@ sequenceDiagram
 submit은 새 record의 첫 part로 시작한다. 따라서 재시도하려면 호출 전에 보관한 전체 record를
 첫 part부터 다시 제출해야 한다.
 
+PAIR 수신은 part 단위 [`zlink_recv_part`](README.ko.md#zlink_recv_part) 또는 record 전체를 한 번에
+받는 [`zlink_recv`](README.ko.md#zlink_recv-와-zlink_router_recv)를 쓴다. peer가 하나
+뿐이므로 두 함수 모두 source routing ID를 채우지 않는다(`NULL`). 소유권·close·capacity·record 원자성
+규칙은 [Socket 공통](README.ko.md)이 소유한다.
+
 ## 3. Receive flow state
 
 DEALER와 ROUTER socket이 peer에게 수신 중단·재개를 알리는 receive-flow 상태와 그 상수는

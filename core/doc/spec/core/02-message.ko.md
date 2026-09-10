@@ -105,7 +105,14 @@ thread 규칙은 핸들 단위다. 하나의 `zlink_msg_t` instance를 여러 th
 [§7 내부 구조](#7-내부-구조)가 설명한다.
 
 `zlink_msg_t` 구조체의 연속 배열로 저장한 multipart message는
-[`zlink_multipart_close`](#zlink_multipart_close)로 모든 part를 한 번에 닫는다.
+[`zlink_multipart_close`](#zlink_multipart_close)로 모든 part를 한 번에 닫는다. whole-message
+수신([`zlink_recv`·`zlink_router_recv`](socket/README.ko.md#zlink_recv-와-zlink_router_recv))이
+그런 배열을 채우는 생성 경로다: caller가 `zlink_msg_t` 배열과 capacity를 주면 Core가 record의 모든
+part를 앞에서부터 채우고 `*part_count_out_`에 개수를 쓴다. 성공 시 각 슬롯은 caller-소유 part이며(호출
+전 초기화 불필요), caller는 `zlink_multipart_close(parts, count)`로 정확히 한 번 닫는다. capacity가
+record의 part 수보다 작으면 record를 소비하지 않고 필요한 개수만 `*part_count_out_`에 쓴 뒤
+`ZLINK_RECV_BUFFER_TOO_SMALL`(`errno == ENOBUFS`)을 반환하므로, 부분 소비로 절반짜리 record 상태가
+남지 않는다.
 
 multipart와 thread의 관계는 다음과 같다. PAIR·DEALER·ROUTER에서는 여러 thread가 같은 socket에 각자
 독립된 multipart message를 동시에 보낼 수 있지만, 하나의 multipart message를 thread 사이에 나누면 안 된다. receive는 single-consumer

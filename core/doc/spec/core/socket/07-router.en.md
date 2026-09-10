@@ -47,6 +47,15 @@ sequence, and the application does not interpret, create, or modify it. A reply 
 after the entire REQUEST has been received through FINAL. Replies, timeouts, and terminal results
 for requests submitted by ROUTER are returned as REQUEST completions, not through ordinary receive.
 
+To receive an entire record (all parts) in one call, use
+[`zlink_router_recv`](README.en.md#zlink_recv-and-zlink_router_recv). It
+returns the same `source_rid_out_` and `reply_token_out_` values as `zlink_router_recv_part` (token
+`0` for DATA, a nonzero token for REQUEST, the same RID and token on every part) and fills the parts
+into a caller-provided `zlink_msg_t` array. When the capacity is smaller than the record's part
+count, the record is not consumed, the needed count is written to `*part_count_out_`, and
+`ZLINK_RECV_BUFFER_TOO_SMALL` (`errno == ENOBUFS`) is returned. Ownership, close, and capacity rules
+are owned by [Socket Common](README.en.md#zlink_recv-and-zlink_router_recv).
+
 The returned RID is a socket-owned borrowed view. It remains valid until entry to the next data-recv
 API on the same socket or until socket close. Poller wait, completion recv, monitor recv, and data
 recv on another socket do not invalidate it. A caller or binding that must retain it longer copies

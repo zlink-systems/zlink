@@ -87,6 +87,28 @@ Ordinary DATA receive functions are divided as follows.
 | `zlink_subscribe_part()` | SUB and XSUB topic DATA |
 | `zlink_xpub_recv_part()` | XPUB subscribe and unsubscribe events |
 
+Whole-message receive functions take an entire record (all parts) in a **single call**. The
+`*_recv_part` functions are the one-part-at-a-time path (single-part, low-allocation, partial
+consumption); whole-message receive is the low-complexity, low-boundary path that fills a
+caller-provided `zlink_msg_t` array with a mostly-multipart record at once. The two coexist.
+
+| Function | Socket and record |
+|---|---|
+| `zlink_recv()` | Entire PAIR or DEALER DATA record |
+| `zlink_router_recv()` | Entire ROUTER DATA or REQUEST record (including source RID and reply token) |
+
+Whole-message receive consumes a record **atomically in one call** (it leaves no mid-part cursor
+state). `parts_out_` is a caller-provided `zlink_msg_t` array; on success the leading
+`*part_count_out_` slots become caller-owned parts (see [Message §4](../02-message.en.md#4-multipart);
+close with [`zlink_multipart_close`](../02-message.en.md#zlink_multipart_close)). When
+`parts_capacity_` is smaller than the record's part count, the record is not consumed, the needed
+count is written to `*part_count_out_`, and `ZLINK_RECV_BUFFER_TOO_SMALL` (`errno == ENOBUFS`) is
+returned; retrying with a large enough array receives the same record exactly once. The
+single-consumer contract, record atomicity, and borrowed-RID lifetime follow the same rules as
+`*_recv_part` ([§2](#2-thread-safety), [`zlink_recv_part`](#zlink_recv_part)). Mixing whole-message
+receive and `*_recv_part` on the same socket leaves no shared cursor because of record atomicity;
+concurrent entry by another thread or family returns `ZLINK_RECV_BUSY` (`errno == EBUSY`).
+
 `ZLINK_POLLCOMPLETION` is not payload. Poller wait does not remove completions or add operation
 payload to `zlink_poller_event_t`. For each ready socket, the caller invokes
 `zlink_completion_recv(..., ZLINK_RECV_FLAGS_DONTWAIT)` until `ZLINK_RECV_NO_DATA` drains the queue.
@@ -139,7 +161,8 @@ typedef enum zlink_recv_flags_t
 ```
 
 Used by `zlink_recv_part`, `zlink_subscribe_part`, the socket-specific
-`zlink_*_recv_part` family, and the monitor `zlink_*_monitor_recv` functions.
+`zlink_*_recv_part` family, the whole-message `zlink_recv` and `zlink_router_recv`, and the
+monitor `zlink_*_monitor_recv` functions.
 
 ### Message part flag
 
@@ -662,6 +685,62 @@ record, regardless of the actual topic length.
 A reply to a REQUEST sent by the requester appears only as a REQUEST
 completion, never in a data receive function. DEALER neither receives typed
 REQUEST records nor replies to them.
+
+---
+
+### zlink_recv and zlink_router_recv
+
+Receive every part of one record in a single call into a caller-provided array. Coexists with
+`*_recv_part` (one part at a time).
+
+```c
+ZLINK_EXPORT zlink_recv_result_t zlink_recv (
+  void *s_,
+  const zlink_routing_id_t **source_rid_out_,
+  zlink_msg_t *parts_out_,
+  size_t parts_capacity_,
+  size_t *part_count_out_,
+  zlink_recv_flags_t flags_);
+
+ZLINK_EXPORT zlink_recv_result_t zlink_router_recv (
+  void *router_,
+  const zlink_routing_id_t **source_rid_out_,
+  zlink_reply_token_t *reply_token_out_,
+  zlink_msg_t *parts_out_,
+  size_t parts_capacity_,
+  size_t *part_count_out_,
+  zlink_recv_flags_t flags_);
+```
+
+`zlink_recv` supports raw `PAIR` and `DEALER`; `zlink_router_recv` supports `ROUTER`. Other socket
+types return `ZLINK_RECV_NOT_SUPPORTED` (`errno == ENOTSUP`). `parts_out_` and `part_count_out_` are
+required, and `zlink_router_recv` also requires `source_rid_out_` and `reply_token_out_`. For
+`zlink_recv`, `source_rid_out_` is optional and PAIR/DEALER fill it with `NULL`.
+
+| Function | Value on success |
+|---|---|
+| `zlink_recv` | `*part_count_out_` = record's part count, each slot a caller-owned part. PAIR/DEALER source RID is `NULL` |
+| `zlink_router_recv` | As above, and DATA returns the source logical RID with token `0`, REQUEST the same source RID with a Core-generated nonzero opaque reply token |
+
+One success consumes one record (all parts) **atomically**. On success the leading
+`*part_count_out_` slots of `parts_out_` each become a caller-owned `zlink_msg_t`, which the caller
+closes exactly once with [`zlink_multipart_close`](../02-message.en.md#zlink_multipart_close) (or
+per-slot [`zlink_msg_close`](../02-message.en.md#zlink_msg_close)). Slots need not be initialized
+before the call.
+
+When `parts_capacity_` is smaller than the record's part count, the record is **not consumed**, the
+needed part count is written to `*part_count_out_`, and `ZLINK_RECV_BUFFER_TOO_SMALL`
+(`errno == ENOBUFS`) is returned. The `parts_out_` slots and other outputs are unchanged, so
+retrying with a large enough array receives the same record exactly once. Because of record
+atomicity, no partial-record state (a half-filled sequence) exists.
+
+`flags_`, timeout, termination, `DONTWAIT` no-data, output-unchanged-on-failure, and borrowed-RID
+lifetime follow the common rules of [`zlink_recv_part`](#zlink_recv_part). Under `DONTWAIT`, absence
+of a record returns `ZLINK_RECV_NO_DATA` (`errno == EAGAIN`) immediately; once a record is present
+the whole record is returned (never a half record). Mixing whole-message receive and `*_recv_part`
+on the same socket leaves no shared cursor because of record atomicity; concurrent entry by another
+thread or family returns `ZLINK_RECV_BUSY` (`errno == EBUSY`). The `reply_token_out_` token is not a
+wire sequence; the application does not interpret, generate, or modify it.
 
 ---
 

@@ -45,6 +45,13 @@ Multipart REQUEST의 모든 part에는 같은 RID와 token을 반환한다. Toke
 reply sequence를 시작한다. ROUTER가 제출한 REQUEST의 reply·timeout·terminal 결과는 일반 receive에
 나타나지 않고 REQUEST completion으로 반환된다.
 
+record 전체(모든 part)를 한 번에 받으려면 [`zlink_router_recv`](README.ko.md#zlink_recv-와-zlink_router_recv)를
+쓴다. `source_rid_out_`·`reply_token_out_`은 `zlink_router_recv_part`와 같은 값(DATA는 token `0`,
+REQUEST는 nonzero token, 모든 part에 같은 RID·token)을 돌려주고, part는 caller-제공 `zlink_msg_t`
+배열에 채운다. capacity가 record의 part 수보다 작으면 record를 소비하지 않고 필요한 수를
+`*part_count_out_`에 쓴 뒤 `ZLINK_RECV_BUFFER_TOO_SMALL`(`errno == ENOBUFS`)을 반환한다. 소유권·close·
+capacity 규칙은 [Socket 공통](README.ko.md#zlink_recv-와-zlink_router_recv)이 소유한다.
+
 반환한 RID는 socket-owned borrowed view다. 같은 socket의 다음 data recv API에 진입하거나 socket을
 close할 때까지 유효하다. Poller wait, completion recv, monitor recv와 다른 socket의 data recv는
 무효화하지 않는다. 더 오래 보관할 caller와 binding은 receive 직후 owned RID로 복사한다.

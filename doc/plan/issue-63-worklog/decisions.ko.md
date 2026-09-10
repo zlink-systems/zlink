@@ -29,8 +29,35 @@ title: "Issue #63 — whole-message recv 신설 + router recv 네이밍 정정 �
   - dealer: decl `socket_request_reply_internal.hpp:549`, impl `socket_request_reply_runtime_io.cpp:1186`,
     호출 `socket_message_recv_api.cpp:127`, `socket_message_api.cpp:160`
 
+## D63-3 (2026-09-10) whole-message recv capacity 정책
+- caller가 준 `parts_capacity_`가 record의 part 수보다 작으면:
+  **`ZLINK_RECV_BUFFER_TOO_SMALL`(207, `errno == ENOBUFS`) 반환, record는 소비하지 않음(비소비).**
+  `*part_count_out_`에 필요한 part 수를 쓰고, 다른 output(rid/token/parts 슬롯)은 변경하지 않는다.
+  충분한 capacity로 재시도하면 같은 record를 **정확히 한 번** 받는다.
+- 근거: `ZLINK_RECV_BUFFER_TOO_SMALL` enum 주석이 이미 "first record or topic does not fit"라고
+  이 경우를 예상함(`core/include/zlink_errno.h:157`). 기존 `zlink_subscribe_part`의 topic buffer
+  too-small 관용(README.ko.md "필요한 길이만 쓰고 … record는 그대로 … 재시도하면 정확히 한 번")과
+  동일. record 원자성과 정합(부분 record 상태가 남지 않음).
+
+## D63-4 (2026-09-10) parts 배열 소유권
+- `parts_out_`는 caller-제공 `zlink_msg_t[]` 배열(용량 `parts_capacity_`). 성공 시 앞의
+  `*part_count_out_`개 슬롯이 각각 caller-소유 msg가 되고, caller는 `zlink_multipart_close(parts_out_,
+  count)`(또는 슬롯별 `zlink_msg_close`)로 정확히 한 번 닫는다.
+- 실패 시 소유권 이동 없음, output·message content 불변(기존 recv 계열 규칙과 동일).
+- 02-message §4가 이미 "`zlink_msg_t` 연속 배열을 `zlink_multipart_close`로 일괄 닫는다"를 정의 →
+  whole-message recv가 그 배열을 채우는 생성 경로다.
+
+## recv_part 혼용 규칙
+- record 원자성으로 whole-message recv와 `*_recv_part`는 호출 간 공유 커서 상태를 남기지 않는다.
+  동시/타 스레드·family 진입은 기존과 동일하게 `ZLINK_RECV_BUSY`(EBUSY). 새 규칙 불필요(draft §5).
+
 ## 진행 로그
 - 2026-09-10: worktree 생성(`work.sh start --issue 63`). 로컬 패키지 준비는 go boundary 테스트
   (`perf/internal/perfcommon/monotonic.go:C`, clean origin/main의 사전 존재 실패, go는 범위 밖)로
   실패 → Core 단계는 `--no-packages`로 진행. 바인딩 테스트·perf 단계 전에 패키지 재점검 필요.
-- 단계 ①(네이밍 정정) codex 위임 준비.
+- 2026-09-10: **① 네이밍 정정 완료·커밋**(ef85ac8e24, codex terra/high). 순수 rename 8파일 +13/-11,
+  옛 이름 0건, 213/214 ctest 통과. 단일 실패 `158-hotpath_gate`는 dev(LTO OFF) 빌드에서
+  LTO 캘리브레이션 reference 대비 Ir 1.12–1.37×로 나오는 **build-mode 아티팩트**(release-gate 전용
+  게이트, origin/main도 동일 실패, rename 무관)로 판정 → 커밋 본문에 근거 기록.
+- 2026-09-10: ② Core 스펙(감독 직접) 착수. hot-path 스펙의 옛 이름 참조
+  (`core/doc/spec/core/systems/10-hot-path.{ko,en}.md`)도 이 단계에서 `recv_dealer_record`로 정정.

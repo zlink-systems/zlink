@@ -37,9 +37,13 @@ application 개발자다.
 
 ## 2. DATA 수신과 request completion
 
-DEALER는 `zlink_recv_part()`로 일반 DATA만 받는다. DEALER는 inbound typed REQUEST를 받거나
-reply하는 responder socket이 아니다. DEALER가 제출한 REQUEST의 reply·timeout·terminal 결과는
-일반 receive에 나타나지 않고 `zlink_completion_recv()`의 REQUEST record로 반환된다.
+DEALER는 `zlink_recv_part()`로 일반 DATA만 받는다. record 전체(모든 part)를 한 번에 받으려면
+[`zlink_recv`](README.ko.md#zlink_recv-와-zlink_router_recv)를 쓴다 — part를
+caller-제공 `zlink_msg_t` 배열에 채우고 DEALER는 source RID로 `NULL`을 돌려준다. 소유권·close·capacity
+규칙은 [Socket 공통](README.ko.md#zlink_recv-와-zlink_router_recv)이 소유한다. DEALER는
+inbound typed REQUEST를 받거나 reply하는 responder socket이 아니다. DEALER가 제출한 REQUEST의
+reply·timeout·terminal 결과는 일반 receive(`zlink_recv_part`·`zlink_recv` 모두)에 나타나지 않고
+`zlink_completion_recv()`의 REQUEST record로 반환된다.
 
 DEALER-ROUTER single connection에서는 ROUTER가 보낸 DATA와 REPLY·error reply가 같은 inbound
 physical FIFO를 사용한다. Physical head가 DATA이면 public DATA receive가, REPLY·error reply이면

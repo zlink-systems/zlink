@@ -83,6 +83,25 @@ Core는 application notification callback을 호출하지 않는다.
 | `zlink_subscribe_part()` | SUB·XSUB의 topic DATA |
 | `zlink_xpub_recv_part()` | XPUB의 subscribe·unsubscribe event |
 
+한 record의 모든 part를 **한 번의 호출로** 받는 whole-message 수신 함수도 있다. `*_recv_part`는
+part 하나씩(단건·저할당·부분 소비) 경로이고, whole-message 수신은 대부분-멀티파트 record를 caller가
+준 `zlink_msg_t` 배열에 한 번에 채우는 저복잡·저경계 경로다. 둘은 공존한다.
+
+| 함수 | 사용하는 socket과 record |
+|---|---|
+| `zlink_recv()` | PAIR·DEALER의 DATA record 전체 |
+| `zlink_router_recv()` | ROUTER의 DATA 또는 REQUEST record 전체(source RID·reply token 포함) |
+
+whole-message 수신은 record를 **원자적으로 한 번에** 소비한다(part 중간 커서 상태를 남기지 않는다).
+`parts_out_`은 caller-제공 `zlink_msg_t` 배열이고 성공 시 앞의 `*part_count_out_`개 슬롯이 caller-소유
+part가 된다([Message §4](../02-message.ko.md#4-multipart), [`zlink_multipart_close`](../02-message.ko.md#zlink_multipart_close)로 일괄 close).
+`parts_capacity_`가 record의 part 수보다 작으면 record를 소비하지 않고 `*part_count_out_`에 필요한 수를
+쓴 뒤 `ZLINK_RECV_BUFFER_TOO_SMALL`(`errno == ENOBUFS`)을 반환한다. 충분한 배열로 재시도하면 같은
+record를 정확히 한 번 받는다. single-consumer·record 원자성·borrowed RID 수명은 `*_recv_part`와 같은
+규칙([§2](#2-스레드-안전성), [`zlink_recv_part`](#zlink_recv_part))을 따르며, whole-message 수신과
+`*_recv_part`를 같은 socket에서 섞어 써도 record 원자성 때문에 공유 커서가 남지 않는다. 다른 스레드나
+family가 동시에 진입하면 `ZLINK_RECV_BUSY`(`errno == EBUSY`)다.
+
 `ZLINK_POLLCOMPLETION`은 payload가 아니다. Poller wait는 completion을 제거하지 않으며
 `zlink_poller_event_t`에 operation payload를 추가하지 않는다. 준비된 socket의 caller는
 `zlink_completion_recv(..., ZLINK_RECV_FLAGS_DONTWAIT)`를 `ZLINK_RECV_NO_DATA`가 나올
@@ -133,8 +152,8 @@ typedef enum zlink_recv_flags_t
 } zlink_recv_flags_t;
 ```
 
-`zlink_recv_part`, `zlink_subscribe_part`, socket별 `zlink_*_recv_part` 계열, 그리고
-monitor `zlink_*_monitor_recv` 함수들이 이 flag를 사용한다.
+`zlink_recv_part`, `zlink_subscribe_part`, socket별 `zlink_*_recv_part` 계열, whole-message
+`zlink_recv`·`zlink_router_recv`, 그리고 monitor `zlink_*_monitor_recv` 함수들이 이 flag를 사용한다.
 
 ### Message part flag
 
@@ -612,6 +631,60 @@ buffer는 실제 topic 길이와 관계없이 `ZLINK_RECV_INVALID_HANDLE`+`EFAUL
 
 Requester가 보낸 REQUEST의 reply는 어느 data recv 함수에도 나타나지 않고 REQUEST completion으로
 queue에 들어간다. DEALER는 inbound typed REQUEST를 받거나 reply하는 socket이 아니다.
+
+---
+
+### zlink_recv 와 zlink_router_recv
+
+한 record의 모든 part를 한 번의 호출로 caller-제공 배열에 받는다. `*_recv_part`(part 하나씩)와
+공존한다.
+
+```c
+ZLINK_EXPORT zlink_recv_result_t zlink_recv (
+  void *s_,
+  const zlink_routing_id_t **source_rid_out_,
+  zlink_msg_t *parts_out_,
+  size_t parts_capacity_,
+  size_t *part_count_out_,
+  zlink_recv_flags_t flags_);
+
+ZLINK_EXPORT zlink_recv_result_t zlink_router_recv (
+  void *router_,
+  const zlink_routing_id_t **source_rid_out_,
+  zlink_reply_token_t *reply_token_out_,
+  zlink_msg_t *parts_out_,
+  size_t parts_capacity_,
+  size_t *part_count_out_,
+  zlink_recv_flags_t flags_);
+```
+
+`zlink_recv`는 raw `PAIR`·`DEALER`를 지원하고, `zlink_router_recv`는 `ROUTER`를 지원한다. 다른
+socket 타입은 `ZLINK_RECV_NOT_SUPPORTED`(`errno == ENOTSUP`)다. `parts_out_`·`part_count_out_`은
+필수이고, `zlink_router_recv`는 `source_rid_out_`·`reply_token_out_`도 필수다. `zlink_recv`의
+`source_rid_out_`은 선택이며 PAIR·DEALER는 `NULL`을 채운다.
+
+| 함수 | 성공 시 값 |
+|---|---|
+| `zlink_recv` | `*part_count_out_` = record의 part 수, 각 슬롯은 caller-소유 part. PAIR·DEALER source RID는 `NULL` |
+| `zlink_router_recv` | 위와 같고, DATA는 source logical RID와 token `0`, REQUEST는 같은 source RID와 Core가 만든 nonzero opaque reply token |
+
+한 번의 성공은 record 하나(모든 part)를 **원자적으로** 소비한다. 성공 시 `parts_out_`의 앞
+`*part_count_out_`개 슬롯이 각각 caller-소유 `zlink_msg_t`가 되며, caller는
+[`zlink_multipart_close`](../02-message.ko.md#zlink_multipart_close)(또는 슬롯별
+[`zlink_msg_close`](../02-message.ko.md#zlink_msg_close))로 정확히 한 번 닫는다. 슬롯은 호출 전에
+초기화돼 있을 필요가 없다.
+
+`parts_capacity_`가 record의 part 수보다 작으면 record를 **소비하지 않고** `*part_count_out_`에 필요한
+part 수를 쓴 뒤 `ZLINK_RECV_BUFFER_TOO_SMALL`(`errno == ENOBUFS`)을 반환한다. `parts_out_` 슬롯과
+다른 output은 그대로이므로 충분한 배열로 재시도하면 같은 record를 정확히 한 번 받는다. record 원자성
+때문에 부분 record 상태(절반만 채워진 시퀀스)는 존재하지 않는다.
+
+`flags_`·timeout·종료·`DONTWAIT` no-data·실패 시 output 불변·borrowed RID 수명은
+[`zlink_recv_part`](#zlink_recv_part)의 공통 규칙을 따른다. `DONTWAIT`은 record가 없으면 즉시
+`ZLINK_RECV_NO_DATA`(`errno == EAGAIN`)이며, record가 도착하면 전체 record를 받는다(절반 record를
+반환하지 않는다). whole-message 수신과 `*_recv_part`를 같은 socket에서 섞어 써도 record 원자성 때문에
+공유 커서가 남지 않으며, 다른 스레드·family의 동시 진입은 `ZLINK_RECV_BUSY`(`errno == EBUSY`)다.
+`reply_token_out_`의 token은 wire sequence가 아니며 application은 해석·생성·변경하지 않는다.
 
 ---
 

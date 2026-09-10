@@ -65,6 +65,11 @@ The failed call also consumes its `part_` according to the consumption rules of
 [`zlink_send_part`](#zlink_send_part), and the next submit starts the first part of a new record. A retry
 therefore must resubmit the entire record from its first part using copies retained before the calls.
 
+PAIR receive uses either the per-part [`zlink_recv_part`](README.en.md#zlink_recv_part) or the
+whole-record [`zlink_recv`](README.en.md#zlink_recv-and-zlink_router_recv).
+Because there is exactly one peer, both leave the source routing ID unset (`NULL`). Ownership, close,
+capacity, and record-atomicity rules are owned by [Socket Common](README.en.md).
+
 ## 3. Receive flow state
 
 [Socket Common](README.en.md) defines the receive-flow state and constants that DEALER and ROUTER

@@ -38,10 +38,16 @@ The following documents own the related contracts.
 
 ## 2. DATA receive and request completion
 
-DEALER receives only ordinary DATA through `zlink_recv_part()`. It is not a responder socket that
-receives or replies to inbound typed REQUEST records. Replies, timeouts, and terminal results for a
-REQUEST submitted by DEALER do not appear on ordinary receive; they are returned as REQUEST records
-from `zlink_completion_recv()`.
+DEALER receives only ordinary DATA through `zlink_recv_part()`. To receive an entire record (all
+parts) in one call, use
+[`zlink_recv`](README.en.md#zlink_recv-and-zlink_router_recv), which fills the
+parts into a caller-provided `zlink_msg_t` array and returns `NULL` as the DEALER source RID;
+ownership, close, and capacity rules are owned by
+[Socket Common](README.en.md#zlink_recv-and-zlink_router_recv). DEALER is not
+a responder socket that receives or replies to inbound typed REQUEST records. Replies, timeouts, and
+terminal results for a REQUEST submitted by DEALER do not appear on ordinary receive (neither
+`zlink_recv_part` nor `zlink_recv`); they are returned as REQUEST records from
+`zlink_completion_recv()`.
 
 On a DEALER-ROUTER single connection, DATA, REPLY, and error reply sent by the ROUTER use the same
 inbound physical FIFO. When the physical head is DATA, public DATA receive consumes the record; when
