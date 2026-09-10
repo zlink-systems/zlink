@@ -27,7 +27,7 @@ Three implementations are compared per language. `<lang>` is one of `dotnet`, `n
 |-----------|------|
 | `grpc-<lang>` | That language's gRPC unary RPC |
 | `zlink-<lang>` | The raw binding's ROUTER↔ROUTER TCP path, bypassing the framework |
-| `zlink-framework-<lang>` | The client channel and server channel of framework channel messaging |
+| `zlink-framework-<lang>` | Framework RouteMesh request/send addressed directly to a node RID |
 
 The default execution order is `grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>`. Since the
 three implementations run the same pattern at the same payload size and the same active duration,
@@ -74,12 +74,10 @@ selection) versus `ToNode`, ClientServer versus RouteMesh — are not items of t
 belong to a separate ZLink model-comparison bench. This bench compares only the 1:1 request path
 that has the same shape as gRPC.
 
-The current implementation state is recorded alongside. Java has moved to this configuration
-(Issue #13). The `.NET`, C++, and Node raw and framework paths and the C reference bench's client
-have not yet (`.NET` raw is DEALER,
-`framework/bench/grpc/c/zlink/bench_zlink_client.cpp:530-531`). The table above prescribes the
-configuration to be used for measurement, and a value obtained before that change completes
-isn't a value that satisfies this specification.
+The current implementation state is recorded alongside. Java and the `.NET`, C++, and Node framework
+rows have moved to this configuration (Issue #13). Moving the raw paths and the C reference bench
+client is separate work. The table above prescribes the configuration to be used for measurement,
+and a value obtained before that change completes isn't a value that satisfies this specification.
 
 ## 2. Measurement Patterns
 
@@ -152,7 +150,7 @@ one-way send. Under this condition the difference was N times.
 
 - For each implementation (`grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>`) run one
   **source process A** and one **target process B**. A has the HTTP trigger listener, a stats
-  endpoint, and the client toward B (gRPC stub, raw ROUTER, framework channel client). B has the
+  endpoint, and the client toward B (gRPC stub, raw ROUTER, framework node client). B has the
   echo (request) or receive counter (send) and a stats endpoint. §10 defines the roles, the trigger
   contract, and the cell order.
 - The local runner starts B then A for each cell and announces the phase start to A's trigger
@@ -510,7 +508,7 @@ payload reply; gRPC `Command` serializes its existing `Empty` response.
 | Java | A fresh `BenchPayload`: `toByteArray` / `parseFrom` | grpc-java serializes/parses the same generated type | `ZLinkProtobufCodec` serializes/parses the same generated type |
 | .NET | A fresh `BenchPayload`: `WriteTo` / `Parser.ParseFrom` | Google.Protobuf based gRPC serializes/parses the same generated type | Protobuf codec serializes/parses the same generated type |
 | C++ | A fresh `BenchPayload`: protobuf serialization / `ParseFromArray` | libgrpc++ serializes/parses the same generated type | Protobuf codec serializes/parses the same generated type |
-| Node | A fresh `BenchPayload` DTO through the existing proto-loader serializer / deserializer | Uses the same proto-loader protobuf serializer / deserializer | Runner reports `unsupported`: existing framework protobuf codec limitation for `bytes` |
+| Node | A fresh `BenchPayload` DTO through the existing proto-loader serializer / deserializer | Uses the same proto-loader protobuf serializer / deserializer | Connects the same proto-loader serializer / deserializer to the schema envelope codec |
 | C binding | C++ driver creates a generated `BenchPayload` per message and uses existing libprotobuf | Same generated type and libprotobuf | No C framework row |
 
 The C binding bench uses `.cpp` drivers and already depends on protobuf. Raw shares that dependency;

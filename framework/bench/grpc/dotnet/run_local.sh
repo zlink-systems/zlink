@@ -53,9 +53,9 @@ for payload in "${payloads[@]}"; do
 done
 
 case "${scenario}" in
-  all) patterns=(request-serial request-window request-backpressure send-saturation) ;;
-  request) patterns=(request-serial request-window request-backpressure) ;;
-  request-serial|request-window|request-backpressure|send-saturation) patterns=("${scenario}") ;;
+  all) patterns=(request-serial request-backpressure send-saturation) ;;
+  request) patterns=(request-serial request-backpressure) ;;
+  request-serial|request-backpressure|send-saturation) patterns=("${scenario}") ;;
   send|command) patterns=(send-saturation) ;;
   *) echo "unknown scenario: ${scenario}" >&2; exit 2 ;;
 esac
@@ -226,7 +226,7 @@ PY
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   load_average="$(cut -d' ' -f1 /proc/loadavg)"
-  awk -v load="${load_average}" 'BEGIN { exit !(load < 10.0) }' || {
+  awk -v current_load="${load_average}" 'BEGIN { exit !(current_load < 10.0) }' || {
     echo "load average must be below 10 before build (current ${load_average})" >&2
     exit 1
   }

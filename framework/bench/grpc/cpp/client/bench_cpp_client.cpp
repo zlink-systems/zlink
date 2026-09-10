@@ -811,8 +811,7 @@ class framework_driver_t final : public driver_t
         config.codecs ().use (zlink::framework_codecs::protobuf ());
         auto mesh = config.add_route_mesh ("bench");
         mesh.set_object_role (fw::object_role_t::none).listen ("tcp://127.0.0.1:0").set_routing_id (zlink::routing_id_t::from ("bench-source"));
-        mesh.channel ("bench").client ();
-        mesh.peer_connections ().connect (zlink::routing_id_t::from ("bench-server"), options.framework_endpoint);
+        mesh.peer_connections ().connect (_target_node, options.framework_endpoint);
         app.add_hosted_service (std::make_unique<capture_client_t> (_client));
     }
 
@@ -823,7 +822,7 @@ class framework_driver_t final : public driver_t
         const auto deadline = clock_t_::now () + std::chrono::milliseconds (timeout_ms);
         while (clock_t_::now () < deadline) {
             auto payload = make_payload (1024, phase_warmup);
-            auto task = _client->request_to_channel ("bench", std::move (payload))
+            auto task = _client->request_to_node ("bench", _target_node, std::move (payload))
                           .timeout (std::chrono::milliseconds (500))
                           .async<payload_t> ();
             if (task.result ())
@@ -874,9 +873,9 @@ class framework_driver_t final : public driver_t
     fw::task_t<T> submit (payload_t payload)
     {
         if constexpr (std::is_void_v<T>)
-            return _client->send_to_channel ("bench", std::move (payload)).async ();
+            return _client->send_to_node ("bench", _target_node, std::move (payload)).async ();
         else
-            return _client->request_to_channel ("bench", std::move (payload))
+            return _client->request_to_node ("bench", _target_node, std::move (payload))
               .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
               .async<payload_t> ();
     }
@@ -975,6 +974,7 @@ class framework_driver_t final : public driver_t
     int _window;
     bool _command;
     stats_http_server_t _host;
+    zlink::routing_id_t _target_node = zlink::routing_id_t::from ("bench-server");
     fw::route_client_t *_client = nullptr;
     bool _readiness_error_reported = false;
     uint32_t _run_id = static_cast<uint32_t> (now_ns ());
