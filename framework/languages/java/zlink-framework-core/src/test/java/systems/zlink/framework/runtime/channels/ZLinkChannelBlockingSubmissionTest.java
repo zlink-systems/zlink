@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.channels;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.List;
@@ -50,9 +49,12 @@ final class ZLinkChannelBlockingSubmissionTest {
         var send = ZLinkSendCall.class.getMethod("submit_sync");
         var request = ZLinkRequestCall.class.getMethod("submit_sync", Class.class);
         assertEquals(void.class, send.getReturnType());
-        assertTrue(Modifier.isAbstract(send.getModifiers()));
         assertEquals("TReply", request.getGenericReturnType().getTypeName());
-        assertTrue(Modifier.isAbstract(request.getModifiers()));
+        // The exact-interface doc pins these as `default`: the body is identical for every
+        // call type, so one rule lives in the interface instead of N copies in the callers.
+        // framework/doc/.../languages/java/interfaces/channel-messaging.ko.md:239,275
+        assertTrue(send.isDefault());
+        assertTrue(request.isDefault());
     }
 
     @Test

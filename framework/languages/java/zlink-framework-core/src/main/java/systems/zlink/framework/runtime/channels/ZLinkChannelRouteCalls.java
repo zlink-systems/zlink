@@ -141,10 +141,6 @@ final class RouteSendCall implements ZLinkSendCall {
             (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).withAll(values), submitGate);
     }
 
-    @Override
-    public void submit_sync() {
-        ZLinkBlockingCalls.submit(this::submit);
-    }
 
     @Override
     public CompletionStage<Void> submit() {
@@ -299,10 +295,6 @@ final class RouteRequestCall implements ZLinkRequestCall {
             payload, packetName, value, contentType, metadata, submitGate);
     }
 
-    @Override
-    public <TReply> TReply submit_sync(Class<TReply> replyType) {
-        return ZLinkBlockingCalls.submit(() -> submit(replyType));
-    }
 
     @Override
     public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
@@ -542,10 +534,6 @@ final class ChannelSendCall implements ZLinkSendCall {
             (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).withAll(values), submitGate);
     }
 
-    @Override
-    public void submit_sync() {
-        ZLinkBlockingCalls.submit(this::submit);
-    }
 
     @Override
     public CompletionStage<Void> submit() {
@@ -700,10 +688,6 @@ final class ChannelRequestCall implements ZLinkRequestCall {
             submitGate);
     }
 
-    @Override
-    public <TReply> TReply submit_sync(Class<TReply> replyType) {
-        return ZLinkBlockingCalls.submit(() -> submit(replyType));
-    }
 
     @Override
     public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {

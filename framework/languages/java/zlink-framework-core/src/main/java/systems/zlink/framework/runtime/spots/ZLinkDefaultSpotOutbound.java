@@ -1,5 +1,4 @@
 package systems.zlink.framework.runtime.spots;
-import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.concurrent.CompletionException;
@@ -330,10 +329,6 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                 instanceIntent, stableType, selectedMesh, submitGate);
         }
 
-        @Override
-        public void submit_sync() {
-            ZLinkBlockingCalls.submit(this::submit);
-        }
 
         @Override public CompletionStage<Void> submit() {
             rejectAfterRelocationReady("Spot send submit");
@@ -548,10 +543,6 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             return new DeferredSpotRequestCall(
                 target, payload, packetName, value, contentType, metadata, instanceIntent,
                 stableType, selectedMesh, submitGate);
-        }
-        @Override
-        public <TReply> TReply submit_sync(Class<TReply> replyType) {
-            return ZLinkBlockingCalls.submit(() -> submit(replyType));
         }
 
         @Override public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {

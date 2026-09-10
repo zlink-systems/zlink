@@ -2,6 +2,7 @@ package systems.zlink.framework.channels;
 
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 
 public interface ZLinkSendCall {
     default ZLinkSendCall metadata(String key, String value) {
@@ -20,5 +21,7 @@ public interface ZLinkSendCall {
      * @throws systems.zlink.framework.errors.ZLinkFrameworkException with
      *     {@code INVALID_OPERATION} before submission if called from a runtime execution context
      */
-    void submit_sync();
+    default void submit_sync() {
+        ZLinkBlockingCalls.submit(this::submit);
+    }
 }

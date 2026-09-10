@@ -212,10 +212,6 @@ final class RouteSpotSendCall
             metadata.withAll(values), submitGate);
     }
 
-    @Override
-    public void submit_sync() {
-        ZLinkBlockingCalls.submit(this::submit);
-    }
 
     @Override
     public CompletionStage<Void> submit() {
@@ -468,10 +464,6 @@ final class RouteSpotRequestCall
             instanceIntent, stableType, selectedMesh, metadata, submitGate);
     }
 
-    @Override
-    public <TReply> TReply submit_sync(Class<TReply> replyType) {
-        return ZLinkBlockingCalls.submit(() -> submit(replyType));
-    }
 
     @Override
     public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {

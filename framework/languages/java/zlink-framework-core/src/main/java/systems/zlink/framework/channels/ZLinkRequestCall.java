@@ -3,6 +3,7 @@ package systems.zlink.framework.channels;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 
 public interface ZLinkRequestCall {
     default ZLinkRequestCall metadata(String key, String value) {
@@ -23,7 +24,9 @@ public interface ZLinkRequestCall {
      * @throws systems.zlink.framework.errors.ZLinkFrameworkException with
      *     {@code INVALID_OPERATION} before submission if called from a runtime execution context
      */
-    <TReply> TReply submit_sync(Class<TReply> replyType);
+    default <TReply> TReply submit_sync(Class<TReply> replyType) {
+        return ZLinkBlockingCalls.submit(() -> submit(replyType));
+    }
 
     <TReply> CompletionStage<TReply> yield(Class<TReply> replyType);
 

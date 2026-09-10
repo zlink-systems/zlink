@@ -418,10 +418,6 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
             submitGate);
     }
 
-    @Override
-    public void submit_sync() {
-        ZLinkBlockingCalls.submit(this::submit);
-    }
 
     @Override
     public CompletionStage<Void> submit() {
@@ -604,10 +600,6 @@ final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
             submitGate);
     }
 
-    @Override
-    public <TReply> TReply submit_sync(Class<TReply> replyType) {
-        return ZLinkBlockingCalls.submit(() -> submit(replyType));
-    }
 
     @Override
     public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
