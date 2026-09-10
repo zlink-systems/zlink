@@ -2,7 +2,7 @@ using WithGrpcBench.Shared;
 using Systems.Zlink;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.Protobuf;
-using Zlink.Framework.Contracts.Handlers;
+using Zlink.Framework.Contracts.Channels;
 
 var endpoint = ArgValue(args, "--endpoint") ?? "tcp://127.0.0.1:5214";
 var metricsUrl = ArgValue(args, "--metrics-url") ?? "http://127.0.0.1:5215";
@@ -17,9 +17,8 @@ builder.Services.AddZLinkFramework(framework =>
     var mesh = framework.AddRouteMesh("bench")
         .Listen(endpoint)
         .SetRoutingId(RoutingId.From("bench-server"));
-    mesh.Channel("bench").Server()
-        .AddRequestHandler<EchoHandler, BenchPayload, BenchPayload>("BenchPayload")
-        .AddSendHandler<CommandHandler, BenchPayload>("BenchPayload");
+    mesh.AddRouteRequestHandler<EchoHandler, BenchPayload, BenchPayload>("BenchPayload")
+        .AddRouteSendHandler<CommandHandler, BenchPayload>("BenchPayload");
 });
 
 var app = builder.Build();
@@ -50,11 +49,12 @@ static string? ArgValue(string[] args, string name)
     return null;
 }
 
-internal sealed class EchoHandler(BenchServerMetrics metrics) : IZLinkRequestHandler<BenchPayload, BenchPayload>
+internal sealed class EchoHandler(BenchServerMetrics metrics)
+    : IZLinkRouteRequestHandler<BenchPayload, BenchPayload>
 {
     public ValueTask<BenchPayload> HandleAsync(
         BenchPayload request,
-        IZLinkMessageContext context,
+        ZLinkRouteMessageContext context,
         CancellationToken cancellationToken)
     {
         metrics.RecordReceived(request);
@@ -62,11 +62,11 @@ internal sealed class EchoHandler(BenchServerMetrics metrics) : IZLinkRequestHan
     }
 }
 
-internal sealed class CommandHandler(BenchServerMetrics metrics) : IZLinkSendHandler<BenchPayload>
+internal sealed class CommandHandler(BenchServerMetrics metrics) : IZLinkRouteSendHandler<BenchPayload>
 {
     public ValueTask HandleAsync(
         BenchPayload message,
-        IZLinkMessageContext context,
+        ZLinkRouteMessageContext context,
         CancellationToken cancellationToken)
     {
         metrics.Record(message);

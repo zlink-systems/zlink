@@ -480,6 +480,7 @@ internal sealed class GrpcBenchTransport : IBenchTransport
 
 internal sealed class FrameworkBenchTransport : IBenchTransport
 {
+    private static readonly RoutingId Target = RoutingId.From("bench-server");
     private readonly IHost host;
     private readonly IZLinkRouteClient client;
 
@@ -513,8 +514,7 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
             var mesh = framework.AddRouteMesh("bench")
                 .Listen("tcp://127.0.0.1:0")
                 .SetRoutingId(RoutingId.From($"bench-source-{Environment.ProcessId}"));
-            mesh.Channel("bench").Client();
-            mesh.PeerConnections.Connect(RoutingId.From("bench-server"), options.TargetEndpoint);
+            mesh.PeerConnections.Connect(Target, options.TargetEndpoint);
         });
         var host = builder.Build();
         await host.StartAsync();
@@ -525,10 +525,10 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
 
     public async ValueTask<BenchPayload> RequestAsync(
         int stream, BenchPayload payload, CancellationToken cancellationToken) =>
-        await client.RequestToChannel("bench", payload).Async<BenchPayload>(cancellationToken);
+        await client.RequestToNode("bench", Target, payload).Async<BenchPayload>(cancellationToken);
 
     public async ValueTask SendAsync(int stream, BenchPayload payload, CancellationToken cancellationToken) =>
-        await client.SendToChannel("bench", payload).Async(cancellationToken);
+        await client.SendToNode("bench", Target, payload).Async(cancellationToken);
 
     public async ValueTask DisposeAsync()
     {
