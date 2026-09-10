@@ -89,280 +89,31 @@ import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 final class RouteSendCall implements ZLinkSendCall {
     private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
-    private final ZLinkBackendRouterSocket router;
-    private final RoutingId target;
-    private final Message payload;
-    private final Optional<String> packetName;
-    private final String contentType;
-
-    RouteSendCall(
-        ZLinkChannelCallRuntime runtime,
-        ZLinkBackendRouterSocket router,
-        RoutingId target,
-        Message payload,
-        Optional<String> packetName) {
-        this(runtime, router, target, payload, packetName,
-            ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE);
-    }
-
-    RouteSendCall(
-        ZLinkChannelCallRuntime runtime,
-        ZLinkBackendRouterSocket router,
-        RoutingId target,
-        Message payload,
-        Optional<String> packetName,
-        String contentType) {
-        this(runtime, router, target, payload, packetName, contentType,
-            new AtomicBoolean());
-    }
-
-    private RouteSendCall(
-        ZLinkChannelCallRuntime runtime,
-        ZLinkBackendRouterSocket router,
-        RoutingId target,
-        Message payload,
-        Optional<String> packetName,
-        String contentType,
-        AtomicBoolean submitGate) {
-        this.submitGate = submitGate;
-        this.runtime = runtime;
-        this.router = router;
-        this.target = target;
-        this.payload = payload;
-        this.packetName = packetName;
-        this.contentType = contentType;
-    }
-
-    RouteSendCall(
-        ZLinkChannelCallRuntime runtime,
-        ZLinkBackendRouterSocket router,
-        RoutingId target,
-        Message payload) {
-        this(runtime, router, target, payload, Optional.empty());
-    }
-
-    public ZLinkSendCall packetName(String packetName) {
-        return new RouteSendCall(
-            runtime, router, target, payload, Optional.of(packetName), contentType,
-            submitGate);
-    }
-
-    @Override
-    public CompletionStage<Void> submit() {
-        CompletionStage<Void> duplicate =
-            ZLinkOneWayCalls.beginOneWay(submitGate);
-        if (duplicate != null) {
-            return duplicate;
-        }
-        try (var flowScope = runtime.enterApplicationFlow()) {
-        ZLinkMessageFlowTracer.TracePoint sent =
-            runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
-        if (sent != null) {
-            sent.trace(new ZLinkMessageFlowEvent(
-                ZLinkMessageFlowOutcome.SENT,
-                ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
-                ZLinkDispatchMessageKind.SEND,
-                packetName.orElse(null), null, null, null, target.toString(), null, null, null));
-        }
-        List<Message> sendParts = ZLinkChannelCallRuntime.envelopeParts(
-            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_COMMAND,
-            "", packetName, payload, contentType, Map.of());
-        return ZLinkOneWayCalls.adaptOneWay(router.send(target, sendParts))
-            .whenComplete((ignored, failure) ->
-                sendParts.forEach(Message::close));
-        }
-    }
-}
-
-final class RouteRequestCall implements ZLinkRequestCall {
-    private final AtomicBoolean submitGate;
-    private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
-    private final ZLinkBackendRouterSocket router;
-    private final RoutingId target;
-    private final Message payload;
-    private final Optional<String> packetName;
-    private final Duration timeout;
-    private final String contentType;
-
-    RouteRequestCall(
-        ZLinkChannelCallRuntime runtime,
-        String channelName,
-        ZLinkBackendRouterSocket router,
-        RoutingId target,
-        Message payload,
-        Optional<String> packetName,
-        Duration timeout) {
-        this(runtime, channelName, router, target, payload, packetName, timeout,
-            ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE);
-    }
-
-    RouteRequestCall(
-        ZLinkChannelCallRuntime runtime,
-        String channelName,
-        ZLinkBackendRouterSocket router,
-        RoutingId target,
-        Message payload,
-        Optional<String> packetName,
-        Duration timeout,
-        String contentType) {
-        this(runtime, channelName, router, target, payload, packetName, timeout,
-            contentType, new AtomicBoolean());
-    }
-
-    private RouteRequestCall(
-        ZLinkChannelCallRuntime runtime,
-        String channelName,
-        ZLinkBackendRouterSocket router,
-        RoutingId target,
-        Message payload,
-        Optional<String> packetName,
-        Duration timeout,
-        String contentType,
-        AtomicBoolean submitGate) {
-        this.submitGate = submitGate;
-        this.runtime = runtime;
-        this.channelName = channelName;
-        this.router = router;
-        this.target = target;
-        this.payload = payload;
-        this.packetName = packetName;
-        this.timeout = timeout;
-        this.contentType = contentType;
-    }
-
-    public ZLinkRequestCall packetName(String packetName) {
-        return new RouteRequestCall(
-            runtime,
-            channelName,
-            router,
-            target,
-            payload,
-            Optional.of(packetName),
-            timeout,
-            contentType,
-            submitGate);
-    }
-
-    @Override
-    public ZLinkRequestCall timeout(Duration timeout) {
-        return new RouteRequestCall(
-            runtime, channelName, router, target, payload, packetName, timeout, contentType,
-            submitGate);
-    }
-
-    @Override
-    public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
-        CompletionStage<TReply> duplicate =
-            ZLinkOneWayCalls.beginOneWay(submitGate);
-        if (duplicate != null) {
-            return duplicate;
-        }
-        try (var flowScope = runtime.enterApplicationFlow()) {
-        CompletableFuture<TReply> result = new CompletableFuture<>();
-        result.whenComplete((ignored, error) -> {
-            ZLinkMessageFlowTracer.TerminalTracePoint terminal =
-                runtime.flow().beginRequestTerminal(error, result);
-            if (terminal != null) {
-                terminal.trace(new ZLinkMessageFlowEvent(
-                    ZLinkMessageFlowOutcome.REPLY_RECEIVED,
-                    ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
-                    ZLinkDispatchMessageKind.REQUEST,
-                    packetName.orElse(null), channelName, null, null,
-                    target.toString(), null, null, null));
-            }
-        });
-        var operationId = ZLinkServiceOperationIds.next();
-        List<Message> requestParts = ZLinkChannelCallRuntime.envelopeParts(
-            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
-            channelName, packetName, payload, contentType, Map.of(), operationId);
-        ZLinkMessageFlowTracer.TracePoint sent =
-            runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
-        if (sent != null) {
-            sent.trace(new ZLinkMessageFlowEvent(
-                ZLinkMessageFlowOutcome.SENT,
-                ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
-                ZLinkDispatchMessageKind.REQUEST,
-                packetName.orElse(null), channelName, null, null,
-                target.toString(), null, null, null));
-        }
-        runtime.requestRoute(operationId, router, target, requestParts, timeout)
-            .whenComplete((reply, failure) -> {
-                requestParts.forEach(Message::close);
-                if (failure != null) {
-                    result.completeExceptionally(
-                        ZLinkChannelCallRuntime.requestFailure(failure));
-                    return;
-                }
-                if (result.isDone()) {
-                    reply.close();
-                    return;
-                }
-                    try {
-                        runtime.completeReply(reply, replyType, result);
-                    } catch (RuntimeException ex) {
-                        result.completeExceptionally(ex);
-                    } finally {
-                        reply.close();
-                    }
-            });
-        return ZLinkSerialExecutionQueue.manageCurrent(result);
-        }
-    }
-
-    @Override
-    public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
-        return systems.zlink.framework.runtime.internal.handlers
-            .ZLinkSuspendInvocationContext.rejectYield("MeshNode request");
-    }
-
-}
-
-final class MeshNodeRouteSendCall implements ZLinkSendCall {
-    private final AtomicBoolean submitGate;
-    private final ZLinkChannelCallRuntime runtime;
-    private final ZLinkInternalSpotNode node;
+    private final ZLinkChannelSocketRegistry sockets;
     private final RoutingId target;
     private final Message payload;
     private final Optional<String> packetName;
     private final String contentType;
     private final ZLinkApplicationMetadata metadata;
 
-    MeshNodeRouteSendCall(
-        ZLinkChannelCallRuntime runtime,
-        ZLinkInternalSpotNode node,
-        RoutingId target,
-        Message payload,
-        Optional<String> packetName) {
-        this(runtime, node, target, payload, packetName,
-            ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
-            ZLinkApplicationMetadata.empty());
+    RouteSendCall(
+        ZLinkChannelCallRuntime runtime, String channelName,
+        ZLinkChannelSocketRegistry sockets, RoutingId target, Message payload,
+        Optional<String> packetName, String contentType, ZLinkApplicationMetadata metadata) {
+        this(runtime, channelName, sockets, target, payload, packetName, contentType,
+            metadata, new AtomicBoolean());
     }
 
-    MeshNodeRouteSendCall(
-        ZLinkChannelCallRuntime runtime,
-        ZLinkInternalSpotNode node,
-        RoutingId target,
-        Message payload,
-        Optional<String> packetName,
-        String contentType,
-        ZLinkApplicationMetadata metadata) {
-        this(runtime, node, target, payload, packetName, contentType, metadata,
-            new AtomicBoolean());
-    }
-
-    private MeshNodeRouteSendCall(
-        ZLinkChannelCallRuntime runtime,
-        ZLinkInternalSpotNode node,
-        RoutingId target,
-        Message payload,
-        Optional<String> packetName,
-        String contentType,
-        ZLinkApplicationMetadata metadata,
+    private RouteSendCall(
+        ZLinkChannelCallRuntime runtime, String channelName,
+        ZLinkChannelSocketRegistry sockets, RoutingId target, Message payload,
+        Optional<String> packetName, String contentType, ZLinkApplicationMetadata metadata,
         AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.runtime = runtime;
-        this.node = node;
+        this.channelName = channelName;
+        this.sockets = sockets;
         this.target = target;
         this.payload = payload;
         this.packetName = packetName;
@@ -371,42 +122,61 @@ final class MeshNodeRouteSendCall implements ZLinkSendCall {
     }
 
     public ZLinkSendCall packetName(String name) {
-        return new MeshNodeRouteSendCall(
-            runtime, node, target, payload, Optional.of(name), contentType, metadata,
-            submitGate);
+        return new RouteSendCall(runtime, channelName, sockets, target, payload,
+            Optional.of(name), contentType, metadata, submitGate);
     }
 
     @Override
     public ZLinkSendCall metadata(String key, String value) {
-        return new MeshNodeRouteSendCall(
-            runtime, node, target, payload, packetName, contentType,
-            metadata.with(key, value), submitGate);
+        return new RouteSendCall(runtime, channelName, sockets, target, payload,
+            packetName, contentType,
+            (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).with(key, value), submitGate);
     }
 
     @Override
     public ZLinkSendCall metadata(Map<String, String> values) {
-        return new MeshNodeRouteSendCall(
-            runtime, node, target, payload, packetName, contentType,
-            metadata.withAll(values), submitGate);
+        return new RouteSendCall(runtime, channelName, sockets, target, payload,
+            packetName, contentType,
+            (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).withAll(values), submitGate);
     }
 
     @Override
     public CompletionStage<Void> submit() {
-        CompletionStage<Void> duplicate =
-            ZLinkOneWayCalls.beginOneWay(submitGate);
+        CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
         if (duplicate != null) {
             return duplicate;
         }
         try (var flowScope = runtime.enterApplicationFlow()) {
-        ZLinkMessageFlowTracer.TracePoint sent =
-            runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
-        if (sent != null) {
-            sent.trace(new ZLinkMessageFlowEvent(
-                ZLinkMessageFlowOutcome.SENT,
-                ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
-                ZLinkDispatchMessageKind.SEND,
-                packetName.orElse(null), null, null, null, target.toString(), null, null, null));
+            return sockets.submitToNode(channelName, null, null,
+                (router, timeout) -> submitRouter(router),
+                (node, timeout) -> submitNode(node));
+        } catch (RuntimeException | Error failure) {
+            payload.close();
+            throw failure;
         }
+    }
+
+    private CompletionStage<Void> submitRouter(ZLinkBackendRouterSocket router) {
+        if (metadata != null) {
+            throw new UnsupportedOperationException("send metadata is not available");
+        }
+        traceSent();
+        List<Message> parts = ZLinkChannelCallRuntime.envelopeParts(
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_COMMAND,
+            "", packetName, payload, contentType, Map.of());
+        try {
+            return ZLinkOneWayCalls.adaptOneWay(router.send(target, parts))
+                .whenComplete((ignored, failure) -> parts.forEach(Message::close));
+        } catch (RuntimeException | Error failure) {
+            parts.forEach(Message::close);
+            throw failure;
+        }
+    }
+
+    private CompletionStage<Void> submitNode(ZLinkInternalSpotNode node) {
+        ZLinkApplicationMetadata metadata = this.metadata == null
+            ? ZLinkApplicationMetadata.empty() : this.metadata;
+        traceSent();
         List<Message> sendParts = ZLinkChannelCallRuntime.envelopeParts(
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_COMMAND,
             "", packetName, payload, contentType, metadata.values());
@@ -431,6 +201,17 @@ final class MeshNodeRouteSendCall implements ZLinkSendCall {
             sendParts.forEach(Message::close);
             throw failure;
         }
+    }
+
+    private void traceSent() {
+        ZLinkMessageFlowTracer.TracePoint sent =
+            runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
+        if (sent != null) {
+            sent.trace(new ZLinkMessageFlowEvent(
+                ZLinkMessageFlowOutcome.SENT,
+                ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                ZLinkDispatchMessageKind.SEND,
+                packetName.orElse(null), null, null, null, target.toString(), null, null, null));
         }
     }
 
@@ -442,6 +223,228 @@ final class MeshNodeRouteSendCall implements ZLinkSendCall {
         return node.submitLocalNodeSend(target, metadata, parts)
             .orElseGet(() -> CompletableFuture.completedFuture(
                 ZLinkOneWayCalls.ROUTE_NOT_CONNECTED));
+    }
+}
+
+
+final class RouteRequestCall implements ZLinkRequestCall {
+    private final AtomicBoolean submitGate;
+    private final ZLinkChannelCallRuntime runtime;
+    private final String channelName;
+    private final ZLinkChannelSocketRegistry sockets;
+    private final Duration defaultTimeout;
+    private final RoutingId target;
+    private final Message payload;
+    private final Optional<String> packetName;
+    private final Duration timeout;
+    private final String contentType;
+    private final ZLinkApplicationMetadata metadata;
+
+    RouteRequestCall(
+        ZLinkChannelCallRuntime runtime, String channelName,
+        ZLinkChannelSocketRegistry sockets, Duration defaultTimeout, RoutingId target,
+        Message payload, Optional<String> packetName, Duration timeout,
+        String contentType, ZLinkApplicationMetadata metadata) {
+        this(runtime, channelName, sockets, defaultTimeout, target, payload, packetName,
+            timeout, contentType, metadata, new AtomicBoolean());
+    }
+
+    private RouteRequestCall(
+        ZLinkChannelCallRuntime runtime, String channelName,
+        ZLinkChannelSocketRegistry sockets, Duration defaultTimeout, RoutingId target,
+        Message payload, Optional<String> packetName, Duration timeout,
+        String contentType, ZLinkApplicationMetadata metadata, AtomicBoolean submitGate) {
+        this.submitGate = submitGate;
+        this.runtime = runtime;
+        this.channelName = channelName;
+        this.sockets = sockets;
+        this.defaultTimeout = defaultTimeout;
+        this.target = target;
+        this.payload = payload;
+        this.packetName = packetName;
+        this.timeout = timeout;
+        this.contentType = contentType;
+        this.metadata = metadata;
+    }
+
+    public ZLinkRequestCall packetName(String name) {
+        return new RouteRequestCall(runtime, channelName, sockets, defaultTimeout, target,
+            payload, Optional.of(name), timeout, contentType, metadata, submitGate);
+    }
+
+    @Override
+    public ZLinkRequestCall metadata(String key, String value) {
+        return new RouteRequestCall(runtime, channelName, sockets, defaultTimeout, target,
+            payload, packetName, timeout, contentType,
+            (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).with(key, value), submitGate);
+    }
+
+    @Override
+    public ZLinkRequestCall metadata(Map<String, String> values) {
+        return new RouteRequestCall(runtime, channelName, sockets, defaultTimeout, target,
+            payload, packetName, timeout, contentType,
+            (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).withAll(values), submitGate);
+    }
+
+    @Override
+    public ZLinkRequestCall timeout(Duration value) {
+        Objects.requireNonNull(value, "timeout");
+        return new RouteRequestCall(runtime, channelName, sockets, defaultTimeout, target,
+            payload, packetName, value, contentType, metadata, submitGate);
+    }
+
+    @Override
+    public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
+        CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
+        if (duplicate != null) {
+            return duplicate;
+        }
+        try (var flowScope = runtime.enterApplicationFlow()) {
+            try {
+                return ZLinkSerialExecutionQueue.manageCurrent(sockets.submitToNode(
+                    channelName, timeout, defaultTimeout,
+                    (router, effectiveTimeout) -> submitRouter(router, effectiveTimeout, replyType),
+                    (node, effectiveTimeout) -> submitNode(node, effectiveTimeout, replyType)));
+            } catch (ZLinkConfigurationException failure) {
+                payload.close();
+                throw failure;
+            } catch (RuntimeException failure) {
+                payload.close();
+                CompletableFuture<TReply> result = requestResult();
+                result.completeExceptionally(failure);
+                return ZLinkSerialExecutionQueue.manageCurrent(result);
+            } catch (Error failure) {
+                payload.close();
+                throw failure;
+            }
+        }
+    }
+
+    private <TReply> CompletionStage<TReply> submitRouter(
+        ZLinkBackendRouterSocket router, Duration timeout, Class<TReply> replyType) {
+        if (metadata != null) {
+            throw new UnsupportedOperationException("request metadata is not available");
+        }
+        CompletableFuture<TReply> result = requestResult();
+        var operationId = ZLinkServiceOperationIds.next();
+        List<Message> requestParts = requestParts(operationId, Map.of());
+        runtime.requestRoute(operationId, router, target, requestParts, timeout)
+            .whenComplete((reply, failure) -> {
+                requestParts.forEach(Message::close);
+                if (failure != null) {
+                    result.completeExceptionally(
+                        ZLinkChannelCallRuntime.requestFailure(failure));
+                    return;
+                }
+                if (result.isDone()) {
+                    reply.close();
+                    return;
+                }
+                try {
+                    runtime.completeReply(reply, replyType, result);
+                } catch (RuntimeException ex) {
+                    result.completeExceptionally(ex);
+                } finally {
+                    reply.close();
+                }
+            });
+        return result;
+    }
+
+    private <TReply> CompletionStage<TReply> submitNode(
+        ZLinkInternalSpotNode node, Duration timeout, Class<TReply> replyType) {
+        ZLinkApplicationMetadata metadata = this.metadata == null
+            ? ZLinkApplicationMetadata.empty() : this.metadata;
+        CompletableFuture<TReply> result = requestResult();
+        var operationId = ZLinkServiceOperationIds.next();
+        List<Message> requestParts = requestParts(operationId, metadata.values());
+        try {
+            Optional<Integer> classified =
+                node.classifyNodeSendTarget(target);
+            if (classified.isPresent()) {
+                int status = classified.orElseThrow();
+                result.completeExceptionally(switch (status) {
+                    case ZLinkOneWayCalls.TARGET_NOT_FOUND ->
+                        new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                            "RouteMesh node request target was not found: "
+                                + target);
+                    case ZLinkOneWayCalls.ROUTE_NOT_CONNECTED ->
+                        new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "RouteMesh node request route is not connected: "
+                                + target);
+                    default -> new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                        "RouteMesh node request target classification failed: "
+                            + status);
+                });
+                return result;
+            }
+            runtime.requestNode(
+                    operationId, node, target,
+                    metadata.encode(),
+                    requestParts,
+                    timeout)
+                .whenComplete((reply, failure) -> {
+                    if (failure != null) {
+                        result.completeExceptionally(ZLinkChannelCallRuntime.requestFailure(failure));
+                        return;
+                    }
+                    try {
+                        runtime.completeReply(reply, replyType, result);
+                    } catch (RuntimeException error) {
+                        result.completeExceptionally(error);
+                    } finally {
+                        reply.close();
+                    }
+                });
+        } catch (RuntimeException error) {
+            result.completeExceptionally(error);
+        } finally {
+            requestParts.forEach(Message::close);
+        }
+        return result;
+    }
+
+    private <TReply> CompletableFuture<TReply> requestResult() {
+        CompletableFuture<TReply> result = new CompletableFuture<>();
+        result.whenComplete((ignored, error) -> {
+            ZLinkMessageFlowTracer.TerminalTracePoint terminal =
+                runtime.flow().beginRequestTerminal(error, result);
+            if (terminal != null) {
+                terminal.trace(new ZLinkMessageFlowEvent(
+                    ZLinkMessageFlowOutcome.REPLY_RECEIVED,
+                    ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                    ZLinkDispatchMessageKind.REQUEST,
+                    packetName.orElse(null), channelName, null, null,
+                    target.toString(), null, null, null));
+            }
+        });
+        return result;
+    }
+
+    private List<Message> requestParts(java.util.UUID operationId, Map<String, String> metadata) {
+        List<Message> requestParts = ZLinkChannelCallRuntime.envelopeParts(
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
+            channelName, packetName, payload, contentType, metadata, operationId);
+        ZLinkMessageFlowTracer.TracePoint sent =
+            runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
+        if (sent != null) {
+            sent.trace(new ZLinkMessageFlowEvent(
+                ZLinkMessageFlowOutcome.SENT,
+                ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                ZLinkDispatchMessageKind.REQUEST,
+                packetName.orElse(null), channelName, null, null,
+                target.toString(), null, null, null));
+        }
+        return requestParts;
+    }
+
+    @Override
+    public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
+        return systems.zlink.framework.runtime.internal.handlers
+            .ZLinkSuspendInvocationContext.rejectYield("MeshNode request");
     }
 }
 
@@ -840,193 +843,4 @@ final class ChannelRequestCall implements ZLinkRequestCall {
             .yieldCurrent(submit(replyType));
     }
 
-}
-
-final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
-    private final AtomicBoolean submitGate;
-    private final ZLinkChannelCallRuntime runtime;
-    private final String channelName;
-    private final ZLinkInternalSpotNode node;
-    private final RoutingId target;
-    private final Message payload;
-    private final Optional<String> packetName;
-    private final Duration timeout;
-    private final String contentType;
-    private final ZLinkApplicationMetadata metadata;
-
-    MeshNodeRouteRequestCall(
-        ZLinkChannelCallRuntime runtime,
-        String channelName,
-        ZLinkInternalSpotNode node,
-        RoutingId target,
-        Message payload,
-        Optional<String> packetName,
-        Duration timeout) {
-        this(
-            runtime,
-            channelName,
-            node,
-            target,
-            payload,
-            packetName,
-            timeout,
-            ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
-            ZLinkApplicationMetadata.empty());
-    }
-
-    MeshNodeRouteRequestCall(
-        ZLinkChannelCallRuntime runtime,
-        String channelName,
-        ZLinkInternalSpotNode node,
-        RoutingId target,
-        Message payload,
-        Optional<String> packetName,
-        Duration timeout,
-        String contentType,
-        ZLinkApplicationMetadata metadata) {
-        this(runtime, channelName, node, target, payload, packetName, timeout, contentType,
-            metadata, new AtomicBoolean());
-    }
-
-    private MeshNodeRouteRequestCall(
-        ZLinkChannelCallRuntime runtime,
-        String channelName,
-        ZLinkInternalSpotNode node,
-        RoutingId target,
-        Message payload,
-        Optional<String> packetName,
-        Duration timeout,
-        String contentType,
-        ZLinkApplicationMetadata metadata,
-        AtomicBoolean submitGate) {
-        this.submitGate = submitGate;
-        this.runtime = runtime;
-        this.channelName = channelName;
-        this.node = node;
-        this.target = target;
-        this.payload = payload;
-        this.packetName = packetName;
-        this.timeout = timeout;
-        this.contentType = contentType;
-        this.metadata = metadata;
-    }
-
-    public ZLinkRequestCall packetName(String name) {
-        return new MeshNodeRouteRequestCall(
-            runtime, channelName, node, target, payload, Optional.of(name), timeout,
-            contentType, metadata, submitGate);
-    }
-
-    @Override
-    public ZLinkRequestCall metadata(String key, String value) {
-        return new MeshNodeRouteRequestCall(
-            runtime, channelName, node, target, payload, packetName, timeout,
-            contentType, metadata.with(key, value), submitGate);
-    }
-
-    @Override
-    public ZLinkRequestCall metadata(Map<String, String> values) {
-        return new MeshNodeRouteRequestCall(
-            runtime, channelName, node, target, payload, packetName, timeout,
-            contentType, metadata.withAll(values), submitGate);
-    }
-
-    @Override
-    public ZLinkRequestCall timeout(Duration value) {
-        return new MeshNodeRouteRequestCall(
-            runtime, channelName, node, target, payload, packetName, value,
-            contentType, metadata, submitGate);
-    }
-
-    @Override
-    public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
-        CompletionStage<TReply> duplicate =
-            ZLinkOneWayCalls.beginOneWay(submitGate);
-        if (duplicate != null) {
-            return duplicate;
-        }
-        try (var flowScope = runtime.enterApplicationFlow()) {
-        CompletableFuture<TReply> result = new CompletableFuture<>();
-        result.whenComplete((ignored, error) -> {
-            ZLinkMessageFlowTracer.TerminalTracePoint terminal =
-                runtime.flow().beginRequestTerminal(error, result);
-            if (terminal != null) {
-                terminal.trace(new ZLinkMessageFlowEvent(
-                    ZLinkMessageFlowOutcome.REPLY_RECEIVED,
-                    ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
-                    ZLinkDispatchMessageKind.REQUEST,
-                    packetName.orElse(null), channelName, null, null,
-                    target.toString(), null, null, null));
-            }
-        });
-        var operationId = ZLinkServiceOperationIds.next();
-        List<Message> requestParts = ZLinkChannelCallRuntime.envelopeParts(
-            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
-            channelName, packetName, payload, contentType, metadata.values(), operationId);
-        ZLinkMessageFlowTracer.TracePoint sent =
-            runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
-        if (sent != null) {
-            sent.trace(new ZLinkMessageFlowEvent(
-                ZLinkMessageFlowOutcome.SENT,
-                ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
-                ZLinkDispatchMessageKind.REQUEST,
-                packetName.orElse(null), channelName, null, null,
-                target.toString(), null, null, null));
-        }
-        try {
-            Optional<Integer> classified =
-                node.classifyNodeSendTarget(target);
-            if (classified.isPresent()) {
-                int status = classified.orElseThrow();
-                result.completeExceptionally(switch (status) {
-                    case ZLinkOneWayCalls.TARGET_NOT_FOUND ->
-                        new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.NOT_FOUND,
-                            "RouteMesh node request target was not found: "
-                                + target);
-                    case ZLinkOneWayCalls.ROUTE_NOT_CONNECTED ->
-                        new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.UNAVAILABLE,
-                            "RouteMesh node request route is not connected: "
-                                + target);
-                    default -> new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-                        "RouteMesh node request target classification failed: "
-                            + status);
-                });
-                return systems.zlink.framework.execution
-                    .ZLinkSerialExecutionQueue.manageCurrent(result);
-            }
-            runtime.requestNode(
-                    operationId, node, target,
-                    metadata.encode(),
-                    requestParts,
-                    timeout)
-                .whenComplete((reply, failure) -> {
-                    if (failure != null) {
-                        result.completeExceptionally(ZLinkChannelCallRuntime.requestFailure(failure));
-                        return;
-                    }
-                    try {
-                        runtime.completeReply(reply, replyType, result);
-                    } catch (RuntimeException error) {
-                        result.completeExceptionally(error);
-                    } finally {
-                        reply.close();
-                    }
-                });
-        } catch (RuntimeException error) {
-            result.completeExceptionally(error);
-        } finally {
-            requestParts.forEach(Message::close);
-        }
-        return ZLinkSerialExecutionQueue.manageCurrent(result);
-        }
-    }
-
-    @Override
-    public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
-        return systems.zlink.framework.runtime.internal.handlers
-            .ZLinkSuspendInvocationContext.rejectYield("MeshNode request");
-    }
 }

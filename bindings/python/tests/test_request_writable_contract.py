@@ -7,13 +7,6 @@ import pytest
 import zlink
 
 
-async def _next_event_loop_turn():
-    loop = asyncio.get_running_loop()
-    ready = loop.create_future()
-    loop.call_soon(ready.set_result, None)
-    await ready
-
-
 def _serve(router, count):
     poller = zlink.create_poller()
     events = zlink.create_poll_events(1)
@@ -131,15 +124,10 @@ def test_request_hwm_waits_for_its_writable_then_retries_and_receives_reply(
                     source = bytearray(index.to_bytes(4, "little") + b"x" * 60)
                     sources.append(source)
                     expected.append(bytes(source))
-                    tasks.append(
-                        asyncio.create_task(
-                            dealer.request()
-                            .message(source)
-                            .timeout(5)
-                            .submit()
-                        )
+                    submission = (
+                        dealer.request().message(source).timeout(5).submit()
                     )
-                    await _next_event_loop_turn()
+                    tasks.append(submission.reply)
                     if submissions[-1]["result"] == int(
                         zlink.SubmitResult.BACKPRESSURED
                     ):
@@ -218,10 +206,8 @@ def test_connect_before_bind_request_resumes_from_writable(round_index):
                     side_effect=observe_writable,
                 ),
             ):
-                task = asyncio.create_task(
-                    dealer.request().message(source).timeout(5).submit()
-                )
-                await _next_event_loop_turn()
+                submission = dealer.request().message(source).timeout(5).submit()
+                task = submission.reply
                 blocked = submissions[0]
                 assert blocked["result"] == int(zlink.SubmitResult.BACKPRESSURED)
                 assert blocked["errno"] == errno.EAGAIN
@@ -271,10 +257,10 @@ def test_close_clears_request_wait_token_with_typed_failure(round_index):
             with patch.object(
                 owner, "_submit_parts", side_effect=observe_submit
             ):
-                task = asyncio.create_task(
+                submission = (
                     dealer.request().message(b"close-request").timeout(5).submit()
                 )
-                await _next_event_loop_turn()
+                task = submission.reply
                 assert submissions[0]["result"] == int(
                     zlink.SubmitResult.BACKPRESSURED
                 )
@@ -326,14 +312,15 @@ def test_send_and_request_wait_tokens_share_completion_owner(round_index):
                     side_effect=observe_writable,
                 ),
             ):
-                send_task = asyncio.create_task(
-                    dealer.send().message(b"mixed-send").submit()
+                send_submission = dealer.send().message(b"mixed-send").submit()
+                request_submission = (
+                    dealer.request()
+                    .message(b"mixed-request")
+                    .timeout(5)
+                    .submit()
                 )
-                request_task = asyncio.create_task(
-                    dealer.request().message(b"mixed-request").timeout(5).submit()
-                )
-                await _next_event_loop_turn()
-                await _next_event_loop_turn()
+                send_task = send_submission.admitted
+                request_task = request_submission.reply
                 blocked = [
                     record
                     for record in submissions

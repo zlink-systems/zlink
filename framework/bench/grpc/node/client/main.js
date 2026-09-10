@@ -150,13 +150,14 @@ function createRawTransport(options) {
       options.targetCommandEndpoint
     ))
     : [];
-  return {
-    request: async (_stream, payload) => {
-      const parts = await requestSocket.socket.request(requestSocket.peer)
-        .message(rawWire.REQUEST_ENVELOPE)
-        .message(rawWire.encodeBenchPayloadMessage(payload))
-        .timeout(options.requestTimeoutMs)
-        .submit();
+
+  const submitRequest = (payload) => {
+    const submission = requestSocket.socket.request(requestSocket.peer)
+      .message(rawWire.REQUEST_ENVELOPE)
+      .message(rawWire.encodeBenchPayloadMessage(payload))
+      .timeout(options.requestTimeoutMs)
+      .submit();
+    const reply = submission.reply.then((parts) => {
       try {
         if (parts.length === 0) throw new Error('raw request returned no reply parts');
         const body = rawWire.decodeBenchPayloadBody(parts[parts.length - 1].data());
@@ -165,14 +166,31 @@ function createRawTransport(options) {
       } finally {
         for (const part of parts) part.close();
       }
+    });
+    return { result: submission.result, admitted: submission.admitted, reply };
+  };
+
+  const submitSend = (stream, payload) => {
+    const socket = sendSockets[stream % sendSockets.length];
+    return socket.socket.send(socket.peer)
+      .message(rawWire.REQUEST_ENVELOPE)
+      .message(rawWire.encodeBenchPayloadMessage(payload))
+      .submit();
+  };
+
+  return {
+    request: async (_stream, payload) => {
+      return submitRequest(payload).reply;
     },
+    requestSubmission: (_stream, payload) => submitRequest(payload),
     send: async (stream, payload) => {
-      const socket = sendSockets[stream % sendSockets.length];
-      await socket.socket.send(socket.peer)
-        .message(rawWire.REQUEST_ENVELOPE)
-        .message(rawWire.encodeBenchPayloadMessage(payload))
-        .submit();
+      const submission = submitSend(stream, payload);
+      if (submission.result === zlink.SubmitResult.Backpressured) {
+        await submission.admitted;
+      }
     },
+    sendSubmission: (stream, payload) => submitSend(stream, payload),
+    backpressuredResult: zlink.SubmitResult.Backpressured,
     close: async () => {
       if (requestSocket !== null) requestSocket.close();
       for (const socket of sendSockets) socket.close();
@@ -277,6 +295,12 @@ async function writeResult(options, observedTrigger, result) {
     `# warmup: ${options.warmup}`,
     ''
   ];
+  for (const error of result.client_error_summary) {
+    lines.push(`client_error: ${error.type}: ${error.message} (${error.count})`);
+  }
+  if (result.client_error_other_count !== 0) {
+    lines.push(`client_error_other: ${result.client_error_other_count}`);
+  }
   const metrics = {
     throughput: result.throughput_per_second,
     bandwidth: result.bandwidth_mb_s,

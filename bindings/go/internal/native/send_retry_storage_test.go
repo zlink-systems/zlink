@@ -28,7 +28,7 @@ func TestSendRetryStoragePreservesSourcesOnPreparationFailure(t *testing.T) {
 func TestSendBuilderPreservesMultipartAcrossInlineBoundary(t *testing.T) {
 	for _, count := range []int{1, 2, 3, 8} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
-			op := newSendBuilder(func(_ context.Context, parts []sendBuilderPart) error {
+			op := newSendBuilder(func(_ context.Context, parts []sendBuilderPart) (SendSubmission, error) {
 				if len(parts) != count {
 					t.Fatalf("got %d parts, want %d", len(parts), count)
 				}
@@ -37,16 +37,16 @@ func TestSendBuilderPreservesMultipartAcrossInlineBoundary(t *testing.T) {
 						t.Fatalf("part %d changed", i)
 					}
 				}
-				return nil
+				return &sendSubmission{result: SubmitOK}, nil
 			})
 			submit := op.Bytes([]byte{0})
 			for i := 1; i < count; i++ {
 				submit = submit.Bytes([]byte{byte(i)})
 			}
-			if err := submit.Submit(context.Background()); err != nil {
+			if err := submitNativeSend(context.Background(), submit); err != nil {
 				t.Fatal(err)
 			}
-			if err := submit.Submit(context.Background()); err == nil {
+			if _, err := submit.Submit(context.Background()); err == nil {
 				t.Fatal("builder accepted second Submit")
 			}
 		})

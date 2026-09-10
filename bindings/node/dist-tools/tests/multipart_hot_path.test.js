@@ -25,7 +25,7 @@ for (const count of [2, 17]) {
             let operation = dealer.request().timeout(1000);
             for (const payload of payloads)
                 operation = operation.message(payload);
-            const pending = operation.submit();
+            const pending = operation.submit().reply;
             // Admission may await WRITABLE. The public owner must keep progressing
             // it while the receiver waits; blocking recv alone cannot run JS retry.
             while (!router.recv(received, zlink.RecvFlags.DontWait)) {
@@ -73,7 +73,7 @@ for (const count of [2, 17]) {
         router.bind('inproc://multipart-observed-data');
         dealer.connect('inproc://multipart-observed-data');
         for (let round = 0; round < 2; ++round) {
-            const pending = dealer.request().message('before').message('').timeout(1000).submit();
+            const pending = dealer.request().message('before').message('').timeout(1000).submit().reply;
             strict_1.default.equal(router.recv(received), true);
             const view = received.parts[0].data();
             view.write('edited');
@@ -104,7 +104,7 @@ for (const count of [2, 17]) {
         const prefix = Buffer.from('prefix');
         const bytes = new Uint8Array([1, 2, 3, 4]).subarray(1, 3);
         const owned = zlink.Message.from('owned');
-        await right.send().message(prefix).message('text').message(bytes).message(owned).submit();
+        await right.send().message(prefix).message('text').message(bytes).message(owned).submit().admitted;
         strict_1.default.equal(owned.size(), 0);
         strict_1.default.equal(prefix.toString(), 'prefix');
         strict_1.default.equal(left.recv(received), true);

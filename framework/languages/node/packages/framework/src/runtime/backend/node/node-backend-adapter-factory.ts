@@ -1,7 +1,6 @@
 import type {
   Context,
   CoreHwmBudgetSnapshot,
-  Received,
   TopicMessage
 } from '@zlink-systems/zlink';
 import type { ZLinkCoreHwmOptions } from '../../../contracts/Configuration';
@@ -11,6 +10,7 @@ import type {
   ZLinkBackendDealerSocket,
   ZLinkBackendPublisherSocket,
   ZLinkBackendReadablePoller,
+  ZLinkBackendReceived,
   ZLinkBackendRouterSocket,
   ZLinkBackendSocket,
   ZLinkBackendSocketMonitor,
@@ -35,7 +35,7 @@ import { ZLinkNodeMeshBackendAdapter } from './node-mesh-backend-adapter';
 export { isDisconnectRouteNotFoundError } from './node-socket-backend-adapter';
 
 export class ZLinkNodeBackendAdapterFactory implements ZLinkBackendAdapterFactory {
-  createReceived(): Received {
+  createReceived(): ZLinkBackendReceived {
     return new zlink.Received();
   }
 

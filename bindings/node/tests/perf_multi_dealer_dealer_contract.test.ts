@@ -98,8 +98,15 @@ async function runDealerDealerFairRoundContract(transport: 'tcp' | 'wss'): Promi
       maxInFlight[index] = Math.max(maxInFlight[index], inFlight[index]);
       let operation = dealer.send();
       for (const part of record) operation = operation.message(part);
-      return operation.submit()
-        .finally(() => { inFlight[index] -= 1; });
+      const submission = operation.submit();
+      if (submission.result === zlink.SubmitResult.Ok) {
+        inFlight[index] -= 1;
+        return submission;
+      }
+      return {
+        result: submission.result,
+        admitted: submission.admitted.finally(() => { inFlight[index] -= 1; }),
+      };
     };
 
     let senderResult = null;
@@ -174,9 +181,15 @@ test('dealer/dealer fair scheduler advances available sockets past a pending adm
     submit: (dealer) => {
       admissions[dealer.id] += 1;
       if (dealer.id === 0 && admissions[dealer.id] === 1) {
-        return slowAdmission;
+        return {
+          result: zlink.SubmitResult.Backpressured,
+          admitted: slowAdmission,
+        };
       }
-      return Promise.resolve();
+      return {
+        result: zlink.SubmitResult.Ok,
+        admitted: Promise.resolve(),
+      };
     },
     yieldTurn: async () => {
       yieldedTurns += 1;
@@ -217,7 +230,10 @@ test('multi measurement records share only the empty tail and stop stays one-par
         },
         submit() {
           submitted.push(parts);
-          return Promise.resolve();
+          return {
+            result: zlink.SubmitResult.Ok,
+            admitted: Promise.resolve(),
+          };
         }
       };
     }

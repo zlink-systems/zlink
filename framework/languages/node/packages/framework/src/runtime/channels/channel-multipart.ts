@@ -16,8 +16,16 @@ export interface ZLinkMultipartSubmitOperation extends ZLinkMultipartOperation<Z
   submit(): unknown;
 }
 
+/**
+ * Binding submit()은 제출 스냅샷을 돌려준다. admission을 기다리려면 `.admitted`를
+ * await 한다. binding 타입과 구조적으로 호환되므로 import 하지 않는다.
+ */
+export interface ZLinkMultipartSubmission {
+  readonly admitted: Promise<void>;
+}
+
 export interface ZLinkMultipartAsyncSubmitOperation extends ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation> {
-  submit(): Promise<void>;
+  submit(): ZLinkMultipartSubmission;
 }
 
 export type ZLinkMultipartReplyOperation = ZLinkMultipartSubmitOperation;

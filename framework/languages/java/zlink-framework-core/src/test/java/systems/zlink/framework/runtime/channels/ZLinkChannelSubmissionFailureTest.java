@@ -25,6 +25,7 @@ import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
+import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 
 final class ZLinkChannelSubmissionFailureTest {
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
@@ -40,8 +41,9 @@ final class ZLinkChannelSubmissionFailureTest {
             ZLinkChannelCallRuntime runtime = runtime(scheduler);
             try {
                 CompletionException failure = assertThrows(CompletionException.class,
-                    () -> new RouteRequestCall(runtime, "orders", router, TARGET, payload,
-                        Optional.of("request"), TIMEOUT)
+                    () -> new RouteRequestCall(runtime, "orders", sockets(router), TIMEOUT,
+                        TARGET, payload, Optional.of("request"), null,
+                        ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE, null)
                         .submit(String.class).toCompletableFuture().join());
 
                 assertEquals(rejection, failure.getCause());
@@ -66,8 +68,10 @@ final class ZLinkChannelSubmissionFailureTest {
                 pending = exhaustCapacity(runtime);
 
                 ZLinkFrameworkException failure = requestFailure(
-                    new RouteRequestCall(runtime, "orders", router, TARGET, payload,
-                        Optional.of("request"), TIMEOUT).submit(String.class));
+                    new RouteRequestCall(runtime, "orders", sockets(router), TIMEOUT,
+                        TARGET, payload, Optional.of("request"), null,
+                        ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE, null)
+                        .submit(String.class));
 
                 assertEquals(ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED, failure.kind());
                 assertEquals(0, attempts.get());
@@ -138,12 +142,15 @@ final class ZLinkChannelSubmissionFailureTest {
             try {
                 IllegalStateException failure = assertThrows(
                     IllegalStateException.class,
-                    () -> new MeshNodeRouteSendCall(
+                    () -> new RouteSendCall(
                         runtime,
-                        node,
+                        "orders",
+                        sockets(node),
                         TARGET,
                         payload,
-                        Optional.of("command")).submit());
+                        Optional.of("command"),
+                        ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
+                        ZLinkApplicationMetadata.empty()).submit());
 
                 assertEquals(rejection, failure);
                 assertEquals(1, attempts.get());
@@ -190,6 +197,12 @@ final class ZLinkChannelSubmissionFailureTest {
     private static ZLinkChannelSocketRegistry sockets(ZLinkInternalSpotNode node) {
         ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
         sockets.registerSpotRouterNode("orders", node);
+        return sockets;
+    }
+
+    private static ZLinkChannelSocketRegistry sockets(ZLinkBackendRouterSocket router) {
+        ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
+        sockets.registerRouteRouter("orders", router);
         return sockets;
     }
 

@@ -25,7 +25,7 @@ final class NativeStreamSocket extends NativeSocketBase implements StreamSocket 
     static {
         FrameworkStreamOperations.register((socket, routingId, parts, timeout) ->
             ((NativeStreamSocket) socket).runtime().submitSend(
-                routingId, parts));
+                routingId, parts).admitted());
     }
 
     private final StreamSocketOptions options = ContractAccess.streamSocketOptions(this);

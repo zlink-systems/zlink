@@ -75,8 +75,10 @@ completion_entry_t::completion_entry_t (
 }
 
 completion_entry_t::completion_entry_t (
-  async_operation_state_t<std::vector<message_t>> *request_result_) :
-    _kind (kind_t::request), _context (this), _request_result (request_result_)
+  async_operation_state_t<std::vector<message_t>> *request_result_,
+  async_operation_state_t<void> *request_admitted_result_) :
+    _kind (kind_t::request), _context (this), _request_result (request_result_),
+    _request_admitted_result (request_admitted_result_)
 {
 }
 
@@ -89,8 +91,10 @@ completion_entry_t::completion_entry_t (
 
 completion_entry_t::completion_entry_t (
   async_operation_state_t<std::vector<message_t>> *request_result_,
+  async_operation_state_t<void> *request_admitted_result_,
   std::unique_ptr<operation_state_t> request_operation_) :
     _kind (kind_t::request), _context (this), _request_result (request_result_),
+    _request_admitted_result (request_admitted_result_),
     _request_operation (std::move (request_operation_))
 {
 }
@@ -125,6 +129,7 @@ void completion_entry_t::fail_send (std::exception_ptr failure_) noexcept
 void completion_entry_t::fail_request (std::exception_ptr failure_) noexcept
 {
     async_operation_state_t<std::vector<message_t>> *result = nullptr;
+    async_operation_state_t<void> *admitted_result = nullptr;
     std::exception_ptr failure = std::move (failure_);
     {
         std::lock_guard<std::mutex> lock (_mutex);
@@ -134,8 +139,11 @@ void completion_entry_t::fail_request (std::exception_ptr failure_) noexcept
         _captured = true;
         _settled = true;
         result = _request_result;
+        admitted_result = _request_admitted_result;
         _changed.notify_all ();
     }
+    if (admitted_result)
+        admitted_result->fail (failure);
     if (result)
         result->fail (std::move (failure));
 }
@@ -209,7 +217,8 @@ void completion_entry_t::detach_send_sources () noexcept
         detach_async_send_sources (*_send_operation);
 }
 
-bool completion_entry_t::submit_request_attempt (bool initial_)
+bool completion_entry_t::submit_request_attempt (bool initial_,
+                                                 bool *admitted_out_)
 {
     {
         std::lock_guard<std::mutex> lock (_mutex);
@@ -240,6 +249,8 @@ bool completion_entry_t::submit_request_attempt (bool initial_)
     }
 
     if (!admitted) {
+        if (admitted_out_)
+            *admitted_out_ = false;
         if (initial_)
             own_async_send_parts (*_request_operation);
         detach_async_send_sources (*_request_operation);
@@ -253,28 +264,39 @@ bool completion_entry_t::submit_request_attempt (bool initial_)
         return false;
     }
 
+    if (admitted_out_)
+        *admitted_out_ = true;
+
     std::unique_ptr<operation_state_t> admitted_operation;
+    async_operation_state_t<void> *admitted_result = nullptr;
     {
         std::lock_guard<std::mutex> lock (_mutex);
         admitted_operation = std::move (_request_operation);
-        if (_settled) {
-            _changed.notify_all ();
-        } else {
-            _completion_id = completion_id;
-            _request_waiting_writable = false;
-            _published = true;
-            _changed.notify_all ();
-        }
+        admitted_result = _request_admitted_result;
+        _request_waiting_writable = false;
     }
     release_state (std::move (admitted_operation));
+    if (admitted_result)
+        admitted_result->complete ();
+    {
+        std::unique_lock<std::mutex> lock (_mutex);
+        if (!_settled) {
+            _completion_id = completion_id;
+            _published = true;
+            settle_if_joined (lock);
+        }
+        _changed.notify_all ();
+    }
     return false;
 }
 
-void completion_entry_t::start_request ()
+bool completion_entry_t::start_request ()
 {
     if (_kind != kind_t::request || !_request_operation)
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
-    (void) submit_request_attempt (true);
+    bool admitted = false;
+    (void) submit_request_attempt (true, &admitted);
+    return admitted;
 }
 
 void completion_entry_t::publish (uint64_t completion_id_) noexcept

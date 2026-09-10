@@ -279,7 +279,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     await appendSendParts(
       this.socket.send(bindingRoutingId(targetRid)),
       parts
-    ).submit();
+    ).submit().admitted;
   }
 
   async request(
@@ -291,7 +291,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     try {
       const replies = await appendRequestParts(this.socket.request(bindingRoutingId(targetRid)), parts)
         .timeout(timeoutMs)
-        .submit();
+        .submit().reply;
       return copyAndClose(replies);
     } catch (error) {
       throw translateBindingResultError(error);
@@ -332,12 +332,12 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
 
   async send(parts: readonly Uint8Array[]): Promise<void> {
     this.requireOpen();
-    await appendSendParts(this.socket.send(), parts).submit();
+    await appendSendParts(this.socket.send(), parts).submit().admitted;
   }
 
   async request(parts: readonly Uint8Array[], timeoutMs: number): Promise<readonly Buffer[]> {
     this.requireOpen();
-    const replies = await appendRequestParts(this.socket.request(), parts).timeout(timeoutMs).submit();
+    const replies = await appendRequestParts(this.socket.request(), parts).timeout(timeoutMs).submit().reply;
     return copyAndClose(replies);
   }
 

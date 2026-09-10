@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <csignal>
 #include <condition_variable>
+#include <cxxabi.h>
 
 #include "bench.grpc.pb.h"
 #include "bench.pb.h"
@@ -24,7 +25,9 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <typeinfo>
 #include <type_traits>
 #include <vector>
 
@@ -95,14 +98,25 @@ struct options_t
 // per-cell measurement state
 // ---------------------------------------------------------------------------
 
+struct error_record_t
+{
+    std::string type;
+    std::string message;
+    long long count = 0;
+};
+
 struct counters_t
 {
+    static constexpr size_t error_kind_limit = 8;
+    static constexpr size_t error_message_limit = 200;
     std::atomic<long long> completed {0};
     std::atomic<long long> errors {0};
     std::atomic<long long> submitted {0};
     std::atomic<long long> header_failures {0};
     std::atomic<long long> outstanding {0};
     std::atomic<long long> peak_in_flight {0};
+    std::vector<error_record_t> error_summary;
+    long long other_errors = 0;
 
     void enter ()
     {
@@ -115,6 +129,34 @@ struct counters_t
 
     void leave () { outstanding.fetch_sub (1, std::memory_order_acq_rel); }
 
+    void record_error (std::string type, std::string message)
+    {
+        errors.fetch_add (1, std::memory_order_relaxed);
+        std::replace (message.begin (), message.end (), '\r', ' ');
+        std::replace (message.begin (), message.end (), '\n', ' ');
+        if (message.size () > error_message_limit)
+            message.resize (error_message_limit);
+        const auto found = std::find_if (
+          error_summary.begin (), error_summary.end (), [&] (const error_record_t &entry) {
+              return entry.type == type && entry.message == message;
+          });
+        if (found != error_summary.end ())
+            ++found->count;
+        else if (error_summary.size () < error_kind_limit)
+            error_summary.push_back ({std::move (type), std::move (message), 1});
+        else
+            ++other_errors;
+    }
+
+    void record_exception (const std::exception &error)
+    {
+        int status = 0;
+        std::unique_ptr<char, decltype (&std::free)> demangled (
+          abi::__cxa_demangle (typeid (error).name (), nullptr, nullptr, &status), &std::free);
+        record_error (status == 0 && demangled ? demangled.get () : typeid (error).name (),
+                      error.what ());
+    }
+
     void reset ()
     {
         completed.store (0);
@@ -122,6 +164,8 @@ struct counters_t
         submitted.store (0);
         header_failures.store (0);
         peak_in_flight.store (0);
+        error_summary.clear ();
+        other_errors = 0;
         // `outstanding` is deliberately NOT reset: requests issued during warmup
         // that are still open are genuinely still open when the active window
         // starts, and zeroing the counter here would hide them.
@@ -278,7 +322,11 @@ class grpc_driver_t : public driver_t
                     counters.completed.fetch_add (1, std::memory_order_relaxed);
                 }
             } else {
-                counters.errors.fetch_add (1, std::memory_order_relaxed);
+                const std::string message = ok
+                  ? "code " + std::to_string (call->status.error_code ()) + ": "
+                      + call->status.error_message ()
+                  : "completion queue event was not ok";
+                counters.record_error ("grpc::Status", message);
             }
             delete call;
         };
@@ -384,7 +432,7 @@ bool grpc_driver_t::validate<zlink::framework::bench::withgrpc::BenchPayload> (
         || header.run_id != _run_id || header.phase != static_cast<uint8_t> (phase) || header.seq != seq
         || header.payload_size != size || reply.body ().size () != size) {
         counters.header_failures.fetch_add (1, std::memory_order_relaxed);
-        counters.errors.fetch_add (1, std::memory_order_relaxed);
+        counters.record_error ("ValidationError", "gRPC reply header mismatch");
         return false;
     }
     return true;
@@ -463,12 +511,6 @@ class zlink_raw_driver_t : public driver_t
             run_slots (deadline, payload_size, phase, counters, latency, _window);
     }
 
-    // The cooperative-yield variant of request-backpressure. The public async
-    // request terminal absorbs admission backpressure instead of returning it,
-    // so nothing here can submit "until refused". What it does instead is
-    // submit continuously and hand control to the completion pump after every
-    // submission, so depth settles where the submission and completion rates
-    // balance rather than at a number this harness chose.
     void run_unbounded (clock_t_::time_point deadline,
                         size_t payload_size,
                         phase_t phase,
@@ -481,33 +523,26 @@ class zlink_raw_driver_t : public driver_t
         _counters = &counters;
         _latency = latency;
 
-        std::vector<task_t> live;
+        std::vector<task_t> replies;
+        task_t submitter = request_submitter (replies);
         const auto hard_stop = deadline + std::chrono::milliseconds (_options.drain_bound_ms);
         std::vector<zlink::poll_event_t> events (4);
         for (;;) {
             const auto now = clock_t_::now ();
             close_window (deadline);
-            if (now < deadline)
-                live.push_back (request_once (_seq++));
-
-            // Run every continuation that is ready, then drop the finished
-            // tasks so an uncapped run does not grow this vector without bound.
             const size_t resumed = _ready.run_ready_round ();
-            live.erase (std::remove_if (live.begin (), live.end (),
-                                        [] (const task_t &t) { return t.done (); }),
-                        live.end ());
+            replies.erase (std::remove_if (replies.begin (), replies.end (),
+                                           [] (const task_t &t) { return t.done (); }),
+                           replies.end ());
 
-            if (now >= deadline && live.empty ())
+            if (submitter.done () && replies.empty ())
                 break;
             if (now >= hard_stop)
                 break;
 
-            // Never block while submission is still possible; that would cap
-            // the submission rate at one per timeout and impose a ceiling by
-            // the back door.
             const std::chrono::milliseconds wait =
-              (now < deadline || resumed != 0) ? std::chrono::milliseconds (0)
-                                               : std::chrono::milliseconds (1);
+              resumed != 0 ? std::chrono::milliseconds (0)
+                           : std::chrono::milliseconds (1);
             _poller.wait (events.data (), events.size (), wait);
         }
 
@@ -600,45 +635,92 @@ class zlink_raw_driver_t : public driver_t
             _counters->enter ();
             _counters->submitted.fetch_add (1, std::memory_order_relaxed);
             try {
-                std::vector<zlink::message_t> reply =
-                  co_await request_operation ()
+                zlink::request_submission_t submission =
+                  request_operation ()
                     .message (parts.first)
                     .message (parts.second)
                     .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
                     .async ();
+                if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
+                    co_await std::move (submission.admitted);
+                else if (submission.result != ZLINK_SUBMIT_OK)
+                    throw std::logic_error ("unexpected request submit result");
+                std::vector<zlink::message_t> reply =
+                  co_await std::move (submission.reply);
                 _counters->leave ();
                 record_reply (reply, seq);
             }
             catch (const std::exception &error) {
-                if (_counters->errors.load () == 0) std::fprintf (stderr, "raw operation failed: %s\n", error.what ());
                 _counters->leave ();
-                _counters->errors.fetch_add (1, std::memory_order_relaxed);
+                _counters->record_exception (error);
             }
         }
     }
 
-    // One request, then the coroutine finishes. request_slot loops forever and
-    // so is a fixed slot; this is what an uncapped submitter spawns.
-    task_t request_once (uint64_t seq)
+    task_t observe_request_reply (zlink::async_result_t<std::vector<zlink::message_t>> reply_,
+                                  uint64_t seq)
     {
         co_await _ready.schedule ();
-        auto parts = make_parts (_payload_size, _phase, seq);
-        _counters->enter ();
-        _counters->submitted.fetch_add (1, std::memory_order_relaxed);
         try {
             std::vector<zlink::message_t> reply =
-              co_await request_operation ()
-                .message (parts.first)
-                .message (parts.second)
-                .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
-                .async ();
+              co_await std::move (reply_);
             _counters->leave ();
             record_reply (reply, seq);
         }
         catch (const std::exception &error) {
-                if (_counters->errors.load () == 0) std::fprintf (stderr, "raw operation failed: %s\n", error.what ());
             _counters->leave ();
-            _counters->errors.fetch_add (1, std::memory_order_relaxed);
+            _counters->record_exception (error);
+        }
+    }
+
+    task_t request_submitter (std::vector<task_t> &replies)
+    {
+        co_await _ready.schedule ();
+        size_t submitted_since_progress = 0;
+        while (clock_t_::now () < _deadline) {
+            const uint64_t seq = _seq++;
+            auto parts = make_parts (_payload_size, _phase, seq);
+            _counters->enter ();
+            _counters->submitted.fetch_add (1, std::memory_order_relaxed);
+            bool yield_after_error = false;
+            try {
+                zlink::request_submission_t submission =
+                  request_operation ()
+                    .message (parts.first)
+                    .message (parts.second)
+                    .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
+                    .async ();
+                const bool backpressured =
+                  submission.result == ZLINK_SUBMIT_BACKPRESSURED;
+                if (submission.result != ZLINK_SUBMIT_OK && !backpressured)
+                    throw std::logic_error ("unexpected request submit result");
+                replies.push_back (
+                  observe_request_reply (std::move (submission.reply), seq));
+                if (backpressured) {
+                    try {
+                        co_await std::move (submission.admitted);
+                    }
+                    catch (...) {
+                        co_return;
+                    }
+                }
+            }
+            catch (const std::exception &error) {
+                _counters->leave ();
+                // record_exception이 개수와 (타입, 메시지)를 함께 집계한다(#133).
+                _counters->record_exception (error);
+                yield_after_error = true;
+            }
+            // co_await는 예외 handler 안에서 쓸 수 없다. 집계는 handler가 하고
+            // 양보는 handler를 벗어난 뒤에 한다. 의미는 같다(#137).
+            if (yield_after_error) {
+                co_await _ready.schedule ();
+                continue;
+            }
+            if (++submitted_since_progress == 64) {
+                submitted_since_progress = 0;
+                co_await _ready.schedule ();
+            }
         }
     }
 
@@ -651,21 +733,21 @@ class zlink_raw_driver_t : public driver_t
             _counters->enter ();
             _counters->submitted.fetch_add (1, std::memory_order_relaxed);
             try {
-                co_await send_operation ()
+                zlink::send_submission_t submission = send_operation ()
                   .message (parts.first)
                   .message (parts.second)
                   .async ();
+                if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
+                    co_await std::move (submission.admitted);
+                else if (submission.result != ZLINK_SUBMIT_OK)
+                    throw std::logic_error ("unexpected send submit result");
                 _counters->leave ();
                 _counters->completed.fetch_add (1, std::memory_order_relaxed);
             }
             catch (const std::exception &error) {
-                if (_counters->errors.load () == 0) std::fprintf (stderr, "raw operation failed: %s\n", error.what ());
                 _counters->leave ();
-                _counters->errors.fetch_add (1, std::memory_order_relaxed);
+                _counters->record_exception (error);
             }
-            // A send can complete synchronously. Yield each stream's turn so
-            // that the first coroutine cannot consume all eight streams' time.
-            co_await _ready.schedule ();
         }
     }
 
@@ -673,7 +755,7 @@ class zlink_raw_driver_t : public driver_t
     void record_reply (const std::vector<zlink::message_t> &reply, uint64_t seq)
     {
         if (reply.empty ()) {
-            _counters->errors.fetch_add (1, std::memory_order_relaxed);
+            _counters->record_error ("ValidationError", "raw request returned no reply parts");
             return;
         }
         const zlink::message_t &body = reply.back ();
@@ -684,7 +766,7 @@ class zlink_raw_driver_t : public driver_t
             || header.run_id != _run_id || header.phase != _phase
             || header.payload_size != _payload_size || payload.body ().size () != _payload_size || header.seq != seq) {
             _counters->header_failures.fetch_add (1, std::memory_order_relaxed);
-            _counters->errors.fetch_add (1, std::memory_order_relaxed);
+            _counters->record_error ("ValidationError", "raw reply header mismatch");
             return;
         }
         const uint64_t now = now_ns ();
@@ -867,9 +949,10 @@ class framework_driver_t final : public driver_t
                     ++counters.completed;
                     if (latency) latency->add_us (static_cast<double> (now_ns () - item.sent_ns) / 1000.0);
                 } else {
-                    ++counters.errors;
-                    if (counters.errors.load () == 1 && !result)
-                        std::fprintf (stderr, "framework operation failed: %s\n", result.error ()->what ());
+                    if (result)
+                        counters.record_error ("ValidationError", "Framework reply header mismatch");
+                    else
+                        counters.record_exception (*result.error ());
                 }
                 counters.leave ();
                 pending[slot].reset ();
@@ -1140,11 +1223,21 @@ class source_t
              : "one application thread; Framework task completion notifications"}};
         value["completed_at_close"] = completed_at_close;
         value["active_elapsed_ms"] = elapsed * 1000;
+        value["client_error_summary"] = json::array ();
+        for (const auto &error : _counters.error_summary)
+            value["client_error_summary"].push_back (
+              {{"type", error.type}, {"message", error.message}, {"count", error.count}});
+        value["client_error_other_count"] = _counters.other_errors;
         std::ofstream output (temporary, std::ios::trunc);
         output << record.dump (2) << '\n';
         output.close ();
         if (!output) throw std::runtime_error ("cannot write source result");
         std::filesystem::rename (temporary, _options.output_file);
+        for (const auto &error : _counters.error_summary)
+            std::fprintf (stdout, "client_error: %s: %s (%lld)\n", error.type.c_str (),
+                          error.message.c_str (), error.count);
+        if (_counters.other_errors != 0)
+            std::fprintf (stdout, "client_error_other: %lld\n", _counters.other_errors);
         print_result_lines (stdout, cell);
         std::fflush (stdout);
     }

@@ -9,6 +9,7 @@ import type {
   ReplyOperation,
   ReplySubmitOperation,
   SendOperation,
+  SendSubmission,
   SendSubmitOperation,
 } from '../../contracts/messaging/operations';
 import { PartOperationBase } from './send_operation_base';
@@ -19,12 +20,12 @@ class RuntimeReceivedSendOperation
 
   constructor(
     private readonly _invoke: (parts: readonly Message[]) => void,
-    private readonly _invokeAsync: (parts: readonly Message[]) => Promise<void>
+    private readonly _invokeAsync: (parts: readonly Message[]) => SendSubmission
   ) {
     super((message) => message instanceof Message ? message : Message.from(message));
   }
 
-  submit(): Promise<void> {
+  submit(): SendSubmission {
     return this._invokeAsync(this.consumeParts());
   }
 
@@ -56,7 +57,7 @@ class RuntimeReceivedReplyOperation
 
 export function createReceivedSendOperation(
   invoke: (parts: readonly Message[]) => void,
-  invokeAsync: (parts: readonly Message[]) => Promise<void>
+  invokeAsync: (parts: readonly Message[]) => SendSubmission
 ): SendOperation {
   return new RuntimeReceivedSendOperation(invoke, invokeAsync);
 }

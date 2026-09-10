@@ -451,14 +451,12 @@ async def send_routed(
     routing_id=None,
     measurement=True,
     method="send",
-    _yield_after_submit=True,
 ):
     """Submit one HWM-managed send through the public async terminal.
 
-    PERF_MULTI_TEST_POLICY.md:61-71 and :92-93 forbid driving an HWM-managed
-    send through the synchronous terminal: the awaited terminal completes at
-    the Core admission result (bindings/doc/spec/async-coroutine-policy.ko.md
-    § 1), so the caller resumes at admission and never waits for the echo.
+    Immediate admission returns without scheduler pacing. Backpressure waits
+    only for this socket's binding-owned admission stage; it never waits for
+    an echo or retries outside the binding.
     """
 
     send_method = getattr(sock, method)
@@ -469,15 +467,9 @@ async def send_routed(
         op.messages(*payload)
     else:
         op.message(payload)
-    await op.submit()
-
-    # Immediate admission does not suspend the coroutine. Yield one scheduler
-    # turn for continuous send loops without a sleep or timer.
-    if _yield_after_submit:
-        loop = asyncio.get_running_loop()
-        resumed = loop.create_future()
-        loop.call_soon(resumed.set_result, None)
-        await resumed
+    submission = op.submit()
+    if submission.result == _require_zlink().SubmitResult.BACKPRESSURED:
+        await submission.admitted
     return True
 
 
@@ -530,7 +522,9 @@ class RoutedReplySender:
                 received = self._pending.popleft()
                 try:
                     try:
-                        await received.send().messages(*received.parts).submit()
+                        submission = received.send().messages(*received.parts).submit()
+                        if submission.result == zlink_mod.SubmitResult.BACKPRESSURED:
+                            await submission.admitted
                     except zlink_mod.SubmitError as exc:
                         if exc.result not in self._ignored_results:
                             raise

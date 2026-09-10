@@ -43,8 +43,8 @@ class TokenlessBackpressureContractTest {
             for (boolean request : new boolean[] {false, true}) {
                 core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.BACKPRESSURED, NativeErrno.EAGAIN, 31));
                 var waiter = request
-                    ? dealer.request().message(Message.from("retry")).timeout(Duration.ofSeconds(2)).submit().toCompletableFuture()
-                    : dealer.send().message(Message.from("retry")).submit().toCompletableFuture();
+                    ? dealer.request().message(Message.from("retry")).timeout(Duration.ofSeconds(2)).submit().reply().toCompletableFuture()
+                    : dealer.send().message(Message.from("retry")).submit().admitted().toCompletableFuture();
                 core.writable(core.submissions.getLast(), 0);
                 core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.BACKPRESSURED, NativeErrno.EAGAIN, 0));
                 assertEquals(1, owner.drain());

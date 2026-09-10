@@ -117,7 +117,10 @@ async function sendServerReply(received) {
     for (const part of received.parts) {
       reply = reply.message(part);
     }
-    await reply.submit();
+    const submission = reply.submit();
+    if (submission.result === zlink.SubmitResult.Backpressured) {
+      await submission.admitted;
+    }
     return true;
   } catch (error) {
     if (error instanceof zlink.SubmitError
@@ -146,22 +149,20 @@ async function runRoutedSendSendRounds({
 }) {
   let seq = 1n;
   let nextSocket = 0;
-  let pendingCount = 0;
   let failure = null;
   const available = sockets.map(() => true);
+  const blocked = new Map();
 
   const submitOne = (index) => {
     available[index] = false;
-    pendingCount += 1;
     replyDrain?.submitted();
-    let admission;
+    let submission;
     try {
-      admission = submit(
+      submission = submit(
         sockets[index], routerClient, measurementRecords[index]
       );
     } catch (error) {
       available[index] = true;
-      pendingCount -= 1;
       try {
         replyDrain?.admissionRejected();
       } catch (drainError) {
@@ -172,14 +173,13 @@ async function runRoutedSendSendRounds({
       return;
     }
 
-    Promise.resolve(admission).then(
-      () => {
-        available[index] = true;
-        pendingCount -= 1;
-      },
+    if (submission.result === zlink.SubmitResult.Ok) {
+      available[index] = true;
+      return;
+    }
+    const admission = submission.admitted.then(
+      () => { available[index] = true; },
       (error) => {
-        available[index] = true;
-        pendingCount -= 1;
         try {
           replyDrain?.admissionRejected();
         } catch (drainError) {
@@ -188,7 +188,8 @@ async function runRoutedSendSendRounds({
         }
         failure ??= error;
       }
-    );
+    ).finally(() => blocked.delete(index));
+    blocked.set(index, admission);
   };
 
   while (!failure && nowNs() < activeStopNs) {
@@ -203,38 +204,39 @@ async function runRoutedSendSendRounds({
       stampPayload(payloads[index], {
         phase: 1, runId, msgSize, seq: currentSeq
       });
-      // A socket owns one stable record until its own public admission
-      // settles. A backpressured retry does not gate another socket's submit.
+      // OK keeps the socket runnable without a Promise turn. BACKPRESSURED
+      // removes only this socket until its admitted stage resolves.
       submitOne(index);
     }
     if (sockets.length > 0) {
       nextSocket = (sendStart + 1) % sockets.length;
     }
 
-    // Receive progress is independent of any one admission Promise. It also
-    // releases HWM credit for binding-owned WRITABLE retries.
-    await drainReplies();
-    await yieldTurn();
+    if (blocked.size === sockets.length) {
+      await drainReplies();
+      await Promise.race(blocked.values());
+    }
   }
 
   // The active deadline stops new records. Keep receive/retry progress alive
   // inside the existing teardown deadline. Once admissions have settled, the
   // poller can wait for echoes without delaying a Promise continuation.
-  while (pendingCount > 0 || (replyDrain?.pending ?? 0) > 0) {
+  while (blocked.size > 0 || (replyDrain?.pending ?? 0) > 0) {
     const remainingNs = BigInt(sendDrainStopNs) - BigInt(nowNs());
     if (remainingNs <= 0n) break;
-    const waitMs = pendingCount === 0
+    const waitMs = blocked.size === 0
       ? Math.max(1, Number(remainingNs / 1_000_000n))
       : 0;
     await drainReplies(waitMs);
-    await yieldTurn();
+    if (blocked.size > 0) await Promise.race(blocked.values());
+    else await yieldTurn();
   }
 
   if (failure) throw failure;
-  if (pendingCount > 0 || (replyDrain?.pending ?? 0) > 0) {
+  if (blocked.size > 0 || (replyDrain?.pending ?? 0) > 0) {
     throw new Error(
       'multi routed send admission or echo drain timed out '
-      + `(echoes=${replyDrain?.pending ?? 0}, admissions=${pendingCount})`
+      + `(echoes=${replyDrain?.pending ?? 0}, admissions=${blocked.size})`
     );
   }
 
@@ -430,7 +432,7 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
 
     await readyBarrier;
     while (!stopController.signal.aborted) {
-      // Pending public send Promises and stdin both run on this event loop.
+      // Pending public admission stages and stdin both run on this event loop.
       // A zero-time readiness probe followed by setImmediate keeps those
       // signal-driven continuations runnable without a timer pump.
       const ready = waitPollerOne(poller, pollBuffer, 0);
@@ -469,10 +471,8 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
       await sleepImmediate();
       if (sendFailure) throw sendFailure;
     }
-    // Node SEND admission is asynchronous: sendRouted() returns the Promise
-    // from op.submit(). STOP therefore does not block the event loop, but an
-    // unconditional await here can still wait forever for a departed peer's
-    // WRITABLE token. Give the already-owned reply the same bounded post-STOP
+    // Only backpressured sends contribute a pending admission task. Give the
+    // already-owned reply the same bounded post-STOP
     // drain as the C relay, while reserving time for socket/context teardown.
     const drainMs = relayShutdownDrainMs();
     const drainDeadlineNs = currentEpochNs() + BigInt(drainMs) * 1_000_000n;
@@ -488,7 +488,7 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
       );
       console.error(
         '[perf-multi-relay] reply abandoned after shutdown drain; '
-        + 'socket close will terminate its admission Promise'
+        + 'socket close will terminate its admission stage'
       );
     }
   } finally {

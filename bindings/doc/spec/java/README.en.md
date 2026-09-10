@@ -1001,7 +1001,7 @@ bridge details.
 
 Java package information follows its [distribution metadata](../../../java/build.gradle); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-Java provides blocking `submit_sync()` and `submit()` returning `CompletionStage`.
+Java provides blocking `submit_sync()` and `submit()` returning a result object (`SendSubmission`/`RequestSubmission`: `result` and `admitted`, plus `reply` for a request).
 Kotlin uses the same Java contract without an independent native ABI or token wrapper.
 Caller wait cancellation is expressed through stage cancellation.
 
@@ -1020,16 +1020,27 @@ first bind/connect, the `recvMode` setter accepts only `RAW` and `PACKET` and re
 ### Public interface
 
 ```java
+public interface SendSubmission {
+    SubmitResult result();              // OK | BACKPRESSURED, submit-time snapshot
+    CompletionStage<Void> admitted();   // completed when result is OK
+}
+
+public interface RequestSubmission {
+    SubmitResult result();
+    CompletionStage<Void> admitted();
+    CompletionStage<List<Message>> reply();   // completes after successful admission
+}
+
 public interface SendSubmitOperation {
     SendSubmitOperation message(Message part);
-    CompletionStage<Void> submit();
+    SendSubmission submit();
     void submit_sync();
 }
 
 public interface RequestSubmitOperation {
     RequestSubmitOperation message(Message part);
     RequestSubmitOperation timeout(Duration timeout);
-    CompletionStage<List<Message>> submit();
+    RequestSubmission submit();
     List<Message> submit_sync();
 }
 

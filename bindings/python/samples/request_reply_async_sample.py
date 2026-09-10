@@ -37,11 +37,11 @@ async def main():
                         dealer_socket.connect(endpoint)
                         wait_connected(router_monitor, dealer_monitor)
 
-                pending_reply = asyncio.create_task(
+                submission = (
                     dealer_socket.request().message(b"ping").timeout(2.0).submit()
                 )
                 await asyncio.to_thread(respond, router_socket)
-                reply = await pending_reply
+                reply = await submission.reply
                 try:
                     if [part.to_bytes() for part in reply] != [b"pong"]:
                         raise AssertionError("unexpected reply payload")

@@ -1,15 +1,5 @@
 package systems.zlink.perf.multi;
 
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.atomic.AtomicReferenceArray;
-import org.junit.jupiter.api.Test;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -17,100 +7,113 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class PerfMultiTargetCoordinatorTest {
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceArray;
+import org.junit.jupiter.api.Test;
+import systems.zlink.contracts.messaging.SendSubmission;
+import systems.zlink.contracts.sockets.SubmitResult;
+
+class PerfMultiRoutedSendCoordinatorTest {
     @Test
-    void inlineTerminalsAdvanceOneSocketPerRoundUntilRetryWait() {
+    void okImmediatelyKeepsSocketAvailableWithoutReadingAdmissionStage() {
         List<Integer> order = new ArrayList<>();
         AtomicReferenceArray<CompletableFuture<Void>> pending =
             new AtomicReferenceArray<>(3);
+        AtomicInteger admittedReads = new AtomicInteger();
         int[] submissions = new int[3];
-        var admissions = new PerfMultiTargetCoordinator.AdmissionRoundRobin(
-            3, Long.MAX_VALUE, index -> {
-                order.add(index);
-                if (++submissions[index] == 1) {
-                    return CompletableFuture.completedFuture(null);
-                }
-                CompletableFuture<Void> stage = new CompletableFuture<>();
-                pending.set(index, stage);
-                return stage;
-            });
+        var coordinator = coordinator(3, index -> {
+            order.add(index);
+            if (++submissions[index] == 1) {
+                return okSubmission(admittedReads);
+            }
+            CompletableFuture<Void> stage = new CompletableFuture<>();
+            pending.set(index, stage);
+            return backpressuredSubmission(stage);
+        });
 
-        assertTrue(admissions.submitRound());
+        assertTrue(coordinator.submitRound());
         assertEquals(List.of(0, 1, 2), order);
-        assertTrue(admissions.submitRound());
+        assertEquals(0, admittedReads.get(),
+            "OK must not inspect or await admitted()");
+        assertTrue(coordinator.submitRound());
         assertEquals(List.of(0, 1, 2, 1, 2, 0), order,
-            "each round rotates its first socket and submits each socket once");
-        assertFalse(admissions.submitRound(),
-            "sends awaiting WRITABLE retry must not be submitted again");
+            "OK sockets remain immediately eligible in rotating order");
+        assertFalse(coordinator.submitRound(),
+            "only BACKPRESSURED sockets become unavailable");
 
         for (int index = 0; index < 3; index++) {
             pending.get(index).complete(null);
         }
         order.clear();
-        assertTrue(admissions.submitRound());
-        assertEquals(List.of(0, 1, 2), order,
-            "completed retry makes sockets available to the coordinator");
+        assertTrue(coordinator.submitRound());
+        assertEquals(List.of(0, 1, 2), order);
     }
 
     @Test
-    void admissionOnlyModeBurstsInlineTerminalsUntilRetryWait() {
-        List<Integer> order = new ArrayList<>();
-        int[] submissions = new int[2];
-        var admissions = new PerfMultiTargetCoordinator.AdmissionRoundRobin(
-            2, Long.MAX_VALUE, index -> {
-                order.add(index);
-                if (++submissions[index] == 1) {
-                    return CompletableFuture.completedFuture(null);
-                }
-                return new CompletableFuture<>();
-            }, false, true);
-
-        assertTrue(admissions.submitRound());
-        assertEquals(List.of(0, 0, 1, 1), order);
-        assertFalse(admissions.submitRound());
-    }
-
-    @Test
-    void terminalCompletionOnlyPublishesReadinessToCoordinatorThread()
+    void admissionCompletionOnlyPublishesReadinessToCoordinatorThread()
         throws Exception {
-        Thread coordinatorThread = Thread.currentThread();
+        Thread callerThread = Thread.currentThread();
         List<Thread> submitThreads = new ArrayList<>();
         List<CompletableFuture<Void>> stages = new ArrayList<>();
-        var admissions = new PerfMultiTargetCoordinator.AdmissionRoundRobin(
-            1, Long.MAX_VALUE, index -> {
-                submitThreads.add(Thread.currentThread());
-                CompletableFuture<Void> stage = new CompletableFuture<>();
-                stages.add(stage);
-                return stage;
-            });
+        var coordinator = coordinator(1, index -> {
+            submitThreads.add(Thread.currentThread());
+            CompletableFuture<Void> stage = new CompletableFuture<>();
+            stages.add(stage);
+            return backpressuredSubmission(stage);
+        });
 
-        assertTrue(admissions.submitRound());
+        assertTrue(coordinator.submitRound());
         Thread completionThread = new Thread(() -> stages.get(0).complete(null),
             "test-admission-completion");
         completionThread.start();
         completionThread.join();
 
-        assertTrue(admissions.submitRound(),
-            "send completion after WRITABLE retry enables the next submit");
-        assertEquals(List.of(coordinatorThread, coordinatorThread),
-            submitThreads,
+        assertTrue(coordinator.submitRound());
+        assertEquals(List.of(callerThread, callerThread), submitThreads,
             "completion threads must never submit directly");
     }
 
     @Test
-    void teardownKeepsReceivingWhileASendTerminalIsOutstanding() {
-        // The echo relay holds one reply under Core admission and stops
-        // pulling requests until it is admitted, so a client that blocks on
-        // its own send terminals without receiving deadlocks the pair. The
-        // teardown wait must keep taking receive turns (C echo client drain,
-        // .NET PerfMultiEchoReplyDrain.WaitAsync).
+    void backpressureOnOneSocketDoesNotStopOtherSockets() {
+        CompletableFuture<Void> blocked = new CompletableFuture<>();
+        AtomicInteger admittedReads = new AtomicInteger();
+        int[] submissions = new int[2];
+        var coordinator = coordinator(2, index -> {
+            submissions[index]++;
+            return index == 0
+                ? backpressuredSubmission(blocked)
+                : okSubmission(admittedReads);
+        });
+
+        assertTrue(coordinator.submitRound());
+        assertTrue(coordinator.submitRound());
+        assertEquals(1, submissions[0]);
+        assertEquals(2, submissions[1],
+            "an OK socket must continue while its peer waits for admission");
+        assertEquals(0, admittedReads.get());
+
+        blocked.complete(null);
+        assertTrue(coordinator.submitRound());
+        assertEquals(2, submissions[0]);
+    }
+
+    @Test
+    void teardownKeepsReceivingWhileBackpressuredAdmissionIsOutstanding() {
         CompletableFuture<Void> stage = new CompletableFuture<>();
-        var admissions = new PerfMultiTargetCoordinator.AdmissionRoundRobin(
-            1, Long.MAX_VALUE, index -> stage, true, false);
-        assertTrue(admissions.submitRound());
+        var coordinator = coordinator(1,
+            index -> backpressuredSubmission(stage));
+        assertTrue(coordinator.submitRound());
 
         int[] turns = {0};
-        long drained = admissions.awaitLatestWhileReceiving(
+        long drained = coordinator.awaitPendingWhileReceiving(
             Duration.ofSeconds(5), "test teardown drain", 0L, waitMillis -> {
                 if (++turns[0] == 3) {
                     stage.complete(null);
@@ -118,67 +121,54 @@ class PerfMultiTargetCoordinatorTest {
                 return 2;
             });
 
-        assertEquals(3, turns[0],
-            "the wait must take receive turns until the terminal arrives");
-        assertEquals(6L, drained, "every consumed reply is reported");
-        assertEquals(0, admissions.pendingCount());
+        assertEquals(3, turns[0]);
+        assertEquals(6L, drained);
+        assertEquals(0, coordinator.pendingCount());
     }
 
     @Test
-    void teardownKeepsReceivingUntilTheOwedEchoesArrive() {
-        // Every admitted request owes one echo. Leaving those echoes in the
-        // client receive queue strands the relay's last reply under admission,
-        // so the window must not end at the send terminal. C drains on
-        // `tracker_has_retained_sends || tracker_has_pending_replies`.
-        var admissions = new PerfMultiTargetCoordinator.AdmissionRoundRobin(
-            1, Long.MAX_VALUE,
-            index -> CompletableFuture.completedFuture(null), true, false);
-        assertTrue(admissions.submitRound());
-        assertEquals(1L, admissions.admittedCount());
+    void teardownKeepsReceivingUntilOwedEchoArrivesAfterOk() {
+        var coordinator = coordinator(1,
+            index -> okSubmission(new AtomicInteger()));
+        assertTrue(coordinator.submitRound());
+        assertEquals(1L, coordinator.admittedCount());
 
         int[] turns = {0};
-        long drained = admissions.awaitLatestWhileReceiving(
+        long drained = coordinator.awaitPendingWhileReceiving(
             Duration.ofSeconds(5), "test teardown drain", 0L,
             waitMillis -> ++turns[0] < 3 ? 0 : 1);
 
-        assertEquals(3, turns[0],
-            "the terminal alone must not end the window while an echo is owed");
+        assertEquals(3, turns[0]);
         assertEquals(1L, drained);
     }
 
     @Test
-    void teardownReceivesUntilTheBoundedWindowExpiresThenReportsTheTimeout() {
-        var admissions = new PerfMultiTargetCoordinator.AdmissionRoundRobin(
-            1, Long.MAX_VALUE, index -> new CompletableFuture<Void>(),
-            true, false);
-        assertTrue(admissions.submitRound());
+    void teardownReportsTimeoutForOutstandingBackpressure() {
+        var coordinator = coordinator(1,
+            index -> backpressuredSubmission(new CompletableFuture<>()));
+        assertTrue(coordinator.submitRound());
 
         int[] turns = {0};
         IllegalStateException failure = assertThrows(IllegalStateException.class,
-            () -> admissions.awaitLatestWhileReceiving(
+            () -> coordinator.awaitPendingWhileReceiving(
                 Duration.ofMillis(200), "test teardown drain", 0L,
                 waitMillis -> {
                     turns[0]++;
                     return 0;
                 }));
 
-        assertTrue(failure.getMessage().endsWith(" timed out"),
-            "the bounded window still reports the policy timeout: "
-                + failure.getMessage());
-        assertTrue(turns[0] > 0,
-            "the window must be spent receiving, never blocking blind");
+        assertTrue(failure.getMessage().endsWith(" timed out"));
+        assertTrue(turns[0] > 0);
     }
 
     @Test
-    void admissionOnlyRunWakesForCompletionAndSubmitsOnCallerThread()
-        throws Exception {
+    void admissionOnlyRunWakesAndResubmitsOnCallerThread() throws Exception {
         Thread callerThread = Thread.currentThread();
         List<Thread> submitThreads = new ArrayList<>();
         CompletableFuture<Void> first = new CompletableFuture<>();
         CountDownLatch firstSubmitted = new CountDownLatch(1);
         AtomicReference<Throwable> completionFailure = new AtomicReference<>();
-        long activeEnd = System.nanoTime()
-            + TimeUnit.SECONDS.toNanos(1);
+        long activeEnd = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
         IllegalArgumentException terminalFailure =
             new IllegalArgumentException("stop test admission loop");
 
@@ -195,26 +185,58 @@ class PerfMultiTargetCoordinatorTest {
 
         int[] submissions = {0};
         IllegalStateException failure = assertThrows(IllegalStateException.class,
-            () -> PerfMultiTargetCoordinator.runAdmissions(1, activeEnd,
+            () -> PerfMultiRoutedSendCoordinator.runAdmissions(1, activeEnd,
                 index -> {
                     submitThreads.add(Thread.currentThread());
                     submissions[0]++;
                     if (submissions[0] == 1) {
                         firstSubmitted.countDown();
-                        return first;
+                        return backpressuredSubmission(first);
                     }
-                    if (submissions[0] == 2) {
-                        return CompletableFuture.failedFuture(terminalFailure);
-                    }
-                    throw new AssertionError(
-                        "socket was resubmitted while awaiting WRITABLE retry");
+                    throw terminalFailure;
                 }, Duration.ofSeconds(1), "test admission-only sends"));
         completionThread.join();
 
         assertNull(completionFailure.get());
         assertSame(terminalFailure, failure.getCause());
         assertEquals(2, submissions[0]);
-        assertEquals(List.of(callerThread, callerThread), submitThreads,
-            "completion thread must only signal the caller thread");
+        assertEquals(List.of(callerThread, callerThread), submitThreads);
+    }
+
+    private static PerfMultiRoutedSendCoordinator.BackpressureCoordinator
+            coordinator(int socketCount,
+                        PerfMultiRoutedSendCoordinator.Submitter submitter) {
+        return new PerfMultiRoutedSendCoordinator.BackpressureCoordinator(
+            socketCount, Long.MAX_VALUE, submitter);
+    }
+
+    private static SendSubmission okSubmission(AtomicInteger admittedReads) {
+        return new SendSubmission() {
+            @Override
+            public SubmitResult result() {
+                return SubmitResult.OK;
+            }
+
+            @Override
+            public CompletionStage<Void> admitted() {
+                admittedReads.incrementAndGet();
+                throw new AssertionError("OK admission stage was inspected");
+            }
+        };
+    }
+
+    private static SendSubmission backpressuredSubmission(
+            CompletionStage<Void> admitted) {
+        return new SendSubmission() {
+            @Override
+            public SubmitResult result() {
+                return SubmitResult.BACKPRESSURED;
+            }
+
+            @Override
+            public CompletionStage<Void> admitted() {
+                return admitted;
+            }
+        };
     }
 }

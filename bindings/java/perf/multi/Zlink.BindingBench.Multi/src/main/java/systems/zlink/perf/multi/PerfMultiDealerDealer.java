@@ -5,12 +5,12 @@ package systems.zlink.perf.multi;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.sockets.DealerSocket;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.SendSubmission;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.SocketType;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.errors.ZlinkException;
@@ -21,7 +21,6 @@ import systems.zlink.perf.PerfUtil;
 import java.util.ArrayList;
 import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.CompletionStage;
 
 final class PerfMultiDealerDealer {
     private static final MonitorEventType READY_EVENT = MonitorEventType.CONNECTION_READY;
@@ -181,11 +180,11 @@ final class PerfMultiDealerDealer {
             PerfControl.awaitStart(config.size(), "dealer/dealer client");
             long activeEnd = System.nanoTime()
                 + config.durationSeconds() * 1_000_000_000L;
-            PerfMultiTargetCoordinator.runAdmissions(clients.size(),
+            PerfMultiRoutedSendCoordinator.runAdmissions(clients.size(),
                 activeEnd,
                 index -> sendOneActive(clients.get(index), config.size(),
                     activeEnd),
-                PerfMultiTargetCoordinator.sendDrainTimeout(),
+                PerfMultiRoutedSendCoordinator.sendDrainTimeout(),
                 "multi dealer/dealer async sends");
             // C parity: send one wire-level stop token on every client socket
             // so the server's signal-driven receive loop is guaranteed to wake.
@@ -222,9 +221,9 @@ final class PerfMultiDealerDealer {
         }
     }
 
-    private static CompletionStage<Void> sendOneActive(DealerSocket socket,
-                                                       int size,
-                                                       long activeEnd) {
+    private static SendSubmission sendOneActive(DealerSocket socket,
+                                                int size,
+                                                long activeEnd) {
         try (Message payload = PerfUtil.payload(size,
                  (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
              Message tail = PerfUtil.measurementPartCount() == 2

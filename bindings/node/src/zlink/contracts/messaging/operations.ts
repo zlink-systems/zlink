@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import type { Message, MessageLike } from './message';
+import type { SubmitResult } from '../errors';
 
 /** Builder stage that accepts one message part and returns the next stage. */
 export interface PartBuilder<TNext> {
@@ -17,16 +18,23 @@ export interface Timeoutable<TNext> {
 /** Builds a multipart send with managed nonblocking back-pressure retry. */
 export interface SendOperation extends PartBuilder<SendSubmitOperation> {}
 
-/** Accepts further parts and the synchronous or Promise terminal. */
+/** Snapshot of a send submit and its admission stage. */
+export interface SendSubmission {
+  readonly result: SubmitResult;
+  readonly admitted: Promise<void>;
+}
+
+/** Accepts further parts and the synchronous or submission-result terminal. */
 export interface SendSubmitOperation
   extends PartBuilder<SendSubmitOperation> {
   /**
-   * Resolve after admission. On back-pressure the runtime waits for the exact
-   * WRITABLE token and retries an owned packet snapshot. Message ownership
-   * transfers on immediate admission or after the first back-pressure snapshot,
-   * which can occur before this Promise resolves. Terminal failures reject.
+   * Return the native submit result and admission stage. On back-pressure the
+   * runtime waits for the exact WRITABLE token and retries an owned packet
+   * snapshot. Message ownership transfers on immediate admission or after the
+   * first back-pressure snapshot, which can occur before `admitted` resolves.
+   * Terminal failures reject `admitted`.
    */
-  submit(): Promise<void>;
+  submit(): SendSubmission;
   /** Submit synchronously with Core blocking admission semantics. */
   submit_sync(): void;
 }
@@ -42,15 +50,22 @@ export interface PublishSubmitOperation extends PartBuilder<PublishSubmitOperati
 /** Builds a request: add the request parts, then submit and await a reply. */
 export interface RequestOperation extends PartBuilder<RequestSubmitOperation> {}
 
+/** Snapshot of a request submit and its admission and reply stages. */
+export interface RequestSubmission {
+  readonly result: SubmitResult;
+  readonly admitted: Promise<void>;
+  readonly reply: Promise<Message[]>;
+}
+
 /** Accepts further parts, reply timeout, and the two request terminals. */
 export interface RequestSubmitOperation
   extends PartBuilder<RequestSubmitOperation>, Timeoutable<RequestSubmitOperation> {
   /**
-   * Submit the request and return the caller-owned reply parts. Backpressure
-   * waits for this request's WRITABLE token before resubmitting the same packet;
-   * the reply timeout starts only after admission.
+   * Submit the request and return its two completion stages. Backpressure waits
+   * for this request's WRITABLE token before resubmitting the same packet; the
+   * reply timeout starts only after admission.
    */
-  submit(): Promise<Message[]>;
+  submit(): RequestSubmission;
   submit_sync(): Message[];
 }
 

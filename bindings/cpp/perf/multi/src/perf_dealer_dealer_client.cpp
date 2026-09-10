@@ -238,11 +238,21 @@ class dealer_dealer_client_bench_t
             try {
                 if (perf::multi::measurement_part_count () == 2) {
                     zlink::message_t tail = perf::multi::measurement_empty_part ();
-                    co_await std::move (state.sock->send ().message (payload)).message (tail)
+                    zlink::send_submission_t submission =
+                      std::move (state.sock->send ().message (payload)).message (tail)
                       .async ();
+                    if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
+                        co_await std::move (submission.admitted);
+                    else if (submission.result != ZLINK_SUBMIT_OK)
+                        co_return false;
                 } else {
-                    co_await std::move (state.sock->send ()).message (payload)
+                    zlink::send_submission_t submission =
+                      std::move (state.sock->send ()).message (payload)
                       .async ();
+                    if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
+                        co_await std::move (submission.admitted);
+                    else if (submission.result != ZLINK_SUBMIT_OK)
+                        co_return false;
                 }
                 if (std::chrono::steady_clock::now () < deadline)
                     ++count;

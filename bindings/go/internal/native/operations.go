@@ -17,7 +17,12 @@ type SendSubmitOp interface {
 	Message(*Message) SendSubmitOp
 	MoveMessage(*Message) SendSubmitOp
 	Bytes([]byte) SendSubmitOp
-	Submit(context.Context) error
+	Submit(context.Context) (SendSubmission, error)
+}
+
+type SendSubmission interface {
+	Result() SubmitResult
+	Admitted(context.Context) error
 }
 
 type RequestOp interface {
@@ -29,7 +34,13 @@ type RequestSubmitOp interface {
 	Message(*Message) RequestSubmitOp
 	Bytes([]byte) RequestSubmitOp
 	Timeout(time.Duration) RequestSubmitOp
-	Submit(context.Context) ([]*Message, error)
+	Submit(context.Context) (RequestSubmission, error)
+}
+
+type RequestSubmission interface {
+	Result() SubmitResult
+	Admitted(context.Context) error
+	Reply(context.Context) ([]*Message, error)
 }
 
 type ReplyOp interface {
@@ -67,10 +78,10 @@ type sendBuilder struct {
 	parts []sendBuilderPart
 	count int
 	submitOnce
-	submit func(context.Context, []sendBuilderPart) error
+	submit func(context.Context, []sendBuilderPart) (SendSubmission, error)
 }
 
-func newSendBuilder(submit func(context.Context, []sendBuilderPart) error) SendOp {
+func newSendBuilder(submit func(context.Context, []sendBuilderPart) (SendSubmission, error)) SendOp {
 	return &sendBuilder{submit: submit}
 }
 
@@ -109,17 +120,31 @@ func (b *sendBuilder) builderParts() []sendBuilderPart {
 	return b.parts
 }
 
-func (b *sendBuilder) Submit(ctx context.Context) error {
+func (b *sendBuilder) Submit(ctx context.Context) (SendSubmission, error) {
 	if err := contextError(ctx); err != nil {
-		return err
+		return nil, err
 	}
 	if b.count == 0 {
-		return configInvalidArgumentError()
+		return nil, configInvalidArgumentError()
 	}
 	if err := b.markSubmitted(); err != nil {
-		return err
+		return nil, err
 	}
 	return b.submit(ctx, b.builderParts())
+}
+
+type sendSubmission struct {
+	result SubmitResult
+	entry  *completionEntry
+}
+
+func (s *sendSubmission) Result() SubmitResult { return s.result }
+
+func (s *sendSubmission) Admitted(ctx context.Context) error {
+	if s.entry == nil {
+		return nil
+	}
+	return s.entry.waitAdmitted(ctx)
 }
 
 type publishBuilder struct {
@@ -197,10 +222,10 @@ type requestBuilder struct {
 	parts   []requestBuilderPart
 	timeout time.Duration
 	submitOnce
-	submit func(context.Context, []requestBuilderPart, time.Duration) ([]*Message, error)
+	submit func(context.Context, []requestBuilderPart, time.Duration) (RequestSubmission, error)
 }
 
-func newRequestBuilder(submit func(context.Context, []requestBuilderPart, time.Duration) ([]*Message, error)) RequestOp {
+func newRequestBuilder(submit func(context.Context, []requestBuilderPart, time.Duration) (RequestSubmission, error)) RequestOp {
 	return &requestBuilder{submit: submit}
 }
 
@@ -219,7 +244,7 @@ func (b *requestBuilder) Timeout(timeout time.Duration) RequestSubmitOp {
 	return b
 }
 
-func (b *requestBuilder) Submit(ctx context.Context) ([]*Message, error) {
+func (b *requestBuilder) Submit(ctx context.Context) (RequestSubmission, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
@@ -230,6 +255,21 @@ func (b *requestBuilder) Submit(ctx context.Context) ([]*Message, error) {
 		return nil, err
 	}
 	return b.submit(ctx, b.parts, b.timeout)
+}
+
+type requestSubmission struct {
+	result SubmitResult
+	entry  *completionEntry
+}
+
+func (s *requestSubmission) Result() SubmitResult { return s.result }
+
+func (s *requestSubmission) Admitted(ctx context.Context) error {
+	return s.entry.waitAdmitted(ctx)
+}
+
+func (s *requestSubmission) Reply(ctx context.Context) ([]*Message, error) {
+	return s.entry.waitRequest(ctx)
 }
 
 type replyBuilder struct {

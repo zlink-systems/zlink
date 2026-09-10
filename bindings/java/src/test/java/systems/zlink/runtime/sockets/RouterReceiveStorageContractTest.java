@@ -35,7 +35,7 @@ class RouterReceiveStorageContractTest {
                 if (request) {
                     future = dealer.request().message(Message.from("one"))
                         .message(Message.from("two")).message(Message.from("three"))
-                        .timeout(Duration.ofSeconds(2)).submit().toCompletableFuture();
+                        .timeout(Duration.ofSeconds(2)).submit().reply().toCompletableFuture();
                 } else {
                     dealer.send().message(Message.from("one"))
                         .message(Message.from("two")).message(Message.from("three"))
@@ -80,7 +80,7 @@ class RouterReceiveStorageContractTest {
                         .timeout(Duration.ofSeconds(2));
                     for (int i = 1; i < count; i++)
                         request.message(Message.from("part-" + i));
-                    var future = request.submit().toCompletableFuture();
+                    var future = request.submit().reply().toCompletableFuture();
                     assertEquals(1, input.wait(events, Duration.ofSeconds(2)));
                     assertTrue(router.recv(received, flags));
                     assertEquals(count, received.parts().size());

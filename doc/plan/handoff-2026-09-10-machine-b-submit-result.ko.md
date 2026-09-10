@@ -73,3 +73,28 @@ G2 결과가 설계를 바꾸면 G4 브리프 전에 draft를 고치고 A에 알
 - `doc/plan/bindings-submit-result-terminal-plan.ko.md` §9 진행 로그에 단계별 커밋·PR·측정값.
 - `doc/plan/fw-bench-worklog/decisions.ko.md`에 FB 항목(캠페인 결과: perf clients=1 전후, gRPC 벤치 raw 전후, 회귀 없음 판정).
 - binding 4언어 태그 뒤 A에 알린다(A의 framework 릴리스와 #85 재검증이 그 패키지를 쓴다).
+
+## 7. 세션 진행 현황 (머신 B, 2026-09-11 갱신)
+
+신규 이슈·재할당은 이 절과 A handoff(§4.5)에 함께 적는다(사용자 규칙 2026-09-11).
+
+| 단계 | 상태 |
+|---|---|
+| G1 #88 스펙·정책 문안 | **완료·머지** PR #124, 보완 #128(per-lang en 쌍)·#129(#126 산문 정합). 옛 종결자 시그니처·산문 0건. |
+| G2 #89 Java 파일럿 | **완료·머지** PR #119 (참조 구현). |
+| G4 바인딩 | cpp #91(#122)·node #93(#123)·python #96(#121)·**go #94(#130)** 머지. **dotnet #92**·rust #95 codex 진행 중. |
+| G3 #90 Java perf·gRPC Java raw | codex 진행 중. **main 기준**(handoff의 Issue #12 `e1272851bd`는 origin에 없음→소멸). 코드만, 측정 G6. |
+| G5 #97~#100 framework | **→ 머신 A** (사용자 재할당 2026-09-10). B는 착수 안 함. |
+| G3 #90 Java perf·gRPC Java raw | **완료·머지** PR #141. §5 루프 + gRPC raw 드라이버. |
+| G6 perf 판정 | **criterion 2·4 PASS (2026-09-11, FB-071).** cpp ccu=1 8.5k→**300k**(깊이 탈출, C ref 275k 동급), ccu=100 회귀 없음(옛 150k→새 157k; 과거 0.17.5 97k·64B 137k 대비 유지·상승). ccu=1>ccu=100 역전은 harness 단일스레드 특성(C control·3언어·Core 버전·과거결과 4중 확증, §5/Core 회귀 아님). criterion 3(gRPC Java 3-run)은 `zlink:0.18.0` 공유 Maven 로컬 패키지(§5 전제) 발행 후속 — 판정 blocker 아님. |
+| G7 #101 | 릴리스 노트(breaking)·바인딩 0.18.0 태그 남음. decisions FB-071 기록 완료. |
+
+**신규/재할당 이슈 기록**:
+- #126 (신규, area:docs kind:bug) — 바인딩 스펙 산문이 옛 계약 자기모순. B 감독 직접 처리, PR #128·#129로 완료·CLOSED.
+- dotnet #92 — G4에서 누락됐다가 발견해 추가 투입(cpp/node/python/go만 먼저 돌림).
+
+**결정·정정**:
+- 바인딩 perf 측정은 전부 G6로 분리, perf **코드**는 G3/G4에서 완료(사용자 2026-09-11: 코드는 미리 병렬, 측정은 나중).
+- Python 결과 객체는 Java 참조처럼 method 접근(`result()/admitted()/reply()`)으로 통일(draft §4 Python의 field 표기 대신 7언어 일관).
+- JDK 25 위치 `/home/hep7hep7/.jdks/jdk-25.0.4.1+1` (gradle 자동 탐지). handoff §5의 `/home/hep7/.cache/zlink/jdk/temurin-25`는 틀림 — "JDK 25 부재"는 오판.
+- G4·G5 병행: 바인딩(G4)과 framework(G5) 디렉터리 분리라 동시 진행 가능(계약 확정).

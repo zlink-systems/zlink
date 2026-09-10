@@ -58,17 +58,16 @@
     그렇지 않으면 pending operation으로 backpressure와 전송 순서를 처리한다.
     operation id `0`은 callback 없이 즉시 완료되며 nonzero id만 completion callback으로
     한 번 완료된다.
-  - **C 이외의 binding**: 같은 nonblocking 의미를 async submit으로 구현한다.
-    ownership을 받은 terminal은 backpressure 동안 async 작업을 suspend하고
-    Core의 writable/completion 진행에 따라 resume한다. public async terminal이
-    ownership 이전의 backpressure를 즉시 알리면 같은 coroutine/task가 cooperative
-    yield 또는 public readiness 뒤 같은 logical operation을 재제출한다. 다른
-    소켓의 submit은 계속 진행해야 하며, C의 pending 표시와 `POLLOUT` 재등록을
-    binding-local sync 경로로 복제하지 않는다. binding multi 오버헤드는 이 async
-    실행 오버헤드를 포함한다. send coroutine은 admission 완료를 await한 뒤 다음
-    send를 제출할 수 있지만 echo 수신을 기다리면 안 된다.
-    request coroutine은 reply completion을 기다리는 동안 다음 request 작업을 별도로
-    시작해야 한다. 왕복을 inflight 1로 직렬화하면 C의 nonblocking 모델과 달라진다.
+  - **C 이외의 binding**: 같은 nonblocking 의미를 async submit 종결자의 결과 객체로
+    구현한다. 종결자는 제출 시점 `result`(`OK`|`BACKPRESSURED`)를 돌려주며, `result == OK`면
+    기다릴 것 없이 **즉시 다음을 제출**하고, `BACKPRESSURED`면 **그 socket만** `admitted`를
+    기다렸다가 재개한다. 다른 socket의 submit은 계속 진행한다. 즉 비동기 대기는 `BACKPRESSURED`일
+    때만 하며, C의 pending 표시와 `POLLOUT` 재등록을 binding-local sync 경로로 복제하지 않는다.
+    binding multi 오버헤드는 이 async 실행 오버헤드를 포함한다. send는 `OK`면 echo 수신을
+    기다리지 않고 바로 다음 send를 제출한다.
+    request의 reply는 `reply` stage로 별도 진행하며 제출을 막지 않는다. socket당 깊이는 HWM(byte)이
+    정한다. **turn당 1건 pacing·완료 poll 대기·"stage `isDone`" 판정은 없앤다.** 왕복을 inflight 1로
+    직렬화하면 C의 nonblocking 모델과 달라진다.
     단, `MULTI_STREAM` 외부 raw client는 Core HWM admission이 없는 검증 peer이므로
     연결당 unresolved echo를 최대 1개로 고정한다. 이 예외는 zlink send/send와
     request/reply의 연속 제출 의미를 바꾸지 않는다.
@@ -79,9 +78,9 @@
     [§ 1.3.1](#131-poller-wait-timeout-정책)을 따른다.
   - 언어별 비동기 실행 모델은 C++ coroutine, .NET `Task`, Java
     `CompletionStage`, Node `Promise`, Go goroutine, Python `asyncio`, Rust Future다.
-    Go에는 별도 send async terminal이 없으므로 goroutine 하나가 blocking
-    `Submit(ctx)` 하나를 소유하고, 여러 goroutine을 Go runtime이 concurrent하게
-    진행한다.
+    Go의 `Submit(ctx)`는 native 제출 한 번을 하고 즉시 결과 객체를 돌려주므로, 한 goroutine이
+    `Submit` → `Result()==BACKPRESSURED`면 `Admitted(ctx)` 대기 → 계속 제출하고, reply는 별도
+    goroutine이 `Reply(ctx)`로 모은다(C reference 모양).
   - C 이외의 binding이 sync `DONTWAIT`와 `POLLOUT` 재제출로 C reference를 복제하거나,
     active hot path를 전용 OS thread의 blocking loop로 실행하면 정책 위반이다.
   - **operation 계약 예외**: PUB/XPUB publish와 수신한 raw request에 대한 reply는
@@ -169,10 +168,10 @@ poller wait 이후 hot path는 poller가 ready로 보고한 source만 처리해�
   - C reference는 public callback request terminal로 제출하고, 같은 active
     poller에 requester socket을 `POLLCOMPLETION` 단독으로 등록한다. 이 등록은
     reply progress와 completion callback drain을 public poller loop에 묶는다.
-  - C 이외의 binding은 public async request terminal로 여러 request 완료를 동시에
-    진행한다. ownership을 받은 submit은 해당 언어의 async 작업에서 대기하고
-    writable/completion 진행에 따라 재개한다. ownership 이전의 backpressure는
-    같은 async 작업이 cooperative yield 또는 public readiness 뒤 재제출한다.
+  - C 이외의 binding은 public async request terminal의 결과 객체로 여러 request 완료를 동시에
+    진행한다. 종결자 `result == OK`면 즉시 다음 request를 제출하고, `BACKPRESSURED`면 그 socket의
+    `admitted`를 기다렸다가 재개한다. reply는 `reply` stage로 별도 진행하며 제출을 막지 않는다.
+    즉 비동기 대기는 `BACKPRESSURED`일 때만 하고, **turn당 1건 pacing·완료 poll 대기는 없앤다.**
     별도 progress OS thread, timer, pipe wake, sleep fallback은 금지한다.
   - Python처럼 event-loop thread에서 async terminal을 진행하는 binding은 같은 active
     execution context가 소유한 public poller 하나에 모든 requester socket을

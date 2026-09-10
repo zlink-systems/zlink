@@ -20,7 +20,7 @@ public sealed class test_tokenless_backpressure
         for (var i = 0; i < pending.Length; i++)
         {
             using Message part = Message.From("reserved");
-            pending[i] = dealer.Request().Message(part).Async();
+            pending[i] = dealer.Request().Message(part).Async().Reply;
             Assert.False(pending[i].IsCompleted);
         }
 
@@ -29,7 +29,7 @@ public sealed class test_tokenless_backpressure
             using Message overflow = Message.From("overflow");
             ZlinkSubmitException asyncError = await Assert.ThrowsAsync<
                 ZlinkSubmitException>(() => dealer.Request().Message(overflow)
-                    .Async());
+                    .Async().Reply);
             AssertBackpressure(asyncError);
             Assert.Equal("overflow", overflow.GetString());
 

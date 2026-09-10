@@ -4,6 +4,7 @@ import ctypes
 import errno
 
 from ...contracts.sockets.codes import RecvResult, SocketType, SubmitResult
+from ...contracts.sockets.operations import RequestSubmission, SendSubmission
 from ...contracts.core.routing_id import RoutingId
 from ...contracts.messaging.received import (
     _reply_token_from_native,
@@ -187,7 +188,10 @@ class _ManagedSendOp:
             raise SubmitError(SubmitResult.INVALID_STATE, 0)
         payload = self._payload_or_raise()
         self._submitted = True
-        return self._socket._completion_owner.submit_send(self._routing_id, payload)
+        result, admitted = self._socket._completion_owner.submit_send(
+            self._routing_id, payload
+        )
+        return SendSubmission(result, admitted)
 
     def submit_sync(self) -> None:
         if self._submitted:
@@ -317,10 +321,11 @@ class _RequestOp:
         if not self._parts:
             raise SubmitError(SubmitResult.INVALID_ARGUMENT, 0)
         self._submitted = True
-        return self._op_submit(
+        result, admitted, reply = self._op_submit(
             self._parts,
             _timeout_to_ms(self._timeout),
         )
+        return RequestSubmission(result, admitted, reply)
 
     def submit_sync(self):
         if self._submitted:
