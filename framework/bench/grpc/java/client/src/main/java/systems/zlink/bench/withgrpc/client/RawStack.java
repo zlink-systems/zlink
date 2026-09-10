@@ -53,6 +53,7 @@ public final class RawStack implements AutoCloseable {
                     .message(body)
                     .timeout(timeout)
                     .submit()
+                    .reply()
                     .toCompletableFuture()
                     .thenAccept(parts -> validate(parts, runId, phase, payloadSize, sequence));
             }
@@ -69,6 +70,7 @@ public final class RawStack implements AutoCloseable {
                     .message(header)
                     .message(body)
                     .submit()
+                    .admitted()
                     .toCompletableFuture()
                     .thenApply(ignored -> (Void) null);
             }
