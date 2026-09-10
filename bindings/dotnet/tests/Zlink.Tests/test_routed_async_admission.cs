@@ -58,7 +58,7 @@ public sealed class test_routed_async_admission
         using var cancellation = new CancellationTokenSource();
         using Message payload = Message.From("pending");
         var started = Stopwatch.StartNew();
-        Task pending = dealer.Send().Message(payload).Async(cancellation.Token);
+        Task pending = dealer.Send().Message(payload).Async(cancellation.Token).Admitted;
         started.Stop();
 
         Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(250));
@@ -87,7 +87,7 @@ public sealed class test_routed_async_admission
         using var cancellation = new CancellationTokenSource();
         using Message payload = Message.From("cancel-wait");
         Task<IReadOnlyList<Message>> pending = dealer.Request().Message(payload)
-            .Timeout(TimeSpan.FromSeconds(2)).Async(cancellation.Token);
+            .Timeout(TimeSpan.FromSeconds(2)).Async(cancellation.Token).Reply;
         using Received received = RecvWithRetry(router);
 
         cancellation.Cancel();
@@ -117,7 +117,7 @@ public sealed class test_routed_async_admission
 
         using Message payload = Message.From("inline-payload");
         var started = Stopwatch.StartNew();
-        Task admitted = dealer.Send().Message(payload).Async();
+        Task admitted = dealer.Send().Message(payload).Async().Admitted;
         started.Stop();
 
         // A successful SEND has completion id zero and no native completion.
@@ -153,7 +153,7 @@ public sealed class test_routed_async_admission
         Message[] parts = expected.Select(Message.From).ToArray();
         try
         {
-            await dealer.Send().Messages(parts).Async()
+            await dealer.Send().Messages(parts).Async().Admitted
                 .WaitAsync(TimeSpan.FromSeconds(3));
 
             using Received received = RecvWithRetry(router);
@@ -184,7 +184,7 @@ public sealed class test_routed_async_admission
 
         using Message payload = Message.From("two-part-inline");
         using Message tail = Message.Allocate(0);
-        Task admission = dealer.Send().Message(payload).Message(tail).Async();
+        Task admission = dealer.Send().Message(payload).Message(tail).Async().Admitted;
 
         Assert.Throws<ObjectDisposedException>(() => _ = payload.Size);
         Assert.Throws<ObjectDisposedException>(() => _ = tail.Size);
@@ -216,7 +216,7 @@ public sealed class test_routed_async_admission
         try
         {
             SendSubmitOperation operation = sender.Send().Messages(parts);
-            Action submit = () => _ = operation.Async();
+            Action submit = () => _ = operation.Async().Admitted;
             Assert.Throws<ObjectDisposedException>(submit);
 
             for (var index = 0; index < parts.Length - 1; index++)
@@ -338,7 +338,7 @@ public sealed class test_routed_async_admission
         Task<IReadOnlyList<Message>> replyTask = dealer.Request()
             .Message(request)
             .Timeout(TimeSpan.FromSeconds(5))
-            .Async();
+            .Async().Reply;
         RoutingId source;
         ReplyToken replyToken;
         using (Received receivedRequest = Received.Create())
@@ -379,7 +379,7 @@ public sealed class test_routed_async_admission
     }
 
     [Fact]
-    public void try_submit_reports_backpressure_and_preserves_the_packet()
+    public async Task async_reports_backpressure_and_retries_the_packet()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -405,36 +405,34 @@ public sealed class test_routed_async_admission
         poller.Add(dealer,
             PollEventFlags.PollOut | PollEventFlags.PollCompletion, 42);
 
-        Message blocked = FillDealerUntilTrySubmitBackpressured(dealer,
+        SendSubmission blocked = FillDealerUntilBackpressured(dealer,
             out int acceptedCount);
-        using (blocked)
+        Assert.True(acceptedCount > 0);
+        Assert.Equal(SubmitResult.Backpressured, blocked.Result);
+
+        var events = new PollEvent[1];
+        Assert.Equal(0, poller.Wait(events, TimeSpan.Zero));
+
+        for (var index = 0; index < acceptedCount; index++)
         {
-            Assert.True(acceptedCount > 0);
-            Assert.Equal(FillerPayload, blocked.GetString());
+            using Received filler = Received.Create();
+            Assert.True(router.Recv(filler));
+        }
 
-            var events = new PollEvent[1];
-            Assert.Equal(0, poller.Wait(events, TimeSpan.Zero));
-
-            for (var index = 0; index < acceptedCount; index++)
-            {
-                using Received filler = Received.Create();
-                Assert.True(router.Recv(filler));
-            }
-
+        for (var attempt = 0;
+             attempt < 16 && !blocked.Admitted.IsCompleted;
+             attempt++)
+        {
             Assert.Equal(1,
                 poller.Wait(events, TimeSpan.FromSeconds(5)));
             Assert.Equal((nuint)42, events[0].Slot);
-            Assert.NotEqual(PollEventFlags.None,
-                events[0].Revents & PollEventFlags.PollOut);
-            Assert.Equal(PollEventFlags.None,
-                events[0].Revents & PollEventFlags.PollCompletion);
-
-            Assert.True(dealer.Send().Message(blocked).TrySubmit());
-            using Received retried = Received.Create();
-            Assert.True(router.Recv(retried));
-            Assert.Equal(FillerPayload,
-                retried.SinglePartOrThrow().GetString());
         }
+        await blocked.Admitted.WaitAsync(TimeSpan.FromSeconds(5));
+
+        using Received retried = Received.Create();
+        Assert.True(router.Recv(retried));
+        Assert.Equal(FillerPayload,
+            retried.SinglePartOrThrow().GetString());
     }
 
     [Fact]
@@ -461,7 +459,7 @@ public sealed class test_routed_async_admission
         using Message payload = Message.From("pending-cancel");
         Task pending = dealer.Send()
             .Message(payload)
-            .Async(cancellation.Token);
+            .Async(cancellation.Token).Admitted;
         await Task.Delay(50);
         Assert.False(pending.IsCompleted);
 
@@ -494,7 +492,7 @@ public sealed class test_routed_async_admission
         _ = FillDealerTarget(dealer, out List<Task> filler);
 
         using Message payload = Message.From("pending-close");
-        Task pending = dealer.Send().Message(payload).Async();
+        Task pending = dealer.Send().Message(payload).Async().Admitted;
         await Task.Delay(50);
         Assert.False(pending.IsCompleted);
 
@@ -525,7 +523,7 @@ public sealed class test_routed_async_admission
         Task<IReadOnlyList<Message>> pending = dealer.Request()
             .Message(request)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
+            .Async().Reply;
         using Received accepted = RecvWithRetry(router);
         Assert.Equal(ReceivedMessageType.Request, accepted.MessageType);
 
@@ -559,7 +557,7 @@ public sealed class test_routed_async_admission
         _ = FillRouterTarget(router, dealerRid, out List<Task> filler);
 
         using Message payload = Message.From("pending-disconnect");
-        Task pending = router.Send(dealerRid).Message(payload).Async();
+        Task pending = router.Send(dealerRid).Message(payload).Async().Admitted;
         await Task.Delay(50);
         Assert.False(pending.IsCompleted);
 
@@ -596,7 +594,7 @@ public sealed class test_routed_async_admission
         Task<IReadOnlyList<Message>> pending = dealer.Request()
             .Message(request)
             .Timeout(TimeSpan.FromMilliseconds(100))
-            .Async();
+            .Async().Reply;
         started.Stop();
         Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(250));
 
@@ -617,7 +615,7 @@ public sealed class test_routed_async_admission
         for (var attempt = 0; attempt < 16; attempt++)
         {
             using Message filler = Message.From(FillerPayload);
-            Task task = dealer.Send().Message(filler).Async();
+            Task task = dealer.Send().Message(filler).Async().Admitted;
             submitted.Add(task);
             if (!task.IsCompleted)
                 return task;
@@ -638,7 +636,7 @@ public sealed class test_routed_async_admission
             Task task;
             try
             {
-                task = router.Send(routingId).Message(filler).Async();
+                task = router.Send(routingId).Message(filler).Async().Admitted;
             }
             catch (ZlinkSubmitException) when (DateTimeOffset.UtcNow < deadline)
             {
@@ -667,7 +665,7 @@ public sealed class test_routed_async_admission
         {
             string payload = FillerPayload + $"-{attempt:D2}";
             using Message candidate = Message.From(payload);
-            Task submitted = dealer.Send().Message(candidate).Async();
+            Task submitted = dealer.Send().Message(candidate).Async().Admitted;
             if (!submitted.IsCompleted)
             {
                 pendingPayload = payload;
@@ -682,31 +680,26 @@ public sealed class test_routed_async_admission
             "The DEALER target did not return a pending WRITABLE waiter.");
     }
 
-    private static Message FillDealerUntilTrySubmitBackpressured(
+    private static SendSubmission FillDealerUntilBackpressured(
         IDealerSocket dealer,
         out int acceptedCount)
     {
         acceptedCount = 0;
         for (var attempt = 0; attempt < 16; attempt++)
         {
-            Message candidate = Message.From(FillerPayload);
-            try
+            using Message candidate = Message.From(FillerPayload);
+            SendSubmission submission = dealer.Send().Message(candidate).Async();
+            if (submission.Result == SubmitResult.Backpressured)
             {
-                if (!dealer.Send().Message(candidate).TrySubmit())
-                    return candidate;
-
-                acceptedCount++;
-                candidate.Dispose();
+                return submission;
             }
-            catch
-            {
-                candidate.Dispose();
-                throw;
-            }
+            Assert.Equal(SubmitResult.Ok, submission.Result);
+            Assert.True(submission.Admitted.IsCompletedSuccessfully);
+            acceptedCount++;
         }
 
         throw new Xunit.Sdk.XunitException(
-            "The DEALER target did not report backpressure through TrySubmit.");
+            "The DEALER target did not report backpressure through Async.");
     }
 
     private static async Task ReplyAfterSendRetry(Task pendingSend,

@@ -57,12 +57,12 @@ public sealed class test_router_multiple_dealers
         using Message reply1 = Message.From("reply_to_d1");
         await router.Send(
                 RoutingId.From(Encoding.UTF8.GetBytes(dealer1RoutingId)))
-            .Message(reply1).Async();
+            .Message(reply1).Async().Admitted;
 
         using Message reply2 = Message.From("reply_to_d2");
         await router.Send(
                 RoutingId.From(Encoding.UTF8.GetBytes(dealer2RoutingId)))
-            .Message(reply2).Async();
+            .Message(reply2).Async().Admitted;
 
         Assert.Equal("reply_to_d1", CoreTestSupport.ReceiveUtf8WithTimeout(dealer1,
             2000));
@@ -121,7 +121,7 @@ public sealed class test_router_multiple_dealers
 
         using Message payload = Message.From("first");
         using Message tail = Message.Allocate(0);
-        await dealer.Send().Message(payload).Message(tail).Async()
+        await dealer.Send().Message(payload).Message(tail).Async().Admitted
             .WaitAsync(TimeSpan.FromSeconds(2));
 
         using var received = Received.Create();
@@ -131,7 +131,7 @@ public sealed class test_router_multiple_dealers
             part => Assert.Equal("first", part.GetString()),
             part => Assert.Equal(0, part.Size));
 
-        Task reply = received.Send().Messages(forwardedParts).Async();
+        Task reply = received.Send().Messages(forwardedParts).Async().Admitted;
         Assert.All(forwardedParts, part =>
             Assert.Throws<ObjectDisposedException>(() => _ = part.Size));
         await reply.WaitAsync(TimeSpan.FromSeconds(2));
@@ -144,7 +144,7 @@ public sealed class test_router_multiple_dealers
 
         using Message nextPayload = Message.From("second");
         using Message nextTail = Message.Allocate(0);
-        await dealer.Send().Message(nextPayload).Message(nextTail).Async()
+        await dealer.Send().Message(nextPayload).Message(nextTail).Async().Admitted
             .WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(router.Recv(received));
@@ -176,7 +176,7 @@ public sealed class test_router_multiple_dealers
         Thread.Sleep(100);
 
         using Message firstPayload = Message.From("first");
-        await first.Send().Message(firstPayload).Async()
+        await first.Send().Message(firstPayload).Async().Admitted
             .WaitAsync(TimeSpan.FromSeconds(2));
         using var captured = Received.Create();
         Assert.True(router.Recv(captured));
@@ -185,7 +185,7 @@ public sealed class test_router_multiple_dealers
         replacement.Connect(endpoint);
         Thread.Sleep(100);
         using Message replacementPayload = Message.From("replacement");
-        await replacement.Send().Message(replacementPayload).Async()
+        await replacement.Send().Message(replacementPayload).Async().Admitted
             .WaitAsync(TimeSpan.FromSeconds(2));
         using var replacementReceived = Received.Create();
         Assert.True(router.Recv(replacementReceived));
@@ -196,7 +196,7 @@ public sealed class test_router_multiple_dealers
         // retain the source route snapshot captured before the handover.
         Assert.False(router.Recv(captured, RecvFlags.DontWait));
         using Message exactReply = Message.From("first-only");
-        await capturedSend.Message(exactReply).Async();
+        await capturedSend.Message(exactReply).Async().Admitted;
 
         using var firstUnexpected = Received.Create();
         Assert.False(first.Recv(firstUnexpected, RecvFlags.DontWait));
@@ -225,13 +225,13 @@ public sealed class test_router_multiple_dealers
         Task<IReadOnlyList<Message>> completion = dealer.Request()
             .Message(request)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
+            .Async().Reply;
         using var received = Received.Create();
         Assert.True(router.Recv(received));
         Assert.Equal(ReceivedMessageType.Request, received.MessageType);
 
         using Message sideMessage = Message.From("source-send");
-        await received.Send().Message(sideMessage).Async()
+        await received.Send().Message(sideMessage).Async().Admitted
             .WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal("source-send",
             CoreTestSupport.ReceiveUtf8WithTimeout(dealer, 2000));
@@ -263,7 +263,7 @@ public sealed class test_router_multiple_dealers
         Thread.Sleep(100);
 
         using Message first = Message.From("first");
-        await dealer.Send().Message(first).Async()
+        await dealer.Send().Message(first).Async().Admitted
             .WaitAsync(TimeSpan.FromSeconds(2));
 
         using var received = Received.Create();
@@ -271,7 +271,7 @@ public sealed class test_router_multiple_dealers
         Assert.Equal("first", received.SinglePartOrThrow().GetString());
 
         using Message next = Message.From("next");
-        await dealer.Send().Message(next).Async()
+        await dealer.Send().Message(next).Async().Admitted
             .WaitAsync(TimeSpan.FromSeconds(2));
         Assert.True(CoreTestSupport.WaitUntil(
             () => router.Recv(received, RecvFlags.DontWait), 2000));
@@ -279,7 +279,7 @@ public sealed class test_router_multiple_dealers
 
         using Message multipartHead = Message.From("multipart");
         using Message multipartTail = Message.From("tail");
-        await dealer.Send().Message(multipartHead).Message(multipartTail).Async()
+        await dealer.Send().Message(multipartHead).Message(multipartTail).Async().Admitted
             .WaitAsync(TimeSpan.FromSeconds(2));
         Assert.True(CoreTestSupport.WaitUntil(
             () => router.Recv(received, RecvFlags.DontWait), 2000));
@@ -309,7 +309,7 @@ public sealed class test_router_multiple_dealers
         Thread.Sleep(100);
 
         using Message outbound = Message.From("ping");
-        await dealer.Send().Message(outbound).Async();
+        await dealer.Send().Message(outbound).Async().Admitted;
 
         using var inbound = Received.Create();
         Assert.True(router.Recv(inbound));
@@ -321,7 +321,7 @@ public sealed class test_router_multiple_dealers
             inbound.FirstPart().AsReadOnlySpan()));
 
         using Message reply = Message.From("pong");
-        await router.Send(actualSourceRid).Message(reply).Async();
+        await router.Send(actualSourceRid).Message(reply).Async().Admitted;
 
         using var dealerInbound = Received.Create();
         Assert.True(dealer.Recv(dealerInbound));

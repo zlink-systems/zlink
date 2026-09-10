@@ -65,10 +65,11 @@ fn inline_admission_resolves_the_future_on_its_first_poll() {
     let router = ctx.router_socket().unwrap();
     let dealer = ctx.dealer_socket().unwrap();
     router.bind("inproc://rust-send-complete-inline").unwrap();
-    dealer
-        .connect("inproc://rust-send-complete-inline")
-        .unwrap();
-    thread::sleep(Duration::from_millis(75));
+    test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
+        dealer
+            .connect("inproc://rust-send-complete-inline")
+            .unwrap()
+    });
 
     let mut future = send_stage(
         dealer
@@ -588,10 +589,11 @@ fn dropping_a_pending_send_future_detaches_the_waiter() {
         .set_receive_high_water_mark(RECORD_HWM)
         .unwrap();
     router.bind("inproc://rust-send-complete-cancel").unwrap();
-    dealer
-        .connect("inproc://rust-send-complete-cancel")
-        .unwrap();
-    thread::sleep(Duration::from_millis(75));
+    test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
+        dealer
+            .connect("inproc://rust-send-complete-cancel")
+            .unwrap()
+    });
 
     let pending = saturate(|| send_stage(dealer.send().message(large_filler(b'd')).submit()));
     assert!(!pending.is_empty(), "test target did not reach HWM");
@@ -682,8 +684,9 @@ fn closing_a_socket_completes_its_pending_send_once() {
         .set_receive_high_water_mark(RECORD_HWM)
         .unwrap();
     router.bind("inproc://rust-routed-async-close").unwrap();
-    dealer.connect("inproc://rust-routed-async-close").unwrap();
-    thread::sleep(Duration::from_millis(75));
+    test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
+        dealer.connect("inproc://rust-routed-async-close").unwrap()
+    });
 
     let filler = saturate(|| send_stage(dealer.send().message(large_filler(b'c')).submit()));
     assert!(!filler.is_empty(), "test target did not reach HWM");
@@ -738,13 +741,16 @@ fn blocked_router_target_does_not_delay_another_target() {
         .set_receive_high_water_mark(RECORD_HWM)
         .unwrap();
     router.bind("inproc://rust-routed-async-targets").unwrap();
-    dealer_a
-        .connect("inproc://rust-routed-async-targets")
-        .unwrap();
-    dealer_b
-        .connect("inproc://rust-routed-async-targets")
-        .unwrap();
-    thread::sleep(Duration::from_millis(100));
+    test_support::connect_dealer_router_and_confirm(&router, &dealer_a, || {
+        dealer_a
+            .connect("inproc://rust-routed-async-targets")
+            .unwrap()
+    });
+    test_support::connect_dealer_router_and_confirm(&router, &dealer_b, || {
+        dealer_b
+            .connect("inproc://rust-routed-async-targets")
+            .unwrap()
+    });
 
     let blocked_a =
         saturate(|| send_stage(router.send(&rid_a).message(large_filler(b'a')).submit()));

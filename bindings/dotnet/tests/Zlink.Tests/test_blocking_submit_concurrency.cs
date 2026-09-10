@@ -191,7 +191,7 @@ public sealed class test_blocking_submit_concurrency
     {
         using Message part = Message.From("reply-token");
         Task<IReadOnlyList<Message>> pending = peer.Request(socketRid).Message(part)
-            .Timeout(Watchdog).Async();
+            .Timeout(Watchdog).Async().Reply;
         using var poller = Zlink.CreatePoller();
         poller.Add(socket, PollEventFlags.PollIn, 1);
         Assert.Equal(1, poller.Wait(new PollEvent[1], Watchdog));

@@ -20,7 +20,7 @@ public sealed class test_pull_completion_contract
 
         using Message request = Message.From("request");
         Task<IReadOnlyList<Message>> replyTask = dealer.Request()
-            .Message(request).Timeout(TimeSpan.FromSeconds(2)).Async();
+            .Message(request).Timeout(TimeSpan.FromSeconds(2)).Async().Reply;
         using Received received = Receive(owner);
         ReplyToken token = received.ReplyToken
             ?? throw new InvalidOperationException("missing reply token");
@@ -60,7 +60,7 @@ public sealed class test_pull_completion_contract
         Task responder = Task.Run(() => ReplyOnce(router, "one"));
         using Message request = Message.From("one");
         Task<IReadOnlyList<Message>> pending = dealer.Request().Message(request)
-            .Timeout(TimeSpan.FromSeconds(2)).Async();
+            .Timeout(TimeSpan.FromSeconds(2)).Async().Reply;
         var events = new PollEvent[1];
         Assert.Equal(1, poller.Wait(events, TimeSpan.FromSeconds(2)));
         Assert.Equal((nuint)17, events[0].Slot);
@@ -77,7 +77,7 @@ public sealed class test_pull_completion_contract
         Task responderAfterTransfer = Task.Run(() => ReplyOnce(router, "two"));
         using Message second = Message.From("two");
         IReadOnlyList<Message> secondReply = await dealer.Request()
-            .Message(second).Timeout(TimeSpan.FromSeconds(2)).Async();
+            .Message(second).Timeout(TimeSpan.FromSeconds(2)).Async().Reply;
         Zlink.MultipartClose(secondReply);
         await responderAfterTransfer;
     }
@@ -100,7 +100,7 @@ public sealed class test_pull_completion_contract
         using Received handshakeReceived = Receive(receiver);
 
         using Message message = Message.From("immediate");
-        Task admitted = sender.Send().Message(message).Async();
+        Task admitted = sender.Send().Message(message).Async().Admitted;
 
         Assert.True(admitted.IsCompletedSuccessfully);
         await admitted;
@@ -132,12 +132,12 @@ public sealed class test_pull_completion_contract
         {
             using Message request = Message.From($"drop-{i}");
             _ = dealer.Request().Message(request)
-                .Timeout(TimeSpan.FromSeconds(2)).Async();
+                .Timeout(TimeSpan.FromSeconds(2)).Async().Reply;
         }
 
         using Message probe = Message.From("probe");
         IReadOnlyList<Message> probeReply = await dealer.Request()
-            .Message(probe).Timeout(TimeSpan.FromSeconds(2)).Async()
+            .Message(probe).Timeout(TimeSpan.FromSeconds(2)).Async().Reply
             .WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal("probe", Assert.Single(probeReply).GetString());
         Zlink.MultipartClose(probeReply);
@@ -160,7 +160,7 @@ public sealed class test_pull_completion_contract
         using Message request = Message.From("no-reply");
         ZlinkRequestException error = await Assert.ThrowsAsync<ZlinkRequestException>(
             () => dealer.Request().Message(request)
-                .Timeout(TimeSpan.FromMilliseconds(25)).Async());
+                .Timeout(TimeSpan.FromMilliseconds(25)).Async().Reply);
         Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, error.Result);
     }
 

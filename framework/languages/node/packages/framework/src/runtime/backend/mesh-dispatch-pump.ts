@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { availableParallelism } from 'node:os';
 import { ZLINK_BACKEND_RECV_DONT_WAIT } from './runtime-values';
 import {
   ReadyDomain,
@@ -17,6 +18,7 @@ const MESH_DISPATCH_YIELD_RECORDS = 16;
 const MESH_DISPATCH_YIELD_INTERVAL_MS = 2;
 const MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET = 4;
 const MESH_DISPATCH_RECEIVE_CAPACITY = 64;
+const MESH_DISPATCH_MAX_APPLICATION_WORKERS = Math.max(2, availableParallelism());
 // Captured while the runtime module is loaded, before any application owner
 // exists. A ready callback may run inside a Spot turn; the shared Mesh pump
 // must enter like an independent receive-loop task, without inheriting that
@@ -53,12 +55,12 @@ class ZLinkMeshDispatchFailure extends Error {
 
 export class ZLinkMeshDispatchPump {
   private pendingDomains: number = ReadyDomain.None;
-  private scheduled = false;
   private infrastructureScheduled = false;
   private disposed = false;
-  private drainPromise?: Promise<void>;
   private infrastructureDrainPromise?: Promise<void>;
   private readonly activeDrains = new Set<Promise<void>>();
+  private readonly idleApplicationWorkers = new Set<() => void>();
+  private applicationWorkerCount = 0;
   private readonly capacityStop = new AbortController();
   private recordsSinceYield = 0;
   private yieldStartedAtMs = 0;
@@ -70,12 +72,12 @@ export class ZLinkMeshDispatchPump {
   }
 
   start(): void {
+    if (this.applicationWorkerCount === 0) this.startApplicationWorker();
     this.node.setReadyHandler((domains) => {
       if (this.disposed) {
         return ReadyDomain.None;
       }
-      this.pendingDomains |= domains;
-      this.schedule();
+      this.markReady(domains);
       return domains;
     });
   }
@@ -87,51 +89,91 @@ export class ZLinkMeshDispatchPump {
     this.disposed = true;
     this.capacityStop.abort();
     this.pendingDomains = ReadyDomain.None;
+    for (const wake of this.idleApplicationWorkers) wake();
+    this.idleApplicationWorkers.clear();
     while (this.activeDrains.size > 0) {
       await Promise.all([...this.activeDrains]);
     }
   }
 
-  private schedule(): void {
-    const infrastructureReady = (this.pendingDomains & ReadyDomain.Infrastructure) !== 0;
-    if ((!infrastructureReady || this.infrastructureScheduled)
-        && ((this.pendingDomains & ReadyDomain.Application) === 0 || this.scheduled)) return;
-    const startTurn = this.yieldIfNeeded() ?? Promise.resolve();
-    if (infrastructureReady) {
+  private markReady(domains: number): void {
+    if (domains === ReadyDomain.None || this.disposed) return;
+    const previous = this.pendingDomains;
+    this.pendingDomains |= domains;
+    const startInfrastructure =
+      (domains & ReadyDomain.Infrastructure) !== 0
+      && (previous & ReadyDomain.Infrastructure) === 0;
+    const startApplication =
+      (domains & ReadyDomain.Application) !== 0
+      && (previous & ReadyDomain.Application) === 0;
+    if (startInfrastructure && startApplication) {
+      const startTurn = this.yieldIfNeeded() ?? Promise.resolve();
       this.scheduleInfrastructure(startTurn);
-    }
-    if ((this.pendingDomains & ReadyDomain.Application) === 0) {
       return;
     }
-    if (this.scheduled) {
-      return;
-    }
-    this.scheduled = true;
-    // Let the bounded lifecycle turn start first when both domains wake.
-    // Waiting for its start (not its handlers) preserves independent progress.
-    const applicationTurn = infrastructureReady ? startTurn.then(yieldToEventLoop) : startTurn;
-    const drain = applicationTurn
-      .then(() => detachedMeshDispatchScope(() =>
-        runZLinkExecutionArea('application', () => this.drain())))
-      .catch((error) => {
-        if (error instanceof ZLinkMeshDispatchFailure) {
-          this.options.reportError?.(error.dispatchCause, error.context);
-          return;
-        }
-        this.options.reportError?.(error);
-      });
-    this.activeDrains.add(drain);
-    this.drainPromise = drain;
-    void drain.finally(() => {
-      this.activeDrains.delete(drain);
-      if (this.drainPromise === drain) {
-        this.drainPromise = undefined;
-        this.scheduled = false;
-        if (!this.disposed && this.pendingDomains !== ReadyDomain.None) {
-          this.schedule();
-        }
+    if (startInfrastructure) this.scheduleInfrastructure();
+    if (startApplication) {
+      if ((domains & ReadyDomain.Infrastructure) !== 0) {
+        setImmediate(() => this.wakeApplicationWorker());
+      } else {
+        this.wakeApplicationWorker();
       }
-    });
+    }
+  }
+
+  private wakeApplicationWorker(): void {
+    if (this.disposed || (this.pendingDomains & ReadyDomain.Application) === 0) return;
+    const idle = this.idleApplicationWorkers.values().next().value as (() => void) | undefined;
+    if (idle !== undefined) {
+      this.idleApplicationWorkers.delete(idle);
+      this.pendingDomains &= ~ReadyDomain.Application;
+      idle();
+      return;
+    }
+    if (this.applicationWorkerCount < MESH_DISPATCH_MAX_APPLICATION_WORKERS) {
+      this.startApplicationWorker();
+    }
+  }
+
+  private startApplicationWorker(): void {
+    this.applicationWorkerCount += 1;
+    let worker: Promise<void>;
+    worker = detachedMeshDispatchScope(() =>
+      runZLinkExecutionArea('application', () => this.runApplicationWorker()))
+      .finally(() => {
+        this.applicationWorkerCount -= 1;
+        this.activeDrains.delete(worker);
+      });
+    this.activeDrains.add(worker);
+  }
+
+  private async runApplicationWorker(): Promise<void> {
+    for (;;) {
+      await this.waitForApplicationReady();
+      if (this.disposed) return;
+      try {
+        await this.drainDomain(ReadyDomain.Application);
+      } catch (error) {
+        this.reportDispatchError(error);
+      }
+    }
+  }
+
+  private waitForApplicationReady(): Promise<void> {
+    if (this.disposed) return Promise.resolve();
+    if ((this.pendingDomains & ReadyDomain.Application) !== 0) {
+      this.pendingDomains &= ~ReadyDomain.Application;
+      return Promise.resolve();
+    }
+    return new Promise(resolve => this.idleApplicationWorkers.add(resolve));
+  }
+
+  private reportDispatchError(error: unknown): void {
+    if (error instanceof ZLinkMeshDispatchFailure) {
+      this.options.reportError?.(error.dispatchCause, error.context);
+      return;
+    }
+    this.options.reportError?.(error);
   }
 
   /**
@@ -170,22 +212,15 @@ export class ZLinkMeshDispatchPump {
     });
   }
 
-  private async drain(): Promise<void> {
-    while (!this.disposed) {
-      if ((this.pendingDomains & ReadyDomain.Application) === 0) {
-        return;
-      }
-      this.pendingDomains &= ~ReadyDomain.Application;
-      await this.drainDomain(ReadyDomain.Application);
-    }
-  }
-
   private async drainInfrastructure(): Promise<void> {
     while (!this.disposed) {
       if ((this.pendingDomains & ReadyDomain.Infrastructure) === 0) {
         return;
       }
       this.pendingDomains &= ~ReadyDomain.Infrastructure;
+      if ((this.pendingDomains & ReadyDomain.Application) !== 0) {
+        setImmediate(() => this.wakeApplicationWorker());
+      }
       const lifecycleBudgetExhausted = await this.drainDomain(
         ReadyDomain.Infrastructure,
         MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET
@@ -218,7 +253,7 @@ export class ZLinkMeshDispatchPump {
           return false;
         }
         if (domain === ReadyDomain.Application && drained.hasResidue) {
-          this.pendingDomains |= ReadyDomain.Application;
+          this.markReady(ReadyDomain.Application);
         }
         for (let index = 0; index < drained.records.length; index += 1) {
           const claim = readyBatch.takeClaim(index);
@@ -255,12 +290,9 @@ export class ZLinkMeshDispatchPump {
               if (domain === ReadyDomain.Infrastructure) {
                 this.infrastructureScheduled = false;
                 this.infrastructureDrainPromise = undefined;
-              } else {
-                this.scheduled = false;
-                this.drainPromise = undefined;
-              }
-              if (this.pendingDomains !== ReadyDomain.None) {
-                this.schedule();
+                if ((this.pendingDomains & ReadyDomain.Infrastructure) !== 0) {
+                  this.scheduleInfrastructure();
+                }
               }
               try {
                 for (const record of received.records) {
@@ -307,6 +339,10 @@ export class ZLinkMeshDispatchPump {
             receiveBatch.close();
             claim.release();
           }
+        }
+        if (claimBudget !== undefined && claimsDrained >= claimBudget) {
+          this.wakeApplicationWorker();
+          return true;
         }
         // Empty ready claims also count as work, so they cannot monopolize
         // the microtask queue without giving I/O and deadlines a turn.

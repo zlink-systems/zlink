@@ -113,6 +113,17 @@ public final class BenchResultWriter {
         fields.put("server_memory_mb", "server_memory_mb");
         String scenario = options.implementation + "-" + options.scenario;
         StringBuilder report = new StringBuilder("# with-grpc bench, server-driven source A\n\n");
+        @SuppressWarnings("unchecked")
+        var errors = (Iterable<Map<String, Object>>) result.get("client_error_summary");
+        for (Map<String, Object> error : errors) {
+            report.append("client_error: ").append(error.get("type")).append(": ")
+                .append(error.get("message")).append(" (").append(error.get("count"))
+                .append(")\n");
+        }
+        Number otherErrors = (Number) result.get("client_error_other_count");
+        if (otherErrors.longValue() != 0) {
+            report.append("client_error_other: ").append(otherErrors).append('\n');
+        }
         for (Map.Entry<String, String> entry : fields.entrySet()) {
             Number value = (Number) result.get(entry.getValue());
             report.append(String.format("RESULT,current,%s,local,%d,%s,%.3f%n",

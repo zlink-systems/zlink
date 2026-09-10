@@ -30,7 +30,7 @@ public sealed class test_whole_message_receive
                     .Timeout(TimeSpan.FromSeconds(2));
                 for (int i = 1; i < count; i++)
                     operation.Message(sent[i]);
-                var pending = operation.Async();
+                var pending = operation.Async().Reply;
                 Assert.True(CoreTestSupport.WaitUntil(() => router.Recv(received, flags), 2000));
                 Assert.Equal(count, received.Parts.Count);
                 Assert.Equal(dealer.GetRoutingId(), received.RoutingId);

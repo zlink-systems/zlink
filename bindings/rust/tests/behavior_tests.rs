@@ -89,8 +89,9 @@ fn dealer_router_roundtrip() {
     let dealer = ctx.dealer_socket().unwrap();
     let rid = RoutingId::from(b"dealer-42");
     dealer.set_routing_id(&rid).unwrap();
-    dealer.connect("inproc://beh-dr").unwrap();
-    thread::sleep(Duration::from_millis(50));
+    test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
+        dealer.connect("inproc://beh-dr").unwrap()
+    });
 
     // Dealer sends to Router
     let msg = Message::try_from(b"request-payload").unwrap();
@@ -124,8 +125,9 @@ fn dealer_recv_reuse_keeps_ordinary_messages_non_replyable() {
     let dealer_rid = RoutingId::from(b"dealer-recv-request-seq");
     dealer.set_routing_id(&dealer_rid).unwrap();
     router.bind("inproc://beh-dealer-request-seq").unwrap();
-    dealer.connect("inproc://beh-dealer-request-seq").unwrap();
-    thread::sleep(Duration::from_millis(50));
+    test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
+        dealer.connect("inproc://beh-dealer-request-seq").unwrap()
+    });
 
     await_send(
         dealer
@@ -160,8 +162,9 @@ fn router_recv_preserves_routing_id_and_multipart_payload() {
     let dealer = ctx.dealer_socket().unwrap();
     let rid = RoutingId::from(b"dealer-part");
     dealer.set_routing_id(&rid).unwrap();
-    dealer.connect("inproc://beh-router-part").unwrap();
-    thread::sleep(Duration::from_millis(50));
+    test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
+        dealer.connect("inproc://beh-router-part").unwrap()
+    });
 
     await_send(
         dealer
