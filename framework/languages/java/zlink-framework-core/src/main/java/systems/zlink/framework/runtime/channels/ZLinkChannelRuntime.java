@@ -1107,29 +1107,9 @@ public final class ZLinkChannelRuntime
     public ZLinkSendCall sendToNode(String channelName, RoutingId target, Object message) {
         ZLinkPayloadEncoding.EncodedPayload encoded =
             encodePayload(message);
-        ZLinkBackendRouterSocket router = sockets.routeRouter(channelName);
-        if (router == null) {
-            ZLinkInternalSpotNode node = sockets.spotRouterNode(channelName);
-            if (node != null) {
-                return new MeshNodeRouteSendCall(
-                    callRuntime,
-                    node,
-                    target,
-                    encoded.payload(),
-                    Optional.of(encoded.packetName()),
-                    encoded.contentType(),
-                    ZLinkApplicationMetadata.empty());
-            }
-            throw new ZLinkConfigurationException(
-                "route mesh channel is not configured: " + channelName);
-        }
         return new RouteSendCall(
-            callRuntime,
-            router,
-            target,
-            encoded.payload(),
-            Optional.of(encoded.packetName()),
-            encoded.contentType());
+            callRuntime, channelName, sockets, target, encoded.payload(),
+            Optional.of(encoded.packetName()), encoded.contentType(), null);
     }
 
     @Override
@@ -1156,33 +1136,10 @@ public final class ZLinkChannelRuntime
     public ZLinkRequestCall requestToNode(String channelName, RoutingId target, Object message) {
         ZLinkPayloadEncoding.EncodedPayload encoded =
             encodePayload(message);
-        ZLinkBackendRouterSocket router = sockets.routeRouter(channelName);
-        if (router == null) {
-            ZLinkInternalSpotNode node = sockets.spotRouterNode(channelName);
-            if (node != null) {
-                return new MeshNodeRouteRequestCall(
-                    callRuntime,
-                    channelName,
-                    node,
-                    target,
-                    encoded.payload(),
-                    Optional.of(encoded.packetName()),
-                    defaultRequestTimeout(channelName),
-                    encoded.contentType(),
-                    ZLinkApplicationMetadata.empty());
-            }
-            throw new ZLinkConfigurationException(
-                "route mesh channel is not configured: " + channelName);
-        }
         return new RouteRequestCall(
-            callRuntime,
-            channelName,
-            router,
-            target,
-            encoded.payload(),
-            Optional.of(encoded.packetName()),
-            defaultRequestTimeout(channelName),
-            encoded.contentType());
+            callRuntime, channelName, sockets, defaultRequestTimeout, target,
+            encoded.payload(), Optional.of(encoded.packetName()), null,
+            encoded.contentType(), null);
     }
 
     @Override
@@ -1368,28 +1325,26 @@ public final class ZLinkChannelRuntime
         long authorityOwnerGeneration,
         long ownerLeaseGeneration,
         List<Message> spotParts) {
-        ZLinkSpotRouteTarget target = resolveSpotRouteTarget(routerChannelId, targetNodeRid);
-        if (target instanceof ZLinkSpotRouterNodeTarget spotRouterNodeTarget) {
-            return sendToSpotViaSpotRouterNode(
-                routerChannelId,
-                spotRouterNodeTarget.node(),
-                targetNodeRid,
-                targetSpotId,
-                targetSpotGeneration,
-                authorityOwnerGeneration,
-                ownerLeaseGeneration,
-                spotParts);
-        }
-        Duration timeout = effectiveRouteTimeout(
-            defaultRequestTimeout(routerChannelId));
-        return callRuntime.submit(timeout, () -> {
-            CompletableFuture<Void> result = new CompletableFuture<>();
-            ZLinkBackendSpotRouteBridge bridge = requireSpotRouteBridge(routerChannelId);
-            ZLinkSpotRouteBridgeDispatcher.submitSend(
-                bridge, routerChannelId, targetNodeRid, targetSpotId,
-                copyMessages(spotParts), result);
-            return result;
-        }, ignored -> { });
+        return sockets.submitToSpot(
+            routerChannelId, targetNodeRid, spotRouteBridgeOwner, null, defaultRequestTimeout,
+            (bridge, resolvedTimeout) -> {
+                Duration timeout = effectiveRouteTimeout(resolvedTimeout);
+                spotRouteBridgeDrainer.start();
+                return callRuntime.submit(timeout, () -> {
+                    CompletableFuture<Void> result = new CompletableFuture<>();
+                    ZLinkSpotRouteBridgeDispatcher.submitSend(
+                        bridge, routerChannelId, targetNodeRid, targetSpotId,
+                        copyMessages(spotParts), result);
+                    return result;
+                }, ignored -> { });
+            },
+            (node, resolvedTimeout) -> {
+                Duration timeout = effectiveRouteTimeout(resolvedTimeout);
+                return callRuntime.submit(timeout, () -> ZLinkSpotRouterNodeDispatcher.send(
+                    routerChannelId, node, targetNodeRid, targetSpotId,
+                    targetSpotGeneration, authorityOwnerGeneration, ownerLeaseGeneration,
+                    spotParts, timeout), ignored -> { });
+            });
     }
 
     public CompletionStage<List<Message>> requestToSpotViaRouterChannel(
@@ -1436,110 +1391,37 @@ public final class ZLinkChannelRuntime
         Duration timeout,
         ZLinkServiceOperationRegistry operations,
         UUID operationId) {
+        Objects.requireNonNull(timeout, "timeout");
         trace(STREAM_TRACE ? "spot-route request-start router=" + routerChannelId
             + " targetNode=" + targetNodeRid
             + " targetSpot=" + targetSpotId
             + " parts=" + describeTraceParts(spotParts) : null);
-        ZLinkSpotRouteTarget target = resolveSpotRouteTarget(routerChannelId, targetNodeRid);
-        if (target instanceof ZLinkSpotRouterNodeTarget spotRouterNodeTarget) {
-            trace(STREAM_TRACE ? "spot-route request-path=spot-router-node router=" + routerChannelId
-                + " targetNode=" + targetNodeRid
-                + " targetSpot=" + targetSpotId : null);
-            return requestToSpotViaSpotRouterNode(
-                routerChannelId,
-                spotRouterNodeTarget.node(),
-                targetNodeRid,
-                targetSpotId,
-                targetSpotGeneration,
-                authorityOwnerGeneration,
-                ownerLeaseGeneration,
-                spotParts,
-                timeout,
-                operations,
-                operationId);
-        }
-        return operations.submit(operationId, timeout, () -> {
-            CompletableFuture<List<Message>> result = new CompletableFuture<>();
-            ZLinkBackendSpotRouteBridge bridge = requireSpotRouteBridge(routerChannelId);
-            trace(STREAM_TRACE ? "spot-route request-path=route-bridge router=" + routerChannelId
-                + " targetNode=" + targetNodeRid
-                + " targetSpot=" + targetSpotId : null);
-            ZLinkSpotRouteBridgeDispatcher.submitRequest(
-                bridge, routerChannelId, targetNodeRid, targetSpotId,
-                copyMessages(spotParts), timeout, result);
-            return result;
-        }, Message::closeAll);
+        return sockets.submitToSpot(
+            routerChannelId, targetNodeRid, spotRouteBridgeOwner, timeout, defaultRequestTimeout,
+            (bridge, effectiveTimeout) -> {
+                spotRouteBridgeDrainer.start();
+                return operations.submit(operationId, effectiveTimeout, () -> {
+                    CompletableFuture<List<Message>> result = new CompletableFuture<>();
+                    trace(STREAM_TRACE ? "spot-route request-path=route-bridge router=" + routerChannelId
+                        + " targetNode=" + targetNodeRid
+                        + " targetSpot=" + targetSpotId : null);
+                    ZLinkSpotRouteBridgeDispatcher.submitRequest(
+                        bridge, routerChannelId, targetNodeRid, targetSpotId,
+                        copyMessages(spotParts), effectiveTimeout, result);
+                    return result;
+                }, Message::closeAll);
+            },
+            (node, effectiveTimeout) -> {
+                trace(STREAM_TRACE ? "spot-route request-path=spot-router-node router=" + routerChannelId
+                    + " targetNode=" + targetNodeRid
+                    + " targetSpot=" + targetSpotId : null);
+                return ZLinkSpotRouterNodeDispatcher.request(
+                    routerChannelId, node, targetNodeRid, targetSpotId,
+                    targetSpotGeneration, authorityOwnerGeneration, ownerLeaseGeneration,
+                    spotParts, effectiveTimeout, operations, operationId);
+            });
     }
 
-    private ZLinkSpotRouteTarget resolveSpotRouteTarget(
-        String routerChannelId,
-        RoutingId targetNodeRid) {
-        if (spotRouteBridgeOwner != null) {
-            ZLinkInternalSpotNode localNode = spotRouteBridgeOwner.get();
-            if (localNode != null && localNode.routingId().equals(targetNodeRid)) {
-                return new ZLinkSpotRouterNodeTarget(localNode);
-            }
-        }
-        ChannelRegistration registration = sockets.registration(routerChannelId);
-        if (registration != null && registration.kind() == ChannelKind.ROUTE_MESH) {
-            return new ZLinkRouteBridgeTarget();
-        }
-        ZLinkInternalSpotNode spotRouterNode = sockets.spotRouterNode(routerChannelId);
-        if (spotRouterNode != null) {
-            return new ZLinkSpotRouterNodeTarget(spotRouterNode);
-        }
-        trace(STREAM_TRACE ? "spot-route missing-router router=" + routerChannelId : null);
-        throw new ZLinkConfigurationException(
-            "route mesh channel is not configured: " + routerChannelId);
-    }
-
-    private CompletionStage<Void> sendToSpotViaSpotRouterNode(
-        String routerChannelId,
-        ZLinkInternalSpotNode node,
-        RoutingId targetNodeRid,
-        String targetSpotId,
-        long targetSpotGeneration,
-        long authorityOwnerGeneration,
-        long ownerLeaseGeneration,
-        List<Message> spotParts) {
-        Duration timeout = effectiveRouteTimeout(defaultRequestTimeout(routerChannelId));
-        return callRuntime.submit(timeout, () -> ZLinkSpotRouterNodeDispatcher.send(
-            routerChannelId,
-            node,
-            targetNodeRid,
-            targetSpotId,
-            targetSpotGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration,
-            spotParts,
-            timeout), ignored -> { });
-    }
-
-    private CompletionStage<List<Message>> requestToSpotViaSpotRouterNode(
-        String routerChannelId,
-        ZLinkInternalSpotNode node,
-        RoutingId targetNodeRid,
-        String targetSpotId,
-        long targetSpotGeneration,
-        long authorityOwnerGeneration,
-        long ownerLeaseGeneration,
-        List<Message> spotParts,
-        Duration timeout,
-        ZLinkServiceOperationRegistry operations,
-        UUID operationId) {
-        return ZLinkSpotRouterNodeDispatcher.request(
-            routerChannelId,
-            node,
-            targetNodeRid,
-            targetSpotId,
-            targetSpotGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration,
-            spotParts,
-            timeout,
-            operations,
-            operationId);
-    }
 
     static void trace(String message) {
         if (STREAM_TRACE) {
@@ -1692,22 +1574,8 @@ public final class ZLinkChannelRuntime
         if (existing != null) {
             return existing;
         }
-        if (spotRouteBridgeOwner == null) {
-            throw new ZLinkConfigurationException(
-                "routed SPOT egress requires a router-capable SPOT node");
-        }
-        ZLinkBackendSpotRouteBridge bridge =
-            spotRouteBridgeOwner.get().createRouteBridge();
-        ChannelRegistration registration = sockets.registration(channelName);
-        if (registration != null && registration.kind() == ChannelKind.ROUTE_MESH) {
-            bridge.attachRouterChannel(
-                channelName,
-                requireRouteRouter(channelName));
-        } else {
-            throw new ZLinkConfigurationException(
-                "SPOT route bridge requires a router channel: " + channelName);
-        }
-        sockets.registerSpotRouteBridge(channelName, bridge);
+        ZLinkBackendSpotRouteBridge bridge = sockets.requireSpotRouteBridge(
+            channelName, spotRouteBridgeOwner);
         spotRouteBridgeDrainer.start();
         return bridge;
     }
