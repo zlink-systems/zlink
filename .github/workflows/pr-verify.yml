@@ -1,0 +1,200 @@
+name: PR Verify
+
+# build.yml은 dispatch 전용 릴리스 파이프라인이라 PR에 맞지 않는다. 이 워크플로우는
+# PR에서 운영 코드 변경만 골라 Core·binding·framework Java를 Linux에서 검증한다.
+# framework .NET·Node는 framework-dotnet.yml·framework-node.yml이 이미 PR을 받는다.
+# framework C++은 hiredis·redis++ 소스 빌드와 cpp binding package가 선행이라 별도로 낸다.
+#
+# GitHub의 paths 필터는 workflow 단위라 job별로 다르게 줄 수 없다. union을 필터로 두고
+# changes job이 base와의 diff로 어느 job을 돌릴지 정한다. 외부 action을 쓰지 않는다.
+
+on:
+  pull_request:
+    branches:
+      - main
+    # 운영 코드만. 문서·계획·bench·sample은 이 워크플로우를 시작하지 않는다.
+    paths:
+      - ".github/workflows/pr-verify.yml"
+      - "VERSION"
+      - "core/include/**"
+      - "core/src/**"
+      - "core/tests/**"
+      - "core/CMakeLists.txt"
+      - "core/cmake/**"
+      - "bindings/c/**"
+      - "bindings/cpp/**"
+      - "bindings/java/**"
+      - "bindings/python/**"
+      - "bindings/tools/**"
+      # mirror 대조 대상. go·rust는 헤더 미러만 본다.
+      - "bindings/go/include/**"
+      - "bindings/rust/include/**"
+      - "framework/languages/java/**"
+      - "framework/runtime/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Select checks
+    runs-on: ubuntu-24.04
+    outputs:
+      core: ${{ steps.select.outputs.core }}
+      framework_java: ${{ steps.select.outputs.framework_java }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compare against the base branch
+        id: select
+        env:
+          BASE: ${{ github.base_ref || 'main' }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT}" != "pull_request" ]; then
+            # 손으로 돌릴 때는 전부 돈다.
+            printf 'core=true\nframework_java=true\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          git fetch --no-tags --depth=200 origin "${BASE}"
+          changed="$(git diff --name-only "origin/${BASE}...HEAD")"
+          printf '변경 파일:\n%s\n' "${changed}"
+          emit() {
+            if printf '%s\n' "${changed}" | grep -qE "$2"; then
+              echo "$1=true" >> "${GITHUB_OUTPUT}"
+            else
+              echo "$1=false" >> "${GITHUB_OUTPUT}"
+            fi
+          }
+          emit core '^(VERSION|core/|bindings/(c|cpp|python|tools)/|bindings/(go|rust)/include/|\.github/workflows/pr-verify\.yml)'
+          emit framework_java '^(VERSION|core/|bindings/(java|tools)/|framework/languages/java/|framework/runtime/|\.github/workflows/pr-verify\.yml)'
+
+  core:
+    name: Core ctest and binding smoke
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build git pkg-config libssl-dev python3-venv
+
+      # CONTRIBUTING §1의 명령과 같다. LTO는 끈다 — PR 검증은 동작을 보는 것이고
+      # LTO 링크가 느리다. hotpath_gate는 valgrind가 있을 때만 등록되므로 여기서는
+      # 돌지 않는다(릴리스 gate가 소유한다).
+      - name: Build libzlink with tests
+        run: |
+          cmake -S core -B core/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_LTO=OFF \
+            -DZLINK_BUILD_TESTS=ON \
+            -DBUILD_TESTS=ON \
+            -DBUILD_BENCHMARKS=OFF \
+            -DWITH_DOCS=OFF
+          cmake --build core/build --parallel 2
+
+      - name: ctest
+        run: ctest --test-dir core/build -j2 --output-on-failure
+
+      # 알려진 load flake는 단독 재실행 1회로 판정한다(CONTRIBUTING §5).
+      - name: Single-lane suite twice
+        run: |
+          ctest --test-dir core/build -R '^test_single_lane_' -j2 --output-on-failure
+          ctest --test-dir core/build -R '^test_single_lane_' -j2 --output-on-failure
+
+      # raw header mirror가 어긋나면 바인딩이 조용히 옛 계약을 쓴다.
+      - name: Verify raw header mirrors
+        run: |
+          set -euo pipefail
+          status=0
+          for l in c cpp go rust; do
+            for h in zlink_enum.h zlink/socket/api.h zlink/eventing/api.h; do
+              if ! cmp -s "core/include/$h" "bindings/$l/include/$h"; then
+                echo "MIRROR DIFF $l/$h"
+                status=1
+              fi
+            done
+          done
+          exit "${status}"
+
+      - name: Whitespace check
+        env:
+          BASE: ${{ github.base_ref || 'main' }}
+        run: |
+          git fetch --no-tags --depth=200 origin "${BASE}"
+          git diff --check "$(git merge-base HEAD "origin/${BASE}")"
+
+      - name: C++ binding smoke
+        run: bash bindings/cpp/tests/run_tests.sh
+
+      - name: Python binding smoke
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/pyvenv"
+          "${RUNNER_TEMP}/pyvenv/bin/pip" install --quiet --upgrade pip pytest
+          ZLINK_CORE_SOURCE=local \
+          PYTHON_EXECUTABLE="${RUNNER_TEMP}/pyvenv/bin/python" \
+            bash bindings/python/tests/run_tests.sh
+
+  framework-java:
+    name: Framework Java unit and contract tests
+    needs: changes
+    if: needs.changes.outputs.framework_java == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build git pkg-config libssl-dev
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      # 체크아웃의 Core를 소스에서 빌드한다. 릴리스 자산에 의존하지 않으므로
+      # VERSION을 올리는 PR도 검증된다. 테스트는 core job이 돌리므로 여기서는 끈다.
+      - name: Build the checkout Core runtime
+        run: |
+          cmake -S core -B core/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_LTO=OFF \
+            -DZLINK_BUILD_TESTS=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_BENCHMARKS=OFF \
+            -DWITH_DOCS=OFF
+          cmake --build core/build --parallel 2 --target libzlink
+
+      # 공유 Maven에 아직 없는 binding 버전이어도 되도록 binding 소스를 includeBuild
+      # 한다(doc/building/local-core-bindings.ko.md).
+      - name: Run framework Java tests against the checkout binding
+        working-directory: framework/languages/java
+        run: |
+          set -euo pipefail
+          export ZLINK_JAVA_BINDINGS_SOURCE="${GITHUB_WORKSPACE}/bindings/java"
+          export ZLINK_CORE_SOURCE=local
+          export ZLINK_CORE_INCLUDE_DIR="${GITHUB_WORKSPACE}/core/include"
+          export ZLINK_CORE_LIB_DIR="${GITHUB_WORKSPACE}/core/build/lib"
+          ./gradlew --no-daemon --max-workers=2 \
+            :zlink-framework-core:test \
+            contractTest \
+            :zlink-framework-spring-boot-starter:test
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: framework-java-test-results
+          path: framework/languages/java/*/build/test-results/**/*.xml
+          retention-days: 7
