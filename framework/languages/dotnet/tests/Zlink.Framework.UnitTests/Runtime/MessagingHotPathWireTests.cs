@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using Zlink.Framework.Codecs.Protobuf;
+using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Codecs;
 using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
 
@@ -226,6 +227,28 @@ public sealed class MessagingHotPathWireTests
 
     private sealed class WireValue
     {
+    }
+
+    [Fact]
+    public void Wrapped_typed_message_uses_the_same_owned_part_serializer_as_direct_envelopes()
+    {
+        var codecs = new ZLinkCodecRegistryBuilder();
+        codecs.AddSerializer("application/x-wire-part", new FixedPartSerializer(),
+            static type => type == typeof(WireValue));
+        var value = ZLinkMessage.From(new WireValue());
+        using var raw = value.ToRawMessage(codecs);
+        var parts = ZLinkEnvelopeCodec.EncodeParts(
+            Header(ZLinkMessageKind.Request, "corr-fixed"), value, typeof(ZLinkMessage), codecs);
+        try
+        {
+            Assert.Equal(new byte[] { 0xC0, 0xDE, 0x48, 0x4F, 0x54 }, raw.ToArray());
+            Assert.Equal(raw.ToArray(), parts[1].ToArray());
+            Assert.Equal(Encoding.UTF8.GetBytes(PartSerializerHeader), parts[0].ToArray());
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
     }
 
     private sealed class FixedPartSerializer :

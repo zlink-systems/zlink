@@ -217,9 +217,7 @@ internal static class ZLinkEnvelopeCodec
                 throw new InvalidOperationException(
                     $"Envelope body type is ZLinkMessage, but body instance is '{body?.GetType()}'.");
 
-            var encoded = message.Encode(codecs ?? new ZLinkCodecRegistryBuilder());
-            contentType = encoded.ContentType;
-            return Message.From(encoded.Payload.Bytes.Span);
+            return message.ToRawMessage(codecs ?? new ZLinkCodecRegistryBuilder(), out contentType);
         }
 
         var hasSerializer = TryResolveBodySerializer(
@@ -235,16 +233,12 @@ internal static class ZLinkEnvelopeCodec
         return EncodeBody(
             body,
             bodyType,
-            codecs,
-            resolutionCompleted,
             hasSerializer ? serializer : null);
     }
 
     private static Message EncodeBody(
         object? body,
         Type? bodyType,
-        ZLinkCodecRegistryBuilder? codecs,
-        bool resolutionCompleted,
         IZLinkMessageSerializer? serializer)
     {
         if (bodyType is null || body is null) return Message.From(ReadOnlySpan<byte>.Empty);
@@ -258,18 +252,14 @@ internal static class ZLinkEnvelopeCodec
             return Message.From(message);
         }
 
-        if (bodyType == typeof(ZLinkMessage))
-        {
-            if (body is not ZLinkMessage message)
-                throw new InvalidOperationException(
-                    $"Envelope body type is ZLinkMessage, but body instance is '{body.GetType()}'.");
+        return EncodeSerializedPart(body, bodyType, serializer);
+    }
 
-            return Message.From(message.Encode(codecs ?? new ZLinkCodecRegistryBuilder()).Payload.Bytes.Span);
-        }
-
-        if (!resolutionCompleted)
-            return EncodeJsonPart(body, bodyType);
-
+    internal static Message EncodeSerializedPart(
+        object? body, Type bodyType, IZLinkMessageSerializer? serializer)
+    {
+        if (body is null)
+            return Message.From(ReadOnlySpan<byte>.Empty);
         if (serializer is not null)
         {
             if (serializer is IZLinkMessagePartSerializer partSerializer)
