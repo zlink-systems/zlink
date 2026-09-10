@@ -181,6 +181,7 @@ callback/handler 등록 함수 이름은 실제 동작을 드러내야 한다. �
 |------|----------------|
 | raw STREAM packet handler 등록 | `setPacketHandler` |
 | SPOT dispatch event handler 등록 | `setDispatchHandler` |
+| socket 수신 readiness handler 등록 | `setReadableHandler` |
 | SPOT routed receive | `recvRouted` |
 | SPOT Actor lifecycle receive | `recvActorLifecycle` |
 
