@@ -52,7 +52,7 @@ public final class OutstandingRequestRepro {
         client.request(peer)
             .message(Message.from(envelope))
             .message(Message.from(ReproWire.encodeBody(new byte[1024])))
-            .timeout(Duration.ofSeconds(5)).submit()
+            .timeout(Duration.ofSeconds(5)).submit().reply()
             .toCompletableFuture().get(5, TimeUnit.SECONDS).forEach(Message::close);
         System.out.println("route established against " + endpoint);
 
@@ -63,7 +63,7 @@ public final class OutstandingRequestRepro {
                 .message(Message.from(envelope))
                 .message(Message.from(ReproWire.encodeBody(new byte[1024])))
                 .timeout(Duration.ofSeconds(waitSeconds))
-                .submit()
+                .submit().reply()
                 .toCompletableFuture()
                 .thenApply(parts -> {
                     parts.forEach(Message::close);
@@ -150,7 +150,7 @@ public final class OutstandingRequestRepro {
 
         // One blocking request first, so the route is established before the batch.
         client.request(SERVER).message(Message.from("warm"))
-            .timeout(Duration.ofSeconds(5)).submit()
+            .timeout(Duration.ofSeconds(5)).submit().reply()
             .toCompletableFuture().get(5, TimeUnit.SECONDS).forEach(Message::close);
         System.out.println("route established; echoed=" + echoed.get());
 
@@ -160,7 +160,7 @@ public final class OutstandingRequestRepro {
             pending.add(client.request(SERVER)
                 .message(Message.from("req-" + index))
                 .timeout(Duration.ofSeconds(waitSeconds))
-                .submit()
+                .submit().reply()
                 .toCompletableFuture()
                 .thenApply(parts -> {
                     parts.forEach(Message::close);
