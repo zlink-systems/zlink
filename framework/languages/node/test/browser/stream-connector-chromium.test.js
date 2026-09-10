@@ -31,8 +31,10 @@ test('actual Chromium uses ws/wss, explicit flow, reconnect, drain, and browser 
   const browser = await chromium.launch({ headless: true });
   t.after(() => cleanup(t, 'browser', () => closeBrowser(browser)));
   const context = await browser.newContext();
+  t.after(() => cleanup(t, 'browser context', () => closeBrowserContext(context)));
   const page = await context.newPage();
   const secureContext = await browser.newContext({ ignoreHTTPSErrors: true });
+  t.after(() => cleanup(t, 'secure browser context', () => closeBrowserContext(secureContext)));
   const securePage = await secureContext.newPage();
   const untrustedPage = await context.newPage();
   try {
@@ -167,6 +169,11 @@ async function stopStreamServer(child) {
 async function cleanup(t, resource, action) {
   const result = await action();
   if (result.timedOut) t.diagnostic(`${resource} cleanup exceeded its grace period; forced=${result.forced}`);
+}
+
+async function closeBrowserContext(context) {
+  await context.close();
+  return { timedOut: false, forced: false };
 }
 
 async function freePorts(count) {

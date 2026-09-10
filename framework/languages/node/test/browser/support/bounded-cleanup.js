@@ -22,7 +22,10 @@ function waitForExit(child, timeoutMs) {
 async function stopChild(child, timeoutMs = 5_000) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return { timedOut: false, forced: false };
   child.kill('SIGTERM');
-  return waitForExit(child, timeoutMs);
+  const result = await waitForExit(child, timeoutMs);
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+  return result;
 }
 
 async function closeServer(server, timeoutMs = 5_000) {
@@ -35,6 +38,7 @@ async function closeServer(server, timeoutMs = 5_000) {
       new Promise((resolve) => { timer = setTimeout(() => {
         timedOut = true;
         server.closeAllConnections?.();
+        server.closeIdleConnections?.();
         resolve();
       }, timeoutMs); })
     ]);
