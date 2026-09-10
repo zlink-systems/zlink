@@ -8,6 +8,8 @@ const header = require('../shared/bench-metric-header');
 const LOGICAL_CORES = os.cpus().length;
 const CLIENT_SATURATION_METRIC = 'event_loop_utilization';
 const CLIENT_PARALLELISM_CEILING = 1.0;
+const ERROR_KIND_LIMIT = 8;
+const ERROR_MESSAGE_LIMIT = 200;
 
 class ResourceSample {
   constructor() {
@@ -49,6 +51,8 @@ class SourceMetrics {
     this.sampleCount = 0;
     this.sampleSumMicros = 0;
     this.samples = [];
+    this.errorSummary = new Map();
+    this.otherErrors = 0;
   }
 
   begin() {
@@ -58,14 +62,32 @@ class SourceMetrics {
     return header.nowNs();
   }
 
-  complete(started, success) {
+  complete(started, success, error = null) {
     const micros = Number(header.nowNs() - started) / 1000;
     this.inFlight -= 1;
     if (success) this.completed += 1;
-    else this.errors += 1;
+    else {
+      this.errors += 1;
+      if (error !== null) this.recordError(error);
+    }
     this.sampleCount += 1;
     this.sampleSumMicros += micros;
     if (this.samples.length < this.sampleLimit) this.samples.push(micros);
+  }
+
+  recordError(error) {
+    const type = error && error.name ? String(error.name) : typeof error;
+    let message = error && error.message !== undefined ? String(error.message) : String(error);
+    message = message.replace(/[\r\n]/g, ' ').slice(0, ERROR_MESSAGE_LIMIT);
+    const key = JSON.stringify([type, message]);
+    const existing = this.errorSummary.get(key);
+    if (existing !== undefined) {
+      existing.count += 1;
+    } else if (this.errorSummary.size < ERROR_KIND_LIMIT) {
+      this.errorSummary.set(key, { type, message, count: 1 });
+    } else {
+      this.otherErrors += 1;
+    }
   }
 
   recordAbandoned(count) {
@@ -91,6 +113,8 @@ class SourceMetrics {
       inFlight: this.inFlight,
       peakInFlight: this.peakInFlight,
       abandoned: this.abandoned,
+      clientErrorSummary: [...this.errorSummary.values()],
+      clientErrorOtherCount: this.otherErrors,
       meanMicros: this.sampleCount === 0 ? 0 : this.sampleSumMicros / this.sampleCount,
       p95Micros: percentile(sorted, 0.95),
       p99Micros: percentile(sorted, 0.99)
@@ -199,6 +223,8 @@ async function runActive(transport, metrics, options, trigger) {
   return {
     completed: source.completed,
     errors: source.errors,
+    client_error_summary: source.clientErrorSummary,
+    client_error_other_count: source.clientErrorOtherCount,
     server_errors: target.errors,
     throughput_per_second: throughput,
     bandwidth_mb_s: throughput * trigger.payloadBytes / 1_000_000,
@@ -244,7 +270,7 @@ async function requestBackpressure(
       try {
         submission = transport.requestSubmission(0, payload);
       } catch (error) {
-        metrics.complete(started, false);
+        metrics.complete(started, false, error);
         continue;
       }
       const reply = (async () => {
@@ -253,7 +279,7 @@ async function requestBackpressure(
           validateReply(value, runId, header.PHASE_ACTIVE, trigger.payloadBytes, sequence);
           metrics.complete(started, true);
         } catch (error) {
-          metrics.complete(started, false);
+          metrics.complete(started, false, error);
         }
       })();
       pending.add(reply);
@@ -312,7 +338,7 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
         }
         metrics.complete(started, true);
       } catch (error) {
-        metrics.complete(started, false);
+        metrics.complete(started, false, error);
       }
     }
   })());
@@ -329,7 +355,7 @@ async function executeRequest(transport, metrics, trigger, runId, stream, sequen
     validateReply(reply, runId, header.PHASE_ACTIVE, trigger.payloadBytes, sequence);
     metrics.complete(started, true);
   } catch (error) {
-    metrics.complete(started, false);
+    metrics.complete(started, false, error);
   }
 }
 
