@@ -342,6 +342,52 @@ Node 바인딩은 같은 자리에서 `Promise.resolve()`를 공유하는데 **P
 C++ metric이 debug에서만 발행되는 것(`host_capacity_runtime.hpp:150`이 같다)은 **기존 관례**이며
 job 잘못이 아니다. **#173**으로 분리했다 — .NET은 `Meter` counter라 항상 발행한다.
 
+### DI scope — 내 요약이 스펙보다 강했다 (사용자 지적 2026-09-11)
+
+#48 제목과 항목 7에 **"DI scope를 제거한다"**고 썼는데 **틀린 표현이다.**
+메시지마다 scope를 만드는 것은 ASP.NET·NestJS의 정상 패턴이고 **스펙도 그 의미를 유지하라고 한다.**
+
+`01-execution/08-messaging-hot-path.ko.md` §4.3:
+> **handler instance 조회와 DI scope는 W1~W3 안에서 상수 시간이다.**
+> **scoped handler의 의미는 유지하되**, scope 생성과 조회가 record마다 컨테이너를 탐색하지 않도록
+> **활성화 경로를 캐시한다.**
+
+**요구는 "없애기"가 아니라 "상수 시간으로 만들기"다.** 제목을 고쳤다 →
+*"...record별 task를 제거하고 **DI 활성화를 상수 시간으로 만든다**"*.
+
+#### 4언어 현황 (감독 확인)
+
+| 언어 | record마다 scope | 활성화 | lane 건너감 | 판정 |
+|---|---|---|---|---|
+| **.NET** | `CreateAsyncScope()` (`ZLinkHandlerDispatcher.cs:59`) | **reflection** | **예** | **문제** |
+| **C++** | 없음 — 등록 시 lambda가 `services.get_required<TOwner>()`를 캡처(`handler_registry.hpp:99-103`) | 상수 시간 | 아니오 | 정상 |
+| **Java** | core dispatch에 없음. Spring 통합은 `spring-boot-starter`로 분리 | — | — | 정상 |
+| **Node** | core dispatch에 없음. NestJS 통합은 `packages/nestjs`로 분리 | — | — | 정상 |
+
+**.NET 고유 문제다.** 그리고 비싼 것은 scope 생성이 아니다.
+
+```csharp
+// ZLinkScopedHandlerInstanceOwner.cs:21-35
+public object Resolve(Type handlerType)
+{
+    return AwaitStateLane(_lane.RunAsync(() =>          // ← lane 왕복 + 호출 thread blocking
+    {
+        if (_fallbackInstances.TryGetValue(handlerType, out var existing)) return existing;
+        var created = ActivatorUtilities.CreateInstance(Services, handlerType);   // ← reflection
+        ...
+```
+
+세 가지가 겹친다 — **lane 왕복**(#48 항목 1의 "왕복 14회" 중 하나), **reflection**, 그리고
+**캐시가 한 번도 적중하지 않는다**(`ZLinkHandlerDispatcher.cs:60`이 scope마다 새 owner를 만들어
+record마다 빈 상태로 시작).
+
+**C++이 참고다** — 등록 시점에 `service_provider_t&`를 받는 invoker lambda를 만들어 캡처해 두고
+record마다는 실행만 한다. 스펙이 말하는 "활성화 경로를 캐시한다"가 그것이다.
+
+**#5·#6·#7 진단 브리프에 쓸 문장:** "DI scope를 제거한다"가 아니라
+**"활성화를 상수 시간으로 만들고 DI 해석이 state lane을 건너가지 않게 한다"**.
+전자로 쓰면 job이 scoped 의미를 없애는 방향으로 간다.
+
 ### C++ 측정 경로가 열렸다 (2026-09-11) — 네 가지가 막고 있었다
 
 **`ctest --preset linux-ninja-release -L 'framework-unit|framework-contract'` → 65/65, 실패 0.**
