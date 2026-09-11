@@ -9147,7 +9147,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 var socket = _socket;
                 if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
                     throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
-                admission = socket.Send(target).Messages(messages).Async(cancellationToken).Admitted;
+                admission = socket.Send(target).Messages(messages).Async(cancellationToken).EnsureAcceptedAsync();
                 ownershipTransferred = true;
             }
             await admission.ConfigureAwait(false);
@@ -9174,7 +9174,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 var socket = _socket;
                 if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
                     throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
-                admission = socket.Send(target).Messages(messages).Async(cancellationToken).Admitted;
+                admission = socket.Send(target).Messages(messages).Async(cancellationToken).EnsureAcceptedAsync();
                 ownershipTransferred = true;
             }
             await admission.ConfigureAwait(false);
@@ -11041,7 +11041,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         try
         {
             message = Message.From(head);
-            var admission = exactSend.Message(message).Async(cancellationToken).Admitted;
+            var admission = exactSend.Message(message).Async(cancellationToken).EnsureAcceptedAsync();
             if (admission.IsCanceled)
                 return;
             message = null;
@@ -11319,7 +11319,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
                 var operation = socket.Send(target).Messages(messages);
                 ownershipTransferred = true;
-                admission = operation.Async(cancellationToken).Admitted;
+                admission = operation.Async(cancellationToken).EnsureAcceptedAsync();
             }
             await admission.ConfigureAwait(false);
         }
@@ -12449,7 +12449,7 @@ internal sealed class ZLinkManagedStreamSessionService(
         var retained = parts.Select(Message.From).ToArray();
         try
         {
-            return stream.Send(sessionRid).Messages(retained).Async(cancellationToken).Admitted;
+            return stream.Send(sessionRid).Messages(retained).Async(cancellationToken).EnsureAcceptedAsync();
         }
         finally
         {

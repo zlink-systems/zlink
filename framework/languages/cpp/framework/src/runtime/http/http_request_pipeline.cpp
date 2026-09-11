@@ -45,8 +45,11 @@ class http_route_invoker_access_t
           [&route, &services, &context, owned_request = request,
            owned_body = body] () mutable -> boost::asio::awaitable<result_t<http_response_t>> {
               try {
-                  co_return co_await await_task_result (
-                    route.invoke (services, context, owned_request, owned_body));
+                  auto pending = [&] {
+                      const detail::ambient_context_scope_t invocation (nullptr, &route);
+                      return route.invoke (services, context, owned_request, owned_body);
+                  } ();
+                  co_return co_await await_task_result (std::move (pending));
               }
               catch (const framework_exception_t &error) {
                   co_return detail::result_access_t::failure<http_response_t> (error);
@@ -675,6 +678,7 @@ void invoke_matched_route (http::response<http::string_body> &response,
                            const http::request<http::string_body> &request,
                            const matched_route_t &match)
 {
+    const detail::ambient_context_scope_t invocation (nullptr, &match);
     auto request_scope = detail::service_scope_t::create (
       services, detail::service_scope_kind_t::handler_invocation);
     auto &request_services = request_scope.provider ();

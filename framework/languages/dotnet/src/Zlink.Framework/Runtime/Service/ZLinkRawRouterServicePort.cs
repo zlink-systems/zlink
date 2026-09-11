@@ -86,7 +86,7 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
             await _socket.Send(target)
                 .Messages(messages)
                 .Async(cancellationToken)
-                .Admitted
+                .EnsureAcceptedAsync()
                 .ConfigureAwait(false);
         }
         finally

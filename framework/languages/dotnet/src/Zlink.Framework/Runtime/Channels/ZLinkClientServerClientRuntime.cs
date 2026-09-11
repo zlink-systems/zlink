@@ -174,7 +174,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             await target.Socket.Send()
                 .Messages(parts)
                 .Async(cancellationToken)
-                .Admitted
+                .EnsureAcceptedAsync()
                 .ConfigureAwait(false);
             if (sentPacketName is not null
                 && _flow!.Enabled(ZLinkMessageFlowOutcome.Sent))
@@ -1610,7 +1610,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 await Socket.Send()
                     .Message(message)
                     .Async(cancellationToken)
-                    .Admitted
+                    .EnsureAcceptedAsync()
                     .ConfigureAwait(false);
                 return true;
             }
