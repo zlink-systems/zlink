@@ -12,7 +12,7 @@ using Zlink.Framework.LocationProvider;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class ClientServerChannelRuntimeTests
+public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     [Fact]
     public async Task GlobalClientServerMetadataFailureDisposesEachSendPartOnce()
@@ -369,9 +369,22 @@ public sealed class ClientServerChannelRuntimeTests
     [Fact]
     public async Task NegotiatedBoundConvertsOversizedServerReplyToCapacityExceeded()
     {
+        var logDirectory = Environment.GetEnvironmentVariable("ZLINK_TEST_FLOW_DIRECTORY")
+            ?? Zlink.Framework.Tests.Common.FrameworkTestEnvironment.CreateTestLogDirectory("oversized-server-reply");
+        var flowFilePath = Path.Combine(
+            logDirectory, $"oversized-server-reply-{Guid.NewGuid():N}.flow");
+        using var listener = new TestHostMessageFlowListener(flowFilePath);
+        output.WriteLine($"Message flow file: {flowFilePath}");
+        var diagnosticsLevel = Environment.GetEnvironmentVariable("ZLINK_TEST_FLOW_LEVEL") is { } level
+            ? Enum.Parse<ZLinkDiagnosticsLevel>(level)
+            : ZLinkDiagnosticsLevel.Normal;
         var port = ReservePort();
         await using var server = CreateLargeReplyServer(port, maximumMessageBytes: 512);
         await using var client = CreateClient(port, maximumMessageBytes: 4096);
+        server.GetRequiredService<ZLinkFrameworkRegistration>().DispatchOptions.Diagnostics
+            .SetLevel(diagnosticsLevel);
+        client.GetRequiredService<ZLinkFrameworkRegistration>().DispatchOptions.Diagnostics
+            .SetLevel(diagnosticsLevel);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
 
@@ -393,8 +406,15 @@ public sealed class ClientServerChannelRuntimeTests
         }
         finally
         {
-            await clientRuntime.StopAsync(CancellationToken.None);
-            await serverRuntime.StopAsync(CancellationToken.None);
+            try
+            {
+                await clientRuntime.StopAsync(CancellationToken.None);
+                await serverRuntime.StopAsync(CancellationToken.None);
+            }
+            finally
+            {
+                output.WriteLine(File.ReadAllText(flowFilePath));
+            }
         }
     }
 
