@@ -325,7 +325,7 @@ of §3 and §4, and the language pages link the instrumentation points and test 
   send-saturation and for each payload 1024 and 4096, the value being the ratio of the aggregator's 3-run
   medians. This 0.90 is the pass line this page has confirmed, separate from the 0.80 pass line bench
   spec §7.2 applies to request-backpressure. Pass or fail is decided by this ratio alone — below 0.90
-  is a defect, and a value above 1 is not (user decision 2026-09-10).
+  is a defect, and a value above 1 is not.
 - (d) **Concurrency** (measurement candidate): in request-window(100), the 3-run median of the per-run mean in-flight count
   (throughput × mean latency) is at least 90.
 - (e) **Consumption rate** (measurement candidate): in send-saturation the time D from the close of the active window to the

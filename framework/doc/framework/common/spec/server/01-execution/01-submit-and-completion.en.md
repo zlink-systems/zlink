@@ -113,7 +113,7 @@ defined by the operation family accepted the message. Remote handler execution, 
 receipt, remote Spot queue acceptance, or application callback completion are not awaited.
 
 <a id="41-nodejs-provides-no-synchronous-blocking-terminator"></a>
-### 4.1 Node.js provides no synchronous blocking terminator (user decision, 2026-09-11)
+### 4.1 Node.js Provides No Synchronous Blocking Terminator
 
 The Node.js runtime is **single-threaded**. Blocking that thread leaves the framework with no way
 to deliver the completion. When a request's target handler lives in the same process, the caller
