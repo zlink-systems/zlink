@@ -7,6 +7,7 @@ internal sealed partial class ZLinkEntrySpotActivation
     {
         EnsureConfigurationOpen();
         _packets.Add(typeof(THandler));
+        _handlerInstances.Prepare(typeof(THandler));
     }
 
     public void AddSubscribe<THandler>(string channelName, string topic)
@@ -14,6 +15,7 @@ internal sealed partial class ZLinkEntrySpotActivation
     {
         EnsureConfigurationOpen();
         _subscriptions.Add(channelName, topic, typeof(THandler));
+        _handlerInstances.Prepare(typeof(THandler));
     }
 
     public void AddHandler<THandler>()
@@ -21,6 +23,7 @@ internal sealed partial class ZLinkEntrySpotActivation
     {
         EnsureConfigurationOpen();
         _actorHandlers.AddHandler(typeof(THandler), null);
+        _handlerInstances.Prepare(typeof(THandler));
     }
 
     public void AddHandler<THandler>(string packetName)
@@ -31,6 +34,7 @@ internal sealed partial class ZLinkEntrySpotActivation
 
         EnsureConfigurationOpen();
         _actorHandlers.AddHandler(typeof(THandler), packetName);
+        _handlerInstances.Prepare(typeof(THandler));
     }
 
     public void AddActorPacket<THandler, TActor>()
@@ -57,6 +61,7 @@ internal sealed partial class ZLinkEntrySpotActivation
         if (handler.SpotType != EntrySpot.GetType()) return;
 
         EnsureConfigurationOpen();
+        _handlerInstances.Prepare(handler.HandlerType);
         switch (handler.Kind)
         {
             case ZLinkScannedSpotHandlerKind.Packet:
@@ -118,6 +123,7 @@ internal sealed partial class ZLinkEntrySpotActivation
     {
         EnsureConfigurationOpen();
         _actorHandlers.AddPacket(typeof(THandler), typeof(TActor), packetName);
+        _handlerInstances.Prepare(typeof(THandler));
     }
 
     private void EnsureConfigurationOpen()

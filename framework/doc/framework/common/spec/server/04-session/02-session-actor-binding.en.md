@@ -550,12 +550,19 @@ owner. The Session owner only validates these values.
 - Whether the binding the seal was installed on matches the binding whose
   route is being changed
 
-Transport validates the authenticated peer, node generation, and frame
-shape at the transport boundary. After finishing preparation, the target
-relocation runtime performs the Location Store CAS using the expected
-source owner and generation. Actor join, host relocation, Message Follow,
-and the Session owner don't repeat these two checks or reconsider one
-another's result. Session route change doesn't use a numeric high-water,
+The transport validates the RID of the
+[Authenticated peer](../00-foundation/02-glossary.en.md#authenticated-peer),
+node generation, and frame shape at the transport boundary. After finishing
+preparation, the target relocation runtime performs the Location Store CAS
+using the expected source owner and generation.
+
+- **Transport validation, the target's owner CAS, and the Session owner's binding
+  route validation each run once at their owning boundary.** If Actor join, host
+  relocation, Message Follow, the Session owner, or a callback path repeats
+  another boundary's check or reconsiders its result, one fact gains several
+  deciders.
+
+Session route change doesn't use a numeric high-water,
 per-message ACK journal, or relocation-specific capacity condition. A
 message arriving during the seal is held by the aggregate, but the per-
 message size, transport, deadline, and cancellation limits still apply

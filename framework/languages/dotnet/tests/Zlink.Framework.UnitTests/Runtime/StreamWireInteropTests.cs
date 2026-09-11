@@ -10,6 +10,46 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class StreamWireInteropTests
 {
+    [Theory]
+    [InlineData(0L)]
+    [InlineData(1L)]
+    [InlineData(15L)]
+    [InlineData(16L)]
+    [InlineData(long.MaxValue)]
+    [InlineData(long.MinValue)]
+    [InlineData(-1L)]
+    public void CorrelationCounterSpan_PreservesLegacyHexWireIncludingWraparound(long counter)
+    {
+        var legacyCorrelation = Convert.ToString(counter, 16);
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Request, ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.HasRequestSeq, new ZlinkStreamRequestSeq(7), "packet",
+            ZlinkStreamMetadata.Empty.With("key", "value"), legacyCorrelation);
+        var codec = new ConnectorHeaderCodec();
+        var expected = CoreHeaderCodec.Encode(header);
+        Span<char> correlation = stackalloc char[16];
+        Assert.True(counter.TryFormat(correlation, out var written, "x"));
+
+        var actual = codec.Encode(header with { CorrelationId = null }, correlation[..written]);
+
+        Assert.Equal(expected.ToArray(), actual.ToArray());
+        Assert.Equal(legacyCorrelation, CoreHeaderCodec.Decode(actual).CorrelationId);
+    }
+
+    [Fact]
+    public void CorrelationText_IsWrittenIntoTheFinalHeaderWithIdenticalUtf8Bytes()
+    {
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Send, ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.None, null, "packet",
+            ZlinkStreamMetadata.Empty, "a한é");
+        byte[] expected = [0xf2, 1, 1, 8, 6, 0x70, 0x61, 0x63, 0x6b, 0x65, 0x74,
+            6, 0x61, 0xed, 0x95, 0x9c, 0xc3, 0xa9];
+        var codec = new ConnectorHeaderCodec();
+        Assert.Equal(expected, codec.Encode(header).ToArray());
+        Assert.Equal("a한é", codec.Decode(expected).CorrelationId);
+    }
+
     [Fact]
     public void Framework_error_wire_code_preserves_the_public_error_kind()
     {
