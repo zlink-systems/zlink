@@ -10,6 +10,8 @@ internal static class CompletionOwnerTestAccess
 {
     private const BindingFlags Instance = BindingFlags.Instance
         | BindingFlags.Public | BindingFlags.NonPublic;
+    private const BindingFlags Static = BindingFlags.Static
+        | BindingFlags.Public | BindingFlags.NonPublic;
 
     internal static Type RuntimeType(string name) =>
         typeof(Message).Assembly.GetType(name, throwOnError: true)!;
@@ -24,6 +26,21 @@ internal static class CompletionOwnerTestAccess
         {
             return target.GetType().GetMethod(method, Instance)!
                 .Invoke(target, arguments);
+        }
+        catch (TargetInvocationException exception)
+            when (exception.InnerException is not null)
+        {
+            ExceptionDispatchInfo.Capture(exception.InnerException).Throw();
+            throw;
+        }
+    }
+
+    internal static object? InvokeStatic(Type type, string method,
+        params object?[] arguments)
+    {
+        try
+        {
+            return type.GetMethod(method, Static)!.Invoke(null, arguments);
         }
         catch (TargetInvocationException exception)
             when (exception.InnerException is not null)

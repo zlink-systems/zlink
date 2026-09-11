@@ -72,8 +72,7 @@ internal sealed class CompletionOwner
                 return new SendSubmission(SubmitResult.Ok, admitted);
             }
 
-            if (IsBackpressured(attempt.Failure)
-                && attempt.CompletionId != 0)
+            if (IsWritableWait(attempt))
             {
                 if (entry is null)
                 {
@@ -146,8 +145,7 @@ internal sealed class CompletionOwner
                     entry.Admitted, entry.Task);
             }
 
-            if (IsBackpressured(attempt.Failure)
-                && attempt.CompletionId != 0)
+            if (IsWritableWait(attempt))
             {
                 Message[]? retained = null;
                 try
@@ -541,13 +539,12 @@ internal sealed class CompletionOwner
         }
     }
 
-    private static bool IsBackpressured(Exception exception)
+    private static bool IsWritableWait(SendAttempt attempt)
     {
-        return exception is ZlinkSubmitException submit
+        return attempt.CompletionId != 0
+               && attempt.Failure is ZlinkSubmitException submit
                && submit.Result ==
-               ZlinkSubmitException.ErrorCode.Backpressured
-               && ZlinkException.MapErrorCode(submit.NativeErrno)
-               == ErrorCode.EAgain;
+               ZlinkSubmitException.ErrorCode.Backpressured;
     }
 
     private static ZlinkSubmitException CreateProtocolFailure() =>
@@ -979,9 +976,7 @@ internal sealed class CompletionOwner
                     SetResultLocked();
                     terminal = true;
                 }
-                else if (attempt.Failure is not null
-                         && IsBackpressured(attempt.Failure)
-                         && attempt.CompletionId != 0)
+                else if (IsWritableWait(attempt))
                 {
                     _token = attempt.CompletionId;
                     _state = SendEntryState.Waiting;
@@ -1342,9 +1337,7 @@ internal sealed class CompletionOwner
                     else
                         SetAdmittedResultLocked();
                 }
-                else if (attempt.Failure is not null
-                         && IsBackpressured(attempt.Failure)
-                         && attempt.CompletionId != 0)
+                else if (IsWritableWait(attempt))
                 {
                     _completionId = attempt.CompletionId;
                     _state = RequestEntryState.WaitingWritable;

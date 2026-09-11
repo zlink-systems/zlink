@@ -4,6 +4,28 @@ namespace Systems.Zlink.Tests;
 
 public sealed class test_writable_token_delivery
 {
+    [Fact]
+    public void nonzero_backpressure_token_is_a_writable_wait_without_errno()
+    {
+        Type ownerType = CompletionOwnerTestAccess.RuntimeType(
+            "Systems.Zlink.CompletionOwner");
+        Type attemptType = ownerType.GetNestedType("SendAttempt",
+            System.Reflection.BindingFlags.NonPublic)!;
+        object failure = CompletionOwnerTestAccess.Create(
+            typeof(ZlinkSubmitException),
+            ZlinkSubmitException.ErrorCode.Backpressured, 0);
+
+        object writableWait = CompletionOwnerTestAccess.Create(attemptType,
+            73UL, failure);
+        Assert.True((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
+            "IsWritableWait", writableWait)!);
+
+        object tokenless = CompletionOwnerTestAccess.Create(attemptType,
+            0UL, failure);
+        Assert.False((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
+            "IsWritableWait", tokenless)!);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
