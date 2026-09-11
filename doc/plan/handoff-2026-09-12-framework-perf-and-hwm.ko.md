@@ -126,9 +126,58 @@ send에도 같은 코드가 있다(같은 파일 `:1533`, `:1565`). send가 안 
 
 ---
 
-## 3. 결론 — 스펙에 이미 다 있다. 구현이 안 되어 있다
+## 3. 결론 — 두 상한은 별개다
 
-**이것이 이 인계의 핵심이다. 이전 세션이 이 결론에 두 번 도달했다.**
+> **2026-09-12 전수 조사(`hwm-gap-survey`)로 아래 §3.0을 추가했다. §3.1~§3.4의 "job queue가
+> 차면 PAUSED를 못 보낸다"는 서술은 부정확했다. 실제 터지는 곳은 다른 counter다.**
+
+### 3.0 전수 조사 결과 — 먼저 읽어라
+
+조사 기준 commit `9f04f3ff6689`. 정적 대조만 수행했다.
+
+| 상한 | 상태 |
+|---|---|
+| **Application Job Queue 4,096** | **네 언어 모두 포화 시 기다린다.** §6의 80 % PAUSE / 60 % RUNNING 전이도 **네 언어 모두 구현돼 있다.** 예외를 던지는 경로는 없다 |
+| **Completion registry 4,096** | **별개 counter.** request를 보내기 전에 callback 자리를 예약하고, 없으면 §11이 명시적으로 `CapacityExceeded`를 요구한다. **여기서 터진다** |
+
+**두 counter는 방향도 다르다.** job queue는 수신 쪽 압력이고 completion 예약은 송신 쪽 자원이다.
+따라서 completion registry의 `CapacityExceeded`를 **§6 위반으로 분류할 수 없다.**
+
+#### §6 판정 — 누락은 한 곳뿐
+
+| 언어 | RouteMesh | ClientServer |
+|---|---|---|
+| C++ | 충족 | 충족 |
+| Java | 충족 | 충족 |
+| Node.js | 충족 | 충족 |
+| **.NET** | **위반** — queue state는 계산하지만 ROUTER가 receive-flow 대상에 등록되지 않는다 | 충족 |
+
+#### §11 판정 — 해석 공백 셋이 갈라짐을 만들었다
+
+`01-submit-and-completion.ko.md` §11(`:396-400`)이 셋을 명시하지 않는다.
+
+1. "합친 수"가 **registry별인지 host별인지 process별인지**
+2. **모든 Messaging Request**인지 RouteMesh만인지
+3. 4,096이 **고정값인지 설정값인지**
+
+그 결과:
+
+| 경로 | 현재 |
+|---|---|
+| C++·Java·.NET RouteMesh | registry별 guard + process-shared dispatcher guard를 **함께** 둔다 |
+| **Java ClientServer** | 같은 구조의 completion reservation을 쓴다 — **네 언어 중 유일** |
+| **C++·Node.js·.NET ClientServer** | Framework completion reservation이 **없다.** binding/Core request를 직접 기다린다 |
+| **Node.js RouteMesh** | 일부 경로에 registry가 없고, 있는 것도 MeshNode별이다 |
+
+**ClientServer 세 언어의 누락과 Node.js의 소유 단위 차이는 현행 문장만으로는 확정적 위반이
+아니라 §11 해석 차이다.** 그래서 §3.5의 스펙 구체화가 필요하다.
+
+전수표 원본: `.artifacts/codex/hwm-gap-survey/`의 job 로그(파일 저장은 읽기 전용으로 실패).
+
+---
+
+**아래 §3.1~§3.6은 조사 이전 서술이다. §3.5(스펙 수정)와 §3.6(모호함 제거)은 여전히 유효하고,
+§3.4의 gap 표는 위 §3.0으로 대체한다.**
 
 ### 3.1 설계 (사용자 확정)
 
