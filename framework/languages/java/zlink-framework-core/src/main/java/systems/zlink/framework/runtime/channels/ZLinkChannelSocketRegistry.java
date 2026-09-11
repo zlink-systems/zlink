@@ -62,7 +62,8 @@ import java.util.function.LongSupplier;
 final class ZLinkChannelSocketRegistry {
     private static final long READY_POLL_INTERVAL_MILLIS = 5;
 
-    private final Map<String, ChannelRegistration> registrations = new HashMap<>();
+    private final Map<String, ChannelRegistration> registrations =
+        new ConcurrentHashMap<>();
     private final ZLinkApplicationJobQueue applicationJobQueue;
     private final LongSupplier nanoTime;
     private final LongConsumer parkNanos;
@@ -86,7 +87,8 @@ final class ZLinkChannelSocketRegistry {
     private final Map<String, Object> routeSocketLocks = new HashMap<>();
     private final Map<String, ZLinkBackendSpotRouteBridge> spotRouteBridges =
         new ConcurrentHashMap<>();
-    private final Map<String, ZLinkInternalSpotNode> spotRouterNodes = new HashMap<>();
+    private final Map<String, ZLinkInternalSpotNode> spotRouterNodes =
+        new ConcurrentHashMap<>();
     private final List<ZLinkBackendObject> ownedSockets = new ArrayList<>();
     private final Map<String, ClientServerServerPeer> clientServerServerPeers =
         new HashMap<>();
@@ -1520,6 +1522,20 @@ final class ZLinkChannelSocketRegistry {
 
     ZLinkInternalSpotNode spotRouterNode(String channelName) {
         return inStateLane(() -> spotRouterNodes.get(channelName));
+    }
+
+    /** Returns the configured MeshName without adding a state-lane turn. */
+    String requestMetricMeshName(String channelName) {
+        ZLinkInternalSpotNode node = spotRouterNodes.get(channelName);
+        if (node != null) {
+            return node.name();
+        }
+        ChannelRegistration registration = registrations.get(channelName);
+        return registration != null
+                && (registration.kind() == ChannelKind.CLIENT_SERVER
+                    || registration.kind() == ChannelKind.ROUTE_MESH)
+            ? registration.name()
+            : null;
     }
 
     Map<String, ZLinkBackendSocket> monitoringSocketSources() {

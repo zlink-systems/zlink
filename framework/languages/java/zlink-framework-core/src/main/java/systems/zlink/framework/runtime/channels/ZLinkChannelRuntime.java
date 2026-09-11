@@ -155,6 +155,7 @@ public final class ZLinkChannelRuntime
     private final ZLinkClientServerRuntime clientServerRuntime;
     private final ZLinkFanoutRuntime fanoutRuntime;
     private Supplier<ZLinkInternalSpotNode> spotRouteBridgeOwner;
+    private volatile Supplier<ZLinkInternalSpotNode> requestSourceMeshOwner;
     private final ScheduledExecutorService spotRouteBridgeDrainLoopExecutor =
         Executors.newSingleThreadScheduledExecutor(task -> {
             Thread thread = new Thread(task, "zlink-java-spot-route-bridge-drain");
@@ -1152,6 +1153,7 @@ public final class ZLinkChannelRuntime
         return new RouteSpotRequestCall(
             callRuntime,
             null,
+            requestSourceMeshName(),
             spotAddressResolver,
             () -> instanceSpotCallRuntime,
             spotId,
@@ -1161,6 +1163,12 @@ public final class ZLinkChannelRuntime
             encoded.contentType(),
             false, null, null,
             ZLinkApplicationMetadata.empty());
+    }
+
+    private String requestSourceMeshName() {
+        Supplier<ZLinkInternalSpotNode> source = requestSourceMeshOwner;
+        ZLinkInternalSpotNode owner = source == null ? null : source.get();
+        return owner == null ? null : owner.name();
     }
 
     private volatile systems.zlink.framework.runtime.internal.spots
@@ -1186,6 +1194,11 @@ public final class ZLinkChannelRuntime
     public void registerSpotRouteBridgeOwner(
         Supplier<ZLinkInternalSpotNode> owner) {
         this.spotRouteBridgeOwner = Objects.requireNonNull(owner, "owner");
+    }
+
+    public void registerRequestSourceMeshOwner(
+        Supplier<ZLinkInternalSpotNode> owner) {
+        this.requestSourceMeshOwner = Objects.requireNonNull(owner, "owner");
     }
 
     public void registerSpotRouteBridgeDispatchDrainer(Runnable drainer) {
