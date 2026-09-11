@@ -146,6 +146,91 @@ public sealed class MessageContextContractTests
     }
 
     [Fact]
+    public async Task PreparedActivation_ReusesDependencyPlanAcrossScopesAndPreservesDisposalOrder()
+    {
+        var lifetime = new PreparedLifetime();
+        await using var services = new ServiceCollection()
+            .AddSingleton(lifetime)
+            .AddScoped<PreparedDependency>()
+            .BuildServiceProvider();
+        var available = new AvailabilityProbe(services.GetRequiredService<IServiceProviderIsService>());
+        var root = new ProbedProvider(services, available);
+        ZLinkScopedHandlerInstanceOwner.Prepare(root, [typeof(PreparedFilter), typeof(PreparedHandler)]);
+        var preparationCalls = available.Calls;
+        Assert.True(preparationCalls > 0);
+        Assert.Equal(0, lifetime.DependencyConstructions);
+
+        PreparedDependency? previous = null;
+        for (var index = 0; index < 2; index++)
+        {
+            await using var scope = services.CreateAsyncScope();
+            await using (var instances = new ZLinkScopedHandlerInstanceOwner(
+                             new ProbedProvider(scope.ServiceProvider, available)))
+            {
+                var filter = instances.Resolve<PreparedFilter>();
+                var handler = instances.Resolve<PreparedHandler>();
+                Assert.Same(filter.Dependency, handler.Dependency);
+                Assert.Same(handler, instances.Resolve<PreparedHandler>());
+                Assert.NotSame(previous, handler.Dependency);
+                previous = handler.Dependency;
+            }
+            Assert.Equal(["handler", "filter"], lifetime.Disposals.TakeLast(2));
+        }
+
+        Assert.Equal(preparationCalls, available.Calls);
+        Assert.Equal(2, lifetime.DependencyConstructions);
+        Assert.Equal(["handler", "filter", "dependency", "handler", "filter", "dependency"],
+            lifetime.Disposals);
+    }
+
+    [Theory]
+    [InlineData(typeof(OverloadedActivation), false)]
+    [InlineData(typeof(OverloadedActivation), true)]
+    [InlineData(typeof(PreferredActivation), true)]
+    [InlineData(typeof(OptionalActivation), false)]
+    [InlineData(typeof(OptionalActivation), true)]
+    [InlineData(typeof(KeyedActivation), false)]
+    public async Task PreparedActivation_PreservesContainerSpecificConstructorSelection(
+        Type handlerType, bool registerDependency)
+    {
+        var registrations = new ServiceCollection();
+        if (registerDependency) registrations.AddScoped<DispatchDependency>();
+        registrations.AddKeyedScoped<DispatchDependency>("activation");
+        await using var services = registrations.BuildServiceProvider();
+        await using var expectedScope = services.CreateAsyncScope();
+        var expected = (ConstructorChoice)ActivatorUtilities.CreateInstance(
+            expectedScope.ServiceProvider, handlerType);
+        ZLinkScopedHandlerInstanceOwner.Prepare(services, [handlerType]);
+
+        await using var actualScope = services.CreateAsyncScope();
+        await using var instances = new ZLinkScopedHandlerInstanceOwner(actualScope.ServiceProvider);
+        var actual = (ConstructorChoice)instances.Resolve(handlerType);
+
+        Assert.Equal(expected.Choice, actual.Choice);
+    }
+
+    [Theory]
+    [InlineData(typeof(AmbiguousActivation))]
+    [InlineData(typeof(UnavailablePreferredActivation))]
+    [InlineData(typeof(MultiplePreferredActivation))]
+    public async Task PreparedActivation_PreservesDeferredConstructorErrors(Type handlerType)
+    {
+        await using var services = new ServiceCollection()
+            .AddScoped<DispatchDependency>()
+            .AddSingleton(new FilterProbe())
+            .BuildServiceProvider();
+        await using var scope = services.CreateAsyncScope();
+        var expected = Assert.Throws<InvalidOperationException>(() =>
+            ActivatorUtilities.CreateInstance(scope.ServiceProvider, handlerType));
+
+        ZLinkScopedHandlerInstanceOwner.Prepare(services, [handlerType]);
+        await using var instances = new ZLinkScopedHandlerInstanceOwner(scope.ServiceProvider);
+        var actual = Assert.Throws<InvalidOperationException>(() => instances.Resolve(handlerType));
+
+        Assert.Equal(expected.Message, actual.Message);
+    }
+
+    [Fact]
     public async Task Dispatcher_FilterCanStopARequestWithoutInvokingTheHandler()
     {
         var probe = new FilterControlProbe();
@@ -377,6 +462,111 @@ public sealed class MessageContextContractTests
     private sealed record FilterRequest(string Value);
 
     private sealed record FilterReply(string Value);
+
+    private sealed class AvailabilityProbe(IServiceProviderIsService available)
+        : IServiceProviderIsService, IServiceProviderIsKeyedService
+    {
+        public int Calls { get; private set; }
+
+        public bool IsService(Type serviceType)
+        {
+            Calls++;
+            return available.IsService(serviceType);
+        }
+
+        public bool IsKeyedService(Type serviceType, object? serviceKey)
+        {
+            Calls++;
+            return ((IServiceProviderIsKeyedService)available).IsKeyedService(serviceType, serviceKey);
+        }
+    }
+
+    private sealed class ProbedProvider(IServiceProvider services, AvailabilityProbe available)
+        : IServiceProvider
+    {
+        public object? GetService(Type serviceType) =>
+            serviceType == typeof(IServiceProviderIsService) ? available : services.GetService(serviceType);
+    }
+
+    private sealed class PreparedLifetime
+    {
+        public int DependencyConstructions;
+        public List<string> Disposals { get; } = [];
+    }
+
+    private sealed class PreparedDependency : IDisposable
+    {
+        private readonly PreparedLifetime _lifetime;
+
+        public PreparedDependency(PreparedLifetime lifetime)
+        {
+            _lifetime = lifetime;
+            lifetime.DependencyConstructions++;
+        }
+
+        public void Dispose() => _lifetime.Disposals.Add("dependency");
+    }
+
+    private sealed class PreparedFilter(PreparedDependency dependency, PreparedLifetime lifetime) : IDisposable
+    {
+        public PreparedDependency Dependency { get; } = dependency;
+        public void Dispose() => lifetime.Disposals.Add("filter");
+    }
+
+    private sealed class PreparedHandler(PreparedDependency dependency, PreparedLifetime lifetime) : IDisposable
+    {
+        public PreparedDependency Dependency { get; } = dependency;
+        public void Dispose() => lifetime.Disposals.Add("handler");
+    }
+
+    private abstract class ConstructorChoice(string choice)
+    {
+        public string Choice { get; } = choice;
+    }
+
+    private sealed class OverloadedActivation : ConstructorChoice
+    {
+        public OverloadedActivation() : base("empty") { }
+        public OverloadedActivation(DispatchDependency dependency) : base("dependency") { }
+        public OverloadedActivation(DispatchDependency dependency, FilterProbe absent) : base("unavailable") { }
+    }
+
+    private sealed class PreferredActivation : ConstructorChoice
+    {
+        public PreferredActivation() : base("empty") { }
+        [ActivatorUtilitiesConstructor]
+        public PreferredActivation(DispatchDependency dependency) : base("preferred") { }
+    }
+
+    private sealed class OptionalActivation(
+        DispatchDependency? dependency = null,
+        DateTime date = default,
+        DayOfWeek? day = DayOfWeek.Monday)
+        : ConstructorChoice($"{dependency is null}:{date.Ticks}:{day}");
+
+    private sealed class KeyedActivation([FromKeyedServices("activation")] DispatchDependency dependency)
+        : ConstructorChoice(dependency is not null ? "keyed" : "missing");
+
+    private sealed class AmbiguousActivation
+    {
+        public AmbiguousActivation(DispatchDependency dependency) { }
+        public AmbiguousActivation(FilterProbe probe) { }
+    }
+
+    private sealed class UnavailablePreferredActivation
+    {
+        public UnavailablePreferredActivation() { }
+        [ActivatorUtilitiesConstructor]
+        public UnavailablePreferredActivation(PreparedLifetime absent) { }
+    }
+
+    private sealed class MultiplePreferredActivation
+    {
+        [ActivatorUtilitiesConstructor]
+        public MultiplePreferredActivation() { }
+        [ActivatorUtilitiesConstructor]
+        public MultiplePreferredActivation(DispatchDependency dependency) { }
+    }
 
     private sealed class FilterProbe
     {

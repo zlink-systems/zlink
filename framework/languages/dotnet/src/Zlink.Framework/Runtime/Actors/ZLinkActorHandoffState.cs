@@ -40,6 +40,7 @@ internal sealed class ZLinkActorHandoffState(
     private bool _abortRestoreAdmissionsReleased;
     private TaskCompletionSource<ZLinkRemoteActorJoinReply>? _preparation;
     private TaskCompletionSource? _sourceCompletion;
+    private SourceMembershipLeave? _sourceMembershipLeave;
     private Task? _canonicalMaintenanceDrain;
 
     private IDisposable? _pendingShutdownToken;
@@ -47,7 +48,7 @@ internal sealed class ZLinkActorHandoffState(
     /// <summary>
     /// The SafeToShutdown obligation token for the relocation unit currently
     /// sealed on this Actor (spec 30 §11). The owning source runtime sets
-    /// this atomically with <see cref="SealCapture(IDisposable)"/>; this class releases it
+    /// this atomically with <see cref="SealCapture(IDisposable, string)"/>; this class releases it
     /// exactly once, in <see cref="ClearMessageFollowRouteLocked"/>, which
     /// every source exit path — commit-then-S4, abort and reset — already
     /// funnels through. A fresh <see cref="BeginCapture"/> can start before
@@ -278,6 +279,7 @@ internal sealed class ZLinkActorHandoffState(
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' does not have a source migration to complete.");
             _sourcePhase = ZLinkActorSourceHandoffPhase.Retired;
+            ClearSourceMembershipLeave();
             completion = _sourceCompletion;
             _sourceCompletion = null;
             return completion;
@@ -334,6 +336,40 @@ internal sealed class ZLinkActorHandoffState(
             return completion;
         }));
         return completion.WaitAsync(cancellationToken);
+    }
+
+    // A leave notification can precede local cutover completion (target fallback
+    // CAS). Track its lifecycle completion independently of the source relay lane.
+    internal Task? SourceMembershipLeaveCompletion =>
+        AwaitStateLane(_lane.RunAsync(() => _sourceMembershipLeave?.Completion.Task));
+
+    internal TaskCompletionSource? TryBeginSourceMembershipLeave(string handoffId)
+    {
+        return AwaitStateLane(_lane.RunAsync(() =>
+        {
+            if (_sourceMembershipLeave is { } pending
+                && pending.HandoffId == handoffId
+                && !pending.NotificationStarted)
+            {
+                pending.NotificationStarted = true;
+                return pending.Completion;
+            }
+            return null;
+        }));
+    }
+
+    private void ClearSourceMembershipLeave()
+    {
+        _sourceMembershipLeave?.Completion.TrySetCanceled();
+        _sourceMembershipLeave = null;
+    }
+
+    private sealed class SourceMembershipLeave(string handoffId)
+    {
+        internal string HandoffId { get; } = handoffId;
+        internal bool NotificationStarted { get; set; }
+        internal TaskCompletionSource Completion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     public ZLinkActorHandoffCaptureResult TryCapture(ZLinkSpotActorFrame frame) =>
@@ -1030,7 +1066,9 @@ internal sealed class ZLinkActorHandoffState(
     /// created, and no abort/reset racing the attach can leak the token —
     /// a seal that throws disposes it immediately instead of orphaning it.
     /// </summary>
-    internal void SealCapture(IDisposable shutdownToken)
+    internal void SealCapture(
+        IDisposable shutdownToken,
+        string? sourceMembershipLeaveHandoffId = null)
     {
         ArgumentNullException.ThrowIfNull(shutdownToken);
         AwaitStateLane(_lane.RunAsync(() =>
@@ -1042,6 +1080,8 @@ internal sealed class ZLinkActorHandoffState(
                     $"Actor '{actorId}' source handoff capture cannot be sealed.");
             }
             _sourceCaptureSealed = true;
+            if (sourceMembershipLeaveHandoffId is not null)
+                _sourceMembershipLeave = new SourceMembershipLeave(sourceMembershipLeaveHandoffId);
             SetPendingShutdownToken(shutdownToken);
         }));
     }
@@ -1692,6 +1732,7 @@ internal sealed class ZLinkActorHandoffState(
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' abort restore still has queued frames.");
             _sourcePhase = ZLinkActorSourceHandoffPhase.Idle;
+            ClearSourceMembershipLeave();
             _sourceIngressAdmission.ReleaseAll();
             _sourceHoldAdmission.ReleaseAll();
             _frames.Clear();
@@ -1773,6 +1814,7 @@ internal sealed class ZLinkActorHandoffState(
         AwaitStateLane(_lane.RunAsync(() =>
         {
             _sourcePhase = ZLinkActorSourceHandoffPhase.Idle;
+            ClearSourceMembershipLeave();
             _targetPhase = ZLinkActorTargetHandoffPhase.Idle;
             _sourceIngressAdmission.ReleaseAll();
             _sourceHoldAdmission.ReleaseAll();
@@ -1812,6 +1854,7 @@ internal sealed class ZLinkActorHandoffState(
         {
             preparation = _preparation;
             _sourcePhase = ZLinkActorSourceHandoffPhase.Idle;
+            ClearSourceMembershipLeave();
             _targetPhase = ZLinkActorTargetHandoffPhase.Idle;
             _sourceIngressAdmission.ReleaseAll();
             _sourceHoldAdmission.ReleaseAll();

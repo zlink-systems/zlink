@@ -845,9 +845,8 @@ late relay runs before new direct target messages.
   released and held Session messages are submitted to the source route. A later failure,
   including cutover-submit failure, doesn't reopen source route.
 
-Authenticated peer/node-generation/frame validation in the transport adapter, owner CAS
-on the target, and binding-route validation on the Session owner each run once. Actor
-join, host relocation, Message Follow, and callback paths don't repeat these decisions.
+[Session-Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover)
+governs validation by the transport, target, and Session owner and defines their boundaries.
 
 ## 11. Request Terminal Identity
 

@@ -12,6 +12,8 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.beans.BeansException;
@@ -60,7 +62,15 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
         new ConcurrentHashMap<>();
 
     ZLinkSpringHandlerFactory(AutowireCapableBeanFactory beanFactory) {
-        this.beanFactory = beanFactory;
+        this.beanFactory = Objects.requireNonNull(beanFactory, "beanFactory");
+    }
+
+    @Override
+    public void prepare(Class<?> handlerType) {
+        ZLinkHandlerActivator.super.prepare(handlerType);
+        if (isZLinkManagedType(handlerType)) {
+            handlerPlan(handlerType);
+        }
     }
 
     @Override
@@ -250,7 +260,43 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     }
 
     private HandlerPlan handlerPlan(Class<?> handlerType) {
-        return handlerPlans.computeIfAbsent(handlerType, HandlerPlan::create);
+        return handlerPlans.computeIfAbsent(handlerType, this::createHandlerPlan);
+    }
+
+    private HandlerPlan createHandlerPlan(Class<?> handlerType) {
+        HandlerPlan plan = HandlerPlan.create(handlerType);
+        for (ConstructorPlan constructor : plan.constructors()) {
+            for (ParameterPlan parameter : constructor.parameters()) {
+                preparedShortcut(parameter).ifPresent(shortcut ->
+                    parameter.shortcut().compareAndSet(null, shortcut));
+            }
+        }
+        return plan;
+    }
+
+    private Optional<ShortcutDependencyDescriptor> preparedShortcut(
+        ParameterPlan parameter) {
+        if (!(beanFactory instanceof ConfigurableListableBeanFactory configurable)
+            || !configurable.isConfigurationFrozen()) {
+            return Optional.empty();
+        }
+        String selected = null;
+        for (String beanName : configurable.getBeanNamesForType(
+                 parameter.type(), true, false)) {
+            if (!configurable.isAutowireCandidate(
+                    beanName, parameter.descriptor())) {
+                continue;
+            }
+            if (selected != null) {
+                return Optional.empty();
+            }
+            selected = beanName;
+        }
+        if (selected == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new ShortcutDependencyDescriptor(
+            parameter.descriptor(), selected, beanFactory.isPrototype(selected)));
     }
 
     private java.util.Optional<ShortcutDependencyDescriptor> shortcutCandidate(

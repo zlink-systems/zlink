@@ -11,6 +11,61 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshApplicationWorkerTests
 {
     [Fact]
+    public async Task SerialDrainReservation_UsesWorkerAndRetainsLifecycleOrdering()
+    {
+        var failures = new Failures();
+        var runner = new ZLinkRuntimeTaskRunner(failures, CancellationToken.None);
+        await using var serial = new ZLinkSerialExecutionQueue(
+            runner, failures, CancellationToken.None);
+        var events = new ConcurrentQueue<string>();
+        var started = Signal();
+        var release = Signal();
+        var queued = Signal();
+        var worker = runner.Run("application-worker", async ct =>
+        {
+            var completion = serial.RunAsync(async _ =>
+            {
+                events.Enqueue("first:start");
+                started.TrySetResult();
+                await release.Task;
+                events.Enqueue("first:end");
+            }, ct, out var reservedDrain);
+            Assert.NotNull(reservedDrain);
+            Assert.False(started.Task.IsCompleted);
+            _ = Assert.Single(runner.ActiveOnSupervisorLane);
+            var drain = reservedDrain(ct);
+            await started.Task;
+            var second = serial.RunAsync(_ =>
+            {
+                events.Enqueue("second");
+                return ValueTask.CompletedTask;
+            }, ct, out var secondDrain);
+            Assert.Null(secondDrain);
+            var lifecycle = serial.RunLifecycleAsync(_ =>
+            {
+                events.Enqueue("lifecycle");
+                return ValueTask.CompletedTask;
+            }, ct);
+            _ = Assert.Single(runner.ActiveOnSupervisorLane);
+            queued.TrySetResult();
+            await Task.WhenAll(drain.AsTask(), completion.AsTask(), second.AsTask(), lifecycle.AsTask());
+        });
+        try
+        {
+            await queued.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(new[] { "first:start" }, events.ToArray());
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        await worker.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(new[] { "first:start", "first:end", "lifecycle", "second" }, events.ToArray());
+        await runner.StopAsync();
+        Assert.Empty(failures.Errors);
+    }
+
+    [Fact]
     public async Task WorkersPersistAcrossBatches_AndDrainSuspendedHandlersOnShutdown()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -70,6 +125,81 @@ public sealed class MeshApplicationWorkerTests
             release.TrySetResult();
             await stopped.WaitAsync(TimeSpan.FromSeconds(5));
             await returned.Task;
+            Assert.Throws<ObjectDisposedException>(() => first.Parts[0].Size);
+            await runner.StopAsync();
+            Assert.Empty(failures.Errors);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await pump.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task SpotDispatchResults_RemainOwnedByPersistentWorkersUntilShutdown()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var jobs = new ZLinkApplicationJobQueue(new(
+            ZLinkApplicationJobQueueProfile.Balanced, 128, 2, 128));
+        await using var node = new ZLinkManagedMeshNode(context, "workers", applicationJobQueue: jobs);
+        var rid = RoutingId.From("spot-worker-node");
+        node.SetRoutingId(rid);
+        node.Start();
+        const string spotId = "spot-worker";
+        var spot = node.GetOrCreateSpot(spotId, out _);
+        var failures = new Failures();
+        var runner = new ZLinkRuntimeTaskRunner(failures, CancellationToken.None);
+        var pump = new ZLinkMeshDispatchPump(node, new ZLinkMeshCompletionTable(), jobs);
+        pump.SetNodeRouteHandler((records, _) =>
+        {
+            foreach (var record in records)
+                record.Dispose();
+            return ValueTask.CompletedTask;
+        }, runner);
+        var state = pump.RegisterSpot(spotId);
+        var firstStarted = Signal();
+        var secondStarted = Signal();
+        var release = Signal();
+        ZLinkBackendRouteReceived? first = null;
+        var count = 0;
+        pump.SetDispatchHandler(spotId, info => (DispatchAsync(info), null));
+        async ValueTask DispatchAsync(ZLinkBackendSpotDispatchInfo info)
+        {
+            Assert.Equal(ZLinkBackendSpotDispatchEvent.RouteReadable, info.Event);
+            Assert.True(runner.IsCurrentExecution);
+            Assert.True(state.Routes.TryDequeue(out var received));
+            using (received)
+            {
+                received.ApplicationJobAdmission?.ReleaseForHandlerStart();
+                if (Interlocked.Increment(ref count) == 1)
+                {
+                    first = received;
+                    firstStarted.TrySetResult();
+                    await release.Task;
+                }
+                else
+                    secondStarted.TrySetResult();
+            }
+        }
+        pump.EnsureStarted();
+        var workers = runner.ActiveOnSupervisorLane.ToHashSet();
+        try
+        {
+            using var payload = Message.From(new byte[4096]);
+            Assert.Equal(SubmitResult.Ok,
+                spot.SendToSpot(rid, spotId, spot.LifecycleGeneration, [payload]));
+            await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(SubmitResult.Ok,
+                spot.SendToSpot(rid, spotId, spot.LifecycleGeneration, [payload]));
+            await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(workers, runner.ActiveOnSupervisorLane.ToHashSet());
+            Assert.Equal(0UL, jobs.GetStatus().PermitsInUse);
+            Assert.Equal(4096, first!.Parts[0].Size);
+            var stopped = pump.DisposeAsync().AsTask();
+            Assert.False(stopped.IsCompleted);
+            release.TrySetResult();
+            await stopped.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Throws<ObjectDisposedException>(() => first.Parts[0].Size);
             await runner.StopAsync();
             Assert.Empty(failures.Errors);

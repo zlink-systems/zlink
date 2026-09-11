@@ -951,11 +951,9 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkFrameworkErrorKind.ProtocolError,
                 $"Actor '{message.ActorId}' source leave sender is not its target.");
         if (!TryGetCreatedActorState(message.ActorId, out var actorState)
-            || actorState.Actor is not { } actor
             || actorState.NativeActorRef is not { } sourceRef
             || sourceRef.Generation != message.ActorGeneration)
             return;
-        var sourceActivation = actorState.LiveActivation;
         var store = Registration.Locations.ResolveStore()
                     ?? throw new ZLinkConfigurationException(
                         "Actor source leave requires an Authority Store.");
@@ -1001,16 +999,11 @@ internal sealed partial class ZLinkFrameworkRuntime
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
                 $"Actor '{message.ActorId}' source leave target fence is stale.");
-        if (sourceActivation is not null)
-            await sourceActivation.TryNotifyActorLeftAfterCommittedMembershipAsync(
-                    actor,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        else
-            await NotifyEntrySpotActorLeftAsync(
-                    actor,
-                    cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
+        await _actorSessionManager.NotifyMigratedSourceMembershipLeftAsync(
+                actorState,
+                message.HandoffId,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     // Direct relocation has already verified and consumed its canonical

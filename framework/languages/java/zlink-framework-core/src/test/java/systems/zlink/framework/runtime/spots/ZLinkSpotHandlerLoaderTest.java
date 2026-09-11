@@ -18,6 +18,7 @@ import systems.zlink.framework.handlers.ZLinkSpotSubscription;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 
 final class ZLinkSpotHandlerLoaderTest {
     @Test
@@ -26,9 +27,11 @@ final class ZLinkSpotHandlerLoaderTest {
         ZLinkScannedHandlerCatalog scannedHandlers = new ZLinkScannedHandlerCatalog(List.of());
         ZLinkSpotActorHandlerCatalog actorHandlers =
             new ZLinkSpotActorHandlerCatalog(scannedHandlers, serializer);
+        Set<Class<?>> preparedHandlers = new HashSet<>();
         ZLinkSpotHandlerLoader loader = new ZLinkSpotHandlerLoader(
             scannedHandlers,
-            actorHandlers);
+            actorHandlers,
+            trackingActivator(preparedHandlers));
 
         loader.load(
             TestSpot.class,
@@ -40,6 +43,7 @@ final class ZLinkSpotHandlerLoaderTest {
         assertEquals(1, registrations.size());
         assertEquals(ZLinkScannedHandlerKind.ACTOR_REQUEST, registrations.get(0).kind());
         assertEquals(TestSpot.class, registrations.get(0).spotType());
+        assertTrue(preparedHandlers.contains(ConfiguredActorHandler.class));
         assertTrue(serializer.preparedTypes.contains(Request.class));
         assertTrue(serializer.preparedTypes.contains(Reply.class));
     }
@@ -49,7 +53,8 @@ final class ZLinkSpotHandlerLoaderTest {
         ZLinkScannedHandlerCatalog scannedHandlers = new ZLinkScannedHandlerCatalog(List.of());
         ZLinkSpotHandlerLoader loader = new ZLinkSpotHandlerLoader(
             scannedHandlers,
-            new ZLinkSpotActorHandlerCatalog(scannedHandlers, new TrackingSerializer()));
+            new ZLinkSpotActorHandlerCatalog(scannedHandlers, new TrackingSerializer()),
+            handlerType -> null);
 
         assertThrows(
             ZLinkConfigurationException.class,
@@ -58,6 +63,21 @@ final class ZLinkSpotHandlerLoaderTest {
                 List.of(FirstSubscription.class, SecondSubscription.class),
                 (name, period, handlerType, options) ->
                     CompletableFuture.completedFuture(null)));
+    }
+
+    private static ZLinkHandlerActivator trackingActivator(
+        Set<Class<?>> preparedHandlers) {
+        return new ZLinkHandlerActivator() {
+            @Override
+            public Object create(Class<?> handlerType) {
+                return null;
+            }
+
+            @Override
+            public void prepare(Class<?> handlerType) {
+                preparedHandlers.add(handlerType);
+            }
+        };
     }
 
     private static final class ConfiguredActorHandler {
