@@ -29,6 +29,7 @@ import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
@@ -329,6 +330,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                 instanceIntent, stableType, selectedMesh, submitGate);
         }
 
+
         @Override public CompletionStage<Void> submit() {
             rejectAfterRelocationReady("Spot send submit");
             CompletionStage<Void> duplicate =
@@ -543,6 +545,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                 target, payload, packetName, value, contentType, metadata, instanceIntent,
                 stableType, selectedMesh, submitGate);
         }
+
         @Override public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
             rejectAfterRelocationReady("Spot request submit");
             CompletionStage<TReply> duplicate =
@@ -552,26 +555,53 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             }
             systems.zlink.framework.runtime.internal.handlers
                 .ZLinkSuspendInvocationContext.rejectSameSpotWait(target);
-            CompletionStage<TReply> stage = resolve(target).handle((address, failure) -> {
-                if (failure == null) {
-                    return requestExistingOrActivate(address, replyType);
-                }
-                if (!instanceIntent || instanceSpots == null) {
-                    return CompletableFuture.<TReply>failedFuture(unwrap(failure));
-                }
-                return activateRequest(replyType);
-            }).thenCompose(Function.identity());
-            return ZLinkSerialExecutionQueue.manageCurrent(
-                stage.whenComplete((ignored, failure) -> payload.close()));
+            long started = ZLinkRequestMetrics.durationEnabled()
+                ? System.nanoTime() : ZLinkRequestMetrics.NO_START;
+            String metricMeshName = instanceIntent && instanceSpots != null
+                ? instanceSpots.metricMeshName(selectedMesh, meshName)
+                : meshName;
+            ZLinkRequestMetrics.Series metric = instanceIntent
+                ? ZLinkRequestMetrics.instanceSpot(metricMeshName)
+                : ZLinkRequestMetrics.spot(meshName);
+            ZLinkRequestMetrics.start(metric);
+            CompletionStage<TReply> stage;
+            try {
+                stage = resolve(target).handle((address, failure) -> {
+                    if (failure == null) {
+                        return requestExistingOrActivate(address, replyType);
+                    }
+                    if (!instanceIntent || instanceSpots == null) {
+                        return CompletableFuture.<TReply>failedFuture(unwrap(failure));
+                    }
+                    return activateRequest(replyType);
+                }).thenCompose(Function.identity());
+            } catch (RuntimeException | Error failure) {
+                payload.close();
+                ZLinkRequestMetrics.complete(
+                    metric,
+                    started == ZLinkRequestMetrics.NO_START
+                        ? -1L
+                        : ZLinkRequestMetrics.elapsed(started, System.nanoTime()),
+                    failure);
+                throw failure;
+            }
+            CompletionStage<TReply> result =
+                stage.whenComplete((ignored, failure) -> payload.close());
+            result.whenComplete((ignored, failure) ->
+                ZLinkRequestMetrics.complete(
+                    metric,
+                    started == ZLinkRequestMetrics.NO_START
+                        ? -1L
+                        : ZLinkRequestMetrics.elapsed(
+                            started, System.nanoTime()),
+                    failure));
+            return ZLinkSerialExecutionQueue.manageCurrent(result);
         }
 
         private <TReply> CompletionStage<TReply> requestExistingOrActivate(
             SpotTransportAddress address,
             Class<TReply> replyType) {
-            return requestExisting(address, replyType).handle((reply, failure) -> {
-                if (failure == null) {
-                    return CompletableFuture.completedFuture(reply);
-                }
+            return requestExisting(address, replyType).exceptionallyCompose(failure -> {
                 RuntimeException error = unwrap(failure);
                 if (isStaleRoute(error)) {
                     invalidate(target);
@@ -580,7 +610,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                     reactivate
                         ? activateRequest(replyType)
                         : CompletableFuture.<TReply>failedFuture(error));
-            }).thenCompose(Function.identity());
+            });
         }
 
         private CompletionStage<Boolean> shouldReactivate(

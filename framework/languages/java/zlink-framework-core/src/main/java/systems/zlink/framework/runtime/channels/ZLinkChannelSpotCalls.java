@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import systems.zlink.framework.spots.ZLinkSpotRequestCall;
@@ -74,6 +75,7 @@ import systems.zlink.framework.spots.SpotHandle;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
@@ -211,6 +213,7 @@ final class RouteSpotSendCall
             metadata.withAll(values), submitGate);
     }
 
+
     @Override
     public CompletionStage<Void> submit() {
         CompletionStage<Void> duplicate =
@@ -326,6 +329,7 @@ final class RouteSpotRequestCall
     private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
+    private final String callerMeshName;
     private final SpotTransportAddressResolver resolver;
     private final Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots;
     private final String target;
@@ -341,13 +345,14 @@ final class RouteSpotRequestCall
     RouteSpotRequestCall(
         ZLinkChannelCallRuntime runtime,
         String channelName,
+        String callerMeshName,
         SpotTransportAddressResolver resolver,
         Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots,
         String target,
         Message payload,
         Optional<String> packetName,
         Duration timeout) {
-        this(runtime, channelName, resolver, instanceSpots, target, payload,
+        this(runtime, channelName, callerMeshName, resolver, instanceSpots, target, payload,
             packetName, timeout, ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
             false, null, null,
             ZLinkApplicationMetadata.empty());
@@ -356,6 +361,7 @@ final class RouteSpotRequestCall
     RouteSpotRequestCall(
         ZLinkChannelCallRuntime runtime,
         String channelName,
+        String callerMeshName,
         SpotTransportAddressResolver resolver,
         Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots,
         String target,
@@ -367,7 +373,7 @@ final class RouteSpotRequestCall
         String stableType,
         String selectedMesh,
         ZLinkApplicationMetadata metadata) {
-        this(runtime, channelName, resolver, instanceSpots, target, payload, packetName,
+        this(runtime, channelName, callerMeshName, resolver, instanceSpots, target, payload, packetName,
             timeout, contentType, instanceIntent, stableType, selectedMesh, metadata,
             new AtomicBoolean());
     }
@@ -375,6 +381,7 @@ final class RouteSpotRequestCall
     private RouteSpotRequestCall(
         ZLinkChannelCallRuntime runtime,
         String channelName,
+        String callerMeshName,
         SpotTransportAddressResolver resolver,
         Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots,
         String target,
@@ -390,6 +397,7 @@ final class RouteSpotRequestCall
         this.submitGate = submitGate;
         this.runtime = runtime;
         this.channelName = channelName;
+        this.callerMeshName = callerMeshName;
         this.resolver = resolver;
         this.instanceSpots = instanceSpots;
         this.target = target;
@@ -407,6 +415,7 @@ final class RouteSpotRequestCall
         return new RouteSpotRequestCall(
             runtime,
             channelName,
+            callerMeshName,
             resolver,
             instanceSpots,
             target,
@@ -425,23 +434,23 @@ final class RouteSpotRequestCall
     }
     private RouteSpotRequestCall withInstanceType(String value) {
         if (instanceIntent) throw new IllegalStateException("instanceSpot was already set");
-        return new RouteSpotRequestCall(runtime, channelName, resolver, instanceSpots,
+        return new RouteSpotRequestCall(runtime, channelName, callerMeshName, resolver, instanceSpots,
             target, payload, packetName, timeout, contentType, true, value, selectedMesh, metadata,
             submitGate);
     }
     @Override public ZLinkSpotRequestCall inMesh(String value) {
         if (selectedMesh != null) throw new IllegalStateException("inMesh was already set");
-        return new RouteSpotRequestCall(runtime, channelName, resolver, instanceSpots,
+        return new RouteSpotRequestCall(runtime, channelName, callerMeshName, resolver, instanceSpots,
             target, payload, packetName, timeout, contentType, instanceIntent, stableType,
             SpotCallAddresses.requireText(value), metadata, submitGate);
     }
     @Override public ZLinkSpotRequestCall metadata(String key, String value) {
-        return new RouteSpotRequestCall(runtime, channelName, resolver, instanceSpots,
+        return new RouteSpotRequestCall(runtime, channelName, callerMeshName, resolver, instanceSpots,
             target, payload, packetName, timeout, contentType, instanceIntent, stableType,
             selectedMesh, metadata.with(key, value), submitGate);
     }
     @Override public ZLinkSpotRequestCall metadata(Map<String, String> values) {
-        return new RouteSpotRequestCall(runtime, channelName, resolver, instanceSpots,
+        return new RouteSpotRequestCall(runtime, channelName, callerMeshName, resolver, instanceSpots,
             target, payload, packetName, timeout, contentType, instanceIntent, stableType,
             selectedMesh, metadata.withAll(values), submitGate);
     }
@@ -452,6 +461,7 @@ final class RouteSpotRequestCall
         return new RouteSpotRequestCall(
             runtime,
             channelName,
+            callerMeshName,
             resolver,
             instanceSpots,
             target,
@@ -462,6 +472,7 @@ final class RouteSpotRequestCall
             instanceIntent, stableType, selectedMesh, metadata, submitGate);
     }
 
+
     @Override
     public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
         CompletionStage<TReply> duplicate =
@@ -469,30 +480,75 @@ final class RouteSpotRequestCall
         if (duplicate != null) {
             return duplicate;
         }
+        long started = ZLinkRequestMetrics.durationEnabled()
+            ? runtime.nanoTime() : ZLinkRequestMetrics.NO_START;
         try (var flowScope = runtime.enterApplicationFlow()) {
-            var operationFlow = systems.zlink.framework.runtime.internal.diagnostics
-                .ZLinkFlowContext.current();
-            systems.zlink.framework.runtime.internal.handlers
-                .ZLinkSuspendInvocationContext.rejectSameSpotWait(target);
-            ZLinkInstanceSpotCallRuntime activation = instanceSpots == null
-                ? null : instanceSpots.get();
-            CompletionStage<TReply> stage = SpotCallAddresses.resolve(resolver, target)
-                .handle((address, failure) ->
-                    systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.call(
-                        operationFlow,
-                        () -> {
-                            if (failure == null) {
-                                return submitExistingOrActivate(
-                                    address, replyType, activation);
-                            }
-                            RuntimeException error = SpotCallAddresses.unwrap(failure);
-                            if (!instanceIntent || activation == null
-                                || !SpotCallAddresses.isStaleRoute(error)) {
-                                return CompletableFuture.<TReply>failedFuture(error);
-                            }
-                            return activateRequest(activation, replyType);
-                        }))
-                .thenCompose(Function.identity());
+            ZLinkInstanceSpotCallRuntime activation;
+            try {
+                systems.zlink.framework.runtime.internal.handlers
+                    .ZLinkSuspendInvocationContext.rejectSameSpotWait(target);
+                activation = instanceSpots == null
+                    ? null : instanceSpots.get();
+            } catch (RuntimeException | Error failure) {
+                ZLinkRequestMetrics.Series metric = instanceIntent
+                    ? ZLinkRequestMetrics.instanceSpot(callerMeshName)
+                    : ZLinkRequestMetrics.spot(callerMeshName);
+                ZLinkRequestMetrics.start(metric);
+                ZLinkRequestMetrics.complete(
+                    metric,
+                    started == ZLinkRequestMetrics.NO_START
+                        ? -1L
+                        : ZLinkRequestMetrics.elapsed(
+                            started, runtime.nanoTime()),
+                    failure);
+                throw failure;
+            }
+            String metricMeshName = instanceIntent && activation != null
+                ? activation.metricMeshName(selectedMesh, callerMeshName)
+                : callerMeshName;
+            ZLinkRequestMetrics.Series metric = instanceIntent
+                ? ZLinkRequestMetrics.instanceSpot(metricMeshName)
+                : ZLinkRequestMetrics.spot(metricMeshName);
+            ZLinkRequestMetrics.start(metric);
+            CompletionStage<TReply> stage;
+            try {
+                var operationFlow = systems.zlink.framework.runtime.internal.diagnostics
+                    .ZLinkFlowContext.current();
+                stage = SpotCallAddresses.resolve(resolver, target)
+                    .handle((address, failure) ->
+                        systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.call(
+                            operationFlow,
+                            () -> {
+                                if (failure == null) {
+                                    return submitExistingOrActivate(
+                                        address, replyType, activation);
+                                }
+                                RuntimeException error = SpotCallAddresses.unwrap(failure);
+                                if (!instanceIntent || activation == null
+                                    || !SpotCallAddresses.isStaleRoute(error)) {
+                                    return CompletableFuture.<TReply>failedFuture(error);
+                                }
+                                return activateRequest(activation, replyType);
+                            }))
+                    .thenCompose(Function.identity());
+            } catch (RuntimeException | Error failure) {
+                ZLinkRequestMetrics.complete(
+                    metric,
+                    started == ZLinkRequestMetrics.NO_START
+                        ? -1L
+                        : ZLinkRequestMetrics.elapsed(
+                            started, runtime.nanoTime()),
+                    failure);
+                throw failure;
+            }
+            stage.whenComplete((ignored, failure) ->
+                ZLinkRequestMetrics.complete(
+                    metric,
+                    started == ZLinkRequestMetrics.NO_START
+                        ? -1L
+                        : ZLinkRequestMetrics.elapsed(
+                            started, runtime.nanoTime()),
+                    failure));
             return ZLinkSerialExecutionQueue.manageCurrent(stage);
         }
     }
@@ -585,13 +641,19 @@ final class RouteSpotRequestCall
                 requestParts,
                 timeout,
                 operationId)
-                .thenApply(replyParts -> {
+                .handle((replyParts, failure) -> {
                     try {
+                        if (failure != null) {
+                            throw SpotCallAddresses.unwrap(failure);
+                        }
                         return runtime.decodeSpotReply(replyParts, replyType);
                     } finally {
-                        replyParts.forEach(Message::close);
+                        requestParts.forEach(Message::close);
+                        if (replyParts != null) {
+                            replyParts.forEach(Message::close);
+                        }
                     }
-                }).whenComplete((ignored, error) -> requestParts.forEach(Message::close));
+                });
     }
 
     @Override

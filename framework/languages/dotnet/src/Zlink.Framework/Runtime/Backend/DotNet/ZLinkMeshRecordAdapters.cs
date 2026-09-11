@@ -142,7 +142,7 @@ internal static class ZLinkMeshRecordAdapters
         MeshReceiveBatch batch, int index, MeshReceiveRecord record,
         ActorRef ownerActor = default, ulong requestId = 0,
         ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? directReply = null)
+        Func<IReadOnlyList<Message>, SubmitResult>? directReply = null)
     {
         IReadOnlyList<Message> messages = batch.RetainMessage(index);
         if (messages.Count == 0) return Array.Empty<ZLinkBackendActorPart>();

@@ -10,7 +10,6 @@
 #include <atomic>
 #include <cstddef>
 #include <memory>
-#include <thread>
 #include <vector>
 
 namespace zlink::framework::runtime
@@ -36,9 +35,8 @@ class http_host_service_t final : public hosted_service_t,
     http_options_snapshot_t _options;
     health_builder_t *_health;
     std::size_t _handler_worker_count;
-    std::atomic_bool _stop{false};
+    std::atomic_bool _stop{true};
     std::vector<std::unique_ptr<listener_t>> _listeners;
-    std::vector<std::thread> _threads;
 };
 
 } // namespace zlink::framework::runtime

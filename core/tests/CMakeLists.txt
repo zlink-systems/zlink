@@ -21,6 +21,13 @@ set(SPLIT_ONLY_TEST_TARGETS
     test_disconnect_progress
     test_dealer_router_single_lane_contract
     test_writable_resubmit_from_other_thread_while_sequence_open)
+set(WRITABLE_RESUBMIT_SEQUENCE_OPEN_TARGET
+    test_writable_resubmit_from_other_thread_while_sequence_open)
+if(WIN32)
+  # Keep public CTest selector names stable, but avoid MSBuild's MAX_PATH
+  # failure when an issue worktree prefixes this already-long target name.
+  set(WRITABLE_RESUBMIT_SEQUENCE_OPEN_TARGET test_writable_resubmit_seq_open)
+endif()
 set(INTEGRATION_TEST_ROOT "integration")
 set(E2E_TEST_ROOT "e2e")
 
@@ -345,10 +352,14 @@ endif()
 
 foreach(test_source ${tests})
   get_filename_component(test ${test_source} NAME)
+  set(test_target ${test})
+  if(test STREQUAL "test_writable_resubmit_from_other_thread_while_sequence_open")
+    set(test_target ${WRITABLE_RESUBMIT_SEQUENCE_OPEN_TARGET})
+  endif()
   # target_sources not supported before CMake 3.1
-  add_executable(${test} ${test_source}.cpp)
+  add_executable(${test_target} ${test_source}.cpp)
 
-  target_link_libraries(${test} ${TESTUTIL_LIB})
+  target_link_libraries(${test_target} ${TESTUTIL_LIB})
 
   if(WIN32)
     # This is the output for Debug dynamic builds on Visual Studio 6.0 You should provide the correct directory, don't
@@ -356,24 +367,24 @@ foreach(test_source ${tests})
     find_path(LIBZLINK_PATH "libzlink.lib" PATHS "../bin/Win32/Debug/v120/dynamic")
 
     if(NOT ${LIBZLINK_PATH} STREQUAL "LIBZLINK_PATH-NOTFOUND")
-      set_target_properties(${test} PROPERTIES LINK_FLAGS "/LIBPATH:${LIBZLINK_PATH}")
+      set_target_properties(${test_target} PROPERTIES LINK_FLAGS "/LIBPATH:${LIBZLINK_PATH}")
     endif()
   else()
     # per-test directories not generated on OS X / Darwin
     if(NOT APPLE)
       set_property(
-        TARGET ${test} APPEND PROPERTY LINK_DIRECTORIES
+        TARGET ${test_target} APPEND PROPERTY LINK_DIRECTORIES
         "${Zlink_SOURCE_DIR}/../lib")
     endif()
   endif()
 
   if(RT_LIBRARY)
-    target_link_libraries(${test} ${RT_LIBRARY})
+    target_link_libraries(${test_target} ${RT_LIBRARY})
   endif()
 
   if(CMAKE_SYSTEM_NAME MATCHES "QNX")
-    target_link_libraries(${test} socket)
-    target_link_libraries(${test} m)
+    target_link_libraries(${test_target} socket)
+    target_link_libraries(${test_target} m)
   endif()
 
   if(NOT test IN_LIST SPLIT_ONLY_TEST_TARGETS)
@@ -872,9 +883,9 @@ if(TARGET test_send_async_tls_admit)
     TLS_ADMISSION_RECOVERY_TEST_NAMES
     90)
 endif()
-if(TARGET test_writable_resubmit_from_other_thread_while_sequence_open)
+if(TARGET ${WRITABLE_RESUBMIT_SEQUENCE_OPEN_TARGET})
   add_env_case_suite(
-    test_writable_resubmit_from_other_thread_while_sequence_open
+    ${WRITABLE_RESUBMIT_SEQUENCE_OPEN_TARGET}
     WRITABLE_RESUBMIT_SEQUENCE_OPEN_TEST_SPECS
     WRITABLE_RESUBMIT_SEQUENCE_OPEN_TEST_NAMES)
   set_zlink_network_case_properties(

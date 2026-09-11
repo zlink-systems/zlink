@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
@@ -11,8 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.concurrent.TimeoutException;
-import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -139,6 +139,7 @@ final class RouteSendCall implements ZLinkSendCall {
             packetName, contentType,
             (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).withAll(values), submitGate);
     }
+
 
     @Override
     public CompletionStage<Void> submit() {
@@ -293,39 +294,50 @@ final class RouteRequestCall implements ZLinkRequestCall {
             payload, packetName, value, contentType, metadata, submitGate);
     }
 
+
     @Override
     public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
         CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
         if (duplicate != null) {
             return duplicate;
         }
+        ZLinkRequestMetrics.Series metric =
+            ZLinkRequestMetrics.node(sockets.requestMetricMeshName(channelName));
+        long started = ZLinkRequestMetrics.durationEnabled()
+            ? runtime.nanoTime() : ZLinkRequestMetrics.NO_START;
+        ZLinkRequestMetrics.start(metric);
         try (var flowScope = runtime.enterApplicationFlow()) {
             try {
                 return ZLinkSerialExecutionQueue.manageCurrent(sockets.submitToNode(
                     channelName, timeout, defaultTimeout,
-                    (router, effectiveTimeout) -> submitRouter(router, effectiveTimeout, replyType),
-                    (node, effectiveTimeout) -> submitNode(node, effectiveTimeout, replyType)));
+                    (router, effectiveTimeout) -> submitRouter(
+                        router, effectiveTimeout, replyType, metric, started),
+                    (node, effectiveTimeout) -> submitNode(
+                        node, effectiveTimeout, replyType, metric, started)));
             } catch (ZLinkConfigurationException failure) {
                 payload.close();
+                completeMetric(metric, started, failure);
                 throw failure;
             } catch (RuntimeException failure) {
                 payload.close();
-                CompletableFuture<TReply> result = requestResult();
+                CompletableFuture<TReply> result = requestResult(metric, started);
                 result.completeExceptionally(failure);
                 return ZLinkSerialExecutionQueue.manageCurrent(result);
             } catch (Error failure) {
                 payload.close();
+                completeMetric(metric, started, failure);
                 throw failure;
             }
         }
     }
 
     private <TReply> CompletionStage<TReply> submitRouter(
-        ZLinkBackendRouterSocket router, Duration timeout, Class<TReply> replyType) {
+        ZLinkBackendRouterSocket router, Duration timeout, Class<TReply> replyType,
+        ZLinkRequestMetrics.Series metric, long started) {
         if (metadata != null) {
             throw new UnsupportedOperationException("request metadata is not available");
         }
-        CompletableFuture<TReply> result = requestResult();
+        CompletableFuture<TReply> result = requestResult(metric, started);
         var operationId = ZLinkServiceOperationIds.next();
         List<Message> requestParts = requestParts(operationId, Map.of());
         runtime.requestRoute(operationId, router, target, requestParts, timeout)
@@ -352,10 +364,11 @@ final class RouteRequestCall implements ZLinkRequestCall {
     }
 
     private <TReply> CompletionStage<TReply> submitNode(
-        ZLinkInternalSpotNode node, Duration timeout, Class<TReply> replyType) {
+        ZLinkInternalSpotNode node, Duration timeout, Class<TReply> replyType,
+        ZLinkRequestMetrics.Series metric, long started) {
         ZLinkApplicationMetadata metadata = this.metadata == null
             ? ZLinkApplicationMetadata.empty() : this.metadata;
-        CompletableFuture<TReply> result = requestResult();
+        CompletableFuture<TReply> result = requestResult(metric, started);
         var operationId = ZLinkServiceOperationIds.next();
         List<Message> requestParts = requestParts(operationId, metadata.values());
         try {
@@ -407,9 +420,11 @@ final class RouteRequestCall implements ZLinkRequestCall {
         return result;
     }
 
-    private <TReply> CompletableFuture<TReply> requestResult() {
+    private <TReply> CompletableFuture<TReply> requestResult(
+        ZLinkRequestMetrics.Series metric, long started) {
         CompletableFuture<TReply> result = new CompletableFuture<>();
         result.whenComplete((ignored, error) -> {
+            completeMetric(metric, started, error);
             ZLinkMessageFlowTracer.TerminalTracePoint terminal =
                 runtime.flow().beginRequestTerminal(error, result);
             if (terminal != null) {
@@ -422,6 +437,15 @@ final class RouteRequestCall implements ZLinkRequestCall {
             }
         });
         return result;
+    }
+
+    private void completeMetric(
+        ZLinkRequestMetrics.Series metric, long started, Throwable failure) {
+        ZLinkRequestMetrics.complete(
+            metric,
+            started == ZLinkRequestMetrics.NO_START
+                ? -1L : ZLinkRequestMetrics.elapsed(started, runtime.nanoTime()),
+            failure);
     }
 
     private List<Message> requestParts(java.util.UUID operationId, Map<String, String> metadata) {
@@ -530,6 +554,7 @@ final class ChannelSendCall implements ZLinkSendCall {
             runtime, channelName, sockets, defaultTimeout, payload, packetName, contentType,
             (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).withAll(values), submitGate);
     }
+
 
     @Override
     public CompletionStage<Void> submit() {
@@ -684,6 +709,7 @@ final class ChannelRequestCall implements ZLinkRequestCall {
             submitGate);
     }
 
+
     @Override
     public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
         CompletionStage<TReply> duplicate =
@@ -691,31 +717,43 @@ final class ChannelRequestCall implements ZLinkRequestCall {
         if (duplicate != null) {
             return duplicate;
         }
-        long started = runtime.nanoTime();
+        ZLinkRequestMetrics.Series metric =
+            ZLinkRequestMetrics.channel(
+                sockets.requestMetricMeshName(channelName));
+        long started = ZLinkRequestMetrics.durationEnabled()
+            ? runtime.nanoTime() : ZLinkRequestMetrics.NO_START;
+        ZLinkRequestMetrics.start(metric);
         try (var flowScope = runtime.enterApplicationFlow()) {
             try {
                 return ZLinkSerialExecutionQueue.manageCurrent(
                     sockets.submitToChannel(channelName, timeout, defaultTimeout, metadata != null,
-                        (client, remaining) -> submitClient(client, remaining, replyType, started),
-                        (node, effectiveTimeout) -> submitMesh(node, effectiveTimeout, replyType, started)));
+                        (client, remaining) -> submitClient(
+                            client, remaining, replyType, metric, started),
+                        (node, effectiveTimeout) -> submitMesh(
+                            node, effectiveTimeout, replyType, metric, started)));
             } catch (ZLinkConfigurationException failure) {
                 payload.close();
+                completeMetric(metric, started, failure);
                 throw failure;
             } catch (RuntimeException failure) {
                 payload.close();
-                CompletableFuture<TReply> result = requestResult(ZLinkDispatchErrorSurface.CHANNEL, started);
+                CompletableFuture<TReply> result = requestResult(
+                    ZLinkDispatchErrorSurface.CHANNEL, metric, started);
                 result.completeExceptionally(failure);
                 return ZLinkSerialExecutionQueue.manageCurrent(result);
             } catch (Error failure) {
                 payload.close();
+                completeMetric(metric, started, failure);
                 throw failure;
             }
         }
     }
 
     private <TReply> CompletionStage<TReply> submitClient(
-        ZLinkBackendDealerSocket target, Duration timeout, Class<TReply> replyType, long started) {
-        CompletableFuture<TReply> result = requestResult(ZLinkDispatchErrorSurface.CHANNEL, started);
+        ZLinkBackendDealerSocket target, Duration timeout, Class<TReply> replyType,
+        ZLinkRequestMetrics.Series metric, long started) {
+        CompletableFuture<TReply> result = requestResult(
+            ZLinkDispatchErrorSurface.CHANNEL, metric, started);
         String reqPacket = packetName.orElse(null);
         List<Message> requestParts = ZLinkChannelCallRuntime.parts(
             packetName, payload, contentType);
@@ -763,10 +801,12 @@ final class ChannelRequestCall implements ZLinkRequestCall {
     }
 
     private <TReply> CompletionStage<TReply> submitMesh(
-        ZLinkInternalSpotNode node, Duration timeout, Class<TReply> replyType, long started) {
+        ZLinkInternalSpotNode node, Duration timeout, Class<TReply> replyType,
+        ZLinkRequestMetrics.Series metric, long started) {
         ZLinkApplicationMetadata metadata = this.metadata == null
             ? ZLinkApplicationMetadata.empty() : this.metadata;
-        CompletableFuture<TReply> result = requestResult(ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL, started);
+        CompletableFuture<TReply> result = requestResult(
+            ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL, metric, started);
         var operationId = ZLinkServiceOperationIds.next();
         List<Message> parts = ZLinkChannelCallRuntime.envelopeParts(
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
@@ -798,9 +838,12 @@ final class ChannelRequestCall implements ZLinkRequestCall {
     }
 
     private <TReply> CompletableFuture<TReply> requestResult(
-        ZLinkDispatchErrorSurface surface, long started) {
+        ZLinkDispatchErrorSurface surface,
+        ZLinkRequestMetrics.Series metric,
+        long started) {
         CompletableFuture<TReply> result = new CompletableFuture<>();
         result.whenComplete((ignored, error) -> {
+            completeMetric(metric, started, error);
             ZLinkMessageFlowTracer.TerminalTracePoint terminal =
                 runtime.flow().beginRequestTerminal(error, result);
             if (terminal != null) {
@@ -814,25 +857,16 @@ final class ChannelRequestCall implements ZLinkRequestCall {
             }
         });
 
-        if (surface == ZLinkDispatchErrorSurface.CHANNEL && ZLinkRuntimeMetrics.enabled()) {
-            ZLinkRequestMetricTags metricTags = ZLinkRequestMetricTags.forChannel(channelName);
-            ZLinkRuntimeMetrics.add(
-                "zlink.mesh_node.requests.inflight", 1, metricTags.request);
-            result.whenComplete((ignored, error) -> {
-                ZLinkRuntimeMetrics.add(
-                    "zlink.mesh_node.requests.inflight", -1, metricTags.request);
-                boolean timedOut = error instanceof TimeoutException
-                    || (error != null && error.getCause() instanceof TimeoutException);
-                ZLinkRuntimeMetrics.record("zlink.mesh_node.request.duration",
-                    Duration.ofNanos(runtime.nanoTime() - started),
-                    metricTags.duration(timedOut, error != null));
-                if (timedOut) {
-                    ZLinkRuntimeMetrics.increment(
-                        "zlink.mesh_node.request.timeouts", metricTags.request);
-                }
-            });
-        }
         return result;
+    }
+
+    private void completeMetric(
+        ZLinkRequestMetrics.Series metric, long started, Throwable failure) {
+        ZLinkRequestMetrics.complete(
+            metric,
+            started == ZLinkRequestMetrics.NO_START
+                ? -1L : ZLinkRequestMetrics.elapsed(started, runtime.nanoTime()),
+            failure);
     }
 
     @Override

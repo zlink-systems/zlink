@@ -29,7 +29,7 @@ internal sealed class ZLinkActorMessageFollower
         Message body,
         ulong sourceNodeGeneration = 0,
         ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? directReply = null,
+        Func<IReadOnlyList<Message>, SubmitResult>? directReply = null,
         ReadOnlyMemory<byte> applicationMetadata = default)
     {
         _ = EnqueueTracked(
@@ -58,7 +58,7 @@ internal sealed class ZLinkActorMessageFollower
         Message body,
         ulong sourceNodeGeneration = 0,
         ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? directReply = null,
+        Func<IReadOnlyList<Message>, SubmitResult>? directReply = null,
         ReadOnlyMemory<byte> applicationMetadata = default)
     {
         _runtime.ShutdownToken.ThrowIfCancellationRequested();
@@ -220,7 +220,7 @@ internal sealed class ZLinkActorMessageFollower
         string actorId,
         ulong requestId,
         ulong deadlineUnixMs,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult> directReply)
+        Func<IReadOnlyList<Message>, SubmitResult> directReply)
     {
         if (replyNodeRid.IsEmpty
             || string.IsNullOrWhiteSpace(actorId)
@@ -254,11 +254,10 @@ internal sealed class ZLinkActorMessageFollower
 
         return new PreservedDirectReply(
             capability,
-            (parts, flags) => CompleteLocalDirectReply(
+            parts => CompleteLocalDirectReply(
                 key,
                 pending,
-                parts,
-                flags));
+                parts));
     }
 
     internal bool TryResolveReplyRoute(
@@ -346,8 +345,7 @@ internal sealed class ZLinkActorMessageFollower
     private SubmitResult CompleteLocalDirectReply(
         DirectReplyKey key,
         PendingDirectReply pending,
-        IReadOnlyList<Message> parts,
-        SendFlags flags)
+        IReadOnlyList<Message> parts)
     {
         if (_directReplyCompletions.TryGet(key) is not { } current
             || !ReferenceEquals(current, pending)
@@ -363,7 +361,7 @@ internal sealed class ZLinkActorMessageFollower
                 return SubmitResult.Terminated;
             }
             terminal = true;
-            return pending.Reply(parts, flags);
+            return pending.Reply(parts);
         }
         finally
         {
@@ -436,13 +434,13 @@ internal sealed class ZLinkActorMessageFollower
             messages[index] = Message.From(frames[index]);
         try
         {
-            result = pending.Reply(messages, SendFlags.DontWait);
+            result = pending.Reply(messages);
         }
         finally
         {
             ZLinkMessageParts.DisposeAll(messages);
         }
-        return ValueTask.FromResult(result == SubmitResult.Ok
+        return ValueTask.FromResult(result is SubmitResult.Ok or SubmitResult.Backpressured
             ? DirectReplyDeliveryResult.Submitted
             : DirectReplyDeliveryResult.TerminalRejected);
     }
@@ -524,7 +522,6 @@ internal sealed class ZLinkActorMessageFollower
                             frame.SourceSessionRid,
                             headerPart,
                             true,
-                            SendFlags.DontWait,
                             frame.MessageFollowRouteContext,
                             frame.SourceNodeGeneration,
                             frame.RequestSource,
@@ -547,7 +544,6 @@ internal sealed class ZLinkActorMessageFollower
                             frame.SourceSessionRid,
                             bodyPart,
                             false,
-                            SendFlags.DontWait,
                             frame.MessageFollowRouteContext,
                             frame.SourceNodeGeneration,
                             frame.RequestSource,
@@ -842,7 +838,7 @@ internal sealed class ZLinkActorMessageFollower
     }
 
     private sealed class PendingDirectReply(
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult> reply,
+        Func<IReadOnlyList<Message>, SubmitResult> reply,
         ulong deadlineUnixMs,
         TimeSpan fallbackTimeout)
     {
@@ -852,7 +848,7 @@ internal sealed class ZLinkActorMessageFollower
                 ? DateTimeOffset.FromUnixTimeMilliseconds((long)deadlineUnixMs) - DateTimeOffset.UtcNow
                 : fallbackTimeout);
 
-        public Func<IReadOnlyList<Message>, SendFlags, SubmitResult> Reply { get; } =
+        public Func<IReadOnlyList<Message>, SubmitResult> Reply { get; } =
             reply;
         public ulong DeadlineUnixMs { get; } = deadlineUnixMs;
         public bool HasExplicitDeadline =>
@@ -894,5 +890,5 @@ internal sealed class ZLinkActorMessageFollower
 
     internal readonly record struct PreservedDirectReply(
         string Capability,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult> Reply);
+        Func<IReadOnlyList<Message>, SubmitResult> Reply);
 }

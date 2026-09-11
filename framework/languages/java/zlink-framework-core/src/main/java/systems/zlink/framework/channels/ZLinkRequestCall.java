@@ -3,6 +3,7 @@ package systems.zlink.framework.channels;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 
 public interface ZLinkRequestCall {
     default ZLinkRequestCall metadata(String key, String value) {
@@ -17,6 +18,15 @@ public interface ZLinkRequestCall {
 
     /** For {@code requestToChannel}, channel validation (including metadata support) and the default timeout are resolved when {@code submit} is called. */
     <TReply> CompletionStage<TReply> submit(Class<TReply> replyType);
+
+    /**
+     * Blocks the calling application thread until the application reply completes.
+     * @throws systems.zlink.framework.errors.ZLinkFrameworkException with
+     *     {@code INVALID_OPERATION} before submission if called from a runtime execution context
+     */
+    default <TReply> TReply submit_sync(Class<TReply> replyType) {
+        return ZLinkBlockingCalls.submit(() -> submit(replyType));
+    }
 
     <TReply> CompletionStage<TReply> yield(Class<TReply> replyType);
 

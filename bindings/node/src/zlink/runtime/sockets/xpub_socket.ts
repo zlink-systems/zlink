@@ -6,7 +6,6 @@ import {
 } from './socket_operations';
 import type { RuntimeContext as Context } from '../core/context';
 import { recvNativeError } from '../errors/native_errors';
-import { getNativeHandle } from '../handles/native_handle';
 import { requireNative } from '../native/native';
 import { SubscriptionEvent } from '../../contracts';
 import { wrapRoutingId } from '../core/routing_id_conversion';
@@ -27,8 +26,8 @@ export class XPubSocket extends PublisherSocket {
     let raw;
     try {
       raw = ((flags | 0) & (RecvFlags.DontWait | 0))
-        ? requireNative().socketTrySubscriptionEvent(getNativeHandle(this)) as { routingId?: Buffer | null; topic: string; subscribed: boolean } | null
-        : requireNative().socketSubscriptionEvent(getNativeHandle(this), flags | 0) as { routingId?: Buffer | null; topic: string; subscribed: boolean } | null;
+        ? requireNative().socketTrySubscriptionEvent(this.receiveHandle()) as { routingId?: Buffer | null; topic: string; subscribed: boolean } | null
+        : requireNative().socketSubscriptionEvent(this.receiveHandle(), flags | 0) as { routingId?: Buffer | null; topic: string; subscribed: boolean } | null;
     } catch (error) {
       throw recvNativeError(error, flags, 'subscription event recv failed');
     }

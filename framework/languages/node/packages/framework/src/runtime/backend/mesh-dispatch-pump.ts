@@ -3,7 +3,9 @@ import { availableParallelism } from 'node:os';
 import { ZLINK_BACKEND_RECV_DONT_WAIT } from './runtime-values';
 import {
   ReadyDomain,
+  type ReadyBatch,
   type ReadyRecord,
+  type ReceiveBatch,
   type ReceiveRecord
 } from '../foundation/service-runtime-contracts';
 import type { ZLinkBackendMeshNode } from './contracts';
@@ -148,14 +150,25 @@ export class ZLinkMeshDispatchPump {
   }
 
   private async runApplicationWorker(): Promise<void> {
-    for (;;) {
-      await this.waitForApplicationReady();
-      if (this.disposed) return;
-      try {
-        await this.drainDomain(ReadyDomain.Application);
-      } catch (error) {
-        this.reportDispatchError(error);
+    // A worker claims one owner at a time so a suspended handler cannot hold
+    // unrelated owners. Each owner may supply up to 64 pre-admitted records.
+    const readyBatch = this.node.createReadyBatch(1);
+    const receiveBatch = this.node.createReceiveBatch(
+      MESH_DISPATCH_RECEIVE_CAPACITY, this.options.partCapacity ?? 256
+    );
+    try {
+      for (;;) {
+        await this.waitForApplicationReady();
+        if (this.disposed) return;
+        try {
+          await this.drainDomain(ReadyDomain.Application, readyBatch, receiveBatch);
+        } catch (error) {
+          this.reportDispatchError(error);
+        }
       }
+    } finally {
+      receiveBatch.close();
+      readyBatch.close();
     }
   }
 
@@ -213,32 +226,44 @@ export class ZLinkMeshDispatchPump {
   }
 
   private async drainInfrastructure(): Promise<void> {
-    while (!this.disposed) {
-      if ((this.pendingDomains & ReadyDomain.Infrastructure) === 0) {
-        return;
+    const readyBatch = this.node.createReadyBatch(
+      Math.min(this.options.readyCapacity ?? 32, MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET)
+    );
+    const receiveBatch = this.node.createReceiveBatch(
+      MESH_DISPATCH_RECEIVE_CAPACITY, this.options.partCapacity ?? 256
+    );
+    try {
+      while (!this.disposed) {
+        if ((this.pendingDomains & ReadyDomain.Infrastructure) === 0) {
+          return;
+        }
+        this.pendingDomains &= ~ReadyDomain.Infrastructure;
+        if ((this.pendingDomains & ReadyDomain.Application) !== 0) {
+          setImmediate(() => this.wakeApplicationWorker());
+        }
+        const lifecycleBudgetExhausted = await this.drainDomain(
+          ReadyDomain.Infrastructure,
+          readyBatch,
+          receiveBatch,
+          MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET
+        );
+        if (lifecycleBudgetExhausted) {
+          this.pendingDomains |= ReadyDomain.Infrastructure;
+          await yieldToEventLoop();
+        }
       }
-      this.pendingDomains &= ~ReadyDomain.Infrastructure;
-      if ((this.pendingDomains & ReadyDomain.Application) !== 0) {
-        setImmediate(() => this.wakeApplicationWorker());
-      }
-      const lifecycleBudgetExhausted = await this.drainDomain(
-        ReadyDomain.Infrastructure,
-        MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET
-      );
-      if (lifecycleBudgetExhausted) {
-        this.pendingDomains |= ReadyDomain.Infrastructure;
-        await yieldToEventLoop();
-      }
+    } finally {
+      receiveBatch.close();
+      readyBatch.close();
     }
   }
 
-  private async drainDomain(domain: number, claimBudget?: number): Promise<boolean> {
-    const readyCapacity = domain === ReadyDomain.Application
-      ? 1
-      : claimBudget === undefined
-        ? (this.options.readyCapacity ?? 32)
-        : Math.min(this.options.readyCapacity ?? 32, claimBudget);
-    const readyBatch = this.node.createReadyBatch(readyCapacity);
+  private async drainDomain(
+    domain: number,
+    readyBatch: ReadyBatch,
+    receiveBatch: ReceiveBatch,
+    claimBudget?: number
+  ): Promise<boolean> {
     let claimsDrained = 0;
     try {
       for (;;) {
@@ -261,82 +286,77 @@ export class ZLinkMeshDispatchPump {
           const owner = drained.records[index];
           // Raw ingress already attached one host permit to each record.
           // A claim that reserves admission here may receive only that permit's record.
-          const receiveBatch = this.node.createReceiveBatch(
-            owner.ordinaryIngressPreAdmitted === true ? MESH_DISPATCH_RECEIVE_CAPACITY : 1,
-            this.options.partCapacity ?? 256
-          );
           try {
-            receiveBatch.reset();
+            const capacity = owner.ordinaryIngressPreAdmitted === true
+              ? MESH_DISPATCH_RECEIVE_CAPACITY : 1;
             for (;;) {
-              const claimPermit = owner.terminalCompletion === true
+              let claimPermit = owner.terminalCompletion === true
                 || owner.ordinaryIngressPreAdmitted === true
                 || domain === ReadyDomain.Infrastructure
                 ? undefined
                 : await this.acquirePermit();
-              if (claimPermit === undefined
-                  && this.disposed
-                  && owner.terminalCompletion !== true
-                  && owner.ordinaryIngressPreAdmitted !== true) return false;
-              const received = claim.recvBatch(receiveBatch, ZLINK_BACKEND_RECV_DONT_WAIT);
-              if (!received.ok) {
-                claimPermit?.releaseAfterInternalProcessing();
-                break;
-              }
-              if (received.records.length === 0) {
-                claimPermit?.releaseAfterInternalProcessing();
-              }
-              // This owner keeps its claim while it drains. Other owners and
-              // infrastructure may progress if one of its handlers suspends.
-              if (domain === ReadyDomain.Infrastructure) {
-                this.infrastructureScheduled = false;
-                this.infrastructureDrainPromise = undefined;
-                if ((this.pendingDomains & ReadyDomain.Infrastructure) !== 0) {
-                  this.scheduleInfrastructure();
-                }
-              }
               try {
-                for (const record of received.records) {
-                  if (this.disposed) break;
-                  const permit = record.applicationJobPermit ?? claimPermit;
-                  if (owner.ordinaryIngressPreAdmitted === true && permit === undefined) {
-                    throw new Error('Pre-admitted raw ingress record lost its Application Job Queue permit.');
+                if (this.capacityStop.signal.aborted) return false;
+                receiveBatch.reset(capacity);
+                const received = claim.recvBatch(receiveBatch, ZLINK_BACKEND_RECV_DONT_WAIT);
+                if (!received.ok) break;
+                // This owner keeps its claim while it drains. Other owners and
+                // infrastructure may progress if one of its handlers suspends.
+                if (domain === ReadyDomain.Infrastructure) {
+                  this.infrastructureScheduled = false;
+                  this.infrastructureDrainPromise = undefined;
+                  if ((this.pendingDomains & ReadyDomain.Infrastructure) !== 0) {
+                    this.scheduleInfrastructure();
                   }
-                  this.recordsSinceYield += 1;
-                  const dispatch = async () => {
-                    try {
-                      await this.options.dispatch(drained.records[index], record);
-                    } catch (error) {
-                      throw new ZLinkMeshDispatchFailure(
-                        meshDispatchFailureContext(record),
-                        error
-                      );
+                }
+                try {
+                  for (const record of received.records) {
+                    if (this.disposed) break;
+                    const permit = record.applicationJobPermit ?? claimPermit;
+                    if (owner.ordinaryIngressPreAdmitted === true && permit === undefined) {
+                      throw new Error('Pre-admitted raw ingress record lost its Application Job Queue permit.');
                     }
-                    await record.onTerminalCompletion?.();
-                  };
-                  if (permit === undefined) {
-                    await dispatch();
-                  } else {
-                    if (
-                      domain === ReadyDomain.Application
-                      && record.applicationJobPermit === undefined
-                    ) permit.markApplicationQueued();
-                    await runWithApplicationJobPermit(permit, dispatch);
+                    this.recordsSinceYield += 1;
+                    const dispatch = async () => {
+                      try {
+                        await this.options.dispatch(drained.records[index], record);
+                      } catch (error) {
+                        throw new ZLinkMeshDispatchFailure(
+                          meshDispatchFailureContext(record),
+                          error
+                        );
+                      }
+                      await record.onTerminalCompletion?.();
+                    };
+                    if (permit === undefined) {
+                      await dispatch();
+                    } else {
+                      if (
+                        domain === ReadyDomain.Application
+                        && record.applicationJobPermit === undefined
+                      ) permit.markApplicationQueued();
+                      // The scope now owns this reservation, including failure
+                      // and detached handler handoff. Only unused permits remain
+                      // owned by the receive attempt's finally block.
+                      if (permit === claimPermit) claimPermit = undefined;
+                      await runWithApplicationJobPermit(permit, dispatch);
+                    }
+                    const yieldTurn = this.yieldIfNeeded();
+                    if (yieldTurn !== undefined) await yieldTurn;
                   }
-                  const yieldTurn = this.yieldIfNeeded();
-                  if (yieldTurn !== undefined) await yieldTurn;
+                } finally {
+                  // Batch ownership includes records whose dispatch never began,
+                  // including on failure or shutdown in the middle of the batch.
+                  for (const record of received.records) {
+                    for (const part of record.parts) part.close();
+                    record.releaseRetainedIngress?.();
+                  }
                 }
               } finally {
-                // Batch ownership includes records whose dispatch never began,
-                // including on failure or shutdown in the middle of the batch.
-                for (const record of received.records) {
-                  for (const part of record.parts) part.close();
-                  record.releaseRetainedIngress?.();
-                }
+                claimPermit?.releaseAfterInternalProcessing();
               }
-              receiveBatch.reset();
             }
           } finally {
-            receiveBatch.close();
             claim.release();
           }
         }
@@ -354,7 +374,7 @@ export class ZLinkMeshDispatchPump {
         }
       }
     } finally {
-      readyBatch.close();
+      readyBatch.reset();
     }
   }
 

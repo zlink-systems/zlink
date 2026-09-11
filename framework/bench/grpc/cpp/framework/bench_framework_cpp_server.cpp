@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 // Target B: public RouteMesh typed protobuf echo/count handlers.
+#include "bench_metric_reader.hpp"
 #include "bench_stats_server.hpp"
 #include "bench.pb.h"
 #include <zlink/framework.hpp>
@@ -39,17 +40,25 @@ int main (int argc, char **argv)
     const auto endpoint = arg_value (argc, argv, "--endpoint", "tcp://127.0.0.1:5294");
     const int port = std::stoi (arg_value (argc, argv, "--stats-port", "5295"));
     try {
-        server_metrics_t metrics;
-        stats_http_server_t server (metrics, port);
+        bench_metric_reader_t metric_reader;
+        server_metrics_t metrics (std::nullopt);
+        stats_http_server_t server (metrics, port, [&] {
+            if (const auto rejected = metric_reader.collect_cumulative_sum (
+                  "zlink.mesh_node.messages.dropped", {{"mesh_name", "bench"},
+                                                       {"surface", "node"},
+                                                       {"message_kind", "send"},
+                                                       {"reason", "backpressure"}}))
+                metrics.observe_rejected_total (static_cast<long long> (*rejected));
+        });
+        server.app ().logging ().disable_record_capture ();
         auto &options = server.app ().add_zlink_framework ();
         options.codecs ().use (zlink::framework_codecs::protobuf ());
         options.services ().add_singleton<echo_handler_t> (std::make_unique<echo_handler_t> (metrics));
         options.services ().add_singleton<command_handler_t> (std::make_unique<command_handler_t> (metrics));
         auto mesh = options.add_route_mesh ("bench");
         mesh.set_object_role (fw::object_role_t::none).listen (endpoint).set_routing_id (zlink::routing_id_t::from ("bench-server"));
-        mesh.channel ("bench").server ()
-          .add_request_handler<echo_handler_t, payload_t, payload_t> ("BenchPayload")
-          .add_send_handler<command_handler_t, payload_t> ("BenchPayload");
+        mesh.add_route_request_handler<echo_handler_t, payload_t, payload_t> ("BenchPayload")
+          .add_route_send_handler<command_handler_t, payload_t> ("BenchPayload");
         if (!server.start ())
             return 2;
         std::fprintf (stderr, "zlink-framework-cpp target: endpoint=%s stats=%d\n", endpoint.c_str (), port);

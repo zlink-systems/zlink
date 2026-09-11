@@ -18,6 +18,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -73,6 +74,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -86,6 +88,7 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
+import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
 import systems.zlink.framework.handlers.ZLinkSpotActorSend;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
@@ -467,6 +470,114 @@ final class EntrySpotActorDispatchTests {
                 .contains("not registered locally"));
             assertTrue(backend.node.boundSessionReplies.isEmpty());
             assertEquals(0, backend.node.remoteSessionBinds.size());
+        }
+    }
+
+    @Test
+    void entrySpotActorSendMissingActorRecordsOneWayDropAtDefaultDiagnostics()
+        throws Exception {
+        TestBackend backend = startBackend();
+        LinkedBlockingQueue<Map<String, String>> drops = new LinkedBlockingQueue<>();
+        try (var metrics = ZLinkRuntimeMetrics.install(new ZLinkRuntimeMetrics.Sink() {
+                @Override
+                public void increment(String name, Map<String, String> tags) {
+                    if (name.equals("zlink.mesh_node.messages.dropped")) {
+                        drops.add(tags);
+                    }
+                }
+            });
+             ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
+            backend.entrySpot.raiseActorReadable(actorSendParts(
+                "missing", "follow-send", "missing"));
+
+            assertEquals(Map.of(
+                "mesh_name", "entry",
+                "surface", "actor",
+                "message_kind", "send",
+                "reason", "no_handler"), drops.poll(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void entrySpotActorSendDecodeFailureRecordsOneWayDropAtDefaultDiagnostics()
+        throws Exception {
+        TestBackend backend = startBackend();
+        LinkedBlockingQueue<Map<String, String>> drops = new LinkedBlockingQueue<>();
+        try (var metrics = ZLinkRuntimeMetrics.install(new ZLinkRuntimeMetrics.Sink() {
+                @Override
+                public void increment(String name, Map<String, String> tags) {
+                    if (name.equals("zlink.mesh_node.messages.dropped")) {
+                        drops.add(tags);
+                    }
+                }
+            });
+             ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
+            runtime.actorManager().create("actor-a", "probe").submit()
+                .toCompletableFuture().get(5, TimeUnit.SECONDS);
+            backend.entrySpot.raiseActorReadable(actorSendParts(
+                "actor-a", "follow-send", "not-json"));
+
+            assertEquals(Map.of(
+                "mesh_name", "entry",
+                "surface", "actor",
+                "message_kind", "send",
+                "reason", "decode_error"), drops.poll(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void entrySpotRouteSendMissingHandlerRecordsOneWayDropAtDefaultDiagnostics()
+        throws Exception {
+        TestBackend backend = startBackend();
+        LinkedBlockingQueue<Map<String, String>> drops = new LinkedBlockingQueue<>();
+        try (var metrics = ZLinkRuntimeMetrics.install(new ZLinkRuntimeMetrics.Sink() {
+                @Override
+                public void increment(String name, Map<String, String> tags) {
+                    if (name.equals("zlink.mesh_node.messages.dropped")) {
+                        drops.add(tags);
+                    }
+                }
+            });
+             ZLinkFrameworkRuntime runtime = startRuntime(backend);
+             Message packetName = Message.from("missing-route-handler");
+             Message payload = Message.from("body")) {
+            backend.entrySpot.sendToSpot(
+                RoutingId.from("entry-node"), backend.entrySpot.spotId(), 1,
+                List.of(packetName, payload)).toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+            assertEquals(Map.of(
+                "mesh_name", "entry",
+                "surface", "spot",
+                "message_kind", "send",
+                "reason", "no_handler"), drops.poll(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void entrySpotRouteSendDecodeFailureRecordsOneWayDropAtDefaultDiagnostics()
+        throws Exception {
+        TestBackend backend = startBackend();
+        LinkedBlockingQueue<Map<String, String>> drops = new LinkedBlockingQueue<>();
+        try (var metrics = ZLinkRuntimeMetrics.install(new ZLinkRuntimeMetrics.Sink() {
+                @Override
+                public void increment(String name, Map<String, String> tags) {
+                    if (name.equals("zlink.mesh_node.messages.dropped")) {
+                        drops.add(tags);
+                    }
+                }
+            });
+             ZLinkFrameworkRuntime runtime = startRuntime(backend);
+             Message packetName = Message.from("ProbeRequest");
+             Message payload = Message.from("not-json")) {
+            backend.entrySpot.sendToSpot(
+                RoutingId.from("entry-node"), backend.entrySpot.spotId(), 1,
+                List.of(packetName, payload)).toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+            assertEquals(Map.of(
+                "mesh_name", "entry",
+                "surface", "spot",
+                "message_kind", "send",
+                "reason", "decode_error"), drops.poll(5, TimeUnit.SECONDS));
         }
     }
 
@@ -1011,6 +1122,40 @@ final class EntrySpotActorDispatchTests {
                 false));
     }
 
+    private static List<ZLinkBackendActorReceived> actorSendParts(
+        String actorId,
+        String packetName,
+        String payload) {
+        ZLinkBackendActorRef actorRef =
+            new ZLinkBackendActorRef(RoutingId.from("entry-node"), actorId, 1);
+        ZLinkStreamHeader header = new ZLinkStreamHeader(
+            ZLinkStreamMessageKind.SEND,
+            ZLinkStreamCodec.JSON,
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            Optional.empty(),
+            packetName,
+            Map.of());
+        return List.of(
+            new ZLinkBackendActorReceived(
+                actorRef,
+                RoutingId.from("source-node"),
+                RoutingId.from("source-session"),
+                Optional.empty(),
+                0,
+                0,
+                Message.from(ZLinkStreamHeaderCodec.encode(header)),
+                true),
+            new ZLinkBackendActorReceived(
+                actorRef,
+                RoutingId.from("source-node"),
+                RoutingId.from("source-session"),
+                Optional.empty(),
+                0,
+                0,
+                Message.from(payload.getBytes(StandardCharsets.UTF_8)),
+                false));
+    }
+
 
     private static ReplyRecord awaitSingle(List<ReplyRecord> replies) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
@@ -1132,6 +1277,14 @@ final class EntrySpotActorDispatchTests {
             systems.zlink.framework.ZLinkMessageContext context,
             ProbeRequest request) {
             actor.recordHandled();
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class ProbeEntrySpotSendHandler
+        implements ZLinkSpotPacketHandler<ProbeEntrySpot, ProbeRequest> {
+        @Override
+        public CompletionStage<Void> handle(ProbeEntrySpot spot, ProbeRequest request) {
             return CompletableFuture.completedFuture(null);
         }
     }

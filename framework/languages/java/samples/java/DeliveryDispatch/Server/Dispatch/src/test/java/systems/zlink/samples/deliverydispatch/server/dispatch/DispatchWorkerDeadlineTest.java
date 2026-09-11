@@ -102,6 +102,11 @@ final class DispatchWorkerDeadlineTest {
                     }
 
                     @Override
+                    public <TReply> TReply submit_sync(Class<TReply> replyType) {
+                        throw new UnsupportedOperationException();
+                    }
+
+                    @Override
                     public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
                         throw new UnsupportedOperationException();
                     }

@@ -181,6 +181,7 @@ callback/handler 등록 함수 이름은 실제 동작을 드러내야 한다. �
 |------|----------------|
 | raw STREAM packet handler 등록 | `setPacketHandler` |
 | SPOT dispatch event handler 등록 | `setDispatchHandler` |
+| socket 수신 readiness handler 등록 | `setReadableHandler` |
 | SPOT routed receive | `recvRouted` |
 | SPOT Actor lifecycle receive | `recvActorLifecycle` |
 
@@ -1802,14 +1803,10 @@ C API 의 **함수별 typed result enum 구조를 모든 바인딩이 그대로 
 - flags 기본값은 `0` (blocking).
 - non-blocking 호출의 temporary 상태는 언어별 public 계약에 맞춰 전달한다.
   - `.NET` / `Java` / `Node` / `Python`
-    - `send`, `publish`, callback `request`: temporary backpressure 면
-      `false`
     - caller-provided `recv`, `subscribe`,
       `receiveSubscriptionEvent`: 현재 데이터가 없으면 `false`
     - 그 외 실패: typed exception
   - C++
-    - operation builder `send` / `publish` / callback `request`: temporary
-      backpressure 면 `false`
     - caller-provided `recv` / `subscribe` /
       `receive_subscription_event`: 현재 데이터가 없으면 `recv_result_t::no_data`
       정수값 반환
@@ -2401,13 +2398,8 @@ raw direct callback `onReceive` 는 canonical public binding API 가 아니다.
 - routingId를 optional/default 파라미터로 만들면 plain send가 가능해지므로 금지한다.
 
 ### Send / Publish 반환값
-- `.NET` / `Java` / `Node` / `Python` / `C++` 에서는 blocking
-  `send` / `publish` / callback `request` submit 성공 시 항상 `true` 를
-  반환한다.
-- 위 언어의 non-blocking submit 에서는 temporary backpressure 일 때만
-  `false` 를 반환한다.
-- temporary backpressure 가 아닌 submit 실패는 예외로 전달해야 한다.
-- 상태 코드(int, number 등)를 반환하는 방식은 금지한다.
+- Send·request의 제출 결과와 실패는 [Submit 결과 투영](#submit-result-projection)을 따른다.
+- Publish의 반환형과 실패 전달 방식은 각 언어 README의 publish 계약을 따른다.
 
 ### 언어별 네이밍 일관성
 - 한 바인딩 내에서 네이밍 컨벤션이 혼재되면 안 된다.

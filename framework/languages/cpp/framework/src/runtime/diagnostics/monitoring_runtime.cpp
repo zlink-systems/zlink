@@ -2,6 +2,9 @@
 
 #include "monitoring_runtime.hpp"
 
+#include <opentelemetry/metrics/provider.h>
+#include <opentelemetry/metrics/sync_instruments.h>
+
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
@@ -124,34 +127,6 @@ const char *actor_event_name (actor_event_kind_t event) noexcept
     return "unknown";
 }
 
-const char *metric_kind_name (metric_instrument_kind_t kind) noexcept
-{
-    switch (kind) {
-        case metric_instrument_kind_t::counter:
-            return "counter";
-        case metric_instrument_kind_t::updown:
-            return "updown";
-        case metric_instrument_kind_t::observable:
-            return "observable";
-        case metric_instrument_kind_t::histogram:
-            return "histogram";
-    }
-    return "unknown";
-}
-
-const char *metric_temporality_name (metric_temporality_t temporality) noexcept
-{
-    switch (temporality) {
-        case metric_temporality_t::delta:
-            return "delta";
-        case metric_temporality_t::current:
-            return "current";
-        case metric_temporality_t::sample:
-            return "sample";
-    }
-    return "unknown";
-}
-
 const char *drain_state_name (drain_state_t state) noexcept
 {
     switch (state) {
@@ -168,6 +143,88 @@ const char *drain_state_name (drain_state_t state) noexcept
 }
 
 } // namespace
+
+// A no-op provider has no collection path. Real providers own reader/view
+// selection; the Framework does not infer it from log sinks or log levels.
+monitoring_runtime_state_t::monitoring_runtime_state_t ()
+{
+    const auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
+    if (dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ()) == nullptr)
+        metric_meter = provider->GetMeter ("zlink.framework");
+}
+
+class metric_instrument_t
+{
+  public:
+    metric_instrument_t (opentelemetry::metrics::Meter &meter,
+                         const metric_event_payload_t &event) :
+        _kind (event.instrument_kind)
+    {
+        switch (_kind) {
+            case metric_instrument_kind_t::counter:
+                _counter = meter.CreateDoubleCounter (event.name, "", event.unit);
+                break;
+            case metric_instrument_kind_t::updown:
+                _updown = meter.CreateDoubleUpDownCounter (event.name, "", event.unit);
+                break;
+            case metric_instrument_kind_t::histogram:
+                _histogram = meter.CreateDoubleHistogram (event.name, "", event.unit);
+                break;
+            case metric_instrument_kind_t::observable:
+                _observable = meter.CreateDoubleObservableGauge (event.name, "", event.unit);
+                _observable->AddCallback (&observe, this);
+                break;
+        }
+    }
+
+    ~metric_instrument_t ()
+    {
+        if (_observable)
+            _observable->RemoveCallback (&observe, this);
+    }
+
+    void record (const metric_event_payload_t &event)
+    {
+        switch (_kind) {
+            case metric_instrument_kind_t::counter:
+                _counter->Add (event.value, event.tags);
+                break;
+            case metric_instrument_kind_t::updown:
+                _updown->Add (event.value, event.tags);
+                break;
+            case metric_instrument_kind_t::histogram:
+                _histogram->Record (event.value, event.tags, opentelemetry::context::Context{});
+                break;
+            case metric_instrument_kind_t::observable: {
+                // ABI 1 exposes asynchronous gauges. Retain only the latest
+                // value for each existing bounded label set, never samples.
+                std::lock_guard lock (_mutex);
+                _current[event.tags] = event.value;
+                break;
+            }
+        }
+    }
+
+  private:
+    static void observe (opentelemetry::metrics::ObserverResult result, void *state)
+    {
+        auto &instrument = *static_cast<metric_instrument_t *> (state);
+        auto observer = opentelemetry::nostd::get<
+          opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObserverResultT<double>>> (
+          result);
+        std::lock_guard lock (instrument._mutex);
+        for (const auto &[tags, value] : instrument._current)
+            observer->Observe (value, tags);
+    }
+
+    metric_instrument_kind_t _kind;
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Counter<double>> _counter;
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::UpDownCounter<double>> _updown;
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Histogram<double>> _histogram;
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument> _observable;
+    std::mutex _mutex;
+    std::map<std::map<std::string, std::string>, double> _current;
+};
 
 monitoring_runtime_t::monitoring_runtime_t (
   std::shared_ptr<monitoring_runtime_state_t> state) :
@@ -326,17 +383,17 @@ void monitoring_runtime_t::publish_timer_failure (
 
 void monitoring_runtime_t::publish_metric (metric_event_payload_t event) const
 {
-    std::vector<log_field_t> fields{
-      {"name", std::move (event.name)},
-      {"value", std::to_string (event.value)},
-      {"unit", std::move (event.unit)},
-      {"instrument_kind", metric_kind_name (event.instrument_kind)},
-      {"temporality", metric_temporality_name (event.temporality)}};
-    fields.reserve (fields.size () + event.tags.size ());
-    for (auto &[key, value] : event.tags) {
-        fields.push_back ({std::move (key), std::move (value)});
+    if (!_state || !_state->metric_meter)
+        return;
+    std::shared_ptr<metric_instrument_t> instrument;
+    {
+        std::lock_guard lock (_state->metric_mutex);
+        auto &registered = _state->metric_instruments[event.name];
+        if (!registered)
+            registered = std::make_shared<metric_instrument_t> (*_state->metric_meter, event);
+        instrument = registered;
     }
-    log (log_level_t::debug, "zlink.runtime.metric.recorded", std::move (fields));
+    instrument->record (event);
 }
 
 void monitoring_runtime_t::publish_drain (drain_event_t event) const

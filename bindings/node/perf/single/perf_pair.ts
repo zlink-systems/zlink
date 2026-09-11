@@ -97,7 +97,9 @@ async function runPairBenchmark(msgSize, options) {
     );
     waitForWorkerStatus(worker, 4);
     const result = collector.finish();
-    emitSingleSocketHwmDetail(server, 'PAIR', options.transport, 'receiver', msgSize);
+    emitSingleSocketHwmDetail(
+      serverMonitor, server, 'PAIR', options.transport, 'receiver', msgSize
+    );
     return result;
   } finally {
     await closeSenderWorker(worker);

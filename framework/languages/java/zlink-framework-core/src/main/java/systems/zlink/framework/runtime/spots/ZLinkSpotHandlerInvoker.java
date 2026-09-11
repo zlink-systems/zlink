@@ -1,5 +1,8 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
+
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
@@ -38,8 +41,16 @@ final class ZLinkSpotHandlerInvoker {
         Map<String, String> metadata,
         Function<Class<?>, Object> handlers,
         String failureMessage) {
-        Object message = deserialize(
-            payload, registration.messageType(), contentType);
+        Object message;
+        try {
+            message = deserialize(payload, registration.messageType(), contentType);
+        } catch (RuntimeException decodeFailure) {
+            if (ZLinkRuntimeMetrics.enabled()) {
+                ZLinkMeshMessageMetrics
+                    .forMesh(actor.context().meshName()).dropped("actor", "decode_error");
+            }
+            throw decodeFailure;
+        }
         ZLinkMessageContext context =
             new ZLinkSpotActorSendHandlerContext(
                 registration.packetName(), contentType, metadata);

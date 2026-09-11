@@ -460,10 +460,16 @@ Session binding에 관한 검증은 Session owner 한 곳에서만 수행한다.
 - 같은 relocation인지 구분하는 relocation identity
 - seal을 설치한 binding과 route를 바꿀 binding이 같은지 여부
 
-Transport는 authenticated peer와 node generation, frame 형식을 transport 경계에서
-검증한다. Target relocation runtime은 준비를 끝낸 뒤 예상 source owner와 generation으로
-Location Store CAS를 수행한다. Actor join, host relocation, Message Follow와 Session
-owner는 이 두 검증을 반복하거나 서로의 결과를 다시 판단하지 않는다. Session route
+Transport는 [Authenticated peer](../00-foundation/02-glossary.ko.md#authenticated-peer)의
+RID와 node generation, frame 형식을 transport 경계에서 검증한다. Target relocation
+runtime은 준비를 끝낸 뒤 예상 source owner와 generation으로 Location Store CAS를 수행한다.
+
+- **Transport 검증, target의 owner CAS와 Session owner의 binding route 검증은 각 소유
+  경계에서 한 번만 수행한다.** Actor join, host relocation, Message Follow, Session
+  owner와 callback 경로가 다른 경계의 검증을 반복하거나 그 결과를 다시 판단하면 같은
+  사실에 판정 주체가 여럿 생긴다.
+
+Session route
 변경에는 numeric high-water, message별 ACK journal 또는 relocation 전용 capacity
 조건을 사용하지 않는다. Seal 중 도착한 message는 aggregate가 보관하지만 개별 message
 크기, transport, deadline과 cancellation 제한은 그대로 적용한다.

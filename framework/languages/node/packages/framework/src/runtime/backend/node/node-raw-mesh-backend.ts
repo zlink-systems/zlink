@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { setImmediate as yieldToIO } from 'node:timers/promises';
 import { disconnectStreamPeer } from './node-socket-backend-adapter';
 import { ZLinkFrameworkException } from '../../../contracts';
 import { internalFrameworkWireReply } from '../../framework-errors-internal';
@@ -115,10 +116,9 @@ const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
 const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 const MAX_DRAIN_RECORDS = 64;
-// A timer is only a no-data backoff.  Once the binding has reported readable
-// work, continue from the next event-loop turn so a full socket does not wait
-// for an arbitrary timer cadence between batches.
-const MESH_BACKEND_IDLE_POLL_INTERVAL_MS = 1;
+// Preserve the existing monitor/admission/liveness cadence. Only the binding
+// readable handler admits receive work; this timer never probes the socket.
+const MESH_BACKEND_MAINTENANCE_INTERVAL_MS = 1;
 /**
  * Conservative Actor Join admission cap for relocation state chunks (spec 15
  * §4.2): a stable lower bound safe on any deployment, never lowered on
@@ -150,7 +150,17 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private runtime?: RawServiceMeshRuntime;
   private stateful?: ServiceStatefulRuntime;
   private readyHandler?: (domains: number) => number;
-  private pollTimer?: NodeJS.Timeout;
+  private maintenanceTimer?: NodeJS.Timeout;
+  private pumping = false;
+  private readable = false;
+  private readonly onReadable = (): void => {
+    this.readable = true;
+    if (!this.closed && !this.pumping) void this.pump();
+  };
+  private readonly onMaintenance = (): void => {
+    this.maintenanceTimer = undefined;
+    void this.pump();
+  };
   private nextPeerIntent = 1n;
   private closed = false;
   private objectRole: ServiceNodeDescriptor['objectRole'] = 'none';
@@ -378,7 +388,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     }
     this.stateful.setMessageFollowHandler((record) => this.messageFollowHandler?.(record));
     this.runtime = runtime;
-    this.schedulePoll();
+    try {
+      runtime.setReadableHandler(this.onReadable);
+    } catch (error) {
+      this.close();
+      throw error;
+    }
+    this.scheduleMaintenance();
   }
 
   setMessageFollowHandler(handler: (
@@ -410,8 +426,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    if (this.pollTimer !== undefined) clearTimeout(this.pollTimer);
-    this.pollTimer = undefined;
+    if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
+    this.maintenanceTimer = undefined;
     this.stateful?.close();
     this.stateful = undefined;
     this.runtime?.close();
@@ -1465,23 +1481,39 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return result;
   }
 
-  private schedulePoll(delayMs = MESH_BACKEND_IDLE_POLL_INTERVAL_MS): void {
-    if (this.closed || this.pollTimer !== undefined) return;
-    this.pollTimer = setTimeout(async () => {
-      this.pollTimer = undefined;
-      try {
-        const received = await this.poll();
-        // A zero-delay timer yields to I/O and other ready work first without
-        // inserting the idle polling interval between readable batches.
-        delayMs = received ? 0 : MESH_BACKEND_IDLE_POLL_INTERVAL_MS;
-      } finally {
-        if (!this.closed) this.schedulePoll(delayMs);
-      }
-    }, delayMs);
+  private scheduleMaintenance(): void {
+    if (this.closed || this.maintenanceTimer !== undefined) return;
+    this.maintenanceTimer = setTimeout(
+      this.onMaintenance,
+      MESH_BACKEND_MAINTENANCE_INTERVAL_MS
+    );
   }
 
-  private async poll(): Promise<boolean> {
-    return this.runtime === undefined ? false : this.runtime.pumpBatch();
+  private async pump(): Promise<void> {
+    if (this.isClosed() || this.pumping) return;
+    this.pumping = true;
+    if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
+    this.maintenanceTimer = undefined;
+    try {
+      do {
+        const receiveReady = this.readable;
+        this.readable = false;
+        const more = await this.requireRuntime().pumpBatch(receiveReady);
+        if (more) {
+          // Yield only after actual progress, retaining readiness across the
+          // existing batch limits until receive reports no data.
+          this.readable = true;
+          await yieldToIO();
+        }
+      } while (!this.closed && this.readable);
+    } finally {
+      this.pumping = false;
+      this.scheduleMaintenance();
+    }
+  }
+
+  private isClosed(): boolean {
+    return this.closed;
   }
 
   private notifyReady(): void {
@@ -2016,16 +2048,28 @@ class RawReadyBatch implements ReadyBatch {
 }
 
 class RawReceiveBatch implements ReceiveBatch {
+  private receiveCapacity: number;
+
   constructor(
-    readonly messageCapacity: number,
+    private readonly capacity: number,
     readonly partCapacity: number
   ) {
-    if ([messageCapacity, partCapacity].some(value => !Number.isInteger(value) || value < 1)) {
+    if ([capacity, partCapacity].some(value => !Number.isInteger(value) || value < 1)) {
       throw new RangeError('Receive batch capacities must be positive.');
     }
+    this.receiveCapacity = capacity;
   }
 
-  reset(): void {}
+  get messageCapacity(): number {
+    return this.receiveCapacity;
+  }
+
+  reset(messageCapacity = this.capacity): void {
+    if (!Number.isInteger(messageCapacity) || messageCapacity < 1 || messageCapacity > this.capacity) {
+      throw new RangeError('Receive limit must be within the batch capacity.');
+    }
+    this.receiveCapacity = messageCapacity;
+  }
   close(): void {}
 }
 
@@ -2058,6 +2102,12 @@ class MailboxClaim implements RawClaim {
         }
         this.runtime.mailbox.releaseClaimedPayload(record);
         this.remaining = this.claim.records.slice(index + 1);
+        // Nothing was transferred to the receive caller when decoding throws.
+        // Earlier records therefore still belong to this failed batch.
+        for (const decoded of records) {
+          for (const part of decoded.parts) part.close();
+          decoded.releaseRetainedIngress?.();
+        }
         throw error;
       }
       const nextParts = decoded.parts.length;
@@ -2514,7 +2564,17 @@ function decodeApplicationEnvelope(frame: Uint8Array) {
 
 function decodeMultipart(payload: Uint8Array): FrameworkMessage[] {
   const buffers = decodeMultipartBuffers(payload);
-  return buffers.map(part => ZLinkBufferMessage.fromOwned(part));
+  const parts = new Array<FrameworkMessage>(buffers.length);
+  let materialized = 0;
+  try {
+    for (; materialized < buffers.length; materialized += 1) {
+      parts[materialized] = ZLinkBufferMessage.fromOwned(buffers[materialized]!);
+    }
+    return parts;
+  } catch (error) {
+    for (let index = 0; index < materialized; index += 1) parts[index]!.close();
+    throw error;
+  }
 }
 
 function decodeMultipartBuffers(payload: Uint8Array): Buffer[] {

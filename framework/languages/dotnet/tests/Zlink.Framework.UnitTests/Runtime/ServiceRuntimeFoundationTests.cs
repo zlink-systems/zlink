@@ -2073,11 +2073,11 @@ public sealed class ServiceRuntimeFoundationTests
         using (var firstHello = Message.From(encodedHello))
             await source.Send()
                 .Message(firstHello)
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Admitted;
         using (var repeatedHello = Message.From(encodedHello))
             await source.Send()
                 .Message(repeatedHello)
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Admitted;
 
         await WaitUntilAsync(() =>
             target.Peers().Length == 1
@@ -2445,7 +2445,7 @@ public sealed class ServiceRuntimeFoundationTests
                        objectRole: (byte)ZLinkMeshNodeObjectRole.Client)))
             await source.Send()
                 .Message(hello)
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Admitted;
 
         await WaitUntilAsync(() => target.Peers().Length == 1);
         await WaitUntilAsync(() =>
@@ -2460,7 +2460,7 @@ public sealed class ServiceRuntimeFoundationTests
         using (var malformed = Message.From(new byte[] { 1, 2, 3, 4, 5 }))
             await source.Send()
                 .Message(malformed)
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Admitted;
 
         await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
         await WaitUntilAsync(() =>
@@ -2530,8 +2530,16 @@ public sealed class ServiceRuntimeFoundationTests
 
         var firstState = pump.RegisterSpot(firstSpot.SpotId);
         var secondState = pump.RegisterSpot(secondSpot.SpotId);
-        pump.SetDispatchHandler(firstSpot.SpotId, _ => Capture(firstState));
-        pump.SetDispatchHandler(secondSpot.SpotId, _ => Capture(secondState));
+        pump.SetDispatchHandler(firstSpot.SpotId, _ =>
+        {
+            Capture(firstState);
+            return (ValueTask.CompletedTask, null);
+        });
+        pump.SetDispatchHandler(secondSpot.SpotId, _ =>
+        {
+            Capture(secondState);
+            return (ValueTask.CompletedTask, null);
+        });
 
         target.Start();
         pump.EnsureStarted();
@@ -2620,8 +2628,16 @@ public sealed class ServiceRuntimeFoundationTests
         }
         var firstState = pump.RegisterSpot(firstSpot.SpotId);
         var secondState = pump.RegisterSpot(secondSpot.SpotId);
-        pump.SetDispatchHandler(firstSpot.SpotId, _ => Capture(firstState));
-        pump.SetDispatchHandler(secondSpot.SpotId, _ => Capture(secondState));
+        pump.SetDispatchHandler(firstSpot.SpotId, _ =>
+        {
+            Capture(firstState);
+            return (ValueTask.CompletedTask, null);
+        });
+        pump.SetDispatchHandler(secondSpot.SpotId, _ =>
+        {
+            Capture(secondState);
+            return (ValueTask.CompletedTask, null);
+        });
 
         target.Start();
         pump.EnsureStarted();

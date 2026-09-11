@@ -5,6 +5,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { findLocalBindingArchive } from './local-binding-package.mjs';
 
 const nodeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(nodeRoot, '../../..');
@@ -28,7 +29,11 @@ function useSourcePackage() {
     throw new Error(`A bindings package backup exists without an active package at ${backupPath}. Run npm run use:bindings-package.`);
   }
   const version = readVersion(path.join(repoRoot, 'bindings', 'node', 'VERSION'), 'ZLINK_BINDING_VERSION');
-  const archive = findArchive(version);
+  const archive = findLocalBindingArchive({
+    repoRoot,
+    version,
+    configuredRoot: process.env.ZLINK_LOCAL_PACKAGE_ROOT
+  });
   requireInstalledPackage(version);
 
   fs.renameSync(installedPath, backupPath);
@@ -60,24 +65,6 @@ function useRegistryPackage() {
   fs.rmSync(installedPath, { recursive: true, force: true });
   fs.renameSync(backupPath, installedPath);
   process.stdout.write(`Restored registry bindings package ${readPackageVersion(installedPath)}\n`);
-}
-
-function findArchive(version) {
-  const filename = `zlink-systems-zlink-${version}.tgz`;
-  const configuredRoot = process.env.ZLINK_LOCAL_PACKAGE_ROOT;
-  const roots = configuredRoot === undefined
-    ? [
-        path.join(repoRoot, '.artifacts', 'wsl', 'npm'),
-        path.join(repoRoot, '.artifacts', 'windows', 'node', 'package')
-      ]
-    : [path.resolve(configuredRoot), path.resolve(configuredRoot, 'npm')];
-  const candidates = roots.map((root) => path.join(root, filename));
-  const archive = candidates.find((candidate) => fs.existsSync(candidate));
-  if (archive !== undefined) return archive;
-  throw new Error(
-    `Local bindings package ${filename} was not found. Build it with scripts/local-package/node/build-wsl.sh `
-    + `or set ZLINK_LOCAL_PACKAGE_ROOT. Checked: ${candidates.join(', ')}`
-  );
 }
 
 function requireInstalledPackage(version) {

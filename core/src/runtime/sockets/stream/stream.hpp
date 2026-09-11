@@ -51,7 +51,9 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
     int xselect_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_) ZLINK_OVERRIDE;
-    int xterm_peer_rid (const zlink_routing_id_t *peer_rid_) ZLINK_OVERRIDE;
+    int xterm_peer_rid (const zlink_routing_id_t *peer_rid_,
+                        pipe_t **target_out_,
+                        bool *delay_out_) ZLINK_OVERRIDE;
     int xrecv (zlink::msg_t *msg_) ZLINK_OVERRIDE;
     int xrecv_routed (zlink::msg_t *msg_,
                       zlink_routing_id_t *source_rid_out_,

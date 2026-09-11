@@ -199,7 +199,7 @@ public sealed class RouteCodecTests
         var replyTask = dealer.Request()
             .Message(request)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
+            .Async().Reply;
         using var received = await ReceiveAsync(router, TimeSpan.FromSeconds(2));
         ZLinkChannelReplyWriter.ReplyRequest(
             router,
@@ -292,7 +292,7 @@ public sealed class RouteCodecTests
                 {
                     await sender.Send(targetRid)
                         .Message(message)
-                        .Async(CancellationToken.None);
+                        .Async(CancellationToken.None).Admitted;
                 }
                 catch (ZlinkException)
                 {

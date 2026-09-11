@@ -96,6 +96,74 @@ Python·Rust reply builder도 flags를 받지 않는다.
 [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)가 소유한다. 동기
 종결자(`submit_sync()`, .NET·C++ `Submit()`/`submit()`)는 바뀌지 않는다.
 
+<a id="submission-stage-isolation"></a>
+
+### 돌려준 stage는 제출마다 따로 논다
+
+한 제출의 `admitted`나 `reply`를, 또는 그 stage를 public 변환 메서드로 바꾼 view를 호출자가
+완료시키거나 실패시키거나 취소하거나 완료 상태를 덮어써도, **그 영향은 그 제출 하나에만 남는다.**
+
+- **반환 표현을 공유했다는 이유로 다른 제출의 완료 상태나 관측 결과가 바뀌면 안 된다.** 한 호출자가
+  자기 결과를 어떻게 다루든 다른 호출자의 결과가 달라지면, 호출자는 자기가 받은 값을 믿을 수 없다.
+- **stage를 소비하거나 대기를 푸는 것도 마찬가지다.** 그 행위가 공유 상태를 거쳐 다른 제출의 대기자
+  상태나 결과를 꺼낼 수 있는지 여부를 바꾸면 안 된다.
+- **이미 돌려준 결과, 지금 진행 중인 제출, 앞으로의 제출에 모두 적용한다.** 같은 socket인지 다른
+  socket인지도 가리지 않는다. 완료 표현을 process 전체가 공유할 수 있기 때문이다.
+
+### 무엇이 이 규칙의 대상인가
+
+대상은 **반환 타입이 제공하는 완료 상태 연산**과 **정상적인 await·소비·drop·파괴·대기 취소**다.
+
+대상이 아닌 것:
+
+- 객체의 임의 속성이나 prototype을 바꾸는 것, private state에 직접 접근하는 것, payload 자체를 바꾸는 것.
+- **이 조항은 새 취소·강제 완료 API를 만들라고 요구하지 않는다.** 반환 타입에 그런 연산이 없으면
+  그 언어에서는 해당 조작이 애초에 일어나지 않는다.
+
+socket이나 context가 끝나는 경우, 여러 대기에 같은 cancellation source를 호출자가 직접 연결한 경우,
+application이 스스로 완료 의존성을 이어 놓은 경우는 각자의 기존 계약을 따른다.
+
+### 격리는 operation을 취소하는 것이 아니다
+
+**호출자가 view에 강제로 써넣은 값은 실제 admission이나 reply의 근거가 아니다.** 그 조작 때문에
+stage 사이에 새로운 전파 규칙이 생기지 않는다.
+
+실제 admission과 reply가 언제 완료되는지, 한 REQUEST 안에서 두 stage가 어떤 관계인지는
+[비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)가 소유한다.
+호출자의 대기를 취소하는 것과 native state를 정리하는 것은
+[같은 문서 §6](async-execution-model.ko.md#6-caller-wait-cancellation)이 소유한다.
+
+### 이미 완료된 admission은 인스턴스를 공유해도 된다
+
+**공유하되, 위 조작으로 다른 제출에 영향을 줄 수 없어야 한다.** 완료된 값뿐 아니라 **대기자 상태와
+"한 번만 소비할 수 있다"는 상태**도 여기에 포함된다.
+
+다음은 모두 이 조건을 만족할 수 있다.
+
+- 제출마다 새 객체를 만드는 방식
+- 완료 뒤 바꿀 수 없는 표현
+- 호출자가 바꾸는 부분이 원본과 분리된 view
+
+**같은 operation 안에서 내부 상태를 공유 소유권으로 관리하는 것은 허용한다.** 제한하는 것은
+**서로 다른 제출 사이**의 공유다.
+
+| Binding | 이미 성공 완료된 admission의 안전한 표현 예시 | 조건 |
+|---|---|---|
+| Java/Kotlin | 공유 `CompletableFuture.completedStage(null)` 또는 제출마다 새 `CompletableFuture.completedFuture(null)` | 공유 minimal stage의 `toCompletableFuture()` view 변경은 다른 제출에 전파되지 않는다. 가변 `completedFuture(null)` 인스턴스를 여러 제출에 그대로 공유하면 `obtrudeException()` 등으로 다른 결과가 바뀔 수 있다. 성공 완료 뒤의 `cancel()`만으로는 그 결함을 검출할 수 없다. |
+| Node.js | resolver를 노출하지 않는 `Promise.resolve()`의 결과 | Promise의 완료 상태는 결정된 뒤 바뀌지 않는다. 반환 Promise에는 caller용 settle/cancel API가 없다. |
+| .NET | `Task.CompletedTask` 또는 제출별 완료된 `Task` | 결과 객체는 `Task`를 노출하고 그 Task를 완료시키는 source를 노출하지 않는다. |
+| Python | 해당 event loop에서 제출별로 만들고 성공 완료한 `asyncio.Future` | 다른 제출의 pending·cancelled Future나 재사용할 수 없는 coroutine 객체를 공유하지 않는다. |
+| Go | 완료 상태를 비공개로 유지하며 즉시 `nil`을 반환하는 `Admitted(ctx)` | 결과 객체는 완료 채널이나 완료 상태 setter를 노출하지 않는다. |
+| Rust | 제출마다 생성한 `Box::pin(std::future::ready(Ok(())))` | 다른 제출과 Future의 변경 가능한 소비 상태를 공유하지 않는다. Move 소유권만으로 내부 공유의 부재를 가정하지 않는다. |
+| C++ | 제출별 완료·소비 상태를 가진 move-only `async_result_t<void>` | 내부 `shared_ptr` 사용은 허용한다. 한 결과의 소비·파괴가 다른 제출의 완료·소비 상태를 바꾸어서는 안 된다. |
+
+**검증 요구.** Public 결과 객체와 언어의 완료 타입만으로 다음을 회귀 테스트로 고정한다.
+
+- `OK` admission, `BACKPRESSURED` admission, REQUEST `reply`를 각각 대상으로 한다. 타입이 제공하는 완료·실패·취소·덮어쓰기 중 해당 상태에 적용 가능한 조작을 실행하고, 성공적으로 상태를 바꾸는 경우와 거부되거나 효과가 없는 경우를 구분한다. 성공 완료된 가변 future에 대한 테스트를 no-op `cancel()`만으로 대신하지 않는다.
+- 한 제출의 결과를 조작·소비·해제한 뒤, 같은 socket의 이미 반환된 다른 결과와 이후 제출이 각각 자기 완료 결과와 REQUEST reply를 받는지 확인한다. 다른 socket의 결과도 확인하여 여러 socket이 공유하는 완료 표현을 검증한다. 독립적인 대기에는 독립적인 cancellation source를 사용한다.
+- 강제 완료·취소 수단이 없으면 public 타입이 그런 권한을 노출하지 않음을 검증하고, 해당 타입이 제공하는 await·단일 소비·drop·파괴·대기 취소로 다른 제출이 영향을 받지 않는지 확인한다. 수단이 없다는 주석만으로 완료 검증을 대신하지 않는다. 단일 소비 타입의 같은 stage를 두 번 소비할 수 있다고 요구하지 않는다.
+- Pending 대기를 취소·해제한 경우 late completion이 취소된 대기를 다시 끝내지 않고 다른 제출의 완료도 막지 않는지 확인한다. 실제 admission·reply 완료 순서와 native 정리 검증은 [비동기 실행 모델의 검증 요구](async-execution-model.ko.md#7-구현-및-contract-test-검증-요구)를 따른다.
+
 | Binding | Send terminal | Request terminal | Reply terminal |
 |---|---|---|---|
 | C++ | `void submit() &&`, `send_submission_t async() &&` | `vector<message_t> submit() &&`, `request_submission_t async() &&` | `void submit() &&` |

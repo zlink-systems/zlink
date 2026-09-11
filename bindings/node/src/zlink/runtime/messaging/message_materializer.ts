@@ -91,11 +91,9 @@ const routedReceiveContexts = new WeakMap<Received, RoutedReceiveContext>();
 export function routedReceivedPrefersManagedBuffer(target: Received): boolean {
   const parts = target.parts;
   // HOT PATH: a reusable Received reveals its stable consumer role. A data
-  // reader should avoid a second addon call on the next receive, while a
-  // relay consumes the native frame and therefore stays on the movable path.
-  return parts.length === 1
-    && parts[0].size() <= 64
-    && hasObservedManagedReceiveData(parts[0]);
+  // reader should avoid per-part addon calls on the next receive, while a
+  // relay consumes the native frames and therefore stays on the movable path.
+  return parts.length > 0 && parts.every(hasObservedManagedReceiveData);
 }
 
 export function routedReceivedRoutingBytes(target: Received): Buffer | null {
@@ -137,9 +135,12 @@ function materializeParts(parts: MessageSnapshot[]): Message[] {
 
 function materializeReceivedParts(raw: NativeReceivedRaw): Message[] {
   if (isNativeReceivedBufferParts(raw)) {
+    const routingId = (raw as NativeReceivedEnvelope).routingId;
     const messages = new Array<Message>(raw.length);
     for (let i = 0; i < raw.length; i += 1) {
-      messages[i] = messageFromOwnedBuffer(raw[i]);
+      messages[i] = routingId && routingId.length > 0
+        ? messageFromOwnedRoutedBuffer(raw[i], routingId)
+        : messageFromOwnedBuffer(raw[i]);
     }
     return messages;
   }
