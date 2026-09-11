@@ -200,10 +200,12 @@ assembly Zlink.Framework
   type interface Zlink.Framework.Contracts.Channels.IZLinkPublishCall : Zlink.Framework.Contracts.Channels.IZLinkMetadataCall<Zlink.Framework.Contracts.Channels.IZLinkPublishCall>
     method abstract System.Threading.Tasks.ValueTask Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Channels.IZLinkRequestCall : Zlink.Framework.Contracts.Channels.IZLinkMetadataCall<Zlink.Framework.Contracts.Channels.IZLinkRequestCall>
-    method abstract System.Threading.Tasks.ValueTask<TReply?> Async<TReply>(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Threading.Tasks.ValueTask<TReply> Async<TReply>(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
       generic TReply variance=invariant nullable=unspecified
+    method virtual TReply? Submit<TReply>() [return=read:nullable,write:nullable]
+      generic TReply variance=invariant nullable=nullable
     method abstract Zlink.Framework.Contracts.Channels.IZLinkRequestCall Timeout(System.TimeSpan timeout [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
-    method abstract System.Threading.Tasks.ValueTask<TReply?> Yield<TReply>(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Threading.Tasks.ValueTask<TReply> Yield<TReply>(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
       generic TReply variance=invariant nullable=unspecified
   type interface Zlink.Framework.Contracts.Channels.IZLinkRouteClient
     method abstract Zlink.Framework.Contracts.Channels.IZLinkRequestCall RequestToChannel<TRequest>(System.String channelName [nullability=read:not-null,write:not-null], TRequest? request [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
@@ -223,6 +225,7 @@ assembly Zlink.Framework
     method abstract System.Threading.Tasks.ValueTask HandleAsync(TMessage? message [nullability=read:nullable,write:nullable], Zlink.Framework.Contracts.Channels.ZLinkRouteMessageContext context [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Channels.IZLinkSendCall : Zlink.Framework.Contracts.Channels.IZLinkMetadataCall<Zlink.Framework.Contracts.Channels.IZLinkSendCall>
     method abstract System.Threading.Tasks.ValueTask Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual System.Void Submit() [return=read:not-null,write:not-null]
   type sealed-class Zlink.Framework.Contracts.Channels.ZLinkPublishMessageContext : Zlink.Framework.Contracts.Handlers.IZLinkMessageContext
     property System.String? ChannelName { get; } [nullability=read:nullable,write:unknown]
     property System.String? ContentType { get; } [nullability=read:nullable,write:unknown]

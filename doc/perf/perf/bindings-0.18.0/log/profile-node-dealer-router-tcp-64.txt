@@ -1,0 +1,173 @@
+Node single hot-path profile: DEALER_ROUTER tcp 64B
+====================================================
+
+Scope and environment
+---------------------
+- Diagnostic only. No benchmark result below is an official performance result.
+- Repository: main at 98c84a853542bc1c60fbd2942780e0ac2d0a382f
+- Node: v22.23.2
+- Loaded Core, verified at runtime with zlink.version(): 0.18.0
+- Host: WSL2 Linux 6.6.87.2, Intel Core i7-1260P, 16 logical CPUs
+- Environment: PERF_SINGLE_DURATION_SECONDS=3, PERF_IO_THREADS=1,
+  ZLINK_CORE_VERSION=0.18.0. PERF_PART_COUNT was not set, so the existing
+  runner's default two-part record was used (64-byte payload + empty part).
+- Existing dist/dist-tools/build artifacts were reused. No rebuild was run.
+- Profilers: node --prof, node --cpu-prof, node --trace-gc-nvp. Linux perf was
+  unavailable. gprofng was excluded after the PAIR trials described in the PAIR
+  summary because it either changed setup timing or recorded no PCs on WSL2.
+
+Diagnostic run observations
+---------------------------
+- --prof run throughput: 165,435 messages/s (profile overhead included).
+- --cpu-prof run throughput: 167,009 messages/s (profile overhead included).
+- GC-trace run throughput: 172,775 messages/s (trace overhead included).
+- The parent isolate is the ROUTER receiver and Worker isolate is the DEALER
+  sender. Percentages are approximate samples within one isolate/process
+  lifetime and include setup/teardown.
+
+DEALER sender hot path: top five
+--------------------------------
+1. 70.7%: CompletionOwner.sendSync, including the single JS-to-N-API crossing,
+   Buffer-to-zlink_msg conversion, Core blocking send/admission, and result
+   checks. Source: bindings/node/src/zlink/runtime/messaging/
+   completion_owner.ts:444-468; bindings/node/native/src/addon_core.cc:1840-1888;
+   core/src/api/socket/socket_message_send_api.cpp:328-351.
+   Classification: mixed runtime floor and small binding overhead. --prof found
+   60.6% generic libc, 15.5% unresolved Node/V8, 4.9% Core libzlink, and 7.9%
+   epoll_ctl. About three quarters of the libc samples were below submitOnce;
+   the rest were mostly end-of-run Atomics waiting. The high blocking/native
+   share is consistent with backpressure from the slower ROUTER receiver, so it
+   should fall if receiver cost is removed; it is not evidence for async
+   completion tracking.
+2. About 2.8%: measurement-header Buffer/BigInt writes. Source:
+   bindings/node/perf/common/perf_measurement.ts:42-59. Classification: harness
+   fixed cost.
+3. About 2.2%: sendLoop/submitOnce dispatch outside sendSync. Source:
+   bindings/node/perf/single/perf_single_sender_worker.ts:155-177,223-242.
+   Classification: harness fixed cost; no event-loop callback is involved.
+4. About 2%, plus about 963 allocated bytes/delivered message: allocation and
+   GC. CPU-profile GC was 0.8%. Sources include the per-send RuntimeSendOperation
+   and two closures at bindings/node/src/zlink/runtime/sockets/dealer_socket.ts:
+   37-41, builder state at runtime/messaging/send_operation_base.ts:9-49, and
+   per-record Buffer.alloc(0) at perf/single/perf_single_sender_worker.ts:38-42.
+   Classification: closures are removable binding overhead; the empty Buffer is
+   harness overhead; the one-shot builder identity is contract-constrained.
+5. About 0.8%: monotonic deadline/timestamp reads. Source:
+   bindings/node/perf/common/perf_measurement.ts:22-24 and
+   bindings/node/perf/single/perf_single_sender_worker.ts:223-227.
+   Classification: harness fixed cost.
+
+An additional 18.3% self sample in sender main was an end-of-run native/Atomics
+wait after the send loop, not per-message execution, and is excluded from the
+hot-path top five.
+
+ROUTER receiver hot path: top five
+----------------------------------
+1. 34.3%: router recv itself, including one JS-to-N-API call, Core routed recv,
+   routing-id extraction/reuse validation, and construction of the native
+   envelope, part array, per-part snapshot/external handles, and shared routing
+   properties. Source: bindings/node/src/zlink/runtime/sockets/
+   socket_operations.ts:222-247; bindings/node/native/src/addon_core.cc:393-529,
+   2925-2973; bindings/node/native/src/addon_message_values.h:254-273.
+   Classification: mixed. One recv crossing and Core routing are the runtime
+   floor. The multipart envelope/snapshot/external-handle shape is removable
+   binding overhead for a terminal data reader.
+2. 19.4%: V8 garbage collection. The GC-trace run allocated 740,660,216 bytes
+   for about 518,326 delivered messages, about 1,429 bytes/message, and recorded
+   127 collections with 911.8 ms total pause. The much higher GC share than PAIR
+   despite lower message rate maps to routed multipart envelopes, snapshots,
+   native frame handles, copied Buffers, and JS parts arrays. Source allocation
+   sites: addon_core.cc:417-470; addon_message_values.h:139-157,205-223;
+   runtime/messaging/message_materializer.ts:127-168,237-297.
+   Classification: largely removable binding overhead, with some harness
+   latency-sample allocation.
+3. 15.9%: two part.data() conversions, each performing messageFrameCopyData and
+   then messageFrameClose. copyData was 14.3% and close 1.6%. Source:
+   bindings/node/src/zlink/contracts/messaging/message.ts:309-328;
+   bindings/node/native/src/addon_core.cc:1031-1045,1170-1187;
+   bindings/node/native/src/addon_message_values.h:226-242.
+   Classification: removable. It is four extra JS-to-N-API crossings per
+   delivered two-part record, in addition to routerRecv, and copies both the
+   64-byte payload and empty part after native frame materialization.
+4. About 3.6% mapped self time: JS routed materialization, properties/wrapper
+   normalization, prior-part close, new-array freeze, routing-id equality, and
+   Received refill. Source: bindings/node/src/zlink/runtime/messaging/
+   message_materializer.ts:127-168,237-297; runtime/messaging/
+   received_state.ts:49-70; runtime/messaging/message_parts_state.ts:9-20;
+   runtime/core/routing_id.ts:13-37. Classification: partly removable while
+   preserving the Received/Message/routing-id public shapes.
+5. About 2.3%: benchmark clock/header/latency processing. Source:
+   bindings/node/perf/single/perf_single_common.ts:375-430 and
+   bindings/node/perf/common/perf_measurement.ts:22-24,62-76,289-340.
+   Classification: harness fixed cost.
+
+The CPU profile also reported 12.0% as V8 "(program)" with no stack/source. It
+cannot be mapped honestly to a file:line and is not folded into any item above.
+Given the nearby copyData/external-buffer/finalizer path it may include native
+embedder work, but that is only an inference. Linux perf was unavailable, so the
+unresolved bucket remains a stated limitation rather than a fabricated mapping.
+
+N-API, event-loop, and completion conclusions
+---------------------------------------------
+- DEALER sender: one socketSubmitSend crossing/message.
+- ROUTER receiver: approximately five JS-to-N-API crossings/message under the
+  default two-part workload: one routerRecvMessage/NoWait, then for each of two
+  parts one messageFrameCopyData and one messageFrameClose. The source makes
+  this count deterministic and the CPU profile shows the two copyData/close
+  stacks explicitly. Empty DONTWAIT probes add one recv call per drain burst.
+- The reason is structural: routed multipart receive creates movable native
+  frames at addon_core.cc:436-468. messageFromSnapshot marks each frame read-only
+  native at runtime/messaging/message_snapshot.ts:17-25. measurementPayload and
+  payload.data() observe both parts, causing Message.ensureBuffer to copy and
+  close at contracts/messaging/message.ts:309-328.
+- No per-message event-loop tick, callback, Promise continuation, or completion
+  drain was observed. Both loops are synchronous. Worker messaging and Atomics
+  occur only at setup/end; CompletionOwner.ensureRuntimeWatch is not entered by
+  sendSync.
+- The benchmark calls submit_sync(), so it creates no SendSubmission,
+  CompletionEntry, Promise, byToken/byId/retries Map entry, or writable callback.
+  RuntimeSendOperation source: runtime/sockets/socket_operation_builders.ts:
+  62-67. CompletionOwner source: runtime/messaging/completion_owner.ts:444-468.
+- Successful native sends return the frozen per-environment success object made
+  once at native/src/addon_exports.cc:125-143 and returned by
+  native/src/addon_core.cc:1879-1885. The per-result allocator at
+  addon_core.cc:1803-1808 is not used on inline OK.
+- RESOLVED_SEND and {result, admitted} at completion_owner.ts:65,233-313 belong
+  to async submit(), not this benchmark. Async inline OK reuses the Promise but
+  still creates the outer submission object; that is not measured here.
+
+Contract-preserving candidates and POSDDD signals
+-------------------------------------------------
+- Primary candidate: make the existing terminal-reader preference apply to
+  routed multipart records, so routerRecv returns managed Buffers in its single
+  N-API call when a reusable Received has demonstrated data-reading behavior.
+  Preserve Message[], routingId, synthetic message properties, and relay
+  semantics; movable native frames remain the relay mode. This can remove four
+  crossings, two later copy calls, two close calls, and most external-frame
+  objects per message.
+- Ownership rule: the data-reader-versus-relay decision must have one owner.
+  Today runtime/sockets/socket_operations.ts:223-240 computes a preference and
+  native/src/addon_core.cc:473-529 interprets a single-part-specific version.
+  Adding another multipart-only special case in both layers would be a POSDDD
+  warning. Prefer one general receive-storage policy carried across the boundary
+  over duplicated size/part-count branches.
+- Secondary candidate: stable per-socket send invokers remove two closures per
+  send while keeping RuntimeSendOperation one-shot. DealerSocket.send and
+  SendSocket.send currently duplicate this thin wiring. Do not duplicate the
+  CompletionOwner or its maps as a cache.
+- Conditional candidate: reuse parts-array storage on caller-provided Received
+  only after proving retained prior parts are contractually invalidated by the
+  next recv. Otherwise array reuse changes public lifetime semantics.
+- Avoid a separate fast native sync-send implementation solely to remove shared
+  result field reads: it would duplicate submit/error rules for a sub-percent
+  gain and leave the dominant ROUTER receive path untouched.
+
+Bottom line
+-----------
+The dominant DEALER_ROUTER-specific cost is not submit completion tracking. It
+is routed multipart receive materialization: one required recv crossing expands
+to roughly five crossings/message, adds two data copies/two native closes, and
+drives receiver GC to 19.4% of samples. Receiver slowness then appears on the
+DEALER sender as blocking libc/Core time. Generalizing the existing managed-data
+receive policy, with one owning rule and unchanged public shapes, is the first
+candidate for supervisor review.

@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { RoutingId } from '../../contracts';
-import type { Received, RequestOperation, SendOperation } from '../../contracts/messaging';
-import { RecvFlags, SocketType as NativeSocketType } from '../../contracts/sockets/socket_constants';
+import type { RequestOperation, SendOperation } from '../../contracts/messaging';
+import { SocketType as NativeSocketType } from '../../contracts/sockets/socket_constants';
 import { normalizeRoutingId } from '../core/routing_id';
 import type { RuntimeContext as Context } from '../core/context';
-import { configCall, recvNativeError } from '../errors/native_errors';
+import { configCall } from '../errors/native_errors';
 import { getNativeHandle } from '../handles/native_handle';
 import { completionOwnerOf } from '../messaging/completion_owner';
-import { materializeReceivedInto } from '../messaging/message_materializer';
 import { requireNative } from '../native/native';
 import { ReceiveSocket, RuntimeRequestOperation, RuntimeSendOperation } from './socket_operations';
 import { DealerSocketOptions } from './socket_options';
@@ -48,20 +47,6 @@ export class DealerSocket extends ReceiveSocket {
       (parts, timeoutMs) => completionOwnerOf(this).requestSync(
         parts, null, this.resolveRequestTimeout(timeoutMs))
     );
-  }
-
-  recv(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
-    let raw;
-    try {
-      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
-        ? native.socketRecvMessageNoWait(getNativeHandle(this))
-        : native.socketRecvMessage(getNativeHandle(this), flags | 0);
-    } catch (error) {
-      throw recvNativeError(error, flags, 'recv failed');
-    }
-    if (raw == null) return false;
-    materializeReceivedInto(result, raw);
-    return true;
   }
 
   private resolveRequestTimeout(timeoutMs: number): number {

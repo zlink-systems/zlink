@@ -6,6 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <charconv>
 #include <cstring>
 #include <limits>
@@ -13,23 +14,10 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace zlink::framework::runtime::messaging
 {
-
-namespace
-{
-
-template <typename T>
-std::optional<T> optional_json_value (const nlohmann::json &json, const char *name)
-{
-    if (!json.contains (name) || json.at (name).is_null ()) {
-        return std::nullopt;
-    }
-    return json.at (name).get<T> ();
-}
-
-} // namespace
 
 message_parts_t::message_parts_t (zlink::message_t header, zlink::message_t body)
 {
@@ -124,11 +112,14 @@ class header_writer_t
 {
   public:
     explicit header_writer_t (char *output = nullptr) : _output (output) {}
+    explicit header_writer_t (std::string &output) : _string_output (&output) {}
 
     void append (std::string_view text)
     {
         if (_output && !text.empty ())
             std::memcpy (_output + _size, text.data (), text.size ());
+        else if (_string_output != nullptr)
+            _string_output->append (text);
         _size += text.size ();
     }
 
@@ -209,20 +200,74 @@ class header_writer_t
         return true;
     }
 
-    char *_output;
+    char *_output = nullptr;
+    std::string *_string_output = nullptr;
     std::size_t _size = 0;
 };
+
+struct header_plan_t
+{
+    std::optional<message_kind_t> kind;
+    std::string channel_name;
+    std::string message_name;
+    std::string content_type;
+    std::string prefix;
+    std::string middle;
+
+    bool matches (const envelope_header_t &header) const noexcept
+    {
+        return kind && *kind == header.kind && channel_name == header.channel_name
+               && message_name == header.message_name && content_type == header.content_type;
+    }
+
+    void rebuild (const envelope_header_t &header)
+    {
+        // Keep the one-entry backing storage on this thread.  `kind` is the
+        // validity marker and is published only after every escaped segment
+        // and key has been rebuilt successfully.
+        kind.reset ();
+        channel_name.clear ();
+        message_name.clear ();
+        content_type.clear ();
+        prefix.clear ();
+        middle.clear ();
+
+        channel_name = header.channel_name;
+        message_name = header.message_name;
+        content_type = header.content_type;
+
+        header_writer_t prefix_writer (prefix);
+        prefix_writer.append ("{\"channelName\":");
+        prefix_writer.string (channel_name);
+        prefix_writer.append (",\"contentType\":");
+        prefix_writer.string (content_type);
+        prefix_writer.append (",\"correlationId\":");
+
+        header_writer_t middle_writer (middle);
+        middle_writer.append (",\"formatMarker\":");
+        middle_writer.number (static_cast<int> (flow_id_t::format_marker));
+        middle_writer.append (",\"kind\":");
+        middle_writer.number (static_cast<int> (header.kind));
+        middle_writer.append (",\"messageName\":");
+        middle_writer.string (message_name);
+        middle_writer.append (",\"metadata\":{");
+        kind = header.kind;
+    }
+};
+
+header_plan_t &header_plan ()
+{
+    thread_local header_plan_t value;
+    return value;
+}
 
 void write_header (header_writer_t &writer,
                    const envelope_header_t &header,
                    const std::string *flow_id,
-                   const std::optional<flow_origin_t> &flow_origin)
+                   const std::optional<flow_origin_t> &flow_origin,
+                   const header_plan_t &plan)
 {
-    writer.append ("{\"channelName\":");
-    writer.string (header.channel_name);
-    writer.append (",\"contentType\":");
-    writer.string (header.content_type);
-    writer.append (",\"correlationId\":");
+    writer.append (plan.prefix);
     if (header.correlation_id.empty ())
         writer.append ("null");
     else
@@ -243,13 +288,7 @@ void write_header (header_writer_t &writer,
         writer.number (static_cast<int> (*flow_origin));
     else
         writer.append ("null");
-    writer.append (",\"formatMarker\":");
-    writer.number (static_cast<int> (flow_id_t::format_marker));
-    writer.append (",\"kind\":");
-    writer.number (static_cast<int> (header.kind));
-    writer.append (",\"messageName\":");
-    writer.string (header.message_name);
-    writer.append (",\"metadata\":{");
+    writer.append (plan.middle);
     bool first = true;
     for (const auto &[name, value] : header.metadata) {
         if (!first)
@@ -280,59 +319,392 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
                                                 flow_id, flow_origin); !valid) {
         throw framework_exception_t (valid.error_kind (), valid.error ()->what ());
     }
+    auto &plan = header_plan ();
+    if (!plan.matches (header))
+        plan.rebuild (header);
     header_writer_t measure;
-    write_header (measure, header, flow_id, flow_origin);
+    write_header (measure, header, flow_id, flow_origin, plan);
     auto message = zlink::message_t::allocate (measure.size ());
     if (!message.valid ())
         throw std::bad_alloc ();
     header_writer_t writer (reinterpret_cast<char *> (message.data ()));
-    write_header (writer, header, flow_id, flow_origin);
+    write_header (writer, header, flow_id, flow_origin, plan);
     return message;
 }
+
+namespace
+{
+
+enum class header_member_t
+{
+    none,
+    kind,
+    channel_name,
+    message_name,
+    content_type,
+    correlation_id,
+    deadline,
+    topic,
+    error_code,
+    error_message,
+    source,
+    flow_id,
+    flow_origin,
+    format_marker,
+    metadata
+};
+
+enum class header_value_t
+{
+    missing,
+    null,
+    string,
+    number,
+    other
+};
+
+struct header_scalar_t
+{
+    header_value_t type = header_value_t::missing;
+    std::string string;
+    int number = 0;
+
+    void set_null ()
+    {
+        type = header_value_t::null;
+        string.clear ();
+    }
+
+    void set_string (std::string value)
+    {
+        type = header_value_t::string;
+        string = std::move (value);
+    }
+
+    void set_number (int value)
+    {
+        type = header_value_t::number;
+        number = value;
+        string.clear ();
+    }
+
+    void set_other ()
+    {
+        type = header_value_t::other;
+        string.clear ();
+    }
+};
+
+class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
+{
+  public:
+    explicit header_sax_t (bool capture_flow) : _capture_flow (capture_flow) {}
+
+    bool null () override { return scalar ([] (header_scalar_t &value) { value.set_null (); }); }
+    bool boolean (bool value) override
+    {
+        return scalar ([value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
+    }
+    bool number_integer (number_integer_t value) override
+    {
+        return scalar ([value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
+    }
+    bool number_unsigned (number_unsigned_t value) override
+    {
+        return scalar ([value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
+    }
+    bool number_float (number_float_t value, const string_t &) override
+    {
+        return scalar ([value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
+    }
+    bool string (string_t &value) override
+    {
+        return scalar ([&value] (header_scalar_t &target) { target.set_string (std::move (value)); });
+    }
+    bool binary (binary_t &) override { return scalar ([] (header_scalar_t &value) { value.set_other (); }); }
+
+    bool start_object (std::size_t) override
+    {
+        if (_depth == 0) {
+            _root_object = true;
+        } else if (_depth == 1 && _member == header_member_t::metadata) {
+            _metadata_object_depth = _depth + 1;
+            clear_metadata ();
+            _metadata_is_object = true;
+            _member = header_member_t::none;
+        } else {
+            container_value ();
+        }
+        ++_depth;
+        return true;
+    }
+
+    bool key (string_t &value) override
+    {
+        if (_depth == 1) {
+            _member = member (value);
+        } else if (_depth == _metadata_object_depth) {
+            _metadata_key = std::move (value);
+        }
+        return true;
+    }
+
+    bool end_object () override
+    {
+        if (_depth == _metadata_object_depth) {
+            _metadata_object_depth = 0;
+        }
+        if (_depth == 1)
+            _root_closed = true;
+        --_depth;
+        return true;
+    }
+
+    bool start_array (std::size_t) override
+    {
+        container_value ();
+        ++_depth;
+        return true;
+    }
+
+    bool end_array () override
+    {
+        --_depth;
+        return true;
+    }
+
+    bool parse_error (std::size_t,
+                      const std::string &,
+                      const nlohmann::detail::exception &error) override
+    {
+        _parse_error = error.what ();
+        return false;
+    }
+
+    result_t<envelope_header_t> finish ()
+    {
+        if (!_parse_error.empty ())
+            return failure (_parse_error);
+        if (!_root_object || !_root_closed || _depth != 0)
+            return failure ("ZLink envelope header must be a JSON object");
+        if (_kind.type != header_value_t::number || _channel_name.type != header_value_t::string
+            || _message_name.type != header_value_t::string)
+            return failure ("ZLink envelope header has invalid required fields");
+        if (_content_type.type != header_value_t::missing
+            && _content_type.type != header_value_t::string)
+            return failure ("ZLink envelope header contentType is invalid");
+        if (!optional_string (_correlation_id) || !optional_string (_deadline)
+            || !optional_string (_topic) || !optional_string (_error_code)
+            || !optional_string (_error_message) || !optional_string (_source)
+            || !number_or_default (_format_marker))
+            return failure ("ZLink envelope header has an invalid field type");
+        if (_capture_flow
+            && (!optional_string (_flow_id) || !number_or_default (_flow_origin)))
+            return failure ("ZLink envelope header flow fields are invalid");
+        if (!_invalid_metadata_keys.empty ())
+            return failure ("ZLink envelope header metadata value is invalid");
+
+        envelope_header_t header;
+        header.kind = static_cast<message_kind_t> (_kind.number);
+        header.channel_name = std::move (_channel_name.string);
+        header.message_name = std::move (_message_name.string);
+        header.content_type = _content_type.type == header_value_t::missing
+                                ? envelope_codec_t::default_content_type
+                                : std::move (_content_type.string);
+        header.correlation_id = std::move (_correlation_id.string);
+        header.deadline = take_optional (_deadline);
+        header.topic = take_optional (_topic);
+        header.error_code = take_optional (_error_code);
+        header.error_message = take_optional (_error_message);
+        header.source = take_optional (_source);
+        if (_metadata_is_object)
+            header.metadata = std::move (_metadata);
+        if (_capture_flow) {
+            header.flow_id = take_optional (_flow_id);
+            if (_flow_origin.type == header_value_t::number)
+                header.flow_origin = static_cast<flow_origin_t> (_flow_origin.number);
+        }
+        const auto format_marker = _format_marker.type == header_value_t::number
+                                     ? _format_marker.number : 0;
+        if (auto valid = validate_protocol_header (header, format_marker,
+                                                    header.flow_id ? &*header.flow_id : nullptr,
+                                                    header.flow_origin); !valid) {
+            return result_t<envelope_header_t>::failure (valid.error_kind (), valid.error ()->what ());
+        }
+        return result_t<envelope_header_t>::success (std::move (header));
+    }
+
+  private:
+    using number_integer_t = nlohmann::json::number_integer_t;
+    using number_unsigned_t = nlohmann::json::number_unsigned_t;
+    using number_float_t = nlohmann::json::number_float_t;
+    using string_t = nlohmann::json::string_t;
+    using binary_t = nlohmann::json::binary_t;
+
+    static header_member_t member (const std::string &name)
+    {
+        if (name == "kind") return header_member_t::kind;
+        if (name == "channelName") return header_member_t::channel_name;
+        if (name == "messageName") return header_member_t::message_name;
+        if (name == "contentType") return header_member_t::content_type;
+        if (name == "correlationId") return header_member_t::correlation_id;
+        if (name == "deadline") return header_member_t::deadline;
+        if (name == "topic") return header_member_t::topic;
+        if (name == "errorCode") return header_member_t::error_code;
+        if (name == "errorMessage") return header_member_t::error_message;
+        if (name == "source") return header_member_t::source;
+        if (name == "flowId") return header_member_t::flow_id;
+        if (name == "flowOrigin") return header_member_t::flow_origin;
+        if (name == "formatMarker") return header_member_t::format_marker;
+        if (name == "metadata") return header_member_t::metadata;
+        return header_member_t::none;
+    }
+
+    header_scalar_t *current ()
+    {
+        if (_depth != 1)
+            return nullptr;
+        switch (_member) {
+            case header_member_t::kind: return &_kind;
+            case header_member_t::channel_name: return &_channel_name;
+            case header_member_t::message_name: return &_message_name;
+            case header_member_t::content_type: return &_content_type;
+            case header_member_t::correlation_id: return &_correlation_id;
+            case header_member_t::deadline: return &_deadline;
+            case header_member_t::topic: return &_topic;
+            case header_member_t::error_code: return &_error_code;
+            case header_member_t::error_message: return &_error_message;
+            case header_member_t::source: return &_source;
+            case header_member_t::flow_id: return _capture_flow ? &_flow_id : nullptr;
+            case header_member_t::flow_origin: return _capture_flow ? &_flow_origin : nullptr;
+            case header_member_t::format_marker: return &_format_marker;
+            default: return nullptr;
+        }
+    }
+
+    template <typename Set>
+    bool scalar (Set set)
+    {
+        if (_metadata_object_depth != 0 && _depth == _metadata_object_depth) {
+            header_scalar_t value;
+            set (value);
+            if (value.type == header_value_t::string)
+                set_metadata_value (std::move (value.string));
+            else
+                set_metadata_invalid ();
+        } else if (auto *value = current ()) {
+            set (*value);
+            _member = header_member_t::none;
+        } else if (_depth == 1 && _member == header_member_t::metadata) {
+            _metadata_is_object = false;
+            clear_metadata ();
+            _member = header_member_t::none;
+        }
+        return true;
+    }
+
+    void container_value ()
+    {
+        if (_metadata_object_depth != 0 && _depth == _metadata_object_depth) {
+            set_metadata_invalid ();
+        } else if (auto *value = current ()) {
+            value->set_other ();
+            _member = header_member_t::none;
+        } else if (_depth == 1 && _member == header_member_t::metadata) {
+            _metadata_is_object = false;
+            clear_metadata ();
+            _member = header_member_t::none;
+        }
+    }
+
+    void set_metadata_value (std::string value)
+    {
+        _invalid_metadata_keys.erase (
+          std::remove (_invalid_metadata_keys.begin (), _invalid_metadata_keys.end (), _metadata_key),
+          _invalid_metadata_keys.end ());
+        const auto existing = _metadata.find (_metadata_key);
+        if (existing != _metadata.end ())
+            existing->second = std::move (value);
+        else
+            _metadata.emplace (std::move (_metadata_key), std::move (value));
+        _metadata_key.clear ();
+    }
+
+    void set_metadata_invalid ()
+    {
+        _metadata.erase (_metadata_key);
+        _invalid_metadata_keys.push_back (std::move (_metadata_key));
+        _metadata_key.clear ();
+    }
+
+    void clear_metadata ()
+    {
+        _metadata.clear ();
+        _invalid_metadata_keys.clear ();
+    }
+
+    static bool optional_string (const header_scalar_t &value)
+    {
+        return value.type == header_value_t::missing || value.type == header_value_t::null
+               || value.type == header_value_t::string;
+    }
+
+    static bool number_or_default (const header_scalar_t &value)
+    {
+        return value.type == header_value_t::missing || value.type == header_value_t::null
+               || value.type == header_value_t::number;
+    }
+
+    static std::optional<std::string> take_optional (header_scalar_t &value)
+    {
+        if (value.type != header_value_t::string)
+            return std::nullopt;
+        return std::move (value.string);
+    }
+
+    static result_t<envelope_header_t> failure (std::string_view reason)
+    {
+        return result_t<envelope_header_t>::failure (
+          framework_error_kind_t::protocol_error,
+          std::string ("invalid ZLink envelope header: ") + std::string (reason));
+    }
+
+    bool _capture_flow;
+    std::size_t _depth = 0;
+    std::size_t _metadata_object_depth = 0;
+    bool _root_object = false;
+    bool _root_closed = false;
+    bool _metadata_is_object = false;
+    header_member_t _member = header_member_t::none;
+    std::string _metadata_key;
+    std::string _parse_error;
+    std::map<std::string, std::string> _metadata;
+    std::vector<std::string> _invalid_metadata_keys;
+    header_scalar_t _kind;
+    header_scalar_t _channel_name;
+    header_scalar_t _message_name;
+    header_scalar_t _content_type;
+    header_scalar_t _correlation_id;
+    header_scalar_t _deadline;
+    header_scalar_t _topic;
+    header_scalar_t _error_code;
+    header_scalar_t _error_message;
+    header_scalar_t _source;
+    header_scalar_t _flow_id;
+    header_scalar_t _flow_origin;
+    header_scalar_t _format_marker;
+};
+
+} // namespace
 
 result_t<envelope_header_t> envelope_codec_t::decode_header (const zlink::message_t &message,
                                                              bool capture_flow) const
 {
     try {
         const auto bytes = message.bytes ();
-        const auto json = nlohmann::json::parse (bytes.begin (), bytes.end ());
-        envelope_header_t header;
-        header.kind = static_cast<message_kind_t> (json.at ("kind").get<int> ());
-        header.channel_name = json.at ("channelName").get<std::string> ();
-        header.message_name = json.at ("messageName").get<std::string> ();
-        header.content_type = json.value<std::string> ("contentType", default_content_type);
-        header.correlation_id =
-          json.contains ("correlationId") && !json.at ("correlationId").is_null ()
-            ? json.at ("correlationId").get<std::string> ()
-            : std::string{};
-        header.deadline = optional_json_value<std::string> (json, "deadline");
-        header.topic = optional_json_value<std::string> (json, "topic");
-        header.error_code = optional_json_value<std::string> (json, "errorCode");
-        header.error_message = optional_json_value<std::string> (json, "errorMessage");
-        header.source = optional_json_value<std::string> (json, "source");
-        if (json.contains ("metadata") && json.at ("metadata").is_object ()) {
-            header.metadata = json.at ("metadata").get<std::map<std::string, std::string>> ();
-        }
-        /* flow-correlation §4: the flow pair is observation-only. It is
-         * materialized and validated only when the caller can consume it
-         * (tracing on at a flow processing point); at Off the fields are
-         * ignored entirely so malformed flow data cannot reject the frame. */
-        if (capture_flow) {
-            header.flow_id = optional_json_value<std::string> (json, "flowId");
-            if (const auto origin = optional_json_value<int> (json, "flowOrigin")) {
-                header.flow_origin = static_cast<flow_origin_t> (*origin);
-            }
-        }
-        const auto format_marker = json.contains ("formatMarker") && !json.at ("formatMarker").is_null ()
-                                     ? json.at ("formatMarker").get<int> ()
-                                     : 0;
-        if (auto valid = validate_protocol_header (header, format_marker,
-                                                    header.flow_id ? &*header.flow_id : nullptr,
-                                                    header.flow_origin); !valid) {
-            return result_t<envelope_header_t>::failure (valid.error_kind (),
-                                                         valid.error ()->what ());
-        }
-        return result_t<envelope_header_t>::success (std::move (header));
+        header_sax_t sax (capture_flow);
+        (void) nlohmann::json::sax_parse (bytes.begin (), bytes.end (), &sax);
+        return sax.finish ();
     }
     catch (const std::exception &ex) {
         return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,

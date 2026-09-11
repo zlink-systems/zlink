@@ -58,11 +58,17 @@ final class ZLinkChannelRouteDispatcher {
         //  Spec 27 §4: decode and install the inbound flow pair (or start a new
         //  flow) only while capture is enabled; at Off suppress flow state.
         ZLinkFlowContext.State inboundFlow = null;
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header envelope = null;
         boolean captureFlow = flow.captureEnabled();
         if (captureFlow) {
             try {
-                inboundFlow = ZLinkChannelFlowFrame.decode(received.parts());
-            } catch (PayloadDecodeDispatchException invalidFlow) {
+                envelope = systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                    .decodeDispatchHeader(received.parts(), true);
+                inboundFlow = envelope == null
+                    ? ZLinkChannelFlowFrame.decode(received.parts())
+                    : ZLinkChannelFlowFrame.fromEnvelopeHeader(envelope);
+            } catch (PayloadDecodeDispatchException
+                | systems.zlink.framework.errors.ZLinkFrameworkException invalidFlow) {
                 String packetName = received.parts().isEmpty()
                     ? null : received.parts().getFirst().toUtf8String();
                 if (received.routingId().isPresent() && received.isRequest()) {
@@ -104,7 +110,9 @@ final class ZLinkChannelRouteDispatcher {
             }
             ParsedPacket packet;
             try {
-                packet = parsePacket(received.parts());
+                packet = envelope == null
+                    ? parsePacket(received.parts())
+                    : parsePacket(received.parts(), envelope);
             } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
                 //  A JSON-object first frame that is not a valid shared
                 //  envelope is a protocol error (C++ decode parity).
@@ -482,6 +490,12 @@ final class ZLinkChannelRouteDispatcher {
      */
     private static ParsedPacket parsePacket(List<Message> parts) {
         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header = systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.decodeDispatchHeader(parts, false);
+        return parsePacket(parts, header);
+    }
+
+    private static ParsedPacket parsePacket(
+        List<Message> parts,
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
         if (header != null) {
             return new ParsedPacket(header.messageName(), parts.get(1), header);
         }

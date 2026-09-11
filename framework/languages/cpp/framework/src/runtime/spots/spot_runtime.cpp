@@ -13198,9 +13198,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                                              std::move (encoded), std::nullopt};
             const auto dispatched = transfer_actor_leave_owner_reservation
                                       ? dispatcher.dispatch_send (
-                                          received, services, deferred_terminal,
+                                          received, header.value (), services, deferred_terminal,
                                           record.transferred_owner_byte_cost)
-                                      : dispatcher.dispatch_send (received, services);
+                                      : dispatcher.dispatch_send (received, header.value (), services);
             if (transfer_actor_leave_owner_reservation && dispatched && terminal_deferred)
                 *terminal_deferred = true;
             if (!dispatched) {

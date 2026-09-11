@@ -1637,6 +1637,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp
     "framework-unit;framework-regression;messaging")
+  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_messaging)
   target_include_directories(test_cpp_framework_messaging PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_executable(test_cpp_framework_gtest_harness

@@ -1,0 +1,2 @@
+lang	suite	transport	pattern	size	c_tput_ops	bind_tput_ops	tput_ratio_pct	c_lat_ms	bind_lat_ms	lat_ratio	c_status	bind_status	c_report	bind_report	pair_tag
+node	multi	tcp	MULTI_DEALER_DEALER	64	NA	NA	NA	NA	NA	NA	complete (smoke only; excluded: binding META verification failed)	fail: missing META core_source/core_version	bindings/c/perf/results/multi/report/perf_c_multi_linux_20260911_082841_c0180-node-multi-tcp-smoke.txt	bindings/node/perf/results/multi/report/perf_node_multi_linux_20260911_082857_c0180-node-multi-tcp-smoke.txt	c0180-node-multi-tcp-smoke

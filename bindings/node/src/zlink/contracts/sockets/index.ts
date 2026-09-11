@@ -27,6 +27,7 @@ export type {
   BaseSocket,
   ConnectableSocket,
   Socket,
+  ZLinkReadableHandler,
 } from './socket';
 export type {
   CommonSocketOptions,
