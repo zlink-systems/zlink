@@ -190,7 +190,8 @@ Actor가 다른 node의 Spot으로 join할 때와 host `Relocate`로 이전할 �
 
     if (current is { } exact)
     {
-        await actors.DestroyAsync(exact, cancellationToken); // generation이 다른 Actor는 종료하지 않는다.
+        // generation이 다른 Actor는 종료하지 않는다.
+        await actors.DestroyAsync(exact, cancellationToken);
     }
     ```
 
@@ -322,12 +323,15 @@ Relocation으로 Actor가 다른 node의 Entry Spot에 복원되는 경우에는
         // 새 Actor가 이 Entry Spot을 최초 membership으로 삼을 때 호출된다.
         // 반환값이 이 Actor를 만들지 말지를 결정한다 — 이 Spot이 admission 관문이다.
         public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
-            PlayerActor actor,          // 아직 공개되지 않은 새 Actor instance다.
-            ZLinkMessage createRequest, // GetOrCreate/Create의 .Request(...)로 보낸 값이다.
+            // 아직 공개되지 않은 새 Actor instance다.
+            PlayerActor actor,
+            // GetOrCreate/Create의 .Request(...)로 보낸 값이다.
+            ZLinkMessage createRequest,
             CancellationToken cancellationToken)
         {
             var request = createRequest.Decode<CreatePlayer>();
-            actor.SetDisplayName(request.DisplayName); // 초기 state는 Actor가 소유한다.
+            // 초기 state는 Actor가 소유한다.
+            actor.SetDisplayName(request.DisplayName);
 
             // Accept()면 Actor가 Ready가 되고, Reject(...)면 생성이 취소된다.
             return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
@@ -338,7 +342,8 @@ Relocation으로 Actor가 다른 node의 Entry Spot에 복원되는 경우에는
         public ValueTask OnJoinedActorAsync(
             PlayerActor actor,
             CancellationToken cancellationToken)
-            => ValueTask.CompletedTask; // 이 샘플은 알림만 받고 따로 할 일이 없다.
+            // 이 샘플은 알림만 받고 따로 할 일이 없다.
+            => ValueTask.CompletedTask;
 
         // 이 Entry Spot에 있던 Actor가 User Spot으로 빠져나간 commit 뒤 호출된다.
         // Actor가 사라진다는 뜻이 아니라 membership이 옮겨졌다는 뜻이다.
@@ -803,14 +808,16 @@ actor packet으로 등록한 것이다.
 
     ```cpp
     // C++은 handler class 대신 Entry Spot의 member 함수를 등록한다.
-    task_t<void> play_entry_spot_t::join_game (player_actor_t &actor,   // join을 요청한 Actor다.
+    // join을 요청한 Actor다.
+    task_t<void> play_entry_spot_t::join_game (player_actor_t &actor,
                                                message_context_t &,
                                                const join_game_req_t &request)
     {
         actor.context ()
           .join_spot (request.spot_id, join_game_request_t{request.seat})
           .timeout (std::chrono::seconds (5))
-          .defer (); // 현재 handler가 성공한 뒤 join을 시작한다.
+          // 현재 handler가 성공한 뒤 join을 시작한다.
+          .defer ();
         co_return;
     }
     ```

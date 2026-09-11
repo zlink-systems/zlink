@@ -7,6 +7,8 @@ title: "12. 운영 — 런타임 메트릭 · graceful drain · readiness · C#/
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 12. 운영 — 런타임 메트릭 · graceful drain · readiness
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 11. Monitoring — 상태 관측과 진단](11-monitoring.ko.md) | [다음: 13. 주요 타입 사용 색인](13-interface-catalog.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "12. 운영 — 런타임 메트릭 · graceful drain · readiness · C#/
 <!-- language-switch:start -->
 다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/12-operations.ko.md) · [Java](../../../java/guide/server/12-operations.ko.md) · [Kotlin](../../../kotlin/guide/server/12-operations.ko.md) · [Node/TypeScript](../../../node/guide/server/12-operations.ko.md)
 <!-- language-switch:end -->
-
-# 12. 운영 — 런타임 메트릭 · graceful drain · readiness
 
 > **이 장의 계약 소유 문서** — 공통 스펙
 > [Runtime 상태 조회와 운영 진단](../../../common/spec/server/06-observability/01-runtime-monitoring.ko.md),
@@ -56,7 +56,8 @@ framework는 `"zlink.framework"`라는 이름의 `System.Diagnostics.Metrics.Met
 ```csharp
 // 이 한 줄로 zlink 계기 전체가 앱의 OTel 파이프라인에 들어간다.
 builder.Services.AddOpenTelemetry().WithMetrics(m => m
-    .AddMeter("zlink.framework") // Framework가 계기를 방출하는 정식 meter 이름이다.
+    // Framework가 계기를 방출하는 정식 meter 이름이다.
+    .AddMeter("zlink.framework")
     .AddPrometheusExporter());
 ```
 
@@ -364,7 +365,8 @@ component 이벤트 스트림을 제공한다. Host termination은 framework run
 ```csharp
 var meshRuntime = app.Services.GetRequiredService<IZLinkRouteMeshRuntime>();
 
-var status = meshRuntime.GetStatus("game.room"); // 노드·peer·channel의 immutable 현재 상태
+// 노드·peer·channel의 immutable 현재 상태
+var status = meshRuntime.GetStatus("game.room");
 var ready = status.IsReady;
 
 await foreach (var observed in meshRuntime.ObserveAsync("game.room", cancellationToken: ct))

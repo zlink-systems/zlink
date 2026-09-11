@@ -7,6 +7,8 @@ title: "1. Overview · Kotlin"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 1. Overview
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Next: 2. Getting Started](02-getting-started.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "1. Overview · Kotlin"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/01-overview.en.md) · [C++](../../../cpp/guide/server/01-overview.en.md) · [Java](../../../java/guide/server/01-overview.en.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/01-overview.en.md)
 <!-- language-switch:end -->
-
-# 1. Overview
 
 > **The documents that own this chapter's contract** — owned by the
 > [Framework Overview](../../../common/spec/server/00-foundation/03-overview.en.md) and the
@@ -205,7 +205,8 @@ even if they're replaced later — this backend boundary is explained separately
 // Registration — one room mesh and a room type
 val node = options.addRouteMesh("game.room")
 node.listen("tcp://0.0.0.0:9001")
-node.channelName("game.room").server()      // A mesh has at least 1 logical membership
+// A mesh has at least 1 logical membership
+node.channelName("game.room").server()
 node.objects().server()
     .addSpotFactory("room", BingoRoomSpot::class.java) { factory ->
         factory.recreateOnRelocation()
@@ -217,7 +218,8 @@ node.objects().server()
 class MarkNumberHandler : ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
 
     override suspend fun handle(room: BingoRoomSpot, request: MarkNumber): MarkResult {
-        room.board.mark(request.number)         // No lock
+        // No lock
+        room.board.mark(request.number)
         room.lastActivity = Instant.now()
         return MarkResult(room.board.hasBingo())
     }
@@ -349,7 +351,8 @@ remains.
 // Inside an HTTP handler — route an order event to that order's workflow Spot.
 // The first request cold-activates the spot keyed on OrderId, and later requests arrive
 // at the same already-created spot, always processed serially in one place (no distributed lock).
-spots.requestToSpot(request.orderId, request)      // request is already a StartOrderWorkflowReq body.
+// request is already a StartOrderWorkflowReq body.
+spots.requestToSpot(request.orderId, request)
     .instanceSpot("order-workflow")
     .inMesh("commerce")
     .submit(StartOrderWorkflowRes::class.java)
@@ -461,7 +464,8 @@ class StartOrderWorkflowHandler :
 
     override suspend fun handle(
         spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): StartOrderWorkflowRes =
-        workflow.startInSpot(spot, request)        // Accesses spot state without a lock
+        // Accesses spot state without a lock
+        workflow.startInSpot(spot, request)
 }
 ```
 
@@ -516,23 +520,29 @@ request/response."
 class GetPriceHandler : ZLinkRequestHandler<PriceRequest, PriceReply> {
 
     override suspend fun handle(request: PriceRequest, context: ZLinkMessageContext): PriceReply =
-        PriceReply(request.symbol, BigDecimal("187.42"))   // Fixed demo value (a real lookup result in practice)
+        // Fixed demo value (a real lookup result in practice)
+        PriceReply(request.symbol, BigDecimal("187.42"))
 }
 
 // Registration — declares the MeshNode endpoint and the price membership's handler together.
-options.addRouteMesh("services")                        // Scopes the communication range by MeshName.
-    .listen("tcp://0.0.0.0:7301")                       // Opens this MeshNode's endpoint.
+// Scopes the communication range by MeshName.
+options.addRouteMesh("services")
+    // Opens this MeshNode's endpoint.
+    .listen("tcp://0.0.0.0:7301")
     .setRoutingId(RoutingId.from("price-1"))
-    .channelName("price")                                   // Registers the price-handling membership.
+    // Registers the price-handling membership.
+    .channelName("price")
     .server()
     .addRequestHandler(GetPriceHandler::class.java, PriceRequest::class.java, PriceReply::class.java)
 
 // Client: inject the route client and call by ChannelName.
 val reply = client
     .requestToChannel(
-        "price",                                        // The ChannelName to look up process-locally
+        // The ChannelName to look up process-locally
+        "price",
         PriceRequest("AAPL"))
-    .submit(PriceReply::class.java)                     // Sends, then waits for the reply asynchronously.
+    // Sends, then waits for the reply asynchronously.
+    .submit(PriceReply::class.java)
     .await()
 ```
 
@@ -556,20 +566,26 @@ you declare the MeshNode, fanout, and STREAM node.
 
 ```kotlin
 val zlink = ZLinkFrameworkConfigurer { options ->
-    options.addLocationStore(ZLinkRedisLocationStore(...))   // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+    // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+    options.addLocationStore(ZLinkRedisLocationStore(...))
 
-    options.addRouteMesh("services")                         // MeshNode for inter-server request/send
+    // MeshNode for inter-server request/send
+    options.addRouteMesh("services")
         .listen("tcp://0.0.0.0:7301")
         .setRoutingId(RoutingId.from("service-a"))
-        .channelName("orders").server()                          // The logical membership to handle
+        // The logical membership to handle
+        .channelName("orders").server()
     options.addFanoutChannel("events")
-        .enablePublisher("tcp://0.0.0.0:7302")               // classic event fan-out
-    options.addRouteMesh("game.room")                        // SPOT/actor are also owned by a MeshNode
+        // classic event fan-out
+        .enablePublisher("tcp://0.0.0.0:7302")
+    // SPOT/actor are also owned by a MeshNode
+    options.addRouteMesh("game.room")
         .listen("tcp://0.0.0.0:7304")
         .setRoutingId(RoutingId.from("room-a"))
         .channelName("game.room").server()
     options.addStreamNode("gateway")
-        .bind("tcp://0.0.0.0:7400")                          // The external client endpoint
+        // The external client endpoint
+        .bind("tcp://0.0.0.0:7400")
 }
 ```
 

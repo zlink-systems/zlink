@@ -7,6 +7,8 @@ title: "15. E2E 테스트 — client로 시스템 전체를 검증하기 · C#/.
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 15. E2E 테스트 — client로 시스템 전체를 검증하기
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 14. 샘플 고르기 — 내 문제에 가까운 예제부터](14-samples.ko.md) | [다음: 16. Options — 설정 목록과 기본값](16-options.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "15. E2E 테스트 — client로 시스템 전체를 검증하기 · C#/.
 <!-- language-switch:start -->
 다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/15-e2e-testing.ko.md) · [Java](../../../java/guide/server/15-e2e-testing.ko.md) · [Kotlin](../../../kotlin/guide/server/15-e2e-testing.ko.md) · [Node/TypeScript](../../../node/guide/server/15-e2e-testing.ko.md)
 <!-- language-switch:end -->
-
-# 15. E2E 테스트 — client로 시스템 전체를 검증하기
 
 > **이 장에는 계약을 소유하는 스펙 문서가 없다.** 자기 시스템에 테스트를 만드는 방법을
 > 다루기 때문이다. 각 샘플이 무엇을 검증하는지는
@@ -72,7 +72,8 @@ using var api = ZLinkHttpClient.Create(options.ApiUrl.ToString())
     .Build();
 var room = await api.Post("/games")
     .Body(new CreateGameHttpReq(options.GameName))
-    .Fetch<CreateGameHttpRes>(ct);   // Fetch는 역직렬화된 본문을 그대로 돌려준다.
+    // Fetch는 역직렬화된 본문을 그대로 돌려준다.
+    .Fetch<CreateGameHttpRes>(ct);
 
 // 2단계 — 응답이 알려 준 endpoint로 실시간 연결을 연다.
 await using var client = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
@@ -80,7 +81,8 @@ await using var client = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConne
     Endpoint = new Uri(room.PlayEndpoints[0]),
     ConnectTimeout = options.StreamTimeout,
     RequestTimeout = options.StreamTimeout,
-    DispatchMode = ZlinkStreamDispatchMode.Immediate  // console 시나리오는 자동 펌프를 사용한다.
+    // console 시나리오는 자동 펌프를 사용한다.
+    DispatchMode = ZlinkStreamDispatchMode.Immediate
 });
 ```
 
@@ -231,7 +233,8 @@ public async ValueTask RunAsync(TicTacToeClientOptions options, CancellationToke
     var auth1 = await client1.Request(new AuthenticateReq(options.XActorId)).Async<AuthenticateRes>(ct);
     ZlinkStreamAssert.Ensure(auth1.Player.ActorId == options.XActorId, "player x actor id mismatch.");
 
-    var join1 = await JoinGameAsync(client1, room.RoomId, ct);   // 대기 등록 → send → 수신(§3)
+    // 대기 등록 → send → 수신(§3)
+    var join1 = await JoinGameAsync(client1, room.RoomId, ct);
     ZlinkStreamAssert.Ensure(join1.State.Status == TicTacToeGameStatuses.WaitingForPlayers,
         "room should wait for the second player.");
 

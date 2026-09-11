@@ -7,6 +7,8 @@ title: "6. Spot · Java"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 6. Spot
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 5. Channel Messaging — request · send · pub/sub](05-channel-messaging.ko.md) | [다음: 7. Actor와 Spot](07-actor-spot.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "6. Spot · Java"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/06-spot.ko.md) · [C++](../../../cpp/guide/server/06-spot.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/06-spot.ko.md) · [Node/TypeScript](../../../node/guide/server/06-spot.ko.md)
 <!-- language-switch:end -->
-
-# 6. Spot
 
 > **이 장의 계약 소유 문서** — [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
 > [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
@@ -76,9 +76,11 @@ Instance Spot을 등록한다.
 ```java
 // Play 서버 — Entry Spot과 방을 담을 User Spot.
 mesh.objects().server()
-    .addEntrySpot(BingoEntrySpot.class)              // Entry Spot은 stable type이 없다.
+    // Entry Spot은 stable type이 없다.
+    .addEntrySpot(BingoEntrySpot.class)
     .addSpotFactory(
-        SampleNames.RoomSpotType,                    // stable type — 생성할 때 이 이름으로 선택한다.
+        // stable type — 생성할 때 이 이름으로 선택한다.
+        SampleNames.RoomSpotType,
         BingoRoom.class,
         factory -> factory
             .executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
@@ -103,7 +105,8 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
 // Instance Spot — 생성 호출이 없다. 해당 ID로 보내면 없을 때 생성된다.
 ReserveBingoRoomRes allocated = spotClient
     .requestToSpot("match:" + levelBucket, new ReserveBingoRoomReq())
-    .instanceSpot(SampleNames.MatchmakerSpotType) // 없으면 생성해도 된다는 intent.
+    // 없으면 생성해도 된다는 intent.
+    .instanceSpot(SampleNames.MatchmakerSpotType)
     .inMesh(SampleNames.MatchmakingMeshName)
     .submit(ReserveBingoRoomRes.class)
     .toCompletableFuture().join();
@@ -112,7 +115,8 @@ ReserveBingoRoomRes allocated = spotClient
 ZLinkSpotCreateResult created = spots
     .getOrCreate(allocated.roomId(), SampleNames.RoomSpotType)
     .inMesh(SampleNames.PlayMeshName)
-    .request(allocated.settings())   // 새 Spot의 onCreate로 전달된다.
+    // 새 Spot의 onCreate로 전달된다.
+    .request(allocated.settings())
     .submit()
     .toCompletableFuture().join();
 ```
@@ -340,7 +344,8 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
 public final class ChatHandler implements ZLinkSpotPacketHandler<GameRoom, Chat> {
     @Override
     public CompletionStage<Void> handle(GameRoom spot, Chat message) {
-        spot.appendChat(message.text()); // Spot 상태를 직접 만진다. 락은 필요 없다.
+        // Spot 상태를 직접 만진다. 락은 필요 없다.
+        spot.appendChat(message.text());
         return CompletableFuture.completedFuture(null);
     }
 }
@@ -370,7 +375,8 @@ public final class PlaceMarkHandler
     @Override
     public CompletionStage<Void> handle(
         GameRoom spot,
-        PlayerActor actor,              // 이 메시지를 받은 Actor다.
+        // 이 메시지를 받은 Actor다.
+        PlayerActor actor,
         ZLinkMessageContext messageContext,
         PlaceMark message) {
         spot.place(actor.actorId(), message.cell());
@@ -395,7 +401,8 @@ public final class GameRoom implements ZLinkSpot {
 
     @Override
     public void configure() {
-        context.handlers().addHandler(ChatHandler.class); // Spot send handler를 등록한다.
+        // Spot send handler를 등록한다.
+        context.handlers().addHandler(ChatHandler.class);
         // 구독 topic은 ScoreHandler에 붙인 @ZLinkSpotSubscription이 정한다.
         context.handlers().addHandler(ScoreHandler.class);
     }
@@ -547,15 +554,18 @@ factory로 준비할지 고르는 stable type**이다. 그 mesh에 Instance Spot
 // type이 여럿 등록된 mesh — 어느 factory로 만들지 stable type으로 지정한다.
 MatchResult match = spotClient
     .requestToSpot("bronze", new FindMatch(playerId))
-    .instanceSpot("matchmaker") // 대상이 없으면 이 stable type의 factory로 준비한다.
-    .inMesh("matchmaking")      // 처음 배치할 mesh를 고른다.
+    // 대상이 없으면 이 stable type의 factory로 준비한다.
+    .instanceSpot("matchmaker")
+    // 처음 배치할 mesh를 고른다.
+    .inMesh("matchmaking")
     .submit(MatchResult.class)
     .toCompletableFuture().join();
 
 // type이 하나만 등록된 mesh — 생략하면 Framework가 그 유일한 type을 고른다.
 MatchResult single = spotClient
     .requestToSpot("bronze", new FindMatch(playerId))
-    .instanceSpot()             // 대상 node에 등록된 유일한 type으로 준비한다.
+    // 대상 node에 등록된 유일한 type으로 준비한다.
+    .instanceSpot()
     .inMesh("matchmaking")
     .submit(MatchResult.class)
     .toCompletableFuture().join();
@@ -607,8 +617,10 @@ ZLinkTimerOptions options = new ZLinkTimerOptions()
     .setStopOnUnhandledException(false);
 
 gameTick = context.addTimer(
-    "game-tick",                    // 같은 Spot 안에서 유일한 이름이다.
-    Duration.ofSeconds(1),          // 주기. 0 이하이면 ZLinkConfigurationException이다.
+    // 같은 Spot 안에서 유일한 이름이다.
+    "game-tick",
+    // 주기. 0 이하이면 ZLinkConfigurationException이다.
+    Duration.ofSeconds(1),
     GameTickHandler.class,
     options).toCompletableFuture().join();
 
@@ -703,10 +715,12 @@ public final class BuildSnapshotHandler
 
     @Override
     public CompletionStage<SnapshotReply> handle(GameRoom spot, BuildSnapshot request) {
-        var board = spot.copyBoard(); // Spot 상태는 turn 안에서 먼저 복사해 둔다.
+        // Spot 상태는 turn 안에서 먼저 복사해 둔다.
+        var board = spot.copyBoard();
 
         return spot.context()
-            .runCpuWorker(cancellation -> SnapshotCodec.compress(board)) // 무거운 동기 계산.
+            // 무거운 동기 계산.
+            .runCpuWorker(cancellation -> SnapshotCodec.compress(board))
             .yield()
             .thenApply(SnapshotReply::new);
     }
@@ -790,7 +804,8 @@ Application은 상태가 일관된 turn에서 `defer()`를 호출한다. 이 호
 public final class RoundTickHandler implements ZLinkSpotTimerHandler<GameRoom> {
     @Override
     public CompletionStage<Void> handle(GameRoom spot, ZLinkTimerTick tick) {
-        if (!spot.tryFinishRound()) { // 라운드 진행 중이면 신호하지 않는다.
+        // 라운드 진행 중이면 신호하지 않는다.
+        if (!spot.tryFinishRound()) {
             return CompletableFuture.completedFuture(null);
         }
 

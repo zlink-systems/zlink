@@ -30,20 +30,26 @@ handler 단위 테스트를 아무리 촘촘히 작성해도 확인되지 않는
 === "C++"
 
     ```cpp
-    co_await client.connect ().async ();                                     // 실제 연결
-    auto auth = co_await client.request (authenticate_req_t{actor_id})       // 실제 request
+    // 실제 연결
+    co_await client.connect ().async ();
+    // 실제 request
+    auto auth = co_await client.request (authenticate_req_t{actor_id})
                   .async<authenticate_res_t> ();
-    auto push = co_await other.wait_for<player_joined_notify_t> ().async (); // 실제 push 도착 확인
+    // 실제 push 도착 확인
+    auto push = co_await other.wait_for<player_joined_notify_t> ().async ();
     ensure (push.payload.actor_id == auth.player.actor_id);
     ```
 
 === "Java"
 
     ```java
-    client.connect().submit().toCompletableFuture().join();               // 실제 연결
-    AuthenticateRes auth = client.request(new AuthenticateReq(actorId))    // 실제 request
+    // 실제 연결
+    client.connect().submit().toCompletableFuture().join();
+    // 실제 request
+    AuthenticateRes auth = client.request(new AuthenticateReq(actorId))
         .submit(AuthenticateRes.class).toCompletableFuture().join();
-    var push = other.waitFor(PlayerJoinedNotify.class)                    // 실제 push 도착 확인
+    // 실제 push 도착 확인
+    var push = other.waitFor(PlayerJoinedNotify.class)
         .submit(PlayerJoinedNotify.class).toCompletableFuture().join();
     ZLinkStreamAssert.ensure(
         push.payload().actorId().equals(auth.player().actorId()), "join push actor mismatch.");
@@ -64,10 +70,13 @@ handler 단위 테스트를 아무리 촘촘히 작성해도 확인되지 않는
 === "Node/TypeScript"
 
     ```typescript
-    await client.connect(signal);                                            // 실제 연결
-    const auth = await client.request(authenticateReq(actorId))              // 실제 request
+    // 실제 연결
+    await client.connect(signal);
+    // 실제 request
+    const auth = await client.request(authenticateReq(actorId))
       .submit<AuthenticateRes>(signal);
-    const push = await other.waitFor<PlayerJoinedNotify>(                    // 실제 push 도착 확인
+    // 실제 push 도착 확인
+    const push = await other.waitFor<PlayerJoinedNotify>(
       PacketNames.playerJoinedNotify).submit(signal);
     zlinkStreamAssert.ensure(
       push.payload.actorId === auth.player.actorId, 'join push actor mismatch.');
@@ -106,7 +115,8 @@ endpoint로 STREAM에 접속하는 순서다.
         .Build();
     var room = await api.Post("/games")
         .Body(new CreateGameHttpReq(options.GameName))
-        .Fetch<CreateGameHttpRes>(ct);   // Fetch는 역직렬화된 본문을 그대로 돌려준다.
+        // Fetch는 역직렬화된 본문을 그대로 돌려준다.
+        .Fetch<CreateGameHttpRes>(ct);
 
     // 2단계 — 응답이 알려 준 endpoint로 실시간 연결을 연다.
     await using var client = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
@@ -114,7 +124,8 @@ endpoint로 STREAM에 접속하는 순서다.
         Endpoint = new Uri(room.PlayEndpoints[0]),
         ConnectTimeout = options.StreamTimeout,
         RequestTimeout = options.StreamTimeout,
-        DispatchMode = ZlinkStreamDispatchMode.Immediate  // console 시나리오는 자동 펌프를 사용한다.
+        // console 시나리오는 자동 펌프를 사용한다.
+        DispatchMode = ZlinkStreamDispatchMode.Immediate
     });
     ```
 
@@ -156,7 +167,8 @@ endpoint로 STREAM에 접속하는 순서다.
     ZLinkStreamConnector client = ZLinkStreamConnectorFactory.create(
         new ZLinkStreamConnectorOptions(
             URI.create(room.playEndpoints().get(0)),
-            ZLinkStreamDispatchMode.IMMEDIATE, // console 시나리오는 자동 펌프를 사용한다.
+            // console 시나리오는 자동 펌프를 사용한다.
+            ZLinkStreamDispatchMode.IMMEDIATE,
             options.streamTimeout()));
     ```
 
@@ -176,7 +188,8 @@ endpoint로 STREAM에 접속하는 순서다.
     val client = ZLinkStreamConnectorFactory.create(
         ZLinkStreamConnectorOptions(
             URI.create(room.playEndpoints[0]),
-            ZLinkStreamDispatchMode.IMMEDIATE, // console 시나리오는 자동 펌프를 사용한다.
+            // console 시나리오는 자동 펌프를 사용한다.
+            ZLinkStreamDispatchMode.IMMEDIATE,
             options.streamTimeout))
     ```
 
@@ -195,7 +208,8 @@ endpoint로 STREAM에 접속하는 순서다.
       endpoint: room.playEndpoints[0],
       connectTimeoutMs: options.streamTimeoutMs,
       requestTimeoutMs: options.streamTimeoutMs,
-      dispatchMode: ZlinkStreamDispatchMode.Immediate // console 시나리오는 자동 펌프를 사용한다.
+      // console 시나리오는 자동 펌프를 사용한다.
+      dispatchMode: ZlinkStreamDispatchMode.Immediate
     });
     ```
 
@@ -673,7 +687,8 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
         var auth1 = await client1.Request(new AuthenticateReq(options.XActorId)).Async<AuthenticateRes>(ct);
         ZlinkStreamAssert.Ensure(auth1.Player.ActorId == options.XActorId, "player x actor id mismatch.");
 
-        var join1 = await JoinGameAsync(client1, room.RoomId, ct);   // 대기 등록 → send → 수신(§3)
+        // 대기 등록 → send → 수신(§3)
+        var join1 = await JoinGameAsync(client1, room.RoomId, ct);
         ZlinkStreamAssert.Ensure(join1.State.Status == TicTacToeGameStatuses.WaitingForPlayers,
             "room should wait for the second player.");
 
@@ -736,7 +751,8 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
         // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
         co_await client1.connect ().async ();
         co_await client1.request (authenticate_req_t{options.x_actor_id}).async<authenticate_res_t> ();
-        auto join1 = co_await join_game (client1, room.room_id); // 대기 등록 → send → 수신(§3)
+        // 대기 등록 → send → 수신(§3)
+        auto join1 = co_await join_game (client1, room.room_id);
         ensure (join1.state.status == tictactoe_status_t::waiting_for_players);
 
         // 혼자 들어왔을 때 자기 입장 알림이 자기에게 오면 안 된다.
@@ -778,7 +794,8 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
         client1.connect().submit().toCompletableFuture().join();
         client1.request(new AuthenticateReq(options.xActorId()))
             .submit(AuthenticateRes.class).toCompletableFuture().join();
-        JoinGameNotify join1 = joinGame(client1, room.roomId()); // 대기 등록 → send → 수신(§3)
+        // 대기 등록 → send → 수신(§3)
+        JoinGameNotify join1 = joinGame(client1, room.roomId());
         ZLinkStreamAssert.ensure(
             join1.state().status() == TicTacToeGameStatuses.WaitingForPlayers,
             "room should wait for the second player.");
@@ -825,7 +842,8 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
         // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
         client1.connect().submit().await()
         client1.request(AuthenticateReq(options.xActorId)).submit(AuthenticateRes::class.java).await()
-        val join1 = joinGame(client1, room.roomId) // 대기 등록 → send → 수신(§3)
+        // 대기 등록 → send → 수신(§3)
+        val join1 = joinGame(client1, room.roomId)
         ZLinkStreamAssert.ensure(
             join1.state.status == TicTacToeGameStatuses.WaitingForPlayers,
             "room should wait for the second player.")
@@ -867,7 +885,8 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
       // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
       await client1.connect(signal);
       await client1.request(authenticateReq(options.xActorId)).submit<AuthenticateRes>(signal);
-      const join1 = await joinGame(client1, room.roomId, signal); // 대기 등록 → send → 수신(§3)
+      // 대기 등록 → send → 수신(§3)
+      const join1 = await joinGame(client1, room.roomId, signal);
       zlinkStreamAssert.ensure(
         join1.state.status === TicTacToeGameStatuses.WaitingForPlayers,
         'room should wait for the second player.');
@@ -1007,7 +1026,8 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
     start_server play-b "$(app_bin Server Server)" --config "${CONFIG_DIR}/play-b.json"
     start_server api-a  "$(app_bin Server Server)" --config "${CONFIG_DIR}/api-a.json"
 
-    wait_port "${PLAY_A_ROUTE_ENDPOINT}"        # 포트가 열릴 때까지 기다린다. sleep을 쓰지 않는다.
+    # 포트가 열릴 때까지 기다린다. sleep을 쓰지 않는다.
+    wait_port "${PLAY_A_ROUTE_ENDPOINT}"
 
     "$(app_bin Client Client)" --api-url "http://127.0.0.1:${api_a_http_port}" \
       >"${log_dir}/client.log" 2>&1

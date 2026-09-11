@@ -7,6 +7,8 @@ title: "1. Overview · C#/.NET"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 1. Overview
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Next: 2. Getting Started](02-getting-started.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "1. Overview · C#/.NET"
 <!-- language-switch:start -->
 View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/01-overview.en.md) · [Java](../../../java/guide/server/01-overview.en.md) · [Kotlin](../../../kotlin/guide/server/01-overview.en.md) · [Node/TypeScript](../../../node/guide/server/01-overview.en.md)
 <!-- language-switch:end -->
-
-# 1. Overview
 
 > **The documents that own this chapter's contract** — owned by the
 > [Framework Overview](../../../common/spec/server/00-foundation/03-overview.en.md) and the
@@ -205,7 +205,8 @@ even if they're replaced later — this backend boundary is explained separately
 // Registration — one room mesh and a room type
 var node = options.AddRouteMesh("game.room");
 node.Listen("tcp://0.0.0.0:9001");
-node.Channel("game.room").Server();     // A mesh has at least 1 logical membership
+// A mesh has at least 1 logical membership
+node.Channel("game.room").Server();
 node.Objects().Server().AddSpotFactory<BingoRoomSpot>("room", factory => factory.RecreateOnRelocation());
 ```
 
@@ -217,7 +218,8 @@ public sealed class MarkNumberHandler
     public ValueTask<MarkResult> HandleAsync(
         BingoRoomSpot room, MarkNumber request, CancellationToken ct)
     {
-        room.Board.Mark(request.Number);        // No lock
+        // No lock
+        room.Board.Mark(request.Number);
         room.LastActivity = DateTimeOffset.UtcNow;
         return ValueTask.FromResult(new MarkResult(room.Board.HasBingo()));
     }
@@ -348,7 +350,8 @@ remains.
 // Inside an HTTP handler — route an order event to that order's workflow Spot.
 // The first request cold-activates the spot keyed on OrderId, and later requests arrive
 // at the same already-created spot, always processed serially in one place (no distributed lock).
-await spots.RequestToSpot(request.OrderId, request)    // request is already a StartOrderWorkflowReq body.
+// request is already a StartOrderWorkflowReq body.
+await spots.RequestToSpot(request.OrderId, request)
     .InstanceSpot("order-workflow")
     .InMesh("commerce")
     .Async<StartOrderWorkflowRes>(ct);
@@ -459,7 +462,8 @@ public sealed class StartOrderWorkflowHandler :
 {
     public ValueTask<StartOrderWorkflowRes> HandleAsync(
         OrderWorkflowSpot spot, StartOrderWorkflowReq request, CancellationToken ct)
-        => spot.StartOrderWorkflowAsync(request, ct);   // Accesses spot state without a lock
+        // Accesses spot state without a lock
+        => spot.StartOrderWorkflowAsync(request, ct);
 }
 ```
 
@@ -516,26 +520,33 @@ public sealed class GetPriceHandler
 {
     public ValueTask<PriceReply> HandleAsync(
         PriceRequest request, IZLinkMessageContext context, CancellationToken ct)
-        => ValueTask.FromResult(new PriceReply(request.Symbol, 187.42m));   // 187.42m is a fixed demo value (a real lookup result in practice)
+        // 187.42m is a fixed demo value (a real lookup result in practice)
+        => ValueTask.FromResult(new PriceReply(request.Symbol, 187.42m));
 }
 
 // Registration — declares the MeshNode endpoint and the price membership's handler together.
 builder.Services.AddZLinkFramework(options =>
 {
-    options.AddRouteMesh("services")                         // Scopes the communication range by MeshName.
-        .Listen("tcp://0.0.0.0:7301")                       // Opens this MeshNode's endpoint.
+    // Scopes the communication range by MeshName.
+    options.AddRouteMesh("services")
+        // Opens this MeshNode's endpoint.
+        .Listen("tcp://0.0.0.0:7301")
         .SetRoutingId(RoutingId.From("price-1"))
-        .Channel("price")                                   // Registers the price-handling membership.
+        // Registers the price-handling membership.
+        .Channel("price")
         .Server()
-        .AddRequestHandler<GetPriceHandler>();              // Registers this channel's request handler.
+        // Registers this channel's request handler.
+        .AddRequestHandler<GetPriceHandler>();
 });
 
 // Client: inject IZLinkRouteClient and call by ChannelName.
 var reply = await client
     .RequestToChannel(
-        "price",                                            // The ChannelName to look up process-locally
+        // The ChannelName to look up process-locally
+        "price",
         new PriceRequest("AAPL"))
-    .Async<PriceReply>(ct);                                // Sends, then waits for the reply asynchronously.
+    // Sends, then waits for the reply asynchronously.
+    .Async<PriceReply>(ct);
 ```
 
 The connection/setup code disappears, leaving a handler and a few lines of channel
@@ -559,20 +570,26 @@ you declare the MeshNode, fanout, and STREAM node.
 ```csharp
 builder.Services.AddZLinkFramework(options =>
 {
-    options.AddLocationStore(new ZLinkRedisLocationStore(...));  // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+    // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+    options.AddLocationStore(new ZLinkRedisLocationStore(...));
 
-    options.AddRouteMesh("services")                         // MeshNode for inter-server request/send
+    // MeshNode for inter-server request/send
+    options.AddRouteMesh("services")
         .Listen("tcp://0.0.0.0:7301")
         .SetRoutingId(RoutingId.From("service-a"))
-        .Channel("orders").Server();                         // The logical membership to handle
+        // The logical membership to handle
+        .Channel("orders").Server();
     options.AddFanoutChannel("events")
-        .EnablePublisher("tcp://0.0.0.0:7302");              // classic event fan-out
-    options.AddRouteMesh("game.room")                        // SPOT/actor are also owned by a MeshNode
+        // classic event fan-out
+        .EnablePublisher("tcp://0.0.0.0:7302");
+    // SPOT/actor are also owned by a MeshNode
+    options.AddRouteMesh("game.room")
         .Listen("tcp://0.0.0.0:7304")
         .SetRoutingId(RoutingId.From("room-a"))
         .Channel("game.room").Server();
     options.AddStreamNode("gateway")
-        .Bind("tcp://0.0.0.0:7400");                         // The external client endpoint
+        // The external client endpoint
+        .Bind("tcp://0.0.0.0:7400");
 });
 ```
 

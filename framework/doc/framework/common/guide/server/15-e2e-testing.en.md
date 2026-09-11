@@ -22,30 +22,39 @@ E2E test comes down to just this much code.
 === "C#/.NET"
 
     ```csharp
-    await client.Connect.Async(ct);                                    // A real connection
-    var auth = await client.Request(new AuthenticateReq(actorId))      // A real request
+    // A real connection
+    await client.Connect.Async(ct);
+    // A real request
+    var auth = await client.Request(new AuthenticateReq(actorId))
         .Async<AuthenticateRes>(ct);
-    var push = await other.WaitFor<PlayerJoinedNotify>().Async(ct);    // Confirms a real push arrived
+    // Confirms a real push arrived
+    var push = await other.WaitFor<PlayerJoinedNotify>().Async(ct);
     ZlinkStreamAssert.Ensure(push.Payload.ActorId == auth.Player.ActorId, "join push actor mismatch.");
     ```
 
 === "C++"
 
     ```cpp
-    co_await client.connect ().async ();                                     // A real connection
-    auto auth = co_await client.request (authenticate_req_t{actor_id})       // A real request
+    // A real connection
+    co_await client.connect ().async ();
+    // A real request
+    auto auth = co_await client.request (authenticate_req_t{actor_id})
                   .async<authenticate_res_t> ();
-    auto push = co_await other.wait_for<player_joined_notify_t> ().async (); // Confirms a real push arrived
+    // Confirms a real push arrived
+    auto push = co_await other.wait_for<player_joined_notify_t> ().async ();
     ensure (push.payload.actor_id == auth.player.actor_id);
     ```
 
 === "Java"
 
     ```java
-    client.connect().submit().toCompletableFuture().join();               // A real connection
-    AuthenticateRes auth = client.request(new AuthenticateReq(actorId))    // A real request
+    // A real connection
+    client.connect().submit().toCompletableFuture().join();
+    // A real request
+    AuthenticateRes auth = client.request(new AuthenticateReq(actorId))
         .submit(AuthenticateRes.class).toCompletableFuture().join();
-    var push = other.waitFor(PlayerJoinedNotify.class)                    // Confirms a real push arrived
+    // Confirms a real push arrived
+    var push = other.waitFor(PlayerJoinedNotify.class)
         .submit(PlayerJoinedNotify.class).toCompletableFuture().join();
     ZLinkStreamAssert.ensure(
         push.payload().actorId().equals(auth.player().actorId()), "join push actor mismatch.");
@@ -54,10 +63,13 @@ E2E test comes down to just this much code.
 === "Kotlin"
 
     ```kotlin
-    client.connect().submit().await()                                   // A real connection
-    val auth = client.request(AuthenticateReq(actorId))                 // A real request
+    // A real connection
+    client.connect().submit().await()
+    // A real request
+    val auth = client.request(AuthenticateReq(actorId))
         .submit(AuthenticateRes::class.java).await()
-    val push = other.waitFor(PlayerJoinedNotify::class.java)            // Confirms a real push arrived
+    // Confirms a real push arrived
+    val push = other.waitFor(PlayerJoinedNotify::class.java)
         .submit(PlayerJoinedNotify::class.java).await()
     ZLinkStreamAssert.ensure(
         push.payload().actorId == auth.player.actorId, "join push actor mismatch.")
@@ -66,10 +78,13 @@ E2E test comes down to just this much code.
 === "Node/TypeScript"
 
     ```typescript
-    await client.connect(signal);                                            // A real connection
-    const auth = await client.request(authenticateReq(actorId))              // A real request
+    // A real connection
+    await client.connect(signal);
+    // A real request
+    const auth = await client.request(authenticateReq(actorId))
       .submit<AuthenticateRes>(signal);
-    const push = await other.waitFor<PlayerJoinedNotify>(                    // Confirms a real push arrived
+    // Confirms a real push arrived
+    const push = await other.waitFor<PlayerJoinedNotify>(
       PacketNames.playerJoinedNotify).submit(signal);
     zlinkStreamAssert.ensure(
       push.payload.actorId === auth.player.actorId, 'join push actor mismatch.');
@@ -110,7 +125,8 @@ using the endpoint returned in that response.
         .Build();
     var room = await api.Post("/games")
         .Body(new CreateGameHttpReq(options.GameName))
-        .Fetch<CreateGameHttpRes>(ct);   // Fetch returns the deserialized body as-is.
+        // Fetch returns the deserialized body as-is.
+        .Fetch<CreateGameHttpRes>(ct);
 
     // Step 2 -- open a real-time connection to the endpoint the response gave us.
     await using var client = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
@@ -118,7 +134,8 @@ using the endpoint returned in that response.
         Endpoint = new Uri(room.PlayEndpoints[0]),
         ConnectTimeout = options.StreamTimeout,
         RequestTimeout = options.StreamTimeout,
-        DispatchMode = ZlinkStreamDispatchMode.Immediate  // Console scenarios use the automatic pump.
+        // Console scenarios use the automatic pump.
+        DispatchMode = ZlinkStreamDispatchMode.Immediate
     });
     ```
 
@@ -160,7 +177,8 @@ using the endpoint returned in that response.
     ZLinkStreamConnector client = ZLinkStreamConnectorFactory.create(
         new ZLinkStreamConnectorOptions(
             URI.create(room.playEndpoints().get(0)),
-            ZLinkStreamDispatchMode.IMMEDIATE, // Console scenarios use the automatic pump.
+            // Console scenarios use the automatic pump.
+            ZLinkStreamDispatchMode.IMMEDIATE,
             options.streamTimeout()));
     ```
 
@@ -180,7 +198,8 @@ using the endpoint returned in that response.
     val client = ZLinkStreamConnectorFactory.create(
         ZLinkStreamConnectorOptions(
             URI.create(room.playEndpoints[0]),
-            ZLinkStreamDispatchMode.IMMEDIATE, // Console scenarios use the automatic pump.
+            // Console scenarios use the automatic pump.
+            ZLinkStreamDispatchMode.IMMEDIATE,
             options.streamTimeout))
     ```
 
@@ -199,7 +218,8 @@ using the endpoint returned in that response.
       endpoint: room.playEndpoints[0],
       connectTimeoutMs: options.streamTimeoutMs,
       requestTimeoutMs: options.streamTimeoutMs,
-      dispatchMode: ZlinkStreamDispatchMode.Immediate // Console scenarios use the automatic pump.
+      // Console scenarios use the automatic pump.
+      dispatchMode: ZlinkStreamDispatchMode.Immediate
     });
     ```
 
@@ -682,7 +702,8 @@ move, in that order.
         var auth1 = await client1.Request(new AuthenticateReq(options.XActorId)).Async<AuthenticateRes>(ct);
         ZlinkStreamAssert.Ensure(auth1.Player.ActorId == options.XActorId, "player x actor id mismatch.");
 
-        var join1 = await JoinGameAsync(client1, room.RoomId, ct);   // Register wait -> send -> receive (see §3)
+        // Register wait -> send -> receive (see §3)
+        var join1 = await JoinGameAsync(client1, room.RoomId, ct);
         ZlinkStreamAssert.Ensure(join1.State.Status == TicTacToeGameStatuses.WaitingForPlayers,
             "room should wait for the second player.");
 
@@ -745,7 +766,8 @@ move, in that order.
         // 3. Whoever connects first authenticates and enters the empty room.
         co_await client1.connect ().async ();
         co_await client1.request (authenticate_req_t{options.x_actor_id}).async<authenticate_res_t> ();
-        auto join1 = co_await join_game (client1, room.room_id); // Register wait -> send -> receive (see §3)
+        // Register wait -> send -> receive (see §3)
+        auto join1 = co_await join_game (client1, room.room_id);
         ensure (join1.state.status == tictactoe_status_t::waiting_for_players);
 
         // Being alone in the room, their own join notification shouldn't come back to them.
@@ -787,7 +809,8 @@ move, in that order.
         client1.connect().submit().toCompletableFuture().join();
         client1.request(new AuthenticateReq(options.xActorId()))
             .submit(AuthenticateRes.class).toCompletableFuture().join();
-        JoinGameNotify join1 = joinGame(client1, room.roomId()); // Register wait -> send -> receive (see §3)
+        // Register wait -> send -> receive (see §3)
+        JoinGameNotify join1 = joinGame(client1, room.roomId());
         ZLinkStreamAssert.ensure(
             join1.state().status() == TicTacToeGameStatuses.WaitingForPlayers,
             "room should wait for the second player.");
@@ -834,7 +857,8 @@ move, in that order.
         // 3. Whoever connects first authenticates and enters the empty room.
         client1.connect().submit().await()
         client1.request(AuthenticateReq(options.xActorId)).submit(AuthenticateRes::class.java).await()
-        val join1 = joinGame(client1, room.roomId) // Register wait -> send -> receive (see §3)
+        // Register wait -> send -> receive (see §3)
+        val join1 = joinGame(client1, room.roomId)
         ZLinkStreamAssert.ensure(
             join1.state.status == TicTacToeGameStatuses.WaitingForPlayers,
             "room should wait for the second player.")
@@ -876,7 +900,8 @@ move, in that order.
       // 3. Whoever connects first authenticates and enters the empty room.
       await client1.connect(signal);
       await client1.request(authenticateReq(options.xActorId)).submit<AuthenticateRes>(signal);
-      const join1 = await joinGame(client1, room.roomId, signal); // Register wait -> send -> receive (see §3)
+      // Register wait -> send -> receive (see §3)
+      const join1 = await joinGame(client1, room.roomId, signal);
       zlinkStreamAssert.ensure(
         join1.state.status === TicTacToeGameStatuses.WaitingForPlayers,
         'room should wait for the second player.');
@@ -987,7 +1012,8 @@ up afterward.**
     start_server play-b  ".../TicTacToe.Server.Play.dll"  "${PLAY_B_CONFIG}"
     start_server api-a   ".../TicTacToe.Server.Api.dll"   "${API_A_CONFIG}"
 
-    wait_port play-a "${PLAY_A_STREAM_ENDPOINT}"   # Wait until the port opens. Doesn't use sleep.
+    # Wait until the port opens. Doesn't use sleep.
+    wait_port play-a "${PLAY_A_STREAM_ENDPOINT}"
 
     dotnet run --no-build --project Client/TicTacToe.Client.csproj -- \
       --config "${CLIENT_CONFIG}" >"${LOG_DIR}/client.log" 2>&1
@@ -1002,7 +1028,8 @@ up afterward.**
     start_server play-b "$PLAY_BIN" --config="$CONFIG_DIR/play-b.json"
     start_server api-a  "$API_BIN"  --config="$CONFIG_DIR/api-a.json"
 
-    wait_port play-a "$PLAY_A_ROUTE_ENDPOINT"   # Wait until the port opens. Doesn't use sleep.
+    # Wait until the port opens. Doesn't use sleep.
+    wait_port play-a "$PLAY_A_ROUTE_ENDPOINT"
 
     "$CLIENT_BIN" --config="$CONFIG_DIR/client.json" >"$LOG_DIR/client.log" 2>&1
 
@@ -1019,7 +1046,8 @@ up afterward.**
     start_server play-b "$(app_bin Server Server)" --config "${CONFIG_DIR}/play-b.json"
     start_server api-a  "$(app_bin Server Server)" --config "${CONFIG_DIR}/api-a.json"
 
-    wait_port "${PLAY_A_ROUTE_ENDPOINT}"        # Wait until the port opens. Doesn't use sleep.
+    # Wait until the port opens. Doesn't use sleep.
+    wait_port "${PLAY_A_ROUTE_ENDPOINT}"
 
     "$(app_bin Client Client)" --api-url "http://127.0.0.1:${api_a_http_port}" \
       >"${log_dir}/client.log" 2>&1

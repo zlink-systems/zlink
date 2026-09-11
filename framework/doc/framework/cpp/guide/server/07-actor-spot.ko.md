@@ -7,6 +7,8 @@ title: "7. Actor와 Spot · C++"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 7. Actor와 Spot
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 6. Spot](06-spot.ko.md) | [다음: 8. Session과 Actor binding](08-actor-session.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "7. Actor와 Spot · C++"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/07-actor-spot.ko.md) · **C++** · [Java](../../../java/guide/server/07-actor-spot.ko.md) · [Kotlin](../../../kotlin/guide/server/07-actor-spot.ko.md) · [Node/TypeScript](../../../node/guide/server/07-actor-spot.ko.md)
 <!-- language-switch:end -->
-
-# 7. Actor와 Spot
 
 > **이 장의 계약 소유 문서** — [Actor 모델](../../../common/spec/server/03-spot-actor/04-actor-model.ko.md)과
 > [Spot과 Actor membership](../../../common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md)이 동작을,
@@ -278,14 +278,16 @@ actor packet으로 등록한 것이다.
 
 ```cpp
 // C++은 handler class 대신 Entry Spot의 member 함수를 등록한다.
-task_t<void> play_entry_spot_t::join_game (player_actor_t &actor,   // join을 요청한 Actor다.
+// join을 요청한 Actor다.
+task_t<void> play_entry_spot_t::join_game (player_actor_t &actor,
                                            message_context_t &,
                                            const join_game_req_t &request)
 {
     actor.context ()
       .join_spot (request.spot_id, join_game_request_t{request.seat})
       .timeout (std::chrono::seconds (5))
-      .defer (); // 현재 handler가 성공한 뒤 join을 시작한다.
+      // 현재 handler가 성공한 뒤 join을 시작한다.
+      .defer ();
     co_return;
 }
 ```

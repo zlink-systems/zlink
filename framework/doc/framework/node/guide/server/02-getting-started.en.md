@@ -7,6 +7,8 @@ title: "2. Getting Started · Node/TypeScript"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 2. Getting Started
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 1. Overview](01-overview.en.md) | [Next: 3. Core Concepts](03-concepts.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "2. Getting Started · Node/TypeScript"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/02-getting-started.en.md) · [C++](../../../cpp/guide/server/02-getting-started.en.md) · [Java](../../../java/guide/server/02-getting-started.en.md) · [Kotlin](../../../kotlin/guide/server/02-getting-started.en.md) · **Node/TypeScript**
 <!-- language-switch:end -->
-
-# 2. Getting Started
 
 > **The document that owns this chapter's contract** — none. This is a walkthrough for
 > installing and confirming your first working setup.
@@ -71,15 +71,19 @@ export interface Greeting { readonly text: string; }
       useFactory: () => {
         const builder = zlinkFramework();
 
-        const mesh = builder.addRouteMesh('services')   // Names the mesh.
-          .listen('tcp://0.0.0.0:7101');                // Its own endpoint for other processes to connect to.
-        mesh.channel('greeting').server()               // This process handles "greeting".
+        // Names the mesh.
+        const mesh = builder.addRouteMesh('services')
+          // Its own endpoint for other processes to connect to.
+          .listen('tcp://0.0.0.0:7101');
+        // This process handles "greeting".
+        mesh.channel('greeting').server()
           .addRequestHandler(PacketNames.hello, HelloHandler);
 
         return builder.build();
       }
     }),
-    zlinkModule(__dirname, { })                         // Gathers handlers as providers.
+    // Gathers handlers as providers.
+    zlinkModule(__dirname, { })
   ]
 })
 export class ServerModule {}
@@ -100,9 +104,12 @@ export class HelloHandler implements ZLinkRequestHandler<Hello, Greeting> {
 ZLinkModule.forRootFactory({
   useFactory: () => {
     const builder = zlinkFramework();
-    const mesh = builder.addRouteMesh('services').listen('tcp://0.0.0.0:7102');  // It also needs its own endpoint.
-    mesh.channel('greeting').client();                      // The call-only side is client.
-    mesh.peerConnections().connect('tcp://127.0.0.1:7101');   // Manual connection — write the server endpoint directly.
+    // It also needs its own endpoint.
+    const mesh = builder.addRouteMesh('services').listen('tcp://0.0.0.0:7102');
+    // The call-only side is client.
+    mesh.channel('greeting').client();
+    // Manual connection — write the server endpoint directly.
+    mesh.peerConnections().connect('tcp://127.0.0.1:7101');
     return builder.build();
   }
 })
@@ -197,15 +204,19 @@ async create(@Body() request: CreateGameHttpReq): Promise<CreateGameHttpRes> {
   const gameName = request.gameName?.trim() || SampleDefaults.gameName;
 
   const created = await this.spots
-    .create(SampleTypes.gameSpot)         // A node that provides this stable type becomes a candidate.
-    .inMesh(SampleNodes.mesh)             // Selects the RouteMesh to create the Object on.
+    // A node that provides this stable type becomes a candidate.
+    .create(SampleTypes.gameSpot)
+    // Selects the RouteMesh to create the Object on.
+    .inMesh(SampleNodes.mesh)
     .request(tictactoeGameCreateReq(
       gameName,
-      SampleDefaults.requiredLevel))      // The initial settings passed to the new Spot's onCreate.
+      // The initial settings passed to the new Spot's onCreate.
+      SampleDefaults.requiredLevel))
     .submit();
 
   return createGameHttpRes(
-    created.spot.spotId,                  // Uses the Framework-issued SpotId as the room id.
+    // Uses the Framework-issued SpotId as the room id.
+    created.spot.spotId,
     this.settings.playEndpoints,
     this.settings.playNodes,
     gameName,
@@ -229,7 +240,8 @@ const mesh = builder.addRouteMesh(SampleNodes.mesh)
 
 mesh.objects().server()
   .addSpotFactory(
-    SampleTypes.gameSpot,               // The same stable type the API passed to create.
+    // The same stable type the API passed to create.
+    SampleTypes.gameSpot,
     TicTacToeGame,
     factory => factory.disableRelocation());
 ```

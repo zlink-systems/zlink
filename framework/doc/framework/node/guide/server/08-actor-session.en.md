@@ -7,6 +7,8 @@ title: "8. Session and Actor Binding · Node/TypeScript"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 8. Session and Actor Binding
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 7. Actor and Spot](07-actor-spot.en.md) | [Next: 9. STREAM](09-stream.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "8. Session and Actor Binding · Node/TypeScript"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/08-actor-session.en.md) · [C++](../../../cpp/guide/server/08-actor-session.en.md) · [Java](../../../java/guide/server/08-actor-session.en.md) · [Kotlin](../../../kotlin/guide/server/08-actor-session.en.md) · **Node/TypeScript**
 <!-- language-switch:end -->
-
-# 8. Session and Actor Binding
 
 > **The documents that own this chapter's contract** —
 > [Session Actor dispatch](../../../common/spec/server/04-session/02-session-actor-binding.en.md) owns the

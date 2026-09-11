@@ -7,6 +7,8 @@ title: "3. Core Concepts · C++"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 3. Core Concepts
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 2. Getting Started](02-getting-started.en.md) | [Next: 4. Backpressure — When Arrival Outpaces Processing](04-backpressure.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "3. Core Concepts · C++"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/03-concepts.en.md) · **C++** · [Java](../../../java/guide/server/03-concepts.en.md) · [Kotlin](../../../kotlin/guide/server/03-concepts.en.md) · [Node/TypeScript](../../../node/guide/server/03-concepts.en.md)
 <!-- language-switch:end -->
-
-# 3. Core Concepts
 
 > **The documents that own this chapter's contract** — [Framework Overview](../../../common/spec/server/00-foundation/03-overview.en.md)
 > and the [Interaction Model](../../../common/spec/server/00-foundation/04-interaction-model.en.md) own the
@@ -67,13 +67,18 @@ doesn't know — and doesn't need to know — which node was selected.
 Here's what it looks like to configure both roles on one MeshNode.
 
 ```cpp
-auto mesh = options.add_route_mesh ("services");  // One MeshNode joins the mesh "services".
-mesh.listen ("tcp://0.0.0.0:7101");               // Its own endpoint for other nodes to connect to.
+// One MeshNode joins the mesh "services".
+auto mesh = options.add_route_mesh ("services");
+// Its own endpoint for other nodes to connect to.
+mesh.listen ("tcp://0.0.0.0:7101");
 
 // C++ sets the Object role with one enum instead of a separate builder.
-mesh.set_object_role (object_role_t::server);     // This node places spots/actors.
-mesh.channel_name ("orders").server ();           // Channel role — this node handles "orders" requests.
-mesh.channel_name ("billing").client ();          // A call-only channel is client.
+// This node places spots/actors.
+mesh.set_object_role (object_role_t::server);
+// Channel role — this node handles "orders" requests.
+mesh.channel_name ("orders").server ();
+// A call-only channel is client.
+mesh.channel_name ("billing").client ();
 ```
 
 Automatic connection management, which avoids hard-coding peer addresses and tracks servers

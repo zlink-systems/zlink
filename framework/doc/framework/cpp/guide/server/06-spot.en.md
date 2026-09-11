@@ -7,6 +7,8 @@ title: "6. Spot · C++"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 6. Spot
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 5. Channel Messaging — Request · Send · Pub/Sub](05-channel-messaging.en.md) | [Next: 7. Actor and Spot](07-actor-spot.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "6. Spot · C++"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/06-spot.en.md) · **C++** · [Java](../../../java/guide/server/06-spot.en.md) · [Kotlin](../../../kotlin/guide/server/06-spot.en.md) · [Node/TypeScript](../../../node/guide/server/06-spot.en.md)
 <!-- language-switch:end -->
-
-# 6. Spot
 
 > **The document that owns this chapter's contract** — the [Spot model](../../../common/spec/server/03-spot-actor/01-spot-model.en.md)
 > and [SPOT messaging](../../../common/spec/server/03-spot-actor/02-spot-messaging.en.md) own the behavior, and
@@ -79,10 +79,12 @@ registers an Instance Spot to hold the matching queue.
 ```cpp
 // Play server -- an Entry Spot and a User Spot to hold rooms.
 mesh.set_object_role (object_role_t::server)
-  .add_entry_spot<bingo_entry_spot_t> (              // An Entry Spot has no stable type.
+  // An Entry Spot has no stable type.
+  .add_entry_spot<bingo_entry_spot_t> (
     [] (entry_spot_context_t c) { return std::make_shared<bingo_entry_spot_t> (std::move (c)); })
   .add_spot_factory<bingo_room_t> (
-    sample_names_t::room_spot_type,                  // Stable type -- selected by this name when creating.
+    // Stable type -- selected by this name when creating.
+    sample_names_t::room_spot_type,
     [] (spot_context_t c) { return std::make_shared<bingo_room_t> (std::move (c)); },
     [] (auto &factory) {
         factory.set_execution_mode (user_spot_execution_mode_t::spot_wide);
@@ -111,7 +113,8 @@ two together.
 // Instance Spot -- no create call. Sending to that ID creates it if it's missing.
 auto allocated = co_await spot_client
                    .request_to_spot ("match:" + level_bucket, reserve_bingo_room_req_t{})
-                   .instance_spot (sample_names_t::matchmaker_spot_type) // The intent that creation is OK if it's missing.
+                   // The intent that creation is OK if it's missing.
+                   .instance_spot (sample_names_t::matchmaker_spot_type)
                    .in_mesh (sample_names_t::matchmaking_mesh_name)
                    .async<reserve_bingo_room_res_t> ();
 
@@ -119,7 +122,8 @@ auto allocated = co_await spot_client
 auto created = co_await spots
                  .get_or_create (allocated.room_id, sample_names_t::room_spot_type)
                  .in_mesh (sample_names_t::play_mesh_name)
-                 .request (allocated.settings) // Delivered to the new Spot's on_create.
+                 // Delivered to the new Spot's on_create.
+                 .request (allocated.settings)
                  .async ();
 ```
 
@@ -232,16 +236,19 @@ creation is the point, like opening a new room. The result is one of two: it was
 
 ```cpp
 auto created = co_await spots
-                 .create ("game-room")            // Selects the factory and placement candidates by the stable type.
+                 // Selects the factory and placement candidates by the stable type.
+                 .create ("game-room")
                  .in_mesh ("play")
-                 .request (create_game_t{"ranked"}) // The create request delivered to on_create.
+                 // The create request delivered to on_create.
+                 .request (create_game_t{"ranked"})
                  .timeout (std::chrono::seconds (10))
                  .async ();
 
 if (created.state == spot_create_state_t::rejected)
     throw std::runtime_error ("Game creation was rejected.");
 
-auto spot_id = created.spot.spot_id (); // Use only the global SpotId for messaging from here on.
+// Use only the global SpotId for messaging from here on.
+auto spot_id = created.spot.spot_id ();
 ```
 
 > **See it in a sample — [TicTacToe](../../../common/sample/tictactoe/README.en.md).** This
@@ -262,14 +269,18 @@ attempt only once, so the application doesn't have to guard against the race its
 auto result = co_await spots
                 .get_or_create ("lobby-eu-1", "lobby")
                 .in_mesh ("play")
-                .request (create_lobby_t{"eu"}) // Not delivered if this ends as existing.
+                // Not delivered if this ends as existing.
+                .request (create_lobby_t{"eu"})
                 .async ();
 
 switch (result.state) {
-case spot_create_state_t::existing: // Uses the lobby that already existed, as-is.
-case spot_create_state_t::created:  // This call created it.
+// Uses the lobby that already existed, as-is.
+case spot_create_state_t::existing:
+// This call created it.
+case spot_create_state_t::created:
     break;
-case spot_create_state_t::rejected: // The create callback rejected it -- no Ready Spot.
+// The create callback rejected it -- no Ready Spot.
+case spot_create_state_t::rejected:
     throw std::runtime_error ("Lobby creation was rejected.");
 }
 ```
@@ -355,7 +366,8 @@ class game_room_t : public spot_t<player_actor_t>
     // A packet addressed to the Spot.
     task_t<void> chat (const chat_t &message)
     {
-        append_chat (message.text); // Touches Spot state directly. No lock needed.
+        // Touches Spot state directly. No lock needed.
+        append_chat (message.text);
         co_return;
     }
 
@@ -370,7 +382,8 @@ class game_room_t : public spot_t<player_actor_t>
     }
 
     // A packet addressed to a member Actor -- receives the Spot and the Actor together.
-    task_t<void> place_mark (player_actor_t &actor,   // The Actor that received this message.
+    // The Actor that received this message.
+    task_t<void> place_mark (player_actor_t &actor,
                              message_context_t &,
                              const place_mark_t &message)
     {
@@ -394,9 +407,11 @@ class game_room_t : public spot_t<player_actor_t>
 
     void configure () override
     {
-        _context.handlers ().add_handler<&game_room_t::chat> (); // Registers the Spot send handler.
+        // Registers the Spot send handler.
+        _context.handlers ().add_handler<&game_room_t::chat> ();
         _context.handlers ().add_subscribe<&game_room_t::score> (
-          "game-events", "score.changed"); // Registers a Logical Multicast subscription.
+          // Registers a Logical Multicast subscription.
+          "game-events", "score.changed");
     }
 
     task_t<spot_create_response_t> on_create (const message_t &request) override
@@ -511,7 +526,8 @@ short-lived resource directly inside that function.
 // short-lived resource directly inside this function.
 task_t<save_score_reply_t> game_room_t::save_score (const save_score_t &request)
 {
-    auto session = _store.open_session (); // Closed together when this call ends.
+    // Closed together when this call ends.
+    auto session = _store.open_session ();
     co_await session.append (_context.spot_id (), request.value);
     co_return save_score_reply_t{request.value};
 }
@@ -550,14 +566,17 @@ one, it can be omitted.
 // A mesh with multiple types registered -- specify the stable type for which factory creates it.
 auto match = co_await spot_client
                .request_to_spot ("bronze", find_match_t{player_id})
-               .instance_spot ("matchmaker") // Prepares it with this stable type's factory if the target is missing.
-               .in_mesh ("matchmaking")      // Picks the mesh for initial placement.
+               // Prepares it with this stable type's factory if the target is missing.
+               .instance_spot ("matchmaker")
+               // Picks the mesh for initial placement.
+               .in_mesh ("matchmaking")
                .async<match_result_t> ();
 
 // A mesh with only one type registered -- omit it and the Framework picks that sole type.
 auto single = co_await spot_client
                 .request_to_spot ("bronze", find_match_t{player_id})
-                .instance_spot ()            // Prepares it with the only type registered on the target node.
+                // Prepares it with the only type registered on the target node.
+                .instance_spot ()
                 .in_mesh ("matchmaking")
                 .async<match_result_t> ();
 ```
@@ -612,11 +631,14 @@ options.stop_on_unhandled_exception = false;
 
 // The handler is a separate type from the Spot -- handle (spot, tick) takes two arguments.
 _game_tick = _context.add_timer<game_tick_handler_t> (
-  "game-tick",                              // A name unique within the same Spot.
-  std::chrono::seconds (1),                 // The period. A configuration error if <= 0.
+  // A name unique within the same Spot.
+  "game-tick",
+  // The period. A configuration error if <= 0.
+  std::chrono::seconds (1),
   options);
 
-co_await _game_tick.cancel (); // When it's no longer needed. The Framework cleans it up together when the Spot closes.
+// When it's no longer needed. The Framework cleans it up together when the Spot closes.
+co_await _game_tick.cancel ();
 ```
 
 The handler is a separate class that receives the Spot and tick info.
@@ -676,7 +698,8 @@ task_t<void> game_tick_handler_t::handle (game_room_t &spot,
                                           const timer_tick_t &tick) const
 {
     if (tick.delay > std::chrono::milliseconds (500))
-        spot.report_lag (tick.delay, tick.skipped_ticks); // Report load if the delay is large.
+        // Report load if the delay is large.
+        spot.report_lag (tick.delay, tick.skipped_ticks);
 
     co_await spot.tick_once ();
 }
@@ -715,11 +738,13 @@ thread,** use `RunCpuWorker`; if it's **asynchronous code that awaits completion
 // CPU worker -- runs synchronous computation on a worker thread.
 task_t<snapshot_reply_t> game_room_t::build_snapshot (const build_snapshot_t &)
 {
-    auto board = copy_board (); // Copy Spot state first, while still in the turn.
+    // Copy Spot state first, while still in the turn.
+    auto board = copy_board ();
 
     auto packed = co_await _context
                     .run_cpu_worker ([board] (std::stop_token) {
-                        return snapshot_codec_t::compress (board); // Heavy synchronous computation.
+                        // Heavy synchronous computation.
+                        return snapshot_codec_t::compress (board);
                     })
                     .yield ();
 
@@ -737,7 +762,8 @@ task_t<save_score_reply_t> game_room_t::save_score (const save_score_t &request)
                      .run_io_worker ([this, request] (std::stop_token token) {
                          return _store.save (request.value, token);
                      })
-                     .timeout (std::chrono::seconds (3)) // The cap on this worker call.
+                     // The cap on this worker call.
+                     .timeout (std::chrono::seconds (3))
                      .yield ();
 
     co_return save_score_reply_t{version};
@@ -809,7 +835,8 @@ the Framework calls `capture` at that point.
 task_t<void> round_tick_handler_t::handle (game_room_t &spot,
                                            const timer_tick_t &) const
 {
-    if (!spot.try_finish_round ()) // Don't signal while a round is still in progress.
+    // Don't signal while a round is still in progress.
+    if (!spot.try_finish_round ())
         co_return;
 
     // The point where the round ended and state was settled. This must be the last Framework call of the turn.

@@ -131,7 +131,8 @@ Session은 연결, packet dispatch, 오류와 disconnect callback을 구현한�
 
         public void Configure()
         {
-            Context.Handlers.AddHandler<PingHandler>(); // typed session packet handler를 등록한다.
+            // typed session packet handler를 등록한다.
+            Context.Handlers.AddHandler<PingHandler>();
         }
 
         public ValueTask OnConnectedAsync(CancellationToken cancellationToken)
@@ -150,7 +151,8 @@ Session은 연결, packet dispatch, 오류와 disconnect callback을 구현한�
                     payload,
                     cancellationToken))
             {
-                await Context.CloseAsync(); // application protocol에 없는 packet을 받으면 연결을 닫는다.
+                // application protocol에 없는 packet을 받으면 연결을 닫는다.
+                await Context.CloseAsync();
             }
         }
 
@@ -221,7 +223,8 @@ Session은 연결, packet dispatch, 오류와 disconnect callback을 구현한�
 
         @Override
         public void configure() {
-            context.handlers().addHandler(PingHandler.class); // typed session packet handler를 등록한다.
+            // typed session packet handler를 등록한다.
+            context.handlers().addHandler(PingHandler.class);
         }
 
         @Override
@@ -256,7 +259,8 @@ Session은 연결, packet dispatch, 오류와 disconnect callback을 구현한�
     ) : ZLinkSession {
 
         override fun configure() {
-            context.handlers().addHandler(PingHandler::class.java) // typed session packet handler를 등록한다.
+            // typed session packet handler를 등록한다.
+            context.handlers().addHandler(PingHandler::class.java)
         }
 
         override suspend fun onConnected() {
@@ -285,7 +289,8 @@ Session은 연결, packet dispatch, 오류와 disconnect callback을 구현한�
       ) {}
 
       configure(): void {
-        this.context.handlers.addHandler(PingHandler); // typed session packet handler를 등록한다.
+        // typed session packet handler를 등록한다.
+        this.context.handlers.addHandler(PingHandler);
       }
 
       async onConnected(): Promise<void> {
@@ -484,11 +489,13 @@ Client는 server Framework package가 아니라 Stream Connector package를 사�
         return ValueTask.CompletedTask;
     });
 
-    await connector.Connect.Async(cancellationToken); // 연결과 receive loop 준비를 완료한다.
+    // 연결과 receive loop 준비를 완료한다.
+    await connector.Connect.Async(cancellationToken);
 
     while (running)
     {
-        await connector.Dispatch.Async(cancellationToken); // Manual 모드는 이 caller에서 callback을 실행한다.
+        // Manual 모드는 이 caller에서 callback을 실행한다.
+        await connector.Dispatch.Async(cancellationToken);
     }
     ```
 
@@ -503,10 +510,12 @@ Client는 server Framework package가 아니라 Stream Connector package를 사�
     connector.on<game_state_notify_t> ("GameStateNotify",
                                        [] (const auto &message) { render (message.payload ()); });
 
-    co_await connector.connect ().async (); // 연결과 receive loop 준비를 완료한다.
+    // 연결과 receive loop 준비를 완료한다.
+    co_await connector.connect ().async ();
 
     while (running) {
-        co_await connector.dispatch ().async (); // manual 모드는 이 caller에서 callback을 실행한다.
+        // manual 모드는 이 caller에서 callback을 실행한다.
+        co_await connector.dispatch ().async ();
     }
     ```
 
@@ -523,7 +532,8 @@ Client는 server Framework package가 아니라 Stream Connector package를 사�
         return CompletableFuture.completedFuture(null);
     });
 
-    connector.connect().submit().toCompletableFuture().join(); // 연결과 receive loop 준비를 완료한다.
+    // 연결과 receive loop 준비를 완료한다.
+    connector.connect().submit().toCompletableFuture().join();
 
     while (running) {
         // MANUAL 모드는 이 caller에서 callback을 실행한다.
@@ -544,7 +554,8 @@ Client는 server Framework package가 아니라 Stream Connector package를 사�
         CompletableFuture.completedFuture(null)
     }
 
-    connector.connect().submit().await() // 연결과 receive loop 준비를 완료한다.
+    // 연결과 receive loop 준비를 완료한다.
+    connector.connect().submit().await()
 
     while (running) {
         // MANUAL 모드는 이 caller에서 callback을 실행한다.

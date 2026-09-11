@@ -195,7 +195,8 @@ session binding or exact destroy. Ordinary Actor messaging uses only the ActorId
 
     if (current is { } exact)
     {
-        await actors.DestroyAsync(exact, cancellationToken); // Doesn't terminate an Actor whose generation differs.
+        // Doesn't terminate an Actor whose generation differs.
+        await actors.DestroyAsync(exact, cancellationToken);
     }
     ```
 
@@ -330,12 +331,15 @@ In its minimal shape, it looks like this.
         // Called when a new Actor takes this Entry Spot as its first membership.
         // The return value decides whether to create this Actor — this Spot is the admission gate.
         public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
-            PlayerActor actor,          // A new Actor instance, not yet published.
-            ZLinkMessage createRequest, // The value sent via GetOrCreate/Create's .Request(...).
+            // A new Actor instance, not yet published.
+            PlayerActor actor,
+            // The value sent via GetOrCreate/Create's .Request(...).
+            ZLinkMessage createRequest,
             CancellationToken cancellationToken)
         {
             var request = createRequest.Decode<CreatePlayer>();
-            actor.SetDisplayName(request.DisplayName); // The Actor owns its own initial state.
+            // The Actor owns its own initial state.
+            actor.SetDisplayName(request.DisplayName);
 
             // Accept() makes the Actor Ready; Reject(...) cancels the creation.
             return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
@@ -346,7 +350,8 @@ In its minimal shape, it looks like this.
         public ValueTask OnJoinedActorAsync(
             PlayerActor actor,
             CancellationToken cancellationToken)
-            => ValueTask.CompletedTask; // This sample only receives the notification and has nothing else to do.
+            // This sample only receives the notification and has nothing else to do.
+            => ValueTask.CompletedTask;
 
         // Called after the commit for an Actor that was in this Entry Spot leaving to a User Spot.
         // Doesn't mean the Actor disappeared — it means membership moved.
@@ -817,14 +822,16 @@ In its minimal shape, it looks like this.
 
     ```cpp
     // C++ registers a member function on the Entry Spot instead of a handler class.
-    task_t<void> play_entry_spot_t::join_game (player_actor_t &actor,   // The Actor requesting the join.
+    // The Actor requesting the join.
+    task_t<void> play_entry_spot_t::join_game (player_actor_t &actor,
                                                message_context_t &,
                                                const join_game_req_t &request)
     {
         actor.context ()
           .join_spot (request.spot_id, join_game_request_t{request.seat})
           .timeout (std::chrono::seconds (5))
-          .defer (); // Starts the join once the current handler succeeds.
+          // Starts the join once the current handler succeeds.
+          .defer ();
         co_return;
     }
     ```

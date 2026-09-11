@@ -7,6 +7,8 @@ title: "6. Spot · C++"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 6. Spot
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 5. Channel Messaging — request · send · pub/sub](05-channel-messaging.ko.md) | [다음: 7. Actor와 Spot](07-actor-spot.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "6. Spot · C++"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/06-spot.ko.md) · **C++** · [Java](../../../java/guide/server/06-spot.ko.md) · [Kotlin](../../../kotlin/guide/server/06-spot.ko.md) · [Node/TypeScript](../../../node/guide/server/06-spot.ko.md)
 <!-- language-switch:end -->
-
-# 6. Spot
 
 > **이 장의 계약 소유 문서** — [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
 > [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
@@ -76,10 +76,12 @@ Instance Spot을 등록한다.
 ```cpp
 // Play 서버 — Entry Spot과 방을 담을 User Spot.
 mesh.set_object_role (object_role_t::server)
-  .add_entry_spot<bingo_entry_spot_t> (              // Entry Spot은 stable type이 없다.
+  // Entry Spot은 stable type이 없다.
+  .add_entry_spot<bingo_entry_spot_t> (
     [] (entry_spot_context_t c) { return std::make_shared<bingo_entry_spot_t> (std::move (c)); })
   .add_spot_factory<bingo_room_t> (
-    sample_names_t::room_spot_type,                  // stable type — 생성할 때 이 이름으로 선택한다.
+    // stable type — 생성할 때 이 이름으로 선택한다.
+    sample_names_t::room_spot_type,
     [] (spot_context_t c) { return std::make_shared<bingo_room_t> (std::move (c)); },
     [] (auto &factory) {
         factory.set_execution_mode (user_spot_execution_mode_t::spot_wide);
@@ -107,7 +109,8 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
 // Instance Spot — 생성 호출이 없다. 해당 ID로 보내면 없을 때 생성된다.
 auto allocated = co_await spot_client
                    .request_to_spot ("match:" + level_bucket, reserve_bingo_room_req_t{})
-                   .instance_spot (sample_names_t::matchmaker_spot_type) // 없으면 생성해도 된다는 intent.
+                   // 없으면 생성해도 된다는 intent.
+                   .instance_spot (sample_names_t::matchmaker_spot_type)
                    .in_mesh (sample_names_t::matchmaking_mesh_name)
                    .async<reserve_bingo_room_res_t> ();
 
@@ -115,7 +118,8 @@ auto allocated = co_await spot_client
 auto created = co_await spots
                  .get_or_create (allocated.room_id, sample_names_t::room_spot_type)
                  .in_mesh (sample_names_t::play_mesh_name)
-                 .request (allocated.settings) // 새 Spot의 on_create로 전달된다.
+                 // 새 Spot의 on_create로 전달된다.
+                 .request (allocated.settings)
                  .async ();
 ```
 
@@ -226,16 +230,19 @@ ID로 쓸 Spot을 확보하는 호출**이다. 어느 쪽을 쓸지는 "이미 �
 
 ```cpp
 auto created = co_await spots
-                 .create ("game-room")            // stable type으로 factory와 배치 후보를 선택한다.
+                 // stable type으로 factory와 배치 후보를 선택한다.
+                 .create ("game-room")
                  .in_mesh ("play")
-                 .request (create_game_t{"ranked"}) // on_create에 전달할 생성 요청이다.
+                 // on_create에 전달할 생성 요청이다.
+                 .request (create_game_t{"ranked"})
                  .timeout (std::chrono::seconds (10))
                  .async ();
 
 if (created.state == spot_create_state_t::rejected)
     throw std::runtime_error ("Game creation was rejected.");
 
-auto spot_id = created.spot.spot_id (); // 이후 메시징에는 전역 SpotId만 사용한다.
+// 이후 메시징에는 전역 SpotId만 사용한다.
+auto spot_id = created.spot.spot_id ();
 ```
 
 > **샘플에서 보기 — [TicTacToe](../../../common/sample/tictactoe/README.ko.md).** API 서버가
@@ -345,7 +352,8 @@ class game_room_t : public spot_t<player_actor_t>
     // Spot 앞 packet.
     task_t<void> chat (const chat_t &message)
     {
-        append_chat (message.text); // Spot 상태를 직접 만진다. 락은 필요 없다.
+        // Spot 상태를 직접 만진다. 락은 필요 없다.
+        append_chat (message.text);
         co_return;
     }
 
@@ -360,7 +368,8 @@ class game_room_t : public spot_t<player_actor_t>
     }
 
     // member Actor 앞 packet — Spot과 Actor를 함께 받는다.
-    task_t<void> place_mark (player_actor_t &actor,   // 이 메시지를 받은 Actor다.
+    // 이 메시지를 받은 Actor다.
+    task_t<void> place_mark (player_actor_t &actor,
                              message_context_t &,
                              const place_mark_t &message)
     {
@@ -383,9 +392,11 @@ class game_room_t : public spot_t<player_actor_t>
 
     void configure () override
     {
-        _context.handlers ().add_handler<&game_room_t::chat> (); // Spot send handler를 등록한다.
+        // Spot send handler를 등록한다.
+        _context.handlers ().add_handler<&game_room_t::chat> ();
         _context.handlers ().add_subscribe<&game_room_t::score> (
-          "game-events", "score.changed"); // Logical Multicast 구독을 등록한다.
+          // Logical Multicast 구독을 등록한다.
+          "game-events", "score.changed");
     }
 
     task_t<spot_create_response_t> on_create (const message_t &request) override
@@ -496,7 +507,8 @@ member 함수이고, 호출마다 여는 scope 표면도 없다. 짧게 살아�
 // 자원은 이 함수 안에서 열고 닫는다.
 task_t<save_score_reply_t> game_room_t::save_score (const save_score_t &request)
 {
-    auto session = _store.open_session (); // 이 호출이 끝나면 함께 닫힌다.
+    // 이 호출이 끝나면 함께 닫힌다.
+    auto session = _store.open_session ();
     co_await session.append (_context.spot_id (), request.value);
     co_return save_score_reply_t{request.value};
 }
@@ -531,14 +543,17 @@ factory로 준비할지 고르는 stable type**이다. 그 mesh에 Instance Spot
 // type이 여럿 등록된 mesh — 어느 factory로 만들지 stable type으로 지정한다.
 auto match = co_await spot_client
                .request_to_spot ("bronze", find_match_t{player_id})
-               .instance_spot ("matchmaker") // 대상이 없으면 이 stable type의 factory로 준비한다.
-               .in_mesh ("matchmaking")      // 처음 배치할 mesh를 고른다.
+               // 대상이 없으면 이 stable type의 factory로 준비한다.
+               .instance_spot ("matchmaker")
+               // 처음 배치할 mesh를 고른다.
+               .in_mesh ("matchmaking")
                .async<match_result_t> ();
 
 // type이 하나만 등록된 mesh — 생략하면 Framework가 그 유일한 type을 고른다.
 auto single = co_await spot_client
                 .request_to_spot ("bronze", find_match_t{player_id})
-                .instance_spot ()            // 대상 node에 등록된 유일한 type으로 준비한다.
+                // 대상 node에 등록된 유일한 type으로 준비한다.
+                .instance_spot ()
                 .in_mesh ("matchmaking")
                 .async<match_result_t> ();
 ```
@@ -590,11 +605,14 @@ options.stop_on_unhandled_exception = false;
 
 // handler는 Spot이 아니라 별도 타입이다 — handle (spot, tick) 두 인자를 받는다.
 _game_tick = _context.add_timer<game_tick_handler_t> (
-  "game-tick",                              // 같은 Spot 안에서 유일한 이름이다.
-  std::chrono::seconds (1),                 // 주기. 0 이하이면 구성 오류다.
+  // 같은 Spot 안에서 유일한 이름이다.
+  "game-tick",
+  // 주기. 0 이하이면 구성 오류다.
+  std::chrono::seconds (1),
   options);
 
-co_await _game_tick.cancel (); // 더 이상 필요 없을 때. Spot이 닫히면 Framework가 함께 정리한다.
+// 더 이상 필요 없을 때. Spot이 닫히면 Framework가 함께 정리한다.
+co_await _game_tick.cancel ();
 ```
 
 Handler는 Spot과 tick 정보를 받는 별도 class다.
@@ -686,11 +704,13 @@ Spot의 실행 queue는 한 번에 하나만 실행한다. 무거운 계산이�
 // CPU worker — 동기 계산을 worker 스레드에서 실행한다.
 task_t<snapshot_reply_t> game_room_t::build_snapshot (const build_snapshot_t &)
 {
-    auto board = copy_board (); // Spot 상태는 turn 안에서 먼저 복사해 둔다.
+    // Spot 상태는 turn 안에서 먼저 복사해 둔다.
+    auto board = copy_board ();
 
     auto packed = co_await _context
                     .run_cpu_worker ([board] (std::stop_token) {
-                        return snapshot_codec_t::compress (board); // 무거운 동기 계산.
+                        // 무거운 동기 계산.
+                        return snapshot_codec_t::compress (board);
                     })
                     .yield ();
 
@@ -708,7 +728,8 @@ task_t<save_score_reply_t> game_room_t::save_score (const save_score_t &request)
                      .run_io_worker ([this, request] (std::stop_token token) {
                          return _store.save (request.value, token);
                      })
-                     .timeout (std::chrono::seconds (3)) // 이 worker 호출의 상한.
+                     // 이 worker 호출의 상한.
+                     .timeout (std::chrono::seconds (3))
                      .yield ();
 
     co_return save_score_reply_t{version};
@@ -776,7 +797,8 @@ Application은 상태가 일관된 turn에서 `defer()`를 호출한다. 이 호
 task_t<void> round_tick_handler_t::handle (game_room_t &spot,
                                            const timer_tick_t &) const
 {
-    if (!spot.try_finish_round ()) // 라운드 진행 중이면 신호하지 않는다.
+    // 라운드 진행 중이면 신호하지 않는다.
+    if (!spot.try_finish_round ())
         co_return;
 
     // 라운드가 끝나 상태가 정산된 지점이다. 이 turn의 마지막 Framework 호출이어야 한다.

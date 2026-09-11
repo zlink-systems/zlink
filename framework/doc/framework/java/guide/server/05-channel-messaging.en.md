@@ -7,6 +7,8 @@ title: "5. Channel Messaging — Request · Send · Pub/Sub · Java"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 5. Channel Messaging — Request · Send · Pub/Sub
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 4. Backpressure — When Arrival Outpaces Processing](04-backpressure.en.md) | [Next: 6. Spot](06-spot.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "5. Channel Messaging — Request · Send · Pub/Sub · Java"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/05-channel-messaging.en.md) · [C++](../../../cpp/guide/server/05-channel-messaging.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/05-channel-messaging.en.md) · [Node/TypeScript](../../../node/guide/server/05-channel-messaging.en.md)
 <!-- language-switch:end -->
-
-# 5. Channel Messaging — Request · Send · Pub/Sub
 
 > **The document that owns this chapter's contract** — [Channel Messaging](../../../common/spec/server/02-channel-transport/02-channel-messaging.en.md)
 > and [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.en.md) own the
@@ -209,13 +209,16 @@ receiving side is limited to Spots that subscribed to the same topic on that cha
 ```java
 // Publishing -- inside the TicTacToeGame spot.
 context.outbound()
-    .publish(SampleTopics.PlayerMilestoneChannel, // The ChannelName that decides delivery scope.
-             SampleTopics.PlayerMilestone,        // The topic that picks which Spots receive it within that scope.
+    // The ChannelName that decides delivery scope.
+    .publish(SampleTopics.PlayerMilestoneChannel,
+             // The topic that picks which Spots receive it within that scope.
+             SampleTopics.PlayerMilestone,
              milestoneEvent)
     .submit();
 
 // Subscribing -- Java attaches the topic to the handler via annotation and registers with addHandler.
-@ZLinkSpotSubscription(topic = SampleTopics.PlayerMilestone) // Must match the publishing side's topic to receive it.
+// Must match the publishing side's topic to receive it.
+@ZLinkSpotSubscription(topic = SampleTopics.PlayerMilestone)
 public final class PlayerWinMilestoneEventHandler
     implements ZLinkSpotSubscriptionHandler<PlayEntrySpot, PlayerWinMilestoneEvent> { /* ... */ }
 
@@ -397,8 +400,10 @@ public CompletionStage<CreateGameReply> handle(
     // Runtime (handler) thread -- chain onto the CompletionStage. Don't block with join().
     return client
         .requestToChannel("tictactoe.play", new CreateRoomRequest(request.gameName()))
-        .timeout(Duration.ofSeconds(5))     // The cap on waiting for the reply.
-        .submit(CreateRoomReply.class)      // The chained step runs once the reply arrives.
+        // The cap on waiting for the reply.
+        .timeout(Duration.ofSeconds(5))
+        // The chained step runs once the reply arrives.
+        .submit(CreateRoomReply.class)
         .thenApply(room -> new CreateGameReply(room.roomId(), room.gameName()));
 }
 ```
@@ -429,11 +434,13 @@ The framework doesn't automatically open every discovered handler on every chann
 ### RouteMesh and Handler Registration
 
 ```java
-options.addHandlersFromPackageOf(Program.class); // Discovers handler types
+// Discovers handler types
+options.addHandlersFromPackageOf(Program.class);
 ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
     .listen("tcp://0.0.0.0:7101")
     .setRoutingId(RoutingId.from("api-1"));
-mesh.channelName("api").server()                // server() is the role that receives handlers.
+// server() is the role that receives handlers.
+mesh.channelName("api").server()
     .addRequestHandler(GetProfileHandler.class, GetProfileRequest.class, GetProfileReply.class)
     .addSendHandler(RefreshCacheHandler.class, RefreshCacheCommand.class);
 ```
@@ -448,9 +455,11 @@ ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
     .listen("tcp://0.0.0.0:7101")
     .setRoutingId(RoutingId.from("api-1"));
 
-mesh.channelName("api").server()             // A channel this node handles.
+// A channel this node handles.
+mesh.channelName("api").server()
     .addRequestHandler(GetProfileHandler.class, GetProfileRequest.class, GetProfileReply.class);
-mesh.channelName("billing").client();        // A call-only channel is client -- no handler registered.
+// A call-only channel is client -- no handler registered.
+mesh.channelName("billing").client();
 ```
 
 A fanout channel's subscription handler is registered with the fanout builder's
@@ -593,17 +602,21 @@ public final class AuditFilter implements ZLinkHandlerFilter {
 
     @Override
     public CompletionStage<Void> invoke(
-        ZLinkHandlerFilterContext context, // This dispatch's message info + which path it came through.
-        ZLinkHandlerFilterNext next) {     // A no-argument delegate -- runs the next filter or handler.
+        // This dispatch's message info + which path it came through.
+        ZLinkHandlerFilterContext context,
+        // A no-argument delegate -- runs the next filter or handler.
+        ZLinkHandlerFilterNext next) {
         // Audit-logs only ops commands and lets regular business requests pass through.
         if (context.dispatchKind() == ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST) {
             logger.info("ops {} on {}", context.packetName(), context.meshName());
         }
-        return next.invoke(); // If not called, the handler doesn't run.
+        // If not called, the handler doesn't run.
+        return next.invoke();
     }
 }
 
-options.useFilter(AuditFilter.class);      // Registration order is execution order.
+// Registration order is execution order.
+options.useFilter(AuditFilter.class);
 options.useFilter(ValidationFilter.class);
 ```
 
@@ -730,8 +743,10 @@ serving value.
 
 ```java
 // An operational admin endpoint. "orders" is the registered ChannelName.
-meshOptions.channel("orders").weight(0);   // Excludes this ChannelName from new select-one targets
-meshOptions.channel("orders").weight(100); // Back to normal
+// Excludes this ChannelName from new select-one targets
+meshOptions.channel("orders").weight(0);
+// Back to normal
+meshOptions.channel("orders").weight(100);
 ```
 
 - `Weight = 0` (drain) **doesn't close** the serving socket. In-flight requests that
@@ -751,7 +766,8 @@ The same `Weight` is also set as an initial value at registration time.
 ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
     .listen("tcp://0.0.0.0:7101")
     .setRoutingId(RoutingId.from("orders-1"));
-mesh.channelName("orders").server().setWeight(30); // This channel role's starting weight
+// This channel role's starting weight
+mesh.channelName("orders").server().setWeight(30);
 ```
 
 ## 7. Serialization Codec
@@ -867,7 +883,8 @@ startup.**
 ZLinkMeshNodeBuilder caller = options.addRouteMesh("media")
     .listen("tcp://0.0.0.0:5590")
     .setRoutingIdPrefix("resize-client");
-caller.channelName("image.resize").client();     // client, since it only calls.
+// client, since it only calls.
+caller.channelName("image.resize").client();
 caller.peerConnections().connect("tcp://10.30.1.10:5600");
 caller.peerConnections().connect("tcp://10.30.1.10:5601");
 
@@ -951,18 +968,23 @@ public class Program {
     ZLinkFrameworkConfigurer zlink() {
         return options -> {
             options.codecs().use(ZLinkProtobufCodec.getDefault());
-            options.addHandlersFromPackageOf(Program.class);  // Discovery: finds handlers in the package.
+            // Discovery: finds handlers in the package.
+            options.addHandlersFromPackageOf(Program.class);
 
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
                 .listen("tcp://0.0.0.0:7101")
                 .setRoutingId(RoutingId.from("api-1"));
             mesh.channelName("api").server()
-                .addHandlerGroup("api");                     // Exposure: ties the handler group to the channel.
-            mesh.channelName("account").client();            // A call-only channel.
+                // Exposure: ties the handler group to the channel.
+                .addHandlerGroup("api");
+            // A call-only channel.
+            mesh.channelName("account").client();
 
             options.addFanoutChannel("api.events")
-                .enablePublisher("tcp://0.0.0.0:7201")       // This process is the publisher.
-                .connect("tcp://127.0.0.1:7201")   // Also subscribes to its own publish, as an example.
+                // This process is the publisher.
+                .enablePublisher("tcp://0.0.0.0:7201")
+                // Also subscribes to its own publish, as an example.
+                .connect("tcp://127.0.0.1:7201")
                 .addHandler(UserCacheRefreshedEventHandler.class, UserCacheRefreshedEvent.class);
         };
     }

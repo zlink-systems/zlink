@@ -21,7 +21,8 @@ Register one session type on a Stream node. If you use Actor dispatch, enable it
     options.AddStreamNode("client-stream")
         .Bind("tcp://0.0.0.0:9100")
         .EnableActorDispatch()
-        .AddSession<PlaySession>(); // Registers the session type to create per connection.
+        // Registers the session type to create per connection.
+        .AddSession<PlaySession>();
     ```
 
 === "C++"
@@ -30,7 +31,8 @@ Register one session type on a Stream node. If you use Actor dispatch, enable it
     options.add_stream_node ("client-stream")
       .bind ("tcp://0.0.0.0:9100")
       .enable_actor_dispatch ()
-      .register_session<play_session_t> (); // Registers the session type to create per connection.
+      // Registers the session type to create per connection.
+      .register_session<play_session_t> ();
     ```
 
 === "Java"
@@ -44,8 +46,10 @@ Register one session type on a Stream node. If you use Actor dispatch, enable it
     ```kotlin
     options.addStreamNode("client-stream")
         .bind("tcp://0.0.0.0:9100")
-        .enableActorDispatch()            // Kotlin uses the Java surface as-is.
-        .registerSession(PlaySession::class.java) // Registers the session type to create per connection.
+        // Kotlin uses the Java surface as-is.
+        .enableActorDispatch()
+        // Registers the session type to create per connection.
+        .registerSession(PlaySession::class.java)
     ```
 
 === "Node/TypeScript"
@@ -54,7 +58,8 @@ Register one session type on a Stream node. If you use Actor dispatch, enable it
     builder.addStreamNode('client-stream')
       .bind('tcp://0.0.0.0:9100')
       .enableActorDispatch()
-      .registerSession(PlaySessionFactory); // Registers the session factory to create per connection.
+      // Registers the session factory to create per connection.
+      .registerSession(PlaySessionFactory);
     ```
 
 
@@ -136,7 +141,8 @@ A minimal implementation looks like this.
 
         public void Configure()
         {
-            Context.Handlers.AddHandler<PingHandler>(); // Registers a typed session packet handler.
+            // Registers a typed session packet handler.
+            Context.Handlers.AddHandler<PingHandler>();
         }
 
         public ValueTask OnConnectedAsync(CancellationToken cancellationToken)
@@ -155,7 +161,8 @@ A minimal implementation looks like this.
                     payload,
                     cancellationToken))
             {
-                await Context.CloseAsync(); // Closes the connection on a packet outside the application protocol.
+                // Closes the connection on a packet outside the application protocol.
+                await Context.CloseAsync();
             }
         }
 
@@ -226,7 +233,8 @@ A minimal implementation looks like this.
 
         @Override
         public void configure() {
-            context.handlers().addHandler(PingHandler.class); // Registers a typed session packet handler.
+            // Registers a typed session packet handler.
+            context.handlers().addHandler(PingHandler.class);
         }
 
         @Override
@@ -261,7 +269,8 @@ A minimal implementation looks like this.
     ) : ZLinkSession {
 
         override fun configure() {
-            context.handlers().addHandler(PingHandler::class.java) // Registers a typed session packet handler.
+            // Registers a typed session packet handler.
+            context.handlers().addHandler(PingHandler::class.java)
         }
 
         override suspend fun onConnected() {
@@ -290,7 +299,8 @@ A minimal implementation looks like this.
       ) {}
 
       configure(): void {
-        this.context.handlers.addHandler(PingHandler); // Registers a typed session packet handler.
+        // Registers a typed session packet handler.
+        this.context.handlers.addHandler(PingHandler);
       }
 
       async onConnected(): Promise<void> {
@@ -354,7 +364,8 @@ request, use the current dispatch's one-shot reply token.
 
             await context.Client
                 .Reply(new Pong(message.Sequence))
-                .Async(cancellationToken); // Replies exactly once, using the same request correlation.
+                // Replies exactly once, using the same request correlation.
+                .Async(cancellationToken);
         }
     }
     ```
@@ -420,7 +431,8 @@ Use `Send` for server-initiated pushes.
         .Send(new ServerNotice("maintenance"))
         .Metadata("severity", "info")
         .Compress()
-        .Async(cancellationToken); // Waits for admission into the local transport queue.
+        // Waits for admission into the local transport queue.
+        .Async(cancellationToken);
     ```
 
 === "C++"
@@ -492,11 +504,13 @@ The client uses the Stream Connector package, not the server Framework package.
         return ValueTask.CompletedTask;
     });
 
-    await connector.Connect.Async(cancellationToken); // Finishes connecting and preparing the receive loop.
+    // Finishes connecting and preparing the receive loop.
+    await connector.Connect.Async(cancellationToken);
 
     while (running)
     {
-        await connector.Dispatch.Async(cancellationToken); // Manual mode runs the callback on this caller.
+        // Manual mode runs the callback on this caller.
+        await connector.Dispatch.Async(cancellationToken);
     }
     ```
 
@@ -511,10 +525,12 @@ The client uses the Stream Connector package, not the server Framework package.
     connector.on<game_state_notify_t> ("GameStateNotify",
                                        [] (const auto &message) { render (message.payload ()); });
 
-    co_await connector.connect ().async (); // Finishes connecting and preparing the receive loop.
+    // Finishes connecting and preparing the receive loop.
+    co_await connector.connect ().async ();
 
     while (running) {
-        co_await connector.dispatch ().async (); // manual mode runs the callback on this caller.
+        // manual mode runs the callback on this caller.
+        co_await connector.dispatch ().async ();
     }
     ```
 
@@ -531,7 +547,8 @@ The client uses the Stream Connector package, not the server Framework package.
         return CompletableFuture.completedFuture(null);
     });
 
-    connector.connect().submit().toCompletableFuture().join(); // Finishes connecting and preparing the receive loop.
+    // Finishes connecting and preparing the receive loop.
+    connector.connect().submit().toCompletableFuture().join();
 
     while (running) {
         // MANUAL mode runs the callback on this caller.
@@ -552,7 +569,8 @@ The client uses the Stream Connector package, not the server Framework package.
         CompletableFuture.completedFuture(null)
     }
 
-    connector.connect().submit().await() // Finishes connecting and preparing the receive loop.
+    // Finishes connecting and preparing the receive loop.
+    connector.connect().submit().await()
 
     while (running) {
         // MANUAL mode runs the callback on this caller.
@@ -638,11 +656,13 @@ working at `Off`.
     ```csharp
     await connector
         .Send(new PlayerInput(direction))
-        .Async(cancellationToken); // Waits for admission into the bounded outbound queue.
+        // Waits for admission into the bounded outbound queue.
+        .Async(cancellationToken);
 
     Profile profile = await connector
         .Request(new GetProfile(playerId))
-        .Async<Profile>(cancellationToken); // Finds the response by request sequence.
+        // Finds the response by request sequence.
+        .Async<Profile>(cancellationToken);
     ```
 
 === "C++"
