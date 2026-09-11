@@ -1228,6 +1228,7 @@ class source_t
             value["client_error_summary"].push_back (
               {{"type", error.type}, {"message", error.message}, {"count", error.count}});
         value["client_error_other_count"] = _counters.other_errors;
+        value["server_rejected_count"] = 0;
         std::ofstream output (temporary, std::ios::trunc);
         output << record.dump (2) << '\n';
         output.close ();

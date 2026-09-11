@@ -196,7 +196,7 @@ a=json.loads(sys.argv[1]); b=json.loads(sys.argv[2])
 in_flight=a.get("currentInFlight", a.get("inFlight", 0))
 received=(b.get("anyPhaseMessages", 0) if sys.argv[3] == "any"
           else b.get("received", b.get("activeMessages", 0)))
-print(a.get("completed",0), in_flight, received, b.get("errors",0))
+print(a.get("completed",0), in_flight, received, b.get("errors",0), b.get("rejected",0))
 ' "${source_body}" "${target_body}" "${target_counter}")"
     in_flight="$(awk '{print $2}' <<<"${counts}")"
     # Settle = counts unchanged for COMMAND_SETTLE_MS (spec 3). Abandoned operations keep the
@@ -241,8 +241,10 @@ if received is None:
 cell["target_stats"] = {
     "received": int(received),
     "errors": int(target.get("errors", 0)),
+    "rejected": int(target.get("rejected", 0)),
     "drainMs": float(drain_ms),
 }
+cell["server_rejected_count"] = cell["target_stats"]["rejected"]
 source_drain_ms = float(cell.get("source_drain_ms", cell.get("drain_ms", 0.0)))
 cell["source_drain_ms"] = source_drain_ms
 cell["runner_settle_ms"] = float(drain_ms)
@@ -268,6 +270,7 @@ errors = int(cell.get("errors", 0))
 abandoned = int(cell.get("abandoned", 0))
 received = int(cell["target_stats"]["received"])
 target_errors = int(cell["target_stats"].get("errors", 0))
+rejected = int(cell.get("server_rejected_count", 0))
 if submitted != completed + errors + abandoned:
     raise SystemExit(
         f"source count mismatch: submitted={submitted} completed={completed} "
@@ -278,9 +281,14 @@ if cell["pattern"].startswith("request-") and not completed <= received <= compl
     raise SystemExit(
         f"request count mismatch: completed={completed} received={received} "
         f"errors={errors} abandoned={abandoned}")
-if errors == 0 and abandoned == 0 and completed != received:
+accounted = received + rejected if cell["pattern"] == "send-saturation" else received
+if rejected < 0 or accounted > submitted:
+    raise SystemExit(f"target count mismatch: submitted={submitted} received={received} rejected={rejected}")
+if errors == 0 and abandoned == 0 and completed != accounted:
     raise SystemExit(
-        f"{cell['pattern']} count mismatch: completed={completed} received={received}")
+        f"{cell['pattern']} count mismatch: completed={completed} received={received} rejected={rejected}")
+print(f"counts: completed={completed} received={received} server_rejected_count={rejected} "
+      f"difference={completed - received}")
 PY
 }
 
