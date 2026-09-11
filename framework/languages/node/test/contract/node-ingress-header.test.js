@@ -14,19 +14,55 @@ function parts(changes = {}) {
   return [{ data() { return bytes; } }];
 }
 
-test('header validation retains the parsed header and normalizes optional fields', t => {
-  const parse = json.parseFrameworkJsonV1;
-  let parsed;
-  t.mock.method(json, 'parseFrameworkJsonV1', (...args) => (parsed = parse(...args)));
-  const header = envelope.decodeChannelHeader(parts({
-    flowId: '01992176-0000-7000-8000-000000000001', flowOrigin: 3
-  }));
-  assert.equal(header, parsed);
-  assert.equal(header.flowOrigin, 'Application');
+test('canonical header fast path preserves the legacy decoded result', t => {
+  const input = parts();
+  const legacy = json.parseFrameworkJsonV1(input[0].data().toString(), {
+    rejectPropertyName: property => ['__proto__', 'constructor', 'prototype'].includes(property)
+  });
+  legacy.errorCode = null;
+  legacy.errorMessage = null;
+  legacy.source = undefined;
+  legacy.flowId = undefined;
+  legacy.flowOrigin = undefined;
+  Object.freeze(legacy.metadata);
+  t.mock.method(json, 'parseFrameworkJsonV1', () => assert.fail('canonical header used the legacy parser'));
+
+  const header = envelope.decodeChannelHeader(input);
+
+  assert.deepEqual(header, legacy);
+  assert.ok(Object.isFrozen(header.metadata));
+});
+
+test('header decoding preserves omitted optional fields and unknown fields', () => {
+  const header = envelope.decodeChannelHeader(rawParts(
+    '{"formatMarker":242,"kind":1,"channelName":"channel","messageName":"Packet",'
+      + '"contentType":"application/json","correlationId":"request-1","deadline":null,'
+      + '"topic":null,"metadata":{},"unknown":{"nested":[true,3.5]}}'
+  ));
   assert.equal(header.errorCode, null);
   assert.equal(header.errorMessage, null);
   assert.equal(header.source, undefined);
-  assert.ok(Object.isFrozen(header.metadata));
+  assert.deepEqual(header.unknown, { nested: [true, 3.5] });
+});
+
+test('header decoding preserves legacy malformed JSON errors and prototype-key rejection', () => {
+  assert.throws(
+    () => envelope.decodeChannelHeader(rawParts('{"formatMarker":242,"kind":1')),
+    error => {
+      assert.equal(error.constructor, SyntaxError);
+      return true;
+    }
+  );
+  for (const property of ['__proto__', 'constructor', 'prototype']) {
+    assert.throws(
+      () => envelope.decodeChannelHeader(rawParts(
+        '{"formatMarker":242,"kind":1,"channelName":"channel","messageName":"Packet",'
+          + '"contentType":"application/json","correlationId":"request-1","deadline":null,'
+          + '"topic":null,"metadata":{},"' + property + '":{}}'
+      )),
+      /is not allowed/
+    );
+  }
 });
 
 test('header normalization preserves validation and Off ignores observation fields', () => {
@@ -39,3 +75,8 @@ test('header normalization preserves validation and Off ignores observation fiel
   assert.equal(off.flowOrigin, undefined);
   assert.equal(off.correlationId, 'request-1');
 });
+
+function rawParts(value) {
+  const bytes = Buffer.from(value);
+  return [{ data() { return bytes; } }];
+}
