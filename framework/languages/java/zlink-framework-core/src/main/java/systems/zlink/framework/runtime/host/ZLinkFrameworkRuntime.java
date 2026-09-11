@@ -115,6 +115,7 @@ public final class ZLinkFrameworkRuntime
     private AutoCloseable capacityMetricRegistration = () -> { };
     private AutoCloseable applicationJobQueuePressureMetricRegistration =
         () -> { };
+    private AutoCloseable meshTopologyMetricRegistration = () -> { };
     private long capacityMeasurementEpoch;
     private systems.zlink.framework.monitoring.ZLinkCoreHwmStatus
         lastCoreHwmStatus;
@@ -484,6 +485,8 @@ public final class ZLinkFrameworkRuntime
         this.applicationJobQueuePressureMetricRegistration =
             ZLinkRuntimeMetrics.registerApplicationJobQueuePressure(
                 applicationJobQueue::pressureMetrics);
+        this.meshTopologyMetricRegistration =
+            ZLinkRuntimeMetrics.registerMeshTopology(this::meshTopologyMetrics);
         locationSubsystem.startup()
             .thenCompose(ignored ->
                 this.objectDescriptors == null
@@ -869,6 +872,41 @@ public final class ZLinkFrameworkRuntime
             .map(MeshNodeRegistration::channelNames)
             .orElseThrow(() -> new ZLinkConfigurationException(
                 "RouteMesh is not configured: " + meshName));
+    }
+
+    private List<ZLinkRuntimeMetrics.MeshTopologyMetrics> meshTopologyMetrics() {
+        List<ZLinkRuntimeMetrics.MeshTopologyMetrics> result = new ArrayList<>();
+        for (MeshNodeRegistration configured : registration.meshNodes()) {
+            ZLinkInternalMeshNode node = meshNodes.nodesByName().get(
+                configured.meshName());
+            if (node == null) {
+                continue;
+            }
+            Set<RoutingId> configuredPeers = new HashSet<>(node.configuredPeerIds());
+            List<ZLinkRuntimeMetrics.MeshChannelTopologyMetrics> channels =
+                monitoringMeshNodeChannelNames(configured.meshName()).stream()
+                    .distinct()
+                    .sorted()
+                    .map(channelName -> new ZLinkRuntimeMetrics
+                        .MeshChannelTopologyMetrics(channelName,
+                            node.readyChannelMemberCount(channelName)))
+                    .toList();
+            boolean manual = !configured.peers().isEmpty()
+                || locationStores == null;
+            String source = locationStores == null
+                ? "manual"
+                : manual ? "manual_and_redis" : "redis";
+            result.add(new ZLinkRuntimeMetrics.MeshTopologyMetrics(
+                configured.meshName(),
+                source,
+                configuredPeers.size(),
+                configuredPeers.stream()
+                    .filter(node::isPeerTransportConnected)
+                    .count(),
+                node.readyPeerCount(),
+                channels));
+        }
+        return List.copyOf(result);
     }
 
     public ZLinkLocationReadiness locationReadiness() {
@@ -1976,6 +2014,11 @@ public final class ZLinkFrameworkRuntime
         }
         try {
             applicationJobQueuePressureMetricRegistration.close();
+        } catch (Exception ignored) {
+            // Metrics are observational and cannot make runtime teardown fail.
+        }
+        try {
+            meshTopologyMetricRegistration.close();
         } catch (Exception ignored) {
             // Metrics are observational and cannot make runtime teardown fail.
         }
