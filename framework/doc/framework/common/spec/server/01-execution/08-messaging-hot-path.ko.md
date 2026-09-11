@@ -295,7 +295,7 @@ claim, I4의 전환, W1~W5의 묶음 처리라는 관찰 결과는 같으며, �
   `zlink-framework-<lang> / zlink-<lang>`가 request-serial·request-window·send-saturation 각각, payload
   1024·4096 각각에서 0.90 이상이며, 값은 집계기가 내는 3-run 중앙값의 비다. 이 0.90은 bench 규격 §7.2가
   request-backpressure에 두는 합격선 0.80과 별개로 이 문서가 확정한 합격선이다. 합격 여부는 이 비율
-  하나로 판정한다 — 비율이 0.90 미만이면 결함이고, 1을 넘는 값은 결함이 아니다(사용자 결정 2026-09-10).
+  하나로 판정한다 — 비율이 0.90 미만이면 결함이고, 1을 넘는 값은 결함이 아니다.
 - (d) **동시성**(측정 후보): request-window(100)에서 run마다 처리량 × 평균 지연으로 구한 평균 in-flight의 3-run
   중앙값이 90 이상이다.
 - (e) **소비율**(측정 후보): send-saturation에서 active 구간이 닫힌 시점부터 마지막 active record가 target에 수신된
