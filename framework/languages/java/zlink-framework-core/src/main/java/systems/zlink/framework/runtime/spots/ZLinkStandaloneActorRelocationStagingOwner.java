@@ -146,8 +146,18 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         byte[] acceptedJournalRecord,
         Consumer<List<Message>> reply,
         Consumer<Throwable> failure) {
-        requireActive(staged);
+        Objects.requireNonNull(staged, "staged");
         return inStateLane(staged, () -> {
+            if (staged.owner != this || staged.terminal) {
+                if (staged.owner == this
+                    && staged.terminal
+                    && staged.published
+                    && staged.lifecycleOpen) {
+                    return false;
+                }
+                throw new IllegalStateException(
+                    "Actor relocation target attempt fence is not active");
+            }
             if (staged.ingressClosed) {
                 return false;
             }

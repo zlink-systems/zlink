@@ -85,6 +85,172 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             ZLinkUserSpotRetireTargetEndpoint.validateCanonicalAck(
                 relay, expectedSource, wrongLease));
     }
+
+    @Test
+    void publishedStandaloneActorDeclinesStagingWhileNormalizationIsPending() {
+        RoutingId sourceRid = RoutingId.from("source-node");
+        RoutingId targetRid = RoutingId.from("target-node");
+        RoutingId sessionOwnerRid = RoutingId.from("session-owner");
+        RoutingId sessionRid = RoutingId.from("session-a");
+        long targetNodeGeneration = 17;
+        String actorId = "actor-a";
+        String actorAuthorityKey = ZLinkAuthorityKeyCodec.actor(actorId);
+        UUID relocationId = UUID.randomUUID();
+        var participants = List.of(
+            new ZLinkSpotRetireControl.ParticipantFence(
+                actorAuthorityKey,
+                ZLinkPlacementObjectKind.ACTOR.value(),
+                actorId,
+                "player",
+                true,
+                4,
+                7));
+        byte[] root = ZLinkCanonicalActorRelocationEnvelope.encode(
+            relocationId,
+            actorId,
+            4,
+            7,
+            true,
+            new byte[] {1},
+            List.of());
+        AuthorityState authority = new AuthorityState();
+        ZLinkLocationRepository authorityStore = authority.proxy();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            authorityStore);
+        var prepared = coordinator.prepare(
+                new ZLinkAggregateRelocationCoordinator.Request(
+                    relocationId,
+                    1,
+                    1,
+                    List.of(
+                        new ZLinkAggregateRelocationCoordinator.Participant(
+                            actorAuthorityKey,
+                            ZLinkPlacementObjectKind.ACTOR,
+                            4,
+                            7,
+                            "actor-version-1",
+                            ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                            new ZLinkActorAuthorityPayloadCodec().encode(
+                                ZLinkActorAuthorityPayloadCodec.State.READY,
+                                "player",
+                                actorId,
+                                "room-a",
+                                1,
+                                1,
+                                "source-owner",
+                                12,
+                                "mesh",
+                                sourceRid,
+                                11),
+                            new byte[0])),
+                    root,
+                    new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
+                    targetNodeGeneration,
+                    new ZLinkPlacementCapacityBundle(
+                        1, 0, Optional.empty()),
+                    new ZLinkLocationOwnerToken("target-owner", 23),
+                    "actor-version-1"),
+                OPEN)
+            .toCompletableFuture().join();
+        List<String> operations = new CopyOnWriteArrayList<>();
+        var actorStaging = new ZLinkStandaloneActorRelocationStagingOwner(
+            new RestartActorBackend(operations));
+        CompletableFuture<Void> normalization = new CompletableFuture<>();
+        CompletableFuture<Void> normalizationEntered =
+            new CompletableFuture<>();
+        var endpoint = new ZLinkUserSpotRetireTargetEndpoint(
+            targetRid,
+            targetNodeGeneration,
+            coordinator,
+            new ZLinkUserSpotAggregateStagingOwner(
+                new FakeStagingBackend()),
+            ignored -> TestSpot.class,
+            (lane, queued) -> CompletableFuture.failedFuture(
+                new AssertionError("standalone Actor root has no backlog")),
+            new ZLinkSessionRelocationPeerClient(
+                sessionRouteNode(new ZLinkServiceM6BWireCodec(), operations)),
+            Duration.ofSeconds(1),
+            ignored -> {
+                operations.add("normalize");
+                normalizationEntered.complete(null);
+                return normalization;
+            },
+            null,
+            null,
+            authorityStore,
+            actorStaging);
+        var request = new ZLinkSpotRetireControl.StageRequest(
+            new ZLinkSpotRetireControl.Fence(relocationId, 1),
+            sourceRid,
+            11,
+            "source-owner",
+            12,
+            targetRid,
+            targetNodeGeneration,
+            "target-owner",
+            23,
+            "mesh",
+            "room-a",
+            "player",
+            false,
+            true,
+            root,
+            participants,
+            List.of(new ZLinkSpotRetireControl.SessionRouteFence(
+                actorId,
+                4,
+                7,
+                "actor-version-1",
+                sessionOwnerRid,
+                31,
+                "session-owner-id",
+                32,
+                sessionRid,
+                33)));
+
+        endpoint.stage(request).toCompletableFuture().join();
+        coordinator.commit(prepared, OPEN).toCompletableFuture().join();
+        CompletionStage<Void> publishing = endpoint.publish(request);
+
+        assertTrue(normalizationEntered.isDone());
+        assertFalse(publishing.toCompletableFuture().isDone());
+        assertEquals(
+            List.of(
+                "prepare-actor",
+                "publish-actor",
+                "open",
+                "command44",
+                "normalize"),
+            operations);
+        var source = new ZLinkInternalMeshNode.PeerAuthorityFence(
+            sourceRid, 11, "source-owner", 12);
+        var header = new ZLinkServiceM6BWireCodec.ActorMessage(
+            false,
+            0,
+            null,
+            0,
+            0,
+            1,
+            null,
+            new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new ZLinkBackendActorRef(targetRid, actorId, 4),
+                targetNodeGeneration,
+                8,
+                23));
+        assertFalse(endpoint.handleActor(
+            source,
+            header,
+            () -> new byte[] {1},
+            List.of(),
+            null,
+            ignored -> { },
+            ignored -> { }),
+            "a terminal published stage must leave ingress to the live Actor");
+
+        normalization.complete(null);
+        publishing.toCompletableFuture().join();
+    }
+
     @Test
     void targetRestoresDurableBacklogOnlyAfterPublicationAndLifecycleOpen() {
         RoutingId sourceRid = RoutingId.from("source-node");
