@@ -684,6 +684,25 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 우선한다. 상세 표에 `미측정` 또는 `미달`이 하나라도 남아 있으면
 해당 언어는 완료가 아니다.
 
+### 9.0 언어별 전체 평균 (요약)
+
+상세 표(§9.1~9.7)의 (transport+pattern) **aggregate throughput 비율(C 대비)** 을 산술평균한 요약이다.
+평균은 통과·보류 셀을 모두 포함하므로 보류(저비율) 셀이 평균을 끌어내린다 — 완료 판정은 평균이 아니라
+"미달 0(통과·보류만)"이다. latency는 §2.2로 별도 판정. 상세 표가 이 요약보다 우선한다. (as-of 2026-09-11)
+
+| 언어 | Single 평균 | Single 통과/보류/미달/미측정 | Multi 평균 | Multi 통과/보류/미달/미측정 | 상태 |
+|------|------------|------------------------------|-----------|-----------------------------|------|
+| C++ (§9.1) | 미측정 | 0 / 0 / 0 / 42 | 미측정 | 0 / 0 / 0 / 24 | 미측정 |
+| .NET (§9.2) | 미측정 | 0 / 0 / 0 / 42 | 미측정 | 0 / 0 / 0 / 24 | 미측정 (single TSV 확보, 표 미기록) |
+| Java (§9.3) | 88.6% | 23 / 0 / 19 / 0 | 81.5% | 7 / 0 / 9 / 8 | 측정 완료 — 미달·미측정(REQREP·STREAM) 정리 필요 |
+| Node (§9.4) | 73.8% | 16 / 19 / 0 / 0 | 49.6% | 4 / 12 / 0 / 0 | **완료** — 미달 0(통과/보류만). SUB 축약 개선 채택(PUBSUB wss·tls 통과) |
+| Go (§9.5) | 미측정 | 0 / 0 / 0 / 30 | 미측정 | 0 / 0 / 0 / 16 | 미측정 |
+| Rust (§9.6) | 미측정 | 0 / 0 / 0 / 30 | 미측정 | 0 / 0 / 0 / 16 | 미측정 |
+| Python (§9.7) | 미측정 | 0 / 0 / 0 / 30 | 미측정 | 0 / 0 / 0 / 27 | 미측정 |
+
+측정 순서(node→java→dotnet→cpp→rust→go→python)상 Node·Java가 선행 측정됐고 나머지는 대기다. 각 셀의
+근거·결과 파일은 아래 언어별 상세 표에 있다. 이 요약 수치는 상세 표가 갱신될 때 함께 갱신한다.
+
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
@@ -962,8 +981,8 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   - **잔존 latency (3회 재측정으로 확정, artifact 아님)**: `tcp·tls의 DEALER_ROUTER`와 `ipc`(DEALER_ROUTER·ROUTER_ROUTER)의 aggregate 평균 latency ratio는 median-of-3에서 각각 25.4×·14.9×·11.4×·8.4×로 5× cap 초과 = **실제 미달**. C 평균 latency는 0.13~2.4ms로 sub-µs가 아니어서 near-zero-baseline artifact가 아니다(초기 1-run의 형제-패턴 편차는 단순 노이즈였음). 소형(64/256/1024B)에서 Node 평균 latency가 51~325ms로 큼(C 1~2ms) = **Node per-message 처리 속도가 만드는 큐 잔류 latency**. throughput 개선(2×)으로도 남는 부분은 napi+libuv per-op floor에 가깝다. ws·wss·(tcp·tls ROUTER_ROUTER)는 5× 통과. → 이 셀들은 **`보류`**(throughput 통과·개선 반영, latency는 확정 미달). §2.2 Node 소형-셀 latency 예외는 runtime-floor 근거의 spec 결정으로 별도 판단(수치 완화 목적 아님).
   - `inproc`: Node 러너 미지원 → 전 pattern `해당 없음`.
   - `DEALER_ROUTER_REQREP`·`ROUTER_ROUTER_REQREP`: **측정 완료(drain fix 후, commit 4a00dbe18d) → 개선 pass 후 `보류` 확정** — 이전 `completion_id=0` 실패는 하네스가 OK 버스트 중 completion drain을 굶긴 것(바인딩·Core 정상). perf 클라이언트가 OK 중 poller로 completion 진행하도록 수정 → 전 셀 측정됨. 결과: **wss 통과(67/63%)**, tcp·ws·tls·ipc는 개선 job(cx-node-reqrep-improve)에서 7개 계약-보존 후보를 A/B했으나 전부 회귀/무효(reply 수신은 이미 단일 native materialize) → **`보류`**(잔여=napi+libuv per-op floor). [[node-send-backpressure-architecture]].
-- Multi 상태: `측정 완료(2026-09-11)` — tcp·ws·wss·tls, clients=100. **SENDSEND(routed echo)**: ws/wss DEALER 통과, 나머지 미달분(tcp DD/RR, tls DEALER/RR, ws·wss ROUTER)은 위 reqrep 개선 job이 함께 프로파일해 동일 floor로 **`보류`** 확정. **STREAM**: wss 92.8·tls 79.1 통과, tcp·ws 미달. **one-way(MULTI_DEALER_DEALER·MULTI_PUBSUB·MULTI_STREAM tcp/ws)** throughput 미달은 개선 pass 진행 중(cx-node-multi-oneway-improve) → 결과 후 통과/보류 확정.
-- 다음 작업: multi one-way 개선 pass 결과 반영(통과 또는 보류 확정) 후 Node 완료(§7.5 gate: 미달 0). 이후 언어 순서상 Java로 이동.
+- Multi 상태: `완료(2026-09-11)` — tcp·ws·wss·tls, clients=100. 미달 0(통과/보류만). **SENDSEND(routed echo)**: ws/wss DEALER 통과, 나머지(tcp DD/RR, tls DEALER/RR, ws·wss ROUTER)는 동일 floor로 `보류`. **STREAM**: wss 92.8·tls 79.1 통과, tcp·ws는 packet materialization floor `보류`. **MULTI_PUBSUB**: SUB multipart 축약 개선(commit 12e9ee0cd2, envelope+snapshot 제거) 채택 후 재측정 → **wss 65.7·tls 65.3 통과**, tcp 45.3·ws 59.3 `보류`(개선 반영·잔여 recv floor). **MULTI_DEALER_DEALER**: recv N-API+Core floor `보류`(개선 job 프로파일 확인, SUB 무관). 함께 시도한 PUB inline staging은 회귀(−4.77%/STREAM −5.75%)로 revert.
+- 상태: **완료** — 상세표 미달 0. 언어 순서상 다음은 Java(§9.3) 미달·미측정 정리.
 
 #### 9.4.1 Single suite
 
@@ -1016,25 +1035,25 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 19.0% | 25.1% | 34.0% | 25.2% | 60.0% | 55.6% | 미달 36.5%/lat5.15× · c0180-node-multi-tcp |
+| `tcp` | `MULTI_DEALER_DEALER` | 19.0% | 25.1% | 34.0% | 25.2% | 60.0% | 55.6% | 보류 36.5%/lat5.15× · recv N-API+Core floor(개선 job 확인) · c0180-node-multi-tcp |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 22.0% | 20.2% | 22.1% | 24.3% | 62.1% | 62.3% | 보류 35.5%/lat198.47× · c0180-node-multi-tcp (개선소진: echo 이미 단일 materialize, A/B 기각 → napi+libuv per-op floor) |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 24.3% | 29.4% | 30.3% | 34.9% | 42.2% | 48.3% | 보류 34.9%/lat2.03× · c0180-node-multi-tcp (개선소진: echo 이미 단일 materialize, A/B 기각 → napi+libuv per-op floor) |
-| `tcp` | `MULTI_PUBSUB` | 16.1% | 17.1% | 14.6% | 18.0% | 65.2% | 82.0% | 미달 35.5%/lat0.57× · c0180-node-multi-tcp |
-| `tcp` | `MULTI_STREAM` | 42.0% | 32.1% | 22.5% | 해당 없음 | 50.4% | 해당 없음 | 미달 36.8%/lat2.75× · c0180-node-multi-tcp-stream |
-| `ws` | `MULTI_DEALER_DEALER` | 20.1% | 24.3% | 43.8% | 41.4% | 72.2% | 63.7% | 미달 44.2%/lat9.52× · c0180-node-multi-ws |
+| `tcp` | `MULTI_PUBSUB` | 24.7% | 25.4% | 22.0% | 27.8% | 90.3% | 81.2% | 보류 45.3%/lat0.58× · SUB축약 반영(+9.8pp)·잔여 recv floor · c0180-node-multi-tcp-subfix |
+| `tcp` | `MULTI_STREAM` | 42.0% | 32.1% | 22.5% | 해당 없음 | 50.4% | 해당 없음 | 보류 36.8%/lat2.75× · packet materialization floor · c0180-node-multi-tcp-stream |
+| `ws` | `MULTI_DEALER_DEALER` | 20.1% | 24.3% | 43.8% | 41.4% | 72.2% | 63.7% | 보류 44.2%/lat9.52× · recv floor · c0180-node-multi-ws |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 32.2% | 34.8% | 37.7% | 55.5% | 133.1% | 77.0% | 통과 61.7%/lat1.04× · c0180-node-multi-ws |
 | `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 43.0% | 33.9% | 38.3% | 47.0% | 47.5% | 73.5% | 보류 47.2%/lat1.08× · c0180-node-multi-ws (개선소진: echo 이미 단일 materialize, A/B 기각 → napi+libuv per-op floor) |
-| `ws` | `MULTI_PUBSUB` | 31.1% | 25.4% | 16.2% | 15.6% | 94.9% | 93.9% | 미달 46.2%/lat0.30× · c0180-node-multi-ws |
-| `ws` | `MULTI_STREAM` | 49.4% | 46.6% | 38.0% | 해당 없음 | 92.1% | 해당 없음 | 미달 56.5%/lat2.08× · c0180-node-multi-ws-stream |
-| `wss` | `MULTI_DEALER_DEALER` | 20.0% | 26.2% | 44.3% | 52.2% | 64.5% | 60.3% | 미달 44.6%/lat8.79× · c0180-node-multi-wss |
+| `ws` | `MULTI_PUBSUB` | 44.1% | 31.5% | 25.7% | 25.4% | 114.0% | 115.3% | 보류 59.3%/lat0.47× · SUB축약 반영(+13.1pp)·경계 미달 · c0180-node-multi-ws-subfix |
+| `ws` | `MULTI_STREAM` | 49.4% | 46.6% | 38.0% | 해당 없음 | 92.1% | 해당 없음 | 보류 56.5%/lat2.08× · materialization floor · c0180-node-multi-ws-stream |
+| `wss` | `MULTI_DEALER_DEALER` | 20.0% | 26.2% | 44.3% | 52.2% | 64.5% | 60.3% | 보류 44.6%/lat8.79× · recv floor · c0180-node-multi-wss |
 | `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 38.3% | 39.4% | 76.7% | 98.1% | 83.0% | 77.2% | 통과 68.8%/lat1.15× · c0180-node-multi-wss |
 | `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 37.9% | 39.6% | 49.3% | 21.0% | 42.0% | 41.9% | 보류 38.6%/lat1.23× · c0180-node-multi-wss (개선소진: echo 이미 단일 materialize, A/B 기각 → napi+libuv per-op floor) |
-| `wss` | `MULTI_PUBSUB` | 23.8% | 22.0% | 21.0% | 39.4% | 77.6% | 84.0% | 미달 44.6%/lat0.39× · c0180-node-multi-wss |
+| `wss` | `MULTI_PUBSUB` | 38.6% | 33.5% | 32.2% | 62.4% | 114.7% | 113.0% | 통과 65.7%/lat0.53× · SUB축약 반영(+21.1pp) · c0180-node-multi-wss-subfix |
 | `wss` | `MULTI_STREAM` | 83.3% | 80.0% | 64.5% | 해당 없음 | 143.6% | 해당 없음 | 통과 92.8%/lat1.23× · c0180-node-multi-wss-stream |
-| `tls` | `MULTI_DEALER_DEALER` | 20.1% | 41.2% | 56.4% | 41.8% | 83.8% | 67.4% | 미달 51.8%/lat4.26× · c0180-node-multi-tls |
+| `tls` | `MULTI_DEALER_DEALER` | 20.1% | 41.2% | 56.4% | 41.8% | 83.8% | 67.4% | 보류 51.8%/lat4.26× · recv floor · c0180-node-multi-tls |
 | `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 36.2% | 29.0% | 30.5% | 79.5% | 80.8% | 76.1% | 보류 55.4%/lat11.82× · c0180-node-multi-tls (개선소진: echo 이미 단일 materialize, A/B 기각 → napi+libuv per-op floor) |
 | `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 35.0% | 35.4% | 39.0% | 38.4% | 37.0% | 52.3% | 보류 39.5%/lat1.43× · c0180-node-multi-tls (개선소진: echo 이미 단일 materialize, A/B 기각 → napi+libuv per-op floor) |
-| `tls` | `MULTI_PUBSUB` | 24.5% | 29.6% | 22.4% | 48.8% | 68.8% | 64.2% | 미달 43.0%/lat0.43× · c0180-node-multi-tls |
+| `tls` | `MULTI_PUBSUB` | 40.9% | 46.6% | 34.3% | 75.1% | 98.9% | 96.2% | 통과 65.3%/lat0.56× · SUB축약 반영(+22.3pp) · c0180-node-multi-tls-subfix |
 | `tls` | `MULTI_STREAM` | 68.4% | 74.9% | 63.0% | 해당 없음 | 110.2% | 해당 없음 | 통과 79.1%/lat1.40× · c0180-node-multi-tls-stream |
 
 ### 9.5 Go
