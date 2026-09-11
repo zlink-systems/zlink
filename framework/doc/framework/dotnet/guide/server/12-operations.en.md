@@ -7,6 +7,8 @@ title: "12. Operations — Runtime Metrics · Graceful Drain · Readiness · C#/
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 12. Operations — Runtime Metrics · Graceful Drain · Readiness
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 11. Monitoring — Status Observation And Diagnostics](11-monitoring.en.md) | [Next: 13. Key Type Usage Index](13-interface-catalog.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "12. Operations — Runtime Metrics · Graceful Drain · Readiness · C#/
 <!-- language-switch:start -->
 View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/12-operations.en.md) · [Java](../../../java/guide/server/12-operations.en.md) · [Kotlin](../../../kotlin/guide/server/12-operations.en.md) · [Node/TypeScript](../../../node/guide/server/12-operations.en.md)
 <!-- language-switch:end -->
-
-# 12. Operations — Runtime Metrics · Graceful Drain · Readiness
 
 > **The documents that own this chapter's contract** — owned by the common spec
 > [Runtime state query and operational diagnostics](../../../common/spec/server/06-observability/01-runtime-monitoring.en.md),
@@ -59,7 +59,8 @@ The framework emits every instrument through one `System.Diagnostics.Metrics.Met
 ```csharp
 // This one line brings every zlink instrument into the app's OTel pipeline.
 builder.Services.AddOpenTelemetry().WithMetrics(m => m
-    .AddMeter("zlink.framework") // The canonical meter name the Framework emits instruments through.
+    // The canonical meter name the Framework emits instruments through.
+    .AddMeter("zlink.framework")
     .AddPrometheusExporter());
 ```
 
@@ -293,7 +294,8 @@ var result = await runtime.RelocateAsync(
     new ZLinkFrameworkRelocationOptions
     {
         Mode = ZLinkFrameworkRelocationMode.RollingUpdate,
-        TargetApplicationVersion = 12,      // Uses only eligible nodes on the specified new version.
+        // Uses only eligible nodes on the specified new version.
+        TargetApplicationVersion = 12,
         Deadline = TimeSpan.FromSeconds(25)
     },
     cancellationToken: ct);
@@ -379,8 +381,10 @@ socket options (HWM, timeout) are exclusive to `ConfigureRouterSocket()` before 
 
 ```csharp
 var meshOptions = app.Services.GetRequiredService<IZLinkRouteMeshRuntimeOptions>();
-meshOptions.Mesh("game.room").PlacementWeight = 0; // Excludes it from new object placement
-meshOptions.Channel("game.room").Weight = 0;       // Excludes it from new channel select-one
+// Excludes it from new object placement
+meshOptions.Mesh("game.room").PlacementWeight = 0;
+// Excludes it from new channel select-one
+meshOptions.Channel("game.room").Weight = 0;
 ```
 
 The two weights are independent and take effect on new selections while running. Placement
@@ -394,7 +398,8 @@ component event stream for one mesh. Host termination is owned by the framework 
 ```csharp
 var meshRuntime = app.Services.GetRequiredService<IZLinkRouteMeshRuntime>();
 
-var status = meshRuntime.GetStatus("game.room"); // The immutable current status of nodes/peers/channels
+// The immutable current status of nodes/peers/channels
+var status = meshRuntime.GetStatus("game.room");
 var ready = status.IsReady;
 
 await foreach (var observed in meshRuntime.ObserveAsync("game.room", cancellationToken: ct))

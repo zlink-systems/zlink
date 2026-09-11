@@ -4399,42 +4399,67 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     private void drainIngressBatch(RouterSocket pumpSocket) {
         long startedAt = System.nanoTime();
         long receivedBytes = 0;
-        for (int count = 0; count < MAX_INGRESS_BATCH && !closed.get(); count++) {
-            if (count > 0
-                && !port.waitForReadable(pumpSocket, Duration.ZERO)) {
-                return;
-            }
-            systems.zlink.framework.runtime.internal.dispatch
-                .ZLinkApplicationJobQueue.Permit permit = null;
-            try {
-                var queue = applicationJobQueue;
-                if (queue != null) {
-                    permit = queue.acquireBlocking();
+        List<systems.zlink.framework.runtime.internal.dispatch
+            .ZLinkApplicationJobQueue.Permit> permits;
+        try {
+            var queue = applicationJobQueue;
+            permits = queue == null
+                ? List.of()
+                : queue.acquireBatchBlocking(1);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return;
+        }
+        int consumedPermits = 0;
+        int count = 0;
+        try {
+            while (count < MAX_INGRESS_BATCH && !closed.get()) {
+                if (!permits.isEmpty() && consumedPermits == permits.size()) {
+                    try {
+                        permits = applicationJobQueue.acquireBatchBlocking(
+                            MAX_INGRESS_BATCH - count);
+                        consumedPermits = 0;
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
                 }
-                Optional<ZLinkJavaRawServicePort.Inbound> inbound =
-                    port.receiveNow(pumpSocket);
-                if (inbound.isEmpty()) {
+                systems.zlink.framework.runtime.internal.dispatch
+                    .ZLinkApplicationJobQueue.Permit permit = permits.isEmpty()
+                        ? null
+                        : permits.get(consumedPermits++);
+                try {
+                    Optional<ZLinkJavaRawServicePort.Inbound> inbound =
+                        port.receiveNow(pumpSocket);
+                    if (inbound.isEmpty()) {
+                        return;
+                    }
+                    ZLinkJavaRawServicePort.Inbound record = inbound.orElseThrow();
+                    receivedBytes = Math.addExact(
+                        receivedBytes, retainedBytes(record.received().parts()));
+                    try (ZLinkApplicationJobContext.Scope ignored = permit == null
+                             ? () -> { }
+                             : ZLinkApplicationJobContext.enter(permit)) {
+                        dispatch(record);
+                    }
+                } finally {
+                    if (permit != null) {
+                        permit.abandonReservation();
+                    }
+                }
+                if (receivedBytes >= MAX_INGRESS_BATCH_BYTES
+                    || System.nanoTime() - startedAt >= MAX_INGRESS_BATCH_NANOS) {
                     return;
                 }
-                ZLinkJavaRawServicePort.Inbound record = inbound.orElseThrow();
-                receivedBytes = Math.addExact(
-                    receivedBytes, retainedBytes(record.received().parts()));
-                try (ZLinkApplicationJobContext.Scope ignored = permit == null
-                         ? () -> { }
-                         : ZLinkApplicationJobContext.enter(permit)) {
-                    dispatch(record);
-                }
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                return;
-            } finally {
-                if (permit != null) {
-                    permit.abandonReservation();
+                count++;
+                if (count >= MAX_INGRESS_BATCH
+                    || !port.waitForReadable(pumpSocket, Duration.ZERO)) {
+                    return;
                 }
             }
-            if (receivedBytes >= MAX_INGRESS_BATCH_BYTES
-                || System.nanoTime() - startedAt >= MAX_INGRESS_BATCH_NANOS) {
-                return;
+        } finally {
+            while (consumedPermits < permits.size()) {
+                permits.get(consumedPermits++).abandonReservation();
             }
         }
     }
@@ -4777,8 +4802,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             : new byte[0];
         List<Message> messages;
         try {
-            messages = ZLinkServiceM6AWireCodec.decodeFrameworkMultipartFrame(
-                inbound.received().parts().get(payloadOffset).dataBuffer());
+            messages = correlation == null
+                ? ZLinkServiceM6AWireCodec.decodeFrameworkMultipartFrameView(
+                    inbound.received().parts().get(payloadOffset).dataBuffer())
+                : ZLinkServiceM6AWireCodec.decodeFrameworkMultipartFrame(
+                    inbound.received().parts().get(payloadOffset).dataBuffer());
         } catch (RuntimeException invalid) {
             replyApplicationProtocolFailure(inbound, correlation, kind);
             return;

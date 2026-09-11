@@ -7,6 +7,8 @@ title: "6. Spot · Node/TypeScript"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 6. Spot
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 5. Channel Messaging — Request · Send · Pub/Sub](05-channel-messaging.en.md) | [Next: 7. Actor and Spot](07-actor-spot.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "6. Spot · Node/TypeScript"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/06-spot.en.md) · [C++](../../../cpp/guide/server/06-spot.en.md) · [Java](../../../java/guide/server/06-spot.en.md) · [Kotlin](../../../kotlin/guide/server/06-spot.en.md) · **Node/TypeScript**
 <!-- language-switch:end -->
-
-# 6. Spot
 
 > **The document that owns this chapter's contract** — the [Spot model](../../../common/spec/server/03-spot-actor/01-spot-model.en.md)
 > and [SPOT messaging](../../../common/spec/server/03-spot-actor/02-spot-messaging.en.md) own the behavior, and
@@ -79,9 +79,11 @@ registers an Instance Spot to hold the matching queue.
 ```typescript
 // Play server -- an Entry Spot and a User Spot to hold rooms.
 mesh.objects().server()
-  .addEntrySpot(BingoEntrySpot)                    // An Entry Spot has no stable type.
+  // An Entry Spot has no stable type.
+  .addEntrySpot(BingoEntrySpot)
   .addSpotFactory(
-    SampleNames.roomSpotType,                      // Stable type -- selected by this name when creating.
+    // Stable type -- selected by this name when creating.
+    SampleNames.roomSpotType,
     BingoRoom,
     (factory) => factory
       .executionMode(ZLinkUserSpotExecutionMode.SpotWide)
@@ -107,7 +109,8 @@ two together.
 // Instance Spot -- no create call. Sending to that ID creates it if it's missing.
 const allocated = await spotClient
   .requestToSpot(`match:${levelBucket}`, reserveBingoRoomReq())
-  .instanceSpot(SampleNames.matchmakerSpotType) // The intent that creation is OK if it's missing.
+  // The intent that creation is OK if it's missing.
+  .instanceSpot(SampleNames.matchmakerSpotType)
   .inMesh(SampleNames.matchmakingMeshName)
   .submit<ReserveBingoRoomRes>();
 
@@ -115,7 +118,8 @@ const allocated = await spotClient
 const created = await spots
   .getOrCreate(allocated.roomId, SampleNames.roomSpotType)
   .inMesh(SampleNames.playMeshName)
-  .request(allocated.settings)      // Delivered to the new Spot's onCreate.
+  // Delivered to the new Spot's onCreate.
+  .request(allocated.settings)
   .submit();
 ```
 
@@ -134,7 +138,8 @@ const mesh = builder.addRouteMesh('play')
   .setRoutingIdPrefix('play');
 
 mesh.objects().server()
-  .addEntrySpot(PlayEntrySpot) // Registers the Entry Spot an Actor is placed in first.
+  // Registers the Entry Spot an Actor is placed in first.
+  .addEntrySpot(PlayEntrySpot)
   .addSpotFactory('game-room', GameRoom, (factory) => factory
     .executionMode(ZLinkUserSpotExecutionMode.SpotWide)
     .disableRelocation())
@@ -221,9 +226,11 @@ creation is the point, like opening a new room. The result is one of two: it was
 
 ```typescript
 const created = await spots
-  .create('game-room')                  // Selects the factory and placement candidates by the stable type.
+  // Selects the factory and placement candidates by the stable type.
+  .create('game-room')
   .inMesh('play')
-  .request(createGame('ranked'))        // The create request delivered to onCreate.
+  // The create request delivered to onCreate.
+  .request(createGame('ranked'))
   .timeout(10_000)
   .submit();
 
@@ -231,7 +238,8 @@ if (created.state === ZLinkSpotCreateState.Rejected) {
   throw new Error('Game creation was rejected.');
 }
 
-const spotId = created.spot.spotId; // Use only the global SpotId for messaging from here on.
+// Use only the global SpotId for messaging from here on.
+const spotId = created.spot.spotId;
 ```
 
 > **See it in a sample — [TicTacToe](../../../common/sample/tictactoe/README.en.md).** This
@@ -252,14 +260,18 @@ attempt only once, so the application doesn't have to guard against the race its
 const result = await spots
   .getOrCreate('lobby-eu-1', 'lobby')
   .inMesh('play')
-  .request(createLobby('eu')) // Not delivered if this ends as Existing.
+  // Not delivered if this ends as Existing.
+  .request(createLobby('eu'))
   .submit();
 
 switch (result.state) {
-  case ZLinkSpotCreateState.Existing: // Uses the lobby that already existed, as-is.
-  case ZLinkSpotCreateState.Created:  // This call created it.
+  // Uses the lobby that already existed, as-is.
+  case ZLinkSpotCreateState.Existing:
+  // This call created it.
+  case ZLinkSpotCreateState.Created:
     break;
-  case ZLinkSpotCreateState.Rejected: // The create callback rejected it -- no Ready Spot.
+  // The create callback rejected it -- no Ready Spot.
+  case ZLinkSpotCreateState.Rejected:
     throw new Error('Lobby creation was rejected.');
 }
 ```
@@ -338,7 +350,8 @@ The four branches in their minimal form look like this.
 // A packet addressed to the Spot -- the first argument is the target Spot instance.
 export class ChatHandler implements ZLinkSpotPacketHandler<GameRoom, Chat> {
   async handle(spot: GameRoom, message: Chat): Promise<void> {
-    spot.appendChat(message.text); // Touches Spot state directly. No lock needed.
+    // Touches Spot state directly. No lock needed.
+    spot.appendChat(message.text);
   }
 }
 
@@ -362,7 +375,8 @@ export class PlaceMarkHandler
   implements ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
   async handle(
     spot: GameRoom,
-    actor: PlayerActor,             // The Actor that received this message.
+    // The Actor that received this message.
+    actor: PlayerActor,
     messageContext: ZLinkMessageContext,
     message: PlaceMark
   ): Promise<void> {
@@ -382,11 +396,13 @@ export class GameRoom implements ZLinkSpot {
   readonly context!: ZLinkSpotContext;
 
   configure(): void {
-    this.context.handlers.addPacket(ChatHandler); // Registers the Spot send handler.
+    // Registers the Spot send handler.
+    this.context.handlers.addPacket(ChatHandler);
     this.context.handlers.addSubscribe(
       ScoreHandler,
       'game-events',
-      'score.changed'); // Registers a Logical Multicast subscription.
+      // Registers a Logical Multicast subscription.
+      'score.changed');
   }
 
   async onCreate(request: ZLinkMessage): Promise<ZLinkSpotCreateResponse> {
@@ -537,14 +553,17 @@ one, it can be omitted.
 // A mesh with multiple types registered -- specify the stable type for which factory creates it.
 const match = await spotClient
   .requestToSpot('bronze', findMatch(playerId))
-  .instanceSpot('matchmaker') // Prepares it with this stable type's factory if the target is missing.
-  .inMesh('matchmaking')      // Picks the mesh for initial placement.
+  // Prepares it with this stable type's factory if the target is missing.
+  .instanceSpot('matchmaker')
+  // Picks the mesh for initial placement.
+  .inMesh('matchmaking')
   .submit<MatchResult>();
 
 // A mesh with only one type registered -- omit it and the Framework picks that sole type.
 const single = await spotClient
   .requestToSpot('bronze', findMatch(playerId))
-  .instanceSpot()             // Prepares it with the only type registered on the target node.
+  // Prepares it with the only type registered on the target node.
+  .instanceSpot()
   .inMesh('matchmaking')
   .submit<MatchResult>();
 ```
@@ -593,8 +612,10 @@ returns a timer handle, used later to cancel it.
 ```typescript
 // Inside a Spot -- keep the returned ZLinkTimer in a field, used to cancel it later.
 this.gameTick = await this.context.addTimer(
-  'game-tick',                     // A name unique within the same Spot.
-  1_000,                           // The period (ms). A configuration error if <= 0.
+  // A name unique within the same Spot.
+  'game-tick',
+  // The period (ms). A configuration error if <= 0.
+  1_000,
   GameTickHandler,
   {
     overrunPolicy: ZLinkTimerOverrunPolicy.SkipLateTicks,
@@ -657,7 +678,8 @@ number of skipped ticks.
 ```typescript
 async handle(spot: GameRoom, tick: ZLinkTimerTick): Promise<void> {
   if (tick.delayMs > 500) {
-    spot.reportLag(tick.delayMs, tick.skippedTicks); // Report load if the delay is large.
+    // Report load if the delay is large.
+    spot.reportLag(tick.delayMs, tick.skippedTicks);
   }
   await spot.tick();
 }
@@ -697,10 +719,12 @@ export class BuildSnapshotHandler
   implements ZLinkSpotRequestHandler<GameRoom, BuildSnapshot, SnapshotReply> {
 
   async handle(spot: GameRoom, request: BuildSnapshot): Promise<SnapshotReply> {
-    const board = spot.copyBoard(); // Copy Spot state first, while still in the turn.
+    // Copy Spot state first, while still in the turn.
+    const board = spot.copyBoard();
 
     const packed = await spot.context
-      .runCpuWorker(() => SnapshotCodec.compress(board)) // Heavy synchronous computation.
+      // Heavy synchronous computation.
+      .runCpuWorker(() => SnapshotCodec.compress(board))
       .yield();
 
     return snapshotReply(packed);
@@ -785,7 +809,8 @@ the Framework calls `capture` at that point.
 ```typescript
 export class RoundTickHandler implements ZLinkSpotTimerHandler<GameRoom> {
   async handle(spot: GameRoom, tick: ZLinkTimerTick): Promise<void> {
-    if (!spot.tryFinishRound()) return; // Don't signal while a round is still in progress.
+    // Don't signal while a round is still in progress.
+    if (!spot.tryFinishRound()) return;
 
     // The point where the round ended and state was settled. This must be the last Framework call of the turn.
     spot.context.relocationReady().defer();

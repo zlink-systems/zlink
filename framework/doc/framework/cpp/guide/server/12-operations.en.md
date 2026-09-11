@@ -7,6 +7,8 @@ title: "12. Operations — Runtime Metrics · Graceful Drain · Readiness · C++
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 12. Operations — Runtime Metrics · Graceful Drain · Readiness
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 11. Monitoring — Status Observation And Diagnostics](11-monitoring.en.md) | [Next: 13. Key Type Usage Index](13-interface-catalog.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "12. Operations — Runtime Metrics · Graceful Drain · Readiness · C++
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/12-operations.en.md) · **C++** · [Java](../../../java/guide/server/12-operations.en.md) · [Kotlin](../../../kotlin/guide/server/12-operations.en.md) · [Node/TypeScript](../../../node/guide/server/12-operations.en.md)
 <!-- language-switch:end -->
-
-# 12. Operations — Runtime Metrics · Graceful Drain · Readiness
 
 > **The documents that own this chapter's contract** — owned by the common spec
 > [Runtime state query and operational diagnostics](../../../common/spec/server/06-observability/01-runtime-monitoring.en.md),
@@ -290,7 +290,8 @@ avoids failures for callers still caching the old route.
 ```cpp
 relocation_options_t relocation;
 relocation.mode = relocation_mode_t::rolling_update;
-relocation.target_application_version = 12;              // Uses only eligible nodes on the specified new version.
+// Uses only eligible nodes on the specified new version.
+relocation.target_application_version = 12;
 relocation.deadline = std::chrono::seconds (25);
 
 auto result = co_await runtime.relocate (relocation);
@@ -373,8 +374,10 @@ A MeshNode registered with `add_route_mesh` is operated through two DI singleton
 socket options (HWM, timeout) are exclusive to `configure_router_socket()` before startup.
 
 ```cpp
-mesh_options.placement_weight (0);              // Excludes it from new object placement
-mesh_options.channel ("game.room").weight (0);  // Excludes it from new channel select-one
+// Excludes it from new object placement
+mesh_options.placement_weight (0);
+// Excludes it from new channel select-one
+mesh_options.channel ("game.room").weight (0);
 ```
 
 The two weights are independent and take effect on new selections while running. Placement

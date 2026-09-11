@@ -1,9 +1,72 @@
+using System.Reflection;
+using System.Runtime.InteropServices;
 using Xunit;
 
 namespace Systems.Zlink.Tests;
 
 public sealed class test_writable_token_delivery
 {
+    [Fact]
+    public void writable_wait_requires_backpressure_eagain_and_nonzero_token()
+    {
+        Type ownerType = CompletionOwnerTestAccess.RuntimeType(
+            "Systems.Zlink.CompletionOwner");
+        Type attemptType = ownerType.GetNestedType("SendAttempt",
+            System.Reflection.BindingFlags.NonPublic)!;
+        object missingErrno = CompletionOwnerTestAccess.Create(
+            typeof(ZlinkSubmitException),
+            ZlinkSubmitException.ErrorCode.Backpressured, 0);
+        object wouldBlock = CompletionOwnerTestAccess.Create(
+            typeof(ZlinkSubmitException),
+            ZlinkSubmitException.ErrorCode.Backpressured, 11);
+
+        object missingErrnoAttempt = CompletionOwnerTestAccess.Create(
+            attemptType, 73UL, missingErrno);
+        Assert.False((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
+            "IsWritableWait", missingErrnoAttempt)!);
+
+        object writableWait = CompletionOwnerTestAccess.Create(
+            attemptType, 73UL, wouldBlock);
+        Assert.True((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
+            "IsWritableWait", writableWait)!);
+
+        object tokenless = CompletionOwnerTestAccess.Create(attemptType,
+            0UL, wouldBlock);
+        Assert.False((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
+            "IsWritableWait", tokenless)!);
+    }
+
+    [Fact]
+    public void backpressured_request_captures_errno_from_submitting_pinvoke()
+    {
+        Assert.True(CoreTestSupport.IsNativeAvailable());
+        Type nativeMethods = CompletionOwnerTestAccess.RuntimeType(
+            "Systems.Zlink.Runtime.Native.NativeMethods");
+        MethodInfo request = nativeMethods.GetMethod("zlink_request",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+        Assert.True(request.GetCustomAttribute<DllImportAttribute>()!
+            .SetLastError);
+        using var context = Zlink.CreateContext();
+        using var dealer = context.CreateDealerSocket();
+        dealer.Connect(CoreTestSupport.NewEndpoint(
+            "inproc", "request-errno-capture"));
+        object owner = CompletionOwnerTestAccess.Owner(dealer);
+
+        using Message part = Message.From("waiting-for-route");
+        object attempt = CompletionOwnerTestAccess.Invoke(owner,
+            "SubmitRequest", null, new[] { part }, 3000u, 1,
+            new IntPtr(73))!;
+
+        Assert.NotEqual(0UL, CompletionOwnerTestAccess.Property(
+            attempt, "CompletionId"));
+        ZlinkSubmitException failure = Assert.IsType<ZlinkSubmitException>(
+            CompletionOwnerTestAccess.Property(attempt, "Failure"));
+        Assert.Equal(ZlinkSubmitException.ErrorCode.Backpressured,
+            failure.Result);
+        Assert.True(failure.NativeErrno is 11 or 35 or 10035,
+            $"Expected EAGAIN, got {failure.NativeErrno}.");
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]

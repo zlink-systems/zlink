@@ -435,12 +435,22 @@ public final class ZLinkServiceM6AWireCodec {
     public static List<Message> decodeFrameworkMultipart(
         ApplicationPayload payload) {
         Objects.requireNonNull(payload, "payload");
-        return decodeMultipart(payload.packetName(), payload.contentType(),
-            new Reader(payload.payloadForCodec()));
+        return decodeMultipartView(payload.packetName(), payload.contentType(),
+            new Reader(payload.payloadForCodec())).detachAll();
     }
 
     /** Borrows the frame for decoding; returned parts own their binding storage. */
     public static List<Message> decodeFrameworkMultipartFrame(ByteBuffer frame) {
+        return decodeFrameworkMultipartFrameView(frame).detachAll();
+    }
+
+    /**
+     * Borrows one received frame and validates the multipart profile without
+     * copying its inner parts. The caller must keep the frame owner alive until
+     * the returned view is closed.
+     */
+    public static ZLinkFrameworkMultipartView decodeFrameworkMultipartFrameView(
+        ByteBuffer frame) {
         Reader reader = new Reader(frame);
         if (reader.u8("version") != 1) {
             throw protocol("invalid application payload version");
@@ -453,10 +463,10 @@ public final class ZLinkServiceM6AWireCodec {
         if (reader.intU32("payloadLength") != reader.remaining()) {
             throw protocol("application payload length mismatch");
         }
-        return decodeMultipart(packetName, contentType, reader);
+        return decodeMultipartView(packetName, contentType, reader);
     }
 
-    private static List<Message> decodeMultipart(
+    private static ZLinkFrameworkMultipartView decodeMultipartView(
         String packetName, String contentType, Reader reader) {
         if (!ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME.equals(packetName)
             || !ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE.equals(contentType)) {
@@ -468,18 +478,13 @@ public final class ZLinkServiceM6AWireCodec {
             || count > reader.remaining() / (long) Integer.BYTES) {
             throw protocol("framework multipart part count is invalid");
         }
-        List<Message> parts = new ArrayList<>((int) count);
-        try {
-            for (long index = 0; index < count; index++) {
-                int size = reader.intU32("frameworkMultipartPartLength");
-                parts.add(reader.message(size, "frameworkMultipartPart"));
-            }
-            reader.end();
-            return List.copyOf(parts);
-        } catch (RuntimeException failure) {
-            parts.forEach(Message::close);
-            throw failure;
+        List<ByteBuffer> parts = new ArrayList<>((int) count);
+        for (long index = 0; index < count; index++) {
+            int size = reader.intU32("frameworkMultipartPartLength");
+            parts.add(reader.buffer(size, "frameworkMultipartPart"));
         }
+        reader.end();
+        return new ZLinkFrameworkMultipartView(parts);
     }
 
     public ApplicationPayload decodeApplicationPayload(byte[] frame) {

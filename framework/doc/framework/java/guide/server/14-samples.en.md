@@ -7,6 +7,8 @@ title: "14. Picking a Sample — Start with the Example Closest to Your Problem 
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 14. Picking a Sample — Start with the Example Closest to Your Problem
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 13. Key Type Usage Index](13-interface-catalog.en.md) | [Next: 15. E2E Testing — Verifying the Whole System with a Client](15-e2e-testing.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "14. Picking a Sample — Start with the Example Closest to Your Problem 
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/14-samples.en.md) · [C++](../../../cpp/guide/server/14-samples.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/14-samples.en.md) · [Node/TypeScript](../../../node/guide/server/14-samples.en.md)
 <!-- language-switch:end -->
-
-# 14. Picking a Sample — Start with the Example Closest to Your Problem
 
 > **This chapter has no spec document that owns a contract.** It's guidance for choosing
 > which sample to look at. Each sample's language-neutral scenario, message contract, and

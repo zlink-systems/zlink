@@ -7,6 +7,8 @@ title: "15. E2E 테스트 — client로 시스템 전체를 검증하기 · Java
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 15. E2E 테스트 — client로 시스템 전체를 검증하기
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 14. 샘플 고르기 — 내 문제에 가까운 예제부터](14-samples.ko.md) | [다음: 16. Options — 설정 목록과 기본값](16-options.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "15. E2E 테스트 — client로 시스템 전체를 검증하기 · Java
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/15-e2e-testing.ko.md) · [C++](../../../cpp/guide/server/15-e2e-testing.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/15-e2e-testing.ko.md) · [Node/TypeScript](../../../node/guide/server/15-e2e-testing.ko.md)
 <!-- language-switch:end -->
-
-# 15. E2E 테스트 — client로 시스템 전체를 검증하기
 
 > **이 장에는 계약을 소유하는 스펙 문서가 없다.** 자기 시스템에 테스트를 만드는 방법을
 > 다루기 때문이다. 각 샘플이 무엇을 검증하는지는
@@ -35,10 +35,13 @@ handler 단위 테스트를 아무리 촘촘히 작성해도 확인되지 않는
 코드만으로 끝난다.
 
 ```java
-client.connect().submit().toCompletableFuture().join();               // 실제 연결
-AuthenticateRes auth = client.request(new AuthenticateReq(actorId))    // 실제 request
+// 실제 연결
+client.connect().submit().toCompletableFuture().join();
+// 실제 request
+AuthenticateRes auth = client.request(new AuthenticateReq(actorId))
     .submit(AuthenticateRes.class).toCompletableFuture().join();
-var push = other.waitFor(PlayerJoinedNotify.class)                    // 실제 push 도착 확인
+// 실제 push 도착 확인
+var push = other.waitFor(PlayerJoinedNotify.class)
     .submit(PlayerJoinedNotify.class).toCompletableFuture().join();
 ZLinkStreamAssert.ensure(
     push.payload().actorId().equals(auth.player().actorId()), "join push actor mismatch.");
@@ -78,7 +81,8 @@ CreateGameHttpRes room = api.post("/games")
 ZLinkStreamConnector client = ZLinkStreamConnectorFactory.create(
     new ZLinkStreamConnectorOptions(
         URI.create(room.playEndpoints().get(0)),
-        ZLinkStreamDispatchMode.IMMEDIATE, // console 시나리오는 자동 펌프를 사용한다.
+        // console 시나리오는 자동 펌프를 사용한다.
+        ZLinkStreamDispatchMode.IMMEDIATE,
         options.streamTimeout()));
 ```
 
@@ -231,7 +235,8 @@ public void run(TicTacToeClientOptions options) {
     client1.connect().submit().toCompletableFuture().join();
     client1.request(new AuthenticateReq(options.xActorId()))
         .submit(AuthenticateRes.class).toCompletableFuture().join();
-    JoinGameNotify join1 = joinGame(client1, room.roomId()); // 대기 등록 → send → 수신(§3)
+    // 대기 등록 → send → 수신(§3)
+    JoinGameNotify join1 = joinGame(client1, room.roomId());
     ZLinkStreamAssert.ensure(
         join1.state().status() == TicTacToeGameStatuses.WaitingForPlayers,
         "room should wait for the second player.");
@@ -298,7 +303,8 @@ start_server play-a "$(app_bin Server Server)" --config "${CONFIG_DIR}/play-a.js
 start_server play-b "$(app_bin Server Server)" --config "${CONFIG_DIR}/play-b.json"
 start_server api-a  "$(app_bin Server Server)" --config "${CONFIG_DIR}/api-a.json"
 
-wait_port "${PLAY_A_ROUTE_ENDPOINT}"        # 포트가 열릴 때까지 기다린다. sleep을 쓰지 않는다.
+# 포트가 열릴 때까지 기다린다. sleep을 쓰지 않는다.
+wait_port "${PLAY_A_ROUTE_ENDPOINT}"
 
 "$(app_bin Client Client)" --api-url "http://127.0.0.1:${api_a_http_port}" \
   >"${log_dir}/client.log" 2>&1

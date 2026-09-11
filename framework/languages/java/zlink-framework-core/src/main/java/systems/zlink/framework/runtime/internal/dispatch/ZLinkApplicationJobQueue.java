@@ -169,6 +169,34 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         }
     }
 
+    /**
+     * Claims one receive-owner batch. The first permit observes the normal
+     * FIFO wait; the same owner then takes only capacity that is immediately
+     * available without crossing an older waiter.
+     */
+    public List<Permit> acquireBatchBlocking(int maximum)
+        throws InterruptedException {
+        if (maximum < 1) {
+            throw new IllegalArgumentException("maximum must be positive");
+        }
+        ArrayList<Permit> permits = new ArrayList<>(maximum);
+        permits.add(acquireBlocking());
+        PressureSnapshot transition = null;
+        synchronized (lock) {
+            while (!closed
+                && waiters.isEmpty()
+                && permits.size() < maximum
+                && permitsInUse < effectiveLimit) {
+                permits.add(reserveUnderLock());
+            }
+            if (permits.size() > 1) {
+                transition = evaluatePressureUnderLock();
+            }
+        }
+        notifyPressureTransition(transition);
+        return List.copyOf(permits);
+    }
+
     public Snapshot snapshot() {
         synchronized (lock) {
             return new Snapshot(

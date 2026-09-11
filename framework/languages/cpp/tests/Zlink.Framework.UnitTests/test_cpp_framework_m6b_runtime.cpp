@@ -3747,6 +3747,61 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
       == 0);
 }
 
+void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
+{
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{
+        mesh::raw_mesh_node_options_t{
+          descriptor ("owner-batch-target")} });
+    target->start ();
+    auto &mailbox = target->transport ().mailbox ();
+    const auto enqueue = [&mailbox] (std::string value) {
+        auto application = std::make_shared<host::local_application_dispatch_t> ();
+        application->owner.owner_kind = host::owner_kind_t::node;
+        application->owner.domain = host::ready_domain_t::application;
+        application->record.kind = host::record_kind_t::node_send;
+        application->record.domain = host::ready_domain_t::application;
+        application->parts.push_back (zlink::message_t::from (value));
+        mesh::service_mailbox_record_t record;
+        record.owner = mesh::service_mailbox_t::application_owner (
+          host::owner_kind_t::node);
+        record.domain = mesh::service_mailbox_domain_t::application;
+        record.application = std::move (application);
+        return mailbox.try_enqueue (std::move (record));
+    };
+    assert (enqueue ("first"));
+    assert (enqueue ("second"));
+    assert (enqueue ("third"));
+
+    const auto owner = mesh::service_mailbox_t::application_owner (
+      host::owner_kind_t::node);
+    assert (mailbox.begin_application_drain (owner));
+    std::vector<std::string> dispatched;
+    std::size_t started = 0;
+    std::size_t rejected = 0;
+    assert (target->dispatch_application_owner (
+      owner,
+      [&] (const host::ready_record_t &, const host::receive_record_t &record,
+           std::vector<zlink::message_t> parts) {
+          assert (record.retain_mailbox_reservation);
+          assert (record.release_mailbox_reservation);
+          record.retain_mailbox_reservation ();
+          assert (parts.size () == 1);
+          dispatched.push_back (parts.front ().to_string ());
+          record.release_mailbox_reservation ();
+      },
+      [&] { ++started; }, [&] { ++rejected; }));
+    mailbox.end_application_drain (owner);
+
+    assert ((dispatched == std::vector<std::string>{"first", "second", "third"}));
+    assert (started == dispatched.size ());
+    assert (rejected == 0);
+    assert (mailbox.pending_messages (
+              mesh::service_mailbox_domain_t::application)
+            == 0);
+    target->close ();
+}
+
 void verify_public_host_batches_with_finite_permits ()
 {
     auto source = std::make_shared<host::public_host_runtime_t> (
@@ -6956,18 +7011,20 @@ void verify_remote_user_spot_create_close_terminal_once ()
           .count ());
     std::optional<protocol::user_spot_create_reply_t>
       create_reply;
+    std::optional<foundation::operation_terminal_t> create_operation_terminal;
+    bool create_has_application_reply = false;
     std::size_t create_terminal_count = 0;
-    assert (source->create_user_spot_remote (
-      target->status ().routing_id (), create, 5s,
+    const auto record_create =
       [&] (foundation::operation_terminal_t terminal,
            protocol::user_spot_create_reply_t reply,
-           std::optional<protocol::application_payload_t>) {
-          assert (
-            terminal
-            == foundation::operation_terminal_t::completed);
-          ++create_terminal_count;
+           std::optional<protocol::application_payload_t> application_reply) {
+          create_operation_terminal = terminal;
           create_reply = std::move (reply);
-      })
+          create_has_application_reply = application_reply.has_value ();
+          ++create_terminal_count;
+      };
+    assert (source->create_user_spot_remote (
+      target->status ().routing_id (), create, 5s, record_create)
               .result ()
               .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
@@ -6978,6 +7035,8 @@ void verify_remote_user_spot_create_close_terminal_once ()
         std::this_thread::sleep_for (1ms);
     }
     assert (create_reply);
+    assert (create_operation_terminal
+            == foundation::operation_terminal_t::completed);
     assert (create_reply->header.terminal_result == 0);
     assert (
       create_reply->result
@@ -7249,8 +7308,51 @@ void verify_remote_user_spot_create_close_terminal_once ()
           zlink::framework::runtime::spot_authority_key (spot_id))
         .result ()
         .value ()));
-    source->close ();
+
+    create.operation = {99, 7};
+    create.spot_id = "transport-failure-room";
+    create_operation_terminal.reset ();
+    create_reply.reset ();
+    create_has_application_reply = true;
+    assert (source->create_user_spot_remote (
+      target->status ().routing_id (), create, 5s, record_create)
+              .result ()
+              .value ());
+    assert (target->transport ().mailbox ().pending_messages (
+              mesh::service_mailbox_domain_t::infrastructure)
+            == 0);
+    deadline = std::chrono::steady_clock::now () + 5s;
+    while (target->transport ().mailbox ().pending_messages (
+             mesh::service_mailbox_domain_t::infrastructure)
+             == 0
+           && std::chrono::steady_clock::now () < deadline) {
+        (void) source->dispatch_ready (dispatch);
+        const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+        (void) target->transport ().drain_monitor_events (now);
+        assert (target->transport ().pump_one (now).result ().value ()
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+    }
+    assert (target->transport ().mailbox ().pending_messages (
+              mesh::service_mailbox_domain_t::infrastructure)
+            == 1);
+    assert (!create_operation_terminal);
     target->close ();
+    deadline = std::chrono::steady_clock::now () + 5s;
+    while (!create_operation_terminal
+           && std::chrono::steady_clock::now () < deadline) {
+        (void) source->dispatch_ready (dispatch);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (create_operation_terminal
+            == foundation::operation_terminal_t::transport_failed);
+    assert (create_terminal_count == 2);
+    assert (create_reply);
+    assert (!create_has_application_reply);
+    assert (create_reply->header.correlation == 0);
+    assert (create_reply->header.terminal_result == 0);
+    assert (create_reply->header.failure_code == 0);
+
+    source->close ();
 }
 
 // Spec 28 §3/§12: the exact identity is RelocationId + targetAttemptGeneration
@@ -7496,6 +7598,7 @@ int main (int argc, char **argv)
     verify_terminal_journal_preserves_outstanding_entries ();
     verify_unbounded_actor_handoff_backlog ();
     verify_public_host_dispatches_one_application_record_per_turn ();
+    verify_public_host_dispatches_one_owner_claim_as_a_batch ();
     verify_public_host_batches_with_finite_permits ();
     verify_public_host_fifo_drains_before_liveness_probe ();
     verify_logical_multicast_continues_after_one_target_failure ();

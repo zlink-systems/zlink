@@ -10,6 +10,82 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class EntrySpotActorDispatchTests
 {
     [Fact]
+    public async Task MeshNode_Rid_Send_Decodes_The_Retained_Body_View_Directly()
+    {
+        var capture = new RetainedBodyCapture();
+        await using var services = new ServiceCollection()
+            .AddSingleton(capture)
+            .AddTransient<RetainedBodyRouteSendHandler>()
+            .BuildServiceProvider();
+        var registration = new ZLinkFrameworkRegistration
+        {
+            ImplicitHandlerAutoRegistrationEnabled = false
+        };
+        registration.FreezeScannedHandlerCatalog();
+        var spotNode = new ZLinkSpotNodeRegistration
+        {
+            SpotNodeName = "mesh",
+            RoutingId = RoutingId.From("mesh-node")
+        };
+        spotNode.RouteSendHandlers.Add(new ZLinkRouteHandlerRegistration(
+            typeof(RetainedBodyRouteSendHandler),
+            typeof(RetainedBody),
+            null,
+            "RetainedBody"));
+        registration.Codecs.AddSerializer(
+            "application/x-retained-body",
+            new RetainedBodySerializer(capture));
+        var handlers = new ZLinkHandlerRegistry([]);
+        var runtime = new ZLinkFrameworkRuntime(
+            services,
+            null!,
+            registration,
+            handlers,
+            new ZLinkHandlerDispatcher(
+                services.GetRequiredService<IServiceScopeFactory>(),
+                registration));
+        var taskRunner = new ZLinkRuntimeTaskRunner(
+            new ThrowingRuntimeErrorSink(),
+            CancellationToken.None);
+        var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
+            ZLinkMeshNodeRouteDispatcher.Create(
+                services,
+                registration,
+                spotNode,
+                runtime,
+                taskRunner));
+        var header = new ZLinkEnvelopeHeader(
+            ZLinkMessageKind.Command,
+            "mesh",
+            "RetainedBody",
+            "application/x-retained-body",
+            null,
+            null,
+            null,
+            null,
+            null);
+        using var headerPart = ZLinkEnvelopeCodec.EncodeHeader(header);
+        using var bodyPart = Message.From(new byte[] { 1, 2, 3, 4 });
+        var owner = ZLinkApplicationPayloadEnvelopeCodec
+            .EncodeFrameworkMultipartMessage([headerPart, bodyPart]);
+        Assert.True(ZLinkApplicationPayloadEnvelopeCodec
+            .TryDecodeFrameworkMultipartView(owner, out var view));
+        capture.Owner = owner;
+
+        dispatcher.Dispatch(new ZLinkBackendRouteReceived(
+            [],
+            sourceNodeRid: RoutingId.From("source-node"),
+            spotId: null,
+            requestSeq: null,
+            reply: null,
+            payloadOwner: owner,
+            applicationPayloadView: view));
+
+        Assert.True(await capture.Result.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        await taskRunner.StopAsync();
+    }
+
+    [Fact]
     public async Task MeshNode_Channel_Request_Emits_Received_Then_Replied_With_Wire_Identity()
     {
         var membership = new ZLinkMeshChannelMembership { ChannelName = "play" };
@@ -352,6 +428,48 @@ public sealed partial class EntrySpotActorDispatchTests
         public string? MeshName { get; set; }
 
         public RoutingId? SourceNodeRid { get; set; }
+    }
+
+    private sealed class RetainedBodyCapture
+    {
+        public Message Owner { get; set; } = null!;
+
+        public TaskCompletionSource<bool> Result { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed record RetainedBody;
+
+    private sealed class RetainedBodySerializer(RetainedBodyCapture capture)
+        : IZLinkMessageSerializer, IZLinkMessageSpanDeserializer
+    {
+        public ZLinkEncodedPayload Serialize(object value, Type type) =>
+            throw new NotSupportedException();
+
+        public object Deserialize(ZLinkEncodedPayload payload, Type type) =>
+            throw new NotSupportedException();
+
+        public object Deserialize(ReadOnlySpan<byte> payload, Type type)
+        {
+            capture.Result.TrySetResult(
+                payload.Overlaps(capture.Owner.AsReadOnlySpan()));
+            return new RetainedBody();
+        }
+    }
+
+    private sealed class RetainedBodyRouteSendHandler
+        : IZLinkRouteSendHandler<RetainedBody>
+    {
+        public ValueTask HandleAsync(
+            RetainedBody message,
+            ZLinkRouteMessageContext context,
+            CancellationToken cancellationToken)
+        {
+            _ = message;
+            _ = context;
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class FailingMeshChannelRequestHandler

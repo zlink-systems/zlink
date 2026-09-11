@@ -72,7 +72,7 @@ internal sealed partial class SocketKernel : IDisposable
                 (nuint)topicBuffer.Length, out var topicLength, flags);
             if (rc != 0)
             {
-                var errno = NativeMethods.zlink_errno();
+                var errno = NativeMethods.GetLastPInvokeError();
                 if ((flags & DontWaitFlag) != 0
                     && ZlinkException.MapErrorCode(errno) == ErrorCode.EAgain)
                     return false;

@@ -7,6 +7,8 @@ title: "5. Channel Messaging — Request · Send · Pub/Sub · C++"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 5. Channel Messaging — Request · Send · Pub/Sub
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 4. Backpressure — When Arrival Outpaces Processing](04-backpressure.en.md) | [Next: 6. Spot](06-spot.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "5. Channel Messaging — Request · Send · Pub/Sub · C++"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/05-channel-messaging.en.md) · **C++** · [Java](../../../java/guide/server/05-channel-messaging.en.md) · [Kotlin](../../../kotlin/guide/server/05-channel-messaging.en.md) · [Node/TypeScript](../../../node/guide/server/05-channel-messaging.en.md)
 <!-- language-switch:end -->
-
-# 5. Channel Messaging — Request · Send · Pub/Sub
 
 > **The document that owns this chapter's contract** — [Channel Messaging](../../../common/spec/server/02-channel-transport/02-channel-messaging.en.md)
 > and [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.en.md) own the
@@ -214,14 +214,17 @@ receiving side is limited to Spots that subscribed to the same topic on that cha
 ```cpp
 // Publishing -- inside the game spot.
 co_await _context.outbound ()
-  .publish (sample_topics_t::player_milestone_channel, // The ChannelName that decides delivery scope.
-            sample_topics_t::player_milestone,         // The topic that picks which Spots receive it within that scope.
+  // The ChannelName that decides delivery scope.
+  .publish (sample_topics_t::player_milestone_channel,
+            // The topic that picks which Spots receive it within that scope.
+            sample_topics_t::player_milestone,
             milestone_event)
   .async ();
 
 // Subscribing -- when the entry spot starts.
 _context.handlers ().add_subscribe<&play_entry_spot_t::on_player_win_milestone> (
-  sample_topics_t::player_milestone_channel, // Must match the publishing side's ChannelName/topic to receive it.
+  // Must match the publishing side's ChannelName/topic to receive it.
+  sample_topics_t::player_milestone_channel,
   sample_topics_t::player_milestone);
 ```
 
@@ -411,8 +414,10 @@ task_t<create_game_reply_t> handle (const create_game_request_t &request)
     auto room = co_await _client
                   .request_to_channel ("tictactoe.play",
                                        create_room_request_t{request.game_name})
-                  .timeout (std::chrono::seconds (5)) // The cap on waiting for the reply.
-                  .async<create_room_reply_t> ();    // Waits until the reply arrives.
+                  // The cap on waiting for the reply.
+                  .timeout (std::chrono::seconds (5))
+                  // Waits until the reply arrives.
+                  .async<create_room_reply_t> ();
 
     co_return create_game_reply_t{room.room_id, room.game_name};
 }
@@ -444,10 +449,12 @@ The framework doesn't automatically open every discovered handler on every chann
 ### RouteMesh and Handler Registration
 
 ```cpp
-options.handlers ().group ("api").add<get_profile_handler_t> ();  // Puts the handler in a group.
+// Puts the handler in a group.
+options.handlers ().group ("api").add<get_profile_handler_t> ();
 auto mesh = options.add_route_mesh ("services");
 mesh.listen ("tcp://0.0.0.0:7101").set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
-mesh.channel_name ("api").server ()      // server () is the role that receives handlers.
+// server () is the role that receives handlers.
+mesh.channel_name ("api").server ()
   .use_handler_group ("api");
 ```
 
@@ -460,9 +467,11 @@ role.
 auto mesh = options.add_route_mesh ("services");
 mesh.listen ("tcp://0.0.0.0:7101").set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
 
-mesh.channel_name ("api").server ()          // A channel this node handles.
+// A channel this node handles.
+mesh.channel_name ("api").server ()
   .add_request_handler<get_profile_handler_t, get_profile_request_t, get_profile_reply_t> ();
-mesh.channel_name ("billing").client ();     // A call-only channel is client -- no handler registered.
+// A call-only channel is client -- no handler registered.
+mesh.channel_name ("billing").client ();
 ```
 
 A fanout channel's subscription handler is registered with the fanout builder's
@@ -618,21 +627,25 @@ class audit_filter_t
   public:
     explicit audit_filter_t (logger_t<audit_filter_t> &logger) : _logger (logger) {}
 
-    task_t<void> invoke (handler_filter_context_t &context, // This dispatch's message info.
-                         handler_filter_next_t next)        // Runs the next filter or handler.
+    // This dispatch's message info.
+    task_t<void> invoke (handler_filter_context_t &context,
+                         // Runs the next filter or handler.
+                         handler_filter_next_t next)
     {
         // Audit-logs only ops commands and lets regular business requests pass through.
         if (context.dispatch_kind () == handler_dispatch_kind_t::node_direct_request)
             _logger.info (std::string ("ops ") + context.packet_name ());
 
-        co_await next (); // If not called, the handler doesn't run.
+        // If not called, the handler doesn't run.
+        co_await next ();
     }
 
   private:
     logger_t<audit_filter_t> _logger;
 };
 
-options.use_filter<audit_filter_t> ();      // Registration order is execution order.
+// Registration order is execution order.
+options.use_filter<audit_filter_t> ();
 options.use_filter<validation_filter_t> ();
 ```
 
@@ -759,8 +772,10 @@ serving value.
 
 ```cpp
 // An operational admin path. "orders" is the registered ChannelName.
-mesh_options.channel ("orders").weight (0);   // Excludes this ChannelName from new select-one targets
-mesh_options.channel ("orders").weight (100); // Back to normal
+// Excludes this ChannelName from new select-one targets
+mesh_options.channel ("orders").weight (0);
+// Back to normal
+mesh_options.channel ("orders").weight (100);
 ```
 
 - `Weight = 0` (drain) **doesn't close** the serving socket. In-flight requests that
@@ -779,7 +794,8 @@ The same `Weight` is also set as an initial value at registration time.
 ```cpp
 auto mesh = options.add_route_mesh ("services");
 mesh.listen ("tcp://0.0.0.0:7101").set_routing_id (zlink::routing_id_t::from (std::string ("orders-1")));
-mesh.channel_name ("orders").server ().set_weight (30); // This channel role's starting weight
+// This channel role's starting weight
+mesh.channel_name ("orders").server ().set_weight (30);
 ```
 
 ## 7. Serialization Codec
@@ -892,7 +908,8 @@ startup.**
 auto caller = options.add_route_mesh ("media");
 caller.listen ("tcp://0.0.0.0:5590")
   .set_routing_id (zlink::routing_id_t::from (std::string ("resize-client")));
-caller.channel_name ("image.resize").client ();   // client, since it only calls.
+// client, since it only calls.
+caller.channel_name ("image.resize").client ();
 caller.peer_connections ().connect ("tcp://10.30.1.10:5600");
 caller.peer_connections ().connect ("tcp://10.30.1.10:5601");
 
@@ -973,18 +990,23 @@ int main (int argc, char **argv)
     auto app = framework::app_t::create ();
     app.add_zlink_framework ([] (zlink_framework_options_t &options) {
         options.codecs ().use (protobuf_codec_t::default_instance ());
-        options.handlers ().group ("api").add<user_handlers_t> (); // The handler group to expose.
+        // The handler group to expose.
+        options.handlers ().group ("api").add<user_handlers_t> ();
 
         auto mesh = options.add_route_mesh ("services");
         mesh.listen ("tcp://0.0.0.0:7101")
           .set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
         mesh.channel_name ("api").server ().use_handler_group ("api");
-        mesh.channel_name ("account").client ();                   // A call-only channel.
+        // A call-only channel.
+        mesh.channel_name ("account").client ();
 
         options.add_fanout_channel ("api.events")
-          .enable_publisher ("tcp://0.0.0.0:7201")                 // This process is the publisher.
-          .connect ("tcp://127.0.0.1:7201")             // Also subscribes to its own publish.
-          .use_handler_group ("api.events"); // Attaches the subscription handler as a group.
+          // This process is the publisher.
+          .enable_publisher ("tcp://0.0.0.0:7201")
+          // Also subscribes to its own publish.
+          .connect ("tcp://127.0.0.1:7201")
+          // Attaches the subscription handler as a group.
+          .use_handler_group ("api.events");
 
         options.http ()
           .listen ("http://0.0.0.0:8080")

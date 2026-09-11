@@ -7,6 +7,8 @@ title: "6. Spot · C#/.NET"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 6. Spot
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 5. Channel Messaging — Request · Send · Pub/Sub](05-channel-messaging.en.md) | [Next: 7. Actor and Spot](07-actor-spot.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "6. Spot · C#/.NET"
 <!-- language-switch:start -->
 View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/06-spot.en.md) · [Java](../../../java/guide/server/06-spot.en.md) · [Kotlin](../../../kotlin/guide/server/06-spot.en.md) · [Node/TypeScript](../../../node/guide/server/06-spot.en.md)
 <!-- language-switch:end -->
-
-# 6. Spot
 
 > **The document that owns this chapter's contract** — the [Spot model](../../../common/spec/server/03-spot-actor/01-spot-model.en.md)
 > and [SPOT messaging](../../../common/spec/server/03-spot-actor/02-spot-messaging.en.md) own the behavior, and
@@ -79,9 +79,11 @@ registers an Instance Spot to hold the matching queue.
 ```csharp
 // Play server -- an Entry Spot and a User Spot to hold rooms.
 mesh.Objects().Server()
-    .AddEntrySpot<BingoEntrySpot>()                 // An Entry Spot has no stable type.
+    // An Entry Spot has no stable type.
+    .AddEntrySpot<BingoEntrySpot>()
     .AddSpotFactory<BingoRoom>(
-        SampleNames.RoomSpotType,                   // Stable type -- selected by this name when creating.
+        // Stable type -- selected by this name when creating.
+        SampleNames.RoomSpotType,
         factory => factory
             .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
             .PreserveStateWith<BingoRoomRelocationAdapter>());
@@ -103,17 +105,21 @@ two together.
 
 ```csharp
 // Instance Spot -- no create call. Sending to that ID creates it if it's missing.
-var allocated = await spotClient                    // IZLinkSpotClient
+// IZLinkSpotClient
+var allocated = await spotClient
     .RequestToSpot($"match:{levelBucket}", new ReserveBingoRoomReq { ... })
-    .InstanceSpot(SampleNames.MatchmakerSpotType)   // The intent that creation is OK if it's missing (cold activation).
+    // The intent that creation is OK if it's missing (cold activation).
+    .InstanceSpot(SampleNames.MatchmakerSpotType)
     .InMesh(SampleNames.MatchmakingMeshName)
     .Async<ReserveBingoRoomRes>(cancellationToken);
 
 // User Spot -- there's a separate create call.
-var created = await spots                           // IZLinkSpotManager
+// IZLinkSpotManager
+var created = await spots
     .GetOrCreate(allocated.RoomId, SampleNames.RoomSpotType)
     .InMesh(SampleNames.PlayMeshName)
-    .Request(allocated.Settings)                    // Delivered to the new Spot's OnCreateAsync.
+    // Delivered to the new Spot's OnCreateAsync.
+    .Request(allocated.Settings)
     .Async(cancellationToken);
 ```
 
@@ -132,7 +138,8 @@ var mesh = options.AddRouteMesh("play")
     .SetRoutingIdPrefix("play");
 
 mesh.Objects().Server()
-    .AddEntrySpot<PlayEntrySpot>() // Registers the Entry Spot an Actor is placed in first.
+    // Registers the Entry Spot an Actor is placed in first.
+    .AddEntrySpot<PlayEntrySpot>()
     .AddSpotFactory<GameRoom>(
         "game-room",
         factory => factory
@@ -222,16 +229,19 @@ creation is the point, like opening a new room. The result is one of two: it was
 
 ```csharp
 ZLinkSpotCreateResult created = await spots
-    .Create("game-room") // Selects the factory and placement candidates by the stable type.
+    // Selects the factory and placement candidates by the stable type.
+    .Create("game-room")
     .InMesh("play")
-    .Request(new CreateGame("ranked")) // The create request delivered to OnCreateAsync.
+    // The create request delivered to OnCreateAsync.
+    .Request(new CreateGame("ranked"))
     .Timeout(TimeSpan.FromSeconds(10))
     .Async(cancellationToken);
 
 if (created.State == ZLinkSpotCreateState.Rejected)
     throw new InvalidOperationException("Game creation was rejected.");
 
-string spotId = created.Spot.SpotId; // Use only the global SpotId for messaging from here on.
+// Use only the global SpotId for messaging from here on.
+string spotId = created.Spot.SpotId;
 ```
 
 > **See it in a sample — [TicTacToe](../../../common/sample/tictactoe/README.en.md).** This
@@ -252,15 +262,19 @@ attempt only once, so the application doesn't have to guard against the race its
 ZLinkSpotCreateResult result = await spots
     .GetOrCreate("lobby-eu-1", "lobby")
     .InMesh("play")
-    .Request(new CreateLobby("eu")) // Not delivered if this ends as Existing.
+    // Not delivered if this ends as Existing.
+    .Request(new CreateLobby("eu"))
     .Async(cancellationToken);
 
 switch (result.State)
 {
-    case ZLinkSpotCreateState.Existing: // Uses the lobby that already existed, as-is.
-    case ZLinkSpotCreateState.Created:  // This call created it.
+    // Uses the lobby that already existed, as-is.
+    case ZLinkSpotCreateState.Existing:
+    // This call created it.
+    case ZLinkSpotCreateState.Created:
         break;
-    case ZLinkSpotCreateState.Rejected: // The create callback rejected it -- no Ready Spot.
+    // The create callback rejected it -- no Ready Spot.
+    case ZLinkSpotCreateState.Rejected:
         throw new InvalidOperationException("Lobby creation was rejected.");
 }
 ```
@@ -272,7 +286,8 @@ general messaging -- use it only to close that same incarnation.
 SpotRef? current = await spots.FindAsync("lobby-eu-1", cancellationToken);
 if (current is { } exact)
 {
-    await spots.CloseAsync(exact, cancellationToken); // Doesn't accidentally close a different generation.
+    // Doesn't accidentally close a different generation.
+    await spots.CloseAsync(exact, cancellationToken);
 }
 ```
 
@@ -344,7 +359,8 @@ public sealed class ChatHandler : IZLinkSpotPacketHandler<GameRoom, Chat>
         Chat message,
         CancellationToken cancellationToken)
     {
-        spot.AppendChat(message.Text);  // Touches Spot state directly. No lock needed.
+        // Touches Spot state directly. No lock needed.
+        spot.AppendChat(message.Text);
         return ValueTask.CompletedTask;
     }
 }
@@ -379,7 +395,8 @@ public sealed class PlaceMarkHandler
 {
     public ValueTask HandleAsync(
         GameRoom spot,
-        PlayerActor actor,              // The Actor that received this message.
+        // The Actor that received this message.
+        PlayerActor actor,
         IZLinkMessageContext messageContext,
         PlaceMark message,
         CancellationToken cancellationToken)
@@ -403,10 +420,12 @@ public sealed class GameRoom(IZLinkSpotContext context) : IZLinkSpot
 
     public void Configure()
     {
-        Context.Handlers.AddPacket<ChatHandler>(); // Registers the Spot send handler.
+        // Registers the Spot send handler.
+        Context.Handlers.AddPacket<ChatHandler>();
         Context.Handlers.AddSubscribe<ScoreHandler>(
             "game-events",
-            "score.changed"); // Registers a Logical Multicast subscription.
+            // Registers a Logical Multicast subscription.
+            "score.changed");
     }
 
     public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
@@ -575,14 +594,17 @@ one, it can be omitted.
 // A mesh with multiple types registered -- specify the stable type for which factory creates it.
 MatchResult match = await spotClient
     .RequestToSpot("bronze", new FindMatch(playerId))
-    .InstanceSpot("matchmaker")   // Prepares it with this stable type's factory if the target is missing.
-    .InMesh("matchmaking")        // Picks the mesh for initial placement.
+    // Prepares it with this stable type's factory if the target is missing.
+    .InstanceSpot("matchmaker")
+    // Picks the mesh for initial placement.
+    .InMesh("matchmaking")
     .Async<MatchResult>(cancellationToken);
 
 // A mesh with only one type registered -- omit it and the Framework picks that sole type.
 MatchResult single = await spotClient
     .RequestToSpot("bronze", new FindMatch(playerId))
-    .InstanceSpot()               // Prepares it with the only type registered on the target node.
+    // Prepares it with the only type registered on the target node.
+    .InstanceSpot()
     .InMesh("matchmaking")
     .Async<MatchResult>(cancellationToken);
 ```
@@ -631,8 +653,10 @@ returns a timer handle, used later to cancel it.
 ```csharp
 // Inside a Spot -- keep the returned IZLinkTimer in a field, used to cancel it later.
 _gameTick = await Context.AddTimer<GameTickHandler>(
-    "game-tick",                 // A name unique within the same Spot.
-    TimeSpan.FromSeconds(1),     // The period. ZLinkConfigurationException if <= 0.
+    // A name unique within the same Spot.
+    "game-tick",
+    // The period. ZLinkConfigurationException if <= 0.
+    TimeSpan.FromSeconds(1),
     new ZLinkTimerOptions
     {
         OverrunPolicy = ZLinkTimerOverrunPolicy.SkipLateTicks,
@@ -641,7 +665,8 @@ _gameTick = await Context.AddTimer<GameTickHandler>(
     },
     cancellationToken: cancellationToken);
 
-await _gameTick.CancelAsync();   // When it's no longer needed. The Framework cleans it up together when the Spot closes.
+// When it's no longer needed. The Framework cleans it up together when the Spot closes.
+await _gameTick.CancelAsync();
 ```
 
 The handler is a separate class that receives the Spot and tick info.
@@ -699,7 +724,8 @@ number of skipped ticks.
 public ValueTask HandleAsync(GameRoom spot, ZLinkTimerTick tick, CancellationToken ct)
 {
     if (tick.Delay > TimeSpan.FromMilliseconds(500))
-        spot.ReportLag(tick.Delay, tick.SkippedTicks); // Report load if the delay is large.
+        // Report load if the delay is large.
+        spot.ReportLag(tick.Delay, tick.SkippedTicks);
 
     return spot.TickAsync(ct);
 }
@@ -744,13 +770,15 @@ public sealed class BuildSnapshotHandler
         BuildSnapshot request,
         CancellationToken cancellationToken)
     {
-        var board = spot.CopyBoard();          // Copy Spot state first, while still in the turn.
+        // Copy Spot state first, while still in the turn.
+        var board = spot.CopyBoard();
 
         var packed = await spot.Context
             .RunCpuWorker(ct =>
             {
                 ct.ThrowIfCancellationRequested();
-                return SnapshotCodec.Compress(board); // Heavy synchronous computation.
+                // Heavy synchronous computation.
+                return SnapshotCodec.Compress(board);
             })
             .Yield(cancellationToken);
 
@@ -773,7 +801,8 @@ public sealed class SaveScoreHandler
     {
         var version = await spot.Context
             .RunIoWorker(async ct => await _store.SaveAsync(request.Value, ct))
-            .Timeout(TimeSpan.FromSeconds(3))  // The cap on this worker call.
+            // The cap on this worker call.
+            .Timeout(TimeSpan.FromSeconds(3))
             .Yield(cancellationToken);
 
         return new SaveScoreReply(version);
@@ -830,7 +859,8 @@ mesh.Objects().Server()
     .AddSpotFactory<GameRoom>(
         "game-room",
         factory => factory
-            .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide) // Only usable in this mode.
+            // Only usable in this mode.
+            .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
             .RelocationCoordinationMode(
                 ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
             .PreserveStateWith<GameRoomRelocationAdapter>());
@@ -848,7 +878,8 @@ public sealed class RoundTickHandler : IZLinkSpotTimerHandler<GameRoom>
         ZLinkTimerTick tick,
         CancellationToken cancellationToken)
     {
-        if (!spot.TryFinishRound())      // Don't signal while a round is still in progress.
+        // Don't signal while a round is still in progress.
+        if (!spot.TryFinishRound())
             return ValueTask.CompletedTask;
 
         // The point where the round ended and state was settled. This must be the last Framework call of the turn.

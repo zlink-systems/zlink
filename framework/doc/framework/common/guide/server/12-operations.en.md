@@ -44,7 +44,8 @@ The framework emits every instrument through one `System.Diagnostics.Metrics.Met
     ```csharp
     // This one line brings every zlink instrument into the app's OTel pipeline.
     builder.Services.AddOpenTelemetry().WithMetrics(m => m
-        .AddMeter("zlink.framework") // The canonical meter name the Framework emits instruments through.
+        // The canonical meter name the Framework emits instruments through.
+        .AddMeter("zlink.framework")
         .AddPrometheusExporter());
     ```
 
@@ -315,7 +316,8 @@ avoids failures for callers still caching the old route.
         new ZLinkFrameworkRelocationOptions
         {
             Mode = ZLinkFrameworkRelocationMode.RollingUpdate,
-            TargetApplicationVersion = 12,      // Uses only eligible nodes on the specified new version.
+            // Uses only eligible nodes on the specified new version.
+            TargetApplicationVersion = 12,
             Deadline = TimeSpan.FromSeconds(25)
         },
         cancellationToken: ct);
@@ -331,7 +333,8 @@ avoids failures for callers still caching the old route.
     ```cpp
     relocation_options_t relocation;
     relocation.mode = relocation_mode_t::rolling_update;
-    relocation.target_application_version = 12;              // Uses only eligible nodes on the specified new version.
+    // Uses only eligible nodes on the specified new version.
+    relocation.target_application_version = 12;
     relocation.deadline = std::chrono::seconds (25);
 
     auto result = co_await runtime.relocate (relocation);
@@ -347,7 +350,8 @@ avoids failures for callers still caching the old route.
     ZLinkFrameworkRelocationResult result = runtime.relocate(
         new ZLinkFrameworkRelocationOptions(
             ZLinkFrameworkRelocationMode.ROLLING_UPDATE,
-            12L,                            // Uses only eligible nodes on the specified new version.
+            // Uses only eligible nodes on the specified new version.
+            12L,
             Duration.ofSeconds(25)))
         .toCompletableFuture().join();
 
@@ -364,7 +368,8 @@ avoids failures for callers still caching the old route.
     val result = runtime.relocate(
         ZLinkFrameworkRelocationOptions(
             ZLinkFrameworkRelocationMode.ROLLING_UPDATE,
-            12L,                            // Uses only eligible nodes on the specified new version.
+            // Uses only eligible nodes on the specified new version.
+            12L,
             Duration.ofSeconds(25)))
         .await()
 
@@ -380,7 +385,8 @@ avoids failures for callers still caching the old route.
     ```typescript
     const result = await runtime.relocate({
       mode: ZLinkFrameworkRelocationMode.RollingUpdate,
-      targetApplicationVersion: 12n,   // Uses only eligible nodes on the specified new version.
+      // Uses only eligible nodes on the specified new version.
+      targetApplicationVersion: 12n,
       deadlineMs: 25_000
     });
 
@@ -504,36 +510,46 @@ socket options (HWM, timeout) are exclusive to `ConfigureRouterSocket()` before 
 
     ```csharp
     var meshOptions = app.Services.GetRequiredService<IZLinkRouteMeshRuntimeOptions>();
-    meshOptions.Mesh("game.room").PlacementWeight = 0; // Excludes it from new object placement
-    meshOptions.Channel("game.room").Weight = 0;       // Excludes it from new channel select-one
+    // Excludes it from new object placement
+    meshOptions.Mesh("game.room").PlacementWeight = 0;
+    // Excludes it from new channel select-one
+    meshOptions.Channel("game.room").Weight = 0;
     ```
 
 === "C++"
 
     ```cpp
-    mesh_options.placement_weight (0);              // Excludes it from new object placement
-    mesh_options.channel ("game.room").weight (0);  // Excludes it from new channel select-one
+    // Excludes it from new object placement
+    mesh_options.placement_weight (0);
+    // Excludes it from new channel select-one
+    mesh_options.channel ("game.room").weight (0);
     ```
 
 === "Java"
 
     ```java
-    meshOptions.mesh("game.room").setPlacementWeight(0); // Excludes it from new object placement
-    meshOptions.channel("game.room").weight(0);      // Excludes it from new channel select-one
+    // Excludes it from new object placement
+    meshOptions.mesh("game.room").setPlacementWeight(0);
+    // Excludes it from new channel select-one
+    meshOptions.channel("game.room").weight(0);
     ```
 
 === "Kotlin"
 
     ```kotlin
-    meshOptions.mesh("game.room").setPlacementWeight(0) // Excludes it from new object placement
-    meshOptions.channel("game.room").weight(0)      // Excludes it from new channel select-one
+    // Excludes it from new object placement
+    meshOptions.mesh("game.room").setPlacementWeight(0)
+    // Excludes it from new channel select-one
+    meshOptions.channel("game.room").weight(0)
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    meshOptions.mesh('game.room').placementWeight = 0; // Excludes it from new object placement
-    meshOptions.channel('game.room').weight = 0;       // Excludes it from new channel select-one
+    // Excludes it from new object placement
+    meshOptions.mesh('game.room').placementWeight = 0;
+    // Excludes it from new channel select-one
+    meshOptions.channel('game.room').weight = 0;
     ```
 
 
@@ -550,7 +566,8 @@ component event stream for one mesh. Host termination is owned by the framework 
     ```csharp
     var meshRuntime = app.Services.GetRequiredService<IZLinkRouteMeshRuntime>();
 
-    var status = meshRuntime.GetStatus("game.room"); // The immutable current status of nodes/peers/channels
+    // The immutable current status of nodes/peers/channels
+    var status = meshRuntime.GetStatus("game.room");
     var ready = status.IsReady;
 
     await foreach (var observed in meshRuntime.ObserveAsync("game.room", cancellationToken: ct))

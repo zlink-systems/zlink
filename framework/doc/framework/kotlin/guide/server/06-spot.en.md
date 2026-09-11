@@ -7,6 +7,8 @@ title: "6. Spot · Kotlin"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 6. Spot
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 5. Channel Messaging — Request · Send · Pub/Sub](05-channel-messaging.en.md) | [Next: 7. Actor and Spot](07-actor-spot.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "6. Spot · Kotlin"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/06-spot.en.md) · [C++](../../../cpp/guide/server/06-spot.en.md) · [Java](../../../java/guide/server/06-spot.en.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/06-spot.en.md)
 <!-- language-switch:end -->
-
-# 6. Spot
 
 > **The document that owns this chapter's contract** — the [Spot model](../../../common/spec/server/03-spot-actor/01-spot-model.en.md)
 > and [SPOT messaging](../../../common/spec/server/03-spot-actor/02-spot-messaging.en.md) own the behavior, and
@@ -79,9 +79,11 @@ registers an Instance Spot to hold the matching queue.
 ```kotlin
 // Play server -- an Entry Spot and a User Spot to hold rooms.
 mesh.objects().server()
-    .addEntrySpot(BingoEntrySpot::class.java)          // An Entry Spot has no stable type.
+    // An Entry Spot has no stable type.
+    .addEntrySpot(BingoEntrySpot::class.java)
     .addSpotFactory(
-        SampleNames.RoomSpotType,                      // Stable type -- selected by this name when creating.
+        // Stable type -- selected by this name when creating.
+        SampleNames.RoomSpotType,
         BingoRoom::class.java,
     ) { factory ->
         factory.executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
@@ -108,7 +110,8 @@ two together.
 // Instance Spot -- no create call. Sending to that ID creates it if it's missing.
 val allocated = spotClient
     .requestToSpot("match:$levelBucket", ReserveBingoRoomReq())
-    .instanceSpot(SampleNames.MatchmakerSpotType) // The intent that creation is OK if it's missing.
+    // The intent that creation is OK if it's missing.
+    .instanceSpot(SampleNames.MatchmakerSpotType)
     .inMesh(SampleNames.MatchmakingMeshName)
     .submit(ReserveBingoRoomRes::class.java)
     .await()
@@ -117,7 +120,8 @@ val allocated = spotClient
 val created = spots
     .getOrCreate(allocated.roomId, SampleNames.RoomSpotType)
     .inMesh(SampleNames.PlayMeshName)
-    .request(allocated.settings)     // Delivered to the new Spot's onCreate.
+    // Delivered to the new Spot's onCreate.
+    .request(allocated.settings)
     .submit()
     .await()
 ```
@@ -137,7 +141,8 @@ val mesh = options.addRouteMesh("play")
     .setRoutingIdPrefix("play")
 
 mesh.objects().server()
-    .addEntrySpot(PlayEntrySpot::class.java) // Registers the Entry Spot an Actor is placed in first.
+    // Registers the Entry Spot an Actor is placed in first.
+    .addEntrySpot(PlayEntrySpot::class.java)
     .addSpotFactory("game-room", GameRoom::class.java) { factory ->
         factory.executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE).disableRelocation()
     }
@@ -225,9 +230,11 @@ creation is the point, like opening a new room. The result is one of two: it was
 
 ```kotlin
 val created = spots
-    .create("game-room")                  // Selects the factory and placement candidates by the stable type.
+    // Selects the factory and placement candidates by the stable type.
+    .create("game-room")
     .inMesh("play")
-    .request(CreateGame("ranked"))        // The create request delivered to onCreate.
+    // The create request delivered to onCreate.
+    .request(CreateGame("ranked"))
     .timeout(Duration.ofSeconds(10))
     .submit()
     .await()
@@ -236,7 +243,8 @@ if (created.state() == ZLinkSpotCreateState.REJECTED) {
     error("Game creation was rejected.")
 }
 
-val spotId = created.spot().spotId() // Use only the global SpotId for messaging from here on.
+// Use only the global SpotId for messaging from here on.
+val spotId = created.spot().spotId()
 ```
 
 > **See it in a sample — [TicTacToe](../../../common/sample/tictactoe/README.en.md).** This
@@ -257,13 +265,16 @@ attempt only once, so the application doesn't have to guard against the race its
 val result = spots
     .getOrCreate("lobby-eu-1", "lobby")
     .inMesh("play")
-    .request(CreateLobby("eu")) // Not delivered if this ends as EXISTING.
+    // Not delivered if this ends as EXISTING.
+    .request(CreateLobby("eu"))
     .submit()
     .await()
 
 when (result.state()) {
-    ZLinkSpotCreateState.EXISTING -> { }  // Uses the lobby that already existed, as-is.
-    ZLinkSpotCreateState.CREATED -> { }   // This call created it.
+    // Uses the lobby that already existed, as-is.
+    ZLinkSpotCreateState.EXISTING -> { }
+    // This call created it.
+    ZLinkSpotCreateState.CREATED -> { }
     // The create callback rejected it -- no Ready Spot.
     ZLinkSpotCreateState.REJECTED -> error("Lobby creation was rejected.")
 }
@@ -346,7 +357,8 @@ The four branches in their minimal form look like this.
 // A packet addressed to the Spot -- the first argument is the target Spot instance.
 class ChatHandler : ZLinkSpotPacketHandler<GameRoom, Chat> {
     override suspend fun handle(spot: GameRoom, message: Chat) {
-        spot.appendChat(message.text) // Touches Spot state directly. No lock needed.
+        // Touches Spot state directly. No lock needed.
+        spot.appendChat(message.text)
     }
 }
 
@@ -366,7 +378,8 @@ class ScoreHandler : ZLinkSpotSubscriptionHandler<GameRoom, ScoreChanged> {
 class PlaceMarkHandler : ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
     override suspend fun handle(
         spot: GameRoom,
-        actor: PlayerActor,             // The Actor that received this message.
+        // The Actor that received this message.
+        actor: PlayerActor,
         messageContext: ZLinkMessageContext,
         message: PlaceMark,
     ) {
@@ -387,7 +400,8 @@ class GameRoom(private val spotContext: ZLinkSpotContext) : ZLinkSpot {
     override fun context(): ZLinkSpotContext = spotContext
 
     override fun configure() {
-        spotContext.handlers().addHandler(ChatHandler::class.java) // Registers the Spot send handler.
+        // Registers the Spot send handler.
+        spotContext.handlers().addHandler(ChatHandler::class.java)
         // The subscription topic is set by @ZLinkSpotSubscription on ScoreHandler.
         spotContext.handlers().addHandler(ScoreHandler::class.java)
     }
@@ -539,15 +553,18 @@ one, it can be omitted.
 // A mesh with multiple types registered -- specify the stable type for which factory creates it.
 val match = spotClient
     .requestToSpot("bronze", FindMatch(playerId))
-    .instanceSpot("matchmaker") // Prepares it with this stable type's factory if the target is missing.
-    .inMesh("matchmaking")      // Picks the mesh for initial placement.
+    // Prepares it with this stable type's factory if the target is missing.
+    .instanceSpot("matchmaker")
+    // Picks the mesh for initial placement.
+    .inMesh("matchmaking")
     .submit(MatchResult::class.java)
     .await()
 
 // A mesh with only one type registered -- omit it and the Framework picks that sole type.
 val single = spotClient
     .requestToSpot("bronze", FindMatch(playerId))
-    .instanceSpot()             // Prepares it with the only type registered on the target node.
+    // Prepares it with the only type registered on the target node.
+    .instanceSpot()
     .inMesh("matchmaking")
     .submit(MatchResult::class.java)
     .await()
@@ -602,8 +619,10 @@ val options = ZLinkTimerOptions()
     .setStopOnUnhandledException(false)
 
 gameTick = spotContext.addTimer(
-    "game-tick",                    // A name unique within the same Spot.
-    Duration.ofSeconds(1),          // The period. ZLinkConfigurationException if <= 0.
+    // A name unique within the same Spot.
+    "game-tick",
+    // The period. ZLinkConfigurationException if <= 0.
+    Duration.ofSeconds(1),
     GameTickHandler::class.java,
     options).await()
 
@@ -662,7 +681,8 @@ number of skipped ticks.
 ```kotlin
 override suspend fun handle(spot: GameRoom, tick: ZLinkTimerTick) {
     if (tick.delay() > Duration.ofMillis(500)) {
-        spot.reportLag(tick.delay(), tick.skippedTicks()) // Report load if the delay is large.
+        // Report load if the delay is large.
+        spot.reportLag(tick.delay(), tick.skippedTicks())
     }
     spot.tick()
 }
@@ -701,10 +721,12 @@ thread,** use `RunCpuWorker`; if it's **asynchronous code that awaits completion
 class BuildSnapshotHandler : ZLinkSpotRequestHandler<GameRoom, BuildSnapshot, SnapshotReply> {
 
     override suspend fun handle(spot: GameRoom, request: BuildSnapshot): SnapshotReply {
-        val board = spot.copyBoard() // Copy Spot state first, while still in the turn.
+        // Copy Spot state first, while still in the turn.
+        val board = spot.copyBoard()
 
         val packed = spot.context()
-            .runCpuWorker { SnapshotCodec.compress(board) } // Heavy synchronous computation.
+            // Heavy synchronous computation.
+            .runCpuWorker { SnapshotCodec.compress(board) }
             .yield()
             .await()
 
@@ -792,7 +814,8 @@ the Framework calls `capture` at that point.
 ```kotlin
 class RoundTickHandler : ZLinkSpotTimerHandler<GameRoom> {
     override suspend fun handle(spot: GameRoom, tick: ZLinkTimerTick) {
-        if (!spot.tryFinishRound()) return // Don't signal while a round is still in progress.
+        // Don't signal while a round is still in progress.
+        if (!spot.tryFinishRound()) return
 
         // The point where the round ended and state was settled. This must be the last Framework call of the turn.
         spot.context().relocationReady().defer()

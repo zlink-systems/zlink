@@ -16,7 +16,9 @@ that an existing web service otherwise takes on when it adds real-time features.
 
     Game servers make this problem clearest. The web shares a single shape — "respond when
     a request comes in" — which let standard frameworks like Spring and `ASP.NET Core`
-    take hold. Game servers are different. The genre itself decides the topology: a board
+    take hold.
+
+    Game servers are different. The genre itself decides the topology: a board
     game's room-based matching, a MORPG's room/stage split from the lobby, an MMORPG's zone
     mesh and mass broadcast. With no shape to converge on, every team has redesigned its
     own topology starting from the socket layer.
@@ -32,7 +34,9 @@ that an existing web service otherwise takes on when it adds real-time features.
 
     So for a long time the choice narrowed to two — build all of this yourself from
     scratch, or move to a separate runtime, a game server engine, and relearn everything
-    from how you write code to how you deploy and operate it. The industry has actually
+    from how you write code to how you deploy and operate it.
+
+    The industry has actually
     used four major configurations, and in ZLink all four combine on top of one
     declarative model. How the four map to each other is covered in
     [Overview](dotnet/guide/server/01-overview.en.md) chapter 2.
@@ -42,28 +46,36 @@ that an existing web service otherwise takes on when it adds real-time features.
 This code runs **inside a dungeon room**: when a boss is defeated, it applies part of the
 reward to the player's guild as well. The first handler runs on the player side — it applies
 the kill reward to the player, then sends a request to the guild. The second handles that
-request in the guild Instance Spot, applying it without synchronization. This makes two
-things clear. **There's no lock** — both handlers already run serially inside their own
-spots. And **the async call reads like synchronous code** — the player-side request to the
-guild is just the next line, with no callback or futures composition.
+request in the guild Instance Spot, applying it without synchronization.
+
+This makes two things clear. **There's no lock** — both handlers already run serially inside
+their own spots. And **the async call reads like synchronous code** — the player-side request
+to the guild is just the next line, with no callback or futures composition.
 
 === "C#/.NET"
 
     ```csharp
+    using Zlink.Framework.Contracts.Spots;
+
     // Inside the dungeon room -- the handler that processes a boss kill.
-    public sealed class DefeatBossHandler
+    public sealed class DefeatBossHandler(IZLinkSpotClient spots)
         : IZLinkSpotRequestHandler<PlayerSpot, DefeatBossRequest, DefeatBossResult>
     {
         public async ValueTask<DefeatBossResult> HandleAsync(
-            PlayerSpot player, DefeatBossRequest request, IZLinkMessageContext context, CancellationToken ct)
+            PlayerSpot player,
+            DefeatBossRequest request,
+            CancellationToken ct)
         {
-            player.Exp += request.RewardExp;                // No lock -- serial inside this player's spot
+            // No lock -- serial inside this player's spot.
+            player.Exp += request.RewardExp;
 
-            var reply = await context.Channel
-                .RequestToSpot(player.GuildId, new GuildBenefitRequest(request.RewardExp / 10))
+            var benefit = new GuildBenefitRequest(request.RewardExp / 10);
+
+            // The async call reads just like the next line too.
+            var reply = await spots.RequestToSpot(player.GuildId, benefit)
                 .InstanceSpot("guild-workflow")
                 .InMesh("guild")
-                .Async<GuildBenefitResult>(ct);               // The async call reads just like the next line too
+                .Async<GuildBenefitResult>(ct);
 
             return new DefeatBossResult(reply.Ok);
         }
@@ -71,14 +83,21 @@ guild is just the next line, with no callback or futures composition.
     ```
 
     ```csharp
-    // One spot, cold-activated by guild_id, receives every request for this guild serially.
+    using Zlink.Framework.Contracts.Spots;
+
+    // One spot, cold-activated by guild id, receives every request for this
+    // guild serially.
     public sealed class GuildBenefitHandler
         : IZLinkSpotRequestHandler<GuildSpot, GuildBenefitRequest, GuildBenefitResult>
     {
         public ValueTask<GuildBenefitResult> HandleAsync(
-            GuildSpot guild, GuildBenefitRequest request, IZLinkMessageContext context, CancellationToken ct)
+            GuildSpot guild,
+            GuildBenefitRequest request,
+            CancellationToken ct)
         {
-            guild.Exp += request.Exp;                 // No lock -- serial inside this guild's spot
+            // No lock -- serial inside this guild's spot.
+            guild.Exp += request.Exp;
+
             return ValueTask.FromResult(new GuildBenefitResult(true));
         }
     }
@@ -87,62 +106,144 @@ guild is just the next line, with no callback or futures composition.
 === "C++"
 
     ```cpp
-    // Inside the dungeon room -- the handler that processes a boss kill.
-    task_t<defeat_boss_result_t> player_spot_t::defeat_boss (const defeat_boss_request_t &request)
+    #include <zlink/framework.hpp>
+
+    using namespace zlink::framework;
+
+    // Inside the dungeon room -- the spot that processes a boss kill.
+    class player_spot_t : public instance_spot_t
     {
-        _exp += request.reward_exp;                          // No lock -- serial inside this player's spot
+      public:
+        player_spot_t (instance_spot_context_t context, route_client_t &routes) :
+            _context (std::move (context)), _routes (routes)
+        {
+        }
 
-        auto reply = co_await channel.request_to_spot (_guild_id, guild_benefit_request_t{request.reward_exp / 10})
-                         .instance_spot ("guild-workflow")
-                         .in_mesh ("guild")
-                         .submit<guild_benefit_result_t> ();  // The async call reads just like the next line too
+        instance_spot_context_t &context () noexcept override { return _context; }
 
-        co_return defeat_boss_result_t{reply.ok};
-    }
+        void configure () override
+        {
+            _context.handlers ()
+              .add_handler<&player_spot_t::defeat_boss> (
+                defeat_boss_request_t::packet_name);
+        }
+
+        task_t<defeat_boss_result_t> defeat_boss (const defeat_boss_request_t &request)
+        {
+            // No lock -- serial inside this player's spot.
+            _exp += request.reward_exp;
+
+            const guild_benefit_request_t benefit{request.reward_exp / 10};
+
+            // The async call reads just like the next line too.
+            auto reply = co_await _routes.request_to_spot (_guild_id, benefit)
+                           .instance_spot ("guild-workflow")
+                           .in_mesh ("guild")
+                           .async<guild_benefit_result_t> ();
+
+            co_return defeat_boss_result_t{reply.ok};
+        }
+
+      private:
+        instance_spot_context_t _context;
+        route_client_t &_routes;
+        std::string _guild_id;
+        long _exp = 0;
+    };
     ```
 
     ```cpp
-    // One spot, cold-activated by guild_id, receives every request for this guild serially.
-    task_t<guild_benefit_result_t> guild_workflow_spot_t::apply_benefit (const guild_benefit_request_t &request)
+    #include <zlink/framework.hpp>
+
+    using namespace zlink::framework;
+
+    // One spot, cold-activated by guild id, receives every request for this
+    // guild serially.
+    class guild_workflow_spot_t : public instance_spot_t
     {
-        _exp += request.exp;                     // No lock -- serial inside this guild's spot
-        co_return guild_benefit_result_t{true};
-    }
+      public:
+        explicit guild_workflow_spot_t (instance_spot_context_t context) :
+            _context (std::move (context))
+        {
+        }
+
+        instance_spot_context_t &context () noexcept override { return _context; }
+
+        void configure () override
+        {
+            _context.handlers ()
+              .add_handler<&guild_workflow_spot_t::apply_benefit> (
+                guild_benefit_request_t::packet_name);
+        }
+
+        task_t<guild_benefit_result_t> apply_benefit (
+          const guild_benefit_request_t &request)
+        {
+            // No lock -- serial inside this guild's spot.
+            _exp += request.exp;
+
+            co_return guild_benefit_result_t{true};
+        }
+
+      private:
+        instance_spot_context_t _context;
+        long _exp = 0;
+    };
     ```
 
 === "Java"
 
     ```java
+    import java.util.concurrent.CompletionStage;
+    import systems.zlink.framework.channels.ZLinkRouteClient;
+    import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
+
     // Inside the dungeon room -- the handler that processes a boss kill.
-    public final class DefeatBossHandler
-        implements ZLinkSpotRequestHandler<PlayerSpot, DefeatBossRequest, DefeatBossResult> {
+    public final class DefeatBossHandler implements
+        ZLinkSpotRequestHandler<PlayerSpot, DefeatBossRequest, DefeatBossResult> {
+
+        private final ZLinkRouteClient channels;
+
+        public DefeatBossHandler(ZLinkRouteClient channels) {
+            this.channels = channels;
+        }
 
         @Override
         public CompletionStage<DefeatBossResult> handle(
-            PlayerSpot player, DefeatBossRequest request, ZLinkMessageContext context) {
+            PlayerSpot player, DefeatBossRequest request) {
 
-            player.setExp(player.getExp() + request.rewardExp());   // No lock -- serial
+            // No lock -- serial inside this player's spot.
+            player.setExp(player.getExp() + request.rewardExp());
 
-            return context.channel()
-                .requestToSpot(player.getGuildId(), new GuildBenefitRequest(request.rewardExp() / 10))
+            var benefit = new GuildBenefitRequest(request.rewardExp() / 10);
+
+            // The async call chains just like the next line too.
+            return channels.requestToSpot(player.getGuildId(), benefit)
                 .instanceSpot("guild-workflow")
                 .inMesh("guild")
-                .submit(GuildBenefitResult.class)              // The async call chains just like the next line too
+                .submit(GuildBenefitResult.class)
                 .thenApply(reply -> new DefeatBossResult(reply.ok()));
         }
     }
     ```
 
     ```java
-    // One spot, cold-activated by guild_id, receives every request for this guild serially.
-    public final class GuildBenefitHandler
-        implements ZLinkSpotRequestHandler<GuildSpot, GuildBenefitRequest, GuildBenefitResult> {
+    import java.util.concurrent.CompletableFuture;
+    import java.util.concurrent.CompletionStage;
+    import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
+
+    // One spot, cold-activated by guild id, receives every request for this
+    // guild serially.
+    public final class GuildBenefitHandler implements
+        ZLinkSpotRequestHandler<GuildSpot, GuildBenefitRequest, GuildBenefitResult> {
 
         @Override
         public CompletionStage<GuildBenefitResult> handle(
-            GuildSpot guild, GuildBenefitRequest request, ZLinkMessageContext context) {
+            GuildSpot guild, GuildBenefitRequest request) {
 
-            guild.setExp(guild.getExp() + request.exp());   // No lock -- serial
+            // No lock -- serial inside this guild's spot.
+            guild.setExp(guild.getExp() + request.exp());
+
             return CompletableFuture.completedFuture(new GuildBenefitResult(true));
         }
     }
@@ -151,35 +252,52 @@ guild is just the next line, with no callback or futures composition.
 === "Kotlin"
 
     ```kotlin
+    import java.util.concurrent.CompletionStage
+    import systems.zlink.framework.channels.ZLinkRouteClient
+    import systems.zlink.framework.spots.ZLinkSpotRequestHandler
+
     // Inside the dungeon room -- the handler that processes a boss kill.
-    class DefeatBossHandler : ZLinkSpotRequestHandler<PlayerSpot, DefeatBossRequest, DefeatBossResult> {
+    class DefeatBossHandler(
+        private val channels: ZLinkRouteClient,
+    ) : ZLinkSpotRequestHandler<PlayerSpot, DefeatBossRequest, DefeatBossResult> {
 
-        override suspend fun handle(
-            player: PlayerSpot, request: DefeatBossRequest, context: ZLinkMessageContext
-        ): DefeatBossResult {
-            player.exp += request.rewardExp              // No lock -- serial inside this player's spot
+        override fun handle(
+            player: PlayerSpot,
+            request: DefeatBossRequest,
+        ): CompletionStage<DefeatBossResult> {
+            // No lock -- serial inside this player's spot.
+            player.exp += request.rewardExp
 
-            val reply = context.channel
-                .requestToSpot(player.guildId, GuildBenefitRequest(request.rewardExp / 10))
+            val benefit = GuildBenefitRequest(request.rewardExp / 10)
+
+            // The async call chains just like the next line too.
+            return channels.requestToSpot(player.guildId, benefit)
                 .instanceSpot("guild-workflow")
                 .inMesh("guild")
                 .submit(GuildBenefitResult::class.java)
-                .await()                                       // The async call reads just like the next line too
-
-            return DefeatBossResult(reply.ok)
+                .thenApply { reply -> DefeatBossResult(reply.ok) }
         }
     }
     ```
 
     ```kotlin
-    // One spot, cold-activated by guild_id, receives every request for this guild serially.
-    class GuildBenefitHandler : ZLinkSpotRequestHandler<GuildSpot, GuildBenefitRequest, GuildBenefitResult> {
+    import java.util.concurrent.CompletableFuture
+    import java.util.concurrent.CompletionStage
+    import systems.zlink.framework.spots.ZLinkSpotRequestHandler
 
-        override suspend fun handle(
-            guild: GuildSpot, request: GuildBenefitRequest, context: ZLinkMessageContext
-        ): GuildBenefitResult {
-            guild.exp += request.exp         // No lock -- serial inside this guild's spot
-            return GuildBenefitResult(true)
+    // One spot, cold-activated by guild id, receives every request for this
+    // guild serially.
+    class GuildBenefitHandler :
+        ZLinkSpotRequestHandler<GuildSpot, GuildBenefitRequest, GuildBenefitResult> {
+
+        override fun handle(
+            guild: GuildSpot,
+            request: GuildBenefitRequest,
+        ): CompletionStage<GuildBenefitResult> {
+            // No lock -- serial inside this guild's spot.
+            guild.exp += request.exp
+
+            return CompletableFuture.completedFuture(GuildBenefitResult(true))
         }
     }
     ```
@@ -187,20 +305,30 @@ guild is just the next line, with no callback or futures composition.
 === "Node/TypeScript"
 
     ```typescript
+    import { Inject } from '@nestjs/common';
+    import { ZLINK_SPOT_OUTBOUND, zlinkRequestHandler } from '@zlink-systems/nestjs';
+    import type {
+      ZLinkRequestHandler,
+      ZLinkSpotOutbound,
+    } from '@zlink-systems/framework';
+
     // Inside the dungeon room -- the handler that processes a boss kill.
+    @zlinkRequestHandler('play', PacketNames.defeatBossRequest)
     export class DefeatBossHandler
-      implements ZLinkSpotRequestHandler<PlayerSpot, DefeatBossRequest, DefeatBossResult> {
+      implements ZLinkRequestHandler<DefeatBossRequest, DefeatBossResult> {
 
-      async handle(
-        player: PlayerSpot, request: DefeatBossRequest, context: ZLinkMessageContext
-      ): Promise<DefeatBossResult> {
-        player.exp += request.rewardExp;                     // No lock -- serial inside this player's spot
+      constructor(
+        @Inject(ZLINK_SPOT_OUTBOUND)
+        private readonly outbound: ZLinkSpotOutbound,
+      ) {}
 
-        const reply = await context.channel
-          .requestToSpot(player.guildId, { exp: request.rewardExp / 10 })
+      async handle(request: DefeatBossRequest): Promise<DefeatBossResult> {
+        // The async call reads just like the next line too.
+        const reply = await this.outbound
+          .requestToSpot(request.guildId, { exp: request.rewardExp / 10 })
           .instanceSpot('guild-workflow')
           .inMesh('guild')
-          .submit<GuildBenefitResult>();                        // The async call reads just like the next line too
+          .submit<GuildBenefitResult>();
 
         return { ok: reply.ok };
       }
@@ -208,14 +336,19 @@ guild is just the next line, with no callback or futures composition.
     ```
 
     ```typescript
-    // One spot, cold-activated by guild_id, receives every request for this guild serially.
-    export class GuildBenefitHandler
-      implements ZLinkSpotRequestHandler<GuildSpot, GuildBenefitRequest, GuildBenefitResult> {
+    import { zlinkRequestHandler } from '@zlink-systems/nestjs';
+    import type { ZLinkRequestHandler } from '@zlink-systems/framework';
 
-      async handle(
-        guild: GuildSpot, request: GuildBenefitRequest, context: ZLinkMessageContext
-      ): Promise<GuildBenefitResult> {
-        guild.exp += request.exp;                 // No lock -- serial inside this guild's spot
+    // One spot, cold-activated by guild id, receives every request for this
+    // guild serially.
+    @zlinkRequestHandler('guild', PacketNames.guildBenefitRequest)
+    export class GuildBenefitHandler
+      implements ZLinkRequestHandler<GuildBenefitRequest, GuildBenefitResult> {
+
+      async handle(request: GuildBenefitRequest): Promise<GuildBenefitResult> {
+        // No lock -- serial inside this guild's spot.
+        applyGuildExp(request.guildId, request.exp);
+
         return { ok: true };
       }
     }

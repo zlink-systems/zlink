@@ -114,16 +114,20 @@ internal static partial class NativeMethods
     internal static extern void zlink_version(out int major, out int minor,
         out int patch);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern IntPtr zlink_ctx_new();
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern int zlink_ctx_term(IntPtr context);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern int zlink_ctx_shutdown(IntPtr context);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern int zlink_ctx_set(IntPtr context, int option,
         int optval);
 
@@ -139,27 +143,38 @@ internal static partial class NativeMethods
     internal static extern int zlink_ctx_get_data(IntPtr context, int option,
         out ulong optval, ref nuint optvallen);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern int zlink_ctx_get(IntPtr context, int option,
         out int errorOut);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern int zlink_ctx_auto_hwm_recalculate(IntPtr context);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern int zlink_ctx_get_auto_hwm_budget_snapshot(
         IntPtr context, ref ZlinkAutoHwmBudgetSnapshot snapshot);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern int zlink_ctx_reset_auto_hwm_budget_metrics(
         IntPtr context);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern int zlink_close(IntPtr socket);
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int zlink_errno();
+
+    // Every import whose caller consumes errno sets SetLastError so the CLR
+    // snapshots it at the return boundary. Imports whose call sites use only
+    // their semantic result or explicit errorOut stay on the cheaper path.
+    internal static int GetLastPInvokeError() =>
+        Marshal.GetLastPInvokeError();
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr zlink_strerror(int errnum);
@@ -167,12 +182,12 @@ internal static partial class NativeMethods
     // HOT PATH: these marked message helpers are bounded, non-allocating, and
     // cannot call managed code. Keep allocating init_size, close, and every
     // potentially blocking transport call on the normal GC transition path.
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName, SetLastError = true)]
     [SuppressGCTransition]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int zlink_msg_init(ref ZlinkMsg msg);
 
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName, SetLastError = true)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int zlink_msg_init_size(ref ZlinkMsg msg,
         nuint size);
@@ -185,13 +200,14 @@ internal static partial class NativeMethods
         CallingConvention = CallingConvention.Cdecl)]
     internal static extern int zlink_msg_close(IntPtr msg);
 
-    [LibraryImport(LibraryName)]
+    [LibraryImport(LibraryName, SetLastError = true)]
     [SuppressGCTransition]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int zlink_msg_move(ref ZlinkMsg dest,
         ref ZlinkMsg src);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern int zlink_msg_copy(ref ZlinkMsg dest,
         ref ZlinkMsg src);
 
@@ -220,7 +236,8 @@ internal static partial class NativeMethods
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void zlink_multipart_close(IntPtr parts, nuint count);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern IntPtr zlink_atomic_counter_new();
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
@@ -239,7 +256,8 @@ internal static partial class NativeMethods
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void zlink_atomic_counter_destroy(ref IntPtr counter);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern IntPtr zlink_stopwatch_start();
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]

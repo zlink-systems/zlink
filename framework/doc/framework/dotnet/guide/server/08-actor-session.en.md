@@ -7,6 +7,8 @@ title: "8. Session and Actor Binding · C#/.NET"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 8. Session and Actor Binding
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 7. Actor and Spot](07-actor-spot.en.md) | [Next: 9. STREAM](09-stream.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "8. Session and Actor Binding · C#/.NET"
 <!-- language-switch:start -->
 View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/08-actor-session.en.md) · [Java](../../../java/guide/server/08-actor-session.en.md) · [Kotlin](../../../kotlin/guide/server/08-actor-session.en.md) · [Node/TypeScript](../../../node/guide/server/08-actor-session.en.md)
 <!-- language-switch:end -->
-
-# 8. Session and Actor Binding
 
 > **The documents that own this chapter's contract** —
 > [Session Actor dispatch](../../../common/spec/server/04-session/02-session-actor-binding.en.md) owns the
@@ -77,11 +77,13 @@ public sealed class AuthenticateHandler(IZLinkActorManager actors)
 
         await context.Actors.BindOrGetAsync(
             actor,
-            cancellationToken); // Returns the existing route if the same exact incarnation is already bound.
+            // Returns the existing route if the same exact incarnation is already bound.
+            cancellationToken);
 
         await context.Client
             .Reply(new Authenticated(actor.ActorId))
-            .Async(cancellationToken); // Submits the current request's one-shot reply.
+            // Submits the current request's one-shot reply.
+            .Async(cancellationToken);
     }
 }
 ```
@@ -102,7 +104,8 @@ public sealed class PlaySession(IZLinkSessionContext context) : IZLinkSession
     public void Configure()
     {
         Context.Handlers
-            .AddHandler<AuthenticateHandler>(); // Registers the packet to handle before Actor binding.
+            // Registers the packet to handle before Actor binding.
+            .AddHandler<AuthenticateHandler>();
     }
 
     public async ValueTask OnDispatchAsync(
@@ -125,7 +128,8 @@ public sealed class PlaySession(IZLinkSessionContext context) : IZLinkSession
 
         await actor.RelayAsync(
             payload,
-            cancellationToken); // Hands the Framework-owned payload to the Actor handler without decoding it.
+            // Hands the Framework-owned payload to the Actor handler without decoding it.
+            cancellationToken);
     }
 
     public ValueTask OnConnectedAsync(CancellationToken cancellationToken)
@@ -190,7 +194,8 @@ public sealed class StateChangedHandler
         await actor.Context.BoundSession
             .Send(new GameStateNotify(message.State))
             .Metadata("revision", message.Revision.ToString())
-            .Async(cancellationToken); // Waits for local admission on the current bound session.
+            // Waits for local admission on the current bound session.
+            .Async(cancellationToken);
     }
 }
 ```

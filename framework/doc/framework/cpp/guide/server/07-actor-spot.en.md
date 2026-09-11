@@ -7,6 +7,8 @@ title: "7. Actor and Spot · C++"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 7. Actor and Spot
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 6. Spot](06-spot.en.md) | [Next: 8. Session and Actor Binding](08-actor-session.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "7. Actor and Spot · C++"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/07-actor-spot.en.md) · **C++** · [Java](../../../java/guide/server/07-actor-spot.en.md) · [Kotlin](../../../kotlin/guide/server/07-actor-spot.en.md) · [Node/TypeScript](../../../node/guide/server/07-actor-spot.en.md)
 <!-- language-switch:end -->
-
-# 7. Actor and Spot
 
 > **The documents that own this chapter's contract** —
 > [Actor Model](../../../common/spec/server/03-spot-actor/04-actor-model.en.md) and
@@ -292,14 +292,16 @@ In its minimal shape, it looks like this.
 
 ```cpp
 // C++ registers a member function on the Entry Spot instead of a handler class.
-task_t<void> play_entry_spot_t::join_game (player_actor_t &actor,   // The Actor requesting the join.
+// The Actor requesting the join.
+task_t<void> play_entry_spot_t::join_game (player_actor_t &actor,
                                            message_context_t &,
                                            const join_game_req_t &request)
 {
     actor.context ()
       .join_spot (request.spot_id, join_game_request_t{request.seat})
       .timeout (std::chrono::seconds (5))
-      .defer (); // Starts the join once the current handler succeeds.
+      // Starts the join once the current handler succeeds.
+      .defer ();
     co_return;
 }
 ```

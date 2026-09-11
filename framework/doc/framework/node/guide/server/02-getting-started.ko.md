@@ -7,6 +7,8 @@ title: "2. 시작하기 · Node/TypeScript"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 2. 시작하기
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 1. 개요](01-overview.ko.md) | [다음: 3. 핵심 개념](03-concepts.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "2. 시작하기 · Node/TypeScript"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/02-getting-started.ko.md) · [C++](../../../cpp/guide/server/02-getting-started.ko.md) · [Java](../../../java/guide/server/02-getting-started.ko.md) · [Kotlin](../../../kotlin/guide/server/02-getting-started.ko.md) · **Node/TypeScript**
 <!-- language-switch:end -->
-
-# 2. 시작하기
 
 > **이 장의 계약 소유 문서** — 없다. 설치하고 첫 동작을 확인하는 절차 안내다.
 
@@ -68,15 +68,19 @@ export interface Greeting { readonly text: string; }
       useFactory: () => {
         const builder = zlinkFramework();
 
-        const mesh = builder.addRouteMesh('services')   // mesh 이름을 정한다.
-          .listen('tcp://0.0.0.0:7101');                // 다른 process가 접속할 자기 endpoint.
-        mesh.channel('greeting').server()               // 이 process가 "greeting"을 처리한다.
+        // mesh 이름을 정한다.
+        const mesh = builder.addRouteMesh('services')
+          // 다른 process가 접속할 자기 endpoint.
+          .listen('tcp://0.0.0.0:7101');
+        // 이 process가 "greeting"을 처리한다.
+        mesh.channel('greeting').server()
           .addRequestHandler(PacketNames.hello, HelloHandler);
 
         return builder.build();
       }
     }),
-    zlinkModule(__dirname, { })                         // handler를 provider로 모은다.
+    // handler를 provider로 모은다.
+    zlinkModule(__dirname, { })
   ]
 })
 export class ServerModule {}
@@ -97,9 +101,12 @@ export class HelloHandler implements ZLinkRequestHandler<Hello, Greeting> {
 ZLinkModule.forRootFactory({
   useFactory: () => {
     const builder = zlinkFramework();
-    const mesh = builder.addRouteMesh('services').listen('tcp://0.0.0.0:7102');  // 자기 endpoint도 필요하다.
-    mesh.channel('greeting').client();                      // 호출만 하는 쪽은 client.
-    mesh.peerConnections().connect('tcp://127.0.0.1:7101');   // 수동 연결 — server endpoint를 직접 적는다.
+    // 자기 endpoint도 필요하다.
+    const mesh = builder.addRouteMesh('services').listen('tcp://0.0.0.0:7102');
+    // 호출만 하는 쪽은 client.
+    mesh.channel('greeting').client();
+    // 수동 연결 — server endpoint를 직접 적는다.
+    mesh.peerConnections().connect('tcp://127.0.0.1:7101');
     return builder.build();
   }
 })
@@ -193,15 +200,19 @@ async create(@Body() request: CreateGameHttpReq): Promise<CreateGameHttpRes> {
   const gameName = request.gameName?.trim() || SampleDefaults.gameName;
 
   const created = await this.spots
-    .create(SampleTypes.gameSpot)         // 이 stable type을 제공하는 node가 후보가 된다.
-    .inMesh(SampleNodes.mesh)             // Object를 만들 RouteMesh를 선택한다.
+    // 이 stable type을 제공하는 node가 후보가 된다.
+    .create(SampleTypes.gameSpot)
+    // Object를 만들 RouteMesh를 선택한다.
+    .inMesh(SampleNodes.mesh)
     .request(tictactoeGameCreateReq(
       gameName,
-      SampleDefaults.requiredLevel))      // 새 Spot의 onCreate에 전달할 최초 설정이다.
+      // 새 Spot의 onCreate에 전달할 최초 설정이다.
+      SampleDefaults.requiredLevel))
     .submit();
 
   return createGameHttpRes(
-    created.spot.spotId,                  // Framework가 발급한 SpotId를 room id로 사용한다.
+    // Framework가 발급한 SpotId를 room id로 사용한다.
+    created.spot.spotId,
     this.settings.playEndpoints,
     this.settings.playNodes,
     gameName,

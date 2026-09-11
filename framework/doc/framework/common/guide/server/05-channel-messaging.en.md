@@ -153,7 +153,8 @@ For example, for an order service, gRPC's `rpc PlaceOrder(...)` turns into this.
 
     // Client: inject IZLinkRouteClient instead of a gRPC stub
     var placed = await client
-        .RequestToChannel("orders",                 // The target is just one ChannelName. No address, no MeshName.
+        // The target is just one ChannelName. No address, no MeshName.
+        .RequestToChannel("orders",
             new PlaceOrder("order-1042", "acct-77", 18742))
         .Async<OrderPlaced>(ct);
     ```
@@ -338,14 +339,17 @@ receiving side is limited to Spots that subscribed to the same topic on that cha
     ```csharp
     // Publishing -- inside the TicTacToeGame spot.
     await Context.Outbound
-        .Publish(SampleTopics.PlayerMilestoneChannel,   // The ChannelName that decides delivery scope.
-                 SampleTopics.PlayerMilestone,          // The topic that picks which Spots receive it within that scope.
+        // The ChannelName that decides delivery scope.
+        .Publish(SampleTopics.PlayerMilestoneChannel,
+                 // The topic that picks which Spots receive it within that scope.
+                 SampleTopics.PlayerMilestone,
                  milestoneEvent)
         .Async(cancellationToken);
 
     // Subscribing -- when PlayEntrySpot starts.
     Context.Handlers.AddSubscribe<PlayerWinMilestoneEventHandler>(
-        SampleTopics.PlayerMilestoneChannel,            // Must match the publishing side's ChannelName/topic to receive it.
+        // Must match the publishing side's ChannelName/topic to receive it.
+        SampleTopics.PlayerMilestoneChannel,
         SampleTopics.PlayerMilestone);
     ```
 
@@ -354,14 +358,17 @@ receiving side is limited to Spots that subscribed to the same topic on that cha
     ```cpp
     // Publishing -- inside the game spot.
     co_await _context.outbound ()
-      .publish (sample_topics_t::player_milestone_channel, // The ChannelName that decides delivery scope.
-                sample_topics_t::player_milestone,         // The topic that picks which Spots receive it within that scope.
+      // The ChannelName that decides delivery scope.
+      .publish (sample_topics_t::player_milestone_channel,
+                // The topic that picks which Spots receive it within that scope.
+                sample_topics_t::player_milestone,
                 milestone_event)
       .async ();
 
     // Subscribing -- when the entry spot starts.
     _context.handlers ().add_subscribe<&play_entry_spot_t::on_player_win_milestone> (
-      sample_topics_t::player_milestone_channel, // Must match the publishing side's ChannelName/topic to receive it.
+      // Must match the publishing side's ChannelName/topic to receive it.
+      sample_topics_t::player_milestone_channel,
       sample_topics_t::player_milestone);
     ```
 
@@ -370,13 +377,16 @@ receiving side is limited to Spots that subscribed to the same topic on that cha
     ```java
     // Publishing -- inside the TicTacToeGame spot.
     context.outbound()
-        .publish(SampleTopics.PlayerMilestoneChannel, // The ChannelName that decides delivery scope.
-                 SampleTopics.PlayerMilestone,        // The topic that picks which Spots receive it within that scope.
+        // The ChannelName that decides delivery scope.
+        .publish(SampleTopics.PlayerMilestoneChannel,
+                 // The topic that picks which Spots receive it within that scope.
+                 SampleTopics.PlayerMilestone,
                  milestoneEvent)
         .submit();
 
     // Subscribing -- Java attaches the topic to the handler via annotation and registers with addHandler.
-    @ZLinkSpotSubscription(topic = SampleTopics.PlayerMilestone) // Must match the publishing side's topic to receive it.
+    // Must match the publishing side's topic to receive it.
+    @ZLinkSpotSubscription(topic = SampleTopics.PlayerMilestone)
     public final class PlayerWinMilestoneEventHandler
         implements ZLinkSpotSubscriptionHandler<PlayEntrySpot, PlayerWinMilestoneEvent> { /* ... */ }
 
@@ -389,14 +399,17 @@ receiving side is limited to Spots that subscribed to the same topic on that cha
     ```kotlin
     // Publishing -- inside the TicTacToeGame spot.
     context.outbound()
-        .publish(SampleTopics.PlayerMilestoneChannel, // The ChannelName that decides delivery scope.
-                 SampleTopics.PlayerMilestone,        // The topic that picks which Spots receive it within that scope.
+        // The ChannelName that decides delivery scope.
+        .publish(SampleTopics.PlayerMilestoneChannel,
+                 // The topic that picks which Spots receive it within that scope.
+                 SampleTopics.PlayerMilestone,
                  milestoneEvent)
         .submit()
         .await()
 
     // Subscribing -- Kotlin also uses the Java surface. Attach the topic via annotation and register with addHandler.
-    @ZLinkSpotSubscription(topic = SampleTopics.PlayerMilestone) // Must match the publishing side's topic to receive it.
+    // Must match the publishing side's topic to receive it.
+    @ZLinkSpotSubscription(topic = SampleTopics.PlayerMilestone)
     class PlayerWinMilestoneEventHandler :
         ZLinkSpotSubscriptionHandler<PlayEntrySpot, PlayerWinMilestoneEvent> { /* ... */ }
 
@@ -409,15 +422,18 @@ receiving side is limited to Spots that subscribed to the same topic on that cha
     ```typescript
     // Publishing -- inside the TicTacToeGame spot.
     await this.context.outbound
-      .publish(SampleTopics.playerMilestoneChannel, // The ChannelName that decides delivery scope.
-               SampleTopics.playerMilestone,        // The topic that picks which Spots receive it within that scope.
+      // The ChannelName that decides delivery scope.
+      .publish(SampleTopics.playerMilestoneChannel,
+               // The topic that picks which Spots receive it within that scope.
+               SampleTopics.playerMilestone,
                milestoneEvent)
       .submit();
 
     // Subscribing -- when PlayEntrySpot starts.
     this.context.handlers.addSubscribe(
       PlayerWinMilestoneEventHandler,
-      SampleTopics.playerMilestoneChannel, // Must match the publishing side's ChannelName/topic to receive it.
+      // Must match the publishing side's ChannelName/topic to receive it.
+      SampleTopics.playerMilestoneChannel,
       SampleTopics.playerMilestone);
     ```
 
@@ -764,20 +780,24 @@ This is convenient when one class holds several handler methods.
 === "C#/.NET"
 
     ```csharp
-    [ZLinkHandlerGroup("api")]   // Groups this class's methods as the "api" group. Registration decides which channel exposes it.
+    // Groups this class's methods as the "api" group. Registration decides which channel exposes it.
+    [ZLinkHandlerGroup("api")]
     public sealed class UserHandlers
     {
         private readonly IZLinkFanoutClient _publisher;
         public UserHandlers(IZLinkFanoutClient publisher) => _publisher = publisher;
 
-        [ZLinkRequest]   // The method attribute decides the handler kind (doesn't take a channel name)
+        // The method attribute decides the handler kind (doesn't take a channel name)
+        [ZLinkRequest]
         public ValueTask<GetUserReply> GetUserAsync(
-            GetUserRequest request,            // Argument order = (payload, context?, ct?) -- context/token can be omitted
+            // Argument order = (payload, context?, ct?) -- context/token can be omitted
+            GetUserRequest request,
             IZLinkMessageContext context,
             CancellationToken cancellationToken)
             => ValueTask.FromResult(new GetUserReply(request.AccountId, "alice"));
 
-        [ZLinkSend]   // A send handler -- returns ValueTask (no response). Contrast with request's ValueTask<TReply>.
+        // A send handler -- returns ValueTask (no response). Contrast with request's ValueTask<TReply>.
+        [ZLinkSend]
         public async ValueTask RefreshCacheAsync(
             RefreshUserCacheCommand command,
             IZLinkMessageContext context,
@@ -925,8 +945,10 @@ only in test/client scenarios.**
         // Runtime (handler) thread -- free it with await. Blocking (.Result/.GetAwaiter().GetResult()) is forbidden.
         var room = await _client
             .RequestToChannel("tictactoe.play", new CreateRoomRequest(request.GameName))
-            .Timeout(TimeSpan.FromSeconds(5))   // The cap on waiting for the reply.
-            .Async<CreateRoomReply>(ct);        // Awaits until the reply arrives and receives it.
+            // The cap on waiting for the reply.
+            .Timeout(TimeSpan.FromSeconds(5))
+            // Awaits until the reply arrives and receives it.
+            .Async<CreateRoomReply>(ct);
 
         return new CreateGameReply(room.RoomId, room.GameName);
     }
@@ -941,8 +963,10 @@ only in test/client scenarios.**
         auto room = co_await _client
                       .request_to_channel ("tictactoe.play",
                                            create_room_request_t{request.game_name})
-                      .timeout (std::chrono::seconds (5)) // The cap on waiting for the reply.
-                      .async<create_room_reply_t> ();    // Waits until the reply arrives.
+                      // The cap on waiting for the reply.
+                      .timeout (std::chrono::seconds (5))
+                      // Waits until the reply arrives.
+                      .async<create_room_reply_t> ();
 
         co_return create_game_reply_t{room.room_id, room.game_name};
     }
@@ -956,8 +980,10 @@ only in test/client scenarios.**
         // Runtime (handler) thread -- chain onto the CompletionStage. Don't block with join().
         return client
             .requestToChannel("tictactoe.play", new CreateRoomRequest(request.gameName()))
-            .timeout(Duration.ofSeconds(5))     // The cap on waiting for the reply.
-            .submit(CreateRoomReply.class)      // The chained step runs once the reply arrives.
+            // The cap on waiting for the reply.
+            .timeout(Duration.ofSeconds(5))
+            // The chained step runs once the reply arrives.
+            .submit(CreateRoomReply.class)
             .thenApply(room -> new CreateGameReply(room.roomId(), room.gameName()));
     }
     ```
@@ -969,9 +995,11 @@ only in test/client scenarios.**
         // Runtime (handler) thread -- free it with await. Don't use a blocking join.
         val room = client
             .requestToChannel("tictactoe.play", CreateRoomRequest(request.gameName))
-            .timeout(Duration.ofSeconds(5))     // The cap on waiting for the reply.
+            // The cap on waiting for the reply.
+            .timeout(Duration.ofSeconds(5))
             .submit(CreateRoomReply::class.java)
-            .await()                            // Waits until the reply arrives.
+            // Waits until the reply arrives.
+            .await()
 
         return CreateGameReply(room.roomId, room.gameName)
     }
@@ -984,8 +1012,10 @@ only in test/client scenarios.**
       // Runtime (handler) thread -- free it with await. There's no synchronous blocking.
       const room = await this.client
         .requestToChannel('tictactoe.play', createRoomRequest(request.gameName))
-        .timeout(5_000)                     // The cap on waiting for the reply.
-        .submit<CreateRoomReply>();         // Waits until the reply arrives.
+        // The cap on waiting for the reply.
+        .timeout(5_000)
+        // Waits until the reply arrives.
+        .submit<CreateRoomReply>();
 
       return createGameReply(room.roomId, room.gameName);
     }
@@ -1022,11 +1052,13 @@ The framework doesn't automatically open every discovered handler on every chann
     ```csharp
     builder.Services.AddZLinkFramework(options =>
     {
-        options.AddHandlersFromAssemblyOf<Program>(); // Discovers handler types
+        // Discovers handler types
+        options.AddHandlersFromAssemblyOf<Program>();
         var mesh = options.AddRouteMesh("services")
             .Listen("tcp://0.0.0.0:7101")
             .SetRoutingId(RoutingId.From("api-1"));
-        mesh.Channel("api").Server()                 // Server() is the role that receives handlers.
+        // Server() is the role that receives handlers.
+        mesh.Channel("api").Server()
             .AddRequestHandler<GetProfileHandler, GetProfileRequest, GetProfileReply>()
             .AddSendHandler<RefreshCacheHandler, RefreshCacheCommand>();
     });
@@ -1035,21 +1067,25 @@ The framework doesn't automatically open every discovered handler on every chann
 === "C++"
 
     ```cpp
-    options.handlers ().group ("api").add<get_profile_handler_t> ();  // Puts the handler in a group.
+    // Puts the handler in a group.
+    options.handlers ().group ("api").add<get_profile_handler_t> ();
     auto mesh = options.add_route_mesh ("services");
     mesh.listen ("tcp://0.0.0.0:7101").set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
-    mesh.channel_name ("api").server ()      // server () is the role that receives handlers.
+    // server () is the role that receives handlers.
+    mesh.channel_name ("api").server ()
       .use_handler_group ("api");
     ```
 
 === "Java"
 
     ```java
-    options.addHandlersFromPackageOf(Program.class); // Discovers handler types
+    // Discovers handler types
+    options.addHandlersFromPackageOf(Program.class);
     ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
         .listen("tcp://0.0.0.0:7101")
         .setRoutingId(RoutingId.from("api-1"));
-    mesh.channelName("api").server()                // server() is the role that receives handlers.
+    // server() is the role that receives handlers.
+    mesh.channelName("api").server()
         .addRequestHandler(GetProfileHandler.class, GetProfileRequest.class, GetProfileReply.class)
         .addSendHandler(RefreshCacheHandler.class, RefreshCacheCommand.class);
     ```
@@ -1057,11 +1093,13 @@ The framework doesn't automatically open every discovered handler on every chann
 === "Kotlin"
 
     ```kotlin
-    options.addHandlersFromPackageOf(Program::class.java) // Discovers handler types
+    // Discovers handler types
+    options.addHandlersFromPackageOf(Program::class.java)
     val mesh = options.addRouteMesh("services")
         .listen("tcp://0.0.0.0:7101")
         .setRoutingId(RoutingId.from("api-1"))
-    mesh.channelName("api").server()                     // server() is the role that receives handlers.
+    // server() is the role that receives handlers.
+    mesh.channelName("api").server()
         .addRequestHandler(
             GetProfileHandler::class.java, GetProfileRequest::class.java, GetProfileReply::class.java)
         .addSendHandler(RefreshCacheHandler::class.java, RefreshCacheCommand::class.java)
@@ -1073,7 +1111,8 @@ The framework doesn't automatically open every discovered handler on every chann
     const mesh = builder.addRouteMesh('services')
       .listen('tcp://0.0.0.0:7101')
       .routingId('api-1');
-    mesh.channel('api').server()                    // server() is the role that receives handlers.
+    // server() is the role that receives handlers.
+    mesh.channel('api').server()
       .addRequestHandler('GetProfileRequest', GetProfileHandler)
       .addSendHandler('RefreshCacheCommand', RefreshCacheHandler);
     ```
@@ -1091,9 +1130,12 @@ role.
         .Listen("tcp://0.0.0.0:7101")
         .SetRoutingId(RoutingId.From("api-1"));
 
-    mesh.Channel("api").Server()                     // A channel this node handles.
-        .AddRequestHandler<GetProfileHandler>();     // The handler already fixes the payload/reply types.
-    mesh.Channel("billing").Client();                // A call-only channel is Client -- no handler registered.
+    // A channel this node handles.
+    mesh.Channel("api").Server()
+        // The handler already fixes the payload/reply types.
+        .AddRequestHandler<GetProfileHandler>();
+    // A call-only channel is Client -- no handler registered.
+    mesh.Channel("billing").Client();
     ```
 
 === "C++"
@@ -1102,9 +1144,11 @@ role.
     auto mesh = options.add_route_mesh ("services");
     mesh.listen ("tcp://0.0.0.0:7101").set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
 
-    mesh.channel_name ("api").server ()          // A channel this node handles.
+    // A channel this node handles.
+    mesh.channel_name ("api").server ()
       .add_request_handler<get_profile_handler_t, get_profile_request_t, get_profile_reply_t> ();
-    mesh.channel_name ("billing").client ();     // A call-only channel is client -- no handler registered.
+    // A call-only channel is client -- no handler registered.
+    mesh.channel_name ("billing").client ();
     ```
 
 === "Java"
@@ -1114,9 +1158,11 @@ role.
         .listen("tcp://0.0.0.0:7101")
         .setRoutingId(RoutingId.from("api-1"));
 
-    mesh.channelName("api").server()             // A channel this node handles.
+    // A channel this node handles.
+    mesh.channelName("api").server()
         .addRequestHandler(GetProfileHandler.class, GetProfileRequest.class, GetProfileReply.class);
-    mesh.channelName("billing").client();        // A call-only channel is client -- no handler registered.
+    // A call-only channel is client -- no handler registered.
+    mesh.channelName("billing").client();
     ```
 
 === "Kotlin"
@@ -1126,10 +1172,12 @@ role.
         .listen("tcp://0.0.0.0:7101")
         .setRoutingId(RoutingId.from("api-1"))
 
-    mesh.channelName("api").server()             // A channel this node handles.
+    // A channel this node handles.
+    mesh.channelName("api").server()
         .addRequestHandler(
             GetProfileHandler::class.java, GetProfileRequest::class.java, GetProfileReply::class.java)
-    mesh.channelName("billing").client()         // A call-only channel is client -- no handler registered.
+    // A call-only channel is client -- no handler registered.
+    mesh.channelName("billing").client()
     ```
 
 === "Node/TypeScript"
@@ -1139,9 +1187,11 @@ role.
       .listen('tcp://0.0.0.0:7101')
       .routingId('api-1');
 
-    mesh.channel('api').server()                 // A channel this node handles.
+    // A channel this node handles.
+    mesh.channel('api').server()
       .addRequestHandler('GetProfileRequest', GetProfileHandler);
-    mesh.channel('billing').client();            // A call-only channel is client -- no handler registered.
+    // A call-only channel is client -- no handler registered.
+    mesh.channel('billing').client();
     ```
 
 
@@ -1195,15 +1245,18 @@ mixed with RouteMesh handlers.
         public async Task<decimal> GetAsync(string symbol, CancellationToken ct)
         {
             var reply = await client
-                .RequestToChannel("price", new PriceRequest(symbol))   // The target is just one ChannelName.
-                .Async<PriceReply>(ct);    // request: the reply type is specified on .Async<T>, not the payload
+                // The target is just one ChannelName.
+                .RequestToChannel("price", new PriceRequest(symbol))
+                // request: the reply type is specified on .Async<T>, not the payload
+                .Async<PriceReply>(ct);
             return reply.Price;
         }
 
         public async ValueTask RefreshAsync(string accountId, CancellationToken ct)
             => await client
                 .SendToChannel("profile", new RefreshCacheCommand(accountId))
-                .Async(ct);          // send: only waits until my runtime accepts the submission
+                // send: only waits until my runtime accepts the submission
+                .Async(ct);
     }
     ```
 
@@ -1321,7 +1374,8 @@ Attach a terminal only when it needs to differ from the default.
     ```csharp
     await client
         .RequestToChannel("price", new PriceRequest(symbol))
-        .Timeout(TimeSpan.FromSeconds(5))  // Specify only when this call's reply-wait cap should differ from the default (30s).
+        // Specify only when this call's reply-wait cap should differ from the default (30s).
+        .Timeout(TimeSpan.FromSeconds(5))
         .Async<PriceReply>(ct);
     // Order that decides the reply-wait cap (earlier wins):
     //   1) Per-call .Timeout(...)
@@ -1509,21 +1563,25 @@ validation, permission checks, metrics -- in one place.
         : IZLinkHandlerFilter
     {
         public async ValueTask InvokeAsync(
-            IZLinkHandlerFilterContext context,   // This dispatch's message info + which path it came through.
-            ZLinkHandlerFilterNext next,          // A no-argument delegate -- runs the next filter or handler.
+            // This dispatch's message info + which path it came through.
+            IZLinkHandlerFilterContext context,
+            // A no-argument delegate -- runs the next filter or handler.
+            ZLinkHandlerFilterNext next,
             CancellationToken cancellationToken)
         {
             // Audit-logs only ops commands and lets regular business requests pass through.
             if (context.DispatchKind == ZLinkHandlerDispatchKind.NodeDirectRequest)
                 logger.LogInformation("ops {Packet} on {Mesh}", context.PacketName, context.MeshName);
 
-            await next();                         // If not called, the handler doesn't run.
+            // If not called, the handler doesn't run.
+            await next();
         }
     }
 
     builder.Services.AddZLinkFramework(options =>
     {
-        options.UseFilter<AuditFilter>();         // Registration order is execution order.
+        // Registration order is execution order.
+        options.UseFilter<AuditFilter>();
         options.UseFilter<ValidationFilter>();
     });
     ```
@@ -1536,21 +1594,25 @@ validation, permission checks, metrics -- in one place.
       public:
         explicit audit_filter_t (logger_t<audit_filter_t> &logger) : _logger (logger) {}
 
-        task_t<void> invoke (handler_filter_context_t &context, // This dispatch's message info.
-                             handler_filter_next_t next)        // Runs the next filter or handler.
+        // This dispatch's message info.
+        task_t<void> invoke (handler_filter_context_t &context,
+                             // Runs the next filter or handler.
+                             handler_filter_next_t next)
         {
             // Audit-logs only ops commands and lets regular business requests pass through.
             if (context.dispatch_kind () == handler_dispatch_kind_t::node_direct_request)
                 _logger.info (std::string ("ops ") + context.packet_name ());
 
-            co_await next (); // If not called, the handler doesn't run.
+            // If not called, the handler doesn't run.
+            co_await next ();
         }
 
       private:
         logger_t<audit_filter_t> _logger;
     };
 
-    options.use_filter<audit_filter_t> ();      // Registration order is execution order.
+    // Registration order is execution order.
+    options.use_filter<audit_filter_t> ();
     options.use_filter<validation_filter_t> ();
     ```
 
@@ -1562,17 +1624,21 @@ validation, permission checks, metrics -- in one place.
 
         @Override
         public CompletionStage<Void> invoke(
-            ZLinkHandlerFilterContext context, // This dispatch's message info + which path it came through.
-            ZLinkHandlerFilterNext next) {     // A no-argument delegate -- runs the next filter or handler.
+            // This dispatch's message info + which path it came through.
+            ZLinkHandlerFilterContext context,
+            // A no-argument delegate -- runs the next filter or handler.
+            ZLinkHandlerFilterNext next) {
             // Audit-logs only ops commands and lets regular business requests pass through.
             if (context.dispatchKind() == ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST) {
                 logger.info("ops {} on {}", context.packetName(), context.meshName());
             }
-            return next.invoke(); // If not called, the handler doesn't run.
+            // If not called, the handler doesn't run.
+            return next.invoke();
         }
     }
 
-    options.useFilter(AuditFilter.class);      // Registration order is execution order.
+    // Registration order is execution order.
+    options.useFilter(AuditFilter.class);
     options.useFilter(ValidationFilter.class);
     ```
 
@@ -1582,18 +1648,22 @@ validation, permission checks, metrics -- in one place.
     class AuditFilter(private val logger: Logger) : ZLinkHandlerFilter {
 
         override suspend fun invoke(
-            context: ZLinkHandlerFilterContext, // This dispatch's message info + which path it came through.
-            next: ZLinkHandlerFilterNext,       // A no-argument delegate -- runs the next filter or handler.
+            // This dispatch's message info + which path it came through.
+            context: ZLinkHandlerFilterContext,
+            // A no-argument delegate -- runs the next filter or handler.
+            next: ZLinkHandlerFilterNext,
         ) {
             // Audit-logs only ops commands and lets regular business requests pass through.
             if (context.dispatchKind() == ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST) {
                 logger.info("ops {} on {}", context.packetName(), context.meshName())
             }
-            next.invoke() // If not called, the handler doesn't run.
+            // If not called, the handler doesn't run.
+            next.invoke()
         }
     }
 
-    options.useFilter(AuditFilter::class.java)      // Registration order is execution order.
+    // Registration order is execution order.
+    options.useFilter(AuditFilter::class.java)
     options.useFilter(ValidationFilter::class.java)
     ```
 
@@ -1604,14 +1674,17 @@ validation, permission checks, metrics -- in one place.
       constructor(private readonly logger: Logger) {}
 
       async invoke(
-        context: ZLinkHandlerFilterContext, // This dispatch's message info + which path it came through.
-        next: ZLinkHandlerFilterNext        // A no-argument delegate -- runs the next filter or handler.
+        // This dispatch's message info + which path it came through.
+        context: ZLinkHandlerFilterContext,
+        // A no-argument delegate -- runs the next filter or handler.
+        next: ZLinkHandlerFilterNext
       ): Promise<void> {
         // Audit-logs only ops commands and lets regular business requests pass through.
         if (context.dispatchKind === ZLinkHandlerDispatchKind.NodeDirectRequest) {
           this.logger.log(`ops ${context.packetName} on ${context.meshName}`);
         }
-        await next(); // If not called, the handler doesn't run.
+        // If not called, the handler doesn't run.
+        await next();
       }
     }
 
@@ -1798,14 +1871,16 @@ serving value.
     app.MapPost("/admin/channels/orders/drain",
         (IZLinkRouteMeshRuntimeOptions options) =>
         {
-            options.Channel("orders").Weight = 0;  // Excludes this ChannelName from new select-one targets
+            // Excludes this ChannelName from new select-one targets
+            options.Channel("orders").Weight = 0;
             return Results.Ok();
         });
 
     app.MapPost("/admin/channels/orders/restore",
         (IZLinkRouteMeshRuntimeOptions options) =>
         {
-            options.Channel("orders").Weight = 100; // Back to normal
+            // Back to normal
+            options.Channel("orders").Weight = 100;
             return Results.Ok();
         });
     ```
@@ -1814,32 +1889,40 @@ serving value.
 
     ```cpp
     // An operational admin path. "orders" is the registered ChannelName.
-    mesh_options.channel ("orders").weight (0);   // Excludes this ChannelName from new select-one targets
-    mesh_options.channel ("orders").weight (100); // Back to normal
+    // Excludes this ChannelName from new select-one targets
+    mesh_options.channel ("orders").weight (0);
+    // Back to normal
+    mesh_options.channel ("orders").weight (100);
     ```
 
 === "Java"
 
     ```java
     // An operational admin endpoint. "orders" is the registered ChannelName.
-    meshOptions.channel("orders").weight(0);   // Excludes this ChannelName from new select-one targets
-    meshOptions.channel("orders").weight(100); // Back to normal
+    // Excludes this ChannelName from new select-one targets
+    meshOptions.channel("orders").weight(0);
+    // Back to normal
+    meshOptions.channel("orders").weight(100);
     ```
 
 === "Kotlin"
 
     ```kotlin
     // An operational admin endpoint. "orders" is the registered ChannelName.
-    meshOptions.channel("orders").weight(0)   // Excludes this ChannelName from new select-one targets
-    meshOptions.channel("orders").weight(100) // Back to normal
+    // Excludes this ChannelName from new select-one targets
+    meshOptions.channel("orders").weight(0)
+    // Back to normal
+    meshOptions.channel("orders").weight(100)
     ```
 
 === "Node/TypeScript"
 
     ```typescript
     // An operational admin endpoint. "orders" is the registered ChannelName.
-    meshOptions.channel('orders').weight = 0;   // Excludes this ChannelName from new select-one targets
-    meshOptions.channel('orders').weight = 100; // Back to normal
+    // Excludes this ChannelName from new select-one targets
+    meshOptions.channel('orders').weight = 0;
+    // Back to normal
+    meshOptions.channel('orders').weight = 100;
     ```
 
 
@@ -1862,7 +1945,8 @@ The same `Weight` is also set as an initial value at registration time.
     var mesh = options.AddRouteMesh("services")
         .Listen("tcp://0.0.0.0:7101")
         .SetRoutingId(RoutingId.From("orders-1"));
-    mesh.Channel("orders").Server().SetWeight(30); // This channel role's starting weight
+    // This channel role's starting weight
+    mesh.Channel("orders").Server().SetWeight(30);
     ```
 
 === "C++"
@@ -1870,7 +1954,8 @@ The same `Weight` is also set as an initial value at registration time.
     ```cpp
     auto mesh = options.add_route_mesh ("services");
     mesh.listen ("tcp://0.0.0.0:7101").set_routing_id (zlink::routing_id_t::from (std::string ("orders-1")));
-    mesh.channel_name ("orders").server ().set_weight (30); // This channel role's starting weight
+    // This channel role's starting weight
+    mesh.channel_name ("orders").server ().set_weight (30);
     ```
 
 === "Java"
@@ -1879,7 +1964,8 @@ The same `Weight` is also set as an initial value at registration time.
     ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
         .listen("tcp://0.0.0.0:7101")
         .setRoutingId(RoutingId.from("orders-1"));
-    mesh.channelName("orders").server().setWeight(30); // This channel role's starting weight
+    // This channel role's starting weight
+    mesh.channelName("orders").server().setWeight(30);
     ```
 
 === "Kotlin"
@@ -1888,7 +1974,8 @@ The same `Weight` is also set as an initial value at registration time.
     val mesh = options.addRouteMesh("services")
         .listen("tcp://0.0.0.0:7101")
         .setRoutingId(RoutingId.from("orders-1"))
-    mesh.channelName("orders").server().setWeight(30) // This channel role's starting weight
+    // This channel role's starting weight
+    mesh.channelName("orders").server().setWeight(30)
     ```
 
 === "Node/TypeScript"
@@ -1897,7 +1984,8 @@ The same `Weight` is also set as an initial value at registration time.
     const mesh = builder.addRouteMesh('services')
       .listen('tcp://0.0.0.0:7101')
       .routingId('orders-1');
-    mesh.channel('orders').server().setWeight(30); // This channel role's starting weight
+    // This channel role's starting weight
+    mesh.channel('orders').server().setWeight(30);
     ```
 
 
@@ -1980,7 +2068,8 @@ as they don't overlap.
         }
     }
 
-    options.Codecs.Use(new AvroCodecExtension()); // Registers the Avro serializer once, inside the extension.
+    // Registers the Avro serializer once, inside the extension.
+    options.Codecs.Use(new AvroCodecExtension());
     ```
 
 === "C++"
@@ -2190,7 +2279,8 @@ startup.**
     var caller = options.AddRouteMesh("media")
         .Listen("tcp://0.0.0.0:5590")
         .SetRoutingIdPrefix("resize-client");
-    caller.Channel("image.resize").Client();          // Client, since it only calls.
+    // Client, since it only calls.
+    caller.Channel("image.resize").Client();
     caller.PeerConnections.Connect("tcp://10.30.1.10:5600");
     caller.PeerConnections.Connect("tcp://10.30.1.10:5601");
 
@@ -2207,7 +2297,8 @@ startup.**
     auto caller = options.add_route_mesh ("media");
     caller.listen ("tcp://0.0.0.0:5590")
       .set_routing_id (zlink::routing_id_t::from (std::string ("resize-client")));
-    caller.channel_name ("image.resize").client ();   // client, since it only calls.
+    // client, since it only calls.
+    caller.channel_name ("image.resize").client ();
     caller.peer_connections ().connect ("tcp://10.30.1.10:5600");
     caller.peer_connections ().connect ("tcp://10.30.1.10:5601");
 
@@ -2222,7 +2313,8 @@ startup.**
     ZLinkMeshNodeBuilder caller = options.addRouteMesh("media")
         .listen("tcp://0.0.0.0:5590")
         .setRoutingIdPrefix("resize-client");
-    caller.channelName("image.resize").client();     // client, since it only calls.
+    // client, since it only calls.
+    caller.channelName("image.resize").client();
     caller.peerConnections().connect("tcp://10.30.1.10:5600");
     caller.peerConnections().connect("tcp://10.30.1.10:5601");
 
@@ -2237,7 +2329,8 @@ startup.**
     val caller = options.addRouteMesh("media")
         .listen("tcp://0.0.0.0:5590")
         .setRoutingIdPrefix("resize-client")
-    caller.channelName("image.resize").client()      // client, since it only calls.
+    // client, since it only calls.
+    caller.channelName("image.resize").client()
     caller.peerConnections().connect("tcp://10.30.1.10:5600")
     caller.peerConnections().connect("tcp://10.30.1.10:5601")
 
@@ -2252,7 +2345,8 @@ startup.**
     const caller = builder.addRouteMesh('media')
       .listen('tcp://0.0.0.0:5590')
       .setRoutingIdPrefix('resize-client');
-    caller.channel('image.resize').client();        // client, since it only calls.
+    // client, since it only calls.
+    caller.channel('image.resize').client();
     caller.peerConnections().connect('tcp://10.30.1.10:5600');
     caller.peerConnections().connect('tcp://10.30.1.10:5601');
 
@@ -2468,18 +2562,23 @@ The relationship with SPOT continues in [06-spot](06-spot.en.md).
     builder.Services.AddZLinkFramework(options =>
     {
         options.Codecs.Use(ZLinkProtobufCodec.Default);
-        options.AddHandlersFromAssemblyOf<Program>();      // Discovery: finds handler types in the assembly.
+        // Discovery: finds handler types in the assembly.
+        options.AddHandlersFromAssemblyOf<Program>();
 
         var mesh = options.AddRouteMesh("services")
             .Listen("tcp://0.0.0.0:7101")
             .SetRoutingId(RoutingId.From("api-1"));
         mesh.Channel("api").Server()
-            .AddHandlerGroup("api");                       // Exposure: ties the attribute handler group to this channel.
-        mesh.Channel("account").Client();                  // A call-only channel.
+            // Exposure: ties the attribute handler group to this channel.
+            .AddHandlerGroup("api");
+        // A call-only channel.
+        mesh.Channel("account").Client();
 
         options.AddFanoutChannel("api.events")
-            .EnablePublisher("tcp://0.0.0.0:7201")         // This process is the publisher.
-            .Connect("tcp://127.0.0.1:7201")     // Also subscribes to its own publish, as an example.
+            // This process is the publisher.
+            .EnablePublisher("tcp://0.0.0.0:7201")
+            // Also subscribes to its own publish, as an example.
+            .Connect("tcp://127.0.0.1:7201")
             .AddHandler<UserCacheRefreshedEventHandler, UserCacheRefreshedEvent>();
     });
 
@@ -2531,18 +2630,23 @@ The relationship with SPOT continues in [06-spot](06-spot.en.md).
         auto app = framework::app_t::create ();
         app.add_zlink_framework ([] (zlink_framework_options_t &options) {
             options.codecs ().use (protobuf_codec_t::default_instance ());
-            options.handlers ().group ("api").add<user_handlers_t> (); // The handler group to expose.
+            // The handler group to expose.
+            options.handlers ().group ("api").add<user_handlers_t> ();
 
             auto mesh = options.add_route_mesh ("services");
             mesh.listen ("tcp://0.0.0.0:7101")
               .set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
             mesh.channel_name ("api").server ().use_handler_group ("api");
-            mesh.channel_name ("account").client ();                   // A call-only channel.
+            // A call-only channel.
+            mesh.channel_name ("account").client ();
 
             options.add_fanout_channel ("api.events")
-              .enable_publisher ("tcp://0.0.0.0:7201")                 // This process is the publisher.
-              .connect ("tcp://127.0.0.1:7201")             // Also subscribes to its own publish.
-              .use_handler_group ("api.events"); // Attaches the subscription handler as a group.
+              // This process is the publisher.
+              .enable_publisher ("tcp://0.0.0.0:7201")
+              // Also subscribes to its own publish.
+              .connect ("tcp://127.0.0.1:7201")
+              // Attaches the subscription handler as a group.
+              .use_handler_group ("api.events");
 
             options.http ()
               .listen ("http://0.0.0.0:8080")
@@ -2565,18 +2669,23 @@ The relationship with SPOT continues in [06-spot](06-spot.en.md).
         ZLinkFrameworkConfigurer zlink() {
             return options -> {
                 options.codecs().use(ZLinkProtobufCodec.getDefault());
-                options.addHandlersFromPackageOf(Program.class);  // Discovery: finds handlers in the package.
+                // Discovery: finds handlers in the package.
+                options.addHandlersFromPackageOf(Program.class);
 
                 ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
                     .listen("tcp://0.0.0.0:7101")
                     .setRoutingId(RoutingId.from("api-1"));
                 mesh.channelName("api").server()
-                    .addHandlerGroup("api");                     // Exposure: ties the handler group to the channel.
-                mesh.channelName("account").client();            // A call-only channel.
+                    // Exposure: ties the handler group to the channel.
+                    .addHandlerGroup("api");
+                // A call-only channel.
+                mesh.channelName("account").client();
 
                 options.addFanoutChannel("api.events")
-                    .enablePublisher("tcp://0.0.0.0:7201")       // This process is the publisher.
-                    .connect("tcp://127.0.0.1:7201")   // Also subscribes to its own publish, as an example.
+                    // This process is the publisher.
+                    .enablePublisher("tcp://0.0.0.0:7201")
+                    // Also subscribes to its own publish, as an example.
+                    .connect("tcp://127.0.0.1:7201")
                     .addHandler(UserCacheRefreshedEventHandler.class, UserCacheRefreshedEvent.class);
             };
         }
@@ -2596,18 +2705,23 @@ The relationship with SPOT continues in [06-spot](06-spot.en.md).
     @Bean
     fun zlink() = ZLinkFrameworkConfigurer { options ->
         options.codecs().use(ZLinkProtobufCodec.getDefault())
-        options.addHandlersFromPackageOf(Program::class.java) // Discovery: finds handlers in the package.
+        // Discovery: finds handlers in the package.
+        options.addHandlersFromPackageOf(Program::class.java)
 
         val mesh = options.addRouteMesh("services")
             .listen("tcp://0.0.0.0:7101")
             .setRoutingId(RoutingId.from("api-1"))
         mesh.channelName("api").server()
-            .addHandlerGroup("api")                           // Exposure: ties the handler group to the channel.
-        mesh.channelName("account").client()                  // A call-only channel.
+            // Exposure: ties the handler group to the channel.
+            .addHandlerGroup("api")
+        // A call-only channel.
+        mesh.channelName("account").client()
 
         options.addFanoutChannel("api.events")
-            .enablePublisher("tcp://0.0.0.0:7201")            // This process is the publisher.
-            .connect("tcp://127.0.0.1:7201")        // Also subscribes to its own publish, as an example.
+            // This process is the publisher.
+            .enablePublisher("tcp://0.0.0.0:7201")
+            // Also subscribes to its own publish, as an example.
+            .connect("tcp://127.0.0.1:7201")
             .addHandler(
                 UserCacheRefreshedEventHandler::class.java, UserCacheRefreshedEvent::class.java)
     }
@@ -2627,19 +2741,25 @@ The relationship with SPOT continues in [06-spot](06-spot.en.md).
               .listen('tcp://0.0.0.0:7101')
               .routingId('api-1');
             mesh.channel('api').server()
-              .addHandlerGroup('api');                   // Exposure: ties the handler group to the channel.
-            mesh.channel('account').client();            // A call-only channel.
+              // Exposure: ties the handler group to the channel.
+              .addHandlerGroup('api');
+            // A call-only channel.
+            mesh.channel('account').client();
 
             const events = builder.addFanoutChannel('api.events');
-            events.enablePublisher('tcp://0.0.0.0:7201'); // This process is the publisher.
-            events.connect('tcp://127.0.0.1:7201');       // Also subscribes to its own publish, as an example.
-            events.addHandlerGroup('api.events');         // Attaches the subscription handler as a group.
+            // This process is the publisher.
+            events.enablePublisher('tcp://0.0.0.0:7201');
+            // Also subscribes to its own publish, as an example.
+            events.connect('tcp://127.0.0.1:7201');
+            // Attaches the subscription handler as a group.
+            events.addHandlerGroup('api.events');
 
             return builder.build();
           }
         })
       ],
-      providers: [UserHandlers, UserCacheRefreshedEventHandler] // Discovery: registered as providers.
+      // Discovery: registered as providers.
+      providers: [UserHandlers, UserCacheRefreshedEventHandler]
     })
     export class AppModule {}
     ```

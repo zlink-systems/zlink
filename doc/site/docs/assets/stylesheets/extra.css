@@ -8,11 +8,9 @@
   font-size: 0.82em;
 }
 
-/* 오른쪽 "현재 페이지" 목차를 없앤다. mkdocs.yml에 toc.integrate를 켜면 왼쪽
-   nav 안으로 병합되는데, 그러면 nav 트리가 페이지마다 늘어난다. 그 대신 CSS로
-   오른쪽 컬럼만 감춘다 — 왼쪽 nav는 그대로 두고, 본문(.md-content)은
-   flex-grow:1이라 비워진 공간으로 자동으로 넓어진다.
-   레이아웃 폭 자체는 .md-grid의 max-width(theme 기본값)로 계속 제한된다. */
-.md-sidebar--secondary {
-  display: none !important;
-}
+/* 오른쪽 "현재 페이지" 목차를 되살린다.
+
+   예전에는 감췄다. 본문이 빈 공간으로 넓어지는 것이 이득이라고 봤는데, 그 결과
+   영문 본문이 한 줄에 130자 가까이 담겨 시선이 되돌아올 자리를 잃었다(권장 60~80자).
+   목차를 되살리면 본문 폭이 읽을 만한 범위로 줄고, 긴 장에서 지금 어디쯤인지도
+   보인다. docs.nestjs.com도 "ON THIS PAGE"를 오른쪽에 둔다. */

@@ -7,6 +7,8 @@ title: "10. Location — Auto-Connect and Object Location · C++"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 10. Location — Auto-Connect and Object Location
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 9. STREAM](09-stream.en.md) | [Next: 11. Monitoring — Status Observation And Diagnostics](11-monitoring.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "10. Location — Auto-Connect and Object Location · C++"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/10-location.en.md) · **C++** · [Java](../../../java/guide/server/10-location.en.md) · [Kotlin](../../../kotlin/guide/server/10-location.en.md) · [Node/TypeScript](../../../node/guide/server/10-location.en.md)
 <!-- language-switch:end -->
-
-# 10. Location — Auto-Connect and Object Location
 
 > **The documents that own this chapter's contract** — defined by
 > [Location runtime](../../../common/spec/server/05-location-relocation/01-location-runtime.en.md),

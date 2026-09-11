@@ -239,7 +239,8 @@ internal sealed class Poller : NativeOwner, IPoller
         if (_handle == IntPtr.Zero)
         {
             _handle = IntPtr.Zero;
-            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateConfigException(
+                NativeMethods.GetLastPInvokeError());
         }
     }
 
@@ -272,7 +273,7 @@ internal sealed class Poller : NativeOwner, IPoller
                 // wait error leaves every WRITABLE/REQUEST record unread and
                 // level-true for the next Wait, so the waiters stay valid.
                 if (ZlinkException.IsTerminationError(
-                        NativeMethods.zlink_errno()))
+                        NativeMethods.GetLastPInvokeError()))
                     FailPublicWaitsTerminated();
                 throw ZlinkException.CreateConfigException(
                     (ConfigResult)errorOut);
@@ -498,7 +499,8 @@ internal sealed class Poller : NativeOwner, IPoller
 
         var handle = NativeMethods.zlink_poller_new();
         if (handle == IntPtr.Zero)
-            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateConfigException(
+                NativeMethods.GetLastPInvokeError());
         return handle;
     }
 

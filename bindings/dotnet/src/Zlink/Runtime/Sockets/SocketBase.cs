@@ -66,7 +66,8 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
         var rc = NativeMethods.zlink_set_tls_server(Handle, certPath, keyPath,
             requireClientCert ? 1 : 0);
         if (rc != 0)
-            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateConfigException(
+                NativeMethods.GetLastPInvokeError());
     }
 
     public void SetTlsClient(string caCertPath, string hostname,
@@ -80,7 +81,8 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
         var rc = NativeMethods.zlink_set_tls_client(Handle, caCertPath, hostname,
             trustSystem ? 1 : 0);
         if (rc != 0)
-            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateConfigException(
+                NativeMethods.GetLastPInvokeError());
     }
 
     public void SetReceiveFlowState(ReceiveFlowState state)
