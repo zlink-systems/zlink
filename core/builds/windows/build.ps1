@@ -1,11 +1,11 @@
 # Windows build script for libzlink
 # Requires: Visual Studio 2022, CMake
-# Supports: x64 and ARM64 architectures (ARM64 is cross-compiled on x64 host)
+# Supports: x64 architecture
 
 param(
     [string]$LibzlinkVersion,
     [string]$BuildType = "Release",
-    [ValidateSet("x64", "arm64")]
+    [ValidateSet("x64")]
     [string]$Architecture = "x64",
     [string]$OutputDir,
     [string]$RunTests = "OFF"
@@ -31,18 +31,11 @@ if ($LibzlinkVersion -and $LibzlinkVersion -ne $FILE_LIBZLINK_VERSION) {
 }
 $LIBZLINK_VERSION = $FILE_LIBZLINK_VERSION
 
-# Set architecture-specific configurations
-if ($Architecture -eq "arm64") {
-    $VCPKG_TRIPLET = "arm64-windows-static"
-    $CMAKE_ARCH = "ARM64"
-    $DEFAULT_OUTPUT_DIR = Join-Path $RepoRoot "core\\dist\\windows-arm64"
-} else {
-    $VCPKG_TRIPLET = "x64-windows-static"
-    $CMAKE_ARCH = "x64"
-    $DEFAULT_OUTPUT_DIR = Join-Path $RepoRoot "core\\dist\\windows-x64"
-}
+$VCPKG_TRIPLET = "x64-windows-static"
+$CMAKE_ARCH = "x64"
+$DEFAULT_OUTPUT_DIR = Join-Path $RepoRoot "core\\dist\\windows-x64"
 
-# Use provided OutputDir or default based on architecture
+# Use the provided output directory or the Windows x64 default.
 if (-not $OutputDir) {
     $OutputDir = $DEFAULT_OUTPUT_DIR
 } elseif (-not [System.IO.Path]::IsPathRooted($OutputDir)) {
@@ -87,15 +80,10 @@ Write-Host "Build type:        $BuildType"
 Write-Host "RUN_TESTS:         $RunTests"
 Write-Host "Output directory:  $OutputDir"
 Write-Host "CMake platform:    $CMAKE_ARCH"
-if ($Architecture -eq "arm64") {
-    Write-Host ""
-    Write-Host "NOTE: Building ARM64 binaries (cross-compilation)"
-    Write-Host "      Tests cannot be executed on x64 host"
-}
 Write-Host "==================================="
 Write-Host ""
 
-# Create build directories with architecture suffix
+# Keep the x64 suffix explicit so build and package paths stay aligned.
 $BUILD_DIR = Join-Path $RepoRoot "core\\build\\windows-$Architecture"
 New-Item -ItemType Directory -Force -Path $BUILD_DIR | Out-Null
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
@@ -281,55 +269,50 @@ try {
         Write-Host ""
         Write-Host "Step 5: Running tests..."
 
-        # Skip tests for ARM64 cross-compilation (cannot run ARM64 binaries on x64 host)
-        if ($Architecture -eq "arm64") {
-            Write-Host "Skipping tests: Cannot run ARM64 binaries on x64 host"
+        # Run tests with ctest
+        Write-Host "Running ctest..."
+
+        # Ensure the DLL directory is in the PATH so tests can find zlink.dll
+        $OLD_PATH = $env:PATH
+        $DLL_DIR = (Resolve-Path ("bin\\$BuildType")).Path
+        $env:PATH = "$DLL_DIR;$env:PATH"
+        Write-Host "Temporarily added $DLL_DIR to PATH for testing"
+
+        # Run ctest and capture exit code
+        $ctestOutput = ""
+        $ctestExitCode = 0
+
+        try {
+            # Run ctest with output on failure
+            ctest --output-on-failure -C $BuildType --parallel 2>&1 | Tee-Object -Variable ctestOutput | Write-Host
+            $ctestExitCode = $LASTEXITCODE
+        } catch {
+            $ctestExitCode = 1
+        } finally {
+            # Restore original path
+            $env:PATH = $OLD_PATH
+        }
+
+        if ($ctestExitCode -ne 0) {
+            Write-Host ""
+            Write-Host "Some tests failed. Checking results..."
+
+            # Count failed tests
+            $failedCount = 0
+            if ($ctestOutput -match "(\d+) tests? failed") {
+                $failedCount = [int]$matches[1]
+            }
+
+            Write-Host "Failed tests: $failedCount"
+
+            # Allow up to 20 test failures (TIPC, fuzzer tests may not work in all environments)
+            if ($failedCount -gt 20) {
+                throw "Too many test failures ($failedCount). Build may be broken."
+            }
+
+            Write-Host "Acceptable number of test failures. Continuing..."
         } else {
-            # Run tests with ctest
-            Write-Host "Running ctest..."
-
-            # Ensure the DLL directory is in the PATH so tests can find zlink.dll
-            $OLD_PATH = $env:PATH
-            $DLL_DIR = (Resolve-Path ("bin\\$BuildType")).Path
-            $env:PATH = "$DLL_DIR;$env:PATH"
-            Write-Host "Temporarily added $DLL_DIR to PATH for testing"
-
-            # Run ctest and capture exit code
-            $ctestOutput = ""
-            $ctestExitCode = 0
-
-            try {
-                # Run ctest with output on failure
-                ctest --output-on-failure -C $BuildType --parallel 2>&1 | Tee-Object -Variable ctestOutput | Write-Host
-                $ctestExitCode = $LASTEXITCODE
-            } catch {
-                $ctestExitCode = 1
-            } finally {
-                # Restore original path
-                $env:PATH = $OLD_PATH
-            }
-
-            if ($ctestExitCode -ne 0) {
-                Write-Host ""
-                Write-Host "Some tests failed. Checking results..."
-
-                # Count failed tests
-                $failedCount = 0
-                if ($ctestOutput -match "(\d+) tests? failed") {
-                    $failedCount = [int]$matches[1]
-                }
-
-                Write-Host "Failed tests: $failedCount"
-
-                # Allow up to 20 test failures (TIPC, fuzzer tests may not work in all environments)
-                if ($failedCount -gt 20) {
-                    throw "Too many test failures ($failedCount). Build may be broken."
-                }
-
-                Write-Host "Acceptable number of test failures. Continuing..."
-            } else {
-                Write-Host "All tests passed!"
-            }
+            Write-Host "All tests passed!"
         }
     }
 } finally {
@@ -362,12 +345,6 @@ if (Test-Path $FINAL_DLL) {
     Write-Host "Build completed successfully!"
     Write-Host "Architecture:      $Architecture"
     Write-Host "Output: $FINAL_DLL"
-    if ($Architecture -eq "arm64") {
-        Write-Host ""
-        Write-Host "IMPORTANT: This is an ARM64 binary"
-        Write-Host "           Cannot be executed on x64 host"
-        Write-Host "           Deploy to ARM64 Windows device for testing"
-    }
     Write-Host "==================================="
 } else {
     throw "Build failed: $FINAL_DLL not found"
