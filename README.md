@@ -168,7 +168,7 @@ per layer:
 | Layer | Build documentation |
 |---|---|
 | Core | [Build guide](./doc/building/build-guide.md) · [CMake options](./doc/building/cmake-options.md) |
-| Bindings | [Local Core and Bindings](./doc/building/local-core-bindings.ko.md) (Korean) · [local package runner](./scripts/local-package/README.ko.md) (Korean) |
+| Bindings | [Local Core and Bindings](./doc/building/local-core-bindings.md) · [local package runner](./scripts/local-package/README.md) |
 | Framework | [Framework workspace layout](./doc/building/framework-workspace.md), then the source root for [C++](./framework/languages/cpp/), [.NET](./framework/languages/dotnet/), [JVM](./framework/languages/java/), or [Node.js](./framework/languages/node/) |
 | Packaging and release | [Packaging guide](./doc/building/packaging.md) · [Build and release pipeline](./doc/building/release-pipeline.md) |
 
