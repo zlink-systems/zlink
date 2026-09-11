@@ -849,7 +849,8 @@ function(zlink_framework_cpp_enable_test_assertions target_name)
   # assertion expressions. Release evidence must execute those expressions;
   # disabling assertions would silently remove the operation under test.
   if(MSVC)
-    target_compile_options(${target_name} PRIVATE /UNDEBUG)
+    target_compile_options(${target_name} PRIVATE /UNDEBUG /utf-8)
+    target_compile_definitions(${target_name} PRIVATE NOMINMAX)
   else()
     target_compile_options(${target_name} PRIVATE -UNDEBUG)
   endif()
@@ -1193,6 +1194,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
 
   function(add_zlink_framework_test target_name source_file labels)
     add_executable(${target_name} ${source_file})
+    target_compile_options(${target_name} PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+    target_compile_definitions(${target_name} PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:NOMINMAX>")
     target_link_libraries(${target_name} PRIVATE zlink::framework)
     target_link_zlink_test_harness(${target_name})
     target_include_directories(${target_name} PRIVATE
