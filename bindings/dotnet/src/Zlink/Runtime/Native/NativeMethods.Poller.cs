@@ -23,7 +23,8 @@ internal static partial class NativeMethods
     internal static ReadOnlySpan<string> RequiredPollerExports =>
         RequiredPollerExportNames;
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern IntPtr zlink_poller_new();
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
@@ -63,13 +64,14 @@ internal static partial class NativeMethods
     internal static extern int zlink_poller_remove_timer(IntPtr poller,
         IntPtr timer);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern int zlink_poller_wait(IntPtr poller,
         [Out] ZlinkPollerEvent[] events, int nEvents, long timeout,
         out int errorOut);
 
     [DllImport(LibraryName, EntryPoint = "zlink_poller_wait",
-        CallingConvention = CallingConvention.Cdecl)]
+        CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern unsafe int zlink_poller_wait_pinned(IntPtr poller,
         ZlinkPollerEvent* events, int nEvents, long timeout,
         out int errorOut);
@@ -86,11 +88,13 @@ internal static partial class NativeMethods
         [In] [Out] ZlinkPollItemWindows[] items, int nitems, long timeout,
         out int errorOut);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern int zlink_proxy(IntPtr frontend, IntPtr backend,
         IntPtr capture);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern int zlink_has(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string capability);
 

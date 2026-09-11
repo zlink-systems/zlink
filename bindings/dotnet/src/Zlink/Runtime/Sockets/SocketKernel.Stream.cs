@@ -20,13 +20,13 @@ internal sealed partial class SocketKernel
             var rc = NativeMethods.zlink_msg_init(ref header);
             if (rc != 0)
                 throw ZlinkException.CreateRecvException(
-                    NativeMethods.zlink_errno());
+                    NativeMethods.GetLastPInvokeError());
             headerInitialized = true;
 
             rc = NativeMethods.zlink_msg_init(ref body);
             if (rc != 0)
                 throw ZlinkException.CreateRecvException(
-                    NativeMethods.zlink_errno());
+                    NativeMethods.GetLastPInvokeError());
             bodyInitialized = true;
 
             rc = NativeMethods.zlink_stream_recv_packet(Handle,

@@ -123,7 +123,8 @@ internal sealed class Timer : NativeOwner, IZlinkTimer
 
         var poller = NativeMethods.zlink_poller_new();
         if (poller == IntPtr.Zero)
-            throw ZlinkException.CreateRecvException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateRecvException(
+                NativeMethods.GetLastPInvokeError());
 
         var rc = NativeMethods.zlink_poller_add_timer(poller, _handle,
             IntPtr.Zero);
@@ -168,7 +169,8 @@ internal sealed class Timer : NativeOwner, IZlinkTimer
     {
         var handle = NativeMethods.zlink_timer_new();
         if (handle == IntPtr.Zero)
-            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateConfigException(
+                NativeMethods.GetLastPInvokeError());
         return handle;
     }
 
