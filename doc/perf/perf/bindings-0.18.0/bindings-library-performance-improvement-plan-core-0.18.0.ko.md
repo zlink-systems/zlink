@@ -868,8 +868,11 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   - **reqrep(DEALER_ROUTER_REQREP·ROUTER_ROUTER_REQREP) 전 transport 미달**(18~66%, 목표 70) + 일부 size fail(`socket_reqrep_failed`·`timeout_after_45s`). **node/cpp와 동일 routed request/reply 약점**(submit send-admission 경로) — 교차언어 공통.
   - **tls·inproc 일부 one-way는 throughput 통과하나 평균 latency가 3× cap 초과**(tls DEALER_DEALER 3.46×·DEALER_ROUTER 4.21×, inproc ROUTER_ROUTER 4.30×·reqrep 4.6~8.2×) → 미달. 소형 메시지 per-op floor(node와 동류).
   - **inproc one-way 저조**: DEALER_DEALER·DEALER_ROUTER 57%, PUBSUB 43%.
-- Multi 상태: `미측정`
-- 다음 작업: (1) reqrep 약점은 교차언어 공통 send-admission 이슈로 별도 판단, (2) tls/inproc latency §2.2 예외 검토, (3) Java Multi 측정.
+- Multi 상태: `측정 완료(2026-09-11, META parity 수정 반영)` — C multi baseline 재사용, tcp/ws/wss/tls, clients=100. 측정 5패턴(REQREP 2개는 이번 스코프 외=미측정, STREAM 실패).
+  - **SENDSEND(echo)는 통과**(76~113%, 목표 70) — **node에서 실패하던 것이 java에선 정상**(node의 send-admission drain 굶음은 단일 이벤트루프 특유, java 스레드 모델엔 없음). 단 tcp/ws SENDSEND는 평균 latency 3.6~3.8×로 일부 미달.
+  - **MULTI_DEALER_DEALER 미달**(65~76%, 목표 90) 전 transport. **MULTI_PUBSUB**는 tcp 90·wss 88(경계)·ws 102·tls 84.
+  - **MULTI_STREAM 전 transport 실패**(server_start_ready_timeout_or_mismatch) — STREAM 서버 준비 실패, 별도 진단 필요.
+- 다음 작업: (1) MULTI_STREAM 준비 실패 진단, (2) DEALER_DEALER multi 개선, (3) reqrep(단·다) 약점, (4) tls latency §2.2. Java Multi REQREP는 후속 측정.
 
 #### 9.3.1 Single suite
 
@@ -922,34 +925,34 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 36.7% | 84.8% | 118.2% | 60.1% | 58.5% | 51.6% | 미달 68.3%/lat0.19× · c0180-java-multi-tcp |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 83.7% | 76.8% | 82.3% | 80.5% | 92.5% | 81.2% | 미달 82.8%/lat3.64× · c0180-java-multi-tcp |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 107.8% | 99.8% | 93.1% | 30.7% | 54.6% | 70.2% | 통과 76.0%/lat2.34× · c0180-java-multi-tcp |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `tcp` | `MULTI_PUBSUB` | 73.8% | 61.7% | 65.3% | 66.9% | 137.3% | 134.7% | 미달 90.0%/lat1.21× · c0180-java-multi-tcp |
+| `tcp` | `MULTI_STREAM` | 실패 | 실패 | 실패 | 해당 없음 | 실패 | 해당 없음 | 실패 — MULTI_STREAM server_start_ready_timeout_or_mismatch (STREAM 서버 준비 실패, 측정 불가) |
+| `ws` | `MULTI_DEALER_DEALER` | 41.4% | 76.5% | 64.7% | 82.9% | 63.1% | 63.4% | 미달 65.3%/lat1.74× · c0180-java-multi-ws |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 98.4% | 87.3% | 114.4% | 81.2% | 141.0% | 156.5% | 통과 113.1%/lat0.52× · c0180-java-multi-ws |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 114.4% | 52.5% | 54.7% | 58.5% | 62.7% | 72.1% | 미달 69.2%/lat3.82× · c0180-java-multi-ws |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `ws` | `MULTI_PUBSUB` | 116.0% | 75.6% | 60.8% | 71.2% | 146.9% | 144.6% | 통과 102.5%/lat0.86× · c0180-java-multi-ws |
+| `ws` | `MULTI_STREAM` | 실패 | 실패 | 실패 | 해당 없음 | 실패 | 해당 없음 | 실패 — MULTI_STREAM server_start_ready_timeout_or_mismatch (STREAM 서버 준비 실패, 측정 불가) |
+| `wss` | `MULTI_DEALER_DEALER` | 41.8% | 75.2% | 88.5% | 91.0% | 65.7% | 66.3% | 미달 71.4%/lat0.76× · c0180-java-multi-wss |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 110.3% | 89.3% | 69.3% | 76.9% | 74.0% | 66.7% | 통과 81.1%/lat1.35× · c0180-java-multi-wss |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 75.6% | 72.6% | 79.6% | 36.4% | 113.7% | 115.6% | 통과 82.2%/lat0.74× · c0180-java-multi-wss |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `wss` | `MULTI_PUBSUB` | 101.1% | 66.0% | 75.9% | 82.7% | 103.5% | 97.7% | 미달 87.8%/lat0.74× · c0180-java-multi-wss |
+| `wss` | `MULTI_STREAM` | 실패 | 실패 | 실패 | 해당 없음 | 실패 | 해당 없음 | 실패 — MULTI_STREAM server_start_ready_timeout_or_mismatch (STREAM 서버 준비 실패, 측정 불가) |
+| `tls` | `MULTI_DEALER_DEALER` | 36.4% | 98.5% | 86.4% | 67.2% | 89.3% | 77.5% | 미달 75.9%/lat0.58× · c0180-java-multi-tls |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 96.7% | 75.4% | 63.9% | 60.2% | 75.3% | 83.7% | 통과 75.9%/lat1.59× · c0180-java-multi-tls |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 79.7% | 69.5% | 75.2% | 57.1% | 94.7% | 96.5% | 통과 78.8%/lat0.95× · c0180-java-multi-tls |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `tls` | `MULTI_PUBSUB` | 79.8% | 91.7% | 73.3% | 81.1% | 88.1% | 91.7% | 미달 84.3%/lat1.33× · c0180-java-multi-tls |
+| `tls` | `MULTI_STREAM` | 실패 | 실패 | 실패 | 해당 없음 | 실패 | 해당 없음 | 실패 — MULTI_STREAM server_start_ready_timeout_or_mismatch (STREAM 서버 준비 실패, 측정 불가) |
 
 ### 9.4 Node
 
