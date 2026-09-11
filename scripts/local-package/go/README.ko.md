@@ -1,3 +1,5 @@
+[English](./README.md) | [한국어](./README.ko.md)
+
 # Go local package
 
 `build-wsl.sh`는 `bindings/go`를 현재 Core `<VERSION>` runtime과 함께 source
