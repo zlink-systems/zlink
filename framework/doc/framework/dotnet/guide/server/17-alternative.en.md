@@ -7,6 +7,8 @@ title: "17. Where ZLink Fits — Internal Service Communication and Real-Time St
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 17. Where ZLink Fits — Internal Service Communication and Real-Time State Server Patterns
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 16. Options — Configuration List And Defaults](16-options.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "17. Where ZLink Fits — Internal Service Communication and Real-Time St
 <!-- language-switch:start -->
 View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/17-alternative.en.md) · [Java](../../../java/guide/server/17-alternative.en.md) · [Kotlin](../../../kotlin/guide/server/17-alternative.en.md) · [Node/TypeScript](../../../node/guide/server/17-alternative.en.md)
 <!-- language-switch:end -->
-
-# 17. Where ZLink Fits — Internal Service Communication and Real-Time State Server Patterns
 
 > **This chapter has no spec document that owns a contract.** It's an introduction to help
 > readers decide what to choose.

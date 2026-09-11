@@ -7,6 +7,8 @@ title: "4. Backpressure — When Arrival Outpaces Processing · C++"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 4. Backpressure — When Arrival Outpaces Processing
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 3. Core Concepts](03-concepts.en.md) | [Next: 5. Channel Messaging — Request · Send · Pub/Sub](05-channel-messaging.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "4. Backpressure — When Arrival Outpaces Processing · C++"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/04-backpressure.en.md) · **C++** · [Java](../../../java/guide/server/04-backpressure.en.md) · [Kotlin](../../../kotlin/guide/server/04-backpressure.en.md) · [Node/TypeScript](../../../node/guide/server/04-backpressure.en.md)
 <!-- language-switch:end -->
-
-# 4. Backpressure — When Arrival Outpaces Processing
 
 > **The documents that own this chapter's contract** — covered by the
 > [Async Execution Policy](../../../common/spec/server/01-execution/README.en.md),

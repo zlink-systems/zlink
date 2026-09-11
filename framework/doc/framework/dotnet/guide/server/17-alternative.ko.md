@@ -7,6 +7,8 @@ title: "17. ZLink를 어디에 쓰나 — 내부 서비스 통신과 실시간 �
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 17. ZLink를 어디에 쓰나 — 내부 서비스 통신과 실시간 상태 서버 패턴
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 16. Options — 설정 목록과 기본값](16-options.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "17. ZLink를 어디에 쓰나 — 내부 서비스 통신과 실시간 �
 <!-- language-switch:start -->
 다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/17-alternative.ko.md) · [Java](../../../java/guide/server/17-alternative.ko.md) · [Kotlin](../../../kotlin/guide/server/17-alternative.ko.md) · [Node/TypeScript](../../../node/guide/server/17-alternative.ko.md)
 <!-- language-switch:end -->
-
-# 17. ZLink를 어디에 쓰나 — 내부 서비스 통신과 실시간 상태 서버 패턴
 
 > **이 장에는 계약을 소유하는 스펙 문서가 없다.** 무엇을 고를지 판단하는 도입 서술이기
 > 때문이다.

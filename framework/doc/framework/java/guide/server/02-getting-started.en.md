@@ -7,6 +7,8 @@ title: "2. Getting Started · Java"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 2. Getting Started
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 1. Overview](01-overview.en.md) | [Next: 3. Core Concepts](03-concepts.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "2. Getting Started · Java"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/02-getting-started.en.md) · [C++](../../../cpp/guide/server/02-getting-started.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/02-getting-started.en.md) · [Node/TypeScript](../../../node/guide/server/02-getting-started.en.md)
 <!-- language-switch:end -->
-
-# 2. Getting Started
 
 > **The document that owns this chapter's contract** — none. This is a walkthrough for
 > installing and confirming your first working setup.

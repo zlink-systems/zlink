@@ -7,6 +7,8 @@ title: "7. Actor와 Spot · C#/.NET"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 7. Actor와 Spot
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 6. Spot](06-spot.ko.md) | [다음: 8. Session과 Actor binding](08-actor-session.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "7. Actor와 Spot · C#/.NET"
 <!-- language-switch:start -->
 다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/07-actor-spot.ko.md) · [Java](../../../java/guide/server/07-actor-spot.ko.md) · [Kotlin](../../../kotlin/guide/server/07-actor-spot.ko.md) · [Node/TypeScript](../../../node/guide/server/07-actor-spot.ko.md)
 <!-- language-switch:end -->
-
-# 7. Actor와 Spot
 
 > **이 장의 계약 소유 문서** — [Actor 모델](../../../common/spec/server/03-spot-actor/04-actor-model.ko.md)과
 > [Spot과 Actor membership](../../../common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md)이 동작을,

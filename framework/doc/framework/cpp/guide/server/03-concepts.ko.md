@@ -7,6 +7,8 @@ title: "3. 핵심 개념 · C++"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 3. 핵심 개념
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 2. 시작하기](02-getting-started.ko.md) | [다음: 4. Backpressure — 처리보다 도착이 빠를 때](04-backpressure.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "3. 핵심 개념 · C++"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/03-concepts.ko.md) · **C++** · [Java](../../../java/guide/server/03-concepts.ko.md) · [Kotlin](../../../kotlin/guide/server/03-concepts.ko.md) · [Node/TypeScript](../../../node/guide/server/03-concepts.ko.md)
 <!-- language-switch:end -->
-
-# 3. 핵심 개념
 
 > **이 장의 계약 소유 문서** — [Framework 개요](../../../common/spec/server/00-foundation/03-overview.ko.md)와
 > [상호작용 모델](../../../common/spec/server/00-foundation/04-interaction-model.ko.md)이 개념의 정식 의미를,

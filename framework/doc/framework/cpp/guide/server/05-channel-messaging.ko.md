@@ -7,6 +7,8 @@ title: "5. Channel Messaging — request · send · pub/sub · C++"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 5. Channel Messaging — request · send · pub/sub
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 4. Backpressure — 처리보다 도착이 빠를 때](04-backpressure.ko.md) | [다음: 6. Spot](06-spot.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "5. Channel Messaging — request · send · pub/sub · C++"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/05-channel-messaging.ko.md) · **C++** · [Java](../../../java/guide/server/05-channel-messaging.ko.md) · [Kotlin](../../../kotlin/guide/server/05-channel-messaging.ko.md) · [Node/TypeScript](../../../node/guide/server/05-channel-messaging.ko.md)
 <!-- language-switch:end -->
-
-# 5. Channel Messaging — request · send · pub/sub
 
 > **이 장의 계약 소유 문서** — [Channel 메시징](../../../common/spec/server/02-channel-transport/02-channel-messaging.ko.md)과
 > [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.ko.md)이 동작을,

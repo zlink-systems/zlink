@@ -7,6 +7,8 @@ title: "15. E2E Testing — Verifying the Whole System with a Client · Kotlin"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 15. E2E Testing — Verifying the Whole System with a Client
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 14. Picking a Sample — Start with the Example Closest to Your Problem](14-samples.en.md) | [Next: ../../../java/guide/server/16-options.en.md](../../../java/guide/server/16-options.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "15. E2E Testing — Verifying the Whole System with a Client · Kotlin"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/15-e2e-testing.en.md) · [C++](../../../cpp/guide/server/15-e2e-testing.en.md) · [Java](../../../java/guide/server/15-e2e-testing.en.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/15-e2e-testing.en.md)
 <!-- language-switch:end -->
-
-# 15. E2E Testing — Verifying the Whole System with a Client
 
 > **This chapter has no spec document that owns its contract.** That's because it covers
 > how to build tests in your own system. What each sample verifies is defined by the

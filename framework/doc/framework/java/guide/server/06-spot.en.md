@@ -7,6 +7,8 @@ title: "6. Spot · Java"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 6. Spot
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 5. Channel Messaging — Request · Send · Pub/Sub](05-channel-messaging.en.md) | [Next: 7. Actor and Spot](07-actor-spot.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "6. Spot · Java"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/06-spot.en.md) · [C++](../../../cpp/guide/server/06-spot.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/06-spot.en.md) · [Node/TypeScript](../../../node/guide/server/06-spot.en.md)
 <!-- language-switch:end -->
-
-# 6. Spot
 
 > **The document that owns this chapter's contract** — the [Spot model](../../../common/spec/server/03-spot-actor/01-spot-model.en.md)
 > and [SPOT messaging](../../../common/spec/server/03-spot-actor/02-spot-messaging.en.md) own the behavior, and

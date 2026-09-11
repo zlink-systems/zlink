@@ -7,6 +7,8 @@ title: "9. STREAM · Java"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 9. STREAM
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 8. Session과 Actor binding](08-actor-session.ko.md) | [다음: 10. Location — 자동 연결과 Object 위치](10-location.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "9. STREAM · Java"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/09-stream.ko.md) · [C++](../../../cpp/guide/server/09-stream.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/09-stream.ko.md) · [Node/TypeScript](../../../node/guide/server/09-stream.ko.md)
 <!-- language-switch:end -->
-
-# 9. STREAM
 
 > **이 장의 계약 소유 문서** — [STREAM 서버 session](../../../common/spec/server/04-session/01-stream-session.ko.md)이
 > 동작을, [언어별 STREAM session 공개 계약](../../../common/spec/server/languages/README.ko.md)이

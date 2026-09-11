@@ -7,6 +7,8 @@ title: "3. Core Concepts · C#/.NET"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 3. Core Concepts
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 2. Getting Started](02-getting-started.en.md) | [Next: 4. Backpressure — When Arrival Outpaces Processing](04-backpressure.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "3. Core Concepts · C#/.NET"
 <!-- language-switch:start -->
 View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/03-concepts.en.md) · [Java](../../../java/guide/server/03-concepts.en.md) · [Kotlin](../../../kotlin/guide/server/03-concepts.en.md) · [Node/TypeScript](../../../node/guide/server/03-concepts.en.md)
 <!-- language-switch:end -->
-
-# 3. Core Concepts
 
 > **The documents that own this chapter's contract** — [Framework Overview](../../../common/spec/server/00-foundation/03-overview.en.md)
 > and the [Interaction Model](../../../common/spec/server/00-foundation/04-interaction-model.en.md) own the

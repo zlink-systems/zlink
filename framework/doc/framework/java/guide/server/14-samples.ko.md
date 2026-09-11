@@ -7,6 +7,8 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · Java"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 14. 샘플 고르기 — 내 문제에 가까운 예제부터
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 13. 주요 타입 사용 색인](13-interface-catalog.ko.md) | [다음: 15. E2E 테스트 — client로 시스템 전체를 검증하기](15-e2e-testing.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · Java"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/14-samples.ko.md) · [C++](../../../cpp/guide/server/14-samples.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/14-samples.ko.md) · [Node/TypeScript](../../../node/guide/server/14-samples.ko.md)
 <!-- language-switch:end -->
-
-# 14. 샘플 고르기 — 내 문제에 가까운 예제부터
 
 > **이 장에는 계약을 소유하는 스펙 문서가 없다.** 어떤 샘플부터 보면 좋은지 고르는
 > 안내이기 때문이다. 각 샘플의 언어 중립 시나리오, 메시지 계약과 검증 기준은

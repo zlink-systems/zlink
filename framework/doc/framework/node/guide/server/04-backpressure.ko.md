@@ -7,6 +7,8 @@ title: "4. Backpressure — 처리보다 도착이 빠를 때 · Node/TypeScript
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 4. Backpressure — 처리보다 도착이 빠를 때
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 3. 핵심 개념](03-concepts.ko.md) | [다음: 5. Channel Messaging — request · send · pub/sub](05-channel-messaging.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "4. Backpressure — 처리보다 도착이 빠를 때 · Node/TypeScript
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/04-backpressure.ko.md) · [C++](../../../cpp/guide/server/04-backpressure.ko.md) · [Java](../../../java/guide/server/04-backpressure.ko.md) · [Kotlin](../../../kotlin/guide/server/04-backpressure.ko.md) · **Node/TypeScript**
 <!-- language-switch:end -->
-
-# 4. Backpressure — 처리보다 도착이 빠를 때
 
 > **이 장의 계약 소유 문서** — [비동기 실행 정책](../../../common/spec/server/01-execution/README.ko.md)과
 > [Framework API](../../../common/spec/server/00-foundation/06-framework-api.ko.md),

@@ -7,6 +7,8 @@ title: "1. 개요 · Node/TypeScript"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 1. 개요
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [다음: 2. 시작하기](02-getting-started.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "1. 개요 · Node/TypeScript"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/01-overview.ko.md) · [C++](../../../cpp/guide/server/01-overview.ko.md) · [Java](../../../java/guide/server/01-overview.ko.md) · [Kotlin](../../../kotlin/guide/server/01-overview.ko.md) · **Node/TypeScript**
 <!-- language-switch:end -->
-
-# 1. 개요
 
 > **이 장의 계약 소유 문서** — [Framework 개요](../../../common/spec/server/00-foundation/03-overview.ko.md)와
 > [언어별 공개 계약 목차](../../../common/spec/server/languages/README.ko.md)가 소유한다.

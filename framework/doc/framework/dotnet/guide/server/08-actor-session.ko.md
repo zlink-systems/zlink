@@ -7,6 +7,8 @@ title: "8. Session과 Actor binding · C#/.NET"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 8. Session과 Actor binding
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 7. Actor와 Spot](07-actor-spot.ko.md) | [다음: 9. STREAM](09-stream.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "8. Session과 Actor binding · C#/.NET"
 <!-- language-switch:start -->
 다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/08-actor-session.ko.md) · [Java](../../../java/guide/server/08-actor-session.ko.md) · [Kotlin](../../../kotlin/guide/server/08-actor-session.ko.md) · [Node/TypeScript](../../../node/guide/server/08-actor-session.ko.md)
 <!-- language-switch:end -->
-
-# 8. Session과 Actor binding
 
 > **이 장의 계약 소유 문서** — [Session Actor dispatch](../../../common/spec/server/04-session/02-session-actor-binding.ko.md)가
 > 동작을, [언어별 STREAM session · bound session 공개 계약](../../../common/spec/server/languages/README.ko.md)이

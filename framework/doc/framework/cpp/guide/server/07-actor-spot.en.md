@@ -7,6 +7,8 @@ title: "7. Actor and Spot · C++"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 7. Actor and Spot
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 6. Spot](06-spot.en.md) | [Next: 8. Session and Actor Binding](08-actor-session.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "7. Actor and Spot · C++"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/07-actor-spot.en.md) · **C++** · [Java](../../../java/guide/server/07-actor-spot.en.md) · [Kotlin](../../../kotlin/guide/server/07-actor-spot.en.md) · [Node/TypeScript](../../../node/guide/server/07-actor-spot.en.md)
 <!-- language-switch:end -->
-
-# 7. Actor and Spot
 
 > **The documents that own this chapter's contract** —
 > [Actor Model](../../../common/spec/server/03-spot-actor/04-actor-model.en.md) and
