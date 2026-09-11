@@ -1,9 +1,9 @@
 # 인계 — framework 성능(gRPC bench)과 HWM 흐름 제어
 
 작성 2026-09-12. 이전 세션이 길어져 판단이 흔들렸고, 같은 결론을 두 번 도출했다.
-**아래 §3이 그 결론이며, 새 세션은 §3부터 읽으면 된다.**
+**§3이 HWM 결론이고, §5가 남은 이슈다. 새 세션은 §5.0부터 읽어라 — main이 적색이다.**
 
-관련 이슈: **#5 #6 #7**(0.90), **#259**(capacity 고갈), #262, #255, #60, #101, #87
+관련 이슈: **#278**(main 적색·최우선), **#5 #6 #7**(0.90), **#259**(capacity 고갈), **#277**(Node 측정 불가), #101, #60. 열린 PR #276.
 
 ---
 
@@ -317,11 +317,88 @@ framework/languages/node/packages/framework/src/runtime/dispatch/application-job
 
 ---
 
-## 5. 기타 열린 이슈
+## 5. 남은 이슈 — 2026-09-12 세션 종료 시점
 
-| 이슈 | 내용 |
+### 5.0 먼저 — main이 Windows에서 적색이다
+
+**#278이 최우선이다. 다른 어떤 작업보다 먼저 해소한다.**
+
+PR #270(2026-09-11 20:16 머지) 이후 main의 win-x64·win-arm64가 계속 실패한다
+(run `34643333076`, 단계 `Run framework unit tests (Debug, net8.0)`, 9건).
+Linux x64/arm64와 macOS arm64는 통과한다.
+
+원인은 확정했다. `SetLastError = true`가 캡처하는 값이 플랫폼마다 다르다.
+
+| 플랫폼 | CLR이 캡처 | Core가 설정 | 일치 |
+|---|---|---|---|
+| Linux / macOS | CRT `errno` | CRT `errno` | O |
+| **Windows** | **Win32 `GetLastError()`** | CRT `errno` | **X** |
+
+Core는 CRT `errno`를 설정한다 — `core/src/runtime/sockets/common/socket_send_complete.cpp:169,234`의
+`errno = EAGAIN;`, `core/src/api/core/context_api.cpp:90`의 `zlink_errno()`.
+Windows에서 `Marshal.GetLastPInvokeError()`는 이 값을 보지 못한다.
+
+실패 테스트가 전부 backpressure 경로라는 점이 진단과 맞는다
+(`BackpressuredSend_*`, `ZlinkSubmitException : zlink error code 1`).
+
+수정 방향은 `NativeMethods.Core.cs:176`의 `GetLastPInvokeError()` **한 곳에서만** 분기하는 것이다.
+Windows는 `zlink_errno()`를 반환 직후 즉시 호출하고, Linux·macOS는 현행을 유지한다.
+호출부가 41곳이므로 분기가 helper 밖으로 새면 안 된다.
+
+**`errno` 검사를 빼는 우회(PR #263 방식)로 되돌리지 마라.** 그것은 #262의 재발이다.
+지켜야 할 계약은 `result == BACKPRESSURED` AND `errno == EAGAIN` AND `completionId != 0`이다.
+
+### 5.1 0.18.0 열린 이슈
+
+| 이슈 | 상태 | 다음 행동 |
+|---|---|---|
+| **#278** | **main 적색 — 최우선** | §5.0. codex job `winerrno-278` 착수함 |
+| **#259** | 조사 완료, 스펙 개정 대기 | §3.5·§3.6의 문안 확정 → codex 리뷰 → 사용자 승인 → 4언어 적용 |
+| **#5 #6 #7** | request PASS, send 미달 | send **건당 비용**(§1.3) 감축. 깊이 문제가 아니다 |
+| **#101** | **#277에 막혀 있다** | #277 해소 후 7언어 전수 재측정 |
+| **#277** | 신규 | Node REQREP가 `request completion drain timed out`으로 측정 불가 |
+| **#60** | 현재 재현 안 됨 | 닫는 조건 = linux-x64·win-x64 Debug/net8.0 **연속 10회 green** |
+
+### 5.2 열린 PR
+
+| PR | 상태 |
 |---|---|
-| **#262** | Core가 `BACKPRESSURED` 반환 시 `errno`를 `EAGAIN`으로 남기지 않는다(스펙 위반). `core/src/api/socket/socket_request_reply_submit_api.cpp:282`가 덮어쓴다. 스펙은 `core/doc/spec/core/socket/06-dealer.ko.md:411-413`. **4언어 binding이 errno를 검사하므로 전체 영향** |
-| **#255** | `AutomaticTurnDispatch` E2E가 async terminal 개명을 안 따라가 빌드 실패 |
-| **#60** | oversized reply가 재현되지 않는다. 증거 기록 후 열어둠 |
-| **#101 · #87** | 릴리스. 0.90 판정 후 |
+| **#276** | .NET RouteMesh receive-flow 등록(#259 조사 중 발견한 §6 위반). Linux·macOS 통과, Windows는 #278 때문에 적색. **#278 해소 후 재실행하고 머지한다.** #259는 닫지 않는다 |
+| #275 #274 #272 | 0.19.0 Windows 계열 draft. 타 담당 |
+| #226 #213 #31 | 원작업자 담당 (사용자 지시) |
+
+### 5.3 #262에 대한 정정 — 이전 판의 기록이 틀렸다
+
+이 문서의 이전 판은 #262를 이렇게 적었다.
+
+> Core가 `BACKPRESSURED` 반환 시 `errno`를 `EAGAIN`으로 남기지 않는다(스펙 위반).
+> `socket_request_reply_submit_api.cpp:282`가 덮어쓴다.
+
+**틀렸다.** Core는 `socket_send_complete.cpp:169,234`에서 **명시적으로** `errno = EAGAIN`을
+설정하며 git 이력이 그 의도를 확인해 준다. 실제 원인은 **.NET P/Invoke 경계에서 errno가
+유실된 것**이었고, 독립 probe로 증명했다 — `SetLastError=true` 즉시 캡처 11,
+별도 지연 `zlink_errno()` 호출 0.
+
+PR #270이 그 정공법을 넣었고 #262는 닫혔다. 다만 Windows 분기를 놓쳐 #278이 생겼다.
+
+### 5.4 이번 세션에서 정리한 것
+
+- 실행 중이던 codex job 3건 종료. perf ticket 큐 비움.
+- **worktree 94개 → 4개.** 판정 기준은 `git cherry origin/main <branch>`다.
+  `git merge-base --is-ancestor`는 squash merge를 미머지로 오판한다 —
+  44개로 보였던 미머지가 실제로는 29개가 이미 머지된 PR이었다.
+- 남긴 worktree: `main`, `zlink-259-dotnet`(PR #276), 릴리스용 detached 2개.
+
+### 5.5 되풀이하지 말 것 — 이번 세션의 오판
+
+§4의 목록에 더한다.
+
+- **"3건이 3시간째 진행 중인 건 perf 큐 락 대기 때문"** → 절반만 맞았다.
+  두 perf job은 대기가 아니라 **측정 실패 루프**에 빠져 있었다(#277).
+  큐 상태만 보고 job 로그의 오류를 안 읽었다.
+- **"PR #276의 Windows 실패는 내 변경 탓"** → 아니다. main이 이미 적색이었다.
+  **로컬 main이 3커밋 뒤처진 상태로 코드를 읽어서** #270이 안 들어간 것처럼 보였다.
+  진단 전에 `git fetch && git log origin/main`을 먼저 한다.
+- **PR 본문에 `Closes #259`를 썼다** → #276은 #259 본체(C++ capacity 고갈)를 고치지 않는다.
+  머지되면 미해결 이슈가 자동으로 닫혔을 것이다. `Refs`로 정정했다.
+  **닫기 키워드는 이슈 본문이 요구한 것을 실제로 해결했을 때만 쓴다.**
