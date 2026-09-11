@@ -393,6 +393,9 @@ start_command() {
         fi
     fi
 
+    if [[ -z "$milestone" && -n "$issue_arg" ]]; then
+        milestone=$(gh issue view "$ISSUE_NUMBER" --json milestone --jq '.milestone.title // empty' 2>/dev/null || true)
+    fi
     [[ -n "$milestone" ]] || milestone=$(default_milestone "$root")
     set_milestone_best_effort "$ISSUE_NUMBER" "$milestone"
 
