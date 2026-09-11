@@ -76,6 +76,9 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         assertTrue(backend.discarded);
         assertInstanceOf(IllegalStateException.class, stagedFailure.get());
         assertThrows(IllegalStateException.class, () ->
+            owner.acceptIngress(
+                staged, new byte[] {2}, null, ignored -> { }));
+        assertThrows(IllegalStateException.class, () ->
             owner.closeDurableBacklog(
                 staged, root, actorReplayer(owner, staged)));
     }
