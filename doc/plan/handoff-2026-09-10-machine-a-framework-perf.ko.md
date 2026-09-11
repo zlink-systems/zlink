@@ -217,6 +217,131 @@ claim 하면 거절된 호출이 뒤이은 정상 호출에 보인다.
 | **#15** | 선행 조건 미도래(`ZLINK_CTX_OPT_BLOCKY` 잔존, binding이 `MaxMessageSize` 노출). 1.0.0으로 옮기자고 제안 |
 | **#47** | **#151 Java 투입(2026-09-11).** #47 판정에서 드러난 것이 흐름 제어 이완이고 #151이 바로 그 구조를 바꾼다. #151 브리프에 **깊이 상한을 증명하는 회귀 테스트**를 완료 조건으로 넣었다 |
 
+### 플랫폼 차단 — 사용자 결정 2026-09-11: **CI에 진단을 붙이고 0.19.0으로 이월**
+
+마일스톤 **0.19.0을 새로 만들었고**(`#3`) #17·#23·#77을 옮겼다. #15는 1.0으로 옮겼다.
+**#18은 재현되지 않아 닫았다.**
+
+| Issue | 플랫폼 | 근거 |
+|---|---|---|
+| ~~#18~~ | Windows | **닫음.** win-x64/node22가 최근 4회 연속 success, 8~10분에 끝난다(한도 30분). Chromium 단계 자체가 green |
+| #17 | macOS | **증상이 바뀌었다.** hang은 없다(12분 정상 종료). 대신 osx-arm64에서만 `MalformedPushedControl_ReconnectsAndReadmits`(net8)와 `DirectNoBindReply_BackpressuredSubmissionIsNotTerminalRefusal`(net10)이 깨진다. 최근 14 run 중 7 실패, 같은 run에서 linux·windows는 전부 통과 |
+| #23 | Windows | framework C++ Windows CI가 아예 없다(#117이 그걸 만든다) |
+| #77 | macOS ARM | 재현됨. 실패 테스트가 run마다 다르다 — `channel-client.test.js` 80/81(RouteMesh ready 10초 timeout), `backend-contract.test.js`의 MeshNode 채널 record dispatch(`2 !== 0`) |
+
+**붙인 진단**: `framework-dotnet.yml`에 실패 시 TRX artifact 업로드(PR #177). TRX에는 테스트별
+stdout과 stack이 있어 raw 로그보다 좁히기 쉽고, job 만료 뒤에도 남는다.
+`framework-node.yml`에도 게이트 출력을 `tee`로 남기려 했으나 **되돌렸다** — 그 단계가 Windows에서
+pwsh로 도는데 `shell: bash`로 바꾸는 것은 성공 경로의 실행 셸을 바꾸는 일이라 이득보다 위험이 크다.
+#77에 필요한 것은 로그 보존이 아니라 **테스트 쪽 message-flow 추적**이며 0.19.0에서 한다.
+
+### main이 red였다 — 내 머지 때문 (2026-09-11)
+
+**`framework-node.yml`의 node20 job이 전 플랫폼에서 실패하고 있었다.**
+
+```
+error: 'Promise.withResolvers is not a function'
+  framework/languages/node/test/contract/backend-contract.test.js:199,240,241
+```
+
+`Promise.withResolvers`는 **Node 22에서 들어왔는데 Node 20이 필수 런타임**이다
+(`framework/languages/node/scripts/verify_node_abi_matrix.js:16` → `['20', '22']`).
+`4a233e576d`(#99 G5 Node, **내가 머지한 PR #135**)에서 들어왔고 node22 job은 통과하므로 보이지 않았다.
+
+PR #176으로 로컬 `deferred()` helper로 바꿨고 **node20이 5개 플랫폼 전부 green**이 됐다.
+같은 종류(Node 22+ 전용 API: `Array.fromAsync`·`Object.groupBy`·`toSorted`·`toSpliced`·
+`Array.prototype.with`)를 전체 훑었고 **다른 위반은 없다.**
+
+**교훈: 언어 런타임 최소 버전은 테스트 코드에도 적용된다.** 상위 버전에서만 돌려보면 안 보인다.
+
+### #16 완료 — 그리고 CI가 만들자마자 결함 4건을 찾았다
+
+PR #118 머지. `pull_request`에서 Core ctest·binding smoke·framework Java를 검증한다.
+**셋 다 main에 이미 있던 것이고 돌리는 CI가 없어서 보이지 않았다.**
+
+| 찾은 것 | 처리 |
+|---|---|
+| stream 테스트가 러너에서만 hang — 완료 판정이 수신 개수였다 | #120 → 프레임 byte 기준 |
+| Python perf 러너 단언 2건이 정책 정합 이전 값 — **4일간 red** | #164 → PR #165 |
+| relocation barrier 테스트가 2-core에서만 실패 — future 완료를 turn 종료로 착각 | #166 → PR #175 |
+| Python binding smoke가 Core prefix 미전달 | 워크플로에서 `sync-local-core-libs.sh` 배선 |
+
+**남은 구멍: `integrationTest`를 CI가 돌리지 않는다.** G4 이후 `.submit().reply()`로 바뀌지 않은
+호출부가 거기 남아 있다가 PR #169에서야 드러났다. 같은 종류다. 후속으로 추가한다.
+
+### #151이 지금 캠페인의 중심이다 (2026-09-11)
+
+**G4의 이득을 framework가 하나도 쓰지 않고 있다.** G5는 의미 보존이 목표였으므로
+`send`는 `.admitted`, `request`는 `.reply`를 **항상** 기다리게 적응시켰다. `result`를 보지 않는다.
+
+```
+result == OK            → 이미 로컬 큐에 들어갔다. 기다릴 것이 없다.
+result == BACKPRESSURED → 바인딩이 payload를 보관하고 WRITABLE에서 재제출한다. 이때만 기다린다.
+```
+
+바인딩 perf 루프는 이미 이 구조다(#96). framework만 뒤처져 있다.
+
+**분담 확정 (사용자 결정 2026-09-11): Java·.NET은 A, Node·C++는 B.**
+
+| 언어 | 담당 | 상태 |
+|---|---|---|
+| Java | **A** | 2차 job 진행 중. **36셀 before/after 측정 통과** — send-saturation before 73,084~77,556 / after 73,700~77,195, request-backpressure p99 양쪽 0.44~0.60 ms, `peak_in_flight`(bp-4096) before 25/58/63 · after 67/28/37. **1차의 −32%도 #47의 깊이 폭증(1,101)도 없다** |
+| .NET | **A** | job 진행 중. 기준선 측정 완료 |
+| Node | **B** | 미착수. 수정 지점은 `node-raw-binding-port.ts:247,300` — 항상 `.submit().admitted`를 await 한다 |
+| C++ | **B** | 미착수 |
+
+B에게 넘긴 1차 기각 맥락 네 가지는 **Issue #151 코멘트**에 적었다 —
+① 공유 객체가 가변이면 안 된다(Node `Promise.resolve()`는 불변이라 안전, C++은 확인 필요)
+② send-saturation 처리량을 반드시 잰다
+③ `peak_in_flight`를 p99와 함께 싣는다
+④ Node의 수정 지점과 바인딩 쪽 구조는 이미 올바르다는 것
+
+**Java 1차 기각 사유 두 가지 — 다른 언어도 같은 것을 본다.**
+
+**① send-saturation 처리량이 떨어졌다.** 1024에서 80,223 → 54,390 (**−32%**), 4096에서
+78,929 → 60,048 (**−24%**). 덜 기다리는데 느려졌다. 가장 유력한 가설은 **이미 완료된 stage를
+돌려주면 `thenXxx` continuation이 호출 thread에서 인라인으로 돌아**, 전에 completion owner
+thread가 받아주던 downstream 작업까지 송신 루프가 떠안는다는 것이다. 파이프라이닝이 사라진다.
+
+**② 공유 *가변* future.**
+```java
+private static final CompletionStage<Void> ADMITTED = CompletableFuture.completedFuture(null);
+```
+`CompletableFuture`는 가변이고 `ZLinkActorBoundSessionSender.java:124`에
+`submission.toCompletableFuture().cancel(true)`가 있다. **한 번만 취소되면 프로세스 전체의
+이후 모든 `OK` send가 영구히 취소된 상태를 돌려받는다.**
+
+Node 바인딩은 같은 자리에서 `Promise.resolve()`를 공유하는데 **Promise는 불변이라 안전하다**
+(`bindings/node/src/zlink/runtime/messaging/completion_owner.ts:70,307`). Java·.NET은 그렇지 않다.
+**.NET을 리뷰할 때 `ValueTask`/`Task` 공유 인스턴스를 먼저 본다.**
+
+### Node send/backpressure 구조 (참고 — #151 Node 설계 전에 읽을 것)
+
+바인딩이 전부 소유하고 framework는 `await`만 한다.
+
+1. **제출은 항상 `DONTWAIT` 한 번.** `completion_owner.ts:268` `socketSubmitSend(..., DONTWAIT, token)`.
+   절대 블로킹하지 않는다.
+2. **`OK`** → `RESOLVED_SEND`(공유 `Promise.resolve()`). `completionId != 0`이면 `InternalError`로 던진다.
+3. **`Backpressured`** → 그때서야 `snapshotRetryPayload(payload)`로 복사한다(Core는 SEND payload를
+   보관하지 않는다). `EAGAIN`이 아니거나 `completionId == 0`이면 던진다. `CompletionEntry`를 만들고
+   `ensureRuntimeWatch()`로 **이때 비로소** mailbox fd 감시를 켠다.
+4. **재제출은 completion drain이 한다** — `captureWritable()`이 검증 후 `writableRetries`에 넣고,
+   drain 루프가 **completion 큐를 `NO_DATA`까지 비운 뒤** 재제출한다. 재제출이 곧바로 새 WRITABLE을
+   밀어넣기 때문이다.
+5. **framework는 `result`를 보지 않는다** — `node-raw-binding-port.ts:247,300`이 항상
+   `.submit().admitted`를 await 한다. 이것이 Node 몫의 #151이다.
+
+### #158 2차 리뷰 — 계수는 맞고 측정 조건이 틀렸다
+
+`171,243 completed = 118,070 received + 53,173 rejected` 대사와 107,374건 삼중 일치는 훌륭하다.
+그런데 벤치 타깃이 `set_min_level(fw::log_level_t::debug)`로 돌게 됐다
+(`bench_framework_cpp_server.cpp:62`, 변경 전에는 없던 줄). **이 벤치가 #7의 기준이다** —
+그대로 머지하면 앞으로의 모든 C++ framework 숫자가 debug 로깅 비용을 안고 나온다.
+`stats_http_server_t`/`snapshot("bench")` 경로로 읽도록 되돌려보냈다.
+
+C++ metric이 debug에서만 발행되는 것(`host_capacity_runtime.hpp:150`이 같다)은 **기존 관례**이며
+job 잘못이 아니다. **#173**으로 분리했다 — .NET은 `Meter` counter라 항상 발행한다.
+
 ### 부하가 판정을 오염시킨다 — 내가 당했다
 
 C++ `test_cpp_framework_m6b_runtime`이 #45 브랜치에서 1/5 실패했다. 회귀로 볼 뻔했는데

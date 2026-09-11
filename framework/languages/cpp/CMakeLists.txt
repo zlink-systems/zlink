@@ -118,6 +118,8 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/messaging/call_facade_runtime.cpp
   framework/src/runtime/messaging/logical_multicast_runtime.cpp
   framework/src/runtime/diagnostics/runtime_observation.cpp
+  framework/src/runtime/diagnostics/logging.cpp
+  framework/src/runtime/diagnostics/monitoring_runtime.cpp
   framework/src/runtime/protocol/service_wire_codec.cpp
   framework/src/runtime/protocol/relocation_envelope_codec.cpp
   framework/src/runtime/mesh/raw_mesh_node_owner.cpp
@@ -228,9 +230,7 @@ add_library(zlink_framework STATIC
   framework/src/runtime/configuration/builders/configuration_builder.cpp
   framework/src/runtime/configuration/endpoint_connections.cpp
   framework/src/runtime/configuration/services.cpp
-  framework/src/runtime/diagnostics/logging.cpp
   framework/src/runtime/diagnostics/health.cpp
-  framework/src/runtime/diagnostics/monitoring_runtime.cpp
   framework/src/runtime/execution/serial_execution_queue.cpp
   framework/src/runtime/handlers/handler_registry.cpp
   framework/src/runtime/dispatch/projection.cpp
@@ -1015,6 +1015,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   zlink_framework_cpp_enable_test_assertions(test_cpp_framework_m6a_runtime)
   add_test(NAME test_cpp_framework_m6a_runtime
     COMMAND test_cpp_framework_m6a_runtime)
+  add_test(NAME test_cpp_framework_owner_rejection_observability
+    COMMAND test_cpp_framework_m6a_runtime --owner-rejection-observability)
+  set_tests_properties(test_cpp_framework_owner_rejection_observability PROPERTIES
+    LABELS "framework-unit")
   set_tests_properties(test_cpp_framework_m6a_runtime PROPERTIES
     LABELS "framework-unit;framework-m6-runtime;topology;mailbox;liveness;raw-binding"
     TIMEOUT 30)

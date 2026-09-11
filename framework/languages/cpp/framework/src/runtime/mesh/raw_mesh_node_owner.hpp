@@ -4,6 +4,7 @@
 #include "runtime/backend/raw_route_port.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
+#include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/mesh/service_liveness_registry.hpp"
@@ -14,6 +15,7 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -67,6 +69,7 @@ struct raw_mesh_node_options_t
       zlink::auto_hwm_profile::balanced;
     std::shared_ptr<application_job_queue_t> application_jobs;
     std::shared_ptr<const std::atomic_bool> shutdown_admission_seal;
+    dispatch_options_t dispatch;
 };
 
 struct raw_mesh_byte_vector_less_t
@@ -187,6 +190,8 @@ class raw_mesh_node_owner_t
     task_t<void> publish_draining ();
     service_liveness_registry_t &liveness () noexcept;
     service_mailbox_t &mailbox () noexcept;
+    void publish_drop_metrics (
+      const std::shared_ptr<framework::detail::monitoring_runtime_state_t> &monitoring) const;
 
     bool connect_peer (const std::string &endpoint);
     bool connect_peer (const std::string &endpoint,
@@ -532,6 +537,7 @@ class raw_mesh_node_owner_t
     raw_mesh_pump_result_t enqueue_received_or_retain (
       service_mailbox_record_t record,
       raw_mesh_pump_result_t accepted_result);
+    void observe_owner_rejection (const service_mailbox_record_t &record);
     raw_mesh_node_options_t _options;
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
@@ -550,6 +556,7 @@ class raw_mesh_node_owner_t
     service_topology_registry_t _topology;
     service_liveness_registry_t _liveness;
     service_mailbox_t _mailbox;
+    std::array<std::atomic_uint64_t, 4> _inbound_drops{};
     std::optional<pending_received_mailbox_record_t> _pending_received;
     std::deque<pending_admission_t> _pending_admissions;
     std::size_t _pending_admission_bytes = 0;

@@ -5721,6 +5721,25 @@ void verify_full_owner_rejects_request_without_blocking_other_owner ()
             == static_cast<std::uint32_t> (
               protocol::framework_error_code::workerQueueFull));
 
+    // A rejected request already has a terminal reply. It is not a one-way
+    // drop in the cross-language zlink.mesh_node.messages.dropped metric.
+    std::size_t drop_series = 0;
+    zlink::framework::logging_builder_t logging;
+    logging.set_min_level (zlink::framework::log_level_t::debug).use_provider (
+      "request-rejection-test", [&] (const zlink::framework::log_record_t &record) {
+          std::map<std::string, std::string> fields;
+          for (const auto &field : record.fields)
+              fields.emplace (field.key, field.value);
+          if (fields["name"] == "zlink.mesh_node.messages.dropped") {
+              assert (std::stod (fields["value"]) == 0);
+              ++drop_series;
+          }
+      });
+    auto monitoring = std::make_shared<zlink::framework::detail::monitoring_runtime_state_t> ();
+    monitoring->diagnostics_logger = logging.create_logger ("request-rejection-test");
+    target.publish_drop_metrics (monitoring);
+    assert (drop_series == 4);
+
     std::promise<foundation::operation_terminal_t> independent_promise;
     auto independent = independent_promise.get_future ();
     assert (source.request_to_channel (
@@ -7392,8 +7411,12 @@ void verify_relocation_failure_code_classification_is_distinct ()
 
 } // namespace
 
-int main ()
+int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--owner-request-rejection") {
+        verify_full_owner_rejects_request_without_blocking_other_owner ();
+        return 0;
+    }
     verify_actor_create_replays_after_reciprocal_handover ();
     verify_message_follow_invalidation_subscriptions_are_lifetime_safe ();
     verify_actor_calls_keep_selected_route_until_follow_notice ();
