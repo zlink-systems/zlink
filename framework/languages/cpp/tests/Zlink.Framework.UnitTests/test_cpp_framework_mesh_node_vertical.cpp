@@ -2127,18 +2127,19 @@ int main (int argc, char **argv)
     zlink::framework::detail::mesh_node_runtime_t node (state);
     node.start ();
     assert (node.status ().routing_id ().to_string () == "vertical-a");
-    assert (node.status ().channel_count () == 1);
+    assert (node.channel_names ().size () == 1);
 
     const std::vector<std::uint8_t> metadata{0x01, 0x02, 0x03};
     const std::vector<zlink::message_t> direct_parts{
       zlink::message_t::from (std::string ("direct"))};
-    const auto direct_result =
-      node.send_to_node (*state->routing_id, direct_parts, metadata);
+    const auto direct_result = std::move (
+      node.send_to_node (*state->routing_id, direct_parts, metadata)).result ().value ();
     assert (direct_result == zlink::submit_result_t::invalid_argument);
 
     const std::vector<zlink::message_t> channel_parts{
       zlink::message_t::from (std::string ("channel"))};
-    const auto channel_result = node.send_to_channel ("work", channel_parts, metadata);
+    const auto channel_result = std::move (
+      node.send_to_channel ("work", channel_parts, metadata)).result ().value ();
     assert (channel_result == zlink::submit_result_t::invalid_argument);
 
     node.stop ();

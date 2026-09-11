@@ -1,32 +1,22 @@
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot/../redis-common.ps1"
+. "$PSScriptRoot/../sample-build-common.ps1"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$CppRoot = Resolve-Path (Join-Path $ScriptDir "../..")
+$CppRoot = (Resolve-Path (Join-Path $ScriptDir "../..")).Path
 $env:TICTACTOE_LOG_DIR = if ($env:TICTACTOE_LOG_DIR) { $env:TICTACTOE_LOG_DIR } else { Join-Path $ScriptDir "logs" }
 New-Item -ItemType Directory -Force -Path $env:TICTACTOE_LOG_DIR | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:TICTACTOE_LOG_DIR "*.log")
 
-$BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Join-Path $CppRoot "build" }
-$BuildConfiguration = if ($env:ZLINK_CPP_BUILD_CONFIGURATION) { $env:ZLINK_CPP_BUILD_CONFIGURATION } else { "Release" }
-$BinDir = $BuildDir
-if (Test-Path (Join-Path $BuildDir "$BuildConfiguration/sample_cpp_framework_tictactoe_play.exe")) {
-    $BinDir = Join-Path $BuildDir $BuildConfiguration
-} elseif (-not (Test-Path (Join-Path $BinDir "sample_cpp_framework_tictactoe_play.exe")) -and
-    (Test-Path (Join-Path $BinDir "linux-ninja-debug/sample_cpp_framework_tictactoe_play.exe"))) {
-    $BinDir = Join-Path $BinDir "linux-ninja-debug"
-}
-
-$PlayBin = Join-Path $BinDir "sample_cpp_framework_tictactoe_play.exe"
-$ApiBin = Join-Path $BinDir "sample_cpp_framework_tictactoe_api.exe"
-$ClientBin = Join-Path $BinDir "sample_cpp_framework_tictactoe_client.exe"
+$SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRoot -RequiredBinaries @(
+    "sample_cpp_framework_tictactoe_play",
+    "sample_cpp_framework_tictactoe_api",
+    "sample_cpp_framework_tictactoe_client"
+) -AllowMissingBinaries
+$BuildDir = $SampleBuild.BuildDir
+$BuildConfiguration = $SampleBuild.Configuration
+Initialize-ZlinkCppSampleRuntime -Build $SampleBuild
 $CTestBin = if ($env:CTEST_BIN) { $env:CTEST_BIN } else { "ctest" }
-
-foreach ($Binary in @($PlayBin, $ApiBin, $ClientBin)) {
-    if (-not (Test-Path $Binary)) {
-        throw "Missing executable: $Binary. Build C++ samples first or set ZLINK_CPP_BUILD_DIR."
-    }
-}
 
 function Reserve-Ports([int]$Count) {
     return @(Get-ZlinkSamplePorts -Count $Count)
@@ -100,6 +90,7 @@ function Start-Server([string]$Name, [string]$Binary, [string[]]$Arguments) {
     $stdout = Join-Path $LogDir "$Name.log"
     $stderr = Join-Path $LogDir "$Name.err.log"
     $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -RedirectStandardOutput $stdout -RedirectStandardError $stderr -NoNewWindow -PassThru
+    [void]$process.Handle
     $script:Processes.Add($process)
 }
 
@@ -149,11 +140,15 @@ function Cleanup([int]$Status) {
     return $Status
 }
 
-& $CTestBin --test-dir $BuildDir `
-    -C $BuildConfiguration `
-    -R "test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway|sample_smoke_sample_cpp_framework_tictactoe_(play|api)" `
-    --output-on-failure
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& cmake --build $BuildDir --config $BuildConfiguration --parallel 2 --target `
+    sample_cpp_framework_tictactoe_play sample_cpp_framework_tictactoe_api sample_cpp_framework_tictactoe_client
+if ($LASTEXITCODE -ne 0) { throw "TicTacToe sample build failed." }
+$PlayBin = Get-ZlinkCppSampleBinary -Build $SampleBuild -Name "sample_cpp_framework_tictactoe_play"
+$ApiBin = Get-ZlinkCppSampleBinary -Build $SampleBuild -Name "sample_cpp_framework_tictactoe_api"
+$ClientBin = Get-ZlinkCppSampleBinary -Build $SampleBuild -Name "sample_cpp_framework_tictactoe_client"
+
+Invoke-ZlinkCppSampleCTest -Build $SampleBuild -CTestBin $CTestBin `
+    -Pattern "test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway|sample_smoke_sample_cpp_framework_tictactoe_(play|api)"
 
 $ports = Reserve-Ports 16
 $ApiAEndpoint = "tcp://127.0.0.1:$($ports[0])"
@@ -185,52 +180,49 @@ try {
     $RedisEndpoint = $redis.Endpoint
     Wait-Port "redis" $RedisEndpoint
 
-    $topologyArgs = @(
-        "--sample.topology.apiEndpoint=$ApiAEndpoint",
-        "--sample.topology.apiAEndpoint=$ApiAEndpoint",
-        "--sample.topology.apiBEndpoint=$ApiBEndpoint",
-        "--sample.topology.apiHttpEndpoint=$ApiAHttpEndpoint",
-        "--sample.topology.apiAHttpEndpoint=$ApiAHttpEndpoint",
-        "--sample.topology.apiBHttpEndpoint=$ApiBHttpEndpoint",
-        "--sample.topology.playEndpoint=$PlayAEndpoint",
-        "--sample.topology.playAEndpoint=$PlayAEndpoint",
-        "--sample.topology.playBEndpoint=$PlayBEndpoint",
-        "--sample.topology.playARouteEndpoint=$PlayARouteEndpoint",
-        "--sample.topology.playBRouteEndpoint=$PlayBRouteEndpoint",
-        "--sample.topology.apiARouteEndpoint=$ApiARouteEndpoint",
-        "--sample.topology.apiBRouteEndpoint=$ApiBRouteEndpoint",
-        "--sample.topology.playASpotEndpoint=$PlayASpotEndpoint",
-        "--sample.topology.playBSpotEndpoint=$PlayBSpotEndpoint",
-        "--sample.topology.playASpotRouterEndpoint=$PlayASpotRouterEndpoint",
-        "--sample.topology.playBSpotRouterEndpoint=$PlayBSpotRouterEndpoint",
-        "--sample.topology.playAStreamEndpoint=$PlayAStreamEndpoint",
-        "--sample.topology.playBStreamEndpoint=$PlayBStreamEndpoint",
-        "--sample.topology.redisEndpoint=$RedisEndpoint",
-        "--sample.topology.redisKeyPrefix=$RedisKeyPrefix"
-    )
-    $serverArgs = @("--sample.host.keepRunning", "true") + $topologyArgs
+    $ConfigDir = Join-Path $LogDir "config"
+    New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+    function Write-RoleConfig([string]$Role, [string]$ApiNode, [string]$PlayNode) {
+        $configuration = @{ sample = @{
+            host = @{ keepRunning = $true }
+            topology = @{
+                logDir = $env:TICTACTOE_LOG_DIR; apiNode = $ApiNode; playNode = $PlayNode
+                apiEndpoint = $ApiAEndpoint; apiAEndpoint = $ApiAEndpoint; apiBEndpoint = $ApiBEndpoint
+                apiHttpEndpoint = $ApiAHttpEndpoint; apiAHttpEndpoint = $ApiAHttpEndpoint; apiBHttpEndpoint = $ApiBHttpEndpoint
+                playEndpoint = $PlayAEndpoint; playAEndpoint = $PlayAEndpoint; playBEndpoint = $PlayBEndpoint
+                playARouteEndpoint = $PlayARouteEndpoint; playBRouteEndpoint = $PlayBRouteEndpoint
+                apiARouteEndpoint = $ApiARouteEndpoint; apiBRouteEndpoint = $ApiBRouteEndpoint
+                playASpotEndpoint = $PlayASpotEndpoint; playBSpotEndpoint = $PlayBSpotEndpoint
+                playASpotRouterEndpoint = $PlayASpotRouterEndpoint; playBSpotRouterEndpoint = $PlayBSpotRouterEndpoint
+                playAStreamEndpoint = $PlayAStreamEndpoint; playBStreamEndpoint = $PlayBStreamEndpoint
+                redisEndpoint = $RedisEndpoint; redisKeyPrefix = $RedisKeyPrefix
+            }
+        } }
+        $configuration | ConvertTo-Json -Depth 6 |
+            Set-Content -LiteralPath (Join-Path $ConfigDir "$Role.json") -Encoding UTF8
+    }
+    Write-RoleConfig "api-a" "a" "a"
+    Write-RoleConfig "api-b" "b" "a"
+    Write-RoleConfig "play-a" "a" "a"
+    Write-RoleConfig "play-b" "a" "b"
 
-    Start-Server "api-a" $ApiBin ($serverArgs + @("--sample.topology.apiNode=a"))
+    Start-Server "api-a" $ApiBin @("--config=`"$(Join-Path $ConfigDir 'api-a.json')`"")
     Wait-Port "api-a-channel" $ApiAEndpoint
     Wait-Port "api-a-http" $ApiAHttpEndpoint
     Wait-Port "api-a-route" $ApiARouteEndpoint
 
-    Start-Server "api-b" $ApiBin ($serverArgs + @("--sample.topology.apiNode=b"))
+    Start-Server "api-b" $ApiBin @("--config=`"$(Join-Path $ConfigDir 'api-b.json')`"")
     Wait-Port "api-b-channel" $ApiBEndpoint
     Wait-Port "api-b-http" $ApiBHttpEndpoint
     Wait-Port "api-b-route" $ApiBRouteEndpoint
 
-    Start-Server "play-a" $PlayBin ($serverArgs + @("--sample.topology.playNode=a"))
-    Wait-Port "play-a-channel" $PlayAEndpoint
+    Start-Server "play-a" $PlayBin @("--config=`"$(Join-Path $ConfigDir 'play-a.json')`"")
+    Wait-Port "play-a-object-route" $PlayARouteEndpoint
     Wait-Port "play-a-stream" $PlayAStreamEndpoint
-    Wait-Port "play-a-spot-router" $PlayASpotRouterEndpoint
-    Wait-Port "play-a-spot-pub" $PlayASpotEndpoint
 
-    Start-Server "play-b" $PlayBin ($serverArgs + @("--sample.topology.playNode=b"))
-    Wait-Port "play-b-channel" $PlayBEndpoint
+    Start-Server "play-b" $PlayBin @("--config=`"$(Join-Path $ConfigDir 'play-b.json')`"")
+    Wait-Port "play-b-object-route" $PlayBRouteEndpoint
     Wait-Port "play-b-stream" $PlayBStreamEndpoint
-    Wait-Port "play-b-spot-router" $PlayBSpotRouterEndpoint
-    Wait-Port "play-b-spot-pub" $PlayBSpotEndpoint
     Wait-RouteReady $ApiAHttpEndpoint "tictactoe-play-a"
     Wait-RouteReady $ApiAHttpEndpoint "tictactoe-play-b"
 

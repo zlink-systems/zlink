@@ -1,10 +1,19 @@
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot/../redis-common.ps1"
+. "$PSScriptRoot/../sample-build-common.ps1"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$CppRoot = Resolve-Path (Join-Path $ScriptDir "../..")
-$BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Join-Path $CppRoot "build" }
-$BuildConfiguration = if ($env:ZLINK_CPP_BUILD_CONFIGURATION) { $env:ZLINK_CPP_BUILD_CONFIGURATION } else { "Release" }
+$CppRoot = (Resolve-Path (Join-Path $ScriptDir "../..")).Path
+$SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRoot -RequiredBinaries @(
+    "sample_cpp_framework_bingo_api",
+    "sample_cpp_framework_bingo_matchmaking",
+    "sample_cpp_framework_bingo_play",
+    "sample_cpp_framework_bingo_session",
+    "sample_cpp_framework_bingo_client"
+) -AllowMissingBinaries
+$BuildDir = $SampleBuild.BuildDir
+$BuildConfiguration = $SampleBuild.Configuration
+Initialize-ZlinkCppSampleRuntime -Build $SampleBuild
 $CTestBin = if ($env:CTEST_BIN) { $env:CTEST_BIN } else { "ctest" }
 $LogDir = Join-Path $ScriptDir "build/sample-logs"
 
@@ -12,27 +21,8 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $LogDir "*.log")
 
 function Find-Binary([string]$Name) {
-    $candidates = @(
-        (Join-Path $BuildDir $Name),
-        (Join-Path $BuildDir "$Name.exe"),
-        (Join-Path $BuildDir "$BuildConfiguration/$Name"),
-        (Join-Path $BuildDir "$BuildConfiguration/$Name.exe"),
-        (Join-Path $BuildDir "linux-ninja-debug/$Name"),
-        (Join-Path $BuildDir "linux-ninja-debug/$Name.exe")
-    )
-    foreach ($candidate in $candidates) {
-        if (Test-Path $candidate) {
-            return $candidate
-        }
-    }
-    throw "Missing executable: $Name. Build C++ samples first or set ZLINK_CPP_BUILD_DIR."
+    return Get-ZlinkCppSampleBinary -Build $SampleBuild -Name $Name
 }
-
-$ApiBin = Find-Binary "sample_cpp_framework_bingo_api"
-$MatchmakingBin = Find-Binary "sample_cpp_framework_bingo_matchmaking"
-$PlayBin = Find-Binary "sample_cpp_framework_bingo_play"
-$SessionBin = Find-Binary "sample_cpp_framework_bingo_session"
-$ClientBin = Find-Binary "sample_cpp_framework_bingo_client"
 
 $Processes = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
 $RedisContainer = $null
@@ -155,6 +145,7 @@ function Start-Server([string]$Name, [string]$Binary, [string[]]$Arguments) {
     $logPath = Join-Path $LogDir "$Name.log"
     $errorLogPath = Join-Path $LogDir "$Name.err.log"
     $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -NoNewWindow -PassThru
+    [void]$process.Handle
     $Processes.Add($process)
 }
 
@@ -167,12 +158,17 @@ function Invoke-Checked([string]$FilePath, [string[]]$Arguments) {
 
 $Status = 1
 try {
-    Invoke-Checked $CTestBin @(
-        "--test-dir", $BuildDir,
-        "-C", $BuildConfiguration,
-        "-R", "test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway",
-        "--output-on-failure"
-    )
+    & cmake --build $BuildDir --config $BuildConfiguration --parallel 2 --target `
+        sample_cpp_framework_bingo_api sample_cpp_framework_bingo_matchmaking `
+        sample_cpp_framework_bingo_play sample_cpp_framework_bingo_session sample_cpp_framework_bingo_client
+    if ($LASTEXITCODE -ne 0) { throw "Bingo sample build failed." }
+    $ApiBin = Find-Binary "sample_cpp_framework_bingo_api"
+    $MatchmakingBin = Find-Binary "sample_cpp_framework_bingo_matchmaking"
+    $PlayBin = Find-Binary "sample_cpp_framework_bingo_play"
+    $SessionBin = Find-Binary "sample_cpp_framework_bingo_session"
+    $ClientBin = Find-Binary "sample_cpp_framework_bingo_client"
+    Invoke-ZlinkCppSampleCTest -Build $SampleBuild -CTestBin $CTestBin `
+        -Pattern "test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway"
 
     $ports = Reserve-Endpoints 24
     $apiAChannelEndpoint = if ($env:BINGO_API_A_CHANNEL_ENDPOINT) { $env:BINGO_API_A_CHANNEL_ENDPOINT } else { "tcp://$($ports[2])" }
@@ -204,70 +200,92 @@ try {
     $redisEndpoint = $redis.Endpoint
     Wait-Endpoint "redis" "tcp://$redisEndpoint"
 
-    $topologyArgs = @(
-        "--sample.topology.apiChannelEndpoint=$apiAChannelEndpoint",
-        "--sample.topology.apiAChannelEndpoint=$apiAChannelEndpoint",
-        "--sample.topology.apiBChannelEndpoint=$apiBChannelEndpoint",
-        "--sample.topology.playChannelEndpoint=$playAChannelEndpoint",
-        "--sample.topology.playAChannelEndpoint=$playAChannelEndpoint",
-        "--sample.topology.playBChannelEndpoint=$playBChannelEndpoint",
-        "--sample.topology.playARouteEndpoint=$playARouteEndpoint",
-        "--sample.topology.playBRouteEndpoint=$playBRouteEndpoint",
-        "--sample.topology.apiAPlayRouteEndpoint=$apiAPlayRouteEndpoint",
-        "--sample.topology.apiBPlayRouteEndpoint=$apiBPlayRouteEndpoint",
-        "--sample.topology.apiAMatchmakingRouteEndpoint=$apiAMatchmakingRouteEndpoint",
-        "--sample.topology.apiBMatchmakingRouteEndpoint=$apiBMatchmakingRouteEndpoint",
-        "--sample.topology.matchmakingRouteEndpoint=$matchmakingRouteEndpoint",
-        "--sample.topology.sessionAPlayRouteEndpoint=$sessionAPlayRouteEndpoint",
-        "--sample.topology.sessionBPlayRouteEndpoint=$sessionBPlayRouteEndpoint",
-        "--sample.topology.playASpotEndpoint=$playASpotEndpoint",
-        "--sample.topology.playBSpotEndpoint=$playBSpotEndpoint",
-        "--sample.topology.playASpotRouterEndpoint=$playASpotRouterEndpoint",
-        "--sample.topology.playBSpotRouterEndpoint=$playBSpotRouterEndpoint",
-        "--sample.topology.sessionSpotEndpoint=$sessionASpotEndpoint",
-        "--sample.topology.sessionRouterEndpoint=$sessionARouterEndpoint",
-        "--sample.topology.sessionAStreamEndpoint=$sessionAStreamEndpoint",
-        "--sample.topology.sessionBStreamEndpoint=$sessionBStreamEndpoint",
-        "--sample.topology.logDir=$LogDir",
-        "--sample.topology.redisEndpoint=$redisEndpoint",
-        "--sample.topology.redisKeyPrefix=$RedisKeyPrefix"
-    )
-    $serverArgs = @("--sample.host.keepRunning", "true") + $topologyArgs
+    $configDir = Join-Path $LogDir "config"
+    New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+    function Write-RoleConfig(
+        [string]$Name,
+        [string]$ApiNode,
+        [string]$PlayNode,
+        [string]$SessionNode,
+        [string]$StreamEndpoint,
+        [string]$SessionSpotEndpoint,
+        [string]$SessionRouterEndpoint
+    ) {
+        $path = Join-Path $configDir "$Name.json"
+        @{
+            sample = @{
+                host = @{ keepRunning = $true }
+                topology = @{
+                    logDir = $LogDir
+                    apiNode = $ApiNode
+                    playNode = $PlayNode
+                    sessionNode = $SessionNode
+                    apiChannelEndpoint = $apiAChannelEndpoint
+                    apiAChannelEndpoint = $apiAChannelEndpoint
+                    apiBChannelEndpoint = $apiBChannelEndpoint
+                    playChannelEndpoint = $playAChannelEndpoint
+                    playAChannelEndpoint = $playAChannelEndpoint
+                    playBChannelEndpoint = $playBChannelEndpoint
+                    playARouteEndpoint = $playARouteEndpoint
+                    playBRouteEndpoint = $playBRouteEndpoint
+                    apiAPlayRouteEndpoint = $apiAPlayRouteEndpoint
+                    apiBPlayRouteEndpoint = $apiBPlayRouteEndpoint
+                    apiAMatchmakingRouteEndpoint = $apiAMatchmakingRouteEndpoint
+                    apiBMatchmakingRouteEndpoint = $apiBMatchmakingRouteEndpoint
+                    matchmakingRouteEndpoint = $matchmakingRouteEndpoint
+                    playASpotEndpoint = $playASpotEndpoint
+                    playBSpotEndpoint = $playBSpotEndpoint
+                    playASpotRouterEndpoint = $playASpotRouterEndpoint
+                    playBSpotRouterEndpoint = $playBSpotRouterEndpoint
+                    sessionSpotEndpoint = $SessionSpotEndpoint
+                    sessionRouterEndpoint = $SessionRouterEndpoint
+                    streamEndpoint = $StreamEndpoint
+                    sessionAStreamEndpoint = $sessionAStreamEndpoint
+                    sessionBStreamEndpoint = $sessionBStreamEndpoint
+                    sessionAPlayRouteEndpoint = $sessionAPlayRouteEndpoint
+                    sessionBPlayRouteEndpoint = $sessionBPlayRouteEndpoint
+                    redisEndpoint = $redisEndpoint
+                    redisKeyPrefix = $RedisKeyPrefix
+                }
+            }
+        } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $path -Encoding UTF8
+        return $path
+    }
 
-    Start-Server "matchmaking" $MatchmakingBin $serverArgs
+    $roleConfigs = @{
+        "play-a" = Write-RoleConfig "play-a" "a" "a" "a" $sessionAStreamEndpoint $sessionASpotEndpoint $sessionARouterEndpoint
+        "play-b" = Write-RoleConfig "play-b" "a" "b" "a" $sessionAStreamEndpoint $sessionASpotEndpoint $sessionARouterEndpoint
+        "api-a" = Write-RoleConfig "api-a" "a" "a" "a" $sessionAStreamEndpoint $sessionASpotEndpoint $sessionARouterEndpoint
+        "api-b" = Write-RoleConfig "api-b" "b" "a" "a" $sessionAStreamEndpoint $sessionASpotEndpoint $sessionARouterEndpoint
+        "matchmaking" = Write-RoleConfig "matchmaking" "a" "a" "a" $sessionAStreamEndpoint $sessionASpotEndpoint $sessionARouterEndpoint
+        "session-a" = Write-RoleConfig "session-a" "a" "a" "a" $sessionAStreamEndpoint $sessionASpotEndpoint $sessionARouterEndpoint
+        "session-b" = Write-RoleConfig "session-b" "a" "a" "b" $sessionBStreamEndpoint $sessionBSpotEndpoint $sessionBRouterEndpoint
+    }
+
+    Start-Server "matchmaking" $MatchmakingBin @("--config=$($roleConfigs['matchmaking'])")
     Wait-Endpoint "matchmaking" $matchmakingRouteEndpoint
 
-    Start-Server "api-a" $ApiBin ($serverArgs + @("--sample.topology.apiNode=a"))
+    Start-Server "api-a" $ApiBin @("--config=$($roleConfigs['api-a'])")
     Wait-Endpoint "api-a" $apiAChannelEndpoint
     Wait-Endpoint "api-a-play-route" $apiAPlayRouteEndpoint
     Wait-Endpoint "api-a-matchmaking-route" $apiAMatchmakingRouteEndpoint
-    Start-Server "api-b" $ApiBin ($serverArgs + @("--sample.topology.apiNode=b"))
+    Start-Server "api-b" $ApiBin @("--config=$($roleConfigs['api-b'])")
     Wait-Endpoint "api-b" $apiBChannelEndpoint
     Wait-Endpoint "api-b-play-route" $apiBPlayRouteEndpoint
     Wait-Endpoint "api-b-matchmaking-route" $apiBMatchmakingRouteEndpoint
 
-    Start-Server "session-a" $SessionBin ($serverArgs + @(
-        "--sample.topology.sessionNode=a",
-        "--sample.topology.sessionSpotEndpoint=$sessionASpotEndpoint",
-        "--sample.topology.sessionRouterEndpoint=$sessionARouterEndpoint",
-        "--sample.topology.streamEndpoint=$sessionAStreamEndpoint"
-    ))
+    Start-Server "play-a" $PlayBin @("--config=$($roleConfigs['play-a'])")
+    Wait-Endpoint "play-a-spot-router" $playASpotRouterEndpoint
+    Start-Server "play-b" $PlayBin @("--config=$($roleConfigs['play-b'])")
+    Wait-Endpoint "play-b-spot-router" $playBSpotRouterEndpoint
+
+    Start-Server "session-a" $SessionBin @("--config=$($roleConfigs['session-a'])")
     Wait-Endpoint "session-a-stream" $sessionAStreamEndpoint
     Wait-Endpoint "session-a-play-route" $sessionAPlayRouteEndpoint
 
-    Start-Server "session-b" $SessionBin ($serverArgs + @(
-        "--sample.topology.sessionNode=b",
-        "--sample.topology.sessionSpotEndpoint=$sessionBSpotEndpoint",
-        "--sample.topology.sessionRouterEndpoint=$sessionBRouterEndpoint",
-        "--sample.topology.streamEndpoint=$sessionBStreamEndpoint"
-    ))
+    Start-Server "session-b" $SessionBin @("--config=$($roleConfigs['session-b'])")
     Wait-Endpoint "session-b-stream" $sessionBStreamEndpoint
     Wait-Endpoint "session-b-play-route" $sessionBPlayRouteEndpoint
-
-    Start-Server "play-a" $PlayBin ($serverArgs + @("--sample.topology.playNode=a"))
-    Wait-Endpoint "play-a-spot-router" $playASpotRouterEndpoint
-    Start-Server "play-b" $PlayBin ($serverArgs + @("--sample.topology.playNode=b"))
-    Wait-Endpoint "play-b-spot-router" $playBSpotRouterEndpoint
 
     Wait-Log "play-a peer route readiness" (Join-Path $LogDir "play-a.log") "bingo-ready kind=peer-route node=play-a peer=play-b"
     Wait-Log "play-b peer route readiness" (Join-Path $LogDir "play-b.log") "bingo-ready kind=peer-route node=play-b peer=play-a"
@@ -279,10 +297,14 @@ try {
     Wait-Log "session-b room route readiness" (Join-Path $LogDir "session-b.log") "bingo-ready kind=mesh-route node=session-b mesh=room"
 
     $clientLog = Join-Path $LogDir "client.log"
-    Invoke-Checked $ClientBin @(
-        "--session-a-stream-endpoint", $sessionAStreamEndpoint,
-        "--session-b-stream-endpoint", $sessionBStreamEndpoint
-    ) *> $clientLog
+    $clientTraceLog = Join-Path $LogDir "client.err.log"
+    $clientProcess = Start-Process -FilePath $ClientBin -ArgumentList @(
+        "--session-a-stream-endpoint=$sessionAStreamEndpoint",
+        "--session-b-stream-endpoint=$sessionBStreamEndpoint"
+    ) -RedirectStandardOutput $clientLog -RedirectStandardError $clientTraceLog -NoNewWindow -PassThru -Wait
+    if ($clientProcess.ExitCode -ne 0) {
+        throw "$ClientBin failed with exit code $($clientProcess.ExitCode)"
+    }
 
     if (-not (Select-String -Path $clientLog -Pattern "bingo=completed" -Quiet)) {
         throw "Bingo C++ client did not write completion marker."

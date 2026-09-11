@@ -2,11 +2,18 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 . "$PSScriptRoot/../redis-common.ps1"
+. "$PSScriptRoot/../sample-build-common.ps1"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$CppRoot = Resolve-Path (Join-Path $ScriptDir "../..")
-$BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Join-Path $CppRoot "build" }
-$BuildConfiguration = if ($env:ZLINK_CPP_BUILD_CONFIGURATION) { $env:ZLINK_CPP_BUILD_CONFIGURATION } else { "Release" }
+$CppRoot = (Resolve-Path (Join-Path $ScriptDir "../..")).Path
+$SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRoot -RequiredBinaries @(
+    "sample_cpp_framework_gamequest_quest_mission",
+    "sample_cpp_framework_gamequest_game_api",
+    "sample_cpp_framework_gamequest_client"
+) -AllowMissingBinaries
+$BuildDir = $SampleBuild.BuildDir
+$BuildConfiguration = $SampleBuild.Configuration
+Initialize-ZlinkCppSampleRuntime -Build $SampleBuild
 $WaitAttempts = 300
 $WaitMilliseconds = 100
 $Processes = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
@@ -18,15 +25,7 @@ $ReleaseFile = Join-Path $RunDir "owner-loss-release"
 New-Item -ItemType Directory -Force -Path $LogDir, $ConfigDir | Out-Null
 
 function Find-Binary([string]$Name) {
-    foreach ($candidate in @(
-        (Join-Path $BuildDir $Name), (Join-Path $BuildDir "$Name.exe"),
-        (Join-Path $BuildDir "$BuildConfiguration/$Name"), (Join-Path $BuildDir "$BuildConfiguration/$Name.exe"),
-        (Join-Path $BuildDir "linux-ninja-debug/$Name"),
-        (Join-Path $BuildDir "linux-ninja-debug/$Name.exe")
-    )) {
-        if (Test-Path $candidate) { return $candidate }
-    }
-    throw "Missing executable: $Name"
+    return Get-ZlinkCppSampleBinary -Build $SampleBuild -Name $Name
 }
 
 function Role-Logs([string]$Name) {
@@ -113,6 +112,7 @@ function Start-Role([string]$Name, [string]$Binary, [string[]]$Arguments) {
     $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -NoNewWindow -PassThru `
         -RedirectStandardOutput (Join-Path $LogDir "$Name.stdout.log") `
         -RedirectStandardError (Join-Path $LogDir "$Name.stderr.log")
+    [void]$process.Handle
     $Processes.Add($process)
     return $process
 }
@@ -151,7 +151,11 @@ function Cleanup {
         }
     }
     if ($RedisContainer) { Remove-ZlinkSampleRedis $RedisContainer }
-    if (Test-Path $RunDir) { Remove-Item -Recurse -Force $RunDir }
+    if ($env:ZLINK_CPP_CROSS_KEEP_RUN_DIR -eq '1') {
+        Write-Host "runDir=$RunDir"
+    } elseif (Test-Path $RunDir) {
+        Remove-Item -Recurse -Force $RunDir
+    }
 }
 
 $Succeeded = $false

@@ -79,7 +79,7 @@ string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef tooling_run_id)
 set(smoke_run_dir
   "${ZLINK_FRAMEWORK_CPP_BUILD_DIR}/tooling-smoke-runs/${tooling_run_id}")
 set(smoke_build_dir
-  "${smoke_run_dir}/linux-ninja-debug")
+  "${smoke_run_dir}/linux-ninja-release")
 set(tooling_configure_args)
 if(DEFINED ZLINK_FRAMEWORK_CPP_TOOLING_CMAKE_TOOLCHAIN_FILE)
   list(APPEND tooling_configure_args
@@ -102,7 +102,7 @@ execute_process(
     -S "${ZLINK_FRAMEWORK_CPP_SOURCE_DIR}"
     -B "${smoke_build_dir}"
     -G Ninja
-    -D CMAKE_BUILD_TYPE=Debug
+    -D CMAKE_BUILD_TYPE=Release
     -D CMAKE_CXX_STANDARD=20
     -D CMAKE_CXX_EXTENSIONS=OFF
     -D CMAKE_EXPORT_COMPILE_COMMANDS=ON
