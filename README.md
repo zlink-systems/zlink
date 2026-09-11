@@ -156,7 +156,7 @@ against an unreleased revision.
 and OpenSSL when TLS/WSS is enabled. Framework runtimes additionally need the
 toolchain of their host language.
 
-Core provides x64 and ARM64 build paths for Linux, macOS, and Windows. Consult
+Core provides x64 and ARM64 build paths for Linux, an ARM64 build path for macOS, and an x64 build path for Windows. Consult
 each language document for the runtime support, package formats, and
 platform-specific constraints of its Binding or Framework implementation.
 

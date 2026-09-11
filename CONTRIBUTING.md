@@ -204,8 +204,8 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   [`doc/building/release-pipeline.md`](doc/building/release-pipeline.md); accounts and secrets by
   [`doc/building/release-accounts.md`](doc/building/release-accounts.md); ConanCenter and vcpkg go
   through PRs ([`doc/building/pr-drafts/`](doc/building/pr-drafts/)).
-- Supported platforms are linux-x64, linux-arm64, macos-arm64, windows-x64 and windows-arm64. Intel
-  Mac is unsupported from Core up and never appears in CI matrices or prebuilds.
+- Supported platforms are linux-x64, linux-arm64, macos-arm64 and windows-x64. Intel Mac and Windows
+  ARM64 are unsupported from Core up and never appear in CI matrices or prebuilds.
 - After a release, move the baseline worktree to the new tag, and record workflow or procedure fixes
   made during release preparation under `doc/building/release-prep/<date>-<topic>.ko.md`.
 

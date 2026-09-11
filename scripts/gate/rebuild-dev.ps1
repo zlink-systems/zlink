@@ -13,6 +13,7 @@ if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
 } else {
   $RepositoryRoot = (Resolve-Path $RepositoryRoot).Path
 }
+. (Join-Path $PSScriptRoot "..\local-package\windows-platform.ps1")
 $version = (Select-String -LiteralPath (Join-Path $RepositoryRoot "VERSION") -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
 if ([string]::IsNullOrWhiteSpace($version)) { throw "Unable to read Core version from $RepositoryRoot" }
 $artifacts = Join-Path $RepositoryRoot ".artifacts\windows"
@@ -64,6 +65,7 @@ $files = @(Get-ChildItem -LiteralPath $corePrefix -Recurse -File |
 }) | Sort-Object path
 $provenanceJson = [ordered]@{
   schema = 1; package = "zlink-core"; version = $version; abiMajor = 0
+  platform = "windows-x64"
   runtime = [ordered]@{ path = "bin/zlink.dll"; sha256 = (Get-FileHash $runtime -Algorithm SHA256).Hash.ToLowerInvariant(); soname = $null }
   source = [ordered]@{ revision = (& git -C $RepositoryRoot rev-parse HEAD).Trim(); dirty = [bool](& git -C $RepositoryRoot status --porcelain --untracked-files=no) }
   release = $null; files = $files

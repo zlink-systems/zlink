@@ -119,7 +119,6 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 | linux-arm64 | ✅ | 소스 빌드 | Core 아카이브 | |
 | macos-arm64 | ✅ | 소스 빌드 | Core 아카이브 | |
 | windows-x64 | ✅ | 소스 빌드 | Core 아카이브 | 아카이브에 OpenSSL DLL 포함 |
-| windows-arm64 | ✅ | 소스 빌드 | Core 아카이브 | |
 | macos-x64 (Intel) | ❌ | ❌ | ❌ | Core부터 미지원(2026-09-09 결정) |
 
 "소스 빌드"는 패키지 설치 시 `ZLINK_CORE_SOURCE=release`와 `ZLINK_CORE_PACKAGE_PREFIX`로 가리킨 Core

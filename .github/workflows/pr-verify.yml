@@ -15,22 +15,30 @@ on:
     # 운영 코드만. 문서·계획·bench·sample은 이 워크플로우를 시작하지 않는다.
     paths:
       - ".github/workflows/pr-verify.yml"
+      - ".github/workflows/build.yml"
       - "VERSION"
       - "core/include/**"
       - "core/src/**"
       - "core/tests/**"
       - "core/CMakeLists.txt"
       - "core/cmake/**"
+      - "core/builds/windows/**/*.ps1"
       - "bindings/c/**"
       - "bindings/cpp/**"
+      - "bindings/dotnet/**"
       - "bindings/java/**"
       - "bindings/python/**"
       - "bindings/tools/**"
       # mirror 대조 대상. go·rust는 헤더 미러만 본다.
       - "bindings/go/include/**"
       - "bindings/rust/include/**"
+      - "framework/languages/cpp/**"
+      - "framework/languages/dotnet/**"
       - "framework/languages/java/**"
+      - "framework/languages/node/**"
       - "framework/runtime/**"
+      - "scripts/gate/rebuild-dev.ps1"
+      - "scripts/local-package/**"
   workflow_dispatch:
 
 concurrency:
@@ -44,6 +52,7 @@ jobs:
     outputs:
       core: ${{ steps.select.outputs.core }}
       framework_java: ${{ steps.select.outputs.framework_java }}
+      windows_local_package: ${{ steps.select.outputs.windows_local_package }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -58,7 +67,7 @@ jobs:
           set -euo pipefail
           if [ "${EVENT}" != "pull_request" ]; then
             # 손으로 돌릴 때는 전부 돈다.
-            printf 'core=true\nframework_java=true\n' >> "${GITHUB_OUTPUT}"
+            printf 'core=true\nframework_java=true\nwindows_local_package=true\n' >> "${GITHUB_OUTPUT}"
             exit 0
           fi
           git fetch --no-tags --depth=200 origin "${BASE}"
@@ -71,8 +80,85 @@ jobs:
               echo "$1=false" >> "${GITHUB_OUTPUT}"
             fi
           }
-          emit core '^(VERSION|core/|bindings/(c|cpp|python|tools)/|bindings/(go|rust)/include/|\.github/workflows/pr-verify\.yml)'
-          emit framework_java '^(VERSION|core/|bindings/(java|tools)/|framework/languages/java/|framework/runtime/|\.github/workflows/pr-verify\.yml)'
+          emit core '^(VERSION|core/|bindings/(c|cpp|python|tools)/|bindings/(go|rust)/include/|\.github/workflows/(pr-verify|build)\.yml)'
+          emit framework_java '^(VERSION|core/|bindings/(java|tools)/|framework/languages/java/|framework/runtime/|\.github/workflows/(pr-verify|build)\.yml)'
+          emit windows_local_package '^(VERSION|BINDINGS_VERSION|FRAMEWORK_VERSION|core/builds/windows/.*\.ps1$|bindings/(cpp|dotnet|java|node)/|framework/languages/(cpp|dotnet|java|node)/|scripts/(local-package/|gate/rebuild-dev\.ps1)|\.github/workflows/(pr-verify|build)\.yml)'
+
+  windows-local-package:
+    name: Windows local-package contracts
+    needs: changes
+    if: needs.changes.outputs.windows_local_package == 'true'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Verify PowerShell 5 entrypoints and sample inventory
+        shell: powershell
+        run: .\scripts\local-package\tests\windows-entrypoints.Tests.ps1
+
+      - name: Verify Windows architecture mapping and rejection
+        shell: powershell
+        run: .\scripts\local-package\tests\windows-platform.Tests.ps1
+
+      - name: Verify synchronized versions and package paths
+        shell: powershell
+        run: python scripts/local-package/sync-version.py --check
+
+      - name: Whitespace check
+        shell: bash
+        env:
+          BASE: ${{ github.base_ref || 'main' }}
+        run: |
+          git fetch --no-tags --depth=200 origin "${BASE}"
+          git diff --check "$(git merge-base HEAD "origin/${BASE}")"
+
+  windows-local-package-build:
+    name: Windows local-package (x64)
+    needs: [changes, windows-local-package]
+    if: needs.changes.outputs.windows_local_package == 'true'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: bindings/node/package-lock.json
+
+      - name: Fetch verified Core release
+        id: core
+        shell: powershell
+        run: |
+          $prefix = .\scripts\local-package\core\fetch-release.ps1 `
+            -Platform windows-x64 `
+            -CacheDir "$env:RUNNER_TEMP\zlink-core"
+          "prefix=$prefix" >> $env:GITHUB_OUTPUT
+
+      - name: Build and inspect binding packages
+        shell: powershell
+        run: |
+          .\scripts\local-package\build-windows.ps1 `
+            -CorePrefix '${{ steps.core.outputs.prefix }}' `
+            -Language cpp,dotnet,java,node `
+            -Configuration Release
 
   core:
     name: Core ctest and binding smoke

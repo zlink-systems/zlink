@@ -196,7 +196,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   채널·확인 명령은 [`doc/building/release-pipeline.ko.md`](doc/building/release-pipeline.ko.md)가
   소유한다. 계정·secret은 [`doc/building/release-accounts.ko.md`](doc/building/release-accounts.ko.md),
   ConanCenter·vcpkg는 PR 방식([`doc/building/pr-drafts/`](doc/building/pr-drafts/)).
-- 지원 플랫폼은 linux-x64·linux-arm64·macos-arm64·windows-x64·windows-arm64다. Intel Mac은
+- 지원 플랫폼은 linux-x64·linux-arm64·macos-arm64·windows-x64다. Intel Mac과 Windows ARM64는
   Core부터 지원하지 않으며 CI matrix·prebuild에 넣지 않는다.
 - 릴리스 뒤 baseline worktree를 새 태그로 갱신하고, 릴리스 준비 중 고친 워크플로우·절차는
   `doc/building/release-prep/<날짜>-<주제>.ko.md`로 남긴다.

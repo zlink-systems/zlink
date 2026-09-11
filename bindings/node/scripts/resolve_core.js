@@ -82,5 +82,14 @@ if (!library) {
   fail(`Core library is missing ${libraryNames.join(' or ')} from ${libraryDirs.join(' or ')}`);
 }
 
-const values = { prefix: prefix || '', include: includeDir, library, version };
+function toGypPath(value) {
+  return process.platform === 'win32' ? value.replaceAll('\\', '/') : value;
+}
+
+const values = {
+  prefix: prefix || '',
+  include: toGypPath(includeDir),
+  library: toGypPath(library),
+  version
+};
 process.stdout.write(values[query]);

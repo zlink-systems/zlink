@@ -130,7 +130,7 @@ function validateDarwin(dir, arch) {
 }
 
 function validateWindows(dir, arch) {
-  const expected = arch === 'arm64' ? 'Aarch64' : arch === 'x64' ? 'x86-64' : null;
+  const expected = arch === 'x64' ? 'x86-64' : null;
   if (!expected) {
     fail(`unsupported Windows prebuild arch: ${arch}`);
   }

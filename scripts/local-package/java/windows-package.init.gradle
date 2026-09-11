@@ -10,11 +10,13 @@ rootProject {
         def prefixValue = System.getenv('ZLINK_CORE_PACKAGE_PREFIX')
         def summaryValue = System.getenv('ZLINK_CORE_PACKAGE_SUMMARY')
         def expectedCoreVersion = System.getenv('ZLINK_CORE_VERSION')
+        def expectedCorePlatform = System.getenv('ZLINK_CORE_PLATFORM')
         if (prefixValue == null || prefixValue.trim().isEmpty()
             || summaryValue == null || summaryValue.trim().isEmpty()
-            || expectedCoreVersion == null || expectedCoreVersion.trim().isEmpty()) {
+            || expectedCoreVersion == null || expectedCoreVersion.trim().isEmpty()
+            || expectedCorePlatform != 'windows-x64') {
             throw new GradleException(
-                'Windows Java packaging requires ZLINK_CORE_PACKAGE_PREFIX, ZLINK_CORE_PACKAGE_SUMMARY and ZLINK_CORE_VERSION')
+                'Windows Java packaging requires a verified prefix, summary, version and platform')
         }
 
         def prefix = file(prefixValue).canonicalFile
@@ -28,7 +30,9 @@ rootProject {
         }
         if (!runtime.isFile() || !manifest.isFile()
             || metadata.version != expectedCoreVersion
+            || metadata.platform != expectedCorePlatform
             || approved.version != expectedCoreVersion
+            || approved.platform != expectedCorePlatform
             || approved.prefix != prefix.canonicalPath
             || approved.provenanceSha256 != sha256(manifest)
             || approved.runtime.sha256 != sha256(runtime)

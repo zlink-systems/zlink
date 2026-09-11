@@ -20,13 +20,14 @@ if ($Version -ne $repoVersion) {
   throw "Core release version $Version must match repository VERSION $repoVersion"
 }
 
-$supportedPlatforms = @("windows-x64", "windows-arm64", "linux-x64", "linux-arm64", "macos-x64", "macos-arm64")
+$supportedPlatforms = @("windows-x64")
 if ($supportedPlatforms -notcontains $Platform) {
   throw "Unsupported Core release platform: $Platform"
 }
 if ($Platform -notlike "windows-*") {
   throw "PowerShell Core release fetcher is intended for Windows assets"
 }
+. (Join-Path $PSScriptRoot "..\windows-platform.ps1")
 
 if ([string]::IsNullOrWhiteSpace($CacheDir)) {
   $localAppData = [Environment]::GetFolderPath("LocalApplicationData")
@@ -51,11 +52,11 @@ if (-not $Force -and (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
     if ($hasUtf8Bom) {
       throw "Cached Core provenance must be UTF-8 without BOM"
     }
-    $existing = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    if ($existing.version -eq $Version -and $existing.package -eq "zlink-core") {
-      Write-Output $prefix
-      exit 0
-    }
+    $null = Resolve-ZLinkWindowsCorePackage `
+      -CorePrefix $prefix `
+      -ExpectedVersion $Version
+    Write-Output $prefix
+    exit 0
   } catch {
     # Recreate an incomplete cache entry below.
   }
@@ -180,6 +181,10 @@ try {
   if (-not (Test-Path -LiteralPath $runtimeFile -PathType Leaf)) {
     throw "Windows Core runtime is missing: $runtimePath"
   }
+  $runtimeArchitecture = Get-ZLinkPeArchitecture -Path $runtimeFile
+  if ($runtimeArchitecture -ne "x64") {
+    throw "Core release runtime architecture $runtimeArchitecture does not match $Platform"
+  }
   $files = @(Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object {
     [ordered]@{
       path = $_.FullName.Substring($stage.Length + 1).Replace("\", "/")
@@ -191,6 +196,7 @@ try {
     package = "zlink-core"
     version = $Version
     abiMajor = 0
+    platform = $Platform
     runtime = [ordered]@{
       path = $runtimePath
       sha256 = Get-Sha256 $runtimeFile

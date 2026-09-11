@@ -29,7 +29,7 @@ Regression tests are split into the following three layers.
 | Item | Standard |
 |------|------|
 | target framework | `net8.0`, `net10.0` |
-| runtime RID[^rid] | `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64` |
+| runtime RID[^rid] | `win-x64`, `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64` |
 | test mode | debug, release |
 
 The repository's current default build (the `ZLinkFrameworkTargetFrameworks` default) is a single
@@ -41,14 +41,13 @@ multi-target build for regression-matrix reporting, as below.
   reporting.
 
 Meanwhile, the packaging target of the repository's `bindings/dotnet/runtimes/` and the native
-artifact combination `.github/workflows/build.yml` produces are both based on the six runtime RIDs
+artifact combination `.github/workflows/build.yml` produces are both based on the five runtime RIDs
 above. The framework CI gate[^ci-gate] also treats this as the default scope by default.
 
 In other words, `.NET` framework regression tests don't run just one representative OS and call it
 done. Under the current plan, the platforms that must pass are:
 
 - Windows x64
-- Windows ARM64
 - Linux x64
 - Linux ARM64
 - macOS x64

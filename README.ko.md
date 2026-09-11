@@ -147,7 +147,7 @@ DEALER/ROUTER, request/reply, STREAM, monitoring 샘플을 함께 제공합니�
 **요구 사항** — CMake 3.10+, C++17 컴파일러(GCC 7+, Clang 5+, MSVC 2017+), TLS/WSS를
 켤 때 OpenSSL. Framework 런타임은 host 언어의 툴체인이 추가로 필요합니다.
 
-Core는 Linux, macOS, Windows에서 x64와 ARM64 빌드 경로를 제공합니다. Binding과
+Core는 Linux에 x64/ARM64, macOS에 ARM64, Windows에 x64 빌드 경로를 제공합니다. Binding과
 Framework 구현의 런타임 지원, 패키지 형식, 플랫폼별 제약은 각 언어 문서를
 참고하세요.
 

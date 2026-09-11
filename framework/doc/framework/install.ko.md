@@ -7,7 +7,7 @@
 | 항목 | 값 |
 |---|---|
 | 게시 버전 | framework 0.11, binding 0.17.6 |
-| 지원 플랫폼 | linux-x64, linux-arm64, macos-arm64, windows-x64, windows-arm64 (Intel Mac 미지원) |
+| 1.0 지원 플랫폼 | linux-x64, linux-arm64, macos-arm64, windows-x64 (Intel Mac 미지원) |
 | 패키지 저장소 | nuget.org, Maven Central, npm, vcpkg/Conan + GitHub Release |
 
 ## Framework 패키지
@@ -18,8 +18,7 @@
 framework는 각 언어의 패키지 저장소에 게시된 패키지로 설치한다. framework 패키지는
 자신이 의존하는 binding 패키지를 함께 끌어오고, binding 패키지에는 Core 엔진의 native
 런타임이 들어 있으므로 Core를 직접 빌드할 필요가 없다. 현재 게시 버전은 framework 0.11,
-binding 0.17.6이다. 지원 플랫폼은 linux-x64, linux-arm64, macos-arm64, windows-x64,
-windows-arm64다.
+binding 0.17.6이다. 1.0 릴리스 계열은 linux-x64, linux-arm64, macos-arm64, windows-x64를 지원한다.
 
 아래 탭은 언어별 설치 명령과 host 등록 코드다. 설치 뒤 첫 handler를 작성하고 실행하는
 절차는 각 언어의 "설치와 첫 동작" 장이 다룬다.

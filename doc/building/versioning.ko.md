@@ -57,8 +57,8 @@ binding 0.17.6에서 확인). 태그는 언어별로 push하거나 workflow를 �
 
 1.0 조건은 다음과 같다.
 
-- 공개 C API·ABI 동결(`libzlink.vers`), 지원 플랫폼 5종(linux-x64·linux-arm64·macos-arm64·
-  windows-x64·windows-arm64) 릴리스 아카이브와 CI green.
+- 공개 C API·ABI 동결(`libzlink.vers`), 지원 플랫폼 4종(linux-x64·linux-arm64·macos-arm64·
+  windows-x64) 릴리스 아카이브와 CI green.
 - 각 언어 binding의 공개 API 동결과 B 머신의 binding 성능 개선 캠페인 판정 완료.
 - Framework는 Core·bindings와 같은 1.0 계열에 맞춘다. 배포 순서는 Core → 해당 언어 binding →
   해당 언어 framework다.
