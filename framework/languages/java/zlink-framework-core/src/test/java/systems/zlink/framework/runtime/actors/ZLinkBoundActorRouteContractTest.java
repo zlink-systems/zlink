@@ -30,6 +30,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetricProbe;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
@@ -62,7 +63,7 @@ final class ZLinkBoundActorRouteContractTest {
     }
 
     @Test
-    void localReplyUsesItsDeclaredCodecInsteadOfEchoingTheRequestCodec() {
+    void localReplyUsesItsDeclaredCodecInsteadOfEchoingTheRequestCodec() throws Exception {
         AtomicReference<ZLinkStreamHeader> sentHeader = new AtomicReference<>();
         AtomicReference<String> sentPayload = new AtomicReference<>();
         ZLinkBackendStreamSocket stream = (ZLinkBackendStreamSocket)
@@ -106,19 +107,23 @@ final class ZLinkBoundActorRouteContractTest {
             () -> true,
             operation -> operation.apply(1),
             ZLinkRelayMetadataPolicy.EMPTY);
-        relayHeaders.enter(new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.REQUEST,
-            ZLinkStreamCodec.JSON,
-            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-            Optional.of(41L),
-            "Request",
-            Map.of()));
-        try {
-            actor.relay(ZLinkMessage.of("request"))
-                .toCompletableFuture()
-                .join();
-        } finally {
-            relayHeaders.exit();
+        try (ZLinkRequestMetricProbe metrics = ZLinkRequestMetricProbe.install()) {
+            relayHeaders.enter(new ZLinkStreamHeader(
+                ZLinkStreamMessageKind.REQUEST,
+                ZLinkStreamCodec.JSON,
+                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                Optional.of(41L),
+                "Request",
+                Map.of()));
+            try {
+                actor.relay(ZLinkMessage.of("request"))
+                    .toCompletableFuture()
+                    .join();
+            } finally {
+                relayHeaders.exit();
+            }
+            assertEquals(0L, metrics.inflight("game", "actor"));
+            assertEquals(1L, metrics.durationCount("game", "actor", "completed"));
         }
 
         assertEquals(ZLinkStreamCodec.PROTOBUF, sentHeader.get().codec());
@@ -299,6 +304,167 @@ final class ZLinkBoundActorRouteContractTest {
             clientReply.get().kind());
         assertEquals(Optional.of(41L),
             clientReply.get().requestSequence());
+    }
+
+    @Test
+    void remoteBoundActorRequestRecordsItsActualTerminalWithoutCountingSendControls()
+        throws Exception {
+        CompletableFuture<List<Message>> pending = new CompletableFuture<>();
+        AtomicReference<ZLinkStreamHeader> requestHeader = new AtomicReference<>();
+        ZLinkBackendStreamSocket stream = (ZLinkBackendStreamSocket)
+            Proxy.newProxyInstance(
+                ZLinkBackendStreamSocket.class.getClassLoader(),
+                new Class<?>[] {ZLinkBackendStreamSocket.class},
+                (proxy, method, arguments) -> switch (method.getName()) {
+                    case "relayBoundActorAsync", "replyAsync" ->
+                        CompletableFuture.completedFuture(null);
+                    case "requestBoundActor" -> {
+                        ZLinkStreamHeader header = null;
+                        for (Object argument : arguments) {
+                            if (argument instanceof ZLinkStreamHeader candidate) {
+                                header = candidate;
+                                break;
+                            }
+                        }
+                        if (header == null) {
+                            throw new AssertionError(
+                                "bound Actor request has no STREAM header");
+                        }
+                        if (header.kind() == ZLinkStreamMessageKind.SEND) {
+                            yield CompletableFuture.completedFuture(List.of());
+                        }
+                        requestHeader.set(header);
+                        yield pending;
+                    }
+                    default -> throw new UnsupportedOperationException(
+                        method.getName());
+                });
+        ZLinkSessionRelayHeaders relayHeaders = new ZLinkSessionRelayHeaders();
+        ZLinkBoundActor actor = new ZLinkBoundActor(
+            stream,
+            RoutingId.from("session"),
+            new ZLinkBackendActorRef(
+                RoutingId.from("actor-node-a"), "actor-1", 7),
+            "game",
+            Optional.empty(),
+            null,
+            new RawSerializer(),
+            0,
+            1,
+            ignored -> true,
+            null,
+            true,
+            ZLinkStreamCodec.JSON,
+            relayHeaders,
+            null,
+            () -> true,
+            operation -> operation.apply(1),
+            ZLinkRelayMetadataPolicy.EMPTY);
+
+        try (ZLinkRequestMetricProbe metrics = ZLinkRequestMetricProbe.install()) {
+            relayHeaders.enter(new ZLinkStreamHeader(
+                ZLinkStreamMessageKind.SEND,
+                ZLinkStreamCodec.JSON,
+                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                Optional.empty(),
+                "Push",
+                Map.of()));
+            try {
+                actor.relay(ZLinkMessage.of("push")).toCompletableFuture().join();
+            } finally {
+                relayHeaders.exit();
+            }
+            actor.notifyRemoteBoundSession().toCompletableFuture().join();
+            assertEquals(0L, metrics.inflight("game", "actor"));
+            assertEquals(0L, metrics.durationCount("game", "actor", "completed"));
+
+            relayHeaders.enter(new ZLinkStreamHeader(
+                ZLinkStreamMessageKind.REQUEST,
+                ZLinkStreamCodec.JSON,
+                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                Optional.of(41L),
+                "Request",
+                Map.of()));
+            CompletableFuture<Void> relay;
+            try {
+                relay = actor.relay(ZLinkMessage.of("request")).toCompletableFuture();
+            } finally {
+                relayHeaders.exit();
+            }
+            assertEquals(1L, metrics.inflight("game", "actor"));
+            assertTrue(relay.cancel(false));
+            assertEquals(1L, metrics.inflight("game", "actor"));
+
+            ZLinkStreamHeader response = ZLinkStreamHeader.createResponse(
+                requestHeader.get(),
+                ZLinkStreamCodec.JSON,
+                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                requestHeader.get().packetName(),
+                Map.of());
+            try (Message responsePart = Message.from(ZLinkStreamFrameCodec.encode(
+                    response, "reply".getBytes(StandardCharsets.UTF_8)))) {
+                pending.complete(List.of(responsePart));
+            }
+
+            assertEquals(0L, metrics.inflight("game", "actor"));
+            assertEquals(1L, metrics.durationCount("game", "actor", "completed"));
+        }
+    }
+
+    @Test
+    void remoteBoundActorRequestTimeoutRecordsActorTimeout() throws Exception {
+        ZLinkBackendStreamSocket stream = (ZLinkBackendStreamSocket)
+            Proxy.newProxyInstance(
+                ZLinkBackendStreamSocket.class.getClassLoader(),
+                new Class<?>[] {ZLinkBackendStreamSocket.class},
+                (proxy, method, arguments) -> switch (method.getName()) {
+                    case "requestBoundActor" -> CompletableFuture.failedFuture(
+                        new TimeoutException("bound actor request timed out"));
+                    default -> throw new UnsupportedOperationException(
+                        method.getName());
+                });
+        ZLinkSessionRelayHeaders relayHeaders = new ZLinkSessionRelayHeaders();
+        ZLinkBoundActor actor = new ZLinkBoundActor(
+            stream,
+            RoutingId.from("session"),
+            new ZLinkBackendActorRef(
+                RoutingId.from("actor-node-a"), "actor-1", 7),
+            "game",
+            Optional.empty(),
+            null,
+            new RawSerializer(),
+            0,
+            1,
+            ignored -> true,
+            null,
+            true,
+            ZLinkStreamCodec.JSON,
+            relayHeaders,
+            null,
+            () -> true,
+            operation -> operation.apply(1),
+            ZLinkRelayMetadataPolicy.EMPTY);
+
+        try (ZLinkRequestMetricProbe metrics = ZLinkRequestMetricProbe.install()) {
+            relayHeaders.enter(new ZLinkStreamHeader(
+                ZLinkStreamMessageKind.REQUEST,
+                ZLinkStreamCodec.JSON,
+                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                Optional.of(41L),
+                "Request",
+                Map.of()));
+            try {
+                assertThrows(CompletionException.class,
+                    () -> actor.relay(ZLinkMessage.of("request"))
+                        .toCompletableFuture().join());
+            } finally {
+                relayHeaders.exit();
+            }
+
+            assertEquals(0L, metrics.inflight("game", "actor"));
+            assertEquals(1L, metrics.durationCount("game", "actor", "timed_out"));
+            assertEquals(1L, metrics.timeoutCount("game", "actor"));
+        }
     }
 
     @Test

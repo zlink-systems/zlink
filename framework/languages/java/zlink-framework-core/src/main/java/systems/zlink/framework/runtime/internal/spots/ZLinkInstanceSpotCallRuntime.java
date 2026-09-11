@@ -11,6 +11,12 @@ import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 
 /** Internal bridge from the public fluent call to Instance Spot activation. */
 public interface ZLinkInstanceSpotCallRuntime {
+    default String metricMeshName(
+        String requestedMesh,
+        String callerMesh) {
+        return callerMesh;
+    }
+
     default CompletionStage<Boolean> isStaleRoute(
         String spotId,
         SpotTransportAddress address) {

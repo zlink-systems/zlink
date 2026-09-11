@@ -410,6 +410,9 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             lower.start();
             higher.start();
 
+            assertFalse(lower.configuredPeerIds().contains(higherRid));
+            assertFalse(lower.isPeerTransportConnected(higherRid));
+
             lower.connectPeer(higherEndpoint, higherRid);
             higher.connectPeer(lowerEndpoint, lowerRid);
 
@@ -420,6 +423,9 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             assertEquals(1, higher.peers().size());
             assertEquals(MeshPeerState.ADMITTED, lowerPeer.state());
             assertEquals(MeshPeerState.ADMITTED, higherPeer.state());
+            assertTrue(lower.configuredPeerIds().contains(higherRid));
+            assertTrue(lower.isPeerTransportConnected(higherRid));
+            assertTrue(higher.isPeerTransportConnected(lowerRid));
 
             CompletableFuture<ZLinkMeshDispatchRecord> received =
                 new CompletableFuture<>();
@@ -471,6 +477,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
 
             peer.close();
             awaitState(local, MeshPeerState.CLOSED);
+            assertFalse(local.isPeerTransportConnected(peerRid));
 
             assertEquals(
                 ZLinkOneWayCalls.ROUTE_NOT_CONNECTED,

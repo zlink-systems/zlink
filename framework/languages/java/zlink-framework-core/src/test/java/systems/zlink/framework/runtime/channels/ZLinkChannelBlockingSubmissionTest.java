@@ -226,6 +226,9 @@ final class ZLinkChannelBlockingSubmissionTest {
                 new ZLinkChannelReplyDecoder(new ZLinkJsonMessageSerializer()), null, null);
             var node = (ZLinkInternalSpotNode) Proxy.newProxyInstance(getClass().getClassLoader(),
                 new Class<?>[] {ZLinkInternalSpotNode.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("name")) {
+                        return "orders";
+                    }
                     if (method.getName().equals("sendToChannel")) {
                         submissions.incrementAndGet();
                         submitted.countDown();
