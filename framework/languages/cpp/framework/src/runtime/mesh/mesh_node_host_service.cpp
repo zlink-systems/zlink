@@ -13,6 +13,7 @@
 #include "runtime/channels/route_handler_registry.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
+#include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/mesh/mesh_record_dispatcher.hpp"
 #include "runtime/mesh/mesh_metadata_codec.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
@@ -2671,14 +2672,44 @@ void mesh_node_host_service_t::dispatch_application (
               "MeshNode is draining and rejects new application work");
             return;
         }
-        if (owner.owner_kind == host::owner_kind_t::node
-            || owner.owner_kind == host::owner_kind_t::channel) {
+        if (owner.owner_kind == host::owner_kind_t::channel
+            || owner.owner_kind == host::owner_kind_t::node) {
+            runtime::messaging::message_parts_t encoded (std::move (parts));
+            runtime::messaging::envelope_codec_t codec;
+            auto header = codec.decode_header (
+              encoded, detail::message_flow_tracer_t (dispatch_options).capture_enabled ());
             detail::mesh_record_dispatcher_t dispatcher (
               *services, *serializers, registration->handlers, *filters,
               dispatch_options, record.before_application_handler);
-            const auto dispatched = dispatcher.dispatch (record, std::move (parts));
-            trace_mesh_application ("route-dispatch", record, 0,
-                                    dispatched ? "success" : "failure");
+            if (!header) {
+                const auto dispatched = dispatcher.dispatch (
+                  record, std::move (encoded), std::move (header));
+                trace_mesh_application ("route-dispatch", record, 0,
+                                        dispatched ? "success" : "failure");
+                return;
+            }
+            if (owner.owner_kind == host::owner_kind_t::channel
+                || !detail::spot_node_runtime_t::is_framework_node_mesh_packet (
+                  owner.owner_kind, record.kind, header.value ().message_name)) {
+                const auto dispatched = dispatcher.dispatch (record, std::move (encoded),
+                                                              header.value ());
+                trace_mesh_application ("route-dispatch", record, 0,
+                                        dispatched ? "success" : "failure");
+                return;
+            }
+            deferred_terminal = std::make_shared<application_dispatch_terminal_owner_t> (
+              std::move (terminal));
+            detail::spot_node_runtime_t application_spot_runtime (registration->spot_state);
+            bool terminal_deferred = false;
+            parts = std::move (encoded).take_items ();
+            const auto handled = application_spot_runtime.dispatch_node_internal_mesh_record (
+              owner, record, parts, header.value (), *services, *serializers,
+              [deferred_terminal] { deferred_terminal->settle (); },
+              &terminal_deferred, record.before_application_handler);
+            trace_mesh_application ("framework-dispatch", record, parts.size (),
+                                    handled ? "handled" : "failure");
+            if (!terminal_deferred)
+                deferred_terminal->settle ();
             return;
         }
         deferred_terminal = std::make_shared<application_dispatch_terminal_owner_t> (

@@ -28,6 +28,14 @@ class mesh_record_dispatcher_t
     result_t<void> dispatch (
       const runtime::host::receive_record_t &record,
                              std::vector<zlink::message_t> parts) const;
+    result_t<void> dispatch (
+      const runtime::host::receive_record_t &record,
+      runtime::messaging::message_parts_t parts,
+      const runtime::messaging::envelope_header_t &header) const;
+    result_t<void> dispatch (
+      const runtime::host::receive_record_t &record,
+      runtime::messaging::message_parts_t parts,
+      result_t<runtime::messaging::envelope_header_t> header) const;
 
   private:
     service_provider_t *_services;

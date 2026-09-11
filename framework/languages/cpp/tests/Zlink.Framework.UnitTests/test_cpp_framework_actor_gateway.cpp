@@ -3172,6 +3172,93 @@ int reconcile_deadline_fast_fails_when_store_is_indeterminate ()
     return reconcile_deadline_fast_fails_without_target_commit (nullptr);
 }
 
+int node_owned_multicast_reaches_subscribed_spot_once ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    namespace messaging = zlink::framework::runtime::messaging;
+    namespace stateful = zlink::framework::runtime::stateful;
+
+    serializer_registry_t serializers;
+    auto node = std::make_shared<spot_node_builder_state_t> ("multicast-node");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, 16, "multicast");
+    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+
+    auto context = std::make_shared<spot_context_state_t> ();
+    context->node = node;
+    context->node_rid = node_rid_t::from_string ("multicast-node");
+    context->spot_id = spot_id_t ("multicast-spot");
+    context->spot_name = "multicast";
+    context->spot_instance = std::make_shared<int> (1);
+    context->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    context->channel_runtime->serializers = &serializers;
+    context->serial_executor = node->worker_executor;
+    context->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *context->serial_executor, runtime::serial_execution_queue_options_t{});
+    const auto native_spot = std::make_shared<runtime::host::spot_t> (
+      nullptr, stateful::object_ref_t{stateful::object_kind_t::user_spot, "multicast-spot", 1,
+                                      0, "mesh", "multicast-node"});
+    context->native_spot = native_spot;
+    std::atomic_int calls{0};
+    context->handlers.push_back (
+      spot_handler_descriptor_t{spot_handler_kind_t::subscription, "WinMilestoneNotify", "win-topic",
+                                std::type_index (typeid (int)), std::type_index (typeid (void)),
+                                std::type_index (typeid (void)), std::type_index (typeid (void))});
+    context->handler_invokers.push_back (
+      [&calls] (void *, void *, service_provider_t &, serializer_registry_t &,
+                const zlink::message_t &, const spot_inbound_message_t &) -> task_t<zlink::message_t> {
+          calls.fetch_add (1, std::memory_order_release);
+          co_return zlink::message_t{};
+      });
+    node->spot_contexts_by_id.emplace (context->spot_id, spot_context_access_t::create (context));
+    node->route_client_lane.run ([&] { node->route_client.emplace (); }).get ();
+
+    service_collection_t services;
+    services.add_singleton<actor_gateway_runtime_t> ();
+    auto provider = services.build_provider ();
+    const runtime::host::ready_record_t owner{
+      .owner_kind = runtime::host::owner_kind_t::node,
+      .domain = runtime::host::ready_domain_t::application};
+    runtime::host::receive_record_t record{
+      .kind = runtime::host::record_kind_t::node_send,
+      .domain = runtime::host::ready_domain_t::application};
+    record.source_node_rid = zlink::routing_id_t::from ("multicast-source");
+    messaging::envelope_header_t header;
+    header.kind = messaging::message_kind_t::command;
+    header.channel_name = "node";
+    header.message_name = spot_multicast_route_send_t::packet_name;
+    messaging::envelope_header_t event_header;
+    event_header.kind = messaging::message_kind_t::command;
+    event_header.channel_name = "multicast";
+    event_header.message_name = "WinMilestoneNotify";
+    auto event = messaging::envelope_codec_t{}.encode_raw_body_parts (
+      event_header, zlink::message_t::from (std::string ("winner")));
+    const auto event_header_bytes = event.items ()[0].to_bytes ();
+    const auto event_body_bytes = event.items ()[1].to_bytes ();
+    std::vector<std::uint8_t> event_frame{'Z', 'L', 'F', 'E',
+                                          static_cast<std::uint8_t> (event_header_bytes.size () >> 24),
+                                          static_cast<std::uint8_t> (event_header_bytes.size () >> 16),
+                                          static_cast<std::uint8_t> (event_header_bytes.size () >> 8),
+                                          static_cast<std::uint8_t> (event_header_bytes.size ())};
+    event_frame.insert (event_frame.end (), event_header_bytes.begin (), event_header_bytes.end ());
+    event_frame.insert (event_frame.end (), event_body_bytes.begin (), event_body_bytes.end ());
+    auto encoded = messaging::envelope_codec_t{}.encode_parts (
+      header, spot_multicast_route_send_t{"win-topic", std::move (event_frame)}, serializers);
+    auto parts = std::move (encoded).take_items ();
+    bool terminal_deferred = false;
+    const auto handled = spot_node_runtime_t (node).dispatch_mesh_record (
+      owner, record, parts, provider, serializers, {}, &terminal_deferred);
+    context->serial_queue->drain ();
+    node->worker_executor->drain ();
+    if (!handled)
+        return 1;
+    if (terminal_deferred)
+        return 2;
+    return calls.load (std::memory_order_acquire) == 1 ? 0 : 3;
+}
+
 int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
 {
     using namespace zlink::framework;
@@ -5109,6 +5196,10 @@ int main (int argc, char **argv)
 {
     if (argc == 2) {
         const std::string test (argv[1]);
+        if (test == "--node-multicast")
+            return node_owned_multicast_reaches_subscribed_spot_once ();
+        if (test == "--node-leave")
+            return leave_notification_travels_node_level_and_reaches_source_entry_spot_once ();
         if (test == "--reconcile-source")
             return reconcile_deadline_fast_fails_when_store_shows_source ();
         if (test == "--reconcile-no-commit")
