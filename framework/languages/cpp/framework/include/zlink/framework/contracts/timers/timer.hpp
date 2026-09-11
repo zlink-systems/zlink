@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include <zlink/framework/contracts/dispatch/task.hpp>
+
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -14,6 +16,7 @@ namespace detail
 {
 class timer_state_t;
 class timer_runtime_t;
+struct timer_test_access_t;
 } // namespace detail
 
 enum class timer_overrun_policy_t
@@ -63,11 +66,12 @@ class timer_t
     timer_t &operator= (const timer_t &) = default;
 
     bool is_disposed () const noexcept;
-    void cancel () noexcept;
+    task_t<void> cancel ();
 
   private:
     friend class spot_context_t;
     friend class detail::timer_runtime_t;
+    friend struct detail::timer_test_access_t;
 
     explicit timer_t (std::shared_ptr<detail::timer_state_t> state);
 

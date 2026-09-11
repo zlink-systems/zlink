@@ -502,7 +502,7 @@ class config12_instance_spot_t final : public fw::instance_spot_t
         _evidence.add ("spot-timer-workflow-reply|spot=" + spot + "|timer=" + tick.name);
         _evidence.add ("spot-timer-end|spot=" + spot + "|timer=" + tick.name
                        + "|sequence=handler-start,workflow-reply,handler-end,timer-start,workflow-reply,timer-end");
-        _timer.cancel ();
+        (void) _timer.cancel ();
         co_return;
     }
 

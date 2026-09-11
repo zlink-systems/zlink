@@ -109,7 +109,7 @@ handle_timer_stop_command (std::map<std::string, await_timer_state_t> &timers,
         }
     }
     for (auto &timer : timers_to_cancel) {
-        timer.cancel ();
+        (void) timer.cancel ();
     }
 }
 

@@ -19,7 +19,7 @@ inline task_t<void> bingo_room_spot_t::handle_draw_tick (const timer_tick_t &)
     if (drawn->state.status == bingo_room_status_t::finished) {
         send_to_players (make_game_ended_message (drawn->state));
         publish_reward (*drawn);
-        _draw_timer.cancel ();
+        (void) _draw_timer.cancel ();
         co_await leave_finished_actors ();
         if (!actors.empty () || !observers.empty ()) {
             _context->relocation_ready ().defer ();
