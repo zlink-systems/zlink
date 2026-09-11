@@ -2147,7 +2147,7 @@ public_host_runtime_t::create_user_spot_remote (const zlink::routing_id_t &targe
       target_node.to_bytes (), std::move (request), timeout,
       [completion = std::move (completion), capture = capture_flow ()] (
         foundation::operation_terminal_t terminal, std::vector<std::uint8_t> packed) mutable {
-          protocol::user_spot_create_reply_t reply;
+          protocol::user_spot_create_reply_t reply{};
           std::optional<protocol::application_payload_t> application_reply;
           if (terminal == foundation::operation_terminal_t::completed) {
               try {
