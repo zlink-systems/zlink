@@ -20,7 +20,7 @@ internal sealed class SocketHandle : IDisposable
         {
             _context = null;
             throw ZlinkException.CreateConfigException(
-                NativeMethods.zlink_errno());
+                NativeMethods.GetLastPInvokeError());
         }
     }
 
@@ -47,7 +47,7 @@ internal sealed class SocketHandle : IDisposable
                     return;
                 }
 
-                var errno = NativeMethods.zlink_errno();
+                var errno = NativeMethods.GetLastPInvokeError();
                 lastErrno = errno;
                 var code = ZlinkException.MapErrorCode(errno);
                 if (code == ErrorCode.EIntr || errno == 4)

@@ -65,7 +65,7 @@ internal abstract class NativeOwner
                 return rc;
             }
 
-            lastErrno = Runtime.Native.NativeMethods.zlink_errno();
+            lastErrno = Runtime.Native.NativeMethods.GetLastPInvokeError();
             var code = ZlinkException.MapErrorCode(lastErrno);
             if (code == ErrorCode.EIntr || lastErrno == 4)
                 continue;

@@ -4,7 +4,8 @@ namespace Systems.Zlink.Runtime.Native;
 
 internal static partial class NativeMethods
 {
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
     internal static extern IntPtr zlink_timer_new();
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]

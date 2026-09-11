@@ -29,7 +29,8 @@ public static partial class Zlink
 
         var rc = NativeMethods.zlink_has(capability);
         if (rc < 0)
-            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateConfigException(
+                NativeMethods.GetLastPInvokeError());
         return rc != 0;
     }
 
@@ -47,7 +48,8 @@ public static partial class Zlink
         var rc = NativeMethods.zlink_proxy(frontendSocket.Handle,
             backendSocket.Handle, captureSocket?.Handle ?? IntPtr.Zero);
         if (rc != 0)
-            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateConfigException(
+                NativeMethods.GetLastPInvokeError());
     }
 
     private static void SleepCore(TimeSpan duration)
