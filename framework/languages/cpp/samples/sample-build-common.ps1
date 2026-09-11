@@ -76,6 +76,7 @@ function Resolve-ZlinkCppSampleBuild {
         }
         $Configurations += @("Debug", "Release", "RelWithDebInfo", "MinSizeRel")
         $Configurations = @($Configurations | Select-Object -Unique)
+        $ConfigurationTypes = Get-ZlinkCppSampleCacheValue -BuildDir $BuildRoot -Name "CMAKE_CONFIGURATION_TYPES"
         $ExistingConfigurations = @($Configurations | Where-Object {
             Test-Path -LiteralPath (Join-Path $BuildRoot $_) -PathType Container
         })
@@ -89,7 +90,7 @@ function Resolve-ZlinkCppSampleBuild {
         }
 
         $ConfigurationBinDirs = @($Configurations | ForEach-Object { Join-Path $BuildRoot $_ })
-        $BinDirs = if ($AllowMissingBinaries -and $ExistingConfigurations.Count -gt 0) {
+        $BinDirs = if ($AllowMissingBinaries -and ($ConfigurationTypes -or $ExistingConfigurations.Count -gt 0)) {
             $ConfigurationBinDirs + @($BuildRoot)
         } else {
             @($BuildRoot) + $ConfigurationBinDirs

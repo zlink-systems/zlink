@@ -58,6 +58,14 @@ try {
     New-Item -ItemType Directory -Force (Join-Path $clean 'Release') | Out-Null
     $cleanResult = Resolve-ZlinkCppSampleBuild @args -AllowMissingBinaries
     Assert-Equal $cleanResult.Configuration 'Release' 'Clean multi-config build selection'
+    $cleanMulti = New-TestBuild 'clean-multi' '' @()
+    Add-Content -LiteralPath (Join-Path $cleanMulti 'CMakeCache.txt') `
+        -Value 'CMAKE_CONFIGURATION_TYPES:STRING=Debug;Release;MinSizeRel;RelWithDebInfo' -Encoding ASCII
+    $env:ZLINK_CPP_BUILD_DIR = $cleanMulti
+    $env:ZLINK_CPP_BUILD_CONFIGURATION = 'Debug'
+    $cleanMultiResult = Resolve-ZlinkCppSampleBuild @args -AllowMissingBinaries
+    Assert-Equal $cleanMultiResult.BinDir (Join-Path $cleanMulti 'Debug') 'Clean multi-config binary directory'
+    Assert-Equal $cleanMultiResult.Configuration 'Debug' 'Clean multi-config explicit configuration'
     Write-Host "sample-build-common: $checks checks passed"
 } finally {
     $env:ZLINK_CPP_BUILD_DIR = $oldBuildDir

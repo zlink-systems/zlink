@@ -268,8 +268,7 @@ SAMPLE_RUNNER_INVENTORIES = (
         "cpp",
         "framework/languages/cpp/samples",
         "",
-        ("Bingo", "DeliveryDispatch", "GameQuest", "ShoppingMall",
-         "SupportChat", "TicTacToe"),
+        SAMPLE_NAMES,
     ),
     SampleRunnerInventory(
         "dotnet",
