@@ -251,19 +251,27 @@ internal sealed class ZLinkTimer : IZLinkTimer
 
     private Task GetOrStartFinalization()
     {
-        return AwaitStateLane(_lane.RunAsync(() =>
+        TaskCompletionSource? completion = null;
+        var finalization = AwaitStateLane(_lane.RunAsync(() =>
         {
             if (_finalization is not null)
                 return _finalization;
 
             _disposed = 1;
-            var completion = new TaskCompletionSource(
+            completion = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             _finalization = completion.Task;
-            using (ExecutionContext.SuppressFlow())
-                _ = Task.Run(() => CompleteFinalizationAsync(completion));
             return _finalization;
         }));
+
+        // Start cancellation before returning, outside the state lane: a
+        // queued worker could run after the active callback unregisters.
+        if (completion is not null)
+        {
+            using (ExecutionContext.SuppressFlow())
+                _ = CompleteFinalizationAsync(completion);
+        }
+        return finalization;
     }
 
     private async Task CompleteFinalizationAsync(TaskCompletionSource completion)
