@@ -231,12 +231,20 @@ function Invoke-ZlinkDockerCommand {
         throw "Failed to start Docker: docker $($Arguments -join ' ')"
     }
     try {
+        # Drain both pipes before waiting. A synchronous ReadToEnd after
+        # WaitForExit deadlocks once the child fills a pipe buffer.
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            $process.Kill()
+            if ($env:OS -eq 'Windows_NT') {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            } else {
+                $process.Kill($true)
+            }
             throw "Docker command timed out after ${TimeoutSeconds}s: docker $($Arguments -join ' ')"
         }
-        $stdout = $process.StandardOutput.ReadToEnd().Trim()
-        $stderr = $process.StandardError.ReadToEnd().Trim()
+        $stdout = $stdoutTask.GetAwaiter().GetResult().Trim()
+        $stderr = $stderrTask.GetAwaiter().GetResult().Trim()
         if ($process.ExitCode -ne 0 -and -not $AllowFailure) {
             throw "Docker command failed (exit=$($process.ExitCode)): docker $($Arguments -join ' ')`n$stderr"
         }
