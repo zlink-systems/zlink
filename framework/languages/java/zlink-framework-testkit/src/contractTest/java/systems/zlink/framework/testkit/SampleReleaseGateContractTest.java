@@ -469,6 +469,74 @@ final class SampleReleaseGateContractTest {
             assertTrue(runner.contains("\"" + argument + "\""),
                 "Java TicTacToe PowerShell build must use " + argument);
         }
+        for (String requiredText : List.of(
+                "$ApiARoutePort = $ports[6]",
+                "$ApiBRoutePort = $ports[7]",
+                "sample.playEndpoints=$PlayStreams",
+                "sample.routeEndpoint=tcp://127.0.0.1:$RoutePort",
+                "sample.spotEndpoints=$Spots",
+                "sample.redisEndpoint=$RedisEndpoint",
+                "sample.redisKeyPrefix=$RedisKeyPrefix",
+                "Wait-Port $PlayBStreamPort",
+                "Wait-Port $PlayBSpotPort",
+                "Wait-Port $PlayAStreamPort",
+                "Wait-Port $PlayASpotPort")) {
+            assertTrue(runner.contains(requiredText),
+                "Java TicTacToe PowerShell runner must match Linux runner rule " + requiredText);
+        }
+        for (String obsoleteText : List.of(
+                "$PlayAChannelPort",
+                "$PlayBChannelPort",
+                "sample.playChannelEndpoint",
+                "sample.playChannelEndpoints",
+                "Wait-Port $ApiAChannelPort",
+                "Wait-Port $ApiBChannelPort")) {
+            assertFalse(runner.contains(obsoleteText),
+                "Java TicTacToe PowerShell runner must not retain obsolete rule " + obsoleteText);
+        }
+    }
+
+    @Test
+    void powerShellSampleCleanupTracksLauncherChildrenBeforeTheirParentsExit()
+            throws IOException {
+        String helper = Files.readString(samplesRoot().resolve("redis-common.ps1"));
+        for (String requiredText : List.of(
+                "function Register-ZlinkSampleProcessTree",
+                "ZlinkSampleOwnedProcesses",
+                "Get-ZlinkSampleDescendantProcessIds",
+                "[Diagnostics.Process]::GetProcessById",
+                "StartTime",
+                "exited before its JVM child was tracked",
+                "function Stop-ZlinkSampleProcessTree",
+                "HasExited",
+                "$trackedProcess.Kill($true)",
+                "$trackedProcess.Kill()",
+                "WaitForExit(5000)")) {
+            assertTrue(helper.contains(requiredText),
+                "PowerShell process-tree helper must preserve " + requiredText);
+        }
+
+        List<String> samples = Stream.concat(REQUIRED_SAMPLES.stream(), Stream.of("ZoneWorld"))
+            .distinct()
+            .sorted()
+            .toList();
+        for (String language : REQUIRED_LANGUAGES) {
+            for (String sample : samples) {
+                Path runnerPath = samplesRoot().resolve(language).resolve(sample)
+                    .resolve("run_sample.ps1");
+                String runner = powerShellRunnerSource(runnerPath);
+                assertTrue(runner.contains("Register-ZlinkSampleProcessTree"),
+                    language + "/" + sample + " must register launcher descendants at start");
+                assertTrue(runner.contains("Stop-ZlinkSampleProcessTree"),
+                    language + "/" + sample + " must use common process-tree cleanup");
+                assertFalse(runner.contains("function Get-ChildProcessIds")
+                        || runner.contains("function Stop-TrackedProcessTree")
+                        || runner.contains("function Stop-ProcessTree"),
+                    language + "/" + sample + " must not duplicate process-tree ownership");
+                assertFalse(runner.contains("Stop-Process -Id"),
+                    language + "/" + sample + " must not bypass common process-tree cleanup");
+            }
+        }
     }
 
     @Test
@@ -733,7 +801,7 @@ final class SampleReleaseGateContractTest {
                     "No owned JVM descendant was found",
                     "Assert-FrameworkGracefulTermination",
                     "ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE",
-                    "taskkillExitCode",
+                    "Stop-ZlinkSampleProcessTree",
                     "Process group leaked PID(s)",
                     "cleanup failed:")) {
                 assertTrue(powerShellScript.contains(requiredText),
@@ -741,7 +809,7 @@ final class SampleReleaseGateContractTest {
                         + requiredText + "'");
             }
             assertFalse(Pattern.compile(
-                    "(?s)if \\(\\$Mode -eq \\\"TERM\\\"\\).*?Stop-ProcessTree.*?-Force")
+                    "(?s)if \\(\\$Mode -eq \\\"TERM\\\"\\).*?Stop-ZlinkSampleProcessTree.*?-Force")
                     .matcher(powerShellScript).find(),
                 language + "/ZoneWorld TERM must not fall back to forced process termination");
         }

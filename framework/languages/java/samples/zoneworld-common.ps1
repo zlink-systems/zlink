@@ -286,53 +286,11 @@ public static class ZlinkWindowsOwnedConsole
         throw "Process group leaked PID(s): $($running -join ', ')"
     }
 
-    function Stop-ProcessTree {
-        param(
-            [Parameter(Mandatory = $true)][Diagnostics.Process]$Process,
-            [switch]$Force
-        )
-        $descendantIds = @(Get-ZlinkSampleDescendantProcessIds -ParentProcessId $Process.Id)
-        if ($Process.HasExited) {
-            $orphanedIds = @(Get-RunningProcessIds -ProcessIds $descendantIds)
-            if ($orphanedIds.Count -eq 0) { return }
-            $orphanRootIds = @(Get-CimInstance Win32_Process `
-                -Filter "ParentProcessId = $($Process.Id)" -ErrorAction Stop |
-                Select-Object -ExpandProperty ProcessId)
-            $orphanFailures = [Collections.Generic.List[string]]::new()
-            foreach ($orphanRootId in $orphanRootIds) {
-                $orphanOutput = & taskkill.exe /PID $orphanRootId /T /F 2>&1
-                if ($LASTEXITCODE -ne 0) {
-                    $orphanFailures.Add("PID $orphanRootId`: $($orphanOutput -join ' ')")
-                }
-            }
-            Wait-ProcessIdsExit -ProcessIds $orphanedIds
-            if ($orphanFailures.Count -ne 0) {
-                throw "taskkill failed for orphaned child process(es): $($orphanFailures -join '; ')"
-            }
-            return
-        }
-        $arguments = @("/PID", $Process.Id, "/T")
-        if ($Force) { $arguments += "/F" }
-        $taskkillOutput = & taskkill.exe @arguments 2>&1
-        $taskkillExitCode = $LASTEXITCODE
-        $trackedIds = @($Process.Id) + $descendantIds
-        try {
-            Wait-ProcessIdsExit -ProcessIds $trackedIds
-        } catch {
-            throw "taskkill exit=$taskkillExitCode failed to stop PID $($Process.Id) tree. " +
-                "$($_.Exception.Message) $($taskkillOutput -join [Environment]::NewLine)"
-        }
-        if ($taskkillExitCode -ne 0) {
-            throw "taskkill returned exit=$taskkillExitCode for PID $($Process.Id): " +
-                ($taskkillOutput -join [Environment]::NewLine)
-        }
-    }
-
     function Stop-AllProcesses {
         $failures = [Collections.Generic.List[string]]::new()
         for ($index = $processes.Count - 1; $index -ge 0; $index--) {
             try {
-                Stop-ProcessTree -Process $processes[$index] -Force
+                Stop-ZlinkSampleProcessTree -Process $processes[$index] -Force
             } catch {
                 $failures.Add($_.Exception.Message)
             }
@@ -424,6 +382,7 @@ public static class ZlinkWindowsOwnedConsole
             $env:ZLINK_JAVA_STREAM_TRACE = $previousTrace
         }
         $processes.Add($process)
+        Register-ZlinkSampleProcessTree -Process $process
         $nodeProcesses[$Name] = $process
         $ownedConsolePids[$process.Id] = $process.Id
         if ([IO.Path]::GetFullPath($FilePath) -eq [IO.Path]::GetFullPath($serverBin)) {
@@ -487,7 +446,7 @@ public static class ZlinkWindowsOwnedConsole
         $process = $nodeProcesses[$Name]
         if (-not $process.HasExited) {
             if ($Mode -eq "KILL") {
-                Stop-ProcessTree -Process $process -Force
+                Stop-ZlinkSampleProcessTree -Process $process -Force
             } else {
                 if (-not $frameworkLogOffsets.ContainsKey($Name)) {
                     throw "Framework lifecycle offset was not recorded for $Name."

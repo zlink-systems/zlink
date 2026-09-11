@@ -28,10 +28,7 @@ function Cleanup {
     param([int]$Status)
     Print-Logs $Status
     for ($i = $Processes.Count - 1; $i -ge 0; $i--) {
-        $process = $Processes[$i]
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        }
+        Stop-ZlinkSampleProcessTree -Process $Processes[$i] -Force
     }
     if ($RedisContainerId) {
         Remove-ZlinkSampleRedis $RedisContainerId
@@ -113,6 +110,7 @@ function Start-Role {
         if ($EventArgs.Data) { Add-Content -Path $Event.MessageData.Err -Value $EventArgs.Data }
     } -MessageData @{ Err = $errorLogPath } | Out-Null
     $Processes.Add($process)
+    Register-ZlinkSampleProcessTree -Process $process
     return $process
 }
 
@@ -287,9 +285,9 @@ try {
     $ownerRole = Wait-ReplayedOwner $missionALog $missionBLog
     $ownerProcess = if ($ownerRole -eq "mission-a") { $missionAProcess } else { $missionBProcess }
     if ($ownerRole -eq "mission-a") {
-        Stop-Process -Id $missionAProcess.Id -Force
+        Stop-ZlinkSampleProcessTree -Process $missionAProcess -Force
     } else {
-        Stop-Process -Id $missionBProcess.Id -Force
+        Stop-ZlinkSampleProcessTree -Process $missionBProcess -Force
     }
     $ownerProcess.WaitForExit()
     [System.IO.File]::WriteAllText((Join-Path $controlDir "owner-terminated"), "released")

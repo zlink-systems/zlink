@@ -54,6 +54,7 @@ function Start-Role([string]$Role, [string]$Project, [string]$Name, [string]$Con
         -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $log `
         -RedirectStandardError "$log.err" -PassThru
     $Processes.Add($process)
+    Register-ZlinkSampleProcessTree -Process $process
 }
 
 function Cleanup([int]$Status) {
@@ -66,7 +67,7 @@ function Cleanup([int]$Status) {
         }
     }
     foreach ($process in $Processes) {
-        if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+        Stop-ZlinkSampleProcessTree -Process $process -Force
     }
     if ($RedisContainer) { Remove-ZlinkSampleRedis $RedisContainer }
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $RunDir

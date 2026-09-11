@@ -348,6 +348,85 @@ function Get-ZlinkSampleDescendantProcessIds {
     return $descendants.ToArray()
 }
 
+function Register-ZlinkSampleProcessTree {
+    param(
+        [Parameter(Mandatory = $true)][Diagnostics.Process]$Process,
+        [int]$DiscoveryTimeoutMilliseconds = 5000
+    )
+
+    $ownedProcesses = [Collections.Generic.List[Diagnostics.Process]]::new()
+    [void]$ownedProcesses.Add($Process)
+    $Process | Add-Member -MemberType NoteProperty `
+        -Name ZlinkSampleOwnedProcesses -Value $ownedProcesses -Force
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+        return
+    }
+    if ($Process.ProcessName -in @("java", "javaw")) {
+        return
+    }
+
+    $rootStartTime = $Process.StartTime
+    $knownIds = @{ $Process.Id = $true }
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($DiscoveryTimeoutMilliseconds)
+    do {
+        $foundJvm = $false
+        foreach ($descendantId in @(Get-ZlinkSampleDescendantProcessIds `
+                -ParentProcessId $Process.Id)) {
+            if ($knownIds.ContainsKey($descendantId)) { continue }
+            try {
+                $descendant = [Diagnostics.Process]::GetProcessById($descendantId)
+                if ($descendant.StartTime -lt $rootStartTime) { continue }
+                [void]$ownedProcesses.Add($descendant)
+                $knownIds[$descendantId] = $true
+                if ($descendant.ProcessName -in @("java", "javaw")) {
+                    $foundJvm = $true
+                }
+            } catch [ArgumentException] {
+                # The descendant completed between the CIM snapshot and handle acquisition.
+            } catch [InvalidOperationException] {
+                # The descendant completed while its process metadata was being read.
+            }
+        }
+        if ($foundJvm) { return }
+        if ($Process.HasExited) {
+            throw "Launcher PID $($Process.Id) exited before its JVM child was tracked."
+        }
+        Start-Sleep -Milliseconds 10
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    throw "Timed out tracking the JVM process tree for PID $($Process.Id)."
+}
+
+function Stop-ZlinkSampleProcessTree {
+    param(
+        [Parameter(Mandatory = $true)][Diagnostics.Process]$Process,
+        [switch]$Force
+    )
+
+    $trackedProperty = $Process.PSObject.Properties["ZlinkSampleOwnedProcesses"]
+    $trackedProcesses = if ($null -eq $trackedProperty) {
+        @($Process)
+    } else {
+        @($trackedProperty.Value)
+    }
+    [array]::Reverse($trackedProcesses)
+    foreach ($trackedProcess in $trackedProcesses) {
+        $trackedProcess.Refresh()
+        if ($trackedProcess.HasExited) { continue }
+        $killTreeMethod = $trackedProcess.GetType().GetMethod(
+            "Kill",
+            [Type[]]@([bool]))
+        if ($null -ne $killTreeMethod) {
+            $trackedProcess.Kill($true)
+        } else {
+            $trackedProcess.Kill()
+        }
+        if (-not $trackedProcess.WaitForExit(5000)) {
+            throw "Process-tree cleanup did not stop tracked PID $($trackedProcess.Id)."
+        }
+    }
+}
+
 function Wait-ZlinkSampleRedisReady {
     param(
         [Parameter(Mandatory = $true)][string]$ContainerId,

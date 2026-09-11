@@ -28,40 +28,11 @@ function Print-Logs {
     }
 }
 
-function Get-ChildProcessIds {
-    param([int]$ParentId)
-    if ($IsWindows) {
-        Get-CimInstance Win32_Process -Filter "ParentProcessId=$ParentId" | ForEach-Object {
-            [int]$_.ProcessId
-            Get-ChildProcessIds -ParentId ([int]$_.ProcessId)
-        }
-    } else {
-        & pgrep -P $ParentId 2>$null | ForEach-Object {
-            if ($_ -match '^\d+$') {
-                [int]$_
-                Get-ChildProcessIds -ParentId ([int]$_)
-            }
-        }
-    }
-}
-
-function Stop-TrackedProcessTree {
-    param([System.Diagnostics.Process]$Process)
-    $children = @(Get-ChildProcessIds -ParentId $Process.Id)
-    [array]::Reverse($children)
-    foreach ($childId in $children) {
-        Stop-Process -Id $childId -Force -ErrorAction SilentlyContinue
-    }
-    if (-not $Process.HasExited) {
-        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
-    }
-}
-
 function Cleanup {
     param([int]$Status)
     Print-Logs $Status
     for ($i = $Processes.Count - 1; $i -ge 0; $i--) {
-        Stop-TrackedProcessTree -Process $Processes[$i]
+        Stop-ZlinkSampleProcessTree -Process $Processes[$i] -Force
     }
     if ($RedisContainer) {
         Remove-ZlinkSampleRedis $RedisContainer
@@ -112,6 +83,7 @@ function Start-AppRole {
     $errorLogPath = Join-Path $LogDir ($LogName + ".err.log")
     $process = Start-Process -FilePath (Get-AppBin $Project $Name) -ArgumentList @("--config", $Config) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -PassThru
     $Processes.Add($process)
+    Register-ZlinkSampleProcessTree -Process $process
 }
 
 function Protect-ConfigFile {

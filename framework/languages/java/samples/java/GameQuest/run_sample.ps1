@@ -80,6 +80,7 @@ function Start-Role([string]$Role, [string]$Project, [string]$Name, [string]$Con
         -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $log `
         -RedirectStandardError "$log.err" -PassThru
     $Processes.Add($process)
+    Register-ZlinkSampleProcessTree -Process $process
     $RoleProcesses[$Role] = $process
     return $process
 }
@@ -98,7 +99,7 @@ function Cleanup([int]$Status) {
         }
     }
     foreach ($process in $Processes) {
-        if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+        Stop-ZlinkSampleProcessTree -Process $process -Force
     }
     if ($RedisContainer) { Remove-ZlinkSampleRedis $RedisContainer }
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $RunDir
@@ -212,7 +213,7 @@ try {
     $ownerClient = Start-Role "owner-unavailable-client" "Client" "Client" $ownerUnavailableConfig
     Wait-LogCount @((Join-Path $LogDir "mission-a.log"), (Join-Path $LogDir "mission-b.log")) "gamequest-owner-ready player=player-owner-unavailable" 1
     $ownerNode = if ((Get-LogCount @((Join-Path $LogDir "mission-a.log")) "gamequest-owner-ready player=player-owner-unavailable node=mission-a") -eq 1) { "mission-a" } else { "mission-b" }
-    Stop-Process -Id $RoleProcesses[$ownerNode].Id -Force
+    Stop-ZlinkSampleProcessTree -Process $RoleProcesses[$ownerNode] -Force
     $ownerClientRelease = New-Item -ItemType File -Path $releaseFile -Force
     $ownerClient.WaitForExit()
     if ($ownerClient.ExitCode -ne 0) { throw "Owner unavailable client scenario failed." }

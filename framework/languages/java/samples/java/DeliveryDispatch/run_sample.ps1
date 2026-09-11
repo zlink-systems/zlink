@@ -18,33 +18,8 @@ $Processes = New-Object System.Collections.Generic.List[System.Diagnostics.Proce
 $RedisContainer = $null
 $CleanedUp = $false
 
-function Get-ChildProcessIds {
-    param([int]$ParentId)
-    if ($IsWindows) {
-        Get-CimInstance Win32_Process -Filter "ParentProcessId=$ParentId" | ForEach-Object {
-            [int]$_.ProcessId
-            Get-ChildProcessIds -ParentId ([int]$_.ProcessId)
-        }
-    } else {
-        & pgrep -P $ParentId 2>$null | ForEach-Object {
-            if ($_ -match '^\d+$') {
-                [int]$_
-                Get-ChildProcessIds -ParentId ([int]$_)
-            }
-        }
-    }
-}
-
-function Stop-TrackedProcessTree {
-    param([System.Diagnostics.Process]$Process)
-    $children = @(Get-ChildProcessIds -ParentId $Process.Id)
-    [array]::Reverse($children)
-    foreach ($childId in $children) { Stop-Process -Id $childId -Force -ErrorAction SilentlyContinue }
-    if (-not $Process.HasExited) { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue }
-}
-
 function Cleanup {
-    for ($i = $Processes.Count - 1; $i -ge 0; $i--) { Stop-TrackedProcessTree -Process $Processes[$i] }
+    for ($i = $Processes.Count - 1; $i -ge 0; $i--) { Stop-ZlinkSampleProcessTree -Process $Processes[$i] -Force }
     if ($RedisContainer) { Remove-ZlinkSampleRedis $RedisContainer }
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $ConfigDir
 }
@@ -79,6 +54,7 @@ function Start-AppRole {
         -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput (Join-Path $LogDir $LogName) `
         -RedirectStandardError (Join-Path $LogDir ($LogName + ".err.log")) -PassThru
     $Processes.Add($process)
+    Register-ZlinkSampleProcessTree -Process $process
 }
 
 function Get-LogCount {

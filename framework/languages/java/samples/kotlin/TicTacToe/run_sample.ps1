@@ -26,10 +26,7 @@ function Cleanup {
     param([int]$Status)
     Print-Logs $Status
     for ($i = $Processes.Count - 1; $i -ge 0; $i--) {
-        $process = $Processes[$i]
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        }
+        Stop-ZlinkSampleProcessTree -Process $Processes[$i] -Force
     }
     if ($RedisContainer) {
         Remove-ZlinkSampleRedis $RedisContainer
@@ -99,6 +96,7 @@ function Start-SampleRole {
     if ($IsWindows) { $serverBin = "$serverBin.bat" }
     $process = Start-Process -FilePath $serverBin -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput (Join-Path $LogDir $LogName) -RedirectStandardError (Join-Path $LogDir "$LogName.err") -PassThru
     $Processes.Add($process)
+    Register-ZlinkSampleProcessTree -Process $process
 }
 
 $Status = 1
@@ -216,6 +214,7 @@ try {
         -WorkingDirectory $SampleDir -NoNewWindow `
         -RedirectStandardOutput $clientLog -RedirectStandardError $clientErrorLog -PassThru
     $Processes.Add($clientProcess)
+    Register-ZlinkSampleProcessTree -Process $clientProcess
     $PlayLogs = Join-Path $LogDir "play-*.log"
     Wait-LogCount $PlayLogs "tictactoe-lifecycle actor-bound actor=player-x" 1
     foreach ($ActorId in @("player-x", "player-o")) {
