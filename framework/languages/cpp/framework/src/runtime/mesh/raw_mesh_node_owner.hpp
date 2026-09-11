@@ -5,6 +5,8 @@
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
+
+#include <opentelemetry/metrics/async_instruments.h>
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/mesh/service_liveness_registry.hpp"
@@ -190,8 +192,6 @@ class raw_mesh_node_owner_t
     task_t<void> publish_draining ();
     service_liveness_registry_t &liveness () noexcept;
     service_mailbox_t &mailbox () noexcept;
-    void publish_drop_metrics (
-      const std::shared_ptr<framework::detail::monitoring_runtime_state_t> &monitoring) const;
 
     bool connect_peer (const std::string &endpoint);
     bool connect_peer (const std::string &endpoint,
@@ -557,6 +557,8 @@ class raw_mesh_node_owner_t
     service_liveness_registry_t _liveness;
     service_mailbox_t _mailbox;
     std::array<std::atomic_uint64_t, 4> _inbound_drops{};
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument> _drop_metric;
+    static void publish_drop_metrics (opentelemetry::metrics::ObserverResult result, void *state);
     std::optional<pending_received_mailbox_record_t> _pending_received;
     std::deque<pending_admission_t> _pending_admissions;
     std::size_t _pending_admission_bytes = 0;

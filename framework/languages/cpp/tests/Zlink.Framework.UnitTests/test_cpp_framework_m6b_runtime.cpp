@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include "metric_test_reader.hpp"
+
 #include "runtime/foundation/operation_registry.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/actors/actor_client.hpp"
@@ -5633,6 +5635,7 @@ void verify_full_owner_rejects_request_without_blocking_other_owner ()
     target_descriptor.channels.push_back ({"independent-channel", 100});
     mesh::raw_mesh_node_owner_t source (
       mesh::raw_mesh_node_options_t{descriptor ("owner-capacity-source")});
+    metric_test::provider_t metric_provider;
     mesh::raw_mesh_node_owner_t target (
       mesh::raw_mesh_node_options_t{
         .descriptor = target_descriptor,
@@ -5724,20 +5727,12 @@ void verify_full_owner_rejects_request_without_blocking_other_owner ()
     // A rejected request already has a terminal reply. It is not a one-way
     // drop in the cross-language zlink.mesh_node.messages.dropped metric.
     std::size_t drop_series = 0;
-    zlink::framework::logging_builder_t logging;
-    logging.set_min_level (zlink::framework::log_level_t::debug).use_provider (
-      "request-rejection-test", [&] (const zlink::framework::log_record_t &record) {
-          std::map<std::string, std::string> fields;
-          for (const auto &field : record.fields)
-              fields.emplace (field.key, field.value);
-          if (fields["name"] == "zlink.mesh_node.messages.dropped") {
-              assert (std::stod (fields["value"]) == 0);
-              ++drop_series;
-          }
-      });
-    auto monitoring = std::make_shared<zlink::framework::detail::monitoring_runtime_state_t> ();
-    monitoring->diagnostics_logger = logging.create_logger ("request-rejection-test");
-    target.publish_drop_metrics (monitoring);
+    for (auto fields : metric_provider.collect_fields ()) {
+        if (fields["name"] == "zlink.mesh_node.messages.dropped") {
+            assert (std::stod (fields["value"]) == 0);
+            ++drop_series;
+        }
+    }
     assert (drop_series == 4);
 
     std::promise<foundation::operation_terminal_t> independent_promise;

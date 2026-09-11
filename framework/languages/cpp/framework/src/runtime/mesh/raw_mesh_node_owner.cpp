@@ -27,6 +27,7 @@
 #include <boost/asio/system_executor.hpp>
 
 #include <nlohmann/json.hpp>
+#include <opentelemetry/metrics/provider.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -597,10 +598,16 @@ raw_mesh_node_owner_t::raw_mesh_node_owner_t (
       std::make_shared<foundation::operation_registry_t> (
         foundation::default_operation_capacity))
 {
+    _drop_metric =
+      opentelemetry::metrics::Provider::GetMeterProvider ()
+        ->GetMeter ("zlink.framework")
+        ->CreateDoubleObservableCounter ("zlink.mesh_node.messages.dropped", "", "{message}");
+    _drop_metric->AddCallback (&publish_drop_metrics, this);
 }
 
 raw_mesh_node_owner_t::~raw_mesh_node_owner_t () noexcept
 {
+    _drop_metric->RemoveCallback (&publish_drop_metrics, this);
     close ();
 }
 
@@ -2891,20 +2898,19 @@ bool raw_mesh_node_owner_t::reply_user_spot_close (
         reply.closed));
 }
 
-void raw_mesh_node_owner_t::publish_drop_metrics (
-  const std::shared_ptr<framework::detail::monitoring_runtime_state_t> &monitoring) const
+void raw_mesh_node_owner_t::publish_drop_metrics (opentelemetry::metrics::ObserverResult result,
+                                                  void *state)
 {
-    if (!monitoring || !monitoring->diagnostics_logger.is_enabled (log_level_t::debug))
-        return;
+    const auto &owner = *static_cast<raw_mesh_node_owner_t *> (state);
+    auto observer = opentelemetry::nostd::get<
+      opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObserverResultT<double>>> (result);
     for (std::size_t index = 0; index < inbound_surfaces.size (); ++index) {
-        framework::detail::monitoring_runtime_t (monitoring).publish_metric ({
-          "zlink.mesh_node.messages.dropped",
-          static_cast<double> (_inbound_drops[index].load (std::memory_order_relaxed)),
-          "{message}", framework::detail::metric_instrument_kind_t::counter,
-          framework::detail::metric_temporality_t::current,
-          {{"mesh_name", _options.descriptor.mesh_name},
+        observer->Observe (
+          static_cast<double> (owner._inbound_drops[index].load (std::memory_order_relaxed)),
+          {{"mesh_name", owner._options.descriptor.mesh_name},
            {"surface", inbound_surfaces[index].metric_surface},
-           {"message_kind", "send"}, {"reason", "backpressure"}}});
+           {"message_kind", "send"},
+           {"reason", "backpressure"}});
     }
 }
 
