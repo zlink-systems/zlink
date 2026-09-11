@@ -25,6 +25,7 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -37,6 +38,42 @@ namespace zlink::framework::runtime
 {
 namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
+
+namespace
+{
+result_t<void> listener_failure (std::exception_ptr failure)
+{
+    std::string message;
+    std::error_code code;
+    try {
+        std::rethrow_exception (failure);
+    }
+    catch (const boost::system::system_error &error) {
+        code = error.code ();
+        message = error.what ();
+    }
+    catch (const std::system_error &error) {
+        code = error.code ();
+        message = error.what ();
+    }
+    catch (const framework_exception_t &error) {
+        return detail::result_access_t::failure<void> (error);
+    }
+    catch (const std::exception &error) {
+        message = error.what ();
+    }
+    catch (...) {
+        message = "HTTP listener failed with a non-standard exception";
+    }
+    if (code) {
+        message += " [error_code=" + std::string (code.category ().name ()) + ":"
+                   + std::to_string (code.value ()) + "]";
+    }
+    return result_t<void>::failure (code ? framework_error_kind_t::unavailable
+                                        : framework_error_kind_t::internal_failure,
+                                    std::move (message));
+}
+} // namespace
 
 class http_host_service_t::listener_t
 {
@@ -75,41 +112,40 @@ class http_host_service_t::listener_t
 
     ~listener_t () { stop_workers (); }
 
-    void run ()
+    void open ()
     {
-        try {
-            _parsed = parse_http_endpoint (_endpoint->uri);
-            open_listener ();
-            configure_tls_context ();
-        }
-        catch (const std::exception &) {
-            if (_stop->load (std::memory_order_acquire)) {
-                return;
-            }
-            throw;
-        }
-
+        _parsed = parse_http_endpoint (_endpoint->uri);
+        open_listener ();
+        configure_tls_context ();
         start_accept ();
-        _io.run ();
+    }
+
+    void start ()
+    {
+        // async captures every exception from the thread in its future;
+        // join consumes it after all listeners have been stopped.
+        _run = std::async (std::launch::async, [this] { _io.run (); });
+    }
+
+    void join ()
+    {
+        if (_run.valid ()) {
+            _run.get ();
+        }
     }
 
     void stop () noexcept
     {
+        _io.stop ();
         close_open_connections ();
-        asio::post (_io, [this] {
-            beast::error_code ignored;
-            _acceptor.cancel (ignored);
-            _acceptor.close (ignored);
-            try {
-                _accept_retry_timer.cancel ();
-            }
-            catch (const boost::system::system_error &) {
-            }
-        });
     }
 
     void stop_after_accept_loop () noexcept
     {
+        // The acceptor has a single owner again once its I/O loop has joined.
+        // This also closes listeners whose startup never reached thread launch.
+        beast::error_code ignored;
+        _acceptor.close (ignored);
         (void) wait_for_active_requests (_options->server.graceful_shutdown_timeout);
         close_open_connections ();
         wait_for_workers ();
@@ -125,9 +161,13 @@ class http_host_service_t::listener_t
         const auto resolve_flags = wildcard ? tcp::resolver::flags::passive
                                             : tcp::resolver::flags ();
         const auto endpoints = resolver.resolve (resolve_host, _parsed.port, resolve_flags, error);
-        if (error || endpoints.begin () == endpoints.end ()) {
-            throw std::runtime_error ("HTTP endpoint address resolution failed: "
-                                      + (error ? error.message () : "no addresses"));
+        if (error) {
+            throw boost::system::system_error (
+              error, "HTTP endpoint address resolution failed: " + _endpoint->uri);
+        }
+        if (endpoints.begin () == endpoints.end ()) {
+            throw std::runtime_error ("HTTP endpoint address resolution returned no addresses: "
+                                      + _endpoint->uri);
         }
         for (const auto &candidate : endpoints) {
             _acceptor.open (candidate.endpoint ().protocol (), error);
@@ -146,7 +186,8 @@ class http_host_service_t::listener_t
             beast::error_code ignored;
             _acceptor.close (ignored);
         }
-        throw std::runtime_error ("HTTP listener bind/listen failed: " + error.message ());
+        throw boost::system::system_error (
+          error, "HTTP listener bind/listen failed: " + _endpoint->uri);
     }
 
     struct connection_t
@@ -497,6 +538,7 @@ class http_host_service_t::listener_t
     asio::io_context _io;
     tcp::acceptor _acceptor;
     asio::steady_timer _accept_retry_timer;
+    std::future<void> _run;
 #ifdef ZLINK_FRAMEWORK_HTTP_WITH_OPENSSL
     std::optional<asio::ssl::context> _tls_context;
 #endif
@@ -510,25 +552,43 @@ http_host_service_t::http_host_service_t (http_options_snapshot_t options,
 {
 }
 
-http_host_service_t::~http_host_service_t () = default;
+http_host_service_t::~http_host_service_t () { stop (); }
 
 task_t<void> http_host_service_t::start (service_provider_t &services)
 {
-    _stop.store (false, std::memory_order_release);
-    for (const auto &endpoint : _options.endpoints) {
-        auto listener =
-          std::make_unique<listener_t> (endpoint, _options, *_health, services,
-                                        _handler_worker_count, _stop);
-        auto *raw = listener.get ();
-        _listeners.push_back (std::move (listener));
-        _threads.emplace_back ([raw] { raw->run (); });
+    try {
+        _stop.store (false, std::memory_order_release);
+        _health->add_hosted_service_check ("http.host")
+          .set_status ("http.host", health_status_t::unhealthy, "HTTP listeners are starting");
+        _listeners.reserve (_options.endpoints.size ());
+        for (const auto &endpoint : _options.endpoints) {
+            auto listener =
+              std::make_unique<listener_t> (endpoint, _options, *_health, services,
+                                            _handler_worker_count, _stop);
+            _listeners.push_back (std::move (listener));
+            _listeners.back ()->open ();
+        }
+        for (const auto &listener : _listeners) {
+            listener->start ();
+        }
+        _health->set_status ("http.host", health_status_t::healthy);
+        return task_t<void> (result_t<void>::success ());
     }
-    return task_t<void> (result_t<void>::success ());
+    catch (...) {
+        const auto failure = std::current_exception ();
+        stop ();
+        auto result = listener_failure (failure);
+        _health->set_status ("http.host", health_status_t::unhealthy, result.error ()->what ());
+        return task_t<void> (std::move (result));
+    }
 }
 
 void http_host_service_t::request_stop () noexcept
 {
-    _stop.store (true, std::memory_order_release);
+    if (_stop.exchange (true, std::memory_order_acq_rel)) {
+        return;
+    }
+    _health->set_status ("http.host", health_status_t::unhealthy, "HTTP listeners are stopped");
     for (auto &listener : _listeners) {
         listener->stop ();
     }
@@ -537,15 +597,19 @@ void http_host_service_t::request_stop () noexcept
 void http_host_service_t::stop () noexcept
 {
     request_stop ();
-    for (auto &thread : _threads) {
-        if (thread.joinable ()) {
-            thread.join ();
+    for (auto &listener : _listeners) {
+        try {
+            listener->join ();
+        }
+        catch (...) {
+            const auto failure = listener_failure (std::current_exception ());
+            _health->set_status ("http.host", health_status_t::unhealthy,
+                                 failure.error ()->what ());
         }
     }
     for (auto &listener : _listeners) {
         listener->stop_after_accept_loop ();
     }
-    _threads.clear ();
     _listeners.clear ();
 }
 

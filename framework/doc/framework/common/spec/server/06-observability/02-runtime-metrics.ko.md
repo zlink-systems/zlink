@@ -45,6 +45,20 @@ Metric 표에서 `counter`는 발생 횟수나 누적량을 단조 증가시키�
 - **Provider failure는 application callback, reply, 새 작업 수락과 host lifecycle
   결과를 바꾸지 않는다.**
 
+### 2.1 Metric 기록과 수집의 활성화
+
+**Metric 기록은 logger의 log 수준과 message-flow diagnostics level·sampling 설정에 의존하지 않는다.** Application이 표준 metric provider 또는 listener를 통해 해당 계기의 수집을 활성화하면 Framework는 이 문서가 정한 사건과 상태를 해당 계기에 기록하거나 수집 시 제공한다. Log 수준을 올리거나 status 조회·변화 관찰을 별도로 시작할 필요가 없어야 한다. Message-flow diagnostics와의 독립성은 [Message flow tracing §4](03-message-flow-tracing.ko.md#4-기록-범위-설정--level과-sampling)의 규칙을 따른다.
+
+여기서 활성화는 **metric 계기의 수집에 대한 설정**이다. Status stream의 구독자 수, 현재 backend를 조회하는 사용자 수 또는 log sink의 존재를 뜻하지 않는다. 활성화 상태를 확인하는 방법은 각 언어의 표준 meter·registry·provider에 맡긴다. 정확한 수집 여부를 확인하는 API가 없으면 표준 계기에 기록하고 provider가 수집하거나 생략하도록 할 수 있다. Framework 공통 API에 subscriber 수나 별도의 metric 활성화 스위치를 요구하지 않는다. 수집 주기, aggregation과 export는 §1·§11의 provider 책임을 따른다.
+
+**각 언어는 이 문서의 적용 조건에 해당하는 모든 계기를 제공한다.** 수집이 활성화된 동안 정의된 사건이 발생하면 그 사건을 기록하고, 현재 상태를 나타내는 계기는 수집 시 그 상태를 제공한다. 계기의 등록만으로 실제 사건 기록을 대신하지 않는다. 어떤 언어에서 해당 사건이 구조적으로 발생할 수 없다면, 공통 계약이 허용한 차이와 그 이유를 언어별 interface 문서에 명시한다. 해당 기능이나 metric을 아직 구현하지 않았다는 사실은 이 예외에 해당하지 않는다. 사건의 집계 범위와 제외 조건은 각 metric 절을 따른다.
+
+수집이 비활성화된 계기에만 필요한 계산과 기록은 생략할 수 있다. **일반 event counter의 비활성 구간 증가분과 histogram 표본을 수집 시작 뒤 소급하여 재구성할 의무는 없다.** Histogram 측정에 필요한 시작값을 수집하지 않았다면 그 과거 구간을 나중에 측정하지 않아도 된다. 이미 계기가 수집하던 값의 보관과 새 reader에 대한 제공 범위는 provider의 aggregation과 수명 계약을 따른다.
+
+이 생략 허용은 runtime이 다른 계약을 위해 유지하는 상태를 바꾸지 않는다. **§3이 정한 현재 epoch의 counter·누계와 각 계기가 나타내는 현재값은 수집 활성화 여부와 무관하게 그 의미를 유지한다.** 활성화·비활성화 자체를 runtime measurement epoch의 Reset으로 취급하지 않는다. Counter를 증가분으로 기록하거나 유지 중인 누계를 수집하는 방식은 표준 provider의 표현에 맞출 수 있으나, 같은 증가분을 중복 집계하거나 현재값·epoch 누계를 일반 event의 비활성 구간으로 취급하여 잃어서는 안 된다.
+
+비활성 경로의 비용, 제한된 집계값의 조회, dispatch ordering과 provider failure는 §11의 규칙을 따른다. Metric 기록의 활성화는 message 처리·routing·완료 조건을 바꾸지 않는다.
+
 ## 3. Host Core HWM과 Application job queue
 
 다음 instance aggregate 계기는 Core runtime snapshot과
