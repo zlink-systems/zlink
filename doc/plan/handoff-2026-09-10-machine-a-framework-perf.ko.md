@@ -217,6 +217,71 @@ claim 하면 거절된 호출이 뒤이은 정상 호출에 보인다.
 | **#15** | 선행 조건 미도래(`ZLINK_CTX_OPT_BLOCKY` 잔존, binding이 `MaxMessageSize` 노출). 1.0.0으로 옮기자고 제안 |
 | **#47** | **#151 Java 투입(2026-09-11).** #47 판정에서 드러난 것이 흐름 제어 이완이고 #151이 바로 그 구조를 바꾼다. #151 브리프에 **깊이 상한을 증명하는 회귀 테스트**를 완료 조건으로 넣었다 |
 
+### #151이 지금 캠페인의 중심이다 (2026-09-11)
+
+**G4의 이득을 framework가 하나도 쓰지 않고 있다.** G5는 의미 보존이 목표였으므로
+`send`는 `.admitted`, `request`는 `.reply`를 **항상** 기다리게 적응시켰다. `result`를 보지 않는다.
+
+```
+result == OK            → 이미 로컬 큐에 들어갔다. 기다릴 것이 없다.
+result == BACKPRESSURED → 바인딩이 payload를 보관하고 WRITABLE에서 재제출한다. 이때만 기다린다.
+```
+
+바인딩 perf 루프는 이미 이 구조다(#96). framework만 뒤처져 있다.
+
+| 언어 | 상태 |
+|---|---|
+| Java | **1차 기각.** 2차 job 진행 중 |
+| .NET | job 진행 중 |
+| Node | 미착수 (브리프 없음) |
+| C++ | 미착수 (브리프 없음) |
+
+**Java 1차 기각 사유 두 가지 — 다른 언어도 같은 것을 본다.**
+
+**① send-saturation 처리량이 떨어졌다.** 1024에서 80,223 → 54,390 (**−32%**), 4096에서
+78,929 → 60,048 (**−24%**). 덜 기다리는데 느려졌다. 가장 유력한 가설은 **이미 완료된 stage를
+돌려주면 `thenXxx` continuation이 호출 thread에서 인라인으로 돌아**, 전에 completion owner
+thread가 받아주던 downstream 작업까지 송신 루프가 떠안는다는 것이다. 파이프라이닝이 사라진다.
+
+**② 공유 *가변* future.**
+```java
+private static final CompletionStage<Void> ADMITTED = CompletableFuture.completedFuture(null);
+```
+`CompletableFuture`는 가변이고 `ZLinkActorBoundSessionSender.java:124`에
+`submission.toCompletableFuture().cancel(true)`가 있다. **한 번만 취소되면 프로세스 전체의
+이후 모든 `OK` send가 영구히 취소된 상태를 돌려받는다.**
+
+Node 바인딩은 같은 자리에서 `Promise.resolve()`를 공유하는데 **Promise는 불변이라 안전하다**
+(`bindings/node/src/zlink/runtime/messaging/completion_owner.ts:70,307`). Java·.NET은 그렇지 않다.
+**.NET을 리뷰할 때 `ValueTask`/`Task` 공유 인스턴스를 먼저 본다.**
+
+### Node send/backpressure 구조 (참고 — #151 Node 설계 전에 읽을 것)
+
+바인딩이 전부 소유하고 framework는 `await`만 한다.
+
+1. **제출은 항상 `DONTWAIT` 한 번.** `completion_owner.ts:268` `socketSubmitSend(..., DONTWAIT, token)`.
+   절대 블로킹하지 않는다.
+2. **`OK`** → `RESOLVED_SEND`(공유 `Promise.resolve()`). `completionId != 0`이면 `InternalError`로 던진다.
+3. **`Backpressured`** → 그때서야 `snapshotRetryPayload(payload)`로 복사한다(Core는 SEND payload를
+   보관하지 않는다). `EAGAIN`이 아니거나 `completionId == 0`이면 던진다. `CompletionEntry`를 만들고
+   `ensureRuntimeWatch()`로 **이때 비로소** mailbox fd 감시를 켠다.
+4. **재제출은 completion drain이 한다** — `captureWritable()`이 검증 후 `writableRetries`에 넣고,
+   drain 루프가 **completion 큐를 `NO_DATA`까지 비운 뒤** 재제출한다. 재제출이 곧바로 새 WRITABLE을
+   밀어넣기 때문이다.
+5. **framework는 `result`를 보지 않는다** — `node-raw-binding-port.ts:247,300`이 항상
+   `.submit().admitted`를 await 한다. 이것이 Node 몫의 #151이다.
+
+### #158 2차 리뷰 — 계수는 맞고 측정 조건이 틀렸다
+
+`171,243 completed = 118,070 received + 53,173 rejected` 대사와 107,374건 삼중 일치는 훌륭하다.
+그런데 벤치 타깃이 `set_min_level(fw::log_level_t::debug)`로 돌게 됐다
+(`bench_framework_cpp_server.cpp:62`, 변경 전에는 없던 줄). **이 벤치가 #7의 기준이다** —
+그대로 머지하면 앞으로의 모든 C++ framework 숫자가 debug 로깅 비용을 안고 나온다.
+`stats_http_server_t`/`snapshot("bench")` 경로로 읽도록 되돌려보냈다.
+
+C++ metric이 debug에서만 발행되는 것(`host_capacity_runtime.hpp:150`이 같다)은 **기존 관례**이며
+job 잘못이 아니다. **#173**으로 분리했다 — .NET은 `Meter` counter라 항상 발행한다.
+
 ### 부하가 판정을 오염시킨다 — 내가 당했다
 
 C++ `test_cpp_framework_m6b_runtime`이 #45 브랜치에서 1/5 실패했다. 회귀로 볼 뻔했는데
