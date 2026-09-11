@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.lang.reflect.RecordComponent;
 import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -164,6 +165,48 @@ final class ZLinkApplicationJobQueueRuntimeMonitoringTest {
                 assertEquals(null, pressureSource.get().get());
             }
             metrics.close();
+        }
+    }
+
+    @Test
+    void runtimeReplaysLiveMeshTopologyToAMetricProviderInstalledAfterStartup()
+        throws Exception {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addRouteMesh("metrics").listen(
+            "inproc://metrics-topology-late-" + UUID.randomUUID());
+        ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(
+            options,
+            new ZLinkJavaBackendAdapterFactory());
+        AtomicReference<Supplier<List<ZLinkRuntimeMetrics.MeshTopologyMetrics>>>
+            topologySource = new AtomicReference<>();
+        AutoCloseable metrics = null;
+        boolean closed = false;
+        try {
+            metrics = ZLinkRuntimeMetrics.install(new ZLinkRuntimeMetrics.Sink() {
+                @Override
+                public void registerMeshTopology(
+                    Supplier<List<ZLinkRuntimeMetrics.MeshTopologyMetrics>> value) {
+                    topologySource.set(value);
+                }
+            });
+            assertEquals(1, topologySource.get().get().size());
+            var snapshot = topologySource.get().get().getFirst();
+            assertEquals("metrics", snapshot.meshName());
+            assertEquals("manual", snapshot.source());
+            assertEquals(0, snapshot.configuredPeers());
+            assertEquals(0, snapshot.connectedPeers());
+            assertEquals(0, snapshot.readyPeers());
+
+            runtime.close();
+            closed = true;
+            assertTrue(topologySource.get().get().isEmpty());
+        } finally {
+            if (metrics != null) {
+                metrics.close();
+            }
+            if (!closed) {
+                runtime.close();
+            }
         }
     }
 

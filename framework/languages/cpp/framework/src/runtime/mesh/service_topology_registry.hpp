@@ -4,6 +4,8 @@
 #include "runtime/execution/state_lane.hpp"
 
 #include <service_wire_constants.hpp>
+#include <opentelemetry/metrics/meter.h>
+#include <opentelemetry/metrics/async_instruments.h>
 
 #include <cstdint>
 #include <functional>
@@ -106,7 +108,8 @@ bool route_mesh_connection_not_required (const service_node_descriptor_t &local,
 class service_topology_registry_t
 {
   public:
-    explicit service_topology_registry_t (service_node_descriptor_t local);
+    explicit service_topology_registry_t (service_node_descriptor_t local,
+                                          std::vector<std::string> metric_channel_names = {});
 
     void publish_local (service_node_descriptor_t descriptor);
     service_node_descriptor_t local_descriptor () const;
@@ -129,6 +132,7 @@ class service_topology_registry_t
     std::optional<admitted_peer_t> peer (const std::vector<std::uint8_t> &node_routing_id) const;
     std::optional<std::vector<std::uint8_t>> select (const std::string &channel_name);
     std::vector<admitted_peer_t> multicast_targets (const std::string &channel_name) const;
+    void observe_channel_metrics (opentelemetry::metrics::ObserverResult result, bool closed) const;
 
   private:
     struct byte_vector_less_t
@@ -153,6 +157,7 @@ class service_topology_registry_t
       _not_required_peers;
     struct selection_state_t
     {
+        const char *unavailable_reason = "not_ready";
         std::uint64_t total_weight = 0;
         std::map<std::vector<std::uint8_t>, std::uint64_t, byte_vector_less_t> weights;
         std::map<std::vector<std::uint8_t>, std::int64_t, byte_vector_less_t> cumulative;
@@ -168,8 +173,11 @@ class service_topology_registry_t
     void materialize_selection_state (selection_state_t &state);
     void rebuild_selection_schedule (selection_state_t &state);
     void rebuild_channel_selections ();
+    void record_selection_failure (const std::string &channel_name) const noexcept;
 
     std::unordered_map<std::string, selection_state_t> _selection_state;
+    std::vector<std::string> _metric_channel_names;
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Counter<double>> _selection_failures;
     std::uint64_t _topology_version = 0;
     std::function<void ()> _change_handler;
 };

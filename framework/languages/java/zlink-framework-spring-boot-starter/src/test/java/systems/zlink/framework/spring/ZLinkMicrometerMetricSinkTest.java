@@ -6,8 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -18,6 +20,7 @@ import systems.zlink.framework.monitoring.ZLinkApplicationJobQueueStatus;
 import systems.zlink.framework.monitoring.ZLinkCoreHwmStatus;
 import systems.zlink.framework.monitoring.ZLinkHostCapacityStatus;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkApplicationJobQueuePressureMetrics;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 
 final class ZLinkMicrometerMetricSinkTest {
     @Test
@@ -33,6 +36,55 @@ final class ZLinkMicrometerMetricSinkTest {
         assertEquals(1, registry.get("zlink.mesh_node.request.duration").timer().count());
         assertThrows(IllegalArgumentException.class,
             () -> sink.increment("zlink.channel.messages.dropped", Map.of("flow_id", "x")));
+    }
+
+    @Test
+    void recordsRequestDurationSecondsInTheExistingTimer() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        ZLinkMicrometerMetricSink sink = new ZLinkMicrometerMetricSink(registry);
+
+        sink.record("zlink.mesh_node.request.duration", 0.25, Map.of());
+
+        assertEquals(1, registry.get("zlink.mesh_node.request.duration").timer().count());
+        assertEquals(0.25, registry.get("zlink.mesh_node.request.duration")
+            .timer().totalTime(TimeUnit.SECONDS), 0.000001);
+    }
+
+    @Test
+    void exportsLiveRouteMeshTopologyAndAggregatesMatchingHosts() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        ZLinkMicrometerMetricSink sink = new ZLinkMicrometerMetricSink(registry);
+        AtomicReference<List<ZLinkRuntimeMetrics.MeshTopologyMetrics>> source =
+            new AtomicReference<>(List.of(
+                topology("mesh", "manual_and_redis", 2, 1, 1, 3),
+                topology("mesh", "manual_and_redis", 3, 2, 2, 4)));
+
+        sink.registerMeshTopology(source::get);
+
+        assertEquals(5.0, registry.get("zlink.mesh_node.peers.configured")
+            .tag("mesh_name", "mesh").tag("source", "manual_and_redis")
+            .gauge().value());
+        assertEquals(3.0, registry.get("zlink.mesh_node.peers.connected")
+            .tag("mesh_name", "mesh").tag("source", "manual_and_redis")
+            .gauge().value());
+        assertEquals(3.0, registry.get("zlink.mesh_node.peers.ready")
+            .tag("mesh_name", "mesh").tag("source", "manual_and_redis")
+            .gauge().value());
+        assertEquals(7.0, registry.get("zlink.mesh_node.channels.ready_members")
+            .tag("mesh_name", "mesh").tag("channel_name", "orders")
+            .gauge().value());
+        assertEquals("{peer}", registry.get("zlink.mesh_node.peers.configured")
+            .gauge().getId().getBaseUnit());
+        assertEquals("{member}", registry.get("zlink.mesh_node.channels.ready_members")
+            .gauge().getId().getBaseUnit());
+
+        source.set(List.of(topology("mesh", "manual_and_redis", 1, 0, 0, 0)));
+        assertEquals(1.0, registry.get("zlink.mesh_node.peers.configured")
+            .tag("mesh_name", "mesh").tag("source", "manual_and_redis")
+            .gauge().value());
+        assertEquals(0.0, registry.get("zlink.mesh_node.channels.ready_members")
+            .tag("mesh_name", "mesh").tag("channel_name", "orders")
+            .gauge().value());
     }
 
     @Test
@@ -182,6 +234,19 @@ final class ZLinkMicrometerMetricSinkTest {
                 "zlink.host.application_job_queue.pressure_state"))
             .map(meter -> meter.getId().getTag("state"))
             .collect(java.util.stream.Collectors.toSet());
+    }
+
+    private static ZLinkRuntimeMetrics.MeshTopologyMetrics topology(
+        String meshName,
+        String source,
+        long configured,
+        long connected,
+        long ready,
+        long readyMembers) {
+        return new ZLinkRuntimeMetrics.MeshTopologyMetrics(
+            meshName, source, configured, connected, ready,
+            List.of(new ZLinkRuntimeMetrics.MeshChannelTopologyMetrics(
+                "orders", readyMembers)));
     }
 
     private static ZLinkHostCapacityStatus capacity(

@@ -67,6 +67,7 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetricProbe;
 
 final class ZLinkChannelRuntimeTest {
     private static ZLinkHandlerActivator handlers() {
@@ -543,6 +544,137 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
+    void publicRequestsRecordNodeChannelSpotAndInstanceSpotMetrics() throws Exception {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.setDefaultRequestTimeout(Duration.ofMillis(300));
+        options.addClientServerChannel("profile")
+            .client()
+            .connect("inproc://profile");
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+            .enableServer("inproc://play-route")
+            .enableClient("inproc://play-peer");
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        backend.dealer.requestFailuresRemaining = 1;
+        backend.router.requestFailuresRemaining = 1;
+        backend.bridge.requestReplyParts = List.of(Message.from(
+            "{\"ok\":true,\"response\":{\"value\":\"reply\"}}".getBytes()));
+
+        try (ZLinkRequestMetricProbe metrics = ZLinkRequestMetricProbe.install();
+             ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
+                 backend,
+                 options.registration(),
+                 new ZLinkJsonMessageSerializer(), handlers())) {
+            runtime.registerSpotRouterNode("play.route", backend.spotNode);
+            runtime.registerSpotRouteBridgeOwner(() -> backend.spotNode);
+            runtime.registerRequestSourceMeshOwner(() -> backend.spotNode);
+            runtime.registerInstanceSpotCallRuntime(
+                new ZLinkInstanceSpotCallRuntime() {
+                    @Override
+                    public String metricMeshName(
+                        String requestedMesh,
+                        String callerMesh) {
+                        return "placement".equals(requestedMesh)
+                            ? requestedMesh : callerMesh;
+                    }
+
+                    @Override
+                    public CompletionStage<Void> send(
+                        String spotId,
+                        String stableType,
+                        String meshName,
+                        Message payload,
+                        Optional<String> packetName,
+                        String contentType,
+                        Map<String, String> metadata) {
+                        throw new AssertionError("ready route must not activate");
+                    }
+
+                    @Override
+                    public CompletionStage<List<Message>> request(
+                        String spotId,
+                        String stableType,
+                        String meshName,
+                        Message payload,
+                        Optional<String> packetName,
+                        String contentType,
+                        Map<String, String> metadata,
+                        Duration timeout) {
+                        throw new AssertionError("ready route must not activate");
+                    }
+                });
+
+            assertThrows(CompletionException.class,
+                () -> runtime.requestToChannel("profile", new TestRequest("channel"))
+                    .submit(TestReply.class).toCompletableFuture().join());
+            assertThrows(CompletionException.class,
+                () -> runtime.requestToNode(
+                        "play.route", RoutingId.from("play-node"),
+                        new TestRequest("node"))
+                    .submit(TestReply.class).toCompletableFuture().join());
+            assertThrows(ZLinkConfigurationException.class,
+                () -> runtime.requestToChannel(
+                        "not-registered", new TestRequest("invalid"))
+                    .submit(TestReply.class));
+            runtime.requestToSpot("room-spot", new TestRequest("spot"))
+                .submit(TestReply.class).toCompletableFuture().join();
+            backend.bridge.requestReplyParts = List.of(Message.from(
+                "{\"ok\":true,\"response\":{\"value\":\"reply\"}}".getBytes()));
+            runtime.requestToSpot("room-instance", new TestRequest("instance"))
+                .instanceSpot("room")
+                .inMesh("placement")
+                .submit(TestReply.class).toCompletableFuture().join();
+
+            assertEquals(0L, metrics.inflight("profile", "channel"));
+            assertEquals(1L, metrics.durationCount(
+                "profile", "channel", "failed"));
+            assertEquals(0L, metrics.durationCount(
+                "not-registered", "channel", "failed"));
+            assertEquals(0L, metrics.inflight("fake-node", "node"));
+            assertEquals(1L, metrics.durationCount(
+                "fake-node", "node", "failed"));
+            assertEquals(0L, metrics.inflight("fake-node", "spot"));
+            assertEquals(1L, metrics.durationCount(
+                "fake-node", "spot", "completed"));
+            assertEquals(0L, metrics.inflight("placement", "instance_spot"));
+            assertEquals(1L, metrics.durationCount(
+                "placement", "instance_spot", "completed"));
+        }
+    }
+
+    @Test
+    void cancelledSpotRequestCompletesMetricsBeforeResolverTerminal()
+        throws Exception {
+        CompletableFuture<Optional<SpotTransportAddress>> resolution =
+            new CompletableFuture<>();
+        SpotTransportAddressResolver resolver = ignored -> resolution;
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+
+        try (ZLinkRequestMetricProbe metrics = ZLinkRequestMetricProbe.install();
+             ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
+                 backend,
+                 options.registration(),
+                 new ZLinkJsonMessageSerializer(), handlers(resolver))) {
+            runtime.registerRequestSourceMeshOwner(() -> backend.spotNode);
+            CompletableFuture<TestReply> result = runtime.requestToSpot(
+                    "pending", new TestRequest("request"))
+                .submit(TestReply.class)
+                .toCompletableFuture();
+
+            assertEquals(1L, metrics.inflight("fake-node", "spot"));
+            assertTrue(result.cancel(false));
+            assertEquals(0L, metrics.inflight("fake-node", "spot"));
+            assertEquals(1L, metrics.durationCount(
+                "fake-node", "spot", "failed"));
+
+            resolution.complete(Optional.empty());
+            assertEquals(0L, metrics.inflight("fake-node", "spot"));
+            assertEquals(1L, metrics.durationCount(
+                "fake-node", "spot", "failed"));
+        }
+    }
+
+    @Test
     void meshNodeAndChannelCallsEncodeImmutableApplicationMetadata() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
@@ -868,7 +1000,8 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
-    void instanceSpotRequestDoesNotActivateWhenReadyOwnerIsUnavailable() {
+    void instanceSpotRequestDoesNotActivateWhenReadyOwnerIsUnavailable()
+        throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
@@ -878,12 +1011,22 @@ final class ZLinkChannelRuntimeTest {
             CompletableFuture.failedFuture(new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.UNAVAILABLE,
                 "ready owner lease expired"));
-        try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
-            backend,
-            options.registration(),
-            new ZLinkJsonMessageSerializer(), handlers(resolver))) {
+        try (ZLinkRequestMetricProbe metrics = ZLinkRequestMetricProbe.install();
+             ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
+                 backend,
+                 options.registration(),
+                 new ZLinkJsonMessageSerializer(), handlers(resolver))) {
             runtime.registerSpotRouterNode("play.route", backend.spotNode);
+            runtime.registerRequestSourceMeshOwner(() -> backend.spotNode);
             runtime.registerInstanceSpotCallRuntime(new ZLinkInstanceSpotCallRuntime() {
+                @Override
+                public String metricMeshName(
+                    String requestedMesh,
+                    String callerMesh) {
+                    return "play.route".equals(requestedMesh)
+                        ? requestedMesh : callerMesh;
+                }
+
                 @Override
                 public CompletionStage<Void> send(
                     String spotId,
@@ -948,6 +1091,9 @@ final class ZLinkChannelRuntimeTest {
             assertEquals(0, activationAttempts.get());
             assertEquals(0, backend.spotNode.entrySpot.sendAttempts);
             assertEquals(0, backend.spotNode.entrySpot.requestAttempts);
+            assertEquals(0L, metrics.inflight("play.route", "instance_spot"));
+            assertEquals(1L, metrics.durationCount(
+                "play.route", "instance_spot", "failed"));
         }
     }
 

@@ -53,19 +53,67 @@ as a distribution.
 - **Provider failure doesn't change application callback, reply, new-work
   acceptance, or host lifecycle results.**
 
-### 2.1 Activation of Metric Recording and Collection
+### 2.1 When Metrics Are Recorded
 
-**Metric recording does not depend on the logger's log level or on message-flow diagnostics level or sampling settings.** When the application enables collection of an instrument through a standard metric provider or listener, the framework records the events and states defined by this document in that instrument, or supplies them when it is collected. This must not require raising the log level or separately starting status queries or status-change observation. Independence from message-flow diagnostics follows [Message Flow Tracing §4](03-message-flow-tracing.en.md#4-how-the-application-sets-the-recording-scope--level-and-sampling).
+When the application turns on collection for an instrument through a standard metric provider or
+listener, the framework records to that instrument every time an event defined by this document
+happens. Instruments that represent a current value supply that value when the provider reads them.
 
-Here, activation means **configuration for collecting the metric instrument**. It does not mean the number of status-stream subscribers, the number of users currently querying a backend, or the presence of a log sink. How activation is detected is left to each language's standard meter, registry, or provider. If no API exposes whether an instrument is being collected, an implementation may record through the standard instrument and let the provider collect or discard the measurement. The common framework API does not require a subscriber count or a separate metric activation switch. Collection interval, aggregation, and export remain provider responsibilities under §1 and §11.
+- **Recording does not require raising the log level.** The logger's level and the message-flow
+  diagnostics level and sampling settings cannot turn metric recording off. Metrics and logs are
+  separate observation axes, and turning logs on changes the behavior and performance of the thing
+  being measured. The relationship with message-flow diagnostics is owned by
+  [Message Flow Tracing §4](03-message-flow-tracing.en.md#4-how-the-application-sets-the-recording-scope--level-and-sampling).
+- **No separate status query or change subscription is needed.** If seeing one instrument required
+  turning on another observation path, that instrument could not be collected on its own.
 
-**Each language provides every instrument whose applicability conditions in this document are met.** While collection is enabled, defined events are recorded, and instruments representing current state supply that state when collected. Registering an instrument does not substitute for recording actual events. If an event is structurally impossible in a language, its language interface document states the difference permitted by the common contract and its reason. An unimplemented feature or metric does not qualify for this exception. Each metric section owns its aggregation scope and exclusions.
+"Turning on collection" here means **the provider is configured to collect that instrument**. It has
+nothing to do with how many subscribers a status stream has, how many users are querying a backend,
+or whether a log sink is attached.
 
-Calculations and recording needed only by a disabled instrument may be skipped. **There is no requirement to reconstruct ordinary event-counter increments or histogram samples from a disabled interval after collection starts.** If a histogram's required start measurement was not collected, the implementation need not measure that past interval retroactively. Retention of measurements already being collected and their availability to a new reader follow the provider's aggregation and lifetime contract.
+How an implementation detects that collection is on is left to the language's standard meter,
+registry, or provider. When no API exposes it, the implementation may record to the standard
+instrument and let the provider collect or discard the measurement. The common framework API does not
+count subscribers or add a metric-only on/off switch. How often values are read, and how they are
+aggregated and exported, belong to the provider under §1 and §11.
 
-This permission to skip work does not change state the runtime maintains for another contract. **The current-epoch counters and cumulative values defined in §3, and the current values represented by individual instruments, retain their meaning independently of collection activation.** Activation or deactivation alone is not a Reset of the runtime measurement epoch. An implementation may record counter increments or collect a maintained cumulative value using the standard provider's representation. It must not count the same increment twice or lose a current value or epoch cumulative value by treating it as an ordinary event from a disabled interval.
+### 2.2 Which Instruments Must Exist
 
-The rules in §11 continue to govern disabled-path cost, reading bounded aggregates, dispatch ordering, and provider failure. Activating metric recording does not change message processing, routing, or completion conditions.
+**Each language provides every instrument whose conditions in this document apply.** While collection
+is on, a defined event is recorded when it happens, and an instrument representing a current value
+supplies that value when read.
+
+- **Registering an instrument is not enough.** A registered name that records nothing when the event
+  happens leaves operators with the same view as if the event never occurred.
+- **If an event cannot structurally happen in a language**, that difference and its reason belong in
+  that language's interface document. **Not having implemented it yet is not this exception.** Writing
+  an implementation status as a contract difference makes the next reader treat it as permitted.
+
+Which events are counted and what is excluded belongs to each metric's own section.
+
+### 2.3 What May Be Skipped While Collection Is Off
+
+Calculations and recording needed only by an instrument that is off may be skipped.
+
+- **There is no obligation to recover counter increments or histogram samples from the interval while
+  it was off.** If the start time a histogram needs was not recorded, that interval need not be
+  measured afterward.
+- **How long already-collected values are retained, and how much a new reader receives**, follows the
+  way the provider aggregates and keeps them.
+
+**This skipping does not touch values the runtime maintains for another contract.** The current-epoch
+counters and cumulative values defined in §3, and the current value each instrument represents, stay
+as they are regardless of whether collection is on. Turning collection on or off is not a Reset of the
+measurement epoch.
+
+- **The same increment is never counted twice.** An implementation may send counter increments or let
+  a maintained cumulative value be read, matching the standard provider's representation — but it must
+  not mix the two so that one event is counted twice.
+- **A current value or an epoch cumulative value is not discarded as "an ordinary event from an
+  interval while collection was off."**
+
+The cost of a disabled path, reading bounded aggregates, recording order, and provider failure belong
+to §11. **Turning metrics on does not change message processing, routing, or completion conditions.**
 
 ## 3. Host Core HWM and Application Job Queue
 

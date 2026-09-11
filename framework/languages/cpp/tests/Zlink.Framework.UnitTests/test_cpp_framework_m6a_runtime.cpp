@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include "metric_test_reader.hpp"
+
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
@@ -2154,13 +2156,12 @@ void verify_raw_owner_node_send_and_liveness (
     std::mutex observations_mutex;
     std::vector<std::map<std::string, std::string>> observations;
     fw::logging_builder_t logging;
-    logging.set_min_level (fw::log_level_t::debug).use_provider (
-      "owner-rejection-test", [&] (const fw::log_record_t &record) {
-          std::lock_guard lock (observations_mutex);
-          auto &fields = observations.emplace_back ();
-          for (const auto &field : record.fields)
-              fields.emplace (field.key, field.value);
-      });
+    logging.use_provider ("owner-rejection-test", [&] (const fw::log_record_t &record) {
+        std::lock_guard lock (observations_mutex);
+        auto &fields = observations.emplace_back ();
+        for (const auto &field : record.fields)
+            fields.emplace (field.key, field.value);
+    });
     auto monitoring = std::make_shared<fw::detail::monitoring_runtime_state_t> ();
     monitoring->diagnostics_logger = logging.create_logger ("owner-rejection-test");
     fw::dispatch_options_t dispatch;
@@ -2173,6 +2174,7 @@ void verify_raw_owner_node_send_and_liveness (
     second_context->options ().auto_hwm_enabled (false);
     mesh::raw_mesh_node_owner_t first (
       mesh::raw_mesh_node_options_t{descriptor ("raw-a")}, first_context);
+    metric_test::provider_t metric_provider;
     mesh::raw_mesh_node_owner_t second (
       mesh::raw_mesh_node_options_t{
         descriptor ("raw-b"),
@@ -2303,8 +2305,11 @@ void verify_raw_owner_node_send_and_liveness (
 
     // A drop remains observable with tracing disabled. Reading a cumulative
     // counter twice must neither reset it nor turn it into two dropped records.
-    second.publish_drop_metrics (monitoring);
-    second.publish_drop_metrics (monitoring);
+    for (int scrape = 0; scrape < 2; ++scrape) {
+        auto collected = metric_provider.collect_fields ();
+        std::lock_guard lock (observations_mutex);
+        observations.insert (observations.end (), collected.begin (), collected.end ());
+    }
     {
         std::lock_guard lock (observations_mutex);
         std::size_t metrics = 0, flows = 0, errors = 0;

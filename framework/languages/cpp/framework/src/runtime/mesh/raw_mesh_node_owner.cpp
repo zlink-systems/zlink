@@ -5,6 +5,7 @@
 #include "runtime/messaging/envelope_codec.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/dispatch/application_job_receive_flow.hpp"
 #include "runtime/transport/listener_identity.hpp"
 
@@ -27,6 +28,7 @@
 #include <boost/asio/system_executor.hpp>
 
 #include <nlohmann/json.hpp>
+#include <opentelemetry/metrics/provider.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -144,6 +146,22 @@ std::size_t raw_received_bytes (
         total += part.size ();
     }
     return total;
+}
+
+foundation::operation_terminal_t request_metric_terminal (const protocol::reply_header_t &reply) noexcept
+{
+    if (reply.terminal_result == 0)
+        return foundation::operation_terminal_t::completed;
+    // Reuse the canonical reply classification, including workerTimedOut;
+    // metrics must not introduce another wire failure-code table.
+    switch (user_spot_terminal::map_user_spot_wire_failure (reply, false)) {
+        case framework_error_kind_t::deadline_exceeded:
+            return foundation::operation_terminal_t::timed_out;
+        case framework_error_kind_t::shutting_down:
+            return foundation::operation_terminal_t::shutdown;
+        default:
+            return foundation::operation_terminal_t::transport_failed;
+    }
 }
 
 class infrastructure_request_retry_state_t final :
@@ -588,19 +606,39 @@ raw_mesh_node_owner_t::raw_mesh_node_owner_t (
     _options (std::move (options)),
     _context (
       context ? std::move (context) : std::make_shared<zlink::context_t> ()),
-    _topology (_options.descriptor),
+    _topology (_options.descriptor, _options.metric_channel_names),
     _mailbox (_options.application_message_budget,
               _options.application_byte_budget,
               _options.infrastructure_message_budget,
               _options.infrastructure_byte_budget),
+    _request_metrics (std::make_shared<mesh_request_metrics_t> (_options.descriptor.mesh_name)),
     _operations (
       std::make_shared<foundation::operation_registry_t> (
         foundation::default_operation_capacity))
 {
+    auto meter = opentelemetry::metrics::Provider::GetMeterProvider ()->GetMeter ("zlink.framework");
+    constexpr std::array names{"zlink.mesh_node.peers.configured", "zlink.mesh_node.peers.connected",
+                               "zlink.mesh_node.peers.ready", "zlink.mesh_node.channels.ready_members"};
+    for (std::size_t index = 0; index < names.size (); ++index) {
+        auto &registration = _peer_metrics[index];
+        registration.owner = this;
+        registration.index = index;
+        registration.instrument = meter->CreateDoubleObservableGauge (
+          names[index], "", index == 3 ? "{member}" : "{peer}");
+        registration.instrument->AddCallback (&publish_peer_metrics, &registration);
+    }
+    _drop_metric =
+      opentelemetry::metrics::Provider::GetMeterProvider ()
+        ->GetMeter ("zlink.framework")
+        ->CreateDoubleObservableCounter ("zlink.mesh_node.messages.dropped", "", "{message}");
+    _drop_metric->AddCallback (&publish_drop_metrics, this);
 }
 
 raw_mesh_node_owner_t::~raw_mesh_node_owner_t () noexcept
 {
+    for (auto &registration : _peer_metrics)
+        registration.instrument->RemoveCallback (&publish_peer_metrics, &registration);
+    _drop_metric->RemoveCallback (&publish_drop_metrics, this);
     close ();
 }
 
@@ -1074,7 +1112,8 @@ task_t<bool> raw_mesh_node_owner_t::request_to_node (
 {
     co_return co_await request_to_target (
       target_routing_id, application_payload, timeout, std::move (callback),
-      std::nullopt, correlation);
+      std::nullopt, correlation, false,
+      mesh_request_metric_t (_request_metrics, mesh_request_surface_t::node));
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_to_channel (
@@ -1084,13 +1123,14 @@ task_t<bool> raw_mesh_node_owner_t::request_to_channel (
   foundation::operation_registry_t::callback_t callback,
   std::optional<std::uint64_t> correlation)
 {
+    mesh_request_metric_t request_metric (_request_metrics, mesh_request_surface_t::channel);
     auto selected = _topology.select (channel_name);
     if (!selected) {
         co_return false;
     }
     co_return co_await request_to_target (
       std::move (*selected), application_payload, timeout,
-      std::move (callback), channel_name, correlation, true);
+      std::move (callback), channel_name, correlation, true, std::move (request_metric));
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_to_target (
@@ -1100,7 +1140,8 @@ task_t<bool> raw_mesh_node_owner_t::request_to_target (
   foundation::operation_registry_t::callback_t callback,
   const std::optional<std::string> &channel_name,
   std::optional<std::uint64_t> correlation,
-  bool target_claimed)
+  bool target_claimed,
+  mesh_request_metric_t request_metric)
 {
     co_return co_await request_with_header (
       std::move (target_routing_id),
@@ -1111,7 +1152,7 @@ task_t<bool> raw_mesh_node_owner_t::request_to_target (
                    : protocol::encode_node_request_header (correlation);
       },
       application_payload, timeout, std::move (callback), correlation,
-      target_claimed);
+      target_claimed, std::move (request_metric));
 }
 
 task_t<bool> raw_mesh_node_owner_t::observe_request (
@@ -1190,7 +1231,7 @@ task_t<bool> raw_mesh_node_owner_t::observe_request (
                   (void) operations->fail (
                     operation,
                     foundation::operation_terminal_t::transport_failed,
-                    parts.front ());
+                    parts.front (), {}, request_metric_terminal (reply));
                   return;
               }
               if (parts.size () != 2) {
@@ -1285,7 +1326,8 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
   std::chrono::milliseconds timeout,
   foundation::operation_registry_t::callback_t callback,
   std::optional<std::uint64_t> requested_correlation,
-  bool target_claimed)
+  bool target_claimed,
+  mesh_request_metric_t request_metric)
 {
     if (timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument ("raw mesh request timeout must be positive");
@@ -1300,7 +1342,7 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
         std::shared_ptr<task_t<detail::backend::raw_request_completion_t>> running;
         bool registered = false;
     };
-    auto start = _lane.run ([this, &header, requested_correlation, timeout,
+    auto start = _lane.run ([this, &header, &request_metric, requested_correlation, timeout,
                              callback = std::move (callback),
                              target_routing_id = std::move (target_routing_id),
                              encoded_payload = std::move (encoded_payload)] () mutable {
@@ -1322,7 +1364,7 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
         value.registered = _operations->register_operation (
           value.operation,
           foundation::operation_registry_t::clock_t::now () + timeout,
-          std::move (callback));
+          std::move (callback), {}, std::move (request_metric));
         if (value.registered) {
             try {
                 trace_mesh (
@@ -1853,12 +1895,13 @@ std::optional<foundation::call_id_t>
 raw_mesh_node_owner_t::register_local_operation (
   foundation::operation_registry_t::clock_t::time_point deadline,
   foundation::operation_registry_t::callback_t callback,
-  std::optional<foundation::call_id_t> requested)
+  std::optional<foundation::call_id_t> requested,
+  mesh_request_surface_t request_surface)
 {
     if (!callback)
         throw std::invalid_argument ("local operation callback is required");
     return _lane.run ([this, deadline, callback = std::move (callback),
-                       requested] () mutable -> std::optional<foundation::call_id_t> {
+                       requested, request_surface] () mutable -> std::optional<foundation::call_id_t> {
         foundation::call_id_t operation;
         {
             std::lock_guard lifecycle_lock (_lifecycle_mutex);
@@ -1874,7 +1917,8 @@ raw_mesh_node_owner_t::register_local_operation (
             }
         }
         if (!_operations->register_operation (
-              operation, deadline, std::move (callback)))
+              operation, deadline, std::move (callback), {},
+              mesh_request_metric_t (_request_metrics, request_surface)))
             return std::nullopt;
         signal_activity ();
         return operation;
@@ -1992,7 +2036,8 @@ task_t<bool> raw_mesh_node_owner_t::request_to_spot (
             protocol::command::spotRequest, source_spot_id,
             target, exact, correlation);
       },
-      application_payload, timeout, std::move (callback), correlation);
+      application_payload, timeout, std::move (callback), correlation, false,
+      mesh_request_metric_t (_request_metrics, mesh_request_surface_t::spot));
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_to_actor (
@@ -2053,7 +2098,8 @@ task_t<bool> raw_mesh_node_owner_t::request_to_actor (
             protocol::command::actorRequest, source_actor, target,
             exact, correlation, 0, bound_session_source);
       },
-      application_payload, timeout, std::move (callback), correlation);
+      application_payload, timeout, std::move (callback), correlation, false,
+      mesh_request_metric_t (_request_metrics, mesh_request_surface_t::actor));
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_user_spot_create (
@@ -2505,7 +2551,8 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
     const auto id = operation_id (local.lifecycle_generation, correlation);
     if (!_operations->register_operation (
           id, foundation::operation_registry_t::clock_t::now () + timeout,
-          std::move (callback))) {
+          std::move (callback), {}, mesh_request_metric_t (_request_metrics,
+            request.request ? mesh_request_surface_t::instance_spot : mesh_request_surface_t::none))) {
         co_return false;
     }
     if (target_routing_id == local.node_routing_id) {
@@ -2570,7 +2617,8 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
                   (void) protocol::decode_application_payload (
                     reply_parts[1], false);
               (void) operations->complete (
-                id, protocol::pack_infrastructure_reply (reply_parts));
+                id, protocol::pack_infrastructure_reply (reply_parts), {},
+                request_metric_terminal (reply));
           }
           catch (const protocol::service_wire_error_t &) {
               //  Spec 32-framework-error-model:91-92 — a reply that can't be
@@ -2581,7 +2629,8 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
                 id,
                 protocol::pack_infrastructure_reply (
                   detail::backend::raw_message_t{
-                    protocol::encode_reply_header (correlation, 104, 16)}));
+                    protocol::encode_reply_header (correlation, 104, 16)}), {},
+                foundation::operation_terminal_t::protocol_error);
           }
       });
     co_return true;
@@ -2856,7 +2905,8 @@ bool raw_mesh_node_owner_t::reply_instance_spot_activation (
           operation_id (
             local.lifecycle_generation,
             *request.correlation),
-          protocol::pack_infrastructure_reply (parts));
+          protocol::pack_infrastructure_reply (parts), {},
+          request_metric_terminal ({*request.correlation, terminal_result, failure_code}));
     }
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
@@ -2891,20 +2941,53 @@ bool raw_mesh_node_owner_t::reply_user_spot_close (
         reply.closed));
 }
 
-void raw_mesh_node_owner_t::publish_drop_metrics (
-  const std::shared_ptr<framework::detail::monitoring_runtime_state_t> &monitoring) const
+void raw_mesh_node_owner_t::publish_peer_metrics (opentelemetry::metrics::ObserverResult result,
+                                                void *state)
 {
-    if (!monitoring || !monitoring->diagnostics_logger.is_enabled (log_level_t::debug))
+    const auto &registration = *static_cast<peer_metric_registration_t *> (state);
+    auto &owner = *registration.owner;
+    if (registration.index == 3) {
+        const auto closed = owner._lane.run ([&] { return owner._closed; }).get ();
+        owner._topology.observe_channel_metrics (result, closed);
         return;
+    }
+    const auto count = owner._lane.run ([&] () -> std::size_t {
+        if (registration.index == 1)
+            return owner._closed ? 0 : owner._connections.peer_count ();
+        const auto peers = owner._topology.peers ();
+        if (registration.index == 2)
+            return owner._closed ? 0 : std::count_if (
+              peers.begin (), peers.end (), [] (const auto &peer) {
+                  return peer.descriptor.state == service_node_state_t::serving;
+              });
+        std::size_t configured = owner._expected_peers.size ()
+          - owner._expected_peers.count (owner._options.descriptor.node_routing_id);
+        for (const auto &peer : peers)
+            configured += !owner._expected_peers.contains (peer.descriptor.node_routing_id);
+        for (const auto &peer : owner._topology.not_required_peers ())
+            configured += !owner._expected_peers.contains (peer.node_routing_id);
+        return configured;
+    }).get ();
+    auto observer = opentelemetry::nostd::get<
+      opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObserverResultT<double>>> (result);
+    observer->Observe (static_cast<double> (count),
+                       {{"mesh_name", owner._options.descriptor.mesh_name},
+                        {"source", owner._options.metric_source}});
+}
+
+void raw_mesh_node_owner_t::publish_drop_metrics (opentelemetry::metrics::ObserverResult result,
+                                                  void *state)
+{
+    const auto &owner = *static_cast<raw_mesh_node_owner_t *> (state);
+    auto observer = opentelemetry::nostd::get<
+      opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObserverResultT<double>>> (result);
     for (std::size_t index = 0; index < inbound_surfaces.size (); ++index) {
-        framework::detail::monitoring_runtime_t (monitoring).publish_metric ({
-          "zlink.mesh_node.messages.dropped",
-          static_cast<double> (_inbound_drops[index].load (std::memory_order_relaxed)),
-          "{message}", framework::detail::metric_instrument_kind_t::counter,
-          framework::detail::metric_temporality_t::current,
-          {{"mesh_name", _options.descriptor.mesh_name},
+        observer->Observe (
+          static_cast<double> (owner._inbound_drops[index].load (std::memory_order_relaxed)),
+          {{"mesh_name", owner._options.descriptor.mesh_name},
            {"surface", inbound_surfaces[index].metric_surface},
-           {"message_kind", "send"}, {"reason", "backpressure"}}});
+           {"message_kind", "send"},
+           {"reason", "backpressure"}});
     }
 }
 

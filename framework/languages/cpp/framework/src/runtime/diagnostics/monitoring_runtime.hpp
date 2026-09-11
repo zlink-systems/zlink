@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include <opentelemetry/metrics/meter.h>
+
 #include <zlink/framework/contracts/configuration/logging.hpp>
 #include <zlink/framework/contracts/monitoring/spot_events.hpp>
 #include <zlink/framework/contracts/locations/diagnostics.hpp>
@@ -14,6 +16,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -109,12 +112,18 @@ struct drain_event_t
     drain_state_t state = drain_state_t::serving;
 };
 
+class metric_instrument_t;
+
 class monitoring_runtime_state_t
 {
   public:
+    monitoring_runtime_state_t ();
     runtime::offload_executor_t lane_executor;
     mutable runtime::state_lane_t lane{lane_executor};
     logger_t<> diagnostics_logger;
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::Meter> metric_meter;
+    std::mutex metric_mutex;
+    std::map<std::string, std::shared_ptr<metric_instrument_t>> metric_instruments;
     std::vector<std::string> spot_sources;
     std::vector<spot_event_handler_t> spot_handlers;
 };

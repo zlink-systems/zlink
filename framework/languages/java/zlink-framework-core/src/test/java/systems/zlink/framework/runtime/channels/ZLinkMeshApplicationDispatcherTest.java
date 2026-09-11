@@ -41,6 +41,52 @@ import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 
 final class ZLinkMeshApplicationDispatcherTest {
+    @Test
+    void recordsMissingHandlerDropsWithDefaultDiagnostics() throws Exception {
+        var events = new java.util.concurrent.LinkedBlockingQueue<Map<String, String>>();
+        try (var metrics = systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.install(
+                new systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Sink() {
+                    @Override
+                    public void increment(String name, Map<String, String> tags) {
+                        assertEquals("zlink.mesh_node.messages.dropped", name);
+                        events.add(tags);
+                    }
+                })) {
+            MeshNodeRegistration mesh = new MeshNodeRegistration("game");
+            mesh.listen("inproc://metrics-missing-handler");
+            ZLinkMeshApplicationDispatcher dispatcher = dispatcher(mesh);
+            dispatcher.accept(record(RecordKind.NODE_SEND, null, "missing"));
+            assertEquals(Map.of("mesh_name", "game", "surface", "node",
+                "message_kind", "send", "reason", "no_handler"), events.poll(2, TimeUnit.SECONDS));
+            dispatcher.accept(record(RecordKind.CHANNEL_SEND, "unregistered", "missing"));
+            assertEquals(Map.of("mesh_name", "game", "surface", "channel",
+                "message_kind", "send", "reason", "no_handler"), events.poll(2, TimeUnit.SECONDS));
+            assertTrue(events.isEmpty());
+        }
+    }
+
+    @Test
+    void recordsTypedSendDecodeFailureBeforeHandlerWithDefaultDiagnostics() throws Exception {
+        CompletableFuture<Map<String, String>> event = new CompletableFuture<>();
+        try (var metrics = systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.install(
+                new systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Sink() {
+                    @Override
+                    public void increment(String name, Map<String, String> tags) {
+                        assertEquals("zlink.mesh_node.messages.dropped", name);
+                        assertTrue(event.complete(tags), "one send has one terminal drop");
+                    }
+                })) {
+            MeshNodeRegistration mesh = new MeshNodeRegistration("game");
+            mesh.listen("inproc://metrics-decode");
+            mesh.addRouteSendHandler(NodeHandler.class, String.class);
+            dispatcher(mesh).accept(record(RecordKind.NODE_SEND, null, "body", Map.of(),
+                "application/unknown", null));
+            assertEquals(Map.of("mesh_name", "game", "surface", "node",
+                "message_kind", "send", "reason", "decode_error"), event.get(2, TimeUnit.SECONDS));
+            assertFalse(NodeHandler.received.isDone());
+        }
+    }
+
     @BeforeEach
     void resetHandlers() {
         NodeHandler.received = new CompletableFuture<>();

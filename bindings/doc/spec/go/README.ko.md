@@ -224,7 +224,7 @@ type ZlinkError interface {
 
 - Context가 `Submit` 호출 전에 이미 취소되었거나 deadline을 넘겼으면 해당 표준 error를
   반환한다. 이 error를 함수군별 Core error로 변환하지 않는다.
-- Native request가 수용된 뒤의 reply와 실패는 `Submit(context.Context)`의
+- Native request가 수용된 뒤의 reply와 실패는 `RequestSubmission.Reply(context.Context)`의
   `([]*Message, error)` 결과로 전달한다.
 
 ## FFI와 package 경계
@@ -299,7 +299,7 @@ type SendSubmission interface {
 type RequestSubmission interface {
     Result() SubmitResult
     Admitted(ctx context.Context) error
-    Reply(ctx context.Context) ([]*Message, error)   // reply까지 block; 이전 Submit 결과와 같음
+    Reply(ctx context.Context) ([]*Message, error)   // reply까지 기다린 뒤 응답 또는 error 반환
 }
 
 type SendSubmitOp interface {
@@ -403,8 +403,9 @@ Public Go interface, 반환값과 poller event만으로 다음을 확인한다. 
 
 **Operation과 완료**
 
-- Send·request가 `Submit(context.Context)` terminal 하나를 제공하고 request success는
-  `([]*Message, nil)`, non-OK completion은 `(nil, typed request error)`를 반환한다.
+- Send·request의 `Submit(context.Context)`는 즉시 결과 객체를 반환한다. Request의
+  `Reply(context.Context)`는 응답을 기다려 성공 시 `([]*Message, nil)`, non-OK completion 시
+  `(nil, typed request error)`를 반환한다.
 - Go·Python과 공유하지 않는 send flags는 `PublishSubmitOp`에만 있으며 publish submit은
   `(bool, error)` 결과를 유지한다.
 - 완료·cancellation·poller의 공통 관측은
