@@ -1,44 +1,55 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 360" width="900" height="360"
-     role="img" aria-label="zlink layer stack. Your business logic (Spot, Actor, handler) and ZLink Framework both run inside the application host - ASP.NET Core, Spring Boot, NestJS, or the C++ host - and ZLink is registered into it. Below the public API boundary sits the internal implementation: the per-language bindings backend adapter, the native zlink Core C API with its socket patterns, and the transports tcp, ipc, inproc, tls, ws, wss." font-family="'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',system-ui,sans-serif">
-  <title>zlink layer stack</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 384" width="900" height="384"
+     role="img" aria-label="zlink layer structure. At the top is the business logic you write - Spot, Actor, handler. Below it sits zlink, which is itself a thin three-layer stack: ZLink Framework for .NET, C++, Java, Kotlin and Node; the per-language bindings backend adapter; and the native zlink Core C API with its socket patterns and transports. The bindings and Core layers are internal implementation and are not exposed to application code. At the bottom is the application host you register zlink into - ASP.NET Core, Spring Boot, NestJS, or the C++ host." font-family="'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',system-ui,sans-serif">
+  <title>zlink layer structure and registration point</title>
 
-  <rect x="0" y="0" width="900" height="360" fill="#10151A"/>
+  <rect x="0" y="0" width="900" height="384" fill="#10151A"/>
 
-  <text x="390" y="22" text-anchor="middle" font-size="13.5" font-weight="700" fill="#B4BFC9">Your code and ZLink Framework run in your host — below the API is internal implementation</text>
-  <text x="390" y="41" text-anchor="middle" font-size="10.5" fill="#8493A0">One native Core, wrapped in per-language layers, registered into the application host you already use</text>
+  <text x="450" y="22" text-anchor="middle" font-size="13.5" font-weight="700" fill="#B4BFC9">ZLink on the host, business logic on top — and ZLink itself is a thin 3-layer stack</text>
+  <text x="450" y="41" text-anchor="middle" font-size="10.5" fill="#8493A0">Register zlink into the host you already use · one native Core, wrapped in per-language layers</text>
 
-  <!-- application host: the container, not a layer underneath -->
-  <rect x="40" y="56" width="700" height="136" rx="7" fill="#191F27" stroke="#B4BFC9" stroke-width="1.6"/>
-  <text x="54" y="74" font-size="10" font-weight="600" fill="#8493A0">Application host — ASP.NET Core · Spring Boot · NestJS · C++ host</text>
+  <rect x="40" y="56" width="820" height="38" rx="6" fill="none" stroke="#B4BFC9" stroke-width="1.8"/>
+  <text x="450" y="80" text-anchor="middle" font-size="13" font-weight="700" fill="#B4BFC9">Business logic — Spot · Actor · handler</text>
 
-  <rect x="56" y="82" width="668" height="36" rx="5" fill="none" stroke="#B4BFC9" stroke-width="1.8"/>
-  <text x="390" y="105" text-anchor="middle" font-size="13" font-weight="700" fill="#B4BFC9">Business logic — Spot · Actor · handler</text>
+  <path d="M450,94 L450,106" stroke="#5FBFCE" stroke-width="1.4" stroke-dasharray="3 3"/>
 
-  <path d="M390,118 L390,130" stroke="#5FBFCE" stroke-width="1.4" stroke-dasharray="3 3"/>
+  <!-- the ZLink Framework slot of 01-layers, expanded into the overview-stack 3 layers -->
+  <rect x="40" y="106" width="820" height="190" rx="7" fill="#191F27" stroke="#B4BFC9" stroke-width="1.6"/>
+  <text x="56" y="122" font-size="10" font-weight="600" fill="#8493A0">zlink — below the public API is internal implementation</text>
 
-  <rect x="56" y="130" width="668" height="52" rx="6" fill="#17242A" stroke="#5FBFCE" stroke-width="2.2"/>
-  <text x="390" y="152" text-anchor="middle" font-size="13" font-weight="700" fill="#5FBFCE">ZLink Framework (.NET · C++ · Java · Kotlin · Node)</text>
-  <text x="390" y="170" text-anchor="middle" font-size="10.5" fill="#5FBFCE">RouteMesh · SPOT · actor · STREAM · location · monitoring</text>
+  <rect x="56" y="130" width="672" height="50" rx="6" fill="#17242A" stroke="#5FBFCE" stroke-width="2.2"/>
+  <text x="392" y="151" text-anchor="middle" font-size="12.5" font-weight="700" fill="#5FBFCE">ZLink Framework (.NET · C++ · Java · Kotlin · Node)</text>
+  <text x="392" y="168" text-anchor="middle" font-size="10" fill="#5FBFCE">RouteMesh · SPOT · actor · STREAM · location · monitoring</text>
+  <text x="742" y="152" font-size="9.5" fill="#5FBFCE">public</text>
+  <text x="742" y="165" font-size="9.5" fill="#5FBFCE">API</text>
 
-  <text x="752" y="148" font-size="9.5" fill="#5FBFCE">registered via</text>
-  <text x="752" y="161" font-size="9.5" font-weight="600" fill="#5FBFCE">AddZLinkFramework</text>
+  <rect x="56" y="188" width="672" height="42" rx="5" fill="#1D242C" stroke="#8493A0" stroke-width="1.2"/>
+  <text x="392" y="206" text-anchor="middle" font-size="11" font-weight="600" fill="#8493A0">bindings — backend adapter (c · cpp · dotnet · node · java · go · python · rust)</text>
+  <text x="392" y="221" text-anchor="middle" font-size="9.5" font-family="'IBM Plex Mono','SFMono-Regular',Consolas,monospace" fill="#8493A0">language-native API over the Core C API</text>
 
-  <!-- public API boundary -->
-  <text x="40" y="207" font-size="9.5" fill="#8493A0">public API — everything below is internal implementation</text>
-  <path d="M40,214 L740,214" stroke="#8493A0" stroke-width="1" stroke-dasharray="4 4"/>
+  <rect x="56" y="238" width="672" height="42" rx="5" fill="#1D242C" stroke="#8493A0" stroke-width="1.2"/>
+  <text x="392" y="256" text-anchor="middle" font-size="11" font-weight="600" fill="#8493A0">zlink Core (C API, native)</text>
+  <text x="392" y="271" text-anchor="middle" font-size="9.5" font-family="'IBM Plex Mono','SFMono-Regular',Consolas,monospace" fill="#8493A0">PAIR · PUB/SUB · XPUB/XSUB · DEALER/ROUTER · STREAM  ·  tcp · ipc · inproc · tls · ws · wss</text>
 
-  <rect x="40" y="224" width="700" height="44" rx="5" fill="#1D242C" stroke="#8493A0" stroke-width="1.2"/>
-  <text x="390" y="242" text-anchor="middle" font-size="11.5" font-weight="600" fill="#8493A0">bindings — backend adapter (c · cpp · dotnet · node · java · go · python · rust)</text>
-  <text x="390" y="258" text-anchor="middle" font-size="9.5" font-family="'IBM Plex Mono','SFMono-Regular',Consolas,monospace" fill="#8493A0">language-native API and resource lifetime model over the C API</text>
+  <path d="M740,188 h7 v92 h-7" fill="none" stroke="#8493A0" stroke-width="1.4"/>
+  <text x="754" y="230" font-size="9.5" font-weight="600" fill="#8493A0">internal</text>
+  <text x="754" y="243" font-size="9.5" font-weight="600" fill="#8493A0">impl.</text>
 
-  <rect x="40" y="276" width="700" height="44" rx="5" fill="#1D242C" stroke="#8493A0" stroke-width="1.2"/>
-  <text x="390" y="294" text-anchor="middle" font-size="11.5" font-weight="600" fill="#8493A0">zlink Core (C API, native)</text>
-  <text x="390" y="310" text-anchor="middle" font-size="9.5" font-family="'IBM Plex Mono','SFMono-Regular',Consolas,monospace" fill="#8493A0">PAIR · PUB/SUB · XPUB/XSUB · DEALER/ROUTER · STREAM</text>
+  <!-- registered into the host -->
+  <path d="M136,296 L136,318" stroke="#5FBFCE" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <path d="M345,296 L345,318" stroke="#5FBFCE" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <path d="M555,296 L555,318" stroke="#5FBFCE" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <path d="M764,296 L764,318" stroke="#5FBFCE" stroke-width="1.2" stroke-dasharray="3 3"/>
 
-  <rect x="40" y="328" width="700" height="26" rx="5" fill="none" stroke="#262E37" stroke-width="1.2"/>
-  <text x="390" y="345" text-anchor="middle" font-size="9.5" font-family="'IBM Plex Mono','SFMono-Regular',Consolas,monospace" fill="#8493A0">tcp · ipc · inproc · tls · ws · wss</text>
-
-  <path d="M752,224 h7 v130 h-7" fill="none" stroke="#8493A0" stroke-width="1.4"/>
-  <text x="766" y="284" font-size="10" font-weight="600" fill="#8493A0">internal</text>
-  <text x="766" y="298" font-size="10" font-weight="600" fill="#8493A0">impl.</text>
+  <rect x="40"  y="318" width="193" height="54" rx="5" fill="#191F27" stroke="#B4BFC9" stroke-width="1.4"/>
+  <text x="136" y="342" text-anchor="middle" font-size="12" font-weight="600" fill="#B4BFC9">ASP.NET Core</text>
+  <text x="136" y="359" text-anchor="middle" font-size="9" fill="#8493A0">.NET</text>
+  <rect x="249" y="318" width="193" height="54" rx="5" fill="#191F27" stroke="#B4BFC9" stroke-width="1.4"/>
+  <text x="345" y="342" text-anchor="middle" font-size="12" font-weight="600" fill="#B4BFC9">Spring Boot</text>
+  <text x="345" y="359" text-anchor="middle" font-size="9" fill="#8493A0">JVM · Java · Kotlin</text>
+  <rect x="458" y="318" width="193" height="54" rx="5" fill="#191F27" stroke="#B4BFC9" stroke-width="1.4"/>
+  <text x="555" y="342" text-anchor="middle" font-size="12" font-weight="600" fill="#B4BFC9">NestJS</text>
+  <text x="555" y="359" text-anchor="middle" font-size="9" fill="#8493A0">Node</text>
+  <rect x="667" y="318" width="193" height="54" rx="5" fill="#191F27" stroke="#B4BFC9" stroke-width="1.4"/>
+  <text x="763" y="342" text-anchor="middle" font-size="12" font-weight="600" fill="#B4BFC9">C++ host</text>
+  <text x="763" y="359" text-anchor="middle" font-size="8.5" fill="#8493A0">zlink is the host (no external framework)</text>
 </svg>
