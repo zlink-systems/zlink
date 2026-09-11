@@ -47,12 +47,15 @@ single-use, 중복 option과 terminal 재호출 오류는
 |---|---|---|
 | one-way 비동기 terminal | 송신 측 수락 경계인 [source-local admission](../00-foundation/02-glossary.ko.md#source-local-admission)이 성공하면 반환 데이터 없이 완료하고 실패하면 예외로 완료한다 | await하지 않으면 현재 turn을 기다리게 하지 않는다 |
 | 일반 비동기 terminal | Request, worker 또는 create의 application 결과가 terminal 상태가 될 때까지 기다린다 | 완료 continuation이 끝날 때까지 현재 실행 객체의 [handler turn](../00-foundation/02-glossary.ko.md#handler-turn)을 유지한다 |
+| 동기 blocking 종결자 | application 결과(또는 one-way admission)까지 **호출 thread를 막는다**. runtime 실행 문맥에서는 `InvalidOperation`으로 즉시 실패한다(§4 F2-a) | application thread 전용 — runtime turn·gate를 쥐지 않는다 |
 | `Yield` | Operation을 제출한 뒤 callback이 application queue에서 execution gate를 점유해 실행되는 단위인 shared [Spot turn](../00-foundation/02-glossary.ko.md#spot-turn)을 반납하고 application 결과를 기다린다 | 완료 continuation은 같은 Spot gate를 다시 얻어 새 turn에서 재개한다 |
 
 언어별 일반 비동기 terminal 이름은 .NET `Async`, C++ `async`, Java·Node.js `submit`, Kotlin
-전용 wrapper의 `await`다. 비동기 완료를 반환하지 않는 즉시 제출은 `Submit`·`submit`을
-사용한다. 실제 shared Spot gate를 반납하는 terminal만 `Yield`·`yield`라는 이름을
-사용한다.
+전용 wrapper의 `await`다. 동기 blocking 종결자 이름은 binding 정책
+[async-coroutine-policy §6](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md#6-언어별-terminal-interface)을
+따른다 — Java `submit_sync()`, .NET `Submit()`, C++ `submit()`(Kotlin은 추가 없이 Java 표면의
+`submit_sync()`를 노출한다). **Node.js는 동기 blocking 종결자를 제공하지 않는다(§4.1).** 실제 shared
+Spot gate를 반납하는 terminal만 `Yield`·`yield`라는 이름을 사용한다.
 
 `Yield`를 제공하는 실행 문맥과 call 목록은
 [Handler turn과 execution gate §16](02-handler-turn-and-execution-gate.ko.md#yield-call-eligibility)이 소유한다.
@@ -90,10 +93,31 @@ single-use, 중복 option과 terminal 재호출 오류는
 ## 4. One-way submit — admission 경계
 
 Send, publish, bound session send, session Actor relay와 명시적인 STREAM send·reply는
-비동기 submit terminator 하나만 제공하고, 동기 `TrySubmit` 계열을 제공하지 않는다.
-정상 완료 값은 없으며 operation family가 정의한 source-local admission boundary가
-message를 수락했다는 뜻이다. Remote handler 실행, subscriber 수신, remote Spot queue
+비동기 submit terminator와 §2 표의 동기 blocking 종결자를 제공하고, **nonblocking try 계열은
+제공하지 않는다**. nonblocking 완료를 주는 유일한 대안은 callback인데 복잡하고 혼동을 주므로 동기
+종결자는 blocking만 제공한다. 정상 완료 값은 없으며 operation family가 정의한 source-local admission
+boundary가 message를 수락했다는 뜻이다. Remote handler 실행, subscriber 수신, remote Spot queue
 수락 또는 application callback 완료는 기다리지 않는다.
+
+<a id="41-nodejs는-동기-blocking-종결자를-제공하지-않는다"></a>
+### 4.1 Node.js는 동기 blocking 종결자를 제공하지 않는다 (사용자 결정 2026-09-11)
+
+Node.js runtime은 **단일 JS 스레드**다. 그 스레드를 막으면 framework가 완료를 배달할 방법이
+없다. request의 대상 handler가 같은 process 안에 있으면 **호출자가 기다리는 응답을 호출자가
+만들어야 하는 상태**가 되어 교착한다. Java·.NET·C++은 완료를 나르는 실행 문맥이 호출 thread와
+분리돼 있어 이 문제가 없다(Java는 전용 platform-thread pump).
+
+대상이 로컬인지 원격인지는 제출 시점에 항상 알 수 있는 것이 아니므로, "로컬일 때만 막는다"는
+규칙도 세울 수 없다. **지킬 수 없는 약속을 표면에 두지 않는다** — Node.js framework 표면에는
+동기 blocking 종결자가 없다. Node application은 비동기 종결자(`submit(...)` → `Promise`)를 쓴다.
+
+이 결정은 framework 표면에만 적용된다. **binding Node의 `submit_sync()`는 그대로 있다**
+([async-coroutine-policy §6](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md#6-언어별-terminal-interface)) — binding은 framework runtime의 완료 배달에 의존하지 않는다.
+
+**동기 blocking 종결자는 runtime 실행 문맥에서 부를 수 없다(F2-a).** handler turn·Spot turn·state
+lane 위에서 blocking하면 gate를 쥔 채 완료를 기다려 교착한다. [상태 소유와 state lane §5](06-state-ownership-and-lanes.ko.md#반환-전-완료-보장)(반환 전 완료 보장)·[handler turn §2](02-handler-turn-and-execution-gate.ko.md)과 같은 원칙으로, runtime 실행 문맥에서 동기
+종결자를 부르면 `InvalidOperation`으로 즉시 실패한다. 동기 종결자의 용도는 application
+thread(main·테스트·스크립트)다.
 
 Session callback이 사용하는 transport-facing stream write(동기 `bool` 반환)는 이 절의 call이
 아니며 [STREAM session](../04-session/01-stream-session.ko.md)의 transport 실행 문맥 계약을 따른다.
@@ -130,8 +154,8 @@ sequenceDiagram
 
 Local Framework capacity가 부족하면 Framework가 해당 family의 send timeout까지
 기다린다. Core HWM으로 binding operation이 대기하면 Core가 재시도를 소유하고
-operation별 completion awaitable을 완료한다. Framework는 별도 readiness callback,
-retry waiter 또는 binding adapter를 만들지 않으며 다음 규칙을 따른다.
+operation별 completion awaitable(binding 결과 객체의 `admitted`)을 완료한다. Framework는
+별도 readiness callback, retry waiter 또는 binding adapter를 만들지 않으며 다음 규칙을 따른다.
 
 - 송신 경로나 queue의 capacity가 일시적으로 부족한 내부 상태인
   [`Backpressured`](../00-foundation/02-glossary.ko.md#backpressured)는 public terminal result가
@@ -421,21 +445,22 @@ acceptance 한 표현만 사용한다.
 
 Framework runtime이 binding의 HWM-managed send 계열(PAIR send, routed send,
 `Received.send()`)을 소비할 때는 **async terminal**(C++ `async()`, .NET `Async()`,
-그 외 `submit()`)만 사용한다. Binding의 sync(+flags) terminal은 binding의 공개
-표면이지 framework 내부 경로가 아니다. Core send-completion 통지가 완료를
-구동하므로 framework는 별도 executor나 offload로 감싸지 않는다. Binding terminal의
-이름·반환 타입·flags 계약 자체는
+그 외 `submit()`)의 **결과 객체**를 사용한다(F1). 종결자가 돌려준 `result`로 즉시 판정하고,
+`result == BACKPRESSURED`일 때만 `admitted`를 기다렸다가 재개하며, request는 `reply`를 소비한다.
+이렇게 해서 "HWM에 걸렸을 때만 기다린다"를 정확히 구현한다 — 지금까지는 stage 하나로 admission과
+reply를 구분할 수 없어 [3단계 backpressure](04-dispatch-and-worker/README.ko.md) 대기가 정확하지
+않았다. framework **공개 terminal은 backpressure를 노출하지 않으며**(§5, `Backpressured`는 public
+result가 아니다), 이 소비는 framework 내부 구현에만 있다. Core send-completion 통지가 완료를
+구동하므로 framework는 별도 executor나 offload로 감싸지 않는다. Binding terminal의 이름·반환
+타입·결과 객체 계약 자체는
 [바인딩 routed 전송 계약과 비동기 완료 표면 정책](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md)이
 소유한다 — 이 절은 framework의 소비 규칙만 소유한다.
 
-다음 두 경우는 sync terminal 사용이 정당하다.
-
-- **즉시 backpressure 관찰** — `DONTWAIT` flag로 대기 없이 admission 결과를 받아야
-  하는 경로. sync terminal이 그 계약의 유일한 표면이다.
-- **공개 동기 계약의 구현** —
-  [상태 소유와 state lane §5](06-state-ownership-and-lanes.ko.md#반환-전-완료-보장)가
-  유지를 요구하는 공개 동기 표면의 내부 구현. 이때 HWM 포화 시의 대기는 그 공개
-  계약의 관측 가능한 특성이며 위반이 아니다.
+binding의 **동기 blocking 종결자**(§2·§4)는 application thread 전용 공개 표면이다. 공개 동기 계약의
+구현([상태 소유와 state lane §5](06-state-ownership-and-lanes.ko.md#반환-전-완료-보장)가 유지를 요구하는
+반환 전 완료 보장)에서 HWM 포화 시의 대기는 그 공개 계약의 관측 가능한 특성이며 위반이 아니다.
+즉시 backpressure를 sync `DONTWAIT` terminal로 관찰하던 경로는 없앤다 — admission 결과는 async
+terminal 결과 객체의 `result`로 받는다.
 
 Publish는 HWM-free이고 동기 terminal을 사용한다. Raw reply는 peer topology에 따라 다르다.
 RouteMesh ROUTER-ROUTER reply는 별도 [Completion connection](../00-foundation/02-glossary.ko.md#completion-connection)에서 HWM-free다. ClientServer
@@ -469,13 +494,15 @@ reply(동기 one-shot)와 구분한다.
 의미는 이 문서가 소유하며, 각 언어의 정확한 반환 type과 오류 표현은 다음 언어별
 interface가 소유한다.
 
-| 언어 | 일반 비동기 완료 | Spot turn 반납 | 언어별 interface owner |
-|---|---|---|---|
-| .NET | `Async(...)`가 `ValueTask` 또는 `ValueTask<T>`를 반환한다 | `Yield(...)` | [언어별 interface 목차](../languages/dotnet/interfaces/README.ko.md) |
-| Java | `submit(...)`이 `CompletionStage<T>`를 반환한다 | `yield(...)` | [Channel messaging](../languages/java/interfaces/channel-messaging.ko.md) |
-| Kotlin | 전용 call wrapper의 suspending `await()`를 사용한다 | 전용 wrapper의 `yield()` | [Channel messaging](../languages/kotlin/interfaces/channel-messaging.ko.md) |
-| Node.js | `submit(...)`이 `Promise<T>`를 반환한다 | `yield(...)` | [인터페이스 목차](../languages/node/interfaces/README.ko.md) |
-| C++ | `async(...)`가 `task_t<T>`를 반환한다 | `yield(...)` | [framework 인터페이스](../languages/cpp/interfaces/README.ko.md) |
+| 언어 | 일반 비동기 완료 | 동기 blocking | Spot turn 반납 | 언어별 interface owner |
+|---|---|---|---|---|
+| .NET | `Async(...)`가 `ValueTask` 또는 `ValueTask<T>`를 반환한다 | `Submit(...)` | `Yield(...)` | [언어별 interface 목차](../languages/dotnet/interfaces/README.ko.md) |
+| Java | `submit(...)`이 `CompletionStage<T>`를 반환한다 | `submit_sync(...)` | `yield(...)` | [Channel messaging](../languages/java/interfaces/channel-messaging.ko.md) |
+| Kotlin | 전용 call wrapper의 suspending `await()`를 사용한다 | Java 표면의 `submit_sync(...)` | 전용 wrapper의 `yield()` | [Channel messaging](../languages/kotlin/interfaces/channel-messaging.ko.md) |
+| Node.js | `submit(...)`이 `Promise<T>`를 반환한다 | **제공하지 않는다(§4.1)** | `yield(...)` | [인터페이스 목차](../languages/node/interfaces/README.ko.md) |
+| C++ | `async(...)`가 `task_t<T>`를 반환한다 | `submit(...)` | `yield(...)` | [framework 인터페이스](../languages/cpp/interfaces/README.ko.md) |
+
+동기 blocking 종결자는 runtime 실행 문맥에서 `InvalidOperation`으로 실패한다(§4 F2-a).
 
 각 언어별 interface는 terminator별 return type, cancellation 인자, callback 또는
 coroutine 표현을 고정한다. 언어 표준 표현이 달라도 같은 operation의 완료 시점,
@@ -489,10 +516,10 @@ sendCall.async();                      // 결과 없이 operation만 시작한�
 auto reply = co_await requestCall.async(); // 비동기 application reply를 기다린다.
 ```
 
-반환형만 다른 overload는 만들지 않는다. C++ Messaging call wrapper는 같은 인자의
-blocking `submit()`과 coroutine terminal을 함께 제공하지 않고 `task_t<T> async()`
-하나를 제공한다. Callback overload는 parameter list가 다르므로 `submit(callback)`으로
-제공할 수 있다.
+반환형만 다른 overload는 만들지 않는다. C++ Messaging call wrapper는 비동기 `task_t<T> async()`와
+동기 blocking `submit()`을 함께 제공한다(두 종결자는 이름이 다르므로 overload가 아니다). `submit()`은
+application thread 전용이며 runtime 실행 문맥에서는 `InvalidOperation`으로 실패한다(§4 F2-a).
+Callback overload는 parameter list가 다르므로 `submit(callback)`으로 제공할 수 있다.
 
 ## 17. 검증 요구
 

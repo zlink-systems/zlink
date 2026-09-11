@@ -95,15 +95,16 @@ socket.send().message(msg).submit_sync(SendFlags::NONE).unwrap();
 // msg를 다시 쓰면 컴파일 에러 → 소유권 안전성을 타입으로 보장
 ```
 
-HWM 대기 가능 send는 비동기 `submit()` Future와 동기
-`submit_sync(SendFlags)`를 제공합니다. async 실행 흐름에서는
-`socket.send().message(msg).submit().await?`를 사용합니다. plain thread에서는
-`submit_sync(SendFlags::NONE)`을 사용할 수 있고, 즉시 backpressure가 필요하면
-`SendFlags::DONT_WAIT`을 지정합니다.
+HWM 대기 가능 send는 결과 객체를 돌려주는 `submit()`과 동기 `submit_sync(SendFlags)`를
+제공합니다. `submit()`은 `Result<SendSubmission, _>`를 돌려주고 `SendSubmission`은 `result`
+(`OK`|`BACKPRESSURED`)와 `admitted` future를 가집니다. async 실행 흐름에서는
+`socket.send().message(msg).submit()?.admitted.await?`로 admission을 기다립니다(`result`가
+`OK`면 이미 완료). plain thread에서는 `submit_sync(SendFlags::NONE)`을 사용할 수 있고, 즉시
+backpressure가 필요하면 `SendFlags::DONT_WAIT`을 지정합니다.
 
-Request는 reply까지 blocking하는 `submit_sync()`과 socket completion queue에서 settle되는
-`Vec<Message>` Future를 반환하는 `submit()`을 제공합니다. Reply는 terminal 결과이며 별도
-DATA receive가 아닙니다.
+Request는 reply까지 blocking하는 `submit_sync()`과 `RequestSubmission`(`result`·`admitted`에
+`reply` future 추가)을 돌려주는 `submit()`을 제공합니다. `result`가 `OK`면 바로 `reply`를
+`await`하면 되고, reply는 terminal 결과이며 별도 DATA receive가 아닙니다.
 
 Core가 pre-admission operation을 접수한 뒤 retry를 소유하므로 caller retry queue를 만들거나
 payload를 재전송하지 않습니다. 공용 native `ZLINK_OPT_PENDING_MAX_MSGS/BYTES` cap은 pending
@@ -202,9 +203,9 @@ match socket.send().message(msg).submit_sync(SendFlags::DONT_WAIT) {
 | `zlink_socket(ctx, type)` | `ctx.pair_socket()` 등 |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(m).submit_sync(flags)` |
-| DONTWAIT send + completion pull | `socket.send().message(m).submit().await` |
-| `zlink_recv_part(...)` | `socket.recv(&mut received, flags)` |
+| `zlink_send(..., parts, count, ...)` / `zlink_send_rid(..., parts, count, ...)` | `socket.send().message(m).submit_sync(flags)` |
+| DONTWAIT send + completion pull | `socket.send().message(m).submit()?.admitted.await` |
+| `zlink_recv(..., parts_out, capacity, count_out, ...)` | `socket.recv(&mut received, flags)` |
 | `zlink_msg_data(msg)` | `part.as_bytes()` |
 | `zlink_routing_id_t` | `RoutingId` |
 | `zlink_socket_monitor_open(...)` | `SocketMonitor::open(&socket)` |
@@ -232,7 +233,7 @@ println!("zlink {major}.{minor}.{patch}");
 
 `submit_sync(SendFlags::NONE)`은 HWM admission을 기다리는 동안 호출 thread를
 멈춥니다. plain thread에서는 그 thread만 대기합니다. async executor에서 다른 task를
-계속 실행해야 하면 `submit().await`를 사용하고, 즉시 backpressure가 필요하면
+계속 실행해야 하면 `submit()?.admitted.await`를 사용하고, 즉시 backpressure가 필요하면
 `submit_sync(SendFlags::DONT_WAIT)`을 사용합니다.
 
 ```rust

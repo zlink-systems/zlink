@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/framework-codec-msgpack",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
@@ -28,11 +28,11 @@
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.3",
-    "@zlink-systems/stream-wire": "0.11.0"
+    "@zlink-systems/stream-wire": "0.11.1"
   },
   "peerDependencies": {
-    "@zlink-systems/framework": "0.11.0",
-    "@zlink-systems/stream-connector": "0.11.0"
+    "@zlink-systems/framework": "0.11.1",
+    "@zlink-systems/stream-connector": "0.11.1"
   },
   "peerDependenciesMeta": {
     "@zlink-systems/framework": {

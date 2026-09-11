@@ -26,8 +26,8 @@ func TestCoreCapabilityMatrixHasTypedGoOwner(t *testing.T) {
 		owner  string
 	}{
 		{name: "completion drain", symbol: "zlink_completion_recv", owner: "func (o *completionOwner) drain"},
-		{name: "unified request", symbol: "zlink_request_part", owner: "func submitCompletionRequest"},
-		{name: "opaque reply", symbol: "zlink_reply_part", owner: "func (s *routedSocket) reply"},
+		{name: "unified request", symbol: "zlink_request", owner: "func submitCompletionRequest"},
+		{name: "opaque reply", symbol: "zlink_reply", owner: "func (s *routedSocket) reply"},
 		{name: "STREAM packet pull", symbol: "zlink_stream_recv_packet", owner: "func (s *StreamSocket) RecvPacket"},
 	} {
 		if !strings.Contains(text, capability.symbol) {

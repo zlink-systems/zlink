@@ -120,7 +120,7 @@ void test_ctx_shutdown_releases_concurrent_receive_and_send_after_backpressure (
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK, zlink_msg_init_size (&send_part, message_size));
     memset (zlink_msg_data (&send_part), 's', message_size);
-    zlink_part_flag_t recv_part_flag = ZLINK_PART_MORE;
+    size_t recv_part_flag = 0;
     zlink_recv_result_t recv_result = ZLINK_RECV_INTERNAL_ERROR;
     int recv_errno = 0;
     concurrent_shutdown_start_gate_t start_gate;
@@ -133,9 +133,7 @@ void test_ctx_shutdown_releases_concurrent_receive_and_send_after_backpressure (
     std::thread receiver_thread ([&] {
         wait_for_start ();
         errno = 0;
-        recv_result = zlink_recv_part (socket, NULL, &recv_part,
-                                       &recv_part_flag,
-                                       ZLINK_RECV_FLAGS_NONE);
+        recv_result = zlink_recv (socket, NULL, &recv_part, 1, &recv_part_flag, ZLINK_RECV_FLAGS_NONE);
         recv_errno = zlink_errno ();
     });
 
@@ -145,9 +143,7 @@ void test_ctx_shutdown_releases_concurrent_receive_and_send_after_backpressure (
     std::thread sender_thread ([&] {
         wait_for_start ();
         errno = 0;
-        send_result = zlink_send_part (
-          socket, &send_part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-          NULL, &completion_id);
+        send_result = zlink_send (socket, &send_part, 1, ZLINK_SEND_FLAGS_NONE, NULL, &completion_id);
         send_errno = zlink_errno ();
     });
 
@@ -173,7 +169,7 @@ void test_ctx_shutdown_releases_concurrent_receive_and_send_after_backpressure (
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_TERMINATED, recv_result);
     TEST_ASSERT_EQUAL_INT (ETERM, recv_errno);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&recv_part));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, recv_part_flag);
+    TEST_ASSERT_EQUAL_INT (0, recv_part_flag);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&recv_part));
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_TERMINATED, send_result);
     TEST_ASSERT_EQUAL_INT (ETERM, send_errno);

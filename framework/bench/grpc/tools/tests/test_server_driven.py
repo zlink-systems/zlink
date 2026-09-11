@@ -10,7 +10,7 @@ _TOOLS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _TOOLS)
 
 from benchagg.analysis import build_rows, judge_pair  # noqa: E402
-from benchagg.model import CellKey  # noqa: E402
+from benchagg.model import PATTERNS, CellKey  # noqa: E402
 from benchagg.readers import (  # noqa: E402
     ReportError,
     cells_from_server_document,
@@ -173,15 +173,24 @@ class ServerDrivenRenderTest(unittest.TestCase):
         self.assertIn("Source CPU", table)
         self.assertIn("Target Mem", table)
         self.assertNotIn("Client CPU", table)
-        self.assertIn("100.00 KOPS", table)
+        self.assertIn("5.32 KOPS", table)
         self.assertIn("50.00 KMSG/s", table)
+
+    def test_current_grid_has_three_patterns_and_omits_archived_window_rows(self):
+        self.assertEqual(
+            PATTERNS,
+            ("request-serial", "request-backpressure", "send-saturation"),
+        )
+        table = render_spec4_table(self.rows, (1024,))
+        self.assertNotIn("request-window", table)
 
     def test_result_lines_use_the_three_run_median(self):
         output = render_result_lines(
             self.rows, (1024,), implementations=("zlink-dotnet",)
         )
+        self.assertNotIn("request-window", output)
         self.assertIn(
-            "RESULT,current,zlink-dotnet-request-window,local,1024,throughput,100000.000",
+            "RESULT,current,zlink-dotnet-send-saturation,local,1024,throughput,50000.000",
             output,
         )
 
@@ -189,10 +198,7 @@ class ServerDrivenRenderTest(unittest.TestCase):
         table = render_companion_table(
             self.rows, (1024,), implementations=("zlink-dotnet",)
         )
-        self.assertIn(
-            "| request-window | 1024 | `zlink-dotnet` | 1 | 100 | http://127.0.0.1:5200/bench/start |",
-            table,
-        )
+        self.assertNotIn("request-window", table)
         self.assertIn(
             "| send-saturation | 1024 | `zlink-dotnet` | 8 | 1 | http://127.0.0.1:5200/bench/start |",
             table,
@@ -202,7 +208,7 @@ class ServerDrivenRenderTest(unittest.TestCase):
     def test_doc_table_is_language_scoped_markdown(self):
         table = render_doc_table(self.rows, (1024,), "dotnet")
         self.assertTrue(table.startswith("| Language | Pattern | Payload |"))
-        self.assertIn("| dotnet | request-window | 1024B | `zlink-dotnet` | 100.000 | KOPS |", table)
+        self.assertNotIn("request-window", table)
         self.assertIn("| dotnet | send-saturation | 1024B | `zlink-dotnet` | 50.000 | KMSG/s |", table)
         self.assertNotIn("`zlink-c`", table)
 

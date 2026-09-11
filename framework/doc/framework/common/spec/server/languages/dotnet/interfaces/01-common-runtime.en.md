@@ -37,6 +37,7 @@ public interface IZLinkSendCall : IZLinkMetadataCall<IZLinkSendCall>
 {
  ValueTask Async(
  CancellationToken cancellationToken = default);
+ void Submit();   // synchronous blocking; InvalidOperation in a runtime execution context (F2-a)
 }
 
 public interface IZLinkRequestCall : IZLinkMetadataCall<IZLinkRequestCall>
@@ -44,6 +45,7 @@ public interface IZLinkRequestCall : IZLinkMetadataCall<IZLinkRequestCall>
  IZLinkRequestCall Timeout(TimeSpan timeout);
  ValueTask<TReply> Async<TReply>(
  CancellationToken cancellationToken = default);
+ TReply Submit<TReply>();   // synchronous blocking; InvalidOperation in a runtime execution context (F2-a)
  ValueTask<TReply> Yield<TReply>(
  CancellationToken cancellationToken = default);
 }

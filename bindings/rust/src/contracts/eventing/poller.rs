@@ -108,7 +108,7 @@ impl Poller {
     /// echoed back in the matching [`PollEvent`].
     ///
     /// Register both [`POLLOUT`] and [`POLLCOMPLETION`] when this poller owns
-    /// progress for managed SEND or REQUEST futures.
+    /// progress for managed SEND admission or REQUEST admission/reply stages.
     pub fn add_socket(
         &self,
         socket: &dyn Pollable,

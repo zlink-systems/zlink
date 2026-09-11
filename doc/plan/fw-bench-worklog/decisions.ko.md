@@ -1029,3 +1029,214 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
 - **결정(감독자)**: 2차 범위 = (1) persistent application worker, (2) **send-saturation 4096 회귀와 target backlog 원인 규명 우선**
   — 프레임워크 target이 4096에서 소비하지 못하는 이유를 계측으로 특정한다(raw는 361k msg/s인데 framework는 814 msg/s),
   (3) 스펙 08 §3~§4 순서 준수. 수치를 맞추려고 벤치 조건·HWM·timeout을 바꾸지 않는다.
+
+## FB-062 — Java 수신 pump는 platform thread여야 한다. 가상 thread면 send 지연이 125 ms (2026-09-10, Issue #75, PR #80)
+
+- 같은 커밋을 pump 종류만 바꿔 잰 1-run(1024 B, `.artifacts/vt-compare/`):
+
+  | 패턴 | 가상 thread | platform thread | 차이 |
+  |---|---:|---:|---:|
+  | send-saturation 처리량 | 14,356 msg/s | 67,712 msg/s | **4.7배** |
+  | send-saturation 지연 | 125.462 ms | 0.247 ms | **1/508** |
+  | request-serial 처리량 | 1,927.8 ops/s | 2,233.2 ops/s | +15.8% |
+
+- 이 pump는 socket 하나를 blocking으로 기다리는 전용 실행 단위다. 가상 thread의 이점(대기 중 carrier 반납)이
+  없고 mount/unmount 비용만 남는다.
+- **경위 정정**: 처음에는 "가상 thread에서 멀티파트 수신이 실패한다"는 보고로 임시 우회를 시작했다.
+  감독자가 그 재현을 현재 main에서 다시 돌리니 **네 조합(virtual/platform × forceYield on/off) 모두 정상**이었다.
+  정확성 문제는 재현되지 않는다. 성능 차이만 실재하므로 성능 수정으로 채택했다.
+- **남은 질문**: 가상 thread에서 blocking 수신이 왜 이렇게 느린지, 멀티파트 실패 보고가 무엇이었는지(Issue #75 유지).
+  다른 언어에도 같은 형태가 있는지 확인이 필요하다.
+
+## FB-063 — Java 제출 경로의 읽기 전용 조회 3회가 177 µs를 쓴다. 본문은 0.57 µs (2026-09-10, Issue #78)
+
+- 프로파일(`.artifacts/codex/java-client-profile/`):
+
+  | 구간 | framework | raw binding |
+  |---|---:|---:|
+  | 제출 진입 → binding submit | **193.20 µs** | 1.35 µs |
+  | 요청당 Java 스레드 전달 | 12회 | 3회 |
+
+  193 µs 중 **177.55 µs가 registry 조회 3회의 lane 왕복**, 조회 본문 합계는 **0.57 µs**다. 300배다.
+- 문제 코드: `ZLinkChannelRuntime.java:1097,1106`이 제출 전에 `hasClientRegistration`·`spotRouterNode`를 부르고,
+  둘 다 맵 조회 하나를 `inStateLane`으로 감싼다(`ZLinkChannelSocketRegistry.java:642-648`, `:1368-1370`).
+  `sendToChannel`도 같은 경로다 — **채널 API 전체가 이 비용을 낸다.**
+- **이 발견이 앞선 라운드의 결과를 설명한다.** 감사로 뽑은 클라이언트 항목 7개(요청별 timer 2개, UUID 2개,
+  이중 등록, 이중 진입, 여분 continuation, 복사)를 모두 없앴는데 +7.4%였다(PR #74). 그 항목들은 0.57 µs 쪽에
+  속한 비용이었다. **문제는 무엇을 하느냐가 아니라 그 일을 어디서 하느냐였다.**
+- 같은 처방이 이미 통했다: Issue #68(PR #76)에서 handler scope 조회의 스레드 왕복을 없애 send 지연을
+  120.4 ms → 0.301 ms로 줄였다.
+- 스펙 08 E2는 선택이 "선택 소유자의 turn 하나 안에서 상수 시간"이어야 한다고 정한다. 지금은 turn을 세 번 왕복한다.
+
+## FB-064 — gRPC 벤치의 비교 짝이 어긋나 있었다 (2026-09-10, 사용자 지적, Issue #13 재정의)
+
+- 세 스택이 서로 다른 토폴로지·주소 지정을 쓴다: gRPC는 특정 대상과 1:1, zlink core(raw)는 **DEALER→ROUTER**,
+  zlink framework는 **RouteMesh `sendToChannel`**(ROUTER↔ROUTER 위 채널 단위 라운드로빈)이다.
+  그래서 비율이 "framework 계층의 비용"이 아니라 "토폴로지 차이 + framework 비용"을 섞어 보고한다.
+- **결정(사용자)**: gRPC 벤치는 gRPC와 비교하는 것이 목적이므로 셋을 맞춘다 — core는 **ROUTER↔ROUTER**,
+  framework는 **`sendToNode`/`requestToNode`**(RID 직접). 패턴은 `request-serial`·`request-backpressure`·
+  `send-saturation` 셋으로 줄인다. `request-window`는 깊이를 밖에서 강제해 도달 깊이를 보고하므로 뺀다.
+  서버는 1개 유지.
+- 모델 사이 비교(DEALER→ROUTER, `ToChannel`, ClientServer)는 **별도 벤치**로 분리한다. 특히 `ToChannel`과
+  `ToNode`를 나란히 재면 채널 선택 비용이 그 차이로 드러난다 — 가치는 있으나 gRPC 비교표에 섞을 값이 아니다.
+- 재측정 뒤 이전 숫자와 직접 비교하지 않는다. 분모가 달라진다.
+
+## FB-065 — raw ROUTER↔ROUTER request-backpressure 붕괴는 벤치 raw 클라이언트가 bindings perf 구조를 따르지 않은 것; send_ready 콜백 부활은 하지 않는다 (2026-09-10, 사용자 결정)
+
+- 증상: Java raw ROUTER↔ROUTER `request-backpressure` 0.2~0.4/s(warmup 포기 4만 건대, 3-run 전부, 2026-09-09
+  `s2r_run{1,2,3}`부터 동일), 이전 `request-window`(100) raw 0(Issue #12/FB-050). 서버는 받은 요청을 전부 응답, 오류 0,
+  CPU 0.7%. 같은 binding으로 framework ToNode 5,457/s, request-serial raw 6,153/s는 정상.
+- 확인한 것: 벤치 raw 클라이언트(`RawStack`, `BenchDrivers.runBackpressure`)는 poller 없이 tight loop로 제출만 하고
+  완료는 binding runtime pump에 맡긴다. bindings perf의 같은 구성 `PerfMultiSocketReqRep`(ROUTER↔ROUTER request,
+  상한 없음)은 client socket을 public poller에 `POLLCOMPLETION`으로 등록해 자기 poll 루프에서 완료를 drain하고 turn마다
+  socket당 요청 하나를 제출한다. Core는 HWM에 막힌 submit마다 대기 토큰만 보관하고 payload는 호출자가 든다(0.17 계약 B,
+  D-B79/D-B85). 감독자가 처음 제시한 "Core가 대기 전부를 깨우고 binding이 전부 재시도한다"는 설명은 4개 binding 코드 조사
+  결과(token-matched 재시도만 수행) 뒷받침되지 않아 철회했다. 벤치 raw 행에 application 상한을 두자는 제안도 결함을 가리는
+  것이라 철회했다(사용자).
+- 결정(사용자): 벤치 raw 클라이언트를 perf 구현(best practice)대로 다시 쓴다. Issue #12를 그 내용으로 다시 썼고 job
+  `bench-java-raw-perfshape`가 수행한다. 통과 기준은 raw request-backpressure 3-run warmup 포기 0·오류 0, 다른 패턴 회귀 없음.
+  다른 언어 raw 드라이버도 각 언어 perf 샘플 대비 확인해 같은 Issue 아래 후속.
+- send_ready 콜백 부활 검토(사용자 질문): 하지 않는다. 0.13에서 hint 콜백은 "재시도해볼 만하다"는 뜻뿐이라 admission 정책을
+  세울 수 없고, 콜백 안 재개는 콜백 내 submit 금지·send-sequence gate로 EINVAL 69~88%·Core 스레드 블로킹을 요구해
+  폐기됐다(`doc/plan/archive/core-send-completion-design.ko.md:29-32`, 커밋 2cea03c016). 0.16의 Core 소유 pending pool은
+  무제한 내부 큐가 되어 HWM이 흐름 제어를 잃어 폐기됐다(D-B71~D-B79, D-B85). 관리형 런타임은 콜백을 받아도 자기 루프로
+  넘겨야 하므로 큐+wake가 필요하고, 그것이 현재의 POLLCOMPLETION pull이다. 남는 완화는 binding public API에 perf 샘플의
+  completion 루프 형태를 유틸로 제공하는 것(1.0 뒤 후보).
+
+### FB-065 추가 (2026-09-10 저녁) — 깊이 사다리와 사용자 판정: 벤치가 backpressure를 보지 않은 것이 잘못, binding 결함 아님
+
+- perf 구조 1차 결과: raw 6셀 오류 0으로 완료했으나 socket 1개라 `peak_in_flight=1`, request-serial과 같은 8k/s.
+- 깊이 사다리(`.artifacts/codex/java-raw-depth-ladder/K-*`, 1024B, socket 1개, turn당 K건 제출):
+
+  | K | 처리량/s | p95 | peak_in_flight | 오류 |
+  |---:|---:|---:|---:|---:|
+  | 1 | 8,568 | 0.17 ms | 1 | 0 |
+  | 10 | 69,714 | 0.21 ms | 30 | 0 |
+  | 100 | 361,520 | 0.58 ms | 699 | 0 |
+  | 1,000 | 4,688 | 30.5 s | 26,288 | 6,558 timeout |
+  | 10,000 / 100,000 | 128 / 102 | 38 s / 34 s | 24k / 30k | 포기·timeout 수만 건 |
+
+  K=10은 bindings perf multi(socket 100개, 69,272/s)와 같다. HWM 아래 깊이에서는 socket 하나로 361k/s(gRPC 209k~258k보다 높다).
+  send HWM을 넘겨 대기 토큰을 쌓으면 요청이 timeout(30 s)으로 실패한다. HWM은 accounted **byte** 기준(manual 기본 4,096,000 bytes,
+  auto HWM은 context budget의 water-filling)이며 메시지 건수로 환산하지 않는다(사용자 지적, 감독자의 "1 MiB ≈ 1,000건"은 오류).
+- 감독자는 HWM 초과 구간의 붕괴를 binding 결함 후보로 올렸으나 **사용자 판정: binding에는 문제가 없고 벤치가 잘못 작성됐다.**
+  올바른 클라이언트는 admission backpressure(POLLOUT 거짓)에서 제출을 멈추고 재개 신호에서 이어간다(규격 §2,
+  `PERF_MULTI_TEST_POLICY.md` §1.1; C reference `perf_multi_socket_reqrep.hpp:832-870`). HWM을 넘겨 토큰을 수만 건 쌓는 것은
+  지원하는 사용 방식이 아니다. 2차 job `bench-java-raw-pollout`: public poller `POLLOUT|POLLCOMPLETION`, POLLOUT이 참인 동안 제출.
+- 기준값(감독자 직접 실행, `bindings/java/perf/multi/run_benchmarks.sh --pattern ROUTER_ROUTER_REQREP --transports tcp --msg-sizes 1024
+  --duration 5`, Core 0.17.5, JDK 25): clients=100 **248,159/s**(p95 0.450 ms), clients=1 **8,542/s**(p95 0.081 ms). 벤치 raw
+  1 socket(7.7~8.8k/s)과 clients=1이 같다 — binding에 문제 없음 확인. **사용자 결정: gRPC 비교는 socket 1개로 한다.** 2차 job
+  `bench-java-raw-pollout`(POLLOUT 게이트) 착수. 완료 구간 프로파일(`.artifacts/codex/java-completion-profile/`): 완료 구간 차이는
+  15 µs뿐이고 `requestToNode` 제출 구간이 194 µs(왕복 3회) → Issue #85, job `java-tonode-lane`.
+
+## FB-066 — #85 채택. registry turn 3→1은 맞으나 그 개선을 고정하는 테스트가 없다 (2026-09-10, 감독 검증, PR #107, Issue #108)
+
+job 보고를 감독이 직접 재검증했다.
+
+- **채택.** 감독이 이 기계에서 직접 실행: `zlink-framework-core:test` 1,374 + contractTest 27 + kotlin
+  contractTest 17 + provider-abstractions 4 + spring-boot-starter 48 + testkit 48 = **1,518 테스트, 실패 0**
+  (skip 1). Core 0.18.0 release prefix, binding은 `ZLINK_JAVA_BINDINGS_SOURCE` includeBuild.
+- **flow context는 제거된 것이 아니라 이동했다.** diff만 보면 `ZLinkFlowContext.current()/enter/suppress`
+  래핑이 사라진 것처럼 보이나, `submitInStateLane` 하나로 옮겨져 세 제출 경로에 균일하게 적용된다.
+  spec 26/27의 `flow`·`corr` 상관은 유지된다. 규칙이 3곳 중복 → 1곳 소유로 줄었다.
+- **원래 블로커는 오진이었다.** "공유 Maven에 binding 0.18.0이 없어 막힘"으로 기록돼 있었으나, 실제
+  원인은 worktree가 main보다 447파일 뒤처져 pin이 **0.17.7**(존재하지 않는 버전)이었던 것이다.
+  main 병합으로 풀렸다.
+- **남은 것**: 새 `ZLinkNodeSubmitTurnTest`(586줄)는 라우팅·timeout·metadata·오류 경로를 검증하지만
+  **lane turn 횟수를 assert 하지 않는다** — 3 turn으로 되돌아가도 통과한다. Issue #108로 분리했다.
+
+## FB-067 — Node의 1 ms ingress 타이머는 spec gap이 아니다. 메커니즘은 이미 있고 공개돼 있지 않을 뿐이다 (2026-09-10, 감독 재검증, Issue #50 → #111)
+
+Issue #50의 job(astra)이 "Node binding에 비동기 ordinary receive readiness 공개 계약이 없다"며
+**D(계약 부재)** 로 보고하고 코드 변경 없이 종료했다. 감독이 인용 코드를 직접 열어 **기각**했다.
+
+- `bindings/node/native/src/addon_core.cc:2114-2196` `socket_readable_watch_start(socket, callback)`이
+  `ZLINK_OPT_FD`로 fd를 얻어 `uv_poll_init_socket` + `uv_poll_start(UV_READABLE)`를 건다. 폴링도
+  타이머도 없는 진짜 libuv readiness다.
+- `addon_exports.cc:80-81`이 `socketReadableWatchStart`/`Stop`으로 내보낸다.
+- **이미 제품 경로에서 쓰인다**: `completion_owner.ts:662-668` `ensureRuntimeWatch()`가 completion
+  소켓에 걸고 `runtimeWake(status)`에서 drain 한다. async resource 이름도 `"zlink:completion"`이다.
+- 막힌 것은 `bindings/node/src/index.ts` 공개 export에 없다는 것뿐이다. framework는 공개
+  `@zlink-systems/zlink`만 쓰므로 닿을 수 없고, 그래서 `node-raw-mesh-backend.ts:1504-1515`가
+  `setTimeout`으로 깨어난다.
+
+따라서 분류는 D가 아니라 **B(기존 결함) + 공개 API 추가 하나**다. AGENTS.md §3에 따라 공개 API
+추가는 설계 변경으로 분리해 사용자에게 보고한다 → **Issue #111**, 사용자 결정 대기.
+
+검토한 대안: ① framework가 `setImmediate` spin(raw 벤치 방식) — 스펙 08 §4 I0·§7(a) busy polling
+금지 위반, 코어 하나 소모. ② `Poller`에 fd를 넣고 `wait` — 동기 차단이라 Node 이벤트 루프를 막는다.
+둘 다 기각.
+
+**Node는 이것 없이 0.90에 도달할 수 없다.** 왕복마다 1 ms가 고정으로 붙는다.
+
+## FB-068 — #48 진단 승인. dispatch별 DI scope 제거는 공개 계약 위반이므로 제외한다 (2026-09-10, 감독 승인, Issue #48)
+
+job이 AGENTS.md §3의 2단계 규칙대로 1단계 진단만 내고 승인을 기다렸다. 감독이 인용 근거를 직접
+확인하고 **승인**했다.
+
+- `git cherry origin/main framework-dotnet/5-dispatch-batch` → 11개 커밋 전부 `-`(patch-equivalent).
+  그 브랜치를 merge·cherry-pick 할 것이 없다. 감독이 직접 실행해 확인했다.
+- `Runtime/Execution/ZLinkStateLane.cs:208`의 `Interlocked.Exchange(ref _scheduled, 0)` 존재 확인 —
+  FB-061 lost-wakeup 수정은 유지한다.
+- **항목 7(b) 제외**: 인용된 공개 계약
+  `framework/doc/framework/common/spec/server/languages/dotnet/interfaces/03-configuration-topology.ko.md` §4가
+  "Node direct·Channel send/request와 classic fanout 구독 handler를 **실행할 때마다 DI scope를 하나
+  만든다**"를 명시한다. 감독이 직접 열어 확인했다. scope 자체 제거는 **D**이므로 구현 금지.
+  허용되는 것은 7(a) — activation 경로를 등록 시점에 compile/cache 하고 scope 의미는 유지.
+- 구현 승인 범위: 항목 1·2·3·4·6·7(a)·8·9 (전부 B). 항목 5는 이미 해결됨.
+
+진단 표는 `.artifacts/codex/dotnet-lane-48/diagnosis.md`에 보존했다(job.log에만 있던 것을 꺼냈다).
+
+## FB-069 — 환경 결함 셋을 고쳤다: local-package 경로 별칭, job.sh xhigh, Rust 테스트의 sleep 의존 (2026-09-10, 감독)
+
+캠페인 진행을 실제로 막던 것들이다.
+
+- **local-package가 두 번째 실행부터 항상 실패했다**(Issue #112, PR #113). `package-cache.py:267-269`가
+  `<staging>/build`를 영속 build tree로 가는 심볼릭 링크로 만드는데 staging 이름에 pid가 들어간다.
+  C·C++ 스크립트가 그 별칭을 CMake에 넘겨 `CMAKE_CACHEFILE_DIR`에 박혔고, 다음 실행은 경로 불일치로
+  반드시 죽었다. `readlink -f`로 실제 경로를 넘기게 고쳤다 — build tree 하나에 이름 하나. 보정 분기는
+  넣지 않았다. 수정 뒤 8개 언어 전부 패키징 성공.
+- **Rust 바인딩 테스트가 부하에서 깨진다**(Issue #110). `ownership_tests.rs:217`과
+  `contract_tests.rs:388`이 `NotConnected`(errno 107)로 실패했으나 단독 실행은 각각 9/9·26/26 통과.
+  원인은 inproc 연결 완료를 `thread::sleep(50ms)`로 추정하는 것(CONTRIBUTING §5 금지). 이 flake로
+  로컬 패키징이 세 번 막혔다. **Core 0.18.0 회귀가 아니다.**
+- **job.sh가 `--effort xhigh`를 거절했다**(Issue #115, PR #116). 사용자 결정(2026-09-10)은 astra를
+  쓸 때 항상 xhigh다.
+
+## FB-070 — PR 검증 워크플로우를 냈다. framework C++은 부트스트랩 때문에 분리한다 (2026-09-10, Issue #16, PR #118 / #117)
+
+`build.yml`은 dispatch 전용이라 PR을 받지 않고, framework .NET·Node만 PR CI가 있었다. Core·binding·
+framework Java에는 **PR 검증이 전혀 없었다** — 네 언어의 framework 런타임을 동시에 고치는 중에
+회귀가 그대로 들어온다.
+
+`pr-verify.yml`을 냈다. GitHub의 paths 필터가 workflow 단위인 문제는 union 필터 + `changes` job의
+`git diff --name-only`로 풀었다(외부 action 없음). core job은 CONTRIBUTING §1·§6의 명령 그대로
+(ctest 전체, single_lane ×2, header mirror 대조, `git diff --check`, C++·Python 스모크). framework-java
+job은 체크아웃 Core를 소스 빌드하고 binding을 `ZLINK_JAVA_BINDINGS_SOURCE`로 includeBuild 하므로
+릴리스 자산이나 공개 Maven에 의존하지 않는다 — **VERSION을 올리는 PR도 검증된다.**
+
+framework C++은 ① apt 의존성 8종 ② hiredis·redis-plus-plus 소스 빌드(Debian `libhiredis-dev`에
+`hiredis-config.cmake`가 없다) ③ `find_package(zlink_cpp ... CONFIG REQUIRED)`용 binding package가
+선행이라 같은 PR에 넣으면 경량 워크플로우가 아니게 된다. Issue #117로 분리했다.
+
+## FB-071 — submit 결과 객체 캠페인 G6 perf 판정: criterion 2·4 PASS, 회귀 없음. ccu=1>ccu=100 역전은 harness 단일스레드 특성(C control·3언어·Core 버전·과거 결과로 4중 확증) (2026-09-11, 머신 B 감독)
+
+바인딩 submit 결과 객체 캠페인(#88~#96, #90 머지 완료)의 G6 perf 재측정. Core는 0.18.0 released prefix로 고정(`~/.cache/zlink/core/0.18.0/linux-x64`), `ROUTER_ROUTER_REQREP` tcp/1024, runs=3.
+
+**criterion 2 (ccu=1 깊이 1 탈출) — PASS.** cpp ccu=1: 옛 루프 **7,933/s**(깊이 1, 0.17.5에서도 재현·문서 "8.5k"와 일치) → 새 §5 루프 **300,108/s** (약 38×). C reference(275k)와 동급. §5가 "`OK`면 즉시 연속 제출, `BACKPRESSURED`만 `admitted` 대기"로 단일 소켓을 HWM 깊이까지 파이프라인.
+
+**criterion 4 (회귀 없음) — PASS.** same-Core(0.18.0) 전후 cpp ccu=100 tcp/1024: 옛 루프 150,518 → 새 §5 156,979 (+4.3%). 과거 저장 결과와 cpp-to-cpp 교차(clients=100):
+- tcp/1024: 과거 0.17.5(커밋 6edf7b95) 97,403 → 0.18.0 현재 150~157k (상승)
+- tcp/64: 과거 0.17.5 137,755 → 0.18.0 현재 ~142,323 (동급)
+Core 0.17.5→0.18.0 전환도 회귀 아님(C RR/1024/c100 185k→223k, cpp 97k→157k 상승).
+
+**ccu=1 > ccu=100 역전 조사(사용자 제기).** cpp 새 §5: ccu=1=300k > ccu=100=157k. "ccu=100이 더 높아야 정상" 직관과 반대라 §5 버그·Core 회귀를 의심해 4중 검증:
+1. **C reference(이 캠페인 미변경) control**: ccu=1=275k > ccu=100=223k — 미변경 코드도 동일 역전 → §5 버그 아님.
+2. **3언어(C·C++·go)**: 전부 ccu=1 > ccu=100 (go 125k>92k) → 언어 공통 = harness 특성.
+3. **Core 버전(0.17.5 vs 0.18.0)**: ccu=100 하락 없음(상승) → Core 회귀 아님.
+4. **과거 저장 결과**: size축 확인(논의는 1024B, 사용자가 64B로 오인). 전 size·버전에서 c100 유지·개선.
+원인: 벤치 harness가 **단일 협조 런타임 스레드**로 모든 클라 구동(PERF §1.3). 옛 루프는 ccu=1이 depth-1(7.9k)로 스레드를 굶겨 ccu=100이 필요했으나, §5가 ccu=1을 300k로 고쳐 **단일 클라가 이미 스레드 천장 포화** → ccu=100은 100코루틴 코디네이션 오버헤드만 추가. **ccu=100 자체는 저하 없음.** 벤치 버그 아님 — harness는 의도적 단일 런타임(멀티코어 스케일이 아니라 binding async 효율 측정).
+
+**남은 관찰(§5 무관·선재)**: cpp ccu=100(157k)이 C ccu=100(223k)보다 낮음(c100/c1: cpp 52% vs C 81%) — 바인딩 async 런타임 per-client 오버헤드가 C reference보다 큼. baseline(150k)부터 있던 선재 특성, 별도 최적화 영역.
+
+**criterion 3 (gRPC Java raw 3-run)**: raw 드라이버 코드(RawStack·BenchDrivers.runRaw)는 #90(#141)으로 머지·assemble 검증됨. 전체 gRPC 3-stack 비교 실행은 `systems.zlink:zlink:0.18.0` 공유 Maven 로컬 패키지(handoff §5 전제) 발행이 선행 — 후속으로 처리. 바인딩 캠페인 판정의 blocker 아님.

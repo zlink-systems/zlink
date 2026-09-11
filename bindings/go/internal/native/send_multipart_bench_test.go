@@ -41,7 +41,7 @@ func BenchmarkManagedSendMultipart(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				if err := z.Send().MoveMessage(body).Message(tail).Submit(context.Background()); err != nil {
+				if err := submitNativeSend(context.Background(), z.Send().MoveMessage(body).Message(tail)); err != nil {
 					b.Fatal(err)
 				}
 				var r Received

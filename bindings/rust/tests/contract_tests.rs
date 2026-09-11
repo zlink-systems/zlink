@@ -6,7 +6,9 @@ mod test_support;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Barrier};
+use std::task::Poll;
 use std::thread;
+use std::time::Duration;
 
 use zlink::{
     Context, DealerSocket, Message, POLLCOMPLETION, POLLIN, Poller, Received, RecvFlags,
@@ -251,7 +253,7 @@ fn request_reply_surface_exists() {
 }
 
 #[test]
-fn concurrent_multipart_publish_exposes_core_rejection_and_releases_parts() {
+fn concurrent_multipart_publish_submits_whole_records_and_releases_parts() {
     const WORKERS: usize = 8;
     const PER_WORKER: usize = 500;
 
@@ -285,40 +287,31 @@ fn concurrent_multipart_publish_exposes_core_rejection_and_releases_parts() {
             let start = Arc::clone(&start);
             thread::spawn(move || {
                 let mut accepted = 0usize;
-                let mut rejected = 0usize;
                 start.wait();
                 for (publish, first, second, first_bytes, second_bytes) in requests {
                     match publish.submit() {
-                        Err(error)
-                            if error.code() == SubmitResult::InvalidArgument
-                                && error.native_errno() == libc::EINVAL =>
-                        {
+                        Ok(()) => {
                             assert_eq!(first.as_bytes(), first_bytes);
                             assert_eq!(second.as_bytes(), second_bytes);
                             assert_eq!(first.ref_count(), 1);
                             assert_eq!(second.ref_count(), 1);
-                            rejected += 1;
+                            accepted += 1;
                         }
-                        Ok(()) => accepted += 1,
                         Err(error) => panic!("unexpected concurrent publish error: {error}"),
                     }
                 }
-                (accepted, rejected)
+                accepted
             })
         })
         .collect::<Vec<_>>();
 
-    let (accepted, rejected) = handles
+    let accepted = handles
         .into_iter()
         .map(|handle| handle.join().unwrap())
-        .fold((0usize, 0usize), |total, result| {
-            (total.0 + result.0, total.1 + result.1)
-        });
-    assert!(accepted > 0, "Core accepted no multipart publish");
-    assert!(rejected > 0, "Core exposed no competing-attempt rejection");
-    assert_eq!(accepted + rejected, WORKERS * PER_WORKER);
+        .sum::<usize>();
+    assert_eq!(accepted, WORKERS * PER_WORKER);
     eprintln!(
-        "concurrent multipart publishes: attempts={} accepted={accepted} rejected={rejected}",
+        "concurrent whole-record publishes: attempts={} accepted={accepted}",
         WORKERS * PER_WORKER
     );
 }
@@ -343,53 +336,26 @@ fn poller_modify_transfers_completion_ownership() {
 fn pollcompletion_reports_only_after_request_future_is_settled() {
     let ctx = Context::new().unwrap();
     let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
     router
         .bind("inproc://rust-public-completion-owner")
         .unwrap();
-    dealer
-        .connect("inproc://rust-public-completion-owner")
-        .unwrap();
-    dealer
-        .common_options()
-        .set_send_timeout(std::time::Duration::from_secs(5))
-        .unwrap();
-    router
-        .common_options()
-        .set_receive_timeout(std::time::Duration::from_secs(5))
-        .unwrap();
-
-    // Complete a blocking data handshake before the first DONTWAIT REQUEST.
-    // This removes transport attachment from the completion-owner assertion.
-    dealer
-        .send()
-        .message(Message::try_from(b"ready").unwrap())
-        .submit_sync()
-        .unwrap();
-    let mut ready = Received::empty();
-    assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
-    assert_eq!(ready.single_part().unwrap().as_bytes(), b"ready");
+    let (dealer, result, mut future, request) = test_support::request_until_received(
+        &ctx,
+        &router,
+        "inproc://rust-public-completion-owner",
+        b"poller-request",
+        Duration::from_secs(2),
+    );
+    assert_eq!(result, SubmitResult::Ok);
 
     let poller = Poller::new().unwrap();
     poller.add_socket(&dealer, POLLCOMPLETION, 17).unwrap();
-    let responder = thread::spawn(move || {
-        let mut request = Received::empty();
-        assert!(router.recv(&mut request, RecvFlags::NONE).unwrap());
-        request
-            .reply()
-            .message(Message::try_from(b"poller-reply").unwrap())
-            .submit()
-            .unwrap();
-    });
-
-    let mut future = Box::pin(
-        dealer
-            .request()
-            .message(Message::try_from(b"poller-request").unwrap())
-            .timeout(std::time::Duration::from_secs(2))
-            .submit(),
-    );
     assert!(test_support::poll_once(&mut future).is_pending());
+    request
+        .reply()
+        .message(Message::try_from(b"poller-reply").unwrap())
+        .submit()
+        .unwrap();
     let mut events = [zlink::PollEvent::default()];
     assert_eq!(poller.wait(&mut events, 5_000).unwrap(), 1);
     assert_eq!(events[0].slot, 17);
@@ -400,7 +366,167 @@ fn pollcompletion_reports_only_after_request_future_is_settled() {
     poller.modify_socket(&dealer, POLLIN).unwrap();
     poller.modify_socket(&dealer, POLLCOMPLETION).unwrap();
     poller.remove_socket(&dealer).unwrap();
-    responder.join().unwrap();
+}
+
+#[test]
+fn submit_result_immediate_admission_exposes_completed_stage_and_reply() {
+    let ctx = Context::new().unwrap();
+    ctx.options().set_auto_hwm_enabled(false).unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    router.bind("inproc://rust-submit-result-ok").unwrap();
+    dealer.connect("inproc://rust-submit-result-ok").unwrap();
+
+    dealer
+        .send()
+        .message(Message::try_from(b"ready").unwrap())
+        .submit_sync()
+        .unwrap();
+    let mut received = Received::empty();
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+
+    let send = dealer
+        .send()
+        .message(Message::try_from(b"send-ok").unwrap())
+        .submit()
+        .unwrap();
+    assert_eq!(send.result, SubmitResult::Ok);
+    let mut admitted = send.admitted;
+    assert_eq!(test_support::poll_once(&mut admitted), Poll::Ready(Ok(())));
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    assert_eq!(received.parts()[0].as_bytes(), b"send-ok");
+
+    let request = dealer
+        .request()
+        .message(Message::try_from(b"request-ok").unwrap())
+        .timeout(Duration::from_secs(2))
+        .submit()
+        .unwrap();
+    assert_eq!(request.result, SubmitResult::Ok);
+    let mut admitted = request.admitted;
+    assert_eq!(test_support::poll_once(&mut admitted), Poll::Ready(Ok(())));
+    let mut reply = request.reply;
+    assert!(test_support::poll_once(&mut reply).is_pending());
+
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    received
+        .reply()
+        .message(Message::try_from(b"reply-ok").unwrap())
+        .submit()
+        .unwrap();
+    let parts = test_support::block_on(reply).unwrap();
+    assert_eq!(parts[0].as_bytes(), b"reply-ok");
+}
+
+#[test]
+fn submit_result_backpressure_admits_after_writable_then_completes_reply() {
+    const RECORD_HWM: u64 = 65_536 + 64;
+
+    let ctx = Context::new().unwrap();
+    ctx.options().set_auto_hwm_enabled(false).unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    dealer
+        .common_options()
+        .set_send_high_water_mark(RECORD_HWM)
+        .unwrap();
+    router
+        .common_options()
+        .set_receive_high_water_mark(RECORD_HWM)
+        .unwrap();
+    router
+        .common_options()
+        .set_receive_timeout(Duration::from_secs(5))
+        .unwrap();
+    router
+        .bind("inproc://rust-submit-result-backpressured")
+        .unwrap();
+    dealer
+        .connect("inproc://rust-submit-result-backpressured")
+        .unwrap();
+
+    dealer
+        .send()
+        .message(Message::try_from(b"ready").unwrap())
+        .submit_sync()
+        .unwrap();
+    let mut received = Received::empty();
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+
+    let first = dealer
+        .request()
+        .message(Message::try_from(vec![b'a'; 65_536].as_slice()).unwrap())
+        .timeout(Duration::from_secs(5))
+        .submit()
+        .unwrap();
+    assert_eq!(first.result, SubmitResult::Ok);
+    assert!(test_support::block_on(first.admitted).is_ok());
+
+    let second = dealer
+        .request()
+        .message(Message::try_from(vec![b'b'; 65_536].as_slice()).unwrap())
+        .timeout(Duration::from_secs(5))
+        .submit()
+        .unwrap();
+    assert_eq!(second.result, SubmitResult::Backpressured);
+    let mut second_admitted = second.admitted;
+    assert!(test_support::poll_once(&mut second_admitted).is_pending());
+
+    let poller = Poller::new().unwrap();
+    poller.add_socket(&dealer, POLLCOMPLETION, 29).unwrap();
+    let mut events = [zlink::PollEvent::default()];
+    assert_eq!(poller.wait(&mut events, 0).unwrap(), 0);
+
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    assert_eq!(received.parts()[0].as_bytes()[0], b'a');
+    received
+        .reply()
+        .message(Message::try_from(b"first-reply").unwrap())
+        .submit()
+        .unwrap();
+
+    loop {
+        match test_support::poll_once(&mut second_admitted) {
+            Poll::Ready(result) => {
+                result.unwrap();
+                break;
+            }
+            Poll::Pending => {
+                assert_eq!(poller.wait(&mut events, 5_000).unwrap(), 1);
+                assert_eq!(events[0].slot, 29);
+                assert_ne!(events[0].revents & POLLCOMPLETION, 0);
+            }
+        }
+    }
+
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    assert_eq!(received.parts()[0].as_bytes()[0], b'b');
+    received
+        .reply()
+        .message(Message::try_from(b"second-reply").unwrap())
+        .submit()
+        .unwrap();
+
+    let mut first_reply = first.reply;
+    let first_reply = loop {
+        match test_support::poll_once(&mut first_reply) {
+            Poll::Ready(result) => break result.unwrap(),
+            Poll::Pending => {
+                assert_eq!(poller.wait(&mut events, 5_000).unwrap(), 1);
+            }
+        }
+    };
+    let mut second_reply = second.reply;
+    let second_reply = loop {
+        match test_support::poll_once(&mut second_reply) {
+            Poll::Ready(result) => break result.unwrap(),
+            Poll::Pending => {
+                assert_eq!(poller.wait(&mut events, 5_000).unwrap(), 1);
+            }
+        }
+    };
+    assert_eq!(first_reply[0].as_bytes(), b"first-reply");
+    assert_eq!(second_reply[0].as_bytes(), b"second-reply");
 }
 
 #[test]
@@ -415,13 +541,12 @@ fn ordinary_router_message_has_no_reply_token() {
         .connect("inproc://rust-request-reply-data")
         .unwrap();
 
-    test_support::block_on(
-        dealer_socket
-            .send()
-            .message(Message::try_from(b"plain-data").unwrap())
-            .submit(),
-    )
-    .unwrap();
+    let submission = dealer_socket
+        .send()
+        .message(Message::try_from(b"plain-data").unwrap())
+        .submit()
+        .unwrap();
+    test_support::block_on(submission.admitted).unwrap();
 
     let mut received = Received::empty();
     router_socket.recv(&mut received, RecvFlags::NONE).unwrap();

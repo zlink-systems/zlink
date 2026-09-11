@@ -1,0 +1,61 @@
+You are a coding sub-agent for the zlink repository (GitHub Issue #63). You work ONLY inside the
+worktree given to you (branch core/63-core-c-api-whole-message-recv-router-rec). Commit to that
+branch only. Do NOT touch spec documents (core/doc/spec/**, bindings/doc/spec/**) — the supervisor
+owns those. Do NOT push or open PRs.
+
+== Authoritative documents (read first) ==
+- Design draft: doc/draft/core-whole-message-recv-api.ko.md
+- Apply plan:   doc/plan/core-whole-message-recv-api-apply-plan.ko.md
+- Decisions:    doc/plan/issue-63-worklog/decisions.ko.md  (D63-1 public names, D63-2 internal rename)
+- Rules: CONTRIBUTING.ko.md §9 (commits), §10 (agent forbidden scope); AGENTS.md §2.1.
+
+== Principles ==
+- No behavior change. No public-surface change. No numbers fabrication. Keep thread-safety /
+  single-consumer contract exactly. Match surrounding code style/idiom.
+
+== TASK (apply-plan step ①: internal naming correction only — separate commit) ==
+Rename two internal C++ symbols. These are general whole-record pull functions that receive BOTH
+DATA (send) and REQUEST records, so the "reqrep ... _direct" name misleads. Rename ONLY the function
+identifiers; do NOT move the namespace (zlink::socket_reqrep_internal stays).
+
+1. recv_router_message_direct  ->  recv_router_record
+2. recv_dealer_message_direct  ->  recv_dealer_record
+
+Update every declaration, definition, and call site. Known locations (re-verify with grep before
+editing — line anchors may have shifted):
+  router: core/src/api/socket/socket_request_reply_internal.hpp (decl),
+          core/src/api/socket/socket_request_reply_runtime_io.cpp (impl),
+          core/src/api/socket/socket_request_reply_router_api.cpp (call)
+  dealer: core/src/api/socket/socket_request_reply_internal.hpp (decl),
+          core/src/api/socket/socket_request_reply_runtime_io.cpp (impl),
+          core/src/api/socket/socket_message_recv_api.cpp (call),
+          core/src/api/socket/socket_message_api.cpp (call)
+Run `grep -rn "recv_router_message_direct\|recv_dealer_message_direct" core/` first and after, to
+confirm ZERO remaining occurrences of the old names anywhere in core/ (src, include, tests, comments).
+
+At each renamed declaration add a one-line comment clarifying intent, e.g.:
+  // General whole-record ROUTER receive: pulls one entire record (rid + optional reply token +
+  // all parts) for both DATA and REQUEST. Not request/reply-specific despite the enclosing namespace.
+and the analogous comment for the dealer function.
+
+== Build & test (JOBS capped at 4 — do NOT exceed, WSL memory) ==
+  JOBS=4 scripts/build-core.sh dev
+  ctest --test-dir core/build-dev --output-on-failure
+All tests that passed before must still pass. This is a pure rename: no test should change behavior.
+
+== Commit (to the issue branch only) ==
+Message:
+  core: rename internal whole-record recv (recv_router_record / recv_dealer_record)
+
+  recv_router_message_direct / recv_dealer_message_direct receive both DATA and
+  REQUEST records; the "reqrep ... _direct" naming implied request/reply-only.
+  Rename the function identifiers to reflect the general whole-record pull. No
+  behavior change, no public surface change, namespace unchanged. Refs #63.
+
+  Build: JOBS=4 scripts/build-core.sh dev — OK
+  Test:  ctest --test-dir core/build-dev — <paste pass/fail summary>
+
+== Deliverable ==
+The rename committed on the branch, build + ctest green. Report: files touched, grep-clean
+confirmation (old names = 0 occurrences), and the exact ctest summary line (N tests, all passed / any
+failures with names).

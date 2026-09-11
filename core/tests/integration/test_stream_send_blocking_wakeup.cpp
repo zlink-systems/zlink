@@ -132,15 +132,14 @@ zlink_routing_id_t receive_connected_rid (void *stream_)
     zlink_msg_t notification;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&notification));
     const zlink_routing_id_t *borrowed_rid = NULL;
-    zlink_part_flag_t part_flag = ZLINK_PART_MORE;
+    size_t part_flag = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
-      zlink_recv_part (stream_, &borrowed_rid, &notification, &part_flag,
-                       ZLINK_RECV_FLAGS_NONE));
+      zlink_recv (stream_, &borrowed_rid, &notification, 1, &part_flag, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (borrowed_rid);
     TEST_ASSERT_EQUAL_UINT (4, borrowed_rid->size);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&notification));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, part_flag);
+    TEST_ASSERT_EQUAL_INT (1, part_flag);
 
     zlink_routing_id_t rid = *borrowed_rid;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&notification));
@@ -211,9 +210,7 @@ size_t fill_until_backpressured (
                                zlink_msg_init_size (&part, payload_.size ()));
         memcpy (zlink_msg_data (&part), payload_.data (), payload_.size ());
         zlink_completion_id_t id = UINT64_MAX;
-        const zlink_submit_result_t result = zlink_send_part_rid (
-          stream_, rid_, &part, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
-          user_context_, &id);
+        const zlink_submit_result_t result = zlink_send_rid (stream_, rid_, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, user_context_, &id);
         const int submit_errno = zlink_errno ();
         TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&part));
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
@@ -310,9 +307,7 @@ void test_stream_blocking_send_wakes_after_peer_reads ()
             }
             start.condition.notify_one ();
             errno = 0;
-            observed.result = zlink_send_part_rid (
-              stream, &rid, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-              NULL, &observed.completion_id);
+            observed.result = zlink_send_rid (stream, &rid, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, &observed.completion_id);
             observed.remaining_size = zlink_msg_size (&part);
             zlink_msg_close (&part);
         }
@@ -383,9 +378,7 @@ void test_stream_backpressure_wakes_pollout_and_retry_succeeds ()
     zlink_completion_id_t completion_id = UINT64_MAX;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part_rid (stream, &rid, &retry,
-                           ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL,
-                           &completion_id));
+      zlink_send_rid (stream, &rid, &retry, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL, &completion_id));
     TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&retry));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&retry));

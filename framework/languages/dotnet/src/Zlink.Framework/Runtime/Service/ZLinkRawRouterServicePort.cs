@@ -86,6 +86,7 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
             await _socket.Send(target)
                 .Messages(messages)
                 .Async(cancellationToken)
+                .Admitted
                 .ConfigureAwait(false);
         }
         finally
@@ -153,6 +154,7 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
                 .Messages(messages)
                 .Timeout(timeout)
                 .Async(cancellationToken)
+                .Reply
                 .ConfigureAwait(false);
             return new ZLinkRawReplyEnvelope(reply);
         }

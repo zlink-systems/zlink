@@ -3457,6 +3457,9 @@ void verify_actor_commit_is_replayable_until_deadline ()
 {
     using namespace zlink::framework;
     spots::actor_transfer_coordinator_t coordinator;
+    std::size_t activity = 0;
+    coordinator.set_activity_handler ([&] { ++activity; });
+    assert (!coordinator.next_activity ());
     const auto source = detail::actor_ref_access_t::make (
       node_rid_t::from_string ("node-a"), "player",
       "actor-commit-replay", 7);
@@ -3469,6 +3472,8 @@ void verify_actor_commit_is_replayable_until_deadline ()
       .completion_operation_id_high = 11,
       .completion_operation_id_low = 12};
     assert (coordinator.try_add_admission ("transfer-replay", admission));
+    assert (activity == 1);
+    assert (coordinator.next_activity () == admission.deadline);
     assert (coordinator.stage_session_relocation_route (
       "transfer-replay", {0x41}, "player", 17));
     assert (coordinator.commit_session_relocation_route_authority (
@@ -3479,7 +3484,9 @@ void verify_actor_commit_is_replayable_until_deadline ()
       "transfer-replay", 40, 42));
     assert (coordinator.begin_commit (
       "transfer-replay", source, "spot-b"));
+    assert (!coordinator.next_activity ());
     coordinator.complete_commit ("transfer-replay");
+    assert (coordinator.next_activity () == admission.deadline);
     assert (!coordinator.pending_commit (
       "transfer-replay", source, "spot-b"));
     const auto completed = coordinator.completed_commit (
@@ -3517,6 +3524,23 @@ void verify_actor_commit_is_replayable_until_deadline ()
 
     (void) coordinator.cleanup_expired (
       std::chrono::steady_clock::now () + 31s);
+    assert (!coordinator.next_activity ());
+}
+
+void verify_reconcile_management_deadline_advances_after_each_attempt ()
+{
+    spots::actor_transfer_coordinator_t coordinator;
+    coordinator.mark_reconcile ("player:reconcile-deadline", 1s);
+    const auto first = coordinator.next_activity ();
+    assert (first);
+    assert (coordinator.take_due_reconciles (*first - 1ms).empty ());
+    assert (coordinator.take_due_reconciles (*first).size () == 1);
+    const auto next = coordinator.next_activity ();
+    assert (next == *first + std::chrono::milliseconds (100));
+    assert (coordinator.take_due_reconciles (*first).empty ());
+    assert (coordinator.take_due_reconciles (*next).size () == 1);
+    coordinator.cancel_move ("player:reconcile-deadline");
+    assert (!coordinator.next_activity ());
 }
 
 void verify_terminal_journal_preserves_outstanding_entries ()
@@ -4019,6 +4043,99 @@ void verify_logical_multicast_continues_after_one_target_failure ()
     target->close ();
 }
 
+void verify_pending_relocation_management_bounds_dispatch_wait ()
+{
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("management-deadline")}});
+    host->start ();
+    const auto local = host->transport ().topology ().local_descriptor ();
+    const protocol::relocation_coordinator_fence_t coordinator{
+      "management-owner", 7, local.node_routing_id,
+      local.lifecycle_generation, "management-store"};
+    const protocol::request_source_fence_t source{
+      "request-owner", 9, bytes ("source"), 11};
+    const protocol::reply_relay_t relay{
+      {1, 2}, 3, {4, 5}, 6, coordinator, 7, 8, 0,
+      protocol::framework_error_code::none};
+    assert (host->relocation_wire ().register_terminal_target ({
+      relay, source, std::nullopt,
+      [] (protocol::reply_relay_ack_status_t) { return true; },
+      [] { return true; }}));
+    // Consume the registration wake so the second wait is bounded solely
+    // by the relay owner's immediate management deadline.
+    (void) host->wait_for_dispatch_activity (0ms, false);
+    auto due = std::async (std::launch::async, [&] {
+        return host->wait_for_dispatch_activity (5s, false);
+    });
+    assert (due.wait_for (500ms) == std::future_status::ready);
+    assert (!due.get ());
+    host->close ();
+}
+
+void verify_failed_relay_persistence_rearms_dispatch_wait ()
+{
+    for (const bool source_lease_expiry : {false, true}) {
+        auto host = std::make_shared<host::public_host_runtime_t> (
+          host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("relay-persist-wake")}});
+        host->start ();
+        const auto local = host->transport ().topology ().local_descriptor ();
+        const protocol::relocation_coordinator_fence_t coordinator{
+          "management-owner", 7, local.node_routing_id,
+          local.lifecycle_generation, "management-store"};
+        const protocol::request_source_fence_t source{
+          "request-owner", 9, bytes ("source"), 11};
+        const protocol::reply_relay_t relay{
+          {1, 2}, 3, {4, 5}, 6, coordinator, 7, 8, 0,
+          protocol::framework_error_code::none};
+        std::promise<void> persist_entered;
+        auto entered = persist_entered.get_future ();
+        std::promise<void> release_persist;
+        auto released = release_persist.get_future ().share ();
+        const auto fail_persist = [&] {
+            persist_entered.set_value ();
+            released.wait ();
+            return false;
+        };
+        assert (host->relocation_wire ().register_terminal_target ({
+          relay, source, std::nullopt,
+          [&] (protocol::reply_relay_ack_status_t) { return fail_persist (); },
+          fail_persist}));
+        const protocol::reply_relay_ack_t ack{
+          relay.relocation, coordinator, relay.operation, relay.reply_route_id,
+          source, protocol::reply_relay_ack_status_t::terminal_received};
+        const mesh::service_mailbox_record_t record{
+          "relay", mesh::service_mailbox_domain_t::infrastructure,
+          {protocol::encode_reply_relay_ack (ack)}, source.node_routing_id,
+          std::nullopt, std::nullopt, source.node_generation};
+        auto persisting = std::async (std::launch::async, [&] {
+            if (source_lease_expiry)
+                return host->relocation_wire ().confirm_terminal_source_lease_expired (
+                  relay.relocation, relay.operation, source);
+            return await_task (host->relocation_wire ().process (record))
+                   != stateful::raw_relocation_replay_result_t::persistence_failed;
+        });
+        entered.wait ();
+        assert (!host->relocation_wire ().next_activity ());
+        // Drain the original registration wake while persistence has made
+        // the relay temporarily ineligible for retry.
+        (void) host->wait_for_dispatch_activity (0ms, false);
+        auto waking = std::async (std::launch::async, [&] {
+            return host->wait_for_dispatch_activity (-1ms, false);
+        });
+        assert (waking.wait_for (20ms) == std::future_status::timeout);
+        release_persist.set_value ();
+        assert (!persisting.get ());
+        assert (host->relocation_wire ().next_activity ());
+        const auto woke = waking.wait_for (500ms);
+        // Always release the waiter before asserting, so a failing regression
+        // remains bounded without using a product timer or a polling loop.
+        host->signal_dispatch_activity ();
+        (void) waking.get ();
+        host->close ();
+        assert (woke == std::future_status::ready);
+    }
+}
+
 void verify_local_application_enqueue_wakes_dispatch_wait ()
 {
     auto host = std::make_shared<host::public_host_runtime_t> (
@@ -4150,8 +4267,15 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
     assert (completed.wait_for (0ms) != std::future_status::ready);
     assert (journal_capture_count == 0);
 
+    (void) local->wait_for_dispatch_activity (0ms, false);
+    auto wake = std::async (std::launch::async, [&] {
+        return local->wait_for_dispatch_activity (5s, false);
+    });
+    assert (wake.wait_for (20ms) == std::future_status::timeout);
     assert (local->sessions ().complete_inbound (*ingress)
             == stateful::stateful_error_t::none);
+    assert (wake.wait_for (500ms) == std::future_status::ready);
+    assert (wake.get ());
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while (completed.wait_for (0ms) != std::future_status::ready
            && std::chrono::steady_clock::now () < deadline) {
@@ -4185,9 +4309,16 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
        status.routing_id ().to_bytes (),
        status.lifecycle_generation (),
        0}};
+    (void) local->wait_for_dispatch_activity (0ms, false);
+    auto route_wake = std::async (std::launch::async, [&] {
+        return local->wait_for_dispatch_activity (5s, false);
+    });
+    assert (route_wake.wait_for (20ms) == std::future_status::timeout);
     assert (local->route_session_remote (status.routing_id (), route)
               .result ()
               .value ());
+    assert (route_wake.wait_for (500ms) == std::future_status::ready);
+    assert (route_wake.get ());
     const auto route_deadline = std::chrono::steady_clock::now () + 2s;
     auto current = local->sessions ().current_binding (actor_object->key);
     while ((!current
@@ -4700,7 +4831,7 @@ void verify_raw_spot_and_actor_routing ()
       dispatch.try_claim (spot);
     assert (spot_delivery_error == stateful::stateful_error_t::none);
     assert (spot_delivery
-            && spot_delivery->payload.payload == bytes ("spot"));
+            && spot_delivery->payload.payload_bytes () == bytes ("spot"));
     const auto &frozen_spot = spot_delivery->frozen;
     assert (spot_delivery->turn.payload.empty ());
     assert (spot_delivery->turn.application_record.has_value ());
@@ -4737,7 +4868,7 @@ void verify_raw_spot_and_actor_routing ()
       dispatch.try_claim (spot);
     assert (relocated_error == stateful::stateful_error_t::none);
     assert (relocated_delivery && !relocated_delivery->request);
-    assert (relocated_delivery->payload.payload == bytes ("relocated"));
+    assert (relocated_delivery->payload.payload_bytes () == bytes ("relocated"));
     assert (dispatch.complete_async (*relocated_delivery).result ().value ()
             == stateful::stateful_error_t::none);
 
@@ -4782,7 +4913,7 @@ void verify_raw_spot_and_actor_routing ()
       dispatch.try_claim (actor);
     assert (actor_delivery_error == stateful::stateful_error_t::none);
     assert (actor_delivery && actor_delivery->request);
-    assert (actor_delivery->payload.payload == bytes ("request"));
+    assert (actor_delivery->payload.payload_bytes () == bytes ("request"));
     const auto &frozen_actor = actor_delivery->frozen;
     assert (actor_delivery->turn.payload.empty ());
     assert (actor_delivery->turn.application_record.has_value ());
@@ -4814,7 +4945,7 @@ void verify_raw_spot_and_actor_routing ()
     const auto result = future.get ();
     assert (result.first
             == foundation::operation_terminal_t::completed);
-    assert (protocol::decode_application_payload (result.second).payload
+    assert (protocol::decode_application_payload (result.second).payload_bytes ()
             == bytes ("reply"));
 
     // A bound-session actorRequest journals the frozen source with the
@@ -4915,7 +5046,7 @@ void verify_raw_spot_and_actor_routing ()
     const auto bound_result = bound_future.get ();
     assert (bound_result.first
             == foundation::operation_terminal_t::completed);
-    assert (protocol::decode_application_payload (bound_result.second).payload
+    assert (protocol::decode_application_payload (bound_result.second).payload_bytes ()
             == bytes ("bound-reply"));
 
     // A bound-session-routed actorRequest that is missing its exact fence
@@ -5085,7 +5216,7 @@ void verify_raw_spot_and_actor_routing ()
     assert (recreated_result.first
             == foundation::operation_terminal_t::completed);
     assert (protocol::decode_application_payload (
-              recreated_result.second).payload
+              recreated_result.second).payload_bytes ()
             == bytes ("recreated"));
     assert (stale_terminal_count == 1);
     source.close ();
@@ -5160,7 +5291,7 @@ void verify_relocated_source_reply_failure_keeps_terminal_record ()
 
     const auto [claim_error, delivery] = dispatch.try_claim (actor);
     assert (claim_error == stateful::stateful_error_t::none && delivery);
-    assert (delivery->payload.payload == bytes ("request"));
+    assert (delivery->payload.payload_bytes () == bytes ("request"));
     assert (objects.complete_claim (
               actor, stateful::turn_domain_t::application)
             == stateful::stateful_error_t::none);
@@ -5412,7 +5543,7 @@ void verify_node_request_requires_remote_admission ()
     assert (protocol::decode_header (request.parts.front ()).kind
             == protocol::command::nodeRequest);
     assert (request.correlation && *request.correlation == 4242);
-    assert (protocol::decode_application_payload (request.parts.at (1)).payload
+    assert (protocol::decode_application_payload (request.parts.at (1)).payload_bytes ()
             == bytes ("request"));
     assert (target.reply (
       request,
@@ -5430,7 +5561,7 @@ void verify_node_request_requires_remote_admission ()
     assert (future.wait_for (0ms) == std::future_status::ready);
     const auto result = future.get ();
     assert (result.first == foundation::operation_terminal_t::completed);
-    assert (protocol::decode_application_payload (result.second).payload
+    assert (protocol::decode_application_payload (result.second).payload_bytes ()
             == bytes ("reply"));
     source.close ();
     target.close ();
@@ -5457,7 +5588,7 @@ void verify_unadmitted_request_is_rejected_without_framework_queue ()
     auto request = std::move (
       source.request ().message (header).message (body))
                      .timeout (5s)
-                     .async ();
+                     .async ().reply;
 
     mesh::raw_mesh_pump_result_t pumped =
       mesh::raw_mesh_pump_result_t::no_data;
@@ -5885,6 +6016,8 @@ void verify_durable_reply_relay_single_winner ()
       source, 8, 4096, 1ms, 1ms);
     stateful::raw_relocation_replay_coordinator_t target_coordinator (
       target, 8, 4096, 1ms, 1ms);
+    assert (!source_coordinator.next_activity ());
+    assert (!target_coordinator.next_activity ());
     int completion_count = 0;
     assert (source_coordinator.register_terminal_source ({
       relocation, coordinator, operation, request_source,
@@ -5907,6 +6040,8 @@ void verify_durable_reply_relay_single_winner ()
       },
       [] { return true; }}));
     assert (target_coordinator.pending_terminal_relays () == 1);
+    assert (target_coordinator.next_activity ()
+            == stateful::raw_relocation_replay_coordinator_t::clock_t::time_point::min ());
     assert (target_coordinator.terminal_retained_bytes () > 0);
     const protocol::reply_relay_ack_t stale_ack{
       relocation, coordinator, operation, relay.reply_route_id,
@@ -5951,9 +6086,11 @@ void verify_durable_reply_relay_single_winner ()
     assert (await_task (
               target_coordinator.retry_terminal_relays (first_send_time))
             == 1);
+    assert (target_coordinator.next_activity () == first_send_time + 1ms);
     assert (receive (source, source_coordinator)
             == stateful::raw_relocation_replay_result_t::terminal_received);
     assert (completion_count == 1);
+    assert (source_coordinator.next_activity ());
 
     bool first_ack_dropped = false;
     deadline = std::chrono::steady_clock::now () + 2s;
@@ -5982,7 +6119,7 @@ void verify_durable_reply_relay_single_winner ()
     assert (target_coordinator.pending_terminal_relays () == 1);
 
     auto conflicting_reply = reply;
-    conflicting_reply.payload = bytes ("conflicting");
+    conflicting_reply.payload_bytes () = bytes ("conflicting");
     assert (target.send_reply_relay (
               source_descriptor.node_routing_id, relay, conflicting_reply)
               .result ()
@@ -6003,6 +6140,7 @@ void verify_durable_reply_relay_single_winner ()
     assert (persisted_status
             == protocol::reply_relay_ack_status_t::already_terminal);
     assert (target_coordinator.pending_terminal_relays () == 0);
+    assert (!target_coordinator.next_activity ());
     assert (target_coordinator.terminal_retained_bytes () == 0);
 
     auto expiry_relay = relay;
@@ -6031,6 +6169,7 @@ void verify_durable_reply_relay_single_winner ()
               stateful::raw_relocation_replay_coordinator_t::clock_t::now ()
                 + 2ms)
             == 1);
+    assert (!source_coordinator.next_activity ());
     assert (target.send_reply_relay (
               source_descriptor.node_routing_id, relay, reply)
               .result ()
@@ -7287,6 +7426,7 @@ int main ()
     verify_verified_remote_stream_binding ();
     verify_message_follow_route_admission_and_suppression ();
     verify_actor_commit_is_replayable_until_deadline ();
+    verify_reconcile_management_deadline_advances_after_each_attempt ();
     verify_terminal_journal_preserves_outstanding_entries ();
     verify_unbounded_actor_handoff_backlog ();
     verify_public_host_dispatches_one_application_record_per_turn ();
@@ -7294,6 +7434,8 @@ int main ()
     verify_public_host_fifo_drains_before_liveness_probe ();
     verify_logical_multicast_continues_after_one_target_failure ();
     verify_local_application_enqueue_wakes_dispatch_wait ();
+    verify_pending_relocation_management_bounds_dispatch_wait ();
+    verify_failed_relay_persistence_rearms_dispatch_wait ();
     verify_root_location_session_seal_timeout_is_startup_snapshot ();
     verify_same_node_session_seal_waits_for_active_ingress ();
     verify_configured_session_seal_timeout_closes_actual_owner ();

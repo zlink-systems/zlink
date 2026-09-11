@@ -26,6 +26,13 @@ final class ZLinkSpotFlowFrame {
             .getBytes(StandardCharsets.UTF_8));
     }
 
+    static ZLinkFlowContext.State fromEnvelopeHeader(
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
+        return header.flowId() == null
+            ? null
+            : new ZLinkFlowContext.State(header.flowId(), header.flowOrigin());
+    }
+
     /**
      * Reads the inbound flow pair from a SPOT route message. A shared
      * cross-language envelope carries the pair in its JSON header

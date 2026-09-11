@@ -555,41 +555,45 @@ inline int recv_router_request (void *router_,
         return -1;
 
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    if (zlink_msg_init (payload_out_) != 0) {
-        if (bench_debug_enabled ())
-            std::cerr << "[perf-single-reqrep] payload init failed errno="
-                      << zlink_errno () << std::endl;
-        return -1;
-    }
-    const zlink_recv_result_t rc =
-      zlink_router_recv_part (router_, &source_rid, reply_token_out_, payload_out_,
-                              &has_more, ZLINK_RECV_FLAGS_NONE);
+    zlink_msg_t parts[2];
+    size_t part_count = 0;
+    const zlink_recv_result_t rc = zlink_router_recv (
+      router_, &source_rid, reply_token_out_, parts, 2u, &part_count,
+      ZLINK_RECV_FLAGS_NONE);
     if (rc != ZLINK_RECV_OK) {
-        zlink_msg_close (payload_out_);
         if (rc == ZLINK_RECV_NO_DATA)
             return 0;
         if (bench_debug_enabled ())
-            std::cerr << "[perf-single-reqrep] zlink_router_recv_part rc=" << rc
+            std::cerr << "[perf-single-reqrep] zlink_router_recv rc=" << rc
                       << " errno=" << zlink_errno () << std::endl;
         return -1;
     }
-    const bool is_stop = is_stop_token (zlink_msg_data (payload_out_), zlink_msg_size (payload_out_));
+    const bool is_stop =
+      is_stop_token (zlink_msg_data (&parts[0]), zlink_msg_size (&parts[0]));
     if (!source_rid || source_rid->size == 0
-        || (is_stop ? has_more != ZLINK_PART_FINAL
-                    : !perf_zlink_recv_measurement_tail (
-                        router_, has_more, ZLINK_RECV_FLAGS_NONE, perf_zlink_recv_next_router))) {
+        || (is_stop ? part_count != 1u
+                    : !perf_zlink_measurement_parts_valid (parts, part_count))) {
         if (bench_debug_enabled ())
             std::cerr << "[perf-single-reqrep] invalid router recv metadata source_rid="
                       << (source_rid ? static_cast<unsigned int> (source_rid->size) : 0)
-                      << " has_more=" << has_more
+                      << " part_count=" << part_count
                       << " reply_token=" << *reply_token_out_ << std::endl;
-        zlink_msg_close (payload_out_);
+        zlink_multipart_close (parts, part_count);
         return -1;
     }
     std::memset (source_rid_out_, 0, sizeof (*source_rid_out_));
     source_rid_out_->size = source_rid->size;
     std::memcpy (source_rid_out_->data, source_rid->data, source_rid->size);
+    if (zlink_msg_init (payload_out_) != 0) {
+        zlink_multipart_close (parts, part_count);
+        return -1;
+    }
+    if (zlink_msg_move (payload_out_, &parts[0]) != ZLINK_CONFIG_OK) {
+        zlink_msg_close (payload_out_);
+        zlink_multipart_close (parts, part_count);
+        return -1;
+    }
+    zlink_multipart_close (parts, part_count);
     return 1;
 }
 
@@ -626,56 +630,9 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
             continue;
         }
 
-        if (perf_measurement_part_count () == 2u) {
-#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
-            zlink_submit_result_t payload_rc = zlink_router_reply_part (
-#else
-            zlink_submit_result_t payload_rc = zlink_reply_part (
-#endif
-              router_, &source_rid, reply_token, &request, ZLINK_PART_MORE);
-            if (payload_rc != ZLINK_SUBMIT_OK) {
-                if (state_->stop.load (std::memory_order_acquire))
-                    return;
-                mark_reply_fatal (state_, "reply_payload_more", payload_rc,
-                                  zlink_errno ());
-                return;
-            }
-            zlink_submit_result_t final_rc = ZLINK_SUBMIT_BACKPRESSURED;
-            const auto retry_deadline = std::chrono::steady_clock::now ()
-                                      + std::chrono::milliseconds (
-                                        resolve_completion_drain_timeout_ms ());
-            while (final_rc == ZLINK_SUBMIT_BACKPRESSURED
-                   && std::chrono::steady_clock::now () < retry_deadline
-                   && !state_->stop.load (std::memory_order_acquire)) {
-                zlink_msg_t empty_part;
-                if (zlink_msg_init (&empty_part) != 0) {
-                    mark_reply_fatal (state_, "reply_final_init", -1,
-                                      zlink_errno ());
-                    return;
-                }
-#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
-                final_rc = zlink_router_reply_part (
-#else
-                final_rc = zlink_reply_part (
-#endif
-                  router_, &source_rid, reply_token, &empty_part, ZLINK_PART_FINAL);
-                if (final_rc == ZLINK_SUBMIT_BACKPRESSURED)
-                    std::this_thread::yield ();
-            }
-            if (final_rc != ZLINK_SUBMIT_OK) {
-                if (state_->stop.load (std::memory_order_acquire))
-                    return;
-                mark_reply_fatal (state_, "reply_final", final_rc,
-                                  zlink_errno ());
-                return;
-            }
-            state_->replied.fetch_add (1, std::memory_order_relaxed);
-            continue;
-        }
-
-        // The reply submit consumes its part even when it reports
-        // backpressure. Keep a shared-storage copy so a retry preserves the
-        // request metric payload without copying the bytes on the hot path.
+        // Whole-record submission consumes every part even on backpressure.
+        // Keep a shared-storage payload template and rebuild the complete
+        // one- or two-part measurement record for every retry.
         zlink_msg_t retry_template;
         const bool retry_template_initialized = zlink_msg_init (&retry_template) == 0;
         if (!retry_template_initialized
@@ -690,12 +647,8 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
             return;
         }
 
-#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
-        zlink_submit_result_t reply_rc = zlink_router_reply_part (
-#else
-        zlink_submit_result_t reply_rc = zlink_reply_part (
-#endif
-          router_, &source_rid, reply_token, &request, ZLINK_PART_FINAL);
+        zlink_submit_result_t reply_rc = perf_zlink_router_reply_measurement_part (
+          router_, &source_rid, reply_token, &request);
         if (reply_rc == ZLINK_SUBMIT_BACKPRESSURED) {
             const auto retry_deadline =
               std::chrono::steady_clock::now ()
@@ -717,12 +670,8 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
                     return;
                 }
                 std::this_thread::yield ();
-#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
-                reply_rc = zlink_router_reply_part (
-#else
-                reply_rc = zlink_reply_part (
-#endif
-                  router_, &source_rid, reply_token, &retry, ZLINK_PART_FINAL);
+                reply_rc = perf_zlink_router_reply_measurement_part (
+                  router_, &source_rid, reply_token, &retry);
             }
         }
         zlink_msg_close (&retry_template);

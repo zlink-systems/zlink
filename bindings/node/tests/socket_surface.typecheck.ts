@@ -7,6 +7,13 @@ const pub = zlink.createPubSocket(ctx);
 const dealer = zlink.createDealerSocket(ctx);
 const router = zlink.createRouterSocket(ctx);
 const stream = zlink.createStreamSocket(ctx);
+const readableHandler: zlink.ZLinkReadableHandler = () => {};
+const baseSocket: zlink.BaseSocket = pair;
+const readableRegistration: void = baseSocket.setReadableHandler(readableHandler);
+dealer.setReadableHandler(readableHandler);
+router.setReadableHandler(readableHandler);
+stream.setReadableHandler(readableHandler);
+void readableRegistration;
 const monitor = pair.monitorOpen();
 const monitorSource: zlink.SocketMonitor = monitor;
 const pollableMonitor: zlink.Pollable = monitorSource;
@@ -25,24 +32,29 @@ const messageMoveResult: void = messageSource.move(messageDestination);
 void messageMoveResult;
 messageDestination.close(); messageClone.close(); messageCopy.close(); messageSource.close();
 
-const pairSend: Promise<void> = pair.send().message('one').message('two').submit();
+const pairSend: zlink.SendSubmission = pair.send().message('one').message('two').submit();
 const pairSync: void = pair.send().message('sync').submit_sync();
-const dealerSend: Promise<void> = dealer.send().message('dealer').submit();
+const dealerSend: zlink.SendSubmission = dealer.send().message('dealer').submit();
 const dealerSync: void = dealer.send().message('dealer').submit_sync();
-const routerSend: Promise<void> = router.send(routingId).message('router').submit();
+const routerSend: zlink.SendSubmission = router.send(routingId).message('router').submit();
 const routerSync: void = router.send(routingId).message('router').submit_sync();
-const streamSend: Promise<void> = stream.send(routingId).message('stream').submit();
+const streamSend: zlink.SendSubmission = stream.send(routingId).message('stream').submit();
 const streamSync: void = stream.send(routingId).message('stream').submit_sync();
 void pairSend; void pairSync; void dealerSend; void dealerSync;
 void routerSend; void routerSync; void streamSend; void streamSync;
 
-const dealerRequest: Promise<zlink.Message[]> = dealer.request()
+const dealerRequest: zlink.RequestSubmission = dealer.request()
   .message('request').timeout(1000).submit();
 const dealerRequestSync: zlink.Message[] = dealer.request()
   .message('request').submit_sync();
-const routerRequest: Promise<zlink.Message[]> = router.request(routingId)
+const routerRequest: zlink.RequestSubmission = router.request(routingId)
   .message('request').timeout(1000).submit();
 void dealerRequest; void dealerRequestSync; void routerRequest;
+const submitResult: zlink.SubmitResult = pairSend.result;
+const sendAdmitted: Promise<void> = pairSend.admitted;
+const requestAdmitted: Promise<void> = dealerRequest.admitted;
+const requestReply: Promise<zlink.Message[]> = dealerRequest.reply;
+void submitResult; void sendAdmitted; void requestAdmitted; void requestReply;
 
 const received = new zlink.Received();
 router.recv(received, zlink.RecvFlags.DontWait);
@@ -94,6 +106,10 @@ stream.trySend(routingId);
 stream.setPacketHandler(() => {});
 // @ts-expect-error monitor is pull-only
 monitor.onEvent(() => {});
+// @ts-expect-error readable handlers have no error argument
+pair.setReadableHandler((error: Error) => {});
+// @ts-expect-error readiness has no separate removal surface
+pair.removeReadableHandler();
 // @ts-expect-error timer is pull-only
 timer.onFire(() => {});
 // @ts-expect-error reply tokens have no public constructor

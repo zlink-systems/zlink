@@ -54,7 +54,7 @@ public crate API.
 - Public contract source: `bindings/rust/src/contracts/`.
 - Crate projection: `lib.rs`'s public re-exports and the rustdoc for public modules.
 - Runtime implementation: private modules under `bindings/rust/src/runtime/`.
-- Native bridge: private modules under `bindings/rust/src/runtime/native/` — raw handles, callback trampolines, request-progress helpers, part-loop helpers.
+- Native bridge: private modules under `bindings/rust/src/runtime/native/` — raw handles, callback trampolines, request-progress helpers, and whole-message array helpers.
 - Concrete crate-private resource storage lives in `bindings/rust/src/internal.rs`. Contract files may reference this storage's types but never import runtime resource types directly. FFI declarations and native calls stay under `runtime/`.
 - Documentation's role: this README defines the shape and semantic coverage. The public crate export owns the exact member list. Each public item must still map to one of the common contract categories.
 
@@ -85,7 +85,7 @@ The tree below is the aligned implementation structure. Public structs,
 enums, traits, errors, free functions, and builder contracts belong to
 `contracts/` and are intentionally re-exported from `lib.rs`. FFI bindings,
 native struct mirrors, callback trampolines, request-progress helpers,
-marshalling, and the unsafe part loop stay private under `runtime/`. The
+marshalling, and unsafe whole-message array handling stay private under `runtime/`. The
 crate-private storage module holds only the concrete state a public
 wrapper must own, and neither declares nor calls the FFI surface.
 
@@ -178,7 +178,7 @@ The public projection of a Core capability follows these principles.
 1. Choose the common contract category that will own the public behavior.
 2. Add the public type, method, or function to the module that safely owns it, and update the `lib.rs` re-export projection if it must be visible at the crate root.
 3. Add a concrete public type or method first, and add a trait only if a genuinely substitutable behavior is needed.
-4. Keep `unsafe`, raw handles, callback userdata, and the part loop inside private modules.
+4. Keep `unsafe`, raw handles, callback userdata, and whole-message array handling inside private modules.
 5. A fallible operation returns a `Result` carrying typed error information.
 6. Add a test that uses the public crate projection.
 7. Update samples and perf only through the public API.
@@ -242,7 +242,7 @@ with public inherent methods, plus private helpers in `runtime/`.
 - Public structs, enums, traits, errors, and builder contracts belong to their matching `contracts/` category, and are re-exported from `lib.rs` when public.
 - A public free function, associated helper function, convenience method, or builder helper method belongs to a public module when the caller can use it directly.
 - The public inherent `impl` block of a native-backed public resource lives in the contract-owned file; its body may thinly delegate to a `pub(crate)` runtime helper.
-- Runtime handle owners, the request pump, callback adapters, and part-loop helpers stay private or `pub(crate)`.
+- Runtime handle owners, the request pump, callback adapters, and whole-message array helpers stay private or `pub(crate)`.
 - FFI bindings, raw pointers, native struct mirrors, marshalling helpers, and platform loading code stay inside a private FFI/runtime owner.
 - `lib.rs` and public rustdoc modules project the contract categories and never expose a runtime module.
 - A runtime concrete type is a construction target behind a crate root constructor or contract method. `lib.rs` may import a runtime module only to wire up such a constructor, and public signatures use contract names.
@@ -467,7 +467,7 @@ logical spot.
 ## Performance policy
 
 - The hot path does not use avoidable dynamic dispatch, avoidable allocation, avoidable byte copies, hidden sleeps, busy waits, broad locks, or thread joins.
-- FFI bridge code must materialize public Rust values directly from the core part substrate.
+- FFI bridge code must materialize public Rust values from the array filled by one Core whole-message receive call.
 - It does not create a thread or timer per request when progress can be shared per handle.
 - Perf, samples, and tests use only the public crate API.
 
@@ -517,7 +517,7 @@ Rust exposes Actor and Spot route lookup results as public value types.
 
 Rust package information follows its [distribution metadata](../../../rust/Cargo.toml); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-Rust provides `submit_sync()` returning a blocking `Result` and `submit()` returning a runtime-independent `Future`.
+Rust provides `submit_sync()` returning a blocking `Result` and `submit()` returning a result object (`Result<SendSubmission>`/`Result<RequestSubmission>`: `result` and a boxed `admitted` future, plus a `reply` future for a request).
 Completion-wait lifetime ends through Future drop or executor task abort.
 
 Native completion IDs, `user_context`, and raw drain are not public APIs.
@@ -552,18 +552,26 @@ impl std::fmt::Debug for ReplyToken {
     }
 }
 
+// `impl Trait` fields are not allowed on stable Rust, so start with boxed futures.
+pub struct SendSubmission {
+    pub result: SubmitResult,   // OK | BACKPRESSURED, submit-time snapshot
+    pub admitted: Pin<Box<dyn Future<Output = Result<(), SubmitError>> + Send>>,
+}
+
+pub struct RequestSubmission {
+    pub result: SubmitResult,
+    pub admitted: Pin<Box<dyn Future<Output = Result<(), SubmitError>> + Send>>,
+    pub reply: Pin<Box<dyn Future<Output = Result<Vec<Message>, ZlinkError>> + Send>>,
+}
+
 impl SendOp<Ready> {
-    pub fn submit(
-        self,
-    ) -> impl Future<Output = Result<(), SubmitError>> + Send;
+    pub fn submit(self) -> Result<SendSubmission, SubmitError>;
     pub fn submit_sync(self) -> Result<(), SubmitError>;
 }
 
 impl RequestOp<Ready> {
     pub fn timeout(self, timeout: Duration) -> Self;
-    pub fn submit(
-        self,
-    ) -> impl Future<Output = Result<Vec<Message>, ZlinkError>> + Send;
+    pub fn submit(self) -> Result<RequestSubmission, ZlinkError>;
     pub fn submit_sync(self) -> Result<Vec<Message>, ZlinkError>;
 }
 

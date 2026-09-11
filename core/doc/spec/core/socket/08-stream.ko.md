@@ -49,7 +49,7 @@ typedef enum zlink_stream_option_t
 
 typedef enum zlink_stream_recv_mode_t {
   ZLINK_STREAM_RECV_MODE_UNSPECIFIED = 0, // bind/connect할 수 없는 초기값
-  ZLINK_STREAM_RECV_MODE_RAW = 1,         // zlink_recv_part() 사용
+  ZLINK_STREAM_RECV_MODE_RAW = 1,         // zlink_recv() 사용
   ZLINK_STREAM_RECV_MODE_PACKET = 2       // zlink_stream_recv_packet() 사용
 } zlink_stream_recv_mode_t;
 
@@ -89,38 +89,34 @@ PACKET과 `NOTIFY=1`은 함께 사용할 수 없다. 두 설정 중 나중 호�
 
 | 언제 쓰는가 | 수신 모드 | 활성화 방법 | 전달 형태 |
 |---|---|---|---|
-| Application이 framing 없는 raw byte stream을 직접 다룰 때 | RAW | `ZLINK_STREAM_RECV_MODE_RAW` 설정 | `zlink_recv_part()`로 raw byte record를 받는다 |
+| Application이 framing 없는 raw byte stream을 직접 다룰 때 | RAW | `ZLINK_STREAM_RECV_MODE_RAW` 설정 | `zlink_recv()`로 raw byte record를 받는다 |
 | `header + body` framing이 있는 application protocol을 packet 단위로 받을 때 | PACKET | `ZLINK_STREAM_RECV_MODE_PACKET` 설정 | `zlink_stream_recv_packet()`으로 header/body packet을 받는다 |
 
-RAW는 `zlink_recv_part()`만, PACKET은 `zlink_stream_recv_packet()`만 허용한다. 다른 recv
+RAW는 `zlink_recv()`만, PACKET은 `zlink_stream_recv_packet()`만 허용한다. 다른 recv
 family는 `ZLINK_RECV_NOT_SUPPORTED`, `errno == ENOTSUP`이다. Receive mode는
 `ZLINK_POLLOUT`과 send 계약을 바꾸지 않는다.
 
-## 4. Routed part send
+## 4. Routed send
 
 ```c
-ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid (
-  void *s_,
-  const zlink_routing_id_t *target_rid_,
-  zlink_msg_t *part_,
-  zlink_send_flags_t flags_,
-  zlink_part_flag_t part_flag_,
-  void *user_context_,
-  zlink_completion_id_t *completion_id_out_);
+ZLINK_EXPORT zlink_submit_result_t zlink_send_rid (
+  void *s_, const zlink_routing_id_t *target_rid_,
+  zlink_msg_t *parts_, size_t part_count_, zlink_send_flags_t flags_,
+  void *user_context_, zlink_completion_id_t *completion_id_out_);
 ```
 
 `target_rid_`는 STREAM이 연결에 부여한 유효한 4 byte logical routing ID다.
-STREAM 송신은 `ZLINK_PART_FINAL`로 제출하는 단일 part다. 공통 인자 검증을 통과한
-`ZLINK_PART_MORE` 호출은
+STREAM 송신은 `part_count_ == 1`만 허용한다. 다른 수는
 `ZLINK_SUBMIT_NOT_SUPPORTED`, `errno == ENOTSUP`, completion ID `0`으로 거절하며
-입력 part를 소비하고 전송하지 않는다. 모든 호출은 성공과 실패 모두 `part_`를 소비한다.
+모든 입력 슬롯을 소비하고 전송하지 않는다. 모든 호출은 성공과 실패 모두 모든 입력 슬롯을
+빈 initialized 상태로 만든다.
 
 송신 호출의 경계는 peer의 수신 경계를 보장하지 않는다. Application의 메시지 경계는
 wire framing으로 정하며, PACKET 수신의 header/body는 [§6](#6-packet-receive와-framing)의
-한 packet을 구성한다. 이는 송신 multipart sequence가 아니다.
+한 packet을 구성한다.
 
-`NONE FINAL`은 `SNDTIMEO`를 snapshot해 같은 RID의 local queue admission을
-기다린다. `DONTWAIT FINAL`은 admission을 한 번만 시도한다. 즉시 admission되면 ID `0`과
+`NONE`은 `SNDTIMEO`를 snapshot해 같은 RID의 local queue admission을
+기다린다. `DONTWAIT`은 admission을 한 번만 시도한다. 즉시 admission되면 ID `0`과
 completion 없음이다. HWM·byte credit 때문에 admission하지 못하거나 연결은 있지만 아직 준비되지
 않았으면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID에 묶인 nonzero wait token을 반환하며
 payload는 유지하지 않는다. `target_rid_`에 해당하는 연결이 없으면 즉시
@@ -134,7 +130,7 @@ token은 `ZLINK_SEND_TERMINAL`+`ENOTCONN`인 WRITABLE record로 끝난다. 재�
 사용한다. socket close·context 종료는 token을
 내부에서 끝내며 record를 전달하지 않는다([§7](#7-completion과-thread-safety)). ID `0` 뒤에는 application
 payload를 replay하지 않는다. 상세 ownership·result·errno는
-[소켓 공통](README.ko.md#part-send와-pending-admission)을 따른다.
+[소켓 공통](README.ko.md#whole-message-send와-pending-admission)을 따른다.
 
 여러 client가 연결된 STREAM에서 `ZLINK_POLLOUT`은 socket 전체의 집계 readiness이며
 특정 `target_rid_`의 credit을 예약하거나 그 RID를 event에 싣지 않는다. 다른 client가
@@ -143,34 +139,34 @@ Target별 정확한 신호는 `peer_rid`로 식별되는 `ZLINK_COMPLETION_WRITA
 WRITABLE record가 있는 동안 `ZLINK_POLLOUT`과 `ZLINK_POLLCOMPLETION`은 level로 유지된다. 이
 record는 `zlink_completion_recv()`로 받는다.
 
-유효한 `target_rid_`에 길이 0인 part를 routed 송신하면 byte record를 보내지 않고 해당
-peer 연결의 종료를 요청한다. 성공 시 이 길이 0 part도 소비된다.
+유효한 `target_rid_`에 길이 0인 단일 part를 routed 송신하면 byte record를 보내지 않고 해당
+peer 연결의 종료를 요청한다. 성공 시 이 입력 슬롯도 소비된다.
 
 연결을 찾을 수 없으면 `ZLINK_SUBMIT_NOT_CONNECTED`를 반환한다. 전체 결과 대응은
 [errno map](../03-errors.ko.md#result와-errno-대응)을 따른다.
 
-## 5. Raw part receive
+## 5. Raw receive
 
 ```c
-ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (
+ZLINK_EXPORT zlink_recv_result_t zlink_recv (
   void *s_,
   const zlink_routing_id_t **source_rid_out_,
-  zlink_msg_t *part_out_,
-  zlink_part_flag_t *has_more_out_,
+  zlink_msg_t *parts_out_,
+  size_t parts_capacity_,
+  size_t *part_count_out_,
   zlink_recv_flags_t flags_);
 ```
 
-`part_out_`은 초기화된 message여야 하며 `has_more_out_`과 함께 필수다.
-`source_rid_out_`은 선택 사항이다. 성공하면 source client의 routing ID를 가리키는
+`parts_out_`과 `part_count_out_`은 필수이고 `source_rid_out_`은 선택 사항이다. 성공하면 source client의 routing ID를 가리키는
 Core 소유 borrowed view — Core가 소유한 memory를 잠시 빌려 읽는 참조 — 를 받는다.
 이 view가 같은 socket의 다음 data recv API 진입 뒤에도 필요하면 그 전에 복사해야 한다.
 
-성공하면 수신 part의 소유권이 호출자에게 이전되며 호출자는
-`zlink_msg_close(part_out_)`를 정확히 한 번 호출해야 한다. part를 받기 전에 실패하면
-소유권이 이전되지 않는다. RAW 수신 record는 단일 part이며, 성공 시
-`*has_more_out_`은 `ZLINK_PART_FINAL`이다. `ZLINK_RECV_FLAGS_DONTWAIT` 호출에 데이터가 없으면
+RAW 수신 record는 단일 part다. 성공하면 `*part_count_out_ == 1`이고 앞 슬롯의 소유권이
+호출자에게 이전되며 호출자는 `zlink_multipart_close()`로 해제한다. 실패하면 소유권이 이전되지
+않는다. `parts_capacity_ < 1`이면 record를 소비하지 않고 필요한 수 `1`과
+`ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`를 반환한다. `ZLINK_RECV_FLAGS_DONTWAIT` 호출에 데이터가 없으면
 `ZLINK_RECV_NO_DATA`와 `EAGAIN`을 반환한다. `NONE`의 timeout·종료와 output 불변은
-[Socket 공통](README.ko.md#zlink_recv_part)의 data recv 계약을 따른다.
+[Socket 공통](README.ko.md#zlink_recv)의 data recv 계약을 따른다.
 
 ## 6. Packet receive와 framing
 
@@ -303,7 +299,7 @@ sequenceDiagram
     participant Eng as Engine
     participant Tr as Transport
 
-    App->>SS: zlink_send_part_rid(rid, data)
+    App->>SS: zlink_send_rid(rid, data)
     SS->>Eng: pipe_t::write()
     Eng->>Tr: raw_encode (passthrough byte, framing 없음)
     Tr->>Tr: ws::write
@@ -429,7 +425,7 @@ write는 `ZLINK_OPT_SNDBUF`, 양쪽은 `ZLINK_OPT_MAXMSGSIZE`가 더 작으면 �
 **생성, bind/connect와 수신 모드**
 - 기본 `UNSPECIFIED` 상태의 bind와 connect는 각각 `ZLINK_BIND_INVALID_ARGUMENT`+`EINVAL`,
   `ZLINK_CONNECT_INVALID_ARGUMENT`+`EINVAL`로 side effect 없이 실패한다.
-- Bind 또는 connect 전에 RAW를 설정하면 성공하고 `zlink_recv_part()`만 허용되며 PACKET recv는
+- Bind 또는 connect 전에 RAW를 설정하면 성공하고 `zlink_recv()`만 허용되며 PACKET recv는
   `ZLINK_RECV_NOT_SUPPORTED`+`ENOTSUP`이다.
 - Bind 또는 connect 전에 PACKET을 설정하면 성공하고 `zlink_stream_recv_packet()`만 허용되며
   raw recv는 `ZLINK_RECV_NOT_SUPPORTED`+`ENOTSUP`이다.
@@ -440,15 +436,14 @@ write는 `ZLINK_OPT_SNDBUF`, 양쪽은 `ZLINK_OPT_MAXMSGSIZE`가 더 작으면 �
 - RAW에서 `NOTIFY=1`이면 연결·해제가 길이 0 DATA record와 source RID로 반환되고, PACKET은
   monitor pull로 연결·해제 상태와 RID를 받는다.
 
-**Routed part send**
-- 나머지 인자가 유효한 `ZLINK_PART_MORE` 송신은 `ZLINK_SUBMIT_NOT_SUPPORTED`+`ENOTSUP`, ID `0`으로 거절하고
-  입력을 소비한다. 거절된 bytes는 전송하지 않으며, 다음 `FINAL` 송신은 독립적으로 성공한다.
-- 유효한 target routing ID에 길이 0 part를 보내면 peer 연결 종료를 요청하고 part를
-  소비한다.
-- 성공과 실패 모두 `part_`를 소비해 empty initialized 상태로 둔다.
-- `NONE FINAL`은 진입 시 `SNDTIMEO`를 snapshot해 같은 logical RID의 local admission을 기다리고
+**Routed send**
+- `part_count_ != 1`이면 `ZLINK_SUBMIT_NOT_SUPPORTED`+`ENOTSUP`, ID `0`으로 거절하고 모든 입력
+  슬롯을 소비하며 bytes를 전송하지 않는다.
+- 유효한 target routing ID에 길이 0인 단일 part를 보내면 peer 연결 종료를 요청한다.
+- 성공과 실패 모두 모든 입력 슬롯을 소비해 empty initialized 상태로 둔다.
+- `NONE`은 진입 시 `SNDTIMEO`를 snapshot해 같은 logical RID의 local admission을 기다리고
   ID `0`·completion 없음으로 끝난다.
-- `DONTWAIT FINAL`은 즉시 admission되면 ID `0`과 completion 없음이다. HWM·credit 또는 준비되지
+- `DONTWAIT`은 즉시 admission되면 ID `0`과 completion 없음이다. HWM·credit 또는 준비되지
   않은 연결 때문에 거절되면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID의 nonzero wait
   token이며 payload는 유지되지 않는다.
 - 같은 RID에 write credit이 생기면 그 token의 `ZLINK_COMPLETION_WRITABLE` record
@@ -460,10 +455,11 @@ write는 `ZLINK_OPT_SNDBUF`, 양쪽은 `ZLINK_OPT_MAXMSGSIZE`가 더 작으면 �
   발행하며, ID `0` 뒤에는 payload를 replay하지 않는다.
 - 연결을 찾을 수 없으면 즉시 `ZLINK_SUBMIT_NOT_CONNECTED`, ID `0`이고 token이 없다.
 
-**Raw part receive**
-- 성공하면 part 소유권이 호출자에게 이전되고 `zlink_msg_close`를 정확히 한 번
-  호출해야 하며, part를 받기 전에 실패하면 소유권이 이전되지 않는다.
-- RAW 수신 성공 시 `*has_more_out_`은 `ZLINK_PART_FINAL`이다.
+**Raw receive**
+- 성공하면 `*part_count_out_ == 1`이고 앞 슬롯 소유권이 호출자에게 이전되어
+  `zlink_multipart_close()`로 해제한다. 실패하면 소유권이 이전되지 않는다.
+- `parts_capacity_ < 1`이면 필요한 수 `1`과 `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`를 반환하고
+  record를 소비하지 않는다.
 - `DONTWAIT` 또는 `NONE` timeout에 데이터가 없으면 `ZLINK_RECV_NO_DATA`+`EAGAIN`이다.
 - `source_rid_out_`의 borrowed view는 같은 socket의 다음 data recv 진입 또는 close까지 유효하며,
   poller/completion/monitor recv와 다른 socket의 data recv는 이를 무효화하지 않는다.

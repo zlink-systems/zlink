@@ -59,13 +59,13 @@ public sealed class test_optimization_guard
     }
 
     [Fact]
-    public void request_uses_unified_core_part_api_without_binding_registry()
+    public void request_uses_whole_message_core_api_without_binding_registry()
     {
         string path = Path.Combine(BindingRoot(), "src", "Zlink", "Runtime",
             "Messaging", "CompletionOwner.cs");
         string source = File.ReadAllText(path);
 
-        Assert.Contains("NativeMethods.zlink_request_part(", source,
+        Assert.Contains("NativeMethods.zlink_request(", source,
             StringComparison.Ordinal);
         Assert.DoesNotContain("SelectRouterTarget", source,
             StringComparison.Ordinal);
@@ -129,7 +129,7 @@ public sealed class test_optimization_guard
         string source = File.ReadAllText(path);
 
         int requestPath = source.IndexOf(
-            "internal Task<IReadOnlyList<Message>> RequestAsync",
+            "internal RequestSubmission RequestAsync",
             StringComparison.Ordinal);
         int firstAttempt = source.IndexOf(
             "var attempt = SubmitRequest(target, parts, timeoutMs, DontWait,",
@@ -189,22 +189,20 @@ public sealed class test_optimization_guard
     }
 
     [Fact]
-    public void perf_measurement_async_helpers_keep_completed_task_fast_path()
+    public void perf_measurement_helpers_branch_on_submit_result()
     {
         string path = Path.Combine(BindingRoot(), "perf", "common",
             "Zlink.BindingBench.Common", "PerfSocketIo.cs");
         string source = File.ReadAllText(path);
 
         Assert.Equal(4, Regex.Matches(source,
-            @"public static Task SendMeasurementAsync\(").Count);
-        Assert.DoesNotContain("async Task<int> SendMeasurementAsync", source,
+            @"public static SendSubmission SendMeasurementAsync\(").Count);
+        Assert.DoesNotContain("IsCompleted", source,
             StringComparison.Ordinal);
-        Assert.Contains("if (!submit.IsCompletedSuccessfully)", source,
+        Assert.Contains("submission.Result == SubmitResult.Backpressured", source,
             StringComparison.Ordinal);
-        Assert.Contains("return Task.CompletedTask;", source,
+        Assert.Contains("submission.Admitted", source,
             StringComparison.Ordinal);
-        Assert.Contains("AwaitMeasurementSendAsync(submit, tail, ownedMessage)",
-            source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -236,9 +234,12 @@ public sealed class test_optimization_guard
             Assert.Contains(
                 "for (int attempts = 0; attempts < slots.Length; attempts++)",
                 source, StringComparison.Ordinal);
-            Assert.Contains("if (!TryCompletePendingAdmission(slot))", source,
+            Assert.Contains("if (slot.AdmissionPending)", source,
                 StringComparison.Ordinal);
-            Assert.Contains("slot.PendingAdmission =", source,
+            Assert.Contains(
+                "while (Stopwatch.GetTimestamp() < benchDeadlineTicks)", source,
+                StringComparison.Ordinal);
+            Assert.Contains("submission.Result == SubmitResult.Ok", source,
                 StringComparison.Ordinal);
             Assert.Contains("admissionSignal.Track(tracked)", source,
                 StringComparison.Ordinal);
@@ -258,6 +259,10 @@ public sealed class test_optimization_guard
                 StringComparison.Ordinal);
             Assert.DoesNotContain("WaitingForReply", source,
                 StringComparison.Ordinal);
+            Assert.DoesNotContain("IsCompleted", source,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("TryCompletePendingAdmission", source,
+                StringComparison.Ordinal);
         }
 
         string signal = File.ReadAllText(Path.Combine(sourceRoot,
@@ -267,6 +272,25 @@ public sealed class test_optimization_guard
         Assert.Contains("TaskCreationOptions.RunContinuationsAsynchronously",
             signal, StringComparison.Ordinal);
         Assert.DoesNotContain("Task.Delay", signal,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void single_request_perf_waits_only_for_backpressured_admission()
+    {
+        string path = Path.Combine(BindingRoot(), "perf", "single",
+            "Zlink.BindingBench", "src", "PerfReqRep.cs");
+        string source = File.ReadAllText(path);
+
+        Assert.Contains("RequestSubmission submission = submit(message);", source,
+            StringComparison.Ordinal);
+        Assert.Contains("SubmitResult.Backpressured", source,
+            StringComparison.Ordinal);
+        Assert.Contains("submission.Admitted.GetAwaiter().GetResult();", source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("completionPoller", source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(".IsCompleted", source,
             StringComparison.Ordinal);
     }
 

@@ -12,6 +12,8 @@ import {
   closeMessages
 } from './channel-envelope';
 import { tryDecodeChannelHeader } from './channel-envelope-inspection';
+// 같은 계약을 두 곳에 두지 않는다 — channel-multipart가 소유한다.
+import type { ZLinkMultipartAsyncSubmitOperation } from './channel-multipart';
 import type { ZLinkChannelEnvelopeHeader } from './channel-envelope';
 import {
   ZLinkReceiveTaskTracker,
@@ -37,10 +39,6 @@ interface ZLinkMultipartOperation<TNext> {
 
 interface ZLinkMultipartSubmitOperation extends ZLinkMultipartOperation<ZLinkMultipartSubmitOperation> {
   submit(): unknown;
-}
-
-interface ZLinkMultipartAsyncSubmitOperation extends ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation> {
-  submit(): Promise<void>;
 }
 
 type ZLinkMultipartReplyOperation = ZLinkMultipartSubmitOperation;
@@ -259,14 +257,8 @@ export class ZLinkChannelReceiveLoop {
       }
       const applicationJobPermit = await this.acquirePermit(capacitySignal);
       if (applicationJobPermit === undefined) break;
-      if (!this.poller.wait(0)) {
-        applicationJobPermit.releaseAfterInternalProcessing();
-        this.roundRobin?.setReady(this.receiveOwner, false);
-        this.roundRobin?.release(this.receiveOwner);
-        batch.reset();
-        await waitReceiveLoopIdle();
-        continue;
-      }
+      // Readiness can become stale while admission waits. The nonblocking
+      // recv below owns the empty-result check and returns the permit then.
       this.roundRobin?.setReady(this.receiveOwner, true);
       if (this.roundRobin?.tryAcquire(this.receiveOwner) === false) {
         applicationJobPermit.releaseAfterInternalProcessing();
@@ -821,15 +813,15 @@ export class ZLinkRouteReceiveLoop {
 }
 
 const RECEIVE_BATCH_MESSAGE_LIMIT = 64;
-const RECEIVE_BATCH_BYTE_LIMIT = 4n * 1024n * 1024n;
+const RECEIVE_BATCH_BYTE_LIMIT = 4 * 1024 * 1024;
 const RECEIVE_BATCH_TIME_LIMIT_MS = 2;
 
 class ZLinkReceiveBatchBudget {
   private messages = 0;
-  private bytes = 0n;
+  private bytes = 0;
   private startedAt = performance.now();
 
-  record(bytes: bigint): boolean {
+  record(bytes: number): boolean {
     this.messages += 1;
     this.bytes += bytes;
     return this.messages >= RECEIVE_BATCH_MESSAGE_LIMIT
@@ -844,7 +836,7 @@ class ZLinkReceiveBatchBudget {
 
   reset(): void {
     this.messages = 0;
-    this.bytes = 0n;
+    this.bytes = 0;
     this.startedAt = performance.now();
   }
 }
@@ -885,17 +877,17 @@ function waitReceiveLoopTurn(): Promise<void> {
 }
 
 
-function messageBytes(parts: readonly Message[]): bigint {
-  return parts.reduce((sum, part) => sum + messagePartBytes(part), 0n);
+function messageBytes(parts: readonly Message[]): number {
+  return parts.reduce((sum, part) => sum + messagePartBytes(part), 0);
 }
 
-function messagePartBytes(part: Message | undefined): bigint {
+function messagePartBytes(part: Message | undefined): number {
   if (part === undefined) {
-    return 0n;
+    return 0;
   }
   const size = (part as Message & { size?: () => number }).size;
   if (typeof size === 'function') {
-    return BigInt(size.call(part));
+    return size.call(part);
   }
-  return BigInt(part.data().byteLength);
+  return part.data().byteLength;
 }

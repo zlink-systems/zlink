@@ -37,7 +37,7 @@ export interface SocketNativeBinding {
   socketCompletionRecv: (socket: NativeHandle, flags: number) => NativeCompletion | null;
   socketReadableWatchStart: (
     socket: NativeHandle,
-    callback: (status: number) => void
+    callback: (status: number, nativeErrno?: number) => void
   ) => NativeHandle;
   socketReadableWatchStop: (watch: NativeHandle) => void;
   socketReply: (socket: NativeHandle, sourceRid: Buffer, replyToken: bigint, parts: unknown) => void;
@@ -55,12 +55,12 @@ export interface SocketNativeBinding {
   routerRecvMessage: (
     socket: NativeHandle,
     flags: number,
-    preferManagedSinglePart?: boolean,
+    preferManagedParts?: boolean,
     routingIdStorage?: Buffer | null
   ) => NativeReceivedRaw | null;
   routerRecvMessageNoWait: (
     socket: NativeHandle,
-    preferManagedSinglePart?: boolean,
+    preferManagedParts?: boolean,
     routingIdStorage?: Buffer | null
   ) => NativeReceivedRaw | null;
   socketBind: (socket: NativeHandle, endpoint: string) => void;

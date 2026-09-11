@@ -79,6 +79,7 @@ run_setup() {
         ZLINK_PERF_QUEUE="$TEST_ROOT/queue" \
         ZLINK_LOCAL_PACKAGE_ROOT="$TEST_ROOT/packages" \
         ZLINK_CORE_CACHE_DIR="$TEST_ROOT/core-cache" \
+        ZLINK_CORE_RELEASE_PLATFORM=linux-x64 \
         "$SESSION_SETUP" "$@"
 }
 
@@ -130,10 +131,13 @@ wait "$RUNNER_PID" 2>/dev/null || true
 RUNNER_PID=""
 rm "$TEST_ROOT/queue/runner.pid"
 
-mkdir -p "$TEST_ROOT/core-cache/0.17.5/linux-x64/share/zlink"
-printf '{"version":"0.17.5"}\n' >"$TEST_ROOT/core-cache/0.17.5/linux-x64/share/zlink/core-package-provenance.json"
+core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' "$SOURCE_ROOT/VERSION")
+mkdir -p "$TEST_ROOT/core-cache/$core_version/linux-x64/share/zlink"
+printf '{"version":"%s"}\n' "$core_version" \
+    >"$TEST_ROOT/core-cache/$core_version/linux-x64/share/zlink/core-package-provenance.json"
 mkdir -p "$TEST_ROOT/packages/nuget"
-touch "$TEST_ROOT/packages/nuget/Zlink.0.17.6.nupkg"
+dotnet_binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$SOURCE_ROOT/bindings/dotnet/VERSION")
+touch "$TEST_ROOT/packages/nuget/Zlink.$dotnet_binding_version.nupkg"
 printf '5200-5299,6200-6219\n' >"$TEST_ROOT/state/reserved"
 printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\ntmpfs 4096 0 4096 0%% /tmp\n' >"$TEST_ROOT/state/df.out"
 assert_success 'Core와 로컬 패키지 존재를 확인한다' run_setup --check

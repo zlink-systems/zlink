@@ -4,6 +4,7 @@ import ctypes
 import errno
 
 from ...contracts.sockets.codes import RecvResult, SocketType, SubmitResult
+from ...contracts.sockets.operations import RequestSubmission, SendSubmission
 from ...contracts.core.routing_id import RoutingId
 from ...contracts.messaging.received import (
     _reply_token_from_native,
@@ -53,7 +54,6 @@ from .socket_base import (
     _SubscriberSocket,
     _close_native_parts,
     _native_extension,
-    _part_flag,
     _submit_parts,
 )
 
@@ -188,7 +188,10 @@ class _ManagedSendOp:
             raise SubmitError(SubmitResult.INVALID_STATE, 0)
         payload = self._payload_or_raise()
         self._submitted = True
-        return self._socket._completion_owner.submit_send(self._routing_id, payload)
+        result, admitted = self._socket._completion_owner.submit_send(
+            self._routing_id, payload
+        )
+        return SendSubmission(result, admitted)
 
     def submit_sync(self) -> None:
         if self._submitted:
@@ -223,18 +226,15 @@ class _PublisherSendOp(_PublishOpBase):
             return None
         native_parts = _clone_payload(payload)
         part_count = len(native_parts)
-        for index, native in enumerate(native_parts):
-            rc = lib().zlink_publish_part(
-                self._socket._handle,
-                topic_bytes,
-                ctypes.byref(native),
-                int(self._flags),
-                _part_flag(index, part_count),
-            )
-            if rc != 0:
-                err = lib().zlink_errno()
-                _close_native_parts(native_parts, index)
-                _raise_result_error(SubmitError, SubmitResult, rc, err)
+        rc = lib().zlink_publish(
+            self._socket._handle,
+            topic_bytes,
+            native_parts,
+            part_count,
+            int(self._flags),
+        )
+        if rc != 0:
+            _raise_result_error(SubmitError, SubmitResult, rc, lib().zlink_errno())
         return None
 
 
@@ -321,10 +321,11 @@ class _RequestOp:
         if not self._parts:
             raise SubmitError(SubmitResult.INVALID_ARGUMENT, 0)
         self._submitted = True
-        return self._op_submit(
+        result, admitted, reply = self._op_submit(
             self._parts,
             _timeout_to_ms(self._timeout),
         )
+        return RequestSubmission(result, admitted, reply)
 
     def submit_sync(self):
         if self._submitted:
@@ -475,12 +476,12 @@ class RouterSocket(
         native_rid = _copy_routing_id(routing_id)
         rc, native_errno = _submit_parts(
             native_parts,
-            lambda part_ptr, part_flag: lib().zlink_reply_part(
+            lambda parts_ptr, part_count: lib().zlink_reply(
                 self._handle,
                 ctypes.byref(native_rid),
                 ctypes.c_uint64(_reply_token_value(token)),
-                part_ptr,
-                part_flag,
+                parts_ptr,
+                part_count,
             ),
         )
         if rc != int(SubmitResult.OK):
@@ -533,44 +534,41 @@ class RouterSocket(
         try:
             source_rid = ctypes.POINTER(ZlinkRoutingId)()
             token_value = ctypes.c_uint64()
-            native_parts = []
-            has_more = ctypes.c_int()
-            recv_flags = int(flags)
-            try:
-                while True:
-                    native_part = ZlinkMsg()
-                    rc = lib().zlink_msg_init(ctypes.byref(native_part))
-                    if rc != 0:
-                        _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
-                    rc = lib().zlink_router_recv_part(
-                        self._handle,
-                        ctypes.byref(source_rid),
-                        ctypes.byref(token_value),
-                        ctypes.byref(native_part),
-                        ctypes.byref(has_more),
-                        recv_flags,
+            capacity = 1
+            native_parts = (ZlinkMsg * capacity)()
+            while True:
+                part_count = ctypes.c_size_t()
+                rc = lib().zlink_router_recv(
+                    self._handle,
+                    ctypes.byref(source_rid),
+                    ctypes.byref(token_value),
+                    native_parts,
+                    capacity,
+                    ctypes.byref(part_count),
+                    int(flags),
+                )
+                if rc != int(RecvResult.BUFFER_TOO_SMALL):
+                    break
+                if part_count.value <= capacity:
+                    _raise_result_error(
+                        RecvError, RecvResult, RecvResult.INTERNAL_ERROR, errno.EPROTO
                     )
-                    if rc != 0:
-                        lib().zlink_msg_close(ctypes.byref(native_part))
-                        _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
-                    native_parts.append(native_part)
-                    if has_more.value == 0:
-                        break
-                    recv_flags = 1
-            except Exception:
-                _close_native_parts(native_parts)
-                raise
+                capacity = part_count.value
+                native_parts = (ZlinkMsg * capacity)()
+            if rc != int(RecvResult.OK):
+                _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
+            if part_count.value == 0 or part_count.value > capacity:
+                _raise_result_error(
+                    RecvError, RecvResult, RecvResult.INTERNAL_ERROR, errno.EPROTO
+                )
         except RecvError as ex:
             if int(flags) & 1 and ex.result == RecvResult.NO_DATA:
                 return False
             raise
         routing_id = _routing_id_bytes(source_rid.contents) if source_rid else None
-        parts_array = (ZlinkMsg * len(native_parts))()
-        for index, native_part in enumerate(native_parts):
-            parts_array[index] = native_part
         self._replace_router_received(
             received,
-            _ReceivedPartsOwner(parts_array, len(native_parts)),
+            _ReceivedPartsOwner(native_parts, part_count.value),
             routing_id,
             int(token_value.value),
         )
@@ -702,7 +700,7 @@ class XPubSocket(
         subscribed = ctypes.c_int()
         topic_buf = ctypes.create_string_buffer(256)
         topic_len = ctypes.c_size_t()
-        rc = lib().zlink_xpub_recv_part(
+        rc = lib().zlink_xpub_recv(
             self._handle,
             ctypes.byref(routing_id),
             ctypes.byref(subscribed),

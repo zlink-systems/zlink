@@ -2,7 +2,7 @@
 
 #include "service_scope.hpp"
 
-#include <map>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -44,7 +44,7 @@ class service_registry_t
         return descriptors.find (type) != descriptors.end ();
     }
 
-    std::map<std::type_index, service_descriptor_t> descriptors;
+    std::unordered_map<std::type_index, service_descriptor_t> descriptors;
 };
 
 class service_scope_state_t
@@ -58,8 +58,8 @@ class service_scope_state_t
     bool scoped_context;
     service_scope_kind_t kind;
     bool closed = false;
-    std::map<std::type_index, std::shared_ptr<void>> scoped_instances;
-    std::map<std::type_index, std::shared_ptr<void>> framework_dependencies;
+    std::unordered_map<std::type_index, std::shared_ptr<void>> scoped_instances;
+    std::unordered_map<std::type_index, std::shared_ptr<void>> framework_dependencies;
     std::vector<std::shared_ptr<void>> transient_instances;
 };
 

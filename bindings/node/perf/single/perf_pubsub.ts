@@ -243,7 +243,9 @@ async function runPubSubBenchmark(msgSize, options) {
     );
     waitForWorkerStatus(worker, 4);
     const result = collector.finish();
-    emitSingleSocketHwmDetail(sub, 'PUBSUB', options.transport, 'subscriber', msgSize);
+    emitSingleSocketHwmDetail(
+      subMonitor, sub, 'PUBSUB', options.transport, 'subscriber', msgSize
+    );
     return result;
   } finally {
     trace('closing');

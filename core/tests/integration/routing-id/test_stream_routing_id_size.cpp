@@ -83,11 +83,10 @@ void test_stream_auto_routing_id_size ()
     const zlink_routing_id_t *rid = NULL;
     zlink_msg_t received;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received));
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     zlink_recv_result_t recv_result = ZLINK_RECV_NO_DATA;
     for (int i = 0; i < 200 && recv_result == ZLINK_RECV_NO_DATA; ++i) {
-        recv_result = zlink_recv_part (server, &rid, &received, &has_more,
-                                       ZLINK_RECV_FLAGS_DONTWAIT);
+        recv_result = zlink_recv (server, &rid, &received, 1, &has_more, ZLINK_RECV_FLAGS_DONTWAIT);
         if (recv_result != ZLINK_RECV_NO_DATA)
             break;
 #if defined(ZLINK_HAVE_WINDOWS)
@@ -100,7 +99,7 @@ void test_stream_auto_routing_id_size ()
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, recv_result);
     TEST_ASSERT_NOT_NULL (rid);
     TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, rid->size);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_UINT64 (1, zlink_msg_size (&received));
     TEST_ASSERT_EQUAL_UINT8 ('x',
                              *static_cast<unsigned char *> (

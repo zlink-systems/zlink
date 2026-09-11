@@ -20,6 +20,32 @@ Issue ──> 브랜치 + worktree ──> 작업(사람 또는 codex job) ─�
 
 ## 2. 작업 등록 — GitHub Issue
 
+### 2.0 세 가지 일을 구분한다
+
+절차는 **main에 들어갈 변경**을 위한 것이다. 모든 일에 같은 무게를 씌우지 않는다.
+
+| 종류 | Issue | 브랜치·worktree | PR | 보드 |
+|---|---|---|---|---|
+| **main에 들어갈 변경** | 필요 | 필요 | 필요 | 올린다 |
+| **결함 발견** | 필요(고칠 때까지 열어 둔다) | 고칠 때 만든다 | 고칠 때 | 올린다 |
+| **버리는 실험·측정** | **만들지 않는다** | 필요하면 임시로 만들되 보드에 올리지 않는다 | **만들지 않는다** | 올리지 않는다 |
+
+**실험 결과가 남길 만하면 Issue 없이 그대로 PR을 연다.** main 보호가 요구하는 것은 PR이지 Issue가 아니다.
+그 PR 본문에 보고서 경로와 측정값을 근거로 적으면 추적에 충분하다. Issue를 만드는 경우는 따로 있다 —
+여러 세션·여러 사람에 걸치는 일, 지금 고치지 않고 나중에 할 일, 릴리스 범위 판단에 들어가야 할 일이다.
+즉 **실험 → (좋으면) PR**이 기본 경로이고, Issue는 그 일을 남에게 넘기거나 미뤄야 할 때 만든다.
+**Issue가 필요해지는 시점은 PR을 올릴 때다** — 먼저 만들 이유가 없다. worktree에서 바로 시작하고,
+PR 단계에서 추적이 필요하면 그때 등록해 연결한다. 미리 만드는 경우는 둘뿐이다: 오래 걸려서 진행 중에도
+보드에서 보여야 하는 일, 그리고 다른 사람이 이어받을 일.
+
+실험은 `.artifacts/codex/<이름>/`에 브리프와 보고서만 남긴다. 코드를 고쳐야 하면 worktree를 만들되
+Issue·PR·보드 없이 쓰고, 끝나면 [§4.3의 worktree 정리](#43-그-밖의-개발-스크립트)로 지운다. 실험에서
+**결함이 나오면 그때 Issue를 만든다** — 실험 자체를 Issue로 만들지 않는다.
+
+판단 기준은 하나다: **이 작업의 결과가 main에 남는가.** 남지 않으면 절차를 씌우지 않는다.
+
+### 2.1 Issue 작성
+
 - 모든 작업은 시작 전에 Issue로 등록한다. 제목은 한 줄 결과("무엇이 어떻게 되어야 한다"), 본문은
   **범위 / 완료 조건 / 근거** 세 항목이며 각 항목이 비어 있으면 안 된다. 근거는 결정 기록의 번호
   (`FB-nnn`·`D-nnn`)와 **파일 경로**(`doc/plan/fw-bench-worklog/decisions.ko.md#fb-056`처럼 절 anchor까지),
@@ -43,7 +69,8 @@ Issue ──> 브랜치 + worktree ──> 작업(사람 또는 codex job) ─�
 - **Project** = 보드 `ZLink`(https://github.com/users/zlink-systems/projects/1, 저장소 Projects 탭에도 연결).
   보드의 행은 **Issue만**이다(PR은 Issue의 연결 정보로 본다). Status `Todo → In progress → Review → Done`,
   필드 `area`(라벨과 같은 값, 자동 채움), `runner`(`astra` / `sol` / `direct` / 비움; 선택). 상태 전환의
-  주체는 **`work.sh` 하나**다(GitHub 내장 workflow는 같은 필드를 건드리지 않게 끈다). Project 갱신 실패는
+  주체는 **`work.sh`와 동등한 Windows `work.ps1` 진입점**이다(GitHub 내장 workflow는 같은 필드를
+  건드리지 않게 끈다). Project 갱신 실패는
   경고로 남기고 작업을 막지 않는다(§4.2).
 - 라벨은 §2의 두 축으로 끝내고 상태·runner는 Project 필드로만 관리한다.
 
@@ -63,7 +90,7 @@ Issue ──> 브랜치 + worktree ──> 작업(사람 또는 codex job) ─�
 binding 로컬 패키지(nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `systems.zlink:zlink*`, C++ `install/zlink-cpp`)는
 입력이 같으면 결과가 같으므로 해시로 공유한다(vcpkg binary cache·Conan cache와 같은 원리). 규칙:
 
-- **키** = `sha256(bindings/ 트리 해시 ‖ BINDINGS_VERSION ‖ Core 버전 ‖ scripts/local-package/ 트리 해시 ‖ 플랫폼
+- **키** = `sha256(bindings/ 트리 해시 ‖ 언어별 bindings/<language>/VERSION 값 map ‖ Core 버전 ‖ scripts/local-package/ 트리 해시 ‖ 플랫폼
   `<os>-<arch>` ‖ 도구 버전 id)` 앞 16자리. 도구 버전 id는 `build-wsl.sh`가 사용하는 컴파일러·SDK·Node·JDK
   버전을 한 줄로 합친 값이다(스크립트가 출력한다).
 - **깨끗한 트리에서만 공유**: `bindings/`·`scripts/local-package/`에 staged·unstaged·untracked 변경이 있으면
@@ -82,7 +109,7 @@ binding 로컬 패키지(nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `sys
   키와 baseline worktree의 키는 지우지 않는다. `work.sh done`은 링크만 지우고 캐시는 건드리지 않는다.
 - 문서 작업처럼 패키지가 필요 없는 Issue는 `work.sh start --no-packages`로 시작한다.
 
-### 4.2 명령 하나로 — `scripts/dev/work.sh`
+### 4.2 명령 하나로 — `scripts/dev/work.sh` / Windows `scripts/dev/work.ps1`
 
 절차를 잊지 않도록 단계마다 명령 하나로 묶는다. 사람도 감독자도 이 명령으로만 시작·제출·종료한다.
 **모든 명령은 재실행해도 안전하다**: 기존 Issue/branch/worktree/PR 상태를 먼저 조회해 끝난 단계는
@@ -99,6 +126,7 @@ binding 로컬 패키지(nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `sys
 - Project·milestone 갱신은 best-effort다: 권한이 없거나 통신이 실패하면 경고를 내고 로컬 단계는 계속한다.
   `status`는 로컬 정보를 항상 보여 준다.
 - `work.sh`가 생기기 전(§8)의 수동 절차는 §8에 적힌 명령 목록이다.
+- Windows에서는 같은 하위 명령과 옵션을 `powershell -File scripts/dev/work.ps1 ...`로 실행한다.
 
 ### 4.3 그 밖의 개발 스크립트
 

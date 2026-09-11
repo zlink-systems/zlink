@@ -51,7 +51,7 @@ final class RequestWaitTokenContractTest {
             for (int sequence = 0; sequence < REQUEST_COUNT; sequence++) {
                 try (Message request = Message.from(requestPayload(sequence))) {
                     replies.add(client.request().message(request)
-                        .timeout(REQUEST_TIMEOUT).submit().toCompletableFuture());
+                        .timeout(REQUEST_TIMEOUT).submit().reply().toCompletableFuture());
                 }
             }
 
@@ -87,7 +87,7 @@ final class RequestWaitTokenContractTest {
             CompletableFuture<List<Message>> future;
             try (Message request = Message.from("before-bind")) {
                 future = client.request().message(request)
-                    .timeout(REQUEST_TIMEOUT).submit().toCompletableFuture();
+                    .timeout(REQUEST_TIMEOUT).submit().reply().toCompletableFuture();
             }
             server.bind(endpoint);
             replyOnce(server, "before-bind-reply");
@@ -111,7 +111,7 @@ final class RequestWaitTokenContractTest {
             for (int sequence = 0; sequence < REQUEST_COUNT; sequence++) {
                 try (Message request = Message.from(requestPayload(sequence))) {
                     future = client.request().message(request)
-                        .timeout(REQUEST_TIMEOUT).submit().toCompletableFuture();
+                        .timeout(REQUEST_TIMEOUT).submit().reply().toCompletableFuture();
                 }
             }
             client.close();
@@ -138,12 +138,12 @@ final class RequestWaitTokenContractTest {
             CompletableFuture<Void> send;
             CompletableFuture<List<Message>> request;
             try (Message payload = Message.from("send-token")) {
-                send = client.send().message(payload).submit()
+                send = client.send().message(payload).submit().admitted()
                     .toCompletableFuture();
             }
             try (Message payload = Message.from("request-token")) {
                 request = client.request().message(payload)
-                    .timeout(REQUEST_TIMEOUT).submit().toCompletableFuture();
+                    .timeout(REQUEST_TIMEOUT).submit().reply().toCompletableFuture();
             }
 
             server.bind(endpoint);

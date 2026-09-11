@@ -8,6 +8,7 @@ import {
   TopicMessage,
   type MessageLike
 } from '../../contracts';
+import type { SendSubmission } from '../../contracts/messaging/operations';
 import { hasObservedManagedReceiveData } from '../../contracts/messaging/message';
 import { normalizeRoutingId, routingIdFromOwnedBuffer } from '../core/routing_id';
 import {
@@ -73,7 +74,7 @@ function isNativeReceivedBufferParts(
 export interface RoutedReceiveOperations {
   readonly replyOwner: object;
   send(routingId: Buffer, parts: readonly Message[]): void;
-  sendManaged(routingId: Buffer, parts: readonly Message[]): Promise<void>;
+  sendManaged(routingId: Buffer, parts: readonly Message[]): SendSubmission;
   reply(routingId: Buffer, token: ReplyToken, parts: readonly MessageLike[]): void;
 }
 
@@ -90,11 +91,9 @@ const routedReceiveContexts = new WeakMap<Received, RoutedReceiveContext>();
 export function routedReceivedPrefersManagedBuffer(target: Received): boolean {
   const parts = target.parts;
   // HOT PATH: a reusable Received reveals its stable consumer role. A data
-  // reader should avoid a second addon call on the next receive, while a
-  // relay consumes the native frame and therefore stays on the movable path.
-  return parts.length === 1
-    && parts[0].size() <= 64
-    && hasObservedManagedReceiveData(parts[0]);
+  // reader should avoid per-part addon calls on the next receive, while a
+  // relay consumes the native frames and therefore stays on the movable path.
+  return parts.length > 0 && parts.every(hasObservedManagedReceiveData);
 }
 
 export function routedReceivedRoutingBytes(target: Received): Buffer | null {
@@ -136,9 +135,12 @@ function materializeParts(parts: MessageSnapshot[]): Message[] {
 
 function materializeReceivedParts(raw: NativeReceivedRaw): Message[] {
   if (isNativeReceivedBufferParts(raw)) {
+    const routingId = (raw as NativeReceivedEnvelope).routingId;
     const messages = new Array<Message>(raw.length);
     for (let i = 0; i < raw.length; i += 1) {
-      messages[i] = messageFromOwnedBuffer(raw[i]);
+      messages[i] = routingId && routingId.length > 0
+        ? messageFromOwnedRoutedBuffer(raw[i], routingId)
+        : messageFromOwnedBuffer(raw[i]);
     }
     return messages;
   }
@@ -186,7 +188,7 @@ function materializeTopicParts(raw: NativeTopicMessageEnvelope): Message[] {
 export function materializeReceived(
   raw: NativeReceivedRaw,
   send?: (parts: readonly Message[]) => void,
-  sendManaged?: (parts: readonly Message[]) => Promise<void>
+  sendManaged?: (parts: readonly Message[]) => SendSubmission
 ): Received {
   const envelope = envelopeOf(raw);
   return createReceived(
@@ -199,7 +201,7 @@ export function materializeReceived(
           beginSend() {
             return createReceivedSendOperation(
               (parts: readonly Message[]): void => send(parts),
-              (parts: readonly Message[]): Promise<void> => sendManaged(parts)
+              (parts: readonly Message[]): SendSubmission => sendManaged(parts)
             );
           }
         }
@@ -211,7 +213,7 @@ export function materializeReceivedInto(
   target: Received,
   raw: NativeReceivedRaw,
   send?: (parts: readonly Message[]) => void,
-  sendManaged?: (parts: readonly Message[]) => Promise<void>
+  sendManaged?: (parts: readonly Message[]) => SendSubmission
 ): void {
   const envelope = envelopeOf(raw);
   replaceReceived(
@@ -225,7 +227,7 @@ export function materializeReceivedInto(
             beginSend() {
               return createReceivedSendOperation(
                 (parts: readonly Message[]): void => send(parts),
-                (parts: readonly Message[]): Promise<void> => sendManaged(parts)
+                (parts: readonly Message[]): SendSubmission => sendManaged(parts)
               );
             }
           }

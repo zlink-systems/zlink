@@ -1,0 +1,78 @@
+META,os,Linux 6.6.87.2-microsoft-standard-WSL2
+META,cpu,x86_64
+META,cores,16
+META,build,Release
+META,commit,59fe475de1
+META,core_source,release
+META,core_version,0.17.5
+META,core_runtime,/home/hep7hep7/.cache/zlink/core/0.17.5/linux-x64/lib/libzlink.so.0.17.5
+META,core_revision,766dd1bb6e860a45ac2268363b45e26533b1626b
+META,core_dirty,0
+META,core_release_tag,core/v0.17.5
+META,timestamp,2026-09-09T13:43:01+09:00
+META,runs,1
+
+## Effective Options (start)
+- lang: c
+- suite: single
+- runs: 1
+- duration_seconds: 1
+- timeout_seconds: 30
+- io_threads: 1
+- hwm: auto-hwm
+- sndhwm: auto-hwm
+- rcvhwm: auto-hwm
+- sndbuf: -1
+- rcvbuf: -1
+- sndtimeo_ms: 200
+- rcvtimeo_ms: 200
+- ctx_auto_hwm_enable: core-default
+- ctx_auto_hwm_profile: balanced
+- patterns: PAIR
+- transports: tcp
+- msg_sizes: 64
+## PATTERN: PAIR (one-way)
+  > Benchmarking current for PAIR...
+    Testing tcp:
+      | Size     |       Throughput |    Bandwidth |  Lat.Mean(ms) |   Lat.P95(ms) |   Lat.P99(ms) |
+      |----------|------------------|--------------|--------------|--------------|--------------|
+      | 64B      |   1465.44 Kmsg/s |    93.79 MB/s |     0.452 ms |     1.825 ms |     7.438 ms |
+    Testing tcp: Done
+
+## Effective Options (result)
+- lang: c
+- suite: single
+- runs: 1
+- duration_seconds: 1
+- timeout_seconds: 30
+- io_threads: 1
+- hwm: auto-hwm
+- sndhwm: auto-hwm
+- rcvhwm: auto-hwm
+- sndbuf: -1
+- rcvbuf: -1
+- sndtimeo_ms: 200
+- rcvtimeo_ms: 200
+- ctx_auto_hwm_enable: core-default
+- ctx_auto_hwm_profile: balanced
+- patterns: PAIR
+- transports: tcp
+- msg_sizes: 64
+
+## Result Data
+RESULT,current,PAIR,tcp,64,throughput,1465444.000
+RESULT,current,PAIR,tcp,64,bandwidth,93.788
+RESULT,current,PAIR,tcp,64,latency,0.452402
+RESULT,current,PAIR,tcp,64,latency_p95,1.824990
+RESULT,current,PAIR,tcp,64,latency_p99,7.437790
+
+## Completion
+- success: 1
+- unsupported: 0
+- skip: 0
+- fail: 0
+- status: complete
+- expected_result_lines: 5
+- actual_result_lines: 5
+
+Saved result file: /home/hep7hep7/project/zlink/doc/perf/perf/bindings-0.17.5/log/single/report/perf_c_single_linux_20260909_134300_c0175-java-single-smoke.txt (status=complete)

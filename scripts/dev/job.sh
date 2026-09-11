@@ -17,7 +17,7 @@ ERROR_PATTERN='^(ERROR|error)[: ]|^codex: |invalid_request_error|not supported w
 usage() {
     cat <<'EOF'
 사용법:
-  job.sh [--dry-run] start <이름> --worktree <경로> --brief <파일> [--read-only] [--model <모델>] [--effort high|medium|low] [--max-jobs N]
+  job.sh [--dry-run] start <이름> --worktree <경로> --brief <파일> [--read-only] [--model <모델>] [--effort xhigh|high|medium|low] [--max-jobs N]
   job.sh [--dry-run] status [--all] [<이름>]
   job.sh [--dry-run] watch [--interval 180]
   job.sh [--dry-run] kill <이름>
@@ -323,7 +323,7 @@ start_command() {
     fi
     worktree=$top
     case "$effort" in
-        high|medium|low) ;;
+        xhigh|high|medium|low) ;;
         *) die 2 "지원하지 않는 effort입니다: $effort" ;;
     esac
     [[ -n "$max_jobs" ]] || max_jobs=${ZLINK_MAX_JOBS:-5}

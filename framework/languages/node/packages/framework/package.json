@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/framework",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
@@ -19,7 +19,7 @@
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/api-logs": "^0.221.0",
-    "@zlink-systems/stream-wire": "0.11.0",
-    "@zlink-systems/zlink": "0.17.6"
+    "@zlink-systems/stream-wire": "0.11.1",
+    "@zlink-systems/zlink": "0.18.0"
   }
 }

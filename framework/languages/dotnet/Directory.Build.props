@@ -2,7 +2,7 @@
     <PropertyGroup>
         <ZLinkFrameworkTargetFrameworks Condition="'$(ZLinkFrameworkTargetFrameworks)' == ''">net8.0</ZLinkFrameworkTargetFrameworks>
         <ZLinkRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../..'))</ZLinkRepoRoot>
-        <ZLinkFrameworkVersionFile>$([System.IO.Path]::Combine('$(ZLinkRepoRoot)', 'FRAMEWORK_VERSION'))</ZLinkFrameworkVersionFile>
+        <ZLinkFrameworkVersionFile>$([System.IO.Path]::Combine('$(MSBuildThisFileDirectory)', 'VERSION'))</ZLinkFrameworkVersionFile>
         <ZLinkUseBindingsSource Condition="'$(ZLinkUseBindingsSource)' == ''">false</ZLinkUseBindingsSource>
         <ZLinkBindingsProject>$([System.IO.Path]::GetFullPath('$(ZLinkRepoRoot)/bindings/dotnet/src/Zlink/Zlink.csproj'))</ZLinkBindingsProject>
         <Version Condition="'$(Version)' == '' and Exists('$(ZLinkFrameworkVersionFile)')">$([System.IO.File]::ReadAllText('$(ZLinkFrameworkVersionFile)').Trim().Replace('ZLINK_FRAMEWORK_VERSION=', ''))</Version>

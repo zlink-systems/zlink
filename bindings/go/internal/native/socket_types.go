@@ -74,7 +74,7 @@ func newPairSocket(ctx *Context) (*PairSocket, error) {
 }
 
 func (s *PairSocket) Send() SendOp {
-	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
+	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) (SendSubmission, error) {
 		return submitManagedSend(ctx, s.socketCore, nil, parts)
 	})
 }
@@ -96,8 +96,8 @@ func newPubSocket(ctx *Context, socketType C.zlink_socket_type_t) (*PubSocket, e
 func (s *PubSocket) Publish(topic string) PublishOp {
 	return newPublishBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
 		return s.withCString(topic, func(cstr *C.char) error {
-			return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-				return submitErrorFromResult(C.zlink_publish_part(s.raw(), cstr, part, C.zlink_send_flags_t(flags), partFlag))
+			return submitMultipartFromBuilderParts(parts, func(native *C.zlink_msg_t, count C.size_t) error {
+				return submitErrorFromResult(C.zlink_publish(s.raw(), cstr, native, count, C.zlink_send_flags_t(flags)))
 			})
 		})
 	})
@@ -178,13 +178,13 @@ func (s *DealerSocket) SetRequestTimeout(value time.Duration) error {
 }
 
 func (s *DealerSocket) Send() SendOp {
-	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
+	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) (SendSubmission, error) {
 		return submitManagedSend(ctx, s.socketCore, nil, parts)
 	})
 }
 
 func (s *DealerSocket) Request() RequestOp {
-	return newRequestBuilder(func(ctx context.Context, parts []requestBuilderPart, timeout time.Duration) ([]*Message, error) {
+	return newRequestBuilder(func(ctx context.Context, parts []requestBuilderPart, timeout time.Duration) (RequestSubmission, error) {
 		return submitCompletionRequest(ctx, s.socketCore, nil, timeout, parts)
 	})
 }
@@ -291,8 +291,8 @@ func newXPubSocket(ctx *Context) (*XPubSocket, error) {
 func (s *XPubSocket) Publish(topic string) PublishOp {
 	return newPublishBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
 		return s.withCString(topic, func(cstr *C.char) error {
-			return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-				return submitErrorFromResult(C.zlink_publish_part(s.raw(), cstr, part, C.zlink_send_flags_t(flags), partFlag))
+			return submitMultipartFromBuilderParts(parts, func(native *C.zlink_msg_t, count C.size_t) error {
+				return submitErrorFromResult(C.zlink_publish(s.raw(), cstr, native, count, C.zlink_send_flags_t(flags)))
 			})
 		})
 	})
@@ -507,7 +507,7 @@ func (s *StreamSocket) RoutingID() (RoutingID, error) {
 }
 
 func (s *StreamSocket) SendTo(target RoutingID) SendOp {
-	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
+	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) (SendSubmission, error) {
 		return submitManagedSend(ctx, s.core.socketCore, &target, parts)
 	})
 }
@@ -521,7 +521,7 @@ func (s *StreamSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 	}
 	if out.routingID.Size() > 0 {
 		routingID := out.routingID
-		out.send = func(ctx context.Context, builderParts []sendBuilderPart) error {
+		out.send = func(ctx context.Context, builderParts []sendBuilderPart) (SendSubmission, error) {
 			return submitManagedSend(ctx, s.core.socketCore, &routingID, builderParts)
 		}
 	}

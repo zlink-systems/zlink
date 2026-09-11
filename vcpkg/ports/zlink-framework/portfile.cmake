@@ -1,9 +1,9 @@
 # Framework archives are static; dependencies retain the triplet's linkage.
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
-# SHA512 of the published framework/v0.11.0 source unit (cmake/prepare-source-archive.cmake).
+# SHA512 of the published framework-cpp/v0.11.0 source unit (cmake/prepare-source-archive.cmake).
 vcpkg_download_distfile(ARCHIVE
-    URLS "https://github.com/zlink-systems/zlink/releases/download/framework/v${VERSION}/zlink-framework-cpp-${VERSION}.tar.gz"
+    URLS "https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v${VERSION}/zlink-framework-cpp-${VERSION}.tar.gz"
     FILENAME "zlink-framework-cpp-${VERSION}.tar.gz"
     SHA512 350674d6953585938417942c87187ebe464fc0b2aba49a34b5d32c2ffae8141e217a7c9fd5915f4f6d9ccc9e50afc95c906d0ac0ed6f7bbeda14ddd6477ae3ba
 )
@@ -17,8 +17,8 @@ vcpkg_cmake_configure(
     OPTIONS
         -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=ON
         -DZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST=ON
-        -DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=0.17.6
-        -DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION=0.17.5
+        -DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=0.18.0
+        -DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION=0.18.0
         -DZLINK_FRAMEWORK_CPP_BUILD_TESTS=OFF
         -DZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS=OFF
         -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF

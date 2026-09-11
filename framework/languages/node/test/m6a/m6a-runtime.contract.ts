@@ -245,7 +245,9 @@ test('RouteMesh admission preserves an optional maintenance wave across updates'
 
 test('RouteMesh hello advertises the configured host instead of the bind host', async () => {
   const sent: Array<{ readonly target: string; readonly parts: readonly Uint8Array[] }> = [];
+  let readableHandler: (() => void) | undefined;
   const router = {
+    setReadableHandler(handler: () => void) { readableHandler = handler; },
     setRoutingId() {},
     setReceiveFlowState() {},
     bind(endpoint: string) {
@@ -280,6 +282,7 @@ test('RouteMesh hello advertises the configured host instead of the bind host', 
   backend.setAdvertiseHost('127.0.0.1');
   backend.start();
   try {
+    assert.equal(typeof readableHandler, 'function');
     await backend.connectPeer({
       endpoint: 'tcp://127.0.0.1:28731',
       expectedRid: 'peer-node'

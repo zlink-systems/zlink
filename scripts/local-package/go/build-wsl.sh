@@ -11,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Creates zlink-go-<BINDINGS_VERSION>.tar.gz containing the Go module source,
+Creates zlink-go-<bindings/go/VERSION>.tar.gz containing the Go module source,
 headers, and exact Core VERSION Linux runtime. The Go module path is
 zlink.systems/zlink.
 EOF
@@ -28,7 +28,7 @@ done
 [[ "$core_prefix" = /* ]] || { echo "--core-prefix must be absolute" >&2; exit 2; }
 core_prefix="$(readlink -f "$core_prefix")"
 core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
-binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
+binding_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$repo_root/bindings/go/VERSION")"
 export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
 export ZLINK_CORE_VERSION="$core_version"
 module_path="$(sed -n 's/^module //p' "$repo_root/bindings/go/go.mod" | head -n1)"

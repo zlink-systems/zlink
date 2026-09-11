@@ -40,28 +40,3 @@ inline void close_recv_parts (zlink_msg_t *parts, size_t part_count)
         return;
     zlink_multipart_close (parts, part_count);
 }
-
-template <typename Submit>
-inline int submit_msg_parts (zlink_msg_t *parts, size_t part_count, Submit submit)
-{
-    if (!parts || part_count == 0) {
-        errno = EFAULT;
-        return ZLINK_SUBMIT_INVALID_ARGUMENT;
-    }
-
-    for (size_t i = 0; i < part_count; ++i) {
-        const bool is_final = i + 1u == part_count;
-        const zlink_part_flag_t part_flag = is_final ? ZLINK_PART_FINAL : ZLINK_PART_MORE;
-        int rc = submit (&parts[i], part_flag, is_final);
-        if (rc != ZLINK_SUBMIT_OK) {
-            // Core consumes the attempted native part even when the record is
-            // rejected. Release the empty attempted slot and every untouched
-            // later slot in this staging copy; the JavaScript Message owners
-            // remain separate and untouched.
-            zlink_multipart_close (parts, part_count);
-            return rc;
-        }
-    }
-
-    return ZLINK_SUBMIT_OK;
-}

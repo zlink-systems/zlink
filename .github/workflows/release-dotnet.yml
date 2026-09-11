@@ -5,10 +5,11 @@ on:
     tags:
       - 'dotnet/v*'
       - 'framework/v*'
+      - 'framework-dotnet/v*'
   workflow_dispatch:
     inputs:
       target:
-        description: 'binding: Systems.Zlink from dotnet/v*; framework: the framework .NET packages from framework/v*'
+        description: 'binding: Systems.Zlink from dotnet/v*; framework: the framework .NET packages from framework-dotnet/v*'
         required: true
         default: 'binding'
         type: choice
@@ -16,7 +17,7 @@ on:
           - binding
           - framework
       version:
-        description: 'Version to release (binding 0.17.3 or framework 0.10.0)'
+        description: 'Version to release; must match the target binding or framework VERSION file'
         required: true
         type: string
 
@@ -55,15 +56,15 @@ jobs:
             exit 1
           fi
 
-          repository_binding_version=$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' BINDINGS_VERSION)
+          repository_binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/dotnet/VERSION)
           if [ "${version}" != "${repository_binding_version}" ]; then
-            echo "Binding version mismatch: requested=${version}, BINDINGS_VERSION=${repository_binding_version}" >&2
+            echo "Binding version mismatch: requested=${version}, bindings/dotnet/VERSION=${repository_binding_version}" >&2
             exit 1
           fi
 
-          project_version=$(sed -n 's/.*<Version>\(.*\)<\/Version>.*/\1/p' bindings/dotnet/src/Zlink/Zlink.csproj | head -n1)
-          if [ "${version}" != "${project_version}" ]; then
-            echo "Binding version mismatch: requested=${version}, Zlink.csproj=${project_version}" >&2
+          if ! grep -q 'ZLinkBindingVersionFile' bindings/dotnet/src/Zlink/Zlink.csproj ||
+             ! grep -q 'ZLINK_BINDING_VERSION=' bindings/dotnet/src/Zlink/Zlink.csproj; then
+            echo "Zlink.csproj no longer reads bindings/dotnet/VERSION" >&2
             exit 1
           fi
 
@@ -172,7 +173,7 @@ jobs:
           echo "::warning::symbol package (.snupkg) was not accepted after 30 attempts; the package itself is published"
 
   release-framework-dotnet:
-    if: startsWith(github.ref_name, 'framework/v') || (github.event_name == 'workflow_dispatch' && inputs.target == 'framework')
+    if: startsWith(github.ref_name, 'framework-dotnet/v') || startsWith(github.ref_name, 'framework/v') || (github.event_name == 'workflow_dispatch' && inputs.target == 'framework')
     name: Build and publish .NET framework packages
     runs-on: ubuntu-24.04
     steps:
@@ -185,7 +186,7 @@ jobs:
           REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
-            version="${GITHUB_REF_NAME#framework/v}"
+            version="${GITHUB_REF_NAME##*/v}"
           else
             version="${REQUESTED_VERSION}"
           fi
@@ -193,16 +194,24 @@ jobs:
             echo "Invalid framework version: ${version:-<missing>}" >&2
             exit 1
           fi
-          framework_version=$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' FRAMEWORK_VERSION)
+          framework_version=$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/dotnet/VERSION)
           if [ "${version}" != "${framework_version}" ]; then
-            echo "Framework version mismatch: requested=${version}, FRAMEWORK_VERSION=${framework_version}" >&2
+            echo "Framework version mismatch: requested=${version}, framework/languages/dotnet/VERSION=${framework_version}" >&2
             exit 1
           fi
-          # Directory.Build.props reads the root FRAMEWORK_VERSION file at build time (since
-          # 0.11.0), so the file above is the single declaration; only confirm the props still
-          # point at it.
+          # A legacy all-language tag must not partially publish when versions differ.
+          if [[ "${GITHUB_REF_NAME}" == framework/v* ]]; then
+            for language in cpp java node; do
+              declared=$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' "framework/languages/${language}/VERSION")
+              if [ "${declared}" != "${version}" ]; then
+                echo "Legacy framework tag requires matching ${language} version" >&2
+                exit 1
+              fi
+            done
+          fi
+          # Directory.Build.props reads the .NET-owned VERSION file at build time.
           if ! grep -q "ZLinkFrameworkVersionFile" framework/languages/dotnet/Directory.Build.props; then
-            echo "Directory.Build.props no longer reads FRAMEWORK_VERSION" >&2
+            echo "Directory.Build.props no longer reads its language VERSION" >&2
             exit 1
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
@@ -227,7 +236,11 @@ jobs:
           ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/.artifacts/wsl
         run: |
           mkdir -p "${ZLINK_LOCAL_PACKAGE_ROOT}/nuget"
-          binding_version=$(sed -n 's/.*<ZLinkBindingsPackageVersion[^>]*>\(.*\)<\/ZLinkBindingsPackageVersion>.*/\1/p' framework/languages/dotnet/Directory.Packages.props | head -n1)
+          binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/dotnet/VERSION)
+          if ! [[ "${binding_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid .NET binding version in bindings/dotnet/VERSION" >&2
+            exit 1
+          fi
           # nuget.org lists a freshly pushed package only after validation (minutes).
           url="https://api.nuget.org/v3-flatcontainer/zlink/${binding_version}/zlink.${binding_version}.nupkg"
           for attempt in $(seq 1 45); do

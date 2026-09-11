@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.11.0 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.11.1 LANGUAGES C CXX)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(
@@ -62,9 +62,9 @@ option(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST
 list(APPEND CMAKE_MODULE_PATH "${ZLINK_FRAMEWORK_CPP_DIR}/cmake")
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "0.17.6" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "0.18.0" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "0.17.5" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "0.18.0" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
 if(NOT ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT)
   if(WIN32 AND EXISTS "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/.artifacts/windows/install/zlink-cpp/${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION}")
@@ -893,6 +893,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink::cpp
     nlohmann_json::nlohmann_json
     Threads::Threads)
+  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_service_wire_codec)
   add_test(NAME test_cpp_framework_service_wire_codec
     COMMAND test_cpp_framework_service_wire_codec)
   set_tests_properties(test_cpp_framework_service_wire_codec PROPERTIES
@@ -1632,6 +1633,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp
     "framework-unit;framework-regression;messaging")
+  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_messaging)
   target_include_directories(test_cpp_framework_messaging PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_executable(test_cpp_framework_gtest_harness

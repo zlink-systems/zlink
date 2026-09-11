@@ -3,8 +3,8 @@
 
 // `zlink-framework-<lang>` server, node row.
 //
-// spec section 1.3: RouteMesh ROUTER<->ROUTER with a channel request handler and a
-// channel send handler. The host is `@zlink-systems/nestjs`, which is the public
+// spec section 1.3: RouteMesh ROUTER<->ROUTER with node-direct request and send
+// handlers. The host is `@zlink-systems/nestjs`, which is the public
 // way to stand up `packages/framework` -- the analogue of `.NET`'s
 // `Zlink.Framework.AspNetCore`. `packages/framework`'s `src/internal.ts` is
 // marked "not exported by package.json" and is not used: reaching into it would
@@ -15,13 +15,13 @@ const { Module, Injectable } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const { ZLinkModule, zlinkFramework } = require('@zlink-systems/nestjs');
 const {
-  createProtobufMessageSerializer,
   ZLINK_PROTOBUF_CONTENT_TYPE
 } = require('@zlink-systems/framework-codec-protobuf/framework');
 
 const { argValue } = require('../shared/args');
 const { BenchServerMetrics, startStatsServer } = require('../shared/bench-server-metrics');
 const contract = require('../shared/framework-bench-contract');
+const { createBenchPayloadSerializer } = require('../shared/framework-protobuf');
 
 const argv = process.argv.slice(2);
 const endpoint = argValue(argv, '--endpoint', 'tcp://127.0.0.1:5234');
@@ -30,7 +30,7 @@ const metricsUrl = argValue(argv, '--metrics-url', 'http://127.0.0.1:5235');
 const metrics = new BenchServerMetrics();
 
 class EchoHandler {
-  // spec section 2: `request-serial` and `request-window` echo the payload back so the
+  // spec section 2: request patterns echo the payload back so the
   // client can validate the 29-byte header it sent (G2).
   async handle(request) {
     metrics.record(toBuffer(request && request.body));
@@ -64,15 +64,14 @@ Module({
         const builder = zlinkFramework();
         builder.codecs().use({
           register: (codecs) => {
-            codecs.addSerializer(ZLINK_PROTOBUF_CONTENT_TYPE, createProtobufMessageSerializer());
+            codecs.addSerializer(ZLINK_PROTOBUF_CONTENT_TYPE, createBenchPayloadSerializer());
           }
         });
         const mesh = builder.addRouteMesh(contract.MESH_NAME)
           .listen(endpoint)
           .routingId(contract.SERVER_ROUTING_ID);
-        mesh.channel(contract.CHANNEL_NAME).server()
-          .addRequestHandler(contract.PACKET_NAME, EchoHandler)
-          .addSendHandler(contract.PACKET_NAME, CommandHandler);
+        mesh.addRequestHandler(contract.PACKET_NAME, EchoHandler);
+        mesh.addSendHandler(contract.PACKET_NAME, CommandHandler);
         return builder.build();
       }
     })

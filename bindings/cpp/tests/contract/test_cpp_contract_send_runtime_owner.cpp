@@ -66,9 +66,9 @@ void test_runtime_progress (bool transfer_from_public_, bool concurrent_request_
     if (concurrent_request_)
         request.emplace (await_request (
           dealer.request ().message (zlink::message_t::from ("request"))
-            .timeout (std::chrono::seconds (5)).async ()));
+            .timeout (std::chrono::seconds (5)).async ().reply));
     auto send = await_send (
-      dealer.send ().message (zlink::message_t::from ("send")).async ());
+      dealer.send ().message (zlink::message_t::from ("send")).async ().admitted);
     assert ((!request || !request->ready ()) && !send.ready ());
     if (transfer_from_public_)
         public_poller.remove (dealer);

@@ -21,7 +21,7 @@ first subscribe for a topic and the last unsubscribe that leaves no subscriber f
 subscribe for an already-subscribed topic, or an unsubscribe while other subscribers remain, becomes visible only with
 `ZLINK_PUB_OPT_VERBOSE` / `ZLINK_PUB_OPT_VERBOSER` ([§4](#4-pub-options-zlink_pub_option_t)).
 
-This document defines the public contracts specific to XPUB: PUB/XPUB-only options, message-part publishing, and subscription-event
+This document defines the public contracts specific to XPUB: PUB/XPUB-only options, whole-message publishing, and subscription-event
 receiving.
 
 The following documents own the related contracts.
@@ -36,10 +36,10 @@ The following documents own the related contracts.
 ## 2. Subscription Event Flow
 
 Subscribe and unsubscribe requests sent by a subscriber arrive at XPUB as subscription-event messages. The application retrieves these
-events one at a time with [`zlink_xpub_recv_part`](#zlink_xpub_recv_part) and observes which peer sent the event (routing ID), whether it
+events one at a time with [`zlink_xpub_recv`](#zlink_xpub_recv) and observes which peer sent the event (routing ID), whether it
 is a subscribe or unsubscribe event, and which topic it addresses. A subscription event is a single frame: the first byte is `0x01`
 for subscribe or `0x00` for unsubscribe, and the remaining bytes are the topic (the byte sequence that identifies the subscription
-target). An event with an empty topic still carries that one byte. `zlink_xpub_recv_part` splits the first byte into `*subscribed_out_`
+target). An event with an empty topic still carries that one byte. `zlink_xpub_recv` splits the first byte into `*subscribed_out_`
 and the rest into the topic output, so the application never parses the frame itself.
 
 Enable manual subscription management with `ZLINK_PUB_OPT_MANUAL`. In manual mode, set `ZLINK_PUB_OPT_APPROVE_SUBSCRIBE` to approve a
@@ -52,18 +52,18 @@ sequenceDiagram
     participant XPub as XPUB socket
     participant App as Application
     Sub->>XPub: Request topic subscription
-    App->>XPub: zlink_xpub_recv_part()
+    App->>XPub: zlink_xpub_recv()
     XPub-->>App: Subscription event (peer routing ID, subscribe=1, topic bytes)
-    App->>XPub: zlink_publish_part(topic, part)
+    App->>XPub: zlink_publish(topic, parts, part_count, flags)
     XPub-->>Sub: Deliver published message
 ```
 
 ## 3. Drop and Backpressure at HWM
 
 `ZLINK_PUB_OPT_NODROP` defaults to `0`. Fanout delivery permits loss. The [HWM](../glossary.en.md#hwm) (High-Water Mark) is the byte limit
-retained by the send queue. When that limit is reached, `zlink_publish_part()` drops the message for that subscriber and reports success.
+retained by the send queue. When that limit is reached, `zlink_publish()` drops the message for that subscriber and reports success.
 To apply [backpressure](../glossary.en.md#backpressure), which limits additional submissions by the publisher instead of dropping when
-the send queue is full, explicitly set this option to `1`. `zlink_publish_part()` then returns `ZLINK_SUBMIT_BACKPRESSURED`. Only the
+the send queue is full, explicitly set this option to `1`. `zlink_publish()` then returns `ZLINK_SUBMIT_BACKPRESSURED`. Only the
 pipes whose filter matches the current topic are checked against the HWM — if any of them is full, the record is delivered to none of the
 matching subscribers, and the state of a non-matching subscriber's pipe does not affect this publish.
 
@@ -140,17 +140,14 @@ Retrieves the current value of a PUB/XPUB socket option.
 
 ---
 
-### zlink_publish_part
+### zlink_publish
 
-Publishes one message part from a raw `XPUB` socket.
+Publishes one message record from a raw `XPUB` socket.
 
 ```c
-ZLINK_EXPORT zlink_submit_result_t zlink_publish_part (
-  void *subject_,
-  const char *topic_id_,
-  zlink_msg_t *part_,
-  zlink_send_flags_t flags_,
-  zlink_part_flag_t part_flag_);
+ZLINK_EXPORT zlink_submit_result_t zlink_publish (
+  void *subject_, const char *topic_id_, zlink_msg_t *parts_,
+  size_t part_count_, zlink_send_flags_t flags_);
 ```
 
 When `topic_id_ == NULL`, the first message frame carries the topic according to the wire-prefix convention. Otherwise, `topic_id_` must
@@ -161,39 +158,37 @@ There is no separate topic-specific maximum length; topic bytes count toward the
 Exceeding the size limit returns `ZLINK_SUBMIT_INVALID_ARGUMENT` with `EMSGSIZE`, while failure to allocate topic-frame storage returns
 `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM`.
 
-A multipart message started with `ZLINK_PART_MORE` continues on the same thread with the same
-topic and flags through `ZLINK_PART_FINAL`.
+The `parts_` array and `part_count_` form the publish record. `part_count_` must be positive; `0`
+returns `ZLINK_SUBMIT_INVALID_ARGUMENT` with `EINVAL`. Parts are delivered in array order.
 
-This function consumes the content of `part_` on both success and failure. If the same content may be needed again, copy it before the
-call. A consumed `zlink_msg_t` is left as an initialized empty message, so it can be closed or reused as is.
+This function consumes every input slot on both success and failure. If the same record may be needed again, copy it before the call.
+Each consumed `zlink_msg_t` is left as an initialized empty message, so it can be closed or reused as is.
 
 Pass `ZLINK_DONTWAIT` in `flags_` for non-blocking publish; a call that cannot
 proceed immediately returns `ZLINK_SUBMIT_BACKPRESSURED`.
 
-Core stages successful intermediate parts as one publish record until `ZLINK_PART_FINAL` succeeds. Failure handling is the same path
-as PUB and is owned by [PUB §3](02-pub.en.md#3-multipart-publishing-and-the-publish-record): a pre-submit sequence validation failure
-consumes only the called part and keeps the open record, while a send-stage failure of an intermediate or final submit atomically
-discards the staged parts and the failed part and closes the sequence.
+Core admits the complete record atomically. If the call fails, subscribers see none of its parts and
+the caller resubmits the complete retained record. [PUB §3](02-pub.en.md#3-whole-message-publishing-and-the-publish-record)
+owns this contract.
 
 Applicable types are raw `PUB` and raw `XPUB`. Other types return `ZLINK_SUBMIT_NOT_SUPPORTED` with `errno == ENOTSUP`. The complete result
 mapping follows the [errno map](../03-errors.en.md#result-and-errno-mapping).
 
-**See also:** `zlink_xpub_recv_part`
+**See also:** `zlink_xpub_recv`
 
 ---
 
-### zlink_xpub_recv_part
+### zlink_xpub_recv
 
 Receives a subscription event from an XPUB socket.
 
 ```c
-ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
-                               const zlink_routing_id_t **source_rid_out_,
-                               int *subscribed_out_,
-                               char *topic_id_buf_,
-                               size_t topic_id_capacity_,
-                               size_t *topic_id_len_out_,
-                               zlink_recv_flags_t flags_);
+ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv (
+  void *xpub_,
+  const zlink_routing_id_t **source_rid_out_,
+  int *subscribed_out_,
+  char *topic_id_buf_, size_t topic_id_capacity_, size_t *topic_id_len_out_,
+  zlink_recv_flags_t flags_);
 ```
 
 Receives the next subscription event in recv mode. `subscribed_out_` and `topic_id_len_out_` are required outputs, and `topic_id_buf_`
@@ -222,7 +217,7 @@ diagnostics.
 **Errors:** `ZLINK_RECV_INVALID_HANDLE` with `EFAULT` if `xpub_`, `subscribed_out_`, or `topic_id_len_out_` is NULL, or if `topic_id_capacity_ > 0` and `topic_id_buf_` is NULL. `ZLINK_RECV_NO_DATA` with `EAGAIN` if `flags_` has `ZLINK_RECV_FLAGS_DONTWAIT` set and no event is available. `ZLINK_RECV_BUFFER_TOO_SMALL` with
 `ENOBUFS` if the topic is longer than `topic_id_capacity_`. `ZLINK_RECV_NOT_SUPPORTED` with `ENOTSUP` if the subject is not XPUB.
 
-**See also:** `zlink_publish_part`
+**See also:** `zlink_publish`
 
 ---
 
@@ -235,8 +230,8 @@ emit `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, or `ZLINK_
 
 ## 7. Implementation and Contract-Test Verification Requirements
 
-Verify the following only through the public surface (`zlink_set_pub_option`, `zlink_get_pub_option`, `zlink_publish_part`,
-`zlink_xpub_recv_part`, `zlink_socket_set_receive_flow_state`, return values, and errno). Each item maps to one unit test.
+Verify the following only through the public surface (`zlink_set_pub_option`, `zlink_get_pub_option`, `zlink_publish`,
+`zlink_xpub_recv`, `zlink_socket_set_receive_flow_state`, return values, and errno). Each item maps to one unit test.
 
 **Options**
 
@@ -245,7 +240,7 @@ Verify the following only through the public surface (`zlink_set_pub_option`, `z
 - Initially, `VERBOSE`, `VERBOSER`, `MANUAL`, `MANUAL_LAST_VALUE`, and `TOPICS_COUNT` are `0`, and an empty `WELCOME_MSG` sends no message to a new subscriber pipe.
 - Enabling `ZLINK_PUB_OPT_MANUAL_LAST_VALUE` enables manual mode and delivers the next publish only to the last subscription-event pipe.
 
-**Subscription-event receive (`zlink_xpub_recv_part`)**
+**Subscription-event receive (`zlink_xpub_recv`)**
 
 - When a raw XPUB has a subscription event, the caller observes `ZLINK_RECV_OK` together with `*subscribed_out_` (subscribe=1, unsubscribe=0), the subscribing peer's routing ID pointer, and binary-safe topic bytes.
 - `source_rid_out_` is an optional output that may be NULL.
@@ -256,23 +251,23 @@ Verify the following only through the public surface (`zlink_set_pub_option`, `z
 - A subject that is not a raw XPUB returns `ZLINK_RECV_NOT_SUPPORTED` with `ENOTSUP`.
 - If `xpub_` is NULL, errno is `EFAULT`.
 
-**Publish and topic (`zlink_publish_part`)**
+**Publish and topic (`zlink_publish`)**
 
 - When `topic_id_` is not NULL, the bytes before the terminating NUL are prepended to the message as the topic frame. When it is NULL, the first message frame carries the topic according to the wire-prefix convention.
 - Exceeding a size limit that includes the topic bytes returns `ZLINK_SUBMIT_INVALID_ARGUMENT` with `EMSGSIZE`; failure to allocate topic-frame storage returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM`.
 - Calling the function on a type other than raw `PUB` or raw `XPUB` returns `ZLINK_SUBMIT_NOT_SUPPORTED` with `errno == ENOTSUP`.
-- `part_` is consumed on both success and failure and is left as an initialized empty message — it can be closed or reused as is.
+- Every `parts_` slot is consumed on both success and failure and is left as an initialized empty message — it can be closed or reused as is.
 - When `ZLINK_DONTWAIT` is used and the call cannot proceed immediately, the result is `ZLINK_SUBMIT_BACKPRESSURED`.
 
-**Multipart publish record**
+**Whole-message publish record**
 
-- If an intermediate or final submit in an open sequence fails at the send stage, no part of that record becomes visible to subscribers and the next publish starts with the first part of a new record; a pre-submit sequence validation failure (topic/flag/thread mismatch) consumes only the called part and the record can be continued from the original thread with the same topic and flag ([PUB §3](02-pub.en.md#3-multipart-publishing-and-the-publish-record)).
-- The failed call also consumes `part_`; after a failure, including backpressure, the caller must resubmit the retained entire record from its first part.
+- The parts in `parts_` are delivered in array order as one publish record.
+- If the call fails, including because of backpressure, subscribers see none of the record's parts and every input slot is consumed; the caller resubmits the complete retained record ([PUB §3](02-pub.en.md#3-whole-message-publishing-and-the-publish-record)).
 
 **Drop and NODROP at HWM**
 
-- When `ZLINK_PUB_OPT_NODROP` has its default value of `0`, a message for a subscriber that has reached HWM is dropped, and `zlink_publish_part()` reports success.
-- When the option is set to `1` and the send queue is full, `zlink_publish_part()` returns `ZLINK_SUBMIT_BACKPRESSURED`.
+- When `ZLINK_PUB_OPT_NODROP` has its default value of `0`, a message for a subscriber that has reached HWM is dropped, and `zlink_publish()` reports success.
+- When the option is set to `1` and the send queue is full, `zlink_publish()` returns `ZLINK_SUBMIT_BACKPRESSURED`.
 
 **Receive flow state**
 

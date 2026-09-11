@@ -7,30 +7,30 @@ package native
 #include <stdint.h>
 #include "zlink.h"
 
-static inline zlink_submit_result_t zlink_go_send_part_with_context(
-    void *socket_, zlink_msg_t *part_, zlink_send_flags_t flags_,
-    zlink_part_flag_t part_flag_, uintptr_t user_context_,
+static inline zlink_submit_result_t zlink_go_send_with_context(
+    void *socket_, zlink_msg_t *parts_, size_t part_count_,
+    zlink_send_flags_t flags_, uintptr_t user_context_,
     zlink_completion_id_t *completion_id_out_) {
-    return zlink_send_part(socket_, part_, flags_, part_flag_,
-                           (void *)user_context_, completion_id_out_);
+    return zlink_send(socket_, parts_, part_count_, flags_,
+                      (void *)user_context_, completion_id_out_);
 }
 
-static inline zlink_submit_result_t zlink_go_send_part_rid_with_context(
-    void *socket_, const zlink_routing_id_t *target_rid_, zlink_msg_t *part_,
-    zlink_send_flags_t flags_, zlink_part_flag_t part_flag_,
+static inline zlink_submit_result_t zlink_go_send_rid_with_context(
+    void *socket_, const zlink_routing_id_t *target_rid_,
+    zlink_msg_t *parts_, size_t part_count_, zlink_send_flags_t flags_,
     uintptr_t user_context_, zlink_completion_id_t *completion_id_out_) {
-    return zlink_send_part_rid(socket_, target_rid_, part_, flags_, part_flag_,
-                               (void *)user_context_, completion_id_out_);
+    return zlink_send_rid(socket_, target_rid_, parts_, part_count_, flags_,
+                          (void *)user_context_, completion_id_out_);
 }
 
-static inline zlink_submit_result_t zlink_go_request_part_with_context(
-    void *socket_, const zlink_routing_id_t *target_rid_, zlink_msg_t *part_,
-    zlink_send_flags_t flags_, zlink_part_flag_t part_flag_,
+static inline zlink_submit_result_t zlink_go_request_with_context(
+    void *socket_, const zlink_routing_id_t *target_rid_,
+    zlink_msg_t *parts_, size_t part_count_, zlink_send_flags_t flags_,
     uint32_t timeout_ms_, uintptr_t user_context_,
     zlink_completion_id_t *completion_id_out_) {
-    return zlink_request_part(socket_, target_rid_, part_, flags_, part_flag_,
-                              timeout_ms_, (void *)user_context_,
-                              completion_id_out_);
+    return zlink_request(socket_, target_rid_, parts_, part_count_, flags_,
+                         timeout_ms_, (void *)user_context_,
+                         completion_id_out_);
 }
 */
 import "C"
@@ -104,21 +104,15 @@ func (s *sendRetryState) attempt(userContext uintptr) (uint64, error) {
 		value := s.target.toC()
 		rid = &value
 	}
-	err := submitMultipartFromClones(s.payload.owned, false, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-		var finalContext C.uintptr_t
-		var completionOut *C.zlink_completion_id_t
-		if partFlag == C.ZLINK_PART_FINAL {
-			finalContext = C.uintptr_t(userContext)
-			completionOut = &completionID
-		}
+	err := submitMultipartFromClones(s.payload.owned, false, func(native *C.zlink_msg_t, count C.size_t) error {
 		if !s.hasTarget {
-			return submitErrorFromResult(C.zlink_go_send_part_with_context(
-				s.core.raw(), part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
-				finalContext, completionOut))
+			return submitErrorFromResult(C.zlink_go_send_with_context(
+				s.core.raw(), native, count, C.ZLINK_SEND_FLAGS_DONTWAIT,
+				C.uintptr_t(userContext), &completionID))
 		}
-		return submitErrorFromResult(C.zlink_go_send_part_rid_with_context(
-			s.core.raw(), rid, part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
-			finalContext, completionOut))
+		return submitErrorFromResult(C.zlink_go_send_rid_with_context(
+			s.core.raw(), rid, native, count, C.ZLINK_SEND_FLAGS_DONTWAIT,
+			C.uintptr_t(userContext), &completionID))
 	})
 	return uint64(completionID), err
 }
@@ -134,18 +128,10 @@ func (s *requestRetryState) attempt(userContext uintptr) (uint64, error) {
 		rid := s.target.toC()
 		ridPointer = &rid
 	}
-	err := submitMultipartFromClones(s.payload.owned, false, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-		var partTimeout C.uint32_t
-		var finalContext C.uintptr_t
-		var completionOut *C.zlink_completion_id_t
-		if partFlag == C.ZLINK_PART_FINAL {
-			partTimeout = C.uint32_t(s.timeout)
-			finalContext = C.uintptr_t(userContext)
-			completionOut = &completionID
-		}
-		return submitErrorFromResult(C.zlink_go_request_part_with_context(
-			s.core.raw(), ridPointer, part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
-			partTimeout, finalContext, completionOut))
+	err := submitMultipartFromClones(s.payload.owned, false, func(native *C.zlink_msg_t, count C.size_t) error {
+		return submitErrorFromResult(C.zlink_go_request_with_context(
+			s.core.raw(), ridPointer, native, count, C.ZLINK_SEND_FLAGS_DONTWAIT,
+			C.uint32_t(s.timeout), C.uintptr_t(userContext), &completionID))
 	})
 	return uint64(completionID), err
 }
@@ -192,6 +178,7 @@ func (e *completionEntry) attemptSend() bool {
 				e.mu.Lock()
 				if !e.publicDone {
 					e.err = activateErr
+					e.finishAdmittedLocked(activateErr)
 					e.publicDone = true
 					close(e.done)
 				}
@@ -214,24 +201,24 @@ func submitManagedSend(
 	core *socketCore,
 	target *RoutingID,
 	parts []sendBuilderPart,
-) error {
+) (SendSubmission, error) {
 	if err := contextError(ctx); err != nil {
-		return err
+		return nil, err
 	}
 	if core == nil || core.isClosed() {
-		return &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+		return nil, &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	if target != nil && target.Size() == 0 {
-		return &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
+		return nil, &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}
 
 	send, err := newSendRetryState(core, target, parts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := contextError(ctx); err != nil {
 		send.payload.close()
-		return err
+		return nil, err
 	}
 	// Only the nonblocking native admission and wait-token publication share
 	// the drain owner's lock. No completion wait or payload preparation holds it.
@@ -241,14 +228,14 @@ func submitManagedSend(
 	if owner.shutdown {
 		owner.mu.Unlock()
 		send.payload.close()
-		return &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.ESHUTDOWN)}
+		return nil, &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.ESHUTDOWN)}
 	}
 	completionID, err := send.attempt(key)
 	if err == nil && completionID == 0 {
 		owner.mu.Unlock()
 		send.payload.takeSourceOwnership()
 		send.payload.close()
-		return nil
+		return &sendSubmission{result: SubmitOK}, nil
 	}
 	var submitErr *SubmitError
 	if !errors.As(err, &submitErr) || submitErr.Result != SubmitBackpressured ||
@@ -256,15 +243,15 @@ func submitManagedSend(
 		owner.mu.Unlock()
 		send.payload.close()
 		if err == nil || (submitErr != nil && submitErr.Result == SubmitBackpressured) {
-			return &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
+			return nil, &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
 		}
-		return err
+		return nil, err
 	}
 	// A token now exists. Publish the entry before a drain can look it up;
 	// immediate admission has no entry, channel, or global handle registration.
 	retry := new(sendRetryState)
 	*retry = send
-	entry := newSendCompletionEntry(nil, retry, key)
+	entry := newSendCompletionEntry(retry, key)
 	entry.owner = owner
 	entry.attemptMu.Lock()
 	owner.entries[key] = entry
@@ -274,14 +261,14 @@ func submitManagedSend(
 	if activateErr := entry.setWritableWaiting(true); activateErr != nil {
 		entry.mu.Lock()
 		entry.err = activateErr
+		entry.finishAdmittedLocked(activateErr)
 		entry.publicDone = true
 		close(entry.done)
 		entry.mu.Unlock()
 		send.payload.close()
 	}
 	entry.attemptMu.Unlock()
-	entry.enableCancellation(ctx)
-	return entry.waitSend()
+	return &sendSubmission{result: SubmitBackpressured, entry: entry}, nil
 }
 
 func submitCompletionRequest(
@@ -290,7 +277,7 @@ func submitCompletionRequest(
 	target *RoutingID,
 	timeout time.Duration,
 	parts []requestBuilderPart,
-) ([]*Message, error) {
+) (RequestSubmission, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
@@ -305,7 +292,7 @@ func submitCompletionRequest(
 		return nil, err
 	}
 
-	entry := newCompletionEntry(completionRequest, ctx)
+	entry := newCompletionEntry(completionRequest)
 	if err := core.completion.register(entry); err != nil {
 		entry.failSubmit()
 		return nil, err
@@ -325,18 +312,10 @@ func submitCompletionRequest(
 		rid := target.toC()
 		ridPointer = &rid
 	}
-	err = submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-		var partTimeout C.uint32_t
-		var userContext C.uintptr_t
-		var completionOut *C.zlink_completion_id_t
-		if partFlag == C.ZLINK_PART_FINAL {
-			partTimeout = C.uint32_t(timeoutMillis)
-			userContext = C.uintptr_t(entry.handleKey)
-			completionOut = &completionID
-		}
-		return submitErrorFromResult(C.zlink_go_request_part_with_context(
-			core.raw(), ridPointer, part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
-			partTimeout, userContext, completionOut))
+	err = submitMultipartFromBuilderParts(parts, func(native *C.zlink_msg_t, count C.size_t) error {
+		return submitErrorFromResult(C.zlink_go_request_with_context(
+			core.raw(), ridPointer, native, count, C.ZLINK_SEND_FLAGS_DONTWAIT,
+			C.uint32_t(timeoutMillis), C.uintptr_t(entry.handleKey), &completionID))
 	})
 	if err == nil {
 		if completionID == 0 {
@@ -345,9 +324,10 @@ func submitCompletionRequest(
 			core.completion.unregister(entry)
 			return nil, &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
 		}
+		entry.finishAdmitted(nil)
 		entry.publish(uint64(completionID))
 		entry.attemptMu.Unlock()
-		return entry.waitRequest()
+		return &requestSubmission{result: SubmitOK, entry: entry}, nil
 	}
 
 	var submitErr *SubmitError
@@ -367,6 +347,7 @@ func submitCompletionRequest(
 			entry.mu.Lock()
 			if !entry.publicDone {
 				entry.err = snapshotErr
+				entry.finishAdmittedLocked(snapshotErr)
 				entry.publicDone = true
 				close(entry.done)
 			}
@@ -376,7 +357,7 @@ func submitCompletionRequest(
 			}
 		}
 		entry.attemptMu.Unlock()
-		return entry.waitRequest()
+		return &requestSubmission{result: SubmitBackpressured, entry: entry}, nil
 	}
 
 	entry.attemptMu.Unlock()

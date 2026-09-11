@@ -7,9 +7,11 @@
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
     <ZLinkSampleRepositoryDetected Condition="Exists('$(MSBuildThisFileDirectory)../src/Zlink.Framework/Zlink.Framework.csproj')">true</ZLinkSampleRepositoryDetected>
     <ZLinkSampleRepositoryDetected Condition="'$(ZLinkSampleRepositoryDetected)' == ''">false</ZLinkSampleRepositoryDetected>
-    <ZLinkSampleFrameworkVersionFile Condition="'$(ZLinkSampleRepositoryDetected)' == 'true'">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../../FRAMEWORK_VERSION'))</ZLinkSampleFrameworkVersionFile>
+    <ZLinkSampleFrameworkVersionFile Condition="'$(ZLinkSampleRepositoryDetected)' == 'true'">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../VERSION'))</ZLinkSampleFrameworkVersionFile>
+    <ZLinkSampleBindingsVersionFile Condition="'$(ZLinkSampleRepositoryDetected)' == 'true'">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../../bindings/dotnet/VERSION'))</ZLinkSampleBindingsVersionFile>
     <ZLinkSampleFrameworkVersion Condition="'$(ZLinkSampleFrameworkVersion)' == '' and '$(ZLinkSampleRepositoryDetected)' == 'true' and Exists('$(ZLinkSampleFrameworkVersionFile)')">$([System.IO.File]::ReadAllText('$(ZLinkSampleFrameworkVersionFile)').Trim().Replace('ZLINK_FRAMEWORK_VERSION=', ''))</ZLinkSampleFrameworkVersion>
-    <ZLinkBindingsPackageVersion Condition="'$(ZLinkBindingsPackageVersion)' == ''">0.17.6</ZLinkBindingsPackageVersion>
+    <ZLinkBindingsPackageVersion Condition="'$(ZLinkBindingsPackageVersion)' == '' and '$(ZLinkSampleRepositoryDetected)' == 'true' and Exists('$(ZLinkSampleBindingsVersionFile)')">$([System.IO.File]::ReadAllText('$(ZLinkSampleBindingsVersionFile)').Trim().Replace('ZLINK_BINDING_VERSION=', ''))</ZLinkBindingsPackageVersion>
+    <ZLinkBindingsPackageVersion Condition="'$(ZLinkBindingsPackageVersion)' == ''">0.17.7</ZLinkBindingsPackageVersion>
   </PropertyGroup>
 
   <ItemGroup>

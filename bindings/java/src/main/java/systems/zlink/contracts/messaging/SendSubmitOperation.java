@@ -2,8 +2,6 @@
 
 package systems.zlink.contracts.messaging;
 
-import java.util.concurrent.CompletionStage;
-
 /** Accepts further parts and completes one captured-target send. */
 public interface SendSubmitOperation
   extends MessageBuilderStage<SendSubmitOperation> {
@@ -17,7 +15,7 @@ public interface SendSubmitOperation
     SendSubmitOperation message(Message part);
 
     /**
-     * Starts an asynchronous send and completes after the packet is admitted.
+     * Starts an asynchronous send and returns its admission submission.
      *
      * <p>Each native attempt uses Core DONTWAIT. Immediate admission produces
      * no SEND completion. If an attempt reports BACKPRESSURED/EAGAIN, Core
@@ -25,7 +23,7 @@ public interface SendSubmitOperation
      * POLLOUT, the binding drains completion records and retries the same
      * packet only for the matching WRITABLE token.
      */
-    CompletionStage<Void> submit();
+    SendSubmission submit();
 
     /** Blocks in Core until local send-queue admission completes. */
     void submit_sync();

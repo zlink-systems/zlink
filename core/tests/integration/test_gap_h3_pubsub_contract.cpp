@@ -28,9 +28,7 @@ zlink_recv_result_t recv_xpub_event_eventually (
     const std::chrono::steady_clock::time_point deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (3);
     while (std::chrono::steady_clock::now () < deadline) {
-        const zlink_recv_result_t result = zlink_xpub_recv_part (
-          xpub_, source_rid_out_, subscribed_out_, topic_, topic_capacity_,
-          topic_len_out_, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
+        const zlink_recv_result_t result = zlink_xpub_recv (xpub_, source_rid_out_, subscribed_out_, topic_, topic_capacity_, topic_len_out_, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
         if (result != ZLINK_RECV_NO_DATA)
             return result;
         TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
@@ -43,15 +41,12 @@ zlink_recv_result_t recv_xpub_event_eventually (
 zlink_recv_result_t recv_xsub_part_eventually (
   void *xsub_, const zlink_routing_id_t **source_rid_out_, char *topic_,
   size_t topic_capacity_, size_t *topic_len_out_, zlink_msg_t *part_out_,
-  zlink_part_flag_t *has_more_out_)
+  size_t *has_more_out_)
 {
     const std::chrono::steady_clock::time_point deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (3);
     while (std::chrono::steady_clock::now () < deadline) {
-        const zlink_recv_result_t result = zlink_subscribe_part (
-          xsub_, source_rid_out_, topic_, topic_capacity_, topic_len_out_,
-          part_out_, has_more_out_,
-          static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
+        const zlink_recv_result_t result = zlink_subscribe (xsub_, source_rid_out_, topic_, topic_capacity_, topic_len_out_, part_out_, 1, has_more_out_, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
         if (result != ZLINK_RECV_NO_DATA)
             return result;
         TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
@@ -113,26 +108,18 @@ void test_xsub_public_helpers_forward_upstream_and_retry_without_consuming ()
     size_t error_topic_len = sizeof (error_topic);
     zlink_msg_t error_part;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&error_part));
-    zlink_part_flag_t error_more = ZLINK_PART_MORE;
+    size_t error_more = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_INVALID_HANDLE,
-      zlink_subscribe_part (
-        xsub, NULL, NULL, sizeof (error_topic), &error_topic_len, &error_part,
-        &error_more, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+      zlink_subscribe (xsub, NULL, NULL, sizeof (error_topic), &error_topic_len, &error_part, 1, &error_more, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
     TEST_ASSERT_EQUAL_INT (EFAULT, zlink_errno ());
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_NOT_SUPPORTED,
-      zlink_subscribe_part (
-        wrong_type, NULL, error_topic, sizeof (error_topic), &error_topic_len,
-        &error_part, &error_more,
-        static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+      zlink_subscribe (wrong_type, NULL, error_topic, sizeof (error_topic), &error_topic_len, &error_part, 1, &error_more, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
     TEST_ASSERT_EQUAL_INT (ENOTSUP, zlink_errno ());
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_NO_DATA,
-      zlink_subscribe_part (
-        xsub, NULL, error_topic, sizeof (error_topic), &error_topic_len,
-        &error_part, &error_more,
-        static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+      zlink_subscribe (xsub, NULL, error_topic, sizeof (error_topic), &error_topic_len, &error_part, 1, &error_more, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&error_part));
 
@@ -144,15 +131,14 @@ void test_xsub_public_helpers_forward_upstream_and_retry_without_consuming ()
     init_part (&outbound, "xsub-payload");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_publish_part (xpub, topic_name, &outbound,
-                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL));
+      zlink_publish (xpub, topic_name, &outbound, 1, ZLINK_SEND_FLAGS_NONE));
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&outbound));
 
     char small_topic[3] = {'k', 'e', 'p'};
     size_t topic_len = 0;
     zlink_msg_t inbound;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&inbound));
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     const zlink_routing_id_t *source_rid =
       reinterpret_cast<const zlink_routing_id_t *> (0x1);
     TEST_ASSERT_EQUAL_INT (
@@ -166,7 +152,7 @@ void test_xsub_public_helpers_forward_upstream_and_retry_without_consuming ()
     TEST_ASSERT_EQUAL_PTR (
       reinterpret_cast<const zlink_routing_id_t *> (0x1), source_rid);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&inbound));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
 
     char full_topic[32];
     source_rid = reinterpret_cast<const zlink_routing_id_t *> (0x1);
@@ -178,7 +164,7 @@ void test_xsub_public_helpers_forward_upstream_and_retry_without_consuming ()
     TEST_ASSERT_NULL (source_rid);
     TEST_ASSERT_EQUAL_UINT64 (strlen (topic_name), topic_len);
     TEST_ASSERT_EQUAL_MEMORY (topic_name, full_topic, topic_len);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_UINT64 (strlen ("xsub-payload"),
                               zlink_msg_size (&inbound));
     TEST_ASSERT_EQUAL_MEMORY ("xsub-payload", zlink_msg_data (&inbound),
@@ -233,10 +219,7 @@ void test_xpub_recv_socket_owned_rid_and_retryable_buffer_contract ()
       reinterpret_cast<const zlink_routing_id_t *> (0x1);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_NO_DATA,
-      zlink_xpub_recv_part (
-        xpub_a, &no_event_rid, &no_event_subscribed, no_event_topic,
-        sizeof (no_event_topic), &no_event_len,
-        static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+      zlink_xpub_recv (xpub_a, &no_event_rid, &no_event_subscribed, no_event_topic, sizeof (no_event_topic), &no_event_len, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
     TEST_ASSERT_EQUAL_PTR (
       reinterpret_cast<const zlink_routing_id_t *> (0x1), no_event_rid);
@@ -273,9 +256,7 @@ void test_xpub_recv_socket_owned_rid_and_retryable_buffer_contract ()
     const zlink_routing_id_t *retry_rid = NULL;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
-      zlink_xpub_recv_part (xpub_a, &retry_rid, &subscribed, retry,
-                            sizeof (retry), &needed,
-                            static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+      zlink_xpub_recv (xpub_a, &retry_rid, &subscribed, retry, sizeof (retry), &needed, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
     TEST_ASSERT_NOT_NULL (retry_rid);
     TEST_ASSERT_EQUAL_UINT8 (6, retry_rid->size);
     TEST_ASSERT_EQUAL_MEMORY ("xsub-A", retry_rid->data, 6);
@@ -287,9 +268,7 @@ void test_xpub_recv_socket_owned_rid_and_retryable_buffer_contract ()
     subscribed = 17;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_NO_DATA,
-      zlink_xpub_recv_part (xpub_a, NULL, &subscribed, retry,
-                            sizeof (retry), &needed,
-                            static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+      zlink_xpub_recv (xpub_a, NULL, &subscribed, retry, sizeof (retry), &needed, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (91, needed);
     TEST_ASSERT_EQUAL_INT (17, subscribed);
@@ -302,8 +281,7 @@ void test_xpub_recv_socket_owned_rid_and_retryable_buffer_contract ()
     subscribed = 29;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_INVALID_HANDLE,
-      zlink_xpub_recv_part (xpub_a, NULL, &subscribed, NULL, 1, &needed,
-                            static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+      zlink_xpub_recv (xpub_a, NULL, &subscribed, NULL, 1, &needed, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
     TEST_ASSERT_EQUAL_INT (EFAULT, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (123, needed);
     TEST_ASSERT_EQUAL_INT (29, subscribed);
@@ -330,30 +308,25 @@ void test_xpub_recv_socket_owned_rid_and_retryable_buffer_contract ()
     needed = sizeof (retry);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_NOT_SUPPORTED,
-      zlink_xpub_recv_part (xsub_a, NULL, &subscribed, retry,
-                            sizeof (retry), &needed,
-                            static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+      zlink_xpub_recv (xsub_a, NULL, &subscribed, retry, sizeof (retry), &needed, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
     TEST_ASSERT_EQUAL_INT (ENOTSUP, zlink_errno ());
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_INVALID_HANDLE,
-      zlink_xpub_recv_part (NULL, NULL, &subscribed, retry,
-                            sizeof (retry), &needed,
-                            static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+      zlink_xpub_recv (NULL, NULL, &subscribed, retry, sizeof (retry), &needed, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
     TEST_ASSERT_EQUAL_INT (EFAULT, zlink_errno ());
 
     zlink_msg_t published;
     init_part (&published, "published-payload");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_publish_part (xpub_a, "topic-a", &published,
-                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL));
+      zlink_publish (xpub_a, "topic-a", &published, 1, ZLINK_SEND_FLAGS_NONE));
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&published));
 
     char received_topic[32];
     size_t received_topic_len = 0;
     zlink_msg_t received;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&received));
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     const zlink_routing_id_t *source_rid =
       reinterpret_cast<const zlink_routing_id_t *> (0x1);
     TEST_ASSERT_EQUAL_INT (
@@ -364,7 +337,7 @@ void test_xpub_recv_socket_owned_rid_and_retryable_buffer_contract ()
     TEST_ASSERT_NULL (source_rid);
     TEST_ASSERT_EQUAL_UINT64 (strlen ("topic-a"), received_topic_len);
     TEST_ASSERT_EQUAL_MEMORY ("topic-a", received_topic, received_topic_len);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_MEMORY ("published-payload", zlink_msg_data (&received),
                               strlen ("published-payload"));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&received));
@@ -374,8 +347,7 @@ void test_xpub_recv_socket_owned_rid_and_retryable_buffer_contract ()
     init_part (&rejected, "rejected");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_NOT_SUPPORTED,
-      zlink_publish_part (wrong_type, "topic", &rejected,
-                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL));
+      zlink_publish (wrong_type, "topic", &rejected, 1, ZLINK_SEND_FLAGS_NONE));
     TEST_ASSERT_EQUAL_INT (ENOTSUP, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&rejected));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&rejected));
@@ -410,9 +382,7 @@ void test_xpub_recv_socket_owned_rid_and_retryable_buffer_contract ()
     for (size_t i = 0; i != 256 && !backpressured; ++i) {
         zlink_msg_t part;
         init_part (&part, std::string (1024, 'n'));
-        const zlink_submit_result_t result = zlink_publish_part (
-          nodrop_xpub, "topic", &part, ZLINK_SEND_FLAGS_DONTWAIT,
-          ZLINK_PART_FINAL);
+        const zlink_submit_result_t result = zlink_publish (nodrop_xpub, "topic", &part, 1, ZLINK_SEND_FLAGS_DONTWAIT);
         TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&part));
         if (result == ZLINK_SUBMIT_BACKPRESSURED) {
             TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());

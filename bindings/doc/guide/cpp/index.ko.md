@@ -263,9 +263,9 @@ try {
 | `zlink_socket(ctx, type)` | `zlink::pair_socket_t{ctx}` 등 |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| blocking `zlink_send_part(...)` / `zlink_send_part_rid(...)` | `socket.send().message(m).submit()` |
+| blocking `zlink_send(..., parts, count, ...)` / `zlink_send_rid(..., parts, count, ...)` | `socket.send().message(m).submit()` |
 | DONTWAIT send + completion pull | `co_await socket.send().message(m).async()` |
-| `zlink_recv_part(...)` | `socket.recv(received)` |
+| `zlink_recv(..., parts_out, capacity, count_out, ...)` | `socket.recv(received)` |
 | `zlink_msg_data(msg)` | `part.data()` / `part.bytes()` |
 | `zlink_msg_size(msg)` | `part.size()` |
 | `zlink_routing_id_t` | `zlink::routing_id_t` |

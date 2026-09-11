@@ -286,7 +286,7 @@ internal static class PerfMultiStreamServer
         try
         {
             await server.Send(routingId).Message(payload)
-                .Async(cancellationToken)
+                .Async(cancellationToken).Admitted
                 .ConfigureAwait(false);
         }
         catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))

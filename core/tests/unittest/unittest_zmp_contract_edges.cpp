@@ -770,49 +770,6 @@ void test_pending_timeout_task_is_reused_and_only_replaced_for_earlier_deadline 
     TEST_ASSERT_FALSE (state->pending_timeout_task);
 }
 
-void test_suspended_request_multipart_preserves_pending_cookie ()
-{
-    using namespace zlink::part_helper_internal;
-    void *ctx = zlink_ctx_new ();
-    TEST_ASSERT_NOT_NULL (ctx);
-    void *dealer = zlink_socket (ctx, ZLINK_SOCKET_DEALER);
-    TEST_ASSERT_NOT_NULL (dealer);
-    socket_handle_t handle = as_socket_handle (dealer);
-    TEST_ASSERT_NOT_NULL (handle.socket);
-
-    send_sequence_spec_t staged;
-    staged.family = send_family_dealer_request;
-    staged.request_like = true;
-    std::shared_ptr<handle_state_t> helper_state;
-    send_sequence_state_t *sequence = NULL;
-    bool first_part = false;
-    TEST_ASSERT_SUCCESS_ERRNO (prepare_send_step (
-      staged, handle.socket, &helper_state, &sequence, &first_part));
-    TEST_ASSERT_TRUE (first_part);
-    complete_send_step (helper_state, sequence, ZLINK_PART_MORE);
-
-    send_sequence_spec_t resumed = staged;
-    resumed.timeout_ms = 1000;
-    resumed.request_seq = 77;
-    resumed.pending_cookie = 991;
-    TEST_ASSERT_SUCCESS_ERRNO (prepare_send_step (
-      resumed, handle.socket, &helper_state, &sequence, &first_part));
-    TEST_ASSERT_FALSE (first_part);
-    {
-        std::lock_guard<std::mutex> lock (helper_state->mutex);
-        TEST_ASSERT_EQUAL_UINT64 (resumed.request_seq,
-                                  sequence->spec.request_seq);
-        TEST_ASSERT_EQUAL_UINT64 (resumed.pending_cookie,
-                                  sequence->spec.pending_cookie);
-    }
-    abort_send_step (helper_state, sequence);
-
-    handle = socket_handle_t ();
-    helper_state.reset ();
-    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (dealer));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
-}
-
 void test_pending_cookie_wrap_skips_zero ()
 {
     using namespace zlink::socket_reqrep_internal;
@@ -991,7 +948,6 @@ int main ()
     RUN_TEST (test_pending_aggregate_wrap_and_stale_cookie_are_fenced);
     RUN_TEST (
       test_pending_timeout_task_is_reused_and_only_replaced_for_earlier_deadline);
-    RUN_TEST (test_suspended_request_multipart_preserves_pending_cookie);
     RUN_TEST (test_pending_cookie_wrap_skips_zero);
     RUN_TEST (test_pending_insert_failure_releases_completion_reservation);
     RUN_TEST (test_timeout_remove_can_race_close_without_post_close_delivery);

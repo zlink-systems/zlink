@@ -1,0 +1,33 @@
+{
+  "schema": "with-grpc-cell-v1",
+  "cells": [
+    {
+      "implementation": "zlink-framework-node",
+      "pattern": "request-window",
+      "payload_size": 1024,
+      "throughput_per_second": 104000,
+      "bandwidth_mb_s": 106.496,
+      "latency_mean_ms": 1.04,
+      "latency_p95_ms": 2.08,
+      "latency_p99_ms": 3.12,
+      "peak_in_flight": 104,
+      "abandoned": 0,
+      "drain_bound_hit": false,
+      "errors": 0
+    },
+    {
+      "implementation": "zlink-framework-node",
+      "pattern": "request-window",
+      "payload_size": 4096,
+      "throughput_per_second": 52000,
+      "bandwidth_mb_s": 212.992,
+      "latency_mean_ms": 2.04,
+      "latency_p95_ms": 4.08,
+      "latency_p99_ms": 6.12,
+      "peak_in_flight": 102,
+      "abandoned": 0,
+      "drain_bound_hit": false,
+      "errors": 0
+    }
+  ]
+}

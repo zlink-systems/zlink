@@ -332,10 +332,15 @@ final class SpotActivation
         //  Spec 27 §4: decode and install the inbound flow pair (or start a new
         //  flow) only while capture is enabled; at Off suppress flow state.
         ZLinkFlowContext.State inboundFlow = null;
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header envelope = null;
         boolean captureFlow = host.flowCaptureEnabled();
         if (captureFlow) {
             try {
-                inboundFlow = ZLinkSpotFlowFrame.decode(received.parts());
+                envelope = systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                    .decodeDispatchHeader(received.parts(), true);
+                inboundFlow = envelope == null
+                    ? ZLinkSpotFlowFrame.decode(received.parts())
+                    : ZLinkSpotFlowFrame.fromEnvelopeHeader(envelope);
             } catch (ZLinkFrameworkException invalidFlow) {
                 failRouteInvalidFlow(received, invalidFlow);
                 return CompletableFuture.completedFuture(null);
@@ -351,7 +356,9 @@ final class SpotActivation
         }
         ParsedPacket packet;
         try {
-            packet = ZLinkSpotRuntime.parsePacket(received.parts());
+            packet = envelope == null
+                ? ZLinkSpotRuntime.parsePacket(received.parts())
+                : ZLinkSpotRuntime.parsePacket(received.parts(), envelope);
         } catch (ZLinkFrameworkException invalidEnvelope) {
             //  A JSON-object first frame that is not a valid shared envelope
             //  is a protocol error (C++ decode parity).

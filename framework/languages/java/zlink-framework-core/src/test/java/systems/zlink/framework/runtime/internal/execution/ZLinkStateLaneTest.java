@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.execution;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -10,13 +11,109 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 final class ZLinkStateLaneTest {
+    @Test
+    void directExecutorReturnsCompletedTurnsWithoutAnotherCompletionTask() {
+        ZLinkStateLane lane = new ZLinkStateLane(Runnable::run);
+        for (int index = 0; index < 100; index++) {
+            CompletableFuture<Integer> result = lane.runAsync(() -> {
+                assertTrue(lane.isOnLane());
+                return 42;
+            }).toCompletableFuture();
+            assertTrue(result.isDone());
+            assertFalse(lane.isOnLane());
+            assertEquals(42, result.join());
+            assertEquals(43, result.thenApply(value -> {
+                assertFalse(lane.isOnLane());
+                return lane.runAsync(() -> value + 1).toCompletableFuture().join();
+            }).join());
+        }
+        IllegalArgumentException failure = new IllegalArgumentException("activation failed");
+        CompletableFuture<?> failed = lane.runAsync(() -> {
+            throw failure;
+        }).toCompletableFuture();
+        assertTrue(failed.isDone());
+        assertSame(failure, assertThrows(CompletionException.class, failed::join).getCause());
+        CancellationException cancelledWork = new CancellationException("work cancelled");
+        CompletableFuture<?> cancellationFailure = lane.runAsync(() -> {
+            throw cancelledWork;
+        }).toCompletableFuture();
+        assertTrue(cancellationFailure.isDone());
+        assertFalse(cancellationFailure.isCancelled());
+        assertSame(cancelledWork,
+            assertThrows(CompletionException.class, cancellationFailure::join).getCause());
+        assertFalse(lane.isOnLane());
+        lane.closeAsync().toCompletableFuture().join();
+    }
+
+    @Test
+    void pendingCompletionCanReenterASingleThreadLaneAfterSuccessOrFailure() throws Exception {
+        try (var worker = Executors.newSingleThreadExecutor()) {
+            ZLinkStateLane lane = new ZLinkStateLane(worker);
+            for (boolean fail : List.of(false, true)) {
+                CompletableFuture<Void> entered = new CompletableFuture<>();
+                CompletableFuture<Void> release = new CompletableFuture<>();
+                CompletableFuture<Integer> result = lane.runAsync(() -> {
+                    entered.complete(null);
+                    release.join();
+                    if (fail) {
+                        throw new IllegalArgumentException("activation failed");
+                    }
+                    return 1;
+                }).toCompletableFuture();
+                try {
+                    entered.get(3, TimeUnit.SECONDS);
+                    CompletableFuture<Integer> dependent = result.handle((value, error) -> {
+                        assertFalse(lane.isOnLane());
+                        assertEquals(fail, error != null);
+                        return lane.runAsync(() -> 42).toCompletableFuture().join();
+                    });
+                    release.complete(null);
+                    assertEquals(42, dependent.get(3, TimeUnit.SECONDS));
+                } finally {
+                    release.complete(null);
+                }
+            }
+            lane.closeAsync().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void defaultLanesShareExecutorButKeepIndependentTurnsAndClose() throws Exception {
+        ZLinkStateLane first = new ZLinkStateLane();
+        ZLinkStateLane second = new ZLinkStateLane();
+        var executor = ZLinkStateLane.class.getDeclaredField("executor");
+        executor.setAccessible(true);
+        assertSame(executor.get(first), executor.get(second));
+
+        CompletableFuture<Void> entered = new CompletableFuture<>();
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        var blocked = first.runAsync(() -> {
+            entered.complete(null);
+            release.join();
+        });
+        try {
+            entered.get(3, TimeUnit.SECONDS);
+            assertEquals(42, second.runAsync(() -> 42)
+                .toCompletableFuture().get(3, TimeUnit.SECONDS));
+        } finally {
+            release.complete(null);
+        }
+        blocked.toCompletableFuture().get(3, TimeUnit.SECONDS);
+        first.closeAsync().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        assertEquals(43, second.runAsync(() -> 43)
+            .toCompletableFuture().get(3, TimeUnit.SECONDS));
+        second.closeAsync().toCompletableFuture().get(3, TimeUnit.SECONDS);
+    }
+
     @Test
     void runAsyncReturnsTheResultOfTheWork() throws Exception {
         ZLinkStateLane lane = new ZLinkStateLane();

@@ -22,7 +22,7 @@ as registering and removing subscriptions, uses control-plane calls that configu
 socket rather than the data plane that carries messages.
 
 This document defines the SUB-specific contract: registering and removing subscription filters,
-filter matching rules, SUB-specific options (`zlink_sub_option_t`), the topic-part receive function,
+filter matching rules, SUB-specific options (`zlink_sub_option_t`), the topic-and-payload receive function,
 and subscription inventory queries. These functions also apply to raw XSUB; [XSUB](05-xsub.en.md)
 defines XSUB-specific behavior.
 
@@ -48,8 +48,8 @@ Subscriptions are managed by filter string.
 3. **Query** — Read the number of subscribed topics through the read-only
    [`ZLINK_SUB_OPT_TOPICS_COUNT`](#5-options-zlink_sub_option_t) option, and read an individual
    filter by index through [`zlink_subscription_at`](#zlink_subscription_at).
-4. **Receive** — Receive the topic and payload parts of a matching message through
-   [`zlink_subscribe_part`](#zlink_subscribe_part).
+4. **Receive** — Receive the topic and complete payload record of a matching message through
+   [`zlink_subscribe`](#zlink_subscribe).
 
 ## 3. Automatic HWM defaults
 
@@ -152,7 +152,7 @@ Applicable types: raw SUB, raw XSUB.
 **Errors:** `EFAULT` if `handle_` is NULL. `EINVAL` if `filter_` is NULL or the handle type does not
 support subscriptions.
 
-**See also:** `zlink_unset_subscription`, `zlink_subscribe_part`
+**See also:** `zlink_unset_subscription`, `zlink_subscribe`
 
 ---
 
@@ -179,38 +179,37 @@ support removing subscriptions.
 
 ---
 
-### zlink_subscribe_part
+### zlink_subscribe
 
-Receive one payload part of a topic-bearing message from a raw `SUB` or `XSUB` socket.
+Receive the topic and complete payload record from a raw `SUB` or `XSUB` socket.
 
 ```c
-ZLINK_EXPORT zlink_recv_result_t zlink_subscribe_part (void *sub_,
-                                                       const zlink_routing_id_t **source_rid_out_,
-                                                       char *topic_id_buf_,
-                                                       size_t topic_id_capacity_,
-                                                       size_t *topic_id_len_out_,
-                                                       zlink_msg_t *part_out_,
-                                                       zlink_part_flag_t *has_more_out_,
-                                                       zlink_recv_flags_t flags_);
+ZLINK_EXPORT zlink_recv_result_t zlink_subscribe (
+  void *sub_,
+  const zlink_routing_id_t **source_rid_out_,
+  char *topic_id_buf_, size_t topic_id_capacity_, size_t *topic_id_len_out_,
+  zlink_msg_t *parts_out_, size_t parts_capacity_, size_t *part_count_out_,
+  zlink_recv_flags_t flags_);
 ```
 
-`topic_id_len_out_`, an initialized `part_out_`, and `has_more_out_` are required.
+`topic_id_len_out_`, `parts_out_`, and `part_count_out_` are required. The array slots need not be initialized.
 `source_rid_out_` is optional and always receives `NULL` for raw `SUB` and `XSUB`. On success, the
 function copies the binary topic bytes into the caller's buffer without a NUL byte and transfers
-ownership of the payload part to the caller. The caller must close the received part exactly once
-with `zlink_msg_close(part_out_)`.
+the complete payload record into the array. The caller closes the leading `*part_count_out_` slots
+exactly once with `zlink_multipart_close`.
 
 If `topic_id_capacity_` is smaller than the topic length (a zero-length topic succeeds with capacity 0), the function writes the required topic
 length to `*topic_id_len_out_` and returns `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`. Core keeps
-that message's topic and payload internally, leaves `part_out_` and every output other than
-`topic_id_len_out_` unchanged, and does not transfer ownership of the part. Calling again with a sufficient
+that message's topic and payload internally, leaves `parts_out_` and every output other than
+`topic_id_len_out_` unchanged, and does not transfer ownership of the slots. Calling again with a sufficient
 buffer returns the same retained message. If capacity is greater than zero but `topic_id_buf_` is NULL, the
 function returns `ZLINK_RECV_INVALID_HANDLE` with `EFAULT` before inspecting or consuming the queue
-and leaves every output and `part_out_` unchanged.
+and leaves every output and `parts_out_` unchanged.
 
-Receive every payload part from the first through the last part of one multipart message with this
-function on the same thread. `*has_more_out_` is `ZLINK_PART_MORE` when another payload part follows
-and `ZLINK_PART_FINAL` for the last part. Applicable types are raw `SUB` and raw `XSUB`.
+If `parts_capacity_` is smaller than the payload part count, the record is not consumed, the needed
+count is written to `*part_count_out_`, and the call returns `ZLINK_RECV_BUFFER_TOO_SMALL` with
+`ENOBUFS`. Other outputs and array slots are unchanged; retrying with a large enough array receives
+the same record. Applicable types are raw `SUB` and raw `XSUB`.
 
 ---
 
@@ -250,12 +249,12 @@ the handle type does not support subscription queries.
 ## 7. Implementation and contract test verification requirements
 
 Verify the following through only the public surface: the subscription functions, SUB option set
-and get, `zlink_subscribe_part` results, return values, and errno. Each item maps to one unit test.
+and get, `zlink_subscribe` results, return values, and errno. Each item maps to one unit test.
 
 **Subscription registration and removal**
 
 - A filter registered through `zlink_set_subscription` matches by byte prefix—a message is received
-  through `zlink_subscribe_part` when its topic begins with the filter bytes before the terminating
+  through `zlink_subscribe` when its topic begins with the filter bytes before the terminating
   NUL.
 - An empty-string filter subscribes to every message.
 - A filter with a trailing `*` matches `*` as a literal byte; it is not expanded as a wildcard.
@@ -285,23 +284,25 @@ and get, `zlink_subscribe_part` results, return values, and errno. Each item map
 - An out-of-range index produces `ENOENT`; a handle type that does not support subscription queries
   produces `ENOTSUP`.
 
-**Topic-part receive**
+**Topic and payload-record receive**
 
-- A successful `zlink_subscribe_part` copies the binary topic bytes into the caller's buffer without
-  a NUL byte and transfers ownership of the payload part to the caller, which calls
-  `zlink_msg_close(part_out_)` exactly once.
+- A successful `zlink_subscribe` copies the binary topic bytes into the caller's buffer without
+  a NUL byte and fills the array with the complete payload record; the caller closes the leading
+  `*part_count_out_` slots exactly once with `zlink_multipart_close`.
 - On raw SUB and XSUB, `source_rid_out_` always receives `NULL`.
 - If `topic_id_capacity_` is smaller than the topic length (a zero-length topic succeeds with capacity 0), the function writes the required length
   to `*topic_id_len_out_` and returns `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`. Core retains that
   message's topic and payload internally, so a retry with a sufficient buffer receives the same message;
-  `part_out_` and every output other than `topic_id_len_out_` remain unchanged.
+  `parts_out_` and every output other than `topic_id_len_out_` remain unchanged.
+- If `parts_capacity_` is smaller than the payload part count, the call writes the needed count to
+  `*part_count_out_` and returns `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`. The record and other
+  outputs remain unchanged, and retrying with a large enough array receives the same record.
 - A record whose topic frame is not followed by a payload part (the topic frame lacks `MORE`) returns
   `ZLINK_RECV_INTERNAL_ERROR` with `EPROTO`.
 - If capacity is greater than zero but `topic_id_buf_` is NULL, the function returns
   `ZLINK_RECV_INVALID_HANDLE` with `EFAULT` before inspecting or consuming the queue, and every
-  output and `part_out_` remains unchanged.
-- For a multipart message, the next payload part follows while `*has_more_out_` is
-  `ZLINK_PART_MORE`, and the last part sets it to `ZLINK_PART_FINAL`.
+  output and `parts_out_` remains unchanged.
+- All payload parts of a multipart message are returned in array order in one call, with no partial-record state.
 
 **Automatic HWM defaults**
 

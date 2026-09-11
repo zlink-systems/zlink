@@ -37,7 +37,7 @@ distinguishes each sender by `source_rid`.
 | DEALER 2 | `D2` | `"sell TSLA 50"` | source_rid=`D2`, data=`"sell TSLA 50"` |
 | DEALER 3 | `D3` | `"buy MSFT 200"` | source_rid=`D3`, data=`"buy MSFT 200"` |
 
-The ROUTER replies to each DEALER using `zlink_send_part_rid()` with the
+The ROUTER replies to each DEALER using `zlink_send_rid()` with the
 corresponding `source_rid`. Because DEALER uses round-robin for
 *outgoing* connections, if a single DEALER connects to multiple ROUTERs,
 its messages cycle across them (msg1 -> ROUTER-A, msg2 -> ROUTER-B, ...).
@@ -59,67 +59,59 @@ zlink_connect(dealer, "tcp://127.0.0.1:5558");
 ### Sending and Receiving Messages
 
 ```c
-/* Send requests -- can send consecutively without ordering constraints.
-   Each message here is a single-part record, so every call uses
-   ZLINK_PART_FINAL. */
+/* Each call submits a complete single-part record, so requests may be
+   sent consecutively without multipart ordering constraints. */
 zlink_msg_t msg1, msg2, msg3;
 zlink_msg_init_size(&msg1, 9);
 memcpy(zlink_msg_data(&msg1), "request-1", 9);
-zlink_send_part(dealer, &msg1, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
+zlink_send(dealer, &msg1, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
 
 zlink_msg_init_size(&msg2, 9);
 memcpy(zlink_msg_data(&msg2), "request-2", 9);
-zlink_send_part(dealer, &msg2, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
+zlink_send(dealer, &msg2, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
 
 zlink_msg_init_size(&msg3, 9);
 memcpy(zlink_msg_data(&msg3), "request-3", 9);
-zlink_send_part(dealer, &msg3, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
+zlink_send(dealer, &msg3, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
 
-/* Ordinary DATA is drained with zlink_recv_part(). Results for
-   zlink_request_part() are drained with zlink_completion_recv(). */
+/* Ordinary DATA is drained with zlink_recv(). Results for
+   zlink_request() are drained with zlink_completion_recv(). */
 ```
 
 ### Receive Modes
 
-Use `zlink_recv_part()` to receive one part at a time, synchronously.
+Use `zlink_recv()` to receive one complete record synchronously.
 `source_rid_out_` is optional for DEALER; pass `NULL` when the caller does
 not need it (DEALER returns `NULL` there in any case).
 
 ```c
-zlink_msg_t part;
-zlink_part_flag_t more;
-
-zlink_msg_init(&part);
-zlink_recv_result_t rc = zlink_recv_part(
-    dealer, NULL, &part, &more, ZLINK_RECV_FLAGS_NONE);
+zlink_msg_t parts[8];
+size_t part_count = 0;
+zlink_recv_result_t rc = zlink_recv(
+    dealer, NULL, parts, 8, &part_count, ZLINK_RECV_FLAGS_NONE);
 if (rc == ZLINK_RECV_OK) {
-    /* process part; more == ZLINK_PART_MORE means another part of
-       the same record follows */
-    zlink_msg_close(&part);
+    /* Process parts[0..part_count), then close the complete array. */
+    zlink_multipart_close(parts, part_count);
 }
 /* other rc values: ZLINK_RECV_NO_DATA (EAGAIN), TERMINATED, INVALID_HANDLE */
 ```
 
-> When HWM is reached, `zlink_send_part()` blocks (default) or returns
+> When HWM is reached, `zlink_send()` blocks (default) or returns
 > `ZLINK_SUBMIT_BACKPRESSURED` with `ZLINK_SEND_FLAGS_DONTWAIT`. For advanced
 > backpressure patterns, see [Performance Guide](10-performance.en.md).
 
 ## 3. Usage Example
 
 ```c
-/* DEALER → ROUTER send: one two-part record. Every part except the
-   last uses ZLINK_PART_MORE; the last uses ZLINK_PART_FINAL. */
-zlink_msg_t header, body;
-zlink_msg_init_size(&header, 6);
-memcpy(zlink_msg_data(&header), "header", 6);
-zlink_msg_init_size(&body, 4);
-memcpy(zlink_msg_data(&body), "body", 4);
+/* DEALER → ROUTER send: one two-part record in one array. */
+zlink_msg_t parts[2];
+zlink_msg_init_size(&parts[0], 6);
+memcpy(zlink_msg_data(&parts[0]), "header", 6);
+zlink_msg_init_size(&parts[1], 4);
+memcpy(zlink_msg_data(&parts[1]), "body", 4);
 
-zlink_submit_result_t rc = zlink_send_part(
-    dealer, &header, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL);
-if (rc == ZLINK_SUBMIT_OK)
-    rc = zlink_send_part(
-        dealer, &body, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
+zlink_submit_result_t rc = zlink_send(
+    dealer, parts, 2, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
 ```
 
 ## 4. Socket Options
@@ -150,7 +142,7 @@ zlink_connect(dealer, "tcp://127.0.0.1:5558");
 
 ### 4.1 Request-Reply
 
-When DEALER needs a correlated reply, use `zlink_request_part()` instead of
+When DEALER needs a correlated reply, use `zlink_request()` instead of
 ordinary DATA `send/recv`. It attaches a ZMP request-reply envelope and places
 the reply or terminal result in the socket completion queue.
 
@@ -169,8 +161,8 @@ zlink_msg_t req;
 zlink_msg_init_size(&req, 4);
 memcpy(zlink_msg_data(&req), "ping", 4);
 zlink_completion_id_t id = 0;
-zlink_submit_result_t rc = zlink_request_part(
-    dealer, NULL, &req, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
+zlink_submit_result_t rc = zlink_request(
+    dealer, NULL, &req, 1, ZLINK_SEND_FLAGS_NONE,
     0 /* uses ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS */, NULL, &id);
 if (rc == ZLINK_SUBMIT_OK) {
     zlink_completion_t completion = {0};
@@ -183,7 +175,7 @@ if (rc == ZLINK_SUBMIT_OK) {
 }
 ```
 
-When `timeout_ms_ == 0` is passed to `zlink_request_part()`, DEALER uses
+When `timeout_ms_ == 0` is passed to `zlink_request()`, DEALER uses
 the `ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS` socket default (`5000ms` unless set
 otherwise).
 
@@ -207,27 +199,25 @@ zlink_msg_t req;
 zlink_msg_init_size(&req, 5);
 memcpy(zlink_msg_data(&req), "Hello", 5);
 zlink_completion_id_t request_id = 0;
-zlink_request_part(dealer, NULL, &req, ZLINK_SEND_FLAGS_NONE,
-                   ZLINK_PART_FINAL, 0, NULL, &request_id);
+zlink_request(dealer, NULL, &req, 1, ZLINK_SEND_FLAGS_NONE,
+              0, NULL, &request_id);
 
 /* Server: receive REQUEST with source_rid + opaque reply_token. */
 const zlink_routing_id_t *source_rid = NULL;
 zlink_reply_token_t reply_token = 0;
-zlink_msg_t part;
-zlink_part_flag_t more;
-
-zlink_msg_init(&part);
-zlink_router_recv_part(router, &source_rid, &reply_token, &part, &more,
-                       ZLINK_RECV_FLAGS_NONE);
+zlink_msg_t parts[8];
+size_t part_count = 0;
+zlink_router_recv(router, &source_rid, &reply_token,
+                  parts, 8, &part_count, ZLINK_RECV_FLAGS_NONE);
 printf("Received from [%.*s]: %.*s\n", (int)source_rid->size, source_rid->data,
-       (int)zlink_msg_size(&part), (char *)zlink_msg_data(&part));
+       (int)zlink_msg_size(&parts[0]), (char *)zlink_msg_data(&parts[0]));
 
 /* A nonzero token marks REQUEST and must be returned unchanged. */
 zlink_msg_t reply;
 zlink_msg_init_size(&reply, 5);
 memcpy(zlink_msg_data(&reply), "World", 5);
-zlink_reply_part(router, source_rid, reply_token, &reply, ZLINK_PART_FINAL);
-zlink_msg_close(&part);
+zlink_reply(router, source_rid, reply_token, &reply, 1);
+zlink_multipart_close(parts, part_count);
 
 /* Client: receive the reply as REQUEST completion, not DATA. */
 zlink_completion_t completion = {0};
@@ -262,14 +252,14 @@ zlink_connect(dealer2, endpoint);
 zlink_msg_t m1;
 zlink_msg_init_size(&m1, 12);
 memcpy(zlink_msg_data(&m1), "from_dealer1", 12);
-zlink_send_part(dealer1, &m1, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
+zlink_send(dealer1, &m1, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
 
 zlink_msg_t m2;
 zlink_msg_init_size(&m2, 12);
 memcpy(zlink_msg_data(&m2), "from_dealer2", 12);
-zlink_send_part(dealer2, &m2, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
+zlink_send(dealer2, &m2, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
 
-/* zlink_router_recv_part() distinguishes each DEALER's message by
+/* zlink_router_recv() distinguishes each DEALER's message by
    its source_rid */
 ```
 
@@ -298,33 +288,24 @@ zlink_proxy(frontend, backend, NULL);
 
 ```c
 /* Worker thread: a plain DEALER connected to the backend. The proxy
-   presents the client's envelope as a leading part, so the worker
-   reads it, then the payload, and echoes the same envelope back
-   ahead of its reply -- no target routing id is passed explicitly. */
+   presents the client's envelope and payload as one record, so the worker
+   receives the complete array and echoes the same envelope ahead of its
+   reply. No target routing id is passed explicitly. */
 void worker_thread(void *arg) {
     void *worker = zlink_socket(ctx, ZLINK_SOCKET_DEALER);
     zlink_connect(worker, "inproc://backend");
 
-    zlink_msg_t envelope, request;
-    zlink_part_flag_t more;
-
-    zlink_msg_init(&envelope);
-    zlink_recv_part(worker, NULL, &envelope, &more, ZLINK_RECV_FLAGS_NONE);
-    /* more == ZLINK_PART_MORE: the payload follows */
-
-    zlink_msg_init(&request);
-    zlink_recv_part(worker, NULL, &request, &more, ZLINK_RECV_FLAGS_NONE);
-    /* more == ZLINK_PART_FINAL: request is complete */
+    zlink_msg_t parts[2];
+    size_t part_count = 0;
+    zlink_recv(worker, NULL, parts, 2, &part_count, ZLINK_RECV_FLAGS_NONE);
+    /* parts[0] is the envelope and parts[1] is the request payload. */
 
     /* Process request, then reply: re-send the envelope, then the
        reply payload */
-    zlink_msg_t reply;
-    zlink_msg_init_size(&reply, 5);
-    memcpy(zlink_msg_data(&reply), "World", 5);
-
-    zlink_send_part(worker, &envelope, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL);
-    zlink_send_part(worker, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
-    zlink_msg_close(&request);
+    zlink_msg_close(&parts[1]);
+    zlink_msg_init_size(&parts[1], 5);
+    memcpy(zlink_msg_data(&parts[1]), "World", 5);
+    zlink_send(worker, parts, 2, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
 
     /* Worker stays alive until socket is closed */
 }
@@ -347,14 +328,14 @@ zlink_connect(b, "tcp://127.0.0.1:5558");
 zlink_msg_t ping;
 zlink_msg_init_size(&ping, 4);
 memcpy(zlink_msg_data(&ping), "ping", 4);
-zlink_send_part(a, &ping, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
+zlink_send(a, &ping, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
 
 zlink_msg_t pong;
 zlink_msg_init_size(&pong, 4);
 memcpy(zlink_msg_data(&pong), "pong", 4);
-zlink_send_part(b, &pong, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
+zlink_send(b, &pong, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
 
-/* b receives "ping" and a receives "pong" via zlink_recv_part() */
+/* b receives "ping" and a receives "pong" via zlink_recv() */
 ```
 
 ## 6. Caveats
@@ -373,8 +354,8 @@ zlink_msg_t msg;
 zlink_msg_init_size(&msg, 4);
 memcpy(zlink_msg_data(&msg), "data", 4);
 zlink_completion_id_t wait_token = 0;   /* identifies the WRITABLE record when BACKPRESSURED */
-zlink_submit_result_t rc = zlink_send_part(
-    dealer, &msg, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL, &wait_token);
+zlink_submit_result_t rc = zlink_send(
+    dealer, &msg, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL, &wait_token);
 if (rc == ZLINK_SUBMIT_NOT_ADMITTED) {
     /* No connected peer to admit the message */
 } else if (rc == ZLINK_SUBMIT_BACKPRESSURED) {
@@ -396,8 +377,8 @@ and unequal positive weights change the send ratio. The underlying
 connections stay alive, so a peer that flips back to a positive weight
 rejoins the rotation without reconnect.
 
-If every known peer is `0`, `zlink_send_part()` and
-`zlink_request_part()` return `ZLINK_SUBMIT_NOT_ADMITTED`. The caller
+If every known peer is `0`, `zlink_send()` and
+`zlink_request()` return `ZLINK_SUBMIT_NOT_ADMITTED`. The caller
 should wait for at least one peer to return to a positive weight before
 retrying; treating `NOT_ADMITTED` as a hard failure would discard
 messages that are expected to succeed once maintenance ends.

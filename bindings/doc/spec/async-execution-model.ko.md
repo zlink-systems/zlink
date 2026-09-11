@@ -53,7 +53,7 @@ Awaitable은 비동기 완료를 담는 언어별 값을 함께 가리키는 문
 | Node | `Promise<T>` |
 | Python | `Awaitable[T]` |
 | Rust | `Future<Output = T>` |
-| Go | `Submit(context.Context)` 호출을 실행하는 goroutine이 internal completion을 기다린다 |
+| Go | `Submit(context.Context)`는 즉시 결과 객체를 돌려주고, `Admitted(ctx)`·`Reply(ctx)`를 실행하는 goroutine이 internal completion을 기다린다 |
 
 동기 terminal의 반환값은 awaitable이 아니다. `void`, collection, `Result`, `error` 또는
 언어별 exception으로 호출 안에서 결정한 결과를 전달한다.
@@ -85,7 +85,7 @@ blocking terminal을 직렬로 호출하지 않는다. Binding은 blocking termi
 - **바인딩은 Core에 전달한 context의 유효 수명을 보장하고 submit 결과와 completion이 경합해도 언어 terminal을 정확히 한 번 끝내며 남은 native payload를 정확히 한 번 정리한다.**
   Completion은 submit 반환 전에 읽힐 수 있으므로, 반환 순서가 결과 유실·중복 완료·중복
   해제로 이어져서는 안 된다. Context의 native 수명은
-  [Core part send](../../../core/doc/spec/core/socket/README.ko.md#part-send와-pending-admission)와
+  [Core whole-message send](../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)와
   [request 계약](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)이 소유한다.
   내부 확인 조건은 각 native payload에 해제 또는 언어 소유권 이전이 한 번만 대응하는 것이다.
 
@@ -94,6 +94,13 @@ Submit 반환값과 대기 토큰을 언어 결과로 연결하는 기준은
 해당 submit 결과와 합류하기 전에는 terminal을 끝내지 않는다. 조기 completion을 처리한
 `wait()`도 합류 후 settle 또는 cleanup이 끝나기 전에는 `PollCompletion` progress를 반환하지
 않는다. Blocking send와 reply에는 completion을 기다리는 합류가 없다.
+
+비동기 종결자가 돌려주는 결과 객체는 이 합류를 두 stage로 나눠 노출한다. `result`는 종결자 반환
+시점 스냅샷(`OK`|`BACKPRESSURED`)이며 바뀌지 않고, 그 뒤의 재제출 결과는 `admitted`로만 관측된다.
+`admitted`는 admission에서 완료되고(`OK`면 반환 시 이미 완료, `BACKPRESSURED`면 WRITABLE 재제출이
+admission된 뒤 완료), REQUEST의 `reply`는 `admitted` 성공 뒤에만 완료될 수 있다. `admitted`가
+실패하면 `reply`도 같은 원인으로 실패한다. 두 stage는 각각 정확히 한 번 끝나며, 같은 실패를 두 번
+보고하거나 한쪽만 끝나지 않는다 — 위 정확히 한 번·수명 결과가 stage 분리 뒤에도 그대로 성립한다.
 
 **언어별 재량** — 등록 시점과 자료구조는 구현이 정한다. Submit 반환 전 등록, drain과 등록의
 직렬화, 조기 record 보관은 모두 위 완료·수명 결과를 보존할 때만 동등한 방법이다.

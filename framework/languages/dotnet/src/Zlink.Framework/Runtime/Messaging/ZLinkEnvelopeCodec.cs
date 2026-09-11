@@ -1,9 +1,58 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Text.Json;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Messaging;
+
+internal sealed class ZLinkMultipartPayloadView(
+    Message frame,
+    int[] ranges)
+{
+    private ReadOnlyMemory<byte>? _managedFrame;
+
+    internal int Count => ranges.Length / 2;
+
+    internal ReadOnlySpan<byte> GetSpan(int index)
+    {
+        EnsureIndex(index);
+        return frame.AsReadOnlySpan().Slice(
+            ranges[index * 2],
+            ranges[index * 2 + 1]);
+    }
+
+    internal ReadOnlyMemory<byte> GetMemory(int index)
+    {
+        EnsureIndex(index);
+        var memory = _managedFrame ??= frame.AsReadOnlyMemory();
+        return memory.Slice(ranges[index * 2], ranges[index * 2 + 1]);
+    }
+
+    internal IReadOnlyList<Message> RetainMessages()
+    {
+        var result = new Message[Count];
+        var created = 0;
+        try
+        {
+            for (; created < result.Length; created++)
+                result[created] = Message.From(GetSpan(created));
+            return result;
+        }
+        catch
+        {
+            for (var index = 0; index < created; index++)
+                result[index].Dispose();
+            throw;
+        }
+    }
+
+    private void EnsureIndex(int index)
+    {
+        if ((uint)index >= (uint)Count)
+            throw new ArgumentOutOfRangeException(nameof(index));
+    }
+}
 
 internal enum ZLinkMessageKind
 {
@@ -53,7 +102,8 @@ internal static class ZLinkEnvelopeCodec
     private const string JsonContentType = "application/json";
     private const int MaximumSimpleHeaderCacheEntries = 4096;
     private static readonly ZLinkStateLane CacheLane = new();
-    private static readonly Dictionary<SimpleHeaderKey, byte[]> SimpleHeaderCache = new();
+    private static ImmutableDictionary<SimpleHeaderKey, byte[]> SimpleHeaderCache =
+        ImmutableDictionary<SimpleHeaderKey, byte[]>.Empty;
     private static readonly ConcurrentQueue<SimpleHeaderKey> SimpleHeaderCacheOrder = new();
     private static HeaderCacheEntry[] DecodedHeaderCache = [];
 
@@ -65,51 +115,18 @@ internal static class ZLinkEnvelopeCodec
         Type? bodyType,
         ZLinkCodecRegistryBuilder? codecs)
     {
-        if (bodyType == typeof(ZLinkMessage))
+        var bodyMessage = EncodeBody(body, bodyType, codecs, out var contentType);
+        try
         {
-            if (body is not ZLinkMessage message)
-                throw new InvalidOperationException(
-                    $"Envelope body type is ZLinkMessage, but body instance is '{body?.GetType()}'.");
-
-            var encoded = message.Encode(codecs ?? new ZLinkCodecRegistryBuilder());
             return ZLinkMessageParts.Create(
-                EncodeHeader(header, encoded.ContentType),
-                Message.From(encoded.Payload.Bytes.Span));
+                EncodeHeader(header, contentType),
+                bodyMessage);
         }
-
-        var hasSerializer = TryResolveBodySerializer(
-            body,
-            bodyType,
-            codecs,
-            out var contentType,
-            out var serializer,
-            out var resolutionCompleted);
-        if (hasSerializer)
+        catch
         {
-            var headerMessage = EncodeHeader(header, contentType);
-            try
-            {
-                return ZLinkMessageParts.Create(
-                    headerMessage,
-                    EncodeBodyWithSerializer(body!, bodyType!, serializer!));
-            }
-            catch
-            {
-                headerMessage.Dispose();
-                throw;
-            }
+            bodyMessage.Dispose();
+            throw;
         }
-
-        return ZLinkMessageParts.Create(
-            EncodeHeader(
-                header,
-                resolutionCompleted ? contentType : JsonContentType),
-            EncodeBody(
-                body,
-                bodyType,
-                codecs,
-                resolutionCompleted,
-                serializer));
     }
 
     public static IReadOnlyList<Message> EncodeRawBodyParts(
@@ -181,13 +198,40 @@ internal static class ZLinkEnvelopeCodec
 
     public static Message EncodeBody(object? body, Type? bodyType, ZLinkCodecRegistryBuilder? codecs)
     {
+        return EncodeBody(body, bodyType, codecs, out _);
+    }
+
+    // The encoded body may outlive one request attempt (for example, a channel
+    // reselection). Return the resolved content type with the owned Message so
+    // each fresh envelope header describes those same bytes without resolving
+    // or serializing the typed value again.
+    public static Message EncodeBody(
+        object? body,
+        Type? bodyType,
+        ZLinkCodecRegistryBuilder? codecs,
+        out string contentType)
+    {
+        if (bodyType == typeof(ZLinkMessage))
+        {
+            if (body is not ZLinkMessage message)
+                throw new InvalidOperationException(
+                    $"Envelope body type is ZLinkMessage, but body instance is '{body?.GetType()}'.");
+
+            var encoded = message.Encode(codecs ?? new ZLinkCodecRegistryBuilder());
+            contentType = encoded.ContentType;
+            return Message.From(encoded.Payload.Bytes.Span);
+        }
+
         var hasSerializer = TryResolveBodySerializer(
             body,
             bodyType,
             codecs,
-            out _,
+            out var resolvedContentType,
             out var serializer,
             out var resolutionCompleted);
+        contentType = resolutionCompleted
+            ? resolvedContentType
+            : JsonContentType;
         return EncodeBody(
             body,
             bodyType,
@@ -237,17 +281,6 @@ internal static class ZLinkEnvelopeCodec
         return EncodeJsonPart(body, bodyType);
     }
 
-    private static Message EncodeBodyWithSerializer(
-        object body,
-        Type bodyType,
-        IZLinkMessageSerializer serializer)
-    {
-        if (serializer is IZLinkMessagePartSerializer partSerializer)
-            return partSerializer.SerializePart(body, bodyType);
-
-        return Message.From(serializer.Serialize(body, bodyType).Bytes.Span);
-    }
-
     public static T DecodePart<T>(Message message)
     {
         return JsonSerializer.Deserialize<T>(message.AsReadOnlySpan(), ZLinkJsonSerializerOptions.Default)
@@ -261,11 +294,15 @@ internal static class ZLinkEnvelopeCodec
 
     public static ZLinkEnvelopeHeader DecodeHeader(
         Message message,
-        bool validateFlow = true)
+        bool validateFlow = true) =>
+        DecodeHeader(message.AsReadOnlySpan(), validateFlow);
+
+    private static ZLinkEnvelopeHeader DecodeHeader(
+        ReadOnlySpan<byte> bytes,
+        bool validateFlow)
     {
-        var bytes = message.AsReadOnlySpan();
         var hash = HashBytes(bytes);
-        var cached = FindDecodedHeaderCacheEntry(message, hash);
+        var cached = FindDecodedHeaderCacheEntry(bytes, hash);
         if (cached is not null)
             return ValidateDecodedFlow(cached, validateFlow);
 
@@ -303,6 +340,14 @@ internal static class ZLinkEnvelopeCodec
     {
         EnsurePart(parts, 0, "header");
         return DecodeHeader(parts[0], validateFlow);
+    }
+
+    internal static ZLinkEnvelopeHeader DecodeHeader(
+        ZLinkMultipartPayloadView parts,
+        bool validateFlow = true)
+    {
+        EnsurePart(parts, 0, "header");
+        return DecodeHeader(parts.GetSpan(0), validateFlow);
     }
 
     internal static ulong MeasureApplicationPayloadBytes(
@@ -416,6 +461,46 @@ internal static class ZLinkEnvelopeCodec
             bodyType);
     }
 
+    internal static object? DecodeBody(
+        ZLinkMultipartPayloadView parts,
+        Type bodyType,
+        string contentType,
+        ZLinkCodecRegistryBuilder? codecs)
+    {
+        EnsurePart(parts, 1, "body");
+        var body = parts.GetSpan(1);
+        IZLinkMessageSerializer? customSerializer = null;
+        if (!contentType.Equals(JsonContentType, StringComparison.OrdinalIgnoreCase)
+            && (codecs is null
+                || !codecs.TryGetSerializer(contentType, out customSerializer)))
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                $"No payload serializer is registered for received content type '{contentType}'.");
+
+        if (bodyType == typeof(Message))
+            return Message.From(body);
+        if (bodyType == typeof(ZLinkMessage))
+            return ZLinkMessage.FromEncoded(
+                contentType,
+                parts.GetMemory(1),
+                codecs ?? new ZLinkCodecRegistryBuilder());
+        if (bodyType == typeof(ReadOnlyMemory<byte>))
+            return parts.GetMemory(1);
+        if (body.IsEmpty)
+            return bodyType.IsValueType
+                ? Activator.CreateInstance(bodyType)
+                : null;
+        if (customSerializer is not null)
+        {
+            if (customSerializer is IZLinkMessageSpanDeserializer spanDeserializer)
+                return spanDeserializer.Deserialize(body, bodyType);
+            return customSerializer.Deserialize(
+                ZLinkEncodedPayload.FromOwned(parts.GetMemory(1)),
+                bodyType);
+        }
+        return ZLinkFrameworkJsonPayloadCodec.Deserialize(body, bodyType);
+    }
+
     public static Message EncodeJsonPart<T>(T value)
     {
         return Message.From(EncodeJsonBytes(value));
@@ -477,6 +562,17 @@ internal static class ZLinkEnvelopeCodec
     private static void EnsurePart(IReadOnlyList<Message> parts, int index, string name)
     {
         if (parts.Count <= index) throw new InvalidOperationException($"ZLink envelope {name} part is missing.");
+    }
+
+    private static void EnsurePart(
+        ZLinkMultipartPayloadView parts,
+        int index,
+        string name)
+    {
+        if (parts.Count <= index)
+            throw new ZLinkEnvelopeProtocolException(
+                InvalidProtocolHeader(),
+                $"ZLink envelope {name} part is missing.");
     }
 
     private static bool IsSimpleHeader(ZLinkEnvelopeHeader header)
@@ -620,20 +716,28 @@ internal static class ZLinkEnvelopeCodec
         // Message and channel names are application input. Keep a bounded
         // replacement cache so hot keys remain cheap after arbitrary keys
         // have filled the cache.
-        return AwaitStateLane(CacheLane.RunAsync(() =>
-        {
-            if (SimpleHeaderCache.TryGetValue(key, out var cached))
-                return cached;
+        if (Volatile.Read(ref SimpleHeaderCache).TryGetValue(key, out var hit))
+            return hit;
+        return AddOnMiss(key);
 
-            while (SimpleHeaderCache.Count >= MaximumSimpleHeaderCacheEntries
-                   && SimpleHeaderCacheOrder.TryDequeue(out var evicted))
-                SimpleHeaderCache.Remove(evicted);
+        // Keep the mutation closure on the miss path; a warm lookup does not
+        // allocate an owner-turn callback merely to return immutable bytes.
+        static byte[] AddOnMiss(SimpleHeaderKey key) =>
+            AwaitStateLane(CacheLane.RunAsync(() =>
+            {
+                var cache = SimpleHeaderCache;
+                if (cache.TryGetValue(key, out var cached))
+                    return cached;
 
-            var encoded = EncodeSimpleHeaderBytes(key);
-            SimpleHeaderCache[key] = encoded;
-            SimpleHeaderCacheOrder.Enqueue(key);
-            return encoded;
-        }));
+                while (cache.Count >= MaximumSimpleHeaderCacheEntries
+                       && SimpleHeaderCacheOrder.TryDequeue(out var evicted))
+                    cache = cache.Remove(evicted);
+
+                var encoded = EncodeSimpleHeaderBytes(key);
+                SimpleHeaderCacheOrder.Enqueue(key);
+                Volatile.Write(ref SimpleHeaderCache, cache.Add(key, encoded));
+                return encoded;
+            }));
     }
 
     private static byte[] EncodeSimpleHeaderBytes(SimpleHeaderKey key) =>
@@ -662,20 +766,16 @@ internal static class ZLinkEnvelopeCodec
     }
 
     private static ZLinkEnvelopeHeader? FindDecodedHeaderCacheEntry(
-        Message message,
-        ulong hash) =>
-        AwaitStateLane(CacheLane.RunAsync(() =>
+        ReadOnlySpan<byte> bytes,
+        ulong hash)
+    {
+        foreach (var entry in Volatile.Read(ref DecodedHeaderCache))
         {
-            var cache = DecodedHeaderCache;
-            foreach (var entry in cache)
-            {
-                if (entry.Hash == hash
-                    && entry.Bytes.AsSpan().SequenceEqual(message.AsReadOnlySpan()))
-                    return entry.Header;
-            }
-
-            return null;
-        }));
+            if (entry.Hash == hash && entry.Bytes.AsSpan().SequenceEqual(bytes))
+                return entry.Header;
+        }
+        return null;
+    }
 
     private static void AddDecodedHeaderCacheEntry(
         byte[] copy,
@@ -704,7 +804,7 @@ internal static class ZLinkEnvelopeCodec
                 next[^1] = new HeaderCacheEntry(copy, hash, header);
             }
 
-            DecodedHeaderCache = next;
+            Volatile.Write(ref DecodedHeaderCache, next);
         }));
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>

@@ -1,38 +1,6 @@
 use super::*;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Submit message parts directly from their owned `Message` storage.
-///
-/// Core consumes each `zlink_msg_t` on every result, including DONTWAIT
-/// backpressure. Callers that may retry must therefore submit cloned attempt
-/// records and retain the logical packet separately.
-pub(crate) fn submit_part_sequence(
-    parts: &mut crate::messaging_operations::MessageParts,
-    mut submit: impl FnMut(*mut ffi::zlink_msg_t, ffi::zlink_part_flag_t, bool) -> i32,
-) -> Result<i32, SubmitError> {
-    if parts.is_empty() {
-        return Err(submit_validation_error());
-    }
-
-    let part_count = parts.len();
-    for (index, part) in parts.iter_mut().enumerate() {
-        let is_final = index + 1 == part_count;
-        let part_flag = if is_final {
-            ffi::zlink_part_flag_t::ZLINK_PART_FINAL
-        } else {
-            ffi::zlink_part_flag_t::ZLINK_PART_MORE
-        };
-        let rc = submit(part.raw_mut(), part_flag, is_final);
-        if rc != 0 {
-            return Ok(rc);
-        }
-    }
-
-    Ok(0)
-}
+const INITIAL_NATIVE_PART_CAPACITY: usize = 8;
 
 // Short subscribe topics bypass heap allocation entirely (<=22 bytes live
 // inline).
@@ -56,69 +24,121 @@ pub(crate) fn routing_id_from_ptr(raw: *const ffi::zlink_routing_id_t) -> Option
 type RecvBasicParts = Result<Option<Option<RoutingId>>, RecvError>;
 type RecvSubscribedParts = Result<Option<(Option<RoutingId>, smol_str::SmolStr)>, RecvError>;
 
-/// Refill the envelope's private scratch storage in place. The public parts
-/// are swapped only after FINAL, so NO_DATA and errors preserve the envelope.
-/// Core closes the previous contents on a successful receive; initialized
-/// headers can therefore be reused without a temporary message and move.
-pub(crate) fn recv_part_sequence(
+/// Receive one whole record into reusable native storage, growing and retrying
+/// without consuming the record when Core reports insufficient capacity.
+pub(crate) fn recv_whole_message(
     parts: &mut Vec<Message>,
+    native_parts: &mut Vec<ffi::zlink_msg_t>,
     flags: ffi::zlink_recv_flags_t,
-    mut receive: impl FnMut(
-        *mut ffi::zlink_msg_t,
-        *mut ffi::zlink_part_flag_t,
-        ffi::zlink_recv_flags_t,
-        bool,
-    ) -> i32,
+    mut receive: impl FnMut(*mut ffi::zlink_msg_t, usize, *mut usize, ffi::zlink_recv_flags_t) -> i32,
 ) -> Result<bool, RecvError> {
-    let mut count = 0;
-    let mut recv_flags = flags;
+    if native_parts.is_empty() {
+        grow_native_parts(native_parts, INITIAL_NATIVE_PART_CAPACITY);
+    }
+
     loop {
-        if count == parts.len() {
-            parts.push(Message::new().map_err(|error| {
-                RecvError::new(RecvResult::InternalError, error.native_errno())
-            })?);
-        }
-        let mut has_more = ffi::zlink_part_flag_t::ZLINK_PART_FINAL;
+        let mut count = 0;
         let rc = receive(
-            parts[count].raw_mut(),
-            &mut has_more,
-            recv_flags,
-            count == 0,
+            native_parts.as_mut_ptr(),
+            native_parts.len(),
+            &mut count,
+            flags,
         );
-        if rc != 0 {
-            if count == 0
-                && (rc == RecvResult::NoData as i32
-                    || unsafe { ffi::zlink_errno() } == libc::EAGAIN)
-            {
-                return Ok(false);
+
+        if rc == ffi::ZLINK_RECV_BUFFER_TOO_SMALL {
+            if count <= native_parts.len() {
+                return Err(RecvError::new(RecvResult::InternalError, libc::EPROTO));
             }
+            grow_native_parts(native_parts, count);
+            continue;
+        }
+
+        if rc == RecvResult::NoData as i32
+            || (rc != 0 && unsafe { ffi::zlink_errno() } == libc::EAGAIN)
+        {
+            return Ok(false);
+        }
+        if rc != 0 {
             return Err(check_recv_rc(rc).unwrap_err());
         }
-        count += 1;
-        if has_more == ffi::zlink_part_flag_t::ZLINK_PART_FINAL {
-            parts.truncate(count);
-            return Ok(true);
+        if count == 0 || count > native_parts.len() {
+            return Err(RecvError::new(RecvResult::InternalError, libc::EPROTO));
         }
-        recv_flags = ffi::ZLINK_DONTWAIT;
+
+        return adopt_native_parts(parts, native_parts, count).map(|()| true);
     }
+}
+
+fn grow_native_parts(parts: &mut Vec<ffi::zlink_msg_t>, capacity: usize) {
+    parts.resize_with(capacity, ffi::zlink_msg_t::recv_slot);
+}
+
+fn adopt_native_parts(
+    parts: &mut Vec<Message>,
+    native_parts: &mut Vec<ffi::zlink_msg_t>,
+    count: usize,
+) -> Result<(), RecvError> {
+    parts.clear();
+    parts.reserve(count);
+
+    for index in 0..count {
+        let mut part = Message::new().map_err(|error| {
+            unsafe {
+                ffi::zlink_multipart_close(native_parts.as_mut_ptr(), count);
+            }
+            parts.clear();
+            RecvError::new(RecvResult::InternalError, error.native_errno())
+        })?;
+        let rc = unsafe { ffi::zlink_msg_adopt(part.raw_mut(), &mut native_parts[index]) };
+        if rc != 0 {
+            let errno = unsafe { ffi::zlink_errno() };
+            unsafe {
+                ffi::zlink_multipart_close(native_parts.as_mut_ptr(), count);
+            }
+            parts.clear();
+            return Err(RecvError::new(
+                RecvResult::InternalError,
+                if errno == 0 { libc::EIO } else { errno },
+            ));
+        }
+        parts.push(part);
+    }
+
+    unsafe {
+        ffi::zlink_multipart_close(native_parts.as_mut_ptr(), count);
+    }
+    Ok(())
 }
 
 pub(crate) fn recv_basic_parts(
     handle: *mut c_void,
     flags: ffi::zlink_recv_flags_t,
     parts: &mut Vec<Message>,
+    native_parts: &mut Vec<ffi::zlink_msg_t>,
 ) -> RecvBasicParts {
     let mut routing_id = None;
-    let received = recv_part_sequence(parts, flags, |part, has_more, recv_flags, first| {
-        let mut source_rid_ptr = ptr::null();
-        let rc = unsafe {
-            ffi::zlink_recv_part(handle, &mut source_rid_ptr, part, has_more, recv_flags)
-        };
-        if first && rc == 0 {
-            routing_id = routing_id_from_ptr(source_rid_ptr);
-        }
-        rc
-    })?;
+    let received = recv_whole_message(
+        parts,
+        native_parts,
+        flags,
+        |buffer, capacity, count, recv_flags| {
+            let mut source_rid_ptr = ptr::null();
+            let rc = unsafe {
+                ffi::zlink_recv(
+                    handle,
+                    &mut source_rid_ptr,
+                    buffer,
+                    capacity,
+                    count,
+                    recv_flags,
+                )
+            };
+            if rc == 0 {
+                routing_id = routing_id_from_ptr(source_rid_ptr);
+            }
+            rc
+        },
+    )?;
     Ok(received.then_some(routing_id))
 }
 
@@ -127,29 +147,36 @@ pub(crate) fn recv_subscribed_parts(
     topic_buf: &mut [i8; 256],
     flags: ffi::zlink_recv_flags_t,
     parts: &mut Vec<Message>,
+    native_parts: &mut Vec<ffi::zlink_msg_t>,
 ) -> RecvSubscribedParts {
     let mut routing_id = None;
     let mut topic = smol_str::SmolStr::default();
-    let received = recv_part_sequence(parts, flags, |part, has_more, recv_flags, first| {
-        let mut source_rid_ptr = ptr::null();
-        let mut topic_len = topic_buf.len();
-        let rc = unsafe {
-            ffi::zlink_subscribe_part(
-                handle,
-                &mut source_rid_ptr,
-                topic_buf.as_mut_ptr(),
-                topic_buf.len(),
-                &mut topic_len,
-                part,
-                has_more,
-                recv_flags,
-            )
-        };
-        if first && rc == 0 {
-            routing_id = routing_id_from_ptr(source_rid_ptr);
-            topic = cstr_buf_to_smolstr(topic_buf, topic_len);
-        }
-        rc
-    })?;
+    let received = recv_whole_message(
+        parts,
+        native_parts,
+        flags,
+        |buffer, capacity, count, recv_flags| {
+            let mut source_rid_ptr = ptr::null();
+            let mut topic_len = topic_buf.len();
+            let rc = unsafe {
+                ffi::zlink_subscribe(
+                    handle,
+                    &mut source_rid_ptr,
+                    topic_buf.as_mut_ptr(),
+                    topic_buf.len(),
+                    &mut topic_len,
+                    buffer,
+                    capacity,
+                    count,
+                    recv_flags,
+                )
+            };
+            if rc == 0 {
+                routing_id = routing_id_from_ptr(source_rid_ptr);
+                topic = cstr_buf_to_smolstr(topic_buf, topic_len);
+            }
+            rc
+        },
+    )?;
     Ok(received.then_some((routing_id, topic)))
 }

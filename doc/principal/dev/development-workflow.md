@@ -20,6 +20,36 @@ One branch = one Issue = one worktree. One Issue may have several PRs (§5).
 
 ## 2. Registering work — GitHub Issues
 
+### 2.0 Three kinds of work
+
+The procedure exists for **changes that land in main**. Not every task carries the same weight.
+
+| Kind | Issue | Branch and worktree | PR | Board |
+|---|---|---|---|---|
+| **A change that lands in main** | yes | yes | yes | listed |
+| **A defect found** | yes (stays open until fixed) | when fixing | when fixing | listed |
+| **A throwaway experiment or measurement** | **no** | a temporary one if code must change, not on the board | **no** | not listed |
+
+**When an experiment produces something worth keeping, open a PR from it directly, with no Issue.**
+Branch protection asks for a PR, not for an Issue. Naming the report path and the measurements in the
+PR body is traceability enough. An Issue is for the other cases — work that spans sessions or people,
+work deferred rather than done now, and work that has to appear in a release-scope decision. So the
+default path is **experiment → (if good) PR**, and an Issue is created when the work must be handed
+over or postponed. **The moment an Issue becomes useful is when the PR goes up** — there is no reason
+to create one earlier. Start in a worktree, and register the Issue at PR time when the work needs
+tracking. Only two cases justify creating it up front: work long enough that it should be visible on
+the board while it runs, and work someone else will pick up.
+
+An experiment leaves only its brief and report under `.artifacts/codex/<name>/`. When it must change
+code it gets a worktree without an Issue, a PR or a board entry, and that worktree is removed
+afterwards with the sweep in [§4.3](#43-the-other-development-scripts). When an experiment **finds a
+defect, that is when an Issue is created** — the experiment itself never becomes one.
+
+There is one test: **does the result of this work stay in main?** When it does not, the procedure
+does not apply.
+
+### 2.1 Writing the Issue
+
 - Every piece of work is an Issue before it starts. The title is a one-line outcome; the body has
   three sections — **scope / done criteria / evidence** — and none may be empty. Evidence names the
   decision record number (`FB-nnn`, `D-nnn`) **with its file path and anchor**
@@ -46,7 +76,8 @@ One branch = one Issue = one worktree. One Issue may have several PRs (§5).
 - **Project** = the board `ZLink` (https://github.com/users/zlink-systems/projects/1, also linked in the
   repository's Projects tab). Board rows are **Issues only** (PRs appear as linked information). Status
   `Todo → In progress → Review → Done`, fields `area` (same values as the label, filled automatically)
-  and `runner` (`astra` / `sol` / `direct` / empty; optional). **Only `work.sh` moves the status**
+  and `runner` (`astra` / `sol` / `direct` / empty; optional). **Only `work.sh` and its equivalent Windows
+  `work.ps1` entry point move the status**
   (built-in GitHub workflows that touch the same field stay off). A failed Project update is a warning
   and never blocks the work (§4.2).
 - Labels stop at the two axes in §2; status and runner live only in Project fields.
@@ -69,7 +100,7 @@ Binding local packages (nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `syst
 C++ `install/zlink-cpp`) have equal outputs for equal inputs, so they are shared by hash (the same
 principle as the vcpkg binary cache and the Conan cache). Rules:
 
-- **Key** = first 16 characters of `sha256(tree hash of bindings/ ‖ BINDINGS_VERSION ‖ Core version ‖
+- **Key** = first 16 characters of `sha256(tree hash of bindings/ ‖ map of per-language bindings/<language>/VERSION values ‖ Core version ‖
   tree hash of scripts/local-package/ ‖ platform <os>-<arch> ‖ toolchain id)`. The toolchain id is one
   line combining the compiler, SDK, Node and JDK versions `build-wsl.sh` uses (the script prints it).
 - **Share only from a clean tree**: with staged, unstaged or untracked changes under `bindings/` or
@@ -92,7 +123,7 @@ principle as the vcpkg binary cache and the Conan cache). Rules:
   links only, never cache entries.
 - Issues that need no packages (documentation work) start with `work.sh start --no-packages`.
 
-### 4.2 One command per step — `scripts/dev/work.sh`
+### 4.2 One command per step — `scripts/dev/work.sh` / Windows `scripts/dev/work.ps1`
 
 Each step is one command so that nothing is forgotten; people and the supervisor start, submit and
 finish work only through it. **Every command is safe to re-run**: it inspects the existing
@@ -110,6 +141,7 @@ on failure, prints the created IDs, URLs and paths together with the resume comm
 - Project and milestone updates are best-effort: without permission or connectivity a warning is
   printed and the local steps continue. `status` always shows the local information.
 - Until `work.sh` exists (§8) the manual procedure is the command list in §8.
+- On Windows, run the same subcommands and options with `powershell -File scripts/dev/work.ps1 ...`.
 
 ### 4.3 The other development scripts
 

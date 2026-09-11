@@ -230,24 +230,40 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
 
     internal bool TryAcquire(out ZLinkApplicationJobQueueLease? lease)
     {
-        var acquired = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_waiters.Count != 0
-                || PermitsInUseUnderLock()
-                   >= _capacity.EffectiveMaxQueuedApplicationJobs)
-                return new TryAcquireResult(null, false);
-
-            _reservedSupplyPermits = checked(_reservedSupplyPermits + 1);
-            ObservePeakUnderLock();
-            return new TryAcquireResult(
-                new ZLinkApplicationJobQueueLease(this),
-                UpdatePressureStateOnLane());
-        }));
+        var acquired = AwaitStateLane(_lane.RunAsync(() => ReserveAvailableOnLane(1)));
         if (acquired.PressureChanged)
             _receiveFlowController.ApplyPending();
-        lease = acquired.Lease;
+        lease = acquired.Count == 0 ? null : new ZLinkApplicationJobQueueLease(this);
         return lease is not null;
+    }
+
+    internal int TryAcquireBatch(
+        ZLinkApplicationJobQueueLease?[] destination, int offset, int maximum)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentOutOfRangeException.ThrowIfNegative(maximum);
+        if (offset > destination.Length - maximum)
+            throw new ArgumentOutOfRangeException(nameof(maximum));
+        var acquired = AwaitStateLane(_lane.RunAsync(() => ReserveAvailableOnLane(maximum)));
+        for (var index = 0; index < acquired.Count; index++)
+            destination[offset + index] = new ZLinkApplicationJobQueueLease(this);
+        if (acquired.PressureChanged)
+            _receiveFlowController.ApplyPending();
+        return acquired.Count;
+    }
+
+    private (int Count, bool PressureChanged) ReserveAvailableOnLane(int maximum)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_waiters.Count != 0)
+            return (0, false);
+        var count = (int)Math.Min((ulong)maximum,
+            _capacity.EffectiveMaxQueuedApplicationJobs - PermitsInUseUnderLock());
+        if (count == 0)
+            return (0, false);
+        _reservedSupplyPermits = checked(_reservedSupplyPermits + (ulong)count);
+        ObservePeakUnderLock();
+        return (count, UpdatePressureStateOnLane());
     }
 
     internal ZLinkApplicationJobQueueStatus GetStatus()
@@ -564,10 +580,6 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
     private readonly record struct AcquireResult(
         Waiter? Waiter,
         ZLinkApplicationJobQueueLease? ImmediateLease,
-        bool PressureChanged);
-
-    private readonly record struct TryAcquireResult(
-        ZLinkApplicationJobQueueLease? Lease,
         bool PressureChanged);
 
     private readonly record struct ReleaseResult(
@@ -931,6 +943,9 @@ internal sealed class ZLinkApplicationJobQueueRecordOwner : IDisposable
 internal static class ZLinkApplicationJobQueueInvocation
 {
     private static readonly AsyncLocal<Scope?> Current = new();
+
+    // Handler entry releases the queue permit, but the invocation still owns its turn.
+    internal static bool IsActive => Current.Value is not null;
 
     internal static IDisposable Enter(ZLinkApplicationJobQueueLease lease)
     {

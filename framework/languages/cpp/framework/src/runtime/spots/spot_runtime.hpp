@@ -1880,6 +1880,7 @@ class spot_node_runtime_t
       std::optional<std::chrono::steady_clock::time_point> deadline,
       std::function<void (result_t<actor_join_reply_t>)> completion,
       std::function<task_t<void> ()> submit_source_leave = {});
+    std::optional<std::chrono::steady_clock::time_point> next_management_activity () const;
     std::size_t cleanup_expired_actor_admissions ();
     std::size_t cleanup_expired_actor_admissions_at (std::chrono::steady_clock::time_point now);
     bool stage_session_relocation_route (const std::string &transfer_id,

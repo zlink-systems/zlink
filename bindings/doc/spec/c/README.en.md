@@ -112,7 +112,7 @@ The C binding keeps the native ABI shape.
 - Blocking vs. non-blocking behavior is chosen with a flag such as `ZLINK_DONTWAIT`, not a separate public `try_*` function.
 - The send path returns `zlink_submit_result_t` or a documented request result.
 - The recv path returns `zlink_recv_result_t` and fills a caller-owned output storage per the header contract.
-- Multipart payloads use repeated `zlink_msg_t *part` calls and `zlink_part_flag_t`.
+- Multipart payloads use a `zlink_msg_t` array and part count in one call.
 - Routing APIs use an explicit routing id parameter and an explicit output routing id storage.
 - A callback API exposes a C function pointer and userdata only when the public header declares it.
 
@@ -222,7 +222,7 @@ The C binding reports public results as a C result domain, not exceptions.
 
 The C binding is the performance baseline for the other bindings.
 
-- The hot path does not add aggregate materialization when the public part substrate can stream parts as-is.
+- The hot path uses the caller-provided whole-message array directly and does not build another intermediate collection containing the same payload.
 - The send/recv, request, dispatch, poller, timer, stream, SPOT, and actor paths do not add hidden sleeps, busy waits, thread joins, reflection-like dynamic dispatch, coarse global locks, or avoidable copies.
 - The perf runner and samples include only the public header.
 - `bindings/c/perf` measures `core/build`'s runtime unless the perf policy explicitly says otherwise.
@@ -260,7 +260,7 @@ C exposes REQUEST and WRITABLE through a `zlink_completion_t` output.
 [Core completion pull and ownership](../../../../core/doc/spec/core/socket/README.en.md#completion-pull-and-ownership)
 owns the receive and cleanup functions, readiness, and single drain owner.
 SEND/REQUEST results, IDs, wait tokens, input retention, and resubmission conditions follow
-[Core part send](../../../../core/doc/spec/core/socket/README.en.md#part-send-and-pending-admission) and
+[Core whole-message send](../../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission) and
 [Core request](../../../../core/doc/spec/core/socket/README.en.md#request-and-reply).
 C adds no language terminal or completion registry.
 
@@ -302,39 +302,39 @@ typedef struct zlink_completion_t {
   size_t reply_part_count;
 } zlink_completion_t;
 
-ZLINK_EXPORT zlink_submit_result_t zlink_send_part(
+ZLINK_EXPORT zlink_submit_result_t zlink_send(
   void *s_,
-  zlink_msg_t *part_,
+  zlink_msg_t *parts_,
+  size_t part_count_,
   zlink_send_flags_t flags_,
-  zlink_part_flag_t part_flag_,
   void *user_context_,
   zlink_completion_id_t *completion_id_out_);
 
-ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid(
+ZLINK_EXPORT zlink_submit_result_t zlink_send_rid(
   void *s_,
   const zlink_routing_id_t *target_rid_,
-  zlink_msg_t *part_,
+  zlink_msg_t *parts_,
+  size_t part_count_,
   zlink_send_flags_t flags_,
-  zlink_part_flag_t part_flag_,
   void *user_context_,
   zlink_completion_id_t *completion_id_out_);
 
-ZLINK_EXPORT zlink_submit_result_t zlink_request_part(
+ZLINK_EXPORT zlink_submit_result_t zlink_request(
   void *s_,
   const zlink_routing_id_t *target_router_rid_or_null_,
-  zlink_msg_t *part_,
+  zlink_msg_t *parts_,
+  size_t part_count_,
   zlink_send_flags_t flags_,
-  zlink_part_flag_t part_flag_,
   uint32_t timeout_ms_,
   void *user_context_,
   zlink_completion_id_t *completion_id_out_);
 
-ZLINK_EXPORT zlink_submit_result_t zlink_reply_part(
+ZLINK_EXPORT zlink_submit_result_t zlink_reply(
   void *router_,
   const zlink_routing_id_t *source_rid_,
   zlink_reply_token_t reply_token_,
-  zlink_msg_t *part_,
-  zlink_part_flag_t part_flag_);
+  zlink_msg_t *parts_,
+  size_t part_count_);
 
 ZLINK_EXPORT zlink_recv_result_t zlink_completion_recv(
   void *s_,
@@ -344,12 +344,13 @@ ZLINK_EXPORT zlink_recv_result_t zlink_completion_recv(
 ZLINK_EXPORT void zlink_completion_close(
   zlink_completion_t *completion_);
 
-ZLINK_EXPORT zlink_recv_result_t zlink_router_recv_part(
+ZLINK_EXPORT zlink_recv_result_t zlink_router_recv(
   void *router_,
   const zlink_routing_id_t **source_rid_out_,
   zlink_reply_token_t *reply_token_out_,
-  zlink_msg_t *part_out_,
-  zlink_part_flag_t *has_more_out_,
+  zlink_msg_t *parts_out_,
+  size_t parts_capacity_,
+  size_t *part_count_out_,
   zlink_recv_flags_t flags_);
 
 typedef enum zlink_stream_recv_mode_t {

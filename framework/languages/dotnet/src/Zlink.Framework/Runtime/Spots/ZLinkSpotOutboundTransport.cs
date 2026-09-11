@@ -213,7 +213,7 @@ internal sealed class ZLinkSpotOutboundTransport(
         }
     }
 
-    public async ValueTask<IReadOnlyList<Message>> RequestToChannelAsync(
+    public async ValueTask<ZLinkBackendRouteReceived> RequestToChannelAsync(
         string channelName,
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
@@ -246,7 +246,7 @@ internal sealed class ZLinkSpotOutboundTransport(
         }
     }
 
-    public async ValueTask<IReadOnlyList<Message>> RequestToSpotAsync(
+    public async ValueTask<ZLinkBackendRouteReceived> RequestToSpotAsync(
         RoutingId targetNodeRid,
         string targetSpotId,
         ulong targetSpotGeneration,

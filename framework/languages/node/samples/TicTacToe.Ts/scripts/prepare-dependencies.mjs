@@ -3,12 +3,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pathToFileURL } from 'node:url';
 
 const sampleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repositoryHelper = path.resolve(sampleRoot, '../scripts/prepare-sample-dependencies.mjs');
 
 if (fs.existsSync(repositoryHelper)) {
-  const { prepareSampleDependencies } = await import(repositoryHelper);
+  const { prepareSampleDependencies } = await import(pathToFileURL(repositoryHelper).href);
   prepareSampleDependencies(sampleRoot);
 } else {
   const manifest = JSON.parse(fs.readFileSync(path.join(sampleRoot, 'package.json'), 'utf8'));

@@ -11,10 +11,10 @@
 
 | Requirement | Socket pattern | Core API |
 |---|---|---|
-| One-to-one communication between threads | PAIR | `zlink_send_part`, `zlink_recv_part` |
-| Topic-based one-way distribution | PUB/SUB | `zlink_publish_part`, `zlink_subscribe_part` |
-| Async routed request/reply | DEALER/ROUTER | `zlink_request_part`, `zlink_completion_recv`, `zlink_reply_part` |
-| Sending to multiple peers by routing id | ROUTER | `zlink_send_part_rid`, `zlink_router_recv_part` |
+| One-to-one communication between threads | PAIR | `zlink_send`, `zlink_recv` |
+| Topic-based one-way distribution | PUB/SUB | `zlink_publish`, `zlink_subscribe` |
+| Async routed request/reply | DEALER/ROUTER | `zlink_request`, `zlink_completion_recv`, `zlink_reply` |
+| Sending to multiple peers by routing id | ROUTER | `zlink_send_rid`, `zlink_router_recv` |
 | Integrating with an external TCP-family client | STREAM | `zlink_stream_recv_packet` |
 | Waiting on unified readiness | poller | `zlink_poller_add`, `zlink_poller_wait` |
 | Observing connection state | socket monitor | `zlink_socket_monitor_open`, `zlink_socket_monitor_recv` |

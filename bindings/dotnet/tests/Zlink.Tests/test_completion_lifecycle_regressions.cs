@@ -48,7 +48,7 @@ public sealed class test_completion_lifecycle_regressions
 
         using Message request = Message.From("request");
         Task<IReadOnlyList<Message>> pending = dealer.Request()
-            .Message(request).Timeout(TimeSpan.FromSeconds(2)).Async();
+            .Message(request).Timeout(TimeSpan.FromSeconds(2)).Async().Reply;
         using (Received received = Receive(router))
         using (Message reply = Message.From("reply"))
             router.Reply(received.RoutingId!.Value, received.ReplyToken!)
@@ -147,7 +147,7 @@ public sealed class test_completion_lifecycle_regressions
 
         using Message request = Message.From("pending");
         Task<IReadOnlyList<Message>> pending = dealer.Request()
-            .Message(request).Timeout(TimeSpan.FromSeconds(30)).Async();
+            .Message(request).Timeout(TimeSpan.FromSeconds(30)).Async().Reply;
 
         context.Shutdown();
 
@@ -175,7 +175,7 @@ public sealed class test_completion_lifecycle_regressions
 
         using Message request = Message.From("pending");
         Task<IReadOnlyList<Message>> pending = dealer.Request()
-            .Message(request).Timeout(TimeSpan.FromSeconds(30)).Async();
+            .Message(request).Timeout(TimeSpan.FromSeconds(30)).Async().Reply;
 
         context.Shutdown();
         var events = new PollEvent[1];
@@ -235,7 +235,7 @@ public sealed class test_completion_lifecycle_regressions
             dealer.Send().Message(handshake).Submit();
         using Message request = Message.From("pending");
         Task<IReadOnlyList<Message>> pending = dealer.Request()
-            .Message(request).Timeout(TimeSpan.FromSeconds(30)).Async();
+            .Message(request).Timeout(TimeSpan.FromSeconds(30)).Async().Reply;
         var weakDealer = new WeakReference<IDealerSocket>(dealer);
         GC.KeepAlive(dealer);
         return (pending, weakDealer);

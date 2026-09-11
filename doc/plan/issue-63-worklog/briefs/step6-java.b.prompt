@@ -1,0 +1,36 @@
+Coding sub-agent for zlink Issue #63. Work ONLY in this worktree; commit to its detached HEAD. Do NOT
+touch core/doc/** or bindings/doc/**. Do NOT push/PR. Keep input tight; grep before reading.
+
+READ: doc/plan/issue-63-worklog/binding-migration-ref.ko.md (removal→replacement map, D63-6..8 contracts).
+Core is whole-message ONLY now; the removed part symbols no longer exist, so this binding will NOT
+compile until every use is migrated. core/build-dev (symlink) has the new-only API. Reference impl:
+bindings/cpp/src/Runtime/Native/native_receive.hpp (reusable array + grow-on-ENOBUFS retry) and the
+new send contract comments in core/include/zlink/socket/api.h.
+
+TASK (java): migrate BOTH send and recv FFM internals to whole-message; public recv(Received)/send
+builder surface UNCHANGED.
+- runtime/nativeapi (NativeSymbols/Native/InternalAccess): replace downcall handles for the removed
+  zlink_*_part (send&recv) + zlink_xpub_recv_part with zlink_send/send_rid/request/reply/publish,
+  zlink_recv/router_recv/subscribe/xpub_recv (array+count, no part_flag).
+- Internal send loop → one whole-message call over an off-heap zlink_msg_t array; internal recv loop →
+  one whole-message call into a reusable MemorySegment array (grow on ZLINK_RECV_BUFFER_TOO_SMALL,
+  retry; record preserved). Ownership: each native part → one Message closed once; close remaining on
+  failure. STREAM RAW recv via zlink_recv; send count==1. Drop part_flag/MORE/FINAL.
+grep: grep -rn "zlink_.*_part\|ZLINK_PART_\|part_flag" bindings/java/src.
+
+TEST (new-only local Core; do NOT rebuild Core):
+  ZLINK_CORE_SOURCE=local ZLINK_CORE_INCLUDE_DIR="$PWD/core/include" \
+    ZLINK_CORE_LIB_DIR="$PWD/core/build-dev/lib" bash bindings/java/tests/run_tests.sh
+All java contract tests must pass. Update per-message-native-call assertions to new observable behavior
+(no public-contract weakening; explain each).
+
+COMMIT (detached HEAD):
+  bindings(java): whole-message send+recv (drop part API)
+
+  <what changed>. Public recv/send surface unchanged. Refs #63.
+  Test: ZLINK_CORE_SOURCE=local ... bindings/java/tests/run_tests.sh — <pass summary>
+
+  Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01Df7vbMq5yraG6siDn8PAUH
+
+REPORT: files changed, capacity/retry+ownership, tests updated & why, exact java test pass summary.

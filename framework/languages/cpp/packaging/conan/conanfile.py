@@ -13,7 +13,7 @@ required_conan_version = ">=2.1"
 
 class ZlinkFrameworkConan(ConanFile):
     name = "zlink-framework"
-    version = "0.11.0"
+    version = "0.11.1"
     package_type = "static-library"
     license = "FSL-1.1-ALv2"
     homepage = "https://github.com/zlink-systems/zlink"
@@ -31,7 +31,7 @@ class ZlinkFrameworkConan(ConanFile):
 
     def requirements(self):
         for dependency in (
-            "zlink-cpp/0.17.6",
+            "zlink-cpp/0.18.0",
             "boost/1.85.0",
             "nlohmann_json/3.11.3",
             "openssl/[>=3.0 <4]",

@@ -4,7 +4,8 @@
   "private": true,
   "description": "with-grpc local bench, node language row (spec framework/bench/grpc/README.ko.md)",
   "scripts": {
-    "build": "npm --prefix ../../../languages/node ci && npm --prefix ../../../languages/node run build"
+    "build": "npm --prefix ../../../languages/node ci && npm --prefix ../../../languages/node run build",
+    "test": "NODE_PATH=../../../languages/node/node_modules node --test shared/raw-wire.test.js"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.12.6",

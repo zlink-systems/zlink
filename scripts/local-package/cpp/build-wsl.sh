@@ -12,8 +12,8 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Builds the C++ binding at BINDINGS_VERSION against the Core VERSION local
-package and installs it below .artifacts/wsl/install/zlink-cpp/<BINDINGS_VERSION>.
+Builds the C++ binding at bindings/cpp/VERSION against the Core VERSION local
+package and installs it below .artifacts/wsl/install/zlink-cpp/<binding-version>.
 EOF
 }
 
@@ -28,14 +28,16 @@ done
 [[ "$core_prefix" = /* ]] || { echo "--core-prefix must be absolute" >&2; exit 2; }
 core_prefix="$(readlink -f "$core_prefix")"
 core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
-binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
+binding_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$repo_root/bindings/cpp/VERSION")"
 package_version="$(sed -n 's/^project(zlink_cpp VERSION \([0-9.]*\).*/\1/p' "$repo_root/bindings/cpp/CMakeLists.txt" | head -n1)"
 [[ "$package_version" = "$binding_version" ]] || {
   echo "C++ binding version $package_version does not match $binding_version" >&2
   exit 1
 }
 prefix="$artifact_root/install/zlink-cpp/$binding_version"
-build_dir="$artifact_root/build/bindings-cpp-$binding_version"
+# See the note in scripts/local-package/c/build-wsl.sh: the build tree must be
+# addressed by its real path, not the per-run <staging>/build alias.
+build_dir="$(readlink -f "$artifact_root/build")/bindings-cpp-$binding_version"
 rm -rf "$prefix"
 cmake -S "$repo_root/bindings/cpp" -B "$build_dir" \
   -DCMAKE_BUILD_TYPE="$configuration" \

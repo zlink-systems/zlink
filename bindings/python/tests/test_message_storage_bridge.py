@@ -23,7 +23,7 @@ def test_native_submission_preserves_mixed_public_parts(part_count):
                     choices = [owned, bytearray(b"mutable"), memoryview(b"strided")[::2], b""]
                     payloads = [choices[i % len(choices)] for i in range(part_count)]
                     expected = [value.to_bytes() if value is owned else bytes(value) for value in payloads]
-                    await sender.send().messages(*payloads).submit()
+                    await sender.send().messages(*payloads).submit().admitted
                     choices[1][:] = b"changed"
                     assert owned.to_bytes() == b"owned"
                     with zlink.create_received() as received:
@@ -107,13 +107,14 @@ def test_copied_mutable_input_is_independent():
         assert message.to_bytes() == b"original"
 
 
-def test_send_only_allocates_future_when_waiting():
+def test_send_submission_always_exposes_admission_future():
     async def exercise():
         loop = asyncio.get_running_loop()
         accepted = _SendEntry(loop, None, [])
         accepted.succeed_send()
         assert await accepted.wait_async() is None
-        assert accepted.future is None
+        assert accepted.future is accepted.admitted
+        assert accepted.admitted.done()
 
         rejected = _SendEntry(loop, None, [])
         failure = zlink.SubmitError(zlink.SubmitResult.NOT_CONNECTED, 1)
@@ -121,7 +122,8 @@ def test_send_only_allocates_future_when_waiting():
         with pytest.raises(zlink.SubmitError) as raised:
             await rejected.wait_async()
         assert raised.value is failure
-        assert rejected.future is None
+        assert rejected.future is rejected.admitted
+        assert rejected.admitted.done()
 
         pending = _SendEntry(loop, None, [])
         loop.call_soon(pending.succeed_send)
@@ -156,11 +158,13 @@ def test_admitted_send_has_no_completion_registration_or_private_condition():
                     return result
 
                 with patch.object(owner, "_submit_parts", side_effect=submit):
-                    await sender.send().message(b"payload").submit()
+                    submission = sender.send().message(b"payload").submit()
+                    await submission.admitted
                 assert len(observed) == 1
                 entry, result = observed[0]
                 assert result == (int(zlink.SubmitResult.OK), 0, 0)
-                assert entry.future is None
+                assert entry.future is entry.admitted
+                assert entry.admitted.done()
                 assert not owner._entries
                 assert not owner._entries_by_id
                 assert owner._runtime_poller is None
@@ -233,7 +237,9 @@ def test_writable_received_during_submit_is_not_lost_before_registration():
             thread.start()
             assert receiving.wait(3)
             try:
-                await asyncio.wait_for(owner.submit_send(None, b"packet"), 3)
+                result, admission = owner.submit_send(None, b"packet")
+                assert result == zlink.SubmitResult.BACKPRESSURED
+                await asyncio.wait_for(admission, 3)
                 thread.join(3)
                 assert not thread.is_alive()
                 assert drained == [1]

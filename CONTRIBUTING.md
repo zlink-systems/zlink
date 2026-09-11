@@ -185,21 +185,22 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - Number rules (Core `MAJOR.MINOR`, binding `CORE_MAJOR.CORE_MINOR.N`, framework `MAJOR.MINOR.HOTFIX`) are
   owned by [`doc/building/versioning.md`](doc/building/versioning.md).
 - Version bump checklist (one commit):
-  1. Edit only the root `VERSION` (Core) and `BINDINGS_VERSION` (binding and framework pins).
+  1. Edit only the target component's source: root `VERSION` for Core,
+     `bindings/<language>/VERSION` for a binding, or `framework/languages/<language>/VERSION` for a framework.
   2. Run `python3 scripts/local-package/sync-version.py --write`; it updates `core/CMakeLists.txt`,
      the public headers, the raw header mirrors (`bindings/{c,cpp,go,rust}/include`), binding
      manifests, framework pins, the first debian changelog stanza and contract snapshots at once.
      Never hunt for pins by hand.
-  3. Add a section to `core/CHANGELOG.md` (the Core release notes are extracted from it).
+  3. When Core changes, add a section to `core/CHANGELOG.md` (the Core release notes are extracted from it).
   4. Check for missing pins with `scripts/local-package/build-wsl.sh --verify-versions`.
 - Release tag preconditions: §6 gate green, `hotpath_gate` PASS, §7 release comparison PASS
   (or a user decision recorded in the decision log), package verification with
   `scripts/local-package/core/verify-package.sh`.
 - Every publish happens **in GitHub Actions**. Never run `npm publish`, `dotnet nuget push` or a
   Central upload locally, and never create API tokens (npm and nuget use Trusted Publishing, Maven
-  Central uses repository secrets). The order is Core (`core/vX.Y.Z` tag + `build.yml` dispatch) →
-  the four bindings (`cpp/`, `node/`, `java/`, `dotnet/v*` tags) → the four frameworks (one
-  `framework/vA.B.C` tag). Workflows, triggers, channels and verification commands are owned by
+  Central uses repository secrets). Per-language order is Core (`core/vX.Y.Z` tag + `build.yml` dispatch) →
+  binding (`<language>/vX.Y.N`) → framework (`framework-<language>/vA.B.C`). Workflows, triggers,
+  channels and verification commands are owned by
   [`doc/building/release-pipeline.md`](doc/building/release-pipeline.md); accounts and secrets by
   [`doc/building/release-accounts.md`](doc/building/release-accounts.md); ConanCenter and vcpkg go
   through PRs ([`doc/building/pr-drafts/`](doc/building/pr-drafts/)).

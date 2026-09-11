@@ -3,17 +3,16 @@ package systems.zlink.framework.runtime.channels;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -22,6 +21,9 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
@@ -50,17 +52,17 @@ final class ZLinkChannelCallRuntime {
             long authorityOwnerGeneration,
             long ownerLeaseGeneration,
             List<Message> parts,
-            Duration timeout);
+            Duration timeout,
+            ZLinkServiceOperationRegistry operations,
+            UUID operationId);
     }
 
     private final ZLinkMessageFlowTracer flow;
-    private final ScheduledExecutorService timeoutExecutor;
+    private final ZLinkServiceOperationRegistry operations;
     private final LongSupplier nanoTime;
     private final ZLinkChannelReplyDecoder replyDecoder;
     private final SpotSend spotSend;
     private final SpotRequest spotRequest;
-    private final Set<CompletableFuture<?>> pendingRequests = ConcurrentHashMap.newKeySet();
-    private final AtomicBoolean closing = new AtomicBoolean();
 
     ZLinkChannelCallRuntime(
         ZLinkMessageFlowTracer flow,
@@ -79,7 +81,10 @@ final class ZLinkChannelCallRuntime {
         SpotRequest spotRequest,
         LongSupplier nanoTime) {
         this.flow = flow;
-        this.timeoutExecutor = timeoutExecutor;
+        this.operations = new ZLinkServiceOperationRegistry(
+            timeoutExecutor, ZLinkServiceOperationRegistry.DEFAULT_MAX_PENDING_OPERATIONS,
+            closedFailure(), () -> requestFailure(
+                new TimeoutException("service operation timed out")), nanoTime);
         this.nanoTime = nanoTime;
         this.replyDecoder = replyDecoder;
         this.spotSend = spotSend;
@@ -100,58 +105,90 @@ final class ZLinkChannelCallRuntime {
             flow.captureEnabled());
     }
 
-    void track(CompletableFuture<?> result, Duration timeout) {
-        if (closing.get()) {
-            result.completeExceptionally(closedFailure());
-            return;
-        }
-        pendingRequests.add(result);
-        if (closing.get()) {
-            pendingRequests.remove(result);
-            result.completeExceptionally(closedFailure());
-            return;
-        }
-        final java.util.concurrent.ScheduledFuture<?> timeoutTask;
+    <T> CompletableFuture<T> submit(
+        Duration timeout,
+        Supplier<? extends CompletionStage<T>> submission,
+        Consumer<? super T> discardValue) {
+        return submit(ZLinkServiceOperationIds.next(), timeout, submission, discardValue);
+    }
+
+    private <T> CompletableFuture<T> submit(
+        UUID operationId,
+        Duration timeout,
+        Supplier<? extends CompletionStage<T>> submission,
+        Consumer<? super T> discardValue) {
         try {
-            timeoutTask = timeoutExecutor.schedule(
-                () -> {
-                    String message = "request timed out after " + timeout;
-                    //  Spec 32-framework-error-model:90 — a reply not received
-                    //  within the deadline is DeadlineExceeded, not a raw
-                    //  language timeout. The TimeoutException cause is retained
-                    //  so timeout metrics tagging still recognises it.
-                    result.completeExceptionally(new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                        message,
-                        new TimeoutException(message)));
-                },
-                timeout.toNanos(),
-                TimeUnit.NANOSECONDS);
-        } catch (RejectedExecutionException rejection) {
-            pendingRequests.remove(result);
-            result.completeExceptionally(shuttingDownFailure(rejection));
-            return;
+            return operations.submit(operationId, timeout, submission, discardValue);
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
         }
-        result.whenComplete((ignored, error) -> {
-            timeoutTask.cancel(false);
-            pendingRequests.remove(result);
-        });
     }
 
     CompletionStage<ZLinkBackendReceived> requestClient(
         ZLinkBackendDealerSocket client,
         List<Message> requestParts,
         Duration timeout) {
-        return preserveCurrentFlow(client.request(requestParts, timeout));
+        return preserveCurrentFlow(submit(
+            ZLinkServiceOperationIds.next(), timeout,
+            () -> client.request(requestParts, timeout), ZLinkBackendReceived::close));
     }
 
     CompletionStage<ZLinkBackendReceived> requestRoute(
+        UUID operationId,
         ZLinkBackendRouterSocket router,
         RoutingId target,
         List<Message> requestParts,
         Duration timeout) {
-        return preserveCurrentFlow(
-            router.request(target, requestParts, timeout));
+        return preserveCurrentFlow(submit(
+            operationId, timeout,
+            () -> router.request(target, requestParts, timeout),
+            ZLinkBackendReceived::close));
+    }
+
+    CompletionStage<ZLinkBackendReceived> requestChannel(
+        UUID operationId,
+        ZLinkInternalSpotNode node,
+        String channelName,
+        byte[] metadata,
+        List<Message> requestParts,
+        Duration timeout) {
+        if (operations.isClosed()) {
+            return CompletableFuture.failedFuture(closedFailure());
+        }
+        try {
+            return preserveCurrentFlow(node.requestToChannel(
+                channelName, metadata, requestParts, timeout, operations, operationId));
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+    }
+
+    CompletionStage<ZLinkBackendReceived> requestNode(
+        UUID operationId,
+        ZLinkInternalSpotNode node,
+        RoutingId target,
+        byte[] metadata,
+        List<Message> requestParts,
+        Duration timeout) {
+        if (operations.isClosed()) {
+            return CompletableFuture.failedFuture(closedFailure());
+        }
+        try {
+            return preserveCurrentFlow(node.requestToNode(
+                target, metadata, requestParts, timeout, operations, operationId));
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+    }
+
+    static Throwable requestFailure(Throwable failure) {
+        Throwable cause = unwrap(failure);
+        if (cause instanceof TimeoutException) {
+            return new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                cause.getMessage(), cause);
+        }
+        return cause;
     }
 
     static Throwable unwrap(Throwable failure) {
@@ -163,7 +200,7 @@ final class ZLinkChannelCallRuntime {
         return current;
     }
 
-    private static <T> CompletionStage<T> preserveCurrentFlow(
+    static <T> CompletionStage<T> preserveCurrentFlow(
         CompletionStage<T> request) {
         ZLinkFlowContext.State captured = ZLinkFlowContext.current();
         if (captured == null) {
@@ -242,22 +279,44 @@ final class ZLinkChannelCallRuntime {
         long ownerLeaseGeneration,
         List<Message> parts,
         Duration timeout) {
-        return spotRequest.request(
-            channelName,
-            targetNode,
-            targetSpot,
-            targetSpotGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration,
-            parts,
-            timeout);
+        return requestToSpot(
+            channelName, targetNode, targetSpot, targetSpotGeneration,
+            authorityOwnerGeneration, ownerLeaseGeneration, parts, timeout,
+            ZLinkServiceOperationIds.next());
+    }
+
+    CompletionStage<List<Message>> requestToSpot(
+        String channelName,
+        RoutingId targetNode,
+        String targetSpot,
+        long targetSpotGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration,
+        List<Message> parts,
+        Duration timeout,
+        UUID operationId) {
+        if (operations.isClosed()) {
+            return CompletableFuture.failedFuture(closedFailure());
+        }
+        try {
+            return spotRequest.request(
+                channelName,
+                targetNode,
+                targetSpot,
+                targetSpotGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration,
+                parts,
+                timeout,
+                operations,
+                operationId);
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
     }
 
     void beginClose() {
-        closing.set(true);
-        for (CompletableFuture<?> pending : pendingRequests) {
-            pending.completeExceptionally(closedFailure());
-        }
+        operations.close();
     }
 
     private static ZLinkFrameworkException closedFailure() {
@@ -267,13 +326,6 @@ final class ZLinkChannelCallRuntime {
         return new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.SHUTTING_DOWN,
             "channel runtime is closed");
-    }
-
-    static ZLinkFrameworkException shuttingDownFailure(Throwable cause) {
-        return new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.SHUTTING_DOWN,
-            "channel runtime is closed",
-            cause);
     }
 
     static List<Message> parts(Optional<String> packetName, Message payload) {
@@ -332,19 +384,26 @@ final class ZLinkChannelCallRuntime {
         Message payload,
         String contentType,
         java.util.Map<String, String> metadata) {
+        return envelopeParts(kind, channelName, packetName, payload, contentType,
+            metadata, kind == systems.zlink.framework.runtime.messaging
+                .ZLinkChannelEnvelope.KIND_REQUEST ? ZLinkServiceOperationIds.next() : null);
+    }
+
+    static List<Message> envelopeParts(
+        int kind,
+        String channelName,
+        Optional<String> packetName,
+        Message payload,
+        String contentType,
+        Map<String, String> metadata,
+        UUID operationId) {
         if (packetName.isEmpty()) {
             return List.of(payload);
         }
         return systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encode(
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.create(
-                kind,
-                channelName,
-                packetName.orElseThrow(),
-                contentType,
-                null,
-                metadata,
-                ZLinkFlowContext.current()),
-            payload);
+                kind, channelName, packetName.orElseThrow(), contentType, null,
+                metadata, ZLinkFlowContext.current(), operationId), payload);
     }
 
     static List<Message> copyEnvelopeParts(
@@ -354,8 +413,22 @@ final class ZLinkChannelCallRuntime {
         Message payload,
         String contentType,
         java.util.Map<String, String> metadata) {
+        return copyEnvelopeParts(
+            kind, channelName, packetName, payload, contentType, metadata,
+            kind == systems.zlink.framework.runtime.messaging
+                .ZLinkChannelEnvelope.KIND_REQUEST ? ZLinkServiceOperationIds.next() : null);
+    }
+
+    static List<Message> copyEnvelopeParts(
+        int kind,
+        String channelName,
+        Optional<String> packetName,
+        Message payload,
+        String contentType,
+        Map<String, String> metadata,
+        UUID operationId) {
         List<Message> source = envelopeParts(
-            kind, channelName, packetName, payload, contentType, metadata);
+            kind, channelName, packetName, payload, contentType, metadata, operationId);
         try {
             return ZLinkChannelRuntime.copyMessages(source);
         } finally {

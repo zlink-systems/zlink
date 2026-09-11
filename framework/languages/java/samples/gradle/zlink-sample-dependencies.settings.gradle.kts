@@ -13,13 +13,13 @@ val packageMode = providers.gradleProperty("zlink.samples.packageMode")
     .orElse(frameworkRoot == null)
     .get()
 val frameworkVersionDefault = if (packageMode) {
-    providers.provider { "0.11.0" }
+    providers.provider { "0.11.1" }
 } else {
     val localFrameworkRoot = checkNotNull(frameworkRoot) {
         "Developer mode requires the zlink Java framework source above the samples directory. " +
             "Use -Pzlink.samples.packageMode=true for published packages."
     }
-    val versionFile = localFrameworkRoot.resolve("../../../FRAMEWORK_VERSION").canonicalFile
+    val versionFile = localFrameworkRoot.resolve("VERSION").canonicalFile
     val versionFileRelativeToSettings = settingsDir.toPath()
         .relativize(versionFile.toPath())
         .toString()
@@ -45,7 +45,7 @@ if (packageMode && !providers.environmentVariable("ZLINK_JAVA_BINDINGS_SOURCE").
 
 if (packageMode) {
     val bindingsVersion = providers.gradleProperty("zlink.bindingsVersion")
-        .orElse("0.17.6")
+        .orElse("0.18.0")
         .get()
     dependencyResolutionManagement {
         versionCatalogs {

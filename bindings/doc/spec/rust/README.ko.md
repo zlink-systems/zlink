@@ -52,7 +52,7 @@ private `runtime` 모듈이 소스 소유권을 조직화하고, `lib.rs`가 어
 - Crate projection: `lib.rs`의 공개 re-export와 공개 모듈에 대한 rustdoc.
 - 런타임 구현: `bindings/rust/src/runtime/` 아래 private 모듈.
 - 네이티브 브릿지: `bindings/rust/src/runtime/native/` 아래 private 모듈, raw 핸들,
-  콜백 trampoline, request progress 헬퍼, part-loop 헬퍼.
+  콜백 trampoline, request progress 헬퍼, whole-message 배열 헬퍼.
 - 구체적인 crate-private 리소스 저장소는 `bindings/rust/src/internal.rs`에 둔다.
   계약 파일은 이 저장소 타입을 참조할 수 있지만 runtime 리소스 타입을 직접 import하지
   않는다. FFI 선언과 native 호출은 계속 `runtime/` 아래에 둔다.
@@ -85,7 +85,7 @@ Rust 바인딩을 변경할 때 이 경로를 일관되게 사용한다.
 다음 트리는 정렬된 구현 구조이다. 공개 struct, enum, trait, error, free function,
 builder 계약은 `contracts/`에 속하며 `lib.rs`에서 의도적으로 re-export된다. FFI
 바인딩, 네이티브 struct mirror, 콜백 trampoline, request progress 헬퍼,
-marshalling, unsafe part loop는 `runtime/` 아래 private으로 유지한다. crate-private
+marshalling, unsafe whole-message 배열 처리는 `runtime/` 아래 private으로 유지한다. crate-private
 저장소 모듈에는 public wrapper가 소유해야 하는 구체 상태만 두며 FFI 표면을 선언하거나
 호출하지 않는다.
 
@@ -178,7 +178,7 @@ bindings/rust/
    경우 `lib.rs` re-export projection을 갱신한다.
 3. 구체적인 공개 타입이나 메서드를 먼저 추가하고, 실제로 대체 가능한 동작이
    필요한 경우에만 trait를 추가한다.
-4. `unsafe`, raw 핸들, 콜백 userdata, part loop는 private 모듈 안에 유지한다.
+4. `unsafe`, raw 핸들, 콜백 userdata, whole-message 배열 처리는 private 모듈 안에 유지한다.
 5. 실패 가능한 작업은 typed error 정보를 담아 `Result`를 반환한다.
 6. 공개 crate projection을 사용하는 테스트를 추가한다.
 7. 샘플과 perf는 공개 API만 통해 갱신한다.
@@ -249,7 +249,7 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   호출자가 직접 사용할 수 있을 때 공개 모듈에 속한다.
 - 네이티브 기반 공개 리소스의 공개 inherent `impl` 블록은 계약 소유 파일에 둔다.
   본문은 얇게 `pub(crate)` 런타임 헬퍼로 위임할 수 있다.
-- 런타임 핸들 소유자, request pump, 콜백 adapter, part-loop 헬퍼는 private
+- 런타임 핸들 소유자, request pump, 콜백 adapter, whole-message 배열 헬퍼는 private
   또는 `pub(crate)`로 유지한다.
 - FFI 바인딩, raw 포인터, 네이티브 struct mirror, marshalling 헬퍼, 플랫폼
   로딩 코드는 private FFI/런타임 소유자 안에 유지한다.
@@ -526,7 +526,7 @@ boolean은 논리적 spot을 생성한 호출에서만 `true`이다.
 - Hot path는 피할 수 있는 dynamic dispatch, 피할 수 있는 할당, 피할 수 있는
   바이트 복사, 숨겨진 sleep, busy wait, 광범위한 lock, thread join을 사용하지
   않는다.
-- FFI 브릿지 코드는 core part substrate에서 직접 공개 Rust 값을
+- FFI 브릿지 코드는 Core whole-message 수신 함수가 한 번의 호출로 채운 배열에서 공개 Rust 값을
   materialize해야 한다.
 - 핸들 단위로 progress를 공유할 수 있을 때 요청마다 thread나 timer를 하나씩
   두지 않는다.
@@ -593,7 +593,7 @@ Rust는 Actor와 Spot route 조회 결과를 공개 값 타입으로 노출한�
 
 Rust package 정보는 [배포 metadata](../../../rust/Cargo.toml)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Rust는 blocking `Result`를 반환하는 `submit_sync()`와 runtime-independent `Future`를 반환하는 `submit()`을 제공한다.
+Rust는 blocking `Result`를 반환하는 `submit_sync()`와 결과 객체(`Result<SendSubmission>`/`Result<RequestSubmission>`: `result`와 boxed `admitted` future, request는 `reply` future)를 돌려주는 `submit()`을 제공한다.
 완료 대기 객체의 수명 종료는 Future drop 또는 executor task abort로 표현한다.
 
 Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
@@ -628,18 +628,26 @@ impl std::fmt::Debug for ReplyToken {
     }
 }
 
+// impl Trait 필드는 안정 Rust에서 불가하므로 boxed future로 시작한다.
+pub struct SendSubmission {
+    pub result: SubmitResult,   // OK | BACKPRESSURED, 제출 시점 스냅샷
+    pub admitted: Pin<Box<dyn Future<Output = Result<(), SubmitError>> + Send>>,
+}
+
+pub struct RequestSubmission {
+    pub result: SubmitResult,
+    pub admitted: Pin<Box<dyn Future<Output = Result<(), SubmitError>> + Send>>,
+    pub reply: Pin<Box<dyn Future<Output = Result<Vec<Message>, ZlinkError>> + Send>>,
+}
+
 impl SendOp<Ready> {
-    pub fn submit(
-        self,
-    ) -> impl Future<Output = Result<(), SubmitError>> + Send;
+    pub fn submit(self) -> Result<SendSubmission, SubmitError>;
     pub fn submit_sync(self) -> Result<(), SubmitError>;
 }
 
 impl RequestOp<Ready> {
     pub fn timeout(self, timeout: Duration) -> Self;
-    pub fn submit(
-        self,
-    ) -> impl Future<Output = Result<Vec<Message>, ZlinkError>> + Send;
+    pub fn submit(self) -> Result<RequestSubmission, ZlinkError>;
     pub fn submit_sync(self) -> Result<Vec<Message>, ZlinkError>;
 }
 

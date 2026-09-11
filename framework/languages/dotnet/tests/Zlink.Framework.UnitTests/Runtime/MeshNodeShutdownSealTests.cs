@@ -161,8 +161,8 @@ public sealed class MeshNodeShutdownSealTests
         await using var node = new ZLinkManagedMeshNode(
             context,
             MeshName,
-            openSocketMonitor: (socket, events) =>
-                transportMonitor = new DeferredReadyMonitor(socket.MonitorOpen(events)));
+            decorateSocketMonitor: monitor =>
+                transportMonitor = new DeferredReadyMonitor(monitor));
         var suffix = Guid.NewGuid().ToString("N");
         node.SetRoutingId(RoutingId.From($"same-connection-node-{suffix}"));
         node.SetBind(EphemeralTcpEndpoint);
@@ -216,8 +216,8 @@ public sealed class MeshNodeShutdownSealTests
             context,
             MeshName,
             routedSubmitScheduler: scheduler,
-            openSocketMonitor: (socket, events) =>
-                transportMonitor = new DeferredReadyMonitor(socket.MonitorOpen(events)));
+            decorateSocketMonitor: monitor =>
+                transportMonitor = new DeferredReadyMonitor(monitor));
         var suffix = Guid.NewGuid().ToString("N");
         node.SetRoutingId(RoutingId.From($"late-ready-node-{suffix}"));
         node.SetBind(EphemeralTcpEndpoint);
@@ -561,7 +561,10 @@ public sealed class MeshNodeShutdownSealTests
 
         internal Task ReadyCaptured => _captured.Task;
         internal Task ReadyApplied => _applied.Task;
-        internal void ReleaseReady() => Volatile.Write(ref _release, 1);
+        internal void ReleaseReady()
+        {
+            Volatile.Write(ref _release, 1);
+        }
 
         public MonitorEvent? Recv(RecvFlags flags = RecvFlags.None)
         {
@@ -618,7 +621,7 @@ public sealed class MeshNodeShutdownSealTests
             try
             {
                 using var message = Message.From(head);
-                await socket.Send().Message(message).Async(CancellationToken.None);
+                await socket.Send().Message(message).Async(CancellationToken.None).Admitted;
                 return;
             }
             catch (ZlinkSubmitException) when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)

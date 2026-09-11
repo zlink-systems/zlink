@@ -12,9 +12,13 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.config.AutowireCapableBeanFactory;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.beans.factory.config.DependencyDescriptor;
 import org.springframework.core.MethodParameter;
 import systems.zlink.framework.ZLinkHandlerFilter;
@@ -52,6 +56,8 @@ import systems.zlink.framework.streams.ZLinkTypedSessionPacketHandler;
 
 final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     private final AutowireCapableBeanFactory beanFactory;
+    private final Map<Class<?>, HandlerPlan> handlerPlans =
+        new ConcurrentHashMap<>();
 
     ZLinkSpringHandlerFactory(AutowireCapableBeanFactory beanFactory) {
         this.beanFactory = beanFactory;
@@ -139,19 +145,13 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
                     "Spring handler activation is closed");
             }
             RuntimeException lastFailure = null;
-            Constructor<?>[] constructors = handlerType.getConstructors();
-            Arrays.sort(
-                constructors,
-                Comparator.<Constructor<?>>comparingInt(
-                        ZLinkSpringHandlerFactory::autowiredPriority)
-                    .thenComparingInt(Constructor::getParameterCount)
-                    .reversed());
-            for (Constructor<?> constructor : constructors) {
+            for (ConstructorPlan constructor : handlerPlan(handlerType).constructors()) {
                 try {
                     Object[] arguments = resolveArguments(
                         constructor,
                         dependencyResolver);
-                    Object instance = constructor.newInstance(arguments);
+                    Object instance = constructor.constructor().newInstance(
+                        arguments);
                     beanFactory.autowireBean(instance);
                     return beanFactory.initializeBean(
                         instance,
@@ -170,44 +170,46 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
         }
 
         private Object[] resolveArguments(
-            Constructor<?> constructor,
+            ConstructorPlan constructor,
             DependencyResolver dependencyResolver) {
-            Parameter[] parameters = constructor.getParameters();
+            ParameterPlan[] parameters = constructor.parameters();
             Object[] arguments = new Object[parameters.length];
             for (int index = 0; index < parameters.length; index++) {
-                Object supplied = dependencyResolver.resolve(
-                    parameters[index].getType());
+                ParameterPlan parameter = parameters[index];
+                Object supplied = dependencyResolver.resolve(parameter.type());
                 if (supplied != null) {
                     arguments[index] = supplied;
                     continue;
                 }
-                DependencyKey key = DependencyKey.from(parameters[index]);
-                Object cached = scopedDependencies.get(key);
+                Object cached = scopedDependencies.get(parameter.key());
                 if (cached != null) {
                     arguments[index] = cached;
                     continue;
                 }
-                HashSet<String> beanNames = new HashSet<>();
-                DependencyDescriptor descriptor = new DependencyDescriptor(
-                    new MethodParameter(constructor, index),
-                    true);
+                ShortcutDependencyDescriptor shortcut = parameter.shortcut().get();
+                HashSet<String> beanNames = shortcut == null ? new HashSet<>() : null;
                 Object dependency = beanFactory.resolveDependency(
-                    descriptor,
-                    constructor.getDeclaringClass().getName(),
+                    shortcut == null ? parameter.descriptor() : shortcut,
+                    constructor.constructor().getDeclaringClass().getName(),
                     beanNames,
                     null);
                 if (dependency == null) {
                     throw new IllegalStateException(
-                        "Spring dependency is unavailable: "
-                            + parameters[index].getParameterizedType().getTypeName());
+                        "Spring dependency is unavailable: " + parameter.typeName());
                 }
-                boolean activationScoped = !beanNames.isEmpty()
-                    && beanNames.stream().anyMatch(beanFactory::isPrototype);
+                boolean activationScoped = shortcut != null
+                    ? shortcut.activationScoped()
+                    : beanNames.stream().anyMatch(beanFactory::isPrototype);
                 if (activationScoped) {
-                    scopedDependencies.put(key, dependency);
+                    scopedDependencies.put(parameter.key(), dependency);
                     ownedDependencies.add(dependency);
                 }
                 arguments[index] = dependency;
+                if (shortcut == null) {
+                    shortcutCandidate(parameter, beanNames)
+                        .ifPresent(candidate ->
+                            parameter.shortcut().compareAndSet(null, candidate));
+                }
             }
             return arguments;
         }
@@ -244,6 +246,91 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
             if (firstFailure != null) {
                 throw firstFailure;
             }
+        }
+    }
+
+    private HandlerPlan handlerPlan(Class<?> handlerType) {
+        return handlerPlans.computeIfAbsent(handlerType, HandlerPlan::create);
+    }
+
+    private java.util.Optional<ShortcutDependencyDescriptor> shortcutCandidate(
+        ParameterPlan parameter,
+        HashSet<String> beanNames) {
+        if (!(beanFactory instanceof ConfigurableListableBeanFactory configurable)
+            || !configurable.isConfigurationFrozen()
+            || beanNames.size() != 1) {
+            return java.util.Optional.empty();
+        }
+        String beanName = beanNames.iterator().next();
+        if (!beanFactory.containsBean(beanName)
+            || !beanFactory.isTypeMatch(beanName, parameter.type())) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(new ShortcutDependencyDescriptor(
+            parameter.descriptor(),
+            beanName,
+            beanFactory.isPrototype(beanName)));
+    }
+
+    private record HandlerPlan(List<ConstructorPlan> constructors) {
+        static HandlerPlan create(Class<?> handlerType) {
+            return new HandlerPlan(Arrays.stream(handlerType.getConstructors())
+                .sorted(Comparator.<Constructor<?>>comparingInt(
+                        ZLinkSpringHandlerFactory::autowiredPriority)
+                    .thenComparingInt(Constructor::getParameterCount)
+                    .reversed())
+                .map(ConstructorPlan::create)
+                .toList());
+        }
+    }
+
+    private record ConstructorPlan(
+        Constructor<?> constructor,
+        ParameterPlan[] parameters) {
+        static ConstructorPlan create(Constructor<?> constructor) {
+            Parameter[] parameters = constructor.getParameters();
+            ParameterPlan[] plans = new ParameterPlan[parameters.length];
+            for (int index = 0; index < parameters.length; index++) {
+                plans[index] = new ParameterPlan(
+                    parameters[index].getType(),
+                    parameters[index].getParameterizedType().getTypeName(),
+                    DependencyKey.from(parameters[index]),
+                    new DependencyDescriptor(new MethodParameter(constructor, index), true),
+                    new AtomicReference<>());
+            }
+            return new ConstructorPlan(constructor, plans);
+        }
+    }
+
+    private record ParameterPlan(
+        Class<?> type,
+        String typeName,
+        DependencyKey key,
+        DependencyDescriptor descriptor,
+        AtomicReference<ShortcutDependencyDescriptor> shortcut) {
+    }
+
+    private static final class ShortcutDependencyDescriptor
+        extends DependencyDescriptor {
+        private final String beanName;
+        private final boolean activationScoped;
+
+        private ShortcutDependencyDescriptor(
+            DependencyDescriptor descriptor,
+            String beanName,
+            boolean activationScoped) {
+            super(descriptor);
+            this.beanName = beanName;
+            this.activationScoped = activationScoped;
+        }
+
+        private boolean activationScoped() {
+            return activationScoped;
+        }
+
+        @Override
+        public Object resolveShortcut(BeanFactory factory) {
+            return factory.getBean(beanName, getDependencyType());
         }
     }
 

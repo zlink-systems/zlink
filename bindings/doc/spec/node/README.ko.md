@@ -73,7 +73,7 @@ camelCase 메서드, PascalCase 공개 타입, TypeScript에 어울리는 곳에
 - 패키지 projection: 패키지 entrypoint에서 export되고 발행된 TypeScript 정의에
   선언된 심볼.
 - 내부 구현: 네이티브 addon 모듈, 비공개 소스 모듈, N-API 핸들,
-  completion drain owner와 completion operation state, 컨버터, raw part-loop 헬퍼.
+  completion drain owner와 completion operation state, 컨버터, whole-message 배열 헬퍼.
 - 패키지 경계: `package.json` exports는 문서화된 공개 entrypoint만 노출한다.
 - 문서 역할: 이 README는 형태와 의미적 범위(semantic coverage)를 정의한다. 정확한
   공개 멤버 목록은 패키지 entrypoint와 선언이 소유한다.
@@ -268,8 +268,8 @@ Contract/runtime 경계는 다음 요구를 만족한다.
   구조적(structural)으로 남는다.
 - Operation 빌더는 단계적 네이티브 요청 상태와 multipart 누적을 감추므로 공개
   계약 인터페이스를 사용한다.
-- 네이티브 addon 핸들, raw 포인터, 콜백 userdata, request pump, part-loop
-  시퀀싱은 절대 노출되지 않는다.
+- 네이티브 addon 핸들, raw 포인터, 콜백 userdata, request pump, whole-message 배열
+  처리는 절대 노출되지 않는다.
 
 순수 DTO/값 객체에 대해 대칭성만을 위해 인터페이스를 도입하지 않는다.
 `Message`, `RoutingId`, `Received`, `TopicMessage`, route 결과, 스냅샷, 옵션
@@ -305,7 +305,7 @@ perf나 샘플이 네이티브 객체에 더 빨리 접근하도록 문서화되
   구현은 계약 파일이 런타임 구현을 import하지 않도록 패키지 entrypoint나
   런타임 팩토리 모듈에 둔다.
 - JavaScript 런타임 구현, 네이티브 핸들 owner, request pump, 콜백 어댑터,
-  part-loop 헬퍼는 `src/zlink/runtime`에 속한다.
+  whole-message 배열 헬퍼는 `src/zlink/runtime`에 속한다.
 - N-API 바인딩, 네이티브 addon 핸들, 마샬링 헬퍼, 플랫폼 로딩 코드는
   `src/zlink/runtime/native`에 속한다.
 - 패키지 export와 발행된 `.d.ts` 파일은 계약 소스를 projection 해야 하며 런타임
@@ -469,12 +469,50 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
   `PollEventFlag.PollIn`만 유효하고 다른 readiness mask는 typed `ConfigResult.InvalidArgument`로
   거절한다. ready 뒤 `monitor.recv(RecvFlags.DontWait)`로 drain하며 `PollEvents.source(index)`가
   등록한 monitor 객체를 돌려준다.
+- socket은 `setReadableHandler(handler)`로 **수신 readiness 알림 handler**를 등록한다.
+  Node는 단일 이벤트 루프이므로 `Poller.wait`가 그 루프를 막는다. readiness는 Node
+  이벤트 루프에 등록해 알린다(자세한 계약은 아래 "수신 readiness" 절).
 - 버전, capability 조회, strerror, proxy, sleep, multipart cleanup 헬퍼 같은 패키지
   루트 팩토리/헬퍼 함수는 공개 계약 함수다. 이 함수들 뒤의 네이티브 호출은 런타임
   모듈에 머문다.
 
 네이티브 기반 런타임 클래스를 직접 생성하는 것은 정렬된 계약의 일부가 아니다.
 팩토리가 안정적인 생성 표면이다.
+
+## 수신 readiness
+
+Node는 단일 이벤트 루프에서 동작하므로 다른 바인딩이 쓰는 blocking readiness 대기를
+그대로 쓸 수 없다. `Poller.wait`는 동기 호출이라 이벤트 루프를 막고, 고정 간격
+타이머 폴링은 왕복마다 최소 1 ms를 더한다. 그래서 socket은 **Node 이벤트 루프에
+등록되는 readiness 알림**을 공개한다.
+
+```ts
+export type ZLinkReadableHandler = () => void;
+
+// BaseSocket
+setReadableHandler(handler: ZLinkReadableHandler): void;
+```
+
+- **readiness 알림이지 메시지 개수 알림이 아니다.** 한 번의 호출이 몇 건이 왔는지
+  말하지 않는다. 호출자는 no-data 표현이 나올 때까지 `recv(RecvFlags.DontWait)`로
+  drain한다. 공통 spec의 "Dispatch readiness 의미"와 같은 축이며, edge-trigger
+  one-shot처럼 설명하거나 구현하지 않는다.
+- handler는 **인자를 받지 않는다.** 전달할 사실이 "지금 읽을 것이 있다" 하나뿐이다.
+  readiness 감시 자체가 실패하면 그 socket의 다음 receive가 typed 실패로 표면화한다.
+  handler에 오류 인자를 주지 않는다.
+- **해제 표면을 만들지 않는다.** callback을 `null`로 설정해 해제하는 표면은 이
+  문서의 "callback 등록" 규칙이 금지한다. 등록한 handler는 socket이 닫힐 때 함께
+  풀린다.
+- **활성 handler는 Node 이벤트 루프를 살려 둔다.** socket이 열려 있고 수신을
+  기다리는 동안 프로세스가 종료되지 않는다는 뜻이며, 이는 서버의 정상 동작이다.
+  더 기다리지 않으려면 socket을 닫는다.
+- 같은 socket에 두 번 등록하면 나중 등록이 앞의 것을 대체한다. socket 하나에
+  readiness handler 하나다.
+- 이 표면은 `Poller`를 대체하지 않는다. 여러 source를 한 자리에서 기다리는 경우는
+  `Poller`가 그대로 담당하며, `Pollable`의 `number`(raw fd) 항목도 유지된다.
+
+canonical 이름은 `setReadableHandler`이며 다른 바인딩도 같은 정식 이름을 언어별
+표기로 사용한다(공통 spec "함수 이름 규칙").
 
 ## 함수 이름 규칙
 
@@ -533,8 +571,8 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - **Node는 JS thread 하나이므로 동기 terminal이 실행되는 동안 그 호출이 completion 소비자다.**
   지정 owner(public poller)가 같은 thread에서 동시에 진행할 수 없기 때문이다. 동기 호출이
   받은 다른 completion은 반환 뒤 owner의 drain 규칙(NO_DATA 뒤 재제출)으로 전달한다.
-- DEALER/ROUTER request는 `submit_sync(): Message[]`와 `submit(): Promise<Message[]>`를
-  제공하고 builder의 reply timeout을 유지한다.
+- DEALER/ROUTER request는 `submit_sync(): Message[]`와 `submit(): RequestSubmission`(`result`·
+  `admitted`에 `reply: Promise<Message[]>` 추가)을 제공하고 builder의 reply timeout을 유지한다.
 - Raw ROUTER/`Received` reply의 terminal은
   `ReplySubmitOperation.submit(): void`인 동기 one-shot이다. Promise를 반환하지 않고
   terminal reply 또는 error reply를 native 호출 한 번으로 제출한다. DEALER peer에는 Application
@@ -775,8 +813,8 @@ Node는 Actor와 Spot route 조회 결과를 공개 JavaScript 객체와 일치�
 
 Node package 정보는 [배포 metadata](../../../node/package.json)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Node는 blocking `submit_sync()`와 `Promise`를 반환하는 `submit()`을 제공한다.
-Promise를 더 이상 기다리지 않는 경우에도 아래 공통 완료 수명 계약을 따른다.
+Node는 blocking `submit_sync()`와 결과 객체(`SendSubmission`/`RequestSubmission`: `result`와 `admitted`, request는 `reply`)를 돌려주는 `submit()`을 제공한다.
+`admitted`/`reply` Promise를 더 이상 기다리지 않는 경우에도 아래 공통 완료 수명 계약을 따른다.
 
 Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
 제출 결과는 [공통 결과 투영](../README.ko.md#submit-result-projection)을, 완료 합류·수명과
@@ -793,9 +831,20 @@ Token은 raw conversion, ordering, serialization과 `close()`를 제공하지 �
 ### Public interface
 
 ```ts
+export interface SendSubmission {
+  result: SubmitResult;        // OK | BACKPRESSURED, 제출 시점 스냅샷 (동기 필드)
+  admitted: Promise<void>;     // OK면 완료 상태
+}
+
+export interface RequestSubmission {
+  result: SubmitResult;
+  admitted: Promise<void>;
+  reply: Promise<Message[]>;   // admitted 성공 뒤 완료
+}
+
 export interface SendSubmitOperation {
   message(message: MessageLike): SendSubmitOperation;
-  submit(): Promise<void>;
+  submit(): SendSubmission;
   submit_sync(): void;
 }
 
@@ -811,7 +860,7 @@ export class ReplyToken {
 export interface RequestSubmitOperation {
   message(message: MessageLike): RequestSubmitOperation;
   timeout(timeoutMs: number): RequestSubmitOperation;
-  submit(): Promise<Message[]>;
+  submit(): RequestSubmission;
   submit_sync(): Message[];
 }
 

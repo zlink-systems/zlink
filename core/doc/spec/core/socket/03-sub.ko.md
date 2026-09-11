@@ -22,7 +22,7 @@ SUB는 data 수신 전용이다 — 발행은 [PUB](02-pub.ko.md)·[XPUB](04-xpu
 설정·제어하는 control plane 호출이다.
 
 이 문서는 SUB 고유 계약을 정의한다 — 구독 filter의 등록·해제와 매칭 규칙, SUB 전용
-옵션(`zlink_sub_option_t`), topic part 수신 함수와 구독 목록 조회. 이 함수들은 raw
+옵션(`zlink_sub_option_t`), topic과 payload record 수신 함수와 구독 목록 조회. 이 함수들은 raw
 XSUB에도 적용되며, XSUB 고유 동작은 [XSUB](05-xsub.ko.md)가 정의한다.
 
 관련 계약의 소유 문서는 다음과 같다.
@@ -47,8 +47,8 @@ XSUB에도 적용되며, XSUB 고유 동작은 [XSUB](05-xsub.ko.md)가 정의�
 3. **조회** — 구독된 topic 수는 읽기 전용 옵션
    [`ZLINK_SUB_OPT_TOPICS_COUNT`](#5-옵션-zlink_sub_option_t)로 읽고, 개별 filter는
    [`zlink_subscription_at`](#zlink_subscription_at)으로 index를 지정해 읽는다.
-4. **수신** — 매칭된 message는 [`zlink_subscribe_part`](#zlink_subscribe_part)로
-   topic과 payload part를 받는다.
+4. **수신** — 매칭된 message는 [`zlink_subscribe`](#zlink_subscribe)로
+   topic과 payload record 전체를 받는다.
 
 ## 3. 자동 HWM 기본값
 
@@ -151,7 +151,7 @@ message를 구독한다. wildcard 구문은 없으며 후행 `*`도 literal byte
 **에러:** `handle_`이 NULL이면 `EFAULT`. `filter_`가 NULL이거나 handle 타입이
 구독을 지원하지 않으면 `EINVAL`.
 
-**참고:** `zlink_unset_subscription`, `zlink_subscribe_part`
+**참고:** `zlink_unset_subscription`, `zlink_subscribe`
 
 ---
 
@@ -178,40 +178,37 @@ ZLINK_EXPORT zlink_config_result_t zlink_unset_subscription (void *handle_, cons
 
 ---
 
-### zlink_subscribe_part
+### zlink_subscribe
 
-raw `SUB` 또는 `XSUB` socket에서 topic message의 payload part 하나를
-수신한다.
+raw `SUB` 또는 `XSUB` socket에서 topic과 payload record 전체를 수신한다.
 
 ```c
-ZLINK_EXPORT zlink_recv_result_t zlink_subscribe_part (void *sub_,
-                                                       const zlink_routing_id_t **source_rid_out_,
-                                                       char *topic_id_buf_,
-                                                       size_t topic_id_capacity_,
-                                                       size_t *topic_id_len_out_,
-                                                       zlink_msg_t *part_out_,
-                                                       zlink_part_flag_t *has_more_out_,
-                                                       zlink_recv_flags_t flags_);
+ZLINK_EXPORT zlink_recv_result_t zlink_subscribe (
+  void *sub_,
+  const zlink_routing_id_t **source_rid_out_,
+  char *topic_id_buf_, size_t topic_id_capacity_, size_t *topic_id_len_out_,
+  zlink_msg_t *parts_out_, size_t parts_capacity_, size_t *part_count_out_,
+  zlink_recv_flags_t flags_);
 ```
 
-`topic_id_len_out_`, 초기화된 `part_out_`, `has_more_out_`은 필수다.
+`topic_id_len_out_`, `parts_out_`, `part_count_out_`은 필수다. 배열 슬롯은 미리 초기화할 필요가 없다.
 `source_rid_out_`은 선택 사항이며 raw `SUB`와 `XSUB`에서는 항상 `NULL`을
 받는다. 성공하면 topic의 binary byte를 호출자 buffer에 NUL 없이 복사하고
-payload part의 소유권을 호출자에게 이전한다. 호출자는 받은 part를
-`zlink_msg_close(part_out_)`로 정확히 한 번 닫아야 한다.
+payload record 전체를 배열에 채운다. Caller는 앞의 `*part_count_out_`개 슬롯을
+`zlink_multipart_close`로 정확히 한 번 닫아야 한다.
 
 `topic_id_capacity_`가 topic 길이보다 작으면(길이 0 topic은 capacity 0으로 성공한다) 함수는
 `*topic_id_len_out_`에 필요한 topic 길이를 기록하고
 `ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. 이 경우 Core는 그 message의 topic과
-payload를 내부에 보관하고, `topic_id_len_out_`을 제외한 output과 `part_out_`은
-변경하지 않는다. part 소유권도 이전하지 않으므로 호출자는 충분한 buffer로
+payload를 내부에 보관하고, `topic_id_len_out_`을 제외한 output과 `parts_out_`은
+변경하지 않는다. 슬롯 소유권도 이전하지 않으므로 호출자는 충분한 buffer로
 다시 호출해 보관된 같은 message를 받는다. 용량이 0보다 큰데 `topic_id_buf_`가
 NULL이면 queue를 검사하거나 소비하기 전에 `ZLINK_RECV_INVALID_HANDLE`과
-`EFAULT`를 반환하고 모든 output과 `part_out_`을 변경하지 않는다.
+`EFAULT`를 반환하고 모든 output과 `parts_out_`을 변경하지 않는다.
 
-한 multipart message의 첫 payload part부터 마지막 part까지 같은 thread에서 이
-함수로 계속 수신해야 한다. `*has_more_out_`은 다음 payload part가 있으면
-`ZLINK_PART_MORE`, 마지막이면 `ZLINK_PART_FINAL`이다. 적용 타입은 raw
+`parts_capacity_`가 payload part 수보다 작으면 record를 소비하지 않고 필요한 수를
+`*part_count_out_`에 쓴 뒤 `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`를 반환한다. 다른 output과
+배열 슬롯은 변하지 않으며, 충분한 배열로 재시도하면 같은 record를 받는다. 적용 타입은 raw
 `SUB`, raw `XSUB`다.
 
 ---
@@ -253,11 +250,11 @@ handle 타입이 구독 조회를 지원하지 않으면 `ENOTSUP`.
 
 ## 7. 구현 및 contract test 검증 요구
 
-공개 표면(구독 함수, SUB 옵션 set·get, `zlink_subscribe_part` 결과, 반환값·errno)만으로
+공개 표면(구독 함수, SUB 옵션 set·get, `zlink_subscribe` 결과, 반환값·errno)만으로
 다음을 확인한다. 각 항목은 unit test 하나로 이어진다.
 
 **구독 등록·해제**
-- `zlink_set_subscription`으로 등록한 filter는 byte-prefix로 매칭된다 — topic이 filter의 종료 NUL 앞 byte로 시작하는 message가 `zlink_subscribe_part`로 수신된다.
+- `zlink_set_subscription`으로 등록한 filter는 byte-prefix로 매칭된다 — topic이 filter의 종료 NUL 앞 byte로 시작하는 message가 `zlink_subscribe`로 수신된다.
 - 빈 문자열 filter는 모든 message를 구독한다.
 - 후행 `*`를 포함한 filter는 `*`를 literal byte로 매칭한다 — wildcard로 확장되지 않는다.
 - `zlink_unset_subscription`은 종료 NUL 앞 byte가 이전에 등록한 prefix와 일치하는 구독을 제거한다.
@@ -274,13 +271,14 @@ handle 타입이 구독 조회를 지원하지 않으면 `ENOTSUP`.
 - buffer가 작으면 필요한 길이를 `*filter_len_inout_`에 기록하고 `ZLINK_CONFIG_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. `filter_out_`에 부분 데이터를 쓰지 않고 `*is_pattern_out_`도 바꾸지 않으며, 같은 `index_`를 충분한 buffer로 다시 조회할 수 있다.
 - 범위를 벗어난 index는 `ENOENT`, 구독 조회를 지원하지 않는 handle 타입은 `ENOTSUP`이다.
 
-**topic part 수신**
-- 성공한 `zlink_subscribe_part`는 topic의 binary byte를 NUL 없이 호출자 buffer에 복사하고 payload part의 소유권을 호출자에게 이전한다 — 호출자가 `zlink_msg_close(part_out_)`를 정확히 한 번 호출한다.
+**topic과 payload record 수신**
+- 성공한 `zlink_subscribe`는 topic의 binary byte를 NUL 없이 caller buffer에 복사하고 payload record 전체를 배열에 채운다 — caller가 앞의 `*part_count_out_`개 슬롯을 `zlink_multipart_close`로 정확히 한 번 닫는다.
 - raw SUB·XSUB에서 `source_rid_out_`은 항상 `NULL`을 받는다.
-- `topic_id_capacity_`가 topic 길이보다 작으면(길이 0 topic은 capacity 0으로 성공) `*topic_id_len_out_`에 필요한 길이를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. Core가 그 message의 topic과 payload를 내부에 보관하므로 충분한 buffer로 다시 호출하면 같은 message를 수신하고, `topic_id_len_out_`을 제외한 output과 `part_out_`은 변하지 않는다.
+- `topic_id_capacity_`가 topic 길이보다 작으면(길이 0 topic은 capacity 0으로 성공) `*topic_id_len_out_`에 필요한 길이를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. Core가 그 message의 topic과 payload를 내부에 보관하므로 충분한 buffer로 다시 호출하면 같은 message를 수신하고, `topic_id_len_out_`을 제외한 output과 `parts_out_`은 변하지 않는다.
+- `parts_capacity_`가 payload part 수보다 작으면 `*part_count_out_`에 필요한 수를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`를 반환한다. Record와 다른 output은 그대로이며 충분한 배열로 재시도하면 같은 record를 받는다.
 - topic frame 뒤에 payload part가 없는(topic frame에 `MORE`가 없는) record를 받으면 `ZLINK_RECV_INTERNAL_ERROR`와 `EPROTO`를 반환한다.
-- 용량이 0보다 큰데 `topic_id_buf_`가 NULL이면 queue를 검사·소비하기 전에 `ZLINK_RECV_INVALID_HANDLE`과 `EFAULT`를 반환하고 모든 output과 `part_out_`이 변하지 않는다.
-- multipart message는 `*has_more_out_`이 `ZLINK_PART_MORE`인 동안 다음 payload part가 이어지고 마지막 part에서 `ZLINK_PART_FINAL`이 된다.
+- 용량이 0보다 큰데 `topic_id_buf_`가 NULL이면 queue를 검사·소비하기 전에 `ZLINK_RECV_INVALID_HANDLE`과 `EFAULT`를 반환하고 모든 output과 `parts_out_`이 변하지 않는다.
+- multipart message의 모든 payload part는 배열 순서대로 한 번에 반환되며 부분 record 상태는 남지 않는다.
 
 **자동 HWM 기본값**
 - `RCVHWM`을 직접 설정한 application 방향은 자동 분배에서 제외된다.

@@ -37,7 +37,10 @@ async function sendStream(stream, routingId, frame) {
   try {
     // STREAM owns its packet framing; it must remain byte-for-byte unchanged
     // when measurement multipart mode is enabled for the other patterns.
-    await stream.send(routingId).message(frame).submit();
+    const submission = stream.send(routingId).message(frame).submit();
+    if (submission.result === zlink.SubmitResult.Backpressured) {
+      await submission.admitted;
+    }
   } catch (error) {
     if (isGoneRoutingSendError(error)) {
       // The peer route is terminally gone. Treat the reply as handled so the

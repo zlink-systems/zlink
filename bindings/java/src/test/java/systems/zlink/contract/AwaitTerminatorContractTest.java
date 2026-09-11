@@ -58,7 +58,7 @@ class AwaitTerminatorContractTest {
                 reply = client.request()
                     .message(request)
                     .timeout(Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS))
-                    .submit()
+                    .submit().reply()
                     .toCompletableFuture()
                     .get(TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             }
@@ -94,7 +94,7 @@ class AwaitTerminatorContractTest {
                     client.request()
                         .message(request)
                         .timeout(Duration.ofMillis(200))
-                        .submit()
+                        .submit().reply()
                         .toCompletableFuture()
                         .get(TestSupport.DEFAULT_TIMEOUT_MS,
                             TimeUnit.MILLISECONDS));

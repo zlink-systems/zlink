@@ -129,9 +129,10 @@ Send, publish, request와 reply는 multipart builder를 사용한다. Builder는
 해당 operation에 허용된 option을 모은 뒤 terminal `Submit`에서 한 번 실행된다.
 같은 builder를 두 번 submit하면 두 번째 completion은 state error로 끝난다.
 
-Send와 request는 `Submit(context.Context)`가 Core `DONTWAIT` completion을 기다린다. Reply는
-호출 진입 전에 Context를 확인하고, native 호출 뒤 admission 대기는 socket `SNDTIMEO`가
-소유한다. Publish만 별도 `PublishOp`의 `Flags(SendFlags)`를 제공한다. Exact interface는
+Send와 request의 `Submit(context.Context)`는 Core `DONTWAIT`로 한 번 제출하고 결과 객체를 즉시
+돌려준다. completion 대기는 결과 객체의 `Admitted(ctx)`·`Reply(ctx)`가 하며, `result == OK`면
+`Admitted`는 즉시 nil이다. Reply는 호출 진입 전에 Context를 확인하고, native 호출 뒤 admission
+대기는 socket `SNDTIMEO`가 소유한다. Publish만 별도 `PublishOp`의 `Flags(SendFlags)`를 제공한다. Exact interface는
 [Pull completion 공개 계약](#pull-completion-공개-계약)에 둔다.
 
 ### Context와 오류 분류
@@ -159,8 +160,8 @@ Send와 request는 `Submit(context.Context)`가 Core `DONTWAIT` completion을 �
 | PAIR, DEALER, ROUTER, STREAM | `Received` 저장소를 채우는 `Recv` |
 | SUB, XSUB | `TopicMessage` 저장소를 채우는 `Subscribe` |
 
-Core의 part 함수는 이 multipart 수신 API를 구현하기 위한 internal 기반이며 Go
-public method로 노출하지 않는다.
+Binding은 Core whole-message 수신 함수를 한 번 호출해 받은 배열로 이 multipart 수신 API를
+구현한다. Native 배열과 capacity 관리는 Go public method로 노출하지 않는다.
 
 ## Receive와 eventing
 
@@ -262,8 +263,10 @@ GoDoc과 process sample의 검증 진입점은 `bindings/go/README.godoc.md`,
 
 Go package 정보는 [배포 metadata](../../../go/go.mod)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Go는 호출 goroutine에서 완료를 기다리는 `Submit(context.Context)` terminal 하나를 제공한다.
-Caller wait 취소 입력은 `context.Context`이고 request의 취소 결과는 `(nil, ctx.Err())`다.
+Go는 `Submit(context.Context)` terminal 하나를 제공한다. `Submit`은 native 제출 한 번을 하고 즉시
+결과 객체(`SendSubmission`/`RequestSubmission`)를 돌려주며, 완료 대기는 결과 객체의
+`Result()`·`Admitted(ctx)`·`Reply(ctx)` 메서드가 한다. 각 대기 메서드의 취소 입력은 `context.Context`이고
+request의 취소 결과는 `(nil, ctx.Err())`다.
 
 Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
 제출 결과는 [공통 결과 투영](../README.ko.md#submit-result-projection)을, 완료 합류·수명과
@@ -287,11 +290,23 @@ type SendOp interface {
     Bytes([]byte) SendSubmitOp
 }
 
+// 대기는 결과 객체의 메서드가 한다(Go 관용). Submit은 native 제출 한 번을 하고 즉시 돌려준다.
+type SendSubmission interface {
+    Result() SubmitResult                 // OK | BACKPRESSURED, 제출 시점 스냅샷
+    Admitted(ctx context.Context) error   // OK면 즉시 nil; BACKPRESSURED면 재제출 admission까지 block
+}
+
+type RequestSubmission interface {
+    Result() SubmitResult
+    Admitted(ctx context.Context) error
+    Reply(ctx context.Context) ([]*Message, error)   // reply까지 block; 이전 Submit 결과와 같음
+}
+
 type SendSubmitOp interface {
     Message(*Message) SendSubmitOp
     MoveMessage(*Message) SendSubmitOp
     Bytes([]byte) SendSubmitOp
-    Submit(context.Context) error
+    Submit(context.Context) (SendSubmission, error)
 }
 
 type RequestOp interface {
@@ -303,7 +318,7 @@ type RequestSubmitOp interface {
     Message(*Message) RequestSubmitOp
     Bytes([]byte) RequestSubmitOp
     Timeout(time.Duration) RequestSubmitOp
-    Submit(context.Context) ([]*Message, error)
+    Submit(context.Context) (RequestSubmission, error)
 }
 
 type ReplyOp interface {

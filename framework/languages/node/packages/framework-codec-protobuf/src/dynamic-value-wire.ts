@@ -10,7 +10,8 @@ const enum ValueKind {
   Number = 2,
   String = 3,
   Object = 4,
-  Array = 5
+  Array = 5,
+  Bytes = 6
 }
 
 export function createDynamicValueProtobufType(): {
@@ -49,6 +50,12 @@ export function encodeDynamicValue(value: unknown): Buffer {
       encodeBytesField(4, Buffer.from(value))
     ]);
   }
+  if (value instanceof Uint8Array) {
+    return encodeFields([
+      encodeVarintField(1, ValueKind.Bytes),
+      encodeBytesField(7, Buffer.from(value.buffer, value.byteOffset, value.byteLength))
+    ]);
+  }
   if (Array.isArray(value)) {
     return encodeFields([
       encodeVarintField(1, ValueKind.Array),
@@ -70,6 +77,7 @@ export function decodeDynamicValue(bytes: Buffer): unknown {
   let boolValue = false;
   let numberValue = 0;
   let stringValue = '';
+  let bytesValue = Buffer.alloc(0);
   const objectValue: Record<string, unknown> = {};
   const arrayValue: unknown[] = [];
 
@@ -95,6 +103,9 @@ export function decodeDynamicValue(bytes: Buffer): unknown {
       case 6:
         arrayValue.push(decodeDynamicValue(readBytesPayload(field)));
         break;
+      case 7:
+        bytesValue = Buffer.from(readBytesPayload(field));
+        break;
       default:
         break;
     }
@@ -107,6 +118,7 @@ export function decodeDynamicValue(bytes: Buffer): unknown {
     case ValueKind.String: return stringValue;
     case ValueKind.Object: return objectValue;
     case ValueKind.Array: return arrayValue;
+    case ValueKind.Bytes: return bytesValue;
     default: throw new Error(`Protobuf serializer cannot decode value kind '${kind}'.`);
   }
 }

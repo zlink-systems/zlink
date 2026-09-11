@@ -28,6 +28,23 @@ fn large_filler(byte: u8) -> Message {
 /// a Core WRITABLE token, and returns those still-pending futures.
 type PendingSend =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), zlink::SubmitError>> + Send>>;
+type PendingRequest =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<Message>, ZlinkError>> + Send>>;
+
+fn send_stage(submission: Result<zlink::SendSubmission, zlink::SubmitError>) -> PendingSend {
+    match submission {
+        Ok(submission) => submission.admitted,
+        Err(error) => Box::pin(std::future::ready(Err(error))),
+    }
+}
+
+fn request_stage(submission: Result<zlink::RequestSubmission, ZlinkError>) -> PendingRequest {
+    Box::pin(async move {
+        let submission = submission?;
+        submission.admitted.await?;
+        submission.reply.await
+    })
+}
 
 fn saturate(mut submit: impl FnMut() -> PendingSend) -> Vec<PendingSend> {
     let mut pending = Vec::new();
@@ -48,12 +65,13 @@ fn inline_admission_resolves_the_future_on_its_first_poll() {
     let router = ctx.router_socket().unwrap();
     let dealer = ctx.dealer_socket().unwrap();
     router.bind("inproc://rust-send-complete-inline").unwrap();
-    dealer
-        .connect("inproc://rust-send-complete-inline")
-        .unwrap();
-    thread::sleep(Duration::from_millis(75));
+    test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
+        dealer
+            .connect("inproc://rust-send-complete-inline")
+            .unwrap()
+    });
 
-    let mut future = Box::pin(
+    let mut future = send_stage(
         dealer
             .send()
             .message(Message::try_from(b"inline-header").unwrap())
@@ -124,7 +142,7 @@ fn public_poller_drains_writable_and_retries_the_same_packet() {
         let header = format!("{index:04}").into_bytes();
         let mut body = vec![b'x'; 64];
         body[..header.len()].copy_from_slice(&header);
-        let mut future = Box::pin(
+        let mut future = send_stage(
             sender
                 .send()
                 .message(Message::try_from(header.as_slice()).unwrap())
@@ -193,7 +211,7 @@ fn request_completion_reservation_exhaustion_preserves_tokenless_backpressure() 
     // An unbound peer cannot become writable. Each first poll reserves one
     // Core wait token, so the next request must fail with EAGAIN and ID zero.
     let request = || {
-        Box::pin(
+        request_stage(
             dealer
                 .request()
                 .message(Message::try_from(b"request").unwrap())
@@ -264,14 +282,14 @@ fn request_backpressure_retries_after_its_writable_then_receives_reply() {
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
 
-    let mut first = Box::pin(
+    let mut first = request_stage(
         dealer
             .request()
             .message(large_filler(b'a'))
             .timeout(Duration::from_secs(5))
             .submit(),
     );
-    let mut retry = Box::pin(
+    let mut retry = request_stage(
         dealer
             .request()
             .message(large_filler(b'b'))
@@ -349,14 +367,14 @@ fn backpressured_request_resumes_from_runtime_owner_without_repolling() {
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
 
-    let mut first = Box::pin(
+    let mut first = request_stage(
         dealer
             .request()
             .message(large_filler(b'a'))
             .timeout(Duration::from_secs(5))
             .submit(),
     );
-    let mut retry = Box::pin(
+    let mut retry = request_stage(
         dealer
             .request()
             .message(large_filler(b'b'))
@@ -417,7 +435,7 @@ fn request_connect_before_bind_waits_for_writable_without_sleep() {
         .connect("inproc://rust-request-connect-before-bind")
         .unwrap();
 
-    let mut request = Box::pin(
+    let mut request = request_stage(
         dealer
             .request()
             .message(Message::try_from(b"before-bind").unwrap())
@@ -458,7 +476,7 @@ fn closing_a_socket_cleans_up_a_request_wait_token() {
     let mut dealer = ctx.dealer_socket().unwrap();
     dealer.common_options().set_immediate(true).unwrap();
     dealer.connect("inproc://rust-request-token-close").unwrap();
-    let mut request = Box::pin(
+    let mut request = request_stage(
         dealer
             .request()
             .message(Message::try_from(b"close-before-admission").unwrap())
@@ -511,17 +529,19 @@ fn request_and_send_wait_tokens_share_the_completion_lane() {
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
 
     for marker in *b"12" {
-        let result = test_support::block_on(dealer.send().message(large_filler(marker)).submit());
+        let result = test_support::block_on(send_stage(
+            dealer.send().message(large_filler(marker)).submit(),
+        ));
         result.expect("filler admission");
     }
-    let mut request = Box::pin(
+    let mut request = request_stage(
         dealer
             .request()
             .message(large_filler(b'r'))
             .timeout(Duration::from_secs(5))
             .submit(),
     );
-    let mut send = Box::pin(dealer.send().message(large_filler(b's')).submit());
+    let mut send = send_stage(dealer.send().message(large_filler(b's')).submit());
     assert!(test_support::poll_once(&mut request).is_pending());
     assert!(test_support::poll_once(&mut send).is_pending());
 
@@ -569,15 +589,16 @@ fn dropping_a_pending_send_future_detaches_the_waiter() {
         .set_receive_high_water_mark(RECORD_HWM)
         .unwrap();
     router.bind("inproc://rust-send-complete-cancel").unwrap();
-    dealer
-        .connect("inproc://rust-send-complete-cancel")
-        .unwrap();
-    thread::sleep(Duration::from_millis(75));
+    test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
+        dealer
+            .connect("inproc://rust-send-complete-cancel")
+            .unwrap()
+    });
 
-    let pending = saturate(|| Box::pin(dealer.send().message(large_filler(b'd')).submit()));
+    let pending = saturate(|| send_stage(dealer.send().message(large_filler(b'd')).submit()));
     assert!(!pending.is_empty(), "test target did not reach HWM");
 
-    let mut cancelled = Box::pin(dealer.send().message(large_filler(b'z')).submit());
+    let mut cancelled = send_stage(dealer.send().message(large_filler(b'z')).submit());
     assert_eq!(test_support::poll_once(&mut cancelled), Poll::Pending);
     // Dropping the Future discards the retained payload. Its payload-free sink
     // remains until Core retires the live token or socket cleanup runs.
@@ -617,11 +638,13 @@ fn dropped_send_tokens_do_not_starve_an_existing_request() {
     let mut ready = Received::empty();
     assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
 
-    let request = dealer
-        .request()
-        .message(Message::try_from(b"question").unwrap())
-        .timeout(Duration::from_secs(3))
-        .submit();
+    let request = request_stage(
+        dealer
+            .request()
+            .message(Message::try_from(b"question").unwrap())
+            .timeout(Duration::from_secs(3))
+            .submit(),
+    );
     let (done_tx, done_rx) = mpsc::channel();
     let waiter = thread::spawn(move || {
         done_tx.send(test_support::block_on(request)).unwrap();
@@ -629,7 +652,7 @@ fn dropped_send_tokens_do_not_starve_an_existing_request() {
 
     let mut received_request = Received::empty();
     assert!(router.recv(&mut received_request, RecvFlags::NONE).unwrap());
-    let pending = saturate(|| Box::pin(dealer.send().message(large_filler(b'q')).submit()));
+    let pending = saturate(|| send_stage(dealer.send().message(large_filler(b'q')).submit()));
     assert!(!pending.is_empty(), "test target did not reach HWM");
     drop(pending);
 
@@ -661,13 +684,14 @@ fn closing_a_socket_completes_its_pending_send_once() {
         .set_receive_high_water_mark(RECORD_HWM)
         .unwrap();
     router.bind("inproc://rust-routed-async-close").unwrap();
-    dealer.connect("inproc://rust-routed-async-close").unwrap();
-    thread::sleep(Duration::from_millis(75));
+    test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
+        dealer.connect("inproc://rust-routed-async-close").unwrap()
+    });
 
-    let filler = saturate(|| Box::pin(dealer.send().message(large_filler(b'c')).submit()));
+    let filler = saturate(|| send_stage(dealer.send().message(large_filler(b'c')).submit()));
     assert!(!filler.is_empty(), "test target did not reach HWM");
 
-    let mut pending = Box::pin(
+    let mut pending = send_stage(
         dealer
             .send()
             .message(Message::try_from(b"pending-close").unwrap())
@@ -717,25 +741,29 @@ fn blocked_router_target_does_not_delay_another_target() {
         .set_receive_high_water_mark(RECORD_HWM)
         .unwrap();
     router.bind("inproc://rust-routed-async-targets").unwrap();
-    dealer_a
-        .connect("inproc://rust-routed-async-targets")
-        .unwrap();
-    dealer_b
-        .connect("inproc://rust-routed-async-targets")
-        .unwrap();
-    thread::sleep(Duration::from_millis(100));
+    test_support::connect_dealer_router_and_confirm(&router, &dealer_a, || {
+        dealer_a
+            .connect("inproc://rust-routed-async-targets")
+            .unwrap()
+    });
+    test_support::connect_dealer_router_and_confirm(&router, &dealer_b, || {
+        dealer_b
+            .connect("inproc://rust-routed-async-targets")
+            .unwrap()
+    });
 
-    let blocked_a = saturate(|| Box::pin(router.send(&rid_a).message(large_filler(b'a')).submit()));
+    let blocked_a =
+        saturate(|| send_stage(router.send(&rid_a).message(large_filler(b'a')).submit()));
     assert!(!blocked_a.is_empty(), "target A did not reach HWM");
 
     // Target B is a different physical pipe, so its record is admitted right
     // away while target A's binding-owned packet waits for WRITABLE.
-    test_support::block_on(
+    test_support::block_on(send_stage(
         router
             .send(&rid_b)
             .message(Message::try_from(b"ready-b").unwrap())
             .submit(),
-    )
+    ))
     .unwrap();
     let mut received_b = Received::empty();
     dealer_b
@@ -781,13 +809,15 @@ fn request_timeout_is_owned_by_core() {
     let mut ready = Received::empty();
     assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
 
-    // The Future is inert until polled; the submit and the Core-owned deadline
-    // both start at the first poll. Nothing in the binding times the request.
-    let pending = dealer
-        .request()
-        .message(Message::try_from(b"no-responder").unwrap())
-        .timeout(Duration::from_millis(50))
-        .submit();
+    // The terminal submits immediately, so the Core-owned deadline starts
+    // before either returned stage is polled.
+    let pending = request_stage(
+        dealer
+            .request()
+            .message(Message::try_from(b"no-responder").unwrap())
+            .timeout(Duration::from_millis(50))
+            .submit(),
+    );
     thread::sleep(Duration::from_millis(30));
 
     let started = std::time::Instant::now();
@@ -870,7 +900,7 @@ fn dropped_request_future_cleans_up_its_late_completion() {
         router
     });
 
-    let mut dropped = Box::pin(
+    let mut dropped = request_stage(
         dealer
             .request()
             .message(Message::try_from(b"drop-request").unwrap())
@@ -884,13 +914,13 @@ fn dropped_request_future_cleans_up_its_late_completion() {
     drop(dropped);
     thread::sleep(Duration::from_millis(50));
 
-    let reply = test_support::block_on(
+    let reply = test_support::block_on(request_stage(
         dealer
             .request()
             .message(Message::try_from(b"next-request").unwrap())
             .timeout(Duration::from_secs(2))
             .submit(),
-    )
+    ))
     .unwrap();
     assert_eq!(reply[0].as_bytes(), b"next-reply");
     drop(responder.join().unwrap());
@@ -959,10 +989,10 @@ fn backpressured_send_resumes_without_executor_repolls() {
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
 
-    let filler = saturate(|| Box::pin(dealer.send().message(large_filler(b'p')).submit()));
+    let filler = saturate(|| send_stage(dealer.send().message(large_filler(b'p')).submit()));
     assert!(!filler.is_empty(), "test target did not reach HWM");
 
-    let mut parked = Box::pin(
+    let mut parked = send_stage(
         dealer
             .send()
             .message(Message::try_from(b"parked-header").unwrap())
@@ -1025,7 +1055,7 @@ fn request_alongside_live_send_tokens_is_not_repolled() {
     let mut ready = Received::empty();
     assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
 
-    let mut request = Box::pin(
+    let mut request = request_stage(
         dealer
             .request()
             .message(Message::try_from(b"question").unwrap())
@@ -1039,7 +1069,7 @@ fn request_alongside_live_send_tokens_is_not_repolled() {
 
     // Live SEND wait tokens on the same socket must not turn the REQUEST
     // waiter into a polling loop.
-    let pending = saturate(|| Box::pin(dealer.send().message(large_filler(b'q')).submit()));
+    let pending = saturate(|| send_stage(dealer.send().message(large_filler(b'q')).submit()));
     assert!(!pending.is_empty(), "test target did not reach HWM");
 
     let (done_tx, done_rx) = mpsc::channel();
@@ -1092,9 +1122,9 @@ fn removing_the_target_fails_a_parked_router_send() {
     let mut ready = Received::empty();
     assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
 
-    let filler = saturate(|| Box::pin(router.send(&rid).message(large_filler(b't')).submit()));
+    let filler = saturate(|| send_stage(router.send(&rid).message(large_filler(b't')).submit()));
     assert!(!filler.is_empty(), "test target did not reach HWM");
-    let mut parked = Box::pin(
+    let mut parked = send_stage(
         router
             .send(&rid)
             .message(Message::try_from(b"never-delivered").unwrap())
@@ -1148,9 +1178,9 @@ fn removing_the_target_fails_a_parked_router_request_with_typed_error() {
     let mut ready = Received::empty();
     assert!(peer.recv(&mut ready, RecvFlags::NONE).unwrap());
 
-    let filler = saturate(|| Box::pin(router.send(&rid).message(large_filler(b't')).submit()));
+    let filler = saturate(|| send_stage(router.send(&rid).message(large_filler(b't')).submit()));
     assert!(!filler.is_empty(), "test target did not reach HWM");
-    let mut request = Box::pin(
+    let mut request = request_stage(
         router
             .request(&rid)
             .message(Message::try_from(b"never-admitted").unwrap())

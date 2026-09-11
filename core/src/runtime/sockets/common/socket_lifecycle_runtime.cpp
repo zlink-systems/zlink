@@ -347,24 +347,9 @@ bool zlink::socket_lifecycle_coordinator_t::public_close_requested () const
 
 bool zlink::socket_lifecycle_coordinator_t::public_multipart_send_active () const
 {
-    // Read the marker first.  If its release is observed, the acquire also
-    // observes the boundary lease published before that release, closing the
-    // multipart-to-complete-submit hand-off gap.
-    if ((public_api_state.load (std::memory_order_acquire)
-         & public_api_multipart_bit)
-        != 0)
-        return true;
-    return public_multipart_control_boundary.load (std::memory_order_acquire);
-}
-
-void zlink::socket_lifecycle_coordinator_t::hold_public_multipart_control_boundary ()
-{
-    public_multipart_control_boundary.store (true, std::memory_order_release);
-}
-
-void zlink::socket_lifecycle_coordinator_t::release_public_multipart_control_boundary ()
-{
-    public_multipart_control_boundary.store (false, std::memory_order_release);
+    return (public_api_state.load (std::memory_order_acquire)
+            & public_api_multipart_bit)
+           != 0;
 }
 
 void zlink::socket_lifecycle_coordinator_t::mark_deferred_peer_controls ()

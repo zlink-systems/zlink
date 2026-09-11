@@ -30,7 +30,7 @@ from benchagg.analysis import (  # noqa: E402
     language_verdict,
     ordered_keys,
 )
-from benchagg.model import JUDGEMENT_PATTERN, PAYLOAD_SIZES  # noqa: E402
+from benchagg.model import JUDGEMENT_PATTERN, PATTERNS, PAYLOAD_SIZES  # noqa: E402
 from benchagg.readers import ReportError, read_runs  # noqa: E402
 from benchagg.render import (  # noqa: E402
     render_contaminated,
@@ -66,6 +66,7 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--judgement-pattern",
+        choices=PATTERNS,
         default=JUDGEMENT_PATTERN,
         help=(
             "pattern the two spec 7.2 ratios are computed on "

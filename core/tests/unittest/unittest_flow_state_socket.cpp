@@ -805,10 +805,9 @@ void test_flow_frame_cannot_complete_a_truncated_reply ()
     memcpy (zlink_msg_data (&request_part), "ping", 4);
     zlink_completion_id_t completion_id = 0;
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
-                           zlink_request_part (
-                             dealer, NULL, &request_part,
-                             ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, 1500,
-                             NULL, &completion_id));
+                           zlink_request (dealer, NULL, &request_part, 1,
+                                          ZLINK_SEND_FLAGS_NONE, 1500, NULL,
+                                          &completion_id));
     TEST_ASSERT_TRUE (completion_id != 0);
 
     const zlink_routing_id_t *peer_rid = NULL;
@@ -1298,9 +1297,8 @@ void test_flow_frame_before_reply_is_consumed_on_a_local_pair ()
     zlink_completion_id_t completion_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_request_part (fixture.dealer, NULL, &request_part,
-                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, 1500,
-                          NULL, &completion_id));
+      zlink_request (fixture.dealer, NULL, &request_part, 1,
+                     ZLINK_SEND_FLAGS_NONE, 1500, NULL, &completion_id));
     TEST_ASSERT_TRUE (completion_id != 0);
 
     const zlink_routing_id_t *peer_rid = NULL;
@@ -1406,9 +1404,8 @@ void test_peer_weight_change_does_not_leak_to_public_receive ()
     zlink_completion_id_t completion_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_request_part (fixture.dealer, NULL, &request,
-                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, 1500,
-                          NULL, &completion_id));
+      zlink_request (fixture.dealer, NULL, &request, 1,
+                     ZLINK_SEND_FLAGS_NONE, 1500, NULL, &completion_id));
     TEST_ASSERT_TRUE (completion_id != 0);
 
     const zlink_routing_id_t *peer_rid = NULL;
@@ -1429,8 +1426,7 @@ void test_peer_weight_change_does_not_leak_to_public_receive ()
     memcpy (zlink_msg_data (&reply), "pong", 4);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_reply_part (fixture.router, &reply_rid, request_seq, &reply,
-                        ZLINK_PART_FINAL));
+      zlink_reply (fixture.router, &reply_rid, request_seq, &reply, 1));
 
     bool completed = false;
     zlink_completion_t completion;

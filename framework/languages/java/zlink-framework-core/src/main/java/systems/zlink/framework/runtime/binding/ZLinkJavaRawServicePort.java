@@ -1,9 +1,8 @@
 package systems.zlink.framework.runtime.binding;
 
-import java.util.ArrayList;
-import java.util.IdentityHashMap;
+import java.util.AbstractList;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -11,6 +10,7 @@ import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
+import java.util.function.Function;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
@@ -37,9 +37,8 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
 final class ZLinkJavaRawServicePort implements AutoCloseable {
     private final Context context;
     private final boolean ownsContext;
-    private final List<RouterSocket> routers = new ArrayList<>();
-    private final Map<RouterSocket, ZLinkJavaSocketReceivePoller> receivePollers =
-        new IdentityHashMap<>();
+    private final LinkedHashMap<RouterSocket, ZLinkJavaSocketReceivePoller> receivePollers =
+        new LinkedHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
 
     ZLinkJavaRawServicePort() {
@@ -67,7 +66,6 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         boolean accepted = false;
         try {
             router.setRoutingId(Objects.requireNonNull(routingId, "routingId"));
-            routers.add(router);
             receivePollers.put(router, new ZLinkJavaSocketReceivePoller(router));
             accepted = true;
             return router;
@@ -91,42 +89,73 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         RouterSocket router,
         RoutingId target,
         List<byte[]> frames) {
-        ensureOwned(router);
-        return sendOnLane(router, target, frames);
+        return sendMessages(router, target,
+            copyMessages(frames, "service multipart must not be empty"));
     }
 
-    private CompletionStage<Void> sendOnLane(
+    /** Consumes every message on every return or throw path. */
+    CompletionStage<Void> sendMessages(
         RouterSocket router,
         RoutingId target,
-        List<byte[]> frames) {
-        Objects.requireNonNull(target, "target");
-        if (frames.isEmpty()) {
-            throw new IllegalArgumentException("service multipart must not be empty");
-        }
-        List<Message> messages = frames.stream()
-            .map(frame -> Message.from(Objects.requireNonNull(frame, "frame")))
-            .toList();
-        boolean submitted = false;
+        List<Message> messages) {
+        List<Message> ownedMessages = claimMessages(messages);
+        boolean completionOwns = false;
         try {
+            ensureOwned(router);
+            Objects.requireNonNull(target, "target");
+            if (ownedMessages.isEmpty()) {
+                throw new IllegalArgumentException(
+                    "service multipart must not be empty");
+            }
             var send = router.send(target);
-            var submit = send.message(messages.getFirst());
-            for (int index = 1; index < messages.size(); index++) {
-                submit.message(messages.get(index));
+            var submit = send.message(ownedMessages.getFirst());
+            for (int index = 1; index < ownedMessages.size(); index++) {
+                submit.message(ownedMessages.get(index));
             }
             CompletionStage<Void> completion;
             try {
-                completion = submit.submit();
+                completion = submit.submit().admitted();
             } catch (RuntimeException failure) {
                 completion = CompletableFuture.failedFuture(failure);
             }
             completion = completion.whenComplete((ignored, failure) ->
-                Message.closeAll(messages));
-            submitted = true;
+                Message.closeAll(ownedMessages));
+            completionOwns = true;
             return completion;
         } finally {
-            if (!submitted) {
-                Message.closeAll(messages);
+            if (!completionOwns) {
+                Message.closeAll(ownedMessages);
             }
+        }
+    }
+
+    private static List<Message> claimMessages(List<Message> messages) {
+        Objects.requireNonNull(messages, "messages");
+        try {
+            return List.copyOf(messages);
+        } catch (RuntimeException | Error failure) {
+            Message.closeAll(messages);
+            throw failure;
+        }
+    }
+
+    private static List<Message> copyMessages(
+        List<byte[]> frames,
+        String emptyMessage) {
+        Objects.requireNonNull(frames, "frames");
+        if (frames.isEmpty()) {
+            throw new IllegalArgumentException(emptyMessage);
+        }
+        var messages = new java.util.ArrayList<Message>(frames.size());
+        try {
+            for (byte[] frame : frames) {
+                messages.add(Message.from(
+                    Objects.requireNonNull(frame, "frame")));
+            }
+            return List.copyOf(messages);
+        } catch (RuntimeException | Error failure) {
+            Message.closeAll(messages);
+            throw failure;
         }
     }
 
@@ -145,46 +174,63 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         RoutingId target,
         List<byte[]> frames,
         Duration timeout) {
-        ensureOwned(router);
-        return requestOnLane(router, target, frames, timeout);
+        return request(router, target, frames, timeout,
+            reply -> reply.stream().map(Message::toByteArray).toList());
     }
 
-    private CompletionStage<List<byte[]>> requestOnLane(
+    <T> CompletionStage<T> request(
         RouterSocket router,
         RoutingId target,
         List<byte[]> frames,
-        Duration timeout) {
-        Objects.requireNonNull(target, "target");
-        Objects.requireNonNull(timeout, "timeout");
-        if (frames.isEmpty()) {
-            throw new IllegalArgumentException("service request must not be empty");
-        }
-        List<Message> messages = frames.stream()
-            .map(frame -> Message.from(Objects.requireNonNull(frame, "frame")))
-            .toList();
-        boolean submitted = false;
+        Duration timeout,
+        Function<List<Message>, T> decodeReply) {
+        return requestMessages(router, target,
+            copyMessages(frames, "service request must not be empty"),
+            timeout,
+            decodeReply);
+    }
+
+    /** Consumes every request message on every return or throw path. */
+    <T> CompletionStage<T> requestMessages(
+        RouterSocket router,
+        RoutingId target,
+        List<Message> messages,
+        Duration timeout,
+        Function<List<Message>, T> decodeReply) {
+        List<Message> ownedMessages = claimMessages(messages);
+        boolean completionOwns = false;
         try {
-            var request = router.request(target);
-            RequestSubmitOperation submit = request.message(messages.getFirst());
-            for (int index = 1; index < messages.size(); index++) {
-                submit.message(messages.get(index));
+            ensureOwned(router);
+            Objects.requireNonNull(decodeReply, "decodeReply");
+            Objects.requireNonNull(target, "target");
+            Objects.requireNonNull(timeout, "timeout");
+            if (ownedMessages.isEmpty()) {
+                throw new IllegalArgumentException(
+                    "service request must not be empty");
             }
-            CompletionStage<List<byte[]>> completion = submit.timeout(timeout)
+            var request = router.request(target);
+            RequestSubmitOperation submit = request.message(
+                ownedMessages.getFirst());
+            for (int index = 1; index < ownedMessages.size(); index++) {
+                submit.message(ownedMessages.get(index));
+            }
+            CompletionStage<T> completion = submit.timeout(timeout)
                 .submit()
+                .reply()
                 .thenApply(reply -> {
                     try {
-                        return reply.stream().map(Message::toByteArray).toList();
+                        return decodeReply.apply(reply);
                     } finally {
                         reply.forEach(Message::close);
                     }
                 })
                 .whenComplete((ignored, failure) ->
-                    Message.closeAll(messages));
-            submitted = true;
+                    Message.closeAll(ownedMessages));
+            completionOwns = true;
             return completion;
         } finally {
-            if (!submitted) {
-                Message.closeAll(messages);
+            if (!completionOwns) {
+                Message.closeAll(ownedMessages);
             }
         }
     }
@@ -273,7 +319,19 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             }
             RoutingId source = received.getRoutingId().orElseThrow(
                 () -> new IllegalStateException("service ROUTER receive has no routing id"));
-            List<byte[]> frames = received.parts().stream().map(Message::toByteArray).toList();
+            // Control decoders request individual headers. Application decoders
+            // borrow received.parts() directly while this owner is retained.
+            List<byte[]> frames = new AbstractList<>() {
+                @Override
+                public byte[] get(int index) {
+                    return received.parts().get(index).toByteArray();
+                }
+
+                @Override
+                public int size() {
+                    return received.parts().size();
+                }
+            };
             Inbound inbound = new Inbound(
                 source,
                 received.replyToken().orElse(null),
@@ -300,16 +358,11 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        for (int index = routers.size() - 1; index >= 0; index--) {
-            RouterSocket router = routers.get(index);
-            ZLinkJavaSocketReceivePoller receivePoller = receivePollers.remove(router);
-            if (receivePoller != null) {
-                receivePoller.close();
-            }
-            router.close();
+        for (var entry : receivePollers.reversed().entrySet()) {
+            entry.getValue().close();
+            entry.getKey().close();
         }
         receivePollers.clear();
-        routers.clear();
         if (ownsContext) {
             context.close();
         }
@@ -317,7 +370,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
 
     private void ensureOwnedOnLane(RouterSocket router) {
         ensureOpen();
-        if (!routers.contains(Objects.requireNonNull(router, "router"))) {
+        if (!receivePollers.containsKey(Objects.requireNonNull(router, "router"))) {
             throw new IllegalArgumentException("router is not owned by this service port");
         }
     }
@@ -352,7 +405,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         Received received) implements AutoCloseable {
         Inbound {
             Objects.requireNonNull(source, "source");
-            frames = List.copyOf(frames);
+            Objects.requireNonNull(frames, "frames");
             Objects.requireNonNull(received, "received");
         }
 

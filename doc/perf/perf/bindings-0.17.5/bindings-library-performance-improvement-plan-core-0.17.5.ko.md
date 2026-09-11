@@ -1509,6 +1509,20 @@ pattern 평균의 목표 median 대비 갭(큰 순):
 - 남은 병목: 메시지당 N-API 경계 2회, receive envelope/parts/snapshot, async continuation. Node는 목표 median 60엔 아직 못 미치나 최대 갭
   패턴을 유의미하게 축소. **다음: dotnet DEALER_ROUTER_SENDSEND(갭 17.9)**.
 
+### 11.4 개선 #2 시도 — .NET routed hot-path (보류, 채택 없음)
+
+- **진단(EventPipe·임시 계측 근거):** 64B 2-part routed relay에서 메시지당 **native API 경계 14회, msg_copy 2회, 관리 객체 ~320~407 B**
+  (`Received` 144B + multipart collection 32B + send op/context 112B + async list 32B). Gen0 GC 3회/10s, **monitor contention 0**, 모든 send가 동기
+  완료(continuation 0). 지배 고정비는 (1) part마다 반복되는 managed/native 경계·Core 호출, (2) recv wrapper + ownership 보존용 native copy,
+  (3) ~320B 관리 객체. routing-id 조회·async continuation은 주 병목 아님. C는 동일 copy/send를 직접 ABI로 하는 반면 .NET은 part마다 P/Invoke +
+  wrapper 상태 전이를 지불.
+- **후보 4개 측정·전부 revert(§7.7):** RID cache 복구 / DONTWAIT GC 전이 생략 / context 평탄화 / 단일 RID snapshot. 일부는 ROUTER_ROUTER_SENDSEND
+  (RID cache 64B +10.7%, 4096B +12%)·DEALER_ROUTER_REQREP를 개선했으나 **최우선 DEALER_ROUTER_SENDSEND 64B는 모두 −3~8% 하락** → §7.7 기준
+  미달로 전부 revert. tracked 변경 0, 채택 commit 없음. .NET 테스트 234/234 통과.
+- **결론·다음:** 작은 size의 진짜 지렛대는 **논리 메시지당 14회 native 경계 축소**인데, 공개 Core API에 multipart routed **batch recv/send** 함수가 없어
+  .NET 내부만으로 줄이면 ownership/실패복원 계약을 깬다. 따라서 다음 단계는 **Core API/spec 변경(batch 계약)** 으로 분리해야 하며, 이는 별도 과제다.
+  (참고: 이 시도 중 .NET package 빌더가 저장소 루트에 파일을 잘못 풀고 README를 덮어쓴 부작용은 감독 검증에서 정리·복원 완료.)
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.

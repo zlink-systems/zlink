@@ -21,6 +21,7 @@
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
+#include "runtime/mesh/mesh_record_dispatcher.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/spots/spot_route_internal_dispatcher.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
@@ -670,9 +671,11 @@ class local_internal_dispatcher_t final
 
     zlink::framework::result_t<void>
     dispatch_send (const zlink::framework::detail::route_received_packet_t &received,
+                   const zlink::framework::runtime::messaging::envelope_header_t &header,
                    zlink::framework::service_provider_t &services) const override
     {
         (void) received;
+        (void) header;
         services.get_required<local_handler_t> ().internal_dispatch_provider_seen = 1;
         ++send_count;
         return zlink::framework::result_t<void>::success ();
@@ -792,6 +795,70 @@ await_native_reply (
 
 int main ()
 {
+    // The Mesh classification decode carries flow capture through route dispatch.
+    {
+        using namespace zlink::framework;
+        namespace msg = runtime::messaging;
+        struct flow_command_handler_t
+        {
+            int invocations = 0;
+            int last_value = 0;
+            void handle (const int &value, const route_message_context_t &)
+            {
+                ++invocations;
+                last_value = value;
+            }
+        };
+        service_collection_t services;
+        services.add_singleton<flow_command_handler_t> ();
+        auto provider = services.build_provider ();
+        serializer_registry_t serializers;
+        detail::route_handler_registry_t handlers;
+        handlers.on_send<flow_command_handler_t, int> (
+          "mesh", "flow-command", &flow_command_handler_t::handle);
+        auto &handler = provider.get_required<flow_command_handler_t> ();
+        handler_registry_t filters;
+        runtime::host::receive_record_t record;
+        record.channel_name = "mesh";
+        msg::envelope_header_t header;
+        header.kind = msg::message_kind_t::command;
+        header.channel_name = "mesh";
+        header.message_name = "flow-command";
+        header.flow_id = "01890a5d-ac96-774b-bcce-b302099a8057";
+        header.flow_origin = flow_origin_t::timer;
+        msg::envelope_codec_t codec;
+        const auto wire = codec.encode_header (header).to_string ();
+        auto malformed = wire;
+        malformed.replace (malformed.find (*header.flow_id), 4, "ZZZZ");
+        auto parts = [] (const std::string &encoded) {
+            return std::vector<zlink::message_t>{zlink::message_t::from (encoded),
+                                                  zlink::message_t::from (std::string ("42"))};
+        };
+        dispatch_options_t off_options;
+        off_options.message_flow (message_flow_log_mode_t::off);
+        detail::mesh_record_dispatcher_t off (provider, serializers, handlers, filters, off_options);
+        if (!off.dispatch (record, parts (malformed))
+            || handler.invocations != 1 || handler.last_value != 42)
+            return 220;
+        dispatch_options_t options;
+        options.message_flow (message_flow_log_mode_t::normal);
+        bool preserved = false;
+        detail::dispatch_options_access_t::set_observer_for_tests (
+          options, [&] (const message_flow_event_t &event) {
+              if (event.outcome == message_flow_outcome_t::received)
+                  preserved = event.flow_id == header.flow_id
+                              && event.flow_origin == header.flow_origin;
+          });
+        detail::mesh_record_dispatcher_t on (provider, serializers, handlers, filters, options);
+        if (!on.dispatch (record, parts (wire)) || !preserved
+            || handler.invocations != 2 || handler.last_value != 42)
+            return 221;
+        const auto rejected = on.dispatch (record, parts (malformed));
+        if (rejected || rejected.error_kind () != framework_error_kind_t::protocol_error
+            || handler.invocations != 2)
+            return 222;
+    }
+
     zlink::framework::zlink_builder_t zlink;
     zlink.add_node ("outbound-node");
     zlink.default_request_timeout (std::chrono::milliseconds (10000));
@@ -1179,6 +1246,21 @@ int main ()
       protobuf_serializers);
     zlink::framework_codecs::protobuf ().register_framework_codecs (
       protobuf_registration);
+    for (const auto size : {0u, 1u, 1024u, 4096u}) {
+        google::protobuf::StringValue value;
+        value.set_value (std::string (size, 'x'));
+        const auto serializer = protobuf_serializers.get<google::protobuf::StringValue> ();
+        zlink::message_t retained;
+        {
+            const auto encoded = serializer.serialize (value);
+            assert (encoded.to_string () == value.SerializeAsString ());
+            retained = zlink::framework::detail::encoded_payload_to_raw (encoded);
+            if (size >= 1024)
+                assert (retained.data () == encoded.bytes ().data ());
+            assert (serializer.deserialize (encoded).value () == value.value ());
+        }
+        assert (retained.to_string () == value.SerializeAsString ());
+    }
     zlink::framework::zlink_builder_t protobuf_client_builder;
     protobuf_client_builder.channel ("protobuf-client")
       .enable_client ()
@@ -1707,7 +1789,7 @@ int main ()
                                   .message (native_request_header)
                                   .message (native_request_body)
                                   .timeout (std::chrono::milliseconds (2000))
-                                  .async ();
+                                  .async ().reply;
     const auto native_client_reply = copy_message_parts (
       await_native_reply (std::move (native_client_future)).result ().value ());
     const int native_server_result = native_server_done.get ();
@@ -1895,7 +1977,7 @@ int main ()
                              .message (attempt_header)
                              .message (attempt_body)
                              .timeout (std::chrono::milliseconds (200))
-                             .async ();
+                             .async ().reply;
             routed_hosted_reply =
               await_native_reply (std::move (pending)).result ().value ();
             routed_request_completed = true;
@@ -2684,7 +2766,7 @@ int main ()
     const auto no_internal_send = no_internal.dispatch_send (
       zlink::framework::detail::route_received_packet_t{
         zlink::routing_id_t::from (std::string ("source-node")), std::nullopt, internal_parts},
-      provider);
+      internal_header, provider);
     if (no_internal_send
         || no_internal_send.error_kind ()
              != zlink::framework::framework_error_kind_t::not_found) {
@@ -3565,7 +3647,7 @@ int main ()
     auto bound_send = actor_dispatcher.dispatch_send (
       zlink::framework::detail::route_received_packet_t{
         zlink::routing_id_t::from (std::string ("play-node")), 100, std::move (bound_send_parts)},
-      provider);
+      bound_header, provider);
     const auto routed_send_headers = stream_runtime.written_headers (stream);
     if (!bound_send || routed_send_headers.size () != 2
         || routed_send_headers[1].codec () != zlink::framework::stream_codec_t::json

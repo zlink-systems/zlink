@@ -40,7 +40,7 @@ internal sealed class ZLinkSpotOutboundEndpoint(
     internal bool IsClientServerClientChannel(string channelName) =>
         runtime.IsClientServerClientChannel(channelName);
 
-    public async ValueTask<IReadOnlyList<Message>> RequestToChannelAsync(
+    public async ValueTask<ZLinkBackendRouteReceived> RequestToChannelAsync(
         string channelName,
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
@@ -102,7 +102,7 @@ internal sealed class ZLinkSpotOutboundEndpoint(
             .ConfigureAwait(false);
     }
 
-    public ValueTask<IReadOnlyList<Message>> RequestToSpotAsync(
+    public ValueTask<ZLinkBackendRouteReceived> RequestToSpotAsync(
         string routerChannelId,
         RoutingId targetNodeRid,
         string targetSpotId,

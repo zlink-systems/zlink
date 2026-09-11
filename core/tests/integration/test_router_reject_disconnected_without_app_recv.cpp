@@ -115,9 +115,7 @@ zlink_completion_id_t submit_request (void *server_)
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&part, 1));
     *static_cast<char *> (zlink_msg_data (&part)) = 'Q';
     zlink_completion_id_t id = 0;
-    const zlink_submit_result_t rc = zlink_request_part (
-      server_, &target, &part, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
-      setup_timeout_ms, NULL, &id);
+    const zlink_submit_result_t rc = zlink_request (server_, &target, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, setup_timeout_ms, NULL, &id);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, rc);
     TEST_ASSERT_NOT_EQUAL (0, id);
@@ -130,16 +128,14 @@ void answer_request (void *client_)
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
     const zlink_routing_id_t *source = NULL;
     zlink_reply_token_t token = 0;
-    zlink_part_flag_t flag = ZLINK_PART_MORE;
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv_part (
-      client_, &source, &token, &part, &flag, ZLINK_RECV_FLAGS_NONE));
+    size_t flag = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv (client_, &source, &token, &part, 1, &flag, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source);
     TEST_ASSERT_NOT_EQUAL (0, token);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, flag);
+    TEST_ASSERT_EQUAL_INT (1, flag);
     TEST_ASSERT_EQUAL_UINT64 (1, zlink_msg_size (&part));
     TEST_ASSERT_EQUAL_MEMORY ("Q", zlink_msg_data (&part), 1);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_reply_part (
-      client_, source, token, &part, ZLINK_PART_FINAL));
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_reply (client_, source, token, &part, 1));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
 }
 

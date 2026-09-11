@@ -65,10 +65,12 @@ func main() {
 		requestDone <- replyErr
 	}()
 
-	reply, err := dealerSocket.Request().
+	submission, err := dealerSocket.Request().
 		Message(samplecommon.Message("ping")).
 		Timeout(2 * time.Second).
 		Submit(context.Background())
+	samplecommon.Must(err)
+	reply, err := submission.Reply(context.Background())
 	samplecommon.Must(err)
 	defer func() {
 		for _, part := range reply {

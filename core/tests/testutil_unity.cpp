@@ -341,16 +341,15 @@ void make_random_ipc_endpoint (char *out_endpoint_)
 #endif
 
 zlink_routing_id_t recv_routed_string_expect_success (
-  void *socket_, const char *payload_, const char *expected_rid_,
-  zlink_part_flag_t expected_more_)
+  void *socket_, const char *payload_, const char *expected_rid_)
 {
     zlink_msg_t part;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
     const zlink_routing_id_t *source = NULL;
     zlink_reply_token_t token = 0;
-    zlink_part_flag_t more;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_router_recv_part (
-      socket_, &source, &token, &part, &more, ZLINK_RECV_FLAGS_NONE));
+    size_t count = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_router_recv (
+      socket_, &source, &token, &part, 1, &count, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source);
     TEST_ASSERT_GREATER_THAN_UINT (0, source->size);
     const zlink_routing_id_t result = *source;
@@ -362,7 +361,7 @@ zlink_routing_id_t recv_routed_string_expect_success (
     TEST_ASSERT_EQUAL_UINT (length, zlink_msg_size (&part));
     if (length)
         TEST_ASSERT_EQUAL_MEMORY (payload_, zlink_msg_data (&part), length);
-    TEST_ASSERT_EQUAL_INT (expected_more_, more);
+    TEST_ASSERT_EQUAL_UINT64 (1, count);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
     return result;
 }
@@ -387,8 +386,8 @@ void send_published_string_expect_success (
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&part, size));
     if (size)
         memcpy (zlink_msg_data (&part), payload_, size);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_publish_part (
-      publisher_, topic_, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL));
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_publish (
+      publisher_, topic_, &part, 1, ZLINK_SEND_FLAGS_NONE));
 }
 
 void recv_subscribed_string_expect_success (
@@ -399,10 +398,10 @@ void recv_subscribed_string_expect_success (
     size_t received_topic_size = 0;
     zlink_msg_t part;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
-    zlink_part_flag_t more = ZLINK_PART_MORE;
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_subscribe_part (
+    size_t count = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_subscribe (
       subscriber_, NULL, topic.data (), topic.size (), &received_topic_size,
-      &part, &more, ZLINK_RECV_FLAGS_NONE));
+      &part, 1, &count, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_EQUAL_UINT64 (topic_size, received_topic_size);
     if (topic_size)
         TEST_ASSERT_EQUAL_MEMORY (topic_, topic.data (), topic_size);
@@ -410,7 +409,7 @@ void recv_subscribed_string_expect_success (
     TEST_ASSERT_EQUAL_UINT64 (size, zlink_msg_size (&part));
     if (size)
         TEST_ASSERT_EQUAL_MEMORY (payload_, zlink_msg_data (&part), size);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
+    TEST_ASSERT_EQUAL_UINT64 (1, count);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
 }
 

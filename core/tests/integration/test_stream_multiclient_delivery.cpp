@@ -136,8 +136,7 @@ void push (void *server_, client_t &client_, const std::string &bytes_)
     zlink_completion_id_t id = UINT64_MAX;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part_rid (server_, &client_.rid, &part,
-                           ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL, &id));
+      zlink_send_rid (server_, &client_.rid, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL, &id));
     TEST_ASSERT_EQUAL_UINT64 (0, id);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
     client_.expected += bytes_;

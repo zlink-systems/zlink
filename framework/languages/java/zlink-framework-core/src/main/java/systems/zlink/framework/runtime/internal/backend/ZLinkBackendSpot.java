@@ -2,10 +2,12 @@ package systems.zlink.framework.runtime.internal.backend;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
 public interface ZLinkBackendSpot extends ZLinkBackendObject {
     String spotId();
@@ -124,6 +126,21 @@ public interface ZLinkBackendSpot extends ZLinkBackendObject {
                 timeout);
         }
         throw new UnsupportedOperationException("Spot request metadata is unavailable");
+    }
+
+    default CompletionStage<ZLinkBackendReceived> requestToSpot(
+        RoutingId targetNodeRid,
+        String spotId,
+        long spotGeneration,
+        byte[] metadata,
+        List<Message> parts,
+        Duration timeout,
+        ZLinkServiceOperationRegistry operations,
+        UUID operationId) {
+        return operations.submit(operationId, timeout,
+            () -> requestToSpot(
+                targetNodeRid, spotId, spotGeneration, metadata, parts, timeout),
+            ZLinkBackendReceived::close);
     }
     void onDispatchEvent(ZLinkBackendSpotDispatchHandler handler);
 

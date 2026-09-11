@@ -49,14 +49,14 @@ final class CompletionNativeFixture {
         errnoLocation = linker.downcallHandle(linker.defaultLookup()
             .find("__errno_location").orElseThrow(), FunctionDescriptor.of(ADDRESS));
         Map<String, MemorySegment> replacements = new HashMap<>();
-        replace(replacements, "zlink_send_part", "send", FunctionDescriptor.of(JAVA_INT,
-            ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS, ADDRESS));
-        replace(replacements, "zlink_send_part_rid", "sendRid", FunctionDescriptor.of(JAVA_INT,
-            ADDRESS, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS, ADDRESS));
-        replace(replacements, "zlink_request_part", "request", FunctionDescriptor.of(JAVA_INT,
-            ADDRESS, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, ADDRESS));
-        replace(replacements, "zlink_reply_part", "reply", FunctionDescriptor.of(JAVA_INT,
-            ADDRESS, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT));
+        replace(replacements, "zlink_send", "send", FunctionDescriptor.of(JAVA_INT,
+            ADDRESS, ADDRESS, JAVA_LONG, JAVA_INT, ADDRESS, ADDRESS));
+        replace(replacements, "zlink_send_rid", "sendRid", FunctionDescriptor.of(JAVA_INT,
+            ADDRESS, ADDRESS, ADDRESS, JAVA_LONG, JAVA_INT, ADDRESS, ADDRESS));
+        replace(replacements, "zlink_request", "request", FunctionDescriptor.of(JAVA_INT,
+            ADDRESS, ADDRESS, ADDRESS, JAVA_LONG, JAVA_INT, JAVA_INT, ADDRESS, ADDRESS));
+        replace(replacements, "zlink_reply", "reply", FunctionDescriptor.of(JAVA_INT,
+            ADDRESS, ADDRESS, JAVA_LONG, ADDRESS, JAVA_LONG));
         replace(replacements, "zlink_disconnect_rid", "disconnect", FunctionDescriptor.of(JAVA_INT,
             ADDRESS, ADDRESS));
         replace(replacements, "zlink_completion_recv", "recv", FunctionDescriptor.of(JAVA_INT,
@@ -82,11 +82,14 @@ final class CompletionNativeFixture {
             .set(JAVA_INT, 0, value);
     }
 
-    private int submit(MemorySegment part, int partFlag, MemorySegment context,
+    private int submit(MemorySegment parts, long partCount, MemorySegment context,
                        MemorySegment idOut, boolean request, MemorySegment rid) throws Throwable {
-        NativeMessage.messageClose(part);
-        if (partFlag == Native.PART_MORE)
-            return SubmitResult.OK.value();
+        long partSize = NativeLayouts.MESSAGE_LAYOUT.byteSize();
+        parts = parts.reinterpret(Math.multiplyExact(partSize, partCount));
+        for (long index = 0; index < partCount; index++) {
+            NativeMessage.messageClose(parts.asSlice(index * partSize,
+                partSize));
+        }
         Attempt attempt = attempts.poll();
         if (attempt == null) {
             unexpectedSubmit = true;
@@ -112,26 +115,28 @@ final class CompletionNativeFixture {
         return attempt.result().value();
     }
 
-    private int send(MemorySegment socket, MemorySegment part, int flags, int partFlag,
+    private int send(MemorySegment socket, MemorySegment parts, long partCount, int flags,
                      MemorySegment context, MemorySegment idOut) throws Throwable {
-        return submit(part, partFlag, context, idOut, false, MemorySegment.NULL);
+        return submit(parts, partCount, context, idOut, false,
+            MemorySegment.NULL);
     }
 
-    private int sendRid(MemorySegment socket, MemorySegment rid, MemorySegment part,
-                        int flags, int partFlag, MemorySegment context,
+    private int sendRid(MemorySegment socket, MemorySegment rid, MemorySegment parts,
+                        long partCount, int flags, MemorySegment context,
                         MemorySegment idOut) throws Throwable {
-        return submit(part, partFlag, context, idOut, false, rid);
+        return submit(parts, partCount, context, idOut, false, rid);
     }
 
-    private int request(MemorySegment socket, MemorySegment rid, MemorySegment part,
-                        int flags, int partFlag, int timeout, MemorySegment context,
+    private int request(MemorySegment socket, MemorySegment rid, MemorySegment parts,
+                        long partCount, int flags, int timeout, MemorySegment context,
                         MemorySegment idOut) throws Throwable {
-        return submit(part, partFlag, context, idOut, true, rid);
+        return submit(parts, partCount, context, idOut, true, rid);
     }
 
     private int reply(MemorySegment socket, MemorySegment rid, long token,
-                      MemorySegment part, int partFlag) throws Throwable {
-        return submit(part, partFlag, MemorySegment.NULL, MemorySegment.NULL, false, rid);
+                      MemorySegment parts, long partCount) throws Throwable {
+        return submit(parts, partCount, MemorySegment.NULL,
+            MemorySegment.NULL, false, rid);
     }
 
     private int disconnect(MemorySegment socket, MemorySegment rid) {

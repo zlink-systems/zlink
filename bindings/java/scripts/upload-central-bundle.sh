@@ -3,8 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 java_root="$(cd "$script_dir/.." && pwd)"
-repo_root="$(git -C "$java_root" rev-parse --show-toplevel)"
-version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
+version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$java_root/VERSION")"
 staging_dir="${MAVEN_CENTRAL_BUNDLE_DIR:-$java_root/build/central-staging}"
 bundle_path="${MAVEN_CENTRAL_BUNDLE_PATH:-$java_root/build/zlink-java-$version-central-bundle.zip}"
 prepare_only=false
@@ -18,7 +17,7 @@ if [[ $# -ne 0 ]]; then
   exit 2
 fi
 if [[ -z "$version" ]]; then
-  echo "BINDINGS_VERSION does not contain ZLINK_BINDINGS_VERSION" >&2
+  echo "$java_root/VERSION does not contain ZLINK_BINDING_VERSION" >&2
   exit 1
 fi
 if [[ ! -d "$staging_dir" ]]; then

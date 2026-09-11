@@ -19,8 +19,8 @@ import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 /**
  * {@code zlink-framework-<lang>} server, java row.
  *
- * <p>spec section 1.3: RouteMesh ROUTER&lt;-&gt;ROUTER with a channel request handler and a
- * channel send handler. The host is the Spring Boot starter, which is the public way
+ * <p>RouteMesh ROUTER&lt;-&gt;ROUTER with node-direct request and send handlers.
+ * The host is the Spring Boot starter, which is the public way
  * to stand up {@code zlink-framework-core} -- the analogue of .NET's
  * {@code Zlink.Framework.AspNetCore} and node's {@code @zlink-systems/nestjs}. No
  * internal package of the framework is touched (G4).
@@ -93,9 +93,15 @@ public class ZLinkFrameworkBenchServer {
             var mesh = options.addRouteMesh(BenchContract.MESH_NAME)
                 .listen(endpoint.value())
                 .setRoutingId(RoutingId.from(BenchContract.SERVER_ROUTING_ID));
-            // spec section 1.3: one RouteMesh channel carrying both a request handler and
-            // a send handler, registered for the same message type as in the .NET and
-            // node rows so the three language rows stay comparable.
+            mesh.addRouteRequestHandler(
+                    BenchEchoHandler.class,
+                    systems.zlink.bench.withgrpc.proto.BenchPayload.class,
+                    systems.zlink.bench.withgrpc.proto.BenchPayload.class)
+                .addRouteSendHandler(
+                    BenchCommandHandler.class,
+                    systems.zlink.bench.withgrpc.proto.BenchPayload.class);
+            // Kotlin reuses this server and still addresses the channel. Both public
+            // namespaces use the same handlers, codec and metrics.
             mesh.channelName(BenchContract.CHANNEL_NAME).server()
                 .addRequestHandler(
                     BenchEchoHandler.class,

@@ -56,6 +56,17 @@ def version(root, filename, field):
                 (root / filename).read_text().splitlines())[field]
 
 
+def package_versions(root):
+    core = version(root, 'VERSION', 'LIBZLINK_VERSION')
+    return {
+        language: (
+            core if language == 'c' else
+            version(root, f'bindings/{language}/VERSION', 'ZLINK_BINDING_VERSION')
+        )
+        for language in LANGUAGES
+    }
+
+
 def tool_id(root):
     java = Path(os.environ['JAVA_HOME']) / 'bin' if os.environ.get('JAVA_HOME') else Path('')
     commands = [
@@ -84,7 +95,7 @@ def tool_id(root):
 def cache_key(root, tools, host=None):
     host = host or f'{platform.system().lower()}-{platform.machine().lower()}'
     fields = [tree_hash(root, 'bindings'),
-              version(root, 'BINDINGS_VERSION', 'ZLINK_BINDINGS_VERSION'),
+              json.dumps(package_versions(root), sort_keys=True, separators=(',', ':')),
               version(root, 'VERSION', 'LIBZLINK_VERSION'),
               tree_hash(root, 'scripts/local-package'), host, tools]
     # NUL separates the six fields unambiguously, in specification order.
@@ -95,17 +106,17 @@ def dirty(root):
     return bool(git(root, 'status', '--porcelain=v1', '--untracked-files=all', '--', *SCOPES))
 
 
-def package_files(root, binding, languages):
+def package_files(root, versions, languages):
     """The binding output layout has a single owner, also used by verification."""
     patterns = {
-        'c': [f'c/zlink-c-{binding}.tar.gz'],
-        'cpp': [f'install/zlink-cpp/{binding}/**/*'],
-        'dotnet': [f'nuget/Zlink.{binding}.nupkg'],
-        'go': [f'go/zlink-go-{binding}.tar.gz'],
-        'java': [f'maven/systems/zlink/zlink/{binding}/**/*'],
-        'node': [f'npm/zlink-systems-zlink-{binding}.tgz'],
-        'python': [f'python/zlink-{binding}-*.whl', f'python/zlink-{binding}.tar.gz'],
-        'rust': [f'rust/zlink-{binding}.crate'],
+        'c': [f'c/zlink-c-{versions["c"]}.tar.gz'],
+        'cpp': [f'install/zlink-cpp/{versions["cpp"]}/**/*'],
+        'dotnet': [f'nuget/Zlink.{versions["dotnet"]}.nupkg'],
+        'go': [f'go/zlink-go-{versions["go"]}.tar.gz'],
+        'java': [f'maven/systems/zlink/zlink/{versions["java"]}/**/*'],
+        'node': [f'npm/zlink-systems-zlink-{versions["node"]}.tgz'],
+        'python': [f'python/zlink-{versions["python"]}-*.whl', f'python/zlink-{versions["python"]}.tar.gz'],
+        'rust': [f'rust/zlink-{versions["rust"]}.crate'],
     }
     files = {}
     for lang in languages:
@@ -115,6 +126,7 @@ def package_files(root, binding, languages):
             if not matches:
                 raise ValueError(f'Missing {lang} package: {pattern}')
             paths.update(matches)
+        binding = versions[lang]
         required = {'cpp': [f'install/zlink-cpp/{binding}/include/zlink.hpp',
                             f'install/zlink-cpp/{binding}/lib/libzlink_cpp.a'],
                     'java': [f'maven/systems/zlink/zlink/{binding}/zlink-{binding}.jar',
@@ -129,10 +141,11 @@ def package_files(root, binding, languages):
     return files
 
 
-def verify(entry, binding, languages):
+def verify(entry, versions, languages):
     manifest = json.loads((entry / '.complete').read_text())
-    actual = package_files(entry, binding, languages)
-    if manifest != {'binding_version': binding, 'files': actual}:
+    selected = {language: versions[language] for language in languages}
+    actual = package_files(entry, versions, languages)
+    if manifest != {'binding_versions': selected, 'files': actual}:
         raise ValueError(f'Package manifest/digest mismatch: {entry}')
     return actual
 
@@ -175,6 +188,48 @@ def link_packages(entry, output, files):
         if digest(target) != record['sha256']:
             raise ValueError(f'Linked package digest mismatch: {target}')
     print(f'-- verified {len(files)} binding file digests (including NuGet/npm/Maven)')
+    invalidate_consumer_caches(versions_from(files))
+
+
+def versions_from(files):
+    """Package version per language, read back from the linked output names."""
+    found = {}
+    for name in files:
+        match = re.search(r'nuget/Zlink\.(?P<v>[0-9][^/]*)\.nupkg$', name)
+        if match:
+            found['dotnet'] = match.group('v')
+        match = re.search(r'npm/zlink-systems-zlink-(?P<v>[0-9][^/]*)\.tgz$', name)
+        if match:
+            found['node'] = match.group('v')
+    return found
+
+
+def invalidate_consumer_caches(versions):
+    """A package rebuilt at the same version must not be served from a stale cache.
+
+    Development rebuilds keep the version and change the content, but every consumer
+    caches by version.  The side that produced the package owns invalidating what it
+    just made stale; otherwise each consumer has to remember a different cleanup.
+    Maven and the C++ prefix read the linked path directly and need nothing here.
+    """
+    version = versions.get('dotnet')
+    if version:
+        cached = Path.home() / '.nuget/packages/zlink' / version
+        if cached.is_dir():
+            shutil.rmtree(cached)
+            print(f'-- invalidated stale NuGet cache: {cached}', flush=True)
+    version = versions.get('node')
+    if version:
+        # npm keys cacache by the tarball URL; a file: install re-reads the file, but
+        # a registry-style entry for the same version would shadow it.
+        result = subprocess.run(
+            ['npm', 'cache', 'ls', f'@zlink-systems/zlink@{version}'],
+            capture_output=True, text=True, check=False)
+        if result.returncode == 0 and result.stdout.strip():
+            subprocess.run(['npm', 'cache', 'clean', '--force'],
+                           capture_output=True, check=False)
+            print(f'-- invalidated npm cache entry for @zlink-systems/zlink@{version}',
+                  flush=True)
 
 
 def source_copy(root, destination):
@@ -222,7 +277,7 @@ def prepare(root, output, cache, languages):
     # Serialize same-worktree builds, including private output and source copies.
     with lock(output / '.package-build.lock'):
         key = cache_key(root, tools)
-        binding = version(root, 'BINDINGS_VERSION', 'ZLINK_BINDINGS_VERSION')
+        versions = package_versions(root)
         core_env = dict(os.environ, ZLINK_LOCAL_PACKAGE_ROOT=str(output))
         subprocess.run(['bash', str(root / 'scripts/local-package/build-wsl.sh'),
                         '--prepare-core'], env=core_env, check=True)
@@ -236,9 +291,10 @@ def prepare(root, output, cache, languages):
             (private / '.complete').unlink(missing_ok=True)
             print(f'-- dirty inputs or custom build flags: private build at {private}', flush=True)
             build(root, private, languages)
-            files = package_files(private, binding, languages)
-            (private / '.complete').write_text(json.dumps({'binding_version': binding, 'files': files}, indent=2) + '\n')
-            link_packages(private, output, verify(private, binding, languages))
+            files = package_files(private, versions, languages)
+            selected = {language: versions[language] for language in languages}
+            (private / '.complete').write_text(json.dumps({'binding_versions': selected, 'files': files}, indent=2) + '\n')
+            link_packages(private, output, verify(private, versions, languages))
             return
         cache.mkdir(parents=True, exist_ok=True)
         entry = cache / key
@@ -255,7 +311,7 @@ def prepare(root, output, cache, languages):
                     (staging / 'build').symlink_to(build_tree, target_is_directory=True)
                     source = source_copy(root, build_tree / 'package-source')
                     build(root, staging, LANGUAGES, source)
-                    files = package_files(staging, binding, LANGUAGES)
+                    files = package_files(staging, versions, LANGUAGES)
                     # Preserve package files only: Core and build outputs are local.
                     (staging / 'build').unlink()
                     allowed = set(files)
@@ -265,8 +321,8 @@ def prepare(root, output, cache, languages):
                                 path.rmdir()
                         elif path.relative_to(staging).as_posix() not in allowed:
                             path.unlink()
-                    (staging / '.complete').write_text(json.dumps({'binding_version': binding, 'files': files}, indent=2) + '\n')
-                    verify(staging, binding, LANGUAGES)
+                    (staging / '.complete').write_text(json.dumps({'binding_versions': versions, 'files': files}, indent=2) + '\n')
+                    verify(staging, versions, LANGUAGES)
                     if dirty(root) or cache_key(root, tools) != key:
                         raise ValueError('Package inputs changed during build; refusing publication')
                     # Never replace an existing published key, even if corrupt.
@@ -276,7 +332,7 @@ def prepare(root, output, cache, languages):
                         shutil.rmtree(staging)
             else:
                 print(f'-- cache hit: {entry}', flush=True)
-            link_packages(entry, output, verify(entry, binding, LANGUAGES))
+            link_packages(entry, output, verify(entry, versions, LANGUAGES))
             print(f'-- package cache key: {key}', flush=True)
 
 

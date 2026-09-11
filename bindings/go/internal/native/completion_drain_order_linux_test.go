@@ -17,7 +17,7 @@ func TestWritableResubmitsOnlyAfterNoData(t *testing.T) {
 	for _, kind := range []completionOperationKind{completionSendRetry, completionRequest} {
 		t.Run(completionTestName(kind), func(t *testing.T) {
 			owner, entry := newWritableFixture(t, kind)
-			second := newCompletionEntry(completionRequest, context.Background())
+			second := newCompletionEntry(completionRequest)
 			if err := owner.register(second); err != nil {
 				t.Fatal(err)
 			}
@@ -63,7 +63,7 @@ func TestWritableRetryCancellationDuringDrain(t *testing.T) {
 	for _, kind := range []completionOperationKind{completionSendRetry, completionRequest} {
 		t.Run(completionTestName(kind), func(t *testing.T) {
 			owner, entry := newWritableFixture(t, kind)
-			second := newCompletionEntry(completionRequest, context.Background())
+			second := newCompletionEntry(completionRequest)
 			if err := owner.register(second); err != nil {
 				t.Fatal(err)
 			}

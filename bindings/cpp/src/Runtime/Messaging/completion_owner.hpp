@@ -36,12 +36,14 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
                         std::unique_ptr<operation_state_t> send_operation_,
                         void *submit_context_, uint64_t wait_token_);
     explicit completion_entry_t (
-      async_operation_state_t<std::vector<message_t>> *request_result_);
+      async_operation_state_t<std::vector<message_t>> *request_result_,
+      async_operation_state_t<void> *request_admitted_result_ = nullptr);
     explicit completion_entry_t (
       const std::shared_ptr<async_operation_state_t<std::vector<message_t>>> &
         request_result_);
     completion_entry_t (
       async_operation_state_t<std::vector<message_t>> *request_result_,
+      async_operation_state_t<void> *request_admitted_result_,
       std::unique_ptr<operation_state_t> request_operation_);
     ~completion_entry_t ();
 
@@ -52,7 +54,7 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
     // Identity Core recorded as the completion user context for this
     // operation. SEND uses the operation state it owns; REQUEST uses the entry.
     void *context () const noexcept { return _context; }
-    void start_request ();
+    bool start_request ();
     void publish (uint64_t completion_id_) noexcept;
     void fail_submit () noexcept;
     capture_result_t capture (zlink_completion_t &completion_) noexcept;
@@ -64,7 +66,7 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
 
   private:
     bool resubmit_send_attempt () noexcept;
-    bool submit_request_attempt (bool initial_);
+    bool submit_request_attempt (bool initial_, bool *admitted_out_ = nullptr);
     void fail_send (std::exception_ptr failure_) noexcept;
     void fail_request (std::exception_ptr failure_) noexcept;
     void settle_if_joined (std::unique_lock<std::mutex> &lock_) noexcept;
@@ -74,6 +76,7 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
     async_operation_state_t<void> *_send_result;
     std::unique_ptr<operation_state_t> _send_operation;
     async_operation_state_t<std::vector<message_t>> *_request_result;
+    async_operation_state_t<void> *_request_admitted_result = nullptr;
     std::unique_ptr<operation_state_t> _request_operation;
     std::mutex _mutex;
     std::condition_variable _changed;

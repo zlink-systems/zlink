@@ -16,19 +16,18 @@ static void pubsub_subscriber_thread (void *arg_)
     pubsub_sample_t *sample = (pubsub_sample_t *) arg_;
     const zlink_routing_id_t *rid = NULL;
     zlink_msg_t part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+    size_t part_count = 0;
     size_t topic_len = sizeof (sample->topic);
 
-    assert (zlink_msg_init (&part) == 0);
-    assert (zlink_subscribe_part (sample->subscriber, &rid, sample->topic, topic_len, &topic_len,
-                                  &part, &has_more, 0)
+    assert (zlink_subscribe (sample->subscriber, &rid, sample->topic, topic_len, &topic_len,
+                             &part, 1, &part_count, 0)
             == ZLINK_RECV_OK);
-    assert (has_more == ZLINK_PART_FINAL);
+    assert (part_count == 1);
     sample->payload_len = zlink_msg_size (&part);
     assert (sample->payload_len == strlen (k_pubsub_payload));
     memcpy (sample->payload, zlink_msg_data (&part), sample->payload_len);
     sample->payload[sample->payload_len] = '\0';
-    zlink_msg_close (&part);
+    zlink_multipart_close (&part, part_count);
 }
 
 static void pubsub_publisher_thread (void *arg_)
@@ -37,7 +36,7 @@ static void pubsub_publisher_thread (void *arg_)
     zlink_msg_t outbound;
 
     make_message (&outbound, k_pubsub_payload);
-    assert (zlink_publish_part (sample->publisher, k_pubsub_topic, &outbound, 0, ZLINK_PART_FINAL)
+    assert (zlink_publish (sample->publisher, k_pubsub_topic, &outbound, 1, 0)
             == ZLINK_SUBMIT_OK);
 }
 

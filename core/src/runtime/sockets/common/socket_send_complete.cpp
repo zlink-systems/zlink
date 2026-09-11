@@ -422,23 +422,6 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
     return 0;
 }
 
-void zlink::socket_base_t::notify_incremental_send_released ()
-{
-    lifecycle_coordinator ().release_public_multipart_control_boundary ();
-    if (lifecycle_coordinator ().deferred_peer_controls_pending_cached ())
-        flush_deferred_peer_controls ();
-}
-
-void zlink::socket_base_t::hold_incremental_send_control_boundary ()
-{
-    lifecycle_coordinator ().hold_public_multipart_control_boundary ();
-}
-
-void zlink::socket_base_t::clear_incremental_send_control_boundary ()
-{
-    lifecycle_coordinator ().release_public_multipart_control_boundary ();
-}
-
 void zlink::socket_base_t::flush_deferred_peer_controls ()
 {
     if (!lifecycle_coordinator ().take_deferred_peer_controls ())

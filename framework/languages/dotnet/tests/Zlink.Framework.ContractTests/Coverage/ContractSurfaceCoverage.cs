@@ -1721,7 +1721,7 @@ using System.Threading.Tasks;
         while (current is not null)
         {
             if (File.Exists(Path.Combine(current.FullName, "AGENTS.md"))
-                && File.Exists(Path.Combine(current.FullName, "BINDINGS_VERSION"))
+                && File.Exists(Path.Combine(current.FullName, "framework", "languages", "dotnet", "VERSION"))
                 && Directory.Exists(Path.Combine(current.FullName, "framework"))
                 && Directory.Exists(Path.Combine(current.FullName, "core")))
                 return current.FullName;

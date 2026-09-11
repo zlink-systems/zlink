@@ -446,7 +446,7 @@ std::string read_stream_session_source ()
 void test_stream_async_send_uses_writable_retry_loop ()
 {
     const std::string source = read_stream_session_source ();
-    require_stream_test (source.find ("zlink_send_part_rid (") != std::string::npos);
+    require_stream_test (source.find ("zlink_send_rid (") != std::string::npos);
     require_stream_test (source.find ("zlink_completion_recv (") != std::string::npos);
     require_stream_test (source.find ("ZLINK_SEND_FLAGS_DONTWAIT") != std::string::npos);
     require_stream_test (source.find ("ZLINK_COMPLETION_WRITABLE")

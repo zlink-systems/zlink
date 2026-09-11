@@ -284,9 +284,7 @@ static void wait_pubsub_subscription (void *pub_)
         int subscribed = 0;
         char topic[256];
         size_t topic_len = sizeof (topic);
-        const zlink_recv_result_t result = zlink_xpub_recv_part (
-          pub_, &source_rid, &subscribed, topic, sizeof (topic), &topic_len,
-          static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
+        const zlink_recv_result_t result = zlink_xpub_recv (pub_, &source_rid, &subscribed, topic, sizeof (topic), &topic_len, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
         if (result == ZLINK_RECV_OK) {
             TEST_ASSERT_NOT_NULL (source_rid);
             TEST_ASSERT_EQUAL_INT (1, subscribed);

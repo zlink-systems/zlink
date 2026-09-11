@@ -167,10 +167,10 @@ func TestSurfacePullCompletionTerminalSignatures(t *testing.T) {
 	errorType := reflect.TypeOf((*error)(nil)).Elem()
 	messageSliceType := reflect.TypeOf([]*zlink.Message(nil))
 
-	assertSendTerminal := func(target reflect.Type) {
+	assertSubmitTerminal := func(target, resultType reflect.Type) {
 		t.Helper()
 		method, ok := target.MethodByName("Submit")
-		if !ok || method.Type.NumIn() != 1 || method.Type.In(0) != contextType || method.Type.NumOut() != 1 || method.Type.Out(0) != errorType {
+		if !ok || method.Type.NumIn() != 1 || method.Type.In(0) != contextType || method.Type.NumOut() != 2 || method.Type.Out(0) != resultType || method.Type.Out(1) != errorType {
 			t.Fatalf("%v.Submit signature = %v", target, method.Type)
 		}
 		for _, forbidden := range []string{"Flags", "SubmitAsync", "Callback", "OnProgress"} {
@@ -179,15 +179,26 @@ func TestSurfacePullCompletionTerminalSignatures(t *testing.T) {
 			}
 		}
 	}
-	assertSendTerminal(reflect.TypeOf((*zlink.SendSubmitOp)(nil)).Elem())
-	assertSendTerminal(reflect.TypeOf((*zlink.ReplySubmitOp)(nil)).Elem())
+	sendSubmissionType := reflect.TypeOf((*zlink.SendSubmission)(nil)).Elem()
+	requestSubmissionType := reflect.TypeOf((*zlink.RequestSubmission)(nil)).Elem()
+	assertSubmitTerminal(reflect.TypeOf((*zlink.SendSubmitOp)(nil)).Elem(), sendSubmissionType)
 	requestType := reflect.TypeOf((*zlink.RequestSubmitOp)(nil)).Elem()
-	requestSubmit, ok := requestType.MethodByName("Submit")
-	if !ok || requestSubmit.Type.NumIn() != 1 || requestSubmit.Type.In(0) != contextType || requestSubmit.Type.NumOut() != 2 || requestSubmit.Type.Out(0) != messageSliceType || requestSubmit.Type.Out(1) != errorType {
-		t.Fatalf("%v.Submit signature = %v", requestType, requestSubmit.Type)
-	}
+	assertSubmitTerminal(requestType, requestSubmissionType)
 	if _, ok := requestType.MethodByName("Flags"); ok {
 		t.Fatalf("%v must not expose Flags", requestType)
+	}
+	assertSubmissionMethod(t, sendSubmissionType, "Result", nil, reflect.TypeOf(zlink.SubmitOK))
+	assertSubmissionMethod(t, sendSubmissionType, "Admitted", []reflect.Type{contextType}, errorType)
+	assertSubmissionMethod(t, requestSubmissionType, "Result", nil, reflect.TypeOf(zlink.SubmitOK))
+	assertSubmissionMethod(t, requestSubmissionType, "Admitted", []reflect.Type{contextType}, errorType)
+	requestReply, ok := requestSubmissionType.MethodByName("Reply")
+	if !ok || requestReply.Type.NumIn() != 1 || requestReply.Type.In(0) != contextType || requestReply.Type.NumOut() != 2 || requestReply.Type.Out(0) != messageSliceType || requestReply.Type.Out(1) != errorType {
+		t.Fatalf("%v.Reply signature = %v", requestSubmissionType, requestReply.Type)
+	}
+	replyType := reflect.TypeOf((*zlink.ReplySubmitOp)(nil)).Elem()
+	replySubmit, ok := replyType.MethodByName("Submit")
+	if !ok || replySubmit.Type.NumIn() != 1 || replySubmit.Type.In(0) != contextType || replySubmit.Type.NumOut() != 1 || replySubmit.Type.Out(0) != errorType {
+		t.Fatalf("%v.Submit signature = %v", replyType, replySubmit.Type)
 	}
 	publishType := reflect.TypeOf((*zlink.PublishSubmitOp)(nil)).Elem()
 	publishSubmit, ok := publishType.MethodByName("Submit")
@@ -196,6 +207,19 @@ func TestSurfacePullCompletionTerminalSignatures(t *testing.T) {
 	}
 	if _, ok := publishType.MethodByName("Flags"); !ok {
 		t.Fatalf("%v must expose Flags", publishType)
+	}
+}
+
+func assertSubmissionMethod(t testing.TB, target reflect.Type, name string, inputs []reflect.Type, output reflect.Type) {
+	t.Helper()
+	method, ok := target.MethodByName(name)
+	if !ok || method.Type.NumIn() != len(inputs) || method.Type.NumOut() != 1 || method.Type.Out(0) != output {
+		t.Fatalf("%v.%s signature = %v", target, name, method.Type)
+	}
+	for index, input := range inputs {
+		if method.Type.In(index) != input {
+			t.Fatalf("%v.%s signature = %v", target, name, method.Type)
+		}
 	}
 }
 

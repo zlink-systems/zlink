@@ -44,7 +44,7 @@ public final class StreamPacketCallbackSample {
                          Message reply = frame(replyHeader, replyBody)) {
                         server.send(routingId)
                             .message(reply)
-                            .submit().toCompletableFuture().join();
+                            .submit().admitted().toCompletableFuture().join();
                     }
 
                     byte[] echoedFrame = SampleSupport.recvExactRawTcp(

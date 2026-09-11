@@ -240,8 +240,8 @@ class zlink_stream_echo_server_t
         if (buffer.bytes.empty () && buffer.consumed == 0) {
             if (is_complete_stream_frame (payload, payload_size)) {
                 recv_msgs.fetch_add (1, std::memory_order_relaxed);
-                if (zlink_send_part_rid (server, rid_, msg_, ZLINK_SEND_FLAGS_NONE,
-                                         ZLINK_PART_FINAL, NULL, NULL)
+                if (zlink_send_rid (server, rid_, msg_, 1, ZLINK_SEND_FLAGS_NONE,
+                                    NULL, NULL)
                     != 0) {
                     send_error.fetch_add (1, std::memory_order_relaxed);
                     (void) zlink_msg_close (msg_);
@@ -275,8 +275,8 @@ class zlink_stream_echo_server_t
             }
             std::memcpy (zlink_msg_data (&reply), frame.data, frame.size);
             recv_msgs.fetch_add (1, std::memory_order_relaxed);
-            if (zlink_send_part_rid (server, rid_, &reply, ZLINK_SEND_FLAGS_NONE,
-                                     ZLINK_PART_FINAL, NULL, NULL)
+            if (zlink_send_rid (server, rid_, &reply, 1, ZLINK_SEND_FLAGS_NONE,
+                                NULL, NULL)
                 != 0) {
                 send_error.fetch_add (1, std::memory_order_relaxed);
                 (void) zlink_msg_close (&reply);
@@ -295,16 +295,14 @@ class zlink_stream_echo_server_t
         for (;;) {
             const zlink_routing_id_t *rid = NULL;
             zlink_msg_t msg;
-            if (zlink_msg_init (&msg) != ZLINK_CONFIG_OK)
-                return false;
-            const zlink_recv_result_t recv_result = zlink_recv_part (
-              server, &rid, &msg, &raw_has_more, ZLINK_RECV_FLAGS_DONTWAIT);
-            if (recv_result == ZLINK_RECV_NO_DATA) {
-                (void) zlink_msg_close (&msg);
+            size_t part_count = 0;
+            const zlink_recv_result_t recv_result = zlink_recv (
+              server, &rid, &msg, 1, &part_count, ZLINK_RECV_FLAGS_DONTWAIT);
+            if (recv_result == ZLINK_RECV_NO_DATA)
                 return true;
-            }
-            if (recv_result != ZLINK_RECV_OK) {
-                (void) zlink_msg_close (&msg);
+            if (recv_result != ZLINK_RECV_OK || part_count != 1) {
+                if (recv_result == ZLINK_RECV_OK)
+                    zlink_multipart_close (&msg, part_count);
                 return false;
             }
             if (on_raw_packet (rid, &msg) != 0)
@@ -335,7 +333,6 @@ class zlink_stream_echo_server_t
 
     std::atomic<bool> stop;
     std::array<frame_shard_t, k_frame_shard_count> frame_shards;
-    zlink_part_flag_t raw_has_more = ZLINK_PART_FINAL;
 };
 
 bool parse_options (int argc, char **argv, server_options_t &opt)

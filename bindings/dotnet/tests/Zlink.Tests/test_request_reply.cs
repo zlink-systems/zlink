@@ -48,7 +48,7 @@ public sealed class test_request_reply
         Task server = Task.Run(() => ReplyOnce(router, "callback-pong"));
         using Message request = Message.From("callback-ping");
         IReadOnlyList<Message> reply = await dealer.Request().Message(request)
-            .Timeout(TimeSpan.FromSeconds(2)).Async();
+            .Timeout(TimeSpan.FromSeconds(2)).Async().Reply;
 
         Assert.Equal("callback-pong", Assert.Single(reply).GetString());
         Zlink.MultipartClose(reply);
@@ -117,7 +117,7 @@ public sealed class test_request_reply
         IReadOnlyList<Message> reply = await dealerSocket.Request()
             .Message(request)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
+            .Async().Reply;
         try
         {
             Assert.Equal("pong", reply[0].GetString());
@@ -156,7 +156,7 @@ public sealed class test_request_reply
         Task<IReadOnlyList<Message>> completion = client.Request(serverRid)
             .Message(request)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
+            .Async().Reply;
 
         using Received received = RecvWithRetry(server);
         Assert.Equal(ReceivedMessageType.Request, received.MessageType);
@@ -200,7 +200,7 @@ public sealed class test_request_reply
         Task<IReadOnlyList<Message>> replyTask = dealer.Request()
             .Message(request)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
+            .Async().Reply;
         using Received inbound = Received.Create();
         Assert.True(router.Recv(inbound));
         RoutingId sourceRid = inbound.RoutingId
@@ -216,7 +216,7 @@ public sealed class test_request_reply
             part.Dispose();
 
         using Message update = Message.From("unsolicited");
-        await router.Send(sourceRid).Message(update).Async();
+        await router.Send(sourceRid).Message(update).Async().Admitted;
         string unsolicited =
             CoreTestSupport.ReceiveUtf8WithTimeout(dealer, 2000);
         Assert.Equal("unsolicited", unsolicited);
@@ -244,7 +244,7 @@ public sealed class test_request_reply
         Task<IReadOnlyList<Message>> replyTask = dealer.Request()
             .Message(request)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
+            .Async().Reply;
 
         // Regression guard for BLK-004: the ROUTER side of a ClientServer
         // admission handshake polls its initial recv with RecvFlags.DontWait
@@ -268,7 +268,7 @@ public sealed class test_request_reply
             part.Dispose();
 
         using Message update = Message.From("unsolicited");
-        await router.Send(sourceRid).Message(update).Async();
+        await router.Send(sourceRid).Message(update).Async().Admitted;
 
         using Received delivered = RecvWithRetry(dealer);
         Assert.Equal("unsolicited", delivered.Parts[0].GetString());
@@ -293,7 +293,7 @@ public sealed class test_request_reply
         CoreTestSupport.WaitReady(dealerSocket);
 
         using Message payload = Message.From("plain-data");
-        await dealerSocket.Send().Message(payload).Async();
+        await dealerSocket.Send().Message(payload).Async().Admitted;
 
         var received = Received.Create();
         routerSocket.Recv(received);
@@ -355,7 +355,7 @@ public sealed class test_request_reply
         IReadOnlyList<Message> reply = await dealerSocket.Request()
             .Message(request)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async()
+            .Async().Reply
             .WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Single(reply);
         owned = reply[0];

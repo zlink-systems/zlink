@@ -777,13 +777,11 @@ void assert_paired_handshake_not_dispatchable (
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
     const zlink_routing_id_t *source_rid = NULL;
     uint64_t request_seq = 0;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+    size_t has_more = 1;
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_NO_DATA,
-      zlink_router_recv_part (
-        server, &source_rid, &request_seq, &msg, &has_more,
-        static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+      zlink_router_recv (server, &source_rid, &request_seq, &msg, 1, &has_more, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
     TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
 
@@ -821,9 +819,7 @@ void run_raw_error_reply_case (uint64_t pair_id_,
     int user_context_value = 17;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_request_part (server, NULL, &request, ZLINK_SEND_FLAGS_NONE,
-                          ZLINK_PART_FINAL, 5000, &user_context_value,
-                          &completion_id));
+      zlink_request (server, NULL, &request, 1, ZLINK_SEND_FLAGS_NONE, 5000, &user_context_value, &completion_id));
     TEST_ASSERT_TRUE (completion_id != 0);
     const uint64_t request_sequence =
       read_raw_request_sequence (application);

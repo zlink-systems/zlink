@@ -90,17 +90,17 @@ struct completion_result_t
 
 struct case_sync_t
 {
-    case_sync_t () : a_more_done (false), release_a (false),
-                     a_final_done (false), b_retried (false),
+    case_sync_t () : a_ready (false), release_a (false),
+                     a_submitted (false), b_retried (false),
                      b_received (false), a_received (false), abort (false)
     {
     }
 
     std::mutex mutex;
     std::condition_variable changed;
-    bool a_more_done;
+    bool a_ready;
     bool release_a;
-    bool a_final_done;
+    bool a_submitted;
     bool b_retried;
     bool b_received;
     bool a_received;
@@ -147,35 +147,38 @@ bool wait_for_state (case_sync_t *sync_, Predicate predicate_)
       lock, std::chrono::milliseconds (wait_ms), predicate_);
 }
 
-submission_t submit_part (void *dealer_, bool request_,
-                          const std::string &payload_,
-                          zlink_part_flag_t part_flag_, void *context_)
+submission_t submit_record (void *dealer_, bool request_,
+                            const std::vector<std::string> &payloads_,
+                            void *context_)
 {
     submission_t submitted;
-    zlink_msg_t part;
-    if (zlink_msg_init_size (&part, payload_.size ()) != ZLINK_CONFIG_OK) {
-        submitted.error = zlink_errno ();
-        return submitted;
+    std::vector<zlink_msg_t> parts (payloads_.size ());
+    for (size_t i = 0; i < parts.size (); ++i) {
+        if (zlink_msg_init_size (&parts[i], payloads_[i].size ()) != ZLINK_CONFIG_OK) {
+            submitted.error = zlink_errno ();
+            zlink_multipart_close (parts.data (), i);
+            return submitted;
+        }
+        if (!payloads_[i].empty ())
+            memcpy (zlink_msg_data (&parts[i]), payloads_[i].data (), payloads_[i].size ());
     }
     submitted.initialized = true;
-    if (!payload_.empty ())
-        memcpy (zlink_msg_data (&part), payload_.data (), payload_.size ());
-
     errno = 0;
     if (request_)
-        submitted.result = zlink_request_part (
-          dealer_, NULL, &part, ZLINK_SEND_FLAGS_DONTWAIT, part_flag_,
-          part_flag_ == ZLINK_PART_MORE ? 0 : 30000,
-          part_flag_ == ZLINK_PART_MORE ? NULL : context_,
-          &submitted.completion_id);
+        submitted.result = zlink_request (
+          dealer_, NULL, parts.data (), parts.size (), ZLINK_SEND_FLAGS_DONTWAIT,
+          30000, context_, &submitted.completion_id);
     else
-        submitted.result = zlink_send_part (
-          dealer_, &part, ZLINK_SEND_FLAGS_DONTWAIT, part_flag_,
-          part_flag_ == ZLINK_PART_MORE ? NULL : context_,
-          &submitted.completion_id);
+        submitted.result = zlink_send (
+          dealer_, parts.data (), parts.size (), ZLINK_SEND_FLAGS_DONTWAIT,
+          context_, &submitted.completion_id);
     submitted.error = zlink_errno ();
-    submitted.remaining_size = zlink_msg_size (&part);
-    submitted.close_result = zlink_msg_close (&part);
+    for (size_t i = 0; i < parts.size (); ++i) {
+        submitted.remaining_size += zlink_msg_size (&parts[i]);
+        const int close_rc = zlink_msg_close (&parts[i]);
+        if (close_rc != ZLINK_CONFIG_OK)
+            submitted.close_result = close_rc;
+    }
     return submitted;
 }
 
@@ -216,8 +219,7 @@ submission_t reply_to (void *router_, const received_record_t &request_,
     submitted.initialized = true;
     memcpy (zlink_msg_data (&part), payload_, size);
     errno = 0;
-    submitted.result = zlink_reply_part (
-      router_, &request_.source, request_.token, &part, ZLINK_PART_FINAL);
+    submitted.result = zlink_reply (router_, &request_.source, request_.token, &part, 1);
     submitted.error = zlink_errno ();
     submitted.remaining_size = zlink_msg_size (&part);
     submitted.close_result = zlink_msg_close (&part);
@@ -388,15 +390,15 @@ bool run_case (const char *transport_, bool request_, size_t serial_,
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (dealer);
-    configure_socket (router, "sequence-open-router");
-    configure_socket (dealer, "sequence-open-dealer");
+    configure_socket (router, "whole-record-router");
+    configure_socket (dealer, "whole-record-dealer");
     void *monitor = open_ready_monitor (dealer);
 
     char endpoint[MAX_SOCKET_STRING];
     memset (endpoint, 0, sizeof (endpoint));
     if (strcmp (transport_, "inproc") == 0) {
         snprintf (endpoint, sizeof (endpoint),
-                  "inproc://writable-resubmit-sequence-open-%u",
+                  "inproc://writable-resubmit-whole-record-%u",
                   static_cast<unsigned> (serial_));
         TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (router, endpoint));
     } else {
@@ -411,7 +413,7 @@ bool run_case (const char *transport_, bool request_, size_t serial_,
     // Establish the application lane before changing its absolute receive-flow
     // state. READY alone does not require the peer to have consumed a record.
     const submission_t prime =
-      submit_part (dealer, false, "flow-prime", ZLINK_PART_FINAL, NULL);
+      submit_record (dealer, false, {"flow-prime"}, NULL);
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, prime.result);
     TEST_ASSERT_TRUE (submission_consumed (prime));
     const received_record_t primed = receive_record (router);
@@ -437,21 +439,14 @@ bool run_case (const char *transport_, bool request_, size_t serial_,
     submission_t filler_backpressure;
     void *poller = NULL;
     case_sync_t sync;
-    submission_t a_more;
-    submission_t a_final_submit;
+    submission_t a_submit;
 
     std::thread application_a ([&] {
-        a_more = submit_part (dealer, request_, a_first, ZLINK_PART_MORE, NULL);
         {
             std::lock_guard<std::mutex> lock (sync.mutex);
-            sync.a_more_done = true;
+            sync.a_ready = true;
         }
         sync.changed.notify_all ();
-        if (a_more.result != ZLINK_SUBMIT_OK || !submission_consumed (a_more)) {
-            describe_submission_failure (&sync, "A MORE", a_more);
-            return;
-        }
-
         std::unique_lock<std::mutex> lock (sync.mutex);
         sync.changed.wait (
           lock, [&] { return sync.release_a || sync.abort; });
@@ -459,30 +454,30 @@ bool run_case (const char *transport_, bool request_, size_t serial_,
             return;
         lock.unlock ();
 
-        a_final_submit = submit_part (
-          dealer, request_, a_final, ZLINK_PART_FINAL,
+        a_submit = submit_record (
+          dealer, request_, {a_first, a_final},
           request_ ? static_cast<void *> (&contexts[3]) : NULL);
         {
             std::lock_guard<std::mutex> done_lock (sync.mutex);
-            sync.a_final_done = true;
+            sync.a_submitted = true;
         }
         sync.changed.notify_all ();
-        if (a_final_submit.result != ZLINK_SUBMIT_OK
-            || !submission_consumed (a_final_submit)
-            || (request_ ? a_final_submit.completion_id == 0
-                         : a_final_submit.completion_id != 0))
-            describe_submission_failure (&sync, "A FINAL", a_final_submit);
+        if (a_submit.result != ZLINK_SUBMIT_OK
+            || !submission_consumed (a_submit)
+            || (request_ ? a_submit.completion_id == 0
+                         : a_submit.completion_id != 0))
+            describe_submission_failure (&sync, "A record", a_submit);
     });
 
-    bool a_open = wait_for_state (
-      &sync, [&] { return sync.a_more_done || sync.abort; });
-    if (!a_open)
-        abort_case (&sync, "timed out waiting for A MORE");
+    bool a_ready = wait_for_state (
+      &sync, [&] { return sync.a_ready || sync.abort; });
+    if (!a_ready)
+        abort_case (&sync, "timed out waiting for submitter A");
     if (has_failure (&sync))
-        abort_case (&sync, "A MORE failed");
+        abort_case (&sync, "submitter A failed");
 
-    // Saturate after A has opened its independent sequence so the measured
-    // rejection and B's FINAL are adjacent even when TCP drains concurrently.
+    // Keep A waiting while B is rejected and resubmitted from another thread.
+    // Both submissions own complete records and independent completion IDs.
     if (!is_aborted (&sync)) {
         poller = zlink_poller_new ();
         if (!poller
@@ -503,8 +498,8 @@ bool run_case (const char *transport_, bool request_, size_t serial_,
     if (!is_aborted (&sync)) {
         size_t attempts = 0;
         for (; attempts != max_fill_attempts; ++attempts) {
-            submission_t submitted = submit_part (
-              dealer, false, filler, ZLINK_PART_FINAL, &contexts[0]);
+            submission_t submitted = submit_record (
+              dealer, false, {filler}, &contexts[0]);
             if (!submission_consumed (submitted)) {
                 describe_submission_failure (&sync, "filler", submitted);
                 break;
@@ -563,26 +558,19 @@ bool run_case (const char *transport_, bool request_, size_t serial_,
             abort_case (&sync, "filler setup failed");
     }
 
-    submission_t b_initial_more;
-    submission_t b_initial_final;
+    submission_t b_initial;
     if (!is_aborted (&sync)) {
         std::thread initial_submitter ([&] {
-            b_initial_more =
-              submit_part (dealer, request_, b_first, ZLINK_PART_MORE, NULL);
-            b_initial_final = submit_part (
-              dealer, request_, b_final, ZLINK_PART_FINAL, &contexts[1]);
+            b_initial = submit_record (
+              dealer, request_, {b_first, b_final}, &contexts[1]);
         });
         initial_submitter.join ();
-        if (b_initial_more.result != ZLINK_SUBMIT_OK
-            || !submission_consumed (b_initial_more))
-            describe_submission_failure (&sync, "B initial MORE",
-                                         b_initial_more);
-        if (b_initial_final.result != ZLINK_SUBMIT_BACKPRESSURED
-            || b_initial_final.error != EAGAIN
-            || b_initial_final.completion_id == 0
-            || !submission_consumed (b_initial_final))
-            describe_submission_failure (&sync, "B initial FINAL",
-                                         b_initial_final);
+        if (b_initial.result != ZLINK_SUBMIT_BACKPRESSURED
+            || b_initial.error != EAGAIN
+            || b_initial.completion_id == 0
+            || !submission_consumed (b_initial))
+            describe_submission_failure (&sync, "B initial record",
+                                         b_initial);
     }
     if (has_failure (&sync))
         abort_case (&sync, "initial B submission failed");
@@ -646,8 +634,8 @@ bool run_case (const char *transport_, bool request_, size_t serial_,
 
             lock.lock ();
             sync.changed.wait (
-              lock, [&] { return sync.a_final_done || sync.abort; });
-            if (sync.abort || !sync.a_final_done)
+              lock, [&] { return sync.a_submitted || sync.abort; });
+            if (sync.abort || !sync.a_submitted)
                 return;
             lock.unlock ();
 
@@ -674,8 +662,7 @@ bool run_case (const char *transport_, bool request_, size_t serial_,
     }
 
     completion_result_t writable;
-    submission_t b_retry_more;
-    submission_t b_retry_final;
+    submission_t b_retry;
     completion_result_t b_completion;
     completion_result_t a_completion;
 
@@ -710,7 +697,7 @@ bool run_case (const char *transport_, bool request_, size_t serial_,
                 }
                 saw_filler = true;
             } else if (candidate.completion_id
-                       == b_initial_final.completion_id) {
+                       == b_initial.completion_id) {
                 if (candidate.user_context != &contexts[1] || saw_b) {
                     abort_case (&sync, "B WRITABLE identity mismatch");
                     break;
@@ -727,20 +714,15 @@ bool run_case (const char *transport_, bool request_, size_t serial_,
     }
     if (!is_aborted (&sync)) {
         std::thread retry_submitter ([&] {
-            b_retry_more =
-              submit_part (dealer, request_, b_first, ZLINK_PART_MORE, NULL);
-            b_retry_final = submit_part (
-              dealer, request_, b_final, ZLINK_PART_FINAL, &contexts[2]);
+            b_retry = submit_record (
+              dealer, request_, {b_first, b_final}, &contexts[2]);
         });
         retry_submitter.join ();
-        if (b_retry_more.result != ZLINK_SUBMIT_OK
-            || !submission_consumed (b_retry_more))
-            describe_submission_failure (&sync, "B retry MORE", b_retry_more);
-        if (b_retry_final.result != ZLINK_SUBMIT_OK
-            || !submission_consumed (b_retry_final)
-            || (request_ ? b_retry_final.completion_id == 0
-                         : b_retry_final.completion_id != 0))
-            describe_submission_failure (&sync, "B retry FINAL", b_retry_final);
+        if (b_retry.result != ZLINK_SUBMIT_OK
+            || !submission_consumed (b_retry)
+            || (request_ ? b_retry.completion_id == 0
+                         : b_retry.completion_id != 0))
+            describe_submission_failure (&sync, "B retry record", b_retry);
         if (has_failure (&sync))
             abort_case (&sync, "B retry submission failed");
         else {
@@ -759,11 +741,11 @@ bool run_case (const char *transport_, bool request_, size_t serial_,
     if (!is_aborted (&sync) && request_) {
         b_completion = receive_completion (dealer);
         if (!completion_matches_request (
-              b_completion, b_retry_final.completion_id, &contexts[2],
+              b_completion, b_retry.completion_id, &contexts[2],
               "reply-b"))
             describe_completion_failure (
               &sync, "B REQUEST completion", b_completion,
-              b_retry_final.completion_id, &contexts[2]);
+              b_retry.completion_id, &contexts[2]);
     }
 
     if (!is_aborted (&sync)) {
@@ -773,9 +755,9 @@ bool run_case (const char *transport_, bool request_, size_t serial_,
     }
     if (!is_aborted (&sync)) {
         const bool a_finished = wait_for_state (
-          &sync, [&] { return sync.a_final_done || sync.abort; });
-        if (!a_finished || !sync.a_final_done)
-            abort_case (&sync, "timed out waiting for A FINAL");
+          &sync, [&] { return sync.a_submitted || sync.abort; });
+        if (!a_finished || !sync.a_submitted)
+            abort_case (&sync, "timed out waiting for A record");
     }
     if (!is_aborted (&sync)) {
         const bool received_a = wait_for_state (
@@ -786,11 +768,11 @@ bool run_case (const char *transport_, bool request_, size_t serial_,
     if (!is_aborted (&sync) && request_) {
         a_completion = receive_completion (dealer);
         if (!completion_matches_request (
-              a_completion, a_final_submit.completion_id, &contexts[3],
+              a_completion, a_submit.completion_id, &contexts[3],
               "reply-a"))
             describe_completion_failure (
               &sync, "A REQUEST completion", a_completion,
-              a_final_submit.completion_id, &contexts[3]);
+              a_submit.completion_id, &contexts[3]);
     }
 
     if (is_aborted (&sync)) {

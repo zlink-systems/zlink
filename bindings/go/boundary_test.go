@@ -98,7 +98,7 @@ func TestNilInputValidation(t *testing.T) {
 			t.Fatalf("Recv(nil) error = %v, want *RecvError/EFAULT", err)
 		}
 	}
-	if err := socket.Send().Message(nil).Submit(context.Background()); err == nil {
+	if _, err := socket.Send().Message(nil).Submit(context.Background()); err == nil {
 		t.Fatalf("Send(nil) should fail")
 	}
 	stream, _ := ctx.StreamSocket()

@@ -3,32 +3,24 @@
 package systems.zlink.perf.multi;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.eventing.PollEventFlags;
+import systems.zlink.contracts.messaging.SendSubmission;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.perf.PerfSocketPollSet;
 
-/** Coordinates async send admission on one application thread. */
-final class PerfMultiTargetCoordinator {
-    private PerfMultiTargetCoordinator() {
+/** Coordinates public send results on one application submit thread. */
+final class PerfMultiRoutedSendCoordinator {
+    private PerfMultiRoutedSendCoordinator() {
     }
 
-    /**
-     * Bounded post-deadline send-admission drain.
-     *
-     * <p>PERF_MULTI_TEST_POLICY.md &sect; 12.3 fixes the knob name
-     * {@code PERF_MULTI_SEND_DRAIN_TIMEOUT_MS} and its 5000 ms default. The
-     * drain starts no new submission and adds nothing to the RESULT
-     * aggregate.</p>
-     */
+    /** Bounded post-deadline send-admission drain. */
     static Duration sendDrainTimeout() {
         String raw = System.getenv("PERF_MULTI_SEND_DRAIN_TIMEOUT_MS");
         if (raw != null && !raw.isBlank()) {
@@ -56,19 +48,18 @@ final class PerfMultiTargetCoordinator {
         Objects.requireNonNull(replyDrainer, "replyDrainer");
         Objects.requireNonNull(teardownDrainer, "teardownDrainer");
         Objects.requireNonNull(terminalTimeout, "terminalTimeout");
-        AdmissionRoundRobin admissions = new AdmissionRoundRobin(socketCount,
-            activeEnd, submitter, true, false);
+        BackpressureCoordinator submissions = new BackpressureCoordinator(
+            socketCount, activeEnd, submitter);
 
         long received = 0L;
-        while (System.nanoTime() < activeEnd && !admissions.hasFailure()) {
-            boolean submitted = admissions.submitRound();
-            if (admissions.hasFailure()) {
+        while (System.nanoTime() < activeEnd && !submissions.hasFailure()) {
+            boolean submitted = submissions.submitRound();
+            if (submissions.hasFailure()) {
                 break;
             }
 
-            // Reply readiness must never gate the next send admission. Poll
-            // replies without blocking, then park only on the completion
-            // signal for the same socket's previous admission.
+            // Reply progress never gates submission. This receive poll is
+            // nonblocking; admission waits are driven only by BACKPRESSURED.
             int readyCount = pollSet.poll(0);
             boolean drainedReply = false;
             for (int readyOffset = 0; readyOffset < readyCount;
@@ -81,7 +72,7 @@ final class PerfMultiTargetCoordinator {
                 drainedReply = true;
             }
             if (!submitted && !drainedReply
-                && !admissions.awaitAvailability(activeEnd)) {
+                && !submissions.awaitAvailability(activeEnd)) {
                 if (Thread.currentThread().isInterrupted()) {
                     throw new IllegalStateException(label + " interrupted");
                 }
@@ -90,29 +81,29 @@ final class PerfMultiTargetCoordinator {
         }
 
         System.err.println("CLIENT_DRAIN_DETAIL,enter,pending="
-            + admissions.pendingCount() + ",submitted="
-            + admissions.submittedCount() + ",admitted="
-            + admissions.admittedCount() + ",received=" + received
-            + ",outstanding=" + (admissions.admittedCount() - received)
+            + submissions.pendingCount() + ",submitted="
+            + submissions.submittedCount() + ",admitted="
+            + submissions.admittedCount() + ",received=" + received
+            + ",outstanding=" + (submissions.admittedCount() - received)
             + ",label=" + label);
         long drainStart = System.nanoTime();
         long activeReceived = received;
         long drained = 0L;
         try {
-            drained = admissions.awaitLatestWhileReceiving(terminalTimeout,
+            drained = submissions.awaitPendingWhileReceiving(terminalTimeout,
                 label, activeReceived,
                 waitMillis -> pollAndDrain(pollSet, teardownDrainer,
                     waitMillis));
         } finally {
             System.err.println("CLIENT_DRAIN_DETAIL,exit,pending="
-                + admissions.pendingCount() + ",drained=" + drained
+                + submissions.pendingCount() + ",drained=" + drained
                 + ",outstanding="
-                + (admissions.admittedCount() - activeReceived - drained)
+                + (submissions.admittedCount() - activeReceived - drained)
                 + ",elapsed_ms="
                 + ((System.nanoTime() - drainStart) / 1_000_000L)
                 + ",label=" + label);
         }
-        admissions.throwIfFailed(label);
+        submissions.throwIfFailed(label);
     }
 
     static void runAdmissions(int socketCount,
@@ -121,14 +112,14 @@ final class PerfMultiTargetCoordinator {
                               Duration terminalTimeout,
                               String label) {
         Objects.requireNonNull(terminalTimeout, "terminalTimeout");
-        AdmissionRoundRobin admissions = new AdmissionRoundRobin(socketCount,
-            activeEnd, submitter, true, true);
+        BackpressureCoordinator submissions = new BackpressureCoordinator(
+            socketCount, activeEnd, submitter);
 
-        while (System.nanoTime() < activeEnd && !admissions.hasFailure()) {
-            if (admissions.submitRound()) {
+        while (System.nanoTime() < activeEnd && !submissions.hasFailure()) {
+            if (submissions.submitRound()) {
                 continue;
             }
-            if (!admissions.awaitAvailability(activeEnd)) {
+            if (!submissions.awaitAvailability(activeEnd)) {
                 if (Thread.currentThread().isInterrupted()) {
                     throw new IllegalStateException(label + " interrupted");
                 }
@@ -136,16 +127,16 @@ final class PerfMultiTargetCoordinator {
             }
         }
 
-        admissions.awaitLatest(terminalTimeout, label);
-        admissions.throwIfFailed(label);
+        submissions.awaitPending(terminalTimeout, label);
+        submissions.throwIfFailed(label);
     }
 
     @FunctionalInterface
     interface Submitter {
-        CompletionStage<Void> submit(int socketIndex);
+        SendSubmission submit(int socketIndex);
     }
 
-    /** One bounded receive turn: polls once and consumes what is ready. */
+    /** One bounded receive turn used only by post-deadline echo drain. */
     @FunctionalInterface
     interface TeardownReceiver {
         int receive(int timeoutMillis);
@@ -172,41 +163,28 @@ final class PerfMultiTargetCoordinator {
     }
 
     /**
-     * Owns only admission state. Completion threads publish terminal state;
-     * the caller of {@link #submitRound()} remains the sole submitter.
+     * Keeps state only for submissions that actually returned BACKPRESSURED.
+     * The caller thread remains the sole submitter; completion threads only
+     * make their socket available and wake that caller.
      */
-    static final class AdmissionRoundRobin {
+    static final class BackpressureCoordinator {
         private static final int AVAILABLE = 0;
-        private static final int PENDING = 1;
+        private static final int BACKPRESSURED = 1;
 
         private final int socketCount;
         private final long activeEnd;
         private final Submitter submitter;
         private final AtomicIntegerArray states;
-        private final CompletionStage<Void>[] latestStages;
         private final Thread coordinatorThread;
-        private final boolean signalCompletions;
-        private final boolean burstInlineTerminals;
+        private final AtomicInteger pendingCount = new AtomicInteger();
+        private final AtomicLong admittedCount = new AtomicLong();
         private final AtomicReference<Throwable> failure =
             new AtomicReference<>();
         private int roundRobinIndex;
         private long submittedCount;
-        // Every admitted request owes exactly one echo. Counted on the
-        // terminal, so a rejected admission never owes one (C counts the
-        // same way: `slot->replies` rises only on a successful send).
-        private final java.util.concurrent.atomic.AtomicLong admittedCount =
-            new java.util.concurrent.atomic.AtomicLong();
 
-        AdmissionRoundRobin(int socketCount, long activeEnd,
-                            Submitter submitter) {
-            this(socketCount, activeEnd, submitter, false, false);
-        }
-
-        @SuppressWarnings("unchecked")
-        AdmissionRoundRobin(int socketCount, long activeEnd,
-                            Submitter submitter,
-                            boolean signalCompletions,
-                            boolean burstInlineTerminals) {
+        BackpressureCoordinator(int socketCount, long activeEnd,
+                                Submitter submitter) {
             if (socketCount <= 0) {
                 throw new IllegalArgumentException(
                     "socketCount must be greater than zero");
@@ -215,12 +193,7 @@ final class PerfMultiTargetCoordinator {
             this.activeEnd = activeEnd;
             this.submitter = Objects.requireNonNull(submitter, "submitter");
             this.states = new AtomicIntegerArray(socketCount);
-            this.latestStages = (CompletionStage<Void>[])
-                new CompletionStage<?>[socketCount];
-            this.signalCompletions = signalCompletions;
-            this.burstInlineTerminals = burstInlineTerminals;
-            this.coordinatorThread = signalCompletions
-                ? Thread.currentThread() : null;
+            this.coordinatorThread = Thread.currentThread();
         }
 
         boolean submitRound() {
@@ -231,95 +204,58 @@ final class PerfMultiTargetCoordinator {
             int start = roundRobinIndex;
             roundRobinIndex = (roundRobinIndex + 1) % socketCount;
             for (int attempt = 0; attempt < socketCount; attempt++) {
-                if (hasFailure()) {
+                if (System.nanoTime() >= activeEnd || hasFailure()) {
                     break;
                 }
                 int index = (start + attempt) % socketCount;
-                submitted |= burstInlineTerminals
-                    ? submitUntilPending(index)
-                    : submitOnce(index);
+                if (states.get(index) != AVAILABLE) {
+                    continue;
+                }
+                submitted |= submitOnce(index);
             }
             return submitted;
         }
 
-        /**
-         * Submits at most once per socket in this round. An inline terminal
-         * makes the socket eligible again in the next round; it does not
-         * create an inflight-one window. This mirrors the C runner's fair
-         * one-submit-per-writable-socket round before its next drain pass.
-         */
         private boolean submitOnce(int index) {
-            if (System.nanoTime() >= activeEnd || hasFailure()
-                || !states.compareAndSet(index, AVAILABLE, PENDING)) {
-                return false;
-            }
-
-            CompletionStage<Void> stage;
+            SendSubmission submission;
             try {
-                stage = Objects.requireNonNull(submitter.submit(index),
-                    "async submit stage");
+                submission = Objects.requireNonNull(submitter.submit(index),
+                    "async send submission");
             } catch (Throwable error) {
                 recordFailure(error);
-                states.set(index, AVAILABLE);
                 return false;
             }
             submittedCount++;
-            latestStages[index] = stage.handle((ignored, error) -> {
-                if (error != null) {
-                    recordFailure(error);
-                } else {
-                    admittedCount.incrementAndGet();
-                }
-                states.set(index, AVAILABLE);
-                if (signalCompletions) {
-                    LockSupport.unpark(coordinatorThread);
-                }
-                return null;
-            });
+            if (!PerfMultiAsyncSendLoop.isBackpressured(submission)) {
+                admittedCount.incrementAndGet();
+                return true;
+            }
+
+            states.set(index, BACKPRESSURED);
+            pendingCount.incrementAndGet();
+            try {
+                Objects.requireNonNull(submission.admitted(),
+                    "backpressured admission stage")
+                    .whenComplete((ignored, error) ->
+                        completeAdmission(index, error));
+            } catch (Throwable error) {
+                completeAdmission(index, error);
+            }
             return true;
         }
 
-        private boolean submitUntilPending(int index) {
-            boolean submitted = false;
-            while (System.nanoTime() < activeEnd && !hasFailure()) {
-                if (!states.compareAndSet(index, AVAILABLE, PENDING)) {
-                    return submitted;
-                }
-                CompletionStage<Void> stage;
-                try {
-                    stage = Objects.requireNonNull(submitter.submit(index),
-                        "async submit stage");
-                } catch (Throwable error) {
-                    recordFailure(error);
-                    states.set(index, AVAILABLE);
-                    return submitted;
-                }
-                submittedCount++;
-                latestStages[index] = stage.handle((ignored, error) -> {
-                    if (error != null) {
-                        recordFailure(error);
-                    } else {
-                        admittedCount.incrementAndGet();
-                    }
-                    states.set(index, AVAILABLE);
-                    if (signalCompletions) {
-                        LockSupport.unpark(coordinatorThread);
-                    }
-                    return null;
-                });
-                submitted = true;
-                if (states.get(index) == PENDING) {
-                    return true;
-                }
+        private void completeAdmission(int index, Throwable error) {
+            if (error != null) {
+                recordFailure(error);
+            } else {
+                admittedCount.incrementAndGet();
             }
-            return submitted;
+            states.set(index, AVAILABLE);
+            pendingCount.decrementAndGet();
+            LockSupport.unpark(coordinatorThread);
         }
 
         boolean awaitAvailability(long deadline) {
-            if (!signalCompletions) {
-                throw new IllegalStateException(
-                    "completion signaling is not enabled");
-            }
             while (!hasFailure() && !hasAvailable()) {
                 long remainingNanos = deadline - System.nanoTime();
                 if (remainingNanos <= 0L) {
@@ -330,22 +266,15 @@ final class PerfMultiTargetCoordinator {
                     return false;
                 }
             }
-            return true;
+            return !hasFailure() && hasAvailable();
         }
 
         boolean hasFailure() {
             return failure.get() != null;
         }
 
-        /** Sockets whose latest admission has not reached its terminal. */
         int pendingCount() {
-            int pending = 0;
-            for (int index = 0; index < socketCount; index++) {
-                if (states.get(index) == PENDING) {
-                    pending++;
-                }
-            }
-            return pending;
+            return pendingCount.get();
         }
 
         long submittedCount() {
@@ -356,55 +285,36 @@ final class PerfMultiTargetCoordinator {
             return admittedCount.get();
         }
 
-        void awaitLatest(Duration timeout, String label) {
-            List<CompletionStage<Void>> stages = latestStages();
-            if (!stages.isEmpty()) {
-                PerfMultiAsyncSendLoop.awaitAll(stages, timeout, label);
+        void awaitPending(Duration timeout, String label) {
+            long deadline = System.nanoTime() + timeout.toNanos();
+            while (pendingCount() > 0 && !hasFailure()) {
+                long remainingNanos = deadline - System.nanoTime();
+                if (remainingNanos <= 0L) {
+                    break;
+                }
+                LockSupport.parkNanos(this, remainingNanos);
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new IllegalStateException(label + " interrupted");
+                }
+            }
+            if (pendingCount() > 0 && !hasFailure()) {
+                throw new IllegalStateException(label + " timed out");
             }
         }
 
         /**
-         * Awaits the outstanding send terminals while still receiving echoes.
-         *
-         * <p>A blocking wait here deadlocks the echo topology: the relay holds
-         * one reply under Core admission and refuses to pull the next request
-         * until it is admitted ({@code PerfMultiRoutedRelay.drainRequests}), so
-         * a client receive queue left at its HWM stops that reply, and the
-         * stopped relay in turn stops this client's own send admission. The C
-         * echo client never stops receiving in its post-deadline drain
-         * ({@code bindings/c/perf/multi/common/perf_multi_client_helpers.hpp},
-         * drain loop after the active deadline), and .NET does the same in
-         * {@code PerfMultiEchoReplyDrain.WaitAsync}.</p>
-         *
-         * <p>The window ends only when both halves are settled, exactly like
-         * the C loop's {@code tracker_has_retained_sends ||
-         * tracker_has_pending_replies}: the send terminals must be complete
-         * <em>and</em> the echoes owed for the requests already admitted must
-         * have been pulled. Leaving the owed echoes in the client's receive
-         * queue is what strands the relay's last reply under admission, and
-         * the relay then burns its own drain window after STOP. Replies
-         * consumed here are past the active window, so they are discarded and
-         * never reach the RESULT aggregate.</p>
-         *
-         * @param activeReceived echoes already received in the active window
-         * @return the number of post-deadline replies consumed
+         * Awaits BACKPRESSURED admissions while continuing to consume echo
+         * replies. Replies consumed here are outside the active window and do
+         * not reach the RESULT aggregate.
          */
-        long awaitLatestWhileReceiving(Duration timeout, String label,
-                                       long activeReceived,
-                                       TeardownReceiver receiver) {
-            List<CompletionStage<Void>> stages = latestStages();
-            CompletableFuture<Void> all = stages.isEmpty()
-                ? CompletableFuture.completedFuture(null)
-                : CompletableFuture.allOf(stages.stream()
-                    .map(CompletionStage::toCompletableFuture)
-                    .toArray(CompletableFuture[]::new));
+        long awaitPendingWhileReceiving(Duration timeout, String label,
+                                         long activeReceived,
+                                         TeardownReceiver receiver) {
             long deadline = System.nanoTime() + timeout.toNanos();
             long drained = 0L;
-            while (!all.isDone()
+            while (pendingCount() > 0
                 || admittedCount() - activeReceived - drained > 0L) {
                 if (hasFailure()) {
-                    // A failing send terminal ends the run; do not spend the
-                    // window waiting for echoes that will never be owed.
                     break;
                 }
                 long remainingNanos = deadline - System.nanoTime();
@@ -415,33 +325,15 @@ final class PerfMultiTargetCoordinator {
                     Math.max(1L, remainingNanos / 1_000_000L));
                 drained += receiver.receive(waitMillis);
             }
-            if (stages.isEmpty()) {
-                return drained;
+            if (pendingCount() > 0 && !hasFailure()) {
+                throw new IllegalStateException(label + " timed out");
             }
-            // The bounded window is unchanged; awaitAll only republishes the
-            // terminal state, including the policy timeout message.
-            long remainingNanos = deadline - System.nanoTime();
-            PerfMultiAsyncSendLoop.awaitAll(stages,
-                Duration.ofMillis(Math.max(1L, remainingNanos / 1_000_000L)),
-                label);
             return drained;
-        }
-
-        private List<CompletionStage<Void>> latestStages() {
-            List<CompletionStage<Void>> stages = new ArrayList<>(socketCount);
-            for (CompletionStage<Void> stage : latestStages) {
-                if (stage != null) {
-                    stages.add(stage);
-                }
-            }
-            return stages;
         }
 
         void throwIfFailed(String label) {
             Throwable cause = failure.get();
             if (cause != null) {
-                // Zlink exceptions carry a null message, so the FAIL reason
-                // would otherwise stop at this label. Name result and errno.
                 throw new IllegalStateException(label + " failed:"
                     + PerfMultiRoutedRelay.describe(cause), cause);
             }
@@ -457,6 +349,7 @@ final class PerfMultiTargetCoordinator {
                 return;
             }
             failure.compareAndSet(null, cause);
+            LockSupport.unpark(coordinatorThread);
         }
 
         private boolean hasAvailable() {

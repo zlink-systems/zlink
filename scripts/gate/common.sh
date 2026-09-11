@@ -6,7 +6,7 @@ TAG="${1:?usage: <script> <tag>}"
 # ZLINK_GATE_CORE_LIB to a release prefix lib dir (e.g. ~/.cache/zlink/core/0.17.3/linux-x64/lib).
 CORE_LIB="${ZLINK_GATE_CORE_LIB:-$Z/core/build-dev/lib}"
 CORE_VER="${ZLINK_GATE_CORE_VERSION:-$(sed -n 's/^LIBZLINK_VERSION=//p' "$Z/VERSION")}"
-BINDING_VER="${ZLINK_GATE_BINDING_VERSION:-$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$Z/BINDINGS_VERSION")}"
+DOTNET_BINDING_VER="${ZLINK_GATE_DOTNET_BINDING_VERSION:-$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$Z/bindings/dotnet/VERSION")}"
 LOGS="$Z/zlink-work/gates/$TAG"; mkdir -p "$LOGS"
 ts() { date +%H:%M; }
 require_quiet() { # gates carry timing assertions; refuse to start on a loaded box
@@ -21,5 +21,5 @@ run() { # name dir cmd... — serialized behind the samples lock, log per step
 }
 dotnet_env() {
   export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH="$CORE_LIB" ZLINK_LOCAL_PACKAGE_ROOT="$Z/.artifacts/wsl" UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
-  local h; h=$(sha256sum "$Z/.artifacts/wsl/nuget/Zlink.$BINDING_VER.nupkg" | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${h:0:16}; mkdir -p "$TMPDIR"
+  local h; h=$(sha256sum "$Z/.artifacts/wsl/nuget/Zlink.$DOTNET_BINDING_VER.nupkg" | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${h:0:16}; mkdir -p "$TMPDIR"
 }

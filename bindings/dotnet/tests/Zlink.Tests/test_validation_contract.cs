@@ -188,6 +188,6 @@ public sealed class test_validation_contract
         TimeSpan negative = TimeSpan.FromMilliseconds(-1);
 
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
-            dealer.Request().Message(message).Timeout(negative).Async());
+            dealer.Request().Message(message).Timeout(negative).Async().Reply);
     }
 }

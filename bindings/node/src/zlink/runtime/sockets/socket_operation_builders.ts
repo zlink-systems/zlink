@@ -9,7 +9,9 @@ import type {
   RequestSubmitOperation,
   ReplyOperation,
   ReplySubmitOperation,
+  RequestSubmission,
   SendOperation,
+  SendSubmission,
   SendSubmitOperation,
 } from '../../contracts/messaging';
 import {
@@ -19,7 +21,7 @@ import {
 
 export type ManagedSendInvoker = (
   parts: OperationPayloadValue<MessageLike>
-) => Promise<void>;
+) => SendSubmission;
 export type SyncSendInvoker = (
   parts: OperationPayloadValue<MessageLike>
 ) => void;
@@ -30,7 +32,7 @@ export type PublishInvoker = (
 export type RequestInvoker = (
   parts: OperationPayloadValue<MessageLike>,
   timeoutMs: number
-) => Promise<Message[]>;
+) => RequestSubmission;
 export type SyncRequestInvoker = (
   parts: OperationPayloadValue<MessageLike>, timeoutMs: number
 ) => Message[];
@@ -57,7 +59,7 @@ export class RuntimeSendOperation
     private readonly _invokeSync: SyncSendInvoker
   ) { super(); }
 
-  submit(): Promise<void> { return this._invoke(this.consumePayload()); }
+  submit(): SendSubmission { return this._invoke(this.consumePayload()); }
   submit_sync(): void {
     const payload = this.consumePayload();
     this._invokeSync(payload);
@@ -103,7 +105,7 @@ export class RuntimeRequestOperation
     return this;
   }
 
-  submit(): Promise<Message[]> {
+  submit(): RequestSubmission {
     return this._invoke(this.consumePayload(), this._timeoutMs);
   }
 

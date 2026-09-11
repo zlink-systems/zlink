@@ -22,8 +22,8 @@ void test_none_pre_return_out_of_memory_and_internal_error_are_distinct ()
         errno = 0;
         TEST_ASSERT_EQUAL_INT (
           expected_results[i],
-          zlink_send_part (sender, &part, ZLINK_SEND_FLAGS_NONE,
-                           ZLINK_PART_FINAL, NULL, &completion_id));
+          zlink_send (sender, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL,
+                      &completion_id));
         TEST_ASSERT_EQUAL_INT (injected_errnos[i], zlink_errno ());
         TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
         assert_part_consumed (&part);
@@ -61,8 +61,8 @@ void test_dontwait_non_admission_failures_are_synchronous_zero_id ()
         errno = 0;
         TEST_ASSERT_EQUAL_INT (
           expected_results[i],
-          zlink_send_part (sender, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                           ZLINK_PART_FINAL, NULL, &completion_id));
+          zlink_send (sender, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL,
+                      &completion_id));
         TEST_ASSERT_EQUAL_INT (injected_errnos[i], zlink_errno ());
         TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
         assert_part_consumed (&part);

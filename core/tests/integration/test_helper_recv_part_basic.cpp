@@ -43,13 +43,11 @@ zlink_recv_result_t recv_router_part_with_retry (void *router_,
                                                  const zlink_routing_id_t **source_node_rid_out_,
                                                  uint64_t *request_seq_out_,
                                                  zlink_msg_t *part_out_,
-                                                 zlink_part_flag_t *has_more_out_)
+                                                 size_t *has_more_out_)
 {
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::milliseconds (3000);
     while (std::chrono::steady_clock::now () < deadline) {
-        const zlink_recv_result_t rc = zlink_router_recv_part (
-          router_, source_node_rid_out_, request_seq_out_, part_out_,
-          has_more_out_, static_cast<zlink_recv_flags_t> (0));
+        const zlink_recv_result_t rc = zlink_router_recv (router_, source_node_rid_out_, request_seq_out_, part_out_, 1, has_more_out_, static_cast<zlink_recv_flags_t> (0));
         if (rc == ZLINK_RECV_OK)
             return rc;
         TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, rc);
@@ -57,7 +55,7 @@ zlink_recv_result_t recv_router_part_with_retry (void *router_,
         msleep (1);
     }
 
-    TEST_FAIL_MESSAGE ("timed out waiting for zlink_router_recv_part");
+    TEST_FAIL_MESSAGE ("timed out waiting for zlink_router_recv");
     return ZLINK_RECV_INTERNAL_ERROR;
 }
 
@@ -66,13 +64,12 @@ zlink_recv_result_t recv_subscribe_part_with_retry (void *sub_,
                                                     size_t topic_id_capacity_,
                                                     size_t *topic_id_len_out_,
                                                     zlink_msg_t *part_out_,
-                                                    zlink_part_flag_t *has_more_out_)
+                                                    size_t *has_more_out_)
 {
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::milliseconds (3000);
     while (std::chrono::steady_clock::now () < deadline) {
         const zlink_recv_result_t rc =
-          zlink_subscribe_part (sub_, NULL, topic_id_buf_, topic_id_capacity_, topic_id_len_out_,
-                                part_out_, has_more_out_, static_cast<zlink_recv_flags_t> (0));
+          zlink_subscribe (sub_, NULL, topic_id_buf_, topic_id_capacity_, topic_id_len_out_, part_out_, 1, has_more_out_, static_cast<zlink_recv_flags_t> (0));
         if (rc == ZLINK_RECV_OK || zlink_errno () == EMSGSIZE)
             return rc;
         TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, rc);
@@ -80,7 +77,7 @@ zlink_recv_result_t recv_subscribe_part_with_retry (void *sub_,
         msleep (1);
     }
 
-    TEST_FAIL_MESSAGE ("timed out waiting for zlink_subscribe_part");
+    TEST_FAIL_MESSAGE ("timed out waiting for zlink_subscribe");
     return ZLINK_RECV_INTERNAL_ERROR;
 }
 
@@ -98,8 +95,7 @@ zlink_completion_id_t send_dealer_request_single (void *dealer_,
     zlink_completion_id_t completion_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_request_part (dealer_, NULL, &part, ZLINK_SEND_FLAGS_NONE,
-                          ZLINK_PART_FINAL, 3000, NULL, &completion_id));
+      zlink_request (dealer_, NULL, &part, 1, ZLINK_SEND_FLAGS_NONE, 3000, NULL, &completion_id));
     TEST_ASSERT_TRUE (completion_id != 0);
     return completion_id;
 }
@@ -113,8 +109,7 @@ void reply_from_router (void *router_,
     init_part (&part, payload_);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_reply_part (router_, peer_rid_, request_seq_, &part,
-                        ZLINK_PART_FINAL));
+      zlink_reply (router_, peer_rid_, request_seq_, &part, 1));
 }
 
 void publish_and_recv_subscribe_part_eventually (void *pub_,
@@ -125,7 +120,7 @@ void publish_and_recv_subscribe_part_eventually (void *pub_,
                                                  size_t topic_id_capacity_,
                                                  size_t *topic_id_len_out_,
                                                  zlink_msg_t *part_out_,
-                                                 zlink_part_flag_t *has_more_out_,
+                                                 size_t *has_more_out_,
                                                  zlink_recv_result_t expected_rc_,
                                                  int expected_errno_)
 {
@@ -137,9 +132,7 @@ void publish_and_recv_subscribe_part_eventually (void *pub_,
 
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::milliseconds (3000);
     while (std::chrono::steady_clock::now () < deadline) {
-        const zlink_recv_result_t rc = zlink_subscribe_part (
-          sub_, NULL, topic_id_buf_, topic_id_capacity_, topic_id_len_out_, part_out_,
-          has_more_out_, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
+        const zlink_recv_result_t rc = zlink_subscribe (sub_, NULL, topic_id_buf_, topic_id_capacity_, topic_id_len_out_, part_out_, 1, has_more_out_, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
         if (rc == expected_rc_ && zlink_errno () == expected_errno_)
             return;
         if (rc == ZLINK_RECV_OK && expected_rc_ == ZLINK_RECV_OK)
@@ -154,7 +147,7 @@ void publish_and_recv_subscribe_part_eventually (void *pub_,
 
 }
 
-void test_recv_part_reads_each_part_and_tracks_has_more ()
+void test_whole_recv_returns_all_parts_in_order ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *receiver = test_context_socket (ZLINK_SOCKET_DEALER);
@@ -189,27 +182,30 @@ void test_recv_part_reads_each_part_and_tracks_has_more ()
     msleep (SETTLE_TIME);
 
     const char *expected[2] = {"one", "two"};
-    for (int i = 0; i < 2; ++i) {
-        zlink_msg_t part;
-        zlink_msg_init (&part);
-        const zlink_routing_id_t *part_source_rid =
-          reinterpret_cast<const zlink_routing_id_t *> (0x1);
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_recv_part (receiver, &part_source_rid, &part, &has_more,
-                                                    static_cast<zlink_recv_flags_t> (0)));
-        TEST_ASSERT_NULL (part_source_rid);
-        TEST_ASSERT_EQUAL_UINT64 (strlen (expected[i]), zlink_msg_size (&part));
-        TEST_ASSERT_EQUAL_MEMORY (expected[i], zlink_msg_data (&part), strlen (expected[i]));
-        TEST_ASSERT_EQUAL_INT (i == 1 ? 0 : 1, has_more);
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+    zlink_msg_t received[2];
+    const zlink_routing_id_t *part_source_rid =
+      reinterpret_cast<const zlink_routing_id_t *> (0x1);
+    size_t part_count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_recv (receiver, &part_source_rid, received, 2, &part_count,
+                  static_cast<zlink_recv_flags_t> (0)));
+    TEST_ASSERT_NULL (part_source_rid);
+    TEST_ASSERT_EQUAL_UINT64 (2, part_count);
+    for (size_t i = 0; i != part_count; ++i) {
+        TEST_ASSERT_EQUAL_UINT64 (strlen (expected[i]),
+                                  zlink_msg_size (&received[i]));
+        TEST_ASSERT_EQUAL_MEMORY (expected[i], zlink_msg_data (&received[i]),
+                                  strlen (expected[i]));
     }
+    zlink_multipart_close (received, part_count);
 
     test_context_socket_close_zero_linger (receiver);
     test_context_socket_close_zero_linger (router);
 }
 
 
-void test_router_recv_part_metadata_view_invalidates_on_next_recv_like_call ()
+void test_router_recv_metadata_view_invalidates_on_next_recv_like_call ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *dealer1 = test_context_socket (ZLINK_SOCKET_DEALER);
@@ -240,12 +236,12 @@ void test_router_recv_part_metadata_view_invalidates_on_next_recv_like_call ()
     uint64_t first_request_seq = 0;
     zlink_msg_t part;
     zlink_msg_init (&part);
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+    size_t has_more = 1;
     TEST_ASSERT_SUCCESS_ERRNO (recv_router_part_with_retry (
       router, &first_source_rid, &first_request_seq, &part, &has_more));
     TEST_ASSERT_NOT_NULL (first_source_rid);
     TEST_ASSERT_TRUE (first_request_seq != 0);
-    TEST_ASSERT_EQUAL_INT (0, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_MEMORY ("D1", first_source_rid->data, 2);
     TEST_ASSERT_EQUAL_MEMORY ("first", zlink_msg_data (&part), 5);
     zlink_routing_id_t first_source_copy = *first_source_rid;
@@ -260,12 +256,10 @@ void test_router_recv_part_metadata_view_invalidates_on_next_recv_like_call ()
     zlink_reply_token_t other_token = UINT64_MAX;
     zlink_msg_t other_part;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&other_part));
-    zlink_part_flag_t other_more = ZLINK_PART_MORE;
+    size_t other_more = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_NO_DATA,
-      zlink_router_recv_part (other_router, &other_source_rid, &other_token,
-                              &other_part, &other_more,
-                              ZLINK_RECV_FLAGS_DONTWAIT));
+      zlink_router_recv (other_router, &other_source_rid, &other_token, &other_part, 1, &other_more, ZLINK_RECV_FLAGS_DONTWAIT));
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
     TEST_ASSERT_EQUAL_MEMORY ("D1", first_source_rid->data, 2);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&other_part));
@@ -284,12 +278,12 @@ void test_router_recv_part_metadata_view_invalidates_on_next_recv_like_call ()
     const zlink_routing_id_t *second_spot_rid = NULL;
     uint64_t second_request_seq = 0;
     zlink_msg_init (&part);
-    has_more = ZLINK_PART_FINAL;
+    has_more = 1;
     TEST_ASSERT_SUCCESS_ERRNO (recv_router_part_with_retry (
       router, &second_source_rid, &second_request_seq, &part, &has_more));
     TEST_ASSERT_NOT_NULL (second_source_rid);
     TEST_ASSERT_EQUAL_MEMORY ("D2", second_source_rid->data, 2);
-    TEST_ASSERT_EQUAL_INT (0, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
 
     TEST_ASSERT_EQUAL_MEMORY (second_source_rid->data, first_source_rid->data,
                               second_source_rid->size);
@@ -309,7 +303,7 @@ void test_router_recv_part_metadata_view_invalidates_on_next_recv_like_call ()
     test_context_socket_close_zero_linger (router);
 }
 
-void test_subscribe_part_reports_needed_topic_size_without_consuming_payload ()
+void test_subscribe_reports_needed_topic_size_without_consuming_payload ()
 {
     void *pub = test_context_socket (ZLINK_SOCKET_PUB);
     void *sub = test_context_socket (ZLINK_SOCKET_SUB);
@@ -324,13 +318,13 @@ void test_subscribe_part_reports_needed_topic_size_without_consuming_payload ()
     size_t topic_len = 0;
     zlink_msg_t payload;
     zlink_msg_init (&payload);
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     publish_and_recv_subscribe_part_eventually (pub, sub, "topic-1", "payload-1", small_topic,
                                                 sizeof (small_topic), &topic_len, &payload,
                                                 &has_more, ZLINK_RECV_BUFFER_TOO_SMALL, ENOBUFS);
     TEST_ASSERT_EQUAL_INT (ENOBUFS, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (7, topic_len);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&payload));
     TEST_ASSERT_EQUAL_MEMORY ("xy", small_topic, sizeof (small_topic));
 
@@ -340,20 +334,20 @@ void test_subscribe_part_reports_needed_topic_size_without_consuming_payload ()
       recv_subscribe_part_with_retry (sub, full_topic, sizeof (full_topic),
                                       &topic_len, &payload, &has_more));
     TEST_ASSERT_EQUAL_MEMORY ("topic-1", full_topic, sizeof (full_topic));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_MEMORY ("payload-1", zlink_msg_data (&payload), 9);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&payload));
 
     char sentinel[4] = {'k', 'e', 'e', 'p'};
     topic_len = 0;
     zlink_msg_init (&payload);
-    has_more = ZLINK_PART_MORE;
+    has_more = 0;
     publish_and_recv_subscribe_part_eventually (
       pub, sub, "topic-2", "payload-2", sentinel, 0, &topic_len, &payload,
       &has_more, ZLINK_RECV_BUFFER_TOO_SMALL, ENOBUFS);
     TEST_ASSERT_EQUAL_INT (ENOBUFS, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (7, topic_len);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_MEMORY ("keep", sentinel, sizeof (sentinel));
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&payload));
 
@@ -362,7 +356,7 @@ void test_subscribe_part_reports_needed_topic_size_without_consuming_payload ()
       recv_subscribe_part_with_retry (sub, full_topic, sizeof (full_topic),
                                       &topic_len, &payload, &has_more));
     TEST_ASSERT_EQUAL_MEMORY ("topic-2", full_topic, sizeof (full_topic));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_MEMORY ("payload-2", zlink_msg_data (&payload), 9);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&payload));
 
@@ -373,38 +367,36 @@ void test_subscribe_part_reports_needed_topic_size_without_consuming_payload ()
                      static_cast<zlink_send_flags_t> (0)));
     topic_len = 91;
     zlink_msg_init (&payload);
-    has_more = ZLINK_PART_MORE;
+    has_more = 0;
     const zlink_routing_id_t *source_rid =
       reinterpret_cast<const zlink_routing_id_t *> (0x1);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_INVALID_HANDLE,
-      zlink_subscribe_part (
-        sub, &source_rid, NULL, 1, &topic_len, &payload, &has_more,
-        static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+      zlink_subscribe (sub, &source_rid, NULL, 1, &topic_len, &payload, 1, &has_more, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
     TEST_ASSERT_EQUAL_INT (EFAULT, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (91, topic_len);
     TEST_ASSERT_EQUAL_PTR (
       reinterpret_cast<const zlink_routing_id_t *> (0x1), source_rid);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&payload));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, has_more);
+    TEST_ASSERT_EQUAL_INT (0, has_more);
 
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
       recv_subscribe_part_with_retry (sub, full_topic, sizeof (full_topic),
                                       &topic_len, &payload, &has_more));
     TEST_ASSERT_EQUAL_MEMORY ("topic-3", full_topic, sizeof (full_topic));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_MEMORY ("payload-3", zlink_msg_data (&payload), 9);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&payload));
 
     topic_len = 47;
     zlink_msg_init (&payload);
-    has_more = ZLINK_PART_MORE;
+    has_more = 0;
     publish_and_recv_subscribe_part_eventually (
       pub, sub, "", "empty-topic", NULL, 0, &topic_len, &payload,
       &has_more, ZLINK_RECV_OK, 0);
     TEST_ASSERT_EQUAL_UINT64 (0, topic_len);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_MEMORY ("empty-topic", zlink_msg_data (&payload), 11);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&payload));
 
@@ -419,10 +411,10 @@ int main (void)
     setup_test_environment ();
 
     UNITY_BEGIN ();
-    RUN_TEST (test_recv_part_reads_each_part_and_tracks_has_more);
-    RUN_TEST (test_router_recv_part_metadata_view_invalidates_on_next_recv_like_call);
+    RUN_TEST (test_whole_recv_returns_all_parts_in_order);
+    RUN_TEST (test_router_recv_metadata_view_invalidates_on_next_recv_like_call);
     RUN_TEST (
-      test_subscribe_part_reports_needed_topic_size_without_consuming_payload);
+      test_subscribe_reports_needed_topic_size_without_consuming_payload);
     const int rc = UNITY_END ();
     fflush (NULL);
     std::_Exit (rc);

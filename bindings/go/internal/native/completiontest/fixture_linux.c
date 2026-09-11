@@ -79,45 +79,44 @@ zlink_recv_result_t __wrap_zlink_completion_recv(void *socket, zlink_completion_
     return ZLINK_RECV_OK;
 }
 
-static zlink_submit_result_t admit(zlink_msg_t *part, zlink_send_flags_t flags,
-                                  zlink_part_flag_t part_flag, void *context,
+static zlink_submit_result_t admit(zlink_msg_t *parts, size_t part_count,
+                                  zlink_send_flags_t flags, void *context,
                                   zlink_completion_id_t *id, int request)
 {
     assert(flags == ZLINK_SEND_FLAGS_DONTWAIT);
-    zlink_msg_close(part);
+    assert(part_count > 0);
+    zlink_multipart_close(parts, part_count);
     if (id)
         *id = 0;
-    if (part_flag == ZLINK_PART_FINAL) {
-        record_call(request ? 'R' : 'S');
-        if (request) {
-            assert(id != NULL);
-            *id = 900;
-            fixture_request(*id, (uintptr_t) context);
-        }
+    record_call(request ? 'R' : 'S');
+    if (request) {
+        assert(id != NULL);
+        *id = 900;
+        fixture_request(*id, (uintptr_t) context);
     }
     return ZLINK_SUBMIT_OK;
 }
 
-zlink_submit_result_t __real_zlink_send_part(void *, zlink_msg_t *, zlink_send_flags_t, zlink_part_flag_t, void *, zlink_completion_id_t *);
-zlink_submit_result_t __wrap_zlink_send_part(void *socket, zlink_msg_t *part, zlink_send_flags_t flags, zlink_part_flag_t part_flag, void *context, zlink_completion_id_t *id)
+zlink_submit_result_t __real_zlink_send(void *, zlink_msg_t *, size_t, zlink_send_flags_t, void *, zlink_completion_id_t *);
+zlink_submit_result_t __wrap_zlink_send(void *socket, zlink_msg_t *parts, size_t part_count, zlink_send_flags_t flags, void *context, zlink_completion_id_t *id)
 {
     if (!owns_socket(socket))
-        return __real_zlink_send_part(socket, part, flags, part_flag, context, id);
-    return admit(part, flags, part_flag, context, id, 0);
+        return __real_zlink_send(socket, parts, part_count, flags, context, id);
+    return admit(parts, part_count, flags, context, id, 0);
 }
 
-zlink_submit_result_t __real_zlink_send_part_rid(void *, const zlink_routing_id_t *, zlink_msg_t *, zlink_send_flags_t, zlink_part_flag_t, void *, zlink_completion_id_t *);
-zlink_submit_result_t __wrap_zlink_send_part_rid(void *socket, const zlink_routing_id_t *rid, zlink_msg_t *part, zlink_send_flags_t flags, zlink_part_flag_t part_flag, void *context, zlink_completion_id_t *id)
+zlink_submit_result_t __real_zlink_send_rid(void *, const zlink_routing_id_t *, zlink_msg_t *, size_t, zlink_send_flags_t, void *, zlink_completion_id_t *);
+zlink_submit_result_t __wrap_zlink_send_rid(void *socket, const zlink_routing_id_t *rid, zlink_msg_t *parts, size_t part_count, zlink_send_flags_t flags, void *context, zlink_completion_id_t *id)
 {
     if (!owns_socket(socket))
-        return __real_zlink_send_part_rid(socket, rid, part, flags, part_flag, context, id);
-    return admit(part, flags, part_flag, context, id, 0);
+        return __real_zlink_send_rid(socket, rid, parts, part_count, flags, context, id);
+    return admit(parts, part_count, flags, context, id, 0);
 }
 
-zlink_submit_result_t __real_zlink_request_part(void *, const zlink_routing_id_t *, zlink_msg_t *, zlink_send_flags_t, zlink_part_flag_t, uint32_t, void *, zlink_completion_id_t *);
-zlink_submit_result_t __wrap_zlink_request_part(void *socket, const zlink_routing_id_t *rid, zlink_msg_t *part, zlink_send_flags_t flags, zlink_part_flag_t part_flag, uint32_t timeout, void *context, zlink_completion_id_t *id)
+zlink_submit_result_t __real_zlink_request(void *, const zlink_routing_id_t *, zlink_msg_t *, size_t, zlink_send_flags_t, uint32_t, void *, zlink_completion_id_t *);
+zlink_submit_result_t __wrap_zlink_request(void *socket, const zlink_routing_id_t *rid, zlink_msg_t *parts, size_t part_count, zlink_send_flags_t flags, uint32_t timeout, void *context, zlink_completion_id_t *id)
 {
     if (!owns_socket(socket))
-        return __real_zlink_request_part(socket, rid, part, flags, part_flag, timeout, context, id);
-    return admit(part, flags, part_flag, context, id, 1);
+        return __real_zlink_request(socket, rid, parts, part_count, flags, timeout, context, id);
+    return admit(parts, part_count, flags, context, id, 1);
 }

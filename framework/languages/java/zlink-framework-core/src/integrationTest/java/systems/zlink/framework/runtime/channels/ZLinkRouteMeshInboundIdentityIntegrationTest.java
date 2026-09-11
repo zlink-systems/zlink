@@ -111,6 +111,7 @@ final class ZLinkRouteMeshInboundIdentityIntegrationTest {
             .message(Message.from(("request:" + marker).getBytes()))
             .timeout(Duration.ofSeconds(2))
             .submit()
+            .reply()
             .toCompletableFuture()
             .get(3, TimeUnit.SECONDS);
         try {

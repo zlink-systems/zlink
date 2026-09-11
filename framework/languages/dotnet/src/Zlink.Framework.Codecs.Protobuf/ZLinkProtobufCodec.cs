@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Contracts.Codecs;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Codecs.Protobuf;
 
@@ -71,7 +72,9 @@ public sealed class ZLinkProtobufCodec :
         return Expression.Lambda<Func<IMessage>>(convert).Compile();
     }
 
-    private sealed class ProtobufSerializer : IZLinkMessageSerializer
+    private sealed class ProtobufSerializer :
+        IZLinkMessageSerializer,
+        IZLinkMessageSpanDeserializer
     {
         public static ProtobufSerializer Instance { get; } = new();
 
@@ -85,6 +88,11 @@ public sealed class ZLinkProtobufCodec :
 
         public object? Deserialize(ZLinkEncodedPayload payload, Type type)
         {
+            return Deserialize(payload.Bytes.Span, type);
+        }
+
+        public object? Deserialize(ReadOnlySpan<byte> payload, Type type)
+        {
             if (!typeof(IMessage).IsAssignableFrom(type))
                 throw new InvalidOperationException($"Protobuf codec cannot deserialize payload type '{type}'.");
 
@@ -92,7 +100,7 @@ public sealed class ZLinkProtobufCodec :
             // response decode while still honoring protobuf's parameterless ctor
             // contract.
             var protobuf = CreateMessage(type);
-            protobuf.MergeFrom(payload.Bytes.Span);
+            protobuf.MergeFrom(payload);
             return protobuf;
         }
     }

@@ -77,47 +77,43 @@ int recv_pubsub_header_flags (void *subscriber_,
         *header_ok_out_ = false;
 
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_msg_t part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+    zlink_msg_t parts[2];
+    size_t part_count = 0;
     char topic[256];
     size_t topic_len = sizeof (topic);
-    if (zlink_msg_init (&part) != 0)
-        return perf_single_one_way::recv_result_error;
-    const int rc =
-      zlink_subscribe_part (subscriber_, &source_rid, topic, sizeof (topic), &topic_len, &part,
-                            &has_more, static_cast<zlink_recv_flags_t> (flags_));
+    const int rc = zlink_subscribe (
+      subscriber_, &source_rid, topic, sizeof (topic), &topic_len, parts, 2u,
+      &part_count, static_cast<zlink_recv_flags_t> (flags_));
     if (rc != 0) {
         const int err = zlink_errno ();
-        zlink_msg_close (&part);
         if (err == EAGAIN || err == EINTR)
             return perf_single_one_way::recv_result_again;
         return perf_single_one_way::recv_result_error;
     }
+    zlink_msg_t &part = parts[0];
 
     const bool topic_ok = topic_len == std::strlen (k_pubsub_topic)
                           && std::memcmp (topic, k_pubsub_topic, topic_len) == 0;
     if (!topic_ok || source_rid) {
         if (bench_debug_enabled ()) {
             std::cerr << "[perf-pubsub] invalid recv topic_ok=" << (topic_ok ? 1 : 0)
-                      << " has_more=" << static_cast<int> (has_more) << std::endl;
+                      << " part_count=" << part_count << std::endl;
         }
-        zlink_msg_close (&part);
+        zlink_multipart_close (parts, part_count);
         return perf_single_one_way::recv_result_error;
     }
 
     const size_t actual_size = zlink_msg_size (&part);
     if (is_stop_token (zlink_msg_data (&part), actual_size)) {
-        if (has_more != ZLINK_PART_FINAL) {
-            zlink_msg_close (&part);
+        if (part_count != 1u) {
+            zlink_multipart_close (parts, part_count);
             return perf_single_one_way::recv_result_error;
         }
-        zlink_msg_close (&part);
+        zlink_multipart_close (parts, part_count);
         return perf_single_one_way::recv_result_stop;
     }
-    if (!perf_zlink_recv_measurement_tail (
-          subscriber_, has_more, static_cast<zlink_recv_flags_t> (flags_),
-          perf_zlink_recv_next_subscribe)) {
-        zlink_msg_close (&part);
+    if (!perf_zlink_measurement_parts_valid (parts, part_count)) {
+        zlink_multipart_close (parts, part_count);
         return perf_single_one_way::recv_result_error;
     }
     // PERF_SINGLE_TEST_POLICY § 2.1: a wire frame whose byte length differs
@@ -129,7 +125,7 @@ int recv_pubsub_header_flags (void *subscriber_,
         header_ok = perf_single_metric::decode_payload_header (zlink_msg_data (&part), actual_size,
                                                                header_out_);
     }
-    zlink_msg_close (&part);
+    zlink_multipart_close (parts, part_count);
     if (!size_ok && bench_debug_enabled ()) {
         std::cerr << "[perf-pubsub] excluded payload size=" << actual_size
                   << " expected=" << payload_size_ << std::endl;

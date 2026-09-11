@@ -280,7 +280,7 @@ TEST (ChannelHostReplyAdmission,
                              .message (request_header)
                              .message (request_body)
                              .timeout (5s)
-                             .async ();
+                             .async ().reply;
 
     ASSERT_TRUE (handler.wait_until_entered (2s));
     EXPECT_EQ (0u,
@@ -302,6 +302,7 @@ TEST (ChannelHostReplyAdmission,
                context->core_hwm_budget_snapshot ()
                  .outstanding_application_lease_count ());
 
+    // Discard the reply waiter at scope exit; this test observes lease release.
     (void) pending_request;
 }
 

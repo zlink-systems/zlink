@@ -62,14 +62,17 @@ A receive with `RecvFlags.DONT_WAIT` returns `False` when there's no message.
 Control APIs that directly return a pending value — timers, monitors — return
 `None` when there's no value.
 
-HWM-managed sends provide asynchronous `submit()` and synchronous
-`submit_sync()` terminals. In async code, use
-`await socket.send().message(message).submit()`; it submits with DONTWAIT and
-settles from the socket completion queue. On a plain thread, `submit_sync()`
+HWM-managed sends provide a result-object `submit()` and synchronous
+`submit_sync()` terminals. `submit()` returns a `SendSubmission` (`result()`:
+`OK`|`BACKPRESSURED`, `admitted()`: awaitable) immediately; in async code, use
+`await socket.send().message(message).submit().admitted()` to wait for admission
+(already complete when `result()` is `OK`). It submits with DONTWAIT and settles
+admission from the socket completion queue. On a plain thread, `submit_sync()`
 blocks in Core until local admission.
 
-Request provides `submit_sync()` to block until the reply and `submit()` to
-return an awaitable `list[Message]` settled from the socket completion queue.
+Request provides `submit_sync()` to block until the reply and `submit()` to return a
+`RequestSubmission` (`result()`, `admitted()`, plus a `reply()` awaitable). When `result()`
+is `OK` you can await `reply()` directly; it settles from the socket completion queue.
 The reply is that terminal result, not DATA received separately.
 
 Core owns retry after accepting a pre-admission operation; do not create a
@@ -127,8 +130,8 @@ except zlink.SubmitError as exc:
 `submit_sync()` stops its calling thread while waiting for HWM admission. This
 is safe on a plain thread because only that thread waits.
 Calling it inside an asyncio event loop stops the entire loop, so other tasks and
-send completions cannot progress. In asyncio code, `await` asynchronous
-`submit()`.
+send completions cannot progress. In asyncio code, `await` the `admitted()`/`reply()`
+of the result object returned by `submit()`.
 
 ## Samples And Perf
 

@@ -30,8 +30,6 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
     applyContextPolicy(ctx, 'client', pattern);
     const sockets = [];
     let rl = null;
-    let completionPoller = null;
-    let completionEvents = null;
     try {
         for (let i = 0; i < options.clients; i += 1) {
             const socket = routerClient ? zlink.createRouterSocket(ctx) : zlink.createDealerSocket(ctx);
@@ -46,11 +44,6 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
         ctx.recalculateAutoHwm();
         for (const socket of sockets) {
             emitMultiSocketHwmDetail(socket, 'endpoint', options.transport, options.msgSize);
-        }
-        completionPoller = zlink.createPoller();
-        completionEvents = zlink.createPollEvents(Math.max(1, sockets.length));
-        for (let index = 0; index < sockets.length; index += 1) {
-            completionPoller.add(sockets[index], [zlink.PollEventFlag.PollCompletion], index);
         }
         // PERF_POLICY.md:469-471 - the C request/reply client uses no runner
         // CLIENT_READY/START barrier; its own CONNECTION_READY gate above is the
@@ -67,13 +60,14 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
         let seq = 1n;
         const payloadTemplates = sockets.map(() => createPayload(options.msgSize));
         const pending = new Set();
+        const blocked = new Map();
+        const available = sockets.map(() => true);
+        let nextSocket = 0;
         let requestFailure = null;
-        const submitRequest = async (socket, payload) => {
+        const collectReply = async (reply) => {
             let parts = null;
             try {
-                const operation = routerClient ? socket.request(serverRoutingId) : socket.request();
-                parts = await appendMeasurement(operation, payload)
-                    .timeout(requestTimeoutMs).submit();
+                parts = await reply;
                 const replyPayload = measurementPayload(parts);
                 collector.recordPayload(replyPayload?.data?.() ?? null, currentEpochNs());
             }
@@ -88,7 +82,11 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
             }
         };
         while (currentEpochNs() < activeStopNs) {
-            for (let index = 0; index < sockets.length; index += 1) {
+            const sendStart = nextSocket;
+            for (let offset = 0; offset < sockets.length; offset += 1) {
+                const index = (sendStart + offset) % sockets.length;
+                if (!available[index])
+                    continue;
                 const payload = Buffer.from(payloadTemplates[index]);
                 const currentSeq = seq;
                 seq += 1n;
@@ -98,20 +96,43 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
                 stampPayload(payload, {
                     phase: 1, runId, msgSize: options.msgSize, seq: currentSeq
                 });
-                const task = submitRequest(sockets[index], payload);
+                let submission;
+                try {
+                    const operation = routerClient
+                        ? sockets[index].request(serverRoutingId)
+                        : sockets[index].request();
+                    submission = appendMeasurement(operation, payload)
+                        .timeout(requestTimeoutMs).submit();
+                }
+                catch (error) {
+                    requestFailure = error;
+                    break;
+                }
+                const task = collectReply(submission.reply);
                 pending.add(task);
                 task.catch((error) => { requestFailure = error; })
                     .finally(() => pending.delete(task));
+                if (submission.result === zlink.SubmitResult.Backpressured) {
+                    available[index] = false;
+                    const admission = submission.admitted.then(() => { available[index] = true; }, (error) => { requestFailure = error; }).finally(() => blocked.delete(index));
+                    blocked.set(index, admission);
+                }
             }
-            completionPoller.wait(completionEvents, 0);
-            await sleepImmediate();
+            nextSocket = (sendStart + 1) % sockets.length;
             if (requestFailure)
                 throw requestFailure;
+            if (blocked.size === sockets.length) {
+                await Promise.race(blocked.values());
+            }
         }
+        while (blocked.size > 0 && !requestFailure) {
+            await Promise.race(blocked.values());
+        }
+        if (requestFailure)
+            throw requestFailure;
         const drainStopNs = currentEpochNs()
             + BigInt(Math.max(1_000, requestTimeoutMs * 4)) * 1000000n;
         while (pending.size > 0 && currentEpochNs() < drainStopNs && !requestFailure) {
-            completionPoller.wait(completionEvents, 0);
             await sleepImmediate();
         }
         if (pending.size > 0) {
@@ -142,20 +163,6 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
     }
     finally {
         rl?.close();
-        for (const socket of sockets) {
-            try {
-                completionPoller?.remove?.(socket);
-            }
-            catch (_) { /* preserve the benchmark failure */ }
-        }
-        try {
-            completionEvents?.close?.();
-        }
-        catch (_) { /* preserve the benchmark failure */ }
-        try {
-            completionPoller?.close?.();
-        }
-        catch (_) { /* preserve the benchmark failure */ }
         for (const socket of sockets)
             socket.close();
         ctx.close();
