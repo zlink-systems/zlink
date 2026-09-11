@@ -1,6 +1,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot '../local_nuget.ps1')
+
 if (-not (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
     $IsWindows = $env:OS -eq "Windows_NT"
 }
@@ -604,10 +606,12 @@ function Wait-SampleHttpHealth {
 function Invoke-SampleDotnetBuild {
     param([Parameter(Mandatory = $true)][string]$Project)
 
-    & dotnet build $Project --maxcpucount:1
-    if ($LASTEXITCODE -ne 0) {
-        throw "dotnet build failed for $Project"
+    $localRoot = $env:ZLINK_LOCAL_PACKAGE_ROOT
+    if (-not $localRoot -and $IsWindows) {
+        $candidate = Join-Path $PSScriptRoot '../../../../.artifacts/windows'
+        if (Test-Path -LiteralPath (Join-Path $candidate 'nuget')) { $localRoot = $candidate }
     }
+    Invoke-ZlinkDotnetBuild -Project $Project -LocalPackageRoot $localRoot
 }
 
 function Start-SampleProcess {
