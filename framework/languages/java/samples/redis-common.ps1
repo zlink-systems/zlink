@@ -27,9 +27,16 @@ function Set-ZlinkSampleUtf8File {
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Value
     )
 
+    $propertiesLines = ($Value -join [System.Environment]::NewLine) -split "`r?`n" |
+        ForEach-Object {
+            $separator = $_.IndexOf('=')
+            if ($separator -lt 0) { return $_ }
+            return $_.Substring(0, $separator + 1) +
+                $_.Substring($separator + 1).Replace('\', '\\')
+        }
     [System.IO.File]::WriteAllText(
         $Path,
-        ($Value -join [System.Environment]::NewLine),
+        ($propertiesLines -join [System.Environment]::NewLine),
         [System.Text.UTF8Encoding]::new($false))
 }
 
@@ -40,6 +47,61 @@ function ConvertTo-ZlinkSampleProcessArgument {
         return $Value
     }
     return '"' + [regex]::Replace($Value, '(\\*)"', '$1$1\"') + '"'
+}
+
+function Start-ZlinkSampleProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [AllowEmptyCollection()][string[]]$ArgumentList = @(),
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [Parameter(Mandatory = $true)][Alias("RedirectStandardOutput")][string]$StandardOutputPath,
+        [Parameter(Mandatory = $true)][Alias("RedirectStandardError")][string]$StandardErrorPath,
+        [switch]$NoNewWindow,
+        [switch]$PassThru
+    )
+
+    if ($IsWindows -and [IO.Path]::GetExtension($FilePath) -ieq ".bat") {
+        function ConvertTo-ZlinkSampleBatchEnvironmentValue {
+            param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
+
+            # Normalize only the two cmd argv forms the sample runners already use.
+            # The resulting quoted environment value is expanded once by cmd.exe.
+            if ($Value.Length -ge 2 -and $Value.StartsWith('"') -and $Value.EndsWith('"')) {
+                $Value = $Value.Substring(1, $Value.Length - 2)
+            } elseif ($Value -match '^[^"\s]+="[^"]*"$') {
+                $Value = $Value.Replace('"', '')
+            }
+            return '"' + $Value + '"'
+        }
+
+        # Start-Process delegates .bat files through a shell whose process exit code
+        # is not the batch program's exit code. Run it in cmd.exe directly and
+        # expand each normalized argument exactly once from its environment.
+        $startInfo = [Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $env:ComSpec
+        $startInfo.WorkingDirectory = $WorkingDirectory
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.EnvironmentVariables["ZLINK_SAMPLE_BATCH_FILE"] =
+            ConvertTo-ZlinkSampleBatchEnvironmentValue $FilePath
+        $startInfo.EnvironmentVariables["ZLINK_SAMPLE_BATCH_STDOUT"] =
+            ConvertTo-ZlinkSampleBatchEnvironmentValue $StandardOutputPath
+        $startInfo.EnvironmentVariables["ZLINK_SAMPLE_BATCH_STDERR"] =
+            ConvertTo-ZlinkSampleBatchEnvironmentValue $StandardErrorPath
+        $batchArguments = [Collections.Generic.List[string]]::new()
+        for ($index = 0; $index -lt $ArgumentList.Count; $index++) {
+            $name = "ZLINK_SAMPLE_ARGUMENT_$index"
+            $startInfo.EnvironmentVariables[$name] = ConvertTo-ZlinkSampleBatchEnvironmentValue $ArgumentList[$index]
+            $batchArguments.Add('%' + $name + '%')
+        }
+        $startInfo.Arguments = '/d /s /c %ZLINK_SAMPLE_BATCH_FILE% ' + ($batchArguments -join ' ')
+        $startInfo.Arguments += ' 1> %ZLINK_SAMPLE_BATCH_STDOUT% 2> %ZLINK_SAMPLE_BATCH_STDERR%'
+        return [Diagnostics.Process]::Start($startInfo)
+    }
+
+    Start-Process -FilePath $FilePath -ArgumentList $ArgumentList `
+        -WorkingDirectory $WorkingDirectory -NoNewWindow `
+        -RedirectStandardOutput $StandardOutputPath -RedirectStandardError $StandardErrorPath -PassThru
 }
 
 function Optimize-ZlinkSampleWindowsLaunchers {

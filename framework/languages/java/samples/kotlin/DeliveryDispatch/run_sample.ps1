@@ -101,7 +101,7 @@ function Start-Role {
     param([string]$Project, [string]$ScriptName, [string]$ConfigPath, [string]$LogName)
     $bin = Join-Path $SampleDir "$Project/build/install/$ScriptName/bin/$ScriptName"
     if ($IsWindows) { $bin = "$bin.bat" }
-    $process = Start-Process -FilePath $bin -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput (Join-Path $LogDir $LogName) -RedirectStandardError (Join-Path $LogDir "$LogName.err") -PassThru
+    $process = Start-ZlinkSampleProcess -FilePath $bin -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput (Join-Path $LogDir $LogName) -RedirectStandardError (Join-Path $LogDir "$LogName.err") -PassThru
     $Processes.Add($process)
     Register-ZlinkSampleProcessTree -Process $process
 }
@@ -190,8 +190,13 @@ try {
     $clientBin = Join-Path $SampleDir "Client/build/install/Client/bin/Client"
     if ($IsWindows) { $clientBin = "$clientBin.bat" }
     $clientLog = Join-Path $LogDir "client.log"
-    & $clientBin --config $clientConfig *> $clientLog
-    if ($LASTEXITCODE -ne 0) { throw "Client failed." }
+    $clientProcess = Start-ZlinkSampleProcess -FilePath $clientBin -ArgumentList @("--config", $clientConfig) `
+        -WorkingDirectory $SampleDir -StandardOutputPath $clientLog `
+        -StandardErrorPath (Join-Path $LogDir "client.err.log")
+    $Processes.Add($clientProcess)
+    Register-ZlinkSampleProcessTree -Process $clientProcess
+    $clientProcess.WaitForExit()
+    if ($clientProcess.ExitCode -ne 0) { throw "Client failed." }
 
     Wait-LogCount $clientLog "deliverydispatch-reassignment=completed" 1
     Wait-LogCount $clientLog "deliverydispatch-server-evidence=completed" 1

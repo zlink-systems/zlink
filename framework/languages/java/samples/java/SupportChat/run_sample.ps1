@@ -3,6 +3,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $SampleDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $SampleDir
 $RunDir = Join-Path ([IO.Path]::GetTempPath()) ("zlink-supportchat-" + [Guid]::NewGuid().ToString("N"))
 $LogDir = Join-Path $RunDir "logs"
 $Processes = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
@@ -50,9 +51,9 @@ function Get-AppBin([string]$Project, [string]$Name) {
 
 function Start-Role([string]$Role, [string]$Project, [string]$Name, [string]$Config) {
     $log = Join-Path $LogDir "$Role.log"
-    $process = Start-Process -FilePath (Get-AppBin $Project $Name) -ArgumentList @("--config", $Config) `
+    $process = Start-ZlinkSampleProcess -FilePath (Get-AppBin $Project $Name) -ArgumentList @("--config", $Config) `
         -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $log `
-        -RedirectStandardError "$log.err" -PassThru
+        -RedirectStandardError (Join-Path $LogDir "$Role.err.log") -PassThru
     $Processes.Add($process)
     Register-ZlinkSampleProcessTree -Process $process
 }
@@ -135,8 +136,13 @@ try {
     Wait-LogCount @((Join-Path $LogDir "session.log")) "supportchat-ready kind=spot-route node=session mesh=supportchat-actors" 1
 
     $clientLog = Join-Path $LogDir "client.log"
-    & (Get-AppBin "Client" "Client") --stream-endpoint $sessionStreamEndpoint *> $clientLog
-    if ($LASTEXITCODE -ne 0) { throw "SupportChat client scenario failed." }
+    $clientProcess = Start-ZlinkSampleProcess -FilePath (Get-AppBin "Client" "Client") `
+        -ArgumentList @("--stream-endpoint", $sessionStreamEndpoint) -WorkingDirectory $SampleDir `
+        -StandardOutputPath $clientLog -StandardErrorPath (Join-Path $LogDir "client.err.log")
+    $Processes.Add($clientProcess)
+    Register-ZlinkSampleProcessTree -Process $clientProcess
+    $clientProcess.WaitForExit()
+    if ($clientProcess.ExitCode -ne 0) { throw "SupportChat client scenario failed." }
 
     Wait-LogCount @($clientLog) "supportchat=completed" 1
     Wait-LogCount @($clientLog) "supportchat-closed-typing-ignore=verified" 1

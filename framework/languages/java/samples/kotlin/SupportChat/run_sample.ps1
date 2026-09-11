@@ -92,7 +92,7 @@ function Start-Role {
     param([string]$Name, [string]$Binary, [string]$ConfigPath)
     $logPath = Join-Path $LogDir "$Name.log"
     $errPath = Join-Path $LogDir "$Name.err.log"
-    $process = Start-Process -FilePath $Binary -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $logPath -RedirectStandardError $errPath -PassThru
+    $process = Start-ZlinkSampleProcess -FilePath $Binary -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $logPath -RedirectStandardError $errPath -PassThru
     $Processes.Add($process)
     Register-ZlinkSampleProcessTree -Process $process
 }
@@ -165,9 +165,13 @@ try {
     Wait-LogCount @((Join-Path $LogDir "session.log")) "supportchat-ready kind=spot-route node=session mesh=supportchat.support.spots" 1
 
     $clientLog = Join-Path $LogDir "client.log"
-    & (Get-AppBin "Client" "Client") `
-        --stream-endpoint $StreamEndpoint *> $clientLog
-    if ($LASTEXITCODE -ne 0) {
+    $clientProcess = Start-ZlinkSampleProcess -FilePath (Get-AppBin "Client" "Client") `
+        -ArgumentList @("--stream-endpoint", $StreamEndpoint) -WorkingDirectory $SampleDir `
+        -StandardOutputPath $clientLog -StandardErrorPath (Join-Path $LogDir "client.err.log")
+    $Processes.Add($clientProcess)
+    Register-ZlinkSampleProcessTree -Process $clientProcess
+    $clientProcess.WaitForExit()
+    if ($clientProcess.ExitCode -ne 0) {
         throw "SupportChat client failed."
     }
     Wait-LogCount @($clientLog) "supportchat=completed" 1

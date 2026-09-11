@@ -77,12 +77,22 @@ function Invoke-SampleWithPortCollisionRetry {
     $output = New-TemporaryFile
     try {
         for ($attempt = 1; $attempt -le 3; $attempt++) {
-            if ($ScriptPath.EndsWith(".sh")) {
-                & bash $ScriptPath *> $output
-            } else {
-                & $PowerShell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath *> $output
+            $previousErrorActionPreference = $ErrorActionPreference
+            try {
+                # Windows PowerShell 5 promotes a native child's stderr to
+                # ErrorRecord. Preserve the combined log and judge the child
+                # strictly by its process exit code instead.
+                $ErrorActionPreference = "Continue"
+                if ($ScriptPath.EndsWith(".sh")) {
+                    & bash $ScriptPath *> $output
+                } else {
+                    & $PowerShell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath *> $output
+                }
+                $exitCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $previousErrorActionPreference
             }
-            if ($LASTEXITCODE -eq 0) {
+            if ($exitCode -eq 0) {
                 Get-Content $output
                 return
             }
@@ -131,9 +141,9 @@ try {
     Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
         "--no-daemon",
         "--no-parallel",
-        ":zlink-framework-testkit:fakeBackendTest",
+        ":zlink-framework-core:test",
         "--tests",
-        "systems.zlink.framework.testkit.ActorRuntimeFakeBackendTest.entrySpotDestroyActorRemovesEntryOwnedActorWithoutLeftCallback"
+        "systems.zlink.framework.runtime.actors.ZLinkActorRelocationStagingTest.entrySpotDestroyWaitsForActiveActorTurn"
     )
 } finally {
     Pop-Location

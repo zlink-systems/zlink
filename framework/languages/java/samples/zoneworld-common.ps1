@@ -1,5 +1,23 @@
 Set-StrictMode -Version Latest
 
+function Resolve-ZlinkZoneWorldPython {
+    $pythonCommand = Get-Command python.exe, python3.exe -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    $pythonExecutable = if ($pythonCommand) {
+        $pythonCommand.Source
+    } else {
+        $pythonRoot = Join-Path $env:LOCALAPPDATA "Programs\Python"
+        Get-ChildItem -LiteralPath $pythonRoot -Filter python.exe -Recurse -File `
+            -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+    }
+    if ([string]::IsNullOrWhiteSpace($pythonExecutable) -or
+            -not (Test-Path -LiteralPath $pythonExecutable -PathType Leaf)) {
+        throw "Python 3 is required for the ZW-B8 proxy lane."
+    }
+    return (Resolve-Path -LiteralPath $pythonExecutable).Path
+}
+
 function Invoke-ZlinkZoneWorldSample {
     param(
         [Parameter(Mandatory = $true)]
@@ -655,9 +673,7 @@ public static class ZlinkWindowsOwnedConsole
             } else {
                 Join-Path $SampleDir "../../java/ZoneWorld/Support/session_route_block_proxy.py"
             }
-            $python = Get-Command python.exe, python3.exe -ErrorAction SilentlyContinue |
-                Select-Object -First 1 -ExpandProperty Source
-            if (-not $python) { throw "Python was not found for the ZW-B8 proxy lane." }
+            $python = Resolve-ZlinkZoneWorldPython
             foreach ($spec in @(
                     @{ Name = "zone-node-1"; Port = $mesh1 },
                     @{ Name = "zone-node-2"; Port = $mesh2 },

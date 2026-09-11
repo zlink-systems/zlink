@@ -94,7 +94,7 @@ function Start-SampleRole {
     $scriptName = if ($Role -eq "play") { "tictactoe-play" } else { "Server" }
     $serverBin = Join-Path $SampleDir "Server/build/install/Server/bin/$scriptName"
     if ($IsWindows) { $serverBin = "$serverBin.bat" }
-    $process = Start-Process -FilePath $serverBin -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput (Join-Path $LogDir $LogName) -RedirectStandardError (Join-Path $LogDir "$LogName.err") -PassThru
+    $process = Start-ZlinkSampleProcess -FilePath $serverBin -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput (Join-Path $LogDir $LogName) -RedirectStandardError (Join-Path $LogDir "$LogName.err") -PassThru
     $Processes.Add($process)
     Register-ZlinkSampleProcessTree -Process $process
 }
@@ -207,12 +207,12 @@ try {
     $clientLog = Join-Path $LogDir "client.log"
     $clientErrorLog = Join-Path $LogDir "client.err.log"
     $lifecycleCompletionFile = Join-Path $RunDir "lifecycle-complete"
-    $clientProcess = Start-Process -FilePath $clientBin `
+    $clientProcess = Start-ZlinkSampleProcess -FilePath $clientBin `
         -ArgumentList @(
             "--api-url", "http://127.0.0.1:$ApiAHttpPort",
             "--lifecycle-completion-file", "`"$lifecycleCompletionFile`"") `
-        -WorkingDirectory $SampleDir -NoNewWindow `
-        -RedirectStandardOutput $clientLog -RedirectStandardError $clientErrorLog -PassThru
+        -WorkingDirectory $SampleDir `
+        -StandardOutputPath $clientLog -StandardErrorPath $clientErrorLog
     $Processes.Add($clientProcess)
     Register-ZlinkSampleProcessTree -Process $clientProcess
     $PlayLogs = Join-Path $LogDir "play-*.log"

@@ -50,7 +50,7 @@ function Get-AppBin {
 
 function Start-AppRole {
     param([string]$Project, [string]$Name, [string]$Config, [string]$LogName)
-    $process = Start-Process -FilePath (Get-AppBin $Project $Name) -ArgumentList @("--config", $Config) `
+    $process = Start-ZlinkSampleProcess -FilePath (Get-AppBin $Project $Name) -ArgumentList @("--config", $Config) `
         -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput (Join-Path $LogDir $LogName) `
         -RedirectStandardError (Join-Path $LogDir ($LogName + ".err.log")) -PassThru
     $Processes.Add($process)
@@ -166,8 +166,13 @@ try {
     Wait-LogCount "dispatch courier node 2 readiness" @($dispatchLog) "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-2" 1
 
     $clientLog = Join-Path $LogDir "client.log"
-    & (Get-AppBin "Client" "Client") --config $clientConfig *> $clientLog
-    if ($LASTEXITCODE -ne 0) { throw "Client run failed." }
+    $clientProcess = Start-ZlinkSampleProcess -FilePath (Get-AppBin "Client" "Client") `
+        -ArgumentList @("--config", $clientConfig) -WorkingDirectory $SampleDir `
+        -StandardOutputPath $clientLog -StandardErrorPath (Join-Path $LogDir "client.err.log")
+    $Processes.Add($clientProcess)
+    Register-ZlinkSampleProcessTree -Process $clientProcess
+    $clientProcess.WaitForExit()
+    if ($clientProcess.ExitCode -ne 0) { throw "Client run failed." }
     Wait-LogCount "client reassignment marker" @($clientLog) "deliverydispatch-reassignment=completed" 1
     Wait-LogCount "client server evidence marker" @($clientLog) "deliverydispatch-server-evidence=completed" 1
     Wait-LogCount "client completion marker" @($clientLog) "deliverydispatch=completed" 1

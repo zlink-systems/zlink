@@ -94,7 +94,7 @@ function Start-Role {
     param([string]$ScriptPath, [string]$LogName, [string]$ConfigPath)
     $logPath = Join-Path $LogDir $LogName
     $errorLogPath = Join-Path $LogDir ($LogName + ".err.log")
-    $process = Start-Process -FilePath $ScriptPath -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -PassThru
+    $process = Start-ZlinkSampleProcess -FilePath $ScriptPath -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -PassThru
     $Processes.Add($process)
     Register-ZlinkSampleProcessTree -Process $process
 }
@@ -217,10 +217,6 @@ try {
 
     Start-Role -ScriptPath (App-Bin "Server/OrderWorkflow" "OrderWorkflow") -LogName "workflow-a.log" -ConfigPath $workflowAConfig
     Start-Role -ScriptPath (App-Bin "Server/OrderWorkflow" "OrderWorkflow") -LogName "workflow-b.log" -ConfigPath $workflowBConfig
-    Wait-Port $workflowAChannel.Host $workflowAChannel.Port
-    Wait-Port $workflowBChannel.Host $workflowBChannel.Port
-    Wait-Port $workflowASpot.Host $workflowASpot.Port
-    Wait-Port $workflowBSpot.Host $workflowBSpot.Port
     Wait-Port $workflowARouter.Host $workflowARouter.Port
     Wait-Port $workflowBRouter.Host $workflowBRouter.Port
     Wait-Port $workflowAHttp.Host $workflowAHttp.Port
