@@ -5,6 +5,7 @@
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
+#include "runtime/diagnostics/mesh_request_metrics.hpp"
 
 #include <opentelemetry/metrics/async_instruments.h>
 #include "runtime/execution/state_lane.hpp"
@@ -72,6 +73,8 @@ struct raw_mesh_node_options_t
     std::shared_ptr<application_job_queue_t> application_jobs;
     std::shared_ptr<const std::atomic_bool> shutdown_admission_seal;
     dispatch_options_t dispatch;
+    std::vector<std::string> metric_channel_names;
+    std::string metric_source = "manual";
 };
 
 struct raw_mesh_byte_vector_less_t
@@ -114,6 +117,7 @@ class raw_mesh_connection_candidates_t
     disconnect_by_endpoint (std::string_view remote_endpoint);
     std::size_t size (
       const std::vector<std::uint8_t> &node_routing_id) const;
+    std::size_t peer_count () const noexcept { return _candidates.size (); }
     bool contains (const std::vector<std::uint8_t> &node_routing_id,
                    const std::vector<std::uint8_t> &connection_id) const;
     bool endpoint_in_use_by_other (
@@ -236,7 +240,8 @@ class raw_mesh_node_owner_t
     std::optional<foundation::call_id_t> register_local_operation (
       foundation::operation_registry_t::clock_t::time_point deadline,
       foundation::operation_registry_t::callback_t callback,
-      std::optional<foundation::call_id_t> requested = std::nullopt);
+      std::optional<foundation::call_id_t> requested = std::nullopt,
+      mesh_request_surface_t request_surface = mesh_request_surface_t::none);
     bool complete_local_operation (
       const foundation::call_id_t &operation,
       foundation::operation_registry_t::before_dispatch_t before_dispatch = {});
@@ -472,7 +477,8 @@ class raw_mesh_node_owner_t
       foundation::operation_registry_t::callback_t callback,
       const std::optional<std::string> &channel_name,
       std::optional<std::uint64_t> correlation,
-      bool target_claimed = false);
+      bool target_claimed,
+      mesh_request_metric_t request_metric);
     task_t<bool> send_with_header (
       const std::vector<std::uint8_t> &target_routing_id,
       std::vector<std::uint8_t> header,
@@ -508,7 +514,8 @@ class raw_mesh_node_owner_t
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback,
       std::optional<std::uint64_t> correlation = std::nullopt,
-      bool target_claimed = false);
+      bool target_claimed = false,
+      mesh_request_metric_t request_metric = {});
     task_t<bool> request_infrastructure (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
@@ -556,6 +563,15 @@ class raw_mesh_node_owner_t
     service_topology_registry_t _topology;
     service_liveness_registry_t _liveness;
     service_mailbox_t _mailbox;
+    std::shared_ptr<mesh_request_metrics_t> _request_metrics;
+    struct peer_metric_registration_t
+    {
+        raw_mesh_node_owner_t *owner = nullptr;
+        std::size_t index = 0;
+        opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument> instrument;
+    };
+    std::array<peer_metric_registration_t, 4> _peer_metrics;
+    static void publish_peer_metrics (opentelemetry::metrics::ObserverResult result, void *state);
     std::array<std::atomic_uint64_t, 4> _inbound_drops{};
     opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument> _drop_metric;
     static void publish_drop_metrics (opentelemetry::metrics::ObserverResult result, void *state);

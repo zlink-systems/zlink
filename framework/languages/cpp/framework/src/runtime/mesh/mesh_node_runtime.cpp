@@ -801,6 +801,15 @@ void mesh_node_runtime_t::start ()
         return spot_state->drain_flag;
     }).get ();
     node_options.mesh.dispatch = spot_state->dispatch;
+    _state->lane.run ([&] {
+        for (const auto &[name, _] : _state->channels)
+            node_options.mesh.metric_channel_names.push_back (name);
+        const bool manual = !_state->peer_connections.empty ()
+                            || !spot_snapshot.router_manual_connections.empty ()
+                            || !spot_snapshot.router_manual_rid_connections.empty ();
+        node_options.mesh.metric_source = _user_spot_store ? (manual ? "manual_and_redis" : "redis")
+                                                         : "manual";
+    }).get ();
     auto node = std::make_shared<host::public_host_runtime_t> (std::move (node_options));
     /* flow-correlation §4: thread the flow-capture provider so the host's
      * cold decode paths skip flow validation/materialization at level Off. */

@@ -899,6 +899,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_link_libraries(test_cpp_framework_service_wire_codec PRIVATE
     zlink::cpp
     nlohmann_json::nlohmann_json
+    opentelemetry-cpp::api
     Threads::Threads)
   zlink_framework_cpp_enable_test_assertions(test_cpp_framework_service_wire_codec)
   add_test(NAME test_cpp_framework_service_wire_codec
@@ -1671,6 +1672,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_monitoring.cpp
     "framework-unit;framework-regression;framework-observability;metrics")
   target_link_libraries(test_cpp_framework_monitoring PRIVATE opentelemetry-cpp::metrics)
+  add_zlink_framework_test(
+    test_cpp_framework_mesh_metrics
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_metrics.cpp
+    "framework-unit;framework-regression;framework-observability;metrics")
+  target_link_libraries(test_cpp_framework_mesh_metrics PRIVATE
+    opentelemetry-cpp::metrics)
+  target_include_directories(test_cpp_framework_mesh_metrics PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp
