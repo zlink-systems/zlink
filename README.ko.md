@@ -281,7 +281,7 @@ Framework sample은 단순 API 호출뿐 아니라 여러 역할의 server와 cl
 
 ## 지원 플랫폼
 
-Core는 Linux와 macOS에 x64/ARM64 빌드 경로를 제공하고 Windows에는 x64 빌드 경로를 제공합니다. Binding과
+Core는 Linux에 x64/ARM64, macOS에 ARM64, Windows에 x64 빌드 경로를 제공합니다. Binding과
 Framework의 지원 runtime, package 형식과 플랫폼 제약은 각 언어 문서에서
 확인하세요.
 

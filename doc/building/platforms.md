@@ -7,7 +7,7 @@
 | Platform | Architecture | Status |
 |----------|:------------:|:------:|
 | Linux | x64, ARM64 | Stable |
-| macOS | x64, ARM64 | Stable |
+| macOS | ARM64 | Stable |
 | Windows | x64 | Stable |
 
 ## 2. Compiler Requirements
