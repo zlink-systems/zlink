@@ -315,6 +315,7 @@ handler_registry_t::invoke_filters_async (handler_dispatch_kind_t dispatch_kind,
                                           const message_context_t &context,
                                           terminal_invoker_t terminal) const
 {
+    const detail::ambient_context_scope_t invocation (nullptr, this);
     const auto filters = _state->filters;
     if (filters->empty ()) {
         try {

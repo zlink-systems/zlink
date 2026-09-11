@@ -1234,6 +1234,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-contract;framework-unit;async"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_provider_task
+    tests/Zlink.Framework.ContractTests/test_cpp_framework_provider_task.cpp)
+  target_link_libraries(test_cpp_framework_provider_task PRIVATE
+    zlink::framework_provider_abstractions Threads::Threads)
+  add_test(NAME test_cpp_framework_provider_task COMMAND test_cpp_framework_provider_task)
+  set_tests_properties(test_cpp_framework_provider_task PROPERTIES
+    LABELS "framework-contract;async"
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_sample_parity
     tests/Zlink.Framework.ContractTests/test_cpp_framework_sample_parity.cpp)
   target_link_libraries(test_cpp_framework_sample_parity PRIVATE
@@ -1383,6 +1392,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   set_tests_properties(test_cpp_framework_http_integration PROPERTIES
     LABELS "framework-integration;framework-http;framework-http-e2e;http"
     TIMEOUT 30)
+  add_test(NAME test_cpp_framework_http_sync_submit
+    COMMAND test_cpp_framework_app_host --http-submit-only)
+  set_tests_properties(test_cpp_framework_http_sync_submit PROPERTIES
+    LABELS "framework-unit;framework-regression;framework-http"
+    TIMEOUT 30)
   if(ZLINK_FRAMEWORK_CPP_REQUIRE_HTTP_PERF_REPORT)
     add_test(NAME test_cpp_framework_http_perf_gate
       COMMAND ${CMAKE_COMMAND}
@@ -1408,6 +1422,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   set_tests_properties(
     test_cpp_framework_app_host
     test_cpp_framework_http_integration
+    test_cpp_framework_http_sync_submit
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_framework_http_ports)
   add_zlink_framework_test(
@@ -1455,6 +1470,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   set_tests_properties(test_cpp_framework_state_lane PROPERTIES
     LABELS "framework-unit;framework-regression;execution"
     TIMEOUT 30)
+  add_zlink_framework_test(
+    test_cpp_framework_sync_submit
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_sync_submit.cpp
+    "framework-unit;framework-regression;execution;messaging")
+  target_link_libraries(test_cpp_framework_sync_submit PRIVATE GTest::gtest_main)
+  target_include_directories(test_cpp_framework_sync_submit PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp
