@@ -11,7 +11,7 @@ Typed request의 reified entry method는 wrapper를 만들 때 `KClass<TReply>.j
 
 동기 blocking 종결자는 Kotlin 전용 wrapper를 추가하지 않고 Java 표면의 `submit_sync()`를 그대로
 노출한다. blocking 호출은 suspend가 아니므로 `await()`로 감싸지 않으며, application thread 전용이고
-runtime 실행 문맥에서 부르면 `InvalidOperation`으로 실패한다([Submit과 완료 §4 F2-a](../../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)).
+runtime 실행 문맥에서 부르면 `InvalidOperation`으로 실패한다([Submit과 완료 §4 F2-a](../../../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)).
 
 Kotlin filter는 Java runtime과 같은 적용 범위를 사용한다. RouteMesh·ClientServer
 Channel send/request, Node direct send/request와 classic fanout 구독 handler에는
