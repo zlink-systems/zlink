@@ -1467,7 +1467,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_zlink_framework_test(
     test_cpp_framework_execution
     tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
-    "framework-unit;framework-regression;execution;spot;yield")
+    "framework-unit;framework-contract;framework-regression;execution;spot;yield")
   target_include_directories(test_cpp_framework_execution PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_execution PRIVATE
