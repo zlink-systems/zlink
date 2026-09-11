@@ -200,7 +200,7 @@ inline int recv_whole_envelope (void *socket_,
     }
 
     if (rc != ZLINK_RECV_OK)
-        return use_router_recv_ ? -1 : rc;
+        return rc;
     if (part_count == 0 || part_count > envelope_.native_capacity ()) {
         errno = EPROTO;
         return -1;
