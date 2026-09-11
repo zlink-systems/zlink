@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 360" width="900" height="360"
+     role="img" aria-label="zlink layer stack. Your business logic (Spot, Actor, handler) and ZLink Framework both run inside the application host - ASP.NET Core, Spring Boot, NestJS, or the C++ host - and ZLink is registered into it. Below the public API boundary sits the internal implementation: the per-language bindings backend adapter, the native zlink Core C API with its socket patterns, and the transports tcp, ipc, inproc, tls, ws, wss." font-family="'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',system-ui,sans-serif">
+  <title>zlink layer stack</title>
+
+  <rect x="0" y="0" width="900" height="360" fill="#FCFCFD"/>
+
+  <text x="390" y="22" text-anchor="middle" font-size="13.5" font-weight="700" fill="#46535F">Your code and ZLink Framework run in your host — below the API is internal implementation</text>
+  <text x="390" y="41" text-anchor="middle" font-size="10.5" fill="#6E7B87">One native Core, wrapped in per-language layers, registered into the application host you already use</text>
+
+  <!-- application host: the container, not a layer underneath -->
+  <rect x="40" y="56" width="700" height="136" rx="7" fill="#F2F4F7" stroke="#46535F" stroke-width="1.6"/>
+  <text x="54" y="74" font-size="10" font-weight="600" fill="#6E7B87">Application host — ASP.NET Core · Spring Boot · NestJS · C++ host</text>
+
+  <rect x="56" y="82" width="668" height="36" rx="5" fill="none" stroke="#46535F" stroke-width="1.8"/>
+  <text x="390" y="105" text-anchor="middle" font-size="13" font-weight="700" fill="#46535F">Business logic — Spot · Actor · handler</text>
+
+  <path d="M390,118 L390,130" stroke="#0E5C6B" stroke-width="1.4" stroke-dasharray="3 3"/>
+
+  <rect x="56" y="130" width="668" height="52" rx="6" fill="#E7EEF0" stroke="#0E5C6B" stroke-width="2.2"/>
+  <text x="390" y="152" text-anchor="middle" font-size="13" font-weight="700" fill="#0E5C6B">ZLink Framework (.NET · C++ · Java · Kotlin · Node)</text>
+  <text x="390" y="170" text-anchor="middle" font-size="10.5" fill="#0E5C6B">RouteMesh · SPOT · actor · STREAM · location · monitoring</text>
+
+  <text x="752" y="148" font-size="9.5" fill="#0E5C6B">registered via</text>
+  <text x="752" y="161" font-size="9.5" font-weight="600" fill="#0E5C6B">AddZLinkFramework</text>
+
+  <!-- public API boundary -->
+  <text x="40" y="207" font-size="9.5" fill="#6E7B87">public API — everything below is internal implementation</text>
+  <path d="M40,214 L740,214" stroke="#6E7B87" stroke-width="1" stroke-dasharray="4 4"/>
+
+  <rect x="40" y="224" width="700" height="44" rx="5" fill="#EDF0F3" stroke="#6E7B87" stroke-width="1.2"/>
+  <text x="390" y="242" text-anchor="middle" font-size="11.5" font-weight="600" fill="#6E7B87">bindings — backend adapter (c · cpp · dotnet · node · java · go · python · rust)</text>
+  <text x="390" y="258" text-anchor="middle" font-size="9.5" font-family="'IBM Plex Mono','SFMono-Regular',Consolas,monospace" fill="#6E7B87">language-native API and resource lifetime model over the C API</text>
+
+  <rect x="40" y="276" width="700" height="44" rx="5" fill="#EDF0F3" stroke="#6E7B87" stroke-width="1.2"/>
+  <text x="390" y="294" text-anchor="middle" font-size="11.5" font-weight="600" fill="#6E7B87">zlink Core (C API, native)</text>
+  <text x="390" y="310" text-anchor="middle" font-size="9.5" font-family="'IBM Plex Mono','SFMono-Regular',Consolas,monospace" fill="#6E7B87">PAIR · PUB/SUB · XPUB/XSUB · DEALER/ROUTER · STREAM</text>
+
+  <rect x="40" y="328" width="700" height="26" rx="5" fill="none" stroke="#DFE4E9" stroke-width="1.2"/>
+  <text x="390" y="345" text-anchor="middle" font-size="9.5" font-family="'IBM Plex Mono','SFMono-Regular',Consolas,monospace" fill="#6E7B87">tcp · ipc · inproc · tls · ws · wss</text>
+
+  <path d="M752,224 h7 v130 h-7" fill="none" stroke="#6E7B87" stroke-width="1.4"/>
+  <text x="766" y="284" font-size="10" font-weight="600" fill="#6E7B87">internal</text>
+  <text x="766" y="298" font-size="10" font-weight="600" fill="#6E7B87">impl.</text>
+</svg>

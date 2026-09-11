@@ -29,19 +29,10 @@ own, and each one adds a level of abstraction over the one below it.
 | [`bindings/`](./bindings/) | Language-native APIs and resource lifetime models over Core | C++, .NET, Java, Node.js, Python, Go, Rust |
 | [`framework/`](./framework/) | Typed handlers, routing, stateful runtime units, and the location runtime | C++, .NET, JVM (Java/Kotlin), Node.js |
 
-```text
-Application
-    │
-ZLink Framework
-  Channel · RouteMesh · Spot · Actor · STREAM
-    │
-Language Binding
-    │
-zlink Core
-  PAIR · PUB/SUB · XPUB/XSUB · DEALER/ROUTER · STREAM
-    │
-tcp · ipc · inproc · tls · ws · wss
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./doc/assets/layer-stack-dark.svg">
+  <img alt="Your business logic and ZLink Framework run inside the application host; below the public API sit the per-language bindings, the native zlink Core C API, and the transports." src="./doc/assets/layer-stack-light.svg" width="900">
+</picture>
 
 **Core** is a native messaging engine derived from
 [libzmq](https://github.com/zeromq/libzmq) v4.3.5 and rebuilt around Boost.Asio
