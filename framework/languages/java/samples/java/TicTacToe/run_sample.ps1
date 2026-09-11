@@ -178,6 +178,9 @@ try {
     Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
         "--settings-file",
         "standalone.settings.gradle.kts",
+        "--no-daemon",
+        "--no-parallel",
+        "--max-workers=1",
         ":Server:installDist",
         ":Client:installDist",
         "--quiet")

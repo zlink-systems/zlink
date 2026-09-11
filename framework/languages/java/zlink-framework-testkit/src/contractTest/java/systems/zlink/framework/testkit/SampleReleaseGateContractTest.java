@@ -461,6 +461,17 @@ final class SampleReleaseGateContractTest {
     }
 
     @Test
+    void javaTicTacToePowerShellBuildDoesNotLeaveGradleWorkersHoldingCapturePipes()
+            throws IOException {
+        String runner = Files.readString(
+            samplesRoot().resolve("java/TicTacToe/run_sample.ps1"));
+        for (String argument : List.of("--no-daemon", "--no-parallel", "--max-workers=1")) {
+            assertTrue(runner.contains("\"" + argument + "\""),
+                "Java TicTacToe PowerShell build must use " + argument);
+        }
+    }
+
+    @Test
     void commonSampleMessageNamesRemainVisibleInJavaAndKotlinSources() throws IOException {
         Path javaTicTacToe = samplesRoot().resolve("java/TicTacToe");
         Path kotlinTicTacToe = samplesRoot().resolve("kotlin/TicTacToe");
