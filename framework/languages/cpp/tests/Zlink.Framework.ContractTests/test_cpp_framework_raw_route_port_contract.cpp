@@ -7,6 +7,7 @@
 
 #include <zlink.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <atomic>
 #include <chrono>
@@ -190,6 +191,133 @@ void verify_completion_only_wait_keeps_ordinary_record_unclaimed ()
     monitor.close ();
 }
 
+void verify_ok_send_submissions_keep_unfinished_depth_at_zero ()
+{
+    zlink::context_t context;
+    context.options ().auto_hwm_enabled (false);
+    zlink::router_socket_t source (context), target (context);
+    zlink::dealer_socket_t dealer (context);
+    const auto source_rid = zlink::routing_id_t::from ("ok-depth-source");
+    const auto target_rid = zlink::routing_id_t::from ("ok-depth-target");
+    const auto dealer_rid = zlink::routing_id_t::from ("ok-depth-dealer");
+    source.set_routing_id (source_rid);
+    target.set_routing_id (target_rid);
+    dealer.set_routing_id (dealer_rid);
+    for (auto *socket : {&source, &target}) {
+        socket->options ().linger (0ms);
+        socket->options ().send_hwm (
+          zlink::byte_count_t::bytes (16u * 1024u * 1024u));
+        socket->options ().recv_hwm (
+          zlink::byte_count_t::bytes (16u * 1024u * 1024u));
+    }
+    dealer.options ().linger (0ms);
+    dealer.options ().send_hwm (
+      zlink::byte_count_t::bytes (16u * 1024u * 1024u));
+    dealer.options ().recv_hwm (
+      zlink::byte_count_t::bytes (16u * 1024u * 1024u));
+    target.bind ("inproc://framework-ok-send-depth");
+    auto monitor = source.monitor_open (zlink::monitor_event::connection_ready);
+    auto dealer_monitor =
+      dealer.monitor_open (zlink::monitor_event::connection_ready);
+    source.options ().connect_routing_id (target_rid);
+    source.connect ("inproc://framework-ok-send-depth");
+    dealer.connect ("inproc://framework-ok-send-depth");
+    assert (wait_for_monitor_event (
+      monitor, zlink::monitor_event::connection_ready, 2s));
+    assert (wait_for_monitor_event (
+      dealer_monitor, zlink::monitor_event::connection_ready, 2s));
+
+    backend::raw_route_port_t source_port (source);
+    backend::raw_dealer_port_t dealer_port (dealer);
+    std::size_t unfinished = 0;
+    std::size_t max_unfinished = 0;
+    const auto record_depth = [&] (bool ready) {
+        if (!ready)
+            ++unfinished;
+        max_unfinished = std::max (max_unfinished, unfinished);
+    };
+    constexpr std::size_t submission_count = 64;
+    for (std::size_t index = 0; index < submission_count; ++index) {
+        auto routed_result = source_port.send_result (
+          target_rid.to_bytes (), request_parts ());
+        record_depth (routed_result.await_ready ());
+        assert (routed_result.await_ready ());
+        assert (routed_result.result ().value () == zlink::submit_result_t::ok);
+
+        auto routed = source_port.send (
+          target_rid.to_bytes (), request_parts ());
+        record_depth (routed.await_ready ());
+        assert (routed.await_ready ());
+        assert (routed.result ().value ());
+
+        auto dealer_result = dealer_port.send (request_parts (), 2s);
+        record_depth (dealer_result.await_ready ());
+        assert (dealer_result.await_ready ());
+        assert (dealer_result.result ().value () == zlink::submit_result_t::ok);
+
+        auto dealer_sent = dealer_port.send (request_parts ());
+        record_depth (dealer_sent.await_ready ());
+        assert (dealer_sent.await_ready ());
+        assert (dealer_sent.result ().value ());
+    }
+    // An OK snapshot means the local transport queue already owns the record;
+    // no Framework admission observer may remain in flight for that submit.
+    assert (max_unfinished == 0);
+    assert (unfinished == 0);
+
+    dealer_port.close ();
+    source_port.close ();
+    dealer_monitor.close ();
+    monitor.close ();
+}
+
+void verify_backpressured_send_waits_for_admission ()
+{
+    zlink::context_t context;
+    context.options ().auto_hwm_enabled (false);
+    zlink::dealer_socket_t source (context);
+    zlink::router_socket_t target (context);
+    const auto source_rid = zlink::routing_id_t::from ("wait-source");
+    source.set_routing_id (source_rid);
+    source.options ().linger (0ms);
+    target.options ().linger (0ms);
+    source.options ().send_hwm (zlink::byte_count_t::bytes (16));
+    target.options ().recv_hwm (zlink::byte_count_t::bytes (16));
+    target.set_receive_flow_state (zlink::receive_flow_state_t::paused);
+    target.bind ("inproc://framework-backpressured-send-wait");
+    auto monitor = source.monitor_open (zlink::monitor_event::connection_ready);
+    source.connect ("inproc://framework-backpressured-send-wait");
+    assert (wait_for_monitor_event (
+      monitor, zlink::monitor_event::connection_ready, 2s));
+
+    zlink::poller_t source_poller;
+    backend::raw_dealer_port_t source_port (
+      source, nullptr, &source_poller);
+    std::optional<zlink::framework::task_t<zlink::submit_result_t>> waiting;
+    for (std::size_t index = 0; index < 256 && !waiting; ++index) {
+        auto sent = source_port.send (request_parts (), 2s);
+        if (!sent.await_ready ()) {
+            waiting.emplace (std::move (sent));
+        } else {
+            assert (sent.result ().value () == zlink::submit_result_t::ok);
+        }
+    }
+    assert (waiting);
+
+    target.set_receive_flow_state (zlink::receive_flow_state_t::running);
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    while (!waiting->await_ready ()
+           && std::chrono::steady_clock::now () < deadline) {
+        zlink::poll_event_t event;
+        (void) source_poller.wait (&event, 1, 10ms);
+    }
+    assert (waiting->await_ready ());
+    assert (waiting->result ().value () == zlink::submit_result_t::ok);
+
+    source_port.close ();
+    monitor.close ();
+}
+
 void verify_missing_rid_is_initial_not_connected_without_wait_token ()
 {
     zlink::context_t context;
@@ -333,6 +461,8 @@ int main ()
 {
     verify_binding_completion_bypasses_handler_executor ();
     verify_completion_only_wait_keeps_ordinary_record_unclaimed ();
+    verify_ok_send_submissions_keep_unfinished_depth_at_zero ();
+    verify_backpressured_send_waits_for_admission ();
     verify_handover_request_completion_is_replayable ();
     verify_missing_rid_is_initial_not_connected_without_wait_token ();
     verify_disconnect_rid_ends_issued_wait_token_with_enoent ();

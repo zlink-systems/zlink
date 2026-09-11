@@ -1096,6 +1096,10 @@ void verify_mesh_stop_drains_admitted_request_completion ()
     }
     assert (delayed_reply);
 
+    // The test owns the poller-driving reference until completion is
+    // observed; stop() may release the mesh's reference before the async
+    // waiter's future is published.
+    const auto completion_owner = source.native_node ().shared_from_this ();
     auto completion = std::async (
       std::launch::async,
       [&] {
@@ -1121,11 +1125,13 @@ void verify_mesh_stop_drains_admitted_request_completion ()
     const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
     while (completion.wait_for (0ms) != std::future_status::ready
            && std::chrono::steady_clock::now () < completion_deadline) {
-        // E5 must settle while the host dispatch thread is not running.
-        (void) source.native_node ().transport ().pump_one (
-          std::chrono::steady_clock::now (), false).result ().value ();
-        (void) target.dispatch_ready (discard);
-        std::this_thread::sleep_for (1ms);
+        // PollCompletion transfers drain ownership to the existing poller
+        // (binding async execution §4). E5 needs that wait, but no host
+        // dispatch turn or ordinary receive. The retained owner remains safe
+        // if stop closes its port concurrently with this wait.
+        (void) completion_owner->transport ().wait_for_activity (std::max (
+          0ms, std::chrono::ceil<std::chrono::milliseconds> (
+                 completion_deadline - std::chrono::steady_clock::now ())), false);
     }
     assert (completion.wait_for (0ms) == std::future_status::ready);
     const auto settled = completion.get ();
@@ -1134,8 +1140,8 @@ void verify_mesh_stop_drains_admitted_request_completion ()
             == static_cast<int> (zlink::request_result_t::ok));
     assert (settled.value ().parts.size () == 1);
     assert (settled.value ().parts.front ().to_string () == "settled");
-    assert (stopped.wait_for (1s) == std::future_status::ready);
     stopped.get ();
+    assert (!completion_owner->transport ().started ());
     target.stop ();
 }
 
@@ -3868,6 +3874,13 @@ void verify_public_host_batches_with_finite_permits ()
 
 void verify_public_host_fifo_drains_before_liveness_probe ()
 {
+    using clock_t = mesh::service_liveness_registry_t::clock_t;
+    const auto wait_for_input = [] (mesh::raw_mesh_node_owner_t &transport,
+                                    clock_t::time_point deadline) {
+        (void) transport.wait_for_activity (std::max (
+          0ms, std::chrono::ceil<std::chrono::milliseconds> (
+                 deadline - clock_t::now ())));
+    };
     auto source = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{
         mesh::raw_mesh_node_options_t{
@@ -3888,20 +3901,23 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
                                    std::vector<zlink::message_t>) {};
     const auto connect_deadline =
       mesh::service_liveness_registry_t::clock_t::now () + 5s;
-    while ((!source->transport ().topology ().peer (
-               target_status.routing_id ().to_bytes ())
-             || !target->transport ().topology ().peer (
-               source_status.routing_id ().to_bytes ()))
-           && mesh::service_liveness_registry_t::clock_t::now ()
-                < connect_deadline) {
-        await_task (source->dispatch_ready (noop_dispatch));
-        await_task (target->dispatch_ready (noop_dispatch));
-        std::this_thread::sleep_for (1ms);
-    }
-    assert (source->transport ().topology ().peer (
-      target_status.routing_id ().to_bytes ()));
-    assert (target->transport ().topology ().peer (
-      source_status.routing_id ().to_bytes ()));
+    const auto admit = [&] (host::public_host_runtime_t &runtime,
+                            const zlink::routing_id_t &peer) {
+        while (!runtime.transport ().topology ().peer (peer.to_bytes ())
+               && clock_t::now () < connect_deadline) {
+            await_task (runtime.dispatch_ready (noop_dispatch));
+            if (!runtime.transport ().topology ().peer (peer.to_bytes ()))
+                wait_for_input (runtime.transport (), connect_deadline);
+        }
+        return runtime.transport ().topology ().peer (peer.to_bytes ()).has_value ();
+    };
+    // Each endpoint must keep servicing its handshake while the other waits
+    // for input. A wait on one endpoint cannot drive the other's receive turn.
+    auto source_admitted = std::async (std::launch::async, [&] {
+        return admit (*source, target_status.routing_id ());
+    });
+    assert (admit (*target, source_status.routing_id ()));
+    assert (source_admitted.get ());
 
     const std::array values{"fifo-1", "fifo-2", "fifo-3", "fifo-4"};
     for (const auto value : values) {
@@ -3915,8 +3931,9 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
 
     // Submit the probe after the application records.  The target must
     // consume the transport FIFO's application prefix before seeing it.
-    const auto probe_time =
-      mesh::service_liveness_registry_t::clock_t::now () + 5s;
+    // Advance the source's logical time to its exact probe deadline. From
+    // here on only explicit timestamps drive its liveness state.
+    const auto probe_time = source->transport ().liveness ().next_activity ().value ();
     const auto tick = await_task (source->transport ().tick_liveness (
       probe_time));
     assert (tick.probes.size () == 1);
@@ -3928,6 +3945,7 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
       mesh::service_liveness_registry_t::clock_t::now () + 5s;
     while (consumed.size () < values.size ()
            && mesh::service_liveness_registry_t::clock_t::now () < io_deadline) {
+        const auto before = consumed.size ();
         await_task (target->dispatch_ready (
           [&] (const host::ready_record_t &owner, const host::receive_record_t &record,
                std::vector<zlink::message_t> parts) {
@@ -3935,43 +3953,86 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
               assert (record.kind == host::record_kind_t::node_send);
               assert (parts.size () == 1);
               consumed.push_back (parts.front ().to_string ());
+          }, true, [&] {
+              // One receive permit advances one FIFO record. Admission may
+              // precede the prefix, but no control may overtake its remainder.
+              if (before != 0)
+                  assert (consumed.size () == before + 1);
+              return false;
           }));
+        assert (consumed.size () <= before + 1);
+        if (consumed.size () == before)
+            wait_for_input (target->transport (), io_deadline);
     }
     assert (consumed.size () == values.size ());
     for (std::size_t index = 0; index != values.size (); ++index)
         assert (consumed[index] == values[index]);
 
+    // Queue a different infrastructure record ahead of the ACK even when
+    // admission happened to finish early. The source must distinguish it.
+    const auto target_probe_time = target->transport ().liveness ().next_activity ().value ();
+    const auto target_tick = await_task (target->transport ().tick_liveness (
+      target_probe_time));
+    assert (target_tick.probes.size () == 1);
+
     while (probe_pump != mesh::raw_mesh_pump_result_t::infrastructure
            && mesh::service_liveness_registry_t::clock_t::now ()
                 < io_deadline) {
-        probe_pump = await_task (target->transport ().pump_one (probe_time));
+        probe_pump = await_task (target->transport ().pump_one (target_probe_time));
         assert (probe_pump != mesh::raw_mesh_pump_result_t::protocol_error);
         if (probe_pump == mesh::raw_mesh_pump_result_t::no_data)
-            std::this_thread::sleep_for (1ms);
+            wait_for_input (target->transport (), io_deadline);
     }
     assert (probe_pump == mesh::raw_mesh_pump_result_t::infrastructure);
 
-    mesh::raw_mesh_pump_result_t ack_pump =
+    // The ACK and this marker share the target-to-source FIFO. A generic
+    // infrastructure result could instead be a late admission record; only
+    // receiving this marker proves that the preceding ACK was processed.
+    assert (target->send_to_node (
+              source_status.routing_id (),
+              {zlink::message_t::from (std::string ("after-probe-ack"))})
+              .result ().value () == zlink::submit_result_t::ok);
+    mesh::raw_mesh_pump_result_t ack_barrier =
       mesh::raw_mesh_pump_result_t::no_data;
-    while (ack_pump != mesh::raw_mesh_pump_result_t::infrastructure
+    while (ack_barrier != mesh::raw_mesh_pump_result_t::application
            && mesh::service_liveness_registry_t::clock_t::now ()
                 < io_deadline) {
-        ack_pump = await_task (source->transport ().pump_one (probe_time));
-        assert (ack_pump != mesh::raw_mesh_pump_result_t::protocol_error);
-        if (ack_pump == mesh::raw_mesh_pump_result_t::no_data)
-            std::this_thread::sleep_for (1ms);
+        ack_barrier = await_task (source->transport ().pump_one (probe_time));
+        assert (ack_barrier != mesh::raw_mesh_pump_result_t::protocol_error);
+        if (ack_barrier == mesh::raw_mesh_pump_result_t::no_data)
+            wait_for_input (source->transport (), io_deadline);
     }
-    assert (ack_pump == mesh::raw_mesh_pump_result_t::infrastructure);
+    assert (ack_barrier == mesh::raw_mesh_pump_result_t::application);
+    auto marker = source->transport ().mailbox ().try_claim (
+      mesh::service_mailbox_domain_t::application, 1, 1024);
+    assert (marker && marker->records.size () == 1);
+    const auto &record = marker->records.front ();
+    assert (record.source_routing_id == target_status.routing_id ().to_bytes ());
+    assert (record.parts.size () == 2);
+    const auto marker_parts = protocol::decode_application_parts (
+      protocol::decode_application_payload (record.parts.back ()));
+    assert (marker_parts.size () == 1);
+    assert (marker_parts.front ().to_string () == "after-probe-ack");
+    assert (source->transport ().mailbox ().release (*marker));
 
     // The ACK refreshes the unchanged 15 second peer deadline.  Check just
     // before that virtual deadline without adding a product timeout.
     const auto after_ack = await_task (source->transport ().tick_liveness (
       probe_time + 15s - 1ms));
     assert (after_ack.timed_out_nodes.empty ());
+    assert (after_ack.probes.size () == 1);
+    assert (after_ack.probes.front ().probe_id != tick.probes.front ().probe_id);
     assert (source->transport ().topology ().peer (
       target_status.routing_id ().to_bytes ()));
     assert (target->transport ().topology ().peer (
       source_status.routing_id ().to_bytes ()));
+
+    const auto expired = await_task (source->transport ().tick_liveness (
+      probe_time + 15s));
+    assert (expired.timed_out_nodes.size () == 1);
+    assert (expired.timed_out_nodes.front () == target_status.routing_id ().to_bytes ());
+    assert (!source->transport ().topology ().peer (
+      target_status.routing_id ().to_bytes ()));
 
     source->close ();
     target->close ();
@@ -4063,14 +4124,18 @@ void verify_pending_relocation_management_bounds_dispatch_wait ()
       relay, source, std::nullopt,
       [] (protocol::reply_relay_ack_status_t) { return true; },
       [] { return true; }}));
-    // Consume the registration wake so the second wait is bounded solely
-    // by the relay owner's immediate management deadline.
-    (void) host->wait_for_dispatch_activity (0ms, false);
-    auto due = std::async (std::launch::async, [&] {
-        return host->wait_for_dispatch_activity (5s, false);
-    });
-    assert (due.wait_for (500ms) == std::future_status::ready);
-    assert (!due.get ());
+    assert (host->relocation_wire ().pending_terminal_relays () == 1);
+    assert (host->relocation_wire ().next_activity ()
+            == stateful::raw_relocation_replay_coordinator_t::clock_t::time_point::min ());
+    // A zero-time poll can run before Core publishes the registration wake.
+    // Wait on the transport to consume that exact notification, independently
+    // of the host's already-due relocation deadline.
+    assert (host->transport ().wait_for_activity (-1ms, false));
+    // An unbounded caller wait must become nonblocking at the due deadline.
+    // Without the bound this hangs and the existing CTest watchdog fails it;
+    // there is no worker scheduling race or elapsed-time assertion.
+    assert (!host->wait_for_dispatch_activity (-1ms, false));
+    assert (host->relocation_wire ().pending_terminal_relays () == 1);
     host->close ();
 }
 
@@ -4120,21 +4185,18 @@ void verify_failed_relay_persistence_rearms_dispatch_wait ()
         assert (!host->relocation_wire ().next_activity ());
         // Drain the original registration wake while persistence has made
         // the relay temporarily ineligible for retry.
-        (void) host->wait_for_dispatch_activity (0ms, false);
-        auto waking = std::async (std::launch::async, [&] {
-            return host->wait_for_dispatch_activity (-1ms, false);
-        });
-        assert (waking.wait_for (20ms) == std::future_status::timeout);
+        assert (host->transport ().wait_for_activity (-1ms, false));
+        assert (!host->relocation_wire ().next_activity ());
         release_persist.set_value ();
         assert (!persisting.get ());
-        assert (host->relocation_wire ().next_activity ());
-        const auto woke = waking.wait_for (500ms);
-        // Always release the waiter before asserting, so a failing regression
-        // remains bounded without using a product timer or a polling loop.
-        host->signal_dispatch_activity ();
-        (void) waking.get ();
+        assert (host->relocation_wire ().next_activity ()
+                == stateful::raw_relocation_replay_coordinator_t::clock_t::time_point::min ());
+        // Observe the new notification separately from the due deadline:
+        // either alone must not stand in for the other.
+        assert (host->transport ().wait_for_activity (-1ms, false));
+        assert (!host->wait_for_dispatch_activity (-1ms, false));
+        assert (host->relocation_wire ().pending_terminal_relays () == 1);
         host->close ();
-        assert (woke == std::future_status::ready);
     }
 }
 
@@ -4265,25 +4327,21 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
     const auto dispatch = [] (const host::ready_record_t &,
                               const host::receive_record_t &,
                               std::vector<zlink::message_t>) {};
-    (void) local->dispatch_ready (dispatch);
+    // Observe the seal-registration wake before the dispatch turn can
+    // consume it. The turn must leave the active ingress unfinished.
+    assert (local->transport ().wait_for_activity (-1ms, false));
+    await_task (local->dispatch_ready (dispatch));
     assert (completed.wait_for (0ms) != std::future_status::ready);
     assert (journal_capture_count == 0);
 
-    (void) local->wait_for_dispatch_activity (0ms, false);
-    auto wake = std::async (std::launch::async, [&] {
-        return local->wait_for_dispatch_activity (5s, false);
-    });
-    assert (wake.wait_for (20ms) == std::future_status::timeout);
     assert (local->sessions ().complete_inbound (*ingress)
             == stateful::stateful_error_t::none);
-    assert (wake.wait_for (500ms) == std::future_status::ready);
-    assert (wake.get ());
-    const auto deadline = std::chrono::steady_clock::now () + 2s;
-    while (completed.wait_for (0ms) != std::future_status::ready
-           && std::chrono::steady_clock::now () < deadline) {
-        (void) local->dispatch_ready (dispatch);
-        std::this_thread::sleep_for (1ms);
-    }
+    assert (local->wait_for_dispatch_activity (-1ms, false));
+    // Completion of the ingress only wakes management. Advance that turn
+    // explicitly before observing seal completion and journal capture.
+    assert (completed.wait_for (0ms) != std::future_status::ready);
+    assert (journal_capture_count == 0);
+    await_task (local->dispatch_ready (dispatch));
     assert (completed.wait_for (0ms) == std::future_status::ready);
     const auto result = completed.get ();
     assert (result.first
@@ -4311,26 +4369,16 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
        status.routing_id ().to_bytes (),
        status.lifecycle_generation (),
        0}};
-    (void) local->wait_for_dispatch_activity (0ms, false);
-    auto route_wake = std::async (std::launch::async, [&] {
-        return local->wait_for_dispatch_activity (5s, false);
-    });
-    assert (route_wake.wait_for (20ms) == std::future_status::timeout);
     assert (local->route_session_remote (status.routing_id (), route)
               .result ()
               .value ());
-    assert (route_wake.wait_for (500ms) == std::future_status::ready);
-    assert (route_wake.get ());
-    const auto route_deadline = std::chrono::steady_clock::now () + 2s;
+    assert (local->wait_for_dispatch_activity (-1ms, false));
     auto current = local->sessions ().current_binding (actor_object->key);
-    while ((!current
-            || current->actor.authority_owner_generation
-                 != target_authority_owner_generation)
-           && std::chrono::steady_clock::now () < route_deadline) {
-        (void) local->dispatch_ready (dispatch);
-        current = local->sessions ().current_binding (actor_object->key);
-        std::this_thread::sleep_for (1ms);
-    }
+    assert (current && current->actor.authority_owner_generation
+                         == actor_object->authority_owner_generation);
+    assert (local->sessions ().remote_route_sealed (actor_object->key));
+    await_task (local->dispatch_ready (dispatch));
+    current = local->sessions ().current_binding (actor_object->key);
     assert (current
             && current->actor.authority_owner_generation
                  == target_authority_owner_generation);
