@@ -671,9 +671,11 @@ class local_internal_dispatcher_t final
 
     zlink::framework::result_t<void>
     dispatch_send (const zlink::framework::detail::route_received_packet_t &received,
+                   const zlink::framework::runtime::messaging::envelope_header_t &header,
                    zlink::framework::service_provider_t &services) const override
     {
         (void) received;
+        (void) header;
         services.get_required<local_handler_t> ().internal_dispatch_provider_seen = 1;
         ++send_count;
         return zlink::framework::result_t<void>::success ();
@@ -2764,7 +2766,7 @@ int main ()
     const auto no_internal_send = no_internal.dispatch_send (
       zlink::framework::detail::route_received_packet_t{
         zlink::routing_id_t::from (std::string ("source-node")), std::nullopt, internal_parts},
-      provider);
+      internal_header, provider);
     if (no_internal_send
         || no_internal_send.error_kind ()
              != zlink::framework::framework_error_kind_t::not_found) {
@@ -3645,7 +3647,7 @@ int main ()
     auto bound_send = actor_dispatcher.dispatch_send (
       zlink::framework::detail::route_received_packet_t{
         zlink::routing_id_t::from (std::string ("play-node")), 100, std::move (bound_send_parts)},
-      provider);
+      bound_header, provider);
     const auto routed_send_headers = stream_runtime.written_headers (stream);
     if (!bound_send || routed_send_headers.size () != 2
         || routed_send_headers[1].codec () != zlink::framework::stream_codec_t::json

@@ -133,6 +133,7 @@
         <Compile Include="Runtime/LogicalMulticastSubmitTests.cs"/>
         <Compile Include="Runtime/SharedAsyncDisposalTests.cs"/>
         <Compile Include="Runtime/SubmitAdmissionRuntimeTests.cs"/>
+        <Compile Include="Runtime/BlockingSubmitTests.cs"/>
         <Compile Include="Runtime/OwnerLeaseTrackerTests.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.cs"/>
         <Compile Include="Runtime/ProviderRelocationRepositoryTests.cs"/>

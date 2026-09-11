@@ -948,11 +948,13 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.4 Node
 
 - perf 경로: `bindings/node/perf`
-- Single 상태: `측정 완료(2026-09-11, one-way 5패턴 clean)` — tcp·ws·wss·tls·ipc × {PAIR,PUBSUB,DEALER_DEALER,DEALER_ROUTER,ROUTER_ROUTER} paired(C 0.18.0 release baseline 재사용). throughput aggregate는 대부분 통과(60% 목표)이나 **소형 payload(64/256B)는 8~35%로 매우 낮고**, **tcp·tls·ipc 평균 latency ratio가 5× cap 초과(7~38×)**라 다수 셀 `미달`. ws·wss는 latency 통과. 공통 원인 = Node hot path의 **메시지당 고정 비용**(napi 경계, per-op allocation/dispatch). = 실질 개선 대상.
-  - `inproc`: Node 러너 미지원 → 전 pattern `해당 없음`(inventory gate 제외).
-  - `DEALER_ROUTER_REQREP`·`ROUTER_ROUTER_REQREP`: `미측정` — Core reqrep backpressure 결함으로 소형 payload가 submit 단계에서 실패(대형은 35~61% 미달). 원인·repro는 [[node-reqrep-backpressure-token-bug]], 수정=Core(A) 조율.
+- Single 상태: `측정 완료 + routed 수신 개선 반영(2026-09-11)` — tcp·ws·wss·tls·ipc × {PAIR,PUBSUB,DEALER_DEALER,DEALER_ROUTER,ROUTER_ROUTER} paired(C 0.18.0 release baseline 재사용).
+  - **routed 수신 개선 채택**(commit 28fdce3c10, N-API 왕복 5→1): `DEALER_ROUTER`·`ROUTER_ROUTER`의 소형 throughput ~2×, aggregate throughput가 전 transport 60% 목표 **통과**(ipc 56.8→72.1%, tcp 62→80%대, wss·tls ~100%). PAIR/DEALER_DEALER/PUBSUB(base recv, 개선 무관)은 clean 수치 유지.
+  - **잔존 latency (3회 재측정으로 확정, artifact 아님)**: `tcp·tls의 DEALER_ROUTER`와 `ipc`(DEALER_ROUTER·ROUTER_ROUTER)의 aggregate 평균 latency ratio는 median-of-3에서 각각 25.4×·14.9×·11.4×·8.4×로 5× cap 초과 = **실제 미달**. C 평균 latency는 0.13~2.4ms로 sub-µs가 아니어서 near-zero-baseline artifact가 아니다(초기 1-run의 형제-패턴 편차는 단순 노이즈였음). 소형(64/256/1024B)에서 Node 평균 latency가 51~325ms로 큼(C 1~2ms) = **Node per-message 처리 속도가 만드는 큐 잔류 latency**. throughput 개선(2×)으로도 남는 부분은 napi+libuv per-op floor에 가깝다. ws·wss·(tcp·tls ROUTER_ROUTER)는 5× 통과. → 이 셀들은 **`보류`**(throughput 통과·개선 반영, latency는 확정 미달). §2.2 Node 소형-셀 latency 예외는 runtime-floor 근거의 spec 결정으로 별도 판단(수치 완화 목적 아님).
+  - `inproc`: Node 러너 미지원 → 전 pattern `해당 없음`.
+  - `DEALER_ROUTER_REQREP`·`ROUTER_ROUTER_REQREP`: `미측정` — Node reqrep 소형 payload가 submit 단계에서 실패(`BACKPRESSURED`+`completion_id=0` wait-slot 소진을 바인딩이 fatal throw). **같은 Core 0.18.0에서 C reqrep은 전 셀 정상** → Core 버그 아님, **Node-side 문제**(하네스 submit pacing 또는 바인딩 drain). 근본 원인 미확정 — 조사 필요. [[node-reqrep-backpressure-token-bug]].
 - Multi 상태: `미측정`
-- 다음 작업: (1) 소형 payload/latency per-op 비용 개선 후보 조사(POSDDD·계약 유지), (2) reqrep Core 결함은 A 조율, (3) Node Multi 측정.
+- 다음 작업: (1) reqrep Node-side 원인 조사(wait-slot 소진 pacing/drain, C 대조), (2) Node Multi 측정 진행 중. (routed latency 보류 셀 §2.2 예외는 감독 spec 판단 대기.)
 
 #### 9.4.1 Single suite
 
@@ -961,31 +963,31 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `PAIR` | 18.7% | 27.3% | 42.9% | 161.5% | 127.5% | 110.4% | 미달 81.4%/lat19.34× · c0180-node-single-tcp-clean |
 | `tcp` | `PUBSUB` | 17.0% | 23.3% | 35.7% | 130.4% | 105.3% | 148.2% | 미달 76.7%/lat38.36× · c0180-node-single-tcp-clean |
 | `tcp` | `DEALER_DEALER` | 18.2% | 22.9% | 34.8% | 155.0% | 125.7% | 102.5% | 통과 76.5%/lat2.50× · c0180-node-single-tcp-clean |
-| `tcp` | `DEALER_ROUTER` | 7.1% | 11.3% | 20.2% | 121.5% | 111.2% | 95.5% | 미달 61.1%/lat38.60× · c0180-node-single-tcp-clean |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Core reqrep backpressure 결함(소형 payload fail, 대형 미달); [[node-reqrep-backpressure-token-bug]] fix=Core(A) |
-| `tcp` | `ROUTER_ROUTER` | 8.6% | 12.3% | 17.2% | 124.1% | 115.6% | 98.9% | 미달 62.8%/lat6.45× · c0180-node-single-tcp-clean |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Core reqrep backpressure 결함(소형 payload fail, 대형 미달); [[node-reqrep-backpressure-token-bug]] fix=Core(A) |
+| `tcp` | `DEALER_ROUTER` | 15.6% | 23.7% | 35.2% | 169.7% | 134.8% | 113.0% | 미달 82.0%/lat23.62× · c0180-node-single-tcp-routed2 |
+| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Node reqrep 소형 payload submit 실패(wait-slot 소진, completion_id=0). C는 정상(Core 버그 아님) → Node-side 조사. [[node-reqrep-backpressure-token-bug]] |
+| `tcp` | `ROUTER_ROUTER` | 16.3% | 23.0% | 31.1% | 160.0% | 135.2% | 111.1% | 통과 79.5%/lat2.54× · c0180-node-single-tcp-routed2 |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Node reqrep 소형 payload submit 실패(wait-slot 소진, completion_id=0). C는 정상(Core 버그 아님) → Node-side 조사. [[node-reqrep-backpressure-token-bug]] |
 | `ws` | `PAIR` | 20.4% | 28.4% | 35.7% | 167.2% | 147.3% | 120.0% | 통과 86.5%/lat2.21× · c0180-node-single-ws-clean |
 | `ws` | `PUBSUB` | 18.3% | 20.5% | 31.1% | 94.9% | 100.9% | 123.6% | 통과 64.9%/lat4.25× · c0180-node-single-ws-clean |
 | `ws` | `DEALER_DEALER` | 20.9% | 26.4% | 34.6% | 167.6% | 139.1% | 120.2% | 통과 84.8%/lat2.17× · c0180-node-single-ws-clean |
-| `ws` | `DEALER_ROUTER` | 8.5% | 13.0% | 18.7% | 141.5% | 135.3% | 114.9% | 통과 72.0%/lat4.06× · c0180-node-single-ws-clean |
-| `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Core reqrep backpressure 결함(소형 payload fail, 대형 미달); [[node-reqrep-backpressure-token-bug]] fix=Core(A) |
-| `ws` | `ROUTER_ROUTER` | 9.4% | 13.6% | 19.3% | 138.0% | 140.2% | 116.1% | 통과 72.8%/lat3.92× · c0180-node-single-ws-clean |
-| `ws` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Core reqrep backpressure 결함(소형 payload fail, 대형 미달); [[node-reqrep-backpressure-token-bug]] fix=Core(A) |
+| `ws` | `DEALER_ROUTER` | 16.8% | 23.8% | 31.8% | 167.9% | 151.2% | 116.3% | 통과 84.6%/lat2.48× · c0180-node-single-ws-routed2 |
+| `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Node reqrep 소형 payload submit 실패(wait-slot 소진, completion_id=0). C는 정상(Core 버그 아님) → Node-side 조사. [[node-reqrep-backpressure-token-bug]] |
+| `ws` | `ROUTER_ROUTER` | 17.7% | 24.0% | 31.5% | 158.4% | 148.2% | 113.8% | 통과 82.3%/lat2.50× · c0180-node-single-ws-routed2 |
+| `ws` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Node reqrep 소형 payload submit 실패(wait-slot 소진, completion_id=0). C는 정상(Core 버그 아님) → Node-side 조사. [[node-reqrep-backpressure-token-bug]] |
 | `wss` | `PAIR` | 18.4% | 31.5% | 65.1% | 178.5% | 165.0% | 146.4% | 통과 100.8%/lat1.21× · c0180-node-single-wss-clean |
 | `wss` | `PUBSUB` | 16.1% | 23.8% | 50.7% | 110.5% | 93.6% | 87.2% | 통과 63.6%/lat2.02× · c0180-node-single-wss-clean |
 | `wss` | `DEALER_DEALER` | 19.7% | 28.4% | 60.2% | 175.0% | 163.5% | 149.6% | 통과 99.4%/lat1.50× · c0180-node-single-wss-clean |
-| `wss` | `DEALER_ROUTER` | 8.3% | 13.4% | 32.8% | 172.8% | 161.7% | 145.9% | 통과 89.2%/lat2.51× · c0180-node-single-wss-clean |
-| `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Core reqrep backpressure 결함(소형 payload fail, 대형 미달); [[node-reqrep-backpressure-token-bug]] fix=Core(A) |
-| `wss` | `ROUTER_ROUTER` | 9.3% | 14.7% | 35.0% | 174.5% | 176.2% | 154.7% | 통과 94.1%/lat2.19× · c0180-node-single-wss-clean |
-| `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Core reqrep backpressure 결함(소형 payload fail, 대형 미달); [[node-reqrep-backpressure-token-bug]] fix=Core(A) |
+| `wss` | `DEALER_ROUTER` | 16.2% | 24.8% | 54.6% | 177.5% | 172.7% | 148.8% | 통과 99.1%/lat1.57× · c0180-node-single-wss-routed2 |
+| `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Node reqrep 소형 payload submit 실패(wait-slot 소진, completion_id=0). C는 정상(Core 버그 아님) → Node-side 조사. [[node-reqrep-backpressure-token-bug]] |
+| `wss` | `ROUTER_ROUTER` | 17.3% | 26.2% | 57.1% | 185.3% | 173.0% | 155.1% | 통과 102.3%/lat1.38× · c0180-node-single-wss-routed2 |
+| `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Node reqrep 소형 payload submit 실패(wait-slot 소진, completion_id=0). C는 정상(Core 버그 아님) → Node-side 조사. [[node-reqrep-backpressure-token-bug]] |
 | `tls` | `PAIR` | 19.5% | 35.7% | 87.0% | 185.1% | 182.2% | 164.5% | 미달 112.3%/lat13.05× · c0180-node-single-tls-clean |
 | `tls` | `PUBSUB` | 18.4% | 32.5% | 75.4% | 99.6% | 100.2% | 90.7% | 미달 69.5%/lat11.92× · c0180-node-single-tls-clean |
 | `tls` | `DEALER_DEALER` | 17.3% | 30.4% | 81.5% | 177.3% | 181.6% | 163.3% | 미달 108.6%/lat13.90× · c0180-node-single-tls-clean |
-| `tls` | `DEALER_ROUTER` | 7.9% | 15.6% | 45.4% | 173.3% | 165.2% | 156.4% | 미달 94.0%/lat23.35× · c0180-node-single-tls-clean |
-| `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Core reqrep backpressure 결함(소형 payload fail, 대형 미달); [[node-reqrep-backpressure-token-bug]] fix=Core(A) |
-| `tls` | `ROUTER_ROUTER` | 9.1% | 15.2% | 33.2% | 154.3% | 156.2% | 147.3% | 통과 85.9%/lat2.89× · c0180-node-single-tls-clean |
-| `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Core reqrep backpressure 결함(소형 payload fail, 대형 미달); [[node-reqrep-backpressure-token-bug]] fix=Core(A) |
+| `tls` | `DEALER_ROUTER` | 15.3% | 28.4% | 74.7% | 181.6% | 167.8% | 159.3% | 미달 104.5%/lat13.78× · c0180-node-single-tls-routed2 |
+| `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Node reqrep 소형 payload submit 실패(wait-slot 소진, completion_id=0). C는 정상(Core 버그 아님) → Node-side 조사. [[node-reqrep-backpressure-token-bug]] |
+| `tls` | `ROUTER_ROUTER` | 16.5% | 26.9% | 54.1% | 164.4% | 164.5% | 154.8% | 통과 96.9%/lat1.84× · c0180-node-single-tls-routed2 |
+| `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Node reqrep 소형 payload submit 실패(wait-slot 소진, completion_id=0). C는 정상(Core 버그 아님) → Node-side 조사. [[node-reqrep-backpressure-token-bug]] |
 | `inproc` | `PAIR` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 (Node 러너 inproc 미지원 — inventory gate 제외) |
 | `inproc` | `PUBSUB` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 (Node 러너 inproc 미지원 — inventory gate 제외) |
 | `inproc` | `DEALER_DEALER` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 (Node 러너 inproc 미지원 — inventory gate 제외) |
@@ -996,10 +998,10 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `ipc` | `PAIR` | 19.8% | 27.2% | 38.1% | 145.3% | 127.0% | 110.1% | 미달 77.9%/lat7.86× · c0180-node-single-ipc-clean |
 | `ipc` | `PUBSUB` | 19.4% | 23.2% | 34.4% | 100.6% | 108.3% | 139.1% | 미달 70.8%/lat14.03× · c0180-node-single-ipc-clean |
 | `ipc` | `DEALER_DEALER` | 21.0% | 25.9% | 31.1% | 148.8% | 110.1% | 109.6% | 통과 74.4%/lat2.29× · c0180-node-single-ipc-clean |
-| `ipc` | `DEALER_ROUTER` | 8.0% | 11.6% | 16.8% | 108.8% | 96.1% | 99.8% | 미달 56.9%/lat18.36× · c0180-node-single-ipc-clean |
-| `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Core reqrep backpressure 결함(소형 payload fail, 대형 미달); [[node-reqrep-backpressure-token-bug]] fix=Core(A) |
-| `ipc` | `ROUTER_ROUTER` | 9.2% | 11.8% | 16.2% | 113.6% | 101.5% | 88.5% | 미달 56.8%/lat14.84× · c0180-node-single-ipc-clean |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Core reqrep backpressure 결함(소형 payload fail, 대형 미달); [[node-reqrep-backpressure-token-bug]] fix=Core(A) |
+| `ipc` | `DEALER_ROUTER` | 17.0% | 21.5% | 28.3% | 140.8% | 110.7% | 112.8% | 미달 71.9%/lat10.78× · c0180-node-single-ipc-routed2 |
+| `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Node reqrep 소형 payload submit 실패(wait-slot 소진, completion_id=0). C는 정상(Core 버그 아님) → Node-side 조사. [[node-reqrep-backpressure-token-bug]] |
+| `ipc` | `ROUTER_ROUTER` | 18.1% | 21.5% | 27.4% | 147.7% | 118.5% | 99.4% | 미달 72.1%/lat8.25× · c0180-node-single-ipc-routed2 |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — Node reqrep 소형 payload submit 실패(wait-slot 소진, completion_id=0). C는 정상(Core 버그 아님) → Node-side 조사. [[node-reqrep-backpressure-token-bug]] |
 
 #### 9.4.2 Multi suite
 
