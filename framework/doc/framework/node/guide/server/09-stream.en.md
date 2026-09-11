@@ -36,7 +36,8 @@ Register one session type on a Stream node. If you use Actor dispatch, enable it
 builder.addStreamNode('client-stream')
   .bind('tcp://0.0.0.0:9100')
   .enableActorDispatch()
-  .registerSession(PlaySessionFactory); // Registers the session factory to create per connection.
+  // Registers the session factory to create per connection.
+  .registerSession(PlaySessionFactory);
 ```
 
 Session handlers and Actor/Spot handlers use the Framework's default typed JSON
@@ -88,7 +89,8 @@ export class PlaySession implements ZLinkSession {
   ) {}
 
   configure(): void {
-    this.context.handlers.addHandler(PingHandler); // Registers a typed session packet handler.
+    // Registers a typed session packet handler.
+    this.context.handlers.addHandler(PingHandler);
   }
 
   async onConnected(): Promise<void> {

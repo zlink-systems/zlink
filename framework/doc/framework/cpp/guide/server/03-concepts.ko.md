@@ -63,13 +63,18 @@ framework가 찾아서 전달한다. 이렇게 **대상이 어디 있는지 호�
 MeshNode 하나에 두 역할을 함께 얹은 모양은 이렇다.
 
 ```cpp
-auto mesh = options.add_route_mesh ("services");  // MeshNode 하나가 mesh "services"에 참여한다.
-mesh.listen ("tcp://0.0.0.0:7101");               // 다른 node가 접속할 자기 endpoint.
+// MeshNode 하나가 mesh "services"에 참여한다.
+auto mesh = options.add_route_mesh ("services");
+// 다른 node가 접속할 자기 endpoint.
+mesh.listen ("tcp://0.0.0.0:7101");
 
 // C++은 Object role을 별도 builder 대신 enum 하나로 지정한다.
-mesh.set_object_role (object_role_t::server);     // 이 node에 spot·actor를 배치한다.
-mesh.channel_name ("orders").server ();           // Channel role — "orders" 요청을 이 node가 처리한다.
-mesh.channel_name ("billing").client ();          // 호출만 하는 channel은 client다.
+// 이 node에 spot·actor를 배치한다.
+mesh.set_object_role (object_role_t::server);
+// Channel role — "orders" 요청을 이 node가 처리한다.
+mesh.channel_name ("orders").server ();
+// 호출만 하는 channel은 client다.
+mesh.channel_name ("billing").client ();
 ```
 
 peer 주소를 코드에 적지 않고 서버 증감을 따라가는 자동 연결은

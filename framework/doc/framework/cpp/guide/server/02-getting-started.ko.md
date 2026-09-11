@@ -67,9 +67,12 @@ int main (int argc, char **argv)
 {
     auto app = zlink::framework::app_t::create ();
     app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-        auto mesh = options.add_route_mesh ("services")     // mesh 이름을 정한다.
-          .listen ("tcp://0.0.0.0:7101");                   // 다른 process가 접속할 자기 endpoint.
-        mesh.channel_name ("greeting").server ()            // 이 process가 "greeting"을 처리한다.
+        // mesh 이름을 정한다.
+        auto mesh = options.add_route_mesh ("services")
+          // 다른 process가 접속할 자기 endpoint.
+          .listen ("tcp://0.0.0.0:7101");
+        // 이 process가 "greeting"을 처리한다.
+        mesh.channel_name ("greeting").server ()
           .add_request_handler<hello_handler_t, hello_t, greeting_t> ();
     });
     return app.run (argc, argv);
@@ -93,9 +96,12 @@ class hello_handler_t
 
 ```cpp
 app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-    auto mesh = options.add_route_mesh ("services").listen ("tcp://0.0.0.0:7102");  // 자기 endpoint도 필요하다.
-    mesh.channel_name ("greeting").client ();               // 호출만 하는 쪽은 client.
-    mesh.peer_connections ().connect ("tcp://127.0.0.1:7101"); // 수동 연결 — server endpoint를 직접 적는다.
+    // 자기 endpoint도 필요하다.
+    auto mesh = options.add_route_mesh ("services").listen ("tcp://0.0.0.0:7102");
+    // 호출만 하는 쪽은 client.
+    mesh.channel_name ("greeting").client ();
+    // 수동 연결 — server endpoint를 직접 적는다.
+    mesh.peer_connections ().connect ("tcp://127.0.0.1:7101");
 
     options.http ()
       .listen ("http://0.0.0.0:5000")
@@ -185,14 +191,18 @@ create_game_http_handler_t::handle (const create_game_http_req_t &request)
                              : request.game_name;
 
     auto created = co_await _spots
-      .create (sample_types_t::game_spot)     // 이 stable type을 제공하는 node가 후보가 된다.
-      .in_mesh (sample_nodes_t::mesh)         // Object를 만들 RouteMesh를 선택한다.
+      // 이 stable type을 제공하는 node가 후보가 된다.
+      .create (sample_types_t::game_spot)
+      // Object를 만들 RouteMesh를 선택한다.
+      .in_mesh (sample_nodes_t::mesh)
       .creation_request (tictactoe_game_create_req_t{
-        game_name, sample_defaults_t::required_level})  // 새 Spot의 on_create에 전달할 최초 설정이다.
+        // 새 Spot의 on_create에 전달할 최초 설정이다.
+        game_name, sample_defaults_t::required_level})
       .async ();
 
     co_return create_game_http_res_t{
-      created.spot.spot_id (),                // Framework가 발급한 SpotId를 room id로 사용한다.
+      // Framework가 발급한 SpotId를 room id로 사용한다.
+      created.spot.spot_id (),
       _settings.play_endpoints,
       _settings.play_nodes,
       game_name,

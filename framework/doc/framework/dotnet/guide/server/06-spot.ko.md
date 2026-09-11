@@ -76,9 +76,11 @@ Instance Spot을 등록한다.
 ```csharp
 // Play 서버 — Entry Spot과 방을 담을 User Spot.
 mesh.Objects().Server()
-    .AddEntrySpot<BingoEntrySpot>()                 // Entry Spot은 stable type이 없다.
+    // Entry Spot은 stable type이 없다.
+    .AddEntrySpot<BingoEntrySpot>()
     .AddSpotFactory<BingoRoom>(
-        SampleNames.RoomSpotType,                   // stable type — 생성할 때 이 이름으로 선택한다.
+        // stable type — 생성할 때 이 이름으로 선택한다.
+        SampleNames.RoomSpotType,
         factory => factory
             .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
             .PreserveStateWith<BingoRoomRelocationAdapter>());
@@ -99,17 +101,21 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
 
 ```csharp
 // Instance Spot — 생성 호출이 없다. 해당 ID로 보내면 없을 때 생성된다.
-var allocated = await spotClient                    // IZLinkSpotClient
+// IZLinkSpotClient
+var allocated = await spotClient
     .RequestToSpot($"match:{levelBucket}", new ReserveBingoRoomReq { ... })
-    .InstanceSpot(SampleNames.MatchmakerSpotType)   // 없으면 생성해도 된다는 intent(cold activation).
+    // 없으면 생성해도 된다는 intent(cold activation).
+    .InstanceSpot(SampleNames.MatchmakerSpotType)
     .InMesh(SampleNames.MatchmakingMeshName)
     .Async<ReserveBingoRoomRes>(cancellationToken);
 
 // User Spot — 생성 호출이 따로 있다.
-var created = await spots                           // IZLinkSpotManager
+// IZLinkSpotManager
+var created = await spots
     .GetOrCreate(allocated.RoomId, SampleNames.RoomSpotType)
     .InMesh(SampleNames.PlayMeshName)
-    .Request(allocated.Settings)                    // 새 Spot의 OnCreateAsync로 전달된다.
+    // 새 Spot의 OnCreateAsync로 전달된다.
+    .Request(allocated.Settings)
     .Async(cancellationToken);
 ```
 
@@ -335,7 +341,8 @@ public sealed class ChatHandler : IZLinkSpotPacketHandler<GameRoom, Chat>
         Chat message,
         CancellationToken cancellationToken)
     {
-        spot.AppendChat(message.Text);  // Spot 상태를 직접 만진다. 락은 필요 없다.
+        // Spot 상태를 직접 만진다. 락은 필요 없다.
+        spot.AppendChat(message.Text);
         return ValueTask.CompletedTask;
     }
 }
@@ -370,7 +377,8 @@ public sealed class PlaceMarkHandler
 {
     public ValueTask HandleAsync(
         GameRoom spot,
-        PlayerActor actor,              // 이 메시지를 받은 Actor다.
+        // 이 메시지를 받은 Actor다.
+        PlayerActor actor,
         IZLinkMessageContext messageContext,
         PlaceMark message,
         CancellationToken cancellationToken)
@@ -393,10 +401,12 @@ public sealed class GameRoom(IZLinkSpotContext context) : IZLinkSpot
 
     public void Configure()
     {
-        Context.Handlers.AddPacket<ChatHandler>(); // Spot send handler를 등록한다.
+        // Spot send handler를 등록한다.
+        Context.Handlers.AddPacket<ChatHandler>();
         Context.Handlers.AddSubscribe<ScoreHandler>(
             "game-events",
-            "score.changed"); // Logical Multicast 구독을 등록한다.
+            // Logical Multicast 구독을 등록한다.
+            "score.changed");
     }
 
     public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
@@ -557,14 +567,17 @@ factory로 준비할지 고르는 stable type**이다. 그 mesh에 Instance Spot
 // type이 여럿 등록된 mesh — 어느 factory로 만들지 stable type으로 지정한다.
 MatchResult match = await spotClient
     .RequestToSpot("bronze", new FindMatch(playerId))
-    .InstanceSpot("matchmaker")   // 대상이 없으면 이 stable type의 factory로 준비한다.
-    .InMesh("matchmaking")        // 처음 배치할 mesh를 고른다.
+    // 대상이 없으면 이 stable type의 factory로 준비한다.
+    .InstanceSpot("matchmaker")
+    // 처음 배치할 mesh를 고른다.
+    .InMesh("matchmaking")
     .Async<MatchResult>(cancellationToken);
 
 // type이 하나만 등록된 mesh — 생략하면 Framework가 그 유일한 type을 고른다.
 MatchResult single = await spotClient
     .RequestToSpot("bronze", new FindMatch(playerId))
-    .InstanceSpot()               // 대상 node에 등록된 유일한 type으로 준비한다.
+    // 대상 node에 등록된 유일한 type으로 준비한다.
+    .InstanceSpot()
     .InMesh("matchmaking")
     .Async<MatchResult>(cancellationToken);
 ```
@@ -610,8 +623,10 @@ handler 안에서 Spot 상태를 그대로 만질 수 있다. 등록은 timer �
 ```csharp
 // Spot 안에서 — 반환된 IZLinkTimer를 필드에 보관해 두었다가 취소에 쓴다.
 _gameTick = await Context.AddTimer<GameTickHandler>(
-    "game-tick",                 // 같은 Spot 안에서 유일한 이름이다.
-    TimeSpan.FromSeconds(1),     // 주기. 0 이하이면 ZLinkConfigurationException이다.
+    // 같은 Spot 안에서 유일한 이름이다.
+    "game-tick",
+    // 주기. 0 이하이면 ZLinkConfigurationException이다.
+    TimeSpan.FromSeconds(1),
     new ZLinkTimerOptions
     {
         OverrunPolicy = ZLinkTimerOverrunPolicy.SkipLateTicks,
@@ -620,7 +635,8 @@ _gameTick = await Context.AddTimer<GameTickHandler>(
     },
     cancellationToken: cancellationToken);
 
-await _gameTick.CancelAsync();   // 더 이상 필요 없을 때. Spot이 닫히면 Framework가 함께 정리한다.
+// 더 이상 필요 없을 때. Spot이 닫히면 Framework가 함께 정리한다.
+await _gameTick.CancelAsync();
 ```
 
 Handler는 Spot과 tick 정보를 받는 별도 class다.
@@ -716,13 +732,15 @@ public sealed class BuildSnapshotHandler
         BuildSnapshot request,
         CancellationToken cancellationToken)
     {
-        var board = spot.CopyBoard();          // Spot 상태는 turn 안에서 먼저 복사해 둔다.
+        // Spot 상태는 turn 안에서 먼저 복사해 둔다.
+        var board = spot.CopyBoard();
 
         var packed = await spot.Context
             .RunCpuWorker(ct =>
             {
                 ct.ThrowIfCancellationRequested();
-                return SnapshotCodec.Compress(board); // 무거운 동기 계산.
+                // 무거운 동기 계산.
+                return SnapshotCodec.Compress(board);
             })
             .Yield(cancellationToken);
 
@@ -745,7 +763,8 @@ public sealed class SaveScoreHandler
     {
         var version = await spot.Context
             .RunIoWorker(async ct => await _store.SaveAsync(request.Value, ct))
-            .Timeout(TimeSpan.FromSeconds(3))  // 이 worker 호출의 상한.
+            // 이 worker 호출의 상한.
+            .Timeout(TimeSpan.FromSeconds(3))
             .Yield(cancellationToken);
 
         return new SaveScoreReply(version);
@@ -816,7 +835,8 @@ public sealed class RoundTickHandler : IZLinkSpotTimerHandler<GameRoom>
         ZLinkTimerTick tick,
         CancellationToken cancellationToken)
     {
-        if (!spot.TryFinishRound())      // 라운드 진행 중이면 신호하지 않는다.
+        // 라운드 진행 중이면 신호하지 않는다.
+        if (!spot.TryFinishRound())
             return ValueTask.CompletedTask;
 
         // 라운드가 끝나 상태가 정산된 지점이다. 이 turn의 마지막 Framework 호출이어야 한다.

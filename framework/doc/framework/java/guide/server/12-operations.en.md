@@ -290,7 +290,8 @@ avoids failures for callers still caching the old route.
 ZLinkFrameworkRelocationResult result = runtime.relocate(
     new ZLinkFrameworkRelocationOptions(
         ZLinkFrameworkRelocationMode.ROLLING_UPDATE,
-        12L,                            // Uses only eligible nodes on the specified new version.
+        // Uses only eligible nodes on the specified new version.
+        12L,
         Duration.ofSeconds(25)))
     .toCompletableFuture().join();
 
@@ -374,8 +375,10 @@ A MeshNode registered with `addRouteMesh` is operated through two DI singletons.
 socket options (HWM, timeout) are exclusive to `configureRouterSocket()` before startup.
 
 ```java
-meshOptions.mesh("game.room").setPlacementWeight(0); // Excludes it from new object placement
-meshOptions.channel("game.room").weight(0);      // Excludes it from new channel select-one
+// Excludes it from new object placement
+meshOptions.mesh("game.room").setPlacementWeight(0);
+// Excludes it from new channel select-one
+meshOptions.channel("game.room").weight(0);
 ```
 
 The two weights are independent and take effect on new selections while running. Placement

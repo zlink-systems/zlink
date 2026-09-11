@@ -35,10 +35,13 @@ handler 단위 테스트를 아무리 촘촘히 작성해도 확인되지 않는
 코드만으로 끝난다.
 
 ```cpp
-co_await client.connect ().async ();                                     // 실제 연결
-auto auth = co_await client.request (authenticate_req_t{actor_id})       // 실제 request
+// 실제 연결
+co_await client.connect ().async ();
+// 실제 request
+auto auth = co_await client.request (authenticate_req_t{actor_id})
               .async<authenticate_res_t> ();
-auto push = co_await other.wait_for<player_joined_notify_t> ().async (); // 실제 push 도착 확인
+// 실제 push 도착 확인
+auto push = co_await other.wait_for<player_joined_notify_t> ().async ();
 ensure (push.payload.actor_id == auth.player.actor_id);
 ```
 
@@ -234,7 +237,8 @@ task_t<void> run (const tictactoe_client_options_t &options)
     // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
     co_await client1.connect ().async ();
     co_await client1.request (authenticate_req_t{options.x_actor_id}).async<authenticate_res_t> ();
-    auto join1 = co_await join_game (client1, room.room_id); // 대기 등록 → send → 수신(§3)
+    // 대기 등록 → send → 수신(§3)
+    auto join1 = co_await join_game (client1, room.room_id);
     ensure (join1.state.status == tictactoe_status_t::waiting_for_players);
 
     // 혼자 들어왔을 때 자기 입장 알림이 자기에게 오면 안 된다.

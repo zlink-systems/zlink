@@ -68,15 +68,19 @@ export interface Greeting { readonly text: string; }
       useFactory: () => {
         const builder = zlinkFramework();
 
-        const mesh = builder.addRouteMesh('services')   // mesh 이름을 정한다.
-          .listen('tcp://0.0.0.0:7101');                // 다른 process가 접속할 자기 endpoint.
-        mesh.channel('greeting').server()               // 이 process가 "greeting"을 처리한다.
+        // mesh 이름을 정한다.
+        const mesh = builder.addRouteMesh('services')
+          // 다른 process가 접속할 자기 endpoint.
+          .listen('tcp://0.0.0.0:7101');
+        // 이 process가 "greeting"을 처리한다.
+        mesh.channel('greeting').server()
           .addRequestHandler(PacketNames.hello, HelloHandler);
 
         return builder.build();
       }
     }),
-    zlinkModule(__dirname, { })                         // handler를 provider로 모은다.
+    // handler를 provider로 모은다.
+    zlinkModule(__dirname, { })
   ]
 })
 export class ServerModule {}
@@ -97,9 +101,12 @@ export class HelloHandler implements ZLinkRequestHandler<Hello, Greeting> {
 ZLinkModule.forRootFactory({
   useFactory: () => {
     const builder = zlinkFramework();
-    const mesh = builder.addRouteMesh('services').listen('tcp://0.0.0.0:7102');  // 자기 endpoint도 필요하다.
-    mesh.channel('greeting').client();                      // 호출만 하는 쪽은 client.
-    mesh.peerConnections().connect('tcp://127.0.0.1:7101');   // 수동 연결 — server endpoint를 직접 적는다.
+    // 자기 endpoint도 필요하다.
+    const mesh = builder.addRouteMesh('services').listen('tcp://0.0.0.0:7102');
+    // 호출만 하는 쪽은 client.
+    mesh.channel('greeting').client();
+    // 수동 연결 — server endpoint를 직접 적는다.
+    mesh.peerConnections().connect('tcp://127.0.0.1:7101');
     return builder.build();
   }
 })
@@ -193,15 +200,19 @@ async create(@Body() request: CreateGameHttpReq): Promise<CreateGameHttpRes> {
   const gameName = request.gameName?.trim() || SampleDefaults.gameName;
 
   const created = await this.spots
-    .create(SampleTypes.gameSpot)         // 이 stable type을 제공하는 node가 후보가 된다.
-    .inMesh(SampleNodes.mesh)             // Object를 만들 RouteMesh를 선택한다.
+    // 이 stable type을 제공하는 node가 후보가 된다.
+    .create(SampleTypes.gameSpot)
+    // Object를 만들 RouteMesh를 선택한다.
+    .inMesh(SampleNodes.mesh)
     .request(tictactoeGameCreateReq(
       gameName,
-      SampleDefaults.requiredLevel))      // 새 Spot의 onCreate에 전달할 최초 설정이다.
+      // 새 Spot의 onCreate에 전달할 최초 설정이다.
+      SampleDefaults.requiredLevel))
     .submit();
 
   return createGameHttpRes(
-    created.spot.spotId,                  // Framework가 발급한 SpotId를 room id로 사용한다.
+    // Framework가 발급한 SpotId를 room id로 사용한다.
+    created.spot.spotId,
     this.settings.playEndpoints,
     this.settings.playNodes,
     gameName,

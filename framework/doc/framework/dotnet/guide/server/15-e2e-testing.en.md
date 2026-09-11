@@ -37,10 +37,13 @@ that work. **The client library your real users use is itself the verification t
 E2E test comes down to just this much code.
 
 ```csharp
-await client.Connect.Async(ct);                                    // A real connection
-var auth = await client.Request(new AuthenticateReq(actorId))      // A real request
+// A real connection
+await client.Connect.Async(ct);
+// A real request
+var auth = await client.Request(new AuthenticateReq(actorId))
     .Async<AuthenticateRes>(ct);
-var push = await other.WaitFor<PlayerJoinedNotify>().Async(ct);    // Confirms a real push arrived
+// Confirms a real push arrived
+var push = await other.WaitFor<PlayerJoinedNotify>().Async(ct);
 ZlinkStreamAssert.Ensure(push.Payload.ActorId == auth.Player.ActorId, "join push actor mismatch.");
 ```
 
@@ -76,7 +79,8 @@ using var api = ZLinkHttpClient.Create(options.ApiUrl.ToString())
     .Build();
 var room = await api.Post("/games")
     .Body(new CreateGameHttpReq(options.GameName))
-    .Fetch<CreateGameHttpRes>(ct);   // Fetch returns the deserialized body as-is.
+    // Fetch returns the deserialized body as-is.
+    .Fetch<CreateGameHttpRes>(ct);
 
 // Step 2 -- open a real-time connection to the endpoint the response gave us.
 await using var client = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
@@ -84,7 +88,8 @@ await using var client = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConne
     Endpoint = new Uri(room.PlayEndpoints[0]),
     ConnectTimeout = options.StreamTimeout,
     RequestTimeout = options.StreamTimeout,
-    DispatchMode = ZlinkStreamDispatchMode.Immediate  // Console scenarios use the automatic pump.
+    // Console scenarios use the automatic pump.
+    DispatchMode = ZlinkStreamDispatchMode.Immediate
 });
 ```
 
@@ -240,7 +245,8 @@ public async ValueTask RunAsync(TicTacToeClientOptions options, CancellationToke
     var auth1 = await client1.Request(new AuthenticateReq(options.XActorId)).Async<AuthenticateRes>(ct);
     ZlinkStreamAssert.Ensure(auth1.Player.ActorId == options.XActorId, "player x actor id mismatch.");
 
-    var join1 = await JoinGameAsync(client1, room.RoomId, ct);   // Register wait -> send -> receive (see §3)
+    // Register wait -> send -> receive (see §3)
+    var join1 = await JoinGameAsync(client1, room.RoomId, ct);
     ZlinkStreamAssert.Ensure(join1.State.Status == TicTacToeGameStatuses.WaitingForPlayers,
         "room should wait for the second player.");
 
@@ -317,7 +323,8 @@ start_server play-a  ".../TicTacToe.Server.Play.dll"  "${PLAY_A_CONFIG}"
 start_server play-b  ".../TicTacToe.Server.Play.dll"  "${PLAY_B_CONFIG}"
 start_server api-a   ".../TicTacToe.Server.Api.dll"   "${API_A_CONFIG}"
 
-wait_port play-a "${PLAY_A_STREAM_ENDPOINT}"   # Wait until the port opens. Doesn't use sleep.
+# Wait until the port opens. Doesn't use sleep.
+wait_port play-a "${PLAY_A_STREAM_ENDPOINT}"
 
 dotnet run --no-build --project Client/TicTacToe.Client.csproj -- \
   --config "${CLIENT_CONFIG}" >"${LOG_DIR}/client.log" 2>&1

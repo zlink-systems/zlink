@@ -76,9 +76,11 @@ Instance Spot을 등록한다.
 ```typescript
 // Play 서버 — Entry Spot과 방을 담을 User Spot.
 mesh.objects().server()
-  .addEntrySpot(BingoEntrySpot)                    // Entry Spot은 stable type이 없다.
+  // Entry Spot은 stable type이 없다.
+  .addEntrySpot(BingoEntrySpot)
   .addSpotFactory(
-    SampleNames.roomSpotType,                      // stable type — 생성할 때 이 이름으로 선택한다.
+    // stable type — 생성할 때 이 이름으로 선택한다.
+    SampleNames.roomSpotType,
     BingoRoom,
     (factory) => factory
       .executionMode(ZLinkUserSpotExecutionMode.SpotWide)
@@ -103,7 +105,8 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
 // Instance Spot — 생성 호출이 없다. 해당 ID로 보내면 없을 때 생성된다.
 const allocated = await spotClient
   .requestToSpot(`match:${levelBucket}`, reserveBingoRoomReq())
-  .instanceSpot(SampleNames.matchmakerSpotType) // 없으면 생성해도 된다는 intent.
+  // 없으면 생성해도 된다는 intent.
+  .instanceSpot(SampleNames.matchmakerSpotType)
   .inMesh(SampleNames.matchmakingMeshName)
   .submit<ReserveBingoRoomRes>();
 
@@ -111,7 +114,8 @@ const allocated = await spotClient
 const created = await spots
   .getOrCreate(allocated.roomId, SampleNames.roomSpotType)
   .inMesh(SampleNames.playMeshName)
-  .request(allocated.settings)      // 새 Spot의 onCreate로 전달된다.
+  // 새 Spot의 onCreate로 전달된다.
+  .request(allocated.settings)
   .submit();
 ```
 
@@ -329,7 +333,8 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
 // Spot 앞 packet — 첫 인자가 대상 Spot instance다.
 export class ChatHandler implements ZLinkSpotPacketHandler<GameRoom, Chat> {
   async handle(spot: GameRoom, message: Chat): Promise<void> {
-    spot.appendChat(message.text); // Spot 상태를 직접 만진다. 락은 필요 없다.
+    // Spot 상태를 직접 만진다. 락은 필요 없다.
+    spot.appendChat(message.text);
   }
 }
 
@@ -353,7 +358,8 @@ export class PlaceMarkHandler
   implements ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
   async handle(
     spot: GameRoom,
-    actor: PlayerActor,             // 이 메시지를 받은 Actor다.
+    // 이 메시지를 받은 Actor다.
+    actor: PlayerActor,
     messageContext: ZLinkMessageContext,
     message: PlaceMark
   ): Promise<void> {
@@ -372,11 +378,13 @@ export class GameRoom implements ZLinkSpot {
   readonly context!: ZLinkSpotContext;
 
   configure(): void {
-    this.context.handlers.addPacket(ChatHandler); // Spot send handler를 등록한다.
+    // Spot send handler를 등록한다.
+    this.context.handlers.addPacket(ChatHandler);
     this.context.handlers.addSubscribe(
       ScoreHandler,
       'game-events',
-      'score.changed'); // Logical Multicast 구독을 등록한다.
+      // Logical Multicast 구독을 등록한다.
+      'score.changed');
   }
 
   async onCreate(request: ZLinkMessage): Promise<ZLinkSpotCreateResponse> {
@@ -519,14 +527,17 @@ factory로 준비할지 고르는 stable type**이다. 그 mesh에 Instance Spot
 // type이 여럿 등록된 mesh — 어느 factory로 만들지 stable type으로 지정한다.
 const match = await spotClient
   .requestToSpot('bronze', findMatch(playerId))
-  .instanceSpot('matchmaker') // 대상이 없으면 이 stable type의 factory로 준비한다.
-  .inMesh('matchmaking')      // 처음 배치할 mesh를 고른다.
+  // 대상이 없으면 이 stable type의 factory로 준비한다.
+  .instanceSpot('matchmaker')
+  // 처음 배치할 mesh를 고른다.
+  .inMesh('matchmaking')
   .submit<MatchResult>();
 
 // type이 하나만 등록된 mesh — 생략하면 Framework가 그 유일한 type을 고른다.
 const single = await spotClient
   .requestToSpot('bronze', findMatch(playerId))
-  .instanceSpot()             // 대상 node에 등록된 유일한 type으로 준비한다.
+  // 대상 node에 등록된 유일한 type으로 준비한다.
+  .instanceSpot()
   .inMesh('matchmaking')
   .submit<MatchResult>();
 ```
@@ -572,8 +583,10 @@ handler 안에서 Spot 상태를 그대로 만질 수 있다. 등록은 timer �
 ```typescript
 // Spot 안에서 — 반환된 ZLinkTimer를 필드에 보관해 두었다가 취소에 쓴다.
 this.gameTick = await this.context.addTimer(
-  'game-tick',                     // 같은 Spot 안에서 유일한 이름이다.
-  1_000,                           // 주기(ms). 0 이하이면 구성 오류다.
+  // 같은 Spot 안에서 유일한 이름이다.
+  'game-tick',
+  // 주기(ms). 0 이하이면 구성 오류다.
+  1_000,
   GameTickHandler,
   {
     overrunPolicy: ZLinkTimerOverrunPolicy.SkipLateTicks,
@@ -753,7 +766,8 @@ Application은 상태가 일관된 turn에서 `defer()`를 호출한다. 이 호
 ```typescript
 export class RoundTickHandler implements ZLinkSpotTimerHandler<GameRoom> {
   async handle(spot: GameRoom, tick: ZLinkTimerTick): Promise<void> {
-    if (!spot.tryFinishRound()) return; // 라운드 진행 중이면 신호하지 않는다.
+    // 라운드 진행 중이면 신호하지 않는다.
+    if (!spot.tryFinishRound()) return;
 
     // 라운드가 끝나 상태가 정산된 지점이다. 이 turn의 마지막 Framework 호출이어야 한다.
     spot.context.relocationReady().defer();

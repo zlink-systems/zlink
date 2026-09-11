@@ -363,7 +363,8 @@ STREAM에는 이 pressure 상태를 적용하지 않는다.
 
 ```typescript
 // Node는 수준을 message flow log mode로 지정한다.
-builder.configureDispatch().messageFlow("errors");  // 기본값 — error와 backpressure를 기록한다.
+// 기본값 — error와 backpressure를 기록한다.
+builder.configureDispatch().messageFlow("errors");
 ```
 
 message flow 기록에 `backpressured`가 남았다면 보낼 자리를 기다리는 일이 실제로 일어났다는

@@ -202,14 +202,17 @@ receiving side is limited to Spots that subscribed to the same topic on that cha
 ```kotlin
 // Publishing -- inside the TicTacToeGame spot.
 context.outbound()
-    .publish(SampleTopics.PlayerMilestoneChannel, // The ChannelName that decides delivery scope.
-             SampleTopics.PlayerMilestone,        // The topic that picks which Spots receive it within that scope.
+    // The ChannelName that decides delivery scope.
+    .publish(SampleTopics.PlayerMilestoneChannel,
+             // The topic that picks which Spots receive it within that scope.
+             SampleTopics.PlayerMilestone,
              milestoneEvent)
     .submit()
     .await()
 
 // Subscribing -- Kotlin also uses the Java surface. Attach the topic via annotation and register with addHandler.
-@ZLinkSpotSubscription(topic = SampleTopics.PlayerMilestone) // Must match the publishing side's topic to receive it.
+// Must match the publishing side's topic to receive it.
+@ZLinkSpotSubscription(topic = SampleTopics.PlayerMilestone)
 class PlayerWinMilestoneEventHandler :
     ZLinkSpotSubscriptionHandler<PlayEntrySpot, PlayerWinMilestoneEvent> { /* ... */ }
 
@@ -379,9 +382,11 @@ suspend fun handle(request: CreateGameRequest, context: ZLinkMessageContext): Cr
     // Runtime (handler) thread -- free it with await. Don't use a blocking join.
     val room = client
         .requestToChannel("tictactoe.play", CreateRoomRequest(request.gameName))
-        .timeout(Duration.ofSeconds(5))     // The cap on waiting for the reply.
+        // The cap on waiting for the reply.
+        .timeout(Duration.ofSeconds(5))
         .submit(CreateRoomReply::class.java)
-        .await()                            // Waits until the reply arrives.
+        // Waits until the reply arrives.
+        .await()
 
     return CreateGameReply(room.roomId, room.gameName)
 }
@@ -413,11 +418,13 @@ The framework doesn't automatically open every discovered handler on every chann
 ### RouteMesh and Handler Registration
 
 ```kotlin
-options.addHandlersFromPackageOf(Program::class.java) // Discovers handler types
+// Discovers handler types
+options.addHandlersFromPackageOf(Program::class.java)
 val mesh = options.addRouteMesh("services")
     .listen("tcp://0.0.0.0:7101")
     .setRoutingId(RoutingId.from("api-1"))
-mesh.channelName("api").server()                     // server() is the role that receives handlers.
+// server() is the role that receives handlers.
+mesh.channelName("api").server()
     .addRequestHandler(
         GetProfileHandler::class.java, GetProfileRequest::class.java, GetProfileReply::class.java)
     .addSendHandler(RefreshCacheHandler::class.java, RefreshCacheCommand::class.java)
@@ -433,10 +440,12 @@ val mesh = options.addRouteMesh("services")
     .listen("tcp://0.0.0.0:7101")
     .setRoutingId(RoutingId.from("api-1"))
 
-mesh.channelName("api").server()             // A channel this node handles.
+// A channel this node handles.
+mesh.channelName("api").server()
     .addRequestHandler(
         GetProfileHandler::class.java, GetProfileRequest::class.java, GetProfileReply::class.java)
-mesh.channelName("billing").client()         // A call-only channel is client -- no handler registered.
+// A call-only channel is client -- no handler registered.
+mesh.channelName("billing").client()
 ```
 
 A fanout channel's subscription handler is registered with the fanout builder's
@@ -578,18 +587,22 @@ validation, permission checks, metrics -- in one place.
 class AuditFilter(private val logger: Logger) : ZLinkHandlerFilter {
 
     override suspend fun invoke(
-        context: ZLinkHandlerFilterContext, // This dispatch's message info + which path it came through.
-        next: ZLinkHandlerFilterNext,       // A no-argument delegate -- runs the next filter or handler.
+        // This dispatch's message info + which path it came through.
+        context: ZLinkHandlerFilterContext,
+        // A no-argument delegate -- runs the next filter or handler.
+        next: ZLinkHandlerFilterNext,
     ) {
         // Audit-logs only ops commands and lets regular business requests pass through.
         if (context.dispatchKind() == ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST) {
             logger.info("ops {} on {}", context.packetName(), context.meshName())
         }
-        next.invoke() // If not called, the handler doesn't run.
+        // If not called, the handler doesn't run.
+        next.invoke()
     }
 }
 
-options.useFilter(AuditFilter::class.java)      // Registration order is execution order.
+// Registration order is execution order.
+options.useFilter(AuditFilter::class.java)
 options.useFilter(ValidationFilter::class.java)
 ```
 
@@ -716,8 +729,10 @@ serving value.
 
 ```kotlin
 // An operational admin endpoint. "orders" is the registered ChannelName.
-meshOptions.channel("orders").weight(0)   // Excludes this ChannelName from new select-one targets
-meshOptions.channel("orders").weight(100) // Back to normal
+// Excludes this ChannelName from new select-one targets
+meshOptions.channel("orders").weight(0)
+// Back to normal
+meshOptions.channel("orders").weight(100)
 ```
 
 - `Weight = 0` (drain) **doesn't close** the serving socket. In-flight requests that
@@ -737,7 +752,8 @@ The same `Weight` is also set as an initial value at registration time.
 val mesh = options.addRouteMesh("services")
     .listen("tcp://0.0.0.0:7101")
     .setRoutingId(RoutingId.from("orders-1"))
-mesh.channelName("orders").server().setWeight(30) // This channel role's starting weight
+// This channel role's starting weight
+mesh.channelName("orders").server().setWeight(30)
 ```
 
 ## 7. Serialization Codec
@@ -850,7 +866,8 @@ startup.**
 val caller = options.addRouteMesh("media")
     .listen("tcp://0.0.0.0:5590")
     .setRoutingIdPrefix("resize-client")
-caller.channelName("image.resize").client()      // client, since it only calls.
+// client, since it only calls.
+caller.channelName("image.resize").client()
 caller.peerConnections().connect("tcp://10.30.1.10:5600")
 caller.peerConnections().connect("tcp://10.30.1.10:5601")
 
@@ -931,18 +948,23 @@ fun main(args: Array<String>) {
 @Bean
 fun zlink() = ZLinkFrameworkConfigurer { options ->
     options.codecs().use(ZLinkProtobufCodec.getDefault())
-    options.addHandlersFromPackageOf(Program::class.java) // Discovery: finds handlers in the package.
+    // Discovery: finds handlers in the package.
+    options.addHandlersFromPackageOf(Program::class.java)
 
     val mesh = options.addRouteMesh("services")
         .listen("tcp://0.0.0.0:7101")
         .setRoutingId(RoutingId.from("api-1"))
     mesh.channelName("api").server()
-        .addHandlerGroup("api")                           // Exposure: ties the handler group to the channel.
-    mesh.channelName("account").client()                  // A call-only channel.
+        // Exposure: ties the handler group to the channel.
+        .addHandlerGroup("api")
+    // A call-only channel.
+    mesh.channelName("account").client()
 
     options.addFanoutChannel("api.events")
-        .enablePublisher("tcp://0.0.0.0:7201")            // This process is the publisher.
-        .connect("tcp://127.0.0.1:7201")        // Also subscribes to its own publish, as an example.
+        // This process is the publisher.
+        .enablePublisher("tcp://0.0.0.0:7201")
+        // Also subscribes to its own publish, as an example.
+        .connect("tcp://127.0.0.1:7201")
         .addHandler(
             UserCacheRefreshedEventHandler::class.java, UserCacheRefreshedEvent::class.java)
 }

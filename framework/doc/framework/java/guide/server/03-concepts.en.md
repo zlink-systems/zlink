@@ -67,12 +67,17 @@ doesn't know — and doesn't need to know — which node was selected.
 Here's what it looks like to configure both roles on one MeshNode.
 
 ```java
-ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services"); // One MeshNode joins the mesh "services".
-mesh.listen("tcp://0.0.0.0:7101");                            // Its own endpoint for other nodes to connect to.
+// One MeshNode joins the mesh "services".
+ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services");
+// Its own endpoint for other nodes to connect to.
+mesh.listen("tcp://0.0.0.0:7101");
 
-mesh.objects().server();                   // Object role — this node places spots/actors.
-mesh.channelName("orders").server();       // Channel role — this node handles "orders" requests.
-mesh.channelName("billing").client();      // A call-only channel is client.
+// Object role — this node places spots/actors.
+mesh.objects().server();
+// Channel role — this node handles "orders" requests.
+mesh.channelName("orders").server();
+// A call-only channel is client.
+mesh.channelName("billing").client();
 ```
 
 Automatic connection management, which avoids hard-coding peer addresses and tracks servers

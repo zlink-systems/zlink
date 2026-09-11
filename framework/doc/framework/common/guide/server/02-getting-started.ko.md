@@ -39,9 +39,12 @@
     NuGet에서 받는다. 서버 하나를 만들 때 필요한 최소 조합은 다음 셋이다.
 
     ```bash
-    dotnet add package Zlink                         # core 메시징 엔진(.NET binding)
-    dotnet add package Zlink.Framework                # 계약과 runtime
-    dotnet add package Zlink.Framework.AspNetCore # DI·hosted service 등록(AddZLinkFramework)
+    # core 메시징 엔진(.NET binding)
+    dotnet add package Zlink
+    # 계약과 runtime
+    dotnet add package Zlink.Framework
+    # DI·hosted service 등록(AddZLinkFramework)
+    dotnet add package Zlink.Framework.AspNetCore
     ```
 
     필요할 때 더하는 패키지는 다음과 같다.
@@ -114,9 +117,12 @@
     Maven Central에서 받는다. 서버 하나를 만들 때 필요한 최소 조합은 다음 셋이다.
 
     ```kotlin
-    implementation("systems.zlink:zlink-framework-core")                // 계약과 runtime
-    implementation("systems.zlink:zlink-framework-spring-boot-starter") // DI·수명주기 등록
-    implementation("systems.zlink:zlink-framework-kotlin")              // coroutine idiom
+    // 계약과 runtime
+    implementation("systems.zlink:zlink-framework-core")
+    // DI·수명주기 등록
+    implementation("systems.zlink:zlink-framework-spring-boot-starter")
+    // coroutine idiom
+    implementation("systems.zlink:zlink-framework-kotlin")
     ```
 
     필요할 때 더하는 아티팩트는 다음과 같다.
@@ -209,11 +215,15 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
 
     builder.Services.AddZLinkFramework(options =>
     {
-        options.AddHandlersFromAssemblyOf<Program>();          // handler type을 찾는다.
+        // handler type을 찾는다.
+        options.AddHandlersFromAssemblyOf<Program>();
 
-        var mesh = options.AddRouteMesh("services")            // mesh 이름을 정한다.
-            .Listen("tcp://0.0.0.0:7101");                     // 다른 process가 접속할 자기 endpoint.
-        mesh.Channel("greeting").Server();                     // 이 process가 "greeting"을 처리한다.
+        // mesh 이름을 정한다.
+        var mesh = options.AddRouteMesh("services")
+            // 다른 process가 접속할 자기 endpoint.
+            .Listen("tcp://0.0.0.0:7101");
+        // 이 process가 "greeting"을 처리한다.
+        mesh.Channel("greeting").Server();
     });
 
     var app = builder.Build();
@@ -237,9 +247,12 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
     {
         auto app = zlink::framework::app_t::create ();
         app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-            auto mesh = options.add_route_mesh ("services")     // mesh 이름을 정한다.
-              .listen ("tcp://0.0.0.0:7101");                   // 다른 process가 접속할 자기 endpoint.
-            mesh.channel_name ("greeting").server ()            // 이 process가 "greeting"을 처리한다.
+            // mesh 이름을 정한다.
+            auto mesh = options.add_route_mesh ("services")
+              // 다른 process가 접속할 자기 endpoint.
+              .listen ("tcp://0.0.0.0:7101");
+            // 이 process가 "greeting"을 처리한다.
+            mesh.channel_name ("greeting").server ()
               .add_request_handler<hello_handler_t, hello_t, greeting_t> ();
         });
         return app.run (argc, argv);
@@ -269,11 +282,15 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
         @Bean
         ZLinkFrameworkConfigurer zlink() {
             return options -> {
-                options.addHandlersFromPackageOf(ServerApplication.class);  // handler type을 찾는다.
+                // handler type을 찾는다.
+                options.addHandlersFromPackageOf(ServerApplication.class);
 
-                ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services") // mesh 이름을 정한다.
-                    .listen("tcp://0.0.0.0:7101");                          // 다른 process가 접속할 자기 endpoint.
-                mesh.channelName("greeting").server()                           // 이 process가 "greeting"을 처리한다.
+                // mesh 이름을 정한다.
+                ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
+                    // 다른 process가 접속할 자기 endpoint.
+                    .listen("tcp://0.0.0.0:7101");
+                // 이 process가 "greeting"을 처리한다.
+                mesh.channelName("greeting").server()
                     .addRequestHandler(HelloHandler.class, Hello.class, Greeting.class);
             };
         }
@@ -298,11 +315,15 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
 
         @Bean
         fun zlink(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
-            options.addHandlersFromPackageOf(ServerApplication::class.java)  // handler type을 찾는다.
+            // handler type을 찾는다.
+            options.addHandlersFromPackageOf(ServerApplication::class.java)
 
-            val mesh = options.addRouteMesh("services")                      // mesh 이름을 정한다.
-                .listen("tcp://0.0.0.0:7101")                                // 다른 process가 접속할 자기 endpoint.
-            mesh.channelName("greeting").server()                                // 이 process가 "greeting"을 처리한다.
+            // mesh 이름을 정한다.
+            val mesh = options.addRouteMesh("services")
+                // 다른 process가 접속할 자기 endpoint.
+                .listen("tcp://0.0.0.0:7101")
+            // 이 process가 "greeting"을 처리한다.
+            mesh.channelName("greeting").server()
                 .addRequestHandler(HelloHandler::class.java, Hello::class.java, Greeting::class.java)
         }
     }
@@ -324,15 +345,19 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
           useFactory: () => {
             const builder = zlinkFramework();
 
-            const mesh = builder.addRouteMesh('services')   // mesh 이름을 정한다.
-              .listen('tcp://0.0.0.0:7101');                // 다른 process가 접속할 자기 endpoint.
-            mesh.channel('greeting').server()               // 이 process가 "greeting"을 처리한다.
+            // mesh 이름을 정한다.
+            const mesh = builder.addRouteMesh('services')
+              // 다른 process가 접속할 자기 endpoint.
+              .listen('tcp://0.0.0.0:7101');
+            // 이 process가 "greeting"을 처리한다.
+            mesh.channel('greeting').server()
               .addRequestHandler(PacketNames.hello, HelloHandler);
 
             return builder.build();
           }
         }),
-        zlinkModule(__dirname, { })                         // handler를 provider로 모은다.
+        // handler를 provider로 모은다.
+        zlinkModule(__dirname, { })
       ]
     })
     export class ServerModule {}
@@ -356,9 +381,12 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
 
     builder.Services.AddZLinkFramework(options =>
     {
-        var mesh = options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7102");  // 자기 endpoint도 필요하다.
-        mesh.Channel("greeting").Client();                     // 호출만 하는 쪽은 Client.
-        mesh.PeerConnections.Connect("tcp://127.0.0.1:7101");  // 수동 연결 — server endpoint를 직접 적는다.
+        // 자기 endpoint도 필요하다.
+        var mesh = options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7102");
+        // 호출만 하는 쪽은 Client.
+        mesh.Channel("greeting").Client();
+        // 수동 연결 — server endpoint를 직접 적는다.
+        mesh.PeerConnections.Connect("tcp://127.0.0.1:7101");
     });
 
     var app = builder.Build();
@@ -383,9 +411,12 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
 
     ```cpp
     app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-        auto mesh = options.add_route_mesh ("services").listen ("tcp://0.0.0.0:7102");  // 자기 endpoint도 필요하다.
-        mesh.channel_name ("greeting").client ();               // 호출만 하는 쪽은 client.
-        mesh.peer_connections ().connect ("tcp://127.0.0.1:7101"); // 수동 연결 — server endpoint를 직접 적는다.
+        // 자기 endpoint도 필요하다.
+        auto mesh = options.add_route_mesh ("services").listen ("tcp://0.0.0.0:7102");
+        // 호출만 하는 쪽은 client.
+        mesh.channel_name ("greeting").client ();
+        // 수동 연결 — server endpoint를 직접 적는다.
+        mesh.peer_connections ().connect ("tcp://127.0.0.1:7101");
 
         options.http ()
           .listen ("http://0.0.0.0:5000")
@@ -406,9 +437,12 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
     @Bean
     ZLinkFrameworkConfigurer zlink() {
         return options -> {
-            ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102");  // 자기 endpoint도 필요하다.
-            mesh.channelName("greeting").client();                  // 호출만 하는 쪽은 Client.
-            mesh.peerConnections().connect("tcp://127.0.0.1:7101"); // 수동 연결 — server endpoint를 직접 적는다.
+            // 자기 endpoint도 필요하다.
+            ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102");
+            // 호출만 하는 쪽은 Client.
+            mesh.channelName("greeting").client();
+            // 수동 연결 — server endpoint를 직접 적는다.
+            mesh.peerConnections().connect("tcp://127.0.0.1:7101");
         };
     }
 
@@ -433,9 +467,12 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
     ```kotlin
     @Bean
     fun zlink(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
-        val mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102")  // 자기 endpoint도 필요하다.
-        mesh.channelName("greeting").client()                       // 호출만 하는 쪽은 Client.
-        mesh.peerConnections().connect("tcp://127.0.0.1:7101")  // 수동 연결 — server endpoint를 직접 적는다.
+        // 자기 endpoint도 필요하다.
+        val mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102")
+        // 호출만 하는 쪽은 Client.
+        mesh.channelName("greeting").client()
+        // 수동 연결 — server endpoint를 직접 적는다.
+        mesh.peerConnections().connect("tcp://127.0.0.1:7101")
     }
 
     @RestController
@@ -457,9 +494,12 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
     ZLinkModule.forRootFactory({
       useFactory: () => {
         const builder = zlinkFramework();
-        const mesh = builder.addRouteMesh('services').listen('tcp://0.0.0.0:7102');  // 자기 endpoint도 필요하다.
-        mesh.channel('greeting').client();                      // 호출만 하는 쪽은 client.
-        mesh.peerConnections().connect('tcp://127.0.0.1:7101');   // 수동 연결 — server endpoint를 직접 적는다.
+        // 자기 endpoint도 필요하다.
+        const mesh = builder.addRouteMesh('services').listen('tcp://0.0.0.0:7102');
+        // 호출만 하는 쪽은 client.
+        mesh.channel('greeting').client();
+        // 수동 연결 — server endpoint를 직접 적는다.
+        mesh.peerConnections().connect('tcp://127.0.0.1:7101');
         return builder.build();
       }
     })
@@ -721,14 +761,18 @@ HTTP handler는 DI로 받은 spot manager를 사용한다.
                                  : request.game_name;
 
         auto created = co_await _spots
-          .create (sample_types_t::game_spot)     // 이 stable type을 제공하는 node가 후보가 된다.
-          .in_mesh (sample_nodes_t::mesh)         // Object를 만들 RouteMesh를 선택한다.
+          // 이 stable type을 제공하는 node가 후보가 된다.
+          .create (sample_types_t::game_spot)
+          // Object를 만들 RouteMesh를 선택한다.
+          .in_mesh (sample_nodes_t::mesh)
           .creation_request (tictactoe_game_create_req_t{
-            game_name, sample_defaults_t::required_level})  // 새 Spot의 on_create에 전달할 최초 설정이다.
+            // 새 Spot의 on_create에 전달할 최초 설정이다.
+            game_name, sample_defaults_t::required_level})
           .async ();
 
         co_return create_game_http_res_t{
-          created.spot.spot_id (),                // Framework가 발급한 SpotId를 room id로 사용한다.
+          // Framework가 발급한 SpotId를 room id로 사용한다.
+          created.spot.spot_id (),
           _settings.play_endpoints,
           _settings.play_nodes,
           game_name,
@@ -747,14 +791,18 @@ HTTP handler는 DI로 받은 spot manager를 사용한다.
             : request.gameName();
 
         return spots
-            .create(SampleTypes.GAME_SPOT)      // 이 stable type을 제공하는 node가 후보가 된다.
-            .inMesh(SampleNodes.MESH)           // Object를 만들 RouteMesh를 선택한다.
+            // 이 stable type을 제공하는 node가 후보가 된다.
+            .create(SampleTypes.GAME_SPOT)
+            // Object를 만들 RouteMesh를 선택한다.
+            .inMesh(SampleNodes.MESH)
             .request(new TicTacToeGameCreateReq(
                 gameName,
-                SampleDefaults.REQUIRED_LEVEL)) // 새 Spot의 onCreate에 전달할 최초 설정이다.
+                // 새 Spot의 onCreate에 전달할 최초 설정이다.
+                SampleDefaults.REQUIRED_LEVEL))
             .submit()
             .thenApply(created -> new CreateGameHttpRes(
-                created.spot().spotId(),        // Framework가 발급한 SpotId를 room id로 사용한다.
+                // Framework가 발급한 SpotId를 room id로 사용한다.
+                created.spot().spotId(),
                 settings.playEndpoints(),
                 settings.playNodes(),
                 gameName,
@@ -771,16 +819,20 @@ HTTP handler는 DI로 받은 spot manager를 사용한다.
         val gameName = request.gameName.ifBlank { SampleDefaults.GAME_NAME }
 
         val created = spots
-            .create(SampleTypes.GAME_SPOT)      // 이 stable type을 제공하는 node가 후보가 된다.
-            .inMesh(SampleNodes.MESH)           // Object를 만들 RouteMesh를 선택한다.
+            // 이 stable type을 제공하는 node가 후보가 된다.
+            .create(SampleTypes.GAME_SPOT)
+            // Object를 만들 RouteMesh를 선택한다.
+            .inMesh(SampleNodes.MESH)
             .request(TicTacToeGameCreateReq(
                 gameName,
-                SampleDefaults.REQUIRED_LEVEL)) // 새 Spot의 onCreate에 전달할 최초 설정이다.
+                // 새 Spot의 onCreate에 전달할 최초 설정이다.
+                SampleDefaults.REQUIRED_LEVEL))
             .submit()
             .await()
 
         return CreateGameHttpRes(
-            created.spot().spotId(),            // Framework가 발급한 SpotId를 room id로 사용한다.
+            // Framework가 발급한 SpotId를 room id로 사용한다.
+            created.spot().spotId(),
             settings.playEndpoints,
             settings.playNodes,
             gameName,
@@ -797,15 +849,19 @@ HTTP handler는 DI로 받은 spot manager를 사용한다.
       const gameName = request.gameName?.trim() || SampleDefaults.gameName;
 
       const created = await this.spots
-        .create(SampleTypes.gameSpot)         // 이 stable type을 제공하는 node가 후보가 된다.
-        .inMesh(SampleNodes.mesh)             // Object를 만들 RouteMesh를 선택한다.
+        // 이 stable type을 제공하는 node가 후보가 된다.
+        .create(SampleTypes.gameSpot)
+        // Object를 만들 RouteMesh를 선택한다.
+        .inMesh(SampleNodes.mesh)
         .request(tictactoeGameCreateReq(
           gameName,
-          SampleDefaults.requiredLevel))      // 새 Spot의 onCreate에 전달할 최초 설정이다.
+          // 새 Spot의 onCreate에 전달할 최초 설정이다.
+          SampleDefaults.requiredLevel))
         .submit();
 
       return createGameHttpRes(
-        created.spot.spotId,                  // Framework가 발급한 SpotId를 room id로 사용한다.
+        // Framework가 발급한 SpotId를 room id로 사용한다.
+        created.spot.spotId,
         this.settings.playEndpoints,
         this.settings.playNodes,
         gameName,

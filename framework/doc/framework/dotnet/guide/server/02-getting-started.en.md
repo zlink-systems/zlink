@@ -31,9 +31,12 @@ Get it from NuGet. The minimal combination needed to build one server consists o
 three packages.
 
 ```bash
-dotnet add package Zlink                         # The core messaging engine (.NET binding)
-dotnet add package Zlink.Framework                # The contract and runtime
-dotnet add package Zlink.Framework.AspNetCore # DI/hosted service registration (AddZLinkFramework)
+# The core messaging engine (.NET binding)
+dotnet add package Zlink
+# The contract and runtime
+dotnet add package Zlink.Framework
+# DI/hosted service registration (AddZLinkFramework)
+dotnet add package Zlink.Framework.AspNetCore
 ```
 
 Packages to add when you need them:
@@ -71,11 +74,15 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddZLinkFramework(options =>
 {
-    options.AddHandlersFromAssemblyOf<Program>();          // Finds handler types.
+    // Finds handler types.
+    options.AddHandlersFromAssemblyOf<Program>();
 
-    var mesh = options.AddRouteMesh("services")            // Names the mesh.
-        .Listen("tcp://0.0.0.0:7101");                     // Its own endpoint for other processes to connect to.
-    mesh.Channel("greeting").Server();                     // This process handles "greeting".
+    // Names the mesh.
+    var mesh = options.AddRouteMesh("services")
+        // Its own endpoint for other processes to connect to.
+        .Listen("tcp://0.0.0.0:7101");
+    // This process handles "greeting".
+    mesh.Channel("greeting").Server();
 });
 
 var app = builder.Build();
@@ -99,9 +106,12 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddZLinkFramework(options =>
 {
-    var mesh = options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7102");  // It also needs its own endpoint.
-    mesh.Channel("greeting").Client();                     // The call-only side is Client.
-    mesh.PeerConnections.Connect("tcp://127.0.0.1:7101");  // Manual connection — write the server endpoint directly.
+    // It also needs its own endpoint.
+    var mesh = options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7102");
+    // The call-only side is Client.
+    mesh.Channel("greeting").Client();
+    // Manual connection — write the server endpoint directly.
+    mesh.PeerConnections.Connect("tcp://127.0.0.1:7101");
 });
 
 var app = builder.Build();
@@ -205,15 +215,19 @@ internal static async Task<IResult> HandleAsync(
         : SampleDefaults.GameName;
 
     var created = await spots
-        .Create(SampleTypes.GameSpot)      // A node that provides this stable type becomes a candidate.
-        .InMesh(SampleNodes.Mesh)          // Selects the RouteMesh to create the Object on.
+        // A node that provides this stable type becomes a candidate.
+        .Create(SampleTypes.GameSpot)
+        // Selects the RouteMesh to create the Object on.
+        .InMesh(SampleNodes.Mesh)
         .Request(new TicTacToeGameCreateReq(
             gameName,
-            SampleDefaults.RequiredLevel)) // The initial settings passed to the new Spot's OnCreateAsync.
+            // The initial settings passed to the new Spot's OnCreateAsync.
+            SampleDefaults.RequiredLevel))
         .Async(cancellationToken);
 
     return Results.Ok(new CreateGameHttpRes(
-        created.Spot.SpotId,               // Uses the Framework-issued SpotId as the room id.
+        // Uses the Framework-issued SpotId as the room id.
+        created.Spot.SpotId,
         settings.PlayEndpoints,
         settings.PlayNodes,
         gameName,
@@ -237,7 +251,8 @@ var mesh = options.AddRouteMesh(SampleNodes.Mesh)
 
 mesh.Objects().Server()
     .AddSpotFactory<TicTacToeGame>(
-        SampleTypes.GameSpot,               // The same stable type the API passed to Create.
+        // The same stable type the API passed to Create.
+        SampleTypes.GameSpot,
         factory => factory.DisableRelocation());
 ```
 

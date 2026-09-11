@@ -85,7 +85,8 @@ SpotRef? currentSpot = await actors.FindSpotAsync(playerId, cancellationToken);
 
 if (current is { } exact)
 {
-    await actors.DestroyAsync(exact, cancellationToken); // generation이 다른 Actor는 종료하지 않는다.
+    // generation이 다른 Actor는 종료하지 않는다.
+    await actors.DestroyAsync(exact, cancellationToken);
 }
 ```
 
@@ -140,12 +141,15 @@ public sealed class PlayEntrySpot(IZLinkEntrySpotContext context)
     // 새 Actor가 이 Entry Spot을 최초 membership으로 삼을 때 호출된다.
     // 반환값이 이 Actor를 만들지 말지를 결정한다 — 이 Spot이 admission 관문이다.
     public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
-        PlayerActor actor,          // 아직 공개되지 않은 새 Actor instance다.
-        ZLinkMessage createRequest, // GetOrCreate/Create의 .Request(...)로 보낸 값이다.
+        // 아직 공개되지 않은 새 Actor instance다.
+        PlayerActor actor,
+        // GetOrCreate/Create의 .Request(...)로 보낸 값이다.
+        ZLinkMessage createRequest,
         CancellationToken cancellationToken)
     {
         var request = createRequest.Decode<CreatePlayer>();
-        actor.SetDisplayName(request.DisplayName); // 초기 state는 Actor가 소유한다.
+        // 초기 state는 Actor가 소유한다.
+        actor.SetDisplayName(request.DisplayName);
 
         // Accept()면 Actor가 Ready가 되고, Reject(...)면 생성이 취소된다.
         return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
@@ -156,7 +160,8 @@ public sealed class PlayEntrySpot(IZLinkEntrySpotContext context)
     public ValueTask OnJoinedActorAsync(
         PlayerActor actor,
         CancellationToken cancellationToken)
-        => ValueTask.CompletedTask; // 이 샘플은 알림만 받고 따로 할 일이 없다.
+        // 이 샘플은 알림만 받고 따로 할 일이 없다.
+        => ValueTask.CompletedTask;
 
     // 이 Entry Spot에 있던 Actor가 User Spot으로 빠져나간 commit 뒤 호출된다.
     // Actor가 사라진다는 뜻이 아니라 membership이 옮겨졌다는 뜻이다.

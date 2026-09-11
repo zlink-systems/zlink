@@ -190,14 +190,17 @@ mesh 소켓을 그대로 사용하므로 별도 소켓이 없고,
 ```kotlin
 // 발행 — TicTacToeGame spot 안에서.
 context.outbound()
-    .publish(SampleTopics.PlayerMilestoneChannel, // 전달 범위를 정하는 ChannelName.
-             SampleTopics.PlayerMilestone,        // 그 안에서 받을 Spot을 고르는 topic.
+    // 전달 범위를 정하는 ChannelName.
+    .publish(SampleTopics.PlayerMilestoneChannel,
+             // 그 안에서 받을 Spot을 고르는 topic.
+             SampleTopics.PlayerMilestone,
              milestoneEvent)
     .submit()
     .await()
 
 // 구독 — Kotlin도 Java 표면을 쓴다. annotation으로 topic을 붙이고 addHandler로 등록한다.
-@ZLinkSpotSubscription(topic = SampleTopics.PlayerMilestone) // 발행 쪽과 같은 topic이어야 받는다.
+// 발행 쪽과 같은 topic이어야 받는다.
+@ZLinkSpotSubscription(topic = SampleTopics.PlayerMilestone)
 class PlayerWinMilestoneEventHandler :
     ZLinkSpotSubscriptionHandler<PlayEntrySpot, PlayerWinMilestoneEvent> { /* ... */ }
 
@@ -361,9 +364,11 @@ suspend fun handle(request: CreateGameRequest, context: ZLinkMessageContext): Cr
     // 런타임(핸들러) 스레드 — await로 비운다. blocking join은 쓰지 않는다.
     val room = client
         .requestToChannel("tictactoe.play", CreateRoomRequest(request.gameName))
-        .timeout(Duration.ofSeconds(5))     // reply를 기다릴 상한.
+        // reply를 기다릴 상한.
+        .timeout(Duration.ofSeconds(5))
         .submit(CreateRoomReply::class.java)
-        .await()                            // reply가 도착할 때까지 기다린다.
+        // reply가 도착할 때까지 기다린다.
+        .await()
 
     return CreateGameReply(room.roomId, room.gameName)
 }
@@ -413,10 +418,12 @@ val mesh = options.addRouteMesh("services")
     .listen("tcp://0.0.0.0:7101")
     .setRoutingId(RoutingId.from("api-1"))
 
-mesh.channelName("api").server()             // 이 node가 처리하는 channel.
+// 이 node가 처리하는 channel.
+mesh.channelName("api").server()
     .addRequestHandler(
         GetProfileHandler::class.java, GetProfileRequest::class.java, GetProfileReply::class.java)
-mesh.channelName("billing").client()         // 호출만 하는 channel은 client — handler를 등록하지 않는다.
+// 호출만 하는 channel은 client — handler를 등록하지 않는다.
+mesh.channelName("billing").client()
 ```
 
 fanout channel의 구독 handler는 fanout builder의 `AddHandler<...>()`로 등록한다.
@@ -547,18 +554,22 @@ filter로 한곳에 모은다.
 class AuditFilter(private val logger: Logger) : ZLinkHandlerFilter {
 
     override suspend fun invoke(
-        context: ZLinkHandlerFilterContext, // 이 dispatch의 message 정보 + 어느 경로로 왔는지.
-        next: ZLinkHandlerFilterNext,       // 인자 없는 delegate — 다음 filter 또는 handler를 실행한다.
+        // 이 dispatch의 message 정보 + 어느 경로로 왔는지.
+        context: ZLinkHandlerFilterContext,
+        // 인자 없는 delegate — 다음 filter 또는 handler를 실행한다.
+        next: ZLinkHandlerFilterNext,
     ) {
         // 운영 명령만 감사 로그로 남기고 일반 업무 요청은 그냥 통과시킨다.
         if (context.dispatchKind() == ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST) {
             logger.info("ops {} on {}", context.packetName(), context.meshName())
         }
-        next.invoke() // 호출하지 않으면 handler가 실행되지 않는다.
+        // 호출하지 않으면 handler가 실행되지 않는다.
+        next.invoke()
     }
 }
 
-options.useFilter(AuditFilter::class.java)      // 등록한 순서가 곧 실행 순서다.
+// 등록한 순서가 곧 실행 순서다.
+options.useFilter(AuditFilter::class.java)
 options.useFilter(ValidationFilter::class.java)
 ```
 
@@ -673,8 +684,10 @@ weight가 모두 같으면 새 요청은 균등하게 round-robin으로 분배�
 
 ```kotlin
 // 운영 admin 엔드포인트. "orders"는 등록한 ChannelName이다.
-meshOptions.channel("orders").weight(0)   // 이 ChannelName을 새 select-one 대상에서 제외
-meshOptions.channel("orders").weight(100) // 정상 복귀
+// 이 ChannelName을 새 select-one 대상에서 제외
+meshOptions.channel("orders").weight(0)
+// 정상 복귀
+meshOptions.channel("orders").weight(100)
 ```
 
 - `Weight = 0`(drain)은 serving socket을 **닫지 않는다**. 이미 들어온 in-flight 요청은
@@ -796,7 +809,8 @@ ChannelName을 물리 송신 경로 둘 이상에 등록하는 것도 **host 시
 val caller = options.addRouteMesh("media")
     .listen("tcp://0.0.0.0:5590")
     .setRoutingIdPrefix("resize-client")
-caller.channelName("image.resize").client()      // 호출만 하므로 client.
+// 호출만 하므로 client.
+caller.channelName("image.resize").client()
 caller.peerConnections().connect("tcp://10.30.1.10:5600")
 caller.peerConnections().connect("tcp://10.30.1.10:5601")
 
@@ -876,18 +890,23 @@ fun main(args: Array<String>) {
 @Bean
 fun zlink() = ZLinkFrameworkConfigurer { options ->
     options.codecs().use(ZLinkProtobufCodec.getDefault())
-    options.addHandlersFromPackageOf(Program::class.java) // 발견: package에서 handler를 찾는다.
+    // 발견: package에서 handler를 찾는다.
+    options.addHandlersFromPackageOf(Program::class.java)
 
     val mesh = options.addRouteMesh("services")
         .listen("tcp://0.0.0.0:7101")
         .setRoutingId(RoutingId.from("api-1"))
     mesh.channelName("api").server()
-        .addHandlerGroup("api")                           // 노출: handler group을 channel에 연결한다.
-    mesh.channelName("account").client()                  // 호출만 하는 channel.
+        // 노출: handler group을 channel에 연결한다.
+        .addHandlerGroup("api")
+    // 호출만 하는 channel.
+    mesh.channelName("account").client()
 
     options.addFanoutChannel("api.events")
-        .enablePublisher("tcp://0.0.0.0:7201")            // 이 process가 발행자다.
-        .connect("tcp://127.0.0.1:7201")        // 자기 발행도 구독해 보여 주는 예다.
+        // 이 process가 발행자다.
+        .enablePublisher("tcp://0.0.0.0:7201")
+        // 자기 발행도 구독해 보여 주는 예다.
+        .connect("tcp://127.0.0.1:7201")
         .addHandler(
             UserCacheRefreshedEventHandler::class.java, UserCacheRefreshedEvent::class.java)
 }

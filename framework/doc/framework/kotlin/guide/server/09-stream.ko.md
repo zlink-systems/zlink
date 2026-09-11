@@ -82,7 +82,8 @@ class PlaySession(
 ) : ZLinkSession {
 
     override fun configure() {
-        context.handlers().addHandler(PingHandler::class.java) // typed session packet handler를 등록한다.
+        // typed session packet handler를 등록한다.
+        context.handlers().addHandler(PingHandler::class.java)
     }
 
     override suspend fun onConnected() {
@@ -177,7 +178,8 @@ connector.on(GameStateNotify::class.java) { message ->
     CompletableFuture.completedFuture(null)
 }
 
-connector.connect().submit().await() // 연결과 receive loop 준비를 완료한다.
+// 연결과 receive loop 준비를 완료한다.
+connector.connect().submit().await()
 
 while (running) {
     // MANUAL 모드는 이 caller에서 callback을 실행한다.

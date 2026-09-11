@@ -263,7 +263,8 @@ SpotId direct 호출에 Instance intent를 붙였을 때만 시작한다([06-spo
 ```cpp
 relocation_options_t relocation;
 relocation.mode = relocation_mode_t::rolling_update;
-relocation.target_application_version = 12;              // 지정한 새 버전의 eligible node만 사용한다.
+// 지정한 새 버전의 eligible node만 사용한다.
+relocation.target_application_version = 12;
 relocation.deadline = std::chrono::seconds (25);
 
 auto result = co_await runtime.relocate (relocation);

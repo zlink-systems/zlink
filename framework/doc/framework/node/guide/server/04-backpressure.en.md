@@ -389,7 +389,8 @@ Terminal reply/error completion identifiable before receive does not use this pe
 
 ```typescript
 // Node sets the level as a message flow log mode.
-builder.configureDispatch().messageFlow("errors");  // Default — records errors and backpressure.
+// Default — records errors and backpressure.
+builder.configureDispatch().messageFlow("errors");
 ```
 
 If `backpressured` shows up in the message flow record, it means waiting for a send slot

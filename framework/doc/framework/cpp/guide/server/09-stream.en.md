@@ -36,7 +36,8 @@ Register one session type on a Stream node. If you use Actor dispatch, enable it
 options.add_stream_node ("client-stream")
   .bind ("tcp://0.0.0.0:9100")
   .enable_actor_dispatch ()
-  .register_session<play_session_t> (); // Registers the session type to create per connection.
+  // Registers the session type to create per connection.
+  .register_session<play_session_t> ();
 ```
 
 Session handlers and Actor/Spot handlers use the Framework's default typed JSON
@@ -192,10 +193,12 @@ auto connector = zlink::stream_connector::connector_factory_t::create (connector
 connector.on<game_state_notify_t> ("GameStateNotify",
                                    [] (const auto &message) { render (message.payload ()); });
 
-co_await connector.connect ().async (); // Finishes connecting and preparing the receive loop.
+// Finishes connecting and preparing the receive loop.
+co_await connector.connect ().async ();
 
 while (running) {
-    co_await connector.dispatch ().async (); // manual mode runs the callback on this caller.
+    // manual mode runs the callback on this caller.
+    co_await connector.dispatch ().async ();
 }
 ```
 

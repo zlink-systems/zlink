@@ -67,12 +67,17 @@ doesn't know — and doesn't need to know — which node was selected.
 Here's what it looks like to configure both roles on one MeshNode.
 
 ```csharp
-var mesh = options.AddRouteMesh("services")     // One MeshNode joins the mesh "services".
-    .Listen("tcp://0.0.0.0:7101");              // Its own endpoint for other nodes to connect to.
+// One MeshNode joins the mesh "services".
+var mesh = options.AddRouteMesh("services")
+    // Its own endpoint for other nodes to connect to.
+    .Listen("tcp://0.0.0.0:7101");
 
-mesh.Objects().Server();                        // Object role — this node places spots/actors.
-mesh.Channel("orders").Server();                // Channel role — this node handles "orders" requests.
-mesh.Channel("billing").Client();               // A call-only channel is Client.
+// Object role — this node places spots/actors.
+mesh.Objects().Server();
+// Channel role — this node handles "orders" requests.
+mesh.Channel("orders").Server();
+// A call-only channel is Client.
+mesh.Channel("billing").Client();
 ```
 
 Automatic connection management, which avoids hard-coding peer addresses and tracks servers

@@ -35,8 +35,10 @@ Register one session type on a Stream node. If you use Actor dispatch, enable it
 ```kotlin
 options.addStreamNode("client-stream")
     .bind("tcp://0.0.0.0:9100")
-    .enableActorDispatch()            // Kotlin uses the Java surface as-is.
-    .registerSession(PlaySession::class.java) // Registers the session type to create per connection.
+    // Kotlin uses the Java surface as-is.
+    .enableActorDispatch()
+    // Registers the session type to create per connection.
+    .registerSession(PlaySession::class.java)
 ```
 
 Session handlers and Actor/Spot handlers use the Framework's default typed JSON
@@ -87,7 +89,8 @@ class PlaySession(
 ) : ZLinkSession {
 
     override fun configure() {
-        context.handlers().addHandler(PingHandler::class.java) // Registers a typed session packet handler.
+        // Registers a typed session packet handler.
+        context.handlers().addHandler(PingHandler::class.java)
     }
 
     override suspend fun onConnected() {
@@ -185,7 +188,8 @@ connector.on(GameStateNotify::class.java) { message ->
     CompletableFuture.completedFuture(null)
 }
 
-connector.connect().submit().await() // Finishes connecting and preparing the receive loop.
+// Finishes connecting and preparing the receive loop.
+connector.connect().submit().await()
 
 while (running) {
     // MANUAL mode runs the callback on this caller.

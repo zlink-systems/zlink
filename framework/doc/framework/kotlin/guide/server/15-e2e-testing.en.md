@@ -37,10 +37,13 @@ that work. **The client library your real users use is itself the verification t
 E2E test comes down to just this much code.
 
 ```kotlin
-client.connect().submit().await()                                   // A real connection
-val auth = client.request(AuthenticateReq(actorId))                 // A real request
+// A real connection
+client.connect().submit().await()
+// A real request
+val auth = client.request(AuthenticateReq(actorId))
     .submit(AuthenticateRes::class.java).await()
-val push = other.waitFor(PlayerJoinedNotify::class.java)            // Confirms a real push arrived
+// Confirms a real push arrived
+val push = other.waitFor(PlayerJoinedNotify::class.java)
     .submit(PlayerJoinedNotify::class.java).await()
 ZLinkStreamAssert.ensure(
     push.payload().actorId == auth.player.actorId, "join push actor mismatch.")
@@ -82,7 +85,8 @@ val room = api.post("/games")
 val client = ZLinkStreamConnectorFactory.create(
     ZLinkStreamConnectorOptions(
         URI.create(room.playEndpoints[0]),
-        ZLinkStreamDispatchMode.IMMEDIATE, // Console scenarios use the automatic pump.
+        // Console scenarios use the automatic pump.
+        ZLinkStreamDispatchMode.IMMEDIATE,
         options.streamTimeout))
 ```
 
@@ -234,7 +238,8 @@ suspend fun run(options: TicTacToeClientOptions) {
     // 3. Whoever connects first authenticates and enters the empty room.
     client1.connect().submit().await()
     client1.request(AuthenticateReq(options.xActorId)).submit(AuthenticateRes::class.java).await()
-    val join1 = joinGame(client1, room.roomId) // Register wait -> send -> receive (see §3)
+    // Register wait -> send -> receive (see §3)
+    val join1 = joinGame(client1, room.roomId)
     ZLinkStreamAssert.ensure(
         join1.state.status == TicTacToeGameStatuses.WaitingForPlayers,
         "room should wait for the second player.")

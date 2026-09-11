@@ -28,9 +28,12 @@ title: "2. 시작하기 · C#/.NET"
 NuGet에서 받는다. 서버 하나를 만들 때 필요한 최소 조합은 다음 셋이다.
 
 ```bash
-dotnet add package Zlink                         # core 메시징 엔진(.NET binding)
-dotnet add package Zlink.Framework                # 계약과 runtime
-dotnet add package Zlink.Framework.AspNetCore # DI·hosted service 등록(AddZLinkFramework)
+# core 메시징 엔진(.NET binding)
+dotnet add package Zlink
+# 계약과 runtime
+dotnet add package Zlink.Framework
+# DI·hosted service 등록(AddZLinkFramework)
+dotnet add package Zlink.Framework.AspNetCore
 ```
 
 필요할 때 더하는 패키지는 다음과 같다.
@@ -68,11 +71,15 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddZLinkFramework(options =>
 {
-    options.AddHandlersFromAssemblyOf<Program>();          // handler type을 찾는다.
+    // handler type을 찾는다.
+    options.AddHandlersFromAssemblyOf<Program>();
 
-    var mesh = options.AddRouteMesh("services")            // mesh 이름을 정한다.
-        .Listen("tcp://0.0.0.0:7101");                     // 다른 process가 접속할 자기 endpoint.
-    mesh.Channel("greeting").Server();                     // 이 process가 "greeting"을 처리한다.
+    // mesh 이름을 정한다.
+    var mesh = options.AddRouteMesh("services")
+        // 다른 process가 접속할 자기 endpoint.
+        .Listen("tcp://0.0.0.0:7101");
+    // 이 process가 "greeting"을 처리한다.
+    mesh.Channel("greeting").Server();
 });
 
 var app = builder.Build();
@@ -96,9 +103,12 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddZLinkFramework(options =>
 {
-    var mesh = options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7102");  // 자기 endpoint도 필요하다.
-    mesh.Channel("greeting").Client();                     // 호출만 하는 쪽은 Client.
-    mesh.PeerConnections.Connect("tcp://127.0.0.1:7101");  // 수동 연결 — server endpoint를 직접 적는다.
+    // 자기 endpoint도 필요하다.
+    var mesh = options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7102");
+    // 호출만 하는 쪽은 Client.
+    mesh.Channel("greeting").Client();
+    // 수동 연결 — server endpoint를 직접 적는다.
+    mesh.PeerConnections.Connect("tcp://127.0.0.1:7101");
 });
 
 var app = builder.Build();

@@ -35,10 +35,13 @@ handler 단위 테스트를 아무리 촘촘히 작성해도 확인되지 않는
 코드만으로 끝난다.
 
 ```typescript
-await client.connect(signal);                                            // 실제 연결
-const auth = await client.request(authenticateReq(actorId))              // 실제 request
+// 실제 연결
+await client.connect(signal);
+// 실제 request
+const auth = await client.request(authenticateReq(actorId))
   .submit<AuthenticateRes>(signal);
-const push = await other.waitFor<PlayerJoinedNotify>(                    // 실제 push 도착 확인
+// 실제 push 도착 확인
+const push = await other.waitFor<PlayerJoinedNotify>(
   PacketNames.playerJoinedNotify).submit(signal);
 zlinkStreamAssert.ensure(
   push.payload.actorId === auth.player.actorId, 'join push actor mismatch.');
@@ -77,7 +80,8 @@ const client = zlinkStreamConnectorFactory.create({
   endpoint: room.playEndpoints[0],
   connectTimeoutMs: options.streamTimeoutMs,
   requestTimeoutMs: options.streamTimeoutMs,
-  dispatchMode: ZlinkStreamDispatchMode.Immediate // console 시나리오는 자동 펌프를 사용한다.
+  // console 시나리오는 자동 펌프를 사용한다.
+  dispatchMode: ZlinkStreamDispatchMode.Immediate
 });
 ```
 
@@ -223,7 +227,8 @@ async function run(options: TicTacToeClientOptions, signal: AbortSignal): Promis
   // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
   await client1.connect(signal);
   await client1.request(authenticateReq(options.xActorId)).submit<AuthenticateRes>(signal);
-  const join1 = await joinGame(client1, room.roomId, signal); // 대기 등록 → send → 수신(§3)
+  // 대기 등록 → send → 수신(§3)
+  const join1 = await joinGame(client1, room.roomId, signal);
   zlinkStreamAssert.ensure(
     join1.state.status === TicTacToeGameStatuses.WaitingForPlayers,
     'room should wait for the second player.');

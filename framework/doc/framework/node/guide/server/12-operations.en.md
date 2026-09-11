@@ -290,7 +290,8 @@ avoids failures for callers still caching the old route.
 ```typescript
 const result = await runtime.relocate({
   mode: ZLinkFrameworkRelocationMode.RollingUpdate,
-  targetApplicationVersion: 12n,   // Uses only eligible nodes on the specified new version.
+  // Uses only eligible nodes on the specified new version.
+  targetApplicationVersion: 12n,
   deadlineMs: 25_000
 });
 
@@ -374,8 +375,10 @@ A MeshNode registered with `addRouteMesh` is operated through two DI singletons.
 socket options (HWM, timeout) are exclusive to `configureRouterSocket()` before startup.
 
 ```typescript
-meshOptions.mesh('game.room').placementWeight = 0; // Excludes it from new object placement
-meshOptions.channel('game.room').weight = 0;       // Excludes it from new channel select-one
+// Excludes it from new object placement
+meshOptions.mesh('game.room').placementWeight = 0;
+// Excludes it from new channel select-one
+meshOptions.channel('game.room').weight = 0;
 ```
 
 The two weights are independent and take effect on new selections while running. Placement

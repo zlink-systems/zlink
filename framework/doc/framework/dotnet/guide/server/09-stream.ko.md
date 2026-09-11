@@ -84,7 +84,8 @@ public sealed class PlaySession(
 
     public void Configure()
     {
-        Context.Handlers.AddHandler<PingHandler>(); // typed session packet handler를 등록한다.
+        // typed session packet handler를 등록한다.
+        Context.Handlers.AddHandler<PingHandler>();
     }
 
     public ValueTask OnConnectedAsync(CancellationToken cancellationToken)
@@ -103,7 +104,8 @@ public sealed class PlaySession(
                 payload,
                 cancellationToken))
         {
-            await Context.CloseAsync(); // application protocol에 없는 packet을 받으면 연결을 닫는다.
+            // application protocol에 없는 packet을 받으면 연결을 닫는다.
+            await Context.CloseAsync();
         }
     }
 
@@ -215,11 +217,13 @@ connector.On<GameStateNotify>("GameStateNotify", (message, cancellationToken) =>
     return ValueTask.CompletedTask;
 });
 
-await connector.Connect.Async(cancellationToken); // 연결과 receive loop 준비를 완료한다.
+// 연결과 receive loop 준비를 완료한다.
+await connector.Connect.Async(cancellationToken);
 
 while (running)
 {
-    await connector.Dispatch.Async(cancellationToken); // Manual 모드는 이 caller에서 callback을 실행한다.
+    // Manual 모드는 이 caller에서 callback을 실행한다.
+    await connector.Dispatch.Async(cancellationToken);
 }
 ```
 

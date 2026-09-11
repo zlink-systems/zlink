@@ -37,10 +37,13 @@ that work. **The client library your real users use is itself the verification t
 E2E test comes down to just this much code.
 
 ```typescript
-await client.connect(signal);                                            // A real connection
-const auth = await client.request(authenticateReq(actorId))              // A real request
+// A real connection
+await client.connect(signal);
+// A real request
+const auth = await client.request(authenticateReq(actorId))
   .submit<AuthenticateRes>(signal);
-const push = await other.waitFor<PlayerJoinedNotify>(                    // Confirms a real push arrived
+// Confirms a real push arrived
+const push = await other.waitFor<PlayerJoinedNotify>(
   PacketNames.playerJoinedNotify).submit(signal);
 zlinkStreamAssert.ensure(
   push.payload.actorId === auth.player.actorId, 'join push actor mismatch.');
@@ -81,7 +84,8 @@ const client = zlinkStreamConnectorFactory.create({
   endpoint: room.playEndpoints[0],
   connectTimeoutMs: options.streamTimeoutMs,
   requestTimeoutMs: options.streamTimeoutMs,
-  dispatchMode: ZlinkStreamDispatchMode.Immediate // Console scenarios use the automatic pump.
+  // Console scenarios use the automatic pump.
+  dispatchMode: ZlinkStreamDispatchMode.Immediate
 });
 ```
 
@@ -232,7 +236,8 @@ async function run(options: TicTacToeClientOptions, signal: AbortSignal): Promis
   // 3. Whoever connects first authenticates and enters the empty room.
   await client1.connect(signal);
   await client1.request(authenticateReq(options.xActorId)).submit<AuthenticateRes>(signal);
-  const join1 = await joinGame(client1, room.roomId, signal); // Register wait -> send -> receive (see §3)
+  // Register wait -> send -> receive (see §3)
+  const join1 = await joinGame(client1, room.roomId, signal);
   zlinkStreamAssert.ensure(
     join1.state.status === TicTacToeGameStatuses.WaitingForPlayers,
     'room should wait for the second player.');

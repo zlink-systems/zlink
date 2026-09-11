@@ -83,7 +83,8 @@ export class PlaySession implements ZLinkSession {
   ) {}
 
   configure(): void {
-    this.context.handlers.addHandler(PingHandler); // typed session packet handler를 등록한다.
+    // typed session packet handler를 등록한다.
+    this.context.handlers.addHandler(PingHandler);
   }
 
   async onConnected(): Promise<void> {

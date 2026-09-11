@@ -69,9 +69,12 @@ int main (int argc, char **argv)
 {
     auto app = zlink::framework::app_t::create ();
     app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-        auto mesh = options.add_route_mesh ("services")     // Names the mesh.
-          .listen ("tcp://0.0.0.0:7101");                   // Its own endpoint for other processes to connect to.
-        mesh.channel_name ("greeting").server ()            // This process handles "greeting".
+        // Names the mesh.
+        auto mesh = options.add_route_mesh ("services")
+          // Its own endpoint for other processes to connect to.
+          .listen ("tcp://0.0.0.0:7101");
+        // This process handles "greeting".
+        mesh.channel_name ("greeting").server ()
           .add_request_handler<hello_handler_t, hello_t, greeting_t> ();
     });
     return app.run (argc, argv);
@@ -95,9 +98,12 @@ class hello_handler_t
 
 ```cpp
 app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-    auto mesh = options.add_route_mesh ("services").listen ("tcp://0.0.0.0:7102");  // It also needs its own endpoint.
-    mesh.channel_name ("greeting").client ();               // The call-only side is client.
-    mesh.peer_connections ().connect ("tcp://127.0.0.1:7101"); // Manual connection — write the server endpoint directly.
+    // It also needs its own endpoint.
+    auto mesh = options.add_route_mesh ("services").listen ("tcp://0.0.0.0:7102");
+    // The call-only side is client.
+    mesh.channel_name ("greeting").client ();
+    // Manual connection — write the server endpoint directly.
+    mesh.peer_connections ().connect ("tcp://127.0.0.1:7101");
 
     options.http ()
       .listen ("http://0.0.0.0:5000")
@@ -188,14 +194,18 @@ create_game_http_handler_t::handle (const create_game_http_req_t &request)
                              : request.game_name;
 
     auto created = co_await _spots
-      .create (sample_types_t::game_spot)     // A node that provides this stable type becomes a candidate.
-      .in_mesh (sample_nodes_t::mesh)         // Selects the RouteMesh to create the Object on.
+      // A node that provides this stable type becomes a candidate.
+      .create (sample_types_t::game_spot)
+      // Selects the RouteMesh to create the Object on.
+      .in_mesh (sample_nodes_t::mesh)
       .creation_request (tictactoe_game_create_req_t{
-        game_name, sample_defaults_t::required_level})  // The initial settings passed to the new Spot's on_create.
+        // The initial settings passed to the new Spot's on_create.
+        game_name, sample_defaults_t::required_level})
       .async ();
 
     co_return create_game_http_res_t{
-      created.spot.spot_id (),                // Uses the Framework-issued SpotId as the room id.
+      // Uses the Framework-issued SpotId as the room id.
+      created.spot.spot_id (),
       _settings.play_endpoints,
       _settings.play_nodes,
       game_name,
@@ -218,7 +228,8 @@ auto mesh = options.add_route_mesh (sample_nodes_t::mesh)
   .set_routing_id (routing_id_t::from ("tictactoe-play-1"));
 
 mesh.add_spot_factory<tictactoe_game_t> (
-  sample_types_t::game_spot,          // The same stable type the API passed to create.
+  // The same stable type the API passed to create.
+  sample_types_t::game_spot,
   [] (spot_context_t context) { return std::make_shared<tictactoe_game_t> (std::move (context)); },
   [] (auto &factory) { factory.disable_relocation (); });
 ```

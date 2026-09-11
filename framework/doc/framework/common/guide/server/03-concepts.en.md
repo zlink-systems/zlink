@@ -52,57 +52,82 @@ Here's what it looks like to configure both roles on one MeshNode.
 === "C#/.NET"
 
     ```csharp
-    var mesh = options.AddRouteMesh("services")     // One MeshNode joins the mesh "services".
-        .Listen("tcp://0.0.0.0:7101");              // Its own endpoint for other nodes to connect to.
+    // One MeshNode joins the mesh "services".
+    var mesh = options.AddRouteMesh("services")
+        // Its own endpoint for other nodes to connect to.
+        .Listen("tcp://0.0.0.0:7101");
 
-    mesh.Objects().Server();                        // Object role — this node places spots/actors.
-    mesh.Channel("orders").Server();                // Channel role — this node handles "orders" requests.
-    mesh.Channel("billing").Client();               // A call-only channel is Client.
+    // Object role — this node places spots/actors.
+    mesh.Objects().Server();
+    // Channel role — this node handles "orders" requests.
+    mesh.Channel("orders").Server();
+    // A call-only channel is Client.
+    mesh.Channel("billing").Client();
     ```
 
 === "C++"
 
     ```cpp
-    auto mesh = options.add_route_mesh ("services");  // One MeshNode joins the mesh "services".
-    mesh.listen ("tcp://0.0.0.0:7101");               // Its own endpoint for other nodes to connect to.
+    // One MeshNode joins the mesh "services".
+    auto mesh = options.add_route_mesh ("services");
+    // Its own endpoint for other nodes to connect to.
+    mesh.listen ("tcp://0.0.0.0:7101");
 
     // C++ sets the Object role with one enum instead of a separate builder.
-    mesh.set_object_role (object_role_t::server);     // This node places spots/actors.
-    mesh.channel_name ("orders").server ();           // Channel role — this node handles "orders" requests.
-    mesh.channel_name ("billing").client ();          // A call-only channel is client.
+    // This node places spots/actors.
+    mesh.set_object_role (object_role_t::server);
+    // Channel role — this node handles "orders" requests.
+    mesh.channel_name ("orders").server ();
+    // A call-only channel is client.
+    mesh.channel_name ("billing").client ();
     ```
 
 === "Java"
 
     ```java
-    ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services"); // One MeshNode joins the mesh "services".
-    mesh.listen("tcp://0.0.0.0:7101");                            // Its own endpoint for other nodes to connect to.
+    // One MeshNode joins the mesh "services".
+    ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services");
+    // Its own endpoint for other nodes to connect to.
+    mesh.listen("tcp://0.0.0.0:7101");
 
-    mesh.objects().server();                   // Object role — this node places spots/actors.
-    mesh.channelName("orders").server();       // Channel role — this node handles "orders" requests.
-    mesh.channelName("billing").client();      // A call-only channel is client.
+    // Object role — this node places spots/actors.
+    mesh.objects().server();
+    // Channel role — this node handles "orders" requests.
+    mesh.channelName("orders").server();
+    // A call-only channel is client.
+    mesh.channelName("billing").client();
     ```
 
 === "Kotlin"
 
     ```kotlin
-    val mesh = options.addRouteMesh("services")  // One MeshNode joins the mesh "services".
-    mesh.listen("tcp://0.0.0.0:7101")            // Its own endpoint for other nodes to connect to.
+    // One MeshNode joins the mesh "services".
+    val mesh = options.addRouteMesh("services")
+    // Its own endpoint for other nodes to connect to.
+    mesh.listen("tcp://0.0.0.0:7101")
 
-    mesh.objects().server()                      // Object role — this node places spots/actors.
-    mesh.channelName("orders").server()          // Channel role — this node handles "orders" requests.
-    mesh.channelName("billing").client()         // A call-only channel is client.
+    // Object role — this node places spots/actors.
+    mesh.objects().server()
+    // Channel role — this node handles "orders" requests.
+    mesh.channelName("orders").server()
+    // A call-only channel is client.
+    mesh.channelName("billing").client()
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    const mesh = builder.addRouteMesh('services');  // One MeshNode joins the mesh "services".
-    mesh.listen('tcp://0.0.0.0:7101');              // Its own endpoint for other nodes to connect to.
+    // One MeshNode joins the mesh "services".
+    const mesh = builder.addRouteMesh('services');
+    // Its own endpoint for other nodes to connect to.
+    mesh.listen('tcp://0.0.0.0:7101');
 
-    mesh.objects().server();                        // Object role — this node places spots/actors.
-    mesh.channel('orders').server();                // Channel role — this node handles "orders" requests.
-    mesh.channel('billing').client();               // A call-only channel is client.
+    // Object role — this node places spots/actors.
+    mesh.objects().server();
+    // Channel role — this node handles "orders" requests.
+    mesh.channel('orders').server();
+    // A call-only channel is client.
+    mesh.channel('billing').client();
     ```
 
 

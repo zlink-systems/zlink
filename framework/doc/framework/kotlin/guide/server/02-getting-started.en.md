@@ -31,9 +31,12 @@ Get it from Maven Central. The minimal combination needed to build one server co
 of these three artifacts.
 
 ```kotlin
-implementation("systems.zlink:zlink-framework-core")                // The contract and runtime
-implementation("systems.zlink:zlink-framework-spring-boot-starter") // DI/lifecycle registration
-implementation("systems.zlink:zlink-framework-kotlin")              // Coroutine idiom
+// The contract and runtime
+implementation("systems.zlink:zlink-framework-core")
+// DI/lifecycle registration
+implementation("systems.zlink:zlink-framework-spring-boot-starter")
+// Coroutine idiom
+implementation("systems.zlink:zlink-framework-kotlin")
 ```
 
 Artifacts to add when you need them:
@@ -72,11 +75,15 @@ class ServerApplication {
 
     @Bean
     fun zlink(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
-        options.addHandlersFromPackageOf(ServerApplication::class.java)  // Finds handler types.
+        // Finds handler types.
+        options.addHandlersFromPackageOf(ServerApplication::class.java)
 
-        val mesh = options.addRouteMesh("services")                      // Names the mesh.
-            .listen("tcp://0.0.0.0:7101")                                // Its own endpoint for other processes to connect to.
-        mesh.channelName("greeting").server()                                // This process handles "greeting".
+        // Names the mesh.
+        val mesh = options.addRouteMesh("services")
+            // Its own endpoint for other processes to connect to.
+            .listen("tcp://0.0.0.0:7101")
+        // This process handles "greeting".
+        mesh.channelName("greeting").server()
             .addRequestHandler(HelloHandler::class.java, Hello::class.java, Greeting::class.java)
     }
 }
@@ -94,9 +101,12 @@ class HelloHandler : ZLinkRequestHandler<Hello, Greeting> {
 ```kotlin
 @Bean
 fun zlink(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
-    val mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102")  // It also needs its own endpoint.
-    mesh.channelName("greeting").client()                       // The call-only side is Client.
-    mesh.peerConnections().connect("tcp://127.0.0.1:7101")  // Manual connection — write the server endpoint directly.
+    // It also needs its own endpoint.
+    val mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102")
+    // The call-only side is Client.
+    mesh.channelName("greeting").client()
+    // Manual connection — write the server endpoint directly.
+    mesh.peerConnections().connect("tcp://127.0.0.1:7101")
 }
 
 @RestController
@@ -183,16 +193,20 @@ suspend fun create(@RequestBody request: CreateGameHttpReq): CreateGameHttpRes {
     val gameName = request.gameName.ifBlank { SampleDefaults.GAME_NAME }
 
     val created = spots
-        .create(SampleTypes.GAME_SPOT)      // A node that provides this stable type becomes a candidate.
-        .inMesh(SampleNodes.MESH)           // Selects the RouteMesh to create the Object on.
+        // A node that provides this stable type becomes a candidate.
+        .create(SampleTypes.GAME_SPOT)
+        // Selects the RouteMesh to create the Object on.
+        .inMesh(SampleNodes.MESH)
         .request(TicTacToeGameCreateReq(
             gameName,
-            SampleDefaults.REQUIRED_LEVEL)) // The initial settings passed to the new Spot's onCreate.
+            // The initial settings passed to the new Spot's onCreate.
+            SampleDefaults.REQUIRED_LEVEL))
         .submit()
         .await()
 
     return CreateGameHttpRes(
-        created.spot().spotId(),            // Uses the Framework-issued SpotId as the room id.
+        // Uses the Framework-issued SpotId as the room id.
+        created.spot().spotId(),
         settings.playEndpoints,
         settings.playNodes,
         gameName,
@@ -216,7 +230,8 @@ val mesh = options.addRouteMesh(SampleNodes.MESH)
 
 mesh.objects().server()
     .addSpotFactory(
-        SampleTypes.GAME_SPOT,          // The same stable type the API passed to create.
+        // The same stable type the API passed to create.
+        SampleTypes.GAME_SPOT,
         TicTacToeGame::class.java
     ) { factory -> factory.disableRelocation() }
 ```

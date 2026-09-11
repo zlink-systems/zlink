@@ -36,7 +36,8 @@ Register one session type on a Stream node. If you use Actor dispatch, enable it
 options.AddStreamNode("client-stream")
     .Bind("tcp://0.0.0.0:9100")
     .EnableActorDispatch()
-    .AddSession<PlaySession>(); // Registers the session type to create per connection.
+    // Registers the session type to create per connection.
+    .AddSession<PlaySession>();
 ```
 
 Session handlers and Actor/Spot handlers use the Framework's default typed JSON
@@ -89,7 +90,8 @@ public sealed class PlaySession(
 
     public void Configure()
     {
-        Context.Handlers.AddHandler<PingHandler>(); // Registers a typed session packet handler.
+        // Registers a typed session packet handler.
+        Context.Handlers.AddHandler<PingHandler>();
     }
 
     public ValueTask OnConnectedAsync(CancellationToken cancellationToken)
@@ -108,7 +110,8 @@ public sealed class PlaySession(
                 payload,
                 cancellationToken))
         {
-            await Context.CloseAsync(); // Closes the connection on a packet outside the application protocol.
+            // Closes the connection on a packet outside the application protocol.
+            await Context.CloseAsync();
         }
     }
 
@@ -173,7 +176,8 @@ public sealed class PingHandler
 
         await context.Client
             .Reply(new Pong(message.Sequence))
-            .Async(cancellationToken); // Replies exactly once, using the same request correlation.
+            // Replies exactly once, using the same request correlation.
+            .Async(cancellationToken);
     }
 }
 ```
@@ -193,7 +197,8 @@ await Context.Client
     .Send(new ServerNotice("maintenance"))
     .Metadata("severity", "info")
     .Compress()
-    .Async(cancellationToken); // Waits for admission into the local transport queue.
+    // Waits for admission into the local transport queue.
+    .Async(cancellationToken);
 ```
 
 ## 4. Actor Dispatch
@@ -223,11 +228,13 @@ connector.On<GameStateNotify>("GameStateNotify", (message, cancellationToken) =>
     return ValueTask.CompletedTask;
 });
 
-await connector.Connect.Async(cancellationToken); // Finishes connecting and preparing the receive loop.
+// Finishes connecting and preparing the receive loop.
+await connector.Connect.Async(cancellationToken);
 
 while (running)
 {
-    await connector.Dispatch.Async(cancellationToken); // Manual mode runs the callback on this caller.
+    // Manual mode runs the callback on this caller.
+    await connector.Dispatch.Async(cancellationToken);
 }
 ```
 
@@ -258,11 +265,13 @@ new ZlinkStreamConnectorOptions
 ```csharp
 await connector
     .Send(new PlayerInput(direction))
-    .Async(cancellationToken); // Waits for admission into the bounded outbound queue.
+    // Waits for admission into the bounded outbound queue.
+    .Async(cancellationToken);
 
 Profile profile = await connector
     .Request(new GetProfile(playerId))
-    .Async<Profile>(cancellationToken); // Finds the response by request sequence.
+    // Finds the response by request sequence.
+    .Async<Profile>(cancellationToken);
 ```
 
 The Connector's default typed codec is JSON. Packet name override, push waiting, reconnect,

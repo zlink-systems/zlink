@@ -203,15 +203,18 @@ receiving side is limited to Spots that subscribed to the same topic on that cha
 ```typescript
 // Publishing -- inside the TicTacToeGame spot.
 await this.context.outbound
-  .publish(SampleTopics.playerMilestoneChannel, // The ChannelName that decides delivery scope.
-           SampleTopics.playerMilestone,        // The topic that picks which Spots receive it within that scope.
+  // The ChannelName that decides delivery scope.
+  .publish(SampleTopics.playerMilestoneChannel,
+           // The topic that picks which Spots receive it within that scope.
+           SampleTopics.playerMilestone,
            milestoneEvent)
   .submit();
 
 // Subscribing -- when PlayEntrySpot starts.
 this.context.handlers.addSubscribe(
   PlayerWinMilestoneEventHandler,
-  SampleTopics.playerMilestoneChannel, // Must match the publishing side's ChannelName/topic to receive it.
+  // Must match the publishing side's ChannelName/topic to receive it.
+  SampleTopics.playerMilestoneChannel,
   SampleTopics.playerMilestone);
 ```
 
@@ -381,8 +384,10 @@ async handle(request: CreateGameRequest, context: ZLinkMessageContext): Promise<
   // Runtime (handler) thread -- free it with await. There's no synchronous blocking.
   const room = await this.client
     .requestToChannel('tictactoe.play', createRoomRequest(request.gameName))
-    .timeout(5_000)                     // The cap on waiting for the reply.
-    .submit<CreateRoomReply>();         // Waits until the reply arrives.
+    // The cap on waiting for the reply.
+    .timeout(5_000)
+    // Waits until the reply arrives.
+    .submit<CreateRoomReply>();
 
   return createGameReply(room.roomId, room.gameName);
 }
@@ -417,7 +422,8 @@ The framework doesn't automatically open every discovered handler on every chann
 const mesh = builder.addRouteMesh('services')
   .listen('tcp://0.0.0.0:7101')
   .routingId('api-1');
-mesh.channel('api').server()                    // server() is the role that receives handlers.
+// server() is the role that receives handlers.
+mesh.channel('api').server()
   .addRequestHandler('GetProfileRequest', GetProfileHandler)
   .addSendHandler('RefreshCacheCommand', RefreshCacheHandler);
 ```
@@ -432,9 +438,11 @@ const mesh = builder.addRouteMesh('services')
   .listen('tcp://0.0.0.0:7101')
   .routingId('api-1');
 
-mesh.channel('api').server()                 // A channel this node handles.
+// A channel this node handles.
+mesh.channel('api').server()
   .addRequestHandler('GetProfileRequest', GetProfileHandler);
-mesh.channel('billing').client();            // A call-only channel is client -- no handler registered.
+// A call-only channel is client -- no handler registered.
+mesh.channel('billing').client();
 ```
 
 A fanout channel's subscription handler is registered with the fanout builder's
@@ -576,14 +584,17 @@ export class AuditFilter implements ZLinkHandlerFilter {
   constructor(private readonly logger: Logger) {}
 
   async invoke(
-    context: ZLinkHandlerFilterContext, // This dispatch's message info + which path it came through.
-    next: ZLinkHandlerFilterNext        // A no-argument delegate -- runs the next filter or handler.
+    // This dispatch's message info + which path it came through.
+    context: ZLinkHandlerFilterContext,
+    // A no-argument delegate -- runs the next filter or handler.
+    next: ZLinkHandlerFilterNext
   ): Promise<void> {
     // Audit-logs only ops commands and lets regular business requests pass through.
     if (context.dispatchKind === ZLinkHandlerDispatchKind.NodeDirectRequest) {
       this.logger.log(`ops ${context.packetName} on ${context.meshName}`);
     }
-    await next(); // If not called, the handler doesn't run.
+    // If not called, the handler doesn't run.
+    await next();
   }
 }
 
@@ -717,8 +728,10 @@ serving value.
 
 ```typescript
 // An operational admin endpoint. "orders" is the registered ChannelName.
-meshOptions.channel('orders').weight = 0;   // Excludes this ChannelName from new select-one targets
-meshOptions.channel('orders').weight = 100; // Back to normal
+// Excludes this ChannelName from new select-one targets
+meshOptions.channel('orders').weight = 0;
+// Back to normal
+meshOptions.channel('orders').weight = 100;
 ```
 
 - `Weight = 0` (drain) **doesn't close** the serving socket. In-flight requests that
@@ -738,7 +751,8 @@ The same `Weight` is also set as an initial value at registration time.
 const mesh = builder.addRouteMesh('services')
   .listen('tcp://0.0.0.0:7101')
   .routingId('orders-1');
-mesh.channel('orders').server().setWeight(30); // This channel role's starting weight
+// This channel role's starting weight
+mesh.channel('orders').server().setWeight(30);
 ```
 
 ## 7. Serialization Codec
@@ -849,7 +863,8 @@ startup.**
 const caller = builder.addRouteMesh('media')
   .listen('tcp://0.0.0.0:5590')
   .setRoutingIdPrefix('resize-client');
-caller.channel('image.resize').client();        // client, since it only calls.
+// client, since it only calls.
+caller.channel('image.resize').client();
 caller.peerConnections().connect('tcp://10.30.1.10:5600');
 caller.peerConnections().connect('tcp://10.30.1.10:5601');
 
@@ -931,19 +946,25 @@ The relationship with SPOT continues in [06-spot](06-spot.en.md).
           .listen('tcp://0.0.0.0:7101')
           .routingId('api-1');
         mesh.channel('api').server()
-          .addHandlerGroup('api');                   // Exposure: ties the handler group to the channel.
-        mesh.channel('account').client();            // A call-only channel.
+          // Exposure: ties the handler group to the channel.
+          .addHandlerGroup('api');
+        // A call-only channel.
+        mesh.channel('account').client();
 
         const events = builder.addFanoutChannel('api.events');
-        events.enablePublisher('tcp://0.0.0.0:7201'); // This process is the publisher.
-        events.connect('tcp://127.0.0.1:7201');       // Also subscribes to its own publish, as an example.
-        events.addHandlerGroup('api.events');         // Attaches the subscription handler as a group.
+        // This process is the publisher.
+        events.enablePublisher('tcp://0.0.0.0:7201');
+        // Also subscribes to its own publish, as an example.
+        events.connect('tcp://127.0.0.1:7201');
+        // Attaches the subscription handler as a group.
+        events.addHandlerGroup('api.events');
 
         return builder.build();
       }
     })
   ],
-  providers: [UserHandlers, UserCacheRefreshedEventHandler] // Discovery: registered as providers.
+  // Discovery: registered as providers.
+  providers: [UserHandlers, UserCacheRefreshedEventHandler]
 })
 export class AppModule {}
 ```

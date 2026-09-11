@@ -56,7 +56,8 @@ framework는 `"zlink.framework"`라는 이름의 `System.Diagnostics.Metrics.Met
 ```csharp
 // 이 한 줄로 zlink 계기 전체가 앱의 OTel 파이프라인에 들어간다.
 builder.Services.AddOpenTelemetry().WithMetrics(m => m
-    .AddMeter("zlink.framework") // Framework가 계기를 방출하는 정식 meter 이름이다.
+    // Framework가 계기를 방출하는 정식 meter 이름이다.
+    .AddMeter("zlink.framework")
     .AddPrometheusExporter());
 ```
 
@@ -364,7 +365,8 @@ component 이벤트 스트림을 제공한다. Host termination은 framework run
 ```csharp
 var meshRuntime = app.Services.GetRequiredService<IZLinkRouteMeshRuntime>();
 
-var status = meshRuntime.GetStatus("game.room"); // 노드·peer·channel의 immutable 현재 상태
+// 노드·peer·channel의 immutable 현재 상태
+var status = meshRuntime.GetStatus("game.room");
 var ready = status.IsReady;
 
 await foreach (var observed in meshRuntime.ObserveAsync("game.room", cancellationToken: ct))

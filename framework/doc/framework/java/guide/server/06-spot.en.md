@@ -79,9 +79,11 @@ registers an Instance Spot to hold the matching queue.
 ```java
 // Play server -- an Entry Spot and a User Spot to hold rooms.
 mesh.objects().server()
-    .addEntrySpot(BingoEntrySpot.class)              // An Entry Spot has no stable type.
+    // An Entry Spot has no stable type.
+    .addEntrySpot(BingoEntrySpot.class)
     .addSpotFactory(
-        SampleNames.RoomSpotType,                    // Stable type -- selected by this name when creating.
+        // Stable type -- selected by this name when creating.
+        SampleNames.RoomSpotType,
         BingoRoom.class,
         factory -> factory
             .executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
@@ -107,7 +109,8 @@ two together.
 // Instance Spot -- no create call. Sending to that ID creates it if it's missing.
 ReserveBingoRoomRes allocated = spotClient
     .requestToSpot("match:" + levelBucket, new ReserveBingoRoomReq())
-    .instanceSpot(SampleNames.MatchmakerSpotType) // The intent that creation is OK if it's missing.
+    // The intent that creation is OK if it's missing.
+    .instanceSpot(SampleNames.MatchmakerSpotType)
     .inMesh(SampleNames.MatchmakingMeshName)
     .submit(ReserveBingoRoomRes.class)
     .toCompletableFuture().join();
@@ -116,7 +119,8 @@ ReserveBingoRoomRes allocated = spotClient
 ZLinkSpotCreateResult created = spots
     .getOrCreate(allocated.roomId(), SampleNames.RoomSpotType)
     .inMesh(SampleNames.PlayMeshName)
-    .request(allocated.settings())   // Delivered to the new Spot's onCreate.
+    // Delivered to the new Spot's onCreate.
+    .request(allocated.settings())
     .submit()
     .toCompletableFuture().join();
 ```
@@ -136,7 +140,8 @@ ZLinkMeshNodeBuilder mesh = options.addRouteMesh("play")
     .setRoutingIdPrefix("play");
 
 mesh.objects().server()
-    .addEntrySpot(PlayEntrySpot.class) // Registers the Entry Spot an Actor is placed in first.
+    // Registers the Entry Spot an Actor is placed in first.
+    .addEntrySpot(PlayEntrySpot.class)
     .addSpotFactory(
         "game-room",
         GameRoom.class,
@@ -228,9 +233,11 @@ creation is the point, like opening a new room. The result is one of two: it was
 
 ```java
 ZLinkSpotCreateResult created = spots
-    .create("game-room")                  // Selects the factory and placement candidates by the stable type.
+    // Selects the factory and placement candidates by the stable type.
+    .create("game-room")
     .inMesh("play")
-    .request(new CreateGame("ranked"))    // The create request delivered to onCreate.
+    // The create request delivered to onCreate.
+    .request(new CreateGame("ranked"))
     .timeout(Duration.ofSeconds(10))
     .submit()
     .toCompletableFuture().join();
@@ -239,7 +246,8 @@ if (created.state() == ZLinkSpotCreateState.REJECTED) {
     throw new IllegalStateException("Game creation was rejected.");
 }
 
-String spotId = created.spot().spotId(); // Use only the global SpotId for messaging from here on.
+// Use only the global SpotId for messaging from here on.
+String spotId = created.spot().spotId();
 ```
 
 > **See it in a sample — [TicTacToe](../../../common/sample/tictactoe/README.en.md).** This
@@ -350,7 +358,8 @@ The four branches in their minimal form look like this.
 public final class ChatHandler implements ZLinkSpotPacketHandler<GameRoom, Chat> {
     @Override
     public CompletionStage<Void> handle(GameRoom spot, Chat message) {
-        spot.appendChat(message.text()); // Touches Spot state directly. No lock needed.
+        // Touches Spot state directly. No lock needed.
+        spot.appendChat(message.text());
         return CompletableFuture.completedFuture(null);
     }
 }
@@ -380,7 +389,8 @@ public final class PlaceMarkHandler
     @Override
     public CompletionStage<Void> handle(
         GameRoom spot,
-        PlayerActor actor,              // The Actor that received this message.
+        // The Actor that received this message.
+        PlayerActor actor,
         ZLinkMessageContext messageContext,
         PlaceMark message) {
         spot.place(actor.actorId(), message.cell());
@@ -406,7 +416,8 @@ public final class GameRoom implements ZLinkSpot {
 
     @Override
     public void configure() {
-        context.handlers().addHandler(ChatHandler.class); // Registers the Spot send handler.
+        // Registers the Spot send handler.
+        context.handlers().addHandler(ChatHandler.class);
         // The subscription topic is set by @ZLinkSpotSubscription on ScoreHandler.
         context.handlers().addHandler(ScoreHandler.class);
     }
@@ -566,15 +577,18 @@ one, it can be omitted.
 // A mesh with multiple types registered -- specify the stable type for which factory creates it.
 MatchResult match = spotClient
     .requestToSpot("bronze", new FindMatch(playerId))
-    .instanceSpot("matchmaker") // Prepares it with this stable type's factory if the target is missing.
-    .inMesh("matchmaking")      // Picks the mesh for initial placement.
+    // Prepares it with this stable type's factory if the target is missing.
+    .instanceSpot("matchmaker")
+    // Picks the mesh for initial placement.
+    .inMesh("matchmaking")
     .submit(MatchResult.class)
     .toCompletableFuture().join();
 
 // A mesh with only one type registered -- omit it and the Framework picks that sole type.
 MatchResult single = spotClient
     .requestToSpot("bronze", new FindMatch(playerId))
-    .instanceSpot()             // Prepares it with the only type registered on the target node.
+    // Prepares it with the only type registered on the target node.
+    .instanceSpot()
     .inMesh("matchmaking")
     .submit(MatchResult.class)
     .toCompletableFuture().join();
@@ -629,8 +643,10 @@ ZLinkTimerOptions options = new ZLinkTimerOptions()
     .setStopOnUnhandledException(false);
 
 gameTick = context.addTimer(
-    "game-tick",                    // A name unique within the same Spot.
-    Duration.ofSeconds(1),          // The period. ZLinkConfigurationException if <= 0.
+    // A name unique within the same Spot.
+    "game-tick",
+    // The period. ZLinkConfigurationException if <= 0.
+    Duration.ofSeconds(1),
     GameTickHandler.class,
     options).toCompletableFuture().join();
 
@@ -691,7 +707,8 @@ number of skipped ticks.
 @Override
 public CompletionStage<Void> handle(GameRoom spot, ZLinkTimerTick tick) {
     if (tick.delay().compareTo(Duration.ofMillis(500)) > 0) {
-        spot.reportLag(tick.delay(), tick.skippedTicks()); // Report load if the delay is large.
+        // Report load if the delay is large.
+        spot.reportLag(tick.delay(), tick.skippedTicks());
     }
     return spot.tick();
 }
@@ -732,10 +749,12 @@ public final class BuildSnapshotHandler
 
     @Override
     public CompletionStage<SnapshotReply> handle(GameRoom spot, BuildSnapshot request) {
-        var board = spot.copyBoard(); // Copy Spot state first, while still in the turn.
+        // Copy Spot state first, while still in the turn.
+        var board = spot.copyBoard();
 
         return spot.context()
-            .runCpuWorker(cancellation -> SnapshotCodec.compress(board)) // Heavy synchronous computation.
+            // Heavy synchronous computation.
+            .runCpuWorker(cancellation -> SnapshotCodec.compress(board))
             .yield()
             .thenApply(SnapshotReply::new);
     }
@@ -823,7 +842,8 @@ the Framework calls `capture` at that point.
 public final class RoundTickHandler implements ZLinkSpotTimerHandler<GameRoom> {
     @Override
     public CompletionStage<Void> handle(GameRoom spot, ZLinkTimerTick tick) {
-        if (!spot.tryFinishRound()) { // Don't signal while a round is still in progress.
+        // Don't signal while a round is still in progress.
+        if (!spot.tryFinishRound()) {
             return CompletableFuture.completedFuture(null);
         }
 

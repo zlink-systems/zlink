@@ -67,13 +67,18 @@ doesn't know — and doesn't need to know — which node was selected.
 Here's what it looks like to configure both roles on one MeshNode.
 
 ```cpp
-auto mesh = options.add_route_mesh ("services");  // One MeshNode joins the mesh "services".
-mesh.listen ("tcp://0.0.0.0:7101");               // Its own endpoint for other nodes to connect to.
+// One MeshNode joins the mesh "services".
+auto mesh = options.add_route_mesh ("services");
+// Its own endpoint for other nodes to connect to.
+mesh.listen ("tcp://0.0.0.0:7101");
 
 // C++ sets the Object role with one enum instead of a separate builder.
-mesh.set_object_role (object_role_t::server);     // This node places spots/actors.
-mesh.channel_name ("orders").server ();           // Channel role — this node handles "orders" requests.
-mesh.channel_name ("billing").client ();          // A call-only channel is client.
+// This node places spots/actors.
+mesh.set_object_role (object_role_t::server);
+// Channel role — this node handles "orders" requests.
+mesh.channel_name ("orders").server ();
+// A call-only channel is client.
+mesh.channel_name ("billing").client ();
 ```
 
 Automatic connection management, which avoids hard-coding peer addresses and tracks servers

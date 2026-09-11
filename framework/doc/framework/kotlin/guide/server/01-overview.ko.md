@@ -186,7 +186,8 @@ application 코드는 바뀌지 않는다 — 이 backend 경계는
 // 등록 — room mesh 하나와 room 타입
 val node = options.addRouteMesh("game.room")
 node.listen("tcp://0.0.0.0:9001")
-node.channelName("game.room").server()      // mesh는 최소 1개 logical membership을 갖는다
+// mesh는 최소 1개 logical membership을 갖는다
+node.channelName("game.room").server()
 node.objects().server()
     .addSpotFactory("room", BingoRoomSpot::class.java) { factory ->
         factory.recreateOnRelocation()
@@ -198,7 +199,8 @@ node.objects().server()
 class MarkNumberHandler : ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
 
     override suspend fun handle(room: BingoRoomSpot, request: MarkNumber): MarkResult {
-        room.board.mark(request.number)         // lock 없음
+        // lock 없음
+        room.board.mark(request.number)
         room.lastActivity = Instant.now()
         return MarkResult(room.board.hasBingo())
     }
@@ -318,7 +320,8 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 세 조각이 사
 // HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
 // 첫 요청이 OrderId 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
 // 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-spots.requestToSpot(request.orderId, request)      // request는 이미 StartOrderWorkflowReq 바디다.
+// request는 이미 StartOrderWorkflowReq 바디다.
+spots.requestToSpot(request.orderId, request)
     .instanceSpot("order-workflow")
     .inMesh("commerce")
     .submit(StartOrderWorkflowRes::class.java)
@@ -420,7 +423,8 @@ class StartOrderWorkflowHandler :
 
     override suspend fun handle(
         spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): StartOrderWorkflowRes =
-        workflow.startInSpot(spot, request)        // spot 상태에 lock 없이 접근
+        // spot 상태에 lock 없이 접근
+        workflow.startInSpot(spot, request)
 }
 ```
 
@@ -473,23 +477,29 @@ application에서는 "`services` mesh의 `orders` channel로 요청을 보낸다
 class GetPriceHandler : ZLinkRequestHandler<PriceRequest, PriceReply> {
 
     override suspend fun handle(request: PriceRequest, context: ZLinkMessageContext): PriceReply =
-        PriceReply(request.symbol, BigDecimal("187.42"))   // 데모용 고정값(실제론 조회 결과)
+        // 데모용 고정값(실제론 조회 결과)
+        PriceReply(request.symbol, BigDecimal("187.42"))
 }
 
 // 등록 — MeshNode endpoint와 price membership의 handler를 함께 선언한다.
-options.addRouteMesh("services")                        // MeshName으로 통신 범위를 구분한다.
-    .listen("tcp://0.0.0.0:7301")                       // 이 MeshNode의 endpoint를 연다.
+// MeshName으로 통신 범위를 구분한다.
+options.addRouteMesh("services")
+    // 이 MeshNode의 endpoint를 연다.
+    .listen("tcp://0.0.0.0:7301")
     .setRoutingId(RoutingId.from("price-1"))
-    .channelName("price")                                   // price 처리 membership을 등록한다.
+    // price 처리 membership을 등록한다.
+    .channelName("price")
     .server()
     .addRequestHandler(GetPriceHandler::class.java, PriceRequest::class.java, PriceReply::class.java)
 
 // 클라이언트: route client를 주입받아 ChannelName으로 호출한다.
 val reply = client
     .requestToChannel(
-        "price",                                        // process-local로 찾을 ChannelName
+        // process-local로 찾을 ChannelName
+        "price",
         PriceRequest("AAPL"))
-    .submit(PriceReply::class.java)                     // 송신한 뒤 reply를 비동기로 기다린다.
+    // 송신한 뒤 reply를 비동기로 기다린다.
+    .submit(PriceReply::class.java)
     .await()
 ```
 
@@ -511,20 +521,26 @@ fanout과 STREAM node를 선언한다.
 
 ```kotlin
 val zlink = ZLinkFrameworkConfigurer { options ->
-    options.addLocationStore(ZLinkRedisLocationStore(...))   // node·actor·spot 위치정보 제공 — 이 정보를 기반으로 node 간 연결은 자동
+    // node·actor·spot 위치정보 제공 — 이 정보를 기반으로 node 간 연결은 자동
+    options.addLocationStore(ZLinkRedisLocationStore(...))
 
-    options.addRouteMesh("services")                         // 서버 간 request/send용 MeshNode
+    // 서버 간 request/send용 MeshNode
+    options.addRouteMesh("services")
         .listen("tcp://0.0.0.0:7301")
         .setRoutingId(RoutingId.from("service-a"))
-        .channelName("orders").server()                          // 처리할 논리 membership
+        // 처리할 논리 membership
+        .channelName("orders").server()
     options.addFanoutChannel("events")
-        .enablePublisher("tcp://0.0.0.0:7302")               // classic event fan-out
-    options.addRouteMesh("game.room")                        // SPOT·actor도 MeshNode가 소유
+        // classic event fan-out
+        .enablePublisher("tcp://0.0.0.0:7302")
+    // SPOT·actor도 MeshNode가 소유
+    options.addRouteMesh("game.room")
         .listen("tcp://0.0.0.0:7304")
         .setRoutingId(RoutingId.from("room-a"))
         .channelName("game.room").server()
     options.addStreamNode("gateway")
-        .bind("tcp://0.0.0.0:7400")                          // 외부 client endpoint
+        // 외부 client endpoint
+        .bind("tcp://0.0.0.0:7400")
 }
 ```
 

@@ -278,14 +278,16 @@ actor packet으로 등록한 것이다.
 
 ```cpp
 // C++은 handler class 대신 Entry Spot의 member 함수를 등록한다.
-task_t<void> play_entry_spot_t::join_game (player_actor_t &actor,   // join을 요청한 Actor다.
+// join을 요청한 Actor다.
+task_t<void> play_entry_spot_t::join_game (player_actor_t &actor,
                                            message_context_t &,
                                            const join_game_req_t &request)
 {
     actor.context ()
       .join_spot (request.spot_id, join_game_request_t{request.seat})
       .timeout (std::chrono::seconds (5))
-      .defer (); // 현재 handler가 성공한 뒤 join을 시작한다.
+      // 현재 handler가 성공한 뒤 join을 시작한다.
+      .defer ();
     co_return;
 }
 ```

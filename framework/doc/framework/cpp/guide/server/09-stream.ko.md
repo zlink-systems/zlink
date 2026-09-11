@@ -184,10 +184,12 @@ auto connector = zlink::stream_connector::connector_factory_t::create (connector
 connector.on<game_state_notify_t> ("GameStateNotify",
                                    [] (const auto &message) { render (message.payload ()); });
 
-co_await connector.connect ().async (); // 연결과 receive loop 준비를 완료한다.
+// 연결과 receive loop 준비를 완료한다.
+co_await connector.connect ().async ();
 
 while (running) {
-    co_await connector.dispatch ().async (); // manual 모드는 이 caller에서 callback을 실행한다.
+    // manual 모드는 이 caller에서 callback을 실행한다.
+    co_await connector.dispatch ().async ();
 }
 ```
 

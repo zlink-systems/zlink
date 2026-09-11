@@ -526,28 +526,32 @@ STREAM에는 이 pressure 상태를 적용하지 않는다.
 
     ```cpp
     // C++은 수준을 message flow log mode로 지정한다.
-    options.configure_dispatch ().message_flow (message_flow_log_mode_t::errors);  // 기본값 — error와 backpressure를 기록한다.
+    // 기본값 — error와 backpressure를 기록한다.
+    options.configure_dispatch ().message_flow (message_flow_log_mode_t::errors);
     ```
 
 === "Java"
 
     ```java
     // Java는 수준을 message flow log mode로 지정한다.
-    options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS);  // 기본값 — error와 backpressure를 기록한다.
+    // 기본값 — error와 backpressure를 기록한다.
+    options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS);
     ```
 
 === "Kotlin"
 
     ```kotlin
     // Kotlin은 Java 표면을 그대로 쓴다.
-    options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS)  // 기본값 — error와 backpressure를 기록한다.
+    // 기본값 — error와 backpressure를 기록한다.
+    options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS)
     ```
 
 === "Node/TypeScript"
 
     ```typescript
     // Node는 수준을 message flow log mode로 지정한다.
-    builder.configureDispatch().messageFlow("errors");  // 기본값 — error와 backpressure를 기록한다.
+    // 기본값 — error와 backpressure를 기록한다.
+    builder.configureDispatch().messageFlow("errors");
     ```
 
 

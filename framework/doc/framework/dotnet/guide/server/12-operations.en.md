@@ -59,7 +59,8 @@ The framework emits every instrument through one `System.Diagnostics.Metrics.Met
 ```csharp
 // This one line brings every zlink instrument into the app's OTel pipeline.
 builder.Services.AddOpenTelemetry().WithMetrics(m => m
-    .AddMeter("zlink.framework") // The canonical meter name the Framework emits instruments through.
+    // The canonical meter name the Framework emits instruments through.
+    .AddMeter("zlink.framework")
     .AddPrometheusExporter());
 ```
 
@@ -293,7 +294,8 @@ var result = await runtime.RelocateAsync(
     new ZLinkFrameworkRelocationOptions
     {
         Mode = ZLinkFrameworkRelocationMode.RollingUpdate,
-        TargetApplicationVersion = 12,      // Uses only eligible nodes on the specified new version.
+        // Uses only eligible nodes on the specified new version.
+        TargetApplicationVersion = 12,
         Deadline = TimeSpan.FromSeconds(25)
     },
     cancellationToken: ct);
@@ -379,8 +381,10 @@ socket options (HWM, timeout) are exclusive to `ConfigureRouterSocket()` before 
 
 ```csharp
 var meshOptions = app.Services.GetRequiredService<IZLinkRouteMeshRuntimeOptions>();
-meshOptions.Mesh("game.room").PlacementWeight = 0; // Excludes it from new object placement
-meshOptions.Channel("game.room").Weight = 0;       // Excludes it from new channel select-one
+// Excludes it from new object placement
+meshOptions.Mesh("game.room").PlacementWeight = 0;
+// Excludes it from new channel select-one
+meshOptions.Channel("game.room").Weight = 0;
 ```
 
 The two weights are independent and take effect on new selections while running. Placement
@@ -394,7 +398,8 @@ component event stream for one mesh. Host termination is owned by the framework 
 ```csharp
 var meshRuntime = app.Services.GetRequiredService<IZLinkRouteMeshRuntime>();
 
-var status = meshRuntime.GetStatus("game.room"); // The immutable current status of nodes/peers/channels
+// The immutable current status of nodes/peers/channels
+var status = meshRuntime.GetStatus("game.room");
 var ready = status.IsReady;
 
 await foreach (var observed in meshRuntime.ObserveAsync("game.room", cancellationToken: ct))

@@ -114,7 +114,8 @@ public sealed class PlaceOrderHandler
 
 // 클라이언트: gRPC stub 대신 IZLinkRouteClient 주입
 var placed = await client
-    .RequestToChannel("orders",                 // 대상은 ChannelName 하나. 주소도 MeshName도 넣지 않는다.
+    // 대상은 ChannelName 하나. 주소도 MeshName도 넣지 않는다.
+    .RequestToChannel("orders",
         new PlaceOrder("order-1042", "acct-77", 18742))
     .Async<OrderPlaced>(ct);
 ```
@@ -196,14 +197,17 @@ mesh 소켓을 그대로 사용하므로 별도 소켓이 없고,
 ```csharp
 // 발행 — TicTacToeGame spot 안에서.
 await Context.Outbound
-    .Publish(SampleTopics.PlayerMilestoneChannel,   // 전달 범위를 정하는 ChannelName.
-             SampleTopics.PlayerMilestone,          // 그 안에서 받을 Spot을 고르는 topic.
+    // 전달 범위를 정하는 ChannelName.
+    .Publish(SampleTopics.PlayerMilestoneChannel,
+             // 그 안에서 받을 Spot을 고르는 topic.
+             SampleTopics.PlayerMilestone,
              milestoneEvent)
     .Async(cancellationToken);
 
 // 구독 — PlayEntrySpot이 시작할 때.
 Context.Handlers.AddSubscribe<PlayerWinMilestoneEventHandler>(
-    SampleTopics.PlayerMilestoneChannel,            // 발행 쪽과 같은 ChannelName·topic이어야 받는다.
+    // 발행 쪽과 같은 ChannelName·topic이어야 받는다.
+    SampleTopics.PlayerMilestoneChannel,
     SampleTopics.PlayerMilestone);
 ```
 
@@ -340,20 +344,24 @@ public sealed class CacheRefreshedEventHandler
 class에 여러 handler 메서드를 둘 때 편하다.
 
 ```csharp
-[ZLinkHandlerGroup("api")]   // 이 class의 메서드들을 "api" group으로 묶는다. 어느 channel에 노출할지는 등록이 정한다.
+// 이 class의 메서드들을 "api" group으로 묶는다. 어느 channel에 노출할지는 등록이 정한다.
+[ZLinkHandlerGroup("api")]
 public sealed class UserHandlers
 {
     private readonly IZLinkFanoutClient _publisher;
     public UserHandlers(IZLinkFanoutClient publisher) => _publisher = publisher;
 
-    [ZLinkRequest]   // 메서드 attribute가 handler 종류를 정한다(channel 이름은 안 받음)
+    // 메서드 attribute가 handler 종류를 정한다(channel 이름은 안 받음)
+    [ZLinkRequest]
     public ValueTask<GetUserReply> GetUserAsync(
-        GetUserRequest request,            // 인자 순서 = (payload, context?, ct?) — context·토큰은 생략 가능
+        // 인자 순서 = (payload, context?, ct?) — context·토큰은 생략 가능
+        GetUserRequest request,
         IZLinkMessageContext context,
         CancellationToken cancellationToken)
         => ValueTask.FromResult(new GetUserReply(request.AccountId, "alice"));
 
-    [ZLinkSend]   // send handler — 반환이 ValueTask(응답 없음). request의 ValueTask<TReply> 와 대비.
+    // send handler — 반환이 ValueTask(응답 없음). request의 ValueTask<TReply> 와 대비.
+    [ZLinkSend]
     public async ValueTask RefreshCacheAsync(
         RefreshUserCacheCommand command,
         IZLinkMessageContext context,
@@ -391,8 +399,10 @@ public async ValueTask<CreateGameReply> HandleAsync(
     // 런타임(핸들러) 스레드 — await로 비운다. blocking(.Result/.GetAwaiter().GetResult())은 금지.
     var room = await _client
         .RequestToChannel("tictactoe.play", new CreateRoomRequest(request.GameName))
-        .Timeout(TimeSpan.FromSeconds(5))   // reply를 기다릴 상한.
-        .Async<CreateRoomReply>(ct);        // reply가 도착할 때까지 await로 대기하고 그 reply를 받는다.
+        // reply를 기다릴 상한.
+        .Timeout(TimeSpan.FromSeconds(5))
+        // reply가 도착할 때까지 await로 대기하고 그 reply를 받는다.
+        .Async<CreateRoomReply>(ct);
 
     return new CreateGameReply(room.RoomId, room.GameName);
 }
@@ -444,9 +454,12 @@ var mesh = options.AddRouteMesh("services")
     .Listen("tcp://0.0.0.0:7101")
     .SetRoutingId(RoutingId.From("api-1"));
 
-mesh.Channel("api").Server()                     // 이 node가 처리하는 channel.
-    .AddRequestHandler<GetProfileHandler>();     // payload·reply 타입은 handler가 이미 고정한다.
-mesh.Channel("billing").Client();                // 호출만 하는 channel은 Client — handler를 등록하지 않는다.
+// 이 node가 처리하는 channel.
+mesh.Channel("api").Server()
+    // payload·reply 타입은 handler가 이미 고정한다.
+    .AddRequestHandler<GetProfileHandler>();
+// 호출만 하는 channel은 Client — handler를 등록하지 않는다.
+mesh.Channel("billing").Client();
 ```
 
 fanout channel의 구독 handler는 fanout builder의 `AddHandler<...>()`로 등록한다.
@@ -492,15 +505,18 @@ public sealed class PriceService(IZLinkRouteClient client)
     public async Task<decimal> GetAsync(string symbol, CancellationToken ct)
     {
         var reply = await client
-            .RequestToChannel("price", new PriceRequest(symbol))   // 대상은 ChannelName 하나다.
-            .Async<PriceReply>(ct);    // request: reply 타입은 payload가 아니라 .Async<T> 에서 지정
+            // 대상은 ChannelName 하나다.
+            .RequestToChannel("price", new PriceRequest(symbol))
+            // request: reply 타입은 payload가 아니라 .Async<T> 에서 지정
+            .Async<PriceReply>(ct);
         return reply.Price;
     }
 
     public async ValueTask RefreshAsync(string accountId, CancellationToken ct)
         => await client
             .SendToChannel("profile", new RefreshCacheCommand(accountId))
-            .Async(ct);          // send: 내 runtime이 제출을 받아들일 때까지만 기다린다
+            // send: 내 runtime이 제출을 받아들일 때까지만 기다린다
+            .Async(ct);
 }
 ```
 
@@ -522,7 +538,8 @@ public sealed class PriceService(IZLinkRouteClient client)
 ```csharp
 await client
     .RequestToChannel("price", new PriceRequest(symbol))
-    .Timeout(TimeSpan.FromSeconds(5))  // 이 호출의 reply 대기 상한을 기본(30초)과 다르게 둘 때만 지정
+    // 이 호출의 reply 대기 상한을 기본(30초)과 다르게 둘 때만 지정
+    .Timeout(TimeSpan.FromSeconds(5))
     .Async<PriceReply>(ct);
 // reply 대기 상한 결정 순서(앞이 우선):
 //   1) 호출별 .Timeout(...)
@@ -573,21 +590,25 @@ public sealed class AuditFilter(ILogger<AuditFilter> logger)
     : IZLinkHandlerFilter
 {
     public async ValueTask InvokeAsync(
-        IZLinkHandlerFilterContext context,   // 이 dispatch의 message 정보 + 어느 경로로 왔는지.
-        ZLinkHandlerFilterNext next,          // 인자 없는 delegate — 다음 filter 또는 handler를 실행한다.
+        // 이 dispatch의 message 정보 + 어느 경로로 왔는지.
+        IZLinkHandlerFilterContext context,
+        // 인자 없는 delegate — 다음 filter 또는 handler를 실행한다.
+        ZLinkHandlerFilterNext next,
         CancellationToken cancellationToken)
     {
         // 운영 명령만 감사 로그로 남기고 일반 업무 요청은 그냥 통과시킨다.
         if (context.DispatchKind == ZLinkHandlerDispatchKind.NodeDirectRequest)
             logger.LogInformation("ops {Packet} on {Mesh}", context.PacketName, context.MeshName);
 
-        await next();                         // 호출하지 않으면 handler가 실행되지 않는다.
+        // 호출하지 않으면 handler가 실행되지 않는다.
+        await next();
     }
 }
 
 builder.Services.AddZLinkFramework(options =>
 {
-    options.UseFilter<AuditFilter>();         // 등록한 순서가 곧 실행 순서다.
+    // 등록한 순서가 곧 실행 순서다.
+    options.UseFilter<AuditFilter>();
     options.UseFilter<ValidationFilter>();
 });
 ```
@@ -706,14 +727,16 @@ weight가 모두 같으면 새 요청은 균등하게 round-robin으로 분배�
 app.MapPost("/admin/channels/orders/drain",
     (IZLinkRouteMeshRuntimeOptions options) =>
     {
-        options.Channel("orders").Weight = 0;  // 이 ChannelName을 새 select-one 대상에서 제외
+        // 이 ChannelName을 새 select-one 대상에서 제외
+        options.Channel("orders").Weight = 0;
         return Results.Ok();
     });
 
 app.MapPost("/admin/channels/orders/restore",
     (IZLinkRouteMeshRuntimeOptions options) =>
     {
-        options.Channel("orders").Weight = 100; // 정상 복귀
+        // 정상 복귀
+        options.Channel("orders").Weight = 100;
         return Results.Ok();
     });
 ```
@@ -780,7 +803,8 @@ public sealed class AvroOrderSerializer : IZLinkMessageSerializer
     }
 }
 
-options.Codecs.Use(new AvroCodecExtension()); // extension 내부에서 Avro serializer를 한 번 등록한다.
+// extension 내부에서 Avro serializer를 한 번 등록한다.
+options.Codecs.Use(new AvroCodecExtension());
 ```
 
 등록 후 high-level 호출은 그대로 업무 객체를 주고받고 직렬화는 Avro로 처리된다.
@@ -840,7 +864,8 @@ ChannelName을 물리 송신 경로 둘 이상에 등록하는 것도 **host 시
 var caller = options.AddRouteMesh("media")
     .Listen("tcp://0.0.0.0:5590")
     .SetRoutingIdPrefix("resize-client");
-caller.Channel("image.resize").Client();          // 호출만 하므로 Client.
+// 호출만 하므로 Client.
+caller.Channel("image.resize").Client();
 caller.PeerConnections.Connect("tcp://10.30.1.10:5600");
 caller.PeerConnections.Connect("tcp://10.30.1.10:5601");
 
@@ -920,18 +945,23 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddZLinkFramework(options =>
 {
     options.Codecs.Use(ZLinkProtobufCodec.Default);
-    options.AddHandlersFromAssemblyOf<Program>();      // 발견: assembly에서 handler type을 찾는다.
+    // 발견: assembly에서 handler type을 찾는다.
+    options.AddHandlersFromAssemblyOf<Program>();
 
     var mesh = options.AddRouteMesh("services")
         .Listen("tcp://0.0.0.0:7101")
         .SetRoutingId(RoutingId.From("api-1"));
     mesh.Channel("api").Server()
-        .AddHandlerGroup("api");                       // 노출: attribute handler group을 이 channel에 연결한다.
-    mesh.Channel("account").Client();                  // 호출만 하는 channel.
+        // 노출: attribute handler group을 이 channel에 연결한다.
+        .AddHandlerGroup("api");
+    // 호출만 하는 channel.
+    mesh.Channel("account").Client();
 
     options.AddFanoutChannel("api.events")
-        .EnablePublisher("tcp://0.0.0.0:7201")         // 이 process가 발행자다.
-        .Connect("tcp://127.0.0.1:7201")     // 자기 발행도 구독해 보여 주는 예다.
+        // 이 process가 발행자다.
+        .EnablePublisher("tcp://0.0.0.0:7201")
+        // 자기 발행도 구독해 보여 주는 예다.
+        .Connect("tcp://127.0.0.1:7201")
         .AddHandler<UserCacheRefreshedEventHandler, UserCacheRefreshedEvent>();
 });
 

@@ -90,7 +90,8 @@ SpotRef? currentSpot = await actors.FindSpotAsync(playerId, cancellationToken);
 
 if (current is { } exact)
 {
-    await actors.DestroyAsync(exact, cancellationToken); // Doesn't terminate an Actor whose generation differs.
+    // Doesn't terminate an Actor whose generation differs.
+    await actors.DestroyAsync(exact, cancellationToken);
 }
 ```
 
@@ -148,12 +149,15 @@ public sealed class PlayEntrySpot(IZLinkEntrySpotContext context)
     // Called when a new Actor takes this Entry Spot as its first membership.
     // The return value decides whether to create this Actor — this Spot is the admission gate.
     public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
-        PlayerActor actor,          // A new Actor instance, not yet published.
-        ZLinkMessage createRequest, // The value sent via GetOrCreate/Create's .Request(...).
+        // A new Actor instance, not yet published.
+        PlayerActor actor,
+        // The value sent via GetOrCreate/Create's .Request(...).
+        ZLinkMessage createRequest,
         CancellationToken cancellationToken)
     {
         var request = createRequest.Decode<CreatePlayer>();
-        actor.SetDisplayName(request.DisplayName); // The Actor owns its own initial state.
+        // The Actor owns its own initial state.
+        actor.SetDisplayName(request.DisplayName);
 
         // Accept() makes the Actor Ready; Reject(...) cancels the creation.
         return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
@@ -164,7 +168,8 @@ public sealed class PlayEntrySpot(IZLinkEntrySpotContext context)
     public ValueTask OnJoinedActorAsync(
         PlayerActor actor,
         CancellationToken cancellationToken)
-        => ValueTask.CompletedTask; // This sample only receives the notification and has nothing else to do.
+        // This sample only receives the notification and has nothing else to do.
+        => ValueTask.CompletedTask;
 
     // Called after the commit for an Actor that was in this Entry Spot leaving to a User Spot.
     // Doesn't mean the Actor disappeared — it means membership moved.

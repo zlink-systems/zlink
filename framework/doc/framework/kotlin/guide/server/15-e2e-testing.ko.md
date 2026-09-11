@@ -78,7 +78,8 @@ val room = api.post("/games")
 val client = ZLinkStreamConnectorFactory.create(
     ZLinkStreamConnectorOptions(
         URI.create(room.playEndpoints[0]),
-        ZLinkStreamDispatchMode.IMMEDIATE, // console 시나리오는 자동 펌프를 사용한다.
+        // console 시나리오는 자동 펌프를 사용한다.
+        ZLinkStreamDispatchMode.IMMEDIATE,
         options.streamTimeout))
 ```
 
@@ -225,7 +226,8 @@ suspend fun run(options: TicTacToeClientOptions) {
     // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
     client1.connect().submit().await()
     client1.request(AuthenticateReq(options.xActorId)).submit(AuthenticateRes::class.java).await()
-    val join1 = joinGame(client1, room.roomId) // 대기 등록 → send → 수신(§3)
+    // 대기 등록 → send → 수신(§3)
+    val join1 = joinGame(client1, room.roomId)
     ZLinkStreamAssert.ensure(
         join1.state.status == TicTacToeGameStatuses.WaitingForPlayers,
         "room should wait for the second player.")

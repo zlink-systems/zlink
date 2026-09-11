@@ -394,7 +394,8 @@ Terminal reply/error completion identifiable before receive does not use this pe
 
 ```csharp
 options.ConfigureDispatch().Diagnostics
-    .SetLevel(ZLinkDiagnosticsLevel.Errors); // Default — records errors and backpressure.
+    // Default — records errors and backpressure.
+    .SetLevel(ZLinkDiagnosticsLevel.Errors);
 ```
 
 If `backpressured` shows up in the message flow record, it means waiting for a send slot

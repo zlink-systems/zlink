@@ -292,14 +292,16 @@ In its minimal shape, it looks like this.
 
 ```cpp
 // C++ registers a member function on the Entry Spot instead of a handler class.
-task_t<void> play_entry_spot_t::join_game (player_actor_t &actor,   // The Actor requesting the join.
+// The Actor requesting the join.
+task_t<void> play_entry_spot_t::join_game (player_actor_t &actor,
                                            message_context_t &,
                                            const join_game_req_t &request)
 {
     actor.context ()
       .join_spot (request.spot_id, join_game_request_t{request.seat})
       .timeout (std::chrono::seconds (5))
-      .defer (); // Starts the join once the current handler succeeds.
+      // Starts the join once the current handler succeeds.
+      .defer ();
     co_return;
 }
 ```

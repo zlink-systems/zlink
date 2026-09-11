@@ -63,12 +63,17 @@ framework가 찾아서 전달한다. 이렇게 **대상이 어디 있는지 호�
 MeshNode 하나에 두 역할을 함께 얹은 모양은 이렇다.
 
 ```csharp
-var mesh = options.AddRouteMesh("services")     // MeshNode 하나가 mesh "services"에 참여한다.
-    .Listen("tcp://0.0.0.0:7101");              // 다른 node가 접속할 자기 endpoint.
+// MeshNode 하나가 mesh "services"에 참여한다.
+var mesh = options.AddRouteMesh("services")
+    // 다른 node가 접속할 자기 endpoint.
+    .Listen("tcp://0.0.0.0:7101");
 
-mesh.Objects().Server();                        // Object role — 이 node에 spot·actor를 배치한다.
-mesh.Channel("orders").Server();                // Channel role — "orders" 요청을 이 node가 처리한다.
-mesh.Channel("billing").Client();               // 호출만 하는 channel은 Client.
+// Object role — 이 node에 spot·actor를 배치한다.
+mesh.Objects().Server();
+// Channel role — "orders" 요청을 이 node가 처리한다.
+mesh.Channel("orders").Server();
+// 호출만 하는 channel은 Client.
+mesh.Channel("billing").Client();
 ```
 
 peer 주소를 코드에 적지 않고 서버 증감을 따라가는 자동 연결은

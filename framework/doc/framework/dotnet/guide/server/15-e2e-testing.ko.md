@@ -72,7 +72,8 @@ using var api = ZLinkHttpClient.Create(options.ApiUrl.ToString())
     .Build();
 var room = await api.Post("/games")
     .Body(new CreateGameHttpReq(options.GameName))
-    .Fetch<CreateGameHttpRes>(ct);   // Fetch는 역직렬화된 본문을 그대로 돌려준다.
+    // Fetch는 역직렬화된 본문을 그대로 돌려준다.
+    .Fetch<CreateGameHttpRes>(ct);
 
 // 2단계 — 응답이 알려 준 endpoint로 실시간 연결을 연다.
 await using var client = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
@@ -80,7 +81,8 @@ await using var client = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConne
     Endpoint = new Uri(room.PlayEndpoints[0]),
     ConnectTimeout = options.StreamTimeout,
     RequestTimeout = options.StreamTimeout,
-    DispatchMode = ZlinkStreamDispatchMode.Immediate  // console 시나리오는 자동 펌프를 사용한다.
+    // console 시나리오는 자동 펌프를 사용한다.
+    DispatchMode = ZlinkStreamDispatchMode.Immediate
 });
 ```
 
@@ -231,7 +233,8 @@ public async ValueTask RunAsync(TicTacToeClientOptions options, CancellationToke
     var auth1 = await client1.Request(new AuthenticateReq(options.XActorId)).Async<AuthenticateRes>(ct);
     ZlinkStreamAssert.Ensure(auth1.Player.ActorId == options.XActorId, "player x actor id mismatch.");
 
-    var join1 = await JoinGameAsync(client1, room.RoomId, ct);   // 대기 등록 → send → 수신(§3)
+    // 대기 등록 → send → 수신(§3)
+    var join1 = await JoinGameAsync(client1, room.RoomId, ct);
     ZlinkStreamAssert.Ensure(join1.State.Status == TicTacToeGameStatuses.WaitingForPlayers,
         "room should wait for the second player.");
 
