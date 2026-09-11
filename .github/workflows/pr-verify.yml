@@ -216,10 +216,14 @@ jobs:
           export ZLINK_CORE_SOURCE=local
           export ZLINK_CORE_INCLUDE_DIR="${GITHUB_WORKSPACE}/core/include"
           export ZLINK_CORE_LIB_DIR="${GITHUB_WORKSPACE}/core/build/lib"
+          # integrationTest는 실제 socket을 쓰므로 2-core 러너에서 돌리지 않는다. 그러나
+          # 컴파일은 한다 — G4 이후 `.submit().reply()`로 바뀌지 않은 호출부가 이 source set에
+          # 남아 있다가 PR #169에서야 드러났다. API drift는 컴파일만으로 잡힌다.
           ./gradlew --no-daemon --max-workers=2 \
             :zlink-framework-core:test \
             contractTest \
-            :zlink-framework-spring-boot-starter:test
+            :zlink-framework-spring-boot-starter:test \
+            :zlink-framework-core:compileIntegrationTestJava
 
       - name: Upload test reports on failure
         if: failure()
