@@ -1,11 +1,15 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include <cctype>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <cctype>
+#include <iterator>
+#include <map>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -13,8 +17,218 @@
 #error "ZLINK_FRAMEWORK_CPP_SOURCE_DIR must be defined"
 #endif
 
+#ifndef ZLINK_FRAMEWORK_CPP_BUILD_DIR
+#error "ZLINK_FRAMEWORK_CPP_BUILD_DIR must be defined"
+#endif
+
 namespace
 {
+
+const std::filesystem::path &framework_cpp_build_dir ()
+{
+    static const std::filesystem::path path{ZLINK_FRAMEWORK_CPP_BUILD_DIR};
+    return path;
+}
+
+bool is_in_framework_cpp_build_dir (const std::filesystem::path &path)
+{
+    const auto relative = path.lexically_relative (framework_cpp_build_dir ());
+    return !relative.empty () && *relative.begin () != "..";
+}
+
+struct layout_file_contents_t
+{
+    std::string text;
+    std::vector<std::string_view> lines;
+};
+
+void read_layout_file (const std::filesystem::path &path, layout_file_contents_t &contents)
+{
+    std::ifstream input (path);
+    contents.text.assign (std::istreambuf_iterator<char> (input),
+                          std::istreambuf_iterator<char> ());
+
+    const auto &text = contents.text;
+    for (std::size_t begin = 0; begin < text.size ();) {
+        const auto end = text.find ('\n', begin);
+        if (end == std::string::npos) {
+            contents.lines.emplace_back (text.data () + begin, text.size () - begin);
+            break;
+        }
+        contents.lines.emplace_back (text.data () + begin, end - begin);
+        begin = end + 1;
+    }
+}
+
+class layout_directory_entry_t
+{
+  public:
+    explicit layout_directory_entry_t (const std::filesystem::directory_entry &entry) :
+        entry_{entry}, status_{entry.status ()}
+    {
+    }
+
+    bool is_regular_file () const
+    {
+        return std::filesystem::is_regular_file (status_);
+    }
+
+    bool is_directory () const
+    {
+        return std::filesystem::is_directory (status_);
+    }
+
+    const std::filesystem::path &path () const
+    {
+        return entry_.path ();
+    }
+
+    const layout_file_contents_t &contents () const
+    {
+        return contents_;
+    }
+
+    layout_file_contents_t &contents ()
+    {
+        return contents_;
+    }
+
+  private:
+    std::filesystem::directory_entry entry_;
+    std::filesystem::file_status status_;
+    layout_file_contents_t contents_;
+};
+
+bool is_in_directory_tree (const std::filesystem::path &path,
+                           const std::filesystem::path &root)
+{
+    const auto relative = path.lexically_relative (root);
+    return !relative.empty () && *relative.begin () != "..";
+}
+
+class layout_snapshot_t
+{
+  public:
+    layout_snapshot_t ()
+    {
+        const std::filesystem::path root{ZLINK_FRAMEWORK_CPP_SOURCE_DIR};
+        for (auto iterator = std::filesystem::recursive_directory_iterator (root);
+             iterator != std::filesystem::recursive_directory_iterator{}; ++iterator) {
+            entries_.emplace_back (*iterator);
+            auto &entry = entries_.back ();
+            if (entry.is_directory () && is_in_framework_cpp_build_dir (entry.path ())) {
+                iterator.disable_recursion_pending ();
+            }
+            if (!entry.is_regular_file ()) {
+                continue;
+            }
+            read_layout_file (entry.path (), entry.contents ());
+            files_.emplace (entry.path (), &entry.contents ());
+        }
+    }
+
+    const std::deque<layout_directory_entry_t> &entries () const
+    {
+        return entries_;
+    }
+
+    const layout_file_contents_t &file_contents (const std::filesystem::path &path)
+    {
+        const auto cached = files_.find (path);
+        if (cached != files_.end ()) {
+            return *cached->second;
+        }
+
+        auto [entry, inserted] = other_files_.try_emplace (path);
+        if (inserted) {
+            read_layout_file (path, entry->second);
+        }
+        return entry->second;
+    }
+
+  private:
+    std::deque<layout_directory_entry_t> entries_;
+    std::map<std::filesystem::path, const layout_file_contents_t *> files_;
+    std::map<std::filesystem::path, layout_file_contents_t> other_files_;
+};
+
+layout_snapshot_t &layout_snapshot ()
+{
+    static layout_snapshot_t snapshot;
+    return snapshot;
+}
+
+class layout_recursive_directory_entries_t
+{
+  public:
+    explicit layout_recursive_directory_entries_t (const std::filesystem::path &root) : root_{root}
+    {
+        static_cast<void> (std::filesystem::recursive_directory_iterator{root});
+    }
+
+    class iterator_t
+    {
+      public:
+        explicit iterator_t (const std::filesystem::path &root) : root_{root}
+        {
+            skip_outside_root ();
+        }
+
+        const layout_directory_entry_t &operator* () const
+        {
+            return layout_snapshot ().entries ()[index_];
+        }
+
+        iterator_t &operator++ ()
+        {
+            ++index_;
+            skip_outside_root ();
+            return *this;
+        }
+
+        bool operator== (std::default_sentinel_t) const
+        {
+            return index_ == layout_snapshot ().entries ().size ();
+        }
+
+      private:
+        void skip_outside_root ()
+        {
+            const auto &entries = layout_snapshot ().entries ();
+            while (index_ != entries.size ()
+                   && !is_in_directory_tree (entries[index_].path (), root_)) {
+                ++index_;
+            }
+        }
+
+        std::filesystem::path root_;
+        std::size_t index_ = 0;
+    };
+
+    iterator_t begin () const
+    {
+        return iterator_t{root_};
+    }
+
+    std::default_sentinel_t end () const
+    {
+        return {};
+    }
+
+  private:
+    std::filesystem::path root_;
+};
+
+layout_recursive_directory_entries_t layout_recursive_directory_entries (
+  const std::filesystem::path &root)
+{
+    return layout_recursive_directory_entries_t{root};
+}
+
+const layout_file_contents_t &layout_file_contents (const std::filesystem::path &path)
+{
+    return layout_snapshot ().file_contents (path);
+}
 
 bool require_exists (const std::filesystem::path &path)
 {
@@ -40,7 +254,7 @@ bool public_headers_do_not_include_runtime (const std::filesystem::path &root)
         return true;
     }
     bool ok = true;
-    for (const auto &entry : std::filesystem::recursive_directory_iterator (root)) {
+    for (const auto &entry : layout_recursive_directory_entries (root)) {
         if (!entry.is_regular_file ()) {
             continue;
         }
@@ -49,10 +263,8 @@ bool public_headers_do_not_include_runtime (const std::filesystem::path &root)
             continue;
         }
 
-        std::ifstream input (entry.path ());
-        std::string line;
         std::size_t line_no = 0;
-        while (std::getline (input, line)) {
+        for (const auto line : entry.contents ().lines) {
             ++line_no;
             if (line.find ("src/runtime") != std::string::npos
                 || line.find ("/Private/") != std::string::npos
@@ -124,7 +336,7 @@ bool public_headers_do_not_expose_runtime_dependencies (const std::filesystem::p
                                      "zlink::pub_socket_t",
                                      "zlink::sub_socket_t"};
 
-    for (const auto &entry : std::filesystem::recursive_directory_iterator (root)) {
+    for (const auto &entry : layout_recursive_directory_entries (root)) {
         if (!entry.is_regular_file ()) {
             continue;
         }
@@ -133,14 +345,11 @@ bool public_headers_do_not_expose_runtime_dependencies (const std::filesystem::p
             continue;
         }
 
-        std::ifstream input (entry.path ());
-        std::string line;
+        const auto relative_text = std::filesystem::relative (entry.path (), root).generic_string ();
         std::size_t line_no = 0;
-        while (std::getline (input, line)) {
+        for (const auto line : entry.contents ().lines) {
             ++line_no;
             for (const auto &needle : forbidden) {
-                const auto relative = std::filesystem::relative (entry.path (), root);
-                const auto relative_text = relative.generic_string ();
                 if ((relative_text == "framework/include/zlink/framework/codecs/json.hpp"
                      || relative_text
                           == "framework/include/zlink/framework/codecs/json_stream_connector.hpp"
@@ -183,10 +392,7 @@ bool public_headers_do_not_expose_runtime_dependencies (const std::filesystem::p
 
 bool file_contains_quiet (const std::filesystem::path &path, const std::string &needle)
 {
-    std::ifstream input (path);
-    std::ostringstream buffer;
-    buffer << input.rdbuf ();
-    return buffer.str ().find (needle) != std::string::npos;
+    return layout_file_contents (path).text.find (needle) != std::string::npos;
 }
 
 bool file_contains (const std::filesystem::path &path, const std::string &needle)
@@ -238,7 +444,7 @@ bool redesigned_cpp_contract_symbols_do_not_regress (const std::filesystem::path
             ok = false;
             continue;
         }
-        for (const auto &entry : std::filesystem::recursive_directory_iterator (scan_root)) {
+        for (const auto &entry : layout_recursive_directory_entries (scan_root)) {
             if (!entry.is_regular_file () || !is_code_guard_file (entry.path ())) {
                 continue;
             }
@@ -247,10 +453,8 @@ bool redesigned_cpp_contract_symbols_do_not_regress (const std::filesystem::path
                 continue;
             }
 
-            std::ifstream input (entry.path ());
-            std::string line;
             std::size_t line_no = 0;
-            while (std::getline (input, line)) {
+            for (const auto line : entry.contents ().lines) {
                 ++line_no;
                 for (const auto &needle : forbidden) {
                     if (line.find (needle) != std::string::npos) {
@@ -297,7 +501,7 @@ bool non_empty_directories_do_not_keep_gitkeep (const std::filesystem::path &roo
         if (!std::filesystem::exists (scan_root)) {
             continue;
         }
-        for (const auto &entry : std::filesystem::recursive_directory_iterator (scan_root)) {
+        for (const auto &entry : layout_recursive_directory_entries (scan_root)) {
             if (!entry.is_regular_file () || entry.path ().filename () != ".gitkeep") {
                 continue;
             }
@@ -324,10 +528,7 @@ bool actor_model_documents_actor_destroy_lifecycle (const std::filesystem::path 
 {
     const auto path = root.parent_path ().parent_path ()
                       / "doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md";
-    std::ifstream input (path);
-    std::ostringstream buffer;
-    buffer << input.rdbuf ();
-    const auto text = buffer.str ();
+    const auto &text = layout_file_contents (path).text;
 
     /* §6.8 prose wraps at column width, so needles that used to span a line break (a space in
      * the needle over a '\n' in the file) never matched. Each needle below is re-pinned to text
@@ -359,10 +560,7 @@ bool framework_api_documents_actor_destroy_lifecycle (const std::filesystem::pat
 {
     const auto path = root.parent_path ().parent_path ()
                       / "doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md";
-    std::ifstream input (path);
-    std::ostringstream buffer;
-    buffer << input.rdbuf ();
-    const auto text = buffer.str ();
+    const auto &text = layout_file_contents (path).text;
 
     /* The v10 draft cross-referenced 22-actor-model.ko.md by link text and named "transfer
      * adapter" directly; the v11 common/spec consolidation replaced that with the factory
@@ -394,10 +592,7 @@ bool session_actor_dispatch_documents_disconnect_destroy_boundary (
     const auto path =
       root.parent_path ().parent_path ()
       / "doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md";
-    std::ifstream input (path);
-    std::ostringstream buffer;
-    buffer << input.rdbuf ();
-    const auto text = buffer.str ();
+    const auto &text = layout_file_contents (path).text;
 
     /* The v10 draft named an explicit "Actor control message"/"control operation" vocabulary
      * that the v11 rewrite retired in favor of naming the exact operations
@@ -422,10 +617,7 @@ bool session_actor_dispatch_documents_disconnect_destroy_boundary (
 bool registry_spec_does_not_reintroduce_monitoring_contract (const std::filesystem::path &root)
 {
     const auto path = root / "../../doc/framework/cpp/spec/cpp-registry.ko.md";
-    std::ifstream input (path);
-    std::ostringstream buffer;
-    buffer << input.rdbuf ();
-    const auto text = buffer.str ();
+    const auto &text = layout_file_contents (path).text;
 
     bool ok = true;
     const std::string stale[] = {"Registry snapshot event는 등록된 monitoring source에만 전달",
@@ -448,13 +640,10 @@ bool contract_headers_have_compile_coverage (const std::filesystem::path &root,
 {
     const auto coverage_file =
       root / "tests/Zlink.Framework.ContractTests/test_cpp_framework_contract_headers.cpp";
-    std::ifstream coverage_input (coverage_file);
-    std::ostringstream coverage_buffer;
-    coverage_buffer << coverage_input.rdbuf ();
-    const auto coverage_text = coverage_buffer.str ();
+    const auto &coverage_text = layout_file_contents (coverage_file).text;
 
     bool ok = true;
-    for (const auto &entry : std::filesystem::recursive_directory_iterator (root / include_dir)) {
+    for (const auto &entry : layout_recursive_directory_entries (root / include_dir)) {
         if (!entry.is_regular_file () || entry.path ().extension () != ".hpp") {
             continue;
         }
@@ -474,7 +663,7 @@ bool sample_application_code_uses_message_codec (const std::filesystem::path &ro
 {
     bool ok = true;
     const auto samples_root = root / "samples";
-    for (const auto &entry : std::filesystem::recursive_directory_iterator (samples_root)) {
+    for (const auto &entry : layout_recursive_directory_entries (samples_root)) {
         if (!entry.is_regular_file ()) {
             continue;
         }
@@ -492,10 +681,8 @@ bool sample_application_code_uses_message_codec (const std::filesystem::path &ro
         const bool relocation_adapter_file =
           relative.find ("relocation_adapter") != std::string::npos;
 
-        std::ifstream input (entry.path ());
-        std::string line;
         std::size_t line_no = 0;
-        while (std::getline (input, line)) {
+        for (const auto line : entry.contents ().lines) {
             ++line_no;
             if (!dto_contract_file && line.find ("nlohmann::json::parse") != std::string::npos) {
                 std::cerr << "sample application code must use message_t/serializer "
@@ -544,7 +731,7 @@ bool sample_and_e2e_code_does_not_read_the_environment (const std::filesystem::p
         if (!std::filesystem::exists (tree_root)) {
             continue;
         }
-        for (const auto &entry : std::filesystem::recursive_directory_iterator (tree_root)) {
+        for (const auto &entry : layout_recursive_directory_entries (tree_root)) {
             if (!entry.is_regular_file ()) {
                 continue;
             }
@@ -552,10 +739,8 @@ bool sample_and_e2e_code_does_not_read_the_environment (const std::filesystem::p
             if (ext != ".hpp" && ext != ".cpp" && ext != ".sh") {
                 continue;
             }
-            std::ifstream input (entry.path ());
-            std::string line;
             std::size_t line_no = 0;
-            while (std::getline (input, line)) {
+            for (const auto line : entry.contents ().lines) {
                 ++line_no;
                 const bool reads_environment =
                   line.find ("getenv (") != std::string::npos
@@ -589,13 +774,11 @@ bool runner_generated_config_files_are_private_and_cleaned (const std::filesyste
     bool ok = true;
     for (const auto *tree : {"samples", "e2e"}) {
         const auto tree_root = root / tree;
-        for (const auto &entry : std::filesystem::recursive_directory_iterator (tree_root)) {
+        for (const auto &entry : layout_recursive_directory_entries (tree_root)) {
             if (!entry.is_regular_file () || entry.path ().extension () != ".sh") {
                 continue;
             }
-            std::ifstream input (entry.path ());
-            const std::string content ((std::istreambuf_iterator<char> (input)),
-                                       std::istreambuf_iterator<char> ());
+            const auto &content = entry.contents ().text;
             if (content.find ("--config") == std::string::npos) {
                 continue;
             }
@@ -620,15 +803,13 @@ bool cpp_runners_prefer_the_selected_build_directory (const std::filesystem::pat
     const std::filesystem::path runner_roots[] = {
       root / "e2e", root / "samples", root / "cross-language"};
     for (const auto &runner_root : runner_roots) {
-        for (const auto &entry : std::filesystem::recursive_directory_iterator (runner_root)) {
+        for (const auto &entry : layout_recursive_directory_entries (runner_root)) {
             if (!entry.is_regular_file () || entry.path ().extension () != ".sh")
                 continue;
             const auto relative = std::filesystem::relative (entry.path (), root);
             if (path_contains_segment (relative, "SubmitAdmission"))
                 continue;
-            std::ifstream input (entry.path ());
-            const std::string content ((std::istreambuf_iterator<char> (input)),
-                                       std::istreambuf_iterator<char> ());
+            const auto &content = entry.contents ().text;
             if (content.find ("BUILD_DIR=") != std::string::npos
                 && content.find ("${ZLINK_CPP_BUILD_DIR:-") == std::string::npos) {
                 std::cerr << "C++ runner BUILD_DIR must prefer ZLINK_CPP_BUILD_DIR: "
@@ -666,9 +847,7 @@ bool observability_ops_uses_role_specific_entrypoints (const std::filesystem::pa
         }
     }
 
-    std::ifstream cmake_input (root / "CMakeLists.txt");
-    const std::string cmake ((std::istreambuf_iterator<char> (cmake_input)),
-                             std::istreambuf_iterator<char> ());
+    const auto &cmake = layout_file_contents (root / "CMakeLists.txt").text;
     for (const auto *target : {
            "zlink_cpp_e2e_observability_ops_session",
            "zlink_cpp_e2e_observability_ops_play",
@@ -681,9 +860,7 @@ bool observability_ops_uses_role_specific_entrypoints (const std::filesystem::pa
         }
     }
 
-    std::ifstream runner_input (scenario / "run_e2e.sh");
-    const std::string runner ((std::istreambuf_iterator<char> (runner_input)),
-                              std::istreambuf_iterator<char> ());
+    const auto &runner = layout_file_contents (scenario / "run_e2e.sh").text;
     if (runner.find ("zlink_cpp_e2e_observability_ops_server") != std::string::npos
         || runner.find ('\"' + std::string ("role") + '\"') != std::string::npos) {
         std::cerr
@@ -704,9 +881,7 @@ bool spot_actor_transfer_uses_role_specific_entrypoints (const std::filesystem::
             ok = false;
         }
     }
-    std::ifstream cmake_input (root / "CMakeLists.txt");
-    const std::string cmake ((std::istreambuf_iterator<char> (cmake_input)),
-                             std::istreambuf_iterator<char> ());
+    const auto &cmake = layout_file_contents (root / "CMakeLists.txt").text;
     for (const auto *target : {"zlink_cpp_e2e_spot_actor_transfer_actor_node",
                                "zlink_cpp_e2e_spot_actor_transfer_session"}) {
         if (cmake.find (target) == std::string::npos) {
@@ -714,9 +889,7 @@ bool spot_actor_transfer_uses_role_specific_entrypoints (const std::filesystem::
             ok = false;
         }
     }
-    std::ifstream runner_input (scenario / "run_e2e.sh");
-    const std::string runner ((std::istreambuf_iterator<char> (runner_input)),
-                              std::istreambuf_iterator<char> ());
+    const auto &runner = layout_file_contents (scenario / "run_e2e.sh").text;
     if (runner.find ('\"' + std::string ("role") + '\"') != std::string::npos
         || runner.find ("zlink_cpp_e2e_spot_actor_transfer_node") != std::string::npos) {
         std::cerr << "SpotActorTransfer must not select ActorNode/Session through config\n";
@@ -749,9 +922,7 @@ bool affected_e2e_clients_own_each_scenario_in_a_file (const std::filesystem::pa
     bool ok = true;
     for (const auto &config : configs) {
         const auto client_root = root / "e2e" / config.directory / "Client";
-        std::ifstream main_input (client_root / "main.cpp");
-        const std::string main_content ((std::istreambuf_iterator<char> (main_input)),
-                                        std::istreambuf_iterator<char> ());
+        const auto &main_content = layout_file_contents (client_root / "main.cpp").text;
         for (const auto *id : config.ids) {
             std::string key;
             for (const char value : std::string (id)) {
@@ -766,9 +937,7 @@ bool affected_e2e_clients_own_each_scenario_in_a_file (const std::filesystem::pa
                 ok = false;
                 continue;
             }
-            std::ifstream scenario_input (path);
-            const std::string scenario ((std::istreambuf_iterator<char> (scenario_input)),
-                                        std::istreambuf_iterator<char> ());
+            const auto &scenario = layout_file_contents (path).text;
             if (scenario.find (id) == std::string::npos
                 || scenario.find (symbol) == std::string::npos) {
                 std::cerr << path << " must own " << id << " execution through " << symbol << '\n';
@@ -789,7 +958,7 @@ bool sample_server_code_does_not_block_on_task_result (const std::filesystem::pa
 {
     bool ok = true;
     const auto samples_root = root / "samples";
-    for (const auto &entry : std::filesystem::recursive_directory_iterator (samples_root)) {
+    for (const auto &entry : layout_recursive_directory_entries (samples_root)) {
         if (!entry.is_regular_file ()) {
             continue;
         }
@@ -805,10 +974,8 @@ bool sample_server_code_does_not_block_on_task_result (const std::filesystem::pa
             continue;
         }
 
-        std::ifstream input (entry.path ());
-        std::string line;
         std::size_t line_no = 0;
-        while (std::getline (input, line)) {
+        for (const auto line : entry.contents ().lines) {
             ++line_no;
             if (line.find (".result (") != std::string::npos
                 || line.find (".result(") != std::string::npos) {
@@ -859,7 +1026,7 @@ bool client_sample_does_not_include_server_implementation (const std::filesystem
                                      "run_client_e2e_stream_server",
                                      "use_embedded_server"};
     const auto path = root / client_root;
-    for (const auto &entry : std::filesystem::recursive_directory_iterator (path)) {
+    for (const auto &entry : layout_recursive_directory_entries (path)) {
         if (!entry.is_regular_file ()) {
             continue;
         }
@@ -868,10 +1035,8 @@ bool client_sample_does_not_include_server_implementation (const std::filesystem
             continue;
         }
 
-        std::ifstream input (entry.path ());
-        std::string line;
         std::size_t line_no = 0;
-        while (std::getline (input, line)) {
+        for (const auto line : entry.contents ().lines) {
             ++line_no;
             for (const auto &needle : forbidden) {
                 if (line.find (needle) != std::string::npos) {
@@ -893,10 +1058,7 @@ bool sample_client_targets_do_not_link_framework (const std::filesystem::path &r
       {"sample_cpp_framework_bingo_client", "samples/Bingo/CMakeLists.txt"},
       {"sample_cpp_framework_tictactoe_client", "samples/TicTacToe/CMakeLists.txt"}};
     for (const auto &[target, cmake_path] : targets) {
-        std::ifstream input (root / cmake_path);
-        std::string text ((std::istreambuf_iterator<char> (input)),
-                          std::istreambuf_iterator<char> ());
-        std::istringstream lines (text);
+        std::istringstream lines (layout_file_contents (root / cmake_path).text);
         std::string line;
         std::string block;
         bool found = false;
@@ -949,10 +1111,7 @@ bool http_client_public_surface_declares_general_client_features (const std::fil
     const auto contract_header =
       root / "http-client/include/zlink/http_client/contracts/client.hpp";
 
-    std::ifstream input (contract_header);
-    std::ostringstream buffer;
-    buffer << input.rdbuf ();
-    const auto text = buffer.str ();
+    const auto &text = layout_file_contents (contract_header).text;
 
     const std::string required[] = {"follow_redirects", "retry (", "cookies ()", "proxy (",
                                     "compression ()",   "query (", "form (",     "multipart (",
@@ -977,7 +1136,7 @@ bool stream_connector_public_surface_hides_runtime_internals (const std::filesys
       "transport_connection_t", "stream_connection_t",    "frame_codec_t",     "header_codec_t",
       "metadata_codec_t",       "lz4_compression_codec_t"};
 
-    for (const auto &entry : std::filesystem::recursive_directory_iterator (include_root)) {
+    for (const auto &entry : layout_recursive_directory_entries (include_root)) {
         if (!entry.is_regular_file ()) {
             continue;
         }
@@ -986,10 +1145,8 @@ bool stream_connector_public_surface_hides_runtime_internals (const std::filesys
             continue;
         }
 
-        std::ifstream input (entry.path ());
-        std::string line;
         std::size_t line_no = 0;
-        while (std::getline (input, line)) {
+        for (const auto line : entry.contents ().lines) {
             ++line_no;
             for (const auto &needle : forbidden) {
                 if (line.find (needle) != std::string::npos) {
@@ -1016,10 +1173,8 @@ bool http_hosting_public_surface_excludes_non_goal_features (const std::filesyst
 
     for (const auto &include_root : include_roots) {
         if (std::filesystem::is_regular_file (include_root)) {
-            std::ifstream input (include_root);
-            std::string line;
             std::size_t line_no = 0;
-            while (std::getline (input, line)) {
+            for (const auto line : layout_file_contents (include_root).lines) {
                 ++line_no;
                 for (const auto &needle : forbidden) {
                     if (line.find (needle) != std::string::npos) {
@@ -1034,7 +1189,7 @@ bool http_hosting_public_surface_excludes_non_goal_features (const std::filesyst
             continue;
         }
 
-        for (const auto &entry : std::filesystem::recursive_directory_iterator (include_root)) {
+        for (const auto &entry : layout_recursive_directory_entries (include_root)) {
             if (!entry.is_regular_file ()) {
                 continue;
             }
@@ -1043,10 +1198,8 @@ bool http_hosting_public_surface_excludes_non_goal_features (const std::filesyst
                 continue;
             }
 
-            std::ifstream input (entry.path ());
-            std::string line;
             std::size_t line_no = 0;
-            while (std::getline (input, line)) {
+            for (const auto line : entry.contents ().lines) {
                 ++line_no;
                 for (const auto &needle : forbidden) {
                     if (line.find (needle) != std::string::npos) {
@@ -1075,7 +1228,7 @@ bool location_store_public_surface_hides_domain_repositories (const std::filesys
       "redis_location_repository_t", "redis_relocation_repository_t"};
 
     for (const auto &include_root : include_roots) {
-        for (const auto &entry : std::filesystem::recursive_directory_iterator (include_root)) {
+        for (const auto &entry : layout_recursive_directory_entries (include_root)) {
             if (!entry.is_regular_file ()) {
                 continue;
             }
@@ -1084,10 +1237,8 @@ bool location_store_public_surface_hides_domain_repositories (const std::filesys
                 continue;
             }
 
-            std::ifstream input (entry.path ());
-            std::string line;
             std::size_t line_no = 0;
-            while (std::getline (input, line)) {
+            for (const auto line : entry.contents ().lines) {
                 ++line_no;
                 for (const auto &needle : forbidden) {
                     if (line.find (needle) != std::string::npos) {
