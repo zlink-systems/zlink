@@ -55,20 +55,27 @@ Spring MVC가 얹히듯 `ASP.NET Core` · Spring Boot · NestJS · C++ host 위�
 === "C#/.NET"
 
     ```csharp
+    using Zlink.Framework.Contracts.Spots;
+
     // 던전 room 안 — 보스 처치를 처리하는 handler.
-    public sealed class DefeatBossHandler
+    public sealed class DefeatBossHandler(IZLinkSpotClient spots)
         : IZLinkSpotRequestHandler<PlayerSpot, DefeatBossRequest, DefeatBossResult>
     {
         public async ValueTask<DefeatBossResult> HandleAsync(
-            PlayerSpot player, DefeatBossRequest request, IZLinkMessageContext context, CancellationToken ct)
+            PlayerSpot player,
+            DefeatBossRequest request,
+            CancellationToken ct)
         {
-            player.Exp += request.RewardExp;                // lock 없음 — 이 player의 spot 안에서 직렬
+            // lock 없음 — 이 player의 spot 안에서 직렬.
+            player.Exp += request.RewardExp;
 
-            var reply = await context.Channel
-                .RequestToSpot(player.GuildId, new GuildBenefitRequest(request.RewardExp / 10))
+            var benefit = new GuildBenefitRequest(request.RewardExp / 10);
+
+            // 비동기 호출도 그냥 다음 줄처럼 읽힌다.
+            var reply = await spots.RequestToSpot(player.GuildId, benefit)
                 .InstanceSpot("guild-workflow")
                 .InMesh("guild")
-                .Async<GuildBenefitResult>(ct);               // 비동기 호출도 그냥 다음 줄처럼 읽힌다
+                .Async<GuildBenefitResult>(ct);
 
             return new DefeatBossResult(reply.Ok);
         }
@@ -76,14 +83,20 @@ Spring MVC가 얹히듯 `ASP.NET Core` · Spring Boot · NestJS · C++ host 위�
     ```
 
     ```csharp
+    using Zlink.Framework.Contracts.Spots;
+
     // guild_id로 cold-activate된 spot 하나가 이 길드의 모든 요청을 직렬로 받는다.
     public sealed class GuildBenefitHandler
         : IZLinkSpotRequestHandler<GuildSpot, GuildBenefitRequest, GuildBenefitResult>
     {
         public ValueTask<GuildBenefitResult> HandleAsync(
-            GuildSpot guild, GuildBenefitRequest request, IZLinkMessageContext context, CancellationToken ct)
+            GuildSpot guild,
+            GuildBenefitRequest request,
+            CancellationToken ct)
         {
-            guild.Exp += request.Exp;                 // lock 없음 — 이 guild의 spot 안에서 직렬
+            // lock 없음 — 이 guild의 spot 안에서 직렬.
+            guild.Exp += request.Exp;
+
             return ValueTask.FromResult(new GuildBenefitResult(true));
         }
     }
@@ -92,62 +105,142 @@ Spring MVC가 얹히듯 `ASP.NET Core` · Spring Boot · NestJS · C++ host 위�
 === "C++"
 
     ```cpp
-    // 던전 room 안 — 보스 처치를 처리하는 handler.
-    task_t<defeat_boss_result_t> player_spot_t::defeat_boss (const defeat_boss_request_t &request)
+    #include <zlink/framework.hpp>
+
+    using namespace zlink::framework;
+
+    // 던전 room 안 — 보스 처치를 처리하는 spot.
+    class player_spot_t : public instance_spot_t
     {
-        _exp += request.reward_exp;                          // lock 없음 — 이 player의 spot 안에서 직렬
+      public:
+        player_spot_t (instance_spot_context_t context, route_client_t &routes) :
+            _context (std::move (context)), _routes (routes)
+        {
+        }
 
-        auto reply = co_await channel.request_to_spot (_guild_id, guild_benefit_request_t{request.reward_exp / 10})
-                         .instance_spot ("guild-workflow")
-                         .in_mesh ("guild")
-                         .submit<guild_benefit_result_t> ();  // 비동기 호출도 그냥 다음 줄처럼 읽힌다
+        instance_spot_context_t &context () noexcept override { return _context; }
 
-        co_return defeat_boss_result_t{reply.ok};
-    }
+        void configure () override
+        {
+            _context.handlers ()
+              .add_handler<&player_spot_t::defeat_boss> (
+                defeat_boss_request_t::packet_name);
+        }
+
+        task_t<defeat_boss_result_t> defeat_boss (const defeat_boss_request_t &request)
+        {
+            // lock 없음 — 이 player의 spot 안에서 직렬.
+            _exp += request.reward_exp;
+
+            const guild_benefit_request_t benefit{request.reward_exp / 10};
+
+            // 비동기 호출도 그냥 다음 줄처럼 읽힌다.
+            auto reply = co_await _routes.request_to_spot (_guild_id, benefit)
+                           .instance_spot ("guild-workflow")
+                           .in_mesh ("guild")
+                           .async<guild_benefit_result_t> ();
+
+            co_return defeat_boss_result_t{reply.ok};
+        }
+
+      private:
+        instance_spot_context_t _context;
+        route_client_t &_routes;
+        std::string _guild_id;
+        long _exp = 0;
+    };
     ```
 
     ```cpp
+    #include <zlink/framework.hpp>
+
+    using namespace zlink::framework;
+
     // guild_id로 cold-activate된 spot 하나가 이 길드의 모든 요청을 직렬로 받는다.
-    task_t<guild_benefit_result_t> guild_workflow_spot_t::apply_benefit (const guild_benefit_request_t &request)
+    class guild_workflow_spot_t : public instance_spot_t
     {
-        _exp += request.exp;                     // lock 없음 — 이 guild의 spot 안에서 직렬
-        co_return guild_benefit_result_t{true};
-    }
+      public:
+        explicit guild_workflow_spot_t (instance_spot_context_t context) :
+            _context (std::move (context))
+        {
+        }
+
+        instance_spot_context_t &context () noexcept override { return _context; }
+
+        void configure () override
+        {
+            _context.handlers ()
+              .add_handler<&guild_workflow_spot_t::apply_benefit> (
+                guild_benefit_request_t::packet_name);
+        }
+
+        task_t<guild_benefit_result_t> apply_benefit (
+          const guild_benefit_request_t &request)
+        {
+            // lock 없음 — 이 guild의 spot 안에서 직렬.
+            _exp += request.exp;
+
+            co_return guild_benefit_result_t{true};
+        }
+
+      private:
+        instance_spot_context_t _context;
+        long _exp = 0;
+    };
     ```
 
 === "Java"
 
     ```java
+    import java.util.concurrent.CompletionStage;
+    import systems.zlink.framework.channels.ZLinkRouteClient;
+    import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
+
     // 던전 room 안 — 보스 처치를 처리하는 handler.
-    public final class DefeatBossHandler
-        implements ZLinkSpotRequestHandler<PlayerSpot, DefeatBossRequest, DefeatBossResult> {
+    public final class DefeatBossHandler implements
+        ZLinkSpotRequestHandler<PlayerSpot, DefeatBossRequest, DefeatBossResult> {
+
+        private final ZLinkRouteClient channels;
+
+        public DefeatBossHandler(ZLinkRouteClient channels) {
+            this.channels = channels;
+        }
 
         @Override
         public CompletionStage<DefeatBossResult> handle(
-            PlayerSpot player, DefeatBossRequest request, ZLinkMessageContext context) {
+            PlayerSpot player, DefeatBossRequest request) {
 
-            player.setExp(player.getExp() + request.rewardExp());   // lock 없음 — 직렬
+            // lock 없음 — 이 player의 spot 안에서 직렬.
+            player.setExp(player.getExp() + request.rewardExp());
 
-            return context.channel()
-                .requestToSpot(player.getGuildId(), new GuildBenefitRequest(request.rewardExp() / 10))
+            var benefit = new GuildBenefitRequest(request.rewardExp() / 10);
+
+            // 비동기 호출도 그냥 다음 줄처럼 이어진다.
+            return channels.requestToSpot(player.getGuildId(), benefit)
                 .instanceSpot("guild-workflow")
                 .inMesh("guild")
-                .submit(GuildBenefitResult.class)              // 비동기 호출도 그냥 다음 줄처럼 이어진다
+                .submit(GuildBenefitResult.class)
                 .thenApply(reply -> new DefeatBossResult(reply.ok()));
         }
     }
     ```
 
     ```java
+    import java.util.concurrent.CompletableFuture;
+    import java.util.concurrent.CompletionStage;
+    import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
+
     // guild_id로 cold-activate된 spot 하나가 이 길드의 모든 요청을 직렬로 받는다.
-    public final class GuildBenefitHandler
-        implements ZLinkSpotRequestHandler<GuildSpot, GuildBenefitRequest, GuildBenefitResult> {
+    public final class GuildBenefitHandler implements
+        ZLinkSpotRequestHandler<GuildSpot, GuildBenefitRequest, GuildBenefitResult> {
 
         @Override
         public CompletionStage<GuildBenefitResult> handle(
-            GuildSpot guild, GuildBenefitRequest request, ZLinkMessageContext context) {
+            GuildSpot guild, GuildBenefitRequest request) {
 
-            guild.setExp(guild.getExp() + request.exp());   // lock 없음 — 직렬
+            // lock 없음 — 이 guild의 spot 안에서 직렬.
+            guild.setExp(guild.getExp() + request.exp());
+
             return CompletableFuture.completedFuture(new GuildBenefitResult(true));
         }
     }
@@ -156,35 +249,51 @@ Spring MVC가 얹히듯 `ASP.NET Core` · Spring Boot · NestJS · C++ host 위�
 === "Kotlin"
 
     ```kotlin
+    import java.util.concurrent.CompletionStage
+    import systems.zlink.framework.channels.ZLinkRouteClient
+    import systems.zlink.framework.spots.ZLinkSpotRequestHandler
+
     // 던전 room 안 — 보스 처치를 처리하는 handler.
-    class DefeatBossHandler : ZLinkSpotRequestHandler<PlayerSpot, DefeatBossRequest, DefeatBossResult> {
+    class DefeatBossHandler(
+        private val channels: ZLinkRouteClient,
+    ) : ZLinkSpotRequestHandler<PlayerSpot, DefeatBossRequest, DefeatBossResult> {
 
-        override suspend fun handle(
-            player: PlayerSpot, request: DefeatBossRequest, context: ZLinkMessageContext
-        ): DefeatBossResult {
-            player.exp += request.rewardExp              // lock 없음 — 이 player의 spot 안에서 직렬
+        override fun handle(
+            player: PlayerSpot,
+            request: DefeatBossRequest,
+        ): CompletionStage<DefeatBossResult> {
+            // lock 없음 — 이 player의 spot 안에서 직렬.
+            player.exp += request.rewardExp
 
-            val reply = context.channel
-                .requestToSpot(player.guildId, GuildBenefitRequest(request.rewardExp / 10))
+            val benefit = GuildBenefitRequest(request.rewardExp / 10)
+
+            // 비동기 호출도 그냥 다음 줄처럼 이어진다.
+            return channels.requestToSpot(player.guildId, benefit)
                 .instanceSpot("guild-workflow")
                 .inMesh("guild")
                 .submit(GuildBenefitResult::class.java)
-                .await()                                       // 비동기 호출도 그냥 다음 줄처럼 읽힌다
-
-            return DefeatBossResult(reply.ok)
+                .thenApply { reply -> DefeatBossResult(reply.ok) }
         }
     }
     ```
 
     ```kotlin
-    // guild_id로 cold-activate된 spot 하나가 이 길드의 모든 요청을 직렬로 받는다.
-    class GuildBenefitHandler : ZLinkSpotRequestHandler<GuildSpot, GuildBenefitRequest, GuildBenefitResult> {
+    import java.util.concurrent.CompletableFuture
+    import java.util.concurrent.CompletionStage
+    import systems.zlink.framework.spots.ZLinkSpotRequestHandler
 
-        override suspend fun handle(
-            guild: GuildSpot, request: GuildBenefitRequest, context: ZLinkMessageContext
-        ): GuildBenefitResult {
-            guild.exp += request.exp         // lock 없음 — 이 guild의 spot 안에서 직렬
-            return GuildBenefitResult(true)
+    // guild_id로 cold-activate된 spot 하나가 이 길드의 모든 요청을 직렬로 받는다.
+    class GuildBenefitHandler :
+        ZLinkSpotRequestHandler<GuildSpot, GuildBenefitRequest, GuildBenefitResult> {
+
+        override fun handle(
+            guild: GuildSpot,
+            request: GuildBenefitRequest,
+        ): CompletionStage<GuildBenefitResult> {
+            // lock 없음 — 이 guild의 spot 안에서 직렬.
+            guild.exp += request.exp
+
+            return CompletableFuture.completedFuture(GuildBenefitResult(true))
         }
     }
     ```
@@ -192,20 +301,30 @@ Spring MVC가 얹히듯 `ASP.NET Core` · Spring Boot · NestJS · C++ host 위�
 === "Node/TypeScript"
 
     ```typescript
+    import { Inject } from '@nestjs/common';
+    import { ZLINK_SPOT_OUTBOUND, zlinkRequestHandler } from '@zlink-systems/nestjs';
+    import type {
+      ZLinkRequestHandler,
+      ZLinkSpotOutbound,
+    } from '@zlink-systems/framework';
+
     // 던전 room 안 — 보스 처치를 처리하는 handler.
+    @zlinkRequestHandler('play', PacketNames.defeatBossRequest)
     export class DefeatBossHandler
-      implements ZLinkSpotRequestHandler<PlayerSpot, DefeatBossRequest, DefeatBossResult> {
+      implements ZLinkRequestHandler<DefeatBossRequest, DefeatBossResult> {
 
-      async handle(
-        player: PlayerSpot, request: DefeatBossRequest, context: ZLinkMessageContext
-      ): Promise<DefeatBossResult> {
-        player.exp += request.rewardExp;                     // lock 없음 — 이 player의 spot 안에서 직렬
+      constructor(
+        @Inject(ZLINK_SPOT_OUTBOUND)
+        private readonly outbound: ZLinkSpotOutbound,
+      ) {}
 
-        const reply = await context.channel
-          .requestToSpot(player.guildId, { exp: request.rewardExp / 10 })
+      async handle(request: DefeatBossRequest): Promise<DefeatBossResult> {
+        // 비동기 호출도 그냥 다음 줄처럼 읽힌다.
+        const reply = await this.outbound
+          .requestToSpot(request.guildId, { exp: request.rewardExp / 10 })
           .instanceSpot('guild-workflow')
           .inMesh('guild')
-          .submit<GuildBenefitResult>();                        // 비동기 호출도 그냥 다음 줄처럼 읽힌다
+          .submit<GuildBenefitResult>();
 
         return { ok: reply.ok };
       }
@@ -213,14 +332,18 @@ Spring MVC가 얹히듯 `ASP.NET Core` · Spring Boot · NestJS · C++ host 위�
     ```
 
     ```typescript
-    // guild_id로 cold-activate된 spot 하나가 이 길드의 모든 요청을 직렬로 받는다.
-    export class GuildBenefitHandler
-      implements ZLinkSpotRequestHandler<GuildSpot, GuildBenefitRequest, GuildBenefitResult> {
+    import { zlinkRequestHandler } from '@zlink-systems/nestjs';
+    import type { ZLinkRequestHandler } from '@zlink-systems/framework';
 
-      async handle(
-        guild: GuildSpot, request: GuildBenefitRequest, context: ZLinkMessageContext
-      ): Promise<GuildBenefitResult> {
-        guild.exp += request.exp;                 // lock 없음 — 이 guild의 spot 안에서 직렬
+    // guild_id로 cold-activate된 spot 하나가 이 길드의 모든 요청을 직렬로 받는다.
+    @zlinkRequestHandler('guild', PacketNames.guildBenefitRequest)
+    export class GuildBenefitHandler
+      implements ZLinkRequestHandler<GuildBenefitRequest, GuildBenefitResult> {
+
+      async handle(request: GuildBenefitRequest): Promise<GuildBenefitResult> {
+        // lock 없음 — 이 guild의 spot 안에서 직렬.
+        applyGuildExp(request.guildId, request.exp);
+
         return { ok: true };
       }
     }
