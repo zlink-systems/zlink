@@ -3730,6 +3730,9 @@ test('ZLinkModule route channel dispatches inbound routed handlers after bootstr
   class HandlerModule {}
   const builder = nestjs.zlinkFramework()
     .options({ filters: [NodeDirectFilter] });
+  if (process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR !== undefined) {
+    builder.configureDispatch().messageFlow('normal');
+  }
   const mesh = builder
     .addRouteMesh('mesh')
       .listen(endpoint)
@@ -3787,6 +3790,9 @@ test('ZLinkModule routeMesh channel option dispatches inbound routed handlers af
   class HandlerModule {}
   const builder = nestjs.zlinkFramework()
     .options({ filters: [ChannelOnlyFilter] });
+  if (process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR !== undefined) {
+    builder.configureDispatch().messageFlow('normal');
+  }
   const mesh = builder
     .addRouteMesh('mesh')
       .listen(endpoint)

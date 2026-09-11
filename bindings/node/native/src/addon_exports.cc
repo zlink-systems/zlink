@@ -9,6 +9,19 @@
         js_name, 0, native_fn, 0, 0, 0, napi_default, 0                                            \
     }
 
+template <napi_callback Callback>
+static napi_value socket_progress_call (napi_env env, napi_callback_info info)
+{
+    // Non-receive socket calls can consume the mailbox notification while
+    // processing commands. Preserve a JS drain before entering Core, including
+    // calls that fail. Receive already observes DATA and never takes this path.
+    socket_readable_watch_progress (env, info);
+    return Callback (env, info);
+}
+
+#define ZLINK_SOCKET_METHOD(js_name, native_fn) \
+    ZLINK_METHOD (js_name, socket_progress_call<native_fn>)
+
 static void
 define_exports (napi_env env, napi_value exports, napi_property_descriptor *descs, size_t count)
 {
@@ -49,15 +62,15 @@ void define_core_exports (napi_env env, napi_value exports)
       ZLINK_METHOD ("ctxResetAutoHwmBudgetMetrics", ctx_reset_auto_hwm_budget_metrics),
       ZLINK_METHOD ("socketNew", socket_new),
       ZLINK_METHOD ("socketClose", socket_close),
-      ZLINK_METHOD ("socketBind", socket_bind),
-      ZLINK_METHOD ("socketUnbind", socket_unbind),
-      ZLINK_METHOD ("socketConnect", socket_connect),
-      ZLINK_METHOD ("socketDisconnect", socket_disconnect),
-      ZLINK_METHOD ("socketDisconnectRid", socket_disconnect_rid),
-      ZLINK_METHOD ("socketSetTlsServer", socket_set_tls_server),
-      ZLINK_METHOD ("socketSetTlsClient", socket_set_tls_client),
-      ZLINK_METHOD ("socketPublish", socket_publish),
-      ZLINK_METHOD ("socketTryPublish", socket_try_publish),
+      ZLINK_SOCKET_METHOD ("socketBind", socket_bind),
+      ZLINK_SOCKET_METHOD ("socketUnbind", socket_unbind),
+      ZLINK_SOCKET_METHOD ("socketConnect", socket_connect),
+      ZLINK_SOCKET_METHOD ("socketDisconnect", socket_disconnect),
+      ZLINK_SOCKET_METHOD ("socketDisconnectRid", socket_disconnect_rid),
+      ZLINK_SOCKET_METHOD ("socketSetTlsServer", socket_set_tls_server),
+      ZLINK_SOCKET_METHOD ("socketSetTlsClient", socket_set_tls_client),
+      ZLINK_SOCKET_METHOD ("socketPublish", socket_publish),
+      ZLINK_SOCKET_METHOD ("socketTryPublish", socket_try_publish),
       ZLINK_METHOD ("socketRecvMessage", socket_recv_message),
       ZLINK_METHOD ("socketRecvMessageNoWait", socket_try_recv_message),
       ZLINK_METHOD ("socketSubscribeMessage", socket_subscribe_message),
@@ -66,24 +79,24 @@ void define_core_exports (napi_env env, napi_value exports)
       ZLINK_METHOD ("socketTrySubscriptionEvent", socket_try_subscription_event),
       ZLINK_METHOD ("subscriptionAt", subscription_at),
       ZLINK_METHOD ("socketStreamRecvPacket", socket_stream_recv_packet),
-      ZLINK_METHOD ("socketSetOpt", socket_setopt),
-      ZLINK_METHOD ("socketGetOpt", socket_getopt),
-      ZLINK_METHOD ("socketSetReceiveFlowState", socket_set_receive_flow_state),
-      ZLINK_METHOD ("socketSetSubscription", socket_set_subscription),
-      ZLINK_METHOD ("socketUnsetSubscription", socket_unset_subscription),
-      ZLINK_METHOD ("handleSetRoutingId", handle_set_routing_id),
-      ZLINK_METHOD ("handleGetRoutingId", handle_get_routing_id),
-      ZLINK_METHOD ("socketSubmitSend", socket_submit_send),
-      ZLINK_METHOD ("socketSubmitRequest", socket_submit_request),
-      ZLINK_METHOD ("socketRequestSync", socket_request_sync),
+      ZLINK_SOCKET_METHOD ("socketSetOpt", socket_setopt),
+      ZLINK_SOCKET_METHOD ("socketGetOpt", socket_getopt),
+      ZLINK_SOCKET_METHOD ("socketSetReceiveFlowState", socket_set_receive_flow_state),
+      ZLINK_SOCKET_METHOD ("socketSetSubscription", socket_set_subscription),
+      ZLINK_SOCKET_METHOD ("socketUnsetSubscription", socket_unset_subscription),
+      ZLINK_SOCKET_METHOD ("handleSetRoutingId", handle_set_routing_id),
+      ZLINK_SOCKET_METHOD ("handleGetRoutingId", handle_get_routing_id),
+      ZLINK_SOCKET_METHOD ("socketSubmitSend", socket_submit_send),
+      ZLINK_SOCKET_METHOD ("socketSubmitRequest", socket_submit_request),
+      ZLINK_SOCKET_METHOD ("socketRequestSync", socket_request_sync),
       ZLINK_METHOD ("socketCompletionRecv", socket_completion_recv),
       ZLINK_METHOD ("socketReadableWatchStart", socket_readable_watch_start),
       ZLINK_METHOD ("socketReadableWatchStop", socket_readable_watch_stop),
       ZLINK_METHOD ("testCompletionCloseCount", test_completion_close_count),
-      ZLINK_METHOD ("socketReply", socket_reply),
+      ZLINK_SOCKET_METHOD ("socketReply", socket_reply),
       ZLINK_METHOD ("routerRecvMessage", router_recv_message),
       ZLINK_METHOD ("routerRecvMessageNoWait", router_try_recv_message),
-      ZLINK_METHOD ("monitorOpen", monitor_open),
+      ZLINK_SOCKET_METHOD ("monitorOpen", monitor_open),
       ZLINK_METHOD ("monitorRecv", monitor_recv),
       ZLINK_METHOD ("monitorRecvNoWait", monitor_try_recv),
       ZLINK_METHOD ("monitorStatus", monitor_status),
