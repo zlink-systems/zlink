@@ -30,6 +30,9 @@ namespace detail
 class stream_write_call_state_t;
 class stream_header_t;
 
+// Reject runtime execution contexts before a blocking terminal starts work.
+void ensure_blocking_submit_allowed ();
+
 class submit_once_t
 {
   public:
@@ -79,6 +82,12 @@ template <typename TReply> class request_call_t
     }
 
     task_t<TReply> async () { return start (false); }
+
+    TReply submit ()
+    {
+        detail::ensure_blocking_submit_allowed ();
+        return async ().result ().value ();
+    }
 
     task_t<TReply> yield () { return start (true); }
 
@@ -155,6 +164,12 @@ class channel_request_call_t
     }
 
     template <typename TReply> task_t<TReply> async () { return start<TReply> (false); }
+
+    template <typename TReply> TReply submit ()
+    {
+        detail::ensure_blocking_submit_allowed ();
+        return async<TReply> ().result ().value ();
+    }
 
     template <typename TReply> task_t<TReply> yield () { return start<TReply> (true); }
 
@@ -267,6 +282,12 @@ class send_call_t
     {
         _metadata[std::move (key)] = std::move (value);
         return *this;
+    }
+
+    void submit ()
+    {
+        detail::ensure_blocking_submit_allowed ();
+        async ().result ().value ();
     }
 
     task_t<void> async ()
@@ -422,6 +443,8 @@ class bound_session_send_call_t
 
     task_t<void> async () { return _call.async (); }
 
+    void submit () { _call.submit (); }
+
   private:
     send_call_t _call;
 };
@@ -453,6 +476,7 @@ class stream_write_call_t
     stream_write_call_t &metadata (std::string key, std::string value);
     stream_write_call_t &compress ();
     task_t<void> async ();
+    void submit ();
 
   private:
     using submit_fn_t =
@@ -489,6 +513,7 @@ class stream_send_call_t
     stream_send_call_t &compress ();
     stream_send_call_t &timeout (std::chrono::milliseconds timeout);
     task_t<void> async ();
+    void submit ();
 
   private:
     using submit_fn_t =

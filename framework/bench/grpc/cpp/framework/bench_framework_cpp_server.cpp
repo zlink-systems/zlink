@@ -34,13 +34,33 @@ struct command_handler_t
     server_metrics_t &metrics;
 };
 
+class capture_runtime_t final : public fw::hosted_service_t
+{
+  public:
+    explicit capture_runtime_t (std::atomic<fw::route_mesh_runtime_t *> &runtime) : _runtime (runtime) {}
+    fw::task_t<void> start (fw::service_provider_t &services) override
+    {
+        _runtime.store (&services.get_required<fw::route_mesh_runtime_t> ());
+        co_return;
+    }
+    void stop () noexcept override {}
+  private:
+    std::atomic<fw::route_mesh_runtime_t *> &_runtime;
+};
+
 int main (int argc, char **argv)
 {
     const auto endpoint = arg_value (argc, argv, "--endpoint", "tcp://127.0.0.1:5294");
     const int port = std::stoi (arg_value (argc, argv, "--stats-port", "5295"));
     try {
-        server_metrics_t metrics;
-        stats_http_server_t server (metrics, port);
+        // The public RouteMesh snapshot exposes topology, but no drop counters.
+        server_metrics_t metrics (std::nullopt);
+        std::atomic<fw::route_mesh_runtime_t *> runtime{nullptr};
+        stats_http_server_t server (metrics, port, [&] {
+            if (auto *current = runtime.load ()) (void) current->snapshot ("bench");
+        });
+        server.app ().add_hosted_service (std::make_unique<capture_runtime_t> (runtime));
+        server.app ().logging ().disable_record_capture ();
         auto &options = server.app ().add_zlink_framework ();
         options.codecs ().use (zlink::framework_codecs::protobuf ());
         options.services ().add_singleton<echo_handler_t> (std::make_unique<echo_handler_t> (metrics));

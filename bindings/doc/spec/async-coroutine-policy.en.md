@@ -100,6 +100,33 @@ rules belong to [the common result projection](README.en.md#submit-result-projec
 [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). Synchronous
 terminals (`submit_sync()`, .NET/C++ `Submit()`/`submit()`) are unchanged.
 
+<a id="submission-stage-isolation"></a>
+
+**The state of stages returned by result objects is isolated between distinct submissions.** If a caller completes, fails, cancels, or overwrites the completion state of one submission's `admitted` or `reply`, or a view obtained through a public conversion method of that stage, the action must not propagate to another submission's completion state or observed result through a shared returned representation or shared state behind it. Consuming a stage or detaching a wait must not change another submission's waiter state or ability to consume its result through shared state. This rule covers previously returned results, in-flight submissions, and later submissions on both the same socket and other sockets. Normal resource reclamation and the resulting progress of other submissions follow the existing admission and lifecycle contracts.
+
+The actions covered here are completion-state operations offered by the returned type and ordinary awaiting, consumption, dropping, destruction, and wait cancellation. Arbitrary property or prototype replacement, private-state access, and payload mutation are outside this clause. This clause does not require new cancellation or forced-completion APIs. Socket/context shutdown, a cancellation source explicitly connected to multiple waits, and completion dependencies explicitly established by the application follow their respective existing contracts.
+
+Isolation does not mean cancellation of the Core operation or reversal of admission that has already occurred. Actual admission and reply completion, including the relationship between the two stages of one REQUEST, follow [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). Caller-wait cancellation and native-state cleanup follow [§6 of that document](async-execution-model.en.md#6-caller-wait-cancellation). A value forcibly assigned to a view by the caller is not evidence of actual admission or a reply; this clause defines no new propagation rule between stages for that action.
+
+An instance may be shared to represent already-completed admission, provided the actions above cannot affect another submission through that shared representation. This condition covers waiter and single-consumption state as well as the completed value. Per-submission objects, completion representations that cannot be changed, and views with isolated mutations can all satisfy the condition. Shared ownership of internal state within the same operation is allowed.
+
+| Binding | Safe example for already-successful admission | Condition |
+|---|---|---|
+| Java/Kotlin | Shared `CompletableFuture.completedStage(null)`, or a new `CompletableFuture.completedFuture(null)` per submission | Mutating a `toCompletableFuture()` view of the shared minimal stage does not affect another submission. Directly sharing a mutable `completedFuture(null)` instance across submissions allows operations such as `obtrudeException()` to change other results. Calling only `cancel()` after successful completion does not detect that defect. |
+| Node.js | The result of `Promise.resolve()`, without exposing its resolver | A Promise's completion state cannot change once settled. The returned Promise has no caller-facing settle/cancel API. |
+| .NET | `Task.CompletedTask`, or a completed Task specific to the submission | The result object exposes the Task, not the source that completes it. |
+| Python | An `asyncio.Future` created for the submission on its event loop and completed successfully | Do not share another submission's pending or cancelled Future, or a coroutine object that cannot be reused. |
+| Go | `Admitted(ctx)` that returns `nil` immediately while keeping completion state private | The result object exposes neither a completion channel nor a completion-state setter. |
+| Rust | `Box::pin(std::future::ready(Ok(())))` created per submission | Do not share mutable Future consumption state across submissions. Move ownership alone does not establish the absence of internal sharing. |
+| C++ | A move-only `async_result_t<void>` with completion and consumption state specific to the submission | Internal `shared_ptr` use is allowed. Consuming or destroying one result must not change another submission's completion or consumption state. |
+
+**Verification requirement.** Pin the following with regression tests using public result objects and the language's completion types.
+
+- Cover `OK` admission, `BACKPRESSURED` admission, and REQUEST `reply` separately. Exercise completion, failure, cancellation, and overwrite operations where the type offers them and the state permits them. Distinguish successful state changes from rejected or ineffective attempts. A test of an already-successful mutable future must not rely only on a no-op `cancel()`.
+- After modifying, consuming, or releasing one submission's result, verify that both another result already returned on the same socket and a later submission receive their own completion outcomes and REQUEST replies. Also check results from another socket to cover completion representations shared across sockets. Use independent cancellation sources for independent waits.
+- If forced completion or cancellation is unavailable, verify that the public type exposes no such authority, and use the awaiting, single consumption, dropping, destruction, or wait cancellation that the type does support to check isolation from other submissions. A comment recording the missing operation does not replace completion verification. Do not require a single-consumer stage to support consumption twice.
+- When a pending wait is cancelled or detached, verify that late completion neither completes the cancelled wait again nor prevents other submissions from completing. Verification of actual admission/reply ordering and native cleanup follows [the async execution model's verification requirements](async-execution-model.en.md#7-implementation-and-contract-test-verification-requirements).
+
 | Binding | Send terminal | Request terminal | Reply terminal |
 |---|---|---|---|
 | C++ | `void submit() &&`, `send_submission_t async() &&` | `vector<message_t> submit() &&`, `request_submission_t async() &&` | `void submit() &&` |
