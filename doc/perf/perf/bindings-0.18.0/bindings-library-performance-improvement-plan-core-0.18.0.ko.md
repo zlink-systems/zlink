@@ -946,30 +946,30 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
 | `tcp` | `MULTI_DEALER_DEALER` | 36.7% | 84.8% | 118.2% | 60.1% | 58.5% | 51.6% | 미달 68.3%/lat0.19× · c0180-java-multi-tcp |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 83.7% | 76.8% | 82.3% | 80.5% | 92.5% | 81.2% | 미달 82.8%/lat3.64× · c0180-java-multi-tcp |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 실패 | 76% | 89% | 91% | 13% | 21% | 보류 57.8%(n5) · 64B 실패=소형 backpressure 지연·완료드레인 timeout(측정특성, C성공)·binding/harness 불변 · 대형 latency floor · c0180-java-multi-tcp-reqrep |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 107.8% | 99.8% | 93.1% | 30.7% | 54.6% | 70.2% | 통과 76.0%/lat2.34× · c0180-java-multi-tcp |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 88% | 73% | 86% | 91% | 15% | 20% | 보류 62.1% · 대형 size 의존 latency floor(65536 15%/11×)·소형 backpressure 지연 · binding 불변 · c0180-java-multi-tcp-reqrep |
 | `tcp` | `MULTI_PUBSUB` | 73.8% | 61.7% | 65.3% | 66.9% | 137.3% | 134.7% | 미달 90.0%/lat1.21× · c0180-java-multi-tcp |
 | `tcp` | `MULTI_STREAM` | 실패 | 실패 | 실패 | 해당 없음 | 실패 | 해당 없음 | 실패 — MULTI_STREAM server_start_ready_timeout_or_mismatch (STREAM 서버 준비 실패, 측정 불가) |
 | `ws` | `MULTI_DEALER_DEALER` | 41.4% | 76.5% | 64.7% | 82.9% | 63.1% | 63.4% | 미달 65.3%/lat1.74× · c0180-java-multi-ws |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 98.4% | 87.3% | 114.4% | 81.2% | 141.0% | 156.5% | 통과 113.1%/lat0.52× · c0180-java-multi-ws |
-| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 실패 | 실패 | 138% | 실패 | 40% | 43% | 보류 73.5%(n3) · 소형 다수 실패=backpressure 지연(C성공)·binding 불변 · c0180-java-multi-ws-reqrep |
 | `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 114.4% | 52.5% | 54.7% | 58.5% | 62.7% | 72.1% | 미달 69.2%/lat3.82× · c0180-java-multi-ws |
-| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 실패 | 122% | 140% | 61% | 26% | 35% | 보류 76.6%(n5) · 64B 실패(C성공)·대형 latency floor · binding 불변 · c0180-java-multi-ws-reqrep |
 | `ws` | `MULTI_PUBSUB` | 116.0% | 75.6% | 60.8% | 71.2% | 146.9% | 144.6% | 통과 102.5%/lat0.86× · c0180-java-multi-ws |
 | `ws` | `MULTI_STREAM` | 실패 | 실패 | 실패 | 해당 없음 | 실패 | 해당 없음 | 실패 — MULTI_STREAM server_start_ready_timeout_or_mismatch (STREAM 서버 준비 실패, 측정 불가) |
 | `wss` | `MULTI_DEALER_DEALER` | 41.8% | 75.2% | 88.5% | 91.0% | 65.7% | 66.3% | 미달 71.4%/lat0.76× · c0180-java-multi-wss |
 | `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 110.3% | 89.3% | 69.3% | 76.9% | 74.0% | 66.7% | 통과 81.1%/lat1.35× · c0180-java-multi-wss |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 109% | 104% | 16% | 실패 | 47% | 72% | 보류 69.6%(n5) · 4096B 실패(측정특성, C성공)·binding 불변 · c0180-java-multi-wss-reqrep |
 | `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 75.6% | 72.6% | 79.6% | 36.4% | 113.7% | 115.6% | 통과 82.2%/lat0.74× · c0180-java-multi-wss |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 87% | 99% | 118% | 24% | 32% | 46% | 보류 67.9% · 대형 size 의존 latency floor · binding 불변 · c0180-java-multi-wss-reqrep |
 | `wss` | `MULTI_PUBSUB` | 101.1% | 66.0% | 75.9% | 82.7% | 103.5% | 97.7% | 미달 87.8%/lat0.74× · c0180-java-multi-wss |
 | `wss` | `MULTI_STREAM` | 실패 | 실패 | 실패 | 해당 없음 | 실패 | 해당 없음 | 실패 — MULTI_STREAM server_start_ready_timeout_or_mismatch (STREAM 서버 준비 실패, 측정 불가) |
 | `tls` | `MULTI_DEALER_DEALER` | 36.4% | 98.5% | 86.4% | 67.2% | 89.3% | 77.5% | 미달 75.9%/lat0.58× · c0180-java-multi-tls |
 | `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 96.7% | 75.4% | 63.9% | 60.2% | 75.3% | 83.7% | 통과 75.9%/lat1.59× · c0180-java-multi-tls |
-| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 실패 | 105% | 105% | 실패 | 27% | 54% | 보류 73.0%(n4) · 64B 실패=backpressure 지연; 4096B는 C도 실패=전 언어 공통 · binding 불변 · c0180-java-multi-tls-reqrep |
 | `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 79.7% | 69.5% | 75.2% | 57.1% | 94.7% | 96.5% | 통과 78.8%/lat0.95× · c0180-java-multi-tls |
-| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 — 이번 라운드 5패턴 스코프 외(C·java 러너 등록됨; reqrep은 단일에서도 약점 → 후속 측정 대상) |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 82% | 108% | 85% | 37% | 26% | 38% | 보류 62.9% · 대형 size 의존 latency floor · binding 불변 · c0180-java-multi-tls-reqrep |
 | `tls` | `MULTI_PUBSUB` | 79.8% | 91.7% | 73.3% | 81.1% | 88.1% | 91.7% | 미달 84.3%/lat1.33× · c0180-java-multi-tls |
 | `tls` | `MULTI_STREAM` | 실패 | 실패 | 실패 | 해당 없음 | 실패 | 해당 없음 | 실패 — MULTI_STREAM server_start_ready_timeout_or_mismatch (STREAM 서버 준비 실패, 측정 불가) |
 
