@@ -386,10 +386,12 @@ def _server_identity(raw: dict[str, Any], source: str) -> tuple[dict[str, Any], 
     return trigger, CellKey(str(implementation), str(pattern), int(payload_size))
 
 
-def _target_stats(raw: Any, source: str) -> dict[str, Any]:
+def _target_stats(raw: Any, source: str, pattern: str) -> dict[str, Any]:
     """Validate the spec 4 target_stats object without inventing defaults."""
     if not isinstance(raw, dict):
         return {}
+    if pattern == "send-saturation" and "rejected" in raw and raw["rejected"] is None:
+        raise ReportError(f"{source}: target rejection count unavailable")
     missing = [name for name in ("received", "errors", "drainMs") if name not in raw]
     if missing:
         raise ReportError(f"{source}: target_stats missing {', '.join(missing)}")
@@ -462,7 +464,7 @@ def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") ->
         if role == "source":
             cell.streams = _streams(raw.get("streams"), origin)
         if "target_stats" in raw:
-            cell.target_stats = _target_stats(raw.get("target_stats"), origin)
+            cell.target_stats = _target_stats(raw.get("target_stats"), origin, key.pattern)
         cell.extra.update(raw.get("extra", {}))
         if raw.get("errors") is not None:
             cell.extra["errors"] = float(raw["errors"])

@@ -808,6 +808,7 @@ mesh_node_snapshot_t
 route_mesh_runtime_service_t::snapshot (std::string mesh_name) const
 {
     const auto hub = _state->require_hub (mesh_name);
+    hub->node->native_node ().transport ().publish_drop_metrics (_state->monitoring);
     auto snapshot = build_snapshot (_state, std::move (mesh_name));
     {
         std::lock_guard lock (hub->mutex);
