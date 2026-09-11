@@ -124,6 +124,7 @@ internal abstract partial class ZLinkSpotActivation
         where THandler : class
     {
         EnsureContextOperationAllowed();
+        _handlerInstances.Prepare(typeof(THandler));
         return _timers.AddAsync(
             name,
             period,

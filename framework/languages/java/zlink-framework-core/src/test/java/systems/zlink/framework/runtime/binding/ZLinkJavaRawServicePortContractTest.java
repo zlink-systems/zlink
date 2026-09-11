@@ -80,6 +80,58 @@ final class ZLinkJavaRawServicePortContractTest {
     }
 
     @Test
+    void nativeReplyPreservesWireBytesAndConsumesMessagesOnEveryTerminalPath() throws Exception {
+        RoutingId callerId = RoutingId.from("native-reply-owner-caller");
+        RoutingId targetId = RoutingId.from("native-reply-owner-target");
+        byte[] expected = new byte[4096];
+        for (int index = 0; index < expected.length; index++) {
+            expected[index] = (byte) (index * 31 + 7);
+        }
+        try (ZLinkJavaRawServicePort port = new ZLinkJavaRawServicePort();
+             ZLinkJavaRawServicePort foreign = new ZLinkJavaRawServicePort()) {
+            var target = port.openRouter(targetId);
+            var caller = port.openRouter(callerId);
+            var other = foreign.openRouter(RoutingId.from("native-reply-foreign"));
+            String endpoint = "inproc://native-reply-ownership-" + System.nanoTime();
+            target.bind(endpoint);
+            caller.connect(endpoint);
+            var reply = port.request(caller, targetId, List.of(new byte[] {1}),
+                Duration.ofSeconds(2)).toCompletableFuture();
+            assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
+            try (var incoming = port.receiveNow(target).orElseThrow()) {
+                Message rejected = Message.from(expected);
+                assertThrows(IllegalArgumentException.class,
+                    () -> port.replyMessages(other, incoming.source(),
+                        incoming.requestSequence(), List.of(rejected)));
+                assertConsumed(rejected);
+
+                Message invalidToken = Message.from(expected);
+                assertThrows(IllegalArgumentException.class,
+                    () -> port.replyMessages(target, incoming.source(), null,
+                        List.of(invalidToken)));
+                assertConsumed(invalidToken);
+
+                Message header = Message.from(new byte[] {0, 127, -1});
+                Message payload = Message.from(expected);
+                port.replyMessages(target, incoming.source(), incoming.requestSequence(),
+                    List.of(header, payload));
+                assertConsumed(header);
+                assertConsumed(payload);
+            }
+            List<byte[]> received = reply.get(2, TimeUnit.SECONDS);
+            assertEquals(2, received.size());
+            assertArrayEquals(new byte[] {0, 127, -1}, received.getFirst());
+            assertArrayEquals(expected, received.get(1));
+
+            port.close();
+            Message closed = Message.from(expected);
+            assertThrows(IllegalStateException.class,
+                () -> port.replyMessages(target, callerId, null, List.of(closed)));
+            assertConsumed(closed);
+        }
+    }
+
+    @Test
     void nativeSendConsumesMessagesOnSuccessAndSocketRejection() throws Exception {
         RoutingId receiverId = RoutingId.from("native-send-receiver");
         RoutingId senderId = RoutingId.from("native-send-sender");

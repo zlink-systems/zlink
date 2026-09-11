@@ -29,19 +29,10 @@ own, and each one adds a level of abstraction over the one below it.
 | [`bindings/`](./bindings/) | Language-native APIs and resource lifetime models over Core | C++, .NET, Java, Node.js, Python, Go, Rust |
 | [`framework/`](./framework/) | Typed handlers, routing, stateful runtime units, and the location runtime | C++, .NET, JVM (Java/Kotlin), Node.js |
 
-```text
-Application
-    │
-ZLink Framework
-  Channel · RouteMesh · Spot · Actor · STREAM
-    │
-Language Binding
-    │
-zlink Core
-  PAIR · PUB/SUB · XPUB/XSUB · DEALER/ROUTER · STREAM
-    │
-tcp · ipc · inproc · tls · ws · wss
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./doc/assets/layer-stack-dark.svg">
+  <img alt="Your business logic and ZLink Framework run inside the application host; below the public API sit the per-language bindings, the native zlink Core C API, and the transports." src="./doc/assets/layer-stack-light.svg" width="900">
+</picture>
 
 **Core** is a native messaging engine derived from
 [libzmq](https://github.com/zeromq/libzmq) v4.3.5 and rebuilt around Boost.Asio
@@ -85,15 +76,9 @@ services implemented in several languages at once. Room, zone, match, and
 actor-based topologies are composed from the same RouteMesh, Spot, Actor, and
 STREAM primitives.
 
-Framework is implemented **independently in four language runtimes**. They share
-no native service runtime and no service C ABI — only public contracts, a
-versioned wire protocol, and shared verification fixtures. A .NET service and a
-Java service talk to each other over the same mesh.
-
 ## A quick look
 
-A server that owns the `greeting` channel, and a client that calls it without
-naming a node:
+A server that owns the `greeting` channel — registration, then the handler:
 
 ```csharp
 // Server — registers a handler and announces that it serves "greeting".
@@ -113,117 +98,11 @@ public sealed class HelloHandler : IZLinkRequestHandler<Hello, Greeting>
 }
 ```
 
-```csharp
-// Client — the target is a ChannelName. Which node handles it is not specified.
-var reply = await route
-    .RequestToChannel("greeting", new Hello(name))
-    .Async<Greeting>(cancellationToken);
-```
-
-The same server in C++, Java, Kotlin, and TypeScript:
-
-```cpp
-// C++ — zlink framework host
-app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-    auto mesh = options.add_route_mesh ("services").listen ("tcp://0.0.0.0:7101");
-    mesh.channel_name ("greeting").server ()
-      .add_request_handler<hello_handler_t, hello_t, greeting_t> ();
-});
-
-class hello_handler_t
-{
-  public:
-    using request_type = hello_t;
-    using reply_type = greeting_t;
-
-    greeting_t handle (const hello_t &request)
-    {
-        return greeting_t{"hello, " + request.name};
-    }
-};
-```
-
-```java
-// Java — Spring Boot
-@Bean
-ZLinkFrameworkConfigurer zlink() {
-    return options -> {
-        options.addHandlersFromPackageOf(ServerApplication.class);
-
-        ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7101");
-        mesh.channelName("greeting").server()
-            .addRequestHandler(HelloHandler.class, Hello.class, Greeting.class);
-    };
-}
-
-public final class HelloHandler implements ZLinkRequestHandler<Hello, Greeting> {
-    @Override
-    public CompletionStage<Greeting> handle(Hello request, ZLinkMessageContext context) {
-        return CompletableFuture.completedFuture(new Greeting("hello, " + request.name()));
-    }
-}
-```
-
-```kotlin
-// Kotlin — Spring Boot
-@Bean
-fun zlink(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
-    options.addHandlersFromPackageOf(ServerApplication::class.java)
-
-    val mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7101")
-    mesh.channelName("greeting").server()
-        .addRequestHandler(HelloHandler::class.java, Hello::class.java, Greeting::class.java)
-}
-
-class HelloHandler : ZLinkRequestHandler<Hello, Greeting> {
-    override suspend fun handle(request: Hello, context: ZLinkMessageContext): Greeting =
-        Greeting("hello, ${request.name}")
-}
-```
-
-```typescript
-// Node.js — NestJS
-ZLinkModule.forRootFactory({
-  useFactory: () => {
-    const builder = zlinkFramework();
-
-    const mesh = builder.addRouteMesh('services').listen('tcp://0.0.0.0:7101');
-    mesh.channel('greeting').server()
-      .addRequestHandler(PacketNames.hello, HelloHandler);
-
-    return builder.build();
-  },
-});
-
-@zlinkRequestHandler('greeting', PacketNames.hello)
-export class HelloHandler implements ZLinkRequestHandler<Hello, Greeting> {
-  async handle(request: Hello): Promise<Greeting> {
-    return { text: `hello, ${request.name}` };
-  }
-}
-```
-
-The full walkthrough, including the client half in every language, is in
+A client calls `greeting` without naming a node — which process handles it is
+resolved at runtime. The same registration and handler shape exists in C++,
+Java, Kotlin, and TypeScript; see
 [Installation and first run](https://zlink.systems/dotnet/guide/server/02-getting-started/)
-(switch language at the top of the chapter).
-
-Working one layer down, at the socket level:
-
-```cpp
-#include <zlink.hpp>
-
-zlink::context_t ctx;
-zlink::pair_socket_t server (ctx);
-server.bind ("tcp://127.0.0.1:5555");
-
-zlink::received_t inbound;
-server.recv (inbound);
-std::printf ("%s\n", inbound.parts ()[0].to_string ().c_str ());   // PING
-inbound.close ();
-
-zlink::message_t ack = zlink::message_t::from ("ACK");
-server.send ().message (ack).submit ();
-```
+and switch language at the top of the chapter.
 
 ## Performance
 
@@ -233,24 +112,40 @@ published together: [gRPC comparison report](https://zlink.systems/bench/compari
 
 ## Language support
 
-**Bindings — seven languages.** C++, .NET/C#, Java, Node.js/TypeScript, Python,
-Go, and Rust. C is the public Core API rather than a separate Binding; Kotlin
-shares the Java Binding and JavaScript shares the Node.js Binding. Each Binding
-carries its own samples for PAIR, PUB/SUB, DEALER/ROUTER, request/reply, STREAM,
-and monitoring. → [Bindings guide](https://zlink.systems/bindings/guide/)
+**ZLink Framework — four runtimes.** Each is implemented independently in its
+host language. They share no native service runtime and no service C ABI — only
+public contracts, a versioned wire protocol, and shared verification fixtures,
+so a .NET service and a Java service talk to each other over the same mesh.
 
-**Framework — four runtimes.** C++ (zlink framework host), .NET/C# (ASP.NET
-Core), JVM (Java and Kotlin, Spring Boot), and Node.js (TypeScript and
-JavaScript, NestJS). → [Framework guide](https://zlink.systems/)
+| Runtime | Application host | Install |
+|---|---|---|
+| .NET / C# | ASP.NET Core | `dotnet add package Zlink.Framework.AspNetCore` |
+| JVM — Java, Kotlin | Spring Boot | `systems.zlink:zlink-framework-spring-boot-starter` |
+| Node.js — TypeScript, JavaScript | NestJS | `npm install @zlink-systems/framework @zlink-systems/nestjs` |
+| C++ | zlink framework host | vcpkg port `zlink-framework` |
 
-## Getting started
+**Bindings — seven languages.** For composing Core sockets and transports
+directly, without Framework. Each package bundles a platform-native Core, so
+nothing is built from this repository.
 
-Packages for each language bundle a platform-native Core, so applications do not
-build this repository first.
+| Language | Install |
+|---|---|
+| C++ | vcpkg / Conan package `zlink` |
+| .NET / C# | `dotnet add package Zlink` |
+| Java, Kotlin | `systems.zlink:zlink` |
+| Node.js, JavaScript | `npm install @zlink-systems/zlink` |
+| Python | `pip install zlink` |
+| Go | `go get zlink.systems/zlink` |
+| Rust | `cargo add zlink` |
 
-- **Use the Core API through a language package** — [choose a Binding](https://zlink.systems/bindings/guide/) and follow its installation procedure and five-minute example.
-- **Use ZLink Framework** — pick a language on the [Installation](https://zlink.systems/install/) page, then follow [Installation and first run](https://zlink.systems/dotnet/guide/server/02-getting-started/).
-- **Read the formal contracts** — [Core specification](https://zlink.systems/spec/) and [common Framework specification](https://zlink.systems/common/spec/server/).
+C is the public Core API rather than a separate Binding. Each Binding carries
+samples for PAIR, PUB/SUB, DEALER/ROUTER, request/reply, STREAM, and monitoring.
+
+Installation procedures and each language's five-minute example are on the
+[Installation](https://zlink.systems/install/) page and in the
+[Bindings guide](https://zlink.systems/bindings/guide/). The formal contracts are
+the [Core specification](https://zlink.systems/spec/) and the
+[common Framework specification](https://zlink.systems/common/spec/server/).
 
 ## Building from source
 

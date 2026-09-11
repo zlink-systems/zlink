@@ -21,6 +21,8 @@ internal sealed class ZLinkRuntimeTaskRunner
 
     internal object ExecutionOwner => _executionOwner;
 
+    internal CancellationToken ShutdownToken => _shutdownToken;
+
     // Runner admission state is owned by the fixed supervisor lane. These
     // accessors must only be used from a supervisor-lane turn.
     internal bool AcceptingOnSupervisorLane
@@ -109,15 +111,9 @@ internal sealed class ZLinkRuntimeTaskRunner
         TaskCreationOptions creationOptions,
         out Task task)
     {
-        // The outer task is created cold and started only after the supervisor
-        // state lane releases it, so its synchronous callback prefix cannot
-        // inherit that lane's AsyncLocal ownership.
-        var outer = new Task<Task>(
-            static state => RunDetachedCoreAsync((TaskState)state!),
-            new TaskState(this, name, callback, _errorSink, _shutdownToken),
-            CancellationToken.None,
-            TaskCreationOptions.DenyChildAttach | creationOptions);
-        var startedTask = outer.Unwrap();
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var state = new TaskState(this, name, callback, _errorSink, _shutdownToken, completion);
+        var startedTask = completion.Task;
         var acceptsRunnerExecution = AmbientExecution.Value is { IsActive: true } lease
                                      && (ReferenceEquals(lease.Runner, this)
                                          || _ownsSupervisor
@@ -136,36 +132,24 @@ internal sealed class ZLinkRuntimeTaskRunner
             return false;
         }
         task = startedTask;
-        RegisterCompletion(startedTask);
-        outer.Start(TaskScheduler.Default);
+        // Scheduling happens after supervisor admission, outside its state lane.
+        // The callback carries its own completion directly; no outer Task<Task>,
+        // Unwrap task or completion-registration task is needed.
+        if (creationOptions == TaskCreationOptions.LongRunning)
+            _ = Task.Factory.StartNew(
+                static value => { _ = RunDetachedCoreAsync((TaskState)value!); },
+                state, CancellationToken.None,
+                TaskCreationOptions.DenyChildAttach | TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
+        else
+            ThreadPool.QueueUserWorkItem(
+                static value => { _ = RunDetachedCoreAsync(value); }, state, preferLocal: false);
         return true;
     }
 
     private void RemoveCompletedTask(Task completed)
     {
         _supervisor.Remove(this, completed);
-    }
-
-    private void RegisterCompletion(Task task)
-    {
-        if (ExecutionContext.IsFlowSuppressed())
-        {
-            _ = task.ContinueWith(
-                static (completed, state) => ((ZLinkRuntimeTaskRunner)state!).RemoveCompletedTask(completed),
-                this,
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-            return;
-        }
-
-        using (ExecutionContext.SuppressFlow())
-            _ = task.ContinueWith(
-                static (completed, state) => ((ZLinkRuntimeTaskRunner)state!).RemoveCompletedTask(completed),
-                this,
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
     }
 
     private static async Task RunDetachedCoreAsync(TaskState state)
@@ -186,14 +170,17 @@ internal sealed class ZLinkRuntimeTaskRunner
             {
                 state.ErrorSink.ReportRuntimeTaskException(state.Name, ex);
             }
-            catch
+            catch (Exception reportingFailure)
             {
+                state.Runner.ReportErrorSinkFailure(state.Name, reportingFailure);
             }
         }
         finally
         {
             lease.Deactivate();
             AmbientExecution.Value = previous;
+            state.Completion.TrySetResult();
+            state.Runner.RemoveCompletedTask(state.Completion.Task);
         }
     }
 
@@ -211,7 +198,8 @@ internal sealed class ZLinkRuntimeTaskRunner
         string Name,
         Func<CancellationToken, ValueTask> Callback,
         IZLinkRuntimeFailureReporter ErrorSink,
-        CancellationToken ShutdownToken);
+        CancellationToken ShutdownToken,
+        TaskCompletionSource Completion);
 
     private sealed class ExecutionLease(object owner, ZLinkRuntimeTaskRunner runner)
     {

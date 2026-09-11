@@ -578,6 +578,8 @@ export interface ZLinkBackendSubscriberSocket extends ZLinkBackendConnectableSoc
 
 export interface ZLinkBackendReadablePoller {
   wait(timeoutMs: number): boolean;
+  waitForReadable(signal?: AbortSignal): Promise<boolean>;
+  markDrained(): void;
   dispose(): void;
 }
 

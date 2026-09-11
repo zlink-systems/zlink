@@ -8570,6 +8570,10 @@ function createStreamRuntime(options) {
 function readyPoller() {
   return {
     wait() { return true; },
+    waitForReadable() {
+      return new Promise((resolve) => setImmediate(() => resolve(true)));
+    },
+    markDrained() {},
     dispose() {}
   };
 }

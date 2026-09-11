@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using Zlink.Framework.Codecs.Protobuf;
+using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Codecs;
 using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
 
@@ -99,6 +100,57 @@ public sealed class MessagingHotPathWireTests
     }
 
     [Fact]
+    public void Correlated_header_with_deadline_flow_and_metadata_matches_fixed_wire_bytes()
+    {
+        var header = Header(ZLinkMessageKind.Request, "0000000000000048") with
+        {
+            Deadline = new DateTimeOffset(2026, 9, 10, 12, 34, 56, TimeSpan.FromHours(9)).AddTicks(1234567),
+            Topic = "topic/one",
+            Source = "node-a",
+            FlowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d",
+            FlowOrigin = ZLinkFlowOrigin.Application,
+            Metadata = new() { ["first"] = "a\"b", ["second"] = "한글<&" }
+        };
+        const string expected = """{"formatMarker":242,"kind":1,"channelName":"wire","messageName":"payload","contentType":"application/json","correlationId":"0000000000000048","deadline":"2026-09-10T12:34:56.1234567+09:00","topic":"topic/one","errorCode":null,"errorMessage":null,"source":"node-a","flowId":"0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d","flowOrigin":3,"metadata":{"first":"a\u0022b","second":"\uD55C\uAE00\u003C\u0026"}}""";
+
+        using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
+        Assert.Equal(Encoding.UTF8.GetBytes(expected), encoded.ToArray());
+        using var fixedWire = Message.From(Encoding.UTF8.GetBytes(expected));
+        var decoded = ZLinkEnvelopeCodec.DecodeHeader(fixedWire);
+        Assert.Equal(header.Deadline, decoded.Deadline);
+        Assert.Equal(header.CorrelationId, decoded.CorrelationId);
+        Assert.Equal(header.FlowId, decoded.FlowId);
+        Assert.Equal(header.Metadata, decoded.Metadata);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1024)]
+    [InlineData(4096)]
+    public void Typed_json_envelope_and_final_multipart_match_fixed_wire_bytes(int length)
+    {
+        var value = new JsonWireValue(new string('x', length), long.MinValue, ulong.MaxValue);
+        var expectedBody = Encoding.UTF8.GetBytes(
+            "{\"text\":\"" + new string('x', length)
+            + "\",\"signed\":\"-9223372036854775808\",\"unsigned\":\"18446744073709551615\"}");
+        var parts = ZLinkEnvelopeCodec.EncodeParts(
+            Header(ZLinkMessageKind.Request, "corr-fixed"), value, typeof(JsonWireValue), null);
+        try
+        {
+            Assert.Equal(Encoding.UTF8.GetBytes(RequestHeader), parts[0].ToArray());
+            Assert.Equal(expectedBody, parts[1].ToArray());
+            using var wire = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(parts);
+            Assert.Equal(ReferenceMultipartFrame(Encoding.UTF8.GetBytes(RequestHeader), expectedBody), wire.ToArray());
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    private sealed record JsonWireValue(string Text, long Signed, ulong Unsigned);
+
+    [Fact]
     public void Part_serializer_keeps_fixed_content_type_header_and_body_bytes()
     {
         var codecs = new ZLinkCodecRegistryBuilder();
@@ -175,6 +227,28 @@ public sealed class MessagingHotPathWireTests
 
     private sealed class WireValue
     {
+    }
+
+    [Fact]
+    public void Wrapped_typed_message_uses_the_same_owned_part_serializer_as_direct_envelopes()
+    {
+        var codecs = new ZLinkCodecRegistryBuilder();
+        codecs.AddSerializer("application/x-wire-part", new FixedPartSerializer(),
+            static type => type == typeof(WireValue));
+        var value = ZLinkMessage.From(new WireValue());
+        using var raw = value.ToRawMessage(codecs);
+        var parts = ZLinkEnvelopeCodec.EncodeParts(
+            Header(ZLinkMessageKind.Request, "corr-fixed"), value, typeof(ZLinkMessage), codecs);
+        try
+        {
+            Assert.Equal(new byte[] { 0xC0, 0xDE, 0x48, 0x4F, 0x54 }, raw.ToArray());
+            Assert.Equal(raw.ToArray(), parts[1].ToArray());
+            Assert.Equal(Encoding.UTF8.GetBytes(PartSerializerHeader), parts[0].ToArray());
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
     }
 
     private sealed class FixedPartSerializer :

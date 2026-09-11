@@ -46,7 +46,13 @@ final class ZLinkSpotTimerRegistryTest {
         CountDownLatch handled = new CountDownLatch(2);
         AtomicInteger creates = new AtomicInteger();
         AtomicInteger destroys = new AtomicInteger();
+        AtomicInteger preparations = new AtomicInteger();
         ZLinkHandlerActivator activator = new ZLinkHandlerActivator() {
+            @Override
+            public void prepare(Class<?> handlerType) {
+                preparations.incrementAndGet();
+            }
+
             @Override
             public Object create(Class<?> handlerType) {
                 creates.incrementAndGet();
@@ -76,6 +82,7 @@ final class ZLinkSpotTimerRegistryTest {
                 Duration.ofMillis(1),
                 CountingTimerHandler.class,
                 null);
+            assertEquals(1, preparations.get());
             assertTrue(handled.await(2, TimeUnit.SECONDS));
             assertEquals(1, creates.get());
         } finally {

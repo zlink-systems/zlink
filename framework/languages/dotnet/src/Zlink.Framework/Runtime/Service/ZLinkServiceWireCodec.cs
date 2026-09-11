@@ -195,6 +195,17 @@ internal static partial class ZLinkServiceWireCodec
         record = default;
         if (!TryDecodePrefix(bytes, out var command, out var flags, out error))
             return false;
+        return TryDecodeApplication(bytes, command, flags, out record, out error);
+    }
+
+    internal static bool TryDecodeApplication(
+        ReadOnlySpan<byte> bytes,
+        ServiceWireConstants.Command command,
+        ServiceWireConstants.Flag flags,
+        out ApplicationRecord record,
+        out DecodeError error)
+    {
+        record = default;
         if (command is not (ServiceWireConstants.Command.NodeSend
             or ServiceWireConstants.Command.NodeRequest
             or ServiceWireConstants.Command.ChannelSend
@@ -289,6 +300,17 @@ internal static partial class ZLinkServiceWireCodec
         record = default;
         if (!TryDecodePrefix(bytes, out var command, out var flags, out error))
             return false;
+        return TryDecodeLogicalMulticast(bytes, command, flags, out record, out error);
+    }
+
+    internal static bool TryDecodeLogicalMulticast(
+        ReadOnlySpan<byte> bytes,
+        ServiceWireConstants.Command command,
+        ServiceWireConstants.Flag flags,
+        out LogicalMulticastRecord record,
+        out DecodeError error)
+    {
+        record = default;
         if (command != ServiceWireConstants.Command.LogicalMulticast)
         {
             error = DecodeError.UnknownCommand;
@@ -1105,6 +1127,18 @@ internal static partial class ZLinkServiceWireCodec
         record = default;
         if (!TryDecodePrefix(bytes, out var command, out var flags, out error))
             return false;
+        return TryDecodeActorDestroy(bytes, command, flags, meshName, out record, out error);
+    }
+
+    internal static bool TryDecodeActorDestroy(
+        ReadOnlySpan<byte> bytes,
+        ServiceWireConstants.Command command,
+        ServiceWireConstants.Flag flags,
+        string meshName,
+        out ActorDestroyOperationRecord record,
+        out DecodeError error)
+    {
+        record = default;
         if (command != ServiceWireConstants.Command.ActorDestroy)
         {
             error = DecodeError.UnknownCommand;
@@ -1162,6 +1196,18 @@ internal static partial class ZLinkServiceWireCodec
         record = default;
         if (!TryDecodePrefix(bytes, out var command, out var flags, out error))
             return false;
+        return TryDecodeStateful(bytes, command, flags, meshName, out record, out error);
+    }
+
+    internal static bool TryDecodeStateful(
+        ReadOnlySpan<byte> bytes,
+        ServiceWireConstants.Command command,
+        ServiceWireConstants.Flag flags,
+        string meshName,
+        out StatefulRecord record,
+        out DecodeError error)
+    {
+        record = default;
         if (command is not (ServiceWireConstants.Command.SpotSend
             or ServiceWireConstants.Command.SpotRequest
             or ServiceWireConstants.Command.ActorSend
@@ -1336,6 +1382,17 @@ internal static partial class ZLinkServiceWireCodec
         record = default;
         if (!TryDecodePrefix(bytes, out var command, out var flags, out error))
             return false;
+        return TryDecodeInstanceSpotActivation(bytes, command, flags, out record, out error);
+    }
+
+    internal static bool TryDecodeInstanceSpotActivation(
+        ReadOnlySpan<byte> bytes,
+        ServiceWireConstants.Command command,
+        ServiceWireConstants.Flag flags,
+        out InstanceSpotActivationRecord record,
+        out DecodeError error)
+    {
+        record = default;
         if (command != ServiceWireConstants.Command.InstanceSpot)
         {
             error = DecodeError.UnknownCommand;
@@ -1489,7 +1546,20 @@ internal static partial class ZLinkServiceWireCodec
         out DecodeError error)
     {
         record = default;
-        if (!TryDecodeGenerated(bytes,
+        if (!TryDecodePrefix(bytes, out var command, out var flags, out error))
+            return false;
+        return TryDecodeActorCreateOperation(bytes, command, flags, out record, out error);
+    }
+
+    internal static bool TryDecodeActorCreateOperation(
+        ReadOnlySpan<byte> bytes,
+        ServiceWireConstants.Command command,
+        ServiceWireConstants.Flag flags,
+        out ActorCreateOperationRecord record,
+        out DecodeError error)
+    {
+        record = default;
+        if (!TryDecodeGenerated(bytes, command, flags,
                 ServiceWireConstants.Command.ActorCreate,
                 ServiceWirePilotCodec.DecodeActorCreate49,
                 out var generated, out error))
@@ -1517,11 +1587,22 @@ internal static partial class ZLinkServiceWireCodec
         out DecodeError error)
     {
         record = default;
-        if (!TryDecodePrefix(bytes, out var command, out _, out error))
+        if (!TryDecodePrefix(bytes, out var command, out var flags, out error))
             return false;
+        return TryDecodeUserSpotOperation(bytes, command, flags, out record, out error);
+    }
+
+    internal static bool TryDecodeUserSpotOperation(
+        ReadOnlySpan<byte> bytes,
+        ServiceWireConstants.Command command,
+        ServiceWireConstants.Flag flags,
+        out UserSpotOperationRecord record,
+        out DecodeError error)
+    {
+        record = default;
         if (command == ServiceWireConstants.Command.UserSpotCreate)
         {
-            if (!TryDecodeGenerated(bytes, command,
+            if (!TryDecodeGenerated(bytes, command, flags, command,
                     ServiceWirePilotCodec.DecodeUserSpotCreate47,
                     out var generated, out error))
                 return false;
@@ -1545,7 +1626,7 @@ internal static partial class ZLinkServiceWireCodec
         }
         if (command == ServiceWireConstants.Command.UserSpotClose)
         {
-            if (!TryDecodeGenerated(bytes, command,
+            if (!TryDecodeGenerated(bytes, command, flags, command,
                     ServiceWirePilotCodec.DecodeUserSpotClose48,
                     out var generated, out error))
                 return false;
@@ -1891,6 +1972,20 @@ internal static partial class ZLinkServiceWireCodec
         value = default!;
         if (!TryDecodePrefix(bytes, out var command, out var flags, out error))
             return false;
+        return TryDecodeGenerated(
+            bytes, command, flags, expectedCommand, decode, out value, out error);
+    }
+
+    private static bool TryDecodeGenerated<T>(
+        ReadOnlySpan<byte> bytes,
+        ServiceWireConstants.Command command,
+        ServiceWireConstants.Flag flags,
+        ServiceWireConstants.Command expectedCommand,
+        Func<byte[], T> decode,
+        out T value,
+        out DecodeError error)
+    {
+        value = default!;
         if (command != expectedCommand)
         {
             error = DecodeError.UnknownCommand;
@@ -2168,7 +2263,7 @@ internal static partial class ZLinkServiceWireCodec
         return true;
     }
 
-    private static bool TryDecodePrefix(
+    internal static bool TryDecodePrefix(
         ReadOnlySpan<byte> bytes,
         out ServiceWireConstants.Command command,
         out ServiceWireConstants.Flag flags,
