@@ -9,6 +9,11 @@ owned by the [common spec](../../../README.en.md) — this document
 only defines names, generics, overloads, inheritance, members,
 parameters, and return types.
 
+**Node.js provides no synchronous blocking terminator.** The absence of `submit_sync` from every
+call in this document is a rule, not an omission — the reason is owned by
+[Submit And Completion §4.1](../../../01-execution/01-submit-and-completion.en.md#41-nodejs-provides-no-synchronous-blocking-terminator).
+Node applications use the async terminator `submit(...)`, which returns a `Promise`.
+
 A provider child context is created each time a Node direct/Channel
 send/request and classic fanout subscription handler runs. The handler
 and filter are each created once in the same context, and use the same
@@ -261,7 +266,6 @@ export interface ZLinkRequestCall {
  metadata(metadata: ZLinkMessageMetadata): this;
  timeout(timeoutMs: number): this;
  submit<TReply>(signal?: AbortSignal): Promise<TReply>;
- submit_sync<TReply>(): TReply;   // synchronous blocking; InvalidOperation in a runtime execution context (F2-a)
 }
 
 export interface ZLinkChannelRequestCall {
@@ -269,7 +273,6 @@ export interface ZLinkChannelRequestCall {
  metadata(metadata: ZLinkMessageMetadata): this;
  timeout(timeoutMs: number): this;
  submit<TReply>(signal?: AbortSignal): Promise<TReply>;
- submit_sync<TReply>(): TReply;   // synchronous blocking; InvalidOperation in a runtime execution context (F2-a)
  yield<TReply>(signal?: AbortSignal): Promise<TReply>;
 }
 
@@ -345,7 +348,6 @@ export interface ZLinkSendCall {
  metadata(key: string, value: string): this;
  metadata(metadata: ZLinkMessageMetadata): this;
  submit(signal?: AbortSignal): Promise<void>;
- submit_sync(): void;   // synchronous blocking; InvalidOperation in a runtime execution context (F2-a)
 }
 
 export interface ZLinkSendHandler<TMessage> {

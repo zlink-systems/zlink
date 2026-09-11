@@ -108,6 +108,26 @@ implementation is not added solely for testability.
 | `test_cpp_framework_client_server_runtime`, `test_cpp_framework_messaging` | Client/server and channel message paths use only binding public operations and preserve lifecycle results. |
 | `test_cpp_framework_stream_framework` | The stream adapter maps connect, receive, and close ordering to framework session semantics. |
 
+## 8. Supported protobuf Range
+
+The range supported by the framework's protobuf codec extension
+(`extensions/framework-codec-protobuf`).
+
+| Item | Range |
+|---|---|
+| protobuf version | **3.21.12 through 33.x** |
+| `protoc` and runtime | **Use the same release.** Do not mix different releases |
+
+**A public API return type changes between those versions.** `MessageLite::GetTypeName()` changed
+from `const std::string &` to `absl::string_view` in 33.x. The codec must compile against both, so
+it converts the return value to `std::string` explicitly — `const char *` and `string_view` have no
+`operator+`.
+
+**Before moving outside this range, check return types and operator compatibility first.** Without
+that check, `protoc` 3.21.12 and a 33.4 dependency stayed mismatched, and **the build succeeded or
+failed depending on the configuration.** In Release the eight targets that depend on the codec did
+not build, while Debug passed and hid it.
+
 ---
 <!-- framework-adapter-nav:bottom:start -->
 [Document List](../../../README.en.md) | [Previous: Runtime Architecture](../../common/spec/server/README.en.md) | [Next: Regression Test Matrix](regression-test-matrix.en.md)

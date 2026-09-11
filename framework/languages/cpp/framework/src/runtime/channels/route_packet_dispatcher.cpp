@@ -141,7 +141,7 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
                                           runtime::messaging::envelope_header_t header) const
 {
     if (_internal_packets != nullptr && _internal_packets->can_handle_send (header.message_name)) {
-        auto dispatched = _internal_packets->dispatch_send (received, *_services);
+        auto dispatched = _internal_packets->dispatch_send (received, header, *_services);
         if (!dispatched) {
             return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (dispatched, "route internal send failed");
         }

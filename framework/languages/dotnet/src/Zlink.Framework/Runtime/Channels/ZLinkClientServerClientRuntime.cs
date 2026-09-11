@@ -174,6 +174,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             await target.Socket.Send()
                 .Messages(parts)
                 .Async(cancellationToken)
+                .EnsureAcceptedAsync()
                 .ConfigureAwait(false);
             if (sentPacketName is not null
                 && _flow!.Enabled(ZLinkMessageFlowOutcome.Sent))
@@ -270,7 +271,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     (pending, nativeTimeout, token) => target.Socket.Request()
                         .Messages(pending)
                         .Timeout(nativeTimeout)
-                        .Async(token),
+                        .Async(token).Reply,
                     remaining,
                     $"ClientServer request failed for '{_channelName}': {{0}}.",
                     cancellationToken)
@@ -1105,6 +1106,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         .Message(hello)
                         .Timeout(_admissionTimeout)
                         .Async(cancellationToken)
+                        .Reply
                         .ConfigureAwait(false);
                 }
                 catch
@@ -1426,7 +1428,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 var request = Socket.Request()
                     .Message(probe)
                     .Timeout(TimeSpan.FromSeconds(15))
-                    .Async(cancellationToken);
+                    .Async(cancellationToken).Reply;
                 Interlocked.Increment(ref _sentLivenessProbeCount);
                 reply = await request.ConfigureAwait(false);
             }
@@ -1608,6 +1610,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 await Socket.Send()
                     .Message(message)
                     .Async(cancellationToken)
+                    .EnsureAcceptedAsync()
                     .ConfigureAwait(false);
                 return true;
             }

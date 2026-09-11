@@ -18,6 +18,7 @@ const {
   submitBindingSyncSend,
 } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
 const { wrapSocket } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
+
 const {
   ZLinkMeshCompletionTable,
   closeMeshCompletion
@@ -32,6 +33,15 @@ const {
 const {
   ZLinkSpotSerialTurnExecutor
 } = require('../../packages/framework/dist/runtime/spots');
+// Node 20 is a required runtime (scripts/verify_node_abi_matrix.js:16) and it has no
+// Promise.withResolvers; that arrived in Node 22.
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
 
 function applicationJobQueue(maxQueuedApplicationJobs) {
   return new ApplicationJobQueue(resolveApplicationJobQueueConfiguration(
@@ -196,7 +206,7 @@ test('backend DONTWAIT Spot send awaits managed binding admission', async () => 
 });
 
 test('received send preserves admission waiting and envelope ownership', async () => {
-  const admission = Promise.withResolvers();
+  const admission = deferred();
   const sent = [];
   const parts = [zlink.Message.from('received')];
   const operation = {
@@ -237,8 +247,8 @@ test('received send preserves admission waiting and envelope ownership', async (
 });
 
 test('binding request waits for reply after admission', async () => {
-  const admission = Promise.withResolvers();
-  const reply = Promise.withResolvers();
+  const admission = deferred();
+  const reply = deferred();
   const operation = {
     message() { return this; },
     timeout() { return this; },

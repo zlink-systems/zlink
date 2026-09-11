@@ -99,7 +99,7 @@
         {
           "path": "framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/SessionActorCoordinatorTests.cs",
           "behaviorGroups": ["actorJoinMilestones", "actorBoundSession", "failureAndIdempotency"],
-          "tests": ["Canonical_Seal_Retries_Target_Push_Until_Command_44_Commits"]
+          "tests": ["Canonical_Seal_Routes_Command_44_Without_Store_Reread"]
         },
         {
           "path": "framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/RelocationRuntimeTests.cs",
@@ -251,7 +251,7 @@
           "path": "framework/languages/node/test/contract/stream-runtime.test.js",
           "behaviorGroups": ["actorJoinMilestones", "actorBoundSession", "failureAndIdempotency"],
           "tests": [
-            "OnJoinedActor public bound-session push waits for route convergence and is delivered exactly once",
+            "relocation target binding republish delivers the post-Join bound-session push exactly once",
             "late predecessor terminal cannot release a successor bound-session queue",
             "concurrent identical ownership terminals commit and drain one exact seal once",
             "concurrent identical abort terminals reopen and drain one exact seal once"
@@ -261,7 +261,7 @@
       "focusedCommands": [
         ["node", "--test", "--test-name-pattern=formal Actor Join runtime port preserves fixture order through target Ready before Session route", "test/contract/spot-manager.test.js"],
         ["node", "--test", "--test-name-pattern=Core source leave submission releases the target fence before its callback result", "test/contract/actor-manager.test.js"],
-        ["node", "--test", "--test-name-pattern=OnJoinedActor public bound-session push waits for route convergence and is delivered exactly once|late predecessor terminal cannot release a successor bound-session queue|concurrent identical ownership terminals commit and drain one exact seal once|concurrent identical abort terminals reopen and drain one exact seal once", "test/contract/stream-runtime.test.js"]
+        ["node", "--test", "--test-name-pattern=relocation target binding republish delivers the post-Join bound-session push exactly once|late predecessor terminal cannot release a successor bound-session queue|concurrent identical ownership terminals commit and drain one exact seal once|concurrent identical abort terminals reopen and drain one exact seal once", "test/contract/stream-runtime.test.js"]
       ]
     }
   ]

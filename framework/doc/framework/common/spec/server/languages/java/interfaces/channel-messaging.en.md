@@ -10,8 +10,13 @@ generics. A one-way operation provides async `submit()` and synchronous blocking
 and also provides synchronous `submit_sync(...)`. The synchronous `submit_sync` family is
 application-thread only and fails immediately with `InvalidOperation` when called from a
 runtime execution context such as a handler turn, Spot turn, or state lane
-([Submit And Completion §4 F2-a](../../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary)).
-The framework public terminator does not expose backpressure (F1). Logical
+([Submit And Completion §4 F2-a](../../../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary)).
+The framework public terminator does not expose backpressure (F1).
+
+**`submit_sync` is a `default` interface method.** The implementation is the same for every
+call type — check the context, then await the same async terminator. Rewriting it per call type
+scatters one rule across many places and lets a new call type omit it. .NET uses a default
+interface method for the same structure. Logical
 Multicast doesn't return per-target submit results or aggregate them into
 publish-only monitoring. Remote Spot queue submission and remote/local
 handler execution or completion aren't `CompletionStage` completion
@@ -270,7 +275,7 @@ public interface systems.zlink.framework.channels.ZLinkRequestCall {
  public default systems.zlink.framework.channels.ZLinkRequestCall metadata(java.util.Map<java.lang.String, java.lang.String>);
  public abstract systems.zlink.framework.channels.ZLinkRequestCall timeout(java.time.Duration);
  public abstract <TReply> java.util.concurrent.CompletionStage<TReply> submit(java.lang.Class<TReply>);
- public abstract <TReply> TReply submit_sync(java.lang.Class<TReply>);   // blocking; InvalidOperation in a runtime context
+ public default <TReply> TReply submit_sync(java.lang.Class<TReply>);   // blocking; InvalidOperation in a runtime context
  public abstract <TReply> java.util.concurrent.CompletionStage<TReply> yield(java.lang.Class<TReply>);
 }
 public interface systems.zlink.framework.channels.ZLinkRequestHandler<TRequest, TReply> {
@@ -306,7 +311,7 @@ public interface systems.zlink.framework.channels.ZLinkSendCall {
  public default systems.zlink.framework.channels.ZLinkSendCall metadata(java.lang.String, java.lang.String);
  public default systems.zlink.framework.channels.ZLinkSendCall metadata(java.util.Map<java.lang.String, java.lang.String>);
  public abstract java.util.concurrent.CompletionStage<java.lang.Void> submit();
- public abstract void submit_sync();   // blocking; InvalidOperation in a runtime context
+ public default void submit_sync();   // blocking; InvalidOperation in a runtime context
 }
 public interface systems.zlink.framework.channels.ZLinkSendHandler<TMessage> {
  public abstract java.util.concurrent.CompletionStage<java.lang.Void> handle(TMessage, systems.zlink.framework.ZLinkMessageContext);

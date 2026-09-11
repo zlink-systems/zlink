@@ -79,7 +79,7 @@ class RawKotlinStack private constructor(
             // two different experiments.
             val pending = Message.from(RawWire.REQUEST_ENVELOPE).use { header ->
                 RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence).use { body ->
-                    call.message(header).message(body).timeout(timeout).submit().toCompletableFuture()
+                    call.message(header).message(body).timeout(timeout).submit().reply().toCompletableFuture()
                 }
             }
             val parts = pending.await()
@@ -103,7 +103,7 @@ class RawKotlinStack private constructor(
             val call = if (router != null) router.send(peer) else dealer!!.send()
             val pending = Message.from(RawWire.REQUEST_ENVELOPE).use { header ->
                 RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence).use { body ->
-                    call.message(header).message(body).submit().toCompletableFuture()
+                    call.message(header).message(body).submit().admitted().toCompletableFuture()
                 }
             }
             pending.await()

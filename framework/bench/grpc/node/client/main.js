@@ -14,9 +14,10 @@ const { BenchPhaseController, startSourceHttp } = require('../shared/bench-http-
 const header = require('../shared/bench-metric-header');
 const rawWire = require('../shared/raw-wire');
 const core = require('./bench-core');
+const { createFrameworkTransport } = require('./framework-transport');
 
 const PATTERNS = ['request-serial', 'request-window', 'request-backpressure', 'send-saturation'];
-const IMPLEMENTATIONS = ['grpc-node', 'zlink-node'];
+const IMPLEMENTATIONS = ['grpc-node', 'zlink-node', 'zlink-framework-node'];
 
 function parseOptions(argv) {
   return {
@@ -202,7 +203,9 @@ function createRawTransport(options) {
 async function createTransport(options) {
   const transport = options.implementation === 'grpc-node'
     ? createGrpcTransport(options)
-    : createRawTransport(options);
+    : options.implementation === 'zlink-framework-node'
+      ? await createFrameworkTransport(options)
+      : createRawTransport(options);
   const probeBody = header.createPayloadBytes(1024, 1, header.PHASE_WARMUP, 0);
   await core.waitForRouteReady(async () => {
     if (options.scenario === 'send-saturation') {

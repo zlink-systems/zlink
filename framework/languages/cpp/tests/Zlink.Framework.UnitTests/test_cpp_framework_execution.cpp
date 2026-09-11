@@ -4853,7 +4853,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         return false;
     }
     const auto submitted = dispatcher.dispatch_send (
-      route_received_packet_t{zlink::routing_id_t::from ("source-node"), 1, parts}, provider);
+      route_received_packet_t{zlink::routing_id_t::from ("source-node"), 1, parts}, header, provider);
     const auto join_completion_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (1);
     while (!join_completion_entered.load (std::memory_order_acquire)

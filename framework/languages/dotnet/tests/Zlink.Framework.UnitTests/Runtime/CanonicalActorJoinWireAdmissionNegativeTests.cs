@@ -175,7 +175,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             .Message(head)
             .Message(payload)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async(CancellationToken.None);
+            .Async(CancellationToken.None).Reply;
     }
 
     private static void AssertTerminal(
@@ -434,7 +434,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                 .Message(requestHead)
                 .Message(payload)
                 .Timeout(TimeSpan.FromSeconds(2))
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Reply;
         }
 
         public async ValueTask DisposeAsync()
@@ -465,7 +465,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                             descriptorRevision: 1,
                             new Dictionary<string, uint>(StringComparer.Ordinal),
                             objectRole: (byte)ZLinkMeshNodeObjectRole.Server));
-                    await source.Send().Message(hello).Async(CancellationToken.None);
+                    await source.Send().Message(hello).Async(CancellationToken.None).Admitted;
                     return;
                 }
                 catch (ZlinkSubmitException) when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)

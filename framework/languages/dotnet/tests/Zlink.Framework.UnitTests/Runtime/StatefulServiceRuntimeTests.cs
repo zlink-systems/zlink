@@ -1298,7 +1298,7 @@ public sealed partial class StatefulServiceRuntimeTests
             DeadlineUnixMs: 277,
             ApplicationMetadata: metadata,
             Parts: messages,
-            Reply: static (_, _) => SubmitResult.Ok)));
+            Reply: static _ => SubmitResult.Ok)));
 
         Assert.Equal(1, follower.Count);
         Assert.Equal(operation, follower.LastRoute.OperationId);
@@ -1841,6 +1841,87 @@ public sealed partial class StatefulServiceRuntimeTests
                 record.Kind == MeshRecordKind.Completion
                 && record.OperationId == operation));
         await Task.Delay(100);
+        Assert.DoesNotContain(
+            DrainRecords(source),
+            record => record.Kind == MeshRecordKind.Completion
+                      && record.OperationId == operation);
+    }
+
+    [Fact]
+    public async Task RemoteActorRequest_BackpressuredReplyThatExpiresDuringSubmitReturnsTerminated()
+    {
+        var replyAttempts = 0;
+        var deadlineTime = new AdjustableTimeProvider(DateTimeOffset.UtcNow);
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = NewNode(context, "expired-reply-source");
+        await using var target = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            deadlineTimeProvider: deadlineTime,
+            nativeTerminalReplySubmitOverride: _ =>
+            {
+                Interlocked.Increment(ref replyAttempts);
+                // Expire after the initial submit's deadline check, before the
+                // Backpressured result is classified for retention or terminal failure.
+                deadlineTime.Advance(
+                    wallClock: TimeSpan.FromSeconds(10),
+                    monotonic: TimeSpan.FromSeconds(10));
+                return SubmitResult.Backpressured;
+            });
+        target.SetRoutingId(RoutingId.From("expired-reply-target"));
+        source.SetLocalOwnerLeaseGeneration(17);
+        target.SetLocalOwnerLeaseGeneration(17);
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceEndpoint = $"inproc://expired-reply-source-{suffix}";
+        var targetEndpoint = $"inproc://expired-reply-target-{suffix}";
+        source.SetBind(sourceEndpoint);
+        target.SetBind(targetEndpoint);
+        source.ConnectPeer(targetEndpoint, target.RoutingId);
+        source.Start();
+        target.Start();
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1
+            && target.Status().AdmittedPeerCount == 1);
+
+        var actor = target.CreateActor("expired-reply-actor");
+        DrainAndDispose(target);
+        Assert.True(target.TryGetActorAuthority(
+            actor,
+            out var authorityOwnerGeneration,
+            out var ownerLeaseGeneration));
+        source.ObserveActorAuthority(
+            actor,
+            target.Status().LifecycleGeneration,
+            authorityOwnerGeneration,
+            ownerLeaseGeneration);
+
+        using var payload = Message.From(new byte[] { 19 });
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.RequestToActor(
+                actor,
+                [payload],
+                out var operation,
+                TimeSpan.FromSeconds(3)));
+        await WaitUntilAsync(() =>
+        {
+            using var ready = new MeshReadyBatch();
+            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+            return ready.Count == 1;
+        });
+        using (var requestReady = new MeshReadyBatch())
+        {
+            target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+            using var requestClaim = requestReady.TakeClaim(0);
+            using var requestBatch = new MeshReceiveBatch();
+            Assert.True(requestClaim.Receive(requestBatch, RecvFlags.DontWait));
+            Assert.Equal(MeshRecordKind.ActorRequest, requestBatch[0].Kind);
+            using var reply = Message.From(new byte[] { 73 });
+            Assert.Equal(SubmitResult.Terminated, requestBatch[0].Reply([reply]));
+        }
+
+        await Task.Delay(100);
+        Assert.Equal(1, Volatile.Read(ref replyAttempts));
         Assert.DoesNotContain(
             DrainRecords(source),
             record => record.Kind == MeshRecordKind.Completion
@@ -3389,7 +3470,7 @@ public sealed partial class StatefulServiceRuntimeTests
                        objectRole: (byte)ZLinkMeshNodeObjectRole.Server)))
             await target.Send(source.RoutingId)
                 .Message(targetHello)
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Admitted;
         await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 1);
 
         var reservation = new ObjectReservationFence(
@@ -4260,7 +4341,7 @@ public sealed partial class StatefulServiceRuntimeTests
                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError)))
             await target.Send(sourceRid)
                 .Message(rawReply)
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Admitted;
 
         await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
         Assert.DoesNotContain(
@@ -4592,11 +4673,11 @@ public sealed partial class StatefulServiceRuntimeTests
                     using var first = Message.From(new byte[] { 197 });
                     Assert.Equal(
                         SubmitResult.Ok,
-                        header.DirectReply!([first], SendFlags.DontWait));
+                        header.DirectReply!([first]));
                     using var duplicate = Message.From(new byte[] { 199 });
                     Assert.Equal(
                         SubmitResult.Ok,
-                        header.DirectReply!([duplicate], SendFlags.DontWait));
+                        header.DirectReply!([duplicate]));
                 }
                 return true;
             }

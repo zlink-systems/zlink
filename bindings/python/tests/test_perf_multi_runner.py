@@ -150,7 +150,10 @@ class PerfMultiRunnerTests(unittest.TestCase):
             self.assertEqual(_clients_for_pattern("DEALER_DEALER", None), "100")
             self.assertEqual(_clients_for_pattern("STREAM", None), "100")
             clients = _options_clients_display(list(DEFAULT_PATTERNS), None)
-            self.assertEqual(clients, "100 (stream=100)")
+            # C resolve_clients_meta (bindings/c/perf/run_comparison.py:3830-3845)
+            # returns the plain general default unless the whole selection is
+            # STREAM; it never annotates the row with a stream sub-value.
+            self.assertEqual(clients, "100")
             options = _build_options(
                 parse_args([]),
                 list(DEFAULT_PATTERNS),
@@ -281,8 +284,10 @@ class PerfMultiRunnerTests(unittest.TestCase):
             wait_connection_ready_count(monitor, 3, 1000)
         self.assertEqual(wait_event.call_count, 3)
 
-    def test_python_multi_defaults_to_one_io_thread(self):
-        self.assertEqual(PYTHON_MULTI_DEFAULT_IO_THREADS, 1)
+    def test_python_multi_default_io_threads_match_the_c_reference(self):
+        # bindings/c/perf/run_comparison.py:1255 and the C++ runner both default
+        # to 4. Python ran with 1 until the runner alignment in b93b176061.
+        self.assertEqual(PYTHON_MULTI_DEFAULT_IO_THREADS, 4)
 
     def test_routed_sendsend_clients_recalculate_hwm_before_active_phase(self):
         multi_dir = PERF_DIR / "multi"

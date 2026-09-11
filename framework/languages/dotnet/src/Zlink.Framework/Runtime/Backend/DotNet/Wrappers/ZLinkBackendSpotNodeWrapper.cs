@@ -1146,10 +1146,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
 
     public bool SendActorBoundSession(
         ZLinkBackendActorRef actor,
-        IReadOnlyList<Message> parts,
-        SendFlags flags)
+        IReadOnlyList<Message> parts)
     {
-        return _node.SendBoundSession(ToNativeActor(actor), parts, flags) == SubmitResult.Ok;
+        return _node.SendBoundSession(ToNativeActor(actor), parts) == SubmitResult.Ok;
     }
 
     public ValueTask SendActorBoundSessionAsync(
@@ -1315,8 +1314,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         RoutingId sourceNodeRid,
         RoutingId sourceSessionRid,
         Message message,
-        bool hasMore,
-        SendFlags flags)
+        bool hasMore)
     {
         if (hasMore)
         {
@@ -1348,7 +1346,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
 
         // SendBoundSession clones the parts (the caller keeps ownership), so this
         // wrapper disposes every clone it owns on success.
-        if (_node.SendBoundSession(ToNativeActor(actor), parts, flags) == SubmitResult.Ok)
+        if (_node.SendBoundSession(ToNativeActor(actor), parts) == SubmitResult.Ok)
         {
             foreach (var part in parts) part.Dispose();
             return true;

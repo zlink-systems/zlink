@@ -100,8 +100,12 @@ public final class BenchClient {
 
     private static String streamImplementation(BenchOptions options) {
         if ("zlink-java".equals(options.implementation)
-            && ("request-backpressure".equals(options.scenario)
-                || "send-saturation".equals(options.scenario))) {
+            && "request-backpressure".equals(options.scenario)) {
+            return "one Java platform submit thread; one request per turn, "
+                + "public POLLCOMPLETION progress, uncapped replies";
+        }
+        if ("zlink-java".equals(options.implementation)
+            && "send-saturation".equals(options.scenario)) {
             return "one Java platform submit thread; OK continues inline, "
                 + "BACKPRESSURED awaits admission";
         }

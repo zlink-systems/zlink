@@ -235,7 +235,7 @@ public sealed partial class EntrySpotActorDispatchTests
             sourceNodeRid: RoutingId.From("source-node"),
             spotId: null,
             requestSeq: 41,
-            reply: (replyParts, _) =>
+            reply: replyParts =>
             {
                 var replyHeader = ZLinkEnvelopeCodec.DecodeHeader(replyParts);
                 if (replyHeader.Kind == ZLinkMessageKind.Error)

@@ -175,7 +175,7 @@ transfer ownership. If `parts_capacity_ < 1`, the call does not consume the reco
 needed count `1` with `ZLINK_RECV_BUFFER_TOO_SMALL` and `ENOBUFS`. A
 `ZLINK_RECV_FLAGS_DONTWAIT` call with no data returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
 Timeout and termination for `NONE`, and output invariance, follow the data-recv contract in
-[Socket Common](README.en.md#zlink_recv).
+[Socket Common](README.en.md#zlink_recv-and-zlink_router_recv).
 
 ## 6. Packet receive and framing
 

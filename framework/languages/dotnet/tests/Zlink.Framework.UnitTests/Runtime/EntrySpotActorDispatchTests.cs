@@ -1417,7 +1417,7 @@ public sealed partial class EntrySpotActorDispatchTests
                             requestOperation,
                             requestMessages,
                             flags: 1,
-                            directReply: (_, _) =>
+                            directReply: _ =>
                             {
                                 Interlocked.Increment(ref directReplyCount);
                                 return SubmitResult.Ok;
@@ -1537,7 +1537,6 @@ public sealed partial class EntrySpotActorDispatchTests
             default,
             header,
             hasMore: true,
-            flags: SendFlags.DontWait,
             meshName: "mesh-a",
             selectedNode: localNode,
             targetNodeGeneration: 83,
@@ -1552,7 +1551,6 @@ public sealed partial class EntrySpotActorDispatchTests
             default,
             body,
             hasMore: false,
-            flags: SendFlags.DontWait,
             meshName: "mesh-a",
             selectedNode: localNode,
             targetNodeGeneration: 83,
@@ -2047,7 +2045,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     ZLinkFrameworkErrorKind.NotFound,
                     "session relay authority identity is stale."),
                 CancellationToken.None,
-                directReply: (parts, _) =>
+                directReply: parts =>
                 {
                     directReplies.Add(
                         parts.Single().AsReadOnlySpan().ToArray());
@@ -2847,7 +2845,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 Message.From("fence-body"),
                 sourceNodeGeneration: 0,
                 requestSource: null,
-                (parts, _) =>
+                parts =>
                 {
                     directReplies.Add(
                         parts.Single().AsReadOnlySpan().ToArray());
@@ -4997,6 +4995,10 @@ public sealed partial class EntrySpotActorDispatchTests
                 .Publish("entry", "events", new ProbeRouteMessage("published"))
                 .Async();
 
+            // 02-spot-messaging.ko.md §4.4: publish completes at worker handoff.
+            // Observe backend completion before asserting that the delivered
+            // envelope preserves flow identity and has no request correlation.
+            await node.EntrySpotBackend.PublishCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var header = Assert.IsType<ZLinkEnvelopeHeader>(node.EntrySpotBackend.PublishedHeader);
             Assert.Null(header.CorrelationId);
             Assert.True(ZlinkStreamFlowId.IsValid(header.FlowId));
@@ -5194,8 +5196,10 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    [Fact]
-    public async Task DirectNoBindTerminalDoesNotRetryTransientSubmitFailure()
+    [Theory]
+    [InlineData(SubmitResult.NotConnected)]
+    [InlineData(SubmitResult.Terminated)]
+    public async Task DirectNoBindTerminalReportsTerminalSubmitFailure(SubmitResult result)
     {
         var node = new CapturingSpotNode();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
@@ -5225,14 +5229,13 @@ public sealed partial class EntrySpotActorDispatchTests
                     ZLinkFrameworkErrorKind.Unavailable,
                     "Actor is moving.")),
                 cancellationToken: CancellationToken.None,
-                directReply: (_, flags) =>
+                directReply: _ =>
                 {
-                    Assert.Equal(SendFlags.DontWait, flags);
                     Interlocked.Increment(ref attempts);
-                    return SubmitResult.Backpressured;
+                    return result;
                 }));
 
-            Assert.Equal(ZlinkSubmitException.ErrorCode.Backpressured, failure.Result);
+            Assert.Equal((ZlinkSubmitException.ErrorCode)(int)result, failure.Result);
             Assert.Equal(1, Volatile.Read(ref attempts));
         }
         finally
@@ -6616,8 +6619,8 @@ public sealed partial class EntrySpotActorDispatchTests
             const ulong actorGeneration = 4;
             var sourceNodeRid = RoutingId.From("prewarm-source");
             var repliedWithError = false;
-            Func<IReadOnlyList<Message>, SendFlags, SubmitResult> directReply =
-                (messages, _) =>
+            Func<IReadOnlyList<Message>, SubmitResult> directReply =
+                messages =>
                 {
                     repliedWithError = true;
                     foreach (var message in messages) message.Dispose();
@@ -6783,8 +6786,8 @@ public sealed partial class EntrySpotActorDispatchTests
             const ulong actorGeneration = 4;
             var sourceNodeRid = RoutingId.From("prewarm-source");
             var repliedWithError = false;
-            Func<IReadOnlyList<Message>, SendFlags, SubmitResult> directReply =
-                (messages, _) =>
+            Func<IReadOnlyList<Message>, SubmitResult> directReply =
+                messages =>
                 {
                     repliedWithError = true;
                     foreach (var message in messages) message.Dispose();
@@ -7515,7 +7518,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actor,
                 sourceNodeRid,
                 requestId: 701,
-                (_, _) =>
+                _ =>
                 {
                     Interlocked.Increment(ref replies);
                     return SubmitResult.Ok;
@@ -7588,7 +7591,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actor,
                 sourceNodeRid,
                 requestId: 711,
-                static (_, _) => SubmitResult.Ok);
+                static _ => SubmitResult.Ok);
             ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(
                 runtime,
                 frame);
@@ -7655,7 +7658,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actor,
                 sourceNodeRid,
                 requestId: 702,
-                (_, _) =>
+                _ =>
                 {
                     Interlocked.Increment(ref replies);
                     return SubmitResult.Ok;
@@ -7679,11 +7682,11 @@ public sealed partial class EntrySpotActorDispatchTests
             using var first = Message.From("first");
             Assert.Equal(
                 SubmitResult.Ok,
-                frame.DirectReply!([first], SendFlags.DontWait));
+                frame.DirectReply!([first]));
             using var duplicate = Message.From("duplicate");
             Assert.Equal(
                 SubmitResult.Terminated,
-                frame.DirectReply!([duplicate], SendFlags.DontWait));
+                frame.DirectReply!([duplicate]));
             Assert.Equal(1, Volatile.Read(ref replies));
         }
         finally
@@ -7706,7 +7709,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 deadlineUnixMs: checked((ulong)DateTimeOffset.UtcNow
                     .AddMilliseconds(20)
                     .ToUnixTimeMilliseconds()),
-                (_, _) =>
+                _ =>
                 {
                     Interlocked.Increment(ref replies);
                     return SubmitResult.Ok;
@@ -7716,7 +7719,7 @@ public sealed partial class EntrySpotActorDispatchTests
             using var late = Message.From("late");
             Assert.Equal(
                 SubmitResult.Terminated,
-                preserved.Reply([late], SendFlags.DontWait));
+                preserved.Reply([late]));
             Assert.Equal(0, Volatile.Read(ref replies));
         }
         finally
@@ -7739,7 +7742,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 deadlineUnixMs: checked((ulong)DateTimeOffset.UtcNow
                     .AddSeconds(1)
                     .ToUnixTimeMilliseconds()),
-                (_, _) =>
+                _ =>
                 {
                     Interlocked.Increment(ref attempts);
                     return SubmitResult.Backpressured;
@@ -7785,7 +7788,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 deadlineUnixMs: checked((ulong)DateTimeOffset.UtcNow
                     .AddMilliseconds(-1)
                     .ToUnixTimeMilliseconds()),
-                (_, _) =>
+                _ =>
                 {
                     Interlocked.Increment(ref attempts);
                     return SubmitResult.Backpressured;
@@ -7831,7 +7834,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actor.ActorId,
                 requestId: 707,
                 deadlineUnixMs: 0,
-                (_, _) =>
+                _ =>
                 {
                     Interlocked.Increment(ref attempts);
                     return SubmitResult.Backpressured;
@@ -7869,7 +7872,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 deadlineUnixMs: checked((ulong)DateTimeOffset.UtcNow
                     .AddSeconds(1)
                     .ToUnixTimeMilliseconds()),
-                (_, _) =>
+                _ =>
                 {
                     if (!Volatile.Read(ref admitted))
                         return SubmitResult.Backpressured;
@@ -7935,7 +7938,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 deadlineUnixMs: checked((ulong)DateTimeOffset.UtcNow
                     .AddSeconds(1)
                     .ToUnixTimeMilliseconds()),
-                static (_, _) => SubmitResult.Ok);
+                static _ => SubmitResult.Ok);
             using var reply = Message.From("reply");
 
             await runtime.ReplyActorNoBindAsync(
@@ -7973,7 +7976,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 deadlineUnixMs: checked((ulong)DateTimeOffset.UtcNow
                     .AddSeconds(1)
                     .ToUnixTimeMilliseconds()),
-                (_, _) =>
+                _ =>
                 {
                     Interlocked.Increment(ref attempts);
                     return SubmitResult.Backpressured;
@@ -8022,7 +8025,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 deadlineUnixMs: checked((ulong)DateTimeOffset.UtcNow
                     .AddMilliseconds(100)
                     .ToUnixTimeMilliseconds()),
-                static (_, _) => SubmitResult.Ok);
+                static _ => SubmitResult.Ok);
             await Task.Delay(TimeSpan.FromMilliseconds(300));
             using var reply = Message.From("late-reply");
 
@@ -8047,7 +8050,7 @@ public sealed partial class EntrySpotActorDispatchTests
         ZLinkBackendActorRef actor,
         RoutingId sourceNodeRid,
         ulong requestId,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult> directReply)
+        Func<IReadOnlyList<Message>, SubmitResult> directReply)
     {
         return new ZLinkSpotActorFrame(
             actor,
@@ -8135,7 +8138,7 @@ public sealed partial class EntrySpotActorDispatchTests
             MeshOperationId operation,
             IReadOnlyList<Message> messages,
             uint flags,
-            Func<IReadOnlyList<Message>, SendFlags, SubmitResult>?
+            Func<IReadOnlyList<Message>, SubmitResult>?
                 directReply = null,
             byte messageFollowHopCount = 0)
     {
@@ -8486,7 +8489,7 @@ public sealed partial class EntrySpotActorDispatchTests
             RoutingId.From("startup-source"),
             spotId: null,
             requestSequence,
-            reply: (replyParts, _) =>
+            reply: replyParts =>
             {
                 var decoded = ZLinkEnvelopeCodec.DecodeBody(
                     replyParts,
@@ -9899,6 +9902,9 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public ZLinkEnvelopeHeader? PublishedHeader { get; private set; }
 
+        public TaskCompletionSource PublishCompleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public int? ActorJoinResultCode { get; private set; }
 
         public ZLinkEnvelopeHeader? ActorJoinReplyHeader { get; private set; }
@@ -10031,6 +10037,7 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = topic;
             _ = flags;
             PublishedHeader = ZLinkEnvelopeCodec.DecodeHeader(message);
+            PublishCompleted.TrySetResult();
         }
 
         public void Publish(
@@ -10040,6 +10047,7 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = topic;
             _ = flags;
             PublishedHeader = ZLinkEnvelopeCodec.DecodeHeader(parts);
+            PublishCompleted.TrySetResult();
         }
 
         public SubmitResult SendToSpot(
@@ -10227,22 +10235,15 @@ public sealed partial class EntrySpotActorDispatchTests
             return false;
         }
 
-        public bool Send(
+        public Task SendAsync(
             RoutingId routingId,
             Message payload,
-            SendFlags flags)
+            CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref _sendCount);
-            return true;
-        }
-
-        public bool Send(
-            RoutingId routingId,
-            IReadOnlyList<Message> parts,
-            SendFlags flags)
-        {
-            Interlocked.Increment(ref _sendCount);
-            return true;
+            payload.Dispose();
+            return Task.CompletedTask;
         }
 
         public void DisconnectPeer(RoutingId routingId) { }
@@ -10289,15 +10290,15 @@ public sealed partial class EntrySpotActorDispatchTests
             return false;
         }
 
-        public bool Send(
+        public Task SendAsync(
             RoutingId routingId,
             Message payload,
-            SendFlags flags) => true;
-
-        public bool Send(
-            RoutingId routingId,
-            IReadOnlyList<Message> parts,
-            SendFlags flags) => true;
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            payload.Dispose();
+            return Task.CompletedTask;
+        }
 
         public void DisconnectPeer(RoutingId routingId) { }
 
@@ -11050,8 +11051,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public bool SendActorBoundSession(
             ZLinkBackendActorRef actor,
-            IReadOnlyList<Message> parts,
-            SendFlags flags)
+            IReadOnlyList<Message> parts)
         {
             BoundSessionSendAttempts++;
             if (BoundSessionSendAccepted)
@@ -11144,8 +11144,7 @@ public sealed partial class EntrySpotActorDispatchTests
             RoutingId sourceNodeRid,
             RoutingId sourceSessionRid,
             Message message,
-            bool hasMore,
-            SendFlags flags)
+            bool hasMore)
         {
             BeforeForwardActorBoundSessionPart?.Invoke();
             var result = !ForwardResults.TryDequeue(out var configured) || configured;

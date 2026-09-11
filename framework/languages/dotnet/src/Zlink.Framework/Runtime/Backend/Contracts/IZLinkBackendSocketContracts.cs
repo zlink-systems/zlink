@@ -22,34 +22,10 @@ internal interface IZLinkBackendStreamSocket : IAsyncDisposable
         out ZLinkBackendStreamReceive? received,
         RecvFlags flags = RecvFlags.None);
 
-    bool Send(
+    Task SendAsync(
         RoutingId routingId,
         Message payload,
-        SendFlags flags);
-
-    ValueTask SendAsync(
-        RoutingId routingId,
-        Message payload,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        try
-        {
-            if (!Send(routingId, payload, SendFlags.DontWait))
-                throw new ZlinkSubmitException(
-                    ZlinkSubmitException.ErrorCode.Backpressured);
-            return ValueTask.CompletedTask;
-        }
-        finally
-        {
-            payload.Dispose();
-        }
-    }
-
-    bool Send(
-        RoutingId routingId,
-        IReadOnlyList<Message> parts,
-        SendFlags flags);
+        CancellationToken cancellationToken = default);
 
     void DisconnectPeer(RoutingId routingId);
 

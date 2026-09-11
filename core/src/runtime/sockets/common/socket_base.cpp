@@ -385,6 +385,7 @@ void zlink::socket_base_t::refresh_auto_hwm_policy (bool force_apply_)
 
 zlink::socket_base_t::~socket_base_t ()
 {
+    stop_inproc_reconnect_scheduler ();
     //  A detached count-1 pair can leave a stale ready entry after its final
     //  completion owner has stopped. The intrusive queue owns the pipe and its
     //  inbound ypipe independently of transport-pair teardown; release those
@@ -421,6 +422,7 @@ void zlink::socket_base_t::stop ()
     //  boundary: it may wait for a worker or enter another socket and must
     //  finish before the administrative command takes this socket's turn.
     _ctx_terminated.store (true, std::memory_order_release);
+    stop_inproc_reconnect_scheduler ();
     stop_monitor ();
     send_stop ();
     static_cast<mailbox_t *> (_mailbox)->signal ();

@@ -109,6 +109,7 @@ try {
                 if (-not (Test-Path -LiteralPath $package -PathType Leaf)) {
                     throw "Missing Node HTTP client package: $package"
                 }
+                Invoke-Checked $node @("scripts\materialize-local-http-client-package.mjs") $root
             }
         }
         Write-Output "$item HTTP client local package result=passed version=$frameworkVersion"

@@ -625,8 +625,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         var replyRecord = record;
         var reply = record.Kind is MeshRecordKind.NodeRequest
             or MeshRecordKind.ChannelRequest or MeshRecordKind.SpotRequest
-            ? new Func<IReadOnlyList<Message>, SendFlags, SubmitResult>(
-                (parts, flags) => replyRecord.Reply(parts, flags))
+            ? new Func<IReadOnlyList<Message>, SubmitResult>(
+                parts => replyRecord.Reply(parts))
             : null;
         _requestSources.TryGetValue(
             (record.SourceNodeRid, record.SourceBindingGeneration),
@@ -679,8 +679,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 
         var replyRecord = record;
         var reply = record.Kind is MeshRecordKind.NodeRequest or MeshRecordKind.ChannelRequest
-            ? new Func<IReadOnlyList<Message>, SendFlags, SubmitResult>(
-                (parts, flags) => replyRecord.Reply(parts, flags))
+            ? new Func<IReadOnlyList<Message>, SubmitResult>(
+                parts => replyRecord.Reply(parts))
             : null;
         var parts = record.ApplicationPayloadView is null
             ? RetainParts(batch, index)

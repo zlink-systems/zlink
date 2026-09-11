@@ -989,6 +989,9 @@ internal static class ZLinkApplicationJobQueueInvocation
 {
     private static readonly AsyncLocal<Scope?> Current = new();
 
+    // Handler entry releases the queue permit, but the invocation still owns its turn.
+    internal static bool IsActive => Current.Value is not null;
+
     internal static IDisposable Enter(ZLinkApplicationJobQueueLease lease)
     {
         ArgumentNullException.ThrowIfNull(lease);

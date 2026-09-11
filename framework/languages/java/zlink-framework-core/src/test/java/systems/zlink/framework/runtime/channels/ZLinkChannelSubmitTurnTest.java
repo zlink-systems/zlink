@@ -251,6 +251,9 @@ final class ZLinkChannelSubmitTurnTest {
         ZLinkInternalSpotNode node(AtomicInteger calls, AtomicReference<Duration> timeout, Runnable binding) {
             return (ZLinkInternalSpotNode) Proxy.newProxyInstance(getClass().getClassLoader(),
                 new Class<?>[] {ZLinkInternalSpotNode.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("name")) {
+                        return "orders";
+                    }
                     if (method.getName().equals("requestToChannel")) {
                         timeout.set((Duration) args[3]);
                         var operations = (ZLinkServiceOperationRegistry) args[4];

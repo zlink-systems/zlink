@@ -195,13 +195,14 @@ void zlink::routing_socket_base_t::erase_out_pipe (const pipe_t *pipe_)
     }
 }
 
-int zlink::routing_socket_base_t::terminate_out_pipe_by_routing_id (
-  const zlink_routing_id_t *peer_rid_)
+int zlink::routing_socket_base_t::prepare_out_pipe_termination_by_routing_id (
+  const zlink_routing_id_t *peer_rid_, pipe_t **target_out_)
 {
-    if (!peer_rid_ || peer_rid_->size == 0) {
+    if (!peer_rid_ || peer_rid_->size == 0 || !target_out_) {
         errno = EINVAL;
         return -1;
     }
+    *target_out_ = NULL;
 
     pipe_t *target = NULL;
     {
@@ -221,8 +222,7 @@ int zlink::routing_socket_base_t::terminate_out_pipe_by_routing_id (
 
     socket_reqrep_internal::fail_pending_requests_for_pipe (
       request_reply_state (), target);
-    target->terminate (false);
-    target->release_lifetime_ref ();
+    *target_out_ = target;
     return 0;
 }
 

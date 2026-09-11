@@ -54,13 +54,19 @@ interface defines single-use rules, repeated-option handling, and terminal re-in
 
 The synchronous blocking terminator name follows the binding policy
 [async-coroutine-policy §6](../../../../../../../bindings/doc/spec/async-coroutine-policy.en.md#6-per-language-terminal-interfaces)
-— Java/Node `submit_sync()`, .NET `Submit()`, C++ `submit()` (Kotlin adds none and exposes the Java surface's
-`submit_sync()`).
+— Java `submit_sync()`, .NET `Submit()`, C++ `submit()` (Kotlin adds none and exposes the Java surface's
+`submit_sync()`). **Node.js provides no synchronous blocking terminator (§4.1).**
 
 The general async terminal name per language is .NET `Async`, C++ `async`, Java/Node.js `submit`,
 and the dedicated Kotlin wrapper's `await`. An immediate submit that returns no async
 completion uses `Submit`/`submit`. Only the terminal that actually releases the shared Spot
 gate uses the name `Yield`/`yield`.
+
+**[The binding rule for isolation between submissions](../../../../../../../bindings/doc/spec/async-coroutine-policy.en.md#submission-stage-isolation) also applies to asynchronous completion representations returned by the Framework.** When an asynchronous terminator covered by this document returns an admission or application result, directly or by transforming a binding result, completion-state changes, cancellation, consumption, or detachment applied to one call must not propagate to another call's completion state or ability to consume its result through a shared returned representation or shared state behind it. This also applies to shared representations of already-completed results. Progress of other calls due to normal resource reclamation follows the existing admission and lifecycle contracts.
+
+Verification uses the completion representations and outcomes actually exposed by Framework terminators to check that shared state does not contaminate results already returned for other calls or results of later calls. It does not require the Framework to expose binding result-object structures or a `Backpressured` result.
+
+The layer returning the completion representation owns its isolation. [Cancellation and shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race) owns the boundaries between cancellation of Framework queue waits, caller-wait cancellation of binding operations, and late-completion cleanup. Isolating a returned representation must not remove an existing cancellation connection for a pending stage or introduce binding operation state, registries, or resubmission logic into the Framework.
 
 [Handler turn and execution gate §16](02-handler-turn-and-execution-gate.en.md#yield-call-eligibility)
 owns the execution contexts and calls that offer `Yield`.
@@ -105,6 +111,24 @@ callback, which is complex and confusing, so the synchronous terminator is block
 is no normal-completion value; completion only means the source-local admission boundary
 defined by the operation family accepted the message. Remote handler execution, subscriber
 receipt, remote Spot queue acceptance, or application callback completion are not awaited.
+
+<a id="41-nodejs-provides-no-synchronous-blocking-terminator"></a>
+### 4.1 Node.js Provides No Synchronous Blocking Terminator
+
+The Node.js runtime is **single-threaded**. Blocking that thread leaves the framework with no way
+to deliver the completion. When a request's target handler lives in the same process, the caller
+would have to produce the very reply it is waiting for, and the call deadlocks. Java, .NET, and
+C++ do not have this problem because the execution context that carries completions is separate
+from the calling thread (Java uses a dedicated platform-thread pump).
+
+Whether the target is local or remote is not always known at submit time, so a "block only when
+remote" rule is not available either. **A promise that cannot be kept does not belong on the
+surface** — the Node.js framework surface has no synchronous blocking terminator. Node
+applications use the async terminator (`submit(...)` returning a `Promise`).
+
+This decision applies to the framework surface only. **The Node binding keeps its `submit_sync()`**
+([async-coroutine-policy §6](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md#6-언어별-terminal-interface))
+— the binding does not depend on the framework runtime to deliver completions.
 
 **The synchronous blocking terminator cannot be called from a runtime execution context (F2-a).**
 Blocking on a handler turn, Spot turn, or state lane would wait for completion while holding the
@@ -459,7 +483,7 @@ When the framework runtime consumes a binding's HWM-managed send family
 decides immediately from the returned `result`, waits on `admitted` only when
 `result == BACKPRESSURED`, and consumes `reply` for a request. This implements "wait
 only when blocked at HWM" precisely — until now a single stage could not distinguish
-admission from reply, so [three-stage backpressure](04-dispatch-and-worker/README.en.md)
+admission from reply, so [three-stage backpressure](04-application-job-queue-and-backpressure.en.md)
 waiting was imprecise. The framework's **public terminal does not expose backpressure**
 (§5, `Backpressured` is not a public result); this consumption lives only in the framework's
 internal implementation. Core send-completion notification drives the completion, so the
@@ -517,7 +541,7 @@ the specific return type and error representation.
 | .NET | `Async(...)` returns `ValueTask` or `ValueTask<T>` | `Submit(...)` | `Yield(...)` | [per-language interface index](../languages/dotnet/interfaces/README.en.md) |
 | Java | `submit(...)` returns `CompletionStage<T>` | `submit_sync(...)` | `yield(...)` | [Channel messaging](../languages/java/interfaces/channel-messaging.en.md) |
 | Kotlin | Uses the dedicated call wrapper's suspending `await()` | the Java surface's `submit_sync(...)` | The dedicated wrapper's `yield()` | [Channel messaging](../languages/kotlin/interfaces/channel-messaging.en.md) |
-| Node.js | `submit(...)` returns `Promise<T>` | `submit_sync(...)` | `yield(...)` | [interface index](../languages/node/interfaces/README.en.md) |
+| Node.js | `submit(...)` returns `Promise<T>` | **not provided (§4.1)** | `yield(...)` | [interface index](../languages/node/interfaces/README.en.md) |
 | C++ | `async(...)` returns `task_t<T>` | `submit(...)` | `yield(...)` | [framework interfaces](../languages/cpp/interfaces/README.en.md) |
 
 The synchronous blocking terminator fails with `InvalidOperation` in a runtime execution context (§4 F2-a).

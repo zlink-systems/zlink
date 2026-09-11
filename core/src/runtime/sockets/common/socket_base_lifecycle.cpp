@@ -4,9 +4,12 @@
 
 #include <boost/asio.hpp>
 
+#include "core/control_runtime.hpp"
+#include "core/ctx.hpp"
 #include "core/io_thread.hpp"
 #include "core/mailbox.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
+#include "transports/asio/asio_reconnect_interval.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "sockets/common/socket_public_handle.hpp"
 
@@ -1448,13 +1451,189 @@ void zlink::socket_base_t::process_term_endpoint (std::string *endpoint_)
     delete endpoint_;
 }
 
-void zlink::socket_base_t::process_reconnect_inproc (std::string *endpoint_)
+void zlink::socket_base_t::inproc_reconnect_task_main (void *arg_)
 {
-    // This callback already owns command dispatch, so the inproc connect path
-    // must not try to drain the same mailbox recursively.
-    if (!is_terminating () && endpoint_)
-        (void) connect_internal (endpoint_->c_str (), false);
-    delete endpoint_;
+    static_cast<socket_base_t *> (arg_)
+      ->process_scheduled_inproc_reconnects ();
+}
+
+bool zlink::socket_base_t::schedule_inproc_reconnect (
+  const std::string &endpoint_,
+  const endpoint_uri_pair_t &endpoint_pair_)
+{
+    if (options.reconnect_ivl <= 0 || is_terminating () || _ctx_terminated)
+        return false;
+
+    int current_reconnect_ivl = -1;
+    const int interval =
+      next_asio_reconnect_interval (options, &current_reconnect_ivl);
+
+    control_runtime_t *const control = get_ctx ()->control_runtime ();
+    if (!control)
+        return false;
+
+    socket_inproc_reconnect_runtime_t &runtime =
+      inproc_reconnect_runtime ();
+    const uint64_t deadline =
+      _clock.now_ms () + static_cast<uint64_t> (interval);
+    {
+        scoped_lock_t lock (runtime.sync);
+        if (runtime.stopping)
+            return false;
+
+        socket_inproc_reconnect_runtime_t::pending_t::iterator inserted;
+        try {
+            inserted = runtime.pending.insert (
+              std::make_pair (deadline, endpoint_));
+        }
+        catch (const std::bad_alloc &) {
+            // The asynchronous disconnect path has no caller to which it can
+            // return ENOMEM. Do not silently discard a live connect intent.
+            alloc_assert (false);
+            return false;
+        }
+        if (runtime.task_id == 0) {
+            runtime.task_id = control->add_periodic_task (
+              &socket_base_t::inproc_reconnect_task_main, this,
+              static_cast<uint32_t> (interval), false);
+            if (runtime.task_id == 0) {
+                runtime.pending.erase (inserted);
+                if (errno == ENOMEM)
+                    alloc_assert (false);
+                return false;
+            }
+        } else if (inserted == runtime.pending.begin ()) {
+            const int rc = control->schedule_task_after (
+              runtime.task_id, static_cast<uint32_t> (interval));
+            zlink_assert (rc == 0);
+        }
+    }
+
+    event_connect_retried (endpoint_pair_, interval);
+    return true;
+}
+
+void zlink::socket_base_t::process_scheduled_inproc_reconnects ()
+{
+    socket_public_api_scope_t admission (lifecycle_coordinator ());
+    if (!admission.acquired ())
+        return;
+    socket_public_api_lock_scope_t guard (lifecycle_coordinator ());
+
+    socket_inproc_reconnect_runtime_t &runtime =
+      inproc_reconnect_runtime ();
+    control_runtime_t *const control = get_ctx ()->control_runtime ();
+    zlink_assert (control);
+
+    // Extract and consume one preallocated queue node at a time. Unlike a
+    // temporary vector this cannot allocate after erasing earlier intents, so
+    // one allocation failure can never lose the remainder of a due batch.
+    for (;;) {
+        socket_inproc_reconnect_runtime_t::pending_t::node_type due;
+        uint64_t task_to_remove = 0;
+        {
+            scoped_lock_t lock (runtime.sync);
+            if (runtime.stopping || is_terminating () || _ctx_terminated)
+                return;
+
+            const uint64_t now = _clock.now_ms ();
+            if (runtime.pending.empty ()) {
+                task_to_remove = runtime.task_id;
+                runtime.task_id = 0;
+            } else if (runtime.pending.begin ()->first > now) {
+                const uint64_t remaining =
+                  runtime.pending.begin ()->first - now;
+                const int rc = control->schedule_task_after (
+                  runtime.task_id, static_cast<uint32_t> (remaining));
+                zlink_assert (rc == 0);
+                return;
+            } else {
+                due = runtime.pending.extract (runtime.pending.begin ());
+            }
+        }
+
+        if (task_to_remove != 0) {
+            (void) control->remove_task (task_to_remove);
+            return;
+        }
+
+        zlink_assert (!due.empty ());
+        try {
+            (void) connect_internal (due.mapped ().c_str (), false);
+        }
+        catch (const std::bad_alloc &) {
+            scoped_lock_t lock (runtime.sync);
+            if (!runtime.stopping)
+                runtime.pending.insert (std::move (due));
+            throw;
+        }
+    }
+}
+
+bool zlink::socket_base_t::cancel_scheduled_inproc_reconnects (
+  const std::string &endpoint_)
+{
+    socket_inproc_reconnect_runtime_t &runtime =
+      inproc_reconnect_runtime ();
+    scoped_lock_t lock (runtime.sync);
+    const uint64_t previous_deadline = runtime.pending.empty ()
+                                         ? 0
+                                         : runtime.pending.begin ()->first;
+    bool cancelled = false;
+    for (socket_inproc_reconnect_runtime_t::pending_t::iterator it =
+           runtime.pending.begin ();
+         it != runtime.pending.end ();) {
+        if (it->second == endpoint_) {
+            cancelled = true;
+            runtime.pending.erase (it++);
+        } else
+            ++it;
+    }
+
+    if (runtime.task_id == 0)
+        return cancelled;
+
+    control_runtime_t *const control = get_ctx ()->control_runtime ();
+    if (!control)
+        return cancelled;
+    if (runtime.pending.empty ()) {
+        // The control callback owns task removal. Wake that callback after
+        // this socket turn so it can retire the empty timer without racing an
+        // endpoint disconnect that already holds the turn.
+        (void) control->schedule_task_after (runtime.task_id, 0);
+        return cancelled;
+    }
+    if (runtime.pending.begin ()->first == previous_deadline)
+        return cancelled;
+    const uint64_t now = _clock.now_ms ();
+    const uint64_t next_deadline = runtime.pending.begin ()->first;
+    const uint64_t remaining = next_deadline > now
+                                 ? next_deadline - now
+                                 : 0;
+    (void) control->schedule_task_after (
+      runtime.task_id, static_cast<uint32_t> (remaining));
+    return cancelled;
+}
+
+void zlink::socket_base_t::stop_inproc_reconnect_scheduler ()
+{
+    socket_inproc_reconnect_runtime_t &runtime =
+      inproc_reconnect_runtime ();
+    uint64_t task_id = 0;
+    {
+        scoped_lock_t lock (runtime.sync);
+        runtime.stopping = true;
+        runtime.pending.clear ();
+        task_id = runtime.task_id;
+    }
+
+    control_runtime_t *const control = get_ctx ()->control_runtime ();
+    if (control && task_id != 0)
+        (void) control->remove_task (task_id);
+
+    scoped_lock_t lock (runtime.sync);
+    if (runtime.task_id == task_id)
+        runtime.task_id = 0;
 }
 
 void zlink::socket_base_t::set_all_pipes_nodelay ()

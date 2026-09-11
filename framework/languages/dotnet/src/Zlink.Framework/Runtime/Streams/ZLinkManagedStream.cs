@@ -34,8 +34,10 @@ internal sealed class ZLinkManagedStream : IZLinkStream
         SendFlags flags = SendFlags.None)
     {
         ArgumentNullException.ThrowIfNull(payload);
+        if (flags is not (SendFlags.None or SendFlags.DontWait))
+            throw new ArgumentOutOfRangeException(nameof(flags));
         using var raw = payload.ToRawMessage(_codecs);
-        return WriteRaw(raw, flags);
+        return WriteRaw(raw);
     }
 
     public ValueTask CloseAsync()
@@ -44,14 +46,13 @@ internal sealed class ZLinkManagedStream : IZLinkStream
         return ValueTask.CompletedTask;
     }
 
-    internal bool WriteRaw(
-        Message payload,
-        SendFlags flags = SendFlags.None)
+    internal bool WriteRaw(Message payload)
     {
-        return _socket.Send(_routingId, payload, flags);
+        _ = _socket.SendAsync(_routingId, payload);
+        return true;
     }
 
-    internal ValueTask SubmitRawAsync(
+    internal Task SubmitRawAsync(
         Message payload,
         CancellationToken cancellationToken)
     {

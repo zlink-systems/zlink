@@ -89,6 +89,10 @@ struct application_payload_t
     std::variant<std::vector<std::uint8_t>, std::shared_ptr<const multipart_t>> _body;
 };
 
+// Shared inverse of application_payload_t::from_parts; used by dispatch and diagnostics.
+application_payload_t::multipart_t
+decode_application_parts (const application_payload_t &payload);
+
 struct spot_route_fence_t
 {
     std::string spot_id;

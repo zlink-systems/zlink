@@ -469,12 +469,50 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
   `PollEventFlag.PollIn`만 유효하고 다른 readiness mask는 typed `ConfigResult.InvalidArgument`로
   거절한다. ready 뒤 `monitor.recv(RecvFlags.DontWait)`로 drain하며 `PollEvents.source(index)`가
   등록한 monitor 객체를 돌려준다.
+- socket은 `setReadableHandler(handler)`로 **수신 readiness 알림 handler**를 등록한다.
+  Node는 단일 이벤트 루프이므로 `Poller.wait`가 그 루프를 막는다. readiness는 Node
+  이벤트 루프에 등록해 알린다(자세한 계약은 아래 "수신 readiness" 절).
 - 버전, capability 조회, strerror, proxy, sleep, multipart cleanup 헬퍼 같은 패키지
   루트 팩토리/헬퍼 함수는 공개 계약 함수다. 이 함수들 뒤의 네이티브 호출은 런타임
   모듈에 머문다.
 
 네이티브 기반 런타임 클래스를 직접 생성하는 것은 정렬된 계약의 일부가 아니다.
 팩토리가 안정적인 생성 표면이다.
+
+## 수신 readiness
+
+Node는 단일 이벤트 루프에서 동작하므로 다른 바인딩이 쓰는 blocking readiness 대기를
+그대로 쓸 수 없다. `Poller.wait`는 동기 호출이라 이벤트 루프를 막고, 고정 간격
+타이머 폴링은 왕복마다 최소 1 ms를 더한다. 그래서 socket은 **Node 이벤트 루프에
+등록되는 readiness 알림**을 공개한다.
+
+```ts
+export type ZLinkReadableHandler = () => void;
+
+// BaseSocket
+setReadableHandler(handler: ZLinkReadableHandler): void;
+```
+
+- **readiness 알림이지 메시지 개수 알림이 아니다.** 한 번의 호출이 몇 건이 왔는지
+  말하지 않는다. 호출자는 no-data 표현이 나올 때까지 `recv(RecvFlags.DontWait)`로
+  drain한다. 공통 spec의 "Dispatch readiness 의미"와 같은 축이며, edge-trigger
+  one-shot처럼 설명하거나 구현하지 않는다.
+- handler는 **인자를 받지 않는다.** 전달할 사실이 "지금 읽을 것이 있다" 하나뿐이다.
+  readiness 감시 자체가 실패하면 그 socket의 다음 receive가 typed 실패로 표면화한다.
+  handler에 오류 인자를 주지 않는다.
+- **해제 표면을 만들지 않는다.** callback을 `null`로 설정해 해제하는 표면은 이
+  문서의 "callback 등록" 규칙이 금지한다. 등록한 handler는 socket이 닫힐 때 함께
+  풀린다.
+- **활성 handler는 Node 이벤트 루프를 살려 둔다.** socket이 열려 있고 수신을
+  기다리는 동안 프로세스가 종료되지 않는다는 뜻이며, 이는 서버의 정상 동작이다.
+  더 기다리지 않으려면 socket을 닫는다.
+- 같은 socket에 두 번 등록하면 나중 등록이 앞의 것을 대체한다. socket 하나에
+  readiness handler 하나다.
+- 이 표면은 `Poller`를 대체하지 않는다. 여러 source를 한 자리에서 기다리는 경우는
+  `Poller`가 그대로 담당하며, `Pollable`의 `number`(raw fd) 항목도 유지된다.
+
+canonical 이름은 `setReadableHandler`이며 다른 바인딩도 같은 정식 이름을 언어별
+표기로 사용한다(공통 spec "함수 이름 규칙").
 
 ## 함수 이름 규칙
 
@@ -794,14 +832,14 @@ Token은 raw conversion, ordering, serialization과 `close()`를 제공하지 �
 
 ```ts
 export interface SendSubmission {
-  result: SubmitResult;        // OK | BACKPRESSURED, 제출 시점 스냅샷 (동기 필드)
-  admitted: Promise<void>;     // OK면 완료 상태
+  readonly result: SubmitResult;        // OK | BACKPRESSURED, 제출 시점 스냅샷 (동기 필드)
+  readonly admitted: Promise<void>;     // OK면 완료 상태
 }
 
 export interface RequestSubmission {
-  result: SubmitResult;
-  admitted: Promise<void>;
-  reply: Promise<Message[]>;   // admitted 성공 뒤 완료
+  readonly result: SubmitResult;
+  readonly admitted: Promise<void>;
+  readonly reply: Promise<Message[]>;   // admitted 성공 뒤 완료
 }
 
 export interface SendSubmitOperation {

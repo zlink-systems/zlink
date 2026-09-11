@@ -10,6 +10,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
@@ -67,25 +69,27 @@ final class ZLinkCompositeRelocationBarrierTest {
 
     @Test
     void failedLaneRollsBackEveryEarlierSeal() throws Exception {
-        ZLinkSerialExecutionQueue spot = new ZLinkSerialExecutionQueue();
-        ZLinkSerialExecutionQueue actor = new ZLinkSerialExecutionQueue();
+        ManualExecutor spotExecutor = new ManualExecutor();
+        ManualExecutor actorExecutor = new ManualExecutor();
+        ZLinkSerialExecutionQueue spot = new ZLinkSerialExecutionQueue(
+            spotExecutor, ZLinkExecutionLanePolicy.generic());
+        ZLinkSerialExecutionQueue actor = new ZLinkSerialExecutionQueue(
+            actorExecutor, ZLinkExecutionLanePolicy.generic());
         ZLinkSerialExecutionQueue timer = new ZLinkSerialExecutionQueue();
         ZLinkCompositeRelocationBarrier barrier =
             new ZLinkCompositeRelocationBarrier();
         CompletableFuture<Void> actorActive = new CompletableFuture<>();
-        CompletableFuture<Void> actorStarted = new CompletableFuture<>();
-
-        actor.enqueue(() -> {
-            actorStarted.complete(null);
-            return actorActive;
-        });
-        actorStarted.get(3, TimeUnit.SECONDS);
+        actor.enqueue(() -> actorActive);
+        actorExecutor.take().run();
 
         assertTrue(barrier.trySeal(lanes(spot, actor, timer)).isEmpty());
         CompletableFuture<Void> spotIngress = spot.enqueue(
             () -> CompletableFuture.completedFuture(null))
             .toCompletableFuture();
+        spotExecutor.take().run();
         spotIngress.get(3, TimeUnit.SECONDS);
+        spot.awaitQuiescence().toCompletableFuture()
+            .get(3, TimeUnit.SECONDS);
 
         actorActive.complete(null);
         actor.awaitQuiescence().toCompletableFuture()
@@ -179,20 +183,22 @@ final class ZLinkCompositeRelocationBarrierTest {
     @Test
     void cancelledTurnBoundaryRestoresAcceptedQueueWithoutPartialSeal()
         throws Exception {
-        ZLinkSerialExecutionQueue spot = new ZLinkSerialExecutionQueue();
-        ZLinkSerialExecutionQueue actor = new ZLinkSerialExecutionQueue();
-        ZLinkSerialExecutionQueue timer = new ZLinkSerialExecutionQueue();
+        ManualExecutor spotExecutor = new ManualExecutor();
+        ManualExecutor actorExecutor = new ManualExecutor();
+        ManualExecutor timerExecutor = new ManualExecutor();
+        ZLinkSerialExecutionQueue spot = new ZLinkSerialExecutionQueue(
+            spotExecutor, ZLinkExecutionLanePolicy.generic());
+        ZLinkSerialExecutionQueue actor = new ZLinkSerialExecutionQueue(
+            actorExecutor, ZLinkExecutionLanePolicy.generic());
+        ZLinkSerialExecutionQueue timer = new ZLinkSerialExecutionQueue(
+            timerExecutor, ZLinkExecutionLanePolicy.generic());
         ZLinkCompositeRelocationBarrier barrier =
             new ZLinkCompositeRelocationBarrier();
         CompletableFuture<Void> active = new CompletableFuture<>();
-        CompletableFuture<Void> started = new CompletableFuture<>();
         AtomicBoolean cancelled = new AtomicBoolean();
 
-        actor.enqueue(() -> {
-            started.complete(null);
-            return active;
-        });
-        started.get(3, TimeUnit.SECONDS);
+        actor.enqueue(() -> active);
+        actorExecutor.take().run();
         CompletableFuture<Void> accepted = actor.enqueueRelocatable(
             new byte[] {9},
             () -> CompletableFuture.completedFuture(null))
@@ -204,10 +210,43 @@ final class ZLinkCompositeRelocationBarrierTest {
                     cancelled::get)
                 .toCompletableFuture();
 
-        cancelled.set(true);
+        spotExecutor.take().run();
+        assertFalse(sealing.isDone());
         active.complete(null);
+        actorExecutor.take().run();
+        assertFalse(accepted.isDone());
+        assertFalse(sealing.isDone());
+
+        // Keep the timer boundary pending until the Actor boundary has suspended,
+        // so restored work always needs a separately controlled executor task.
+        cancelled.set(true);
+        timerExecutor.take().run();
         assertTrue(sealing.get(3, TimeUnit.SECONDS).isEmpty());
-        accepted.get(3, TimeUnit.SECONDS);
+        assertFalse(accepted.isDone());
+
+        CompletableFuture<Void> quiescent =
+            actor.awaitQuiescence().toCompletableFuture();
+        CompletableFuture<Void> completionObserved = new CompletableFuture<>();
+        CompletableFuture<Void> releaseCompletion = new CompletableFuture<>();
+        CompletableFuture<Void> completionCallback = accepted.thenRun(() -> {
+            // CompletableFuture runs this dependent before invokeInline can
+            // release the gate; the test observes that interval from outside it.
+            completionObserved.complete(null);
+            releaseCompletion.join();
+        });
+        CompletableFuture<Void> acceptedDrain =
+            CompletableFuture.runAsync(actorExecutor.take());
+        try {
+            completionObserved.get(3, TimeUnit.SECONDS);
+            accepted.get(3, TimeUnit.SECONDS);
+            assertFalse(quiescent.isDone());
+            assertTrue(barrier.trySeal(lanes(spot, actor, timer)).isEmpty());
+        } finally {
+            releaseCompletion.complete(null);
+        }
+        completionCallback.get(3, TimeUnit.SECONDS);
+        acceptedDrain.get(3, TimeUnit.SECONDS);
+        quiescent.get(3, TimeUnit.SECONDS);
         assertTrue(barrier.trySeal(lanes(spot, actor, timer)).isPresent());
     }
 
@@ -243,6 +282,22 @@ final class ZLinkCompositeRelocationBarrierTest {
         dispatch.get(3, TimeUnit.SECONDS);
         var seal = sealing.get(3, TimeUnit.SECONDS).orElseThrow();
         assertTrue(barrier.abort(seal));
+    }
+
+    private static final class ManualExecutor implements Executor {
+        private final LinkedBlockingQueue<Runnable> pending =
+            new LinkedBlockingQueue<>();
+
+        @Override
+        public void execute(Runnable command) {
+            pending.add(command);
+        }
+
+        private Runnable take() throws InterruptedException {
+            Runnable task = pending.poll(3, TimeUnit.SECONDS);
+            assertTrue(task != null, "the lane must submit its next drain task");
+            return task;
+        }
     }
 
     private static LinkedHashMap<String, ZLinkSerialExecutionQueue> lanes(

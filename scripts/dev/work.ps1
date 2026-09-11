@@ -155,7 +155,11 @@ function Start-Work([string[]]$Values) {
         }
         if (-not (Get-Label $issue 'kind:')) { Invoke-Change gh @('issue','edit',[string]$issue.number,'--add-label',"kind: $($o['--kind'])") | Out-Host }
     }
-    $milestone = $o['--milestone']; $conf = Join-Path $root 'scripts/dev/work.conf'
+    $milestone = $o['--milestone']
+    if (-not $milestone -and $o['--issue'] -and $null -ne $issue.milestone) {
+        $milestone = $issue.milestone.title
+    }
+    $conf = Join-Path $root 'scripts/dev/work.conf'
     if (-not $milestone -and (Test-Path -LiteralPath $conf)) {
         $line = Get-Content -LiteralPath $conf | Where-Object { $_ -match '^\s*current_milestone\s*=' } | Select-Object -First 1
         if ($line) { $milestone = (($line -split '=',2)[1] -replace '\s*#.*$','').Trim().Trim('"') }

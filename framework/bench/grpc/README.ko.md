@@ -24,7 +24,7 @@ L7 load balancer, multi-node 분배, 네트워크 지연을 대표하지 않는�
 |-----------|------|
 | `grpc-<lang>` | 해당 언어의 gRPC unary RPC |
 | `zlink-<lang>` | framework를 거치지 않는 raw binding의 ROUTER↔ROUTER TCP 경로 |
-| `zlink-framework-<lang>` | framework channel messaging의 client channel과 server channel |
+| `zlink-framework-<lang>` | framework RouteMesh의 RID 직접 node request/send |
 
 기본 실행 순서는 `grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>` 순서다. 같은 payload
 크기와 같은 active duration에서 세 구현을 같은 패턴으로 실행하므로, 표에서는 한 패턴 아래에
@@ -67,9 +67,8 @@ ZLink 모델 사이의 비교 — DEALER→ROUTER 대 ROUTER↔ROUTER, `ToChanne
 `ToNode`, ClientServer 대 RouteMesh — 는 이 bench의 항목이 아니며 별도의 ZLink 모델 비교
 bench에서 다룬다. 이 bench는 gRPC와 같은 모양의 1:1 요청 경로만 비교한다.
 
-현재 구현 상태를 함께 적는다. Java는 이 구성으로 전환했다(Issue #13). `.NET`·C++·Node의 raw
-경로와 framework 경로, C 기준 bench의 client는 아직 전환 전이다(`.NET` raw는 DEALER,
-`framework/bench/grpc/c/zlink/bench_zlink_client.cpp:530-531`). 위 표는 측정에 사용할 구성을
+현재 구현 상태를 함께 적는다. Java와 `.NET`·C++·Node framework 행은 이 구성으로 전환했다(Issue
+#13). raw 경로와 C 기준 bench client의 전환은 별도 작업 범위다. 위 표는 측정에 사용할 구성을
 규정한 것이며, 전환이 끝나기 전에 얻은 값은 이 규격을 만족하는 값이 아니다.
 
 ## 2. 측정 패턴
@@ -140,7 +139,7 @@ bench에서 옳은 비교인 이유는 아래와 같다.
 
 - 구현(`grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>`)마다 **source process A**와
   **target process B**를 각 1개 띄운다. A는 HTTP trigger listener와 stats endpoint를 갖고 B로
-  향하는 client(gRPC stub, raw ROUTER, framework channel client)를 품는다. B는 echo(request)
+  향하는 client(gRPC stub, raw ROUTER, framework node client)를 품는다. B는 echo(request)
   또는 수신 집계(send)와 stats endpoint를 갖는다. 역할·trigger 계약·셀 순서는 §10이 정한다.
 - 로컬 runner는 셀마다 B → A 순서로 띄우고, A의 trigger endpoint에 HTTP로 phase 시작을 알린다.
   runner 자체는 부하를 만들지 않는다.
@@ -470,7 +469,7 @@ version은 1.51.1이며, 오래된 version이므로 결과에 반드시 기록�
 | Java | 매번 생성한 `BenchPayload`의 `toByteArray` / `parseFrom` | 같은 generated 타입을 grpc-java가 직렬화·역직렬화 | 같은 generated 타입을 `ZLinkProtobufCodec`이 직렬화·역직렬화 |
 | .NET | 매번 생성한 `BenchPayload`의 `WriteTo` / `Parser.ParseFrom` | 같은 generated 타입을 Google.Protobuf 기반 gRPC가 직렬화·역직렬화 | 같은 generated 타입을 protobuf codec이 직렬화·역직렬화 |
 | C++ | 매번 생성한 `BenchPayload`의 protobuf 직렬화 / `ParseFromArray` | 같은 generated 타입을 libgrpc++가 직렬화·역직렬화 | 같은 generated 타입을 protobuf codec이 직렬화·역직렬화 |
-| Node | 매번 생성한 `BenchPayload` DTO를 기존 proto-loader serializer / deserializer로 처리 | 같은 proto-loader의 protobuf serializer / deserializer 사용 | runner에서 `unsupported`: 기존 framework protobuf codec의 `bytes` 지원 제약 |
+| Node | 매번 생성한 `BenchPayload` DTO를 기존 proto-loader serializer / deserializer로 처리 | 같은 proto-loader의 protobuf serializer / deserializer 사용 | 같은 proto-loader serializer / deserializer를 schema envelope codec에 연결 |
 | C binding | C++ 드라이버에서 매번 generated `BenchPayload`를 생성해 기존 libprotobuf로 직렬화·역직렬화 | 같은 generated 타입과 libprotobuf 사용 | C framework 행 없음 |
 
 C binding bench는 `.cpp` 드라이버이며 protobuf가 이미 빌드 의존성이다. raw도 이를 공유하므로

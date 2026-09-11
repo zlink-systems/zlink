@@ -5,6 +5,7 @@
 #include "../testutil_unity.hpp"
 
 #include "core/socket_poller.hpp"
+#include "core/mailbox.hpp"
 #include "utils/ip.hpp"
 
 #include <unity.h>
@@ -78,6 +79,37 @@ void test_many_fd_registrations_survive_remove_and_rebuild ()
               poller.remove_fd (signalers[i].get_fd ()));
     }
 }
+
+#if defined ZLINK_HAVE_WINDOWS
+void test_two_mailbox_burst_leaves_no_stale_fd_notification ()
+{
+    zlink::mailbox_t first;
+    zlink::mailbox_t second;
+    zlink::signaler_t poller_signaler (false, true);
+    TEST_ASSERT_TRUE (poller_signaler.valid ());
+    TEST_ASSERT_SUCCESS_ERRNO (first.add_signaler (&poller_signaler));
+    TEST_ASSERT_SUCCESS_ERRNO (second.add_signaler (&poller_signaler));
+
+    // A mixed poller registers the same private fd-backed signaler with each
+    // mailbox. Both owners may publish before the poller drains that edge.
+    first.signal_pollers ();
+    second.signal_pollers ();
+    TEST_ASSERT_SUCCESS_ERRNO (poller_signaler.wait (0));
+    TEST_ASSERT_SUCCESS_ERRNO (poller_signaler.recv_failable ());
+    TEST_ASSERT_EQUAL_INT (-1, poller_signaler.recv_failable ());
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+    TEST_ASSERT_EQUAL_INT (-1, poller_signaler.wait (0));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+
+    // Draining the coalesced burst must also leave the signaler reusable.
+    second.signal_pollers ();
+    TEST_ASSERT_SUCCESS_ERRNO (poller_signaler.wait (0));
+    TEST_ASSERT_SUCCESS_ERRNO (poller_signaler.recv_failable ());
+
+    first.remove_signaler (&poller_signaler);
+    second.remove_signaler (&poller_signaler);
+}
+#endif
 } // namespace
 
 int main ()
@@ -88,6 +120,9 @@ int main ()
 
     RUN_TEST (test_single_fd_registration_reports_input);
     RUN_TEST (test_many_fd_registrations_survive_remove_and_rebuild);
+#if defined ZLINK_HAVE_WINDOWS
+    RUN_TEST (test_two_mailbox_burst_leaves_no_stale_fd_notification);
+#endif
 
     zlink::shutdown_network ();
     return UNITY_END ();

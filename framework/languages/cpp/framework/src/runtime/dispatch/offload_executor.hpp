@@ -27,7 +27,7 @@ class offload_executor_t
                         std::size_t max_queue_length,
                         std::chrono::milliseconds idle_timeout,
                         std::string thread_name = "zlink-offload");
-    ~offload_executor_t ();
+    virtual ~offload_executor_t ();
 
     offload_executor_t (const offload_executor_t &) = delete;
     offload_executor_t &operator= (const offload_executor_t &) = delete;
@@ -37,7 +37,7 @@ class offload_executor_t
     // Internal scheduler work is accounted for by its owning bounded queue.
     // It must not be rejected only because application worker submissions
     // filled the executor's public queue.
-    bool try_submit_internal (std::function<void ()> work);
+    virtual bool try_submit_internal (std::function<void ()> work);
     void submit (std::function<void ()> work);
     void request_stop () noexcept;
     void drain ();
