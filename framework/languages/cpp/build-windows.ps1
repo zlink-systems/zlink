@@ -158,16 +158,13 @@ if (-not (Test-Path $Toolchain)) {
 
 $TestsEnabled = if ($IncludeTests) { "ON" } else { "OFF" }
 $E2EEnabled = if ($IncludeE2E) { "ON" } else { "OFF" }
-$ImportedConfigurationMaps = @("Debug", "Release", "RelWithDebInfo", "MinSizeRel") |
-    Where-Object { $_ -ne $Configuration } |
-    ForEach-Object { "-DCMAKE_MAP_IMPORTED_CONFIG_$($_.ToUpperInvariant())=$Configuration" }
-
 $ConfigureArguments = @(
     "-S", $CppRoot, "-B", $BuildDir, "-G", "Visual Studio 17 2022", "-A", "x64",
     "-DCMAKE_TOOLCHAIN_FILE=$Toolchain",
     "-DVCPKG_INSTALLED_DIR=$VcpkgInstalledDir",
     "-DVCPKG_MANIFEST_MODE=OFF",
     "-Dzlink_DIR=$CoreCMakeDir",
+    "-DCMAKE_BUILD_TYPE=$Configuration",
     "-DCMAKE_CXX_FLAGS=/EHsc /bigobj /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00",
     "-DCMAKE_CXX_FLAGS_RELEASE=/Od /DNDEBUG",
     "-DZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT=$LocalPackageRoot",
@@ -178,7 +175,7 @@ $ConfigureArguments = @(
     "-DZLINK_FRAMEWORK_CPP_BUILD_E2E=$E2EEnabled",
     "-DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=ON",
     "-DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=ON"
-) + $ImportedConfigurationMaps
+)
 Invoke-ZlinkCMake -FailureMessage "C++ Framework configure failed" -Arguments $ConfigureArguments
 
 Invoke-ZlinkCMake -FailureMessage "C++ Framework build failed" -Arguments @(

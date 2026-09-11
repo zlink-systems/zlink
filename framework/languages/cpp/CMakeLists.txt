@@ -18,6 +18,7 @@ endif()
 include(GNUInstallDirs)
 include(FetchContent)
 include(CMakePackageConfigHelpers)
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/zlink_framework_cpp_imported_config.cmake")
 find_package(Threads REQUIRED)
 
 option(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE "Build bindings/cpp from the workspace (explicit opt-in)" OFF)
@@ -97,6 +98,7 @@ if(NOT TARGET zlink::cpp)
     find_package(zlink_cpp ${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION} EXACT CONFIG REQUIRED)
   endif()
 endif()
+zlink_framework_cpp_configure_imported_target(zlink::cpp)
 
 add_library(zlink_framework_provider_abstractions INTERFACE)
 add_library(zlink::framework_provider_abstractions ALIAS
@@ -787,6 +789,11 @@ foreach(_package zlink_framework_cpp zlink_stream_connector_cpp)
   endif()
   install(FILES "${CMAKE_CURRENT_LIST_DIR}/cmake/Findlz4.cmake"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${_package} COMPONENT ${_component})
+  if(_package STREQUAL "zlink_framework_cpp")
+    install(FILES
+      "${CMAKE_CURRENT_LIST_DIR}/cmake/zlink_framework_cpp_imported_config.cmake"
+      DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${_package} COMPONENT ${_component})
+  endif()
 endforeach()
 
 configure_package_config_file(
@@ -1326,6 +1333,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-contract;framework-package;framework-tooling"
     RESOURCE_LOCK "zlink-cpp-vcpkg"
     TIMEOUT 120)
+  add_test(
+    NAME test_cpp_framework_imported_configuration_contract
+    COMMAND ${CMAKE_COMMAND}
+      -D ZLINK_FRAMEWORK_CPP_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}
+      -D ZLINK_FRAMEWORK_CPP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -D ZLINK_FRAMEWORK_CPP_TEST_GENERATOR=${CMAKE_GENERATOR}
+      -D ZLINK_FRAMEWORK_CPP_TEST_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}
+      -D ZLINK_FRAMEWORK_CPP_TEST_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}
+      -P ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.ContractTests/verify_imported_configuration_contract.cmake)
+  set_tests_properties(test_cpp_framework_imported_configuration_contract PROPERTIES
+    LABELS "framework-contract;framework-package;framework-tooling"
+    TIMEOUT 30)
   add_test(
     NAME test_cpp_framework_label_contract
     COMMAND ${CMAKE_COMMAND}
