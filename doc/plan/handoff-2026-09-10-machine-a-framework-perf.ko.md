@@ -287,8 +287,8 @@ result == BACKPRESSURED → 바인딩이 payload를 보관하고 WRITABLE에서 
 |---|---|---|
 | Java | **A** | 2차 job 진행 중. **36셀 before/after 측정 통과** — send-saturation before 73,084~77,556 / after 73,700~77,195, request-backpressure p99 양쪽 0.44~0.60 ms, `peak_in_flight`(bp-4096) before 25/58/63 · after 67/28/37. **1차의 −32%도 #47의 깊이 폭증(1,101)도 없다** |
 | .NET | **A** | job 진행 중. 기준선 측정 완료 |
-| Node | **B** | 미착수. 수정 지점은 `node-raw-binding-port.ts:247,300` — 항상 `.submit().admitted`를 await 한다 |
-| C++ | **B** | 미착수 |
+| Node | **B** | **완료·머지**(`af5df22136`). `node-raw-binding-port.ts` 두 send가 `result==Backpressured`일 때만 admitted await. 깊이-상한 테스트(OK 1024회 깊이≤1) 추가, framework 1692 테스트 통과. same-machine A/B(perf 큐): send-saturation 1024 +1.20%, 4096 −1.11% = **무회귀**(Java −24~32% 미재현, 불변 Promise). |
+| C++ | **B** | **완료·머지**(`bb264d7517`). `raw_dealer_port.cpp`·`raw_route_port.cpp` OK면 co_return(공유 completion source 제거). 깊이-상한 테스트(깊이==0), ContractTests·-Wall 클린. A/B(raw 불변식 completed==received 검증): 1024 +1.58%, 4096 +1.56% = **무회귀**. grpc/protobuf 1.51.1 툴체인 non-sudo 구성으로 측정(bench rejection-counter gap #158은 우회, 미수정). |
 
 B에게 넘긴 1차 기각 맥락 네 가지는 **Issue #151 코멘트**에 적었다 —
 ① 공유 객체가 가변이면 안 된다(Node `Promise.resolve()`는 불변이라 안전, C++은 확인 필요)
@@ -341,6 +341,54 @@ Node 바인딩은 같은 자리에서 `Promise.resolve()`를 공유하는데 **P
 
 C++ metric이 debug에서만 발행되는 것(`host_capacity_runtime.hpp:150`이 같다)은 **기존 관례**이며
 job 잘못이 아니다. **#173**으로 분리했다 — .NET은 `Meter` counter라 항상 발행한다.
+
+### C++ 측정 경로가 열렸다 (2026-09-11) — 네 가지가 막고 있었다
+
+**`ctest --preset linux-ninja-release -L 'framework-unit|framework-contract'` → 65/65, 실패 0.**
+C++이 처음으로 완전히 깨끗하다. 오늘 이전에는 최대 55/65였다.
+
+| 막고 있던 것 | 해결 |
+|---|---|
+| **#202** protobuf 33.x에서 codec이 컴파일 안 됨 → Release 8개 대상 "Not Run" | PR #214. `GetTypeName()` 반환형이 `const std::string&`→`absl::string_view`로 바뀐 것. 지원 범위 3.21.12~33.x를 `backend-dependency-policy` §8에 명시(사용자 승인) |
+| **#182** m6b가 부하에서 깨져 판정을 **세 번** 오염 | PR #211. 실시간 timer 단언 → 이벤트 소비 관측. **2 CPU + 부하 3에서 20/20** |
+| **#173-A** metric이 debug 로그에서만 발행 → 읽으려면 측정이 **3.14% 느려짐** | PR #215. log 게이트 3곳 제거. 기본 레벨에서 `246,312 = 246,312 + 0` rc=0 |
+| **#158** 벤치가 53% 유실을 통과시킴 | PR #183 + #215로 닫힘 |
+
+**#7(C++ 0.90) 판정을 이제 깨끗한 조건에서 할 수 있다.**
+
+### #77 — macOS 전용이 아니었다. Node binding의 mailbox FD edge 유실
+
+0.19.0으로 이월했다가 **이 리눅스 기계에서 재현**해 되돌렸다(전체 suite 안에서 실패, 단독 24회 중 1회).
+
+**원인(Core 소스로 확정): `send`·`recv`도 mailbox FD edge를 소진한다.**
+`setReadableHandler`의 watch가 그 edge에 의존하므로 **send 한 번이 대기 중인 수신 readiness를 지웠다.**
+
+`102`의 정체도 밝혔다 — Framework `RequestResult.NotFound`이고 Channel 선택 실패가 즉시 `102/0`
+completion을 만든다. "peer가 ready가 되지 않았다"와 일관된다.
+
+**왜 지금 드러났나:** `setReadableHandler`는 PR #168(#111)에서 들어갔다. 그 전에는 이 watch가
+send backpressure 재제출에만 쓰였고(`byToken.size !== 0` 조건), #111이 수신 readiness까지 같은
+watch로 몰았다. **밑에 있던 mailbox edge 의미가 그때 표면화됐다.**
+
+결과: PR #216. `npm test` **30/30회 통과, `102` 실패 0회**(고치기 전 12회 중 4회).
+
+**후속 spec gap: `ZLINK_OPT_FD`의 edge 소진 의미가 Core 스펙에 없다**
+(`core/doc/spec/core/socket/README.ko.md:353-354`에 이름과 타입만). 어떤 연산이 edge를 소진하는지
+규정이 없어 아무도 몰랐다. 절차(문안 → codex 리뷰 → 사용자 승인 → 전 언어)를 밟을 대상이다.
+
+### 스펙 변경 절차 (사용자 지시 2026-09-11)
+
+> 스펙 상세화가 필요한건 스펙 상세화를 하고 codex 리뷰하고, 나에게 승인 받고,
+> 모든 framework에 동일하게 적용해야해
+
+**오늘 두 건을 이 절차로 처리했고, 두 번 다 리뷰가 감독 초안의 오류를 잡았다.**
+
+| 스펙 | 리뷰가 잡은 것 |
+|---|---|
+| **제출 stage 격리**(PR #185, `async-coroutine-policy` `#submission-stage-isolation`) | "한 번의 `cancel()`이 오염시킨다"가 **틀렸다** — 성공 완료된 `CompletableFuture`의 `cancel(true)`는 `false`를 반환하고 상태를 안 바꾼다. 실제 수단은 `obtrudeException()`. Go는 공개 채널이 없고, Rust의 move는 내부 `Arc` 공유의 부재를 뜻하지 않으며, C++의 `shared_ptr`는 금지 대상이 아니다(제약할 것은 `_consumed` 공유). **현재 7언어에 위반 없음 — 예방 규범이다.** |
+| **metric 기록의 log 독립성**(PR #208, `02-runtime-metrics` §2.1) | "구독자가 있으면"이 **4언어 어디도 그 개념이 아니다.** "구독 이전 이력 보존"은 .NET `Enabled`·Java NOOP sink·Node 위임과 충돌. "C++ 안에서도 술어가 둘"은 **틀렸다**(`enabled()`는 wrapper). tracing §4가 이미 일부를 정하고 있었다. **그리고 전수 조사로 C++ 8개·Java 6개 계기 누락을 찾았다.** |
+
+**교훈: 감독 단독 문안은 사실 오류를 담는다.** 7언어를 다 열어보지 않고 표를 쓰면 추측이 섞인다.
 
 ### 측정 방법론 — 3-run으로 판정하지 마라 (2026-09-11, 두 번 당하고 배움)
 

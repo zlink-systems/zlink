@@ -8,6 +8,7 @@
     "lz4",
     "nlohmann-json",
     "openssl",
+    "opentelemetry-cpp",
     "protobuf",
     {
       "name": "redis-plus-plus",
