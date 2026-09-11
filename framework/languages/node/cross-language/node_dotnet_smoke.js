@@ -1020,7 +1020,6 @@ async function runDotnetRedisProviderTest(filter, redisEndpoint, prefix, tempDir
     'test',
     dotnetRedisTestsProject,
     '--framework', 'net8.0',
-    '--no-restore',
     '--filter', filter,
     '-m:1',
     '-p:UseSharedCompilation=false',
