@@ -328,8 +328,10 @@ assert_file_contains "$TEST_ROOT/last.out" 'Refs PR: Issue와 worktree를 유지
 pass 'done의 Refs 분기가 Issue·브랜치·worktree를 유지한다'
 
 printf 'close cleanup fixture' >"$TEST_ROOT/gh-state/issue-22-title"
+printf '2.0\n' >"$TEST_ROOT/gh-state/issue-22-milestone"
 assert_success 'Closes fixture start 실패' bash -c "cd '$TEST_ROOT/repo' && $(declare -f work); work start --issue 22 --no-packages"
-assert_file_contains "$TEST_ROOT/gh-state/calls.log" '^issue edit 22 --milestone 1.0 '
+assert_file_not_contains "$TEST_ROOT/gh-state/calls.log" '^issue edit 22 --milestone 1.0 '
+[[ "$(cat "$TEST_ROOT/gh-state/issue-22-milestone")" == '2.0' ]] || fail '기존 Issue milestone을 기본값으로 덮어씀'
 WT22="$TEST_ROOT/home/project/zlink-22-close-cleanup-fixture"
 [[ ! -e "$WT22/.artifacts/wsl" ]] || fail '--no-packages가 패키지를 준비함'
 printf 'close\n' >"$WT22/close.txt"
