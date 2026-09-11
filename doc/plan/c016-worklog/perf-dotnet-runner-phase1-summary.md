@@ -139,14 +139,14 @@ Smoke 2초 실행(진단 Off, warmup 1초):
 - 읽기 전용 원인 위치: `framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkClientServerRuntimeService.cs:98`의 `Selectable: state.HasClient && ...`와 `:131`의 public `IsReady` projection. Server-only는 HasClient 조건을 만족하지 못한다. 기존 Framework 결함(B)으로 보이며 수정하지 않았다. 새 API는 필요하지 않다.
 - 처리: public readiness의 false를 무시하거나 Server-only에 Client 역할을 추가하지 않았다. 두 payload 셀을 `unsupported`, `baselineEligible=false`로 보존하고 30초 측정을 중단했다. Framework runtime 변경을 하지 않았으므로 변경 전 교차언어 구현 대조 및 runtime 구현 승인은 수행 대상이 아니다. 후속 runtime 수정은 별도 진단·승인 범위다.
 
-- 1024 bytes 공개 증거: [request-ordinary-clientserver-sna-nna-ba353c289905445f4c92fe178a1ffdc29577b30190ce9500ba72e24cbe166b53/tmp/infrastructure-readiness-failed.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/1024/request-ordinary-clientserver-sna-nna-ba353c289905445f4c92fe178a1ffdc29577b30190ce9500ba72e24cbe166b53/tmp/infrastructure-readiness-failed.json), [source snapshot](/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/1024/request-ordinary-clientserver-sna-nna-ba353c289905445f4c92fe178a1ffdc29577b30190ce9500ba72e24cbe166b53/server-channel-0.json), [target role config](/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/1024/request-ordinary-clientserver-sna-nna-ba353c289905445f4c92fe178a1ffdc29577b30190ce9500ba72e24cbe166b53/role-configs/channel-1.json).
-- 4096 bytes 공개 증거: [request-ordinary-clientserver-sna-nna-b1c7260b97162a1373f45944bff2f3496d4afd975c51193d8287e217caafc1e1/tmp/infrastructure-readiness-failed.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-clientserver-sna-nna-b1c7260b97162a1373f45944bff2f3496d4afd975c51193d8287e217caafc1e1/tmp/infrastructure-readiness-failed.json), [source snapshot](/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-clientserver-sna-nna-b1c7260b97162a1373f45944bff2f3496d4afd975c51193d8287e217caafc1e1/server-channel-0.json), [target role config](/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-clientserver-sna-nna-b1c7260b97162a1373f45944bff2f3496d4afd975c51193d8287e217caafc1e1/role-configs/channel-1.json).
+- 1024 bytes 공개 증거: request-ordinary-clientserver-sna-nna-ba353c289905445f4c92fe178a1ffdc29577b30190ce9500ba72e24cbe166b53/tmp/infrastructure-readiness-failed.json (`/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/1024/request-ordinary-clientserver-sna-nna-ba353c289905445f4c92fe178a1ffdc29577b30190ce9500ba72e24cbe166b53/tmp/infrastructure-readiness-failed.json`), source snapshot (`/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/1024/request-ordinary-clientserver-sna-nna-ba353c289905445f4c92fe178a1ffdc29577b30190ce9500ba72e24cbe166b53/server-channel-0.json`), target role config (`/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/1024/request-ordinary-clientserver-sna-nna-ba353c289905445f4c92fe178a1ffdc29577b30190ce9500ba72e24cbe166b53/role-configs/channel-1.json`).
+- 4096 bytes 공개 증거: request-ordinary-clientserver-sna-nna-b1c7260b97162a1373f45944bff2f3496d4afd975c51193d8287e217caafc1e1/tmp/infrastructure-readiness-failed.json (`/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-clientserver-sna-nna-b1c7260b97162a1373f45944bff2f3496d4afd975c51193d8287e217caafc1e1/tmp/infrastructure-readiness-failed.json`), source snapshot (`/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-clientserver-sna-nna-b1c7260b97162a1373f45944bff2f3496d4afd975c51193d8287e217caafc1e1/server-channel-0.json`), target role config (`/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-clientserver-sna-nna-b1c7260b97162a1373f45944bff2f3496d4afd975c51193d8287e217caafc1e1/role-configs/channel-1.json`).
 
 이 차이를 우회해야 하는 다른 누락 API나 spec ambiguity는 확인하지 못했다. 위 두 셀은 §19/§22 성공 완료 수에 포함하지 않는다.
 
 ## 남은 실패와 해석 제한
 
-RouteMesh 4096 일반 smoke는 sent=11904, completed=11888, timeout=16(`DeadlineExceeded`), failed/cancelled/unresolved=0이었다. [source 원본](/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-00fbf9142615e83fad986a975fc95ed0c5433c6703a2947320d6300fca737b3c/server-channel-0.json)에 public 오류 kind와 첫 오류가 있다. 일반 30초 실행은 warmup sent=59126, completed=59110, timeout=16으로 실패했다. [warmup source 원본](/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-routemesh-4096/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-37f6e58c68f3085d9e52fd89b0d272f4d86cc01a5bb6aa31296338b481b0145f/server-channel-0.json)의 resetSeq는 0이며 measured reset/barrier를 열지 않았다. 같은 public 호출은 `framework/languages/dotnet/perf/ZLink.Framework.Perf.ChannelServer/ChannelEchoOnlyScenario.cs:60`의 `RequestToChannel(...).Timeout(...).Async<PerfEchoReply>()`; exact 호출 선언은 `framework/doc/framework/common/spec/server/languages/dotnet/interfaces/04-channel-messaging.ko.md:102`다. Framework/Core 중 어느 계층에서 deadline이 발생했는지는 확정하지 못했다.
+RouteMesh 4096 일반 smoke는 sent=11904, completed=11888, timeout=16(`DeadlineExceeded`), failed/cancelled/unresolved=0이었다. source 원본 (`/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-00fbf9142615e83fad986a975fc95ed0c5433c6703a2947320d6300fca737b3c/server-channel-0.json`)에 public 오류 kind와 첫 오류가 있다. 일반 30초 실행은 warmup sent=59126, completed=59110, timeout=16으로 실패했다. warmup source 원본 (`/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-routemesh-4096/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-37f6e58c68f3085d9e52fd89b0d272f4d86cc01a5bb6aa31296338b481b0145f/server-channel-0.json`)의 resetSeq는 0이며 measured reset/barrier를 열지 않았다. 같은 public 호출은 `framework/languages/dotnet/perf/ZLink.Framework.Perf.ChannelServer/ChannelEchoOnlyScenario.cs:60`의 `RequestToChannel(...).Timeout(...).Async<PerfEchoReply>()`; exact 호출 선언은 `framework/doc/framework/common/spec/server/languages/dotnet/interfaces/04-channel-messaging.ko.md:102`다. Framework/Core 중 어느 계층에서 deadline이 발생했는지는 확정하지 못했다.
 
 기존 message-flow를 Normal로 켠 별도 2초·30초 실행은 오류를 재현하지 못했다. 두 실행의 source/target `logs/message-flow-channel-*.log`를 보존했고 이 수치를 무오류 일반 baseline으로 대체하지 않았다. Public status 조회를 application counter lock 밖으로 둔 harness 검토 수정 이후에도 일반 30초 warmup 실패가 남았으므로 이를 deadline 원인 해결이라고 주장하지 않는다. Timeout, workload, retry 횟수를 바꾸어 실패를 없앤 결과는 없다.
 
@@ -156,9 +156,9 @@ RouteMesh 4096 일반 smoke는 sent=11904, completed=11888, timeout=16(`Deadline
 
 | Run / 셀 | 서버 PID | exitCode | 근거 |
 |---|---:|---:|---|
-| phase1-smoke / channel-echo-only 4096 | 91811 | -9 | [cleanup.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-00fbf9142615e83fad986a975fc95ed0c5433c6703a2947320d6300fca737b3c/cleanup.json) |
-| phase1-smoke / session-echo-only 4096 | 90677 | -9 | [cleanup.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/session-echo-only/4096/request-ordinary-na-sna-nna-7797f480caf42b0ed48385b13d937dddfb7c383a55e239af51d1a524b1edee56/cleanup.json) |
-| phase1-full-session / session-echo-only 1024 | 95677 | -9 | [cleanup.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-session/session-echo-only/1024/request-ordinary-na-sna-nna-3e57f44d260b8fe26c479f2bf07c131f637ff1a87adac7c2dd662bddb2311358/cleanup.json) |
+| phase1-smoke / channel-echo-only 4096 | 91811 | -9 | cleanup.json (`/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-00fbf9142615e83fad986a975fc95ed0c5433c6703a2947320d6300fca737b3c/cleanup.json`) |
+| phase1-smoke / session-echo-only 4096 | 90677 | -9 | cleanup.json (`/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/session-echo-only/4096/request-ordinary-na-sna-nna-7797f480caf42b0ed48385b13d937dddfb7c383a55e239af51d1a524b1edee56/cleanup.json`) |
+| phase1-full-session / session-echo-only 1024 | 95677 | -9 | cleanup.json (`/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-session/session-echo-only/1024/request-ordinary-na-sna-nna-3e57f44d260b8fe26c479f2bf07c131f637ff1a87adac7c2dd662bddb2311358/cleanup.json`) |
 
 Store가 없는 세 baseline 구성은 Docker Redis를 시작하지 않는다. `redis-common.sh`는 sample의 `redis-common.template.sh`를 source하고 run 이름·정확한 container ID·dotnet Redis port range(22000–22099)를 사용하도록 준비했지만, Redis 실행/종료와 Store namespace는 이번 phase의 실행 검증 대상이 아니었다. Host Redis fallback은 없다.
 
@@ -197,11 +197,11 @@ flock --exclusive --close /tmp/zlink-samples-gate.lock \
   python3 /dev/shm/zlink-perf-dotnet/test-admin-contract.py
 ```
 
-- .NET 관련 test: **11 passed / 0 failed** — [log](/dev/shm/zlink-perf-dotnet/harness-tests-final.log).
-- Python harness test: **9 passed / 0 failed** — [log](/dev/shm/zlink-perf-dotnet/python-harness-tests-final.log).
-- 실제 HTTP 계약: **16 cases passed**, 잘못된 입력의 state 보존 확인 — [evidence](/dev/shm/zlink-perf-dotnet/admin-contract/http-contract-checks.json).
-- 저장 결과 대조: **13 cells / 6,707 checks passed** — [audit](/dev/shm/zlink-perf-dotnet/artifact-audit.json). 이는 실패/unsupported 셀의 원본 보존을 포함한 자료 정합성 검사이며 13개 성능 성공을 뜻하지 않는다.
-- runner isolation: `FRAMEWORK RUNNER ISOLATION CLEAN ranges=20 locks=5 runners=76 sample_runners=67 redis_helpers=7` — [log](/dev/shm/zlink-perf-dotnet/runner-isolation-verification.log).
+- .NET 관련 test: **11 passed / 0 failed** — log (`/dev/shm/zlink-perf-dotnet/harness-tests-final.log`).
+- Python harness test: **9 passed / 0 failed** — log (`/dev/shm/zlink-perf-dotnet/python-harness-tests-final.log`).
+- 실제 HTTP 계약: **16 cases passed**, 잘못된 입력의 state 보존 확인 — evidence (`/dev/shm/zlink-perf-dotnet/admin-contract/http-contract-checks.json`).
+- 저장 결과 대조: **13 cells / 6,707 checks passed** — audit (`/dev/shm/zlink-perf-dotnet/artifact-audit.json`). 이는 실패/unsupported 셀의 원본 보존을 포함한 자료 정합성 검사이며 13개 성능 성공을 뜻하지 않는다.
+- runner isolation: `FRAMEWORK RUNNER ISOLATION CLEAN ranges=20 locks=5 runners=76 sample_runners=67 redis_helpers=7` — log (`/dev/shm/zlink-perf-dotnet/runner-isolation-verification.log`).
 - role Release build, shell syntax, Python compile, 해당 solution diff의 whitespace 검사를 통과했다. 전체 solution/test 및 다른 언어 gate는 실행하지 않았다. 기존 Framework 소스에서 관찰한 `ZLinkSpotNodeCatalog.cs:768`의 CS8619 warning은 범위 밖이므로 수정하지 않았다.
 
 `scripts/verify-framework-runner-isolation.py`는 `:689`의 `*/run_sample.*`와 `:754` 부근의 지정된 E2E runner를 inventory로 검사한다. 새 perf runner는 이 inventory에 포함되지 않으며 새 고정 listener range도 요구하지 않는다. 따라서 해당 script를 수정하지 않았다. 이번 runner의 실제 port 예약·공유 lock·소유 PID cleanup은 코드와 run evidence로 별도 확인했다.
@@ -231,7 +231,7 @@ Serialized message byte 수를 얻는 public per-message 관측은 사용하지 
 
 ### phase1-contract-multiclient · session-echo-only · 1024 · STREAM
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-contract-multiclient/session-echo-only/1024/request-ordinary-na-sna-nna-95d0317ad66b29b5d4df50afe1489e046e3f653e8f6374b6ec59aa348078d494/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-contract-multiclient/session-echo-only/1024/request-ordinary-na-sna-nna-95d0317ad66b29b5d4df50afe1489e046e3f653e8f6374b6ec59aa348078d494/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-contract-multiclient/session-echo-only/1024/request-ordinary-na-sna-nna-95d0317ad66b29b5d4df50afe1489e046e3f653e8f6374b6ec59aa348078d494/summary.json`  
 SHA-256: `27001530cd642357bc8e080278cddae65c5079c962345d9556797a894743d905`
 
 ```json
@@ -353,7 +353,7 @@ SHA-256: `27001530cd642357bc8e080278cddae65c5079c962345d9556797a894743d905`
 
 ### phase1-dev-clientserver · channel-echo-only · 4096 · clientserver
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-dev-clientserver/channel-echo-only/4096/request-ordinary-clientserver-sna-nna-898ca21ad6db8c6ebb213d672d121545dec66583120d406aa158cca77d94881f/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-dev-clientserver/channel-echo-only/4096/request-ordinary-clientserver-sna-nna-898ca21ad6db8c6ebb213d672d121545dec66583120d406aa158cca77d94881f/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-dev-clientserver/channel-echo-only/4096/request-ordinary-clientserver-sna-nna-898ca21ad6db8c6ebb213d672d121545dec66583120d406aa158cca77d94881f/summary.json`  
 SHA-256: `debe138b603a8ff9dc33bae317c2689e2dbdaad062b4df1059b9e63b5e7603ac`
 
 ```json
@@ -410,7 +410,7 @@ SHA-256: `debe138b603a8ff9dc33bae317c2689e2dbdaad062b4df1059b9e63b5e7603ac`
 
 ### phase1-dev-routemesh · channel-echo-only · 4096 · routemesh
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-dev-routemesh/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-dc2e6580281c565eea59e60b5c857a6129da763845a45213a0bd9ff78cee6afc/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-dev-routemesh/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-dc2e6580281c565eea59e60b5c857a6129da763845a45213a0bd9ff78cee6afc/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-dev-routemesh/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-dc2e6580281c565eea59e60b5c857a6129da763845a45213a0bd9ff78cee6afc/summary.json`  
 SHA-256: `a7f1ce3550d7d6ff2f877822f9bdc465615e51d9294f739d9e9b01c0a49b77b5`
 
 ```json
@@ -467,7 +467,7 @@ SHA-256: `a7f1ce3550d7d6ff2f877822f9bdc465615e51d9294f739d9e9b01c0a49b77b5`
 
 ### phase1-dev-routemesh-v2 · channel-echo-only · 4096 · routemesh
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-dev-routemesh-v2/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-dc2e6580281c565eea59e60b5c857a6129da763845a45213a0bd9ff78cee6afc/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-dev-routemesh-v2/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-dc2e6580281c565eea59e60b5c857a6129da763845a45213a0bd9ff78cee6afc/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-dev-routemesh-v2/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-dc2e6580281c565eea59e60b5c857a6129da763845a45213a0bd9ff78cee6afc/summary.json`  
 SHA-256: `9965613d5e00482c4d98f101b81296616b8dcbbb6bc00ee1cfa7718fdb1b03e9`
 
 ```json
@@ -579,7 +579,7 @@ SHA-256: `9965613d5e00482c4d98f101b81296616b8dcbbb6bc00ee1cfa7718fdb1b03e9`
 
 ### phase1-dev-session · session-echo-only · 1024 · STREAM
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-dev-session/session-echo-only/1024/request-ordinary-na-sna-nna-4959060dc87dcfd8005a0bcb0ac34836626d004aff2977b53cb08d32ff63abce/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-dev-session/session-echo-only/1024/request-ordinary-na-sna-nna-4959060dc87dcfd8005a0bcb0ac34836626d004aff2977b53cb08d32ff63abce/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-dev-session/session-echo-only/1024/request-ordinary-na-sna-nna-4959060dc87dcfd8005a0bcb0ac34836626d004aff2977b53cb08d32ff63abce/summary.json`  
 SHA-256: `32726503c2544173c386c884f3f3c1f59b3f4279b22a0ce0ac56daf541709269`
 
 ```json
@@ -679,7 +679,7 @@ SHA-256: `32726503c2544173c386c884f3f3c1f59b3f4279b22a0ce0ac56daf541709269`
 
 ### phase1-diag-routemesh-4096 · channel-echo-only · 4096 · routemesh
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-diag-routemesh-4096/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-9019b7e1a4eba21d0df96853412f246cb982776d863e5338af1433586234f52b/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-diag-routemesh-4096/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-9019b7e1a4eba21d0df96853412f246cb982776d863e5338af1433586234f52b/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-diag-routemesh-4096/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-9019b7e1a4eba21d0df96853412f246cb982776d863e5338af1433586234f52b/summary.json`  
 SHA-256: `ff583e422885671f50caedcc412c58f7d49e0d0a08e91b62a4eca9de5f22ed70`
 
 ```json
@@ -818,7 +818,7 @@ SHA-256: `ff583e422885671f50caedcc412c58f7d49e0d0a08e91b62a4eca9de5f22ed70`
 
 ### phase1-diag-routemesh-4096-full · channel-echo-only · 4096 · routemesh
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-diag-routemesh-4096-full/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-5cb934ec7c5aaac76c096fcb2e71b9926929cbafb032ee4c91d636d11b821b2f/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-diag-routemesh-4096-full/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-5cb934ec7c5aaac76c096fcb2e71b9926929cbafb032ee4c91d636d11b821b2f/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-diag-routemesh-4096-full/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-5cb934ec7c5aaac76c096fcb2e71b9926929cbafb032ee4c91d636d11b821b2f/summary.json`  
 SHA-256: `0101b0244e1cf648ccad273d868f475ae57c56d5750321838f80ce6be189d43b`
 
 ```json
@@ -931,7 +931,7 @@ SHA-256: `0101b0244e1cf648ccad273d868f475ae57c56d5750321838f80ce6be189d43b`
 
 ### phase1-full-routemesh-1024 · channel-echo-only · 1024 · routemesh
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-routemesh-1024/channel-echo-only/1024/request-ordinary-routemesh-sna-nna-b0ed7f7c21864b9fceccab1829e0db5893eca71661d6bf7be6d60d5eb6294321/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-routemesh-1024/channel-echo-only/1024/request-ordinary-routemesh-sna-nna-b0ed7f7c21864b9fceccab1829e0db5893eca71661d6bf7be6d60d5eb6294321/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-routemesh-1024/channel-echo-only/1024/request-ordinary-routemesh-sna-nna-b0ed7f7c21864b9fceccab1829e0db5893eca71661d6bf7be6d60d5eb6294321/summary.json`  
 SHA-256: `d72190e51cb7fd87f68b19facd72b6229c99064488b09296e2e11eeb942572b2`
 
 ```json
@@ -1044,7 +1044,7 @@ SHA-256: `d72190e51cb7fd87f68b19facd72b6229c99064488b09296e2e11eeb942572b2`
 
 ### phase1-full-routemesh-4096 · channel-echo-only · 4096 · routemesh
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-routemesh-4096/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-37f6e58c68f3085d9e52fd89b0d272f4d86cc01a5bb6aa31296338b481b0145f/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-routemesh-4096/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-37f6e58c68f3085d9e52fd89b0d272f4d86cc01a5bb6aa31296338b481b0145f/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-routemesh-4096/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-37f6e58c68f3085d9e52fd89b0d272f4d86cc01a5bb6aa31296338b481b0145f/summary.json`  
 SHA-256: `27cd11c570bafbb1490addc2e56bc989e6825ceba9ef345f6a8ee90f1335d983`
 
 ```json
@@ -1178,7 +1178,7 @@ SHA-256: `27cd11c570bafbb1490addc2e56bc989e6825ceba9ef345f6a8ee90f1335d983`
 
 ### phase1-full-session · session-echo-only · 1024 · STREAM
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-session/session-echo-only/1024/request-ordinary-na-sna-nna-3e57f44d260b8fe26c479f2bf07c131f637ff1a87adac7c2dd662bddb2311358/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-session/session-echo-only/1024/request-ordinary-na-sna-nna-3e57f44d260b8fe26c479f2bf07c131f637ff1a87adac7c2dd662bddb2311358/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-session/session-echo-only/1024/request-ordinary-na-sna-nna-3e57f44d260b8fe26c479f2bf07c131f637ff1a87adac7c2dd662bddb2311358/summary.json`  
 SHA-256: `7b832720947c3aebe896077f69a1f2f6cc4e8ce96d8b211f6f0d6e9815f9c576`
 
 ```json
@@ -1279,7 +1279,7 @@ SHA-256: `7b832720947c3aebe896077f69a1f2f6cc4e8ce96d8b211f6f0d6e9815f9c576`
 
 ### phase1-full-session · session-echo-only · 4096 · STREAM
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-session/session-echo-only/4096/request-ordinary-na-sna-nna-4ddf747b0947f7ab29be7a8a45db53bd181c2565c19eff4460dc9ca6b7e91bf2/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-session/session-echo-only/4096/request-ordinary-na-sna-nna-4ddf747b0947f7ab29be7a8a45db53bd181c2565c19eff4460dc9ca6b7e91bf2/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-full-session/session-echo-only/4096/request-ordinary-na-sna-nna-4ddf747b0947f7ab29be7a8a45db53bd181c2565c19eff4460dc9ca6b7e91bf2/summary.json`  
 SHA-256: `6b5df04b3f2ca9d5559d2c8485e59ef20ff90ac142e0bdf6047795ab812f6bce`
 
 ```json
@@ -1380,7 +1380,7 @@ SHA-256: `6b5df04b3f2ca9d5559d2c8485e59ef20ff90ac142e0bdf6047795ab812f6bce`
 
 ### phase1-smoke · channel-echo-only · 1024 · clientserver
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/1024/request-ordinary-clientserver-sna-nna-ba353c289905445f4c92fe178a1ffdc29577b30190ce9500ba72e24cbe166b53/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/1024/request-ordinary-clientserver-sna-nna-ba353c289905445f4c92fe178a1ffdc29577b30190ce9500ba72e24cbe166b53/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/1024/request-ordinary-clientserver-sna-nna-ba353c289905445f4c92fe178a1ffdc29577b30190ce9500ba72e24cbe166b53/summary.json`  
 SHA-256: `65939d6f54a51872d099038ac67c5d7f98857cdf5a0da755118725c546b1ac54`
 
 ```json
@@ -1513,7 +1513,7 @@ SHA-256: `65939d6f54a51872d099038ac67c5d7f98857cdf5a0da755118725c546b1ac54`
 
 ### phase1-smoke · channel-echo-only · 1024 · routemesh
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/1024/request-ordinary-routemesh-sna-nna-ac003987c57f49183515e497a6ca4b9343fa0da3d10b1bb544ab132894448d1f/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/1024/request-ordinary-routemesh-sna-nna-ac003987c57f49183515e497a6ca4b9343fa0da3d10b1bb544ab132894448d1f/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/1024/request-ordinary-routemesh-sna-nna-ac003987c57f49183515e497a6ca4b9343fa0da3d10b1bb544ab132894448d1f/summary.json`  
 SHA-256: `4fb69331e6d15b17d9f0e1b20c68ec2267942eb1d046e8b45d04096ad94e25e8`
 
 ```json
@@ -1625,7 +1625,7 @@ SHA-256: `4fb69331e6d15b17d9f0e1b20c68ec2267942eb1d046e8b45d04096ad94e25e8`
 
 ### phase1-smoke · channel-echo-only · 4096 · clientserver
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-clientserver-sna-nna-b1c7260b97162a1373f45944bff2f3496d4afd975c51193d8287e217caafc1e1/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-clientserver-sna-nna-b1c7260b97162a1373f45944bff2f3496d4afd975c51193d8287e217caafc1e1/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-clientserver-sna-nna-b1c7260b97162a1373f45944bff2f3496d4afd975c51193d8287e217caafc1e1/summary.json`  
 SHA-256: `021ed99e9121f6e9e3574c926c5f11490d431583a183db831942e394f6a9fd61`
 
 ```json
@@ -1758,7 +1758,7 @@ SHA-256: `021ed99e9121f6e9e3574c926c5f11490d431583a183db831942e394f6a9fd61`
 
 ### phase1-smoke · channel-echo-only · 4096 · routemesh
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-00fbf9142615e83fad986a975fc95ed0c5433c6703a2947320d6300fca737b3c/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-00fbf9142615e83fad986a975fc95ed0c5433c6703a2947320d6300fca737b3c/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/channel-echo-only/4096/request-ordinary-routemesh-sna-nna-00fbf9142615e83fad986a975fc95ed0c5433c6703a2947320d6300fca737b3c/summary.json`  
 SHA-256: `17f9e84fb27955037a05aba863495b7b7290b356575cb930126eddc7ccc4491b`
 
 ```json
@@ -1909,7 +1909,7 @@ SHA-256: `17f9e84fb27955037a05aba863495b7b7290b356575cb930126eddc7ccc4491b`
 
 ### phase1-smoke · session-echo-only · 1024 · STREAM
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/session-echo-only/1024/request-ordinary-na-sna-nna-4f2a07303a0ba8a627135ba09d48ddbe6d53f94ab7bac0ea3ec19d03dc02a7b6/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/session-echo-only/1024/request-ordinary-na-sna-nna-4f2a07303a0ba8a627135ba09d48ddbe6d53f94ab7bac0ea3ec19d03dc02a7b6/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/session-echo-only/1024/request-ordinary-na-sna-nna-4f2a07303a0ba8a627135ba09d48ddbe6d53f94ab7bac0ea3ec19d03dc02a7b6/summary.json`  
 SHA-256: `9e67797e6f4076dbcb4e3d9c1fb0c7286a74f836a4cda3bf32bdfa68eb9ba0c9`
 
 ```json
@@ -2009,7 +2009,7 @@ SHA-256: `9e67797e6f4076dbcb4e3d9c1fb0c7286a74f836a4cda3bf32bdfa68eb9ba0c9`
 
 ### phase1-smoke · session-echo-only · 4096 · STREAM
 
-Source: [/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/session-echo-only/4096/request-ordinary-na-sna-nna-7797f480caf42b0ed48385b13d937dddfb7c383a55e239af51d1a524b1edee56/summary.json](/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/session-echo-only/4096/request-ordinary-na-sna-nna-7797f480caf42b0ed48385b13d937dddfb7c383a55e239af51d1a524b1edee56/summary.json)  
+Source: `/dev/shm/zlink-perf-dotnet/perf-results/phase1-smoke/session-echo-only/4096/request-ordinary-na-sna-nna-7797f480caf42b0ed48385b13d937dddfb7c383a55e239af51d1a524b1edee56/summary.json`  
 SHA-256: `edd1e762bf39ed4c9fe18e0c15a417eeb8ba7aad3a5a6d02d3b15ef6dcc14d29`
 
 ```json
@@ -2109,7 +2109,7 @@ SHA-256: `edd1e762bf39ed4c9fe18e0c15a417eeb8ba7aad3a5a6d02d3b15ef6dcc14d29`
 
 ## collect_env.sh 출력 사본
 
-Source: [/dev/shm/zlink-perf-dotnet/collect-env-report.json](/dev/shm/zlink-perf-dotnet/collect-env-report.json)  
+Source: `/dev/shm/zlink-perf-dotnet/collect-env-report.json`  
 SHA-256: `5733f44977cc5b54d383879fc8e7c5269fec1b652f58a8bc35252cdaa83db2a5`
 
 ```json

@@ -314,7 +314,7 @@ signal 전용 native 종료 thread 추가는 제안하지 않는다. Error reply
 
 ## 증거 위치와 진단 도구 정리
 
-증거 root는 [`zlink-work/c016/logs/diag-node-teardown/`](../../../zlink-work/c016/logs/diag-node-teardown/)다.
+증거 root는 `zlink-work/c016/logs/diag-node-teardown/` (`../../../zlink-work/c016/logs/diag-node-teardown/`)다.
 `observations.json`에 PID별 handle/timer/activation snapshot과 Context/host 반환 시간이 있다.
 각 case directory에는 runner log, PID `.trace`, `.report.json`, `.cpuprofile`, 수집한 `.gdb`,
 sample run의 config와 flow/file log를 보존했다. Report의 environmentVariables는 보존본에서 제거했다.

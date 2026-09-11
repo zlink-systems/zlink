@@ -23,6 +23,7 @@ GitHub에서 문서를 읽을 때 맞는 링크이고 사이트에는 실을 대
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -127,10 +128,27 @@ def resolves_after_generation(md: Path, link: str) -> bool:
     return any((d / link).resolve().exists() for d in GENERATED_INTO)
 
 
-#  빌드 산출물이다(.gitignore 173·262행). 저장소에 없는 것이 정상이므로 문서 링크
-#  검사 대상에서 뺀다 — perf 리포트와 증거 파일은 그때그때 생겼다 사라진다.
-#  이 기계에는 있어서 로컬은 통과하고 CI만 깨지던 자리다.
-GENERATED_OUTPUT = re.compile(r"(^|/)(\.artifacts|perf/results)/")
+#  링크 대상이 파일로 존재해도, gitignore 대상이면 저장소에 없는 것이다. 빌드 트리
+#  (`.artifacts/`·`perf/results/`·`framework/languages/cpp/build/`)와 작업 디렉터리
+#  (`zlink-work/`·`scratchpad/`)가 그렇다. 쓴 사람의 기계에는 있어서 로컬 검사는
+#  통과하고 CI만 깨진다 — 실제로 그렇게 통과해 나간 링크가 있었다. 존재 여부만이
+#  아니라 추적 여부를 본다. 측정 증거 파일 경로는 링크가 아니라 inline code로 적는다.
+def ignored_paths(paths: list[Path]) -> set[Path]:
+    """git이 무시하는 경로들. 한 번의 호출로 일괄 판정한다."""
+    if not paths:
+        return set()
+    rel = [str(p.relative_to(REPO_ROOT)) for p in paths]
+    out = subprocess.run(["git", "check-ignore", "--stdin"], cwd=REPO_ROOT,
+                         input="\n".join(rel), capture_output=True, text=True)
+    return {REPO_ROOT / line for line in out.stdout.splitlines() if line}
+
+
+#  절대 경로는 링크가 될 수 없다. 저장소 밖(`/home/<사용자>/.cache/...`·`/tmp/...`)을
+#  가리키므로 다른 기계에서는 존재하지 않는다. 그런데 쓴 사람의 기계에는 있어서
+#  로컬 검사는 통과하고 CI만 깨진다 — 실제로 그렇게 81건이 통과해 나갔다. 존재
+#  여부를 보지 않고 형태만으로 막는다. 측정 증거 파일 경로는 링크가 아니라 inline
+#  code로 적는다.
+ABSOLUTE = re.compile(r"^/")
 
 
 #  redline 미러는 문서가 아니라 문서의 사본이다. `doc/plan/<캠페인>/<x>-redline/`
@@ -141,8 +159,13 @@ GENERATED_OUTPUT = re.compile(r"(^|/)(\.artifacts|perf/results)/")
 MIRROR_COPY = re.compile(r"(^|/)[A-Za-z0-9._-]+-redline/")
 
 
-def check_tree(name: str, root: Path, errors: list[str]) -> tuple[int, int]:
-    """문서 트리 하나를 검사하고 (문서 수, 링크 수)를 돌려준다."""
+def check_tree(name: str, root: Path, errors: list[str],
+               pending: list[tuple[Path, str]]) -> tuple[int, int]:
+    """문서 트리 하나를 검사하고 (문서 수, 링크 수)를 돌려준다.
+
+    `pending`에는 존재는 하지만 추적 여부를 아직 보지 않은 대상을 모은다. 무시
+    대상 판정은 트리를 다 돈 뒤 한 번에 한다.
+    """
     md_files = [p for p in sorted(root.rglob("*.md"))
                 if not MIRROR_COPY.search(str(p.relative_to(REPO_ROOT)))]
     if not md_files:
@@ -155,12 +178,18 @@ def check_tree(name: str, root: Path, errors: list[str]) -> tuple[int, int]:
         for ln, target in links_in(md.read_text(encoding="utf-8")):
             total += 1
             path, _, anchor = target.partition("#")
+            if ABSOLUTE.match(path):
+                errors.append(f"[{name}] {rel_md}:{ln}: 절대 경로는 링크가 될 수 없다: {target}")
+                continue
             resolved = md if not path else (md.parent / path).resolve()
             if not resolved.exists():
-                if resolves_after_generation(md, path) or GENERATED_OUTPUT.search(path):
+                if resolves_after_generation(md, path):
                     continue
                 errors.append(f"[{name}] {rel_md}:{ln}: 링크 대상 없음: {target}")
                 continue
+            if REPO_ROOT in resolved.parents or resolved == REPO_ROOT:
+                pending.append((resolved, f"[{name}] {rel_md}:{ln}: "
+                                          f"git이 추적하지 않는 경로다: {target}"))
             if anchor and resolved.suffix == ".md" \
                     and anchor not in anchors_of(resolved):
                 errors.append(f"[{name}] {rel_md}:{ln}: anchor 없음: {target}")
@@ -176,9 +205,13 @@ def main() -> int:
         return 2
 
     errors: list[str] = []
+    pending: list[tuple[Path, str]] = []
     for name in requested:
-        docs, links = check_tree(name, DOC_TREES[name], errors)
+        docs, links = check_tree(name, DOC_TREES[name], errors, pending)
         print(f"검사[{name}]: 문서 {docs}개, 상대 링크 {links}개")
+
+    ignored = ignored_paths(sorted({p for p, _ in pending}))
+    errors.extend(msg for p, msg in pending if p in ignored)
 
     if errors:
         print(f"\n깨진 링크 {len(errors)}건:", file=sys.stderr)

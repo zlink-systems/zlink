@@ -10,7 +10,7 @@ Framework runtime과 Core·binding은 수정하지 않았다.
 
 ## 증거와 소유 계층
 
-전체 증거는 [`scratchpad/fix-dotnet-sample-teardown-137/`](../../../scratchpad/fix-dotnet-sample-teardown-137/)에
+전체 증거는 `scratchpad/fix-dotnet-sample-teardown-137/` (`../../../scratchpad/fix-dotnet-sample-teardown-137/`)에
 보존했다. 진단용 runner 복사본은 원본의 SIGINT 및 2초 대기 뒤 dump를 수집한다. 별도
 SIGTERM 진단에서는 2초 시점의 heap dump와 정상 종료까지의 시간을 수집한다. 이 복사본
 실행을 정식 sample PASS로 계산하지 않았다.
