@@ -96,10 +96,23 @@ function Get-ZoneWorldLogPath {
     return Join-Path $LogDir "$Name.out.log"
 }
 
+function Get-ZoneWorldErrorLogPath {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    return Join-Path $LogDir "$Name.err.log"
+}
+
 function Get-ZoneWorldNextLogLine {
     param([Parameter(Mandatory = $true)][string]$Name)
 
     $path = Get-ZoneWorldLogPath $Name
+    if (-not (Test-Path -LiteralPath $path)) { return 1 }
+    return @((Get-Content -LiteralPath $path)).Count + 1
+}
+
+function Get-ZoneWorldNextErrorLogLine {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    $path = Get-ZoneWorldErrorLogPath $Name
     if (-not (Test-Path -LiteralPath $path)) { return 1 }
     return @((Get-Content -LiteralPath $path)).Count + 1
 }
@@ -176,8 +189,8 @@ function Wait-ZoneWorldPeerAdmission {
     $firstPattern = "mesh_peer_admission_accepted local=$FirstRid peer=$SecondRid command=Admit"
     $secondPattern = "mesh_peer_admission_accepted local=$SecondRid peer=$FirstRid command=Admit"
     for ($attempt = 0; $attempt -lt $Attempts; $attempt++) {
-        $firstPath = Get-ZoneWorldLogPath $FirstName
-        $secondPath = Get-ZoneWorldLogPath $SecondName
+        $firstPath = Get-ZoneWorldErrorLogPath $FirstName
+        $secondPath = Get-ZoneWorldErrorLogPath $SecondName
         $firstAccepted = (Test-Path -LiteralPath $firstPath) -and
             (@(Get-Content -LiteralPath $firstPath | Select-Object -Skip ($FirstLine - 1)) |
                 Select-String -SimpleMatch $firstPattern -Quiet)
@@ -214,7 +227,7 @@ function Start-ZoneWorldRole {
     )
 
     $existingOutput = Get-ZoneWorldLogPath $Name
-    $existingError = Join-Path $LogDir "$Name.err.log"
+    $existingError = Get-ZoneWorldErrorLogPath $Name
     if (Test-Path -LiteralPath $existingOutput) {
         Move-Item -LiteralPath $existingOutput -Destination (Join-Path $LogDir "$Name.$([Guid]::NewGuid().ToString('N')).out.log")
     }
@@ -259,8 +272,9 @@ function Start-ZoneWorldNode {
         $ConfigName = "zone-node-replacement"
     }
     $firstNodeLine = 1
+    $firstNodeErrorLine = 1
     $firstOpsLine = Get-ZoneWorldNextLogLine "ops"
-    $firstPeerLine = Get-ZoneWorldNextLogLine "zone-node-1"
+    $firstPeerErrorLine = Get-ZoneWorldNextErrorLogLine "zone-node-1"
     Start-ZoneWorldRole -Name $Name -Project $ZoneNodeProject -ConfigName $ConfigName | Out-Null
     Wait-ZoneWorldLog $Name "topology=ready" -FirstLine $firstNodeLine -Attempts 450
     Wait-ZoneWorldLog $Name "node status report submitted. node=$Name" -FirstLine $firstNodeLine -Attempts 450
@@ -268,7 +282,7 @@ function Start-ZoneWorldNode {
     if ($Name -eq "zone-node-2") {
         $localRid = Get-ZoneWorldRoutingId "zone-node-2" -FirstLine $firstOpsLine
         $peerRid = Get-ZoneWorldRoutingId "zone-node-1"
-        Wait-ZoneWorldPeerAdmission $Name $localRid $firstNodeLine "zone-node-1" $peerRid $firstPeerLine
+        Wait-ZoneWorldPeerAdmission $Name $localRid $firstNodeErrorLine "zone-node-1" $peerRid $firstPeerErrorLine
     }
 }
 

@@ -731,6 +731,22 @@ public sealed partial class RegressionTests
         Assert.Contains("sample_runner.ps1", zoneWorldPowerShellRunner, StringComparison.Ordinal);
         Assert.Contains("Start-SampleDotnetAssembly", zoneWorldPowerShellRunner, StringComparison.Ordinal);
         Assert.Contains("Wait-ZoneWorldLog", zoneWorldPowerShellRunner, StringComparison.Ordinal);
+        var peerAdmissionStart = zoneWorldPowerShellRunner.IndexOf(
+            "function Wait-ZoneWorldPeerAdmission", StringComparison.Ordinal);
+        var nextFunctionStart = zoneWorldPowerShellRunner.IndexOf(
+            "function Wait-ZoneWorldEvidenceWhileRunning", peerAdmissionStart, StringComparison.Ordinal);
+        Assert.True(peerAdmissionStart >= 0 && nextFunctionStart > peerAdmissionStart);
+        var peerAdmission = zoneWorldPowerShellRunner[peerAdmissionStart..nextFunctionStart];
+        Assert.Contains("$firstPath = Get-ZoneWorldErrorLogPath $FirstName", peerAdmission,
+            StringComparison.Ordinal);
+        Assert.Contains("$secondPath = Get-ZoneWorldErrorLogPath $SecondName", peerAdmission,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Get-ZoneWorldLogPath", peerAdmission, StringComparison.Ordinal);
+        Assert.Contains("$firstPeerErrorLine = Get-ZoneWorldNextErrorLogLine \"zone-node-1\"",
+            zoneWorldPowerShellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "Wait-ZoneWorldPeerAdmission $Name $localRid $firstNodeErrorLine \"zone-node-1\" $peerRid $firstPeerErrorLine",
+            zoneWorldPowerShellRunner, StringComparison.Ordinal);
         Assert.Contains("$BrowserSmoke", zoneWorldPowerShellRunner, StringComparison.Ordinal);
         Assert.Contains("Stop-SampleProcesses", zoneWorldPowerShellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("run_sample.sh", zoneWorldPowerShellRunner, StringComparison.Ordinal);
