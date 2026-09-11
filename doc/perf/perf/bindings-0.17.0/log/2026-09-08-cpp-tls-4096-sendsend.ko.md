@@ -135,14 +135,14 @@ bash bindings/cpp/perf/run_benchmarks_multi.sh \
 
 | 검증 항목 | 실행 | 결과 |
 |---|---|---|
-| 1·2. 재현 및 연속 3회 | DEALER→ROUTER / TLS / 4096 B — [fix1](../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_005923_tls4096_fix1.txt) | complete, fail=0 |
-|  | 동일 — [fix2](../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_005959_tls4096_fix2.txt) | complete, fail=0 |
-|  | 동일 — [fix3](../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_010006_tls4096_fix3.txt) | complete, fail=0 |
-| 3. ROUTER→ROUTER | TLS / 4096 B — [rr](../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_010013_tls4096_rr.txt) | complete, fail=0 |
-| 4. 전 크기 | DEALER→ROUTER / TLS / 64,256,1024,4096,65536 B — [full_dr](../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_010023_tls4096_full_dr.txt) | complete, fail=0 |
-|  | ROUTER→ROUTER / TLS / 같은 전 크기 — [full_rr](../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_010051_tls4096_full_rr.txt) | complete, fail=0 |
-| 5. 회귀 | DEALER→DEALER / TLS / 4096 B — [reg_dd](../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_010127_tls4096_reg_dd.txt) | complete, fail=0 |
-|  | DEALER→ROUTER / TCP / 4096 B — [reg_tcp](../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_010133_tls4096_reg_tcp.txt) | complete, fail=0 |
+| 1·2. 재현 및 연속 3회 | DEALER→ROUTER / TLS / 4096 B — fix1 (`../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_005923_tls4096_fix1.txt`) | complete, fail=0 |
+|  | 동일 — fix2 (`../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_005959_tls4096_fix2.txt`) | complete, fail=0 |
+|  | 동일 — fix3 (`../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_010006_tls4096_fix3.txt`) | complete, fail=0 |
+| 3. ROUTER→ROUTER | TLS / 4096 B — rr (`../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_010013_tls4096_rr.txt`) | complete, fail=0 |
+| 4. 전 크기 | DEALER→ROUTER / TLS / 64,256,1024,4096,65536 B — full_dr (`../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_010023_tls4096_full_dr.txt`) | complete, fail=0 |
+|  | ROUTER→ROUTER / TLS / 같은 전 크기 — full_rr (`../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_010051_tls4096_full_rr.txt`) | complete, fail=0 |
+| 5. 회귀 | DEALER→DEALER / TLS / 4096 B — reg_dd (`../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_010127_tls4096_reg_dd.txt`) | complete, fail=0 |
+|  | DEALER→ROUTER / TCP / 4096 B — reg_tcp (`../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_010133_tls4096_reg_tcp.txt`) | complete, fail=0 |
 
 빌드는 기존 설정에서 해당 C++ perf executable target만 재컴파일했다. Build log에 Core
 컴파일은 없으며, RESULT META와 `ldd`에서 pinned Core 경로를 확인했다.

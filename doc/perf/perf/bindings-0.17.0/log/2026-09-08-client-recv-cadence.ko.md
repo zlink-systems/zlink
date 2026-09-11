@@ -8,7 +8,7 @@
 원복했다. 최종 적용한 러너 수정은 없다.** 원래 초 단위 latency의 주원인은 미확정이다.
 
 후보 diff와 테스트는 검토용
-[patch](../../../../../.artifacts/perf/client-recv-cadence/java-candidate-rejected.patch)로
+patch (`../../../../../.artifacts/perf/client-recv-cadence/java-candidate-rejected.patch`)로
 보존했다. 늦게 도착한 수신 메시지가 admission 완료 전에 처리되는 회귀 테스트는
 원본에서 실패, 후보에서 통과했으며 이 기능상의 발견을 성능 개선과 구분한다.
 

@@ -7,7 +7,7 @@ Framework 종료 경로의 잘못된 actor relocation, discovery보다 먼저 cl
 처음 보고된 `TeardownFailed` 7개 역할은 개별 sample 재검증에서 `Stopped/None`이다.
 ShoppingMall의 진행 중 relocation은 여전히 `ForceStopped/DeadlineExceeded`다.
 
-전체 증거는 [작업 증거 디렉터리](../../../scratchpad/fix-dotnet-zoneworld-g4-and-teardown-outcomes/)에
+전체 증거는 작업 증거 디렉터리 (`../../../scratchpad/fix-dotnet-zoneworld-g4-and-teardown-outcomes/`)에
 보존했다. Core·binding·sample·다른 언어·보호 문서는 수정하지 않았고 commit하지 않았다.
 동시에 진행된 다른 작업의 변경은 유지했다.
 
@@ -36,8 +36,8 @@ Core completion을 Framework의 별도 monitor 상태·poller·timer로 대체�
 
 ### Framework 없는 공개 API 재현
 
-[.NET 재현](../../../scratchpad/fix-dotnet-zoneworld-g4-and-teardown-outcomes/public-api-repro/Program.cs)과
-[C 공개 API 재현](../../../scratchpad/fix-dotnet-zoneworld-g4-and-teardown-outcomes/public-api-repro/repro.cpp)은
+.NET 재현 (`../../../scratchpad/fix-dotnet-zoneworld-g4-and-teardown-outcomes/public-api-repro/Program.cs`)과
+C 공개 API 재현 (`../../../scratchpad/fix-dotnet-zoneworld-g4-and-teardown-outcomes/public-api-repro/repro.cpp`)은
 다음 순서를 사용한다.
 
 1. TCP ROUTER socket 두 개에 source/target RID를 지정하고 연결한다.

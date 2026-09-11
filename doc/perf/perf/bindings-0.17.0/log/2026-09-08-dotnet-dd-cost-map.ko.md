@@ -267,7 +267,7 @@ Microsoft의 [CLR ABI 설명](https://github.com/dotnet/runtime/blob/main/docs/d
 
 ### 원본 report와 재현 자료
 
-- 기존 기준: [NET r1net](/home/hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260908_081958_r1net.txt), [C r1net](/home/hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260908_081717_r1net.txt). `/tmp`에도 baseline 사본을 보존했다.
+- 기존 기준: NET r1net (`/home/hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260908_081958_r1net.txt`), C r1net (`/home/hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260908_081717_r1net.txt`). `/tmp`에도 baseline 사본을 보존했다.
 - 측정·분석 자료 루트: `/tmp/zlink-dotnet-dd-cost-map`. `perf-{dotnet,c}-{64,4096,65536}.{data,script,map.json,application-functions.tsv,functions.tsv,stacks.tsv}`에 raw CPU와 배타적 귀속을 보존했다.
 - GC·할당: `perf-dotnet-{size}.{nettrace,events.jsonl,alloc.json,client.log}`. 전수 caller와 allocation weight는 `alloc.json`에 있다. 초기 EventPipe는 `dotnet-{64,65536}.*`다.
 - 실행: `measure-dotnet.py`, `measure-dotnet-perf.py`, `measure-c-perf.py`, `c-pair-perf.py`; 분석: `reader/Program.cs`, `analyze-perf.py`, `analyze-dotnet.py`, `make-report.py`. 정규화 식·범주 배정·sample별 stack을 함께 보존했다.
