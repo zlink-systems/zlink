@@ -77,27 +77,33 @@ function Invoke-SampleWithPortCollisionRetry {
     $output = New-TemporaryFile
     try {
         for ($attempt = 1; $attempt -le 3; $attempt++) {
-            $previousErrorActionPreference = $ErrorActionPreference
-            try {
-                # Windows PowerShell 5 promotes a native child's stderr to
-                # ErrorRecord. Preserve the combined log and judge the child
-                # strictly by its process exit code instead.
-                $ErrorActionPreference = "Continue"
-                if ($ScriptPath.EndsWith(".sh")) {
-                    & bash $ScriptPath *> $output
-                } else {
+            if ($IsWindows) {
+                $previousErrorActionPreference = $ErrorActionPreference
+                try {
+                    # Windows PowerShell 5 promotes a native child's stderr to
+                    # ErrorRecord. Preserve the combined log and judge the child
+                    # strictly by its process exit code instead.
+                    $ErrorActionPreference = "Continue"
                     & $PowerShell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath *> $output
+                    $exitCode = $LASTEXITCODE
+                } finally {
+                    $ErrorActionPreference = $previousErrorActionPreference
                 }
+            } else {
+                & bash $ScriptPath *> $output
                 $exitCode = $LASTEXITCODE
-            } finally {
-                $ErrorActionPreference = $previousErrorActionPreference
             }
             if ($exitCode -eq 0) {
                 Get-Content $output
                 return
             }
             $text = Get-Content $output -Raw
-            if ($text -notmatch '(?i)(address already in use|port is already allocated|failed to bind host port|WSAEADDRINUSE|EADDRINUSE|Only one usage of each socket address)') {
+            $transientFailure = if ($IsWindows) {
+                $text -match '(?i)(address already in use|port is already allocated|failed to bind host port|WSAEADDRINUSE|EADDRINUSE|Only one usage of each socket address)'
+            } else {
+                $text -match 'ZlinkBindException|BindException|Address already in use|EADDRINUSE|errno=98'
+            }
+            if (-not $transientFailure) {
                 [Console]::Error.WriteLine($text)
                 throw "Sample failed: $ScriptPath"
             }

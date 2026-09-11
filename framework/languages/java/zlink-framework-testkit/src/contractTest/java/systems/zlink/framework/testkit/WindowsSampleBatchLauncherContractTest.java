@@ -1,6 +1,7 @@
 package systems.zlink.framework.testkit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
@@ -111,6 +112,27 @@ final class WindowsSampleBatchLauncherContractTest {
     }
 
     @Test
+    void aggregateRunnerKeepsWindowsAndUnixRetryContractsSeparate() throws Exception {
+        String runner = Files.readString(
+            samplesRoot().resolve("run_samples.ps1"), StandardCharsets.UTF_8)
+            .replace("\r\n", "\n");
+
+        assertTrue(runner.contains("if ($IsWindows) {\n                $previousErrorActionPreference"),
+            "only the Windows branch may suppress PowerShell native stderr promotion");
+        assertTrue(runner.contains("& $PowerShell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath *> $output"),
+            "Windows must invoke the PowerShell sample runner");
+        assertTrue(runner.contains("} else {\n                & bash $ScriptPath *> $output"),
+            "Unix must preserve the Bash sample invocation");
+        assertTrue(runner.contains(
+                "ZlinkBindException|BindException|Address already in use|EADDRINUSE|errno=98"),
+            "Unix must match the canonical Bash bind retry classification");
+        assertFalse(runner.contains("ZlinkBindException|Timed out waiting"),
+            "Unix must not classify a generic readiness timeout as a bind collision");
+        assertTrue(runner.contains("WSAEADDRINUSE|EADDRINUSE"),
+            "Windows must retain its Windows port-collision classification");
+    }
+
+    @Test
     void propertiesWriterRoundTripsWindowsReleasePath() throws Exception {
         Assumptions.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
 
@@ -202,6 +224,73 @@ final class WindowsSampleBatchLauncherContractTest {
     }
 
     @Test
+    void zoneWorldOwnedConsoleKeepsNativeOutputAfterStderrAndPropagatesExit() throws Exception {
+        Assumptions.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+
+        Path batch = writeBatch("owned-console-output.bat", """
+            @echo off
+            echo standard-output-before
+            echo ZLINK_FRAMEWORK_READY 1>&2
+            ping -n 2 127.0.0.1 >nul
+            echo standard-output-after
+            echo standard-error-after 1>&2
+            exit /b 23
+            """);
+        Path log = temporaryRoot.resolve("owned-console.log");
+
+        BatchResult result = launchWithZoneWorldOwnedConsole(batch, log);
+        String output = Files.readString(log, StandardCharsets.UTF_16LE);
+
+        assertEquals(23, result.exitCode(), result.output() + "\n" + output);
+        assertTrue(output.contains("standard-output-before"), output);
+        assertTrue(output.contains("ZLINK_FRAMEWORK_READY"), output);
+        assertTrue(output.contains("standard-output-after"), output);
+        assertTrue(output.contains("standard-error-after"), output);
+    }
+
+    @Test
+    void processTreeRegistrationTracksConfiguredNonJvmLeaf() throws Exception {
+        Assumptions.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+
+        Path batch = writeBatch("non-jvm-leaf.bat", """
+            @echo off
+            powershell.exe -NoProfile -Command "Start-Sleep -Seconds 30"
+            exit /b %ERRORLEVEL%
+            """);
+        Path output = batchLogPath("non-jvm-leaf.out.log");
+        Path error = batchLogPath("non-jvm-leaf.err.log");
+        String script = """
+            $ErrorActionPreference = 'Stop'
+            . '%s'
+            $process = Start-ZlinkSampleProcess -FilePath '%s' -WorkingDirectory '%s' `
+                -StandardOutputPath '%s' -StandardErrorPath '%s'
+            try {
+                Register-ZlinkSampleProcessTree -Process $process `
+                    -ExpectedLeafProcessNames @('powershell')
+                $trackedLeaf = @($process.ZlinkSampleOwnedProcesses | Where-Object {
+                    $_.ProcessName -eq 'powershell'
+                })
+                if ($trackedLeaf.Count -eq 0) { throw 'configured non-JVM leaf was not tracked' }
+            } finally {
+                Stop-ZlinkSampleProcessTree -Process $process -Force
+            }
+            """.formatted(
+                quoteForPowerShell(samplesRoot().resolve("redis-common.ps1")),
+                quoteForPowerShell(batch),
+                quoteForPowerShell(temporaryRoot),
+                quoteForPowerShell(output),
+                quoteForPowerShell(error));
+        String encoded = Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_16LE));
+        Process process = new ProcessBuilder(
+            "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded)
+            .redirectErrorStream(true)
+            .start();
+        assertTrue(process.waitFor(15, TimeUnit.SECONDS), "non-JVM process-tree test timed out");
+        String processOutput = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        assertEquals(0, process.exitValue(), processOutput);
+    }
+
+    @Test
     void allManifestSamplesUseAnExitCodeAndArgumentCoveredLauncher() throws Exception {
         Path samples = samplesRoot();
         String manifest = Files.readString(samples.resolve("sample-manifest.env"), StandardCharsets.UTF_8);
@@ -249,8 +338,36 @@ final class WindowsSampleBatchLauncherContractTest {
                 assertTrue(source.contains("Start-ZlinkSampleProcess"), script.toString());
             }
         }
-        String zoneWorld = Files.readString(samples.resolve("zoneworld-common.ps1"), StandardCharsets.UTF_8);
-        assertTrue(zoneWorld.contains("if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }"));
+        String zoneWorld = Files.readString(
+            samples.resolve("zoneworld-common.ps1"), StandardCharsets.UTF_8)
+            .replace("\r\n", "\n");
+        assertTrue(zoneWorld.contains("$ErrorActionPreference = \"Continue\""));
+        assertTrue(zoneWorld.contains("$exitCode = $LASTEXITCODE } finally {"));
+        assertTrue(zoneWorld.contains("$ErrorActionPreference = $previousErrorActionPreference"));
+        assertTrue(zoneWorld.contains("if ($null -ne $exitCode) { exit $exitCode }"));
+        assertTrue(zoneWorld.contains(
+            "$process = [ZlinkWindowsOwnedConsole]::Start($nativeCommandLine, $SampleDir)"));
+        assertTrue(zoneWorld.contains(
+            "Register-ZlinkSampleProcessTree -Process $process `\n"
+                + "            -ExpectedLeafProcessNames $ExpectedLeafProcessNames `\n"
+                + "            -AllowExitedLauncher:$AllowExitedLauncher"));
+        assertTrue(zoneWorld.contains(
+            "-Arguments @(\"--config\", (New-ClientConfig -Id $Id)) -AllowExitedLauncher"));
+        assertEquals(2, zoneWorld.split(Pattern.quote("-AllowExitedLauncher"), -1).length - 1,
+            "only Start-Client may opt in after the shared registration forwarding call");
+        assertTrue(zoneWorld.contains(
+            "-ExpectedLeafProcessNames $pythonProcessName -Arguments @("));
+        assertTrue(!zoneWorld.contains(
+            "[Diagnostics.Process]::GetProcessById($processId)"));
+
+        String processTree = Files.readString(
+            samples.resolve("redis-common.ps1"), StandardCharsets.UTF_8);
+        assertTrue(processTree.contains(
+            "[string[]]$ExpectedLeafProcessNames = @(\"java\", \"javaw\")"));
+        assertTrue(processTree.contains("[switch]$AllowExitedLauncher"));
+        assertTrue(processTree.contains("if ($AllowExitedLauncher) { return }"));
+        assertTrue(processTree.contains(
+            "exited before its expected child process was tracked"));
     }
 
     @Test
@@ -270,6 +387,27 @@ final class WindowsSampleBatchLauncherContractTest {
         assertTrue(linuxRunner.contains("wait_http \"$workflow_a_http\""));
         assertTrue(!powershellRunner.contains("Wait-Port $workflowAChannel.Host $workflowAChannel.Port"));
         assertTrue(!powershellRunner.contains("Wait-Port $workflowASpot.Host $workflowASpot.Port"));
+    }
+
+    @Test
+    void zoneWorldSubscriberOnlyReadinessMatchesUnixRunners() throws Exception {
+        Path samples = samplesRoot();
+        String windows = Files.readString(samples.resolve("zoneworld-common.ps1"), StandardCharsets.UTF_8)
+            .replace("\r\n", "\n");
+        assertTrue(windows.contains("[bool]$WaitForStatusReport = $true"));
+        assertTrue(windows.contains("if ($WaitForStatusReport) {\n"
+            + "            Wait-Log -Name $Name -Pattern \"node status report submitted\""));
+        assertTrue(windows.contains(
+            "Start-Zone -Name \"zone-node-3\" -WaitForStatusReport $false"));
+
+        for (String language : List.of("java", "kotlin")) {
+            String unix = Files.readString(
+                samples.resolve(language + "/ZoneWorld/run_sample.sh"), StandardCharsets.UTF_8);
+            assertTrue(Pattern.compile(
+                    "start zone-node-3 .*; wait_log zone-node-3 topology=ready[^\\n]*")
+                    .matcher(unix).find(),
+                language + " Unix runner must require only topology readiness for subscriber-only zone-node-3");
+        }
     }
 
     @Test
@@ -407,6 +545,60 @@ final class WindowsSampleBatchLauncherContractTest {
         builder.environment().putAll(environment);
         Process process = builder.start();
         assertTrue(process.waitFor(10, TimeUnit.SECONDS), "ZoneWorld batch launcher timed out");
+        return new BatchResult(
+            process.exitValue(),
+            new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
+    }
+
+    private BatchResult launchWithZoneWorldOwnedConsole(Path batch, Path log) throws Exception {
+        String zoneWorld = Files.readString(samplesRoot().resolve("zoneworld-common.ps1"), StandardCharsets.UTF_8)
+            .replace("\r\n", "\n");
+        String sourcePrefix = "$ownedConsoleSource = @'\n";
+        int sourceStart = zoneWorld.indexOf(sourcePrefix);
+        int sourceEnd = zoneWorld.indexOf("\n'@", sourceStart + sourcePrefix.length());
+        assertTrue(sourceStart >= 0 && sourceEnd > sourceStart, "owned-console source was not found");
+        String ownedConsoleSource = zoneWorld.substring(sourceStart + sourcePrefix.length(), sourceEnd);
+
+        String childCommand = "$ErrorActionPreference = \"Stop\"; "
+            + "$previousErrorActionPreference = $ErrorActionPreference; try { "
+            + "$ErrorActionPreference = \"Continue\"; "
+            + "& '" + quoteForPowerShell(batch) + "' *>> '" + quoteForPowerShell(log) + "'; "
+            + "$exitCode = $LASTEXITCODE } finally { "
+            + "$ErrorActionPreference = $previousErrorActionPreference }; "
+            + "if ($null -ne $exitCode) { exit $exitCode }";
+        String encodedChild = Base64.getEncoder().encodeToString(
+            childCommand.getBytes(StandardCharsets.UTF_16LE));
+        String powerShell = Path.of(System.getenv("SystemRoot"),
+            "System32", "WindowsPowerShell", "v1.0", "powershell.exe").toString();
+        String commandLine = "\"" + powerShell + "\" -NoProfile -ExecutionPolicy Bypass -EncodedCommand "
+            + encodedChild;
+        String script = """
+            $ErrorActionPreference = 'Stop'
+            . '%s'
+            Add-Type -TypeDefinition @'
+            %s
+            '@
+            $process = [ZlinkWindowsOwnedConsole]::Start('%s', '%s')
+            if (-not $process.WaitForExit(10000)) {
+                $process.Kill()
+                throw 'owned-console child timed out'
+            }
+            $process.WaitForExit()
+            $process.Refresh()
+            Register-ZlinkSampleProcessTree -Process $process -AllowExitedLauncher
+            $observedExitCode = $process.ExitCode
+            exit $observedExitCode
+            """.formatted(
+                quoteForPowerShell(samplesRoot().resolve("redis-common.ps1")),
+                ownedConsoleSource,
+                commandLine.replace("'", "''"),
+                quoteForPowerShell(temporaryRoot));
+        String encoded = Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_16LE));
+        Process process = new ProcessBuilder(
+            "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded)
+            .redirectErrorStream(true)
+            .start();
+        assertTrue(process.waitFor(15, TimeUnit.SECONDS), "owned-console launcher timed out");
         return new BatchResult(
             process.exitValue(),
             new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8));

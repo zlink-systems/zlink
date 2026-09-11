@@ -506,7 +506,8 @@ final class SampleReleaseGateContractTest {
                 "Get-ZlinkSampleDescendantProcessIds",
                 "[Diagnostics.Process]::GetProcessById",
                 "StartTime",
-                "exited before its JVM child was tracked",
+                "ExpectedLeafProcessNames",
+                "exited before its expected child process was tracked",
                 "function Stop-ZlinkSampleProcessTree",
                 "HasExited",
                 "$trackedProcess.Kill($true)",
@@ -832,7 +833,8 @@ final class SampleReleaseGateContractTest {
         }
 
         String buildWindows = Files.readString(javaRoot.resolve("build-windows.ps1"));
-        String runSamplesWindows = Files.readString(samplesRoot().resolve("run_samples.ps1"));
+        String runSamplesWindows = Files.readString(samplesRoot().resolve("run_samples.ps1"))
+            .replace("\r\n", "\n");
         for (String script : List.of(buildWindows, runSamplesWindows)) {
             assertTrue(script.contains("Assert-ZlinkJavaLocalBindingPackage"),
                 "Windows build/sample entrypoints must preflight the exact Java binding package");
@@ -881,9 +883,14 @@ final class SampleReleaseGateContractTest {
                 && runSamplesWindows.contains("WSAEADDRINUSE")
                 && runSamplesWindows.contains("EADDRINUSE"),
             "Windows aggregate sample retries must classify only actual port collisions");
-        assertFalse(runSamplesWindows.contains(
-                "ZlinkBindException|Timed out waiting"),
-            "semantic binding and readiness failures must not be retried");
+        assertTrue(Pattern.compile(
+                "(?s)\\$transientFailure = if \\(\\$IsWindows\\) \\{.*?WSAEADDRINUSE.*?"
+                    + "\\} else \\{\\s*\\$text -match 'ZlinkBindException\\|BindException\\|"
+                    + "Address already in use\\|EADDRINUSE\\|errno=98'\\s*\\}")
+                .matcher(runSamplesWindows).find(),
+            "Windows must retry only Windows port collisions while Unix matches the canonical Bash classifier");
+        assertFalse(runSamplesWindows.contains("ZlinkBindException|Timed out waiting"),
+            "Unix aggregate retries must not treat generic readiness timeouts as bind collisions");
 
         Set<String> expectedSamples = Stream.concat(REQUIRED_SAMPLES.stream(), Stream.of("ZoneWorld"))
             .collect(Collectors.toSet());

@@ -421,8 +421,17 @@ function Get-ZlinkSampleDescendantProcessIds {
 function Register-ZlinkSampleProcessTree {
     param(
         [Parameter(Mandatory = $true)][Diagnostics.Process]$Process,
-        [int]$DiscoveryTimeoutMilliseconds = 5000
+        [int]$DiscoveryTimeoutMilliseconds = 5000,
+        [string[]]$ExpectedLeafProcessNames = @("java", "javaw"),
+        [switch]$AllowExitedLauncher
     )
+
+    if ($ExpectedLeafProcessNames.Count -eq 0 -or
+            @($ExpectedLeafProcessNames | Where-Object {
+                [string]::IsNullOrWhiteSpace($_)
+            }).Count -ne 0) {
+        throw "Expected leaf process names must not be empty."
+    }
 
     $ownedProcesses = [Collections.Generic.List[Diagnostics.Process]]::new()
     [void]$ownedProcesses.Add($Process)
@@ -431,15 +440,27 @@ function Register-ZlinkSampleProcessTree {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
         return
     }
-    if ($Process.ProcessName -in @("java", "javaw")) {
-        return
+    if ($Process.HasExited) {
+        if ($AllowExitedLauncher) { return }
+        throw "Launcher PID $($Process.Id) exited before its expected child process was tracked."
     }
 
-    $rootStartTime = $Process.StartTime
+    try {
+        $rootProcessName = $Process.ProcessName
+        $rootStartTime = $Process.StartTime
+    } catch [ArgumentException], [InvalidOperationException] {
+        if ($Process.HasExited) {
+            if ($AllowExitedLauncher) { return }
+            throw "Launcher PID $($Process.Id) exited before its expected child process was tracked."
+        }
+        throw
+    }
+    if ($rootProcessName -in $ExpectedLeafProcessNames) { return }
+
     $knownIds = @{ $Process.Id = $true }
     $deadline = [DateTime]::UtcNow.AddMilliseconds($DiscoveryTimeoutMilliseconds)
     do {
-        $foundJvm = $false
+        $foundExpectedLeaf = $false
         foreach ($descendantId in @(Get-ZlinkSampleDescendantProcessIds `
                 -ParentProcessId $Process.Id)) {
             if ($knownIds.ContainsKey($descendantId)) { continue }
@@ -448,8 +469,8 @@ function Register-ZlinkSampleProcessTree {
                 if ($descendant.StartTime -lt $rootStartTime) { continue }
                 [void]$ownedProcesses.Add($descendant)
                 $knownIds[$descendantId] = $true
-                if ($descendant.ProcessName -in @("java", "javaw")) {
-                    $foundJvm = $true
+                if ($descendant.ProcessName -in $ExpectedLeafProcessNames) {
+                    $foundExpectedLeaf = $true
                 }
             } catch [ArgumentException] {
                 # The descendant completed between the CIM snapshot and handle acquisition.
@@ -457,14 +478,15 @@ function Register-ZlinkSampleProcessTree {
                 # The descendant completed while its process metadata was being read.
             }
         }
-        if ($foundJvm) { return }
+        if ($foundExpectedLeaf) { return }
         if ($Process.HasExited) {
-            throw "Launcher PID $($Process.Id) exited before its JVM child was tracked."
+            if ($AllowExitedLauncher) { return }
+            throw "Launcher PID $($Process.Id) exited before its expected child process was tracked."
         }
         Start-Sleep -Milliseconds 10
     } while ([DateTime]::UtcNow -lt $deadline)
 
-    throw "Timed out tracking the JVM process tree for PID $($Process.Id)."
+    throw "Timed out tracking the expected process tree for PID $($Process.Id)."
 }
 
 function Stop-ZlinkSampleProcessTree {

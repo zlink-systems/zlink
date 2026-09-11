@@ -106,6 +106,7 @@ function Invoke-ZlinkZoneWorldSample {
     $ownedConsoleSource = @'
 using System;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -188,7 +189,7 @@ public static class ZlinkWindowsOwnedConsole
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr handle);
 
-    public static int Start(string commandLine, string currentDirectory)
+    public static Process Start(string commandLine, string currentDirectory)
     {
         STARTUPINFO startupInfo = new STARTUPINFO();
         startupInfo.cb = Marshal.SizeOf(typeof(STARTUPINFO));
@@ -204,7 +205,9 @@ public static class ZlinkWindowsOwnedConsole
         }
         try
         {
-            return checked((int)processInformation.dwProcessId);
+            Process process = Process.GetProcessById(checked((int)processInformation.dwProcessId));
+            IntPtr managedHandle = process.Handle;
+            return process;
         }
         finally
         {
@@ -372,7 +375,9 @@ public static class ZlinkWindowsOwnedConsole
         param(
             [string]$Name,
             [string]$FilePath,
-            [string[]]$Arguments = @()
+            [string[]]$Arguments = @(),
+            [string[]]$ExpectedLeafProcessNames = @("java", "javaw"),
+            [switch]$AllowExitedLauncher
         )
         $logPath = Join-Path $logDir "$Name.log"
         $quotedFilePath = "'" + $FilePath.Replace("'", "''") + "'"
@@ -381,8 +386,12 @@ public static class ZlinkWindowsOwnedConsole
         }) -join " "
         $quotedLogPath = "'" + $logPath.Replace("'", "''") + "'"
         $command = '$ErrorActionPreference = "Stop"; ' +
+            '$previousErrorActionPreference = $ErrorActionPreference; try { ' +
+            '$ErrorActionPreference = "Continue"; ' +
             "& $quotedFilePath $quotedArguments *>> $quotedLogPath; " +
-            'if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }'
+            '$exitCode = $LASTEXITCODE } finally { ' +
+            '$ErrorActionPreference = $previousErrorActionPreference }; ' +
+            'if ($null -ne $exitCode) { exit $exitCode }'
         $encodedCommand = [Convert]::ToBase64String(
             [Text.Encoding]::Unicode.GetBytes($command))
         $nativeArguments = @(
@@ -394,13 +403,14 @@ public static class ZlinkWindowsOwnedConsole
         $env:ZLINK_JAVA_STREAM_TRACE = "1"
         try {
             $firstLogLine = Get-NextLine $logPath
-            $processId = [ZlinkWindowsOwnedConsole]::Start($nativeCommandLine, $SampleDir)
-            $process = [Diagnostics.Process]::GetProcessById($processId)
+            $process = [ZlinkWindowsOwnedConsole]::Start($nativeCommandLine, $SampleDir)
         } finally {
             $env:ZLINK_JAVA_STREAM_TRACE = $previousTrace
         }
         $processes.Add($process)
-        Register-ZlinkSampleProcessTree -Process $process
+        Register-ZlinkSampleProcessTree -Process $process `
+            -ExpectedLeafProcessNames $ExpectedLeafProcessNames `
+            -AllowExitedLauncher:$AllowExitedLauncher
         $nodeProcesses[$Name] = $process
         $ownedConsolePids[$process.Id] = $process.Id
         if ([IO.Path]::GetFullPath($FilePath) -eq [IO.Path]::GetFullPath($serverBin)) {
@@ -514,14 +524,20 @@ public static class ZlinkWindowsOwnedConsole
     }
 
     function Start-Zone {
-        param([string]$Name, [string]$ConfigName = $Name)
+        param(
+            [string]$Name,
+            [string]$ConfigName = $Name,
+            [bool]$WaitForStatusReport = $true
+        )
         $firstLine = Get-NextLine (Join-Path $logDir "$Name.log")
         $process = Start-LoggedProcess -Name $Name -FilePath $serverBin `
             -Arguments @("--config", (Join-Path $configDir "$ConfigName.properties"))
         Wait-Log -Name $Name -Pattern "topology=ready" -FirstLine $firstLine `
             -Process $process -Attempts 900
-        Wait-Log -Name $Name -Pattern "node status report submitted" -FirstLine $firstLine `
-            -Process $process -Attempts 900
+        if ($WaitForStatusReport) {
+            Wait-Log -Name $Name -Pattern "node status report submitted" -FirstLine $firstLine `
+                -Process $process -Attempts 900
+        }
     }
 
     function New-ClientConfig {
@@ -542,7 +558,7 @@ public static class ZlinkWindowsOwnedConsole
         param([string]$Id)
         $name = "client-$($Id.Replace(',', '-'))-$([Guid]::NewGuid().ToString('N'))"
         return Start-LoggedProcess -Name $name -FilePath $clientBin `
-            -Arguments @("--config", (New-ClientConfig -Id $Id))
+            -Arguments @("--config", (New-ClientConfig -Id $Id)) -AllowExitedLauncher
     }
 
     function Complete-Client {
@@ -674,12 +690,14 @@ public static class ZlinkWindowsOwnedConsole
                 Join-Path $SampleDir "../../java/ZoneWorld/Support/session_route_block_proxy.py"
             }
             $python = Resolve-ZlinkZoneWorldPython
+            $pythonProcessName = [IO.Path]::GetFileNameWithoutExtension($python)
             foreach ($spec in @(
                     @{ Name = "zone-node-1"; Port = $mesh1 },
                     @{ Name = "zone-node-2"; Port = $mesh2 },
                     @{ Name = "gateway"; Port = $gatewayMesh })) {
                 $proxyName = "proxy-$($spec.Name)"
-                $proxy = Start-LoggedProcess -Name $proxyName -FilePath $python -Arguments @(
+                $proxy = Start-LoggedProcess -Name $proxyName -FilePath $python `
+                    -ExpectedLeafProcessNames $pythonProcessName -Arguments @(
                     $proxyScript, "--listen-host", "127.0.0.1", "--listen-port", $spec.Port,
                     "--target-host", "127.0.0.2", "--target-port", $spec.Port,
                     "--arm-file", (Join-Path $runDir "b8-block-command-44"))
@@ -703,7 +721,7 @@ public static class ZlinkWindowsOwnedConsole
         $gateway = Start-LoggedProcess -Name "gateway" -FilePath $serverBin `
             -Arguments @("--config", (Join-Path $configDir "gateway.properties"))
         Wait-Log -Name "gateway" -Pattern "ZLINK_FRAMEWORK_READY" -Process $gateway -Attempts 900
-        Start-Zone "zone-node-3"
+        Start-Zone -Name "zone-node-3" -WaitForStatusReport $false
 
         if ($g4Proven) { Add-Pass "ZW-G4" }
         if ($b8Proven) { Add-Pass "ZW-B8" }
