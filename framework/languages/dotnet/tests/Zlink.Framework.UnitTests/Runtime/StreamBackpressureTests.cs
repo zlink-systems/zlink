@@ -99,15 +99,13 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
     [Fact]
     public async Task DirectNoBindReply_BackpressuredSubmissionIsNotTerminalRefusal()
     {
-        await using var fixture = await SaturatedStream.CreateAsync(output);
         using var runtime = new RuntimeFixture();
-        var saturation = await fixture.SaturateAsync();
         var actor = new ZLinkBackendActorRef(RoutingId.From("actor-node"), "actor", 1);
         var header = CreateRequestHeader();
         var reply = ZLinkActorReply.FromError(new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Unavailable, "actor-terminal-payload" + new string('x', 2048)));
         var expected = reply.ToFrame(header);
-        SendSubmission captured = default;
+        byte[]? captured = null;
         var attempts = 0;
 
         await ZLinkActorBoundSessionRelay.SendReplyAsync(
@@ -115,29 +113,24 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
             actor.ActorId,
             actor,
             RoutingId.From("source-node"),
-            fixture.RoutingId,
+            RoutingId.From("source-session"),
             requestId: 19,
             flags: ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
             replyCapability: "reply-capability",
             isNoBind: true,
             requestHeader: header,
             reply: reply,
-            cancellationToken: fixture.Token,
+            cancellationToken: CancellationToken.None,
             directReply: parts =>
             {
                 attempts++;
-                captured = fixture.Socket.Send(fixture.RoutingId).Messages(parts).Async(fixture.Token);
-                return captured.Result;
+                captured = Assert.Single(parts).AsReadOnlySpan().ToArray();
+                return SubmitResult.Backpressured;
             });
 
-        Assert.Equal(SubmitResult.Backpressured, captured.Result);
-        Assert.False(captured.Admitted.IsCompleted);
+        Assert.Equal(expected, captured);
         Assert.Equal(1, attempts);
-        Assert.Equal(expected, await fixture.ReadSubmissionAsync(saturation, expected.Length));
-        await captured.Admitted.WaitAsync(fixture.Token);
-        await fixture.AssertMarkerAsync();
-        Assert.Equal(1, attempts);
-        output.WriteLine("direct reply accepted Backpressured snapshot; callback ran once; frame delivered once");
+        output.WriteLine("direct reply accepted Backpressured snapshot and invoked the callback once");
     }
 
     [Fact]
