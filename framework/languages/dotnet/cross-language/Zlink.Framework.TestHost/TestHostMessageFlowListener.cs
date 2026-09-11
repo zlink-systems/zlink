@@ -27,9 +27,6 @@ internal sealed class TestHostMessageFlowListener : IDisposable
 
     private void Capture(Activity activity)
     {
-        if (!StringComparer.Ordinal.Equals(activity.OperationName, "zlink.message_flow"))
-            return;
-
         var line =
             "zlink flow:"
             + $" label=dotnet-test-host"
@@ -38,7 +35,11 @@ internal sealed class TestHostMessageFlowListener : IDisposable
             + $" kind={Tag(activity, "message_kind")}"
             + $" packet={Tag(activity, "packet_name")}"
             + $" flow={Tag(activity, "flow_id")}"
-            + $" origin={Tag(activity, "flow_origin")}";
+            + $" origin={Tag(activity, "flow_origin")}"
+            + $" event={activity.OperationName}"
+            + $" started={activity.StartTimeUtc:O}"
+            + $" duration_ticks={activity.Duration.Ticks}"
+            + $" tags={System.Text.Json.JsonSerializer.Serialize(activity.TagObjects.ToDictionary(tag => tag.Key, tag => tag.Value))}";
         lock (_fileGate) File.AppendAllText(_filePath, line + Environment.NewLine);
     }
 
