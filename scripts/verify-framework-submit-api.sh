@@ -41,7 +41,9 @@ if (mode === '--contract') {
   const scenario = read('framework/doc/framework/common/e2e/config-13-submit-admission.ko.md');
   for (const [source, owner, fragments] of [
     [asyncPolicy, 'async policy', [
-      '동기 `TrySubmit` 계열을 제공하지 않는다',
+      // G1(e98f23b570)에서 `TrySubmit`이라는 이름이 'nonblocking try 계열'로 바뀌었다.
+      // 이름이 아니라 계약을 검사한다 — 선언·소스의 TrySubmit 스캔은 아래에 그대로 있다.
+      '**nonblocking try 계열은\n제공하지 않는다**',
       '반환 데이터 없이 완료',
       '`DeadlineExceeded`',
       '`ShuttingDown`']],

@@ -334,8 +334,8 @@ public crate items and re-exports.
 - The async builder terminator is `submit()` because `async` is a Rust keyword.
 
   ```rust
-  dealer.send().message(message).submit().await?;
-  let reply = dealer.request().message(request).submit().await?;
+  dealer.send().message(message).submit()?.admitted.await?;
+  let reply = dealer.request().message(request).submit()?.reply.await?;
   ```
 
   HWM-managed **send** (PAIR `send()`, STREAM `send(target)`, `Received::send()`, and

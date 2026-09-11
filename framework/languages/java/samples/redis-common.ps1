@@ -289,34 +289,42 @@ function Invoke-ZlinkDockerCommand {
         throw "Failed to start Docker: docker $($Arguments -join ' ')"
     }
     try {
+        # Drain both pipes before waiting. A synchronous ReadToEnd after
+        # WaitForExit deadlocks once the child fills a pipe buffer.
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            $descendantIds = @(Get-ZlinkSampleDescendantProcessIds -ParentProcessId $process.Id)
-            $killTreeMethod = $process.GetType().GetMethod(
-                "Kill",
-                [Type[]]@([bool]))
-            if ($null -ne $killTreeMethod) {
+            if (-not $IsWindows) {
                 $process.Kill($true)
             } else {
-                $taskkillOutput = & taskkill.exe /PID $process.Id /T /F 2>&1
-                $taskkillExitCode = $LASTEXITCODE
-                if ($taskkillExitCode -ne 0 -and -not $process.HasExited) {
-                    throw "taskkill failed (exit=$taskkillExitCode) for Docker PID $($process.Id): " +
-                        ($taskkillOutput -join [Environment]::NewLine)
+                $descendantIds = @(Get-ZlinkSampleDescendantProcessIds -ParentProcessId $process.Id)
+                $killTreeMethod = $process.GetType().GetMethod(
+                    "Kill",
+                    [Type[]]@([bool]))
+                if ($null -ne $killTreeMethod) {
+                    $process.Kill($true)
+                } else {
+                    $taskkillOutput = & taskkill.exe /PID $process.Id /T /F 2>&1
+                    $taskkillExitCode = $LASTEXITCODE
+                    if ($taskkillExitCode -ne 0 -and -not $process.HasExited) {
+                        throw "taskkill failed (exit=$taskkillExitCode) for Docker PID $($process.Id): " +
+                            ($taskkillOutput -join [Environment]::NewLine)
+                    }
                 }
-            }
-            if (-not $process.WaitForExit(5000)) {
-                throw "Docker process did not exit after process-tree termination: PID $($process.Id)"
-            }
-            $leakedIds = @($descendantIds | Where-Object {
-                $null -ne (Get-Process -Id $_ -ErrorAction SilentlyContinue)
-            })
-            if ($leakedIds.Count -ne 0) {
-                throw "Docker process-tree termination leaked child PID(s): $($leakedIds -join ', ')"
+                if (-not $process.WaitForExit(5000)) {
+                    throw "Docker process did not exit after process-tree termination: PID $($process.Id)"
+                }
+                $leakedIds = @($descendantIds | Where-Object {
+                    $null -ne (Get-Process -Id $_ -ErrorAction SilentlyContinue)
+                })
+                if ($leakedIds.Count -ne 0) {
+                    throw "Docker process-tree termination leaked child PID(s): $($leakedIds -join ', ')"
+                }
             }
             throw "Docker command timed out after ${TimeoutSeconds}s: docker $($Arguments -join ' ')"
         }
-        $stdout = $process.StandardOutput.ReadToEnd().Trim()
-        $stderr = $process.StandardError.ReadToEnd().Trim()
+        $stdout = $stdoutTask.GetAwaiter().GetResult().Trim()
+        $stderr = $stderrTask.GetAwaiter().GetResult().Trim()
         if ($process.ExitCode -ne 0 -and -not $AllowFailure) {
             throw "Docker command failed (exit=$($process.ExitCode)): docker $($Arguments -join ' ')`n$stderr"
         }

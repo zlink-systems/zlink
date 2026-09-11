@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/operations/call_id.hpp"
+#include "runtime/diagnostics/mesh_request_metrics.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -47,14 +48,18 @@ class operation_registry_t
     bool register_operation (call_id_t id,
                              clock_t::time_point deadline,
                              callback_t callback,
-                             std::vector<std::uint8_t> target_routing_id = {});
+                             std::vector<std::uint8_t> target_routing_id = {},
+                             mesh_request_metric_t request_metric = {});
     bool contains (const call_id_t &id) const;
     std::size_t fail_target (const std::vector<std::uint8_t> &target_routing_id,
                             operation_terminal_t terminal);
     bool complete (const call_id_t &id, std::vector<std::uint8_t> payload);
+    // Packed infrastructure replies retain their delivery terminal and payload
+    // for the caller to decode; request_terminal observes their semantic result.
     bool complete (const call_id_t &id,
                    std::vector<std::uint8_t> payload,
-                   before_dispatch_t before_dispatch);
+                   before_dispatch_t before_dispatch,
+                   operation_terminal_t request_terminal = operation_terminal_t::completed);
     bool cancel (const call_id_t &id);
     bool fail (const call_id_t &id,
                operation_terminal_t terminal,
@@ -62,7 +67,8 @@ class operation_registry_t
     bool fail (const call_id_t &id,
                operation_terminal_t terminal,
                std::vector<std::uint8_t> payload,
-               before_dispatch_t before_dispatch);
+               before_dispatch_t before_dispatch,
+               std::optional<operation_terminal_t> request_terminal = {});
     bool unregister (const call_id_t &id);
     std::size_t expire (clock_t::time_point now);
     std::optional<clock_t::time_point> next_deadline () const;

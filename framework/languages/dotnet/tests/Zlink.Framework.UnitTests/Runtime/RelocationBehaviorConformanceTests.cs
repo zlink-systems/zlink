@@ -1122,6 +1122,7 @@ public sealed class RelocationBehaviorConformanceTests
                 .Timeout(TimeSpan.FromSeconds(15))
                 .Async<BehaviorAck>();
             Assert.Equal("direct", direct.Marker);
+            await trace.WaitAsync("sourceMembershipLeaveStarted");
         }
         finally
         {

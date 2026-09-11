@@ -321,8 +321,10 @@ Terminal call은 별도 check와 send로 나누지 않고 다음 순서로 resol
 8. Source는 다음 값을 하나의 activation envelope에 넣어 target으로 보낸다 — global Spot ID,
    선택한 Mesh·stable type과 target descriptor fence, source node RID·lifecycle
    generation·optional source Spot ID, operation identity·reply correlation·deadline, command
-   39의 optional metadata 존재 여부와 metadata frame, 최초 application message. 이 시점에는
-   Source가 자신이나 target을 owner로 등록하지 않는다.
+   39의 optional metadata 존재 여부와 metadata frame, 최초 application message.
+   - **Source는 자신이나 target을 owner로 등록하거나 생성 reservation과 수용 공간을 미리 확보하지 않는다.**
+     Target이 현재 owner와 local Spot을 확인한 뒤 생성 권한과 capacity를 함께 확보해야 하기
+     때문이다.
    - Command 39의 route kind `1`은 이미 Ready인 authority의 generation fence를 사용한다.
    - Missing cold activation은 route kind `2`를 사용하며 target Mesh·node RID·lifecycle, Spot
      ID, stable type, descriptor version과 deadline만 전달한다. 아직 존재하지 않는 authority

@@ -48,7 +48,6 @@ struct command_t
         term_ack,
         term_endpoint,
         release_endpoint,
-        reconnect_inproc,
         reap,
         reaped,
         inproc_connected,
@@ -214,12 +213,6 @@ struct command_t
         {
             std::string *endpoint;
         } term_endpoint;
-
-        //  Sent by an inproc connector pipe after an unexpected peer detach.
-        struct
-        {
-            std::string *endpoint;
-        } reconnect_inproc;
 
         //  Transfers the ownership of the closed socket
         //  to the reaper thread.

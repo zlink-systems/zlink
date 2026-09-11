@@ -79,6 +79,7 @@ final class ZLinkFrameworkSpotSubsystem {
         if (channels != null) {
             channels.registerInstanceSpotCallRuntime(
                 spots.instanceSpotCalls());
+            channels.registerRequestSourceMeshOwner(spots::primaryNode);
         }
         if (authorityStore != null
             && locationStore != null

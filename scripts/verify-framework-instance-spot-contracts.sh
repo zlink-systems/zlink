@@ -46,7 +46,7 @@ const formalFixtures = [
       'Instance intent를 명시한 경우에만 Missing authority의 cold activation을 시작한다.',
       '선택한 Mesh의 serving descriptor에 등록된 distinct Instance type이 하나일 때만 자동 선택한다.',
       'Source는 owner claim이나 reservation을 먼저 만들지 않는다.',
-      '확보한 runtime만 factory와 initialize를 실행하고, activation envelope의 message를 durable activation inbox의 첫 record로 확정한다.',
+      '확보한 runtime만 factory와 initialize를 실행하고, activation envelope의 message를 [durable activation inbox](02-glossary.ko.md#durable-activation-inbox)의 첫 record로 확정한다.',
       'Public object handle, directory, resolver와 unbounded list는 제공하지 않는다.',
       '| SpotRef로 직접 지정한 close |',
     ],
@@ -69,6 +69,13 @@ const formalFixtures = [
       '`SpotHandle`, 별도 resolver handle과 `InstanceSpotAddress`는 제공하지 않는다.',
       '## 3. User Spot 명시적 생성 — Create와 GetOrCreate',
       '## 4. Cold activation — message로 Instance Spot을 처음 만드는 방법',
+      'stable type을 생략하면 선택한 Mesh의 serving descriptor에 등록된 distinct Instance type을 계산한다. 하나면 자동 선택하고, 0개이면 `NotFound`, 둘 이상이면 required type을 생략한 `InvalidOperation`이다.',
+      'Source는 자신이나 target을 owner로 등록하거나 생성 reservation과 수용 공간을 미리 확보하지 않는다.',
+      'Target은 Location Store의 현재 owner 기록과 자신의 Spot 목록을 함께 확인한다.',
+      'Store에 owner가 없고 target에도 현재 사용할 Spot이 없으면 target은 complete',
+      '다음 자신에게 이 Spot을 만들어도 되는지 `Reserve`로 요청한다.',
+      '조건을 만족하면 object 상태를 `Missing`에서 `Creating`으로 바꾼다(`Missing → Creating` transition).',
+      '같은 transaction에서 recovery root와 생성 예약의 연결을 확인하는 [recovery receipt](../00-foundation/02-glossary.ko.md#recovery-receipt), provider가 발급한 reservation fence와 생성 중 capacity를 기록한다.',
       'Spot manager가 Instance Spot create·get-or-create를 제공하지 않는다.',
       'Instance intent가 없는 Missing Spot message가 creation intent를 만들지 않는다.',
       '선택한 Mesh의 distinct Instance type이 하나면 type을 자동 선택하고 여러 개면 type 명시를 요구한다.',
@@ -81,12 +88,20 @@ const formalFixtures = [
     path: 'framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md',
     required: [
       'Spot의 terminal lifecycle callback은 `OnClosing(ClosingContext)`이다.',
-      '| 0 | `ExplicitClose` |',
-      '| 1 | `HostShutdown` |',
-      '| 2 | `RelocationOut` |',
+      '`ClosingContext`는 닫힌 reason 네 값(`ExplicitClose`·`HostShutdown`·`RelocationOut`·`IdleEvicted`)과 operation의 absolute deadline을 제공한다.',
+      '[Spot 모델 §3.4](01-spot-model.ko.md#34-spot-instance가-종료될-때-호출하는-callback)의 표가 소유한다.',
       'Actor별 closing callback을 제공하지 않는다.',
       'Instance Spot은 source가 first-message activation envelope를 후보 target에 먼저 제출하고 target activation registry가 `Reserve`를 호출한다.',
       'Spot closing만을 위한 별도 Framework cancellation 타입을 만들지는 않는다.',
+    ],
+  },
+  {
+    path: 'framework/doc/framework/common/spec/server/03-spot-actor/01-spot-model.ko.md',
+    required: [
+      '| 0 | `ExplicitClose` |',
+      '| 1 | `HostShutdown` |',
+      '| 2 | `RelocationOut` |',
+      '| 3 | `IdleEvicted` |',
     ],
   },
   {
@@ -103,6 +118,12 @@ const formalFixtures = [
     ],
   },
 ];
+
+// Each language delegates cold activation to this section. Check its rules in
+// formalFixtures as well, so a surviving link cannot hide a missing contract.
+const coldActivationContract =
+  'Cold activation의 type·Mesh 선택, 생성 순서와 최초 message 보존은 '
+  + '[Spot address messaging §4](../../../03-spot-actor/06-spot-address-messaging.ko.md#4-cold-activation--message로-instance-spot을-처음-만드는-방법)가 소유한다.';
 
 const projections = {
   dotnet: [
@@ -127,8 +148,7 @@ const projections = {
     'ExplicitClose = 0, HostShutdown = 1, RelocationOut = 2, IdleEvicted = 3',
     'public readonly record struct ZLinkSpotClosingContext( ZLinkSpotCloseReason Reason, DateTimeOffset Deadline);',
     'ValueTask OnClosingAsync( ZLinkSpotClosingContext context, CancellationToken cleanupCancellationToken)',
-    'Source는 owner claim이나 수용 공간을 미리 확보하지 않는다.',
-    'Target에 같은 Spot의 local instance가 없을 때만 자신을 owner로 하는 `Creating` record와 수용 공간을 함께 확보한다.',
+    coldActivationContract,
   ],
   cpp: [
     'using spot_id_t = std::string;',
@@ -140,7 +160,6 @@ const projections = {
     'spot_request_call_t request_to_spot( spot_id_t target, TRequest request);',
     '`instance_spot()`은 [stable type]',
     '`instance_spot(stable_type)`은 stable type을 명시한다.',
-    'distinct Instance Spot type이 0개이면 `not_found`, 둘 이상이면 `invalid_operation`이다.',
     'class spot_manager_t {',
     'virtual spot_create_call_t create(std::string stable_type) = 0;',
     'virtual spot_create_call_t get_or_create( spot_id_t spot_id, std::string stable_type) = 0;',
@@ -156,8 +175,7 @@ const projections = {
     'struct spot_closing_context_t final',
     'std::chrono::system_clock::time_point deadline;',
     'const spot_closing_context_t &context, std::stop_token cleanup_cancellation',
-    'Source는 creation reservation을 만들지 않는다.',
-    '같은 Spot의 local instance가 없을 때만 Target이 자신을 owner로 등록할 reservation을 요청한다.',
+    coldActivationContract,
   ],
   java: [
     'public record SpotRef(',
@@ -175,15 +193,13 @@ const projections = {
     'close(systems.zlink.framework.spots.SpotRef);',
     'ZLinkSpotSendCall sendToSpot(java.lang.String, java.lang.Object);',
     'ZLinkSpotRequestCall requestToSpot(java.lang.String, java.lang.Object);',
-    'serving 가능한 distinct Instance type이 정확히 하나일 때만 그 type을 사용한다.',
     '`ZLinkInstanceSpotContext.close()`',
     'public enum ZLinkSpotCloseReason',
     'EXPLICIT_CLOSE(0), HOST_SHUTDOWN(1), RELOCATION_OUT(2), IDLE_EVICTED(3);',
     'public record ZLinkSpotClosingContext( ZLinkSpotCloseReason reason, Instant deadline)',
     'onClosing(systems.zlink.framework.spots.ZLinkSpotClosingContext);',
     'Java Spot closing callback에는 별도 Framework cancellation 인자를 추가하지 않는다.',
-    'Instance Spot은 source에서 reservation을 만들지 않고 다음 순서로 처리한다.',
-    'Instance가 없을 때만 target이 자신을 owner로 하는 `CREATING` authority와 reserved capacity를 예약한다.',
+    coldActivationContract,
   ],
   kotlin: [
     'SpotId는 UTF-8 encoded 크기 1..255 bytes의 `String`이며',
@@ -191,9 +207,9 @@ const projections = {
     '`ZLinkSpotManager.create(spotType)`은 User Spot ID를 생성하고,',
     '`getOrCreate(spotId, spotType)`은 caller가 정한 User',
     'Manager는 Instance Spot create/get-or-create를 제공하지 않는다.',
-    'Spot send/request는 global SpotId만 address로 받고 Kotlin 전용 Spot call wrapper를 반환한다.',
-    '`instanceSpot()`이나 `instanceSpot(stableType)`을 호출한 call만 Missing Instance Spot의 cold activation intent를 만든다.',
-    'serving Instance type이 distinct value 하나일 때만 그 type을 자동 선택한다.',
+    'Spot send/request는 global SpotId를 받고 `ZLinkKotlinSpotSendCall` 또는 `ZLinkKotlinSpotRequestCall<TReply>`를 반환한다.',
+    'Missing [Instance Spot](../../../00-foundation/02-glossary.ko.md#entry-spot-user-spot과-instance-spot)의 cold activation은 Spot 전용 send/request call에서 `instanceSpot()` 또는 `instanceSpot(stableType)`을 명시한 경우에만 시작한다.',
+    'marker만 사용한 cold activation은 selected Mesh의 distinct serving Instance type이 하나일 때만 type을 자동 선택한다.',
     '): ZLinkKotlinSpotSendCall',
     '): ZLinkKotlinSpotRequestCall<TReply>',
     'Kotlin은 address DTO, process-local handle, resolver와 unbounded directory를 제공하지 않는다.',
@@ -203,8 +219,7 @@ const projections = {
     'context: ZLinkSpotClosingContext,',
     'onClosing(systems.zlink.framework.spots.ZLinkSpotClosingContext);',
     '별도 Framework cancellation 타입을 사용하지 않는다.',
-    'Source는 placement reservation을 만들지 않는다.',
-    'Instance가 local에 없을 때만 target이 자신을 owner로 예약한다.',
+    coldActivationContract,
   ],
   node: [
     'export type SpotId = string;',
@@ -221,7 +236,6 @@ const projections = {
     'create(spotType: string): ZLinkSpotCreateCall;',
     'getOrCreate( spotId: SpotId, spotType: string): ZLinkSpotGetOrCreateCall;',
     'Instance Spot에는 manager create·get-or-create를 제공하지 않는다.',
-    '`instanceSpot()`은 선택한 Mesh의 serving descriptor에 distinct Instance type이 하나일 때',
     'close(spot: SpotRef, signal?: AbortSignal): Promise<boolean>;',
     'export interface ZLinkInstanceSpotContext',
     'close(signal?: AbortSignal): Promise<boolean>;',
@@ -234,8 +248,7 @@ const projections = {
     'export interface ZLinkSpotClosingContext { readonly reason: ZLinkSpotCloseReason; readonly deadline: Date;',
     'context: ZLinkSpotClosingContext, cleanupSignal: AbortSignal): Promise<void>;',
     'Actor별 closing callback은 제공하지 않는다.',
-    'Source는 Store reservation을 만들지 않는다.',
-    'Instance가 없을 때만 target이 자신을 owner로 하는 Creating row와 reserved capacity를 예약한다.',
+    coldActivationContract,
   ],
 };
 

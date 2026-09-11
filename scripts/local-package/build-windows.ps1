@@ -104,6 +104,64 @@ function Get-BindingVersion([string]$Name) {
   return $match.Matches[0].Groups[1].Value
 }
 
+function Remove-ScopedDirectory([string]$Path, [string]$ScopeRoot) {
+  $fullPath = [IO.Path]::GetFullPath($Path)
+  $fullScope = [IO.Path]::GetFullPath($ScopeRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+  $scopePrefix = $fullScope + [IO.Path]::DirectorySeparatorChar
+  if (-not $fullPath.StartsWith($scopePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to remove a directory outside the staging root: $fullPath"
+  }
+  Remove-Item -LiteralPath $fullPath -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+function Copy-NodePackageSource([string]$Source, [string]$Destination) {
+  New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+  $excluded = @("node_modules", "build", "dist", "prebuilds", "provenance") |
+    ForEach-Object { Join-Path $Source $_ }
+  $arguments = @(
+    $Source, $Destination,
+    "/E", "/XJ", "/R:0", "/W:0", "/COPY:DAT", "/DCOPY:DAT",
+    "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/XD"
+  ) + $excluded
+  & robocopy.exe @arguments | Out-Null
+  $exitCode = $LASTEXITCODE
+  if ($exitCode -ge 8) {
+    throw "robocopy.exe failed with exit code $exitCode while staging the Node package"
+  }
+}
+
+function Assert-NodePackage([string]$Package, [string]$WorkRoot, [string]$Version,
+                            [string]$CoreRuntime, [string]$CoreManifest) {
+  $verifyRoot = Join-Path $WorkRoot "verify"
+  New-Item -ItemType Directory -Force -Path $verifyRoot | Out-Null
+  Invoke-Checked tar.exe @("-xzf", $Package, "-C", $verifyRoot)
+
+  $packageRoot = Join-Path $verifyRoot "package"
+  $prebuild = Join-Path $packageRoot "prebuilds\win32-x64"
+  $addon = Join-Path $prebuild "zlink.node"
+  $runtime = Join-Path $prebuild "zlink.dll"
+  $manifest = Join-Path $packageRoot "provenance\core-package-provenance.json"
+  $packageJson = Join-Path $packageRoot "package.json"
+  foreach ($required in @($addon, $runtime, $manifest, $packageJson)) {
+    if (-not (Test-Path -LiteralPath $required -PathType Leaf) -or
+        (Get-Item -LiteralPath $required).Length -eq 0) {
+      throw "Node package is missing a non-empty required entry: $required"
+    }
+  }
+  $packedVersion = (Get-Content -LiteralPath $packageJson -Raw | ConvertFrom-Json).version
+  if ($packedVersion -ne $Version) {
+    throw "Node package version is $packedVersion; expected $Version"
+  }
+  if ((Get-FileHash -LiteralPath $runtime -Algorithm SHA256).Hash -ne
+      (Get-FileHash -LiteralPath $CoreRuntime -Algorithm SHA256).Hash) {
+    throw "Node package Core runtime does not match the approved Core prefix"
+  }
+  if ((Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash -ne
+      (Get-FileHash -LiteralPath $CoreManifest -Algorithm SHA256).Hash) {
+    throw "Node package provenance does not match the approved Core prefix"
+  }
+}
+
 foreach ($item in $Language) {
   $bindingVersion = Get-BindingVersion $item
   switch ($item) {
@@ -179,26 +237,41 @@ foreach ($item in $Language) {
       $npx = (Get-Command npx.cmd -ErrorAction Stop).Source
       $out = Join-Path $artifactRoot "npm"
       New-Item -ItemType Directory -Force -Path $out | Out-Null
+      $stageRoot = Join-Path $artifactRoot "staging"
+      New-Item -ItemType Directory -Force -Path $stageRoot | Out-Null
+      $work = Join-Path $stageRoot "node-$bindingVersion-$([Guid]::NewGuid().ToString('N'))"
+      $nodeStage = Join-Path $work "source"
+      $packStage = Join-Path $work "package"
+      New-Item -ItemType Directory -Force -Path $packStage | Out-Null
       $previousPrefix = $env:ZLINK_CORE_INSTALL_PREFIX
       $previousSource = $env:ZLINK_CORE_SOURCE
       try {
         $env:ZLINK_CORE_INSTALL_PREFIX = $CorePrefix
         $env:ZLINK_CORE_SOURCE = "release"
-        Remove-Item -LiteralPath (Join-Path $nodeRoot "prebuilds") -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath (Join-Path $nodeRoot "provenance") -Recurse -Force -ErrorAction SilentlyContinue
-        Invoke-Checked $npm @("ci", "--ignore-scripts") $nodeRoot
-        Invoke-Checked $npm @("run", "build") $nodeRoot
-        Invoke-Checked $npx @("node-gyp", "configure", "build") $nodeRoot
-        $prebuild = Join-Path $nodeRoot "prebuilds\win32-x64"
+        Copy-NodePackageSource -Source $nodeRoot -Destination $nodeStage
+        Invoke-Checked $npm @("ci", "--ignore-scripts") $nodeStage
+        Invoke-Checked $npm @("run", "build") $nodeStage
+        Invoke-Checked $npx @("node-gyp", "configure", "build") $nodeStage
+        $prebuild = Join-Path $nodeStage "prebuilds\win32-x64"
         New-Item -ItemType Directory -Force -Path $prebuild | Out-Null
-        Copy-Item -LiteralPath (Join-Path $nodeRoot "build\Release\zlink.node") -Destination (Join-Path $prebuild "zlink.node") -Force
+        Copy-Item -LiteralPath (Join-Path $nodeStage "build\Release\zlink.node") -Destination (Join-Path $prebuild "zlink.node") -Force
         Copy-Item -Path (Join-Path $CorePrefix "bin\*.dll") -Destination $prebuild -Force
-        New-Item -ItemType Directory -Force -Path (Join-Path $nodeRoot "provenance") | Out-Null
-        Copy-Item -LiteralPath $manifest -Destination (Join-Path $nodeRoot "provenance\core-package-provenance.json") -Force
-        Invoke-Checked $npm @("pack", "--pack-destination", $out) $nodeRoot
+        New-Item -ItemType Directory -Force -Path (Join-Path $nodeStage "provenance") | Out-Null
+        Copy-Item -LiteralPath $manifest -Destination (Join-Path $nodeStage "provenance\core-package-provenance.json") -Force
+        Invoke-Checked $npm @("pack", "--ignore-scripts", "--pack-destination", $packStage) $nodeStage
+
+        $packageName = "zlink-systems-zlink-$bindingVersion.tgz"
+        $stagedPackage = Join-Path $packStage $packageName
+        if (-not (Test-Path -LiteralPath $stagedPackage -PathType Leaf)) {
+          throw "Node package is missing from the staging output: $stagedPackage"
+        }
+        Assert-NodePackage -Package $stagedPackage -WorkRoot $work -Version $bindingVersion `
+          -CoreRuntime (Join-Path $CorePrefix "bin\zlink.dll") -CoreManifest $manifest
+        Copy-Item -LiteralPath $stagedPackage -Destination (Join-Path $out $packageName) -Force
       } finally {
         $env:ZLINK_CORE_INSTALL_PREFIX = $previousPrefix
         $env:ZLINK_CORE_SOURCE = $previousSource
+        Remove-ScopedDirectory -Path $work -ScopeRoot $stageRoot
       }
       $package = Join-Path $out "zlink-systems-zlink-$bindingVersion.tgz"
       if (-not (Test-Path -LiteralPath $package)) { throw "Node package is missing: $package" }

@@ -25,6 +25,7 @@ const {
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 
 const SERVER_RID = zlink.RoutingId.from(Buffer.from('SERVER', 'ascii'));
+const COMPLETION_PROGRESS_BATCH = 64;
 
 function closeParts(parts) {
   for (const part of parts ?? []) part?.close?.();
@@ -85,6 +86,8 @@ async function runSocketReqRep(msgSize, options, routedClient) {
                               : zlink.createDealerSocket(ctx);
   const clientMonitor = client.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
   let worker = null;
+  let completionPoller = null;
+  let completionEvents = null;
 
   try {
     applySocketPolicy(client, options);
@@ -115,6 +118,10 @@ async function runSocketReqRep(msgSize, options, routedClient) {
     if (!routingProbe(client, routedClient, requestTimeoutMs)) {
       throw new Error('request-reply routing probe failed');
     }
+    completionPoller = zlink.createPoller();
+    completionEvents = zlink.createPollEvents(1);
+    completionPoller.add(client, [zlink.PollEventFlag.PollCompletion], 0);
+
     const runId = createRunId(options.runId ?? 1);
     const activeStartNs = currentEpochNs();
     const activeStopNs = activeStartNs
@@ -132,6 +139,7 @@ async function runSocketReqRep(msgSize, options, routedClient) {
     const pending = new Set();
     let requestFailure = null;
     let seq = 1n;
+    let okSinceProgress = 0;
 
     const collectReply = async (reply) => {
       let parts = null;
@@ -162,12 +170,36 @@ async function runSocketReqRep(msgSize, options, routedClient) {
       return submission;
     };
 
+    const waitForAdmission = async (admitted) => {
+      let settled = false;
+      let failure = null;
+      admitted.then(
+        () => { settled = true; },
+        (error) => { failure = error; settled = true; }
+      );
+      while (!settled) {
+        completionPoller.wait(completionEvents, 50);
+        await sleepImmediate();
+      }
+      if (failure) throw failure;
+    };
+
     // Core's result is the only admission window. OK immediately advances to
     // the next request; BACKPRESSURED waits for admission, never for reply.
     while (currentEpochNs() < activeStopNs && !requestFailure) {
       const submission = submitOne();
       if (submission.result === zlink.SubmitResult.Backpressured) {
-        await submission.admitted;
+        await waitForAdmission(submission.admitted);
+        okSinceProgress = 0;
+      } else {
+        okSinceProgress += 1;
+        if (okSinceProgress === COMPLETION_PROGRESS_BATCH) {
+          okSinceProgress = 0;
+          // C drains this queue after the same bounded OK burst. The public
+          // poller performs that drain before Promise callbacks get a turn.
+          completionPoller.wait(completionEvents, 0);
+          await sleepImmediate();
+        }
       }
     }
     if (requestFailure) throw requestFailure;
@@ -177,22 +209,26 @@ async function runSocketReqRep(msgSize, options, routedClient) {
     const drainStopNs = currentEpochNs()
       + BigInt(Math.max(1_000, requestTimeoutMs * 4)) * 1_000_000n;
     while (pending.size > 0 && currentEpochNs() < drainStopNs && !requestFailure) {
+      completionPoller.wait(completionEvents, 0);
       await sleepImmediate();
     }
+    if (requestFailure) throw requestFailure;
     if (pending.size > 0) {
       throw new Error('request completion drain timed out');
     }
-    if (requestFailure) throw requestFailure;
 
     const stopOperation = routedClient ? client.send(SERVER_RID) : client.send();
     const stopSubmission = stopOperation.message(STOP_TOKEN_BYTES).submit();
     if (stopSubmission.result === zlink.SubmitResult.Backpressured) {
-      await stopSubmission.admitted;
+      await waitForAdmission(stopSubmission.admitted);
     }
     waitForWorkerStatus(worker, 4, 10_000);
     return collector.finish();
   } finally {
     await closeSenderWorker(worker);
+    try { completionPoller?.remove?.(client); } catch (_) { /* preserve the benchmark failure */ }
+    try { completionEvents?.close?.(); } catch (_) { /* preserve the benchmark failure */ }
+    try { completionPoller?.close?.(); } catch (_) { /* preserve the benchmark failure */ }
     for (const resource of [clientMonitor, client, ctx]) {
       try { resource?.close?.(); } catch (_) { /* preserve the benchmark failure */ }
     }

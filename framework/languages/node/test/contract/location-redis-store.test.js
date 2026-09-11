@@ -98,7 +98,7 @@ test('redis opaque Location Store applies conditional batches atomically', async
     assert.equal(read.kind, 'found');
     assert.equal(Buffer.from(read.value.bytes).toString(), 'after');
     assert.notEqual(read.value.version.value, alphaVersion.value);
-    assert.equal(read.value.storeNow.getTime() <= Date.now(), true);
+    assert.equal(read.value.storeNow.getTime() >= updated.storeNow.getTime(), true);
   } finally {
     await store.dispose();
     await cleanup(fixture.client, prefix);

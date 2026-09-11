@@ -106,7 +106,7 @@ boundary가 message를 수락했다는 뜻이다. Remote handler 실행, subscri
 수락 또는 application callback 완료는 기다리지 않는다.
 
 <a id="41-nodejs는-동기-blocking-종결자를-제공하지-않는다"></a>
-### 4.1 Node.js는 동기 blocking 종결자를 제공하지 않는다 (사용자 결정 2026-09-11)
+### 4.1 Node.js는 동기 blocking 종결자를 제공하지 않는다
 
 Node.js runtime은 **단일 JS 스레드**다. 그 스레드를 막으면 framework가 완료를 배달할 방법이
 없다. request의 대상 handler가 같은 process 안에 있으면 **호출자가 기다리는 응답을 호출자가

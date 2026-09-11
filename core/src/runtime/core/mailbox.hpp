@@ -85,7 +85,7 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     // Signaler support for ZLINK_INTERNAL_OPT_FD
     int add_signaler (signaler_t *signaler_);
     void remove_signaler (signaler_t *signaler_);
-    //  The first POSIX socket poller keeps the descriptor-pollset fast path.
+    //  The first descriptor-based socket poller keeps the mailbox fast path.
     //  Concurrent pollers use their own registered signaler instead, so no two
     //  waiters compete to consume the same primary notification.
     bool acquire_poller_notification ();
@@ -153,7 +153,7 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     std::vector<signaler_t *> _signalers;
     mutable std::atomic<bool> _primary_signaler_required;
     //  The high bit records whether the current registration epoch still has
-    //  its primary poller; the remaining bits hold all POSIX poller refs.
+    //  its primary poller; the remaining bits hold all descriptor-poller refs.
     //  Keeping both in one CAS state prevents primary release/re-acquire races.
     std::atomic<uint32_t> _poller_notifications;
 

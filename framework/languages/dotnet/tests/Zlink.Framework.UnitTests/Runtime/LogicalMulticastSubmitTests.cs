@@ -64,7 +64,37 @@ public sealed class LogicalMulticastSubmitTests
             TimeSpan.FromSeconds(1)).AsTask();
 
         Assert.False(pending.IsCompleted);
+        Assert.Equal(1, pool.DirectAdmissionWaiterCount);
+
+        var poolType = typeof(ZLinkWorkerPool);
+        var sync = poolType.GetField("_sync", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(pool)!;
+        var capacitySignalField = poolType.GetField(
+            "_directCapacityChanged", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var idleThreadsField = poolType.GetField(
+            "_idleThreads", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        Task<int> idleThreadsAtNotification;
+        lock (sync)
+        {
+            var waiterSignal = (TaskCompletionSource)capacitySignalField.GetValue(pool)!;
+            var notification = new TaskCompletionSource();
+            // Observe publication synchronously at the notification boundary, while
+            // the actual admission waiter retains its asynchronous continuations.
+            idleThreadsAtNotification = notification.Task.ContinueWith(
+                _ =>
+                {
+                    var idleThreads = (int)idleThreadsField.GetValue(pool)!;
+                    waiterSignal.TrySetResult();
+                    return idleThreads;
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            capacitySignalField.SetValue(pool, notification);
+        }
+
         release.Set();
+        Assert.Equal(1, await idleThreadsAtNotification.WaitAsync(TimeSpan.FromSeconds(5)));
         var result = await pending.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(SubmitResult.Ok, result);
         Assert.True(SpinWait.SpinUntil(
