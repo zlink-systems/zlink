@@ -2080,8 +2080,9 @@ void app_t::_apply_zlink_framework ()
               const auto routing_id = application_mesh->routing_id ();
               const auto target_node =
                 routing_id ? node_rid_t::from_string (routing_id->to_string ()) : actor.node_rid ();
-              return application_mesh->join_application_actor_to_entry_spot (actor, target_node,
-                                                                             request, timeout);
+              return application_mesh
+                ->join_application_actor_to_entry_spot (actor, target_node, request, timeout)
+                .result ();
           });
         actor_gateway_runtime.on_join_spot (
           [application_mesh, actor_gateway_runtime,

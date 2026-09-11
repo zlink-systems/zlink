@@ -2227,27 +2227,23 @@ result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
     }
 }
 
-result_t<actor_join_reply_t>
+task_t<actor_join_reply_t>
 mesh_node_runtime_t::join_application_actor_to_entry_spot (const actor_ref_t &actor,
                                                            const node_rid_t &target_node,
                                                            const zlink::message_t &request,
                                                            std::chrono::milliseconds timeout)
 {
-    const auto found = _actors.find (std::string (actor.actor_id ().value ()));
-    if (found == _actors.end ()) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                      "local Actor handle was not found");
-    }
-    host::pending_operation_t operation;
-    const std::vector<zlink::message_t> parts{request};
-    const auto submitted = found->second.join_entry_spot (
-      zlink::routing_id_t::from (std::string (target_node.value ())), parts, operation, timeout);
-    if (submitted != zlink::submit_result_t::ok) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::internal_failure,
-                                                      "Actor entry Spot join was not submitted");
-    }
-    auto joined = wait_for_join_completion (operation, actor, timeout);
-    return joined;
+    auto completion = std::make_shared<detail::task_completion_source_t<actor_join_reply_t>> ();
+    auto pending = completion->task ();
+    const auto submitted = submit_application_actor_entry_spot_join (
+      actor, target_node, request, timeout,
+      [completion] (result_t<actor_join_reply_t> joined) mutable {
+          completion->complete (std::move (joined));
+      });
+    if (!submitted)
+        co_return detail::propagate_failure<actor_join_reply_t> (
+          submitted, "Actor entry Spot join was not submitted");
+    co_return co_await pending;
 }
 
 result_t<void>
