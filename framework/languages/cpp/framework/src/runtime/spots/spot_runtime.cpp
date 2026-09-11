@@ -1067,10 +1067,10 @@ void configure_spot_execution (
 namespace detail
 {
 
+thread_local constinit const spot_context_state_t *current_callback_context = nullptr;
+
 namespace
 {
-
-thread_local const spot_context_state_t *current_callback_context = nullptr;
 
 class callback_context_scope_t final
 {

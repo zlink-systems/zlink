@@ -2,6 +2,7 @@
 #pragma once
 
 #include <zlink/framework/contracts/errors/result.hpp>
+#include <zlink/framework/detail/runtime/dispatch/application_job_context.hpp>
 
 #include <atomic>
 #include <condition_variable>
@@ -171,8 +172,8 @@ template <typename T> task_t<T> unsupported_yield_task ();
  * (flow-correlation MFLOW-EXT-014). The runtime installs the hooks once; a
  * continuation or callback re-enters the context captured at registration
  * and the guard ends with the resume call, so a finished continuation never
- * leaks its context into unrelated work. Without hooks the machinery costs
- * one atomic pointer load. Both functions publish through a single atomic
+ * leaks its context into unrelated work. Without hooks only the atomic hook
+ * pointer and application job TLS pointer are accessed. Both functions publish through a single atomic
  * table pointer so a concurrent task can never observe a half-installed
  * pair; installation runs from a dynamic initializer while other
  * initializers may already schedule tasks. An atomic plain pointer is
@@ -185,16 +186,52 @@ struct ambient_context_hooks_t
 
 inline std::atomic<const ambient_context_hooks_t *> ambient_context_hooks{nullptr};
 
-inline std::shared_ptr<void> capture_ambient_context ()
+struct ambient_context_snapshot_t
+{
+    std::shared_ptr<void> state;
+    const void *application_job = nullptr;
+};
+
+// Extend the existing resume guard with the application job context. The
+// pointer is independent of optional tracing and needs no allocation.
+class ambient_context_scope_t
+{
+  public:
+    ambient_context_scope_t (std::shared_ptr<void> state, const void *application_job) :
+        _state (std::move (state)),
+        _previous_application_job (application_job_context_t::current ())
+    {
+        // A callback captured outside a job may run inline inside a handler.
+        // An absent captured context must not erase that physical invocation.
+        application_job_context_t::exchange (
+          application_job != nullptr ? application_job : _previous_application_job);
+    }
+
+    ~ambient_context_scope_t ()
+    {
+        application_job_context_t::exchange (_previous_application_job);
+    }
+
+    ambient_context_scope_t (const ambient_context_scope_t &) = delete;
+    ambient_context_scope_t &operator= (const ambient_context_scope_t &) = delete;
+
+  private:
+    std::shared_ptr<void> _state;
+    const void *_previous_application_job;
+};
+
+inline ambient_context_snapshot_t capture_ambient_context ()
 {
     const auto *hooks = ambient_context_hooks.load (std::memory_order_acquire);
-    return hooks != nullptr ? hooks->capture () : nullptr;
+    return {hooks != nullptr ? hooks->capture () : nullptr,
+            application_job_context_t::current ()};
 }
 
-inline std::shared_ptr<void> enter_ambient_context (const std::shared_ptr<void> &snapshot)
+inline ambient_context_scope_t enter_ambient_context (const ambient_context_snapshot_t &snapshot)
 {
     const auto *hooks = ambient_context_hooks.load (std::memory_order_acquire);
-    return hooks != nullptr && snapshot ? hooks->enter (snapshot) : nullptr;
+    return {hooks != nullptr && snapshot.state ? hooks->enter (snapshot.state) : nullptr,
+            snapshot.application_job};
 }
 
 // Native binding awaitables can ask the active Framework promise for this
@@ -207,7 +244,7 @@ inline task_scheduler_t capture_native_continuation_scheduler ()
       turn_plan ? std::move (turn_plan->scheduler) : task_scheduler_t{};
     task_scheduler_t runtime_scheduler =
       capture_runtime_native_continuation_scheduler ();
-    std::shared_ptr<void> ambient = capture_ambient_context ();
+    auto ambient = capture_ambient_context ();
     return [turn_scheduler = std::move (turn_scheduler),
             runtime_scheduler = std::move (runtime_scheduler),
             ambient = std::move (ambient)] (std::function<void ()> work) mutable {
@@ -242,10 +279,10 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
 
     void complete (result_t<T> result)
     {
-        std::vector<std::pair<std::coroutine_handle<>, std::shared_ptr<void>>> continuations;
-        std::vector<std::pair<std::function<void (const result_t<T> &)>, std::shared_ptr<void>>>
+        std::vector<std::pair<std::coroutine_handle<>, ambient_context_snapshot_t>> continuations;
+        std::vector<std::pair<std::function<void (const result_t<T> &)>, ambient_context_snapshot_t>>
           callbacks;
-        std::vector<std::pair<std::function<void (const result_t<T> &)>, std::shared_ptr<void>>>
+        std::vector<std::pair<std::function<void (const result_t<T> &)>, ambient_context_snapshot_t>>
           terminal_callbacks;
         auto self = this->shared_from_this ();
         {
@@ -368,10 +405,10 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     std::condition_variable _ready;
     task_scheduler_t _scheduler;
     std::optional<result_t<T>> _result;
-    std::vector<std::pair<std::coroutine_handle<>, std::shared_ptr<void>>> _continuations;
-    std::vector<std::pair<std::function<void (const result_t<T> &)>, std::shared_ptr<void>>>
+    std::vector<std::pair<std::coroutine_handle<>, ambient_context_snapshot_t>> _continuations;
+    std::vector<std::pair<std::function<void (const result_t<T> &)>, ambient_context_snapshot_t>>
       _callbacks;
-    std::vector<std::pair<std::function<void (const result_t<T> &)>, std::shared_ptr<void>>>
+    std::vector<std::pair<std::function<void (const result_t<T> &)>, ambient_context_snapshot_t>>
       _terminal_callbacks;
 };
 

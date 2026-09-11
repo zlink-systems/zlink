@@ -17,6 +17,7 @@
 #include <zlink/framework/contracts/configuration/mesh_node.hpp>
 #include <zlink/framework/contracts/configuration/route_mesh_runtime_options.hpp>
 #include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/framework/detail/runtime/dispatch/application_job_context.hpp>
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 #include <zlink/framework/contracts/errors/error.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
@@ -296,10 +297,11 @@ template <typename T, typename TResult> concept has_callback_async = requires (T
     value.async ([] (zlink::framework::result_t<TResult>) {});
 };
 
-static_assert (!has_submit<zlink::framework::request_call_t<int>>);
+// Submit-and-completion §16 and C++ channel interfaces define both terminals.
+static_assert (has_submit<zlink::framework::request_call_t<int>>);
 static_assert (has_async<zlink::framework::request_call_t<int>>);
 static_assert (!has_callback_async<zlink::framework::request_call_t<int>, int>);
-static_assert (!has_submit<zlink::framework::send_call_t>);
+static_assert (has_submit<zlink::framework::send_call_t>);
 static_assert (!has_callback_async<zlink::framework::send_call_t, void>);
 static_assert (!has_yield<zlink::framework::send_call_t>);
 static_assert (!has_submit<zlink::framework::relay_request_call_t>);
@@ -307,12 +309,12 @@ static_assert (has_async<zlink::framework::relay_request_call_t>);
 static_assert (
   !has_callback_async<zlink::framework::relay_request_call_t, zlink::framework::message_t>);
 static_assert (has_yield<zlink::framework::relay_request_call_t>);
-static_assert (!has_submit<zlink::framework::stream_write_call_t>);
+static_assert (has_submit<zlink::framework::stream_write_call_t>);
 static_assert (!has_callback_async<zlink::framework::stream_write_call_t, void>);
 static_assert (!has_submit<zlink::framework::route_send_call_t>);
 static_assert (!has_callback_async<zlink::framework::route_send_call_t, void>);
 static_assert (!has_submit<zlink::framework::channel_request_call_t>);
-static_assert (!has_typed_submit<zlink::framework::channel_request_call_t, std::uint64_t>);
+static_assert (has_typed_submit<zlink::framework::channel_request_call_t, std::uint64_t>);
 static_assert (has_typed_async<zlink::framework::channel_request_call_t, std::uint64_t>);
 static_assert (!has_callback_async<zlink::framework::channel_request_call_t, std::uint64_t>);
 static_assert (has_typed_yield<zlink::framework::channel_request_call_t, std::uint64_t>);
