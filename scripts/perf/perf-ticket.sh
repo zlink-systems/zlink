@@ -10,8 +10,10 @@
 # 명령은 저장소 루트에서 실행되며 ZLINK_CORE_SOURCE·ZLINK_CORE_PACKAGE_PREFIX 등 환경은 티켓에
 # 그대로 기록된다(제출 시점의 값). runner(scripts/perf/perf-queue-runner.sh)가 떠 있어야 한다.
 set -u
-repo="$(cd "$(dirname "$0")/../.." && pwd)"
-root="${ZLINK_PERF_QUEUE:-${repo}/.artifacts/perf-queue}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=perf-queue-root.sh
+source "${script_dir}/perf-queue-root.sh"
+root="$(perf_queue_root)"
 cmd="${1:-}"; shift || true
 
 wait_ticket() {
