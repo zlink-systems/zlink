@@ -24,7 +24,6 @@ import type {
 import {
   closeWithBusyRetry,
   isContextTerminatedError,
-  isPollerInterruptedError,
   zlink,
   type ZLinkBindingModule
 } from './node-backend-adapter-support';
@@ -167,38 +166,64 @@ function asNodeContext(context: ZLinkBackendContext): Context {
 function createNodeReadablePoller(
   socket: { readonly nativeInstance: unknown }
 ): ZLinkBackendReadablePoller {
-  const poller = zlink.createPoller();
-  const events = zlink.createPollEvents(1);
-  try {
-    poller.add(socket.nativeInstance as never, [zlink.PollEventFlag.PollIn], 0);
-  } catch (error) {
-    events.close();
-    poller.close();
-    throw error;
-  }
+  const nativeSocket = socket.nativeInstance as {
+    setReadableHandler(handler: () => void): void;
+  };
   let disposed = false;
+  let readable = false;
+  let pending: {
+    readonly promise: Promise<boolean>;
+    readonly resolve: (readable: boolean) => void;
+    readonly signal?: AbortSignal;
+    readonly onAbort?: () => void;
+  } | undefined;
+
+  const settlePending = (value: boolean): void => {
+    const current = pending;
+    if (current === undefined) return;
+    pending = undefined;
+    if (current.signal !== undefined && current.onAbort !== undefined) {
+      current.signal.removeEventListener('abort', current.onAbort);
+    }
+    current.resolve(value);
+  };
+
+  nativeSocket.setReadableHandler(() => {
+    if (disposed) return;
+    readable = true;
+    settlePending(true);
+  });
+
   return {
-    wait(timeoutMs: number): boolean {
-      try {
-        return poller.wait(events, timeoutMs) > 0
-          && events.hasEvent(0, zlink.PollEventFlag.PollIn);
-      } catch (error) {
-        if (isPollerInterruptedError(error)) return false;
-        throw error;
+    wait(_timeoutMs: number): boolean {
+      return !disposed && readable;
+    },
+    waitForReadable(signal?: AbortSignal): Promise<boolean> {
+      if (disposed || signal?.aborted === true) return Promise.resolve(false);
+      if (readable) return Promise.resolve(true);
+      if (pending !== undefined) return pending.promise;
+
+      let resolvePending!: (value: boolean) => void;
+      const promise = new Promise<boolean>((resolve) => {
+        resolvePending = resolve;
+      });
+      const onAbort = signal === undefined
+        ? undefined
+        : (): void => settlePending(false);
+      pending = { promise, resolve: resolvePending, signal, onAbort };
+      if (signal !== undefined && onAbort !== undefined) {
+        signal.addEventListener('abort', onAbort, { once: true });
       }
+      return promise;
+    },
+    markDrained(): void {
+      readable = false;
     },
     dispose(): void {
       if (disposed) return;
       disposed = true;
-      try {
-        poller.remove(socket.nativeInstance as never);
-      } finally {
-        try {
-          events.close();
-        } finally {
-          poller.close();
-        }
-      }
+      readable = false;
+      settlePending(false);
     }
   };
 }

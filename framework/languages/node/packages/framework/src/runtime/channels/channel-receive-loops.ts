@@ -252,7 +252,7 @@ export class ZLinkChannelReceiveLoop {
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
         batch.reset();
-        await waitReceiveLoopIdle();
+        if (!await this.poller.waitForReadable(capacitySignal)) break;
         continue;
       }
       const applicationJobPermit = await this.acquirePermit(capacitySignal);
@@ -276,12 +276,13 @@ export class ZLinkChannelReceiveLoop {
       }
       const received = this.router.recv(1);
       if (received == null) {
+        this.poller.markDrained();
         applicationJobPermit.releaseAfterInternalProcessing();
         releaseRawReceive();
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
         batch.reset();
-        await waitReceiveLoopIdle();
+        if (!await this.poller.waitForReadable(capacitySignal)) break;
         continue;
       }
       const receivedBytes = messageBytes(received.parts);
@@ -471,19 +472,11 @@ export class ZLinkSubscriberReceiveLoop {
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
         batch.reset();
-        await waitReceiveLoopIdle();
+        if (!await this.poller.waitForReadable(capacitySignal)) break;
         continue;
       }
       const applicationJobPermit = await this.acquirePermit(capacitySignal);
       if (applicationJobPermit === undefined) break;
-      if (!this.poller.wait(0)) {
-        applicationJobPermit.releaseAfterInternalProcessing();
-        this.roundRobin?.setReady(this.receiveOwner, false);
-        this.roundRobin?.release(this.receiveOwner);
-        batch.reset();
-        await waitReceiveLoopIdle();
-        continue;
-      }
       this.roundRobin?.setReady(this.receiveOwner, true);
       if (this.roundRobin?.tryAcquire(this.receiveOwner) === false) {
         applicationJobPermit.releaseAfterInternalProcessing();
@@ -500,14 +493,15 @@ export class ZLinkSubscriberReceiveLoop {
         continue;
       }
       const topicMessage = this.adapter.createTopicMessage();
-      if (!this.subscriber.subscribe(topicMessage)) {
+      if (!this.subscriber.subscribe(topicMessage, 1)) {
+        this.poller.markDrained();
         applicationJobPermit.releaseAfterInternalProcessing();
         releaseRawReceive();
         topicMessage.close();
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
         batch.reset();
-        await waitReceiveLoopIdle();
+        if (!await this.poller.waitForReadable(capacitySignal)) break;
         continue;
       }
       const receivedBytes = messageBytes(topicMessage.parts as readonly Message[]);
@@ -671,14 +665,7 @@ export class ZLinkRouteReceiveLoop {
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
         batch.reset();
-        await waitReceiveLoopIdle();
-        continue;
-      }
-      if (!this.poller.wait(0)) {
-        this.roundRobin?.setReady(this.receiveOwner, false);
-        this.roundRobin?.release(this.receiveOwner);
-        batch.reset();
-        await waitReceiveLoopIdle();
+        if (!await this.poller.waitForReadable(capacitySignal)) break;
         continue;
       }
       this.roundRobin?.setReady(this.receiveOwner, true);
@@ -696,11 +683,12 @@ export class ZLinkRouteReceiveLoop {
       }
       const received = this.router.recv(1);
       if (received == null) {
+        this.poller.markDrained();
         releaseRawReceive();
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
         batch.reset();
-        await waitReceiveLoopIdle();
+        if (!await this.poller.waitForReadable(capacitySignal)) break;
         continue;
       }
       const receivedBytes = messageBytes(received.parts);
@@ -839,37 +827,6 @@ class ZLinkReceiveBatchBudget {
     this.bytes = 0;
     this.startedAt = performance.now();
   }
-}
-
-class ZLinkSharedIdleWaiter {
-  private pending?: Promise<void>;
-  private resolvePending?: () => void;
-  private readonly wake = (): void => {
-    const resolve = this.resolvePending;
-    this.pending = undefined;
-    this.resolvePending = undefined;
-    resolve?.();
-  };
-
-  constructor(private readonly delayMs: number) {}
-
-  wait(): Promise<void> {
-    if (this.pending !== undefined) return this.pending;
-    this.pending = new Promise<void>((resolve) => {
-      this.resolvePending = resolve;
-    });
-    setTimeout(this.wake, this.delayMs);
-    return this.pending;
-  }
-}
-
-const CHANNEL_RECEIVE_IDLE_POLL_INTERVAL_MS = 5;
-const receiveLoopIdleWaiter = new ZLinkSharedIdleWaiter(
-  CHANNEL_RECEIVE_IDLE_POLL_INTERVAL_MS
-);
-
-function waitReceiveLoopIdle(): Promise<void> {
-  return receiveLoopIdleWaiter.wait();
 }
 
 function waitReceiveLoopTurn(): Promise<void> {

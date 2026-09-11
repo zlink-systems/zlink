@@ -569,6 +569,13 @@ function fakeBackendAdapterFactory(calls, nodeRid) {
         createReadablePoller() {
           return {
             wait() { return false; },
+            waitForReadable(signal) {
+              return new Promise((resolve) => {
+                if (signal?.aborted === true) resolve(false);
+                else signal?.addEventListener('abort', () => resolve(false), { once: true });
+              });
+            },
+            markDrained() {},
             dispose() {}
           };
         },

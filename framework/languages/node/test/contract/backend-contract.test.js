@@ -1948,8 +1948,12 @@ test('backend adapter creates context and core socket wrappers through public bi
     assert.equal(typeof publisher.dispose, 'function');
     assert.equal(typeof subscriber.dispose, 'function');
     assert.equal(typeof subscriberPoller.wait, 'function');
+    assert.equal(typeof subscriberPoller.waitForReadable, 'function');
+    assert.equal(typeof subscriberPoller.markDrained, 'function');
     assert.equal(typeof subscriberPoller.dispose, 'function');
     assert.equal(typeof streamPoller.wait, 'function');
+    assert.equal(typeof streamPoller.waitForReadable, 'function');
+    assert.equal(typeof streamPoller.markDrained, 'function');
     assert.equal(typeof streamPoller.dispose, 'function');
     assert.equal(typeof stream.dispose, 'function');
   } finally {
@@ -2360,6 +2364,13 @@ test('subscriber receive loop never blocks the Node event loop while polling', a
             waits.push(timeoutMs);
             return false;
           },
+          waitForReadable(signal) {
+            return new Promise((resolve) => {
+              if (signal?.aborted === true) resolve(false);
+              else signal?.addEventListener('abort', () => resolve(false), { once: true });
+            });
+          },
+          markDrained() {},
           dispose() {}
         };
       }
@@ -2378,8 +2389,46 @@ test('subscriber receive loop never blocks the Node event loop while polling', a
   assert.deepEqual([...new Set(waits)], [0]);
 });
 
+test('subscriber receive loop parks on backend readiness instead of a fixed interval', async () => {
+  let readinessWaits = 0;
+  const loop = new framework.ZLinkSubscriberReceiveLoop(
+    {
+      createReadablePoller() {
+        return {
+          wait() { return false; },
+          waitForReadable(signal) {
+            readinessWaits++;
+            return new Promise((resolve) => {
+              if (signal?.aborted === true) {
+                resolve(false);
+                return;
+              }
+              signal?.addEventListener('abort', () => resolve(false), { once: true });
+            });
+          },
+          markDrained() {},
+          dispose() {}
+        };
+      }
+    },
+    {},
+    { async dispatch() {} },
+    applicationJobQueue()
+  );
+
+  const running = loop.run();
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(readinessWaits, 1);
+  } finally {
+    await loop.stop();
+    await running;
+  }
+});
+
 test('subscriber receive loop keeps receiving while an earlier handler is awaiting', async () => {
   const queued = [messageRecord('first'), messageRecord('second')];
+  const receiveFlags = [];
   let releaseFirst;
   const firstPending = new Promise((resolve) => { releaseFirst = resolve; });
   let observeSecond;
@@ -2390,13 +2439,21 @@ test('subscriber receive loop keeps receiving while an earlier handler is awaiti
       createReadablePoller() {
         return {
           wait() { return queued.length > 0; },
+          waitForReadable(signal) {
+            return new Promise((resolve) => {
+              if (signal?.aborted === true) resolve(false);
+              else signal?.addEventListener('abort', () => resolve(false), { once: true });
+            });
+          },
+          markDrained() {},
           dispose() {}
         };
       },
       createTopicMessage() { return { topic: '', parts: [] }; }
     },
     {
-      subscribe(target) {
+      subscribe(target, flags) {
+        receiveFlags.push(flags);
         const next = queued.shift();
         if (next === undefined) return false;
         target.topic = next.topic;
@@ -2423,6 +2480,7 @@ test('subscriber receive loop keeps receiving while an earlier handler is awaiti
         1_000
       ))
     ]);
+    assert.deepEqual(receiveFlags, [1, 1]);
   } finally {
     releaseFirst();
     await loop.stop();

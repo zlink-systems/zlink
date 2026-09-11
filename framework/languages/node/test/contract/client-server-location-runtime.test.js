@@ -631,6 +631,13 @@ test('ClientServer socket creation releases the Poller and dealer when monitor s
       createReadablePoller() {
         return {
           wait() { return false; },
+          waitForReadable(signal) {
+            return new Promise((resolve) => {
+              if (signal?.aborted === true) resolve(false);
+              else signal?.addEventListener('abort', () => resolve(false), { once: true });
+            });
+          },
+          markDrained() {},
           dispose() { pollerDisposed += 1; }
         };
       }
@@ -2220,6 +2227,10 @@ function fakeDealer(id) {
 function readyPoller() {
   return {
     wait() { return true; },
+    waitForReadable() {
+      return new Promise((resolve) => setImmediate(() => resolve(true)));
+    },
+    markDrained() {},
     dispose() {}
   };
 }
