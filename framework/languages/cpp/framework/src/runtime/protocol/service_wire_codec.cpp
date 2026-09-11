@@ -2979,6 +2979,44 @@ application_payload_t application_payload_t::from_parts (const multipart_t &part
     return result;
 }
 
+application_payload_t::multipart_t
+decode_application_parts (const application_payload_t &payload)
+{
+    if (payload.packet_name != framework_multipart_packet_name
+        || payload.content_type != framework_multipart_content_type) {
+        throw service_wire_error_t ("framework application payload profile is unsupported");
+    }
+    if (const auto *parts = payload.parts ()) {
+        application_payload_t::multipart_t result;
+        result.reserve (parts->size ());
+        for (const auto &part : *parts)
+            result.push_back (part.copy ());
+        return result;
+    }
+    const auto &encoded = payload.payload_bytes ();
+    if (encoded.size () < 4)
+        throw service_wire_error_t ("framework multipart payload is truncated");
+    std::size_t offset = 0;
+    const auto count = read_u32 (encoded, offset);
+    if (count == 0 || count > (encoded.size () - offset) / sizeof (std::uint32_t))
+        throw service_wire_error_t ("framework multipart part count is invalid");
+    application_payload_t::multipart_t parts;
+    parts.reserve (count);
+    for (std::uint32_t index = 0; index < count; ++index) {
+        if (encoded.size () - offset < 4)
+            throw service_wire_error_t ("framework multipart payload is truncated");
+        const auto size = read_u32 (encoded, offset);
+        if (size > encoded.size () - offset)
+            throw service_wire_error_t ("framework multipart part is truncated");
+        parts.push_back (zlink::message_t::from (
+          std::span<const std::uint8_t> (encoded.data () + offset, size)));
+        offset += size;
+    }
+    if (offset != encoded.size ())
+        throw service_wire_error_t ("framework multipart payload has trailing bytes");
+    return parts;
+}
+
 bool operator== (const application_payload_t &left, const application_payload_t &right)
 {
     if (left.packet_name != right.packet_name || left.content_type != right.content_type

@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/diagnostics/mesh_trace.hpp"
+#include "runtime/diagnostics/dispatch_error_reporter.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/dispatch/application_job_receive_flow.hpp"
@@ -44,6 +46,23 @@ namespace
 {
 
 constexpr std::size_t max_pending_admissions = 64;
+// The same bounded surface axis serves accumulation and metric/flow projection.
+struct inbound_surface_t
+{
+    protocol::command send;
+    protocol::command request;
+    const char *metric_surface;
+    dispatch_error_surface_t flow_surface;
+};
+constexpr std::array inbound_surfaces{
+  inbound_surface_t{protocol::command::nodeSend, protocol::command::nodeRequest,
+                    "node", dispatch_error_surface_t::node},
+  inbound_surface_t{protocol::command::channelSend, protocol::command::channelRequest,
+                    "channel", dispatch_error_surface_t::route_mesh_channel},
+  inbound_surface_t{protocol::command::spotSend, protocol::command::spotRequest,
+                    "spot", dispatch_error_surface_t::spot_route},
+  inbound_surface_t{protocol::command::actorSend, protocol::command::actorRequest,
+                    "actor", dispatch_error_surface_t::spot_actor}};
 constexpr std::size_t max_pending_admission_bytes = 64u * 1024u;
 constexpr auto infrastructure_not_connected_retry_interval =
   std::chrono::milliseconds (75);
@@ -2872,6 +2891,93 @@ bool raw_mesh_node_owner_t::reply_user_spot_close (
         reply.closed));
 }
 
+void raw_mesh_node_owner_t::publish_drop_metrics (
+  const std::shared_ptr<framework::detail::monitoring_runtime_state_t> &monitoring) const
+{
+    if (!monitoring || !monitoring->diagnostics_logger.is_enabled (log_level_t::debug))
+        return;
+    for (std::size_t index = 0; index < inbound_surfaces.size (); ++index) {
+        framework::detail::monitoring_runtime_t (monitoring).publish_metric ({
+          "zlink.mesh_node.messages.dropped",
+          static_cast<double> (_inbound_drops[index].load (std::memory_order_relaxed)),
+          "{message}", framework::detail::metric_instrument_kind_t::counter,
+          framework::detail::metric_temporality_t::current,
+          {{"mesh_name", _options.descriptor.mesh_name},
+           {"surface", inbound_surfaces[index].metric_surface},
+           {"message_kind", "send"}, {"reason", "backpressure"}}});
+    }
+}
+
+void raw_mesh_node_owner_t::observe_owner_rejection (const service_mailbox_record_t &record)
+{
+    const auto command = protocol::decode_header (record.parts.front ()).kind;
+    for (std::size_t index = 0; index < inbound_surfaces.size (); ++index) {
+        const auto &surface = inbound_surfaces[index];
+        const bool send = command == surface.send;
+        if (!send && command != surface.request)
+            continue;
+        if (send)
+            _inbound_drops[index].fetch_add (1, std::memory_order_relaxed);
+        const framework::detail::message_flow_tracer_t flow (_options.dispatch);
+        if (flow.enabled (message_flow_log_mode_t::errors)) {
+            flow.trace (message_flow_outcome_t::dropped, message_flow_result_t::failed, [&] {
+                message_flow_event_t event{};
+                auto payload = protocol::decode_application_payload (record.parts.back (), true);
+                if (payload.packet_name == protocol::framework_multipart_packet_name
+                    && payload.content_type == protocol::framework_multipart_content_type) {
+                    const auto parts = protocol::decode_application_parts (payload);
+                    const auto header = messaging::envelope_codec_t ().decode_header (parts.front (), true);
+                    const auto &envelope = header.value ();
+                    payload.packet_name = envelope.message_name;
+                    payload.flow_id = envelope.flow_id;
+                    payload.flow_origin = envelope.flow_origin;
+                    if (!envelope.correlation_id.empty ())
+                        event.correlation_id = envelope.correlation_id;
+                    if (!envelope.channel_name.empty ())
+                        event.channel_name = envelope.channel_name;
+                }
+                auto scope = flow_context_t::enter (
+                  payload.flow_id, payload.flow_origin, flow.mode (), flow_origin_t::inbound);
+                event.outcome = message_flow_outcome_t::dropped;
+                event.surface = surface.flow_surface;
+                event.message_kind = send ? dispatch_message_kind_t::send
+                                          : dispatch_message_kind_t::request;
+                event.packet_name = payload.packet_name;
+                event.mesh_name = _options.descriptor.mesh_name;
+                event.source_rid = zlink::routing_id_t::from (record.source_routing_id).to_string ();
+                if (record.correlation && !event.correlation_id)
+                    event.correlation_id = std::to_string (*record.correlation);
+                event.error_reason = dispatch_error_reason_t::backpressure;
+                event.error_action = send ? dispatch_error_action_t::drop
+                                          : dispatch_error_action_t::reply_error;
+                event.reason = message_flow_reason_t::backpressure;
+                event.exception = std::make_exception_ptr (framework_exception_t (
+                  framework_error_kind_t::unavailable, "Target owner FIFO capacity exceeded"));
+                if (const auto &context = flow_context_t::current ()) {
+                    event.flow_id = context->flow_id;
+                    event.flow_origin = context->origin;
+                }
+                message_dispatch_error_event_t error{};
+                error.surface = event.surface;
+                error.message_kind = event.message_kind;
+                error.reason = *event.error_reason;
+                error.action = *event.error_action;
+                error.packet_name = event.packet_name;
+                error.channel_name = event.channel_name;
+                error.mesh_name = event.mesh_name;
+                error.source_rid = event.source_rid;
+                error.correlation_id = event.correlation_id;
+                error.flow_id = event.flow_id;
+                error.flow_origin = event.flow_origin;
+                error.exception = event.exception;
+                framework::detail::dispatch_error_reporter_t (_options.dispatch).report (std::move (error));
+                return event;
+            });
+        }
+        return;
+    }
+}
+
 raw_mesh_pump_result_t raw_mesh_node_owner_t::enqueue_received_or_retain (
   service_mailbox_record_t record,
   raw_mesh_pump_result_t accepted_result)
@@ -2884,6 +2990,7 @@ raw_mesh_pump_result_t raw_mesh_node_owner_t::enqueue_received_or_retain (
     if (enqueue_result == service_mailbox_enqueue_result_t::closed)
         return raw_mesh_pump_result_t::backpressured;
     if (record.domain == service_mailbox_domain_t::application) {
+        observe_owner_rejection (record);
         bool replied = false;
         if (record.reply_token && record.correlation) {
             try {

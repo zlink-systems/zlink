@@ -118,6 +118,8 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/messaging/call_facade_runtime.cpp
   framework/src/runtime/messaging/logical_multicast_runtime.cpp
   framework/src/runtime/diagnostics/runtime_observation.cpp
+  framework/src/runtime/diagnostics/logging.cpp
+  framework/src/runtime/diagnostics/monitoring_runtime.cpp
   framework/src/runtime/protocol/service_wire_codec.cpp
   framework/src/runtime/protocol/relocation_envelope_codec.cpp
   framework/src/runtime/mesh/raw_mesh_node_owner.cpp
@@ -228,9 +230,7 @@ add_library(zlink_framework STATIC
   framework/src/runtime/configuration/builders/configuration_builder.cpp
   framework/src/runtime/configuration/endpoint_connections.cpp
   framework/src/runtime/configuration/services.cpp
-  framework/src/runtime/diagnostics/logging.cpp
   framework/src/runtime/diagnostics/health.cpp
-  framework/src/runtime/diagnostics/monitoring_runtime.cpp
   framework/src/runtime/execution/serial_execution_queue.cpp
   framework/src/runtime/handlers/handler_registry.cpp
   framework/src/runtime/dispatch/projection.cpp
@@ -1015,6 +1015,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   zlink_framework_cpp_enable_test_assertions(test_cpp_framework_m6a_runtime)
   add_test(NAME test_cpp_framework_m6a_runtime
     COMMAND test_cpp_framework_m6a_runtime)
+  add_test(NAME test_cpp_framework_owner_rejection_observability
+    COMMAND test_cpp_framework_m6a_runtime --owner-rejection-observability)
+  set_tests_properties(test_cpp_framework_owner_rejection_observability PROPERTIES
+    LABELS "framework-unit")
   set_tests_properties(test_cpp_framework_m6a_runtime PROPERTIES
     LABELS "framework-unit;framework-m6-runtime;topology;mailbox;liveness;raw-binding"
     TIMEOUT 30)
@@ -1230,6 +1234,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-contract;framework-unit;async"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_provider_task
+    tests/Zlink.Framework.ContractTests/test_cpp_framework_provider_task.cpp)
+  target_link_libraries(test_cpp_framework_provider_task PRIVATE
+    zlink::framework_provider_abstractions Threads::Threads)
+  add_test(NAME test_cpp_framework_provider_task COMMAND test_cpp_framework_provider_task)
+  set_tests_properties(test_cpp_framework_provider_task PROPERTIES
+    LABELS "framework-contract;async"
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_sample_parity
     tests/Zlink.Framework.ContractTests/test_cpp_framework_sample_parity.cpp)
   target_link_libraries(test_cpp_framework_sample_parity PRIVATE
@@ -1379,6 +1392,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   set_tests_properties(test_cpp_framework_http_integration PROPERTIES
     LABELS "framework-integration;framework-http;framework-http-e2e;http"
     TIMEOUT 30)
+  add_test(NAME test_cpp_framework_http_sync_submit
+    COMMAND test_cpp_framework_app_host --http-submit-only)
+  set_tests_properties(test_cpp_framework_http_sync_submit PROPERTIES
+    LABELS "framework-unit;framework-regression;framework-http"
+    TIMEOUT 30)
   if(ZLINK_FRAMEWORK_CPP_REQUIRE_HTTP_PERF_REPORT)
     add_test(NAME test_cpp_framework_http_perf_gate
       COMMAND ${CMAKE_COMMAND}
@@ -1404,6 +1422,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   set_tests_properties(
     test_cpp_framework_app_host
     test_cpp_framework_http_integration
+    test_cpp_framework_http_sync_submit
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_framework_http_ports)
   add_zlink_framework_test(
@@ -1451,6 +1470,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   set_tests_properties(test_cpp_framework_state_lane PROPERTIES
     LABELS "framework-unit;framework-regression;execution"
     TIMEOUT 30)
+  add_zlink_framework_test(
+    test_cpp_framework_sync_submit
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_sync_submit.cpp
+    "framework-unit;framework-regression;execution;messaging")
+  target_link_libraries(test_cpp_framework_sync_submit PRIVATE GTest::gtest_main)
+  target_include_directories(test_cpp_framework_sync_submit PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp
