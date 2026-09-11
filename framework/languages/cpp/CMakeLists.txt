@@ -1510,6 +1510,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   set_tests_properties(test_cpp_framework_state_lane PROPERTIES
     LABELS "framework-unit;framework-regression;execution"
     TIMEOUT 30)
+  add_executable(test_cpp_framework_lane_roundtrip
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_lane_roundtrip.cpp)
+  target_link_libraries(test_cpp_framework_lane_roundtrip PRIVATE
+    zlink::framework
+    GTest::gtest
+    GTest::gtest_main)
+  target_include_directories(test_cpp_framework_lane_roundtrip PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  zlink_enable_coverage(test_cpp_framework_lane_roundtrip)
+  add_test(NAME test_cpp_framework_lane_roundtrip
+    COMMAND test_cpp_framework_lane_roundtrip)
+  set_tests_properties(test_cpp_framework_lane_roundtrip PROPERTIES
+    LABELS "framework-unit;framework-regression;execution"
+    TIMEOUT 30)
   add_zlink_framework_test(
     test_cpp_framework_sync_submit
     tests/Zlink.Framework.UnitTests/test_cpp_framework_sync_submit.cpp

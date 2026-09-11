@@ -454,7 +454,7 @@ Framework runtime이 binding의 HWM-managed send 계열(PAIR send, routed send,
 그 외 `submit()`)의 **결과 객체**를 사용한다(F1). 종결자가 돌려준 `result`로 즉시 판정하고,
 `result == BACKPRESSURED`일 때만 `admitted`를 기다렸다가 재개하며, request는 `reply`를 소비한다.
 이렇게 해서 "HWM에 걸렸을 때만 기다린다"를 정확히 구현한다 — 지금까지는 stage 하나로 admission과
-reply를 구분할 수 없어 [3단계 backpressure](04-dispatch-and-worker/README.ko.md) 대기가 정확하지
+reply를 구분할 수 없어 [3단계 backpressure](04-application-job-queue-and-backpressure.ko.md) 대기가 정확하지
 않았다. framework **공개 terminal은 backpressure를 노출하지 않으며**(§5, `Backpressured`는 public
 result가 아니다), 이 소비는 framework 내부 구현에만 있다. Core send-completion 통지가 완료를
 구동하므로 framework는 별도 executor나 offload로 감싸지 않는다. Binding terminal의 이름·반환
