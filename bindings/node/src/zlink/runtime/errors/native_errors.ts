@@ -67,6 +67,7 @@ export function recvNativeError(
   flags: RecvFlags,
   fallbackMessage: string
 ): RecvError {
+  if (error instanceof RecvError) return error;
   const message = nativeErrorMessage(error, fallbackMessage);
   const errno = readErrno();
   if ((flags & RecvFlags.DontWait) !== 0 && isWouldBlock(errno)) {

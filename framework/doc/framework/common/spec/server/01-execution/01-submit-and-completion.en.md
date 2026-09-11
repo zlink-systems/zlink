@@ -54,8 +54,8 @@ interface defines single-use rules, repeated-option handling, and terminal re-in
 
 The synchronous blocking terminator name follows the binding policy
 [async-coroutine-policy §6](../../../../../../../bindings/doc/spec/async-coroutine-policy.en.md#6-per-language-terminal-interfaces)
-— Java/Node `submit_sync()`, .NET `Submit()`, C++ `submit()` (Kotlin adds none and exposes the Java surface's
-`submit_sync()`).
+— Java `submit_sync()`, .NET `Submit()`, C++ `submit()` (Kotlin adds none and exposes the Java surface's
+`submit_sync()`). **Node.js provides no synchronous blocking terminator (§4.1).**
 
 The general async terminal name per language is .NET `Async`, C++ `async`, Java/Node.js `submit`,
 and the dedicated Kotlin wrapper's `await`. An immediate submit that returns no async
@@ -105,6 +105,24 @@ callback, which is complex and confusing, so the synchronous terminator is block
 is no normal-completion value; completion only means the source-local admission boundary
 defined by the operation family accepted the message. Remote handler execution, subscriber
 receipt, remote Spot queue acceptance, or application callback completion are not awaited.
+
+<a id="41-nodejs-provides-no-synchronous-blocking-terminator"></a>
+### 4.1 Node.js provides no synchronous blocking terminator (user decision, 2026-09-11)
+
+The Node.js runtime is **single-threaded**. Blocking that thread leaves the framework with no way
+to deliver the completion. When a request's target handler lives in the same process, the caller
+would have to produce the very reply it is waiting for, and the call deadlocks. Java, .NET, and
+C++ do not have this problem because the execution context that carries completions is separate
+from the calling thread (Java uses a dedicated platform-thread pump).
+
+Whether the target is local or remote is not always known at submit time, so a "block only when
+remote" rule is not available either. **A promise that cannot be kept does not belong on the
+surface** — the Node.js framework surface has no synchronous blocking terminator. Node
+applications use the async terminator (`submit(...)` returning a `Promise`).
+
+This decision applies to the framework surface only. **The Node binding keeps its `submit_sync()`**
+([async-coroutine-policy §6](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md#6-언어별-terminal-interface))
+— the binding does not depend on the framework runtime to deliver completions.
 
 **The synchronous blocking terminator cannot be called from a runtime execution context (F2-a).**
 Blocking on a handler turn, Spot turn, or state lane would wait for completion while holding the
@@ -517,7 +535,7 @@ the specific return type and error representation.
 | .NET | `Async(...)` returns `ValueTask` or `ValueTask<T>` | `Submit(...)` | `Yield(...)` | [per-language interface index](../languages/dotnet/interfaces/README.en.md) |
 | Java | `submit(...)` returns `CompletionStage<T>` | `submit_sync(...)` | `yield(...)` | [Channel messaging](../languages/java/interfaces/channel-messaging.en.md) |
 | Kotlin | Uses the dedicated call wrapper's suspending `await()` | the Java surface's `submit_sync(...)` | The dedicated wrapper's `yield()` | [Channel messaging](../languages/kotlin/interfaces/channel-messaging.en.md) |
-| Node.js | `submit(...)` returns `Promise<T>` | `submit_sync(...)` | `yield(...)` | [interface index](../languages/node/interfaces/README.en.md) |
+| Node.js | `submit(...)` returns `Promise<T>` | **not provided (§4.1)** | `yield(...)` | [interface index](../languages/node/interfaces/README.en.md) |
 | C++ | `async(...)` returns `task_t<T>` | `submit(...)` | `yield(...)` | [framework interfaces](../languages/cpp/interfaces/README.en.md) |
 
 The synchronous blocking terminator fails with `InvalidOperation` in a runtime execution context (§4 F2-a).

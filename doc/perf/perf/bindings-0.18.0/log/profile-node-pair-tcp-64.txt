@@ -1,0 +1,147 @@
+Node single hot-path profile: PAIR tcp 64B
+============================================
+
+Scope and environment
+---------------------
+- Diagnostic only. No benchmark result below is an official performance result.
+- Repository: main at 98c84a853542bc1c60fbd2942780e0ac2d0a382f
+- Node: v22.23.2
+- Loaded Core, verified at runtime with zlink.version(): 0.18.0
+- Host: WSL2 Linux 6.6.87.2, Intel Core i7-1260P, 16 logical CPUs
+- Environment: PERF_SINGLE_DURATION_SECONDS=3, PERF_IO_THREADS=1,
+  ZLINK_CORE_VERSION=0.18.0. PERF_PART_COUNT was not set, so the existing
+  runner's default two-part record was used (64-byte payload + empty part).
+- Existing dist/dist-tools/build artifacts were reused. No rebuild was run.
+- Profilers: node --prof, node --cpu-prof, node --trace-gc-nvp. Linux perf was
+  unavailable. gprofng heap tracing changed setup timing and missed the
+  connection-ready deadline; clock-only gprofng produced no PC samples on this
+  WSL2 host, so neither gprofng run is used as evidence.
+
+Diagnostic run observations
+---------------------------
+- --prof run throughput: 443,063 messages/s (profile overhead included).
+- --cpu-prof run throughput: 435,824 messages/s (profile overhead included).
+- GC-trace run throughput: 456,423 messages/s (trace overhead included).
+- The parent isolate is the receiver and Worker isolate is the sender.
+- Percentages below are samples within one isolate/process lifetime, including
+  setup and teardown. They are approximate and percentages from different
+  isolates or runs must not be added.
+
+Sender hot path: top five
+-------------------------
+1. 74.2%: synchronous submit body, including the single JS-to-N-API crossing,
+   Buffer-to-zlink_msg conversion, Core send, and any blocking admission work.
+   Source: bindings/node/src/zlink/runtime/messaging/completion_owner.ts:444-468;
+   bindings/node/native/src/addon_core.cc:1840-1888;
+   core/src/api/socket/socket_message_send_api.cpp:328-351.
+   Classification: mixed. One N-API terminal call and Core send are the runtime
+   floor. The shared result field checks are binding overhead but small.
+   The --prof subdivision was 37.0% unresolved Node/V8 shared-library work,
+   15.0% libc, 11.8% Core libzlink, and 9.2% epoll_ctl; allocator/native
+   conversion self samples included malloc 2.9%, consume_native_message_value
+   1.2%, socket_submit_send 0.4%, and build_msg_vector_or_single 0.4%.
+2. About 7.4%: measurement-header Buffer/BigInt writes. Source:
+   bindings/node/perf/common/perf_measurement.ts:42-59. Classification: harness
+   fixed cost, not a binding improvement target.
+3. About 5.1%: tight-loop and submitOnce dispatch outside the terminal. Source:
+   bindings/node/perf/single/perf_single_sender_worker.ts:155-177,223-242.
+   Classification: harness fixed cost; there is no event-loop callback here.
+4. About 3-4%, plus about 838 allocated bytes/delivered message: JavaScript
+   allocation and GC. GC was 1.6% of CPU samples. Important allocation sites are
+   the per-send RuntimeSendOperation and its two closures at
+   bindings/node/src/zlink/runtime/sockets/socket_operations.ts:83-87, the
+   builder state at runtime/messaging/send_operation_base.ts:9-49, and the
+   per-record empty Buffer at bindings/node/perf/single/
+   perf_single_sender_worker.ts:38-42. Classification: closures are removable
+   binding overhead; the empty Buffer is harness overhead; the one-shot fluent
+   operation object is constrained by the public operation contract.
+5. About 2.4%: monotonic deadline/timestamp reads. Source:
+   bindings/node/perf/common/perf_measurement.ts:22-24 and
+   bindings/node/perf/single/perf_single_sender_worker.ts:223-227.
+   Classification: harness fixed cost.
+
+Receiver hot path: top five
+---------------------------
+1. 58.9% self (62.9% inclusive): recv, including one JS-to-N-API call per
+   delivered message (plus one empty DONTWAIT probe per drain burst), Core recv,
+   and native construction of a two-Buffer array. Source:
+   bindings/node/src/zlink/runtime/sockets/socket_operations.ts:67-78;
+   bindings/node/native/src/addon_core.cc:393-415,2420-2490;
+   bindings/node/native/src/addon_message_values.h:226-242.
+   Classification: mixed. The recv crossing and Core receive are the runtime
+   floor. Per-message JS Buffer/array allocation belongs to the binding/public
+   Message[] representation, but removing it requires proving that retained
+   Message/parts views may be invalidated when caller-provided Received is
+   refilled.
+2. About 5.8% inclusive: benchmark callback, header decode, and latency record.
+   Source: bindings/node/perf/single/perf_pair.ts:55-67 and
+   bindings/node/perf/common/perf_measurement.ts:62-76,289-340.
+   Classification: harness fixed cost.
+3. About 4.1% inclusive: wrap the two native-owned Buffers in pooled Message
+   facades, freeze the new parts array, close the prior parts, and refill the
+   caller-provided Received. Source:
+   bindings/node/src/zlink/runtime/messaging/message_materializer.ts:127-168,
+   211-235; runtime/messaging/received_state.ts:49-70;
+   runtime/messaging/message_parts_state.ts:9-20.
+   Classification: partly removable. Wrapper pooling already removes most
+   Message-object creation, but a fresh parts array/freeze remains per record.
+4. 1.4% CPU samples and about 970 allocated bytes/delivered message: receiver
+   GC/allocation. The GC-trace run allocated 1,327,813,216 bytes for about
+   1,369,269 delivered messages; it recorded 142 collections and 51.0 ms total
+   pause. Classification: partly removable, primarily at the native Buffer/array
+   and materialization sites listed above; the metric sample array is harness
+   allocation.
+5. About 1.4%: per-message monotonic clock and drain-loop control, excluding the
+   callback work already listed. Source: bindings/node/perf/single/
+   perf_single_common.ts:318-372 and bindings/node/perf/common/
+   perf_measurement.ts:22-24. Classification: harness fixed cost.
+
+N-API, event-loop, and completion conclusions
+---------------------------------------------
+- Sender: one JS-to-N-API call/message, socketSubmitSend. Receiver: one recv
+  call/message; data() for both parts is JS-only because native recv returned
+  JS-owned Buffers. This is the minimum practical crossing count for the current
+  synchronous public API.
+- No per-message libuv tick, callback, Promise continuation, or completion
+  dispatch was observed. Sender and receiver both run synchronous tight loops.
+  Worker postMessage/Atomics and event-loop activity occur only at setup/end.
+- The benchmark calls submit_sync(), not submit(). RuntimeSendOperation at
+  runtime/sockets/socket_operation_builders.ts:62-67 invokes
+  CompletionOwner.sendSync(), so the send path creates no SendSubmission,
+  CompletionEntry, Promise, or byToken/byId/retries Map entry.
+- Native successful sends also do not allocate a result object per message.
+  addon_exports.cc:125-143 creates and freezes one success object per Node
+  environment; addon_core.cc:1879-1885 returns that reference when result is OK
+  and completionId is zero. create_completion_submit_result at
+  addon_core.cc:1803-1808 is only reached for non-inline-success cases.
+- RESOLVED_SEND and the outer {result, admitted} at
+  runtime/messaging/completion_owner.ts:65,233-313 belong to async submit().
+  Even there the Promise is shared for inline OK, but the outer result object is
+  per call. That path is not present in this PAIR benchmark.
+
+Contract-preserving candidates and POSDDD signals
+-------------------------------------------------
+- Candidate: store stable send invoker functions on the socket/base once, then
+  pass them to each RuntimeSendOperation. This preserves the one-shot fluent
+  operation contract while removing two closures per send. Do not cache a second
+  CompletionOwner state; completion_owner.ts must remain the sole owner.
+- Candidate requiring contract proof: refill internal parts storage for a
+  caller-provided Received instead of freezing a new array per message. This is
+  valid only if retained parts/Message identities are explicitly invalid after
+  the next refill; otherwise it changes observable lifetime semantics.
+- Low-value candidate: a dedicated native sync-send terminal could return
+  undefined on OK and avoid reads from the shared result object. It would also
+  duplicate the submit/error path, a POSDDD shallow/pass-through and duplicated-
+  rule warning. The profile does not justify that extra rule.
+- POSDDD warning: SendSocket.send() and DealerSocket.send() duplicate the same
+  per-operation builder/closure wiring. Consolidating that wiring in its owning
+  socket abstraction would reduce rules. The completion owner, retry maps, and
+  runtime watcher should not be copied into a fast path.
+
+Bottom line
+-----------
+PAIR is already at one N-API crossing in each direction. Its dominant cost is
+the unavoidable synchronous N-API/Core terminal plus per-record conversion;
+the clearest removable binding cost is allocation from operation builders and
+receive materialization, not completion tracking. The submit-result redesign is
+not a meaningful per-message cost in this measured sync one-way path.

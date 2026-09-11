@@ -153,6 +153,170 @@ thread의 `Atomics.wait`은 금지다.
 | **#158** | C++ send-saturation에서 owner FIFO가 53% 버린다 | phase 1 판정 완료(거부 자체는 스펙 허용, **drop 지표 부재와 벤치의 `completed == received` 가정이 결함**). job `cpp-ownercap-158b` 진행 중 |
 | **#97~#100** | 위 F2·F2-a | 브리프 4개 작성 완료, 슬롯 대기 |
 
+### 2026-09-11 오후 판정·환경 (계속)
+
+**#164/#165 — main이 4일간 red였고 아무도 몰랐다.** `bindings/python/tests/test_perf_multi_runner.py`
+단언 2건이 2026-09-07 러너 정책 정합(`b93b176061`, `d634417a37`) 이전 값을 들고 있었다.
+**이 테스트를 돌리는 CI가 없었다.** #16의 PR 검증이 처음 찾아냈다. 구현은 옳고 테스트가 낡았다 —
+C 레퍼런스(`bindings/c/perf/run_comparison.py:1255`, `:3830-3845`)가 근거다. PR #165 머지.
+
+**#82 닫음 — 재현되지 않는다.** Node ↔ .NET 양방향 5회씩 10/10에서 `kind=rejected|origin=application`이
+보존된다. 그 경로에는 이미 교차언어 단언이 있다(`node_dotnet_smoke.js:531`). 4언어가 모두
+"framework exception이면 그 kind, 아니면 `internal_failure`"로 동일하며, `internal_failure`가
+나오는 유일한 조건은 오류 모델 §5 마지막 항목이 정한 그대로다.
+
+**#143 순서 결정** — 세 언어의 선행 조건이 다르다. C++(#49)만 CLOSED라 지금 가능하고,
+.NET(#48)·Node(#50)은 그 이슈가 머지된 뒤다. 한 job으로 묶지 않는다.
+
+**#15는 아직 선행 조건이 없다** — `ZLINK_CTX_OPT_BLOCKY`가 Core header에 살아 있고 binding이
+`MaxMessageSize`를 아직 노출한다. binding 1.0.0에서 실제로 제거된 뒤의 정리 작업이므로
+1.0.0 마일스톤으로 옮길 것을 제안했다. **0.18.0을 막지 않는다.**
+
+**#87 Core 릴리스 사전 검사는 이미 PASS다.** `scripts/dev/release-check.sh core 0.18.0` →
+버전·릴리스 노트·Conan/vcpkg SHA 전부 PASS. `hotpath_gate`도 release-gate 빌드에서 PASS.
+남은 것은 태그·dispatch(외부 공개 행위)와 바인딩 4언어 릴리스(머신 B)다.
+
+### G5 종료 (2026-09-11)
+
+| 언어 | F1 | F2·F2-a | 결과 |
+|---|---|---|---|
+| Java #97 | PR #125 | **PR #169** | 닫음 |
+| .NET #98 | PR #155 | **PR #170** | 닫음 |
+| Node #99 | PR #135 | **제공하지 않기로 결정** | 닫음 |
+| C++ #100 | PR #134 | job 진행 중 | — |
+
+**Node 결정(F2-b, 사용자 2026-09-11).** Node는 단일 JS 스레드라 완료를 나르는 실행 문맥이
+호출 thread와 같다. request 대상이 같은 process의 handler면 **호출자가 기다리는 응답을 호출자가
+만들어야 해 교착한다.** 대상이 로컬인지 원격인지 제출 시점에 늘 알 수 없어 "로컬일 때만"이라는
+규칙도 세울 수 없다. **지킬 수 없는 약속을 표면에 두지 않는다.**
+스펙 `01-submit-and-completion.{ko,en}.md` **새 §4.1**이 이유를 소유한다.
+binding Node의 `submit_sync()`는 그대로다 — binding은 framework runtime의 완료 배달에 의존하지 않는다.
+
+**`submit_sync`는 interface의 `default` 메서드로 정했다.** job이 Java에서 abstract로 두어 같은
+보일러플레이트가 구현 7곳에 복사됐고 Kotlin 테스트 더블 3개가 컴파일되지 않아 전체 빌드가
+깨져 있었다. `default`로 올려 규칙을 한 곳에 뒀고 **스펙도 같은 이유로 고쳤다**(G1에서 쓴
+`abstract`는 구현이 없던 시점의 추정이었다). .NET은 이미 default interface method였다.
+
+F2-a 판정 술어는 **언어마다 하나**이며 기존 표지를 합쳐 쓴다 — application job context(handler turn)·
+Spot activation(Spot turn)·state lane. **검사는 제출보다 먼저** 한다. call의 단발 gate를 먼저
+claim 하면 거절된 호출이 뒤이은 정상 호출에 보인다.
+
+### 2026-09-11 오후 판정 (계속)
+
+| Issue | 판정 |
+|---|---|
+| **#45** | Java·C++ 병합(PR #167). Node는 main이 이미 최종 Buffer 직접 기록, .NET은 #48의 HeaderPlan이 같은 일을 한다. Java encode heap 1,560→96 B/op, C++ decode new 42→13회/op. **wire byte 동일** golden 테스트 추가 |
+| **#111** | 병합(PR #168). serial 1024 **471→730 ops/s (+55%)**, 평균 2.11→1.36 ms, ELU 0.744→0.234, 오류·abandoned 0. 1 ms 타이머가 실제로 사라졌다 |
+| **#82** | 닫음 — 재현 안 됨. 양방향 10/10에서 `kind=rejected|origin=application` 보존. 그 경로에 이미 교차언어 단언이 있다(`node_dotnet_smoke.js:531`) |
+| **#154** | **내 이슈 본문이 오진이었다.** `503/errno 93`은 의도적으로 `invalid://startup-failure`를 넘기는 **다른(통과하는)** 테스트의 로그였다. 실제 원인은 테스트 결함 2건이며 `d6ec19765e`가 최초 불일치 커밋으로 **#98보다 앞선다.** Actor 기대값은 스펙 §8.1대로 `Unavailable`이 맞다 — 승인 후 구현 중 |
+| **#60** | 9회(현재 6 + 실패 당시 커밋 3) 재현 안 됨. **관측을 먼저 붙였다** — `TestHostMessageFlowListener`가 `zlink.message_flow` 외를 버리고 있었고 버려지던 것이 원인 규명에 필요한 부분이었다 |
+| **#164/#165** | main이 4일간 red. Python perf 러너 테스트 2건이 정책 정합 이전 값을 단언. **이 테스트를 돌리는 CI가 없었다** |
+| **#166** | 새로 엶 — `ZLinkCompositeRelocationBarrierTest`가 CI 러너(2-core)에서만 실패. 로컬 20-core 12/12, `taskset -c 0,1` 10/10 통과. PR #118을 막는다 |
+| **#171** | 새로 엶 — .NET Unit suite 간헐 실패 2종(LogicalMulticast admission `Ok`/`Backpressured`, StatefulService handover 0/101). **`Ok` 대 `Backpressured`는 타이밍이 아니라 흐름 제어 상태 단언이다** |
+| **#143** | 순서 결정 — C++(#49)만 CLOSED라 지금 가능. .NET(#48)·Node(#50)은 그 뒤 |
+| **#15** | 선행 조건 미도래(`ZLINK_CTX_OPT_BLOCKY` 잔존, binding이 `MaxMessageSize` 노출). 1.0.0으로 옮기자고 제안 |
+| **#47** | **#151 Java 투입(2026-09-11).** #47 판정에서 드러난 것이 흐름 제어 이완이고 #151이 바로 그 구조를 바꾼다. #151 브리프에 **깊이 상한을 증명하는 회귀 테스트**를 완료 조건으로 넣었다 |
+
+### #151이 지금 캠페인의 중심이다 (2026-09-11)
+
+**G4의 이득을 framework가 하나도 쓰지 않고 있다.** G5는 의미 보존이 목표였으므로
+`send`는 `.admitted`, `request`는 `.reply`를 **항상** 기다리게 적응시켰다. `result`를 보지 않는다.
+
+```
+result == OK            → 이미 로컬 큐에 들어갔다. 기다릴 것이 없다.
+result == BACKPRESSURED → 바인딩이 payload를 보관하고 WRITABLE에서 재제출한다. 이때만 기다린다.
+```
+
+바인딩 perf 루프는 이미 이 구조다(#96). framework만 뒤처져 있다.
+
+| 언어 | 상태 |
+|---|---|
+| Java | **1차 기각.** 2차 job 진행 중 |
+| .NET | job 진행 중 |
+| Node | 미착수 (브리프 없음) |
+| C++ | 미착수 (브리프 없음) |
+
+**Java 1차 기각 사유 두 가지 — 다른 언어도 같은 것을 본다.**
+
+**① send-saturation 처리량이 떨어졌다.** 1024에서 80,223 → 54,390 (**−32%**), 4096에서
+78,929 → 60,048 (**−24%**). 덜 기다리는데 느려졌다. 가장 유력한 가설은 **이미 완료된 stage를
+돌려주면 `thenXxx` continuation이 호출 thread에서 인라인으로 돌아**, 전에 completion owner
+thread가 받아주던 downstream 작업까지 송신 루프가 떠안는다는 것이다. 파이프라이닝이 사라진다.
+
+**② 공유 *가변* future.**
+```java
+private static final CompletionStage<Void> ADMITTED = CompletableFuture.completedFuture(null);
+```
+`CompletableFuture`는 가변이고 `ZLinkActorBoundSessionSender.java:124`에
+`submission.toCompletableFuture().cancel(true)`가 있다. **한 번만 취소되면 프로세스 전체의
+이후 모든 `OK` send가 영구히 취소된 상태를 돌려받는다.**
+
+Node 바인딩은 같은 자리에서 `Promise.resolve()`를 공유하는데 **Promise는 불변이라 안전하다**
+(`bindings/node/src/zlink/runtime/messaging/completion_owner.ts:70,307`). Java·.NET은 그렇지 않다.
+**.NET을 리뷰할 때 `ValueTask`/`Task` 공유 인스턴스를 먼저 본다.**
+
+### Node send/backpressure 구조 (참고 — #151 Node 설계 전에 읽을 것)
+
+바인딩이 전부 소유하고 framework는 `await`만 한다.
+
+1. **제출은 항상 `DONTWAIT` 한 번.** `completion_owner.ts:268` `socketSubmitSend(..., DONTWAIT, token)`.
+   절대 블로킹하지 않는다.
+2. **`OK`** → `RESOLVED_SEND`(공유 `Promise.resolve()`). `completionId != 0`이면 `InternalError`로 던진다.
+3. **`Backpressured`** → 그때서야 `snapshotRetryPayload(payload)`로 복사한다(Core는 SEND payload를
+   보관하지 않는다). `EAGAIN`이 아니거나 `completionId == 0`이면 던진다. `CompletionEntry`를 만들고
+   `ensureRuntimeWatch()`로 **이때 비로소** mailbox fd 감시를 켠다.
+4. **재제출은 completion drain이 한다** — `captureWritable()`이 검증 후 `writableRetries`에 넣고,
+   drain 루프가 **completion 큐를 `NO_DATA`까지 비운 뒤** 재제출한다. 재제출이 곧바로 새 WRITABLE을
+   밀어넣기 때문이다.
+5. **framework는 `result`를 보지 않는다** — `node-raw-binding-port.ts:247,300`이 항상
+   `.submit().admitted`를 await 한다. 이것이 Node 몫의 #151이다.
+
+### #158 2차 리뷰 — 계수는 맞고 측정 조건이 틀렸다
+
+`171,243 completed = 118,070 received + 53,173 rejected` 대사와 107,374건 삼중 일치는 훌륭하다.
+그런데 벤치 타깃이 `set_min_level(fw::log_level_t::debug)`로 돌게 됐다
+(`bench_framework_cpp_server.cpp:62`, 변경 전에는 없던 줄). **이 벤치가 #7의 기준이다** —
+그대로 머지하면 앞으로의 모든 C++ framework 숫자가 debug 로깅 비용을 안고 나온다.
+`stats_http_server_t`/`snapshot("bench")` 경로로 읽도록 되돌려보냈다.
+
+C++ metric이 debug에서만 발행되는 것(`host_capacity_runtime.hpp:150`이 같다)은 **기존 관례**이며
+job 잘못이 아니다. **#173**으로 분리했다 — .NET은 `Meter` counter라 항상 발행한다.
+
+### 부하가 판정을 오염시킨다 — 내가 당했다
+
+C++ `test_cpp_framework_m6b_runtime`이 #45 브랜치에서 1/5 실패했다. 회귀로 볼 뻔했는데
+**같은 조건에서 main은 8회 중 3회 실패했다**(더 나쁘다). 두 실행 모두 **load average 약 21**이었고
+게이트 기준은 10이다. 해당 테스트가 실시간 timer에 의존한다.
+
+**규칙: 내 검증 빌드도 job과 같은 부하 예산을 쓴다.** 5개 job이 도는 중에 무거운 빌드를
+동시에 돌리면 내가 만든 부하로 내가 판정을 그르친다.
+
+### 환경 — 이 머신에 없던 것 두 가지 (2026-09-11에 찾아 고침)
+
+**1. JDK 25가 없어서 framework Java가 아예 빌드되지 않았다.**
+`zlink-jvm-baseline.settings.gradle.kts`가 `zlinkJavaLanguageVersion = 25`를 강제하는데
+(`b6b5fcaa97`, 2026-09-09) toolchain auto-download repository가 설정돼 있지 않다. 그래서
+컴파일 오류가 아니라 **의존성 해석 단계에서 죽는다.**
+
+```
+Cannot find a Java installation ... matching: {languageVersion=25, ...}
+Toolchain download repositories have not been configured.
+```
+
+**이 증상을 코드 문제로 오진하기 쉽다** — `envelope-45` job이 "binding API에
+`toCompletableFuture()`가 없다"고 보고했는데 실제 원인은 이것이었다(binding jar는 class file
+version 69 = Java 25로 빌드돼 있고 API는 정상이다). Temurin 25를 `/usr/lib/jvm`에 풀어 해결.
+
+**2. framework C++ 빌드에는 환경변수 두 개가 필요하다.**
+```bash
+export VCPKG_ROOT=/home/hep7/.cache/zlink/pr/vcpkg
+export ZLINK_LOCAL_PACKAGE_ROOT=/home/hep7/project/zlink/.artifacts/wsl
+```
+`base` preset의 toolchain이 `$env{VCPKG_ROOT}`이고 `CMakeLists.txt:63`이
+`$ENV{ZLINK_LOCAL_PACKAGE_ROOT}`로 zlink_cpp prefix를 만든다. worktree의 빈
+`.artifacts/wsl`로 fallback 하면 `zlink_cpp 0.18.0`을 못 찾는다.
+**설정을 바꿔 재configure 할 때는 `rm -rf build/<preset>` 부터 한다.**
+
 ### 이 머신에서 판정할 수 없는 것 (플랫폼 차단)
 
 WSL x64에서는 재현도 검증도 불가능하다. 0.18.0 마감 때 **별도로 분류**한다.
