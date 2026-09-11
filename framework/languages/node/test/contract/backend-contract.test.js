@@ -19,14 +19,6 @@ const {
 } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
 const { wrapSocket } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
 
-// Node 20 is a required runtime (scripts/verify_node_abi_matrix.js:16) and it has no
-// Promise.withResolvers; that arrived in Node 22.
-function deferred() {
-  let resolve;
-  let reject;
-  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
-  return { promise, resolve, reject };
-}
 const {
   ZLinkMeshCompletionTable,
   closeMeshCompletion
@@ -41,6 +33,15 @@ const {
 const {
   ZLinkSpotSerialTurnExecutor
 } = require('../../packages/framework/dist/runtime/spots');
+// Node 20 is a required runtime (scripts/verify_node_abi_matrix.js:16) and it has no
+// Promise.withResolvers; that arrived in Node 22.
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
 
 function applicationJobQueue(maxQueuedApplicationJobs) {
   return new ApplicationJobQueue(resolveApplicationJobQueueConfiguration(
