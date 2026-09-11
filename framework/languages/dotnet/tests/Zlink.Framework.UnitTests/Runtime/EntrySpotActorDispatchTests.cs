@@ -4907,6 +4907,10 @@ public sealed partial class EntrySpotActorDispatchTests
                 .Publish("entry", "events", new ProbeRouteMessage("published"))
                 .Async();
 
+            // 02-spot-messaging.ko.md §4.4: publish completes at worker handoff.
+            // Observe backend completion before asserting that the delivered
+            // envelope preserves flow identity and has no request correlation.
+            await node.EntrySpotBackend.PublishCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var header = Assert.IsType<ZLinkEnvelopeHeader>(node.EntrySpotBackend.PublishedHeader);
             Assert.Null(header.CorrelationId);
             Assert.True(ZlinkStreamFlowId.IsValid(header.FlowId));
@@ -9810,6 +9814,9 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public ZLinkEnvelopeHeader? PublishedHeader { get; private set; }
 
+        public TaskCompletionSource PublishCompleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public int? ActorJoinResultCode { get; private set; }
 
         public ZLinkEnvelopeHeader? ActorJoinReplyHeader { get; private set; }
@@ -9932,6 +9939,7 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = topic;
             _ = flags;
             PublishedHeader = ZLinkEnvelopeCodec.DecodeHeader(message);
+            PublishCompleted.TrySetResult();
         }
 
         public void Publish(
@@ -9941,6 +9949,7 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = topic;
             _ = flags;
             PublishedHeader = ZLinkEnvelopeCodec.DecodeHeader(parts);
+            PublishCompleted.TrySetResult();
         }
 
         public SubmitResult SendToSpot(
