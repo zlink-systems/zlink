@@ -355,7 +355,7 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
         _state.record ("SpotTimerTick", {}, _context.spot_id (),
                        tick.name + ":" + std::to_string (tick.delivery_index));
         if (_timer_ticks >= 2) {
-            _timer.cancel ();
+            (void) _timer.cancel ();
         }
     }
 
@@ -397,7 +397,7 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
                          + "|scheduled=" + std::to_string (tick.scheduled_index)
                          + "|skipped=" + std::to_string (tick.skipped_ticks));
         if (_overrun_ticks >= 5) {
-            _overrun_timer.cancel ();
+            (void) _overrun_timer.cancel ();
             return;
         }
         std::this_thread::sleep_for (std::chrono::milliseconds (90));
@@ -428,7 +428,7 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
         _state.record ("StageTimer", {}, _context.spot_id (),
                        tick.name + ":" + std::to_string (tick.delivery_index));
         if (_stage_timer_ticks >= 1) {
-            _stage_timer.cancel ();
+            (void) _stage_timer.cancel ();
         }
     }
 

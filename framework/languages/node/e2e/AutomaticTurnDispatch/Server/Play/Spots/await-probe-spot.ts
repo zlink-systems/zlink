@@ -105,11 +105,11 @@ export class AwaitProbeSpot implements ZLinkSpot<AwaitActor> {
     return this.timers.get(timerName);
   }
 
-  stopScenarioTimers(requestId: string): void {
+  async stopScenarioTimers(requestId: string): Promise<void> {
     const matches = [...this.timers.values()].filter((state) => state.requestId === requestId);
     for (const state of matches) {
       this.timers.delete(state.timerName);
     }
-    void Promise.all(matches.map((state) => state.timer?.cancel())).catch(() => undefined);
+    await Promise.all(matches.map((state) => state.timer?.cancel()));
   }
 }
