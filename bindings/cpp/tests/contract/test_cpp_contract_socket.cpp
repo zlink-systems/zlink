@@ -318,18 +318,14 @@ void test_pair_direct_recv_no_data_preserves_output ()
 
     zlink::message_t existing = zlink_cpp_contract::make_message ("keep");
     const int rc = socket.recv (existing, zlink::recv_flags_t::dontwait);
-    assert (rc == static_cast<int> (zlink::recv_result_t::no_data) || rc == -1);
-    if (rc == -1)
-        assert (errno == EAGAIN || errno == EWOULDBLOCK);
+    assert (rc == static_cast<int> (zlink::recv_result_t::no_data));
     assert (existing.valid ());
     assert (existing.to_string () == "keep");
 
     zlink::message_t invalid;
     invalid.close ();
     const int invalid_rc = socket.recv (invalid, zlink::recv_flags_t::dontwait);
-    assert (invalid_rc == static_cast<int> (zlink::recv_result_t::no_data) || invalid_rc == -1);
-    if (invalid_rc == -1)
-        assert (errno == EAGAIN || errno == EWOULDBLOCK);
+    assert (invalid_rc == static_cast<int> (zlink::recv_result_t::no_data));
     assert (!invalid.valid ());
 }
 
@@ -480,9 +476,7 @@ void test_router_send_builder_owns_target_rid ()
 
     zlink::message_t routed_to_b;
     const int dealer_b_rc = dealer_b.recv (routed_to_b, zlink::recv_flags_t::dontwait);
-    assert (dealer_b_rc == static_cast<int> (zlink::recv_result_t::no_data) || dealer_b_rc == -1);
-    if (dealer_b_rc == -1)
-        assert (errno == EAGAIN || errno == EWOULDBLOCK);
+    assert (dealer_b_rc == static_cast<int> (zlink::recv_result_t::no_data));
 }
 
 void test_router_recv_received_single_part_large ()
@@ -580,8 +574,7 @@ void test_router_recv_received_multipart ()
     assert (inbound.parts ()[1].to_string () == "four");
 
     const int no_data_rc = router.recv (inbound, zlink::recv_flags_t::dontwait);
-    assert (no_data_rc == static_cast<int> (zlink::recv_result_t::no_data)
-            || no_data_rc == -1);
+    assert (no_data_rc == static_cast<int> (zlink::recv_result_t::no_data));
     assert (!inbound.routing_id ().has_value ());
     assert (inbound.parts ().empty ());
     assert (inbound.parts ().capacity () == reusable_capacity);
@@ -598,9 +591,7 @@ void test_router_direct_recv_no_data_preserves_output ()
     zlink::message_t existing = zlink_cpp_contract::make_message ("keep");
 
     const int rc = router.recv (source, existing, zlink::recv_flags_t::dontwait);
-    assert (rc == static_cast<int> (zlink::recv_result_t::no_data) || rc == -1);
-    if (rc == -1)
-        assert (errno == EAGAIN || errno == EWOULDBLOCK);
+    assert (rc == static_cast<int> (zlink::recv_result_t::no_data));
     assert (source == placeholder);
     assert (existing.valid ());
     assert (existing.to_string () == "keep");
@@ -608,9 +599,7 @@ void test_router_direct_recv_no_data_preserves_output ()
     zlink::message_t invalid;
     invalid.close ();
     const int invalid_rc = router.recv (source, invalid, zlink::recv_flags_t::dontwait);
-    assert (invalid_rc == static_cast<int> (zlink::recv_result_t::no_data) || invalid_rc == -1);
-    if (invalid_rc == -1)
-        assert (errno == EAGAIN || errno == EWOULDBLOCK);
+    assert (invalid_rc == static_cast<int> (zlink::recv_result_t::no_data));
     assert (source == placeholder);
     assert (!invalid.valid ());
 }
