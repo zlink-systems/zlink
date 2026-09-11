@@ -41,6 +41,18 @@ const systemTimerClock: ZLinkTimerClock = {
 };
 
 type ZLinkTimerOwnerSpot = ZLinkSpot | ZLinkEntrySpot;
+
+interface ZLinkTimerFinalization {
+  readonly promise: Promise<void>;
+  readonly resolve: () => void;
+  readonly reject: (cause: unknown) => void;
+}
+
+interface ZLinkTimerFinalizationStart {
+  readonly timeout: unknown;
+  readonly running: Promise<void>;
+}
+
 type ZLinkTimerFailureReporter = (
   tick: ZLinkTimerTick,
   cause: unknown,
@@ -125,11 +137,13 @@ export class ZLinkSpotTimerRegistry {
       ? this.executionSerialForTimer?.(name, serial) ?? serial
       : undefined;
     if (this.executionBarrier !== undefined) executionSerial?.setExecutionBarrier(this.executionBarrier);
+    let callbackStarted = false;
     const timer = startOutsideStateLane(() => new ZLinkManagedTimer(
       name,
       periodMs,
       normalizeTimerOptions(options),
       async (tick) => {
+        callbackStarted = false;
         const timerFlow = createInboundFlow(undefined, 'Timer', this.flowCreationEnabled());
         const operation = () => {
           const current = this.timers.get(name);
@@ -137,6 +151,7 @@ export class ZLinkSpotTimerRegistry {
             return undefined;
           }
           if (!this.executionAllowed()) return undefined;
+          callbackStarted = true;
           return runWithFlow(timerFlow, () => handler.handle(spot, tick));
         };
         if (this.executeTimer !== undefined) {
@@ -146,9 +161,7 @@ export class ZLinkSpotTimerRegistry {
         }
       },
       reportFailure,
-      () => this.executeTimer === undefined
-        ? !executionSerial!.isExecuting
-        : this.isTimerExecuting?.(name) !== true,
+      () => callbackStarted,
       this.clock
     ));
     const registered = await this.lane.run(() => this.completeAddCore(
@@ -163,13 +176,18 @@ export class ZLinkSpotTimerRegistry {
 
   async dispose(): Promise<void> {
     const timers = await this.lane.run(() => {
-      const active = [...this.timers.values()].map((entry) => entry.timer);
+      const active = [...this.timers.entries()].map(([name, entry]) => ({
+        name,
+        timer: entry.timer,
+        wait: this.executeTimer === undefined
+          ? true
+          : this.isTimerExecuting?.(name) !== true
+      }));
       this.timers.clear();
       return active;
     });
-    for (const timer of timers) {
-      await timer.dispose();
-    }
+    const finalizations = timers.map(({ timer }) => timer.dispose());
+    await Promise.all(finalizations.filter((_, index) => timers[index]!.wait));
   }
 
   async captureRelocation(): Promise<readonly ZLinkTimerRelocationState[]> {
@@ -248,6 +266,8 @@ export class ZLinkSpotTimerRegistry {
 }
 
 class ZLinkRegisteredTimer implements ZLinkTimer {
+  private finalization: Promise<void> | undefined;
+
   constructor(
     private readonly registry: ZLinkSpotTimerRegistry,
     private readonly name: string,
@@ -260,7 +280,18 @@ class ZLinkRegisteredTimer implements ZLinkTimer {
   }
 
   cancel(signal?: AbortSignal): Promise<void> {
-    return this.registry.cancel(this.name, this.generation, this.timer, signal);
+    if (this.finalization !== undefined) return this.finalization;
+    try {
+      throwIfAborted(signal);
+    } catch (failure) {
+      return Promise.reject(failure);
+    }
+    this.finalization = this.registry.cancel(
+      this.name,
+      this.generation,
+      this.timer
+    );
+    return this.finalization;
   }
 
   dispose(): Promise<void> {
@@ -278,6 +309,8 @@ export class ZLinkManagedTimer implements ZLinkTimer {
   private lastScheduledIndex = 0n;
   private timeout: unknown;
   private running: Promise<void> = Promise.resolve();
+  private dispatchFailure: { readonly cause: unknown } | undefined;
+  private finalization: ZLinkTimerFinalization | undefined;
 
   constructor(
     private readonly name: string,
@@ -297,9 +330,30 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     return this.disposed;
   }
 
-  async cancel(_signal?: AbortSignal): Promise<void> {
-    const prepared = await this.lane.run(() => this.cancelCore());
-    await prepared.running;
+  cancel(_signal?: AbortSignal): Promise<void> {
+    if (this.finalization !== undefined) return this.finalization.promise;
+
+    let resolve!: () => void;
+    let reject!: (cause: unknown) => void;
+    const promise = new Promise<void>((complete, fail) => {
+      resolve = complete;
+      reject = fail;
+    });
+    const finalization = { promise, resolve, reject };
+    this.finalization = finalization;
+
+    try {
+      const preparation = this.lane.run(() => this.cancelCore());
+      void preparation.then(
+        start => {
+          void this.completeFinalization(start, finalization).then(undefined, reject);
+        },
+        reject
+      );
+    } catch (failure) {
+      reject(failure);
+    }
+    return promise;
   }
 
   dispose(): Promise<void> {
@@ -363,7 +417,13 @@ export class ZLinkManagedTimer implements ZLinkTimer {
       : Math.max(0, Number(this.lastScheduledIndex + 1n) * this.periodMs - this.elapsedMs());
     this.timeout = this.clock.setTimeout(() => {
       this.timeout = undefined;
-      this.running = startOutsideStateLane(() => this.fire()).catch(() => undefined);
+      const execution = startOutsideStateLane(() => this.fire());
+      this.running = execution.then(
+        () => undefined,
+        cause => this.lane.run(() => {
+          this.dispatchFailure ??= { cause };
+        })
+      );
     }, delayMs);
   }
 
@@ -388,14 +448,45 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     await this.lane.run(() => this.completeFireCore(prepared.scheduledIndex, shouldContinue));
   }
 
-  private cancelCore(): { readonly running: Promise<void> } {
-    if (this.disposed) return { running: Promise.resolve() };
+  private cancelCore(): ZLinkTimerFinalizationStart {
     this.disposed = true;
-    if (this.timeout !== undefined) {
-      this.clock.clearTimeout(this.timeout);
-      this.timeout = undefined;
+    const timeout = this.timeout;
+    this.timeout = undefined;
+    return {
+      timeout,
+      running: this.shouldWaitForRunningOnCancel()
+        ? this.running
+        : Promise.resolve()
+    };
+  }
+
+  private async completeFinalization(
+    start: ZLinkTimerFinalizationStart,
+    finalization: ZLinkTimerFinalization
+  ): Promise<void> {
+    const failures: unknown[] = [];
+    if (start.timeout !== undefined) {
+      try {
+        this.clock.clearTimeout(start.timeout);
+      } catch (failure) {
+        failures.push(failure);
+      }
     }
-    return { running: this.shouldWaitForRunningOnCancel() ? this.running : Promise.resolve() };
+    try {
+      await start.running;
+    } catch (failure) {
+      failures.push(failure);
+    }
+    const dispatchFailure = await this.lane.run(() => this.dispatchFailure);
+    if (dispatchFailure !== undefined) failures.push(dispatchFailure.cause);
+
+    if (failures.length === 0) {
+      finalization.resolve();
+    } else if (failures.length === 1) {
+      finalization.reject(failures[0]);
+    } else {
+      finalization.reject(new AggregateError(failures, `Timer '${this.name}' cleanup failed.`));
+    }
   }
 
   private prepareCaptureCore(): { readonly running: Promise<void> } {
