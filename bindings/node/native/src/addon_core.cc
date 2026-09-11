@@ -609,14 +609,25 @@ napi_value create_subscribed_value (napi_env env,
 {
     napi_value obj;
 
-    if (part_count == 1 && routing_id.size == 0) {
-        napi_value data = create_received_message_buffer (env, &parts[0]);
-        if (!data)
-            return NULL;
+    if (routing_id.size == 0) {
+        napi_value payload;
+        if (part_count == 1) {
+            payload = create_received_message_buffer (env, &parts[0]);
+            if (!payload)
+                return NULL;
+        } else {
+            napi_create_array_with_length (env, part_count, &payload);
+            for (size_t i = 0; i < part_count; ++i) {
+                napi_value data = create_received_message_buffer (env, &parts[i]);
+                if (!data)
+                    return NULL;
+                napi_set_element (env, payload, static_cast<uint32_t> (i), data);
+            }
+        }
         napi_value topic_value;
         napi_create_string_utf8 (env, topic ? topic : "", topic ? topic_len : 0, &topic_value);
         napi_create_array_with_length (env, 2, &obj);
-        napi_set_element (env, obj, 0, data);
+        napi_set_element (env, obj, 0, payload);
         napi_set_element (env, obj, 1, topic_value);
         return obj;
     }
@@ -640,14 +651,8 @@ napi_value create_subscribed_value (napi_env env,
     napi_value topic_value;
     napi_create_string_utf8 (env, topic ? topic : "", topic ? topic_len : 0, &topic_value);
 
-    if (routing_id.size > 0) {
-        // Hot path: plain SUB messages normally have no source routing id.
-        // Leaving the internal raw field absent preserves the public null
-        // routing id after TypeScript materialization and avoids creating a
-        // per-message JS null property on the common receive path.
-        napi_value rid = create_routing_id_value (env, routing_id);
-        napi_set_named_property (env, obj, "routingId", rid);
-    }
+    napi_value rid = create_routing_id_value (env, routing_id);
+    napi_set_named_property (env, obj, "routingId", rid);
     napi_set_named_property (env, obj, "topic", topic_value);
     return obj;
 }
