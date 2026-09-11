@@ -694,7 +694,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 |------|------------|------------------------------|-----------|-----------------------------|------|
 | C++ (§9.1) | 미측정 | 0 / 0 / 0 / 42 | 미측정 | 0 / 0 / 0 / 24 | 미측정 |
 | .NET (§9.2) | 미측정 | 0 / 0 / 0 / 42 | 미측정 | 0 / 0 / 0 / 24 | 미측정 (single TSV 확보, 표 미기록) |
-| Java (§9.3) | 88.6% | 23 / 19 / 0 / 0 | 77.0% | 7 / 17 / 0 / 0 | single 완료(미달 0); multi는 MULTI_STREAM 4 transport 실패만 진단 중(그 외 통과/보류) |
+| Java (§9.3) | 88.6% | 23 / 19 / 0 / 0 | 82.5% | 11 / 17 / 0 / 0 | **완료** — 미달·실패·미측정 0(통과/보류만). STREAM은 하네스 monitor-lifecycle 수정 후 전 transport 통과 |
 | Node (§9.4) | 73.8% | 16 / 19 / 0 / 0 | 49.6% | 4 / 12 / 0 / 0 | **완료** — 미달 0(통과/보류만). SUB 축약 개선 채택(PUBSUB wss·tls 통과) |
 | Go (§9.5) | 미측정 | 0 / 0 / 0 / 30 | 미측정 | 0 / 0 / 0 / 16 | 미측정 |
 | Rust (§9.6) | 미측정 | 0 / 0 / 0 / 30 | 미측정 | 0 / 0 / 0 / 16 | 미측정 |
@@ -890,9 +890,10 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 - Multi 상태: `측정 완료(2026-09-11, META parity 수정 반영)` — C multi baseline 재사용, tcp/ws/wss/tls, clients=100. 측정 5패턴(REQREP 2개는 이번 스코프 외=미측정, STREAM 실패).
   - **SENDSEND(echo)는 통과**(76~113%, 목표 70) — **node에서 실패하던 것이 java에선 정상**(node의 send-admission drain 굶음은 단일 이벤트루프 특유, java 스레드 모델엔 없음). 단 tcp/ws SENDSEND는 평균 latency 3.6~3.8×로 일부 미달.
   - **MULTI_DEALER_DEALER 미달**(65~76%, 목표 90) 전 transport. **MULTI_PUBSUB**는 tcp 90·wss 88(경계)·ws 102·tls 84.
-  - **MULTI_STREAM 전 transport 실패**(server_start_ready_timeout_or_mismatch) — STREAM 서버 준비 실패, 별도 진단 필요.
+  - **MULTI_STREAM 전 transport 통과**(tcp 97.6·ws 93.0·wss 118.0·tls 107.9%) — 하네스 monitor-lifecycle 수정 후(단일 monitor 계약).
 - **판정(2026-09-11): 미달 0 — 통과/보류만.** 측정된 미달 aggregate는 모두 **보류** 확정: reqrep(단·다)·inproc/ipc one-way 저조·tls/inproc latency는 가이드 §3.1 Java cost-map이 "지배적 제거가능 비용 없음(계약경계·size 의존·소형 per-op floor)"로 진단한 것들이고, MULTI_REQREP 소형 실패는 submit-result 모델에서 소형이 byte-HWM에 늦게 닿아 backpressure가 늦게 걸리는 측정 특성(C 성공, binding 정상)이라 binding/harness 불변. CompletionPump 공정성 실험은 single reqrep latency 회귀로 되돌림(런타임 원본 유지).
-- 잔여: **MULTI_STREAM 전 transport 실패**(server_start_ready_timeout)만 미해결 — 기능 실패라 별도 진단 중(cx-java-stream-diagnose). 이것만 통과/보류로 확정되면 Java §9.3 마감.
+- **MULTI_STREAM 해결·통과**: server_start_ready_timeout은 Java STREAM 하네스의 monitor-lifecycle 결함(connection-ready monitor를 안 닫고 진단 snapshot monitor를 열어 socket당 단일 monitor 계약 위반 — Node single 초기 결함과 동류)이었다. `PerfMultiStream.java`에 ready monitor를 snapshot 전 close(4줄, C parity)로 전 transport `complete`·통과(tcp 97.6·ws 93.0·wss 118.0·tls 107.9%, latency ≤1.3×). 바인딩·Core 불변.
+- **Java §9.3 완전 마감(2026-09-11): 미달·실패·미측정 0 — 통과/보류만.** §7.5 언어 전환 게이트 충족 → 다음 dotnet(§9.2).
 
 #### 9.3.1 Single suite
 
@@ -951,28 +952,28 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 107.8% | 99.8% | 93.1% | 30.7% | 54.6% | 70.2% | 통과 76.0%/lat2.34× · c0180-java-multi-tcp |
 | `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 88% | 73% | 86% | 91% | 15% | 20% | 보류 62.1% · 대형 size 의존 latency floor(65536 15%/11×)·소형 backpressure 지연 · binding 불변 · c0180-java-multi-tcp-reqrep |
 | `tcp` | `MULTI_PUBSUB` | 73.8% | 61.7% | 65.3% | 66.9% | 137.3% | 134.7% | 보류 90.0%/lat1.21× · c0180-java-multi-tcp |
-| `tcp` | `MULTI_STREAM` | 실패 | 실패 | 실패 | 해당 없음 | 실패 | 해당 없음 | 실패 — MULTI_STREAM server_start_ready_timeout_or_mismatch (STREAM 서버 준비 실패, 측정 불가) |
+| `tcp` | `MULTI_STREAM` | 85.8% | 87.5% | 84.9% | 해당 없음 | 132.3% | 해당 없음 | 통과 97.6%/lat≤1.2× · 하네스 monitor-lifecycle 수정(단일 monitor 계약, C parity) · c0180-java-multi-tcp-stream |
 | `ws` | `MULTI_DEALER_DEALER` | 41.4% | 76.5% | 64.7% | 82.9% | 63.1% | 63.4% | 보류 65.3%/lat1.74× · c0180-java-multi-ws |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 98.4% | 87.3% | 114.4% | 81.2% | 141.0% | 156.5% | 통과 113.1%/lat0.52× · c0180-java-multi-ws |
 | `ws` | `MULTI_DEALER_ROUTER_REQREP` | 실패 | 실패 | 138% | 실패 | 40% | 43% | 보류 73.5%(n3) · 소형 다수 실패=backpressure 지연(C성공)·binding 불변 · c0180-java-multi-ws-reqrep |
 | `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 114.4% | 52.5% | 54.7% | 58.5% | 62.7% | 72.1% | 보류 69.2%/lat3.82× · c0180-java-multi-ws |
 | `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 실패 | 122% | 140% | 61% | 26% | 35% | 보류 76.6%(n5) · 64B 실패(C성공)·대형 latency floor · binding 불변 · c0180-java-multi-ws-reqrep |
 | `ws` | `MULTI_PUBSUB` | 116.0% | 75.6% | 60.8% | 71.2% | 146.9% | 144.6% | 통과 102.5%/lat0.86× · c0180-java-multi-ws |
-| `ws` | `MULTI_STREAM` | 실패 | 실패 | 실패 | 해당 없음 | 실패 | 해당 없음 | 실패 — MULTI_STREAM server_start_ready_timeout_or_mismatch (STREAM 서버 준비 실패, 측정 불가) |
+| `ws` | `MULTI_STREAM` | 77.9% | 93.3% | 96.1% | 해당 없음 | 104.8% | 해당 없음 | 통과 93.0%/lat≤1.3× · 동상 · c0180-java-multi-ws-stream |
 | `wss` | `MULTI_DEALER_DEALER` | 41.8% | 75.2% | 88.5% | 91.0% | 65.7% | 66.3% | 보류 71.4%/lat0.76× · c0180-java-multi-wss |
 | `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 110.3% | 89.3% | 69.3% | 76.9% | 74.0% | 66.7% | 통과 81.1%/lat1.35× · c0180-java-multi-wss |
 | `wss` | `MULTI_DEALER_ROUTER_REQREP` | 109% | 104% | 16% | 실패 | 47% | 72% | 보류 69.6%(n5) · 4096B 실패(측정특성, C성공)·binding 불변 · c0180-java-multi-wss-reqrep |
 | `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 75.6% | 72.6% | 79.6% | 36.4% | 113.7% | 115.6% | 통과 82.2%/lat0.74× · c0180-java-multi-wss |
 | `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 87% | 99% | 118% | 24% | 32% | 46% | 보류 67.9% · 대형 size 의존 latency floor · binding 불변 · c0180-java-multi-wss-reqrep |
 | `wss` | `MULTI_PUBSUB` | 101.1% | 66.0% | 75.9% | 82.7% | 103.5% | 97.7% | 보류 87.8%/lat0.74× · c0180-java-multi-wss |
-| `wss` | `MULTI_STREAM` | 실패 | 실패 | 실패 | 해당 없음 | 실패 | 해당 없음 | 실패 — MULTI_STREAM server_start_ready_timeout_or_mismatch (STREAM 서버 준비 실패, 측정 불가) |
+| `wss` | `MULTI_STREAM` | 95.7% | 119.9% | 113.8% | 해당 없음 | 142.7% | 해당 없음 | 통과 118.0%/lat≤1.1× · 동상 · c0180-java-multi-wss-stream |
 | `tls` | `MULTI_DEALER_DEALER` | 36.4% | 98.5% | 86.4% | 67.2% | 89.3% | 77.5% | 보류 75.9%/lat0.58× · c0180-java-multi-tls |
 | `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 96.7% | 75.4% | 63.9% | 60.2% | 75.3% | 83.7% | 통과 75.9%/lat1.59× · c0180-java-multi-tls |
 | `tls` | `MULTI_DEALER_ROUTER_REQREP` | 실패 | 105% | 105% | 실패 | 27% | 54% | 보류 73.0%(n4) · 64B 실패=backpressure 지연; 4096B는 C도 실패=전 언어 공통 · binding 불변 · c0180-java-multi-tls-reqrep |
 | `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 79.7% | 69.5% | 75.2% | 57.1% | 94.7% | 96.5% | 통과 78.8%/lat0.95× · c0180-java-multi-tls |
 | `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 82% | 108% | 85% | 37% | 26% | 38% | 보류 62.9% · 대형 size 의존 latency floor · binding 불변 · c0180-java-multi-tls-reqrep |
 | `tls` | `MULTI_PUBSUB` | 79.8% | 91.7% | 73.3% | 81.1% | 88.1% | 91.7% | 보류 84.3%/lat1.33× · c0180-java-multi-tls |
-| `tls` | `MULTI_STREAM` | 실패 | 실패 | 실패 | 해당 없음 | 실패 | 해당 없음 | 실패 — MULTI_STREAM server_start_ready_timeout_or_mismatch (STREAM 서버 준비 실패, 측정 불가) |
+| `tls` | `MULTI_STREAM` | 88.6% | 106.6% | 111.1% | 해당 없음 | 125.2% | 해당 없음 | 통과 107.9%/lat≤1.2× · 동상 · c0180-java-multi-tls-stream |
 
 ### 9.4 Node
 
