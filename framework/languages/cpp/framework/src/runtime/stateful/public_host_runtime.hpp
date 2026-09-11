@@ -764,7 +764,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void register_local_completion (pending_operation_t &operation,
                                     std::chrono::milliseconds timeout,
                                     spot_request_completion_t completion = {},
-                                    std::function<void ()> incomplete = {});
+                                    std::function<void ()> incomplete = {},
+                                    mesh_request_surface_t request_surface = mesh_request_surface_t::none);
     bool enqueue_completion (const pending_operation_t &operation,
                              receive_record_t record,
                              std::vector<zlink::message_t> parts);
