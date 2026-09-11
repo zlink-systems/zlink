@@ -5,7 +5,6 @@
 package native
 
 import (
-	"context"
 	"testing"
 
 	"zlink.systems/zlink/internal/native/completiontest"
@@ -76,7 +75,7 @@ func newWritableFixture(t *testing.T, kind completionOperationKind) (*completion
 		t.Fatal(err)
 	}
 	owner := socket.completion
-	entry := newCompletionEntry(kind, context.Background())
+	entry := newCompletionEntry(kind)
 	target := NewRoutingIDString("submit-target")
 	parts := []sendBuilderPart{{bytes: true, data: []byte("retained")}}
 	if kind == completionRequest {

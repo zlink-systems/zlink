@@ -457,7 +457,7 @@ publishes no part on the wire and does not invoke its handler. Capacity exhausti
 not block another pair or ordinary sends on the same pipe. Reply, timeout, disconnect, and close
 return the work and count reservations together. When a terminal reply or timeout returns the
 reservations, it wakes request-submit recovery on the pipe owner that held that reservation.
-When the wait token of a refused `DONTWAIT FINAL` request emits `ZLINK_COMPLETION_WRITABLE` is owned
+When the wait token of a refused `DONTWAIT` request emits `ZLINK_COMPLETION_WRITABLE` is owned
 by the [socket README's REQUEST DONTWAIT section](../socket/README.en.md#request-and-reply) — the
 recovery of the refusing resource is the only wake condition, so this reservation return is that
 condition.

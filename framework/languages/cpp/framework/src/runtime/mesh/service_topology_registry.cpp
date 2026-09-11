@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/mesh/service_topology_registry.hpp"
+#include <opentelemetry/metrics/provider.h>
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
@@ -97,12 +99,23 @@ bool discovery_expectation_matches (const service_node_descriptor_t &expected,
 
 } // namespace
 
-service_topology_registry_t::service_topology_registry_t (service_node_descriptor_t local) :
-    _local (std::move (local))
+service_topology_registry_t::service_topology_registry_t (
+  service_node_descriptor_t local, std::vector<std::string> metric_channel_names) :
+    _local (std::move (local)), _metric_channel_names (std::move (metric_channel_names))
 {
     if (!valid_descriptor (_local)) {
         throw std::invalid_argument ("local service descriptor is invalid");
     }
+    for (const auto &channel : _local.channels)
+        _metric_channel_names.push_back (channel.name);
+    std::sort (_metric_channel_names.begin (), _metric_channel_names.end ());
+    _metric_channel_names.erase (
+      std::unique (_metric_channel_names.begin (), _metric_channel_names.end ()),
+      _metric_channel_names.end ());
+    _selection_failures = opentelemetry::metrics::Provider::GetMeterProvider ()
+                            ->GetMeter ("zlink.framework")
+                            ->CreateDoubleCounter ("zlink.mesh_node.channel.selection_failures",
+                                                   "", "{failure}");
 }
 
 bool service_topology_registry_t::byte_vector_less_t::operator() (
@@ -278,6 +291,7 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                 _peers.erase (key);
                 _not_required_peers.insert_or_assign (std::move (key), std::move (descriptor));
                 ++_topology_version;
+                rebuild_channel_selections ();
                 return std::pair{peer_admission_result_t::not_required, _change_handler};
             }
 
@@ -313,6 +327,7 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
               admitted_peer_t{std::move (descriptor), std::move (connection_id),
                               direction.value_or (service_connection_direction_t::inbound),
                               admission_epoch});
+            rebuild_channel_selections ();
             return std::pair{peer_admission_result_t::admitted, _change_handler};
         })
         .get ();
@@ -334,6 +349,7 @@ bool service_topology_registry_t::disconnect (const std::vector<std::uint8_t> &n
             }
             _peers.erase (found);
             ++_topology_version;
+            rebuild_channel_selections ();
             changed = _change_handler;
             return std::pair{true, std::move (changed)};
         })
@@ -388,23 +404,23 @@ void service_topology_registry_t::materialize_selection_state (selection_state_t
 {
     if (!state.precomputed)
         return;
-    const auto total_selections = static_cast<std::int64_t> (state.precomputed_total_selections);
+    std::vector<std::size_t> selected_counts (
+      state.ordered_node_ids.size (), 0);
+    for (std::size_t step = 0; step < state.precomputed_cursor; ++step)
+        ++selected_counts[state.precomputed_schedule[step]];
+    const auto total_selections = static_cast<std::int64_t> (state.precomputed_cursor);
     for (std::size_t index = 0; index < state.ordered_node_ids.size (); ++index) {
         const auto weight = static_cast<std::int64_t> (state.ordered_weights[index]);
         state.cumulative[state.ordered_node_ids[index]] =
           state.precomputed_initial_cumulative[index] + total_selections * weight
-          - static_cast<std::int64_t> (state.precomputed_selected_counts[index])
+          - static_cast<std::int64_t> (selected_counts[index])
               * static_cast<std::int64_t> (state.total_weight);
     }
     state.precomputed = false;
     state.precomputed_initial_cumulative.clear ();
-    state.precomputed_cycle_start_cumulative.clear ();
     state.precomputed_schedule.clear ();
-    state.precomputed_selected_counts.clear ();
-    state.precomputed_total_selections = 0;
     state.precomputed_cursor = 0;
     state.precomputed_cycle_start = 0;
-    state.precomputed_schedule_end = 0;
 }
 
 void service_topology_registry_t::rebuild_selection_schedule (selection_state_t &state)
@@ -413,13 +429,9 @@ void service_topology_registry_t::rebuild_selection_schedule (selection_state_t 
     constexpr auto max_precompute_time = std::chrono::milliseconds (5);
     state.precomputed = false;
     state.precomputed_initial_cumulative.clear ();
-    state.precomputed_cycle_start_cumulative.clear ();
     state.precomputed_schedule.clear ();
-    state.precomputed_selected_counts.clear ();
-    state.precomputed_total_selections = 0;
     state.precomputed_cursor = 0;
     state.precomputed_cycle_start = 0;
-    state.precomputed_schedule_end = 0;
     if (state.ordered_node_ids.empty () || state.total_weight == 0
         || state.total_weight
              > static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ()))
@@ -466,15 +478,9 @@ void service_topology_registry_t::rebuild_selection_schedule (selection_state_t 
         const auto [found, inserted] = seen.emplace (simulated, step);
         if (!inserted) {
             const auto cycle_start = found->second;
-            auto cycle_state = initial;
-            for (std::size_t index = 0; index < cycle_start; ++index)
-                apply_selection (cycle_state, schedule[index]);
             state.precomputed = true;
             state.precomputed_initial_cumulative = initial;
-            state.precomputed_cycle_start_cumulative = std::move (cycle_state);
-            state.precomputed_selected_counts.assign (state.ordered_node_ids.size (), 0);
             state.precomputed_cycle_start = cycle_start;
-            state.precomputed_schedule_end = schedule.size ();
             state.precomputed_schedule = std::move (schedule);
             return;
         }
@@ -486,70 +492,83 @@ void service_topology_registry_t::rebuild_selection_schedule (selection_state_t 
     }
 }
 
-std::optional<admitted_peer_t> service_topology_registry_t::select (const std::string &channel_name)
+void service_topology_registry_t::rebuild_channel_selections ()
+{
+    std::set<std::string> channel_names;
+    for (const auto &[_, peer] : _peers) {
+        for (const auto &channel : peer.descriptor.channels)
+            channel_names.insert (channel.name);
+    }
+
+    for (auto state = _selection_state.begin (); state != _selection_state.end ();) {
+        if (!channel_names.contains (state->first))
+            state = _selection_state.erase (state);
+        else
+            ++state;
+    }
+
+    for (const auto &channel_name : channel_names) {
+        auto &state = _selection_state[channel_name];
+        materialize_selection_state (state);
+        state.weights.clear ();
+        state.total_weight = 0;
+        bool all_draining = true;
+        for (const auto &[node_id, peer] : _peers) {
+            const auto channel =
+              std::lower_bound (peer.descriptor.channels.begin (),
+                                peer.descriptor.channels.end (), channel_name,
+                                [] (const service_channel_descriptor_t &entry,
+                                    const std::string &name) { return entry.name < name; });
+            if (channel == peer.descriptor.channels.end () || channel->name != channel_name)
+                continue;
+            all_draining &= peer.descriptor.state == service_node_state_t::draining;
+            if (!selectable (peer.descriptor, channel_name))
+                continue;
+            const auto weight = static_cast<std::uint64_t> (channel->weight);
+            if (state.total_weight > std::numeric_limits<std::uint64_t>::max () - weight)
+                throw std::overflow_error ("RouteMesh selection weight total is exhausted");
+            state.weights.insert_or_assign (node_id, weight);
+            state.total_weight += weight;
+        }
+        state.unavailable_reason = all_draining ? "draining" : "not_ready";
+        for (auto current = state.cumulative.begin (); current != state.cumulative.end ();) {
+            if (!state.weights.contains (current->first))
+                current = state.cumulative.erase (current);
+            else
+                ++current;
+        }
+        state.ordered_node_ids.clear ();
+        state.ordered_weights.clear ();
+        state.ordered_node_ids.reserve (state.weights.size ());
+        state.ordered_weights.reserve (state.weights.size ());
+        for (const auto &[node_id, weight] : state.weights) {
+            state.ordered_node_ids.push_back (node_id);
+            state.ordered_weights.push_back (weight);
+        }
+        rebuild_selection_schedule (state);
+    }
+}
+
+std::optional<std::vector<std::uint8_t>>
+service_topology_registry_t::select (const std::string &channel_name)
 {
     if (channel_name.empty ()) {
         return std::nullopt;
     }
     return _lane
-      .run ([&, this] () -> std::optional<admitted_peer_t> {
-          auto &state = _selection_state[channel_name];
-          if (!state.initialized || state.topology_version != _topology_version) {
-              materialize_selection_state (state);
-              state.weights.clear ();
-              state.total_weight = 0;
-              for (const auto &[node_id, peer] : _peers) {
-                  if (!selectable (peer.descriptor, channel_name))
-                      continue;
-                  const auto channel =
-                    std::lower_bound (peer.descriptor.channels.begin (),
-                                      peer.descriptor.channels.end (), channel_name,
-                                      [] (const service_channel_descriptor_t &entry,
-                                          const std::string &name) { return entry.name < name; });
-                  const auto weight = static_cast<std::uint64_t> (channel->weight);
-                  if (state.total_weight > std::numeric_limits<std::uint64_t>::max () - weight)
-                      throw std::overflow_error ("RouteMesh selection weight total is exhausted");
-                  state.weights.insert_or_assign (node_id, weight);
-                  state.total_weight += weight;
-              }
-              for (auto it = state.cumulative.begin (); it != state.cumulative.end ();) {
-                  if (!state.weights.contains (it->first))
-                      it = state.cumulative.erase (it);
-                  else
-                      ++it;
-              }
-              state.ordered_node_ids.clear ();
-              state.ordered_weights.clear ();
-              state.ordered_node_ids.reserve (state.weights.size ());
-              state.ordered_weights.reserve (state.weights.size ());
-              for (const auto &[node_id, weight] : state.weights) {
-                  state.ordered_node_ids.push_back (node_id);
-                  state.ordered_weights.push_back (weight);
-              }
-              rebuild_selection_schedule (state);
-              state.initialized = true;
-              state.topology_version = _topology_version;
-          }
-
-          if (state.weights.empty () || state.total_weight == 0)
+      .run ([&, this] () -> std::optional<std::vector<std::uint8_t>> {
+          const auto found = _selection_state.find (channel_name);
+          if (found == _selection_state.end ()) {
+              record_selection_failure (channel_name);
               return std::nullopt;
+          }
+          auto &state = found->second;
 
           if (state.precomputed) {
               const auto selected_index = state.precomputed_schedule[state.precomputed_cursor++];
-              ++state.precomputed_selected_counts[selected_index];
-              ++state.precomputed_total_selections;
-              const auto selected_node_id = state.ordered_node_ids[selected_index];
-              if (state.precomputed_cursor == state.precomputed_schedule_end) {
-                  state.precomputed_initial_cumulative = state.precomputed_cycle_start_cumulative;
-                  std::fill (state.precomputed_selected_counts.begin (),
-                             state.precomputed_selected_counts.end (), 0);
-                  state.precomputed_total_selections = 0;
+              if (state.precomputed_cursor == state.precomputed_schedule.size ())
                   state.precomputed_cursor = state.precomputed_cycle_start;
-              }
-              const auto selected = _peers.find (selected_node_id);
-              if (selected == _peers.end ())
-                  return std::nullopt;
-              return selected->second;
+              return state.ordered_node_ids[selected_index];
           }
 
           const admitted_peer_t *selected = nullptr;
@@ -571,14 +590,49 @@ std::optional<admitted_peer_t> service_topology_registry_t::select (const std::s
                   selected_cumulative = cumulative;
               }
           }
-          if (selected == nullptr)
+          if (selected == nullptr) {
+              record_selection_failure (channel_name);
               return std::nullopt;
+          }
 
           auto &selected_value = state.cumulative[selected->descriptor.node_routing_id];
           selected_value -= static_cast<std::int64_t> (state.total_weight);
-          return *selected;
+          return selected->descriptor.node_routing_id;
       })
       .get ();
+}
+
+void service_topology_registry_t::record_selection_failure (const std::string &channel_name) const noexcept
+{
+    // Labels come only from startup registrations; arbitrary requested names
+    // and per-peer identities cannot create metric series.
+    if (!std::binary_search (_metric_channel_names.begin (), _metric_channel_names.end (), channel_name))
+        return;
+    const auto found = _selection_state.find (channel_name);
+    const char *reason = _local.state == service_node_state_t::draining ? "draining"
+                         : found == _selection_state.end () ? "no_member"
+                         : found->second.unavailable_reason;
+    _selection_failures->Add (
+      1, {{"mesh_name", opentelemetry::nostd::string_view (_local.mesh_name.data (), _local.mesh_name.size ())},
+          {"channel_name", opentelemetry::nostd::string_view (channel_name.data (), channel_name.size ())},
+          {"reason", reason}});
+}
+
+void service_topology_registry_t::observe_channel_metrics (
+  opentelemetry::metrics::ObserverResult result, bool closed) const
+{
+    auto observer = opentelemetry::nostd::get<
+      opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObserverResultT<double>>> (result);
+    _lane.run ([&] {
+        // Selection already maintains the bounded member aggregates. No
+        // application object, mailbox or Location Store traversal is needed.
+        for (const auto &channel : _metric_channel_names) {
+            const auto found = _selection_state.find (channel);
+            const auto count = closed || found == _selection_state.end () ? 0 : found->second.weights.size ();
+            observer->Observe (static_cast<double> (count),
+                               {{"mesh_name", _local.mesh_name}, {"channel_name", channel}});
+        }
+    }).get ();
 }
 
 std::vector<admitted_peer_t>

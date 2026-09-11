@@ -2,6 +2,34 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class RuntimeConcurrencyBoundaryTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunnerCompletion_PreservesContextWithoutSupervisorLaneOwnership(bool longRunning)
+    {
+        var runner = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), CancellationToken.None);
+        var ambient = new AsyncLocal<string?> { Value = "caller" };
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observed = new TaskCompletionSource<(string?, bool, bool)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        async ValueTask Callback(CancellationToken token)
+        {
+            entered.TrySetResult();
+            await release.Task.ConfigureAwait(false);
+            observed.TrySetResult((ambient.Value, runner.IsCurrentExecution, ZLinkStateLane.Current is null));
+        }
+        var execution = longRunning ? runner.RunLongRunning("context", Callback) : runner.Run("context", Callback);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var stop = runner.StopAsync().AsTask();
+        Assert.False(stop.IsCompleted);
+        release.TrySetResult();
+        Assert.Equal(("caller", true, true), await observed.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        await execution.WaitAsync(TimeSpan.FromSeconds(5));
+        await stop.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(runner.IsCurrentExecution);
+        Assert.Equal("caller", ambient.Value);
+    }
+
     [Fact]
     public async Task Runner_can_stop_a_sibling_with_the_same_execution_owner()
     {

@@ -281,7 +281,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       sourceNodeRid: string,
       parts: readonly MessageLike[]
     ) => ZLinkSubmitResult,
-    private readonly metrics?: ZLinkRuntimeMetrics
+    private readonly metrics?: ZLinkRuntimeMetrics,
+    private readonly flowCreationEnabled: () => boolean = () => true
   ) {}
 
   canRouteChannel(routerChannelId: string): boolean {
@@ -308,7 +309,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
   ): Promise<ZLinkSubmitResult> {
     // Call-scoped flow (spec 27 §4): the envelope flow pair lives only for
     // the duration of this outbound call, never in the caller's context.
-    return runWithOutboundFlow(true, () => this.submitNode(
+    return runWithOutboundFlow(this.flowCreationEnabled(), () => this.submitNode(
       meshName,
       targetNodeRid,
       packetName,
@@ -327,7 +328,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): Promise<ZLinkSubmitResult> {
-    return runWithOutboundFlow(true, () => this.submitNode(
+    return runWithOutboundFlow(this.flowCreationEnabled(), () => this.submitNode(
       meshName,
       targetNodeRid,
       packetName,
@@ -399,7 +400,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): Promise<TReply> {
-    return runWithOutboundFlow(true, () => this.requestScoped<TReply>(
+    return runWithOutboundFlow(this.flowCreationEnabled(), () => this.requestScoped<TReply>(
       meshName,
       targetNodeRid,
       packetName,
@@ -468,7 +469,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): Promise<ZLinkSubmitResult> {
-    return runWithOutboundFlow(true, () => this.submitToChannelScoped(
+    return runWithOutboundFlow(this.flowCreationEnabled(), () => this.submitToChannelScoped(
       meshName,
       channelName,
       packetName,
@@ -521,7 +522,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): Promise<TReply> {
-    return runWithOutboundFlow(true, () => this.requestToChannelScoped<TReply>(
+    return runWithOutboundFlow(this.flowCreationEnabled(), () => this.requestToChannelScoped<TReply>(
       meshName,
       channelName,
       packetName,
@@ -614,7 +615,10 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       readonly metadata?: ReadonlyMap<string, string>;
     }
   ): Promise<ZLinkSubmitResult> {
-    return runWithOutboundFlow(true, () => this.sendToSpotScoped(spotRouteTarget, message, options));
+    return runWithOutboundFlow(
+      this.flowCreationEnabled(),
+      () => this.sendToSpotScoped(spotRouteTarget, message, options)
+    );
   }
 
   private async sendToSpotScoped(
@@ -712,7 +716,10 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       readonly metadata?: ReadonlyMap<string, string>;
     }
   ): Promise<TReply> {
-    return runWithOutboundFlow(true, () => this.requestToSpotScoped<TReply>(spotRouteTarget, request, options));
+    return runWithOutboundFlow(
+      this.flowCreationEnabled(),
+      () => this.requestToSpotScoped<TReply>(spotRouteTarget, request, options)
+    );
   }
 
   private async requestToSpotScoped<TReply = unknown>(
@@ -819,7 +826,10 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     request: Message,
     options: { readonly timeoutMs?: number; readonly signal?: AbortSignal }
   ): Promise<readonly Message[]> {
-    return runWithOutboundFlow(true, () => this.requestRawToSpotScoped(spotRouteTarget, request, options));
+    return runWithOutboundFlow(
+      this.flowCreationEnabled(),
+      () => this.requestRawToSpotScoped(spotRouteTarget, request, options)
+    );
   }
 
   private async requestRawToSpotScoped(
@@ -963,7 +973,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       undefined,
       this.codecs,
       undefined,
-      true,
+      this.flowCreationEnabled(),
       metadata
     );
   }

@@ -1,7 +1,13 @@
 {
   "name": "@zlink-systems/framework-locations-redis",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zlink-systems/zlink.git",
+    "directory": "framework/languages/node/packages/framework-locations-redis"
+  },
+  "homepage": "https://zlink.systems/",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -11,8 +17,8 @@
     }
   },
   "dependencies": {
-    "@zlink-systems/framework": "0.11.0",
-    "@zlink-systems/zlink": "0.17.6",
+    "@zlink-systems/framework": "0.11.1",
+    "@zlink-systems/zlink": "0.18.0",
     "redis": "^6.1.0"
   }
 }

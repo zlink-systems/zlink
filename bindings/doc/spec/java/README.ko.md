@@ -90,7 +90,7 @@ Java package 구조는 다음 조건을 만족한다.
 - factory가 contract 타입을 반환하고 runtime 클래스를 감춘다;
 - public contract 파일은 `systems.zlink.runtime.*`을 import하지 않는다;
 - 샘플, perf runner와 테스트는 runtime package를 import하지 않는다;
-- native handle, raw part loop, completion drain state와 native struct mirror는 public contract
+- native handle, whole-message 배열 처리, completion drain state와 native struct mirror는 public contract
   source 밖에 있다.
 
 Contract/runtime 분리는 helper뿐 아니라 resource 경계에도 적용한다.
@@ -520,7 +520,7 @@ constructor는 목표 contract의 일부가 아니다.
 ## Contract File Requirements
 
 Contract 파일은 Panama, JNI, native handle, native struct layout, completion
-registry와 raw `*_part` loop를 몰라도 읽을 수 있어야 한다.
+registry와 whole-message 배열 처리를 몰라도 읽을 수 있어야 한다.
 
 Contract 파일이 import할 수 있는 것:
 
@@ -563,7 +563,7 @@ Runtime이 소유하는 것:
 - 메시지 marshalling;
 - socket-local completion operation state와 drain owner;
 - receive cursor;
-- part-loop sequencing;
+- whole-message 배열 marshalling;
 - native error mapping;
 - typed option mapping;
 - native resource 채택과 해제;
@@ -599,8 +599,8 @@ Typed socket contract는 해당 socket 타입에 의미 있는 기능만 더한�
 - `StreamSocket`: RAW recv, PACKET recv, stream send, actor gateway, bound actor
   operation.
 
-Protocol envelope helper, raw native part submission과 native routing-ID pointer는
-public contract가 아니다.
+Runtime은 record마다 Core whole-message API를 한 번 호출하며 native part 배열과 count를 내부에서
+관리한다. Protocol envelope helper와 native routing-ID pointer도 public contract가 아니다.
 
 ## Operation Builder Shape
 
@@ -621,8 +621,13 @@ Builder 시작 메서드는 대상 식별자와 reply token만 받는다:
 - `sendBoundActor(sessionRid, actorId)`
 
 PAIR·DEALER·ROUTER·STREAM send builder는 `SendOperation` family를 사용한다. Send는 비동기
-`submit()`과 동기 `submit_sync()`를 제공한다. Request는 `submit()`과 `submit_sync()`를 제공하고
-reply timeout을 builder에서 설정한다.
+`submit()`과 동기 `submit_sync()`를 제공한다. 비동기 `submit()`은 `CompletionStage`를 직접 돌려주지 않고
+결과 객체 `SendSubmission`(`SubmitResult result()`, `CompletionStage<Void> admitted()`)을 돌려준다.
+Request는 `submit()`과 `submit_sync()`를 제공하고 reply timeout을 builder에서 설정한다. Request의 비동기
+`submit()`은 `RequestSubmission`(`result()`·`admitted()`에 `CompletionStage<List<Message>> reply()` 추가)을
+돌려준다. `result()`는 제출 시점 `OK`|`BACKPRESSURED` 스냅샷이고, 그 밖의 제출 실패는 지금처럼
+`ZlinkSubmitException`으로 던진다. 결과 객체의 구조와 합류는
+[공통 결과 투영](../README.ko.md#submit-result-projection)과 [async-coroutine-policy §6](../async-coroutine-policy.ko.md#6-언어별-terminal-interface)이 소유한다.
 PUB/XPUB publish도 같은 staged message builder를 사용하지만 `submit()`은
 동기 `void`이며, 성공하지 못하면 즉시 `ZlinkSubmitException`을 던진다.
 
@@ -660,6 +665,13 @@ Submit과 completion의 합류는 [공통 실행 모델](../async-execution-mode
 `Message`:
 
 - 문서화된 ownership 규칙에 따라 메시지 payload를 소유하거나 공유한다;
+- payload 공유·이전·복제는 공통 계약의 `Copy`/`Move`/`Clone`을 따른다:
+  `Message copy()`(ref-count 공유, 새 `Message` 반환, `zlink_msg_copy`),
+  `void move(Message dest)`(소유권 이전, 호출자 empty, `zlink_msg_move`),
+  `Message clone()`(독립 버퍼 deep copy). 기존 `sharedCopyOf`/`moveInto`/`moveTo`는
+  공개 API가 아니라 내부 bridge/package-private였으므로 공개 deprecated alias는 두지 않고
+  내부 호출 경로만 유지한다. 정의는 [Message ownership 공통 계약](../draft/message-ownership.ko.md)
+  §"명시적 Copy / Move / Clone";
 - `Message.from(...)` 같은 Java 친화적 factory를 노출한다;
 - raw `wrapNative`, `wrapDirect`, native pointer, borrow된 Java buffer send
   경로를 public API로 노출하지 않는다;
@@ -894,7 +906,7 @@ Java 바인딩은 다음 경계를 지킨다:
 5. factory 진입점을 public contract 타입으로 옮기고 contract interface를
    반환하게 한다.
 6. native-backed resource의 직접 public constructor를 제거한다.
-7. native handle, Panama/JNI 호출, completion drain, marshalling helper, part loop는
+7. native handle, Panama/JNI 호출, completion drain, marshalling helper, whole-message 배열 처리는
    runtime/nativeapi 또는 runtime support 클래스가 소유한다.
 8. 샘플, perf, 테스트, 문서 예시를 `systems.zlink.contracts.*`만 import하도록
    업데이트한다.
@@ -917,7 +929,7 @@ concrete contract resource에서 helper 클래스만 추출하는 것으로 시�
 - 좁게 정당화된 factory 와이어링을 제외하면 contract 파일이
   `systems.zlink.runtime.*`을 import하지 않는다.
 - public signature가 native handle, Panama memory segment, native bridge 타입,
-  completion registry state, raw part loop를 언급하지 않는다.
+  completion registry state, whole-message 배열 처리를 언급하지 않는다.
 - DTO/값/record/enum/result/exception 타입이 concrete로 유지된다.
 - Operation builder가 public contract이며 staged 상태를 감춘다.
 - 샘플, perf, 테스트, 애플리케이션이 `systems.zlink.contracts.*`만 import한다.
@@ -965,7 +977,7 @@ interface나 operation contract가 native bridge 세부에 의존하는 결과�
 
 Java package 정보는 [배포 metadata](../../../java/build.gradle)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Java는 blocking `submit_sync()`와 `CompletionStage`를 반환하는 `submit()`을 제공한다.
+Java는 blocking `submit_sync()`와 결과 객체(`SendSubmission`/`RequestSubmission`: `result`와 `admitted`, request는 `reply`)를 돌려주는 `submit()`을 제공한다.
 Kotlin은 독립 native ABI나 token wrapper 없이 같은 Java 계약을 사용한다.
 Caller wait 취소는 stage cancellation으로 표현한다.
 
@@ -984,16 +996,27 @@ Token은 raw accessor, ordering, serialization과 `AutoCloseable`을 제공하�
 ### Public interface
 
 ```java
+public interface SendSubmission {
+    SubmitResult result();              // OK | BACKPRESSURED, 제출 시점 스냅샷
+    CompletionStage<Void> admitted();   // OK면 완료 상태
+}
+
+public interface RequestSubmission {
+    SubmitResult result();
+    CompletionStage<Void> admitted();
+    CompletionStage<List<Message>> reply();   // admitted 성공 뒤 완료
+}
+
 public interface SendSubmitOperation {
     SendSubmitOperation message(Message part);
-    CompletionStage<Void> submit();
+    SendSubmission submit();
     void submit_sync();
 }
 
 public interface RequestSubmitOperation {
     RequestSubmitOperation message(Message part);
     RequestSubmitOperation timeout(Duration timeout);
-    CompletionStage<List<Message>> submit();
+    RequestSubmission submit();
     List<Message> submit_sync();
 }
 

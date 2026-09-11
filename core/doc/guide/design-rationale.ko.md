@@ -61,7 +61,8 @@ Boost.Asio 기반으로 I/O **완료** 이벤트를 핸들러로 전달한다(Pr
 
 **사용자에게 의미**: I/O 완료는 Context가 소유한 I/O 스레드 안에서 처리되고, 사용자 코드는
 그 스레드에서 실행되지 않는다 — Core는 application 콜백을 두지 않으며, application은 poller로
-readiness를 기다린 뒤 `*_recv_part()`·`zlink_completion_recv()`로 결과를 **pull**한다. 다중
+readiness를 기다린 뒤 socket 종류에 맞는 whole-message receive 함수나
+`zlink_completion_recv()`로 결과를 **pull**한다. 다중
 소켓을 한 루프에서 poller로 묶는다(개념은 [02 Core API](02-core-api.ko.md), 언어 표면은 각
 [바인딩 가이드](../../../bindings/doc/guide/README.ko.md)).
 

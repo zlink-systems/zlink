@@ -13,14 +13,21 @@ import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
  * Owns handler instances for one Framework lifecycle boundary.
  */
 public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
+    private final ZLinkHandlerActivator activator;
     private final ZLinkHandlerActivator.Activation activation;
     private final Map<Class<?>, Object> instances = new LinkedHashMap<>();
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    // Keep synchronous activation on the caller's execution resource; the lane
+    // still owns FIFO and non-reentrant access to the scope's state.
+    private final ZLinkStateLane stateLane = new ZLinkStateLane(Runnable::run);
     private boolean closed;
 
     public ZLinkHandlerInstanceOwner(ZLinkHandlerActivator activator) {
-        this.activation = Objects.requireNonNull(activator, "activator")
-            .openActivation();
+        this.activator = Objects.requireNonNull(activator, "activator");
+        this.activation = this.activator.openActivation();
+    }
+
+    public void prepare(Class<?> handlerType) {
+        activator.prepare(handlerType);
     }
 
     public Object instance(Class<?> handlerType) {

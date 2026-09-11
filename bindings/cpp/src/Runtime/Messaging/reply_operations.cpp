@@ -30,8 +30,8 @@ void submit_raw_reply (detail::operation_state_t &state_)
     const zlink_reply_token_t token = detail::received_access_t::token_value (
       *state_.reply.token);
     const int rc = detail::submit_message_parts (
-      state_.message.parts, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
-          return zlink_reply_part (state_.raw.socket, &first_rid, token, part_out_, part_flag_);
+      state_.message.parts, [&] (zlink_msg_t *parts_, size_t part_count_) {
+          return zlink_reply (state_.raw.socket, &first_rid, token, parts_, part_count_);
       });
     if (rc == -1) {
         detail::restore_send_parts_to_sources (state_, state_.message.parts);

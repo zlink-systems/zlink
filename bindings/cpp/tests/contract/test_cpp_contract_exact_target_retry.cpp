@@ -88,11 +88,10 @@ std::string receive_raw_dealer_part (void *dealer_)
 {
     wait_raw_socket (dealer_, ZLINK_POLLIN);
     zlink_msg_t part;
-    assert (zlink_msg_init (&part) == ZLINK_CONFIG_OK);
-    zlink_part_flag_t part_flag = ZLINK_PART_MORE;
-    assert (zlink_recv_part (dealer_, nullptr, &part, &part_flag,
-                             ZLINK_RECV_FLAGS_DONTWAIT) == ZLINK_RECV_OK);
-    assert (part_flag == ZLINK_PART_FINAL);
+    size_t part_count = 0;
+    assert (zlink_recv (dealer_, nullptr, &part, 1u, &part_count,
+                        ZLINK_RECV_FLAGS_DONTWAIT) == ZLINK_RECV_OK);
+    assert (part_count == 1u);
     const std::string payload (
       static_cast<const char *> (zlink_msg_data (&part)),
       zlink_msg_size (&part));
@@ -122,9 +121,9 @@ size_t fill_raw_router_until_backpressured (
         init_raw_part (part, logical_payload_);
         zlink_completion_id_t completion_id = UINT64_MAX;
         errno = 0;
-        const zlink_submit_result_t result = zlink_send_part_rid (
-          router_, &target_, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-          ZLINK_PART_FINAL, user_context_, &completion_id);
+        const zlink_submit_result_t result = zlink_send_rid (
+          router_, &target_, &part, 1u, ZLINK_SEND_FLAGS_DONTWAIT,
+          user_context_, &completion_id);
         const int submit_errno = zlink_errno ();
         assert_raw_part_consumed (part);
         if (result == ZLINK_SUBMIT_BACKPRESSURED) {
@@ -186,8 +185,8 @@ void test_raw_dontwait_backpressure_writable_and_exact_retry ()
     zlink_msg_t prime;
     init_raw_part (prime, "route-prime");
     zlink_completion_id_t prime_id = UINT64_MAX;
-    assert (zlink_send_part (dealer, &prime, ZLINK_SEND_FLAGS_NONE,
-                             ZLINK_PART_FINAL, nullptr, &prime_id)
+    assert (zlink_send (dealer, &prime, 1u, ZLINK_SEND_FLAGS_NONE,
+                        nullptr, &prime_id)
             == ZLINK_SUBMIT_OK);
     assert (prime_id == 0);
     assert_raw_part_consumed (prime);
@@ -196,17 +195,16 @@ void test_raw_dontwait_backpressure_writable_and_exact_retry ()
     const zlink_routing_id_t *source_rid = nullptr;
     zlink_reply_token_t reply_token = UINT64_MAX;
     zlink_msg_t received_prime;
-    assert (zlink_msg_init (&received_prime) == ZLINK_CONFIG_OK);
-    zlink_part_flag_t prime_flag = ZLINK_PART_MORE;
-    assert (zlink_router_recv_part (
-              router, &source_rid, &reply_token, &received_prime, &prime_flag,
+    size_t prime_count = 0;
+    assert (zlink_router_recv (
+              router, &source_rid, &reply_token, &received_prime, 1u, &prime_count,
               ZLINK_RECV_FLAGS_DONTWAIT)
             == ZLINK_RECV_OK);
     assert (source_rid != nullptr);
     assert (source_rid->size == dealer_name.size ());
     assert (std::memcmp (source_rid->data, dealer_name.data (),
                          dealer_name.size ()) == 0);
-    assert (reply_token == 0 && prime_flag == ZLINK_PART_FINAL);
+    assert (reply_token == 0 && prime_count == 1u);
     assert (zlink_msg_close (&received_prime) == ZLINK_CONFIG_OK);
 
     const zlink_routing_id_t target = make_raw_routing_id (dealer_name);
@@ -285,9 +283,9 @@ void test_raw_dontwait_backpressure_writable_and_exact_retry ()
     zlink_msg_t retry;
     init_raw_part (retry, logical_payload);
     zlink_completion_id_t retry_id = UINT64_MAX;
-    assert (zlink_send_part_rid (
-              router, &target, &retry, ZLINK_SEND_FLAGS_DONTWAIT,
-              ZLINK_PART_FINAL, nullptr, &retry_id)
+    assert (zlink_send_rid (
+              router, &target, &retry, 1u, ZLINK_SEND_FLAGS_DONTWAIT,
+              nullptr, &retry_id)
             == ZLINK_SUBMIT_OK);
     assert (retry_id == 0);
     assert_raw_part_consumed (retry);
@@ -479,11 +477,15 @@ int test_admitted_async_send_leaves_no_waiter_identity ()
         zlink::message_t payload =
           zlink_cpp_contract::make_message ("admitted-" + std::to_string (i));
         auto result = dealer.send ().message (payload).async ();
+        if (result.result != ZLINK_SUBMIT_OK) {
+            std::fprintf (stderr, "an admitted send must report OK\n");
+            return 1;
+        }
         if (payload.valid ()) {
             std::fprintf (stderr, "an admitted send must consume the part\n");
             return 1;
         }
-        auto awaiter = std::move (result).operator co_await ();
+        auto awaiter = std::move (result.admitted).operator co_await ();
         if (!awaiter.await_ready ()) {
             std::fprintf (stderr, "an admitted send must complete inline\n");
             return 2;
@@ -500,7 +502,11 @@ int test_admitted_async_send_leaves_no_waiter_identity ()
     zlink::message_t rejected =
       zlink_cpp_contract::make_message ("resumed-after-admitted");
     auto pending = dealer.send ().message (rejected).async ();
-    auto pending_awaiter = std::move (pending).operator co_await ();
+    if (pending.result != ZLINK_SUBMIT_BACKPRESSURED) {
+        std::fprintf (stderr, "a send without credit must report backpressure\n");
+        return 4;
+    }
+    auto pending_awaiter = std::move (pending.admitted).operator co_await ();
     if (pending_awaiter.await_ready ()) {
         std::fprintf (stderr, "a send without credit must not be terminal\n");
         return 4;

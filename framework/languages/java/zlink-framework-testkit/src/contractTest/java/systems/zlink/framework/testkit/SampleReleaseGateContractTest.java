@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFileAttributeView;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -137,13 +138,15 @@ final class SampleReleaseGateContractTest {
                     "missing build.gradle.kts for " + sampleName);
                 assertTrue(Files.isRegularFile(sampleRoot.resolve("run_sample.sh")),
                     "missing run_sample.sh for " + sampleName);
-                if (sample.equals("TicTacToe")) {
-                    assertFalse(Files.isExecutable(sampleRoot.resolve("run_sample.sh")),
-                        "TicTacToe run_sample.sh must retain its non-executable release mode for "
-                            + sampleName);
-                } else {
-                    assertTrue(Files.isExecutable(sampleRoot.resolve("run_sample.sh")),
-                        "run_sample.sh must be executable for " + sampleName);
+                if (supportsPosixExecuteBits(sampleRoot.resolve("run_sample.sh"))) {
+                    if (sample.equals("TicTacToe")) {
+                        assertFalse(Files.isExecutable(sampleRoot.resolve("run_sample.sh")),
+                            "TicTacToe run_sample.sh must retain its non-executable release mode for "
+                                + sampleName);
+                    } else {
+                        assertTrue(Files.isExecutable(sampleRoot.resolve("run_sample.sh")),
+                            "run_sample.sh must be executable for " + sampleName);
+                    }
                 }
                 String runner = Files.readString(sampleRoot.resolve("run_sample.sh"));
                 assertTrue(runner.contains("--settings-file standalone.settings.gradle.kts")
@@ -2477,6 +2480,10 @@ final class SampleReleaseGateContractTest {
 
     private static Path samplesRoot() {
         return frameworkJavaRoot().resolve("samples");
+    }
+
+    private static boolean supportsPosixExecuteBits(Path path) {
+        return Files.getFileAttributeView(path, PosixFileAttributeView.class) != null;
     }
 
     private static Path frameworkJavaRoot() {

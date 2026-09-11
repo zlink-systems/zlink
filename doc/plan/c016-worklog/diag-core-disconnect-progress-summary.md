@@ -13,7 +13,7 @@ READY를 발행했다. Monitor queue의 병합이나 `wait_monitor_event`의 과
 
 - 기준: detached `origin/main` `0c28961cebcc12ef146f34862d924e310d3ff989`.
 - 구현·빌드·실행 위치: `/home/hep7/project/zlink-core-gate`.
-- [적용할 패치](/tmp/zlink-core-gate/disconnect-progress-fix.patch): 3개 파일, 41행 추가·21행 삭제.
+- 적용할 패치 (`/tmp/zlink-core-gate/disconnect-progress-fix.patch`): 3개 파일, 41행 추가·21행 삭제.
 - 패치 SHA-256: `63ee16c75376cd1f8157dac853c930e74ad534b2936a4fb61fb00c9c8fbd03d7`.
 - Commit·push·spec 수정 없음. Main에는 요청한 이 결과 파일만 생성했다.
 
@@ -35,12 +35,12 @@ READY를 발행했다. Monitor queue의 병합이나 `wait_monitor_event`의 과
    Socket 자체는 close되지 않았으므로 pipe가 활성 상태로 등록되고 DISCONNECTED는 나오지 않는다.
 
 첫 독립 재현은 기존 `ZLINK_DEBUG_PIPE_TERM=1`과 event 수신 로그를 켠 36번째 실행이었다.
-[실패 로그](/tmp/zlink-core-gate/baseline/test_inproc_unregistered_server_disconnect_progresses-36.log)에는
+실패 로그 (`/tmp/zlink-core-gate/baseline/test_inproc_unregistered_server_disconnect_progresses-36.log`)에는
 READY(connection 5) 뒤 3초 동안 종료 시작 로그가 없고, assertion 실패 후 정리에서야 pipe 종료가 나타난다.
 
 추가로 hot path에 파일 출력을 넣지 않고 메모리에 등록·제거·event 이력을 기록했다.
 첫 연결만 분리한 진단 executable의 1,935번째 실행에서 같은 실패를 자연 재현했다.
-[원시 이력](/tmp/zlink-core-gate/ring-first/inproc-1935.log)의 관련 순서는 다음과 같다.
+원시 이력 (`/tmp/zlink-core-gate/ring-first/inproc-1935.log`)의 관련 순서는 다음과 같다.
 
 | 순번 | 관찰 |
 |---|---|
@@ -69,7 +69,7 @@ connection ID 0이 들어 있다. `core/src/runtime/sockets/stream/stream.cpp:22
 RID를 만들고 READY를 발행한다. 따라서 이 READY를 받은 application은 아직 TCP accept가
 완료되지 않았는데도 server endpoint를 해제할 수 있다.
 
-[단일 I/O thread 실패 이력](/tmp/zlink-core-gate/stream-baseline/stream-286.log):
+단일 I/O thread 실패 이력 (`/tmp/zlink-core-gate/stream-baseline/stream-286.log`):
 READY(event 4096, connection 0, edge flag 1) → server disconnect → DISCONNECTED 3초 만료.
 이 경우 monitor에서 보인 READY가 성립한 물리 연결을 가리키지 않았다.
 
@@ -81,7 +81,7 @@ READY event에 0을 숨기는 조건을 추가하거나 별도 event를 합성�
 **공개 C API 회귀 강화:** 첫 READY의 connection ID가 0이 아님을 확인하고,
 그 **같은 ID**의 DISCONNECTED를 요구한다. 다음 READY는 0이 아니며 이전과 다른 ID여야 한다.
 기존 fresh RID 검사도 유지한다. 강화한 검사는
-[수정 전 library에서 실패](/tmp/zlink-core-gate/stream-strengthened-baseline.log)하고 수정 후 통과한다.
+수정 전 library에서 실패 (`/tmp/zlink-core-gate/stream-strengthened-baseline.log`)하고 수정 후 통과한다.
 `ZLINK_TEST_CASE` 선택은 저장소의 기존 선택 방식과 같으며 200회 검증에서도 실행 사례 수가
 정확히 1인지 확인했다.
 
@@ -118,12 +118,12 @@ Integration executable은 shared Core library에 연결되며 test executable �
 
 | 검증 | 결과 | 증거 |
 |---|---|---|
-| 관련 테스트 파일 전체 | 14개 사례 PASS | [focused log](/tmp/zlink-core-gate/fix-focused.log) |
-| `test_inproc_unregistered_server_disconnect_progresses` | 200/200, 총 4,000 disconnect/rebind cycle | [집계](/tmp/zlink-core-gate/regression-200/summary.json) |
+| 관련 테스트 파일 전체 | 14개 사례 PASS | focused log (`/tmp/zlink-core-gate/fix-focused.log`) |
+| `test_inproc_unregistered_server_disconnect_progresses` | 200/200, 총 4,000 disconnect/rebind cycle | 집계 (`/tmp/zlink-core-gate/regression-200/summary.json`) |
 | `test_stream_disconnect_reconnect_on_single_io_thread` | 200/200, ID·RID 검사 포함 | 같은 집계 |
-| `unittest_receive_transaction`, `unittest_ctx_lifecycle`, `unittest_zmp_pair_lifecycle`, `unittest_monitor_ready_drain` | 4/4 executable PASS | [unit log](/tmp/zlink-core-gate/fix-unit.log) |
-| Integration lane | 127/128 PASS, 기존 peer weight 실패 1개 | [첫 구간](/tmp/zlink-core-gate/integration.log), [남은 72개 PASS](/tmp/zlink-core-gate/integration-remaining.log), [전체 집계](/tmp/zlink-core-gate/integration-results.json) |
-| `hotpath_gate` | 4/4 cell PASS, reference 변경 없음 | [gate log](/tmp/zlink-core-gate/hotpath.log) |
+| `unittest_receive_transaction`, `unittest_ctx_lifecycle`, `unittest_zmp_pair_lifecycle`, `unittest_monitor_ready_drain` | 4/4 executable PASS | unit log (`/tmp/zlink-core-gate/fix-unit.log`) |
+| Integration lane | 127/128 PASS, 기존 peer weight 실패 1개 | 첫 구간 (`/tmp/zlink-core-gate/integration.log`), 남은 72개 PASS (`/tmp/zlink-core-gate/integration-remaining.log`), 전체 집계 (`/tmp/zlink-core-gate/integration-results.json`) |
+| `hotpath_gate` | 4/4 cell PASS, reference 변경 없음 | gate log (`/tmp/zlink-core-gate/hotpath.log`) |
 | `git diff --check` | PASS | 최종 patch 생성 전 확인 |
 
 원래 `event_timeout_ms=3000`, sample 수 20, disconnect p95 제한 200 ms와 reconnect p95 제한
@@ -152,8 +152,8 @@ ZLINK_TEST_CASE=test_stream_disconnect_reconnect_on_single_io_thread \
 `core/tests/integration/test_flow_state_paired.cpp:322`에서 peer weight를 3초 안에 관찰하지 못했다.
 Assertion 후 정리가 끝나지 않아 lane에서는 CTest 10초 timeout으로 기록됐다.
 별도 A/B 실행에서도 수정 전 library는 5회 통과 후 6번째 실패, 수정 후 library는 3회 통과 후
-4번째 실패했다. [Baseline 실패](/tmp/zlink-core-gate/flow-ab/baseline-6.log),
-[수정 후 실패](/tmp/zlink-core-gate/flow-ab/fixed-4.log), [A/B 집계](/tmp/zlink-core-gate/flow-ab/summary.json).
+4번째 실패했다. Baseline 실패 (`/tmp/zlink-core-gate/flow-ab/baseline-6.log`),
+수정 후 실패 (`/tmp/zlink-core-gate/flow-ab/fixed-4.log`), A/B 집계 (`/tmp/zlink-core-gate/flow-ab/summary.json`).
 이 적은 표본으로 실패율의 증감을 판정하지 않는다.
 
 같은 기존 실패는 `doc/plan/c016-worklog/core-tests-rebase-summary.md:113–120`에 기록돼 있고,

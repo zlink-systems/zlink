@@ -1031,20 +1031,23 @@ TEST (CppFrameworkSampleParity, JsonFieldAccessStaysInsideDtoSerializers)
 TEST (CppFrameworkSampleParity, SampleReadmesDescribePublicExecutablesAndRunnerScope)
 {
     const auto cpp_root = cpp_language_root ();
-    const auto cmake = read_file (cpp_root / "CMakeLists.txt");
     struct sample_readme_case_t
     {
         std::string readme_path;
+        std::string cmake_path;
         std::vector<std::string> public_targets;
     };
     const std::vector<sample_readme_case_t> cases{
       {"samples/Bingo/README.ko.md",
+       "samples/Bingo/CMakeLists.txt",
        {"sample_cpp_framework_bingo_api", "sample_cpp_framework_bingo_play",
         "sample_cpp_framework_bingo_session", "sample_cpp_framework_bingo_client"}},
       {"samples/TicTacToe/README.ko.md",
+       "samples/TicTacToe/CMakeLists.txt",
        {"sample_cpp_framework_tictactoe_api", "sample_cpp_framework_tictactoe_play",
         "sample_cpp_framework_tictactoe_client"}},
       {"samples/DeliveryDispatch/README.ko.md",
+       "samples/DeliveryDispatch/CMakeLists.txt",
        {"sample_cpp_framework_deliverydispatch_dispatch",
         "sample_cpp_framework_deliverydispatch_courier_actor_node",
         "sample_cpp_framework_deliverydispatch_customer_gateway",
@@ -1054,9 +1057,10 @@ TEST (CppFrameworkSampleParity, SampleReadmesDescribePublicExecutablesAndRunnerS
 
     for (const auto &sample : cases) {
         const auto readme = read_file (cpp_root / sample.readme_path);
+        const auto cmake = read_file (cpp_root / sample.cmake_path);
         for (const auto &target : sample.public_targets) {
             EXPECT_NE (cmake.find (target), std::string::npos)
-              << target << " is missing from CMake sample targets";
+              << target << " is missing from " << sample.cmake_path;
             EXPECT_NE (readme.find ("`" + target + "`"), std::string::npos)
               << sample.readme_path << " does not document " << target;
         }

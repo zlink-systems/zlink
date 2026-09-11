@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 'use strict';
 
+const path = require('node:path');
+const protoLoader = require('@grpc/proto-loader');
+const zlink = require('@zlink-systems/zlink');
+const { BenchPayload } = require('./framework-bench-contract');
+
 // Wire shape of the `zlink-<lang>` raw row.
 //
 // The raw row is measured against `zlink-c` (spec section 7.2 formula 1), so it must put
@@ -24,65 +29,19 @@ const RESPONSE_ENVELOPE = Buffer.from(
   'utf8'
 );
 
-function varintSize(value) {
-  let size = 1;
-  let remaining = value >>> 0;
-  while (remaining >= 0x80) {
-    remaining >>>= 7;
-    size += 1;
-  }
-  return size;
+// Reuse the same protobuf serializer as the gRPC row; schema loading is setup work.
+const payloadMethod = protoLoader.loadSync(path.join(__dirname, '../../proto/bench.proto'), {
+  keepCase: true, longs: String, enums: String, defaults: true, oneofs: true, bytes: Buffer
+})['zlink.framework.bench.withgrpc.BenchService'].Echo;
+
+/** Construct and serialize a typed message for every request and response. */
+function encodeBenchPayloadMessage(payload) {
+  return zlink.Message.from(payloadMethod.requestSerialize(new BenchPayload(payload)));
 }
 
-function writeVarint(buffer, offset, value) {
-  let remaining = value >>> 0;
-  let index = offset;
-  while (remaining >= 0x80) {
-    buffer[index++] = (remaining & 0x7f) | 0x80;
-    remaining >>>= 7;
-  }
-  buffer[index++] = remaining;
-  return index;
-}
-
-/** `BenchPayload { bytes body = 1 }` around an already-stamped payload. */
-function encodeBenchPayload(payload) {
-  const encoded = Buffer.allocUnsafe(1 + varintSize(payload.length) + payload.length);
-  encoded[0] = 0x0a;
-  const offset = writeVarint(encoded, 1, payload.length);
-  payload.copy(encoded, offset);
-  return encoded;
-}
-
-/** Returns a subarray view of field 1, or null. No copy. */
+/** Protobuf decode errors propagate to the caller's existing error accounting. */
 function decodeBenchPayloadBody(encoded) {
-  let offset = 0;
-  while (offset < encoded.length) {
-    let key = 0;
-    let shift = 0;
-    let byte;
-    do {
-      if (offset >= encoded.length || shift >= 32) return null;
-      byte = encoded[offset++];
-      key |= (byte & 0x7f) << shift;
-      shift += 7;
-    } while (byte & 0x80);
-    const field = key >>> 3;
-    const wireType = key & 0x07;
-    if (wireType !== 2) return null;
-    let length = 0;
-    shift = 0;
-    do {
-      if (offset >= encoded.length || shift >= 32) return null;
-      byte = encoded[offset++];
-      length |= (byte & 0x7f) << shift;
-      shift += 7;
-    } while (byte & 0x80);
-    if (encoded.length - offset < length) return null;
-    if (field === 1) return encoded.subarray(offset, offset + length);
-    offset += length;
-  }
-  return null;
+  return payloadMethod.requestDeserialize(encoded).body;
 }
 
 const ROUTING_IDS = {
@@ -94,6 +53,6 @@ module.exports = {
   REQUEST_ENVELOPE,
   RESPONSE_ENVELOPE,
   ROUTING_IDS,
-  encodeBenchPayload,
+  encodeBenchPayloadMessage,
   decodeBenchPayloadBody
 };

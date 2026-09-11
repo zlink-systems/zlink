@@ -22,7 +22,7 @@ test('runtime completion resolves consecutive requests without another event-loo
       dealer.connect('inproc://completion-progress');
       try {
         for (let index = 0; index < 10; ++index) {
-          const pending = dealer.request().message(String(index)).timeout(1000).submit();
+          const pending = dealer.request().message(String(index)).timeout(1000).submit().reply;
           assert.equal(router.recv(received), true);
           received.reply().message(String(index)).submit();
           received.close();
@@ -51,7 +51,7 @@ test('pending requests move between runtime and public completion ownership with
   router.bind('inproc://completion-owner-transfer');
   dealer.connect('inproc://completion-owner-transfer');
   try {
-    const first = dealer.request().message('public').timeout(1000).submit();
+    const first = dealer.request().message('public').timeout(1000).submit().reply;
     assert.equal(router.recv(received), true);
     poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 31);
     received.reply().message('first').submit();
@@ -62,7 +62,7 @@ test('pending requests move between runtime and public completion ownership with
     assert.equal(firstParts[0].getString(), 'first');
     firstParts.forEach(part => part.close());
 
-    const second = dealer.request().message('runtime').timeout(1000).submit();
+    const second = dealer.request().message('runtime').timeout(1000).submit().reply;
     assert.equal(router.recv(received), true);
     const peer = received.routingId;
     received.reply().message('second').submit();
@@ -95,7 +95,7 @@ test('runtime completion survives shutdown of an independent Context', async () 
   });
   const exchange = async (group) => {
     const pending = group.dealers.map((socket, index) =>
-      socket.request().message(String(index)).timeout(1000).submit());
+      socket.request().message(String(index)).timeout(1000).submit().reply);
     const received = new zlink.Received();
     try {
       for (let index = 0; index < pending.length; ++index) {
@@ -118,7 +118,7 @@ test('runtime completion survives shutdown of an independent Context', async () 
   try {
     await Promise.all(groups.map(exchange));
     const terminated = groups[0].dealers[0].request()
-      .message('shutdown').timeout(1000).submit();
+      .message('shutdown').timeout(1000).submit().reply;
     const rejected = assert.rejects(terminated, (error: any) =>
       error instanceof zlink.RequestError && error.result === zlink.RequestResult.Terminated);
     groups[0].ctx.shutdown();
@@ -187,7 +187,7 @@ test('public completion ownership defers settlement until wait and close rejects
   router.bind('inproc://completion-explicit-owner');
   dealer.connect('inproc://completion-explicit-owner');
   try {
-    const pending = dealer.request().message('owned').timeout(1000).submit();
+    const pending = dealer.request().message('owned').timeout(1000).submit().reply;
     let settled = false;
     void pending.then(() => { settled = true; });
     poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 7);
@@ -199,7 +199,7 @@ test('public completion ownership defers settlement until wait and close rejects
     assert.equal(poller.wait(events, 1000), 1);
     (await pending).forEach(part => part.close());
     poller.remove(dealer);
-    const closing = dealer.request().message('closing').timeout(1000).submit();
+    const closing = dealer.request().message('closing').timeout(1000).submit().reply;
     const rejected = assert.rejects(closing, (error: any) =>
       error instanceof zlink.RequestError && error.result === zlink.RequestResult.Terminated);
     dealer.close();

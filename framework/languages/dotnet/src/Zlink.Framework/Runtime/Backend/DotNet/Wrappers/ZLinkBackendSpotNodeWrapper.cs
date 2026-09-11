@@ -51,8 +51,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             node,
             _completions,
             applicationJobQueue);
-        _node.SetCompletionOverflowHandlerCore(
-            (record, parts) => _completions.Complete(record, parts));
+        _node.SetCompletionHandlerCore(
+            (record, parts) => _completions.TryComplete(record, parts));
         _messageFollowIngress = new ActorMessageFollowIngressAdapter(_pump);
         _node.SetActorMessageFollowIngressTarget(_messageFollowIngress);
     }
@@ -1146,10 +1146,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
 
     public bool SendActorBoundSession(
         ZLinkBackendActorRef actor,
-        IReadOnlyList<Message> parts,
-        SendFlags flags)
+        IReadOnlyList<Message> parts)
     {
-        return _node.SendBoundSession(ToNativeActor(actor), parts, flags) == SubmitResult.Ok;
+        return _node.SendBoundSession(ToNativeActor(actor), parts) == SubmitResult.Ok;
     }
 
     public ValueTask SendActorBoundSessionAsync(
@@ -1211,7 +1210,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         return true;
     }
 
-    public ValueTask<IReadOnlyList<Message>> RequestToNodeAsync(
+    public ValueTask<ZLinkBackendRouteReceived> RequestToNodeAsync(
         RoutingId targetNodeRid,
         IReadOnlyList<Message> parts,
         SendFlags flags,
@@ -1315,8 +1314,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         RoutingId sourceNodeRid,
         RoutingId sourceSessionRid,
         Message message,
-        bool hasMore,
-        SendFlags flags)
+        bool hasMore)
     {
         if (hasMore)
         {
@@ -1348,7 +1346,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
 
         // SendBoundSession clones the parts (the caller keeps ownership), so this
         // wrapper disposes every clone it owns on success.
-        if (_node.SendBoundSession(ToNativeActor(actor), parts, flags) == SubmitResult.Ok)
+        if (_node.SendBoundSession(ToNativeActor(actor), parts) == SubmitResult.Ok)
         {
             foreach (var part in parts) part.Dispose();
             return true;
@@ -1370,9 +1368,11 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         _ = _node.CloseBoundSession(ToNativeActor(actor), 0, timeout);
     }
 
-    public void OnNodeRoute(Action<ZLinkBackendRouteReceived> handler)
+    public void OnNodeRoute(
+        Func<IReadOnlyList<ZLinkBackendRouteReceived>, CancellationToken, ValueTask> handler,
+        ZLinkRuntimeTaskRunner taskRunner)
     {
-        _pump.SetNodeRouteHandler(handler);
+        _pump.SetNodeRouteHandler(handler, taskRunner);
     }
 
     public async ValueTask DisposeAsync()

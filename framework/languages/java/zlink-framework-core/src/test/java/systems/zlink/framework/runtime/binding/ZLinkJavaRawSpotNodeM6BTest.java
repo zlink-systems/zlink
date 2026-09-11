@@ -3,6 +3,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -16,6 +17,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -1333,6 +1335,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             CompletableFuture<String> sent = new CompletableFuture<>();
             AtomicReference<ZLinkBackendReceived> retainedRoute =
                 new AtomicReference<>();
+            CompletableFuture<ZLinkBackendReceived> firstRequest =
+                new CompletableFuture<>();
             AtomicInteger handlerCalls = new AtomicInteger();
             target.onDispatchEvent(info -> {
                 if (info.event() != ZLinkBackendSpotDispatchEvent.ROUTED_READABLE) {
@@ -1343,6 +1347,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 handlerCalls.incrementAndGet();
                 String value = received.parts().getLast().toUtf8String();
                 if (received.requestSeq().isPresent()) {
+                    if (firstRequest.complete(received)) {
+                        return;
+                    }
                     try (received) {
                         try (Message reply = Message.from("remote-reply")) {
                             received.reply(List.of(reply));
@@ -1369,20 +1376,57 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             awaitOutstandingApplicationLease(context, 0L);
 
             CompletableFuture<ZLinkBackendReceived> reply;
-            try (Message message = Message.from("remote-request")) {
-                reply = source.requestToSpot(
-                        leftRid,
-                        targetRid.toString(),
-                        target.lifecycleGeneration(),
-                        List.of(message),
-                        Duration.ofSeconds(2))
-                    .toCompletableFuture();
-            }
-            try (ZLinkBackendReceived received =
-                     reply.get(2, TimeUnit.SECONDS)) {
+            var scheduler = java.util.concurrent.Executors
+                .newSingleThreadScheduledExecutor();
+            try (var caller = new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceOperationRegistry(scheduler)) {
+                UUID operationId = systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceOperationIds.next();
+                var envelope = systems.zlink.framework.runtime.messaging
+                    .ZLinkChannelEnvelope.create(
+                        1, "orders", "request", "application/json", null,
+                        Map.of(), null, operationId);
+                try (Message header = systems.zlink.framework.runtime.messaging
+                         .ZLinkChannelEnvelope.encodeHeader(envelope);
+                     Message message = Message.from("remote-request")) {
+                    reply = source.requestToSpot(
+                            leftRid,
+                            targetRid.toString(),
+                            target.lifecycleGeneration(),
+                            new byte[0],
+                            List.of(header, message),
+                            Duration.ofSeconds(2),
+                            caller,
+                            operationId)
+                        .toCompletableFuture();
+                }
+                ZLinkBackendReceived pending =
+                    firstRequest.get(2, TimeUnit.SECONDS);
+                assertEquals(1, caller.pendingCount());
+                var field = ZLinkJavaRawMeshNode.class
+                    .getDeclaredField("operations");
+                field.setAccessible(true);
+                var meshRegistry = (systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceOperationRegistry) field.get(right);
+                assertEquals(0, meshRegistry.pendingCount());
                 assertEquals(
-                    "remote-reply",
-                    received.parts().getFirst().toUtf8String());
+                    envelope.correlationId(),
+                    systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                        .decodeHeader(pending.parts().getFirst(), false)
+                        .correlationId());
+                try (pending;
+                     Message response = Message.from("remote-reply")) {
+                    pending.reply(List.of(response));
+                }
+                try (ZLinkBackendReceived received =
+                         reply.get(2, TimeUnit.SECONDS)) {
+                    assertEquals(
+                        "remote-reply",
+                        received.parts().getFirst().toUtf8String());
+                }
+                assertEquals(0, caller.pendingCount());
+            } finally {
+                scheduler.shutdownNow();
             }
             assertEquals(2, handlerCalls.get());
 
@@ -1439,6 +1483,107 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     received.result());
             }
             assertEquals(3, handlerCalls.get());
+        }
+    }
+
+    @Test
+    void remoteSpotNativeFramesPreserveLargeMultipartPayloads() throws Exception {
+        String endpoint = "inproc://jvm-m6b-native-spot-" + System.nanoTime();
+        RoutingId leftRid = RoutingId.from("jvm-m6b-native-spot-left");
+        RoutingId rightRid = RoutingId.from("jvm-m6b-native-spot-right");
+        String targetSpotId = "jvm-m6b-native-spot-target";
+        byte[] sendMetadata = {1, 3, 5, 7};
+        byte[] requestMetadata = {2, 4, 6, 8};
+        byte[] sendHead = payloadBytes(1_024, 11);
+        byte[] sendBody = payloadBytes(4_096, 17);
+        byte[] requestHead = payloadBytes(1_024, 23);
+        byte[] requestBody = payloadBytes(4_096, 29);
+        byte[] replyHead = payloadBytes(1_024, 31);
+        byte[] replyBody = payloadBytes(4_096, 37);
+
+        try (var context = Zlink.createContext();
+             var left = new ZLinkJavaRawMeshNode(context, "mesh");
+             var right = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            context.options().autoHwmEnabled(false);
+            left.setRoutingId(leftRid);
+            left.setBind(endpoint);
+            right.setRoutingId(rightRid);
+            right.setBind(
+                "inproc://jvm-m6b-native-spot-right-" + System.nanoTime());
+            left.start();
+            right.start();
+            acceptExactSource(left, rightRid, right.lifecycleGeneration());
+            right.connectPeer(endpoint, leftRid);
+            awaitAdmitted(right);
+
+            ZLinkBackendSpot source = right.spotNode().createSpot("source");
+            ZLinkBackendSpot target = left.spotNode().createSpot(targetSpotId);
+            target.rememberSpotAuthority(
+                leftRid, targetSpotId, target.lifecycleGeneration(), 77, 1);
+            source.rememberSpotAuthority(
+                leftRid, targetSpotId, target.lifecycleGeneration(), 77, 1);
+
+            CompletableFuture<ZLinkBackendReceived> sent = new CompletableFuture<>();
+            CompletableFuture<ZLinkBackendReceived> requested =
+                new CompletableFuture<>();
+            target.onDispatchEvent(info -> {
+                if (info.event() != ZLinkBackendSpotDispatchEvent.ROUTED_READABLE) {
+                    return;
+                }
+                ZLinkBackendReceived received =
+                    target.recvRoute(ZLinkBackendRecvMode.DONT_WAIT);
+                if (received == null) {
+                    return;
+                }
+                CompletableFuture<ZLinkBackendReceived> destination =
+                    received.requestSeq().isPresent() ? requested : sent;
+                if (!destination.complete(received)) {
+                    received.close();
+                }
+            });
+
+            try (Message head = Message.from(sendHead);
+                 Message body = Message.from(sendBody)) {
+                source.sendToSpot(
+                        leftRid,
+                        targetSpotId,
+                        target.lifecycleGeneration(),
+                        sendMetadata,
+                        List.of(head, body))
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
+            }
+            try (ZLinkBackendReceived received = sent.get(2, TimeUnit.SECONDS)) {
+                assertArrayEquals(sendMetadata, received.applicationMetadata());
+                assertArrayEquals(sendHead, received.parts().get(0).toByteArray());
+                assertArrayEquals(sendBody, received.parts().get(1).toByteArray());
+            }
+
+            CompletableFuture<ZLinkBackendReceived> reply;
+            try (Message head = Message.from(requestHead);
+                 Message body = Message.from(requestBody)) {
+                reply = source.requestToSpot(
+                        leftRid,
+                        targetSpotId,
+                        target.lifecycleGeneration(),
+                        requestMetadata,
+                        List.of(head, body),
+                        Duration.ofSeconds(2))
+                    .toCompletableFuture();
+            }
+            try (ZLinkBackendReceived received = requested.get(2, TimeUnit.SECONDS);
+                 Message head = Message.from(replyHead);
+                 Message body = Message.from(replyBody)) {
+                assertArrayEquals(requestMetadata, received.applicationMetadata());
+                assertArrayEquals(requestHead, received.parts().get(0).toByteArray());
+                assertArrayEquals(requestBody, received.parts().get(1).toByteArray());
+                received.reply(List.of(head, body));
+            }
+            try (ZLinkBackendReceived received = reply.get(2, TimeUnit.SECONDS)) {
+                assertEquals(ZLinkBackendRequestResult.OK, received.result());
+                assertArrayEquals(replyHead, received.parts().get(0).toByteArray());
+                assertArrayEquals(replyBody, received.parts().get(1).toByteArray());
+            }
         }
     }
 
@@ -2938,6 +3083,14 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 reactivated.spot().lifecycleGeneration()
                     > firstGeneration);
         }
+    }
+
+    private static byte[] payloadBytes(int length, int seed) {
+        byte[] payload = new byte[length];
+        for (int index = 0; index < payload.length; index++) {
+            payload[index] = (byte) (seed + index * 31);
+        }
+        return payload;
     }
 
     private static void acceptExactSource(

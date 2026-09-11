@@ -174,14 +174,36 @@ function Invoke-ZlinkSampleGradleBuild {
     }
 
     try {
-        & $GradleExecutable @Arguments
+        $normalizedArguments = @($Arguments | ForEach-Object {
+            if ($_ -eq "--settings-file") { "-c" } else { $_ }
+        })
+        $settingsIndex = [Array]::IndexOf($normalizedArguments, "-c")
+        $temporarySettingsPath = $null
+        $existingSettingsContent = $null
+        if ($settingsIndex -ge 0 -and $settingsIndex + 1 -lt $normalizedArguments.Count) {
+            $settingsSourcePath = Join-Path (Get-Location) $normalizedArguments[$settingsIndex + 1]
+            $temporarySettingsPath = Join-Path (Get-Location) "settings.gradle.kts"
+            if (Test-Path -LiteralPath $temporarySettingsPath) {
+                $existingSettingsContent = Get-Content -LiteralPath $temporarySettingsPath -Raw
+            }
+            Copy-Item -LiteralPath $settingsSourcePath -Destination $temporarySettingsPath -Force
+            $normalizedArguments = @($normalizedArguments | Where-Object { $_ -ne "-c" -and $_ -ne $normalizedArguments[$settingsIndex + 1] })
+        }
+        & $GradleExecutable @normalizedArguments
         if ($LASTEXITCODE -ne 0) {
-            throw "Gradle build failed: $($Arguments -join ' ')"
+            throw "Gradle build failed: $($normalizedArguments -join ' ')"
         }
         if ($Arguments -match ':installDist$') {
             Optimize-ZlinkSampleWindowsLaunchers -Root (Get-Location).Path
         }
     } finally {
+        if ($temporarySettingsPath) {
+            if ($null -eq $existingSettingsContent) {
+                Remove-Item -LiteralPath $temporarySettingsPath -Force -ErrorAction SilentlyContinue
+            } else {
+                Set-Content -LiteralPath $temporarySettingsPath -Value $existingSettingsContent -NoNewline
+            }
+        }
         $lockStream.Dispose()
     }
 }
@@ -209,12 +231,20 @@ function Invoke-ZlinkDockerCommand {
         throw "Failed to start Docker: docker $($Arguments -join ' ')"
     }
     try {
+        # Drain both pipes before waiting. A synchronous ReadToEnd after
+        # WaitForExit deadlocks once the child fills a pipe buffer.
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            $process.Kill()
+            if ($env:OS -eq 'Windows_NT') {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            } else {
+                $process.Kill($true)
+            }
             throw "Docker command timed out after ${TimeoutSeconds}s: docker $($Arguments -join ' ')"
         }
-        $stdout = $process.StandardOutput.ReadToEnd().Trim()
-        $stderr = $process.StandardError.ReadToEnd().Trim()
+        $stdout = $stdoutTask.GetAwaiter().GetResult().Trim()
+        $stderr = $stderrTask.GetAwaiter().GetResult().Trim()
         if ($process.ExitCode -ne 0 -and -not $AllowFailure) {
             throw "Docker command failed (exit=$($process.ExitCode)): docker $($Arguments -join ' ')`n$stderr"
         }

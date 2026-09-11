@@ -11,12 +11,6 @@ internal static partial class NativeMethods
         NativeLibraryLoader.EnsureLoaded();
     }
 
-    internal enum ZlinkPartFlag
-    {
-        Final = 0,
-        More = 1
-    }
-
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void ZlinkFreeFnDelegate(IntPtr data, IntPtr hint);
 }

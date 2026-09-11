@@ -9,8 +9,8 @@ on:
     paths:
       - ".github/workflows/framework-dotnet.yml"
       - "scripts/ci/**"
-      - "FRAMEWORK_VERSION"
-      - "BINDINGS_VERSION"
+      - "framework/languages/dotnet/VERSION"
+      - "bindings/dotnet/VERSION"
       - "framework/runtime/**"
       - "framework/languages/dotnet/Directory.Build.props"
       - "framework/languages/dotnet/Directory.Build.targets"
@@ -30,8 +30,8 @@ on:
     paths:
       - ".github/workflows/framework-dotnet.yml"
       - "scripts/ci/**"
-      - "FRAMEWORK_VERSION"
-      - "BINDINGS_VERSION"
+      - "framework/languages/dotnet/VERSION"
+      - "bindings/dotnet/VERSION"
       - "framework/runtime/**"
       - "framework/languages/dotnet/Directory.Build.props"
       - "framework/languages/dotnet/Directory.Build.targets"
@@ -64,9 +64,62 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  prepare-dotnet-binding:
+    name: prepare-dotnet-binding
+    runs-on: ubuntu-24.04
+    outputs:
+      binding_version: ${{ steps.versions.outputs.binding_version }}
+      artifact_name: ${{ steps.versions.outputs.artifact_name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Pack the public .NET binding contract
+        id: versions
+        shell: bash
+        run: |
+          binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/dotnet/VERSION)
+          core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
+          test -n "${binding_version}" || { echo "::error::binding version is missing" >&2; exit 1; }
+          test -n "${core_version}" || { echo "::error::Core version is missing" >&2; exit 1; }
+          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
+            --version "${core_version}" \
+            --platform linux-x64 \
+            --cache-dir .artifacts/core-release)
+          package_root="${RUNNER_TEMP}/zlink-dotnet-binding"
+          mkdir -p "${package_root}"
+          dotnet pack bindings/dotnet/src/Zlink/Zlink.csproj \
+            -c Release \
+            -o "${package_root}" \
+            "-p:ZLinkCoreVersion=${core_version}" \
+            "-p:ZLinkCoreSource=local" \
+            "-p:ZLinkLinuxX64NativeRoot=${core_prefix}/lib" \
+            "-p:ZLinkCoreProvenancePath=${core_prefix}/share/zlink/core-package-provenance.json"
+          test -s "${package_root}/Zlink.${binding_version}.nupkg" || {
+            echo "::error::binding package was not created" >&2
+            exit 1
+          }
+          artifact_name="zlink-dotnet-binding-${binding_version}"
+          echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
+          echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload the binding package
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ steps.versions.outputs.artifact_name }}
+          path: ${{ runner.temp }}/zlink-dotnet-binding/Zlink.*.nupkg
+          if-no-files-found: error
+
   framework-dotnet:
     name: ${{ matrix.target.name }}
     runs-on: ${{ matrix.target.runner }}
+    needs:
+      - prepare-dotnet-binding
     strategy:
       fail-fast: false
       matrix:
@@ -110,31 +163,33 @@ jobs:
         with:
           node-version: 20
 
+      - name: Download the prepared .NET binding package
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ needs.prepare-dotnet-binding.outputs.artifact_name }}
+          path: ${{ runner.temp }}/zlink-local-packages/nuget
+
       - name: Prepare local dependency packages
         shell: bash
         run: |
-          # The framework consumes the released binding package surface. The
-          # binding pin comes from Directory.Packages.props; the HttpClient
-          # package is packed from this checkout.
+          # The framework consumes the public binding package contract. During
+          # pre-release CI the package is packed from this checkout against the
+          # verified Core release instead of waiting for nuget.org publication.
           package_root="${RUNNER_TEMP}/zlink-local-packages"
           nuget_source="${package_root}/nuget"
           mkdir -p "${nuget_source}"
-          binding_version=$(sed -n 's/.*<ZLinkBindingsPackageVersion[^>]*>\(.*\)<\/ZLinkBindingsPackageVersion>.*/\1/p' framework/languages/dotnet/Directory.Packages.props | head -n1)
+          binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/dotnet/VERSION)
           if [ -z "${binding_version}" ]; then
-            echo "::error::Zlink pin not found in framework/languages/dotnet/Directory.Packages.props" >&2
+            echo "::error::Zlink binding version not found in bindings/dotnet/VERSION" >&2
             exit 1
           fi
-          # nuget.org lists a freshly pushed package only after validation (minutes).
-          url="https://api.nuget.org/v3-flatcontainer/zlink/${binding_version}/zlink.${binding_version}.nupkg"
-          for attempt in $(seq 1 45); do
-            if curl -sSfL -o "${nuget_source}/Zlink.${binding_version}.nupkg" "${url}"; then
-              break
-            fi
-            echo "attempt ${attempt}: Zlink ${binding_version} not on nuget.org yet; waiting 60s"
-            sleep 60
-          done
+          binding_artifact="${{ needs.prepare-dotnet-binding.outputs.artifact_name }}"
+          test -n "${binding_artifact}" || {
+            echo "::error::binding artifact name is missing" >&2
+            exit 1
+          }
           test -s "${nuget_source}/Zlink.${binding_version}.nupkg" \
-            || { echo "::error::Zlink ${binding_version} is not available on nuget.org after 45 minutes" >&2; exit 1; }
+            || { echo "::error::Downloaded Zlink ${binding_version} package is missing" >&2; exit 1; }
           dotnet pack framework/languages/dotnet/src/Zlink.HttpClient/Zlink.HttpClient.csproj -c Release -o "${nuget_source}"
           echo "ZLINK_LOCAL_PACKAGE_ROOT=${package_root}" >> "${GITHUB_ENV}"
           echo "ZLinkLocalPackageRoot=${package_root}" >> "${GITHUB_ENV}"
@@ -189,6 +244,17 @@ jobs:
 
       - name: Run stream connector tests (Release, net10.0)
         run: bash scripts/ci/dotnet-test-retry.sh ${{ env.STREAM_CONNECTOR_TESTS }} Release net10.0
+
+      # macOS·Windows 실패는 이 기계에서 재현되지 않는다(#17, 0.19.0). TRX에는 테스트별
+      # stdout과 stack이 들어 있어 raw 로그보다 원인을 좁히기 쉽다. 실패했을 때만 올린다.
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: dotnet-test-results-${{ matrix.target.name }}
+          path: ${{ runner.temp }}/zlink-test-results/**
+          retention-days: 14
+          if-no-files-found: warn
 
   framework-dotnet-gate:
     name: release-gate

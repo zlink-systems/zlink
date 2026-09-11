@@ -44,6 +44,13 @@ $manifestPath = Join-Path $prefix "share\zlink\core-package-provenance.json"
 
 if (-not $Force -and (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
   try {
+    $manifestBytes = [IO.File]::ReadAllBytes($manifestPath)
+    $hasUtf8Bom = $manifestBytes.Length -ge 3 -and
+      $manifestBytes[0] -eq 0xEF -and $manifestBytes[1] -eq 0xBB -and
+      $manifestBytes[2] -eq 0xBF
+    if ($hasUtf8Bom) {
+      throw "Cached Core provenance must be UTF-8 without BOM"
+    }
     $existing = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     if ($existing.version -eq $Version -and $existing.package -eq "zlink-core") {
       Write-Output $prefix
@@ -199,7 +206,12 @@ try {
     }
     files = $files
   }
-  $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $stageShare "core-package-provenance.json") -Encoding UTF8
+  $manifestJson = ($manifest | ConvertTo-Json -Depth 8) + [Environment]::NewLine
+  $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+  [IO.File]::WriteAllText(
+    (Join-Path $stageShare "core-package-provenance.json"),
+    $manifestJson,
+    $utf8WithoutBom)
 
   if (Test-Path -LiteralPath $prefix) {
     Remove-Item -LiteralPath $prefix -Recurse -Force

@@ -88,7 +88,7 @@ class DontWaitBackpressureContractTest {
                         CompletableFuture<Void> completion;
                         try {
                             completion = sender.send().message(candidate)
-                                .submit().toCompletableFuture();
+                                .submit().admitted().toCompletableFuture();
                         } catch (RuntimeException | Error failure) {
                             candidate.close();
                             throw failure;
@@ -270,7 +270,7 @@ class DontWaitBackpressureContractTest {
         for (int sequence = 0; sequence < MAX_FILL_RECORDS; sequence++) {
             try (Message candidate = Message.from(payload(sequence))) {
                 CompletableFuture<Void> completion = sender.send()
-                    .message(candidate).submit().toCompletableFuture();
+                    .message(candidate).submit().admitted().toCompletableFuture();
                 if (!completion.isDone()) {
                     return completion;
                 }
@@ -285,7 +285,7 @@ class DontWaitBackpressureContractTest {
         for (int sequence = 0; sequence < MAX_FILL_RECORDS; sequence++) {
             try (Message candidate = Message.from(payload(sequence))) {
                 CompletableFuture<Void> completion = sender.send(target)
-                    .message(candidate).submit().toCompletableFuture();
+                    .message(candidate).submit().admitted().toCompletableFuture();
                 if (!completion.isDone()) {
                     return completion;
                 }

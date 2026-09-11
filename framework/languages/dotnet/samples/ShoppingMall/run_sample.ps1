@@ -54,13 +54,13 @@ function Wait-ShoppingMallLogExactCount {
 function Invoke-ShoppingMallPlannedRelocation {
     param(
         [Parameter(Mandatory = $true)][string]$OrderId,
-        [Parameter(Mandatory = $true)][string[]]$WorkflowUrls,
+        [Parameter(Mandatory = $true)][hashtable]$WorkflowUrls,
         [Parameter(Mandatory = $true)][hashtable]$Headers
     )
 
     $lastResult = "no owner observed"
     for ($attempt = 0; $attempt -lt $WaitAttempts; $attempt++) {
-        foreach ($url in $WorkflowUrls) {
+        foreach ($url in $WorkflowUrls.Values) {
             try {
                 $result = Invoke-RestMethod -Method Post -Uri "$url/self-check/relocate/$OrderId" -Headers $Headers -Body "{}"
             }
@@ -71,7 +71,19 @@ function Invoke-ShoppingMallPlannedRelocation {
                 continue
             }
             if ($result.Outcome -in @("Started", "AlreadyStarted") -and $result.Reason -eq "None") {
-                $targetUrl = if ($url -eq $WorkflowUrls[0]) { $WorkflowUrls[1] } else { $WorkflowUrls[0] }
+                $sourceInstanceId = [string]$result.SourceInstanceId
+                if ([string]::IsNullOrWhiteSpace($sourceInstanceId)) {
+                    throw "Planned relocation returned no workflow source for $($result.AnchorId)"
+                }
+                if (-not $WorkflowUrls.ContainsKey($sourceInstanceId)) {
+                    throw "Planned relocation returned unknown workflow source '$sourceInstanceId' for $($result.AnchorId)"
+                }
+                $targetEntries = @($WorkflowUrls.GetEnumerator() |
+                    Where-Object { $_.Key -ne $sourceInstanceId })
+                if ($targetEntries.Count -ne 1) {
+                    throw "Planned relocation source '$sourceInstanceId' does not map to one workflow target"
+                }
+                $targetUrl = [string]$targetEntries[0].Value
                 for ($statusAttempt = 0; $statusAttempt -lt $WaitAttempts; $statusAttempt++) {
                     try {
                         $status = Invoke-RestMethod -Method Get -Uri "$targetUrl/self-check/owner/$OrderId"
@@ -276,8 +288,10 @@ try {
     } | ConvertTo-Json -Compress
     $relocationCheckpoint = Invoke-RestMethod -Method Post -Uri "$SHOPPINGMALL_API_A_HTTP_URL/self-check/workflow/inventory-reserved" -Headers $jsonHeaders -Body $relocationBody
     $relocationOrderId = $relocationCheckpoint.orderId
-    Invoke-RestMethod -Method Post -Uri "$SHOPPINGMALL_API_A_HTTP_URL/self-check/relocation/$relocationOrderId/arm" -Headers $jsonHeaders -Body "{}" | Out-Null
-    Invoke-ShoppingMallPlannedRelocation -OrderId $relocationOrderId -WorkflowUrls @($SHOPPINGMALL_WORKFLOW_A_HTTP_URL, $SHOPPINGMALL_WORKFLOW_B_HTTP_URL) -Headers $jsonHeaders
+    Invoke-ShoppingMallPlannedRelocation -OrderId $relocationOrderId -WorkflowUrls @{
+        "workflow-a" = $SHOPPINGMALL_WORKFLOW_A_HTTP_URL
+        "workflow-b" = $SHOPPINGMALL_WORKFLOW_B_HTTP_URL
+    } -Headers $jsonHeaders
     Invoke-ShoppingMallRelocatedOrderContinue -OrderId $relocationOrderId -ApiUrl $SHOPPINGMALL_API_A_HTTP_URL -Headers $jsonHeaders
     # Planned relocation is intentionally required. These can pass only when the
     # sample actually drives relocation; store wiring does not emit either line.

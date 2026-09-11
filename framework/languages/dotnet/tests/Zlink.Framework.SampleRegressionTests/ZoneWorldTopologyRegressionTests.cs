@@ -6,6 +6,19 @@ namespace Zlink.Framework.SampleRegressionTests;
 public sealed partial class RegressionTests
 {
     [Fact]
+    public void ZoneWorld_Uses_The_Framework_Request_Deadline()
+    {
+        var sampleRoot = ResolveSampleRoot("ZoneWorld");
+        foreach (var role in new[] { "Gateway", "Ops", "ZoneNode" })
+        {
+            var source = File.ReadAllText(Path.Combine(sampleRoot, "Server", role, "Program.cs"));
+            // A sample-only deadline equal to the owner lease TTL can expire
+            // before Location observes a crash and retires its connection intent.
+            Assert.DoesNotContain("DefaultRequestTimeout", source, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void ZoneWorld_Uses_One_Physical_Mesh_Per_Mesh_Participant()
     {
         var sampleRoot = ResolveSampleRoot("ZoneWorld");

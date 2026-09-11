@@ -1,6 +1,7 @@
 using Systems.Zlink;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Service;
 
@@ -247,7 +248,7 @@ internal readonly record struct ActorMessageFollowIngress(
     ulong DeadlineUnixMs,
     ReadOnlyMemory<byte> ApplicationMetadata,
     IReadOnlyList<Message> Parts,
-    Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? Reply)
+    Func<IReadOnlyList<Message>, SubmitResult>? Reply)
 {
     // A stale Actor route is admitted by the follow target before the payload is
     // materialized. The adapter decodes this envelope only after it accepts the
@@ -453,10 +454,14 @@ internal interface IMeshNodeMonitor : IDisposable, IAsyncDisposable
 
 internal readonly record struct MeshReadyRecord(
     MeshOwnerKind OwnerKind, MeshReadyDomains Domain,
-    string SpotId, ActorRef Actor);
+    string SpotId, ActorRef Actor,
+    int AvailableRecords = 1,
+    bool ApplicationAdmissionReserved = false);
 
 internal sealed class MeshReadyBatch : IDisposable
 {
+    internal bool RequireReservedApplicationAdmission { get; set; }
+    internal int MaximumRecords { get; set; } = int.MaxValue;
     private readonly List<(MeshReadyRecord Record, MeshClaim Claim)> _entries = new();
     public int Count => _entries.Count;
     public MeshReadyRecord this[int index] => _entries[index].Record;
@@ -481,8 +486,13 @@ internal sealed class MeshReceiveBatch : IDisposable
     internal long Bytes { get; private set; }
     public int Count => _entries.Count;
     public MeshReceiveRecord this[int index] => _entries[index].Record;
-    public IReadOnlyList<Message> RetainMessage(int index) =>
-        _entries[index].Parts.Select(Message.From).ToArray();
+    public IReadOnlyList<Message> RetainMessage(int index)
+    {
+        var entry = _entries[index];
+        return entry.Record.ApplicationPayloadView is { } view
+            ? view.RetainMessages()
+            : entry.Parts.Select(Message.From).ToArray();
+    }
     internal bool CanAdd(long bytes)
     {
         if (Count == 0) return true;
@@ -557,7 +567,7 @@ internal sealed class MeshClaim : IDisposable
 
 internal struct MeshReceiveRecord
 {
-    private readonly Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? _reply;
+    private readonly Func<IReadOnlyList<Message>, SubmitResult>? _reply;
     private readonly Func<RequestResult, uint, SubmitResult>? _terminalReply;
     private readonly Func<ActorJoinResult, IReadOnlyList<Message>, SendFlags, SubmitResult>?
         _joinReply;
@@ -568,7 +578,7 @@ internal struct MeshReceiveRecord
         string? channelName, string? topic, byte[]? applicationMetadata,
         int partOffset, int partCount, int terminalResult, int failureErrno,
         MeshRecordPayload? kindData,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? reply = null,
+        Func<IReadOnlyList<Message>, SubmitResult>? reply = null,
         Func<ActorJoinResult, IReadOnlyList<Message>, SendFlags, SubmitResult>?
             joinReply = null,
         ulong targetNodeGeneration = 0,
@@ -577,7 +587,8 @@ internal struct MeshReceiveRecord
         byte messageFollowHopCount = 0,
         ulong replyRouteId = 0,
         ulong deadlineUnixMs = 0,
-        Func<RequestResult, uint, SubmitResult>? terminalReply = null)
+        Func<RequestResult, uint, SubmitResult>? terminalReply = null,
+        ZLinkMultipartPayloadView? applicationPayloadView = null)
     {
         Kind = kind; Domain = domain; SourceNodeRid = sourceNodeRid;
         SourceSpotId = sourceSpotId; SourceBindingGeneration = sourceBindingGeneration;
@@ -593,6 +604,7 @@ internal struct MeshReceiveRecord
         MessageFollowHopCount = messageFollowHopCount;
         ReplyRouteId = replyRouteId;
         DeadlineUnixMs = deadlineUnixMs;
+        ApplicationPayloadView = applicationPayloadView;
     }
     public MeshRecordKind Kind { get; }
     public MeshReadyDomains Domain { get; }
@@ -616,6 +628,7 @@ internal struct MeshReceiveRecord
     public ulong ReplyRouteId { get; }
     public ulong DeadlineUnixMs { get; }
     public MeshRecordPayload? KindData { get; }
+    internal ZLinkMultipartPayloadView? ApplicationPayloadView { get; }
     // Ingress records carry the payload size once it is known. This keeps the
     // mailbox and dispatch pump from rediscovering envelope boundaries.
     internal ulong? ApplicationPayloadBytes { get; set; }
@@ -631,17 +644,17 @@ internal struct MeshReceiveRecord
     public ActorDestroyCompletion? ActorDestroyCompletion =>
         KindData as ActorDestroyCompletion;
     public MeshSendReadyData? SendReady => KindData as MeshSendReadyData;
-    internal Func<IReadOnlyList<Message>, SendFlags, SubmitResult>?
+    internal Func<IReadOnlyList<Message>, SubmitResult>?
         CaptureReplyRoute() => _reply;
-    public SubmitResult Reply(IReadOnlyList<Message> parts, SendFlags flags = SendFlags.None) =>
-        _reply?.Invoke(parts, flags) ?? SubmitResult.Terminated;
+    public SubmitResult Reply(IReadOnlyList<Message> parts) =>
+        _reply?.Invoke(parts) ?? SubmitResult.Terminated;
     public SubmitResult ReplyTerminal(RequestResult result, uint failureCode) =>
         _terminalReply?.Invoke(result, failureCode) ?? SubmitResult.Terminated;
     public SubmitResult ReplyJoin(
         ActorJoinResult result,
         IReadOnlyList<Message> parts,
         SendFlags flags = SendFlags.None) =>
-        _joinReply?.Invoke(result, parts, flags) ?? Reply(parts, flags);
+        _joinReply?.Invoke(result, parts, flags) ?? Reply(parts);
 
     internal static MeshReceiveRecord CompletionFailure(
         MeshOperationId operationId,
@@ -714,8 +727,8 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
     MeshPeerChannel[] PeerChannels(RoutingId peerRid, ulong lifecycleGeneration);
     IMeshNodeMonitor OpenMonitor(MeshMonitorEventMask events = MeshMonitorEventMask.All);
     void SetReadyHandler(Func<MeshReadyDomains, MeshReadyDomains> handler);
-    void SetCompletionOverflowHandler(
-        Action<MeshReceiveRecord, IReadOnlyList<Message>> handler) { }
+    void SetCompletionHandler(
+        Func<MeshReceiveRecord, IReadOnlyList<Message>, bool> handler) { }
     bool DrainReady(MeshReadyDomains domains, MeshReadyBatch batch, RecvFlags flags = RecvFlags.None);
     ISpot CreateSpot();
     ISpot EntrySpot();
@@ -752,7 +765,7 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
     SubmitResult SendToActor(ActorRef actor, IReadOnlyList<Message> parts, SendFlags flags = SendFlags.None);
     SubmitResult RequestToActor(ActorRef actor, IReadOnlyList<Message> parts,
         out MeshOperationId operationId, TimeSpan timeout = default);
-    SubmitResult SendBoundSession(ActorRef actor, IReadOnlyList<Message> parts, SendFlags flags = SendFlags.None);
+    SubmitResult SendBoundSession(ActorRef actor, IReadOnlyList<Message> parts);
     MeshOperationId CloseBoundSession(ActorRef actor, ulong expectedBindingGeneration, TimeSpan timeout = default);
     void SetUserSpotOperationTarget(IUserSpotOperationTarget target);
     void SetActorCreateOperationTarget(IActorCreateOperationTarget target);

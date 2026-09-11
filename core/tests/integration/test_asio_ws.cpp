@@ -673,9 +673,7 @@ void test_zlink_ws_stream_packet_pull_routed_send ()
             memcpy (zlink_msg_data (&response_message), &(*messages[i])[0],
                     messages[i]->size ());
             send_result.store (
-              zlink_send_part_rid (
-                server, &rid, &response_message, ZLINK_SEND_FLAGS_NONE,
-                ZLINK_PART_FINAL, NULL, NULL),
+              zlink_send_rid (server, &rid, &response_message, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL),
               std::memory_order_release);
         });
         service_thread.join ();
@@ -991,9 +989,7 @@ void test_zlink_wss_stream_fragmented_partial_read ()
         memcpy (zlink_msg_data (&response_message), &response[0],
                 response.size ());
         send_result.store (
-          zlink_send_part_rid (
-            server, &rid, &response_message, ZLINK_SEND_FLAGS_NONE,
-            ZLINK_PART_FINAL, NULL, NULL),
+          zlink_send_rid (server, &rid, &response_message, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL),
           std::memory_order_release);
     });
     service_thread.join ();

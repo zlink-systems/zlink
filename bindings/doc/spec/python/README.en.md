@@ -125,6 +125,9 @@ The [common receive ownership contract](../README.en.md#receive-ownership) defin
   completion joins and cancellation follow the [async execution model](../async-execution-model.en.md).
 - Reply and publish end with synchronous `submit()`. Only a separate `PublishOp` provides publish
   flags.
+- The runtime submits every part collected by a builder to the Core whole-message API once as a native array and count.
+  Receive uses a reusable native array, capacity, and count; when the array is too small, it grows
+  to the required size and retries the same unconsumed record.
 - Caller-provided receive with `RecvFlags.DONT_WAIT` returns `False` when no message is available.
 - Direct-return control APIs such as timer and monitor return `None` when no value is pending.
 - An actual native failure is delivered through its corresponding error type and is not hidden as
@@ -168,7 +171,9 @@ checking targets the Python 3.9 target `pyrightconfig.json` specifies, and
 
 Python package information follows its [distribution metadata](../../../python/pyproject.toml); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-Python provides blocking `submit_sync()` and `submit()` returning an awaitable.
+Python provides blocking `submit_sync()` and `submit()` returning a result object (`SendSubmission`/`RequestSubmission`: `result` and `admitted`, plus `reply` for a request).
+The result accessors are read-only properties. Read the initial result through `submission.result`,
+wait for admission with `await submission.admitted`, and wait for a request's response with `await submission.reply`.
 Caller wait cancellation is expressed through awaitable cancellation.
 
 Native completion IDs, `user_context`, and raw drain are not public APIs.
@@ -196,17 +201,31 @@ bind/connect, the `recv_mode` setter accepts only `RAW` and `PACKET` and rejects
 ### Public interface
 
 ```python
+class SendSubmission:
+    @property
+    def result(self) -> SubmitResult: ...        # OK | BACKPRESSURED, submit-time snapshot
+    @property
+    def admitted(self) -> Awaitable[None]: ...   # completed when result is OK
+
+class RequestSubmission:
+    @property
+    def result(self) -> SubmitResult: ...
+    @property
+    def admitted(self) -> Awaitable[None]: ...
+    @property
+    def reply(self) -> Awaitable[list[Message]]: ...   # completes after successful admission
+
 class SendOp(Protocol):
     def message(self, payload) -> "SendOp": ...
     def messages(self, *payloads) -> "SendOp": ...
-    def submit(self) -> Awaitable[None]: ...
+    def submit(self) -> SendSubmission: ...
     def submit_sync(self) -> None: ...
 
 class RequestOp(Protocol):
     def message(self, payload) -> "RequestOp": ...
     def messages(self, *payloads) -> "RequestOp": ...
     def timeout(self, timeout) -> "RequestOp": ...
-    def submit(self) -> Awaitable[list[Message]]: ...
+    def submit(self) -> RequestSubmission: ...
     def submit_sync(self) -> list[Message]: ...
 
 class ReplyOp(Protocol):

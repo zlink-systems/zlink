@@ -8,6 +8,35 @@ namespace Zlink.Framework.UnitTests;
 /// </summary>
 public sealed class StateLaneTests
 {
+    [Fact]
+    public async Task IdleSynchronousTurn_ReturnsValueWithoutATask()
+    {
+        await using var lane = new ZLinkStateLane();
+        var result = lane.RunAsync(static () => 48);
+        Assert.Equal(ValueTask.FromResult(48), result);
+        Assert.Equal(48, await result);
+
+        var completed = lane.RunAsync(static () => { });
+        Assert.Equal(ValueTask.CompletedTask, completed);
+        await completed;
+    }
+
+    [Fact]
+    public async Task NestedIdleTurn_RestoresOuterOwnershipEvenWhenInnerWorkFails()
+    {
+        await using var outer = new ZLinkStateLane();
+        await using var inner = new ZLinkStateLane();
+        await outer.RunAsync(() =>
+        {
+            Assert.True(outer.IsOnLane);
+            Assert.Throws<InvalidOperationException>(() => inner.RunAsync<int>(
+                () => throw new InvalidOperationException("inner")).GetAwaiter().GetResult());
+            Assert.Same(outer, ZLinkStateLane.Current);
+            Assert.Throws<InvalidOperationException>(() => outer.RunAsync(static () => 0));
+        });
+        Assert.Null(ZLinkStateLane.Current);
+    }
+
     // ---- 기본 동작 -------------------------------------------------------------------
 
     [Fact]
@@ -119,6 +148,25 @@ public sealed class StateLaneTests
         Assert.Equal(250, await lane.RunAsync(() => count));
     }
 
+    [Fact]
+    public async Task EnqueueRacingWithDrainRelease_DoesNotStrandTheNextTurn()
+    {
+        var lane = new ZLinkStateLane();
+        var count = 0;
+        // A single producer repeatedly races the completion of its previous
+        // turn with the drainer's empty-queue check. Multiple producers tend to
+        // keep the queue nonempty and hide this idle-transition race.
+        var producer = Task.Run(() =>
+        {
+            for (var index = 0; index < 1_000_000; index++)
+                lane.RunAsync(() => ++count).GetAwaiter().GetResult();
+        });
+
+        await producer.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(1_000_000, count);
+        await lane.DisposeAsync();
+    }
+
     // ---- 재진입: 행 대신 진단 가능한 실패 ---------------------------------------------
 
     [Fact]
@@ -152,6 +200,43 @@ public sealed class StateLaneTests
         var result = await outer.RunAsync(() => inner.RunAsync(() => 5).AsTask().Result);
 
         Assert.Equal(5, result);
+    }
+
+    [Fact]
+    public async Task IdleSynchronousTurn_DrainsInlineAndRestoresCallerContext()
+    {
+        await using var lane = new ZLinkStateLane();
+        var caller = Environment.CurrentManagedThreadId;
+        var operation = lane.RunAsync(() =>
+        {
+            Assert.True(lane.IsOnLane);
+            return Environment.CurrentManagedThreadId;
+        });
+        Assert.True(operation.IsCompletedSuccessfully);
+        Assert.Equal(caller, await operation);
+        Assert.Null(ZLinkStateLane.Current);
+    }
+
+    [Fact]
+    public async Task InlineDrain_DoesNotPassAnEarlierSuspendedTurn()
+    {
+        await using var lane = new ZLinkStateLane();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var order = new List<int>();
+        lane.TryPost(async () =>
+        {
+            started.SetResult();
+            await release.Task;
+            order.Add(1);
+        });
+        await started.Task;
+        var second = lane.RunAsync(() => order.Add(2));
+        Assert.False(second.IsCompleted);
+        release.SetResult();
+        await second;
+        Assert.Equal(new[] { 1, 2 }, order);
+        Assert.Null(ZLinkStateLane.Current);
     }
 
     // ---- 종료 ------------------------------------------------------------------------

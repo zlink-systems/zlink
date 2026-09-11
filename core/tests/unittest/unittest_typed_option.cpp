@@ -394,8 +394,10 @@ void test_option_owner_map_matches_domains ()
                            zlink::common_option_owner_of (ZLINK_OPT_TCP_NODELAY));
     TEST_ASSERT_EQUAL_INT (zlink::options_owner_socket_specific,
                            zlink::common_option_owner_of (ZLINK_OPT_LAST_ENDPOINT));
+    // The removed socket option number has no owner; context BLOCKY remains.
     TEST_ASSERT_EQUAL_INT (zlink::options_owner_unknown,
-                           zlink::common_option_owner_of (ZLINK_OPT_BLOCKY));
+                           zlink::common_option_owner_of (
+                             static_cast<zlink_option_t> (0x301E)));
 
     TEST_ASSERT_EQUAL_INT (zlink::options_owner_socket_specific,
                            zlink::router_option_owner_of (ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID));

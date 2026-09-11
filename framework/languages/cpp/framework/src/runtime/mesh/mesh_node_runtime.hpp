@@ -181,11 +181,7 @@ class mesh_node_runtime_t
   public:
     using message_follow_subscription_id_t = std::uint64_t;
 
-    struct operation_completion_t
-    {
-        host::receive_record_t record;
-        std::vector<zlink::message_t> parts;
-    };
+    using operation_completion_t = host::operation_completion_t;
     using actor_join_completion_t = std::function<void (result_t<actor_join_reply_t>)>;
     explicit mesh_node_runtime_t (std::shared_ptr<mesh_node_builder_state_t> state);
     ~mesh_node_runtime_t ();
@@ -195,6 +191,7 @@ class mesh_node_runtime_t
 
     void start ();
     void stop () noexcept;
+    void signal_dispatch_activity ();
     void bind_serializers (serializer_registry_t &serializers) noexcept;
     void bind_descriptor_publisher (
       std::function<void (const std::map<std::string, int> &, int, std::uint64_t)> publisher);
@@ -282,12 +279,12 @@ class mesh_node_runtime_t
                                          const std::map<std::string, std::string> &metadata);
     task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,
                                             const std::vector<zlink::message_t> &parts,
-                                            host::call_id_t &operation_id,
+                                            host::pending_operation_t &operation_id,
                                             std::chrono::milliseconds timeout,
                                             std::vector<std::uint8_t> metadata = {});
     task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,
                                             const std::vector<zlink::message_t> &parts,
-                                            host::call_id_t &operation_id,
+                                            host::pending_operation_t &operation_id,
                                             std::chrono::milliseconds timeout,
                                             const std::map<std::string, std::string> &metadata);
     task_t<zlink::submit_result_t> send_to_channel (const std::string &channel_name,
@@ -298,12 +295,12 @@ class mesh_node_runtime_t
                                             const std::map<std::string, std::string> &metadata);
     task_t<zlink::submit_result_t> request_to_channel (const std::string &channel_name,
                                                const std::vector<zlink::message_t> &parts,
-                                               host::call_id_t &operation_id,
+                                               host::pending_operation_t &operation_id,
                                                std::chrono::milliseconds timeout,
                                                std::vector<std::uint8_t> metadata = {});
     task_t<zlink::submit_result_t> request_to_channel (const std::string &channel_name,
                                                const std::vector<zlink::message_t> &parts,
-                                               host::call_id_t &operation_id,
+                                               host::pending_operation_t &operation_id,
                                                std::chrono::milliseconds timeout,
                                                const std::map<std::string, std::string> &metadata);
     host::spot_handle_t get_or_create_spot (std::string spot_id);
@@ -318,7 +315,7 @@ class mesh_node_runtime_t
                                             const std::string &target_spot_id,
                                             std::uint64_t target_spot_generation,
                                             const std::vector<zlink::message_t> &parts,
-                                            host::call_id_t &operation_id,
+                                            host::pending_operation_t &operation_id,
                                             std::chrono::milliseconds timeout,
                                             std::vector<std::uint8_t> metadata = {});
     host::actor_handle_t create_actor (std::string actor_type,
@@ -334,7 +331,7 @@ class mesh_node_runtime_t
                                             bound_session_source = std::nullopt);
     task_t<zlink::submit_result_t> request_to_actor (const actor_ref_t &target,
                                              const std::vector<zlink::message_t> &parts,
-                                             host::call_id_t &operation_id,
+                                             host::pending_operation_t &operation_id,
                                              std::chrono::milliseconds timeout,
                                              std::vector<std::uint8_t> metadata = {},
                                              std::uint64_t authority_owner_generation = 0,
@@ -369,8 +366,7 @@ class mesh_node_runtime_t
                                                              const zlink::message_t &request,
                                                              std::chrono::milliseconds timeout,
                                                              actor_join_completion_t completion);
-    bool complete_application_actor_entry_spot_join (const host::receive_record_t &record,
-                                                     const std::vector<zlink::message_t> &parts);
+
     task_t<actor_join_reply_t> join_application_actor_to_spot (
       actor_ref_t actor,
       const runtime::spot_address_t &target,
@@ -435,15 +431,16 @@ class mesh_node_runtime_t
                                                         const node_rid_t &target_node,
                                                         std::chrono::milliseconds timeout);
     result_t<operation_completion_t>
-    wait_for_completion (const host::call_id_t &operation,
+    wait_for_completion (const host::pending_operation_t &operation,
                          std::chrono::milliseconds timeout,
                          std::optional<zlink::routing_id_t> target = std::nullopt);
     task_t<operation_completion_t>
-    await_completion (const host::call_id_t &operation);
+    await_completion (const host::pending_operation_t &operation);
     task_t<std::size_t> dispatch_ready (const std::function<void (const host::ready_record_t &,
                                                           const host::receive_record_t &,
                                                           std::vector<zlink::message_t>)> &dispatch,
-                                bool accept_application_receive = true);
+                                bool accept_application_receive = true,
+      const std::function<bool ()> &next_application_receive = {});
     host::node_status_t status () const;
     void dispatch_message_follow (const runtime::protocol::message_follow_notice_t &notice);
     /* Admitted RouteMesh membership size. Vertical and E2E checks wait on this
@@ -605,11 +602,12 @@ class mesh_node_runtime_t
 
     struct message_follow_subscription_state_t;
 
-    result_t<actor_join_reply_t>
+    static result_t<actor_join_reply_t>
     actor_join_reply_from_completion (const host::receive_record_t &record,
                                       const std::vector<zlink::message_t> &parts,
-                                      const actor_ref_t &actor);
-    result_t<actor_join_reply_t> wait_for_join_completion (const host::call_id_t &operation,
+                                      const actor_ref_t &actor,
+                                      const std::shared_ptr<mesh_node_builder_state_t> &state);
+    result_t<actor_join_reply_t> wait_for_join_completion (const host::pending_operation_t &operation,
                                                            const actor_ref_t &actor,
                                                            std::chrono::milliseconds timeout);
     std::optional<zlink::submit_result_t>
@@ -678,37 +676,7 @@ class mesh_node_runtime_t
     std::mutex _completion_mutex;
     std::condition_variable _completion_ready;
     std::atomic_bool _stopping{false};
-    static constexpr std::size_t timed_out_operation_capacity = 65'536;
-    static constexpr std::size_t completion_capacity = 65'536;
-    zlink::framework::runtime::exactly_once_table_t<host::call_id_t,
-                                                    operation_completion_t,
-                                                    zlink::framework::runtime::call_id_hash_t>
-      _completed_operations{completion_capacity};
-    std::unordered_map<host::call_id_t,
-                       std::shared_ptr<detail::task_completion_source_t<operation_completion_t>>,
-                       zlink::framework::runtime::call_id_hash_t>
-      _completion_awaiters;
-    // A timed-out waiter must leave a bounded tombstone. A late completion
-    // must be dropped instead of recreating an orphan holding-slot entry.
-    std::unordered_set<host::call_id_t,
-                       zlink::framework::runtime::call_id_hash_t>
-      _timed_out_operations;
-    std::deque<host::call_id_t> _timed_out_operation_order;
-    // A completion that cannot enter the bounded holding table must remain
-    // observable by its waiter instead of silently degrading into a timeout.
-    std::unordered_set<host::call_id_t,
-                       zlink::framework::runtime::call_id_hash_t>
-      _completion_overflow_operations;
-    std::deque<host::call_id_t> _completion_overflow_order;
-    struct actor_join_continuation_t
-    {
-        actor_ref_t actor;
-        actor_join_completion_t completion;
-    };
-    std::unordered_map<host::call_id_t,
-                       actor_join_continuation_t,
-                       zlink::framework::runtime::call_id_hash_t>
-      _actor_join_continuations;
+
 };
 
 // actorJoin(28) receiver admission, extracted so unit tests can pin its

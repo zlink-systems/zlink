@@ -116,6 +116,9 @@ framing을 보존하고 `close()`, context manager 종료 또는 저장소 재�
   완료 합류와 cancellation은 [비동기 실행 모델](../async-execution-model.ko.md)을 따른다.
 - Reply와 publish는 synchronous `submit()`으로 끝난다. Publish flags는 별도 `PublishOp`만
   제공한다.
+- Runtime은 builder가 모은 모든 part를 native 배열과 count로 Core whole-message API에 한 번 제출한다.
+  Receive는 재사용 가능한 native 배열, capacity와 count를 사용하고, 배열이 작으면
+  필요한 크기로 늘린 뒤 소비되지 않은 같은 record를 다시 받는다.
 - `RecvFlags.DONT_WAIT`를 사용한 caller-provided receive는 message가 없을 때 `False`를 반환한다.
 - timer, monitor와 같은 직접 반환 control API는 pending value가 없을 때 `None`을 반환한다.
 - 실제 native failure는 해당 error type으로 전달하며 no-data로 숨기지 않는다.
@@ -154,7 +157,9 @@ Core result를 반환하는 호출은 Python의 대응 error에 `result`, `code`
 
 Python package 정보는 [배포 metadata](../../../python/pyproject.toml)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Python은 blocking `submit_sync()`와 awaitable을 반환하는 `submit()`을 제공한다.
+Python은 blocking `submit_sync()`와 결과 객체(`SendSubmission`/`RequestSubmission`: `result`와 `admitted`, request는 `reply`)를 돌려주는 `submit()`을 제공한다.
+결과 접근자는 읽기 전용 property다. `submission.result`로 제출 결과를 읽고,
+`await submission.admitted`로 수용 완료를, request의 `await submission.reply`로 응답을 기다린다.
 Caller wait 취소는 awaitable cancellation으로 표현한다.
 
 Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
@@ -181,17 +186,31 @@ Token은 raw property, `int()` conversion, ordering과 `close()`를 제공하지
 ### Public interface
 
 ```python
+class SendSubmission:
+    @property
+    def result(self) -> SubmitResult: ...        # OK | BACKPRESSURED, 제출 시점 스냅샷
+    @property
+    def admitted(self) -> Awaitable[None]: ...   # OK면 완료 상태
+
+class RequestSubmission:
+    @property
+    def result(self) -> SubmitResult: ...
+    @property
+    def admitted(self) -> Awaitable[None]: ...
+    @property
+    def reply(self) -> Awaitable[list[Message]]: ...   # admitted 성공 뒤 완료
+
 class SendOp(Protocol):
     def message(self, payload) -> "SendOp": ...
     def messages(self, *payloads) -> "SendOp": ...
-    def submit(self) -> Awaitable[None]: ...
+    def submit(self) -> SendSubmission: ...
     def submit_sync(self) -> None: ...
 
 class RequestOp(Protocol):
     def message(self, payload) -> "RequestOp": ...
     def messages(self, *payloads) -> "RequestOp": ...
     def timeout(self, timeout) -> "RequestOp": ...
-    def submit(self) -> Awaitable[list[Message]]: ...
+    def submit(self) -> RequestSubmission: ...
     def submit_sync(self) -> list[Message]: ...
 
 class ReplyOp(Protocol):

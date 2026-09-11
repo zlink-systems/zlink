@@ -7,17 +7,6 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const zlink = require('@zlink-systems/zlink');
 
-interface HeldMultipartStart {
-  state: unknown;
-  openResult: number;
-  openErrno: number;
-}
-
-interface HeldMultipartEnd {
-  finalResult: number;
-  finalErrno: number;
-}
-
 interface SendCloseStressCounts {
   attempts: bigint;
   single_attempts: bigint;
@@ -32,7 +21,6 @@ interface SendCloseStressCounts {
   bad_first_parts: bigint;
   bad_mixed_parts: bigint;
   bad_part_counts: bigint;
-  bad_next_part_results: bigint;
   close_ok: bigint;
   close_busy: bigint;
   close_shutdown: bigint;
@@ -42,14 +30,8 @@ interface SendCloseStressCounts {
 const nativeTestHooks = require(
   path.resolve(__dirname, '../../build/Release/zlink.node')
 ) as {
-  testBeginHeldRoutedMultipart(socket: unknown, routingId: Buffer): HeldMultipartStart;
-  testEndHeldRoutedMultipart(state: unknown): HeldMultipartEnd;
   testRunSendCloseStress(threadCount: number, iterations: number): SendCloseStressCounts;
 };
-const { getNativeHandle } = require(
-  path.resolve(__dirname, '../../dist/zlink/runtime/handles/native_handle.js')
-) as { getNativeHandle(handle: unknown): unknown };
-
 test('pair sockets send and receive multipart through canonical api', () => {
   const ctx = zlink.createContext();
   const left = zlink.createPairSocket(ctx);
@@ -77,13 +59,13 @@ test('routed multipart captures its target and preserves part boundaries', async
   try {
     router.bind('inproc://node-routed-multipart-contract');
     dealer.connect('inproc://node-routed-multipart-contract');
-    await dealer.send().message('route-probe').submit();
+    await dealer.send().message('route-probe').submit().admitted;
     assert.equal(router.recv(inbound), true);
     assert.ok(inbound.routingId);
     const operation = router.send(inbound.routingId)
       .message('first').message('second');
     inbound.close();
-    await operation.submit();
+    await operation.submit().admitted;
     assert.equal(dealer.recv(outbound), true);
     assert.deepEqual(outbound.parts.map((part) => part.getString()), ['first', 'second']);
   } finally {

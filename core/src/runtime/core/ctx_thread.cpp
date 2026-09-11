@@ -89,6 +89,14 @@ int zlink::thread_ctx_t::get (int option_, void *optval_, size_t *optvallen_)
     int *value = static_cast<int *> (optval_);
 
     switch (option_) {
+        case ZLINK_THREAD_PRIORITY:
+            if (is_int) {
+                scoped_lock_t locker (_opt_sync);
+                *value = _thread_priority;
+                return 0;
+            }
+            break;
+
         case ZLINK_THREAD_SCHED_POLICY:
             if (is_int) {
                 scoped_lock_t locker (_opt_sync);

@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use zlink::{
     DealerSocket, Message, POLLCOMPLETION, POLLIN, PollEvent, Poller, RecvFlags, RecvResult,
-    RouterSocket, RoutingId, SubmitResult, ZlinkError,
+    RequestSubmission, RouterSocket, RoutingId, SubmitError, SubmitResult, ZlinkError,
 };
 
 const SERVER_ROUTING_ID: &[u8] = b"SERVER";
@@ -51,29 +51,27 @@ enum RequestClientSocket {
 }
 
 type RequestTask = Pin<Box<dyn Future<Output = (usize, Result<Vec<Message>, ZlinkError>)> + Send>>;
+type AdmissionTask = Pin<Box<dyn Future<Output = Result<(), SubmitError>> + Send>>;
 
 impl RequestClientSocket {
-    fn request_task(
+    fn submit_request(
         &self,
-        socket_index: usize,
         payload: Message,
         timeout: Duration,
-    ) -> RequestTask {
+    ) -> Result<RequestSubmission, ZlinkError> {
         let operation = match self {
             Self::Dealer(socket) => socket.request(),
             Self::Router { socket, target } => socket.request(target),
         }
         .message(payload);
-        let future = if common::measurement_part_count() == 2 {
+        if common::measurement_part_count() == 2 {
             operation
                 .message(Message::try_from(&[] as &[u8]).expect("empty request tail"))
                 .timeout(timeout)
                 .submit()
         } else {
             operation.timeout(timeout).submit()
-        };
-
-        Box::pin(async move { (socket_index, future.await) })
+        }
     }
 }
 
@@ -146,7 +144,7 @@ pub fn run_server(config: ReqRepConfig) {
 
         while !stop.load(Ordering::Acquire) {
             match router.recv(&mut received, RecvFlags::DONT_WAIT) {
-                Ok(true) => reply_request(&received),
+                Ok(true) => reply_request(std::mem::take(&mut received)),
                 Ok(false) => break,
                 Err(error) if error.code() == RecvResult::NoData => break,
                 Err(error) => panic!("request receive failed: {error}"),
@@ -155,7 +153,7 @@ pub fn run_server(config: ReqRepConfig) {
     }
 }
 
-fn reply_request(received: &zlink::Received) {
+fn reply_request(received: zlink::Received) {
     if received.routing_id().is_none() || received.reply_token().is_none() {
         panic!("request is missing its reply route");
     }
@@ -164,12 +162,13 @@ fn reply_request(received: &zlink::Received) {
         panic!("request has an invalid measurement envelope");
     }
 
-    // Message::try_clone uses zlink_msg_copy, so the reply owns an independent
-    // native reference without copying the payload bytes out to a Vec and back.
-    let reply_payload = received.parts()[0]
-        .try_clone()
-        .expect("clone received reply payload");
-    let reply = received.reply().message(reply_payload);
+    let reply = received.reply();
+    let reply_payload = received
+        .into_parts()
+        .into_iter()
+        .next()
+        .expect("received reply payload");
+    let reply = reply.message(reply_payload);
     let result = if common::measurement_part_count() == 2 {
         reply
             .message(Message::try_from(&[] as &[u8]).expect("empty reply tail"))
@@ -262,55 +261,74 @@ pub fn run_client(config: ReqRepConfig) {
     let active_deadline = Instant::now() + Duration::from_secs(settings.duration_seconds);
     let mut sequences = vec![1u64; sockets.len()];
     let mut requests = common::ConcurrentTasks::<RequestTask>::new(0);
+    let mut admissions = common::ConcurrentTasks::<AdmissionTask>::new(sockets.len());
     let mut latency = common::LatencyStats::new();
 
-    // Each turn submits once per socket, then drains completion progress.
+    // Keep submitting on each socket until Core reports backpressure. Only that
+    // socket waits for its admission stage; reply stages progress independently.
     while Instant::now() < active_deadline {
+        let mut progressed = false;
         for (socket_index, socket) in sockets.iter().enumerate() {
-            if Instant::now() >= active_deadline {
-                break;
+            if admissions.is_pending(socket_index) {
+                continue;
             }
-            let sequence = sequences[socket_index];
-            sequences[socket_index] = sequence.wrapping_add(1);
-            let mut payload = Message::with_size(payload_size).expect("request payload");
-            common::encode_header(
-                payload.data_mut(),
-                common::PHASE_ACTIVE,
-                args.msg_size as u32,
-                sequence,
-            );
-            requests.push(socket.request_task(socket_index, payload, request_timeout));
+            while Instant::now() < active_deadline {
+                let sequence = sequences[socket_index];
+                sequences[socket_index] = sequence.wrapping_add(1);
+                let mut payload = Message::with_size(payload_size).expect("request payload");
+                common::encode_header(
+                    payload.data_mut(),
+                    common::PHASE_ACTIVE,
+                    args.msg_size as u32,
+                    sequence,
+                );
+                let submission = socket
+                    .submit_request(payload, request_timeout)
+                    .unwrap_or_else(|error| panic!("request submit failed: {error}"));
+                let result = submission.result;
+                requests.push(Box::pin(
+                    async move { (socket_index, submission.reply.await) },
+                ));
+                progressed = true;
+                if result == SubmitResult::Backpressured {
+                    admissions.insert(socket_index, submission.admitted);
+                    break;
+                }
+            }
         }
 
+        for (_, result) in admissions.poll_ready() {
+            result.unwrap_or_else(|error| panic!("request admission failed: {error}"));
+            progressed = true;
+        }
         let ready = requests.poll_ready();
-        let progressed = !ready.is_empty();
+        progressed |= !ready.is_empty();
         for (_, (_, completion)) in ready {
             process_completion(completion, args.msg_size, active_deadline, &mut latency);
         }
-        if Instant::now() < active_deadline {
-            // WRITABLE and REQUEST records share the socket completion lane.
-            // Even after executor progress, a zero-time wait drains that lane;
-            // an idle turn blocks until Core wakes it or the phase ends.
-            let wait_ms = if progressed {
-                0
-            } else {
-                common::poll_timeout_until(active_deadline)
-            };
+        if Instant::now() < active_deadline && !progressed {
             completion_poller
-                .wait(&mut completion_events, wait_ms)
+                .wait(
+                    &mut completion_events,
+                    common::poll_timeout_until(active_deadline),
+                )
                 .expect("request completion wait");
         }
     }
 
     let drain_deadline =
         Instant::now() + common::resolve_multi_reqrep_drain_timeout(request_timeout);
-    while requests.any_pending() && Instant::now() < drain_deadline {
+    while (requests.any_pending() || admissions.any_pending()) && Instant::now() < drain_deadline {
+        let admission_ready = admissions.poll_ready();
+        for (_, result) in &admission_ready {
+            result.unwrap_or_else(|error| panic!("request admission failed: {error}"));
+        }
         let ready = requests.poll_ready();
-        let progressed = !ready.is_empty();
+        let progressed = !ready.is_empty() || !admission_ready.is_empty();
         for (_, (_, completion)) in ready {
             process_completion(completion, args.msg_size, active_deadline, &mut latency);
         }
-        if requests.any_pending() {
+        if requests.any_pending() || admissions.any_pending() {
             let wait_ms = if progressed {
                 0
             } else {
@@ -325,7 +343,7 @@ pub fn run_client(config: ReqRepConfig) {
         process_completion(completion, args.msg_size, active_deadline, &mut latency);
     }
     assert!(
-        !requests.any_pending(),
+        !requests.any_pending() && !admissions.any_pending(),
         "request completion drain timed out"
     );
 

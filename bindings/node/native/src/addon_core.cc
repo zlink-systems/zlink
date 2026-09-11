@@ -11,7 +11,6 @@
 #include <errno.h>
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -28,221 +27,92 @@ namespace
 static std::atomic<uint64_t> g_completion_close_count (0);
 static const size_t k_inline_message_part_count = 8;
 
-// Most public records contain one or two parts. Keep those native staging
-// messages in the N-API call frame and allocate only for an uncommon larger
-// multipart record. This storage never closes messages implicitly: callers
-// must either close() the still-owned staging records or release() them after
-// Core has consumed every slot.
+// Inline slots cover common records. Receive calls reuse this storage on the
+// owning JS thread; close() releases frames while retaining the array capacity.
+// Send staging releases ownership after Core consumes every slot, even on error.
 class small_msg_storage_t
 {
   public:
-    small_msg_storage_t () : heap_size_ (0), heap_capacity_ (0), stack_size_ (0) {}
+    small_msg_storage_t () : capacity_ (k_inline_message_part_count), size_ (0) {}
+    ~small_msg_storage_t () { close (); }
 
-    bool prepare (napi_env env, size_t count)
+    bool reserve (size_t count)
     {
-        release ();
-        if (count <= k_inline_message_part_count) {
-            stack_size_ = count;
+        if (count <= capacity_)
             return true;
-        }
         if (count > (std::numeric_limits<size_t>::max) () / sizeof (zlink_msg_t)) {
-            napi_throw_error (env, NULL, "message parts allocation failed");
+            errno = ENOMEM;
             return false;
         }
-        heap_.reset (new (std::nothrow) zlink_msg_t[count]);
-        if (!heap_) {
-            napi_throw_error (env, NULL, "message parts allocation failed");
+        std::unique_ptr<zlink_msg_t[]> candidate (
+          new (std::nothrow) zlink_msg_t[count]);
+        if (!candidate) {
+            errno = ENOMEM;
             return false;
         }
-        heap_size_ = count;
-        heap_capacity_ = count;
+        // Growth only occurs before initialization or after a non-consuming
+        // BUFFER_TOO_SMALL result, so no live frames need relocation.
+        heap_ = std::move (candidate);
+        capacity_ = count;
         return true;
     }
 
-    bool append_move (zlink_msg_t *part)
+    bool prepare (napi_env env, size_t count)
     {
-        if (!part)
-            return false;
-        if (!heap_ && stack_size_ < k_inline_message_part_count) {
-            zlink_msg_t *slot = &stack_[stack_size_];
-            if (zlink_msg_init (slot) != 0)
-                return false;
-            if (zlink_msg_move (slot, part) != 0) {
-                zlink_msg_close (slot);
-                return false;
-            }
-            ++stack_size_;
-            return true;
-        }
-
-        if (!heap_) {
-            const size_t capacity = k_inline_message_part_count * 2;
-            std::unique_ptr<zlink_msg_t[]> candidate (
-              new (std::nothrow) zlink_msg_t[capacity]);
-            if (!candidate)
-                return false;
-            for (size_t index = 0; index < stack_size_; ++index) {
-                if (zlink_msg_init (&candidate[index]) != 0) {
-                    for (size_t built = 0; built < index; ++built)
-                        zlink_msg_close (&candidate[built]);
-                    for (size_t remaining = index; remaining < stack_size_; ++remaining)
-                        zlink_msg_close (&stack_[remaining]);
-                    stack_size_ = 0;
-                    return false;
-                }
-                if (zlink_msg_move (&candidate[index], &stack_[index]) != 0) {
-                    for (size_t built = 0; built <= index; ++built)
-                        zlink_msg_close (&candidate[built]);
-                    for (size_t remaining = index; remaining < stack_size_; ++remaining)
-                        zlink_msg_close (&stack_[remaining]);
-                    stack_size_ = 0;
-                    return false;
-                }
-            }
-            heap_size_ = stack_size_;
-            heap_capacity_ = capacity;
-            stack_size_ = 0;
-            heap_ = std::move (candidate);
-        }
-
-        if (heap_size_ == heap_capacity_) {
-            if (heap_capacity_ > (std::numeric_limits<size_t>::max) () / 2
-                || heap_capacity_ * 2
-                     > (std::numeric_limits<size_t>::max) () / sizeof (zlink_msg_t))
-                return false;
-            const size_t capacity = heap_capacity_ * 2;
-            std::unique_ptr<zlink_msg_t[]> candidate (
-              new (std::nothrow) zlink_msg_t[capacity]);
-            if (!candidate)
-                return false;
-            for (size_t index = 0; index < heap_size_; ++index) {
-                if (zlink_msg_init (&candidate[index]) != 0) {
-                    for (size_t built = 0; built < index; ++built)
-                        zlink_msg_close (&candidate[built]);
-                    for (size_t remaining = index; remaining < heap_size_; ++remaining)
-                        zlink_msg_close (&heap_[remaining]);
-                    heap_.reset ();
-                    heap_size_ = 0;
-                    heap_capacity_ = 0;
-                    return false;
-                }
-                if (zlink_msg_move (&candidate[index], &heap_[index]) != 0) {
-                    for (size_t built = 0; built <= index; ++built)
-                        zlink_msg_close (&candidate[built]);
-                    for (size_t remaining = index; remaining < heap_size_; ++remaining)
-                        zlink_msg_close (&heap_[remaining]);
-                    heap_.reset ();
-                    heap_size_ = 0;
-                    heap_capacity_ = 0;
-                    return false;
-                }
-            }
-            heap_ = std::move (candidate);
-            heap_capacity_ = capacity;
-        }
-
-        if (zlink_msg_init (&heap_[heap_size_]) != 0)
-            return false;
-        if (zlink_msg_move (&heap_[heap_size_], part) != 0) {
-            zlink_msg_close (&heap_[heap_size_]);
+        if (!reserve (count)) {
+            napi_throw_error (env, NULL, "message parts allocation failed");
             return false;
         }
-        ++heap_size_;
+        size_ = count;
         return true;
     }
 
     zlink_msg_t *data () { return heap_ ? heap_.get () : stack_; }
-    const zlink_msg_t *data () const { return heap_ ? heap_.get () : stack_; }
-    size_t size () const { return heap_ ? heap_size_ : stack_size_; }
+    size_t capacity () const { return capacity_; }
+    size_t size () const { return size_; }
     zlink_msg_t &operator[] (size_t index) { return data ()[index]; }
+    void own (size_t count) { size_ = count; }
+    void release () { size_ = 0; }
 
     void close ()
     {
-        if (size () > 0)
-            zlink_multipart_close (data (), size ());
+        if (size_ > 0)
+            zlink_multipart_close (data (), size_);
         release ();
-    }
-
-    void release ()
-    {
-        heap_.reset ();
-        heap_size_ = 0;
-        heap_capacity_ = 0;
-        stack_size_ = 0;
     }
 
   private:
     zlink_msg_t stack_[k_inline_message_part_count];
     std::unique_ptr<zlink_msg_t[]> heap_;
-    size_t heap_size_;
-    size_t heap_capacity_;
-    size_t stack_size_;
+    size_t capacity_;
+    size_t size_;
 };
 
-inline int collect_recv_parts (void *socket,
-                               zlink_msg_t *first_part,
-                               zlink_part_flag_t has_more,
-                               small_msg_storage_t *parts)
+small_msg_storage_t &recv_msg_storage ()
 {
-    if (!parts) {
-        if (first_part)
-            zlink_msg_close (first_part);
-        errno = EFAULT;
-        return ZLINK_RECV_INTERNAL_ERROR;
-    }
-    if (!parts->append_move (first_part)) {
-        if (first_part)
-            zlink_msg_close (first_part);
-        errno = ENOMEM;
-        return ZLINK_RECV_INTERNAL_ERROR;
-    }
-    while (has_more) {
-        const zlink_routing_id_t *source_rid = NULL;
-        zlink_msg_t next_part;
-        if (zlink_msg_init (&next_part) != 0) {
-            parts->close ();
-            return ZLINK_RECV_INTERNAL_ERROR;
-        }
-        zlink_part_flag_t more = ZLINK_PART_FINAL;
-        const int rc = zlink_recv_part (
-          socket, &source_rid, &next_part, &more, ZLINK_RECV_FLAGS_DONTWAIT);
-        if (rc != ZLINK_RECV_OK) {
-            zlink_msg_close (&next_part);
-            parts->close ();
-            return rc;
-        }
-        if (!parts->append_move (&next_part)) {
-            zlink_msg_close (&next_part);
-            parts->close ();
-            errno = ENOMEM;
-            return ZLINK_RECV_INTERNAL_ERROR;
-        }
-        has_more = more;
-    }
-    return ZLINK_RECV_OK;
+    // N-API materialization finishes and closes/moves all frames before another
+    // JS receive can enter. No socket-owned record or routing metadata is cached.
+    static thread_local small_msg_storage_t parts;
+    return parts;
 }
 
-struct held_routed_multipart_test_t
+template <typename Receive>
+int collect_recv_parts (small_msg_storage_t *parts, Receive receive)
 {
-    held_routed_multipart_test_t ()
-        : socket (NULL), opened (false), finish (false), open_result (-1),
-          open_errno (0), final_result (-1), final_errno (0)
-    {
-        memset (&routing_id, 0, sizeof (routing_id));
+    size_t count = 0;
+    for (;;) {
+        const int rc = receive (parts->data (), parts->capacity (), &count);
+        if (rc == ZLINK_RECV_OK) {
+            parts->own (count);
+            return rc;
+        }
+        if (rc != ZLINK_RECV_BUFFER_TOO_SMALL || count <= parts->capacity ())
+            return rc;
+        // Core retains the entire record; retry only after growing the array.
+        if (!parts->reserve (count))
+            return ZLINK_RECV_INTERNAL_ERROR;
     }
-
-    void *socket;
-    zlink_routing_id_t routing_id;
-    std::mutex mutex;
-    std::condition_variable condition;
-    bool opened;
-    bool finish;
-    int open_result;
-    int open_errno;
-    int final_result;
-    int final_errno;
-    std::thread worker;
-};
+}
 
 struct send_close_stress_counts_t
 {
@@ -251,7 +121,7 @@ struct send_close_stress_counts_t
           submitted (0), rejected_einval (0), shutdown (0),
           backpressured (0), other_submit (0), received_records (0),
           bad_records (0), bad_first_parts (0), bad_mixed_parts (0),
-          bad_part_counts (0), bad_next_part_results (0),
+          bad_part_counts (0),
           close_ok (0), close_busy (0),
           close_shutdown (0), close_other (0)
     {
@@ -270,7 +140,6 @@ struct send_close_stress_counts_t
     std::atomic<uint64_t> bad_first_parts;
     std::atomic<uint64_t> bad_mixed_parts;
     std::atomic<uint64_t> bad_part_counts;
-    std::atomic<uint64_t> bad_next_part_results;
     std::atomic<uint64_t> close_ok;
     std::atomic<uint64_t> close_busy;
     std::atomic<uint64_t> close_shutdown;
@@ -331,118 +200,15 @@ int subscribe_parts (void *sock,
                      int32_t flags)
 {
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_msg_t first_part;
-    if (zlink_msg_init (&first_part) != 0)
-        return ZLINK_RECV_INTERNAL_ERROR;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-
-    copy_routing_id (routing_id, NULL);
-    if (parts)
-        parts->release ();
-
-    int rc = zlink_subscribe_part (sock, &source_rid, topic, topic_capacity, topic_len, &first_part,
-                                   &has_more, static_cast<zlink_recv_flags_t> (flags));
-    if (rc != ZLINK_RECV_OK) {
-        zlink_msg_close (&first_part);
-        return rc;
-    }
-
-    copy_routing_id (routing_id, source_rid);
-    if (!parts) {
-        zlink_msg_close (&first_part);
-        errno = EFAULT;
-        return ZLINK_RECV_INTERNAL_ERROR;
-    }
-    parts->release ();
-    if (!parts->append_move (&first_part)) {
-        zlink_msg_close (&first_part);
-        errno = ENOMEM;
-        return ZLINK_RECV_INTERNAL_ERROR;
-    }
-    while (has_more) {
-        const zlink_routing_id_t *next_source_rid = NULL;
-        char next_topic[256];
-        size_t next_topic_len = 0;
-        zlink_msg_t next_part;
-        if (zlink_msg_init (&next_part) != 0) {
-            parts->close ();
-            return ZLINK_RECV_INTERNAL_ERROR;
-        }
-        zlink_part_flag_t more = ZLINK_PART_FINAL;
-        rc = zlink_subscribe_part (sock, &next_source_rid, next_topic, sizeof (next_topic),
-                                   &next_topic_len, &next_part, &more, ZLINK_RECV_FLAGS_DONTWAIT);
-        if (rc != ZLINK_RECV_OK) {
-            zlink_msg_close (&next_part);
-            parts->close ();
-            return rc;
-        }
-        if (!parts->append_move (&next_part)) {
-            zlink_msg_close (&next_part);
-            parts->close ();
-            errno = ENOMEM;
-            return ZLINK_RECV_INTERNAL_ERROR;
-        }
-        has_more = more;
-    }
-    return ZLINK_RECV_OK;
-}
-
-int send_parts (void *sock, zlink_msg_t *parts, size_t part_count, zlink_send_flags_t flags)
-{
-    return submit_msg_parts (parts, part_count, [sock, flags] (zlink_msg_t *part,
-                                                               zlink_part_flag_t part_flag,
-                                                               bool) {
-        return zlink_send_part (sock, part, flags, part_flag, NULL, NULL);
-    });
-}
-
-void run_held_routed_multipart_test (held_routed_multipart_test_t *state)
-{
-    static const char first_payload[] = "held-first";
-    static const char final_payload[] = "held-final";
-    zlink_msg_t first;
-    zlink_msg_t final;
-    const bool first_initialized = init_msg_from_bytes (
-      &first, first_payload, sizeof (first_payload) - 1u);
-    const bool final_initialized = init_msg_from_bytes (
-      &final, final_payload, sizeof (final_payload) - 1u);
-
-    if (first_initialized && final_initialized) {
-        state->open_result = zlink_send_part_rid (
-          state->socket, &state->routing_id, &first,
-          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL);
-        state->open_errno = state->open_result == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
-    } else {
-        state->open_result = ZLINK_SUBMIT_OUT_OF_MEMORY;
-        state->open_errno = zlink_errno ();
-    }
-
-    {
-        std::lock_guard<std::mutex> lock (state->mutex);
-        state->opened = true;
-    }
-    state->condition.notify_one ();
-
-    {
-        std::unique_lock<std::mutex> lock (state->mutex);
-        state->condition.wait_for (
-          lock, std::chrono::seconds (5), [state] { return state->finish; });
-    }
-
-    if (state->open_result == ZLINK_SUBMIT_OK) {
-        state->final_result = zlink_send_part_rid (
-          state->socket, &state->routing_id, &final,
-          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
-        state->final_errno = state->final_result == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
-    }
-
-    if (state->open_result != ZLINK_SUBMIT_OK
-        || state->final_result != ZLINK_SUBMIT_OK) {
-        if (first_initialized)
-            zlink_msg_close (&first);
-        if (final_initialized)
-            zlink_msg_close (&final);
-    }
+    const int rc = collect_recv_parts (
+      parts, [&] (zlink_msg_t *buffer, size_t capacity, size_t *count) {
+          return zlink_subscribe (
+            sock, &source_rid, topic, topic_capacity, topic_len,
+            buffer, capacity, count, static_cast<zlink_recv_flags_t> (flags));
+      });
+    if (rc == ZLINK_RECV_OK)
+        copy_routing_id (routing_id, source_rid);
+    return rc;
 }
 
 uint32_t stress_payload_checksum (const stress_part_payload_t &payload)
@@ -519,8 +285,8 @@ void run_send_close_stress_sender (void *sender,
             continue;
         }
 
-        const int result = send_parts (
-          sender, parts, part_count, ZLINK_SEND_FLAGS_DONTWAIT);
+        const int result = zlink_send (
+          sender, parts, part_count, ZLINK_SEND_FLAGS_DONTWAIT, NULL, NULL);
         const int native_errno = result == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
         if (result == ZLINK_SUBMIT_OK) {
             counts->submitted.fetch_add (1, std::memory_order_relaxed);
@@ -543,22 +309,18 @@ void run_send_close_stress_receiver (void *receiver,
                                      std::atomic<bool> *senders_done,
                                      send_close_stress_counts_t *counts)
 {
+    small_msg_storage_t parts;
     uint32_t empty_after_done = 0;
     while (!senders_done->load (std::memory_order_acquire)
            || empty_after_done < 10000u) {
-        zlink_msg_t part;
-        if (zlink_msg_init (&part) != ZLINK_CONFIG_OK) {
-            counts->bad_records.fetch_add (1, std::memory_order_relaxed);
-            return;
-        }
         const zlink_routing_id_t *source_routing_id = NULL;
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-        const int result = zlink_recv_part (
-          receiver, &source_routing_id, &part, &has_more,
-          ZLINK_RECV_FLAGS_DONTWAIT);
+        const int result = collect_recv_parts (
+          &parts, [&] (zlink_msg_t *buffer, size_t capacity, size_t *count) {
+              return zlink_recv (receiver, &source_routing_id, buffer, capacity,
+                                 count, ZLINK_RECV_FLAGS_DONTWAIT);
+          });
         const int native_errno = result == ZLINK_RECV_OK ? 0 : zlink_errno ();
         if (result == ZLINK_RECV_NO_DATA || native_errno == EAGAIN) {
-            zlink_msg_close (&part);
             if (senders_done->load (std::memory_order_acquire))
                 ++empty_after_done;
             std::this_thread::yield ();
@@ -566,47 +328,32 @@ void run_send_close_stress_receiver (void *receiver,
         }
         empty_after_done = 0;
         if (result != ZLINK_RECV_OK) {
-            zlink_msg_close (&part);
             counts->bad_records.fetch_add (1, std::memory_order_relaxed);
             continue;
         }
 
         stress_part_payload_t first_payload = {};
-        bool valid = read_stress_part (&part, &first_payload)
+        bool valid = parts.size () > 0
+                     && read_stress_part (&parts[0], &first_payload)
                      && first_payload.part_index == 0;
         if (!valid)
             counts->bad_first_parts.fetch_add (1, std::memory_order_relaxed);
-        zlink_msg_close (&part);
-        uint32_t received_part_count = 1;
-        while (has_more) {
-            if (zlink_msg_init (&part) != ZLINK_CONFIG_OK) {
-                valid = false;
-                break;
-            }
-            const int part_result = zlink_recv_part (
-              receiver, &source_routing_id, &part, &has_more,
-              ZLINK_RECV_FLAGS_DONTWAIT);
+        for (size_t index = 1; index < parts.size (); ++index) {
             stress_part_payload_t payload;
-            if (part_result != ZLINK_RECV_OK) {
-                counts->bad_next_part_results.fetch_add (1, std::memory_order_relaxed);
-                valid = false;
-            } else if (!read_stress_part (&part, &payload)
-                       || payload.sender != first_payload.sender
-                       || payload.sequence != first_payload.sequence
-                       || payload.part_count != first_payload.part_count
-                       || payload.part_index != received_part_count) {
+            if (!read_stress_part (&parts[index], &payload)
+                || payload.sender != first_payload.sender
+                || payload.sequence != first_payload.sequence
+                || payload.part_count != first_payload.part_count
+                || payload.part_index != index) {
                 counts->bad_mixed_parts.fetch_add (1, std::memory_order_relaxed);
                 valid = false;
             }
-            zlink_msg_close (&part);
-            ++received_part_count;
-            if (part_result != ZLINK_RECV_OK)
-                break;
         }
-        if (received_part_count != first_payload.part_count) {
+        if (parts.size () != first_payload.part_count) {
             counts->bad_part_counts.fetch_add (1, std::memory_order_relaxed);
             valid = false;
         }
+        parts.close ();
         counts->received_records.fetch_add (1, std::memory_order_relaxed);
         if (!valid)
             counts->bad_records.fetch_add (1, std::memory_order_relaxed);
@@ -641,30 +388,6 @@ void run_send_close_stress_closer (void *sender,
         break;
     }
     close_finished->store (true, std::memory_order_release);
-}
-
-int publish_parts (
-  void *sock, const char *topic, zlink_msg_t *parts, size_t part_count, zlink_send_flags_t flags)
-{
-    return submit_msg_parts (parts, part_count, [sock, topic, flags] (zlink_msg_t *part,
-                                                                      zlink_part_flag_t part_flag,
-                                                                      bool) {
-        return zlink_publish_part (sock, topic, part, flags, part_flag);
-    });
-}
-
-int reply_parts_016 (void *router,
-                        const zlink_routing_id_t *peer_rid,
-                        uint64_t reply_token,
-                        zlink_msg_t *parts,
-                        size_t part_count)
-{
-    return submit_msg_parts (parts, part_count, [router, peer_rid, reply_token] (
-                                                  zlink_msg_t *part,
-                                                  zlink_part_flag_t part_flag, bool) {
-        return zlink_reply_part (
-          router, peer_rid, reply_token, part, part_flag);
-    });
 }
 
 napi_value create_recv_message_value (napi_env env,
@@ -717,7 +440,20 @@ napi_value create_recv_message_value (napi_env env,
     napi_value properties = create_message_properties_snapshot (
       env, &routing_id, NULL, false);
     for (size_t i = 0; i < part_count; ++i) {
-        napi_value part = create_message_snapshot_value (env, NULL, &parts[i]);
+        napi_value part;
+        if (routing_id.size > 0) {
+            // Routed relays usually submit these parts again without reading
+            // their payload. Preserve each native frame until Message.data()
+            // is requested instead of copying it into a Buffer eagerly.
+            napi_create_object (env, &part);
+            napi_value native_message = move_message_to_native_frame_value (
+              env, &parts[i]);
+            if (!native_message)
+                return NULL;
+            napi_set_named_property (env, part, "nativeMessage", native_message);
+        } else {
+            part = create_message_snapshot_value (env, NULL, &parts[i]);
+        }
         if (!part)
             return NULL;
         if (properties)
@@ -739,11 +475,25 @@ napi_value create_router_recv_message_value (napi_env env,
                                              uint64_t reply_token,
                                              zlink_msg_t *parts,
                                              size_t part_count,
-                                             bool prefer_managed_single_part,
+                                             bool prefer_managed_parts,
                                              napi_value routing_id_storage)
 {
     napi_value obj;
-    if (part_count == 1 && !prefer_managed_single_part) {
+    if (prefer_managed_parts) {
+        // Terminal readers own JS Buffers for the whole record. Materialize
+        // every part before returning so payload access and close stay on the
+        // JS side regardless of multipart width.
+        napi_create_array_with_length (env, part_count, &obj);
+        for (size_t i = 0; i < part_count; ++i) {
+            napi_value data = create_received_message_buffer (env, &parts[i]);
+            if (!data)
+                return NULL;
+            napi_set_element (env, obj, static_cast<uint32_t> (i), data);
+        }
+        napi_value rid = create_routing_id_value_reusing (
+          env, routing_id, routing_id_storage);
+        napi_set_named_property (env, obj, "routingId", rid);
+    } else if (part_count == 1) {
         napi_create_object (env, &obj);
         napi_value native_message = move_message_to_native_frame_value (env, &parts[0]);
         if (!native_message)
@@ -769,67 +519,26 @@ napi_value create_router_recv_message_value (napi_env env,
 int router_recv_message_value (napi_env env,
                                void *router,
                                int32_t flags,
-                               bool prefer_managed_single_part,
+                               bool prefer_managed_parts,
                                napi_value routing_id_storage,
                                napi_value *out)
 {
     const zlink_routing_id_t *peer_rid_ptr = NULL;
     zlink_routing_id_t peer_rid;
     uint64_t reply_token = 0;
-    zlink_msg_t first_part;
-    if (zlink_msg_init (&first_part) != 0)
-        return ZLINK_RECV_INTERNAL_ERROR;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    const int rc = zlink_router_recv_part (
-      router, &peer_rid_ptr, &reply_token, &first_part, &has_more,
-      static_cast<zlink_recv_flags_t> (flags));
-    if (rc != ZLINK_RECV_OK) {
-        zlink_msg_close (&first_part);
+    small_msg_storage_t &parts = recv_msg_storage ();
+    const int rc = collect_recv_parts (
+      &parts, [&] (zlink_msg_t *buffer, size_t capacity, size_t *count) {
+          return zlink_router_recv (
+            router, &peer_rid_ptr, &reply_token, buffer, capacity, count,
+            static_cast<zlink_recv_flags_t> (flags));
+      });
+    if (rc != ZLINK_RECV_OK)
         return rc;
-    }
     copy_routing_id (&peer_rid, peer_rid_ptr);
-    if (!has_more) {
-        *out = create_router_recv_message_value (
-          env, peer_rid, reply_token, &first_part, 1,
-          prefer_managed_single_part, routing_id_storage);
-        zlink_msg_close (&first_part);
-        return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
-    }
-
-    small_msg_storage_t parts;
-    if (!parts.append_move (&first_part)) {
-        zlink_msg_close (&first_part);
-        errno = ENOMEM;
-        return ZLINK_RECV_INTERNAL_ERROR;
-    }
-    while (has_more) {
-        const zlink_routing_id_t *next_peer_rid = NULL;
-        uint64_t next_reply_token = 0;
-        zlink_msg_t next_part;
-        if (zlink_msg_init (&next_part) != 0) {
-            parts.close ();
-            return ZLINK_RECV_INTERNAL_ERROR;
-        }
-        zlink_part_flag_t more = ZLINK_PART_FINAL;
-        const int next_rc = zlink_router_recv_part (
-          router, &next_peer_rid, &next_reply_token, &next_part, &more,
-          ZLINK_RECV_FLAGS_DONTWAIT);
-        if (next_rc != ZLINK_RECV_OK) {
-            zlink_msg_close (&next_part);
-            parts.close ();
-            return next_rc;
-        }
-        if (!parts.append_move (&next_part)) {
-            zlink_msg_close (&next_part);
-            parts.close ();
-            errno = ENOMEM;
-            return ZLINK_RECV_INTERNAL_ERROR;
-        }
-        has_more = more;
-    }
     *out = create_router_recv_message_value (
       env, peer_rid, reply_token, parts.data (), parts.size (),
-      prefer_managed_single_part, routing_id_storage);
+      prefer_managed_parts, routing_id_storage);
     parts.close ();
     return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
 }
@@ -1154,6 +863,21 @@ bool init_msg_from_value (napi_env env,
         return true;
     }
 
+    native_message_frame_handle_t *direct_handle = NULL;
+    if (napi_get_value_external (
+          env, value, reinterpret_cast<void **> (&direct_handle)) == napi_ok
+        && direct_handle && direct_handle->frame) {
+        if (zlink_msg_init (msg) != 0)
+            return false;
+        if (zlink_msg_copy (msg, &direct_handle->frame->message) != 0) {
+            zlink_msg_close (msg);
+            return false;
+        }
+        if (contains_native_frame)
+            *contains_native_frame = true;
+        return true;
+    }
+
     bool has_native_message = false;
     if (napi_has_named_property (env, value, "nativeMessage", &has_native_message) != napi_ok) {
         napi_throw_type_error (env, NULL, "message snapshot native frame lookup failed");
@@ -1209,6 +933,14 @@ void consume_native_message_value (napi_env env, napi_value value)
             if (napi_get_element (env, value, index, &part) == napi_ok)
                 consume_native_message_value (env, part);
         }
+        return;
+    }
+    native_message_frame_handle_t *direct_handle = NULL;
+    if (napi_get_value_external (
+          env, value, reinterpret_cast<void **> (&direct_handle)) == napi_ok
+        && direct_handle && direct_handle->frame) {
+        zlink_msg_close (&direct_handle->frame->message);
+        zlink_msg_init (&direct_handle->frame->message);
         return;
     }
     napi_valuetype value_type = napi_undefined;
@@ -1324,6 +1056,111 @@ napi_value message_frame_copy_data (napi_env env, napi_callback_info info)
     if (!frame)
         return NULL;
     return create_received_message_buffer (env, &frame->message);
+}
+
+napi_value message_frame_copy (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 1) {
+        napi_throw_type_error (env, NULL, "messageFrameCopy requires a native message frame");
+        return NULL;
+    }
+    native_message_frame_t *source = get_native_message_frame (
+      env, argv[0], "messageFrameCopy requires a native message frame");
+    if (!source)
+        return NULL;
+
+    native_message_frame_t *copy = acquire_native_message_frame ();
+    if (!copy) {
+        napi_throw_error (env, NULL, "native message frame allocation failed");
+        return NULL;
+    }
+    if (zlink_msg_init (&copy->message) != 0) {
+        recycle_native_message_frame (copy);
+        return throw_last_error (env, "message copy destination init failed");
+    }
+    if (zlink_msg_copy (&copy->message, &source->message) != 0) {
+        zlink_msg_close (&copy->message);
+        recycle_native_message_frame (copy);
+        return throw_last_error (env, "message copy failed");
+    }
+    return create_native_message_value (env, copy, false);
+}
+
+static void detach_message_buffer (napi_env env, napi_value value)
+{
+    if (value == NULL)
+        return;
+    bool is_buffer = false;
+    if (napi_is_buffer (env, value, &is_buffer) != napi_ok || !is_buffer)
+        return;
+    napi_value array_buffer;
+    if (napi_get_named_property (env, value, "buffer", &array_buffer) == napi_ok)
+        napi_detach_arraybuffer (env, array_buffer);
+}
+
+napi_value message_frame_move (napi_env env, napi_callback_info info)
+{
+    napi_value argv[4];
+    size_t argc = 4;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 2) {
+        napi_throw_type_error (
+          env, NULL,
+          "messageFrameMove requires destination and source native message frames");
+        return NULL;
+    }
+    native_message_frame_t *destination = get_native_message_frame (
+      env, argv[0], "messageFrameMove destination is invalid");
+    if (!destination)
+        return NULL;
+    native_message_frame_t *source = get_native_message_frame (
+      env, argv[1], "messageFrameMove source is invalid");
+    if (!source)
+        return NULL;
+    if (destination == source) {
+        napi_throw_type_error (env, NULL, "messageFrameMove requires distinct frames");
+        return NULL;
+    }
+    if (zlink_msg_move (&destination->message, &source->message) != 0)
+        return throw_last_error (env, "message move failed");
+
+    // Any previously exposed Buffer points at the pre-move storage. Invalidate
+    // those views after the ownership transfer before JavaScript can observe
+    // either wrapper again.
+    if (argc > 2)
+        detach_message_buffer (env, argv[2]);
+    if (argc > 3)
+        detach_message_buffer (env, argv[3]);
+
+    napi_value out;
+    napi_get_undefined (env, &out);
+    return out;
+}
+
+napi_value message_frame_ref_count (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 1) {
+        napi_throw_type_error (
+          env, NULL, "messageFrameRefCount requires a native message frame");
+        return NULL;
+    }
+    native_message_frame_t *frame = get_native_message_frame (
+      env, argv[0], "messageFrameRefCount requires a native message frame");
+    if (!frame)
+        return NULL;
+    zlink_config_result_t error = ZLINK_CONFIG_OK;
+    const int ref_count = zlink_msg_refcnt (&frame->message, &error);
+    if (error != ZLINK_CONFIG_OK)
+        return throw_last_error (env, "message refcount failed");
+    napi_value out;
+    napi_create_int32 (env, ref_count, &out);
+    return out;
 }
 
 napi_value message_frame_size (napi_env env, napi_callback_info info)
@@ -1739,74 +1576,6 @@ napi_value socket_close (napi_env env, napi_callback_info info)
     return ok;
 }
 
-napi_value test_begin_held_routed_multipart (napi_env env, napi_callback_info info)
-{
-    napi_value argv[2];
-    size_t argc = 2;
-    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
-    if (argc < 2) {
-        napi_throw_type_error (env, NULL, "test hook requires socket and routing id");
-        return NULL;
-    }
-
-    held_routed_multipart_test_t *state =
-      new (std::nothrow) held_routed_multipart_test_t ();
-    if (!state) {
-        napi_throw_error (env, NULL, "test hook allocation failed");
-        return NULL;
-    }
-    napi_get_value_external (env, argv[0], &state->socket);
-    if (!state->socket || !parse_routing_id_value (env, argv[1], &state->routing_id)) {
-        delete state;
-        return NULL;
-    }
-
-    state->worker = std::thread (run_held_routed_multipart_test, state);
-    {
-        std::unique_lock<std::mutex> lock (state->mutex);
-        state->condition.wait (lock, [state] { return state->opened; });
-    }
-
-    napi_value out;
-    napi_value external;
-    napi_create_object (env, &out);
-    napi_create_external (env, state, NULL, NULL, &external);
-    napi_set_named_property (env, out, "state", external);
-    set_int64_property (env, out, "openResult", state->open_result);
-    set_int64_property (env, out, "openErrno", state->open_errno);
-    return out;
-}
-
-napi_value test_end_held_routed_multipart (napi_env env, napi_callback_info info)
-{
-    napi_value argv[1];
-    size_t argc = 1;
-    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
-    held_routed_multipart_test_t *state = NULL;
-    if (argc < 1
-        || napi_get_value_external (
-             env, argv[0], reinterpret_cast<void **> (&state)) != napi_ok
-        || !state) {
-        napi_throw_type_error (env, NULL, "test hook state is invalid");
-        return NULL;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock (state->mutex);
-        state->finish = true;
-    }
-    state->condition.notify_one ();
-    if (state->worker.joinable ())
-        state->worker.join ();
-
-    napi_value out;
-    napi_create_object (env, &out);
-    set_int64_property (env, out, "finalResult", state->final_result);
-    set_int64_property (env, out, "finalErrno", state->final_errno);
-    delete state;
-    return out;
-}
-
 napi_value test_run_send_close_stress (napi_env env, napi_callback_info info)
 {
     napi_value argv[2];
@@ -1899,7 +1668,6 @@ napi_value test_run_send_close_stress (napi_env env, napi_callback_info info)
     SET_STRESS_COUNT (bad_first_parts);
     SET_STRESS_COUNT (bad_mixed_parts);
     SET_STRESS_COUNT (bad_part_counts);
-    SET_STRESS_COUNT (bad_next_part_results);
     SET_STRESS_COUNT (close_ok);
     SET_STRESS_COUNT (close_busy);
     SET_STRESS_COUNT (close_shutdown);
@@ -2077,34 +1845,10 @@ static int submit_send_parts_016 (
   size_t part_count, zlink_send_flags_t flags, void *user_context,
   zlink_completion_id_t *completion_id)
 {
-    return submit_msg_parts (
-      parts, part_count,
-      [socket, target, flags, user_context, completion_id] (
-        zlink_msg_t *part, zlink_part_flag_t part_flag, bool final) {
-          return target
-            ? zlink_send_part_rid (
-                socket, target, part, flags, part_flag,
-                final ? user_context : NULL, final ? completion_id : NULL)
-            : zlink_send_part (
-                socket, part, flags, part_flag,
-                final ? user_context : NULL, final ? completion_id : NULL);
-      });
-}
-
-static int submit_request_parts_016 (
-  void *socket, const zlink_routing_id_t *target, zlink_msg_t *parts,
-  size_t part_count, zlink_send_flags_t flags, uint32_t timeout_ms,
-  void *user_context, zlink_completion_id_t *completion_id)
-{
-    return submit_msg_parts (
-      parts, part_count,
-      [socket, target, flags, timeout_ms, user_context, completion_id] (
-        zlink_msg_t *part, zlink_part_flag_t part_flag, bool final) {
-          return zlink_request_part (
-            socket, target, part, flags, part_flag,
-            final ? timeout_ms : 0u,
-            final ? user_context : NULL, final ? completion_id : NULL);
-      });
+    return target
+      ? zlink_send_rid (socket, target, parts, part_count, flags,
+                        user_context, completion_id)
+      : zlink_send (socket, parts, part_count, flags, user_context, completion_id);
 }
 
 napi_value socket_submit_send (napi_env env, napi_callback_info info)
@@ -2197,7 +1941,7 @@ napi_value socket_submit_request (napi_env env, napi_callback_info info)
     zlink_completion_id_t completion_id = 0;
     void *user_context = token == 0
       ? NULL : reinterpret_cast<void *> (static_cast<uintptr_t> (token));
-    const int result = submit_request_parts_016 (
+    const int result = zlink_request (
       socket, target, parts.data (), parts.size (),
       static_cast<zlink_send_flags_t> (flags),
       static_cast<uint32_t> (timeout_ms), user_context, &completion_id);
@@ -2297,18 +2041,26 @@ namespace
 struct socket_readable_watch_t
 {
     uv_poll_t poll;
+    uv_idle_t dispatch;
     napi_env env;
+    void *socket;
     napi_ref callback;
     napi_async_context async_context;
     bool closing;
-    bool closed;
+    unsigned int open_handles;
     bool finalized;
+    int status;
+    int native_errno;
 };
+
+// Only watch registration allocates entries. All access is on the owning Node
+// thread, including Worker environments; no receive call consults this index.
+static thread_local std::unordered_map<void *, socket_readable_watch_t *> readable_watches;
 
 static void delete_socket_readable_watch_if_finalized (
   socket_readable_watch_t *watch)
 {
-    if (watch->closed && watch->finalized)
+    if (watch->open_handles == 0 && watch->finalized)
         delete watch;
 }
 
@@ -2316,7 +2068,8 @@ static void socket_readable_watch_closed (uv_handle_t *handle)
 {
     socket_readable_watch_t *watch =
       static_cast<socket_readable_watch_t *> (handle->data);
-    watch->closed = true;
+    if (--watch->open_handles != 0)
+        return;
     if (watch->async_context) {
         napi_async_destroy (watch->env, watch->async_context);
         watch->async_context = NULL;
@@ -2333,7 +2086,12 @@ static void close_socket_readable_watch (socket_readable_watch_t *watch)
     if (watch->closing)
         return;
     watch->closing = true;
+    readable_watches.erase (watch->socket);
+    uv_idle_stop (&watch->dispatch);
     uv_poll_stop (&watch->poll);
+    uv_close (
+      reinterpret_cast<uv_handle_t *> (&watch->dispatch),
+      socket_readable_watch_closed);
     uv_close (
       reinterpret_cast<uv_handle_t *> (&watch->poll),
       socket_readable_watch_closed);
@@ -2351,23 +2109,31 @@ static void socket_readable_watch_finalize (
         delete_socket_readable_watch_if_finalized (watch);
 }
 
-static void socket_readable_watch_ready (
-  uv_poll_t *poll, int status, int)
+static void socket_readable_watch_dispatch (uv_idle_t *dispatch)
 {
     socket_readable_watch_t *watch =
-      static_cast<socket_readable_watch_t *> (poll->data);
+      static_cast<socket_readable_watch_t *> (dispatch->data);
+    // This is a coalesced delivery of observed progress, not an idle poll.
+    // Stop before JS so work submitted by the handler gets a later loop turn.
+    uv_idle_stop (dispatch);
     if (watch->closing || !watch->callback)
         return;
+    const int status = watch->status;
+    const int native_errno = watch->native_errno;
+    watch->status = 0;
+    watch->native_errno = 0;
     napi_handle_scope scope;
     if (napi_open_handle_scope (watch->env, &scope) != napi_ok)
         return;
     napi_value callback;
     napi_value receiver;
     napi_value status_value;
+    napi_value errno_value;
     napi_get_reference_value (watch->env, watch->callback, &callback);
     napi_get_global (watch->env, &receiver);
     napi_create_int32 (watch->env, status, &status_value);
-    napi_value argv[] = {status_value};
+    napi_create_int32 (watch->env, native_errno, &errno_value);
+    napi_value argv[] = {status_value, errno_value};
     napi_value ignored;
     // This callback enters JavaScript from libuv, not from a JavaScript call.
     // MakeCallback completes the Node callback scope, including its Promise
@@ -2379,7 +2145,56 @@ static void socket_readable_watch_ready (
     napi_close_handle_scope (watch->env, scope);
 }
 
+static void schedule_socket_readable_watch (socket_readable_watch_t *watch)
+{
+    if (!watch->closing)
+        uv_idle_start (&watch->dispatch, socket_readable_watch_dispatch);
+}
+
+static void socket_readable_watch_ready (uv_poll_t *poll, int status, int)
+{
+    socket_readable_watch_t *watch =
+      static_cast<socket_readable_watch_t *> (poll->data);
+    if (watch->closing)
+        return;
+    int native_errno = 0;
+    if (status >= 0) {
+        // Retire the mailbox edge without consuming DATA. Socket operations
+        // can retire it too, so FD and local progress share the same dispatch.
+        int events = 0;
+        size_t events_size = sizeof (events);
+        if (zlink_get_option (
+              watch->socket, ZLINK_OPT_EVENTS, &events, &events_size)
+            != ZLINK_CONFIG_OK) {
+            native_errno = zlink_errno ();
+            status = UV_EIO;
+        }
+    }
+    if (status < 0 && watch->status == 0) {
+        watch->status = status;
+        watch->native_errno = native_errno;
+        uv_poll_stop (&watch->poll);
+    }
+    schedule_socket_readable_watch (watch);
+}
+
 } // namespace
+
+void socket_readable_watch_progress (napi_env env, napi_callback_info info)
+{
+    if (readable_watches.empty ())
+        return;
+    napi_value socket_arg;
+    size_t argc = 1;
+    void *socket = NULL;
+    if (napi_get_cb_info (env, info, &argc, &socket_arg, NULL, NULL) != napi_ok
+        || argc == 0
+        || napi_get_value_external (env, socket_arg, &socket) != napi_ok)
+        return;
+    const auto it = readable_watches.find (socket);
+    if (it != readable_watches.end ())
+        schedule_socket_readable_watch (it->second);
+}
 
 napi_value socket_readable_watch_start (napi_env env, napi_callback_info info)
 {
@@ -2397,6 +2212,10 @@ napi_value socket_readable_watch_start (napi_env env, napi_callback_info info)
     napi_typeof (env, argv[1], &callback_type);
     if (!socket || callback_type != napi_function) {
         napi_throw_type_error (env, NULL, "invalid readable watch arguments");
+        return NULL;
+    }
+    if (readable_watches.find (socket) != readable_watches.end ()) {
+        napi_throw_error (env, NULL, "socket already has a readable watch");
         return NULL;
     }
 
@@ -2419,11 +2238,14 @@ napi_value socket_readable_watch_start (napi_env env, napi_callback_info info)
     }
     memset (&watch->poll, 0, sizeof (watch->poll));
     watch->env = env;
+    watch->socket = socket;
     watch->callback = NULL;
     watch->async_context = NULL;
     watch->closing = false;
-    watch->closed = false;
+    watch->open_handles = 0;
     watch->finalized = false;
+    watch->status = 0;
+    watch->native_errno = 0;
     const int init_result = uv_poll_init_socket (loop, &watch->poll, fd);
     if (init_result != 0) {
         napi_throw_error (env, NULL, "socket readable watch start failed");
@@ -2431,6 +2253,18 @@ napi_value socket_readable_watch_start (napi_env env, napi_callback_info info)
         return NULL;
     }
     watch->poll.data = watch;
+    watch->open_handles = 1;
+    const int dispatch_result = uv_idle_init (loop, &watch->dispatch);
+    if (dispatch_result != 0) {
+        watch->closing = true;
+        watch->finalized = true;
+        uv_close (reinterpret_cast<uv_handle_t *> (&watch->poll),
+                  socket_readable_watch_closed);
+        napi_throw_error (env, NULL, "socket readable dispatch start failed");
+        return NULL;
+    }
+    watch->dispatch.data = watch;
+    watch->open_handles = 2;
     if (napi_create_reference (env, argv[1], 1, &watch->callback) != napi_ok) {
         watch->finalized = true;
         close_socket_readable_watch (watch);
@@ -2461,6 +2295,7 @@ napi_value socket_readable_watch_start (napi_env env, napi_callback_info info)
     napi_value out;
     napi_create_external (
       env, watch, socket_readable_watch_finalize, NULL, &out);
+    readable_watches.emplace (socket, watch);
     return out;
 }
 
@@ -2529,7 +2364,7 @@ napi_value socket_request_sync (napi_env env, napi_callback_info info)
     if (!build_msg_vector_or_single (env, argv[2], &parts))
         return NULL;
     zlink_completion_id_t completion_id = 0;
-    const int result = submit_request_parts_016 (
+    const int result = zlink_request (
       socket, target, parts.data (), parts.size (),
       ZLINK_SEND_FLAGS_NONE, static_cast<uint32_t> (timeout_ms),
       NULL, &completion_id);
@@ -2615,7 +2450,7 @@ napi_value socket_publish (napi_env env, napi_callback_info info)
             total += zlink_msg_size (&parts[i]);
     }
     int rc =
-      publish_parts (sock, topic, use_single_part ? &single_part : parts.data (),
+      zlink_publish (sock, topic, use_single_part ? &single_part : parts.data (),
                      use_single_part ? 1 : parts.size (), static_cast<zlink_send_flags_t> (flags));
     if (rc != ZLINK_SUBMIT_OK) {
         return throw_submit_error (env, "publish failed", rc);
@@ -2673,7 +2508,7 @@ napi_value socket_try_publish (napi_env env, napi_callback_info info)
         }
     }
 
-    int rc = publish_parts (sock, topic, use_single_part ? &single_part : parts.data (),
+    int rc = zlink_publish (sock, topic, use_single_part ? &single_part : parts.data (),
                             use_single_part ? 1 : parts.size (), ZLINK_SEND_FLAGS_DONTWAIT);
     if (rc != ZLINK_SUBMIT_OK)
         rc = preserve_try_send_result (rc);
@@ -2698,43 +2533,24 @@ int recv_message_value (napi_env env,
 
     *out = NULL;
     zlink_routing_id_t routing_id;
-    zlink_msg_t first_part;
-    if (zlink_msg_init (&first_part) != 0)
-        return ZLINK_RECV_INTERNAL_ERROR;
-
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    const int rc = zlink_recv_part (sock, &source_rid, &first_part, &has_more,
-                                    static_cast<zlink_recv_flags_t> (flags));
-    if (rc != ZLINK_RECV_OK) {
-        zlink_msg_close (&first_part);
+    small_msg_storage_t &parts = recv_msg_storage ();
+    const int rc = collect_recv_parts (
+      &parts, [&] (zlink_msg_t *buffer, size_t capacity, size_t *count) {
+          return zlink_recv (sock, &source_rid, buffer, capacity, count,
+                             static_cast<zlink_recv_flags_t> (flags));
+      });
+    if (rc != ZLINK_RECV_OK)
         return rc;
-    }
-
     copy_routing_id (&routing_id, source_rid);
-    if (has_more == ZLINK_PART_FINAL) {
-        if (received_bytes)
-            *received_bytes = zlink_msg_size (&first_part);
-        if (routing_id.size == 0) {
-            *out = create_received_message_buffer (env, &first_part);
-            zlink_msg_close (&first_part);
-            return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
-        }
-        *out = create_recv_message_value (env, routing_id, &first_part, 1);
-        zlink_msg_close (&first_part);
-        return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
-    }
-
-    small_msg_storage_t parts;
-    const int collect_rc = collect_recv_parts (sock, &first_part, has_more, &parts);
-    if (collect_rc != ZLINK_RECV_OK)
-        return collect_rc;
     if (received_bytes) {
         *received_bytes = 0;
         for (size_t index = 0; index < parts.size (); ++index)
             *received_bytes += zlink_msg_size (&parts[index]);
     }
-    *out = create_recv_message_value (env, routing_id, parts.data (), parts.size ());
+    *out = parts.size () == 1 && routing_id.size == 0
+             ? create_received_message_buffer (env, &parts[0])
+             : create_recv_message_value (env, routing_id, parts.data (), parts.size ());
     parts.close ();
     return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
 }
@@ -2811,7 +2627,7 @@ napi_value socket_subscribe_message (napi_env env, napi_callback_info info)
 
     subscribe_topic_buffer_t topic;
     zlink_routing_id_t routing_id;
-    small_msg_storage_t parts;
+    small_msg_storage_t &parts = recv_msg_storage ();
     size_t topic_len = topic.size ();
 
     for (;;) {
@@ -2824,7 +2640,7 @@ napi_value socket_subscribe_message (napi_env env, napi_callback_info info)
             parts.close ();
             return out;
         }
-        if (zlink_errno () != EMSGSIZE)
+        if (rc != ZLINK_RECV_BUFFER_TOO_SMALL || topic_len <= topic.size ())
             return throw_last_error (env, "subscribe failed");
         topic.resize (topic_len);
     }
@@ -2841,7 +2657,7 @@ int try_subscribe_message_value (napi_env env,
 
     for (;;) {
         memset (&routing_id, 0, sizeof (routing_id));
-        small_msg_storage_t parts;
+        small_msg_storage_t &parts = recv_msg_storage ();
         const int rc = subscribe_parts (sock, &routing_id, topic.data (), topic.size (), &topic_len,
                                         &parts, ZLINK_RECV_FLAGS_DONTWAIT);
         if (rc == ZLINK_RECV_OK) {
@@ -2858,7 +2674,7 @@ int try_subscribe_message_value (napi_env env,
         const int err = zlink_errno ();
         if (err == EAGAIN)
             return rc;
-        if (err != EMSGSIZE)
+        if (rc != ZLINK_RECV_BUFFER_TOO_SMALL || topic_len <= topic.size ())
             return rc;
         topic.resize (topic_len);
     }
@@ -2899,7 +2715,7 @@ napi_value socket_subscription_event (napi_env env, napi_callback_info info)
     for (;;) {
         const zlink_routing_id_t *source_rid = NULL;
         memset (&routing_id, 0, sizeof (routing_id));
-        int rc = zlink_xpub_recv_part (sock, &source_rid, &subscribed, topic.data (), topic.size (),
+        int rc = zlink_xpub_recv (sock, &source_rid, &subscribed, topic.data (), topic.size (),
                                        &topic_len, ZLINK_RECV_FLAGS_NONE);
         if (rc == ZLINK_RECV_OK) {
             copy_routing_id (&routing_id, source_rid);
@@ -2928,7 +2744,7 @@ napi_value socket_try_subscription_event (napi_env env, napi_callback_info info)
     for (;;) {
         const zlink_routing_id_t *source_rid = NULL;
         memset (&routing_id, 0, sizeof (routing_id));
-        int rc = zlink_xpub_recv_part (sock, &source_rid, &subscribed, topic.data (), topic.size (),
+        int rc = zlink_xpub_recv (sock, &source_rid, &subscribed, topic.data (), topic.size (),
                                        &topic_len, ZLINK_RECV_FLAGS_DONTWAIT);
         if (rc == ZLINK_RECV_OK) {
             copy_routing_id (&routing_id, source_rid);
@@ -3200,7 +3016,7 @@ napi_value socket_reply (napi_env env, napi_callback_info info)
     small_msg_storage_t parts;
     if (!build_msg_vector_or_single (env, argv[3], &parts))
         return NULL;
-    const int result = reply_parts_016 (
+    const int result = zlink_reply (
       router, &source_rid, reply_token, parts.data (), parts.size ());
     parts.release ();
     if (result != ZLINK_SUBMIT_OK)
@@ -3221,14 +3037,14 @@ napi_value router_recv_message (napi_env env, napi_callback_info info)
     int32_t flags = 0;
     if (argc >= 2)
         napi_get_value_int32 (env, argv[1], &flags);
-    bool prefer_managed_single_part = false;
+    bool prefer_managed_parts = false;
     if (argc >= 3)
-        napi_get_value_bool (env, argv[2], &prefer_managed_single_part);
+        napi_get_value_bool (env, argv[2], &prefer_managed_parts);
     napi_value routing_id_storage = argc >= 4 ? argv[3] : NULL;
 
     napi_value out = NULL;
     const int rc = router_recv_message_value (
-      env, router, flags, prefer_managed_single_part, routing_id_storage, &out);
+      env, router, flags, prefer_managed_parts, routing_id_storage, &out);
     if (rc != ZLINK_RECV_OK)
         return throw_last_error (env, "routerRecvMessage failed");
     return out;
@@ -3241,14 +3057,14 @@ napi_value router_try_recv_message (napi_env env, napi_callback_info info)
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     void *router = NULL;
     napi_get_value_external (env, argv[0], &router);
-    bool prefer_managed_single_part = false;
+    bool prefer_managed_parts = false;
     if (argc >= 2)
-        napi_get_value_bool (env, argv[1], &prefer_managed_single_part);
+        napi_get_value_bool (env, argv[1], &prefer_managed_parts);
     napi_value routing_id_storage = argc >= 3 ? argv[2] : NULL;
 
     napi_value out = NULL;
     const int rc = router_recv_message_value (
-      env, router, ZLINK_RECV_FLAGS_DONTWAIT, prefer_managed_single_part,
+      env, router, ZLINK_RECV_FLAGS_DONTWAIT, prefer_managed_parts,
       routing_id_storage, &out);
     if (rc != ZLINK_RECV_OK) {
         if (zlink_errno () == EAGAIN) {

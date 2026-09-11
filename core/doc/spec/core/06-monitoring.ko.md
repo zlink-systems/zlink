@@ -27,7 +27,7 @@ event를 제공한다. Monitor는 상태를 관측할 뿐 routing과 queue 상�
 
 | 관련 계약 | 정의하는 문서 |
 |---|---|
-| socket event family 카탈로그, receive-flow event 3개의 발생 조건과 `value`·`flags` 의미 | [Events](04-events.ko.md) |
+| socket event family 카탈로그와 receive-flow event 발생 조건 | [Events](04-events.ko.md) |
 | monitor queue의 Auto HWM planning 제외와 context budget snapshot 집계 | [Auto HWM](systems/06-auto-hwm.ko.md) |
 | 각 result 값과 errno의 대응 | [Errors](03-errors.ko.md#result와-errno-대응) |
 
@@ -88,11 +88,12 @@ event별 `value`의 의미는 다음과 같다.
 | `MONITOR_STOPPED` | `0` |
 | `DISCONNECTED` | `zlink_disconnect_reason_t` 값 |
 | `HANDSHAKE_FAILED_PROTOCOL` | `zlink_protocol_error_t` 값 |
+| `HANDSHAKE_FAILED_AUTH` | TLS verify·client-cert 실패를 나타내는 `EACCES` |
 | `PEER_WEIGHT_CHANGED` | 새 `0..10000` weight |
-| `CONNECTION_READY` | 해당 monitor source가 ready인 공개 transport 수의 현재 count |
-| receive-flow event 3개 | [Events](04-events.ko.md)가 소유 |
+| `CONNECTION_READY` | 해당 monitor source의 ready logical peer 수 |
+| receive-flow event | 아래 receive-flow 표 |
 
-`CONNECTION_READY`의 `value`는 ready인 공개 transport 수의 현재 count이므로, count가 증가한
+`CONNECTION_READY`의 `value`는 ready logical peer 수의 현재 count이므로, count가 증가한
 순간을 구분해야 하면 `flags`의 `ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE`를 사용한다.
 이 flag가 없는 ready count event는 count snapshot이며 새로운 연결의 ready edge를 뜻하지
 않는다.
@@ -100,8 +101,30 @@ event별 `value`의 의미는 다음과 같다.
 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE`,
 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`는 receive-flow event
 3개(`ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`,
-`ZLINK_EVENT_FLOW_STATE_STALE`)에만 적용한다. 발생 조건과 각 event의 `value` 의미는
-[Events](04-events.ko.md)가 소유한다.
+`ZLINK_EVENT_FLOW_STATE_STALE`)에만 적용한다.
+
+발생 조건과 event bit는 [Events](04-events.ko.md)가 정의한다. Receive-flow field 값은
+다음과 같다.
+
+| Event | `value` | `flags` | 다른 field |
+|---|---|---|---|
+| `ZLINK_EVENT_SEND_FLOW_PAUSED` | 적용된 상태의 flow epoch | 없음 | PAUSED된 peer의 `routing_id`, `connection_id`, Application `transport_lane` |
+| `ZLINK_EVENT_SEND_FLOW_RESUMED` | 적용된 상태의 flow epoch | remote pause를 해제한 결과 pipe가 실제로 writable이면 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` | PAUSED와 동일 |
+| `ZLINK_EVENT_FLOW_STATE_STALE` | 받은 flow epoch | `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` | 해당 peer의 `routing_id`, `connection_id`, Application `transport_lane` |
+
+| 보조 식별자 (`ZLINK_` 접두사) | 값 | 의미 |
+|---|---|---|
+| `DISCONNECT_REASON_UNKNOWN` | `0` | 다른 공개 reason으로 분류하지 않은 종료 |
+| `DISCONNECT_REASON_HANDSHAKE_FAILED` | `3` | handshake 실패 |
+| `DISCONNECT_REASON_TRANSPORT_ERROR` | `4` | transport 오류 |
+| `DISCONNECT_REASON_CTX_TERM` | `5` | Context 종료 |
+| `PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_HELLO` | `0x10000013` | malformed HELLO |
+| `PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_READY` | `0x10000016` | malformed READY metadata 또는 paired-lane topology |
+| `MONITOR_TRANSPORT_LANE_APPLICATION` | `0` | Application connection |
+| `MONITOR_TRANSPORT_LANE_COMPLETION` | `1` | 별도 Completion connection |
+| `MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE` | `1u << 0` | logical peer가 not-ready에서 ready로 전이 |
+| `MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` | `1u << 1` | RESUMED 적용 뒤 다른 원인도 pipe를 막지 않음 |
+| `MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` | `1u << 3` | 같은 generation에서 전진하지 않은 epoch 거부 |
 
 ## 4. 순서, overflow와 thread 안전성
 
@@ -291,8 +314,8 @@ typedef enum zlink_monitor_transport_lane_e {
 } zlink_monitor_transport_lane_t;
 
 #define ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE (1u << 0)       // count가 증가한 ready edge (§3.2)
-#define ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE (1u << 1)          // receive-flow event 전용. 의미는 Events 소유
-#define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH (1u << 3)      // receive-flow event 전용. 의미는 Events 소유
+#define ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE (1u << 1)          // receive-flow event 전용. §3.2 참조
+#define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH (1u << 3)      // receive-flow event 전용. §3.2 참조
 
 typedef zlink_monitor_event_t zlink_socket_monitor_event_t;
 ```
@@ -430,6 +453,9 @@ ZLINK_EXPORT void *zlink_socket_monitor_open(
 `monitor_hwm_bytes`가 monitor queue의 byte 예산을 정한다([§5](#5-monitor-queue의-byte-예산)).
 이 함수, open options와 status 구조체의 layout 정책은 [§6.1](#61-abi-version과-layout)을
 따른다 — caller size/version 협상이나 병렬 versioned entrypoint를 추가하지 않는다.
+
+같은 socket에는 monitor 하나만 열 수 있다. 기존 monitor가 열려 있으면 두 번째 open은
+`NULL`과 `EBUSY`를 반환하며 기존 handle의 수명과 event 소비는 유지된다.
 
 **반환값:** 성공 시 monitor 핸들, 실패 시 `NULL` (errno가 설정됨).
 

@@ -17,7 +17,10 @@ import { SOCKET_MONITOR_EVENT_ALL, type ReceiveFlowState } from '../../contracts
 import { normalizeRoutingId } from '../core/routing_id';
 import { MonitorSocket } from '../eventing/monitor_socket';
 import { validateUInt64 } from '../options/byte_values';
+import type { ZLinkReadableHandler } from '../../contracts/sockets/socket';
+import { createError } from '../errors/error_mapping';
 import {
+  completionOwnerOf,
   installCompletionOwner,
   releaseCompletionOwner,
 } from '../messaging/completion_owner';
@@ -29,6 +32,18 @@ export class SocketBase extends NativeHandle {
       throw lastError('config', 'socket creation failed');
     }
     installCompletionOwner(this, this._native);
+  }
+
+  setReadableHandler(handler: ZLinkReadableHandler): void {
+    if (!this._native) throw createError('handler', 14, 'socket is closed');
+    completionOwnerOf(this).setReadableHandler(handler);
+  }
+
+  /** @internal */
+  protected receiveHandle(): unknown {
+    const handle = getNativeHandle(this);
+    if (handle) completionOwnerOf(this).throwReceiveError();
+    return handle;
   }
 
   bind(endpoint: string): void {

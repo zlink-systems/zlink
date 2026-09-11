@@ -27,7 +27,7 @@ test('ReplyToken equality and hash include the socket owner', async () => {
   router.bind('inproc://reply-token-value-contract');
   dealer.connect('inproc://reply-token-value-contract');
   try {
-    const pending = dealer.request().message('ping').timeout(1_000).submit();
+    const pending = dealer.request().message('ping').timeout(1_000).submit().reply;
     const received = new zlink.Received();
     assert.equal(router.recv(received), true);
     const token = received.replyToken;

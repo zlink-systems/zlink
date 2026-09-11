@@ -95,25 +95,29 @@ fn main() {
     let mut tasks = common::ConcurrentTasks::new(sockets.len());
     let mut seqs = vec![1u64; sockets.len()];
     while Instant::now() < deadline || (tasks.any_pending() && Instant::now() < drain_deadline) {
-        let mut inserted = vec![false; sockets.len()];
+        let mut submitted = false;
         if Instant::now() < deadline {
             for (slot, socket) in sockets.iter().enumerate() {
                 if tasks.is_pending(slot) {
                     continue;
                 }
-                let mut msg = Message::with_size(payload_size).expect("msg");
-                common::encode_header(
-                    msg.data_mut(),
-                    common::PHASE_ACTIVE,
-                    args.msg_size as u32,
-                    seqs[slot],
-                );
-                seqs[slot] += 1;
-                tasks.insert(
-                    slot,
-                    perf_submit_measurement_async!(socket.send(&server_rid), msg),
-                );
-                inserted[slot] = true;
+                while Instant::now() < deadline {
+                    let mut msg = Message::with_size(payload_size).expect("msg");
+                    common::encode_header(
+                        msg.data_mut(),
+                        common::PHASE_ACTIVE,
+                        args.msg_size as u32,
+                        seqs[slot],
+                    );
+                    seqs[slot] += 1;
+                    submitted = true;
+                    let submission = perf_submit_measurement_async!(socket.send(&server_rid), msg)
+                        .unwrap_or_else(|err| panic!("send failed: {err}"));
+                    if submission.result == zlink::SubmitResult::Backpressured {
+                        tasks.insert(slot, submission.admitted);
+                        break;
+                    }
+                }
             }
         }
         let ready = tasks.poll_ready();
@@ -121,10 +125,7 @@ fn main() {
         for (_, result) in ready {
             result.unwrap_or_else(|err| panic!("send failed: {err}"));
         }
-        progressed |= inserted
-            .iter()
-            .enumerate()
-            .any(|(slot, was_inserted)| *was_inserted && tasks.is_pending(slot));
+        progressed |= submitted;
         if Instant::now() >= deadline && !tasks.any_pending() {
             break;
         }

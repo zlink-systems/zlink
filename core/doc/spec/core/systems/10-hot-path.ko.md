@@ -32,18 +32,18 @@ path다. 이 표는 규범이다: 표의 함수(또는 그 callee)를 고치는 
 
 | 진입점 | 경로 |
 |---|---|
-| `zlink_send_part` (PAIR·DEALER·ROUTER·STREAM) | `submit_completion_aware_part` → blocking은 `send_completion_submit_blocking`, DONTWAIT 거절은 `register_send_writable_wait_after_failure` → `try_admit_send_parts_scoped` → `xsend_selected_pipe` / `xsend_configured_endpoint` / `send_direct_with_retry` → `lb_t::sendpipe_to` → `pipe_t::write_*` |
-| `zlink_send_part_rid` (ROUTER·STREAM) | 위와 같되 `send_direct_with_retry` 분기 |
-| `zlink_request_part` FINAL (DEALER·ROUTER) | `request_part_common` → `submit_pull_blocking_request` → `request_admission_submit_blocking` → `try_admit_send_parts_scoped` → `arm_socket_pending_request_timeout` |
-| `zlink_reply_part` FINAL (ROUTER) | `public_router_reply_submit` → `checkout_router_reply_target` → `send_public_router_reply_with_wait` → `retain_reply_transport_pipe` → `send_completion_staged_frames_on_pipe` |
-| `zlink_recv_part` / `zlink_router_recv_part` | `recv_dealer_message_direct` / `router_recv_part_impl` → `recv_common` / `recv_routed` → `fq_t::recvpipe` → `pipe_t::read` → `reclassify_transport_pair_application_head` → `end_public_part_receive_delivery_hold` |
+| `zlink_send` (PAIR·DEALER) | `submit_completion_aware_part` → blocking은 `send_completion_submit_blocking`, DONTWAIT 거절은 `register_send_writable_wait_after_failure` → `try_admit_send_parts_scoped` → `xsend_selected_pipe` / `xsend_configured_endpoint` / `send_direct_with_retry` → `lb_t::sendpipe_to` → `pipe_t::write_*` |
+| `zlink_send_rid` (ROUTER·STREAM) | 위와 같되 `send_direct_with_retry` 분기 |
+| `zlink_request` (DEALER·ROUTER) | `request_part_common` → `submit_pull_blocking_request` → `request_admission_submit_blocking` → `try_admit_send_parts_scoped` → `arm_socket_pending_request_timeout` |
+| `zlink_reply` (ROUTER) | `public_router_reply_submit` → `checkout_router_reply_target` → `send_public_router_reply_with_wait` → `retain_reply_transport_pipe` → `send_completion_staged_frames_on_pipe` |
+| `zlink_recv` / `zlink_router_recv` | `recv_dealer_record` / `router_recv_part_impl` → `recv_common` / `recv_routed` → `fq_t::recvpipe` → `pipe_t::read` → `reclassify_transport_pair_application_head` → `end_public_part_receive_delivery_hold` |
 | `zlink_completion_recv` | `process_submit_commands` → blocking이고 timeout이 0이 아니면 `prepare_completion_pull` → `socket_completion::recv` |
 | `zlink_poll` / `zlink_poller_wait` | `get_events_internal` → `process_commands` → `xhas_in` / `xhas_out` |
 | I/O thread → socket 전달 | `pipe_t::flush` → `activate_read` command → `xread_activated` → `fq_t::activated`; `process_async_mailbox` |
 
 ## 3. Hot path 안에서 금지되는 동작
 
-Hot path 안의 코드는 다음을 하지 않는다. 예외는 §4의 후퇴 경로뿐이다.
+Hot path 안의 코드는 다음을 하지 않는다. 예외는 아래 opaque reply token 조회와 §4의 후퇴 경로다.
 
 1. **Heap 할당.** `std::vector`·`std::string`의 임시 생성, `new`, `make_shared`를 message마다
    하지 않는다. 필요한 버퍼는 socket·load balancer·pipe의 멤버 scratch를 재사용한다.
@@ -51,7 +51,8 @@ Hot path 안의 코드는 다음을 하지 않는다. 예외는 §4의 후퇴 �
    않는다. 선택 시점에 얻은 `pipe_t*`를 같은 send scope 안에서 그대로 사용한다.
 3. **Socket 단위 table 조회와 그 mutex.** Transport pair table, pending queue map, route history
    같은 socket 단위 컨테이너를 message마다 찾지 않는다. Message 경로가 묻는 상태는 §4의 캐시로
-   답한다.
+   답한다. Opaque reply token을 해석하는 `checkout_router_reply_target`의 조회와 mutex는
+   예외다. 이 조회는 reply의 대상과 소유권을 확인하며 Core request/reply owner가 담당한다.
 4. **조건 없는 부가 작업.** Hold 해제, head 재분류, deferred control flush처럼 "가끔 필요한" 작업은
    먼저 atomic 플래그로 필요 여부를 확인하고, 필요할 때만 lock을 잡는다.
 5. **Reader를 재우는 미리보기.** 수신 경로에서 pipe head를 미리 보는 코드는 prefetch된 범위
@@ -77,7 +78,7 @@ Message 경로가 필요로 하는 socket 단위 상태는 상태가 바뀌는 �
 |---|---|---|
 | 이 pipe는 ready한 transport pair의 Application lane인가 | `pipe_t::transport_pair_application_ready_cached()` | pair admission에서 set, 첫 physical detach에서 clear |
 | 이 pipe는 lifecycle active인가 | `pipe_t::is_lifecycle_active()` (`_state` 미러) | `_state`가 `active`를 떠나는 모든 전이 |
-| Public part receive에 hold가 걸려 있는가 | `_public_part_receive_delivery_hold_active` (atomic) | hold begin/end |
+| Public whole-message receive에 delivery hold가 걸려 있는가 | `_public_part_receive_delivery_hold_active` (atomic) | hold begin/end |
 
 캐시로 답하지 못하는 경우(선택한 pipe가 그 사이 detach됨, backpressure로 재시도 대기가 필요함)
 에만 일반 경로로 후퇴한다. 후퇴 경로는 다음을 지킨다.
@@ -93,7 +94,7 @@ Message 경로가 필요로 하는 socket 단위 상태는 상태가 바뀌는 �
 - Wait token 등록과 WRITABLE record 게시는 message마다 실행되는 성공 경로 밖에 있다. 두 작업은
   거절이 일어났을 때와 credit·attach wake가 일어났을 때만 실행되므로 §3의 허용 범위(후퇴 경로)에
   속하며, 성공 경로에 대한 §3의 금지는 그대로 유효하다.
-- 후퇴 경로의 계약(blocking send의 선택은 FINAL에서 한 번, 재시도는 같은 endpoint)은 fast
+- 후퇴 경로의 계약(blocking send는 record마다 target을 한 번 선택하고 재시도는 같은 endpoint)은 fast
   path가 있어도 바뀌지 않는다.
 
 ## 5. 성능 gate

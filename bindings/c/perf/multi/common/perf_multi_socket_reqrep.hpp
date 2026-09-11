@@ -803,61 +803,33 @@ inline int run_client_benchmark (const endpoint_config_t &config,
 inline bool submit_router_reply_with_retry (void *server,
                                             const zlink_routing_id_t *source_rid,
                                             uint64_t reply_token,
-                                            zlink_msg_t *part)
+                                            zlink_msg_t *parts,
+                                            size_t part_count)
 {
-    if (!server || !source_rid || reply_token == 0 || !part)
+    if (!server || !source_rid || reply_token == 0 || !parts || part_count == 0)
         return false;
 
-    if (perf_measurement_part_count () == 2u) {
-#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
-        const zlink_submit_result_t payload_rc = zlink_router_reply_part (
-#else
-        const zlink_submit_result_t payload_rc = zlink_reply_part (
-#endif
-          server, source_rid, reply_token, part, ZLINK_PART_MORE);
-        if (payload_rc != ZLINK_SUBMIT_OK)
+    // Reply submission consumes the complete record on backpressure. Keep a
+    // shared-storage template and rebuild the same record for every retry.
+    std::vector<zlink_msg_t> retry_template (part_count);
+    size_t initialized = 0;
+    for (; initialized < part_count; ++initialized) {
+        if (zlink_msg_init (&retry_template[initialized]) != 0) {
+            zlink_multipart_close (retry_template.data (), initialized);
+            zlink_multipart_close (parts, part_count);
             return false;
-        while (!perf_stop_requested ().load (std::memory_order_acquire)) {
-            zlink_msg_t empty_part;
-            if (zlink_msg_init (&empty_part) != 0)
-                return false;
-#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
-            const zlink_submit_result_t final_rc = zlink_router_reply_part (
-#else
-            const zlink_submit_result_t final_rc = zlink_reply_part (
-#endif
-              server, source_rid, reply_token, &empty_part, ZLINK_PART_FINAL);
-            if (final_rc == ZLINK_SUBMIT_OK)
-                return true;
-            if (final_rc != ZLINK_SUBMIT_BACKPRESSURED)
-                return false;
-            zlink_pollitem_t item = {server, 0, ZLINK_POLLOUT, 0};
-            if (perf_socket_poll (&item, 1, perf_aux_poll_wait_ms ()) < 0
-                && zlink_errno () != EINTR && zlink_errno () != EAGAIN)
-                return false;
         }
-        return false;
+        if (zlink_msg_copy (&retry_template[initialized], &parts[initialized])
+            != ZLINK_CONFIG_OK) {
+            zlink_multipart_close (retry_template.data (), initialized + 1u);
+            zlink_multipart_close (parts, part_count);
+            return false;
+        }
     }
 
-    // Reply submission consumes the supplied part on backpressure. Keep a
-    // shared-storage copy so the retry preserves the received metric payload.
-    zlink_msg_t retry_template;
-    const bool retry_template_initialized = zlink_msg_init (&retry_template) == 0;
-    if (!retry_template_initialized
-        || zlink_msg_copy (&retry_template, part) != ZLINK_CONFIG_OK) {
-        if (retry_template_initialized)
-            zlink_msg_close (&retry_template);
-        zlink_msg_close (part);
-        return false;
-    }
-
-#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
     zlink_submit_result_t reply_rc =
-      zlink_router_reply_part (server, source_rid, reply_token, part, ZLINK_PART_FINAL);
-#else
-    zlink_submit_result_t reply_rc =
-      zlink_reply_part (server, source_rid, reply_token, part, ZLINK_PART_FINAL);
-#endif
+      zlink_reply (server, source_rid, reply_token, parts, part_count);
+    zlink_multipart_close (parts, part_count);
     while (reply_rc == ZLINK_SUBMIT_BACKPRESSURED
            && !perf_stop_requested ().load (std::memory_order_acquire)) {
         zlink_pollitem_t item = {server, 0, ZLINK_POLLOUT, 0};
@@ -870,24 +842,30 @@ inline bool submit_router_reply_with_retry (void *server,
         if (poll_rc == 0 || (item.revents & ZLINK_POLLOUT) == 0)
             continue;
 
-        zlink_msg_t retry;
-        const bool retry_initialized = zlink_msg_init (&retry) == 0;
-        if (!retry_initialized
-            || zlink_msg_copy (&retry, &retry_template) != ZLINK_CONFIG_OK) {
-            if (retry_initialized)
-                zlink_msg_close (&retry);
-            reply_rc = ZLINK_SUBMIT_TERMINATED;
-            break;
+        std::vector<zlink_msg_t> retry (part_count);
+        size_t retry_initialized = 0;
+        for (; retry_initialized < part_count; ++retry_initialized) {
+            if (zlink_msg_init (&retry[retry_initialized]) != 0) {
+                zlink_multipart_close (retry.data (), retry_initialized);
+                reply_rc = ZLINK_SUBMIT_TERMINATED;
+                break;
+            }
+            if (zlink_msg_copy (&retry[retry_initialized],
+                                &retry_template[retry_initialized])
+                != ZLINK_CONFIG_OK) {
+                zlink_multipart_close (retry.data (), retry_initialized + 1u);
+                reply_rc = ZLINK_SUBMIT_TERMINATED;
+                break;
+            }
         }
-#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
-        reply_rc = zlink_router_reply_part (
-#else
-        reply_rc = zlink_reply_part (
-#endif
-          server, source_rid, reply_token, &retry, ZLINK_PART_FINAL);
+        if (retry_initialized != part_count)
+            break;
+        reply_rc = zlink_reply (
+          server, source_rid, reply_token, retry.data (), retry.size ());
+        zlink_multipart_close (retry.data (), retry.size ());
     }
 
-    zlink_msg_close (&retry_template);
+    zlink_multipart_close (retry_template.data (), retry_template.size ());
     return reply_rc == ZLINK_SUBMIT_OK;
 }
 
@@ -907,31 +885,27 @@ inline server_recv_step_t reply_one_request (void *server,
 {
     const zlink_routing_id_t *source_rid = NULL;
     uint64_t reply_token = 0;
-    zlink_msg_t part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    if (zlink_msg_init (&part) != 0)
-        return server_recv_step_error;
+    zlink_msg_t parts[2];
+    size_t part_count = 0;
 
-    const int rc =
-      zlink_router_recv_part (server, &source_rid, &reply_token, &part,
-                              &has_more, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
+    const int rc = zlink_router_recv (
+      server, &source_rid, &reply_token, parts, 2u, &part_count,
+      static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
     if (rc != 0) {
         const int err = zlink_errno ();
-        zlink_msg_close (&part);
         if (err == EAGAIN || err == EWOULDBLOCK || err == EINTR)
             return server_recv_step_drained;
         return server_recv_step_error;
     }
 
     if (!source_rid || source_rid->size == 0 || reply_token == 0
-        || !perf_zlink_recv_measurement_tail (
-          server, has_more, ZLINK_RECV_FLAGS_DONTWAIT, perf_zlink_recv_next_router)) {
-        zlink_msg_close (&part);
+        || !perf_zlink_measurement_parts_valid (parts, part_count)) {
+        zlink_multipart_close (parts, part_count);
         errno = EPROTO;
         return server_recv_step_error;
     }
 
-    const size_t msg_size = zlink_msg_size (&part);
+    const size_t msg_size = zlink_msg_size (&parts[0]);
     if (active_msg_size && msg_size > 0 && *active_msg_size != msg_size) {
         apply_benchmark_hwm (server, hwm_value);
         *active_msg_size = msg_size;
@@ -939,7 +913,7 @@ inline server_recv_step_t reply_one_request (void *server,
                                       socket_type);
     }
 
-    if (submit_router_reply_with_retry (server, source_rid, reply_token, &part))
+    if (submit_router_reply_with_retry (server, source_rid, reply_token, parts, part_count))
         return server_recv_step_replied;
 
     const int reply_err = zlink_errno ();

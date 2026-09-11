@@ -1272,7 +1272,10 @@ export class ZLinkChannelSocketRegistry {
     for (;;) {
       if (!connection.readablePoller.wait(0)) return;
       const received = connection.dealer.recv(1);
-      if (received === undefined) return;
+      if (received === undefined) {
+        connection.readablePoller.markDrained();
+        return;
+      }
       try {
         if (received.parts.length !== 1
           || !isClientServerControlFrame(received.parts[0]!.data())) {

@@ -5,6 +5,7 @@ package systems.zlink.perf.multi;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.sockets.DealerSocket;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.SendSubmission;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.eventing.PollEventFlags;
@@ -18,7 +19,6 @@ import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 final class PerfMultiDealerRouter {
@@ -127,17 +127,17 @@ final class PerfMultiDealerRouter {
                 socketsAsBase, PollEventFlags.POLLIN)) {
             long activeEnd = System.nanoTime()
                 + (long) config.durationSeconds() * 1_000_000_000L;
-            PerfMultiTargetCoordinator.run(n, activeEnd, pollSet,
+            PerfMultiRoutedSendCoordinator.run(n, activeEnd, pollSet,
                 index -> sendPayload(clients.get(index), msgSize, activeEnd),
                 index -> drainReplies(clients.get(index), msgSize, metrics,
                     replyBuffer, activeEnd),
                 index -> drainRepliesForTeardown(clients.get(index),
                     replyBuffer),
                 // C echo client: teardown window max(env, 3 s per active second).
-                PerfMultiTargetCoordinator.sendDrainTimeout().compareTo(
+                PerfMultiRoutedSendCoordinator.sendDrainTimeout().compareTo(
                     java.time.Duration.ofSeconds(
                         Math.max(1L, (long) config.durationSeconds()) * 3L)) >= 0
-                    ? PerfMultiTargetCoordinator.sendDrainTimeout()
+                    ? PerfMultiRoutedSendCoordinator.sendDrainTimeout()
                     : java.time.Duration.ofSeconds(
                         Math.max(1L, (long) config.durationSeconds()) * 3L),
                 "multi dealer/router async sends");
@@ -148,9 +148,9 @@ final class PerfMultiDealerRouter {
         }
     }
 
-    private static CompletionStage<Void> sendPayload(DealerSocket client,
-                                                     int msgSize,
-                                                     long activeEnd) {
+    private static SendSubmission sendPayload(DealerSocket client,
+                                              int msgSize,
+                                              long activeEnd) {
         try (Message payload = PerfUtil.payload(msgSize,
                  (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
              Message tail = PerfUtil.measurementPartCount() == 2

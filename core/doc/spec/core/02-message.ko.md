@@ -17,9 +17,9 @@ title: "Message"
 zlink의 message는 [socket](glossary.ko.md#socket) 사이에서 임의의 binary payload를 전달하는
 기본 단위다. message가 운반하는 사용자 data byte를 payload라 한다. message는 data를
 복사하지 않고 pointer·참조만 전달해 전송하는 zero-copy 방식과, 여러 frame(part)을 하나의
-논리적 message로 묶어 전송하는 multipart sequence를 지원한다.
+논리적 message로 묶는 multipart를 지원한다.
 
-이 문서는 message의 생성, payload 접근, ownership과 multipart의 공개 계약을 정의한다. 대상
+이 문서는 message의 생성, payload 접근, ownership과 multipart 배열의 공개 계약을 정의한다. 대상
 독자는 message lifecycle과 zero-copy buffer ownership을 C API와 각 언어 binding으로 옮기는
 개발자다. 이 문서는 "socket이 송수신하는 message를 어떻게 만들고 공유하며 정확히 한 번
 해제하는가?"에 답한다.
@@ -99,17 +99,23 @@ thread 규칙은 핸들 단위다. 하나의 `zlink_msg_t` instance를 여러 th
 이 절은 multipart를 지원하는 socket에 적용한다. STREAM은
 [part 하나를 보내는 송신과 RAW/PACKET 수신](socket/08-stream.ko.md)을 사용한다.
 
-여러 frame(part)을 하나의 논리적 message로 묶어 전송하는 방식을 multipart라 한다. Core는
-`ZLINK_PART_MORE`부터 `ZLINK_PART_FINAL`까지의 part를 하나의 논리적 multipart sequence로
-처리한다. 다른 sender의 part가 이 sequence 사이에 삽입되지 않도록 보호하는 내부 구조는
-[§7 내부 구조](#7-내부-구조)가 설명한다.
+여러 frame(part)을 하나의 논리적 message로 묶어 전송하는 방식을 multipart라 한다. 송신 API는
+연속된 `zlink_msg_t` 배열과 part 수를 한 번에 받아 record 하나로 원자적으로 제출한다. 다른
+sender의 part가 그 record 안에 섞이지 않는다.
 
 `zlink_msg_t` 구조체의 연속 배열로 저장한 multipart message는
-[`zlink_multipart_close`](#zlink_multipart_close)로 모든 part를 한 번에 닫는다.
+[`zlink_multipart_close`](#zlink_multipart_close)로 모든 part를 한 번에 닫는다. whole-message
+수신([`zlink_recv`·`zlink_router_recv`](socket/README.ko.md#zlink_recv-와-zlink_router_recv))이
+그런 배열을 채우는 생성 경로다: caller가 `zlink_msg_t` 배열과 capacity를 주면 Core가 record의 모든
+part를 앞에서부터 채우고 `*part_count_out_`에 개수를 쓴다. 성공 시 각 슬롯은 caller-소유 part이며(호출
+전 초기화 불필요), caller는 `zlink_multipart_close(parts, count)`로 정확히 한 번 닫는다. capacity가
+record의 part 수보다 작으면 record를 소비하지 않고 필요한 개수만 `*part_count_out_`에 쓴 뒤
+`ZLINK_RECV_BUFFER_TOO_SMALL`(`errno == ENOBUFS`)을 반환하므로, 부분 소비로 절반짜리 record 상태가
+남지 않는다.
 
-multipart와 thread의 관계는 다음과 같다. PAIR·DEALER·ROUTER에서는 여러 thread가 같은 socket에 각자
-독립된 multipart message를 동시에 보낼 수 있지만, 하나의 multipart message를 thread 사이에 나누면 안 된다. receive는 single-consumer
-계약을 따른다.
+multipart와 thread의 관계는 다음과 같다. PAIR·DEALER·ROUTER에서는 여러 thread가 같은 socket에
+각자 독립된 multipart 배열을 동시에 제출할 수 있다. 한 호출에 전달한 배열과 각 슬롯은 호출이
+끝날 때까지 다른 thread가 접근하면 안 된다. receive는 single-consumer 계약을 따른다.
 
 ## 5. 타입과 상수
 
@@ -263,6 +269,9 @@ source에서 대상으로 message 내용을 이동한다.
 ZLINK_EXPORT zlink_config_result_t zlink_msg_move (zlink_msg_t *dest_, zlink_msg_t *src_);
 ```
 
+두 포인터가 같은 유효 message를 가리키는 경우(`dest_ == src_`, non-NULL), 내용을 변경하지 않고 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로
+거부한다.
+
 `src_`의 내용을 `dest_`로 이동한다. 성공한 이동 후 `src_`는 빈 message가 되고(새로
 초기화된 message와 동일) `dest_`는 원래 내용을 포함한다. `dest_`의 이전 내용은 해제된다.
 
@@ -281,6 +290,9 @@ message를 복사한다.
 ```c
 ZLINK_EXPORT zlink_config_result_t zlink_msg_copy (zlink_msg_t *dest_, zlink_msg_t *src_);
 ```
+
+두 포인터가 같은 유효 message를 가리키는 경우(`dest_ == src_`, non-NULL), 내용을 변경하지 않고 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로
+거부한다.
 
 `src_`의 내용을 `dest_`로 복사한다. large/zero-copy storage는 두 message가 reference
 counting으로 기본 data buffer를 공유하고, 작은 inline message는 값으로 복사된다. `dest_`의
@@ -301,6 +313,9 @@ counting으로 기본 data buffer를 공유하고, 작은 inline message는 값�
 ```c
 ZLINK_EXPORT zlink_config_result_t zlink_msg_adopt (zlink_msg_t *dest_, zlink_msg_t *src_);
 ```
+
+두 포인터가 같은 유효 message를 가리키는 경우(`dest_ == src_`, non-NULL), 내용을 변경하지 않고 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로
+거부한다.
 
 이미 `dest_`에 대한 storage를 보유하고 있고, 새로 수신한 native message의 소유권을
 효율적으로 가져와야 하는 binding을 위한 함수다. `zlink_msg_move`와 달리 `dest_`는 현재
@@ -417,37 +432,30 @@ ZLINK_EXPORT void zlink_multipart_close (zlink_msg_t *parts, size_t part_count);
 
 **참고:** `zlink_msg_close`
 
-## 7. 내부 구조
+## 7. 내부 불변 조건
 
-> **이 절의 계약 소유** — multipart framing의 공개 계약은 이 문서의 [Multipart](#4-multipart)
-> 절과 [검증 요구](#8-구현-및-contract-test-검증-요구) 절이 소유한다. 이 절은 다른 sender의
-> message part가 sequence 사이에 삽입되지 않도록 내부에서 어떻게 보호하는지 설명한다.
-
-Core는 [§4](#4-multipart)가 정의한 대로 `ZLINK_PART_MORE`부터 `ZLINK_PART_FINAL`까지의
-part를 하나의 논리적 multipart sequence로 처리한다. 다른 sender의 message part가 이
-sequence 사이에 삽입되지 않도록 socket별 transaction state가 send 경로를 보호한다.
+> **결과** — 내부 send·queue·receive 경로는 한 번 제출된 multipart 배열의 record 경계와
+> metadata를 함께 보존한다. 공개 계약은 [Multipart](#4-multipart)와
+> [검증 요구](#8-구현-및-contract-test-검증-요구)가 소유한다.
 
 ### Send
 
-첫 part가 transaction을 시작하고 final part가 commit한다. Part 호출이 실패하면 그 호출에 전달된
-part를 소비하고 이미 제출된 staging은 해당 API의 abort 계약([Socket 공통](socket/README.ko.md#part-send와-pending-admission))에
-따라 정리하며, 아직 제출하지 않은 caller 소유 part는 변경하지 않는다. 내부 transaction state를
-정리해 다음 message가 이전 sequence를 이어받지 않게 한다. 소비된 storage는 초기화된 빈 message로
-남으므로 그대로 close하거나 재사용할 수 있고, 다시 보내려면 caller가 보관해 둔 복사본으로 첫
-part부터 재제출한다.
+송신 경로는 한 호출의 `parts_` 배열 전체를 record 하나로 admission한다. 성공·실패 모두 모든 입력
+슬롯을 소비해 빈 initialized 상태로 두며, 실패하면 어떤 part도 peer에 보이지 않는다. 재시도는
+호출 전에 보관한 record 전체로 한다. 상세 계약은
+[Socket 공통](socket/README.ko.md#whole-message-send와-pending-admission)이 소유한다.
 
 ### Receive
 
-typed receive API는 part 하나와 `ZLINK_PART_MORE` 또는 `ZLINK_PART_FINAL`을 반환한다.
-receive helper는 socket family와 owner thread가 sequence 동안 바뀌지 않는지 확인하고,
-source는 첫 part에서 저장한 값을 후속 part에 그대로 반환한다. sequence를 중단하면
-buffered part를 close하고 helper state를 초기화한다.
+typed receive API는 완전한 record의 모든 part를 caller 배열에 한 번에 반환한다. Capacity가 부족하면
+record를 소비하지 않고 필요한 수만 반환하므로 부분 수신 상태가 없다. 성공 시 record에 속한 source와
+reply token 같은 output도 한 번에 정해진다.
 
 ### Request/reply
 
-Request·reply kind와 sequence는 첫 application part의 내부 metadata로 transaction과 함께
-이동한다. Pipe와 queue는 이를 보존하고, typed receive 경로는 reply에 필요한 sequence 또는
-local token과 routing context를 message 밖의 별도 상태·output으로 옮긴 뒤 public message에서 metadata를 제거한다. Application payload 앞에
+Request·reply kind는 record의 내부 metadata로 함께 이동한다. Pipe와 queue는 이를 보존하고,
+typed receive 경로는 reply에 필요한 local token과 routing context를 message 밖의 별도
+output으로 옮긴 뒤 public message에서 metadata를 제거한다. Application payload 앞에
 request-reply protocol part를 추가하지 않는다.
 
 ## 8. 구현 및 contract test 검증 요구
@@ -478,8 +486,11 @@ request-reply protocol part를 추가하지 않는다.
 
 **multipart**
 - `zlink_multipart_close`는 배열의 각 요소에 `zlink_msg_close`를 호출한 것과 같은 결과를 남긴다.
-- multipart send가 중간에 실패하면 그 호출에 전달된 part는 소비되어 빈 초기화 상태로 남고 아직 제출하지 않은 part는 변하지 않으며, 다음 message가 이전 sequence를 이어받지 않는다.
-- 수신자는 `ZLINK_PART_MORE`부터 `ZLINK_PART_FINAL`까지를 하나의 multipart sequence로 받으며, 다른 sender의 part가 그 사이에 섞이지 않는다.
+- multipart send는 성공·실패 모두 모든 입력 슬롯을 소비해 빈 initialized 상태로 두고, 실패하면
+  peer에 어떤 part도 보이지 않는다.
+- receive는 완전한 multipart record의 모든 part를 한 번에 반환하며 다른 sender의 part가 섞이지 않는다.
+- receive capacity가 부족하면 필요한 part 수와 `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`를 반환하고
+  record를 소비하지 않는다.
 
 **공통 반환 규약**
 - `zlink_config_result_t`를 반환하는 각 `zlink_msg_*` 함수는 성공 시 `ZLINK_CONFIG_OK`, 실패 시 `zlink_config_result_t` 값을 반환하며 `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.

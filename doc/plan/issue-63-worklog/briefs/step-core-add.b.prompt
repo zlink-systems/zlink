@@ -1,0 +1,74 @@
+You are a coding sub-agent for zlink (GitHub Issue #63). Work ONLY in the given worktree (branch
+core/63-core-c-api-whole-message-recv-router-rec); commit to that branch. Do NOT touch spec/guide
+docs (core/doc/spec/**, core/doc/guide/**, bindings/doc/**) — the supervisor owns those. Do NOT push/PR.
+
+== Read first (keep input tight) ==
+- doc/draft/core-whole-message-recv-api.ko.md §7 (authoritative design: signatures §7.3.1/§7.4,
+  removal list, rationale) and doc/plan/issue-63-worklog/scope-expansion.ko.md (D63-6..D63-8).
+- Already done on this branch (③): public zlink_recv (PAIR/DEALER) and zlink_router_recv (ROUTER)
+  exist and work — DO NOT change them. Reference their impl for the array/ownership idiom:
+  core/src/api/socket/socket_message_api.cpp (zlink_recv), socket_request_reply_router_api.cpp
+  (zlink_router_recv). Reuse-array + ownership via zlink_msg_adopt where filling caller slots.
+
+== TASK: additively ADD the whole-message SEND family + subscribe + xpub_recv ==
+This phase is ADDITIVE — keep every existing *_part function working (removal is a later phase). Add:
+
+Public decls in core/include/zlink/socket/api.h (signatures verbatim from draft §7.4):
+  zlink_send(s, zlink_msg_t* parts, size_t part_count, flags, user_context, completion_id_out)
+  zlink_send_rid(s, target_rid, parts, part_count, flags, user_context, completion_id_out)
+  zlink_request(s, target_router_rid_or_null, parts, part_count, flags, timeout_ms, user_context, completion_id_out)
+  zlink_reply(s, source_rid, reply_token, parts, part_count)
+  zlink_publish(subject, topic_id, parts, part_count, flags)
+  zlink_subscribe(sub, source_rid_out, topic_id_buf, topic_id_capacity, topic_id_len_out,
+                  parts_out, parts_capacity, part_count_out, flags)   // recv, replaces subscribe_part
+  zlink_xpub_recv(...)   // SAME signature/contract as zlink_xpub_recv_part, new name (no zlink_msg_t)
+
+Implement each next to its part-based sibling (keep the sibling):
+  - socket_message_send_api.cpp: zlink_send / zlink_send_rid / zlink_publish (siblings at :590/:677/:775)
+  - socket_request_reply_submit_api.cpp: zlink_request / zlink_reply (siblings at :1098/:1190).
+    NOTE: zlink_request_part had "MORE => timeout_ms==0 && user_context==NULL" constraints; whole-record
+    zlink_request submits the whole record at once so those per-part constraints do not apply.
+  - socket_message_api.cpp: zlink_subscribe (recv; sibling zlink_subscribe_part at :463) — topic buffer
+    idiom identical, parts filled like zlink_recv (array+capacity+count, adopt into caller slots).
+  - xpub: add zlink_xpub_recv delegating to the same impl as zlink_xpub_recv_part (both names live).
+
+Implementation approach (send): iterate the caller parts array once inside Core, submitting each part
+with the existing internal per-part submit path applying MORE for i<count-1 and FINAL for i==count-1,
+as ONE atomic record (same staging/atomicity the *_part loop produced, but caller makes one call).
+Contracts to honor:
+  - Every slot's msg is consumed by the call (like "Every call consumes part_"). D63-8: whole-record
+    retry only — on failure the record is not partially submitted (all-or-nothing per the result code;
+    mirror the existing failed-FINAL-discards-staged-prefix behavior but at the record level).
+  - record atomicity, thread-safety/single-consumer unchanged. No numbers fabrication.
+  - part_count==0 -> EINVAL. NULL required args -> EFAULT.
+- libzlink.vers: ADD the new symbols (keep the old ones this phase).
+- Raw header mirror: after editing core/include, run `python3 scripts/local-package/sync-version.py --check`
+  and `--write` if it reports the mirror stale, then re-check clean.
+
+== Tests (core/tests) — ADD, do not remove old ==
+Add whole-message send/subscribe tests (mirror the new-recv tests already on the branch,
+core/tests/integration/test_whole_message_recv.cpp for style):
+  - send/send_rid/request/reply/publish: multipart record submitted in one call arrives byte-exact,
+    correct part count/order at the receiver (use the new zlink_recv/zlink_router_recv to verify);
+    all input slots consumed; single-part (count==1); part_count==0 -> EINVAL; backpressure/retry is
+    whole-record. subscribe: topic + multipart parts in one call; capacity-too-small non-consuming
+    ZLINK_RECV_BUFFER_TOO_SMALL retry (D63-6). xpub_recv: same behavior as xpub_recv_part.
+
+== Build & test (JOBS capped at 4) ==
+  JOBS=4 scripts/build-core.sh dev
+  ctest --test-dir core/build-dev --output-on-failure -E hotpath_gate
+NOTE: hotpath_gate fails under dev (LTO-OFF Ir artifact) — IGNORE it; every OTHER test must pass,
+including your new ones and all existing *_part tests (still present this phase).
+
+== Commit (issue branch) ==
+  core: add whole-message send family + subscribe + xpub_recv (additive)
+
+  <what changed>. *_part API still present (removed in a later phase). Refs #63.
+  Build: OK. Test: ctest -E hotpath_gate — <pass summary>; new tests: <names>.
+
+  Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01Df7vbMq5yraG6siDn8PAUH
+
+== Deliverable ==
+Committed. Report: new decls/impls/symbols, how send atomicity+consume+whole-record-retry are handled,
+new test names, exact ctest summary, sync-version --check clean.

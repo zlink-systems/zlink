@@ -1,6 +1,6 @@
 {
   "name": "zlink-framework-cpp",
-  "version-string": "0.11.0",
+  "version-string": "0.11.1",
   "dependencies": [
     "boost-asio",
     "boost-beast",
@@ -8,6 +8,7 @@
     "lz4",
     "nlohmann-json",
     "openssl",
+    "opentelemetry-cpp",
     "protobuf",
     {
       "name": "redis-plus-plus",

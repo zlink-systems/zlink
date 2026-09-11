@@ -538,10 +538,35 @@ struct request_task_http_handler_t
     }
 };
 
+void require_http_submit_rejected_before_submission ()
+{
+    using namespace zlink::framework;
+    int submissions = 0;
+    send_call_t call ("http-handler", [&] (const auto &, const auto &) {
+        ++submissions;
+        return result_t<void>::success ();
+    });
+    bool rejected = false;
+    try {
+        call.submit ();
+    }
+    catch (const framework_exception_t &error) {
+        rejected = error.kind () == framework_error_kind_t::invalid_operation;
+    }
+    if (!rejected || submissions != 0) {
+        throw std::runtime_error ("HTTP submit must reject before submission");
+    }
+    call.async ().result ().value ();
+    if (submissions != 1) {
+        throw std::runtime_error ("HTTP rejection must preserve the async submission claim");
+    }
+}
+
 struct raw_echo_http_handler_t
 {
     zlink::framework::http_response_t handle (const zlink::framework::http_request_t &request)
     {
+        require_http_submit_rejected_before_submission ();
         zlink::framework::http_response_t response;
         response.status = 206;
         response.content_type = "text/plain";
@@ -557,6 +582,7 @@ struct raw_async_http_handler_t
     zlink::framework::task_t<zlink::framework::http_response_t>
     handle (const zlink::framework::http_request_t &request)
     {
+        require_http_submit_rejected_before_submission ();
         zlink::framework::http_response_t response;
         response.status = 208;
         response.content_type = "text/plain";
@@ -652,6 +678,7 @@ struct correlation_middleware_t
     void before (zlink::framework::http_context_t &context)
     {
         ++before_count;
+        require_http_submit_rejected_before_submission ();
         if (!context.correlation_id.empty ()) {
             context.response_header ("X-Middleware-Before", "seen");
         }
@@ -665,6 +692,7 @@ struct correlation_middleware_t
     void after (zlink::framework::http_context_t &context)
     {
         ++after_count;
+        require_http_submit_rejected_before_submission ();
         context.response_header ("X-Middleware-After", "seen");
         context.response_header ("X-Context-Path", context.path);
     }
@@ -766,8 +794,10 @@ bool wait_for_raw_status (const zlink::http_client::client_t &client, std::strin
 
 } // namespace
 
-int main ()
+int main (int test_argc, char **test_argv)
 {
+    const bool http_submit_only =
+      test_argc == 2 && std::string (test_argv[1]) == "--http-submit-only";
     failure_trace_t trace;
     bool duplicate_route_rejected = false;
     try {
@@ -1294,6 +1324,13 @@ int main ()
         std::cerr << "main app exit_code=" << exit_code
                   << " zlink_configured=" << zlink_configured << '\n';
         return 1;
+    }
+    // The focused F2 regression reuses every HTTP response assertion and
+    // completed host shutdown above. The default test also runs the separate
+    // configuration, logging, observation and additional host scenarios below.
+    if (http_submit_only) {
+        trace.success = true;
+        return 0;
     }
     if (app.config ().model ().get ("config.json.path") != config_path.string ()) {
         return 2;

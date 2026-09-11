@@ -2,19 +2,27 @@
 
 package systems.zlink.bench.withgrpc.client;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 import systems.zlink.bench.withgrpc.shared.BenchHttpApplication;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
+import systems.zlink.contracts.eventing.PollEvents;
+import systems.zlink.contracts.eventing.Poller;
 
 /** Pattern-to-logical-stream implementation shared by the Java and Kotlin sources. */
 public final class BenchDrivers {
@@ -90,6 +98,8 @@ public final class BenchDrivers {
         result.put("completed", activeMetrics.completed());
         result.put("submitted", activeMetrics.submitted());
         result.put("errors", activeMetrics.errors());
+        result.put("client_error_summary", activeMetrics.errorSummary());
+        result.put("client_error_other_count", activeMetrics.otherErrors());
         result.put("server_errors", target.errors());
         result.put("throughput_per_second", throughput);
         result.put("bandwidth_mb_s", throughput * trigger.payloadBytes() / 1_000_000.0);
@@ -126,6 +136,12 @@ public final class BenchDrivers {
         byte headerPhase,
         SourceMetrics source,
         ClientResources resources) throws Exception {
+        if (operation instanceof RawStack.RawOperation raw
+            && ("request-backpressure".equals(trigger.pattern())
+                || "send-saturation".equals(trigger.pattern()))) {
+            runRaw(trigger, raw, headerPhase, source, resources);
+            return 1;
+        }
         return switch (trigger.pattern()) {
             case "request-serial" -> {
                 runWorkers(1, trigger, operation, headerPhase, source, resources);
@@ -148,6 +164,105 @@ public final class BenchDrivers {
         };
     }
 
+    /**
+     * Request turns submit once, then let the public poller drain completions,
+     * as in PerfMultiSocketReqRep at 31c5e4f7f0 (Issue #12's reference).
+     * Only admission backpressure gates submission; reply depth has no cap.
+     */
+    private void runRaw(
+        BenchHttpApplication.Trigger trigger,
+        RawStack.RawOperation operation,
+        byte phase,
+        SourceMetrics source,
+        ClientResources resources) throws InterruptedException {
+        long deadline = BenchMetricHeader.nowNs()
+            + trigger.durationMs() * 1_000_000L;
+        long sequence = 0;
+        long cpuStart = ClientResources.currentThreadCpuNs();
+        Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
+        try (Poller completionPoller = "request-backpressure".equals(trigger.pattern())
+                ? operation.openCompletionPoller() : null) {
+            PollEvents events = completionPoller == null ? null : new PollEvents(1);
+            while (BenchMetricHeader.nowNs() < deadline) {
+                long started = source.begin();
+                RawStack.RawSubmission submission;
+                try {
+                    submission = operation.submitRaw(
+                        trigger.payloadBytes(), phase, sequence++);
+                } catch (RuntimeException error) {
+                    source.complete(started, error);
+                    continue;
+                }
+
+                CompletableFuture<Void> completion = submission.completion();
+                pending.add(completion);
+                completion.whenComplete((ignored, error) -> {
+                    source.complete(started, error);
+                    pending.remove(completion);
+                });
+
+                if (completionPoller != null) {
+                    completionPoller.wait(events, Duration.ofNanos(Math.min(
+                        50_000_000L, Math.max(1L, deadline - BenchMetricHeader.nowNs()))));
+                }
+
+                if (submission.result()
+                    == systems.zlink.contracts.sockets.SubmitResult.OK) {
+                    continue;
+                }
+                if (submission.result()
+                    != systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED) {
+                    throw new IllegalStateException(
+                        "raw submit returned " + submission.result());
+                }
+
+                long remainingNanos = deadline - BenchMetricHeader.nowNs();
+                if (remainingNanos <= 0L) {
+                    break;
+                }
+                try {
+                    awaitRawCompletion(submission.admitted(), completionPoller,
+                        events, deadline);
+                } catch (TimeoutException | ExecutionException stopped) {
+                    break;
+                }
+            }
+            if (resources != null) {
+                resources.addSubmitCpuNs(
+                    ClientResources.currentThreadCpuNs() - cpuStart);
+            }
+
+            CompletableFuture<Void> settled = CompletableFuture.allOf(
+                pending.toArray(CompletableFuture[]::new));
+            try {
+                awaitRawCompletion(settled, completionPoller, events,
+                    BenchMetricHeader.nowNs() + options.drainBoundMs * 1_000_000L);
+            } catch (TimeoutException | ExecutionException ignored) {
+                // Per-operation callbacks own success/error accounting. A timeout
+                // is recorded below as abandoned work.
+            }
+            source.recordAbandoned(source.inFlight());
+        }
+    }
+
+    private static void awaitRawCompletion(
+        CompletableFuture<Void> completion, Poller poller, PollEvents events,
+        long deadline) throws InterruptedException, ExecutionException, TimeoutException {
+        if (poller == null) {
+            completion.get(Math.max(1L, deadline - BenchMetricHeader.nowNs()),
+                TimeUnit.NANOSECONDS);
+            return;
+        }
+        while (!completion.isDone()) {
+            long remaining = deadline - BenchMetricHeader.nowNs();
+            if (remaining <= 0L) {
+                throw new TimeoutException("raw completion drain deadline expired");
+            }
+            poller.wait(events, Duration.ofNanos(remaining));
+        }
+        completion.get();
+    }
+
     private void runWorkers(
         int count,
         BenchHttpApplication.Trigger trigger,
@@ -167,9 +282,9 @@ public final class BenchDrivers {
                     try {
                         operation.invoke(trigger.payloadBytes(), phase, value)
                             .get(options.requestTimeoutMs, TimeUnit.MILLISECONDS);
-                        source.complete(started, true);
+                        source.complete(started, null);
                     } catch (Exception error) {
-                        source.complete(started, false);
+                        source.complete(started, error);
                     }
                 }
                 if (resources != null) {
@@ -202,11 +317,11 @@ public final class BenchDrivers {
                 CompletableFuture<Void> future = operation.invoke(
                     trigger.payloadBytes(), phase, sequence++);
                 future.whenComplete((ignored, error) -> {
-                    source.complete(started, error == null);
+                    source.complete(started, error);
                     slots.release();
                 });
             } catch (Throwable error) {
-                source.complete(started, false);
+                source.complete(started, error);
                 slots.release();
             }
         }
@@ -237,12 +352,12 @@ public final class BenchDrivers {
             try {
                 future = operation.invoke(trigger.payloadBytes(), phase, sequence++);
             } catch (Throwable error) {
-                source.complete(started, false);
+                source.complete(started, error);
                 continue;
             }
             pending.add(future);
             future.whenComplete((ignored, error) -> {
-                source.complete(started, error == null);
+                source.complete(started, error);
                 pending.remove(future);
             });
             if (++issuedSinceYield == 256) {
@@ -272,12 +387,18 @@ public final class BenchDrivers {
     }
 
     private static final class SourceMetrics {
+        private static final int ERROR_KIND_LIMIT = 8;
+        private static final int ERROR_MESSAGE_LIMIT = 200;
         private final AtomicLong submitted = new AtomicLong();
         private final AtomicLong completed = new AtomicLong();
         private final AtomicLong errors = new AtomicLong();
         private final AtomicInteger inFlight = new AtomicInteger();
         private final AtomicInteger peakInFlight = new AtomicInteger();
         private final AtomicLong abandoned = new AtomicLong();
+        private final AtomicReferenceArray<ErrorKey> errorKeys =
+            new AtomicReferenceArray<>(ERROR_KIND_LIMIT);
+        private final AtomicLongArray errorCounts = new AtomicLongArray(ERROR_KIND_LIMIT);
+        private final AtomicLong otherErrors = new AtomicLong();
         private final Latencies latencies;
 
         private SourceMetrics(int sampleLimit) {
@@ -291,14 +412,75 @@ public final class BenchDrivers {
             return BenchMetricHeader.nowNs();
         }
 
-        private void complete(long started, boolean success) {
-            if (success) {
+        private void complete(long started, Throwable error) {
+            if (error == null) {
                 completed.incrementAndGet();
             } else {
                 errors.incrementAndGet();
+                recordError(error);
             }
             latencies.add((BenchMetricHeader.nowNs() - started) / 1000.0);
             inFlight.decrementAndGet();
+        }
+
+        private void recordError(Throwable original) {
+            Throwable error = unwrap(original);
+            String type = error.getClass().getName();
+            String message = String.valueOf(error.getMessage())
+                .replace('\r', ' ').replace('\n', ' ');
+            if (message.length() > ERROR_MESSAGE_LIMIT) {
+                message = message.substring(0, ERROR_MESSAGE_LIMIT);
+            }
+            ErrorKey key = new ErrorKey(type, message);
+            int start = Math.floorMod(key.hashCode(), ERROR_KIND_LIMIT);
+            for (;;) {
+                boolean retry = false;
+                for (int offset = 0; offset < ERROR_KIND_LIMIT; offset++) {
+                    int index = (start + offset) % ERROR_KIND_LIMIT;
+                    ErrorKey current = errorKeys.get(index);
+                    if (key.equals(current)) {
+                        errorCounts.incrementAndGet(index);
+                        return;
+                    }
+                    if (current == null) {
+                        if (errorKeys.compareAndSet(index, null, key)) {
+                            errorCounts.incrementAndGet(index);
+                            return;
+                        }
+                        retry = true;
+                        break;
+                    }
+                }
+                if (!retry) {
+                    otherErrors.incrementAndGet();
+                    return;
+                }
+            }
+        }
+
+        private static Throwable unwrap(Throwable error) {
+            Throwable current = error;
+            while ((current instanceof CompletionException || current instanceof ExecutionException)
+                && current.getCause() != null) {
+                current = current.getCause();
+            }
+            return current;
+        }
+
+        private List<Map<String, Object>> errorSummary() {
+            List<Map<String, Object>> summary = new ArrayList<>();
+            for (int index = 0; index < ERROR_KIND_LIMIT; index++) {
+                ErrorKey key = errorKeys.get(index);
+                if (key == null) {
+                    continue;
+                }
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("type", key.type());
+                entry.put("message", key.message());
+                entry.put("count", errorCounts.get(index));
+                summary.add(entry);
+            }
+            return summary;
         }
 
         private void recordAbandoned(long count) {
@@ -316,6 +498,10 @@ public final class BenchDrivers {
         private long inFlight() { return inFlight.get(); }
         private long peakInFlight() { return peakInFlight.get(); }
         private long abandoned() { return abandoned.get(); }
+        private long otherErrors() { return otherErrors.get(); }
         private Latencies.Summary latencySummary() { return latencies.summary(); }
+
+        private record ErrorKey(String type, String message) {
+        }
     }
 }

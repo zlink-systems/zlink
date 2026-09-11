@@ -137,10 +137,6 @@ fn config_result_from_errno(err: i32) -> ConfigResult {
     }
 }
 
-pub(crate) fn submit_validation_error() -> SubmitError {
-    SubmitError::new(SubmitResult::InvalidArgument, libc::EINVAL)
-}
-
 pub(crate) fn request_error_from_result(code: RequestResult) -> RequestError {
     let native_errno = match code {
         RequestResult::Ok => 0,
@@ -163,14 +159,6 @@ pub(crate) fn request_error_from_result(code: RequestResult) -> RequestError {
 
 pub(crate) fn config_validation_error() -> ConfigError {
     ConfigError::new(ConfigResult::InvalidArgument, libc::EINVAL)
-}
-
-pub(crate) fn check_submit_rc(rc: i32) -> Result<(), SubmitError> {
-    if rc == SubmitResult::Ok as i32 {
-        Ok(())
-    } else {
-        Err(submit_error_from_rc(rc, last_errno()))
-    }
 }
 
 pub(crate) fn check_recv_rc(rc: i32) -> Result<(), RecvError> {

@@ -68,7 +68,7 @@ GC pause는 EventPipe 실행에서 0.0469%, 최종 CPU+GC 실행에서 0.3039%�
 | **합계** | **기존 r1net 1/throughput** | **574.308** | **100.000%** | **0.000** | — |
 
 C에 managed Message wrapper·Task/TCS·ArrayPool·P/Invoke는 없다. C의 message 준비와 payload copy는 위 native message 및 memcpy 행에 들어간다.
-함수별 원시 CPU-ns/msg와 sample 수: [NET 64 application 함수](/tmp/zlink-dotnet-dd-cost-map/perf-dotnet-64.application-functions.tsv), [C 64 application 함수](/tmp/zlink-dotnet-dd-cost-map/perf-c-64.application-functions.tsv).
+함수별 원시 CPU-ns/msg와 sample 수: NET 64 application 함수 (`/tmp/zlink-dotnet-dd-cost-map/perf-dotnet-64.application-functions.tsv`), C 64 application 함수 (`/tmp/zlink-dotnet-dd-cost-map/perf-c-64.application-functions.tsv`).
 
 ## 2. 65536 B — .NET과 C
 
@@ -267,8 +267,8 @@ Microsoft의 [CLR ABI 설명](https://github.com/dotnet/runtime/blob/main/docs/d
 
 ### 원본 report와 재현 자료
 
-- 기존 기준: [NET r1net](/home/hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260908_081958_r1net.txt), [C r1net](/home/hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260908_081717_r1net.txt). `/tmp`에도 baseline 사본을 보존했다.
-- 측정·분석 자료 루트: [/tmp/zlink-dotnet-dd-cost-map](/tmp/zlink-dotnet-dd-cost-map). `perf-{dotnet,c}-{64,4096,65536}.{data,script,map.json,application-functions.tsv,functions.tsv,stacks.tsv}`에 raw CPU와 배타적 귀속을 보존했다.
+- 기존 기준: NET r1net (`/home/hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260908_081958_r1net.txt`), C r1net (`/home/hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260908_081717_r1net.txt`). `/tmp`에도 baseline 사본을 보존했다.
+- 측정·분석 자료 루트: `/tmp/zlink-dotnet-dd-cost-map`. `perf-{dotnet,c}-{64,4096,65536}.{data,script,map.json,application-functions.tsv,functions.tsv,stacks.tsv}`에 raw CPU와 배타적 귀속을 보존했다.
 - GC·할당: `perf-dotnet-{size}.{nettrace,events.jsonl,alloc.json,client.log}`. 전수 caller와 allocation weight는 `alloc.json`에 있다. 초기 EventPipe는 `dotnet-{64,65536}.*`다.
 - 실행: `measure-dotnet.py`, `measure-dotnet-perf.py`, `measure-c-perf.py`, `c-pair-perf.py`; 분석: `reader/Program.cs`, `analyze-perf.py`, `analyze-dotnet.py`, `make-report.py`. 정규화 식·범주 배정·sample별 stack을 함께 보존했다.
 - `binaries.sha256`, `c-ldd.txt`, native debug Build ID가 binary 경계를 소유한다. `/tmp` 자료는 이 host의 임시 보존 자료다.
@@ -278,8 +278,8 @@ Microsoft의 [CLR ABI 설명](https://github.com/dotnet/runtime/blob/main/docs/d
 1. repository의 .NET/C source는 수정하지 않았다. `/tmp/runner`에 runner source를 복사하고 DD client 구간 시작·종료에 sent/seq/clock/GC counter 출력을 추가했다. binding/Common DLL은 기존 Release binary를 그대로 참조했다. `/tmp`의 runner와 도구만 build했다.
 2. official `--reuse-build` runner를 사용하기 위해 ignored apphost를 일시적으로 wrapper로 바꿨다. server는 원본 복사본, client는 계측 runner를 실행했다. 매 실행의 finally에서 원래 apphost를 복원했다. 원본 source와 runtime DLL은 변경하지 않았다.
 3. custom EventSource의 초기 WindowEnd payload overload는 long field가 잘못 해석된다. **모든 N은 COST_WINDOW의 sent/seq에서 읽었고**, EventSource는 구간 timestamp만 사용했다. raw event의 sent를 분모로 쓰지 않았다.
-4. 최초 C callgrind 실행은 외부 harness가 server START를 전달하지 않아 client exit 0/server exit 1이었다. `brk segment overflow` 경고도 있었다. [실패 자료](/tmp/zlink-dotnet-dd-cost-map/failed-c-64-missing-server-start)에 보존하고 전부 주표에서 제외했다. START 전달을 바로잡은 최종 C CPU 수집은 3개 크기 모두 client/server exit 0이다.
-5. 첫 .NET 64 B Linux CPU 자료는 default perf clock과 Stopwatch clock 경계가 달라 [별도 폴더](/tmp/zlink-dotnet-dd-cost-map/perf-64-default-clock)에 보존했다. 최종 3개 크기는 `--clockid mono`다. 해당 보완 실행의 RESULT로 기준 throughput을 교체하지 않았다.
+4. 최초 C callgrind 실행은 외부 harness가 server START를 전달하지 않아 client exit 0/server exit 1이었다. `brk segment overflow` 경고도 있었다. 실패 자료 (`/tmp/zlink-dotnet-dd-cost-map/failed-c-64-missing-server-start`)에 보존하고 전부 주표에서 제외했다. START 전달을 바로잡은 최종 C CPU 수집은 3개 크기 모두 client/server exit 0이다.
+5. 첫 .NET 64 B Linux CPU 자료는 default perf clock과 Stopwatch clock 경계가 달라 별도 폴더 (`/tmp/zlink-dotnet-dd-cost-map/perf-64-default-clock`)에 보존했다. 최종 3개 크기는 `--clockid mono`다. 해당 보완 실행의 RESULT로 기준 throughput을 교체하지 않았다.
 6. 최종 nettrace 3개와 초기 nettrace 2개 모두 reader의 `EventsLost=0`이다. perf 수집·해석 로그에서 lost/error 경고는 0건이었다. native debug symbol의 debuginfod 다운로드는 timeout, 같은 버전의 Ubuntu ddeb 다운로드는 성공했다. 처음 받은 `dotnet-runtime-dbg`는 managed PDB이고 native 해석에는 사용하지 않았다.
 
 ## 7. 남은 미분리 범위
@@ -290,4 +290,4 @@ Microsoft의 [CLR ABI 설명](https://github.com/dotnet/runtime/blob/main/docs/d
 - **4096 B 87.78%의 인과 설명**: 동일 크기의 CPU 구성·allocation·retry 관측은 확보했지만 기존 5-run ratio의 원인을 함수별 wall 기여로 확정하지 않았다.
 - C++ 참조 문서는 REQREP의 Ir 지도이며 clients 4/duration 2/Core 0.17.1 문맥을 포함한다. 이번 DD clients 100/duration 5/Core 0.17.2 ns와 직접 환산·차감하지 않았다.
 
-검증: counter/분모, 배타적 CPU 합, 주표의 W 합계, allocation 총합, Core·binding·apphost 원복 hash 확인을 통과했다. [검산 결과](/tmp/zlink-dotnet-dd-cost-map/verification.json)에 수치와 hash 확인 결과를 보존했다. production 변경이 없으므로 기능 test·전체 gate는 실행하지 않는다.
+검증: counter/분모, 배타적 CPU 합, 주표의 W 합계, allocation 총합, Core·binding·apphost 원복 hash 확인을 통과했다. 검산 결과 (`/tmp/zlink-dotnet-dd-cost-map/verification.json`)에 수치와 hash 확인 결과를 보존했다. production 변경이 없으므로 기능 test·전체 gate는 실행하지 않는다.

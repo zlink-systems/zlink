@@ -87,7 +87,6 @@ final class ZLinkChannelHandlerInvoker {
     private final ZLinkMessageSerializer serializer;
     private final ZLinkCodecRegistration codecs;
     private final ZLinkHandlerActivator handlerFactory;
-    private final Executor handlerExecutor;
     private final List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers;
     private final List<Class<? extends ZLinkHandlerFilter>> filterTypes;
     private final String meshName;
@@ -120,7 +119,7 @@ final class ZLinkChannelHandlerInvoker {
         this.serializer = serializer;
         this.codecs = codecs;
         this.handlerFactory = handlerFactory;
-        this.handlerExecutor = handlerExecutor;
+        Objects.requireNonNull(handlerExecutor, "handlerExecutor");
         this.suspendHandlerInvokers = suspendHandlerInvokers;
         this.filterTypes = filterTypes;
         this.meshName = meshName;
@@ -132,7 +131,7 @@ final class ZLinkChannelHandlerInvoker {
         var flow = ZLinkFlowContext.current();
         var applicationJob = ZLinkApplicationJobContext.transferToQueuedJob();
         try {
-            handlerExecutor.execute(() -> {
+            Runnable invocation = () -> {
                 try (var ignored =
                          ZLinkApplicationJobContext.enterQueued(applicationJob)) {
                     ZLinkApplicationJobContext
@@ -153,7 +152,8 @@ final class ZLinkChannelHandlerInvoker {
                         applicationJob.close();
                     }
                 }
-            });
+            };
+            invocation.run();
         } catch (RuntimeException ex) {
             if (applicationJob != null) {
                 applicationJob.close();

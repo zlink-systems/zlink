@@ -10,10 +10,9 @@ use crate::error::{SubmitError, SubmitResult};
 use crate::ffi;
 use crate::internal::{CompletionEntry, CompletionEntryKind, CompletionOwner, RoutedHandle};
 use crate::messaging_operations::{
-    Empty, MessageParts, PublishOp, PublishOpStorage, SendOp, SendOpStorage,
+    Empty, MessageParts, PublishOp, PublishOpStorage, SendOp, SendOpStorage, SendSubmission,
 };
-use crate::native_errors::{check_submit_rc, submit_error_from_errno, submit_error_from_rc};
-use crate::socket::submit_part_sequence;
+use crate::native_errors::{submit_error_from_errno, submit_error_from_rc};
 
 pub(crate) fn socket_send_op(
     handle: *mut c_void,
@@ -98,21 +97,58 @@ pub(crate) fn submit_publish(mut op: PublishOpStorage) -> Result<(), SubmitError
     let mut topic_buf = [0u8; 256];
     let bytes = op.topic.as_str().as_bytes();
     topic_buf[..bytes.len()].copy_from_slice(bytes);
-    let rc = submit_part_sequence(&mut op.parts, |part, part_flag, _| unsafe {
-        ffi::zlink_publish_part(op.handle, topic_buf.as_ptr().cast(), part, flags, part_flag)
+    let (rc, errno) = submit_shared_message(&mut op.parts, |parts, count| unsafe {
+        ffi::zlink_publish(op.handle, topic_buf.as_ptr().cast(), parts, count, flags)
     })?;
-    check_submit_rc(rc)
+    check_submit_result(rc, errno)
 }
 
-pub(crate) fn submit_send(
-    op: SendOpStorage,
-) -> impl Future<Output = Result<(), SubmitError>> + Send {
-    SendFuture {
-        operation: Some(op),
-        context: std::ptr::null_mut(),
-        entry: None,
-        waiting_for_writable: false,
-        finished: false,
+pub(crate) fn submit_send(mut op: SendOpStorage) -> Result<SendSubmission, SubmitError> {
+    if op.parts.is_empty() {
+        return Err(SubmitError::new(
+            SubmitResult::InvalidArgument,
+            libc::EINVAL,
+        ));
+    }
+    live_handle(&op)?;
+
+    let context = op.completion_owner.next_context();
+    match submit_send_attempt(&mut op, context) {
+        Ok(SendAttempt::Admitted) => Ok(SendSubmission {
+            result: SubmitResult::Ok,
+            admitted: Box::pin(std::future::ready(Ok(()))),
+        }),
+        Ok(SendAttempt::Waiting(completion_id)) => {
+            let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
+            let owner = Arc::clone(&op.completion_owner);
+            if let Err(error) = owner.register_send_token(context, &entry, completion_id) {
+                if entry.detach() {
+                    owner.unregister(context);
+                }
+                return Err(error);
+            }
+            Ok(SendSubmission {
+                result: SubmitResult::Backpressured,
+                admitted: Box::pin(SendFuture {
+                    operation: Some(op),
+                    context,
+                    entry: Some(entry),
+                    waiting_for_writable: true,
+                    finished: false,
+                }),
+            })
+        }
+        Err(failure) => {
+            if let Some(completion_id) = failure.live_token {
+                let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
+                let owner = Arc::clone(&op.completion_owner);
+                let _ = owner.register_send_token(context, &entry, completion_id);
+                if entry.detach() {
+                    owner.unregister(context);
+                }
+            }
+            Err(failure.error)
+        }
     }
 }
 
@@ -124,29 +160,29 @@ pub(crate) fn submit_send_blocking(mut op: SendOpStorage) -> Result<(), SubmitEr
             .target
             .as_ref()
             .map_or(std::ptr::null(), |rid| rid.as_raw() as *const _);
-        let rc = submit_part_sequence(&mut op.parts, |part, part_flag, _| unsafe {
+        let (rc, errno) = submit_shared_message(&mut op.parts, |parts, count| unsafe {
             if target.is_null() {
-                ffi::zlink_send_part(
+                ffi::zlink_send(
                     handle,
-                    part,
+                    parts,
+                    count,
                     0,
-                    part_flag,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
                 )
             } else {
-                ffi::zlink_send_part_rid(
+                ffi::zlink_send_rid(
                     handle,
                     target,
-                    part,
+                    parts,
+                    count,
                     0,
-                    part_flag,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
                 )
             }
         })?;
-        check_submit_rc(rc)
+        check_submit_result(rc, errno)
     })
 }
 
@@ -174,20 +210,6 @@ impl Future for SendFuture {
         if self.finished {
             panic!("send Future polled after completion");
         }
-        if self.context.is_null() {
-            let operation = self.operation.as_ref().expect("active send");
-            if operation.parts.is_empty() {
-                return self.finish(Err(SubmitError::new(
-                    SubmitResult::InvalidArgument,
-                    libc::EINVAL,
-                )));
-            }
-            if let Err(error) = live_handle(operation) {
-                return self.finish(Err(error));
-            }
-            self.context = operation.completion_owner.next_context();
-        }
-
         loop {
             if self.waiting_for_writable {
                 let entry = self.entry.as_ref().expect("send retry entry");
@@ -298,45 +320,61 @@ impl SendAttemptError {
     }
 }
 
-/// Submits Core shared copies of `parts` in sequence and returns the final
-/// `(rc, errno)`. Core consumes every submitted part and re-initializes it, so
-/// the copy is closed after each call and the retained packet is untouched.
-pub(super) fn submit_shared_part_sequence(
+/// Submits one whole-message array built from shared copies of `parts`.
+/// Core consumes every array slot on every result; the builder-owned packet is
+/// retained so completion-backed operations can rebuild and retry the record.
+pub(super) fn submit_shared_message(
     parts: &mut MessageParts,
-    mut submit: impl FnMut(*mut ffi::zlink_msg_t, ffi::zlink_part_flag_t, bool) -> i32,
+    submit: impl FnOnce(*mut ffi::zlink_msg_t, usize) -> i32,
 ) -> Result<(i32, i32), SubmitError> {
-    let part_count = parts.len();
-    for (index, part) in parts.iter_mut().enumerate() {
-        let is_final = index + 1 == part_count;
-        let part_flag = if is_final {
-            ffi::zlink_part_flag_t::ZLINK_PART_FINAL
-        } else {
-            ffi::zlink_part_flag_t::ZLINK_PART_MORE
-        };
+    if parts.is_empty() {
+        return Err(SubmitError::new(
+            SubmitResult::InvalidArgument,
+            libc::EINVAL,
+        ));
+    }
+
+    let mut native_parts = Vec::with_capacity(parts.len());
+    for part in parts.iter_mut() {
         let mut attempt = std::mem::MaybeUninit::<ffi::zlink_msg_t>::uninit();
-        let rc = unsafe {
+        unsafe {
             if ffi::zlink_msg_init(attempt.as_mut_ptr()) != 0 {
-                return Err(submit_error_from_errno(ffi::zlink_errno()));
+                let errno = ffi::zlink_errno();
+                ffi::zlink_multipart_close(native_parts.as_mut_ptr(), native_parts.len());
+                return Err(submit_error_from_errno(errno));
             }
             if ffi::zlink_msg_copy(attempt.as_mut_ptr(), part.raw_mut()) != 0 {
                 let errno = ffi::zlink_errno();
                 ffi::zlink_msg_close(attempt.as_mut_ptr());
+                ffi::zlink_multipart_close(native_parts.as_mut_ptr(), native_parts.len());
                 return Err(submit_error_from_errno(if errno == 0 {
                     libc::EIO
                 } else {
                     errno
                 }));
             }
-            let rc = submit(attempt.as_mut_ptr(), part_flag, is_final);
-            let errno = if rc == 0 { 0 } else { ffi::zlink_errno() };
-            ffi::zlink_msg_close(attempt.as_mut_ptr());
-            (rc, errno)
-        };
-        if rc.0 != 0 {
-            return Ok(rc);
+            native_parts.push(attempt.assume_init());
         }
     }
-    Ok((0, 0))
+
+    let rc = submit(native_parts.as_mut_ptr(), native_parts.len());
+    let errno = if rc == 0 {
+        0
+    } else {
+        unsafe { ffi::zlink_errno() }
+    };
+    unsafe {
+        ffi::zlink_multipart_close(native_parts.as_mut_ptr(), native_parts.len());
+    }
+    Ok((rc, errno))
+}
+
+pub(super) fn check_submit_result(rc: i32, errno: i32) -> Result<(), SubmitError> {
+    if rc == SubmitResult::Ok as i32 {
+        Ok(())
+    } else {
+        Err(submit_error_from_rc(rc, errno))
+    }
 }
 
 fn submit_send_attempt(
@@ -352,35 +390,25 @@ fn submit_send_attempt(
     let (rc, errno) = owner
         .with_submit(|| {
             let handle = live_handle(op)?;
-            submit_shared_part_sequence(&mut op.parts, |part, part_flag, is_final| unsafe {
-                let context = if is_final {
-                    user_context
-                } else {
-                    std::ptr::null_mut()
-                };
-                let id_out = if is_final {
-                    &mut completion_id
-                } else {
-                    std::ptr::null_mut()
-                };
+            submit_shared_message(&mut op.parts, |parts, count| unsafe {
                 if target.is_null() {
-                    ffi::zlink_send_part(
+                    ffi::zlink_send(
                         handle,
-                        part,
+                        parts,
+                        count,
                         ffi::ZLINK_DONTWAIT,
-                        part_flag,
-                        context,
-                        id_out,
+                        user_context,
+                        &mut completion_id,
                     )
                 } else {
-                    ffi::zlink_send_part_rid(
+                    ffi::zlink_send_rid(
                         handle,
                         target,
-                        part,
+                        parts,
+                        count,
                         ffi::ZLINK_DONTWAIT,
-                        part_flag,
-                        context,
-                        id_out,
+                        user_context,
+                        &mut completion_id,
                     )
                 }
             })

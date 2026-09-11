@@ -3,10 +3,13 @@ package systems.zlink.runtime.sockets;
 
 import static org.junit.jupiter.api.Assertions.*;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.*;
 import systems.zlink.contracts.errors.*;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.RequestSubmission;
+import systems.zlink.contracts.messaging.SendSubmission;
 import systems.zlink.contracts.sockets.*;
 import systems.zlink.runtime.nativeapi.NativeErrno;
 
@@ -25,9 +28,24 @@ class TargetRemovalResultContractTest {
             for (boolean request : new boolean[] {false, true}) {
                 for (boolean terminal : new boolean[] {true, false}) {
                     core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.BACKPRESSURED, NativeErrno.EAGAIN, 41));
-                    var waiter = request
-                        ? router.request(rid).message(Message.from("pending")).timeout(Duration.ofSeconds(2)).submit().toCompletableFuture()
-                        : router.send(rid).message(Message.from("pending")).submit().toCompletableFuture();
+                    CompletableFuture<Void> admitted;
+                    CompletableFuture<?> waiter;
+                    if (request) {
+                        RequestSubmission submission = router.request(rid)
+                            .message(Message.from("pending"))
+                            .timeout(Duration.ofSeconds(2)).submit();
+                        assertEquals(SubmitResult.BACKPRESSURED,
+                            submission.result());
+                        admitted = submission.admitted().toCompletableFuture();
+                        waiter = submission.reply().toCompletableFuture();
+                    } else {
+                        SendSubmission submission = router.send(rid)
+                            .message(Message.from("pending")).submit();
+                        assertEquals(SubmitResult.BACKPRESSURED,
+                            submission.result());
+                        admitted = submission.admitted().toCompletableFuture();
+                        waiter = admitted;
+                    }
                     var pending = core.submissions.getLast();
                     if (!terminal)
                         core.writable(pending, 0);
@@ -38,6 +56,9 @@ class TargetRemovalResultContractTest {
                         core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.NOT_CONNECTED, NativeErrno.EHOSTUNREACH, 0));
                     assertEquals(1, owner.drain());
                     Throwable failure = CompletionNativeFixture.failure(waiter);
+                    assertSame(failure,
+                        CompletionNativeFixture.failure(admitted),
+                        "admission and reply must expose the same terminal cause");
                     if (terminal && request) {
                         assertEquals(RequestResult.NOT_FOUND, assertInstanceOf(ZlinkRequestException.class, failure).getResult());
                     } else {

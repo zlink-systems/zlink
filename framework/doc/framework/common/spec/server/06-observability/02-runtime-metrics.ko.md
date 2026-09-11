@@ -45,6 +45,59 @@ Metric 표에서 `counter`는 발생 횟수나 누적량을 단조 증가시키�
 - **Provider failure는 application callback, reply, 새 작업 수락과 host lifecycle
   결과를 바꾸지 않는다.**
 
+### 2.1 Metric을 언제 기록하는가
+
+Application이 표준 metric provider나 listener로 어떤 계기의 수집을 켜면, Framework는 이 문서가 정한
+사건이 일어날 때마다 그 계기에 기록한다. 현재 값을 나타내는 계기는 provider가 읽어 갈 때 그 값을 준다.
+
+- **Log 수준을 올리지 않아도 기록한다.** logger의 수준, message-flow diagnostics의 level과 sampling
+  설정은 metric 기록을 끄지 못한다. metric과 log는 서로 다른 관측 축이고, log를 켜면 측정 대상의
+  동작과 성능이 함께 바뀌기 때문이다. Message-flow diagnostics와의 관계는
+  [Message flow tracing §4](03-message-flow-tracing.ko.md#4-기록-범위-설정--level과-sampling)가 소유한다.
+- **status를 따로 조회하거나 변화를 관찰하기 시작할 필요가 없다.** 계기 하나를 보려고 다른 관측
+  경로를 함께 켜야 하면 그 계기만 골라 수집할 수 없다.
+
+여기서 "수집을 켠다"는 것은 **그 계기를 수집하도록 provider를 설정했다**는 뜻이다. Status stream을
+구독한 사람 수, 지금 backend를 조회하는 사용자 수, log sink가 붙어 있는지와는 무관하다.
+
+수집이 켜졌는지 확인하는 방법은 언어의 표준 meter·registry·provider에 맡긴다. 확인할 API가 없으면
+표준 계기에 그냥 기록하고 provider가 수집하거나 버리게 해도 된다. Framework 공통 API는 구독자 수를
+세거나 metric 전용 on/off 스위치를 두지 않는다. 얼마나 자주 읽어 가는지, 값을 어떻게 합치고 내보내는지는
+§1과 §11이 정한 provider의 몫이다.
+
+### 2.2 어떤 계기를 제공해야 하는가
+
+**각 언어는 이 문서의 조건에 해당하는 계기를 모두 제공한다.** 수집이 켜진 동안 정의된 사건이 일어나면
+기록하고, 현재 값을 나타내는 계기는 읽어 갈 때 그 값을 준다.
+
+- **계기를 등록만 하는 것으로는 부족하다.** 이름이 등록돼 있어도 사건이 일어났을 때 기록하지 않으면
+  운영에서는 그 사건이 없었던 것과 같다.
+- **어떤 언어에서 그 사건이 구조적으로 일어날 수 없으면** 그 차이와 이유를 해당 언어의 interface
+  문서에 적는다. **아직 구현하지 않았다는 것은 이 예외가 아니다.** 구현 상태를 계약의 차이로 적으면
+  다음에 읽는 사람이 그것을 허용된 차이로 읽는다.
+
+어떤 사건을 세고 무엇을 빼는지는 각 metric 절이 정한다.
+
+### 2.3 수집이 꺼져 있을 때 무엇을 생략할 수 있는가
+
+꺼진 계기에만 필요한 계산과 기록은 건너뛸 수 있다.
+
+- **꺼져 있던 동안의 counter 증가분과 histogram 표본을 나중에 되살릴 의무는 없다.** histogram을 재는 데
+  필요한 시작 시각을 기록하지 않았다면 그 구간은 측정하지 않아도 된다.
+- **이미 수집하던 값을 얼마나 보관하고 새로 읽는 쪽에 어디까지 주는지**는 provider가 값을 합치고
+  유지하는 방식을 따른다.
+
+**이 생략은 runtime이 다른 계약 때문에 유지하는 값을 건드리지 않는다.** §3이 정한 현재 epoch의
+counter와 누적값, 그리고 각 계기가 나타내는 현재 값은 수집을 켰는지와 무관하게 그대로다. 수집을
+켜거나 끄는 것 자체는 measurement epoch의 Reset이 아니다.
+
+- **같은 증가분을 두 번 세지 않는다.** counter를 증가분으로 보내든 유지하던 누적값을 읽어 가게 하든
+  표준 provider의 표현에 맞추면 되지만, 두 방식을 섞어 같은 사건을 중복해 세면 안 된다.
+- **현재 값과 epoch 누적값을 "꺼져 있던 구간의 일반 사건"으로 취급해 버리지 않는다.**
+
+꺼진 경로의 비용, 제한된 합계값을 읽는 방법, 기록 순서와 provider 실패는 §11이 정한다.
+**metric을 켜도 message 처리·routing·완료 조건은 달라지지 않는다.**
+
 ## 3. Host Core HWM과 Application job queue
 
 다음 instance aggregate 계기는 Core runtime snapshot과

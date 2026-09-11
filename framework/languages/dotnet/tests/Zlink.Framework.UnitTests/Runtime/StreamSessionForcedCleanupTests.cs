@@ -1365,7 +1365,6 @@ public sealed class StreamSessionForcedCleanupTests
         runtime = CreateRuntime(provider, registration);
         var socket = new TestStreamSocket
         {
-            BlockSend = true,
             BlockSendAsync = true
         };
         var table = new ZLinkStreamSessionTable(
@@ -1395,7 +1394,6 @@ public sealed class StreamSessionForcedCleanupTests
         }
         finally
         {
-            socket.AllowSend.TrySetResult();
             socket.AllowSendAsync.TrySetResult();
         }
     }
@@ -2279,11 +2277,6 @@ public sealed class StreamSessionForcedCleanupTests
         public TaskCompletionSource<byte[]> SentFrame { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public bool BlockSend { get; init; }
-
-        public TaskCompletionSource AllowSend { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
         public bool BlockSendAsync { get; init; }
 
         public Exception? SendAsyncFailure { get; init; }
@@ -2367,14 +2360,7 @@ public sealed class StreamSessionForcedCleanupTests
             EnqueuePacket(routingId, header, payload);
         }
 
-        public bool Send(RoutingId routingId, Message payload, SendFlags flags)
-        {
-            SentFrame.TrySetResult(payload.ToArray());
-            if (BlockSend) AllowSend.Task.GetAwaiter().GetResult();
-            return true;
-        }
-
-        public async ValueTask SendAsync(
+        public async Task SendAsync(
             RoutingId routingId,
             Message payload,
             CancellationToken cancellationToken)
@@ -2399,8 +2385,6 @@ public sealed class StreamSessionForcedCleanupTests
                 payload.Dispose();
             }
         }
-
-        public bool Send(RoutingId routingId, IReadOnlyList<Message> parts, SendFlags flags) => true;
 
         public int DisconnectCount { get; private set; }
 

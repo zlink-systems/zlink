@@ -23,6 +23,8 @@ import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.RequestSubmission;
+import systems.zlink.contracts.messaging.SendSubmission;
 import systems.zlink.contracts.sockets.CompletionKind;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RequestResult;
@@ -43,7 +45,7 @@ final class CompletionOwner implements AutoCloseable {
     private static final int SEND_ADMITTED = 0;
     private static final int SEND_TERMINAL = 202;
     private static final int RECV_DONT_WAIT = 1;
-    private static final CompletionStage<Void> COMPLETED_SEND =
+    private static final CompletionStage<Void> COMPLETED_ADMISSION =
         CompletableFuture.completedStage(null);
     private static final AtomicLong NEXT_CONTEXT = new AtomicLong(1L);
     private static final AtomicLong CLOSED_COMPLETIONS = new AtomicLong();
@@ -84,8 +86,8 @@ final class CompletionOwner implements AutoCloseable {
     private final Object ownerLock = new Object();
     private final ReentrantLock drainLock = new ReentrantLock();
     private final List<Pending<?>> retries = new ArrayList<>();
-    private Pending<?> publicSettlementHead;
-    private Pending<?> publicSettlementTail;
+    private PublicSettlement publicSettlementHead;
+    private PublicSettlement publicSettlementTail;
     private final ReentrantReadWriteLock nativeCallGate =
         new ReentrantReadWriteLock();
     private volatile boolean closed;
@@ -100,7 +102,7 @@ final class CompletionOwner implements AutoCloseable {
         this.runtime = lane.completionPump(contextHandle);
     }
 
-    CompletionStage<Void> submitSend(RoutingId target, List<Message> parts) {
+    SendSubmission submitSend(RoutingId target, List<Message> parts) {
         drainLock.lock();
         try {
             long token = nextContextToken();
@@ -114,7 +116,8 @@ final class CompletionOwner implements AutoCloseable {
                         SubmitResult.INTERNAL_ERROR);
                 }
                 closeParts(parts);
-                return COMPLETED_SEND;
+                return new SendSubmissionValue(SubmitResult.OK,
+                    COMPLETED_ADMISSION);
             }
             if (!isWritableWait(attempt)) {
                 throw submitFailure(attempt);
@@ -141,7 +144,8 @@ final class CompletionOwner implements AutoCloseable {
             state.armWritable(attempt.completionId());
             closeParts(parts);
             startRuntimeOwner();
-            return state.future;
+            return new SendSubmissionValue(SubmitResult.BACKPRESSURED,
+                state.admitted);
         } finally {
             drainLock.unlock();
         }
@@ -154,9 +158,8 @@ final class CompletionOwner implements AutoCloseable {
         closeParts(parts);
     }
 
-    CompletionStage<List<Message>> submitRequest(RoutingId target,
-                                                  List<Message> parts,
-                                                  Duration timeout) {
+    RequestSubmission submitRequest(RoutingId target, List<Message> parts,
+                                    Duration timeout) {
         drainLock.lock();
         try {
             long token = nextContextToken();
@@ -174,7 +177,8 @@ final class CompletionOwner implements AutoCloseable {
                 state.publishRequest(attempt.completionId());
                 closeParts(parts);
                 startRuntimeOwner();
-                return state.future;
+                return new RequestSubmissionValue(SubmitResult.OK,
+                    state.admitted, state.future);
             }
             if (!isWritableWait(attempt)) {
                 throw submitFailure(attempt);
@@ -201,7 +205,8 @@ final class CompletionOwner implements AutoCloseable {
             state.armWritable(attempt.completionId());
             closeParts(parts);
             startRuntimeOwner();
-            return state.future;
+            return new RequestSubmissionValue(SubmitResult.BACKPRESSURED,
+                state.admitted, state.future);
         } finally {
             drainLock.unlock();
         }
@@ -343,51 +348,42 @@ final class CompletionOwner implements AutoCloseable {
         // part; Core consumes each staged header when it is submitted.
         MemorySegment nativeParts = scratch.parts(originals.size());
         int initialized = 0;
-        int consumed = 0;
+        boolean submitted = false;
         try {
             for (; initialized < originals.size(); initialized++) {
                 InternalAccess.messageCopyTo(originals.get(initialized),
                     nativeParts.asSlice(partSize * initialized, partSize));
             }
-            for (; consumed < originals.size(); consumed++) {
-                MemorySegment nativePart = nativeParts.asSlice(
-                    partSize * consumed, partSize);
-                int partFlag = consumed + 1 < originals.size()
-                    ? Native.PART_MORE : Native.PART_FINAL;
-                boolean last = partFlag == Native.PART_FINAL;
-                MemorySegment context = last
-                    ? userContext : MemorySegment.NULL;
-                MemorySegment output = last
-                    ? idOut : MemorySegment.NULL;
-                int rc;
-                if (!request && replyToken == 0L) {
-                    rc = target == null
-                        ? Native.sendPart(socket.handle(), nativePart,
-                            flags, partFlag, context, output)
-                        : Native.sendPartRid(socket.handle(), nativeTarget,
-                            nativePart, flags, partFlag, context, output);
-                } else if (request) {
-                    rc = Native.requestPart(socket.handle(), nativeTarget,
-                        nativePart, flags, partFlag, last ? timeoutMs : 0,
-                        context, output);
-                } else {
-                    rc = Native.replyPart(socket.handle(), nativeTarget,
-                        replyToken, nativePart, partFlag);
-                }
-                if (rc != SubmitResult.OK.value()) {
-                    int errno = Native.errno();
-                    long id = completion
-                        ? idOut.get(ValueLayout.JAVA_LONG, 0) : 0L;
-                    consumed++;
-                    return new SubmitAttempt(SubmitResult.fromValue(rc),
-                        errno, id);
-                }
+            submitted = true;
+            int rc;
+            if (!request && replyToken == 0L) {
+                rc = target == null
+                    ? Native.send(socket.handle(), nativeParts,
+                        originals.size(), flags, userContext, idOut)
+                    : Native.sendRid(socket.handle(), nativeTarget,
+                        nativeParts, originals.size(), flags, userContext,
+                        idOut);
+            } else if (request) {
+                rc = Native.request(socket.handle(), nativeTarget,
+                    nativeParts, originals.size(), flags, timeoutMs,
+                    userContext, idOut);
+            } else {
+                rc = Native.reply(socket.handle(), nativeTarget,
+                    replyToken, nativeParts, originals.size());
+            }
+            if (rc != SubmitResult.OK.value()) {
+                int errno = Native.errno();
+                long id = completion
+                    ? idOut.get(ValueLayout.JAVA_LONG, 0) : 0L;
+                return new SubmitAttempt(SubmitResult.fromValue(rc), errno,
+                    id);
             }
             long id = completion
                 ? idOut.get(ValueLayout.JAVA_LONG, 0) : 0L;
             return new SubmitAttempt(SubmitResult.OK, 0, id);
         } finally {
-            for (int index = consumed; index < initialized; index++) {
+            for (int index = submitted ? initialized : 0;
+                 index < initialized; index++) {
                 NativeMessage.messageClose(nativeParts.asSlice(
                     partSize * index, partSize));
             }
@@ -569,7 +565,7 @@ final class CompletionOwner implements AutoCloseable {
     }
 
     int drain() {
-        Pending<?> settlements = null;
+        PublicSettlement settlements = null;
         try {
             drainLock.lock();
             try {
@@ -584,27 +580,27 @@ final class CompletionOwner implements AutoCloseable {
         }
     }
 
-    private void enqueuePublicSettlement(Pending<?> state) {
+    private void enqueuePublicSettlement(Runnable completion) {
+        PublicSettlement state = new PublicSettlement(completion);
         if (publicSettlementTail == null) {
             publicSettlementHead = state;
         } else {
-            publicSettlementTail.nextPublicSettlement = state;
+            publicSettlementTail.next = state;
         }
         publicSettlementTail = state;
     }
 
-    private Pending<?> detachPublicSettlements() {
-        Pending<?> head = publicSettlementHead;
+    private PublicSettlement detachPublicSettlements() {
+        PublicSettlement head = publicSettlementHead;
         publicSettlementHead = null;
         publicSettlementTail = null;
         return head;
     }
 
-    private static void completePublicSettlements(Pending<?> state) {
+    private static void completePublicSettlements(PublicSettlement state) {
         while (state != null) {
-            Pending<?> next = state.nextPublicSettlement;
-            state.nextPublicSettlement = null;
-            state.completeFuture();
+            PublicSettlement next = state.next;
+            state.completion.run();
             state = next;
         }
     }
@@ -864,7 +860,7 @@ final class CompletionOwner implements AutoCloseable {
                     SubmitResult.INTERNAL_ERROR), settleInline);
                 return;
             }
-            state.publishRequest(attempt.completionId());
+            state.publishRequest(attempt.completionId(), settleInline);
             state.releaseRetained();
             return;
         }
@@ -986,6 +982,27 @@ final class CompletionOwner implements AutoCloseable {
     private record RequestCompletion(long completionId, Object outcome) {
     }
 
+    private record SendSubmissionValue(
+            SubmitResult result,
+            CompletionStage<Void> admitted) implements SendSubmission {
+    }
+
+    private record RequestSubmissionValue(
+            SubmitResult result,
+            CompletionStage<Void> admitted,
+            CompletionStage<List<Message>> reply)
+            implements RequestSubmission {
+    }
+
+    private static final class PublicSettlement {
+        private final Runnable completion;
+        private PublicSettlement next;
+
+        private PublicSettlement(Runnable completion) {
+            this.completion = completion;
+        }
+    }
+
     private final class Pending<T> {
         private final long token;
         private final PendingKind kind;
@@ -993,6 +1010,8 @@ final class CompletionOwner implements AutoCloseable {
         private List<Message> retained;
         private final int requestTimeoutMs;
         private final CompletableFuture<T> future = new CompletableFuture<>();
+        private final CompletableFuture<Void> admitted =
+            new CompletableFuture<>();
         private boolean published;
         private boolean captured;
         private boolean dispatched;
@@ -1001,7 +1020,6 @@ final class CompletionOwner implements AutoCloseable {
         private boolean requestAdmitted;
         private Object terminalValue;
         private Throwable terminalFailure;
-        private Pending<?> nextPublicSettlement;
 
         Pending(long token, PendingKind kind, RoutingId target,
                 List<Message> retained, int requestTimeoutMs) {
@@ -1012,6 +1030,9 @@ final class CompletionOwner implements AutoCloseable {
             this.requestTimeoutMs = requestTimeoutMs;
             this.requestAdmitted = kind == PendingKind.REQUEST
                 && retained.isEmpty();
+            if (requestAdmitted) {
+                admitted.complete(null);
+            }
         }
 
         MemorySegment context() {
@@ -1019,18 +1040,27 @@ final class CompletionOwner implements AutoCloseable {
         }
 
         void publishRequest(long id) {
+            publishRequest(id, false);
+        }
+
+        void publishRequest(long id, boolean settleInline) {
             boolean ready;
+            boolean completeAdmission;
             synchronized (this) {
                 if (dispatched) {
                     return;
                 }
                 completionId = id;
                 published = true;
+                completeAdmission = !requestAdmitted;
                 requestAdmitted = true;
                 ready = captured;
             }
+            if (completeAdmission) {
+                completeAdmission(settleInline);
+            }
             if (ready) {
-                settleCapturedRequest();
+                settleCapturedRequest(settleInline);
             }
         }
 
@@ -1069,10 +1099,6 @@ final class CompletionOwner implements AutoCloseable {
             if (ready) {
                 settleCapturedRequest(settleInline);
             }
-        }
-
-        private void settleCapturedRequest() {
-            settleCapturedRequest(false);
         }
 
         private void settleCapturedRequest(boolean settleInline) {
@@ -1159,6 +1185,14 @@ final class CompletionOwner implements AutoCloseable {
             settle(null, null, inline);
         }
 
+        private void completeAdmission(boolean inline) {
+            if (inline) {
+                enqueuePublicSettlement(() -> admitted.complete(null));
+            } else {
+                lane.dispatch(() -> admitted.complete(null));
+            }
+        }
+
         void completeDiscardInline() {
             if (prepareSettlement(null, null)) {
                 completeFuture();
@@ -1178,7 +1212,7 @@ final class CompletionOwner implements AutoCloseable {
                 return;
             }
             if (inline) {
-                enqueuePublicSettlement(this);
+                enqueuePublicSettlement(this::completeFuture);
             } else {
                 lane.dispatch(this::completeFuture);
             }
@@ -1202,8 +1236,10 @@ final class CompletionOwner implements AutoCloseable {
         private void completeFuture() {
             try {
                 if (terminalFailure != null) {
+                    admitted.completeExceptionally(terminalFailure);
                     future.completeExceptionally(terminalFailure);
                 } else {
+                    admitted.complete(null);
                     @SuppressWarnings("unchecked")
                     T typed = (T) terminalValue;
                     future.complete(typed);

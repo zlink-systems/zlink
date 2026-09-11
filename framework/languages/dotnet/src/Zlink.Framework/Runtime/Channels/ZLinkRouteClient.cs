@@ -206,6 +206,10 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
         var timeout = _timeout ?? runtime.Registration.ResolveChannelRequestTimeout(channelName);
         var started = Stopwatch.GetTimestamp();
         var remaining = timeout;
+        using var encodedBody = ZLinkClientCallCodec.EncodeEnvelopeBody(
+            request,
+            runtime.Registration.Codecs,
+            out var contentType);
         //  One logical request owns one `reply_received` terminal, even when the
         //  ShuttingDown reselection loop below submits more than once.
         var terminal = runtime.Flow.CaptureEnabled
@@ -227,7 +231,10 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
                     packetName,
                     remaining);
                 terminal?.SetCorrelation(header.CorrelationId);
-                var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(header, request, runtime.Registration.Codecs);
+                var parts = ZLinkClientCallCodec.CopyEnvelopeParts(
+                    header,
+                    encodedBody,
+                    contentType);
                 var reply = await runtime
                     .RequestToChannelAsync(
                         channelName,

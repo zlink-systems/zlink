@@ -1,3 +1,5 @@
+import java.time.Duration
+
 plugins { application }
 
 dependencies {
@@ -17,3 +19,13 @@ application {
     mainClass.set("systems.zlink.bench.withgrpc.client.BenchClient")
     applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
+
+val rawProgressTest by tasks.registering(JavaExec::class) {
+    description = "Verify raw request progress without a reply cap and across poller ownership changes"
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("systems.zlink.bench.withgrpc.client.RawProgressTest")
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    dependsOn(tasks.testClasses)
+    timeout.set(Duration.ofSeconds(40))
+}
+tasks.check { dependsOn(rawProgressTest) }

@@ -3,12 +3,9 @@
 
 All send, request, and reply paths use this module as the ownership boundary.
 The caller keeps ownership of input buffers and ``Message`` objects because
-the returned values are independent staging parts. A synchronous Core call
-consumes every staging part it actually attempts on success or ordinary
-failure; the binding closes any later part that was not attempted.
+the returned values are independent staging parts. A synchronous whole-message
+Core call consumes every staging part on success or ordinary failure.
 """
-
-import ctypes
 
 from .message_materializer import Message, ReceivedMessage
 from ..._native.ffi import ZlinkMsg
@@ -39,23 +36,25 @@ def _materialize_native_parts(payload):
             payload, ZlinkMsg, Message, ReceivedMessage, _as_bytes_view
         )
 
-    native_parts = []
+    payload_parts = _payload_parts(payload)
+    native_parts = (ZlinkMsg * len(payload_parts))()
+    initialized = 0
     try:
-        for part in _payload_parts(payload):
+        for index, part in enumerate(payload_parts):
             if isinstance(part, Message):
-                native_parts.append(_clone_native_msg(part._msg))
+                native_parts[index] = _clone_native_msg(part._msg)
+                initialized += 1
                 continue
             if isinstance(part, ReceivedMessage):
                 native = part._clone_native_for_send()
                 if native is not None:
-                    native_parts.append(native)
+                    native_parts[index] = native
+                    initialized += 1
                     continue
 
-            native = ZlinkMsg()
-            _init_msg_from_buffer(native, part, borrow=False)
-            native_parts.append(native)
+            _init_msg_from_buffer(native_parts[index], part, borrow=False)
+            initialized += 1
     except Exception:
-        for native in native_parts:
-            _close_multipart(ctypes.byref(native), 1)
+        _close_multipart(native_parts, initialized)
         raise
     return native_parts

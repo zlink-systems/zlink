@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
 using System.Buffers;
-using System.Runtime.CompilerServices;
 using Systems.Zlink.Runtime.Native;
 
 namespace Systems.Zlink;
@@ -81,144 +80,9 @@ internal static class RequestReplySupport
                 part.ConsumeAfterSuccessfulSubmit();
     }
 
-    internal static void SubmitClonedParts(IReadOnlyList<Message> parts,
-        NativePartSubmitter submit)
-    {
-        if (parts == null)
-            throw new ArgumentNullException(nameof(parts));
-        if (parts.Count == 0)
-            throw new ArgumentException("parts must not be empty", nameof(parts));
-        if (submit == null)
-            throw new ArgumentNullException(nameof(submit));
-
-        for (var i = 0; i < parts.Count; i++)
-        {
-            ZlinkMsg nativePart = default;
-            parts[i].MoveTo(ref nativePart);
-            var submitReturned = false;
-            try
-            {
-                var rc = submit(ref nativePart, i + 1 < parts.Count
-                    ? NativeMethods.ZlinkPartFlag.More
-                    : NativeMethods.ZlinkPartFlag.Final);
-                submitReturned = true;
-                if (rc != 0)
-                    throw ZlinkException.CreateSubmitException(
-                        NativeMethods.zlink_errno());
-            }
-            finally
-            {
-                // A returned Core submit result consumes this native part on
-                // both success and failure. Restore only when the managed
-                // delegate itself failed before returning a Core result.
-                if (!submitReturned)
-                    parts[i].RestoreFrom(ref nativePart);
-            }
-        }
-    }
-
-    internal static void SubmitOwnedSinglePart(Message part,
-        NativePartSubmitter submit)
-    {
-        if (part == null)
-            throw new ArgumentNullException(nameof(part));
-        if (submit == null)
-            throw new ArgumentNullException(nameof(submit));
-
-        var submitter = new DelegateSinglePartSubmitter(submit);
-        var rc = SinglePartSubmit.Submit(part, ref submitter);
-        if (rc != 0)
-            throw ZlinkException.CreateSubmitException(NativeMethods.zlink_errno());
-    }
-
-    private readonly struct DelegateSinglePartSubmitter
-        : INativeSinglePartSubmitter<DelegateSinglePartSubmitter>
-    {
-        private readonly NativePartSubmitter _submit;
-
-        internal DelegateSinglePartSubmitter(NativePartSubmitter submit)
-        {
-            _submit = submit;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static int Submit(ref DelegateSinglePartSubmitter submitter,
-            ref ZlinkMsg nativePart)
-        {
-            return submitter._submit(ref nativePart,
-                NativeMethods.ZlinkPartFlag.Final);
-        }
-    }
-
-    internal static void SubmitOwnedParts(IReadOnlyList<Message> parts,
-        NativePartSubmitter submit)
-    {
-        if (parts == null)
-            throw new ArgumentNullException(nameof(parts));
-        if (parts.Count == 0)
-            throw new ArgumentException("parts must not be empty", nameof(parts));
-        if (submit == null)
-            throw new ArgumentNullException(nameof(submit));
-
-        if (parts.Count == 1)
-        {
-            SubmitOwnedSinglePart(parts[0], submit);
-            return;
-        }
-
-        Message[]? copiedParts = null;
-        var sourceParts = NativeMessageParts.AsSpan(parts, ref copiedParts);
-        ZlinkMsg[]? rentedNative = null;
-        // Hot path: request/reply messages are normally one or two parts. Keep
-        // native descriptors on the stack for that case and rent only for larger
-        // multipart frames.
-        var nativeParts = sourceParts.Length <= NativeMessageParts.StackPartLimit
-            ? stackalloc ZlinkMsg[NativeMessageParts.StackPartLimit]
-            : rentedNative = ArrayPool<ZlinkMsg>.Shared.Rent(sourceParts.Length);
-        nativeParts = nativeParts[..sourceParts.Length];
-
-        var built = 0;
-        var consumed = 0;
-        try
-        {
-            NativeMessageParts.MoveToNative(sourceParts, nativeParts,
-                nameof(parts), ref built);
-            for (var i = 0; i < built; i++)
-            {
-                var rc = submit(ref nativeParts[i], i + 1 < built
-                    ? NativeMethods.ZlinkPartFlag.More
-                    : NativeMethods.ZlinkPartFlag.Final);
-                consumed = i + 1;
-                if (rc == 0)
-                    continue;
-
-                throw ZlinkException.CreateSubmitException(
-                    NativeMethods.zlink_errno());
-            }
-        }
-        catch
-        {
-            NativeMessageParts.RestoreManaged(sourceParts, nativeParts,
-                consumed, built - consumed);
-            throw;
-        }
-        finally
-        {
-            if (rentedNative != null)
-                ArrayPool<ZlinkMsg>.Shared.Return(rentedNative);
-        }
-    }
-
-    internal static void SubmitPreservingOnFailure(
-        IReadOnlyList<Message> parts, NativePartSubmitter submit)
-    {
-        var submitter = new DelegatePartSubmitter(submit);
-        SubmitPreservingOnFailure(parts, ref submitter);
-    }
-
     internal static void SubmitPreservingOnFailure<T>(
         IReadOnlyList<Message> parts, ref T submitter)
-        where T : struct, INativePartSubmitter<T>
+        where T : struct, INativeMessageSubmitter<T>
     {
         EnsureParts(parts, nameof(parts));
         ZlinkMsg[]? rented = null;
@@ -228,22 +92,15 @@ internal static class RequestReplySupport
         var built = 0;
         try
         {
-            // Core consumes every submitted part, including failures. Keep the
-            // caller's originals until FINAL succeeds, but hold the temporary
-            // shared references directly in native storage, without wrappers
-            // or another init/move round trip. Copy the whole record before
-            // submitting its prefix so validation failure cannot stage a part.
+            // Core consumes the whole native record on every returned result.
+            // Preserve the managed originals until admission succeeds.
             for (; built < parts.Count; built++)
                 parts[built].CopyTo(ref nativeParts[built]);
-            for (var i = 0; i < built; i++)
-            {
-                var rc = T.Submit(ref submitter, ref nativeParts[i],
-                    i + 1 < built ? NativeMethods.ZlinkPartFlag.More
-                        : NativeMethods.ZlinkPartFlag.Final);
-                if (rc != 0)
-                    throw ZlinkException.CreateSubmitException(
-                        NativeMethods.zlink_errno());
-            }
+            var rc = T.Submit(ref submitter, nativeParts[..built]);
+            built = 0;
+            if (rc != 0)
+                throw new ZlinkSubmitException((SubmitResult)rc,
+                    NativeMethods.zlink_errno());
             ConsumeParts(parts);
         }
         finally
@@ -254,24 +111,9 @@ internal static class RequestReplySupport
                 ArrayPool<ZlinkMsg>.Shared.Return(rented);
         }
     }
-
-    private readonly struct DelegatePartSubmitter(NativePartSubmitter submit)
-        : INativePartSubmitter<DelegatePartSubmitter>
-    {
-        public static int Submit(ref DelegatePartSubmitter self,
-            ref ZlinkMsg part, NativeMethods.ZlinkPartFlag flag) =>
-            self.Invoke(ref part, flag);
-
-        private int Invoke(ref ZlinkMsg part, NativeMethods.ZlinkPartFlag flag)
-            => submit(ref part, flag);
-    }
-
-    internal delegate int NativePartSubmitter(
-        ref ZlinkMsg nativePart, NativeMethods.ZlinkPartFlag partFlag);
 }
 
-internal interface INativePartSubmitter<T> where T : struct, INativePartSubmitter<T>
+internal interface INativeMessageSubmitter<T> where T : struct, INativeMessageSubmitter<T>
 {
-    static abstract int Submit(ref T self, ref ZlinkMsg part,
-        NativeMethods.ZlinkPartFlag flag);
+    static abstract int Submit(ref T self, Span<ZlinkMsg> parts);
 }

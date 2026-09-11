@@ -10,6 +10,11 @@
 #include "transports/tls/wss_transport.hpp"
 #endif
 #endif
+#if defined ZLINK_HAVE_ASIO_SSL
+#include "transports/tls/ssl_context_helper.hpp"
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+#endif
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -220,10 +225,33 @@ void test_ws_buffers_keep_small_initial_sizes_and_grow_for_large_payload ()
 }
 
 #endif
+#if defined ZLINK_HAVE_ASIO_SSL
+void test_tls_auth_classifier_excludes_transport_cipher_and_version_errors ()
+{
+    const int reasons[] = {SSL_R_CERTIFICATE_VERIFY_FAILED,
+                           SSL_R_PEER_DID_NOT_RETURN_A_CERTIFICATE,
+                           SSL_R_NO_SHARED_CIPHER,
+                           SSL_R_UNSUPPORTED_PROTOCOL,
+                           SSL_R_SSLV3_ALERT_HANDSHAKE_FAILURE};
+    for (size_t i = 0; i != sizeof (reasons) / sizeof (reasons[0]); ++i) {
+        const boost::system::error_code error (
+          static_cast<int> (ERR_PACK (ERR_LIB_SSL, 0, reasons[i])),
+          boost::asio::error::get_ssl_category ());
+        TEST_ASSERT_EQUAL_INT (i < 2,
+          zlink::ssl_context_helper_t::is_authentication_failure (error));
+    }
+    TEST_ASSERT_FALSE (zlink::ssl_context_helper_t::is_authentication_failure (
+      boost::asio::error::connection_reset));
+}
+#endif
+
 int main ()
 {
     setup_test_environment ();
     UNITY_BEGIN ();
+#if defined ZLINK_HAVE_ASIO_SSL
+    RUN_TEST (test_tls_auth_classifier_excludes_transport_cipher_and_version_errors);
+#endif
     RUN_TEST (test_ws_mask_inplace_matches_byte_reference);
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO && defined ZLINK_HAVE_ASIO_WS && defined ZLINK_HAVE_WS
     RUN_TEST (test_ws_transport_config_initialization_is_thread_safe);

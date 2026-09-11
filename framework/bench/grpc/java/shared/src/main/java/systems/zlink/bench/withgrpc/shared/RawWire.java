@@ -3,9 +3,11 @@
 package systems.zlink.bench.withgrpc.shared;
 
 import com.google.protobuf.ByteString;
+import com.google.protobuf.InvalidProtocolBufferException;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import systems.zlink.bench.withgrpc.proto.BenchPayload;
+import java.nio.charset.StandardCharsets;
+import systems.zlink.contracts.messaging.Message;
 
 /**
  * Wire shape of the {@code zlink-<lang>} raw row.
@@ -36,58 +38,30 @@ public final class RawWire {
     private RawWire() {
     }
 
-    /** {@code BenchPayload { bytes body = 1 }} around an already-stamped payload. */
-    public static byte[] encodeBenchPayload(byte[] payload) {
-        return BenchPayload.newBuilder()
-            .setBody(ByteString.copyFrom(payload))
-            .build()
-            .toByteArray();
+    /** Creates and serializes a typed payload for every raw send/request. */
+    public static Message encodeBenchPayloadMessage(
+        int payloadSize, int runId, byte phase, long sequence) {
+        return encodeBenchPayloadMessage(ByteBuffer.wrap(
+            BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence)));
     }
 
-    /** Field 1 of the encoded BenchPayload, or {@code null} when it is absent. */
+    /** Replies preserve the received measurement header, including its timestamp. */
+    public static Message encodeBenchPayloadMessage(ByteBuffer body) {
+        BenchPayload payload = BenchPayload.newBuilder()
+            .setBody(ByteString.copyFrom(body.duplicate()))
+            .build();
+        return Message.from(payload.toByteArray());
+    }
+
+    /** Parses BenchPayload with the same protobuf runtime used by the typed stacks. */
     public static ByteBuffer decodeBenchPayloadBody(ByteBuffer encoded) {
         if (encoded == null) {
             return null;
         }
-        ByteBuffer view = encoded.duplicate();
-        while (view.hasRemaining()) {
-            long key = readVarint(view);
-            if (key < 0) {
-                return null;
-            }
-            int field = (int) (key >>> 3);
-            int wireType = (int) (key & 0x07);
-            if (wireType != 2) {
-                return null;
-            }
-            long length = readVarint(view);
-            if (length < 0 || length > view.remaining()) {
-                return null;
-            }
-            if (field == 1) {
-                ByteBuffer body = view.duplicate();
-                body.limit(body.position() + (int) length);
-                return body.slice();
-            }
-            view.position(view.position() + (int) length);
+        try {
+            return BenchPayload.parseFrom(encoded.duplicate()).getBody().asReadOnlyByteBuffer();
+        } catch (InvalidProtocolBufferException error) {
+            return null;
         }
-        return null;
-    }
-
-    private static long readVarint(ByteBuffer buffer) {
-        long value = 0;
-        int shift = 0;
-        while (shift < 64) {
-            if (!buffer.hasRemaining()) {
-                return -1;
-            }
-            int b = buffer.get() & 0xff;
-            value |= ((long) (b & 0x7f)) << shift;
-            if ((b & 0x80) == 0) {
-                return value;
-            }
-            shift += 7;
-        }
-        return -1;
     }
 }

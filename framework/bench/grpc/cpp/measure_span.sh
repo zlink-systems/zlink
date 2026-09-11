@@ -13,7 +13,7 @@ RUNS="${RUNS:-3}"
 DURATION="${DURATION:-5}"
 WARMUP="${WARMUP:-5}"
 IMPLEMENTATIONS="${IMPLEMENTATIONS:-grpc-cpp,zlink-cpp,zlink-framework-cpp}"
-PATTERNS="${PATTERNS:-request-serial,request-window,request-backpressure,send-saturation}"
+PATTERNS="${PATTERNS:-request-serial,request-backpressure,send-saturation}"
 PAYLOAD_SIZES="${PAYLOAD_SIZES:-1024,4096}"
 LOAD_GATE="${LOAD_GATE:-2.0}"
 export LOAD_GATE

@@ -247,16 +247,16 @@ public sealed partial class EntrySpotActorDispatchTests
         };
         node.ApplicationIngressOnActivation = () =>
         {
-            node.NodeRouteHandler!(CreateImmediateMeshRequest(
+            node.NodeRouteHandler!([CreateImmediateMeshRequest(
                 value: "node",
                 channelName: null,
                 requestSequence: 11,
-                nodeReply));
-            node.NodeRouteHandler!(CreateImmediateMeshRequest(
+                nodeReply)]);
+            node.NodeRouteHandler!([CreateImmediateMeshRequest(
                 value: "channel",
                 channelName: "startup-channel",
                 requestSequence: 12,
-                channelReply));
+                channelReply)]);
         };
 
         var (runtime, _) = await CreateStartedRuntimeAsync(
@@ -1417,7 +1417,7 @@ public sealed partial class EntrySpotActorDispatchTests
                             requestOperation,
                             requestMessages,
                             flags: 1,
-                            directReply: (_, _) =>
+                            directReply: _ =>
                             {
                                 Interlocked.Increment(ref directReplyCount);
                                 return SubmitResult.Ok;
@@ -1537,7 +1537,6 @@ public sealed partial class EntrySpotActorDispatchTests
             default,
             header,
             hasMore: true,
-            flags: SendFlags.DontWait,
             meshName: "mesh-a",
             selectedNode: localNode,
             targetNodeGeneration: 83,
@@ -1552,7 +1551,6 @@ public sealed partial class EntrySpotActorDispatchTests
             default,
             body,
             hasMore: false,
-            flags: SendFlags.DontWait,
             meshName: "mesh-a",
             selectedNode: localNode,
             targetNodeGeneration: 83,
@@ -2047,7 +2045,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     ZLinkFrameworkErrorKind.NotFound,
                     "session relay authority identity is stale."),
                 CancellationToken.None,
-                directReply: (parts, _) =>
+                directReply: parts =>
                 {
                     directReplies.Add(
                         parts.Single().AsReadOnlySpan().ToArray());
@@ -2847,7 +2845,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 Message.From("fence-body"),
                 sourceNodeGeneration: 0,
                 requestSource: null,
-                (parts, _) =>
+                parts =>
                 {
                     directReplies.Add(
                         parts.Single().AsReadOnlySpan().ToArray());
@@ -3580,9 +3578,9 @@ public sealed partial class EntrySpotActorDispatchTests
 
         var actorParts = CreateActorRequestParts(actorRef, "request", "discard", requestId: 99, flags: 1);
         var actorBody = actorParts[1].Message;
-        spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
+        await spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
             ZLinkBackendSpotDispatchEvent.ActorReadable,
-            ActorParts: actorParts));
+            ActorParts: actorParts)).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.True(SpinWait.SpinUntil(
             () =>
@@ -3623,9 +3621,9 @@ public sealed partial class EntrySpotActorDispatchTests
             flags: 1);
         var body = parts[1].Message;
 
-        spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
+        await spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
             ZLinkBackendSpotDispatchEvent.ActorReadable,
-            ActorParts: parts));
+            ActorParts: parts)).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.True(SpinWait.SpinUntil(
             () => IsDisposed(body),
@@ -3666,7 +3664,7 @@ public sealed partial class EntrySpotActorDispatchTests
             runner);
         pump.Attach(spot);
 
-        spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
+        await spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
             ZLinkBackendSpotDispatchEvent.ActorReadable,
             ActorParts: CreateActorRequestParts(
                 actorA,
@@ -3674,7 +3672,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 "first",
                 requestId: 0,
                 flags: 0,
-                kind: ZlinkStreamMessageKind.Send)));
+                kind: ZlinkStreamMessageKind.Send))).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await probe.ActorAFirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var overflowParts = CreateActorRequestParts(
@@ -3685,13 +3683,13 @@ public sealed partial class EntrySpotActorDispatchTests
             flags: 0,
             kind: ZlinkStreamMessageKind.Send);
         var overflowBody = overflowParts[1].Message;
-        spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
+        await spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
             ZLinkBackendSpotDispatchEvent.ActorReadable,
-            ActorParts: overflowParts));
+            ActorParts: overflowParts)).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(IsDisposed(overflowBody));
         Assert.False(probe.ActorASecondStarted.Task.IsCompleted);
 
-        spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
+        await spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
             ZLinkBackendSpotDispatchEvent.ActorReadable,
             ActorParts: CreateActorRequestParts(
                 actorB,
@@ -3699,7 +3697,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 "first",
                 requestId: 0,
                 flags: 0,
-                kind: ZlinkStreamMessageKind.Send)));
+                kind: ZlinkStreamMessageKind.Send))).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await probe.ActorBStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         probe.ReleaseActorAFirst.TrySetResult();
@@ -3779,13 +3777,101 @@ public sealed partial class EntrySpotActorDispatchTests
         pump.Attach(spot);
 
         var received = CreateRoutedReceived("routed-ok");
-        spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
+        await spot.RaiseDispatch(new ZLinkBackendSpotDispatchInfo(
             ZLinkBackendSpotDispatchEvent.RouteReadable,
-            RoutedMessages: [received]));
+            RoutedMessages: [received])).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(
             "routed-ok",
             await probe.Message.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task EntrySpotRouteDispatch_ReturnsOwnedResultWithoutRecordRunnerTask(
+        bool alreadyDrained)
+    {
+        var probe = new EntryTimerSerialProbe();
+        var services = new ServiceCollection()
+            .AddSingleton(probe)
+            .AddTransient<BlockingProbeRouteHandler>()
+            .BuildServiceProvider();
+        var spot = new CapturingSpot();
+        var (activation, runtime) = CreateActivationWithRuntime(
+            services, spot, typeof(TimerProbeEntrySpot));
+        await using var cleanup = activation.ConfigureAwait(false);
+        activation.Configure();
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ThrowingRuntimeErrorSink(), CancellationToken.None);
+        await using var pump = new ZLinkEntrySpotDispatchPump(runtime, activation, runner);
+        pump.Attach(spot);
+        var first = CreateRoutedReceived("first");
+        if (!alreadyDrained)
+        {
+            spot.Routes.Enqueue(first);
+        }
+        var submitted = spot.SubmitDispatch(new ZLinkBackendSpotDispatchInfo(
+            ZLinkBackendSpotDispatchEvent.RouteReadable,
+            RoutedMessages: alreadyDrained ? [first] : null));
+        Assert.False(probe.RouteStarted.Task.IsCompleted);
+        Assert.NotNull(submitted.Drain);
+        Assert.False(submitted.Completion.IsCompleted);
+        var drain = submitted.Drain(CancellationToken.None);
+        var dispatched = submitted.Completion;
+        try
+        {
+            await probe.RouteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(dispatched.IsCompleted);
+            Assert.Empty(runner.ActiveOnSupervisorLane);
+            Assert.True(first.Parts[0].Size > 0);
+            Assert.Equal(new[] { "route:start" }, probe.Events.ToArray());
+        }
+        finally
+        {
+            probe.ReleaseRoute.TrySetResult();
+        }
+        await dispatched.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await drain.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(
+            new[] { "route:start", "route:end" },
+            probe.Events.ToArray());
+        Assert.Throws<ObjectDisposedException>(() => first.Parts[0].Size);
+        await runner.StopAsync();
+    }
+
+    [Fact]
+    public async Task EntrySpotRouteDispatch_CancelledSubmissionReleasesEveryUnacceptedRecord()
+    {
+        var probe = new EntryTimerSerialProbe();
+        using var services = new ServiceCollection()
+            .AddSingleton(probe)
+            .AddTransient<BlockingProbeRouteHandler>()
+            .BuildServiceProvider();
+        var spot = new CapturingSpot();
+        var (activation, runtime) = CreateActivationWithRuntime(
+            services, spot, typeof(TimerProbeEntrySpot));
+        await using var cleanup = activation.ConfigureAwait(false);
+        activation.Configure();
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ThrowingRuntimeErrorSink(), new CancellationToken(canceled: true));
+        await using var pump = new ZLinkEntrySpotDispatchPump(runtime, activation, runner);
+        pump.Attach(spot);
+        using var first = CreateRoutedReceived("first");
+        using var second = CreateRoutedReceived("second");
+
+        var submitted = spot.SubmitDispatch(new ZLinkBackendSpotDispatchInfo(
+            ZLinkBackendSpotDispatchEvent.RouteReadable,
+            RoutedMessages: [first, second]));
+
+        Assert.Null(submitted.Drain);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => submitted.Completion.AsTask());
+        Assert.False(probe.RouteStarted.Task.IsCompleted);
+        Assert.Empty(runner.ActiveOnSupervisorLane);
+        Assert.Throws<ObjectDisposedException>(() => first.Parts[0].Size);
+        Assert.Throws<ObjectDisposedException>(() => second.Parts[0].Size);
+        await runner.StopAsync();
     }
 
     [Fact]
@@ -4909,6 +4995,10 @@ public sealed partial class EntrySpotActorDispatchTests
                 .Publish("entry", "events", new ProbeRouteMessage("published"))
                 .Async();
 
+            // 02-spot-messaging.ko.md §4.4: publish completes at worker handoff.
+            // Observe backend completion before asserting that the delivered
+            // envelope preserves flow identity and has no request correlation.
+            await node.EntrySpotBackend.PublishCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var header = Assert.IsType<ZLinkEnvelopeHeader>(node.EntrySpotBackend.PublishedHeader);
             Assert.Null(header.CorrelationId);
             Assert.True(ZlinkStreamFlowId.IsValid(header.FlowId));
@@ -5106,8 +5196,10 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    [Fact]
-    public async Task DirectNoBindTerminalDoesNotRetryTransientSubmitFailure()
+    [Theory]
+    [InlineData(SubmitResult.NotConnected)]
+    [InlineData(SubmitResult.Terminated)]
+    public async Task DirectNoBindTerminalReportsTerminalSubmitFailure(SubmitResult result)
     {
         var node = new CapturingSpotNode();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
@@ -5137,14 +5229,13 @@ public sealed partial class EntrySpotActorDispatchTests
                     ZLinkFrameworkErrorKind.Unavailable,
                     "Actor is moving.")),
                 cancellationToken: CancellationToken.None,
-                directReply: (_, flags) =>
+                directReply: _ =>
                 {
-                    Assert.Equal(SendFlags.DontWait, flags);
                     Interlocked.Increment(ref attempts);
-                    return SubmitResult.Backpressured;
+                    return result;
                 }));
 
-            Assert.Equal(ZlinkSubmitException.ErrorCode.Backpressured, failure.Result);
+            Assert.Equal((ZlinkSubmitException.ErrorCode)(int)result, failure.Result);
             Assert.Equal(1, Volatile.Read(ref attempts));
         }
         finally
@@ -6528,8 +6619,8 @@ public sealed partial class EntrySpotActorDispatchTests
             const ulong actorGeneration = 4;
             var sourceNodeRid = RoutingId.From("prewarm-source");
             var repliedWithError = false;
-            Func<IReadOnlyList<Message>, SendFlags, SubmitResult> directReply =
-                (messages, _) =>
+            Func<IReadOnlyList<Message>, SubmitResult> directReply =
+                messages =>
                 {
                     repliedWithError = true;
                     foreach (var message in messages) message.Dispose();
@@ -6695,8 +6786,8 @@ public sealed partial class EntrySpotActorDispatchTests
             const ulong actorGeneration = 4;
             var sourceNodeRid = RoutingId.From("prewarm-source");
             var repliedWithError = false;
-            Func<IReadOnlyList<Message>, SendFlags, SubmitResult> directReply =
-                (messages, _) =>
+            Func<IReadOnlyList<Message>, SubmitResult> directReply =
+                messages =>
                 {
                     repliedWithError = true;
                     foreach (var message in messages) message.Dispose();
@@ -7427,7 +7518,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actor,
                 sourceNodeRid,
                 requestId: 701,
-                (_, _) =>
+                _ =>
                 {
                     Interlocked.Increment(ref replies);
                     return SubmitResult.Ok;
@@ -7500,7 +7591,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actor,
                 sourceNodeRid,
                 requestId: 711,
-                static (_, _) => SubmitResult.Ok);
+                static _ => SubmitResult.Ok);
             ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(
                 runtime,
                 frame);
@@ -7567,7 +7658,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actor,
                 sourceNodeRid,
                 requestId: 702,
-                (_, _) =>
+                _ =>
                 {
                     Interlocked.Increment(ref replies);
                     return SubmitResult.Ok;
@@ -7591,11 +7682,11 @@ public sealed partial class EntrySpotActorDispatchTests
             using var first = Message.From("first");
             Assert.Equal(
                 SubmitResult.Ok,
-                frame.DirectReply!([first], SendFlags.DontWait));
+                frame.DirectReply!([first]));
             using var duplicate = Message.From("duplicate");
             Assert.Equal(
                 SubmitResult.Terminated,
-                frame.DirectReply!([duplicate], SendFlags.DontWait));
+                frame.DirectReply!([duplicate]));
             Assert.Equal(1, Volatile.Read(ref replies));
         }
         finally
@@ -7618,7 +7709,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 deadlineUnixMs: checked((ulong)DateTimeOffset.UtcNow
                     .AddMilliseconds(20)
                     .ToUnixTimeMilliseconds()),
-                (_, _) =>
+                _ =>
                 {
                     Interlocked.Increment(ref replies);
                     return SubmitResult.Ok;
@@ -7628,7 +7719,7 @@ public sealed partial class EntrySpotActorDispatchTests
             using var late = Message.From("late");
             Assert.Equal(
                 SubmitResult.Terminated,
-                preserved.Reply([late], SendFlags.DontWait));
+                preserved.Reply([late]));
             Assert.Equal(0, Volatile.Read(ref replies));
         }
         finally
@@ -7651,7 +7742,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 deadlineUnixMs: checked((ulong)DateTimeOffset.UtcNow
                     .AddSeconds(1)
                     .ToUnixTimeMilliseconds()),
-                (_, _) =>
+                _ =>
                 {
                     Interlocked.Increment(ref attempts);
                     return SubmitResult.Backpressured;
@@ -7697,7 +7788,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 deadlineUnixMs: checked((ulong)DateTimeOffset.UtcNow
                     .AddMilliseconds(-1)
                     .ToUnixTimeMilliseconds()),
-                (_, _) =>
+                _ =>
                 {
                     Interlocked.Increment(ref attempts);
                     return SubmitResult.Backpressured;
@@ -7743,7 +7834,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actor.ActorId,
                 requestId: 707,
                 deadlineUnixMs: 0,
-                (_, _) =>
+                _ =>
                 {
                     Interlocked.Increment(ref attempts);
                     return SubmitResult.Backpressured;
@@ -7781,7 +7872,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 deadlineUnixMs: checked((ulong)DateTimeOffset.UtcNow
                     .AddSeconds(1)
                     .ToUnixTimeMilliseconds()),
-                (_, _) =>
+                _ =>
                 {
                     if (!Volatile.Read(ref admitted))
                         return SubmitResult.Backpressured;
@@ -7847,7 +7938,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 deadlineUnixMs: checked((ulong)DateTimeOffset.UtcNow
                     .AddSeconds(1)
                     .ToUnixTimeMilliseconds()),
-                static (_, _) => SubmitResult.Ok);
+                static _ => SubmitResult.Ok);
             using var reply = Message.From("reply");
 
             await runtime.ReplyActorNoBindAsync(
@@ -7885,7 +7976,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 deadlineUnixMs: checked((ulong)DateTimeOffset.UtcNow
                     .AddSeconds(1)
                     .ToUnixTimeMilliseconds()),
-                (_, _) =>
+                _ =>
                 {
                     Interlocked.Increment(ref attempts);
                     return SubmitResult.Backpressured;
@@ -7934,7 +8025,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 deadlineUnixMs: checked((ulong)DateTimeOffset.UtcNow
                     .AddMilliseconds(100)
                     .ToUnixTimeMilliseconds()),
-                static (_, _) => SubmitResult.Ok);
+                static _ => SubmitResult.Ok);
             await Task.Delay(TimeSpan.FromMilliseconds(300));
             using var reply = Message.From("late-reply");
 
@@ -7959,7 +8050,7 @@ public sealed partial class EntrySpotActorDispatchTests
         ZLinkBackendActorRef actor,
         RoutingId sourceNodeRid,
         ulong requestId,
-        Func<IReadOnlyList<Message>, SendFlags, SubmitResult> directReply)
+        Func<IReadOnlyList<Message>, SubmitResult> directReply)
     {
         return new ZLinkSpotActorFrame(
             actor,
@@ -8047,7 +8138,7 @@ public sealed partial class EntrySpotActorDispatchTests
             MeshOperationId operation,
             IReadOnlyList<Message> messages,
             uint flags,
-            Func<IReadOnlyList<Message>, SendFlags, SubmitResult>?
+            Func<IReadOnlyList<Message>, SubmitResult>?
                 directReply = null,
             byte messageFollowHopCount = 0)
     {
@@ -8398,7 +8489,7 @@ public sealed partial class EntrySpotActorDispatchTests
             RoutingId.From("startup-source"),
             spotId: null,
             requestSequence,
-            reply: (replyParts, _) =>
+            reply: replyParts =>
             {
                 var decoded = ZLinkEnvelopeCodec.DecodeBody(
                     replyParts,
@@ -9799,7 +9890,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public ulong LifecycleGeneration { get; set; } = 1;
 
-        private Action<ZLinkBackendSpotDispatchInfo>? _dispatchHandler;
+        private Func<ZLinkBackendSpotDispatchInfo, (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain)>? _dispatchHandler;
 
         public RoutingId RoutingId { get; private set; } = RoutingId.From("entry-spot");
 
@@ -9810,6 +9901,9 @@ public sealed partial class EntrySpotActorDispatchTests
         public int DisposeCount { get; private set; }
 
         public ZLinkEnvelopeHeader? PublishedHeader { get; private set; }
+
+        public TaskCompletionSource PublishCompleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public int? ActorJoinResultCode { get; private set; }
 
@@ -9888,19 +9982,29 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public ZLinkBackendSubscribeMessage? Subscribe(RecvFlags flags) => null;
 
-        public ZLinkBackendRouteReceived? RecvRoute(RecvFlags flags) => null;
+        public ConcurrentQueue<ZLinkBackendRouteReceived> Routes { get; } = new();
 
-        public void OnDispatchEvent(Action<ZLinkBackendSpotDispatchInfo> handler)
+        public ZLinkBackendRouteReceived? RecvRoute(RecvFlags flags) =>
+            Routes.TryDequeue(out var received) ? received : null;
+
+        public void OnDispatchEvent(Func<ZLinkBackendSpotDispatchInfo, (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain)> handler)
         {
             _dispatchHandler = handler;
         }
 
         public bool DispatchHandlerAttached => _dispatchHandler is not null;
 
-        public void RaiseDispatch(ZLinkBackendSpotDispatchInfo info)
+        public async ValueTask RaiseDispatch(ZLinkBackendSpotDispatchInfo info)
         {
-            (_dispatchHandler ?? throw new InvalidOperationException("Dispatch handler was not attached.")).Invoke(info);
+            var dispatch = SubmitDispatch(info);
+            if (dispatch.Drain is { } drain)
+                await drain(CancellationToken.None).ConfigureAwait(false);
+            await dispatch.Completion.ConfigureAwait(false);
         }
+
+        public (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain) SubmitDispatch(
+            ZLinkBackendSpotDispatchInfo info) =>
+            (_dispatchHandler ?? throw new InvalidOperationException("Dispatch handler was not attached.")).Invoke(info);
 
         public bool RequestToChannel(
             string channelName,
@@ -9933,6 +10037,7 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = topic;
             _ = flags;
             PublishedHeader = ZLinkEnvelopeCodec.DecodeHeader(message);
+            PublishCompleted.TrySetResult();
         }
 
         public void Publish(
@@ -9942,6 +10047,7 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = topic;
             _ = flags;
             PublishedHeader = ZLinkEnvelopeCodec.DecodeHeader(parts);
+            PublishCompleted.TrySetResult();
         }
 
         public SubmitResult SendToSpot(
@@ -9987,7 +10093,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     (ZlinkSubmitException.ErrorCode)(int)result));
         }
 
-        public ValueTask<IReadOnlyList<Message>> RequestToSpotAsync(
+        public ValueTask<ZLinkBackendRouteReceived> RequestToSpotAsync(
             RoutingId targetRid,
             string targetSpotId,
             ulong spotGeneration,
@@ -10002,7 +10108,7 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = timeout;
             _ = metadata;
             if (SpotRequestHandler is null)
-                return ValueTask.FromException<IReadOnlyList<Message>>(
+                return ValueTask.FromException<ZLinkBackendRouteReceived>(
                     new ZlinkSubmitException(
                         ZlinkSubmitException.ErrorCode.NotConnected));
             SpotRequests.Add((targetRid, targetSpotId, spotGeneration));
@@ -10010,8 +10116,9 @@ public sealed partial class EntrySpotActorDispatchTests
                 ? configured
                 : RequestResult.Ok;
             return result == RequestResult.Ok
-                ? ValueTask.FromResult(SpotRequestHandler(parts))
-                : ValueTask.FromException<IReadOnlyList<Message>>(
+                ? ValueTask.FromResult(new ZLinkBackendRouteReceived(
+                    SpotRequestHandler(parts), null, null, null, null))
+                : ValueTask.FromException<ZLinkBackendRouteReceived>(
                     new ZlinkRequestException(
                         (ZlinkRequestException.ErrorCode)(int)result));
         }
@@ -10128,22 +10235,15 @@ public sealed partial class EntrySpotActorDispatchTests
             return false;
         }
 
-        public bool Send(
+        public Task SendAsync(
             RoutingId routingId,
             Message payload,
-            SendFlags flags)
+            CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref _sendCount);
-            return true;
-        }
-
-        public bool Send(
-            RoutingId routingId,
-            IReadOnlyList<Message> parts,
-            SendFlags flags)
-        {
-            Interlocked.Increment(ref _sendCount);
-            return true;
+            payload.Dispose();
+            return Task.CompletedTask;
         }
 
         public void DisconnectPeer(RoutingId routingId) { }
@@ -10190,15 +10290,15 @@ public sealed partial class EntrySpotActorDispatchTests
             return false;
         }
 
-        public bool Send(
+        public Task SendAsync(
             RoutingId routingId,
             Message payload,
-            SendFlags flags) => true;
-
-        public bool Send(
-            RoutingId routingId,
-            IReadOnlyList<Message> parts,
-            SendFlags flags) => true;
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            payload.Dispose();
+            return Task.CompletedTask;
+        }
 
         public void DisconnectPeer(RoutingId routingId) { }
 
@@ -10729,7 +10829,8 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public bool EntryDispatchReadyAtActivation { get; private set; }
 
-        public Action<ZLinkBackendRouteReceived>? NodeRouteHandler { get; private set; }
+        public Action<IReadOnlyList<ZLinkBackendRouteReceived>>?
+            NodeRouteHandler { get; private set; }
 
         public void AddChannel(string channelName) => AddedChannels.Add(channelName);
 
@@ -10761,9 +10862,11 @@ public sealed partial class EntrySpotActorDispatchTests
             ApplicationIngressOnActivation?.Invoke();
         }
 
-        public void OnNodeRoute(Action<ZLinkBackendRouteReceived> handler)
+        public void OnNodeRoute(
+            Func<IReadOnlyList<ZLinkBackendRouteReceived>, CancellationToken, ValueTask> handler,
+            ZLinkRuntimeTaskRunner taskRunner)
         {
-            NodeRouteHandler = handler;
+            NodeRouteHandler = records => _ = handler(records, CancellationToken.None);
             InitializationEvents.Enqueue("node-route-handler");
         }
 
@@ -10926,7 +11029,7 @@ public sealed partial class EntrySpotActorDispatchTests
                   ?? new NotSupportedException("No node request result was configured for this test.");
         }
 
-        public ValueTask<IReadOnlyList<Message>> RequestToNodeAsync(
+        public ValueTask<ZLinkBackendRouteReceived> RequestToNodeAsync(
             RoutingId targetNodeRid,
             IReadOnlyList<Message> parts,
             SendFlags flags,
@@ -10940,7 +11043,7 @@ public sealed partial class EntrySpotActorDispatchTests
             LastNodeRequestFlags = flags;
             _ = timeout;
             LastNodeRequestMetadata = metadata.ToArray();
-            return ValueTask.FromException<IReadOnlyList<Message>>(
+            return ValueTask.FromException<ZLinkBackendRouteReceived>(
                 NodeRequestFailure
                 ?? new NotSupportedException(
                     "No node request result was configured for this test."));
@@ -10948,8 +11051,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public bool SendActorBoundSession(
             ZLinkBackendActorRef actor,
-            IReadOnlyList<Message> parts,
-            SendFlags flags)
+            IReadOnlyList<Message> parts)
         {
             BoundSessionSendAttempts++;
             if (BoundSessionSendAccepted)
@@ -11042,8 +11144,7 @@ public sealed partial class EntrySpotActorDispatchTests
             RoutingId sourceNodeRid,
             RoutingId sourceSessionRid,
             Message message,
-            bool hasMore,
-            SendFlags flags)
+            bool hasMore)
         {
             BeforeForwardActorBoundSessionPart?.Invoke();
             var result = !ForwardResults.TryDequeue(out var configured) || configured;

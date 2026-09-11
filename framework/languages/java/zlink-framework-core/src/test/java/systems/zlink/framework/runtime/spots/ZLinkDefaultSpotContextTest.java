@@ -5,9 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.lang.reflect.Proxy;
+import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
@@ -19,6 +22,11 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.channels.ZLinkRequestCall;
+import systems.zlink.framework.channels.ZLinkSendCall;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
@@ -34,6 +42,40 @@ import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.spots.ZLinkSpot;
 
 final class ZLinkDefaultSpotContextTest {
+    @Test
+    void blockingTerminalsFailInsideSpotCallbacks() {
+        TestHost host = new TestHost();
+        try (Message sendPayload = Message.from("send");
+             Message requestPayload = Message.from("request");
+             ZLinkWorkerPool workers = new ZLinkWorkerPool(1, 1, Duration.ofSeconds(5), 4)) {
+            ZLinkSendCall send = new ZLinkSpotDirectSendCall(
+                null, host.backendSpot, RoutingId.from("target"), "target-spot", 1,
+                sendPayload, Optional.of("packet"));
+            ZLinkRequestCall request = new ZLinkSpotDirectRequestCall(
+                null, host.backendSpot, RoutingId.from("target"), "target-spot", 1,
+                requestPayload, Optional.of("packet"), Duration.ofSeconds(5));
+            Supplier<CompletionStage<Void>> callback = () -> {
+                assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    assertThrows(ZLinkFrameworkException.class, send::submit_sync).kind());
+                assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    assertThrows(ZLinkFrameworkException.class,
+                        () -> request.submit_sync(String.class)).kind());
+                assertFalse(sendPayload.empty());
+                assertFalse(requestPayload.empty());
+                return CompletableFuture.completedFuture(null);
+            };
+
+            host.userContext(ZLinkUserSpotExecutionMode.SPOT_WIDE)
+                .runLifecycleExecution(callback).toCompletableFuture().join();
+            host.userContext(ZLinkUserSpotExecutionMode.PER_ACTOR)
+                .enqueueActorDispatch("actor", 0, callback).toCompletableFuture().join();
+            host.entryContext().enqueueActorDispatch("actor", 0, callback)
+                .toCompletableFuture().join();
+            host.instanceContext(workers).runLifecycleExecution(callback)
+                .toCompletableFuture().join();
+        }
+    }
+
     @Test
     void lifecycleYieldIsLimitedToSharedSpotExecutions() {
         assertTrue(lifecycleYieldAllowed(
@@ -669,7 +711,8 @@ final class ZLinkDefaultSpotContextTest {
                 new ZLinkSpotHandlerLoader(
                     scannedHandlers,
                     new ZLinkSpotActorHandlerCatalog(
-                        scannedHandlers, null)),
+                        scannedHandlers, null),
+                    handlerType -> null),
                 "instance-mesh",
                 RoutingId.from("node-a"),
                 backendSpot);

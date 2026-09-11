@@ -410,6 +410,9 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             lower.start();
             higher.start();
 
+            assertFalse(lower.configuredPeerIds().contains(higherRid));
+            assertFalse(lower.isPeerTransportConnected(higherRid));
+
             lower.connectPeer(higherEndpoint, higherRid);
             higher.connectPeer(lowerEndpoint, lowerRid);
 
@@ -420,6 +423,9 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             assertEquals(1, higher.peers().size());
             assertEquals(MeshPeerState.ADMITTED, lowerPeer.state());
             assertEquals(MeshPeerState.ADMITTED, higherPeer.state());
+            assertTrue(lower.configuredPeerIds().contains(higherRid));
+            assertTrue(lower.isPeerTransportConnected(higherRid));
+            assertTrue(higher.isPeerTransportConnected(lowerRid));
 
             CompletableFuture<ZLinkMeshDispatchRecord> received =
                 new CompletableFuture<>();
@@ -471,6 +477,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
 
             peer.close();
             awaitState(local, MeshPeerState.CLOSED);
+            assertFalse(local.isPeerTransportConnected(peerRid));
 
             assertEquals(
                 ZLinkOneWayCalls.ROUTE_NOT_CONNECTED,
@@ -1084,6 +1091,80 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
+    void ingressReservesPermitBeforeReceiveAndCapsEachBatch() throws Exception {
+        String endpoint = "inproc://jvm-permit-before-receive-"
+            + System.nanoTime();
+        RoutingId sourceRid = RoutingId.from("jvm-permit-source");
+        RoutingId targetRid = RoutingId.from("jvm-permit-target");
+        var queue = new ZLinkApplicationJobQueue(
+            ZLinkApplicationJobQueueProfile.BALANCED,
+            OptionalLong.of(1),
+            new ZLinkApplicationJobQueue.ProcessorCandidates(
+                1, null, null, null));
+        CountDownLatch firstEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch secondEntered = new CountDownLatch(1);
+        AtomicInteger received = new AtomicInteger();
+        try (var context = Zlink.createContext();
+             var source = meshNode(context);
+             var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            target.setApplicationJobQueue(queue);
+            source.setRoutingId(sourceRid);
+            source.setBind("inproc://jvm-permit-source-" + System.nanoTime());
+            target.setRoutingId(targetRid);
+            target.setBind(endpoint);
+            target.startDispatch(record -> {
+                int ordinal = received.incrementAndGet();
+                if (ordinal == 1) {
+                    firstEntered.countDown();
+                    try {
+                        releaseFirst.await(2, TimeUnit.SECONDS);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                } else {
+                    secondEntered.countDown();
+                }
+                record.close();
+            });
+            source.start();
+            target.start();
+            source.connectPeer(endpoint, targetRid);
+            awaitAdmitted(source);
+
+            sendNodeMarker(source, targetRid, (byte) 1)
+                .get(2, TimeUnit.SECONDS);
+            assertTrue(firstEntered.await(2, TimeUnit.SECONDS));
+            sendNodeMarker(source, targetRid, (byte) 2);
+            Thread.sleep(100);
+            assertEquals(1, queue.snapshot().permitsInUse());
+            assertEquals(
+                systems.zlink.framework.monitoring
+                    .ZLinkApplicationJobQueuePressureState.PAUSED,
+                queue.snapshot().pressureState());
+            assertEquals(1, received.get());
+            assertEquals(64, ZLinkJavaRawMeshNode.ingressBatchLimit());
+
+            releaseFirst.countDown();
+            assertTrue(secondEntered.await(2, TimeUnit.SECONDS));
+        } finally {
+            releaseFirst.countDown();
+            queue.close();
+        }
+    }
+
+    private static CompletableFuture<Void> sendNodeMarker(
+        ZLinkJavaRawMeshNode source,
+        RoutingId target,
+        byte marker) {
+        try (Message packet = Message.from("permit.test");
+             Message payload = Message.from(new byte[] {marker})) {
+            return source.spotNode().sendToNode(
+                target, List.of(packet, payload)).toCompletableFuture();
+        }
+    }
+
+    @Test
     void messageFollowIsDeliveredAsInfrastructureWithoutApplicationDispatch()
         throws Exception {
         String endpoint =
@@ -1306,6 +1387,61 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     List.of(packet, payload))
                 .toCompletableFuture()
                 .get(2, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void channelRequestUsesOnlyTheCallerRegistryAndKeepsItsEnvelopeIdentity() throws Exception {
+        String endpoint = "inproc://jvm-single-operation-" + System.nanoTime();
+        RoutingId targetRid = RoutingId.from("single-operation-target");
+        try (var context = Zlink.createContext();
+             var target = meshNode(context);
+             var source = meshNode(context);
+             var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+             var caller = new systems.zlink.framework.runtime.internal.service
+                 .ZLinkServiceOperationRegistry(scheduler)) {
+            target.setRoutingId(targetRid);
+            target.setBind(endpoint);
+            target.addChannel("orders");
+            target.setChannelWeight("orders", 100);
+            source.setRoutingId(RoutingId.from("single-operation-source"));
+            source.setBind("inproc://jvm-single-operation-source-" + System.nanoTime());
+            target.start();
+            source.start();
+            source.connectPeer(endpoint, targetRid);
+            awaitAdmitted(source);
+            CompletableFuture<ZLinkMeshDispatchRecord> incoming = new CompletableFuture<>();
+            target.startDispatch(incoming::complete);
+            var id = systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds.next();
+            var header = systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.create(
+                1, "orders", "request", "application/json", null,
+                java.util.Map.of(), null, id);
+            try (Message encodedHeader = systems.zlink.framework.runtime.messaging
+                    .ZLinkChannelEnvelope.encodeHeader(header);
+                 Message body = Message.from("request")) {
+                var result = source.spotNode().requestToChannel("orders", new byte[0],
+                    List.of(encodedHeader, body), Duration.ofSeconds(2), caller, id)
+                    .toCompletableFuture();
+                try (var record = incoming.get(2, TimeUnit.SECONDS)) {
+                    assertEquals(1, caller.pendingCount());
+                    var field = ZLinkJavaRawMeshNode.class.getDeclaredField("operations");
+                    field.setAccessible(true);
+                    var meshRegistry = (systems.zlink.framework.runtime.internal.service
+                        .ZLinkServiceOperationRegistry) field.get(source);
+                    assertEquals(0, meshRegistry.pendingCount(),
+                        "the service node must not register the channel operation again");
+                    assertEquals(header.correlationId(), systems.zlink.framework.runtime.messaging
+                        .ZLinkChannelEnvelope.decodeHeader(record.parts().getFirst(), false)
+                        .correlationId());
+                    try (Message reply = Message.from("reply")) {
+                        record.reply(List.of(reply));
+                    }
+                }
+                try (var reply = result.get(2, TimeUnit.SECONDS)) {
+                    assertEquals("reply", reply.parts().getFirst().toUtf8String());
+                    assertEquals(0, caller.pendingCount());
+                }
+            }
         }
     }
 

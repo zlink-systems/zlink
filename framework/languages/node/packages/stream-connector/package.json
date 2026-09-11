@@ -1,7 +1,13 @@
 {
   "name": "@zlink-systems/stream-connector",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zlink-systems/zlink.git",
+    "directory": "framework/languages/node/packages/stream-connector"
+  },
+  "homepage": "https://zlink.systems/",
   "type": "module",
   "types": "dist/browser/index.d.ts",
   "files": [
@@ -15,6 +21,6 @@
     }
   },
   "dependencies": {
-    "@zlink-systems/stream-wire": "0.11.0"
+    "@zlink-systems/stream-wire": "0.11.1"
   }
 }

@@ -451,14 +451,12 @@ async def send_routed(
     routing_id=None,
     measurement=True,
     method="send",
-    _yield_after_submit=True,
 ):
     """Submit one HWM-managed send through the public async terminal.
 
-    PERF_MULTI_TEST_POLICY.md:61-71 and :92-93 forbid driving an HWM-managed
-    send through the synchronous terminal: the awaited terminal completes at
-    the Core admission result (bindings/doc/spec/async-coroutine-policy.ko.md
-    § 1), so the caller resumes at admission and never waits for the echo.
+    Immediate admission returns without scheduler pacing. Backpressure waits
+    only for this socket's binding-owned admission stage; it never waits for
+    an echo or retries outside the binding.
     """
 
     send_method = getattr(sock, method)
@@ -469,38 +467,38 @@ async def send_routed(
         op.messages(*payload)
     else:
         op.message(payload)
-    await op.submit()
-
-    # Immediate admission does not suspend the coroutine. Yield one scheduler
-    # turn for continuous send loops without a sleep or timer.
-    if _yield_after_submit:
-        loop = asyncio.get_running_loop()
-        resumed = loop.create_future()
-        loop.call_soon(resumed.set_result, None)
-        await resumed
+    submission = op.submit()
+    if submission.result == _require_zlink().SubmitResult.BACKPRESSURED:
+        await submission.admitted
     return True
 
 
 class RoutedReplySender:
-    """Submit routed reply snapshots in FIFO admission order."""
+    """Submit received routed parts in FIFO admission order."""
 
-    __slots__ = ("_ignored_results", "_pending", "_sock", "_task")
+    __slots__ = ("_available", "_ignored_results", "_pending", "_task")
 
-    def __init__(self, sock):
+    def __init__(self):
         zlink_mod = _require_zlink()
         self._ignored_results = {
             zlink_mod.SubmitResult.NOT_CONNECTED,
             zlink_mod.SubmitResult.NOT_FOUND,
         }
+        self._available = deque()
         self._pending = deque()
-        self._sock = sock
         self._task = None
 
-    def enqueue(self, payload, routing_id):
+    def enqueue(self, received):
         self.raise_if_failed()
-        self._pending.append((payload, routing_id))
+        self._pending.append(received)
         if self._task is None:
             self._task = asyncio.create_task(self._send_pending())
+
+    def acquire_storage(self):
+        self.raise_if_failed()
+        if self._available:
+            return self._available.popleft()
+        return _require_zlink().create_received()
 
     def raise_if_failed(self):
         if self._task is None or not self._task.done():
@@ -510,25 +508,49 @@ class RoutedReplySender:
         task.result()
 
     async def drain(self):
-        if self._task is not None:
-            await self._task
-            self._task = None
+        task = self._task
+        if task is not None:
+            try:
+                await task
+            finally:
+                self._task = None
 
     async def _send_pending(self):
         zlink_mod = _require_zlink()
-        while self._pending:
-            payload, routing_id = self._pending[0]
-            try:
-                await send_routed(
-                    self._sock,
-                    payload,
-                    routing_id=routing_id,
-                    _yield_after_submit=False,
-                )
-            except zlink_mod.SubmitError as exc:
-                if exc.result not in self._ignored_results:
-                    raise
-            self._pending.popleft()
+        try:
+            while self._pending:
+                received = self._pending.popleft()
+                try:
+                    try:
+                        submission = received.send().messages(*received.parts).submit()
+                        if submission.result == zlink_mod.SubmitResult.BACKPRESSURED:
+                            await submission.admitted
+                    except zlink_mod.SubmitError as exc:
+                        if exc.result not in self._ignored_results:
+                            raise
+                finally:
+                    received.close()
+                self._available.append(received)
+        finally:
+            while self._pending:
+                self._pending.popleft().close()
+
+
+def enqueue_received_reply(sender, received):
+    transferred = False
+    try:
+        if len(received.parts) != measurement_part_count():
+            raise RuntimeError("invalid measured multipart request")
+        if len(received.parts) == 2 and len(received.parts[1]) != 0:
+            raise RuntimeError("invalid measured multipart trailing frame")
+        if received.routing_id is None:
+            raise RuntimeError("request is missing routing metadata")
+        sender.enqueue(received)
+        transferred = True
+        return sender.acquire_storage()
+    finally:
+        if not transferred:
+            received.close()
 
 
 

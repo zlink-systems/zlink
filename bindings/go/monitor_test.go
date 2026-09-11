@@ -204,7 +204,7 @@ func sendAfterConnect(t testing.TB, dealer *zlink.DealerSocket, msg *zlink.Messa
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := dealer.Send().Message(msg).Submit(ctx); err != nil {
+	if err := submitAndWait(ctx, dealer.Send().Message(msg)); err != nil {
 		t.Fatalf("dealer Send() error = %v", err)
 	}
 }

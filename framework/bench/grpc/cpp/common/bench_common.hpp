@@ -8,6 +8,8 @@
 #ifndef ZLINK_CPP_BENCH_WITH_GRPC_COMMON_HPP
 #define ZLINK_CPP_BENCH_WITH_GRPC_COMMON_HPP
 
+#include "bench.pb.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -19,6 +21,8 @@
 #include <mutex>
 #include <optional>
 #include <sstream>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -131,96 +135,15 @@ inline bool decode_payload (const void *payload, size_t payload_size, decoded_he
     return out->magic == k_magic;
 }
 
-// ---------------------------------------------------------------------------
-// protobuf BenchPayload{bytes body = 1} by hand
-//
-// FB-024: the raw ZLink row must put the same bytes on the wire as `zlink-c`,
-// because formula 1 divides one by the other. The C bench hand-encodes field 1
-// (`bench_zlink_client.cpp:130-140`); this does the same so the raw row never
-// depends on which protobuf runtime a language happens to link.
-// ---------------------------------------------------------------------------
-
-inline size_t varint_size (size_t value)
+// The raw transport serializes the same typed payload as gRPC and Framework.
+// Envelope headers below remain protocol constants.
+inline std::string encode_bench_payload (
+  const zlink::framework::bench::withgrpc::BenchPayload &payload)
 {
-    size_t n = 1;
-    while (value >= 0x80) {
-        value >>= 7;
-        ++n;
-    }
-    return n;
-}
-
-inline unsigned char *write_varint (unsigned char *dst, size_t value)
-{
-    while (value >= 0x80) {
-        *dst++ = static_cast<unsigned char> ((value & 0x7fU) | 0x80U);
-        value >>= 7;
-    }
-    *dst++ = static_cast<unsigned char> (value);
-    return dst;
-}
-
-inline bool read_varint (const unsigned char *&p, const unsigned char *end, size_t *value)
-{
-    size_t result = 0;
-    unsigned shift = 0;
-    while (p < end && shift < sizeof (size_t) * 8) {
-        const unsigned char byte = *p++;
-        result |= static_cast<size_t> (byte & 0x7fU) << shift;
-        if ((byte & 0x80U) == 0) {
-            *value = result;
-            return true;
-        }
-        shift += 7;
-    }
-    return false;
-}
-
-inline bool decode_bench_payload_body (const void *data,
-                                       size_t size,
-                                       const unsigned char **body,
-                                       size_t *body_size)
-{
-    if (!data || !body || !body_size)
-        return false;
-    const unsigned char *p = static_cast<const unsigned char *> (data);
-    const unsigned char *end = p + size;
-    while (p < end) {
-        size_t key = 0;
-        if (!read_varint (p, end, &key))
-            return false;
-        const size_t field = key >> 3;
-        const size_t wire_type = key & 0x07U;
-        if (wire_type != 2)
-            return false;
-        size_t len = 0;
-        if (!read_varint (p, end, &len) || static_cast<size_t> (end - p) < len)
-            return false;
-        if (field == 1) {
-            *body = p;
-            *body_size = len;
-            return true;
-        }
-        p += len;
-    }
-    return false;
-}
-
-// Encodes BenchPayload{body} into `out` and stamps the spec 6 header into the
-// body. Returns the offset of the body inside `out`.
-inline size_t encode_bench_payload (std::vector<unsigned char> &out,
-                                    size_t payload_size,
-                                    uint32_t run_id,
-                                    phase_t phase,
-                                    uint64_t seq)
-{
-    const size_t body_size = std::max (payload_size, k_header_size);
-    out.assign (1 + varint_size (body_size) + body_size, 0xab);
-    out[0] = 0x0a;
-    unsigned char *body = write_varint (out.data () + 1, body_size);
-    std::memset (body, 0xab, body_size);
-    stamp_payload (body, body_size, run_id, phase, seq);
-    return static_cast<size_t> (body - out.data ());
+    std::string encoded;
+    if (!payload.SerializeToString (&encoded))
+        throw std::runtime_error ("cannot serialize BenchPayload");
+    return encoded;
 }
 
 // ---------------------------------------------------------------------------

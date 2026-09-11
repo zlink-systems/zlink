@@ -37,6 +37,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocati
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityExhausted;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
@@ -496,7 +497,8 @@ public final class ZLinkSpotRuntime
         ZLinkScannedHandlerCatalog scannedHandlers =
             ZLinkHandlerScanner.scan(registration.handlerPackageMarkers());
         this.actorHandlers = new ZLinkSpotActorHandlerCatalog(scannedHandlers, serializer);
-        this.handlerLoader = new ZLinkSpotHandlerLoader(scannedHandlers, actorHandlers);
+        this.handlerLoader = new ZLinkSpotHandlerLoader(
+            scannedHandlers, actorHandlers, handlerFactory);
         ZLinkChannelBackendAdapter channelAdapter =
             backendFactory.createChannelAdapter(adapterOptions);
         ZLinkSpotBackendAdapter spotAdapter = registration.spotNodes().isEmpty()
@@ -2204,6 +2206,16 @@ public final class ZLinkSpotRuntime
     public ZLinkInstanceSpotCallRuntime instanceSpotCalls() {
         return new ZLinkInstanceSpotCallRuntime() {
             @Override
+            public String metricMeshName(
+                String requestedMesh,
+                String callerMesh) {
+                return requestedMesh != null
+                        && nodesByName.containsKey(requestedMesh)
+                    ? requestedMesh
+                    : callerMesh;
+            }
+
+            @Override
             public CompletionStage<Boolean> isStaleRoute(
                 String spotId,
                 SpotTransportAddress address) {
@@ -3531,6 +3543,10 @@ public final class ZLinkSpotRuntime
     }
 
     private String meshNameForSpot(String spotId) {
+        ZLinkInstanceSpotActivation instance = instanceSpotActivations.get(spotId);
+        if (instance != null) {
+            return instance.context.meshName();
+        }
         return spotLocations.meshNameForSpot(
             spotId,
             primaryNode.routingId(),
@@ -5126,10 +5142,19 @@ public final class ZLinkSpotRuntime
             errorMessage(failure.error)));
     }
 
+    void recordSpotDrop(String spotId, String reason) {
+        if (ZLinkRuntimeMetrics.enabled()) {
+            ZLinkMeshMessageMetrics
+                .forMesh(meshNameForSpot(spotId)).dropped(
+                    instanceSpotActivations.containsKey(spotId) ? "instance_spot" : "spot", reason);
+        }
+    }
+
     void reportSpotRouteSendDropped(
         ZLinkBackendReceived received,
         String packetName,
         String spotId) {
+        recordSpotDrop(spotId, "no_handler");
         reportDispatchError(DispatchFailureReport.of(
                 ZLinkDispatchErrorSurface.SPOT_ROUTE,
                 ZLinkDispatchMessageKind.SEND,
@@ -5146,6 +5171,7 @@ public final class ZLinkSpotRuntime
         String packetName,
         String spotId,
         Throwable error) {
+        recordSpotDrop(spotId, "decode_error");
         reportDispatchError(DispatchFailureReport.of(
                 ZLinkDispatchErrorSurface.SPOT_ROUTE,
                 ZLinkDispatchMessageKind.SEND,
@@ -5178,6 +5204,10 @@ public final class ZLinkSpotRuntime
         String actorId,
         RoutingId sourceRid) {
         boolean request = packetHeader.requestSeq().isPresent();
+        if (!request && ZLinkRuntimeMetrics.enabled()) {
+            ZLinkMeshMessageMetrics
+                .forMesh(meshNameForSpot(spotId)).dropped("actor", "no_handler");
+        }
         reportDispatchError(DispatchFailureReport.of(
                 ZLinkDispatchErrorSurface.SPOT_ACTOR,
                 request
@@ -5311,6 +5341,12 @@ public final class ZLinkSpotRuntime
         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header =
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
                 .decodeDispatchHeader(parts, false);
+        return parsePacket(parts, header);
+    }
+
+    static ParsedPacket parsePacket(
+        List<Message> parts,
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
         if (header != null) {
             return new ParsedPacket(header.messageName(), parts.get(1), header);
         }

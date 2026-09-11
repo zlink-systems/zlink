@@ -41,16 +41,15 @@ void recv_router_payload (void *router_, const char *expected_rid_,
     uint64_t request_seq = UINT64_MAX;
     zlink_msg_t part;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
-      zlink_router_recv_part (router_, &source_rid, &request_seq, &part,
-                              &has_more, ZLINK_RECV_FLAGS_NONE));
+      zlink_router_recv (router_, &source_rid, &request_seq, &part, 1, &has_more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source_rid);
     TEST_ASSERT_EQUAL_UINT64 (strlen (expected_rid_), source_rid->size);
     TEST_ASSERT_EQUAL_MEMORY (expected_rid_, source_rid->data, source_rid->size);
     TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_UINT64 (strlen (expected_payload_), zlink_msg_size (&part));
     TEST_ASSERT_EQUAL_MEMORY (expected_payload_, zlink_msg_data (&part),
                               zlink_msg_size (&part));
@@ -258,10 +257,8 @@ void test_weighted_dealer_preserves_peer_weight_after_backpressure ()
                 uint64_t request_seq = UINT64_MAX;
                 zlink_msg_t part;
                 TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
-                zlink_part_flag_t has_more = ZLINK_PART_MORE;
-                const zlink_recv_result_t rc = zlink_router_recv_part (
-                  routers[router_index], &source_rid, &request_seq, &part,
-                  &has_more, ZLINK_RECV_FLAGS_DONTWAIT);
+                size_t has_more = 0;
+                const zlink_recv_result_t rc = zlink_router_recv (routers[router_index], &source_rid, &request_seq, &part, 1, &has_more, ZLINK_RECV_FLAGS_DONTWAIT);
                 if (rc == ZLINK_RECV_NO_DATA) {
                     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
                     continue;
@@ -270,7 +267,7 @@ void test_weighted_dealer_preserves_peer_weight_after_backpressure ()
                 TEST_ASSERT_NOT_NULL (source_rid);
                 TEST_ASSERT_GREATER_THAN_INT (0, source_rid->size);
                 TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
-                TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+                TEST_ASSERT_EQUAL_INT (1, has_more);
                 TEST_ASSERT_EQUAL_UINT64 (4, zlink_msg_size (&part));
                 TEST_ASSERT_EQUAL_MEMORY ("next", zlink_msg_data (&part), 4);
                 TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));

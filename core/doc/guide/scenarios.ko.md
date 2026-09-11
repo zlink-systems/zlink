@@ -13,10 +13,10 @@ title: "Core 사용 시나리오"
 
 | 요구 사항 | Socket pattern | 핵심 API |
 |---|---|---|
-| Thread 사이 일대일 통신 | PAIR | `zlink_send_part`, `zlink_recv_part` |
-| Topic 기반 단방향 배포 | PUB/SUB | `zlink_publish_part`, `zlink_subscribe_part` |
-| 비동기 routed request/reply | DEALER/ROUTER | `zlink_request_part`, `zlink_completion_recv`, `zlink_reply_part` |
-| 여러 peer에 routing id로 송신 | ROUTER | `zlink_send_part_rid`, `zlink_router_recv_part` |
+| Thread 사이 일대일 통신 | PAIR | `zlink_send`, `zlink_recv` |
+| Topic 기반 단방향 배포 | PUB/SUB | `zlink_publish`, `zlink_subscribe` |
+| 비동기 routed request/reply | DEALER/ROUTER | `zlink_request`, `zlink_completion_recv`, `zlink_reply` |
+| 여러 peer에 routing id로 송신 | ROUTER | `zlink_send_rid`, `zlink_router_recv` |
 | 외부 TCP 계열 client 연동 | STREAM | `zlink_stream_recv_packet` |
 | Readiness 통합 대기 | poller | `zlink_poller_add`, `zlink_poller_wait` |
 | 연결 상태 관찰 | socket monitor | `zlink_socket_monitor_open`, `zlink_socket_monitor_recv` |

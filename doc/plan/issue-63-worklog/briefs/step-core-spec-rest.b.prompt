@@ -1,0 +1,65 @@
+Coding sub-agent for zlink Issue #63. Work ONLY in this worktree; commit to its detached HEAD. Do NOT
+push/PR. This task DOES edit spec docs (core/doc/spec/**) — the supervisor has explicitly delegated
+the remaining mechanical spec propagation to you for speed; apply already-decided contracts, do not
+invent new ones.
+
+== Authoritative pattern (already committed — copy this style/decisions) ==
+- core/doc/spec/core/socket/README.ko.md and README.en.md are ALREADY rewritten to the new
+  whole-message API. Use them as the reference for wording, structure, and the exact new signatures.
+- doc/plan/issue-63-worklog/binding-migration-ref.ko.md — the removal→replacement map + D63-6..8.
+- doc/draft/core-whole-message-recv-api.ko.md §7 — design/rationale, removal list, new signatures.
+- Writing principles you MUST follow: doc/principal/documentation/spec-writing-guide.ko.md,
+  guide-writing-guide.ko.md, documentation-principles.ko.md. Key: plain/easy language (원칙 §7),
+  each section starts with the result; enum/field/option meaning as INLINE comments on the
+  declaration (not separate tables) (§8.3); contract vs implementation direction (§4.4); verification
+  section (§9.3) interface-observable only; nav lines + concept-first (§2.2); do NOT invent
+  names/numbers not in the source.
+
+== The API change (same across all files) ==
+REMOVED (must not appear anywhere in core/doc/spec except as history): zlink_send_part,
+zlink_send_part_rid, zlink_request_part, zlink_reply_part, zlink_publish_part, zlink_recv_part,
+zlink_router_recv_part, zlink_subscribe_part, zlink_xpub_recv_part, the type zlink_part_flag_t and
+ZLINK_PART_MORE / ZLINK_PART_FINAL, and the "one record from first MORE to FINAL on the same thread"
+rule + mid-sequence BUSY + failed-FINAL-discards-staged-prefix rule.
+ADDED (whole-message, array + count; signatures verbatim from README): zlink_send, zlink_send_rid,
+zlink_request, zlink_reply, zlink_publish, zlink_recv, zlink_router_recv, zlink_subscribe,
+zlink_xpub_recv. KEPT: zlink_stream_recv_packet, zlink_multipart_close, zlink_completion_*.
+Contracts D63-6..8: capacity<part_count → non-consuming ZLINK_RECV_BUFFER_TOO_SMALL(ENOBUFS)+needed
+count, retry gets same record; STREAM RAW recv via zlink_recv (1 part), STREAM send count==1 (empty
+part to valid RID disconnects that peer); whole-record retry (no partial). part send consumes all
+input slots.
+
+== TASK: finish EVERY remaining Core spec file so it matches the new API ==
+Files (edit BOTH .ko.md and .en.md, keep their C blocks byte-identical between ko/en):
+  core/doc/spec/core/socket/README.{ko,en}.md  — only the residual backpressure/admission prose and
+    verification bullets still say `MORE`/`FINAL`/part functions; fix those (the main sections are done).
+  core/doc/spec/core/socket/01-pair, 06-dealer, 07-router, 02-pub, 03-sub, 04-xpub, 05-xsub,
+    08-stream (.ko/.en)
+  core/doc/spec/core/02-message, 01-context (.ko/.en)
+  core/doc/spec/core/systems/10-hot-path (.ko/.en)
+  core/doc/spec/core/protocol/01-zmp, 02-raw (.ko/.en) — only if they name removed public symbols
+For each: replace removed part functions with their whole-message replacement (signatures/prose per
+README), rewrite send/recv/subscribe sections to whole-message, delete the part-sequence thread rules,
+remove zlink_part_flag_t declarations and MORE/FINAL enum refs, keep STREAM's dedicated
+stream_recv_packet and single-part send, and keep every still-valid rule (rid/token, ownership,
+backpressure, capacity, DONTWAIT, record atomicity). Plain, easy language.
+
+== Verify (spec ⇔ built new-only libzlink) ==
+Run the public-surface contract check DIRECTLY against THIS worktree's spec and the shared libzlink:
+  python3 core/tests/contract/check_public_surface.py "$PWD" core/build-dev/lib/libzlink.so nm
+It must print PASS (spec FUNC/enum set == exported symbols, ko/en C blocks identical). Iterate until
+PASS. Also run `git diff --check`. Do NOT rebuild Core (core/build-dev is a shared symlink; read-only).
+
+== Commit (detached HEAD; may be several commits, one per file group is fine) ==
+  core(spec): finish whole-message propagation across remaining socket/message specs
+
+  <files>. Removed part API + zlink_part_flag_t from spec; whole-message send/recv/subscribe/
+  xpub_recv per socket; STREAM/SUB/XSUB updated; ko/en identical. check_public_surface.py PASS. Refs #63.
+
+  Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01Df7vbMq5yraG6siDn8PAUH
+
+== Deliverable ==
+All remaining Core spec files consistent with the new API, check_public_surface.py PASS, committed.
+Report: files changed, the exact check_public_surface.py output, and any spot where the source did not
+determine an answer (list as BLOCKERS for the supervisor rather than inventing).

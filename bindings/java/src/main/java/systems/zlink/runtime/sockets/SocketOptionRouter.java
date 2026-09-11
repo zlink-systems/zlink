@@ -101,7 +101,6 @@ final class SocketOptionRouter {
             case 54 -> 0x301B;
             case 57 -> 0x301C;
             case 66 -> 0x301D;
-            case 70 -> 0x301E;
             case 74 -> 0x3020;
             case 75 -> 0x3021;
             case 76 -> 0x3022;

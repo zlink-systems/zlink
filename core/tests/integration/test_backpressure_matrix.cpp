@@ -956,7 +956,7 @@ void run_empty_pipe_oversize_bound (int64_t receiver_maxmsgsize_, bool expect_ad
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&msg, oversize_bytes));
     memset (zlink_msg_data (&msg), 'o', oversize_bytes);
     const zlink_submit_result_t rc =
-      zlink_send_part (sender, &msg, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL, NULL);
+      zlink_send (sender, &msg, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL, NULL);
     if (expect_admitted_) {
         TEST_ASSERT_EQUAL_INT (static_cast<int> (ZLINK_SUBMIT_OK), static_cast<int> (rc));
     } else {
@@ -969,8 +969,7 @@ void run_empty_pipe_oversize_bound (int64_t receiver_maxmsgsize_, bool expect_ad
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&valid, 1));
         TEST_ASSERT_EQUAL_INT (
           ZLINK_SUBMIT_OK,
-          zlink_send_part (
-            sender, &valid, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL, NULL));
+          zlink_send (sender, &valid, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL, NULL));
     }
 
     test_context_socket_close_zero_linger (sender);
@@ -1010,8 +1009,7 @@ void test_unlimited_hwm_still_enforces_max_message_size ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&msg, 64u * 1024u));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_INVALID_ARGUMENT,
-      zlink_send_part (
-        sender, &msg, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL, NULL));
+      zlink_send (sender, &msg, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (EMSGSIZE, errno);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
 
@@ -1019,8 +1017,7 @@ void test_unlimited_hwm_still_enforces_max_message_size ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&valid, 1));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (
-        sender, &valid, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL, NULL));
+      zlink_send (sender, &valid, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL, NULL));
 
     test_context_socket_close_zero_linger (sender);
     test_context_socket_close_zero_linger (receiver);
@@ -1050,19 +1047,15 @@ void test_pubsub_incomplete_multipart_stops_at_max_message_size ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sub, endpoint));
     msleep (SETTLE_TIME);
 
-    zlink_msg_t first;
-    zlink_msg_t exceeds_max;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&first, 400));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&exceeds_max, 700));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_publish_part (
-        pub, kTopic, &first, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_MORE));
+    zlink_msg_t invalid_record[2];
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&invalid_record[0], 400));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&invalid_record[1], 700));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_INVALID_ARGUMENT,
-      zlink_publish_part (
-        pub, kTopic, &exceeds_max, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_MORE));
+      zlink_publish (pub, kTopic, invalid_record, 2,
+                     ZLINK_SEND_FLAGS_DONTWAIT));
     TEST_ASSERT_EQUAL_INT (EMSGSIZE, errno);
+    zlink_multipart_close (invalid_record, 2);
 
     zlink_msg_t valid;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&valid, strlen ("valid")));

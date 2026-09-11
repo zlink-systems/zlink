@@ -90,6 +90,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         ZLinkHandlerDispatcher dispatcher)
     {
         Services = services;
+        handlerRegistry.PrepareInstances(services);
+        ZLinkScopedHandlerInstanceOwner.Prepare(services, registration.Filters);
         _actorHandoffAdmissions = new ZLinkActorHandoffAdmissions(
             diagnostic: LogActorHandoff);
         _backendAdapterFactory = backendAdapterFactory;

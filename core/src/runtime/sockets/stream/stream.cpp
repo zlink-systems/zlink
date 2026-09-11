@@ -272,15 +272,24 @@ void zlink::stream_t::xpipe_terminated (pipe_t *pipe_)
         erase_out_pipe (pipe_);
         _fq.pipe_terminated (pipe_);
     }
+    zlink_routing_id_t rid = {};
+    rid.size = sizeof (server_routing_id);
+    put_uint32 (rid.data, server_routing_id);
+    fail_blocking_send_waits_for_logical_target (&rid, ENOTCONN);
 
 }
 
-int zlink::stream_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
+int zlink::stream_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_,
+                                     pipe_t **target_out_,
+                                     bool *delay_out_)
 {
-    if (!peer_rid_ || peer_rid_->size != sizeof (uint32_t)) {
+    if (!peer_rid_ || peer_rid_->size != sizeof (uint32_t) || !target_out_
+        || !delay_out_) {
         errno = EINVAL;
         return -1;
     }
+    *target_out_ = NULL;
+    *delay_out_ = false;
 
     const uint32_t routing_id = get_uint32 (peer_rid_->data);
     fail_blocking_send_waits_for_logical_target (peer_rid_, ENOENT);
@@ -293,14 +302,18 @@ int zlink::stream_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
             // the disconnect request. The peer receives the pipe delimiter
             // only after those frames, which enables protocol-level closing
             // notifications without a timing workaround.
-            route_pipe->terminate (true);
-            terminated = true;
+            terminated = route_pipe->retain_lifetime_ref ();
+            if (terminated) {
+                *target_out_ = route_pipe;
+                *delay_out_ = true;
+            }
         }
     }
     if (terminated)
         return 0;
 
-    return terminate_out_pipe_by_routing_id (peer_rid_);
+    return prepare_out_pipe_termination_by_routing_id (peer_rid_,
+                                                        target_out_);
 }
 
 bool zlink::stream_t::packet_queue_at_limit () const
@@ -385,7 +398,8 @@ int zlink::stream_t::decode_packet_bytes (uint32_t source_rid_,
         state.reset ();
         unsigned char source_rid_bytes[sizeof (source_rid_)];
         put_uint32 (source_rid_bytes, source_rid_);
-        event_disconnected (source_pipe_->get_endpoint_pair (), failure_errno_,
+        event_disconnected (source_pipe_->get_endpoint_pair (),
+                            ZLINK_DISCONNECT_REASON_TRANSPORT_ERROR,
                             source_rid_bytes, sizeof (source_rid_bytes));
         source_pipe_->terminate (false);
         _fq.deactivate (source_pipe_);

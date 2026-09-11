@@ -13,8 +13,14 @@
 
 #include <nlohmann/json.hpp>
 
+#include <opentelemetry/metrics/provider.h>
+#include <opentelemetry/nostd/variant.h>
+#include <opentelemetry/metrics/noop.h>
+
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -65,43 +71,538 @@ struct server_options_t
     }
 };
 
-/* Aggregates the config-11 §3 evidence arrays. The runtime emits structured
- * log fields, while this public evidence endpoint exposes the metric shape
- * used by the E2E contract: instrument kind and value are metric properties;
- * the remaining low-cardinality fields are labels. */
-class observability_evidence_t
+struct metric_descriptor_t
+{
+    std::string name;
+    std::string unit;
+    std::string kind;
+    std::string temporality;
+};
+
+class evidence_metric_capture_t
 {
   public:
-    void record_metric (const fw::log_record_t &record)
+    void record_sync (const metric_descriptor_t &descriptor,
+                      double value,
+                      const opentelemetry::common::KeyValueIterable &attributes) noexcept
     {
-        nlohmann::json metric = nlohmann::json::object ();
-        nlohmann::json tags = nlohmann::json::object ();
-        for (const auto &field : record.fields) {
-            if (field.key == "instrument_kind") {
-                metric["kind"] = field.value;
-            } else if (field.key == "value") {
-                metric["value"] = std::stod (field.value);
-            } else if (field.key == "name" || field.key == "unit"
-                       || field.key == "temporality") {
-                metric[field.key] = field.value;
-            } else {
-                tags[field.key] = field.value;
-            }
-        }
-        metric["tags"] = std::move (tags);
+        record (_synchronous, descriptor, value, attributes);
+    }
+
+    void begin_observable_collection () noexcept
+    {
         std::lock_guard lock (_mutex);
-        _metrics.push_back (std::move (metric));
+        _observables.clear ();
+    }
+
+    void record_observable (const metric_descriptor_t &descriptor,
+                            double value,
+                            const opentelemetry::common::KeyValueIterable &attributes) noexcept
+    {
+        record (_observables, descriptor, value, attributes);
     }
 
     nlohmann::json snapshot () const
     {
         std::lock_guard lock (_mutex);
-        return nlohmann::json{{"metrics", _metrics}, {"drainEvents", _drain_events}};
+        nlohmann::json metrics = nlohmann::json::array ();
+        for (const auto &metric : _synchronous)
+            metrics.push_back (metric);
+        for (const auto &metric : _observables)
+            metrics.push_back (metric);
+        return metrics;
     }
 
   private:
+    static nlohmann::json tags_of (const opentelemetry::common::KeyValueIterable &attributes)
+    {
+        nlohmann::json tags = nlohmann::json::object ();
+        attributes.ForEachKeyValue (
+          [&] (opentelemetry::nostd::string_view key, opentelemetry::common::AttributeValue value) {
+              if (const auto *string =
+                    opentelemetry::nostd::get_if<opentelemetry::nostd::string_view> (&value))
+                  tags[std::string (key.data (), key.size ())] =
+                    std::string (string->data (), string->size ());
+              else if (const auto *string = opentelemetry::nostd::get_if<const char *> (&value))
+                  tags[std::string (key.data (), key.size ())] = *string;
+              return true;
+          });
+        return tags;
+    }
+
+    void record (std::vector<nlohmann::json> &destination,
+                 const metric_descriptor_t &descriptor,
+                 double value,
+                 const opentelemetry::common::KeyValueIterable &attributes) noexcept
+    {
+        nlohmann::json metric{{"name", descriptor.name}, {"unit", descriptor.unit},
+                              {"kind", descriptor.kind}, {"temporality", descriptor.temporality},
+                              {"value", value},          {"tags", tags_of (attributes)}};
+        std::lock_guard lock (_mutex);
+        destination.push_back (std::move (metric));
+    }
+
     mutable std::mutex _mutex;
-    std::vector<nlohmann::json> _metrics;
+    std::vector<nlohmann::json> _synchronous;
+    std::vector<nlohmann::json> _observables;
+};
+
+class evidence_observable_t
+{
+  public:
+    virtual ~evidence_observable_t () = default;
+    virtual void collect () noexcept = 0;
+};
+
+template <typename T, template <typename> class base_t>
+class evidence_add_t final : public base_t<T>
+{
+  public:
+    evidence_add_t (std::shared_ptr<evidence_metric_capture_t> capture,
+                    metric_descriptor_t descriptor) :
+        base_t<T> (descriptor.name.c_str (), "", descriptor.unit.c_str ()),
+        _capture (std::move (capture)),
+        _descriptor (std::move (descriptor))
+    {
+    }
+
+    void Add (T value) noexcept override { record (value, empty_attributes ()); }
+
+    void Add (T value, const opentelemetry::context::Context &) noexcept override
+    {
+        record (value, empty_attributes ());
+    }
+
+    void Add (T value, const opentelemetry::common::KeyValueIterable &attributes) noexcept override
+    {
+        record (value, attributes);
+    }
+
+    void Add (T value,
+              const opentelemetry::common::KeyValueIterable &attributes,
+              const opentelemetry::context::Context &) noexcept override
+    {
+        record (value, attributes);
+    }
+
+  private:
+    static const opentelemetry::common::NoopKeyValueIterable &empty_attributes ()
+    {
+        static const opentelemetry::common::NoopKeyValueIterable value;
+        return value;
+    }
+
+    void record (T value, const opentelemetry::common::KeyValueIterable &attributes) noexcept
+    {
+        _capture->record_sync (_descriptor, static_cast<double> (value), attributes);
+    }
+
+    std::shared_ptr<evidence_metric_capture_t> _capture;
+    metric_descriptor_t _descriptor;
+};
+
+template <typename T>
+class evidence_histogram_t final : public opentelemetry::metrics::NoopHistogram<T>
+{
+  public:
+    evidence_histogram_t (std::shared_ptr<evidence_metric_capture_t> capture,
+                          metric_descriptor_t descriptor) :
+        opentelemetry::metrics::NoopHistogram<T> (
+          descriptor.name.c_str (), "", descriptor.unit.c_str ()),
+        _capture (std::move (capture)),
+        _descriptor (std::move (descriptor))
+    {
+    }
+
+    void Record (T value, const opentelemetry::context::Context &) noexcept override
+    {
+        record (value, empty_attributes ());
+    }
+
+    void Record (T value,
+                 const opentelemetry::common::KeyValueIterable &attributes,
+                 const opentelemetry::context::Context &) noexcept override
+    {
+        record (value, attributes);
+    }
+
+  private:
+    static const opentelemetry::common::NoopKeyValueIterable &empty_attributes ()
+    {
+        static const opentelemetry::common::NoopKeyValueIterable value;
+        return value;
+    }
+
+    void record (T value, const opentelemetry::common::KeyValueIterable &attributes) noexcept
+    {
+        _capture->record_sync (_descriptor, static_cast<double> (value), attributes);
+    }
+
+    std::shared_ptr<evidence_metric_capture_t> _capture;
+    metric_descriptor_t _descriptor;
+};
+
+template <typename T>
+class evidence_observable_instrument_t final : public opentelemetry::metrics::ObservableInstrument,
+                                               public evidence_observable_t
+{
+  public:
+    evidence_observable_instrument_t (std::shared_ptr<evidence_metric_capture_t> capture,
+                                      metric_descriptor_t descriptor,
+                                      void *meter,
+                                      void (*add) (void *, evidence_observable_t *) noexcept,
+                                      void (*remove) (void *, evidence_observable_t *) noexcept) :
+        _capture (std::move (capture)),
+        _descriptor (std::move (descriptor)),
+        _meter (meter),
+        _remove (remove)
+    {
+        add (_meter, this);
+    }
+
+    ~evidence_observable_instrument_t () override { _remove (_meter, this); }
+
+    void AddCallback (opentelemetry::metrics::ObservableCallbackPtr callback,
+                      void *state) noexcept override
+    {
+        std::lock_guard lock (_mutex);
+        _callbacks.push_back ({callback, state});
+    }
+
+    void RemoveCallback (opentelemetry::metrics::ObservableCallbackPtr callback,
+                         void *state) noexcept override
+    {
+        std::lock_guard lock (_mutex);
+        _callbacks.erase (std::remove_if (_callbacks.begin (), _callbacks.end (),
+                                          [&] (const auto &entry) {
+                                              return entry.callback == callback
+                                                     && entry.state == state;
+                                          }),
+                          _callbacks.end ());
+    }
+
+    void collect () noexcept override
+    {
+        std::lock_guard lock (_mutex);
+        for (const auto &entry : _callbacks) {
+            opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObserverResultT<T>> observer (
+              new observer_t (_capture, _descriptor));
+            entry.callback (opentelemetry::metrics::ObserverResult{std::move (observer)},
+                            entry.state);
+        }
+    }
+
+  private:
+    class observer_t final : public opentelemetry::metrics::ObserverResultT<T>
+    {
+      public:
+        observer_t (std::shared_ptr<evidence_metric_capture_t> capture,
+                    metric_descriptor_t descriptor) :
+            _capture (std::move (capture)), _descriptor (std::move (descriptor))
+        {
+        }
+
+        void Observe (T value) noexcept override
+        {
+            _capture->record_observable (_descriptor, static_cast<double> (value),
+                                         empty_attributes ());
+        }
+
+        void Observe (T value,
+                      const opentelemetry::common::KeyValueIterable &attributes) noexcept override
+        {
+            _capture->record_observable (_descriptor, static_cast<double> (value), attributes);
+        }
+
+      private:
+        static const opentelemetry::common::NoopKeyValueIterable &empty_attributes ()
+        {
+            static const opentelemetry::common::NoopKeyValueIterable value;
+            return value;
+        }
+
+        std::shared_ptr<evidence_metric_capture_t> _capture;
+        metric_descriptor_t _descriptor;
+    };
+
+    struct callback_t
+    {
+        opentelemetry::metrics::ObservableCallbackPtr callback;
+        void *state;
+    };
+
+    std::shared_ptr<evidence_metric_capture_t> _capture;
+    metric_descriptor_t _descriptor;
+    void *_meter;
+    void (*_remove) (void *, evidence_observable_t *) noexcept;
+    std::mutex _mutex;
+    std::vector<callback_t> _callbacks;
+};
+
+class evidence_meter_t final : public opentelemetry::metrics::Meter
+{
+  public:
+    explicit evidence_meter_t (std::shared_ptr<evidence_metric_capture_t> capture) :
+        _capture (std::move (capture))
+    {
+    }
+
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Counter<std::uint64_t>>
+    CreateUInt64Counter (opentelemetry::nostd::string_view name,
+                         opentelemetry::nostd::string_view,
+                         opentelemetry::nostd::string_view unit) noexcept override
+    {
+        return make_counter<std::uint64_t> (name, unit);
+    }
+
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Counter<double>>
+    CreateDoubleCounter (opentelemetry::nostd::string_view name,
+                         opentelemetry::nostd::string_view,
+                         opentelemetry::nostd::string_view unit) noexcept override
+    {
+        return make_counter<double> (name, unit);
+    }
+
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument>
+    CreateInt64ObservableCounter (opentelemetry::nostd::string_view name,
+                                  opentelemetry::nostd::string_view,
+                                  opentelemetry::nostd::string_view unit) noexcept override
+    {
+        return make_observable<std::int64_t> (name, unit, "counter", "cumulative");
+    }
+
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument>
+    CreateDoubleObservableCounter (opentelemetry::nostd::string_view name,
+                                   opentelemetry::nostd::string_view,
+                                   opentelemetry::nostd::string_view unit) noexcept override
+    {
+        return make_observable<double> (name, unit, "counter", "cumulative");
+    }
+
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Histogram<std::uint64_t>>
+    CreateUInt64Histogram (opentelemetry::nostd::string_view name,
+                           opentelemetry::nostd::string_view,
+                           opentelemetry::nostd::string_view unit) noexcept override
+    {
+        return make_histogram<std::uint64_t> (name, unit);
+    }
+
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Histogram<double>>
+    CreateDoubleHistogram (opentelemetry::nostd::string_view name,
+                           opentelemetry::nostd::string_view,
+                           opentelemetry::nostd::string_view unit) noexcept override
+    {
+        return make_histogram<double> (name, unit);
+    }
+
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument>
+    CreateInt64ObservableGauge (opentelemetry::nostd::string_view name,
+                                opentelemetry::nostd::string_view,
+                                opentelemetry::nostd::string_view unit) noexcept override
+    {
+        return make_observable<std::int64_t> (name, unit, "observable", "current");
+    }
+
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument>
+    CreateDoubleObservableGauge (opentelemetry::nostd::string_view name,
+                                 opentelemetry::nostd::string_view,
+                                 opentelemetry::nostd::string_view unit) noexcept override
+    {
+        return make_observable<double> (name, unit, "observable", "current");
+    }
+
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::UpDownCounter<std::int64_t>>
+    CreateInt64UpDownCounter (opentelemetry::nostd::string_view name,
+                              opentelemetry::nostd::string_view,
+                              opentelemetry::nostd::string_view unit) noexcept override
+    {
+        return make_updown<std::int64_t> (name, unit);
+    }
+
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::UpDownCounter<double>>
+    CreateDoubleUpDownCounter (opentelemetry::nostd::string_view name,
+                               opentelemetry::nostd::string_view,
+                               opentelemetry::nostd::string_view unit) noexcept override
+    {
+        return make_updown<double> (name, unit);
+    }
+
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument>
+    CreateInt64ObservableUpDownCounter (opentelemetry::nostd::string_view name,
+                                        opentelemetry::nostd::string_view,
+                                        opentelemetry::nostd::string_view unit) noexcept override
+    {
+        return make_observable<std::int64_t> (name, unit, "updown", "current");
+    }
+
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument>
+    CreateDoubleObservableUpDownCounter (opentelemetry::nostd::string_view name,
+                                         opentelemetry::nostd::string_view,
+                                         opentelemetry::nostd::string_view unit) noexcept override
+    {
+        return make_observable<double> (name, unit, "updown", "current");
+    }
+
+    void collect_observables () noexcept
+    {
+        _capture->begin_observable_collection ();
+        std::lock_guard lock (_mutex);
+        for (auto *instrument : _observables)
+            instrument->collect ();
+    }
+
+  private:
+    static metric_descriptor_t descriptor (opentelemetry::nostd::string_view name,
+                                           opentelemetry::nostd::string_view unit,
+                                           std::string kind,
+                                           std::string temporality)
+    {
+        return {std::string (name.data (), name.size ()), std::string (unit.data (), unit.size ()),
+                std::move (kind), std::move (temporality)};
+    }
+
+    template <typename T>
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Counter<T>>
+    make_counter (opentelemetry::nostd::string_view name,
+                  opentelemetry::nostd::string_view unit) noexcept
+    {
+        return opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Counter<T>> (
+          new evidence_add_t<T, opentelemetry::metrics::NoopCounter> (
+            _capture, descriptor (name, unit, "counter", "delta")));
+    }
+
+    template <typename T>
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Histogram<T>>
+    make_histogram (opentelemetry::nostd::string_view name,
+                    opentelemetry::nostd::string_view unit) noexcept
+    {
+        return opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Histogram<T>> (
+          new evidence_histogram_t<T> (_capture, descriptor (name, unit, "histogram", "sample")));
+    }
+
+    template <typename T>
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::UpDownCounter<T>>
+    make_updown (opentelemetry::nostd::string_view name,
+                 opentelemetry::nostd::string_view unit) noexcept
+    {
+        return opentelemetry::nostd::unique_ptr<opentelemetry::metrics::UpDownCounter<T>> (
+          new evidence_add_t<T, opentelemetry::metrics::NoopUpDownCounter> (
+            _capture, descriptor (name, unit, "updown", "delta")));
+    }
+
+    template <typename T>
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument>
+    make_observable (opentelemetry::nostd::string_view name,
+                     opentelemetry::nostd::string_view unit,
+                     std::string kind,
+                     std::string temporality) noexcept
+    {
+        return opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument> (
+          new evidence_observable_instrument_t<T> (
+            _capture, descriptor (name, unit, std::move (kind), std::move (temporality)), this,
+            &add_observable, &remove_observable));
+    }
+
+    static void add_observable (void *meter, evidence_observable_t *instrument) noexcept
+    {
+        auto &self = *static_cast<evidence_meter_t *> (meter);
+        std::lock_guard lock (self._mutex);
+        self._observables.push_back (instrument);
+    }
+
+    static void remove_observable (void *meter, evidence_observable_t *instrument) noexcept
+    {
+        auto &self = *static_cast<evidence_meter_t *> (meter);
+        std::lock_guard lock (self._mutex);
+        self._observables.erase (
+          std::remove (self._observables.begin (), self._observables.end (), instrument),
+          self._observables.end ());
+    }
+
+    std::shared_ptr<evidence_metric_capture_t> _capture;
+    std::mutex _mutex;
+    std::vector<evidence_observable_t *> _observables;
+};
+
+class evidence_meter_provider_t final : public opentelemetry::metrics::MeterProvider
+{
+  public:
+    explicit evidence_meter_provider_t (std::shared_ptr<evidence_metric_capture_t> capture) :
+        _meter (new evidence_meter_t (std::move (capture)))
+    {
+    }
+
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::Meter>
+    GetMeter (opentelemetry::nostd::string_view,
+              opentelemetry::nostd::string_view,
+              opentelemetry::nostd::string_view) noexcept override
+    {
+        return _meter;
+    }
+
+    void collect_observables () noexcept
+    {
+        static_cast<evidence_meter_t *> (_meter.get ())->collect_observables ();
+    }
+
+  private:
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::Meter> _meter;
+};
+
+class evidence_metric_reader_t
+{
+  public:
+    evidence_metric_reader_t () :
+        _previous_provider (opentelemetry::metrics::Provider::GetMeterProvider ()),
+        _capture (std::make_shared<evidence_metric_capture_t> ()),
+        _provider (std::make_shared<evidence_meter_provider_t> (_capture))
+    {
+        opentelemetry::metrics::Provider::SetMeterProvider (
+          opentelemetry::nostd::shared_ptr<opentelemetry::metrics::MeterProvider> (
+            std::static_pointer_cast<opentelemetry::metrics::MeterProvider> (_provider)));
+    }
+
+    ~evidence_metric_reader_t ()
+    {
+        opentelemetry::metrics::Provider::SetMeterProvider (_previous_provider);
+    }
+
+    evidence_metric_reader_t (const evidence_metric_reader_t &) = delete;
+    evidence_metric_reader_t &operator= (const evidence_metric_reader_t &) = delete;
+
+    nlohmann::json collect () const
+    {
+        _provider->collect_observables ();
+        return _capture->snapshot ();
+    }
+
+  private:
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::MeterProvider> _previous_provider;
+    std::shared_ptr<evidence_metric_capture_t> _capture;
+    std::shared_ptr<evidence_meter_provider_t> _provider;
+};
+
+/* Aggregates the config-11 §3 evidence arrays. Synchronous instruments retain
+ * their actual samples while each evidence request refreshes observables. */
+class observability_evidence_t
+{
+  public:
+    explicit observability_evidence_t (const evidence_metric_reader_t *metric_reader) :
+        _metric_reader (metric_reader)
+    {
+    }
+
+    nlohmann::json snapshot () const
+    {
+        std::lock_guard lock (_mutex);
+        return nlohmann::json{
+          {"metrics", _metric_reader ? _metric_reader->collect () : nlohmann::json::array ()},
+          {"drainEvents", _drain_events}};
+    }
+
+  private:
+    const evidence_metric_reader_t *_metric_reader;
+    mutable std::mutex _mutex;
     std::vector<nlohmann::json> _drain_events;
 };
 
@@ -629,14 +1130,14 @@ int zlink::framework::e2e::observability_ops::server::run_host (host_role_t role
                                                                 int argc,
                                                                 char **argv)
 {
-    auto app = fw::app_t::create ();
-    app.config ().load_cli (argc, argv);
-    const auto config_path = app.config ().model ().get ("config");
+    fw::config_builder_t config;
+    config.load_cli (argc, argv);
+    const auto config_path = config.model ().get ("config");
     if (!config_path) {
         throw std::runtime_error ("ObservabilityOps server requires --config=<path>");
     }
-    app.config ().load_json (*config_path);
-    const auto options = app.config ().bind_required<server_options_t> ("e2e");
+    config.load_json (*config_path);
+    const auto options = config.bind_required<server_options_t> ("e2e");
     if (role == host_role_t::session && options.stream_endpoint.empty ()) {
         throw std::runtime_error ("ObservabilityOps Session requires streamEndpoint");
     }
@@ -646,8 +1147,14 @@ int zlink::framework::e2e::observability_ops::server::run_host (host_role_t role
     if (options.spot_router_endpoint.empty () || options.spot_pub_endpoint.empty ()) {
         throw std::runtime_error ("ObservabilityOps Spot host requires router and pub endpoints");
     }
-    auto evidence_owner = std::make_unique<observability_evidence_t> ();
-    auto *evidence = evidence_owner.get ();
+    std::optional<evidence_metric_reader_t> metric_reader;
+    if (options.metrics_enabled) {
+        metric_reader.emplace ();
+    }
+    auto app = fw::app_t::create ();
+    app.config () = std::move (config);
+    auto evidence_owner =
+      std::make_unique<observability_evidence_t> (metric_reader ? &*metric_reader : nullptr);
     auto drain_control_owner = std::make_unique<drain_control_t> ();
     auto *drain_control = drain_control_owner.get ();
     drain_control->start_drain = [&app] (std::chrono::milliseconds deadline) {
@@ -655,20 +1162,6 @@ int zlink::framework::e2e::observability_ops::server::run_host (host_role_t role
     };
     drain_control->is_ready = [&app] { return app.is_ready (); };
 
-    /* OBS-B4: a node without a metric reader must keep messaging intact on
-     * the inactive instrument path. */
-    if (options.metrics_enabled) {
-        /* Runtime metrics are debug records. Keep the evidence sink on the
-         * same logging path as the runtime instead of lowering the runtime's
-         * observability level after the callback is installed. */
-        app.logging ().set_min_level (fw::log_level_t::debug);
-        app.logging ().use_callback_sink (
-          [evidence] (const fw::log_record_t &record) {
-              if (record.message == "zlink.runtime.metric.recorded") {
-                  evidence->record_metric (record);
-              }
-          });
-    }
     const auto workflow_events = role == host_role_t::order_workflow
                                    ? std::make_shared<workflow_event_store_t> (
                                        std::filesystem::path (options.log_dir)

@@ -30,6 +30,9 @@ is decided first. This topic covers that entire path — from submit to completi
   by which a component guards its own mutable state.
 - [Serial Executor Layers](07-serial-executor-layers.en.md) covers which serial unit
   each of Spot, Actor, and Session runs its work on, and who owns that unit's lifetime.
+- [Messaging Hot Path](08-messaging-hot-path.en.md) covers the number, order and waiting
+  style of the execution stages a send/request passes from source submit to the target handler and
+  reply, and the resulting throughput requirement (at least 0.90 of the binding-direct path).
 
 What this topic does not define — the repeating callback a Spot registers is owned by
 [Spot Timer](../03-spot-actor/10-spot-timer.en.md), the Actor/Spot model itself and queue
@@ -94,6 +97,8 @@ owned by
 | What are the limits (`MaxQueuedApplicationJobs`, pause/resume %, lane caps, dispatcher 4,096) | [§6](#6-numeric-summary-table) |
 | Which queue does a Spot's Actor and Timer work run on | [Serial Executor Layers "4. Spot Execution Mode And Queue Path"](07-serial-executor-layers.en.md#4-spot-execution-mode-and-queue-path) |
 | What stops one owner from holding a queue too long | [Serial Executor Layers "6.4 Fairness"](07-serial-executor-layers.en.md#64-fairness) |
+| How many execution-resource switches does one request make inside the runtime, how many records does the target take per wake-up | [Messaging Hot Path](08-messaging-hot-path.en.md) |
+| How much lower may Framework throughput be than the binding-direct path | [Messaging Hot Path "7. Verification requirements"](08-messaging-hot-path.en.md#7-verification-requirements) |
 | Why does a component guard state with a state lane instead of a lock | [State Ownership And State Lanes "3. The Prohibited Shape"](06-state-ownership-and-lanes.en.md#3-the-prohibited-shape) |
 | What is the difference between a state lane and the Application lane | [State Ownership And State Lanes "2. Terminology — State Lane Versus Application/Lifecycle Lane"](06-state-ownership-and-lanes.en.md#2-terminology--state-lane-versus-applicationlifecycle-lane) |
 
@@ -106,6 +111,8 @@ owned by
 04-application-job-queue-and-backpressure.en.md  capacity before handler start
 05-payload-ownership-and-codec.en.md         ownership and copying of a message
 06-state-ownership-and-lanes.en.md           the mechanism that guards a component's state
+07-serial-executor-layers.en.md              the serial execution units of Spot, Actor and Session
+08-messaging-hot-path.en.md                  the stages a send/request passes and the throughput requirement
 ```
 
 For a developer reading this for the first time, the order is as follows: understanding

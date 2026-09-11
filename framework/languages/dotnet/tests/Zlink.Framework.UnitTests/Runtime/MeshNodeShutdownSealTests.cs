@@ -161,8 +161,8 @@ public sealed class MeshNodeShutdownSealTests
         await using var node = new ZLinkManagedMeshNode(
             context,
             MeshName,
-            openSocketMonitor: (socket, events) =>
-                transportMonitor = new DeferredReadyMonitor(socket.MonitorOpen(events)));
+            decorateSocketMonitor: monitor =>
+                transportMonitor = new DeferredReadyMonitor(monitor));
         var suffix = Guid.NewGuid().ToString("N");
         node.SetRoutingId(RoutingId.From($"same-connection-node-{suffix}"));
         node.SetBind(EphemeralTcpEndpoint);
@@ -216,8 +216,8 @@ public sealed class MeshNodeShutdownSealTests
             context,
             MeshName,
             routedSubmitScheduler: scheduler,
-            openSocketMonitor: (socket, events) =>
-                transportMonitor = new DeferredReadyMonitor(socket.MonitorOpen(events)));
+            decorateSocketMonitor: monitor =>
+                transportMonitor = new DeferredReadyMonitor(monitor));
         var suffix = Guid.NewGuid().ToString("N");
         node.SetRoutingId(RoutingId.From($"late-ready-node-{suffix}"));
         node.SetBind(EphemeralTcpEndpoint);
@@ -241,14 +241,19 @@ public sealed class MeshNodeShutdownSealTests
                        objectRole: (byte)ZLinkMeshNodeObjectRole.Server)))
                 peer.Send().Message(hello).Submit();
 
-            // Hold the queued Admit while its Hello finishes admission. The
-            // transport monitor then delivers the same connection's READY.
+            // Hello validates ingress, but a queued Admit is not a ready route.
+            // A late transport READY must preserve this pending handshake.
             await scheduler.Queued;
-            Assert.Equal(1U, node.Status().AdmittedPeerCount);
-            var admitted = Assert.Single(node.Peers());
+            Assert.Equal(0U, node.Status().AdmittedPeerCount);
+            var pending = Assert.Single(node.Peers());
             await transportMonitor!.ReadyCaptured;
             transportMonitor.ReleaseReady();
             await transportMonitor.ReadyApplied;
+            var afterReady = Assert.Single(node.Peers());
+            Assert.Equal(pending.LifecycleGeneration, afterReady.LifecycleGeneration);
+            Assert.Equal(pending.DescriptorRevision, afterReady.DescriptorRevision);
+            Assert.Equal(pending.LastChangedMs, afterReady.LastChangedMs);
+            Assert.Equal(0U, node.Status().AdmittedPeerCount);
 
             // Update follows the queued Admit on the same socket. It makes a
             // discarded Admit observable as the wrong first record, without a
@@ -268,13 +273,15 @@ public sealed class MeshNodeShutdownSealTests
                 Assert.Equal(expected, command);
             }
 
+            Assert.True(SpinWait.SpinUntil(
+                () => node.Status().AdmittedPeerCount == 1,
+                TimeSpan.FromSeconds(5)));
             Assert.Equal(1UL, monitor.Status().PeerAdmitted);
             Assert.Equal(0UL, monitor.Status().PeerRejected);
             Assert.Equal(0UL, monitor.Status().ProtocolErrors);
             var current = Assert.Single(node.Peers());
-            Assert.Equal(admitted.LifecycleGeneration, current.LifecycleGeneration);
-            Assert.Equal(admitted.DescriptorRevision, current.DescriptorRevision);
-            Assert.Equal(admitted.LastChangedMs, current.LastChangedMs);
+            Assert.Equal(pending.LifecycleGeneration, current.LifecycleGeneration);
+            Assert.Equal(pending.DescriptorRevision, current.DescriptorRevision);
         }
         finally
         {
@@ -501,54 +508,6 @@ public sealed class MeshNodeShutdownSealTests
             Assert.Single(restarted.Peers()).State);
     }
 
-    private sealed class GatedTaskScheduler : TaskScheduler
-    {
-        private readonly Queue<Task> _tasks = new();
-        private readonly TaskCompletionSource _queued =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private bool _released;
-
-        internal Task Queued => _queued.Task;
-
-        protected override IEnumerable<Task> GetScheduledTasks()
-        {
-            lock (_tasks)
-                return _tasks.ToArray();
-        }
-
-        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
-
-        protected override void QueueTask(Task task)
-        {
-            lock (_tasks)
-            {
-                if (!_released)
-                {
-                    _tasks.Enqueue(task);
-                    _queued.TrySetResult();
-                    return;
-                }
-            }
-            Schedule(task);
-        }
-
-        internal void Release()
-        {
-            Task[] tasks;
-            lock (_tasks)
-            {
-                _released = true;
-                tasks = _tasks.ToArray();
-                _tasks.Clear();
-            }
-            foreach (var task in tasks)
-                Schedule(task);
-        }
-
-        private void Schedule(Task task) =>
-            ThreadPool.QueueUserWorkItem(_ => TryExecuteTask(task));
-    }
-
     private sealed class DeferredReadyMonitor(ISocketMonitor inner) : ISocketMonitor
     {
         private readonly Queue<MonitorEvent> _ready = new();
@@ -561,7 +520,10 @@ public sealed class MeshNodeShutdownSealTests
 
         internal Task ReadyCaptured => _captured.Task;
         internal Task ReadyApplied => _applied.Task;
-        internal void ReleaseReady() => Volatile.Write(ref _release, 1);
+        internal void ReleaseReady()
+        {
+            Volatile.Write(ref _release, 1);
+        }
 
         public MonitorEvent? Recv(RecvFlags flags = RecvFlags.None)
         {
@@ -618,7 +580,7 @@ public sealed class MeshNodeShutdownSealTests
             try
             {
                 using var message = Message.From(head);
-                await socket.Send().Message(message).Async(CancellationToken.None);
+                await socket.Send().Message(message).Async(CancellationToken.None).Admitted;
                 return;
             }
             catch (ZlinkSubmitException) when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)

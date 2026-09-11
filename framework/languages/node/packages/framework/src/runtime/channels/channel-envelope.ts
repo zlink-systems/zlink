@@ -96,22 +96,21 @@ export function encodeChannelEnvelopeParts(
   const encoded = encodePayload(payload, codecsForFrameworkPacket(messageName, codecs), messageName, 'payload');
   const flow = createFlow ? currentOrCreateFlow('Application') : undefined;
   const envelopeCorrelationId = correlationIdForOutboundKind(kind, correlationId);
-  const header: ZLinkChannelEnvelopeHeader = {
-    formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
+  return [encodeChannelHeader(
     kind,
     channelName,
     messageName,
-    contentType: encoded.contentType,
-    correlationId: envelopeCorrelationId,
-    deadline: timeoutMs === undefined ? null : new Date(Date.now() + timeoutMs).toISOString(),
-    topic: topic ?? null,
-    errorCode: null,
-    errorMessage: null,
-    metadata: applicationMetadataRecord(metadata),
-    flowId: flow?.flowId,
-    flowOrigin: flow?.flowOrigin
-  };
-  return [encodeChannelHeader(header), encoded.message];
+    encoded.contentType,
+    envelopeCorrelationId,
+    timeoutMs === undefined ? null : new Date(Date.now() + timeoutMs).toISOString(),
+    topic ?? null,
+    null,
+    null,
+    undefined,
+    applicationMetadataRecord(metadata),
+    flow?.flowId,
+    flow?.flowOrigin
+  ), encoded.message];
 }
 
 /**
@@ -139,22 +138,21 @@ export function encodeChannelEnvelopePartsAtDeadline(
   const encoded = encodePayload(payload, codecsForFrameworkPacket(messageName, codecs), messageName, 'payload');
   const flow = createFlow ? currentOrCreateFlow('Application') : undefined;
   const envelopeCorrelationId = correlationIdForOutboundKind(kind, correlationId);
-  const header: ZLinkChannelEnvelopeHeader = {
-    formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
+  return [encodeChannelHeader(
     kind,
     channelName,
     messageName,
-    contentType: encoded.contentType,
-    correlationId: envelopeCorrelationId,
-    deadline: new Date(deadlineUnixMs).toISOString(),
-    topic: topic ?? null,
-    errorCode: null,
-    errorMessage: null,
-    metadata: applicationMetadataRecord(metadata),
-    flowId: flow?.flowId,
-    flowOrigin: flow?.flowOrigin
-  };
-  return [encodeChannelHeader(header), encoded.message];
+    encoded.contentType,
+    envelopeCorrelationId,
+    new Date(deadlineUnixMs).toISOString(),
+    topic ?? null,
+    null,
+    null,
+    undefined,
+    applicationMetadataRecord(metadata),
+    flow?.flowId,
+    flow?.flowOrigin
+  ), encoded.message];
 }
 
 export function encodeChannelPublishEnvelopeParts(
@@ -169,22 +167,21 @@ export function encodeChannelPublishEnvelopeParts(
   const messageName = resolveFrameworkPacketName(payload, packetName, 'Channel');
   const encoded = encodePayload(payload, codecsForFrameworkPacket(messageName, codecs), messageName, 'payload');
   const flow = createFlow ? currentOrCreateFlow('Application') : undefined;
-  const header: ZLinkChannelEnvelopeHeader = {
-    formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
-    kind: ZLinkChannelMessageKind.Publish,
+  return [encodeChannelHeader(
+    ZLinkChannelMessageKind.Publish,
     channelName,
     messageName,
-    contentType: encoded.contentType,
-    correlationId: null,
-    deadline: null,
+    encoded.contentType,
+    null,
+    null,
     topic,
-    errorCode: null,
-    errorMessage: null,
-    metadata: applicationMetadataRecord(metadata),
-    flowId: flow?.flowId,
-    flowOrigin: flow?.flowOrigin
-  };
-  return [encodeChannelHeader(header), encoded.message];
+    null,
+    null,
+    undefined,
+    applicationMetadataRecord(metadata),
+    flow?.flowId,
+    flow?.flowOrigin
+  ), encoded.message];
 }
 
 export function encodeChannelReplyParts(
@@ -198,20 +195,21 @@ export function encodeChannelReplyParts(
     request.messageName,
     'reply'
   );
-  const header: ZLinkChannelEnvelopeHeader = {
-    formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
-    kind: ZLinkChannelMessageKind.Response,
-    channelName: request.channelName,
-    messageName: request.messageName,
-    contentType: encoded.contentType,
-    correlationId: request.correlationId,
-    deadline: null,
-    topic: null,
-    metadata: {},
-    flowId: request.flowId,
-    flowOrigin: request.flowOrigin
-  };
-  return [encodeChannelHeader(header), encoded.message];
+  return [encodeChannelHeader(
+    ZLinkChannelMessageKind.Response,
+    request.channelName,
+    request.messageName,
+    encoded.contentType,
+    request.correlationId,
+    null,
+    null,
+    undefined,
+    undefined,
+    undefined,
+    EMPTY_APPLICATION_METADATA,
+    request.flowId,
+    request.flowOrigin
+  ), encoded.message];
 }
 
 /**
@@ -275,22 +273,21 @@ export function encodeChannelErrorReplyParts(
       : ZLinkFrameworkErrorKind.InternalFailure
   );
   const errorMessage = error instanceof Error ? error.message : String(error);
-  const header: ZLinkChannelEnvelopeHeader = {
-    formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
-    kind: ZLinkChannelMessageKind.Error,
-    channelName: request.channelName,
-    messageName: request.messageName,
-    contentType: JSON_CONTENT_TYPE,
-    correlationId: request.correlationId,
-    deadline: null,
-    topic: null,
+  return [encodeChannelHeader(
+    ZLinkChannelMessageKind.Error,
+    request.channelName,
+    request.messageName,
+    JSON_CONTENT_TYPE,
+    request.correlationId,
+    null,
+    null,
     errorCode,
     errorMessage,
+    undefined,
     metadata,
-    flowId: request.flowId,
-    flowOrigin: request.flowOrigin
-  };
-  return [encodeChannelHeader(header), encodeJsonBytes(null)];
+    request.flowId,
+    request.flowOrigin
+  ), encodeJsonBytes(null)];
 }
 
 export function decodeChannelReply<TReply>(
@@ -491,25 +488,162 @@ function encodeJsonBytes(value: unknown, schema?: ZLinkJsonSchema): Buffer {
   return Buffer.from(stringifyFrameworkJsonV1(value, schema));
 }
 
-function encodeChannelHeader(header: ZLinkChannelEnvelopeHeader): Buffer {
-  //  Explicit construction: this runs for every outbound envelope, so avoid a
-  //  per-message spread of the whole header.
-  return encodeJsonBytes({
-    formatMarker: header.formatMarker,
-    kind: header.kind,
-    channelName: header.channelName,
-    messageName: header.messageName,
-    contentType: header.contentType,
-    correlationId: header.correlationId,
-    deadline: header.deadline,
-    topic: header.topic,
-    errorCode: header.errorCode,
-    errorMessage: header.errorMessage,
-    source: header.source,
-    metadata: header.metadata,
-    flowId: header.flowId,
-    flowOrigin: header.flowOrigin === undefined ? undefined : encodeFlowOrigin(header.flowOrigin)
-  });
+function encodeChannelHeader(
+  kind: ZLinkChannelMessageKind,
+  channelName: string,
+  messageName: string,
+  contentType: string,
+  correlationId: string | null,
+  deadline: string | null,
+  topic: string | null,
+  errorCode: string | null | undefined,
+  errorMessage: string | null | undefined,
+  source: string | null | undefined,
+  metadata: Readonly<Record<string, string>>,
+  flowId: string | undefined,
+  flowOrigin: ZLinkFlowOrigin | undefined
+): Buffer {
+  // The wire has a fixed field order. Measure escaped UTF-8 first, then write
+  // each field once into the only header Buffer: no header object, whole JSON
+  // string, or post-encode byte copy exists on the outbound path.
+  const measure = new ChannelHeaderWriter();
+  writeChannelHeader(
+    measure, kind, channelName, messageName, contentType, correlationId,
+    deadline, topic, errorCode, errorMessage, source, metadata, flowId, flowOrigin
+  );
+  const result = Buffer.alloc(measure.byteLength);
+  const writer = new ChannelHeaderWriter(result);
+  writeChannelHeader(
+    writer, kind, channelName, messageName, contentType, correlationId,
+    deadline, topic, errorCode, errorMessage, source, metadata, flowId, flowOrigin
+  );
+  return result;
+}
+
+function writeChannelHeader(
+  writer: ChannelHeaderWriter,
+  kind: ZLinkChannelMessageKind,
+  channelName: string,
+  messageName: string,
+  contentType: string,
+  correlationId: string | null,
+  deadline: string | null,
+  topic: string | null,
+  errorCode: string | null | undefined,
+  errorMessage: string | null | undefined,
+  source: string | null | undefined,
+  metadata: Readonly<Record<string, string>>,
+  flowId: string | undefined,
+  flowOrigin: ZLinkFlowOrigin | undefined
+): void {
+  writer.append('{"formatMarker":');
+  writer.append(String(ZLINK_CHANNEL_FORMAT_MARKER));
+  writer.append(',"kind":');
+  writer.append(String(kind));
+  writer.append(',"channelName":');
+  writer.string(channelName);
+  writer.append(',"messageName":');
+  writer.string(messageName);
+  writer.append(',"contentType":');
+  writer.string(contentType);
+  writer.append(',"correlationId":');
+  writer.nullableString(correlationId);
+  writer.append(',"deadline":');
+  writer.nullableString(deadline);
+  writer.append(',"topic":');
+  writer.nullableString(topic);
+  if (errorCode !== undefined) {
+    writer.append(',"errorCode":');
+    writer.nullableString(errorCode);
+  }
+  if (errorMessage !== undefined) {
+    writer.append(',"errorMessage":');
+    writer.nullableString(errorMessage);
+  }
+  if (source !== undefined) {
+    writer.append(',"source":');
+    writer.nullableString(source);
+  }
+  writer.append(',"metadata":{');
+  let first = true;
+  for (const name in metadata) {
+    if (!Object.prototype.hasOwnProperty.call(metadata, name)) continue;
+    if (!first) writer.append(',');
+    first = false;
+    writer.string(name);
+    writer.append(':');
+    writer.string(metadata[name]!);
+  }
+  writer.append('}');
+  if (flowId !== undefined) {
+    writer.append(',"flowId":');
+    writer.string(flowId);
+  }
+  if (flowOrigin !== undefined) {
+    writer.append(',"flowOrigin":');
+    writer.append(String(encodeFlowOrigin(flowOrigin)));
+  }
+  writer.append('}');
+}
+
+class ChannelHeaderWriter {
+  private offset = 0;
+
+  constructor(private readonly output?: Buffer) {}
+
+  get byteLength(): number {
+    return this.offset;
+  }
+
+  append(value: string): void {
+    if (this.output === undefined) {
+      this.offset += Buffer.byteLength(value);
+      return;
+    }
+    this.offset += this.output.write(value, this.offset, 'utf8');
+  }
+
+  nullableString(value: string | null): void {
+    if (value === null) this.append('null');
+    else this.string(value);
+  }
+
+  string(value: string): void {
+    this.append('"');
+    let start = 0;
+    for (let index = 0; index < value.length; index += 1) {
+      const code = value.charCodeAt(index);
+      let escaped: string | undefined;
+      switch (code) {
+        case 0x08: escaped = '\\b'; break;
+        case 0x09: escaped = '\\t'; break;
+        case 0x0a: escaped = '\\n'; break;
+        case 0x0c: escaped = '\\f'; break;
+        case 0x0d: escaped = '\\r'; break;
+        case 0x22: escaped = '\\"'; break;
+        case 0x5c: escaped = '\\\\'; break;
+        default:
+          if (code < 0x20) {
+            escaped = `\\u00${code.toString(16).padStart(2, '0')}`;
+          } else if (code >= 0xd800 && code <= 0xdbff) {
+            const next = value.charCodeAt(index + 1);
+            if (next >= 0xdc00 && next <= 0xdfff) {
+              index += 1;
+            } else {
+              escaped = `\\u${code.toString(16)}`;
+            }
+          } else if (code >= 0xdc00 && code <= 0xdfff) {
+            escaped = `\\u${code.toString(16)}`;
+          }
+      }
+      if (escaped === undefined) continue;
+      this.append(value.slice(start, index));
+      this.append(escaped);
+      start = index + 1;
+    }
+    this.append(value.slice(start));
+    this.append('"');
+  }
 }
 
 function encodeFlowOrigin(origin: ZLinkFlowOrigin): number {
@@ -528,13 +662,153 @@ export function decodeChannelHeader(
   if (parts.length === 0) {
     throw new ZLinkConfigurationException('Channel envelope header part is missing.');
   }
-  return validateChannelHeader(parseWireJson(parts[0].data().toString()), flowEnabled);
+  return validateChannelHeader(parseChannelHeaderBytes(parts[0].data()), flowEnabled);
 }
 
 function parseWireJson(payload: string, schema?: ZLinkJsonSchema): unknown {
   return parseFrameworkJsonV1(payload, {
     rejectPropertyName: isPrototypeKey
   }, schema);
+}
+
+function parseChannelHeaderBytes(payload: Buffer): unknown {
+  return tryParseCanonicalChannelHeader(payload) ?? parseWireJson(payload.toString());
+}
+
+/**
+ * Accept the byte layout emitted by writeChannelHeader without materializing
+ * the enclosing JSON text. Any variation falls through to the established
+ * framework-json-v1 parser, which remains the sole authority for JSON
+ * failures, unknown properties, and prototype-key rejection.
+ */
+function tryParseCanonicalChannelHeader(payload: Buffer): Record<string, unknown> | undefined {
+  const reader = new CanonicalChannelHeaderReader(payload);
+  if (!reader.consume('{"formatMarker":242,"kind":')) return undefined;
+  const kind = reader.readSingleDigit();
+  if (kind === undefined || !reader.consume(',"channelName":')) return undefined;
+  const channelName = reader.readString();
+  if (channelName === undefined || !reader.consume(',"messageName":')) return undefined;
+  const messageName = reader.readString();
+  if (messageName === undefined || !reader.consume(',"contentType":')) return undefined;
+  const contentType = reader.readString();
+  if (contentType === undefined || !reader.consume(',"correlationId":')) return undefined;
+  const correlationId = reader.readNullableString();
+  if (correlationId === undefined || !reader.consume(',"deadline":')) return undefined;
+  const deadline = reader.readNullableString();
+  if (deadline === undefined || !reader.consume(',"topic":')) return undefined;
+  const topic = reader.readNullableString();
+  if (topic === undefined) return undefined;
+
+  const header: Record<string, unknown> = {
+    formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
+    kind,
+    channelName,
+    messageName,
+    contentType,
+    correlationId: correlationId === NULL_JSON_STRING ? null : correlationId,
+    deadline: deadline === NULL_JSON_STRING ? null : deadline,
+    topic: topic === NULL_JSON_STRING ? null : topic
+  };
+  if (!reader.readOptionalNullableString('errorCode', header)) return undefined;
+  if (!reader.readOptionalNullableString('errorMessage', header)) return undefined;
+  if (!reader.readOptionalNullableString('source', header)) return undefined;
+  if (!reader.consume(',"metadata":{}')) return undefined;
+  header.metadata = {};
+  if (!reader.readOptionalString('flowId', header)) return undefined;
+  if (!reader.readOptionalSingleDigit('flowOrigin', header)) return undefined;
+  return reader.consume('}') && reader.atEnd() ? header : undefined;
+}
+
+const NULL_JSON_STRING = Symbol('null JSON string');
+
+class CanonicalChannelHeaderReader {
+  private index = 0;
+
+  constructor(private readonly bytes: Buffer) {}
+
+  atEnd(): boolean {
+    return this.index === this.bytes.length;
+  }
+
+  consume(value: string): boolean {
+    if (this.index + value.length > this.bytes.length) return false;
+    for (let offset = 0; offset < value.length; offset += 1) {
+      if (this.bytes[this.index + offset] !== value.charCodeAt(offset)) return false;
+    }
+    this.index += value.length;
+    return true;
+  }
+
+  readSingleDigit(): number | undefined {
+    if (this.index === this.bytes.length) return undefined;
+    const value = this.bytes[this.index];
+    if (value < 0x30 || value > 0x39) return undefined;
+    this.index += 1;
+    return value - 0x30;
+  }
+
+  readString(): string | undefined {
+    if (this.bytes[this.index] !== 0x22) return undefined;
+    const start = this.index;
+    this.index += 1;
+    while (this.index < this.bytes.length) {
+      const value = this.bytes[this.index++]!;
+      if (value === 0x22) {
+        return JSON.parse(this.bytes.toString('utf8', start, this.index)) as string;
+      }
+      if (value < 0x20) return undefined;
+      if (value !== 0x5c) continue;
+      if (this.index === this.bytes.length) return undefined;
+      const escaped = this.bytes[this.index++]!;
+      if (escaped === 0x75) {
+        for (let count = 0; count < 4; count += 1) {
+          if (this.index === this.bytes.length) return undefined;
+          const digit = this.bytes[this.index++];
+          if (!isHexDigit(digit)) return undefined;
+        }
+      } else if (escaped !== 0x22 && escaped !== 0x5c && escaped !== 0x2f
+        && escaped !== 0x62 && escaped !== 0x66 && escaped !== 0x6e
+        && escaped !== 0x72 && escaped !== 0x74) {
+        return undefined;
+      }
+    }
+    return undefined;
+  }
+
+  readNullableString(): string | symbol | undefined {
+    if (this.consume('null')) return NULL_JSON_STRING;
+    return this.readString();
+  }
+
+  readOptionalNullableString(name: string, target: Record<string, unknown>): boolean {
+    if (!this.consume(`,\"${name}\":`)) return true;
+    const value = this.readNullableString();
+    if (value === undefined) return false;
+    target[name] = value === NULL_JSON_STRING ? null : value;
+    return true;
+  }
+
+  readOptionalString(name: string, target: Record<string, unknown>): boolean {
+    if (!this.consume(`,\"${name}\":`)) return true;
+    const value = this.readString();
+    if (value === undefined) return false;
+    target[name] = value;
+    return true;
+  }
+
+  readOptionalSingleDigit(name: string, target: Record<string, unknown>): boolean {
+    if (!this.consume(`,\"${name}\":`)) return true;
+    const value = this.readSingleDigit();
+    if (value === undefined) return false;
+    target[name] = value;
+    return true;
+  }
+}
+
+function isHexDigit(value: number): boolean {
+  return (value >= 0x30 && value <= 0x39)
+    || (value >= 0x41 && value <= 0x46)
+    || (value >= 0x61 && value <= 0x66);
 }
 
 function schemaForInboundChannelEnvelope(header: ZLinkChannelEnvelopeHeader): ZLinkJsonSchema | undefined {
@@ -565,22 +839,19 @@ function validateChannelHeader(value: unknown, flowEnabled = true): ZLinkChannel
   }
   const correlationId = requireNullableString(header.correlationId, 'correlationId');
   validateCorrelationForKind(kind, correlationId);
-  return {
-    formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
-    kind,
-    channelName: requireString(header.channelName, 'channelName'),
-    messageName: requireString(header.messageName, 'messageName'),
-    contentType,
-    correlationId,
-    deadline: requireNullableString(header.deadline, 'deadline'),
-    topic: requireNullableString(header.topic, 'topic'),
-    errorCode: header.errorCode === undefined ? null : requireNullableString(header.errorCode, 'errorCode'),
-    errorMessage: header.errorMessage === undefined ? null : requireNullableString(header.errorMessage, 'errorMessage'),
-    source: header.source === undefined ? undefined : requireNullableString(header.source, 'source'),
-    metadata: requireApplicationMetadata(header.metadata),
-    flowId,
-    flowOrigin
-  };
+  requireString(header.channelName, 'channelName');
+  requireString(header.messageName, 'messageName');
+  requireNullableString(header.deadline, 'deadline');
+  requireNullableString(header.topic, 'topic');
+  // Parsing already gives this receive operation an owned object. Validate
+  // and normalize it here instead of allocating a second header per record.
+  header.errorCode = header.errorCode === undefined ? null : requireNullableString(header.errorCode, 'errorCode');
+  header.errorMessage = header.errorMessage === undefined ? null : requireNullableString(header.errorMessage, 'errorMessage');
+  header.source = header.source === undefined ? undefined : requireNullableString(header.source, 'source');
+  header.metadata = requireApplicationMetadata(header.metadata);
+  header.flowId = flowId;
+  header.flowOrigin = flowOrigin;
+  return header as unknown as ZLinkChannelEnvelopeHeader;
 }
 
 function correlationIdForOutboundKind(

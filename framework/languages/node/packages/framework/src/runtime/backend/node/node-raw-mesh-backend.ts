@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { setImmediate as yieldToIO } from 'node:timers/promises';
 import { disconnectStreamPeer } from './node-socket-backend-adapter';
 import { ZLinkFrameworkException } from '../../../contracts';
 import { internalFrameworkWireReply } from '../../framework-errors-internal';
@@ -17,6 +18,8 @@ import {
   ZLinkBackendResultError,
   type ZLinkBackendMessageLike as MessageLike
 } from '../runtime-values';
+import { ZLinkBufferMessage } from '../runtime-message';
+import type { Message as FrameworkMessage } from '../../../contracts/Common/Message';
 import type {
   MeshOperationId,
   MeshPeerEntry,
@@ -113,40 +116,15 @@ const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
 const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 const MAX_DRAIN_RECORDS = 64;
-// A timer is only a no-data backoff.  Once the binding has reported readable
-// work, continue from the next event-loop turn so a full socket does not wait
-// for an arbitrary timer cadence between batches.
-const MESH_BACKEND_IDLE_POLL_INTERVAL_MS = 1;
-const MESH_RECEIVE_BATCH_BYTE_LIMIT = 4 * 1024 * 1024;
-const MESH_RECEIVE_BATCH_TIME_LIMIT_MS = 2;
+// Preserve the existing monitor/admission/liveness cadence. Only the binding
+// readable handler admits receive work; this timer never probes the socket.
+const MESH_BACKEND_MAINTENANCE_INTERVAL_MS = 1;
 /**
  * Conservative Actor Join admission cap for relocation state chunks (spec 15
  * §4.2): a stable lower bound safe on any deployment, never lowered on
  * recompute. Matches the source's own conservative chunk floor.
  */
 const ACTOR_JOIN_ADVERTISED_RECEIVE_CHUNK_LIMIT_BYTES = 32 * 1024;
-
-class ZLinkMeshReceiveBatchBudget {
-  private readonly peerMessages = new Map<string, number>();
-  private readonly peerBytes = new Map<string, number>();
-  private startedAtMs = 0;
-
-  reset(nowMs: number): void {
-    this.peerMessages.clear();
-    this.peerBytes.clear();
-    this.startedAtMs = nowMs;
-  }
-
-  record(peer: string, byteCount: number, nowMs: number): boolean {
-    const messages = (this.peerMessages.get(peer) ?? 0) + 1;
-    const bytes = (this.peerBytes.get(peer) ?? 0) + byteCount;
-    this.peerMessages.set(peer, messages);
-    this.peerBytes.set(peer, bytes);
-    return messages >= MAX_DRAIN_RECORDS
-      || bytes >= MESH_RECEIVE_BATCH_BYTE_LIMIT
-      || nowMs - this.startedAtMs >= MESH_RECEIVE_BATCH_TIME_LIMIT_MS;
-  }
-}
 
 /**
  * M6A MeshNode backend. Stateful Spot/Actor entry points stay explicit until
@@ -172,7 +150,17 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private runtime?: RawServiceMeshRuntime;
   private stateful?: ServiceStatefulRuntime;
   private readyHandler?: (domains: number) => number;
-  private pollTimer?: NodeJS.Timeout;
+  private maintenanceTimer?: NodeJS.Timeout;
+  private pumping = false;
+  private readable = false;
+  private readonly onReadable = (): void => {
+    this.readable = true;
+    if (!this.closed && !this.pumping) void this.pump();
+  };
+  private readonly onMaintenance = (): void => {
+    this.maintenanceTimer = undefined;
+    void this.pump();
+  };
   private nextPeerIntent = 1n;
   private closed = false;
   private objectRole: ServiceNodeDescriptor['objectRole'] = 'none';
@@ -195,20 +183,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
   private readonly peerDisconnectedHandlers = new Set<(endpoint: string) => void>();
-  private readonly receiveBatchBudget = new ZLinkMeshReceiveBatchBudget();
-  private observedPumpSourceRoutingId?: string;
-  private observedPumpByteCount = 0;
-  private readonly observePump = (sourceRoutingId: string, byteCount: number): void => {
-    this.observedPumpSourceRoutingId = sourceRoutingId;
-    this.observedPumpByteCount = byteCount;
-  };
-
-  private takePumpObservation(): { readonly sourceRoutingId: string; readonly byteCount: number } | undefined {
-    const sourceRoutingId = this.observedPumpSourceRoutingId;
-    if (sourceRoutingId === undefined) return undefined;
-    return { sourceRoutingId, byteCount: this.observedPumpByteCount };
-  }
-
   constructor(
     private readonly meshName: string,
     routingId: string | undefined,
@@ -414,7 +388,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     }
     this.stateful.setMessageFollowHandler((record) => this.messageFollowHandler?.(record));
     this.runtime = runtime;
-    this.schedulePoll();
+    try {
+      runtime.setReadableHandler(this.onReadable);
+    } catch (error) {
+      this.close();
+      throw error;
+    }
+    this.scheduleMaintenance();
   }
 
   setMessageFollowHandler(handler: (
@@ -446,8 +426,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    if (this.pollTimer !== undefined) clearTimeout(this.pollTimer);
-    this.pollTimer = undefined;
+    if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
+    this.maintenanceTimer = undefined;
     this.stateful?.close();
     this.stateful = undefined;
     this.runtime?.close();
@@ -614,7 +594,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): Promise<SubmitResultValue> {
     return await this.requireRuntime().sendToNode(
       String(targetRid),
-      encodeMultipart(parts)
+      encodeMultipartApplicationFrame(parts)
     ) ? SubmitResult.Ok : SubmitResult.NotConnected;
   }
 
@@ -657,7 +637,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): MeshOperationId {
     const pending = this.requireRuntime().requestToNode(
       String(targetRid),
-      encodeMultipart(parts),
+      encodeMultipartApplicationFrame(parts),
       options?.timeoutMs ?? 30_000
     );
     return this.observeCompletion(pending.id, OperationKind.NodeRequest, pending.promise);
@@ -669,7 +649,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): Promise<SubmitResultValue> {
     return await this.requireRuntime().sendToChannel(
       channelName,
-      encodeMultipart(parts)
+      encodeMultipartApplicationFrame(parts)
     ) ? SubmitResult.Ok : SubmitResult.NotConnected;
   }
 
@@ -680,7 +660,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): MeshOperationId {
     const pending = this.requireRuntime().requestToChannel(
       channelName,
-      encodeMultipart(parts),
+      encodeMultipartApplicationFrame(parts),
       options?.timeoutMs ?? 30_000
     );
     if (pending === undefined) {
@@ -1501,49 +1481,39 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return result;
   }
 
-  private schedulePoll(delayMs = MESH_BACKEND_IDLE_POLL_INTERVAL_MS): void {
-    if (this.closed || this.pollTimer !== undefined) return;
-    this.pollTimer = setTimeout(async () => {
-      this.pollTimer = undefined;
-      try {
-        const received = await this.poll();
-        // A zero-delay timer yields to I/O and other ready work first without
-        // inserting the idle polling interval between readable batches.
-        delayMs = received ? 0 : MESH_BACKEND_IDLE_POLL_INTERVAL_MS;
-      } finally {
-        if (!this.closed) this.schedulePoll(delayMs);
-      }
-    }, delayMs);
+  private scheduleMaintenance(): void {
+    if (this.closed || this.maintenanceTimer !== undefined) return;
+    this.maintenanceTimer = setTimeout(
+      this.onMaintenance,
+      MESH_BACKEND_MAINTENANCE_INTERVAL_MS
+    );
   }
 
-  private async poll(): Promise<boolean> {
-    const runtime = this.runtime;
-    if (runtime === undefined) return false;
-    let received = false;
-    await runtime.drainMonitorEvents();
-    this.receiveBatchBudget.reset(performance.now());
-    for (;;) {
-      this.observedPumpSourceRoutingId = undefined;
-      const result = await runtime.pumpOne(performance.now(), this.observePump);
-      if (result === 'noData') break;
-      received = true;
-      if (result === 'application') this.readyHandler?.(ReadyDomain.Application);
-      const observation = this.takePumpObservation();
-      // Core ROUTER advances its fair-queue cursor after each complete
-      // multipart message, so the next poll resumes from the following pipe.
-      if (
-        observation !== undefined
-        && this.receiveBatchBudget.record(
-          observation.sourceRoutingId,
-          observation.byteCount,
-          performance.now()
-        )
-      ) break;
+  private async pump(): Promise<void> {
+    if (this.isClosed() || this.pumping) return;
+    this.pumping = true;
+    if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
+    this.maintenanceTimer = undefined;
+    try {
+      do {
+        const receiveReady = this.readable;
+        this.readable = false;
+        const more = await this.requireRuntime().pumpBatch(receiveReady);
+        if (more) {
+          // Yield only after actual progress, retaining readiness across the
+          // existing batch limits until receive reports no data.
+          this.readable = true;
+          await yieldToIO();
+        }
+      } while (!this.closed && this.readable);
+    } finally {
+      this.pumping = false;
+      this.scheduleMaintenance();
     }
-    await runtime.announceExpectedPeers();
-    await runtime.tickLiveness();
-    this.notifyReady();
-    return received;
+  }
+
+  private isClosed(): boolean {
+    return this.closed;
   }
 
   private notifyReady(): void {
@@ -1654,16 +1624,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       const owner = readyOwner(claim.owner, this.routingId, this.stateful, domain);
       batch.push(
         owner,
-        new MailboxClaim(runtime, claim, () => {
-          // A receive batch may intentionally consume fewer records than the
-          // mailbox claim. Releasing the claim re-queues the remainder, so
-          // expose that newly ready work to the dispatch pump.
-          if (runtime.mailbox.pendingMessages(domain) > 0) {
-            this.readyHandler?.(
-              domain === 'infrastructure' ? ReadyDomain.Infrastructure : ReadyDomain.Application
-            );
-          }
-        })
+        new MailboxClaim(runtime, claim)
       );
     }
   }
@@ -2013,7 +1974,7 @@ class RawStreamSessionService implements StreamSessionService {
       submit = submit.message(parts[index]!);
     }
     try {
-      await submit.submit();
+      await submit.submit().admitted;
       return true;
     } catch (error) {
       if (!(error instanceof SubmitError)) throw error;
@@ -2087,16 +2048,28 @@ class RawReadyBatch implements ReadyBatch {
 }
 
 class RawReceiveBatch implements ReceiveBatch {
+  private receiveCapacity: number;
+
   constructor(
-    readonly messageCapacity: number,
+    private readonly capacity: number,
     readonly partCapacity: number
   ) {
-    if ([messageCapacity, partCapacity].some(value => !Number.isInteger(value) || value < 1)) {
+    if ([capacity, partCapacity].some(value => !Number.isInteger(value) || value < 1)) {
       throw new RangeError('Receive batch capacities must be positive.');
     }
+    this.receiveCapacity = capacity;
   }
 
-  reset(): void {}
+  get messageCapacity(): number {
+    return this.receiveCapacity;
+  }
+
+  reset(messageCapacity = this.capacity): void {
+    if (!Number.isInteger(messageCapacity) || messageCapacity < 1 || messageCapacity > this.capacity) {
+      throw new RangeError('Receive limit must be within the batch capacity.');
+    }
+    this.receiveCapacity = messageCapacity;
+  }
   close(): void {}
 }
 
@@ -2107,8 +2080,7 @@ class MailboxClaim implements RawClaim {
 
   constructor(
     private readonly runtime: RawServiceMeshRuntime,
-    private readonly claim: ServiceMailboxClaim,
-    private readonly onRelease?: () => void
+    private readonly claim: ServiceMailboxClaim
   ) {}
 
   recvBatch(batch: ReceiveBatch) {
@@ -2130,6 +2102,12 @@ class MailboxClaim implements RawClaim {
         }
         this.runtime.mailbox.releaseClaimedPayload(record);
         this.remaining = this.claim.records.slice(index + 1);
+        // Nothing was transferred to the receive caller when decoding throws.
+        // Earlier records therefore still belong to this failed batch.
+        for (const decoded of records) {
+          for (const part of decoded.parts) part.close();
+          decoded.releaseRetainedIngress?.();
+        }
         throw error;
       }
       const nextParts = decoded.parts.length;
@@ -2152,7 +2130,6 @@ class MailboxClaim implements RawClaim {
     if (this.released) return;
     this.released = true;
     this.runtime.mailbox.release(this.claim, this.remaining);
-    this.onRelease?.();
   }
 }
 
@@ -2297,7 +2274,7 @@ function decodeMultipartRecord(
     parts: decodeMultipart(application.payload),
     reply(parts) {
       if (record.correlation === undefined) return SubmitResult.InvalidState;
-      runtime.reply(record, encodeMultipart(parts));
+      runtime.reply(record, encodeMultipartApplicationFrame(parts));
       return SubmitResult.Ok;
     },
     replyActorJoin: () => SubmitResult.NotSupported
@@ -2585,9 +2562,19 @@ function decodeApplicationEnvelope(frame: Uint8Array) {
   return { packetName, contentType, payload: bytes.subarray(offset) };
 }
 
-function decodeMultipart(payload: Uint8Array): Message[] {
+function decodeMultipart(payload: Uint8Array): FrameworkMessage[] {
   const buffers = decodeMultipartBuffers(payload);
-  return buffers.map(part => Message.from(part));
+  const parts = new Array<FrameworkMessage>(buffers.length);
+  let materialized = 0;
+  try {
+    for (; materialized < buffers.length; materialized += 1) {
+      parts[materialized] = ZLinkBufferMessage.fromOwned(buffers[materialized]!);
+    }
+    return parts;
+  } catch (error) {
+    for (let index = 0; index < materialized; index += 1) parts[index]!.close();
+    throw error;
+  }
 }
 
 function decodeMultipartBuffers(payload: Uint8Array): Buffer[] {

@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
+const { stopChildGracefully } = require('../test/support/bounded-cleanup');
 const { createClient } = require('redis');
 const { Injectable, Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
@@ -49,7 +50,9 @@ async function main() {
   await runInTempDir(async (tempDir) => {
     for (const [label, stage] of stages) {
       if (stageFilter && !label.includes(stageFilter)) continue;
+      console.log(`[cross-stage] start ${label}`);
       const outcome = await runStage(label, () => stage(tempDir));
+      console.log(`[cross-stage] pass ${label}`);
       results.push(...(Array.isArray(outcome) ? outcome : [outcome]));
     }
   });
@@ -625,9 +628,10 @@ async function nodeConnectorToDotnetStreamServer(tempDir) {
     '--stream-endpoint', endpoint,
     '--event-file', eventFile
   ]);
-  const instance = await createBrowserConnectorDriver();
+  let instance;
 
   try {
+    instance = await createBrowserConnectorDriver();
     await host.ready;
     await instance.connect(endpoint);
     const reply = await withTimeout(
@@ -641,8 +645,11 @@ async function nodeConnectorToDotnetStreamServer(tempDir) {
     await assertFlowLog(`${eventFile}.flow`, 'RawPing', 'Browser TypeScript -> dotnet');
     return 'Browser TypeScript connector -> dotnet stream server flow-wire and JSON codec';
   } finally {
-    await instance.close();
-    await host.stop();
+    try {
+      await instance?.close();
+    } finally {
+      await host.stop();
+    }
   }
 }
 
@@ -843,13 +850,12 @@ function startDotnetHost(tempDir, name, args) {
     ready: waitForReadyFile(readyFile, exit, output, 30000),
     output: () => output.join(''),
     async stop() {
-      if (child.exitCode !== null) {
-        return;
+      const result = await stopChildGracefully(child, () => fs.writeFile(stopFile, 'STOP'), 10000, 5000);
+      if (result.timedOut) {
+        throw new Error(`${name} did not exit after bounded termination`);
       }
-      await fs.writeFile(stopFile, 'STOP');
-      const result = await withTimeout(exit, 10000, `stop ${name}`);
-      if (result.code !== 0) {
-        throw new Error(`${name} exited with ${result.code ?? result.signal}\n${output.join('')}`);
+      if (child.exitCode !== 0) {
+        throw new Error(`${name} exited with ${child.exitCode ?? child.signalCode}\n${output.join('')}`);
       }
     }
   };
@@ -940,6 +946,7 @@ async function runStage(label, operation) {
   try {
     return await operation();
   } catch (error) {
+    console.error(`[cross-stage] fail ${label}: ${error.message}`);
     throw new Error(`${label} failed`, { cause: error });
   }
 }
@@ -975,20 +982,23 @@ async function runInTempDir(callback) {
 
 async function startRedisContainer() {
   const name = `zlink-node-dotnet-location-${process.pid}-${Date.now()}`;
-  const containerId = (await runProcess('docker', [
+  await runProcess('docker', [
     'run', '-d', '--rm', '--tmpfs', '/data',
     '--name', name,
     '-p', '127.0.0.1::6379',
     'redis:7.2-alpine'
-  ], { cwd: repoRoot })).trim();
-  const portLine = (await runProcess('docker', ['port', containerId, '6379/tcp'], { cwd: repoRoot })).trim();
+  ], { cwd: repoRoot });
+  // Address the container by the name we chose. `docker run` writes the pull
+  // progress to stderr when the image is not cached, so its combined output is
+  // not a container id.
+  const portLine = (await runProcess('docker', ['port', name, '6379/tcp'], { cwd: repoRoot, stdoutOnly: true })).trim();
   const port = portLine.split(':').at(-1);
   const endpoint = `127.0.0.1:${port}`;
   await waitTcp(endpoint, 10000);
   return {
     endpoint,
     async stop() {
-      await runProcess('docker', ['rm', '-f', '-v', containerId], { cwd: repoRoot, allowFailure: true });
+      await runProcess('docker', ['rm', '-f', '-v', name], { cwd: repoRoot, allowFailure: true });
     }
   };
 }
@@ -1010,7 +1020,6 @@ async function runDotnetRedisProviderTest(filter, redisEndpoint, prefix, tempDir
     'test',
     dotnetRedisTestsProject,
     '--framework', 'net8.0',
-    '--no-restore',
     '--filter', filter,
     '-m:1',
     '-p:UseSharedCompilation=false',
@@ -1033,19 +1042,22 @@ async function runProcess(command, args, options = {}) {
     env: options.env ?? process.env,
     stdio: ['ignore', 'pipe', 'pipe']
   });
-  const chunks = [];
+  // Callers that parse the result must not receive stderr: tools write progress
+  // and warnings there, and mixing the two streams corrupts the value.
+  const out = [];
+  const err = [];
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
-  child.stdout.on('data', (chunk) => chunks.push(chunk));
-  child.stderr.on('data', (chunk) => chunks.push(chunk));
+  child.stdout.on('data', (chunk) => out.push(chunk));
+  child.stderr.on('data', (chunk) => err.push(chunk));
   const result = await new Promise((resolve) => {
     child.on('exit', (code, signal) => resolve({ code, signal }));
   });
-  const output = chunks.join('');
+  const combined = out.join('') + err.join('');
   if (result.code !== 0 && options.allowFailure !== true) {
-    throw new Error(`${command} ${args.join(' ')} failed with ${result.code ?? result.signal}\n${output}`);
+    throw new Error(`${command} ${args.join(' ')} failed with ${result.code ?? result.signal}\n${combined}`);
   }
-  return output;
+  return options.stdoutOnly === true ? out.join('') : combined;
 }
 
 async function waitTcp(endpoint, timeoutMs) {

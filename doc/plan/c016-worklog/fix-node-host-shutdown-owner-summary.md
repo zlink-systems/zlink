@@ -224,7 +224,7 @@ Spec 조항: ZoneWorld §9.1의 방향키 이동 및 server-authoritative 상태
 
 ## 증거 위치
 
-[전체 로그](../../../zlink-work/c016/logs/fix-node-host-shutdown-owner/):
+전체 로그 (`../../../zlink-work/c016/logs/fix-node-host-shutdown-owner/`):
 `build-final.log`, `typecheck-final.log`, `lint*.log`, `regression.log`, `subsystem-files.txt`,
 `subsystems.log`, `publication-contract.log`, `final-host-contract.log`, `individual-results.txt`,
 `sample-*.log`, `aggregate-final.log`, `aggregate-final-result.txt`, `npm-test.log`, `npm-test-result.txt`. 첫 ZoneWorld 실패의 원래 role/file log는 `zoneworld-initial-evidence/logs/`에

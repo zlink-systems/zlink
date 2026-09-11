@@ -474,8 +474,16 @@ test('Node-direct operations classify Object Client targets as NotFound', async 
 function fakeSpotRouteBridge() {
   return {
     attachRouterChannel() {},
-    send() { return { message() { return this; }, async submit() {} }; },
-    request() { return { message() { return this; }, timeout() { return this; }, async submit() { return []; } }; },
+    send() {
+      return { message() { return this; }, submit: () => ({ admitted: Promise.resolve() }) };
+    },
+    request() {
+      return {
+        message() { return this; },
+        timeout() { return this; },
+        submit: () => ({ admitted: Promise.resolve(), reply: Promise.resolve([]) })
+      };
+    },
     handleRouterReceived() { return false; },
     async dispose() {}
   };
@@ -1205,7 +1213,13 @@ test('ZLinkDealerChannelClientTransport maps native request connectivity failure
   const transport = new framework.ZLinkDealerChannelClientTransport({
     request() {
       return createMultipartRequestOperation({
-        async submit() { throw nativeError; }
+        submit() {
+          return {
+            result: zlink.SubmitResult.Ok,
+            admitted: Promise.resolve(),
+            reply: Promise.reject(nativeError)
+          };
+        }
       });
     }
   });
@@ -3616,7 +3630,17 @@ test('route receive loop keeps receiving while an earlier SPOT forward awaits ad
   const loop = new framework.ZLinkRouteReceiveLoop(
     router,
     dispatcher,
-    { wait() { return records.length > 0; }, dispose() {} },
+    {
+      wait() { return records.length > 0; },
+      waitForReadable(signal) {
+        return new Promise((resolve) => {
+          if (signal?.aborted === true) resolve(false);
+          else signal?.addEventListener('abort', () => resolve(false), { once: true });
+        });
+      },
+      markDrained() {},
+      dispose() {}
+    },
     new ApplicationJobQueue(resolveApplicationJobQueueConfiguration()),
     undefined,
     (error) => reported.push(error)
@@ -3716,6 +3740,9 @@ test('ZLinkModule route channel dispatches inbound routed handlers after bootstr
   class HandlerModule {}
   const builder = nestjs.zlinkFramework()
     .options({ filters: [NodeDirectFilter] });
+  if (process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR !== undefined) {
+    builder.configureDispatch().messageFlow('normal');
+  }
   const mesh = builder
     .addRouteMesh('mesh')
       .listen(endpoint)
@@ -3773,6 +3800,9 @@ test('ZLinkModule routeMesh channel option dispatches inbound routed handlers af
   class HandlerModule {}
   const builder = nestjs.zlinkFramework()
     .options({ filters: [ChannelOnlyFilter] });
+  if (process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR !== undefined) {
+    builder.configureDispatch().messageFlow('normal');
+  }
   const mesh = builder
     .addRouteMesh('mesh')
       .listen(endpoint)
@@ -5065,7 +5095,7 @@ function submitRawReplyMultipart(operation, parts) {
 }
 
 async function submitAsyncMultipart(operation, parts) {
-  await appendMultipart(operation, parts).submit();
+  await appendMultipart(operation, parts).submit().admitted;
 }
 
 function noDispatchErrorReporter() {
@@ -5109,7 +5139,9 @@ function captureRawMultipart(parts, submit = async () => undefined) {
       parts.push(part);
       return this;
     },
-    submit
+    // 바인딩 계약: submit()은 제출 스냅샷을 돌려주고 admission은 .admitted다.
+    // admission 전 terminal 실패도 .admitted로 전달된다(bindings-node G4).
+    submit: () => ({ admitted: (async () => { await submit(); })() })
   };
 }
 
@@ -5134,7 +5166,7 @@ function submitRequestMultipart(operation, parts) {
   for (let index = 1; index < parts.length; index++) {
     current = current.message(parts[index]);
   }
-  return current.timeout(1000).submit();
+  return current.timeout(1000).submit().reply;
 }
 
 function withTimeout(promise, timeoutMs, label) {
@@ -5339,6 +5371,10 @@ function fakeChannelAdapter({ dealer, router }) {
 function readyPoller() {
   return {
     wait() { return true; },
+    waitForReadable() {
+      return new Promise((resolve) => setImmediate(() => resolve(true)));
+    },
+    markDrained() {},
     dispose() {}
   };
 }

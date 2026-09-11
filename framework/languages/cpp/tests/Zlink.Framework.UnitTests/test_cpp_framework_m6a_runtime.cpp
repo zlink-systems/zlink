@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include "metric_test_reader.hpp"
+
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/locations/service_descriptor_registry.hpp"
@@ -523,7 +526,7 @@ void verify_topology_snapshot_and_connection_fence ()
     const auto first_connection = bytes ("connection-a");
     assert (topology.admit (peer, first_connection)
             == mesh::peer_admission_result_t::admitted);
-    assert (topology.select ("alpha")->descriptor.node_routing_id == bytes ("peer"));
+    assert (*topology.select ("alpha") == bytes ("peer"));
 
     auto older = peer;
     older.descriptor_revision = 0;
@@ -1083,11 +1086,9 @@ void verify_signed_weight_contract ()
     for (std::size_t index = 0; index < 400; ++index) {
         const auto selected = topology.select ("weighted");
         assert (selected);
-        if (selected->descriptor.node_routing_id
-            == bytes ("weight-100"))
+        if (*selected == bytes ("weight-100"))
             ++selected_100;
-        else if (selected->descriptor.node_routing_id
-                 == bytes ("weight-300"))
+        else if (*selected == bytes ("weight-300"))
             ++selected_300;
         else
             assert (false);
@@ -1155,6 +1156,104 @@ void verify_signed_weight_contract ()
     assert (
       mesh::sum_service_weights (overflow_safe_weights)
       == 4'300'000'000ull);
+}
+
+void verify_envelope_body_retains_native_storage ()
+{
+    namespace messaging = zlink::framework::runtime::messaging;
+    std::optional<zlink::message_t> retained;
+    {
+        std::vector<zlink::message_t> values;
+        values.emplace_back ();
+        values.push_back (zlink::message_t::from (std::vector<std::uint8_t> (4096, 7)));
+        messaging::message_parts_t parts (std::move (values));
+        const auto address = parts[1].data ();
+        auto body = messaging::envelope_codec_t{}.decode_body (parts);
+        assert (body && body.value ().data () == address);
+        retained.emplace (std::move (body.value ()));
+    }
+    assert (retained->size () == 4096);
+    assert (retained->to_bytes () == std::vector<std::uint8_t> (4096, 7));
+}
+
+void verify_application_owner_drain_transitions ()
+{
+    mesh::service_mailbox_t mailbox (4, 4096, 1, 4096);
+    std::vector<std::string> ready;
+    int prepared = 0;
+    int ready_copies = 0;
+    struct ready_observer_t
+    {
+        std::vector<std::string> &ready;
+        int &copies;
+        ready_observer_t (std::vector<std::string> &ready, int &copies) :
+            ready (ready), copies (copies) {}
+        ready_observer_t (const ready_observer_t &other) :
+            ready (other.ready), copies (other.copies) { ++copies; }
+        ready_observer_t (ready_observer_t &&) = default;
+        void operator() (const std::string &owner) const { ready.push_back (owner); }
+    };
+    mailbox.bind_application_dispatch (
+      [&] (mesh::service_mailbox_record_t &) { ++prepared; },
+      ready_observer_t{ready, ready_copies});
+    const auto registered_copies = ready_copies;
+    mailbox.begin_application_receive_turn ();
+    mailbox.end_application_receive_turn ();
+    assert (ready_copies == registered_copies); // An idle ingress turn has no callback work.
+    const auto enqueue = [&] (std::string owner, std::uint8_t value) {
+        return mailbox.try_enqueue (mesh::service_mailbox_record_t{
+          std::move (owner), mesh::service_mailbox_domain_t::application, {{value}}});
+    };
+    mailbox.begin_application_receive_turn ();
+    assert (enqueue ("a", 1));
+    assert (ready.empty ());
+    assert (enqueue ("a", 2));
+    assert (enqueue ("b", 3));
+    assert (ready.empty ());
+    mailbox.end_application_receive_turn ();
+    assert (prepared == 3);
+    assert ((ready == std::vector<std::string>{"a", "b"}));
+    const auto delivered_copies = ready_copies;
+    assert (mailbox.begin_application_drain ("a"));
+    assert (!mailbox.begin_application_drain ("a"));
+    assert (mailbox.begin_application_drain ("b"));
+    auto first = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "a", 1, 4096);
+    auto other = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "b", 1, 4096);
+    assert (first && other && first->records[0].parts[0][0] == 1);
+    assert (mailbox.release (*first));
+    assert (ready_copies == delivered_copies); // Terminal release keeps the existing drain.
+    auto second = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "a", 1, 4096);
+    assert (second && second->records[0].parts[0][0] == 2);
+    assert (ready.size () == 2); // The same drain keeps its execution right.
+    assert (enqueue ("a", 4));
+    mailbox.end_application_drain ("a"); // A deferred handler retains its reservation.
+    assert (ready.size () == 2);
+    assert (!mailbox.begin_application_drain ("a"));
+    assert (ready_copies == delivered_copies); // Retained work has no ready owner to notify.
+    mailbox.begin_application_receive_turn ();
+    assert (mailbox.release (*second));
+    assert (ready.size () == 2);
+    mailbox.end_application_receive_turn ();
+    assert (ready.size () == 3 && ready.back () == "a");
+    assert (!mailbox.release (*second));
+    assert (mailbox.begin_application_drain ("a"));
+    auto third = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "a", 1, 4096);
+    assert (third && third->records[0].parts[0][0] == 4);
+    assert (enqueue ("a", 5));
+    assert (mailbox.release (*third));
+    mailbox.end_application_drain ("a"); // A time-budget yield wakes this owner once.
+    assert (ready.size () == 4 && ready.back () == "a");
+    const auto resumed_copies = ready_copies;
+    assert (mailbox.release (*other));
+    mailbox.end_application_drain ("b");
+    assert (mailbox.begin_application_drain ("a"));
+    auto final = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "a", 1, 4096);
+    assert (final && final->records[0].parts[0][0] == 5);
+    assert (mailbox.release (*final));
+    mailbox.end_application_drain ("a");
+    assert (mailbox.pending_messages (mesh::service_mailbox_domain_t::application) == 0);
+    assert (ready.size () == 4);
+    assert (ready_copies == resumed_copies); // Empty owner completion does not copy callbacks.
 }
 
 void verify_independent_mailbox_domains_and_claim_fence ()
@@ -1963,8 +2062,20 @@ void verify_client_server_weighted_selection ()
     for (const auto &expected : expected_route_ids) {
         const auto selected_route = topology.select ("alpha");
         assert (selected_route
-                && selected_route->descriptor.node_routing_id == expected);
+                && *selected_route == expected);
     }
+    assert (!topology.select ("unknown-before-change"));
+    const auto before_change = topology.select ("alpha");
+    assert (before_change
+            && *before_change == bytes ("route-a"));
+    auto route_c = descriptor ("route-c");
+    route_c.state = mesh::service_node_state_t::serving;
+    assert (topology.admit (route_c, bytes ("route-connection-c"))
+            == mesh::peer_admission_result_t::admitted);
+    const auto retained_after_change = topology.select ("alpha");
+    assert (retained_after_change
+            && *retained_after_change == bytes ("route-b"));
+    assert (!topology.select ("unknown-after-change"));
 
     auto weighted_route_a = descriptor ("weighted-route-a");
     auto weighted_route_b = descriptor ("weighted-route-b");
@@ -1984,7 +2095,7 @@ void verify_client_server_weighted_selection ()
     for (std::size_t index = 0; index < 400; ++index) {
         const auto selected_route = weighted_topology.select ("alpha");
         assert (selected_route);
-        ++weighted_selected[selected_route->descriptor.node_routing_id];
+        ++weighted_selected[*selected_route];
     }
     assert (weighted_selected[bytes ("weighted-route-a")] == 300);
     assert (weighted_selected[bytes ("weighted-route-b")] == 100);
@@ -1997,22 +2108,81 @@ void verify_client_server_weighted_selection ()
     for (std::size_t index = 0; index < 32; ++index) {
         const auto selected_route = weighted_topology.select ("alpha");
         assert (selected_route
-                && selected_route->descriptor.node_routing_id
-                     == bytes ("weighted-route-a"));
+                && *selected_route == bytes ("weighted-route-a"));
+    }
+
+    mesh::service_topology_registry_t cycle_topology (
+      descriptor ("cycle-route-local"));
+    auto cycle_route_a = descriptor ("cycle-route-a");
+    auto cycle_route_b = descriptor ("cycle-route-b");
+    cycle_route_a.channels.front ().weight = 5;
+    cycle_route_b.channels.front ().weight = 3;
+    cycle_route_a.state = mesh::service_node_state_t::serving;
+    cycle_route_b.state = mesh::service_node_state_t::serving;
+    assert (cycle_topology.admit (
+              cycle_route_a, bytes ("cycle-route-connection-a"))
+            == mesh::peer_admission_result_t::admitted);
+    assert (cycle_topology.admit (
+              cycle_route_b, bytes ("cycle-route-connection-b"))
+            == mesh::peer_admission_result_t::admitted);
+    client_server::smooth_weighted_selector_t cycle_reference;
+    std::vector<client_server::weighted_candidate_t> cycle_candidates{
+      {"cycle-route-a", 5}, {"cycle-route-b", 3}};
+    for (std::size_t index = 0; index < 257; ++index) {
+        const auto expected = cycle_reference.select (cycle_candidates);
+        const auto actual = cycle_topology.select ("alpha");
+        assert (expected && actual && *actual == bytes (*expected));
+    }
+
+    auto cycle_route_c = descriptor ("cycle-route-c");
+    cycle_route_c.channels.front ().weight = 2;
+    cycle_route_c.state = mesh::service_node_state_t::serving;
+    assert (cycle_topology.admit (
+              cycle_route_c, bytes ("cycle-route-connection-c"))
+            == mesh::peer_admission_result_t::admitted);
+    cycle_candidates.push_back ({"cycle-route-c", 2});
+    for (std::size_t index = 0; index < 211; ++index) {
+        const auto expected = cycle_reference.select (cycle_candidates);
+        const auto actual = cycle_topology.select ("alpha");
+        assert (expected && actual && *actual == bytes (*expected));
     }
 }
 
-void verify_raw_owner_node_send_and_liveness ()
+void verify_raw_owner_node_send_and_liveness (
+  zlink::framework::message_flow_log_mode_t mode = zlink::framework::message_flow_log_mode_t::off,
+  bool framework_multipart = false)
 {
+    namespace fw = zlink::framework;
+    std::mutex observations_mutex;
+    std::vector<std::map<std::string, std::string>> observations;
+    fw::logging_builder_t logging;
+    logging.use_provider ("owner-rejection-test", [&] (const fw::log_record_t &record) {
+        std::lock_guard lock (observations_mutex);
+        auto &fields = observations.emplace_back ();
+        for (const auto &field : record.fields)
+            fields.emplace (field.key, field.value);
+    });
+    auto monitoring = std::make_shared<fw::detail::monitoring_runtime_state_t> ();
+    monitoring->diagnostics_logger = logging.create_logger ("owner-rejection-test");
+    fw::dispatch_options_t dispatch;
+    dispatch.message_flow (mode).trace_sample_rate (0);
+    fw::detail::dispatch_options_access_t::set_logger (
+      dispatch, logging.create_logger ("owner-rejection-test"));
+    auto first_context = std::make_shared<zlink::context_t> ();
+    auto second_context = std::make_shared<zlink::context_t> ();
+    first_context->options ().auto_hwm_enabled (false);
+    second_context->options ().auto_hwm_enabled (false);
     mesh::raw_mesh_node_owner_t first (
-      mesh::raw_mesh_node_options_t{descriptor ("raw-a")});
+      mesh::raw_mesh_node_options_t{descriptor ("raw-a")}, first_context);
+    metric_test::provider_t metric_provider;
     mesh::raw_mesh_node_owner_t second (
       mesh::raw_mesh_node_options_t{
         descriptor ("raw-b"),
         1,
         16u * 1024u * 1024u,
         1024,
-        4u * 1024u * 1024u});
+        4u * 1024u * 1024u, {}, zlink::auto_hwm_profile::balanced, {}, {}, dispatch},
+      second_context);
     assert (first.topology ().local_descriptor ().state
             == mesh::service_node_state_t::preparing);
     assert (second.topology ().local_descriptor ().state
@@ -2047,6 +2217,14 @@ void verify_raw_owner_node_send_and_liveness ()
     assert (first.topology ().peer (second_descriptor.node_routing_id));
     assert (second.topology ().peer (first_descriptor.node_routing_id));
 
+    std::atomic_int local_operation_callbacks{0};
+    const auto local_operation = first.register_local_operation (
+      foundation::operation_registry_t::clock_t::time_point::max (),
+      [&] (auto, auto) {
+          local_operation_callbacks.fetch_add (1, std::memory_order_release);
+      });
+    assert (local_operation);
+
     bool submitted = false;
     while (!submitted && mesh::service_liveness_registry_t::clock_t::now ()
                            < deadline) {
@@ -2066,7 +2244,10 @@ void verify_raw_owner_node_send_and_liveness ()
     // A missing host-wide Application Job Queue permit fences the ordinary
     // ROUTER before Core receive.  Poll readiness alone must not consume or
     // retain the application record in the Framework owner.
-    assert (second.wait_for_activity (1s, false));
+    // Observe queued DATA with receive readiness enabled, then verify that
+    // a claim without a permit still leaves it at Core. Completion-only idle
+    // waiting is covered by the raw route port contract test.
+    assert (second.wait_for_activity (1s, true));
     const auto without_shared_permit = await_task (second.pump_one (
       mesh::service_liveness_registry_t::clock_t::now (), false));
     assert (without_shared_permit == mesh::raw_mesh_pump_result_t::no_data);
@@ -2089,11 +2270,25 @@ void verify_raw_owner_node_send_and_liveness ()
     assert (pumped == mesh::raw_mesh_pump_result_t::application);
 
     bool retained_submitted = false;
+    protocol::application_payload_t retained_payload{
+      "Probe", "application/json", bytes ("retained"),
+      "019fc5b9-9df3-786b-bb69-d55358f6d48b", fw::flow_origin_t::inbound};
+    if (framework_multipart) {
+        runtime::messaging::envelope_header_t header;
+        header.kind = runtime::messaging::message_kind_t::command;
+        header.message_name = "Probe";
+        header.correlation_id = "owner-correlation";
+        header.flow_id = retained_payload.flow_id;
+        header.flow_origin = retained_payload.flow_origin;
+        const auto parts = runtime::messaging::envelope_codec_t ().encode_raw_body_parts (
+          header, zlink::message_t::from (bytes ("retained")));
+        retained_payload = protocol::application_payload_t::from_parts (parts.items ());
+    }
     while (!retained_submitted
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         retained_submitted = await_task (first.send_to_node (
           second_descriptor.node_routing_id,
-          {"Probe", "application/json", bytes ("retained")}));
+          retained_payload));
         if (!retained_submitted)
             std::this_thread::sleep_for (1ms);
     }
@@ -2108,6 +2303,50 @@ void verify_raw_owner_node_send_and_liveness ()
     assert (retained_pump
             == mesh::raw_mesh_pump_result_t::backpressured);
 
+    // A drop remains observable with tracing disabled. Reading a cumulative
+    // counter twice must neither reset it nor turn it into two dropped records.
+    for (int scrape = 0; scrape < 2; ++scrape) {
+        auto collected = metric_provider.collect_fields ();
+        std::lock_guard lock (observations_mutex);
+        observations.insert (observations.end (), collected.begin (), collected.end ());
+    }
+    {
+        std::lock_guard lock (observations_mutex);
+        std::size_t metrics = 0, flows = 0, errors = 0;
+        for (const auto &fields : observations) {
+            const auto get = [&] (const char *key) -> std::string {
+                const auto found = fields.find (key);
+                return found == fields.end () ? "" : found->second;
+            };
+            if (get ("name") == "zlink.mesh_node.messages.dropped") {
+                ++metrics;
+                assert (get ("mesh_name") == second_descriptor.mesh_name);
+                assert (get ("message_kind") == "send");
+                assert (get ("reason") == "backpressure");
+                assert (get ("unit") == "{message}");
+                assert (get ("instrument_kind") == "counter");
+                assert (get ("temporality") == "current");
+                assert (std::stod (get ("value")) == (get ("surface") == "node" ? 1 : 0));
+            } else if (get ("event_id") == "zlink.message_flow") {
+                ++flows;
+                assert (get ("phase") == "dropped" && get ("outcome") == "failed");
+                assert (get ("reason") == "backpressure");
+                assert (get ("packet") == "Probe");
+                if (framework_multipart)
+                    assert (get ("corr") == "owner-correlation");
+                assert (get ("flow") == "019fc5b9-9df3-786b-bb69-d55358f6d48b");
+            } else if (get ("event_id") == "zlink.dispatch_error") {
+                ++errors;
+                assert (get ("reason") == "backpressure" && get ("action") == "drop");
+                assert (get ("flow") == "019fc5b9-9df3-786b-bb69-d55358f6d48b");
+                assert (get ("exception") == "Target owner FIFO capacity exceeded");
+            }
+        }
+        assert (metrics == 8);
+        assert (flows == (mode == fw::message_flow_log_mode_t::off ? 0 : 1));
+        assert (errors == flows);
+    }
+
     // A full owner mailbox drops the second one-way payload. Liveness is a
     // finite ordinary control record: it shares the pre-receive permit, then
     // returns that permit as soon as its internal processing completes.
@@ -2116,7 +2355,7 @@ void verify_raw_owner_node_send_and_liveness ()
     const auto paused_probe = await_task (
       first.tick_liveness (paused_liveness_base + 5s));
     assert (paused_probe.probes.size () == 1);
-    assert (second.wait_for_activity (1s, false));
+    assert (second.wait_for_activity (1s, true));
     const auto paused_without_shared_permit = await_task (second.pump_one (
       mesh::service_liveness_registry_t::clock_t::now (), false));
     assert (paused_without_shared_permit
@@ -2269,6 +2508,8 @@ void verify_raw_owner_node_send_and_liveness ()
       "RequestReply", "application/json", bytes ("reply")};
     assert (protocol::decode_application_payload (request_result.second)
             == expected_reply);
+    assert (first.unregister_local_operation (*local_operation));
+    assert (local_operation_callbacks.load (std::memory_order_acquire) == 0);
 
     std::promise<request_result_t> actor_create_promise;
     auto actor_create_future = actor_create_promise.get_future ();
@@ -2446,6 +2687,126 @@ void verify_raw_owner_node_send_and_liveness ()
     assert (next_probe.probes.size () == 1);
     assert (next_probe.probes.front ().probe_id
             != first_probe.probes.front ().probe_id);
+
+    // Fill the source-to-target Core HWM without pumping the target.  A
+    // registry entry remains present only while binding admission is still
+    // pending; dispatcher scheduling after an immediate admission cannot
+    // produce this observation because terminal claim removes the entry.
+    assert (first.pending_operation_count () == 0);
+    const protocol::application_payload_t saturated_payload{
+      "SaturatedControl",
+      "application/octet-stream",
+      std::vector<std::uint8_t> (512u * 1024u, 0x5a)};
+    std::vector<std::shared_ptr<zlink::framework::task_t<zlink::submit_result_t>>>
+      saturated_sends;
+    for (std::size_t index = 0;
+         index < 128 && first.pending_operation_count () == 0;
+         ++index) {
+        saturated_sends.push_back (
+          std::make_shared<zlink::framework::task_t<zlink::submit_result_t>> (
+            first.send_to_node_result (
+              second_descriptor.node_routing_id, saturated_payload)));
+    }
+    assert (first.pending_operation_count () != 0);
+
+    // The reverse-direction probe itself is not behind the saturated route.
+    // Claiming it starts one ACK binding operation, then I3 must return so the
+    // same source poller remains able to drain that operation's completion.
+    const auto reverse_probe_time =
+      mesh::service_liveness_registry_t::clock_t::now () + 5s;
+    const auto reverse_probe = await_task (
+      second.tick_liveness (reverse_probe_time));
+    assert (reverse_probe.probes.size () == 1);
+    bool reverse_probe_claimed = false;
+    const auto reverse_probe_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!reverse_probe_claimed
+           && std::chrono::steady_clock::now () < reverse_probe_deadline) {
+        auto pumping = first.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ());
+        assert (pumping.await_ready ());
+        const auto result = pumping.result ().value ();
+        assert (result != mesh::raw_mesh_pump_result_t::protocol_error);
+        assert (result != mesh::raw_mesh_pump_result_t::capacity_exceeded);
+        reverse_probe_claimed =
+          result == mesh::raw_mesh_pump_result_t::infrastructure;
+        if (!reverse_probe_claimed)
+            std::this_thread::sleep_for (1ms);
+    }
+    assert (reverse_probe_claimed);
+
+    // Drain the original application prefix and drive both existing pollers.
+    // All application sends and the registered ACK must reach terminal without
+    // a second poller or a detached control-send table.
+    const auto saturation_deadline = std::chrono::steady_clock::now () + 5s;
+    auto all_sends_ready = [&] {
+        return std::all_of (
+          saturated_sends.begin (), saturated_sends.end (),
+          [] (const auto &send) { return send->await_ready (); });
+    };
+    while ((!all_sends_ready () || first.pending_operation_count () != 0
+            || second.pending_operation_count () != 0)
+           && std::chrono::steady_clock::now () < saturation_deadline) {
+        auto target_pump = second.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ());
+        assert (target_pump.await_ready ());
+        const auto target_result = target_pump.result ().value ();
+        assert (target_result != mesh::raw_mesh_pump_result_t::protocol_error);
+        auto claim = second.mailbox ().try_claim (
+          mesh::service_mailbox_domain_t::application,
+          1,
+          1024u * 1024u);
+        if (claim)
+            assert (second.mailbox ().release (*claim));
+
+        auto source_pump = first.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ());
+        assert (source_pump.await_ready ());
+        assert (source_pump.result ().value ()
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (all_sends_ready ());
+    assert (first.pending_operation_count () == 0);
+    assert (second.pending_operation_count () == 0);
+    for (const auto &send : saturated_sends)
+        assert (send->result ().value () == zlink::submit_result_t::ok);
+
+    std::vector<foundation::call_id_t> capacity_operations;
+    capacity_operations.reserve (foundation::default_operation_capacity);
+    const auto capacity_deadline = std::chrono::steady_clock::now () + 2s;
+    while (capacity_operations.size () < foundation::default_operation_capacity
+           && std::chrono::steady_clock::now () < capacity_deadline) {
+        const auto reserved = first.register_local_operation (
+          foundation::operation_registry_t::clock_t::time_point::max (),
+          [] (auto, auto) {});
+        if (reserved)
+            capacity_operations.push_back (*reserved);
+        else
+            std::this_thread::sleep_for (1ms);
+    }
+    assert (capacity_operations.size () == foundation::default_operation_capacity);
+    assert (first.pending_operation_count () == foundation::default_operation_capacity);
+
+    const protocol::application_payload_t capacity_payload{
+      "Capacity", "application/json", bytes ("payload")};
+    const auto send_capacity = first.send_to_node_result (
+      second_descriptor.node_routing_id, capacity_payload).result ();
+    assert (!send_capacity);
+    assert (send_capacity.error_kind ()
+            == zlink::framework::framework_error_kind_t::capacity_exceeded);
+    std::atomic_int rejected_request_callbacks{0};
+    const auto request_capacity = first.request_to_node (
+      second_descriptor.node_routing_id, capacity_payload, 2s,
+      [&] (auto, auto) {
+          rejected_request_callbacks.fetch_add (1, std::memory_order_release);
+      }).result ();
+    assert (!request_capacity);
+    assert (request_capacity.error_kind ()
+            == zlink::framework::framework_error_kind_t::capacity_exceeded);
+    assert (rejected_request_callbacks.load (std::memory_order_acquire) == 0);
+    for (const auto &operation : capacity_operations)
+        assert (first.unregister_local_operation (operation));
+    assert (first.pending_operation_count () == 0);
 
     first.close ();
     second.close ();
@@ -3195,6 +3556,13 @@ void verify_relocation_prepare_failed_reply_with_mismatched_identity_is_fenced (
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--owner-rejection-observability") {
+        verify_raw_owner_node_send_and_liveness (zlink::framework::message_flow_log_mode_t::off);
+        verify_raw_owner_node_send_and_liveness (zlink::framework::message_flow_log_mode_t::errors);
+        verify_raw_owner_node_send_and_liveness (zlink::framework::message_flow_log_mode_t::off, true);
+        verify_raw_owner_node_send_and_liveness (zlink::framework::message_flow_log_mode_t::errors, true);
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--r6-create-lifecycle") {
         verify_actor_create_intent_removal_ends_operation ();
         return 0;
@@ -3248,6 +3616,8 @@ int main (int argc, char **argv)
     verify_object_client_connection_requirement ();
     verify_manual_object_client_pair_ends_not_required ();
     verify_signed_weight_contract ();
+    verify_envelope_body_retains_native_storage ();
+    verify_application_owner_drain_transitions ();
     verify_independent_mailbox_domains_and_claim_fence ();
     verify_liveness_reuses_probe_and_fences_reconnect ();
     verify_location_descriptor_cas_snapshot_and_watch ();

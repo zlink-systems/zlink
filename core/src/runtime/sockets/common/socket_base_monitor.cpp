@@ -271,8 +271,10 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
         scoped_lock_t monitor_lock (monitor.sync);
         has_monitor = monitor.socket != NULL;
     }
-    if (has_monitor)
-        stop_monitor (true);
+    if (has_monitor) {
+        errno = EBUSY;
+        return -1;
+    }
 
     switch (type_) {
         case ZLINK_CORE_SOCKET_PAIR:
@@ -528,6 +530,13 @@ void zlink::socket_base_t::event_handshake_failed_no_detail (
   const endpoint_uri_pair_t &endpoint_uri_pair_, int err_)
 {
     event_scalar (endpoint_uri_pair_, ZLINK_EVENT_HANDSHAKE_FAILED_NO_DETAIL, static_cast<uint64_t> (err_));
+}
+
+void zlink::socket_base_t::event_handshake_failed_auth (
+  const endpoint_uri_pair_t &endpoint_uri_pair_, int err_)
+{
+    event_scalar (endpoint_uri_pair_, ZLINK_EVENT_HANDSHAKE_FAILED_AUTH,
+                  static_cast<uint64_t> (err_));
 }
 
 void zlink::socket_base_t::event_handshake_failed_protocol (

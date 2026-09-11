@@ -306,6 +306,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             Duration period,
             Class<?> handlerType,
             ZLinkTimerOptions options) {
+            handlers.prepare(handlerType);
             this.name = name;
             this.handlerType = handlerType;
             this.options = options;
@@ -313,6 +314,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         }
 
         ManagedTimer(TimerSnapshot snapshot) {
+            handlers.prepare(snapshot.handlerType());
             this.name = snapshot.name();
             this.handlerType = snapshot.handlerType();
             this.options = snapshot.schedule().options();

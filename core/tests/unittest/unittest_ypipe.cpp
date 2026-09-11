@@ -244,6 +244,114 @@ void test_conflate_read_if_retains_or_consumes_under_one_decision ()
     TEST_ASSERT_EQUAL_INT (0, replacement.close ());
 }
 
+namespace
+{
+void free_conflate_frame (void *data_, void *hint_)
+{
+    ++*static_cast<int *> (hint_);
+    free (data_);
+}
+
+uint64_t conflate_frame_bytes (const zlink::msg_t &msg_)
+{
+    return msg_.size ();
+}
+
+bool conflate_complete_message (const zlink::msg_t &msg_)
+{
+    return (msg_.flags () & zlink::msg_t::more) == 0;
+}
+
+void write_conflate_frame (
+  zlink::ypipe_conflate_t<zlink::msg_t> &pipe_, unsigned char value_, bool more_,
+  int *freed_, zlink::ypipe_replacement_accounting_t *replaced_)
+{
+    void *data = malloc (128);
+    TEST_ASSERT_NOT_NULL (data);
+    memset (data, value_, 128);
+    zlink::msg_t msg;
+    TEST_ASSERT_EQUAL_INT (
+      0, msg.init_data (data, 128, free_conflate_frame, freed_));
+    if (more_)
+        msg.set_flags (zlink::msg_t::more);
+    pipe_.write_with_replacement_accounting (
+      msg, more_, conflate_frame_bytes, conflate_complete_message, replaced_);
+    // A successful pipe write takes the reference, just like pipe_t::write.
+    TEST_ASSERT_EQUAL_INT (0, msg.init ());
+    TEST_ASSERT_EQUAL_INT (0, msg.close ());
+}
+
+void read_conflate_frame (zlink::ypipe_conflate_t<zlink::msg_t> &pipe_,
+                         unsigned char expected_, bool more_)
+{
+    zlink::msg_t msg;
+    bool batch_tail = more_;
+    TEST_ASSERT_TRUE (pipe_.read (&msg, &batch_tail));
+    TEST_ASSERT_EQUAL_UINT (128, msg.size ());
+    TEST_ASSERT_EQUAL_HEX8 (expected_,
+                           *static_cast<unsigned char *> (msg.data ()));
+    TEST_ASSERT_EQUAL_INT (more_, (msg.flags () & zlink::msg_t::more) != 0);
+    TEST_ASSERT_EQUAL_INT (!more_, batch_tail);
+    TEST_ASSERT_EQUAL_INT (0, msg.close ());
+}
+}
+
+void test_conflate_complete_records_topics_rollback_and_ownership ()
+{
+    int freed = 0;
+    {
+        zlink::ypipe_conflate_t<zlink::msg_t> pipe;
+        zlink::ypipe_replacement_accounting_t replaced;
+        write_conflate_frame (pipe, 'A', true, &freed, &replaced);
+        pipe.flush ();
+        TEST_ASSERT_FALSE (pipe.check_read ());
+        write_conflate_frame (pipe, '1', false, &freed, &replaced);
+        write_conflate_frame (pipe, 'B', true, &freed, &replaced);
+        write_conflate_frame (pipe, '2', false, &freed, &replaced);
+        TEST_ASSERT_EQUAL_UINT64 (0, replaced.bytes);
+
+        // Once A's topic is read, its payload cannot be replaced by A3.
+        read_conflate_frame (pipe, 'A', true);
+        write_conflate_frame (pipe, 'A', true, &freed, &replaced);
+        write_conflate_frame (pipe, '3', false, &freed, &replaced);
+        TEST_ASSERT_EQUAL_UINT64 (0, replaced.bytes);
+        write_conflate_frame (pipe, 'B', true, &freed, &replaced);
+        TEST_ASSERT_EQUAL_UINT64 (0, replaced.bytes);
+        write_conflate_frame (pipe, '4', false, &freed, &replaced);
+        TEST_ASSERT_EQUAL_UINT64 (256, replaced.bytes);
+        TEST_ASSERT_EQUAL_UINT64 (1, replaced.complete_messages);
+        TEST_ASSERT_EQUAL_INT (3, freed); // read A topic + replaced B2
+
+        // A failed multipart send rolls back its prefix, not published data.
+        write_conflate_frame (pipe, 'C', true, &freed, &replaced);
+        zlink::msg_t rollback;
+        TEST_ASSERT_TRUE (pipe.unwrite (&rollback));
+        TEST_ASSERT_EQUAL_HEX8 (
+          'C', *static_cast<unsigned char *> (rollback.data ()));
+        TEST_ASSERT_EQUAL_INT (0, rollback.close ());
+        TEST_ASSERT_FALSE (pipe.unwrite (&rollback));
+        read_conflate_frame (pipe, '1', false);
+        read_conflate_frame (pipe, 'A', true);
+        read_conflate_frame (pipe, '3', false);
+        read_conflate_frame (pipe, 'B', true);
+        read_conflate_frame (pipe, '4', false);
+        TEST_ASSERT_FALSE (pipe.check_read ());
+        TEST_ASSERT_EQUAL_INT (9, freed);
+
+        // Shutdown charges only remaining committed frames; provisional
+        // frames are released by pipe rollback. Both references are freed.
+        write_conflate_frame (pipe, 'A', true, &freed, &replaced);
+        write_conflate_frame (pipe, '5', false, &freed, &replaced);
+        read_conflate_frame (pipe, 'A', true);
+        write_conflate_frame (pipe, 'B', true, &freed, &replaced);
+        pipe.discard_accounting (conflate_frame_bytes,
+                                 conflate_complete_message, &replaced);
+        TEST_ASSERT_EQUAL_UINT64 (128, replaced.bytes);
+        TEST_ASSERT_EQUAL_UINT64 (1, replaced.complete_messages);
+    }
+    TEST_ASSERT_EQUAL_INT (12, freed);
+}
+
 int main (void)
 {
     setup_test_environment ();
@@ -259,6 +367,7 @@ int main (void)
     RUN_TEST (test_read_if_distinguishes_empty_rejected_and_consumed);
     RUN_TEST (test_read_if_reports_prefetched_batch_tail);
     RUN_TEST (test_conflate_read_if_retains_or_consumes_under_one_decision);
+    RUN_TEST (test_conflate_complete_records_topics_rollback_and_ownership);
 
     return UNITY_END ();
 }

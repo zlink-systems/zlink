@@ -125,8 +125,7 @@ void run_case (const char *transport_)
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_BACKPRESSURED,
-      zlink_send_part (client, &rejected, ZLINK_SEND_FLAGS_DONTWAIT,
-                       ZLINK_PART_FINAL, &wait_context, &wait_token));
+      zlink_send (client, &rejected, 1, ZLINK_SEND_FLAGS_DONTWAIT, &wait_context, &wait_token));
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
     TEST_ASSERT_NOT_EQUAL (0, wait_token);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&rejected));
@@ -143,8 +142,7 @@ void run_case (const char *transport_)
     zlink_completion_id_t retry_id = UINT64_MAX;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (client, &retry, ZLINK_SEND_FLAGS_DONTWAIT,
-                       ZLINK_PART_FINAL, NULL, &retry_id));
+      zlink_send (client, &retry, 1, ZLINK_SEND_FLAGS_DONTWAIT, NULL, &retry_id));
     TEST_ASSERT_EQUAL_UINT64 (0, retry_id);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&retry));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&retry));
@@ -154,14 +152,13 @@ void run_case (const char *transport_)
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received));
     const zlink_routing_id_t *source = NULL;
     zlink_reply_token_t token = UINT64_MAX;
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
-      zlink_router_recv_part (server, &source, &token, &received, &has_more,
-                              ZLINK_RECV_FLAGS_NONE));
+      zlink_router_recv (server, &source, &token, &received, 1, &has_more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source);
     TEST_ASSERT_EQUAL_UINT64 (0, token);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_INT (1, has_more);
     TEST_ASSERT_EQUAL_UINT (payload_size, zlink_msg_size (&received));
     TEST_ASSERT_EQUAL_MEMORY (payload.data (), zlink_msg_data (&received),
                               payload.size ());

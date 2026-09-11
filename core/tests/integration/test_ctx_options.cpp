@@ -447,9 +447,7 @@ static void run_auto_hwm_public_blocking_send (bool multipart_)
       zlink_connect (sender, "inproc://auto-hwm-blocked-ratio"));
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_reset_auto_hwm_budget_metrics (ctx));
-    // Raw nonfinal-frame admission is covered by
-    // unittest_auto_hwm_physical_attempt. Public MORE stages a part; the
-    // complete FINAL submissions below exercise public physical admission.
+    // Both single-part and multipart records make one public admission.
     char payload[message_size];
     memset (payload, 'b', sizeof (payload));
     int queued = 0;
@@ -466,13 +464,18 @@ static void run_auto_hwm_public_blocking_send (bool multipart_)
 
     std::future<int> blocked_send =
       std::async (std::launch::async, [&] () {
-          if (multipart_) {
-              const int prefix_rc =
-                zlink_send (sender, payload, sizeof (payload), ZLINK_SNDMORE);
-              if (prefix_rc != static_cast<int> (sizeof (payload)))
-                  return prefix_rc;
+          zlink_msg_t parts[2];
+          const size_t count = multipart_ ? 2 : 1;
+          for (size_t i = 0; i < count; ++i) {
+              if (zlink_msg_init_size (&parts[i], sizeof (payload)) != ZLINK_CONFIG_OK) {
+                  zlink_multipart_close (parts, i);
+                  return -1;
+              }
+              memcpy (zlink_msg_data (&parts[i]), payload, sizeof (payload));
           }
-          return zlink_send (sender, payload, sizeof (payload), 0);
+          const zlink_submit_result_t rc = zlink_send (
+            sender, parts, count, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
+          return rc == ZLINK_SUBMIT_OK ? static_cast<int> (sizeof (payload)) : -1;
       });
 
     zlink_auto_hwm_budget_snapshot_t blocked = before;
@@ -1173,11 +1176,30 @@ void test_ctx_option_invalid ()
     TEST_ASSERT_EQUAL_INT (EINVAL, errno);
 }
 
+void test_thread_priority_has_independent_context_option ()
+{
+    zlink_config_result_t error = ZLINK_CONFIG_INTERNAL_ERROR;
+    const int socket_limit = zlink_ctx_get (get_test_context (), ZLINK_SOCKET_LIMIT, &error);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
+    TEST_ASSERT_EQUAL_INT (-1, zlink_ctx_get (get_test_context (), ZLINK_THREAD_PRIORITY, &error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_ctx_set (
+      get_test_context (), ZLINK_THREAD_PRIORITY, 0));
+    TEST_ASSERT_EQUAL_INT (0, zlink_ctx_get (get_test_context (), ZLINK_THREAD_PRIORITY, &error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
+    TEST_ASSERT_EQUAL_INT (socket_limit, zlink_ctx_get (
+      get_test_context (), ZLINK_SOCKET_LIMIT, &error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_INVALID_ARGUMENT, zlink_ctx_set (
+      get_test_context (), ZLINK_SOCKET_LIMIT, 0));
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+}
+
 int main (void)
 {
     setup_test_environment ();
 
     UNITY_BEGIN ();
+    RUN_TEST (test_thread_priority_has_independent_context_option);
     RUN_TEST (test_ctx_option_max_sockets);
     RUN_TEST (test_ctx_option_socket_limit);
     RUN_TEST (test_ctx_option_io_threads);

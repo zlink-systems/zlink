@@ -203,7 +203,8 @@ void zlink::asio_zmp_engine_t::send_error_frame (uint8_t code_, const char *reas
     }
 }
 
-void zlink::asio_zmp_engine_t::error (error_reason_t reason_)
+void zlink::asio_zmp_engine_t::error (error_reason_t reason_,
+                                    const boost::system::error_code &handshake_error_)
 {
     if (reason_ == timeout_error) {
         if (is_handshaking ())
@@ -231,7 +232,7 @@ void zlink::asio_zmp_engine_t::error (error_reason_t reason_)
           _negotiated_transport_pair_generation);
     }
 
-    asio_engine_t::error (reason_);
+    asio_engine_t::error (reason_, handshake_error_);
 }
 
 void zlink::asio_zmp_engine_t::plug_internal ()

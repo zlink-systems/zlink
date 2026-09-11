@@ -380,7 +380,8 @@ export class ZLinkFrameworkRuntimeHost implements
         this.meshRouters.classifyManualNodeTarget(meshName, targetNodeRid),
       (meshName, sourceNodeRid, parts) =>
         this.submitLocalMeshRoute(meshName, sourceNodeRid, parts),
-      this.metrics
+      this.metrics,
+      () => this.flowCreationEnabled()
     );
     this.spotAddressTransport = new ZLinkHostSpotAddressTransport({
       resolver: () => this.createLocationSpotRouteResolver(),

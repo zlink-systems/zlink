@@ -65,12 +65,11 @@ zlink_routing_id_t discover_stream_rid (void *stream_, int fd_)
     zlink_msg_t received;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received));
     const zlink_routing_id_t *borrowed_rid = NULL;
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    size_t has_more = 0;
     zlink_recv_result_t rc = ZLINK_RECV_NO_DATA;
     for (int attempt = 0; attempt < 1000 && rc == ZLINK_RECV_NO_DATA;
          ++attempt) {
-        rc = zlink_recv_part (stream_, &borrowed_rid, &received, &has_more,
-                              ZLINK_RECV_FLAGS_DONTWAIT);
+        rc = zlink_recv (stream_, &borrowed_rid, &received, 1, &has_more, ZLINK_RECV_FLAGS_DONTWAIT);
         if (rc == ZLINK_RECV_NO_DATA)
             msleep (1);
     }
@@ -155,9 +154,7 @@ void run_concurrent_send_case (int sender_count_, int sends_per_thread_,
                 memset (zlink_msg_data (&part), 0x40 + sender, payload_size);
                 TEST_ASSERT_EQUAL_INT (
                   ZLINK_SUBMIT_OK,
-                  zlink_send_part_rid (server, &rid, &part,
-                                       ZLINK_SEND_FLAGS_NONE,
-                                       ZLINK_PART_FINAL, NULL, NULL));
+                  zlink_send_rid (server, &rid, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
                 TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
             }
         }));

@@ -29,7 +29,7 @@ import re
 from glob import glob
 from typing import Any, Iterable
 
-from .model import PATTERNS, Cell, CellKey, RunSet
+from .model import INPUT_PATTERNS, Cell, CellKey, RunSet
 
 _RESULT_FIELDS = 7
 
@@ -47,12 +47,11 @@ class ReportError(RuntimeError):
 def split_scenario(scenario: str) -> tuple[str, str] | None:
     """``zlink-framework-dotnet-request-window`` -> implementation, pattern.
 
-    Returns ``None`` for a scenario whose pattern is not one of the three the
-    spec defines, so that the C bench's ``request-saturation`` and
-    ``send-blocking`` cells are dropped visibly instead of being matched by a
-    loose suffix rule.
+    Archived ``request-window`` input remains readable but is not part of the
+    current rendered grid. Other non-spec C cells are dropped visibly instead
+    of being matched by a loose suffix rule.
     """
-    for pattern in PATTERNS:
+    for pattern in INPUT_PATTERNS:
         suffix = "-" + pattern
         if scenario.endswith(suffix) and len(scenario) > len(suffix):
             return scenario[: -len(suffix)], pattern
@@ -382,15 +381,17 @@ def _server_identity(raw: dict[str, Any], source: str) -> tuple[dict[str, Any], 
     payload_size = raw.get("payload_size", trigger["payloadBytes"])
     if pattern != trigger["pattern"] or int(payload_size) != int(trigger["payloadBytes"]):
         raise ReportError(f"{source}: cell key disagrees with trigger pattern/payloadBytes")
-    if pattern not in PATTERNS:
+    if pattern not in INPUT_PATTERNS:
         raise ReportError(f"{source}: unsupported server-driven pattern {pattern!r}")
     return trigger, CellKey(str(implementation), str(pattern), int(payload_size))
 
 
-def _target_stats(raw: Any, source: str) -> dict[str, Any]:
+def _target_stats(raw: Any, source: str, pattern: str) -> dict[str, Any]:
     """Validate the spec 4 target_stats object without inventing defaults."""
     if not isinstance(raw, dict):
         return {}
+    if pattern == "send-saturation" and "rejected" in raw and raw["rejected"] is None:
+        raise ReportError(f"{source}: target rejection count unavailable")
     missing = [name for name in ("received", "errors", "drainMs") if name not in raw]
     if missing:
         raise ReportError(f"{source}: target_stats missing {', '.join(missing)}")
@@ -463,7 +464,7 @@ def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") ->
         if role == "source":
             cell.streams = _streams(raw.get("streams"), origin)
         if "target_stats" in raw:
-            cell.target_stats = _target_stats(raw.get("target_stats"), origin)
+            cell.target_stats = _target_stats(raw.get("target_stats"), origin, key.pattern)
         cell.extra.update(raw.get("extra", {}))
         if raw.get("errors") is not None:
             cell.extra["errors"] = float(raw["errors"])

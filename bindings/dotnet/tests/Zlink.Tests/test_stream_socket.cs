@@ -65,7 +65,7 @@ public sealed class test_stream_socket
         using var packet = StreamPacket.Create();
         Assert.True(stream.RecvPacket(packet));
         using Message reply = Message.From("reply");
-        await stream.Send(packet.RoutingId!.Value).Message(reply).Async();
+        await stream.Send(packet.RoutingId!.Value).Message(reply).Async().Admitted;
 
         byte[] echoed = new byte[5];
         int read = client.GetStream().Read(echoed);

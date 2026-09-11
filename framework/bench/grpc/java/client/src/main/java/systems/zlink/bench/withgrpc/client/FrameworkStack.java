@@ -2,9 +2,8 @@
 
 package systems.zlink.bench.withgrpc.client;
 
-import com.google.protobuf.ByteString;
+import com.google.protobuf.UnsafeByteOperations;
 import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
@@ -20,7 +19,7 @@ import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 
 /**
- * {@code zlink-framework-java} client: RouteMesh channel messaging.
+ * {@code zlink-framework-java} client: RouteMesh messaging to an explicit node RID.
  *
  * <p>spec section 8.1: {@code zlink-framework-core} through its public host, the Spring
  * Boot starter, with the protobuf codec from {@code zlink-framework-codec-protobuf}.
@@ -28,6 +27,8 @@ import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
  * window.
  */
 public final class FrameworkStack implements AutoCloseable {
+    private static final RoutingId SERVER = RoutingId.from(BenchContract.SERVER_ROUTING_ID);
+
     private final ConfigurableApplicationContext context;
     private final ZLinkRouteClient route;
     private final int runId;
@@ -59,7 +60,7 @@ public final class FrameworkStack implements AutoCloseable {
     public BenchOperation request() {
         return (payloadSize, phase, sequence) -> {
             BenchPayload message = payload(payloadSize, phase, sequence);
-            return route.requestToChannel(BenchContract.CHANNEL_NAME, message)
+            return route.requestToNode(BenchContract.MESH_NAME, SERVER, message)
                 .timeout(timeout)
                 .submit(BenchPayload.class)
                 .toCompletableFuture()
@@ -77,7 +78,7 @@ public final class FrameworkStack implements AutoCloseable {
     public BenchOperation send() {
         return (payloadSize, phase, sequence) -> {
             BenchPayload message = payload(payloadSize, phase, sequence);
-            return route.sendToChannel(BenchContract.CHANNEL_NAME, message)
+            return route.sendToNode(BenchContract.MESH_NAME, SERVER, message)
                 .submit()
                 .toCompletableFuture()
                 .thenApply(ignored -> (Void) null);
@@ -86,7 +87,7 @@ public final class FrameworkStack implements AutoCloseable {
 
     private BenchPayload payload(int payloadSize, byte phase, long sequence) {
         return BenchPayload.newBuilder()
-            .setBody(ByteString.copyFrom(
+            .setBody(UnsafeByteOperations.unsafeWrap(
                 BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence)))
             .build();
     }
@@ -116,7 +117,7 @@ public final class FrameworkStack implements AutoCloseable {
                 mesh.channelName(BenchContract.CHANNEL_NAME).client();
                 // spec section 3: manual endpoint connection, no location store.
                 mesh.peerConnections().connect(
-                    RoutingId.from(BenchContract.SERVER_ROUTING_ID), endpoint.value());
+                    SERVER, endpoint.value());
             };
         }
     }

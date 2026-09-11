@@ -30,18 +30,16 @@ public sealed class test_contract_b_regressions
         using Message asyncMessage = Message.From("async-no-route");
         ZlinkSubmitException asyncError = await Assert.ThrowsAsync<
             ZlinkSubmitException>(() =>
-            router.Send(unknown).Message(asyncMessage).Async());
+            router.Send(unknown).Message(asyncMessage).Async().Admitted);
         Assert.Equal(ZlinkSubmitException.ErrorCode.NotConnected,
             asyncError.Result);
 
-        // TrySubmit reports only BACKPRESSURED as false; a missing route is
-        // an immediate failure with no wait token.
-        using Message tryMessage = Message.From("try-no-route");
-        ZlinkSubmitException tryError = Assert.Throws<ZlinkSubmitException>(
-            () => router.Send(unknown).Message(tryMessage).TrySubmit());
+        using Message secondMessage = Message.From("second-no-route");
+        ZlinkSubmitException secondError = Assert.Throws<ZlinkSubmitException>(
+            () => router.Send(unknown).Message(secondMessage).Async());
         Assert.Equal(ZlinkSubmitException.ErrorCode.NotConnected,
-            tryError.Result);
-        Assert.Equal("try-no-route", tryMessage.GetString());
+            secondError.Result);
+        Assert.Equal("second-no-route", secondMessage.GetString());
     }
 
     [Fact]
@@ -72,7 +70,7 @@ public sealed class test_contract_b_regressions
         {
             string payload = FillerPayload + $"-{attempt:D2}";
             using Message candidate = Message.From(payload);
-            Task submitted = dealer.Send().Message(candidate).Async();
+            Task submitted = dealer.Send().Message(candidate).Async().Admitted;
             if (submitted.IsCompleted)
             {
                 await submitted;
@@ -111,7 +109,7 @@ public sealed class test_contract_b_regressions
     }
 
     [Fact]
-    public async Task try_submit_wait_token_is_retired_by_socket_close()
+    public async Task async_admission_waiter_is_failed_by_socket_close()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -129,32 +127,30 @@ public sealed class test_contract_b_regressions
         dealer.Connect(endpoint);
         Handshake(dealer, router);
 
-        Message? blocked = null;
+        Task? blockedAdmission = null;
         var acceptedCount = 0;
-        for (var attempt = 0; attempt < 16 && blocked is null; attempt++)
+        for (var attempt = 0; attempt < 16 && blockedAdmission is null; attempt++)
         {
-            Message candidate = Message.From(FillerPayload);
-            if (dealer.Send().Message(candidate).TrySubmit())
+            using Message candidate = Message.From(FillerPayload);
+            SendSubmission submission = dealer.Send().Message(candidate).Async();
+            if (submission.Result == SubmitResult.Ok)
             {
+                Assert.True(submission.Admitted.IsCompletedSuccessfully);
                 acceptedCount++;
-                candidate.Dispose();
                 continue;
             }
 
-            blocked = candidate;
+            Assert.Equal(SubmitResult.Backpressured, submission.Result);
+            blockedAdmission = submission.Admitted;
         }
 
-        Assert.NotNull(blocked);
-        using (blocked)
-        {
-            Assert.True(acceptedCount > 0);
-            Assert.Equal(FillerPayload, blocked!.GetString());
+        Assert.NotNull(blockedAdmission);
+        Assert.True(acceptedCount > 0);
 
-            // The live wait token belongs to Core; closing the socket retires
-            // it and must neither block nor throw.
-            await Task.Run(dealer.Dispose).WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal(FillerPayload, blocked.GetString());
-        }
+        await Task.Run(dealer.Dispose).WaitAsync(TimeSpan.FromSeconds(5));
+        ZlinkSubmitException error = await Assert.ThrowsAsync<ZlinkSubmitException>(
+            () => blockedAdmission!.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(ZlinkSubmitException.ErrorCode.Terminated, error.Result);
 
         for (var index = 0; index < acceptedCount; index++)
         {
@@ -193,7 +189,7 @@ public sealed class test_contract_b_regressions
         {
             string payload = FillerPayload + $"-{attempt:D2}";
             using Message candidate = Message.From(payload);
-            Task submitted = dealer.Send().Message(candidate).Async();
+            Task submitted = dealer.Send().Message(candidate).Async().Admitted;
             if (submitted.IsCompleted)
             {
                 await submitted;

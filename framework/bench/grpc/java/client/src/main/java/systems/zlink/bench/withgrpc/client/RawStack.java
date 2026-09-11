@@ -6,38 +6,28 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
 import systems.zlink.bench.withgrpc.shared.RawWire;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.eventing.PollEventFlags;
+import systems.zlink.contracts.eventing.Poller;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.DealerSocket;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.sockets.RouterSocket;
-import systems.zlink.contracts.sockets.Socket;
 
-/**
- * {@code zlink-java} client: raw binding, ROUTER&lt;-&gt;ROUTER by default.
- *
- * <p>FB-001 / spec section 1.3: the raw row is ROUTER&lt;-&gt;ROUTER so that
- * {@code zlink-framework-java / zlink-java} isolates framework-layer cost instead of
- * mixing in a DEALER-&gt;ROUTER socket-pattern difference. The DEALER mode exists only
- * for the one comparison run the campaign keeps beside the three ROUTER runs.
- */
+/** Raw binding client: ROUTER&lt;-&gt;ROUTER with an explicit target routing ID. */
 public final class RawStack implements AutoCloseable {
-    private final Socket socket;
     private final RouterSocket router;
-    private final DealerSocket dealer;
     private final RoutingId peer;
     private final int runId;
     private final Duration timeout;
 
     private RawStack(
-        Socket socket, RouterSocket router, DealerSocket dealer, RoutingId peer,
+        RouterSocket router, RoutingId peer,
         int runId, Duration timeout) {
-        this.socket = socket;
         this.router = router;
-        this.dealer = dealer;
         this.peer = peer;
         this.runId = runId;
         this.timeout = timeout;
@@ -48,47 +38,94 @@ public final class RawStack implements AutoCloseable {
         RoutingId peer = RoutingId.from(peerId.getBytes(StandardCharsets.US_ASCII));
         RoutingId self = RoutingId.from(selfId.getBytes(StandardCharsets.US_ASCII));
         Duration timeout = Duration.ofMillis(options.requestTimeoutMs);
-        if ("dealer".equals(options.rawSocket)) {
-            DealerSocket dealer = context.createDealerSocket();
-            dealer.setRoutingId(self);
-            dealer.connect(endpoint);
-            return new RawStack(dealer, null, dealer, peer, options.runId, timeout);
-        }
         RouterSocket router = context.createRouterSocket();
         router.setRoutingId(self);
         router.options().mandatory(true);
         router.options().setConnectRoutingId(peer);
         router.connect(endpoint);
-        return new RawStack(router, router, null, peer, options.runId, timeout);
+        return new RawStack(router, peer, options.runId, timeout);
     }
 
-    public BenchOperation request() {
-        return (payloadSize, phase, sequence) -> {
-            byte[] payload =
-                BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence);
-            var operation = router != null ? router.request(peer) : dealer.request();
-            return operation
-                .message(Message.from(RawWire.REQUEST_ENVELOPE))
-                .message(Message.from(RawWire.encodeBenchPayload(payload)))
-                .timeout(timeout)
-                .submit()
-                .toCompletableFuture()
-                .thenAccept(parts -> validate(parts, runId, phase, payloadSize, sequence));
+    public RawOperation request() {
+        return new RawOperation() {
+            @Override
+            public RawSubmission submitRaw(int payloadSize, byte phase, long sequence) {
+                var operation = router.request(peer);
+                try (Message header = Message.from(RawWire.REQUEST_ENVELOPE);
+                     Message body = RawWire.encodeBenchPayloadMessage(
+                         payloadSize, runId, phase, sequence)) {
+                    var submission = operation
+                        .message(header)
+                        .message(body)
+                        .timeout(timeout)
+                        .submit();
+                    var admitted = submission.result() == SubmitResult.BACKPRESSURED
+                        ? submission.admitted().toCompletableFuture()
+                        : java.util.concurrent.CompletableFuture.<Void>completedFuture(
+                            null);
+                    return new RawSubmission(submission.result(),
+                        admitted,
+                        submission.reply().toCompletableFuture().thenAccept(
+                            parts -> validate(parts, runId, phase, payloadSize,
+                                sequence)));
+                }
+            }
         };
     }
 
-    public BenchOperation send() {
-        return (payloadSize, phase, sequence) -> {
-            byte[] payload =
-                BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence);
-            var operation = router != null ? router.send(peer) : dealer.send();
-            return operation
-                .message(Message.from(RawWire.REQUEST_ENVELOPE))
-                .message(Message.from(RawWire.encodeBenchPayload(payload)))
-                .submit()
-                .toCompletableFuture()
-                .thenApply(ignored -> (Void) null);
+    public RawOperation send() {
+        return new RawOperation() {
+            @Override
+            public RawSubmission submitRaw(int payloadSize, byte phase, long sequence) {
+                var operation = router.send(peer);
+                try (Message header = Message.from(RawWire.REQUEST_ENVELOPE);
+                     Message body = RawWire.encodeBenchPayloadMessage(
+                         payloadSize, runId, phase, sequence)) {
+                    var submission = operation
+                        .message(header)
+                        .message(body)
+                        .submit();
+                    var admitted = submission.result() == SubmitResult.BACKPRESSURED
+                        ? submission.admitted().toCompletableFuture()
+                        : java.util.concurrent.CompletableFuture.<Void>completedFuture(
+                            null);
+                    return new RawSubmission(submission.result(), admitted,
+                        submission.result() == SubmitResult.OK
+                            ? java.util.concurrent.CompletableFuture.completedFuture(
+                                null)
+                            : admitted);
+                }
+            }
         };
+    }
+
+    /** Raw operations expose admission separately from request completion. */
+    public abstract class RawOperation implements BenchOperation {
+        public abstract RawSubmission submitRaw(int payloadSize, byte phase, long sequence);
+
+        final Poller openCompletionPoller() {
+            Poller poller = Zlink.createPoller();
+            try {
+                poller.add(router, 0, PollEventFlags.POLLCOMPLETION);
+                return poller;
+            } catch (RuntimeException | Error error) {
+                poller.close();
+                throw error;
+            }
+        }
+
+        @Override
+        public final java.util.concurrent.CompletableFuture<Void> invoke(
+                int payloadSize, byte phase, long sequence) {
+            return submitRaw(payloadSize, phase, sequence).completion();
+        }
+    }
+
+    /** Initial result, conditional admission wait, and independent completion. */
+    public record RawSubmission(
+        SubmitResult result,
+        java.util.concurrent.CompletableFuture<Void> admitted,
+        java.util.concurrent.CompletableFuture<Void> completion) {
     }
 
     private static void validate(
@@ -112,6 +149,6 @@ public final class RawStack implements AutoCloseable {
 
     @Override
     public void close() {
-        socket.close();
+        router.close();
     }
 }

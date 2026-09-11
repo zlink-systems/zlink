@@ -164,6 +164,14 @@ void blocking_directed_send_absorbs_short_active_router_disconnect ()
     int reconnect_ivl = 20;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (client, ZLINK_OPT_RECONNECT_IVL, &reconnect_ivl, sizeof (reconnect_ivl)));
+    // The test exercises the reconnect scheduler, not the platform TCP SYN
+    // timeout. Bound an in-flight attempt inside the existing 500 ms send
+    // budget so Windows cannot keep the first pre-rebind SYN pending for its
+    // OS-default interval and bypass the retry transition under test.
+    int connect_timeout = 50;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (client, ZLINK_OPT_CONNECT_TIMEOUT,
+                        &connect_timeout, sizeof (connect_timeout)));
     int one = 1;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_router_option (client, ZLINK_ROUTER_OPT_MANDATORY, &one, sizeof (one)));

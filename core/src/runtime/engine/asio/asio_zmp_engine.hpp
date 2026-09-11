@@ -48,7 +48,8 @@ class asio_zmp_engine_t ZLINK_FINAL : public asio_engine_t
     void transport_lane_count_decided (unsigned char lane_count_,
                                        int error_number_) ZLINK_OVERRIDE;
     void plug_internal () ZLINK_OVERRIDE;
-    void error (error_reason_t reason_) ZLINK_OVERRIDE;
+    void error (error_reason_t reason_,
+                        const boost::system::error_code &handshake_error_ = boost::system::error_code ()) ZLINK_OVERRIDE;
     bool handshake_timer_should_fail () ZLINK_OVERRIDE;
     int decode_and_push (msg_t *msg_) ZLINK_OVERRIDE;
     int process_command_message (msg_t *msg_) ZLINK_OVERRIDE;

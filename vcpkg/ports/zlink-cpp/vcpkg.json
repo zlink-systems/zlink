@@ -1,6 +1,6 @@
 {
   "name": "zlink-cpp",
-  "version": "0.17.6",
+  "version": "0.18.0",
   "description": "C++20 binding for the zlink messaging library",
   "homepage": "https://github.com/zlink-systems/zlink",
   "license": "MPL-2.0",

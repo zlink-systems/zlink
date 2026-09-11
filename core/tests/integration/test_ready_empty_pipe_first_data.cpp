@@ -65,11 +65,10 @@ void expect_no_data ()
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
     const zlink_routing_id_t *rid = NULL;
     zlink_reply_token_t token = 0;
-    zlink_part_flag_t more = ZLINK_PART_MORE;
+    size_t more = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_NO_DATA,
-      zlink_router_recv_part (receiver, &rid, &token, &part, &more,
-                              ZLINK_RECV_FLAGS_DONTWAIT));
+      zlink_router_recv (receiver, &rid, &token, &part, 1, &more, ZLINK_RECV_FLAGS_DONTWAIT));
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
 }
@@ -82,12 +81,8 @@ zlink_submit_result_t send_data (const zlink_routing_id_t *target_,
       ZLINK_CONFIG_OK, zlink_msg_init_size (&part, sizeof (payload) - 1));
     memcpy (zlink_msg_data (&part), payload, sizeof (payload) - 1);
     const zlink_submit_result_t result =
-      target_ ? zlink_send_part_rid (
-                  sender, target_, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                  ZLINK_PART_FINAL, context_, id_)
-              : zlink_send_part (
-                  sender, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                  ZLINK_PART_FINAL, context_, id_);
+      target_ ? zlink_send_rid (sender, target_, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, context_, id_)
+              : zlink_send (sender, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, context_, id_);
     const int send_errno = zlink_errno ();
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&part));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
@@ -204,11 +199,10 @@ void run_first_data (int sender_type_, bool inproc_, bool reader_first_)
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
     const zlink_routing_id_t *source = NULL;
     zlink_reply_token_t token = 0;
-    zlink_part_flag_t more = ZLINK_PART_MORE;
+    size_t more = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
-      zlink_router_recv_part (receiver, &source, &token, &part, &more,
-                              ZLINK_RECV_FLAGS_NONE));
+      zlink_router_recv (receiver, &source, &token, &part, 1, &more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source);
     zlink_routing_id_t sender_rid = {};
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
@@ -216,7 +210,7 @@ void run_first_data (int sender_type_, bool inproc_, bool reader_first_)
     TEST_ASSERT_EQUAL_UINT (sender_rid.size, source->size);
     TEST_ASSERT_EQUAL_MEMORY (sender_rid.data, source->data, source->size);
     TEST_ASSERT_EQUAL_UINT64 (0, token);
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
+    TEST_ASSERT_EQUAL_INT (1, more);
     TEST_ASSERT_EQUAL_UINT64 (sizeof (payload) - 1, zlink_msg_size (&part));
     TEST_ASSERT_EQUAL_MEMORY (payload, zlink_msg_data (&part), sizeof (payload) - 1);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));

@@ -82,21 +82,22 @@ class raw_route_port_t
 
     task_t<zlink::submit_result_t> send_result (
       const raw_bytes_t &target_routing_id,
-      const raw_message_t &parts,
+      raw_message_t parts,
       raw_send_stage_trace_t trace = {});
     task_t<bool> send (const raw_bytes_t &target_routing_id,
-                       const raw_message_t &parts);
+                       raw_message_t parts);
     task_t<raw_request_completion_t> request (
       const raw_bytes_t &target_routing_id,
-      const raw_message_t &parts,
+      raw_message_t parts,
       std::chrono::milliseconds timeout);
-    zlink::poll_event_flag_t poll (std::chrono::milliseconds timeout);
+    zlink::poll_event_flag_t poll (std::chrono::milliseconds timeout,
+                                   bool accept_application_receive = true);
     void signal_activity () noexcept;
     std::optional<raw_received_t> receive_if_ready (
       zlink::poll_event_flag_t revents);
     std::optional<raw_received_t> try_receive ();
     bool reply (const raw_received_t &request,
-                const raw_message_t &parts);
+                raw_message_t parts);
     void close () noexcept;
 
   private:
@@ -104,6 +105,9 @@ class raw_route_port_t
     zlink::poller_t *_poller;
     std::uintptr_t _poller_slot;
     zlink::router_socket_t *_socket;
+    // Poller registration/wait/close have their own resource lifetime. A
+    // blocking wait must not hold the independent socket submission gate.
+    std::mutex _poller_mutex;
     std::mutex _owned_socket_mutex;
     std::mutex *_socket_mutex;
     zlink::poll_event_flag_t _receive_events;

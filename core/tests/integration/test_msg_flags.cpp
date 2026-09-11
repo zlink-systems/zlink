@@ -3,6 +3,8 @@
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
 
+#include <cstring>
+
 SETUP_TEARDOWN_TESTCONTEXT
 
 void test_more ()
@@ -14,30 +16,31 @@ void test_more ()
     void *sc = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sc, "inproc://a"));
 
-    //  Send 2-part message.
-    send_string_expect_success (sc, "A", ZLINK_SNDMORE);
-    send_string_expect_success (sc, "B", 0);
+    zlink_msg_t outgoing[2];
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&outgoing[0], 1));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&outgoing[1], 1));
+    memcpy (zlink_msg_data (&outgoing[0]), "A", 1);
+    memcpy (zlink_msg_data (&outgoing[1]), "B", 1);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send (sc, outgoing, 2, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
 
     //  The public receive returns the source id beside the first payload part.
-    zlink_msg_t msg;
+    zlink_msg_t msg[2];
     const zlink_routing_id_t *source = NULL;
     zlink_reply_token_t token;
-    zlink_part_flag_t more = ZLINK_PART_FINAL;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
+    size_t more = 1;
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
-      zlink_router_recv_part (sb, &source, &token, &msg, &more, ZLINK_RECV_FLAGS_NONE));
+      zlink_router_recv (sb, &source, &token, msg, 2, &more,
+                         ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source);
     TEST_ASSERT_GREATER_THAN_UINT (0, source->size);
-    TEST_ASSERT_EQUAL_UINT (1, zlink_msg_size (&msg));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, more);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
-      zlink_router_recv_part (sb, &source, &token, &msg, &more, ZLINK_RECV_FLAGS_NONE));
-    TEST_ASSERT_EQUAL_UINT (1, zlink_msg_size (&msg));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
+    TEST_ASSERT_EQUAL_UINT (2, more);
+    TEST_ASSERT_EQUAL_UINT (1, zlink_msg_size (&msg[0]));
+    TEST_ASSERT_EQUAL_MEMORY ("A", zlink_msg_data (&msg[0]), 1);
+    TEST_ASSERT_EQUAL_UINT (1, zlink_msg_size (&msg[1]));
+    TEST_ASSERT_EQUAL_MEMORY ("B", zlink_msg_data (&msg[1]), 1);
+    zlink_multipart_close (msg, more);
 
     //  Deallocate the infrastructure.
     test_context_socket_close (sc);
@@ -52,11 +55,23 @@ void test_pair_socket_preserves_multipart_more_flag ()
     void *sc = test_context_socket (ZLINK_SOCKET_PAIR);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sc, "inproc://msg-flags-pair"));
 
-    TEST_ASSERT_EQUAL_INT (3, TEST_ASSERT_SUCCESS_ERRNO (zlink_send (sb, "foo", 3, ZLINK_SNDMORE)));
-    TEST_ASSERT_EQUAL_INT (6, TEST_ASSERT_SUCCESS_ERRNO (zlink_send (sb, "foobar", 6, 0)));
-
-    recv_string_expect_success (sc, "foo", 0);
-    recv_string_expect_success (sc, "foobar", 0);
+    zlink_msg_t outgoing[2];
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&outgoing[0], 3));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&outgoing[1], 6));
+    memcpy (zlink_msg_data (&outgoing[0]), "foo", 3);
+    memcpy (zlink_msg_data (&outgoing[1]), "foobar", 6);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send (sb, outgoing, 2, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
+    zlink_msg_t incoming[2];
+    size_t count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_recv (sc, NULL, incoming, 2, &count, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_UINT64 (2, count);
+    TEST_ASSERT_EQUAL_MEMORY ("foo", zlink_msg_data (&incoming[0]), 3);
+    TEST_ASSERT_EQUAL_MEMORY ("foobar", zlink_msg_data (&incoming[1]), 6);
+    zlink_multipart_close (incoming, count);
 
     test_context_socket_close (sc);
     test_context_socket_close (sb);

@@ -1,9 +1,11 @@
+[English](./README.md) | [한국어](./README.ko.md)
+
 # Local package
 
 이 디렉터리는 외부 registry에 publish하지 않고 Core release와 first-party
 binding을 package하는 경로다. Core version은 root `VERSION`, binding package
-version은 root `BINDINGS_VERSION`, Framework package version은 root
-`FRAMEWORK_VERSION`이 각각 소유한다. 기본 동작은 GitHub의
+version은 `bindings/<language>/VERSION`, Framework package version은
+`framework/languages/<language>/VERSION`이 각각 소유한다. 기본 동작은 GitHub의
 `core/v<VERSION>` release asset을 다운로드하고 checksum과 provenance를 확인한
 뒤 binding이 사용할 Core prefix를 만드는 것이다. 기본 출력은
 `.artifacts/wsl/` 아래에 생성된다.
@@ -11,15 +13,16 @@ version은 root `BINDINGS_VERSION`, Framework package version은 root
 ## 버전 동기화
 
 root `VERSION`은 Core release·public header·native payload version의 유일한
-원본이고, root `BINDINGS_VERSION`은 first-party binding package release version,
-root `FRAMEWORK_VERSION`은 Framework package release version의 유일한 원본이다.
-package manager manifest와 Framework binding dependency pin은 `BINDINGS_VERSION`을,
-Core prefix·provenance·versioned runtime은 `VERSION`을, Framework manifest와 sample
-dependency pin은 `FRAMEWORK_VERSION`을 따른다. 다음 공식 진입점으로 동기화하고
+원본이다. 각 binding과 Framework의 `VERSION`은 해당 언어 package release
+version의 유일한 원본이다. package manager manifest와 Framework binding
+dependency pin은 같은 언어의 binding `VERSION`을, Core prefix·provenance·versioned
+runtime은 root `VERSION`을, Framework manifest와 sample dependency pin은 같은
+언어의 Framework `VERSION`을 따른다. C binding은 Core와 함께 배포하므로 별도
+package version 없이 root `VERSION`을 사용한다. 다음 공식 진입점으로 동기화하고
 검증한다.
 
 Core, binding package 또는 Framework package release version을 변경할 때는 해당
-root version 파일만 수정한 뒤 `--sync-versions`를 실행한다. 언어별 manifest,
+소유 `VERSION` 파일만 수정한 뒤 `--sync-versions`를 실행한다. 언어별 manifest,
 Framework dependency, sample pin과 sample runner의 local Core package 경로를 직접
 찾아서 수정하지 않는다. 동기화 뒤에는 `--verify-versions`로 누락된 pin이 없는지
 확인하고 local package를 생성한다.
@@ -29,7 +32,8 @@ scripts/local-package/build-wsl.sh --sync-versions
 scripts/local-package/build-wsl.sh --verify-versions
 ```
 
-일반 local-package build도 package 작업 전에 같은 sync와 verify를 실행한다.
+일반 local-package build와 cache hit는 버전을 검사하고, 불일치하면 종료한다.
+버전 파일을 변경한 뒤에는 위의 `--sync-versions`를 명시적으로 실행한다.
 Framework package 자체 version과 언어별 sample pin도 같은 동기화 대상이다.
 
 ## 전체 빌드
@@ -38,14 +42,30 @@ Framework package 자체 version과 언어별 sample pin도 같은 동기화 대
 scripts/local-package/build-wsl.sh
 ```
 
-위 명령은 Core source를 별도로 build하지 않고 `VERSION`의 release Core를 준비한
-뒤 `BINDINGS_VERSION`의 C, C++, .NET, Go, Java, Node.js, Python, Rust binding을
-차례로 package한다.
+위 명령은 Core source를 별도로 build하지 않고 root `VERSION`의 release Core를
+준비한 뒤, C는 Core version으로, 나머지는 각 `bindings/<language>/VERSION`으로
+C, C++, .NET, Go, Java, Node.js, Python, Rust binding을 차례로 package한다.
 
-특정 binding만 package하려면 언어 이름을 넘긴다.
+`bindings/`와 `scripts/local-package/`가 깨끗하면 입력 hash에 해당하는 공유
+binding package를 재사용한다. Cache miss에서는 8개 binding을 모두 빌드한다.
+`.artifacts/wsl/`은 worktree별 디렉터리이며 binding package 파일만 공유 cache로
+연결한다. Framework package와 빌드 디렉터리는 worktree별로 유지한다.
+
+위 입력 경로에 staged·unstaged·untracked 변경이 있거나 기본 Release와 다른
+빌드 설정·compiler flag를 사용하면 `.artifacts/wsl-private/`에서 빌드한다.
+이때 특정 binding만 package하려면 언어 이름을 넘긴다.
 
 ```bash
 scripts/local-package/build-wsl.sh dotnet java node
+```
+
+Cache key·도구 버전 조회와 cache 정리는 다음 명령을 사용한다.
+공유 정책은 [개발 흐름 §4.1](../../doc/principal/dev/development-workflow.ko.md#41-로컬-패키지-공유-캐시-content-addressed)이 소유한다.
+
+```bash
+scripts/local-package/build-wsl.sh --cache-key
+scripts/local-package/cache-prune.sh --keep 5 --dry-run
+scripts/local-package/cache-prune.sh --keep 5
 ```
 
 **Core release가 선행 조건이다 — 우회 경로는 없다(2026-08-28 확정).** Core source
@@ -102,14 +122,14 @@ release line에 맞춰 `libzlink.so.0`으로 생성한다. 외부 dependency의 
 
 ## binding별 출력
 
-- C: `.artifacts/wsl/c/zlink-c-<BINDINGS_VERSION>.tar.gz`
-- C++: `.artifacts/wsl/install/zlink-cpp/<BINDINGS_VERSION>/`
-- .NET: `.artifacts/wsl/nuget/Zlink.<BINDINGS_VERSION>.nupkg`
-- Go: `.artifacts/wsl/go/zlink-go-<BINDINGS_VERSION>.tar.gz`
-- Java: `.artifacts/wsl/maven/systems/zlink/zlink/<BINDINGS_VERSION>/`
-- Node.js: `.artifacts/wsl/npm/zlink-systems-zlink-<BINDINGS_VERSION>.tgz`
-- Python: `.artifacts/wsl/python/zlink-<BINDINGS_VERSION>-*.whl` 및 source archive
-- Rust: `.artifacts/wsl/rust/zlink-<BINDINGS_VERSION>.crate`
+- C: `.artifacts/wsl/c/zlink-c-<CORE_VERSION>.tar.gz`
+- C++: `.artifacts/wsl/install/zlink-cpp/<CPP_BINDING_VERSION>/`
+- .NET: `.artifacts/wsl/nuget/Zlink.<DOTNET_BINDING_VERSION>.nupkg`
+- Go: `.artifacts/wsl/go/zlink-go-<GO_BINDING_VERSION>.tar.gz`
+- Java: `.artifacts/wsl/maven/systems/zlink/zlink/<JAVA_BINDING_VERSION>/`
+- Node.js: `.artifacts/wsl/npm/zlink-systems-zlink-<NODE_BINDING_VERSION>.tgz`
+- Python: `.artifacts/wsl/python/zlink-<PYTHON_BINDING_VERSION>-*.whl` 및 source archive
+- Rust: `.artifacts/wsl/rust/zlink-<RUST_BINDING_VERSION>.crate`
 
 Go의 public module path는 `zlink.systems/zlink`이며, release version과
 import path를 분리한다. 모든 binding package는 Core provenance에 기록된
@@ -122,6 +142,18 @@ Windows 작업에서도 binding은 Core source를 먼저 build하지 않고 rele
 
 ```powershell
 $prefix = powershell -ExecutionPolicy Bypass -File scripts/local-package/core/fetch-release.ps1
+
+# C++/.NET/Java/Node binding 전체 또는 언어별 package
+scripts/local-package/build-windows.ps1 -SyncVersions
+scripts/local-package/build-windows.ps1 -VerifyVersions
+scripts/local-package/build-windows.ps1 -CorePrefix $prefix
+scripts/local-package/cpp/build-windows.ps1 -CorePrefix $prefix
+scripts/local-package/dotnet/build-windows.ps1 -CorePrefix $prefix
+scripts/local-package/java/build-windows.ps1 -CorePrefix $prefix
+scripts/local-package/node/build-windows.ps1 -CorePrefix $prefix
+
+# Framework가 소비하는 .NET/Java/Node HTTP client local package
+scripts/local-package/http-client/build-windows.ps1
 ```
 
 기본 prefix는 `%LOCALAPPDATA%\zlink\core\<VERSION>\windows-x64\`이다. 진행 중인

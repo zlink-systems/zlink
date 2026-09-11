@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class MessageCopyWrapContractTest {
@@ -49,8 +50,8 @@ public class MessageCopyWrapContractTest {
     }
 
     @Test
-    public void moveIsNotPublicContract() {
-        assertFalse(hasPublicMethod(Message.class, "move"));
+    public void moveIsPublicContract() {
+        assertTrue(hasPublicMethod(Message.class, "move", Message.class));
     }
 
     @Test
@@ -61,6 +62,53 @@ public class MessageCopyWrapContractTest {
             assertTrue(empty.isEmpty());
             assertFalse(source.isEmpty());
             assertArrayEquals(source.toByteArray(), copy.toByteArray());
+        }
+    }
+
+    @Test
+    public void copySharesNativePayloadAndSurvivesSourceClose() {
+        TestSupport.assumeNative();
+
+        Message source = Message.from(new byte[1024]);
+        Message copy = source.copy();
+        assertEquals(2, source.refCount());
+        assertEquals(2, copy.refCount());
+
+        source.close();
+        assertEquals(1024, copy.size());
+        assertEquals(1, copy.refCount());
+        copy.close();
+    }
+
+    @Test
+    public void moveTransfersPayloadAndLeavesSourceEmpty() {
+        TestSupport.assumeNative();
+
+        Message source = Message.from(new byte[1024]);
+        source.writeByte(0, (byte) 0x5a);
+        Message destination = Message.from("replaced");
+        source.move(destination);
+
+        assertTrue(source.isEmpty());
+        assertEquals(1, source.refCount());
+        assertEquals(1024, destination.size());
+        assertEquals((byte) 0x5a, destination.readByte(0));
+        assertEquals(1, destination.refCount());
+
+        source.close();
+        destination.close();
+    }
+
+    @Test
+    public void cloneCreatesIndependentPayload() {
+        TestSupport.assumeNative();
+
+        try (Message source = Message.from(new byte[1024]);
+             Message clone = source.clone()) {
+            source.writeByte(0, (byte) 0x33);
+            assertNotEquals(source.readByte(0), clone.readByte(0));
+            assertEquals(1, source.refCount());
+            assertEquals(1, clone.refCount());
         }
     }
 

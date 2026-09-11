@@ -208,6 +208,10 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 	stats := perfcommon.NewMultiStats()
 	type counts struct{ attempts, failures, timeouts uint64 }
 	countsByClient := make([]counts, len(clients))
+	type admission struct {
+		client int
+		err    error
+	}
 	type completion struct {
 		client      int
 		parts       []*zlink.Message
@@ -215,41 +219,43 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 		completedAt time.Time
 		completedNs int64
 	}
-	// One turn submits at most one request per client. The channel buffers that
-	// turn only; Core admission and completion pace the number still in flight.
 	completed := make(chan completion, len(clients))
-	totalOutstanding := 0
-
-	var completionPoller *zlink.Poller
-	completionEvents := make([]zlink.PollEvent, max(1, len(clients)))
-	if len(clients) > 0 && clients[0].target != nil {
-		var pollerErr error
-		completionPoller, pollerErr = zlink.NewPoller()
-		perfcommon.Must(pollerErr)
-		defer completionPoller.Close()
-		for index := range clients {
-			perfcommon.Must(completionPoller.AddSocket(clients[index].target, zlink.PollCompletion, uintptr(index)))
-		}
+	admitted := make(chan admission, len(clients))
+	available := make([]bool, len(clients))
+	for index := range available {
+		available[index] = true
 	}
+	totalOutstanding := 0
+	pendingAdmissions := 0
 
 	submitOne := func(index int) {
 		countsByClient[index].attempts++
+		payload := perfcommon.PreparePayload(cfg.msgSize)
+		perfcommon.StampWindowPayload(payload, window.ActiveAt)
+		submit := clients[index].request().Bytes(payload)
+		if perfcommon.MeasurementPartCount() == 2 {
+			submit = submit.Bytes(nil)
+		}
+		submission, err := submit.Timeout(timeout).Submit(context.Background())
+		if err != nil {
+			countsByClient[index].failures++
+			perfcommon.Must(err)
+		}
 		totalOutstanding++
 		go func() {
-			payload := perfcommon.PreparePayload(cfg.msgSize)
-			// Stamp on the goroutine that immediately invokes the public terminal;
-			// scheduler queueing before this point is not wire latency.
-			perfcommon.StampWindowPayload(payload, window.ActiveAt)
-			submit := clients[index].request().Bytes(payload)
-			if perfcommon.MeasurementPartCount() == 2 {
-				submit = submit.Bytes(nil)
-			}
-			parts, err := submit.Timeout(timeout).Submit(context.Background())
+			parts, err := submission.Reply(context.Background())
 			completed <- completion{
 				client: index, parts: parts, err: err,
 				completedAt: time.Now(), completedNs: perfcommon.MonotonicNowNs(),
 			}
 		}()
+		if submission.Result() == zlink.SubmitBackpressured {
+			available[index] = false
+			pendingAdmissions++
+			go func() {
+				admitted <- admission{client: index, err: submission.Admitted(context.Background())}
+			}()
+		}
 	}
 
 	processCompletion := func(done completion) {
@@ -281,6 +287,13 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 		progressed := false
 		for {
 			select {
+			case ready := <-admitted:
+				pendingAdmissions--
+				if ready.err != nil {
+					perfcommon.Must(ready.err)
+				}
+				available[ready.client] = true
+				progressed = true
 			case done := <-completed:
 				processCompletion(done)
 				progressed = true
@@ -290,43 +303,40 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 		}
 	}
 
-	waitForProgress := func(deadline time.Time, progressed bool) {
+	waitForProgress := func(deadline time.Time) {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return
 		}
-		if completionPoller != nil {
-			if progressed {
-				remaining = 0
-			} else if remaining > 50*time.Millisecond {
-				remaining = 50 * time.Millisecond
-			}
-			_, pollErr := completionPoller.Wait(completionEvents, remaining)
-			perfcommon.Must(pollErr)
-			return
-		}
-		if progressed {
-			return
-		}
 		select {
+		case ready := <-admitted:
+			pendingAdmissions--
+			if ready.err != nil {
+				perfcommon.Must(ready.err)
+			}
+			available[ready.client] = true
 		case done := <-completed:
 			processCompletion(done)
 		case <-time.After(remaining):
 		}
 	}
 
-	// Each turn submits once per socket, drains ready completions, then lets the
-	// completion-only poller pace request and WRITABLE progress. A reply is
-	// never an application admission gate for the next turn.
 	for time.Now().Before(window.StopAt) {
+		submitted := false
 		for index := range clients {
 			if !time.Now().Before(window.StopAt) {
 				break
 			}
+			if !available[index] {
+				continue
+			}
 			submitOne(index)
+			submitted = true
 		}
 		progressed := drainReady()
-		waitForProgress(window.StopAt, progressed)
+		if !submitted && !progressed {
+			waitForProgress(window.StopAt)
+		}
 	}
 
 	drainTimeout := max(1000*time.Millisecond, timeout*4)
@@ -334,15 +344,17 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 		drainTimeout = time.Duration(value) * time.Millisecond
 	}
 	drainDeadline := time.Now().Add(drainTimeout)
-	for totalOutstanding > 0 {
+	for totalOutstanding > 0 || pendingAdmissions > 0 {
 		progressed := drainReady()
-		if totalOutstanding == 0 {
+		if totalOutstanding == 0 && pendingAdmissions == 0 {
 			break
 		}
 		if !time.Now().Before(drainDeadline) {
 			perfcommon.Must(fmt.Errorf("multi reqrep completion drain timed out with %d outstanding", totalOutstanding))
 		}
-		waitForProgress(drainDeadline, progressed)
+		if !progressed {
+			waitForProgress(drainDeadline)
+		}
 	}
 	var total counts
 	for _, count := range countsByClient {

@@ -2,6 +2,8 @@
 
 #include <Runtime/Native/message_access.hpp>
 
+#include <zlink/Contracts/Errors/errors.hpp>
+
 #include <cstring>
 #include <stdexcept>
 #include <zlink.h>
@@ -183,6 +185,49 @@ bool message_t::is_empty () const noexcept
 int message_t::ref_count () const noexcept
 {
     return _valid ? zlink_msg_refcnt (detail::native_handle (*this), nullptr) : -1;
+}
+
+message_t message_t::copy () const
+{
+    message_t result{no_init_t ()};
+    config_result_t rc = static_cast<config_result_t> (
+      zlink_msg_init (detail::native_handle (result)));
+    detail::throw_if_failed<config_error_t> (rc);
+    result._valid = true;
+    rc = static_cast<config_result_t> (
+      zlink_msg_copy (detail::native_handle (result),
+                      const_cast<zlink_msg_t *> (detail::native_handle (*this))));
+    detail::throw_if_failed<config_error_t> (rc);
+    result._has_payload = _has_payload;
+    return result;
+}
+
+void message_t::move (message_t &dest_)
+{
+    const config_result_t rc = static_cast<config_result_t> (
+      zlink_msg_move (detail::native_handle (dest_), detail::native_handle (*this)));
+    detail::throw_if_failed<config_error_t> (rc);
+    dest_._valid = true;
+    dest_._has_payload = _has_payload;
+    _valid = true;
+    _has_payload = false;
+}
+
+message_t message_t::clone () const
+{
+    if (!_valid)
+        throw config_error_t (config_result_t::invalid_handle, EFAULT);
+
+    const size_t payload_size = size ();
+    message_t result{no_init_t ()};
+    const config_result_t rc = static_cast<config_result_t> (
+      zlink_msg_init_size (detail::native_handle (result), payload_size));
+    detail::throw_if_failed<config_error_t> (rc);
+    result._valid = true;
+    result._has_payload = payload_size > 0;
+    if (payload_size > 0)
+        std::memcpy (result.data (), data (), payload_size);
+    return result;
 }
 
 std::vector<uint8_t> message_t::to_bytes () const

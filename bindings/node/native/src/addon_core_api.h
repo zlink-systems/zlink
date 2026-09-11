@@ -14,6 +14,9 @@ napi_value message_from_buffer (napi_env env, napi_callback_info info);
 napi_value message_allocate (napi_env env, napi_callback_info info);
 napi_value message_frame_data (napi_env env, napi_callback_info info);
 napi_value message_frame_copy_data (napi_env env, napi_callback_info info);
+napi_value message_frame_copy (napi_env env, napi_callback_info info);
+napi_value message_frame_move (napi_env env, napi_callback_info info);
+napi_value message_frame_ref_count (napi_env env, napi_callback_info info);
 napi_value message_frame_size (napi_env env, napi_callback_info info);
 napi_value message_frame_close (napi_env env, napi_callback_info info);
 
@@ -29,8 +32,6 @@ napi_value ctx_reset_auto_hwm_budget_metrics (napi_env env, napi_callback_info i
 
 napi_value socket_new (napi_env env, napi_callback_info info);
 napi_value socket_close (napi_env env, napi_callback_info info);
-napi_value test_begin_held_routed_multipart (napi_env env, napi_callback_info info);
-napi_value test_end_held_routed_multipart (napi_env env, napi_callback_info info);
 napi_value test_run_send_close_stress (napi_env env, napi_callback_info info);
 napi_value socket_bind (napi_env env, napi_callback_info info);
 napi_value socket_unbind (napi_env env, napi_callback_info info);
@@ -92,6 +93,7 @@ napi_value poll_events_fd (napi_env env, napi_callback_info info);
 napi_value poller_wait_into (napi_env env, napi_callback_info info);
 napi_value socket_readable_watch_start (napi_env env, napi_callback_info info);
 napi_value socket_readable_watch_stop (napi_env env, napi_callback_info info);
+void socket_readable_watch_progress (napi_env env, napi_callback_info info);
 
 napi_value timer_new (napi_env env, napi_callback_info info);
 napi_value timer_destroy (napi_env env, napi_callback_info info);

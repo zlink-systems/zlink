@@ -23,7 +23,7 @@ public sealed class test_hot_path_ownership_contract
         var operation = sender.Send().Message(source);
         for (var i = 1; i < count; i++)
             operation.Message(source);
-        await operation.Async();
+        await operation.Async().Admitted;
         Assert.Throws<ObjectDisposedException>(() => source.GetString());
         using Received received = Received.Create();
         Assert.True(receiver.Recv(received));
@@ -52,7 +52,7 @@ public sealed class test_hot_path_ownership_contract
         for (var i = 1; i < count - 1; i++)
             operation.Message(source);
         operation.Message(invalid);
-        Assert.Throws<ObjectDisposedException>(() => operation.TrySubmit());
+        Assert.Throws<ObjectDisposedException>(() => operation.Async());
         Assert.Equal("prefix", source.GetString());
         sender.Send().Message(source).Submit();
         using Received received = Received.Create();
@@ -64,20 +64,23 @@ public sealed class test_hot_path_ownership_contract
     [InlineData(2)]
     [InlineData(9)]
     [InlineData(33)]
-    public void native_final_failure_preserves_all_originals(int count)
+    public void native_record_failure_preserves_all_originals(int count)
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
         using var context = Zlink.CreateContext();
         using var router = context.CreateRouterSocket();
         router.Options.Mandatory = true;
-        using Message source = Message.From("preserved");
+        string payload = new string('p', 512);
+        using Message source = Message.From(payload);
+        using Message observer = source.Copy();
         var operation = router.Send(RoutingId.From("missing"u8)).Message(source);
         for (var i = 1; i < count; i++)
             operation.Message(source);
-        var error = Assert.Throws<ZlinkSubmitException>(() => operation.TrySubmit());
+        var error = Assert.Throws<ZlinkSubmitException>(() => operation.Async());
         Assert.Equal(ZlinkSubmitException.ErrorCode.NotConnected, error.Result);
-        Assert.Equal("preserved", source.GetString());
+        Assert.Equal(payload, source.GetString());
+        Assert.Equal(2, observer.RefCount);
     }
     [Theory]
     [InlineData(1)]
@@ -96,7 +99,7 @@ public sealed class test_hot_path_ownership_contract
         dealer.Connect(endpoint);
         using Message request = Message.From("request");
         var pending = dealer.Request().Message(request)
-            .Timeout(TimeSpan.FromSeconds(2)).Async();
+            .Timeout(TimeSpan.FromSeconds(2)).Async().Reply;
         using Received received = Received.Create();
         Assert.True(router.Recv(received));
         var rid = received.RoutingId!.Value;
@@ -143,7 +146,7 @@ public sealed class test_hot_path_ownership_contract
         dealer.Connect(endpoint);
         using Message request = Message.From("request");
         var pending = dealer.Request().Message(request)
-            .Timeout(TimeSpan.FromSeconds(2)).Async();
+            .Timeout(TimeSpan.FromSeconds(2)).Async().Reply;
         using Received received = Received.Create();
         Assert.True(router.Recv(received));
         using Message source = Message.From("prefix");
@@ -225,7 +228,7 @@ public sealed class test_hot_path_ownership_contract
         {
             using var part = Message.From(text);
             var pending = dealer.Request().Message(part)
-                .Timeout(TimeSpan.FromSeconds(2)).Async();
+                .Timeout(TimeSpan.FromSeconds(2)).Async().Reply;
             Assert.True(router.Recv(received));
             router.Reply(received.RoutingId!.Value, received.ReplyToken!)
                 .Message(received.Parts[0]).Submit();
@@ -280,7 +283,7 @@ public sealed class test_hot_path_ownership_contract
             {
                 using var sequence = Message.From(i.ToString());
                 using var body = Message.Allocate(65_536);
-                await sender.Send().Message(sequence).Message(body).Async();
+                await sender.Send().Message(sequence).Message(body).Async().Admitted;
             }
         });
         var receiving = Task.Run(() =>

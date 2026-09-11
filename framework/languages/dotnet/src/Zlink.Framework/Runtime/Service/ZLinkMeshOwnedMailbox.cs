@@ -57,7 +57,10 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
     private readonly Queue<ZLinkMeshQueuedRecord> _records = new();
     private readonly ZLinkStateLane _lane = new();
     private ulong _pendingBytes;
-    private bool _claimed;
+    private int _applicationAdmissionRecords;
+    // An active claim owns only the FIFO prefix present when it was granted.
+    // Zero still holds that claim until Release; -1 means no active claim.
+    private int _claimedRecordCount = -1;
 
     internal bool HasRecords => AwaitStateLane(
         _lane.RunAsync(() => _records.Count != 0));
@@ -70,7 +73,7 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
         ulong byteBudget)
     {
         var pendingBytes = record.PendingBytes;
-        var enqueued = AwaitStateLane(_lane.RunAsync(() =>
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (pendingBytes == ulong.MaxValue)
                 return false;
@@ -80,88 +83,86 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
                     byteBudget))
                 return false;
             _records.Enqueue(record);
+            if (record.HasApplicationJobAdmission)
+                _applicationAdmissionRecords++;
             _pendingBytes = checked(_pendingBytes + pendingBytes);
 
-            // Enqueue accounting must precede the callback. A dequeue can
-            // otherwise publish its decrement before the corresponding
-            // increment and expose a transient negative global count.
+            // Publish accounting before another mailbox turn can dequeue
+            // this record. Readiness reads this existing aggregate directly.
+            onRecordEnqueued(pendingBytes);
             return true;
         }));
-        if (!enqueued)
-            return false;
-
-        onRecordEnqueued(pendingBytes);
-        return true;
     }
 
-    internal bool TryClaim()
+    internal bool TryClaim(bool requireApplicationAdmission, bool claim, out int count,
+        out bool applicationAdmissionReserved)
+    {
+        var result = AwaitStateLane(_lane.RunAsync(() =>
+        {
+            var admitted = _applicationAdmissionRecords == _records.Count;
+            if (_claimedRecordCount >= 0 || _records.Count == 0
+                || (requireApplicationAdmission && !admitted))
+                return (Ready: false, Count: 0, Admitted: false);
+            if (claim)
+                _claimedRecordCount = _records.Count;
+            return (Ready: true, Count: _records.Count, Admitted: admitted);
+        }));
+        count = result.Count;
+        applicationAdmissionReserved = result.Admitted;
+        return result.Ready;
+    }
+
+    internal bool Drain(MeshReceiveBatch batch, int maximumRecords)
     {
         return AwaitStateLane(_lane.RunAsync(() =>
         {
-            if (_claimed || _records.Count == 0)
-                return false;
-            _claimed = true;
-            return true;
+            var count = 0;
+            var limit = Math.Min(maximumRecords, _claimedRecordCount);
+            while (count < limit && _records.Count != 0)
+            {
+                var candidate = _records.Peek();
+                if (!batch.CanAdd(checked((long)candidate.PayloadBytes)))
+                    break;
+                var record = _records.Dequeue();
+                _claimedRecordCount--;
+                if (record.HasApplicationJobAdmission)
+                    _applicationAdmissionRecords--;
+                _pendingBytes -= record.PendingBytes;
+                onRecordDequeued(record.PendingBytes);
+                batch.Add(record.Record, record.TakeParts(), record.TakePayloadOwner());
+                count++;
+            }
+            return count != 0;
         }));
     }
 
-    internal bool TryDequeue(
-        MeshReceiveBatch batch,
-        out ZLinkMeshQueuedRecord record)
+    internal bool Release()
     {
-        var dequeued = AwaitStateLane(
-            _lane.RunAsync(() => TryDequeueOnLane(batch)));
-
-        if (dequeued.Record is not { } dequeuedRecord)
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
-            record = null!;
-            return false;
-        }
-
-        record = dequeuedRecord;
-        onRecordDequeued(dequeued.PendingBytes);
-        return true;
-    }
-
-    private (ZLinkMeshQueuedRecord? Record, ulong PendingBytes) TryDequeueOnLane(
-        MeshReceiveBatch batch)
-    {
-        if (_records.Count == 0)
-            return (null, 0);
-        var candidate = _records.Peek();
-        if (!batch.CanAdd(checked((long)candidate.PayloadBytes)))
-            return (null, 0);
-
-        var record = _records.Dequeue();
-        var pendingBytes = record.PendingBytes;
-        _pendingBytes -= pendingBytes;
-        return (record, pendingBytes);
-    }
-
-    internal void Release()
-    {
-        AwaitStateLane(_lane.RunAsync(() => _claimed = false));
+            _claimedRecordCount = -1;
+            return _records.Count != 0;
+        }));
     }
 
     internal void Dispose()
     {
-        List<(ZLinkMeshQueuedRecord Record, ulong PendingBytes)> removed = [];
+        List<ZLinkMeshQueuedRecord> removed = [];
         AwaitStateLane(_lane.RunAsync(() =>
         {
             while (_records.Count != 0)
             {
                 var record = _records.Dequeue();
-                removed.Add((record, record.PendingBytes));
+                removed.Add(record);
+                onRecordDequeued(record.PendingBytes);
             }
             _pendingBytes = 0;
-            _claimed = false;
+            _applicationAdmissionRecords = 0;
+            _claimedRecordCount = -1;
         }));
 
-        foreach (var (record, pendingBytes) in removed)
-        {
-            onRecordDequeued(pendingBytes);
+        foreach (var record in removed)
             record.Dispose();
-        }
     }
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
@@ -207,6 +208,9 @@ internal sealed class ZLinkMeshQueuedRecord : IDisposable
     internal ulong PayloadBytes => _payloadBytes;
 
     internal ulong PendingBytes => _pendingBytes;
+
+    internal bool HasApplicationJobAdmission =>
+        _payloadOwner is ZLinkApplicationJobQueueRecordOwner;
 
     internal IReadOnlyList<Message> TakeParts() =>
         Interlocked.Exchange(ref _parts, null) ?? Array.Empty<Message>();

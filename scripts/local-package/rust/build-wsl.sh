@@ -11,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Creates zlink-<BINDINGS_VERSION>.crate with the exact Core VERSION Linux
+Creates zlink-<bindings/rust/VERSION>.crate with the exact Core VERSION Linux
 runtime.
 EOF
 }
@@ -27,7 +27,7 @@ done
 [[ "$core_prefix" = /* ]] || { echo "--core-prefix must be absolute" >&2; exit 2; }
 core_prefix="$(readlink -f "$core_prefix")"
 core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
-binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
+binding_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$repo_root/bindings/rust/VERSION")"
 export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
 export ZLINK_CORE_VERSION="$core_version"
 package_version="$(sed -n 's/^version = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"/\1/p' "$repo_root/bindings/rust/Cargo.toml" | head -n1)"

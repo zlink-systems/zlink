@@ -71,30 +71,29 @@ void test_multipart_message ()
     const char *part2 = "Part 2";
     const char *part3 = "Part 3";
 
-    send_string_expect_success (server, part1, ZLINK_SNDMORE);
-    send_string_expect_success (server, part2, ZLINK_SNDMORE);
-    send_string_expect_success (server, part3, 0);
+    const char *const payloads[] = {part1, part2, part3};
+    zlink_msg_t outgoing[3];
+    for (size_t i = 0; i != 3; ++i) {
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_msg_init_size (&outgoing[i], strlen (payloads[i]) + 1));
+        memcpy (zlink_msg_data (&outgoing[i]), payloads[i],
+                strlen (payloads[i]) + 1);
+    }
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send (server, outgoing, 3, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
 
     //  Receive and verify all parts
-    zlink_msg_t msg;
-    zlink_part_flag_t more = ZLINK_PART_FINAL;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
-    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, client, 0, &more));
-    TEST_ASSERT_EQUAL_STRING (part1, static_cast<const char *> (zlink_msg_data (&msg)));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, more);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
-    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, client, 0, &more));
-    TEST_ASSERT_EQUAL_STRING (part2, static_cast<const char *> (zlink_msg_data (&msg)));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, more);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
-    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, client, 0, &more));
-    TEST_ASSERT_EQUAL_STRING (part3, static_cast<const char *> (zlink_msg_data (&msg)));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
+    zlink_msg_t incoming[3];
+    size_t count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_recv (client, NULL, incoming, 3, &count, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_UINT64 (3, count);
+    for (size_t i = 0; i != count; ++i)
+        TEST_ASSERT_EQUAL_STRING (
+          payloads[i], static_cast<const char *> (zlink_msg_data (&incoming[i])));
+    zlink_multipart_close (incoming, count);
 
     test_context_socket_close (client);
     test_context_socket_close (server);

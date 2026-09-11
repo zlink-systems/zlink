@@ -378,22 +378,6 @@ func (o *ContextOptions) AutoHwmRecalcDebounce() (time.Duration, error) {
 	return time.Duration(value) * time.Millisecond, err
 }
 
-func (o *ContextOptions) SetMaxMessageSize(value int) error {
-	ctx, err := o.context()
-	if err != nil {
-		return err
-	}
-	return ctx.setIntOption(C.ZLINK_MAX_MSGSZ, value)
-}
-
-func (o *ContextOptions) MaxMessageSize() (int, error) {
-	ctx, err := o.context()
-	if err != nil {
-		return 0, err
-	}
-	return ctx.getIntOption(C.ZLINK_MAX_MSGSZ)
-}
-
 func (o *ContextOptions) MessageStructSize() (int, error) {
 	ctx, err := o.context()
 	if err != nil {

@@ -7,6 +7,7 @@
 
 #include <google/protobuf/message_lite.h>
 
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -14,6 +15,34 @@
 
 namespace zlink::framework_codecs
 {
+
+namespace detail
+{
+inline zlink::framework::encoded_payload_t serialize_protobuf (
+  const google::protobuf::MessageLite &value)
+{
+    const auto size = value.ByteSizeLong ();
+    if (size > static_cast<std::size_t> (std::numeric_limits<int>::max ()))
+        throw std::length_error ("protobuf payload exceeds serializer size limit");
+    auto message = zlink::message_t::allocate (size);
+    if (!message.valid ())
+        throw std::bad_alloc ();
+    if (!value.SerializeToArray (message.data (), static_cast<int> (size)))
+        throw std::runtime_error ("protobuf codec failed to serialize "
+                                  + std::string (value.GetTypeName ()));
+    return zlink::framework::detail::encoded_payload_from_raw (std::move (message));
+}
+
+inline void parse_protobuf (google::protobuf::MessageLite &value,
+                            const zlink::framework::encoded_payload_t &payload)
+{
+    const auto bytes = payload.bytes ();
+    if (bytes.size () > static_cast<std::size_t> (std::numeric_limits<int>::max ())
+        || !value.ParseFromArray (bytes.data (), static_cast<int> (bytes.size ())))
+        throw std::runtime_error ("protobuf codec failed to parse "
+                                  + std::string (value.GetTypeName ()));
+}
+} // namespace detail
 
 struct protobuf_registration_key_t
 {
@@ -57,16 +86,11 @@ class protobuf_codec_extension_t
                        "protobuf codec requires a protobuf message type");
         codecs.template add_serializer<TMessage> (
           [] (const TMessage &value) {
-              //  from_raw only borrows the message buffer (a small message
-              //  even stores its bytes inline in the temporary itself), and
-              //  the temporary dies at the end of this full expression — the
-              //  returned payload must OWN its bytes.
-              return zlink::framework::encoded_payload_t::from_string (serialize (value));
+              return detail::serialize_protobuf (value);
           },
           [] (const zlink::framework::encoded_payload_t &payload) {
               TMessage value;
-              parse (value,
-                     zlink::framework::detail::encoded_payload_to_raw (payload).to_string ());
+              detail::parse_protobuf (value, payload);
               return value;
           },
           content_type);
@@ -81,14 +105,11 @@ class protobuf_codec_extension_t
           [] (const TPayload &value) {
               TMessage message;
               to_protobuf (value, message);
-              //  Same ownership rule as above: never return a payload that
-              //  borrows a temporary message's buffer.
-              return zlink::framework::encoded_payload_t::from_string (serialize (message));
+              return detail::serialize_protobuf (message);
           },
           [] (const zlink::framework::encoded_payload_t &payload) {
               TMessage message;
-              parse (message,
-                     zlink::framework::detail::encoded_payload_to_raw (payload).to_string ());
+              detail::parse_protobuf (message, payload);
               TPayload value;
               from_protobuf (message, value);
               return value;
@@ -96,24 +117,6 @@ class protobuf_codec_extension_t
           content_type);
     }
 
-  private:
-    static std::string serialize (const google::protobuf::MessageLite &message)
-    {
-        std::string bytes;
-        if (!message.SerializeToString (&bytes)) {
-            throw std::runtime_error ("protobuf codec failed to serialize "
-                                      + std::string (message.GetTypeName ()));
-        }
-        return bytes;
-    }
-
-    static void parse (google::protobuf::MessageLite &message, const std::string &bytes)
-    {
-        if (!message.ParseFromString (bytes)) {
-            throw std::runtime_error ("protobuf codec failed to parse "
-                                      + std::string (message.GetTypeName ()));
-        }
-    }
 };
 
 inline protobuf_codec_extension_t protobuf ()
@@ -138,19 +141,11 @@ struct extension_serializer_traits_t<
     {
         return serializer_t<T> (
           [] (const T &value) {
-              std::string bytes;
-              if (!value.SerializeToString (&bytes)) {
-                  throw std::runtime_error ("protobuf codec failed to serialize "
-                                            + std::string (value.GetTypeName ()));
-              }
-              return encoded_payload_t::from_string (bytes);
+              return framework_codecs::detail::serialize_protobuf (value);
           },
           [] (const encoded_payload_t &payload) {
               T value;
-              if (!value.ParseFromString (encoded_payload_to_raw (payload).to_string ())) {
-                  throw std::runtime_error ("protobuf codec failed to parse "
-                                            + std::string (value.GetTypeName ()));
-              }
+              framework_codecs::detail::parse_protobuf (value, payload);
               return value;
           },
           framework_codecs::protobuf_codec_extension_t::content_type);

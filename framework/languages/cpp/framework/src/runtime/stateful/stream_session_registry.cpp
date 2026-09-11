@@ -29,8 +29,10 @@ void settle_retained_outbound (std::vector<stream_retained_outbound_t> retained,
 
 } // namespace
 
-stream_session_registry_t::stream_session_registry_t (authority_resolver_t resolver) :
-    _resolver (std::move (resolver)), _lane_executor (), _lane (_lane_executor)
+stream_session_registry_t::stream_session_registry_t (authority_resolver_t resolver,
+                                                      std::function<void ()> activity_handler) :
+    _resolver (std::move (resolver)), _activity_handler (std::move (activity_handler)),
+    _lane_executor (), _lane (_lane_executor)
 {
     if (!_resolver) {
         throw std::invalid_argument ("stream session authority resolver is empty");
@@ -1093,6 +1095,8 @@ void stream_session_registry_t::notify_changed () noexcept
         _changed_generation.fetch_add (1, std::memory_order_release);
     }
     _changed.notify_all ();
+    if (!_barriers.empty () && _activity_handler)
+        _activity_handler ();
 }
 
 bool stream_session_registry_t::exact_tenure_target (const stream_remote_tenure_t &tenure,

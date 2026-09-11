@@ -33,6 +33,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
 
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -312,18 +313,36 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 "local actor dispatch requires a Spot runtime"));
         }
         Message payload = Message.from(payloadBytes);
-        return localActorDispatcher.dispatch(
+        ZLinkRequestMetrics.Series metric = header.requestSequence().isPresent()
+            ? ZLinkRequestMetrics.actor(meshName) : null;
+        long started = metric != null && ZLinkRequestMetrics.durationEnabled()
+            ? System.nanoTime() : ZLinkRequestMetrics.NO_START;
+        ZLinkRequestMetrics.start(metric);
+        CompletionStage<Optional<ZLinkSessionActorsRuntime.LocalActorReply>> request;
+        try {
+            request = localActorDispatcher.dispatch(
                 ref,
                 sourceSessionSequence,
                 header,
-                payload)
+                payload);
+        } catch (RuntimeException failure) {
+            payload.close();
+            completeRequest(metric, started, failure);
+            throw failure;
+        }
+        // The actor request terminal precedes forwarding its independent
+        // serialized reply to the STREAM session.
+        request.whenComplete((ignored, failure) -> {
+            payload.close();
+            completeRequest(metric, started, failure);
+        });
+        return request
             .thenCompose(reply -> {
                 if (reply.isEmpty()) {
                     return CompletableFuture.completedFuture(null);
                 }
                 return replyLocal(header, reply.get());
-            })
-            .whenComplete((ignored, error) -> payload.close());
+            });
     }
 
     private CompletionStage<Void> replyLocal(
@@ -395,6 +414,10 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         byte[] payloadBytes,
         long sourceSessionSequence) {
         Message payloadPart = Message.from(payloadBytes);
+        ZLinkRequestMetrics.Series metric = ZLinkRequestMetrics.actor(meshName);
+        long started = ZLinkRequestMetrics.durationEnabled()
+            ? System.nanoTime() : ZLinkRequestMetrics.NO_START;
+        ZLinkRequestMetrics.start(metric);
         CompletionStage<List<Message>> request;
         try {
             request = stream.requestBoundActor(
@@ -406,10 +429,27 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 ZLinkSessionActorsRuntime.RELAY_SUBMIT_TIMEOUT);
         } catch (RuntimeException failure) {
             payloadPart.close();
+            completeRequest(metric, started, failure);
             return CompletableFuture.failedFuture(failure);
         }
-        return request.thenCompose(reply -> replyRemote(requestHeader, reply))
-            .whenComplete((ignored, failure) -> payloadPart.close());
+        // The actor request terminal precedes forwarding its reply to STREAM.
+        request.whenComplete((ignored, failure) -> {
+            payloadPart.close();
+            completeRequest(metric, started, failure);
+        });
+        return request.thenCompose(reply -> replyRemote(requestHeader, reply));
+    }
+
+    private static void completeRequest(
+        ZLinkRequestMetrics.Series metric,
+        long started,
+        Throwable failure) {
+        ZLinkRequestMetrics.complete(
+            metric,
+            started == ZLinkRequestMetrics.NO_START
+                ? -1L
+                : ZLinkRequestMetrics.elapsed(started, System.nanoTime()),
+            failure);
     }
 
     private CompletionStage<Void> replyRemote(

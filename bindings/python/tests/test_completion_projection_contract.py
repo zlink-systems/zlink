@@ -123,7 +123,6 @@ def test_request_tokenless_backpressure_preserves_core_error(
         owner = runtime.CompletionOwner(dealer)
         dealer._completion_owner = owner
         submissions = []
-        task = None
 
         def submit(target, native_parts, flags, entry, timeout_ms):
             assert target is None
@@ -160,22 +159,24 @@ def test_request_tokenless_backpressure_preserves_core_error(
             ):
                 operation = dealer.request().message(b"request").timeout(1)
                 if stage == "retry":
-                    task = asyncio.create_task(operation.submit())
-                    turn = asyncio.get_running_loop().create_future()
-                    asyncio.get_running_loop().call_soon(turn.set_result, None)
-                    await turn
-                    assert not task.done()
+                    result = operation.submit()
+                    assert result.result == zlink.SubmitResult.BACKPRESSURED
+                    assert not result.admitted.done()
+                    assert not result.reply.done()
                     assert submissions[0].waiting_native
                     assert owner._entries_by_id == {71: submissions[0]}
                     schedule.assert_called_once()
                     schedule.reset_mock()
                     assert owner.drain().total_count == 1
-                    result = task
+                    with pytest.raises(zlink.SubmitError) as admitted:
+                        await result.admitted
+                    with pytest.raises(zlink.SubmitError) as reply:
+                        await result.reply
+                    assert admitted.value is reply.value
+                    raised = admitted
                 else:
-                    result = operation.submit()
-
-                with pytest.raises(zlink.SubmitError) as raised:
-                    await result
+                    with pytest.raises(zlink.SubmitError) as raised:
+                        operation.submit()
 
                 assert raised.value.result == zlink.SubmitResult.BACKPRESSURED
                 assert raised.value.native_errno == errno.EAGAIN
@@ -191,9 +192,6 @@ def test_request_tokenless_backpressure_preserves_core_error(
                 assert not owner._entries
                 assert not owner._entries_by_id
         finally:
-            if task is not None and not task.done():
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
             dealer.close()
             context.close()
 

@@ -17,7 +17,7 @@ use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 use zlink::{
     AutoHwmProfile, Context, DealerSocket, Message, Monitorable, PairSocket, PollEvent, Poller,
-    PubSocket, RecvFlags, RouterSocket, RoutingId, SocketMonitor, SocketMonitorEventMask,
+    PubSocket, Received, RecvFlags, RouterSocket, SocketMonitor, SocketMonitorEventMask,
     SocketMonitorOpenOptions, StreamSocket, SubSocket, SubmitError, SubmitResult, ZlinkError,
 };
 
@@ -346,43 +346,36 @@ pub fn measurement_part_count() -> usize {
 #[macro_export]
 macro_rules! perf_submit_measurement_async {
     ($operation:expr, $payload:expr) => {{
-        async move {
-            let operation = $operation.message($payload);
-            if $crate::common::measurement_part_count() == 2 {
-                operation
-                    .message(
-                        zlink::Message::try_from(&[] as &[u8]).expect("empty measurement tail"),
-                    )
-                    .submit()
-                    .await
-            } else {
-                operation.submit().await
-            }
+        let operation = $operation.message($payload);
+        if $crate::common::measurement_part_count() == 2 {
+            operation
+                .message(zlink::Message::try_from(&[] as &[u8]).expect("empty measurement tail"))
+                .submit()
+        } else {
+            operation.submit()
         }
     }};
 }
 
-type RoutedReplyFuture<'a> = Pin<Box<dyn Future<Output = Result<(), SubmitError>> + 'a>>;
+type RoutedReplyFuture = Pin<Box<dyn Future<Output = Result<(), SubmitError>>>>;
 
-/// C-parity routed relay queue: receive snapshots may accumulate, but only the
-/// FIFO head is submitted until its Core admission Future completes.
-pub struct RoutedReplySender<'a> {
-    router: &'a RouterSocket,
-    pending: VecDeque<(RoutingId, Vec<u8>)>,
-    active: ConcurrentTasks<RoutedReplyFuture<'a>>,
+/// C-parity routed relay queue: received envelopes may accumulate, but only the
+/// FIFO head waits when Core reports backpressure.
+pub struct RoutedReplySender {
+    pending: VecDeque<Received>,
+    active: ConcurrentTasks<RoutedReplyFuture>,
 }
 
-impl<'a> RoutedReplySender<'a> {
-    pub fn new(router: &'a RouterSocket) -> Self {
+impl RoutedReplySender {
+    pub fn new() -> Self {
         Self {
-            router,
             pending: VecDeque::new(),
             active: ConcurrentTasks::new(0),
         }
     }
 
-    pub fn enqueue(&mut self, rid: RoutingId, payload: Vec<u8>) {
-        self.pending.push_back((rid, payload));
+    pub fn enqueue(&mut self, received: Received) {
+        self.pending.push_back(received);
         self.advance();
     }
 
@@ -403,14 +396,29 @@ impl<'a> RoutedReplySender<'a> {
             if self.active.any_pending() {
                 return;
             }
-            let Some((rid, payload)) = self.pending.pop_front() else {
+            let Some(received) = self.pending.pop_front() else {
                 return;
             };
-            let router = self.router;
-            self.active.push(Box::pin(async move {
-                let msg = Message::try_from(payload.as_slice()).expect("reply");
-                perf_submit_measurement_async!(router.send(&rid), msg).await
-            }));
+            let send = received.send();
+            let parts = received.into_parts();
+            let mut parts = parts.into_iter();
+            let first = parts.next().expect("routed reply payload");
+            let mut operation = send.message(first);
+            for part in parts {
+                operation = operation.message(part);
+            }
+            match operation.submit() {
+                Ok(submission) if submission.result == SubmitResult::Ok => {}
+                Ok(submission) => {
+                    self.active.push(submission.admitted);
+                }
+                Err(err)
+                    if matches!(
+                        err.code(),
+                        SubmitResult::NotConnected | SubmitResult::NotFound
+                    ) => {}
+                Err(err) => panic!("routed reply failed: {err}"),
+            }
         }
     }
 

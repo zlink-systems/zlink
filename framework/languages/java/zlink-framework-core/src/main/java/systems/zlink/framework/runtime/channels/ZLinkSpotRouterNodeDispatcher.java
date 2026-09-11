@@ -3,9 +3,9 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.function.BiConsumer;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.messaging.Message;
@@ -14,6 +14,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
 final class ZLinkSpotRouterNodeDispatcher {
@@ -29,10 +30,8 @@ final class ZLinkSpotRouterNodeDispatcher {
         long authorityOwnerGeneration,
         long ownerLeaseGeneration,
         List<Message> spotParts,
-        Duration timeout,
-        BiConsumer<CompletableFuture<Void>, Duration> trackPendingRequest) {
+        Duration timeout) {
         CompletableFuture<Void> result = new CompletableFuture<>();
-        trackPendingRequest.accept(result, timeout);
         var entrySpot = node.entrySpot();
         rememberAuthority(
             entrySpot,
@@ -75,9 +74,9 @@ final class ZLinkSpotRouterNodeDispatcher {
         long ownerLeaseGeneration,
         List<Message> spotParts,
         Duration timeout,
-        BiConsumer<CompletableFuture<List<Message>>, Duration> trackPendingRequest) {
+        ZLinkServiceOperationRegistry operations,
+        UUID operationId) {
         CompletableFuture<List<Message>> result = new CompletableFuture<>();
-        trackPendingRequest.accept(result, timeout);
         long requestStartedNanos = ZLinkChannelRuntime.traceEnabled()
             ? System.nanoTime()
             : 0L;
@@ -97,8 +96,11 @@ final class ZLinkSpotRouterNodeDispatcher {
                 targetNodeRid,
                 targetSpotId,
                 targetSpotGeneration,
+                new byte[0],
                 spotParts,
-                timeout)
+                timeout,
+                operations,
+                operationId)
             .whenComplete((reply, failure) -> {
                 ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ?
                     "spot-route node-request-result router=" + routerChannelId

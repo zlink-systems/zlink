@@ -633,6 +633,9 @@ final class ZLinkClientServerM6ARuntimeTest {
                 70);
         ZLinkChannelSocketRegistry sockets =
             new ZLinkChannelSocketRegistry();
+        ChannelRegistration channel = new ChannelRegistration("orders", ChannelKind.CLIENT_SERVER);
+        channel.enableClient();
+        sockets.registerChannel(channel);
         sockets.setClientServerServerDescriptor("orders", descriptor);
         AtomicInteger requests = new AtomicInteger();
         AtomicInteger creates = new AtomicInteger();
@@ -733,8 +736,10 @@ final class ZLinkClientServerM6ARuntimeTest {
 
             assertSame(
                 dealer,
-                sockets.awaitClientForOutbound(
-                    "orders", Duration.ofSeconds(1)));
+                sockets.submitToChannel("orders", null, Duration.ofSeconds(1), false,
+                    (target, remaining) -> CompletableFuture.completedFuture(target),
+                    (node, remaining) -> { throw new AssertionError("expected ClientServer"); })
+                    .toCompletableFuture().join());
             assertEquals(timeoutFirst ? 2 : 1, requests.get());
             assertEquals(1, creates.get());
             assertEquals(1, connects.get());

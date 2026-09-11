@@ -170,22 +170,22 @@ internal sealed class ZLinkMeshCompletionTable
             pending);
     }
 
-    public void Complete(
-        MeshReceiveRecord record,
-        IReadOnlyList<Message> parts)
+    public void Complete(MeshReceiveRecord record, IReadOnlyList<Message> parts)
+    {
+        if (!TryComplete(record, parts))
+            ZLinkMessageParts.DisposeAll(parts);
+    }
+
+    // A native node may also serve raw pull callers. Ownership transfers only
+    // when this table actually owns the operation, not merely because a sink
+    // was installed by a Framework wrapper.
+    internal bool TryComplete(MeshReceiveRecord record, IReadOnlyList<Message> parts)
     {
         if (!TryTake(record.OperationId, out var pending))
-        {
-            // A terminal after cancellation, timeout, or shutdown no longer has
-            // an owner. It must not be attached to a later request.
-            ZLinkMessageParts.DisposeAll(parts);
-            return;
-        }
-        // Ownership of parts transfers to the registered handler. Once the
-        // callback starts, the table cannot safely dispose them on exception:
-        // the handler may already have transferred or disposed the messages.
+            return false;
         pending.PrepareReply(record, parts);
         _dispatcher.Post(pending);
+        return true;
     }
 
     public void FailAll(RequestResult result)

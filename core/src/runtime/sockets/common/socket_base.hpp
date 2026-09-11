@@ -96,7 +96,6 @@ struct socket_request_reply_bridge_t
     socket_request_reply_bridge_t () :
         request_reply_state_present (false),
         part_helper_state_present (false),
-        part_helper_send_active_flag (false),
         part_helper_recv_ready_flag (false)
     {
     }
@@ -105,7 +104,6 @@ struct socket_request_reply_bridge_t
     std::shared_ptr<part_helper_internal::handle_state_t> part_helper_state;
     std::atomic<bool> request_reply_state_present;
     std::atomic<bool> part_helper_state_present;
-    std::atomic<bool> part_helper_send_active_flag;
     std::atomic<bool> part_helper_recv_ready_flag;
 };
 
@@ -453,9 +451,6 @@ class socket_base_t : public own_t,
       std::optional<socket_public_api_scope_t> *scope_out_);
     bool begin_complete_send_scope (
       std::optional<socket_public_send_scope_t> *scope_out_);
-    void notify_incremental_send_released ();
-    void hold_incremental_send_control_boundary ();
-    void clear_incremental_send_control_boundary ();
     int rollback ();
     int rollback_scoped (socket_public_send_scope_t &scope_);
     int recv (zlink::msg_t *msg_, int flags_,
@@ -713,6 +708,7 @@ class socket_base_t : public own_t,
                              uint64_t transport_pair_id_ = 0,
                              uint64_t transport_pair_generation_ = 0);
     void event_handshake_failed_no_detail (const endpoint_uri_pair_t &endpoint_uri_pair_, int err_);
+    void event_handshake_failed_auth (const endpoint_uri_pair_t &endpoint_uri_pair_, int err_);
     void event_handshake_failed_protocol (const endpoint_uri_pair_t &endpoint_uri_pair_, int err_);
     void event_connection_ready_changed (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                          const unsigned char *routing_id_,
@@ -801,20 +797,13 @@ class socket_base_t : public own_t,
     void revoke_router_reply_targets_for_rid (
       const zlink_routing_id_t *peer_rid_);
     std::shared_ptr<part_helper_internal::handle_state_t> part_helper_state () const;
-    // Borrowed helper state is valid only while the caller pins this socket's
-    // public handle. The socket keeps the immutable shared owner until final
-    // destruction; close only withdraws the publication bit.
-    part_helper_internal::handle_state_t *borrow_part_helper_state () const;
     std::shared_ptr<part_helper_internal::handle_state_t>
     set_part_helper_state (const std::shared_ptr<part_helper_internal::handle_state_t> &state_);
     void clear_part_helper_state ();
-    bool part_helper_send_active () const;
-    void set_part_helper_send_active (bool active_);
     bool part_helper_recv_ready () const;
     void set_part_helper_recv_ready (bool ready_);
-    //  zlink_recv_part() buffers a complete physical DATA record before it
-    //  publishes the first part. On a count-1 pair, keep the following REPLY
-    //  private until that buffered public record reaches its FINAL part.
+    // Keep a following REPLY private until a DATA record retained after
+    // BUFFER_TOO_SMALL is delivered to its caller.
     int begin_public_part_receive_delivery_hold ();
     void bind_public_part_receive_delivery_hold (pipe_t *source_pipe_);
     void end_public_part_receive_delivery_hold ();
@@ -969,7 +958,12 @@ class socket_base_t : public own_t,
                               pipe_t::read_admission_fn *admission_ = NULL,
                               void *admission_userdata_ = NULL,
                               uint64_t *route_binding_token_out_ = NULL);
-    virtual int xterm_peer_rid (const zlink_routing_id_t *peer_rid_);
+    // Selects and retains the pipe owned by a RID termination. The public
+    // lifecycle owner performs the actual termination after the socket-specific
+    // route state has been updated.
+    virtual int xterm_peer_rid (const zlink_routing_id_t *peer_rid_,
+                                pipe_t **target_out_,
+                                bool *delay_out_);
     virtual void xsocket_msg_pipe_terminated (zlink::pipe_t *pipe_);
     virtual int xpeer_command (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     virtual void xlocal_peer_weight_changed ();
@@ -1141,6 +1135,10 @@ class socket_base_t : public own_t,
 
     endpoint_runtime_t &endpoint_runtime () { return _runtime.endpoint_runtime; }
     const endpoint_runtime_t &endpoint_runtime () const { return _runtime.endpoint_runtime; }
+    socket_inproc_reconnect_runtime_t &inproc_reconnect_runtime ()
+    {
+        return _runtime.inproc_reconnect_runtime;
+    }
     command_runtime_t &command_runtime () { return _runtime.command_runtime; }
     const command_runtime_t &command_runtime () const { return _runtime.command_runtime; }
     receive_runtime_t &receive_runtime () { return _runtime.receive_runtime; }
@@ -1201,6 +1199,14 @@ class socket_base_t : public own_t,
 
     // Monitor socket cleanup
     void stop_monitor (bool send_monitor_stopped_event_ = true);
+
+    static void inproc_reconnect_task_main (void *arg_);
+    bool schedule_inproc_reconnect (
+      const std::string &endpoint_,
+      const endpoint_uri_pair_t &endpoint_pair_);
+    void process_scheduled_inproc_reconnects ();
+    bool cancel_scheduled_inproc_reconnects (const std::string &endpoint_);
+    void stop_inproc_reconnect_scheduler ();
 
     //  Creates new endpoint ID and adds the endpoint to the map.
     void add_endpoint (const endpoint_uri_pair_t &endpoint_pair_, own_t *endpoint_, pipe_t *pipe_);
@@ -1388,7 +1394,6 @@ class socket_base_t : public own_t,
     void process_bind (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void process_term (int linger_) ZLINK_FINAL;
     void process_term_endpoint (std::string *endpoint_) ZLINK_FINAL;
-    void process_reconnect_inproc (std::string *endpoint_) ZLINK_FINAL;
     void process_transport_pair_owner_request (
       zlink::session_base_t *session_, int peer_socket_type_,
       uint64_t connection_id_, uint64_t pair_id_, uint64_t generation_,
@@ -1545,7 +1550,8 @@ class routing_socket_base_t : public socket_base_t
     out_pipe_t *lookup_out_pipe (const blob_t &routing_id_);
     const out_pipe_t *lookup_out_pipe (const blob_t &routing_id_) const;
     void erase_out_pipe (const pipe_t *pipe_);
-    int terminate_out_pipe_by_routing_id (const zlink_routing_id_t *peer_rid_);
+    int prepare_out_pipe_termination_by_routing_id (
+      const zlink_routing_id_t *peer_rid_, pipe_t **target_out_);
     void mark_out_pipe_active (out_pipe_t *out_pipe_);
     void mark_out_pipe_inactive (out_pipe_t *out_pipe_);
     void update_out_pipe_weight (out_pipe_t *out_pipe_, uint32_t weight_);

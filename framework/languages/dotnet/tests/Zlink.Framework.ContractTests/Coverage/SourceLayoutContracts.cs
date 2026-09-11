@@ -121,7 +121,7 @@ public sealed class SourceLayoutContracts
         while (current is not null)
         {
             if (File.Exists(Path.Combine(current.FullName, "AGENTS.md"))
-                && File.Exists(Path.Combine(current.FullName, "BINDINGS_VERSION")))
+                && File.Exists(Path.Combine(current.FullName, "framework", "languages", "dotnet", "VERSION")))
                 return current.FullName;
             current = current.Parent;
         }

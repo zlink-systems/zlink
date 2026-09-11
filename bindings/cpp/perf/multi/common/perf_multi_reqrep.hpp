@@ -90,8 +90,9 @@ struct client_completion_state_t
 
 enum class logical_launch_t
 {
+    ready,
     launching,
-    owned_by_operation,
+    waiting_admission,
     fatal
 };
 
@@ -99,7 +100,7 @@ struct logical_request_t
 {
     logical_request_t () :
         payload (),
-        launch (logical_launch_t::launching)
+        launch (logical_launch_t::ready)
     {
     }
 
@@ -227,19 +228,27 @@ template <typename SocketT> class client_bench_t
               .count ()),
           std::memory_order_release);
 
+        size_t submitted_since_progress = 0;
         while (std::chrono::steady_clock::now () < deadline
                && !_completion->fatal.load (std::memory_order_acquire)) {
+            size_t submitted = 0;
             for (size_t i = 0; i < _slots.size (); ++i) {
+                const uint64_t previous_seq = _slots[i]->next_seq;
                 if (!launch_request (*_slots[i])) {
                     _completion->fatal.store (true, std::memory_order_release);
                     signal_change (_completion);
                     break;
                 }
+                submitted += _slots[i]->next_seq != previous_seq ? 1 : 0;
             }
             if (_completion->fatal.load (std::memory_order_acquire))
                 break;
-            if (!progress_once (deadline))
-                break;
+            submitted_since_progress += submitted;
+            if (submitted == 0 || submitted_since_progress >= 64) {
+                if (!progress_once (deadline, submitted == 0))
+                    break;
+                submitted_since_progress = 0;
+            }
         }
 
         const int drain_timeout_ms = std::max (1, _settings.send_drain_timeout_ms);
@@ -247,7 +256,7 @@ template <typename SocketT> class client_bench_t
           std::chrono::steady_clock::now () + std::chrono::milliseconds (drain_timeout_ms);
         while (_completion->outstanding.load (std::memory_order_acquire) != 0
                && std::chrono::steady_clock::now () < drain_deadline) {
-            if (!progress_once (drain_deadline))
+            if (!progress_once (drain_deadline, true))
                 break;
         }
 
@@ -326,18 +335,16 @@ template <typename SocketT> class client_bench_t
         }
     }
 
-    bool progress_once (const std::chrono::steady_clock::time_point &deadline_)
+    bool progress_once (const std::chrono::steady_clock::time_point &deadline_,
+                        bool wait_)
     {
         try {
-            // One completion-only wait paces every submit/progress turn.
-            // Registering every requester on this one public poller keeps
-            // initial submission, binding-owned WRITABLE resumption, and reply
-            // completion on the same active application thread.
             const auto now = std::chrono::steady_clock::now ();
-            const auto wait = now < deadline_
-                                ? std::min (std::chrono::milliseconds (50),
-                                            std::chrono::duration_cast<std::chrono::milliseconds> (
-                                              deadline_ - now))
+            const auto wait = wait_ && now < deadline_
+                                ? std::min (
+                                    std::chrono::milliseconds (50),
+                                    std::chrono::duration_cast<std::chrono::milliseconds> (
+                                      deadline_ - now))
                                 : std::chrono::milliseconds::zero ();
             (void) _completion_poller.wait (
               _completion_events.data (), _completion_events.size (),
@@ -354,14 +361,13 @@ template <typename SocketT> class client_bench_t
 
     bool launch_request (client_slot_t<SocketT> &slot_)
     {
-        // PERF_MULTI_TEST_POLICY.md:164-168 — do not fix the inflight request
-        // count and do not serialize the round trip 1:1.  Each turn submits
-        // one new logical request per socket and never waits for the previous
-        // reply, matching the C reference submit cursor
-        // (bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:577-590).
-        // REQUEST async owns the pre-admission WRITABLE wait and the
-        // post-admission reply wait. The runner submits once for this socket's
-        // turn and never retries or gates on an application-side depth.
+        const logical_launch_t launch =
+          slot_.logical.launch.load (std::memory_order_acquire);
+        if (launch == logical_launch_t::waiting_admission)
+            return true;
+        if (launch != logical_launch_t::ready)
+            return false;
+
         const uint64_t sent_ns = perf_metric::now_ns ();
         if (!perf_metric::stamp_payload (
               slot_.logical.payload.data (), slot_.logical.payload.size (),
@@ -377,7 +383,8 @@ template <typename SocketT> class client_bench_t
                                 std::max (1, request_timeout_ms ())),
                               _completion);
         switch (slot_.logical.launch.load (std::memory_order_acquire)) {
-            case logical_launch_t::owned_by_operation:
+            case logical_launch_t::ready:
+            case logical_launch_t::waiting_admission:
                 ++slot_.next_seq;
                 return true;
             case logical_launch_t::fatal:
@@ -395,7 +402,7 @@ template <typename SocketT> class client_bench_t
         completion_->changed.notify_all ();
     }
 
-    static zlink::async_result_t<std::vector<zlink::message_t>> begin_request (
+    static zlink::request_submission_t begin_request (
       SocketT &socket_, const zlink::routing_id_t &target_rid_,
       zlink::message_t request_, std::chrono::milliseconds timeout_)
     {
@@ -472,18 +479,27 @@ template <typename SocketT> class client_bench_t
                 signal_change (completion_);
                 co_return;
             }
-            std::optional<zlink::async_result_t<std::vector<zlink::message_t>>> operation;
-            operation.emplace (
-              begin_request (socket_, target_rid_, std::move (request), timeout_));
+            zlink::request_submission_t submission =
+              begin_request (socket_, target_rid_, std::move (request), timeout_);
             completion_->outstanding.fetch_add (1, std::memory_order_release);
-            logical_->launch.store (logical_launch_t::owned_by_operation,
-                                     std::memory_order_release);
+            const bool backpressured =
+              submission.result == ZLINK_SUBMIT_BACKPRESSURED;
+            if (submission.result != ZLINK_SUBMIT_OK && !backpressured)
+                throw std::logic_error ("unexpected request submit result");
+            logical_->launch.store (
+              backpressured ? logical_launch_t::waiting_admission
+                            : logical_launch_t::ready,
+              std::memory_order_release);
             signal_change (completion_);
-            // The async operation owns the request across any WRITABLE waits,
-            // resubmission, and the final REQUEST completion. This coroutine
-            // must not read the reusable slot/logical buffer again.
             try {
-                std::vector<zlink::message_t> reply = co_await std::move (*operation);
+                if (backpressured) {
+                    co_await std::move (submission.admitted);
+                    logical_->launch.store (logical_launch_t::ready,
+                                             std::memory_order_release);
+                    signal_change (completion_);
+                }
+                std::vector<zlink::message_t> reply =
+                  co_await std::move (submission.reply);
                 observe_reply (completion_, reply);
             }
             catch (const zlink::request_error_t &err) {
@@ -492,6 +508,8 @@ template <typename SocketT> class client_bench_t
             }
             catch (...) {
                 completion_->fatal.store (true, std::memory_order_release);
+                logical_->launch.store (logical_launch_t::fatal,
+                                         std::memory_order_release);
             }
             completion_->outstanding.fetch_sub (1, std::memory_order_release);
             signal_change (completion_);
@@ -538,9 +556,9 @@ inline bool submit_router_reply (zlink::received_t &received_,
     try {
         if (measurement_part_count () == 2) {
             zlink::message_t tail = measurement_empty_part ();
-            std::move (received_.reply ().message (part_)).message (tail).submit ();
+            received_.reply ().message (part_).message (tail).submit ();
         } else {
-            std::move (received_.reply ().message (part_)).submit ();
+            received_.reply ().message (part_).submit ();
         }
         return true;
     }

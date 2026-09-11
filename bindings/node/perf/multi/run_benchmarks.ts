@@ -238,6 +238,9 @@ async function main() {
   for (const line of metaLines(metaItems)) {
     emit(line);
   }
+  emit(`META,core_source,${process.env.PERF_CORE_SOURCE || 'unknown'}`);
+  emit(`META,core_version,${process.env.PERF_CORE_VERSION || 'unknown'}`);
+  emit(`META,core_runtime,${process.env.PERF_CORE_RUNTIME || 'unknown'}`);
   emit(`META,node_runtime,${process.versions.node}`);
   if (process.env.ZLINK_PERF_RUNTIME_LIBZLINK) {
     emit(`META,runtime_libzlink,${process.env.ZLINK_PERF_RUNTIME_LIBZLINK}`);

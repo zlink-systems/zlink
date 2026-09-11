@@ -33,9 +33,8 @@ static int check_missing_route (void *socket, const zlink_routing_id_t *unknown)
     CHECK (make_part (&failed, "missing-route") == 0);
     zlink_completion_id_t completion_id = UINT64_MAX;
     errno = 0;
-    CHECK (zlink_send_part_rid (socket, unknown, &failed,
-                                ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
-                                NULL, &completion_id)
+    CHECK (zlink_send_rid (socket, unknown, &failed, 1,
+                           ZLINK_SEND_FLAGS_DONTWAIT, NULL, &completion_id)
            == ZLINK_SUBMIT_NOT_CONNECTED);
     CHECK (zlink_errno () == EHOSTUNREACH);
     CHECK (completion_id == 0);
@@ -93,7 +92,7 @@ int main (void)
     zlink_msg_t pub_failed;
     CHECK (make_part (&pub_failed, "publish") == 0);
     CHECK (
-      zlink_publish_part (pair, "topic", &pub_failed, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL)
+      zlink_publish (pair, "topic", &pub_failed, 1, ZLINK_SEND_FLAGS_DONTWAIT)
       == ZLINK_SUBMIT_NOT_SUPPORTED);
     CHECK (zlink_msg_close (&pub_failed) == ZLINK_CONFIG_OK);
 

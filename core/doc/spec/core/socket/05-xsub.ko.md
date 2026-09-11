@@ -20,7 +20,7 @@ filter-match로 수신 message를 걸러내지 않는다. 연결된 PUB 또는 X
 받아 publisher 쪽에서 filtering하며, XSUB는 실제로 들어온 message를 모두 application에
 전달한다.
 
-이 문서는 XSUB에서 구독을 등록·해제·조회하고 topic message를 part 단위로 수신하는 공개
+이 문서는 XSUB에서 구독을 등록·해제·조회하고 topic과 payload record 전체를 수신하는 공개
 계약을 정의한다. 대상 독자는 이 계약을 C API와 각 언어 binding으로 옮기는 개발자다.
 
 관련 계약의 소유 문서는 다음과 같다.
@@ -44,7 +44,7 @@ XSUB의 구독은 topic filter 단위로 진행한다.
    전달되지 않는다. 구독 event를 관찰하고 수동으로 관리하는 계약은 [XPUB](04-xpub.ko.md)가
    소유한다.
 3. XSUB는 자체 filter-match를 적용하지 않고 실제로 들어온 모든 message를
-   [`zlink_subscribe_part`](#zlink_subscribe_part)로 part 하나씩 수신하도록 전달한다.
+   [`zlink_subscribe`](#zlink_subscribe)로 record 전체를 수신하도록 전달한다.
 4. [`zlink_unset_subscription`](#zlink_unset_subscription)으로 등록한 구독의 reference
    count를 줄인다. 마지막 등록을 해제할 때만 upstream unsubscribe message를
    전송하며, 등록되지 않은 filter를 해제하면 upstream으로 아무 message도
@@ -59,8 +59,8 @@ sequenceDiagram
     XSUB->>Up: 구독 message 전달
     Note over Up: XPUB가 subscription에 따라 filtering
     Up-->>XSUB: upstream이 선택해 보낸 message
-    App->>XSUB: zlink_subscribe_part()
-    XSUB-->>App: topic byte 복사 + payload part 소유권 이전
+    App->>XSUB: zlink_subscribe()
+    XSUB-->>App: topic byte 복사 + payload record 전체 반환
 ```
 
 현재 구독된 topic 수는 `ZLINK_SUB_OPT_TOPICS_COUNT` 옵션으로, 개별 구독 filter는
@@ -140,7 +140,7 @@ XSUB 자체는 이 filter로 수신 message를 걸러내지 않는다. 같은 fi
 **에러:** `handle_`이 NULL이면 `EFAULT`. `filter_`가 NULL이거나 handle 타입이
 구독을 지원하지 않으면 `EINVAL`.
 
-**참고:** `zlink_unset_subscription`, `zlink_subscribe_part`
+**참고:** `zlink_unset_subscription`, `zlink_subscribe`
 
 ---
 
@@ -170,40 +170,36 @@ ZLINK_EXPORT zlink_config_result_t zlink_unset_subscription (void *handle_, cons
 
 ---
 
-### zlink_subscribe_part
+### zlink_subscribe
 
-raw `XSUB` socket에서 topic message의 payload part 하나를 수신한다.
+raw `XSUB` socket에서 topic과 payload record 전체를 수신한다.
 
 ```c
-ZLINK_EXPORT zlink_recv_result_t zlink_subscribe_part (
+ZLINK_EXPORT zlink_recv_result_t zlink_subscribe (
   void *sub_,
   const zlink_routing_id_t **source_rid_out_,
-  char *topic_id_buf_,
-  size_t topic_id_capacity_,
-  size_t *topic_id_len_out_,
-  zlink_msg_t *part_out_,
-  zlink_part_flag_t *has_more_out_,
+  char *topic_id_buf_, size_t topic_id_capacity_, size_t *topic_id_len_out_,
+  zlink_msg_t *parts_out_, size_t parts_capacity_, size_t *part_count_out_,
   zlink_recv_flags_t flags_);
 ```
 
-`topic_id_len_out_`, 초기화된 `part_out_`, `has_more_out_`은 필수다.
+`topic_id_len_out_`, `parts_out_`, `part_count_out_`은 필수다. 배열 슬롯은 미리 초기화할 필요가 없다.
 `source_rid_out_`은 선택 사항이며 raw XSUB에서는 성공 시 `NULL`을 받는다.
-성공하면 topic의 binary byte를 호출자 buffer에 NUL 없이 복사하고 payload part의
-소유권을 호출자에게 이전한다. 호출자는 받은 part를
-`zlink_msg_close(part_out_)`로 정확히 한 번 닫아야 한다.
+성공하면 topic의 binary byte를 caller buffer에 NUL 없이 복사하고 payload record 전체를 배열에
+채운다. Caller는 앞의 `*part_count_out_`개 슬롯을 `zlink_multipart_close`로 정확히 한 번 닫아야 한다.
 
 `topic_id_capacity_`가 topic 길이보다 작으면(길이 0 topic은 capacity 0으로 성공한다) 함수는
 `*topic_id_len_out_`에 필요한 topic 길이를 기록하고
 `ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. 이 경우 Core는 그 message의 topic과
-payload를 내부에 보관하고, `topic_id_len_out_`을 제외한 output과 `part_out_`은
-변경하지 않는다. part 소유권도 이전하지 않으므로 호출자는 충분한 buffer로
+payload를 내부에 보관하고, `topic_id_len_out_`을 제외한 output과 `parts_out_`은
+변경하지 않는다. 슬롯 소유권도 이전하지 않으므로 호출자는 충분한 buffer로
 다시 호출해 보관된 같은 message를 받는다. 용량이 0보다 큰데 `topic_id_buf_`가
 NULL이면 queue를 검사하거나 소비하기 전에 `ZLINK_RECV_INVALID_HANDLE`과
-`EFAULT`를 반환하고 모든 output과 `part_out_`을 변경하지 않는다.
+`EFAULT`를 반환하고 모든 output과 `parts_out_`을 변경하지 않는다.
 
-한 multipart message는 첫 payload part부터 마지막 part까지 같은 thread에서 이
-함수로 계속 수신한다. `*has_more_out_`은 다음 part가 있으면
-`ZLINK_PART_MORE`, 마지막이면 `ZLINK_PART_FINAL`이다. 이 함수는 raw SUB와
+`parts_capacity_`가 payload part 수보다 작으면 record를 소비하지 않고 필요한 수를
+`*part_count_out_`에 쓴 뒤 `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`를 반환한다. 다른 output과
+배열 슬롯은 변하지 않으며 충분한 배열로 재시도하면 같은 record를 받는다. 이 함수는 raw SUB와
 raw XSUB에 적용된다.
 
 ---
@@ -257,7 +253,7 @@ low water mark, transport backpressure는 그대로 유지된다. XSUB socket의
 ## 6. 구현 및 contract test 검증 요구
 
 공개 표면(`zlink_set_sub_option`·`zlink_get_sub_option`, 구독 등록·해제·조회 함수,
-`zlink_subscribe_part`, `zlink_socket_set_receive_flow_state`, 반환값·errno)만으로 다음을
+`zlink_subscribe`, `zlink_socket_set_receive_flow_state`, 반환값·errno)만으로 다음을
 확인한다. 각 항목은 unit test 하나로 이어진다.
 
 **옵션**
@@ -278,12 +274,13 @@ low water mark, transport backpressure는 그대로 유지된다. XSUB socket의
 - buffer가 작으면 필요한 길이를 `*filter_len_inout_`에 기록하고 `ZLINK_CONFIG_BUFFER_TOO_SMALL`과 `ENOBUFS`로 실패한다. `filter_out_`에 부분 data를 기록하지 않고 `*is_pattern_out_`도 변경하지 않으며, subscription inventory를 소비하거나 변경하지 않으므로 같은 `index_`를 충분한 buffer로 다시 조회할 수 있다.
 - `index_`가 범위를 벗어나면 `ENOENT`, handle 타입이 구독 조회를 지원하지 않으면 `ENOTSUP`이다.
 
-**topic part 수신**
-- `zlink_subscribe_part`가 성공하면 topic의 binary byte가 NUL 없이 호출자 buffer에 복사되고 payload part의 소유권이 호출자에게 이전된다 — 받은 part는 `zlink_msg_close(part_out_)`로 정확히 한 번 닫는다. raw XSUB에서 `source_rid_out_`은 성공 시 `NULL`이다.
-- `topic_id_capacity_`가 topic 길이보다 작으면(길이 0 topic은 capacity 0으로 성공) `*topic_id_len_out_`에 필요한 topic 길이를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. Core가 그 message의 topic과 payload를 내부에 보관하고 `topic_id_len_out_`을 제외한 output과 `part_out_`은 변하지 않으며, part 소유권도 이전되지 않으므로 충분한 buffer로 다시 호출하면 같은 message를 수신한다.
+**topic과 payload record 수신**
+- `zlink_subscribe`가 성공하면 topic의 binary byte가 NUL 없이 caller buffer에 복사되고 payload record 전체가 배열에 채워진다 — 앞의 `*part_count_out_`개 슬롯은 `zlink_multipart_close`로 정확히 한 번 닫는다. raw XSUB에서 `source_rid_out_`은 성공 시 `NULL`이다.
+- `topic_id_capacity_`가 topic 길이보다 작으면(길이 0 topic은 capacity 0으로 성공) `*topic_id_len_out_`에 필요한 topic 길이를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. Core가 그 message의 topic과 payload를 내부에 보관하고 `topic_id_len_out_`을 제외한 output과 `parts_out_`은 변하지 않으며, 슬롯 소유권도 이전되지 않으므로 충분한 buffer로 다시 호출하면 같은 message를 수신한다.
+- `parts_capacity_`가 payload part 수보다 작으면 `*part_count_out_`에 필요한 수를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`를 반환한다. Record와 다른 output은 그대로이며 충분한 배열로 재시도하면 같은 record를 받는다.
 - topic frame 뒤에 payload part가 없는(topic frame에 `MORE`가 없는) record를 받으면 `ZLINK_RECV_INTERNAL_ERROR`와 `EPROTO`를 반환한다.
-- 용량이 0보다 큰데 `topic_id_buf_`가 NULL이면 queue를 검사하거나 소비하기 전에 `ZLINK_RECV_INVALID_HANDLE`과 `EFAULT`를 반환하고 모든 output과 `part_out_`은 변하지 않는다.
-- 한 multipart message는 첫 payload part부터 마지막 part까지 같은 thread에서 이 함수로 계속 수신하며, `*has_more_out_`은 다음 part가 있으면 `ZLINK_PART_MORE`, 마지막이면 `ZLINK_PART_FINAL`이다.
+- 용량이 0보다 큰데 `topic_id_buf_`가 NULL이면 queue를 검사하거나 소비하기 전에 `ZLINK_RECV_INVALID_HANDLE`과 `EFAULT`를 반환하고 모든 output과 `parts_out_`은 변하지 않는다.
+- multipart message의 모든 payload part는 배열 순서대로 한 번에 반환되며 부분 record 상태는 남지 않는다.
 
 **Receive flow state 없음**
 - `zlink_socket_set_receive_flow_state()`는 XSUB socket에 대해 `errno == ENOTSUP`과 함께 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고 아무것도 바꾸지 않는다 — byte HWM, low water mark와 transport backpressure는 그대로 유지된다.

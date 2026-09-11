@@ -38,6 +38,7 @@
 
     <ItemGroup>
         <Compile Include="AssemblyInfo.cs"/>
+        <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="Support/TestHostMessageFlowListener.cs"/>
         <Compile Include="Configuration/Registration/Channels.cs"/>
         <Compile Include="Configuration/Registration/HandlerExposure.cs"/>
         <Compile Include="Configuration/Registration/NodesAndServices.cs"/>
@@ -72,6 +73,14 @@
         <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
         <Compile Include="Runtime/ActorClientTests.cs"/>
         <Compile Include="Runtime/StateLaneTests.cs"/>
+        <Compile Include="Runtime/ProtobufNativePayloadTests.cs"/>
+        <Compile Include="Runtime/MeshMailboxReadinessTests.cs"/>
+        <Compile Include="Runtime/MeshPermitHandoffTests.cs"/>
+        <Compile Include="Runtime/MeshReplyPayloadOwnershipTests.cs"/>
+        <Compile Include="Runtime/MeshMonitorHotPathTests.cs"/>
+        <Compile Include="Runtime/MeshChannelSelectionHotPathTests.cs"/>
+        <Compile Include="Runtime/EnvelopeHeaderCacheHotPathTests.cs"/>
+        <Compile Include="Runtime/MeshApplicationWorkerTests.cs"/>
         <Compile Include="Runtime/SmallStateOwnershipMechanismTests.cs"/>
         <Compile Include="Runtime/ActorBoundSessionRelayTests.cs"/>
         <Compile Include="Runtime/ApplicationJobQueueTests.cs"/>
@@ -79,6 +88,7 @@
         <Compile Include="Runtime/TransportFailFastTests.cs"/>
         <Compile Include="Runtime/BackendAdapterFactoryTests.cs"/>
         <Compile Include="Runtime/BackendStreamSocketConcurrencyTests.cs"/>
+        <Compile Include="Runtime/StreamBackpressureTests.cs"/>
         <Compile Include="Runtime/BackendMonitorWrapperTests.cs"/>
         <Compile Include="Runtime/CoverageCriticalRuntimeTests.cs"/>
         <Compile Include="Runtime/ChannelOutboundTerminalTests.cs"/>
@@ -98,6 +108,7 @@
         <Compile Include="Runtime/RuntimeIdentifierTests.cs"/>
         <Compile Include="Runtime/FanoutAutomaticDiscoveryTests.cs"/>
         <Compile Include="Runtime/EnvelopeCodecTests.cs"/>
+        <Compile Include="Runtime/MessagingHotPathWireTests.cs"/>
         <Compile Include="Runtime/ErrorReplyWireConvergenceTests.cs"/>
         <Compile Include="Runtime/EndpointConnectionsTests.cs"/>
         <Compile Include="Runtime/EndpointNotationTests.cs"/>
@@ -122,6 +133,7 @@
         <Compile Include="Runtime/LogicalMulticastSubmitTests.cs"/>
         <Compile Include="Runtime/SharedAsyncDisposalTests.cs"/>
         <Compile Include="Runtime/SubmitAdmissionRuntimeTests.cs"/>
+        <Compile Include="Runtime/BlockingSubmitTests.cs"/>
         <Compile Include="Runtime/OwnerLeaseTrackerTests.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.cs"/>
         <Compile Include="Runtime/ProviderRelocationRepositoryTests.cs"/>
@@ -144,6 +156,7 @@
         <Compile Include="Runtime/ServiceWireSessionRelocationCodecTests.cs"/>
         <Compile Include="Runtime/StatefulServiceRuntimeTests.cs"/>
         <Compile Include="Runtime/MeshEndpointHandoverTests.cs"/>
+        <Compile Include="Runtime/GatedTaskScheduler.cs"/>
         <Compile Include="Runtime/DurableSenderRuntimeTests.cs"/>
         <Compile Include="Runtime/DurableRequestTests.cs"/>
         <Compile Include="Runtime/StoreRecordGoldenTests.cs"/>

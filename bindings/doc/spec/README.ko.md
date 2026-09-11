@@ -26,8 +26,8 @@ title: "바인딩 API 정책"
 | [바인딩 런타임 범주 정책](#바인딩-런타임-범주-정책) | runtime 카테고리 분류 |
 | [Actor/Spot Route 표면](#actorspot-route-표면) | route 조회 결과 타입과 Actor 대상 send/request |
 | [고성능 바인딩 정책](#고성능-바인딩-정책) | hot path 제약 |
-| [Substrate 와 공개 바인딩 표면](#substrate-와-공개-바인딩-표면) | part substrate와 aggregate 공개 표면의 경계 |
-| [`*_part` Substrate 사용 의무 (Required)](#_part-substrate-사용-의무-required) | aggregate 구현이 `*_part` API를 써야 하는 이유 |
+| [Core whole-message API와 공개 바인딩 표면](#core-whole-message-api와-공개-바인딩-표면) | Core 배열 API와 공개 표면의 경계 |
+| [Whole-message API 사용 의무 (Required)](#whole-message-api-사용-의무-required) | 내부 구현의 array+count 사용 규칙 |
 | [Spot Get-Or-Create 매핑](#spot-get-or-create-매핑) | `zlink_spot_node_spot_get_or_new` 매핑 규칙 |
 | [공개 vs 내부 API 경계](#공개-vs-내부-api-경계) | contract/runtime 분리 원칙과 판정 기준 |
 | [코어 정렬 규칙](#코어-정렬-규칙) | 코어 계약과의 정렬 규칙 |
@@ -181,6 +181,7 @@ callback/handler 등록 함수 이름은 실제 동작을 드러내야 한다. �
 |------|----------------|
 | raw STREAM packet handler 등록 | `setPacketHandler` |
 | SPOT dispatch event handler 등록 | `setDispatchHandler` |
+| socket 수신 readiness handler 등록 | `setReadableHandler` |
 | SPOT routed receive | `recvRouted` |
 | SPOT Actor lifecycle receive | `recvActorLifecycle` |
 
@@ -448,9 +449,9 @@ hot path의 비용 모델을 숨기거나 악화시키면 안 된다. 공개 API
 - callback, dispatch, poller, timer, request completion 진행 경로에서 숨은
   blocking wait, sleep, busy wait, thread join을 수행하지 않는다. 명시적으로
   blocking API로 문서화된 호출만 대기할 수 있다.
-- binding은 core의 `*_part` substrate를 사용해 part 단위로 언어 객체를 구성한다.
-  aggregate native 배열을 만든 뒤 다시 언어별 collection으로 변환하는 이중
-  materialization은 금지한다.
+- Binding은 Core whole-message API에 재사용 가능한 native 배열과 count를 전달한다.
+  수신 슬롯은 언어별 `Message` 소유 객체로 바로 옮기고, 같은 내용을 담은 중간
+  collection을 추가로 만들지 않는다.
 - 성능 검증용 perf, sample, test도 public binding entrypoint만 사용하면서
   위 비용 모델을 깨지 않아야 한다.
 
@@ -458,52 +459,22 @@ hot path의 비용 모델을 숨기거나 악화시키면 안 된다. 공개 API
 리뷰에서 reflection hot path, 불필요한 할당/복사, 스레드 경합, 숨은 대기가
 확인되면 해당 바인딩은 정책 미준수로 본다.
 
-## Substrate 와 공개 바인딩 표면
+## Core whole-message API와 공개 바인딩 표면
 
-bindings 구현은 core가 제공하는 helper substrate C API(`*_part` 계열) 위에 올라간다.
-bindings 사용자에게 노출되는 public API는 그 helper 시그니처를 그대로 따라야 한다는
-뜻이 아니다. 다만 내부 구현이 어떤 core 함수를 호출하는가는 아래 규칙으로 고정한다.
+Binding runtime은 `core/include/zlink.h`의 whole-message API를 내부 기반으로 사용한다.
+Send·request·reply·publish builder가 모은 모든 part는 배열과 count로 한 번에 제출한다.
+Receive·routed receive·subscribe는 caller가 제공한 배열, capacity와 count를 사용해 record
+전체를 한 번에 받는다. 배열이 작으면 `ZLINK_RECV_BUFFER_TOO_SMALL`에서 필요한 크기로
+늘린 뒤 같은 record를 다시 받는다.
 
-이 문서는 아래 경계를 기준으로 해석한다.
-
-- `core/include/zlink.h` 의 `*_part` helper substrate 계약은
-  bindings 구현이 반드시 사용해야 하는 native substrate다.
-- `doc/spec/bindings/` 아래 문서는 각 언어 binding이 외부에 제공하는
-  **public convenience contract**만 정의한다.
-
-즉 binding public API는 helper substrate와 모양이 달라도 된다. 그러나 내부에서
-core를 호출하는 방식은 달라서는 안 된다.
-
-예를 들면 아래 구조가 요구된다.
-
-- core substrate는 `*_part`, `has_more`, caller-provided `zlink_msg_t`
-  같은 primitive한 표면을 가진다.
-- Java, `.NET`, `Go`, `Rust`, `Python`, `Node`, `C++`, C binding은 그 위에
-  `Received`, `Message`, collection, request/reply convenience 같은
-  언어 친화적 public API를 올린다.
-- public API 내부에서 core를 직접 호출하는 경로는 반드시 `*_part` substrate를 사용한다.
-  aggregate 형태의 core 함수(`zlink_send`, `zlink_recv`, `zlink_publish` 등)를
-  binding 내부에서 호출하면 안 된다.
-
-아래 조건은 반드시 지켜야 한다.
-
-- binding public API의 의미 계약은 core 계약으로 설명 가능해야 한다.
-- helper substrate에만 있는 low-level 세부사항을 binding 사용자에게 직접 노출하지
-  않는다.
-- `RecvPart`, `RecvRoutedPart`, `SubscribePart`, `recv_part`,
-  `recv_routed_part`, `subscribe_part`처럼 part 단위 수신을 public binding
-  API로 노출하지 않는다. Part loop, `has_more`, request sequence와 reply context는
-  binding runtime 내부에서 aggregate 결과 저장소로 흡수한다.
-- `doc/spec/bindings/` 문서는 helper substrate 시그니처 자체를 public contract로
-  문서화하지 않는다.
-- helper substrate는 bindings 구현과 성능 최적화를 위한 기반 계층으로만 취급한다.
-
-즉 bindings 정책 문서의 기준은 "helper가 어떻게 생겼는가"가 아니라,
-"binding 사용자가 최종적으로 어떤 public contract를 보게 되는가"이다.
+Java, .NET, Go, Rust, Python, Node와 C++의 공개 `Received`, `Message`, collection과
+request/reply builder는 그대로 유지한다. Native 배열, capacity 증가와 재시도는 runtime
+안에서 처리하며 public API에 노출하지 않는다. C binding은 `zlink.h`의 배열 기반 ABI를
+직접 사용한다.
 
 ### Request-reply protocol metadata 경계
 
-Binding은 request·reply `*_part` API에 application payload만 전달한다. ZMP kind, wire
+Binding은 request·reply whole-message API에 application payload 배열만 전달한다. ZMP kind, wire
 sequence와 header extension은 Core가 소유하므로 binding이 protocol envelope나 header를 만들거나
 payload part로 추가하지 않는다. Request와 reply에 multipart N개를 넘기면 handler와 completion도
 application part N개만 관찰한다.
@@ -516,10 +487,10 @@ source를 raw send했을 때 request-reply kind가 다시 나타나게 해서는
 Public receive와 request completion은 Core가 내부 metadata를 제거한 payload만 aggregate한다.
 Binding은 raw message에서 ZMP kind를 읽거나 이를 public metadata field로 노출하지 않는다.
 
-## `*_part` Substrate 사용 의무 (Required)
+## Whole-message API 사용 의무 (Required)
 
-send, request, reply, publish, subscribe 계열 함수의 내부 구현은 반드시
-core의 `*_part` helper substrate를 사용해야 한다. 이는 `Required` 규칙이다.
+send, request, reply, publish와 receive 계열의 내부 구현은 반드시 Core whole-message API를
+record마다 한 번 호출해야 한다. 이는 `Required` 규칙이다.
 
 ### 적용 대상
 
@@ -532,22 +503,12 @@ core의 `*_part` helper substrate를 사용해야 한다. 이는 `Required` 규�
 - publish
 - subscribe (SPOT subscribe 포함)
 
-### 이유
+### 배열 관리
 
-core가 aggregate 함수와 `*_part` substrate를 모두 제공하던 시기에는 aggregate 함수를
-직접 호출하는 것이 허용됐다. 그러나 이 구조는 아래 비용을 만든다.
-
-- core가 먼저 native aggregate (parts 배열) 를 구성한다.
-- binding이 그 aggregate를 다시 언어별 객체(`Message[]`, `Received`, value object)로
-  변환한다.
-- 결과적으로 "native aggregate 생성 → 언어 객체 aggregate 생성"이 연속으로 일어나며,
-  이 이중 변환 비용이 hot path의 실질적인 병목이 된다.
-
-`*_part` substrate를 직접 사용하면 binding이 part 하나씩 언어 객체로 직접 변환할 수
-있고, native aggregate 생성 단계를 완전히 제거할 수 있다. 이는 특히 Java, .NET처럼
-객체 materialization 비용이 큰 언어에서 측정 가능한 성능 차이를 만든다.
-
-이 규칙은 구조 정리 목적이 아니라 **런타임 성능 비용을 실질적으로 줄이기 위한** 요구사항이다.
+- Send 계열은 builder의 payload를 재사용 가능한 native 배열로 만들고 한 번 제출한다.
+- Receive 계열은 재사용 가능한 caller 배열을 전달한다. Capacity가 부족하면 필요한 count로
+  배열을 늘리고, 소비되지 않은 같은 record를 다시 받는다.
+- 성공한 수신 슬롯은 중간 aggregate를 복제하지 않고 언어별 소유 객체로 옮긴다.
 
 ### public API 형태는 유지
 
@@ -555,10 +516,14 @@ core가 aggregate 함수와 `*_part` substrate를 모두 제공하던 시기에�
 이 규칙과 무관하게 각 언어 spec이 정한 대로 유지한다.
 
 - 사용자는 `send(List<Message>)`, `recv()`, `request(...)` 같은 언어 친화적 API를 그대로 쓴다.
-- `*_part` 호출 시퀀스는 binding 내부 구현 세부사항이며, 사용자에게 노출하지 않는다.
 - public binding의 receive 표면은 `recv`, `subscribe`, `recvRouted` 같은
-  aggregate 결과 저장소 API만 제공한다. `RecvPart`/`SubscribePart` 계열은
-  성능 최적화 substrate의 이름일 뿐 public contract 이름이 아니다.
+  aggregate 결과 저장소 API를 제공한다.
+
+### Multipart 제출
+
+한 Core 호출이 완성된 record 전체를 원자적으로 제출하므로 binding은 part sequence를 위한
+socket-local gate를 만들지 않는다. 서로 독립된 record의 동시 제출은 Core의 same-handle
+concurrency 계약을 따른다.
 
 ## Spot Get-Or-Create 매핑
 
@@ -587,15 +552,11 @@ Core는 "routing id로 local logical Spot을 가져오거나, 없으면 생성�
 
 구현 리뷰와 검증 단계에서 아래를 확인한다.
 
-- binding 소스에서 aggregate 심볼(`zlink_send`, `zlink_recv`, `zlink_send_rid`,
-  `zlink_publish`, `zlink_subscribe`, `zlink_router_recv`, `zlink_dealer_request`,
-  `zlink_router_request`, `zlink_router_reply`, `zlink_spot_send_*`,
-  `zlink_spot_request_*`, `zlink_spot_reply_*`, `zlink_spot_subscribe` 등)을
-  직접 호출하는 경로가 없어야 한다.
-- 대신 대응하는 `*_part` 심볼(`zlink_send_part`, `zlink_recv_part`,
-  `zlink_send_part_rid`, `zlink_publish_part`, `zlink_subscribe_part`,
-  `zlink_router_recv_part`, `zlink_dealer_request_part`, `zlink_router_request_part`,
-  `zlink_router_reply_part`, `zlink_spot_*_part` 등)을 사용해야 한다.
+- Binding 소스의 raw socket 경로는 `zlink_send`, `zlink_send_rid`, `zlink_request`,
+  `zlink_reply`, `zlink_publish`, `zlink_recv`, `zlink_router_recv`, `zlink_subscribe`와
+  `zlink_xpub_recv`를 계약에 맞게 사용해야 한다.
+- Send 계열은 record마다 native 호출 한 번을 사용하고, receive 계열은 배열과 capacity를
+  전달해 record 전체를 받으며 `ENOBUFS`에서는 필요한 count로 늘려 다시 시도해야 한다.
 - 미준수 시 리뷰에서 차단된다.
 
 ## 공개 vs 내부 API 경계
@@ -684,7 +645,7 @@ import path로 노출하지 않는다. 대신 public package/module tree 안의 
 | public builder convenience method or helper | public contract source의 해당 category |
 | DTO, value object, enum, public error/result type | public contract source의 해당 category |
 | runtime concrete class, socket kernel, handle owner | runtime/internal source의 해당 category |
-| request progress pump, callback trampoline, part-loop helper | runtime/internal source의 해당 category |
+| request progress pump, callback trampoline, whole-message array helper | runtime/internal source의 해당 category |
 | native handle wrapper, FFI declaration, struct mirror, marshalling helper | native bridge source |
 | generated native loading code, platform artifact lookup | native bridge source |
 
@@ -887,23 +848,23 @@ runtime/native bridge 역할에만 존재하며 public contract 역할로 만들
 
 ### Send/Recv 공개 모양은 고정
 
-bindings의 `send/recv` 공개 형태는 substrate helper가 어떻게 생기느냐에 따라
+bindings의 `send/recv` 공개 형태는 Core ABI가 어떻게 생기느냐에 따라
 매번 다시 정하는 대상이 아니다. 이 문서와 각 언어별 binding spec이 정한
 public shape를 기준으로 고정한다.
 
-즉 helper substrate가 `*_part`, `has_more`, caller-provided message storage
-형태로 바뀌더라도, binding public API는 아래 원칙을 유지해야 한다.
+즉 Core whole-message API의 array, count, capacity 형태가 바뀌더라도 binding
+public API는 아래 원칙을 유지해야 한다.
 
 - binding 사용자는 언어 문서에 정의된 `send`, `recv`, request/reply,
   callback 형태를 본다.
 - multipart는 각 언어 문서가 정한 aggregate convenience 모델로 계속 제공할 수
   있다.
-- helper substrate 변경만을 이유로 binding public `send/recv` shape를 함께
+- Core ABI 변경만을 이유로 binding public `send/recv` shape를 함께
   흔들면 안 된다.
-- public shape를 바꾸려면 helper 도입과는 별도의 public API 변경으로 다뤄야
+- public shape를 바꾸려면 Core ABI 변경과는 별도의 public API 변경으로 다뤄야
   하며, `doc/spec/bindings/` 문서부터 먼저 갱신해야 한다.
 
-즉 앞으로 helper C API를 도입하더라도, bindings 쪽 `send/recv`는
+즉 Core C API가 바뀌더라도 bindings 쪽 `send/recv`는
 "구현 기반이 바뀌는 것"이지 "사용자에게 보이는 형태가 자동으로 바뀌는 것"이
 아니다.
 
@@ -971,7 +932,7 @@ error 표현을 분리해서 설명해야 한다.
 | Rust | `pub fn recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>;` `pub fn subscribe(&self, out: &mut TopicMessage, flags: RecvFlags) -> Result<bool, RecvError>;` `pub fn receive_subscription_event(&self, out: &mut SubscriptionEvent, flags: RecvFlags) -> Result<bool, RecvError>;` |
 
 C ABI binding 은 이 절의 적용 대상이 아니다. C 바인딩은 `zlink.h` 의 typed
-substrate (`zlink_router_recv_part`, `zlink_subscribe_part` 등) 를 그대로
+substrate (`zlink_router_recv`, `zlink_subscribe` 등) 를 그대로
 노출한다.
 
 #### `Received` envelope 의미 통일
@@ -999,7 +960,7 @@ lifecycle 의 의미는 같아야 한다.
   절과 같아야 한다.
 
 C ABI binding 은 예외다. C 는 managed/object 결과 저장소를 만들지 않고
-`zlink_router_recv_part()`, `zlink_spot_recv_part()`,
+`zlink_router_recv()`, `zlink_spot_recv_part()`,
 `zlink_dealer_recv_part()` 같은 typed out-param 으로 같은 envelope 구성 요소를
 노출한다. C 에 public `zlink_received_t` 같은 aggregate 객체를 추가하지 않는다.
 그 객체를 추가하면 message part 소유권, init/close/reset, reply context 보관
@@ -1192,7 +1153,7 @@ streamSocket.bindActor(sessionRid, actorRef)
 - 바인딩은 raw `SUB`, `XSUB`, SPOT subscribe receive 에 대해
   `onSubscribe` 류 direct topic callback 을 public 으로 노출하면 안 된다.
 - `ROUTER` inbound routed traffic 은 단일 routed recv 표면으로 수신한다.
-  바인딩 runtime은 내부에서 `zlink_router_recv_part()` 를 사용하고, public
+  바인딩 runtime은 내부에서 `zlink_router_recv()` 를 사용하고, public
   표면에는 aggregate routed recv와 [공통 request 완료 표면](async-coroutine-policy.ko.md#6-언어별-terminal-interface)만 노출한다.
   direct receive callback 은 제공하지 않는다.
 - core raw `STREAM` 은 `recv`, raw callback (`zlink_recv_handler()`),
@@ -1328,24 +1289,29 @@ Binding은 Framework의 application job queue count를 Core byte snapshot에 합
 ##### Submit 결과 투영
 
 고수준 바인딩은 native 제출 결과를 아래 언어 완료 결과에 연결한다. Native result·ID·part 소비와
-대기 토큰의 조건은 [Core part send](../../../core/doc/spec/core/socket/README.ko.md#part-send와-pending-admission)와
+대기 토큰의 조건은 [Core whole-message send](../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)와
 [Core REQUEST DONTWAIT](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)가 소유한다.
+
+비동기 종결자는 **결과 객체**를 돌려준다(`SendSubmission`·`RequestSubmission`). `result`는 제출 시점
+`OK`|`BACKPRESSURED` 스냅샷이고 `admitted`(SEND·REQUEST 공통)·`reply`(REQUEST) stage가 완료를 나른다.
+동기 종결자(`submit_sync()` 등)는 바뀌지 않는다. 대기 규칙과 언어별 시그니처는
+[async-coroutine-policy §6](async-coroutine-policy.ko.md#6-언어별-terminal-interface)가 소유한다.
 
 | Native 제출 결과 | 고수준 바인딩의 결과 |
 |---|---|
-| SEND `OK`·ID `0` | 즉시 admission 성공으로 terminal을 끝낸다. |
-| REQUEST `OK`·nonzero ID | 해당 REQUEST completion을 언어 결과에 연결한다. |
-| `BACKPRESSURED`·`EAGAIN`·nonzero 대기 토큰 | 바인딩이 재제출할 입력을 보관하고 WRITABLE을 기다린다. Core의 drain·재제출 계약에 따라 같은 operation을 계속한다. |
-| 대기 토큰 없는 submit 실패 | 해당 submit error로 terminal을 끝낸다. |
+| SEND `OK`·ID `0` | `result == OK`와 완료된 `admitted` stage로 terminal을 끝낸다. |
+| REQUEST `OK`·nonzero ID | `result == OK`·완료된 `admitted`를 돌려주고 해당 REQUEST completion을 `reply` stage에 연결한다. |
+| `BACKPRESSURED`·`EAGAIN`·nonzero 대기 토큰 | 바인딩이 재제출할 입력을 보관하고 WRITABLE을 기다린다. Core의 drain·재제출 계약에 따라 같은 operation을 계속하며, 종결자는 `result == BACKPRESSURED`와 재제출 admission에서 완료되는 `admitted` stage를 돌려준다. |
+| 대기 토큰 없는 submit 실패 | 해당 submit error로 terminal을 끝낸다(결과 객체가 아니라 예외/에러). |
 
 - **바인딩은 socket-local context·token으로 찾은 WRITABLE을 해당 waiter에 전달하며 Core가 보장한 submit RID echo를 다시 판정하지 않는다.**
   RID echo의 소유자는 [Core completion record 계약](../../../core/doc/spec/core/socket/README.ko.md#completion-pull과-ownership)이기 때문이다.
 
 완료 소비와 submit 경합은 [비동기 실행 모델의 합류 계약](async-execution-model.ko.md#5-submit-결과와-completion의-합류)을 따른다.
 
-Part 단위 Core API를 사용하는 binding은 **송신 경로에 자체 lock이나 gate를 두지 않는다.**
-Multipart 원자성·part 소비·동시 제출 결과는
-[Core part send](../../../core/doc/spec/core/socket/README.ko.md#part-send와-pending-admission)가,
+Core whole-message API를 사용하는 binding은 **송신 경로에 자체 lock이나 gate를 두지 않는다.**
+Record 원자성·배열 전체 소비·동시 제출 결과는
+[Core whole-message send](../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)가,
 close와 in-flight 제출의 경합은
 [Core thread safety](../../../core/doc/spec/core/socket/README.ko.md#2-스레드-안전성)가 소유한다.
 공개 API가 실패 시 message를 보존하는 binding은 독립적으로 소유한 staging copy를 Core에
@@ -1423,14 +1389,14 @@ Send·request의 언어별 awaitable·blocking terminal signature는
 - Send 결과는 [Submit 결과 투영](#submit-result-projection)을,
   `PollCompletion`과 완료 전달은 [비동기 실행 모델](async-execution-model.ko.md#4-poller와-completion-drain)을 따른다.
   Raw `ZLINK_POLLOUT`과 `ZLINK_POLLCOMPLETION`의 관계는
-  [Core part send](../../../core/doc/spec/core/socket/README.ko.md#part-send와-pending-admission)가 소유한다.
+  [Core whole-message send](../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)가 소유한다.
 - 바인딩은 peer 가중치 surface 를 언어별 typed option/property 로 노출해야
   한다. 설정 대상은 `ROUTER`, `DEALER`이며 값 범위는
   `0..10000`, 기본값은 `100`이다. `0`은 새 outbound 선택에서 제외를 뜻한다.
   대응하는 제출 실패 코드는 `ZLINK_SUBMIT_NOT_ADMITTED` (값 13) 이며,
   모든 바인딩의 `SubmitError` 매핑에 포함되어야 한다.
 - core raw `STREAM` 은 다음 세 수신 모드 중 하나만 선택할 수 있다:
-  (a) `zlink_recv_part()` 기반 blocking/non-blocking recv, (b) `zlink_recv_handler()`
+  (a) `zlink_recv()` 기반 blocking/non-blocking recv, (b) `zlink_recv_handler()`
   raw direct callback, (c) `zlink_stream_packet_handler()` 빅엔디언
   `u16 header_size + u32 body_size + header + body` 프레이밍 packet callback.
   두 번째 attach 시 `EBUSY` 가 반환된다. 고수준 바인딩은 public 으로
@@ -1539,9 +1505,10 @@ surface 배치는 아래 `Actor Dispatch Policy` 절을 따른다.
 - checklist 항목은 문서 본문의 의미 계약을 대체하지 않는다.
 
 ## 핵심 원칙
-- 코어 계약은 `zlink.h`의 `*_part` substrate가 단일 기준이다.
-- send/recv/request/reply/publish/subscribe 계열의 내부 구현은 반드시 core `*_part`
-  substrate를 사용한다. aggregate 형태의 core 함수를 binding 내부에서 직접 호출하지 않는다.
+- 코어 계약은 `zlink.h`의 whole-message API가 단일 기준이다.
+- send/recv/request/reply/publish/subscribe 계열의 내부 구현은 array와 count를
+  사용해 record마다 Core 함수를 한 번 호출한다. Receive 계열은 capacity가 부족하면
+  필요한 크기로 배열을 늘리고 소비되지 않은 같은 record를 다시 받는다.
 - public API는 multipart 모델을 기준으로 설계한다.
 - blocking과 non-blocking은 이름으로 구분할 수 있다.
 - 동일한 능력을 여러 방식으로 중복 노출하지 않는다.
@@ -1836,14 +1803,10 @@ C API 의 **함수별 typed result enum 구조를 모든 바인딩이 그대로 
 - flags 기본값은 `0` (blocking).
 - non-blocking 호출의 temporary 상태는 언어별 public 계약에 맞춰 전달한다.
   - `.NET` / `Java` / `Node` / `Python`
-    - `send`, `publish`, callback `request`: temporary backpressure 면
-      `false`
     - caller-provided `recv`, `subscribe`,
       `receiveSubscriptionEvent`: 현재 데이터가 없으면 `false`
     - 그 외 실패: typed exception
   - C++
-    - operation builder `send` / `publish` / callback `request`: temporary
-      backpressure 면 `false`
     - caller-provided `recv` / `subscribe` /
       `receive_subscription_event`: 현재 데이터가 없으면 `recv_result_t::no_data`
       정수값 반환
@@ -1976,8 +1939,8 @@ SPOT operation builder 대상의 작업 시작점은 `requestToChannel` /
   - `Received`
   - `TopicMessage`
   - `SubscriptionEvent`
-  - `SubmitResult` (C / Go / Rust — return-based 언어에서 반환 객체/에러에
-    포함. exception 언어에서는 예외 객체 `.code` 로 노출)
+  - `SubmitResult` (비동기 종결자의 결과 객체 `result`(`OK`|`BACKPRESSURED`)로 모든 언어가 노출한다.
+    그 밖의 제출 실패는 return-based 언어에서는 에러로, exception 언어에서는 예외 객체 `.code`로 낸다)
 - 결과 객체는 payload shape, ownership, optional routing metadata를 함께
   설명해야 한다.
 - 편의 기능은 결과 객체 메서드로 둔다.
@@ -2068,9 +2031,9 @@ builder 는 하나 이상의 `Message` 를 누적해서 multipart payload 를 �
 #### `TopicMessage`
 
 raw `SUB` / `XSUB` 와 `Spot subscribe` 의 recv 결과다.
-raw pub/sub 는 C API `zlink_subscribe_part()` 를, Spot subscribe 는
-`zlink_spot_subscribe_part()` 를 바인딩 도메인 객체 하나로 감싼다. 바인딩
-public API는 part helper 호출 결과를 언어별 multipart 객체로 조립해서 돌려준다.
+Raw pub/sub는 C API `zlink_subscribe()`가 반환한 전체 payload 배열을, Spot subscribe는
+`zlink_spot_subscribe_part()`의 결과를 바인딩 도메인 객체 하나로 감싼다. 바인딩
+public API는 이 결과를 언어별 multipart 객체로 돌려준다.
 
 | 구성 | 타입 | 의미 |
 |------|------|------|
@@ -2435,13 +2398,8 @@ raw direct callback `onReceive` 는 canonical public binding API 가 아니다.
 - routingId를 optional/default 파라미터로 만들면 plain send가 가능해지므로 금지한다.
 
 ### Send / Publish 반환값
-- `.NET` / `Java` / `Node` / `Python` / `C++` 에서는 blocking
-  `send` / `publish` / callback `request` submit 성공 시 항상 `true` 를
-  반환한다.
-- 위 언어의 non-blocking submit 에서는 temporary backpressure 일 때만
-  `false` 를 반환한다.
-- temporary backpressure 가 아닌 submit 실패는 예외로 전달해야 한다.
-- 상태 코드(int, number 등)를 반환하는 방식은 금지한다.
+- Send·request의 제출 결과와 실패는 [Submit 결과 투영](#submit-result-projection)을 따른다.
+- Publish의 반환형과 실패 전달 방식은 각 언어 README의 publish 계약을 따른다.
 
 ### 언어별 네이밍 일관성
 - 한 바인딩 내에서 네이밍 컨벤션이 혼재되면 안 된다.
@@ -2627,7 +2585,7 @@ handle, Actor recv/join helper처럼 Actor 계약을 구성하는 public type과
 | `ActorRef` | `node_rid`, `actor_id`, `generation` |
 | `ActorRoute` | route 대상 Actor, current Spot routing id, current Spot kind |
 | `ActorRecvInfo` | 수신 Actor, source node/session routing id, flags |
-| `ActorReceived` | `ActorRecvInfo`, payload parts. 이름은 언어 관례에 따라 바꿀 수 있지만 part 단위 loop와 `has_more`는 public field로 노출하지 않는다. payload parts를 소유하는 언어에서는 복제 가능한 record/value가 아니라 dispose 가능한 envelope로 노출한다 |
+| `ActorReceived` | `ActorRecvInfo`, payload parts. 이름은 언어 관례에 따라 바꿀 수 있지만 native 배열, capacity와 count는 public field로 노출하지 않는다. payload parts를 소유하는 언어에서는 복제 가능한 record/value가 아니라 dispose 가능한 envelope로 노출한다 |
 | `ActorJoinInfo` + join message | join 요청 판단과 응답에 필요한 `source_actor`, `target_actor`, `source_node_rid`, `source_spot_rid`, `target_node_rid`, `target_spot_rid`, `join_epoch`, `flags`, join message. 언어 관례에 따라 `ActorJoinRequest` wrapper나 tuple/pair로 묶을 수 있다. join message를 소유하는 wrapper는 dispose 가능해야 한다. native reply context는 binding 내부에서만 보관하며 public field로 노출하지 않는다 |
 | `ActorJoinResult` | join completion에 전달. `result`, 최종 `actor` ref(remote join이면 target node ref), `joined_spot_rid`, `join_epoch`, `flags` |
 | `ActorJoinEntrySpotResult` | Entry Spot join completion에 전달. `result`, 최종 `actor` ref, `target_node_rid`, `join_epoch`, `flags`. join message나 reply payload는 없다 |
@@ -3001,7 +2959,7 @@ public surface 의 일부가 아니다. 바인딩은 다음 함수나 상수를 
 
 Raw socket request·reply·ROUTER receive의 선언은
 [Core request와 reply](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)와
-[Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#routedsubscription-receive-family)를 따른다.
+[Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#zlink_recv-와-zlink_router_recv)를 따른다.
 Completion record와 반환된 reply part의 수명은
 [Core completion pull과 ownership](../../../core/doc/spec/core/socket/README.ko.md#completion-pull과-ownership)이 소유한다.
 
@@ -3031,7 +2989,7 @@ zlink_handler_result_t zlink_spot_dispatch_event_handler(void *spot, ...);
 #### 수신 Dispatch 모델
 
 ROUTER application record의 종류·source RID·reply token은
-[Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#routedsubscription-receive-family)가 소유한다.
+[Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#zlink_recv-와-zlink_router_recv)가 소유한다.
 Reply 매칭은 [Core request 계약](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)을,
 매칭된 결과의 언어 전달은 [공통 completion owner](async-execution-model.ko.md#4-poller와-completion-drain)를 따른다.
 SPOT 전용 routing context는 별도 service-layer API가 소유한다.
@@ -3086,7 +3044,7 @@ ZMP kind·sequence·header byte 배치와 검증은
 - 별도 `Reply` 타입은 만들지 않는다.
 - multipart reply 지원이 목적이므로 단일 `Message` 가 아닌 리스트 형태다.
   단일 part reply 는 `parts[0]` 으로 꺼낸다.
-- 응답자의 수신 metadata는 [Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#routedsubscription-receive-family)와
+- 응답자의 수신 metadata는 [Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#zlink_recv-와-zlink_router_recv)와
   [ReplyToken 정책](async-coroutine-policy.ko.md#5-replytoken과-reply)을 따른다.
   별도 `Request` 타입이나 `onRequest` 전용 callback은 만들지 않는다.
 
@@ -3119,32 +3077,13 @@ routed messaging 위에 얹어진다.
 SPOT pub/sub 는 `Spot` handle 이 속한 channel 과 `topic` 기반 발행/구독 모델이다.
 발행 호출자는 channel 이름을 별도 인자로 전달하지 않는다.
 
-```c
-/* publish */
-zlink_submit_result_t zlink_spot_publish_part(void *spot,
-    const char *topic_id, zlink_msg_t *part, zlink_send_flags_t flags,
-    zlink_part_flag_t part_flag);
-
-/* subscribe receive */
-zlink_recv_result_t zlink_spot_subscribe_part(void *spot,
-    const zlink_routing_id_t **source_rid_out,
-    char *topic_id_buf, size_t topic_id_capacity,
-    size_t *topic_id_len_out, zlink_msg_t *part_out,
-    zlink_part_flag_t *has_more_out, zlink_recv_flags_t flags);
-
-/* subscription filter */
-zlink_config_result_t zlink_set_subscription(
-    void *handle,
-    const char *filter);
-zlink_config_result_t zlink_unset_subscription(
-    void *handle,
-    const char *filter);
-```
+Binding runtime은 publish builder가 모은 payload를 배열과 count로 한 번에 Core에 제출한다.
+Subscribe receive도 Core 호출 한 번으로 topic과 payload 배열 전체를 받은 뒤 언어별 객체에 채운다.
 
 바인딩 규칙:
-- C API 는 publish 를 위한 별도 no-wait 함수 이름을 따로 두지 않는다.
-- non-blocking publish 는 `zlink_spot_publish_part(..., ZLINK_DONTWAIT, ...)` 를 호출하고
-  errno 를 `zlink_submit_result_t` 로 분류한다. 바인딩은 별도 `tryPublish` 나
+- Binding은 publish를 위한 별도 no-wait 함수 이름을 두지 않는다.
+- Non-blocking publish는 builder의 flag로 선택하고 errno를 `zlink_submit_result_t`로
+  분류한다. 바인딩은 별도 `tryPublish`나
   `publishNoWait` 를 두지 않는다.
 - `subscribe` 수신은 `topic + parts` 를 돌려주는 typed receive surface 로
   노출한다.
@@ -3159,29 +3098,13 @@ zlink_config_result_t zlink_unset_subscription(
 #### Routed Direct Messaging
 
 SPOT routed direct messaging 은 특정 Spot 또는 Router peer, routed reply 대상에
-직접 메시지를 보낸다. Core substrate는 아래 part 기반 C 함수로 표현된다.
+직접 메시지를 보낸다. Builder가 모은 모든 payload part는 배열과 count로 한 번에 Core에 제출한다.
 고수준 바인딩의 `Spot` facade와 `RouterSocket`의 router-to-spot helper 모두
 이 기능을 `Operation Builder Policy`에 맞춘 operation builder 시작점으로
 노출한다. raw socket의 일반 send/request/reply도 동일한 builder 패턴을 따른다.
 
-```c
-/* spot -> spot */
-zlink_submit_result_t zlink_spot_send_spot_part(void *spot,
-    const zlink_routing_id_t *dest_node_rid,
-    const zlink_routing_id_t *dest_spot_rid,
-    zlink_msg_t *part, zlink_send_flags_t flags,
-    zlink_part_flag_t part_flag);
-
-/* router -> spot */
-zlink_submit_result_t zlink_router_send_spot_part(void *router,
-    const zlink_routing_id_t *dest_node_rid,
-    const zlink_routing_id_t *dest_spot_rid,
-    zlink_msg_t *part, zlink_send_flags_t flags,
-    zlink_part_flag_t part_flag);
-```
-
 바인딩 규칙:
-- C ABI는 part 기반 함수형 계약을 유지한다.
+- Binding runtime은 operation마다 Core whole-message API를 한 번 호출한다.
 - 고수준 바인딩의 `Spot` endpoint, `RouterSocket`의 router-to-spot helper,
   그리고 raw `DealerSocket`/`RouterSocket`/`PubSocket`/`StreamSocket` 등의
   일반 send/request/reply/publish 표면 모두 이 문서의
@@ -3476,9 +3399,9 @@ callback 안에서는 event 로 알려진 plane 을 drain 할 수 있어야 한�
 
 | 소켓 타입 | 수신 경로 |
 |-----------|----------|
-| `PAIR` / `DEALER` | runtime은 `zlink_recv_part()` 를 사용하고 public 표면은 aggregate recv |
-| `SUB` / `XSUB` | runtime은 `zlink_subscribe_part()` 를 사용하고 public 표면은 aggregate topic recv |
-| `ROUTER` | Runtime은 `zlink_router_recv_part()`를 사용하고 public 표면은 aggregate routed recv다. Request 완료는 [공통 실행 모델](async-execution-model.ko.md#4-poller와-completion-drain)을 따른다. |
+| `PAIR` / `DEALER` | runtime은 `zlink_recv()` 를 사용하고 public 표면은 aggregate recv |
+| `SUB` / `XSUB` | runtime은 `zlink_subscribe()` 를 사용하고 public 표면은 aggregate topic recv |
+| `ROUTER` | Runtime은 `zlink_router_recv()`를 사용하고 public 표면은 aggregate routed recv다. Request 완료는 [공통 실행 모델](async-execution-model.ko.md#4-poller와-completion-drain)을 따른다. |
 | `STREAM` | 아래 세 모드 중 하나 (상호 배타). raw recv / `zlink_recv_handler()` / `zlink_stream_packet_handler()` |
 | `SPOT` | `zlink_spot_recv_part()` + `zlink_spot_subscribe_part()` + `zlink_spot_recv_subscription_event()` + `zlink_spot_recv_actor_lifecycle()` + `zlink_spot_dispatch_event_handler()`. direct routed callback은 노출하지 않는다 |
 
@@ -3507,14 +3430,14 @@ zlink_recv_result_t zlink_spot_recv_actor_lifecycle(void *spot, ...);
 #### Router 수신 (routed 통합 recv 표면)
 
 ROUTER DATA·REQUEST의 raw 수신 signature와 metadata는
-[Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#routedsubscription-receive-family)를,
+[Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#zlink_recv-와-zlink_router_recv)를,
 request 결과의 전달은 [공통 completion owner](async-execution-model.ko.md#4-poller와-completion-drain)를 따른다.
 SPOT 전용 routing context는 별도 service-layer API가 소유한다.
 
 #### Pub/Sub 수신
 
 - raw `SUB`, `XSUB` 는 수신 전용 topic socket 이다.
-- 바인딩은 `zlink_subscribe_part()` typed receive substrate 위에 언어별
+- 바인딩은 `zlink_subscribe()` typed receive substrate 위에 언어별
   aggregate topic receive surface 를 노출한다.
 - direct topic callback install surface 는 raw pub/sub family 에 두지 않는다.
 
@@ -4535,9 +4458,9 @@ ownership 관리, native loader, package boundary, hot path 최적화를 함께 
 
 ### Required: Optimization Guard 테스트
 - hot path가 High-Performance Binding Policy를 계속 지키는지 검증한다.
-- send/recv/request/reply/publish/subscribe 내부 경로가 `*_part` substrate를
-  사용하는지 확인한다.
-- aggregate native 함수 호출, 숨은 double materialization, 불필요한 eager copy,
+- send/recv/request/reply/publish/subscribe 내부 경로가 record마다 Core
+  whole-message 함수를 한 번 호출하는지 확인한다.
+- 숨은 double materialization, 불필요한 eager copy,
   반복 호출마다 생기는 closure/boxing/allocation이 다시 들어오지 않았는지 확인한다.
 - callback, dispatch, poller, request completion 경로에서 숨은 blocking wait,
   sleep, busy wait, thread join이 생기지 않았는지 확인한다.
@@ -4878,8 +4801,8 @@ perf 정책은 [`doc/perf/PERF_POLICY.md`](../../../doc/perf/PERF_POLICY.md)에�
 3. **얕은 래퍼 제거**
    - native 함수를 1:1로 감싸기만 하는 public 타입이 없다.
    - 모든 public 타입이 검증, ownership, shape 규칙 중 하나 이상을 캡슐화한다.
-   - `RecvPart`, `RecvRoutedPart`, `SubscribePart` 또는 언어별 동등 이름이
-     public API에 없다. part 단위 수신은 runtime/internal substrate로만 존재한다.
+   - public receive API가 native 배열, capacity나 count를 노출하지 않고 언어별
+     aggregate 결과를 돌려준다.
    - `requestFrame(...)`처럼 request-reply ZMP header metadata를 그대로 드러내는 helper가 public
      표면에 없다.
    - `dealer.reply(requestToken, parts)`처럼 DEALER의 송신 능력과 맞지 않는 reply

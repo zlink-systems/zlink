@@ -9,6 +9,7 @@ import systems.zlink.contracts.eventing.PollEvents;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.ReplyToken;
+import systems.zlink.contracts.messaging.SendSubmission;
 import systems.zlink.contracts.messaging.StreamPacket;
 import systems.zlink.contracts.messaging.SubscriptionEvent;
 import systems.zlink.contracts.messaging.TopicMessage;
@@ -25,7 +26,6 @@ import java.nio.ByteBuffer;
 import java.util.Objects;
 import java.util.List;
 import java.util.ServiceLoader;
-import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -222,7 +222,7 @@ public final class ContractAccess {
 
         void setSendSubmitters(
             Received received,
-            Function<List<Message>, CompletionStage<Void>> submitter,
+            Function<List<Message>, SendSubmission> submitter,
             Consumer<List<Message>> blockingSubmitter);
 
         void setRoutedReplySender(Received received,
@@ -710,7 +710,7 @@ public final class ContractAccess {
 
     public static void receivedSetSendSubmitters(
       Received received,
-      Function<List<Message>, CompletionStage<Void>> submitter,
+      Function<List<Message>, SendSubmission> submitter,
       Consumer<List<Message>> blockingSubmitter) {
         receivedAccess().setSendSubmitters(received, submitter,
             blockingSubmitter);

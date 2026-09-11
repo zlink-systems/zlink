@@ -44,8 +44,6 @@ export class ContextOptions {
   get maxSockets(): number { return getContextOptionRaw(this._context, ContextOption.MAX_SOCKETS); }
   set maxSockets(value: number) { setContextOptionRaw(this._context, ContextOption.MAX_SOCKETS, value | 0); }
   get socketLimit(): number { return getContextOptionRaw(this._context, ContextOption.SOCKET_LIMIT); }
-  get maxMsgSize(): number { return getContextOptionRaw(this._context, ContextOption.MAX_MSGSZ); }
-  set maxMsgSize(value: number) { setContextOptionRaw(this._context, ContextOption.MAX_MSGSZ, value | 0); }
   get msgTSize(): number { return getContextOptionRaw(this._context, ContextOption.MSG_T_SIZE); }
   get threadPriority(): number { return getContextOptionRaw(this._context, ContextOption.THREAD_PRIORITY); }
   set threadPriority(value: number) { setContextOptionRaw(this._context, ContextOption.THREAD_PRIORITY, value | 0); }

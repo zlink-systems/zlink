@@ -1092,21 +1092,22 @@ bool zlink::pipe_t::counted_pending_message_ref (const msg_t &msg_)
            && !msg_.is_credential () && !msg_.is_delimiter ();
 }
 
-void zlink::pipe_t::publish_outbound_frame_unlocked (const msg_t &msg_,
-                                                      bool more_)
+zlink::ypipe_replacement_accounting_t
+zlink::pipe_t::publish_outbound_frame_unlocked (const msg_t &msg_, bool more_)
 {
-    if (!_registry_accounting) {
+    ypipe_replacement_accounting_t replaced;
+    if (!_conflate) {
         _out_pipe->write (msg_, more_);
-        return;
+        return replaced;
     }
 
-    ypipe_replacement_accounting_t replaced;
     _out_pipe->write_with_replacement_accounting (
       msg_, more_, &pipe_t::committed_frame_accounted_bytes_ref,
       &pipe_t::counted_pending_message_ref, &replaced);
-    if (replaced.bytes > 0)
+    if (_registry_accounting && replaced.bytes > 0)
         get_ctx ()->_physical_queue_registry.release_committed_frame (
           _out_physical_queue, replaced.bytes, replaced.complete_messages);
+    return replaced;
 }
 
 void zlink::pipe_t::release_discarded_pipe_accounting (
@@ -1227,14 +1228,7 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
       _peers_bytes_read.load (std::memory_order_acquire);
     if (_registry_accounting) {
         const uint64_t frame_bytes = frame_accounted_bytes (msg_);
-        if (_conflate && !msg_->is_delimiter ()) {
-            //  A conflate ypipe retains at most its latest frame and does not
-            //  preserve multipart prefixes. Account each physically retained
-            //  frame as committed so replacement can return that exact charge.
-            get_ctx ()->_physical_queue_registry.commit_message (
-              _out_physical_queue, frame_bytes,
-              counted_pending_message_ref (*msg_), false);
-        } else if (more) {
+        if (more) {
             get_ctx ()->_physical_queue_registry.account_provisional_frame (
               _out_physical_queue, frame_bytes);
         } else if (!msg_->is_delimiter ()) {
@@ -1252,13 +1246,9 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
               counted_pending_message_ref (*msg_),
               oversize_admission);
         }
-        //  Completion and monitor queues retain per-frame registry charge.
-        publish_outbound_frame_unlocked (*msg_, more);
-    } else {
-        //  Application queues account the complete message in pipe-local
-        //  counters; keep their frame publication equal to the legacy path.
-        _out_pipe->write (*msg_, more);
     }
+    const ypipe_replacement_accounting_t replaced =
+      publish_outbound_frame_unlocked (*msg_, more);
     if (commits_bytes) {
         const uint64_t message_bytes = _out_incomplete_bytes;
         const uint64_t in_flight =
@@ -1274,22 +1264,15 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
         uint64_t new_msgs_written =
           _msgs_written.load (std::memory_order_acquire);
         uint64_t new_bytes_written;
-        if (_conflate) {
-            new_bytes_written =
-              UINT64_MAX - peers_bytes_read < message_bytes
-                ? UINT64_MAX
-                : peers_bytes_read + message_bytes;
-            if (!msg_->is_routing_id () && !msg_->is_credential ())
-                new_msgs_written =
-                  _peers_msgs_read.load (std::memory_order_acquire) + 1;
-        } else {
-            new_bytes_written =
-              UINT64_MAX - bytes_written < message_bytes
-                ? UINT64_MAX
-                : bytes_written + message_bytes;
-            if (!msg_->is_routing_id () && !msg_->is_credential ())
-                ++new_msgs_written;
-        }
+        // Replacements retire only records still owned by the queue. Bytes
+        // already read, other topics and a started record keep their charge.
+        const uint64_t retained_bytes = bytes_written - replaced.bytes;
+        new_msgs_written -= replaced.complete_messages;
+        new_bytes_written =
+          UINT64_MAX - retained_bytes < message_bytes
+            ? UINT64_MAX : retained_bytes + message_bytes;
+        if (!msg_->is_routing_id () && !msg_->is_credential ())
+            ++new_msgs_written;
         publish_outbound_ledger_unlocked (new_msgs_written,
                                           new_bytes_written);
         _out_complete_record_pending = true;

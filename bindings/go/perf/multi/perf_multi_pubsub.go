@@ -222,10 +222,8 @@ func drainMultiPubSubSocket(
 	phaseDone *bool,
 	activeObserved *bool,
 ) {
-	// zlink_subscribe_part may need to finish a multipart publish after the
-	// poller reports its first frame. Receive one complete publish per event;
-	// the next poller wakeup continues draining queued messages without making
-	// a no-data DONT_WAIT call in the middle of a multipart sequence.
+	// Receive one complete publish per readiness event. The next poller wakeup
+	// continues draining queued whole messages.
 	ok, err := socket.Subscribe(received, zlink.RecvFlagsDontWait)
 	if err != nil {
 		if perfcommon.IsTransient(err) {

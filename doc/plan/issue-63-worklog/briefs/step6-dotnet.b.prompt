@@ -1,0 +1,39 @@
+Coding sub-agent for zlink Issue #63. Work ONLY in this worktree; commit to its detached HEAD. Do NOT
+touch core/doc/** or bindings/doc/**. Do NOT push/PR. Keep input tight; grep before reading.
+
+READ: doc/plan/issue-63-worklog/binding-migration-ref.ko.md (removal→replacement map, D63-6..8).
+Core is whole-message only; core/build-dev (symlink) has the new-only API. Reference recv idiom:
+bindings/cpp (already migrated).
+
+TASK (dotnet): migrate BOTH send and recv internals to the whole-message Core API. Public
+Recv(Received)/Send builder surface UNCHANGED.
+- NativeMethods.Core.cs: replace P/Invoke of the REMOVED symbols (zlink_*_part send&recv,
+  zlink_xpub_recv_part) with zlink_send/send_rid/request/reply/publish, zlink_recv/router_recv/
+  subscribe/xpub_recv. New signatures take a zlink_msg_t[] array + count (no part_flag). Drop the
+  ZLINK_PART_* usage.
+- SocketKernel.ReceiveCore.cs: the recv while-loops (~:26, :116, ReceiveRouterParts :187) → one
+  whole-message recv call into a pooled msg array (grow on ZLINK_RECV_BUFFER_TOO_SMALL, retry;
+  record preserved). Fill Received. Keep single-part fast path (count==1).
+- The send path (RequestReplySupport.cs and the send helpers): per-part loop → one whole-message send
+  call over the array (every slot consumed).
+- Ownership: each native part adopted into a managed message, disposed exactly once; dispose remaining
+  on failure. STREAM RAW recv via zlink_recv; send count==1.
+Find all: grep -rn "zlink_.*_part\|ZLINK_PART_\|part_flag" bindings/dotnet/src.
+
+TEST (new-only local Core; do NOT rebuild Core):
+  ZLINK_LIBRARY_PATH="$PWD/core/build-dev/lib" TMPDIR=/dev/shm/zlink-tmp-dotnet \
+    UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    bash bindings/dotnet/tests/run_tests.sh
+All dotnet contract tests must pass. Update per-message-native-call assertions to the new observable
+behavior (no public-contract weakening; explain each).
+
+COMMIT (detached HEAD):
+  bindings(dotnet): whole-message send+recv (drop part API)
+
+  <what changed>. Public Recv/Send surface unchanged. Refs #63.
+  Test: ZLINK_LIBRARY_PATH=... bindings/dotnet/tests/run_tests.sh — <pass summary>
+
+  Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01Df7vbMq5yraG6siDn8PAUH
+
+REPORT: files changed, capacity/retry+ownership, tests updated & why, exact dotnet test pass summary.

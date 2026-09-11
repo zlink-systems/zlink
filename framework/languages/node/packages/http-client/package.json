@@ -1,7 +1,13 @@
 {
   "name": "@zlink-systems/http-client",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zlink-systems/zlink.git",
+    "directory": "framework/languages/node/packages/http-client"
+  },
+  "homepage": "https://zlink.systems/",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -16,7 +22,7 @@
     }
   },
   "dependencies": {
-    "@zlink-systems/framework": "0.11.0",
+    "@zlink-systems/framework": "0.11.1",
     "undici": "6.27.0"
   }
 }

@@ -54,8 +54,8 @@ bool send_rtt_message (void *socket, std::vector<unsigned char> &payload, uint64
         return false;
     if (!payload.empty ())
         std::memcpy (zlink_msg_data (&part), payload.data (), payload.size ());
-    if (::zlink_send_part_rid (socket, &target_rid, &part, ZLINK_SEND_FLAGS_NONE,
-                               ZLINK_PART_FINAL, NULL, NULL)
+    if (::zlink_send_rid (socket, &target_rid, &part, 1, ZLINK_SEND_FLAGS_NONE,
+                          NULL, NULL)
         != ZLINK_SUBMIT_OK) {
         zlink_msg_close (&part);
         return false;
@@ -64,6 +64,7 @@ bool send_rtt_message (void *socket, std::vector<unsigned char> &payload, uint64
 }
 
 bool recv_rtt_message (void *socket,
+                       std::vector<zlink_msg_t> &parts,
                        char *id_buf,
                        size_t id_cap,
                        unsigned char *payload_buf,
@@ -71,46 +72,36 @@ bool recv_rtt_message (void *socket,
                        uint64_t &wire_send_ts)
 {
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_msg_t part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    if (zlink_msg_init (&part) != 0)
-        return false;
-    const zlink_recv_result_t rc =
-      ::zlink_recv_part (socket, &source_rid, &part, &has_more, ZLINK_RECV_FLAGS_DONTWAIT);
+    zlink_reply_token_t reply_token = 0;
+    size_t part_count = 0;
+    zlink_recv_result_t rc = ZLINK_RECV_INTERNAL_ERROR;
+    for (;;) {
+        rc = ::zlink_router_recv (socket, &source_rid, &reply_token, parts.data (),
+                                  parts.size (), &part_count, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc != ZLINK_RECV_BUFFER_TOO_SMALL)
+            break;
+        if (part_count <= parts.size ())
+            return false;
+        parts.resize (part_count);
+    }
     if (rc != ZLINK_RECV_OK) {
-        zlink_msg_close (&part);
         return false;
     }
 
-    if (!source_rid || source_rid->size == 0) {
-        zlink_msg_close (&part);
+    if (!source_rid || source_rid->size == 0 || reply_token != 0 || part_count == 0) {
+        zlink_multipart_close (parts.data (), part_count);
         return false;
     }
 
     const size_t id_len = std::min (id_cap, static_cast<size_t> (source_rid->size));
     std::memcpy (id_buf, source_rid->data, id_len);
 
-    const size_t payload_size = zlink_msg_size (&part);
+    const size_t payload_size = zlink_msg_size (&parts[0]);
     const size_t payload_len = std::min (payload_cap, payload_size);
     if (payload_len > 0) {
-        std::memcpy (payload_buf, zlink_msg_data (&part), payload_len);
+        std::memcpy (payload_buf, zlink_msg_data (&parts[0]), payload_len);
     }
-
-    while (has_more == ZLINK_PART_MORE) {
-        zlink_msg_t next;
-        if (zlink_msg_init (&next) != 0) {
-            zlink_msg_close (&part);
-            return false;
-        }
-        const zlink_recv_result_t next_rc =
-          ::zlink_recv_part (socket, &source_rid, &next, &has_more, ZLINK_RECV_FLAGS_DONTWAIT);
-        zlink_msg_close (&next);
-        if (next_rc != ZLINK_RECV_OK) {
-            zlink_msg_close (&part);
-            return false;
-        }
-    }
-    zlink_msg_close (&part);
+    zlink_multipart_close (parts.data (), part_count);
 
     if (payload_len < 16)
         return false;
@@ -149,6 +140,7 @@ bool run_measure_once (const std::vector<void *> &sockets,
 
     std::vector<char> recv_id_buf (512);
     std::vector<unsigned char> recv_payload_buf (1024 * 1024);
+    std::vector<zlink_msg_t> recv_parts (4);
 
     // Build poll items: POLLIN | POLLOUT for async pipeline
     std::vector<zlink_pollitem_t> poll_items (static_cast<size_t> (clients));
@@ -175,7 +167,8 @@ bool run_measure_once (const std::vector<void *> &sockets,
             // Readable: batch-drain all available responses
             if (rev & ZLINK_POLLIN) {
                 uint64_t wire_ts = 0;
-                while (recv_rtt_message (sockets[static_cast<size_t> (i)], recv_id_buf.data (),
+                while (recv_rtt_message (sockets[static_cast<size_t> (i)], recv_parts,
+                                         recv_id_buf.data (),
                                          recv_id_buf.size (), recv_payload_buf.data (),
                                          recv_payload_buf.size (), wire_ts)) {
                     const uint64_t now = now_ns ();
@@ -206,7 +199,8 @@ bool run_measure_once (const std::vector<void *> &sockets,
                 continue;
 
             uint64_t wire_ts = 0;
-            while (recv_rtt_message (sockets[static_cast<size_t> (i)], recv_id_buf.data (),
+            while (recv_rtt_message (sockets[static_cast<size_t> (i)], recv_parts,
+                                     recv_id_buf.data (),
                                      recv_id_buf.size (), recv_payload_buf.data (),
                                      recv_payload_buf.size (), wire_ts)) {
                 const uint64_t now = now_ns ();

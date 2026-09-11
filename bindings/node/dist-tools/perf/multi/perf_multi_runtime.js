@@ -41,7 +41,7 @@ function submitReply(received, payload) {
 function measurementPayload(parts) {
     if (!Array.isArray(parts) || parts.length !== measurementPartCount())
         return null;
-    if (measurementPartCount() === 2 && parts[1].data().length !== 0)
+    if (measurementPartCount() === 2 && parts[1].size() !== 0)
         return null;
     return parts[0];
 }
@@ -94,7 +94,7 @@ function applySocketPolicy(socket, options = {}) {
     // the 200ms default on every benchmark socket UNCONDITIONALLY, and
     // returns early (no timeouts) only for the inproc transport. Direct
     // Receive-only roles use public poller readiness; HWM-managed routed sends
-    // await the canonical managed Promise terminal. Match C's timeout policy:
+    // use the canonical managed submission result. Match C's timeout policy:
     // skip for inproc, otherwise apply the C default.
     const transport = String(options.transport || process.env.PERF_MULTI_TRANSPORT || '').trim().toLowerCase();
     const isInproc = transport === 'inproc';
@@ -228,7 +228,7 @@ async function waitForConnectionReadyCount(socket, expectedCount, connectFn = nu
         monitor.close();
     }
 }
-async function sendRouted(socket, ...args) {
+function sendRouted(socket, ...args) {
     const routed = args.length >= 2 && args[0] instanceof zlink.RoutingId;
     const payload = routed ? args[1] : args[0];
     let op = routed ? socket.send(args[0]) : socket.send();
@@ -242,7 +242,7 @@ async function sendRouted(socket, ...args) {
         // part count without allocating [payload, Buffer.alloc(0)] per send.
         op = appendMeasurement(op, payload);
     }
-    await op.submit();
+    return op.submit();
 }
 // PERF_MULTI_TEST_POLICY § 1.3.1: emit the wire-level stop token once at
 // phase end. Callers pass a closure that performs the actual send (e.g.

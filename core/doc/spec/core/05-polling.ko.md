@@ -60,7 +60,7 @@ readiness를 기다리는 방법은 두 가지다.
 target별 재시도 신호는 `ZLINK_POLLOUT` bit가 아니라 wait token의
 `ZLINK_COMPLETION_WRITABLE` record다. `ZLINK_SEND_FLAGS_DONTWAIT` submit이
 `ZLINK_SUBMIT_BACKPRESSURED`를 반환하면 `completion_id_out`의 0이 아닌 값이 wait token이고,
-그 제출을 거절한 자원이 회복되면(wake 조건은 [socket README](socket/README.ko.md#part-send와-pending-admission)가
+그 제출을 거절한 자원이 회복되면(wake 조건은 [socket README](socket/README.ko.md#whole-message-send와-pending-admission)가
 소유) Core는 같은 token, 같은 `user_context`, 그리고
 ROUTER·STREAM이면 제출한 RID를 담은 WRITABLE record 하나를 socket-local completion queue에
 넣는다. Application은 이 record를 `zlink_completion_recv()`로 꺼내 token·context·RID로 어느
@@ -92,7 +92,7 @@ level-triggered readiness다. Queue에 들어오는 record 종류는 `ZLINK_COMP
 등록하거나 `ZLINK_POLLIN`, `ZLINK_POLLOUT`과 OR할 수 있다. Queue에 record가 남아 있는 동안
 readiness도 유지된다.
 
-DEALER-ROUTER single connection에서 앞선 DATA record의 마지막 part를 dequeue하기 전에는 뒤의
+DEALER-ROUTER single connection에서 앞선 DATA record를 dequeue하기 전에는 뒤의
 REPLY가 physical head가 아니다. 이때 `ZLINK_POLLIN`만 준비되고 `ZLINK_POLLCOMPLETION`은
 준비되지 않을 수 있다. REPLY가 physical head에 도달해 socket-local completion queue로 이동한
 뒤에는 위 level-trigger와 `ZLINK_RECV_NO_DATA`까지 drain하는 규칙을 적용한다.
@@ -316,7 +316,7 @@ array)만으로 다음을 확인한다. 각 항목은 unit test 하나로 이어
 - Event array 용량보다 completion이 많아도 record가 유실·병합되지 않으며, caller는 준비된 socket을
   `ZLINK_RECV_NO_DATA`까지 drain한다.
 - DEALER-ROUTER의 physical head가 multipart DATA이면 `ZLINK_POLLIN`이 준비될 수 있지만 그 뒤
-  REPLY의 `ZLINK_POLLCOMPLETION`은 준비되지 않는다. DATA의 `FINAL` part를 dequeue한 뒤 REPLY가
+  REPLY의 `ZLINK_POLLCOMPLETION`은 준비되지 않는다. DATA record를 dequeue한 뒤 REPLY가
   socket-local completion queue로 이동하면 completion readiness가 발생한다.
 
 **수명**

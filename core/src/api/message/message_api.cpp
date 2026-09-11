@@ -121,6 +121,11 @@ zlink_config_result_t zlink_msg_adopt (zlink_msg_t *dest_, zlink_msg_t *src_)
         return ZLINK_CONFIG_INVALID_HANDLE;
     }
 
+    if (dest_ == src_) {
+        errno = EINVAL;
+        return ZLINK_CONFIG_INVALID_ARGUMENT;
+    }
+
     zlink::msg_t *dest = reinterpret_cast<zlink::msg_t *> (dest_);
     zlink::msg_t *src = reinterpret_cast<zlink::msg_t *> (src_);
     if (unlikely (!src->check ())) {

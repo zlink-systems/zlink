@@ -15,6 +15,7 @@ inline constexpr std::size_t control_mailbox_bytes = 4u * 1024u * 1024u;
 inline constexpr std::size_t receive_batch_messages = 64;
 inline constexpr std::size_t receive_batch_bytes = 1u * 1024u * 1024u;
 inline constexpr std::chrono::milliseconds receive_batch_time{2};
+inline constexpr std::chrono::milliseconds management_retry_interval{100};
 
 inline constexpr std::chrono::milliseconds owner_time_budget{10};
 inline constexpr std::size_t lifecycle_burst_limit = 8;

@@ -23,7 +23,7 @@ for (const count of [2, 17]) {
       poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 1);
       let operation = dealer.request().timeout(1000);
       for (const payload of payloads) operation = operation.message(payload);
-      const pending = operation.submit();
+      const pending = operation.submit().reply;
       // Admission may await WRITABLE. The public owner must keep progressing
       // it while the receiver waits; blocking recv alone cannot run JS retry.
       while (!router.recv(received, zlink.RecvFlags.DontWait)) {
@@ -64,7 +64,7 @@ test('observed multipart data survives receive reuse and reply consumption', asy
     router.bind('inproc://multipart-observed-data');
     dealer.connect('inproc://multipart-observed-data');
     for (let round = 0; round < 2; ++round) {
-      const pending = dealer.request().message('before').message('').timeout(1000).submit();
+      const pending = dealer.request().message('before').message('').timeout(1000).submit().reply;
       assert.equal(router.recv(received), true);
       const view = received.parts[0].data();
       view.write('edited');
@@ -74,6 +74,36 @@ test('observed multipart data survives receive reuse and reply consumption', asy
       assert.equal(parts[0].getString(), 'edited');
       for (const part of parts) part.close();
       assert.equal(view.toString(), 'edited');
+    }
+  } finally {
+    received.close(); dealer.close(); router.close(); context.close();
+  }
+});
+
+test('observed routed multipart data preserves metadata on the next refill', async () => {
+  const context = zlink.createContext();
+  const router = zlink.createRouterSocket(context);
+  const dealer = zlink.createDealerSocket(context);
+  const received = new zlink.Received();
+  try {
+    dealer.setRoutingId(zlink.RoutingId.from(Buffer.from('multipart-reader')));
+    router.bind('inproc://multipart-observed-refill');
+    dealer.connect('inproc://multipart-observed-refill');
+
+    dealer.send().message('first').message('').submit_sync();
+    assert.equal(router.recv(received), true);
+    const firstViews = received.parts.map((part: any) => part.data());
+
+    dealer.send().message('second').message('tail').submit_sync();
+    assert.equal(router.recv(received), true);
+    assert.deepEqual(firstViews, [Buffer.from('first'), Buffer.alloc(0)]);
+    assert.deepEqual(received.parts.map((part: any) => part.data()),
+      [Buffer.from('second'), Buffer.from('tail')]);
+    assert.equal(received.routingId?.toString(), 'multipart-reader');
+    assert.equal(received.replyToken, null);
+    for (const part of received.parts) {
+      assert.equal(part.getProperty('Routing-Id'), 'multipart-reader');
+      assert.equal(part.getProperty('Identity'), 'multipart-reader');
     }
   } finally {
     received.close(); dealer.close(); router.close(); context.close();
@@ -91,7 +121,7 @@ test('mixed multipart normalization preserves prefixes and input buffers', async
     const prefix = Buffer.from('prefix');
     const bytes = new Uint8Array([1, 2, 3, 4]).subarray(1, 3);
     const owned = zlink.Message.from('owned');
-    await right.send().message(prefix).message('text').message(bytes).message(owned).submit();
+    await right.send().message(prefix).message('text').message(bytes).message(owned).submit().admitted;
     assert.equal(owned.size(), 0);
     assert.equal(prefix.toString(), 'prefix');
     assert.equal(left.recv(received), true);

@@ -12,7 +12,7 @@ using Zlink.Framework.LocationProvider;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class ClientServerChannelRuntimeTests
+public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     [Fact]
     public async Task GlobalClientServerMetadataFailureDisposesEachSendPartOnce()
@@ -369,9 +369,22 @@ public sealed class ClientServerChannelRuntimeTests
     [Fact]
     public async Task NegotiatedBoundConvertsOversizedServerReplyToCapacityExceeded()
     {
+        var logDirectory = Environment.GetEnvironmentVariable("ZLINK_TEST_FLOW_DIRECTORY")
+            ?? Zlink.Framework.Tests.Common.FrameworkTestEnvironment.CreateTestLogDirectory("oversized-server-reply");
+        var flowFilePath = Path.Combine(
+            logDirectory, $"oversized-server-reply-{Guid.NewGuid():N}.flow");
+        using var listener = new TestHostMessageFlowListener(flowFilePath);
+        output.WriteLine($"Message flow file: {flowFilePath}");
+        var diagnosticsLevel = Environment.GetEnvironmentVariable("ZLINK_TEST_FLOW_LEVEL") is { } level
+            ? Enum.Parse<ZLinkDiagnosticsLevel>(level)
+            : ZLinkDiagnosticsLevel.Normal;
         var port = ReservePort();
         await using var server = CreateLargeReplyServer(port, maximumMessageBytes: 512);
         await using var client = CreateClient(port, maximumMessageBytes: 4096);
+        server.GetRequiredService<ZLinkFrameworkRegistration>().DispatchOptions.Diagnostics
+            .SetLevel(diagnosticsLevel);
+        client.GetRequiredService<ZLinkFrameworkRegistration>().DispatchOptions.Diagnostics
+            .SetLevel(diagnosticsLevel);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
 
@@ -393,8 +406,15 @@ public sealed class ClientServerChannelRuntimeTests
         }
         finally
         {
-            await clientRuntime.StopAsync(CancellationToken.None);
-            await serverRuntime.StopAsync(CancellationToken.None);
+            try
+            {
+                await clientRuntime.StopAsync(CancellationToken.None);
+                await serverRuntime.StopAsync(CancellationToken.None);
+            }
+            finally
+            {
+                output.WriteLine(File.ReadAllText(flowFilePath));
+            }
         }
     }
 
@@ -1284,6 +1304,7 @@ public sealed class ClientServerChannelRuntimeTests
                 transport,
                 () => transport.ReadyCount == 2,
                 TimeSpan.FromSeconds(10));
+            var buildsBeforeCalls = transport.ReadySelectionPlanBuildCount;
 
             var route = local.GetRequiredService<IZLinkRouteClient>();
             var selected = new HashSet<string>(StringComparer.Ordinal);
@@ -1300,6 +1321,9 @@ public sealed class ClientServerChannelRuntimeTests
             Assert.Equal(
                 new[] { "local", "remote" },
                 selected.OrderBy(static value => value, StringComparer.Ordinal));
+            Assert.Equal(
+                buildsBeforeCalls,
+                transport.ReadySelectionPlanBuildCount);
 
             Assert.True(
                 await local.GetRequiredService<ZLinkLocationAutoConnectHost>()
@@ -1308,12 +1332,18 @@ public sealed class ClientServerChannelRuntimeTests
                 transport,
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));
+            var buildsAfterCandidateChange =
+                transport.ReadySelectionPlanBuildCount;
+            Assert.True(buildsAfterCandidateChange > buildsBeforeCalls);
             var afterDrain = await route.RequestToChannel(
                     "work",
                     new EchoRequest("after-drain"))
                 .Timeout(TimeSpan.FromSeconds(5))
                 .Async<EchoReply>();
             Assert.Equal("remote:after-drain", afterDrain.Value);
+            Assert.Equal(
+                buildsAfterCandidateChange,
+                transport.ReadySelectionPlanBuildCount);
         }
         finally
         {
@@ -1701,7 +1731,7 @@ public sealed class ClientServerChannelRuntimeTests
         var admissionTask = dealer.Request()
             .Message(hello)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async(CancellationToken.None);
+            .Async(CancellationToken.None).Reply;
         using var inbound = await PollReceivedAsync(
             storage => router.Recv(storage, RecvFlags.DontWait),
             TimeSpan.FromSeconds(2));
@@ -1725,7 +1755,7 @@ public sealed class ClientServerChannelRuntimeTests
             ZLinkClientServerControlProtocol.EncodeLivenessProbe(17);
         await router.Send(sourceRid)
             .Message(probe)
-            .Async(CancellationToken.None);
+            .Async(CancellationToken.None).Admitted;
         using var delivered = await PollReceivedAsync(
             storage => dealer.Recv(storage, RecvFlags.DontWait),
             TimeSpan.FromSeconds(2));
@@ -1770,7 +1800,7 @@ public sealed class ClientServerChannelRuntimeTests
                 ZLinkClientServerControlProtocol.EncodeLivenessProbe(17);
             await router.Send(clientRid)
                 .Message(probe)
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Admitted;
             using var reply = await PollReceivedAsync(
                 storage => TryReceive(router, storage),
                 TimeSpan.FromSeconds(3));
@@ -1794,7 +1824,7 @@ public sealed class ClientServerChannelRuntimeTests
                         endpoint));
             await router.Send(clientRid)
                 .Message(draining)
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Admitted;
             await WaitUntilAsync(
                 transport,
                 () => transport.ReadyCount == 0,
@@ -2144,7 +2174,7 @@ public sealed class ClientServerChannelRuntimeTests
                         ?? throw new InvalidOperationException(
                             "missing client routing id"))
                     .Message(malformed)
-                    .Async(CancellationToken.None);
+                    .Async(CancellationToken.None).Admitted;
 
             Received secondHello;
             try
@@ -2232,7 +2262,7 @@ public sealed class ClientServerChannelRuntimeTests
                 new byte[] { 0x5a, 0x4d, 0x01, 0xff, 0x00 });
             await dealer.Send()
                 .Message(malformed)
-                .Async(CancellationToken.None);
+                .Async(CancellationToken.None).Admitted;
             await Task.Delay(250);
             Assert.False(
                 server.GetRequiredService<EchoProbe>().Received.Task.IsCompleted);

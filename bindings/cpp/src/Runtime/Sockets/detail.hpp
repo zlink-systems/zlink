@@ -24,53 +24,6 @@ namespace zlink
 namespace detail
 {
 
-class recv_part_out_guard_t
-{
-  public:
-    explicit recv_part_out_guard_t (message_t &part_) noexcept :
-        _part (part_), _has_saved (false), _committed (false)
-    {
-        // HOT PATH: caller-provided single-part recv must preserve a non-empty
-        // output message when the native receive fails, but an empty output
-        // message has no payload to restore. Skipping save/restore for the
-        // empty case avoids one native message init/close pair per receive
-        // while keeping the public failure contract for non-empty messages.
-        if (_part.valid () && has_payload (_part)) {
-            move_to_native (_part, &_saved);
-            _has_saved = true;
-        }
-    }
-
-    ~recv_part_out_guard_t ()
-    {
-        if (_committed)
-            return;
-        _part.close ();
-        if (_has_saved)
-            adopt_native_message (_part, &_saved);
-    }
-
-    bool prepare ()
-    {
-        _part.init ();
-        return _part.valid ();
-    }
-
-    void commit () noexcept
-    {
-        if (_has_saved)
-            (void) zlink_msg_close (&_saved);
-        _has_saved = false;
-        _committed = true;
-    }
-
-  private:
-    message_t &_part;
-    zlink_msg_t _saved;
-    bool _has_saved;
-    bool _committed;
-};
-
 inline void assign_recv_source_rid (routing_id_t *source_rid_out_,
                                     const zlink_routing_id_t *source_rid_) noexcept
 {
@@ -87,52 +40,28 @@ inline int recv_single_part_message (void *handle_,
                                      message_t &part_out_,
                                      recv_flags_t flags_)
 {
-    // HOT PATH: an already-initialized output message with no payload has
-    // nothing to preserve on failure, which is the whole reason the guard
-    // exists. message_t owns that fact (`has_payload`), so this case needs no
-    // guard object, no init() re-check, and no save/restore bookkeeping.
-    if (part_out_.valid () && !has_payload (part_out_)) {
-        const zlink_routing_id_t *source_rid = nullptr;
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-        const int rc =
-          zlink_recv_part (handle_, &source_rid, detail::native_handle (part_out_), &has_more,
-                           static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
-        if (rc != 0) {
-            part_out_.close ();
-            return rc;
-        }
-        // The frame is known valid here, so record presence directly instead
-        // of re-deriving validity through refresh_payload_presence().
-        message_access_t::has_payload (part_out_) =
-          zlink_msg_size (detail::native_handle (part_out_)) > 0;
-        if (has_more != ZLINK_PART_FINAL) {
-            part_out_.close ();
-            errno = EMSGSIZE;
-            return -1;
-        }
-        assign_recv_source_rid (source_rid_out_, source_rid);
-        return 0;
-    }
-
-    recv_part_out_guard_t part_guard (part_out_);
-    if (!part_guard.prepare ())
-        return -1;
-
     const zlink_routing_id_t *source_rid = nullptr;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    const int rc =
-      zlink_recv_part (handle_, &source_rid, detail::native_handle (part_out_), &has_more,
-                       static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
-    if (rc != 0)
-        return rc;
-    refresh_payload_presence (part_out_);
-    if (has_more != ZLINK_PART_FINAL) {
+    zlink_msg_t native_part;
+    size_t part_count = 0;
+    const int rc = zlink_recv (
+      handle_, &source_rid, &native_part, 1u, &part_count,
+      static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
+    if (rc == ZLINK_RECV_BUFFER_TOO_SMALL) {
         errno = EMSGSIZE;
+        return -1;
+    }
+    if (rc != ZLINK_RECV_OK)
+        return rc;
+    if (part_count != 1u) {
+        if (part_count > 0)
+            close_message_array (&native_part, 1u);
+        errno = EPROTO;
         return -1;
     }
 
     assign_recv_source_rid (source_rid_out_, source_rid);
-    part_guard.commit ();
+    adopt_native_message (part_out_, &native_part);
+    close_message_array (&native_part, 1u);
     return 0;
 }
 
@@ -141,27 +70,30 @@ inline int recv_single_part_routed_message (void *handle_,
                                             message_t &part_out_,
                                             recv_flags_t flags_)
 {
-    recv_part_out_guard_t part_guard (part_out_);
-    if (!part_guard.prepare ())
-        return -1;
-
     const zlink_routing_id_t *source_node_rid = nullptr;
     zlink_reply_token_t reply_token = 0;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    const int rc = zlink_router_recv_part (
-      handle_, &source_node_rid, &reply_token, detail::native_handle (part_out_),
-      &has_more, static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
-    if (rc != 0)
+    zlink_msg_t native_part;
+    size_t part_count = 0;
+    const int rc = zlink_router_recv (
+      handle_, &source_node_rid, &reply_token, &native_part, 1u, &part_count,
+      static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
+    if (rc == ZLINK_RECV_BUFFER_TOO_SMALL) {
+        errno = EMSGSIZE;
+        return -1;
+    }
+    if (rc != ZLINK_RECV_OK)
         return rc;
-    refresh_payload_presence (part_out_);
-    if (has_more != ZLINK_PART_FINAL || reply_token != 0 || !source_node_rid
+    if (part_count != 1u || reply_token != 0 || !source_node_rid
         || source_node_rid->size == 0) {
-        errno = has_more != ZLINK_PART_FINAL ? EMSGSIZE : EPROTO;
+        if (part_count > 0)
+            close_message_array (&native_part, 1u);
+        errno = EPROTO;
         return -1;
     }
 
     assign_routing_id_native (source_rid_out_, *source_node_rid);
-    part_guard.commit ();
+    adopt_native_message (part_out_, &native_part);
+    close_message_array (&native_part, 1u);
     return 0;
 }
 

@@ -36,18 +36,18 @@ this tree must update the table.
 
 | Entry point | Path |
 |---|---|
-| `zlink_send_part` (PAIR, DEALER, ROUTER, STREAM) | `submit_completion_aware_part` → blocking goes through `send_completion_submit_blocking`, a refused DONTWAIT through `register_send_writable_wait_after_failure` → `try_admit_send_parts_scoped` → `xsend_selected_pipe` / `xsend_configured_endpoint` / `send_direct_with_retry` → `lb_t::sendpipe_to` → `pipe_t::write_*` |
-| `zlink_send_part_rid` (ROUTER, STREAM) | as above, through the `send_direct_with_retry` branch |
-| `zlink_request_part` FINAL (DEALER, ROUTER) | `request_part_common` → `submit_pull_blocking_request` → `request_admission_submit_blocking` → `try_admit_send_parts_scoped` → `arm_socket_pending_request_timeout` |
-| `zlink_reply_part` FINAL (ROUTER) | `public_router_reply_submit` → `checkout_router_reply_target` → `send_public_router_reply_with_wait` → `retain_reply_transport_pipe` → `send_completion_staged_frames_on_pipe` |
-| `zlink_recv_part` / `zlink_router_recv_part` | `recv_dealer_message_direct` / `router_recv_part_impl` → `recv_common` / `recv_routed` → `fq_t::recvpipe` → `pipe_t::read` → `reclassify_transport_pair_application_head` → `end_public_part_receive_delivery_hold` |
+| `zlink_send` (PAIR, DEALER) | `submit_completion_aware_part` → blocking goes through `send_completion_submit_blocking`, a refused DONTWAIT through `register_send_writable_wait_after_failure` → `try_admit_send_parts_scoped` → `xsend_selected_pipe` / `xsend_configured_endpoint` / `send_direct_with_retry` → `lb_t::sendpipe_to` → `pipe_t::write_*` |
+| `zlink_send_rid` (ROUTER, STREAM) | as above, through the `send_direct_with_retry` branch |
+| `zlink_request` (DEALER, ROUTER) | `request_part_common` → `submit_pull_blocking_request` → `request_admission_submit_blocking` → `try_admit_send_parts_scoped` → `arm_socket_pending_request_timeout` |
+| `zlink_reply` (ROUTER) | `public_router_reply_submit` → `checkout_router_reply_target` → `send_public_router_reply_with_wait` → `retain_reply_transport_pipe` → `send_completion_staged_frames_on_pipe` |
+| `zlink_recv` / `zlink_router_recv` | `recv_dealer_record` / `router_recv_part_impl` → `recv_common` / `recv_routed` → `fq_t::recvpipe` → `pipe_t::read` → `reclassify_transport_pair_application_head` → `end_public_part_receive_delivery_hold` |
 | `zlink_completion_recv` | `process_submit_commands` → `prepare_completion_pull` when blocking with a nonzero timeout → `socket_completion::recv` |
 | `zlink_poll` / `zlink_poller_wait` | `get_events_internal` → `process_commands` → `xhas_in` / `xhas_out` |
 | I/O thread → socket delivery | `pipe_t::flush` → `activate_read` command → `xread_activated` → `fq_t::activated`; `process_async_mailbox` |
 
 ## 3. What the hot path must not do
 
-Code on the hot path does none of the following. The only exception is the fallback path of §4.
+Code on the hot path does none of the following. Exceptions are the opaque reply token lookup below and the fallback path of §4.
 
 1. **Heap allocation.** No per-message temporary `std::vector` or `std::string`, no `new`, no
    `make_shared`. Buffers that are needed reuse member scratch owned by the socket, the load
@@ -57,7 +57,9 @@ Code on the hot path does none of the following. The only exception is the fallb
    within the same send scope.
 3. **Socket-level table lookups and their mutexes.** Socket-level containers — the transport pair
    table, pending queue maps, route history — are not searched per message. The state the message
-   path asks for is answered by the caches of §4.
+   path asks for is answered by the caches of §4. The lookup and mutex in
+   `checkout_router_reply_target` that resolve an opaque reply token are an exception. The Core
+   request/reply owner uses this lookup to validate the reply target and ownership.
 4. **Unconditional side work.** Work that is only occasionally needed — releasing a hold,
    reclassifying a head, flushing deferred controls — first checks an atomic flag and takes a lock
    only when the flag says so.
@@ -85,7 +87,7 @@ point where it changes, and the message path reads only that cache.
 |---|---|---|
 | Is this pipe the Application lane of a ready transport pair | `pipe_t::transport_pair_application_ready_cached()` | set at pair admission, cleared at the first physical detach |
 | Is this pipe lifecycle-active | `pipe_t::is_lifecycle_active()` (mirror of `_state`) | every transition that leaves `active` |
-| Is a public part-receive hold published | `_public_part_receive_delivery_hold_active` (atomic) | hold begin/end |
+| Is a public whole-message receive delivery hold published | `_public_part_receive_delivery_hold_active` (atomic) | hold begin/end |
 
 Only when the cache cannot answer (the selected pipe detached meanwhile, or backpressure requires a
 retry wait) does the code fall back to the general path. The fallback keeps these rules:
@@ -103,7 +105,7 @@ retry wait) does the code fall back to the general path. The fallback keeps thes
 - Wait-token registration and the WRITABLE record publish lie outside the per-message success
   path. Both run only on a refusal and on a credit or attach wake, so they fall within the
   allowance of §3 (the fallback path), and the §3 prohibitions on the success path still hold.
-- The contract of the fallback (a blocking send's selection is committed once at FINAL, retries
+- The contract of the fallback (a blocking send selects its target once per record, and retries
   stay on the same endpoint) is unchanged by the existence of the fast path.
 
 ## 5. Performance gates

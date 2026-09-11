@@ -211,6 +211,24 @@ int main ()
         || copied_payload.to_string () != "borrowed")
         return 29;
 
+    // An owned codec result and its transport bridge share the same native
+    // buffer. Explicit public copies still own independent bytes.
+    zlink::message_t retained;
+    const std::string large_body (4096, 'x');
+    {
+        auto native = zlink::message_t::from (large_body);
+        const auto *storage = native.data ();
+        auto owned = zlink::framework::detail::encoded_payload_from_raw (std::move (native));
+        retained = zlink::framework::detail::encoded_payload_to_raw (owned);
+        if (owned.bytes ().data () != storage || retained.data () != storage)
+            return 30;
+        auto independent = owned;
+        if (independent.bytes ().data () == storage || independent.to_string () != large_body)
+            return 31;
+    }
+    if (retained.to_string () != large_body)
+        return 32;
+
     for (const auto &scenario : fixture.at ("normalizationScenarios")) {
         zlink::framework::serializer_registry_t registry;
         bool rejected = false;

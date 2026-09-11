@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import unittest
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -24,6 +25,7 @@ from perf_multi_common import (
     PYTHON_MULTI_DEFAULT_IO_THREADS,
     RELAY_SCHEDULER_QUANTUM,
     RelaySchedulerQuantum,
+    RoutedReplySender,
     STOP_TOKEN,
     benchmark_endpoint,
     make_relay_send_done_callback,
@@ -62,6 +64,75 @@ import zlink
 
 
 class PerfMultiRunnerTests(unittest.TestCase):
+    def test_routed_reply_sender_closes_forwarded_received_envelope(self):
+        async def scenario():
+            with zlink.create_context() as context:
+                with zlink.create_router_socket(context) as router:
+                    with zlink.create_dealer_socket(context) as dealer:
+                        endpoint = "inproc://python-perf-relay-" + uuid.uuid4().hex
+                        router.bind(endpoint)
+                        dealer.connect(endpoint)
+                        submission = dealer.send().messages(b"payload", b"").submit()
+                        await submission.admitted
+
+                        received = zlink.create_received()
+                        self.assertTrue(router.recv_into(received))
+                        sender = RoutedReplySender()
+                        sender.enqueue(received)
+                        await sender.drain()
+
+                        self.assertEqual(received.parts, ())
+                        self.assertIs(sender.acquire_storage(), received)
+                        received.close()
+                        with zlink.create_received() as echoed:
+                            self.assertTrue(dealer.recv_into(echoed))
+                            self.assertEqual(echoed.to_bytes_list(), [b"payload", b""])
+
+        asyncio.run(scenario())
+
+    def test_routed_reply_sender_submits_received_parts_directly(self):
+        first = object()
+        second = object()
+
+        class SendOperation:
+            def __init__(self, owner):
+                self.owner = owner
+                self.parts = ()
+
+            def messages(self, *parts):
+                self.parts = parts
+                return self
+
+            def submit(self):
+                self.owner.submitted = self.parts
+                admitted = asyncio.get_running_loop().create_future()
+                admitted.set_result(None)
+                return zlink.SendSubmission(zlink.SubmitResult.OK, admitted)
+
+        class Received:
+            def __init__(self):
+                self.parts = (first, second)
+                self.submitted = None
+                self.close_count = 0
+
+            def send(self):
+                return SendOperation(self)
+
+            def close(self):
+                self.close_count += 1
+
+        received = Received()
+
+        async def scenario():
+            sender = RoutedReplySender()
+            sender.enqueue(received)
+            await sender.drain()
+
+        asyncio.run(scenario())
+        self.assertIs(received.submitted[0], first)
+        self.assertIs(received.submitted[1], second)
+        self.assertEqual(received.close_count, 1)
+
     def test_runner_does_not_treat_partial_results_from_failed_case_as_success(self):
         partial = (
             "RESULT,current,MULTI_PUBSUB,tcp,1024,throughput,1.000\n"
@@ -79,7 +150,10 @@ class PerfMultiRunnerTests(unittest.TestCase):
             self.assertEqual(_clients_for_pattern("DEALER_DEALER", None), "100")
             self.assertEqual(_clients_for_pattern("STREAM", None), "100")
             clients = _options_clients_display(list(DEFAULT_PATTERNS), None)
-            self.assertEqual(clients, "100 (stream=100)")
+            # C resolve_clients_meta (bindings/c/perf/run_comparison.py:3830-3845)
+            # returns the plain general default unless the whole selection is
+            # STREAM; it never annotates the row with a stream sub-value.
+            self.assertEqual(clients, "100")
             options = _build_options(
                 parse_args([]),
                 list(DEFAULT_PATTERNS),
@@ -210,8 +284,10 @@ class PerfMultiRunnerTests(unittest.TestCase):
             wait_connection_ready_count(monitor, 3, 1000)
         self.assertEqual(wait_event.call_count, 3)
 
-    def test_python_multi_defaults_to_one_io_thread(self):
-        self.assertEqual(PYTHON_MULTI_DEFAULT_IO_THREADS, 1)
+    def test_python_multi_default_io_threads_match_the_c_reference(self):
+        # bindings/c/perf/run_comparison.py:1255 and the C++ runner both default
+        # to 4. Python ran with 1 until the runner alignment in b93b176061.
+        self.assertEqual(PYTHON_MULTI_DEFAULT_IO_THREADS, 4)
 
     def test_routed_sendsend_clients_recalculate_hwm_before_active_phase(self):
         multi_dir = PERF_DIR / "multi"
@@ -227,28 +303,20 @@ class PerfMultiRunnerTests(unittest.TestCase):
                 self.assertLess(ready_wait, recalculate)
                 self.assertLess(recalculate, active_phase)
 
-    def test_reqrep_client_owns_completion_dispatch_until_drain(self):
+    def test_reqrep_client_uses_submission_stages_without_completion_poller(self):
         source = (
             PERF_DIR / "multi" / "perf_multi_reqrep_client.py"
         ).read_text(encoding="utf-8")
-        registration = source.index("zlink.PollEventFlag.POLLCOMPLETION")
-        active_progress = source.index(
-            "completion_poller.wait(completion_events, 0)", registration
+        reply_stage = source.index("submission.reply")
+        backpressure = source.index(
+            "submission.result == zlink.SubmitResult.BACKPRESSURED"
         )
-        drain = source.index("drain_deadline =", active_progress)
-        drain_progress = source.index(
-            "completion_poller.wait(completion_events, 0)",
-            active_progress + 1,
-        )
-        removal = source.index("completion_poller.remove_socket(sock)")
-        socket_close = source.index("sock.close()", removal)
+        admitted_stage = source.index("await submission.admitted", backpressure)
 
-        self.assertLess(registration, active_progress)
-        self.assertLess(active_progress, drain)
-        self.assertLess(drain, drain_progress)
-        self.assertLess(drain_progress, removal)
-        self.assertLess(removal, socket_close)
-        self.assertNotIn("await asyncio.wait(", source)
+        self.assertLess(reply_stage, backpressure)
+        self.assertLess(backpressure, admitted_stage)
+        self.assertNotIn("POLLCOMPLETION", source)
+        self.assertNotIn(".done()", source)
 
     def test_dealer_dealer_stop_token_has_raw_message_shape(self):
         class Part:
@@ -484,9 +552,16 @@ class PerfMultiRunnerTests(unittest.TestCase):
                 self.timeout_s = timeout_s
                 return self
 
-            async def submit(self):
+            def submit(self):
                 self.owner.attempts.append((self.parts, self.timeout_s))
-                return reply
+                loop = asyncio.get_running_loop()
+                admitted = loop.create_future()
+                admitted.set_result(None)
+                reply_stage = loop.create_future()
+                reply_stage.set_result(reply)
+                return zlink.RequestSubmission(
+                    zlink.SubmitResult.OK, admitted, reply_stage
+                )
 
         class Socket:
             def __init__(self):
@@ -497,10 +572,14 @@ class PerfMultiRunnerTests(unittest.TestCase):
 
         socket = Socket()
         logical_parts = (b"payload", b"")
-        result = asyncio.run(
-            submit_managed_request(socket, logical_parts, timeout_s=0.2)
-        )
-        self.assertIs(result, reply)
+
+        async def scenario():
+            submission = submit_managed_request(
+                socket, logical_parts, timeout_s=0.2
+            )
+            self.assertIs(await submission.reply, reply)
+
+        asyncio.run(scenario())
         self.assertEqual(
             socket.attempts,
             [((b"payload", b""), 0.2)],
@@ -514,7 +593,7 @@ class PerfMultiRunnerTests(unittest.TestCase):
             def timeout(self, _timeout_s):
                 return self
 
-            async def submit(self):
+            def submit(self):
                 raise zlink.SubmitError(zlink.SubmitResult.BACKPRESSURED, 11)
 
         class Socket:
@@ -522,13 +601,11 @@ class PerfMultiRunnerTests(unittest.TestCase):
                 return RequestOperation()
 
         with self.assertRaises(zlink.SubmitError):
-            asyncio.run(
-                submit_managed_request(
-                    Socket(), (b"payload", b""), timeout_s=0.2
-                )
+            submit_managed_request(
+                Socket(), (b"payload", b""), timeout_s=0.2
             )
 
-    def test_routed_send_propagates_backpressure_without_external_retry(self):
+    def test_routed_send_waits_for_backpressured_admission_without_retry(self):
         class SendOperation:
             def __init__(self, owner):
                 self.owner = owner
@@ -542,12 +619,13 @@ class PerfMultiRunnerTests(unittest.TestCase):
                 self.parts.append(part)
                 return self
 
-            async def submit(self):
+            def submit(self):
                 self.owner.attempts.append(tuple(self.parts))
-                if len(self.owner.attempts) == 1:
-                    raise zlink.SubmitError(
-                        zlink.SubmitResult.BACKPRESSURED, 11
-                    )
+                admitted = asyncio.get_running_loop().create_future()
+                asyncio.get_running_loop().call_soon(admitted.set_result, None)
+                return zlink.SendSubmission(
+                    zlink.SubmitResult.BACKPRESSURED, admitted
+                )
 
         class Socket:
             def __init__(self):
@@ -557,20 +635,21 @@ class PerfMultiRunnerTests(unittest.TestCase):
                 return SendOperation(self)
 
         socket = Socket()
-        with self.assertRaises(zlink.SubmitError) as raised:
-            asyncio.run(send_routed(socket, b"payload"))
-        self.assertEqual(raised.exception.result, zlink.SubmitResult.BACKPRESSURED)
+        asyncio.run(send_routed(socket, b"payload"))
         self.assertEqual(socket.attempts, [(b"payload", b"")])
 
-    def test_inline_routed_admission_yields_to_concurrent_progress(self):
+    def test_immediate_routed_admission_does_not_add_scheduler_pacing(self):
         events = []
 
         class SendOperation:
             def messages(self, *parts):
                 return self
 
-            async def submit(self):
+            def submit(self):
                 events.append("submit")
+                admitted = asyncio.get_running_loop().create_future()
+                admitted.set_result(None)
+                return zlink.SendSubmission(zlink.SubmitResult.OK, admitted)
 
         class Socket:
             def send(self):
@@ -587,38 +666,9 @@ class PerfMultiRunnerTests(unittest.TestCase):
             await asyncio.gather(send_once(), receive_progress())
 
         asyncio.run(scenario())
-        self.assertEqual(events, ["submit", "receive-progress", "send-done"])
-
-    def test_one_shot_routed_reply_can_skip_duplicate_success_yield(self):
-        events = []
-
-        class SendOperation:
-            def messages(self, *parts):
-                return self
-
-            async def submit(self):
-                events.append("submit")
-
-        class Socket:
-            def send(self):
-                return SendOperation()
-
-        async def scenario():
-            async def send_once():
-                await send_routed(
-                    Socket(), b"payload", _yield_after_submit=False
-                )
-                events.append("send-done")
-
-            async def receive_progress():
-                events.append("receive-progress")
-
-            await asyncio.gather(send_once(), receive_progress())
-
-        asyncio.run(scenario())
         self.assertEqual(events, ["submit", "send-done", "receive-progress"])
 
-    def test_one_shot_routed_reply_propagates_backpressure_without_retry_yield(self):
+    def test_one_shot_routed_reply_waits_for_backpressured_admission(self):
         events = []
 
         class SendOperation:
@@ -628,13 +678,20 @@ class PerfMultiRunnerTests(unittest.TestCase):
             def messages(self, *parts):
                 return self
 
-            async def submit(self):
+            def submit(self):
                 self.owner.attempts += 1
                 events.append(f"submit-{self.owner.attempts}")
-                if self.owner.attempts == 1:
-                    raise zlink.SubmitError(
-                        zlink.SubmitResult.BACKPRESSURED, 11
-                    )
+                loop = asyncio.get_running_loop()
+                admitted = loop.create_future()
+
+                def finish_admission():
+                    events.append("admitted")
+                    admitted.set_result(None)
+
+                loop.call_soon(finish_admission)
+                return zlink.SendSubmission(
+                    zlink.SubmitResult.BACKPRESSURED, admitted
+                )
 
         class Socket:
             def __init__(self):
@@ -644,13 +701,9 @@ class PerfMultiRunnerTests(unittest.TestCase):
                 return SendOperation(self)
 
         socket = Socket()
-        with self.assertRaises(zlink.SubmitError) as raised:
-            asyncio.run(
-                send_routed(socket, b"payload", _yield_after_submit=False)
-            )
-        self.assertEqual(raised.exception.result, zlink.SubmitResult.BACKPRESSURED)
+        asyncio.run(send_routed(socket, b"payload"))
         self.assertEqual(socket.attempts, 1)
-        self.assertEqual(events, ["submit-1"])
+        self.assertEqual(events, ["submit-1", "admitted"])
 
     def test_active_message_latency_validates_and_decodes_once(self):
         payload = stamp_payload(new_payload(64), phase=1, run_id=7, seq=11)

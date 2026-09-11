@@ -6,6 +6,7 @@ import {
   StreamPacket,
   type Message,
   type SendOperation,
+  type SendSubmission,
 } from '../../contracts';
 import { streamPacketState } from '../../contracts/messaging/stream_packet';
 import { RecvFlags, SocketType as NativeSocketType } from '../../contracts/sockets/socket_constants';
@@ -46,8 +47,8 @@ export class StreamSocket extends SocketBase {
     let raw;
     try {
       raw = ((flags | 0) & (RecvFlags.DontWait | 0))
-        ? native.socketRecvMessageNoWait(getNativeHandle(this))
-        : native.socketRecvMessage(getNativeHandle(this), flags | 0);
+        ? native.socketRecvMessageNoWait(this.receiveHandle())
+        : native.socketRecvMessage(this.receiveHandle(), flags | 0);
     } catch (error) {
       throw recvNativeError(error, flags, 'recv failed');
     }
@@ -57,8 +58,8 @@ export class StreamSocket extends SocketBase {
       if (!routingId) throw new Error('missing routed send target');
       completionOwnerOf(this).sendSync(parts, routingId);
     };
-    const sendManaged = (parts: readonly Message[]): Promise<void> => {
-      if (!routingId) return Promise.reject(new Error('missing routed send target'));
+    const sendManaged = (parts: readonly Message[]): SendSubmission => {
+      if (!routingId) throw new Error('missing routed send target');
       return completionOwnerOf(this).submitSend(parts, routingId);
     };
     materializeReceivedInto(result, raw, sendSync, sendManaged);
@@ -74,7 +75,7 @@ export class StreamSocket extends SocketBase {
     result.close();
     state._receiving = true;
     try {
-      const raw = native.socketStreamRecvPacket(getNativeHandle(this), flags | 0);
+      const raw = native.socketStreamRecvPacket(this.receiveHandle(), flags | 0);
       if (raw == null) return false;
       state._routingId = RoutingId.from(raw.routingId);
       state._header = messageFromNativeBuffer(raw.header);

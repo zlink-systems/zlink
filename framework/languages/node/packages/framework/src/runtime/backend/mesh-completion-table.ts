@@ -1,4 +1,5 @@
 import { ZLinkBufferMessage as Message } from './runtime-message';
+import type { Message as ZLinkMessage } from '../../contracts/Common/Message';
 import type {
   MeshOperationId,
   ReceiveKindData,
@@ -117,7 +118,7 @@ export class ZLinkMeshCompletionTable {
     this.pending.delete(key);
     pending.removeAbort?.();
     try {
-      pending.resolve(copyCompletion(record));
+      pending.resolve(retainCompletion(record));
     } catch (error) {
       pending.reject(error);
     }
@@ -144,14 +145,21 @@ export class ZLinkMeshCompletionTable {
 
 }
 
-function copyCompletion(record: ReceiveRecord): ZLinkMeshCompletion {
+function retainCompletion(record: ReceiveRecord): ZLinkMeshCompletion {
   return {
     terminalResult: record.terminalResult,
     failureErrno: record.failureErrno,
     operationKind: record.operationKind,
     kindData: record.kindData,
-    parts: record.parts.map((part) => Message.fromOwned(Buffer.from(part.data())))
+    parts: record.parts.map(retainCompletionPart)
   };
+}
+
+function retainCompletionPart(part: ZLinkMessage): Message {
+  // A runtime message already owns a managed Buffer and close() is a no-op.
+  // Binding-native messages can expose native storage through data(), which
+  // becomes invalid when their owner closes; materialize that one boundary copy.
+  return part instanceof Message ? part : Message.fromOwned(Buffer.from(part.data()));
 }
 
 export function closeMeshCompletion(completion: ZLinkMeshCompletion): void {

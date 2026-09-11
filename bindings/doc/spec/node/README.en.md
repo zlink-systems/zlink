@@ -77,7 +77,7 @@ casing, or file names when a TypeScript idiom is clearer.
 - Package projection: symbols exported from the package entrypoint and
   declared in the published TypeScript definitions.
 - Internal implementation: native addon modules, private source modules, N-API handles, completion-drain
-  owners and provisional registries, converters, and raw part-loop helpers.
+  owners and provisional registries, converters, and whole-message array helpers.
 - Package boundary: `package.json` exports expose only documented public
   entrypoints.
 - Documentation role: this README defines shape and semantic coverage. The
@@ -281,7 +281,7 @@ This binding feels like a TypeScript package with a native backend.
 - Operation builders use public contract interfaces because they hide staged
   native request state and multipart accumulation.
 - Native addon handles, raw pointers, callback userdata, request pumps, and
-  part-loop sequencing are never exposed.
+  whole-message array handling are never exposed.
 
 Do not introduce an interface for a pure DTO/value object only for symmetry.
 `Message`, `RoutingId`, `Received`, `TopicMessage`, route results, snapshots,
@@ -323,7 +323,7 @@ native objects faster.
   runtime factory module so contract files do not import runtime
   implementations.
 - JavaScript runtime implementations, native handle owners, request pumps,
-  callback adapters, and part-loop helpers belong in `src/zlink/runtime`.
+  callback adapters, and whole-message array helpers belong in `src/zlink/runtime`.
 - N-API bindings, native addon handles, marshalling helpers, and platform
   loading code belong in `src/zlink/runtime/native`.
 - Package exports and the published `.d.ts` file must project contract
@@ -502,12 +502,52 @@ factories and public contract methods.
   `PollEventFlag.PollIn` is valid for a socket monitor; any other readiness mask is rejected
   with a typed `ConfigResult.InvalidArgument`. Drain with `monitor.recv(RecvFlags.DontWait)`
   after readiness; `PollEvents.source(index)` returns the registered monitor object.
+- A socket registers a **receive readiness notification handler** with
+  `setReadableHandler(handler)`. Node runs a single event loop, so `Poller.wait`
+  blocks it; readiness is delivered through the Node event loop instead (see
+  "Receive Readiness" below).
 - Package-root factory/helper functions such as version, capability lookup,
   strerror, proxy, sleep, and multipart-cleanup helpers are public contract
   functions. The native calls behind them stay in runtime modules.
 
 Direct construction of a native-backed runtime class is not part of the
 aligned contract. Factories are the stable construction surface.
+
+## Receive Readiness
+
+Node runs on a single event loop, so it cannot use the blocking readiness wait the
+other bindings use. `Poller.wait` is synchronous and blocks that loop, and fixed
+interval timer polling adds at least a millisecond to every round trip. A socket
+therefore exposes a **readiness notification registered on the Node event loop**.
+
+```ts
+export type ZLinkReadableHandler = () => void;
+
+// BaseSocket
+setReadableHandler(handler: ZLinkReadableHandler): void;
+```
+
+- **This is a readiness notification, not a message count.** One call does not say
+  how many records arrived. The caller drains with `recv(RecvFlags.DontWait)` until
+  the no-data representation appears. It is the same axis as "Dispatch readiness
+  semantics" in the common spec, and it must not be described or implemented as an
+  edge-triggered one-shot.
+- The handler **takes no argument.** The only fact to deliver is "something is
+  readable now." If readiness watching itself fails, the socket's next receive
+  surfaces the typed failure. The handler is not given an error argument.
+- **No unregistration surface is added.** Clearing a callback by assigning `null` is
+  forbidden by this document's callback registration rule. A registered handler is
+  released when the socket closes.
+- **An active handler keeps the Node event loop alive.** The process does not exit
+  while the socket is open and waiting to receive, which is the intended behaviour
+  for a server. Close the socket to stop waiting.
+- Registering twice on the same socket replaces the earlier handler. One readiness
+  handler per socket.
+- This surface does not replace `Poller`. Waiting on several sources in one place
+  remains `Poller`'s job, and the `number` (raw fd) member of `Pollable` stays.
+
+The canonical name is `setReadableHandler`; other bindings use the same canonical
+name in their own casing (common spec "Function naming rules").
 
 ## Function Naming Rules
 
@@ -567,8 +607,8 @@ using TypeScript spelling.
   `Map`/`WeakMap` lookup. A wrapper that has not been returned is not reused for
   another ownership.
 - Operation-start naming follows the Function Naming Rules above. A
-  builder's terminal method keeps using `submit(...)` even on a
-  Promise-returning surface. Do not add a separate `submitAsync` terminal
+  builder's terminal method keeps using `submit(...)` even though it now
+  returns a result object. Do not add a separate `submitAsync` terminal
   name.
 - PAIR, DEALER, ROUTER, and STREAM send use one `SendOperation` family that captures the target.
   `submit_sync()` uses Core `NONE`; `submit()` uses Core `DONTWAIT` completion.
@@ -577,7 +617,8 @@ using TypeScript spelling.
   Other completions the synchronous call receives are handed to the owner's drain rule (resubmit after
   NO_DATA) once it returns.
 - DEALER/ROUTER request provides `submit_sync(): Message[]` and
-  `submit(): Promise<Message[]>` and retains the builder's reply timeout.
+  `submit(): RequestSubmission` (`result`, `admitted`, plus `reply: Promise<Message[]>`) and retains
+  the builder's reply timeout.
 - The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
   `ReplySubmitOperation.submit(): void`. It returns no Promise and submits a
   terminal reply or error reply with one native call. A DEALER peer is subject
@@ -687,7 +728,24 @@ covers all of the following stable user-facing capabilities.
 - Context lifecycle, options, shutdown, auto-HWM recalculation, version,
   capability lookup, and strerror.
 - Message ownership, multipart payload, routing id, received metadata,
-  topic message, subscription event, and stream packet value.
+  topic message, subscription event, and stream packet value. Payload
+  share/transfer/duplicate follow the common contract's `Copy`/`Move`/`Clone`:
+  `copy(): Message` (ref-count share, `zlink_msg_copy`), `move(dest: Message): void`
+  (ownership transfer, caller left empty, `zlink_msg_move`), and `clone(): Message`
+  (independent deep copy). Since the existing `copy()` was a deep copy, that behavior moves
+  to `clone()`; `copy` is now **ref-share**. JS cannot host the same signature with two
+  return meanings, so a deprecated alias is impossible — this is a **major-version breaking
+  change** with a documented migration (`copy`→`clone`), not a silent one. See the
+  [common Message ownership contract](../draft/message-ownership.ko.md) §"명시적 Copy / Move / Clone".
+  - **refcount observation timing (Node-specific):** Node exposes payload as a JS `Buffer`;
+    while an exposed `Buffer` view is alive, the native frame is released when that view is
+    GC'd/finalized (this has always been the safe behavior). So after `copy()` shares two
+    handles and one is `close()`d, if a Buffer view was exposed the `refCount()` observation
+    does **not** drop to 1 immediately — it reflects after the buffer is GC'd. This affects
+    only the diagnostic `refCount()` reading, not correctness, safety, or ownership
+    independence (each handle stays valid and is closed independently). `close()` uses a
+    single release path in all cases and lets GC reclaim exposed buffers — a deliberate
+    choice so close-heavy paths (e.g. REQREP) do not pay extra per-close cost.
 - Every socket family and its typed options.
 - Monitor, poller, timer, and readiness semantics.
 - SPOT node, SPOT handle, topology snapshot, Actor, and stream Actor
@@ -828,8 +886,8 @@ objects with matching TypeScript declarations.
 
 Node package information follows its [distribution metadata](../../../node/package.json); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-Node provides blocking `submit_sync()` and `submit()` returning `Promise`.
-No longer waiting for a Promise follows the common completion-lifetime contract below.
+Node provides blocking `submit_sync()` and `submit()` returning a result object (`SendSubmission`/`RequestSubmission`: `result` and `admitted`, plus `reply` for a request).
+Not waiting for the `admitted`/`reply` Promise still follows the common completion-lifetime contract below.
 
 Native completion IDs, `user_context`, and raw drain are not public APIs.
 Submission results follow the [common result projection](../README.en.md#submit-result-projection);
@@ -846,9 +904,20 @@ references remain valid only until the next recv entry or `close()`. Before the 
 ### Public interface
 
 ```ts
+export interface SendSubmission {
+  readonly result: SubmitResult;        // OK | BACKPRESSURED, submit-time snapshot (synchronous field)
+  readonly admitted: Promise<void>;     // completed when result is OK
+}
+
+export interface RequestSubmission {
+  readonly result: SubmitResult;
+  readonly admitted: Promise<void>;
+  readonly reply: Promise<Message[]>;   // completes after successful admission
+}
+
 export interface SendSubmitOperation {
   message(message: MessageLike): SendSubmitOperation;
-  submit(): Promise<void>;
+  submit(): SendSubmission;
   submit_sync(): void;
 }
 
@@ -864,7 +933,7 @@ export class ReplyToken {
 export interface RequestSubmitOperation {
   message(message: MessageLike): RequestSubmitOperation;
   timeout(timeoutMs: number): RequestSubmitOperation;
-  submit(): Promise<Message[]>;
+  submit(): RequestSubmission;
   submit_sync(): Message[];
 }
 

@@ -138,8 +138,10 @@ Send, publish, request, and reply use multipart builders. A builder collects its
 options allowed for that operation, then executes once at the terminal `Submit`. Submitting the same
 builder twice completes the second submission with a state error.
 
-Send and request `Submit(context.Context)` wait for a Core `DONTWAIT` completion. Reply checks the
-Context before call entry, and socket `SNDTIMEO` owns the admission wait after the native call. Only
+Send and request `Submit(context.Context)` submit once with Core `DONTWAIT` and return a result object
+immediately. Completion waiting is done by the object's `Admitted(ctx)`/`Reply(ctx)`, and `Admitted` is
+nil immediately when `result == OK`. Reply checks the Context before call entry, and socket `SNDTIMEO`
+owns the admission wait after the native call. Only
 publish provides `Flags(SendFlags)`, on a separate `PublishOp`. The
 [Pull completion public contract](#pull-completion-public-contract) contains the exact interface.
 
@@ -169,8 +171,8 @@ publish provides `Flags(SendFlags)`, on a separate `PublishOp`. The
 | PAIR, DEALER, ROUTER, STREAM | `Recv` filling `Received` storage |
 | SUB, XSUB | `Subscribe` filling `TopicMessage` storage |
 
-Core part functions are the internal substrate for these multipart receive APIs and are not exposed as
-public Go methods.
+The binding implements these multipart receive APIs with one Core whole-message
+receive call. Native array and capacity handling are not exposed as public Go methods.
 
 ## Receive and eventing
 
@@ -238,7 +240,7 @@ type ZlinkError interface {
 - If a Context was already canceled or past its deadline before `Submit`, that standard error is
   returned. It is not converted into a per-function-family Core error.
 - A reply or failure after native request admission is returned through the
-  `([]*Message, error)` result of `Submit(context.Context)`.
+  `([]*Message, error)` result of `RequestSubmission.Reply(context.Context)`.
 
 ## FFI and package boundary
 
@@ -278,8 +280,10 @@ and `bindings/go/samples/run_samples.sh`.
 
 Go package information follows its [distribution metadata](../../../go/go.mod); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-Go provides one `Submit(context.Context)` terminal that waits for completion on the calling goroutine.
-The caller wait cancellation input is `context.Context`, and a canceled request returns `(nil, ctx.Err())`.
+Go provides one `Submit(context.Context)` terminal. `Submit` does one native submission and returns a
+result object (`SendSubmission`/`RequestSubmission`) immediately; waiting is done by the object's
+`Result()`/`Admitted(ctx)`/`Reply(ctx)` methods. Each waiting method takes a `context.Context` for
+cancellation, and a canceled request returns `(nil, ctx.Err())`.
 
 Native completion IDs, `user_context`, and raw drain are not public APIs.
 Submission results follow the [common result projection](../README.en.md#submit-result-projection);
@@ -303,11 +307,24 @@ type SendOp interface {
     Bytes([]byte) SendSubmitOp
 }
 
+// Waiting is done by the result object's methods (Go idiom). Submit does one
+// native submission and returns immediately.
+type SendSubmission interface {
+    Result() SubmitResult                 // OK | BACKPRESSURED, submit-time snapshot
+    Admitted(ctx context.Context) error   // nil immediately when OK; blocks until resubmission admission when BACKPRESSURED
+}
+
+type RequestSubmission interface {
+    Result() SubmitResult
+    Admitted(ctx context.Context) error
+    Reply(ctx context.Context) ([]*Message, error)   // waits for the reply, then returns the response or error
+}
+
 type SendSubmitOp interface {
     Message(*Message) SendSubmitOp
     MoveMessage(*Message) SendSubmitOp
     Bytes([]byte) SendSubmitOp
-    Submit(context.Context) error
+    Submit(context.Context) (SendSubmission, error)
 }
 
 type RequestOp interface {
@@ -319,7 +336,7 @@ type RequestSubmitOp interface {
     Message(*Message) RequestSubmitOp
     Bytes([]byte) RequestSubmitOp
     Timeout(time.Duration) RequestSubmitOp
-    Submit(context.Context) ([]*Message, error)
+    Submit(context.Context) (RequestSubmission, error)
 }
 
 type ReplyOp interface {
@@ -402,8 +419,9 @@ maps to one contract test.
 
 **Operations and completion**
 
-- Send and request provide one `Submit(context.Context)` terminal. Request success returns
-  `([]*Message, nil)`, and a non-OK completion returns `(nil, typed request error)`.
+- Send and request `Submit(context.Context)` return a result object immediately. A request's
+  `Reply(context.Context)` waits for the response and returns `([]*Message, nil)` on success or
+  `(nil, typed request error)` on a non-OK completion.
 - Send flags not shared by Go and Python appear only on `PublishSubmitOp`, and publish submit retains its
   `(bool, error)` result.
 - Common completion, cancellation, and poller observations follow the

@@ -52,7 +52,6 @@ builder.Services.AddSingleton<PlayerMovement>();
 builder.Services.AddSingleton<IOpsReportPort, OpsReportAdapter>();
 builder.Services.AddZLinkFramework(options =>
 {
-    options.DefaultRequestTimeout = TimeSpan.FromSeconds(15);
     var locations = options.ConfigureLocations();
     locations.RouteCacheMaxAge = TimeSpan.Zero;
     locations.MessageFollowDuration = TimeSpan.FromSeconds(5);

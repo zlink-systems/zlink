@@ -5,17 +5,18 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
 artifact_root="${ZLINK_LOCAL_PACKAGE_ROOT:-$repo_root/.artifacts/wsl}"
 core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
-binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
 release_version="${ZLINK_CORE_RELEASE_VERSION:-$core_version}"
 language_args=()
 version_action="build"
+internal_build=0
+prepare_core_only=0
 
 usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [options] [c] [cpp] [dotnet] [go] [java] [node] [python] [rust]
 
-With no language arguments, builds all eight first-party bindings at
-BINDINGS_VERSION into .artifacts/wsl. By default the exact matching Core
+With no language arguments, builds all first-party binding packages at their
+language-owned VERSION into .artifacts/wsl. By default the exact matching Core
 release is downloaded and verified — a published core/vVERSION GitHub release
 is a prerequisite. There is no local-core bypass.
 
@@ -23,12 +24,22 @@ Options:
   --core-version VERSION       Core release version (default: VERSION)
   --sync-versions              Sync managed Core/binding/Framework values and exit
   --verify-versions            Verify managed Core/binding/Framework values and exit
+  --cache-key                  Print working-tree cache key and tool version id
+
+Clean inputs use an immutable cache of all eight binding packages. Dirty inputs
+build only requested bindings in .artifacts/wsl-private. Custom configurations or
+compiler flags also stay private. Binding files are linked
+into the worktree-local output directory. ZLINK_PACKAGE_BUILD_CMD may name an
+executable test builder (receives languages and ZLINK_LOCAL_PACKAGE_ROOT).
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --core-version) release_version="${2:-}"; shift 2 ;;
+    --prepare-core) internal_build=1; prepare_core_only=1; shift ;;
+    --build-packages) internal_build=1; shift ;;
+    --cache-key) version_action="key"; shift ;;
     --sync-versions) version_action="sync"; shift ;;
     --verify-versions) version_action="verify"; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -48,9 +59,13 @@ case "$version_action" in
     python3 "$script_dir/sync-version.py" --check
     exit 0
     ;;
+  key)
+    exec python3 "$script_dir/package-cache.py" key
+    ;;
   build)
-    python3 "$script_dir/sync-version.py" --write
-    python3 "$script_dir/sync-version.py" --check
+    if ((prepare_core_only == 0)); then
+      python3 "$script_dir/sync-version.py" --check
+    fi
     ;;
 esac
 
@@ -67,6 +82,13 @@ fi
   exit 1
 }
 
+# Both misses and hits pass the same version checks before cache preparation.
+if ((internal_build == 0)); then
+  bash "$script_dir/build-wsl.sh" --verify-versions
+  exec python3 "$script_dir/package-cache.py" prepare "${language_args[@]}"
+fi
+
+# The cache coordinator calls this build boundary with a staging/private root.
 mkdir -p "$artifact_root"
 artifact_root="$(readlink -f "$artifact_root")"
 release_core_prefix="$(bash "$script_dir/core/fetch-release.sh" --version "$release_version")"
@@ -77,7 +99,7 @@ case "$core_prefix" in
 esac
 rm -rf -- "$core_prefix"
 mkdir -p "$(dirname "$core_prefix")"
-cp -a "$release_core_prefix" "$core_prefix"
+ln -s "$release_core_prefix" "$core_prefix"
 core_prefix="$(readlink -f "$core_prefix")"
 export ZLINK_LOCAL_PACKAGE_ROOT="$artifact_root"
 export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
@@ -93,11 +115,20 @@ manifest_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\
   exit 1
 }
 
+if ((prepare_core_only)); then
+  exit 0
+fi
+
 "$script_dir/native/sync-local-core-libs.sh" c cpp dotnet go java node python rust
 
 for lang in "${language_args[@]}"; do
   case "$lang" in
     c|cpp|dotnet|go|java|node|python|rust)
+      if [[ "$lang" == c ]]; then
+        binding_version="$core_version"
+      else
+        binding_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$repo_root/bindings/$lang/VERSION")"
+      fi
       echo "-- building local $lang package at $binding_version using Core $release_version (release)"
       bash "$script_dir/$lang/build-wsl.sh" --core-prefix "$core_prefix"
       ;;

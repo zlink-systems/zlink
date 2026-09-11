@@ -22,6 +22,10 @@ public final class BenchClient {
             throw new IllegalArgumentException("unknown Java implementation");
         }
 
+        if ("request-window".equals(options.scenario)) {
+            throw new IllegalArgumentException("request-window is not a Java gRPC comparison pattern");
+        }
+
         BenchDrivers drivers = new BenchDrivers(options);
         AtomicBoolean ready = new AtomicBoolean(false);
         SourceTransport[] transport = new SourceTransport[1];
@@ -36,7 +40,7 @@ public final class BenchClient {
                 }
                 Map<String, Object> result = drivers.runActive(trigger, transport[0].operation());
                 BenchResultWriter.write(options, holder[0].lastTrigger(), result, "java",
-                    streamImplementation(options.scenario), javaMetadata(options));
+                    streamImplementation(options), javaMetadata(options));
             });
         holder[0] = controller;
         BenchHttpApplication http = BenchHttpApplication.start(
@@ -94,11 +98,19 @@ public final class BenchClient {
         };
     }
 
-    private static String streamImplementation(String pattern) {
-        return switch (pattern) {
+    private static String streamImplementation(BenchOptions options) {
+        if ("zlink-java".equals(options.implementation)
+            && "request-backpressure".equals(options.scenario)) {
+            return "one Java platform submit thread; one request per turn, "
+                + "public POLLCOMPLETION progress, uncapped replies";
+        }
+        if ("zlink-java".equals(options.implementation)
+            && "send-saturation".equals(options.scenario)) {
+            return "one Java platform submit thread; OK continues inline, "
+                + "BACKPRESSURED awaits admission";
+        }
+        return switch (options.scenario) {
             case "request-serial" -> "one Java platform submit thread; sequential CompletableFuture";
-            case "request-window" ->
-                "one Java platform submit thread; 100 CompletableFutures share one logical window";
             case "request-backpressure" ->
                 "one Java platform submit thread; uncapped CompletableFuture set";
             case "send-saturation" ->
@@ -111,7 +123,7 @@ public final class BenchClient {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("grpcServerConfiguration",
             "io.grpc.ServerBuilder.forPort defaults, plaintext IPv4 loopback");
-        values.put("logicalStreamRuntime", streamImplementation(options.scenario));
+        values.put("logicalStreamRuntime", streamImplementation(options));
         return values;
     }
 

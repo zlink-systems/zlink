@@ -265,6 +265,34 @@ try (Message msg = Message.from("data")) {
 } // if submit throws, try-with-resources closes msg
 ```
 
+### Share / Move / Clone (copy / move / clone)
+
+Three explicit `Message` payload operations, with the same name and meaning across every
+binding, mapping 1:1 to the Core C API (`zlink_msg_copy`/`zlink_msg_move`).
+
+| Operation | Signature | Meaning | When |
+|------|----------|------|------|
+| `copy()` | `Message copy()` | **ref-count share** — new `Message` on the same buffer, original stays valid | keep the same payload while still using the original |
+| `move(dest)` | `void move(Message dest)` | **ownership transfer** — hands off to `dest`, caller left empty | re-send a received message with no copy (relay/echo) |
+| `clone()` | `Message clone()` | **deep copy** — independent buffer | mutate the duplicate independently |
+
+```java
+try (Message shared = msg.copy()) {
+    socket.send().message(shared).submit_sync();   // shared is consumed
+}
+// msg is still valid
+
+Message out = new Message();
+receivedPart.move(out);                             // receivedPart becomes empty
+socket.send(routingId).message(out).submit_sync();
+
+try (Message dup = msg.clone()) { /* ... */ }
+```
+
+> `copy()` is a ref-share and does not guarantee mutation isolation — use `clone()` for
+> that. (`sharedCopyOf`/`moveInto`/`moveTo` were internal, not public API, so the only
+> public-surface change is adding `copy`/`move`/`clone`.)
+
 ---
 
 ## Error Handling
@@ -311,9 +339,9 @@ Every exception inherits from `ZlinkException` and exposes `getCode()` and
 | `zlink_close(socket)` | `socket.close()` |
 | `zlink_bind(socket, ep)` | `socket.bind(ep)` |
 | `zlink_connect(socket, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + NONE | `socket.send().message(m).submit_sync()` |
+| `zlink_send(..., parts, count, ...)` / `zlink_send_rid(..., parts, count, ...)` + NONE | `socket.send().message(m).submit_sync()` |
 | DONTWAIT send + completion pull | `socket.send().message(m).submit()` (`CompletionStage`) |
-| `zlink_recv_part(...)` | `socket.recv(received, flags)` |
+| `zlink_recv(..., parts_out, capacity, count_out, ...)` | `socket.recv(received, flags)` |
 | `zlink_msg_data(msg)` | `msg.data()` |
 | `zlink_msg_size(msg)` | `msg.size()` |
 | `zlink_msg_close(msg)` | `msg.close()` |

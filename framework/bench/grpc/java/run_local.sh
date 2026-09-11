@@ -7,7 +7,7 @@ cd "${HERE}"
 # shellcheck source=runner_common.sh
 source "${HERE}/runner_common.sh"
 
-export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/temurin-22-jdk-amd64}"
+select_java_home
 export PATH="${JAVA_HOME}/bin:${PATH}"
 
 RUNS="${RUNS:-3}"
@@ -41,9 +41,9 @@ for payload in "${payloads[@]}"; do
   }
 done
 case "${SCENARIO}" in
-  all) patterns=(request-serial request-window request-backpressure send-saturation) ;;
-  request) patterns=(request-serial request-window request-backpressure) ;;
-  request-serial|request-window|request-backpressure|send-saturation) patterns=("${SCENARIO}") ;;
+  all) patterns=(request-serial request-backpressure send-saturation) ;;
+  request) patterns=(request-serial request-backpressure) ;;
+  request-serial|request-backpressure|send-saturation) patterns=("${SCENARIO}") ;;
   send|command) patterns=(send-saturation) ;;
   *) echo "unknown SCENARIO: ${SCENARIO}" >&2; exit 2 ;;
 esac

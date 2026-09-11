@@ -33,7 +33,6 @@ extern "C" int LLVMFuzzerTestOneInput (const uint8_t *data, size_t size)
                                       ZLINK_OPT_CONFLATE,
                                       ZLINK_OPT_TOS,
                                       ZLINK_OPT_HANDSHAKE_IVL,
-                                      ZLINK_OPT_BLOCKY,
                                       ZLINK_OPT_INVERT_MATCHING,
                                       ZLINK_OPT_CONNECT_TIMEOUT,
                                       ZLINK_OPT_TCP_MAXRT,

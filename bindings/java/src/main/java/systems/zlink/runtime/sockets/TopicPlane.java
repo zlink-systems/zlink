@@ -160,70 +160,43 @@ final class TopicPlane {
         while (true) {
             scratch.topicLenOut.set(ValueLayout.JAVA_LONG, 0,
                 RecvScratch.TOPIC_CAPACITY);
-            ArrayList<Message> parts = new ArrayList<>();
-            RoutingId routingId = null;
-            String topicId = "";
-            while (true) {
-                Message part = InternalAccess.messageAcquireReceive();
-                boolean success = false;
+            int rc = Native.subscribe(socket.handle(), scratch.sourceRidOut,
+                scratch.partsOut, scratch.partCountOut, scratch.topicOut,
+                scratch.topicLenOut, flags.getValue());
+            if (rc == RecvResult.OK.value()) {
+                Message[] parts =
+                    InternalAccess.messageFromOwnedMessageVector(
+                        scratch.partsOut.get(ValueLayout.ADDRESS, 0),
+                        scratch.partCountOut.get(ValueLayout.JAVA_LONG, 0));
+                boolean adopted = false;
                 try {
-                    int rc = Native.subscribePart(socket.handle(),
-                        scratch.sourceRidOut, scratch.topicOut,
-                        RecvScratch.TOPIC_CAPACITY, scratch.topicLenOut,
-                        InternalAccess.messageNativeHandle(part),
-                        scratch.hasMoreOut, flags.getValue());
-                    if (rc == 0) {
-                        success = true;
-                        InternalAccess.messageFinishReceive(part,
-                            scratch.hasMoreOut.get(ValueLayout.JAVA_INT, 0) != 0);
-                        if (parts.isEmpty()) {
-                            routingId = NativeRoutingIds.readOut(
-                                scratch.sourceRidOut);
-                            int topicLength =
-                                NativeSocketRuntime.normalizeTopicLength(
-                                    scratch.topicOut,
-                                    RecvScratch.TOPIC_CAPACITY,
-                                    scratch.topicLenOut.get(
-                                        ValueLayout.JAVA_LONG, 0));
-                            topicId = decodeReceivedTopicString(
-                                scratch.topicOut, topicLength);
-                        }
-                        parts.add(part);
-                        if (!part.more()) {
-                            return ContractAccess.topicMessage(routingId,
-                                topicId, parts.toArray(Message[]::new));
-                        }
-                        SubscribeRemainderResult remainder =
-                            subscribeMultipartRemainder(
-                            scratch, parts, routingId, topicId,
-                            flags.getValue(), true, allowNoData);
-                        if (remainder.isRestart()) {
-                            break;
-                        }
-                        return remainder.message();
-                    }
+                    RoutingId routingId = NativeRoutingIds.readOut(
+                        scratch.sourceRidOut);
+                    int topicLength =
+                        NativeSocketRuntime.normalizeTopicLength(
+                            scratch.topicOut, RecvScratch.TOPIC_CAPACITY,
+                            scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
+                    TopicMessage result = ContractAccess.topicMessage(
+                        routingId, decodeReceivedTopicString(
+                            scratch.topicOut, topicLength), parts);
+                    adopted = true;
+                    return result;
                 } finally {
-                    if (!success) {
-                        try {
-                            part.close();
-                        } catch (RuntimeException ignored) {
-                        }
+                    if (!adopted) {
+                        Message.closeAll(parts);
                     }
                 }
-
-                int errno = Native.errno();
-                Message.closeAll(parts);
-                if (errno == NativeErrno.EINTR) {
-                    break;
-                }
-                if (allowNoData
-                    && (errno == NativeErrno.EAGAIN
-                        || errno == NativeErrno.EWOULDBLOCK_WIN)) {
-                    return null;
-                }
-                throw ZlinkException.fromLastError(
-                    systems.zlink.contracts.errors.ErrorCategory.RECV);
             }
+            int errno = Native.errno();
+            if (errno == NativeErrno.EINTR) {
+                continue;
+            }
+            if (allowNoData && (errno == NativeErrno.EAGAIN
+                || errno == NativeErrno.EWOULDBLOCK_WIN)) {
+                return null;
+            }
+            throw ZlinkException.fromLastError(
+                systems.zlink.contracts.errors.ErrorCategory.RECV);
         }
     }
 
@@ -246,27 +219,17 @@ final class TopicPlane {
         while (true) {
             scratch.topicLenOut.set(ValueLayout.JAVA_LONG, 0,
                 RecvScratch.TOPIC_CAPACITY);
-            Message part = access.prepareReusableSinglePart(result);
-            boolean success = false;
-            boolean retainForNextReceive = false;
-            int errno = 0;
-            try {
-                int rc = Native.subscribePartNoWaitCritical(socket.handle(),
-                    scratch.sourceRidOut, scratch.topicOut,
-                    RecvScratch.TOPIC_CAPACITY, scratch.topicLenOut,
-                    InternalAccess.messageNativeHandle(part),
-                    scratch.hasMoreOut, ReceiveFlag.DONTWAIT.getValue());
-                if (rc == 0) {
-                    boolean hasMore =
-                        scratch.hasMoreOut.get(ValueLayout.JAVA_INT, 0) != 0;
-                    InternalAccess.messageFinishReceive(part, hasMore);
-                    if (hasMore) {
-                        success = true;
-                        TopicMessage fresh = subscribeAssembleRemainder(
-                            scratch, part);
-                        ContractAccess.topicMessageAdoptFrom(result, fresh);
-                        return true;
-                    }
+            int rc = Native.subscribe(socket.handle(), scratch.sourceRidOut,
+                scratch.partsOut, scratch.partCountOut, scratch.topicOut,
+                scratch.topicLenOut, ReceiveFlag.DONTWAIT.getValue());
+            int errno = rc == RecvResult.OK.value() ? 0 : Native.errno();
+            if (rc == RecvResult.OK.value()) {
+                Message[] parts =
+                    InternalAccess.messageFromOwnedMessageVector(
+                        scratch.partsOut.get(ValueLayout.ADDRESS, 0),
+                        scratch.partCountOut.get(ValueLayout.JAVA_LONG, 0));
+                boolean adopted = false;
+                try {
                     RoutingId routingId = NativeRoutingIds.readOut(
                         scratch.sourceRidOut);
                     int topicLength = NativeSocketRuntime.normalizeTopicLength(
@@ -274,23 +237,22 @@ final class TopicPlane {
                         scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
                     String topicId = decodeReceivedTopicString(
                         scratch.topicOut, topicLength);
-                    success = true;
-                    access.adoptSingle(result, routingId, topicId, part);
+                    if (parts.length == 1) {
+                        access.adoptSingle(result, routingId, topicId,
+                            parts[0]);
+                    } else {
+                        TopicMessage fresh = ContractAccess.topicMessage(
+                            routingId, topicId, parts);
+                        ContractAccess.topicMessageAdoptFrom(result, fresh);
+                    }
+                    adopted = true;
                     return true;
-                }
-                errno = Native.errno();
-                retainForNextReceive = errno == NativeErrno.EINTR
-                    || errno == NativeErrno.EAGAIN
-                    || errno == NativeErrno.EWOULDBLOCK_WIN;
-            } finally {
-                if (!success && !retainForNextReceive) {
-                    try {
-                        part.close();
-                    } catch (RuntimeException ignored) {
+                } finally {
+                    if (!adopted) {
+                        Message.closeAll(parts);
                     }
                 }
             }
-
             if (errno == NativeErrno.EINTR) {
                 continue;
             }
@@ -327,108 +289,6 @@ final class TopicPlane {
         lastReceivedTopicSegment = MemorySegment.ofArray(raw);
         lastReceivedTopic = new String(raw, StandardCharsets.UTF_8);
         return lastReceivedTopic;
-    }
-
-    private TopicMessage subscribeAssembleRemainder(RecvScratch scratch,
-                                                    Message firstPart) {
-        RoutingId routingId = NativeRoutingIds.readOut(scratch.sourceRidOut);
-        int topicLength = NativeSocketRuntime.normalizeTopicLength(
-            scratch.topicOut, RecvScratch.TOPIC_CAPACITY,
-            scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
-        String topicId = decodeReceivedTopicString(scratch.topicOut,
-            topicLength);
-        ArrayList<Message> parts = new ArrayList<>();
-        parts.add(firstPart);
-        return subscribeMultipartRemainder(scratch, parts, routingId, topicId,
-            ReceiveFlag.NONE.getValue(), false, false).message();
-    }
-
-    private SubscribeRemainderResult subscribeMultipartRemainder(
-        RecvScratch scratch,
-        ArrayList<Message> parts,
-        RoutingId routingId,
-        String topicId,
-        int flags,
-        boolean restartOnEintr,
-        boolean allowNoData) {
-        while (true) {
-            Message next = InternalAccess.messageAcquireReceive();
-            boolean ok = false;
-            try {
-                int rc = Native.subscribePart(socket.handle(),
-                    scratch.sourceRidOut, scratch.topicOut,
-                    RecvScratch.TOPIC_CAPACITY, scratch.topicLenOut,
-                    InternalAccess.messageNativeHandle(next),
-                    scratch.hasMoreOut, flags);
-                if (rc == 0) {
-                    ok = true;
-                    boolean more =
-                        scratch.hasMoreOut.get(ValueLayout.JAVA_INT, 0) != 0;
-                    InternalAccess.messageFinishReceive(next, more);
-                    parts.add(next);
-                    if (!more) {
-                        return SubscribeRemainderResult.message(
-                            ContractAccess.topicMessage(routingId, topicId,
-                                parts.toArray(Message[]::new)));
-                    }
-                    continue;
-                }
-            } finally {
-                if (!ok) {
-                    try {
-                        next.close();
-                    } catch (RuntimeException ignored) {
-                    }
-                }
-            }
-            int errno = Native.errno();
-            if (errno == NativeErrno.EINTR) {
-                if (!restartOnEintr) {
-                    continue;
-                }
-                Message.closeAll(parts);
-                return SubscribeRemainderResult.restart();
-            }
-            if (allowNoData
-                && (errno == NativeErrno.EAGAIN
-                    || errno == NativeErrno.EWOULDBLOCK_WIN)) {
-                Message.closeAll(parts);
-                return SubscribeRemainderResult.message(null);
-            }
-            Message.closeAll(parts);
-            throw ZlinkException.fromLastError(
-                systems.zlink.contracts.errors.ErrorCategory.RECV);
-        }
-    }
-
-    private static final class SubscribeRemainderResult {
-        private static final SubscribeRemainderResult RESTART =
-            new SubscribeRemainderResult(null, true);
-
-        private final TopicMessage message;
-        private final boolean restart;
-
-        private SubscribeRemainderResult(TopicMessage message,
-                                         boolean restart) {
-            this.message = message;
-            this.restart = restart;
-        }
-
-        static SubscribeRemainderResult message(TopicMessage message) {
-            return new SubscribeRemainderResult(message, false);
-        }
-
-        static SubscribeRemainderResult restart() {
-            return RESTART;
-        }
-
-        TopicMessage message() {
-            return message;
-        }
-
-        boolean isRestart() {
-            return restart;
-        }
     }
 
     void setRoutingId(RoutingId rid) {

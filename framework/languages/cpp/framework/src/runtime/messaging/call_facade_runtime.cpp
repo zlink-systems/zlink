@@ -3,6 +3,9 @@
 #include <zlink/framework/contracts/channels/call.hpp>
 
 #include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/execution/actor_execution_context.hpp"
+#include "runtime/execution/state_lane.hpp"
+#include "runtime/spots/spot_runtime.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -55,6 +58,19 @@ result_t<void> terminal_result (const result_t<void> &result)
 }
 
 } // namespace
+
+void ensure_blocking_submit_allowed ()
+{
+    if (application_job_context_t::current () != nullptr
+        || current_serial_turn_handle || current_callback_context
+        || !runtime::current_actor_execution.actor_key.empty ()
+        || !runtime::current_actor_execution.spot_id.empty ()
+        || runtime::state_lane_t::current () != nullptr) {
+        throw framework_exception_t (
+          framework_error_kind_t::invalid_operation,
+          "blocking submit is not allowed in a runtime execution context");
+    }
+}
 
 bool submit_blocking_call (std::function<void ()> work)
 {

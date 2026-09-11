@@ -18,6 +18,12 @@ pub struct zlink_msg_t {
     _data: [u64; 8],
 }
 
+impl zlink_msg_t {
+    pub(crate) const fn recv_slot() -> Self {
+        Self { _data: [0; 8] }
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct zlink_routing_id_t {
@@ -197,8 +203,8 @@ pub enum zlink_ctx_option_t {
     ZLINK_IO_THREADS = 1,
     ZLINK_MAX_SOCKETS = 2,
     ZLINK_SOCKET_LIMIT = 3,
+    ZLINK_THREAD_PRIORITY = 22,
     ZLINK_THREAD_SCHED_POLICY = 4,
-    ZLINK_MAX_MSGSZ = 5,
     ZLINK_MSG_T_SIZE = 6,
     ZLINK_THREAD_AFFINITY_CPU_ADD = 7,
     ZLINK_THREAD_AFFINITY_CPU_REMOVE = 8,
@@ -210,10 +216,6 @@ pub enum zlink_ctx_option_t {
     ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES = 19,
     ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES = 20,
     ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES = 21,
-}
-
-impl zlink_ctx_option_t {
-    pub const ZLINK_THREAD_PRIORITY: Self = Self::ZLINK_SOCKET_LIMIT;
 }
 
 #[repr(C)]
@@ -279,7 +281,6 @@ pub enum zlink_option_t {
     ZLINK_OPT_TLS_PASSWORD = 0x302F,
     ZLINK_OPT_IMMEDIATE = 0x3019,
     ZLINK_OPT_CONFLATE = 0x301B,
-    ZLINK_OPT_BLOCKY = 0x301E,
     ZLINK_OPT_INVERT_MATCHING = 0x3020,
     ZLINK_OPT_SUBMIT_RETRY_MODE = 0x3037,
     ZLINK_OPT_SUBMIT_RETRY_TIMEOUT = 0x3038,
@@ -353,13 +354,7 @@ pub type zlink_send_flags_t = u32;
 pub type zlink_recv_flags_t = u32;
 pub const ZLINK_DONTWAIT: zlink_send_flags_t = 0x0001;
 pub const ZLINK_RECV_DONTWAIT: zlink_recv_flags_t = 0x0001;
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum zlink_part_flag_t {
-    ZLINK_PART_FINAL = 0,
-    ZLINK_PART_MORE = 1,
-}
+pub const ZLINK_RECV_BUFFER_TOO_SMALL: c_int = 207;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -702,61 +697,63 @@ unsafe extern "C" {
     pub fn zlink_disconnect(socket: *mut c_void, addr: *const c_char) -> c_int;
     pub fn zlink_disconnect_rid(socket: *mut c_void, peer_rid: *const zlink_routing_id_t) -> c_int;
 
-    pub fn zlink_send_part(
+    pub fn zlink_send(
         socket: *mut c_void,
-        part: *mut zlink_msg_t,
+        parts: *mut zlink_msg_t,
+        part_count: usize,
         flags: zlink_send_flags_t,
-        part_flag: zlink_part_flag_t,
         user_context: *mut c_void,
         completion_id_out: *mut zlink_completion_id_t,
     ) -> c_int;
-    pub fn zlink_send_part_rid(
+    pub fn zlink_send_rid(
         socket: *mut c_void,
         target_rid: *const zlink_routing_id_t,
-        part: *mut zlink_msg_t,
+        parts: *mut zlink_msg_t,
+        part_count: usize,
         flags: zlink_send_flags_t,
-        part_flag: zlink_part_flag_t,
         user_context: *mut c_void,
         completion_id_out: *mut zlink_completion_id_t,
     ) -> c_int;
-    pub fn zlink_request_part(
+    pub fn zlink_request(
         socket: *mut c_void,
         target_router_rid_or_null: *const zlink_routing_id_t,
-        part: *mut zlink_msg_t,
+        parts: *mut zlink_msg_t,
+        part_count: usize,
         flags: zlink_send_flags_t,
-        part_flag: zlink_part_flag_t,
         timeout_ms: u32,
         user_context: *mut c_void,
         completion_id_out: *mut zlink_completion_id_t,
     ) -> c_int;
-    pub fn zlink_reply_part(
+    pub fn zlink_reply(
         router: *mut c_void,
         source_rid: *const zlink_routing_id_t,
         reply_token: zlink_reply_token_t,
-        part: *mut zlink_msg_t,
-        part_flag: zlink_part_flag_t,
+        parts: *mut zlink_msg_t,
+        part_count: usize,
     ) -> c_int;
-    pub fn zlink_router_recv_part(
+    pub fn zlink_router_recv(
         router: *mut c_void,
         source_rid_out: *mut *const zlink_routing_id_t,
         reply_token_out: *mut zlink_reply_token_t,
-        part_out: *mut zlink_msg_t,
-        has_more_out: *mut zlink_part_flag_t,
+        parts_out: *mut zlink_msg_t,
+        parts_capacity: usize,
+        part_count_out: *mut usize,
         flags: zlink_recv_flags_t,
     ) -> c_int;
-    pub fn zlink_recv_part(
+    pub fn zlink_recv(
         socket: *mut c_void,
         source_rid_out: *mut *const zlink_routing_id_t,
-        part_out: *mut zlink_msg_t,
-        has_more_out: *mut zlink_part_flag_t,
+        parts_out: *mut zlink_msg_t,
+        parts_capacity: usize,
+        part_count_out: *mut usize,
         flags: zlink_recv_flags_t,
     ) -> c_int;
-    pub fn zlink_publish_part(
+    pub fn zlink_publish(
         subject: *mut c_void,
         topic_id: *const c_char,
-        part: *mut zlink_msg_t,
+        parts: *mut zlink_msg_t,
+        part_count: usize,
         flags: zlink_send_flags_t,
-        part_flag: zlink_part_flag_t,
     ) -> c_int;
     pub fn zlink_set_subscription(handle: *mut c_void, filter: *const c_char) -> c_int;
     pub fn zlink_unset_subscription(handle: *mut c_void, filter: *const c_char) -> c_int;
@@ -767,17 +764,18 @@ unsafe extern "C" {
         filter_len_inout: *mut usize,
         is_pattern_out: *mut c_int,
     ) -> c_int;
-    pub fn zlink_subscribe_part(
+    pub fn zlink_subscribe(
         subject: *mut c_void,
         source_rid_out: *mut *const zlink_routing_id_t,
         topic_id_out: *mut c_char,
         topic_id_capacity: usize,
         topic_id_len_out: *mut usize,
-        part_out: *mut zlink_msg_t,
-        has_more_out: *mut zlink_part_flag_t,
+        parts_out: *mut zlink_msg_t,
+        parts_capacity: usize,
+        part_count_out: *mut usize,
         flags: zlink_recv_flags_t,
     ) -> c_int;
-    pub fn zlink_xpub_recv_part(
+    pub fn zlink_xpub_recv(
         subject: *mut c_void,
         source_rid_out: *mut *const zlink_routing_id_t,
         subscribed_out: *mut c_int,

@@ -102,7 +102,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
     }
 
-    internal async ValueTask<IReadOnlyList<Message>> RequestToChannelAsync(
+    internal async ValueTask<ZLinkBackendRouteReceived> RequestToChannelAsync(
         string channelName,
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
@@ -137,12 +137,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkMessageParts.DisposeAll(parts);
                 throw;
             }
-            return await clientRuntime
+            var reply = await clientRuntime
                 .RequestAsync(
                     parts,
                     timeout,
                     cancellationToken)
                 .ConfigureAwait(false);
+            return new ZLinkBackendRouteReceived(reply, null, null, null, null);
         }
 
         ZLinkSpotNodeRuntime nodeRuntime;
@@ -372,7 +373,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             metadata);
     }
 
-    internal async ValueTask<IReadOnlyList<Message>> RequestToSpotViaRouterChannelAsync(
+    internal async ValueTask<ZLinkBackendRouteReceived> RequestToSpotViaRouterChannelAsync(
         string routerChannelId,
         RoutingId targetNodeRid,
         string targetSpotId,

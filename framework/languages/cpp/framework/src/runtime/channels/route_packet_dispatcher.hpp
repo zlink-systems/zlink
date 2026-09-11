@@ -37,6 +37,10 @@ class route_packet_dispatcher_t
     result_t<std::optional<route_dispatch_reply_t>>
     dispatch (const route_received_packet_t &received) const;
 
+    result_t<std::optional<route_dispatch_reply_t>>
+    dispatch (const route_received_packet_t &received,
+              runtime::messaging::envelope_header_t header) const;
+
   private:
     result_t<std::optional<route_dispatch_reply_t>>
     dispatch_send (const route_received_packet_t &received,

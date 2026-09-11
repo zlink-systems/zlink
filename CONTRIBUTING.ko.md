@@ -24,6 +24,9 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 
 - 상세 빌드·플랫폼·CMake 옵션: [`doc/building/build-guide.ko.md`](doc/building/build-guide.ko.md),
   [`doc/building/cmake-options.ko.md`](doc/building/cmake-options.ko.md).
+- 릴리스 없이 **로컬 Core(작업 중 브랜치)로 바인딩을 링크해 테스트·perf**를 돌리는 방법(계약
+  테스트는 라이브 `core/build-dev` + `ZLINK_CORE_SOURCE=local`, perf는 고정 prefix +
+  `ZLINK_CORE_PACKAGE_PREFIX`)은 [`doc/building/local-core-bindings.ko.md`](doc/building/local-core-bindings.ko.md).
 - 빌드 트리는 `scripts/build-core.sh`로 고정한다: `dev`(`core/build-dev`, no-LTO, 테스트 ON) —
   평소 개발·ctest; `release`(`core/build`, LTO, 테스트 OFF) — 출하 라이브러리·perf 측정(라이브러리
   LTO 링크 1회, 2분대); `release-gate`(`core/build`, LTO, 테스트 ON) — 릴리스 직전 `hotpath_gate`와
@@ -165,25 +168,31 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 
 ## 9. 브랜치·커밋·PR·릴리스
 
-- 브랜치·commit·push·merge는 사용자가 명시적으로 요청할 때만 하고, 작업 branch는 사용자가
-  지정한다(`AGENTS.md` §1).
+- **작업 진행 방식(2026-09-10부터)**: 모든 작업은 GitHub Issue로 등록하고, Issue마다 브랜치
+  `<area>/<issue번호>-<slug>` + worktree에서 작업한 뒤 PR로 main에 넣는다. main은 PR로만 바뀐다
+  (예외: 계획·결정 기록 등 코드에 영향 없는 문서, 릴리스 태그). Milestone은 릴리스, Project 보드는
+  진행 상태. 상세는 [`doc/principal/dev/development-workflow.ko.md`](doc/principal/dev/development-workflow.ko.md)가
+  소유한다.
+- 브랜치·commit·push·merge는 사용자가 명시적으로 요청할 때만 하고, 작업 branch는 Issue 브랜치
+  규칙을 따른다(`AGENTS.md` §1).
 - 커밋 메시지: `<모듈>: <한 줄 요약>` + 본문에 원인·수정·근거 수치·gate 결과. 리팩토링은 항목
   (불필요 코드 제거 / 책임 분리 / 명명)이 diff에서 구분되게 한다.
 - 번호 규칙(Core `MAJOR.MINOR`, binding `CORE_MAJOR.CORE_MINOR.N`, framework `MAJOR.MINOR.HOTFIX`)은
   [`doc/building/versioning.ko.md`](doc/building/versioning.ko.md)가 소유한다.
 - 버전 범프 체크리스트(한 커밋에 모두):
-  1. root `VERSION`(Core)과 `BINDINGS_VERSION`(binding·framework pin)만 수정한다.
+  1. 대상 구성 요소의 원본만 수정한다: Core는 root `VERSION`, binding은
+     `bindings/<language>/VERSION`, framework는 `framework/languages/<language>/VERSION`.
   2. `python3 scripts/local-package/sync-version.py --write`로 `core/CMakeLists.txt`, 공개 헤더,
      raw header mirror(`bindings/{c,cpp,go,rust}/include`), 바인딩 매니페스트, framework pin,
      debian changelog 첫 stanza, 계약 스냅샷을 한 번에 맞춘다. 손으로 찾아 고치지 않는다.
-  3. `core/CHANGELOG.md`에 새 절을 추가한다(Core Release 노트가 여기서 추출된다).
+  3. Core를 올렸다면 `core/CHANGELOG.md`에 새 절을 추가한다(Core Release 노트가 여기서 추출된다).
   4. `scripts/local-package/build-wsl.sh --verify-versions`로 누락 pin을 확인한다.
 - 릴리스 태그 조건: §6 gate green, `hotpath_gate` PASS, §7 release 비교 판정 PASS(또는 판정
   기록에 사용자 결정으로 예외 명시), 패키징 검증 `scripts/local-package/core/verify-package.sh`.
 - 배포는 **전부 GitHub Actions에서** 한다. 로컬에서 `npm publish`·`dotnet nuget push`·Central 업로드를
   하지 않으며 API 토큰을 만들지 않는다(npm·nuget은 Trusted Publishing, Maven Central은 repository
-  secret). 순서는 Core(`core/vX.Y.Z` 태그 + `build.yml` dispatch) → bindings 4언어(`cpp/`, `node/`,
-  `java/`, `dotnet/v*` 태그) → framework 4언어(`framework/vA.B.C` 태그 하나)이며, 워크플로우·트리거·
+  secret). 언어별 순서는 Core(`core/vX.Y.Z` 태그 + `build.yml` dispatch) → binding
+  (`<language>/vX.Y.N`) → framework(`framework-<language>/vA.B.C`)이며, 워크플로우·트리거·
   채널·확인 명령은 [`doc/building/release-pipeline.ko.md`](doc/building/release-pipeline.ko.md)가
   소유한다. 계정·secret은 [`doc/building/release-accounts.ko.md`](doc/building/release-accounts.ko.md),
   ConanCenter·vcpkg는 PR 방식([`doc/building/pr-drafts/`](doc/building/pr-drafts/)).
@@ -201,5 +210,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   리팩토링을 묶지 않는다.
 - job은 gate·perf 측정을 스스로 반복하지 않는다. 감독자가 job 종료 뒤 gate를 한 번 돌리고,
   diff를 직접 읽은 뒤 파일을 명시해 커밋한다(`git add -A` 금지).
+- job 하나에 Issue 하나·worktree 하나·브랜치 하나를 준다(`-C <worktree>`). job은 그 브랜치에만
+  커밋하고 push·PR·merge는 감독자가 한다(`doc/principal/dev/development-workflow.ko.md` §4).
 - job은 `doc/**`, `core/doc/**`, `hotpath_reference.json`, `scripts/local-package/**`를 수정·실행하지
   않는다. 스펙 변경이 필요하면 BLOCKERS로 보고하고 감독자가 별도 커밋한다.

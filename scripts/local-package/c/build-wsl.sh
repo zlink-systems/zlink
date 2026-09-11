@@ -17,14 +17,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
-binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
 [[ "$core_prefix" = /* ]] || { echo "--core-prefix must be absolute" >&2; exit 2; }
 core_prefix="$(readlink -f "$core_prefix")"
 export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
 export ZLINK_CORE_VERSION="$core_version"
 "$repo_root/scripts/local-package/native/sync-local-core-libs.sh" c
 
-build_dir="$artifact_root/build/bindings-c-$binding_version"
+# package-cache.py links <staging>/build to this worktree's build tree, and that
+# alias changes every run. CMake records the path it is configured with, so an
+# alias makes the next run fail on a mismatched CMakeCache. Use the real path.
+build_dir="$(readlink -f "$artifact_root/build")/bindings-c-$core_version"
 cmake -S "$repo_root/bindings/c" -B "$build_dir" \
   -DCMAKE_BUILD_TYPE="$configuration" \
   -DZLINK_C_CORE_BUILD_DIR="$core_prefix" \
@@ -34,8 +36,8 @@ cmake --build "$build_dir" --parallel "${ZLINK_BINDING_BUILD_JOBS:-4}"
 ctest --test-dir "$build_dir" --output-on-failure
 
 out_dir="$artifact_root/c"
-stage="$out_dir/zlink-c-$binding_version"
-archive="$out_dir/zlink-c-$binding_version.tar.gz"
+stage="$out_dir/zlink-c-$core_version"
+archive="$out_dir/zlink-c-$core_version.tar.gz"
 rm -rf "$stage" "$archive"
 mkdir -p "$stage/include" "$stage/lib" "$stage/provenance"
 cp -a "$repo_root/bindings/c/include/." "$stage/include/"
@@ -45,6 +47,6 @@ ln -s "libzlink.so.$core_version" "$stage/lib/libzlink.so.0"
 ln -s "libzlink.so.0" "$stage/lib/libzlink.so"
 cp "$core_prefix/share/zlink/core-package-provenance.json" \
   "$stage/provenance/core-package-provenance.json"
-tar -C "$out_dir" -czf "$archive" "zlink-c-$binding_version"
+tar -C "$out_dir" -czf "$archive" "zlink-c-$core_version"
 rm -rf "$stage"
 echo "C local package: $archive"

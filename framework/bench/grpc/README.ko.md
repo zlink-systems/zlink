@@ -24,7 +24,7 @@ L7 load balancer, multi-node 분배, 네트워크 지연을 대표하지 않는�
 |-----------|------|
 | `grpc-<lang>` | 해당 언어의 gRPC unary RPC |
 | `zlink-<lang>` | framework를 거치지 않는 raw binding의 ROUTER↔ROUTER TCP 경로 |
-| `zlink-framework-<lang>` | framework channel messaging의 client channel과 server channel |
+| `zlink-framework-<lang>` | framework RouteMesh의 RID 직접 node request/send |
 
 기본 실행 순서는 `grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>` 순서다. 같은 payload
 크기와 같은 active duration에서 세 구현을 같은 패턴으로 실행하므로, 표에서는 한 패턴 아래에
@@ -35,36 +35,41 @@ L7 load balancer, multi-node 분배, 네트워크 지연을 대표하지 않는�
 `framework/bench/grpc/c`의 `grpc-c`와 `zlink-c`를 바닥 기준으로 함께 유지한다. framework
 계층은 C에 없으므로 C에는 이 두 구현만 존재한다. C 기준 bench는 §10의 server-driven 모델로
 바꾸지 않고 client-driven 그대로 둔다. 기준값으로 쓰는 것은 요청당 비용이지 부하 생성 위치가
-아니기 때문이다. 이 차이는 §7.2의 분모를 읽을 때 함께 적는다. `zlink-c`의 `request-window` 값은 각 언어
+아니기 때문이다. 이 차이는 §7.2의 분모를 읽을 때 함께 적는다. `zlink-c`의 `request-backpressure` 값은 각 언어
 raw binding의 위치를 판정하는 기준값이다(§7.2).
 
 ### 1.3 ZLink 소켓 축
 
-ZLink 쪽 두 행은 모두 **RouteMesh ROUTER↔ROUTER**를 사용한다. 이 조건은 선택 사항이 아니라
-판정식이 성립하기 위한 계약이다.
+ZLink 쪽 두 행은 모두 **ROUTER↔ROUTER, 상대 node를 RID로 직접 지정**한다. 이 조건은 선택
+사항이 아니라 판정식이 성립하기 위한 계약이다. 셀마다 server(B)는 하나다.
 
 | 행 | 소켓 구성 |
 |----|-----------|
-| `zlink-framework-<lang>` | RouteMesh의 channel request 처리기와 send 처리기. RouteMesh는 ROUTER↔ROUTER로 연결한다 |
-| `zlink-<lang>` | raw binding의 ROUTER↔ROUTER. client 쪽도 ROUTER를 만들고 상대 ROUTER의 routing id를 지정해 전송한다 |
+| `zlink-framework-<lang>` | RouteMesh의 node 직접 호출 `requestToNode` / `sendToNode`로 server node의 RID를 지정한다. RouteMesh는 ROUTER↔ROUTER로 연결한다 |
+| `zlink-<lang>` | raw binding의 ROUTER↔ROUTER. client 쪽도 ROUTER를 만들고 상대 ROUTER의 routing id를 지정해 request·send 한다 |
 | `zlink-c` | 위 raw binding 행과 같은 ROUTER↔ROUTER 구성 |
 
 ```mermaid
 flowchart LR
-    FC[framework channel client] <--> FS[framework channel server]
+    FC[framework RouteMesh ToNode client] <--> FS[framework node handler server]
     RC[raw binding ROUTER] <--> RS[raw binding ROUTER]
 ```
 
 이 계약이 필요한 이유는 §7.2의 판정식 때문이다. `zlink-framework-<lang> / zlink-<lang>`는
-framework 계층이 추가로 요구하는 비용을 보기 위한 비율이다. 두 행이 같은 소켓 패턴을 사용할
-때에만 이 비율이 framework 계층만 남긴 값이 된다. raw 행이 DEALER→ROUTER이면 나눗셈 결과에
-framework 계층 비용과 소켓 패턴 차이가 함께 들어가고, 그 값은 framework 계층 비용이 아니다.
+framework 계층이 추가로 요구하는 비용을 보기 위한 비율이다. 두 행이 같은 소켓 패턴과 같은
+대상 지정 방식을 사용할 때에만 이 비율이 framework 계층만 남긴 값이 된다. raw 행이 DEALER→ROUTER
+이거나 framework 행이 channel 이름으로 보내는 `requestToChannel`/`sendToChannel`(node 선택이
+들어간다)이면 나눗셈 결과에 framework 계층 비용과 소켓 패턴·대상 선택 차이가 함께 들어가고, 그
+값은 framework 계층 비용이 아니다. gRPC 행은 채널 하나가 server 하나에 1:1로 붙으므로 위 구성이
+그것과 같은 모양이다.
 
-현재 구현 상태를 함께 적는다. `.NET` client의 raw 경로와 C 기준 bench의 client는 아직
-DEALER를 생성한다(`framework/bench/grpc/dotnet/Client/Program.cs:493,512,530`,
-`framework/bench/grpc/c/zlink/bench_zlink_client.cpp:530-531`). 이 전환은 별도 작업에서
-수행한다. 위 표는 측정에 사용할 구성을 규정한 것이며, 전환이 끝나기 전에 얻은 값은 이 규격을
-만족하는 값이 아니다.
+ZLink 모델 사이의 비교 — DEALER→ROUTER 대 ROUTER↔ROUTER, `ToChannel`(node 선택 포함) 대
+`ToNode`, ClientServer 대 RouteMesh — 는 이 bench의 항목이 아니며 별도의 ZLink 모델 비교
+bench에서 다룬다. 이 bench는 gRPC와 같은 모양의 1:1 요청 경로만 비교한다.
+
+현재 구현 상태를 함께 적는다. Java와 `.NET`·C++·Node framework 행은 이 구성으로 전환했다(Issue
+#13). raw 경로와 C 기준 bench client의 전환은 별도 작업 범위다. 위 표는 측정에 사용할 구성을
+규정한 것이며, 전환이 끝나기 전에 얻은 값은 이 규격을 만족하는 값이 아니다.
 
 ## 2. 측정 패턴
 
@@ -76,21 +81,16 @@ gRPC HTTP/2 frame, protobuf field overhead, ZLink envelope, ZMP header는 이 �
 
 | 패턴 이름 | gRPC | ZLink raw binding | ZLink framework | 해석 |
 |-----------|------|-------------------|-----------------|------|
-| `request-serial` | unary `Echo` RPC | raw request 전송과 reply 수신 | channel request 호출 | 요청 하나를 보내고 reply 완료 뒤 다음 요청을 보낸다 |
-| `request-window` | unary `Echo` RPC | raw request 전송과 reply 수신 | channel request 호출 | 최대 `request_window`개의 미완료 request를 유지한다 |
-| `request-backpressure` | unary `Echo` RPC | raw request 전송과 reply 수신 | channel request 호출 | 미완료 request 수에 상한을 두지 않는다. admission backpressure를 만날 때까지 연속 제출한다 |
-| `send-saturation` | unary `Command` RPC, 응답은 `Empty` | raw 단방향 send 제출 | channel send 제출 | reply payload가 없는 command 경로를 비교한다 |
+| `request-serial` | unary `Echo` RPC | raw request 전송과 reply 수신 | node request 호출 | 요청 하나를 보내고 reply 완료 뒤 다음 요청을 보낸다 |
+| `request-backpressure` | unary `Echo` RPC | raw request 전송과 reply 수신 | node request 호출 | 미완료 request 수에 상한을 두지 않는다. admission backpressure를 만날 때까지 연속 제출한다 |
+| `send-saturation` | unary `Command` RPC, 응답은 `Empty` | raw 단방향 send 제출 | node send 제출 | reply payload가 없는 command 경로를 비교한다 |
 
-세 구현이 사용하는 API 이름은 언어마다 다르지만 계약은 같다. `.NET`에서 framework channel
-request는 `RequestToChannel(...).Async<TReply>()`이고 channel send는
-`SendToChannel(...).Submit()`이다. 언어별 모듈은 §8에 둔다.
+세 구현이 사용하는 API 이름은 언어마다 다르지만 계약은 같다. Java에서 framework node request는
+`requestToNode(mesh, rid, message)`이고 node send는 `sendToNode(mesh, rid, message)`다(§1.3).
+언어별 모듈은 §8에 둔다.
 
 `request-serial`은 한 요청의 왕복 지연이 처리량을 결정한다. 이 값은 "한 번에 하나만 처리하는"
 사용 패턴의 비용을 보기 위한 값이다.
-
-`request-window`는 ZLink request가 reply를 기다리지 않고 다음 request를 제출할 수 있다는 점을
-반영한다. client는 active phase 동안 최대 `request_window`개의 미완료 request를 유지한다.
-reply 하나가 도착하면 해당 slot에서 다음 request를 바로 보낸다. 기본 `request_window`는 `100`이다.
 
 `request-backpressure`는 미완료 request 수에 application 상한을 두지 않는다. client는 reply를
 기다리지 않고 admission backpressure를 만날 때까지 request를 연속 제출하고, 재개 신호에서
@@ -105,21 +105,10 @@ reply 하나가 도착하면 해당 slot에서 다음 request를 바로 보낸�
 연속 제출한 뒤 completion pump에 turn을 넘긴다. 여섯 행이 모두 같은 모양을 사용하고, gRPC 쪽도
 같게 unary 호출을 하나씩 기다리지 않고 연속 제출한다.
 
-두 request 패턴은 서로 다른 질문에 답하며 한쪽이 다른 쪽을 대체하지 않는다.
-
-| 패턴 | 답하는 질문 |
-|---|---|
-| `request-window` | 외부에서 정한 깊이를 강제했을 때 그 스택이 어떻게 동작하는가 |
-| `request-backpressure` | transport가 허용하는 만큼 제출하는 서비스가 실제로 얻는 것은 무엇인가 |
-
-`request-window`는 깊이를 조건으로 고정하므로, 그 조건을 지탱하지 못하는 스택에서는 처리량
-비율이 요청당 비용이 아니라 도달 깊이를 보고한다. `request-backpressure`는 그 고정을 없애지만
-깊이 차이를 없애지는 않는다. 두 패턴 모두 §5.2의 깊이 지표와 함께 읽어야 한다.
-
 이 저장소의 perf 규약은 이미 inflight 깊이를 인위적으로 고정하지 않고 admission backpressure를
 만날 때까지 연속 제출하도록 정하고 있다(`doc/perf/PERF_MULTI_TEST_POLICY.md`의 request/reply
-client 항목, `doc/perf/PERF_POLICY.md`의 app 고정 window 항목). 이 bench가 `request-window`
-하나만 두었던 것은 그 규약과 어긋난 부분이었고, `request-backpressure`가 그 간극을 메운다.
+client 항목, `doc/perf/PERF_POLICY.md`의 app 고정 window 항목). 고정 window 패턴(`request-window`)은
+그 규약과 어긋나므로 이 bench에서 제외했다. 고정 깊이에서의 동작은 ZLink 모델 비교 bench의 항목이다.
 
 `send-saturation`은 request/reply와 섞어 평균 내지 않는다. 이 패턴은 command 계열의 상대
 비용을 따로 보기 위한 항목이다.
@@ -150,7 +139,7 @@ bench에서 옳은 비교인 이유는 아래와 같다.
 
 - 구현(`grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>`)마다 **source process A**와
   **target process B**를 각 1개 띄운다. A는 HTTP trigger listener와 stats endpoint를 갖고 B로
-  향하는 client(gRPC stub, raw ROUTER, framework channel client)를 품는다. B는 echo(request)
+  향하는 client(gRPC stub, raw ROUTER, framework node client)를 품는다. B는 echo(request)
   또는 수신 집계(send)와 stats endpoint를 갖는다. 역할·trigger 계약·셀 순서는 §10이 정한다.
 - 로컬 runner는 셀마다 B → A 순서로 띄우고, A의 trigger endpoint에 HTTP로 phase 시작을 알린다.
   runner 자체는 부하를 만들지 않는다.
@@ -159,9 +148,8 @@ bench에서 옳은 비교인 이유는 아래와 같다.
 - warmup 뒤 정해진 시간의 measured active 구간을 실행한다. warmup 길이는 언어마다 다르게
   두고 사용한 값을 결과에 기록한다(§8.2).
 - 기본 payload 크기는 `1024,4096` bytes다.
-- 기본 `request_window`는 `100`이며 이 값은 `request-window` 패턴에만 적용한다.
-  `request-backpressure` 패턴에는 미완료 request 상한 설정이 없다. 이 패턴에서 깊이는
-  설정하는 조건이 아니라 측정해 기록하는 결과다(§5.2).
+- `request-backpressure` 패턴에는 미완료 request 상한 설정이 없다. 이 패턴에서 깊이는
+  설정하는 조건이 아니라 측정해 기록하는 결과다(§5.2). `request_window` 설정은 이 bench에 없다.
 - 기본 send concurrency는 `8`이다.
 - gRPC와 ZLink framework는 같은 protobuf DTO를 사용한다. ZLink raw binding은 framework를
   거치지 않을 뿐 wire 모양은 같다. envelope 헤더 part 하나와 protobuf로 인코딩한
@@ -199,7 +187,7 @@ server가 받은 수를 폴링해 그 값이 더는 증가하지 않을 때까�
 report 표는 패턴별로 묶고, 각 행에 구현 이름을 표시한다. 예시는 아래 형식이다.
 
 ```text
-  > Benchmarking current for request-window...
+  > Benchmarking current for request-backpressure...
     Testing local:
       | Implementation          | Size     |       Throughput |    Bandwidth |  Lat.Mean(ms) |   Lat.P95(ms) |   Lat.P99(ms) | Client CPU | Client Mem | Server CPU | Server Mem |
       |-------------------------|----------|------------------|--------------|--------------|--------------|--------------|------------|------------|------------|------------|
@@ -218,13 +206,13 @@ RESULT,current,<scenario>,local,<payload_size>,<metric>,<value>
 예시는 아래와 같다.
 
 ```text
-RESULT,current,grpc-dotnet-request-window,local,1024,throughput,10000.000
-RESULT,current,zlink-dotnet-request-window,local,1024,latency,0.300
-RESULT,current,zlink-framework-dotnet-request-window,local,1024,latency_p99,1.200
+RESULT,current,grpc-dotnet-request-backpressure,local,1024,throughput,10000.000
+RESULT,current,zlink-dotnet-request-backpressure,local,1024,latency,0.300
+RESULT,current,zlink-framework-dotnet-request-backpressure,local,1024,latency_p99,1.200
 ```
 
 `<scenario>`는 `<구현 이름>-<패턴 이름>`이므로 언어가 이름에 포함된다. 예를 들어 Node의 같은
-셀은 `zlink-framework-node-request-window`다.
+셀은 `zlink-framework-node-request-backpressure`다.
 
 `metric` 값은 `throughput`, `bandwidth`, `latency`, `latency_p95`, `latency_p99`,
 `client_cpu_percent`, `client_memory_mb`, `server_cpu_percent`, `server_memory_mb`를 사용한다.
@@ -257,7 +245,7 @@ server-driven 모델(§10)에서 `client_*`는 **source process A**, `server_*`�
 | `Target CPU` (`server_cpu_percent`) | target process B가 active 구간 동안 사용한 CPU 비율 |
 | `Target Mem` (`server_memory_mb`) | target process B의 working set |
 
-`request-serial`과 `request-window`는 echo reply가 돌아온 완료 수를 기준으로 `KOPS`를 계산한다.
+`request-serial`과 `request-backpressure`는 echo reply가 돌아온 완료 수를 기준으로 `KOPS`를 계산한다.
 여기서 `1 KOPS`는 초당 1,000건의 request/reply 완료를 뜻한다.
 
 `send-saturation`은 server가 active phase에서 받은 메시지 수를 기준으로 `KMSG/s`를 계산한다.
@@ -301,7 +289,7 @@ event loop 사용률이 바로 그것을 잰다.
 CPU가 binding의 native I/O thread를 함께 셌고, Java에서는 GC와 JIT thread를 셌고, C++에서는
 다시 binding의 I/O thread를 셌다. 다섯 언어 중 넷이 프로세스 CPU가 아닌 것을 선언했다.
 문제는 임계값이 아니라 **판정식이 나누는 두 행 사이의 비교 가능성**이다. C++ 실측에서
-`zlink-cpp` request-window는 선언 계측기로 0.950인데 프로세스 core로는 1.90이고, 같은 run의
+`zlink-cpp` request-backpressure는 선언 계측기로 0.950인데 프로세스 core로는 1.90이고, 같은 run의
 `grpc-cpp`는 0.700과 0.70으로 두 값이 사실상 같다. 프로세스 core로 판정하면 그 차이는 client
 포화가 아니라 어느 행이 Core를 링크하는지를 보고하게 된다.
 
@@ -318,11 +306,6 @@ request 계열 셀은 아래 세 값을 셀마다 함께 기록한다. 세 값�
 | `peak_in_flight` | active 구간에서 관측한 미완료 request 수의 최댓값 |
 | 깊이 | 처리량 x 평균 latency로 계산한 평균 미완료 수(Little's law) |
 | `abandoned` | drain 상한에 이를 때까지 완료되지 않은 request 수 |
-
-`request-window`에서 이 세 값은 **설정한 깊이를 그 스택이 실제로 지탱했는지**를 판정한다.
-`peak_in_flight`가 설정값에 이르지 못한 셀은 harness가 window를 채우지 못한 것과 스택이 그
-깊이까지만 도달한 것을 구분해야 하므로, 두 값을 함께 기록하지 않으면 잘못된 전제가 그대로
-남는다.
 
 `request-backpressure`에서 이 세 값은 **결과 자체**다. 깊이를 설정하지 않으므로 스택이 도달한
 깊이는 그 스택의 설계가 정한 결과이고, 처리량과 같은 자격으로 표에 싣는다. 도달 깊이를 빼고
@@ -347,7 +330,7 @@ request 계열 셀은 아래 세 값을 셀마다 함께 기록한다. 세 값�
 | 13 | 8 | sequence |
 | 21 | 8 | send timestamp ns |
 
-`request-serial`과 `request-window`는 reply payload에 돌아온 header를 client가 검증하고,
+`request-serial`과 `request-backpressure`는 reply payload에 돌아온 header를 client가 검증하고,
 active phase reply 수로 `KOPS`를 계산한다. `send-saturation`은 server가 header를 읽어 active
 phase message 수와 server-side 수신 latency를 계산한다. 이 방식은 payload 안에 측정 값을 넣어,
 client stopwatch만으로 단방향 처리량을 과장하지 않기 위한 기준이다.
@@ -369,7 +352,7 @@ client stopwatch만으로 단방향 처리량을 과장하지 않기 위한 기�
 - payload size
 - warmup과 active duration 설정
 - gRPC와 ZLink endpoint
-- request window 값(`request-window` 패턴) 또는 도달 깊이(`request-backpressure` 패턴)
+- 도달 깊이(`request-backpressure` 패턴, §5.2)
 - A의 logical stream 수, stream당 in-flight 상한, trigger endpoint(§10)
 - 셀마다의 `peak_in_flight`, 깊이, `abandoned`(§5.2)
 - send concurrency 값
@@ -379,7 +362,7 @@ client stopwatch만으로 단방향 처리량을 과장하지 않기 위한 기�
 ### 7.2 계층 간 판정
 
 성능 판정은 gRPC가 아니라 같은 ZLink 계층끼리 비교한다. raw binding은 같은 조건의 `zlink-c`
-request-window 결과를 기준으로 본다. raw binding이 C 결과의 80% 이상이면 binding 계층의 기본
+request-backpressure 결과를 기준으로 본다. raw binding이 C 결과의 80% 이상이면 binding 계층의 기본
 성능은 통과로 판단한다. framework는 같은 언어의 raw binding 결과를 기준으로 본다. framework가
 raw binding 결과의 80% 이상이면 framework 추가 비용은 통과로 판단한다.
 
@@ -400,8 +383,7 @@ zlink-framework-<lang> / zlink-<lang>      >= 0.80   framework 추가 비용 통
 위한 보조 지표로 남긴다.
 
 **판정의 기준 패턴은 `request-backpressure`다.** 언어 통과 여부는 이 패턴에서 두 payload 크기
-모두 기준을 만족할 때 결정한다. `request-window`에서 계산한 같은 두 식은 따로 계산해 함께
-기록하되, 언어 통과 여부를 결정하지 않는다.
+모두 기준을 만족할 때 결정한다.
 
 기준 패턴을 이렇게 두는 근거는 아래와 같다.
 
@@ -420,10 +402,8 @@ zlink-framework-<lang> / zlink-<lang>      >= 0.80   framework 추가 비용 통
 비율을 내고, 비율만으로는 요청당 비용과 도달 깊이를 여전히 가르지 못한다. **그래서 두 패턴
 어느 쪽이든 §5.2의 깊이 세 값을 함께 싣지 않은 비율은 게재하지 않는다.**
 
-**고정 window에서 관측한 유실과 미완료는 이 판정으로 대체되지 않는다.** `request-window`에서
-`abandoned`나 오류가 발생한 스택은 정확성 항목의 결함을 가진 것이며, `request-backpressure`에서
-기준을 통과하더라도 그 결함은 그대로 남는다. 두 결과는 각각 기록하고, 성능 판정이 정확성
-관측을 가리지 않게 한다.
+고정 window 패턴은 이 bench에 없다. 외부에서 정한 깊이에서 스택이 어떻게 동작하는지는 ZLink 모델 비교
+bench의 항목이며, 거기서 관측한 유실과 미완료는 정확성 항목으로 따로 기록한다.
 
 두 번째 식은 §1.3의 소켓 구성을 지켰을 때에만 framework 계층 비용을 나타낸다.
 
@@ -476,6 +456,34 @@ Kotlin은 전체 matrix에서 제외하고 보조 셀만 잰다(§10.5). Kotlin�
 C++는 시스템에 설치된 `libgrpc++`를 사용한다. vcpkg로 gRPC를 빌드하지 않는다. 이 머신의
 version은 1.51.1이며, 오래된 version이므로 결과에 반드시 기록한다.
 
+### 8.1.1 메시지당 payload 작업 대조
+
+각 지원 행의 클라이언트는 request/send 제출마다 29바이트 측정 header를 포함한 body와
+`BenchPayload` 스키마의 메시지 객체를 만들고, 해당 언어의 protobuf 런타임으로 직렬화한다. raw의 envelope header part는 wire 규격에 따른
+상수를 사용한다. 수신한 payload는 protobuf로 역직렬화하고, request 응답도 typed payload를
+직렬화한다. 응답의 측정 header와 timestamp는 요청의 값을 보존한다. send는 payload 응답이
+없으며, gRPC `Command`만 기존 계약대로 `Empty` 응답을 직렬화한다.
+
+| 언어 | raw 요청·응답 직렬화 / 수신 역직렬화 | gRPC | framework |
+|---|---|---|---|
+| Java | 매번 생성한 `BenchPayload`의 `toByteArray` / `parseFrom` | 같은 generated 타입을 grpc-java가 직렬화·역직렬화 | 같은 generated 타입을 `ZLinkProtobufCodec`이 직렬화·역직렬화 |
+| .NET | 매번 생성한 `BenchPayload`의 `WriteTo` / `Parser.ParseFrom` | 같은 generated 타입을 Google.Protobuf 기반 gRPC가 직렬화·역직렬화 | 같은 generated 타입을 protobuf codec이 직렬화·역직렬화 |
+| C++ | 매번 생성한 `BenchPayload`의 protobuf 직렬화 / `ParseFromArray` | 같은 generated 타입을 libgrpc++가 직렬화·역직렬화 | 같은 generated 타입을 protobuf codec이 직렬화·역직렬화 |
+| Node | 매번 생성한 `BenchPayload` DTO를 기존 proto-loader serializer / deserializer로 처리 | 같은 proto-loader의 protobuf serializer / deserializer 사용 | 같은 proto-loader serializer / deserializer를 schema envelope codec에 연결 |
+| C binding | C++ 드라이버에서 매번 generated `BenchPayload`를 생성해 기존 libprotobuf로 직렬화·역직렬화 | 같은 generated 타입과 libprotobuf 사용 | C framework 행 없음 |
+
+C binding bench는 `.cpp` 드라이버이며 protobuf가 이미 빌드 의존성이다. raw도 이를 공유하므로
+수동 protobuf 프레이밍 예외를 사용하지 않는다. 표의 동등성은 payload 작업을 뜻하며,
+transport 호출·envelope 처리·buffer 복사 횟수가 같다는 뜻은 아니다. Java raw와 gRPC는
+`ByteString.copyFrom`을, framework는 기존 `UnsafeByteOperations.unsafeWrap`을 사용한다.
+
+wire 동일성은 `tools/test_raw_wire.sh`로 확인한다. 고정 29바이트 payload의 기존 dump와
+protobuf 결과를 비교하며, 길이 varint 경계와 request 응답의 body 보존도 검증한다.
+
+raw 직렬화 비용을 포함한 결과를 새 기준으로 사용한다. 직렬화를 우회한 raw 기준의
+`framework/raw` 비율과 성능 추세를 비교하지 않는다. raw 처리량이 낮아져 비율이 높아지는
+것은 측정 조건의 정정이며 framework 성능 개선을 뜻하지 않는다.
+
 ### 8.2 언어마다 다르게 두되 반드시 기록하는 값
 
 아래 세 값은 언어마다 다르게 설정한다. 같게 맞추는 것이 목적이 아니라, 사용한 값을 결과에
@@ -526,7 +534,7 @@ admin 계약을 그대로 쓴다. 요청과 응답은 JSON이고 다섯 언어�
 
 ```text
 POST http://127.0.0.1:<A trigger>/bench/start
-{ "runId": "...", "cellId": "...", "pattern": "request-window",
+{ "runId": "...", "cellId": "...", "pattern": "request-backpressure",
   "payloadBytes": 1024, "phase": "warmup" | "active",
   "durationMs": 5000, "requestWindow": 100, "sendConcurrency": 8 }
 → 200 { "accepted": true, "runId": "...", "cellId": "...", "phase": "active", "startedAt": <monotonic ns> }
@@ -548,7 +556,6 @@ in-flight로 표현한다.
 | 패턴 | stream 수 | stream당 in-flight | 의미 |
 |------|-----------|--------------------|------|
 | `request-serial` | 1 | 1 | 요청 하나를 보내고 reply 뒤 다음 요청 |
-| `request-window` | `request_window`(기본 100)을 stream들이 나눠 갖는다. 기본은 stream 1개에 in-flight 100 | 합계 = `request_window` | 미완료 request 수를 window로 유지 |
 | `request-backpressure` | 1 | 상한 없음 | admission backpressure를 만날 때까지 제출 |
 | `send-saturation` | `send_concurrency`(기본 8) | 1 (send는 완료 통지까지) | reply 없는 command 경로 |
 
@@ -577,5 +584,5 @@ gRPC server 구성은 언어 기본값을 두고 결과에 기록한다(§8.2).
 
 Kotlin은 Java와 같은 binding·server·codec을 쓰므로 전체 matrix에서 제외한다. 대신 Kotlin 호출
 층의 비용을 보여 주는 보조 셀 둘 — `grpc-kotlin`(coroutine stub)과 `zlink-framework-kotlin`
-(suspend 호출)의 `request-window @1024` — 을 Java 행 옆에 싣는다. A만 Kotlin이고 B는 Java
+(suspend 호출)의 `request-backpressure @1024` — 을 Java 행 옆에 싣는다. A만 Kotlin이고 B는 Java
 바이너리를 §9의 Java 대역에서 그대로 쓴다.

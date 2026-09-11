@@ -40,6 +40,7 @@ import {
 import type {
   SubscriptionEntry,
   SendOperation,
+  SendSubmission,
   PublishOperation as PublishOperationContract,
 } from '../../contracts/messaging';
 import {
@@ -67,8 +68,8 @@ export class ReceiveSocket extends ConnectableSocket {
     let raw;
     try {
       raw = ((flags | 0) & (RecvFlags.DontWait | 0))
-        ? native.socketRecvMessageNoWait(getNativeHandle(this))
-        : native.socketRecvMessage(getNativeHandle(this), flags | 0);
+        ? native.socketRecvMessageNoWait(this.receiveHandle())
+        : native.socketRecvMessage(this.receiveHandle(), flags | 0);
     } catch (error) {
       throw recvNativeError(error, flags, 'recv failed');
     }
@@ -162,8 +163,8 @@ export class SubscriberSocket extends ConnectableSocket {
     let raw;
     try {
       raw = ((flags | 0) & (RecvFlags.DontWait | 0))
-        ? native.socketTrySubscribeMessage(getNativeHandle(this))
-        : native.socketSubscribeMessage(getNativeHandle(this), flags | 0);
+        ? native.socketTrySubscribeMessage(this.receiveHandle())
+        : native.socketSubscribeMessage(this.receiveHandle(), flags | 0);
     } catch (error) {
       throw recvNativeError(error, flags, 'subscribe failed');
     }
@@ -208,11 +209,11 @@ export class RoutedMessageSocket extends ConnectableSocket {
   protected sendReceivedManaged(
     _routingId: Buffer,
     _parts: readonly Message[],
-  ): Promise<void> {
-    return Promise.reject(submitErrorFromResult(
+  ): SendSubmission {
+    throw submitErrorFromResult(
       SubmitResult.InvalidState,
       'managed received send is not supported by this socket'
-    ));
+    );
   }
 
   /**
@@ -222,20 +223,20 @@ export class RoutedMessageSocket extends ConnectableSocket {
     // HOT PATH: terminal readers repeatedly materialize data(), whereas
     // relays consume the movable native frame. Use the previous refill to
     // select the next internal storage mode without changing the public API.
-    const preferManagedSinglePart = routedReceivedPrefersManagedBuffer(result);
+    const preferManagedParts = routedReceivedPrefersManagedBuffer(result);
     const routingIdStorage = routedReceivedRoutingBytes(result);
     let raw;
     try {
       raw = ((flags | 0) & (RecvFlags.DontWait | 0))
         ? native.routerRecvMessageNoWait(
-            getNativeHandle(this),
-            preferManagedSinglePart,
+            this.receiveHandle(),
+            preferManagedParts,
             routingIdStorage
           )
         : native.routerRecvMessage(
-            getNativeHandle(this),
+            this.receiveHandle(),
             flags | 0,
-            preferManagedSinglePart,
+            preferManagedParts,
             routingIdStorage
           );
     } catch (error) {

@@ -41,6 +41,7 @@ public final class ZLinkRawBenchServer {
         String metricsUrl = Args.value(args, "--metrics-url", "http://127.0.0.1:5249");
 
         BenchServerMetrics metrics = new BenchServerMetrics();
+        boolean replyProbe = System.getenv("BENCH_REPLY_PROBE") != null;
         Context context = Zlink.createContext();
         RouterSocket requestRouter = context.createRouterSocket();
         RouterSocket commandRouter = context.createRouterSocket();
@@ -60,7 +61,7 @@ public final class ZLinkRawBenchServer {
             + commandEndpoint + "\"}");
 
         Thread requestThread = new Thread(
-            () -> pumpRequests(requestRouter, metrics), "bench-raw-request");
+            () -> pumpRequests(requestRouter, metrics, replyProbe), "bench-raw-request");
         Thread commandThread = new Thread(
             () -> pumpCommands(commandRouter, metrics), "bench-raw-command");
         requestThread.setDaemon(true);
@@ -76,7 +77,8 @@ public final class ZLinkRawBenchServer {
     private static final java.util.concurrent.atomic.AtomicInteger probeCount =
         new java.util.concurrent.atomic.AtomicInteger();
 
-    private static void pumpRequests(RouterSocket socket, BenchServerMetrics metrics) {
+    private static void pumpRequests(
+        RouterSocket socket, BenchServerMetrics metrics, boolean replyProbe) {
         try (Received received = new Received()) {
             while (true) {
                 boolean receivedMessage = false;
@@ -88,23 +90,18 @@ public final class ZLinkRawBenchServer {
                     ByteBuffer body = lastPartBody(received);
                     if (body == null) {
                         metrics.recordError();
-                        received.close();
                         continue;
                     }
-                    byte[] copy = new byte[body.remaining()];
-                    body.get(copy);
-                    metrics.record(ByteBuffer.wrap(copy));
-                    byte[] reply = RawWire.encodeBenchPayload(copy);
+                    metrics.record(body);
                     // The two reply wrappers are closed after submit, as the .NET
                     // reference server does with `using` (ZLinkRawServer/Program.cs
                     // ReplyMultipart). A successful submit consumes them; an
                     // unsuccessful one leaves them caller-owned, and leaking a wrapper
                     // per reply is what starves the reply path at depth.
                     try (Message header = Message.from(RawWire.RESPONSE_ENVELOPE);
-                         Message replyBody = Message.from(reply)) {
+                         Message replyBody = RawWire.encodeBenchPayloadMessage(body)) {
                         boolean hasToken = received.replyToken().isPresent();
-                        if (System.getenv("BENCH_REPLY_PROBE") != null
-                            && probeCount.getAndIncrement() < 5) {
+                        if (replyProbe && probeCount.getAndIncrement() < 5) {
                             System.err.println("[probe] reply branch hasToken=" + hasToken
                                 + " parts=" + received.parts().size());
                         }

@@ -113,14 +113,6 @@ int zlink::ctx_t::set (int option_, const void *optval_, size_t optvallen_)
             }
             break;
 
-        case ZLINK_MAX_MSGSZ:
-            if (is_int && value >= 0) {
-                scoped_lock_t locker (_opt_sync);
-                _max_msgsz = value < INT_MAX ? value : INT_MAX;
-                return 0;
-            }
-            break;
-
         default:
             return _thread_context.set (option_, optval_, optvallen_);
     }
@@ -227,14 +219,6 @@ int zlink::ctx_t::get (int option_, void *optval_, size_t *optvallen_)
             if (is_int) {
                 scoped_lock_t locker (_opt_sync);
                 *value = _blocky;
-                return 0;
-            }
-            break;
-
-        case ZLINK_MAX_MSGSZ:
-            if (is_int) {
-                scoped_lock_t locker (_opt_sync);
-                *value = _max_msgsz;
                 return 0;
             }
             break;

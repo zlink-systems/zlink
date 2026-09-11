@@ -1,7 +1,13 @@
 {
   "name": "@zlink-systems/nestjs",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zlink-systems/zlink.git",
+    "directory": "framework/languages/node/packages/nestjs"
+  },
+  "homepage": "https://zlink.systems/",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -15,8 +21,8 @@
   },
   "dependencies": {
     "@nestjs/common": "^10.4.22",
-    "@zlink-systems/framework": "0.11.0",
-    "@zlink-systems/http-client": "0.11.0",
+    "@zlink-systems/framework": "0.11.1",
+    "@zlink-systems/http-client": "0.11.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
   },

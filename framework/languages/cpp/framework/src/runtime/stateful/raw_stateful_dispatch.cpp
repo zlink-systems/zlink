@@ -1366,7 +1366,7 @@ bool raw_relocation_replay_coordinator_t::register_terminal_target (
                  == protocol::framework_error_code::none))
         return false;
     const auto bytes = retained_bytes (registration);
-    return _lane.run ([this, registration = std::move (registration), bytes] () mutable {
+    const auto registered = _lane.run ([this, registration = std::move (registration), bytes] () mutable {
         const auto item_key = terminal_key (
           registration.relay.relocation, registration.relay.operation);
         const auto existing = _terminal_targets.find (item_key);
@@ -1388,6 +1388,9 @@ bool raw_relocation_replay_coordinator_t::register_terminal_target (
         _terminal_retained_bytes += bytes;
         return true;
     }).get ();
+    if (registered)
+        _transport->signal_activity ();
+    return registered;
 }
 
 task_t<std::size_t> raw_relocation_replay_coordinator_t::retry_terminal_relays (
@@ -1546,6 +1549,7 @@ raw_relocation_replay_coordinator_t::process_reply_relay (
         }).get ();
         if (completed != raw_relocation_replay_result_t::terminal_received)
             co_return completed;
+        _transport->signal_activity ();
     }
 
     const protocol::reply_relay_ack_t ack{
@@ -1625,7 +1629,7 @@ raw_relocation_replay_coordinator_t::process_reply_relay_ack (
     catch (...) {
         persisted = false;
     }
-    co_return _lane.run ([this, &item_key, persisted, &work] {
+    const auto result = _lane.run ([this, &item_key, persisted, &work] {
         const auto found = _terminal_targets.find (item_key);
         if (found == _terminal_targets.end ())
             return raw_relocation_replay_result_t::not_registered;
@@ -1638,6 +1642,9 @@ raw_relocation_replay_coordinator_t::process_reply_relay_ack (
         _terminal_targets.erase (found);
         return raw_relocation_replay_result_t::relay_acknowledged;
     }).get ();
+    if (result == raw_relocation_replay_result_t::persistence_failed)
+        _transport->signal_activity ();
+    co_return result;
 }
 
 bool raw_relocation_replay_coordinator_t::confirm_terminal_source_lease_expired (
@@ -1674,7 +1681,9 @@ bool raw_relocation_replay_coordinator_t::confirm_terminal_source_lease_expired 
     catch (...) {
         persisted = false;
     }
-    return _lane.run ([this, &item_key, persisted, &work] {
+    bool retry_reactivated = false;
+    const auto confirmed = _lane.run (
+      [this, &item_key, persisted, &work, &retry_reactivated] {
         const auto found = _terminal_targets.find (item_key);
         if (found == _terminal_targets.end ())
             return false;
@@ -1682,12 +1691,16 @@ bool raw_relocation_replay_coordinator_t::confirm_terminal_source_lease_expired 
         if (!persisted) {
             found->second.registration.persist_source_lease_expiry =
               std::move (work.persist);
+            retry_reactivated = true;
             return false;
         }
         _terminal_retained_bytes -= found->second.retained_bytes;
         _terminal_targets.erase (found);
         return true;
     }).get ();
+    if (retry_reactivated)
+        _transport->signal_activity ();
+    return confirmed;
 }
 
 std::size_t raw_relocation_replay_coordinator_t::reap_terminal_tombstones (
@@ -1708,6 +1721,27 @@ std::size_t raw_relocation_replay_coordinator_t::reap_terminal_tombstones (
             }
         }
         return removed;
+    }).get ();
+}
+
+std::optional<raw_relocation_replay_coordinator_t::clock_t::time_point>
+raw_relocation_replay_coordinator_t::next_activity () const
+{
+    return _lane.run ([this] {
+        std::optional<clock_t::time_point> next;
+        const auto include = [&] (clock_t::time_point deadline) {
+            if (!next || deadline < *next)
+                next = deadline;
+        };
+        for (const auto &[key, state] : _terminal_targets) {
+            if (!state.acknowledging)
+                include (state.next_retry);
+        }
+        for (const auto &[key, state] : _terminal_sources) {
+            if (state.completed)
+                include (state.completed_at + _terminal_tombstone_retention);
+        }
+        return next;
     }).get ();
 }
 

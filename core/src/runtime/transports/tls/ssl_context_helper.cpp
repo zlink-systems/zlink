@@ -21,6 +21,31 @@
 namespace zlink
 {
 
+bool ssl_context_helper_t::is_authentication_failure (
+  const boost::system::error_code &error)
+{
+    // Asio already consumed OpenSSL's error queue into this code.
+    if (error.category () != boost::asio::error::get_ssl_category ()
+        || ERR_GET_LIB (error.value ()) != ERR_LIB_SSL)
+        return false;
+    switch (ERR_GET_REASON (error.value ())) {
+        case SSL_R_CERTIFICATE_VERIFY_FAILED:
+        case SSL_R_PEER_DID_NOT_RETURN_A_CERTIFICATE:
+        case SSL_R_SSLV3_ALERT_BAD_CERTIFICATE:
+        case SSL_R_SSLV3_ALERT_UNSUPPORTED_CERTIFICATE:
+        case SSL_R_SSLV3_ALERT_CERTIFICATE_REVOKED:
+        case SSL_R_SSLV3_ALERT_CERTIFICATE_EXPIRED:
+        case SSL_R_SSLV3_ALERT_CERTIFICATE_UNKNOWN:
+        case SSL_R_TLSV1_ALERT_UNKNOWN_CA:
+#ifdef SSL_R_TLSV13_ALERT_CERTIFICATE_REQUIRED
+        case SSL_R_TLSV13_ALERT_CERTIFICATE_REQUIRED:
+#endif
+            return true;
+        default:
+            return false;
+    }
+}
+
 std::unique_ptr<boost::asio::ssl::context>
 ssl_context_helper_t::create_server_context (const std::string &cert_chain_file,
                                              const std::string &private_key_file,

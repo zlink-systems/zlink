@@ -22,6 +22,23 @@ endif()
 
 get_filename_component(BENCH_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
 
+function(read_zlink_version output file_path key)
+  file(STRINGS "${file_path}" version_lines REGEX "^${key}=[0-9]+\\.[0-9]+\\.[0-9]+$")
+  list(LENGTH version_lines version_line_count)
+  if(NOT version_line_count EQUAL 1)
+    message(FATAL_ERROR "Expected exactly one canonical ${key} version in ${file_path}")
+  endif()
+  string(REGEX REPLACE "^[^=]*=" "" version "${version_lines}")
+  set(${output} "${version}" PARENT_SCOPE)
+endfunction()
+
+read_zlink_version(BENCH_BINDING_VERSION
+  "${BENCH_REPO_ROOT}/bindings/cpp/VERSION" ZLINK_BINDING_VERSION)
+read_zlink_version(BENCH_FRAMEWORK_VERSION
+  "${BENCH_REPO_ROOT}/framework/languages/cpp/VERSION" ZLINK_FRAMEWORK_VERSION)
+read_zlink_version(BENCH_CORE_VERSION
+  "${BENCH_REPO_ROOT}/VERSION" LIBZLINK_VERSION)
+
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 
@@ -54,9 +71,9 @@ add_custom_command(
 # --- the C++ binding under test ---------------------------------------------
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "0.17.6" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "${BENCH_BINDING_VERSION}" CACHE STRING
   "Exact local zlink_cpp package version consumed by this bench")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "0.17.5" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "${BENCH_CORE_VERSION}" CACHE STRING
   "Exact local zlink Core package version consumed by zlink_cpp")
 if(NOT ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT)
   set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "${BENCH_REPO_ROOT}/.artifacts/wsl")
@@ -83,9 +100,7 @@ foreach(option_name IN ITEMS ZLINK_FRAMEWORK_CPP_BUILD_TESTS
 endforeach()
 add_subdirectory("${BENCH_REPO_ROOT}/framework/languages/cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/framework" EXCLUDE_FROM_ALL)
-
-file(STRINGS "${BENCH_REPO_ROOT}/FRAMEWORK_VERSION" BENCH_FRAMEWORK_VERSION LIMIT_COUNT 1)
-string(REGEX REPLACE "^[^=]*=" "" BENCH_FRAMEWORK_VERSION "${BENCH_FRAMEWORK_VERSION}")
+find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS sdk)
 
 set(BENCH_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/common")
 
@@ -113,9 +128,12 @@ function(bench_grpc_target name)
 endfunction()
 
 # --- servers -----------------------------------------------------------------
-add_executable(bench_cpp_zlink_server zlink/bench_zlink_cpp_server.cpp)
+add_executable(bench_cpp_zlink_server zlink/bench_zlink_cpp_server.cpp ${BENCH_PROTO_CC})
 target_link_libraries(bench_cpp_zlink_server PRIVATE zlink::cpp Threads::Threads)
 bench_target(bench_cpp_zlink_server)
+target_include_directories(bench_cpp_zlink_server PRIVATE ${BENCH_PROTO_GEN_DIR} ${BENCH_PROTOBUF_INCLUDE_DIRS})
+target_link_directories(bench_cpp_zlink_server PRIVATE ${BENCH_PROTOBUF_LIBRARY_DIRS})
+target_link_libraries(bench_cpp_zlink_server PRIVATE ${BENCH_PROTOBUF_LIBRARIES})
 
 add_executable(bench_cpp_grpc_server grpc/bench_grpc_cpp_server.cpp ${BENCH_PROTO_CC} ${BENCH_GRPC_CC})
 target_link_libraries(bench_cpp_grpc_server PRIVATE Threads::Threads)
@@ -132,4 +150,18 @@ add_executable(bench_cpp_framework_server framework/bench_framework_cpp_server.c
 target_include_directories(bench_cpp_framework_server PRIVATE ${BENCH_PROTO_GEN_DIR})
 target_link_libraries(bench_cpp_framework_server PRIVATE zlink::framework_codec_protobuf)
 bench_target(bench_cpp_framework_server)
+target_link_libraries(bench_cpp_framework_server PRIVATE opentelemetry-cpp::metrics)
 target_link_libraries(bench_cpp_client PRIVATE zlink::framework_codec_protobuf)
+
+enable_testing()
+add_executable(bench_cpp_server_metrics_test tests/server_metrics_test.cpp ${BENCH_PROTO_CC})
+target_include_directories(bench_cpp_server_metrics_test PRIVATE ${BENCH_PROTO_GEN_DIR})
+target_link_libraries(bench_cpp_server_metrics_test PRIVATE zlink::framework_codec_protobuf)
+bench_target(bench_cpp_server_metrics_test)
+target_link_libraries(bench_cpp_server_metrics_test PRIVATE opentelemetry-cpp::metrics)
+add_test(NAME bench_cpp_server_rejections COMMAND bench_cpp_server_metrics_test)
+add_executable(bench_cpp_raw_wire_test tests/raw_wire_test.cpp ${BENCH_PROTO_CC})
+target_include_directories(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTO_GEN_DIR} ${BENCH_PROTOBUF_INCLUDE_DIRS})
+target_link_directories(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTOBUF_LIBRARY_DIRS})
+target_link_libraries(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTOBUF_LIBRARIES})
+add_test(NAME bench_cpp_raw_wire_identity COMMAND bench_cpp_raw_wire_test)

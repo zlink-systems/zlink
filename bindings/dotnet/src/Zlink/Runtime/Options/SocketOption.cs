@@ -34,7 +34,6 @@ internal enum SocketOption
     Conflate = 0x301B,
     Tos = 0x301C,
     HandshakeIvl = 0x301D,
-    Blocky = 0x301E,
     InvertMatching = 0x3020,
     ConnectTimeout = 0x3024,
     TcpMaxRt = 0x3025,

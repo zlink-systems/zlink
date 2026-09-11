@@ -1,10 +1,26 @@
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class MeshCompletionTableConvergenceTests
 {
+    [Fact]
+    public async Task DispatcherCreatedOnOwnerLane_DoesNotInheritLaneCurrentScope()
+    {
+        var lane = new ZLinkStateLane();
+        var table = await lane.RunAsync(() => new ZLinkMeshCompletionTable(
+            capacity: 1, dispatcher: new ZLinkCompletionDispatcher(1)));
+        var operationId = new MeshOperationId(91, 1);
+        var observed = new TaskCompletionSource<ZLinkStateLane?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        table.Register(operationId, (_, _) => observed.TrySetResult(ZLinkStateLane.Current));
+        table.Complete(MeshReceiveRecord.CompletionFailure(operationId, RequestResult.Ok), []);
+        Assert.Null(await observed.Task.WaitAsync(TimeSpan.FromSeconds(3)));
+        await table.CompletionDrained;
+    }
+
     [Fact]
     public void PendingOperationBoundRejectsBeforeChangingTheTable()
     {

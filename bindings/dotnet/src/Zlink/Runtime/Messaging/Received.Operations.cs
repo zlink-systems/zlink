@@ -38,7 +38,7 @@ internal sealed class ReceivedSendContext(
     Runtime.Sockets.Internal.SocketKernel? sendKernel,
     RoutingIdSnapshot routingId)
 {
-    internal Task SendAsyncCore(
+    internal SendSubmission SendAsyncCore(
         OperationMessageBuffer parts,
         CancellationToken cancellationToken)
     {
@@ -70,16 +70,4 @@ internal sealed class ReceivedSendContext(
         sendKernel.Completion.Send(target.Value, parts);
     }
 
-    internal bool TrySendCore(IReadOnlyList<Message> parts)
-    {
-        ArgumentNullException.ThrowIfNull(parts);
-        if (sendKernel == null)
-            throw new ZlinkSubmitException(SubmitResult.InvalidArgument,
-                (int)ErrorCode.EInval);
-        var target = routingId.ToRoutingId();
-        if (!target.HasValue)
-            throw new ZlinkSubmitException(SubmitResult.InvalidArgument,
-                (int)ErrorCode.EInval);
-        return sendKernel.Completion.TrySend(target.Value, parts);
-    }
 }

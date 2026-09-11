@@ -22,7 +22,7 @@ STREAM 소켓은 zlink framing 없이 **raw byte**를 주고받는 소켓이다.
 - `ZLINK_SOCKET_STREAM`은 bind와 connect를 모두 지원한다(`zlink_connect()` 성공 시 `ZLINK_CONNECT_OK`).
 - RAW 모드는 raw 바이트 스트림을 그대로 전달한다. PACKET 모드는 2바이트 BE header 크기 +
   4바이트 BE body 크기 + header + body framing을 사용한다.
-- zlink API 수준에서: raw `zlink_recv_part()`는 발신 클라이언트의 4바이트
+- zlink API 수준에서: RAW `zlink_recv()`는 한 part로 된 byte record와 발신 클라이언트의 4바이트
   `routing_id`를 자체 `source_rid_out_` out-parameter로 노출하며, packet
   `zlink_stream_recv_packet()`도 같은 Core-owned borrowed view를 `source_rid_out_`로 노출한다.
 
@@ -60,8 +60,8 @@ zlink_bind(stream, "tcp://0.0.0.0:8080");
 STREAM은 기반 소켓 계열(raw socket family)에서 유일한 예외 타입이다. 첫 bind 성공 전에 두
 가지 수신 모드 중 정확히 하나를 고른다.
 
-- **RAW**: `zlink_recv_part()`로 transport 조각을 part 단위로
-  직접 가져온다. 소스 routing id는 `source_rid_out_` out-parameter로
+- **RAW**: `zlink_recv()`로 transport byte record 하나를
+  가져온다. Record는 part 하나로 반환되고, 소스 routing id는 `source_rid_out_` out-parameter로
   받는다. poller의 `ZLINK_POLLIN`과 함께 사용한다.
 - **PACKET**: `zlink_stream_recv_packet()`으로 고정 framing(framing,
   패킷 경계를 구분하는 방식) 규약(2B header size + 4B body size + header + body, big-endian)을
@@ -81,7 +81,7 @@ STREAM만의 고유 동작은 다음과 같다.
   **아니다**. 소켓 monitor의 `ZLINK_EVENT_CONNECTION_READY` / `ZLINK_EVENT_DISCONNECTED`
   이벤트로 보고되며 각각 4바이트 `routing_id`를 담는다. 우연히 1바이트 `0x00`/`0x01`인
   raw payload는 일반 데이터로 전달된다. RAW 모드에서 bind/connect 전에
-  `ZLINK_STREAM_OPT_NOTIFY`를 `1`로 설정하면 `zlink_recv_part()`가 연결·해제마다 해당
+  `ZLINK_STREAM_OPT_NOTIFY`를 `1`로 설정하면 `zlink_recv()`가 연결·해제마다 해당
   `source_rid`와 함께 **길이 0 record**를 추가로 돌려주므로, 그 경우 길이 0 part는
   데이터가 아니라 알림으로 해석한다.
 
@@ -100,17 +100,15 @@ zlink_set_stream_option(stream, ZLINK_STREAM_OPT_RECV_MODE,
 zlink_bind(stream, "tcp://0.0.0.0:8080");
 
 const zlink_routing_id_t *source_rid = NULL;
-zlink_msg_t part;
-zlink_msg_init(&part);
-zlink_part_flag_t more = ZLINK_PART_FINAL;
-if (zlink_recv_part(stream, &source_rid, &part, &more,
-                    ZLINK_RECV_FLAGS_NONE) == ZLINK_RECV_OK) {
+zlink_msg_t parts[1];
+size_t part_count = 0;
+if (zlink_recv(stream, &source_rid, parts, 1, &part_count,
+               ZLINK_RECV_FLAGS_NONE) == ZLINK_RECV_OK) {
     zlink_msg_t reply;
-    zlink_msg_init_size(&reply, zlink_msg_size(&part));
-    memcpy(zlink_msg_data(&reply), zlink_msg_data(&part), zlink_msg_size(&part));
-    zlink_send_part_rid(stream, source_rid, &reply, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL, NULL, NULL);
-    zlink_msg_close(&part);
+    zlink_msg_init_size(&reply, zlink_msg_size(&parts[0]));
+    memcpy(zlink_msg_data(&reply), zlink_msg_data(&parts[0]), zlink_msg_size(&parts[0]));
+    zlink_send_rid(stream, source_rid, &reply, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
+    zlink_multipart_close(parts, part_count);
 }
 ```
 
@@ -118,13 +116,13 @@ if (zlink_recv_part(stream, &source_rid, &part, &more,
 
 | 항목 | 설명 |
 |---|---|
-| 수신 API | `zlink_recv_part()` |
+| 수신 API | `zlink_recv()` |
 | readiness | poller가 `ZLINK_POLLIN`을 알리면 애플리케이션이 recv를 drain |
 | 수명 | `source_rid`는 같은 소켓의 다음 data-recv 진입 또는 close 전까지 유효 |
 | framing | transport에서 수신된 raw 바이트 |
-| 전송 | `zlink_send_part_rid()` |
+| 전송 | `zlink_send_rid()` |
 
-> 송신 큐가 가득 차면(HWM, 고수위 표시) `zlink_send_part_rid()`는 블록(기본) 또는
+> 송신 큐가 가득 차면(HWM, 고수위 표시) `zlink_send_rid()`는 블록(기본) 또는
 > `ZLINK_DONTWAIT` 로 `ZLINK_SUBMIT_BACKPRESSURED` 를 반환한다.
 > 배압(backpressure) 패턴은 [성능 가이드](10-performance.ko.md)를 참고.
 
@@ -167,7 +165,7 @@ PACKET 모드의 규칙은 다음과 같다.
   유효한 객체로 전달된다.
 - `header` 와 `body` 의 소유권은 호출자로 이전된다. 호출자는 두 msg_t 를 각각
   정확히 한 번 close 하거나 소비해야 한다.
-- PACKET 모드에서 raw receive(`zlink_recv_part()`)는 `ENOTSUP`로 실패한다.
+- PACKET 모드에서 whole-message RAW receive(`zlink_recv()`)는 `ENOTSUP`로 실패한다.
   RAW 모드에서 `zlink_stream_recv_packet()`도 같은 방식으로 실패한다.
 - framing 규약을 지키지 않는 비정형 패킷(malformed packet)(길이 제한 초과, 조립 실패,
   불완전 상태 연결 종료 등)은 연결을 닫는 기본 동작으로 이어진다. 이

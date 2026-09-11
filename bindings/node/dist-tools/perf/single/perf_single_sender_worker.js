@@ -4,7 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const { parentPort, workerData } = require('node:worker_threads');
 const zlink = require('@zlink-systems/zlink');
 const { createPayload, integerEnv, stampPayload } = require('../common/perf_metrics');
-const { applyContextPolicy, applySocketPolicy, configureTlsClient, configureTlsServer, emitSingleSocketHwmDetail, waitForConnectionReady, waitForMonitorConnectionReady, } = require('./perf_single_common');
+const { applyContextPolicy, applySocketPolicy, configureTlsClient, configureTlsServer, emitSingleSocketHwmDetail, waitForMonitorConnectionReady, } = require('./perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 const { isStopTokenParts } = require('../perf_stop_token');
 const DEFAULT_TOPIC = 'perf.topic';
@@ -48,9 +48,10 @@ function waitForRelease(control) {
         Atomics.wait(control, 0, 0);
     }
 }
-function connectSender(kind, socket, endpoint, transport) {
+function connectSender(socket, monitor, endpoint, transport) {
     configureTlsClient(socket, transport);
-    waitForConnectionReady(socket, () => socket.connect(endpoint));
+    socket.connect(endpoint);
+    waitForMonitorConnectionReady(monitor);
 }
 function handshakeRouterSender(port, control, status, sender, receiverRoutingId) {
     signalStatus(port, status, 'connected', 2);
@@ -270,6 +271,7 @@ function main() {
     applyContextPolicy(ctx);
     const payload = createPayload(msgSize);
     let socket = null;
+    let monitor = null;
     let activeReceiverRoutingId = receiverRoutingIdBytes
         ? zlink.RoutingId.from(Buffer.from(receiverRoutingIdBytes))
         : null;
@@ -277,48 +279,42 @@ function main() {
         switch (kind) {
             case 'pair':
                 socket = zlink.createPairSocket(ctx);
+                monitor = socket.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
                 applySocketPolicy(socket, options);
                 ctx.recalculateAutoHwm();
-                connectSender(kind, socket, endpoint, transport);
+                connectSender(socket, monitor, endpoint, transport);
                 break;
             case 'dealer_dealer':
                 socket = zlink.createDealerSocket(ctx);
+                monitor = socket.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
                 applySocketPolicy(socket, options);
                 ctx.recalculateAutoHwm();
-                connectSender(kind, socket, endpoint, transport);
+                connectSender(socket, monitor, endpoint, transport);
                 break;
             case 'dealer_router':
                 socket = zlink.createDealerSocket(ctx);
+                monitor = socket.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
                 applySocketPolicy(socket, options);
                 ctx.recalculateAutoHwm();
-                connectSender(kind, socket, endpoint, transport);
+                connectSender(socket, monitor, endpoint, transport);
                 break;
             case 'pubsub':
                 socket = zlink.createPubSocket(ctx);
+                monitor = socket.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
                 applySocketPolicy(socket, options);
                 ctx.recalculateAutoHwm();
                 configureTlsServer(socket, transport);
-                {
-                    const publisherMonitor = socket.monitorOpen([
-                        zlink.MonitorEventType.ConnectionReady
-                    ]);
-                    try {
-                        socket.bind(endpoint);
-                        trace('pubsub bound');
-                        signalStatus(port, status, 'bound', 1);
-                        // Match C setup_connected_pubsub_pair: both the connecting SUB
-                        // and the binding PUB must report CONNECTION_READY before the
-                        // post-ready settle and active publish window begin. This is
-                        // load-bearing for WSS, where the SUB-side event can precede the
-                        // server-side ready route used by publish and the wire stop token.
-                        waitForMonitorConnectionReady(publisherMonitor);
-                        trace('pubsub connection ready');
-                        signalStatus(port, status, 'connected', 2);
-                    }
-                    finally {
-                        publisherMonitor.close();
-                    }
-                }
+                socket.bind(endpoint);
+                trace('pubsub bound');
+                signalStatus(port, status, 'bound', 1);
+                // Match C setup_connected_pubsub_pair: both the connecting SUB
+                // and the binding PUB must report CONNECTION_READY before the
+                // post-ready settle and active publish window begin. This is
+                // load-bearing for WSS, where the SUB-side event can precede the
+                // server-side ready route used by publish and the wire stop token.
+                waitForMonitorConnectionReady(monitor);
+                trace('pubsub connection ready');
+                signalStatus(port, status, 'connected', 2);
                 break;
             case 'router_router': {
                 socket = zlink.createRouterSocket(ctx);
@@ -371,16 +367,16 @@ function main() {
         sendLoop(kind, socket, payload, duration, runId, msgSize, 1n, activeReceiverRoutingId, topic);
         trace('send loop done');
         if (kind === 'pair') {
-            emitSingleSocketHwmDetail(socket, 'PAIR', transport, 'sender', msgSize);
+            emitSingleSocketHwmDetail(monitor, socket, 'PAIR', transport, 'sender', msgSize);
         }
         else if (kind === 'dealer_dealer') {
-            emitSingleSocketHwmDetail(socket, 'DEALER_DEALER', transport, 'sender', msgSize);
+            emitSingleSocketHwmDetail(monitor, socket, 'DEALER_DEALER', transport, 'sender', msgSize);
         }
         else if (kind === 'dealer_router') {
-            emitSingleSocketHwmDetail(socket, 'DEALER_ROUTER', transport, 'sender', msgSize);
+            emitSingleSocketHwmDetail(monitor, socket, 'DEALER_ROUTER', transport, 'sender', msgSize);
         }
         else if (kind === 'pubsub') {
-            emitSingleSocketHwmDetail(socket, 'PUBSUB', transport, 'publisher', msgSize);
+            emitSingleSocketHwmDetail(monitor, socket, 'PUBSUB', transport, 'publisher', msgSize);
         }
         // C keeps the sender socket alive until the receiver has observed the
         // wire stop token and the sender thread is joined. The parent sends this
@@ -400,6 +396,12 @@ function main() {
         process.exitCode = 1;
     }
     finally {
+        try {
+            monitor?.close();
+        }
+        catch (err) {
+            console.error(`[perf] close failed: ${err}`);
+        }
         try {
             socket?.close();
         }

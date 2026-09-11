@@ -4,14 +4,14 @@ use std::fs;
 use std::future::Future;
 use std::io;
 use std::path::Path;
-use std::pin::{pin, Pin};
+use std::pin::{Pin, pin};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context as TaskContext, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use zlink::{
     Context, DealerSocket, Message, PairSocket, PubSocket, RequestResult, RouterSocket,
-    SocketMonitor, SubSocket, SubmitError, ZlinkError,
+    SocketMonitor, SubSocket, SubmitError, SubmitResult, ZlinkError,
 };
 
 // -- Metric header (29 bytes) ------------------------------------------------
@@ -154,7 +154,7 @@ thread_local! {
 }
 
 /// Registers the sender socket with a public `Poller` owned by this thread so
-/// `submit_now` drives parked SEND futures from that poller's `wait()` (the
+/// `submit_now` drives parked SEND admission stages from that poller's `wait()` (the
 /// application-owned completion path) instead of the binding reactor thread.
 pub fn drive_sends_with_poller(socket: &dyn zlink::Pollable) {
     let poller = zlink::Poller::new().expect("sender poller");
@@ -182,11 +182,14 @@ fn wait_for_send_progress() {
     }
 }
 
-pub fn submit_now<F>(future: F) -> Result<(), SubmitError>
-where
-    F: Future<Output = Result<(), SubmitError>>,
-{
-    let mut future = pin!(future);
+pub fn submit_now(
+    submission: Result<zlink::SendSubmission, SubmitError>,
+) -> Result<(), SubmitError> {
+    let submission = submission?;
+    if submission.result == zlink::SubmitResult::Ok {
+        return Ok(());
+    }
+    let mut future = pin!(submission.admitted);
     SENDER_WAKER.with(|waker| {
         let mut context = TaskContext::from_waker(waker);
         loop {
@@ -754,35 +757,6 @@ fn record_reqrep_completion(
 
 pub type RequestTask = Pin<Box<dyn Future<Output = Result<Vec<Message>, ZlinkError>> + Send>>;
 
-// PERF_SINGLE_TEST_POLICY.md 1.1.3 (D-BP40): the awaitable request terminal
-// never reports admission, so the runner reproduces the C reference boundary
-// from the admission window Core actually applied to this socket - the applied
-// SNDHWM bytes divided by one request's wire size. That is the same window
-// whose exhaustion makes the C runner see ZLINK_SUBMIT_BACKPRESSURED; it is not
-// a fixed number. A manual PERF_SINGLE_SNDHWM override does not reach the
-// auto-HWM snapshot, so it is read back from the socket option instead.
-pub fn reqrep_admission_window(
-    applied_sndhwm_bytes: u64,
-    option_sndhwm_bytes: u64,
-    wire_size: usize,
-) -> Result<usize, String> {
-    let hwm_bytes = if applied_sndhwm_bytes > 0 {
-        applied_sndhwm_bytes
-    } else {
-        option_sndhwm_bytes
-    };
-    if hwm_bytes == 0 {
-        return Err(
-            "requester socket reports no send high-water mark, so the admission window is unknown"
-                .to_string(),
-        );
-    }
-    let window = hwm_bytes / wire_size.max(1) as u64;
-    // One in-flight request is always allowed so a window narrower than a
-    // single message still makes progress.
-    Ok(window.max(1).min(usize::MAX as u64) as usize)
-}
-
 /// Poll every un-settled request once and aggregate the ones that finished.
 fn drain_reqrep_completions(
     requests: &mut Vec<RequestTask>,
@@ -810,11 +784,10 @@ fn drain_reqrep_completions(
 pub fn run_reqrep<S>(
     config: &PerfConfig,
     socket: &dyn zlink::Pollable,
-    admission_window: usize,
     mut submit: S,
 ) -> Result<StatsResult, String>
 where
-    S: FnMut(Message, Duration) -> RequestTask,
+    S: FnMut(Message, Duration) -> Result<zlink::RequestSubmission, ZlinkError>,
 {
     let request_timeout = Duration::from_millis(env_or_u64("PERF_SINGLE_REQREP_TIMEOUT_MS", 200));
     let drain_timeout = Duration::from_millis(env_or_u64(
@@ -826,6 +799,7 @@ where
     let mut stats = LatencyStats::new();
     let mut sequence = 1u64;
     let mut requests: Vec<RequestTask> = Vec::new();
+    let mut admission: Option<Pin<Box<dyn Future<Output = Result<(), SubmitError>> + Send>>> = None;
     let poller = zlink::Poller::new().map_err(|error| error.to_string())?;
     poller
         .add_socket(socket, zlink::POLLCOMPLETION, 0)
@@ -834,70 +808,77 @@ where
     let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
     let mut task_context = TaskContext::from_waker(&waker);
 
-    // C parity (perf_single_reqrep.hpp run_request_phase): one turn submits
-    // continuously without awaiting any reply until the applied admission
-    // window is full, drains completions without waiting every 64 submissions,
-    // and blocks bounded only once the window is saturated.
     while Instant::now() < active_deadline {
-        let mut submitted_since_progress = 0u32;
-        while Instant::now() < active_deadline && requests.len() < admission_window {
-            let mut payload =
-                Message::with_size(payload_size).map_err(|error| error.to_string())?;
-            encode_header(
-                payload.data_mut(),
-                PHASE_ACTIVE,
-                config.size as u32,
-                sequence,
-            );
-            sequence = sequence.wrapping_add(1);
-            // `RequestOp::submit` is lazy: admission happens on the first poll,
-            // which is where the C runner calls zlink_request_part(DONTWAIT).
-            let mut task = submit(payload, request_timeout);
-            match task.as_mut().poll(&mut task_context) {
-                Poll::Ready(outcome) => {
-                    record_reqrep_completion(outcome, config.size, &mut stats, true)?
+        let mut progressed = false;
+        if admission.is_none() {
+            while Instant::now() < active_deadline {
+                let mut payload =
+                    Message::with_size(payload_size).map_err(|error| error.to_string())?;
+                encode_header(
+                    payload.data_mut(),
+                    PHASE_ACTIVE,
+                    config.size as u32,
+                    sequence,
+                );
+                sequence = sequence.wrapping_add(1);
+                let submission =
+                    submit(payload, request_timeout).map_err(|error| error.to_string())?;
+                let result = submission.result;
+                requests.push(submission.reply);
+                progressed = true;
+                if result == SubmitResult::Backpressured {
+                    admission = Some(submission.admitted);
+                    break;
                 }
-                Poll::Pending => requests.push(task),
-            }
-            submitted_since_progress += 1;
-            if submitted_since_progress >= 64 {
-                submitted_since_progress = 0;
-                poller
-                    .wait(&mut events, 0)
-                    .map_err(|error| error.to_string())?;
-                drain_reqrep_completions(
-                    &mut requests,
-                    &mut task_context,
-                    &mut stats,
-                    config.size,
-                    true,
-                )?;
             }
         }
-        // The window is full (or the deadline passed): progress on this thread
-        // and block bounded so a saturated interval cannot spin.
-        poller
-            .wait(&mut events, 50)
-            .map_err(|error| error.to_string())?;
-        drain_reqrep_completions(
+
+        if let Some(stage) = admission.as_mut() {
+            if let Poll::Ready(result) = stage.as_mut().poll(&mut task_context) {
+                result.map_err(|error| error.to_string())?;
+                admission = None;
+                progressed = true;
+            }
+        }
+        progressed |= drain_reqrep_completions(
             &mut requests,
             &mut task_context,
             &mut stats,
             config.size,
             true,
         )?;
+        if !progressed && (admission.is_some() || !requests.is_empty()) {
+            poller
+                .wait(
+                    &mut events,
+                    active_deadline
+                        .saturating_duration_since(Instant::now())
+                        .as_millis()
+                        .max(1)
+                        .min(i64::MAX as u128) as i64,
+                )
+                .map_err(|error| error.to_string())?;
+        }
     }
 
     let drain_deadline = Instant::now() + drain_timeout;
-    while !requests.is_empty() && Instant::now() < drain_deadline {
-        let progressed = drain_reqrep_completions(
+    while (admission.is_some() || !requests.is_empty()) && Instant::now() < drain_deadline {
+        let mut progressed = false;
+        if let Some(stage) = admission.as_mut() {
+            if let Poll::Ready(result) = stage.as_mut().poll(&mut task_context) {
+                result.map_err(|error| error.to_string())?;
+                admission = None;
+                progressed = true;
+            }
+        }
+        progressed |= drain_reqrep_completions(
             &mut requests,
             &mut task_context,
             &mut stats,
             config.size,
             false,
         )?;
-        if !requests.is_empty() {
+        if admission.is_some() || !requests.is_empty() {
             let remaining = drain_deadline.saturating_duration_since(Instant::now());
             let wait_ms = if progressed {
                 0
@@ -909,7 +890,7 @@ where
                 .map_err(|error| error.to_string())?;
         }
     }
-    if !requests.is_empty() {
+    if admission.is_some() || !requests.is_empty() {
         return Err("request completion drain timed out".to_string());
     }
 
@@ -938,9 +919,13 @@ pub fn run_router_replier(router: RouterSocket) -> Result<(), String> {
         if payload.is_empty() {
             continue;
         }
-        let payload_part = Message::try_from(payload)
-            .map_err(|error| format!("reply payload allocation failed: {error}"))?;
-        let reply = request.reply().message(payload_part);
+        let reply = request.reply();
+        let payload_part = std::mem::take(&mut request)
+            .into_parts()
+            .into_iter()
+            .next()
+            .ok_or_else(|| "request reply payload is missing".to_string())?;
+        let reply = reply.message(payload_part);
         let result = if measurement_part_count() == 2 {
             reply
                 .message(Message::new().map_err(|error| error.to_string())?)

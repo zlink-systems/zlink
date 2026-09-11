@@ -444,7 +444,13 @@ C보다 좁거나 더 관용적일 수 있지만, 의미는 동일하게 유지�
 - context 생명주기, 옵션, shutdown, auto-HWM 재계산, version, 역할,
   strerror 헬퍼.
 - 메시지 ownership, multipart payload, routing id, received metadata, topic
-  메시지, subscription 이벤트.
+  메시지, subscription 이벤트. payload 공유·이전·복제는 공통 계약의
+  `Copy`/`Move`/`Clone`을 따른다: `Message Copy()`(ref-count 공유, 내부 `zlink_msg_copy`),
+  `void Move(Message dest)`(소유권 이전, 호출자 empty, `zlink_msg_move`),
+  `Message Clone()`(독립 버퍼 깊은 복사). .NET의 기존 `CopyTo(Span<byte>)`/
+  `CopyTo(IBufferWriter<byte>)`는 payload를 호출자 버퍼에 채우는 span-fill 메서드로 Message
+  deep copy(`Clone`)와 별개이므로 그대로 유지한다. 정의는
+  [Message ownership 공통 계약](../draft/message-ownership.ko.md) §"명시적 Copy / Move / Clone".
 - pair, dealer, router, pub, sub, xpub, xsub, stream socket.
 - 공통 옵션, 타입화된 socket 옵션, TLS, bind/connect/disconnect, routing id,
   channel name, request/reply, publish/subscribe, 콜백 표면.
@@ -605,7 +611,7 @@ Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`의 time
 - hot path에서는 reflection, dynamic invocation, 반복 boxing, 피할 수 있는
   할당, 피할 수 있는 버퍼 복사, 숨은 sleep, busy wait, thread join, 광범위한
   락을 사용하지 않는다.
-- 네이티브 interop은 core part 기판에서 직접 관리되는 `Message`, `Received`,
+- 네이티브 interop은 Core whole-message API가 한 번의 호출로 채운 배열에서 `Message`, `Received`,
   `TopicMessage` 값을 만든다. 공개 호출자 소유 `Received` 버퍼는
   `Received.Create()`로 만든다.
 - 반복 publish를 drain하는 호출자는 현재 소비자가 작업을 마친 뒤
@@ -673,7 +679,7 @@ Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`의 time
 
 .NET package 정보는 [배포 metadata](../../../dotnet/src/Zlink/Zlink.csproj)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-.NET은 blocking `Submit()`과 `Task`를 반환하는 `Async(CancellationToken)`을 제공한다.
+.NET은 blocking `Submit()`과 결과 객체(`SendSubmission`/`RequestSubmission`: `Result`와 `Admitted`, request는 `Reply`)를 돌려주는 `Async(CancellationToken)`을 제공한다.
 Caller wait 취소 입력은 `CancellationToken`이다.
 
 Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
@@ -691,11 +697,24 @@ Token은 numeric constructor, raw accessor, ordering, serialization과 `IDisposa
 ### Public interface
 
 ```csharp
+public readonly struct SendSubmission
+{
+    public SubmitResult Result { get; }   // OK | BACKPRESSURED, 제출 시점 스냅샷
+    public Task Admitted { get; }          // OK면 완료 상태
+}
+
+public readonly struct RequestSubmission
+{
+    public SubmitResult Result { get; }
+    public Task Admitted { get; }
+    public Task<IReadOnlyList<Message>> Reply { get; }   // Admitted 성공 뒤 완료
+}
+
 public interface SendSubmitOperation
 {
     SendSubmitOperation Message(Message message);
     void Submit();
-    Task Async(CancellationToken cancellationToken = default);
+    SendSubmission Async(CancellationToken cancellationToken = default);
 }
 
 public interface RequestSubmitOperation
@@ -703,8 +722,7 @@ public interface RequestSubmitOperation
     RequestSubmitOperation Message(Message message);
     RequestSubmitOperation Timeout(TimeSpan timeout);
     IReadOnlyList<Message> Submit();
-    Task<IReadOnlyList<Message>> Async(
-        CancellationToken cancellationToken = default);
+    RequestSubmission Async(CancellationToken cancellationToken = default);
 }
 
 public interface ReplySubmitOperation

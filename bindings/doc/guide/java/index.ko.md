@@ -260,6 +260,37 @@ try (Message msg = Message.from("data")) {
 } // submit이 예외를 던지면 try-with-resources가 msg를 닫음
 ```
 
+### 공유·이전·복제 (copy / move / clone)
+
+`Message` payload를 다루는 세 가지 명시적 동작입니다. 이름과 의미는 모든 바인딩에서
+동일하며 Core C API(`zlink_msg_copy`/`zlink_msg_move`)와 1:1로 대응합니다.
+
+| 동작 | 시그니처 | 의미 | 언제 |
+|------|----------|------|------|
+| `copy()` | `Message copy()` | **ref-count 공유** — 같은 버퍼를 가리키는 새 `Message`, 원본 유효 유지 | 같은 payload를 보관하며 원본도 계속 써야 할 때 |
+| `move(dest)` | `void move(Message dest)` | **소유권 이전** — `dest`로 넘기고 호출자는 empty | 받은 메시지를 사본 없이 그대로 다시 보낼 때(relay/echo) |
+| `clone()` | `Message clone()` | **깊은 복사** — 독립 버퍼 | 복제 후 payload를 독립적으로 수정할 때 |
+
+```java
+// Copy: 같은 버퍼를 공유하는 새 핸들. 둘 다 각자 close.
+try (Message shared = msg.copy()) {
+    socket.send().message(shared).submit_sync();   // shared는 소비됨
+}
+// msg는 여전히 유효
+
+// Move: 받은 메시지를 사본 없이 그대로 echo (가장 효율적)
+Message out = new Message();
+receivedPart.move(out);                             // receivedPart는 empty가 됨
+socket.send(routingId).message(out).submit_sync();
+
+// Clone: 독립 복제 후 수정
+try (Message dup = msg.clone()) { /* ... */ }
+```
+
+> `copy()`는 ref-share이므로 mutation 격리를 보장하지 않습니다 — 독립 수정은 `clone()`을
+> 쓰세요. (기존 `sharedCopyOf`/`moveInto`/`moveTo`는 공개 API가 아니라 내부 경로였으므로
+> 공개 표면 변화는 `copy`/`move`/`clone` 추가뿐입니다.)
+
 ---
 
 ## 에러 처리
@@ -306,9 +337,9 @@ try (Message msg = Message.from("data")) {
 | `zlink_close(socket)` | `socket.close()` |
 | `zlink_bind(socket, ep)` | `socket.bind(ep)` |
 | `zlink_connect(socket, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + NONE | `socket.send().message(m).submit_sync()` |
+| `zlink_send(..., parts, count, ...)` / `zlink_send_rid(..., parts, count, ...)` + NONE | `socket.send().message(m).submit_sync()` |
 | DONTWAIT send + completion pull | `socket.send().message(m).submit()` (`CompletionStage`) |
-| `zlink_recv_part(...)` | `socket.recv(received, flags)` |
+| `zlink_recv(..., parts_out, capacity, count_out, ...)` | `socket.recv(received, flags)` |
 | `zlink_msg_data(msg)` | `msg.data()` |
 | `zlink_msg_size(msg)` | `msg.size()` |
 | `zlink_msg_close(msg)` | `msg.close()` |

@@ -196,7 +196,35 @@ dispose of it** — always with `using` (or `await using`).
 - Dispose sockets **before** the context that created them.
 - The reply parts returned by `Request().Async()`/`Join(...).Async()`
   (`IReadOnlyList<Message>`) are **owned by the caller** — dispose them after use.
-- To hold onto a span, copy it first with `ToArray()`/`CopyTo(...)`.
+- To hold onto a span, copy it first with `ToArray()`/`AsReadOnlyMemory()`.
+
+### Share / Move / Clone (Copy / Move / Clone)
+
+Three explicit `Message` payload operations, with the same name and meaning across every
+binding, mapping 1:1 to the Core C API (`zlink_msg_copy`/`zlink_msg_move`).
+
+| Operation | Signature | Meaning | When |
+|------|----------|------|------|
+| `Copy()` | `Message Copy()` | **ref-count share** — new `Message` on the same buffer, original stays valid | keep the same payload while still using the original |
+| `Move(dest)` | `void Move(Message dest)` | **ownership transfer** — hands off to `dest`, caller left empty | re-send a received message with no copy (relay/echo) |
+| `Clone()` | `Message Clone()` | **deep copy** — independent buffer | mutate the duplicate independently |
+
+```csharp
+using Message shared = msg.Copy();
+socket.Send().Message(shared).Submit();   // shared is consumed
+// msg is still valid
+
+var outMsg = new Message();
+receivedPart.Move(outMsg);                 // receivedPart becomes empty
+socket.Send(routingId).Message(outMsg).Submit();
+
+using Message dup = msg.Clone();
+```
+
+> `Copy()` is a ref-share and does not guarantee mutation isolation — use `Clone()` for an
+> independently mutable payload. .NET's `CopyTo(Span<byte>)`/`CopyTo(IBufferWriter<byte>)`
+> are span-fill methods (they write the payload into a buffer, separate from the `Clone`
+> deep copy) and stay unchanged.
 
 For thread-safety rules, see [thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/).
 `IContext` is safe to share across threads. **Sockets are not** — never call the
@@ -266,18 +294,18 @@ for the full list of C functions.
 | Message creation | `zlink_msg_init` / `_init_size` / `_init_data` | `new Message(size)` / `Message.From(...)` |
 | Message access | `zlink_msg_data` / `zlink_msg_size` | `Message.AsReadOnlySpan()` / `Message.Size` |
 | Message release | `zlink_msg_close` / `zlink_multipart_close` | `Message.Dispose()` / `Zlink.MultipartClose(parts)` |
-| Synchronous send | `zlink_send_part` (+`_rid`) with NONE | `socket.Send().Message(...).Submit()` |
+| Synchronous send | `zlink_send` / `zlink_send_rid` (part array + count, NONE) | `socket.Send().Message(...).Submit()` |
 | Asynchronous send | DONTWAIT send + completion pull | `await socket.Send().Message(...).Async()` |
-| Receive | `zlink_recv_part` | `socket.Recv(Received)` |
-| Request / reply | `zlink_request_part` / `zlink_reply_part` | `dealer.Request()....Async()` / `router.Reply(rid, token)` |
-| Subscribe | `zlink_set_subscription` / `zlink_subscribe_part` | `socket.SetSubscription(...)` / `socket.Subscribe(TopicMessage)` |
+| Receive | `zlink_recv` (output array + capacity + count) | `socket.Recv(Received)` |
+| Request / reply | `zlink_request` / `zlink_reply` | `dealer.Request()....Async()` / `router.Reply(rid, token)` |
+| Subscribe | `zlink_set_subscription` / `zlink_subscribe` | `socket.SetSubscription(...)` / `socket.Subscribe(TopicMessage)` |
 | Monitor | `zlink_socket_monitor_open` / `_recv` | `socket.MonitorOpen(...)` / `monitor.Recv()` |
 | Poller / timer | `zlink_poller_*` / `zlink_timer_*` | `Zlink.CreatePoller()` / `Zlink.CreateTimer()` |
 | Proxy | `zlink_proxy` | `Zlink.Proxy(...)` |
 
-> **Naming convention**: C's `snake_case` becomes `PascalCase` in .NET. The C
-> `*_part` family (the multipart substrate) is represented in .NET as accumulated
-> `.Message(...)` calls on a fluent builder — the public shape follows language
+> **Naming convention**: C's `snake_case` becomes `PascalCase` in .NET. C's
+> whole-message array and count are represented in .NET as accumulated
+> `.Message(...)` calls on a fluent builder. The public shape follows language
 > convention, but the semantic contract is the same.
 
 ---

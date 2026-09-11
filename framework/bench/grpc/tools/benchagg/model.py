@@ -24,10 +24,14 @@ from typing import Any
 #: are dropped with a note rather than silently folded into a table.
 PATTERNS: tuple[str, ...] = (
     "request-serial",
-    "request-window",
     "request-backpressure",
     "send-saturation",
 )
+
+#: Old reports remain readable so the normalizer can diagnose archived runs,
+#: but these patterns are never rendered or used by the current bench grid.
+LEGACY_INPUT_PATTERNS: tuple[str, ...] = ("request-window",)
+INPUT_PATTERNS: tuple[str, ...] = PATTERNS + LEGACY_INPUT_PATTERNS
 
 #: Payload sizes the spec fixes (spec 2, spec 3).
 PAYLOAD_SIZES: tuple[int, ...] = (1024, 4096)
@@ -61,15 +65,14 @@ CLIENT_SATURATION_FRACTION = 0.95
 #: spec 7.2: the default reference pattern for the two ratios. The spec makes
 #: ``request-backpressure`` the reference, because a ratio taken under a depth
 #: the numerator never reaches reports that imposed depth rather than the layer
-#: cost. ``request-window`` stays selectable so the fixed-depth judgement can be
-#: computed and reported beside it. Only the pattern this selects changes: the
-#: 0.80 threshold, the G5 spread limit and the both-payloads rule do not.
+#: cost. The 0.80 threshold, the G5 spread limit and the both-payloads rule do
+#: not change.
 JUDGEMENT_PATTERN = "request-backpressure"
 
 
 @dataclass(frozen=True, order=True)
 class CellKey:
-    """One cell of the 18-cell grid: implementation, pattern, payload size."""
+    """One cell of the current grid: implementation, pattern, payload size."""
 
     implementation: str
     pattern: str

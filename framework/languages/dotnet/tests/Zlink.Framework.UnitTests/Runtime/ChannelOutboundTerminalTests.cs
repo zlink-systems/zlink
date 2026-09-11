@@ -222,7 +222,7 @@ public sealed class ChannelOutboundTerminalTests
                         ZLinkMessageParts.DisposeAll(await dealer.Request()
                             .Message(hello)
                             .Timeout(TimeSpan.FromSeconds(5))
-                            .Async(CancellationToken.None));
+                            .Async(CancellationToken.None).Reply);
                         break;
                     }
                     catch (ZlinkSubmitException) when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
@@ -235,7 +235,7 @@ public sealed class ChannelOutboundTerminalTests
                 //  and now additionally records zlink.dispatch_error(invalid_frame).
                 await dealer.Send()
                     .Message(Message.From("{"))
-                    .Async(CancellationToken.None);
+                    .Async(CancellationToken.None).Admitted;
 
                 await WaitUntilAsync(
                     () => DispatchErrors(activities, "mal-work").Any(),
@@ -289,7 +289,7 @@ public sealed class ChannelOutboundTerminalTests
             sourceNodeRid: RoutingId.From("reject-source"),
             spotId: "reject-spot",
             requestSeq: 1UL,
-            reply: (replyParts, _) =>
+            reply: replyParts =>
             {
                 replies.Add(replyParts
                     .Select(static part => Message.From(part.AsReadOnlySpan()))

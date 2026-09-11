@@ -50,7 +50,7 @@ public sealed class test_socket_concurrency
                     await dealer.Send()
                         .Message(header)
                         .Message(body)
-                        .Async();
+                        .Async().Admitted;
                 }
             }))
             .ToArray();
@@ -100,7 +100,7 @@ public sealed class test_socket_concurrency
                     await router.Send(target)
                         .Message(header)
                         .Message(body)
-                        .Async();
+                        .Async().Admitted;
                 }
             }))
             .ToArray();

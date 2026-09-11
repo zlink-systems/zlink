@@ -91,7 +91,7 @@ struct actor_message_follow_target_t
 // Captured at mark_reconcile time (the FINALIZE call site already holds all
 // of this -- no Location Store re-derivation needed later) so a reconcile
 // deadline can reconcile against the Location Store's authority instead of
-// blindly replaying locally. See reconcile_keys_expired.
+// blindly replaying locally. See take_due_reconciles.
 struct reconcile_target_context_t
 {
     spot_route_t target_route;
@@ -202,14 +202,14 @@ class actor_transfer_coordinator_t
     void mark_reconcile (const std::string &actor_key,
                         std::chrono::steady_clock::duration bound,
                         std::optional<reconcile_target_context_t> context = std::nullopt);
-    // Returns every reconcile-phase move whose bound has passed, together
-    // with the target identity captured when it entered reconcile (if any).
+    // Takes due reconcile moves with the captured target identity and advances
+    // their existing deadline to the next management attempt.
     // The caller reconciles against the Location Store's authority (spec 28
     // relay-ready irreversibility: never blind-replay locally once FINALIZE
-    // may have reached the target) -- see move_state_t's reconcile_deadline
+    // may have reached the target) -- see move_state_t's next_reconcile_at
     // comment.
     std::vector<expired_reconcile_t>
-    reconcile_keys_expired (std::chrono::steady_clock::time_point now) const;
+    take_due_reconciles (std::chrono::steady_clock::time_point now);
     // Returns the out→commit-ack elapsed time when the completed move was a
     // source-remote transfer (runtime-metrics §4.3 duration window); local
     // moves complete with nullopt.
@@ -361,6 +361,8 @@ class actor_transfer_coordinator_t
     std::vector<expired_actor_admission_t>
     cleanup_expired (std::chrono::steady_clock::time_point now);
     std::size_t pending_count () const;
+    std::optional<std::chrono::steady_clock::time_point> next_activity () const;
+    void set_activity_handler (std::function<void ()> handler);
 
     std::string next_transfer_id (const std::string &node_rid);
 
@@ -376,9 +378,9 @@ class actor_transfer_coordinator_t
         // tell whether the target ever received it) where nothing today
         // reconciles against authority truth. Bound it so a stuck reconcile
         // cannot park requests in the backlog forever (spec 28: never
-        // unbounded queueing) -- reconcile_keys_expired reports it once this
-        // passes so the caller can reconcile against the Location Store.
-        std::optional<std::chrono::steady_clock::time_point> reconcile_deadline;
+        // unbounded queueing). After that first bound, this same timestamp
+        // schedules the next management reconciliation attempt.
+        std::optional<std::chrono::steady_clock::time_point> next_reconcile_at;
         // Target identity captured at mark_reconcile time so the deadline
         // handler can adopt the target route (spec 28) without a second
         // Location Store resolver lookup for the target's spot address.
@@ -413,6 +415,7 @@ class actor_transfer_coordinator_t
 
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
+    std::function<void ()> _activity_handler;
     std::map<std::string, move_state_t> _moves;
     std::map<std::string, pending_actor_admission_t> _admissions;
     std::map<std::string, pending_actor_admission_t> _completed_admissions;

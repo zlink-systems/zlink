@@ -8,6 +8,8 @@
 
 - 작업 전에 `git branch --show-current`를 확인하고, 사용자가 지정한 branch에서만 수정, commit과
   push를 수행한다. 어느 branch인지 분명하지 않으면 먼저 묻는다.
+  작업 단위는 Issue 브랜치(`<area>/<issue번호>-<slug>`)와 worktree이며, main은 PR로만 바뀐다
+  (`doc/principal/dev/development-workflow.ko.md`).
 - 변경이 있는 worktree에서는 먼저 범위를 보고하며, 승인 없이 branch 전환, `reset`, `restore`,
   강제 checkout 또는 삭제를 하지 않는다.
 - 기존 변경과 untracked 파일은 사용자 작업이다. 요청 범위 밖의 변경을 수정하거나 정리하지 않는다.

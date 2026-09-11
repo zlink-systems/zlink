@@ -122,19 +122,18 @@ static int receive_request (void *router,
 {
     const zlink_routing_id_t *source = NULL;
     zlink_msg_t part;
-    zlink_part_flag_t flag = ZLINK_PART_MORE;
-    CHECK (zlink_msg_init (&part) == ZLINK_CONFIG_OK);
-    CHECK (zlink_router_recv_part (router, &source, token_out, &part, &flag,
-                                   ZLINK_RECV_FLAGS_NONE)
+    size_t part_count = 0;
+    CHECK (zlink_router_recv (router, &source, token_out, &part, 1, &part_count,
+                              ZLINK_RECV_FLAGS_NONE)
            == ZLINK_RECV_OK);
     CHECK (source != NULL);
-    CHECK (flag == ZLINK_PART_FINAL);
+    CHECK (part_count == 1);
     CHECK (zlink_msg_size (&part) <= payload_capacity);
     *source_out = *source;
     *payload_size_out = zlink_msg_size (&part);
     if (*payload_size_out != 0)
         memcpy (payload_out, zlink_msg_data (&part), *payload_size_out);
-    CHECK (zlink_msg_close (&part) == ZLINK_CONFIG_OK);
+    zlink_multipart_close (&part, part_count);
     return 0;
 }
 
@@ -146,7 +145,7 @@ static int reply_request (void *router,
 {
     zlink_msg_t reply;
     CHECK (init_part (&reply, payload, payload_size) == 0);
-    CHECK (zlink_reply_part (router, source, token, &reply, ZLINK_PART_FINAL)
+    CHECK (zlink_reply (router, source, token, &reply, 1)
            == ZLINK_SUBMIT_OK);
     CHECK (check_part_consumed (&reply) == 0);
     return 0;
@@ -163,10 +162,8 @@ static int prime_route (void *sender, void *receiver, const zlink_routing_id_t *
     zlink_msg_t part;
     CHECK (init_part (&part, payload, sizeof (payload) - 1) == 0);
     const zlink_submit_result_t result =
-      target ? zlink_send_part_rid (sender, target, &part, ZLINK_SEND_FLAGS_NONE,
-                                    ZLINK_PART_FINAL, NULL, &id)
-             : zlink_send_part (sender, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL,
-                                &id);
+      target ? zlink_send_rid (sender, target, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, &id)
+             : zlink_send (sender, &part, 1, ZLINK_SEND_FLAGS_NONE, NULL, &id);
     CHECK (result == ZLINK_SUBMIT_OK);
     CHECK (id == 0);
     CHECK (check_part_consumed (&part) == 0);
@@ -192,9 +189,8 @@ static int fill_requests (void *sender,
         zlink_completion_id_t id = 0;
         CHECK (init_part (&part, payload, PAYLOAD_SIZE) == 0);
         errno = 0;
-        const zlink_submit_result_t result = zlink_request_part (
-          sender, target, &part, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 120000,
-          context, &id);
+        const zlink_submit_result_t result = zlink_request (
+          sender, target, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT, 120000, context, &id);
         CHECK (check_part_consumed (&part) == 0);
         if (result == ZLINK_SUBMIT_BACKPRESSURED) {
             CHECK (zlink_errno () == EAGAIN);
@@ -294,8 +290,8 @@ static int test_hwm_retry (int iteration)
     zlink_msg_t retry;
     zlink_completion_id_t request_id = 0;
     CHECK (init_part (&retry, logical_payload, sizeof (logical_payload)) == 0);
-    CHECK (zlink_request_part (dealer, NULL, &retry, ZLINK_SEND_FLAGS_DONTWAIT,
-                               ZLINK_PART_FINAL, 120000, &request_context, &request_id)
+    CHECK (zlink_request (dealer, NULL, &retry, 1, ZLINK_SEND_FLAGS_DONTWAIT,
+                          120000, &request_context, &request_id)
            == ZLINK_SUBMIT_OK);
     CHECK (request_id != 0);
     CHECK (request_id != wait_token);
@@ -360,8 +356,8 @@ static int test_connect_before_bind_and_mixed_tokens (int iteration)
     zlink_msg_t request;
     CHECK (init_part (&request, "connect-before-bind-request", 27) == 0);
     errno = 0;
-    CHECK (zlink_request_part (dealer, NULL, &request, ZLINK_SEND_FLAGS_DONTWAIT,
-                               ZLINK_PART_FINAL, 1, &request_context, &request_wait_token)
+    CHECK (zlink_request (dealer, NULL, &request, 1, ZLINK_SEND_FLAGS_DONTWAIT,
+                          1, &request_context, &request_wait_token)
            == ZLINK_SUBMIT_BACKPRESSURED);
     CHECK (zlink_errno () == EAGAIN);
     CHECK (request_wait_token != 0);
@@ -372,8 +368,8 @@ static int test_connect_before_bind_and_mixed_tokens (int iteration)
     zlink_msg_t send;
     CHECK (init_part (&send, "mixed-send", 10) == 0);
     errno = 0;
-    CHECK (zlink_send_part (dealer, &send, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
-                            &send_context, &send_wait_token)
+    CHECK (zlink_send (dealer, &send, 1, ZLINK_SEND_FLAGS_DONTWAIT,
+                       &send_context, &send_wait_token)
            == ZLINK_SUBMIT_BACKPRESSURED);
     CHECK (zlink_errno () == EAGAIN);
     CHECK (send_wait_token != 0);
@@ -416,8 +412,8 @@ static int test_connect_before_bind_and_mixed_tokens (int iteration)
 
     zlink_completion_id_t request_id = 0;
     CHECK (init_part (&request, "connect-before-bind-request", 27) == 0);
-    CHECK (zlink_request_part (dealer, NULL, &request, ZLINK_SEND_FLAGS_DONTWAIT,
-                               ZLINK_PART_FINAL, WAIT_MS, &request_context, &request_id)
+    CHECK (zlink_request (dealer, NULL, &request, 1, ZLINK_SEND_FLAGS_DONTWAIT,
+                          WAIT_MS, &request_context, &request_id)
            == ZLINK_SUBMIT_OK);
     CHECK (request_id != 0);
     CHECK (check_part_consumed (&request) == 0);
@@ -466,8 +462,8 @@ static int test_close_reclaims_token (int iteration)
     zlink_completion_id_t wait_token = 0;
     zlink_msg_t request;
     CHECK (init_part (&request, "close-token", 11) == 0);
-    CHECK (zlink_request_part (dealer, NULL, &request, ZLINK_SEND_FLAGS_DONTWAIT,
-                               ZLINK_PART_FINAL, 1, &request_context, &wait_token)
+    CHECK (zlink_request (dealer, NULL, &request, 1, ZLINK_SEND_FLAGS_DONTWAIT,
+                          1, &request_context, &wait_token)
            == ZLINK_SUBMIT_BACKPRESSURED);
     CHECK (wait_token != 0);
     CHECK (check_part_consumed (&request) == 0);

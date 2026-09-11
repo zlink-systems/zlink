@@ -1,23 +1,38 @@
 package main
 
 import (
+	"context"
 	"runtime"
 	"testing"
 	"time"
+
+	zlink "zlink.systems/zlink"
 )
+
+type testSendSubmission struct {
+	result  zlink.SubmitResult
+	release <-chan struct{}
+}
+
+func (s testSendSubmission) Result() zlink.SubmitResult { return s.result }
+func (s testSendSubmission) Admitted(context.Context) error {
+	if s.release != nil {
+		<-s.release
+	}
+	return nil
+}
 
 func TestMultiSendTurnWaitsForSocketAdmission(t *testing.T) {
 	coordinator := newMultiSendTurnCoordinator(2)
 	release := []chan struct{}{make(chan struct{}), make(chan struct{})}
 	started := make(chan int, 3)
-	submit := func(index int) error {
+	submit := func(index int) (zlink.SendSubmission, error) {
 		started <- index
-		<-release[index]
-		return nil
+		return testSendSubmission{result: zlink.SubmitBackpressured, release: release[index]}, nil
 	}
 	stopAt := time.Now().Add(time.Second)
 
-	if coordinator.submitRound(stopAt, submit) != 2 {
+	if submitted, err := coordinator.submitRound(stopAt, submit); err != nil || submitted != 2 {
 		t.Fatal("first round submitted no sockets")
 	}
 	seen := map[int]bool{}
@@ -29,7 +44,7 @@ func TestMultiSendTurnWaitsForSocketAdmission(t *testing.T) {
 			t.Fatal("first round did not start every socket")
 		}
 	}
-	if coordinator.submitRound(stopAt, submit) != 0 {
+	if submitted, err := coordinator.submitRound(stopAt, submit); err != nil || submitted != 0 {
 		t.Fatal("pending sockets were submitted again before admission completed")
 	}
 
@@ -42,7 +57,7 @@ func TestMultiSendTurnWaitsForSocketAdmission(t *testing.T) {
 	if err != nil || !progressed {
 		t.Fatalf("drainReady() = (%v, %v), want (true, nil)", progressed, err)
 	}
-	if coordinator.submitRound(stopAt, submit) != 1 {
+	if submitted, err := coordinator.submitRound(stopAt, submit); err != nil || submitted != 1 {
 		t.Fatal("completed socket was not available in the next round")
 	}
 	select {

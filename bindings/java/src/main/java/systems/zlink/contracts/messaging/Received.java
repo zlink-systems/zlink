@@ -21,7 +21,6 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -40,7 +39,7 @@ public final class Received implements AutoCloseable {
     private boolean hasReplyToken;
     private ReplyToken replyToken;
     private BiConsumer<List<Message>, SendFlags> replySender;
-    private Function<List<Message>, CompletionStage<Void>> sendSubmitter;
+    private Function<List<Message>, SendSubmission> sendSubmitter;
     private Consumer<List<Message>> sendBlockingSubmitter;
     private ContractAccess.RoutedReplyInvoker routedReplySender;
     private byte[] routingIdBytes;
@@ -172,7 +171,7 @@ public final class Received implements AutoCloseable {
             @Override
             public void setSendSubmitters(
               Received received,
-              Function<List<Message>, CompletionStage<Void>> submitter,
+              Function<List<Message>, SendSubmission> submitter,
               Consumer<List<Message>> blockingSubmitter) {
                 received.setSendSubmitters(submitter, blockingSubmitter);
             }
@@ -646,7 +645,7 @@ public final class Received implements AutoCloseable {
     }
 
     void setSendSubmitters(
-      Function<List<Message>, CompletionStage<Void>> submitter,
+      Function<List<Message>, SendSubmission> submitter,
       Consumer<List<Message>> blockingSubmitter) {
         this.sendSubmitter = Objects.requireNonNull(submitter, "submitter");
         this.sendBlockingSubmitter = Objects.requireNonNull(
@@ -681,7 +680,7 @@ public final class Received implements AutoCloseable {
         }
 
         @Override
-        public CompletionStage<Void> submit() {
+        public SendSubmission submit() {
             List<Message> messages = beginSubmit();
             if (sendSubmitter == null)
                 throw new ZlinkSubmitException(SubmitResult.INVALID_STATE);
