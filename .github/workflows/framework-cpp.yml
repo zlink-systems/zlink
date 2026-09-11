@@ -59,7 +59,8 @@ jobs:
               build-essential cmake ninja-build git pkg-config curl \
               libboost-all-dev libgtest-dev libgmock-dev liblz4-dev \
               libuv1-dev nlohmann-json3-dev libssl-dev \
-              protobuf-compiler libprotobuf-dev
+              protobuf-compiler libprotobuf-dev \
+              ripgrep
 
       - name: Cache hiredis and redis-plus-plus
         id: redis-cache
@@ -185,6 +186,7 @@ jobs:
           # No test is excluded. sample_parity, layout_contract and
           # common_e2e_inventory were once believed to fail on main; they pass,
           # and all three read only the source tree, so BUILD_SAMPLES=OFF and
-          # BUILD_E2E=OFF above do not change their result.
+          # BUILD_E2E=OFF above do not change their result. common_e2e_inventory
+          # shells out to rg, which is why ripgrep is installed above.
           ctest --preset linux-ninja-release \
             -L 'framework-unit|framework-contract'
