@@ -44,11 +44,30 @@ mesh_record_dispatcher_t::dispatch (
     runtime::messaging::envelope_codec_t codec;
     auto header = codec.decode_header (
       message_parts, message_flow_tracer_t (_dispatch_options).capture_enabled ());
+    return dispatch (record, std::move (message_parts), std::move (header));
+}
+
+result_t<void>
+mesh_record_dispatcher_t::dispatch (
+  const runtime::host::receive_record_t &record,
+  runtime::messaging::message_parts_t message_parts,
+  result_t<runtime::messaging::envelope_header_t> header) const
+{
     if (!header) {
         return detail::propagate_failure<void> (header, "MeshNode envelope header decode failed");
     }
+    return dispatch (record, std::move (message_parts), header.value ());
+}
+
+result_t<void>
+mesh_record_dispatcher_t::dispatch (
+  const runtime::host::receive_record_t &record,
+  runtime::messaging::message_parts_t message_parts,
+  const runtime::messaging::envelope_header_t &header) const
+{
+    using record_kind_t = runtime::host::record_kind_t;
     const std::string dispatch_channel =
-      record.channel_name.empty () ? header.value ().channel_name : record.channel_name;
+      record.channel_name.empty () ? header.channel_name : record.channel_name;
     const auto channel_dispatch =
       record.kind == record_kind_t::channel_send
       || record.kind == record_kind_t::channel_request;
@@ -62,7 +81,7 @@ mesh_record_dispatcher_t::dispatch (
       _before_application_handler);
     auto dispatched = dispatcher.dispatch (
       route_received_packet_t{record.source_node_rid, {}, std::move (message_parts), {}},
-      std::move (header.value ()));
+      header);
     if (!dispatched) {
         return detail::propagate_failure<void> (dispatched, "MeshNode handler dispatch failed");
     }

@@ -13044,14 +13044,46 @@ std::size_t spot_node_runtime_t::active_user_spot_count () const
     }).get ();
 }
 
-bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &owner,
-                                                const service::receive_record_t &record,
-                                                std::vector<zlink::message_t> &parts,
-                                                service_provider_t &services,
-                                                serializer_registry_t &serializers,
-                                                std::function<void ()> deferred_terminal,
-                                                bool *terminal_deferred,
-                                                std::function<void ()> before_application_handler)
+bool spot_node_runtime_t::is_framework_node_mesh_packet (
+  service::owner_kind_t owner_kind, service::record_kind_t record_kind,
+  std::string_view packet_name) noexcept
+{
+    return spot_route_internal_dispatcher_t::is_framework_node_packet (
+             owner_kind, record_kind, packet_name)
+           || (owner_kind == service::owner_kind_t::node
+               && record_kind == service::record_kind_t::node_send
+               && packet_name == actor_handoff_terminal_packet);
+}
+
+bool spot_node_runtime_t::dispatch_mesh_record (
+  const service::ready_record_t &owner, const service::receive_record_t &record,
+  std::vector<zlink::message_t> &parts, service_provider_t &services,
+  serializer_registry_t &serializers, std::function<void ()> deferred_terminal,
+  bool *terminal_deferred, std::function<void ()> before_application_handler)
+{
+    return dispatch_mesh_record_impl (
+      owner, record, parts, services, serializers, std::move (deferred_terminal),
+      terminal_deferred, std::move (before_application_handler), nullptr);
+}
+
+bool spot_node_runtime_t::dispatch_node_internal_mesh_record (
+  const service::ready_record_t &owner, const service::receive_record_t &record,
+  std::vector<zlink::message_t> &parts,
+  const runtime::messaging::envelope_header_t &header, service_provider_t &services,
+  serializer_registry_t &serializers, std::function<void ()> deferred_terminal,
+  bool *terminal_deferred, std::function<void ()> before_application_handler)
+{
+    return dispatch_mesh_record_impl (
+      owner, record, parts, services, serializers, std::move (deferred_terminal),
+      terminal_deferred, std::move (before_application_handler), &header);
+}
+
+bool spot_node_runtime_t::dispatch_mesh_record_impl (
+  const service::ready_record_t &owner, const service::receive_record_t &record,
+  std::vector<zlink::message_t> &parts, service_provider_t &services,
+  serializer_registry_t &serializers, std::function<void ()> deferred_terminal,
+  bool *terminal_deferred, std::function<void ()> before_application_handler,
+  const runtime::messaging::envelope_header_t *predecoded_header)
 {
     if (terminal_deferred)
         *terminal_deferred = false;
@@ -13073,24 +13105,33 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                              && (record.kind == service::record_kind_t::node_send
                                  || record.kind == service::record_kind_t::node_request);
     if (spot_record || node_record) {
-        const auto route_client =
-          _state->route_client_lane.run ([&] { return _state->route_client; }).get ();
-        if (!route_client)
-            return false;
-
-        runtime::messaging::message_parts_t encoded (std::move (parts));
-        runtime::messaging::envelope_codec_t codec;
-        auto header = codec.decode_header (
-          encoded, detail::message_flow_tracer_t (_state->dispatch).capture_enabled ());
-        if (!header) {
-            parts = std::move (encoded).take_items ();
-            return false;
+        std::optional<route_client_t> route_client;
+        if (spot_record) {
+            route_client =
+              _state->route_client_lane.run ([&] { return _state->route_client; }).get ();
+            if (!route_client)
+                return false;
         }
+        runtime::messaging::message_parts_t encoded (std::move (parts));
+        runtime::messaging::envelope_header_t decoded_header;
+        if (predecoded_header) {
+            decoded_header = *predecoded_header;
+        } else {
+            runtime::messaging::envelope_codec_t codec;
+            auto decoded = codec.decode_header (
+              encoded, detail::message_flow_tracer_t (_state->dispatch).capture_enabled ());
+            if (!decoded) {
+                parts = std::move (encoded).take_items ();
+                return false;
+            }
+            decoded_header = std::move (decoded.value ());
+        }
+        const auto &header = decoded_header;
+        runtime::messaging::envelope_codec_t codec;
         if (node_record && record.kind == service::record_kind_t::node_send
-            && header.value ().message_name == actor_handoff_terminal_packet) {
-            const auto terminal_route = handoff_terminal_route (header.value ().metadata);
-            const auto success =
-              handoff_u64 (header.value ().metadata, actor_handoff_terminal_success_key);
+            && header.message_name == actor_handoff_terminal_packet) {
+            const auto terminal_route = handoff_terminal_route (header.metadata);
+            const auto success = handoff_u64 (header.metadata, actor_handoff_terminal_success_key);
             if (!terminal_route || !success || *success > 1) {
                 if (!terminal_route)
                     report_handoff_terminal_drop (_state, "missing_parking_node");
@@ -13154,8 +13195,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                   std::move (body.value ()));
             } else {
                 const auto error_kind_value =
-                  handoff_u64 (header.value ().metadata, actor_handoff_terminal_error_kind_key);
-                const auto error_message = header.value ().metadata.find (
+                  handoff_u64 (header.metadata, actor_handoff_terminal_error_kind_key);
+                const auto error_message = header.metadata.find (
                   std::string (actor_handoff_terminal_error_message_key));
                 const auto error_kind = error_kind_value
                                           ? static_cast<framework_error_kind_t> (*error_kind_value)
@@ -13164,7 +13205,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                   replies.create_error_header (
                     pending->request_header.channel_name, pending->request_header,
                     framework_exception_t (error_kind,
-                                           error_message == header.value ().metadata.end ()
+                                           error_message == header.metadata.end ()
                                              ? "Actor handoff request failed"
                                              : error_message->second)),
                   zlink::message_t{});
@@ -13173,12 +13214,56 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
             return true;
         }
 
+        // Node application records enter this boundary only when their
+        // envelope names an exact Framework-owned route packet. Keep ordinary
+        // node packets (and their original parts) on the application route.
+        if (node_record
+            && !spot_route_internal_dispatcher_t::is_framework_node_packet (
+              owner.owner_kind, record.kind, header.message_name)) {
+            parts = std::move (encoded).take_items ();
+            return false;
+        }
+
+        if (!route_client) {
+            route_client =
+              _state->route_client_lane.run ([&] { return _state->route_client; }).get ();
+        }
+        if (!route_client) {
+            // An exact internal packet has been claimed by the Framework.
+            // Do not reinterpret its route failure as an application handler
+            // invocation or an unreported drop.
+            if (node_record) {
+                const framework_exception_t error (
+                  framework_error_kind_t::unavailable, "SPOT route client is unavailable");
+                if (record.kind == service::record_kind_t::node_send) {
+                    report_spot_dispatch_error (
+                      _state, dispatch_error_surface_t::spot_route,
+                      dispatch_message_kind_t::send, dispatch_reason_from_error (error.kind ()),
+                      dispatch_error_action_t::drop, header.message_name, std::nullopt,
+                      std::nullopt, std::nullopt, std::make_exception_ptr (error),
+                      record.operation_id.low == 0
+                        ? std::nullopt
+                        : std::make_optional (std::to_string (record.operation_id.low)));
+                } else {
+                    detail::channel_reply_writer_t replies;
+                    const auto reply_parts = replies.reply_raw_envelope (
+                      replies.create_error_header (
+                        header.channel_name, header,
+                        detail::make_framework_origin_exception (error.kind (), error.what ())),
+                      zlink::message_t::from (""));
+                    (void) service::reply (record.reply_token, reply_parts.items ());
+                }
+                return true;
+            }
+            return false;
+        }
+
         /* Native SPOT delivery bypasses the RouteMesh packet dispatcher after
          * the envelope has been decoded. Re-enter the wire flow here so the
          * remote Spot handler observes the same flow as the originating
          * STREAM/session request. */
         auto flow_scope = runtime::flow_context_t::enter (
-          header.value ().flow_id, header.value ().flow_origin,
+          header.flow_id, header.flow_origin,
           detail::message_flow_tracer_t (_state->dispatch).mode (), flow_origin_t::inbound);
 
         auto &actor_gateway = services.get_required<actor_gateway_runtime_t> ();
@@ -13186,10 +13271,10 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                                                      serializers);
         if ((record.kind == service::record_kind_t::spot_send
              || record.kind == service::record_kind_t::node_send)
-            && dispatcher.can_handle_send (header.value ().message_name)) {
+            && dispatcher.can_handle_send (header.message_name)) {
             const bool transfer_actor_leave_owner_reservation =
               node_record
-              && header.value ().message_name == spot_actor_leave_route_command_t::packet_name
+              && header.message_name == spot_actor_leave_route_command_t::packet_name
               && static_cast<bool> (deferred_terminal);
             route_received_packet_t received{record.source_node_rid,
                                              record.operation_id.low == 0
@@ -13198,9 +13283,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                                              std::move (encoded), std::nullopt};
             const auto dispatched = transfer_actor_leave_owner_reservation
                                       ? dispatcher.dispatch_send (
-                                          received, header.value (), services, deferred_terminal,
+                                          received, header, services, deferred_terminal,
                                           record.transferred_owner_byte_cost)
-                                      : dispatcher.dispatch_send (received, header.value (), services);
+                                      : dispatcher.dispatch_send (received, header, services);
             if (transfer_actor_leave_owner_reservation && dispatched && terminal_deferred)
                 *terminal_deferred = true;
             if (!dispatched) {
@@ -13211,7 +13296,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                 report_spot_dispatch_error (
                   _state, dispatch_error_surface_t::spot_route, dispatch_message_kind_t::send,
                   dispatch_reason_from_error (error.kind ()), dispatch_error_action_t::drop,
-                  header.value ().message_name, std::nullopt,
+                  header.message_name, std::nullopt,
                   owner.spot_id.empty () ? std::nullopt : std::make_optional (owner.spot_id),
                   std::nullopt, std::make_exception_ptr (error),
                   record.operation_id.low == 0
@@ -13222,7 +13307,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
         }
         if ((record.kind == service::record_kind_t::spot_request
              || record.kind == service::record_kind_t::node_request)
-            && dispatcher.can_handle_request (header.value ().message_name)) {
+            && dispatcher.can_handle_request (header.message_name)) {
             route_received_packet_t received{record.source_node_rid,
                                              record.operation_id.low == 0
                                                ? std::nullopt
@@ -13231,8 +13316,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
             detail::channel_reply_writer_t replies;
             if (deferred_terminal) {
                 const auto async_dispatched = dispatcher.dispatch_request_async (
-                  received, header.value (), services,
-                  [reply_token = record.reply_token, request_header = header.value (),
+                  received, header, services,
+                  [reply_token = record.reply_token, request_header = header,
                    deferred_terminal =
                      std::move (deferred_terminal)] (result_t<zlink::message_t> response) mutable {
                       try {
@@ -13268,16 +13353,16 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                     return true;
                 }
             }
-            auto response = dispatcher.dispatch_request (received, header.value (), services);
+            auto response = dispatcher.dispatch_request (received, header, services);
             const auto reply_parts =
               response
                 ? replies.reply_raw_envelope (
                     replies.create_reply_header (runtime::messaging::message_kind_t::response,
-                                                 header.value ().channel_name, header.value ()),
+                                                 header.channel_name, header),
                     std::move (response.value ()))
                 : replies.reply_raw_envelope (
                     replies.create_error_header (
-                      header.value ().channel_name, header.value (),
+                      header.channel_name, header,
                       /* Internal route dispatcher failures are framework-
                        * generated (zlink.origin marker). */
                       detail::make_framework_origin_exception (
@@ -13294,7 +13379,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                     return;
                 }
                 auto reply = replies.reply_raw_envelope (
-                  replies.create_error_header (header.value ().channel_name, header.value (),
+                  replies.create_error_header (header.channel_name, header,
                                                error),
                   zlink::message_t::from (""));
                 (void) service::reply (record.reply_token, reply.items ());
@@ -13358,15 +13443,15 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                                             record.kind == service::record_kind_t::spot_request
                                               ? dispatch_message_kind_t::request
                                               : dispatch_message_kind_t::send,
-                                            header.value ().message_name, {}, owner.spot_id);
+                                            header.message_name, {}, owner.spot_id);
                 auto handled =
                   spot_handler_registry_t (dispatch_snapshot.context_state)
                     .invoke_erased (
-                      spot_handler_kind_t::packet, header.value ().message_name, {},
+                      spot_handler_kind_t::packet, header.message_name, {},
                       std::type_index (typeid (void)), dispatch_snapshot.spot_instance.get (),
                       nullptr, services, serializers, body.value (),
-                      spot_inbound_message_t{.content_type = header.value ().content_type,
-                                             .values = header.value ().metadata},
+                      spot_inbound_message_t{.content_type = header.content_type,
+                                             .values = header.metadata},
                       true, {}, {}, {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire,
                       std::move (before_application_handler), {},
                       record.release_mailbox_reservation, record.transferred_owner_byte_cost)
@@ -13385,7 +13470,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                 if (record.kind == service::record_kind_t::spot_request) {
                     auto reply = replies.reply_raw_envelope (
                       replies.create_reply_header (runtime::messaging::message_kind_t::response,
-                                                   header.value ().channel_name, header.value ()),
+                                                   header.channel_name, header),
                       std::move (handled.value ()));
                     (void) service::reply (record.reply_token, reply.items ());
                 }
@@ -13397,7 +13482,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                                             record.kind == service::record_kind_t::spot_request
                                               ? dispatch_message_kind_t::response
                                               : dispatch_message_kind_t::send,
-                                            header.value ().message_name, {}, owner.spot_id);
+                                            header.message_name, {}, owner.spot_id);
                 return true;
             }
             catch (const framework_exception_t &error) {

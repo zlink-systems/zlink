@@ -1750,6 +1750,19 @@ class spot_node_runtime_t
                                std::function<void ()> deferred_terminal = {},
                                bool *terminal_deferred = nullptr,
                                std::function<void ()> before_application_handler = {});
+    static bool is_framework_node_mesh_packet (service::owner_kind_t owner_kind,
+                                               service::record_kind_t record_kind,
+                                               std::string_view packet_name) noexcept;
+    bool dispatch_node_internal_mesh_record (
+      const service::ready_record_t &owner,
+      const service::receive_record_t &record,
+      std::vector<zlink::message_t> &parts,
+      const runtime::messaging::envelope_header_t &header,
+      service_provider_t &services,
+      serializer_registry_t &serializers,
+      std::function<void ()> deferred_terminal = {},
+      bool *terminal_deferred = nullptr,
+      std::function<void ()> before_application_handler = {});
     void set_route_client (route_client_t route_client);
     void on_destroy_actor (std::function<result_t<void> (const actor_ref_t &)> destroy_actor);
     void on_actor_ref_updated (std::function<result_t<void> (const actor_ref_t &)> update_actor);
@@ -2267,6 +2280,16 @@ class spot_node_runtime_t
     }
 
   private:
+    bool dispatch_mesh_record_impl (
+      const service::ready_record_t &owner,
+      const service::receive_record_t &record,
+      std::vector<zlink::message_t> &parts,
+      service_provider_t &services,
+      serializer_registry_t &serializers,
+      std::function<void ()> deferred_terminal,
+      bool *terminal_deferred,
+      std::function<void ()> before_application_handler,
+      const runtime::messaging::envelope_header_t *predecoded_header);
     std::optional<std::string> spot_name_for_unlocked (const spot_id_t &spot_id) const;
 
     std::shared_ptr<service::spot_t>

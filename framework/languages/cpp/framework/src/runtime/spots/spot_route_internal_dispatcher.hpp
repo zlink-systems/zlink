@@ -18,6 +18,11 @@ class spot_route_internal_dispatcher_t final : public route_internal_packet_disp
                                       route_client_t route_client,
                                       serializer_registry_t &serializers);
 
+    static bool is_framework_send_packet (std::string_view packet_name) noexcept;
+    static bool is_framework_request_packet (std::string_view packet_name) noexcept;
+    static bool is_framework_node_packet (service::owner_kind_t owner_kind,
+                                          service::record_kind_t record_kind,
+                                          std::string_view packet_name) noexcept;
     bool can_handle_send (std::string_view packet_name) const override;
     bool can_handle_request (std::string_view packet_name) const override;
     result_t<void> dispatch_send (const route_received_packet_t &received,

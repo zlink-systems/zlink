@@ -8,9 +8,14 @@
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "runtime/mesh/mesh_metadata_codec.hpp"
+#include "runtime/mesh/mesh_record_dispatcher.hpp"
 #include "runtime/mesh/route_mesh_runtime_options_service.hpp"
 #include "runtime/mesh/route_mesh_runtime_service.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/spots/spot_route_packets.hpp"
+#include "runtime/spots/spot_route_internal_dispatcher.hpp"
+#include "runtime/spots/spot_runtime.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 
@@ -697,6 +702,166 @@ class local_route_probe_handler_t
   private:
     std::shared_ptr<local_route_probe_state_t> _state;
 };
+
+class internal_node_route_fallback_probe_handler_t
+{
+  public:
+    explicit internal_node_route_fallback_probe_handler_t (
+      std::shared_ptr<std::atomic_int> calls) :
+        _calls (std::move (calls))
+    {
+    }
+
+    void handle (const zlink::framework::detail::spot_multicast_route_send_t &,
+                 const zlink::framework::route_message_context_t &)
+    {
+        _calls->fetch_add (1, std::memory_order_relaxed);
+    }
+
+    void handle (const zlink::framework::detail::spot_actor_leave_route_command_t &,
+                 const zlink::framework::route_message_context_t &)
+    {
+        _calls->fetch_add (1, std::memory_order_relaxed);
+    }
+
+  private:
+    std::shared_ptr<std::atomic_int> _calls;
+};
+
+class predecoded_channel_probe_handler_t
+{
+  public:
+    explicit predecoded_channel_probe_handler_t (std::shared_ptr<std::atomic_int> calls) :
+        _calls (std::move (calls))
+    {
+    }
+
+    void handle (const local_route_probe_message_t &, const zlink::framework::route_message_context_t &)
+    {
+        _calls->fetch_add (1, std::memory_order_relaxed);
+    }
+
+  private:
+    std::shared_ptr<std::atomic_int> _calls;
+};
+
+void verify_predecoded_channel_falls_through_to_application_handler ()
+{
+    using namespace zlink::framework;
+    namespace detail = zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    namespace messaging = zlink::framework::runtime::messaging;
+
+    serializer_registry_t serializers;
+    serializers.add<local_route_probe_message_t> (
+      [] (const local_route_probe_message_t &message) {
+          return encoded_payload_t::from_string (message.value);
+      },
+      [] (const encoded_payload_t &payload) {
+          return local_route_probe_message_t{payload.to_string ()};
+      });
+    auto calls = std::make_shared<std::atomic_int> (0);
+    service_collection_t services;
+    services.add_singleton<predecoded_channel_probe_handler_t> (
+      std::make_unique<predecoded_channel_probe_handler_t> (calls));
+    auto provider = services.build_provider ();
+    detail::route_handler_registry_t handlers;
+    handlers.on_send<predecoded_channel_probe_handler_t, local_route_probe_message_t> (
+      "work", "PredecodedChannelProbe", &predecoded_channel_probe_handler_t::handle);
+    handler_registry_t filters;
+    messaging::envelope_header_t header;
+    header.kind = messaging::message_kind_t::command;
+    header.channel_name = "work";
+    header.message_name = "PredecodedChannelProbe";
+    messaging::envelope_codec_t codec;
+    auto parts = codec.encode_parts (header, local_route_probe_message_t{"channel"}, serializers);
+    const auto decoded = codec.decode_header (parts, false);
+    assert (decoded);
+    runtime::host::receive_record_t record;
+    record.kind = runtime::host::record_kind_t::channel_send;
+    record.channel_name = "work";
+    detail::mesh_record_dispatcher_t dispatcher (provider, serializers, handlers, filters);
+    assert (dispatcher.dispatch (record, std::move (parts), decoded.value ()));
+    assert (calls->load (std::memory_order_relaxed) == 1);
+}
+
+void verify_node_owned_internal_routes_do_not_reach_application_fallback ()
+{
+    using namespace zlink::framework;
+    namespace detail = zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    namespace messaging = zlink::framework::runtime::messaging;
+
+    auto registration = make_node ("tcp://127.0.0.1:0", "internal-node-route");
+    auto fallback_calls = std::make_shared<std::atomic_int> (0);
+    registration->handlers.on_send<internal_node_route_fallback_probe_handler_t,
+                                    detail::spot_multicast_route_send_t> (
+      "vertical-mesh", detail::spot_multicast_route_send_t::packet_name,
+      static_cast<void (internal_node_route_fallback_probe_handler_t::*) (
+        const detail::spot_multicast_route_send_t &, const route_message_context_t &)>
+        (&internal_node_route_fallback_probe_handler_t::handle));
+    registration->handlers.on_send<internal_node_route_fallback_probe_handler_t,
+                                    detail::spot_actor_leave_route_command_t> (
+      "vertical-mesh", detail::spot_actor_leave_route_command_t::packet_name,
+      static_cast<void (internal_node_route_fallback_probe_handler_t::*) (
+        const detail::spot_actor_leave_route_command_t &, const route_message_context_t &)>
+        (&internal_node_route_fallback_probe_handler_t::handle));
+    assert (detail::spot_route_internal_dispatcher_t::is_framework_node_packet (
+      runtime::host::owner_kind_t::node, runtime::host::record_kind_t::node_send,
+      detail::spot_multicast_route_send_t::packet_name));
+    assert (detail::spot_route_internal_dispatcher_t::is_framework_node_packet (
+      runtime::host::owner_kind_t::node, runtime::host::record_kind_t::node_send,
+      detail::spot_actor_leave_route_command_t::packet_name));
+    assert (!detail::spot_route_internal_dispatcher_t::is_framework_node_packet (
+      runtime::host::owner_kind_t::channel, runtime::host::record_kind_t::channel_send,
+      detail::spot_multicast_route_send_t::packet_name));
+
+    serializer_registry_t serializers;
+    service_collection_t services;
+    services.add_singleton<internal_node_route_fallback_probe_handler_t> (
+      std::make_unique<internal_node_route_fallback_probe_handler_t> (fallback_calls));
+    services.add_singleton<detail::actor_gateway_runtime_t> ();
+    auto owned_store = std::make_unique<runtime::in_memory_location_repository_t> ();
+    auto &location_store = *owned_store;
+    services.add_singleton<location_repository_t> (
+      std::unique_ptr<location_repository_t> (owned_store.release ()));
+    services.add_singleton<runtime::location_runtime_t> (
+      std::make_unique<runtime::location_runtime_t> (location_store));
+    register_mesh_location_resolvers (services);
+    auto provider = services.build_provider ();
+    zlink_builder_t route_builder;
+    detail::spot_node_runtime_t (registration->spot_state)
+      .set_route_client (route_builder.route_client (serializers));
+    auto &location_runtime = provider.get_required<runtime::location_runtime_t> ();
+    location_runtime.start (*registration->routing_id);
+    runtime::mesh_node_host_service_t service ({registration}, serializers);
+    service.start (provider);
+    const auto node = service.nodes ().front ();
+
+    messaging::client_call_codec_t codec;
+    const auto submit = [&] (auto packet, std::string_view packet_name) {
+        const auto header = codec.create_envelope (
+          messaging::message_kind_t::command, "vertical-mesh", std::string (packet_name));
+        auto encoded = codec.encode_envelope_parts (header, std::move (packet), serializers);
+        assert (service.submit_local_node_send (node, encoded.items ())
+                == zlink::submit_result_t::ok);
+        assert (service.wait_for_accepted_callbacks_until (
+          std::chrono::steady_clock::now () + 1s));
+    };
+    submit (detail::spot_multicast_route_send_t{"internal-topic", {0x01}},
+            detail::spot_multicast_route_send_t::packet_name);
+    submit (detail::spot_actor_leave_route_command_t{},
+            detail::spot_actor_leave_route_command_t::packet_name);
+
+    // Both exact Framework-owned node packets are terminally consumed by the
+    // Spot route boundary. Current main reaches these application handlers;
+    // the production change below makes this assertion GREEN.
+    assert (fallback_calls->load (std::memory_order_relaxed) == 0);
+    assert (node->pending_application_callbacks () == 0);
+    assert (node->active_application_callbacks () == 0);
+    service.stop ();
+    location_runtime.stop ();
+}
 
 void verify_local_node_submit_bridge ()
 {
@@ -2092,6 +2257,25 @@ int run_cross_process_delivery ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2) {
+        const std::string_view test (argv[1]);
+        if (test == "--node-owned-internal-routes") {
+            verify_node_owned_internal_routes_do_not_reach_application_fallback ();
+            return 0;
+        }
+        if (test == "--generic-node-bridge") {
+            verify_local_node_submit_bridge ();
+            return 0;
+        }
+        if (test == "--generic-channel-predecoded") {
+            verify_predecoded_channel_falls_through_to_application_handler ();
+            return 0;
+        }
+        if (test == "--terminal-ownership") {
+            verify_deferred_application_terminal_ownership ();
+            return 0;
+        }
+    }
 #if defined(__unix__)
     if (argc == 2 && std::string_view (argv[1]) == "--cross-process")
         return run_cross_process_delivery ();
@@ -2107,6 +2291,7 @@ int main (int argc, char **argv)
     verify_owner_drain_continuation_during_executor_shutdown ();
     verify_deferred_application_terminal_ownership ();
     verify_descriptor_retire_order_and_pre_seal_rollback ();
+    verify_node_owned_internal_routes_do_not_reach_application_fallback ();
     verify_local_node_submit_bridge ();
     verify_direct_target_falls_through_absent_location_store_entry ();
     verify_request_to_never_admitted_target_reports_not_found ();
@@ -2127,18 +2312,19 @@ int main (int argc, char **argv)
     zlink::framework::detail::mesh_node_runtime_t node (state);
     node.start ();
     assert (node.status ().routing_id ().to_string () == "vertical-a");
-    assert (node.status ().channel_count () == 1);
+    assert (node.channel_names ().size () == 1);
 
     const std::vector<std::uint8_t> metadata{0x01, 0x02, 0x03};
     const std::vector<zlink::message_t> direct_parts{
       zlink::message_t::from (std::string ("direct"))};
-    const auto direct_result =
-      node.send_to_node (*state->routing_id, direct_parts, metadata);
+    const auto direct_result = std::move (
+      node.send_to_node (*state->routing_id, direct_parts, metadata)).result ().value ();
     assert (direct_result == zlink::submit_result_t::invalid_argument);
 
     const std::vector<zlink::message_t> channel_parts{
       zlink::message_t::from (std::string ("channel"))};
-    const auto channel_result = node.send_to_channel ("work", channel_parts, metadata);
+    const auto channel_result = std::move (
+      node.send_to_channel ("work", channel_parts, metadata)).result ().value ();
     assert (channel_result == zlink::submit_result_t::invalid_argument);
 
     node.stop ();

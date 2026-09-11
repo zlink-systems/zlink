@@ -83,7 +83,8 @@ spot_route_internal_dispatcher_t::spot_route_internal_dispatcher_t (
 {
 }
 
-bool spot_route_internal_dispatcher_t::can_handle_send (std::string_view packet_name) const
+bool spot_route_internal_dispatcher_t::is_framework_send_packet (
+  std::string_view packet_name) noexcept
 {
     return packet_name == actor_bound_session_route_request_t::packet_name
            || packet_name == spot_actor_commit_route_request_t::packet_name
@@ -91,7 +92,8 @@ bool spot_route_internal_dispatcher_t::can_handle_send (std::string_view packet_
            || packet_name == spot_multicast_route_send_t::packet_name;
 }
 
-bool spot_route_internal_dispatcher_t::can_handle_request (std::string_view packet_name) const
+bool spot_route_internal_dispatcher_t::is_framework_request_packet (
+  std::string_view packet_name) noexcept
 {
     return packet_name == actor_bound_session_bind_route_request_t::packet_name
            || packet_name == actor_bound_session_route_request_t::packet_name
@@ -99,6 +101,29 @@ bool spot_route_internal_dispatcher_t::can_handle_request (std::string_view pack
            || packet_name == spot_actor_commit_route_request_t::packet_name
            || packet_name == spot_actor_packet_route_request_t::packet_name
            || packet_name == spot_actor_disconnect_route_request_t::packet_name;
+}
+
+bool spot_route_internal_dispatcher_t::is_framework_node_packet (
+  service::owner_kind_t owner_kind, service::record_kind_t record_kind,
+  std::string_view packet_name) noexcept
+{
+    if (owner_kind != service::owner_kind_t::node)
+        return false;
+    if (record_kind == service::record_kind_t::node_send)
+        return is_framework_send_packet (packet_name);
+    if (record_kind == service::record_kind_t::node_request)
+        return is_framework_request_packet (packet_name);
+    return false;
+}
+
+bool spot_route_internal_dispatcher_t::can_handle_send (std::string_view packet_name) const
+{
+    return is_framework_send_packet (packet_name);
+}
+
+bool spot_route_internal_dispatcher_t::can_handle_request (std::string_view packet_name) const
+{
+    return is_framework_request_packet (packet_name);
 }
 
 result_t<void>
