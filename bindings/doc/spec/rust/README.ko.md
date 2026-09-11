@@ -384,8 +384,8 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   terminator 이름으로 사용하지 않는다.
 
   ```rust
-  dealer.send().message(message).submit().await?;
-  let reply = dealer.request().message(request).submit().await?;
+  dealer.send().message(message).submit()?.admitted.await?;
+  let reply = dealer.request().message(request).submit()?.reply.await?;
   ```
 
   HWM-managed **send**(PAIR `send()`, STREAM `send(target)`, `Received::send()`,

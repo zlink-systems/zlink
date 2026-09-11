@@ -240,7 +240,7 @@ type ZlinkError interface {
 - If a Context was already canceled or past its deadline before `Submit`, that standard error is
   returned. It is not converted into a per-function-family Core error.
 - A reply or failure after native request admission is returned through the
-  `([]*Message, error)` result of `Submit(context.Context)`.
+  `([]*Message, error)` result of `RequestSubmission.Reply(context.Context)`.
 
 ## FFI and package boundary
 
@@ -317,7 +317,7 @@ type SendSubmission interface {
 type RequestSubmission interface {
     Result() SubmitResult
     Admitted(ctx context.Context) error
-    Reply(ctx context.Context) ([]*Message, error)   // blocks until the reply; same as the prior Submit result
+    Reply(ctx context.Context) ([]*Message, error)   // waits for the reply, then returns the response or error
 }
 
 type SendSubmitOp interface {
@@ -419,8 +419,9 @@ maps to one contract test.
 
 **Operations and completion**
 
-- Send and request provide one `Submit(context.Context)` terminal. Request success returns
-  `([]*Message, nil)`, and a non-OK completion returns `(nil, typed request error)`.
+- Send and request `Submit(context.Context)` return a result object immediately. A request's
+  `Reply(context.Context)` waits for the response and returns `([]*Message, nil)` on success or
+  `(nil, typed request error)` on a non-OK completion.
 - Send flags not shared by Go and Python appear only on `PublishSubmitOp`, and publish submit retains its
   `(bool, error)` result.
 - Common completion, cancellation, and poller observations follow the

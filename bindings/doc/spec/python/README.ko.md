@@ -157,7 +157,9 @@ Core result를 반환하는 호출은 Python의 대응 error에 `result`, `code`
 
 Python package 정보는 [배포 metadata](../../../python/pyproject.toml)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Python은 blocking `submit_sync()`와 결과 객체(`SendSubmission`/`RequestSubmission`: `result()`와 `admitted()`, request는 `reply()`)를 돌려주는 `submit()`을 제공한다.
+Python은 blocking `submit_sync()`와 결과 객체(`SendSubmission`/`RequestSubmission`: `result`와 `admitted`, request는 `reply`)를 돌려주는 `submit()`을 제공한다.
+결과 접근자는 읽기 전용 property다. `submission.result`로 제출 결과를 읽고,
+`await submission.admitted`로 수용 완료를, request의 `await submission.reply`로 응답을 기다린다.
 Caller wait 취소는 awaitable cancellation으로 표현한다.
 
 Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
@@ -185,12 +187,17 @@ Token은 raw property, `int()` conversion, ordering과 `close()`를 제공하지
 
 ```python
 class SendSubmission:
+    @property
     def result(self) -> SubmitResult: ...        # OK | BACKPRESSURED, 제출 시점 스냅샷
+    @property
     def admitted(self) -> Awaitable[None]: ...   # OK면 완료 상태
 
 class RequestSubmission:
+    @property
     def result(self) -> SubmitResult: ...
+    @property
     def admitted(self) -> Awaitable[None]: ...
+    @property
     def reply(self) -> Awaitable[list[Message]]: ...   # admitted 성공 뒤 완료
 
 class SendOp(Protocol):

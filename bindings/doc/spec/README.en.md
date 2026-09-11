@@ -2112,15 +2112,11 @@ builder's `flags(...)` step.
 - A non-blocking call's temporary state is delivered per each language's
   public contract.
   - `.NET` / `Java` / `Node` / `Python`
-    - `send`, `publish`, callback `request`: `false` on temporary
-      backpressure
     - caller-provided `recv`, `subscribe`,
       `receiveSubscriptionEvent`: `false` when there is currently no
       data
     - Any other failure: a typed exception
   - C++
-    - operation builder `send` / `publish` / callback `request`: `false`
-      on temporary backpressure
     - caller-provided `recv` / `subscribe` /
       `receive_subscription_event`: returns the `recv_result_t::no_data`
       integer value when there is currently no data
@@ -2774,13 +2770,8 @@ spec file.
   would allow a plain send.
 
 ### Send/Publish Return Value
-- On `.NET`/`Java`/`Node`/`Python`/`C++`, a blocking `send`/`publish`/
-  callback `request` submit always returns `true` on success.
-- On a non-blocking submit in those languages, it returns `false` only
-  on temporary backpressure.
-- A submit failure that is not temporary backpressure must be delivered
-  as an exception.
-- Returning a status code (`int`, `number`, and so on) is forbidden.
+- Send and request submission results and failures follow [Submit result projection](#submit-result-projection).
+- Publish return types and failure reporting follow each language README's publish contract.
 
 ### Per-Language Naming Consistency
 - A naming convention must not be mixed within one binding.

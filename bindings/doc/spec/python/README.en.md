@@ -171,7 +171,9 @@ checking targets the Python 3.9 target `pyrightconfig.json` specifies, and
 
 Python package information follows its [distribution metadata](../../../python/pyproject.toml); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-Python provides blocking `submit_sync()` and `submit()` returning a result object (`SendSubmission`/`RequestSubmission`: `result()` and `admitted()`, plus `reply()` for a request).
+Python provides blocking `submit_sync()` and `submit()` returning a result object (`SendSubmission`/`RequestSubmission`: `result` and `admitted`, plus `reply` for a request).
+The result accessors are read-only properties. Read the initial result through `submission.result`,
+wait for admission with `await submission.admitted`, and wait for a request's response with `await submission.reply`.
 Caller wait cancellation is expressed through awaitable cancellation.
 
 Native completion IDs, `user_context`, and raw drain are not public APIs.
@@ -200,12 +202,17 @@ bind/connect, the `recv_mode` setter accepts only `RAW` and `PACKET` and rejects
 
 ```python
 class SendSubmission:
+    @property
     def result(self) -> SubmitResult: ...        # OK | BACKPRESSURED, submit-time snapshot
+    @property
     def admitted(self) -> Awaitable[None]: ...   # completed when result is OK
 
 class RequestSubmission:
+    @property
     def result(self) -> SubmitResult: ...
+    @property
     def admitted(self) -> Awaitable[None]: ...
+    @property
     def reply(self) -> Awaitable[list[Message]]: ...   # completes after successful admission
 
 class SendOp(Protocol):
