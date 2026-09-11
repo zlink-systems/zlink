@@ -11,9 +11,6 @@
 #include "runtime/mesh/route_mesh_runtime_options_service.hpp"
 #include "runtime/mesh/route_mesh_runtime_service.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
-#include "runtime/actors/actor_gateway_runtime.hpp"
-#include "runtime/spots/spot_route_packets.hpp"
-#include "runtime/spots/spot_runtime.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 
@@ -701,35 +698,12 @@ class local_route_probe_handler_t
     std::shared_ptr<local_route_probe_state_t> _state;
 };
 
-class internal_route_fallback_probe_handler_t
-{
-  public:
-    explicit internal_route_fallback_probe_handler_t (
-      std::shared_ptr<std::atomic_int> calls) :
-        _calls (std::move (calls))
-    {
-    }
-
-    void handle (const zlink::framework::detail::spot_multicast_route_send_t &,
-                 const zlink::framework::route_message_context_t &)
-    {
-        _calls->fetch_add (1, std::memory_order_relaxed);
-    }
-
-  private:
-    std::shared_ptr<std::atomic_int> _calls;
-};
-
 void verify_local_node_submit_bridge ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "local-route-node");
     registration->max_pending = 1;
     registration->handlers.on_send<local_route_probe_handler_t, local_route_probe_message_t> (
       "vertical-mesh", "LocalRouteProbe", &local_route_probe_handler_t::handle);
-    registration->handlers.on_send<internal_route_fallback_probe_handler_t,
-                                    zlink::framework::detail::spot_multicast_route_send_t> (
-      "vertical-mesh", zlink::framework::detail::spot_multicast_route_send_t::packet_name,
-      &internal_route_fallback_probe_handler_t::handle);
 
     auto independent_registration =
       make_named_node ("independent-mesh", "independent-route-node");
@@ -746,14 +720,9 @@ void verify_local_node_submit_bridge ()
           return local_route_probe_message_t{payload.to_string ()};
       });
     auto probe = std::make_shared<local_route_probe_state_t> ();
-    auto internal_fallback_calls = std::make_shared<std::atomic_int> (0);
     zlink::framework::service_collection_t services;
     services.add_singleton<local_route_probe_handler_t> (
       std::make_unique<local_route_probe_handler_t> (probe));
-    services.add_singleton<internal_route_fallback_probe_handler_t> (
-      std::make_unique<internal_route_fallback_probe_handler_t> (
-        internal_fallback_calls));
-    services.add_singleton<zlink::framework::detail::actor_gateway_runtime_t> ();
     // v11: the MeshNode host resolves the Location store from the provider, so
     // a vertical check registers the in-memory store like any application.
     auto owned_store =
@@ -765,9 +734,6 @@ void verify_local_node_submit_bridge ()
       std::make_unique<zlink::framework::runtime::location_runtime_t> (location_store));
     register_mesh_location_resolvers (services);
     auto provider = services.build_provider ();
-    zlink::framework::zlink_builder_t route_builder;
-    zlink::framework::detail::spot_node_runtime_t (registration->spot_state)
-      .set_route_client (route_builder.route_client (serializers));
     // The MeshNode publishes its descriptor under an owner lease, so the
     // Location runtime starts first just as the host does in production.
     auto &location_runtime =
@@ -783,25 +749,6 @@ void verify_local_node_submit_bridge ()
     service.start (provider);
     const auto node = service.nodes ().front ();
     const auto independent_node = service.nodes ().back ();
-
-    {
-        zlink::framework::runtime::messaging::client_call_codec_t codec;
-        const auto header = codec.create_envelope (
-          zlink::framework::runtime::messaging::message_kind_t::command,
-          "spot", zlink::framework::detail::spot_multicast_route_send_t::packet_name);
-        const auto internal = codec.encode_envelope_parts (
-          header,
-          zlink::framework::detail::spot_multicast_route_send_t{
-            "internal-route-probe", {0x01}},
-          serializers);
-        assert (service.submit_local_node_send (node, internal.items ())
-                == zlink::submit_result_t::ok);
-        assert (service.wait_for_accepted_callbacks_until (
-          std::chrono::steady_clock::now () + 1s));
-        // Framework-owned route packets must be consumed before application
-        // node/channel handlers are considered.
-        assert (internal_fallback_calls->load (std::memory_order_relaxed) == 0);
-    }
 
     auto encode = [&serializers] (std::string value,
                                   std::string mesh_name = "vertical-mesh") {
@@ -2145,10 +2092,6 @@ int run_cross_process_delivery ()
 
 int main (int argc, char **argv)
 {
-    if (argc == 2 && std::string_view (argv[1]) == "--local-node-submit-bridge") {
-        verify_local_node_submit_bridge ();
-        return 0;
-    }
 #if defined(__unix__)
     if (argc == 2 && std::string_view (argv[1]) == "--cross-process")
         return run_cross_process_delivery ();

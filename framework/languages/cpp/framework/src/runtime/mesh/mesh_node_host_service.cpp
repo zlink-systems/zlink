@@ -2671,6 +2671,16 @@ void mesh_node_host_service_t::dispatch_application (
               "MeshNode is draining and rejects new application work");
             return;
         }
+        if (owner.owner_kind == host::owner_kind_t::node
+            || owner.owner_kind == host::owner_kind_t::channel) {
+            detail::mesh_record_dispatcher_t dispatcher (
+              *services, *serializers, registration->handlers, *filters,
+              dispatch_options, record.before_application_handler);
+            const auto dispatched = dispatcher.dispatch (record, std::move (parts));
+            trace_mesh_application ("route-dispatch", record, 0,
+                                    dispatched ? "success" : "failure");
+            return;
+        }
         deferred_terminal = std::make_shared<application_dispatch_terminal_owner_t> (
           std::move (terminal));
         detail::spot_node_runtime_t application_spot_runtime (registration->spot_state);
@@ -2681,16 +2691,6 @@ void mesh_node_host_service_t::dispatch_application (
           &terminal_deferred, record.before_application_handler);
         trace_mesh_application ("framework-dispatch", record, parts.size (),
                                 handled ? "handled" : "not-handled");
-        if (!handled
-            && (owner.owner_kind == host::owner_kind_t::node
-                || owner.owner_kind == host::owner_kind_t::channel)) {
-            detail::mesh_record_dispatcher_t dispatcher (
-              *services, *serializers, registration->handlers, *filters,
-              dispatch_options, record.before_application_handler);
-            const auto dispatched = dispatcher.dispatch (record, std::move (parts));
-            trace_mesh_application ("route-dispatch", record, 0,
-                                    dispatched ? "success" : "failure");
-        }
         if (!terminal_deferred)
             deferred_terminal->settle ();
     }
