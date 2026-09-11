@@ -753,9 +753,8 @@ Session seal을 복원한다. 그 뒤 submit 실패는 source를 복원하지 �
   해제하고 보관한 Session message를 source route로 제출한다. 그 뒤 failure와 cutover submit 실패는
   source route를 다시 열지 않는다.
 
-Transport adapter의 authenticated peer·node generation·frame 검증, target의 owner CAS,
-Session owner의 binding route 검증은 각각 한 번만 수행한다. Actor join, host relocation,
-Message Follow와 callback 경로는 이 판정을 다시 수행하지 않는다.
+Transport, target과 Session owner가 수행하는 검증과 그 경계는
+[Session·Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환)을 따른다.
 
 ## 11. Request terminal identity
 
