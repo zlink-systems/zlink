@@ -17,10 +17,12 @@ both languages to keep parity.
 
 ### 05-polling.{ko,en}.md
 - §2.2 requires the same nav line under the title and at the end of the document. The
-  file had it only at the top. Added the identical nav block
-  (`[Core 스펙 목차](README.ko.md) | [이전: Events](04-events.ko.md) | [다음:
-  Monitoring](06-monitoring.ko.md)`, and the English equivalent) at the end of both
-  files.
+  file had it only at the top. Added the identical nav block, and the English
+  equivalent, at the end of both files:
+
+  ```text
+  [Core 스펙 목차](README.ko.md) | [이전: Events](04-events.ko.md) | [다음: Monitoring](06-monitoring.ko.md)
+  ```
 - §3.2 requires a glossary link plus a same-sentence definition on first use of a
   glossary term. `backpressure` (glossary.ko.md#backpressure /
   glossary.en.md#backpressure) appeared in §3 ("따라서 특정 target의 nonblocking

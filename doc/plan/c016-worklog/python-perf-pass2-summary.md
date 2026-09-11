@@ -40,7 +40,7 @@ REQREP는 ops/s, 나머지는 msg/s다.
 | PUBSUB | 4096 | 135,815.0 | 144,029.0 | 643,339.0 | 22.39% |
 | PUBSUB | 65536 | 45,561.3 | 46,505.2 | 70,159.3 | 66.29% |
 
-최종 자료: [공식 after report](reports/python-pass2-after-final.txt), [원본 이름의 report](reports/perf_python_multi_linux_20260905_234507.txt), [20셀 비교 및 원본 경로](reports/python-pass2-comparison.json). 구현 중간 측정도 [artifact 목록](reports/python-pass2-artifacts.json)에 보존했다. 최종 수치에서 좋은 run만 선택하지 않았다.
+최종 자료: 공식 after report (`reports/python-pass2-after-final.txt`), 원본 이름의 report (`reports/perf_python_multi_linux_20260905_234507.txt`), 20셀 비교 및 원본 경로 (`reports/python-pass2-comparison.json`). 구현 중간 측정도 artifact 목록 (`reports/python-pass2-artifacts.json`)에 보존했다. 최종 수치에서 좋은 run만 선택하지 않았다.
 
 ## Python 호출 분해
 
@@ -55,7 +55,7 @@ cProfile의 Python 함수 호출이며 C built-in은 제외한다. pass 1의 약
 
 DD의 정상 즉시 성공 경로는 binding Python 호출 9개이며, 실측 평균은 9.15회다. 러너·stdlib를 합한 전체 호출은 한 자리 수가 아니다. REQREP client도 binding 33.34회가 남는다. 러너 파일은 변경하지 않았으며 runner 호출 평균의 차이는 readiness·drain 빈도 및 실행당 부대 비용 차이를 포함한다.
 
-함수별 전체 분해는 [call census](reports/python-pass2-call-census.json)에 file/line·호출 수·메시지당 호출 수·자체 시간을 기록했다. DD before의 주요 binding 함수는 `lib` 4.02, `_handle` 2.01, `settled`·`context`·`_init_msg_from_buffer`·`_clone_native_msg` 각각 약 2회, `_materialize_native_parts`·`clone_payload`·`_attempt_send`·`_submit_parts`·`wait_async` 각각 약 1회다. 최종 정상 SEND는 `send`, builder `__init__`, `messages`, `submit`, `_payload_or_raise`, `submit_send`, `wait_async`, `_submit_parts`, `_handle`이 각각 1회 남는다.
+함수별 전체 분해는 call census (`reports/python-pass2-call-census.json`)에 file/line·호출 수·메시지당 호출 수·자체 시간을 기록했다. DD before의 주요 binding 함수는 `lib` 4.02, `_handle` 2.01, `settled`·`context`·`_init_msg_from_buffer`·`_clone_native_msg` 각각 약 2회, `_materialize_native_parts`·`clone_payload`·`_attempt_send`·`_submit_parts`·`wait_async` 각각 약 1회다. 최종 정상 SEND는 `send`, builder `__init__`, `messages`, `submit`, `_payload_or_raise`, `submit_send`, `wait_async`, `_submit_parts`, `_handle`이 각각 1회 남는다.
 
 ## 구현 및 변경 파일
 
@@ -102,7 +102,7 @@ DD의 정상 즉시 성공 경로는 binding Python 호출 9개이며, 실측 �
 - Payload에는 요청된 0.17.0 symlink 세 개만 있다. Main Core와 측정용 복사본의 SHA-256은 모두 `d4b95b10ce3f96315740de20d2ea4e1d1d40f3dffd7a50de5530d26dff9a3f00`이다.
 - 새 worktree source mtime 때문에 러너가 source-tree runtime을 stale로 판정했다. Main binary를 `bindings/python/build/perf-runtime/`으로 그대로 복사하고 기존 explicit runtime 옵션으로 측정했다. Core 파일이나 timestamp, 러너 검사는 수정하지 않았다. 지정 C/Python before report의 runtime hash와도 일치한다.
 - 최종 after의 load 범위 **0.125–1.6704**, 최종 cProfile **0.7861–0.8550**. 전체 pass 2 계측 중 관측 최대는 **2.7832**다. 시작과 실행 중 load를 2초 간격으로 검사한 기록은 `reports/python-pass2-*-load.json`에 있다. 분석 자체는 benchmark/profile 실행과 구분했다.
-- 진행 로그: [python-perf-pass2-progress.md](python-perf-pass2-progress.md). **3분 간격 미준수 구간 10회, 최대 492초**이며 [artifact audit](reports/python-pass2-artifacts.json)에 원 시각을 기록했다. 실행 중 git 금지 작업·Core build/clean은 없었고, 추가 agent를 사용하지 않았다.
+- 진행 로그: [python-perf-pass2-progress.md](python-perf-pass2-progress.md). **3분 간격 미준수 구간 10회, 최대 492초**이며 artifact audit (`reports/python-pass2-artifacts.json`)에 원 시각을 기록했다. 실행 중 git 금지 작업·Core build/clean은 없었고, 추가 agent를 사용하지 않았다.
 
 ## 남은 미달과 spec gap
 

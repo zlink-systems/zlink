@@ -10,9 +10,9 @@
 
 최종 공식 after는 **고정 Core, 20/20 complete, RESULT 100/100, fail 0**이다. 요청한 전체-grid 명령은 load가 3.36으로 상승해 중단했고 비교에서 제외했다. 이후 같은 pattern/size 20셀을 각각 `--reuse-build --clients 100 --duration 5 --runs 1 --transports tcp`로 실행했다. 셀 사이의 부하 대기는 측정 구간 밖에서만 수행했다. 아래 집계는 한 번의 전체-grid runner report가 아니라, 개별 runner 원본의 RESULT를 합친 파일이다.
 
-- 최종 after 집계: [perf_node_multi_linux_20260905_pass1c_load_guarded.txt](reports/perf_node_multi_linux_20260905_pass1c_load_guarded.txt)
-- 원본 20개와 실행 로그 목록: [node-pass1c-final-cells.json](reports/node-pass1c-final-cells.json)
-- 상세 수치: [node-pass1c-comparison.json](reports/node-pass1c-comparison.json)
+- 최종 after 집계: perf_node_multi_linux_20260905_pass1c_load_guarded.txt (`reports/perf_node_multi_linux_20260905_pass1c_load_guarded.txt`)
+- 원본 20개와 실행 로그 목록: node-pass1c-final-cells.json (`reports/node-pass1c-final-cells.json`)
+- 상세 수치: node-pass1c-comparison.json (`reports/node-pass1c-comparison.json`)
 - 고정 Core: `reports/node-pass1c-pinned-core/libzlink.so.0.17.0`, SHA-256 `e680b264822a92f770769a37ab9df152b342413189cfb4b148404c1f5ed9b4ea`.
 
 ## 서버 수신 경로와 C 대조
@@ -52,7 +52,7 @@ DR/tcp/64B/100 clients/5초, 동일한 inspector sampling·N-API 계수·C ABI i
 
 할당은 GC로 회수된 객체를 포함한 V8 sampling 추정치다. 시작·종료, 오류, observer의 할당도 포함하므로 정확한 hot-path allocation census로 해석하지 않는다. 빈/오류 drain에는 endpoint 종료 구간도 포함된다. 큰 batch가 실제 수신 대부분을 처리한다는 사실은 확인되지만, 전체 drain 평균을 active 구간의 평균 batch 크기로 사용하지 않는다. 같은 1-run 비교에도 observer 오버헤드와 비선형 timeout 효과가 있으므로 역사적 처리량 차이 전부를 library 변경만의 인과 효과로 주장하지 않는다.
 
-2-part routed reply에서 코드상 제거한 생성은 라우팅 properties 객체 1개와 string 생성 호출 1회, ReplyToken의 별도 owner/value 객체 1개, 내부 routing Buffer 복사 1회다. 공개 parts array와 Message Buffer 소유권은 유지한다. 계측 원본과 Core 함수별 시간: [node-pass1c-final-diagnostics.json](reports/node-pass1c-final-diagnostics.json), `reports/node-pass1c-final-matched-{before,after}/`.
+2-part routed reply에서 코드상 제거한 생성은 라우팅 properties 객체 1개와 string 생성 호출 1회, ReplyToken의 별도 owner/value 객체 1개, 내부 routing Buffer 복사 1회다. 공개 parts array와 Message Buffer 소유권은 유지한다. 계측 원본과 Core 함수별 시간: node-pass1c-final-diagnostics.json (`reports/node-pass1c-final-diagnostics.json`), `reports/node-pass1c-final-matched-{before,after}/`.
 
 ### Core 큐 추이
 
@@ -121,7 +121,7 @@ DD/PUBSUB는 Kmsg/s, REQREP는 Kops/s다. REQREP latency는 기존 metric 의미
 | MULTI_ROUTER_ROUTER_REQREP | 4096 | 150,208 | 80,992 | 231,200 | 35.03 | 64.598 |
 | MULTI_ROUTER_ROUTER_REQREP | 65536 | 78,300 | 0 | 78,300 | 0.00 | 2.977 |
 
-진단 원본 목록: [node-pass1c-final-timeouts-cells.json](reports/node-pass1c-final-timeouts-cells.json). Timeout 분모는 해당 run의 모든 REQUEST completion 결과 수다.
+진단 원본 목록: node-pass1c-final-timeouts-cells.json (`reports/node-pass1c-final-timeouts-cells.json`). Timeout 분모는 해당 run의 모든 REQUEST completion 결과 수다.
 
 ## 변경 파일과 규칙
 

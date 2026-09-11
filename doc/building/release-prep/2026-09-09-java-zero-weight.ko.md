@@ -21,7 +21,7 @@
 - [ClientServer Channel §5.1](../../../framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.ko.md)은 weight 범위를 `0..10000`으로 정하고, weight 0을 새 target 선택에서 제외한다.
 - [Channel messaging §3.1, §8](../../../framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md)은 positive-weight Ready server만 후보로 삼고, 선택 가능한 target이 없으면 `NotFound`로 끝내도록 정한다.
 - [Framework API §3](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)은 membership이 있으면 weight 0이어도 connection과 liveness를 유지하도록 정한다.
-- [Java channel messaging interface](../../../framework/doc/framework/languages/java/interfaces/channel-messaging.ko.md)는 `submit(...)`이 request 실행과 terminal reply 대기를 시작하는 경계다.
+- [Java channel messaging interface](../../../framework/doc/framework/common/spec/server/languages/java/interfaces/channel-messaging.ko.md)는 `submit(...)`이 request 실행과 terminal reply 대기를 시작하는 경계다.
 
 ## 교차언어 대조
 

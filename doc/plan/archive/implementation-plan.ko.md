@@ -1,6 +1,6 @@
 # 구현 플랜 — 직렬 실행기 계층 정렬
 
-[계약: 스펙 07](../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md) · 이 폴더의 유일한 문서다 — 이전 조사·초안은 git 이력(`e5c38ff111` 이전)에 있다
+[계약: 스펙 07](../../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md) · 이 폴더의 유일한 문서다 — 이전 조사·초안은 git 이력(`e5c38ff111` 이전)에 있다
 
 이 문서는 **네 언어 runtime의 실행기 코드를 스펙 07에 맞추는 순서**를 정한다. 무엇이 옳은지는
 스펙 07이 소유한다 — 이 문서는 그것을 여기에 다시 적지 않고, 어떤 순서로 어느 파일을 고치고
@@ -10,8 +10,8 @@
 
 | # | 문서 | 역할 |
 |---|---|---|
-| 1 | [스펙 07 직렬 실행기 계층](../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md) | **계약.** 코드가 여기에 맞춰진다 |
-| 2 | [스펙 06 상태 소유와 state lane](../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md) | queue map을 무엇으로 지키는가(C1·C2 판별) |
+| 1 | [스펙 07 직렬 실행기 계층](../../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md) | **계약.** 코드가 여기에 맞춰진다 |
+| 2 | [스펙 06 상태 소유와 state lane](../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md) | queue map을 무엇으로 지키는가(C1·C2 판별) |
 | 3 | 스펙 07 | 현행 코드 실측과 언어별 대비 작업 |
 
 ---
@@ -195,8 +195,8 @@ P0-1의 근거는 부록 A에 있다. P0-1은 새 설계가 아니라 스펙 07 
 ### 2.1 P0-4 — mailbox 두 축 회계 (자체 조사 2026-08-28, 부분 완료)
 
 **계약.** owner mailbox는 건수·byte 두 축을 하나의 작업으로 예약하고, **반환은 handler가
-끝난 뒤**다([Framework API §11](../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명) ·
-[02 §7](../../framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현)).
+끝난 뒤**다([Framework API §11](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명) ·
+[02 §7](../../../framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현)).
 `mailboxMessageBudget`·`mailboxByteBudget`은 **MeshNode socket 설정**이다(4언어 exact
 interface 공통).
 
@@ -242,7 +242,7 @@ dotnet은 세 계층 조율자를 모두 갖고 있다. **조율자는 이름을
 
 **dotnet 실행 큐에는 mailbox의 count·byte 회계가 없다(실측 2026-08-28).** admission이
 relocation seal과 stopping 상태만 본다. java·cpp·node는 두 축을 갖고 있으므로
-[Framework API §11](../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)의
+[Framework API §11](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)의
 두 축 계약을 dotnet이 어디서 만족하는지 확인이 필요하다 — `ZLinkManagedMeshNode`의
 `SetMailboxBudgets` 경로가 그 자리일 수 있다. **P0-4로 조사한 뒤 P1 범위를 정한다.**
 
@@ -402,7 +402,7 @@ wrapper를 비우고(P4-1) 그 이름을 조율자에 준다 — 순서를 뒤�
 
 ---
 
-[계약: 스펙 07](../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md) · 이 폴더의 유일한 문서다 — 이전 조사·초안은 git 이력(`e5c38ff111` 이전)에 있다
+[계약: 스펙 07](../../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md) · 이 폴더의 유일한 문서다 — 이전 조사·초안은 git 이력(`e5c38ff111` 이전)에 있다
 
 ---
 
@@ -770,8 +770,8 @@ P1-4처럼 lock을 state lane으로 옮기는 작업이 따르는 절차다. 공
 아니라 캠페인 작업 지시이고, 보고 형식까지 담고 있어 스펙에 둘 자리가 아니었다.
 
 영구 규칙은 스펙에 남겼다 — "반환 전 완료 보장을 보존한다"와 "공개 동기 계약을 lane 도입만을
-이유로 비동기로 바꾸지 않는다"는 [스펙 06 §5 「반환 전 완료 보장」](../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#반환-전-완료-보장),
-교차 불변식이면 한 ownership region으로 합친다는 규칙은 [스펙 06 §4](../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#4-상태-분류와-판별-기준)가 갖는다.
+이유로 비동기로 바꾸지 않는다"는 [스펙 06 §5 「반환 전 완료 보장」](../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#반환-전-완료-보장),
+교차 불변식이면 한 ownership region으로 합친다는 규칙은 [스펙 06 §4](../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#4-상태-분류와-판별-기준)가 갖는다.
 
 #### C.1.1 시그니처 전환 규칙
 
@@ -793,7 +793,7 @@ P1-4처럼 lock을 state lane으로 옮기는 작업이 따르는 절차다. 공
   캡처, store 판독 또는 exact ownership claim을 반환 전에 완료했다면, 전환 뒤에도
   caller가 반환을 관찰하기 전에 그 작업이 완료돼 있어야 한다. 비동기 fire-and-forget
   게시로 바꾸지 않는다.
-- 이 보장을 유지하기 위해 동기 호환 경계가 필요하면 [스펙 06 §5 「완료 신호와 블로킹 호환 경계」](../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#완료-신호와-블로킹-호환-경계) 조건을 확인하고 사유를 기록한다. 완료 신호를
+- 이 보장을 유지하기 위해 동기 호환 경계가 필요하면 [스펙 06 §5 「완료 신호와 블로킹 호환 경계」](../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#완료-신호와-블로킹-호환-경계) 조건을 확인하고 사유를 기록한다. 완료 신호를
   기다리는 이후 단계는 비동기로 남길 수 있지만, 등록·캡처 자체를 반환 뒤로 미루지는
   않는다.
 - 공개 또는 언어별 exact interface가 동기 계약이면, state lane 도입만을 이유로
@@ -809,11 +809,11 @@ P1-4처럼 lock을 state lane으로 옮기는 작업이 따르는 절차다. 공
 - 교차 불변식이나 양방향 대기가 하나라도 있으면 여러 lane으로 나누지 않고 한
   ownership region으로 합친다. "클래스 하나"는 기본 작업 단위일 뿐, 한 클래스 안에
   근거 없이 여러 state lane을 만드는 허가가 아니다.
-- socket·completion·worker 같은 작업 프로토콜 gate는 [스펙 06 §4 「상태 보호와 작업 프로토콜 직렬화를 구분한다」](../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#상태-보호와-작업-프로토콜-직렬화를-구분한다) 조건을 만족할
+- socket·completion·worker 같은 작업 프로토콜 gate는 [스펙 06 §4 「상태 보호와 작업 프로토콜 직렬화를 구분한다」](../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#상태-보호와-작업-프로토콜-직렬화를-구분한다) 조건을 만족할
   때만 state lane 전환 대상에서 제외한다. 제외 사유에는 ownership transfer,
   generation fence, completion 방식과 lock-order를 기록한다.
 - **전환마다 검증을 통과해야 다음으로 간다.** 확인할 항목은
-  [스펙 06 §8 검증 요구](../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#8-검증-요구)가 소유한다.
+  [스펙 06 §8 검증 요구](../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#8-검증-요구)가 소유한다.
 - **성공 지표는 lock 개수가 아니다.** 배타적 접근 문의 개수가 줄어든 것은 증거가
   아니다. 줄여야 하는 것은 "async 경계를 넘어 쓰이는 스냅샷"의 수이며, 이 수를 컴포넌트
   단위로 전후 비교한다. 이 비교는 공개 표면이 아니라 내부 계측으로 확인하는 **내부
