@@ -73,31 +73,35 @@ function sendPayload(socket, routerClient, payload) {
         ? sendRouted(socket, SERVER_ROUTING_ID, payload)
         : sendRouted(socket, payload);
 }
-async function sendServerReply(received) {
+function submitServerReply(received) {
     try {
         let reply = received.send();
         for (const part of received.parts) {
             reply = reply.message(part);
         }
-        const submission = reply.submit();
-        if (submission.result === zlink.SubmitResult.Backpressured) {
-            await submission.admitted;
-        }
-        return true;
+        return reply.submit();
     }
     catch (error) {
         if (error instanceof zlink.SubmitError
             && (error.result === zlink.SubmitResult.NotConnected
                 || error.result === zlink.SubmitResult.NotFound)) {
-            return true;
+            return null;
         }
         throw error;
     }
+}
+async function sendServerReply(received) {
+    const submission = submitServerReply(received);
+    if (submission?.result === zlink.SubmitResult.Backpressured) {
+        await submission.admitted;
+    }
+    return true;
 }
 async function runRoutedSendSendRounds({ sockets, payloads, measurementRecords, routerClient, msgSize, runId, activeStopNs, sendDrainStopNs, replyDrain = null, submit = sendPayload, drainReplies = async (_timeoutMs = 0) => { }, yieldTurn = sleepImmediate, nowNs = currentEpochNs }) {
     let seq = 1n;
     let nextSocket = 0;
     let failure = null;
+    let okSinceProgress = 0;
     const available = sockets.map(() => true);
     const blocked = new Map();
     const submitOne = (index) => {
@@ -121,7 +125,7 @@ async function runRoutedSendSendRounds({ sockets, payloads, measurementRecords, 
         }
         if (submission.result === zlink.SubmitResult.Ok) {
             available[index] = true;
-            return;
+            return true;
         }
         const admission = submission.admitted.then(() => { available[index] = true; }, (error) => {
             try {
@@ -134,6 +138,7 @@ async function runRoutedSendSendRounds({ sockets, payloads, measurementRecords, 
             failure ??= error;
         }).finally(() => blocked.delete(index));
         blocked.set(index, admission);
+        return false;
     };
     while (!failure && nowNs() < activeStopNs) {
         const sendStart = nextSocket;
@@ -150,14 +155,23 @@ async function runRoutedSendSendRounds({ sockets, payloads, measurementRecords, 
             });
             // OK keeps the socket runnable without a Promise turn. BACKPRESSURED
             // removes only this socket until its admitted stage resolves.
-            submitOne(index);
+            if (submitOne(index)) {
+                okSinceProgress += 1;
+                if (okSinceProgress === ASYNC_PROGRESS_BATCH) {
+                    okSinceProgress = 0;
+                    // The public poller owns completion draining. Match C's bounded
+                    // zero-time poll and then let Promise/socket-watch callbacks run.
+                    await drainReplies();
+                    await yieldTurn();
+                }
+            }
         }
         if (sockets.length > 0) {
             nextSocket = (sendStart + 1) % sockets.length;
         }
         if (blocked.size === sockets.length) {
             await drainReplies();
-            await Promise.race(blocked.values());
+            await yieldTurn();
         }
     }
     // The active deadline stops new records. Keep receive/retry progress alive
@@ -167,14 +181,10 @@ async function runRoutedSendSendRounds({ sockets, payloads, measurementRecords, 
         const remainingNs = BigInt(sendDrainStopNs) - BigInt(nowNs());
         if (remainingNs <= 0n)
             break;
-        const waitMs = blocked.size === 0
-            ? Math.max(1, Number(remainingNs / 1000000n))
-            : 0;
+        const remainingMs = Math.max(1, Number(remainingNs / 1000000n));
+        const waitMs = blocked.size === 0 ? remainingMs : Math.min(50, remainingMs);
         await drainReplies(waitMs);
-        if (blocked.size > 0)
-            await Promise.race(blocked.values());
-        else
-            await yieldTurn();
+        await yieldTurn();
     }
     if (failure)
         throw failure;
@@ -368,16 +378,25 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
                         const partSizes = received.parts.map((part) => part.size()).join(',');
                         throw new Error(`invalid multipart echo request: expected=${expectedParts}, sizes=${partSizes}`);
                     }
-                    // Submit every reply through the public async terminal. Core and the
-                    // binding own backpressure and ordering; this Set observes terminal
-                    // lifetime only and never stores a retry payload or serializes sends.
-                    const task = sendServerReply(received);
-                    trackPendingReplyTask(pendingTasks, task, (error) => { sendFailure ??= error; });
+                    // OK replies keep draining this receive burst. On backpressure, C
+                    // returns to its completion poller before receiving another record;
+                    // drive the same public admission stage without retrying here.
+                    const submission = submitServerReply(received);
+                    if (submission?.result === zlink.SubmitResult.Backpressured) {
+                        const task = submission.admitted.then(() => true);
+                        trackPendingReplyTask(pendingTasks, task, (error) => { sendFailure ??= error; });
+                        while (pendingTasks.has(task)) {
+                            waitPollerOne(poller, pollBuffer, 50);
+                            await sleepImmediate();
+                            if (sendFailure)
+                                throw sendFailure;
+                        }
+                    }
                     replyBatchCount += 1;
                     if (replyBatchCount === ASYNC_PROGRESS_BATCH) {
                         replyBatchCount = 0;
-                        // Let Promise continuations reap settled tasks without imposing an
-                        // application reply window; the binding owns WRITABLE retries.
+                        // Let Promise continuations reap settled admission tasks without
+                        // imposing an application reply window.
                         await sleepImmediate();
                         if (sendFailure)
                             throw sendFailure;
