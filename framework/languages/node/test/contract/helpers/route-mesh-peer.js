@@ -1,3 +1,4 @@
+require('./telemetry-log-capture');
 const framework = require('../../../packages/framework/dist/internal');
 
 class RoutePing {
@@ -40,6 +41,9 @@ if (options.mode === 'server-direct') {
   node.routeSendHandlers = [{ packetName: 'RouteNotice', handlerType: RouteNoticeHandler }];
 }
 const registration = framework.createFrameworkRegistration({
+  dispatch: process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR === undefined ? undefined : {
+    diagnostics: { messageFlow: 'normal', sampleRate: 1, includeMessageSizes: false }
+  },
   spotNodes: { mesh: node }
 });
 const providers = new Map();

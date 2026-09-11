@@ -2041,19 +2041,26 @@ namespace
 struct socket_readable_watch_t
 {
     uv_poll_t poll;
+    uv_idle_t dispatch;
     napi_env env;
     void *socket;
     napi_ref callback;
     napi_async_context async_context;
     bool closing;
-    bool closed;
+    unsigned int open_handles;
     bool finalized;
+    int status;
+    int native_errno;
 };
+
+// Only watch registration allocates entries. All access is on the owning Node
+// thread, including Worker environments; no receive call consults this index.
+static thread_local std::unordered_map<void *, socket_readable_watch_t *> readable_watches;
 
 static void delete_socket_readable_watch_if_finalized (
   socket_readable_watch_t *watch)
 {
-    if (watch->closed && watch->finalized)
+    if (watch->open_handles == 0 && watch->finalized)
         delete watch;
 }
 
@@ -2061,7 +2068,8 @@ static void socket_readable_watch_closed (uv_handle_t *handle)
 {
     socket_readable_watch_t *watch =
       static_cast<socket_readable_watch_t *> (handle->data);
-    watch->closed = true;
+    if (--watch->open_handles != 0)
+        return;
     if (watch->async_context) {
         napi_async_destroy (watch->env, watch->async_context);
         watch->async_context = NULL;
@@ -2078,7 +2086,12 @@ static void close_socket_readable_watch (socket_readable_watch_t *watch)
     if (watch->closing)
         return;
     watch->closing = true;
+    readable_watches.erase (watch->socket);
+    uv_idle_stop (&watch->dispatch);
     uv_poll_stop (&watch->poll);
+    uv_close (
+      reinterpret_cast<uv_handle_t *> (&watch->dispatch),
+      socket_readable_watch_closed);
     uv_close (
       reinterpret_cast<uv_handle_t *> (&watch->poll),
       socket_readable_watch_closed);
@@ -2096,27 +2109,19 @@ static void socket_readable_watch_finalize (
         delete_socket_readable_watch_if_finalized (watch);
 }
 
-static void socket_readable_watch_ready (
-  uv_poll_t *poll, int status, int)
+static void socket_readable_watch_dispatch (uv_idle_t *dispatch)
 {
     socket_readable_watch_t *watch =
-      static_cast<socket_readable_watch_t *> (poll->data);
+      static_cast<socket_readable_watch_t *> (dispatch->data);
+    // This is a coalesced delivery of observed progress, not an idle poll.
+    // Stop before JS so work submitted by the handler gets a later loop turn.
+    uv_idle_stop (dispatch);
     if (watch->closing || !watch->callback)
         return;
-    int native_errno = 0;
-    if (status >= 0) {
-        // FD is the mailbox notification source, not a message count. Retire
-        // its edge without dequeuing application data before notifying JS;
-        // a caller may still be waiting for an application queue permit.
-        int events = 0;
-        size_t events_size = sizeof (events);
-        if (zlink_get_option (
-              watch->socket, ZLINK_OPT_EVENTS, &events, &events_size)
-            != ZLINK_CONFIG_OK) {
-            native_errno = zlink_errno ();
-            status = UV_EIO;
-        }
-    }
+    const int status = watch->status;
+    const int native_errno = watch->native_errno;
+    watch->status = 0;
+    watch->native_errno = 0;
     napi_handle_scope scope;
     if (napi_open_handle_scope (watch->env, &scope) != napi_ok)
         return;
@@ -2140,7 +2145,56 @@ static void socket_readable_watch_ready (
     napi_close_handle_scope (watch->env, scope);
 }
 
+static void schedule_socket_readable_watch (socket_readable_watch_t *watch)
+{
+    if (!watch->closing)
+        uv_idle_start (&watch->dispatch, socket_readable_watch_dispatch);
+}
+
+static void socket_readable_watch_ready (uv_poll_t *poll, int status, int)
+{
+    socket_readable_watch_t *watch =
+      static_cast<socket_readable_watch_t *> (poll->data);
+    if (watch->closing)
+        return;
+    int native_errno = 0;
+    if (status >= 0) {
+        // Retire the mailbox edge without consuming DATA. Socket operations
+        // can retire it too, so FD and local progress share the same dispatch.
+        int events = 0;
+        size_t events_size = sizeof (events);
+        if (zlink_get_option (
+              watch->socket, ZLINK_OPT_EVENTS, &events, &events_size)
+            != ZLINK_CONFIG_OK) {
+            native_errno = zlink_errno ();
+            status = UV_EIO;
+        }
+    }
+    if (status < 0 && watch->status == 0) {
+        watch->status = status;
+        watch->native_errno = native_errno;
+        uv_poll_stop (&watch->poll);
+    }
+    schedule_socket_readable_watch (watch);
+}
+
 } // namespace
+
+void socket_readable_watch_progress (napi_env env, napi_callback_info info)
+{
+    if (readable_watches.empty ())
+        return;
+    napi_value socket_arg;
+    size_t argc = 1;
+    void *socket = NULL;
+    if (napi_get_cb_info (env, info, &argc, &socket_arg, NULL, NULL) != napi_ok
+        || argc == 0
+        || napi_get_value_external (env, socket_arg, &socket) != napi_ok)
+        return;
+    const auto it = readable_watches.find (socket);
+    if (it != readable_watches.end ())
+        schedule_socket_readable_watch (it->second);
+}
 
 napi_value socket_readable_watch_start (napi_env env, napi_callback_info info)
 {
@@ -2158,6 +2212,10 @@ napi_value socket_readable_watch_start (napi_env env, napi_callback_info info)
     napi_typeof (env, argv[1], &callback_type);
     if (!socket || callback_type != napi_function) {
         napi_throw_type_error (env, NULL, "invalid readable watch arguments");
+        return NULL;
+    }
+    if (readable_watches.find (socket) != readable_watches.end ()) {
+        napi_throw_error (env, NULL, "socket already has a readable watch");
         return NULL;
     }
 
@@ -2184,8 +2242,10 @@ napi_value socket_readable_watch_start (napi_env env, napi_callback_info info)
     watch->callback = NULL;
     watch->async_context = NULL;
     watch->closing = false;
-    watch->closed = false;
+    watch->open_handles = 0;
     watch->finalized = false;
+    watch->status = 0;
+    watch->native_errno = 0;
     const int init_result = uv_poll_init_socket (loop, &watch->poll, fd);
     if (init_result != 0) {
         napi_throw_error (env, NULL, "socket readable watch start failed");
@@ -2193,6 +2253,18 @@ napi_value socket_readable_watch_start (napi_env env, napi_callback_info info)
         return NULL;
     }
     watch->poll.data = watch;
+    watch->open_handles = 1;
+    const int dispatch_result = uv_idle_init (loop, &watch->dispatch);
+    if (dispatch_result != 0) {
+        watch->closing = true;
+        watch->finalized = true;
+        uv_close (reinterpret_cast<uv_handle_t *> (&watch->poll),
+                  socket_readable_watch_closed);
+        napi_throw_error (env, NULL, "socket readable dispatch start failed");
+        return NULL;
+    }
+    watch->dispatch.data = watch;
+    watch->open_handles = 2;
     if (napi_create_reference (env, argv[1], 1, &watch->callback) != napi_ok) {
         watch->finalized = true;
         close_socket_readable_watch (watch);
@@ -2223,6 +2295,7 @@ napi_value socket_readable_watch_start (napi_env env, napi_callback_info info)
     napi_value out;
     napi_create_external (
       env, watch, socket_readable_watch_finalize, NULL, &out);
+    readable_watches.emplace (socket, watch);
     return out;
 }
 
