@@ -322,8 +322,6 @@ public final class ContractAccess {
 
         int initSize(Object msg, int size);
 
-        long initSizeDataAddress(Object msg, int size);
-
         int close(Object msg);
 
         int move(Object destination, Object source);
@@ -332,7 +330,7 @@ public final class ContractAccess {
 
         long size(Object msg);
 
-        long dataAddress(Object msg);
+        Object data(Object msg);
 
         int refCount(Object msg);
 
@@ -349,6 +347,36 @@ public final class ContractAccess {
         Message materializeVectorPartShared(Object part, boolean hasMore);
 
         Message adoptOwnedMessage(Object nativeMsg);
+
+        byte readByte(Object payload, int offset);
+
+        short readShortBe(Object payload, int offset);
+
+        int readIntLe(Object payload, int offset);
+
+        int readIntBe(Object payload, int offset);
+
+        long readLongLe(Object payload, int offset);
+
+        void writeByte(Object payload, int offset, byte value);
+
+        void writeShortBe(Object payload, int offset, short value);
+
+        void writeIntLe(Object payload, int offset, int value);
+
+        void writeIntBe(Object payload, int offset, int value);
+
+        void writeLongLe(Object payload, int offset, long value);
+
+        void fill(Object payload, int offset, int length, byte value);
+
+        boolean contentEquals(Object payload, byte[] expected);
+
+        void copyFromArray(byte[] source, int sourceOffset, Object destination,
+                           int destinationOffset, int length);
+
+        void copyToArray(Object source, int sourceOffset, byte[] destination,
+                         int destinationOffset, int length);
 
         void copyFromSegment(Object source, long sourceOffset, Object destination,
                              long destinationOffset, long length);
@@ -894,10 +922,6 @@ public final class ContractAccess {
         return nativeMessageAccess().initSize(msg, size);
     }
 
-    public static long nativeMessageInitSizeDataAddress(Object msg, int size) {
-        return nativeMessageAccess().initSizeDataAddress(msg, size);
-    }
-
     public static int nativeMessageClose(Object msg) {
         return nativeMessageAccess().close(msg);
     }
@@ -914,8 +938,8 @@ public final class ContractAccess {
         return nativeMessageAccess().size(msg);
     }
 
-    public static long nativeMessageDataAddress(Object msg) {
-        return nativeMessageAccess().dataAddress(msg);
+    public static Object nativeMessageData(Object msg) {
+        return nativeMessageAccess().data(msg);
     }
 
     public static int nativeMessageRefCount(Object msg) {

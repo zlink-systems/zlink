@@ -315,7 +315,7 @@ public final class CompletionPump implements AutoCloseable {
                             ErrorCategory.CONFIG);
                     }
                     initialized = true;
-                    NativeMessage.messageData(message).reinterpret(1)
+                    NativeMessage.messageData(message)
                         .set(ValueLayout.JAVA_BYTE, 0, (byte) 1);
                     int result = Native.sendPart(writer, message,
                         SendFlags.NONE.value(), Native.PART_FINAL,

@@ -102,8 +102,7 @@ final class SocketSendPlane {
         if (rc != 0)
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         if (length > 0) {
-            MemorySegment dst = NativeMessage.messageData(nativeMsg)
-                .reinterpret(length);
+            MemorySegment dst = NativeMessage.messageData(nativeMsg);
             MemorySegment.copy(payload, 0, dst, 0, length);
         }
         boolean[] consumed = {false};

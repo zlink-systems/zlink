@@ -9,13 +9,24 @@ import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.nativeapi.NativeMessage;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 
 /**
  * Native-backed message operations used by the public Message value.
  */
 final class NativeMessageRuntime {
+    private static final ValueLayout.OfShort SHORT_BE =
+        ValueLayout.JAVA_SHORT_UNALIGNED.withOrder(ByteOrder.BIG_ENDIAN);
+    private static final ValueLayout.OfInt INT_LE =
+        ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
+    private static final ValueLayout.OfInt INT_BE =
+        ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.BIG_ENDIAN);
+    private static final ValueLayout.OfLong LONG_LE =
+        ValueLayout.JAVA_LONG_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
+
     static {
         ContractAccess.register(new ContractAccess.NativeMessageAccess() {
             @Override
@@ -51,7 +62,7 @@ final class NativeMessageRuntime {
 
             @Override
             public Object segmentFromAddress(long address, long size) {
-                return MemorySegment.ofAddress(address).reinterpret(size);
+                return NativeMessageRuntime.segmentFromAddress(address, size);
             }
 
             @Override
@@ -73,12 +84,6 @@ final class NativeMessageRuntime {
             public int initSize(Object msg, int size) {
                 return NativeMessageRuntime.initSize((MemorySegment) msg,
                     size);
-            }
-
-            @Override
-            public long initSizeDataAddress(Object msg, int size) {
-                return NativeMessage.messageInitSizeDataAddress(
-                    (MemorySegment) msg, size);
             }
 
             @Override
@@ -104,8 +109,8 @@ final class NativeMessageRuntime {
             }
 
             @Override
-            public long dataAddress(Object msg) {
-                return NativeMessageRuntime.dataAddress((MemorySegment) msg);
+            public Object data(Object msg) {
+                return NativeMessageRuntime.data((MemorySegment) msg);
             }
 
             @Override
@@ -152,11 +157,101 @@ final class NativeMessageRuntime {
             }
 
             @Override
+            public byte readByte(Object payload, int offset) {
+                return ((MemorySegment) payload)
+                    .get(ValueLayout.JAVA_BYTE, offset);
+            }
+
+            @Override
+            public void writeByte(Object payload, int offset, byte value) {
+                ((MemorySegment) payload)
+                    .set(ValueLayout.JAVA_BYTE, offset, value);
+            }
+
+            @Override
+            public short readShortBe(Object payload, int offset) {
+                return ((MemorySegment) payload)
+                    .get(SHORT_BE, offset);
+            }
+
+            @Override
+            public void writeShortBe(Object payload, int offset, short value) {
+                ((MemorySegment) payload)
+                    .set(SHORT_BE, offset, value);
+            }
+
+            @Override
+            public int readIntLe(Object payload, int offset) {
+                return ((MemorySegment) payload)
+                    .get(INT_LE, offset);
+            }
+
+            @Override
+            public void writeIntLe(Object payload, int offset, int value) {
+                ((MemorySegment) payload)
+                    .set(INT_LE, offset, value);
+            }
+
+            @Override
+            public int readIntBe(Object payload, int offset) {
+                return ((MemorySegment) payload)
+                    .get(INT_BE, offset);
+            }
+
+            @Override
+            public void writeIntBe(Object payload, int offset, int value) {
+                ((MemorySegment) payload)
+                    .set(INT_BE, offset, value);
+            }
+
+            @Override
+            public long readLongLe(Object payload, int offset) {
+                return ((MemorySegment) payload)
+                    .get(LONG_LE, offset);
+            }
+
+            @Override
+            public void writeLongLe(Object payload, int offset, long value) {
+                ((MemorySegment) payload)
+                    .set(LONG_LE, offset, value);
+            }
+
+            @Override
+            public void fill(Object payload, int offset, int length, byte value) {
+                ((MemorySegment) payload).asSlice(offset, length).fill(value);
+            }
+
+            @Override
+            public boolean contentEquals(Object payload, byte[] expected) {
+                return MemorySegment.mismatch((MemorySegment) payload, 0,
+                    expected.length, MemorySegment.ofArray(expected), 0,
+                    expected.length) == -1;
+            }
+
+            @Override
+            public void copyFromArray(byte[] source, int sourceOffset,
+                                      Object destination, int destinationOffset,
+                                      int length) {
+                MemorySegment.copy(MemorySegment.ofArray(source), sourceOffset,
+                    (MemorySegment) destination, destinationOffset, length);
+            }
+
+            @Override
+            public void copyToArray(Object source, int sourceOffset,
+                                    byte[] destination, int destinationOffset,
+                                    int length) {
+                MemorySegment.copy((MemorySegment) source, ValueLayout.JAVA_BYTE,
+                    sourceOffset, destination, destinationOffset, length);
+            }
+
+            @Override
             public void copyFromSegment(Object source, long sourceOffset,
                                         Object destination,
                                         long destinationOffset, long length) {
-                MemorySegment.copy((MemorySegment) source, sourceOffset,
-                    (MemorySegment) destination, destinationOffset, length);
+                MemorySegment.copy((MemorySegment) source,
+                    ValueLayout.JAVA_BYTE, sourceOffset,
+                    (MemorySegment) destination, ValueLayout.JAVA_BYTE,
+                    destinationOffset, length);
             }
 
             @Override
@@ -192,6 +287,12 @@ final class NativeMessageRuntime {
         return NativeLayouts.MESSAGE_LAYOUT.byteSize();
     }
 
+    private static MemorySegment segmentFromAddress(long address, long size) {
+        // This view does not own the native payload. Message validates ranges
+        // and invalidates its cached view when Core consumes or closes the frame.
+        return MemorySegment.ofAddress(address).reinterpret(size);
+    }
+
     static MemorySegment allocate(Arena arena) {
         return arena.allocate(NativeLayouts.MESSAGE_LAYOUT);
     }
@@ -220,8 +321,8 @@ final class NativeMessageRuntime {
         return NativeMessage.messageSize(msg);
     }
 
-    static long dataAddress(MemorySegment msg) {
-        return NativeMessage.messageDataAddress(msg);
+    static MemorySegment data(MemorySegment msg) {
+        return NativeMessage.messageData(msg);
     }
 
     static int refCount(MemorySegment msg) {
