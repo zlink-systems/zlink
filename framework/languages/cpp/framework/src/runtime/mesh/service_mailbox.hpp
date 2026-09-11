@@ -60,6 +60,7 @@ struct service_mailbox_claim_t
     service_mailbox_domain_t domain;
     std::uint64_t serial;
     std::vector<service_mailbox_record_t> records;
+    std::vector<std::size_t> record_bytes;
     std::size_t claimed_messages = 0;
     std::size_t claimed_bytes = 0;
 };
