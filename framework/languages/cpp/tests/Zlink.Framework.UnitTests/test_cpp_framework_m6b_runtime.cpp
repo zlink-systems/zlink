@@ -3747,6 +3747,61 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
       == 0);
 }
 
+void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
+{
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{
+        mesh::raw_mesh_node_options_t{
+          descriptor ("owner-batch-target")} });
+    target->start ();
+    auto &mailbox = target->transport ().mailbox ();
+    const auto enqueue = [&mailbox] (std::string value) {
+        auto application = std::make_shared<host::local_application_dispatch_t> ();
+        application->owner.owner_kind = host::owner_kind_t::node;
+        application->owner.domain = host::ready_domain_t::application;
+        application->record.kind = host::record_kind_t::node_send;
+        application->record.domain = host::ready_domain_t::application;
+        application->parts.push_back (zlink::message_t::from (value));
+        mesh::service_mailbox_record_t record;
+        record.owner = mesh::service_mailbox_t::application_owner (
+          host::owner_kind_t::node);
+        record.domain = mesh::service_mailbox_domain_t::application;
+        record.application = std::move (application);
+        return mailbox.try_enqueue (std::move (record));
+    };
+    assert (enqueue ("first"));
+    assert (enqueue ("second"));
+    assert (enqueue ("third"));
+
+    const auto owner = mesh::service_mailbox_t::application_owner (
+      host::owner_kind_t::node);
+    assert (mailbox.begin_application_drain (owner));
+    std::vector<std::string> dispatched;
+    std::size_t started = 0;
+    std::size_t rejected = 0;
+    assert (target->dispatch_application_owner (
+      owner,
+      [&] (const host::ready_record_t &, const host::receive_record_t &record,
+           std::vector<zlink::message_t> parts) {
+          assert (record.retain_mailbox_reservation);
+          assert (record.release_mailbox_reservation);
+          record.retain_mailbox_reservation ();
+          assert (parts.size () == 1);
+          dispatched.push_back (parts.front ().to_string ());
+          record.release_mailbox_reservation ();
+      },
+      [&] { ++started; }, [&] { ++rejected; }));
+    mailbox.end_application_drain (owner);
+
+    assert ((dispatched == std::vector<std::string>{"first", "second", "third"}));
+    assert (started == dispatched.size ());
+    assert (rejected == 0);
+    assert (mailbox.pending_messages (
+              mesh::service_mailbox_domain_t::application)
+            == 0);
+    target->close ();
+}
+
 void verify_public_host_batches_with_finite_permits ()
 {
     auto source = std::make_shared<host::public_host_runtime_t> (
@@ -7496,6 +7551,7 @@ int main (int argc, char **argv)
     verify_terminal_journal_preserves_outstanding_entries ();
     verify_unbounded_actor_handoff_backlog ();
     verify_public_host_dispatches_one_application_record_per_turn ();
+    verify_public_host_dispatches_one_owner_claim_as_a_batch ();
     verify_public_host_batches_with_finite_permits ();
     verify_public_host_fifo_drains_before_liveness_probe ();
     verify_logical_multicast_continues_after_one_target_failure ();

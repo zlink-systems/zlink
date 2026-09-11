@@ -7,6 +7,8 @@ title: "10. Location — 자동 연결과 Object 위치 · C++"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 10. Location — 자동 연결과 Object 위치
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 9. STREAM](09-stream.ko.md) | [다음: 11. Monitoring — 상태 관측과 진단](11-monitoring.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "10. Location — 자동 연결과 Object 위치 · C++"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/10-location.ko.md) · **C++** · [Java](../../../java/guide/server/10-location.ko.md) · [Kotlin](../../../kotlin/guide/server/10-location.ko.md) · [Node/TypeScript](../../../node/guide/server/10-location.ko.md)
 <!-- language-switch:end -->
-
-# 10. Location — 자동 연결과 Object 위치
 
 > **이 장의 계약 소유 문서** — [Location runtime](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md),
 > [Location Store](../../../common/spec/server/05-location-relocation/02-location-store-redis.ko.md)와

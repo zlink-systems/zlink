@@ -4,6 +4,7 @@ import java.util.function.BooleanSupplier;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.messaging.Message;
@@ -12,14 +13,20 @@ import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.ReplyOperation;
 import systems.zlink.contracts.messaging.RequestOperation;
 import systems.zlink.contracts.messaging.SendOperation;
+import systems.zlink.contracts.messaging.SendSubmitOperation;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.SendFlags;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 
 final class ZLinkJavaSocketSupport {
+    // Callers can mutate only the independent future returned by toCompletableFuture().
+    private static final CompletionStage<Void> ADMITTED =
+        CompletableFuture.completedStage(null);
+
     private ZLinkJavaSocketSupport() {
     }
 
@@ -53,9 +60,14 @@ final class ZLinkJavaSocketSupport {
         for (int i = 1; i < parts.size(); i++) {
             submit.message(parts.get(i));
         }
-        // submit()은 이제 스냅샷을 담은 SendSubmission을 돌려준다. 이전 계약은
-        // admission에서 완료되는 stage였으므로 admitted()가 같은 의미다.
-        return submit.submit().admitted();
+        return submit(submit);
+    }
+
+    static CompletionStage<Void> submit(SendSubmitOperation operation) {
+        var submission = operation.submit();
+        return submission.result() == SubmitResult.BACKPRESSURED
+            ? submission.admitted()
+            : ADMITTED;
     }
 
     static boolean submitSync(

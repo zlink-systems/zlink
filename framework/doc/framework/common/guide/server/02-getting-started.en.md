@@ -46,9 +46,12 @@
     three packages.
 
     ```bash
-    dotnet add package Zlink                         # The core messaging engine (.NET binding)
-    dotnet add package Zlink.Framework                # The contract and runtime
-    dotnet add package Zlink.Framework.AspNetCore # DI/hosted service registration (AddZLinkFramework)
+    # The core messaging engine (.NET binding)
+    dotnet add package Zlink
+    # The contract and runtime
+    dotnet add package Zlink.Framework
+    # DI/hosted service registration (AddZLinkFramework)
+    dotnet add package Zlink.Framework.AspNetCore
     ```
 
     Packages to add when you need them:
@@ -98,8 +101,10 @@
     of these two artifacts.
 
     ```kotlin
-    implementation("systems.zlink:zlink-framework-core")                // The contract and runtime
-    implementation("systems.zlink:zlink-framework-spring-boot-starter") // DI/lifecycle registration
+    // The contract and runtime
+    implementation("systems.zlink:zlink-framework-core")
+    // DI/lifecycle registration
+    implementation("systems.zlink:zlink-framework-spring-boot-starter")
     ```
 
     Artifacts to add when you need them:
@@ -123,9 +128,12 @@
     of these three artifacts.
 
     ```kotlin
-    implementation("systems.zlink:zlink-framework-core")                // The contract and runtime
-    implementation("systems.zlink:zlink-framework-spring-boot-starter") // DI/lifecycle registration
-    implementation("systems.zlink:zlink-framework-kotlin")              // Coroutine idiom
+    // The contract and runtime
+    implementation("systems.zlink:zlink-framework-core")
+    // DI/lifecycle registration
+    implementation("systems.zlink:zlink-framework-spring-boot-starter")
+    // Coroutine idiom
+    implementation("systems.zlink:zlink-framework-kotlin")
     ```
 
     Artifacts to add when you need them:
@@ -219,11 +227,15 @@ endpoint specified directly. This confirms that installation is complete.
 
     builder.Services.AddZLinkFramework(options =>
     {
-        options.AddHandlersFromAssemblyOf<Program>();          // Finds handler types.
+        // Finds handler types.
+        options.AddHandlersFromAssemblyOf<Program>();
 
-        var mesh = options.AddRouteMesh("services")            // Names the mesh.
-            .Listen("tcp://0.0.0.0:7101");                     // Its own endpoint for other processes to connect to.
-        mesh.Channel("greeting").Server();                     // This process handles "greeting".
+        // Names the mesh.
+        var mesh = options.AddRouteMesh("services")
+            // Its own endpoint for other processes to connect to.
+            .Listen("tcp://0.0.0.0:7101");
+        // This process handles "greeting".
+        mesh.Channel("greeting").Server();
     });
 
     var app = builder.Build();
@@ -247,9 +259,12 @@ endpoint specified directly. This confirms that installation is complete.
     {
         auto app = zlink::framework::app_t::create ();
         app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-            auto mesh = options.add_route_mesh ("services")     // Names the mesh.
-              .listen ("tcp://0.0.0.0:7101");                   // Its own endpoint for other processes to connect to.
-            mesh.channel_name ("greeting").server ()            // This process handles "greeting".
+            // Names the mesh.
+            auto mesh = options.add_route_mesh ("services")
+              // Its own endpoint for other processes to connect to.
+              .listen ("tcp://0.0.0.0:7101");
+            // This process handles "greeting".
+            mesh.channel_name ("greeting").server ()
               .add_request_handler<hello_handler_t, hello_t, greeting_t> ();
         });
         return app.run (argc, argv);
@@ -279,11 +294,15 @@ endpoint specified directly. This confirms that installation is complete.
         @Bean
         ZLinkFrameworkConfigurer zlink() {
             return options -> {
-                options.addHandlersFromPackageOf(ServerApplication.class);  // Finds handler types.
+                // Finds handler types.
+                options.addHandlersFromPackageOf(ServerApplication.class);
 
-                ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services") // Names the mesh.
-                    .listen("tcp://0.0.0.0:7101");                          // Its own endpoint for other processes to connect to.
-                mesh.channelName("greeting").server()                           // This process handles "greeting".
+                // Names the mesh.
+                ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
+                    // Its own endpoint for other processes to connect to.
+                    .listen("tcp://0.0.0.0:7101");
+                // This process handles "greeting".
+                mesh.channelName("greeting").server()
                     .addRequestHandler(HelloHandler.class, Hello.class, Greeting.class);
             };
         }
@@ -308,11 +327,15 @@ endpoint specified directly. This confirms that installation is complete.
 
         @Bean
         fun zlink(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
-            options.addHandlersFromPackageOf(ServerApplication::class.java)  // Finds handler types.
+            // Finds handler types.
+            options.addHandlersFromPackageOf(ServerApplication::class.java)
 
-            val mesh = options.addRouteMesh("services")                      // Names the mesh.
-                .listen("tcp://0.0.0.0:7101")                                // Its own endpoint for other processes to connect to.
-            mesh.channelName("greeting").server()                                // This process handles "greeting".
+            // Names the mesh.
+            val mesh = options.addRouteMesh("services")
+                // Its own endpoint for other processes to connect to.
+                .listen("tcp://0.0.0.0:7101")
+            // This process handles "greeting".
+            mesh.channelName("greeting").server()
                 .addRequestHandler(HelloHandler::class.java, Hello::class.java, Greeting::class.java)
         }
     }
@@ -334,15 +357,19 @@ endpoint specified directly. This confirms that installation is complete.
           useFactory: () => {
             const builder = zlinkFramework();
 
-            const mesh = builder.addRouteMesh('services')   // Names the mesh.
-              .listen('tcp://0.0.0.0:7101');                // Its own endpoint for other processes to connect to.
-            mesh.channel('greeting').server()               // This process handles "greeting".
+            // Names the mesh.
+            const mesh = builder.addRouteMesh('services')
+              // Its own endpoint for other processes to connect to.
+              .listen('tcp://0.0.0.0:7101');
+            // This process handles "greeting".
+            mesh.channel('greeting').server()
               .addRequestHandler(PacketNames.hello, HelloHandler);
 
             return builder.build();
           }
         }),
-        zlinkModule(__dirname, { })                         // Gathers handlers as providers.
+        // Gathers handlers as providers.
+        zlinkModule(__dirname, { })
       ]
     })
     export class ServerModule {}
@@ -366,9 +393,12 @@ endpoint specified directly. This confirms that installation is complete.
 
     builder.Services.AddZLinkFramework(options =>
     {
-        var mesh = options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7102");  // It also needs its own endpoint.
-        mesh.Channel("greeting").Client();                     // The call-only side is Client.
-        mesh.PeerConnections.Connect("tcp://127.0.0.1:7101");  // Manual connection — write the server endpoint directly.
+        // It also needs its own endpoint.
+        var mesh = options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7102");
+        // The call-only side is Client.
+        mesh.Channel("greeting").Client();
+        // Manual connection — write the server endpoint directly.
+        mesh.PeerConnections.Connect("tcp://127.0.0.1:7101");
     });
 
     var app = builder.Build();
@@ -393,9 +423,12 @@ endpoint specified directly. This confirms that installation is complete.
 
     ```cpp
     app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-        auto mesh = options.add_route_mesh ("services").listen ("tcp://0.0.0.0:7102");  // It also needs its own endpoint.
-        mesh.channel_name ("greeting").client ();               // The call-only side is client.
-        mesh.peer_connections ().connect ("tcp://127.0.0.1:7101"); // Manual connection — write the server endpoint directly.
+        // It also needs its own endpoint.
+        auto mesh = options.add_route_mesh ("services").listen ("tcp://0.0.0.0:7102");
+        // The call-only side is client.
+        mesh.channel_name ("greeting").client ();
+        // Manual connection — write the server endpoint directly.
+        mesh.peer_connections ().connect ("tcp://127.0.0.1:7101");
 
         options.http ()
           .listen ("http://0.0.0.0:5000")
@@ -416,9 +449,12 @@ endpoint specified directly. This confirms that installation is complete.
     @Bean
     ZLinkFrameworkConfigurer zlink() {
         return options -> {
-            ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102");  // It also needs its own endpoint.
-            mesh.channelName("greeting").client();                  // The call-only side is Client.
-            mesh.peerConnections().connect("tcp://127.0.0.1:7101"); // Manual connection — write the server endpoint directly.
+            // It also needs its own endpoint.
+            ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102");
+            // The call-only side is Client.
+            mesh.channelName("greeting").client();
+            // Manual connection — write the server endpoint directly.
+            mesh.peerConnections().connect("tcp://127.0.0.1:7101");
         };
     }
 
@@ -443,9 +479,12 @@ endpoint specified directly. This confirms that installation is complete.
     ```kotlin
     @Bean
     fun zlink(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
-        val mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102")  // It also needs its own endpoint.
-        mesh.channelName("greeting").client()                       // The call-only side is Client.
-        mesh.peerConnections().connect("tcp://127.0.0.1:7101")  // Manual connection — write the server endpoint directly.
+        // It also needs its own endpoint.
+        val mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102")
+        // The call-only side is Client.
+        mesh.channelName("greeting").client()
+        // Manual connection — write the server endpoint directly.
+        mesh.peerConnections().connect("tcp://127.0.0.1:7101")
     }
 
     @RestController
@@ -467,9 +506,12 @@ endpoint specified directly. This confirms that installation is complete.
     ZLinkModule.forRootFactory({
       useFactory: () => {
         const builder = zlinkFramework();
-        const mesh = builder.addRouteMesh('services').listen('tcp://0.0.0.0:7102');  // It also needs its own endpoint.
-        mesh.channel('greeting').client();                      // The call-only side is client.
-        mesh.peerConnections().connect('tcp://127.0.0.1:7101');   // Manual connection — write the server endpoint directly.
+        // It also needs its own endpoint.
+        const mesh = builder.addRouteMesh('services').listen('tcp://0.0.0.0:7102');
+        // The call-only side is client.
+        mesh.channel('greeting').client();
+        // Manual connection — write the server endpoint directly.
+        mesh.peerConnections().connect('tcp://127.0.0.1:7101');
         return builder.build();
       }
     })
@@ -704,15 +746,19 @@ The HTTP handler uses the spot manager it received through DI.
             : SampleDefaults.GameName;
 
         var created = await spots
-            .Create(SampleTypes.GameSpot)      // A node that provides this stable type becomes a candidate.
-            .InMesh(SampleNodes.Mesh)          // Selects the RouteMesh to create the Object on.
+            // A node that provides this stable type becomes a candidate.
+            .Create(SampleTypes.GameSpot)
+            // Selects the RouteMesh to create the Object on.
+            .InMesh(SampleNodes.Mesh)
             .Request(new TicTacToeGameCreateReq(
                 gameName,
-                SampleDefaults.RequiredLevel)) // The initial settings passed to the new Spot's OnCreateAsync.
+                // The initial settings passed to the new Spot's OnCreateAsync.
+                SampleDefaults.RequiredLevel))
             .Async(cancellationToken);
 
         return Results.Ok(new CreateGameHttpRes(
-            created.Spot.SpotId,               // Uses the Framework-issued SpotId as the room id.
+            // Uses the Framework-issued SpotId as the room id.
+            created.Spot.SpotId,
             settings.PlayEndpoints,
             settings.PlayNodes,
             gameName,
@@ -732,14 +778,18 @@ The HTTP handler uses the spot manager it received through DI.
                                  : request.game_name;
 
         auto created = co_await _spots
-          .create (sample_types_t::game_spot)     // A node that provides this stable type becomes a candidate.
-          .in_mesh (sample_nodes_t::mesh)         // Selects the RouteMesh to create the Object on.
+          // A node that provides this stable type becomes a candidate.
+          .create (sample_types_t::game_spot)
+          // Selects the RouteMesh to create the Object on.
+          .in_mesh (sample_nodes_t::mesh)
           .creation_request (tictactoe_game_create_req_t{
-            game_name, sample_defaults_t::required_level})  // The initial settings passed to the new Spot's on_create.
+            // The initial settings passed to the new Spot's on_create.
+            game_name, sample_defaults_t::required_level})
           .async ();
 
         co_return create_game_http_res_t{
-          created.spot.spot_id (),                // Uses the Framework-issued SpotId as the room id.
+          // Uses the Framework-issued SpotId as the room id.
+          created.spot.spot_id (),
           _settings.play_endpoints,
           _settings.play_nodes,
           game_name,
@@ -758,14 +808,18 @@ The HTTP handler uses the spot manager it received through DI.
             : request.gameName();
 
         return spots
-            .create(SampleTypes.GAME_SPOT)      // A node that provides this stable type becomes a candidate.
-            .inMesh(SampleNodes.MESH)           // Selects the RouteMesh to create the Object on.
+            // A node that provides this stable type becomes a candidate.
+            .create(SampleTypes.GAME_SPOT)
+            // Selects the RouteMesh to create the Object on.
+            .inMesh(SampleNodes.MESH)
             .request(new TicTacToeGameCreateReq(
                 gameName,
-                SampleDefaults.REQUIRED_LEVEL)) // The initial settings passed to the new Spot's onCreate.
+                // The initial settings passed to the new Spot's onCreate.
+                SampleDefaults.REQUIRED_LEVEL))
             .submit()
             .thenApply(created -> new CreateGameHttpRes(
-                created.spot().spotId(),        // Uses the Framework-issued SpotId as the room id.
+                // Uses the Framework-issued SpotId as the room id.
+                created.spot().spotId(),
                 settings.playEndpoints(),
                 settings.playNodes(),
                 gameName,
@@ -782,16 +836,20 @@ The HTTP handler uses the spot manager it received through DI.
         val gameName = request.gameName.ifBlank { SampleDefaults.GAME_NAME }
 
         val created = spots
-            .create(SampleTypes.GAME_SPOT)      // A node that provides this stable type becomes a candidate.
-            .inMesh(SampleNodes.MESH)           // Selects the RouteMesh to create the Object on.
+            // A node that provides this stable type becomes a candidate.
+            .create(SampleTypes.GAME_SPOT)
+            // Selects the RouteMesh to create the Object on.
+            .inMesh(SampleNodes.MESH)
             .request(TicTacToeGameCreateReq(
                 gameName,
-                SampleDefaults.REQUIRED_LEVEL)) // The initial settings passed to the new Spot's onCreate.
+                // The initial settings passed to the new Spot's onCreate.
+                SampleDefaults.REQUIRED_LEVEL))
             .submit()
             .await()
 
         return CreateGameHttpRes(
-            created.spot().spotId(),            // Uses the Framework-issued SpotId as the room id.
+            // Uses the Framework-issued SpotId as the room id.
+            created.spot().spotId(),
             settings.playEndpoints,
             settings.playNodes,
             gameName,
@@ -808,15 +866,19 @@ The HTTP handler uses the spot manager it received through DI.
       const gameName = request.gameName?.trim() || SampleDefaults.gameName;
 
       const created = await this.spots
-        .create(SampleTypes.gameSpot)         // A node that provides this stable type becomes a candidate.
-        .inMesh(SampleNodes.mesh)             // Selects the RouteMesh to create the Object on.
+        // A node that provides this stable type becomes a candidate.
+        .create(SampleTypes.gameSpot)
+        // Selects the RouteMesh to create the Object on.
+        .inMesh(SampleNodes.mesh)
         .request(tictactoeGameCreateReq(
           gameName,
-          SampleDefaults.requiredLevel))      // The initial settings passed to the new Spot's onCreate.
+          // The initial settings passed to the new Spot's onCreate.
+          SampleDefaults.requiredLevel))
         .submit();
 
       return createGameHttpRes(
-        created.spot.spotId,                  // Uses the Framework-issued SpotId as the room id.
+        // Uses the Framework-issued SpotId as the room id.
+        created.spot.spotId,
         this.settings.playEndpoints,
         this.settings.playNodes,
         gameName,
@@ -842,7 +904,8 @@ as follows.
 
     mesh.Objects().Server()
         .AddSpotFactory<TicTacToeGame>(
-            SampleTypes.GameSpot,               // The same stable type the API passed to Create.
+            // The same stable type the API passed to Create.
+            SampleTypes.GameSpot,
             factory => factory.DisableRelocation());
     ```
 
@@ -854,7 +917,8 @@ as follows.
       .set_routing_id (routing_id_t::from ("tictactoe-play-1"));
 
     mesh.add_spot_factory<tictactoe_game_t> (
-      sample_types_t::game_spot,          // The same stable type the API passed to create.
+      // The same stable type the API passed to create.
+      sample_types_t::game_spot,
       [] (spot_context_t context) { return std::make_shared<tictactoe_game_t> (std::move (context)); },
       [] (auto &factory) { factory.disable_relocation (); });
     ```
@@ -868,7 +932,8 @@ as follows.
 
     mesh.objects().server()
         .addSpotFactory(
-            SampleTypes.GAME_SPOT,          // The same stable type the API passed to create.
+            // The same stable type the API passed to create.
+            SampleTypes.GAME_SPOT,
             TicTacToeGame.class,
             factory -> factory.disableRelocation());
     ```
@@ -882,7 +947,8 @@ as follows.
 
     mesh.objects().server()
         .addSpotFactory(
-            SampleTypes.GAME_SPOT,          // The same stable type the API passed to create.
+            // The same stable type the API passed to create.
+            SampleTypes.GAME_SPOT,
             TicTacToeGame::class.java
         ) { factory -> factory.disableRelocation() }
     ```
@@ -896,7 +962,8 @@ as follows.
 
     mesh.objects().server()
       .addSpotFactory(
-        SampleTypes.gameSpot,               // The same stable type the API passed to create.
+        // The same stable type the API passed to create.
+        SampleTypes.gameSpot,
         TicTacToeGame,
         factory => factory.disableRelocation());
     ```

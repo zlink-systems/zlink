@@ -7,6 +7,8 @@ title: "2. Getting Started · Java"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 2. Getting Started
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 1. Overview](01-overview.en.md) | [Next: 3. Core Concepts](03-concepts.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "2. Getting Started · Java"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/02-getting-started.en.md) · [C++](../../../cpp/guide/server/02-getting-started.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/02-getting-started.en.md) · [Node/TypeScript](../../../node/guide/server/02-getting-started.en.md)
 <!-- language-switch:end -->
-
-# 2. Getting Started
 
 > **The document that owns this chapter's contract** — none. This is a walkthrough for
 > installing and confirming your first working setup.
@@ -31,8 +31,10 @@ Get it from Maven Central. The minimal combination needed to build one server co
 of these two artifacts.
 
 ```kotlin
-implementation("systems.zlink:zlink-framework-core")                // The contract and runtime
-implementation("systems.zlink:zlink-framework-spring-boot-starter") // DI/lifecycle registration
+// The contract and runtime
+implementation("systems.zlink:zlink-framework-core")
+// DI/lifecycle registration
+implementation("systems.zlink:zlink-framework-spring-boot-starter")
 ```
 
 Artifacts to add when you need them:
@@ -72,11 +74,15 @@ public class ServerApplication {
     @Bean
     ZLinkFrameworkConfigurer zlink() {
         return options -> {
-            options.addHandlersFromPackageOf(ServerApplication.class);  // Finds handler types.
+            // Finds handler types.
+            options.addHandlersFromPackageOf(ServerApplication.class);
 
-            ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services") // Names the mesh.
-                .listen("tcp://0.0.0.0:7101");                          // Its own endpoint for other processes to connect to.
-            mesh.channelName("greeting").server()                           // This process handles "greeting".
+            // Names the mesh.
+            ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
+                // Its own endpoint for other processes to connect to.
+                .listen("tcp://0.0.0.0:7101");
+            // This process handles "greeting".
+            mesh.channelName("greeting").server()
                 .addRequestHandler(HelloHandler.class, Hello.class, Greeting.class);
         };
     }
@@ -98,9 +104,12 @@ public final class HelloHandler implements ZLinkRequestHandler<Hello, Greeting> 
 @Bean
 ZLinkFrameworkConfigurer zlink() {
     return options -> {
-        ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102");  // It also needs its own endpoint.
-        mesh.channelName("greeting").client();                  // The call-only side is Client.
-        mesh.peerConnections().connect("tcp://127.0.0.1:7101"); // Manual connection — write the server endpoint directly.
+        // It also needs its own endpoint.
+        ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102");
+        // The call-only side is Client.
+        mesh.channelName("greeting").client();
+        // Manual connection — write the server endpoint directly.
+        mesh.peerConnections().connect("tcp://127.0.0.1:7101");
     };
 }
 
@@ -193,14 +202,18 @@ public CompletionStage<CreateGameHttpRes> create(@RequestBody CreateGameHttpReq 
         : request.gameName();
 
     return spots
-        .create(SampleTypes.GAME_SPOT)      // A node that provides this stable type becomes a candidate.
-        .inMesh(SampleNodes.MESH)           // Selects the RouteMesh to create the Object on.
+        // A node that provides this stable type becomes a candidate.
+        .create(SampleTypes.GAME_SPOT)
+        // Selects the RouteMesh to create the Object on.
+        .inMesh(SampleNodes.MESH)
         .request(new TicTacToeGameCreateReq(
             gameName,
-            SampleDefaults.REQUIRED_LEVEL)) // The initial settings passed to the new Spot's onCreate.
+            // The initial settings passed to the new Spot's onCreate.
+            SampleDefaults.REQUIRED_LEVEL))
         .submit()
         .thenApply(created -> new CreateGameHttpRes(
-            created.spot().spotId(),        // Uses the Framework-issued SpotId as the room id.
+            // Uses the Framework-issued SpotId as the room id.
+            created.spot().spotId(),
             settings.playEndpoints(),
             settings.playNodes(),
             gameName,
@@ -224,7 +237,8 @@ ZLinkMeshNodeBuilder mesh = options.addRouteMesh(SampleNodes.MESH)
 
 mesh.objects().server()
     .addSpotFactory(
-        SampleTypes.GAME_SPOT,          // The same stable type the API passed to create.
+        // The same stable type the API passed to create.
+        SampleTypes.GAME_SPOT,
         TicTacToeGame.class,
         factory -> factory.disableRelocation());
 ```

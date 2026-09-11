@@ -61,9 +61,11 @@ Instance Spot을 등록한다.
     ```csharp
     // Play 서버 — Entry Spot과 방을 담을 User Spot.
     mesh.Objects().Server()
-        .AddEntrySpot<BingoEntrySpot>()                 // Entry Spot은 stable type이 없다.
+        // Entry Spot은 stable type이 없다.
+        .AddEntrySpot<BingoEntrySpot>()
         .AddSpotFactory<BingoRoom>(
-            SampleNames.RoomSpotType,                   // stable type — 생성할 때 이 이름으로 선택한다.
+            // stable type — 생성할 때 이 이름으로 선택한다.
+            SampleNames.RoomSpotType,
             factory => factory
                 .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
                 .PreserveStateWith<BingoRoomRelocationAdapter>());
@@ -83,10 +85,12 @@ Instance Spot을 등록한다.
     ```cpp
     // Play 서버 — Entry Spot과 방을 담을 User Spot.
     mesh.set_object_role (object_role_t::server)
-      .add_entry_spot<bingo_entry_spot_t> (              // Entry Spot은 stable type이 없다.
+      // Entry Spot은 stable type이 없다.
+      .add_entry_spot<bingo_entry_spot_t> (
         [] (entry_spot_context_t c) { return std::make_shared<bingo_entry_spot_t> (std::move (c)); })
       .add_spot_factory<bingo_room_t> (
-        sample_names_t::room_spot_type,                  // stable type — 생성할 때 이 이름으로 선택한다.
+        // stable type — 생성할 때 이 이름으로 선택한다.
+        sample_names_t::room_spot_type,
         [] (spot_context_t c) { return std::make_shared<bingo_room_t> (std::move (c)); },
         [] (auto &factory) {
             factory.set_execution_mode (user_spot_execution_mode_t::spot_wide);
@@ -111,9 +115,11 @@ Instance Spot을 등록한다.
     ```java
     // Play 서버 — Entry Spot과 방을 담을 User Spot.
     mesh.objects().server()
-        .addEntrySpot(BingoEntrySpot.class)              // Entry Spot은 stable type이 없다.
+        // Entry Spot은 stable type이 없다.
+        .addEntrySpot(BingoEntrySpot.class)
         .addSpotFactory(
-            SampleNames.RoomSpotType,                    // stable type — 생성할 때 이 이름으로 선택한다.
+            // stable type — 생성할 때 이 이름으로 선택한다.
+            SampleNames.RoomSpotType,
             BingoRoom.class,
             factory -> factory
                 .executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
@@ -135,9 +141,11 @@ Instance Spot을 등록한다.
     ```kotlin
     // Play 서버 — Entry Spot과 방을 담을 User Spot.
     mesh.objects().server()
-        .addEntrySpot(BingoEntrySpot::class.java)          // Entry Spot은 stable type이 없다.
+        // Entry Spot은 stable type이 없다.
+        .addEntrySpot(BingoEntrySpot::class.java)
         .addSpotFactory(
-            SampleNames.RoomSpotType,                      // stable type — 생성할 때 이 이름으로 선택한다.
+            // stable type — 생성할 때 이 이름으로 선택한다.
+            SampleNames.RoomSpotType,
             BingoRoom::class.java,
         ) { factory ->
             factory.executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
@@ -160,9 +168,11 @@ Instance Spot을 등록한다.
     ```typescript
     // Play 서버 — Entry Spot과 방을 담을 User Spot.
     mesh.objects().server()
-      .addEntrySpot(BingoEntrySpot)                    // Entry Spot은 stable type이 없다.
+      // Entry Spot은 stable type이 없다.
+      .addEntrySpot(BingoEntrySpot)
       .addSpotFactory(
-        SampleNames.roomSpotType,                      // stable type — 생성할 때 이 이름으로 선택한다.
+        // stable type — 생성할 때 이 이름으로 선택한다.
+        SampleNames.roomSpotType,
         BingoRoom,
         (factory) => factory
           .executionMode(ZLinkUserSpotExecutionMode.SpotWide)
@@ -188,17 +198,21 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
 
     ```csharp
     // Instance Spot — 생성 호출이 없다. 해당 ID로 보내면 없을 때 생성된다.
-    var allocated = await spotClient                    // IZLinkSpotClient
+    // IZLinkSpotClient
+    var allocated = await spotClient
         .RequestToSpot($"match:{levelBucket}", new ReserveBingoRoomReq { ... })
-        .InstanceSpot(SampleNames.MatchmakerSpotType)   // 없으면 생성해도 된다는 intent(cold activation).
+        // 없으면 생성해도 된다는 intent(cold activation).
+        .InstanceSpot(SampleNames.MatchmakerSpotType)
         .InMesh(SampleNames.MatchmakingMeshName)
         .Async<ReserveBingoRoomRes>(cancellationToken);
 
     // User Spot — 생성 호출이 따로 있다.
-    var created = await spots                           // IZLinkSpotManager
+    // IZLinkSpotManager
+    var created = await spots
         .GetOrCreate(allocated.RoomId, SampleNames.RoomSpotType)
         .InMesh(SampleNames.PlayMeshName)
-        .Request(allocated.Settings)                    // 새 Spot의 OnCreateAsync로 전달된다.
+        // 새 Spot의 OnCreateAsync로 전달된다.
+        .Request(allocated.Settings)
         .Async(cancellationToken);
     ```
 
@@ -208,7 +222,8 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
     // Instance Spot — 생성 호출이 없다. 해당 ID로 보내면 없을 때 생성된다.
     auto allocated = co_await spot_client
                        .request_to_spot ("match:" + level_bucket, reserve_bingo_room_req_t{})
-                       .instance_spot (sample_names_t::matchmaker_spot_type) // 없으면 생성해도 된다는 intent.
+                       // 없으면 생성해도 된다는 intent.
+                       .instance_spot (sample_names_t::matchmaker_spot_type)
                        .in_mesh (sample_names_t::matchmaking_mesh_name)
                        .async<reserve_bingo_room_res_t> ();
 
@@ -216,7 +231,8 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
     auto created = co_await spots
                      .get_or_create (allocated.room_id, sample_names_t::room_spot_type)
                      .in_mesh (sample_names_t::play_mesh_name)
-                     .request (allocated.settings) // 새 Spot의 on_create로 전달된다.
+                     // 새 Spot의 on_create로 전달된다.
+                     .request (allocated.settings)
                      .async ();
     ```
 
@@ -226,7 +242,8 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
     // Instance Spot — 생성 호출이 없다. 해당 ID로 보내면 없을 때 생성된다.
     ReserveBingoRoomRes allocated = spotClient
         .requestToSpot("match:" + levelBucket, new ReserveBingoRoomReq())
-        .instanceSpot(SampleNames.MatchmakerSpotType) // 없으면 생성해도 된다는 intent.
+        // 없으면 생성해도 된다는 intent.
+        .instanceSpot(SampleNames.MatchmakerSpotType)
         .inMesh(SampleNames.MatchmakingMeshName)
         .submit(ReserveBingoRoomRes.class)
         .toCompletableFuture().join();
@@ -235,7 +252,8 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
     ZLinkSpotCreateResult created = spots
         .getOrCreate(allocated.roomId(), SampleNames.RoomSpotType)
         .inMesh(SampleNames.PlayMeshName)
-        .request(allocated.settings())   // 새 Spot의 onCreate로 전달된다.
+        // 새 Spot의 onCreate로 전달된다.
+        .request(allocated.settings())
         .submit()
         .toCompletableFuture().join();
     ```
@@ -246,7 +264,8 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
     // Instance Spot — 생성 호출이 없다. 해당 ID로 보내면 없을 때 생성된다.
     val allocated = spotClient
         .requestToSpot("match:$levelBucket", ReserveBingoRoomReq())
-        .instanceSpot(SampleNames.MatchmakerSpotType) // 없으면 생성해도 된다는 intent.
+        // 없으면 생성해도 된다는 intent.
+        .instanceSpot(SampleNames.MatchmakerSpotType)
         .inMesh(SampleNames.MatchmakingMeshName)
         .submit(ReserveBingoRoomRes::class.java)
         .await()
@@ -255,7 +274,8 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
     val created = spots
         .getOrCreate(allocated.roomId, SampleNames.RoomSpotType)
         .inMesh(SampleNames.PlayMeshName)
-        .request(allocated.settings)     // 새 Spot의 onCreate로 전달된다.
+        // 새 Spot의 onCreate로 전달된다.
+        .request(allocated.settings)
         .submit()
         .await()
     ```
@@ -266,7 +286,8 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
     // Instance Spot — 생성 호출이 없다. 해당 ID로 보내면 없을 때 생성된다.
     const allocated = await spotClient
       .requestToSpot(`match:${levelBucket}`, reserveBingoRoomReq())
-      .instanceSpot(SampleNames.matchmakerSpotType) // 없으면 생성해도 된다는 intent.
+      // 없으면 생성해도 된다는 intent.
+      .instanceSpot(SampleNames.matchmakerSpotType)
       .inMesh(SampleNames.matchmakingMeshName)
       .submit<ReserveBingoRoomRes>();
 
@@ -274,7 +295,8 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
     const created = await spots
       .getOrCreate(allocated.roomId, SampleNames.roomSpotType)
       .inMesh(SampleNames.playMeshName)
-      .request(allocated.settings)      // 새 Spot의 onCreate로 전달된다.
+      // 새 Spot의 onCreate로 전달된다.
+      .request(allocated.settings)
       .submit();
     ```
 
@@ -480,16 +502,19 @@ ID로 쓸 Spot을 확보하는 호출**이다. 어느 쪽을 쓸지는 "이미 �
 
     ```cpp
     auto created = co_await spots
-                     .create ("game-room")            // stable type으로 factory와 배치 후보를 선택한다.
+                     // stable type으로 factory와 배치 후보를 선택한다.
+                     .create ("game-room")
                      .in_mesh ("play")
-                     .request (create_game_t{"ranked"}) // on_create에 전달할 생성 요청이다.
+                     // on_create에 전달할 생성 요청이다.
+                     .request (create_game_t{"ranked"})
                      .timeout (std::chrono::seconds (10))
                      .async ();
 
     if (created.state == spot_create_state_t::rejected)
         throw std::runtime_error ("Game creation was rejected.");
 
-    auto spot_id = created.spot.spot_id (); // 이후 메시징에는 전역 SpotId만 사용한다.
+    // 이후 메시징에는 전역 SpotId만 사용한다.
+    auto spot_id = created.spot.spot_id ();
     ```
 
 === "Java"
@@ -646,13 +671,16 @@ ID로 쓸 Spot을 확보하는 호출**이다. 어느 쪽을 쓸지는 "이미 �
     val result = spots
         .getOrCreate("lobby-eu-1", "lobby")
         .inMesh("play")
-        .request(CreateLobby("eu")) // EXISTING으로 끝나면 이 요청은 전달되지 않는다.
+        // EXISTING으로 끝나면 이 요청은 전달되지 않는다.
+        .request(CreateLobby("eu"))
         .submit()
         .await()
 
     when (result.state()) {
-        ZLinkSpotCreateState.EXISTING -> { }  // 이미 있던 lobby를 그대로 쓴다.
-        ZLinkSpotCreateState.CREATED -> { }   // 이 호출이 만들었다.
+        // 이미 있던 lobby를 그대로 쓴다.
+        ZLinkSpotCreateState.EXISTING -> { }
+        // 이 호출이 만들었다.
+        ZLinkSpotCreateState.CREATED -> { }
         // 생성 callback이 거절해 Ready Spot이 없다.
         ZLinkSpotCreateState.REJECTED -> error("Lobby creation was rejected.")
     }
@@ -878,7 +906,8 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
             Chat message,
             CancellationToken cancellationToken)
         {
-            spot.AppendChat(message.Text);  // Spot 상태를 직접 만진다. 락은 필요 없다.
+            // Spot 상태를 직접 만진다. 락은 필요 없다.
+            spot.AppendChat(message.Text);
             return ValueTask.CompletedTask;
         }
     }
@@ -913,7 +942,8 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
     {
         public ValueTask HandleAsync(
             GameRoom spot,
-            PlayerActor actor,              // 이 메시지를 받은 Actor다.
+            // 이 메시지를 받은 Actor다.
+            PlayerActor actor,
             IZLinkMessageContext messageContext,
             PlaceMark message,
             CancellationToken cancellationToken)
@@ -934,7 +964,8 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
         // Spot 앞 packet.
         task_t<void> chat (const chat_t &message)
         {
-            append_chat (message.text); // Spot 상태를 직접 만진다. 락은 필요 없다.
+            // Spot 상태를 직접 만진다. 락은 필요 없다.
+            append_chat (message.text);
             co_return;
         }
 
@@ -949,7 +980,8 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
         }
 
         // member Actor 앞 packet — Spot과 Actor를 함께 받는다.
-        task_t<void> place_mark (player_actor_t &actor,   // 이 메시지를 받은 Actor다.
+        // 이 메시지를 받은 Actor다.
+        task_t<void> place_mark (player_actor_t &actor,
                                  message_context_t &,
                                  const place_mark_t &message)
         {
@@ -966,7 +998,8 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
     public final class ChatHandler implements ZLinkSpotPacketHandler<GameRoom, Chat> {
         @Override
         public CompletionStage<Void> handle(GameRoom spot, Chat message) {
-            spot.appendChat(message.text()); // Spot 상태를 직접 만진다. 락은 필요 없다.
+            // Spot 상태를 직접 만진다. 락은 필요 없다.
+            spot.appendChat(message.text());
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -996,7 +1029,8 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
         @Override
         public CompletionStage<Void> handle(
             GameRoom spot,
-            PlayerActor actor,              // 이 메시지를 받은 Actor다.
+            // 이 메시지를 받은 Actor다.
+            PlayerActor actor,
             ZLinkMessageContext messageContext,
             PlaceMark message) {
             spot.place(actor.actorId(), message.cell());
@@ -1011,7 +1045,8 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
     // Spot 앞 packet — 첫 인자가 대상 Spot instance다.
     class ChatHandler : ZLinkSpotPacketHandler<GameRoom, Chat> {
         override suspend fun handle(spot: GameRoom, message: Chat) {
-            spot.appendChat(message.text) // Spot 상태를 직접 만진다. 락은 필요 없다.
+            // Spot 상태를 직접 만진다. 락은 필요 없다.
+            spot.appendChat(message.text)
         }
     }
 
@@ -1031,7 +1066,8 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
     class PlaceMarkHandler : ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
         override suspend fun handle(
             spot: GameRoom,
-            actor: PlayerActor,             // 이 메시지를 받은 Actor다.
+            // 이 메시지를 받은 Actor다.
+            actor: PlayerActor,
             messageContext: ZLinkMessageContext,
             message: PlaceMark,
         ) {
@@ -1046,7 +1082,8 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
     // Spot 앞 packet — 첫 인자가 대상 Spot instance다.
     export class ChatHandler implements ZLinkSpotPacketHandler<GameRoom, Chat> {
       async handle(spot: GameRoom, message: Chat): Promise<void> {
-        spot.appendChat(message.text); // Spot 상태를 직접 만진다. 락은 필요 없다.
+        // Spot 상태를 직접 만진다. 락은 필요 없다.
+        spot.appendChat(message.text);
       }
     }
 
@@ -1070,7 +1107,8 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
       implements ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
       async handle(
         spot: GameRoom,
-        actor: PlayerActor,             // 이 메시지를 받은 Actor다.
+        // 이 메시지를 받은 Actor다.
+        actor: PlayerActor,
         messageContext: ZLinkMessageContext,
         message: PlaceMark
       ): Promise<void> {
@@ -1094,10 +1132,12 @@ Actor 앞 request는 actor request handler이며
 
         public void Configure()
         {
-            Context.Handlers.AddPacket<ChatHandler>(); // Spot send handler를 등록한다.
+            // Spot send handler를 등록한다.
+            Context.Handlers.AddPacket<ChatHandler>();
             Context.Handlers.AddSubscribe<ScoreHandler>(
                 "game-events",
-                "score.changed"); // Logical Multicast 구독을 등록한다.
+                // Logical Multicast 구독을 등록한다.
+                "score.changed");
         }
 
         public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
@@ -1137,9 +1177,11 @@ Actor 앞 request는 actor request handler이며
 
         void configure () override
         {
-            _context.handlers ().add_handler<&game_room_t::chat> (); // Spot send handler를 등록한다.
+            // Spot send handler를 등록한다.
+            _context.handlers ().add_handler<&game_room_t::chat> ();
             _context.handlers ().add_subscribe<&game_room_t::score> (
-              "game-events", "score.changed"); // Logical Multicast 구독을 등록한다.
+              // Logical Multicast 구독을 등록한다.
+              "game-events", "score.changed");
         }
 
         task_t<spot_create_response_t> on_create (const message_t &request) override
@@ -1180,7 +1222,8 @@ Actor 앞 request는 actor request handler이며
 
         @Override
         public void configure() {
-            context.handlers().addHandler(ChatHandler.class); // Spot send handler를 등록한다.
+            // Spot send handler를 등록한다.
+            context.handlers().addHandler(ChatHandler.class);
             // 구독 topic은 ScoreHandler에 붙인 @ZLinkSpotSubscription이 정한다.
             context.handlers().addHandler(ScoreHandler.class);
         }
@@ -1216,7 +1259,8 @@ Actor 앞 request는 actor request handler이며
         override fun context(): ZLinkSpotContext = spotContext
 
         override fun configure() {
-            spotContext.handlers().addHandler(ChatHandler::class.java) // Spot send handler를 등록한다.
+            // Spot send handler를 등록한다.
+            spotContext.handlers().addHandler(ChatHandler::class.java)
             // 구독 topic은 ScoreHandler에 붙인 @ZLinkSpotSubscription이 정한다.
             spotContext.handlers().addHandler(ScoreHandler::class.java)
         }
@@ -1245,11 +1289,13 @@ Actor 앞 request는 actor request handler이며
       readonly context!: ZLinkSpotContext;
 
       configure(): void {
-        this.context.handlers.addPacket(ChatHandler); // Spot send handler를 등록한다.
+        // Spot send handler를 등록한다.
+        this.context.handlers.addPacket(ChatHandler);
         this.context.handlers.addSubscribe(
           ScoreHandler,
           'game-events',
-          'score.changed'); // Logical Multicast 구독을 등록한다.
+          // Logical Multicast 구독을 등록한다.
+          'score.changed');
       }
 
       async onCreate(request: ZLinkMessage): Promise<ZLinkSpotCreateResponse> {
@@ -1449,7 +1495,8 @@ member 함수이고, 호출마다 여는 scope 표면도 없다. 짧게 살아�
     // 자원은 이 함수 안에서 열고 닫는다.
     task_t<save_score_reply_t> game_room_t::save_score (const save_score_t &request)
     {
-        auto session = _store.open_session (); // 이 호출이 끝나면 함께 닫힌다.
+        // 이 호출이 끝나면 함께 닫힌다.
+        auto session = _store.open_session ();
         co_await session.append (_context.spot_id (), request.value);
         co_return save_score_reply_t{request.value};
     }
@@ -1587,14 +1634,17 @@ factory로 준비할지 고르는 stable type**이다. 그 mesh에 Instance Spot
     // type이 여럿 등록된 mesh — 어느 factory로 만들지 stable type으로 지정한다.
     MatchResult match = await spotClient
         .RequestToSpot("bronze", new FindMatch(playerId))
-        .InstanceSpot("matchmaker")   // 대상이 없으면 이 stable type의 factory로 준비한다.
-        .InMesh("matchmaking")        // 처음 배치할 mesh를 고른다.
+        // 대상이 없으면 이 stable type의 factory로 준비한다.
+        .InstanceSpot("matchmaker")
+        // 처음 배치할 mesh를 고른다.
+        .InMesh("matchmaking")
         .Async<MatchResult>(cancellationToken);
 
     // type이 하나만 등록된 mesh — 생략하면 Framework가 그 유일한 type을 고른다.
     MatchResult single = await spotClient
         .RequestToSpot("bronze", new FindMatch(playerId))
-        .InstanceSpot()               // 대상 node에 등록된 유일한 type으로 준비한다.
+        // 대상 node에 등록된 유일한 type으로 준비한다.
+        .InstanceSpot()
         .InMesh("matchmaking")
         .Async<MatchResult>(cancellationToken);
     ```
@@ -1605,14 +1655,17 @@ factory로 준비할지 고르는 stable type**이다. 그 mesh에 Instance Spot
     // type이 여럿 등록된 mesh — 어느 factory로 만들지 stable type으로 지정한다.
     auto match = co_await spot_client
                    .request_to_spot ("bronze", find_match_t{player_id})
-                   .instance_spot ("matchmaker") // 대상이 없으면 이 stable type의 factory로 준비한다.
-                   .in_mesh ("matchmaking")      // 처음 배치할 mesh를 고른다.
+                   // 대상이 없으면 이 stable type의 factory로 준비한다.
+                   .instance_spot ("matchmaker")
+                   // 처음 배치할 mesh를 고른다.
+                   .in_mesh ("matchmaking")
                    .async<match_result_t> ();
 
     // type이 하나만 등록된 mesh — 생략하면 Framework가 그 유일한 type을 고른다.
     auto single = co_await spot_client
                     .request_to_spot ("bronze", find_match_t{player_id})
-                    .instance_spot ()            // 대상 node에 등록된 유일한 type으로 준비한다.
+                    // 대상 node에 등록된 유일한 type으로 준비한다.
+                    .instance_spot ()
                     .in_mesh ("matchmaking")
                     .async<match_result_t> ();
     ```
@@ -1623,15 +1676,18 @@ factory로 준비할지 고르는 stable type**이다. 그 mesh에 Instance Spot
     // type이 여럿 등록된 mesh — 어느 factory로 만들지 stable type으로 지정한다.
     MatchResult match = spotClient
         .requestToSpot("bronze", new FindMatch(playerId))
-        .instanceSpot("matchmaker") // 대상이 없으면 이 stable type의 factory로 준비한다.
-        .inMesh("matchmaking")      // 처음 배치할 mesh를 고른다.
+        // 대상이 없으면 이 stable type의 factory로 준비한다.
+        .instanceSpot("matchmaker")
+        // 처음 배치할 mesh를 고른다.
+        .inMesh("matchmaking")
         .submit(MatchResult.class)
         .toCompletableFuture().join();
 
     // type이 하나만 등록된 mesh — 생략하면 Framework가 그 유일한 type을 고른다.
     MatchResult single = spotClient
         .requestToSpot("bronze", new FindMatch(playerId))
-        .instanceSpot()             // 대상 node에 등록된 유일한 type으로 준비한다.
+        // 대상 node에 등록된 유일한 type으로 준비한다.
+        .instanceSpot()
         .inMesh("matchmaking")
         .submit(MatchResult.class)
         .toCompletableFuture().join();
@@ -1643,15 +1699,18 @@ factory로 준비할지 고르는 stable type**이다. 그 mesh에 Instance Spot
     // type이 여럿 등록된 mesh — 어느 factory로 만들지 stable type으로 지정한다.
     val match = spotClient
         .requestToSpot("bronze", FindMatch(playerId))
-        .instanceSpot("matchmaker") // 대상이 없으면 이 stable type의 factory로 준비한다.
-        .inMesh("matchmaking")      // 처음 배치할 mesh를 고른다.
+        // 대상이 없으면 이 stable type의 factory로 준비한다.
+        .instanceSpot("matchmaker")
+        // 처음 배치할 mesh를 고른다.
+        .inMesh("matchmaking")
         .submit(MatchResult::class.java)
         .await()
 
     // type이 하나만 등록된 mesh — 생략하면 Framework가 그 유일한 type을 고른다.
     val single = spotClient
         .requestToSpot("bronze", FindMatch(playerId))
-        .instanceSpot()             // 대상 node에 등록된 유일한 type으로 준비한다.
+        // 대상 node에 등록된 유일한 type으로 준비한다.
+        .instanceSpot()
         .inMesh("matchmaking")
         .submit(MatchResult::class.java)
         .await()
@@ -1663,14 +1722,17 @@ factory로 준비할지 고르는 stable type**이다. 그 mesh에 Instance Spot
     // type이 여럿 등록된 mesh — 어느 factory로 만들지 stable type으로 지정한다.
     const match = await spotClient
       .requestToSpot('bronze', findMatch(playerId))
-      .instanceSpot('matchmaker') // 대상이 없으면 이 stable type의 factory로 준비한다.
-      .inMesh('matchmaking')      // 처음 배치할 mesh를 고른다.
+      // 대상이 없으면 이 stable type의 factory로 준비한다.
+      .instanceSpot('matchmaker')
+      // 처음 배치할 mesh를 고른다.
+      .inMesh('matchmaking')
       .submit<MatchResult>();
 
     // type이 하나만 등록된 mesh — 생략하면 Framework가 그 유일한 type을 고른다.
     const single = await spotClient
       .requestToSpot('bronze', findMatch(playerId))
-      .instanceSpot()             // 대상 node에 등록된 유일한 type으로 준비한다.
+      // 대상 node에 등록된 유일한 type으로 준비한다.
+      .instanceSpot()
       .inMesh('matchmaking')
       .submit<MatchResult>();
     ```
@@ -1719,8 +1781,10 @@ handler 안에서 Spot 상태를 그대로 만질 수 있다. 등록은 timer �
     ```csharp
     // Spot 안에서 — 반환된 IZLinkTimer를 필드에 보관해 두었다가 취소에 쓴다.
     _gameTick = await Context.AddTimer<GameTickHandler>(
-        "game-tick",                 // 같은 Spot 안에서 유일한 이름이다.
-        TimeSpan.FromSeconds(1),     // 주기. 0 이하이면 ZLinkConfigurationException이다.
+        // 같은 Spot 안에서 유일한 이름이다.
+        "game-tick",
+        // 주기. 0 이하이면 ZLinkConfigurationException이다.
+        TimeSpan.FromSeconds(1),
         new ZLinkTimerOptions
         {
             OverrunPolicy = ZLinkTimerOverrunPolicy.SkipLateTicks,
@@ -1729,7 +1793,8 @@ handler 안에서 Spot 상태를 그대로 만질 수 있다. 등록은 timer �
         },
         cancellationToken: cancellationToken);
 
-    await _gameTick.CancelAsync();   // 더 이상 필요 없을 때. Spot이 닫히면 Framework가 함께 정리한다.
+    // 더 이상 필요 없을 때. Spot이 닫히면 Framework가 함께 정리한다.
+    await _gameTick.CancelAsync();
     ```
 
 === "C++"
@@ -1743,11 +1808,14 @@ handler 안에서 Spot 상태를 그대로 만질 수 있다. 등록은 timer �
 
     // handler는 Spot이 아니라 별도 타입이다 — handle (spot, tick) 두 인자를 받는다.
     _game_tick = _context.add_timer<game_tick_handler_t> (
-      "game-tick",                              // 같은 Spot 안에서 유일한 이름이다.
-      std::chrono::seconds (1),                 // 주기. 0 이하이면 구성 오류다.
+      // 같은 Spot 안에서 유일한 이름이다.
+      "game-tick",
+      // 주기. 0 이하이면 구성 오류다.
+      std::chrono::seconds (1),
       options);
 
-    co_await _game_tick.cancel (); // 더 이상 필요 없을 때. Spot이 닫히면 Framework가 함께 정리한다.
+    // 더 이상 필요 없을 때. Spot이 닫히면 Framework가 함께 정리한다.
+    co_await _game_tick.cancel ();
     ```
 
 === "Java"
@@ -1760,8 +1828,10 @@ handler 안에서 Spot 상태를 그대로 만질 수 있다. 등록은 timer �
         .setStopOnUnhandledException(false);
 
     gameTick = context.addTimer(
-        "game-tick",                    // 같은 Spot 안에서 유일한 이름이다.
-        Duration.ofSeconds(1),          // 주기. 0 이하이면 ZLinkConfigurationException이다.
+        // 같은 Spot 안에서 유일한 이름이다.
+        "game-tick",
+        // 주기. 0 이하이면 ZLinkConfigurationException이다.
+        Duration.ofSeconds(1),
         GameTickHandler.class,
         options).toCompletableFuture().join();
 
@@ -1779,8 +1849,10 @@ handler 안에서 Spot 상태를 그대로 만질 수 있다. 등록은 timer �
         .setStopOnUnhandledException(false)
 
     gameTick = spotContext.addTimer(
-        "game-tick",                    // 같은 Spot 안에서 유일한 이름이다.
-        Duration.ofSeconds(1),          // 주기. 0 이하이면 ZLinkConfigurationException이다.
+        // 같은 Spot 안에서 유일한 이름이다.
+        "game-tick",
+        // 주기. 0 이하이면 ZLinkConfigurationException이다.
+        Duration.ofSeconds(1),
         GameTickHandler::class.java,
         options).await()
 
@@ -1793,8 +1865,10 @@ handler 안에서 Spot 상태를 그대로 만질 수 있다. 등록은 timer �
     ```typescript
     // Spot 안에서 — 반환된 ZLinkTimer를 필드에 보관해 두었다가 취소에 쓴다.
     this.gameTick = await this.context.addTimer(
-      'game-tick',                     // 같은 Spot 안에서 유일한 이름이다.
-      1_000,                           // 주기(ms). 0 이하이면 구성 오류다.
+      // 같은 Spot 안에서 유일한 이름이다.
+      'game-tick',
+      // 주기(ms). 0 이하이면 구성 오류다.
+      1_000,
       GameTickHandler,
       {
         overrunPolicy: ZLinkTimerOverrunPolicy.SkipLateTicks,
@@ -2026,13 +2100,15 @@ Spot의 실행 queue는 한 번에 하나만 실행한다. 무거운 계산이�
             BuildSnapshot request,
             CancellationToken cancellationToken)
         {
-            var board = spot.CopyBoard();          // Spot 상태는 turn 안에서 먼저 복사해 둔다.
+            // Spot 상태는 turn 안에서 먼저 복사해 둔다.
+            var board = spot.CopyBoard();
 
             var packed = await spot.Context
                 .RunCpuWorker(ct =>
                 {
                     ct.ThrowIfCancellationRequested();
-                    return SnapshotCodec.Compress(board); // 무거운 동기 계산.
+                    // 무거운 동기 계산.
+                    return SnapshotCodec.Compress(board);
                 })
                 .Yield(cancellationToken);
 
@@ -2047,11 +2123,13 @@ Spot의 실행 queue는 한 번에 하나만 실행한다. 무거운 계산이�
     // CPU worker — 동기 계산을 worker 스레드에서 실행한다.
     task_t<snapshot_reply_t> game_room_t::build_snapshot (const build_snapshot_t &)
     {
-        auto board = copy_board (); // Spot 상태는 turn 안에서 먼저 복사해 둔다.
+        // Spot 상태는 turn 안에서 먼저 복사해 둔다.
+        auto board = copy_board ();
 
         auto packed = co_await _context
                         .run_cpu_worker ([board] (std::stop_token) {
-                            return snapshot_codec_t::compress (board); // 무거운 동기 계산.
+                            // 무거운 동기 계산.
+                            return snapshot_codec_t::compress (board);
                         })
                         .yield ();
 
@@ -2067,10 +2145,12 @@ Spot의 실행 queue는 한 번에 하나만 실행한다. 무거운 계산이�
 
         @Override
         public CompletionStage<SnapshotReply> handle(GameRoom spot, BuildSnapshot request) {
-            var board = spot.copyBoard(); // Spot 상태는 turn 안에서 먼저 복사해 둔다.
+            // Spot 상태는 turn 안에서 먼저 복사해 둔다.
+            var board = spot.copyBoard();
 
             return spot.context()
-                .runCpuWorker(cancellation -> SnapshotCodec.compress(board)) // 무거운 동기 계산.
+                // 무거운 동기 계산.
+                .runCpuWorker(cancellation -> SnapshotCodec.compress(board))
                 .yield()
                 .thenApply(SnapshotReply::new);
         }
@@ -2129,7 +2209,8 @@ I/O를 기다리는 작업은 `RunIoWorker`로 넘긴다.
         {
             var version = await spot.Context
                 .RunIoWorker(async ct => await _store.SaveAsync(request.Value, ct))
-                .Timeout(TimeSpan.FromSeconds(3))  // 이 worker 호출의 상한.
+                // 이 worker 호출의 상한.
+                .Timeout(TimeSpan.FromSeconds(3))
                 .Yield(cancellationToken);
 
             return new SaveScoreReply(version);
@@ -2147,7 +2228,8 @@ I/O를 기다리는 작업은 `RunIoWorker`로 넘긴다.
                          .run_io_worker ([this, request] (std::stop_token token) {
                              return _store.save (request.value, token);
                          })
-                         .timeout (std::chrono::seconds (3)) // 이 worker 호출의 상한.
+                         // 이 worker 호출의 상한.
+                         .timeout (std::chrono::seconds (3))
                          .yield ();
 
         co_return save_score_reply_t{version};
@@ -2327,7 +2409,8 @@ Application은 상태가 일관된 turn에서 `Defer()`를 호출한다. 이 호
             ZLinkTimerTick tick,
             CancellationToken cancellationToken)
         {
-            if (!spot.TryFinishRound())      // 라운드 진행 중이면 신호하지 않는다.
+            // 라운드 진행 중이면 신호하지 않는다.
+            if (!spot.TryFinishRound())
                 return ValueTask.CompletedTask;
 
             // 라운드가 끝나 상태가 정산된 지점이다. 이 turn의 마지막 Framework 호출이어야 한다.
@@ -2343,7 +2426,8 @@ Application은 상태가 일관된 turn에서 `Defer()`를 호출한다. 이 호
     task_t<void> round_tick_handler_t::handle (game_room_t &spot,
                                                const timer_tick_t &) const
     {
-        if (!spot.try_finish_round ()) // 라운드 진행 중이면 신호하지 않는다.
+        // 라운드 진행 중이면 신호하지 않는다.
+        if (!spot.try_finish_round ())
             co_return;
 
         // 라운드가 끝나 상태가 정산된 지점이다. 이 turn의 마지막 Framework 호출이어야 한다.
@@ -2358,7 +2442,8 @@ Application은 상태가 일관된 turn에서 `Defer()`를 호출한다. 이 호
     public final class RoundTickHandler implements ZLinkSpotTimerHandler<GameRoom> {
         @Override
         public CompletionStage<Void> handle(GameRoom spot, ZLinkTimerTick tick) {
-            if (!spot.tryFinishRound()) { // 라운드 진행 중이면 신호하지 않는다.
+            // 라운드 진행 중이면 신호하지 않는다.
+            if (!spot.tryFinishRound()) {
                 return CompletableFuture.completedFuture(null);
             }
 
@@ -2374,7 +2459,8 @@ Application은 상태가 일관된 turn에서 `Defer()`를 호출한다. 이 호
     ```kotlin
     class RoundTickHandler : ZLinkSpotTimerHandler<GameRoom> {
         override suspend fun handle(spot: GameRoom, tick: ZLinkTimerTick) {
-            if (!spot.tryFinishRound()) return // 라운드 진행 중이면 신호하지 않는다.
+            // 라운드 진행 중이면 신호하지 않는다.
+            if (!spot.tryFinishRound()) return
 
             // 라운드가 끝나 상태가 정산된 지점이다. 이 turn의 마지막 Framework 호출이어야 한다.
             spot.context().relocationReady().defer()
@@ -2387,7 +2473,8 @@ Application은 상태가 일관된 turn에서 `Defer()`를 호출한다. 이 호
     ```typescript
     export class RoundTickHandler implements ZLinkSpotTimerHandler<GameRoom> {
       async handle(spot: GameRoom, tick: ZLinkTimerTick): Promise<void> {
-        if (!spot.tryFinishRound()) return; // 라운드 진행 중이면 신호하지 않는다.
+        // 라운드 진행 중이면 신호하지 않는다.
+        if (!spot.tryFinishRound()) return;
 
         // 라운드가 끝나 상태가 정산된 지점이다. 이 turn의 마지막 Framework 호출이어야 한다.
         spot.context.relocationReady().defer();

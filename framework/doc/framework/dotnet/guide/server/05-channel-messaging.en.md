@@ -7,6 +7,8 @@ title: "5. Channel Messaging — Request · Send · Pub/Sub · C#/.NET"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 5. Channel Messaging — Request · Send · Pub/Sub
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 4. Backpressure — When Arrival Outpaces Processing](04-backpressure.en.md) | [Next: 6. Spot](06-spot.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "5. Channel Messaging — Request · Send · Pub/Sub · C#/.NET"
 <!-- language-switch:start -->
 View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/05-channel-messaging.en.md) · [Java](../../../java/guide/server/05-channel-messaging.en.md) · [Kotlin](../../../kotlin/guide/server/05-channel-messaging.en.md) · [Node/TypeScript](../../../node/guide/server/05-channel-messaging.en.md)
 <!-- language-switch:end -->
-
-# 5. Channel Messaging — Request · Send · Pub/Sub
 
 > **The document that owns this chapter's contract** — [Channel Messaging](../../../common/spec/server/02-channel-transport/02-channel-messaging.en.md)
 > and [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.en.md) own the
@@ -121,7 +121,8 @@ public sealed class PlaceOrderHandler
 
 // Client: inject IZLinkRouteClient instead of a gRPC stub
 var placed = await client
-    .RequestToChannel("orders",                 // The target is just one ChannelName. No address, no MeshName.
+    // The target is just one ChannelName. No address, no MeshName.
+    .RequestToChannel("orders",
         new PlaceOrder("order-1042", "acct-77", 18742))
     .Async<OrderPlaced>(ct);
 ```
@@ -208,14 +209,17 @@ receiving side is limited to Spots that subscribed to the same topic on that cha
 ```csharp
 // Publishing -- inside the TicTacToeGame spot.
 await Context.Outbound
-    .Publish(SampleTopics.PlayerMilestoneChannel,   // The ChannelName that decides delivery scope.
-             SampleTopics.PlayerMilestone,          // The topic that picks which Spots receive it within that scope.
+    // The ChannelName that decides delivery scope.
+    .Publish(SampleTopics.PlayerMilestoneChannel,
+             // The topic that picks which Spots receive it within that scope.
+             SampleTopics.PlayerMilestone,
              milestoneEvent)
     .Async(cancellationToken);
 
 // Subscribing -- when PlayEntrySpot starts.
 Context.Handlers.AddSubscribe<PlayerWinMilestoneEventHandler>(
-    SampleTopics.PlayerMilestoneChannel,            // Must match the publishing side's ChannelName/topic to receive it.
+    // Must match the publishing side's ChannelName/topic to receive it.
+    SampleTopics.PlayerMilestoneChannel,
     SampleTopics.PlayerMilestone);
 ```
 
@@ -358,20 +362,24 @@ Instead of an interface, you can write the same handler as a method with an attr
 This is convenient when one class holds several handler methods.
 
 ```csharp
-[ZLinkHandlerGroup("api")]   // Groups this class's methods as the "api" group. Registration decides which channel exposes it.
+// Groups this class's methods as the "api" group. Registration decides which channel exposes it.
+[ZLinkHandlerGroup("api")]
 public sealed class UserHandlers
 {
     private readonly IZLinkFanoutClient _publisher;
     public UserHandlers(IZLinkFanoutClient publisher) => _publisher = publisher;
 
-    [ZLinkRequest]   // The method attribute decides the handler kind (doesn't take a channel name)
+    // The method attribute decides the handler kind (doesn't take a channel name)
+    [ZLinkRequest]
     public ValueTask<GetUserReply> GetUserAsync(
-        GetUserRequest request,            // Argument order = (payload, context?, ct?) -- context/token can be omitted
+        // Argument order = (payload, context?, ct?) -- context/token can be omitted
+        GetUserRequest request,
         IZLinkMessageContext context,
         CancellationToken cancellationToken)
         => ValueTask.FromResult(new GetUserReply(request.AccountId, "alice"));
 
-    [ZLinkSend]   // A send handler -- returns ValueTask (no response). Contrast with request's ValueTask<TReply>.
+    // A send handler -- returns ValueTask (no response). Contrast with request's ValueTask<TReply>.
+    [ZLinkSend]
     public async ValueTask RefreshCacheAsync(
         RefreshUserCacheCommand command,
         IZLinkMessageContext context,
@@ -409,8 +417,10 @@ public async ValueTask<CreateGameReply> HandleAsync(
     // Runtime (handler) thread -- free it with await. Blocking (.Result/.GetAwaiter().GetResult()) is forbidden.
     var room = await _client
         .RequestToChannel("tictactoe.play", new CreateRoomRequest(request.GameName))
-        .Timeout(TimeSpan.FromSeconds(5))   // The cap on waiting for the reply.
-        .Async<CreateRoomReply>(ct);        // Awaits until the reply arrives and receives it.
+        // The cap on waiting for the reply.
+        .Timeout(TimeSpan.FromSeconds(5))
+        // Awaits until the reply arrives and receives it.
+        .Async<CreateRoomReply>(ct);
 
     return new CreateGameReply(room.RoomId, room.GameName);
 }
@@ -444,11 +454,13 @@ The framework doesn't automatically open every discovered handler on every chann
 ```csharp
 builder.Services.AddZLinkFramework(options =>
 {
-    options.AddHandlersFromAssemblyOf<Program>(); // Discovers handler types
+    // Discovers handler types
+    options.AddHandlersFromAssemblyOf<Program>();
     var mesh = options.AddRouteMesh("services")
         .Listen("tcp://0.0.0.0:7101")
         .SetRoutingId(RoutingId.From("api-1"));
-    mesh.Channel("api").Server()                 // Server() is the role that receives handlers.
+    // Server() is the role that receives handlers.
+    mesh.Channel("api").Server()
         .AddRequestHandler<GetProfileHandler, GetProfileRequest, GetProfileReply>()
         .AddSendHandler<RefreshCacheHandler, RefreshCacheCommand>();
 });
@@ -464,9 +476,12 @@ var mesh = options.AddRouteMesh("services")
     .Listen("tcp://0.0.0.0:7101")
     .SetRoutingId(RoutingId.From("api-1"));
 
-mesh.Channel("api").Server()                     // A channel this node handles.
-    .AddRequestHandler<GetProfileHandler>();     // The handler already fixes the payload/reply types.
-mesh.Channel("billing").Client();                // A call-only channel is Client -- no handler registered.
+// A channel this node handles.
+mesh.Channel("api").Server()
+    // The handler already fixes the payload/reply types.
+    .AddRequestHandler<GetProfileHandler>();
+// A call-only channel is Client -- no handler registered.
+mesh.Channel("billing").Client();
 ```
 
 A fanout channel's subscription handler is registered with the fanout builder's
@@ -517,15 +532,18 @@ public sealed class PriceService(IZLinkRouteClient client)
     public async Task<decimal> GetAsync(string symbol, CancellationToken ct)
     {
         var reply = await client
-            .RequestToChannel("price", new PriceRequest(symbol))   // The target is just one ChannelName.
-            .Async<PriceReply>(ct);    // request: the reply type is specified on .Async<T>, not the payload
+            // The target is just one ChannelName.
+            .RequestToChannel("price", new PriceRequest(symbol))
+            // request: the reply type is specified on .Async<T>, not the payload
+            .Async<PriceReply>(ct);
         return reply.Price;
     }
 
     public async ValueTask RefreshAsync(string accountId, CancellationToken ct)
         => await client
             .SendToChannel("profile", new RefreshCacheCommand(accountId))
-            .Async(ct);          // send: only waits until my runtime accepts the submission
+            // send: only waits until my runtime accepts the submission
+            .Async(ct);
 }
 ```
 
@@ -549,7 +567,8 @@ Attach a terminal only when it needs to differ from the default.
 ```csharp
 await client
     .RequestToChannel("price", new PriceRequest(symbol))
-    .Timeout(TimeSpan.FromSeconds(5))  // Specify only when this call's reply-wait cap should differ from the default (30s).
+    // Specify only when this call's reply-wait cap should differ from the default (30s).
+    .Timeout(TimeSpan.FromSeconds(5))
     .Async<PriceReply>(ct);
 // Order that decides the reply-wait cap (earlier wins):
 //   1) Per-call .Timeout(...)
@@ -604,21 +623,25 @@ public sealed class AuditFilter(ILogger<AuditFilter> logger)
     : IZLinkHandlerFilter
 {
     public async ValueTask InvokeAsync(
-        IZLinkHandlerFilterContext context,   // This dispatch's message info + which path it came through.
-        ZLinkHandlerFilterNext next,          // A no-argument delegate -- runs the next filter or handler.
+        // This dispatch's message info + which path it came through.
+        IZLinkHandlerFilterContext context,
+        // A no-argument delegate -- runs the next filter or handler.
+        ZLinkHandlerFilterNext next,
         CancellationToken cancellationToken)
     {
         // Audit-logs only ops commands and lets regular business requests pass through.
         if (context.DispatchKind == ZLinkHandlerDispatchKind.NodeDirectRequest)
             logger.LogInformation("ops {Packet} on {Mesh}", context.PacketName, context.MeshName);
 
-        await next();                         // If not called, the handler doesn't run.
+        // If not called, the handler doesn't run.
+        await next();
     }
 }
 
 builder.Services.AddZLinkFramework(options =>
 {
-    options.UseFilter<AuditFilter>();         // Registration order is execution order.
+    // Registration order is execution order.
+    options.UseFilter<AuditFilter>();
     options.UseFilter<ValidationFilter>();
 });
 ```
@@ -749,14 +772,16 @@ serving value.
 app.MapPost("/admin/channels/orders/drain",
     (IZLinkRouteMeshRuntimeOptions options) =>
     {
-        options.Channel("orders").Weight = 0;  // Excludes this ChannelName from new select-one targets
+        // Excludes this ChannelName from new select-one targets
+        options.Channel("orders").Weight = 0;
         return Results.Ok();
     });
 
 app.MapPost("/admin/channels/orders/restore",
     (IZLinkRouteMeshRuntimeOptions options) =>
     {
-        options.Channel("orders").Weight = 100; // Back to normal
+        // Back to normal
+        options.Channel("orders").Weight = 100;
         return Results.Ok();
     });
 ```
@@ -778,7 +803,8 @@ The same `Weight` is also set as an initial value at registration time.
 var mesh = options.AddRouteMesh("services")
     .Listen("tcp://0.0.0.0:7101")
     .SetRoutingId(RoutingId.From("orders-1"));
-mesh.Channel("orders").Server().SetWeight(30); // This channel role's starting weight
+// This channel role's starting weight
+mesh.Channel("orders").Server().SetWeight(30);
 ```
 
 ## 7. Serialization Codec
@@ -827,7 +853,8 @@ public sealed class AvroOrderSerializer : IZLinkMessageSerializer
     }
 }
 
-options.Codecs.Use(new AvroCodecExtension()); // Registers the Avro serializer once, inside the extension.
+// Registers the Avro serializer once, inside the extension.
+options.Codecs.Use(new AvroCodecExtension());
 ```
 
 After registration, high-level calls still exchange business objects as-is, and
@@ -895,7 +922,8 @@ startup.**
 var caller = options.AddRouteMesh("media")
     .Listen("tcp://0.0.0.0:5590")
     .SetRoutingIdPrefix("resize-client");
-caller.Channel("image.resize").Client();          // Client, since it only calls.
+// Client, since it only calls.
+caller.Channel("image.resize").Client();
 caller.PeerConnections.Connect("tcp://10.30.1.10:5600");
 caller.PeerConnections.Connect("tcp://10.30.1.10:5601");
 
@@ -976,18 +1004,23 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddZLinkFramework(options =>
 {
     options.Codecs.Use(ZLinkProtobufCodec.Default);
-    options.AddHandlersFromAssemblyOf<Program>();      // Discovery: finds handler types in the assembly.
+    // Discovery: finds handler types in the assembly.
+    options.AddHandlersFromAssemblyOf<Program>();
 
     var mesh = options.AddRouteMesh("services")
         .Listen("tcp://0.0.0.0:7101")
         .SetRoutingId(RoutingId.From("api-1"));
     mesh.Channel("api").Server()
-        .AddHandlerGroup("api");                       // Exposure: ties the attribute handler group to this channel.
-    mesh.Channel("account").Client();                  // A call-only channel.
+        // Exposure: ties the attribute handler group to this channel.
+        .AddHandlerGroup("api");
+    // A call-only channel.
+    mesh.Channel("account").Client();
 
     options.AddFanoutChannel("api.events")
-        .EnablePublisher("tcp://0.0.0.0:7201")         // This process is the publisher.
-        .Connect("tcp://127.0.0.1:7201")     // Also subscribes to its own publish, as an example.
+        // This process is the publisher.
+        .EnablePublisher("tcp://0.0.0.0:7201")
+        // Also subscribes to its own publish, as an example.
+        .Connect("tcp://127.0.0.1:7201")
         .AddHandler<UserCacheRefreshedEventHandler, UserCacheRefreshedEvent>();
 });
 

@@ -7,6 +7,8 @@ title: "1. Overview · Node/TypeScript"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 1. Overview
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Next: 2. Getting Started](02-getting-started.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "1. Overview · Node/TypeScript"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/01-overview.en.md) · [C++](../../../cpp/guide/server/01-overview.en.md) · [Java](../../../java/guide/server/01-overview.en.md) · [Kotlin](../../../kotlin/guide/server/01-overview.en.md) · **Node/TypeScript**
 <!-- language-switch:end -->
-
-# 1. Overview
 
 > **The documents that own this chapter's contract** — owned by the
 > [Framework Overview](../../../common/spec/server/00-foundation/03-overview.en.md) and the
@@ -205,7 +205,8 @@ even if they're replaced later — this backend boundary is explained separately
 // Registration — one room mesh and a room type
 const node = builder.addRouteMesh('game.room');
 node.listen('tcp://0.0.0.0:9001');
-node.channel('game.room').server();     // A mesh has at least 1 logical membership
+// A mesh has at least 1 logical membership
+node.channel('game.room').server();
 node.objects().server().addSpotFactory('room', BingoRoomSpot, factory => factory.recreateOnRelocation());
 ```
 
@@ -215,7 +216,8 @@ export class MarkNumberHandler
   implements ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
 
   async handle(room: BingoRoomSpot, request: MarkNumber): Promise<MarkResult> {
-    room.board.mark(request.number);          // No lock
+    // No lock
+    room.board.mark(request.number);
     room.lastActivity = new Date();
     return { bingo: room.board.hasBingo() };
   }
@@ -346,7 +348,8 @@ remains.
 // Inside an HTTP handler — route an order event to that order's workflow Spot.
 // The first request cold-activates the spot keyed on orderId, and later requests arrive
 // at the same already-created spot, always processed serially in one place (no distributed lock).
-await spots.requestToSpot(request.orderId, request)  // request is already a StartOrderWorkflowReq body.
+// request is already a StartOrderWorkflowReq body.
+await spots.requestToSpot(request.orderId, request)
   .instanceSpot('order-workflow')
   .inMesh('commerce')
   .submit<StartOrderWorkflowRes>();
@@ -457,7 +460,8 @@ export class StartOrderWorkflowHandler
 
   async handle(
     spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): Promise<StartOrderWorkflowRes> {
-    return spot.start(request);                    // Accesses spot state without a lock
+    // Accesses spot state without a lock
+    return spot.start(request);
   }
 }
 ```
@@ -514,24 +518,30 @@ request/response."
 export class GetPriceHandler implements ZLinkRequestHandler<PriceRequest, PriceReply> {
 
   async handle(request: PriceRequest): Promise<PriceReply> {
-    return { symbol: request.symbol, price: 187.42 };   // 187.42 is a fixed demo value (a real lookup result in practice)
+    // 187.42 is a fixed demo value (a real lookup result in practice)
+    return { symbol: request.symbol, price: 187.42 };
   }
 }
 
 // Registration — declares the MeshNode endpoint and the price membership's handler together.
-builder.addRouteMesh('services')                        // Scopes the communication range by MeshName.
-  .listen('tcp://0.0.0.0:7301')                         // Opens this MeshNode's endpoint.
+// Scopes the communication range by MeshName.
+builder.addRouteMesh('services')
+  // Opens this MeshNode's endpoint.
+  .listen('tcp://0.0.0.0:7301')
   .routingId('price-1')
-  .channel('price')                                     // Registers the price-handling membership.
+  // Registers the price-handling membership.
+  .channel('price')
   .server()
   .addRequestHandler(PacketNames.priceRequest, GetPriceHandler);
 
 // Client: inject the route client and call by ChannelName.
 const reply = await client
   .requestToChannel(
-    'price',                                            // The ChannelName to look up process-locally
+    // The ChannelName to look up process-locally
+    'price',
     priceRequest('AAPL'))
-  .submit<PriceReply>();                                // Sends, then waits for the reply asynchronously.
+  // Sends, then waits for the reply asynchronously.
+  .submit<PriceReply>();
 ```
 
 The connection/setup code disappears, leaving a handler and a few lines of channel
@@ -556,20 +566,26 @@ you declare the MeshNode, fanout, and STREAM node.
 ZLinkModule.forRootFactory({
   useFactory: () => {
     const builder = zlinkFramework();
-    builder.addLocationStore(new ZLinkRedisLocationStore(...));  // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+    // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+    builder.addLocationStore(new ZLinkRedisLocationStore(...));
 
-    builder.addRouteMesh('services')                         // MeshNode for inter-server request/send
+    // MeshNode for inter-server request/send
+    builder.addRouteMesh('services')
       .listen('tcp://0.0.0.0:7301')
       .routingId('service-a')
-      .channel('orders').server();                           // The logical membership to handle
+      // The logical membership to handle
+      .channel('orders').server();
     builder.addFanoutChannel('events')
-      .enablePublisher('tcp://0.0.0.0:7302');                // classic event fan-out
-    builder.addRouteMesh('game.room')                        // SPOT/actor are also owned by a MeshNode
+      // classic event fan-out
+      .enablePublisher('tcp://0.0.0.0:7302');
+    // SPOT/actor are also owned by a MeshNode
+    builder.addRouteMesh('game.room')
       .listen('tcp://0.0.0.0:7304')
       .routingId('room-a')
       .channel('game.room').server();
     builder.addStreamNode('gateway')
-      .bind('tcp://0.0.0.0:7400');                           // The external client endpoint
+      // The external client endpoint
+      .bind('tcp://0.0.0.0:7400');
 
     return builder.build();
   }

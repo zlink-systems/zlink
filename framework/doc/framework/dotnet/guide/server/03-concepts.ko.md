@@ -7,6 +7,8 @@ title: "3. 핵심 개념 · C#/.NET"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 3. 핵심 개념
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 2. 시작하기](02-getting-started.ko.md) | [다음: 4. Backpressure — 처리보다 도착이 빠를 때](04-backpressure.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "3. 핵심 개념 · C#/.NET"
 <!-- language-switch:start -->
 다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/03-concepts.ko.md) · [Java](../../../java/guide/server/03-concepts.ko.md) · [Kotlin](../../../kotlin/guide/server/03-concepts.ko.md) · [Node/TypeScript](../../../node/guide/server/03-concepts.ko.md)
 <!-- language-switch:end -->
-
-# 3. 핵심 개념
 
 > **이 장의 계약 소유 문서** — [Framework 개요](../../../common/spec/server/00-foundation/03-overview.ko.md)와
 > [상호작용 모델](../../../common/spec/server/00-foundation/04-interaction-model.ko.md)이 개념의 정식 의미를,
@@ -63,12 +63,17 @@ framework가 찾아서 전달한다. 이렇게 **대상이 어디 있는지 호�
 MeshNode 하나에 두 역할을 함께 얹은 모양은 이렇다.
 
 ```csharp
-var mesh = options.AddRouteMesh("services")     // MeshNode 하나가 mesh "services"에 참여한다.
-    .Listen("tcp://0.0.0.0:7101");              // 다른 node가 접속할 자기 endpoint.
+// MeshNode 하나가 mesh "services"에 참여한다.
+var mesh = options.AddRouteMesh("services")
+    // 다른 node가 접속할 자기 endpoint.
+    .Listen("tcp://0.0.0.0:7101");
 
-mesh.Objects().Server();                        // Object role — 이 node에 spot·actor를 배치한다.
-mesh.Channel("orders").Server();                // Channel role — "orders" 요청을 이 node가 처리한다.
-mesh.Channel("billing").Client();               // 호출만 하는 channel은 Client.
+// Object role — 이 node에 spot·actor를 배치한다.
+mesh.Objects().Server();
+// Channel role — "orders" 요청을 이 node가 처리한다.
+mesh.Channel("orders").Server();
+// 호출만 하는 channel은 Client.
+mesh.Channel("billing").Client();
 ```
 
 peer 주소를 코드에 적지 않고 서버 증감을 따라가는 자동 연결은

@@ -7,6 +7,8 @@ title: "15. E2E 테스트 — client로 시스템 전체를 검증하기 · C++"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 15. E2E 테스트 — client로 시스템 전체를 검증하기
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 14. 샘플 고르기 — 내 문제에 가까운 예제부터](14-samples.ko.md) | [다음: 16. Options — 설정 목록과 기본값](16-options.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "15. E2E 테스트 — client로 시스템 전체를 검증하기 · C++"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/15-e2e-testing.ko.md) · **C++** · [Java](../../../java/guide/server/15-e2e-testing.ko.md) · [Kotlin](../../../kotlin/guide/server/15-e2e-testing.ko.md) · [Node/TypeScript](../../../node/guide/server/15-e2e-testing.ko.md)
 <!-- language-switch:end -->
-
-# 15. E2E 테스트 — client로 시스템 전체를 검증하기
 
 > **이 장에는 계약을 소유하는 스펙 문서가 없다.** 자기 시스템에 테스트를 만드는 방법을
 > 다루기 때문이다. 각 샘플이 무엇을 검증하는지는
@@ -35,10 +35,13 @@ handler 단위 테스트를 아무리 촘촘히 작성해도 확인되지 않는
 코드만으로 끝난다.
 
 ```cpp
-co_await client.connect ().async ();                                     // 실제 연결
-auto auth = co_await client.request (authenticate_req_t{actor_id})       // 실제 request
+// 실제 연결
+co_await client.connect ().async ();
+// 실제 request
+auto auth = co_await client.request (authenticate_req_t{actor_id})
               .async<authenticate_res_t> ();
-auto push = co_await other.wait_for<player_joined_notify_t> ().async (); // 실제 push 도착 확인
+// 실제 push 도착 확인
+auto push = co_await other.wait_for<player_joined_notify_t> ().async ();
 ensure (push.payload.actor_id == auth.player.actor_id);
 ```
 
@@ -234,7 +237,8 @@ task_t<void> run (const tictactoe_client_options_t &options)
     // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
     co_await client1.connect ().async ();
     co_await client1.request (authenticate_req_t{options.x_actor_id}).async<authenticate_res_t> ();
-    auto join1 = co_await join_game (client1, room.room_id); // 대기 등록 → send → 수신(§3)
+    // 대기 등록 → send → 수신(§3)
+    auto join1 = co_await join_game (client1, room.room_id);
     ensure (join1.state.status == tictactoe_status_t::waiting_for_players);
 
     // 혼자 들어왔을 때 자기 입장 알림이 자기에게 오면 안 된다.

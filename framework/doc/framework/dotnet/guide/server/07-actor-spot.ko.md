@@ -7,6 +7,8 @@ title: "7. Actor와 Spot · C#/.NET"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 7. Actor와 Spot
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 6. Spot](06-spot.ko.md) | [다음: 8. Session과 Actor binding](08-actor-session.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "7. Actor와 Spot · C#/.NET"
 <!-- language-switch:start -->
 다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/07-actor-spot.ko.md) · [Java](../../../java/guide/server/07-actor-spot.ko.md) · [Kotlin](../../../kotlin/guide/server/07-actor-spot.ko.md) · [Node/TypeScript](../../../node/guide/server/07-actor-spot.ko.md)
 <!-- language-switch:end -->
-
-# 7. Actor와 Spot
 
 > **이 장의 계약 소유 문서** — [Actor 모델](../../../common/spec/server/03-spot-actor/04-actor-model.ko.md)과
 > [Spot과 Actor membership](../../../common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md)이 동작을,
@@ -85,7 +85,8 @@ SpotRef? currentSpot = await actors.FindSpotAsync(playerId, cancellationToken);
 
 if (current is { } exact)
 {
-    await actors.DestroyAsync(exact, cancellationToken); // generation이 다른 Actor는 종료하지 않는다.
+    // generation이 다른 Actor는 종료하지 않는다.
+    await actors.DestroyAsync(exact, cancellationToken);
 }
 ```
 
@@ -140,12 +141,15 @@ public sealed class PlayEntrySpot(IZLinkEntrySpotContext context)
     // 새 Actor가 이 Entry Spot을 최초 membership으로 삼을 때 호출된다.
     // 반환값이 이 Actor를 만들지 말지를 결정한다 — 이 Spot이 admission 관문이다.
     public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
-        PlayerActor actor,          // 아직 공개되지 않은 새 Actor instance다.
-        ZLinkMessage createRequest, // GetOrCreate/Create의 .Request(...)로 보낸 값이다.
+        // 아직 공개되지 않은 새 Actor instance다.
+        PlayerActor actor,
+        // GetOrCreate/Create의 .Request(...)로 보낸 값이다.
+        ZLinkMessage createRequest,
         CancellationToken cancellationToken)
     {
         var request = createRequest.Decode<CreatePlayer>();
-        actor.SetDisplayName(request.DisplayName); // 초기 state는 Actor가 소유한다.
+        // 초기 state는 Actor가 소유한다.
+        actor.SetDisplayName(request.DisplayName);
 
         // Accept()면 Actor가 Ready가 되고, Reject(...)면 생성이 취소된다.
         return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
@@ -156,7 +160,8 @@ public sealed class PlayEntrySpot(IZLinkEntrySpotContext context)
     public ValueTask OnJoinedActorAsync(
         PlayerActor actor,
         CancellationToken cancellationToken)
-        => ValueTask.CompletedTask; // 이 샘플은 알림만 받고 따로 할 일이 없다.
+        // 이 샘플은 알림만 받고 따로 할 일이 없다.
+        => ValueTask.CompletedTask;
 
     // 이 Entry Spot에 있던 Actor가 User Spot으로 빠져나간 commit 뒤 호출된다.
     // Actor가 사라진다는 뜻이 아니라 membership이 옮겨졌다는 뜻이다.

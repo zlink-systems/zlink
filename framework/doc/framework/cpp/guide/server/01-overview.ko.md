@@ -7,6 +7,8 @@ title: "1. 개요 · C++"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 1. 개요
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [다음: 2. 시작하기](02-getting-started.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "1. 개요 · C++"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/01-overview.ko.md) · **C++** · [Java](../../../java/guide/server/01-overview.ko.md) · [Kotlin](../../../kotlin/guide/server/01-overview.ko.md) · [Node/TypeScript](../../../node/guide/server/01-overview.ko.md)
 <!-- language-switch:end -->
-
-# 1. 개요
 
 > **이 장의 계약 소유 문서** — [Framework 개요](../../../common/spec/server/00-foundation/03-overview.ko.md)와
 > [언어별 공개 계약 목차](../../../common/spec/server/languages/README.ko.md)가 소유한다.
@@ -186,7 +186,8 @@ application 코드는 바뀌지 않는다 — 이 backend 경계는
 // 등록 — room mesh 하나와 room 타입
 auto node = options.add_route_mesh ("game.room");
 node.listen ("tcp://0.0.0.0:9001");
-node.channel_name ("game.room").server ();  // mesh는 최소 1개 logical membership을 갖는다
+// mesh는 최소 1개 logical membership을 갖는다
+node.channel_name ("game.room").server ();
 node.add_spot_factory<bingo_room_spot_t> (
   "room",
   [] (spot_context_t context) { return std::make_shared<bingo_room_spot_t> (std::move (context)); },
@@ -198,7 +199,8 @@ node.add_spot_factory<bingo_room_spot_t> (
 // C++ Spot handler는 Spot member 함수다. Spot은 this로 받는다.
 task_t<mark_result_t> bingo_room_spot_t::mark_number (const mark_number_t &request)
 {
-    _board.mark (request.number);           // lock 없음
+    // lock 없음
+    _board.mark (request.number);
     _last_activity = std::chrono::system_clock::now ();
     co_return mark_result_t{_board.has_bingo ()};
 }
@@ -316,7 +318,8 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 세 조각이 사
 // HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
 // 첫 요청이 order_id 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
 // 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-co_await spots.request_to_spot (request.order_id, request)  // request는 이미 start_order_workflow_req_t 바디다.
+// request는 이미 start_order_workflow_req_t 바디다.
+co_await spots.request_to_spot (request.order_id, request)
   .instance_spot ("order-workflow")
   .in_mesh ("commerce")
   .async<start_order_workflow_res_t> ();
@@ -416,7 +419,8 @@ ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파�
 task_t<start_order_workflow_res_t>
 order_workflow_spot_t::start_order_workflow (const start_order_workflow_req_t &request)
 {
-    co_return co_await start_workflow (request);   // spot 상태에 lock 없이 접근
+    // spot 상태에 lock 없이 접근
+    co_return co_await start_workflow (request);
 }
 ```
 
@@ -474,16 +478,20 @@ class get_price_handler_t
 
     reply_type handle (const price_request_t &request)
     {
-        return price_reply_t{request.symbol, 187.42};   // 187.42는 데모용 고정값(실제론 조회 결과)
+        // 187.42는 데모용 고정값(실제론 조회 결과)
+        return price_reply_t{request.symbol, 187.42};
     }
 };
 
 // 등록 — MeshNode endpoint와 price membership의 handler를 함께 선언한다.
 app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-    options.add_route_mesh ("services")                 // MeshName으로 통신 범위를 구분한다.
-      .listen ("tcp://0.0.0.0:7301")                    // 이 MeshNode의 endpoint를 연다.
+    // MeshName으로 통신 범위를 구분한다.
+    options.add_route_mesh ("services")
+      // 이 MeshNode의 endpoint를 연다.
+      .listen ("tcp://0.0.0.0:7301")
       .set_routing_id (routing_id_t::from ("price-1"))
-      .channel_name ("price")                           // price 처리 membership을 등록한다.
+      // price 처리 membership을 등록한다.
+      .channel_name ("price")
       .server ()
       .add_request_handler<get_price_handler_t, price_request_t, price_reply_t> ();
 });
@@ -491,9 +499,11 @@ app.add_zlink_framework ([] (zlink_framework_options_t &options) {
 // 클라이언트: route client를 주입받아 ChannelName으로 호출한다.
 auto reply = co_await client
   .request_to_channel (
-    "price",                                            // process-local로 찾을 ChannelName
+    // process-local로 찾을 ChannelName
+    "price",
     price_request_t{"AAPL"})
-  .async<price_reply_t> ();                            // 송신한 뒤 reply를 비동기로 기다린다.
+  // 송신한 뒤 reply를 비동기로 기다린다.
+  .async<price_reply_t> ();
 ```
 
 연결·설정 코드가 사라지고 남는 것은 handler와 channel 등록 몇 줄이다.
@@ -514,20 +524,26 @@ fanout과 STREAM node를 선언한다.
 
 ```cpp
 app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-    options.add_location_store (std::make_shared<redis_location_store_t> (...));  // node·actor·spot 위치정보 제공 — 이 정보를 기반으로 node 간 연결은 자동
+    // node·actor·spot 위치정보 제공 — 이 정보를 기반으로 node 간 연결은 자동
+    options.add_location_store (std::make_shared<redis_location_store_t> (...));
 
-    options.add_route_mesh ("services")                     // 서버 간 request/send용 MeshNode
+    // 서버 간 request/send용 MeshNode
+    options.add_route_mesh ("services")
       .listen ("tcp://0.0.0.0:7301")
       .set_routing_id (routing_id_t::from ("service-a"))
-      .channel_name ("orders").server ();                   // 처리할 논리 membership
+      // 처리할 논리 membership
+      .channel_name ("orders").server ();
     options.add_fanout_channel ("events")
-      .enable_publisher ("tcp://0.0.0.0:7302");             // classic event fan-out
-    options.add_route_mesh ("game.room")                    // SPOT·actor도 MeshNode가 소유
+      // classic event fan-out
+      .enable_publisher ("tcp://0.0.0.0:7302");
+    // SPOT·actor도 MeshNode가 소유
+    options.add_route_mesh ("game.room")
       .listen ("tcp://0.0.0.0:7304")
       .set_routing_id (routing_id_t::from ("room-a"))
       .channel_name ("game.room").server ();
     options.add_stream_node ("gateway")
-      .bind ("tcp://0.0.0.0:7400");                         // 외부 client endpoint
+      // 외부 client endpoint
+      .bind ("tcp://0.0.0.0:7400");
 });
 ```
 

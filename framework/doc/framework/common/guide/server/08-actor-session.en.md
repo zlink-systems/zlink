@@ -88,11 +88,13 @@ A minimal version looks like this.
 
             await context.Actors.BindOrGetAsync(
                 actor,
-                cancellationToken); // Returns the existing route if the same exact incarnation is already bound.
+                // Returns the existing route if the same exact incarnation is already bound.
+                cancellationToken);
 
             await context.Client
                 .Reply(new Authenticated(actor.ActorId))
-                .Async(cancellationToken); // Submits the current request's one-shot reply.
+                // Submits the current request's one-shot reply.
+                .Async(cancellationToken);
         }
     }
     ```
@@ -200,7 +202,8 @@ unhandled packet is handed to the bound Actor.
         public void Configure()
         {
             Context.Handlers
-                .AddHandler<AuthenticateHandler>(); // Registers the packet to handle before Actor binding.
+                // Registers the packet to handle before Actor binding.
+                .AddHandler<AuthenticateHandler>();
         }
 
         public async ValueTask OnDispatchAsync(
@@ -223,7 +226,8 @@ unhandled packet is handed to the bound Actor.
 
             await actor.RelayAsync(
                 payload,
-                cancellationToken); // Hands the Framework-owned payload to the Actor handler without decoding it.
+                // Hands the Framework-owned payload to the Actor handler without decoding it.
+                cancellationToken);
         }
 
         public ValueTask OnConnectedAsync(CancellationToken cancellationToken)
@@ -440,7 +444,8 @@ An Actor handler sends a message to the currently bound client through
             await actor.Context.BoundSession
                 .Send(new GameStateNotify(message.State))
                 .Metadata("revision", message.Revision.ToString())
-                .Async(cancellationToken); // Waits for local admission on the current bound session.
+                // Waits for local admission on the current bound session.
+                .Async(cancellationToken);
         }
     }
     ```

@@ -7,6 +7,8 @@ title: "3. Core Concepts · Kotlin"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 3. Core Concepts
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 2. Getting Started](02-getting-started.en.md) | [Next: 4. Backpressure — When Arrival Outpaces Processing](04-backpressure.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "3. Core Concepts · Kotlin"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/03-concepts.en.md) · [C++](../../../cpp/guide/server/03-concepts.en.md) · [Java](../../../java/guide/server/03-concepts.en.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/03-concepts.en.md)
 <!-- language-switch:end -->
-
-# 3. Core Concepts
 
 > **The documents that own this chapter's contract** — [Framework Overview](../../../common/spec/server/00-foundation/03-overview.en.md)
 > and the [Interaction Model](../../../common/spec/server/00-foundation/04-interaction-model.en.md) own the
@@ -67,12 +67,17 @@ doesn't know — and doesn't need to know — which node was selected.
 Here's what it looks like to configure both roles on one MeshNode.
 
 ```kotlin
-val mesh = options.addRouteMesh("services")  // One MeshNode joins the mesh "services".
-mesh.listen("tcp://0.0.0.0:7101")            // Its own endpoint for other nodes to connect to.
+// One MeshNode joins the mesh "services".
+val mesh = options.addRouteMesh("services")
+// Its own endpoint for other nodes to connect to.
+mesh.listen("tcp://0.0.0.0:7101")
 
-mesh.objects().server()                      // Object role — this node places spots/actors.
-mesh.channelName("orders").server()          // Channel role — this node handles "orders" requests.
-mesh.channelName("billing").client()         // A call-only channel is client.
+// Object role — this node places spots/actors.
+mesh.objects().server()
+// Channel role — this node handles "orders" requests.
+mesh.channelName("orders").server()
+// A call-only channel is client.
+mesh.channelName("billing").client()
 ```
 
 Automatic connection management, which avoids hard-coding peer addresses and tracks servers

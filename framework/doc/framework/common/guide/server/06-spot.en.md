@@ -64,9 +64,11 @@ registers an Instance Spot to hold the matching queue.
     ```csharp
     // Play server -- an Entry Spot and a User Spot to hold rooms.
     mesh.Objects().Server()
-        .AddEntrySpot<BingoEntrySpot>()                 // An Entry Spot has no stable type.
+        // An Entry Spot has no stable type.
+        .AddEntrySpot<BingoEntrySpot>()
         .AddSpotFactory<BingoRoom>(
-            SampleNames.RoomSpotType,                   // Stable type -- selected by this name when creating.
+            // Stable type -- selected by this name when creating.
+            SampleNames.RoomSpotType,
             factory => factory
                 .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
                 .PreserveStateWith<BingoRoomRelocationAdapter>());
@@ -86,10 +88,12 @@ registers an Instance Spot to hold the matching queue.
     ```cpp
     // Play server -- an Entry Spot and a User Spot to hold rooms.
     mesh.set_object_role (object_role_t::server)
-      .add_entry_spot<bingo_entry_spot_t> (              // An Entry Spot has no stable type.
+      // An Entry Spot has no stable type.
+      .add_entry_spot<bingo_entry_spot_t> (
         [] (entry_spot_context_t c) { return std::make_shared<bingo_entry_spot_t> (std::move (c)); })
       .add_spot_factory<bingo_room_t> (
-        sample_names_t::room_spot_type,                  // Stable type -- selected by this name when creating.
+        // Stable type -- selected by this name when creating.
+        sample_names_t::room_spot_type,
         [] (spot_context_t c) { return std::make_shared<bingo_room_t> (std::move (c)); },
         [] (auto &factory) {
             factory.set_execution_mode (user_spot_execution_mode_t::spot_wide);
@@ -114,9 +118,11 @@ registers an Instance Spot to hold the matching queue.
     ```java
     // Play server -- an Entry Spot and a User Spot to hold rooms.
     mesh.objects().server()
-        .addEntrySpot(BingoEntrySpot.class)              // An Entry Spot has no stable type.
+        // An Entry Spot has no stable type.
+        .addEntrySpot(BingoEntrySpot.class)
         .addSpotFactory(
-            SampleNames.RoomSpotType,                    // Stable type -- selected by this name when creating.
+            // Stable type -- selected by this name when creating.
+            SampleNames.RoomSpotType,
             BingoRoom.class,
             factory -> factory
                 .executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
@@ -138,9 +144,11 @@ registers an Instance Spot to hold the matching queue.
     ```kotlin
     // Play server -- an Entry Spot and a User Spot to hold rooms.
     mesh.objects().server()
-        .addEntrySpot(BingoEntrySpot::class.java)          // An Entry Spot has no stable type.
+        // An Entry Spot has no stable type.
+        .addEntrySpot(BingoEntrySpot::class.java)
         .addSpotFactory(
-            SampleNames.RoomSpotType,                      // Stable type -- selected by this name when creating.
+            // Stable type -- selected by this name when creating.
+            SampleNames.RoomSpotType,
             BingoRoom::class.java,
         ) { factory ->
             factory.executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
@@ -163,9 +171,11 @@ registers an Instance Spot to hold the matching queue.
     ```typescript
     // Play server -- an Entry Spot and a User Spot to hold rooms.
     mesh.objects().server()
-      .addEntrySpot(BingoEntrySpot)                    // An Entry Spot has no stable type.
+      // An Entry Spot has no stable type.
+      .addEntrySpot(BingoEntrySpot)
       .addSpotFactory(
-        SampleNames.roomSpotType,                      // Stable type -- selected by this name when creating.
+        // Stable type -- selected by this name when creating.
+        SampleNames.roomSpotType,
         BingoRoom,
         (factory) => factory
           .executionMode(ZLinkUserSpotExecutionMode.SpotWide)
@@ -192,17 +202,21 @@ two together.
 
     ```csharp
     // Instance Spot -- no create call. Sending to that ID creates it if it's missing.
-    var allocated = await spotClient                    // IZLinkSpotClient
+    // IZLinkSpotClient
+    var allocated = await spotClient
         .RequestToSpot($"match:{levelBucket}", new ReserveBingoRoomReq { ... })
-        .InstanceSpot(SampleNames.MatchmakerSpotType)   // The intent that creation is OK if it's missing (cold activation).
+        // The intent that creation is OK if it's missing (cold activation).
+        .InstanceSpot(SampleNames.MatchmakerSpotType)
         .InMesh(SampleNames.MatchmakingMeshName)
         .Async<ReserveBingoRoomRes>(cancellationToken);
 
     // User Spot -- there's a separate create call.
-    var created = await spots                           // IZLinkSpotManager
+    // IZLinkSpotManager
+    var created = await spots
         .GetOrCreate(allocated.RoomId, SampleNames.RoomSpotType)
         .InMesh(SampleNames.PlayMeshName)
-        .Request(allocated.Settings)                    // Delivered to the new Spot's OnCreateAsync.
+        // Delivered to the new Spot's OnCreateAsync.
+        .Request(allocated.Settings)
         .Async(cancellationToken);
     ```
 
@@ -212,7 +226,8 @@ two together.
     // Instance Spot -- no create call. Sending to that ID creates it if it's missing.
     auto allocated = co_await spot_client
                        .request_to_spot ("match:" + level_bucket, reserve_bingo_room_req_t{})
-                       .instance_spot (sample_names_t::matchmaker_spot_type) // The intent that creation is OK if it's missing.
+                       // The intent that creation is OK if it's missing.
+                       .instance_spot (sample_names_t::matchmaker_spot_type)
                        .in_mesh (sample_names_t::matchmaking_mesh_name)
                        .async<reserve_bingo_room_res_t> ();
 
@@ -220,7 +235,8 @@ two together.
     auto created = co_await spots
                      .get_or_create (allocated.room_id, sample_names_t::room_spot_type)
                      .in_mesh (sample_names_t::play_mesh_name)
-                     .request (allocated.settings) // Delivered to the new Spot's on_create.
+                     // Delivered to the new Spot's on_create.
+                     .request (allocated.settings)
                      .async ();
     ```
 
@@ -230,7 +246,8 @@ two together.
     // Instance Spot -- no create call. Sending to that ID creates it if it's missing.
     ReserveBingoRoomRes allocated = spotClient
         .requestToSpot("match:" + levelBucket, new ReserveBingoRoomReq())
-        .instanceSpot(SampleNames.MatchmakerSpotType) // The intent that creation is OK if it's missing.
+        // The intent that creation is OK if it's missing.
+        .instanceSpot(SampleNames.MatchmakerSpotType)
         .inMesh(SampleNames.MatchmakingMeshName)
         .submit(ReserveBingoRoomRes.class)
         .toCompletableFuture().join();
@@ -239,7 +256,8 @@ two together.
     ZLinkSpotCreateResult created = spots
         .getOrCreate(allocated.roomId(), SampleNames.RoomSpotType)
         .inMesh(SampleNames.PlayMeshName)
-        .request(allocated.settings())   // Delivered to the new Spot's onCreate.
+        // Delivered to the new Spot's onCreate.
+        .request(allocated.settings())
         .submit()
         .toCompletableFuture().join();
     ```
@@ -250,7 +268,8 @@ two together.
     // Instance Spot -- no create call. Sending to that ID creates it if it's missing.
     val allocated = spotClient
         .requestToSpot("match:$levelBucket", ReserveBingoRoomReq())
-        .instanceSpot(SampleNames.MatchmakerSpotType) // The intent that creation is OK if it's missing.
+        // The intent that creation is OK if it's missing.
+        .instanceSpot(SampleNames.MatchmakerSpotType)
         .inMesh(SampleNames.MatchmakingMeshName)
         .submit(ReserveBingoRoomRes::class.java)
         .await()
@@ -259,7 +278,8 @@ two together.
     val created = spots
         .getOrCreate(allocated.roomId, SampleNames.RoomSpotType)
         .inMesh(SampleNames.PlayMeshName)
-        .request(allocated.settings)     // Delivered to the new Spot's onCreate.
+        // Delivered to the new Spot's onCreate.
+        .request(allocated.settings)
         .submit()
         .await()
     ```
@@ -270,7 +290,8 @@ two together.
     // Instance Spot -- no create call. Sending to that ID creates it if it's missing.
     const allocated = await spotClient
       .requestToSpot(`match:${levelBucket}`, reserveBingoRoomReq())
-      .instanceSpot(SampleNames.matchmakerSpotType) // The intent that creation is OK if it's missing.
+      // The intent that creation is OK if it's missing.
+      .instanceSpot(SampleNames.matchmakerSpotType)
       .inMesh(SampleNames.matchmakingMeshName)
       .submit<ReserveBingoRoomRes>();
 
@@ -278,7 +299,8 @@ two together.
     const created = await spots
       .getOrCreate(allocated.roomId, SampleNames.roomSpotType)
       .inMesh(SampleNames.playMeshName)
-      .request(allocated.settings)      // Delivered to the new Spot's onCreate.
+      // Delivered to the new Spot's onCreate.
+      .request(allocated.settings)
       .submit();
     ```
 
@@ -300,7 +322,8 @@ stable type becomes a placement candidate.
         .SetRoutingIdPrefix("play");
 
     mesh.Objects().Server()
-        .AddEntrySpot<PlayEntrySpot>() // Registers the Entry Spot an Actor is placed in first.
+        // Registers the Entry Spot an Actor is placed in first.
+        .AddEntrySpot<PlayEntrySpot>()
         .AddSpotFactory<GameRoom>(
             "game-room",
             factory => factory
@@ -342,7 +365,8 @@ stable type becomes a placement candidate.
         .setRoutingIdPrefix("play");
 
     mesh.objects().server()
-        .addEntrySpot(PlayEntrySpot.class) // Registers the Entry Spot an Actor is placed in first.
+        // Registers the Entry Spot an Actor is placed in first.
+        .addEntrySpot(PlayEntrySpot.class)
         .addSpotFactory(
             "game-room",
             GameRoom.class,
@@ -363,7 +387,8 @@ stable type becomes a placement candidate.
         .setRoutingIdPrefix("play")
 
     mesh.objects().server()
-        .addEntrySpot(PlayEntrySpot::class.java) // Registers the Entry Spot an Actor is placed in first.
+        // Registers the Entry Spot an Actor is placed in first.
+        .addEntrySpot(PlayEntrySpot::class.java)
         .addSpotFactory("game-room", GameRoom::class.java) { factory ->
             factory.executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE).disableRelocation()
         }
@@ -380,7 +405,8 @@ stable type becomes a placement candidate.
       .setRoutingIdPrefix('play');
 
     mesh.objects().server()
-      .addEntrySpot(PlayEntrySpot) // Registers the Entry Spot an Actor is placed in first.
+      // Registers the Entry Spot an Actor is placed in first.
+      .addEntrySpot(PlayEntrySpot)
       .addSpotFactory('game-room', GameRoom, (factory) => factory
         .executionMode(ZLinkUserSpotExecutionMode.SpotWide)
         .disableRelocation())
@@ -470,41 +496,49 @@ creation is the point, like opening a new room. The result is one of two: it was
 
     ```csharp
     ZLinkSpotCreateResult created = await spots
-        .Create("game-room") // Selects the factory and placement candidates by the stable type.
+        // Selects the factory and placement candidates by the stable type.
+        .Create("game-room")
         .InMesh("play")
-        .Request(new CreateGame("ranked")) // The create request delivered to OnCreateAsync.
+        // The create request delivered to OnCreateAsync.
+        .Request(new CreateGame("ranked"))
         .Timeout(TimeSpan.FromSeconds(10))
         .Async(cancellationToken);
 
     if (created.State == ZLinkSpotCreateState.Rejected)
         throw new InvalidOperationException("Game creation was rejected.");
 
-    string spotId = created.Spot.SpotId; // Use only the global SpotId for messaging from here on.
+    // Use only the global SpotId for messaging from here on.
+    string spotId = created.Spot.SpotId;
     ```
 
 === "C++"
 
     ```cpp
     auto created = co_await spots
-                     .create ("game-room")            // Selects the factory and placement candidates by the stable type.
+                     // Selects the factory and placement candidates by the stable type.
+                     .create ("game-room")
                      .in_mesh ("play")
-                     .request (create_game_t{"ranked"}) // The create request delivered to on_create.
+                     // The create request delivered to on_create.
+                     .request (create_game_t{"ranked"})
                      .timeout (std::chrono::seconds (10))
                      .async ();
 
     if (created.state == spot_create_state_t::rejected)
         throw std::runtime_error ("Game creation was rejected.");
 
-    auto spot_id = created.spot.spot_id (); // Use only the global SpotId for messaging from here on.
+    // Use only the global SpotId for messaging from here on.
+    auto spot_id = created.spot.spot_id ();
     ```
 
 === "Java"
 
     ```java
     ZLinkSpotCreateResult created = spots
-        .create("game-room")                  // Selects the factory and placement candidates by the stable type.
+        // Selects the factory and placement candidates by the stable type.
+        .create("game-room")
         .inMesh("play")
-        .request(new CreateGame("ranked"))    // The create request delivered to onCreate.
+        // The create request delivered to onCreate.
+        .request(new CreateGame("ranked"))
         .timeout(Duration.ofSeconds(10))
         .submit()
         .toCompletableFuture().join();
@@ -513,16 +547,19 @@ creation is the point, like opening a new room. The result is one of two: it was
         throw new IllegalStateException("Game creation was rejected.");
     }
 
-    String spotId = created.spot().spotId(); // Use only the global SpotId for messaging from here on.
+    // Use only the global SpotId for messaging from here on.
+    String spotId = created.spot().spotId();
     ```
 
 === "Kotlin"
 
     ```kotlin
     val created = spots
-        .create("game-room")                  // Selects the factory and placement candidates by the stable type.
+        // Selects the factory and placement candidates by the stable type.
+        .create("game-room")
         .inMesh("play")
-        .request(CreateGame("ranked"))        // The create request delivered to onCreate.
+        // The create request delivered to onCreate.
+        .request(CreateGame("ranked"))
         .timeout(Duration.ofSeconds(10))
         .submit()
         .await()
@@ -531,16 +568,19 @@ creation is the point, like opening a new room. The result is one of two: it was
         error("Game creation was rejected.")
     }
 
-    val spotId = created.spot().spotId() // Use only the global SpotId for messaging from here on.
+    // Use only the global SpotId for messaging from here on.
+    val spotId = created.spot().spotId()
     ```
 
 === "Node/TypeScript"
 
     ```typescript
     const created = await spots
-      .create('game-room')                  // Selects the factory and placement candidates by the stable type.
+      // Selects the factory and placement candidates by the stable type.
+      .create('game-room')
       .inMesh('play')
-      .request(createGame('ranked'))        // The create request delivered to onCreate.
+      // The create request delivered to onCreate.
+      .request(createGame('ranked'))
       .timeout(10_000)
       .submit();
 
@@ -548,7 +588,8 @@ creation is the point, like opening a new room. The result is one of two: it was
       throw new Error('Game creation was rejected.');
     }
 
-    const spotId = created.spot.spotId; // Use only the global SpotId for messaging from here on.
+    // Use only the global SpotId for messaging from here on.
+    const spotId = created.spot.spotId;
     ```
 
 
@@ -598,15 +639,19 @@ attempt only once, so the application doesn't have to guard against the race its
     ZLinkSpotCreateResult result = await spots
         .GetOrCreate("lobby-eu-1", "lobby")
         .InMesh("play")
-        .Request(new CreateLobby("eu")) // Not delivered if this ends as Existing.
+        // Not delivered if this ends as Existing.
+        .Request(new CreateLobby("eu"))
         .Async(cancellationToken);
 
     switch (result.State)
     {
-        case ZLinkSpotCreateState.Existing: // Uses the lobby that already existed, as-is.
-        case ZLinkSpotCreateState.Created:  // This call created it.
+        // Uses the lobby that already existed, as-is.
+        case ZLinkSpotCreateState.Existing:
+        // This call created it.
+        case ZLinkSpotCreateState.Created:
             break;
-        case ZLinkSpotCreateState.Rejected: // The create callback rejected it -- no Ready Spot.
+        // The create callback rejected it -- no Ready Spot.
+        case ZLinkSpotCreateState.Rejected:
             throw new InvalidOperationException("Lobby creation was rejected.");
     }
     ```
@@ -617,14 +662,18 @@ attempt only once, so the application doesn't have to guard against the race its
     auto result = co_await spots
                     .get_or_create ("lobby-eu-1", "lobby")
                     .in_mesh ("play")
-                    .request (create_lobby_t{"eu"}) // Not delivered if this ends as existing.
+                    // Not delivered if this ends as existing.
+                    .request (create_lobby_t{"eu"})
                     .async ();
 
     switch (result.state) {
-    case spot_create_state_t::existing: // Uses the lobby that already existed, as-is.
-    case spot_create_state_t::created:  // This call created it.
+    // Uses the lobby that already existed, as-is.
+    case spot_create_state_t::existing:
+    // This call created it.
+    case spot_create_state_t::created:
         break;
-    case spot_create_state_t::rejected: // The create callback rejected it -- no Ready Spot.
+    // The create callback rejected it -- no Ready Spot.
+    case spot_create_state_t::rejected:
         throw std::runtime_error ("Lobby creation was rejected.");
     }
     ```
@@ -653,13 +702,16 @@ attempt only once, so the application doesn't have to guard against the race its
     val result = spots
         .getOrCreate("lobby-eu-1", "lobby")
         .inMesh("play")
-        .request(CreateLobby("eu")) // Not delivered if this ends as EXISTING.
+        // Not delivered if this ends as EXISTING.
+        .request(CreateLobby("eu"))
         .submit()
         .await()
 
     when (result.state()) {
-        ZLinkSpotCreateState.EXISTING -> { }  // Uses the lobby that already existed, as-is.
-        ZLinkSpotCreateState.CREATED -> { }   // This call created it.
+        // Uses the lobby that already existed, as-is.
+        ZLinkSpotCreateState.EXISTING -> { }
+        // This call created it.
+        ZLinkSpotCreateState.CREATED -> { }
         // The create callback rejected it -- no Ready Spot.
         ZLinkSpotCreateState.REJECTED -> error("Lobby creation was rejected.")
     }
@@ -671,14 +723,18 @@ attempt only once, so the application doesn't have to guard against the race its
     const result = await spots
       .getOrCreate('lobby-eu-1', 'lobby')
       .inMesh('play')
-      .request(createLobby('eu')) // Not delivered if this ends as Existing.
+      // Not delivered if this ends as Existing.
+      .request(createLobby('eu'))
       .submit();
 
     switch (result.state) {
-      case ZLinkSpotCreateState.Existing: // Uses the lobby that already existed, as-is.
-      case ZLinkSpotCreateState.Created:  // This call created it.
+      // Uses the lobby that already existed, as-is.
+      case ZLinkSpotCreateState.Existing:
+      // This call created it.
+      case ZLinkSpotCreateState.Created:
         break;
-      case ZLinkSpotCreateState.Rejected: // The create callback rejected it -- no Ready Spot.
+      // The create callback rejected it -- no Ready Spot.
+      case ZLinkSpotCreateState.Rejected:
         throw new Error('Lobby creation was rejected.');
     }
     ```
@@ -693,7 +749,8 @@ general messaging -- use it only to close that same incarnation.
     SpotRef? current = await spots.FindAsync("lobby-eu-1", cancellationToken);
     if (current is { } exact)
     {
-        await spots.CloseAsync(exact, cancellationToken); // Doesn't accidentally close a different generation.
+        // Doesn't accidentally close a different generation.
+        await spots.CloseAsync(exact, cancellationToken);
     }
     ```
 
@@ -889,7 +946,8 @@ The four branches in their minimal form look like this.
             Chat message,
             CancellationToken cancellationToken)
         {
-            spot.AppendChat(message.Text);  // Touches Spot state directly. No lock needed.
+            // Touches Spot state directly. No lock needed.
+            spot.AppendChat(message.Text);
             return ValueTask.CompletedTask;
         }
     }
@@ -924,7 +982,8 @@ The four branches in their minimal form look like this.
     {
         public ValueTask HandleAsync(
             GameRoom spot,
-            PlayerActor actor,              // The Actor that received this message.
+            // The Actor that received this message.
+            PlayerActor actor,
             IZLinkMessageContext messageContext,
             PlaceMark message,
             CancellationToken cancellationToken)
@@ -945,7 +1004,8 @@ The four branches in their minimal form look like this.
         // A packet addressed to the Spot.
         task_t<void> chat (const chat_t &message)
         {
-            append_chat (message.text); // Touches Spot state directly. No lock needed.
+            // Touches Spot state directly. No lock needed.
+            append_chat (message.text);
             co_return;
         }
 
@@ -960,7 +1020,8 @@ The four branches in their minimal form look like this.
         }
 
         // A packet addressed to a member Actor -- receives the Spot and the Actor together.
-        task_t<void> place_mark (player_actor_t &actor,   // The Actor that received this message.
+        // The Actor that received this message.
+        task_t<void> place_mark (player_actor_t &actor,
                                  message_context_t &,
                                  const place_mark_t &message)
         {
@@ -977,7 +1038,8 @@ The four branches in their minimal form look like this.
     public final class ChatHandler implements ZLinkSpotPacketHandler<GameRoom, Chat> {
         @Override
         public CompletionStage<Void> handle(GameRoom spot, Chat message) {
-            spot.appendChat(message.text()); // Touches Spot state directly. No lock needed.
+            // Touches Spot state directly. No lock needed.
+            spot.appendChat(message.text());
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -1007,7 +1069,8 @@ The four branches in their minimal form look like this.
         @Override
         public CompletionStage<Void> handle(
             GameRoom spot,
-            PlayerActor actor,              // The Actor that received this message.
+            // The Actor that received this message.
+            PlayerActor actor,
             ZLinkMessageContext messageContext,
             PlaceMark message) {
             spot.place(actor.actorId(), message.cell());
@@ -1022,7 +1085,8 @@ The four branches in their minimal form look like this.
     // A packet addressed to the Spot -- the first argument is the target Spot instance.
     class ChatHandler : ZLinkSpotPacketHandler<GameRoom, Chat> {
         override suspend fun handle(spot: GameRoom, message: Chat) {
-            spot.appendChat(message.text) // Touches Spot state directly. No lock needed.
+            // Touches Spot state directly. No lock needed.
+            spot.appendChat(message.text)
         }
     }
 
@@ -1042,7 +1106,8 @@ The four branches in their minimal form look like this.
     class PlaceMarkHandler : ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
         override suspend fun handle(
             spot: GameRoom,
-            actor: PlayerActor,             // The Actor that received this message.
+            // The Actor that received this message.
+            actor: PlayerActor,
             messageContext: ZLinkMessageContext,
             message: PlaceMark,
         ) {
@@ -1057,7 +1122,8 @@ The four branches in their minimal form look like this.
     // A packet addressed to the Spot -- the first argument is the target Spot instance.
     export class ChatHandler implements ZLinkSpotPacketHandler<GameRoom, Chat> {
       async handle(spot: GameRoom, message: Chat): Promise<void> {
-        spot.appendChat(message.text); // Touches Spot state directly. No lock needed.
+        // Touches Spot state directly. No lock needed.
+        spot.appendChat(message.text);
       }
     }
 
@@ -1081,7 +1147,8 @@ The four branches in their minimal form look like this.
       implements ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
       async handle(
         spot: GameRoom,
-        actor: PlayerActor,             // The Actor that received this message.
+        // The Actor that received this message.
+        actor: PlayerActor,
         messageContext: ZLinkMessageContext,
         message: PlaceMark
       ): Promise<void> {
@@ -1106,10 +1173,12 @@ callbacks.
 
         public void Configure()
         {
-            Context.Handlers.AddPacket<ChatHandler>(); // Registers the Spot send handler.
+            // Registers the Spot send handler.
+            Context.Handlers.AddPacket<ChatHandler>();
             Context.Handlers.AddSubscribe<ScoreHandler>(
                 "game-events",
-                "score.changed"); // Registers a Logical Multicast subscription.
+                // Registers a Logical Multicast subscription.
+                "score.changed");
         }
 
         public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
@@ -1149,9 +1218,11 @@ callbacks.
 
         void configure () override
         {
-            _context.handlers ().add_handler<&game_room_t::chat> (); // Registers the Spot send handler.
+            // Registers the Spot send handler.
+            _context.handlers ().add_handler<&game_room_t::chat> ();
             _context.handlers ().add_subscribe<&game_room_t::score> (
-              "game-events", "score.changed"); // Registers a Logical Multicast subscription.
+              // Registers a Logical Multicast subscription.
+              "game-events", "score.changed");
         }
 
         task_t<spot_create_response_t> on_create (const message_t &request) override
@@ -1192,7 +1263,8 @@ callbacks.
 
         @Override
         public void configure() {
-            context.handlers().addHandler(ChatHandler.class); // Registers the Spot send handler.
+            // Registers the Spot send handler.
+            context.handlers().addHandler(ChatHandler.class);
             // The subscription topic is set by @ZLinkSpotSubscription on ScoreHandler.
             context.handlers().addHandler(ScoreHandler.class);
         }
@@ -1228,7 +1300,8 @@ callbacks.
         override fun context(): ZLinkSpotContext = spotContext
 
         override fun configure() {
-            spotContext.handlers().addHandler(ChatHandler::class.java) // Registers the Spot send handler.
+            // Registers the Spot send handler.
+            spotContext.handlers().addHandler(ChatHandler::class.java)
             // The subscription topic is set by @ZLinkSpotSubscription on ScoreHandler.
             spotContext.handlers().addHandler(ScoreHandler::class.java)
         }
@@ -1257,11 +1330,13 @@ callbacks.
       readonly context!: ZLinkSpotContext;
 
       configure(): void {
-        this.context.handlers.addPacket(ChatHandler); // Registers the Spot send handler.
+        // Registers the Spot send handler.
+        this.context.handlers.addPacket(ChatHandler);
         this.context.handlers.addSubscribe(
           ScoreHandler,
           'game-events',
-          'score.changed'); // Registers a Logical Multicast subscription.
+          // Registers a Logical Multicast subscription.
+          'score.changed');
       }
 
       async onCreate(request: ZLinkMessage): Promise<ZLinkSpotCreateResponse> {
@@ -1465,7 +1540,8 @@ short-lived resource directly inside that function.
     // short-lived resource directly inside this function.
     task_t<save_score_reply_t> game_room_t::save_score (const save_score_t &request)
     {
-        auto session = _store.open_session (); // Closed together when this call ends.
+        // Closed together when this call ends.
+        auto session = _store.open_session ();
         co_await session.append (_context.spot_id (), request.value);
         co_return save_score_reply_t{request.value};
     }
@@ -1607,14 +1683,17 @@ one, it can be omitted.
     // A mesh with multiple types registered -- specify the stable type for which factory creates it.
     MatchResult match = await spotClient
         .RequestToSpot("bronze", new FindMatch(playerId))
-        .InstanceSpot("matchmaker")   // Prepares it with this stable type's factory if the target is missing.
-        .InMesh("matchmaking")        // Picks the mesh for initial placement.
+        // Prepares it with this stable type's factory if the target is missing.
+        .InstanceSpot("matchmaker")
+        // Picks the mesh for initial placement.
+        .InMesh("matchmaking")
         .Async<MatchResult>(cancellationToken);
 
     // A mesh with only one type registered -- omit it and the Framework picks that sole type.
     MatchResult single = await spotClient
         .RequestToSpot("bronze", new FindMatch(playerId))
-        .InstanceSpot()               // Prepares it with the only type registered on the target node.
+        // Prepares it with the only type registered on the target node.
+        .InstanceSpot()
         .InMesh("matchmaking")
         .Async<MatchResult>(cancellationToken);
     ```
@@ -1625,14 +1704,17 @@ one, it can be omitted.
     // A mesh with multiple types registered -- specify the stable type for which factory creates it.
     auto match = co_await spot_client
                    .request_to_spot ("bronze", find_match_t{player_id})
-                   .instance_spot ("matchmaker") // Prepares it with this stable type's factory if the target is missing.
-                   .in_mesh ("matchmaking")      // Picks the mesh for initial placement.
+                   // Prepares it with this stable type's factory if the target is missing.
+                   .instance_spot ("matchmaker")
+                   // Picks the mesh for initial placement.
+                   .in_mesh ("matchmaking")
                    .async<match_result_t> ();
 
     // A mesh with only one type registered -- omit it and the Framework picks that sole type.
     auto single = co_await spot_client
                     .request_to_spot ("bronze", find_match_t{player_id})
-                    .instance_spot ()            // Prepares it with the only type registered on the target node.
+                    // Prepares it with the only type registered on the target node.
+                    .instance_spot ()
                     .in_mesh ("matchmaking")
                     .async<match_result_t> ();
     ```
@@ -1643,15 +1725,18 @@ one, it can be omitted.
     // A mesh with multiple types registered -- specify the stable type for which factory creates it.
     MatchResult match = spotClient
         .requestToSpot("bronze", new FindMatch(playerId))
-        .instanceSpot("matchmaker") // Prepares it with this stable type's factory if the target is missing.
-        .inMesh("matchmaking")      // Picks the mesh for initial placement.
+        // Prepares it with this stable type's factory if the target is missing.
+        .instanceSpot("matchmaker")
+        // Picks the mesh for initial placement.
+        .inMesh("matchmaking")
         .submit(MatchResult.class)
         .toCompletableFuture().join();
 
     // A mesh with only one type registered -- omit it and the Framework picks that sole type.
     MatchResult single = spotClient
         .requestToSpot("bronze", new FindMatch(playerId))
-        .instanceSpot()             // Prepares it with the only type registered on the target node.
+        // Prepares it with the only type registered on the target node.
+        .instanceSpot()
         .inMesh("matchmaking")
         .submit(MatchResult.class)
         .toCompletableFuture().join();
@@ -1663,15 +1748,18 @@ one, it can be omitted.
     // A mesh with multiple types registered -- specify the stable type for which factory creates it.
     val match = spotClient
         .requestToSpot("bronze", FindMatch(playerId))
-        .instanceSpot("matchmaker") // Prepares it with this stable type's factory if the target is missing.
-        .inMesh("matchmaking")      // Picks the mesh for initial placement.
+        // Prepares it with this stable type's factory if the target is missing.
+        .instanceSpot("matchmaker")
+        // Picks the mesh for initial placement.
+        .inMesh("matchmaking")
         .submit(MatchResult::class.java)
         .await()
 
     // A mesh with only one type registered -- omit it and the Framework picks that sole type.
     val single = spotClient
         .requestToSpot("bronze", FindMatch(playerId))
-        .instanceSpot()             // Prepares it with the only type registered on the target node.
+        // Prepares it with the only type registered on the target node.
+        .instanceSpot()
         .inMesh("matchmaking")
         .submit(MatchResult::class.java)
         .await()
@@ -1683,14 +1771,17 @@ one, it can be omitted.
     // A mesh with multiple types registered -- specify the stable type for which factory creates it.
     const match = await spotClient
       .requestToSpot('bronze', findMatch(playerId))
-      .instanceSpot('matchmaker') // Prepares it with this stable type's factory if the target is missing.
-      .inMesh('matchmaking')      // Picks the mesh for initial placement.
+      // Prepares it with this stable type's factory if the target is missing.
+      .instanceSpot('matchmaker')
+      // Picks the mesh for initial placement.
+      .inMesh('matchmaking')
       .submit<MatchResult>();
 
     // A mesh with only one type registered -- omit it and the Framework picks that sole type.
     const single = await spotClient
       .requestToSpot('bronze', findMatch(playerId))
-      .instanceSpot()             // Prepares it with the only type registered on the target node.
+      // Prepares it with the only type registered on the target node.
+      .instanceSpot()
       .inMesh('matchmaking')
       .submit<MatchResult>();
     ```
@@ -1742,8 +1833,10 @@ returns a timer handle, used later to cancel it.
     ```csharp
     // Inside a Spot -- keep the returned IZLinkTimer in a field, used to cancel it later.
     _gameTick = await Context.AddTimer<GameTickHandler>(
-        "game-tick",                 // A name unique within the same Spot.
-        TimeSpan.FromSeconds(1),     // The period. ZLinkConfigurationException if <= 0.
+        // A name unique within the same Spot.
+        "game-tick",
+        // The period. ZLinkConfigurationException if <= 0.
+        TimeSpan.FromSeconds(1),
         new ZLinkTimerOptions
         {
             OverrunPolicy = ZLinkTimerOverrunPolicy.SkipLateTicks,
@@ -1752,7 +1845,8 @@ returns a timer handle, used later to cancel it.
         },
         cancellationToken: cancellationToken);
 
-    await _gameTick.CancelAsync();   // When it's no longer needed. The Framework cleans it up together when the Spot closes.
+    // When it's no longer needed. The Framework cleans it up together when the Spot closes.
+    await _gameTick.CancelAsync();
     ```
 
 === "C++"
@@ -1766,11 +1860,14 @@ returns a timer handle, used later to cancel it.
 
     // The handler is a separate type from the Spot -- handle (spot, tick) takes two arguments.
     _game_tick = _context.add_timer<game_tick_handler_t> (
-      "game-tick",                              // A name unique within the same Spot.
-      std::chrono::seconds (1),                 // The period. A configuration error if <= 0.
+      // A name unique within the same Spot.
+      "game-tick",
+      // The period. A configuration error if <= 0.
+      std::chrono::seconds (1),
       options);
 
-    co_await _game_tick.cancel (); // When it's no longer needed. The Framework cleans it up together when the Spot closes.
+    // When it's no longer needed. The Framework cleans it up together when the Spot closes.
+    co_await _game_tick.cancel ();
     ```
 
 === "Java"
@@ -1783,8 +1880,10 @@ returns a timer handle, used later to cancel it.
         .setStopOnUnhandledException(false);
 
     gameTick = context.addTimer(
-        "game-tick",                    // A name unique within the same Spot.
-        Duration.ofSeconds(1),          // The period. ZLinkConfigurationException if <= 0.
+        // A name unique within the same Spot.
+        "game-tick",
+        // The period. ZLinkConfigurationException if <= 0.
+        Duration.ofSeconds(1),
         GameTickHandler.class,
         options).toCompletableFuture().join();
 
@@ -1802,8 +1901,10 @@ returns a timer handle, used later to cancel it.
         .setStopOnUnhandledException(false)
 
     gameTick = spotContext.addTimer(
-        "game-tick",                    // A name unique within the same Spot.
-        Duration.ofSeconds(1),          // The period. ZLinkConfigurationException if <= 0.
+        // A name unique within the same Spot.
+        "game-tick",
+        // The period. ZLinkConfigurationException if <= 0.
+        Duration.ofSeconds(1),
         GameTickHandler::class.java,
         options).await()
 
@@ -1816,8 +1917,10 @@ returns a timer handle, used later to cancel it.
     ```typescript
     // Inside a Spot -- keep the returned ZLinkTimer in a field, used to cancel it later.
     this.gameTick = await this.context.addTimer(
-      'game-tick',                     // A name unique within the same Spot.
-      1_000,                           // The period (ms). A configuration error if <= 0.
+      // A name unique within the same Spot.
+      'game-tick',
+      // The period (ms). A configuration error if <= 0.
+      1_000,
       GameTickHandler,
       {
         overrunPolicy: ZLinkTimerOverrunPolicy.SkipLateTicks,
@@ -1961,7 +2064,8 @@ number of skipped ticks.
     public ValueTask HandleAsync(GameRoom spot, ZLinkTimerTick tick, CancellationToken ct)
     {
         if (tick.Delay > TimeSpan.FromMilliseconds(500))
-            spot.ReportLag(tick.Delay, tick.SkippedTicks); // Report load if the delay is large.
+            // Report load if the delay is large.
+            spot.ReportLag(tick.Delay, tick.SkippedTicks);
 
         return spot.TickAsync(ct);
     }
@@ -1974,7 +2078,8 @@ number of skipped ticks.
                                               const timer_tick_t &tick) const
     {
         if (tick.delay > std::chrono::milliseconds (500))
-            spot.report_lag (tick.delay, tick.skipped_ticks); // Report load if the delay is large.
+            // Report load if the delay is large.
+            spot.report_lag (tick.delay, tick.skipped_ticks);
 
         co_await spot.tick_once ();
     }
@@ -1986,7 +2091,8 @@ number of skipped ticks.
     @Override
     public CompletionStage<Void> handle(GameRoom spot, ZLinkTimerTick tick) {
         if (tick.delay().compareTo(Duration.ofMillis(500)) > 0) {
-            spot.reportLag(tick.delay(), tick.skippedTicks()); // Report load if the delay is large.
+            // Report load if the delay is large.
+            spot.reportLag(tick.delay(), tick.skippedTicks());
         }
         return spot.tick();
     }
@@ -1997,7 +2103,8 @@ number of skipped ticks.
     ```kotlin
     override suspend fun handle(spot: GameRoom, tick: ZLinkTimerTick) {
         if (tick.delay() > Duration.ofMillis(500)) {
-            spot.reportLag(tick.delay(), tick.skippedTicks()) // Report load if the delay is large.
+            // Report load if the delay is large.
+            spot.reportLag(tick.delay(), tick.skippedTicks())
         }
         spot.tick()
     }
@@ -2008,7 +2115,8 @@ number of skipped ticks.
     ```typescript
     async handle(spot: GameRoom, tick: ZLinkTimerTick): Promise<void> {
       if (tick.delayMs > 500) {
-        spot.reportLag(tick.delayMs, tick.skippedTicks); // Report load if the delay is large.
+        // Report load if the delay is large.
+        spot.reportLag(tick.delayMs, tick.skippedTicks);
       }
       await spot.tick();
     }
@@ -2056,13 +2164,15 @@ thread,** use `RunCpuWorker`; if it's **asynchronous code that awaits completion
             BuildSnapshot request,
             CancellationToken cancellationToken)
         {
-            var board = spot.CopyBoard();          // Copy Spot state first, while still in the turn.
+            // Copy Spot state first, while still in the turn.
+            var board = spot.CopyBoard();
 
             var packed = await spot.Context
                 .RunCpuWorker(ct =>
                 {
                     ct.ThrowIfCancellationRequested();
-                    return SnapshotCodec.Compress(board); // Heavy synchronous computation.
+                    // Heavy synchronous computation.
+                    return SnapshotCodec.Compress(board);
                 })
                 .Yield(cancellationToken);
 
@@ -2077,11 +2187,13 @@ thread,** use `RunCpuWorker`; if it's **asynchronous code that awaits completion
     // CPU worker -- runs synchronous computation on a worker thread.
     task_t<snapshot_reply_t> game_room_t::build_snapshot (const build_snapshot_t &)
     {
-        auto board = copy_board (); // Copy Spot state first, while still in the turn.
+        // Copy Spot state first, while still in the turn.
+        auto board = copy_board ();
 
         auto packed = co_await _context
                         .run_cpu_worker ([board] (std::stop_token) {
-                            return snapshot_codec_t::compress (board); // Heavy synchronous computation.
+                            // Heavy synchronous computation.
+                            return snapshot_codec_t::compress (board);
                         })
                         .yield ();
 
@@ -2097,10 +2209,12 @@ thread,** use `RunCpuWorker`; if it's **asynchronous code that awaits completion
 
         @Override
         public CompletionStage<SnapshotReply> handle(GameRoom spot, BuildSnapshot request) {
-            var board = spot.copyBoard(); // Copy Spot state first, while still in the turn.
+            // Copy Spot state first, while still in the turn.
+            var board = spot.copyBoard();
 
             return spot.context()
-                .runCpuWorker(cancellation -> SnapshotCodec.compress(board)) // Heavy synchronous computation.
+                // Heavy synchronous computation.
+                .runCpuWorker(cancellation -> SnapshotCodec.compress(board))
                 .yield()
                 .thenApply(SnapshotReply::new);
         }
@@ -2113,10 +2227,12 @@ thread,** use `RunCpuWorker`; if it's **asynchronous code that awaits completion
     class BuildSnapshotHandler : ZLinkSpotRequestHandler<GameRoom, BuildSnapshot, SnapshotReply> {
 
         override suspend fun handle(spot: GameRoom, request: BuildSnapshot): SnapshotReply {
-            val board = spot.copyBoard() // Copy Spot state first, while still in the turn.
+            // Copy Spot state first, while still in the turn.
+            val board = spot.copyBoard()
 
             val packed = spot.context()
-                .runCpuWorker { SnapshotCodec.compress(board) } // Heavy synchronous computation.
+                // Heavy synchronous computation.
+                .runCpuWorker { SnapshotCodec.compress(board) }
                 .yield()
                 .await()
 
@@ -2132,10 +2248,12 @@ thread,** use `RunCpuWorker`; if it's **asynchronous code that awaits completion
       implements ZLinkSpotRequestHandler<GameRoom, BuildSnapshot, SnapshotReply> {
 
       async handle(spot: GameRoom, request: BuildSnapshot): Promise<SnapshotReply> {
-        const board = spot.copyBoard(); // Copy Spot state first, while still in the turn.
+        // Copy Spot state first, while still in the turn.
+        const board = spot.copyBoard();
 
         const packed = await spot.context
-          .runCpuWorker(() => SnapshotCodec.compress(board)) // Heavy synchronous computation.
+          // Heavy synchronous computation.
+          .runCpuWorker(() => SnapshotCodec.compress(board))
           .yield();
 
         return snapshotReply(packed);
@@ -2159,7 +2277,8 @@ Work that waits on I/O is handed to `RunIoWorker`.
         {
             var version = await spot.Context
                 .RunIoWorker(async ct => await _store.SaveAsync(request.Value, ct))
-                .Timeout(TimeSpan.FromSeconds(3))  // The cap on this worker call.
+                // The cap on this worker call.
+                .Timeout(TimeSpan.FromSeconds(3))
                 .Yield(cancellationToken);
 
             return new SaveScoreReply(version);
@@ -2177,7 +2296,8 @@ Work that waits on I/O is handed to `RunIoWorker`.
                          .run_io_worker ([this, request] (std::stop_token token) {
                              return _store.save (request.value, token);
                          })
-                         .timeout (std::chrono::seconds (3)) // The cap on this worker call.
+                         // The cap on this worker call.
+                         .timeout (std::chrono::seconds (3))
                          .yield ();
 
         co_return save_score_reply_t{version};
@@ -2287,7 +2407,8 @@ until the point the application signals.
         .AddSpotFactory<GameRoom>(
             "game-room",
             factory => factory
-                .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide) // Only usable in this mode.
+                // Only usable in this mode.
+                .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
                 .RelocationCoordinationMode(
                     ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
                 .PreserveStateWith<GameRoomRelocationAdapter>());
@@ -2361,7 +2482,8 @@ the Framework calls `Capture` at that point.
             ZLinkTimerTick tick,
             CancellationToken cancellationToken)
         {
-            if (!spot.TryFinishRound())      // Don't signal while a round is still in progress.
+            // Don't signal while a round is still in progress.
+            if (!spot.TryFinishRound())
                 return ValueTask.CompletedTask;
 
             // The point where the round ended and state was settled. This must be the last Framework call of the turn.
@@ -2377,7 +2499,8 @@ the Framework calls `Capture` at that point.
     task_t<void> round_tick_handler_t::handle (game_room_t &spot,
                                                const timer_tick_t &) const
     {
-        if (!spot.try_finish_round ()) // Don't signal while a round is still in progress.
+        // Don't signal while a round is still in progress.
+        if (!spot.try_finish_round ())
             co_return;
 
         // The point where the round ended and state was settled. This must be the last Framework call of the turn.
@@ -2392,7 +2515,8 @@ the Framework calls `Capture` at that point.
     public final class RoundTickHandler implements ZLinkSpotTimerHandler<GameRoom> {
         @Override
         public CompletionStage<Void> handle(GameRoom spot, ZLinkTimerTick tick) {
-            if (!spot.tryFinishRound()) { // Don't signal while a round is still in progress.
+            // Don't signal while a round is still in progress.
+            if (!spot.tryFinishRound()) {
                 return CompletableFuture.completedFuture(null);
             }
 
@@ -2408,7 +2532,8 @@ the Framework calls `Capture` at that point.
     ```kotlin
     class RoundTickHandler : ZLinkSpotTimerHandler<GameRoom> {
         override suspend fun handle(spot: GameRoom, tick: ZLinkTimerTick) {
-            if (!spot.tryFinishRound()) return // Don't signal while a round is still in progress.
+            // Don't signal while a round is still in progress.
+            if (!spot.tryFinishRound()) return
 
             // The point where the round ended and state was settled. This must be the last Framework call of the turn.
             spot.context().relocationReady().defer()
@@ -2421,7 +2546,8 @@ the Framework calls `Capture` at that point.
     ```typescript
     export class RoundTickHandler implements ZLinkSpotTimerHandler<GameRoom> {
       async handle(spot: GameRoom, tick: ZLinkTimerTick): Promise<void> {
-        if (!spot.tryFinishRound()) return; // Don't signal while a round is still in progress.
+        // Don't signal while a round is still in progress.
+        if (!spot.tryFinishRound()) return;
 
         // The point where the round ended and state was settled. This must be the last Framework call of the turn.
         spot.context.relocationReady().defer();

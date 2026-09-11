@@ -7,6 +7,8 @@ title: "2. 시작하기 · Java"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 2. 시작하기
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 1. 개요](01-overview.ko.md) | [다음: 3. 핵심 개념](03-concepts.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "2. 시작하기 · Java"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/02-getting-started.ko.md) · [C++](../../../cpp/guide/server/02-getting-started.ko.md) · **Java** · [Kotlin](../../../kotlin/guide/server/02-getting-started.ko.md) · [Node/TypeScript](../../../node/guide/server/02-getting-started.ko.md)
 <!-- language-switch:end -->
-
-# 2. 시작하기
 
 > **이 장의 계약 소유 문서** — 없다. 설치하고 첫 동작을 확인하는 절차 안내다.
 
@@ -69,11 +69,15 @@ public class ServerApplication {
     @Bean
     ZLinkFrameworkConfigurer zlink() {
         return options -> {
-            options.addHandlersFromPackageOf(ServerApplication.class);  // handler type을 찾는다.
+            // handler type을 찾는다.
+            options.addHandlersFromPackageOf(ServerApplication.class);
 
-            ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services") // mesh 이름을 정한다.
-                .listen("tcp://0.0.0.0:7101");                          // 다른 process가 접속할 자기 endpoint.
-            mesh.channelName("greeting").server()                           // 이 process가 "greeting"을 처리한다.
+            // mesh 이름을 정한다.
+            ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
+                // 다른 process가 접속할 자기 endpoint.
+                .listen("tcp://0.0.0.0:7101");
+            // 이 process가 "greeting"을 처리한다.
+            mesh.channelName("greeting").server()
                 .addRequestHandler(HelloHandler.class, Hello.class, Greeting.class);
         };
     }
@@ -95,9 +99,12 @@ public final class HelloHandler implements ZLinkRequestHandler<Hello, Greeting> 
 @Bean
 ZLinkFrameworkConfigurer zlink() {
     return options -> {
-        ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102");  // 자기 endpoint도 필요하다.
-        mesh.channelName("greeting").client();                  // 호출만 하는 쪽은 Client.
-        mesh.peerConnections().connect("tcp://127.0.0.1:7101"); // 수동 연결 — server endpoint를 직접 적는다.
+        // 자기 endpoint도 필요하다.
+        ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102");
+        // 호출만 하는 쪽은 Client.
+        mesh.channelName("greeting").client();
+        // 수동 연결 — server endpoint를 직접 적는다.
+        mesh.peerConnections().connect("tcp://127.0.0.1:7101");
     };
 }
 
@@ -189,14 +196,18 @@ public CompletionStage<CreateGameHttpRes> create(@RequestBody CreateGameHttpReq 
         : request.gameName();
 
     return spots
-        .create(SampleTypes.GAME_SPOT)      // 이 stable type을 제공하는 node가 후보가 된다.
-        .inMesh(SampleNodes.MESH)           // Object를 만들 RouteMesh를 선택한다.
+        // 이 stable type을 제공하는 node가 후보가 된다.
+        .create(SampleTypes.GAME_SPOT)
+        // Object를 만들 RouteMesh를 선택한다.
+        .inMesh(SampleNodes.MESH)
         .request(new TicTacToeGameCreateReq(
             gameName,
-            SampleDefaults.REQUIRED_LEVEL)) // 새 Spot의 onCreate에 전달할 최초 설정이다.
+            // 새 Spot의 onCreate에 전달할 최초 설정이다.
+            SampleDefaults.REQUIRED_LEVEL))
         .submit()
         .thenApply(created -> new CreateGameHttpRes(
-            created.spot().spotId(),        // Framework가 발급한 SpotId를 room id로 사용한다.
+            // Framework가 발급한 SpotId를 room id로 사용한다.
+            created.spot().spotId(),
             settings.playEndpoints(),
             settings.playNodes(),
             gameName,

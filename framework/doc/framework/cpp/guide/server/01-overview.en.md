@@ -7,6 +7,8 @@ title: "1. Overview · C++"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 1. Overview
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Next: 2. Getting Started](02-getting-started.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "1. Overview · C++"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/01-overview.en.md) · **C++** · [Java](../../../java/guide/server/01-overview.en.md) · [Kotlin](../../../kotlin/guide/server/01-overview.en.md) · [Node/TypeScript](../../../node/guide/server/01-overview.en.md)
 <!-- language-switch:end -->
-
-# 1. Overview
 
 > **The documents that own this chapter's contract** — owned by the
 > [Framework Overview](../../../common/spec/server/00-foundation/03-overview.en.md) and the
@@ -205,7 +205,8 @@ even if they're replaced later — this backend boundary is explained separately
 // Registration — one room mesh and a room type
 auto node = options.add_route_mesh ("game.room");
 node.listen ("tcp://0.0.0.0:9001");
-node.channel_name ("game.room").server ();  // A mesh has at least 1 logical membership
+// A mesh has at least 1 logical membership
+node.channel_name ("game.room").server ();
 node.add_spot_factory<bingo_room_spot_t> (
   "room",
   [] (spot_context_t context) { return std::make_shared<bingo_room_spot_t> (std::move (context)); },
@@ -217,7 +218,8 @@ node.add_spot_factory<bingo_room_spot_t> (
 // A C++ Spot handler is a Spot member function. The Spot arrives as `this`.
 task_t<mark_result_t> bingo_room_spot_t::mark_number (const mark_number_t &request)
 {
-    _board.mark (request.number);           // No lock
+    // No lock
+    _board.mark (request.number);
     _last_activity = std::chrono::system_clock::now ();
     co_return mark_result_t{_board.has_bingo ()};
 }
@@ -347,7 +349,8 @@ remains.
 // Inside an HTTP handler — route an order event to that order's workflow Spot.
 // The first request cold-activates the spot keyed on order_id, and later requests arrive
 // at the same already-created spot, always processed serially in one place (no distributed lock).
-co_await spots.request_to_spot (request.order_id, request)  // request is already a start_order_workflow_req_t body.
+// request is already a start_order_workflow_req_t body.
+co_await spots.request_to_spot (request.order_id, request)
   .instance_spot ("order-workflow")
   .in_mesh ("commerce")
   .async<start_order_workflow_res_t> ();
@@ -457,7 +460,8 @@ pipeline.
 task_t<start_order_workflow_res_t>
 order_workflow_spot_t::start_order_workflow (const start_order_workflow_req_t &request)
 {
-    co_return co_await start_workflow (request);   // Accesses spot state without a lock
+    // Accesses spot state without a lock
+    co_return co_await start_workflow (request);
 }
 ```
 
@@ -517,16 +521,20 @@ class get_price_handler_t
 
     reply_type handle (const price_request_t &request)
     {
-        return price_reply_t{request.symbol, 187.42};   // 187.42 is a fixed demo value (a real lookup result in practice)
+        // 187.42 is a fixed demo value (a real lookup result in practice)
+        return price_reply_t{request.symbol, 187.42};
     }
 };
 
 // Registration — declares the MeshNode endpoint and the price membership's handler together.
 app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-    options.add_route_mesh ("services")                 // Scopes the communication range by MeshName.
-      .listen ("tcp://0.0.0.0:7301")                    // Opens this MeshNode's endpoint.
+    // Scopes the communication range by MeshName.
+    options.add_route_mesh ("services")
+      // Opens this MeshNode's endpoint.
+      .listen ("tcp://0.0.0.0:7301")
       .set_routing_id (routing_id_t::from ("price-1"))
-      .channel_name ("price")                           // Registers the price-handling membership.
+      // Registers the price-handling membership.
+      .channel_name ("price")
       .server ()
       .add_request_handler<get_price_handler_t, price_request_t, price_reply_t> ();
 });
@@ -534,9 +542,11 @@ app.add_zlink_framework ([] (zlink_framework_options_t &options) {
 // Client: inject the route client and call by ChannelName.
 auto reply = co_await client
   .request_to_channel (
-    "price",                                            // The ChannelName to look up process-locally
+    // The ChannelName to look up process-locally
+    "price",
     price_request_t{"AAPL"})
-  .async<price_reply_t> ();                            // Sends, then waits for the reply asynchronously.
+  // Sends, then waits for the reply asynchronously.
+  .async<price_reply_t> ();
 ```
 
 The connection/setup code disappears, leaving a handler and a few lines of channel
@@ -559,20 +569,26 @@ you declare the MeshNode, fanout, and STREAM node.
 
 ```cpp
 app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-    options.add_location_store (std::make_shared<redis_location_store_t> (...));  // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+    // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+    options.add_location_store (std::make_shared<redis_location_store_t> (...));
 
-    options.add_route_mesh ("services")                     // MeshNode for inter-server request/send
+    // MeshNode for inter-server request/send
+    options.add_route_mesh ("services")
       .listen ("tcp://0.0.0.0:7301")
       .set_routing_id (routing_id_t::from ("service-a"))
-      .channel_name ("orders").server ();                   // The logical membership to handle
+      // The logical membership to handle
+      .channel_name ("orders").server ();
     options.add_fanout_channel ("events")
-      .enable_publisher ("tcp://0.0.0.0:7302");             // classic event fan-out
-    options.add_route_mesh ("game.room")                    // SPOT/actor are also owned by a MeshNode
+      // classic event fan-out
+      .enable_publisher ("tcp://0.0.0.0:7302");
+    // SPOT/actor are also owned by a MeshNode
+    options.add_route_mesh ("game.room")
       .listen ("tcp://0.0.0.0:7304")
       .set_routing_id (routing_id_t::from ("room-a"))
       .channel_name ("game.room").server ();
     options.add_stream_node ("gateway")
-      .bind ("tcp://0.0.0.0:7400");                         // The external client endpoint
+      // The external client endpoint
+      .bind ("tcp://0.0.0.0:7400");
 });
 ```
 
