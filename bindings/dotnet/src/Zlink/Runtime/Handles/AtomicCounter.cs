@@ -67,7 +67,7 @@ internal sealed class AtomicCounter : NativeOwner, IAtomicCounter
         var handle = NativeMethods.zlink_atomic_counter_new();
         if (handle == IntPtr.Zero)
             throw ZlinkException.CreateConfigException(
-                NativeMethods.zlink_errno());
+                NativeMethods.GetLastPInvokeError());
         return handle;
     }
 }

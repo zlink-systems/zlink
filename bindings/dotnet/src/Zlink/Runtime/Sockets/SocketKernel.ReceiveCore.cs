@@ -101,7 +101,7 @@ internal sealed partial class SocketKernel
                     if (allowNoData && (RecvResult)rc is RecvResult.NoData or RecvResult.Busy)
                         return false;
                     throw new ZlinkRecvException((RecvResult)rc,
-                        NativeMethods.zlink_errno());
+                        NativeMethods.GetLastPInvokeError());
                 }
 
                 if (count == 0 || count > (nuint)nativeParts.Length)

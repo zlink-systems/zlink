@@ -66,6 +66,6 @@ internal static class SubscriptionIntrospection
 
     private static bool IsMissingSubscription()
     {
-        return NativeMethods.zlink_errno() is Enoent or Esrch;
+        return NativeMethods.GetLastPInvokeError() is Enoent or Esrch;
     }
 }

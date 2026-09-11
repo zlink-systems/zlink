@@ -12,7 +12,8 @@ internal sealed partial class SocketKernel : IDisposable
 
         var rc = NativeMethods.zlink_bind(Handle, address);
         if (rc != 0)
-            throw ZlinkException.CreateBindException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateBindException(
+                NativeMethods.GetLastPInvokeError());
     }
 
     public void Connect(string address)
@@ -21,7 +22,8 @@ internal sealed partial class SocketKernel : IDisposable
 
         var rc = NativeMethods.zlink_connect(Handle, address);
         if (rc != 0)
-            throw ZlinkException.CreateConnectException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateConnectException(
+                NativeMethods.GetLastPInvokeError());
     }
 
     public void Unbind(string address)
@@ -30,7 +32,8 @@ internal sealed partial class SocketKernel : IDisposable
 
         var rc = NativeMethods.zlink_unbind(Handle, address);
         if (rc != 0)
-            throw ZlinkException.CreateConnectException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateConnectException(
+                NativeMethods.GetLastPInvokeError());
     }
 
     public void Disconnect(string address)
@@ -39,7 +42,8 @@ internal sealed partial class SocketKernel : IDisposable
 
         var rc = NativeMethods.zlink_disconnect(Handle, address);
         if (rc != 0)
-            throw ZlinkException.CreateConnectException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateConnectException(
+                NativeMethods.GetLastPInvokeError());
     }
 
     public void DisconnectRid(RoutingId peerRid)

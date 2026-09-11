@@ -100,7 +100,7 @@ internal static class RequestReplySupport
             built = 0;
             if (rc != 0)
                 throw new ZlinkSubmitException((SubmitResult)rc,
-                    NativeMethods.zlink_errno());
+                    NativeMethods.GetLastPInvokeError());
             ConsumeParts(parts);
         }
         finally

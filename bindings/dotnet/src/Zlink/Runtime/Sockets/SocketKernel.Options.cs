@@ -91,7 +91,7 @@ internal sealed partial class SocketKernel : IDisposable
         var handle = NativeMethods.zlink_socket_monitor_open(Handle, in options);
         if (handle == IntPtr.Zero)
             throw ZlinkException.CreateConfigException(
-                NativeMethods.zlink_errno());
+                NativeMethods.GetLastPInvokeError());
         return new SocketMonitor(handle);
     }
 }

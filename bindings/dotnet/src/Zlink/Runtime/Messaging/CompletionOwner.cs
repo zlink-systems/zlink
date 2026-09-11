@@ -544,7 +544,9 @@ internal sealed class CompletionOwner
         return attempt.CompletionId != 0
                && attempt.Failure is ZlinkSubmitException submit
                && submit.Result ==
-               ZlinkSubmitException.ErrorCode.Backpressured;
+               ZlinkSubmitException.ErrorCode.Backpressured
+               && ZlinkException.MapErrorCode(submit.NativeErrno)
+               == ErrorCode.EAgain;
     }
 
     private static ZlinkSubmitException CreateProtocolFailure() =>
@@ -564,7 +566,7 @@ internal sealed class CompletionOwner
             var poller = NativeMethods.zlink_poller_new();
             if (poller == IntPtr.Zero)
                 throw ZlinkException.CreateConfigException(
-                    NativeMethods.zlink_errno());
+                    NativeMethods.GetLastPInvokeError());
             var events = PollEventFlags.PollCompletion;
             var rc = NativeMethods.zlink_poller_add(poller, _handle,
                 IntPtr.Zero, (short)events);
@@ -637,7 +639,7 @@ internal sealed class CompletionOwner
                 {
                     // A signal-interrupted wait (EINTR) leaves the queue and
                     // every token intact; only a real failure ends the pump.
-                    var errno = NativeMethods.zlink_errno();
+                    var errno = NativeMethods.GetLastPInvokeError();
                     if (ZlinkException.MapErrorCode(errno) != ErrorCode.EIntr)
                     {
                         waitFailed = true;
