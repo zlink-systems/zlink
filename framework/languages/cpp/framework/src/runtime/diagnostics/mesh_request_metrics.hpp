@@ -81,11 +81,13 @@ class mesh_request_metric_t
 {
   public:
     mesh_request_metric_t () = default;
-    mesh_request_metric_t (std::shared_ptr<mesh_request_metrics_t> metrics,
+    // Take by reference and copy only when armed. Taking by value would cost a
+    // refcount pair on every request even with metrics collection disabled.
+    mesh_request_metric_t (const std::shared_ptr<mesh_request_metrics_t> &metrics,
                            mesh_request_surface_t surface) : _surface (surface)
     {
         if (metrics && metrics->enabled () && surface != mesh_request_surface_t::none)
-            _metrics = std::move (metrics);
+            _metrics = metrics;
     }
     mesh_request_metric_t (mesh_request_metric_t &&other) noexcept = default;
     mesh_request_metric_t &operator= (mesh_request_metric_t &&other) noexcept
