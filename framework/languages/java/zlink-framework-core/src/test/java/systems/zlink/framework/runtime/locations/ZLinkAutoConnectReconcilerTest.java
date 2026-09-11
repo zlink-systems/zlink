@@ -75,6 +75,28 @@ final class ZLinkAutoConnectReconcilerTest {
     }
 
     @Test
+    void changedOwnerLeaseReplacesConnectionAndAdmissionExpectation() {
+        MutableResolver resolver = new MutableResolver();
+        RecordingExecutor executor = new RecordingExecutor();
+        var reconciler = reconciler(
+            resolver,
+            executor,
+            new ZLinkLocationOptions(),
+            new AtomicLong());
+
+        resolver.rows = List.of(peer(4));
+        reconciler.tick().toCompletableFuture().join();
+        assertEquals(1, executor.connects);
+        assertEquals(1, executor.admissionExpectations);
+
+        resolver.rows = List.of(peer(5));
+        reconciler.tick().toCompletableFuture().join();
+        assertEquals(2, executor.connects);
+        assertEquals(1, executor.disconnects);
+        assertEquals(2, executor.admissionExpectations);
+    }
+
+    @Test
     void objectClientDescriptorIsPublishedAsNotRequiredWithoutConnecting() {
         MutableResolver resolver = new MutableResolver();
         RecordingExecutor executor = new RecordingExecutor();
@@ -143,6 +165,10 @@ final class ZLinkAutoConnectReconcilerTest {
     }
 
     private static ZLinkAutoConnectPeer peer() {
+        return peer(4);
+    }
+
+    private static ZLinkAutoConnectPeer peer(long ownerLeaseGeneration) {
         return new ZLinkAutoConnectPeer(
             ZLinkAutoConnectType.CLIENT_SERVER,
             "orders",
@@ -155,7 +181,7 @@ final class ZLinkAutoConnectReconcilerTest {
             Map.of(),
             List.of(),
             "owner-server",
-            4,
+            ownerLeaseGeneration,
             Instant.parse("2026-07-27T00:00:00Z"));
     }
 

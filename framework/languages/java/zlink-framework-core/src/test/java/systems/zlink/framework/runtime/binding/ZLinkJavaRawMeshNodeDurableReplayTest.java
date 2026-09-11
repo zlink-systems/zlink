@@ -28,7 +28,8 @@ final class ZLinkJavaRawMeshNodeDurableReplayTest {
             source.setRoutingId(RoutingId.from("durable-source"));
             source.setBind(endpoint + "-source");
             source.start();
-            source.observePeerAdmissionExpectation(target, endpoint, 8, "security");
+            source.observePeerAdmissionExpectation(
+                target, endpoint, 8, "security", "target-owner", 1);
             long intent = source.connectPeer(endpoint, target, 8, "security");
             assertFalse(source.targetLifecycleEnded(target), "peer absence is transient");
             source.forgetPeerAdmissionExpectation(target);
@@ -50,7 +51,8 @@ final class ZLinkJavaRawMeshNodeDurableReplayTest {
             source.setBind("inproc://durable-no-route-" + System.nanoTime());
             source.start();
             source.observePeerAdmissionExpectation(targetRid,
-                "inproc://durable-awaiting-admission", 8, "security");
+                "inproc://durable-awaiting-admission", 8, "security",
+                "target-owner", 1);
             var actor = new ZLinkBackendActorRef(targetRid, "actor", 3);
             var spots = (ZLinkJavaRawSpotNode) source.spotNode();
             spots.rememberActorAuthority(actor, 9, 10);

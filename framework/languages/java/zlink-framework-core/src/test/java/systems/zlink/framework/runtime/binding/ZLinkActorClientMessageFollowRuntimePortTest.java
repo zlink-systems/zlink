@@ -108,6 +108,15 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
             source.start();
             target.start();
             clientNode.start();
+            for (ZLinkJavaRawMeshNode node : List.of(
+                    source, target, clientNode)) {
+                node.refreshLocalAuthorityFence().toCompletableFuture()
+                    .get(1, TimeUnit.SECONDS);
+            }
+            observeAdmission(source, clientNode, clientEndpoint);
+            observeAdmission(target, clientNode, clientEndpoint);
+            observeAdmission(clientNode, source, sourceEndpoint);
+            observeAdmission(clientNode, target, targetEndpoint);
             source.connectPeer(clientEndpoint, CLIENT_RID);
             target.connectPeer(clientEndpoint, CLIENT_RID);
             clientNode.connectPeer(sourceEndpoint, SOURCE_RID);
@@ -315,6 +324,20 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
                 nodeGeneration,
                 "runtime-port-owner-" + nodeRid,
                 1)));
+    }
+
+    private static void observeAdmission(
+        ZLinkJavaRawMeshNode target,
+        ZLinkJavaRawMeshNode source,
+        String sourceEndpoint) {
+        target.observePeerAdmissionExpectation(
+            source.routingId(),
+            sourceEndpoint,
+            source.lifecycleGeneration(),
+            systems.zlink.framework.runtime.internal.service
+                .ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+            "runtime-port-owner-" + source.routingId(),
+            1);
     }
 
     private static void recordActorPackets(

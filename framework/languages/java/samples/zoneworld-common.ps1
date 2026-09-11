@@ -647,8 +647,9 @@ public static class ZlinkWindowsOwnedConsole
         $redisEndpoint = $redis.Endpoint
         $redisKeyPrefix = "zoneworld:${languageKey}:$([IO.Path]::GetFileName($runDir)):${PID}:"
 
-        Write-ServerConfig "zone-node-1" "zone" "zone-node-1" $mesh1 0 $false $false $false "*" | Out-Null
-        Write-ServerConfig "zone-node-2" "zone" "zone-node-2" $mesh2 | Out-Null
+        $disableZoneBots = [bool]$B8Child
+        Write-ServerConfig "zone-node-1" "zone" "zone-node-1" $mesh1 0 $false $disableZoneBots $false "*" | Out-Null
+        Write-ServerConfig "zone-node-2" "zone" "zone-node-2" $mesh2 0 $false $disableZoneBots | Out-Null
         Write-ServerConfig "zone-node-3" "zone" "zone-node-3" $spareMesh 0 $true $true $true | Out-Null
         Write-ServerConfig "zone-node-replacement" "zone" "zone-node-2" $replacementMesh | Out-Null
         Write-ServerConfig "zone-node-crash-replacement" "zone" "zone-node-2" $replacementMesh 0 $false $true $true | Out-Null

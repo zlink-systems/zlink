@@ -76,8 +76,9 @@ write_server_config() {
     echo "sample.mesh-advertise-host=$advertise"
   } >"$path"; chmod 0600 "$path"
 }
-write_server_config "$CONFIG_DIR/zone-node-1.properties" zone zone-node-1 "$mesh1" 0 false false false '*'
-write_server_config "$CONFIG_DIR/zone-node-2.properties" zone zone-node-2 "$mesh2" 0
+disable_zone_bots=false; [[ "$B8_CHILD" == 1 ]] && disable_zone_bots=true
+write_server_config "$CONFIG_DIR/zone-node-1.properties" zone zone-node-1 "$mesh1" 0 false "$disable_zone_bots" false '*'
+write_server_config "$CONFIG_DIR/zone-node-2.properties" zone zone-node-2 "$mesh2" 0 false "$disable_zone_bots"
 write_server_config "$CONFIG_DIR/zone-node-3.properties" zone zone-node-3 "$spare_mesh" 0 true true true
 write_server_config "$CONFIG_DIR/zone-node-replacement.properties" zone zone-node-2 "$replacement_mesh" 0
 write_server_config "$CONFIG_DIR/zone-node-crash-replacement.properties" zone zone-node-2 "$replacement_mesh" 0 false true true

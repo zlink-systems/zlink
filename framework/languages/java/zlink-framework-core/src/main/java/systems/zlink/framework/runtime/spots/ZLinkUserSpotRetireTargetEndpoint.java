@@ -292,7 +292,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                         staging.openAdmission(target.staged());
                         return staging.drainDurableBacklog(backlog);
                     })
-                    .thenCompose(ignored -> switchSessionRoutes(request))
+                    .thenCompose(ignored -> switchSessionRoutes(
+                        request, generations))
                     .thenCompose(ignored -> normalizer.normalize(request))
                     .thenRun(() -> releasePublishedTarget(request, target));
             });
@@ -867,7 +868,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
     }
 
     private CompletionStage<Void> switchSessionRoutes(
-        ZLinkSpotRetireControl.StageRequest request) {
+        ZLinkSpotRetireControl.StageRequest request,
+        Map<String, Long> targetOwnerGenerations) {
         if (request.sessionRoutes().isEmpty()) {
             return CompletableFuture.completedFuture(null);
         }
@@ -876,41 +878,29 @@ final class ZLinkUserSpotRetireTargetEndpoint
             return CompletableFuture.failedFuture(new IllegalStateException(
                 "bound Session route switch runtime is unavailable"));
         }
-        return coordinator.readTargetOwnerGenerations(
-                expectedParticipants(request),
-                new ZLinkAggregateFence(
-                    request.fence().aggregateId(),
-                    request.fence().aggregateGeneration()),
-                new ZLinkLocationOwnerToken(
-                    request.targetOwnerId(),
-                    request.targetOwnerLeaseGeneration()),
-                OPEN)
-            .thenCompose(generations -> {
-                CompletionStage<Void> chain =
-                    CompletableFuture.completedFuture(null);
-                for (ZLinkSpotRetireControl.SessionRouteFence route
-                    : request.sessionRoutes()) {
-                    String authorityKey = request.participants().stream()
-                        .filter(participant -> participant.objectId().equals(
-                            route.actorId()))
-                        .map(ZLinkSpotRetireControl.ParticipantFence
-                            ::authorityKey)
-                        .findFirst()
-                        .orElseThrow(() -> new IllegalStateException(
-                            "session route participant is absent: "
-                                + route.actorId()));
-                    long targetOwnerGeneration = generations.getOrDefault(
-                        authorityKey,
-                        0L);
-                    var command = routeCommand(
-                        request,
-                        route,
-                        targetOwnerGeneration);
-                    chain = chain.thenCompose(ignored ->
-                        sessionRoutes.sendRoute(command));
-                }
-                return chain;
-            });
+        CompletionStage<Void> chain =
+            CompletableFuture.completedFuture(null);
+        for (ZLinkSpotRetireControl.SessionRouteFence route
+            : request.sessionRoutes()) {
+            String authorityKey = request.participants().stream()
+                .filter(participant -> participant.objectId().equals(
+                    route.actorId()))
+                .map(ZLinkSpotRetireControl.ParticipantFence::authorityKey)
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                    "session route participant is absent: "
+                        + route.actorId()));
+            long targetOwnerGeneration = targetOwnerGenerations.getOrDefault(
+                authorityKey,
+                0L);
+            var command = routeCommand(
+                request,
+                route,
+                targetOwnerGeneration);
+            chain = chain.thenCompose(ignored ->
+                sessionRoutes.sendRoute(command));
+        }
+        return chain;
     }
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationRoute
@@ -1052,10 +1042,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
                         generations, participant.authorityKey()));
                 target.published().set(true);
                 actorStaging.openAdmission(target.staged());
-                return actorStaging.drainDurableBacklog(backlog);
+                return actorStaging.drainDurableBacklog(backlog)
+                    .thenCompose(ignored -> switchSessionRoutes(
+                        target.requestWithSessionRoute(), generations));
             })
-            .thenCompose(ignored -> switchSessionRoutes(
-                target.requestWithSessionRoute()))
             .thenCompose(ignored -> normalizer.normalize(request))
             .thenRun(() -> releasePublishedActor(request, target));
     }
@@ -1096,10 +1086,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     .thenRun(() -> actorStaging.openAdmission(target.staged()))
                     .thenCompose(ignored -> actorStaging.replayDirectJoin(
                         replay,
-                        productionActorReplayer(target, request)));
+                        productionActorReplayer(target, request)))
+                    .thenCompose(ignored -> switchSessionRoutes(
+                        target.requestWithSessionRoute(), generations));
             })
-            .thenCompose(ignored -> switchSessionRoutes(
-                target.requestWithSessionRoute()))
             .thenCompose(ignored -> normalizer.normalize(request))
             .thenRun(() -> {
                 releasePublishedActor(request, target);

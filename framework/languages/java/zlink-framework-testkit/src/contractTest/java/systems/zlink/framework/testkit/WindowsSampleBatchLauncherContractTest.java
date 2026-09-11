@@ -411,6 +411,29 @@ final class WindowsSampleBatchLauncherContractTest {
     }
 
     @Test
+    void zoneWorldB8FaultLaneDisablesBotsAcrossWindowsAndUnixRunners() throws Exception {
+        Path samples = samplesRoot();
+        String windows = Files.readString(samples.resolve("zoneworld-common.ps1"), StandardCharsets.UTF_8)
+            .replace("\r\n", "\n");
+        assertTrue(windows.contains("$disableZoneBots = [bool]$B8Child"));
+        assertTrue(windows.contains(
+            "Write-ServerConfig \"zone-node-1\" \"zone\" \"zone-node-1\" $mesh1 0 $false $disableZoneBots"));
+        assertTrue(windows.contains(
+            "Write-ServerConfig \"zone-node-2\" \"zone\" \"zone-node-2\" $mesh2 0 $false $disableZoneBots"));
+
+        for (String language : List.of("java", "kotlin")) {
+            String unix = Files.readString(
+                samples.resolve(language + "/ZoneWorld/run_sample.sh"), StandardCharsets.UTF_8);
+            assertTrue(unix.contains(
+                "disable_zone_bots=false; [[ \"$B8_CHILD\" == 1 ]] && disable_zone_bots=true"));
+            assertTrue(unix.contains(
+                "zone-node-1 \"$mesh1\" 0 false \"$disable_zone_bots\""));
+            assertTrue(unix.contains(
+                "zone-node-2 \"$mesh2\" 0 false \"$disable_zone_bots\""));
+        }
+    }
+
+    @Test
     void zoneWorldPythonDiscoveryUsesCanonicalWindowsFallback() throws Exception {
         Assumptions.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
 

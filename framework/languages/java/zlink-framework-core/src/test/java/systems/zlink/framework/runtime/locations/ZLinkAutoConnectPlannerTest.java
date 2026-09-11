@@ -256,7 +256,7 @@ final class ZLinkAutoConnectPlannerTest {
     }
 
     @Test
-    void connectionIntentUsesDescriptorLifecycleInsteadOfStoreGeneration() {
+    void connectionIntentPreservesDescriptorLifecycleAndOwnerFence() {
         var local = local(
             ZLinkAutoConnectType.CLIENT_SERVER,
             ZLinkLocationRole.DEALER,
@@ -286,6 +286,8 @@ final class ZLinkAutoConnectPlannerTest {
             descriptor.nodeRid(),
             73));
         assertEquals(73, target.lifecycleGeneration());
+        assertEquals("server-owner", target.ownerId());
+        assertEquals(900, target.ownerLeaseGeneration());
     }
 
     @Test

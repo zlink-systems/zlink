@@ -30,6 +30,40 @@ final class ZLinkJavaRawMeshNodeTransportIdentityTest {
     private static final String ENDPOINT = "inproc://transport-identity-peer";
 
     @Test
+    void removingAdmittedIntentClearsItsAuthoritySnapshot() throws Exception {
+        RoutingId localRid = RoutingId.from("authority-cleanup-local");
+        RoutingId peerRid = RoutingId.from("authority-cleanup-peer");
+        String localEndpoint = "inproc://authority-cleanup-local-"
+            + System.nanoTime();
+        String peerEndpoint = "inproc://authority-cleanup-peer-"
+            + System.nanoTime();
+        try (var context = Zlink.createContext();
+             var local = new ZLinkJavaRawMeshNode(context, "mesh");
+             var peer = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            local.setRoutingId(localRid);
+            local.setBind(localEndpoint);
+            peer.setRoutingId(peerRid);
+            peer.setBind(peerEndpoint);
+            local.start();
+            peer.start();
+            local.observePeerAdmissionExpectation(
+                peerRid,
+                peerEndpoint,
+                peer.lifecycleGeneration(),
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                "peer-owner",
+                1);
+
+            long intent = local.connectPeer(peerEndpoint, peerRid);
+            awaitState(local, MeshPeerState.ADMITTED);
+            assertEquals(1, admittedAuthorityCount(local));
+
+            local.removePeerConnection(intent);
+            assertEquals(0, admittedAuthorityCount(local));
+        }
+    }
+
+    @Test
     void foreignTerminationPreservesIntentUntilItsRecordedTransportDisconnects()
         throws Exception {
         try (var context = Zlink.createContext();
@@ -490,6 +524,14 @@ final class ZLinkJavaRawMeshNodeTransportIdentityTest {
         @SuppressWarnings("unchecked")
         var intents = (Map<Long, Object>) intentsField.get(node);
         intents.put(INTENT, constructor.newInstance(ENDPOINT, PEER, 0L, null, 0L));
+    }
+
+    private static int admittedAuthorityCount(ZLinkJavaRawMeshNode node)
+        throws Exception {
+        var authorityField = ZLinkJavaRawMeshNode.class
+            .getDeclaredField("admittedPeerAuthorities");
+        authorityField.setAccessible(true);
+        return ((Map<?, ?>) authorityField.get(node)).size();
     }
 
     private static MonitorEvent event(

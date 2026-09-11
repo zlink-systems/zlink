@@ -195,7 +195,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
             assertTrue(pair.source.isPeerTransportConnected(pair.target.routingId()));
             RoutingId discovered = RoutingId.from("discovered-before-connect");
             pair.source.observePeerAdmissionExpectation(discovered, "inproc://discovered", 17,
-                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                "discovered-owner", 1);
             assertTrue(pair.source.configuredPeerIds().contains(discovered));
             assertFalse(pair.source.isPeerTransportConnected(discovered));
             pair.source.forgetPeerAdmissionExpectation(discovered);

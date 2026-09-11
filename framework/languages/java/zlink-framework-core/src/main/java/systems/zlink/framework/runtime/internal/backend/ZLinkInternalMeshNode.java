@@ -156,7 +156,9 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         RoutingId peerRid,
         String endpoint,
         long lifecycleGeneration,
-        String securityIdentity) {
+        String securityIdentity,
+        String ownerId,
+        long ownerLeaseGeneration) {
         // Optional for alternate backends without descriptor admission.
     }
 

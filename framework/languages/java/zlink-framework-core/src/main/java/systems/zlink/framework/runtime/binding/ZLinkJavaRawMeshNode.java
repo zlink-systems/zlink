@@ -155,6 +155,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     private final Map<Long, PeerIntent> peerIntents = new ConcurrentHashMap<>();
     private final Map<RoutingId, PeerAdmissionExpectation>
         peerAdmissionExpectations = new ConcurrentHashMap<>();
+    private final Map<PeerAuthorityKey,
+        ZLinkInternalMeshNode.PeerAuthorityFence>
+        admittedPeerAuthorities = new ConcurrentHashMap<>();
     private final Map<RoutingId, Map<String, Integer>> admittedPeerChannels =
         new ConcurrentHashMap<>();
     private final Map<RoutingId, Map<String, Integer>> knownPeerChannels =
@@ -1063,8 +1066,20 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 if (connectionId != null) {
                     ZLinkServiceTopologyRegistry currentTopology = topology;
                     if (currentTopology != null) {
-                        currentTopology.disconnect(
-                            removed.expectedRoutingId(), connectionId);
+                        ZLinkServiceTopologyRegistry.Peer admitted =
+                            currentTopology.peer(removed.expectedRoutingId())
+                                .filter(value -> value.connectionId()
+                                    .equals(connectionId))
+                                .orElse(null);
+                        if (currentTopology.disconnect(
+                                removed.expectedRoutingId(), connectionId)
+                            && admitted != null) {
+                            admittedPeerAuthorities.remove(
+                                new PeerAuthorityKey(
+                                    removed.expectedRoutingId(),
+                                    admitted.descriptor()
+                                        .lifecycleGeneration()));
+                        }
                     }
                     liveness.disconnect(
                         removed.expectedRoutingId(), connectionId);
@@ -1084,19 +1099,41 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         RoutingId peerRid,
         String endpoint,
         long lifecycleGeneration,
-        String securityIdentity) {
+        String securityIdentity,
+        String ownerId,
+        long ownerLeaseGeneration) {
         peerAdmissionExpectations.put(
             Objects.requireNonNull(peerRid, "peerRid"),
             new PeerAdmissionExpectation(
                 endpoint,
                 lifecycleGeneration,
-                securityIdentity));
+                securityIdentity,
+                ownerId,
+                ownerLeaseGeneration));
     }
 
     @Override
     public void forgetPeerAdmissionExpectation(RoutingId peerRid) {
         peerAdmissionExpectations.remove(peerRid);
+        admittedPeerAuthorities.keySet().removeIf(
+            key -> key.peerRid().equals(peerRid));
         forgetKnownPeerChannelsIfUntracked(peerRid);
+    }
+
+    private void rememberAdmittedPeerAuthority(
+        RoutingId peerRid,
+        long lifecycleGeneration,
+        PeerAdmissionExpectation expectation) {
+        admittedPeerAuthorities.keySet().removeIf(key ->
+            key.peerRid().equals(peerRid)
+                && key.lifecycleGeneration() != lifecycleGeneration);
+        admittedPeerAuthorities.put(
+            new PeerAuthorityKey(peerRid, lifecycleGeneration),
+            new ZLinkInternalMeshNode.PeerAuthorityFence(
+                peerRid,
+                lifecycleGeneration,
+                expectation.ownerId(),
+                expectation.ownerLeaseGeneration()));
     }
 
     @Override
@@ -4332,6 +4369,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             });
         pendingReplyRelays.clear();
         admittedPeerChannels.clear();
+        admittedPeerAuthorities.clear();
         knownPeerChannels.clear();
         connectionIds.clear();
         admissionControlReadyConnections.clear();
@@ -6451,44 +6489,39 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     private CompletionStage<Optional<
         ZLinkInternalMeshNode.PeerAuthorityFence>> resolveSourceAuthority(
             ZLinkJavaRawServicePort.Inbound inbound) {
-        ZLinkInternalMeshNode.PeerAuthorityResolver resolver =
-            peerAuthorityResolver;
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
             topology == null
                 ? Optional.empty()
                 : topology.peer(inbound.source());
-        if (resolver == null || peer.isEmpty()) {
+        if (peer.isEmpty()) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
-        return resolver.resolve(
-            meshName,
-            inbound.source(),
-            peer.orElseThrow().descriptor().lifecycleGeneration());
+        long sourceGeneration = peer.orElseThrow().descriptor()
+            .lifecycleGeneration();
+        return CompletableFuture.completedFuture(Optional.ofNullable(
+            admittedPeerAuthorities.get(new PeerAuthorityKey(
+                inbound.source(), sourceGeneration))));
     }
 
     private CompletionStage<Optional<AcceptedAuthorities>>
         resolveAcceptedAuthorities(
             ZLinkJavaRawServicePort.Inbound inbound) {
-        CompletionStage<Optional<
-            ZLinkInternalMeshNode.PeerAuthorityFence>> source =
-                resolveSourceAuthority(inbound);
-        ZLinkInternalMeshNode.PeerAuthorityResolver resolver =
-            peerAuthorityResolver;
-        ZLinkServiceNodeDescriptor descriptor = localDescriptor;
-        if (resolver == null || descriptor == null || routingId == null) {
+        Optional<ZLinkServiceTopologyRegistry.Peer> peer = topology == null
+            ? Optional.empty()
+            : topology.peer(inbound.source());
+        ZLinkInternalMeshNode.PeerAuthorityFence targetOwner =
+            localAuthorityFence;
+        if (peer.isEmpty() || targetOwner == null) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
-        return source.thenCombine(
-            resolver.resolve(
-                meshName,
-                routingId,
-                descriptor.lifecycleGeneration()),
-            (resolvedSource, targetOwner) ->
-                resolvedSource.isPresent() && targetOwner.isPresent()
-                    ? Optional.of(new AcceptedAuthorities(
-                        resolvedSource.orElseThrow(),
-                        targetOwner.orElseThrow()))
-                    : Optional.empty());
+        long sourceGeneration = peer.orElseThrow().descriptor()
+            .lifecycleGeneration();
+        ZLinkInternalMeshNode.PeerAuthorityFence source =
+            admittedPeerAuthorities.get(new PeerAuthorityKey(
+                inbound.source(), sourceGeneration));
+        return CompletableFuture.completedFuture(source == null
+            ? Optional.empty()
+            : Optional.of(new AcceptedAuthorities(source, targetOwner)));
     }
 
     private record AcceptedAuthorities(
@@ -6525,19 +6558,15 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         long sourceGeneration = source.orElseThrow().descriptor()
             .lifecycleGeneration();
         resolveSourceAuthority(inbound).handle((authority, failure) -> {
-            String ownerId = authority != null && authority.isPresent()
-                ? authority.orElseThrow().ownerId()
-                : inbound.source().toString();
-            long ownerLease = authority != null && authority.isPresent()
-                ? authority.orElseThrow().ownerLeaseGeneration()
-                : 1L;
             boolean accepted = failure == null
+                && authority != null
+                && authority.isPresent()
                 && ((ZLinkJavaRawSpotNode) spotNode())
                     .acceptRemoteStreamBinding(
                         inbound.source(),
                         sourceGeneration,
-                        ownerId,
-                        ownerLease,
+                        authority.orElseThrow().ownerId(),
+                        authority.orElseThrow().ownerLeaseGeneration(),
                         binding);
             port.reply(
                 requireStarted(),
@@ -6805,6 +6834,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                     List.of(wire.encodeReject(3)),
                     "admission-rejected");
                 return;
+            }
+            if (observed != null) {
+                rememberAdmittedPeerAuthority(
+                    inbound.source(), descriptor.lifecycleGeneration(), observed);
             }
             rejectedPeers.remove(inbound.source());
             // The admission-ready marker names the connection whose Admit
@@ -7344,6 +7377,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             admissionControlReadyConnections.remove(peer);
             return false;
         }
+        ZLinkServiceTopologyRegistry.Peer admitted = topology.peer(peer)
+            .filter(value -> value.connectionId().equals(connectionId))
+            .orElse(null);
         if (!topology.disconnect(peer, connectionId)) {
             admissionControlReadyConnections.remove(peer, connectionId);
             return false;
@@ -7351,6 +7387,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         admissionControlReadyConnections.remove(peer, connectionId);
         connectionIds.remove(peer, connectionId);
         admittedPeerChannels.remove(peer);
+        if (admitted != null) {
+            admittedPeerAuthorities.remove(new PeerAuthorityKey(
+                peer, admitted.descriptor().lifecycleGeneration()));
+        }
         if (!notRequiredPeers.contains(peer)) {
             admittedPeerObjectRoles.remove(peer);
         }
@@ -8052,18 +8092,28 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     private record PeerAdmissionExpectation(
         String endpoint,
         long lifecycleGeneration,
-        String securityIdentity) {
+        String securityIdentity,
+        String ownerId,
+        long ownerLeaseGeneration) {
         private PeerAdmissionExpectation {
             //  lifecycleGeneration is an opaque equality token: only zero
             //  (absent) is invalid, not a negative long (spec 13 §7.1).
             if (endpoint == null || endpoint.isBlank()
                 || lifecycleGeneration == 0
                 || securityIdentity == null
-                || securityIdentity.isBlank()) {
+                || securityIdentity.isBlank()
+                || ownerId == null
+                || ownerId.isBlank()
+                || ownerLeaseGeneration <= 0) {
                 throw new IllegalArgumentException(
                     "peer admission expectation must be complete");
             }
         }
+    }
+
+    private record PeerAuthorityKey(
+        RoutingId peerRid,
+        long lifecycleGeneration) {
     }
 
     private record AutomaticNotRequiredPeer(
