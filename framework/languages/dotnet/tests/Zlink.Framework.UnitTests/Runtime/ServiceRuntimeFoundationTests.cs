@@ -2157,6 +2157,15 @@ public sealed class ServiceRuntimeFoundationTests
             target,
             new ZLinkMeshCompletionTable(),
             applicationJobQueue);
+        var dispatched = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        pump.SetNodeRouteHandler((records, _) =>
+        {
+            foreach (var record in records)
+                record.Dispose();
+            dispatched.TrySetResult();
+            return ValueTask.CompletedTask;
+        });
         var suffix = Guid.NewGuid().ToString("N");
         var sourceEndpoint = $"inproc://orders-pre-receive-source-{suffix}";
         var targetEndpoint = $"inproc://orders-pre-receive-target-{suffix}";
@@ -2184,14 +2193,12 @@ public sealed class ServiceRuntimeFoundationTests
         using var payload = Message.From(new byte[] { 1, 2, 3 });
         Assert.Equal(SubmitResult.Ok, source.SendToNode(targetRid, [payload]));
 
-        await Task.Delay(100);
-        await WaitUntilAsync(() =>
-            applicationJobQueue.GetStatus().CapacityWaiters == 1);
-        // Ordinary ingress waits before the binding receive, so saturation
-        // cannot create an unaccounted owner-mailbox backlog.
+        Assert.False(dispatched.Task.IsCompleted);
+        Assert.Equal(0UL, applicationJobQueue.GetStatus().CapacityWaiters);
         Assert.Equal(0UL, target.Status().PendingApplicationMessages);
 
         occupied.ReleaseForHandlerStart();
+        await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await WaitUntilAsync(() =>
         {
             var status = applicationJobQueue.GetStatus();
@@ -2283,7 +2290,7 @@ public sealed class ServiceRuntimeFoundationTests
         //  Spec 33-core-hwm-application-job-flow §8: terminal reply/error
         //  completion progresses independently of ordinary job-flow
         //  saturation. The requester's Application Job Queue is saturated
-        //  (limit 1 held externally, an ordinary record parked pre-receive),
+        //  (limit 1 held externally),
         //  yet a request reply terminal still completes through the native
         //  completion path onto the Infrastructure domain.
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -2317,24 +2324,10 @@ public sealed class ServiceRuntimeFoundationTests
             && replier.Status().AdmittedPeerCount == 1);
 
         //  Saturate the requester's ordinary job flow: the single permit is
-        //  held externally, so Core pauses the inbound ordinary data line
-        //  before Framework needs another permit.
+        //  held externally, so Core pauses the inbound application lane.
         using var occupied = await applicationJobQueue
             .AcquireAsync(CancellationToken.None);
-        using var ordinary = Message.From(new byte[] { 1, 2, 3 });
-        Assert.Equal(
-            SubmitResult.Ok,
-            replier.SendToNode(requesterRid, [ordinary]));
-        await Task.Delay(100);
-        // PAUSED applies from the next message boundary. A record already in
-        // flight may leave the single receive loop waiting for this permit;
-        // native request completion must still make progress independently.
-        Assert.InRange(
-            applicationJobQueue.GetStatus().CapacityWaiters,
-            0UL,
-            1UL);
-        var ordinaryCapacityWaiters =
-            applicationJobQueue.GetStatus().CapacityWaiters;
+        Assert.Equal(0UL, applicationJobQueue.GetStatus().CapacityWaiters);
         Assert.Equal(0UL, requester.Status().PendingApplicationMessages);
 
         //  The saturated requester issues a request; the replier answers.
@@ -2379,9 +2372,11 @@ public sealed class ServiceRuntimeFoundationTests
                 RecvFlags.DontWait);
             return completionReady.Count == 1;
         });
+        var saturated = applicationJobQueue.GetStatus();
+        Assert.Equal(1UL, saturated.PermitsInUse);
         Assert.Equal(
-            ordinaryCapacityWaiters,
-            applicationJobQueue.GetStatus().CapacityWaiters);
+            ZLinkApplicationJobQueuePressureState.Paused,
+            saturated.PressureState);
         Assert.Equal(0UL, requester.Status().PendingApplicationMessages);
         using var completionClaim = completionReady.TakeClaim(0);
         using var completionBatch = new MeshReceiveBatch();
@@ -2392,18 +2387,13 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(operationId, completion.OperationId);
         Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
 
-        //  Releasing the external permit lets the parked ordinary record
-        //  drain normally.
+        //  Closing removes the receive-flow target and its outstanding
+        //  pre-receive waiter before the external permit is returned.
+        await requester.DisposeAsync();
         occupied.ReleaseForHandlerStart();
-        await WaitUntilAsync(() =>
-        {
-            using var ready = new MeshReadyBatch();
-            requester.DrainReady(
-                MeshReadyDomains.Application,
-                ready,
-                RecvFlags.DontWait);
-            return ready.Count > 0;
-        });
+        Assert.Equal(
+            ZLinkApplicationJobQueuePressureState.Running,
+            applicationJobQueue.GetStatus().PressureState);
     }
 
     [Fact]
