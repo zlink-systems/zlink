@@ -1905,9 +1905,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         int flags = metadata == null || metadata.length == 0
             ? 0
             : ServiceWireConstants.FLAG_METADATA;
-        List<byte[]> frames = new ArrayList<>();
         UUID operation = UUID.randomUUID();
-        frames.add(statefulWire.encodeSpotHeader(
+        byte[] header = statefulWire.encodeSpotHeader(
             false,
             flags,
             null,
@@ -1921,12 +1920,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 targetNodeRid,
                 peer.orElseThrow().descriptor().lifecycleGeneration(),
                 authorityOwnerGeneration,
-                ownerLeaseGeneration)));
-        if (flags != 0) {
-            frames.add(metadata.clone());
-        }
-        frames.add(wire.encodeFrameworkMultipartFrame(parts));
-        return sendApplication(targetNodeRid, frames);
+                ownerLeaseGeneration));
+        streamTrace(STREAM_TRACE ? "application-send target=" + targetNodeRid : null);
+        return port.sendMessages(requireStarted(), targetNodeRid,
+            encodeApplicationFrames(header, metadata, parts));
     }
 
     CompletionStage<ZLinkBackendReceived> requestSpot(
@@ -2005,15 +2002,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             return operationOwner.submit(operationId, timeout,
                 () -> port.requestMessages(
                         requireStarted(), targetNodeRid, frames, timeout,
-                        replyFrames -> replyFrames.stream()
-                            .map(Message::toByteArray)
-                            .toList())
-                    .handle((replyFrames, failure) -> completeSpotRequest(
+                        replyFrames -> completeSpotRequest(
+                            targetNodeRid,
+                            targetSpotId,
+                            correlation,
+                            RequestResult.OK,
+                            replyFrames))
+                    .exceptionally(failure -> completeSpotRequest(
                         targetNodeRid,
                         targetSpotId,
                         correlation,
                         requestResult(failure),
-                        replyFrames == null ? List.of() : replyFrames)),
+                        List.of())),
                 ZLinkBackendReceived::close);
         } finally {
             Message.closeAll(frames);
@@ -2049,7 +2049,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         String targetSpotId,
         long correlation,
         RequestResult result,
-        List<byte[]> frames) {
+        List<Message> frames) {
         if (result != RequestResult.OK) {
             return new ZLinkBackendReceived(
                 backendResult(result),
@@ -2064,14 +2064,15 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                     "invalid Spot reply frame count");
             }
             ZLinkServiceM6AWireCodec.Reply header =
-                wire.decodeReplyHeader(frames.getFirst());
+                wire.decodeReplyHeader(frames.getFirst().toByteArray());
             if (header.correlation() != correlation
                 || (header.terminalResult() == 0) != (frames.size() == 2)) {
                 throw new IllegalArgumentException(
                     "Spot reply terminal mismatch");
             }
             List<Message> replyParts = header.terminalResult() == 0
-                ? decodeApplicationMessages(frames.get(1))
+                ? ZLinkServiceM6AWireCodec.decodeFrameworkMultipartFrame(
+                    frames.get(1).dataBuffer())
                 : List.of();
             return new ZLinkBackendReceived(
                 header.terminalResult() == 0
@@ -4840,14 +4841,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                         "service request already has a terminal reply");
                 }
                 try {
-                    List<byte[]> replyFrames = List.of(
-                        wire.encodeReplyHeader(requestCorrelation, 0, 0),
-                        wire.encodeFrameworkMultipartFrame(replyParts));
-                    port.reply(
+                    port.replyMessages(
                         requireStarted(),
                         inbound.source(),
                         inbound.requestSequence(),
-                        replyFrames);
+                        encodeApplicationFrames(
+                            wire.encodeReplyHeader(requestCorrelation, 0, 0),
+                            null, replyParts));
                 } finally {
                     replyParts.forEach(Message::close);
                 }
@@ -4991,13 +4991,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             }
             List<Message> replyParts = List.of(Message.from(reply));
             try {
-                port.reply(
+                port.replyMessages(
                     requireStarted(),
                     inbound.source(),
                     inbound.requestSequence(),
-                    List.of(
+                    encodeApplicationFrames(
                         wire.encodeReplyHeader(correlation, 0, 0),
-                        wire.encodeFrameworkMultipartFrame(replyParts)));
+                        null, replyParts));
             } finally {
                 replyParts.forEach(Message::close);
             }
@@ -5359,7 +5359,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             + " generation=" + header.target().spotGeneration() : null);
         ZLinkServiceM6AWireCodec.ApplicationPayload payload;
         try {
-            payload = wire.decodeApplicationPayload(frames.get(payloadOffset));
+            payload = wire.decodeApplicationPayload(
+                inbound.received().parts().get(payloadOffset).dataBuffer());
         } catch (RuntimeException invalidPayload) {
             replySpotFailure(inbound, header, 104, 12);
             return false;
@@ -5434,14 +5435,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                             return;
                         }
                         try {
-                            port.reply(
+                            port.replyMessages(
                                 requireStarted(),
                                 inbound.source(),
                                 inbound.requestSequence(),
-                                List.of(
+                                encodeApplicationFrames(
                                     wire.encodeReplyHeader(
                                         header.correlation(), 0, 0),
-                                    wire.encodeFrameworkMultipartFrame(replyParts)));
+                                    null, replyParts));
                         } finally {
                             replyParts.forEach(Message::close);
                         }
@@ -5636,14 +5637,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                         return;
                     }
                     try {
-                        port.reply(
+                        port.replyMessages(
                             requireStarted(),
                             inbound.source(),
                             inbound.requestSequence(),
-                            List.of(
+                            encodeApplicationFrames(
                                 wire.encodeReplyHeader(
                                     header.replyRouteId(), 0, 0),
-                                wire.encodeFrameworkMultipartFrame(replyParts)));
+                                null, replyParts));
                     } finally {
                         replyParts.forEach(Message::close);
                     }
@@ -6376,14 +6377,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                             return;
                         }
                         try {
-                            port.reply(
+                            port.replyMessages(
                                 requireStarted(),
                                 inbound.source(),
                                 inbound.requestSequence(),
-                                List.of(
+                                encodeApplicationFrames(
                                     wire.encodeReplyHeader(
                                         header.correlation(), 0, 0),
-                                    wire.encodeFrameworkMultipartFrame(replyParts)));
+                                    null, replyParts));
                         } finally {
                             replyParts.forEach(Message::close);
                         }

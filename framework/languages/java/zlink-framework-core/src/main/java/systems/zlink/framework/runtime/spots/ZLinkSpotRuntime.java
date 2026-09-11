@@ -497,7 +497,8 @@ public final class ZLinkSpotRuntime
         ZLinkScannedHandlerCatalog scannedHandlers =
             ZLinkHandlerScanner.scan(registration.handlerPackageMarkers());
         this.actorHandlers = new ZLinkSpotActorHandlerCatalog(scannedHandlers, serializer);
-        this.handlerLoader = new ZLinkSpotHandlerLoader(scannedHandlers, actorHandlers);
+        this.handlerLoader = new ZLinkSpotHandlerLoader(
+            scannedHandlers, actorHandlers, handlerFactory);
         ZLinkChannelBackendAdapter channelAdapter =
             backendFactory.createChannelAdapter(adapterOptions);
         ZLinkSpotBackendAdapter spotAdapter = registration.spotNodes().isEmpty()

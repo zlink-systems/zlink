@@ -25,6 +25,33 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwn
 
 final class ZLinkSpringHandlerFactoryTest {
     @Test
+    void preparesConstructorAndScalarDependencyBeforeFirstActivation() throws Exception {
+        CountingBeanFactory beanFactory = new CountingBeanFactory();
+        try (AnnotationConfigApplicationContext context =
+                 new AnnotationConfigApplicationContext(beanFactory)) {
+            context.register(ShortcutConfig.class);
+            context.refresh();
+            ZLinkSpringHandlerFactory factory = new ZLinkSpringHandlerFactory(beanFactory);
+            ScopedDependency.instances.set(0);
+
+            factory.prepare(PreparedHandler.class);
+            beanFactory.resetCandidateSearches();
+            assertEquals(0, ScopedDependency.instances.get(),
+                "preparation must not create a scoped dependency");
+
+            try (var owner = new ZLinkHandlerInstanceOwner(factory)) {
+                PreparedHandler handler = (PreparedHandler) owner.instance(
+                    PreparedHandler.class);
+                assertEquals("selected", handler.dependency.value);
+            }
+
+            assertEquals(0, beanFactory.candidateSearches(),
+                "the first activation must use registration-time dependency metadata");
+            assertEquals(1, ScopedDependency.instances.get());
+        }
+    }
+
+    @Test
     void cachesFrozenScalarCandidateWithoutChangingScopeOrBeanLifecycle() {
         CountingBeanFactory beanFactory = new CountingBeanFactory();
         try (AnnotationConfigApplicationContext context =
@@ -196,6 +223,15 @@ final class ZLinkSpringHandlerFactoryTest {
         }
     }
 
+    public static final class PreparedHandler {
+        private final ScopedDependency dependency;
+
+        public PreparedHandler(
+            @Qualifier("selected") ScopedDependency dependency) {
+            this.dependency = dependency;
+        }
+    }
+
     public static final class ShortcutFilter {
         private final ScopedDependency dependency;
 
@@ -233,9 +269,11 @@ final class ZLinkSpringHandlerFactoryTest {
     }
 
     static final class ScopedDependency {
+        private static final AtomicInteger instances = new AtomicInteger();
         private final String value;
 
         ScopedDependency(String value) {
+            instances.incrementAndGet();
             this.value = value;
         }
     }

@@ -24,6 +24,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkScannedHandler;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
@@ -34,12 +35,15 @@ import systems.zlink.framework.spots.ZLinkTimerOptions;
 final class ZLinkSpotHandlerLoader {
     private final ZLinkScannedHandlerCatalog scannedHandlers;
     private final ZLinkSpotActorHandlerCatalog actorHandlers;
+    private final ZLinkHandlerActivator handlerFactory;
 
     ZLinkSpotHandlerLoader(
         ZLinkScannedHandlerCatalog scannedHandlers,
-        ZLinkSpotActorHandlerCatalog actorHandlers) {
+        ZLinkSpotActorHandlerCatalog actorHandlers,
+        ZLinkHandlerActivator handlerFactory) {
         this.scannedHandlers = scannedHandlers;
         this.actorHandlers = actorHandlers;
+        this.handlerFactory = handlerFactory;
     }
 
     ZLinkSpotHandlerCatalog.Registrations load(
@@ -60,6 +64,7 @@ final class ZLinkSpotHandlerLoader {
                 spotType,
                 packetHandlers,
                 subscriptionHandlers);
+            handlerFactory.prepare(handlerType);
         }
         return new ZLinkSpotHandlerCatalog.Registrations(
             packetHandlers,
