@@ -281,12 +281,20 @@ result == BACKPRESSURED → 바인딩이 payload를 보관하고 WRITABLE에서 
 
 바인딩 perf 루프는 이미 이 구조다(#96). framework만 뒤처져 있다.
 
-| 언어 | 상태 |
-|---|---|
-| Java | **1차 기각.** 2차 job 진행 중 |
-| .NET | job 진행 중 |
-| Node | 미착수 (브리프 없음) |
-| C++ | 미착수 (브리프 없음) |
+**분담 확정 (사용자 결정 2026-09-11): Java·.NET은 A, Node·C++는 B.**
+
+| 언어 | 담당 | 상태 |
+|---|---|---|
+| Java | **A** | 2차 job 진행 중. **36셀 before/after 측정 통과** — send-saturation before 73,084~77,556 / after 73,700~77,195, request-backpressure p99 양쪽 0.44~0.60 ms, `peak_in_flight`(bp-4096) before 25/58/63 · after 67/28/37. **1차의 −32%도 #47의 깊이 폭증(1,101)도 없다** |
+| .NET | **A** | job 진행 중. 기준선 측정 완료 |
+| Node | **B** | 미착수. 수정 지점은 `node-raw-binding-port.ts:247,300` — 항상 `.submit().admitted`를 await 한다 |
+| C++ | **B** | 미착수 |
+
+B에게 넘긴 1차 기각 맥락 네 가지는 **Issue #151 코멘트**에 적었다 —
+① 공유 객체가 가변이면 안 된다(Node `Promise.resolve()`는 불변이라 안전, C++은 확인 필요)
+② send-saturation 처리량을 반드시 잰다
+③ `peak_in_flight`를 p99와 함께 싣는다
+④ Node의 수정 지점과 바인딩 쪽 구조는 이미 올바르다는 것
 
 **Java 1차 기각 사유 두 가지 — 다른 언어도 같은 것을 본다.**
 
