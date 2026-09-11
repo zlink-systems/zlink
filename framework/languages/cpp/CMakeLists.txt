@@ -1140,7 +1140,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     Threads::Threads)
   add_test(NAME zlink_cpp_framework_mesh_node_vertical_test
     COMMAND zlink_cpp_framework_mesh_node_vertical_test)
+  add_test(NAME zlink_cpp_framework_mesh_node_local_submit_bridge_test
+    COMMAND zlink_cpp_framework_mesh_node_vertical_test --local-node-submit-bridge)
   set_tests_properties(zlink_cpp_framework_mesh_node_vertical_test PROPERTIES
+    LABELS "framework-unit;framework-zlink;framework-zlink-channel;framework-zlink-spot;framework-zlink-actor-gateway"
+    TIMEOUT 30)
+  set_tests_properties(zlink_cpp_framework_mesh_node_local_submit_bridge_test PROPERTIES
     LABELS "framework-unit;framework-zlink;framework-zlink-channel;framework-zlink-spot;framework-zlink-actor-gateway"
     TIMEOUT 30)
 
