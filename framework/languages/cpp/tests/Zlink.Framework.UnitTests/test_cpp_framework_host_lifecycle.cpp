@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include <zlink/framework.hpp>
+#include <zlink/http_client.hpp>
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/location_records.hpp"
@@ -21,6 +22,12 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace
 {
@@ -199,6 +206,63 @@ class remote_create_entry_spot_t final
 
   private:
     zlink::framework::entry_spot_context_t _context;
+};
+
+struct local_actor_create_request_t
+{
+    int value = 0;
+};
+
+struct local_actor_create_reply_t
+{
+    bool created = false;
+};
+
+void to_json (nlohmann::json &json, const local_actor_create_request_t &value)
+{
+    json = nlohmann::json{{"value", value.value}};
+}
+
+void from_json (const nlohmann::json &json, local_actor_create_request_t &value)
+{
+    value.value = json.value ("value", 0);
+}
+
+void to_json (nlohmann::json &json, const local_actor_create_reply_t &value)
+{
+    json = nlohmann::json{{"created", value.created}};
+}
+
+void from_json (const nlohmann::json &json, local_actor_create_reply_t &value)
+{
+    value.created = json.value ("created", false);
+}
+
+class local_actor_create_handler_t final
+{
+  public:
+    using request_type = local_actor_create_request_t;
+    using reply_type = local_actor_create_reply_t;
+
+    explicit local_actor_create_handler_t (zlink::framework::actor_manager_t &actors) :
+        _actors (actors)
+    {
+    }
+
+    zlink::framework::task_t<reply_type> handle (const request_type &)
+    {
+        const auto created =
+          co_await _actors
+            .get_or_create (zlink::framework::actor_id_t ("host-local-created-actor"),
+                            "remote-create-actor")
+            .timeout (std::chrono::seconds (1))
+            .async ();
+        co_return reply_type{
+          std::holds_alternative<zlink::framework::actor_create_created_t> (created)};
+    }
+
+  private:
+    zlink::framework::actor_manager_t &_actors;
 };
 
 class configuration_instance_spot_t final : public zlink::framework::instance_spot_t
@@ -423,6 +487,100 @@ bool verify_remote_actor_create_completion_reaches_source ()
                   << " created=" << static_cast<bool> (created)
                   << " authority-active=" << authority_active
                   << " error=" << (created.error () ? created.error ()->what () : "-") << '\n';
+    }
+    return passed;
+}
+
+bool verify_local_actor_create_from_application_turn_completes ()
+{
+    remote_create_entry_spot_t::created_count.store (0, std::memory_order_release);
+    remote_create_entry_spot_t::joined_count.store (0, std::memory_order_release);
+    auto location_store =
+      std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ();
+
+    const auto process_id =
+#ifdef _WIN32
+      static_cast<unsigned> (_getpid ());
+#else
+      static_cast<unsigned> (getpid ());
+#endif
+    const auto http_endpoint =
+      "http://127.0.0.1:" + std::to_string (24000U + process_id % 1000U);
+    auto target = zlink::framework::app_t::create ();
+    target.add_zlink_framework (
+      [location_store, http_endpoint] (zlink::framework::zlink_framework_options_t &options) {
+          options.add_location_store (location_store);
+          auto mesh = options.add_route_mesh ("host-local-actor-create-mesh");
+          mesh.set_object_role (zlink::framework::object_role_t::server)
+            .set_routing_id (zlink::routing_id_t::from ("host-local-actor-create-target"))
+            .listen ("tcp://127.0.0.1:0");
+          mesh
+            .add_entry_spot<remote_create_entry_spot_t> (
+              [] (zlink::framework::entry_spot_context_t context) {
+                  return std::make_shared<remote_create_entry_spot_t> (std::move (context));
+              })
+            .add_actor_factory<configuration_actor_t, configuration_actor_factory_t> (
+              "remote-create-actor", std::make_shared<configuration_actor_factory_t> (),
+              [] (auto &factory) { factory.disable_relocation (); });
+          options.http ()
+            .listen (http_endpoint)
+            .map_post<local_actor_create_handler_t> ("/create-local-actor");
+      });
+    char target_program[] = "host-local-actor-create-target";
+    char *target_arguments[] = {target_program, nullptr};
+    int target_exit_code = -1;
+    std::thread target_thread ([&] { target_exit_code = target.run (1, target_arguments); });
+    if (!wait_until ([&] { return target.is_ready (); }, std::chrono::seconds (3))) {
+        target.request_stop ();
+        target_thread.join ();
+        std::cerr << "local Actor create target must reach Serving\n";
+        return false;
+    }
+
+    auto client = zlink::http_client::client_t::create ()
+                    .base_url (http_endpoint)
+                    .timeout (std::chrono::seconds (2))
+                    .build ();
+    const auto reply = client.post ("/create-local-actor")
+                         .body (local_actor_create_request_t{1})
+                         .submit<local_actor_create_reply_t> ()
+                         .result ();
+
+    auto services = target.advanced ().services ().build_provider ();
+    auto &location_repository =
+      services.get_required<zlink::framework::location_repository_t> ();
+    const auto authority = location_repository
+                             .read_authority (zlink::framework::runtime::actor_authority_key (
+                               "host-local-created-actor"))
+                             .result ()
+                             .value ();
+    const auto *authority_snapshot =
+      std::get_if<zlink::framework::authority_snapshot_t> (&authority);
+    const bool authority_ready_and_local =
+      authority_snapshot
+      && authority_snapshot->allocation.state
+           == zlink::framework::placement_allocation_state_t::active
+      && authority_snapshot->allocation.target.node_rid.value ()
+           == "host-local-actor-create-target"
+      && !authority_snapshot->pending_creation;
+
+    const auto target_stopped = target.shutdown (std::chrono::seconds (2)).result ().value ();
+    target_thread.join ();
+    const bool passed = reply && reply.value ().body.created && authority_ready_and_local
+                        && remote_create_entry_spot_t::created_count.load (
+                             std::memory_order_acquire)
+                             == 1
+                        && target_stopped.outcome
+                             == zlink::framework::termination_outcome_t::stopped
+                        && target_exit_code == 0;
+    if (!passed) {
+        std::cerr << "local Actor create from an application turn must complete: reply="
+                  << static_cast<bool> (reply)
+                  << " created=" << (reply ? reply.value ().body.created : false)
+                  << " callback-count="
+                  << remote_create_entry_spot_t::created_count.load (std::memory_order_acquire)
+                  << " authority-ready-local=" << authority_ready_and_local
+                  << " error=" << (reply.error () ? reply.error ()->what () : "-") << '\n';
     }
     return passed;
 }
@@ -1380,6 +1538,9 @@ int main ()
         return EXIT_FAILURE;
 
     if (!verify_remote_actor_create_completion_reaches_source ())
+        return EXIT_FAILURE;
+
+    if (!verify_local_actor_create_from_application_turn_completes ())
         return EXIT_FAILURE;
 
     if (!verify_relocation_retry_after_target_unavailable ())

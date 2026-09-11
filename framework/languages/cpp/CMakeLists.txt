@@ -1122,6 +1122,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
   target_link_libraries(test_cpp_framework_host_lifecycle PRIVATE
     zlink_framework
+    zlink::http_client
     Threads::Threads)
   add_test(NAME test_cpp_framework_host_lifecycle
     COMMAND test_cpp_framework_host_lifecycle)
