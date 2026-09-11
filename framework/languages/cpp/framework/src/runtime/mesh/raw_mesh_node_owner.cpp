@@ -4020,7 +4020,6 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 + " parts=" + std::to_string (received->parts.size ()));
             co_return raw_mesh_pump_result_t::protocol_error;
         }
-        (void) protocol::decode_application_payload (received->parts[1], false);
         const auto local = _topology.local_descriptor ();
         std::string mailbox_owner;
         std::optional<std::uint64_t> correlation;

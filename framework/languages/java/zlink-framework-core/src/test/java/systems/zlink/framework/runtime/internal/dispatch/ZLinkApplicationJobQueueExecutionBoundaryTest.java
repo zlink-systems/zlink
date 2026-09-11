@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -14,6 +15,20 @@ import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
 
 final class ZLinkApplicationJobQueueExecutionBoundaryTest {
+    @Test
+    void receiveOwnerClaimsAvailablePermitsAsOneBoundedBatch()
+        throws Exception {
+        ZLinkApplicationJobQueue queue = queue(4);
+
+        List<ZLinkApplicationJobQueue.Permit> permits =
+            queue.acquireBatchBlocking(64);
+
+        assertEquals(4, permits.size());
+        assertEquals(4, queue.snapshot().reservedSupplyPermits());
+        permits.forEach(ZLinkApplicationJobQueue.Permit::abandonReservation);
+        assertEquals(0, queue.snapshot().permitsInUse());
+    }
+
     @Test
     void reservationCrossesSerialBacklogAndReturnsBeforeFirstApplicationInstruction() {
         ZLinkApplicationJobQueue queue = queue(1);

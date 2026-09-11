@@ -20,7 +20,7 @@ public record ZLinkMeshDispatchRecord(
     Consumer<List<Message>> frameworkReply,
     Runnable terminalRelease) implements AutoCloseable {
     public ZLinkMeshDispatchRecord {
-        parts = List.copyOf(parts);
+        parts = parts instanceof AutoCloseable ? parts : List.copyOf(parts);
         terminalRelease = once(terminalRelease);
     }
 
@@ -52,7 +52,18 @@ public record ZLinkMeshDispatchRecord(
 
     /** Releases retained message parts. */
     public void closeParts() {
-        parts.forEach(Message::close);
+        if (parts instanceof AutoCloseable retained) {
+            try {
+                retained.close();
+            } catch (RuntimeException failure) {
+                throw failure;
+            } catch (Exception failure) {
+                throw new IllegalStateException(
+                    "retained message parts could not be closed", failure);
+            }
+        } else {
+            parts.forEach(Message::close);
+        }
     }
 
     @Override

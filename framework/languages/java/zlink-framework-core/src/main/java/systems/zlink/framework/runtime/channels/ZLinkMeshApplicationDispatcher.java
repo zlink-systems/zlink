@@ -173,7 +173,6 @@ public final class ZLinkMeshApplicationDispatcher
         String packetName = envelope != null
             ? envelope.messageName()
             : record.parts().get(0).toUtf8String();
-        Message payload = record.parts().get(1);
         String contentType = envelope != null
             ? envelope.contentType()
             : record.receive().contentType() != null
@@ -193,10 +192,11 @@ public final class ZLinkMeshApplicationDispatcher
         switch (kind) {
             case NODE_SEND, CHANNEL_SEND ->
                   dispatchSend(
-                      record, namespace, packetName, payload, metadata, contentType, claim);
+                      record, namespace, packetName, metadata, contentType, claim);
             case NODE_REQUEST, CHANNEL_REQUEST ->
                   dispatchRequest(
-                      record, namespace, envelope, packetName, payload, metadata,
+                      record, namespace, envelope, packetName,
+                      record.parts().get(1), metadata,
                       contentType, claim);
             default -> closeRecord(record, claim);
         }
@@ -354,7 +354,6 @@ public final class ZLinkMeshApplicationDispatcher
         ZLinkMeshDispatchRecord record,
         Namespace namespace,
         String packetName,
-        Message payload,
         Map<String, String> metadata,
         String contentType,
         ZLinkMeshDrainCoordinator.Claim claim) {
@@ -372,6 +371,7 @@ public final class ZLinkMeshApplicationDispatcher
         try {
             CompletionStage<Void> queued = namespace.sendQueue
                 .enqueue(() -> {
+                Message payload = record.parts().get(1);
                 traceFlow(
                     ZLinkMessageFlowOutcome.ADMITTED,
                     record,
