@@ -288,6 +288,7 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
                         if (_disposed) return;
 
                         _idleThreads++;
+                        SignalDirectCapacityChanged();
                         var signaled = Monitor.Wait(_sync, _idleTimeout);
                         _idleThreads--;
                         if (!signaled
@@ -310,10 +311,6 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
                 {
                     // Worker call wrappers convert their own failures; a throwing
                     // wrapper must never take the pool thread down.
-                }
-                finally
-                {
-                    lock (_sync) SignalDirectCapacityChanged();
                 }
             }
         }

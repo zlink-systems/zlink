@@ -97,6 +97,7 @@ zlink::signaler_t::signaler_t (bool event_only_)
     _r = retired_fd;
 #ifdef ZLINK_HAVE_WINDOWS
     _signaled.store (false, std::memory_order_relaxed);
+    _coalescing = false;
     _event_only = event_only_;
     _event = NULL;
 
@@ -122,6 +123,14 @@ zlink::signaler_t::signaler_t (bool event_only_)
     pid = getpid ();
 #endif
 }
+
+#ifdef ZLINK_HAVE_WINDOWS
+zlink::signaler_t::signaler_t (bool event_only_, bool coalescing_) :
+    signaler_t (event_only_)
+{
+    _coalescing = coalescing_;
+}
+#endif
 
 // This might get run after some part of construction failed, leaving one or
 // both of _r and _w retired_fd.
@@ -195,7 +204,15 @@ void zlink::signaler_t::send ()
         return; // do not send anything in forked child context
     }
 #endif
-#if !defined ZLINK_HAVE_WINDOWS
+#if defined ZLINK_HAVE_WINDOWS
+    //  Both the event and fd-backed implementations represent an edge, not a
+    //  count. Keep exactly one pending native notification so a poller drain
+    //  can never leave unread socket bytes behind after the atomic flag was
+    //  cleared.
+    if (_coalescing
+        && _signaled.exchange (true, std::memory_order_acq_rel))
+        return;
+#else
     if (_coalescing && _signaled.exchange (true, std::memory_order_acq_rel))
         return;
 #endif
@@ -212,7 +229,8 @@ void zlink::signaler_t::send ()
     if (_event_only) {
         const BOOL rc = SetEvent (_event);
         win_assert (rc != 0);
-        _signaled.store (true, std::memory_order_release);
+        if (!_coalescing)
+            _signaled.store (true, std::memory_order_release);
         return;
     }
     const char dummy = 0;
@@ -224,9 +242,8 @@ void zlink::signaler_t::send ()
     } while (nbytes == SOCKET_ERROR);
     // Given the small size of dummy (should be 1) expect that send was able to send everything.
     zlink_assert (nbytes == sizeof (dummy));
-#ifdef ZLINK_HAVE_WINDOWS
-    _signaled.store (true, std::memory_order_release);
-#endif
+    if (!_coalescing)
+        _signaled.store (true, std::memory_order_release);
 #elif defined ZLINK_HAVE_VXWORKS
     unsigned char dummy = 0;
     while (true) {

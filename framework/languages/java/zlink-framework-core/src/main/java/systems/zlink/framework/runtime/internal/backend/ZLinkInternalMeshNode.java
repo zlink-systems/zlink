@@ -190,6 +190,47 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     List<MeshPeerEntry> peers();
 
     /**
+     * Returns the current descriptor-backed peer identities for metric
+     * collection. This is internal topology state, not a public snapshot.
+     */
+    default List<RoutingId> configuredPeerIds() {
+        return peers().stream().map(MeshPeerEntry::routingId).distinct().toList();
+    }
+
+    /** Whether a physical transport edge currently exists for this peer. */
+    default boolean isPeerTransportConnected(RoutingId peerRid) {
+        return false;
+    }
+
+    /** Returns peers that currently satisfy this backend's ready predicate. */
+    default long readyPeerCount() {
+        return peers().stream()
+            .filter(peer -> peer.state()
+                == systems.zlink.framework.runtime.internal.binding.spot
+                    .MeshPeerState.ADMITTED)
+            .map(MeshPeerEntry::routingId)
+            .distinct()
+            .count();
+    }
+
+    /** Returns select-one members the backend currently considers ready. */
+    default long readyChannelMemberCount(String channelName) {
+        return peers().stream()
+            .filter(peer -> peer.state()
+                == systems.zlink.framework.runtime.internal.binding.spot
+                    .MeshPeerState.ADMITTED)
+            .filter(peer -> {
+                PeerChannels channels = peerChannels(
+                    peer.routingId(), peer.lifecycleGeneration());
+                int index = channels.names().indexOf(channelName);
+                return index >= 0 && channels.weights().get(index) > 0;
+            })
+            .map(MeshPeerEntry::routingId)
+            .distinct()
+            .count();
+    }
+
+    /**
      * Whether the exact admitted transport for a relocation target is
      * available.  Canonical relocation's Prepare is the target-readiness
      * handshake; it must not wait for an independent liveness round-trip

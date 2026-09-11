@@ -53,6 +53,7 @@ import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 import systems.zlink.framework.runtime.internal.streams.ZLinkStreamErrorPayload;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
 
 public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     private static final Duration FALLBACK_ROUTE_RETRY_TIMEOUT = Duration.ofSeconds(5);
@@ -172,18 +173,29 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         Object request,
         Map<String, String> metadata,
         Duration timeout,
-        Class<TReply> replyType) {
+        Class<TReply> replyType,
+        ZLinkRequestMetrics.Series metric,
+        long started) {
         ZLinkFlowContext.State operationFlow = ZLinkFlowContext.current();
-        return resolveActorAddress(actorId, timeout)
-            .thenCompose(actor -> ZLinkFlowContext.call(
+        CompletionStage<TReply> logical = resolveActorAddress(actorId, timeout)
+            .thenCompose(row -> ZLinkFlowContext.call(
                 operationFlow,
                 () -> submitRequestWithRouteRetry(
-                    actor, packetName, request, metadata, timeout, replyType)))
-            .whenComplete((ignored, error) -> {
-                if (error != null && isStaleActorError(error)) {
-                    locations.invalidateActorRoute(actorId);
-                }
-            });
+                    rememberAuthority(row, actorId),
+                    packetName, request, metadata, timeout, replyType)));
+        CompletionStage<TReply> result = logical.whenComplete((ignored, error) -> {
+            if (error != null && isStaleActorError(error)) {
+                locations.invalidateActorRoute(actorId);
+            }
+        });
+        result.whenComplete((ignored, error) ->
+            ZLinkRequestMetrics.complete(
+                metric,
+                started == ZLinkRequestMetrics.NO_START
+                    ? -1L
+                    : ZLinkRequestMetrics.elapsed(started, System.nanoTime()),
+                error));
+        return result;
     }
 
     private <TReply> CompletionStage<TReply> submitRequestWithRouteRetry(
@@ -202,23 +214,21 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
             .exceptionallyCompose(error -> failed(unwrap(error)));
     }
 
-    private CompletionStage<ZLinkBackendActorRef> resolveActorAddress(
+    private CompletionStage<ActorRoute> resolveActorAddress(
         String actorId,
         Duration readinessTimeout) {
         return awaitRuntimeReady(readinessTimeout)
-            .thenCompose(ignored -> locations.resolveActor(actorId))
-            .thenApply(row -> {
-                if (row == null || row.actorRef() == null) {
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.NOT_FOUND,
-                        "Actor route '" + actorId + "' was not found.");
-                }
-                return rememberAuthority(row);
-            });
+            .thenCompose(ignored -> locations.resolveActor(actorId));
     }
 
     private ZLinkBackendActorRef rememberAuthority(
-        ActorRoute row) {
+        ActorRoute row,
+        String actorId) {
+        if (row == null || row.actorRef() == null) {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NOT_FOUND,
+                "Actor route '" + actorId + "' was not found.");
+        }
         ZLinkBackendActorRef actor = toBackendActorRef(row);
         ZLinkInternalSpotNode node = spotNode.get();
         // A positive route cache can overlap a completed relocation.  The
@@ -241,8 +251,9 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         Object message,
         Map<String, String> metadata) {
         ZLinkFlowContext.State operationFlow = ZLinkFlowContext.current();
-        return resolveActorAddress(actorId, defaultTimeout).thenCompose(actor ->
+        return resolveActorAddress(actorId, defaultTimeout).thenCompose(row ->
             ZLinkFlowContext.call(operationFlow, () -> {
+            ZLinkBackendActorRef actor = rememberAuthority(row, actorId);
             List<Message> parts = createPacketParts(
                 ZLinkStreamMessageKind.SEND,
                 Optional.empty(),
@@ -626,9 +637,28 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
             try (var flowScope = enterApplicationFlow()) {
                 systems.zlink.framework.runtime.internal.handlers
                     .ZLinkSuspendInvocationContext.rejectSameActorWait(actorId);
-                return ZLinkSerialExecutionQueue.manageCurrent(
-                    requestAsync(
-                        actorId, packetName, request, metadata, timeout, replyType));
+                ZLinkInternalSpotNode node = spotNode.get();
+                ZLinkRequestMetrics.Series metric =
+                    ZLinkRequestMetrics.actor(node.name());
+                long started = ZLinkRequestMetrics.durationEnabled()
+                    ? System.nanoTime() : ZLinkRequestMetrics.NO_START;
+                ZLinkRequestMetrics.start(metric);
+                CompletionStage<TReply> stage;
+                try {
+                    stage = requestAsync(
+                        actorId, packetName, request, metadata, timeout,
+                        replyType, metric, started);
+                } catch (RuntimeException | Error failure) {
+                    ZLinkRequestMetrics.complete(
+                        metric,
+                        started == ZLinkRequestMetrics.NO_START
+                            ? -1L
+                            : ZLinkRequestMetrics.elapsed(
+                                started, System.nanoTime()),
+                        failure);
+                    throw failure;
+                }
+                return ZLinkSerialExecutionQueue.manageCurrent(stage);
             }
         }
 
