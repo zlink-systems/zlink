@@ -33,16 +33,16 @@ zlink_routing_id_t routing_id (const char *text_)
     return rid;
 }
 
-void *new_router (const char *rid_, int policy_, bool retry_)
+void *new_router (const char *rid_, int policy_, int reconnect_ivl_ = -1)
 {
     void *socket = test_context_socket (ZLINK_SOCKET_ROUTER);
     const int zero = 0;
-    const int reconnect = retry_ ? 50 : -1;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (socket, rid_, strlen (rid_)));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
       socket, ZLINK_OPT_LINGER, &zero, sizeof zero));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
-      socket, ZLINK_OPT_RECONNECT_IVL, &reconnect, sizeof reconnect));
+      socket, ZLINK_OPT_RECONNECT_IVL, &reconnect_ivl_,
+      sizeof reconnect_ivl_));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
       socket, ZLINK_OPT_RID_DUPLICATE_POLICY, &policy_, sizeof policy_));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
@@ -122,6 +122,31 @@ struct observation_t
         for (size_t i = 0; i < events.size (); ++i)
             if (events[i].connection_id == connection_)
                 TEST_ASSERT_NOT_EQUAL (ZLINK_EVENT_DISCONNECTED, events[i].event);
+    }
+
+    void assert_no_new_ready (uint64_t old_connection_, int timeout_ms_)
+    {
+        const clock_type::time_point deadline =
+          clock_type::now () + std::chrono::milliseconds (timeout_ms_);
+        do {
+            drain ();
+            for (size_t i = 0; i < events.size (); ++i) {
+                const zlink_monitor_event_t &event = events[i];
+                TEST_ASSERT_FALSE (
+                  event.event == ZLINK_EVENT_CONNECTION_READY
+                  && event.connection_id != old_connection_
+                  && (event.flags
+                      & ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE));
+            }
+            const long remaining = static_cast<long> (
+              std::chrono::duration_cast<std::chrono::milliseconds> (
+                deadline - clock_type::now ()).count ());
+            zlink_pollitem_t item = {monitor, 0, ZLINK_POLLIN, 0};
+            zlink_config_result_t error = ZLINK_CONFIG_OK;
+            TEST_ASSERT_TRUE (zlink_poll (
+              &item, 1, remaining > 0 ? remaining : 0, &error) >= 0);
+            TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
+        } while (clock_type::now () < deadline);
     }
 };
 
@@ -280,8 +305,8 @@ void await_reconnected_request (void *client_, void *server_)
 
 void run_same_socket (bool tcp_, int policy_, bool retry_ = false)
 {
-    void *server = new_router ("server", policy_, false);
-    void *client = new_router ("client", policy_, retry_);
+    void *server = new_router ("server", policy_);
+    void *client = new_router ("client", policy_, retry_ ? 50 : -1);
     observation_t server_events (server), client_events (client);
     char endpoint[MAX_SOCKET_STRING];
     if (tcp_)
@@ -382,6 +407,62 @@ void test_handover_inproc () { run_same_socket (false, ZLINK_RID_DUPLICATE_HANDO
 // against one listener collide per ZMP section 4.1 (D-096). The retry
 // ordering rule is covered by the inproc case, where one intent suffices.
 void test_reject_retry_inproc () { run_same_socket (false, ZLINK_RID_DUPLICATE_REJECT, true); }
+
+void run_disabled_or_cancelled_inproc_retry (const char *endpoint_,
+                                             int reconnect_ivl_,
+                                             bool cancel_intent_,
+                                             bool close_with_timer_)
+{
+    void *server = new_router ("server", ZLINK_RID_DUPLICATE_REJECT);
+    void *client = new_router (
+      "client", ZLINK_RID_DUPLICATE_REJECT, reconnect_ivl_);
+    observation_t client_events (client);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, endpoint_));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint_));
+    const uint64_t old_connection = client_events.wait (
+      ZLINK_EVENT_CONNECTION_READY, 0, setup_ms);
+
+    test_context_socket_close_zero_linger (server);
+    client_events.wait (ZLINK_EVENT_DISCONNECTED, old_connection,
+                        setup_ms, true);
+
+    if (close_with_timer_) {
+        test_context_socket_close_zero_linger (client);
+        return;
+    }
+    if (cancel_intent_)
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_disconnect (client, endpoint_));
+
+    void *replacement = new_router ("server", ZLINK_RID_DUPLICATE_REJECT);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (replacement, endpoint_));
+    client_events.assert_no_new_ready (old_connection, 300);
+    test_context_socket_close_zero_linger (client);
+    test_context_socket_close_zero_linger (replacement);
+}
+
+void test_reconnect_ivl_minus_one_discards_inproc_intent ()
+{
+    run_disabled_or_cancelled_inproc_retry (
+      "inproc://same-socket-reconnect-minus-one", -1, false, false);
+}
+
+void test_reconnect_ivl_zero_discards_inproc_intent ()
+{
+    run_disabled_or_cancelled_inproc_retry (
+      "inproc://same-socket-reconnect-zero", 0, false, false);
+}
+
+void test_disconnect_cancels_pending_inproc_retry ()
+{
+    run_disabled_or_cancelled_inproc_retry (
+      "inproc://same-socket-reconnect-cancel", 100, true, false);
+}
+
+void test_close_cancels_pending_inproc_retry_timer ()
+{
+    run_disabled_or_cancelled_inproc_retry (
+      "inproc://same-socket-reconnect-close", 100, false, true);
+}
 }
 
 int main ()
@@ -399,6 +480,10 @@ int main ()
     RUN_SELECTED (test_handover_tcp);
     RUN_SELECTED (test_handover_inproc);
     RUN_SELECTED (test_reject_retry_inproc);
+    RUN_SELECTED (test_reconnect_ivl_minus_one_discards_inproc_intent);
+    RUN_SELECTED (test_reconnect_ivl_zero_discards_inproc_intent);
+    RUN_SELECTED (test_disconnect_cancels_pending_inproc_retry);
+    RUN_SELECTED (test_close_cancels_pending_inproc_retry_timer);
 #undef RUN_SELECTED
     return UNITY_END ();
 }

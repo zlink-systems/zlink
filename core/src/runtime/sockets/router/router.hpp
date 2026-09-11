@@ -79,11 +79,15 @@ class router_t : public routing_socket_base_t
     void xread_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xpipe_terminated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xsocket_msg_pipe_terminated (zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
-    int xterm_peer_rid (const zlink_routing_id_t *peer_rid_) ZLINK_OVERRIDE
+    int xterm_peer_rid (const zlink_routing_id_t *peer_rid_,
+                        pipe_t **target_out_,
+                        bool *delay_out_) ZLINK_OVERRIDE
     {
         fail_blocking_send_waits_for_logical_target (peer_rid_, ENOENT);
         revoke_router_reply_targets_for_rid (peer_rid_);
-        return terminate_out_pipe_by_routing_id (peer_rid_);
+        *delay_out_ = false;
+        return prepare_out_pipe_termination_by_routing_id (peer_rid_,
+                                                            target_out_);
     }
     int get_peer_state (const void *routing_id_, size_t routing_id_size_) const ZLINK_FINAL;
     pipe_t *retain_current_transport_pair_pipe (

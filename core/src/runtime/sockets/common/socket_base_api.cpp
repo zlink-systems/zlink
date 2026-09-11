@@ -171,6 +171,7 @@ void zlink::socket_base_t::finish_close_handoff (int handoff_timeout_ms_)
 
 void zlink::socket_base_t::finish_close_reap ()
 {
+    stop_inproc_reconnect_scheduler ();
     socket_completion::close (&completion_runtime (),
                               _ctx_terminated ? ETERM : ESHUTDOWN);
     fail_all_blocking_send_waits (_ctx_terminated ? ETERM : ECANCELED);
@@ -210,12 +211,17 @@ int zlink::socket_base_t::get_peer_state (const void *routing_id_, size_t routin
     return -1;
 }
 
-int zlink::socket_base_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
+int zlink::socket_base_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_,
+                                          pipe_t **target_out_,
+                                          bool *delay_out_)
 {
-    if (!peer_rid_ || peer_rid_->size == 0) {
+    if (!peer_rid_ || peer_rid_->size == 0 || !target_out_
+        || !delay_out_) {
         errno = EINVAL;
         return -1;
     }
+    *target_out_ = NULL;
+    *delay_out_ = false;
 
     std::vector<pipe_t *> pipes;
     snapshot_attached_pipes (&pipes);
@@ -250,11 +256,15 @@ int zlink::socket_base_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
         errno = ENOENT;
         return -1;
     }
+    if (!match->retain_lifetime_ref ()) {
+        errno = ENOENT;
+        return -1;
+    }
 
     fail_blocking_send_waits_for_logical_target (peer_rid_, ENOENT);
     socket_reqrep_internal::fail_pending_requests_for_pipe (
       request_reply_state (), match);
-    match->terminate (false);
+    *target_out_ = match;
     return 0;
 }
 
@@ -1869,9 +1879,11 @@ void zlink::socket_base_t::pipe_peer_terminated (pipe_t *pipe_, bool drain_compl
       pair_generation);
     // pipe_peer_terminated runs under the command owner. Queue the reconnect so
     // connect_internal does not re-enter that owner while handling this pipe.
-    if (reconnect_inproc && !is_terminating ())
-        send_reconnect_inproc (
-          this, new std::string (inproc_reconnect_endpoint));
+    if (reconnect_inproc && !is_terminating ()) {
+        const bool scheduled = schedule_inproc_reconnect (
+          inproc_reconnect_endpoint, endpoint_pair);
+        zlink_assert (scheduled || is_terminating () || _ctx_terminated);
+    }
 }
 
 void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)

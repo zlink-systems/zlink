@@ -1072,8 +1072,10 @@ int zlink::socket_base_t::term_endpoint_internal (
                                           routing_id.size (), &rid);
               fail_blocking_send_waits_for_logical_target (&rid, ENOENT);
           }
-      };
+    };
     if (uri_protocol == protocol_name::inproc) {
+        const bool cancelled_retry =
+          cancel_scheduled_inproc_reconnects (endpoint_uri_str);
         fail_public_pending_for_endpoint (endpoint_uri_str);
         if (unregister_endpoint (endpoint_uri_str, this) == 0) {
             std::vector<pipe_t *> attached;
@@ -1092,10 +1094,11 @@ int zlink::socket_base_t::term_endpoint_internal (
             // acknowledgement only after releasing this socket's turn.
             return 0;
         }
-        return endpoint_runtime ().inprocs.erase_pipes (endpoint_uri_str,
-                                                        this,
-                                                        terminating_pipes_,
-                                                        peer_progress_pipes_);
+        const int rc = endpoint_runtime ().inprocs.erase_pipes (
+          endpoint_uri_str, this, terminating_pipes_, peer_progress_pipes_);
+        if (rc != 0 && cancelled_retry)
+            return 0;
+        return rc;
     }
 
     const std::string resolved_endpoint_uri =
@@ -1194,16 +1197,66 @@ int zlink::socket_base_t::term_peer_rid (const zlink_routing_id_t *peer_rid_)
     socket_public_api_scope_t admission (lifecycle_coordinator ());
     if (!admission.acquired ())
         return -1;
-    socket_public_api_lock_scope_t guard (lifecycle_coordinator ());
 
-    if (unlikely (_ctx_terminated)) {
-        errno = ETERM;
+    // A public BUSY result must be decided before RID termination commits.
+    // Hold the command-progress owner first, then revalidate the RID under the
+    // public API lock below. Once xterm_peer_rid succeeds, this call therefore
+    // owns enough progress to finish the same lifecycle as term_endpoint.
+    transport_pair_owner_progress_scope_t progress_owner (this);
+    if (get_ctx ()->choose_io_thread (0)) {
+        if (acquire_transport_pair_owner_progress () != 0)
+            return -1;
+        *progress_owner.held_state () = true;
+    }
+
+    std::vector<pipe_t *> terminating_pipes;
+    std::vector<pipe_t *> peer_progress_pipes;
+    int term_rc = 0;
+    int term_errno = 0;
+    {
+        socket_public_api_lock_scope_t guard (lifecycle_coordinator ());
+
+        if (unlikely (_ctx_terminated)) {
+            errno = ETERM;
+            return -1;
+        }
+
+        const int rc = process_commands (0, false);
+        if (unlikely (rc != 0))
+            return -1;
+
+        pipe_t *target = NULL;
+        bool delay = false;
+        term_rc = xterm_peer_rid (peer_rid_, &target, &delay);
+        term_errno = errno;
+        if (term_rc == 0) {
+            zlink_assert (target);
+            std::string protocol;
+            std::string path;
+            const std::string &endpoint =
+              target->get_endpoint_pair ().identifier ();
+            const bool inproc = !delay
+                                && parse_uri (endpoint.c_str (), protocol,
+                                              path)
+                                     == 0
+                                && protocol == protocol_name::inproc;
+            if (inproc) {
+                terminating_pipes.push_back (target);
+                begin_inproc_pipe_termination (target,
+                                               &peer_progress_pipes);
+            } else {
+                target->terminate (delay);
+                target->release_lifetime_ref ();
+            }
+        }
+    }
+
+    finish_inproc_endpoint_termination (&terminating_pipes,
+                                        &peer_progress_pipes);
+    if (term_rc != 0) {
+        errno = term_errno;
         return -1;
     }
 
-    const int rc = process_commands (0, false);
-    if (unlikely (rc != 0))
-        return -1;
-
-    return xterm_peer_rid (peer_rid_);
+    return 0;
 }
