@@ -651,12 +651,22 @@ wait_for_pid() {
     return 0
 }
 
+write_control() {
+    local control_fd="$1"
+    shift
+
+    # A benchmark process may close its stdin before the runner reaches
+    # teardown. Keep SIGPIPE in this child shell so the runner can retain the
+    # process output and render the failed case instead of exiting with 141.
+    (printf "$@" >&"${control_fd}") 2>/dev/null || true
+}
+
 shutdown_server() {
     local pid="$1"
     local control_fd="$2"
 
     if kill -0 "${pid}" 2>/dev/null; then
-        printf 'STOP\n' >&"${control_fd}" || true
+        write_control "${control_fd}" 'STOP\n'
         exec {control_fd}>&- || true
         if wait_for_pid "${pid}" "${SERVER_SHUTDOWN_TIMEOUT_SECONDS}"; then
             return
@@ -947,8 +957,8 @@ for run in $(seq 1 "${RUNS}"); do
                         case_status="fail"
                         case_reason="client_ready_timeout_or_invalid"
                     else
-                        printf 'START,%s\n' "${size}" >&"${SERVER_CONTROL_FD}" || true
-                        printf 'START,%s\n' "${size}" >&"${CLIENT_CONTROL_FD}" || true
+                        write_control "${SERVER_CONTROL_FD}" 'START,%s\n' "${size}"
+                        write_control "${CLIENT_CONTROL_FD}" 'START,%s\n' "${size}"
                     fi
 
                     if [[ "${case_status}" == "success" ]]; then
@@ -1007,14 +1017,14 @@ for run in $(seq 1 "${RUNS}"); do
                         case_status="fail"
                         case_reason="stream_client_ready_timeout_or_invalid"
                     else
-                        printf 'START,%s\n' "${size}" >&"${SERVER_CONTROL_FD}" || true
+                        write_control "${SERVER_CONTROL_FD}" 'START,%s\n' "${size}"
                         SERVER_START_READY_LINE="$(wait_for_file_prefix \
                             "${SRV_OUT}" "SERVER_START_READY," "${SERVER_READY_TIMEOUT_SECONDS}" || true)"
                         if [[ "${SERVER_START_READY_LINE}" != "SERVER_START_READY,${size}" ]]; then
                             case_status="fail"
                             case_reason="stream_server_start_ack_timeout_or_invalid"
                         else
-                            printf 'START,%s\n' "${size}" >&"${CLIENT_CONTROL_FD}" || true
+                            write_control "${CLIENT_CONTROL_FD}" 'START,%s\n' "${size}"
                         fi
                     fi
 
@@ -1069,7 +1079,7 @@ for run in $(seq 1 "${RUNS}"); do
                     fi
                     shutdown_server "${SERVER_PID}" "${SERVER_CONTROL_FD}"
                     REQREP_SERVER_STOPPED=1
-                    printf 'STOP\n' >&"${CLIENT_CONTROL_FD}" 2>/dev/null || true
+                    write_control "${CLIENT_CONTROL_FD}" 'STOP\n'
                     exec {CLIENT_CONTROL_FD}>&- || true
                     if ! wait_for_pid "${CLIENT_PID}" "${SERVER_SHUTDOWN_TIMEOUT_SECONDS}"; then
                         case_status="fail"

@@ -74,8 +74,8 @@ fn main() {
     }
     ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
 
-    // Match dealer-router: Future admission and receive draining run
-    // concurrently, without echo-gated inflight-1 ping-pong.
+    // Match dealer-router: submit once per socket per turn so receive and
+    // completion progress stays concurrent without echo-gated ping-pong.
     let poller = Poller::new().expect("poller");
     for (index, sock) in sockets.iter().enumerate() {
         poller
@@ -101,22 +101,19 @@ fn main() {
                 if tasks.is_pending(slot) {
                     continue;
                 }
-                while Instant::now() < deadline {
-                    let mut msg = Message::with_size(payload_size).expect("msg");
-                    common::encode_header(
-                        msg.data_mut(),
-                        common::PHASE_ACTIVE,
-                        args.msg_size as u32,
-                        seqs[slot],
-                    );
-                    seqs[slot] += 1;
-                    submitted = true;
-                    let submission = perf_submit_measurement_async!(socket.send(&server_rid), msg)
-                        .unwrap_or_else(|err| panic!("send failed: {err}"));
-                    if submission.result == zlink::SubmitResult::Backpressured {
-                        tasks.insert(slot, submission.admitted);
-                        break;
-                    }
+                let mut msg = Message::with_size(payload_size).expect("msg");
+                common::encode_header(
+                    msg.data_mut(),
+                    common::PHASE_ACTIVE,
+                    args.msg_size as u32,
+                    seqs[slot],
+                );
+                seqs[slot] += 1;
+                submitted = true;
+                let submission = perf_submit_measurement_async!(socket.send(&server_rid), msg)
+                    .unwrap_or_else(|err| panic!("send failed: {err}"));
+                if submission.result == zlink::SubmitResult::Backpressured {
+                    tasks.insert(slot, submission.admitted);
                 }
             }
         }

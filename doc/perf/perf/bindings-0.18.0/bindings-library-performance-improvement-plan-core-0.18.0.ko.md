@@ -1136,61 +1136,81 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `PAIR` | 73.3% | 109.1% | 134.8% | 151.4% | 113.8% | 118.6% | 통과 116.8%/lat0.86× · c0180-rust-single-tcp |
+| `tcp` | `PUBSUB` | 77.4% | 72.0% | 120.7% | 466.1% | 570.7% | 947.3% | 보류 375.7%/lat4.49× · c0180-rust-single-tcp |
+| `tcp` | `DEALER_DEALER` | 53.5% | 73.8% | 97.3% | 122.3% | 95.8% | 99.5% | 보류 90.4%/lat1.11× · c0180-rust-single-tcp |
+| `tcp` | `DEALER_ROUTER` | 54.4% | 80.2% | 110.6% | 129.2% | 97.8% | 94.6% | 통과 94.5%/lat1.06× · c0180-rust-single-tcp |
+| `tcp` | `ROUTER_ROUTER` | 62.9% | 84.8% | 109.6% | 138.7% | 106.6% | 105.2% | 통과 101.3%/lat0.83× · c0180-rust-single-tcp |
+| `tcp` | `DEALER_ROUTER_REQREP` | 10% | 9% | 27% | 54% | 60% | 68% | 보류 37.9%/lat20.8× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-single-tcp-reqrep |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 10% | 9% | 24% | 55% | 59% | 65% | 보류 37.0%/lat3.7× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-single-tcp-reqrep |
+| `ws` | `PAIR` | 77.6% | 96.1% | 123.9% | 111.0% | 112.4% | 116.2% | 통과 106.2%/lat0.08× · c0180-rust-single-ws |
+| `ws` | `PUBSUB` | 86.4% | 85.0% | 126.7% | 412.1% | 541.5% | 762.5% | 보류 335.7%/lat4.18× · c0180-rust-single-ws |
+| `ws` | `DEALER_DEALER` | 67.6% | 77.8% | 116.3% | 114.0% | 107.4% | 112.9% | 통과 99.3%/lat0.10× · c0180-rust-single-ws |
+| `ws` | `DEALER_ROUTER` | 67.8% | 83.0% | 116.0% | 119.3% | 108.0% | 114.7% | 통과 101.5%/lat0.08× · c0180-rust-single-ws |
+| `ws` | `ROUTER_ROUTER` | 71.2% | 74.3% | 115.2% | 124.7% | 125.7% | 116.2% | 통과 104.5%/lat0.09× · c0180-rust-single-ws |
+| `ws` | `DEALER_ROUTER_REQREP` | 17% | 21% | 17% | 55% | 67% | 76% | 보류 42.1%/lat2.9× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-single-ws-reqrep |
+| `ws` | `ROUTER_ROUTER_REQREP` | 17% | 25% | 26% | 58% | 65% | 72% | 보류 43.8%/lat2.2× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-single-ws-reqrep |
+| `wss` | `PAIR` | 77.2% | 105.0% | 163.3% | 155.1% | 143.7% | 149.5% | 통과 132.3%/lat0.08× · c0180-rust-single-wss |
+| `wss` | `PUBSUB` | 78.4% | 81.8% | 143.6% | 152.6% | 161.8% | 219.2% | 통과 139.6%/lat0.46× · c0180-rust-single-wss |
+| `wss` | `DEALER_DEALER` | 66.2% | 96.8% | 157.1% | 151.2% | 143.3% | 145.9% | 통과 126.8%/lat0.08× · c0180-rust-single-wss |
+| `wss` | `DEALER_ROUTER` | 64.8% | 93.5% | 151.8% | 151.1% | 149.5% | 146.7% | 통과 126.2%/lat0.08× · c0180-rust-single-wss |
+| `wss` | `ROUTER_ROUTER` | 68.5% | 97.1% | 164.7% | 159.1% | 155.3% | 153.8% | 통과 133.1%/lat0.08× · c0180-rust-single-wss |
+| `wss` | `DEALER_ROUTER_REQREP` | 18% | 54% | 27% | 73% | 103% | 131% | 보류 67.7%/lat1.5× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-single-wss-reqrep |
+| `wss` | `ROUTER_ROUTER_REQREP` | 24% | 64% | 38% | 92% | 110% | 119% | 보류 74.3%/lat1.3× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-single-wss-reqrep |
+| `tls` | `PAIR` | 83.2% | 110.1% | 178.6% | 151.4% | 154.0% | 153.1% | 통과 138.4%/lat0.84× · c0180-rust-single-tls |
+| `tls` | `PUBSUB` | 87.3% | 92.9% | 194.5% | 151.7% | 168.7% | 230.1% | 보류 154.2%/lat5.86× · c0180-rust-single-tls |
+| `tls` | `DEALER_DEALER` | 59.7% | 99.8% | 181.9% | 153.7% | 158.2% | 157.1% | 통과 135.1%/lat0.82× · c0180-rust-single-tls |
+| `tls` | `DEALER_ROUTER` | 61.1% | 101.0% | 184.0% | 157.0% | 153.0% | 148.0% | 통과 134.0%/lat0.88× · c0180-rust-single-tls |
+| `tls` | `ROUTER_ROUTER` | 69.3% | 104.1% | 159.2% | 142.6% | 145.4% | 138.9% | 통과 126.6%/lat0.09× · c0180-rust-single-tls |
+| `tls` | `DEALER_ROUTER_REQREP` | 10% | 15% | 27% | 68% | 96% | 119% | 보류 56.0%/lat2.6× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-single-tls-reqrep |
+| `tls` | `ROUTER_ROUTER_REQREP` | 11% | 13% | 32% | 78% | 95% | 115% | 보류 57.3%/lat1.7× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-single-tls-reqrep |
+| `inproc` | `PAIR` | 86.3% | 73.1% | 78.0% | 52.3% | 51.6% | 58.7% | 보류 66.7%/lat1.85× · c0180-rust-single-inproc |
+| `inproc` | `PUBSUB` | 102.1% | 99.0% | 97.2% | 1238.1% | 1661.9% | 3572.7% | 통과 1128.5%/lat0.93× · c0180-rust-single-inproc |
+| `inproc` | `DEALER_DEALER` | 74.3% | 74.1% | 74.6% | 35.1% | 33.2% | 37.7% | 보류 54.8%/lat2.53× · c0180-rust-single-inproc |
+| `inproc` | `DEALER_ROUTER` | 58.5% | 61.0% | 61.9% | 35.1% | 37.5% | 41.4% | 보류 49.2%/lat1.86× · c0180-rust-single-inproc |
+| `inproc` | `ROUTER_ROUTER` | 75.9% | 77.9% | 78.6% | 149.9% | 119.8% | 123.9% | 통과 104.3%/lat1.78× · c0180-rust-single-inproc |
+| `inproc` | `DEALER_ROUTER_REQREP` | 22% | 26% | 39% | 42% | 42% | 33% | 보류 34.0%/lat24.6× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-single-inproc-reqrep |
+| `inproc` | `ROUTER_ROUTER_REQREP` | 11% | 8% | 8% | 42% | 38% | 32% | 보류 23.1%/lat862× · reqrep 소형 약점·대형 size latency floor(전 언어 동류)(inproc 소형 latency 이상) · c0180-rust-single-inproc-reqrep |
+| `ipc` | `PAIR` | 68.2% | 89.5% | 112.4% | 72.4% | 62.1% | 68.2% | 보류 78.8%/lat1.21× · c0180-rust-single-ipc |
+| `ipc` | `PUBSUB` | 74.3% | 74.8% | 110.7% | 309.5% | 415.5% | 572.7% | 통과 259.6%/lat1.97× · c0180-rust-single-ipc |
+| `ipc` | `DEALER_DEALER` | 57.9% | 78.0% | 97.1% | 96.0% | 69.6% | 69.9% | 보류 78.1%/lat1.20× · c0180-rust-single-ipc |
+| `ipc` | `DEALER_ROUTER` | 59.0% | 73.5% | 95.0% | 97.7% | 72.1% | 76.5% | 보류 79.0%/lat1.19× · c0180-rust-single-ipc |
+| `ipc` | `ROUTER_ROUTER` | 66.7% | 83.4% | 97.6% | 99.9% | 74.9% | 70.7% | 보류 82.2%/lat1.02× · c0180-rust-single-ipc |
+| `ipc` | `DEALER_ROUTER_REQREP` | 10% | 12% | 44% | 53% | 59% | 69% | 보류 41.3%/lat8.3× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-single-ipc-reqrep |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 10% | 9% | 15% | 53% | 58% | 69% | 보류 35.8%/lat24.4× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-single-ipc-reqrep |
 
 #### 9.6.2 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 73.8% | 93.8% | 82.9% | 97.6% | 96.3% | 102.4% | 보류 91.1%/lat0.56× · c0180-rust-multi-tcp |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 101.0% | 102.8% | 119.6% | 83.7% | 21.1% | 66.8% | 보류 82.5%/lat8.41× · c0180-rust-multi-tcp |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 91.5% | 31.2% | 69.4% | 50.2% | 44.7% | 21.2% | 보류 51.4%/lat69.88× · c0180-rust-multi-tcp |
+| `tcp` | `MULTI_PUBSUB` | 90.1% | 89.4% | 90.9% | 95.7% | 115.7% | 100.8% | 통과 97.1%/lat1.06× · c0180-rust-multi-tcp |
+| `tcp` | `MULTI_STREAM` | 72.6% | 68.0% | 65.2% | 해당 없음 | 88.3% | 해당 없음 | 보류 73.5%/lat1.42× · c0180-rust-multi-tcp-stream |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 29% | 30% | 32% | 41% | 126% | 148% | 보류 67.7%/lat1.4× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-multi-tcp-reqrep |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 31% | 41% | 42% | 50% | 126% | 145% | 보류 72.7%/lat1.3× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-multi-tcp-reqrep |
+| `ws` | `MULTI_DEALER_DEALER` | 85.0% | 95.5% | 158.3% | 97.4% | 121.3% | 111.8% | 통과 111.5%/lat0.61× · c0180-rust-multi-ws |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 132.1% | 1.7% | 85.1% | 56.0% | 122.3% | 115.2% | 통과 85.4%/lat1.47× · c0180-rust-multi-ws |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 104.8% | 3.5% | 125.2% | 54.6% | 97.2% | 140.1% | 보류 87.6%/lat2.08× · c0180-rust-multi-ws |
+| `ws` | `MULTI_PUBSUB` | 108.6% | 97.2% | 97.8% | 90.9% | 94.5% | 107.8% | 통과 99.5%/lat1.00× · c0180-rust-multi-ws |
+| `ws` | `MULTI_STREAM` | 89.3% | 89.8% | 91.7% | 해당 없음 | 118.4% | 해당 없음 | 통과 97.3%/lat1.10× · c0180-rust-multi-ws-stream |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 45% | 45% | 53% | 122% | 195% | 140% | 보류 100.1%/lat3.3× · 대형 throughput 초과하나 latency>2× cap · c0180-rust-multi-ws-reqrep |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 31% | 42% | 48% | 87% | 204% | 164% | 보류 96.3%/lat2.6× · latency>2× cap · c0180-rust-multi-ws-reqrep |
+| `wss` | `MULTI_DEALER_DEALER` | 84.2% | 99.2% | 98.6% | 124.9% | 130.0% | 122.2% | 통과 109.8%/lat0.67× · c0180-rust-multi-wss |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 115.5% | 126.5% | 43.5% | 48.5% | 101.5% | 119.6% | 통과 92.5%/lat1.14× · c0180-rust-multi-wss |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 143.7% | 138.8% | 41.9% | 64.5% | 102.9% | 103.7% | 통과 99.2%/lat1.39× · c0180-rust-multi-wss |
+| `wss` | `MULTI_PUBSUB` | 123.4% | 96.7% | 112.9% | 101.8% | 138.9% | 138.9% | 통과 118.8%/lat0.92× · c0180-rust-multi-wss |
+| `wss` | `MULTI_STREAM` | 98.8% | 107.2% | 105.3% | 해당 없음 | 160.5% | 해당 없음 | 통과 118.0%/lat0.94× · c0180-rust-multi-wss-stream |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 48% | 46% | 64% | 104% | 120% | 122% | 보류 84.1%/lat1.3× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-multi-wss-reqrep |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 36% | 41% | 51% | 93% | 121% | 118% | 보류 76.4%/lat1.5× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-multi-wss-reqrep |
+| `tls` | `MULTI_DEALER_DEALER` | 82.4% | 130.7% | 104.0% | 91.8% | 133.5% | 124.2% | 통과 111.1%/lat0.76× · c0180-rust-multi-tls |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 125.1% | 112.8% | 41.1% | 107.8% | 83.8% | 124.8% | 통과 99.2%/lat1.00× · c0180-rust-multi-tls |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 116.0% | 113.2% | 133.4% | 123.1% | 100.2% | 95.0% | 통과 113.5%/lat1.85× · c0180-rust-multi-tls |
+| `tls` | `MULTI_PUBSUB` | 125.1% | 128.4% | 105.9% | 98.9% | 121.3% | 113.2% | 통과 115.5%/lat1.06× · c0180-rust-multi-tls |
+| `tls` | `MULTI_STREAM` | 91.9% | 104.8% | 99.3% | 해당 없음 | 126.2% | 해당 없음 | 통과 105.5%/lat0.98× · c0180-rust-multi-tls-stream |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 45% | 46% | 44% | 실패 | 86% | 111% | 보류 66.4%/lat0.7× · 4096B는 C도 실패(전 언어 공통) · c0180-rust-multi-tls-reqrep |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 30% | 31% | 32% | 72% | 115% | 119% | 보류 66.4%/lat0.9× · reqrep 소형 약점·대형 size latency floor(전 언어 동류) · c0180-rust-multi-tls-reqrep |
 
 ### 9.7 Python
 
