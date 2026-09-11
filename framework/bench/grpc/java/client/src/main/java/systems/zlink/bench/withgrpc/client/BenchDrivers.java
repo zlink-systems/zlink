@@ -2,6 +2,7 @@
 
 package systems.zlink.bench.withgrpc.client;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -20,6 +21,8 @@ import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import systems.zlink.bench.withgrpc.shared.BenchHttpApplication;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
+import systems.zlink.contracts.eventing.PollEvents;
+import systems.zlink.contracts.eventing.Poller;
 
 /** Pattern-to-logical-stream implementation shared by the Java and Kotlin sources. */
 public final class BenchDrivers {
@@ -162,8 +165,9 @@ public final class BenchDrivers {
     }
 
     /**
-     * Drives the raw socket until Core reports BACKPRESSURED. Request replies
-     * settle independently and never gate the next submission.
+     * Request turns submit once, then let the public poller drain completions,
+     * as in PerfMultiSocketReqRep at 31c5e4f7f0 (Issue #12's reference).
+     * Only admission backpressure gates submission; reply depth has no cap.
      */
     private void runRaw(
         BenchHttpApplication.Trigger trigger,
@@ -176,59 +180,87 @@ public final class BenchDrivers {
         long sequence = 0;
         long cpuStart = ClientResources.currentThreadCpuNs();
         Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
-        while (BenchMetricHeader.nowNs() < deadline) {
-            long started = source.begin();
-            RawStack.RawSubmission submission;
+        try (Poller completionPoller = "request-backpressure".equals(trigger.pattern())
+                ? operation.openCompletionPoller() : null) {
+            PollEvents events = completionPoller == null ? null : new PollEvents(1);
+            while (BenchMetricHeader.nowNs() < deadline) {
+                long started = source.begin();
+                RawStack.RawSubmission submission;
+                try {
+                    submission = operation.submitRaw(
+                        trigger.payloadBytes(), phase, sequence++);
+                } catch (RuntimeException error) {
+                    source.complete(started, error);
+                    continue;
+                }
+
+                CompletableFuture<Void> completion = submission.completion();
+                pending.add(completion);
+                completion.whenComplete((ignored, error) -> {
+                    source.complete(started, error);
+                    pending.remove(completion);
+                });
+
+                if (completionPoller != null) {
+                    completionPoller.wait(events, Duration.ofNanos(Math.min(
+                        50_000_000L, Math.max(1L, deadline - BenchMetricHeader.nowNs()))));
+                }
+
+                if (submission.result()
+                    == systems.zlink.contracts.sockets.SubmitResult.OK) {
+                    continue;
+                }
+                if (submission.result()
+                    != systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED) {
+                    throw new IllegalStateException(
+                        "raw submit returned " + submission.result());
+                }
+
+                long remainingNanos = deadline - BenchMetricHeader.nowNs();
+                if (remainingNanos <= 0L) {
+                    break;
+                }
+                try {
+                    awaitRawCompletion(submission.admitted(), completionPoller,
+                        events, deadline);
+                } catch (TimeoutException | ExecutionException stopped) {
+                    break;
+                }
+            }
+            if (resources != null) {
+                resources.addSubmitCpuNs(
+                    ClientResources.currentThreadCpuNs() - cpuStart);
+            }
+
+            CompletableFuture<Void> settled = CompletableFuture.allOf(
+                pending.toArray(CompletableFuture[]::new));
             try {
-                submission = operation.submitRaw(
-                    trigger.payloadBytes(), phase, sequence++);
-            } catch (RuntimeException error) {
-                source.complete(started, error);
-                continue;
+                awaitRawCompletion(settled, completionPoller, events,
+                    BenchMetricHeader.nowNs() + options.drainBoundMs * 1_000_000L);
+            } catch (TimeoutException | ExecutionException ignored) {
+                // Per-operation callbacks own success/error accounting. A timeout
+                // is recorded below as abandoned work.
             }
-
-            CompletableFuture<Void> completion = submission.completion();
-            pending.add(completion);
-            completion.whenComplete((ignored, error) -> {
-                source.complete(started, error);
-                pending.remove(completion);
-            });
-
-            if (submission.result()
-                == systems.zlink.contracts.sockets.SubmitResult.OK) {
-                continue;
-            }
-            if (submission.result()
-                != systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED) {
-                throw new IllegalStateException(
-                    "raw submit returned " + submission.result());
-            }
-
-            long remainingNanos = deadline - BenchMetricHeader.nowNs();
-            if (remainingNanos <= 0L) {
-                break;
-            }
-            try {
-                submission.admitted().get(remainingNanos,
-                    TimeUnit.NANOSECONDS);
-            } catch (TimeoutException | ExecutionException stopped) {
-                break;
-            }
+            source.recordAbandoned(source.inFlight());
         }
-        if (resources != null) {
-            resources.addSubmitCpuNs(
-                ClientResources.currentThreadCpuNs() - cpuStart);
-        }
+    }
 
-        CompletableFuture<Void> settled = CompletableFuture.allOf(
-            pending.toArray(CompletableFuture[]::new));
-        try {
-            settled.get(options.drainBoundMs, TimeUnit.MILLISECONDS);
-        } catch (TimeoutException | ExecutionException ignored) {
-            // Per-operation callbacks own success/error accounting. A timeout
-            // is recorded below as abandoned work.
+    private static void awaitRawCompletion(
+        CompletableFuture<Void> completion, Poller poller, PollEvents events,
+        long deadline) throws InterruptedException, ExecutionException, TimeoutException {
+        if (poller == null) {
+            completion.get(Math.max(1L, deadline - BenchMetricHeader.nowNs()),
+                TimeUnit.NANOSECONDS);
+            return;
         }
-        source.recordAbandoned(source.inFlight());
+        while (!completion.isDone()) {
+            long remaining = deadline - BenchMetricHeader.nowNs();
+            if (remaining <= 0L) {
+                throw new TimeoutException("raw completion drain deadline expired");
+            }
+            poller.wait(events, Duration.ofNanos(remaining));
+        }
+        completion.get();
     }
 
     private void runWorkers(
