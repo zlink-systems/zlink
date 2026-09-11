@@ -14,6 +14,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -25,6 +26,11 @@ namespace zlink_cpp_bench
 class server_metrics_t
 {
   public:
+    explicit server_metrics_t (std::optional<long long> rejected_total = 0) :
+        _rejected_total (rejected_total)
+    {
+    }
+
     void reset ()
     {
         std::lock_guard<std::mutex> lock (_gate);
@@ -66,7 +72,7 @@ class server_metrics_t
     void observe_rejected_total (long long total)
     {
         std::lock_guard<std::mutex> lock (_gate);
-        _rejected_total = std::max (_rejected_total, total);
+        _rejected_total = std::max (_rejected_total.value_or (0), total);
     }
 
     std::string snapshot_json ()
@@ -75,7 +81,7 @@ class server_metrics_t
         long long active = 0;
         long long any_phase = 0;
         long long errors = 0;
-        long long rejected = 0;
+        std::optional<long long> rejected;
         double cpu_start = 0.0;
         {
             std::lock_guard<std::mutex> lock (_gate);
@@ -83,11 +89,13 @@ class server_metrics_t
             active = _active_messages;
             any_phase = _any_phase_messages;
             errors = _errors;
-            rejected = _rejected_total - _rejected_baseline;
+            if (_rejected_total && _rejected_baseline)
+                rejected = *_rejected_total - *_rejected_baseline;
             cpu_start = _cpu_start;
         }
         std::sort (samples.begin (), samples.end ());
         const double cpu = std::max (0.0, process_cpu_seconds_self () - cpu_start);
+        const auto rejected_json = rejected ? std::to_string (*rejected) : "null";
         char buffer[768];
         std::snprintf (
           buffer, sizeof (buffer),
@@ -95,9 +103,9 @@ class server_metrics_t
           "\"submitted\":0,\"completed\":%lld,\"errors\":%lld,\"received\":%lld,"
           "\"inFlight\":0,\"currentInFlight\":0,\"peakInFlight\":0,"
           "\"activeMessages\":%lld,\"anyPhaseMessages\":%lld,"
-          "\"rejected\":%lld,\"meanMicros\":%.6f,\"p50Micros\":%.6f,\"p95Micros\":%.6f,"
+          "\"rejected\":%s,\"meanMicros\":%.6f,\"p50Micros\":%.6f,\"p95Micros\":%.6f,"
           "\"p99Micros\":%.6f,\"cpuSeconds\":%.6f,\"workingSetMb\":%.6f}",
-          active, errors, active, active, any_phase, rejected, mean (samples) / 1000.0,
+          active, errors, active, active, any_phase, rejected_json.c_str (), mean (samples) / 1000.0,
           percentile (samples, 0.50) / 1000.0, percentile (samples, 0.95) / 1000.0,
           percentile (samples, 0.99) / 1000.0, cpu, rss_mb ());
         return buffer;
@@ -128,8 +136,8 @@ class server_metrics_t
     long long _active_messages = 0;
     long long _any_phase_messages = 0;
     long long _errors = 0;
-    long long _rejected_total = 0;
-    long long _rejected_baseline = 0;
+    std::optional<long long> _rejected_total;
+    std::optional<long long> _rejected_baseline = 0;
     double _cpu_start = process_cpu_seconds_self ();
 };
 

@@ -196,7 +196,7 @@ a=json.loads(sys.argv[1]); b=json.loads(sys.argv[2])
 in_flight=a.get("currentInFlight", a.get("inFlight", 0))
 received=(b.get("anyPhaseMessages", 0) if sys.argv[3] == "any"
           else b.get("received", b.get("activeMessages", 0)))
-print(a.get("completed",0), in_flight, received, b.get("errors",0), b.get("rejected",0))
+print(a.get("completed",0), in_flight, received, b.get("errors",0), b.get("rejected"))
 ' "${source_body}" "${target_body}" "${target_counter}")"
     in_flight="$(awk '{print $2}' <<<"${counts}")"
     # Settle = counts unchanged for COMMAND_SETTLE_MS (spec 3). Abandoned operations keep the
@@ -241,7 +241,7 @@ if received is None:
 cell["target_stats"] = {
     "received": int(received),
     "errors": int(target.get("errors", 0)),
-    "rejected": int(target.get("rejected", 0)),
+    "rejected": int(target["rejected"]) if target.get("rejected") is not None else None,
     "drainMs": float(drain_ms),
 }
 cell["server_rejected_count"] = cell["target_stats"]["rejected"]
@@ -270,7 +270,11 @@ errors = int(cell.get("errors", 0))
 abandoned = int(cell.get("abandoned", 0))
 received = int(cell["target_stats"]["received"])
 target_errors = int(cell["target_stats"].get("errors", 0))
-rejected = int(cell.get("server_rejected_count", 0))
+rejected = cell.get("server_rejected_count")
+if cell["pattern"] == "send-saturation" and rejected is None:
+    raise SystemExit("target rejection count unavailable: completed == received + rejected cannot be verified")
+if rejected is not None:
+    rejected = int(rejected)
 if submitted != completed + errors + abandoned:
     raise SystemExit(
         f"source count mismatch: submitted={submitted} completed={completed} "
@@ -282,7 +286,7 @@ if cell["pattern"].startswith("request-") and not completed <= received <= compl
         f"request count mismatch: completed={completed} received={received} "
         f"errors={errors} abandoned={abandoned}")
 accounted = received + rejected if cell["pattern"] == "send-saturation" else received
-if rejected < 0 or accounted > submitted:
+if (rejected is not None and rejected < 0) or accounted > submitted:
     raise SystemExit(f"target count mismatch: submitted={submitted} received={received} rejected={rejected}")
 if errors == 0 and abandoned == 0 and completed != accounted:
     raise SystemExit(

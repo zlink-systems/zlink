@@ -53,27 +53,14 @@ int main (int argc, char **argv)
     const auto endpoint = arg_value (argc, argv, "--endpoint", "tcp://127.0.0.1:5294");
     const int port = std::stoi (arg_value (argc, argv, "--stats-port", "5295"));
     try {
-        server_metrics_t metrics;
+        // The public RouteMesh snapshot exposes topology, but no drop counters.
+        server_metrics_t metrics (std::nullopt);
         std::atomic<fw::route_mesh_runtime_t *> runtime{nullptr};
         stats_http_server_t server (metrics, port, [&] {
             if (auto *current = runtime.load ()) (void) current->snapshot ("bench");
         });
         server.app ().add_hosted_service (std::make_unique<capture_runtime_t> (runtime));
-        server.app ().logging ().disable_record_capture ().set_min_level (fw::log_level_t::debug)
-          .use_provider ("bench-rejections", [&metrics] (const fw::log_record_t &record) {
-              // Consume the standard cumulative metric through the public logger.
-              if (record.message != "zlink.runtime.metric.recorded") return;
-              const auto field = [&record] (std::string_view key) -> std::string_view {
-                  for (const auto &item : record.fields)
-                      if (item.key == key) return item.value;
-                  return {};
-              };
-              if (field ("name") == "zlink.mesh_node.messages.dropped"
-                  && field ("mesh_name") == "bench" && field ("surface") == "node"
-                  && field ("message_kind") == "send" && field ("reason") == "backpressure"
-                  && field ("temporality") == "current")
-                  metrics.observe_rejected_total (std::stoll (std::string (field ("value"))));
-          });
+        server.app ().logging ().disable_record_capture ();
         auto &options = server.app ().add_zlink_framework ();
         options.codecs ().use (zlink::framework_codecs::protobuf ());
         options.services ().add_singleton<echo_handler_t> (std::make_unique<echo_handler_t> (metrics));

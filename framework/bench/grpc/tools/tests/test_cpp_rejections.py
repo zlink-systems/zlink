@@ -13,7 +13,7 @@ import unittest
 
 TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS))
-from benchagg.readers import cells_from_cell_json  # noqa: E402
+from benchagg.readers import ReportError, cells_from_cell_json  # noqa: E402
 
 RUNNER = (TOOLS.parent / "cpp" / "run_local.sh").read_text()
 
@@ -68,8 +68,42 @@ class CppRejectionTest(unittest.TestCase):
         self.cell.update(pattern="request-serial", server_rejected_count=3)
         self.verify(False)
 
+    def test_unknown_count_is_preserved_and_rejected_even_when_received_matches(self):
+        for target_count in ({}, {"rejected": None}):
+            with self.subTest(target_count=target_count):
+                self.cell["target_stats"]["received"] = 8
+                self.write()
+                self.target.write_text(json.dumps({"snapshot": {
+                    "received": 8, "errors": 0, **target_count,
+                }}))
+                result = runner_python("merge_target_stats", self.result, self.target, 20, "false")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                document = json.loads(self.result.read_text())
+                cell = document["cells"][0]
+                self.assertIsNone(cell["server_rejected_count"])
+                self.assertIsNone(cell["target_stats"]["rejected"])
+                result = runner_python("verify_counts", self.result)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("target rejection count unavailable", result.stderr)
+                with self.assertRaisesRegex(ReportError, "target rejection count unavailable"):
+                    cells_from_cell_json(document, "test")
+
+    def test_missing_result_count_is_not_zero(self):
+        self.cell["target_stats"]["received"] = 8
+        result = self.verify(False)
+        self.assertIn("target rejection count unavailable", result.stderr)
+
+    def test_requests_validate_receipts_without_a_send_drop_count(self):
+        self.cell.update(pattern="request-serial", server_rejected_count=None)
+        self.cell["target_stats"].update(received=8, rejected=None)
+        self.verify(True)
+        cells_from_cell_json(json.loads(self.result.read_text()), "test")
+        self.cell["target_stats"]["received"] = 7
+        self.verify(False)
+
     def test_legacy_zero_drop_result_and_source_error_equation(self):
         self.cell["target_stats"]["received"] = 8
+        self.cell["server_rejected_count"] = 0
         self.verify(True)
         self.cell["submitted"] = 9
         self.verify(False)

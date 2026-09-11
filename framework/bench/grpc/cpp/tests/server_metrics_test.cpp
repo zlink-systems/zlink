@@ -27,4 +27,18 @@ int main ()
     metrics.reset ();
     metrics.observe_rejected_total (12);
     require (rejected () == 1);
+
+    zlink_cpp_bench::server_metrics_t unavailable (std::nullopt);
+    const auto snapshot = [&] {
+        return nlohmann::json::parse (unavailable.snapshot_json ()).at ("rejected");
+    };
+    require (snapshot ().is_null ());
+    unavailable.reset ();
+    require (snapshot ().is_null ());
+    unavailable.observe_rejected_total (7);
+    require (snapshot ().is_null ()); // An unknown warmup baseline is not zero.
+    unavailable.reset ();
+    require (snapshot () == 0);
+    unavailable.observe_rejected_total (11);
+    require (snapshot () == 4);
 }
