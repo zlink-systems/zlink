@@ -22,7 +22,10 @@ function Get-RepositoryRelativePath {
 }
 
 function Get-RepositoryFiles {
-    param([Parameter(Mandatory = $true)][string[]]$RelativePaths)
+    param(
+        [Parameter(Mandatory = $true)][string[]]$RelativePaths,
+        [string]$FileName = "*.ps1"
+    )
 
     $files = [Collections.Generic.List[IO.FileInfo]]::new()
     foreach ($relativePath in $RelativePaths) {
@@ -34,8 +37,14 @@ function Get-RepositoryFiles {
         if (-not (Test-Path -LiteralPath $path -PathType Container)) {
             throw "Windows entrypoint path was not found: $relativePath"
         }
-        foreach ($file in Get-ChildItem -LiteralPath $path -Recurse -File -Filter "*.ps1") {
-            $files.Add($file)
+        $gitPath = $relativePath.Replace("\", "/").TrimEnd("/")
+        $pathSpec = ":(glob)$gitPath/**/$FileName"
+        $tracked = @(& git -C $RepositoryRoot ls-files -- $pathSpec)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to enumerate tracked files below $relativePath"
+        }
+        foreach ($trackedPath in $tracked) {
+            $files.Add((Get-Item -LiteralPath (Join-Path $RepositoryRoot $trackedPath)))
         }
     }
     return @($files | Sort-Object FullName -Unique)
@@ -82,7 +91,7 @@ $sampleContracts = @(
 
 foreach ($contract in $sampleContracts) {
     $sampleRoot = Join-Path $RepositoryRoot $contract.Root
-    $shellRunners = @(Get-ChildItem -LiteralPath $sampleRoot -Recurse -File -Filter "run_sample.sh")
+    $shellRunners = @(Get-RepositoryFiles -RelativePaths @($contract.Root) -FileName "run_sample.sh")
     if ($shellRunners.Count -ne $contract.Expected) {
         throw "$($contract.Language) sample inventory contains $($shellRunners.Count) shell runners; expected $($contract.Expected)."
     }
@@ -94,7 +103,7 @@ foreach ($contract in $sampleContracts) {
         }
     }
 
-    $powerShellRunners = @(Get-ChildItem -LiteralPath $sampleRoot -Recurse -File -Filter "run_sample.ps1")
+    $powerShellRunners = @(Get-RepositoryFiles -RelativePaths @($contract.Root) -FileName "run_sample.ps1")
     if ($powerShellRunners.Count -ne $contract.Expected) {
         throw "$($contract.Language) sample inventory contains $($powerShellRunners.Count) Windows runners; expected $($contract.Expected)."
     }

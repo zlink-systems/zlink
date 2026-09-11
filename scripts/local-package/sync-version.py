@@ -589,7 +589,7 @@ def synchronize(
         "bindings/dotnet/src/Zlink/Zlink.csproj",
         rf"Core {SEMVER} package",
         f"Core {core_version} package",
-        8,
+        7,
     )
     sync.regex(
         "bindings/dotnet/src/Zlink/Runtime/Native/NativeLibraryLoader.cs",

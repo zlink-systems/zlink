@@ -44,7 +44,7 @@ Regression tests are split into the following three layers.
 | Item | Standard |
 |------|------|
 | Node.js runtime | `node20` (LTS), `node22` (current) |
-| Platform ABI[^abi] | `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `darwin-arm64` |
+| Platform ABI[^abi] | `win-x64`, `linux-x64`, `linux-arm64`, `darwin-arm64` |
 | test mode | development (source `*.ts`), production (bundled/`dist`) |
 
 Since the minimum supported runtime is `node20`, regression tests must also run both runtime
@@ -55,7 +55,7 @@ versions above together.
   reporting.
 
 Meanwhile, the repository's `@zlink-systems/zlink` (Node binding) prebuilt native artifact
-combination and the native artifact combination produced by the CI workflow are both based on the six
+combination and the native artifact combination produced by the CI workflow are both based on the
 platform ABIs above. The framework CI gate[^ci-gate] also treats this as the default scope by
 default.
 
@@ -63,7 +63,6 @@ In other words, the Node framework regression tests don't run just one represent
 done. Under the current plan, the platforms that must pass are:
 
 - Windows x64
-- Windows ARM64
 - Linux x64
 - Linux ARM64
 - macOS x64
@@ -300,7 +299,7 @@ separate from the backend gate.
 | `npm run verify:release` | `integration-multi-process` | runs ABI declaration, P0 regression, sample smoke, Node runtime matrix, and cross-language smoke in order |
 | `npm run verify:samples` | `integration-multi-process` | all 6 maintained TypeScript samples pass their self-check |
 | `npm run verify:runtime-matrix` | `integration-multi-process` | the current runner passes build, typecheck, and the full contract test suite on both Node 20 and Node 22 |
-| `npm run verify:abi-matrix` | `unit` | the `framework-node` CI workflow, release docs, and package script keep the same list of `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `darwin-arm64` and Node 20/22 gates |
+| `npm run verify:abi-matrix` | `unit` | the `framework-node` CI workflow, release docs, and package script keep the same list of `win-x64`, `linux-x64`, `linux-arm64`, `darwin-arm64` and Node 20/22 gates |
 | `npm run verify:cross-language` | `integration-multi-process` | Node and the dotnet TestHost pass six required channel/stream paths with the same protocol meaning |
 | guide chapter map | `unit` | the Node guide's 12 chapters map 1:1 to the dotnet guide's major chapters |
 | sample public API import guard | `unit` | samples import only the framework/connector public API and don't directly use the binding internal/native path |

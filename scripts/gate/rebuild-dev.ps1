@@ -4,9 +4,7 @@ param(
   [ValidateSet("cpp", "dotnet", "java", "node")]
   [string[]]$Language = @("cpp", "dotnet", "java", "node"),
   [ValidateSet("Release", "Debug")]
-  [string]$Configuration = "Release",
-  [ValidateSet("x64", "arm64")]
-  [string]$Architecture = "x64"
+  [string]$Configuration = "Release"
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,13 +14,11 @@ if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
   $RepositoryRoot = (Resolve-Path $RepositoryRoot).Path
 }
 . (Join-Path $PSScriptRoot "..\local-package\windows-platform.ps1")
-$target = Get-ZLinkWindowsPackageTarget -Architecture $Architecture
 $version = (Select-String -LiteralPath (Join-Path $RepositoryRoot "VERSION") -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
 if ([string]::IsNullOrWhiteSpace($version)) { throw "Unable to read Core version from $RepositoryRoot" }
-$artifactDirectory = if ($Architecture -eq "x64") { "windows" } else { "windows-arm64" }
-$artifacts = Join-Path $RepositoryRoot ".artifacts\$artifactDirectory"
+$artifacts = Join-Path $RepositoryRoot ".artifacts\windows"
 $corePrefix = Join-Path $artifacts "install\zlink-core\$version"
-$coreBuild = Join-Path $RepositoryRoot "core\build\windows-$Architecture"
+$coreBuild = Join-Path $RepositoryRoot "core\build\windows-x64"
 $opensslRoot = $env:OPENSSL_ROOT_DIR
 if ([string]::IsNullOrWhiteSpace($opensslRoot)) {
   $opensslRoot = @("C:\Program Files\OpenSSL", "C:\Program Files\OpenSSL-Win64") |
@@ -45,7 +41,7 @@ if ([string]::IsNullOrWhiteSpace($opensslRoot) -or -not (Test-Path -LiteralPath 
 }
 
 New-Item -ItemType Directory -Force -Path $artifacts | Out-Null
-& cmake -S (Join-Path $RepositoryRoot "core") -B $coreBuild -G "Visual Studio 17 2022" -A $target.CMakePlatform `
+& cmake -S (Join-Path $RepositoryRoot "core") -B $coreBuild -G "Visual Studio 17 2022" -A x64 `
   "-DCMAKE_INSTALL_PREFIX=$corePrefix" "-DBUILD_SHARED=ON" "-DBUILD_STATIC=ON" `
   "-DBUILD_TESTS=OFF" "-DZLINK_CXX_STANDARD=17" "-DOPENSSL_ROOT_DIR=$opensslRoot"
 if ($LASTEXITCODE -ne 0) { throw "Core configure failed" }
@@ -69,7 +65,7 @@ $files = @(Get-ChildItem -LiteralPath $corePrefix -Recurse -File |
 }) | Sort-Object path
 $provenanceJson = [ordered]@{
   schema = 1; package = "zlink-core"; version = $version; abiMajor = 0
-  platform = $target.CorePlatform
+  platform = "windows-x64"
   runtime = [ordered]@{ path = "bin/zlink.dll"; sha256 = (Get-FileHash $runtime -Algorithm SHA256).Hash.ToLowerInvariant(); soname = $null }
   source = [ordered]@{ revision = (& git -C $RepositoryRoot rev-parse HEAD).Trim(); dirty = [bool](& git -C $RepositoryRoot status --porcelain --untracked-files=no) }
   release = $null; files = $files
@@ -77,7 +73,7 @@ $provenanceJson = [ordered]@{
 [IO.File]::WriteAllText($provenancePath, $provenanceJson,
   (New-Object Text.UTF8Encoding($false)))
 
-& (Join-Path $PSScriptRoot "..\local-package\build-windows.ps1") -RepositoryRoot $RepositoryRoot -CorePrefix $corePrefix -Language $Language -Configuration $Configuration -Architecture $Architecture
+& (Join-Path $PSScriptRoot "..\local-package\build-windows.ps1") -RepositoryRoot $RepositoryRoot -CorePrefix $corePrefix -Language $Language -Configuration $Configuration
 if ($LASTEXITCODE -ne 0) { throw "Windows binding package build failed" }
 if ($Language -contains "dotnet") {
   $env:ZLINK_LOCAL_PACKAGE_ROOT = $artifacts

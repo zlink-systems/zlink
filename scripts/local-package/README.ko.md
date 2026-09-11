@@ -142,14 +142,11 @@ fetch script는 archive checksum과 provenance를 검증하고 `zlink.dll`의 PE
 ```powershell
 $x64Prefix = powershell -ExecutionPolicy Bypass -File scripts/local-package/core/fetch-release.ps1 `
   -Platform windows-x64
-$arm64Prefix = powershell -ExecutionPolicy Bypass -File scripts/local-package/core/fetch-release.ps1 `
-  -Platform windows-arm64
 
 # C++/.NET/Java/Node binding 전체 또는 언어별 package
 scripts/local-package/build-windows.ps1 -SyncVersions
 scripts/local-package/build-windows.ps1 -VerifyVersions
-scripts/local-package/build-windows.ps1 -CorePrefix $x64Prefix -Architecture x64
-scripts/local-package/build-windows.ps1 -CorePrefix $arm64Prefix -Architecture arm64
+scripts/local-package/build-windows.ps1 -CorePrefix $x64Prefix
 scripts/local-package/cpp/build-windows.ps1 -CorePrefix $x64Prefix
 scripts/local-package/dotnet/build-windows.ps1 -CorePrefix $x64Prefix
 scripts/local-package/java/build-windows.ps1 -CorePrefix $x64Prefix
@@ -159,43 +156,38 @@ scripts/local-package/node/build-windows.ps1 -CorePrefix $x64Prefix
 scripts/local-package/http-client/build-windows.ps1
 ```
 
-release cache prefix는
-`%LOCALAPPDATA%\zlink\core\<VERSION>\windows-<architecture>\`이다. provenance의
-`platform`과 runtime PE machine이 다르면 package 생성 전에 실패한다. `-Architecture`를
-생략하면 provenance에서 target을 선택하고, 지정하면 입력과 일치하는지 추가로 검증한다.
-WSL 출력과 Windows 출력을 서로 바꾸어 사용하지 않는다.
+release cache prefix는 `%LOCALAPPDATA%\zlink\core\<VERSION>\windows-x64\`이다.
+provenance의 `platform`이 `windows-x64`가 아니거나 runtime PE machine이 x64가 아니면
+package 생성 전에 실패한다. WSL 출력과 Windows 출력을 서로 바꾸어 사용하지 않는다.
 
 진행 중인 Core 변경을 binding에서 디버깅할 때만 local rebuild 진입점을 사용한다.
 
 ```powershell
-scripts/gate/rebuild-dev.ps1 -Architecture x64 -Language cpp,dotnet,java,node
-scripts/gate/rebuild-dev.ps1 -Architecture arm64 -Language cpp,dotnet,java,node
+scripts/gate/rebuild-dev.ps1 -Language cpp,dotnet,java,node
 ```
 
 이 script는 `.github/workflows/build.yml`의 Windows 조건과 같은 Visual Studio 2022
 generator, `BUILD_SHARED=ON`, `BUILD_STATIC=ON`, `BUILD_TESTS=OFF`, C++17을 사용한다.
-build directory는 `core/build/windows-<architecture>/`, 검증된 prefix는 architecture별
-artifact root의 `install/zlink-core/<VERSION>/`이다. x64 artifact root는 기존 호환 경로인
-`.artifacts/windows/`, ARM64는 `.artifacts/windows-arm64/`를 사용한다. ARM64 local
-rebuild에는 ARM64용 OpenSSL 개발 prefix가 필요하다.
+build directory는 `core/build/windows-x64/`, 검증된 prefix는
+`.artifacts/windows/install/zlink-core/<VERSION>/`이다.
 
 Java 22 FFM에서 JDK가 먼저 로드한 `msvcp140.dll`과 `/MD` Core의 C++ runtime이
 충돌하는 환경에서는 Java 검증용 `/MT` Core를 별도 build directory로 만든다. 이
 variant를 공통 CI runtime이나 다른 binding의 staged runtime과 섞지 않으며, Java
 계획 문서에서 별도 증적으로 기록한다.
 
-Windows package target과 결과는 Core platform에서 함께 결정한다.
+Windows package target과 결과는 x64 Core platform을 기준으로 함께 검증한다.
 
-- C++: generator platform `x64` 또는 `ARM64`, 결과는
-  `<artifact-root>/install/zlink-cpp/<CPP_BINDING_VERSION>/`
-- .NET: native RID `win-x64` 또는 `win-arm64`, 결과는
-  `<artifact-root>/nuget/Zlink.<DOTNET_BINDING_VERSION>.nupkg`
-- Java: resource `native/windows-x86_64/` 또는 `native/windows-aarch64/`, 결과는
-  `<artifact-root>/maven/systems/zlink/zlink/<JAVA_BINDING_VERSION>/`
-- Node.js: prebuild `win32-x64/` 또는 `win32-arm64/`, 결과는
-  `<artifact-root>/npm/zlink-systems-zlink-<NODE_BINDING_VERSION>.tgz`
+- C++: generator platform `x64`, 결과는
+  `.artifacts/windows/install/zlink-cpp/<CPP_BINDING_VERSION>/`
+- .NET: native RID `win-x64`, 결과는
+  `.artifacts/windows/nuget/Zlink.<DOTNET_BINDING_VERSION>.nupkg`
+- Java: resource `native/windows-x86_64/`, 결과는
+  `.artifacts/windows/maven/systems/zlink/zlink/<JAVA_BINDING_VERSION>/`
+- Node.js: prebuild `win32-x64/`, 결과는
+  `.artifacts/windows/npm/zlink-systems-zlink-<NODE_BINDING_VERSION>.tgz`
 
-각 package는 반대 architecture의 payload가 섞이면 실패한다. C++ local install에는
+각 package는 Windows ARM64 payload가 섞이면 실패한다. C++ local install에는
 Core platform과 library hash를 기록한 `share/zlink/zlink-cpp-package-provenance.json`도
 생성한다. Windows native package 생성 절차를 바꿀 때는 이 target mapping과 언어별
 version pinning을 함께 갱신한다.

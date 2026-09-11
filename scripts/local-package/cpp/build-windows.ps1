@@ -4,9 +4,7 @@ param(
     [string]$CorePrefix,
     [string]$RepositoryRoot = "",
     [ValidateSet("Release", "Debug")]
-    [string]$Configuration = "Release",
-    [ValidateSet("", "x64", "arm64")]
-    [string]$Architecture = ""
+    [string]$Configuration = "Release"
 )
 
 Set-StrictMode -Version Latest
@@ -16,5 +14,4 @@ $ErrorActionPreference = "Stop"
     -CorePrefix $CorePrefix `
     -RepositoryRoot $RepositoryRoot `
     -Language cpp `
-    -Configuration $Configuration `
-    -Architecture $Architecture
+    -Configuration $Configuration

@@ -5,8 +5,6 @@ param(
   [string[]]$Language = @("cpp", "dotnet", "java", "node"),
   [ValidateSet("Release", "Debug")]
   [string]$Configuration = "Release",
-  [ValidateSet("", "x64", "arm64")]
-  [string]$Architecture = "",
   [string]$PythonExecutable = "",
   [switch]$SyncVersions,
   [switch]$VerifyVersions
@@ -67,13 +65,11 @@ if (-not (Test-Path -LiteralPath (Join-Path $CorePrefix "include\zlink.h"))) {
 }
 $corePackage = Resolve-ZLinkWindowsCorePackage `
   -CorePrefix $CorePrefix `
-  -ExpectedVersion $coreVersion `
-  -RequestedArchitecture $Architecture
+  -ExpectedVersion $coreVersion
 $CorePrefix = $corePackage.Prefix
 $manifest = $corePackage.ManifestPath
 $target = $corePackage.Target
-$artifactDirectory = if ($target.Architecture -eq "x64") { "windows" } else { "windows-arm64" }
-$artifactRoot = Join-Path $RepositoryRoot ".artifacts\$artifactDirectory"
+$artifactRoot = Join-Path $RepositoryRoot ".artifacts\windows"
 
 New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 

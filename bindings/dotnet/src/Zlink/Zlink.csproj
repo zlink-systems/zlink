@@ -35,14 +35,6 @@
             <CopyToOutputDirectory>Never</CopyToOutputDirectory>
         </None>
     </ItemGroup>
-    <ItemGroup Condition="'$(ZLinkWindowsArm64NativeRoot)' != ''">
-        <None Include="$(ZLinkWindowsArm64NativeRoot)\zlink.dll">
-            <Pack>true</Pack>
-            <PackagePath>runtimes\win-arm64\native\zlink.dll</PackagePath>
-            <Link>runtimes\win-arm64\native\zlink.dll</Link>
-            <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-        </None>
-    </ItemGroup>
     <ItemGroup Condition="'$(ZLinkCoreProvenancePath)' != ''">
         <None Include="$(ZLinkCoreProvenancePath)">
             <Pack>true</Pack>
@@ -52,10 +44,8 @@
         </None>
     </ItemGroup>
     <Target Name="ValidateCorePackageInput" BeforeTargets="Pack">
-        <Error Condition="'$(ZLinkLinuxX64NativeRoot)' == '' And '$(ZLinkWindowsX64NativeRoot)' == '' And '$(ZLinkWindowsArm64NativeRoot)' == ''"
-               Text="ZLinkLinuxX64NativeRoot, ZLinkWindowsX64NativeRoot, or ZLinkWindowsArm64NativeRoot must identify the approved Core 0.18.0 package runtime directory." />
-        <Error Condition="('$(ZLinkLinuxX64NativeRoot)' != '' And '$(ZLinkWindowsX64NativeRoot)' != '') Or ('$(ZLinkLinuxX64NativeRoot)' != '' And '$(ZLinkWindowsArm64NativeRoot)' != '') Or ('$(ZLinkWindowsX64NativeRoot)' != '' And '$(ZLinkWindowsArm64NativeRoot)' != '')"
-               Text="Exactly one Core native runtime root may be specified when packing Zlink." />
+        <Error Condition="'$(ZLinkLinuxX64NativeRoot)' == '' And '$(ZLinkWindowsX64NativeRoot)' == ''"
+                Text="ZLinkLinuxX64NativeRoot or ZLinkWindowsX64NativeRoot must identify the approved Core 0.18.0 package runtime directory." />
         <Error Condition="'$(ZLinkCoreVersion)' == ''"
                Text="ZLinkCoreVersion must identify the approved Core 0.18.0 package version." />
         <Error Condition="'$(ZLinkCoreSource)' != 'local' And ('$(ZLinkCoreProvenancePath)' == '' Or !Exists('$(ZLinkCoreProvenancePath)'))"
@@ -67,8 +57,6 @@
         <Error Condition="'$(ZLinkLinuxX64NativeRoot)' != '' And !Exists('$(ZLinkLinuxX64NativeRoot)\libzlink.so.$(ZLinkCoreVersion)')"
                Text="The approved Core 0.18.0 package is missing its exact versioned runtime." />
         <Error Condition="'$(ZLinkWindowsX64NativeRoot)' != '' And !Exists('$(ZLinkWindowsX64NativeRoot)\zlink.dll')"
-               Text="The approved Core 0.18.0 package is missing win-x64 zlink.dll." />
-        <Error Condition="'$(ZLinkWindowsArm64NativeRoot)' != '' And !Exists('$(ZLinkWindowsArm64NativeRoot)\zlink.dll')"
-               Text="The approved Core 0.18.0 package is missing win-arm64 zlink.dll." />
+                Text="The approved Core 0.18.0 package is missing zlink.dll." />
     </Target>
 </Project>

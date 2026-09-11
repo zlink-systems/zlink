@@ -219,7 +219,6 @@ bindings/java/
 |   |       +-- linux-aarch64/
 |   |       +-- linux-x64/
 |   |       +-- linux-x86_64/
-|   |       +-- windows-aarch64/
 |   |       +-- windows-x86_64/
 |   +-- test/
 |       +-- java/systems/zlink/

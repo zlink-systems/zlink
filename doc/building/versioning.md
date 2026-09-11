@@ -60,7 +60,7 @@ the [build and release pipeline](./release-pipeline.md).
 The 1.0 criteria are:
 
 - A frozen public C API/ABI (`libzlink.vers`) and green release archives/CI for linux-x64, linux-arm64,
-  macos-arm64, windows-x64, and windows-arm64.
+  macos-arm64, and windows-x64.
 - Frozen public APIs for each language binding and a completed binding-performance campaign on machine B.
 - Framework packages aligned with the Core and binding 1.0 line. Release order is Core, the corresponding
   language binding, then the corresponding language framework.

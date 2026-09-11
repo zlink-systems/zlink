@@ -25,7 +25,7 @@ checksums, and materializes a standard Core install prefix. The final prefix
 is printed to stdout.
 
 Supported platforms: linux-x64, linux-arm64, macos-x64, macos-arm64,
-windows-x64, windows-arm64.
+windows-x64.
 EOF
 }
 
@@ -69,7 +69,6 @@ if [[ -z "$platform" ]]; then
     MINGW*|MSYS*|CYGWIN*)
       case "$(uname -m)" in
         x86_64|amd64) platform="windows-x64" ;;
-        aarch64|arm64) platform="windows-arm64" ;;
         *) echo "Unsupported Windows architecture: $(uname -m)" >&2; exit 2 ;;
       esac
       ;;
@@ -78,7 +77,7 @@ if [[ -z "$platform" ]]; then
 fi
 
 case "$platform" in
-  linux-x64|linux-arm64|macos-x64|macos-arm64|windows-x64|windows-arm64) ;;
+  linux-x64|linux-arm64|macos-x64|macos-arm64|windows-x64) ;;
   *) echo "Unsupported Core release platform: $platform" >&2; exit 2 ;;
 esac
 
@@ -336,7 +335,7 @@ if (platform.startsWith('windows-')) {
     throw new Error(`Windows Core runtime has an invalid PE header: ${runtime}`);
   }
   const actualMachine = image.readUInt16LE(peOffset + 4);
-  const expectedMachine = platform === 'windows-arm64' ? 0xaa64 : 0x8664;
+  const expectedMachine = 0x8664;
   if (actualMachine !== expectedMachine) {
     throw new Error(
       `Windows Core runtime machine 0x${actualMachine.toString(16)} does not match ${platform}`

@@ -8,7 +8,7 @@ Core is never built separately.
 | Item | Value |
 |---|---|
 | Published versions | framework 0.11, binding 0.17.6 |
-| Supported platforms | linux-x64, linux-arm64, macos-arm64, windows-x64, windows-arm64 (Intel Mac unsupported) |
+| 1.0 supported platforms | linux-x64, linux-arm64, macos-arm64, windows-x64 (Intel Mac unsupported) |
 | Registries | nuget.org, Maven Central, npm, vcpkg/Conan plus GitHub Release |
 
 ## Framework packages
@@ -18,8 +18,8 @@ and running the first handler is covered by each language's "Installation and fi
 
 Start from the published packages only. The framework package installs the matching binding
 (which carries the Core engine), so Core is never built separately. Current versions are framework
-0.11 and binding 0.17.6. Supported platforms: linux-x64, linux-arm64, macos-arm64, windows-x64,
-windows-arm64.
+0.11 and binding 0.17.6. The 1.0 release line supports linux-x64, linux-arm64, macos-arm64, and
+windows-x64.
 
 === "C#/.NET"
 

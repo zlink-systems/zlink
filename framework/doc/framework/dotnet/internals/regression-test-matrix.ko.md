@@ -29,7 +29,7 @@
 | 항목 | 기준 |
 |------|------|
 | target framework | `net8.0`, `net10.0` |
-| runtime RID[^rid] | `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64` |
+| runtime RID[^rid] | `win-x64`, `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64` |
 | test mode | debug, release |
 
 현재 저장소의 기본 빌드(`ZLinkFrameworkTargetFrameworks` 기본값)는 `net8.0` 단일 TFM
@@ -41,7 +41,7 @@ multi-target 빌드에서 추가로 다룬다.
   형태로 다룬다.
 
 한편 저장소의 `bindings/dotnet/runtimes/` 패키징 대상과
-`.github/workflows/build.yml` 이 만들어 내는 native artifact 조합은 위 여섯
+`.github/workflows/build.yml` 이 만들어 내는 native artifact 조합은 위 다섯
 runtime RID 를 기준으로 한다. framework CI gate[^ci-gate] 도 같은 범위를
 기본으로 본다.
 
@@ -49,7 +49,6 @@ runtime RID 를 기준으로 한다. framework CI gate[^ci-gate] 도 같은 범�
 현재 계획 기준으로 반드시 통과해야 하는 플랫폼은 다음과 같다.
 
 - Windows x64
-- Windows ARM64
 - Linux x64
 - Linux ARM64
 - macOS x64

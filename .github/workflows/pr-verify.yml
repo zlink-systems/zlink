@@ -117,14 +117,10 @@ jobs:
           git diff --check "$(git merge-base HEAD "origin/${BASE}")"
 
   windows-local-package-build:
-    name: Windows local-package (${{ matrix.architecture }})
+    name: Windows local-package (x64)
     needs: [changes, windows-local-package]
     if: needs.changes.outputs.windows_local_package == 'true'
     runs-on: windows-2022
-    strategy:
-      fail-fast: false
-      matrix:
-        architecture: [x64, arm64]
     steps:
       - uses: actions/checkout@v5
         with:
@@ -149,9 +145,8 @@ jobs:
         id: core
         shell: powershell
         run: |
-          $platform = "windows-${{ matrix.architecture }}"
           $prefix = .\scripts\local-package\core\fetch-release.ps1 `
-            -Platform $platform `
+            -Platform windows-x64 `
             -CacheDir "$env:RUNNER_TEMP\zlink-core"
           "prefix=$prefix" >> $env:GITHUB_OUTPUT
 
@@ -160,7 +155,6 @@ jobs:
         run: |
           .\scripts\local-package\build-windows.ps1 `
             -CorePrefix '${{ steps.core.outputs.prefix }}' `
-            -Architecture '${{ matrix.architecture }}' `
             -Language cpp,dotnet,java,node `
             -Configuration Release
 

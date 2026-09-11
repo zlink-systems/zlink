@@ -68,7 +68,6 @@ $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("zlink-windows-platform-" + [G
 New-Item -ItemType Directory -Path $tempRoot | Out-Null
 try {
   $x64Prefix = New-TestCorePrefix -Root $tempRoot -Platform "windows-x64" -Machine 0x8664
-  $arm64Prefix = New-TestCorePrefix -Root $tempRoot -Platform "windows-arm64" -Machine 0xAA64
 
   $x64 = Resolve-ZLinkWindowsCorePackage -CorePrefix $x64Prefix -ExpectedVersion "9.8.7"
   Assert-Equal "x64" $x64.Target.Architecture "x64 architecture"
@@ -77,29 +76,21 @@ try {
   Assert-Equal "win32-x64" $x64.Target.NodePrebuild "x64 Node prebuild"
   Assert-Equal "x86_64" $x64.Target.JavaResourceArchitecture "x64 Java resource"
 
-  $arm64 = Resolve-ZLinkWindowsCorePackage -CorePrefix $arm64Prefix -ExpectedVersion "9.8.7"
-  Assert-Equal "arm64" $arm64.Target.Architecture "ARM64 architecture"
-  Assert-Equal "ARM64" $arm64.Target.CMakePlatform "ARM64 CMake platform"
-  Assert-Equal "win-arm64" $arm64.Target.DotNetRid "ARM64 .NET RID"
-  Assert-Equal "win32-arm64" $arm64.Target.NodePrebuild "ARM64 Node prebuild"
-  Assert-Equal "aarch64" $arm64.Target.JavaResourceArchitecture "ARM64 Java resource"
-
+  $unsupportedRoot = Join-Path $tempRoot "unsupported"
+  New-Item -ItemType Directory -Path $unsupportedRoot | Out-Null
+  $arm64Prefix = New-TestCorePrefix -Root $unsupportedRoot -Platform "windows-arm64" -Machine 0xAA64
   Assert-Throws {
-    Resolve-ZLinkWindowsCorePackage -CorePrefix $arm64Prefix `
-      -ExpectedVersion "9.8.7" -RequestedArchitecture "x64"
-  } "does not match Core platform"
+    Resolve-ZLinkWindowsCorePackage -CorePrefix $arm64Prefix -ExpectedVersion "9.8.7"
+  } "not the supported Windows x64 platform"
 
-  $x64ManifestPath = Join-Path $x64Prefix "share\zlink\core-package-provenance.json"
-  $x64Manifest = Get-Content -LiteralPath $x64ManifestPath -Raw | ConvertFrom-Json
-  $x64Manifest.platform = "windows-arm64"
-  [IO.File]::WriteAllText($x64ManifestPath,
-    (($x64Manifest | ConvertTo-Json -Depth 4) + [Environment]::NewLine),
-    (New-Object Text.UTF8Encoding($false)))
+  $mismatchRoot = Join-Path $tempRoot "mismatch"
+  New-Item -ItemType Directory -Path $mismatchRoot | Out-Null
+  $mismatchPrefix = New-TestCorePrefix -Root $mismatchRoot -Platform "windows-x64" -Machine 0xAA64
   Assert-Throws {
-    Resolve-ZLinkWindowsCorePackage -CorePrefix $x64Prefix -ExpectedVersion "9.8.7"
-  } "runtime architecture x64 does not match provenance platform windows-arm64"
+    Resolve-ZLinkWindowsCorePackage -CorePrefix $mismatchPrefix -ExpectedVersion "9.8.7"
+  } "runtime architecture arm64 does not match provenance platform windows-x64"
 
-  Write-Host "Windows platform contract tests passed: x64, arm64, mismatch rejection"
+  Write-Host "Windows platform contract tests passed: x64, ARM64 rejection, PE mismatch rejection"
 } finally {
   $resolvedTemp = [IO.Path]::GetFullPath($tempRoot)
   $systemTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())

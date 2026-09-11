@@ -8,7 +8,7 @@
 |--------|:------------:|:----:|
 | Linux | x64, ARM64 | Stable |
 | macOS | x64, ARM64 | Stable |
-| Windows | x64, ARM64 | Stable |
+| Windows | x64 | Stable |
 
 ## 2. 컴파일러 요구사항
 

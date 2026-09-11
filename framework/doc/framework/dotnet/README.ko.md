@@ -64,17 +64,16 @@ Sample과 E2E의 설정 파일, 환경 변수 금지와 Options binding 기준�
 안의 `bindings/dotnet/runtimes/` 와 `.github/workflows/build.yml` 이 이미 함께
 관리하고 있는 native runtime 범위를 framework 쪽에서도 그대로 따른다.
 
-현재 기준으로 반드시 지원해야 하는 runtime RID[^rid] 는 다음 여섯 가지다.
+1.0 릴리스 계열이 지원하는 runtime RID[^rid]는 다음 다섯 가지다.
 
 - `win-x64`
-- `win-arm64`
 - `linux-x64`
 - `linux-arm64`
 - `osx-x64`
 - `osx-arm64`
 
 따라서 `.NET` framework 의 regression 테스트와 release gate[^release-gate] 도
-위 여섯 플랫폼을 모두 통과하는 것을 기본 조건으로 본다.
+위 다섯 플랫폼을 모두 통과하는 것을 기본 조건으로 본다.
 
 ## 1.2 공통 정책 적용
 

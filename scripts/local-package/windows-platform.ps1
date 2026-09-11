@@ -37,46 +37,12 @@ function Get-ZLinkPeArchitecture {
   }
 }
 
-function Get-ZLinkWindowsPackageTarget {
-  param(
-    [Parameter(Mandatory = $true)]
-    [ValidateSet("x64", "arm64")]
-    [string]$Architecture
-  )
-
-  if ($Architecture -eq "x64") {
-    return [pscustomobject]@{
-      Architecture = "x64"
-      CorePlatform = "windows-x64"
-      CMakePlatform = "x64"
-      DotNetRid = "win-x64"
-      DotNetNativeRootProperty = "ZLinkWindowsX64NativeRoot"
-      JavaResourceArchitecture = "x86_64"
-      NodeArchitecture = "x64"
-      NodePrebuild = "win32-x64"
-    }
-  }
-
-  return [pscustomobject]@{
-    Architecture = "arm64"
-    CorePlatform = "windows-arm64"
-    CMakePlatform = "ARM64"
-    DotNetRid = "win-arm64"
-    DotNetNativeRootProperty = "ZLinkWindowsArm64NativeRoot"
-    JavaResourceArchitecture = "aarch64"
-    NodeArchitecture = "arm64"
-    NodePrebuild = "win32-arm64"
-  }
-}
-
 function Resolve-ZLinkWindowsCorePackage {
   param(
     [Parameter(Mandatory = $true)]
     [string]$CorePrefix,
     [Parameter(Mandatory = $true)]
-    [string]$ExpectedVersion,
-    [ValidateSet("", "x64", "arm64")]
-    [string]$RequestedArchitecture = ""
+    [string]$ExpectedVersion
   )
 
   $resolvedPrefix = (Resolve-Path -LiteralPath $CorePrefix -ErrorAction Stop).Path
@@ -95,16 +61,9 @@ function Resolve-ZLinkWindowsCorePackage {
       $manifest.abiMajor -ne 0) {
     throw "Core prefix provenance does not match Core ${ExpectedVersion}: $manifestPath"
   }
-  if ($manifest.platform -notin @("windows-x64", "windows-arm64")) {
-    throw "Core prefix provenance is missing a supported Windows platform: $manifestPath"
+  if ($manifest.platform -ne "windows-x64") {
+    throw "Core prefix provenance is not the supported Windows x64 platform: $manifestPath"
   }
-
-  $architecture = if ($manifest.platform -eq "windows-arm64") { "arm64" } else { "x64" }
-  if (-not [string]::IsNullOrWhiteSpace($RequestedArchitecture) -and
-      $RequestedArchitecture -ne $architecture) {
-    throw "Requested Windows architecture $RequestedArchitecture does not match Core platform $($manifest.platform)"
-  }
-  $target = Get-ZLinkWindowsPackageTarget -Architecture $architecture
 
   $runtimeHash = (Get-FileHash -LiteralPath $runtimePath -Algorithm SHA256).Hash.ToLowerInvariant()
   if ($manifest.runtime.path -ne "bin/zlink.dll" -or
@@ -112,8 +71,19 @@ function Resolve-ZLinkWindowsCorePackage {
     throw "Core runtime does not match its provenance: $resolvedPrefix"
   }
   $runtimeArchitecture = Get-ZLinkPeArchitecture -Path $runtimePath
-  if ($runtimeArchitecture -ne $architecture) {
+  if ($runtimeArchitecture -ne "x64") {
     throw "Core runtime architecture $runtimeArchitecture does not match provenance platform $($manifest.platform)"
+  }
+
+  $target = [pscustomobject]@{
+    Architecture = "x64"
+    CorePlatform = "windows-x64"
+    CMakePlatform = "x64"
+    DotNetRid = "win-x64"
+    DotNetNativeRootProperty = "ZLinkWindowsX64NativeRoot"
+    JavaResourceArchitecture = "x86_64"
+    NodeArchitecture = "x64"
+    NodePrebuild = "win32-x64"
   }
 
   return [pscustomobject]@{
