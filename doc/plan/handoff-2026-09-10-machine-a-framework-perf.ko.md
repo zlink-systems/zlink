@@ -176,6 +176,56 @@ C 레퍼런스(`bindings/c/perf/run_comparison.py:1255`, `:3830-3845`)가 근거
 버전·릴리스 노트·Conan/vcpkg SHA 전부 PASS. `hotpath_gate`도 release-gate 빌드에서 PASS.
 남은 것은 태그·dispatch(외부 공개 행위)와 바인딩 4언어 릴리스(머신 B)다.
 
+### G5 종료 (2026-09-11)
+
+| 언어 | F1 | F2·F2-a | 결과 |
+|---|---|---|---|
+| Java #97 | PR #125 | **PR #169** | 닫음 |
+| .NET #98 | PR #155 | **PR #170** | 닫음 |
+| Node #99 | PR #135 | **제공하지 않기로 결정** | 닫음 |
+| C++ #100 | PR #134 | job 진행 중 | — |
+
+**Node 결정(F2-b, 사용자 2026-09-11).** Node는 단일 JS 스레드라 완료를 나르는 실행 문맥이
+호출 thread와 같다. request 대상이 같은 process의 handler면 **호출자가 기다리는 응답을 호출자가
+만들어야 해 교착한다.** 대상이 로컬인지 원격인지 제출 시점에 늘 알 수 없어 "로컬일 때만"이라는
+규칙도 세울 수 없다. **지킬 수 없는 약속을 표면에 두지 않는다.**
+스펙 `01-submit-and-completion.{ko,en}.md` **새 §4.1**이 이유를 소유한다.
+binding Node의 `submit_sync()`는 그대로다 — binding은 framework runtime의 완료 배달에 의존하지 않는다.
+
+**`submit_sync`는 interface의 `default` 메서드로 정했다.** job이 Java에서 abstract로 두어 같은
+보일러플레이트가 구현 7곳에 복사됐고 Kotlin 테스트 더블 3개가 컴파일되지 않아 전체 빌드가
+깨져 있었다. `default`로 올려 규칙을 한 곳에 뒀고 **스펙도 같은 이유로 고쳤다**(G1에서 쓴
+`abstract`는 구현이 없던 시점의 추정이었다). .NET은 이미 default interface method였다.
+
+F2-a 판정 술어는 **언어마다 하나**이며 기존 표지를 합쳐 쓴다 — application job context(handler turn)·
+Spot activation(Spot turn)·state lane. **검사는 제출보다 먼저** 한다. call의 단발 gate를 먼저
+claim 하면 거절된 호출이 뒤이은 정상 호출에 보인다.
+
+### 2026-09-11 오후 판정 (계속)
+
+| Issue | 판정 |
+|---|---|
+| **#45** | Java·C++ 병합(PR #167). Node는 main이 이미 최종 Buffer 직접 기록, .NET은 #48의 HeaderPlan이 같은 일을 한다. Java encode heap 1,560→96 B/op, C++ decode new 42→13회/op. **wire byte 동일** golden 테스트 추가 |
+| **#111** | 병합(PR #168). serial 1024 **471→730 ops/s (+55%)**, 평균 2.11→1.36 ms, ELU 0.744→0.234, 오류·abandoned 0. 1 ms 타이머가 실제로 사라졌다 |
+| **#82** | 닫음 — 재현 안 됨. 양방향 10/10에서 `kind=rejected|origin=application` 보존. 그 경로에 이미 교차언어 단언이 있다(`node_dotnet_smoke.js:531`) |
+| **#154** | **내 이슈 본문이 오진이었다.** `503/errno 93`은 의도적으로 `invalid://startup-failure`를 넘기는 **다른(통과하는)** 테스트의 로그였다. 실제 원인은 테스트 결함 2건이며 `d6ec19765e`가 최초 불일치 커밋으로 **#98보다 앞선다.** Actor 기대값은 스펙 §8.1대로 `Unavailable`이 맞다 — 승인 후 구현 중 |
+| **#60** | 9회(현재 6 + 실패 당시 커밋 3) 재현 안 됨. **관측을 먼저 붙였다** — `TestHostMessageFlowListener`가 `zlink.message_flow` 외를 버리고 있었고 버려지던 것이 원인 규명에 필요한 부분이었다 |
+| **#164/#165** | main이 4일간 red. Python perf 러너 테스트 2건이 정책 정합 이전 값을 단언. **이 테스트를 돌리는 CI가 없었다** |
+| **#166** | 새로 엶 — `ZLinkCompositeRelocationBarrierTest`가 CI 러너(2-core)에서만 실패. 로컬 20-core 12/12, `taskset -c 0,1` 10/10 통과. PR #118을 막는다 |
+| **#171** | 새로 엶 — .NET Unit suite 간헐 실패 2종(LogicalMulticast admission `Ok`/`Backpressured`, StatefulService handover 0/101). **`Ok` 대 `Backpressured`는 타이밍이 아니라 흐름 제어 상태 단언이다** |
+| **#143** | 순서 결정 — C++(#49)만 CLOSED라 지금 가능. .NET(#48)·Node(#50)은 그 뒤 |
+| **#15** | 선행 조건 미도래(`ZLINK_CTX_OPT_BLOCKY` 잔존, binding이 `MaxMessageSize` 노출). 1.0.0으로 옮기자고 제안 |
+| **#47** | **#151 Java 투입(2026-09-11).** #47 판정에서 드러난 것이 흐름 제어 이완이고 #151이 바로 그 구조를 바꾼다. #151 브리프에 **깊이 상한을 증명하는 회귀 테스트**를 완료 조건으로 넣었다 |
+
+### 부하가 판정을 오염시킨다 — 내가 당했다
+
+C++ `test_cpp_framework_m6b_runtime`이 #45 브랜치에서 1/5 실패했다. 회귀로 볼 뻔했는데
+**같은 조건에서 main은 8회 중 3회 실패했다**(더 나쁘다). 두 실행 모두 **load average 약 21**이었고
+게이트 기준은 10이다. 해당 테스트가 실시간 timer에 의존한다.
+
+**규칙: 내 검증 빌드도 job과 같은 부하 예산을 쓴다.** 5개 job이 도는 중에 무거운 빌드를
+동시에 돌리면 내가 만든 부하로 내가 판정을 그르친다.
+
 ### 환경 — 이 머신에 없던 것 두 가지 (2026-09-11에 찾아 고침)
 
 **1. JDK 25가 없어서 framework Java가 아예 빌드되지 않았다.**

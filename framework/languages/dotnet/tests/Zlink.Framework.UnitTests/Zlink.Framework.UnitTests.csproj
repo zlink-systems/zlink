@@ -38,6 +38,7 @@
 
     <ItemGroup>
         <Compile Include="AssemblyInfo.cs"/>
+        <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="Support/TestHostMessageFlowListener.cs"/>
         <Compile Include="Configuration/Registration/Channels.cs"/>
         <Compile Include="Configuration/Registration/HandlerExposure.cs"/>
         <Compile Include="Configuration/Registration/NodesAndServices.cs"/>
@@ -132,6 +133,7 @@
         <Compile Include="Runtime/LogicalMulticastSubmitTests.cs"/>
         <Compile Include="Runtime/SharedAsyncDisposalTests.cs"/>
         <Compile Include="Runtime/SubmitAdmissionRuntimeTests.cs"/>
+        <Compile Include="Runtime/BlockingSubmitTests.cs"/>
         <Compile Include="Runtime/OwnerLeaseTrackerTests.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.cs"/>
         <Compile Include="Runtime/ProviderRelocationRepositoryTests.cs"/>
