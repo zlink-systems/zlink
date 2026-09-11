@@ -22,7 +22,7 @@ fast path가 이미 있다. 이 작업은 재전송 protocol을 새로 만드는
 
 ## 0. 진행 상태와 재개 지침 (2026-09-03 11:20 갱신)
 
-새 머신·새 세션은 이 절과 [`c016-worklog/`](c016-worklog/README.ko.md)(판정 기록 `decisions.ko.md`,
+새 머신·새 세션은 이 절과 [`c016-worklog/`](../c016-worklog/README.ko.md)(판정 기록 `decisions.ko.md`,
 브리프, 드라이버, job 요약)만 읽으면 이어서 진행할 수 있다. 판정의 진실원천은 `decisions.ko.md`
 D-021~D-047이며, 이 절은 그 요약이다.
 
@@ -47,7 +47,7 @@ D-021~D-047이며, 이 절은 그 요약이다.
 - one-way latency는 포화 queue 깊이가 아니라 in-flight 1 구간으로 잰다(`f5a62c4b3f`, baseline worktree에도 같은 3파일 적용).
 - Phase 7 = smoke 전용(D-026), Phase 8 완료, Phase 11 ≈ 1시간 규모(D-028).
 - 구현은 codex sol, 고난도는 sol ultra; 감독관 직접 구현 금지; 리뷰·판정은 감독관 직접(D-038·D-047).
-- Core 소스를 고치는 모든 job은 스펙 [Core hot path](../../core/doc/spec/core/systems/10-hot-path.ko.md) §3·§5를
+- Core 소스를 고치는 모든 job은 스펙 [Core hot path](../../../core/doc/spec/core/systems/10-hot-path.ko.md) §3·§5를
   필수 인용하고 `hotpath_gate`(도구 job 예정) + release 비교 gate를 green으로 만든다(D-046).
 - 재발 방지 5조치(D-046): hotpath gate 필수, 메시지 경로 캐시화(posddd 리팩토링), 설계 문서 "메시지 경로 영향" 절 의무,
   Core 커밋 서브시스템 단위 분할, wake 불변식 결정적 테스트 suite.

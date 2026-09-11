@@ -37,7 +37,6 @@ DOC_TREES = {
     "core-doc": REPO_ROOT / "core" / "doc",
     "bindings-doc": REPO_ROOT / "bindings" / "doc",
     "framework": REPO_ROOT / "framework" / "doc" / "framework",
-    "framework-plan": REPO_ROOT / "framework" / "doc" / "plan",
 }
 
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^()\s]+)\)")
@@ -134,9 +133,18 @@ def resolves_after_generation(md: Path, link: str) -> bool:
 GENERATED_OUTPUT = re.compile(r"(^|/)(\.artifacts|perf/results)/")
 
 
+#  redline 미러는 문서가 아니라 문서의 사본이다. `doc/plan/<캠페인>/<x>-redline/`
+#  아래에 정본 트리의 경로를 그대로 재현해 스펙 파일을 복사해 두고 그 위에 교정을
+#  적는다. 사본 안의 상대 링크는 원본 위치 기준으로 쓰인 것이라 사본 자리에서는
+#  풀리지 않는다. 이것을 사본 기준으로 다시 쓰면 `../`가 열 단을 넘고, 무엇보다
+#  동결된 판정 기록의 본문이 바뀐다. 사본은 검사하지 않는다.
+MIRROR_COPY = re.compile(r"(^|/)[A-Za-z0-9._-]+-redline/")
+
+
 def check_tree(name: str, root: Path, errors: list[str]) -> tuple[int, int]:
     """문서 트리 하나를 검사하고 (문서 수, 링크 수)를 돌려준다."""
-    md_files = sorted(root.rglob("*.md"))
+    md_files = [p for p in sorted(root.rglob("*.md"))
+                if not MIRROR_COPY.search(str(p.relative_to(REPO_ROOT)))]
     if not md_files:
         errors.append(f"[{name}] 검사할 markdown이 없다: {root}")
         return 0, 0

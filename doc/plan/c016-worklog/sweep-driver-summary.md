@@ -11,18 +11,18 @@ not used.
 
 - Single `--pattern ALL` expands `STANDARD_PATTERNS` to `PAIR`, `PUBSUB`,
   `DEALER_DEALER`, `DEALER_ROUTER`, `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER`,
-  and `ROUTER_ROUTER_REQREP` ([run_benchmarks.sh](/home/hep7/project/zlink/bindings/c/perf/run_benchmarks.sh:184), expansion at [line 575](/home/hep7/project/zlink/bindings/c/perf/run_benchmarks.sh:575)).
+  and `ROUTER_ROUTER_REQREP` ([run_benchmarks.sh](../../../bindings/c/perf/run_benchmarks.sh), expansion at [line 575](../../../bindings/c/perf/run_benchmarks.sh)).
 - Multi `--pattern ALL` comes from its `PATTERNS` list: `DEALER_DEALER`,
   `DEALER_ROUTER_SENDSEND`, `ROUTER_ROUTER_SENDSEND`,
   `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_REQREP`, `PUBSUB`, `STREAM`
-  ([run_benchmarks_multi.sh](/home/hep7/project/zlink/bindings/c/perf/run_benchmarks_multi.sh:52)).
+  ([run_benchmarks_multi.sh](../../../bindings/c/perf/run_benchmarks_multi.sh)).
 - Both wrappers accept `--results-tag`; the single wrapper constructs a report
   under `results/single/report` and passes its explicit `--result-file` to the
-  Python runner ([run_benchmarks.sh](/home/hep7/project/zlink/bindings/c/perf/run_benchmarks.sh:719), [line 949](/home/hep7/project/zlink/bindings/c/perf/run_benchmarks.sh:949)). The shared runner prints `result_file` in effective options ([run_comparison.py](/home/hep7/project/zlink/bindings/c/perf/run_comparison.py:4118)) and saves the file ([line 4550](/home/hep7/project/zlink/bindings/c/perf/run_comparison.py:4550)).
+  Python runner ([run_benchmarks.sh](../../../bindings/c/perf/run_benchmarks.sh), [line 949](../../../bindings/c/perf/run_benchmarks.sh)). The shared runner prints `result_file` in effective options ([run_comparison.py](../../../bindings/c/perf/run_comparison.py)) and saves the file ([line 4550](../../../bindings/c/perf/run_comparison.py)).
 - Runners print `Perf runtime libzlink: <resolved path>` after resolving the
-  worktree local runtime ([run_benchmarks.sh](/home/hep7/project/zlink/bindings/c/perf/run_benchmarks.sh:440)); multi additionally verifies loaded benchmark runtime identity ([run_benchmarks_multi.sh](/home/hep7/project/zlink/bindings/c/perf/run_benchmarks_multi.sh:1522)).
+  worktree local runtime ([run_benchmarks.sh](../../../bindings/c/perf/run_benchmarks.sh)); multi additionally verifies loaded benchmark runtime identity ([run_benchmarks_multi.sh](../../../bindings/c/perf/run_benchmarks_multi.sh)).
 - The gate takes `--baseline-single/--candidate-single` or
-  `--baseline-multi/--candidate-multi` ([perf_regression_gate.py](/home/hep7/project/zlink/bindings/c/perf/perf_regression_gate.py:215)); it uses 0.95 for throughput/bandwidth and 1.05 for latency metrics ([line 139](/home/hep7/project/zlink/bindings/c/perf/perf_regression_gate.py:139)). Its unit tests cover the five-percent boundary and report-pair arguments ([test_perf_regression_gate.py](/home/hep7/project/zlink/bindings/c/perf/tests/test_perf_regression_gate.py:47)).
+  `--baseline-multi/--candidate-multi` ([perf_regression_gate.py](../../../bindings/c/perf/perf_regression_gate.py)); it uses 0.95 for throughput/bandwidth and 1.05 for latency metrics ([line 139](../../../bindings/c/perf/perf_regression_gate.py)). Its unit tests cover the five-percent boundary and report-pair arguments ([test_perf_regression_gate.py](../../../bindings/c/perf/tests/test_perf_regression_gate.py)).
 
 ## Design
 
@@ -39,4 +39,4 @@ not used.
 ## Unconfirmed / operational note
 
 The current multi wrapper unconditionally calls `build_core_runtime` before
-executing its workload ([run_benchmarks_multi.sh](/home/hep7/project/zlink/bindings/c/perf/run_benchmarks_multi.sh:1449)), even with `--reuse-build`. Therefore the driver itself is only authored and syntax-checked here; it has not been run. Before any real sweep, coordinate with the job owning `core/build` (or revise the runner interface) so this wrapper-side build behavior is acceptable.
+executing its workload ([run_benchmarks_multi.sh](../../../bindings/c/perf/run_benchmarks_multi.sh)), even with `--reuse-build`. Therefore the driver itself is only authored and syntax-checked here; it has not been run. Before any real sweep, coordinate with the job owning `core/build` (or revise the runner interface) so this wrapper-side build behavior is acceptable.

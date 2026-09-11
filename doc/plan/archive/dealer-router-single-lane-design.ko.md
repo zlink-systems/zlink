@@ -1,6 +1,6 @@
 # DEALER-ROUTER single lane 설계
 
-[문서 목차](../README.ko.md)
+[문서 목차](../../README.ko.md)
 
 > 이 문서는 Core 0.16.0에서 DEALER-ROUTER의 physical transport를 두 connection에서
 > 한 connection으로 줄일 개발자를 위한 설계다. §1은 현재 구현, §2는 목표 모델과 결정,
