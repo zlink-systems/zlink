@@ -127,7 +127,7 @@ class stream_write_call_state_t
     {
         if (!_submission.try_claim ()) {
             return result_t<void>::failure (
-              framework_error_kind_t::protocol_error,
+              framework_error_kind_t::invalid_operation,
               "STREAM write call has already been submitted");
         }
         if (_reply_submission && !_reply_submission->try_claim ()) {
@@ -494,6 +494,12 @@ task_t<void> stream_write_call_t::submit_now ()
     return _state->submit_now ();
 }
 
+void stream_write_call_t::submit ()
+{
+    detail::ensure_blocking_submit_allowed ();
+    async ().result ().value ();
+}
+
 stream_send_call_t::stream_send_call_t (result_t<void> result) :
     _state (std::make_shared<detail::stream_write_call_state_t> (std::move (result)))
 {
@@ -552,6 +558,12 @@ task_t<void> stream_send_call_t::async ()
           detail::result_access_t::failure<void> (*claimed.error ()));
     }
     return state->submit_now ();
+}
+
+void stream_send_call_t::submit ()
+{
+    detail::ensure_blocking_submit_allowed ();
+    async ().result ().value ();
 }
 
 stream_error_t::stream_error_t (stream_session_error_t error, std::string message) :

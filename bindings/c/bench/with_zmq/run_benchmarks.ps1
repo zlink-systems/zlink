@@ -5,14 +5,13 @@ param(
     [string]$ResultsDir = "",
     [string]$ResultsTag = "",
     [int]$Runs = 1,
-    [Alias("duration")]
     [string]$Duration = "",
     [string]$Hwm = "",
     [string]$SendHwm = "",
     [string]$RecvHwm = "",
-    [Alias("sndtimeo", "sndtimeoMs")]
+    [Alias("sndtimeoMs")]
     [string]$Sndtimeo = "",
-    [Alias("rcvtimeo", "rcvtimeoMs")]
+    [Alias("rcvtimeoMs")]
     [string]$Rcvtimeo = "",
     [string]$IoThreads = "",
     [string]$MsgSizes = "",
@@ -20,6 +19,7 @@ param(
     [switch]$PinCpu,
     [switch]$ReuseBuild,
     [switch]$CleanBuild,
+    [Alias("?")]
     [switch]$Help
 )
 
@@ -210,7 +210,7 @@ $allowedPatterns = @(
     "PUBSUB",
     "DEALER_DEALER",
     "DEALER_ROUTER",
-    "ROUTER_ROUTER",
+    "ROUTER_ROUTER"
 )
 
 $singleBuildTargets = @(
@@ -223,7 +223,7 @@ $singleBuildTargets = @(
     "comp_std_zmq_dealer_router",
     "comp_zlink_dealer_router",
     "comp_std_zmq_router_router",
-    "comp_zlink_router_router",
+    "comp_zlink_router_router"
 )
 
 $patternList = @()

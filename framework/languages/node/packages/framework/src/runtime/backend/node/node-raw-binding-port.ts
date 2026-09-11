@@ -7,6 +7,7 @@ import {
   createDealerSocket,
   createRouterSocket,
   ReceiveFlowState,
+  SubmitResult,
   type Context,
   type DealerSocket,
   type MonitorEvent,
@@ -241,10 +242,13 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
 
   async send(targetRid: string, parts: readonly Uint8Array[]): Promise<void> {
     this.requireOpen();
-    await appendSendParts(
+    const submission = appendSendParts(
       this.socket.send(bindingRoutingId(targetRid)),
       parts
-    ).submit().admitted;
+    ).submit();
+    if (submission.result === SubmitResult.Backpressured) {
+      await submission.admitted;
+    }
   }
 
   async request(
@@ -297,7 +301,10 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
 
   async send(parts: readonly Uint8Array[]): Promise<void> {
     this.requireOpen();
-    await appendSendParts(this.socket.send(), parts).submit().admitted;
+    const submission = appendSendParts(this.socket.send(), parts).submit();
+    if (submission.result === SubmitResult.Backpressured) {
+      await submission.admitted;
+    }
   }
 
   async request(parts: readonly Uint8Array[], timeoutMs: number): Promise<readonly Buffer[]> {

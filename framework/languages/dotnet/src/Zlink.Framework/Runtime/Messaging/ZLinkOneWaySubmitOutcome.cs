@@ -24,6 +24,13 @@ internal readonly record struct ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus 
 
 internal static class ZLinkOneWaySubmitOutcome
 {
+    // Async throws immediate failures. Ok already owns a local queue slot;
+    // only Backpressured needs the binding's retained-payload admission task.
+    public static Task EnsureAcceptedAsync(this SendSubmission submission) =>
+        submission.Result == SubmitResult.Backpressured
+            ? submission.Admitted
+            : Task.CompletedTask;
+
     public static async ValueTask EnsureAcceptedAsync(
         this ValueTask<ZLinkOneWaySubmitResult> pending,
         string operationName,
