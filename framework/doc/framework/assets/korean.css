@@ -230,3 +230,20 @@
 
 /* 인용(샘플에서 보기 / 계약 소유 문서)은 본문과 확실히 구분한다. */
 .md-typeset blockquote { border-left-width: 3px; }
+
+/* Admonition 본문 크기. Material 기본은 본문 `.8rem`에 admonition `.64rem`이라 20%
+   작다. 짧은 곁가지 메모라면 그 차이가 위계로 읽히지만, 이 문서군의 note는 본문
+   서술이 그대로 들어가는 긴 단락이다. 그러면 같은 글이 상자 안팎에서 크기가 달라져
+   읽는 리듬이 끊긴다. 본문과 같은 크기로 맞추고, 구분은 배경색과 테두리가 맡는다.
+
+   본문을 0.7rem으로 낮춘 것은 한글 때문인데(위 §본문 참조) admonition은 따라오지
+   않아 12.8px로 남아 있었다. 한글 하한 14px 아래다. */
+.md-typeset .admonition,
+.md-typeset details {
+  font-size: 0.7rem;
+  line-height: 1.75;
+}
+.md-typeset .admonition-title,
+.md-typeset summary {
+  font-size: 0.7rem;
+}
