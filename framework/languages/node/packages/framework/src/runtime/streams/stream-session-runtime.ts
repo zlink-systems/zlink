@@ -92,29 +92,21 @@ const systemLivenessClock: ZLinkStreamLivenessClock = {
   clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>)
 };
 
-class ZLinkStreamIdleWaiter {
+class ZLinkStreamReceiveWake {
   private pending?: Promise<void>;
   private resolvePending?: () => void;
-  private timer?: ReturnType<typeof setTimeout>;
   private readonly finish = (): void => {
-    if (this.timer !== undefined) {
-      clearTimeout(this.timer);
-      this.timer = undefined;
-    }
     const resolve = this.resolvePending;
     this.pending = undefined;
     this.resolvePending = undefined;
     resolve?.();
   };
 
-  constructor(private readonly delayMs: number) {}
-
   wait(): Promise<void> {
     if (this.pending !== undefined) return this.pending;
     this.pending = new Promise<void>((resolve) => {
       this.resolvePending = resolve;
     });
-    this.timer = setTimeout(this.finish, this.delayMs);
     return this.pending;
   }
 
@@ -892,7 +884,7 @@ export class ZLinkStreamSessionNodeRuntime {
   private stopped = false;
   private readonly receiveAbortController = new AbortController();
   private receiveLoop: Promise<void> | undefined;
-  private readonly receiveIdleWaiter = new ZLinkStreamIdleWaiter(5);
+  private readonly receiveWake = new ZLinkStreamReceiveWake();
   private receiveWorkSinceYield = 0;
   constructor(
     private readonly options: ZLinkStreamSessionNodeRuntimeOptions & ZLinkStreamLivenessOptions
@@ -967,14 +959,15 @@ export class ZLinkStreamSessionNodeRuntime {
         }
         if (!this.options.readablePoller.wait(0)) {
           permit.releaseAfterInternalProcessing();
-          await this.waitReceiveLoopIdle();
+          await this.waitReceiveLoopWake(signal);
           continue;
         }
         packet = this.takePacket();
         if (!this.options.socket.recvPacket(packet, ZLINK_RECV_DONT_WAIT)) {
+          this.options.readablePoller.markDrained();
           permit.releaseAfterInternalProcessing();
           this.recyclePacket(packet);
-          await this.waitReceiveLoopIdle();
+          await this.waitReceiveLoopWake(signal);
           continue;
         }
         packetTransferred = true;
@@ -987,10 +980,10 @@ export class ZLinkStreamSessionNodeRuntime {
         if (!this.isReceiveStopped(signal) && !packetTransferred) {
           this.options.onError?.(error);
           this.receiveWorkSinceYield = 0;
-          await this.waitReceiveLoopIdle();
+          await new Promise<void>((resolve) => setImmediate(resolve));
         } else if (!this.isReceiveStopped(signal)) {
           this.receiveWorkSinceYield = 0;
-          await this.waitReceiveLoopIdle();
+          await new Promise<void>((resolve) => setImmediate(resolve));
         }
         continue;
       }
@@ -1350,12 +1343,15 @@ export class ZLinkStreamSessionNodeRuntime {
     });
   }
 
-  private waitReceiveLoopIdle(): Promise<void> {
-    return this.receiveIdleWaiter.wait();
+  private async waitReceiveLoopWake(signal: AbortSignal): Promise<void> {
+    await Promise.race([
+      this.options.readablePoller.waitForReadable(signal),
+      this.receiveWake.wait()
+    ]);
   }
 
   private wakeReceiveLoop(): void {
-    this.receiveIdleWaiter.wake();
+    this.receiveWake.wake();
   }
 
   private getOrCreateSession(routingId: unknown): ZLinkStreamSessionRuntime | undefined {

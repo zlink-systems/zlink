@@ -3630,7 +3630,17 @@ test('route receive loop keeps receiving while an earlier SPOT forward awaits ad
   const loop = new framework.ZLinkRouteReceiveLoop(
     router,
     dispatcher,
-    { wait() { return records.length > 0; }, dispose() {} },
+    {
+      wait() { return records.length > 0; },
+      waitForReadable(signal) {
+        return new Promise((resolve) => {
+          if (signal?.aborted === true) resolve(false);
+          else signal?.addEventListener('abort', () => resolve(false), { once: true });
+        });
+      },
+      markDrained() {},
+      dispose() {}
+    },
     new ApplicationJobQueue(resolveApplicationJobQueueConfiguration()),
     undefined,
     (error) => reported.push(error)
@@ -5361,6 +5371,10 @@ function fakeChannelAdapter({ dealer, router }) {
 function readyPoller() {
   return {
     wait() { return true; },
+    waitForReadable() {
+      return new Promise((resolve) => setImmediate(() => resolve(true)));
+    },
+    markDrained() {},
     dispose() {}
   };
 }
