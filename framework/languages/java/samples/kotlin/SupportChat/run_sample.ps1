@@ -27,19 +27,7 @@ function Cleanup {
         }
     }
     for ($i = $Processes.Count - 1; $i -ge 0; $i--) {
-        $process = $Processes[$i]
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
-        }
-    }
-    foreach ($process in $Processes) {
-        try {
-            $process.WaitForExit(2000) | Out-Null
-        } catch {
-        }
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        }
+        Stop-ZlinkSampleProcessTree -Process $Processes[$i] -Force
     }
     if ($RedisContainer) {
         Remove-ZlinkSampleRedis $RedisContainer
@@ -104,8 +92,14 @@ function Start-Role {
     param([string]$Name, [string]$Binary, [string]$ConfigPath)
     $logPath = Join-Path $LogDir "$Name.log"
     $errPath = Join-Path $LogDir "$Name.err.log"
-    $process = Start-Process -FilePath $Binary -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $logPath -RedirectStandardError $errPath -PassThru
+    $process = Start-ZlinkSampleProcess -FilePath $Binary -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $logPath -RedirectStandardError $errPath -PassThru
     $Processes.Add($process)
+    Register-ZlinkSampleProcessTree -Process $process
+}
+
+function Get-AppBin {
+    param([string]$Project, [string]$Name)
+    return Join-Path $SampleDir "$Project/build/install/$Name/bin/$Name.bat"
 }
 
 try {
@@ -160,9 +154,9 @@ try {
         ":Server:Support:installDist",
         ":Client:installDist") *> $BuildLog
 
-    Start-Role "support" (Join-Path $SampleDir "Server/Support/build/install/Support/bin/Support") $SupportConfig
-    Start-Role "api" (Join-Path $SampleDir "Server/Api/build/install/Api/bin/Api") $ApiConfig
-    Start-Role "session" (Join-Path $SampleDir "Server/Session/build/install/Session/bin/Session") $SessionConfig
+    Start-Role "support" (Get-AppBin "Server/Support" "Support") $SupportConfig
+    Start-Role "api" (Get-AppBin "Server/Api" "Api") $ApiConfig
+    Start-Role "session" (Get-AppBin "Server/Session" "Session") $SessionConfig
 
     Wait-LogCount @((Join-Path $LogDir "api.log")) "supportchat-ready kind=public node=api" 1
     Wait-LogCount @((Join-Path $LogDir "support.log")) "supportchat-ready kind=public node=support" 1
@@ -171,9 +165,13 @@ try {
     Wait-LogCount @((Join-Path $LogDir "session.log")) "supportchat-ready kind=spot-route node=session mesh=supportchat.support.spots" 1
 
     $clientLog = Join-Path $LogDir "client.log"
-    & (Join-Path $SampleDir "Client/build/install/Client/bin/Client") `
-        --stream-endpoint $StreamEndpoint *> $clientLog
-    if ($LASTEXITCODE -ne 0) {
+    $clientProcess = Start-ZlinkSampleProcess -FilePath (Get-AppBin "Client" "Client") `
+        -ArgumentList @("--stream-endpoint", $StreamEndpoint) -WorkingDirectory $SampleDir `
+        -StandardOutputPath $clientLog -StandardErrorPath (Join-Path $LogDir "client.err.log")
+    $Processes.Add($clientProcess)
+    Register-ZlinkSampleProcessTree -Process $clientProcess
+    $clientProcess.WaitForExit()
+    if ($clientProcess.ExitCode -ne 0) {
         throw "SupportChat client failed."
     }
     Wait-LogCount @($clientLog) "supportchat=completed" 1

@@ -517,7 +517,9 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 peerRid,
                 peerEndpoint,
                 peer.status().lifecycleGeneration(),
-                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                "peer-owner",
+                1);
             long intent = local.connectPeer(peerEndpoint, peerRid);
             awaitState(local, MeshPeerState.ADMITTED);
             assertTrue(local.classifyChannelTarget("game.api").isEmpty());
@@ -622,7 +624,9 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 peerRid,
                 peerEndpoint,
                 peer.status().lifecycleGeneration(),
-                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                "peer-owner",
+                1);
             peer.connectPeer(localEndpoint, localRid);
 
             awaitState(local, MeshPeerState.ADMITTED);
@@ -1518,6 +1522,15 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                             1))));
             source.start();
             target.start();
+            target.refreshLocalAuthorityFence().toCompletableFuture()
+                .get(1, TimeUnit.SECONDS);
+            target.observePeerAdmissionExpectation(
+                sourceRid,
+                source.status().localEndpoint(),
+                source.lifecycleGeneration(),
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                "test-owner",
+                1);
             source.connectPeer(endpoint, targetRid);
             awaitAdmitted(source);
 

@@ -18,33 +18,8 @@ $Processes = New-Object System.Collections.Generic.List[System.Diagnostics.Proce
 $RedisContainer = $null
 $CleanedUp = $false
 
-function Get-ChildProcessIds {
-    param([int]$ParentId)
-    if ($IsWindows) {
-        Get-CimInstance Win32_Process -Filter "ParentProcessId=$ParentId" | ForEach-Object {
-            [int]$_.ProcessId
-            Get-ChildProcessIds -ParentId ([int]$_.ProcessId)
-        }
-    } else {
-        & pgrep -P $ParentId 2>$null | ForEach-Object {
-            if ($_ -match '^\d+$') {
-                [int]$_
-                Get-ChildProcessIds -ParentId ([int]$_)
-            }
-        }
-    }
-}
-
-function Stop-TrackedProcessTree {
-    param([System.Diagnostics.Process]$Process)
-    $children = @(Get-ChildProcessIds -ParentId $Process.Id)
-    [array]::Reverse($children)
-    foreach ($childId in $children) { Stop-Process -Id $childId -Force -ErrorAction SilentlyContinue }
-    if (-not $Process.HasExited) { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue }
-}
-
 function Cleanup {
-    for ($i = $Processes.Count - 1; $i -ge 0; $i--) { Stop-TrackedProcessTree -Process $Processes[$i] }
+    for ($i = $Processes.Count - 1; $i -ge 0; $i--) { Stop-ZlinkSampleProcessTree -Process $Processes[$i] -Force }
     if ($RedisContainer) { Remove-ZlinkSampleRedis $RedisContainer }
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $ConfigDir
 }
@@ -75,10 +50,11 @@ function Get-AppBin {
 
 function Start-AppRole {
     param([string]$Project, [string]$Name, [string]$Config, [string]$LogName)
-    $process = Start-Process -FilePath (Get-AppBin $Project $Name) -ArgumentList @("--config", $Config) `
+    $process = Start-ZlinkSampleProcess -FilePath (Get-AppBin $Project $Name) -ArgumentList @("--config", $Config) `
         -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput (Join-Path $LogDir $LogName) `
         -RedirectStandardError (Join-Path $LogDir ($LogName + ".err.log")) -PassThru
     $Processes.Add($process)
+    Register-ZlinkSampleProcessTree -Process $process
 }
 
 function Get-LogCount {
@@ -190,8 +166,13 @@ try {
     Wait-LogCount "dispatch courier node 2 readiness" @($dispatchLog) "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-2" 1
 
     $clientLog = Join-Path $LogDir "client.log"
-    & (Get-AppBin "Client" "Client") --config $clientConfig *> $clientLog
-    if ($LASTEXITCODE -ne 0) { throw "Client run failed." }
+    $clientProcess = Start-ZlinkSampleProcess -FilePath (Get-AppBin "Client" "Client") `
+        -ArgumentList @("--config", $clientConfig) -WorkingDirectory $SampleDir `
+        -StandardOutputPath $clientLog -StandardErrorPath (Join-Path $LogDir "client.err.log")
+    $Processes.Add($clientProcess)
+    Register-ZlinkSampleProcessTree -Process $clientProcess
+    $clientProcess.WaitForExit()
+    if ($clientProcess.ExitCode -ne 0) { throw "Client run failed." }
     Wait-LogCount "client reassignment marker" @($clientLog) "deliverydispatch-reassignment=completed" 1
     Wait-LogCount "client server evidence marker" @($clientLog) "deliverydispatch-server-evidence=completed" 1
     Wait-LogCount "client completion marker" @($clientLog) "deliverydispatch=completed" 1

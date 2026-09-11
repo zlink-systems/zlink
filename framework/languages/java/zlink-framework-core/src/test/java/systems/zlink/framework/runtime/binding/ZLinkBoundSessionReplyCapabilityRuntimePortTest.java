@@ -12,7 +12,11 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
@@ -35,6 +39,8 @@ final class ZLinkBoundSessionReplyCapabilityRuntimePortTest {
         RoutingId sessionNodeRid = RoutingId.from("reply-capability-session");
         RoutingId sessionRid = RoutingId.from("reply-capability-client");
         String endpoint = "inproc://jvm-reply-capability-" + System.nanoTime();
+        String sessionEndpoint =
+            "inproc://jvm-reply-capability-session-" + System.nanoTime();
         CompletableFuture<List<ZLinkBackendActorReceived>> accepted =
             new CompletableFuture<>();
         CompletableFuture<String> originalReply = new CompletableFuture<>();
@@ -63,8 +69,7 @@ final class ZLinkBoundSessionReplyCapabilityRuntimePortTest {
             actorNode.setRoutingId(actorNodeRid);
             actorNode.setBind(endpoint);
             sessionNode.setRoutingId(sessionNodeRid);
-            sessionNode.setBind(
-                "inproc://jvm-reply-capability-session-" + System.nanoTime());
+            sessionNode.setBind(sessionEndpoint);
             actorNode.start();
             sessionNode.start();
             actorNode.setPeerAuthorityResolver(
@@ -75,6 +80,16 @@ final class ZLinkBoundSessionReplyCapabilityRuntimePortTest {
                             candidateGeneration,
                             "session-owner",
                             1))));
+            actorNode.refreshLocalAuthorityFence().toCompletableFuture()
+                .get(1, TimeUnit.SECONDS);
+            actorNode.observePeerAdmissionExpectation(
+                sessionNodeRid,
+                sessionEndpoint,
+                sessionNode.lifecycleGeneration(),
+                systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                "session-owner",
+                1);
             sessionNode.connectPeer(endpoint, actorNodeRid);
             awaitAdmitted(sessionNode);
 
@@ -150,6 +165,147 @@ final class ZLinkBoundSessionReplyCapabilityRuntimePortTest {
         }
     }
 
+    @ParameterizedTest
+    @EnumSource(AuthorityLookupFailure.class)
+    void establishedBindingDispatchesWithoutRepeatingAuthorityStoreLookup(
+        AuthorityLookupFailure lookupFailure) throws Exception {
+        RoutingId actorNodeRid = RoutingId.from("authority-actor");
+        RoutingId sessionNodeRid = RoutingId.from("authority-session");
+        RoutingId sessionRid = RoutingId.from("authority-client");
+        String endpoint = "inproc://jvm-authority-actor-" + System.nanoTime();
+        AtomicReference<AuthorityLookupFailure> activeFailure =
+            new AtomicReference<>();
+        AtomicInteger failedLookups = new AtomicInteger();
+        CopyOnWriteArrayList<String> packets = new CopyOnWriteArrayList<>();
+        CompletableFuture<Void> probeHandled = new CompletableFuture<>();
+
+        try (var context = Zlink.createContext();
+             var actorNode = new ZLinkJavaRawMeshNode(context, "mesh");
+             var sessionNode = new ZLinkJavaRawMeshNode(context, "mesh");
+             var session = new ZLinkJavaStreamSocket(
+                 context.createStreamSocket(),
+                 sessionNode,
+                 (rid, parts, flags) -> true)) {
+            actorNode.setRoutingId(actorNodeRid);
+            actorNode.setBind(endpoint);
+            sessionNode.setRoutingId(sessionNodeRid);
+            sessionNode.setBind(
+                "inproc://jvm-authority-session-" + System.nanoTime());
+            actorNode.setPeerAuthorityResolver(
+                (meshName, candidateRid, candidateGeneration) -> {
+                    AuthorityLookupFailure active = activeFailure.get();
+                    if (active != null && active.matches(
+                            candidateRid, actorNodeRid, sessionNodeRid)) {
+                        failedLookups.incrementAndGet();
+                        if (active == AuthorityLookupFailure.LOCAL_FAILURE) {
+                            return CompletableFuture.failedFuture(
+                                new IllegalStateException(
+                                    "controlled authority lookup failure"));
+                        }
+                        return CompletableFuture.completedFuture(
+                            Optional.empty());
+                    }
+                    return CompletableFuture.completedFuture(Optional.of(
+                        new ZLinkInternalMeshNode.PeerAuthorityFence(
+                            candidateRid,
+                            candidateGeneration,
+                            "owner-" + candidateRid,
+                            1)));
+                });
+            actorNode.start();
+            sessionNode.start();
+            actorNode.refreshLocalAuthorityFence().toCompletableFuture()
+                .get(1, TimeUnit.SECONDS);
+            actorNode.observePeerAdmissionExpectation(
+                sessionNodeRid,
+                sessionNode.status().localEndpoint(),
+                sessionNode.lifecycleGeneration(),
+                systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                "owner-" + sessionNodeRid,
+                1);
+            sessionNode.connectPeer(endpoint, actorNodeRid);
+            awaitAdmitted(sessionNode);
+
+            ZLinkBackendSpot entry = actorNode.spotNode().entrySpot();
+            entry.onDispatchEvent(info -> {
+                if (info.event() != ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
+                    return;
+                }
+                try {
+                    for (int index = 0; index < info.actorMessages().size();) {
+                        ZLinkBackendActorReceived first =
+                            info.actorMessages().get(index);
+                        String packetName = ZLinkStreamHeaderCodec
+                            .decodeOrPlain(first.message().data())
+                            .packetName();
+                        packets.add(packetName);
+                        if (packetName.equals("AuthorityProbe")) {
+                            probeHandled.complete(null);
+                        }
+                        do {
+                            index++;
+                        } while (index < info.actorMessages().size()
+                            && info.actorMessages().get(index - 1).hasMore());
+                    }
+                } finally {
+                    info.actorMessages().forEach(ZLinkBackendActorReceived::close);
+                }
+            });
+            ZLinkBackendActorRef actor;
+            try (Message create = Message.from("create")) {
+                actor = actorNode.spotNode().createActor(
+                    "authority-actor", create);
+            }
+            actorNode.spotNode().rememberActorAuthority(actor, 73, 1);
+            sessionNode.spotNode().rememberActorAuthority(actor, 73, 1);
+
+            session.startSessionService();
+            activeFailure.set(lookupFailure);
+            session.bindActor(sessionRid, actor)
+                .submit(Duration.ofSeconds(1)).toCompletableFuture()
+                .get(1, TimeUnit.SECONDS);
+            long bindingGeneration = session.boundActorBindingGeneration(
+                sessionRid, actor.actorId());
+
+            assertTrue(forwardBoundActor(
+                sessionNode, session, actor, sessionRid, bindingGeneration,
+                24, "AuthorityProbe"));
+            probeHandled.get(1, TimeUnit.SECONDS);
+
+            assertEquals(0, failedLookups.get(),
+                "commands 38 and 24 must not repeat authority Store lookup");
+            assertEquals(1, packets.stream()
+                .filter("AuthorityProbe"::equals).count(),
+                "command 24 must use the established binding authority");
+        }
+    }
+
+    private static boolean forwardBoundActor(
+        ZLinkJavaRawMeshNode sessionNode,
+        ZLinkJavaStreamSocket session,
+        ZLinkBackendActorRef actor,
+        RoutingId sessionRid,
+        long bindingGeneration,
+        long sequence,
+        String packetName) {
+        ZLinkStreamHeader header = new ZLinkStreamHeader(
+            packetName, Map.of(), Optional.empty());
+        try (Message encodedHeader = Message.from(
+                 ZLinkStreamHeaderCodec.encode(header));
+             Message payload = Message.from("payload")) {
+            return ((ZLinkJavaRawSpotNode) sessionNode.spotNode())
+                .forwardBoundStreamSession(
+                    actor,
+                    sessionRid,
+                    bindingGeneration,
+                    sequence,
+                    session,
+                    header,
+                    List.of(encodedHeader, payload));
+        }
+    }
+
     private static String frameBody(List<Message> parts) {
         byte[] body = ZLinkStreamFrameCodec.tryDecode(
                 parts.getLast().toByteArray())
@@ -172,5 +328,20 @@ final class ZLinkBoundSessionReplyCapabilityRuntimePortTest {
             peer.state()
                 == systems.zlink.framework.runtime.internal.binding.spot
                     .MeshPeerState.ADMITTED));
+    }
+
+    private enum AuthorityLookupFailure {
+        LOCAL_EMPTY,
+        LOCAL_FAILURE,
+        SOURCE_EMPTY;
+
+        private boolean matches(
+            RoutingId candidate,
+            RoutingId local,
+            RoutingId source) {
+            return this == SOURCE_EMPTY
+                ? candidate.equals(source)
+                : candidate.equals(local);
+        }
     }
 }

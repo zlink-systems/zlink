@@ -50,6 +50,7 @@ final class ZLinkAutoConnectPlanner {
         String endpoint,
         Map<String, String> metadata,
         String ownerId,
+        long ownerLeaseGeneration,
         long lifecycleGeneration) {
     }
 
@@ -154,6 +155,7 @@ final class ZLinkAutoConnectPlanner {
             peer.endpoint(),
             peer.metadata(),
             peer.ownerId(),
+            peer.ownerLeaseGeneration(),
             lifecycleGenerationOf(peer));
     }
 

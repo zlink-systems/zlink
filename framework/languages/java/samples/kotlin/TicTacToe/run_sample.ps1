@@ -26,10 +26,7 @@ function Cleanup {
     param([int]$Status)
     Print-Logs $Status
     for ($i = $Processes.Count - 1; $i -ge 0; $i--) {
-        $process = $Processes[$i]
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        }
+        Stop-ZlinkSampleProcessTree -Process $Processes[$i] -Force
     }
     if ($RedisContainer) {
         Remove-ZlinkSampleRedis $RedisContainer
@@ -97,8 +94,9 @@ function Start-SampleRole {
     $scriptName = if ($Role -eq "play") { "tictactoe-play" } else { "Server" }
     $serverBin = Join-Path $SampleDir "Server/build/install/Server/bin/$scriptName"
     if ($IsWindows) { $serverBin = "$serverBin.bat" }
-    $process = Start-Process -FilePath $serverBin -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput (Join-Path $LogDir $LogName) -RedirectStandardError (Join-Path $LogDir "$LogName.err") -PassThru
+    $process = Start-ZlinkSampleProcess -FilePath $serverBin -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput (Join-Path $LogDir $LogName) -RedirectStandardError (Join-Path $LogDir "$LogName.err") -PassThru
     $Processes.Add($process)
+    Register-ZlinkSampleProcessTree -Process $process
 }
 
 $Status = 1
@@ -209,13 +207,14 @@ try {
     $clientLog = Join-Path $LogDir "client.log"
     $clientErrorLog = Join-Path $LogDir "client.err.log"
     $lifecycleCompletionFile = Join-Path $RunDir "lifecycle-complete"
-    $clientProcess = Start-Process -FilePath $clientBin `
+    $clientProcess = Start-ZlinkSampleProcess -FilePath $clientBin `
         -ArgumentList @(
             "--api-url", "http://127.0.0.1:$ApiAHttpPort",
             "--lifecycle-completion-file", "`"$lifecycleCompletionFile`"") `
-        -WorkingDirectory $SampleDir -NoNewWindow `
-        -RedirectStandardOutput $clientLog -RedirectStandardError $clientErrorLog -PassThru
+        -WorkingDirectory $SampleDir `
+        -StandardOutputPath $clientLog -StandardErrorPath $clientErrorLog
     $Processes.Add($clientProcess)
+    Register-ZlinkSampleProcessTree -Process $clientProcess
     $PlayLogs = Join-Path $LogDir "play-*.log"
     Wait-LogCount $PlayLogs "tictactoe-lifecycle actor-bound actor=player-x" 1
     foreach ($ActorId in @("player-x", "player-o")) {

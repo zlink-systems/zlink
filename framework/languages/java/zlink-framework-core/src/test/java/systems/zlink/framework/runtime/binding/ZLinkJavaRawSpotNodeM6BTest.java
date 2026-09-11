@@ -56,6 +56,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDispatchHandler;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
@@ -528,10 +529,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             source.start();
             target.start();
             caller.start();
-            acceptExactSource(
-                target, sourceRid, source.lifecycleGeneration());
-            acceptExactSource(
-                source, callerRid, caller.lifecycleGeneration());
+            acceptExactSource(target, source);
+            acceptExactSource(source, caller);
             source.connectPeer(endpoint, targetRid);
             caller.connectPeer(sourceEndpoint, sourceRid);
             awaitAdmitted(source);
@@ -748,8 +747,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             target.setBind(endpoint);
             source.start();
             target.start();
-            acceptExactSource(
-                target, sourceRid, source.lifecycleGeneration());
+            acceptExactSource(target, source);
             source.connectPeer(endpoint, targetRid);
             awaitAdmitted(source);
 
@@ -1442,8 +1440,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 "inproc://jvm-m6b-remote-right-" + System.nanoTime());
             left.start();
             right.start();
-            acceptExactSource(
-                left, rightRid, right.lifecycleGeneration());
+            acceptExactSource(left, right);
             right.connectPeer(endpoint, leftRid);
             awaitAdmitted(right);
             ZLinkBackendSpot source = right.spotNode().createSpot(
@@ -1641,7 +1638,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 "inproc://jvm-m6b-native-spot-right-" + System.nanoTime());
             left.start();
             right.start();
-            acceptExactSource(left, rightRid, right.lifecycleGeneration());
+            acceptExactSource(left, right);
             right.connectPeer(endpoint, leftRid);
             awaitAdmitted(right);
 
@@ -1856,8 +1853,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 "inproc://jvm-m6b-actor-right-" + System.nanoTime());
             left.start();
             right.start();
-            acceptExactSource(
-                left, rightRid, right.lifecycleGeneration());
+            acceptExactSource(left, right);
             right.connectPeer(endpoint, leftRid);
             ZLinkBackendSpot entry = left.spotNode().entrySpot();
             CompletableFuture<List<systems.zlink.framework.runtime.internal
@@ -2918,10 +2914,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     + System.nanoTime());
             actorNode.start();
             sessionNode.start();
-            acceptExactSource(
-                actorNode,
-                sessionNodeRid,
-                sessionNode.lifecycleGeneration());
+            acceptExactSource(actorNode, sessionNode);
             sessionNode.connectPeer(endpoint, actorNodeRid);
 
             ZLinkBackendSpot entry = actorNode.spotNode().entrySpot();
@@ -3224,8 +3217,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
 
     private static void acceptExactSource(
         ZLinkJavaRawMeshNode target,
-        RoutingId sourceRid,
-        long sourceGeneration) {
+        ZLinkJavaRawMeshNode source) throws Exception {
         target.setPeerAuthorityResolver(
             (meshName, candidateRid, candidateGeneration) ->
                 CompletableFuture.completedFuture(
@@ -3237,6 +3229,15 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 "test-source-owner",
                                 1))
                         : Optional.empty()));
+        target.refreshLocalAuthorityFence().toCompletableFuture()
+            .get(1, TimeUnit.SECONDS);
+        target.observePeerAdmissionExpectation(
+            source.routingId(),
+            source.status().localEndpoint(),
+            source.lifecycleGeneration(),
+            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+            "test-source-owner",
+            1);
     }
 
     private static void installActorFollow(

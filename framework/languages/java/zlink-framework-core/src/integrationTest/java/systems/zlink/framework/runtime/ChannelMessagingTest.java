@@ -139,6 +139,91 @@ final class ChannelMessagingTest {
     }
 
     @Test
+    void manualClientServer_connectBeforeTcpBindCompletesAdmission() throws Exception {
+        String endpoint = tcpEndpoint();
+        DefaultZLinkFrameworkOptions clientOptions = new DefaultZLinkFrameworkOptions();
+        clientOptions.addClientServerChannel("profile").client().connect(endpoint);
+        DefaultZLinkFrameworkOptions serverOptions = new DefaultZLinkFrameworkOptions();
+        listenClientServer(serverOptions, "profile", endpoint)
+            .addRequestHandler(EchoHandler.class, EchoRequest.class, String.class);
+
+        try (ZLinkFrameworkRuntime client = RuntimeTestSupport.startFramework(
+                clientOptions, new ZLinkJavaBackendAdapterFactory());
+             ZLinkFrameworkRuntime server = RuntimeTestSupport.startFramework(
+                serverOptions, new ZLinkJavaBackendAdapterFactory())) {
+            assertEquals("late-server", client.client()
+                .requestToChannel("profile", new EchoRequest("late-server"))
+                .submit(String.class).toCompletableFuture().get(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void manualClientServer_connectBeforeDelayedTcpBindCompletesAdmission() throws Exception {
+        String endpoint = tcpEndpoint();
+        DefaultZLinkFrameworkOptions clientOptions = new DefaultZLinkFrameworkOptions();
+        clientOptions.addClientServerChannel("profile").client().connect(endpoint);
+        DefaultZLinkFrameworkOptions serverOptions = new DefaultZLinkFrameworkOptions();
+        listenClientServer(serverOptions, "profile", endpoint)
+            .addRequestHandler(EchoHandler.class, EchoRequest.class, String.class);
+
+        try (ZLinkFrameworkRuntime client = RuntimeTestSupport.startFramework(
+                clientOptions, new ZLinkJavaBackendAdapterFactory())) {
+            Thread.sleep(2_000);
+            try (ZLinkFrameworkRuntime server = RuntimeTestSupport.startFramework(
+                    serverOptions, new ZLinkJavaBackendAdapterFactory())) {
+                assertEquals("late-server", client.client()
+                    .requestToChannel("profile", new EchoRequest("late-server"))
+                    .submit(String.class).toCompletableFuture().get(5, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    @Test
+    void manualClientServer_lateTcpServersCoexistWithRouteMesh() throws Exception {
+        String firstEndpoint = tcpEndpoint();
+        String secondEndpoint = tcpEndpoint();
+        String firstMeshEndpoint = tcpEndpoint();
+        String secondMeshEndpoint = tcpEndpoint();
+        DefaultZLinkFrameworkOptions firstClientOptions = new DefaultZLinkFrameworkOptions();
+        firstClientOptions.addClientServerChannel("profile").client()
+            .connect(firstEndpoint).connect(secondEndpoint);
+        var firstMesh = firstClientOptions.addRouteMesh("mesh");
+        firstMesh.listen(firstMeshEndpoint).setRoutingId(RoutingId.from("play-a"));
+        firstMesh.peerConnections().connect(secondMeshEndpoint);
+        DefaultZLinkFrameworkOptions secondClientOptions = new DefaultZLinkFrameworkOptions();
+        secondClientOptions.addClientServerChannel("profile").client()
+            .connect(firstEndpoint).connect(secondEndpoint);
+        var secondMesh = secondClientOptions.addRouteMesh("mesh");
+        secondMesh.listen(secondMeshEndpoint).setRoutingId(RoutingId.from("play-b"));
+        secondMesh.peerConnections().connect(firstMeshEndpoint);
+        DefaultZLinkFrameworkOptions firstServerOptions = new DefaultZLinkFrameworkOptions();
+        listenClientServer(firstServerOptions, "profile", firstEndpoint)
+            .addRequestHandler(EchoHandler.class, EchoRequest.class, String.class);
+        var firstServerMesh = firstServerOptions.addRouteMesh("mesh");
+        firstServerMesh.listen(tcpEndpoint()).setRoutingId(RoutingId.from("api-a"));
+        firstServerMesh.peerConnections().connect(firstMeshEndpoint);
+        firstServerMesh.peerConnections().connect(secondMeshEndpoint);
+        DefaultZLinkFrameworkOptions secondServerOptions = new DefaultZLinkFrameworkOptions();
+        listenClientServer(secondServerOptions, "profile", secondEndpoint)
+            .addRequestHandler(EchoHandler.class, EchoRequest.class, String.class);
+        var secondServerMesh = secondServerOptions.addRouteMesh("mesh");
+        secondServerMesh.listen(tcpEndpoint()).setRoutingId(RoutingId.from("api-b"));
+        secondServerMesh.peerConnections().connect(firstMeshEndpoint);
+        secondServerMesh.peerConnections().connect(secondMeshEndpoint);
+
+        try (var firstClient = RuntimeTestSupport.startFramework(firstClientOptions, new ZLinkJavaBackendAdapterFactory());
+             var secondClient = RuntimeTestSupport.startFramework(secondClientOptions, new ZLinkJavaBackendAdapterFactory());
+             var firstServer = RuntimeTestSupport.startFramework(firstServerOptions, new ZLinkJavaBackendAdapterFactory());
+             var secondServer = RuntimeTestSupport.startFramework(secondServerOptions, new ZLinkJavaBackendAdapterFactory())) {
+            for (var client : List.of(firstClient, secondClient)) {
+                assertEquals("late-server", client.client()
+                    .requestToChannel("profile", new EchoRequest("late-server"))
+                    .submit(String.class).toCompletableFuture().get(5, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    @Test
     void processLocalClientServer_requestReplySucceedsWithoutStoreOrManualClientEndpoint() {
         String endpoint = "inproc://zlink-java-local-profile-" + UUID.randomUUID();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();

@@ -146,7 +146,9 @@ final class ZLinkAutoConnectReconciler {
                 .filter(candidate -> samePeerIdentity(candidate, target)).findFirst().orElse(null);
             if (previous != null && (!previous.key().equals(target.key())
                 || !previous.endpoint().equals(target.endpoint())
-                || !Objects.equals(previous.ownerId(), target.ownerId()))) {
+                || !Objects.equals(previous.ownerId(), target.ownerId())
+                || previous.ownerLeaseGeneration()
+                    != target.ownerLeaseGeneration())) {
                 executor.replace(previous, target);
                 observedManual.remove(previous.key());
             }
@@ -159,7 +161,9 @@ final class ZLinkAutoConnectReconciler {
             if (current == null) {
                 if (executor.connect(target)) active.put(entry.getKey(), target);
             } else if ((!current.endpoint().equals(target.endpoint())
-                || !Objects.equals(current.ownerId(), target.ownerId()))
+                || !Objects.equals(current.ownerId(), target.ownerId())
+                || current.ownerLeaseGeneration()
+                    != target.ownerLeaseGeneration())
                 && executor.replace(current, target)) {
                 active.put(entry.getKey(), target);
             } else {

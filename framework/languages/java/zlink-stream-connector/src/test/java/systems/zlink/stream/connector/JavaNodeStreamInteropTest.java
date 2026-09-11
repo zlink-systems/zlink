@@ -97,7 +97,7 @@ final class JavaNodeStreamInteropTest {
                 decodedHeader.requestSeq !== 42n ||
                 decodedHeader.name !== 'Join' ||
                 decodedHeader.metadata.get('trace') !== 'java-node-1' ||
-                Buffer.from(decodedFrame.payload).toString('utf8') !== '{"join":true}') {
+                Buffer.from(decodedFrame.payload).toString('utf8') !== JSON.stringify({ join: true })) {
               throw new Error('Node failed to decode Java request frame');
             }
             const responseHeader = ZlinkStreamHeaderCodec.encode({
@@ -110,7 +110,7 @@ final class JavaNodeStreamInteropTest {
             });
             const responseFrame = ZlinkStreamFrameCodec.encode(
               responseHeader,
-              new TextEncoder().encode('{"accepted":true}'));
+              new TextEncoder().encode(JSON.stringify({ accepted: true })));
             process.stdout.write(Buffer.from(responseFrame).toString('hex'));
             """;
     }

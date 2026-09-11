@@ -79,8 +79,9 @@ final class FrameworkModuleBoundaryTest {
             List<Path> offenders = files
                 .filter(Files::isRegularFile)
                 .filter(path -> path.toString().endsWith(".java"))
-                .filter(path -> path.toString().contains("/src/main/java/"))
-                .filter(path -> !path.toString().contains("/systems/zlink/framework/runtime/"))
+                .filter(path -> containsSubpath(path, Path.of("src", "main", "java")))
+                .filter(path -> !containsSubpath(path,
+                    Path.of("systems", "zlink", "framework", "runtime")))
                 .filter(FrameworkModuleBoundaryTest::importsBindingRuntimePackage)
                 .toList();
 
@@ -93,6 +94,8 @@ final class FrameworkModuleBoundaryTest {
         Path runtimeRoot = frameworkJavaRoot()
             .resolve("zlink-framework-core")
             .resolve("src/main/java/systems/zlink/framework/runtime");
+        Path bindingRuntimeRoot = runtimeRoot.resolve("binding");
+        Path internalBindingRuntimeRoot = runtimeRoot.resolve("internal/binding");
         Set<String> allowedImports = Set.of(
             "import systems.zlink.contracts.core.Context;",
             "import systems.zlink.contracts.core.CoreHwmBudgetSnapshot;",
@@ -152,9 +155,8 @@ final class FrameworkModuleBoundaryTest {
             List<String> offenders = files
                 .filter(Files::isRegularFile)
                 .filter(path -> path.toString().endsWith(".java"))
-                .filter(path -> !path.toString().contains("/systems/zlink/framework/runtime/binding/"))
-                .filter(path -> !path.toString().contains(
-                    "/systems/zlink/framework/runtime/internal/binding/"))
+                .filter(path -> !path.startsWith(bindingRuntimeRoot))
+                .filter(path -> !path.startsWith(internalBindingRuntimeRoot))
                 .flatMap(path -> bindingContractImports(path).stream())
                 .filter(line -> !allowedImports.contains(line))
                 .toList();
@@ -218,6 +220,17 @@ final class FrameworkModuleBoundaryTest {
         } catch (IOException ex) {
             throw new IllegalStateException("failed to read " + path, ex);
         }
+    }
+
+    private static boolean containsSubpath(Path path, Path expected) {
+        Path normalized = path.normalize();
+        int expectedCount = expected.getNameCount();
+        for (int index = 0; index + expectedCount <= normalized.getNameCount(); index++) {
+            if (normalized.subpath(index, index + expectedCount).equals(expected)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean importsDisallowedBindingRuntimePackageInAdapter(

@@ -27,10 +27,7 @@ function Cleanup {
     param([int]$Status)
     Print-Logs $Status
     for ($i = $Processes.Count - 1; $i -ge 0; $i--) {
-        $process = $Processes[$i]
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        }
+        Stop-ZlinkSampleProcessTree -Process $Processes[$i] -Force
     }
     if ($RedisContainer) {
         Remove-ZlinkSampleRedis $RedisContainer
@@ -87,8 +84,9 @@ function Start-SampleRole {
     $scriptName = if ($Role -eq "play") { "tictactoe-play" } else { "Server" }
     $serverBin = Join-Path $SampleDir "Server/build/install/Server/bin/$scriptName"
     if ($IsWindows) { $serverBin = "$serverBin.bat" }
-    $process = Start-Process -FilePath $serverBin -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -PassThru
+    $process = Start-ZlinkSampleProcess -FilePath $serverBin -ArgumentList @("--config", $ConfigPath) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -PassThru
     $Processes.Add($process)
+    Register-ZlinkSampleProcessTree -Process $process
 }
 
 function Protect-ConfigFile {
@@ -112,8 +110,8 @@ try {
     $ApiBChannelPort = $ports[3]
     $PlayAStreamPort = $ports[4]
     $PlayBStreamPort = $ports[5]
-    $PlayAChannelPort = $ports[6]
-    $PlayBChannelPort = $ports[7]
+    $ApiARoutePort = $ports[6]
+    $ApiBRoutePort = $ports[7]
     $PlayASpotPort = $ports[8]
     $PlayBSpotPort = $ports[9]
     $PlayAPubPort = $ports[10]
@@ -124,18 +122,21 @@ try {
     $RedisEndpoint = $redis.Endpoint
     $RedisKeyPrefix = "zlink:tictactoe:${PID}:$([Guid]::NewGuid().ToString('N')):room:"
 
-    $PlayChannels = "tcp://127.0.0.1:$PlayAChannelPort,tcp://127.0.0.1:$PlayBChannelPort"
     $ApiChannels = "tcp://127.0.0.1:$ApiAChannelPort,tcp://127.0.0.1:$ApiBChannelPort"
     $PlayStreams = "tcp://127.0.0.1:$PlayAStreamPort,tcp://127.0.0.1:$PlayBStreamPort"
+    $Spots = "tcp://127.0.0.1:$PlayASpotPort,tcp://127.0.0.1:$PlayBSpotPort"
     function Write-ApiConfig {
-        param([string]$Name, [int]$HttpPort, [int]$ChannelPort)
+        param([string]$Name, [int]$HttpPort, [int]$ChannelPort, [int]$RoutePort)
         $path = Join-Path $RunDir "$Name.properties"
         Set-ZlinkSampleUtf8File -Path $path -Value @(
             "sample.nodeId=$Name",
             "sample.apiBindUrl=http://127.0.0.1:$HttpPort",
             "sample.apiChannelEndpoint=tcp://127.0.0.1:$ChannelPort",
-            "sample.playChannelEndpoint=tcp://127.0.0.1:$PlayAChannelPort",
-            "sample.playChannelEndpoints=$PlayChannels",
+            "sample.playEndpoints=$PlayStreams",
+            "sample.routeEndpoint=tcp://127.0.0.1:$RoutePort",
+            "sample.spotEndpoints=$Spots",
+            "sample.redisEndpoint=$RedisEndpoint",
+            "sample.redisKeyPrefix=$RedisKeyPrefix",
             "sample.logDirectory=$LogDir"
         )
         Protect-ConfigFile $path
@@ -144,7 +145,6 @@ try {
     function Write-PlayConfig {
         param(
             [string]$Name,
-            [int]$ChannelPort,
             [int]$StreamPort,
             [int]$SpotPort,
             [int]$PubPort,
@@ -154,7 +154,6 @@ try {
         Set-ZlinkSampleUtf8File -Path $path -Value @(
         "sample.nodeId=$Name",
         "sample.apiChannelEndpoints=$ApiChannels",
-        "sample.playChannelEndpoint=tcp://127.0.0.1:$ChannelPort",
         "sample.playEndpoint=tcp://127.0.0.1:$StreamPort",
         "sample.playEndpoints=$PlayStreams",
         "sample.spotEndpoint=tcp://127.0.0.1:$SpotPort",
@@ -168,33 +167,34 @@ try {
         Protect-ConfigFile $path
         return $path
     }
-    $ApiAConfig = Write-ApiConfig "api-a" $ApiAPort $ApiAChannelPort
-    $ApiBConfig = Write-ApiConfig "api-b" $ApiBPort $ApiBChannelPort
-    $PlayAConfig = Write-PlayConfig "play-a" $PlayAChannelPort $PlayAStreamPort `
+    $ApiAConfig = Write-ApiConfig "api-a" $ApiAPort $ApiAChannelPort $ApiARoutePort
+    $ApiBConfig = Write-ApiConfig "api-b" $ApiBPort $ApiBChannelPort $ApiBRoutePort
+    $PlayAConfig = Write-PlayConfig "play-a" $PlayAStreamPort `
         $PlayASpotPort $PlayAPubPort $PlayBSpotPort $PlayBPubPort
-    $PlayBConfig = Write-PlayConfig "play-b" $PlayBChannelPort $PlayBStreamPort `
+    $PlayBConfig = Write-PlayConfig "play-b" $PlayBStreamPort `
         $PlayBSpotPort $PlayBPubPort $PlayASpotPort $PlayAPubPort
 
     Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
         "--settings-file",
         "standalone.settings.gradle.kts",
+        "--no-daemon",
+        "--no-parallel",
+        "--max-workers=1",
         ":Server:installDist",
         ":Client:installDist",
         "--quiet")
 
     Start-SampleRole "play" $PlayBConfig "play-b.log"
     Wait-Port $PlayBStreamPort
-    Wait-Port $PlayBChannelPort
+    Wait-Port $PlayBSpotPort
     Start-SampleRole "play" $PlayAConfig "play-a.log"
     Wait-Port $PlayAStreamPort
-    Wait-Port $PlayAChannelPort
+    Wait-Port $PlayASpotPort
 
     Start-SampleRole "api" $ApiAConfig "api-a.log"
     Wait-Port $ApiAPort
-    Wait-Port $ApiAChannelPort
     Start-SampleRole "api" $ApiBConfig "api-b.log"
     Wait-Port $ApiBPort
-    Wait-Port $ApiBChannelPort
 
     Wait-LogCount (Join-Path $LogDir "play-a.log") "tictactoe-ready kind=peer-route node=play-a peer=play-b" 1
     Wait-LogCount (Join-Path $LogDir "play-b.log") "tictactoe-ready kind=peer-route node=play-b peer=play-a" 1
@@ -223,13 +223,14 @@ try {
     $clientLog = Join-Path $LogDir "client.log"
     $clientErrorLog = Join-Path $LogDir "client.err.log"
     $lifecycleCompletionFile = Join-Path $RunDir "lifecycle-complete"
-    $clientProcess = Start-Process -FilePath $clientBin `
+    $clientProcess = Start-ZlinkSampleProcess -FilePath $clientBin `
         -ArgumentList @(
             "--api-url", "http://127.0.0.1:$ApiAPort",
             "--lifecycle-completion-file", "`"$lifecycleCompletionFile`"") `
-        -WorkingDirectory $SampleDir -NoNewWindow `
-        -RedirectStandardOutput $clientLog -RedirectStandardError $clientErrorLog -PassThru
+        -WorkingDirectory $SampleDir `
+        -StandardOutputPath $clientLog -StandardErrorPath $clientErrorLog
     $Processes.Add($clientProcess)
+    Register-ZlinkSampleProcessTree -Process $clientProcess
     $PlayLogs = Join-Path $LogDir "play-*.log"
     Wait-LogCount $PlayLogs "tictactoe-lifecycle actor-bound actor=player-x" 1
     foreach ($ActorId in @("player-x", "player-o")) {

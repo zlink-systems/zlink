@@ -21,6 +21,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -87,7 +88,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
     }
 
     @Test
-    void publishedStandaloneActorDeclinesStagingWhileNormalizationIsPending() {
+    void publishedStandaloneActorUsesOneTargetFenceWhileNormalizationIsPending() {
         RoutingId sourceRid = RoutingId.from("source-node");
         RoutingId targetRid = RoutingId.from("target-node");
         RoutingId sessionOwnerRid = RoutingId.from("session-owner");
@@ -153,6 +154,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 OPEN)
             .toCompletableFuture().join();
         List<String> operations = new CopyOnWriteArrayList<>();
+        List<ZLinkServiceM6BWireCodec.SessionRelocationRoute> routes =
+            new CopyOnWriteArrayList<>();
         var actorStaging = new ZLinkStandaloneActorRelocationStagingOwner(
             new RestartActorBackend(operations));
         CompletableFuture<Void> normalization = new CompletableFuture<>();
@@ -168,7 +171,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             (lane, queued) -> CompletableFuture.failedFuture(
                 new AssertionError("standalone Actor root has no backlog")),
             new ZLinkSessionRelocationPeerClient(
-                sessionRouteNode(new ZLinkServiceM6BWireCodec(), operations)),
+                sessionRouteNode(
+                    new ZLinkServiceM6BWireCodec(), operations, routes::add)),
             Duration.ofSeconds(1),
             ignored -> {
                 operations.add("normalize");
@@ -210,6 +214,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
 
         endpoint.stage(request).toCompletableFuture().join();
         coordinator.commit(prepared, OPEN).toCompletableFuture().join();
+        authority.resetReadCount(actorAuthorityKey);
         CompletionStage<Void> publishing = endpoint.publish(request);
 
         assertTrue(normalizationEntered.isDone());
@@ -222,6 +227,10 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 "command44",
                 "normalize"),
             operations);
+        assertEquals(1, authority.readCount(actorAuthorityKey),
+            "one target fence must serve publication and command 44");
+        assertEquals(8, routes.getFirst().currentAuthorityOwnerGeneration(),
+            "command 44 must use the target fence read for publication");
         var source = new ZLinkInternalMeshNode.PeerAuthorityFence(
             sourceRid, 11, "source-owner", 12);
         var header = new ZLinkServiceM6BWireCodec.ActorMessage(
@@ -670,6 +679,13 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
     private static ZLinkInternalMeshNode sessionRouteNode(
         ZLinkServiceM6BWireCodec wire,
         List<String> operations) {
+        return sessionRouteNode(wire, operations, ignored -> { });
+    }
+
+    private static ZLinkInternalMeshNode sessionRouteNode(
+        ZLinkServiceM6BWireCodec wire,
+        List<String> operations,
+        Consumer<ZLinkServiceM6BWireCodec.SessionRelocationRoute> routes) {
         return (ZLinkInternalMeshNode) Proxy.newProxyInstance(
             ZLinkInternalMeshNode.class.getClassLoader(),
             new Class<?>[] {ZLinkInternalMeshNode.class},
@@ -677,6 +693,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 if (method.getName().equals("sendSessionRelocationRoute")) {
                     var command = wire.decodeSessionRelocationRoute(
                         (byte[]) arguments[1]);
+                    routes.accept(command);
                     operations.add("command44");
                     return CompletableFuture.completedFuture(null);
                 }
@@ -756,6 +773,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
     private static final class AuthorityState {
         private final Map<String, ZLinkAuthoritySnapshot> rows =
             new ConcurrentHashMap<>();
+        private final Map<String, AtomicInteger> readCounts =
+            new ConcurrentHashMap<>();
         private ZLinkAggregatePrepareRequest prepared;
         private boolean progress;
         private String progressStoreVersion;
@@ -771,12 +790,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         (ZLinkAggregateFence) arguments[0]);
                     case "abortAggregate" -> CompletableFuture.completedFuture(
                         ZLinkAggregateAbortResult.ABORTED);
-                    case "read" -> CompletableFuture.completedFuture(
-                        rows.getOrDefault(
-                            (String) arguments[0],
-                            null) == null
-                            ? new ZLinkAuthorityMissing(Instant.now())
-                            : rows.get((String) arguments[0]));
+                    case "read" -> read((String) arguments[0]);
                     case "compareExchange" -> compareExchange(
                         (String) arguments[0],
                         (ZLinkAuthorityExpectation) arguments[1],
@@ -790,6 +804,26 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                     default -> throw new UnsupportedOperationException(
                         method.getName());
                 });
+        }
+
+        void resetReadCount(String key) {
+            readCounts.put(key, new AtomicInteger());
+        }
+
+        int readCount(String key) {
+            AtomicInteger count = readCounts.get(key);
+            return count == null ? 0 : count.get();
+        }
+
+        private CompletionStage<ZLinkAuthorityReadResult> read(String key) {
+            AtomicInteger count = readCounts.get(key);
+            if (count != null) {
+                count.incrementAndGet();
+            }
+            ZLinkAuthoritySnapshot row = rows.get(key);
+            return CompletableFuture.completedFuture(row == null
+                ? new ZLinkAuthorityMissing(Instant.now())
+                : row);
         }
 
         private CompletionStage<ZLinkAggregatePrepareResult> prepare(

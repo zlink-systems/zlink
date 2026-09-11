@@ -475,7 +475,9 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                 target.nodeRid(),
                 target.endpoint(),
                 target.lifecycleGeneration(),
-                admissionSecurityIdentity(target));
+                admissionSecurityIdentity(target),
+                target.ownerId(),
+                target.ownerLeaseGeneration());
         }
 
         @Override

@@ -31,10 +31,7 @@ function Cleanup {
     param([int]$Status)
     Print-Logs $Status
     for ($i = $Processes.Count - 1; $i -ge 0; $i--) {
-        $process = $Processes[$i]
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        }
+        Stop-ZlinkSampleProcessTree -Process $Processes[$i] -Force
     }
     if ($RedisContainer) {
         Remove-ZlinkSampleRedis $RedisContainer
@@ -83,8 +80,9 @@ function Start-AppRole {
     param([string]$Project, [string]$Name, [string]$Config, [string]$LogName)
     $logPath = Join-Path $LogDir $LogName
     $errorLogPath = Join-Path $LogDir ($LogName + ".err.log")
-    $process = Start-Process -FilePath (Get-AppBin $Project $Name) -ArgumentList @("--config", $Config) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -PassThru
+    $process = Start-ZlinkSampleProcess -FilePath (Get-AppBin $Project $Name) -ArgumentList @("--config", $Config) -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -PassThru
     $Processes.Add($process)
+    Register-ZlinkSampleProcessTree -Process $process
 }
 
 function Protect-ConfigFile {
@@ -233,8 +231,13 @@ sample.session-node=a
     Wait-LogCount @((Join-Path $LogDir "session-b.log")) "bingo-ready kind=mesh-route node=session-b mesh=room" 1
 
     $clientLog = Join-Path $LogDir "client.log"
-    & (Get-AppBin "Client" "Client") --config $clientConfig *> $clientLog
-    if ($LASTEXITCODE -ne 0) {
+    $clientProcess = Start-ZlinkSampleProcess -FilePath (Get-AppBin "Client" "Client") `
+        -ArgumentList @("--config", $clientConfig) -WorkingDirectory $SampleDir `
+        -StandardOutputPath $clientLog -StandardErrorPath (Join-Path $LogDir "client.err.log")
+    $Processes.Add($clientProcess)
+    Register-ZlinkSampleProcessTree -Process $clientProcess
+    $clientProcess.WaitForExit()
+    if ($clientProcess.ExitCode -ne 0) {
         throw "Client run failed."
     }
     if (-not (Select-String -Path $clientLog -Pattern "bingo=completed" -Quiet)) {
