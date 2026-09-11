@@ -268,6 +268,8 @@ SAMPLE_RUNNER_INVENTORIES = (
         "cpp",
         "framework/languages/cpp/samples",
         "",
+        # ZoneWorld gained run_sample.ps1 in f9906673b2 (Windows framework and
+        # sample builds); every C++ sample now ships a PowerShell runner.
         SAMPLE_NAMES,
     ),
     SampleRunnerInventory(

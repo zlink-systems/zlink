@@ -12,9 +12,8 @@
 namespace zlink::framework::runtime
 {
 
-/* Keeps metric emission behind the private diagnostics state. Public code
- * configures the standard logging/provider surface and never receives raw
- * runtime metric DTOs. */
+/* The application installs its standard MeterProvider before creating the host.
+ * Metric collection is independent of logging and message-flow diagnostics. */
 class runtime_metrics_t
 {
   public:
@@ -24,13 +23,7 @@ class runtime_metrics_t
     {
     }
 
-    bool enabled () const noexcept
-    {
-        if (!_state) {
-            return false;
-        }
-        return _state->diagnostics_logger.is_enabled (log_level_t::debug);
-    }
+    bool enabled () const noexcept { return _state && _state->metric_meter != nullptr; }
 
     void counter (std::string name,
                   std::string unit,

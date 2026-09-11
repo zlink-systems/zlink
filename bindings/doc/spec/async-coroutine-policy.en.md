@@ -102,13 +102,59 @@ terminals (`submit_sync()`, .NET/C++ `Submit()`/`submit()`) are unchanged.
 
 <a id="submission-stage-isolation"></a>
 
-**The state of stages returned by result objects is isolated between distinct submissions.** If a caller completes, fails, cancels, or overwrites the completion state of one submission's `admitted` or `reply`, or a view obtained through a public conversion method of that stage, the action must not propagate to another submission's completion state or observed result through a shared returned representation or shared state behind it. Consuming a stage or detaching a wait must not change another submission's waiter state or ability to consume its result through shared state. This rule covers previously returned results, in-flight submissions, and later submissions on both the same socket and other sockets. Normal resource reclamation and the resulting progress of other submissions follow the existing admission and lifecycle contracts.
+### A Returned Stage Stands Alone Per Submission
 
-The actions covered here are completion-state operations offered by the returned type and ordinary awaiting, consumption, dropping, destruction, and wait cancellation. Arbitrary property or prototype replacement, private-state access, and payload mutation are outside this clause. This clause does not require new cancellation or forced-completion APIs. Socket/context shutdown, a cancellation source explicitly connected to multiple waits, and completion dependencies explicitly established by the application follow their respective existing contracts.
+When a caller completes, fails, cancels, or overwrites the completion state of one submission's
+`admitted` or `reply` — or of a view obtained from that stage through a public conversion method —
+**the effect stays within that one submission.**
 
-Isolation does not mean cancellation of the Core operation or reversal of admission that has already occurred. Actual admission and reply completion, including the relationship between the two stages of one REQUEST, follow [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). Caller-wait cancellation and native-state cleanup follow [§6 of that document](async-execution-model.en.md#6-caller-wait-cancellation). A value forcibly assigned to a view by the caller is not evidence of actual admission or a reply; this clause defines no new propagation rule between stages for that action.
+- **Sharing a returned representation must not change another submission's completion state or
+  observed result.** If what one caller does with its own result can change another caller's result,
+  no caller can trust the value it received.
+- **Consuming a stage or releasing a wait is the same.** Neither may travel through shared state to
+  change another submission's waiter state or whether its result can still be taken.
+- **This covers results already returned, submissions in flight, and later submissions.** It does not
+  matter whether they are on the same socket, because a completion representation may be shared
+  process-wide.
 
-An instance may be shared to represent already-completed admission, provided the actions above cannot affect another submission through that shared representation. This condition covers waiter and single-consumption state as well as the completed value. Per-submission objects, completion representations that cannot be changed, and views with isolated mutations can all satisfy the condition. Shared ownership of internal state within the same operation is allowed.
+### What This Rule Covers
+
+It covers **the completion-state operations the returned type offers** and **ordinary await, consume,
+drop, destruction, and wait cancellation.**
+
+It does not cover:
+
+- Replacing arbitrary properties or a prototype, reaching into private state, or mutating the payload.
+- **This clause does not ask for new cancel or force-complete APIs.** Where the returned type has no
+  such operation, that manipulation simply cannot happen in that language.
+
+A socket or context shutting down, one cancellation source the caller deliberately wired to several
+waits, and completion dependencies the application linked itself all follow their own contracts.
+
+### Isolation Is Not Cancelling the Operation
+
+**A value a caller forces into a view is not evidence about the real admission or reply.** That
+manipulation creates no new propagation rule between stages.
+
+When the real admission and reply complete, and how the two stages of one REQUEST relate, is owned by
+[Async Execution Model §5](async-execution-model.en.md#5-joining-the-submit-result-and-the-completion).
+Cancelling a caller's wait and cleaning up native state is owned by
+[the same document §6](async-execution-model.en.md#6-caller-wait-cancellation).
+
+### An Already-Completed Admission May Share an Instance
+
+**Share it, but the shared representation must not let the operations above reach another
+submission.** This includes not only the completed value but also **waiter state and the
+"consumable only once" state.**
+
+All of these can satisfy the condition:
+
+- Allocating a new object per submission
+- A representation that cannot change once completed
+- A view whose mutations are separated from the original
+
+**Sharing internal state through shared ownership inside one operation is allowed.** What is
+restricted is sharing **between different submissions.**
 
 | Binding | Safe example for already-successful admission | Condition |
 |---|---|---|

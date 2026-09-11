@@ -14,16 +14,20 @@
 
 namespace zlink
 {
-//  This is a cross-platform equivalent to signal_fd. By default there can be
-//  at most one signal in the signaler at any given moment. The bool
-//  constructor enables coalescing for a shared notification signaler (and an
-//  event-only implementation on Windows).
+//  This is a cross-platform equivalent to signal_fd. Ordinary fd-backed
+//  channels retain one byte per send. On POSIX the bool constructor enables
+//  coalescing. On Windows it selects the event-only implementation; the
+//  two-bool constructor additionally enables coalescing for the fd-backed
+//  private-poller channel.
 
 class signaler_t
 {
   public:
     signaler_t ();
     explicit signaler_t (bool event_only_);
+#ifdef ZLINK_HAVE_WINDOWS
+    signaler_t (bool event_only_, bool coalescing_);
+#endif
     ~signaler_t ();
 
     // Returns the socket/file descriptor
@@ -56,6 +60,7 @@ class signaler_t
 #ifdef ZLINK_HAVE_WINDOWS
     //  Avoid a nonblocking Winsock recv when no wakeup is pending.
     std::atomic<bool> _signaled;
+    bool _coalescing;
     bool _event_only;
     HANDLE _event;
 #else

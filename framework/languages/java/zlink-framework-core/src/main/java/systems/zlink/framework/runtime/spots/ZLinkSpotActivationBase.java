@@ -268,8 +268,8 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                     ZLinkDispatchErrorReason.INVALID_FRAME,
                     error);
             } else {
-                host.reportSpotRouteSendDropped(
-                    received, packet.packetName(), context.spotId());
+                host.reportSpotRouteInvalidFrameDropped(
+                    received, packet.packetName(), context.spotId(), error);
             }
             closeRouteReceived(received);
             return CompletableFuture.completedFuture(null);
@@ -389,14 +389,22 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                         Optional.empty(),
                         context.spotId());
                     return startSpotHandler(() ->
-                        host.runWithOutbound(context.dispatchOutbound(), () ->
-                            handlerInvoker.invokePacket(
-                                handler,
-                                spotSurface,
-                                payloadCopy,
-                                contentType,
-                                metadata,
-                                context.handlerInstances()::instance)));
+                        host.runWithOutbound(context.dispatchOutbound(), () -> {
+                            try {
+                                return handlerInvoker.invokePacket(
+                                    handler,
+                                    spotSurface,
+                                    payloadCopy,
+                                    contentType,
+                                    metadata,
+                                    context.handlerInstances()::instance);
+                            } catch (RuntimeException decodeFailure) {
+                                // invokePacket returns handler failures as a stage;
+                                // synchronous failure here is payload decoding.
+                                host.recordSpotDrop(context.spotId(), "decode_error");
+                                throw decodeFailure;
+                            }
+                        }));
                 });
             })
                 .whenComplete((ignored, error) -> {

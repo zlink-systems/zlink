@@ -249,9 +249,48 @@ concurrently ([Handler Turn "1"](02-handler-turn-and-execution-gate.en.md#1-sepa
 stands, and turns of different gates progress side by side on several workers. Serialising on one
 worker to save switches is a violation.
 
-**Handler instance lookup and the DI scope are constant time within W1–W3.** Scoped-handler semantics
-stay; the activation path is cached so that scope creation and lookup do not search the container per
-record.
+**Handler instance lookup and DI scope preparation are constant time within W1–W3 and add no separate
+DI execution stage to the application worker performing them.** [Framework API "10"·"11"](../00-foundation/06-framework-api.en.md)
+define handler, filter and dependency lifetimes. Each process-level handler dispatch creates a new
+scope and supplies its handler and filters with the same scoped dependencies. Reducing cost must not
+share those instances or scoped dependencies across dispatches.
+
+- **Determine the construction procedure in advance and reuse it.** Select handler and filter
+  constructors and dependency wiring during registration or configuration preparation. Dispatches
+  using that registration reuse a factory, invoker or equivalent construction procedure. Do not scan
+  registration candidates, select constructors again, or rebuild dependency wiring from reflection
+  metadata for each record. Direct lookup of descriptors and of the current scope's dependencies
+  using predetermined service keys, and creation of the required fresh instances, are allowed. A
+  reusable construction procedure must not retain a particular scope's provider or scoped dependency
+  instances. Per-scope instance storage follows that scope's lifetime and does not substitute for
+  reuse of the construction procedure.
+- **Add no execution-resource switch or blocking wait to obtain an instance.** The interval starts
+  when scope creation or handler/filter lookup begins within W1–W3 and ends when the instance is
+  available for use. Do not hand that preparation to another state lane, queue or executor, defer and
+  resume the preparation itself in a later task or event-loop job, or block the calling thread
+  waiting for its completion. Lane state access that completes within the same call is not counted as
+  an execution-resource switch. An asynchronous return representation for an already obtained result
+  is allowed; waiting for separate DI preparation and completion stages before the instance is
+  constructed is not merely result delivery.
+
+Constant time here constrains Framework lookup and wiring costs for a fixed registered handler and
+dependency wiring. It does not impose an absolute execution-time bound on all application code in
+constructors or providers. State classification, serialisation, non-reentrancy and completion signals
+continue to follow [State ownership and lanes](06-state-ownership-and-lanes.en.md).
+
+This preparation interval excludes execution of handler and filter business methods, their await or
+Yield, and asynchronous cleanup after terminal completion. If a filter starts the next instance
+lookup after an await, the same condition applies relative to the application continuation that
+starts that lookup. Framework API "10"·"11" continue to define when scopes and instances are cleaned
+up and the requirement to clean them up exactly once.
+
+Initial Spot and Actor handler creation and dependency resolution take place in the activation scope
+defined by Framework API "11". Initial activation and relocation follow "5" and their lifecycle
+contracts. Lookup of an activated instance within W1–W3 remains subject to this cost boundary.
+
+DI integration may reside in the core runtime or in a separate package or extension. Wherever it
+resides, adapter code executed to prepare handlers or filters is subject to this cost boundary and
+the lifetime rules in Framework API "10"·"11".
 
 Internal check — that ready-set transitions (empty → non-empty) match worker wake-ups, and that no
 per-record dispatch task or supervisor registration exists between W1 and W4, are white-box invariants
@@ -325,7 +364,7 @@ of §3 and §4, and the language pages link the instrumentation points and test 
   send-saturation and for each payload 1024 and 4096, the value being the ratio of the aggregator's 3-run
   medians. This 0.90 is the pass line this page has confirmed, separate from the 0.80 pass line bench
   spec §7.2 applies to request-backpressure. Pass or fail is decided by this ratio alone — below 0.90
-  is a defect, and a value above 1 is not (user decision 2026-09-10).
+  is a defect, and a value above 1 is not.
 - (d) **Concurrency** (measurement candidate): in request-window(100), the 3-run median of the per-run mean in-flight count
   (throughput × mean latency) is at least 90.
 - (e) **Consumption rate** (measurement candidate): in send-saturation the time D from the close of the active window to the

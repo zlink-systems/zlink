@@ -6149,7 +6149,8 @@ call_id_t public_host_runtime_t::next_operation ()
 
 void public_host_runtime_t::register_local_completion (
   pending_operation_t &operation, std::chrono::milliseconds timeout,
-  spot_request_completion_t completion, std::function<void ()> incomplete)
+  spot_request_completion_t completion, std::function<void ()> incomplete,
+  mesh_request_surface_t request_surface)
 {
     try {
         operation.prepare_for_registration ();
@@ -6199,9 +6200,9 @@ void public_host_runtime_t::register_local_completion (
               } else {
                   source->complete (result_t<operation_completion_t>::failure (
                     framework_error_kind_t::internal_failure,
-                    terminal_message));
+                        terminal_message));
               }
-          });
+          }, std::nullopt, request_surface);
         if (!registered)
             throw framework_exception_t (framework_error_kind_t::capacity_exceeded,
                                          "Operation completion capacity is exhausted");
@@ -6430,7 +6431,7 @@ zlink::submit_result_t public_host_runtime_t::enqueue_local_actor_message (
           return _local_dispatch_completion_lane
             .run ([&] {
               if (operation) {
-                  register_local_completion (*operation, timeout);
+                  register_local_completion (*operation, timeout, {}, {}, mesh_request_surface_t::actor);
                   record.operation_id = operation->id;
                   std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
                   record.reply_token.host = weak;
@@ -6534,7 +6535,8 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
           }
           return _local_dispatch_completion_lane
             .run ([&] {
-              register_local_completion (operation, timeout, std::move (completion));
+              register_local_completion (operation, timeout, std::move (completion), {},
+                                         mesh_request_surface_t::spot);
               record.operation_id = operation.id;
               std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
               record.reply_token.host = weak;

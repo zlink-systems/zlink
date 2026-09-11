@@ -1446,7 +1446,8 @@ ZLINK_PERF_REPO_DIR="${REPO_DIR}" python3 - "${ROOT_DIR}/report_common.py" "${tm
   "${STREAM_NON_TCP_CLIENTS_MAX}" "${DISABLE_RESOURCE_METRICS}" "${TIMEOUT_SECONDS}" \
   "${DEFAULT_CLIENTS}" "${STREAM_DEFAULT_CLIENTS}" "${RESULTS_TAG}" \
   "${expected_result_lines}" "${actual_result_lines}" \
-  "${PERF_FAIL_FAST:-0}" <<'PY' || python_status=$?
+  "${PERF_FAIL_FAST:-0}" "${ZLINK_CORE_SOURCE}" "${CORE_VERSION}" \
+  "${CORE_RUNTIME}" <<'PY' || python_status=$?
 import csv
 import datetime
 import math
@@ -1468,6 +1469,7 @@ from pathlib import Path
     stream_non_tcp_clients_max, disable_resource_metrics, timeout_seconds,
     default_clients, default_stream_clients, results_tag,
     expected_result_lines, actual_result_lines, fail_fast,
+    core_source, core_version, core_runtime,
 ) = sys.argv[1:]
 sys.path.insert(0, str(Path(helper_path).resolve().parent))
 from report_common import load_failures
@@ -1727,6 +1729,9 @@ emit(f"META,cpu,{get_cpu_model()}")
 emit(f"META,cores,{os.cpu_count() or 0}")
 emit("META,build,Release")
 emit(f"META,commit,{get_commit()}")
+emit(f"META,core_source,{core_source}")
+emit(f"META,core_version,{core_version}")
+emit(f"META,core_runtime,{core_runtime}")
 emit("META,timestamp,"
      + datetime.datetime.now().astimezone().isoformat(timespec="seconds"))
 load_avg = get_load_avg()

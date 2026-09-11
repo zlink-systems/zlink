@@ -832,14 +832,14 @@ Token은 raw conversion, ordering, serialization과 `close()`를 제공하지 �
 
 ```ts
 export interface SendSubmission {
-  result: SubmitResult;        // OK | BACKPRESSURED, 제출 시점 스냅샷 (동기 필드)
-  admitted: Promise<void>;     // OK면 완료 상태
+  readonly result: SubmitResult;        // OK | BACKPRESSURED, 제출 시점 스냅샷 (동기 필드)
+  readonly admitted: Promise<void>;     // OK면 완료 상태
 }
 
 export interface RequestSubmission {
-  result: SubmitResult;
-  admitted: Promise<void>;
-  reply: Promise<Message[]>;   // admitted 성공 뒤 완료
+  readonly result: SubmitResult;
+  readonly admitted: Promise<void>;
+  readonly reply: Promise<Message[]>;   // admitted 성공 뒤 완료
 }
 
 export interface SendSubmitOperation {

@@ -87,6 +87,8 @@ build_node() {
     fi
     "$compiler" -b packages/http-client
     npm pack --pack-destination "$out_dir" ./packages/http-client
+    ZLINK_LOCAL_PACKAGE_ROOT="$artifact_root" \
+      node scripts/materialize-local-http-client-package.mjs
   )
   echo "-- http-client Node tarball output: $out_dir"
 }

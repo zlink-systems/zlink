@@ -1,9 +1,13 @@
 package systems.zlink.framework.runtime.internal.metrics;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import systems.zlink.framework.monitoring.ZLinkHostCapacityStatus;
 
@@ -16,6 +20,11 @@ public final class ZLinkRuntimeMetrics {
     private static final AtomicReference<
         Supplier<ZLinkApplicationJobQueuePressureMetrics>>
         APPLICATION_JOB_QUEUE_PRESSURE_SOURCE = new AtomicReference<>();
+    private static final ConcurrentHashMap<Object,
+        Supplier<List<MeshTopologyMetrics>>> MESH_TOPOLOGY_SOURCES =
+            new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<Object, RequestInflightSource>
+        REQUEST_INFLIGHT_SOURCES = new ConcurrentHashMap<>();
     private static final Supplier<ZLinkHostCapacityStatus>
         HOST_CAPACITY_PROJECTION = () -> {
             Supplier<ZLinkHostCapacityStatus> source = HOST_CAPACITY_SOURCE.get();
@@ -26,6 +35,13 @@ public final class ZLinkRuntimeMetrics {
             Supplier<ZLinkApplicationJobQueuePressureMetrics> source =
                 APPLICATION_JOB_QUEUE_PRESSURE_SOURCE.get();
             return source == null ? null : source.get();
+        };
+    private static final Supplier<List<MeshTopologyMetrics>>
+        MESH_TOPOLOGY_PROJECTION = () -> {
+            List<MeshTopologyMetrics> snapshots = new ArrayList<>();
+            MESH_TOPOLOGY_SOURCES.values().forEach(source ->
+                snapshots.addAll(source.get()));
+            return List.copyOf(snapshots);
         };
 
     private ZLinkRuntimeMetrics() { }
@@ -46,6 +62,18 @@ public final class ZLinkRuntimeMetrics {
             } catch (RuntimeException ignored) {
             }
         }
+        if (!MESH_TOPOLOGY_SOURCES.isEmpty()) {
+            try {
+                sink.registerMeshTopology(MESH_TOPOLOGY_PROJECTION);
+            } catch (RuntimeException ignored) {
+            }
+        }
+        REQUEST_INFLIGHT_SOURCES.values().forEach(source -> {
+            try {
+                sink.registerRequestInflight(source.tags(), source.value());
+            } catch (RuntimeException ignored) {
+            }
+        });
         return () -> sink = previous;
     }
 
@@ -81,6 +109,32 @@ public final class ZLinkRuntimeMetrics {
         };
     }
 
+    /** Registers host-owned RouteMesh state read only by observable metrics. */
+    public static AutoCloseable registerMeshTopology(
+        Supplier<List<MeshTopologyMetrics>> source) {
+        Objects.requireNonNull(source, "source");
+        Object owner = new Object();
+        MESH_TOPOLOGY_SOURCES.put(owner, source);
+        try {
+            sink.registerMeshTopology(MESH_TOPOLOGY_PROJECTION);
+        } catch (RuntimeException ignored) {
+        }
+        return () -> MESH_TOPOLOGY_SOURCES.remove(owner, source);
+    }
+
+    static AutoCloseable registerRequestInflight(
+        Map<String, String> tags, LongSupplier value) {
+        RequestInflightSource source = new RequestInflightSource(
+            Map.copyOf(tags), value);
+        Object owner = new Object();
+        REQUEST_INFLIGHT_SOURCES.put(owner, source);
+        try {
+            sink.registerRequestInflight(source.tags(), source.value());
+        } catch (RuntimeException ignored) {
+        }
+        return () -> REQUEST_INFLIGHT_SOURCES.remove(owner, source);
+    }
+
     public static boolean enabled() { return sink != NOOP; }
 
     public static void increment(String name, Map<String, String> tags) {
@@ -105,6 +159,29 @@ public final class ZLinkRuntimeMetrics {
         catch (RuntimeException ignored) { }
     }
 
+    public record MeshTopologyMetrics(
+        String meshName,
+        String source,
+        long configuredPeers,
+        long connectedPeers,
+        long readyPeers,
+        List<MeshChannelTopologyMetrics> channels) {
+        public MeshTopologyMetrics {
+            Objects.requireNonNull(meshName, "meshName");
+            Objects.requireNonNull(source, "source");
+            channels = List.copyOf(channels);
+        }
+    }
+
+    public record MeshChannelTopologyMetrics(String channelName, long readyMembers) {
+        public MeshChannelTopologyMetrics {
+            Objects.requireNonNull(channelName, "channelName");
+        }
+    }
+
+    private record RequestInflightSource(
+        Map<String, String> tags, LongSupplier value) { }
+
     public interface Sink {
         default void increment(String name, Map<String, String> tags) { }
         default void add(String name, long delta, Map<String, String> tags) { }
@@ -116,5 +193,9 @@ public final class ZLinkRuntimeMetrics {
             Supplier<ZLinkApplicationJobQueuePressureMetrics> source) { }
         default void observeApplicationJobQueuePressure(
             ZLinkApplicationJobQueuePressureMetrics snapshot) { }
+        default void registerMeshTopology(
+            Supplier<List<MeshTopologyMetrics>> source) { }
+        default void registerRequestInflight(
+            Map<String, String> tags, LongSupplier value) { }
     }
 }

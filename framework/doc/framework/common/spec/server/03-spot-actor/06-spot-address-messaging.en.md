@@ -383,8 +383,10 @@ performs resolve and activation in the following order.
    type and target descriptor fence, source node RID/lifecycle
    generation/optional source Spot ID, operation identity/reply
    correlation/deadline, whether command 39's optional metadata is present
-   and the metadata frame, and the first application message. At this
-   point the source doesn't register itself or the target as owner.
+   and the metadata frame, and the first application message.
+   - **The source doesn't register itself or the target as owner, create a creation reservation, or reserve capacity in advance.**
+     The target must check the current owner and its local Spot before acquiring
+     creation authority and capacity together.
    - Command 39's route kind `1` uses the generation fence of an
      already-Ready authority.
    - Missing cold activation uses route kind `2` and only delivers target

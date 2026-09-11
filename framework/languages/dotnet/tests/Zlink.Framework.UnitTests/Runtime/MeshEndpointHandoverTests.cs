@@ -1,3 +1,5 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
+
 using Zlink.Framework.Runtime.Backend.Contracts;
 
 namespace Zlink.Framework.UnitTests;
@@ -59,46 +61,83 @@ public sealed partial class StatefulServiceRuntimeTests
                 peer.RoutingId == middle.RoutingId && peer.State == MeshPeerState.Draining));
         }
         await WaitUntilAsync(() => owner.Status().AdmittedPeerCount == 0);
-        await using var replacement = NewNode(context, "mesh-z-replacement");
+        var scheduler = new GatedTaskScheduler();
+        await using var replacement = new ZLinkManagedMeshNode(
+            context, "mesh", routedSubmitScheduler: scheduler);
+        replacement.SetRoutingId(RoutingId.From("mesh-z-replacement"));
         replacement.SetBind(endpoint);
         replacement.Start();
-        var replacementIntent = owner.ConnectPeer(endpoint, replacement.RoutingId);
-        replacement.ObserveSpotAuthority(owner.RoutingId, spot.SpotId,
-            spot.LifecycleGeneration, owner.Status().LifecycleGeneration,
-            spot.AuthorityOwnerGeneration, 7);
-        var operation = replacement.AllocateOperationId();
-        Assert.Equal(SubmitResult.Ok, replacement.TryRequestCanonicalActorJoin(
-            new ZLinkBackendCanonicalActorJoinRequest(
-                new ZLinkBackendActorRef(replacement.RoutingId, "a1", 11),
-                replacement.Status().LifecycleGeneration, 13, 7, false,
-                owner.RoutingId, spot.SpotId, spot.LifecycleGeneration,
-                owner.Status().LifecycleGeneration, spot.AuthorityOwnerGeneration,
-                7, "ZLinkFrameworkActorJoinRequest", "application/json", "{}"u8.ToArray()),
-            operation, TimeSpan.FromSeconds(2)));
-        var joins = 0;
-        int? completion = null;
-        await WaitUntilAsync(() =>
+        try
         {
-            foreach (var record in DrainRecords(owner))
+            var replacementIntent = owner.ConnectPeer(endpoint, replacement.RoutingId);
+            await scheduler.Queued.WaitAsync(TimeSpan.FromSeconds(5));
+            // Hello is validated, but the executor has not submitted its Admit.
+            // Neither the status nor route selection may expose readiness yet.
+            Assert.Equal(0U, replacement.Status().AdmittedPeerCount);
+            Assert.Equal(MeshPeerState.Connecting, Assert.Single(replacement.Peers()).State);
+            Assert.Equal(0U, owner.Status().AdmittedPeerCount);
+            replacement.ObserveSpotAuthority(owner.RoutingId, spot.SpotId,
+                spot.LifecycleGeneration, owner.Status().LifecycleGeneration,
+                spot.AuthorityOwnerGeneration, 7);
+            var operation = replacement.AllocateOperationId();
+            Assert.Equal(SubmitResult.Ok, replacement.TryRequestCanonicalActorJoin(
+                new ZLinkBackendCanonicalActorJoinRequest(
+                    new ZLinkBackendActorRef(replacement.RoutingId, "a1", 11),
+                    replacement.Status().LifecycleGeneration, 13, 7, false,
+                    owner.RoutingId, spot.SpotId, spot.LifecycleGeneration,
+                    owner.Status().LifecycleGeneration, spot.AuthorityOwnerGeneration,
+                    7, "ZLinkFrameworkActorJoinRequest", "application/json", "{}"u8.ToArray()),
+                operation, TimeSpan.FromSeconds(2)));
+            // Model a reverse record arriving after remote Admit receipt but before
+            // the local send continuation. The validated Hello authenticates ingress
+            // independently of local outbound readiness; no binding internals are used.
+            using (var header = Message.From(ZLinkServiceWireCodec.EncodeApplication(
+                       ServiceWireConstants.Command.NodeSend, 0, null, false)))
+            using (var payload = Message.From(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
+                       new ReadOnlyMemory<byte>[] { "reverse-before-ready"u8.ToArray() })))
+                ownerContext.Router!.Send(replacement.RoutingId).Message(header).Message(payload).Submit();
+            MeshReceiveRecord? reverse = null;
+            await WaitUntilAsync(() =>
             {
-                if (record.OperationKind != MeshOperationKind.ActorJoin) continue;
-                joins++;
-                Assert.Equal(SubmitResult.Ok,
-                    record.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>()));
-            }
-            foreach (var record in DrainRecords(replacement))
+                foreach (var record in DrainRecords(replacement))
+                {
+                    Assert.NotEqual(operation, record.OperationId);
+                    if (record.Kind == MeshRecordKind.NodeSend) reverse = record;
+                }
+                return reverse is not null;
+            });
+            Assert.Equal(0U, replacement.Status().AdmittedPeerCount);
+            scheduler.Release();
+
+            var joins = 0;
+            int? completion = null;
+            await WaitUntilAsync(() =>
             {
-                if (record.OperationId != operation) continue;
-                completion = record.TerminalResult;
-            }
-            return completion is not null;
-        });
-        Assert.Equal((int)RequestResult.Ok, completion);
-        Assert.Equal(1, joins);
-        var outbound = Assert.Single(owner.Peers(), peer => peer.RoutingId == replacement.RoutingId);
-        Assert.Equal(replacementIntent, outbound.ConnectionIntentId);
-        Assert.Equal(MeshPeerState.Admitted, outbound.State);
-        Assert.Equal(MeshPeerState.Admitted, Assert.Single(replacement.Peers()).State);
+                foreach (var record in DrainRecords(owner))
+                {
+                    if (record.OperationKind != MeshOperationKind.ActorJoin) continue;
+                    joins++;
+                    Assert.Equal(SubmitResult.Ok,
+                        record.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>()));
+                }
+                foreach (var record in DrainRecords(replacement))
+                {
+                    if (record.OperationId != operation) continue;
+                    completion = record.TerminalResult;
+                }
+                return completion is not null;
+            });
+            Assert.Equal((int)RequestResult.Ok, completion);
+            Assert.Equal(1, joins);
+            var outbound = Assert.Single(owner.Peers(), peer => peer.RoutingId == replacement.RoutingId);
+            Assert.Equal(replacementIntent, outbound.ConnectionIntentId);
+            Assert.Equal(MeshPeerState.Admitted, outbound.State);
+            Assert.Equal(MeshPeerState.Admitted, Assert.Single(replacement.Peers()).State);
+        }
+        finally
+        {
+            scheduler.Release();
+        }
     }
 
     [Fact]
