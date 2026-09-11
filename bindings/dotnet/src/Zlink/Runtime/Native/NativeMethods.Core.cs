@@ -170,11 +170,13 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int zlink_errno();
 
-    // Every import whose caller consumes errno sets SetLastError so the CLR
-    // snapshots it at the return boundary. Imports whose call sites use only
-    // their semantic result or explicit errorOut stay on the cheaper path.
+    // Unix SetLastError snapshots CRT errno at the return boundary. Windows
+    // snapshots Win32 last-error instead, so read Core's CRT errno directly.
+    // Callers invoke this helper immediately after the preceding P/Invoke.
     internal static int GetLastPInvokeError() =>
-        Marshal.GetLastPInvokeError();
+        OperatingSystem.IsWindows()
+            ? zlink_errno()
+            : Marshal.GetLastPInvokeError();
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr zlink_strerror(int errnum);

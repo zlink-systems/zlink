@@ -63,7 +63,37 @@ public sealed class test_writable_token_delivery
             CompletionOwnerTestAccess.Property(attempt, "Failure"));
         Assert.Equal(ZlinkSubmitException.ErrorCode.Backpressured,
             failure.Result);
-        Assert.True(failure.NativeErrno is 11 or 35 or 10035,
+        Assert.True(failure.NativeErrno is 11 or 35,
+            $"Expected EAGAIN, got {failure.NativeErrno}.");
+    }
+
+    [Fact]
+    public void backpressured_send_captures_errno_from_submitting_pinvoke()
+    {
+        Assert.True(CoreTestSupport.IsNativeAvailable());
+        Type nativeMethods = CompletionOwnerTestAccess.RuntimeType(
+            "Systems.Zlink.Runtime.Native.NativeMethods");
+        MethodInfo send = nativeMethods.GetMethod("zlink_send",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+        Assert.True(send.GetCustomAttribute<LibraryImportAttribute>()!
+            .SetLastError);
+        using var context = Zlink.CreateContext();
+        using var dealer = context.CreateDealerSocket();
+        dealer.Connect(CoreTestSupport.NewEndpoint(
+            "inproc", "send-errno-capture"));
+        object owner = CompletionOwnerTestAccess.Owner(dealer);
+
+        using Message part = Message.From("waiting-for-route");
+        object attempt = CompletionOwnerTestAccess.Invoke(owner,
+            "SubmitSend", null, new[] { part }, 1, new IntPtr(73))!;
+
+        Assert.NotEqual(0UL, CompletionOwnerTestAccess.Property(
+            attempt, "CompletionId"));
+        ZlinkSubmitException failure = Assert.IsType<ZlinkSubmitException>(
+            CompletionOwnerTestAccess.Property(attempt, "Failure"));
+        Assert.Equal(ZlinkSubmitException.ErrorCode.Backpressured,
+            failure.Result);
+        Assert.True(failure.NativeErrno is 11 or 35,
             $"Expected EAGAIN, got {failure.NativeErrno}.");
     }
 
