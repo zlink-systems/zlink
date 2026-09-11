@@ -7,9 +7,9 @@
         <ZLinkBindingsProject>$([System.IO.Path]::GetFullPath('$(ZLinkRepoRoot)/bindings/dotnet/src/Zlink/Zlink.csproj'))</ZLinkBindingsProject>
         <Version Condition="'$(Version)' == '' and Exists('$(ZLinkFrameworkVersionFile)')">$([System.IO.File]::ReadAllText('$(ZLinkFrameworkVersionFile)').Trim().Replace('ZLINK_FRAMEWORK_VERSION=', ''))</Version>
         <ZLinkLocalPackageRoot Condition="'$(ZLINK_LOCAL_PACKAGE_ROOT)' != ''">$(ZLINK_LOCAL_PACKAGE_ROOT)</ZLinkLocalPackageRoot>
-        <ZLinkLocalNuGetSource Condition="'$(ZLinkLocalNuGetSource)' == '' and '$(ZLinkLocalPackageRoot)' != '' and Exists('$(ZLinkLocalPackageRoot)/nuget')">$(ZLinkLocalPackageRoot)/nuget</ZLinkLocalNuGetSource>
-        <ZLinkLocalNuGetSource Condition="'$(ZLinkLocalNuGetSource)' == '' and Exists('$(ZLinkRepoRoot)/.artifacts/wsl/nuget')">$(ZLinkRepoRoot)/.artifacts/wsl/nuget</ZLinkLocalNuGetSource>
-        <ZLinkLocalNuGetSource Condition="'$(ZLinkLocalNuGetSource)' == '' and Exists('$(ZLinkRepoRoot)/.artifacts/windows/nuget')">$(ZLinkRepoRoot)/.artifacts/windows/nuget</ZLinkLocalNuGetSource>
+        <ZLinkLocalNuGetSource Condition="'$(ZLinkLocalNuGetSource)' == '' and '$(ZLinkLocalPackageRoot)' != ''">$(ZLinkLocalPackageRoot)/nuget</ZLinkLocalNuGetSource>
+        <ZLinkLocalNuGetSource Condition="'$(ZLinkLocalNuGetSource)' == '' and $([MSBuild]::IsOSPlatform('Windows')) and Exists('$(ZLinkRepoRoot)/.artifacts/windows/nuget')">$(ZLinkRepoRoot)/.artifacts/windows/nuget</ZLinkLocalNuGetSource>
+        <ZLinkLocalNuGetSource Condition="'$(ZLinkLocalNuGetSource)' == '' and !$([MSBuild]::IsOSPlatform('Windows')) and Exists('$(ZLinkRepoRoot)/.artifacts/wsl/nuget')">$(ZLinkRepoRoot)/.artifacts/wsl/nuget</ZLinkLocalNuGetSource>
         <RestoreAdditionalProjectSources Condition="'$(ZLinkLocalNuGetSource)' != ''">$(RestoreAdditionalProjectSources);$(ZLinkLocalNuGetSource)</RestoreAdditionalProjectSources>
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>

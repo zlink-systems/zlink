@@ -8,6 +8,244 @@ if (-not (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
 $script:SampleProcesses = @()
 $script:SampleProcessNames = @{}
 
+if ($IsWindows -and -not ("Zlink.SampleWindowsProcessGroup" -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace Zlink
+{
+    public static class SampleWindowsProcessGroup
+    {
+        private const uint CreateNewProcessGroup = 0x00000200;
+        private const uint CtrlBreakEvent = 1;
+        private const uint GenericWrite = 0x40000000;
+        private const uint FileShareRead = 0x00000001;
+        private const uint FileShareWrite = 0x00000002;
+        private const uint FileShareDelete = 0x00000004;
+        private const uint CreateAlways = 2;
+        private const uint FileAttributeNormal = 0x00000080;
+        private const uint StartfUseStdHandles = 0x00000100;
+        private const int StdInputHandle = -10;
+        private static readonly IntPtr InvalidHandleValue = new IntPtr(-1);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SecurityAttributes
+        {
+            public int Length;
+            public IntPtr SecurityDescriptor;
+            [MarshalAs(UnmanagedType.Bool)] public bool InheritHandle;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct StartupInfo
+        {
+            public int Size;
+            public string Reserved;
+            public string Desktop;
+            public string Title;
+            public int X;
+            public int Y;
+            public int XSize;
+            public int YSize;
+            public int XCountChars;
+            public int YCountChars;
+            public int FillAttribute;
+            public int Flags;
+            public short ShowWindow;
+            public short Reserved2Size;
+            public IntPtr Reserved2;
+            public IntPtr StandardInput;
+            public IntPtr StandardOutput;
+            public IntPtr StandardError;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ProcessInformation
+        {
+            public IntPtr Process;
+            public IntPtr Thread;
+            public int ProcessId;
+            public int ThreadId;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreateProcess(
+            string applicationName,
+            StringBuilder commandLine,
+            IntPtr processAttributes,
+            IntPtr threadAttributes,
+            [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,
+            uint creationFlags,
+            IntPtr environment,
+            string currentDirectory,
+            ref StartupInfo startupInfo,
+            out ProcessInformation processInformation);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateFile(
+            string fileName,
+            uint desiredAccess,
+            uint shareMode,
+            ref SecurityAttributes securityAttributes,
+            uint creationDisposition,
+            uint flagsAndAttributes,
+            IntPtr templateFile);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr handle);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr GetStdHandle(int standardHandle);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GenerateConsoleCtrlEvent(uint controlEvent, uint processGroupId);
+
+        public static Process Start(
+            string filePath,
+            string[] arguments,
+            string workingDirectory,
+            string standardOutputPath,
+            string standardErrorPath)
+        {
+            SecurityAttributes security = new SecurityAttributes
+            {
+                Length = Marshal.SizeOf(typeof(SecurityAttributes)),
+                InheritHandle = true
+            };
+            IntPtr standardOutput = OpenLog(standardOutputPath, ref security);
+            IntPtr standardError = IntPtr.Zero;
+            ProcessInformation processInformation = new ProcessInformation();
+            try
+            {
+                standardError = OpenLog(standardErrorPath, ref security);
+                StartupInfo startupInfo = new StartupInfo
+                {
+                    Size = Marshal.SizeOf(typeof(StartupInfo)),
+                    Flags = (int)StartfUseStdHandles,
+                    StandardInput = GetStdHandle(StdInputHandle),
+                    StandardOutput = standardOutput,
+                    StandardError = standardError
+                };
+                string applicationName = filePath;
+                StringBuilder commandLine;
+                string extension = System.IO.Path.GetExtension(filePath);
+                if (String.Equals(extension, ".cmd", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(extension, ".bat", StringComparison.OrdinalIgnoreCase))
+                {
+                    string commandInterpreter = Environment.GetEnvironmentVariable("ComSpec");
+                    if (String.IsNullOrWhiteSpace(commandInterpreter))
+                        throw new InvalidOperationException("ComSpec is required to launch a Windows batch command.");
+                    applicationName = commandInterpreter;
+                    commandLine = new StringBuilder(Quote(commandInterpreter)).Append(" /d /s /c \"")
+                        .Append(BuildCommandLine(filePath, arguments)).Append('"');
+                }
+                else
+                {
+                    commandLine = BuildCommandLine(filePath, arguments);
+                }
+
+                if (!CreateProcess(
+                    applicationName,
+                    commandLine,
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    true,
+                    CreateNewProcessGroup,
+                    IntPtr.Zero,
+                    String.IsNullOrWhiteSpace(workingDirectory) ? null : workingDirectory,
+                    ref startupInfo,
+                    out processInformation))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(),
+                        "Failed to start the sample process group.");
+                }
+
+                Process process = Process.GetProcessById(processInformation.ProcessId);
+                process.Refresh();
+                return process;
+            }
+            finally
+            {
+                if (processInformation.Thread != IntPtr.Zero) CloseHandle(processInformation.Thread);
+                if (processInformation.Process != IntPtr.Zero) CloseHandle(processInformation.Process);
+                if (standardError != IntPtr.Zero && standardError != InvalidHandleValue) CloseHandle(standardError);
+                if (standardOutput != IntPtr.Zero && standardOutput != InvalidHandleValue) CloseHandle(standardOutput);
+            }
+        }
+
+        public static void SendBreak(int processGroupId)
+        {
+            if (!GenerateConsoleCtrlEvent(CtrlBreakEvent, unchecked((uint)processGroupId)))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(),
+                    "Failed to send CTRL_BREAK_EVENT to sample process group " + processGroupId + ".");
+            }
+        }
+
+        private static IntPtr OpenLog(string path, ref SecurityAttributes security)
+        {
+            IntPtr handle = CreateFile(
+                path,
+                GenericWrite,
+                FileShareRead | FileShareWrite | FileShareDelete,
+                ref security,
+                CreateAlways,
+                FileAttributeNormal,
+                IntPtr.Zero);
+            if (handle == InvalidHandleValue)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to open sample log " + path + ".");
+            }
+            return handle;
+        }
+
+        private static StringBuilder BuildCommandLine(string filePath, string[] arguments)
+        {
+            StringBuilder commandLine = new StringBuilder(Quote(filePath));
+            foreach (string argument in arguments)
+            {
+                commandLine.Append(' ').Append(Quote(argument));
+            }
+            return commandLine;
+        }
+
+        private static string Quote(string argument)
+        {
+            if (argument.Length > 0 && argument.IndexOfAny(new[] { ' ', '\t', '\n', '\v', '"' }) < 0)
+                return argument;
+
+            StringBuilder quoted = new StringBuilder("\"");
+            int backslashes = 0;
+            foreach (char character in argument)
+            {
+                if (character == '\\')
+                {
+                    backslashes++;
+                    continue;
+                }
+                if (character == '"')
+                {
+                    quoted.Append('\\', backslashes * 2 + 1).Append(character);
+                    backslashes = 0;
+                    continue;
+                }
+                quoted.Append('\\', backslashes).Append(character);
+                backslashes = 0;
+            }
+            return quoted.Append('\\', backslashes * 2).Append('"').ToString();
+        }
+    }
+}
+'@
+}
+
 function Invoke-SampleDockerCommand {
     param(
         [Parameter(Mandatory = $true)][string[]]$Arguments,
@@ -372,6 +610,48 @@ function Invoke-SampleDotnetBuild {
     }
 }
 
+function Start-SampleProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string]$LogDirectory,
+        [string[]]$Arguments = @(),
+        [string]$WorkingDirectory = ""
+    )
+
+    $standardOutput = Join-Path $LogDirectory "$Name.out.log"
+    $standardError = Join-Path $LogDirectory "$Name.err.log"
+    if ($IsWindows) {
+        $command = Get-Command $FilePath -CommandType Application -ErrorAction Stop |
+            Select-Object -First 1
+        $process = [Zlink.SampleWindowsProcessGroup]::Start(
+            $command.Source,
+            $Arguments,
+            $WorkingDirectory,
+            $standardOutput,
+            $standardError)
+    }
+    else {
+        $parameters = @{
+            FilePath = $FilePath
+            ArgumentList = $Arguments
+            RedirectStandardOutput = $standardOutput
+            RedirectStandardError = $standardError
+            NoNewWindow = $true
+            PassThru = $true
+        }
+        if ($WorkingDirectory) {
+            $parameters.WorkingDirectory = $WorkingDirectory
+        }
+        $process = Start-Process @parameters
+    }
+    # Materialize the native process handle before callers inspect ExitCode.
+    [void]$process.Handle
+    $script:SampleProcesses += $process
+    $script:SampleProcessNames[$process.Id] = $Name
+    return $process
+}
+
 function Start-SampleDotnetAssembly {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -385,15 +665,96 @@ function Start-SampleDotnetAssembly {
     $projectName = [System.IO.Path]::GetFileNameWithoutExtension($projectPath)
     $assembly = Join-Path $projectDirectory "bin/Debug/net8.0/$projectName.dll"
     $argumentList = @($assembly) + $Arguments
-    $process = Start-Process -FilePath "dotnet" `
-        -ArgumentList $argumentList `
-        -RedirectStandardOutput (Join-Path $LogDirectory "$Name.out.log") `
-        -RedirectStandardError (Join-Path $LogDirectory "$Name.err.log") `
-        -NoNewWindow `
-        -PassThru
-    $script:SampleProcesses += $process
-    $script:SampleProcessNames[$process.Id] = $Name
-    return $process
+    return Start-SampleProcess -Name $Name -FilePath "dotnet" -Arguments $argumentList `
+        -LogDirectory $LogDirectory
+}
+
+function Stop-SampleWindowsProcessTree {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = "taskkill.exe"
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    if ($startInfo.PSObject.Properties.Name -contains "ArgumentList") {
+        foreach ($argument in @("/PID", "$ProcessId", "/T", "/F")) {
+            $startInfo.ArgumentList.Add($argument)
+        }
+    }
+    else {
+        $startInfo.Arguments = "/PID $ProcessId /T /F"
+    }
+    $taskkill = [System.Diagnostics.Process]::new()
+    $taskkill.StartInfo = $startInfo
+    try {
+        if (-not $taskkill.Start()) { throw "Failed to start taskkill.exe." }
+        $stdout = $taskkill.StandardOutput.ReadToEndAsync()
+        $stderr = $taskkill.StandardError.ReadToEndAsync()
+        if (-not $taskkill.WaitForExit(5000)) {
+            $taskkill.Kill()
+            throw "taskkill.exe timed out while terminating process $ProcessId."
+        }
+        if ($taskkill.ExitCode -ne 0 -and
+            $null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+            throw "taskkill.exe failed for process $ProcessId`: $($stderr.GetAwaiter().GetResult().Trim()) $($stdout.GetAwaiter().GetResult().Trim())"
+        }
+    }
+    finally {
+        $taskkill.Dispose()
+    }
+}
+
+function Stop-SampleProcess {
+    param(
+        [Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process,
+        [switch]$Force,
+        [int]$GraceMilliseconds = 30000
+    )
+
+    if ($Process.HasExited) { return }
+    if (-not $Force) {
+        if ($IsWindows) {
+            try {
+                [Zlink.SampleWindowsProcessGroup]::SendBreak($Process.Id)
+            }
+            catch {
+                $Process.Refresh()
+                if (-not $Process.HasExited) { throw }
+            }
+        }
+        else {
+            try { [void]$Process.CloseMainWindow() } catch {}
+        }
+        if ($Process.WaitForExit($GraceMilliseconds)) { return }
+    }
+    if ($IsWindows) {
+        Stop-SampleWindowsProcessTree -ProcessId $Process.Id
+    }
+    else {
+        $Process.Kill($true)
+    }
+    if (-not $Process.WaitForExit(5000)) {
+        throw "Sample process $($Process.Id) did not exit after termination."
+    }
+}
+
+function Wait-SampleProcess {
+    param(
+        [Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process,
+        [Parameter(Mandatory = $true)][string]$Description,
+        [int]$TimeoutSeconds = 180
+    )
+
+    if (-not $Process.WaitForExit($TimeoutSeconds * 1000)) {
+        Stop-SampleProcess -Process $Process -Force
+        throw "$Description timed out after $TimeoutSeconds seconds."
+    }
+    $Process.Refresh()
+    if ($Process.ExitCode -ne 0) {
+        throw "$Description failed with exit code $($Process.ExitCode)."
+    }
 }
 
 function Invoke-SampleDotnetRun {
@@ -415,15 +776,27 @@ function Stop-SampleProcesses {
         $process = $script:SampleProcesses[$i]
         try {
             if (-not $process.HasExited) {
-                $process.CloseMainWindow() | Out-Null
+                if ($IsWindows) {
+                    [Zlink.SampleWindowsProcessGroup]::SendBreak($process.Id)
+                }
+                else {
+                    $process.CloseMainWindow() | Out-Null
+                }
                 Start-Sleep -Milliseconds 100
             }
         }
         catch {
+            $process.Refresh()
+            if (-not $process.HasExited) {
+                $name = $script:SampleProcessNames[$process.Id]
+                if ([string]::IsNullOrWhiteSpace($name)) { $name = "pid-$($process.Id)" }
+                $teardownFailures += "Sample role $name (pid $($process.Id)) graceful termination failed: $($_.Exception.Message)"
+            }
         }
     }
 
-    for ($i = 0; $i -lt 20; $i++) {
+    # Match the Framework shutdown deadline used by redis-common.sh.
+    for ($i = 0; $i -lt 300; $i++) {
         $alive = @($script:SampleProcesses | Where-Object { -not $_.HasExited })
         if ($alive.Count -eq 0) {
             break
@@ -436,17 +809,25 @@ function Stop-SampleProcesses {
             if (-not $process.HasExited) {
                 $name = $script:SampleProcessNames[$process.Id]
                 if ([string]::IsNullOrWhiteSpace($name)) { $name = "pid-$($process.Id)" }
-                if (-not $IsWindows) {
+                if ($IsWindows) {
+                    $teardownFailures += "Sample role $name (pid $($process.Id)) required forced termination (taskkill /F)."
+                }
+                else {
                     $teardownFailures += "Sample role $name (pid $($process.Id)) exited during cleanup with status -9 (SIGKILL)."
                 }
                 $forcedProcessIds[$process.Id] = $true
                 if ($IsWindows) {
-                    Stop-Process -Id $process.Id -Force -ErrorAction Stop
+                    Stop-SampleWindowsProcessTree -ProcessId $process.Id
                 } else {
                     $process.Kill($true)
                 }
             }
-            $process.WaitForExit()
+            if (-not $process.WaitForExit(5000)) {
+                $name = $script:SampleProcessNames[$process.Id]
+                if ([string]::IsNullOrWhiteSpace($name)) { $name = "pid-$($process.Id)" }
+                $teardownFailures += "Sample role $name (pid $($process.Id)) did not exit after termination."
+                continue
+            }
             if (-not $forcedProcessIds.ContainsKey($process.Id) -and
                 ($process.ExitCode -eq 137 -or $process.ExitCode -eq -9)) {
                 $name = $script:SampleProcessNames[$process.Id]
@@ -456,6 +837,9 @@ function Stop-SampleProcesses {
             }
         }
         catch {
+            $name = $script:SampleProcessNames[$process.Id]
+            if ([string]::IsNullOrWhiteSpace($name)) { $name = "pid-$($process.Id)" }
+            $teardownFailures += "Sample role $name (pid $($process.Id)) cleanup failed: $($_.Exception.Message)"
         }
         finally {
             $process.Dispose()

@@ -515,6 +515,31 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
+    public void LocalNugetDefaultsDoNotCrossPlatformBoundariesOrOverrideExplicitRoots()
+    {
+        var props = File.ReadAllText(Path.Combine(ResolveDotnetRoot(), "Directory.Build.props"));
+
+        Assert.Contains(
+            "'$(ZLinkLocalPackageRoot)' != ''\">$(ZLinkLocalPackageRoot)/nuget",
+            props,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "'$(ZLinkLocalPackageRoot)' != '' and Exists('$(ZLinkLocalPackageRoot)/nuget')",
+            props,
+            StringComparison.Ordinal);
+        var windowsDefault = props.Split('\n').Single(static line =>
+            line.Contains(".artifacts/windows/nuget", StringComparison.Ordinal));
+        var nonWindowsDefault = props.Split('\n').Single(static line =>
+            line.Contains(".artifacts/wsl/nuget", StringComparison.Ordinal));
+        Assert.Contains("$([MSBuild]::IsOSPlatform('Windows'))", windowsDefault,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("!$([MSBuild]::IsOSPlatform('Windows'))", windowsDefault,
+            StringComparison.Ordinal);
+        Assert.Contains("!$([MSBuild]::IsOSPlatform('Windows'))", nonWindowsDefault,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SampleRunnersDoNotExposeEnvironmentConfigurationFallbacks()
     {
         var forbidden = new[]
@@ -584,16 +609,10 @@ public sealed partial class RegressionTests
                 sampleRoot,
                 sample,
                 "run_sample.ps1"));
-            if (sample == "ZoneWorld")
-                Assert.Contains("run_sample.sh", powershellRunner,
-                    StringComparison.Ordinal);
-            else
-            {
-                Assert.Contains("New-SamplePorts", powershellRunner,
-                    StringComparison.Ordinal);
-                Assert.Contains("Start-SampleRedisContainer", powershellRunner,
-                    StringComparison.Ordinal);
-            }
+            Assert.Contains("New-SamplePorts", powershellRunner,
+                StringComparison.Ordinal);
+            Assert.Contains("Start-SampleRedisContainer", powershellRunner,
+                StringComparison.Ordinal);
         }
 
         var powershellHelper = File.ReadAllText(Path.Combine(
@@ -709,8 +728,13 @@ public sealed partial class RegressionTests
 
         var zoneWorldPowerShellRunner = File.ReadAllText(Path.Combine(
             ResolveDotnetRoot(), "samples", "ZoneWorld", "run_sample.ps1"));
-        Assert.Contains("run_sample.sh", zoneWorldPowerShellRunner, StringComparison.Ordinal);
-        Assert.Contains("bash", zoneWorldPowerShellRunner, StringComparison.Ordinal);
+        Assert.Contains("sample_runner.ps1", zoneWorldPowerShellRunner, StringComparison.Ordinal);
+        Assert.Contains("Start-SampleDotnetAssembly", zoneWorldPowerShellRunner, StringComparison.Ordinal);
+        Assert.Contains("Wait-ZoneWorldLog", zoneWorldPowerShellRunner, StringComparison.Ordinal);
+        Assert.Contains("$BrowserSmoke", zoneWorldPowerShellRunner, StringComparison.Ordinal);
+        Assert.Contains("Stop-SampleProcesses", zoneWorldPowerShellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain("run_sample.sh", zoneWorldPowerShellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain("Get-Command bash", zoneWorldPowerShellRunner, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -734,7 +758,33 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal);
         Assert.Contains("exited during cleanup with status -9 (SIGKILL).", powershellHelper,
             StringComparison.Ordinal);
+        Assert.Contains("CreateNewProcessGroup = 0x00000200", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "GenerateConsoleCtrlEvent(CtrlBreakEvent, unchecked((uint)processGroupId))",
+            powershellHelper,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("GenerateConsoleCtrlEvent(CtrlBreakEvent, 0)", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("for ($i = 0; $i -lt 300; $i++)", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("required forced termination (taskkill /F).", powershellHelper,
+            StringComparison.Ordinal);
         Assert.Contains("throw ($teardownFailures -join [Environment]::NewLine)", powershellHelper,
+            StringComparison.Ordinal);
+
+        var zoneWorldRunner = File.ReadAllText(Path.Combine(
+            samplesRoot, "ZoneWorld", "run_sample.ps1"));
+        var cleanup = zoneWorldRunner[zoneWorldRunner.LastIndexOf("finally {", StringComparison.Ordinal)..];
+        var configurationCleanup = cleanup.IndexOf("try { Remove-SampleConfigurationFiles",
+            StringComparison.Ordinal);
+        var processCleanup = cleanup.IndexOf("try { Stop-SampleProcesses }",
+            StringComparison.Ordinal);
+        var redisCleanup = cleanup.IndexOf("try { Remove-SampleRedisContainer",
+            StringComparison.Ordinal);
+        Assert.True(configurationCleanup >= 0 && configurationCleanup < processCleanup);
+        Assert.True(processCleanup < redisCleanup);
+        Assert.Contains("throw ($cleanupFailures -join [Environment]::NewLine)", cleanup,
             StringComparison.Ordinal);
     }
 
@@ -746,6 +796,7 @@ public sealed partial class RegressionTests
         var runtime = File.ReadAllText(Path.Combine(browserRoot, "src", "shared", "config", "runtime.ts"));
         var liveTest = File.ReadAllText(Path.Combine(browserRoot, "tests", "live", "server.spec.ts"));
         var runner = File.ReadAllText(Path.Combine(ResolveSampleRoot("ZoneWorld"), "run_sample.sh"));
+        var powershellRunner = File.ReadAllText(Path.Combine(ResolveSampleRoot("ZoneWorld"), "run_sample.ps1"));
 
         Assert.Contains("fetch('/config.json'", runtime, StringComparison.Ordinal);
         Assert.DoesNotContain("import.meta.env", runtime, StringComparison.Ordinal);
@@ -753,6 +804,10 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("process.env", liveTest, StringComparison.Ordinal);
         Assert.DoesNotContain("ZONEWORLD_", runner, StringComparison.Ordinal);
         Assert.Contains("browser_dist/config.json", runner, StringComparison.Ordinal);
+        Assert.Contains("browserDist \"config.json\"", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains("gateway = $GatewayEndpoint", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains("ops = $OpsEndpoint", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains("lifecycleMarker = $browserMarker", powershellRunner, StringComparison.Ordinal);
     }
 
     [Fact]
