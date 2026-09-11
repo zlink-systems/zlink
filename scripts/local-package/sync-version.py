@@ -783,6 +783,16 @@ def synchronize(
             rf"\g<1>{binding_version}",
             1,
         )
+    for relative in (
+        "framework/languages/dotnet/samples/Directory.Build.props",
+        "framework/languages/dotnet/samples/Directory.Packages.props",
+    ):
+        sync.regex(
+            relative,
+            rf"(<ZLinkBindingsPackageVersion Condition=\"'\$\(ZLinkBindingsPackageVersion\)' == ''\">){SEMVER}(</ZLinkBindingsPackageVersion>)",
+            rf"\g<1>{binding_version}\2",
+            1,
+        )
     binding_version = bindings["java"]
     sync.regex(
         "framework/languages/java/gradle/libs.versions.toml",

@@ -3387,7 +3387,7 @@ marker state inside a `Message` object.
 
 Raw socket request, reply, and ROUTER receive declarations follow
 [Core request and reply](../../../core/doc/spec/core/socket/README.en.md#request-and-reply) and
-[Core routed receive](../../../core/doc/spec/core/socket/README.en.md#routed-and-subscription-receive-family).
+[Core routed receive](../../../core/doc/spec/core/socket/README.en.md#zlink_recv-and-zlink_router_recv).
 [Core completion pull and ownership](../../../core/doc/spec/core/socket/README.en.md#completion-pull-and-ownership)
 owns completion records and the lifetime of returned reply parts.
 
@@ -3415,7 +3415,7 @@ function declarations. See `core/include/zlink.h` for the actual Core C request-
 
 #### Receive Dispatch Model
 
-[Core routed receive](../../../core/doc/spec/core/socket/README.en.md#routed-and-subscription-receive-family)
+[Core routed receive](../../../core/doc/spec/core/socket/README.en.md#zlink_recv-and-zlink_router_recv)
 owns ROUTER application record kinds, source RIDs, and reply tokens. Reply matching follows
 the [Core request contract](../../../core/doc/spec/core/socket/README.en.md#request-and-reply);
 delivery of matched results to the language follows the
@@ -3478,7 +3478,7 @@ interprets wire metadata and preserves the payload boundary in the [Request-Repl
 - Because multipart reply support is the goal, it's a list shape rather
   than a single `Message`. A single-part reply is retrieved with
   `parts[0]`.
-- Responder receive metadata follows [Core routed receive](../../../core/doc/spec/core/socket/README.en.md#routed-and-subscription-receive-family)
+- Responder receive metadata follows [Core routed receive](../../../core/doc/spec/core/socket/README.en.md#zlink_recv-and-zlink_router_recv)
   and the [ReplyToken policy](async-coroutine-policy.en.md#5-replytoken-and-reply).
   Do not introduce a separate `Request` type or dedicated `onRequest` callback.
 
@@ -3914,7 +3914,7 @@ zlink_recv_result_t zlink_spot_recv_actor_lifecycle(void *spot, ...);
 #### Router Receive (unified routed recv surface)
 
 Raw ROUTER DATA/REQUEST receive signatures and metadata follow
-[Core routed receive](../../../core/doc/spec/core/socket/README.en.md#routed-and-subscription-receive-family);
+[Core routed receive](../../../core/doc/spec/core/socket/README.en.md#zlink_recv-and-zlink_router_recv);
 request-result delivery follows the [common completion owner](async-execution-model.en.md#4-pollers-and-completion-drain).
 SPOT-specific routing context belongs to a separate service-layer API.
 

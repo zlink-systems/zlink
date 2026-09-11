@@ -13,6 +13,31 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Invoke-CoreCtest {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BuildType,
+        [Parameter(Mandatory = $true)]
+        [string]$DllDirectory
+    )
+
+    $OldPath = $env:PATH
+    try {
+        $env:PATH = "$DllDirectory;$env:PATH"
+        Write-Host "Temporarily added $DllDirectory to PATH for testing"
+
+        ctest --output-on-failure -C $BuildType --parallel 2>&1 | Write-Host
+        $CtestExitCode = $LASTEXITCODE
+        if ($CtestExitCode -ne 0) {
+            throw "ctest failed with exit code $CtestExitCode."
+        }
+    } finally {
+        $env:PATH = $OldPath
+    }
+
+    Write-Host "All tests passed!"
+}
+
 # Resolve repo root from this script's location (core/builds/windows)
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..\\..\\..")).Path
@@ -289,47 +314,8 @@ try {
             Write-Host "Running ctest..."
 
             # Ensure the DLL directory is in the PATH so tests can find zlink.dll
-            $OLD_PATH = $env:PATH
             $DLL_DIR = (Resolve-Path ("bin\\$BuildType")).Path
-            $env:PATH = "$DLL_DIR;$env:PATH"
-            Write-Host "Temporarily added $DLL_DIR to PATH for testing"
-
-            # Run ctest and capture exit code
-            $ctestOutput = ""
-            $ctestExitCode = 0
-
-            try {
-                # Run ctest with output on failure
-                ctest --output-on-failure -C $BuildType --parallel 2>&1 | Tee-Object -Variable ctestOutput | Write-Host
-                $ctestExitCode = $LASTEXITCODE
-            } catch {
-                $ctestExitCode = 1
-            } finally {
-                # Restore original path
-                $env:PATH = $OLD_PATH
-            }
-
-            if ($ctestExitCode -ne 0) {
-                Write-Host ""
-                Write-Host "Some tests failed. Checking results..."
-
-                # Count failed tests
-                $failedCount = 0
-                if ($ctestOutput -match "(\d+) tests? failed") {
-                    $failedCount = [int]$matches[1]
-                }
-
-                Write-Host "Failed tests: $failedCount"
-
-                # Allow up to 20 test failures (TIPC, fuzzer tests may not work in all environments)
-                if ($failedCount -gt 20) {
-                    throw "Too many test failures ($failedCount). Build may be broken."
-                }
-
-                Write-Host "Acceptable number of test failures. Continuing..."
-            } else {
-                Write-Host "All tests passed!"
-            }
+            Invoke-CoreCtest -BuildType $BuildType -DllDirectory $DLL_DIR
         }
     }
 } finally {

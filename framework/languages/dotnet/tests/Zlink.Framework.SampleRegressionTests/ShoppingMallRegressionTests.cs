@@ -110,6 +110,28 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("$SHOPPINGMALL_BASE_PORT", powershellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("$SHOPPINGMALL_STORE_DIR", powershellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("SHOPPINGMALL_STARTUP_DELAY_SECONDS", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains("[Parameter(Mandatory = $true)][hashtable]$WorkflowUrls", powershellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains("$sourceInstanceId = [string]$result.SourceInstanceId", powershellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains("$WorkflowUrls.ContainsKey($sourceInstanceId)", powershellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains("Where-Object { $_.Key -ne $sourceInstanceId }", powershellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains("\"workflow-a\" = $SHOPPINGMALL_WORKFLOW_A_HTTP_URL", powershellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains("\"workflow-b\" = $SHOPPINGMALL_WORKFLOW_B_HTTP_URL", powershellRunner,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("$url -eq $WorkflowUrls[0]", powershellRunner,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("/self-check/relocation/$relocationOrderId/arm", powershellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains("await selfChecks.ArmPlannedRelocationReplayAsync(OrderId(), cancellationToken);",
+            workflowHostFactory, StringComparison.Ordinal);
+        Assert.Contains(
+            "Wait-ShoppingMallLogExactCount \"replayed\" @((Join-Path $LogDir \"workflow-a.out.log\"), (Join-Path $LogDir \"workflow-b.out.log\")) \"shoppingmall-order replayed order=\" 1",
+            powershellRunner,
+            StringComparison.Ordinal);
         Assert.Contains("Wait-ShoppingMallLogContains \"client-completed\" (Join-Path $SampleLogDir \"client.log\") \"shoppingmall=completed\"",
             powershellRunner, StringComparison.Ordinal);
         foreach (var node in new[] { "workflow-a", "workflow-b" })

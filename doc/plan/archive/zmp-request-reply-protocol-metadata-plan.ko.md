@@ -1,6 +1,6 @@
 # ZMP request-reply protocol metadata 전환 계획
 
-[문서 목차](../README.ko.md) · [전체 구현 계획](implementation-plan.ko.md)
+[문서 목차](../../README.ko.md) · [전체 구현 계획](implementation-plan.ko.md)
 
 > 이 문서는 Core의 request-reply wire 구조를 수정할 개발자를 위한 구현 계획이다.
 > §3과 §11은 이번 변경에서 구현할 목표 계약이지만 보호된 정식 스펙에 반영되기 전에는
@@ -8,12 +8,12 @@
 > 이 문서만 읽은 작업자가 application payload 앞의 protocol envelope를 없애고,
 > request 종류와 sequence를 ZMP header로 안전하게 옮길 수 있어야 한다.
 
-관련 계약은 [ZMP 스펙](../../core/doc/spec/core/protocol/01-zmp.ko.md),
-[DEALER 스펙](../../core/doc/spec/core/socket/06-dealer.ko.md),
-[ROUTER 스펙](../../core/doc/spec/core/socket/07-router.ko.md),
-[Proxy 스펙](../../core/doc/spec/core/07-utilities.ko.md)과
-[Binding 계약](../../bindings/doc/spec/README.ko.md)이 소유한다. 이 계획은
-[스펙 문서 작성 가이드](../principal/documentation/spec-writing-guide.ko.md)를 따른다.
+관련 계약은 [ZMP 스펙](../../../core/doc/spec/core/protocol/01-zmp.ko.md),
+[DEALER 스펙](../../../core/doc/spec/core/socket/06-dealer.ko.md),
+[ROUTER 스펙](../../../core/doc/spec/core/socket/07-router.ko.md),
+[Proxy 스펙](../../../core/doc/spec/core/07-utilities.ko.md)과
+[Binding 계약](../../../bindings/doc/spec/README.ko.md)이 소유한다. 이 계획은
+[스펙 문서 작성 가이드](../../principal/documentation/spec-writing-guide.ko.md)를 따른다.
 
 ## 1. 전환 개요
 
@@ -230,7 +230,7 @@ Source runtime은 application이 넘긴 첫 message에 내부 kind와 sequence�
 ZMP encoder가 이를 header로 기록하고, target의 decoder가 다시 내부 정보로 복원한다. Socket
 runtime은 복원된 kind를 request handler로 보내거나, reply를 pending request에 전달하는 전용
 transport 경로인
-[completion progress lane](../../core/doc/spec/core/glossary.ko.md#completion-progress-lane)으로
+[completion progress lane](../../../core/doc/spec/core/glossary.ko.md#completion-progress-lane)으로
 보낸다.
 
 ```mermaid
@@ -497,8 +497,8 @@ receive-only이므로 새 sender 경로를 만들지 않는다.
   소비하고 staged buffer를 전부 정리하며 pending request와 reply target을 등록하지 않는다.
 
 Binding source ownership은
-[C++ 표준 인터페이스 규칙](../../bindings/doc/spec/cpp/README.ko.md#표준-인터페이스-규칙)과
-[.NET 표준 인터페이스 규칙](../../bindings/doc/spec/dotnet/README.ko.md#표준-인터페이스-규칙)이
+[C++ 표준 인터페이스 규칙](../../../bindings/doc/spec/cpp/README.ko.md#표준-인터페이스-규칙)과
+[.NET 표준 인터페이스 규칙](../../../bindings/doc/spec/dotnet/README.ko.md#표준-인터페이스-규칙)이
 각각 소유한다. 이 계획은 native copy·view에 metadata를 붙이는 구현만 바꾸고 public
 consumption·rollback 의미는 바꾸지 않는다.
 
@@ -1360,4 +1360,4 @@ decoder 상태와 allocation 제거처럼 내부 구조로만 확인할 조건�
 - SENDSEND와 REQREP에 같은 application multipart를 넘기면 raw wire에서 두 operation의
   방향별 ZMP data frame 수가 application part 수와 같다.
 
-[문서 목차](../README.ko.md) · [전체 구현 계획](implementation-plan.ko.md)
+[문서 목차](../../README.ko.md) · [전체 구현 계획](implementation-plan.ko.md)

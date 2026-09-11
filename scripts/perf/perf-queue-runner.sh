@@ -11,8 +11,11 @@
 # 이전 방식(with-perf-lock.sh·wait-for-idle-perf.sh)과 겹치지 않도록 티켓 하나를 실행하는 동안
 # 같은 flock(/tmp/zlink-perf.lock)을 쥔다. 새 측정은 모두 티켓으로 낸다.
 set -u
-repo="$(cd "$(dirname "$0")/../.." && pwd)"
-root="${ZLINK_PERF_QUEUE:-${repo}/.artifacts/perf-queue}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo="$(git -C "${script_dir}" rev-parse --show-toplevel)"
+# shellcheck source=perf-queue-root.sh
+source "${script_dir}/perf-queue-root.sh"
+root="$(perf_queue_root)"
 lock_file="${ZLINK_PERF_LOCK:-/tmp/zlink-perf.lock}"
 load_max="${ZLINK_PERF_LOAD_MAX:-5}"
 pattern='(/perf/build/.*(perf_multi|perf_single)|(perf_multi|perf_single)[^|]* --role |run_benchmarks(_multi)?\.sh .*--pattern|Zlink\.BindingBench[A-Za-z.]*\.dll)'
@@ -20,7 +23,16 @@ mkdir -p "${root}/pending" "${root}/running" "${root}/done" "${root}/log"
 
 # runner 단일 인스턴스
 exec 8>>"${root}/runner.lock"
-if ! flock -n 8; then echo "runner가 이미 떠 있다: $(cat "${root}/runner.pid" 2>/dev/null)" >&2; exit 1; fi
+if ! flock -n 8; then
+  runner_pid=""
+  [ -r "${root}/runner.pid" ] && runner_pid="$(<"${root}/runner.pid")"
+  if [[ "${runner_pid}" =~ ^[1-9][0-9]*$ ]] && kill -0 "${runner_pid}" 2>/dev/null; then
+    echo "runner가 이미 떠 있다: pid ${runner_pid}" >&2
+  else
+    echo "runner가 이미 떠 있다: runner.lock을 다른 runner가 보유 중 (runner.pid stale 또는 없음)" >&2
+  fi
+  exit 1
+fi
 echo $$ > "${root}/runner.pid"
 trap 'rm -f "${root}/runner.pid"' EXIT
 

@@ -1,3 +1,5 @@
+[English](./framework-bindings-dependency-boundary.md) | [한국어](./framework-bindings-dependency-boundary.ko.md)
+
 # Framework와 Bindings 의존 경계 정리
 
 이 문서는 framework 언어 구현이 bindings 라이브러리를 어떤 방식으로 참조해야 하는지 정리한다.

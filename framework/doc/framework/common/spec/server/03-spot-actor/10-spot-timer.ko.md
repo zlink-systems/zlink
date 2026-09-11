@@ -21,9 +21,13 @@ Service runtime은 platform timer의 만료를 callback work로 변환한다. Ca
 generation의 record는 callback을 실행하지 않는다 — 재등록 전에 예약된 tick이 재등록 뒤에
 실행되면 caller가 기대한 새 주기·새 callback과 다른 것이 실행되기 때문이다.
 
-**Cancel은 해당 generation 이후 callback의 시작만 막는다.** 이미 시작한 callback은 강제로
-중단하지 않는다 — cancel 시점에 이미 실행 중인 handler를 강제 종료하면 handler가 다루던
-상태가 일관되지 않은 채로 남을 수 있다.
+**`cancel`은 해당 timer generation의 새 callback 시작을 막고, 이미 시작한 callback과 timer
+resource 정리가 끝난 뒤 그 generation에 하나뿐인 결과로 완료된다.** 이미 시작한 callback은
+강제로 중단하지 않는다 — cancel 시점에 실행 중인 handler를 강제 종료하면 handler가 다루던
+상태가 일관되지 않은 채로 남을 수 있다. 같은 generation에 `cancel`을 여러 번 불러도 모든
+호출자는 같은 성공 또는 실패를 본다. Generation 하나에 완료 소유자와 terminal 결과가 하나뿐이어야
+어느 호출자가 먼저 불렀는지에 따라 관측이 달라지지 않는다. 정리 실패는 삼키지 않고 그 결과로
+전달하며, 분류는 [오류 모델](../00-foundation/07-framework-error-model.ko.md)을 따른다.
 
 **반복 timer가 handler 실행보다 빠르게 만료돼도 같은 key의 callback을 동시에 실행하지
 않는다.** 중복 만료는 하나의 pending record로 합칠 수 있다 — 동시 실행을 허용하면 같은
@@ -33,7 +37,7 @@ timer의 두 callback이 같은 상태를 동시에 바꿀 수 있기 때문이�
 |---|---|
 | 같은 key 재등록 | generation 증가 |
 | 이전 generation의 queue record | callback 실행 안 함 |
-| cancel | 해당 generation 이후 callback 시작 차단(이미 시작한 callback은 중단하지 않음) |
+| cancel | 해당 generation의 새 callback 시작을 막고, 이미 시작한 callback과 timer resource 정리가 끝나면 모든 cancel 호출자를 같은 성공 또는 실패 결과로 완료한다 |
 | 반복 timer가 handler보다 빠르게 만료 | 같은 key의 callback을 동시 실행하지 않음, 중복 만료를 pending record 1개로 병합 가능 |
 
 Callback은 다음 tick 정보를 받는다.
@@ -143,6 +147,8 @@ batch로 처리한다.
   않는다.
 - Cancel 뒤에는 그 generation 이후의 tick이 callback을 시작하지 않지만, cancel 시점에 이미
   실행 중이던 callback은 끝까지 실행된다.
+- 같은 generation의 `cancel`을 동시에 여러 번 호출하면 모든 결과는 당시 실행 중이던 callback과
+  timer resource 정리가 끝난 뒤 완료되며, 정리가 실패하면 모든 호출자가 같은 실패를 본다.
 - 반복 주기가 handler 실행 시간보다 짧아도 같은 key의 callback이 동시에 두 번 실행되지
   않는다.
 

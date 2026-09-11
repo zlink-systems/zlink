@@ -29,7 +29,7 @@
 
 **D-118 적용 Core로 시험한 결과가 아니다.** 소스의 `core/src/runtime/core/pipe.cpp:1874`에는 수정이 있지만 `core/build-dev`를 재빌드하지 않았다. D-118 수정의 검증 또는 새 release baseline으로 이 결과를 채택하면 안 된다.
 
-원본·trace·재현 실행기는 [진단 artifact root](/dev/shm/zlink-perf-dotnet/diag-followup-20260906)에 있다. 각 표의 run 이름이 그 아래 디렉터리 이름이다. 모든 결과를 보존했으며 기존 phase 1 원본은 덮어쓰지 않았다.
+원본·trace·재현 실행기는 진단 artifact root (`/dev/shm/zlink-perf-dotnet/diag-followup-20260906`)에 있다. 각 표의 run 이름이 그 아래 디렉터리 이름이다. 모든 결과를 보존했으며 기존 phase 1 원본은 덮어쓰지 않았다.
 
 ## A. 재현 결과
 
@@ -147,7 +147,7 @@ RouteMesh의 connections=0은 STREAM connector가 없다는 뜻이다. postwork 
 
 재현은 기존 perf executable의 public `AddZLinkFramework`, typed echo, `RequestToChannel`, Stream Connector close와 ASP.NET Core lifetime을 사용했다. Runtime private API, raw frame 조작, 두 번째 socket poller를 사용하지 않았다. CLR EventPipe는 기존 예외를 관찰하는 외부 진단 도구다.
 
-[재현 실행기](/dev/shm/zlink-perf-dotnet/diag-followup-20260906/repro-tools)와 각 셀의 `role-configs`, `endpoints.json`, `tmp/*-process.json`이 정확한 입력/명령/PID를 소유한다. `.NET trace` tool 10.0.731102는 `/tmp/zlink-perf-diag-tools`에만 설치했다. 기존 Release DLL을 재사용하는 실행기이며, 새 build가 필요하면 세 role 프로젝트를 지정된 build lock 안에서 먼저 빌드한다. 현재 Core/package hash 일치도 시작 전에 검사한다.
+재현 실행기 (`/dev/shm/zlink-perf-dotnet/diag-followup-20260906/repro-tools`)와 각 셀의 `role-configs`, `endpoints.json`, `tmp/*-process.json`이 정확한 입력/명령/PID를 소유한다. `.NET trace` tool 10.0.731102는 `/tmp/zlink-perf-diag-tools`에만 설치했다. 기존 Release DLL을 재사용하는 실행기이며, 새 build가 필요하면 세 role 프로젝트를 지정된 build lock 안에서 먼저 빌드한다. 현재 Core/package hash 일치도 시작 전에 검사한다.
 
 다음은 **새 output root**에서의 공개 사용 경로 재현 명령이다. output root를 재사용하지 않는다. 실행기가 samples lock을 소유한다.
 

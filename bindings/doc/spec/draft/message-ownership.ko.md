@@ -112,7 +112,7 @@ UTF-8 변환을 마친 뒤 같은 규칙을 적용한다.
 의미**로 제공한다. 이름은 Core C API와 1:1 대응하며, 언어별 케이싱만 관례를 따른다
 (`Copy`/`Move`/`Clone` ↔ C `zlink_msg_copy`/`zlink_msg_move` + deep copy). 정확한 언어별
 signature는 각 언어 spec의 Message 절과 계획 문서
-[`doc/plan/bindings-message-share-move-api-parity.ko.md`](../../../../doc/plan/bindings-message-share-move-api-parity.ko.md) §3.3이
+[`doc/plan/bindings-message-share-move-api-parity.ko.md`](../../../../doc/plan/archive/bindings-message-share-move-api-parity.ko.md) §3.3이
 소유한다.
 
 **Copy (= `zlink_msg_copy`, reference-count 공유).** 호출 `Message`의 native payload

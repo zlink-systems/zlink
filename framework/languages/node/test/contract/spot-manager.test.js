@@ -3989,6 +3989,110 @@ test('spot managed timer keeps elapsed scheduling monotonic and relocation curso
   });
 });
 
+test('concurrent timer cancel callers share completion after the running callback drains', async () => {
+  const clock = createManualSpotTimerClock();
+  const started = createDeferred();
+  const callbackRelease = createDeferred();
+  class BlockingTimerHandler {
+    async handle() {
+      started.resolve();
+      await callbackRelease.promise;
+    }
+  }
+  const serial = new framework.ZLinkSpotSerialTurnExecutor(true, 'timer-cancel-drain');
+  const registry = new framework.ZLinkSpotTimerRegistry(
+    undefined, undefined, undefined, undefined, undefined, undefined, clock
+  );
+  const timer = await registry.add(
+    'shared-cancel', 1, undefined, BlockingTimerHandler, serial, {}
+  );
+
+  clock.fireNext();
+  await started.promise;
+  const first = timer.cancel();
+  const second = timer.cancel();
+  assert.strictEqual(first, second);
+  let completed = false;
+  void first.then(() => { completed = true; });
+  await Promise.resolve();
+  assert.equal(completed, false);
+
+  callbackRelease.resolve();
+  await Promise.all([first, second]);
+  assert.equal(completed, true);
+  await registry.dispose();
+});
+
+test('concurrent timer cancel callers observe the same resource cleanup failure', async () => {
+  const cleanupFailure = new Error('timer resource cleanup failed');
+  const clock = createManualSpotTimerClock(cleanupFailure);
+  class TimerHandler { async handle() {} }
+  const serial = new framework.ZLinkSpotSerialTurnExecutor(true, 'timer-cancel-failure');
+  const registry = new framework.ZLinkSpotTimerRegistry(
+    undefined, undefined, undefined, undefined, undefined, undefined, clock
+  );
+  const timer = await registry.add(
+    'failing-cancel', 1, undefined, TimerHandler, serial, {}
+  );
+
+  const first = timer.cancel();
+  const second = timer.cancel();
+  assert.strictEqual(first, second);
+  const [firstResult, secondResult] = await Promise.all([
+    first.then(() => undefined, failure => failure),
+    second.then(() => undefined, failure => failure)
+  ]);
+  assert.strictEqual(firstResult, cleanupFailure);
+  assert.strictEqual(secondResult, firstResult);
+  assert.equal(clock.clearCount, 1);
+  await registry.dispose();
+});
+
+test('timer cancel preserves a running timer task failure for every caller', async () => {
+  const clock = createManualSpotTimerClock();
+  const taskFailure = new Error('timer failure reporting failed');
+  const failureStarted = createDeferred();
+  const failureRelease = createDeferred();
+  class FailingTimerHandler {
+    async handle() {
+      throw new Error('timer handler failed');
+    }
+  }
+  const serial = new framework.ZLinkSpotSerialTurnExecutor(true, 'timer-cancel-task-failure');
+  const registry = new framework.ZLinkSpotTimerRegistry(
+    undefined, undefined, undefined, undefined, undefined, undefined, clock
+  );
+  const timer = await registry.add(
+    'running-failure',
+    1,
+    undefined,
+    FailingTimerHandler,
+    serial,
+    {},
+    undefined,
+    undefined,
+    async () => {
+      failureStarted.resolve();
+      await failureRelease.promise;
+      throw taskFailure;
+    }
+  );
+
+  clock.fireNext();
+  await failureStarted.promise;
+  const first = timer.cancel();
+  const second = timer.cancel();
+  assert.strictEqual(first, second);
+  failureRelease.resolve();
+  const [firstResult, secondResult] = await Promise.all([
+    first.then(() => undefined, failure => failure),
+    second.then(() => undefined, failure => failure)
+  ]);
+  assert.strictEqual(firstResult, taskFailure);
+  assert.strictEqual(secondResult, firstResult);
+  await registry.dispose();
+});
+
 test('spot timer clock observes only its registry while an Instance Spot schedules idle sweeps', async () => {
   const originalNow = performance.now;
   const originalSetTimeout = global.setTimeout;
@@ -4289,6 +4393,32 @@ async function withFakeTimerClock(run, platformDelay = delay => delay) {
   };
 
   await run(clock);
+}
+
+function createManualSpotTimerClock(clearFailure) {
+  const callbacks = new Map();
+  let nextHandle = 1;
+  return {
+    clearCount: 0,
+    now: () => 1,
+    utcNow: () => 1,
+    setTimeout(callback) {
+      const handle = nextHandle++;
+      callbacks.set(handle, callback);
+      return handle;
+    },
+    clearTimeout(handle) {
+      this.clearCount += 1;
+      callbacks.delete(handle);
+      if (clearFailure !== undefined) throw clearFailure;
+    },
+    fireNext() {
+      const next = callbacks.entries().next().value;
+      assert.ok(next, 'expected a scheduled timer callback');
+      callbacks.delete(next[0]);
+      next[1]();
+    }
+  };
 }
 
 function createDeferred() {

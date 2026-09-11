@@ -72,7 +72,7 @@ public sealed partial class RegressionTests
             ResolveDotnetRoot(),
             "src", "Zlink.Framework", "Runtime", "Host", "ZLinkFrameworkRuntimeChannels.cs"));
         var routeRequestStart = runtimeChannels.IndexOf(
-            "internal async ValueTask<IReadOnlyList<Message>> RequestToSpotViaRouterChannelAsync",
+            "internal async ValueTask<ZLinkBackendRouteReceived> RequestToSpotViaRouterChannelAsync",
             StringComparison.Ordinal);
         var routeRequestEnd = runtimeChannels.IndexOf(
             "private static ZLinkFrameworkException CreateUnknownRouteTargetException",

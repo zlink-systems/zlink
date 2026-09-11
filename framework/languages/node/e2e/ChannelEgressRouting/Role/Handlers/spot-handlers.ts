@@ -57,7 +57,7 @@ export class SpotWorkflowTimerHandler implements ZLinkSpotTimerHandler<Config12S
     this.evidence.add(`spot-timer-end|spot=${id}|timer=${tick.name}|sequence=handler-start,workflow-reply,handler-end,timer-start,workflow-reply,timer-end`);
     const timer = timers.get(spot);
     if (timer !== undefined) {
-      await timer.cancel();
+      void timer.cancel();
       timers.delete(spot);
     }
   }
