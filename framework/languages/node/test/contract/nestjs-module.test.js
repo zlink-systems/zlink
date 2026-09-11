@@ -2476,7 +2476,17 @@ test('framework runtime host starts registered stream nodes and disposes their r
             };
           },
           createReadablePoller() {
-            return { wait() { return false; }, dispose() {} };
+            return {
+              wait() { return false; },
+              waitForReadable(signal) {
+                return new Promise((resolve) => {
+                  if (signal?.aborted === true) resolve(false);
+                  else signal?.addEventListener('abort', () => resolve(false), { once: true });
+                });
+              },
+              markDrained() {},
+              dispose() {}
+            };
           }
         };
       },
@@ -2670,7 +2680,17 @@ test('framework runtime host attaches stream SessionRelay to registered SpotNode
             };
           },
           createReadablePoller() {
-            return { wait() { return false; }, dispose() {} };
+            return {
+              wait() { return false; },
+              waitForReadable(signal) {
+                return new Promise((resolve) => {
+                  if (signal?.aborted === true) resolve(false);
+                  else signal?.addEventListener('abort', () => resolve(false), { once: true });
+                });
+              },
+              markDrained() {},
+              dispose() {}
+            };
           }
         };
       },

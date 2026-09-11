@@ -958,7 +958,12 @@ class socket_base_t : public own_t,
                               pipe_t::read_admission_fn *admission_ = NULL,
                               void *admission_userdata_ = NULL,
                               uint64_t *route_binding_token_out_ = NULL);
-    virtual int xterm_peer_rid (const zlink_routing_id_t *peer_rid_);
+    // Selects and retains the pipe owned by a RID termination. The public
+    // lifecycle owner performs the actual termination after the socket-specific
+    // route state has been updated.
+    virtual int xterm_peer_rid (const zlink_routing_id_t *peer_rid_,
+                                pipe_t **target_out_,
+                                bool *delay_out_);
     virtual void xsocket_msg_pipe_terminated (zlink::pipe_t *pipe_);
     virtual int xpeer_command (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     virtual void xlocal_peer_weight_changed ();
@@ -1130,6 +1135,10 @@ class socket_base_t : public own_t,
 
     endpoint_runtime_t &endpoint_runtime () { return _runtime.endpoint_runtime; }
     const endpoint_runtime_t &endpoint_runtime () const { return _runtime.endpoint_runtime; }
+    socket_inproc_reconnect_runtime_t &inproc_reconnect_runtime ()
+    {
+        return _runtime.inproc_reconnect_runtime;
+    }
     command_runtime_t &command_runtime () { return _runtime.command_runtime; }
     const command_runtime_t &command_runtime () const { return _runtime.command_runtime; }
     receive_runtime_t &receive_runtime () { return _runtime.receive_runtime; }
@@ -1190,6 +1199,14 @@ class socket_base_t : public own_t,
 
     // Monitor socket cleanup
     void stop_monitor (bool send_monitor_stopped_event_ = true);
+
+    static void inproc_reconnect_task_main (void *arg_);
+    bool schedule_inproc_reconnect (
+      const std::string &endpoint_,
+      const endpoint_uri_pair_t &endpoint_pair_);
+    void process_scheduled_inproc_reconnects ();
+    bool cancel_scheduled_inproc_reconnects (const std::string &endpoint_);
+    void stop_inproc_reconnect_scheduler ();
 
     //  Creates new endpoint ID and adds the endpoint to the map.
     void add_endpoint (const endpoint_uri_pair_t &endpoint_pair_, own_t *endpoint_, pipe_t *pipe_);
@@ -1377,7 +1394,6 @@ class socket_base_t : public own_t,
     void process_bind (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void process_term (int linger_) ZLINK_FINAL;
     void process_term_endpoint (std::string *endpoint_) ZLINK_FINAL;
-    void process_reconnect_inproc (std::string *endpoint_) ZLINK_FINAL;
     void process_transport_pair_owner_request (
       zlink::session_base_t *session_, int peer_socket_type_,
       uint64_t connection_id_, uint64_t pair_id_, uint64_t generation_,
@@ -1534,7 +1550,8 @@ class routing_socket_base_t : public socket_base_t
     out_pipe_t *lookup_out_pipe (const blob_t &routing_id_);
     const out_pipe_t *lookup_out_pipe (const blob_t &routing_id_) const;
     void erase_out_pipe (const pipe_t *pipe_);
-    int terminate_out_pipe_by_routing_id (const zlink_routing_id_t *peer_rid_);
+    int prepare_out_pipe_termination_by_routing_id (
+      const zlink_routing_id_t *peer_rid_, pipe_t **target_out_);
     void mark_out_pipe_active (out_pipe_t *out_pipe_);
     void mark_out_pipe_inactive (out_pipe_t *out_pipe_);
     void update_out_pipe_weight (out_pipe_t *out_pipe_, uint32_t weight_);

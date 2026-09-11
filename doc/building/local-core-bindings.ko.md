@@ -1,3 +1,5 @@
+[English](./local-core-bindings.md) | [한국어](./local-core-bindings.ko.md)
+
 # 로컬 Core로 바인딩 링크 — 테스트·perf 참조
 
 릴리스 artifact 없이 **작업 중인(브랜치) Core**로 각 언어 바인딩을 링크해 계약 테스트와 perf를

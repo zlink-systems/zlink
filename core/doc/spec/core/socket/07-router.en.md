@@ -265,7 +265,7 @@ writes the needed count to `*part_count_out_`, and returns `ZLINK_RECV_BUFFER_TO
 payload contains no internal request metadata.
 
 Output ownership, `NONE` `RCVTIMEO`, output invariance, and the socket-owned borrowed RID
-lifetime follow the data-recv contract in [Socket Common](README.en.md#zlink_recv).
+lifetime follow the data-recv contract in [Socket Common](README.en.md#zlink_recv-and-zlink_router_recv).
 
 ## 9. Raw reply submit
 

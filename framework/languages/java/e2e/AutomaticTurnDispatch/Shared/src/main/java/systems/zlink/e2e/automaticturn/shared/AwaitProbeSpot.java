@@ -93,17 +93,22 @@ public final class AwaitProbeSpot implements ZLinkSpot<AwaitActor> {
             });
     }
 
-    public synchronized void stopTimers(String requestId) {
-        timerScenarios.entrySet().removeIf(entry -> {
-            if (!entry.getValue().requestId().equals(requestId)) {
-                return false;
-            }
-            ZLinkTimer timer = timers.remove(entry.getKey());
-            if (timer != null) {
-                timer.close();
-            }
-            return true;
-        });
+    public synchronized CompletionStage<Void> stopTimers(String requestId) {
+        List<String> names = timerScenarios.entrySet().stream()
+            .filter(entry -> entry.getValue().requestId().equals(requestId))
+            .map(Map.Entry::getKey)
+            .toList();
+        List<CompletableFuture<Void>> cancellations = names.stream()
+            .map(timerName -> {
+                timerScenarios.remove(timerName);
+                ZLinkTimer timer = timers.remove(timerName);
+                return timer == null
+                    ? CompletableFuture.<Void>completedFuture(null)
+                    : timer.cancel().toCompletableFuture();
+            })
+            .toList();
+        return CompletableFuture.allOf(
+            cancellations.toArray(CompletableFuture[]::new));
     }
 
     public synchronized TimerScenario timerScenario(String timerName) {

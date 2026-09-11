@@ -101,6 +101,12 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("GAMEQUEST_STORE_DIR", powershellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("GAMEQUEST_STARTUP_DELAY_SECONDS", powershellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("message flow", powershellRunner, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("$clientProcess = Start-SampleProcess -Name \"client\"", powershellRunner,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("$clientProcess = Start-Process", powershellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain("$script:SampleProcesses += $clientProcess", powershellRunner,
+            StringComparison.Ordinal);
+        Assert.Contains("if ($clientProcess.ExitCode -ne 0)", powershellRunner, StringComparison.Ordinal);
 
         Assert.Contains("record JoinSessionReq", messages, StringComparison.Ordinal);
         Assert.Contains("record JoinSessionRes", messages, StringComparison.Ordinal);

@@ -389,8 +389,8 @@ if (rc == ZLINK_SUBMIT_NOT_ADMITTED) {
 끝나면 성공했을 메시지를 폐기하게 된다.
 
 > 상세 규약은 DEALER spec
-> [§8 DEALER option](../spec/core/socket/06-dealer.ko.md#8-dealer-option)의
-> 가중치 기반 송신 대상 선택 항목을 참고.
+> [§3 Outbound peer 선택](../spec/core/socket/06-dealer.ko.md#3-outbound-peer-선택)을
+> 참고.
 
 ### routing_id는 connect 전에 설정
 

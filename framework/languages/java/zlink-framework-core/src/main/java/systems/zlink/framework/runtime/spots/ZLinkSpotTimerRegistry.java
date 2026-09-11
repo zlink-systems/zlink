@@ -193,15 +193,11 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
     void stageRestore(FrozenTimers state) {
         RestoreState previous = inStateLane(() -> stageRestoreCore(state));
-        previous.futures().forEach(ZLinkSpotTimerRegistry::cancel);
+        previous.timers().forEach(ManagedTimer::close);
     }
 
     private RestoreState stageRestoreCore(FrozenTimers state) {
         List<ManagedTimer> previous = List.copyOf(timers.values());
-        List<ScheduledFuture<?>> futures = previous.stream()
-            .map(ManagedTimer::disposeCore)
-            .flatMap(Optional::stream)
-            .toList();
         timers.clear();
         frozen = true;
         for (TimerSnapshot snapshot : state.timers()) {
@@ -211,7 +207,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                     "duplicate timer in relocation envelope: " + snapshot.name());
             }
         }
-        return new RestoreState(futures);
+        return new RestoreState(previous);
     }
 
     void publishStagedRestore() {
@@ -228,16 +224,13 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
     @Override
     public void close() {
-        List<ScheduledFuture<?>> futures = inStateLane(() -> {
-            List<ScheduledFuture<?>> current = timers.values().stream()
-                .map(ManagedTimer::disposeCore)
-                .flatMap(Optional::stream)
-                .toList();
+        List<ManagedTimer> current = inStateLane(() -> {
+            List<ManagedTimer> active = List.copyOf(timers.values());
             timers.clear();
             frozen = false;
-            return current;
+            return active;
         });
-        futures.forEach(ZLinkSpotTimerRegistry::cancel);
+        current.forEach(ManagedTimer::close);
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -300,12 +293,15 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         private ScheduleAttempt scheduled;
         private Instant nextScheduledAt;
         private ZLinkSpotTimerSchedule.PendingTick pendingTick;
+        private ActiveDispatch activeDispatch;
+        private CompletableFuture<Void> finalization;
 
         ManagedTimer(
             String name,
             Duration period,
             Class<?> handlerType,
             ZLinkTimerOptions options) {
+            handlers.prepare(handlerType);
             this.name = name;
             this.handlerType = handlerType;
             this.options = options;
@@ -313,6 +309,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         }
 
         ManagedTimer(TimerSnapshot snapshot) {
+            handlers.prepare(snapshot.handlerType());
             this.name = snapshot.name();
             this.handlerType = snapshot.handlerType();
             this.options = snapshot.schedule().options();
@@ -387,6 +384,9 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                     if (disposed || frozen || pendingTick != selected) {
                         return null;
                     }
+                    activeDispatch = new ActiveDispatch(
+                        selected,
+                        new CompletableFuture<>());
                     return new HandlerInvocation(spot, handlerType);
                 });
                 return invocation == null
@@ -398,8 +398,17 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                         boolean stillCurrent = !frozen
                             && !disposed
                             && pendingTick == selected;
+                        CompletableFuture<Void> dispatchCompletion =
+                            activeDispatch != null
+                                && activeDispatch.tick() == selected
+                                ? activeDispatch.completion()
+                                : null;
                         if (!stillCurrent) {
-                            return new DispatchResult(false, false, false);
+                            return new DispatchResult(
+                                false,
+                                false,
+                                false,
+                                dispatchCompletion);
                         }
                         boolean stopped = error != null
                             && options.stopOnUnhandledException();
@@ -407,16 +416,30 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                             schedule.markDelivered(selected);
                         }
                         pendingTick = null;
-                        return new DispatchResult(true, stopped, !stopped);
+                        return new DispatchResult(
+                            true,
+                            stopped,
+                            !stopped,
+                            dispatchCompletion);
                     });
-                    if (!result.stillCurrent()) {
-                        return;
-                    }
-                    if (error != null) {
-                        if (result.stopped()) {
-                            close();
+                    Throwable completionFailure = null;
+                    try {
+                        if (result.stillCurrent() && error != null) {
+                            if (result.stopped()) {
+                                close();
+                            }
+                            publishFailure(this, tick, error, result.stopped());
                         }
-                        publishFailure(this, tick, error, result.stopped());
+                    } catch (RuntimeException | Error failure) {
+                        completionFailure = failure;
+                    }
+                    if (result.dispatchCompletion() != null) {
+                        if (completionFailure == null) {
+                            result.dispatchCompletion().complete(null);
+                        } else {
+                            result.dispatchCompletion().completeExceptionally(
+                                completionFailure);
+                        }
                     }
                     if (result.reschedule()) {
                         scheduleAfterDispatch();
@@ -492,18 +515,68 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
         @Override
         public CompletionStage<Void> cancel() {
-            Optional<ScheduledFuture<?>> task = inStateLane(() -> {
-                timers.remove(name, this);
-                return disposeCore();
-            });
-            task.ifPresent(ZLinkSpotTimerRegistry::cancel);
-            return CompletableFuture.completedFuture(null);
+            return getOrStartFinalization();
         }
 
         @Override
         public void close() {
-            Optional<ScheduledFuture<?>> task = inStateLane(this::disposeCore);
-            task.ifPresent(ZLinkSpotTimerRegistry::cancel);
+            getOrStartFinalization();
+        }
+
+        private CompletableFuture<Void> getOrStartFinalization() {
+            FinalizationPlan plan = inStateLane(() -> {
+                if (finalization != null) {
+                    return new FinalizationPlan(
+                        finalization,
+                        null,
+                        null,
+                        false);
+                }
+                finalization = new CompletableFuture<>();
+                timers.remove(name, this);
+                Optional<ScheduledFuture<?>> task = disposeCore();
+                return new FinalizationPlan(
+                    finalization,
+                    task.orElse(null),
+                    activeDispatch == null
+                        ? null
+                        : activeDispatch.completion(),
+                    true);
+            });
+            if (plan.start()) {
+                completeFinalization(plan);
+            }
+            return plan.finalization();
+        }
+
+        private void completeFinalization(FinalizationPlan plan) {
+            Throwable cleanupFailure = null;
+            try {
+                ZLinkSpotTimerRegistry.cancel(plan.task());
+            } catch (RuntimeException | Error failure) {
+                cleanupFailure = failure;
+            }
+
+            Throwable capturedCleanupFailure = cleanupFailure;
+            CompletionStage<Void> drain = plan.activeDispatch() == null
+                ? CompletableFuture.completedFuture(null)
+                : plan.activeDispatch();
+            drain.whenComplete((ignored, dispatchFailure) -> {
+                Throwable failure = capturedCleanupFailure;
+                if (dispatchFailure != null) {
+                    Throwable unwrapped = unwrap(dispatchFailure);
+                    if (failure == null) {
+                        failure = unwrapped;
+                    } else if (failure != unwrapped) {
+                        failure.addSuppressed(unwrapped);
+                    }
+                }
+                if (failure == null) {
+                    plan.finalization().complete(null);
+                } else {
+                    plan.finalization().completeExceptionally(failure);
+                }
+            });
         }
     }
 
@@ -521,7 +594,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         FrozenTimers snapshot,
         List<ScheduledFuture<?>> futures) {}
 
-    private record RestoreState(List<ScheduledFuture<?>> futures) {}
+    private record RestoreState(List<ManagedTimer> timers) {}
 
     private record SchedulePlan(ScheduleAttempt attempt, long delayNanos) {}
 
@@ -531,10 +604,21 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
     private record HandlerInvocation(Object spot, Class<?> handlerType) {}
 
+    private record ActiveDispatch(
+        ZLinkSpotTimerSchedule.PendingTick tick,
+        CompletableFuture<Void> completion) {}
+
     private record DispatchResult(
         boolean stillCurrent,
         boolean stopped,
-        boolean reschedule) {}
+        boolean reschedule,
+        CompletableFuture<Void> dispatchCompletion) {}
+
+    private record FinalizationPlan(
+        CompletableFuture<Void> finalization,
+        ScheduledFuture<?> task,
+        CompletableFuture<Void> activeDispatch,
+        boolean start) {}
 
     record FrozenTimers(List<TimerSnapshot> timers) {
         FrozenTimers {

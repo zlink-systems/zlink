@@ -5,6 +5,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -13,9 +14,14 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Delayed;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -46,7 +52,13 @@ final class ZLinkSpotTimerRegistryTest {
         CountDownLatch handled = new CountDownLatch(2);
         AtomicInteger creates = new AtomicInteger();
         AtomicInteger destroys = new AtomicInteger();
+        AtomicInteger preparations = new AtomicInteger();
         ZLinkHandlerActivator activator = new ZLinkHandlerActivator() {
+            @Override
+            public void prepare(Class<?> handlerType) {
+                preparations.incrementAndGet();
+            }
+
             @Override
             public Object create(Class<?> handlerType) {
                 creates.incrementAndGet();
@@ -76,6 +88,7 @@ final class ZLinkSpotTimerRegistryTest {
                 Duration.ofMillis(1),
                 CountingTimerHandler.class,
                 null);
+            assertEquals(1, preparations.get());
             assertTrue(handled.await(2, TimeUnit.SECONDS));
             assertEquals(1, creates.get());
         } finally {
@@ -160,6 +173,93 @@ final class ZLinkSpotTimerRegistryTest {
             registry.add("timer", Duration.ofMillis(1), TimerHandler.class, null);
             assertTrue(handled.await(2, TimeUnit.SECONDS));
             assertTrue(enteredDispatch.get());
+        } finally {
+            registry.close();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void concurrentCancelWaitsForRunningCallbackAndSharesCompletion()
+        throws Exception {
+        ScheduledExecutorService executor =
+            Executors.newSingleThreadScheduledExecutor();
+        CountDownLatch started = new CountDownLatch(1);
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        ZLinkSpotTimerRegistry registry = new ZLinkSpotTimerRegistry(
+            "spot",
+            executor,
+            ignored -> new BlockingTimerHandler(started, release),
+            List.of(),
+            null,
+            "test",
+            (timerName, operation) -> operation.get());
+        registry.setSpot(new TestSpot());
+
+        try {
+            ZLinkTimer timer = registry.add(
+                    "timer",
+                    Duration.ofMillis(1),
+                    BlockingTimerHandler.class,
+                    null)
+                .toCompletableFuture()
+                .get(1, TimeUnit.SECONDS);
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+
+            CompletionStage<Void> first = timer.cancel();
+            CompletionStage<Void> second = timer.cancel();
+            assertSame(first, second);
+            assertFalse(first.toCompletableFuture().isDone());
+            assertFalse(second.toCompletableFuture().isDone());
+
+            release.complete(null);
+            CompletableFuture.allOf(
+                    first.toCompletableFuture(),
+                    second.toCompletableFuture())
+                .get(1, TimeUnit.SECONDS);
+        } finally {
+            release.complete(null);
+            registry.close();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void concurrentCancelCallersObserveTheSameResourceCleanupFailure() {
+        RuntimeException cleanupFailure =
+            new RuntimeException("timer resource cleanup failed");
+        ScheduledExecutorService executor =
+            new FailingCancelScheduledExecutor(cleanupFailure);
+        ZLinkSpotTimerRegistry registry = new ZLinkSpotTimerRegistry(
+            "spot",
+            executor,
+            ignored -> new PreviousTimerHandler(new AtomicBoolean()),
+            List.of(),
+            null,
+            "test",
+            (timerName, operation) -> operation.get());
+        registry.setSpot(new TestSpot());
+
+        try {
+            ZLinkTimer timer = registry.add(
+                    "timer",
+                    Duration.ofHours(1),
+                    PreviousTimerHandler.class,
+                    null)
+                .toCompletableFuture()
+                .join();
+
+            CompletionStage<Void> first = timer.cancel();
+            CompletionStage<Void> second = timer.cancel();
+            assertSame(first, second);
+            Throwable firstResult = assertThrows(
+                java.util.concurrent.CompletionException.class,
+                () -> first.toCompletableFuture().join()).getCause();
+            Throwable secondResult = assertThrows(
+                java.util.concurrent.CompletionException.class,
+                () -> second.toCompletableFuture().join()).getCause();
+            assertSame(cleanupFailure, firstResult);
+            assertSame(firstResult, secondResult);
         } finally {
             registry.close();
             executor.shutdownNow();
@@ -406,6 +506,25 @@ final class ZLinkSpotTimerRegistryTest {
         }
     }
 
+    public static final class BlockingTimerHandler {
+        private final CountDownLatch started;
+        private final CompletionStage<Void> release;
+
+        BlockingTimerHandler(
+            CountDownLatch started,
+            CompletionStage<Void> release) {
+            this.started = started;
+            this.release = release;
+        }
+
+        public CompletionStage<Void> handle(
+            ZLinkSpot<?> spot,
+            ZLinkTimerTick tick) {
+            started.countDown();
+            return release;
+        }
+    }
+
     public static final class ThrowingTimerHandler {
         private final AtomicInteger ticks;
 
@@ -458,6 +577,71 @@ final class ZLinkSpotTimerRegistryTest {
             if (tick.compareAndSet(null, value)) {
                 handled.countDown();
             }
+        }
+    }
+
+    private static final class FailingCancelScheduledExecutor
+        extends ScheduledThreadPoolExecutor {
+        private final RuntimeException failure;
+
+        FailingCancelScheduledExecutor(RuntimeException failure) {
+            super(1);
+            this.failure = failure;
+        }
+
+        @Override
+        public ScheduledFuture<?> schedule(
+            Runnable command,
+            long delay,
+            TimeUnit unit) {
+            return new FailingCancelScheduledFuture(
+                super.schedule(command, delay, unit),
+                failure);
+        }
+    }
+
+    private static final class FailingCancelScheduledFuture
+        implements ScheduledFuture<Object> {
+        private final ScheduledFuture<?> delegate;
+        private final RuntimeException failure;
+
+        FailingCancelScheduledFuture(
+            ScheduledFuture<?> delegate,
+            RuntimeException failure) {
+            this.delegate = delegate;
+            this.failure = failure;
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            delegate.cancel(mayInterruptIfRunning);
+            throw failure;
+        }
+
+        @Override public boolean isCancelled() {
+            return delegate.isCancelled();
+        }
+
+        @Override public boolean isDone() {
+            return delegate.isDone();
+        }
+
+        @Override public Object get()
+            throws InterruptedException, ExecutionException {
+            return delegate.get();
+        }
+
+        @Override public Object get(long timeout, TimeUnit unit)
+            throws InterruptedException, ExecutionException, TimeoutException {
+            return delegate.get(timeout, unit);
+        }
+
+        @Override public long getDelay(TimeUnit unit) {
+            return delegate.getDelay(unit);
+        }
+
+        @Override public int compareTo(Delayed other) {
+            return delegate.compareTo(other);
         }
     }
 

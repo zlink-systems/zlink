@@ -46,7 +46,7 @@ Memray는 Python allocator를 추적했다. 아래는 **할당/재할당 이벤�
 | DR server | 166.4→152.4 | 16547→15382 | 49.0→48.0 | 243.4→222.0 |
 | C Python allocator | 0 | 0 | 0 | 0 |
 
-\* 관측 전체에는 observer bucket이 포함된다. Native allocator 이벤트와 모든 원본 계수는 [cost census](reports/python-pass1-cost-census.json)에 따로 보존했다. 계측 처리량은 공식 성능 결과에 섞지 않았다.
+\* 관측 전체에는 observer bucket이 포함된다. Native allocator 이벤트와 모든 원본 계수는 cost census (`reports/python-pass1-cost-census.json`)에 따로 보존했다. 계측 처리량은 공식 성능 결과에 섞지 않았다.
 
 공식 runner 입력은 mutable bytearray + empty tail의 2-part다. Python에서 관측되는 명시적 본문 복사는 초기 send/request의 Python→Core 1회이며 전후 동일하다. DD server와 DR server의 metric 읽기는 Received snapshot 1회를 유지한다. DD SEND retained clone 2회, DR REQUEST completion clone 2회, DR server reply clone 2회도 유지한다. `zlink_msg_copy` 호출을 full-payload memcpy로 환산하지 않았다. C 구조 대조는 `bindings/c/perf/multi/src/perf_multi_dealer_dealer_client.cpp:167`의 native part 구성 memcpy와 `common/perf_multi_socket_reqrep.hpp:901`의 native receive/reply 경로다. C에는 Python snapshot 변환이 없다. Readonly buffer의 중간 bytes 복사 제거는 별도 API 경로의 구조 개선이며 mutable 공식 입력의 copy 감소로 계산하지 않았다.
 
@@ -56,7 +56,7 @@ Runner의 `perf_multi_common.py:362` `send_routed`는 메시지마다 cooperativ
 
 TCP, clients 100, duration 5s, runs 1, sizes 64/256/1024/4096/65536, part-count 2. Core runtime SHA-256은 전후 `d4b95b10ce3f96315740de20d2ea4e1d1d40f3dffd7a50de5530d26dff9a3f00`이며 `core/build/lib/libzlink.so.0.17.0`와 package payload가 일치한다. Extension은 지정 venv에서 `setup.py build_ext --inplace`로 빌드했다. Core는 빌드하지 않았다.
 
-Before/C는 브리프가 지정한 19:32~19:38 원본을 main 작업 트리에서 찾아 [reports](reports/)로 복사했다. After는 요청한 전체-grid 명령을 그대로 실행한 [공식 report](reports/perf_python_multi_linux_20260905_205941.txt)다. 20/20 complete, RESULT 100/100, fail 0, max load 2.302, 다른 측정 프로세스와 겹침 없음. Load는 2초 간격으로 확인하고 3 초과 또는 외부 벤치 발견 시 해당 실행을 중단·제외했다. 최초 불완전 full-grid와 초기 진단 실행은 최종 표에 포함하지 않았다.
+Before/C는 브리프가 지정한 19:32~19:38 원본을 main 작업 트리에서 찾아 `reports/`로 복사했다. After는 요청한 전체-grid 명령을 그대로 실행한 공식 report (`reports/perf_python_multi_linux_20260905_205941.txt`)다. 20/20 complete, RESULT 100/100, fail 0, max load 2.302, 다른 측정 프로세스와 겹침 없음. Load는 2초 간격으로 확인하고 3 초과 또는 외부 벤치 발견 시 해당 실행을 중단·제외했다. 최초 불완전 full-grid와 초기 진단 실행은 최종 표에 포함하지 않았다.
 
 | Pattern | Before/C 평균 | After/C 평균 | After/C 중앙값 | After latency/C 중앙값 |
 |---|---:|---:|---:|---:|
@@ -96,9 +96,9 @@ DD/PUBSUB는 Kmsg/s, REQREP는 Kops/s. Latency는 기존 runner의 metric 의미
 
 ## Gate와 계약
 
-- 공식 `PYTHON_EXECUTABLE=.../python bindings/python/tests/run_tests.sh`: **208 passed + 4 subtests, samples 7/7**. [로그](python-pass1-gate-approved.log).
-- storage/completion/request-writable/boundary 관련 테스트: **72개 × 5회 PASS**. [로그](python-pass1-repeat-approved.log). Mutable/readonly/strided/typed/empty/large buffer, extension-free fallback, native clone lifetime, 즉시 성공/즉시 오류의 Future 미생성, registry 미등록, 제출 반환 전 다른 스레드의 WRITABLE 수신을 포함한다.
-- `git diff --check`: PASS. Public class method signature AST 전후 동일. [검사](reports/python-pass1-public-signatures.json). 공개 contracts와 runner diff 없음.
+- 공식 `PYTHON_EXECUTABLE=.../python bindings/python/tests/run_tests.sh`: **208 passed + 4 subtests, samples 7/7**. 로그 (`python-pass1-gate-approved.log`).
+- storage/completion/request-writable/boundary 관련 테스트: **72개 × 5회 PASS**. 로그 (`python-pass1-repeat-approved.log`). Mutable/readonly/strided/typed/empty/large buffer, extension-free fallback, native clone lifetime, 즉시 성공/즉시 오류의 Future 미생성, registry 미등록, 제출 반환 전 다른 스레드의 WRITABLE 수신을 포함한다.
+- `git diff --check`: PASS. Public class method signature AST 전후 동일. 검사 (`reports/python-pass1-public-signatures.json`). 공개 contracts와 runner diff 없음.
 - Native C 컴파일 경고 없음. Core/package runtime hash 일치. 신규 기능 실패 없음.
 - 소유 계층: Python binding의 message storage와 기존 socket completion owner. Core의 admission·target 선택·credit·WRITABLE 발행 정책을 다시 구현하지 않았다.
 - Spec 근거: `core/doc/spec/core/socket/README.ko.md:938–993`의 ID 0 inline success, nonzero wait token, 소비되는 part, context 수명·WRITABLE correlation. Python ownership은 `bindings/doc/spec/python/README.ko.md:97–113`. 사용자 지정 가이드 §2.1/2.2/2.4 적용.
@@ -117,6 +117,6 @@ DD/PUBSUB는 Kmsg/s, REQREP는 Kops/s. Latency는 기존 runner의 metric 의미
 4. C native heap allocation census는 미수행이다. Python 함수/ctypes/Python allocator와 C 구조 대조 범위로 표를 제한했다. GIL은 sampling 추정이며 정확한 hold/stall 계측은 아니다.
 5. 기존 spec의 dependency/provisional 등록 문구 충돌은 별도 정합 검토가 필요하다. 이후 pass 2의 후보 검토는 이 pass 1 보고를 입력으로 판단해야 한다.
 
-재현 자료: [전체 비교 JSON](reports/python-pass1-comparison.json), [비용 census](reports/python-pass1-cost-census.json), `reports/python-pass1-final-{cprofile,memray,gil}-{before,after}/`, `reports/python-pass1-*-load.json`. 계측·분석 스크립트는 동일 c016 디렉터리의 `python-pass1-{capture,measure,analyze,compare}.py`에 보존했다. 보고서의 Python 함수 수는 계측 wrapper 제외 값이며 진행 중 공유한 raw cProfile 수(DD 111→78.69)는 wrapper 포함 값이다.
+재현 자료: 전체 비교 JSON (`reports/python-pass1-comparison.json`), 비용 census (`reports/python-pass1-cost-census.json`), `reports/python-pass1-final-{cprofile,memray,gil}-{before,after}/`, `reports/python-pass1-*-load.json`. 계측·분석 스크립트는 동일 c016 디렉터리의 `python-pass1-{capture,measure,analyze,compare}.py`에 보존했다. 보고서의 Python 함수 수는 계측 wrapper 제외 값이며 진행 중 공유한 raw cProfile 수(DD 111→78.69)는 wrapper 포함 값이다.
 
 EXIT:2

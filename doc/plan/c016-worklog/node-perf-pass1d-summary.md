@@ -125,7 +125,7 @@ REQREP timeout 분모는 admitted REQUEST이며 종료 drain 후 `OK + TimedOut 
 
 이 실행의 admitted는 261,800, TimedOut은 25,558(9.76%)다. Observer를 줄여도 공식 timeout 계수 run과 같은 부하 분포라고 보장하지 않는다. 원본은 `reports/node-pass1d-trace-light/`, 분석은 `queue-analysis.json`이다.
 
-After 집계: [perf_node_multi_linux_20260905_pass1d_load_guarded.txt](reports/perf_node_multi_linux_20260905_pass1d_load_guarded.txt). 개별 after 원본과 load는 `node-pass1d-valid-after.json`, timeout 계수는 `node-pass1d-valid-timeout.json`에서 연결한다. 유효 after 최대 load 1.589, timeout 계수 최대 load 1.652다.
+After 집계: perf_node_multi_linux_20260905_pass1d_load_guarded.txt (`reports/perf_node_multi_linux_20260905_pass1d_load_guarded.txt`). 개별 after 원본과 load는 `node-pass1d-valid-after.json`, timeout 계수는 `node-pass1d-valid-timeout.json`에서 연결한다. 유효 after 최대 load 1.589, timeout 계수 최대 load 1.652다.
 
 ## Gate와 남은 실패
 

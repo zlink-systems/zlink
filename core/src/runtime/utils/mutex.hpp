@@ -33,25 +33,69 @@
 
 namespace zlink
 {
-//  A critical section is recursive; the plain type is the same object with a
-//  narrower contract, exactly as on the POSIX side.
+//  Windows gives the plain and recursive contracts distinct primitives.
+//  SRWLOCK is non-recursive, while CRITICAL_SECTION provides the explicit
+//  recursive opt-in used by recursive_mutex_t.
 class mutex_t
 {
   public:
-    mutex_t () { InitializeCriticalSection (&_cs); }
+    mutex_t () : _kind (plain_kind) { InitializeSRWLock (&_native.srwlock); }
 
-    ~mutex_t () { DeleteCriticalSection (&_cs); }
+    ~mutex_t ()
+    {
+        if (_kind == recursive_kind)
+            DeleteCriticalSection (&_native.cs);
+    }
 
-    void lock () { EnterCriticalSection (&_cs); }
+    void lock ()
+    {
+        if (_kind == plain_kind)
+            AcquireSRWLockExclusive (&_native.srwlock);
+        else
+            EnterCriticalSection (&_native.cs);
+    }
 
-    bool try_lock () { return (TryEnterCriticalSection (&_cs)) ? true : false; }
+    bool try_lock ()
+    {
+        return _kind == plain_kind
+                 ? TryAcquireSRWLockExclusive (&_native.srwlock) != FALSE
+                 : TryEnterCriticalSection (&_native.cs) != FALSE;
+    }
 
-    void unlock () { LeaveCriticalSection (&_cs); }
+    void unlock ()
+    {
+        if (_kind == plain_kind)
+            ReleaseSRWLockExclusive (&_native.srwlock);
+        else
+            LeaveCriticalSection (&_native.cs);
+    }
 
-    CRITICAL_SECTION *get_cs () { return &_cs; }
+    bool uses_srwlock () const { return _kind == plain_kind; }
+    SRWLOCK *get_srwlock () { return &_native.srwlock; }
+    CRITICAL_SECTION *get_cs () { return &_native.cs; }
+
+  protected:
+    enum kind_t
+    {
+        plain_kind,
+        recursive_kind
+    };
+
+    explicit mutex_t (kind_t kind_) : _kind (kind_)
+    {
+        if (_kind == plain_kind)
+            InitializeSRWLock (&_native.srwlock);
+        else
+            InitializeCriticalSection (&_native.cs);
+    }
 
   private:
-    CRITICAL_SECTION _cs;
+    union native_t
+    {
+        SRWLOCK srwlock;
+        CRITICAL_SECTION cs;
+    } _native;
+    const kind_t _kind;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (mutex_t)
 };
@@ -181,9 +225,10 @@ namespace zlink
 class recursive_mutex_t : public mutex_t
 {
   public:
-#if (defined(ZLINK_HAVE_WINDOWS) && !defined(ZLINK_USE_CV_IMPL_PTHREADS))      \
-  || defined(ZLINK_HAVE_VXWORKS)
-    //  Both platform primitives are already recursive.
+#if defined(ZLINK_HAVE_WINDOWS) && !defined(ZLINK_USE_CV_IMPL_PTHREADS)
+    inline recursive_mutex_t () : mutex_t (recursive_kind) {}
+#elif defined(ZLINK_HAVE_VXWORKS)
+    //  The VxWorks primitive is already recursive.
     inline recursive_mutex_t () {}
 #else
     inline recursive_mutex_t () : mutex_t (recursive_kind) {}

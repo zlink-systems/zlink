@@ -29,7 +29,7 @@ Core·binding·다른 언어·공유 sample·보호 문서는 수정하지 않�
 Spot `onClosing` 또는 authority Delete/capacity 경합이 이번 실패 원인이라는 증거는 없다.
 따라서 .NET B1–B3를 추정으로 이식하지 않았다.
 
-Framework를 사용하지 않는 [공개 API 재현](/tmp/java-bingo-fix-evidence/ContextShutdownRepro.java)은
+Framework를 사용하지 않는 공개 API 재현 (`/tmp/java-bingo-fix-evidence/ContextShutdownRepro.java`)은
 ROUTER/DEALER request를 실제 수신해 binding completion pump를 만든 뒤 socket을 닫는다.
 이어 `context.shutdown(); context.close();`를 호출하면 `TERMINATED`, errno `156384765`로
 실패한다. `close()`만 호출하는 대조군은 성공한다. 예외 class와 stack이 Bingo와 같다.

@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -27,7 +28,13 @@ class core_timer_drain_loop_t
 
     ~core_timer_drain_loop_t () noexcept
     {
-        close ();
+        try {
+            close ();
+        }
+        catch (...) {
+            // Explicit owners call close() and receive its failure. A
+            // destructor cannot report a failure and must not throw.
+        }
     }
 
     core_timer_drain_loop_t (const core_timer_drain_loop_t &) = delete;
@@ -58,28 +65,37 @@ class core_timer_drain_loop_t
         _timer.stop ();
     }
 
-    void close () noexcept
+    void close ()
     {
         std::thread worker;
         {
             std::lock_guard lock (_lifecycle_mutex);
+            if (_closed)
+                return;
+            _closed = true;
             _stop.store (true, std::memory_order_release);
             if (_worker.joinable ())
                 worker = std::move (_worker);
         }
         if (worker.joinable ())
             worker.join ();
+        std::exception_ptr failure;
         try {
             _poller.close ();
         }
         catch (...) {
+            failure = std::current_exception ();
         }
         try {
             _timer.close ();
         }
         catch (...) {
+            if (!failure)
+                failure = std::current_exception ();
         }
         _drain = {};
+        if (failure)
+            std::rethrow_exception (failure);
     }
 
   private:
@@ -107,6 +123,7 @@ class core_timer_drain_loop_t
     std::atomic_bool _stop{false};
     std::thread _worker;
     std::mutex _lifecycle_mutex;
+    bool _closed = false;
 };
 
 } // namespace zlink::framework::detail

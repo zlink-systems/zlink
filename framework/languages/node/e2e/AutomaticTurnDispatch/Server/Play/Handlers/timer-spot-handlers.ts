@@ -42,7 +42,7 @@ export class TimerStartCommandHandler implements ZLinkSpotPacketHandler<AwaitPro
 export class TimerStopCommandHandler implements ZLinkSpotPacketHandler<AwaitProbeSpot, TimerStopMsg> {
   async handle(spot: AwaitProbeSpot, request: TimerStopMsg, context: ZLinkMessageContext): Promise<void> {
     void context;
-    spot.stopScenarioTimers(request.requestId);
+    await spot.stopScenarioTimers(request.requestId);
   }
 }
 

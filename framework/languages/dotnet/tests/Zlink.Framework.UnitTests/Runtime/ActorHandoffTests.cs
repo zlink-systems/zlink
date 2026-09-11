@@ -15,6 +15,46 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class ActorHandoffTests
 {
+    [Theory]
+    [InlineData("abort")]
+    [InlineData("reset")]
+    [InlineData("shutdown")]
+    public void SourceMembershipLeave_AbandonedReceiptCannotReleaseTheNextHandoff(string exit)
+    {
+        var handoff = new ZLinkActorHandoffState("actor-1", TimeProvider.System);
+        handoff.BeginCapture();
+        handoff.SealCapture(new DisposeSpy(() => { }), "previous");
+        var previous = Assert.IsAssignableFrom<Task>(handoff.SourceMembershipLeaveCompletion);
+        switch (exit)
+        {
+            case "abort":
+                _ = handoff.AbortCapture();
+                break;
+            case "reset":
+                handoff.Reset();
+                break;
+            case "shutdown":
+                handoff.AbortRuntimeGeneration(new IOException("source stopped"));
+                break;
+        }
+        Assert.True(previous.IsCanceled);
+        Assert.Null(handoff.SourceMembershipLeaveCompletion);
+
+        handoff.BeginCapture();
+        handoff.SealCapture(new DisposeSpy(() => { }), "current");
+        var current = Assert.IsAssignableFrom<Task>(handoff.SourceMembershipLeaveCompletion);
+        Assert.Null(handoff.TryBeginSourceMembershipLeave("previous"));
+        Assert.False(current.IsCompleted);
+        var notification = Assert.IsType<TaskCompletionSource>(
+            handoff.TryBeginSourceMembershipLeave("current"));
+        Assert.Null(handoff.TryBeginSourceMembershipLeave("current"));
+        Assert.False(current.IsCompleted);
+        notification.SetResult();
+        Assert.True(current.IsCompletedSuccessfully);
+        _ = handoff.AbortCapture();
+        Assert.Null(handoff.SourceMembershipLeaveCompletion);
+    }
+
     [Fact]
     public void Import_NewerHandoffSupersedesImportingTargetState()
     {

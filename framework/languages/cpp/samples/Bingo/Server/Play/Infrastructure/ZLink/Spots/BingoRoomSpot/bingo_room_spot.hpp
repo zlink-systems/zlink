@@ -104,7 +104,7 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
 
     task_t<void> on_closing (const spot_closing_context_t &, std::stop_token) override
     {
-        _draw_timer.cancel ();
+        co_await _draw_timer.cancel ();
         co_return;
     }
 

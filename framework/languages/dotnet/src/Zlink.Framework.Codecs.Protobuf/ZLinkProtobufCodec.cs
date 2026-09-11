@@ -74,9 +74,40 @@ public sealed class ZLinkProtobufCodec :
 
     private sealed class ProtobufSerializer :
         IZLinkMessageSerializer,
+        IZLinkMessagePartSerializer,
         IZLinkMessageSpanDeserializer
     {
         public static ProtobufSerializer Instance { get; } = new();
+
+        public unsafe Systems.Zlink.Message SerializePart(object value, Type type)
+        {
+            if (value is not IMessage protobuf || !typeof(IMessage).IsAssignableFrom(type))
+                throw new InvalidOperationException($"Protobuf codec cannot serialize payload type '{type}'.");
+
+            var part = Systems.Zlink.Message.Allocate(protobuf.CalculateSize());
+            try
+            {
+                // Use the IMessage writer for both current and legacy generated
+                // messages. WriteTo(Span) only accepts IBufferMessage and breaks
+                // the existing IMessage contract. The stream writes into the
+                // final native owner; protobuf owns its fixed-size writer buffer.
+                byte empty = 0;
+                fixed (byte* storage = part.AsSpan())
+                {
+                    using var destination = new UnmanagedMemoryStream(
+                        storage == null ? &empty : storage, part.Size, part.Size, FileAccess.Write);
+                    protobuf.WriteTo(destination);
+                    if (destination.Position != part.Size)
+                        throw new InvalidOperationException("Protobuf serialized size differs from CalculateSize.");
+                }
+                return part;
+            }
+            catch
+            {
+                part.Dispose();
+                throw;
+            }
+        }
 
         public ZLinkEncodedPayload Serialize(object value, Type type)
         {

@@ -22,9 +22,15 @@ generation that's already on the queue does not run its callback — if a tick s
 before re-registration ran after re-registration, it would use a period and callback other
 than the new ones the caller expects.
 
-**Cancel only blocks the start of callbacks from that generation onward.** A callback already
-started is not forcibly interrupted — forcibly terminating a handler already running at the
-moment of cancel could leave the state that handler was working on inconsistent.
+**`cancel` blocks new callbacks for that timer generation and completes with the generation's
+single result after any callback already running and all timer-owned resource cleanup have
+finished.** A callback already started is not forcibly interrupted — forcibly terminating a
+handler running at the moment of cancel could leave the state that handler was working on
+inconsistent. Calling `cancel` several times for the same generation gives every caller the same
+success or failure. One completion owner and one terminal result per generation keep the
+observation from depending on which caller went first. Cleanup failures are not swallowed; they
+arrive in that result and are classified by the
+[error model](../00-foundation/07-framework-error-model.en.md).
 
 **Even if a repeating timer expires faster than the handler runs, the same key's callback
 never runs concurrently.** Duplicate expirations may be collapsed into a single pending
@@ -35,7 +41,7 @@ same state at the same time.
 |---|---|
 | Re-registering the same key | Generation increases |
 | A queue record from an earlier generation | Does not run its callback |
-| Cancel | Blocks callbacks from that generation onward from starting (an already-started callback is not interrupted) |
+| Cancel | Blocks new callbacks for that generation and completes every cancel caller with the same success or failure after an already-running callback and timer-owned resource cleanup finish |
 | A repeating timer expires faster than the handler | The same key's callback is never run concurrently; duplicate expirations may merge into one pending record |
 
 The callback receives the following tick information.
@@ -149,6 +155,9 @@ maps to one contract test.
   not run its callback.
 - After cancel is called, a tick from that generation onward doesn't start its callback, but a callback
   already running at the moment of cancel runs to completion.
+- When `cancel` is called concurrently more than once for the same generation, every result
+  completes after the callback running at that time and timer-owned resource cleanup finish, and
+  every caller sees the same failure when cleanup fails.
 - Even if the repeating period is shorter than the handler's execution time, the same key's
   callback is never run twice concurrently.
 

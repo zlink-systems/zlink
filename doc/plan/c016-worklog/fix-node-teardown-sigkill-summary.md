@@ -121,7 +121,7 @@ client-only membership 문제의 다른 언어 전체 대조는 후속 승인 �
 ## 증거 위치
 
 전체 명령 로그와 실패 sample의 flow/file log는
-[`zlink-work/c016/logs/fix-node-teardown/`](../../../zlink-work/c016/logs/fix-node-teardown/)에 보존했다.
+`zlink-work/c016/logs/fix-node-teardown/` (`../../../zlink-work/c016/logs/fix-node-teardown/`)에 보존했다.
 
 - `verified-individual-results.txt`, `verified-sample-*.log`: 개별 sample 결과.
 - `gate-results.txt`, `npm-test.log`, `aggregate.log`, `aggregate-result.txt`: 최종 gate 결과.

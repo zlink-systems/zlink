@@ -144,12 +144,22 @@ public final class ProbeSpot implements ZLinkSpot<ProbeActor> {
         timers.put(command.timerName(), timer);
     }
 
-    synchronized void stopTimers(String requestId) {
+    synchronized CompletionStage<Void> stopTimers(String requestId) {
         List<String> names = timerScenarios.entrySet().stream()
             .filter(entry -> entry.getValue().requestId().equals(requestId))
             .map(Map.Entry::getKey)
             .toList();
-        names.forEach(this::closeTimer);
+        List<CompletableFuture<Void>> cancellations = names.stream()
+            .map(timerName -> {
+                timerScenarios.remove(timerName);
+                ZLinkTimer timer = timers.remove(timerName);
+                return timer == null
+                    ? CompletableFuture.<Void>completedFuture(null)
+                    : timer.cancel().toCompletableFuture();
+            })
+            .toList();
+        return CompletableFuture.allOf(
+            cancellations.toArray(CompletableFuture[]::new));
     }
 
     synchronized TimerScenario timerScenario(String timerName) {
@@ -167,4 +177,3 @@ public final class ProbeSpot implements ZLinkSpot<ProbeActor> {
     record TimerScenario(String requestId, String mode, long delayMillis) {
     }
 }
-

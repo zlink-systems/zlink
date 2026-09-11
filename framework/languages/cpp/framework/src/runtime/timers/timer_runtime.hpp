@@ -6,16 +6,36 @@
 #include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/timers/core_timer_drain_loop.hpp"
 
+#include <atomic>
 #include <functional>
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <typeindex>
 #include <vector>
 
 namespace zlink::framework::detail
 {
+
+class timer_resource_t
+{
+  public:
+    virtual ~timer_resource_t () = default;
+    virtual result_t<void> cancel () noexcept = 0;
+};
+
+class core_timer_resource_t final : public timer_resource_t
+{
+  public:
+    result_t<void> cancel () noexcept override;
+
+    core_timer_drain_loop_t &loop () noexcept { return _loop; }
+
+  private:
+    core_timer_drain_loop_t _loop;
+};
 
 class timer_state_t
 {
@@ -30,17 +50,30 @@ class timer_state_t
     std::type_index handler_type{typeid (void)};
     std::weak_ptr<void> handler_instance;
     handler_invoker_t handler_invoker;
-    std::unique_ptr<core_timer_drain_loop_t> native_timer;
+    std::unique_ptr<timer_resource_t> native_timer;
     std::shared_ptr<runtime::serial_execution_queue_t> serial_queue;
     std::uint64_t delivery_index = 0;
     std::uint64_t last_scheduled_index = 0;
-    bool disposed = false;
+    std::atomic_bool disposed{false};
     bool running = false;
     mutable std::mutex mutex;
+    std::shared_ptr<task_completion_source_t<void>> cancel_completion;
+    std::optional<result_t<void>> cleanup_result;
+    bool cancel_completed = false;
     bool pending_fire = false;
     std::uint64_t pending_fire_count = 0;
     std::deque<timer_tick_t> delivered_ticks;
     std::deque<timer_failure_event_t> failure_events;
+};
+
+struct timer_test_access_t
+{
+    static timer_t create (std::shared_ptr<timer_state_t> state)
+    {
+        return timer_t (std::move (state));
+    }
+
+    static void finish_callback (const std::shared_ptr<timer_state_t> &state);
 };
 
 class timer_runtime_t

@@ -488,8 +488,7 @@ public final class AwaitProbeHandlers {
         implements ZLinkSpotPacketHandler<AwaitProbeSpot, Contracts.TimerStopMsg> {
         @Override
         public CompletionStage<Void> handle(AwaitProbeSpot spot, Contracts.TimerStopMsg request) {
-            spot.stopTimers(request.requestId());
-            return CompletableFuture.completedFuture(null);
+            return spot.stopTimers(request.requestId());
         }
     }
 

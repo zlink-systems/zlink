@@ -10,7 +10,7 @@ generics. A one-way operation provides async `submit()` and synchronous blocking
 and also provides synchronous `submit_sync(...)`. The synchronous `submit_sync` family is
 application-thread only and fails immediately with `InvalidOperation` when called from a
 runtime execution context such as a handler turn, Spot turn, or state lane
-([Submit And Completion §4 F2-a](../../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary)).
+([Submit And Completion §4 F2-a](../../../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary)).
 The framework public terminator does not expose backpressure (F1).
 
 **`submit_sync` is a `default` interface method.** The implementation is the same for every

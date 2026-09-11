@@ -137,7 +137,7 @@ waits, and completion dependencies the application linked itself all follow thei
 manipulation creates no new propagation rule between stages.
 
 When the real admission and reply complete, and how the two stages of one REQUEST relate, is owned by
-[Async Execution Model §5](async-execution-model.en.md#5-joining-the-submit-result-and-the-completion).
+[Async Execution Model §5](async-execution-model.en.md#5-joining-submit-results-and-completions).
 Cancelling a caller's wait and cleaning up native state is owned by
 [the same document §6](async-execution-model.en.md#6-caller-wait-cancellation).
 

@@ -662,13 +662,153 @@ export function decodeChannelHeader(
   if (parts.length === 0) {
     throw new ZLinkConfigurationException('Channel envelope header part is missing.');
   }
-  return validateChannelHeader(parseWireJson(parts[0].data().toString()), flowEnabled);
+  return validateChannelHeader(parseChannelHeaderBytes(parts[0].data()), flowEnabled);
 }
 
 function parseWireJson(payload: string, schema?: ZLinkJsonSchema): unknown {
   return parseFrameworkJsonV1(payload, {
     rejectPropertyName: isPrototypeKey
   }, schema);
+}
+
+function parseChannelHeaderBytes(payload: Buffer): unknown {
+  return tryParseCanonicalChannelHeader(payload) ?? parseWireJson(payload.toString());
+}
+
+/**
+ * Accept the byte layout emitted by writeChannelHeader without materializing
+ * the enclosing JSON text. Any variation falls through to the established
+ * framework-json-v1 parser, which remains the sole authority for JSON
+ * failures, unknown properties, and prototype-key rejection.
+ */
+function tryParseCanonicalChannelHeader(payload: Buffer): Record<string, unknown> | undefined {
+  const reader = new CanonicalChannelHeaderReader(payload);
+  if (!reader.consume('{"formatMarker":242,"kind":')) return undefined;
+  const kind = reader.readSingleDigit();
+  if (kind === undefined || !reader.consume(',"channelName":')) return undefined;
+  const channelName = reader.readString();
+  if (channelName === undefined || !reader.consume(',"messageName":')) return undefined;
+  const messageName = reader.readString();
+  if (messageName === undefined || !reader.consume(',"contentType":')) return undefined;
+  const contentType = reader.readString();
+  if (contentType === undefined || !reader.consume(',"correlationId":')) return undefined;
+  const correlationId = reader.readNullableString();
+  if (correlationId === undefined || !reader.consume(',"deadline":')) return undefined;
+  const deadline = reader.readNullableString();
+  if (deadline === undefined || !reader.consume(',"topic":')) return undefined;
+  const topic = reader.readNullableString();
+  if (topic === undefined) return undefined;
+
+  const header: Record<string, unknown> = {
+    formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
+    kind,
+    channelName,
+    messageName,
+    contentType,
+    correlationId: correlationId === NULL_JSON_STRING ? null : correlationId,
+    deadline: deadline === NULL_JSON_STRING ? null : deadline,
+    topic: topic === NULL_JSON_STRING ? null : topic
+  };
+  if (!reader.readOptionalNullableString('errorCode', header)) return undefined;
+  if (!reader.readOptionalNullableString('errorMessage', header)) return undefined;
+  if (!reader.readOptionalNullableString('source', header)) return undefined;
+  if (!reader.consume(',"metadata":{}')) return undefined;
+  header.metadata = {};
+  if (!reader.readOptionalString('flowId', header)) return undefined;
+  if (!reader.readOptionalSingleDigit('flowOrigin', header)) return undefined;
+  return reader.consume('}') && reader.atEnd() ? header : undefined;
+}
+
+const NULL_JSON_STRING = Symbol('null JSON string');
+
+class CanonicalChannelHeaderReader {
+  private index = 0;
+
+  constructor(private readonly bytes: Buffer) {}
+
+  atEnd(): boolean {
+    return this.index === this.bytes.length;
+  }
+
+  consume(value: string): boolean {
+    if (this.index + value.length > this.bytes.length) return false;
+    for (let offset = 0; offset < value.length; offset += 1) {
+      if (this.bytes[this.index + offset] !== value.charCodeAt(offset)) return false;
+    }
+    this.index += value.length;
+    return true;
+  }
+
+  readSingleDigit(): number | undefined {
+    if (this.index === this.bytes.length) return undefined;
+    const value = this.bytes[this.index];
+    if (value < 0x30 || value > 0x39) return undefined;
+    this.index += 1;
+    return value - 0x30;
+  }
+
+  readString(): string | undefined {
+    if (this.bytes[this.index] !== 0x22) return undefined;
+    const start = this.index;
+    this.index += 1;
+    while (this.index < this.bytes.length) {
+      const value = this.bytes[this.index++]!;
+      if (value === 0x22) {
+        return JSON.parse(this.bytes.toString('utf8', start, this.index)) as string;
+      }
+      if (value < 0x20) return undefined;
+      if (value !== 0x5c) continue;
+      if (this.index === this.bytes.length) return undefined;
+      const escaped = this.bytes[this.index++]!;
+      if (escaped === 0x75) {
+        for (let count = 0; count < 4; count += 1) {
+          if (this.index === this.bytes.length) return undefined;
+          const digit = this.bytes[this.index++];
+          if (!isHexDigit(digit)) return undefined;
+        }
+      } else if (escaped !== 0x22 && escaped !== 0x5c && escaped !== 0x2f
+        && escaped !== 0x62 && escaped !== 0x66 && escaped !== 0x6e
+        && escaped !== 0x72 && escaped !== 0x74) {
+        return undefined;
+      }
+    }
+    return undefined;
+  }
+
+  readNullableString(): string | symbol | undefined {
+    if (this.consume('null')) return NULL_JSON_STRING;
+    return this.readString();
+  }
+
+  readOptionalNullableString(name: string, target: Record<string, unknown>): boolean {
+    if (!this.consume(`,\"${name}\":`)) return true;
+    const value = this.readNullableString();
+    if (value === undefined) return false;
+    target[name] = value === NULL_JSON_STRING ? null : value;
+    return true;
+  }
+
+  readOptionalString(name: string, target: Record<string, unknown>): boolean {
+    if (!this.consume(`,\"${name}\":`)) return true;
+    const value = this.readString();
+    if (value === undefined) return false;
+    target[name] = value;
+    return true;
+  }
+
+  readOptionalSingleDigit(name: string, target: Record<string, unknown>): boolean {
+    if (!this.consume(`,\"${name}\":`)) return true;
+    const value = this.readSingleDigit();
+    if (value === undefined) return false;
+    target[name] = value;
+    return true;
+  }
+}
+
+function isHexDigit(value: number): boolean {
+  return (value >= 0x30 && value <= 0x39)
+    || (value >= 0x41 && value <= 0x46)
+    || (value >= 0x61 && value <= 0x66);
 }
 
 function schemaForInboundChannelEnvelope(header: ZLinkChannelEnvelopeHeader): ZLinkJsonSchema | undefined {

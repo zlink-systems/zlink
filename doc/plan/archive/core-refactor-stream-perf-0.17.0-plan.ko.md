@@ -3,11 +3,11 @@
 > **상태(2026-09-09)**: 캠페인 종료. 결과는 §9, 릴리즈 0.17.1(`4cd03b9173`)·0.17.2(`dca377aa5e`)·0.17.3(`0761c1d4d0`)·**0.17.4(`5d2d215367`, GitHub Release `core/v0.17.4`)**. 후속(0.17.5) 항목은 §8 끝의 두 목록.
 
 > 작성일: 2026-09-06 21:10, 개정 21:40 · 22:00 (머신 B, main `285f37792d`)
-> 선행 계획: [`core-0.17.0-dontwait-contract-and-perf-plan-b.ko.md`](archive/core-0.17.0-dontwait-contract-and-perf-plan-b.ko.md)
-> 결정 기록: [`c016-worklog/decisions.ko.md`](c016-worklog/decisions.ko.md) (이 캠페인은 D-B140부터 이어 쓴다)
-> 원칙: [`../principal/dev/posddd.ko.md`](../principal/dev/posddd.ko.md), [`../principal/dev/zlink-system-design-principles.ko.md`](../principal/dev/zlink-system-design-principles.ko.md),
-> [`08-posd-module-structure.ko.md`](../../core/doc/spec/core/systems/08-posd-module-structure.ko.md), [`10-hot-path.en.md` §5](../../core/doc/spec/core/systems/10-hot-path.en.md)
-> 성능 정책: [`../perf/PERF_POLICY.md`](../perf/PERF_POLICY.md), [`../perf/PERF_MULTI_TEST_POLICY.md`](../perf/PERF_MULTI_TEST_POLICY.md)
+> 선행 계획: [`core-0.17.0-dontwait-contract-and-perf-plan-b.ko.md`](core-0.17.0-dontwait-contract-and-perf-plan-b.ko.md)
+> 결정 기록: [`c016-worklog/decisions.ko.md`](../c016-worklog/decisions.ko.md) (이 캠페인은 D-B140부터 이어 쓴다)
+> 원칙: [`../principal/dev/posddd.ko.md`](../../principal/dev/posddd.ko.md), [`../principal/dev/zlink-system-design-principles.ko.md`](../../principal/dev/zlink-system-design-principles.ko.md),
+> [`08-posd-module-structure.ko.md`](../../../core/doc/spec/core/systems/08-posd-module-structure.ko.md), [`10-hot-path.en.md` §5](../../../core/doc/spec/core/systems/10-hot-path.en.md)
+> 성능 정책: [`../perf/PERF_POLICY.md`](../../perf/PERF_POLICY.md), [`../perf/PERF_MULTI_TEST_POLICY.md`](../../perf/PERF_MULTI_TEST_POLICY.md)
 
 ## 0. 요청 정리 (사용자, 2026-09-06 21:00 / 21:30)
 
@@ -284,7 +284,7 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 
 ### 7.7 동기화 모델 인벤토리와 목표
 
-스펙 [`systems/11-synchronization-model`](../../core/doc/spec/core/systems/11-synchronization-model.ko.md)의 규칙과 현재 코드의 차이. STREAM tcp 1024 B 셀(CCU 20, callgrind)에서 message당 mutex 획득 횟수. 착지할 때마다 갱신한다.
+스펙 [`systems/11-synchronization-model`](../../../core/doc/spec/core/systems/11-synchronization-model.ko.md)의 규칙과 현재 코드의 차이. STREAM tcp 1024 B 셀(CCU 20, callgrind)에서 message당 mutex 획득 횟수. 착지할 때마다 갱신한다.
 
 | lock | 스펙 분류 | 두 번째 thread | 2026-09-07 (G-11a 뒤) | **0.17.4 (ALL-1/2 뒤)** | 목표 | job |
 |---|---|---|---|---|---|---|

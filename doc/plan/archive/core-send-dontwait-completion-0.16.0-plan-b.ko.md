@@ -2,7 +2,7 @@
 
 > 작성일: 2026-09-03
 > 상위 계획: [`core-send-dontwait-completion-0.16.0-plan.ko.md`](core-send-dontwait-completion-0.16.0-plan.ko.md) §0.3a
-> 작업 기록: [`c016-worklog/`](c016-worklog/README.ko.md) (판정 D-021~D-050, 브리프, 드라이버)
+> 작업 기록: [`c016-worklog/`](../c016-worklog/README.ko.md) (판정 D-021~D-050, 브리프, 드라이버)
 > 역할: 감독관(Claude Fable) = 리뷰·판정·커밋, 구현 = codex sol(고난도 sol ultra), 문서 작성 = sonnet
 
 이 문서는 머신 B의 새 세션이 상위 계획을 다 읽지 않아도 자기 몫을 끝낼 수 있게 쓴 실행 계획이다.
@@ -56,7 +56,7 @@ systemd-run --user --scope --unit=<이름> -p MemoryMax=24G -p OOMPolicy=continu
 
 ## 2. 작업 1 — Core 2차 수정의 성능 판정 (branch `perf/phase2-judge`)
 
-합격 기준(D-040, 스펙 [Core hot path §5.2](../../core/doc/spec/core/systems/10-hot-path.ko.md)):
+합격 기준(D-040, 스펙 [Core hot path §5.2](../../../core/doc/spec/core/systems/10-hot-path.ko.md)):
 cell(pattern·transport·size·metric) throughput·bandwidth ≥ 0.95, latency ≤ 1.05 **그리고** (pattern, transport)별
 size `64,256,1024,65536` 기하평균 throughput·bandwidth ≥ 1.0, latency ≤ 1.0. 둘 다 PASS. gate 완화·이월 금지.
 
@@ -89,7 +89,7 @@ bash $ZLINK_WORK/c016/tools/sweep2.sh --only multi      # 28 cell × 4 size, ~40
   순서대로 branch에 합친다(충돌 시 감독관이 해소).
 - wake 불변식 테스트: 브리프 `briefs/wake-invariant-tests.prompt`(sol high), 별도 worktree, `core/tests/**`만 수정.
 - 규칙: 동작 보존(동작 변경이 필요하면 BLOCKERS로 보고), 공개 API·ABI 불변, 스펙
-  [Core hot path §3](../../core/doc/spec/core/systems/10-hot-path.ko.md) 위반 잔존 시 §4 형태로 정리, 성능 이득이 없어도
+  [Core hot path §3](../../../core/doc/spec/core/systems/10-hot-path.ko.md) 위반 잔존 시 §4 형태로 정리, 성능 이득이 없어도
   구조 개선이면 채택(D-044).
 - Gate: §5 기능 gate + `ctest -R hotpath_gate`(기준값 ±5%) + `sweep2.sh` 비회귀(작업 1 결과와 비교해 나빠진 cell 없음).
 - 커밋은 리팩토링 항목별로 분리(불필요 코드 제거 / 책임 분리 / 명명)해 리뷰 가능하게 하고, PR로 합친다.
