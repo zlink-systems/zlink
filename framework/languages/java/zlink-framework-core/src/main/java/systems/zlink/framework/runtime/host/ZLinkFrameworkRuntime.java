@@ -236,6 +236,7 @@ public final class ZLinkFrameworkRuntime
         options.registration().codecs().freeze();
         this.eventDispatcher = eventDispatcher;
         this.registration = options.registration();
+        handlerFactory.prepare(this.registration.applicationTypes());
         this.applicationJobQueue = this.registration.applicationJobQueue();
         this.meshDrains = new systems.zlink.framework.runtime.internal.drain
             .ZLinkMeshDrainCoordinator(this.registration.meshNodes().stream()
