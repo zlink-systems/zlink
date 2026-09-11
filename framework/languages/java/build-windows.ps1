@@ -10,15 +10,18 @@ $ErrorActionPreference = "Stop"
 $JavaRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepositoryRoot = [System.IO.Path]::GetFullPath(
     (Join-Path $JavaRoot "../../.."))
+. (Join-Path $JavaRoot "local-package-common.ps1")
 if (-not $LocalPackageRoot) {
     $LocalPackageRoot = Join-Path $RepositoryRoot ".artifacts/windows"
 }
 $LocalPackageRoot = [System.IO.Path]::GetFullPath($LocalPackageRoot)
-if (-not (Test-Path -LiteralPath (Join-Path $LocalPackageRoot "maven") -PathType Container)) {
-    throw "Local Maven package repository was not found: $LocalPackageRoot/maven"
-}
+$BindingVersion = Assert-ZlinkJavaLocalBindingPackage `
+    -RepositoryRoot $RepositoryRoot `
+    -LocalPackageRoot $LocalPackageRoot
 
 $env:ZLINK_LOCAL_PACKAGE_ROOT = $LocalPackageRoot
+$env:ZLINK_JAVA_REQUIRE_LOCAL_BINDING = "true"
+Write-Output "Using exact local Java binding package $BindingVersion from $LocalPackageRoot/maven"
 
 function Invoke-GradleBuild {
     param(

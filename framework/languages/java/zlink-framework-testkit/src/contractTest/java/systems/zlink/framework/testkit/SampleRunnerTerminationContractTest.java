@@ -32,7 +32,7 @@ final class SampleRunnerTerminationContractTest {
             trap 'cleanup; exit 0' EXIT
             exit 0
             """);
-        Process process = new ProcessBuilder("bash", "-c", """
+        Process process = new ProcessBuilder(bashExecutable(), "-c", """
             if bash "$1" "$2" "$3"; then
               exit 0
             else
@@ -53,7 +53,7 @@ final class SampleRunnerTerminationContractTest {
             "ZLINK_FRAMEWORK_READY\n"
                 + "ZLINK_FRAMEWORK_READY\n"
                 + "ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED reason=TEARDOWN_FAILED\n");
-        Process process = new ProcessBuilder("bash", "-c", """
+        Process process = new ProcessBuilder(bashExecutable(), "-c", """
             source "$1"
             ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="role.log"
             declare -A ZLINK_SAMPLE_FRAMEWORK_ROLE_LOG_OFFSETS=([role.log]=2)
@@ -121,7 +121,7 @@ final class SampleRunnerTerminationContractTest {
             cleanup
             """.formatted(variableName);
         Process process = new ProcessBuilder(
-            "bash",
+            bashExecutable(),
             "-c",
             script,
             "sample-runner-termination-contract",
@@ -148,6 +148,31 @@ final class SampleRunnerTerminationContractTest {
         try (var paths = Files.walk(directory)) {
             return paths.anyMatch(path -> path.getFileName().toString().equals("role.log"));
         }
+    }
+
+    private static String bashExecutable() {
+        String configured = System.getenv("ZLINK_GIT_BASH");
+        if (configured != null && !configured.isBlank()) {
+            Path executable = Path.of(configured).toAbsolutePath().normalize();
+            if (!Files.isRegularFile(executable)) {
+                throw new IllegalStateException("ZLINK_GIT_BASH was not found: " + executable);
+            }
+            return executable.toString();
+        }
+        if (!System.getProperty("os.name").startsWith("Windows")) {
+            return "bash";
+        }
+        for (String root : List.of(
+                System.getenv().getOrDefault("ProgramFiles", "C:\\Program Files"),
+                System.getenv().getOrDefault("LOCALAPPDATA", "C:\\Users\\Default\\AppData\\Local")
+                    + "\\Programs")) {
+            Path executable = Path.of(root, "Git", "bin", "bash.exe");
+            if (Files.isRegularFile(executable)) {
+                return executable.toString();
+            }
+        }
+        throw new IllegalStateException(
+            "Git Bash is required for shell-runner parity tests; set ZLINK_GIT_BASH.");
     }
 
     private static Path samplesRoot() {

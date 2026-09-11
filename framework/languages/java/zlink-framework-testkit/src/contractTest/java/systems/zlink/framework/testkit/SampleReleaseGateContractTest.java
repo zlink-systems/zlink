@@ -154,7 +154,7 @@ final class SampleReleaseGateContractTest {
                     "run_sample.sh must use standalone settings for " + sampleName);
                 Path powerShellRunnerPath = sampleRoot.resolve("run_sample.ps1");
                 if (Files.isRegularFile(powerShellRunnerPath)) {
-                    String powerShellRunner = Files.readString(powerShellRunnerPath);
+                    String powerShellRunner = powerShellRunnerSource(powerShellRunnerPath);
                     assertTrue((powerShellRunner.contains("--settings-file")
                                 && powerShellRunner.contains("standalone.settings.gradle.kts"))
                             || powerShellRunner.contains(
@@ -230,12 +230,18 @@ final class SampleReleaseGateContractTest {
         for (String needle : List.of(
                 "ProcessStartInfo",
                 "WaitForExit",
+                "Kill($true)",
+                "taskkillExitCode",
+                "Docker process-tree termination leaked child PID(s)",
                 "redis-cli", "ping",
                 "create", "--tmpfs", "127.0.0.1:${hostPort}:6379",
                 "start", "inspect", "rm", "-fv",
                 "Remove-ZlinkSampleRedisAttempt",
+                "Remove-ZlinkSampleRedisExactId",
                 "inspect", "--type", "container", "{{.Id}}",
                 "^[0-9a-f]{12,64}$",
+                "Redis container remained after removal",
+                "ZLINK_REDIS_IMAGE",
                 "Test-ZlinkSampleTcpPortAvailable",
                 "for ($offset = 0; $offset -lt $rangeSize; $offset++)",
                 "address already in use|port is already allocated|failed to bind host port")) {
@@ -249,11 +255,17 @@ final class SampleReleaseGateContractTest {
             "PowerShell Redis create timeout must resolve and remove the exact attempt");
         assertTrue(Pattern.compile(
                 "(?s)function Remove-ZlinkSampleRedis \\{.*?"
-                    + "if \\(\\$ContainerId -match '\\^\\[0-9a-f\\]\\{12,64\\}\\$'\\).*?"
-                    + "Invoke-ZlinkDockerCommand -Arguments @\\(\\\"rm\\\", \\\"-fv\\\", \\$ContainerId\\)")
+                    + "Remove-ZlinkSampleRedisExactId -ContainerId \\$ContainerId")
                 .matcher(powerShellHelper)
                 .find(),
             "PowerShell final Redis cleanup must accept only an exact container ID");
+        assertTrue(Pattern.compile(
+                "(?s)function Remove-ZlinkSampleRedisExactId \\{.*?"
+                    + "\\$ContainerId -notmatch '\\^\\[0-9a-f\\]\\{12,64\\}\\$'.*?"
+                    + "\\$removed.ExitCode -ne 0.*?Redis container remained after removal")
+                .matcher(powerShellHelper)
+                .find(),
+            "PowerShell exact-ID Redis cleanup must fail on removal error or residue");
         assertTrue(Pattern.compile(
                 "(?s)Invoke-ZlinkDockerCommand -Arguments @\\(\\s*\\\"start\\\", \\$containerId.*?"
                     + "catch \\{\\s*Remove-ZlinkSampleRedisAttempt -ContainerId \\$containerId -Name \\$name")
@@ -304,7 +316,7 @@ final class SampleReleaseGateContractTest {
 
                 Path powerShellRunnerPath = runnerPath.resolveSibling("run_sample.ps1");
                 if (Files.isRegularFile(powerShellRunnerPath)) {
-                    String powerShellRunner = Files.readString(powerShellRunnerPath);
+                    String powerShellRunner = powerShellRunnerSource(powerShellRunnerPath);
                     assertTrue(powerShellRunner.contains("Start-ZlinkSampleRedis")
                             && powerShellRunner.contains("Remove-ZlinkSampleRedis"),
                         language + "/" + sample
@@ -349,12 +361,15 @@ final class SampleReleaseGateContractTest {
 
                 Path powerShellRunnerPath = runnerPath.resolveSibling("run_sample.ps1");
                 if (Files.isRegularFile(powerShellRunnerPath)) {
-                    String powerShellRunner = Files.readString(powerShellRunnerPath);
+                    String powerShellRunner = powerShellRunnerSource(powerShellRunnerPath);
                     String powerShellLanguage = language.equals("java") ? "Java" : "Kotlin";
                     boolean usesPowerShellCommonAllocator = powerShellRunner.contains(
                             "Get-ZlinkSampleApplicationPorts -Language " + powerShellLanguage)
                         || powerShellRunner.contains(
-                            "Get-ZlinkSampleApplicationEndpoints -Language " + powerShellLanguage);
+                            "Get-ZlinkSampleApplicationEndpoints -Language " + powerShellLanguage)
+                        || (sample.equals("ZoneWorld")
+                            && powerShellRunner.contains("Get-ZlinkSampleApplicationPorts -Language $Language")
+                            && powerShellRunner.contains("-Language " + powerShellLanguage));
                     assertTrue(usesPowerShellCommonAllocator,
                         language + "/" + sample
                             + " PowerShell runner must use the shared OS bind-checked application port allocator");
@@ -428,7 +443,7 @@ final class SampleReleaseGateContractTest {
                 if (!Files.isRegularFile(runnerPath)) {
                     continue;
                 }
-                String runner = Files.readString(runnerPath);
+                String runner = powerShellRunnerSource(runnerPath);
                 assertTrue(runner.contains("Invoke-ZlinkSampleGradleBuild"),
                     language + "/" + sample
                         + " PowerShell runner must use the shared Gradle build lock");
@@ -676,7 +691,151 @@ final class SampleReleaseGateContractTest {
                 assertTrue(script.contains(requiredText),
                     language + "/ZoneWorld runner must prove continuity marker '" + requiredText + "'");
             }
+
+            String powerShellScript = powerShellRunnerSource(sampleRoot.resolve("run_sample.ps1"));
+            for (String requiredText : List.of(
+                    "Invoke-ClientWithStop \"ZW-C2\" \"TERM\"",
+                    "Invoke-ClientWithStop \"ZW-C3\" \"KILL\"",
+                    "Invoke-Client \"ZW-E5-arm\"",
+                    "Stop-ZoneNode \"zone-node-2\" \"KILL\"",
+                    "Invoke-Client \"ZW-E5\"",
+                    "Test-AllLogs \"ZW-D1-subscribers\"",
+                    "Test-AllLogs \"ZW-D1-spots\"",
+                    "$old = $rid2",
+                    "Stop-ZoneNode \"zone-node-2\" \"TERM\"",
+                    "Wait-Log -Name \"zone-node-replacement\" -Pattern \"topology=ready\"",
+                    "Invoke-Client \"ZW-G3-fresh\"",
+                    "scenario ZW-G3-fresh owner=$new ",
+                    "Add-Pass \"ZW-G3\"",
+                    "zoneworld-ops-observe=completed",
+                    "zoneworld-ops-announce=completed",
+                    "zoneworld-ops-maintenance=completed",
+                    "zoneworld=completed")) {
+                assertTrue(powerShellScript.contains(requiredText),
+                    language + "/ZoneWorld PowerShell runner must prove continuity marker '"
+                        + requiredText + "'");
+            }
+            for (String requiredText : List.of(
+                    "CREATE_NEW_CONSOLE",
+                    "GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0)",
+                    "Send-OwnedConsoleInterrupt",
+                    "No owned JVM descendant was found",
+                    "Assert-FrameworkGracefulTermination",
+                    "ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE",
+                    "taskkillExitCode",
+                    "Process group leaked PID(s)",
+                    "cleanup failed:")) {
+                assertTrue(powerShellScript.contains(requiredText),
+                    language + "/ZoneWorld PowerShell runner must preserve Windows lifecycle evidence '"
+                        + requiredText + "'");
+            }
+            assertFalse(Pattern.compile(
+                    "(?s)if \\(\\$Mode -eq \\\"TERM\\\"\\).*?Stop-ProcessTree.*?-Force")
+                    .matcher(powerShellScript).find(),
+                language + "/ZoneWorld TERM must not fall back to forced process termination");
         }
+    }
+
+    @Test
+    void windowsLocalBindingAndRunnerInventoryAreReleaseGated() throws IOException {
+        Path javaRoot = frameworkJavaRoot();
+        String localHelper = Files.readString(javaRoot.resolve("local-package-common.ps1"));
+        for (String requiredText : List.of(
+                "bindings/java/VERSION",
+                "ZLINK_BINDING_VERSION=",
+                "gradle/libs.versions.toml",
+                "zlinkBindings =",
+                "zlink-$bindingVersion.jar",
+                "zlink-$bindingVersion.pom",
+                "zlink-$bindingVersion.module")) {
+            assertTrue(localHelper.contains(requiredText),
+                "Windows Java local-package preflight must contain " + requiredText);
+        }
+
+        String buildWindows = Files.readString(javaRoot.resolve("build-windows.ps1"));
+        String runSamplesWindows = Files.readString(samplesRoot().resolve("run_samples.ps1"));
+        for (String script : List.of(buildWindows, runSamplesWindows)) {
+            assertTrue(script.contains("Assert-ZlinkJavaLocalBindingPackage"),
+                "Windows build/sample entrypoints must preflight the exact Java binding package");
+            assertTrue(script.contains("ZLINK_JAVA_REQUIRE_LOCAL_BINDING"),
+                "Windows build/sample entrypoints must prohibit repository fallback");
+            assertTrue(script.contains(".artifacts/windows"),
+                "Windows build/sample entrypoints must default to Windows local packages");
+        }
+        String powerShellSampleHelper = Files.readString(
+            samplesRoot().resolve("redis-common.ps1"));
+        assertTrue(powerShellSampleHelper.contains("Assert-ZlinkJavaLocalBindingPackage")
+                && powerShellSampleHelper.contains("ZLINK_JAVA_REQUIRE_LOCAL_BINDING"),
+            "each Windows sample runner must preflight and require the exact local binding");
+
+        String settings = Files.readString(javaRoot.resolve(
+            "gradle/zlink-local-packages.settings.gradle.kts"));
+        assertTrue(settings.contains("zlinkIsWindows -> windowsRepo")
+                && !settings.contains("zlinkIsWindows && windowsRepo.isDirectory"),
+            "Windows must select only the canonical Windows Maven local-package repository");
+        assertTrue(settings.contains(
+                "zlink.localPackageRoot cannot override ZLINK_LOCAL_PACKAGE_ROOT")
+                && settings.contains(
+                    "zlink.requireLocalBinding cannot disable Windows strict local-binding mode"),
+            "Windows strict environment values must be authoritative over Gradle properties");
+        assertTrue(settings.contains("exclusiveContent")
+                && settings.contains("includeModule(\"systems.zlink\", \"zlink\")"),
+            "strict local validation must not resolve the Java binding from Maven Central");
+        assertTrue(settings.contains(
+                "Strict local-package validation cannot use ZLINK_JAVA_BINDINGS_SOURCE"),
+            "strict local validation must not substitute a binding source build");
+
+        String settingsBehaviorTest = Files.readString(javaRoot.resolve(
+            "gradle/test-windows-local-package-settings.ps1"));
+        for (String requiredText : List.of(
+                "Matching strict local-package settings failed",
+                "A conflicting Gradle local-package root was not rejected",
+                "A conflicting Gradle strict-mode property was not rejected",
+                ".artifacts/windows/maven",
+                ".artifacts/wsl/maven")) {
+            assertTrue(settingsBehaviorTest.contains(requiredText),
+                "Windows Gradle settings behavior test must contain " + requiredText);
+        }
+
+        assertTrue(runSamplesWindows.contains("Invoke-SampleWithPortCollisionRetry")
+                && runSamplesWindows.contains("address already in use")
+                && runSamplesWindows.contains("WSAEADDRINUSE")
+                && runSamplesWindows.contains("EADDRINUSE"),
+            "Windows aggregate sample retries must classify only actual port collisions");
+        assertFalse(runSamplesWindows.contains(
+                "ZlinkBindException|Timed out waiting"),
+            "semantic binding and readiness failures must not be retried");
+
+        Set<String> expectedSamples = Stream.concat(REQUIRED_SAMPLES.stream(), Stream.of("ZoneWorld"))
+            .collect(Collectors.toSet());
+        List<String> manifest = Files.readAllLines(samplesRoot().resolve("sample-manifest.env"));
+        for (String language : REQUIRED_LANGUAGES) {
+            String key = language.toUpperCase(Locale.ROOT) + "_SAMPLES=";
+            String manifestLine = manifest.stream()
+                .filter(line -> line.startsWith(key))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("missing manifest key " + key));
+            Set<String> manifestSamples = Set.of(
+                manifestLine.substring(key.length()).replace("\"", "").trim().split("\\s+"));
+            assertTrue(manifestSamples.equals(expectedSamples),
+                language + " manifest must contain exactly the seven release samples");
+            for (String sample : manifestSamples) {
+                assertTrue(Files.isRegularFile(samplesRoot().resolve(language).resolve(sample)
+                        .resolve("run_sample.ps1")),
+                    "missing Windows runner for " + language + "/" + sample);
+            }
+        }
+
+        String kotlinSupportChat = Files.readString(
+            samplesRoot().resolve("kotlin/SupportChat/run_sample.ps1"));
+        assertTrue(kotlinSupportChat.contains("$Name.bat")
+                && kotlinSupportChat.contains("Get-AppBin \"Client\" \"Client\""),
+            "Kotlin SupportChat must launch the generated Windows .bat entrypoints");
+        assertFalse(kotlinSupportChat.contains("bin/Support\"")
+                || kotlinSupportChat.contains("bin/Api\"")
+                || kotlinSupportChat.contains("bin/Session\"")
+                || kotlinSupportChat.contains("bin/Client\""),
+            "Kotlin SupportChat must not launch Unix distribution entrypoints on Windows");
     }
 
     @Test
@@ -2480,6 +2639,15 @@ final class SampleReleaseGateContractTest {
 
     private static Path samplesRoot() {
         return frameworkJavaRoot().resolve("samples");
+    }
+
+    private static String powerShellRunnerSource(Path runnerPath) throws IOException {
+        String source = Files.readString(runnerPath);
+        if (source.contains("zoneworld-common.ps1")) {
+            source += System.lineSeparator()
+                + Files.readString(samplesRoot().resolve("zoneworld-common.ps1"));
+        }
+        return source;
     }
 
     private static boolean supportsPosixExecuteBits(Path path) {

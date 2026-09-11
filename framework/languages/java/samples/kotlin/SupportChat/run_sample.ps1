@@ -108,6 +108,11 @@ function Start-Role {
     $Processes.Add($process)
 }
 
+function Get-AppBin {
+    param([string]$Project, [string]$Name)
+    return Join-Path $SampleDir "$Project/build/install/$Name/bin/$Name.bat"
+}
+
 try {
     $ports = @(Get-ZlinkSampleApplicationPorts -Language Kotlin -Count 7)
     $ApiChannelEndpoint = "tcp://127.0.0.1:$($ports[0])"
@@ -160,9 +165,9 @@ try {
         ":Server:Support:installDist",
         ":Client:installDist") *> $BuildLog
 
-    Start-Role "support" (Join-Path $SampleDir "Server/Support/build/install/Support/bin/Support") $SupportConfig
-    Start-Role "api" (Join-Path $SampleDir "Server/Api/build/install/Api/bin/Api") $ApiConfig
-    Start-Role "session" (Join-Path $SampleDir "Server/Session/build/install/Session/bin/Session") $SessionConfig
+    Start-Role "support" (Get-AppBin "Server/Support" "Support") $SupportConfig
+    Start-Role "api" (Get-AppBin "Server/Api" "Api") $ApiConfig
+    Start-Role "session" (Get-AppBin "Server/Session" "Session") $SessionConfig
 
     Wait-LogCount @((Join-Path $LogDir "api.log")) "supportchat-ready kind=public node=api" 1
     Wait-LogCount @((Join-Path $LogDir "support.log")) "supportchat-ready kind=public node=support" 1
@@ -171,7 +176,7 @@ try {
     Wait-LogCount @((Join-Path $LogDir "session.log")) "supportchat-ready kind=spot-route node=session mesh=supportchat.support.spots" 1
 
     $clientLog = Join-Path $LogDir "client.log"
-    & (Join-Path $SampleDir "Client/build/install/Client/bin/Client") `
+    & (Get-AppBin "Client" "Client") `
         --stream-endpoint $StreamEndpoint *> $clientLog
     if ($LASTEXITCODE -ne 0) {
         throw "SupportChat client failed."

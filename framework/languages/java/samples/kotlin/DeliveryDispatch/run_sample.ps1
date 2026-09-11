@@ -124,7 +124,7 @@ try {
     $CourierNode2SpotPort = $ports[10]
     $CourierSessionSpotPort = $ports[11]
 
-    $redis = Start-ZlinkSampleRedis "zlink-redis-kotlin-sample-deliverydispatch" "redis:7.2-alpine" -Language Kotlin
+    $redis = Start-ZlinkSampleRedis "zlink-redis-kotlin-sample-deliverydispatch" -Language Kotlin
     $RedisContainer = $redis.ContainerId
     $RedisEndpoint = $redis.Endpoint
     $redisPort = [int](($RedisEndpoint -replace '^redis://', '').Split(':')[-1])

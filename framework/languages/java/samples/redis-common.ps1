@@ -4,6 +4,23 @@ if (-not (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
     $IsWindows = $env:OS -eq "Windows_NT"
 }
 
+if ($IsWindows) {
+    $zlinkSampleJavaRoot = Split-Path -Parent $PSScriptRoot
+    $zlinkSampleRepositoryRoot = [IO.Path]::GetFullPath(
+        (Join-Path $zlinkSampleJavaRoot "../../.."))
+    . (Join-Path $zlinkSampleJavaRoot "local-package-common.ps1")
+    $zlinkSampleLocalPackageRoot = if ($env:ZLINK_LOCAL_PACKAGE_ROOT) {
+        [IO.Path]::GetFullPath($env:ZLINK_LOCAL_PACKAGE_ROOT)
+    } else {
+        Join-Path $zlinkSampleRepositoryRoot ".artifacts/windows"
+    }
+    Assert-ZlinkJavaLocalBindingPackage `
+        -RepositoryRoot $zlinkSampleRepositoryRoot `
+        -LocalPackageRoot $zlinkSampleLocalPackageRoot | Out-Null
+    $env:ZLINK_LOCAL_PACKAGE_ROOT = $zlinkSampleLocalPackageRoot
+    $env:ZLINK_JAVA_REQUIRE_LOCAL_BINDING = "true"
+}
+
 function Set-ZlinkSampleUtf8File {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -31,21 +48,62 @@ function Optimize-ZlinkSampleWindowsLaunchers {
     if (-not $IsWindows) {
         return
     }
-    Get-ChildItem -Path $Root -Filter "*.bat" -Recurse -File |
-        Where-Object { $_.FullName -match '[\\/]build[\\/]install[\\/][^\\/]+[\\/]bin[\\/]' } |
-        ForEach-Object {
-            $content = [System.IO.File]::ReadAllText($_.FullName)
-            $optimized = [regex]::Replace(
-                $content,
-                '(?m)^set CLASSPATH=.*$',
-                'set CLASSPATH=%APP_HOME%\lib\*')
-            if ($optimized -ne $content) {
-                [System.IO.File]::WriteAllText(
-                    $_.FullName,
-                    $optimized,
-                    [System.Text.UTF8Encoding]::new($false))
+
+    $rootPath = [System.IO.Path]::GetFullPath($Root)
+    if (-not [System.IO.Directory]::Exists($rootPath)) {
+        throw "Sample root was not found: $rootPath"
+    }
+
+    $excludedDirectoryNames = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($name in @(".git", ".gradle", ".idea", ".kotlin", ".vscode", "node_modules")) {
+        [void]$excludedDirectoryNames.Add($name)
+    }
+
+    $pending = [System.Collections.Generic.Queue[string]]::new()
+    $pending.Enqueue($rootPath)
+    while ($pending.Count -ne 0) {
+        $directory = $pending.Dequeue()
+        foreach ($childDirectory in [System.IO.Directory]::EnumerateDirectories($directory)) {
+            $name = [System.IO.Path]::GetFileName($childDirectory)
+            if ($name.Equals("build", [System.StringComparison]::OrdinalIgnoreCase)) {
+                $installDirectory = Join-Path $childDirectory "install"
+                if (-not [System.IO.Directory]::Exists($installDirectory)) {
+                    continue
+                }
+                foreach ($applicationDirectory in
+                        [System.IO.Directory]::EnumerateDirectories($installDirectory)) {
+                    $binDirectory = Join-Path $applicationDirectory "bin"
+                    if (-not [System.IO.Directory]::Exists($binDirectory)) {
+                        continue
+                    }
+                    foreach ($launcherPath in [System.IO.Directory]::EnumerateFiles(
+                            $binDirectory, "*.bat", [System.IO.SearchOption]::TopDirectoryOnly)) {
+                        $content = [System.IO.File]::ReadAllText($launcherPath)
+                        $optimized = [regex]::Replace(
+                            $content,
+                            '(?m)^set CLASSPATH=.*$',
+                            'set CLASSPATH=%APP_HOME%\lib\*')
+                        if ($optimized -ne $content) {
+                            [System.IO.File]::WriteAllText(
+                                $launcherPath,
+                                $optimized,
+                                [System.Text.UTF8Encoding]::new($false))
+                        }
+                    }
+                }
+                continue
             }
+            if ($excludedDirectoryNames.Contains($name)) {
+                continue
+            }
+            $attributes = [System.IO.File]::GetAttributes($childDirectory)
+            if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                continue
+            }
+            $pending.Enqueue($childDirectory)
         }
+    }
 }
 
 function Get-ZlinkSamplePortPool {
@@ -232,7 +290,29 @@ function Invoke-ZlinkDockerCommand {
     }
     try {
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            $process.Kill()
+            $descendantIds = @(Get-ZlinkSampleDescendantProcessIds -ParentProcessId $process.Id)
+            $killTreeMethod = $process.GetType().GetMethod(
+                "Kill",
+                [Type[]]@([bool]))
+            if ($null -ne $killTreeMethod) {
+                $process.Kill($true)
+            } else {
+                $taskkillOutput = & taskkill.exe /PID $process.Id /T /F 2>&1
+                $taskkillExitCode = $LASTEXITCODE
+                if ($taskkillExitCode -ne 0 -and -not $process.HasExited) {
+                    throw "taskkill failed (exit=$taskkillExitCode) for Docker PID $($process.Id): " +
+                        ($taskkillOutput -join [Environment]::NewLine)
+                }
+            }
+            if (-not $process.WaitForExit(5000)) {
+                throw "Docker process did not exit after process-tree termination: PID $($process.Id)"
+            }
+            $leakedIds = @($descendantIds | Where-Object {
+                $null -ne (Get-Process -Id $_ -ErrorAction SilentlyContinue)
+            })
+            if ($leakedIds.Count -ne 0) {
+                throw "Docker process-tree termination leaked child PID(s): $($leakedIds -join ', ')"
+            }
             throw "Docker command timed out after ${TimeoutSeconds}s: docker $($Arguments -join ' ')"
         }
         $stdout = $process.StandardOutput.ReadToEnd().Trim()
@@ -248,6 +328,24 @@ function Invoke-ZlinkDockerCommand {
     } finally {
         $process.Dispose()
     }
+}
+
+function Get-ZlinkSampleDescendantProcessIds {
+    param([Parameter(Mandatory = $true)][int]$ParentProcessId)
+
+    $pending = [Collections.Generic.Queue[int]]::new()
+    $descendants = [Collections.Generic.List[int]]::new()
+    $pending.Enqueue($ParentProcessId)
+    while ($pending.Count -ne 0) {
+        $parentId = $pending.Dequeue()
+        foreach ($child in @(Get-CimInstance Win32_Process `
+                -Filter "ParentProcessId = $parentId" -ErrorAction Stop)) {
+            $childId = [int]$child.ProcessId
+            $descendants.Add($childId)
+            $pending.Enqueue($childId)
+        }
+    }
+    return $descendants.ToArray()
 }
 
 function Wait-ZlinkSampleRedisReady {
@@ -280,24 +378,61 @@ function Remove-ZlinkSampleRedisAttempt {
         $lookup = Invoke-ZlinkDockerCommand -Arguments @(
             "inspect", "--type", "container", "-f", "{{.Id}}", $Name
         ) -TimeoutSeconds 5 -AllowFailure
-        if ($lookup.ExitCode -eq 0) {
-            $exactId = $lookup.Output.Trim()
+        if ($lookup.ExitCode -ne 0) {
+            if ($lookup.ErrorOutput -match '(?i)no such (object|container)') {
+                return
+            }
+            throw "Could not resolve Redis cleanup target '$Name': $($lookup.ErrorOutput)"
         }
+        $exactId = $lookup.Output.Trim()
     }
-    if ($exactId -match '^[0-9a-f]{12,64}$') {
-        Invoke-ZlinkDockerCommand -Arguments @("rm", "-fv", $exactId) `
-            -TimeoutSeconds 10 -AllowFailure | Out-Null
+    if ($exactId -notmatch '^[0-9a-f]{12,64}$') {
+        throw "Redis cleanup target did not resolve to an exact container ID: $Name"
+    }
+    Remove-ZlinkSampleRedisExactId -ContainerId $exactId
+}
+
+function Remove-ZlinkSampleRedisExactId {
+    param([Parameter(Mandatory = $true)][string]$ContainerId)
+
+    if ($ContainerId -notmatch '^[0-9a-f]{12,64}$') {
+        throw "Refusing Redis cleanup without an exact container ID: $ContainerId"
+    }
+    $removed = Invoke-ZlinkDockerCommand -Arguments @("rm", "-fv", $ContainerId) `
+        -TimeoutSeconds 10 -AllowFailure
+    if ($removed.ExitCode -ne 0) {
+        throw "Redis container removal failed for $ContainerId`: $($removed.ErrorOutput)"
+    }
+    $remaining = Invoke-ZlinkDockerCommand -Arguments @(
+        "inspect", "--type", "container", "-f", "{{.Id}}", $ContainerId
+    ) -TimeoutSeconds 5 -AllowFailure
+    if ($remaining.ExitCode -eq 0) {
+        throw "Redis container remained after removal: $ContainerId"
+    }
+    if ($remaining.ErrorOutput -notmatch '(?i)no such (object|container)') {
+        throw "Could not verify Redis container removal for $ContainerId`: $($remaining.ErrorOutput)"
     }
 }
 
 function Start-ZlinkSampleRedis {
     param(
         [Parameter(Mandatory = $true)][string]$Scope,
-        [string]$Image = "redis:7.2-alpine",
+        [string]$Image = "",
         [Parameter(Mandatory = $true)]
         [ValidateSet("Java", "Kotlin")]
         [string]$Language
     )
+
+    if ([string]::IsNullOrWhiteSpace($Image)) {
+        $Image = if ([string]::IsNullOrWhiteSpace($env:ZLINK_REDIS_IMAGE)) {
+            "redis:7.2-alpine"
+        } else {
+            $env:ZLINK_REDIS_IMAGE
+        }
+    }
+    if ($Image -match '\s') {
+        throw "Invalid Redis image name: $Image"
+    }
 
     $pool = Get-ZlinkSamplePortPool -Language $Language
     $rangeSize = $pool.RedisMaximum - $pool.RedisMinimum + 1
@@ -378,7 +513,6 @@ function Start-ZlinkSampleRedis {
 
 function Remove-ZlinkSampleRedis {
     param([string]$ContainerId)
-    if ($ContainerId -match '^[0-9a-f]{12,64}$') {
-        Invoke-ZlinkDockerCommand -Arguments @("rm", "-fv", $ContainerId) -AllowFailure | Out-Null
-    }
+    if ([string]::IsNullOrWhiteSpace($ContainerId)) { return }
+    Remove-ZlinkSampleRedisExactId -ContainerId $ContainerId
 }

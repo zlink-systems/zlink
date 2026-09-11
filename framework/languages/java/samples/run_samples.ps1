@@ -8,17 +8,33 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-. "$RootDir/redis-common.ps1"
+if (-not (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
+    $IsWindows = $env:OS -eq "Windows_NT"
+}
 $JavaRoot = Split-Path -Parent $RootDir
+$RepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $JavaRoot "../../.."))
+. (Join-Path $JavaRoot "local-package-common.ps1")
 $ManifestPath = Join-Path $RootDir "sample-manifest.env"
 
-if ($LocalPackageRoot) {
+if ($IsWindows) {
+    if (-not $LocalPackageRoot) {
+        $LocalPackageRoot = Join-Path $RepositoryRoot ".artifacts/windows"
+    }
+    $resolvedPackageRoot = [System.IO.Path]::GetFullPath($LocalPackageRoot)
+    $BindingVersion = Assert-ZlinkJavaLocalBindingPackage `
+        -RepositoryRoot $RepositoryRoot `
+        -LocalPackageRoot $resolvedPackageRoot
+    $env:ZLINK_LOCAL_PACKAGE_ROOT = $resolvedPackageRoot
+    $env:ZLINK_JAVA_REQUIRE_LOCAL_BINDING = "true"
+    Write-Output "Using exact local Java binding package $BindingVersion from $resolvedPackageRoot/maven"
+} elseif ($LocalPackageRoot) {
     $resolvedPackageRoot = [System.IO.Path]::GetFullPath($LocalPackageRoot)
     if (-not (Test-Path -LiteralPath (Join-Path $resolvedPackageRoot "maven") -PathType Container)) {
         throw "Local Maven package repository was not found: $resolvedPackageRoot/maven"
     }
     $env:ZLINK_LOCAL_PACKAGE_ROOT = $resolvedPackageRoot
 }
+. "$RootDir/redis-common.ps1"
 if ($Sample) {
     $env:ZLINK_SAMPLE_FILTER = $Sample
 }
@@ -56,7 +72,7 @@ if (-not $PowerShell) {
     throw "PowerShell executable was not found."
 }
 
-function Invoke-SampleWithRetry {
+function Invoke-SampleWithPortCollisionRetry {
     param([string]$ScriptPath)
     $output = New-TemporaryFile
     try {
@@ -71,7 +87,7 @@ function Invoke-SampleWithRetry {
                 return
             }
             $text = Get-Content $output -Raw
-            if ($text -notmatch "ZlinkBindException|Timed out waiting") {
+            if ($text -notmatch '(?i)(address already in use|port is already allocated|failed to bind host port|WSAEADDRINUSE|EADDRINUSE|Only one usage of each socket address)') {
                 [Console]::Error.WriteLine($text)
                 throw "Sample failed: $ScriptPath"
             }
@@ -96,7 +112,7 @@ function Invoke-ManifestSamples {
         $scriptName = if ($IsWindows) { "run_sample.ps1" } else { "run_sample.sh" }
         $script = Join-Path $RootDir "$Language/$sample/$scriptName"
         if (Test-Path $script) {
-            Invoke-SampleWithRetry $script
+            Invoke-SampleWithPortCollisionRetry $script
         } else {
             throw "sample runner missing: $Language/$sample ($script)"
         }
