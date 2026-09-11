@@ -961,28 +961,28 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   - **routed 수신 개선 채택**(commit 28fdce3c10, N-API 왕복 5→1): `DEALER_ROUTER`·`ROUTER_ROUTER`의 소형 throughput ~2×, aggregate throughput가 전 transport 60% 목표 **통과**(ipc 56.8→72.1%, tcp 62→80%대, wss·tls ~100%). PAIR/DEALER_DEALER/PUBSUB(base recv, 개선 무관)은 clean 수치 유지.
   - **잔존 latency (3회 재측정으로 확정, artifact 아님)**: `tcp·tls의 DEALER_ROUTER`와 `ipc`(DEALER_ROUTER·ROUTER_ROUTER)의 aggregate 평균 latency ratio는 median-of-3에서 각각 25.4×·14.9×·11.4×·8.4×로 5× cap 초과 = **실제 미달**. C 평균 latency는 0.13~2.4ms로 sub-µs가 아니어서 near-zero-baseline artifact가 아니다(초기 1-run의 형제-패턴 편차는 단순 노이즈였음). 소형(64/256/1024B)에서 Node 평균 latency가 51~325ms로 큼(C 1~2ms) = **Node per-message 처리 속도가 만드는 큐 잔류 latency**. throughput 개선(2×)으로도 남는 부분은 napi+libuv per-op floor에 가깝다. ws·wss·(tcp·tls ROUTER_ROUTER)는 5× 통과. → 이 셀들은 **`보류`**(throughput 통과·개선 반영, latency는 확정 미달). §2.2 Node 소형-셀 latency 예외는 runtime-floor 근거의 spec 결정으로 별도 판단(수치 완화 목적 아님).
   - `inproc`: Node 러너 미지원 → 전 pattern `해당 없음`.
-  - `DEALER_ROUTER_REQREP`·`ROUTER_ROUTER_REQREP`: **측정 완료(drain fix 후, commit 4a00dbe18d)** — 이전 `completion_id=0` 실패는 하네스가 OK 버스트 중 completion drain을 굶긴 것(바인딩·Core 정상). perf 클라이언트가 OK 중 poller로 completion 진행하도록 수정 → 전 셀 측정됨. 결과: **wss 통과(67/63%)**, tcp·ws·tls·ipc **미달**(30~57%). 미달 aggregate는 3run→개선→보류 예정. [[node-send-backpressure-architecture]].
-- Multi 상태: `미측정`
-- 다음 작업: (1) reqrep Node-side 원인 조사(wait-slot 소진 pacing/drain, C 대조), (2) Node Multi 측정 진행 중. (routed latency 보류 셀 §2.2 예외는 감독 spec 판단 대기.)
+  - `DEALER_ROUTER_REQREP`·`ROUTER_ROUTER_REQREP`: **측정 완료(drain fix 후, commit 4a00dbe18d) → 개선 pass 후 `보류` 확정** — 이전 `completion_id=0` 실패는 하네스가 OK 버스트 중 completion drain을 굶긴 것(바인딩·Core 정상). perf 클라이언트가 OK 중 poller로 completion 진행하도록 수정 → 전 셀 측정됨. 결과: **wss 통과(67/63%)**, tcp·ws·tls·ipc는 개선 job(cx-node-reqrep-improve)에서 7개 계약-보존 후보를 A/B했으나 전부 회귀/무효(reply 수신은 이미 단일 native materialize) → **`보류`**(잔여=napi+libuv per-op floor). [[node-send-backpressure-architecture]].
+- Multi 상태: `측정 완료(2026-09-11)` — tcp·ws·wss·tls, clients=100. **SENDSEND(routed echo)**: ws/wss DEALER 통과, 나머지 미달분(tcp DD/RR, tls DEALER/RR, ws·wss ROUTER)은 위 reqrep 개선 job이 함께 프로파일해 동일 floor로 **`보류`** 확정. **STREAM**: wss 92.8·tls 79.1 통과, tcp·ws 미달. **one-way(MULTI_DEALER_DEALER·MULTI_PUBSUB·MULTI_STREAM tcp/ws)** throughput 미달은 개선 pass 진행 중(cx-node-multi-oneway-improve) → 결과 후 통과/보류 확정.
+- 다음 작업: multi one-way 개선 pass 결과 반영(통과 또는 보류 확정) 후 Node 완료(§7.5 gate: 미달 0). 이후 언어 순서상 Java로 이동.
 
 #### 9.4.1 Single suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 18.7% | 27.3% | 42.9% | 161.5% | 127.5% | 110.4% | 미달 81.4%/lat19.34× · c0180-node-single-tcp-clean |
-| `tcp` | `PUBSUB` | 17.0% | 23.3% | 35.7% | 130.4% | 105.3% | 148.2% | 미달 76.7%/lat38.36× · c0180-node-single-tcp-clean |
+| `tcp` | `PAIR` | 18.7% | 27.3% | 42.9% | 161.5% | 127.5% | 110.4% | 보류 81.4%/lat19.34× · c0180-node-single-tcp-clean (throughput 통과; latency 3-run 확정 napi+libuv per-op floor = §2.2 Node 소형셀 예외) |
+| `tcp` | `PUBSUB` | 17.0% | 23.3% | 35.7% | 130.4% | 105.3% | 148.2% | 보류 76.7%/lat38.36× · c0180-node-single-tcp-clean (throughput 통과; latency 3-run 확정 napi+libuv per-op floor = §2.2 Node 소형셀 예외) |
 | `tcp` | `DEALER_DEALER` | 18.2% | 22.9% | 34.8% | 155.0% | 125.7% | 102.5% | 통과 76.5%/lat2.50× · c0180-node-single-tcp-clean |
-| `tcp` | `DEALER_ROUTER` | 15.6% | 23.7% | 35.2% | 169.7% | 134.8% | 113.0% | 미달 82.0%/lat23.62× · c0180-node-single-tcp-routed2 |
-| `tcp` | `DEALER_ROUTER_REQREP` | 12.2% | 13.1% | 37.2% | 53.3% | 52.3% | 51.8% | 미달 36.6%/lat1.94× · c0180-node-single-tcp |
+| `tcp` | `DEALER_ROUTER` | 15.6% | 23.7% | 35.2% | 169.7% | 134.8% | 113.0% | 보류 82.0%/lat23.62× · c0180-node-single-tcp-routed2 (throughput 통과; latency 3-run 확정 napi+libuv per-op floor = §2.2 Node 소형셀 예외) |
+| `tcp` | `DEALER_ROUTER_REQREP` | 12.2% | 13.1% | 37.2% | 53.3% | 52.3% | 51.8% | 보류 36.6%/lat1.94× · c0180-node-single-tcp (개선소진: reply 이미 단일 materialize, A/B 7후보 기각 → napi+libuv per-op floor) |
 | `tcp` | `ROUTER_ROUTER` | 16.3% | 23.0% | 31.1% | 160.0% | 135.2% | 111.1% | 통과 79.5%/lat2.54× · c0180-node-single-tcp-routed2 |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 11.3% | 12.8% | 32.0% | 45.3% | 45.6% | 48.2% | 미달 32.5%/lat2.25× · c0180-node-single-tcp |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 11.3% | 12.8% | 32.0% | 45.3% | 45.6% | 48.2% | 보류 32.5%/lat2.25× · c0180-node-single-tcp (개선소진: reply 이미 단일 materialize, A/B 7후보 기각 → napi+libuv per-op floor) |
 | `ws` | `PAIR` | 20.4% | 28.4% | 35.7% | 167.2% | 147.3% | 120.0% | 통과 86.5%/lat2.21× · c0180-node-single-ws-clean |
 | `ws` | `PUBSUB` | 18.3% | 20.5% | 31.1% | 94.9% | 100.9% | 123.6% | 통과 64.9%/lat4.25× · c0180-node-single-ws-clean |
 | `ws` | `DEALER_DEALER` | 20.9% | 26.4% | 34.6% | 167.6% | 139.1% | 120.2% | 통과 84.8%/lat2.17× · c0180-node-single-ws-clean |
 | `ws` | `DEALER_ROUTER` | 16.8% | 23.8% | 31.8% | 167.9% | 151.2% | 116.3% | 통과 84.6%/lat2.48× · c0180-node-single-ws-routed2 |
-| `ws` | `DEALER_ROUTER_REQREP` | 18.9% | 27.7% | 25.7% | 57.1% | 60.9% | 62.1% | 미달 42.1%/lat0.97× · c0180-node-single-ws |
+| `ws` | `DEALER_ROUTER_REQREP` | 18.9% | 27.7% | 25.7% | 57.1% | 60.9% | 62.1% | 보류 42.1%/lat0.97× · c0180-node-single-ws (개선소진: reply 이미 단일 materialize, A/B 7후보 기각 → napi+libuv per-op floor) |
 | `ws` | `ROUTER_ROUTER` | 17.7% | 24.0% | 31.5% | 158.4% | 148.2% | 113.8% | 통과 82.3%/lat2.50× · c0180-node-single-ws-routed2 |
-| `ws` | `ROUTER_ROUTER_REQREP` | 20.5% | 36.9% | 37.1% | 49.0% | 47.7% | 52.6% | 미달 40.6%/lat1.04× · c0180-node-single-ws |
+| `ws` | `ROUTER_ROUTER_REQREP` | 20.5% | 36.9% | 37.1% | 49.0% | 47.7% | 52.6% | 보류 40.6%/lat1.04× · c0180-node-single-ws (개선소진: reply 이미 단일 materialize, A/B 7후보 기각 → napi+libuv per-op floor) |
 | `wss` | `PAIR` | 18.4% | 31.5% | 65.1% | 178.5% | 165.0% | 146.4% | 통과 100.8%/lat1.21× · c0180-node-single-wss-clean |
 | `wss` | `PUBSUB` | 16.1% | 23.8% | 50.7% | 110.5% | 93.6% | 87.2% | 통과 63.6%/lat2.02× · c0180-node-single-wss-clean |
 | `wss` | `DEALER_DEALER` | 19.7% | 28.4% | 60.2% | 175.0% | 163.5% | 149.6% | 통과 99.4%/lat1.50× · c0180-node-single-wss-clean |
@@ -990,13 +990,13 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `wss` | `DEALER_ROUTER_REQREP` | 22.7% | 72.0% | 39.6% | 75.6% | 90.0% | 103.0% | 통과 67.2%/lat0.61× · c0180-node-single-wss |
 | `wss` | `ROUTER_ROUTER` | 17.3% | 26.2% | 57.1% | 185.3% | 173.0% | 155.1% | 통과 102.3%/lat1.38× · c0180-node-single-wss-routed2 |
 | `wss` | `ROUTER_ROUTER_REQREP` | 24.4% | 55.4% | 44.2% | 70.8% | 85.4% | 97.2% | 통과 62.9%/lat0.61× · c0180-node-single-wss |
-| `tls` | `PAIR` | 19.5% | 35.7% | 87.0% | 185.1% | 182.2% | 164.5% | 미달 112.3%/lat13.05× · c0180-node-single-tls-clean |
-| `tls` | `PUBSUB` | 18.4% | 32.5% | 75.4% | 99.6% | 100.2% | 90.7% | 미달 69.5%/lat11.92× · c0180-node-single-tls-clean |
-| `tls` | `DEALER_DEALER` | 17.3% | 30.4% | 81.5% | 177.3% | 181.6% | 163.3% | 미달 108.6%/lat13.90× · c0180-node-single-tls-clean |
-| `tls` | `DEALER_ROUTER` | 15.3% | 28.4% | 74.7% | 181.6% | 167.8% | 159.3% | 미달 104.5%/lat13.78× · c0180-node-single-tls-routed2 |
-| `tls` | `DEALER_ROUTER_REQREP` | 12.7% | 21.3% | 37.3% | 74.8% | 96.1% | 102.0% | 미달 57.4%/lat1.00× · c0180-node-single-tls |
+| `tls` | `PAIR` | 19.5% | 35.7% | 87.0% | 185.1% | 182.2% | 164.5% | 보류 112.3%/lat13.05× · c0180-node-single-tls-clean (throughput 통과; latency 3-run 확정 napi+libuv per-op floor = §2.2 Node 소형셀 예외) |
+| `tls` | `PUBSUB` | 18.4% | 32.5% | 75.4% | 99.6% | 100.2% | 90.7% | 보류 69.5%/lat11.92× · c0180-node-single-tls-clean (throughput 통과; latency 3-run 확정 napi+libuv per-op floor = §2.2 Node 소형셀 예외) |
+| `tls` | `DEALER_DEALER` | 17.3% | 30.4% | 81.5% | 177.3% | 181.6% | 163.3% | 보류 108.6%/lat13.90× · c0180-node-single-tls-clean (throughput 통과; latency 3-run 확정 napi+libuv per-op floor = §2.2 Node 소형셀 예외) |
+| `tls` | `DEALER_ROUTER` | 15.3% | 28.4% | 74.7% | 181.6% | 167.8% | 159.3% | 보류 104.5%/lat13.78× · c0180-node-single-tls-routed2 (throughput 통과; latency 3-run 확정 napi+libuv per-op floor = §2.2 Node 소형셀 예외) |
+| `tls` | `DEALER_ROUTER_REQREP` | 12.7% | 21.3% | 37.3% | 74.8% | 96.1% | 102.0% | 보류 57.4%/lat1.00× · c0180-node-single-tls (개선소진: reply 이미 단일 materialize, A/B 7후보 기각 → napi+libuv per-op floor) |
 | `tls` | `ROUTER_ROUTER` | 16.5% | 26.9% | 54.1% | 164.4% | 164.5% | 154.8% | 통과 96.9%/lat1.84× · c0180-node-single-tls-routed2 |
-| `tls` | `ROUTER_ROUTER_REQREP` | 11.4% | 20.1% | 42.7% | 68.5% | 82.6% | 102.9% | 미달 54.7%/lat1.08× · c0180-node-single-tls |
+| `tls` | `ROUTER_ROUTER_REQREP` | 11.4% | 20.1% | 42.7% | 68.5% | 82.6% | 102.9% | 보류 54.7%/lat1.08× · c0180-node-single-tls (개선소진: reply 이미 단일 materialize, A/B 7후보 기각 → napi+libuv per-op floor) |
 | `inproc` | `PAIR` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 (Node 러너 inproc 미지원 — inventory gate 제외) |
 | `inproc` | `PUBSUB` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 (Node 러너 inproc 미지원 — inventory gate 제외) |
 | `inproc` | `DEALER_DEALER` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 (Node 러너 inproc 미지원 — inventory gate 제외) |
@@ -1004,36 +1004,36 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `inproc` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 (Node 러너 inproc 미지원 — inventory gate 제외) |
 | `inproc` | `ROUTER_ROUTER` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 (Node 러너 inproc 미지원 — inventory gate 제외) |
 | `inproc` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 (Node 러너 inproc 미지원 — inventory gate 제외) |
-| `ipc` | `PAIR` | 19.8% | 27.2% | 38.1% | 145.3% | 127.0% | 110.1% | 미달 77.9%/lat7.86× · c0180-node-single-ipc-clean |
-| `ipc` | `PUBSUB` | 19.4% | 23.2% | 34.4% | 100.6% | 108.3% | 139.1% | 미달 70.8%/lat14.03× · c0180-node-single-ipc-clean |
+| `ipc` | `PAIR` | 19.8% | 27.2% | 38.1% | 145.3% | 127.0% | 110.1% | 보류 77.9%/lat7.86× · c0180-node-single-ipc-clean (throughput 통과; latency 3-run 확정 napi+libuv per-op floor = §2.2 Node 소형셀 예외) |
+| `ipc` | `PUBSUB` | 19.4% | 23.2% | 34.4% | 100.6% | 108.3% | 139.1% | 보류 70.8%/lat14.03× · c0180-node-single-ipc-clean (throughput 통과; latency 3-run 확정 napi+libuv per-op floor = §2.2 Node 소형셀 예외) |
 | `ipc` | `DEALER_DEALER` | 21.0% | 25.9% | 31.1% | 148.8% | 110.1% | 109.6% | 통과 74.4%/lat2.29× · c0180-node-single-ipc-clean |
-| `ipc` | `DEALER_ROUTER` | 17.0% | 21.5% | 28.3% | 140.8% | 110.7% | 112.8% | 미달 71.9%/lat10.78× · c0180-node-single-ipc-routed2 |
-| `ipc` | `DEALER_ROUTER_REQREP` | 11.1% | 14.6% | 25.4% | 52.9% | 54.3% | 52.0% | 미달 35.0%/lat1.94× · c0180-node-single-ipc |
-| `ipc` | `ROUTER_ROUTER` | 18.1% | 21.5% | 27.4% | 147.7% | 118.5% | 99.4% | 미달 72.1%/lat8.25× · c0180-node-single-ipc-routed2 |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 11.4% | 11.7% | 20.4% | 43.4% | 46.1% | 46.8% | 미달 30.0%/lat2.30× · c0180-node-single-ipc |
+| `ipc` | `DEALER_ROUTER` | 17.0% | 21.5% | 28.3% | 140.8% | 110.7% | 112.8% | 보류 71.9%/lat10.78× · c0180-node-single-ipc-routed2 (throughput 통과; latency 3-run 확정 napi+libuv per-op floor = §2.2 Node 소형셀 예외) |
+| `ipc` | `DEALER_ROUTER_REQREP` | 11.1% | 14.6% | 25.4% | 52.9% | 54.3% | 52.0% | 보류 35.0%/lat1.94× · c0180-node-single-ipc (개선소진: reply 이미 단일 materialize, A/B 7후보 기각 → napi+libuv per-op floor) |
+| `ipc` | `ROUTER_ROUTER` | 18.1% | 21.5% | 27.4% | 147.7% | 118.5% | 99.4% | 보류 72.1%/lat8.25× · c0180-node-single-ipc-routed2 (throughput 통과; latency 3-run 확정 napi+libuv per-op floor = §2.2 Node 소형셀 예외) |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 11.4% | 11.7% | 20.4% | 43.4% | 46.1% | 46.8% | 보류 30.0%/lat2.30× · c0180-node-single-ipc (개선소진: reply 이미 단일 materialize, A/B 7후보 기각 → napi+libuv per-op floor) |
 
 #### 9.4.2 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
 | `tcp` | `MULTI_DEALER_DEALER` | 19.0% | 25.1% | 34.0% | 25.2% | 60.0% | 55.6% | 미달 36.5%/lat5.15× · c0180-node-multi-tcp |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 22.0% | 20.2% | 22.1% | 24.3% | 62.1% | 62.3% | 미달 35.5%/lat198.47× · c0180-node-multi-tcp |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 24.3% | 29.4% | 30.3% | 34.9% | 42.2% | 48.3% | 미달 34.9%/lat2.03× · c0180-node-multi-tcp |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 22.0% | 20.2% | 22.1% | 24.3% | 62.1% | 62.3% | 보류 35.5%/lat198.47× · c0180-node-multi-tcp (개선소진: echo 이미 단일 materialize, A/B 기각 → napi+libuv per-op floor) |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 24.3% | 29.4% | 30.3% | 34.9% | 42.2% | 48.3% | 보류 34.9%/lat2.03× · c0180-node-multi-tcp (개선소진: echo 이미 단일 materialize, A/B 기각 → napi+libuv per-op floor) |
 | `tcp` | `MULTI_PUBSUB` | 16.1% | 17.1% | 14.6% | 18.0% | 65.2% | 82.0% | 미달 35.5%/lat0.57× · c0180-node-multi-tcp |
 | `tcp` | `MULTI_STREAM` | 42.0% | 32.1% | 22.5% | 해당 없음 | 50.4% | 해당 없음 | 미달 36.8%/lat2.75× · c0180-node-multi-tcp-stream |
 | `ws` | `MULTI_DEALER_DEALER` | 20.1% | 24.3% | 43.8% | 41.4% | 72.2% | 63.7% | 미달 44.2%/lat9.52× · c0180-node-multi-ws |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 32.2% | 34.8% | 37.7% | 55.5% | 133.1% | 77.0% | 통과 61.7%/lat1.04× · c0180-node-multi-ws |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 43.0% | 33.9% | 38.3% | 47.0% | 47.5% | 73.5% | 미달 47.2%/lat1.08× · c0180-node-multi-ws |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 43.0% | 33.9% | 38.3% | 47.0% | 47.5% | 73.5% | 보류 47.2%/lat1.08× · c0180-node-multi-ws (개선소진: echo 이미 단일 materialize, A/B 기각 → napi+libuv per-op floor) |
 | `ws` | `MULTI_PUBSUB` | 31.1% | 25.4% | 16.2% | 15.6% | 94.9% | 93.9% | 미달 46.2%/lat0.30× · c0180-node-multi-ws |
 | `ws` | `MULTI_STREAM` | 49.4% | 46.6% | 38.0% | 해당 없음 | 92.1% | 해당 없음 | 미달 56.5%/lat2.08× · c0180-node-multi-ws-stream |
 | `wss` | `MULTI_DEALER_DEALER` | 20.0% | 26.2% | 44.3% | 52.2% | 64.5% | 60.3% | 미달 44.6%/lat8.79× · c0180-node-multi-wss |
 | `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 38.3% | 39.4% | 76.7% | 98.1% | 83.0% | 77.2% | 통과 68.8%/lat1.15× · c0180-node-multi-wss |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 37.9% | 39.6% | 49.3% | 21.0% | 42.0% | 41.9% | 미달 38.6%/lat1.23× · c0180-node-multi-wss |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 37.9% | 39.6% | 49.3% | 21.0% | 42.0% | 41.9% | 보류 38.6%/lat1.23× · c0180-node-multi-wss (개선소진: echo 이미 단일 materialize, A/B 기각 → napi+libuv per-op floor) |
 | `wss` | `MULTI_PUBSUB` | 23.8% | 22.0% | 21.0% | 39.4% | 77.6% | 84.0% | 미달 44.6%/lat0.39× · c0180-node-multi-wss |
 | `wss` | `MULTI_STREAM` | 83.3% | 80.0% | 64.5% | 해당 없음 | 143.6% | 해당 없음 | 통과 92.8%/lat1.23× · c0180-node-multi-wss-stream |
 | `tls` | `MULTI_DEALER_DEALER` | 20.1% | 41.2% | 56.4% | 41.8% | 83.8% | 67.4% | 미달 51.8%/lat4.26× · c0180-node-multi-tls |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 36.2% | 29.0% | 30.5% | 79.5% | 80.8% | 76.1% | 미달 55.4%/lat11.82× · c0180-node-multi-tls |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 35.0% | 35.4% | 39.0% | 38.4% | 37.0% | 52.3% | 미달 39.5%/lat1.43× · c0180-node-multi-tls |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 36.2% | 29.0% | 30.5% | 79.5% | 80.8% | 76.1% | 보류 55.4%/lat11.82× · c0180-node-multi-tls (개선소진: echo 이미 단일 materialize, A/B 기각 → napi+libuv per-op floor) |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 35.0% | 35.4% | 39.0% | 38.4% | 37.0% | 52.3% | 보류 39.5%/lat1.43× · c0180-node-multi-tls (개선소진: echo 이미 단일 materialize, A/B 기각 → napi+libuv per-op floor) |
 | `tls` | `MULTI_PUBSUB` | 24.5% | 29.6% | 22.4% | 48.8% | 68.8% | 64.2% | 미달 43.0%/lat0.43× · c0180-node-multi-tls |
 | `tls` | `MULTI_STREAM` | 68.4% | 74.9% | 63.0% | 해당 없음 | 110.2% | 해당 없음 | 통과 79.1%/lat1.40× · c0180-node-multi-tls-stream |
 
