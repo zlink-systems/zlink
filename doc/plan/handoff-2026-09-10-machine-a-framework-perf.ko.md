@@ -287,8 +287,8 @@ result == BACKPRESSURED → 바인딩이 payload를 보관하고 WRITABLE에서 
 |---|---|---|
 | Java | **A** | 2차 job 진행 중. **36셀 before/after 측정 통과** — send-saturation before 73,084~77,556 / after 73,700~77,195, request-backpressure p99 양쪽 0.44~0.60 ms, `peak_in_flight`(bp-4096) before 25/58/63 · after 67/28/37. **1차의 −32%도 #47의 깊이 폭증(1,101)도 없다** |
 | .NET | **A** | job 진행 중. 기준선 측정 완료 |
-| Node | **B** | 미착수. 수정 지점은 `node-raw-binding-port.ts:247,300` — 항상 `.submit().admitted`를 await 한다 |
-| C++ | **B** | 미착수 |
+| Node | **B** | **완료·머지**(`af5df22136`). `node-raw-binding-port.ts` 두 send가 `result==Backpressured`일 때만 admitted await. 깊이-상한 테스트(OK 1024회 깊이≤1) 추가, framework 1692 테스트 통과. same-machine A/B(perf 큐): send-saturation 1024 +1.20%, 4096 −1.11% = **무회귀**(Java −24~32% 미재현, 불변 Promise). |
+| C++ | **B** | **완료·머지**(`bb264d7517`). `raw_dealer_port.cpp`·`raw_route_port.cpp` OK면 co_return(공유 completion source 제거). 깊이-상한 테스트(깊이==0), ContractTests·-Wall 클린. A/B(raw 불변식 completed==received 검증): 1024 +1.58%, 4096 +1.56% = **무회귀**. grpc/protobuf 1.51.1 툴체인 non-sudo 구성으로 측정(bench rejection-counter gap #158은 우회, 미수정). |
 
 B에게 넘긴 1차 기각 맥락 네 가지는 **Issue #151 코멘트**에 적었다 —
 ① 공유 객체가 가변이면 안 된다(Node `Promise.resolve()`는 불변이라 안전, C++은 확인 필요)

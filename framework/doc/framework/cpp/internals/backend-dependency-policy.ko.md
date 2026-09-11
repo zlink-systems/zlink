@@ -94,6 +94,24 @@ poller는 호출자가 제공한 `poll_event_t` 저장소를 채우고, framewor
 | `test_cpp_framework_client_server_runtime`, `test_cpp_framework_messaging` | client/server와 channel message 경로가 binding public operation만 사용하고 lifecycle 결과를 유지한다. |
 | `test_cpp_framework_stream_framework` | stream adapter가 연결, 수신, close 순서를 framework session 의미로 변환한다. |
 
+## 8. protobuf 지원 범위
+
+Framework의 protobuf codec extension(`extensions/framework-codec-protobuf`)이 지원하는 범위다.
+
+| 항목 | 범위 |
+|---|---|
+| protobuf 버전 | **3.21.12 ~ 33.x** |
+| `protoc`와 runtime | **같은 릴리스를 쓴다.** 서로 다른 릴리스를 섞지 않는다 |
+
+**두 버전 사이에서 공개 API의 반환형이 바뀐다.** `MessageLite::GetTypeName()`이 33.x에서
+`const std::string &`에서 `absl::string_view`로 바뀌었다. codec은 양쪽에서 컴파일되어야 하므로
+반환값을 `std::string`으로 명시 변환해 쓴다 — `const char *`와 `string_view`는 `operator+`가 없다.
+
+**이 범위를 벗어나는 버전으로 올릴 때는 반환형과 연산자 호환을 먼저 확인한다.** 이전에 이 검사가
+없어서 `protoc` 3.21.12와 dependency 33.4가 어긋난 채로 남아 있었고, **설정에 따라 빌드가 되기도
+하고 안 되기도 했다.** Release에서는 codec에 의존하는 8개 대상이 빌드되지 않았는데 Debug에서는
+통과해 드러나지 않았다.
+
 ---
 <!-- framework-adapter-nav:bottom:start -->
 [문서 목록](../../../README.ko.md) | [이전: Runtime Architecture](../../common/spec/server/README.ko.md) | [다음: Regression Test Matrix](regression-test-matrix.ko.md)

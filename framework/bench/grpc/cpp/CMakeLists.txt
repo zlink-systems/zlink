@@ -100,6 +100,7 @@ foreach(option_name IN ITEMS ZLINK_FRAMEWORK_CPP_BUILD_TESTS
 endforeach()
 add_subdirectory("${BENCH_REPO_ROOT}/framework/languages/cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/framework" EXCLUDE_FROM_ALL)
+find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS sdk)
 
 set(BENCH_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/common")
 
@@ -149,6 +150,7 @@ add_executable(bench_cpp_framework_server framework/bench_framework_cpp_server.c
 target_include_directories(bench_cpp_framework_server PRIVATE ${BENCH_PROTO_GEN_DIR})
 target_link_libraries(bench_cpp_framework_server PRIVATE zlink::framework_codec_protobuf)
 bench_target(bench_cpp_framework_server)
+target_link_libraries(bench_cpp_framework_server PRIVATE opentelemetry-cpp::metrics)
 target_link_libraries(bench_cpp_client PRIVATE zlink::framework_codec_protobuf)
 
 enable_testing()
@@ -156,6 +158,7 @@ add_executable(bench_cpp_server_metrics_test tests/server_metrics_test.cpp ${BEN
 target_include_directories(bench_cpp_server_metrics_test PRIVATE ${BENCH_PROTO_GEN_DIR})
 target_link_libraries(bench_cpp_server_metrics_test PRIVATE zlink::framework_codec_protobuf)
 bench_target(bench_cpp_server_metrics_test)
+target_link_libraries(bench_cpp_server_metrics_test PRIVATE opentelemetry-cpp::metrics)
 add_test(NAME bench_cpp_server_rejections COMMAND bench_cpp_server_metrics_test)
 add_executable(bench_cpp_raw_wire_test tests/raw_wire_test.cpp ${BENCH_PROTO_CC})
 target_include_directories(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTO_GEN_DIR} ${BENCH_PROTOBUF_INCLUDE_DIRS})
