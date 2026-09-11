@@ -62,6 +62,12 @@ and the dedicated Kotlin wrapper's `await`. An immediate submit that returns no 
 completion uses `Submit`/`submit`. Only the terminal that actually releases the shared Spot
 gate uses the name `Yield`/`yield`.
 
+**[The binding rule for isolation between submissions](../../../../../../../bindings/doc/spec/async-coroutine-policy.en.md#submission-stage-isolation) also applies to asynchronous completion representations returned by the Framework.** When an asynchronous terminator covered by this document returns an admission or application result, directly or by transforming a binding result, completion-state changes, cancellation, consumption, or detachment applied to one call must not propagate to another call's completion state or ability to consume its result through a shared returned representation or shared state behind it. This also applies to shared representations of already-completed results. Progress of other calls due to normal resource reclamation follows the existing admission and lifecycle contracts.
+
+Verification uses the completion representations and outcomes actually exposed by Framework terminators to check that shared state does not contaminate results already returned for other calls or results of later calls. It does not require the Framework to expose binding result-object structures or a `Backpressured` result.
+
+The layer returning the completion representation owns its isolation. [Cancellation and shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race) owns the boundaries between cancellation of Framework queue waits, caller-wait cancellation of binding operations, and late-completion cleanup. Isolating a returned representation must not remove an existing cancellation connection for a pending stage or introduce binding operation state, registries, or resubmission logic into the Framework.
+
 [Handler turn and execution gate §16](02-handler-turn-and-execution-gate.en.md#yield-call-eligibility)
 owns the execution contexts and calls that offer `Yield`.
 

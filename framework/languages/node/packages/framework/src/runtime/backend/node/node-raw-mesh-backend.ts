@@ -2048,16 +2048,28 @@ class RawReadyBatch implements ReadyBatch {
 }
 
 class RawReceiveBatch implements ReceiveBatch {
+  private receiveCapacity: number;
+
   constructor(
-    readonly messageCapacity: number,
+    private readonly capacity: number,
     readonly partCapacity: number
   ) {
-    if ([messageCapacity, partCapacity].some(value => !Number.isInteger(value) || value < 1)) {
+    if ([capacity, partCapacity].some(value => !Number.isInteger(value) || value < 1)) {
       throw new RangeError('Receive batch capacities must be positive.');
     }
+    this.receiveCapacity = capacity;
   }
 
-  reset(): void {}
+  get messageCapacity(): number {
+    return this.receiveCapacity;
+  }
+
+  reset(messageCapacity = this.capacity): void {
+    if (!Number.isInteger(messageCapacity) || messageCapacity < 1 || messageCapacity > this.capacity) {
+      throw new RangeError('Receive limit must be within the batch capacity.');
+    }
+    this.receiveCapacity = messageCapacity;
+  }
   close(): void {}
 }
 
@@ -2090,6 +2102,12 @@ class MailboxClaim implements RawClaim {
         }
         this.runtime.mailbox.releaseClaimedPayload(record);
         this.remaining = this.claim.records.slice(index + 1);
+        // Nothing was transferred to the receive caller when decoding throws.
+        // Earlier records therefore still belong to this failed batch.
+        for (const decoded of records) {
+          for (const part of decoded.parts) part.close();
+          decoded.releaseRetainedIngress?.();
+        }
         throw error;
       }
       const nextParts = decoded.parts.length;
@@ -2546,7 +2564,17 @@ function decodeApplicationEnvelope(frame: Uint8Array) {
 
 function decodeMultipart(payload: Uint8Array): FrameworkMessage[] {
   const buffers = decodeMultipartBuffers(payload);
-  return buffers.map(part => ZLinkBufferMessage.fromOwned(part));
+  const parts = new Array<FrameworkMessage>(buffers.length);
+  let materialized = 0;
+  try {
+    for (; materialized < buffers.length; materialized += 1) {
+      parts[materialized] = ZLinkBufferMessage.fromOwned(buffers[materialized]!);
+    }
+    return parts;
+  } catch (error) {
+    for (let index = 0; index < materialized; index += 1) parts[index]!.close();
+    throw error;
+  }
 }
 
 function decodeMultipartBuffers(payload: Uint8Array): Buffer[] {

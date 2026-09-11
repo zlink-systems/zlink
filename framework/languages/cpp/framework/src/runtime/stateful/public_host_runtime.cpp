@@ -61,9 +61,6 @@ classify_bound_session_bind_admission (bool local_actor_matches) noexcept
 namespace
 {
 
-constexpr std::string_view multipart_packet_name = protocol::framework_multipart_packet_name;
-constexpr std::string_view multipart_content_type = protocol::framework_multipart_content_type;
-
 using ::zlink::framework::detail::mesh_trace_enabled;
 
 void trace_mesh_host_enabled (std::string_view stage, std::string_view detail)
@@ -206,30 +203,6 @@ std::uint32_t read_u32 (const std::vector<std::uint8_t> &bytes, std::size_t &off
                        | static_cast<std::uint32_t> (bytes[offset + 3]);
     offset += 4;
     return value;
-}
-
-std::vector<zlink::message_t> decode_parts (const std::vector<std::uint8_t> &encoded)
-{
-    std::size_t offset = 0;
-    const auto count = read_u32 (encoded, offset);
-    if (count == 0 || count > (encoded.size () - offset) / sizeof (std::uint32_t)) {
-        throw protocol::service_wire_error_t ("framework multipart part count is invalid");
-    }
-    std::vector<zlink::message_t> parts;
-    parts.reserve (count);
-    for (std::uint32_t index = 0; index < count; ++index) {
-        const auto size = read_u32 (encoded, offset);
-        if (size > encoded.size () - offset) {
-            throw protocol::service_wire_error_t ("framework multipart part is truncated");
-        }
-        parts.push_back (
-          zlink::message_t::from (std::span<const std::uint8_t> (encoded.data () + offset, size)));
-        offset += size;
-    }
-    if (offset != encoded.size ()) {
-        throw protocol::service_wire_error_t ("framework multipart payload has trailing bytes");
-    }
-    return parts;
 }
 
 struct canonical_actor_join_decode_t
@@ -787,7 +760,7 @@ spot_handle_t::request_to_spot (const zlink::routing_id_t &target_node_rid,
                       /* flow-correlation §4: reply flow pair is observation-
                        * only — skip validation/materialization at Off. */
                       decoded =
-                        result_t<std::vector<zlink::message_t>>::success (host->decode_application (
+                        result_t<std::vector<zlink::message_t>>::success (protocol::decode_application_parts (
                           protocol::decode_application_payload (payload, host->capture_flow ())));
                   }
                   catch (const protocol::service_wire_error_t &error) {
@@ -5534,7 +5507,7 @@ bool public_host_runtime_t::dispatch_bound_session_send (
         return false;
     const auto application =
       protocol::decode_application_payload (mailbox_record.parts.back (), capture_flow ());
-    auto parts = decode_application (application);
+    auto parts = protocol::decode_application_parts (application);
     const auto target_node = zlink::routing_id_t::from (record.actor.target_node_routing_id);
     const stateful::stream_remote_tenure_t tenure{record.actor.actor_id,
                                                   record.actor.object_generation,
@@ -5780,7 +5753,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                               }
                           };
                     }
-                    dispatch (owner, record, decode_application (delivery->payload));
+                    dispatch (owner, record, protocol::decode_application_parts (delivery->payload));
                     ++count;
                     application_dispatch_started = true;
                 }
@@ -5965,7 +5938,7 @@ std::size_t public_host_runtime_t::dispatch_application_claim (
             record.release_mailbox_reservation = release_mailbox_reservation;
             record.retain_mailbox_reservation = retain_mailbox_reservation;
             record.transferred_owner_byte_cost = claim_holder->claimed_bytes;
-            dispatch (owner, record, decode_application (payload));
+            dispatch (owner, record, protocol::decode_application_parts (payload));
             ++count;
         }
         catch (const protocol::service_wire_error_t &) {
@@ -6155,24 +6128,6 @@ public_host_runtime_t::encode_application (const std::vector<zlink::message_t> &
                                            std::span<const std::uint8_t>) const
 {
     return protocol::application_payload_t::from_parts (parts);
-}
-
-std::vector<zlink::message_t>
-public_host_runtime_t::decode_application (const protocol::application_payload_t &payload) const
-{
-    if (payload.packet_name != multipart_packet_name
-        || payload.content_type != multipart_content_type) {
-        throw protocol::service_wire_error_t (
-          "framework application payload profile is unsupported");
-    }
-    if (const auto *parts = payload.parts ()) {
-        std::vector<zlink::message_t> result;
-        result.reserve (parts->size ());
-        for (const auto &part : *parts)
-            result.push_back (part.copy ());
-        return result;
-    }
-    return decode_parts (payload.payload_bytes ());
 }
 
 actor_ref_t public_host_runtime_t::framework_actor_ref (const stateful::object_ref_t &object,
@@ -6654,7 +6609,7 @@ void public_host_runtime_t::complete_operation (const pending_operation_t &opera
         std::vector<zlink::message_t> parts;
         if (record.terminal_result == 0) {
             try {
-                parts = decode_application (
+                parts = protocol::decode_application_parts (
                   protocol::decode_application_payload (payload, capture_flow ()));
             }
             catch (const protocol::service_wire_error_t &) {
