@@ -7,6 +7,7 @@ internal abstract partial class ZLinkSpotActivation
     {
         EnsureConfigurationOpen();
         _packets.Add(typeof(THandler));
+        _handlerInstances.Prepare(typeof(THandler));
     }
 
     protected void AddSubscribeCore<THandler>(string channelName, string topic)
@@ -14,6 +15,7 @@ internal abstract partial class ZLinkSpotActivation
     {
         EnsureConfigurationOpen();
         _subscriptions.Add(channelName, topic, typeof(THandler));
+        _handlerInstances.Prepare(typeof(THandler));
     }
 
     protected void AddHandlerCore<THandler>()
@@ -21,6 +23,7 @@ internal abstract partial class ZLinkSpotActivation
     {
         EnsureConfigurationOpen();
         RequireActorHandlers().AddHandler(typeof(THandler), null);
+        _handlerInstances.Prepare(typeof(THandler));
     }
 
     protected void AddHandlerCore<THandler>(string packetName)
@@ -31,6 +34,7 @@ internal abstract partial class ZLinkSpotActivation
 
         EnsureConfigurationOpen();
         RequireActorHandlers().AddHandler(typeof(THandler), packetName);
+        _handlerInstances.Prepare(typeof(THandler));
     }
 
     protected void AddActorPacketCore<THandler, TActor>()
@@ -125,6 +129,7 @@ internal abstract partial class ZLinkSpotActivation
 
         EnsureConfigurationOpen();
         ValidateScannedHandlerKind(handler.Kind);
+        _handlerInstances.Prepare(handler.HandlerType);
         switch (handler.Kind)
         {
             case ZLinkScannedSpotHandlerKind.Packet:
@@ -177,6 +182,7 @@ internal abstract partial class ZLinkSpotActivation
     {
         EnsureConfigurationOpen();
         RequireActorHandlers().AddPacket(typeof(THandler), typeof(TActor), packetName);
+        _handlerInstances.Prepare(typeof(THandler));
     }
 
     private ZLinkSpotActorHandlerRegistry RequireActorHandlers()
