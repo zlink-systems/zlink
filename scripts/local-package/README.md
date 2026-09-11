@@ -136,56 +136,58 @@ provenance.
 
 ## Windows native verification
 
-On Windows too, the bindings use the release prefix rather than building Core from source first.
-The commands below download and verify the Windows x64 Core release.
+On Windows, the default input is also a verified release prefix rather than a Core source build.
+The fetch script verifies the archive checksum and provenance, and confirms that the `zlink.dll` PE
+machine matches the requested platform.
 
 ```powershell
-$prefix = powershell -ExecutionPolicy Bypass -File scripts/local-package/core/fetch-release.ps1
+$x64Prefix = powershell -ExecutionPolicy Bypass -File scripts/local-package/core/fetch-release.ps1 `
+  -Platform windows-x64
 
-# All of the C++/.NET/Java/Node bindings, or one language at a time
+# All C++/.NET/Java/Node bindings, or one language at a time
 scripts/local-package/build-windows.ps1 -SyncVersions
 scripts/local-package/build-windows.ps1 -VerifyVersions
-scripts/local-package/build-windows.ps1 -CorePrefix $prefix
-scripts/local-package/cpp/build-windows.ps1 -CorePrefix $prefix
-scripts/local-package/dotnet/build-windows.ps1 -CorePrefix $prefix
-scripts/local-package/java/build-windows.ps1 -CorePrefix $prefix
-scripts/local-package/node/build-windows.ps1 -CorePrefix $prefix
+scripts/local-package/build-windows.ps1 -CorePrefix $x64Prefix
+scripts/local-package/cpp/build-windows.ps1 -CorePrefix $x64Prefix
+scripts/local-package/dotnet/build-windows.ps1 -CorePrefix $x64Prefix
+scripts/local-package/java/build-windows.ps1 -CorePrefix $x64Prefix
+scripts/local-package/node/build-windows.ps1 -CorePrefix $x64Prefix
 
-# The .NET/Java/Node HTTP client local packages that Framework consumes
+# The .NET/Java/Node HTTP client local packages consumed by Framework
 scripts/local-package/http-client/build-windows.ps1
 ```
 
-The default prefix is `%LOCALAPPDATA%\zlink\core\<VERSION>\windows-x64\`. When an in-progress
-Windows Core change is needed, use the existing `core/build/windows-x64/install/` as the local
-source fallback input. Do not interchange WSL output and Windows output.
+The release cache prefix is `%LOCALAPPDATA%\zlink\core\<VERSION>\windows-x64\`. Package creation
+fails before it starts unless provenance declares `platform` as `windows-x64` and the runtime PE
+machine is x64. Do not interchange WSL and Windows outputs.
 
-The conditions for a Windows local source fallback build match the Windows x64 job in
-`.github/workflows/build.yml`: the Visual Studio 17 2022 x64 generator with `Release`,
-`BUILD_SHARED=ON`, `BUILD_STATIC=ON`, `BUILD_TESTS=OFF`, and C++17, leaving `ENABLE_LTO` at its
-default. The standard runtime for these conditions is the MSVC dynamic CRT (`/MD`), and the result
-installs to `core/build/windows-x64/install/`.
+Use the local rebuild entry point only to debug an in-progress Core change from a Binding.
 
-In environments where the `msvcp140.dll` the JDK loads first collides with the C++ runtime of a
-`/MD` Core under Java 22 FFM, build a separate `/MT` Core for Java verification in its own build
-directory. Do not mix that variant into the common CI runtime or another binding's staged runtime;
-record it as separate evidence in the Java plan document.
+```powershell
+scripts/gate/rebuild-dev.ps1 -Language cpp,dotnet,java,node
+```
 
-Windows package inputs and results use these paths.
+It uses the same Visual Studio 2022 generator, `BUILD_SHARED=ON`, `BUILD_STATIC=ON`,
+`BUILD_TESTS=OFF`, and C++17 settings as the Windows job in `.github/workflows/build.yml`. Its
+build directory is `core/build/windows-x64/`; the resulting prefix is
+`.artifacts/windows/install/zlink-core/<VERSION>/`.
 
-- .NET: `ZLinkWindowsX64NativeRoot=<release-prefix>/bin`, result in
- `.artifacts/windows/dotnet/package/`
-- C++: pass `<release-prefix>/` as `ZLINK_CPP_CORE_PACKAGE_PREFIX`; the CMake install result lands in
- `.artifacts/windows/cpp/package/`
-- Go: place the release prefix's `bin/` runtime in `bindings/go/native/windows-x86_64/`; result in `.artifacts/windows/go/package/`
-- Java: a version-only consumer that uses the release prefix's `bin/zlink.dll`
-- Node.js: place the release prefix's `bin/zlink.dll` in `bindings/node/prebuilds/win32-x64/`; result in `.artifacts/windows/node/package/`
-- Python: place the release prefix runtime at the wheel's `native/windows-x86_64/zlink.dll`; result in `.artifacts/windows/python/wheel/`
-- Rust: place the release prefix runtime in the crate's `native/windows-x86_64/`; result in `.artifacts/windows/rust/`
+If the `msvcp140.dll` loaded first by the JDK conflicts with an `/MD` Core under Java 22 FFM, build
+a separate `/MT` Core in its own directory for Java verification. Do not put that variant in the
+common CI runtime or another Binding's staged runtime; record it as separate evidence in the Java
+plan document.
 
-When consolidating the Windows native packaging procedure, update these paths together with the
-per-language version pinning. The current state of Windows performance runs and their failure
-causes are owned by the individual measurement sheets and `log/` under
-`doc/perf/perf/core-0.10.0/`.
+Windows package targets and outputs are verified together against the x64 Core platform.
+
+- C++: generator platform `x64`; `.artifacts/windows/install/zlink-cpp/<CPP_BINDING_VERSION>/`
+- .NET: native RID `win-x64`; `.artifacts/windows/nuget/Zlink.<DOTNET_BINDING_VERSION>.nupkg`
+- Java: resource `native/windows-x86_64/`; `.artifacts/windows/maven/systems/zlink/zlink/<JAVA_BINDING_VERSION>/`
+- Node.js: prebuild `win32-x64/`; `.artifacts/windows/npm/zlink-systems-zlink-<NODE_BINDING_VERSION>.tgz`
+
+Each package fails if it contains a Windows ARM64 payload. The C++ local install also records the
+Core platform and library hash in `share/zlink/zlink-cpp-package-provenance.json`. When changing
+the Windows native packaging procedure, update this target mapping together with the per-language
+version pinning.
 
 ## Core runtime synchronization
 

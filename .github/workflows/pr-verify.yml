@@ -15,6 +15,7 @@ on:
     # 운영 코드만. 문서·계획·bench·sample은 이 워크플로우를 시작하지 않는다.
     paths:
       - ".github/workflows/pr-verify.yml"
+      - ".github/workflows/build.yml"
       - "VERSION"
       - "core/include/**"
       - "core/src/**"
@@ -78,9 +79,9 @@ jobs:
               echo "$1=false" >> "${GITHUB_OUTPUT}"
             fi
           }
-          emit core '^(VERSION|core/|bindings/(c|cpp|python|tools)/|bindings/(go|rust)/include/|\.github/workflows/pr-verify\.yml)'
-          emit framework_java '^(VERSION|core/|bindings/(java|tools)/|framework/languages/java/|framework/runtime/|\.github/workflows/pr-verify\.yml)'
-          emit windows_local_package '^(VERSION|BINDINGS_VERSION|FRAMEWORK_VERSION|bindings/(cpp|dotnet|java|node)/|framework/languages/(cpp|dotnet|java|node)/|scripts/(local-package/|gate/rebuild-dev\.ps1)|\.github/workflows/pr-verify\.yml)'
+          emit core '^(VERSION|core/|bindings/(c|cpp|python|tools)/|bindings/(go|rust)/include/|\.github/workflows/(pr-verify|build)\.yml)'
+          emit framework_java '^(VERSION|core/|bindings/(java|tools)/|framework/languages/java/|framework/runtime/|\.github/workflows/(pr-verify|build)\.yml)'
+          emit windows_local_package '^(VERSION|BINDINGS_VERSION|FRAMEWORK_VERSION|bindings/(cpp|dotnet|java|node)/|framework/languages/(cpp|dotnet|java|node)/|scripts/(local-package/|gate/rebuild-dev\.ps1)|\.github/workflows/(pr-verify|build)\.yml)'
 
   windows-local-package:
     name: Windows local-package contracts
