@@ -28,7 +28,8 @@ inline zlink::framework::encoded_payload_t serialize_protobuf (
     if (!message.valid ())
         throw std::bad_alloc ();
     if (!value.SerializeToArray (message.data (), static_cast<int> (size)))
-        throw std::runtime_error ("protobuf codec failed to serialize " + value.GetTypeName ());
+        throw std::runtime_error ("protobuf codec failed to serialize "
+                                  + std::string (value.GetTypeName ()));
     return zlink::framework::detail::encoded_payload_from_raw (std::move (message));
 }
 
@@ -38,7 +39,8 @@ inline void parse_protobuf (google::protobuf::MessageLite &value,
     const auto bytes = payload.bytes ();
     if (bytes.size () > static_cast<std::size_t> (std::numeric_limits<int>::max ())
         || !value.ParseFromArray (bytes.data (), static_cast<int> (bytes.size ())))
-        throw std::runtime_error ("protobuf codec failed to parse " + value.GetTypeName ());
+        throw std::runtime_error ("protobuf codec failed to parse "
+                                  + std::string (value.GetTypeName ()));
 }
 } // namespace detail
 
