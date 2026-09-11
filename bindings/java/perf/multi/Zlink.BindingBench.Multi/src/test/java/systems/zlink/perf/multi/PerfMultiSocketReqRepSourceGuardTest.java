@@ -24,9 +24,9 @@ class PerfMultiSocketReqRepSourceGuardTest {
         assertTrue(source.contains("result != SubmitResult.BACKPRESSURED"));
         assertTrue(source.contains("submission.admitted().whenComplete"));
         assertTrue(source.contains("submission.reply().whenComplete"));
+        assertTrue(source.contains("completionPoller.poll(0)"));
         assertFalse(source.contains("toByteArray()"));
         assertFalse(source.contains("byte[][] pendingPayloads"));
-        assertFalse(source.contains("completion" + "Poller"));
         assertFalse(source.contains("admission" + "Window"));
         assertFalse(source.contains("is" + "Done()"));
     }

@@ -903,9 +903,9 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `PUBSUB` | 61.9% | 76.2% | 102.5% | 99.1% | 100.2% | 102.2% | 통과 90.3%/lat1.61× · c0180-java-single-tcp |
 | `tcp` | `DEALER_DEALER` | 68.9% | 88.3% | 118.4% | 156.7% | 124.4% | 106.6% | 통과 110.5%/lat1.08× · c0180-java-single-tcp |
 | `tcp` | `DEALER_ROUTER` | 59.8% | 82.3% | 115.1% | 147.6% | 110.1% | 107.8% | 통과 103.8%/lat1.41× · c0180-java-single-tcp |
-| `tcp` | `DEALER_ROUTER_REQREP` | 14.6% | 20.4% | 실패 | 36.1% | 39.3% | 44.2% | 보류 30.9%/lat2.50× · c0180-java-single-tcp |
+| `tcp` | `DEALER_ROUTER_REQREP` | 17% | 17% | 45% | 40% | 43% | 50% | 미달 35.3%/lat1.58× · measure(실패 해소); reqrep 소형 약점 · c0180-java-single-tcp-reqrep2 |
 | `tcp` | `ROUTER_ROUTER` | 64.7% | 87.3% | 110.3% | 155.0% | 138.7% | 108.3% | 통과 110.7%/lat0.92× · c0180-java-single-tcp |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 8.1% | 9.7% | 33.6% | 38.9% | 40.4% | 45.4% | 보류 29.3%/lat2.31× · c0180-java-single-tcp |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 19% | 21% | 56% | 39% | 44% | 50% | 미달 38.4%/lat1.75× · measure(실패 해소) · c0180-java-single-tcp-reqrep2 |
 | `ws` | `PAIR` | 82.5% | 107.5% | 137.2% | 153.2% | 152.0% | 127.4% | 통과 126.6%/lat0.08× · c0180-java-single-ws |
 | `ws` | `PUBSUB` | 66.9% | 69.9% | 115.3% | 99.7% | 99.3% | 99.9% | 통과 91.8%/lat1.10× · c0180-java-single-ws |
 | `ws` | `DEALER_DEALER` | 77.2% | 104.4% | 134.5% | 141.8% | 139.1% | 125.3% | 통과 120.4%/lat0.10× · c0180-java-single-ws |
@@ -931,16 +931,16 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `inproc` | `PUBSUB` | 67.8% | 65.9% | 73.6% | 17.9% | 17.5% | 15.0% | 보류 43.0%/lat3.02× · c0180-java-single-inproc |
 | `inproc` | `DEALER_DEALER` | 68.3% | 76.3% | 76.7% | 38.6% | 39.6% | 43.5% | 보류 57.2%/lat2.38× · c0180-java-single-inproc |
 | `inproc` | `DEALER_ROUTER` | 60.2% | 74.2% | 75.9% | 42.2% | 44.1% | 46.6% | 보류 57.2%/lat1.89× · c0180-java-single-inproc |
-| `inproc` | `DEALER_ROUTER_REQREP` | 실패 | 실패 | 실패 | 26.1% | 25.7% | 20.0% | 보류 23.9%/lat4.64× · c0180-java-single-inproc |
+| `inproc` | `DEALER_ROUTER_REQREP` | 18% | 17% | 16% | 33% | 34% | 26% | 미달 24.0%/lat2.07× · measure(실패 해소); inproc reqrep 저조 · c0180-java-single-inproc-reqrep2 |
 | `inproc` | `ROUTER_ROUTER` | 84.4% | 78.1% | 81.7% | 161.5% | 120.6% | 138.2% | 보류 110.8%/lat4.30× · c0180-java-single-inproc |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 13.0% | 10.5% | 15.9% | 23.4% | 23.8% | 19.6% | 보류 17.7%/lat8.21× · c0180-java-single-inproc |
+| `inproc` | `ROUTER_ROUTER_REQREP` | 17% | 18% | 18% | 32% | 29% | 25% | 미달 23.3%/lat2.20× · measure(실패 해소) · c0180-java-single-inproc-reqrep2 |
 | `ipc` | `PAIR` | 70.5% | 99.0% | 134.8% | 77.3% | 83.1% | 75.5% | 통과 90.0%/lat1.22× · c0180-java-single-ipc |
 | `ipc` | `PUBSUB` | 56.9% | 68.9% | 99.4% | 101.1% | 100.6% | 104.2% | 보류 88.5%/lat1.34× · c0180-java-single-ipc |
 | `ipc` | `DEALER_DEALER` | 78.5% | 89.4% | 110.3% | 122.5% | 82.6% | 76.0% | 통과 93.2%/lat1.29× · c0180-java-single-ipc |
 | `ipc` | `DEALER_ROUTER` | 75.0% | 81.3% | 101.1% | 105.5% | 80.5% | 76.6% | 통과 86.7%/lat1.42× · c0180-java-single-ipc |
-| `ipc` | `DEALER_ROUTER_REQREP` | 11.4% | 20.1% | 실패 | 39.6% | 41.9% | 44.1% | 보류 31.4%/lat2.35× · c0180-java-single-ipc |
+| `ipc` | `DEALER_ROUTER_REQREP` | 16% | 20% | 31% | 37% | 42% | 48% | 미달 32.3%/lat1.66× · measure(실패 해소) · c0180-java-single-ipc-reqrep2 |
 | `ipc` | `ROUTER_ROUTER` | 72.7% | 84.1% | 108.7% | 126.1% | 91.8% | 82.8% | 통과 94.4%/lat1.12× · c0180-java-single-ipc |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 5.1% | 6.2% | 11.3% | 37.3% | 41.3% | 45.8% | 보류 24.5%/lat2.53× · c0180-java-single-ipc |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 17% | 22% | 38% | 39% | 41% | 48% | 미달 34.1%/lat1.81× · measure(실패 해소) · c0180-java-single-ipc-reqrep2 |
 
 #### 9.3.2 Multi suite
 
@@ -948,30 +948,30 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
 | `tcp` | `MULTI_DEALER_DEALER` | 36.7% | 84.8% | 118.2% | 60.1% | 58.5% | 51.6% | 보류 68.3%/lat0.19× · c0180-java-multi-tcp |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 83.7% | 76.8% | 82.3% | 80.5% | 92.5% | 81.2% | 보류 82.8%/lat3.64× · c0180-java-multi-tcp |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 실패 | 76% | 89% | 91% | 13% | 21% | 보류 57.8%(n5) · 64B 실패=소형 backpressure 지연·완료드레인 timeout(측정특성, C성공)·binding/harness 불변 · 대형 latency floor · c0180-java-multi-tcp-reqrep |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 76% | 76% | 76% | 66% | 11% | 20% | 미달 54.0%/lat6.25× · 하네스 round-robin fix 후 measure(실패 해소); reqrep 대형 latency floor · c0180-java-multi-tcp-reqrep2 |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 107.8% | 99.8% | 93.1% | 30.7% | 54.6% | 70.2% | 통과 76.0%/lat2.34× · c0180-java-multi-tcp |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 88% | 73% | 86% | 91% | 15% | 20% | 보류 62.1% · 대형 size 의존 latency floor(65536 15%/11×)·소형 backpressure 지연 · binding 불변 · c0180-java-multi-tcp-reqrep |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 86% | 72% | 80% | 79% | 14% | 21% | 미달 58.6%/lat5.24× · measure(실패 해소); 대형 latency floor · c0180-java-multi-tcp-reqrep2 |
 | `tcp` | `MULTI_PUBSUB` | 73.8% | 61.7% | 65.3% | 66.9% | 137.3% | 134.7% | 보류 90.0%/lat1.21× · c0180-java-multi-tcp |
 | `tcp` | `MULTI_STREAM` | 85.8% | 87.5% | 84.9% | 해당 없음 | 132.3% | 해당 없음 | 통과 97.6%/lat≤1.2× · 하네스 monitor-lifecycle 수정(단일 monitor 계약, C parity) · c0180-java-multi-tcp-stream |
 | `ws` | `MULTI_DEALER_DEALER` | 41.4% | 76.5% | 64.7% | 82.9% | 63.1% | 63.4% | 보류 65.3%/lat1.74× · c0180-java-multi-ws |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 98.4% | 87.3% | 114.4% | 81.2% | 141.0% | 156.5% | 통과 113.1%/lat0.52× · c0180-java-multi-ws |
-| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 실패 | 실패 | 138% | 실패 | 40% | 43% | 보류 73.5%(n3) · 소형 다수 실패=backpressure 지연(C성공)·binding 불변 · c0180-java-multi-ws-reqrep |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 104% | 99% | 120% | 217% | 44% | 40% | 미달 104.2%/lat7.07× · throughput 초과나 대형 latency>3× cap · c0180-java-multi-ws-reqrep2 |
 | `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 114.4% | 52.5% | 54.7% | 58.5% | 62.7% | 72.1% | 보류 69.2%/lat3.82× · c0180-java-multi-ws |
-| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 실패 | 122% | 140% | 61% | 26% | 35% | 보류 76.6%(n5) · 64B 실패(C성공)·대형 latency floor · binding 불변 · c0180-java-multi-ws-reqrep |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 69% | 72% | 94% | 145% | 43% | 46% | 미달 78.2%/lat3.81× · latency>3× cap · c0180-java-multi-ws-reqrep2 |
 | `ws` | `MULTI_PUBSUB` | 116.0% | 75.6% | 60.8% | 71.2% | 146.9% | 144.6% | 통과 102.5%/lat0.86× · c0180-java-multi-ws |
 | `ws` | `MULTI_STREAM` | 77.9% | 93.3% | 96.1% | 해당 없음 | 104.8% | 해당 없음 | 통과 93.0%/lat≤1.3× · 동상 · c0180-java-multi-ws-stream |
 | `wss` | `MULTI_DEALER_DEALER` | 41.8% | 75.2% | 88.5% | 91.0% | 65.7% | 66.3% | 보류 71.4%/lat0.76× · c0180-java-multi-wss |
 | `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 110.3% | 89.3% | 69.3% | 76.9% | 74.0% | 66.7% | 통과 81.1%/lat1.35× · c0180-java-multi-wss |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 109% | 104% | 16% | 실패 | 47% | 72% | 보류 69.6%(n5) · 4096B 실패(측정특성, C성공)·binding 불변 · c0180-java-multi-wss-reqrep |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 87% | 96% | 108% | 13% | 41% | 63% | 미달 68.0%/lat2.19× · measure(실패 해소) · c0180-java-multi-wss-reqrep2 |
 | `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 75.6% | 72.6% | 79.6% | 36.4% | 113.7% | 115.6% | 통과 82.2%/lat0.74× · c0180-java-multi-wss |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 87% | 99% | 118% | 24% | 32% | 46% | 보류 67.9% · 대형 size 의존 latency floor · binding 불변 · c0180-java-multi-wss-reqrep |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 73% | 72% | 92% | 102% | 48% | 60% | 통과 74.3%/lat2.31× · 하네스 fix 후 통과 · c0180-java-multi-wss-reqrep2 |
 | `wss` | `MULTI_PUBSUB` | 101.1% | 66.0% | 75.9% | 82.7% | 103.5% | 97.7% | 보류 87.8%/lat0.74× · c0180-java-multi-wss |
 | `wss` | `MULTI_STREAM` | 95.7% | 119.9% | 113.8% | 해당 없음 | 142.7% | 해당 없음 | 통과 118.0%/lat≤1.1× · 동상 · c0180-java-multi-wss-stream |
 | `tls` | `MULTI_DEALER_DEALER` | 36.4% | 98.5% | 86.4% | 67.2% | 89.3% | 77.5% | 보류 75.9%/lat0.58× · c0180-java-multi-tls |
 | `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 96.7% | 75.4% | 63.9% | 60.2% | 75.3% | 83.7% | 통과 75.9%/lat1.59× · c0180-java-multi-tls |
-| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 실패 | 105% | 105% | 실패 | 27% | 54% | 보류 73.0%(n4) · 64B 실패=backpressure 지연; 4096B는 C도 실패=전 언어 공통 · binding 불변 · c0180-java-multi-tls-reqrep |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 93% | 85% | 83% | 해당없음 | 29% | 53% | 미달 68.5%/lat1.26× · 4096B C baseline 누락(drain timeout, 전 언어 공통) · c0180-java-multi-tls-reqrep2 |
 | `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 79.7% | 69.5% | 75.2% | 57.1% | 94.7% | 96.5% | 통과 78.8%/lat0.95× · c0180-java-multi-tls |
-| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 82% | 108% | 85% | 37% | 26% | 38% | 보류 62.9% · 대형 size 의존 latency floor · binding 불변 · c0180-java-multi-tls-reqrep |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 73% | 77% | 75% | 130% | 40% | 46% | 통과 73.6%/lat0.82× · 하네스 fix 후 통과 · c0180-java-multi-tls-reqrep2 |
 | `tls` | `MULTI_PUBSUB` | 79.8% | 91.7% | 73.3% | 81.1% | 88.1% | 91.7% | 보류 84.3%/lat1.33× · c0180-java-multi-tls |
 | `tls` | `MULTI_STREAM` | 88.6% | 106.6% | 111.1% | 해당 없음 | 125.2% | 해당 없음 | 통과 107.9%/lat≤1.2× · 동상 · c0180-java-multi-tls-stream |
 

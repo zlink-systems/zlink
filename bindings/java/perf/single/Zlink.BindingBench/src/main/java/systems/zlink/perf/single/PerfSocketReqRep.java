@@ -4,6 +4,7 @@ package systems.zlink.perf.single;
 
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.RequestSubmission;
@@ -19,6 +20,7 @@ import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfErrno;
+import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfUtil;
 
 import java.nio.charset.StandardCharsets;
@@ -28,7 +30,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.LockSupport;
 
 final class PerfSocketReqRep {
     private static final RoutingId SERVER_RID = RoutingId.from(
@@ -127,11 +128,11 @@ final class PerfSocketReqRep {
     /**
      * Requester flow of PERF_SINGLE_TEST_POLICY.md 1.1.2/1.1.3.
      *
-     * <p>This method submits continuously without waiting for replies. An
-     * {@code OK} result immediately permits the next request; only
-     * {@code BACKPRESSURED} waits for {@code admitted()}. Reply stages settle
-     * independently on the binding runtime, so the application adds neither
-     * an inflight cap nor a completion-poll pacing wait.</p>
+     * <p>This method submits one request per turn without waiting for replies,
+     * then progresses ready completions with a nonblocking public poll. An
+     * {@code OK} result permits submission in the next turn; only
+     * {@code BACKPRESSURED} waits for {@code admitted()}. The application adds
+     * no inflight cap or reply-completion wait.</p>
      *
      * <p>Throughput and latency are anchored exactly as in the C reference
      * (bindings/c/perf/single/common/perf_single_reqrep.hpp
@@ -146,7 +147,6 @@ final class PerfSocketReqRep {
                                         long activeEnd, Duration requestTimeout,
                                         int completionDrainTimeoutMs) {
         AtomicLong outstanding = new AtomicLong();
-        Thread submitThread = Thread.currentThread();
         java.util.function.BiConsumer<List<Message>, Throwable> completion =
             (parts, error) -> {
             try {
@@ -174,37 +174,41 @@ final class PerfSocketReqRep {
                     Message.closeAll(parts);
                 }
                 outstanding.decrementAndGet();
-                LockSupport.unpark(submitThread);
             }
         };
 
-        while (System.nanoTime() < activeEnd && failure.get() == null) {
-            RequestSubmission submission = submitRequest(client,
-                routedClient, config, requestTimeout, outstanding,
-                completion);
-            SubmitResult result = submission.result();
-            if (result == SubmitResult.BACKPRESSURED) {
-                submission.admitted().toCompletableFuture().join();
-            } else if (result != SubmitResult.OK) {
-                throw new IllegalStateException(
-                    "async request returned " + result);
+        try (PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(
+                 List.of(client), PollEventFlags.POLLCOMPLETION)) {
+            while (System.nanoTime() < activeEnd && failure.get() == null) {
+                RequestSubmission submission = submitRequest(client,
+                    routedClient, config, requestTimeout, outstanding,
+                    completion);
+                SubmitResult result = submission.result();
+                if (result == SubmitResult.BACKPRESSURED) {
+                    var admitted = submission.admitted().toCompletableFuture();
+                    while (!admitted.isDone() && failure.get() == null) {
+                        completionPoller.poll(50);
+                    }
+                    admitted.join();
+                } else if (result != SubmitResult.OK) {
+                    throw new IllegalStateException(
+                        "async request returned " + result);
+                }
+                // One submit is one turn. Drain without waiting so reply and
+                // admission completions progress before the next turn.
+                completionPoller.poll(0);
             }
-        }
 
-        long drainEnd = System.nanoTime()
-            + TimeUnit.MILLISECONDS.toNanos(completionDrainTimeoutMs);
-        while (outstanding.get() > 0 && failure.get() == null
-               && System.nanoTime() < drainEnd) {
-            LockSupport.parkNanos(PerfSocketReqRep.class,
-                Math.max(1L, drainEnd - System.nanoTime()));
-            if (Thread.currentThread().isInterrupted()) {
-                throw new IllegalStateException(
-                    "single socket reqrep drain interrupted");
+            long drainEnd = System.nanoTime()
+                + TimeUnit.MILLISECONDS.toNanos(completionDrainTimeoutMs);
+            while (outstanding.get() > 0 && failure.get() == null
+                   && System.nanoTime() < drainEnd) {
+                completionPoller.poll(remainingTimeoutMs(drainEnd));
             }
-        }
-        if (outstanding.get() != 0) {
-            failure.compareAndSet(null, new IllegalStateException(
-                "single socket reqrep completions did not drain"));
+            if (outstanding.get() != 0) {
+                failure.compareAndSet(null, new IllegalStateException(
+                    "single socket reqrep completions did not drain"));
+            }
         }
     }
 
@@ -252,6 +256,15 @@ final class PerfSocketReqRep {
     private static boolean isExpectedRequestFailure(Throwable error) {
         return error instanceof ZlinkRequestException request
             && request.getResult() == RequestResult.TIMED_OUT;
+    }
+
+    private static int remainingTimeoutMs(long deadline) {
+        long remainingNs = deadline - System.nanoTime();
+        if (remainingNs <= 0L) {
+            return 0;
+        }
+        return (int) Math.min(Integer.MAX_VALUE,
+            (remainingNs + 999_999L) / 1_000_000L);
     }
 
     private static void runServer(RouterSocket server,
