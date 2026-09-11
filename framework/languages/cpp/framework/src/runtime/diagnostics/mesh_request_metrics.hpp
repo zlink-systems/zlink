@@ -1,6 +1,13 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#if defined(_WIN32)
+// OpenTelemetry's spin lock includes windows.h after defining _WINSOCKAPI_.
+// Include Winsock2 first so later Boost.Asio headers retain their required
+// Windows socket include order.
+#include <winsock2.h>
+#endif
+
 #include <opentelemetry/metrics/provider.h>
 #include <opentelemetry/metrics/noop.h>
 

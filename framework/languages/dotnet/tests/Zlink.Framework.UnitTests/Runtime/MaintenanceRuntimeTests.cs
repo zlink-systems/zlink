@@ -654,6 +654,25 @@ public sealed class MaintenanceRuntimeTests
             result.Reason);
     }
 
+    [Fact]
+    public async Task Shutdown_expired_before_drain_still_invokes_force_stop()
+    {
+        using var fixture = Create();
+        fixture.Runtime.MarkServing();
+
+        // 05-host-relocation-flow.ko.md §14: an expired shutdown deadline
+        // still requires bounded teardown before DeadlineExceeded is published.
+        // One tick expires before drain admission, even if the CTS callback
+        // has not yet obtained a ThreadPool worker.
+        var result = await fixture.Runtime.ShutdownAsync(TimeSpan.FromTicks(1));
+
+        Assert.Equal(ZLinkFrameworkTerminationOutcome.ForceStopped, result.Outcome);
+        Assert.Equal(ZLinkFrameworkTerminationReason.DeadlineExceeded, result.Reason);
+        Assert.Equal(0, fixture.Executor.ExecuteCount);
+        Assert.Equal(1, fixture.Executor.ForceStopCount);
+        Assert.Equal(ZLinkDrainForceReason.DeadlineExceeded, fixture.Executor.ForceStopReason);
+    }
+
     private static Fixture Create(
         Func<
             ZLinkFrameworkRelocationMode,
@@ -707,6 +726,10 @@ public sealed class MaintenanceRuntimeTests
 
         public bool CancelForceStop { get; set; }
 
+        public int ForceStopCount { get; private set; }
+
+        public ZLinkDrainForceReason? ForceStopReason { get; private set; }
+
         public void RequestShutdown(TimeSpan deadline)
         {
             _ = deadline;
@@ -745,6 +768,8 @@ public sealed class MaintenanceRuntimeTests
             ZLinkDrainForceReason reason,
             CancellationToken cancellationToken)
         {
+            ForceStopCount++;
+            ForceStopReason = reason;
             if (CancelForceStop)
                 await Task.Delay(
                         Timeout.InfiniteTimeSpan,

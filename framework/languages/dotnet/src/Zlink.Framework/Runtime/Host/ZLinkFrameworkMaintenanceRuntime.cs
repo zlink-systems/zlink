@@ -488,8 +488,8 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
                     cancellationToken: CancellationToken.None)
                 .ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
-            when (deadline.IsCancellationRequested)
+        catch (OperationCanceledException exception)
+            when (exception.CancellationToken == deadline.Token)
         {
             drained = await _lifecycle.ForceStopAsync(
                     ZLinkDrainForceReason.DeadlineExceeded,
