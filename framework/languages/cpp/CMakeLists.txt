@@ -19,6 +19,7 @@ include(GNUInstallDirs)
 include(FetchContent)
 include(CMakePackageConfigHelpers)
 find_package(Threads REQUIRED)
+find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS api)
 
 option(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE "Build bindings/cpp from the workspace (explicit opt-in)" OFF)
 
@@ -166,6 +167,7 @@ function(zlink_framework_cpp_configure_m6_objects target_name)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(${target_name} PRIVATE
+    opentelemetry-cpp::api
     zlink::cpp
     Threads::Threads)
   zlink_framework_cpp_configure_msvc_target(${target_name})
@@ -189,6 +191,7 @@ target_compile_features(zlink_framework_m6a_runtime PUBLIC cxx_std_20)
 target_include_directories(zlink_framework_m6a_runtime PUBLIC
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include)
 target_link_libraries(zlink_framework_m6a_runtime PUBLIC
+  opentelemetry-cpp::api
   zlink::cpp
   Threads::Threads)
 
@@ -272,7 +275,7 @@ target_include_directories(zlink_framework PUBLIC
 target_include_directories(zlink_framework PRIVATE
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
   ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-target_link_libraries(zlink_framework PUBLIC zlink::cpp)
+target_link_libraries(zlink_framework PUBLIC zlink::cpp opentelemetry-cpp::api)
 if(WIN32)
   target_link_libraries(zlink_framework PUBLIC bcrypt)
 endif()
@@ -845,6 +848,10 @@ function(zlink_framework_cpp_enable_test_assertions target_name)
   endif()
 endfunction()
 
+if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS OR ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+  find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS sdk)
+endif()
+
 if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   add_executable(test_cpp_framework_raw_route_port_contract
     tests/Zlink.Framework.ContractTests/test_cpp_framework_raw_route_port_contract.cpp
@@ -892,6 +899,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_link_libraries(test_cpp_framework_service_wire_codec PRIVATE
     zlink::cpp
     nlohmann_json::nlohmann_json
+    opentelemetry-cpp::api
     Threads::Threads)
   zlink_framework_cpp_enable_test_assertions(test_cpp_framework_service_wire_codec)
   add_test(NAME test_cpp_framework_service_wire_codec
@@ -1010,6 +1018,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_m6a_runtime PRIVATE
+    opentelemetry-cpp::metrics
     zlink_framework_m6a_runtime
     Threads::Threads)
   zlink_framework_cpp_enable_test_assertions(test_cpp_framework_m6a_runtime)
@@ -1061,6 +1070,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_m6b_runtime PRIVATE
+    opentelemetry-cpp::metrics
     zlink_framework_m6b_runtime
     zlink_framework
     Threads::Threads)
@@ -1234,6 +1244,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-contract;framework-unit;async"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_provider_task
+    tests/Zlink.Framework.ContractTests/test_cpp_framework_provider_task.cpp)
+  target_link_libraries(test_cpp_framework_provider_task PRIVATE
+    zlink::framework_provider_abstractions Threads::Threads)
+  add_test(NAME test_cpp_framework_provider_task COMMAND test_cpp_framework_provider_task)
+  set_tests_properties(test_cpp_framework_provider_task PROPERTIES
+    LABELS "framework-contract;async"
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_sample_parity
     tests/Zlink.Framework.ContractTests/test_cpp_framework_sample_parity.cpp)
   target_link_libraries(test_cpp_framework_sample_parity PRIVATE
@@ -1332,6 +1351,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_app_host.cpp
     "framework-unit;framework-host;framework-config;framework-http;framework-http-e2e")
   add_zlink_framework_test(
+    test_cpp_framework_http_startup
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_http_startup.cpp
+    "framework-unit;framework-contract;framework-host;framework-http;framework-regression")
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_http_startup)
+  target_link_libraries(test_cpp_framework_http_startup PRIVATE GTest::gtest_main)
+  add_zlink_framework_test(
     test_cpp_framework_client_server_runtime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp
     "framework-unit;framework-regression;framework-client-server;framework-monitoring")
@@ -1383,6 +1408,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   set_tests_properties(test_cpp_framework_http_integration PROPERTIES
     LABELS "framework-integration;framework-http;framework-http-e2e;http"
     TIMEOUT 30)
+  add_test(NAME test_cpp_framework_http_sync_submit
+    COMMAND test_cpp_framework_app_host --http-submit-only)
+  set_tests_properties(test_cpp_framework_http_sync_submit PROPERTIES
+    LABELS "framework-unit;framework-regression;framework-http"
+    TIMEOUT 30)
   if(ZLINK_FRAMEWORK_CPP_REQUIRE_HTTP_PERF_REPORT)
     add_test(NAME test_cpp_framework_http_perf_gate
       COMMAND ${CMAKE_COMMAND}
@@ -1408,6 +1438,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   set_tests_properties(
     test_cpp_framework_app_host
     test_cpp_framework_http_integration
+    test_cpp_framework_http_sync_submit
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_framework_http_ports)
   add_zlink_framework_test(
@@ -1455,6 +1486,27 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   set_tests_properties(test_cpp_framework_state_lane PROPERTIES
     LABELS "framework-unit;framework-regression;execution"
     TIMEOUT 30)
+  add_executable(test_cpp_framework_lane_roundtrip
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_lane_roundtrip.cpp)
+  target_link_libraries(test_cpp_framework_lane_roundtrip PRIVATE
+    zlink::framework
+    GTest::gtest
+    GTest::gtest_main)
+  target_include_directories(test_cpp_framework_lane_roundtrip PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  zlink_enable_coverage(test_cpp_framework_lane_roundtrip)
+  add_test(NAME test_cpp_framework_lane_roundtrip
+    COMMAND test_cpp_framework_lane_roundtrip)
+  set_tests_properties(test_cpp_framework_lane_roundtrip PROPERTIES
+    LABELS "framework-unit;framework-regression;execution"
+    TIMEOUT 30)
+  add_zlink_framework_test(
+    test_cpp_framework_sync_submit
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_sync_submit.cpp
+    "framework-unit;framework-regression;execution;messaging")
+  target_link_libraries(test_cpp_framework_sync_submit PRIVATE GTest::gtest_main)
+  target_include_directories(test_cpp_framework_sync_submit PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp
@@ -1633,6 +1685,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_monitoring
     tests/Zlink.Framework.UnitTests/test_cpp_framework_monitoring.cpp
     "framework-unit;framework-regression;framework-observability;metrics")
+  target_link_libraries(test_cpp_framework_monitoring PRIVATE opentelemetry-cpp::metrics)
+  add_zlink_framework_test(
+    test_cpp_framework_mesh_metrics
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_metrics.cpp
+    "framework-unit;framework-regression;framework-observability;metrics")
+  target_link_libraries(test_cpp_framework_mesh_metrics PRIVATE
+    opentelemetry-cpp::metrics)
+  target_include_directories(test_cpp_framework_mesh_metrics PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp

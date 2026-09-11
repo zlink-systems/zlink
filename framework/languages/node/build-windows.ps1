@@ -50,14 +50,15 @@ $coreVersion = (Select-String -LiteralPath (Join-Path $RepositoryRoot "VERSION")
 $httpVersion = $httpManifest.version
 $bindingPackage = Join-Path $npmRoot "zlink-systems-zlink-$bindingVersion.tgz"
 $httpPackage = Join-Path $npmRoot "zlink-systems-http-client-$httpVersion.tgz"
+$materializedHttpPackage = Join-Path $RepositoryRoot ".artifacts\node-install\npm\zlink-systems-http-client-$httpVersion.tgz"
 if (-not (Test-Path -LiteralPath $bindingPackage -PathType Leaf)) {
     throw "Node binding local package is missing: $bindingPackage"
 }
 New-Item -ItemType Directory -Force -Path $npmRoot | Out-Null
 
 # Bootstrap the workspace with the exact local binding and the HTTP client source.
-# Explicit package arguments supersede the platform-specific file pins in package.json
-# without rewriting either package.json or package-lock.json.
+# The published HTTP client tarball does not exist until this first compilation finishes,
+# so explicit package arguments avoid rewriting package.json or package-lock.json.
 Invoke-Checked $npm @(
     "install", "--no-save", "--no-package-lock", "--ignore-scripts", "--no-audit", "--no-fund",
     $bindingPackage, (Join-Path $nodeRoot "packages/http-client")
@@ -67,11 +68,18 @@ Invoke-Checked $npm @("pack", "--pack-destination", $npmRoot, ".\packages\http-c
 if (-not (Test-Path -LiteralPath $httpPackage -PathType Leaf)) {
     throw "Node HTTP client local package was not created: $httpPackage"
 }
+$previousLocalPackageRoot = $env:ZLINK_LOCAL_PACKAGE_ROOT
+try {
+    $env:ZLINK_LOCAL_PACKAGE_ROOT = $LocalPackageRoot
+    Invoke-Checked $node @("scripts/materialize-local-http-client-package.mjs") $nodeRoot
+} finally {
+    $env:ZLINK_LOCAL_PACKAGE_ROOT = $previousLocalPackageRoot
+}
 
 # Reinstall both local tarballs so runtime/sample verification uses packaged output.
 Invoke-Checked $npm @(
     "install", "--no-save", "--no-package-lock", "--ignore-scripts", "--no-audit", "--no-fund",
-    $bindingPackage, $httpPackage
+    $bindingPackage, $materializedHttpPackage
 ) $nodeRoot
 $bindingVerification = @'
 const binding = require('@zlink-systems/zlink');
@@ -97,4 +105,4 @@ if (-not $SkipSamples) {
 
 Write-Output "Node Framework Windows build passed."
 Write-Output "binding=$bindingPackage"
-Write-Output "httpClient=$httpPackage"
+Write-Output "httpClient=$materializedHttpPackage"

@@ -25,6 +25,7 @@ import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -58,6 +59,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetricProbe;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
@@ -380,6 +382,68 @@ final class ZLinkActorClientRuntimeTest {
         ZLinkFrameworkException frameworkError = (ZLinkFrameworkException) error.getCause();
         assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, frameworkError.kind());
         assertEquals(1, node.requestAttempts);
+    }
+
+    @Test
+    void publicActorTimeoutRecordsSourceMeshRequestMetrics() throws Exception {
+        RequestFailingSpotNode node =
+            new RequestFailingSpotNode(RequestResult.TIMED_OUT);
+        ZLinkActorClientRuntime client = new ZLinkActorClientRuntime(
+            () -> node,
+            new ZLinkStoreLocationResolvers(
+                ZLinkRegisteredLocationStores.fromUnified(
+                    storeWithActor("actor-1")),
+                new ZLinkLocationOptions()),
+            new ZLinkJsonMessageSerializer(),
+            Duration.ofSeconds(5),
+            ZLinkTestAdmissionFactory.create());
+
+        try (ZLinkRequestMetricProbe metrics = ZLinkRequestMetricProbe.install()) {
+            assertThrows(CompletionException.class,
+                () -> client.requestToActor("actor-1", new Ping("hello"))
+                    .submit(Pong.class).toCompletableFuture().join());
+
+            assertEquals(0L, metrics.inflight("recording", "actor"));
+            assertEquals(1L, metrics.durationCount(
+                "recording", "actor", "timed_out"));
+            assertEquals(1L, metrics.timeoutCount("recording", "actor"));
+        }
+    }
+
+    @Test
+    void cancelledActorRequestCompletesMetricsBeforeRuntimeReady()
+        throws Exception {
+        CompletableFuture<Void> runtimeReady = new CompletableFuture<>();
+        RequestFailingSpotNode node =
+            new RequestFailingSpotNode(RequestResult.INTERNAL_ERROR);
+        ZLinkActorClientRuntime client = new ZLinkActorClientRuntime(
+            () -> node,
+            new ZLinkStoreLocationResolvers(
+                ZLinkRegisteredLocationStores.fromUnified(
+                    storeWithActor("actor-1")),
+                new ZLinkLocationOptions()),
+            new ZLinkJsonMessageSerializer(),
+            Duration.ofSeconds(5),
+            ZLinkTestAdmissionFactory.create(),
+            runtimeReady);
+
+        try (ZLinkRequestMetricProbe metrics = ZLinkRequestMetricProbe.install()) {
+            CompletableFuture<Pong> result = client.requestToActor(
+                    "actor-1", new Ping("hello"))
+                .submit(Pong.class)
+                .toCompletableFuture();
+
+            assertEquals(1L, metrics.inflight("recording", "actor"));
+            assertTrue(result.cancel(false));
+            assertEquals(0L, metrics.inflight("recording", "actor"));
+            assertEquals(1L, metrics.durationCount(
+                "recording", "actor", "failed"));
+
+            runtimeReady.complete(null);
+            assertEquals(0L, metrics.inflight("recording", "actor"));
+            assertEquals(1L, metrics.durationCount(
+                "recording", "actor", "failed"));
+        }
     }
 
     @Test

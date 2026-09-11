@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import net from 'node:net';
 import { test } from 'node:test';
 import {
   SERVICE_WIRE_MAGIC,
@@ -88,6 +89,30 @@ function descriptor(
     activeCapacityUsed: 0,
     pendingCapacityUsed: 0
   };
+}
+
+function nativeTestEndpoint(name: string): string {
+  return process.platform === 'win32'
+    ? 'tcp://127.0.0.1:0'
+    : `ipc:///tmp/${name}.sock`;
+}
+
+async function nativePrebindTestEndpoint(name: string): Promise<string> {
+  if (process.platform !== 'win32') return nativeTestEndpoint(name);
+  const server = net.createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    server.close();
+    throw new Error('Failed to reserve a Windows loopback test endpoint.');
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close(error => error === undefined ? resolve() : reject(error));
+  });
+  return `tcp://127.0.0.1:${address.port}`;
 }
 
 function rawServiceRuntime(
@@ -903,7 +928,9 @@ test('raw monitor consumes logical ready edges and peer termination, ignoring re
 });
 
 test('raw disconnect fences a late lifecycle generation after peer replacement', () => {
-  const endpoint = `ipc:///tmp/zlink-m6a-generation-fence-${process.pid}-${Date.now()}.sock`;
+  const endpoint = nativeTestEndpoint(
+    `zlink-m6a-generation-fence-${process.pid}-${Date.now()}`
+  );
   const runtime = rawServiceRuntime({
     descriptor: descriptor('local-generation-fence', endpoint)
   });
@@ -933,7 +960,9 @@ test('raw disconnect fences a late lifecycle generation after peer replacement',
 });
 
 test('raw disconnect tolerates a late native route removal after the peer is already gone', () => {
-  const endpoint = `ipc:///tmp/zlink-m6a-late-disconnect-${process.pid}-${Date.now()}.sock`;
+  const endpoint = nativeTestEndpoint(
+    `zlink-m6a-late-disconnect-${process.pid}-${Date.now()}`
+  );
   const runtime = rawServiceRuntime({
     descriptor: descriptor('local-late-disconnect', endpoint)
   });
@@ -1447,18 +1476,18 @@ test('ClientServer selection and classic fanout discovery use dedicated descript
 
 test('raw admission keeps Object Client-only pairs out of liveness and records NotRequired', async () => {
   const nonce = `${process.pid}-${Date.now()}`;
-  const leftDescriptor = {
+  let leftDescriptor: ServiceNodeDescriptor = {
     ...descriptor(
       'client-left',
-      `ipc:///tmp/zlink-m6a-client-left-${nonce}.sock`
+      nativeTestEndpoint(`zlink-m6a-client-left-${nonce}`)
     ),
     channels: [],
     objectRole: 'client' as const
   };
-  const rightDescriptor = {
+  let rightDescriptor: ServiceNodeDescriptor = {
     ...descriptor(
       'client-right',
-      `ipc:///tmp/zlink-m6a-client-right-${nonce}.sock`
+      nativeTestEndpoint(`zlink-m6a-client-right-${nonce}`)
     ),
     channels: [],
     objectRole: 'client' as const
@@ -1467,6 +1496,8 @@ test('raw admission keeps Object Client-only pairs out of liveness and records N
   const right = rawServiceRuntime({ descriptor: rightDescriptor });
   left.start();
   right.start();
+  leftDescriptor = left.topology.localDescriptor();
+  rightDescriptor = right.topology.localDescriptor();
   try {
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
@@ -1504,7 +1535,7 @@ test('raw admission keeps Object Client-only pairs out of liveness and records N
     objectCapabilities: []
   });
   backend.setBind(
-    `ipc:///tmp/zlink-m6a-client-monitor-${process.pid}-${Date.now()}.sock`
+    nativeTestEndpoint(`zlink-m6a-client-monitor-${process.pid}-${Date.now()}`)
   );
   backend.start();
   try {
@@ -1534,18 +1565,23 @@ test('raw admission keeps Object Client-only pairs out of liveness and records N
 
 test('raw runtime admits peers and completes node/channel requests once', async () => {
   const endpointNonce = `${process.pid}-${Date.now()}`;
-  const leftDescriptor = {
-    ...descriptor('m6a-left', `ipc:///tmp/zlink-m6a-left-${endpointNonce}.sock`),
+  let leftDescriptor: ServiceNodeDescriptor = {
+    ...descriptor('m6a-left', nativeTestEndpoint(`zlink-m6a-left-${endpointNonce}`)),
     channels: [
       { name: 'alpha', weight: 0 },
       { name: 'beta', weight: 50 }
     ]
   };
-  const rightDescriptor = descriptor('m6a-right', `ipc:///tmp/zlink-m6a-right-${endpointNonce}.sock`);
+  let rightDescriptor = descriptor(
+    'm6a-right',
+    nativeTestEndpoint(`zlink-m6a-right-${endpointNonce}`)
+  );
   const left = rawServiceRuntime({ descriptor: leftDescriptor });
   const right = rawServiceRuntime({ descriptor: rightDescriptor });
   left.start();
   right.start();
+  leftDescriptor = left.topology.localDescriptor();
+  rightDescriptor = right.topology.localDescriptor();
   try {
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
@@ -1613,7 +1649,7 @@ test('raw runtime admits peers and completes node/channel requests once', async 
     new ZLinkNodeRawBindingPort(),
     applicationJobQueue()
   );
-  backend.setBind(`ipc:///tmp/zlink-m6a-backend-${process.pid}-${Date.now()}.sock`);
+  backend.setBind(nativeTestEndpoint(`zlink-m6a-backend-${process.pid}-${Date.now()}`));
   backend.addChannelName('alpha');
   backend.start();
   try {
@@ -1648,13 +1684,13 @@ test('raw runtime admits peers and completes node/channel requests once', async 
 //  the native request path and never pass the application admission gate.
 test('terminal reply completion progresses while ordinary job flow is saturated', async () => {
   const endpointNonce = `${process.pid}-${Date.now()}`;
-  const leftDescriptor = descriptor(
+  let leftDescriptor = descriptor(
     'm6a-r6-left',
-    `ipc:///tmp/zlink-m6a-r6-left-${endpointNonce}.sock`
+    nativeTestEndpoint(`zlink-m6a-r6-left-${endpointNonce}`)
   );
-  const rightDescriptor = descriptor(
+  let rightDescriptor = descriptor(
     'm6a-r6-right',
-    `ipc:///tmp/zlink-m6a-r6-right-${endpointNonce}.sock`
+    nativeTestEndpoint(`zlink-m6a-r6-right-${endpointNonce}`)
   );
   const leftJobs = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration(
     { maxQueuedApplicationJobs: 1n },
@@ -1667,6 +1703,8 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
   const right = rawServiceRuntime({ descriptor: rightDescriptor });
   left.start();
   right.start();
+  leftDescriptor = left.topology.localDescriptor();
+  rightDescriptor = right.topology.localDescriptor();
   try {
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
@@ -1748,13 +1786,13 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
 
 test('normal receive pump carries application and liveness traffic on one route', async () => {
   const endpointNonce = `${process.pid}-${Date.now()}`;
-  const leftDescriptor = descriptor(
+  let leftDescriptor = descriptor(
     'completion-left',
-    `ipc:///tmp/zlink-m6a-completion-left-${endpointNonce}.sock`
+    nativeTestEndpoint(`zlink-m6a-completion-left-${endpointNonce}`)
   );
-  const rightDescriptor = descriptor(
+  let rightDescriptor = descriptor(
     'completion-right',
-    `ipc:///tmp/zlink-m6a-completion-right-${endpointNonce}.sock`
+    nativeTestEndpoint(`zlink-m6a-completion-right-${endpointNonce}`)
   );
   const left = rawServiceRuntime({
     descriptor: leftDescriptor,
@@ -1768,6 +1806,8 @@ test('normal receive pump carries application and liveness traffic on one route'
   });
   left.start();
   right.start();
+  leftDescriptor = left.topology.localDescriptor();
+  rightDescriptor = right.topology.localDescriptor();
   try {
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
@@ -1837,18 +1877,20 @@ test('normal receive pump carries application and liveness traffic on one route'
 
 test('one-sided endpoint-only client upgrades the provisional route before Ready', async () => {
   const endpointNonce = `${process.pid}-${Date.now()}`;
-  const providerDescriptor = descriptor(
+  let providerDescriptor = descriptor(
     'm6a-manual-provider',
-    `ipc:///tmp/zlink-m6a-manual-provider-${endpointNonce}.sock`
+    nativeTestEndpoint(`zlink-m6a-manual-provider-${endpointNonce}`)
   );
-  const clientDescriptor = descriptor(
+  let clientDescriptor = descriptor(
     'm6a-manual-client',
-    `ipc:///tmp/zlink-m6a-manual-client-${endpointNonce}.sock`
+    nativeTestEndpoint(`zlink-m6a-manual-client-${endpointNonce}`)
   );
   const provider = rawServiceRuntime({ descriptor: providerDescriptor });
   const client = rawServiceRuntime({ descriptor: clientDescriptor });
   provider.start();
   client.start();
+  providerDescriptor = provider.topology.localDescriptor();
+  clientDescriptor = client.topology.localDescriptor();
   try {
     client.connectPeerEndpoint(providerDescriptor.advertisedEndpoint);
     await pollUntil(async () => {
@@ -1919,11 +1961,11 @@ async function verifyBilateralEndpointRequests(
   const endpointNonce = `${process.pid}-${Date.now()}`;
   const leftDescriptor = descriptor(
     'm6a-endpoint-left',
-    `ipc:///tmp/zlink-m6a-endpoint-left-${endpointNonce}.sock`
+    await nativePrebindTestEndpoint(`zlink-m6a-endpoint-left-${endpointNonce}`)
   );
   const rightDescriptor = descriptor(
     'm6a-endpoint-right',
-    `ipc:///tmp/zlink-m6a-endpoint-right-${endpointNonce}.sock`
+    await nativePrebindTestEndpoint(`zlink-m6a-endpoint-right-${endpointNonce}`)
   );
   const left = rawServiceRuntime({ descriptor: leftDescriptor });
   const right = rawServiceRuntime({ descriptor: rightDescriptor });
@@ -2005,7 +2047,7 @@ test('local channel requests preserve successful and failed terminal results', a
   const local = rawServiceRuntime({
     descriptor: descriptor(
       'm6a-local-channel',
-      `ipc:///tmp/zlink-m6a-local-channel-${process.pid}-${Date.now()}.sock`
+      nativeTestEndpoint(`zlink-m6a-local-channel-${process.pid}-${Date.now()}`)
     )
   });
   local.start();

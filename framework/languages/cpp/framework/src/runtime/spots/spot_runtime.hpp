@@ -52,6 +52,9 @@ namespace runtime = zlink::framework::runtime;
 namespace service = zlink::framework::runtime::host;
 
 class actor_dispatch_admission_token_t;
+class spot_context_state_t;
+
+extern thread_local constinit const spot_context_state_t *current_callback_context;
 
 using instance_spot_idle_eviction_callback_t = std::function<bool (
   const spot_id_t &, std::string_view, std::uint64_t, std::uint64_t, std::function<bool ()>)>;

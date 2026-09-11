@@ -81,12 +81,10 @@ class socket_poller_t
         void *user_data;
         short events;
         bool terminal_event_delivered;
-#if !defined ZLINK_HAVE_WINDOWS
         //  Exactly one poller per mailbox uses its primary descriptor. Every
         //  concurrent registration uses this poller's private signaler.
         bool primary_notification;
         bool secondary_notification;
-#endif
 #if defined ZLINK_POLL_BASED_ON_POLL
         int pollfd_index;
 #endif
@@ -184,23 +182,20 @@ class socket_poller_t
     output_readiness_t _output_readiness;
 
 #if defined ZLINK_HAVE_WINDOWS
-    // Windows cannot poll the signaler sockets as cheaply as Linux can poll
-    // eventfd descriptors. Socket-only pollers use one event shared by all
-    // registered mailboxes; pollers containing raw descriptors keep the
-    // WSAPoll path below.
+    // Socket-only pollers use one event shared by all registered mailboxes.
+    // Mixed pollsets use the descriptor path below so sockets and raw sources
+    // remain in one platform wait.
     signaler_t _windows_signaler;
     bool _windows_signaler_active;
-#else
+#endif
     // Socket readiness has its own wakeup channel. The mailbox's primary
-    // signaler remains owned by the command executor when async dispatch is
-    // active, so a poller must never compete for that descriptor.
-    //  Created on first use only. The descriptor pollset path never needs it,
-    //  so an ordinary poll over sockets allocates no eventfd at all.
+    // descriptor remains the first-poller fast path. Concurrent registrations
+    // share this poller's private signaler, including Windows mixed pollsets.
+    // Created on first use only.
     signaler_t *_socket_signaler;
     bool _socket_signaler_active;
 #if defined ZLINK_POLL_BASED_ON_POLL
     int _socket_signaler_pollfd_index;
-#endif
 #endif
 
     //  List of sockets
@@ -214,12 +209,10 @@ class socket_poller_t
     int modify_item_user_data (items_t::iterator it_, void *user_data_);
     int remove_item (items_t::iterator it_);
     int collect_socket_event (item_t &item_, event_t *event_);
-#if !defined ZLINK_HAVE_WINDOWS
     signaler_t *ensure_socket_signaler ();
     void unregister_socket_notifications ();
     void unregister_socket_notification (item_t &item_);
     void drain_socket_signaler ();
-#endif
 
     //  Does the pollset needs rebuilding?
     bool _need_rebuild;

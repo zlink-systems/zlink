@@ -113,7 +113,7 @@ defined by the operation family accepted the message. Remote handler execution, 
 receipt, remote Spot queue acceptance, or application callback completion are not awaited.
 
 <a id="41-nodejs-provides-no-synchronous-blocking-terminator"></a>
-### 4.1 Node.js provides no synchronous blocking terminator (user decision, 2026-09-11)
+### 4.1 Node.js Provides No Synchronous Blocking Terminator
 
 The Node.js runtime is **single-threaded**. Blocking that thread leaves the framework with no way
 to deliver the completion. When a request's target handler lives in the same process, the caller
@@ -483,7 +483,7 @@ When the framework runtime consumes a binding's HWM-managed send family
 decides immediately from the returned `result`, waits on `admitted` only when
 `result == BACKPRESSURED`, and consumes `reply` for a request. This implements "wait
 only when blocked at HWM" precisely — until now a single stage could not distinguish
-admission from reply, so [three-stage backpressure](04-dispatch-and-worker/README.en.md)
+admission from reply, so [three-stage backpressure](04-application-job-queue-and-backpressure.en.md)
 waiting was imprecise. The framework's **public terminal does not expose backpressure**
 (§5, `Backpressured` is not a public result); this consumption lives only in the framework's
 internal implementation. Core send-completion notification drives the completion, so the

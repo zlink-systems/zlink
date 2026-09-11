@@ -2,11 +2,23 @@
 
 const { logs } = require('@opentelemetry/api-logs');
 const { LoggerProvider } = require('@opentelemetry/sdk-logs');
+const fs = require('node:fs');
+const path = require('node:path');
+const flowDirectory = process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR;
+const flowFile = flowDirectory === undefined ? undefined
+  : path.join(flowDirectory, `${process.pid}.flow.jsonl`);
+if (flowDirectory !== undefined) fs.mkdirSync(flowDirectory, { recursive: true });
 
 const records = [];
 const provider = new LoggerProvider({
   processors: [{
     onEmit(record) {
+      if (flowFile !== undefined) {
+        fs.appendFileSync(flowFile, JSON.stringify({
+          pid: process.pid, timestamp: new Date().toISOString(),
+          eventName: record.eventName, body: record.body, attributes: record.attributes
+        }) + '\n');
+      }
       const normalized = {
         eventId: record.eventName,
         severityNumber: record.severityNumber,

@@ -3,6 +3,7 @@
 #include <zlink/framework/contracts/eventing/health.hpp>
 
 #include <algorithm>
+#include <mutex>
 #include <utility>
 
 namespace zlink::framework::detail
@@ -11,6 +12,7 @@ namespace zlink::framework::detail
 class health_state_t
 {
   public:
+    mutable std::mutex mutex;
     std::vector<health_check_result_t> checks;
 };
 
@@ -92,6 +94,7 @@ health_builder_t &health_builder_t::add_hosted_service_check (std::string name)
 health_builder_t &
 health_builder_t::set_status (std::string name, health_status_t status, std::string message)
 {
+    const std::lock_guard lock (_state->mutex);
     auto found =
       std::find_if (_state->checks.begin (), _state->checks.end (),
                     [&] (const health_check_result_t &check) { return check.name == name; });
@@ -109,6 +112,7 @@ health_builder_t::set_status (std::string name, health_status_t status, std::str
 
 health_report_t health_builder_t::report () const
 {
+    const std::lock_guard lock (_state->mutex);
     health_report_t report;
     report.checks = _state->checks;
     for (const auto &check : report.checks) {
@@ -126,6 +130,7 @@ health_report_t health_builder_t::report () const
 health_builder_t &
 health_builder_t::add_check (std::string component, std::string name, health_check_scope_t scope)
 {
+    const std::lock_guard lock (_state->mutex);
     auto found =
       std::find_if (_state->checks.begin (), _state->checks.end (),
                     [&] (const health_check_result_t &check) { return check.name == name; });

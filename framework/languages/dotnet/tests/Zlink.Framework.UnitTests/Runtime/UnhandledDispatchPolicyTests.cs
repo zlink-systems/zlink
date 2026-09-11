@@ -1058,7 +1058,7 @@ public sealed partial class UnhandledDispatchPolicyTests
 
         public ZLinkBackendRouteReceived? RecvRoute(RecvFlags flags) => null;
 
-        public void OnDispatchEvent(Action<ZLinkBackendSpotDispatchInfo> handler)
+        public void OnDispatchEvent(Func<ZLinkBackendSpotDispatchInfo, (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain)> handler)
         {
         }
 

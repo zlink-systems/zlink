@@ -287,8 +287,8 @@ result == BACKPRESSURED → 바인딩이 payload를 보관하고 WRITABLE에서 
 |---|---|---|
 | Java | **A** | 2차 job 진행 중. **36셀 before/after 측정 통과** — send-saturation before 73,084~77,556 / after 73,700~77,195, request-backpressure p99 양쪽 0.44~0.60 ms, `peak_in_flight`(bp-4096) before 25/58/63 · after 67/28/37. **1차의 −32%도 #47의 깊이 폭증(1,101)도 없다** |
 | .NET | **A** | job 진행 중. 기준선 측정 완료 |
-| Node | **B** | 미착수. 수정 지점은 `node-raw-binding-port.ts:247,300` — 항상 `.submit().admitted`를 await 한다 |
-| C++ | **B** | 미착수 |
+| Node | **B** | **완료·머지**(`af5df22136`). `node-raw-binding-port.ts` 두 send가 `result==Backpressured`일 때만 admitted await. 깊이-상한 테스트(OK 1024회 깊이≤1) 추가, framework 1692 테스트 통과. same-machine A/B(perf 큐): send-saturation 1024 +1.20%, 4096 −1.11% = **무회귀**(Java −24~32% 미재현, 불변 Promise). |
+| C++ | **B** | **완료·머지**(`bb264d7517`). `raw_dealer_port.cpp`·`raw_route_port.cpp` OK면 co_return(공유 completion source 제거). 깊이-상한 테스트(깊이==0), ContractTests·-Wall 클린. A/B(raw 불변식 completed==received 검증): 1024 +1.58%, 4096 +1.56% = **무회귀**. grpc/protobuf 1.51.1 툴체인 non-sudo 구성으로 측정(bench rejection-counter gap #158은 우회, 미수정). |
 
 B에게 넘긴 1차 기각 맥락 네 가지는 **Issue #151 코멘트**에 적었다 —
 ① 공유 객체가 가변이면 안 된다(Node `Promise.resolve()`는 불변이라 안전, C++은 확인 필요)
@@ -341,6 +341,130 @@ Node 바인딩은 같은 자리에서 `Promise.resolve()`를 공유하는데 **P
 
 C++ metric이 debug에서만 발행되는 것(`host_capacity_runtime.hpp:150`이 같다)은 **기존 관례**이며
 job 잘못이 아니다. **#173**으로 분리했다 — .NET은 `Meter` counter라 항상 발행한다.
+
+### DI scope — 내 요약이 스펙보다 강했다 (사용자 지적 2026-09-11)
+
+#48 제목과 항목 7에 **"DI scope를 제거한다"**고 썼는데 **틀린 표현이다.**
+메시지마다 scope를 만드는 것은 ASP.NET·NestJS의 정상 패턴이고 **스펙도 그 의미를 유지하라고 한다.**
+
+`01-execution/08-messaging-hot-path.ko.md` §4.3:
+> **handler instance 조회와 DI scope는 W1~W3 안에서 상수 시간이다.**
+> **scoped handler의 의미는 유지하되**, scope 생성과 조회가 record마다 컨테이너를 탐색하지 않도록
+> **활성화 경로를 캐시한다.**
+
+**요구는 "없애기"가 아니라 "상수 시간으로 만들기"다.** 제목을 고쳤다 →
+*"...record별 task를 제거하고 **DI 활성화를 상수 시간으로 만든다**"*.
+
+#### 4언어 현황 (감독 확인)
+
+| 언어 | record마다 scope | 활성화 | lane 건너감 | 판정 |
+|---|---|---|---|---|
+| **.NET** | `CreateAsyncScope()` (`ZLinkHandlerDispatcher.cs:59`) | **reflection** | **예** | **문제** |
+| **C++** | 없음 — 등록 시 lambda가 `services.get_required<TOwner>()`를 캡처(`handler_registry.hpp:99-103`) | 상수 시간 | 아니오 | 정상 |
+| **Java** | core dispatch에 없음. Spring 통합은 `spring-boot-starter`로 분리 | — | — | 정상 |
+| **Node** | core dispatch에 없음. NestJS 통합은 `packages/nestjs`로 분리 | — | — | 정상 |
+
+**.NET 고유 문제다.** 그리고 비싼 것은 scope 생성이 아니다.
+
+```csharp
+// ZLinkScopedHandlerInstanceOwner.cs:21-35
+public object Resolve(Type handlerType)
+{
+    return AwaitStateLane(_lane.RunAsync(() =>          // ← lane 왕복 + 호출 thread blocking
+    {
+        if (_fallbackInstances.TryGetValue(handlerType, out var existing)) return existing;
+        var created = ActivatorUtilities.CreateInstance(Services, handlerType);   // ← reflection
+        ...
+```
+
+세 가지가 겹친다 — **lane 왕복**(#48 항목 1의 "왕복 14회" 중 하나), **reflection**, 그리고
+**캐시가 한 번도 적중하지 않는다**(`ZLinkHandlerDispatcher.cs:60`이 scope마다 새 owner를 만들어
+record마다 빈 상태로 시작).
+
+**C++이 참고다** — 등록 시점에 `service_provider_t&`를 받는 invoker lambda를 만들어 캡처해 두고
+record마다는 실행만 한다. 스펙이 말하는 "활성화 경로를 캐시한다"가 그것이다.
+
+**#5·#6·#7 진단 브리프에 쓸 문장:** "DI scope를 제거한다"가 아니라
+**"활성화를 상수 시간으로 만들고 DI 해석이 state lane을 건너가지 않게 한다"**.
+전자로 쓰면 job이 scoped 의미를 없애는 방향으로 간다.
+
+### C++ 측정 경로가 열렸다 (2026-09-11) — 네 가지가 막고 있었다
+
+**`ctest --preset linux-ninja-release -L 'framework-unit|framework-contract'` → 65/65, 실패 0.**
+C++이 처음으로 완전히 깨끗하다. 오늘 이전에는 최대 55/65였다.
+
+| 막고 있던 것 | 해결 |
+|---|---|
+| **#202** protobuf 33.x에서 codec이 컴파일 안 됨 → Release 8개 대상 "Not Run" | PR #214. `GetTypeName()` 반환형이 `const std::string&`→`absl::string_view`로 바뀐 것. 지원 범위 3.21.12~33.x를 `backend-dependency-policy` §8에 명시(사용자 승인) |
+| **#182** m6b가 부하에서 깨져 판정을 **세 번** 오염 | PR #211. 실시간 timer 단언 → 이벤트 소비 관측. **2 CPU + 부하 3에서 20/20** |
+| **#173-A** metric이 debug 로그에서만 발행 → 읽으려면 측정이 **3.14% 느려짐** | PR #215. log 게이트 3곳 제거. 기본 레벨에서 `246,312 = 246,312 + 0` rc=0 |
+| **#158** 벤치가 53% 유실을 통과시킴 | PR #183 + #215로 닫힘 |
+
+**#7(C++ 0.90) 판정을 이제 깨끗한 조건에서 할 수 있다.**
+
+### #77 — macOS 전용이 아니었다. Node binding의 mailbox FD edge 유실
+
+0.19.0으로 이월했다가 **이 리눅스 기계에서 재현**해 되돌렸다(전체 suite 안에서 실패, 단독 24회 중 1회).
+
+**원인(Core 소스로 확정): `send`·`recv`도 mailbox FD edge를 소진한다.**
+`setReadableHandler`의 watch가 그 edge에 의존하므로 **send 한 번이 대기 중인 수신 readiness를 지웠다.**
+
+`102`의 정체도 밝혔다 — Framework `RequestResult.NotFound`이고 Channel 선택 실패가 즉시 `102/0`
+completion을 만든다. "peer가 ready가 되지 않았다"와 일관된다.
+
+**왜 지금 드러났나:** `setReadableHandler`는 PR #168(#111)에서 들어갔다. 그 전에는 이 watch가
+send backpressure 재제출에만 쓰였고(`byToken.size !== 0` 조건), #111이 수신 readiness까지 같은
+watch로 몰았다. **밑에 있던 mailbox edge 의미가 그때 표면화됐다.**
+
+결과: PR #216. `npm test` **30/30회 통과, `102` 실패 0회**(고치기 전 12회 중 4회).
+
+**후속 spec gap: `ZLINK_OPT_FD`의 edge 소진 의미가 Core 스펙에 없다**
+(`core/doc/spec/core/socket/README.ko.md:353-354`에 이름과 타입만). 어떤 연산이 edge를 소진하는지
+규정이 없어 아무도 몰랐다. 절차(문안 → codex 리뷰 → 사용자 승인 → 전 언어)를 밟을 대상이다.
+
+### 스펙 변경 절차 (사용자 지시 2026-09-11)
+
+> 스펙 상세화가 필요한건 스펙 상세화를 하고 codex 리뷰하고, 나에게 승인 받고,
+> 모든 framework에 동일하게 적용해야해
+
+**오늘 두 건을 이 절차로 처리했고, 두 번 다 리뷰가 감독 초안의 오류를 잡았다.**
+
+| 스펙 | 리뷰가 잡은 것 |
+|---|---|
+| **제출 stage 격리**(PR #185, `async-coroutine-policy` `#submission-stage-isolation`) | "한 번의 `cancel()`이 오염시킨다"가 **틀렸다** — 성공 완료된 `CompletableFuture`의 `cancel(true)`는 `false`를 반환하고 상태를 안 바꾼다. 실제 수단은 `obtrudeException()`. Go는 공개 채널이 없고, Rust의 move는 내부 `Arc` 공유의 부재를 뜻하지 않으며, C++의 `shared_ptr`는 금지 대상이 아니다(제약할 것은 `_consumed` 공유). **현재 7언어에 위반 없음 — 예방 규범이다.** |
+| **metric 기록의 log 독립성**(PR #208, `02-runtime-metrics` §2.1) | "구독자가 있으면"이 **4언어 어디도 그 개념이 아니다.** "구독 이전 이력 보존"은 .NET `Enabled`·Java NOOP sink·Node 위임과 충돌. "C++ 안에서도 술어가 둘"은 **틀렸다**(`enabled()`는 wrapper). tracing §4가 이미 일부를 정하고 있었다. **그리고 전수 조사로 C++ 8개·Java 6개 계기 누락을 찾았다.** |
+
+**교훈: 감독 단독 문안은 사실 오류를 담는다.** 7언어를 다 열어보지 않고 표를 쓰면 추측이 섞인다.
+
+### 측정 방법론 — 3-run으로 판정하지 마라 (2026-09-11, 두 번 당하고 배움)
+
+**같은 실수를 Java #151과 .NET #151에서 두 번 했다.**
+
+| | 1차 판정 (3-run) | 2차 재측정 | 실제 |
+|---|---|---|---|
+| Java #151 | send −24~32% → **기각** | +0.34% / +2.90% | **회귀 없음.** 재현 안 됨 |
+| .NET #151 | 깊이 +9%, 처리량 −2% → **되돌려보냄** | 처리량 +8%·+7.8%·+4.2%, request p99 **−34%**, mean in-flight **−22%** | **전부 개선** |
+
+**두 경우 모두 "회귀"가 측정 잡음이었다.** 그리고 두 경우 모두 **내 검증 빌드가 같은 기계에서 돌고 있었다** —
+Java 1차 때 load가 21까지 갔다. 게이트 기준은 10이다.
+
+**규칙:**
+1. **판정 측정은 최소 5회, 교대(`start B then A`)로 한다.** 3회로는 request-backpressure 셀의 폭
+   (p99 119~224 ms, peak 6,600~7,900)을 가를 수 없다.
+2. **측정 중에는 내 검증 빌드를 돌리지 않는다.** codex job도 비운다.
+3. **`peak_in_flight`만 보지 말고 `mean_in_flight`와 함께 본다.** .NET 2차에서 peak 최댓값은
+   7,628→8,738로 늘었는데 **mean은 1,578→1,231로 줄고 p99는 −34%**였다. peak 하나로는 반대 결론이 난다.
+4. 오류·abandoned가 0이 아닌 셀은 처리량 비교에서 제외한다(이건 지키고 있었다).
+
+**#47 기각도 이 기준으로 다시 봐야 한다** — 당시 after 7 run / before 4 run이었고 교대가 아니었다.
+
+### #12 — 0.90의 분모가 무너져 있었다 (2026-09-11 해결)
+
+Java raw `request-backpressure`가 **0.2~0.4 ops/s**였다. 원인은 벤치 raw 클라이언트가 poller 없이
+tight loop로 제출만 하고 완료를 binding runtime pump에 맡긴 것이다. `PerfMultiSocketReqRep` 구조로
+바꾸니 **5,929~7,981 ops/s** — 약 2만 배다.
+
+**이 숫자가 0.90 판정의 분모다.** 고치기 전에 쟀다면 framework가 raw보다 수천 배 빨라 보였다.
 
 ### 부하가 판정을 오염시킨다 — 내가 당했다
 
@@ -509,3 +633,85 @@ bash scripts/perf/perf-ticket.sh submit -p 1 -o supervisor -d '<설명>' -- <명
 유지: `zlink-47-*`(#47 판정 보류) · `zlink-48-*`(#48b 실행 중) · `zlink-49-*`(#49 리뷰 대기) ·
 `zlink-50-*`(#50 리뷰 대기) · `zlink-13-bench-pairing`(#13 리뷰 대기) · `zlink-99-*`(#99 실행 중) ·
 `zlink-16-*`(PR #118) · `zlink-10-*`·`zlink-97-*`(Refs PR이라 유지) · `zlink-12-*`(B의 #90 base).
+
+## 9. 2026-09-11 후반 — 0.18.0 비성능 작업 정리
+
+성능 8건(#5·#6·#7·#45·#47·#48·#50·#14)은 **사용자와 함께 측정하기로 합의**해 남겨뒀다.
+그 앞을 막던 것들을 이 구간에 정리했다.
+
+| PR | 이슈 | 내용 |
+|---|---|---|
+| #219 | #197 | 7언어 결과 객체 선언을 구현에 맞춤 |
+| #220 | — | §4.3 DI 해석 비용 경계 재작성 |
+| #222 | #221 | 문서 계약 검증기 20건 실패 해소 |
+| #224 | #173-B | C++ 누락 계기 8개 구현 |
+| #225 | #171 | .NET 순서 결함 2건 |
+| #227 | #173-C | Java 누락 계기 → 4언어 계기 집합 일치 |
+
+### 9.1 `zlink.mesh_node.*` 계기는 이제 4언어가 같다
+
+제품 소스 기준 9개다. **Java 트리를 통째로 grep하면 `multicast.*` 5개가 더 나오는데 발행 코드가
+아니다** — "발행되지 않아야 한다"를 검사하는 E2E absence 시나리오(`MonBPublishMonitoringAbsence*`)의
+문자열이고 .NET·C++에도 있다. 언어 간 대조는 `src/main`·`src/`로 좁혀서 한다.
+
+### 9.2 #171은 타이밍이 아니라 순서 결함이었다
+
+둘 다 "관측 가능한 상태를 만들기 전에 관측자를 깨운다"는 모양이다.
+
+- **Multicast**: idle 카운트 증가 신호가 `finally`에서 락을 다시 잡아 나갔다. 깨어난 대기자가
+  용량을 0으로 읽었다.
+- **Handover**: `peer.Admitted`(= 우리 Admit **송신**이 수락됐는가)를 **ingress 인증 19곳**이 썼다.
+  상대가 Admit을 받고 되보낸 트래픽이 우리 플래그가 뒤집히기 전에 도착해 버려졌다.
+
+ingress 인증은 `_peersByRid` 소속으로 옮겼다. 그 근거가 성립하려면 소속이 정확해야 하고,
+**거부 경로가 이제 무조건 인덱스에서 제거한다**(`RejectPeerAdmissionUnderLock`). 종전에는
+`_peersByIntent.ContainsKey` 조건이 붙은 조건부 제거였다.
+
+### 9.3 #143 C++ — 사용자 결정으로 이음매를 만든다
+
+Java(#108)는 `ZLinkStateLane(Executor)`에 세는 Executor를 주입해 셌다. `Executor`가 interface라서
+된다. C++의 `state_lane_t (offload_executor_t &)`는 같은 모양이지만 **`offload_executor_t`에
+virtual이 하나도 없어** 상속해도 정적 디스패치다.
+
+**사용자 승인 2026-09-11**: virtual을 추가한다. 조건은 다음과 같다.
+
+- **소멸자도 virtual로 만든다.** `unique_ptr<offload_executor_t>`(`channel_host_service.cpp:385`),
+  `shared_ptr<offload_executor_t>`(`mesh_node_host_service.hpp:175`) 보관처가 있어, 함수만 virtual로
+  만들면 파생 객체가 저기 들어가는 순간 미정의 동작이다.
+- virtual 범위는 관측에 필요한 최소로, 근거를 남긴다.
+- **성능을 변경 전후로 측정**한다. 진짜 비용은 vtable이 아니라 **LTO 인라인이 막히는 것**이다.
+  유의미한 저하면 멈추고 수치와 함께 보고한다.
+
+1차 시도(CMake 옵션 + child build)는 gate가 70.5초 → 282.8초(4.01배)가 되어 폐기했다.
+
+### 9.4 감독 판독 오류 — 이 구간에 7건
+
+전부 **"분기·문자열의 존재"를 "실제 동작"으로 바꿔 쓴 것**이다.
+
+| 내가 쓴 것 | 실제 |
+|---|---|
+| .NET Resolve는 lane 왕복 + blocking | `ZLinkStateLane.cs:78-93` mailbox가 비면 **인라인 실행** |
+| C++은 등록 시점에 instance 캡처 | lambda 캡처는 `[method]`뿐, `get_required`는 dispatch 때 |
+| Java·Node core dispatch에 DI 없음 | core가 dispatch마다 activator·scope 호출 |
+| `state_lane` 이음매로 C++도 셀 수 있다 | `offload_executor_t`가 전부 비가상이라 불가 |
+| virtual은 0.90 캠페인에 역행 | 이미 `std::function` 타입 소거를 거친다. 한계 비용 작음 |
+| Docker가 안 떠 있어 테스트 실패 | Docker 정상. 빈 컨테이너 목록을 오독. 실제 원인은 `ZLINK_LOCAL_PACKAGE_ROOT` 미전달 |
+| Java에만 multicast 계기 5개 | E2E absence 시나리오 문자열 |
+
+**성능·비용 판정을 쓰기 전에 "이 분기를 언제 타는가"에 답한다.** 답하지 못하면 쓰지 않는다.
+
+### 9.5 sub-agent 모델 배정을 AGENTS.md §2.1로 되돌렸다
+
+캠페인 내내 모든 job을 `astra --effort xhigh`로 돌렸다. "codex astra 를 쓸때는 xhigh 로 사용해"는
+**astra를 쓸 때의 effort** 규칙이지 astra를 기본으로 쓰라는 뜻이 아니었다.
+
+기본은 `sol`+`high`. 문서 정정·정해진 패턴 적용은 `terra`/`luna`. `astra`는 **원인 가설이 아예 없는
+진단**과 계약·사양 충돌 해석에만. 실행 중인 job은 모델을 바꾸려고 재투입하지 않는다.
+
+### 9.6 C++ 게이트 명령
+
+`ctest --preset linux-ninja-release -L 'framework-unit|framework-contract'` — 현재 **66/66**.
+
+전체 `ctest`(87개)를 돌리면 자체 vcpkg install·패키지 소비 테스트가 포함된다. 그리고
+**`VCPKG_ROOT`와 `ZLINK_LOCAL_PACKAGE_ROOT`를 export 하지 않으면** 자식 configure가 Core `zlink`
+패키지를 못 찾아 `tooling_contract`가 실패한다. 새 셸마다 넣는다.

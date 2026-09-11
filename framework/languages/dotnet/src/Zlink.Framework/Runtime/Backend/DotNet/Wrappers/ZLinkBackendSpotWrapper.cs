@@ -119,7 +119,7 @@ internal sealed class ZLinkBackendSpotWrapper :
         return _state.Routes.TryDequeue(out var route) ? route : null;
     }
 
-    public void OnDispatchEvent(Action<ZLinkBackendSpotDispatchInfo> handler)
+    public void OnDispatchEvent(Func<ZLinkBackendSpotDispatchInfo, (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain)> handler)
     {
         _pump.SetDispatchHandler(SpotId, handler);
     }

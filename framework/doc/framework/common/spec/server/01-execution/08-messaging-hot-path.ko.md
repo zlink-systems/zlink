@@ -228,8 +228,43 @@ record를 처리한다.
 ([Handler turn 「1」](02-handler-turn-and-execution-gate.ko.md#1-queue와-gate-분리-원칙))은 그대로이고,
 다른 gate의 turn은 여러 worker에서 나란히 진행한다. worker 하나로 직렬화해 전환을 줄이는 구현은 위반이다.
 
-**handler instance 조회와 DI scope는 W1~W3 안에서 상수 시간이다.** scoped handler의 의미는 유지하되,
-scope 생성과 조회가 record마다 컨테이너를 탐색하지 않도록 활성화 경로를 캐시한다.
+**Handler instance 조회와 DI scope 준비는 W1~W3 안에서 상수 시간이며, 이를 수행하는 application
+worker의 실행 자원에 별도 DI 실행 단계를 추가하지 않는다.** Handler·filter와 dependency의 수명은
+[Framework API 「10」·「11」](../00-foundation/06-framework-api.ko.md)이 정한다. Process-level handler
+dispatch마다 새 scope를 만들고, 그 dispatch의 handler와 filter에 같은 scoped dependency를 제공한다.
+비용을 줄이려고 dispatch 사이에 그 instance나 scoped dependency를 공유하지 않는다.
+
+- **생성 절차를 미리 결정해 재사용한다.** Handler·filter의 constructor와 dependency 연결 방법은
+  등록·구성 준비 때 결정하고, 그 등록을 쓰는 dispatch들이 factory·invoker 또는 그에 해당하는 생성
+  절차를 재사용한다. Record마다 등록 후보를 훑거나, constructor를 다시 고르거나, reflection
+  metadata로 dependency 연결을 다시 짜지 않는다. 미리 정한 service key로 descriptor와 현재 scope의
+  dependency를 바로 조회하고 필요한 새 instance를 만드는 일은 허용한다. 재사용하는 생성 절차는 특정
+  scope의 provider나 scoped dependency instance를 들고 있지 않는다. Scope별 instance 저장소는 그
+  scope의 수명을 따르며, 생성 절차 재사용을 대신하지 못한다.
+- **instance를 얻으려고 실행 자원을 바꾸거나 blocking 대기를 만들지 않는다.** 적용 구간은 W1~W3에서
+  scope 생성이나 handler·filter 조회를 시작한 때부터 그 instance를 쓸 수 있게 된 때까지다. 그 준비
+  작업을 다른 state lane·queue·executor에 맡기거나, 준비 작업 자체를 뒤의 task·event-loop 작업으로
+  미뤘다가 재개하거나, 그 완료를 호출 thread에서 blocking으로 기다리지 않는다. 같은 호출 안에서
+  끝나는 lane의 상태 접근은 실행 자원 전환으로 세지 않는다. 이미 얻은 결과를 비동기 반환형으로
+  전달하는 것은 금지하지 않지만, 실제 instance를 만들기 전에 별도 DI 준비·완료 단계를 기다리는 것은
+  단순한 결과 전달이 아니다.
+
+여기서 상수 시간은 등록된 handler와 dependency 연결이 고정되었을 때 Framework의 조회·배선 비용에
+거는 조건이다. Application의 생성자·provider 업무 코드 전체에 절대적인 실행 시간 상한을 두는 뜻이
+아니다. 상태 분류·직렬화·비재진입과 완료 신호는
+[State ownership and lanes](06-state-ownership-and-lanes.ko.md)의 규칙을 그대로 따른다.
+
+이 준비 구간에는 handler·filter 업무 메서드의 실행과 그 await·Yield, terminal completion 뒤의 비동기
+정리가 들어가지 않는다. Filter가 await한 뒤 다음 instance 조회를 시작하면, 그 조회를 시작한
+application continuation의 실행 자원을 기준으로 같은 조건을 적용한다. Scope와 instance를 언제
+정리하는지와 정확히 한 번 정리할 의무는 Framework API 「10」·「11」을 따른다.
+
+Spot·Actor handler의 최초 생성과 dependency 해석은 Framework API 「11」이 정한 activation scope에서
+한다. 최초 활성화와 relocation 경로는 「5」와 각 lifecycle 계약을 따르고, 이미 활성화된 instance를
+W1~W3에서 조회하는 일에는 이 비용 경계를 적용한다.
+
+DI 통합은 core runtime에 둘 수도 있고 별도 package·확장에 둘 수도 있다. 어디에 있든 handler·filter를
+준비하려고 실행되는 adapter 코드까지 이 비용 경계와 Framework API 「10」·「11」의 수명 규칙을 적용한다.
 
 내부 확인 조건 — 준비된 owner 집합의 전이(비어 있음 → 채워짐)와 worker 깨우기 횟수가 일치하고, W1~W4
 사이에 record별 dispatch task·supervisor 등록이 없다는 것은 trace로 확인하는 white-box 불변 조건이다.
@@ -295,7 +330,7 @@ claim, I4의 전환, W1~W5의 묶음 처리라는 관찰 결과는 같으며, �
   `zlink-framework-<lang> / zlink-<lang>`가 request-serial·request-window·send-saturation 각각, payload
   1024·4096 각각에서 0.90 이상이며, 값은 집계기가 내는 3-run 중앙값의 비다. 이 0.90은 bench 규격 §7.2가
   request-backpressure에 두는 합격선 0.80과 별개로 이 문서가 확정한 합격선이다. 합격 여부는 이 비율
-  하나로 판정한다 — 비율이 0.90 미만이면 결함이고, 1을 넘는 값은 결함이 아니다(사용자 결정 2026-09-10).
+  하나로 판정한다 — 비율이 0.90 미만이면 결함이고, 1을 넘는 값은 결함이 아니다.
 - (d) **동시성**(측정 후보): request-window(100)에서 run마다 처리량 × 평균 지연으로 구한 평균 in-flight의 3-run
   중앙값이 90 이상이다.
 - (e) **소비율**(측정 후보): send-saturation에서 active 구간이 닫힌 시점부터 마지막 active record가 target에 수신된

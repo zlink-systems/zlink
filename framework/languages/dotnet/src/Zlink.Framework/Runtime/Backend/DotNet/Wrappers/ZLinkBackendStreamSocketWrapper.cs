@@ -131,7 +131,7 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         return _socket.Send(routingId)
             .Message(payload)
             .Async(cancellationToken)
-            .Admitted;
+            .EnsureAcceptedAsync();
     }
 
     public void DisconnectPeer(RoutingId routingId)

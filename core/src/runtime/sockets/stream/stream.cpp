@@ -279,12 +279,17 @@ void zlink::stream_t::xpipe_terminated (pipe_t *pipe_)
 
 }
 
-int zlink::stream_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
+int zlink::stream_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_,
+                                     pipe_t **target_out_,
+                                     bool *delay_out_)
 {
-    if (!peer_rid_ || peer_rid_->size != sizeof (uint32_t)) {
+    if (!peer_rid_ || peer_rid_->size != sizeof (uint32_t) || !target_out_
+        || !delay_out_) {
         errno = EINVAL;
         return -1;
     }
+    *target_out_ = NULL;
+    *delay_out_ = false;
 
     const uint32_t routing_id = get_uint32 (peer_rid_->data);
     fail_blocking_send_waits_for_logical_target (peer_rid_, ENOENT);
@@ -297,14 +302,18 @@ int zlink::stream_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
             // the disconnect request. The peer receives the pipe delimiter
             // only after those frames, which enables protocol-level closing
             // notifications without a timing workaround.
-            route_pipe->terminate (true);
-            terminated = true;
+            terminated = route_pipe->retain_lifetime_ref ();
+            if (terminated) {
+                *target_out_ = route_pipe;
+                *delay_out_ = true;
+            }
         }
     }
     if (terminated)
         return 0;
 
-    return terminate_out_pipe_by_routing_id (peer_rid_);
+    return prepare_out_pipe_termination_by_routing_id (peer_rid_,
+                                                        target_out_);
 }
 
 bool zlink::stream_t::packet_queue_at_limit () const

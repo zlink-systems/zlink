@@ -279,6 +279,71 @@ test('routed scheduler stops new submits at deadline and drains owned admission'
     assert.equal(result.sent, 1n);
     assert.ok(now >= 4n);
 });
+test('routed scheduler services async progress during an OK submit burst', async () => {
+    const sockets = [{ id: 0 }];
+    const payloads = [Buffer.alloc(64)];
+    const records = payloads.map((payload) => measurementParts(payload));
+    let now = 0n;
+    let replyDrains = 0;
+    let turns = 0;
+    const result = await runRoutedSendSendRounds({
+        sockets,
+        payloads,
+        measurementRecords: records,
+        routerClient: false,
+        msgSize: 64,
+        runId: 1,
+        activeStopNs: 130n,
+        sendDrainStopNs: 140n,
+        nowNs: () => now,
+        submit: () => {
+            now += 1n;
+            return {
+                result: zlink.SubmitResult.Ok,
+                admitted: Promise.resolve(),
+            };
+        },
+        drainReplies: async () => { replyDrains += 1; },
+        yieldTurn: async () => { turns += 1; }
+    });
+    assert.equal(result.sent, 130n);
+    assert.equal(replyDrains, 2);
+    assert.equal(turns, 2);
+});
+test('routed scheduler keeps polling while every admission is blocked', async () => {
+    const sockets = [{ id: 0 }];
+    const payloads = [Buffer.alloc(64)];
+    const records = payloads.map((payload) => measurementParts(payload));
+    let now = 0n;
+    let replyDrains = 0;
+    let releaseAdmission;
+    const admission = new Promise((resolve) => { releaseAdmission = resolve; });
+    const result = await within(runRoutedSendSendRounds({
+        sockets,
+        payloads,
+        measurementRecords: records,
+        routerClient: false,
+        msgSize: 64,
+        runId: 1,
+        activeStopNs: 3n,
+        sendDrainStopNs: 10n,
+        nowNs: () => now,
+        submit: () => ({
+            result: zlink.SubmitResult.Backpressured,
+            admitted: admission,
+        }),
+        drainReplies: async () => {
+            replyDrains += 1;
+            if (replyDrains === 2) {
+                now = 4n;
+                releaseAdmission();
+            }
+        },
+        yieldTurn: nextTurn
+    }));
+    assert.equal(result.sent, 1n);
+    assert.equal(replyDrains, 2);
+});
 test('routed server reply tracking has no 4096-operation application cap', async () => {
     const pendingTasks = new Set();
     const tasks = [];

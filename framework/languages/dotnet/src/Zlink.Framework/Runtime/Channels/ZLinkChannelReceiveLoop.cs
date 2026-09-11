@@ -265,7 +265,7 @@ internal sealed class ZLinkChannelReceiveLoop(
             await router.Send(sourceRid)
                 .Message(message)
                 .Async(cancellationToken)
-                .Admitted
+                .EnsureAcceptedAsync()
                 .ConfigureAwait(false);
             return true;
         }

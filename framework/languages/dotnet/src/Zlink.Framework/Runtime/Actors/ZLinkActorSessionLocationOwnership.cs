@@ -37,10 +37,49 @@ internal sealed partial class ZLinkActorSessionManager
         }
     }
 
+    internal async ValueTask NotifyMigratedSourceMembershipLeftAsync(
+        ZLinkActorRuntimeState state,
+        string handoffId,
+        CancellationToken cancellationToken)
+    {
+        if (state.Handoff.TryBeginSourceMembershipLeave(handoffId) is not { } completion)
+            return;
+        try
+        {
+            var actor = state.Actor
+                        ?? throw new InvalidOperationException(
+                            $"Actor '{state.ActorId}' lost its source before membership cleanup.");
+            if (state.LiveActivation is { } sourceActivation)
+                await sourceActivation.TryNotifyActorLeftAfterCommittedMembershipAsync(
+                        actor,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            else
+                await runtime.NotifyEntrySpotActorLeftAsync(
+                        actor,
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+        }
+        finally
+        {
+            // OnLeave is one-way. Report callback errors through the receiver,
+            // but completion (including failure) releases the source obligation.
+            completion.TrySetResult();
+        }
+    }
+
     public async ValueTask FinalizeMigratedSourceAsync(
         ZLinkActorRuntimeState state,
-        ZLinkBackendActorRef sourceActor)
+        ZLinkBackendActorRef sourceActor,
+        CancellationToken cancellationToken = default)
     {
+        // Spec 15 §4.2: commit does not complete source membership lifecycle.
+        // This is the retirement gate for Join and maintenance alike. A remote
+        // Join registers its one-way leave obligation at seal; keep the source
+        // instance and ingress/Message Follow state until its callback ends.
+        if (state.Handoff.SourceMembershipLeaveCompletion is { } leaveCompletion)
+            await leaveCompletion.WaitAsync(cancellationToken).ConfigureAwait(false);
+
         // The source stops owning disconnect cleanup, but its exact
         // bound-session fence remains available while Message Follow can
         // forward delayed frames to the target actor. Only a rebind or

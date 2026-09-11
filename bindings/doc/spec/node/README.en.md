@@ -905,14 +905,14 @@ references remain valid only until the next recv entry or `close()`. Before the 
 
 ```ts
 export interface SendSubmission {
-  result: SubmitResult;        // OK | BACKPRESSURED, submit-time snapshot (synchronous field)
-  admitted: Promise<void>;     // completed when result is OK
+  readonly result: SubmitResult;        // OK | BACKPRESSURED, submit-time snapshot (synchronous field)
+  readonly admitted: Promise<void>;     // completed when result is OK
 }
 
 export interface RequestSubmission {
-  result: SubmitResult;
-  admitted: Promise<void>;
-  reply: Promise<Message[]>;   // completes after successful admission
+  readonly result: SubmitResult;
+  readonly admitted: Promise<void>;
+  readonly reply: Promise<Message[]>;   // completes after successful admission
 }
 
 export interface SendSubmitOperation {
