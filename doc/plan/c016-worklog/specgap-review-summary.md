@@ -7,26 +7,26 @@ codex
 
 **(a) 계약 근거**
 
-- [06-monitoring.ko.md:69](/home/hep7hep7/project/zlink/core/doc/spec/core/06-monitoring.ko.md:69): `connection_id`는 “하나의 물리적 transport 시도를 식별하는 진단·correlation 값”이며 reconnect fence가 아니다.
-- [06-monitoring.ko.md:105](/home/hep7hep7/project/zlink/core/doc/spec/core/06-monitoring.ko.md:105): 같은 monitor의 commit 순서는 보장하지만, 서로 다른 connection의 wall-clock 순서는 보장하지 않는다. Queue는 bounded·lossy다.
-- [socket/README.ko.md:609](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/README.ko.md:609): socket close는 자원과 pending operation·unread completion을 정리한다. 이 계약은 모든 연결에서 `CLOSED` event를 받아야 한다고 규정하지 않는다.
+- [06-monitoring.ko.md:69](../../../core/doc/spec/core/06-monitoring.ko.md): `connection_id`는 “하나의 물리적 transport 시도를 식별하는 진단·correlation 값”이며 reconnect fence가 아니다.
+- [06-monitoring.ko.md:105](../../../core/doc/spec/core/06-monitoring.ko.md): 같은 monitor의 commit 순서는 보장하지만, 서로 다른 connection의 wall-clock 순서는 보장하지 않는다. Queue는 bounded·lossy다.
+- [socket/README.ko.md:609](../../../core/doc/spec/core/socket/README.ko.md): socket close는 자원과 pending operation·unread completion을 정리한다. 이 계약은 모든 연결에서 `CLOSED` event를 받아야 한다고 규정하지 않는다.
 - `CLOSED` enum은 있으나 transport별 발생 조건은 정의되어 있지 않다.
 
 **(b) 권고안과 구현·Framework의 관계**
 
 **inproc에 `CLOSED`를 추가하지 않는 방향은 타당합니다. 다만 “물리 transport(fd/listener) close”는 너무 넓습니다.**
 
-현재 `event_closed` 호출은 TCP/IPC/WS/TLS의 **connecter와 listener**에 있습니다. 이미 연결된 공통 ASIO engine의 오류·단절 경로는 [`asio_engine.cpp:1938`](/home/hep7hep7/project/zlink/core/src/runtime/engine/asio/asio_engine.cpp:1938)에서 `DISCONNECTED`를 냅니다. 따라서 “모든 fd 해제마다 `CLOSED`”로 정의하면 기존 network transport에도 추가 구현이 필요합니다.
+현재 `event_closed` 호출은 TCP/IPC/WS/TLS의 **connecter와 listener**에 있습니다. 이미 연결된 공통 ASIO engine의 오류·단절 경로는 [`asio_engine.cpp:1938`](../../../core/src/runtime/engine/asio/asio_engine.cpp)에서 `DISCONNECTED`를 냅니다. 따라서 “모든 fd 해제마다 `CLOSED`”로 정의하면 기존 network transport에도 추가 구현이 필요합니다.
 
-기존 identity 테스트도 연결 종료는 `READY → DISCONNECTED`, 실패한 접속 시도는 `CONNECT_DELAYED → CLOSED`로 대조합니다. [test_monitor_connection_identity.cpp:118](/home/hep7hep7/project/zlink/core/tests/integration/monitoring/test_monitor_connection_identity.cpp:118), [동일 파일:147](/home/hep7hep7/project/zlink/core/tests/integration/monitoring/test_monitor_connection_identity.cpp:147).
+기존 identity 테스트도 연결 종료는 `READY → DISCONNECTED`, 실패한 접속 시도는 `CONNECT_DELAYED → CLOSED`로 대조합니다. [test_monitor_connection_identity.cpp:118](../../../core/tests/integration/monitoring/test_monitor_connection_identity.cpp), [동일 파일:147](../../../core/tests/integration/monitoring/test_monitor_connection_identity.cpp).
 
 Framework는 inproc의 `CLOSED`를 필수로 기다리지는 않습니다.
 
-- .NET ClientServer는 `Disconnected`와 `Closed`를 모두 처리합니다. [ZLinkClientServerClientRuntime.cs:1018](/home/hep7hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkClientServerClientRuntime.cs:1018).
-- .NET Mesh는 `Disconnected`만 연결 후보 제거에 사용합니다. [ZLinkManagedMeshNode.cs:8643](/home/hep7hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs:8643).
-- Java Mesh는 두 event를 terminal 처리하고 endpoint별 후보 queue에서 항목을 제거합니다. `CLOSED`를 추가하면 같은 연결을 두 번 정리하지 않는지 검토해야 합니다. [ZLinkJavaRawMeshNode.java:6710](/home/hep7hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java:6710), [동일 파일:7157](/home/hep7hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java:7157).
+- .NET ClientServer는 `Disconnected`와 `Closed`를 모두 처리합니다. [ZLinkClientServerClientRuntime.cs:1018](../../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkClientServerClientRuntime.cs).
+- .NET Mesh는 `Disconnected`만 연결 후보 제거에 사용합니다. [ZLinkManagedMeshNode.cs:8643](../../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs).
+- Java Mesh는 두 event를 terminal 처리하고 endpoint별 후보 queue에서 항목을 제거합니다. `CLOSED`를 추가하면 같은 연결을 두 번 정리하지 않는지 검토해야 합니다. [ZLinkJavaRawMeshNode.java:6710](../../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java), [동일 파일:7157](../../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java).
 
-별도로 WS/TLS connecter는 event마다 endpoint pair를 생성하는 코드가 남아 있습니다. 이는 같은 attempt의 ID 유지 계약과 불일치할 가능성이 있는 **기존 구현 문제**이며, inproc `CLOSED`의 정책 선택과 분리해야 합니다. [WS:438](/home/hep7hep7/project/zlink/core/src/runtime/transports/ws/asio_ws_connecter.cpp:438), [TLS:411](/home/hep7hep7/project/zlink/core/src/runtime/transports/tls/asio_tls_connecter.cpp:411). 이번 검토에서는 실행 확인하지 않았습니다.
+별도로 WS/TLS connecter는 event마다 endpoint pair를 생성하는 코드가 남아 있습니다. 이는 같은 attempt의 ID 유지 계약과 불일치할 가능성이 있는 **기존 구현 문제**이며, inproc `CLOSED`의 정책 선택과 분리해야 합니다. [WS:438](../../../core/src/runtime/transports/ws/asio_ws_connecter.cpp), [TLS:411](../../../core/src/runtime/transports/tls/asio_tls_connecter.cpp). 이번 검토에서는 실행 확인하지 않았습니다.
 
 **(c) 대안 비교**
 
@@ -59,15 +59,15 @@ Framework는 inproc의 `CLOSED`를 필수로 기다리지는 않습니다.
 | endpoint 또는 logical RID 명시적 제거 | REQUEST는 `NOT_FOUND` |
 | responder의 reply 경로 | 같은 logical RID의 현재 ready pipe 사용. 물리 단절만으로 reply token을 무효화하지 않음 |
 
-근거: [socket/README.ko.md:159](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/README.ko.md:159), [동일 파일:1059](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/README.ko.md:1059), [동일 파일:1129](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/README.ko.md:1129), [07-router.ko.md:291](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/07-router.ko.md:291), [동일 파일:317](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/07-router.ko.md:317).
+근거: [socket/README.ko.md:159](../../../core/doc/spec/core/socket/README.ko.md), [동일 파일:1059](../../../core/doc/spec/core/socket/README.ko.md), [동일 파일:1129](../../../core/doc/spec/core/socket/README.ko.md), [07-router.ko.md:291](../../../core/doc/spec/core/socket/07-router.ko.md), [동일 파일:317](../../../core/doc/spec/core/socket/07-router.ko.md).
 
-[03-errors.ko.md:359](/home/hep7hep7/project/zlink/core/doc/spec/core/03-errors.ko.md:359)도 `TIMED_OUT`, `NOT_FOUND`, `NOT_CONNECTED`를 별개 결과로 정의합니다.
+[03-errors.ko.md:359](../../../core/doc/spec/core/03-errors.ko.md)도 `TIMED_OUT`, `NOT_FOUND`, `NOT_CONNECTED`를 별개 결과로 정의합니다.
 
 **(b) 권고안의 문제와 Framework 대조**
 
-첫째, **monitor 소비와 물리 종료를 구분해야 합니다.** Event가 queue에 있지만 아직 읽히지 않은 상태와, 이전 연결이 실제로 종료 중인 상태는 다릅니다. Lossy monitor 소비를 Core connect의 진행 조건으로 삼으면 안 됩니다. Polling 계약의 내부 command 처리·lost-wake 보장도 그대로 유지해야 합니다. [05-polling.ko.md:73](/home/hep7hep7/project/zlink/core/doc/spec/core/05-polling.ko.md:73).
+첫째, **monitor 소비와 물리 종료를 구분해야 합니다.** Event가 queue에 있지만 아직 읽히지 않은 상태와, 이전 연결이 실제로 종료 중인 상태는 다릅니다. Lossy monitor 소비를 Core connect의 진행 조건으로 삼으면 안 됩니다. Polling 계약의 내부 command 처리·lost-wake 보장도 그대로 유지해야 합니다. [05-polling.ko.md:73](../../../core/doc/spec/core/05-polling.ko.md).
 
-둘째, **기존 테스트는 “request가 이전 pipe로 갔다”를 직접 증명하지 않습니다.** Request는 disconnect→connect **이후** 제출됩니다. 따라서 disconnect 전에 admit된 pending request와 다른 사례입니다. 테스트 끝의 `reply_connection`은 opaque token 때문에 추론한 값이며, 성공한 reply만으로 request 송신 경로까지 같은 connection이었다고 입증할 수 없습니다. [test_socket_disconnect_progress_without_app_poll.cpp:447](/home/hep7hep7/project/zlink/core/tests/integration/test_socket_disconnect_progress_without_app_poll.cpp:447), [동일 파일:515](/home/hep7hep7/project/zlink/core/tests/integration/test_socket_disconnect_progress_without_app_poll.cpp:515).
+둘째, **기존 테스트는 “request가 이전 pipe로 갔다”를 직접 증명하지 않습니다.** Request는 disconnect→connect **이후** 제출됩니다. 따라서 disconnect 전에 admit된 pending request와 다른 사례입니다. 테스트 끝의 `reply_connection`은 opaque token 때문에 추론한 값이며, 성공한 reply만으로 request 송신 경로까지 같은 connection이었다고 입증할 수 없습니다. [test_socket_disconnect_progress_without_app_poll.cpp:447](../../../core/tests/integration/test_socket_disconnect_progress_without_app_poll.cpp), [동일 파일:515](../../../core/tests/integration/test_socket_disconnect_progress_without_app_poll.cpp).
 
 REJECT에서 새 연결이 **상대편의 아직 남은 동일 RID 등록**과 충돌하는 상황도 구분해야 합니다. 이는 local requester가 이미 제거한 pipe를 다시 선택했다는 주장과 다릅니다.
 
@@ -75,13 +75,13 @@ REJECT에서 새 연결이 **상대편의 아직 남은 동일 RID 등록**과 �
 
 > “그 endpoint의 close snapshot 또는 disconnect event를 받기 전에는 같은 endpoint에 새 connection을 만들지 않는다.”
 
-[06-wire-protocol.ko.md:335](/home/hep7hep7/project/zlink/framework/doc/framework/common/spec/server/02-channel-transport/06-wire-protocol.ko.md:335).
+[06-wire-protocol.ko.md:335](../../../framework/doc/framework/common/spec/server/02-channel-transport/06-wire-protocol.ko.md).
 
 실제 구현에도 차이가 있습니다.
 
-- .NET ClientServer는 terminal 관찰을 기다리고, 그동안 별도 poller를 돌립니다. [ZLinkClientServerClientRuntime.cs:1640](/home/hep7hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkClientServerClientRuntime.cs:1640).
-- Java ClientServer는 같은 lock 안에서 즉시 disconnect→connect합니다. [ZLinkChannelSocketRegistry.java:1091](/home/hep7hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkChannelSocketRegistry.java:1091).
-- .NET Channel/Mesh와 Java Channel의 ROUTER 구성에는 HANDOVER가 켜져 있습니다. [ZLinkChannelBundleFactory.cs:55](/home/hep7hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkChannelBundleFactory.cs:55), [ZLinkManagedMeshNode.cs:289](/home/hep7hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs:289), [ZLinkJavaSocketOptions.java:23](/home/hep7hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaSocketOptions.java:23).
+- .NET ClientServer는 terminal 관찰을 기다리고, 그동안 별도 poller를 돌립니다. [ZLinkClientServerClientRuntime.cs:1640](../../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkClientServerClientRuntime.cs).
+- Java ClientServer는 같은 lock 안에서 즉시 disconnect→connect합니다. [ZLinkChannelSocketRegistry.java:1091](../../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkChannelSocketRegistry.java).
+- .NET Channel/Mesh와 Java Channel의 ROUTER 구성에는 HANDOVER가 켜져 있습니다. [ZLinkChannelBundleFactory.cs:55](../../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkChannelBundleFactory.cs), [ZLinkManagedMeshNode.cs:289](../../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs), [ZLinkJavaSocketOptions.java:23](../../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaSocketOptions.java).
 
 Java/.NET 차이는 언어 구조상 불가피한 것으로 확인되지 않았습니다. **현재 Framework 계약과 구현의 불일치로 별도 판정할 사항**입니다. Core의 command progress 수정은 두 번째 poller의 필요성을 없앨 수 있지만, Framework의 교체 관찰 규칙까지 자동으로 없애지는 않습니다.
 
@@ -115,10 +115,10 @@ Framework wire spec의 관찰 대기 조항을 바꾸려면 별도 계약 정합
 
 **(a) 계약 근거**
 
-- [06-monitoring.ko.md:536](/home/hep7hep7/project/zlink/core/doc/spec/core/06-monitoring.ko.md:536): `connection_id`로 send·reply target을 지정하는 public API는 없다.
-- [socket/README.ko.md:287](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/README.ko.md:287): completion record는 operation의 `completion_id`, context, logical RID, 결과·payload를 제공한다.
-- [동일 파일:1124](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/README.ko.md:1124): `peer_rid`는 logical peer snapshot이며 reconnect 뒤 physical connection identity로 바뀌지 않는다.
-- [07-router.ko.md:294](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/07-router.ko.md:294): reply는 현재 ready Application 또는 Completion pipe를 사용한다.
+- [06-monitoring.ko.md:536](../../../core/doc/spec/core/06-monitoring.ko.md): `connection_id`로 send·reply target을 지정하는 public API는 없다.
+- [socket/README.ko.md:287](../../../core/doc/spec/core/socket/README.ko.md): completion record는 operation의 `completion_id`, context, logical RID, 결과·payload를 제공한다.
+- [동일 파일:1124](../../../core/doc/spec/core/socket/README.ko.md): `peer_rid`는 logical peer snapshot이며 reconnect 뒤 physical connection identity로 바뀌지 않는다.
+- [07-router.ko.md:294](../../../core/doc/spec/core/socket/07-router.ko.md): reply는 현재 ready Application 또는 Completion pipe를 사용한다.
 
 **(b) 모순 여부**
 
@@ -141,7 +141,7 @@ Framework의 physical fence 문제를 이 필드로 해결하려 하면 기존 �
 | **현재 API 유지** | ABI·binding 변경 없음. operation과 physical connection의 책임 구분 유지 | 특정 request의 물리 경로를 public API만으로 직접 입증할 수 없음 |
 | completion에 진단 필드 추가 | timeout·handover 분석과 회귀 검증에 도움 | 송신 admission ID·reply 수신 ID·lane·값 부재 의미를 구분해야 함. C layout, Core correlation 보관, C/C++/.NET/Java/Node/Rust/Python/Go binding 변환·계약·테스트 영향 |
 
-Completion은 caller의 `struct_size`를 검증하므로, 필드 추가를 단순한 무비용 확장으로 볼 수 없습니다. [socket/README.ko.md:1116](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/README.ko.md:1116).
+Completion은 caller의 `struct_size`를 검증하므로, 필드 추가를 단순한 무비용 확장으로 볼 수 없습니다. [socket/README.ko.md:1116](../../../core/doc/spec/core/socket/README.ko.md).
 
 **(d) 최종 의견**
 
@@ -169,26 +169,26 @@ tokens used
 
 **(a) 계약 근거**
 
-- [06-monitoring.ko.md:69](/home/hep7hep7/project/zlink/core/doc/spec/core/06-monitoring.ko.md:69): `connection_id`는 “하나의 물리적 transport 시도를 식별하는 진단·correlation 값”이며 reconnect fence가 아니다.
-- [06-monitoring.ko.md:105](/home/hep7hep7/project/zlink/core/doc/spec/core/06-monitoring.ko.md:105): 같은 monitor의 commit 순서는 보장하지만, 서로 다른 connection의 wall-clock 순서는 보장하지 않는다. Queue는 bounded·lossy다.
-- [socket/README.ko.md:609](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/README.ko.md:609): socket close는 자원과 pending operation·unread completion을 정리한다. 이 계약은 모든 연결에서 `CLOSED` event를 받아야 한다고 규정하지 않는다.
+- [06-monitoring.ko.md:69](../../../core/doc/spec/core/06-monitoring.ko.md): `connection_id`는 “하나의 물리적 transport 시도를 식별하는 진단·correlation 값”이며 reconnect fence가 아니다.
+- [06-monitoring.ko.md:105](../../../core/doc/spec/core/06-monitoring.ko.md): 같은 monitor의 commit 순서는 보장하지만, 서로 다른 connection의 wall-clock 순서는 보장하지 않는다. Queue는 bounded·lossy다.
+- [socket/README.ko.md:609](../../../core/doc/spec/core/socket/README.ko.md): socket close는 자원과 pending operation·unread completion을 정리한다. 이 계약은 모든 연결에서 `CLOSED` event를 받아야 한다고 규정하지 않는다.
 - `CLOSED` enum은 있으나 transport별 발생 조건은 정의되어 있지 않다.
 
 **(b) 권고안과 구현·Framework의 관계**
 
 **inproc에 `CLOSED`를 추가하지 않는 방향은 타당합니다. 다만 “물리 transport(fd/listener) close”는 너무 넓습니다.**
 
-현재 `event_closed` 호출은 TCP/IPC/WS/TLS의 **connecter와 listener**에 있습니다. 이미 연결된 공통 ASIO engine의 오류·단절 경로는 [`asio_engine.cpp:1938`](/home/hep7hep7/project/zlink/core/src/runtime/engine/asio/asio_engine.cpp:1938)에서 `DISCONNECTED`를 냅니다. 따라서 “모든 fd 해제마다 `CLOSED`”로 정의하면 기존 network transport에도 추가 구현이 필요합니다.
+현재 `event_closed` 호출은 TCP/IPC/WS/TLS의 **connecter와 listener**에 있습니다. 이미 연결된 공통 ASIO engine의 오류·단절 경로는 [`asio_engine.cpp:1938`](../../../core/src/runtime/engine/asio/asio_engine.cpp)에서 `DISCONNECTED`를 냅니다. 따라서 “모든 fd 해제마다 `CLOSED`”로 정의하면 기존 network transport에도 추가 구현이 필요합니다.
 
-기존 identity 테스트도 연결 종료는 `READY → DISCONNECTED`, 실패한 접속 시도는 `CONNECT_DELAYED → CLOSED`로 대조합니다. [test_monitor_connection_identity.cpp:118](/home/hep7hep7/project/zlink/core/tests/integration/monitoring/test_monitor_connection_identity.cpp:118), [동일 파일:147](/home/hep7hep7/project/zlink/core/tests/integration/monitoring/test_monitor_connection_identity.cpp:147).
+기존 identity 테스트도 연결 종료는 `READY → DISCONNECTED`, 실패한 접속 시도는 `CONNECT_DELAYED → CLOSED`로 대조합니다. [test_monitor_connection_identity.cpp:118](../../../core/tests/integration/monitoring/test_monitor_connection_identity.cpp), [동일 파일:147](../../../core/tests/integration/monitoring/test_monitor_connection_identity.cpp).
 
 Framework는 inproc의 `CLOSED`를 필수로 기다리지는 않습니다.
 
-- .NET ClientServer는 `Disconnected`와 `Closed`를 모두 처리합니다. [ZLinkClientServerClientRuntime.cs:1018](/home/hep7hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkClientServerClientRuntime.cs:1018).
-- .NET Mesh는 `Disconnected`만 연결 후보 제거에 사용합니다. [ZLinkManagedMeshNode.cs:8643](/home/hep7hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs:8643).
-- Java Mesh는 두 event를 terminal 처리하고 endpoint별 후보 queue에서 항목을 제거합니다. `CLOSED`를 추가하면 같은 연결을 두 번 정리하지 않는지 검토해야 합니다. [ZLinkJavaRawMeshNode.java:6710](/home/hep7hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java:6710), [동일 파일:7157](/home/hep7hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java:7157).
+- .NET ClientServer는 `Disconnected`와 `Closed`를 모두 처리합니다. [ZLinkClientServerClientRuntime.cs:1018](../../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkClientServerClientRuntime.cs).
+- .NET Mesh는 `Disconnected`만 연결 후보 제거에 사용합니다. [ZLinkManagedMeshNode.cs:8643](../../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs).
+- Java Mesh는 두 event를 terminal 처리하고 endpoint별 후보 queue에서 항목을 제거합니다. `CLOSED`를 추가하면 같은 연결을 두 번 정리하지 않는지 검토해야 합니다. [ZLinkJavaRawMeshNode.java:6710](../../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java), [동일 파일:7157](../../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java).
 
-별도로 WS/TLS connecter는 event마다 endpoint pair를 생성하는 코드가 남아 있습니다. 이는 같은 attempt의 ID 유지 계약과 불일치할 가능성이 있는 **기존 구현 문제**이며, inproc `CLOSED`의 정책 선택과 분리해야 합니다. [WS:438](/home/hep7hep7/project/zlink/core/src/runtime/transports/ws/asio_ws_connecter.cpp:438), [TLS:411](/home/hep7hep7/project/zlink/core/src/runtime/transports/tls/asio_tls_connecter.cpp:411). 이번 검토에서는 실행 확인하지 않았습니다.
+별도로 WS/TLS connecter는 event마다 endpoint pair를 생성하는 코드가 남아 있습니다. 이는 같은 attempt의 ID 유지 계약과 불일치할 가능성이 있는 **기존 구현 문제**이며, inproc `CLOSED`의 정책 선택과 분리해야 합니다. [WS:438](../../../core/src/runtime/transports/ws/asio_ws_connecter.cpp), [TLS:411](../../../core/src/runtime/transports/tls/asio_tls_connecter.cpp). 이번 검토에서는 실행 확인하지 않았습니다.
 
 **(c) 대안 비교**
 
@@ -221,15 +221,15 @@ Framework는 inproc의 `CLOSED`를 필수로 기다리지는 않습니다.
 | endpoint 또는 logical RID 명시적 제거 | REQUEST는 `NOT_FOUND` |
 | responder의 reply 경로 | 같은 logical RID의 현재 ready pipe 사용. 물리 단절만으로 reply token을 무효화하지 않음 |
 
-근거: [socket/README.ko.md:159](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/README.ko.md:159), [동일 파일:1059](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/README.ko.md:1059), [동일 파일:1129](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/README.ko.md:1129), [07-router.ko.md:291](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/07-router.ko.md:291), [동일 파일:317](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/07-router.ko.md:317).
+근거: [socket/README.ko.md:159](../../../core/doc/spec/core/socket/README.ko.md), [동일 파일:1059](../../../core/doc/spec/core/socket/README.ko.md), [동일 파일:1129](../../../core/doc/spec/core/socket/README.ko.md), [07-router.ko.md:291](../../../core/doc/spec/core/socket/07-router.ko.md), [동일 파일:317](../../../core/doc/spec/core/socket/07-router.ko.md).
 
-[03-errors.ko.md:359](/home/hep7hep7/project/zlink/core/doc/spec/core/03-errors.ko.md:359)도 `TIMED_OUT`, `NOT_FOUND`, `NOT_CONNECTED`를 별개 결과로 정의합니다.
+[03-errors.ko.md:359](../../../core/doc/spec/core/03-errors.ko.md)도 `TIMED_OUT`, `NOT_FOUND`, `NOT_CONNECTED`를 별개 결과로 정의합니다.
 
 **(b) 권고안의 문제와 Framework 대조**
 
-첫째, **monitor 소비와 물리 종료를 구분해야 합니다.** Event가 queue에 있지만 아직 읽히지 않은 상태와, 이전 연결이 실제로 종료 중인 상태는 다릅니다. Lossy monitor 소비를 Core connect의 진행 조건으로 삼으면 안 됩니다. Polling 계약의 내부 command 처리·lost-wake 보장도 그대로 유지해야 합니다. [05-polling.ko.md:73](/home/hep7hep7/project/zlink/core/doc/spec/core/05-polling.ko.md:73).
+첫째, **monitor 소비와 물리 종료를 구분해야 합니다.** Event가 queue에 있지만 아직 읽히지 않은 상태와, 이전 연결이 실제로 종료 중인 상태는 다릅니다. Lossy monitor 소비를 Core connect의 진행 조건으로 삼으면 안 됩니다. Polling 계약의 내부 command 처리·lost-wake 보장도 그대로 유지해야 합니다. [05-polling.ko.md:73](../../../core/doc/spec/core/05-polling.ko.md).
 
-둘째, **기존 테스트는 “request가 이전 pipe로 갔다”를 직접 증명하지 않습니다.** Request는 disconnect→connect **이후** 제출됩니다. 따라서 disconnect 전에 admit된 pending request와 다른 사례입니다. 테스트 끝의 `reply_connection`은 opaque token 때문에 추론한 값이며, 성공한 reply만으로 request 송신 경로까지 같은 connection이었다고 입증할 수 없습니다. [test_socket_disconnect_progress_without_app_poll.cpp:447](/home/hep7hep7/project/zlink/core/tests/integration/test_socket_disconnect_progress_without_app_poll.cpp:447), [동일 파일:515](/home/hep7hep7/project/zlink/core/tests/integration/test_socket_disconnect_progress_without_app_poll.cpp:515).
+둘째, **기존 테스트는 “request가 이전 pipe로 갔다”를 직접 증명하지 않습니다.** Request는 disconnect→connect **이후** 제출됩니다. 따라서 disconnect 전에 admit된 pending request와 다른 사례입니다. 테스트 끝의 `reply_connection`은 opaque token 때문에 추론한 값이며, 성공한 reply만으로 request 송신 경로까지 같은 connection이었다고 입증할 수 없습니다. [test_socket_disconnect_progress_without_app_poll.cpp:447](../../../core/tests/integration/test_socket_disconnect_progress_without_app_poll.cpp), [동일 파일:515](../../../core/tests/integration/test_socket_disconnect_progress_without_app_poll.cpp).
 
 REJECT에서 새 연결이 **상대편의 아직 남은 동일 RID 등록**과 충돌하는 상황도 구분해야 합니다. 이는 local requester가 이미 제거한 pipe를 다시 선택했다는 주장과 다릅니다.
 
@@ -237,13 +237,13 @@ REJECT에서 새 연결이 **상대편의 아직 남은 동일 RID 등록**과 �
 
 > “그 endpoint의 close snapshot 또는 disconnect event를 받기 전에는 같은 endpoint에 새 connection을 만들지 않는다.”
 
-[06-wire-protocol.ko.md:335](/home/hep7hep7/project/zlink/framework/doc/framework/common/spec/server/02-channel-transport/06-wire-protocol.ko.md:335).
+[06-wire-protocol.ko.md:335](../../../framework/doc/framework/common/spec/server/02-channel-transport/06-wire-protocol.ko.md).
 
 실제 구현에도 차이가 있습니다.
 
-- .NET ClientServer는 terminal 관찰을 기다리고, 그동안 별도 poller를 돌립니다. [ZLinkClientServerClientRuntime.cs:1640](/home/hep7hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkClientServerClientRuntime.cs:1640).
-- Java ClientServer는 같은 lock 안에서 즉시 disconnect→connect합니다. [ZLinkChannelSocketRegistry.java:1091](/home/hep7hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkChannelSocketRegistry.java:1091).
-- .NET Channel/Mesh와 Java Channel의 ROUTER 구성에는 HANDOVER가 켜져 있습니다. [ZLinkChannelBundleFactory.cs:55](/home/hep7hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkChannelBundleFactory.cs:55), [ZLinkManagedMeshNode.cs:289](/home/hep7hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs:289), [ZLinkJavaSocketOptions.java:23](/home/hep7hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaSocketOptions.java:23).
+- .NET ClientServer는 terminal 관찰을 기다리고, 그동안 별도 poller를 돌립니다. [ZLinkClientServerClientRuntime.cs:1640](../../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkClientServerClientRuntime.cs).
+- Java ClientServer는 같은 lock 안에서 즉시 disconnect→connect합니다. [ZLinkChannelSocketRegistry.java:1091](../../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkChannelSocketRegistry.java).
+- .NET Channel/Mesh와 Java Channel의 ROUTER 구성에는 HANDOVER가 켜져 있습니다. [ZLinkChannelBundleFactory.cs:55](../../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkChannelBundleFactory.cs), [ZLinkManagedMeshNode.cs:289](../../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs), [ZLinkJavaSocketOptions.java:23](../../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaSocketOptions.java).
 
 Java/.NET 차이는 언어 구조상 불가피한 것으로 확인되지 않았습니다. **현재 Framework 계약과 구현의 불일치로 별도 판정할 사항**입니다. Core의 command progress 수정은 두 번째 poller의 필요성을 없앨 수 있지만, Framework의 교체 관찰 규칙까지 자동으로 없애지는 않습니다.
 
@@ -277,10 +277,10 @@ Framework wire spec의 관찰 대기 조항을 바꾸려면 별도 계약 정합
 
 **(a) 계약 근거**
 
-- [06-monitoring.ko.md:536](/home/hep7hep7/project/zlink/core/doc/spec/core/06-monitoring.ko.md:536): `connection_id`로 send·reply target을 지정하는 public API는 없다.
-- [socket/README.ko.md:287](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/README.ko.md:287): completion record는 operation의 `completion_id`, context, logical RID, 결과·payload를 제공한다.
-- [동일 파일:1124](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/README.ko.md:1124): `peer_rid`는 logical peer snapshot이며 reconnect 뒤 physical connection identity로 바뀌지 않는다.
-- [07-router.ko.md:294](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/07-router.ko.md:294): reply는 현재 ready Application 또는 Completion pipe를 사용한다.
+- [06-monitoring.ko.md:536](../../../core/doc/spec/core/06-monitoring.ko.md): `connection_id`로 send·reply target을 지정하는 public API는 없다.
+- [socket/README.ko.md:287](../../../core/doc/spec/core/socket/README.ko.md): completion record는 operation의 `completion_id`, context, logical RID, 결과·payload를 제공한다.
+- [동일 파일:1124](../../../core/doc/spec/core/socket/README.ko.md): `peer_rid`는 logical peer snapshot이며 reconnect 뒤 physical connection identity로 바뀌지 않는다.
+- [07-router.ko.md:294](../../../core/doc/spec/core/socket/07-router.ko.md): reply는 현재 ready Application 또는 Completion pipe를 사용한다.
 
 **(b) 모순 여부**
 
@@ -303,7 +303,7 @@ Framework의 physical fence 문제를 이 필드로 해결하려 하면 기존 �
 | **현재 API 유지** | ABI·binding 변경 없음. operation과 physical connection의 책임 구분 유지 | 특정 request의 물리 경로를 public API만으로 직접 입증할 수 없음 |
 | completion에 진단 필드 추가 | timeout·handover 분석과 회귀 검증에 도움 | 송신 admission ID·reply 수신 ID·lane·값 부재 의미를 구분해야 함. C layout, Core correlation 보관, C/C++/.NET/Java/Node/Rust/Python/Go binding 변환·계약·테스트 영향 |
 
-Completion은 caller의 `struct_size`를 검증하므로, 필드 추가를 단순한 무비용 확장으로 볼 수 없습니다. [socket/README.ko.md:1116](/home/hep7hep7/project/zlink/core/doc/spec/core/socket/README.ko.md:1116).
+Completion은 caller의 `struct_size`를 검증하므로, 필드 추가를 단순한 무비용 확장으로 볼 수 없습니다. [socket/README.ko.md:1116](../../../core/doc/spec/core/socket/README.ko.md).
 
 **(d) 최종 의견**
 

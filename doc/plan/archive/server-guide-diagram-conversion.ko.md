@@ -2,7 +2,7 @@
 
 > `framework/doc/framework/common/guide/server`의 가이드 문서에 남은 mermaid 다이어그램을
 > **깔끔한 archify SVG**로 변환한다. 규칙은
-> [다이어그램 작성·변환 가이드](../principal/documentation/diagram-authoring-guide.ko.md)를
+> [다이어그램 작성·변환 가이드](../../principal/documentation/diagram-authoring-guide.ko.md)를
 > 단일 진실 원천으로 따른다. 변환 **실행은 codex sol 서브에이전트**가 맡고, **감독·리뷰는
 > Claude가 단독**으로 한다.
 
@@ -26,7 +26,7 @@
   archify sequence의 `messages[].note`는 이 빌드에서 렌더 안 됨 → note 내용은 라벨/카드로 보존(기지 한계).
 - **도구:** `scripts/diagrams/`(`build-diagram.mjs`·`pad-viewbox.mjs`·`shot.mjs`·`shot-dark.mjs`·
   `shot-region.mjs` + README). `build-diagram.mjs`는 `ARCHIFY_DIR` 환경변수가 필요하다.
-- **규칙 SSOT:** [`doc/principal/documentation/diagram-authoring-guide.ko.md`](../principal/documentation/diagram-authoring-guide.ko.md).
+- **규칙 SSOT:** [`doc/principal/documentation/diagram-authoring-guide.ko.md`](../../principal/documentation/diagram-authoring-guide.ko.md).
 - **공통폭:** 현재 **1010**(가장 넓은 다이어그램 폭 이상). 새 다이어그램이 더 넓으면 전체를 새
   공통폭으로 다시 `pad-viewbox` 한다(§5).
 

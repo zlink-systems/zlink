@@ -538,7 +538,7 @@ public sealed partial class StatefulServiceRuntimeTests
             {
                 if (info.Event != ZLinkBackendSpotDispatchEvent.ActorReadable
                     || info.ActorParts is not { Count: > 0 } parts)
-                    return;
+                    return (ValueTask.CompletedTask, null);
 
                 try
                 {
@@ -551,6 +551,7 @@ public sealed partial class StatefulServiceRuntimeTests
                     if (Volatile.Read(ref dispatchCount) == 2)
                         dispatched.TrySetResult(true);
                 }
+                return (ValueTask.CompletedTask, null);
             });
         pump.EnsureStarted();
 
@@ -585,7 +586,7 @@ public sealed partial class StatefulServiceRuntimeTests
             {
                 if (info.Event != ZLinkBackendSpotDispatchEvent.ActorReadable
                     || info.ActorParts is not { Count: > 0 } parts)
-                    return;
+                    return (ValueTask.CompletedTask, null);
 
                 try
                 {
@@ -598,6 +599,7 @@ public sealed partial class StatefulServiceRuntimeTests
                     if (receivedValues.Count == 2)
                         dispatched.TrySetResult(true);
                 }
+                return (ValueTask.CompletedTask, null);
             });
         pump.EnsureStarted();
 

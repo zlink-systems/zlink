@@ -29,7 +29,7 @@
 
 - 분류: consolidation
 - 위치: `framework/doc/framework/common/spec/server/05-location-relocation/06-failure-failover-policy.ko.md:101`, `:109`, `:117`, `:129`, `:168`, `:194`, `:252`, `:290`; `framework/doc/framework/common/spec/server/03-spot-actor/08-routing.ko.md:148`, `:304`, `:327`, `:329`, `:539`, `:554`; `framework/doc/framework/common/spec/server/00-foundation/07-framework-error-model.ko.md:33`, `:67`, `:81`. 조회 status의 투영은 `framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md:875`에도 있다.
-- 현재 규칙(인용): “이 문서가 공개 장애 동작의 소유 문서다.” / “Operation별 적용 표와 owner가 사라졌을 때의 결과가 그곳에 있다.” / “Current operation을 [`Unavailable`](../00-foundation/07-framework-error-model.ko.md)로 끝낸다.”
+- 현재 규칙(인용): “이 문서가 공개 장애 동작의 소유 문서다.” / “Operation별 적용 표와 owner가 사라졌을 때의 결과가 그곳에 있다.” / “Current operation을 [`Unavailable`](../../../../framework/doc/framework/common/spec/server/00-foundation/07-framework-error-model.ko.md)로 끝낸다.”
 - 문제: Failure policy §9는 공개 장애 결과를 자신이 소유한다고 선언하면서 §4.1은 같은 결과의 정의를 routing에 돌려준다. Routing §2.6은 실제로 공개 operation의 결과와 자동 재제출 금지를 정의하고, error model은 같은 원인→kind 매핑을 다시 적는다. 구현 대조에서는 owner가 없는 경우와 authority는 있지만 owner를 사용할 수 없는 경우를 구분한다. 새로운 실패 정책이 필요한 문제가 아니라, R4·R6·R7이 같은 정책을 따로 바꿀 수 있는 문서 소유권 문제다. Error kind의 전체 정의와 resolver tag의 표현은 각각의 원래 계층에 남길 수 있다.
 - 제안: `06-failure-failover-policy.ko.md` §4.2가 소유하고 다른 문서는 결과를 참조한다 — **“기존 Ready Actor·Spot의 authority가 남아 있으나 current owner를 사용할 수 없으면 현재 operation은 Unavailable로 끝나며, Framework는 그 operation을 재제출하거나 authority를 해제해 다른 node에서 자동 활성화하지 않는다.”**
 - 규칙 수: before 3 → after 1 — failure policy·routing·error model의 owner 장애 정책 정의를 한 곳으로 합친다. Kind 정의, resolver tag, 조회 status는 서로 다른 투영이므로 삭제하지 않는다.

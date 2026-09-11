@@ -1278,7 +1278,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_executable(test_cpp_framework_layout_contract
     tests/Zlink.Framework.ContractTests/test_cpp_framework_layout_contract.cpp)
   target_compile_definitions(test_cpp_framework_layout_contract PRIVATE
-    ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}")
+    ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}"
+    ZLINK_FRAMEWORK_CPP_BUILD_DIR="${CMAKE_BINARY_DIR}")
   target_compile_features(test_cpp_framework_layout_contract PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_layout_contract)
   add_test(NAME test_cpp_framework_layout_contract
@@ -1466,7 +1467,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_zlink_framework_test(
     test_cpp_framework_execution
     tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
-    "framework-unit;framework-regression;execution;spot;yield")
+    "framework-unit;framework-contract;framework-regression;execution;spot;yield")
   target_include_directories(test_cpp_framework_execution PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_execution PRIVATE
@@ -1484,6 +1485,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_test(NAME test_cpp_framework_state_lane
     COMMAND test_cpp_framework_state_lane)
   set_tests_properties(test_cpp_framework_state_lane PROPERTIES
+    LABELS "framework-unit;framework-regression;execution"
+    TIMEOUT 30)
+  add_executable(test_cpp_framework_lane_roundtrip
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_lane_roundtrip.cpp)
+  target_link_libraries(test_cpp_framework_lane_roundtrip PRIVATE
+    zlink::framework
+    GTest::gtest
+    GTest::gtest_main)
+  target_include_directories(test_cpp_framework_lane_roundtrip PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  zlink_enable_coverage(test_cpp_framework_lane_roundtrip)
+  add_test(NAME test_cpp_framework_lane_roundtrip
+    COMMAND test_cpp_framework_lane_roundtrip)
+  set_tests_properties(test_cpp_framework_lane_roundtrip PROPERTIES
     LABELS "framework-unit;framework-regression;execution"
     TIMEOUT 30)
   add_zlink_framework_test(

@@ -288,9 +288,9 @@ public final class ZLinkServiceM6AWireCodec {
 
     public byte[] encodeApplicationPayload(ApplicationPayload payload) {
         Objects.requireNonNull(payload, "payload");
-        byte[] payloadBytes = payload.payloadForCodec();
+        ByteBuffer payloadBytes = payload.payloadForCodec();
         ByteBuffer result = applicationFrame(
-            payload.packetName(), payload.contentType(), payloadBytes.length);
+            payload.packetName(), payload.contentType(), payloadBytes.remaining());
         result.put(payloadBytes);
         return result.array();
     }
@@ -317,7 +317,7 @@ public final class ZLinkServiceM6AWireCodec {
         return new ApplicationPayload(
             ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME,
             ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE,
-            multipart.array());
+            multipart.flip());
     }
 
     /** Writes the complete application frame without an intermediate payload. */
@@ -483,6 +483,11 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     public ApplicationPayload decodeApplicationPayload(byte[] frame) {
+        return decodeApplicationPayload(ByteBuffer.wrap(frame.clone()));
+    }
+
+    /** Borrows the frame; its owner must outlive payload decoding or encoding. */
+    public ApplicationPayload decodeApplicationPayload(ByteBuffer frame) {
         Reader reader = new Reader(frame);
         if (reader.u8("version") != 1) {
             throw protocol("invalid application payload version");
@@ -497,7 +502,7 @@ public final class ZLinkServiceM6AWireCodec {
         if (payloadLength != reader.remaining()) {
             throw protocol("application payload length mismatch");
         }
-        byte[] payload = reader.bytes(payloadLength, "payload");
+        ByteBuffer payload = reader.buffer(payloadLength, "payload");
         reader.end();
         return new ApplicationPayload(packetName, contentType, payload);
     }
@@ -642,27 +647,44 @@ public final class ZLinkServiceM6AWireCodec {
         int failureCode) {
     }
 
-    public record ApplicationPayload(
-        String packetName,
-        String contentType,
-        byte[] payload) {
-        public ApplicationPayload {
+    public static final class ApplicationPayload {
+        private final String packetName;
+        private final String contentType;
+        private final ByteBuffer payload;
+
+        public ApplicationPayload(String packetName, String contentType, byte[] payload) {
+            this(packetName, contentType,
+                ByteBuffer.wrap(Objects.requireNonNull(payload, "payload").clone()));
+        }
+
+        private ApplicationPayload(String packetName, String contentType, ByteBuffer payload) {
             if (packetName == null || packetName.isEmpty()) {
                 throw new IllegalArgumentException("packetName is required");
             }
             if (contentType == null || contentType.isEmpty()) {
                 throw new IllegalArgumentException("contentType is required");
             }
-            payload = Objects.requireNonNull(payload, "payload").clone();
+            this.packetName = packetName;
+            this.contentType = contentType;
+            this.payload = payload.slice().asReadOnlyBuffer();
         }
 
-        @Override
+        public String packetName() {
+            return packetName;
+        }
+
+        public String contentType() {
+            return contentType;
+        }
+
         public byte[] payload() {
-            return payload.clone();
+            byte[] result = new byte[payload.remaining()];
+            payloadForCodec().get(result);
+            return result;
         }
 
-        private byte[] payloadForCodec() {
-            return payload;
+        private ByteBuffer payloadForCodec() {
+            return payload.asReadOnlyBuffer();
         }
     }
 
@@ -887,8 +909,12 @@ public final class ZLinkServiceM6AWireCodec {
         }
 
         Message message(int length, String field) {
+            return Message.from(buffer(length, field));
+        }
+
+        ByteBuffer buffer(int length, String field) {
             require(length, field);
-            Message result = Message.from(input.slice(input.position(), length));
+            ByteBuffer result = input.slice(input.position(), length);
             input.position(input.position() + length);
             return result;
         }

@@ -2959,7 +2959,7 @@ public surface 의 일부가 아니다. 바인딩은 다음 함수나 상수를 
 
 Raw socket request·reply·ROUTER receive의 선언은
 [Core request와 reply](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)와
-[Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#routedsubscription-receive-family)를 따른다.
+[Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#zlink_recv-와-zlink_router_recv)를 따른다.
 Completion record와 반환된 reply part의 수명은
 [Core completion pull과 ownership](../../../core/doc/spec/core/socket/README.ko.md#completion-pull과-ownership)이 소유한다.
 
@@ -2989,7 +2989,7 @@ zlink_handler_result_t zlink_spot_dispatch_event_handler(void *spot, ...);
 #### 수신 Dispatch 모델
 
 ROUTER application record의 종류·source RID·reply token은
-[Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#routedsubscription-receive-family)가 소유한다.
+[Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#zlink_recv-와-zlink_router_recv)가 소유한다.
 Reply 매칭은 [Core request 계약](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)을,
 매칭된 결과의 언어 전달은 [공통 completion owner](async-execution-model.ko.md#4-poller와-completion-drain)를 따른다.
 SPOT 전용 routing context는 별도 service-layer API가 소유한다.
@@ -3044,7 +3044,7 @@ ZMP kind·sequence·header byte 배치와 검증은
 - 별도 `Reply` 타입은 만들지 않는다.
 - multipart reply 지원이 목적이므로 단일 `Message` 가 아닌 리스트 형태다.
   단일 part reply 는 `parts[0]` 으로 꺼낸다.
-- 응답자의 수신 metadata는 [Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#routedsubscription-receive-family)와
+- 응답자의 수신 metadata는 [Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#zlink_recv-와-zlink_router_recv)와
   [ReplyToken 정책](async-coroutine-policy.ko.md#5-replytoken과-reply)을 따른다.
   별도 `Request` 타입이나 `onRequest` 전용 callback은 만들지 않는다.
 
@@ -3430,7 +3430,7 @@ zlink_recv_result_t zlink_spot_recv_actor_lifecycle(void *spot, ...);
 #### Router 수신 (routed 통합 recv 표면)
 
 ROUTER DATA·REQUEST의 raw 수신 signature와 metadata는
-[Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#routedsubscription-receive-family)를,
+[Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#zlink_recv-와-zlink_router_recv)를,
 request 결과의 전달은 [공통 completion owner](async-execution-model.ko.md#4-poller와-completion-drain)를 따른다.
 SPOT 전용 routing context는 별도 service-layer API가 소유한다.
 

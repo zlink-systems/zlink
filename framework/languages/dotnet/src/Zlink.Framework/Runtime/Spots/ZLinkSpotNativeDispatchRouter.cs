@@ -37,6 +37,7 @@ internal static class ZLinkSpotNativeDispatchRouter
                         actorPartsReadable(actorParts, info.ActorPayloadOwner);
                         break;
                 }
+                return (ValueTask.CompletedTask, null);
             });
         }
         catch (ZlinkHandlerException error)

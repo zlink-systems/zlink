@@ -72,7 +72,7 @@ class order_workflow_spot_t : public instance_spot_t
 
     task_t<void> on_closing (const spot_closing_context_t &, std::stop_token) override
     {
-        _continue_timer.cancel ();
+        co_await _continue_timer.cancel ();
         co_return;
     }
 
@@ -115,7 +115,7 @@ class order_workflow_spot_t : public instance_spot_t
 
     void run_scheduled_continue ()
     {
-        _continue_timer.cancel ();
+        (void) _continue_timer.cancel ();
         auto order_id = std::move (_scheduled_order_id);
         _scheduled_order_id.clear ();
         if (!order_id.empty ()) {
@@ -142,7 +142,7 @@ class order_workflow_spot_t : public instance_spot_t
 
     void schedule_continue (const std::string &order_id)
     {
-        _continue_timer.cancel ();
+        (void) _continue_timer.cancel ();
         _scheduled_order_id = order_id;
         _continue_timer = _context.add_timer<order_workflow_continue_timer_handler_t> (
           "order-workflow-continue", std::chrono::milliseconds (1));
@@ -294,7 +294,7 @@ class planned_relocation_workflow_spot_t final : public spot_t<actor_t>
   private:
     void schedule_readiness_check ()
     {
-        _readiness_timer.cancel ();
+        (void) _readiness_timer.cancel ();
         _readiness_timer = _context.add_timer<planned_relocation_readiness_timer_handler_t> (
           "planned-relocation-readiness", std::chrono::milliseconds (1));
     }

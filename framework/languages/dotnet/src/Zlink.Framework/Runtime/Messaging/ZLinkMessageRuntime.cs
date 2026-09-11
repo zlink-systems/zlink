@@ -80,9 +80,19 @@ public sealed partial class ZLinkMessage
             resolveSerializerByDeclaredType: true);
     }
 
-    internal Message ToRawMessage(IZLinkMessageCodecRegistry codecs)
+    internal Message ToRawMessage(IZLinkMessageCodecRegistry codecs) =>
+        ToRawMessage(codecs, out _);
+
+    internal Message ToRawMessage(IZLinkMessageCodecRegistry codecs, out string contentType)
     {
-        return Message.From(Encode(codecs).Payload.Bytes.Span);
+        if (_declaredType is not null)
+        {
+            var resolution = ResolvePayloadSerializer(_declaredType, codecs);
+            contentType = resolution.ContentType;
+            return ZLinkEnvelopeCodec.EncodeSerializedPart(_value, _declaredType, resolution.Serializer);
+        }
+        contentType = ContentType ?? DefaultContentType;
+        return Message.From(_payload.Span);
     }
 
     internal static ZLinkMessage FromStreamPayload(

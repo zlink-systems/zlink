@@ -233,7 +233,7 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
       })
     );
     if (drawn.finished) {
-      await this.drawTimer?.cancel();
+      void this.drawTimer?.cancel();
       this.drawTimer = undefined;
       await this.pushPlayers(
         this.playerActors(),

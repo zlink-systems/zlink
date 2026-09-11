@@ -1294,6 +1294,12 @@ test('stream session node runtime checks Poller readiness before Framework recv'
         waits.push(timeoutMs);
         return ready;
       },
+      waitForReadable() {
+        return new Promise((resolve) => setImmediate(() => resolve(true)));
+      },
+      markDrained() {
+        ready = false;
+      },
       dispose() {
         disposed = true;
       }
@@ -2163,6 +2169,10 @@ function decodeRawPackets(routingId, parts) {
 function readyPoller() {
   return {
     wait() { return true; },
+    waitForReadable() {
+      return new Promise((resolve) => setImmediate(() => resolve(true)));
+    },
+    markDrained() {},
     dispose() {}
   };
 }

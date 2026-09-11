@@ -7,7 +7,7 @@ unit 두 절반(1948/1948, 16/16), sample regression(157/157)은 최종 수정 �
 `NotConnected/109`를 전달했다. 이후 Framework의 durable sender와 join 완료 경계가 남는다.
 
 증거의 기준 경로는
-[`scratchpad/fix-dotnet-shoppingmall-relocation-root-and-final-gate/`](../../../scratchpad/fix-dotnet-shoppingmall-relocation-root-and-final-gate/)다.
+`scratchpad/fix-dotnet-shoppingmall-relocation-root-and-final-gate/` (`../../../scratchpad/fix-dotnet-shoppingmall-relocation-root-and-final-gate/`)다.
 아래 증거 파일은 이 디렉터리를 기준으로 한다. `main`에서 작업했으며 commit하지 않았다.
 Core·binding·sample·다른 언어·보호 문서는 수정하지 않았다. 기존 사용자 변경은 유지했다.
 

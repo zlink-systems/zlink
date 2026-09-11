@@ -106,7 +106,7 @@ final class SocketSendPlane {
         }
         if (length > 0) {
             MemorySegment.copy(payload, 0,
-                NativeMessage.messageData(nativeMsg).reinterpret(length),
+                NativeMessage.messageData(nativeMsg),
                 0, length);
         }
         boolean[] submitted = {false};

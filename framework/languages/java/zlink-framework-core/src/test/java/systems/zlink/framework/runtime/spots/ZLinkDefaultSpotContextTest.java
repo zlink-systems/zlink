@@ -711,7 +711,8 @@ final class ZLinkDefaultSpotContextTest {
                 new ZLinkSpotHandlerLoader(
                     scannedHandlers,
                     new ZLinkSpotActorHandlerCatalog(
-                        scannedHandlers, null)),
+                        scannedHandlers, null),
+                    handlerType -> null),
                 "instance-mesh",
                 RoutingId.from("node-a"),
                 backendSpot);

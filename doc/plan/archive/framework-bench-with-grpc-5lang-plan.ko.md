@@ -4,10 +4,10 @@
 # Framework gRPC 비교 bench 5언어 확장 캠페인 — .NET · Node · Java · Kotlin · C++
 
 > 작성일: 2026-09-06 23:10 (main `3c19ab456a`, 0.17.0)
-> 대상 규격: [`with-grpc-local.ko.md`](../../framework/doc/framework/common/bench/with-grpc-local.ko.md)
-> 인접 규격: [Framework Performance 공통 규격](../../framework/doc/framework/common/perf/README.ko.md) (별도 캠페인, 이 문서와 수치를 합치지 않는다)
-> 성능 정책: [`../perf/PERF_POLICY.md`](../perf/PERF_POLICY.md)
-> 문서 규칙: [`../AGENTS.md`](../AGENTS.md) — 이 문서는 `plan/`이므로 공개 문서에서 링크하지 않는다
+> 대상 규격: [`with-grpc-local.ko.md`](../../../framework/bench/grpc/README.ko.md)
+> 인접 규격: [Framework Performance 공통 규격](../../../framework/doc/framework/common/perf/README.ko.md) (별도 캠페인, 이 문서와 수치를 합치지 않는다)
+> 성능 정책: [`../perf/PERF_POLICY.md`](../../perf/PERF_POLICY.md)
+> 문서 규칙: [`../AGENTS.md`](../../AGENTS.md) — 이 문서는 `plan/`이므로 공개 문서에서 링크하지 않는다
 
 ## 0. 요청 정리 (사용자, 2026-09-06 23:00~23:40)
 
@@ -503,7 +503,7 @@ window 100 결과를 빼면 "동시 요청을 깊게 쓰면 멈춘다"는 사실
 ## 12. 캠페인 종료 (2026-09-07)
 
 Phase 0~6 종료 commit `eafdad0405`. Phase 7은 사용자 지시로 중단(§11.1).
-보고서는 [`fw-bench-worklog/report-with-grpc-5lang.ko.md`](fw-bench-worklog/report-with-grpc-5lang.ko.md).
+보고서 `fw-bench-worklog/report-with-grpc-5lang.ko.md`는 Phase 7 중단으로 작성되지 않았다.
 
 ### Phase 0~6 결과
 
