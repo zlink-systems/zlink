@@ -22,6 +22,7 @@ on:
       - "core/tests/**"
       - "core/CMakeLists.txt"
       - "core/cmake/**"
+      - "core/builds/windows/**/*.ps1"
       - "bindings/c/**"
       - "bindings/cpp/**"
       - "bindings/dotnet/**"
@@ -81,7 +82,7 @@ jobs:
           }
           emit core '^(VERSION|core/|bindings/(c|cpp|python|tools)/|bindings/(go|rust)/include/|\.github/workflows/(pr-verify|build)\.yml)'
           emit framework_java '^(VERSION|core/|bindings/(java|tools)/|framework/languages/java/|framework/runtime/|\.github/workflows/(pr-verify|build)\.yml)'
-          emit windows_local_package '^(VERSION|BINDINGS_VERSION|FRAMEWORK_VERSION|bindings/(cpp|dotnet|java|node)/|framework/languages/(cpp|dotnet|java|node)/|scripts/(local-package/|gate/rebuild-dev\.ps1)|\.github/workflows/(pr-verify|build)\.yml)'
+          emit windows_local_package '^(VERSION|BINDINGS_VERSION|FRAMEWORK_VERSION|core/builds/windows/.*\.ps1$|bindings/(cpp|dotnet|java|node)/|framework/languages/(cpp|dotnet|java|node)/|scripts/(local-package/|gate/rebuild-dev\.ps1)|\.github/workflows/(pr-verify|build)\.yml)'
 
   windows-local-package:
     name: Windows local-package contracts
