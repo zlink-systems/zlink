@@ -274,6 +274,11 @@ try {
     Wait-Endpoint "api-b-play-route" $apiBPlayRouteEndpoint
     Wait-Endpoint "api-b-matchmaking-route" $apiBMatchmakingRouteEndpoint
 
+    Start-Server "play-a" $PlayBin @("--config=$($roleConfigs['play-a'])")
+    Wait-Endpoint "play-a-spot-router" $playASpotRouterEndpoint
+    Start-Server "play-b" $PlayBin @("--config=$($roleConfigs['play-b'])")
+    Wait-Endpoint "play-b-spot-router" $playBSpotRouterEndpoint
+
     Start-Server "session-a" $SessionBin @("--config=$($roleConfigs['session-a'])")
     Wait-Endpoint "session-a-stream" $sessionAStreamEndpoint
     Wait-Endpoint "session-a-play-route" $sessionAPlayRouteEndpoint
@@ -281,11 +286,6 @@ try {
     Start-Server "session-b" $SessionBin @("--config=$($roleConfigs['session-b'])")
     Wait-Endpoint "session-b-stream" $sessionBStreamEndpoint
     Wait-Endpoint "session-b-play-route" $sessionBPlayRouteEndpoint
-
-    Start-Server "play-a" $PlayBin @("--config=$($roleConfigs['play-a'])")
-    Wait-Endpoint "play-a-spot-router" $playASpotRouterEndpoint
-    Start-Server "play-b" $PlayBin @("--config=$($roleConfigs['play-b'])")
-    Wait-Endpoint "play-b-spot-router" $playBSpotRouterEndpoint
 
     Wait-Log "play-a peer route readiness" (Join-Path $LogDir "play-a.log") "bingo-ready kind=peer-route node=play-a peer=play-b"
     Wait-Log "play-b peer route readiness" (Join-Path $LogDir "play-b.log") "bingo-ready kind=peer-route node=play-b peer=play-a"
@@ -297,10 +297,14 @@ try {
     Wait-Log "session-b room route readiness" (Join-Path $LogDir "session-b.log") "bingo-ready kind=mesh-route node=session-b mesh=room"
 
     $clientLog = Join-Path $LogDir "client.log"
-    Invoke-Checked $ClientBin @(
-        "--session-a-stream-endpoint", $sessionAStreamEndpoint,
-        "--session-b-stream-endpoint", $sessionBStreamEndpoint
-    ) *> $clientLog
+    $clientTraceLog = Join-Path $LogDir "client.err.log"
+    $clientProcess = Start-Process -FilePath $ClientBin -ArgumentList @(
+        "--session-a-stream-endpoint=$sessionAStreamEndpoint",
+        "--session-b-stream-endpoint=$sessionBStreamEndpoint"
+    ) -RedirectStandardOutput $clientLog -RedirectStandardError $clientTraceLog -NoNewWindow -PassThru -Wait
+    if ($clientProcess.ExitCode -ne 0) {
+        throw "$ClientBin failed with exit code $($clientProcess.ExitCode)"
+    }
 
     if (-not (Select-String -Path $clientLog -Pattern "bingo=completed" -Quiet)) {
         throw "Bingo C++ client did not write completion marker."
