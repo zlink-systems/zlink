@@ -5,12 +5,14 @@ namespace Zlink.Framework.Locations.Redis.Tests;
 /// namespace. The provider remains responsible only for the opaque SPI and
 /// does not expose Framework domain DTOs.
 /// </summary>
-public sealed class RedisProviderSmokeTests
+[Collection(RedisTestCollection.Name)]
+public sealed class RedisProviderSmokeTests(RedisTestFixture fixture)
 {
-    [Fact]
+    [SkippableFact]
     public async Task Dotnet_Opaque_Store_Round_Trip()
     {
-        await using var store = CreateStore("dotnet");
+        Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
+        await using var store = fixture.CreateStore();
         var alphaKey = new ZLinkStoreKey("golden/dotnet/alpha");
         var betaKey = new ZLinkStoreKey("golden/dotnet/beta");
 
@@ -51,26 +53,5 @@ public sealed class RedisProviderSmokeTests
         var unchanged = Assert.IsType<ZLinkStoreReadResult.Found>(
             await store.ReadAsync(alphaKey));
         Assert.Equal(new byte[] { 0, 1, 255 }, unchanged.Value.Bytes.ToArray());
-    }
-
-    private static ZLinkRedisLocationStore CreateStore(string side)
-    {
-        var endpoint = Environment.GetEnvironmentVariable(
-            "ZLINK_REDIS_TEST_ENDPOINT");
-        var prefix = Environment.GetEnvironmentVariable(
-            "ZLINK_REDIS_CROSS_LANGUAGE_PREFIX");
-        if (string.IsNullOrWhiteSpace(endpoint)
-            || string.IsNullOrWhiteSpace(prefix))
-        {
-            throw new InvalidOperationException(
-                "Redis cross-language tests require ZLINK_REDIS_TEST_ENDPOINT "
-                + "and ZLINK_REDIS_CROSS_LANGUAGE_PREFIX.");
-        }
-
-        return new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions
-        {
-            ConnectionString = endpoint,
-            KeyPrefix = $"{prefix}:{side}"
-        });
     }
 }

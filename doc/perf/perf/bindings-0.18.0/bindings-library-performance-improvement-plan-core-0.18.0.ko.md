@@ -688,7 +688,9 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/cpp/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미측정`
+- Multi 상태: `측정 완료(2026-09-11)` — C multi baseline 최초 확립 + Node, 4 transport, clients=100(parity 확인, memory-guard cap 없음). META parity 하네스 수정 반영(multi 러너가 core META 미출력이던 결함).
+  - `MULTI_DEALER_DEALER`·`MULTI_PUBSUB`·`MULTI_STREAM`: 측정 완료. throughput은 대부분 60% 목표 미달(tcp 35~37%, ws/wss/tls 43~56%); **STREAM은 wss 92.8%·tls 79.1% 통과**. 소형/저부하에서 Node per-op·집계 비용이 큼(single과 동일 계열).
+  - `MULTI_DEALER_ROUTER_SENDSEND`·`MULTI_ROUTER_ROUTER_SENDSEND`(routed echo): **전 셀 실패** — `admissions=0`(routed send-admission 완료 drain 미진행). **single reqrep과 동일 근원**(send-admission drain 굶음, #151 send-side). Core 아님. [[node-send-backpressure-architecture]].
 - 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
 
 #### 9.1.1 Single suite
@@ -1007,26 +1009,26 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 19.0% | 25.1% | 34.0% | 25.2% | 60.0% | 55.6% | 미달 36.5%/lat5.15× · c0180-node-multi-tcp |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 실패 | 실패 | 실패 | 실패 | 실패 | 실패 | 미측정 — routed send admission drain 미진행(admissions=0, echo drain timeout). single reqrep과 동일 근원(send-admission 완료 drain 굶음). [[node-send-backpressure-architecture]] #151 트랙 |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 실패 | 실패 | 실패 | 실패 | 실패 | 실패 | 미측정 — routed send admission drain 미진행(admissions=0, echo drain timeout). single reqrep과 동일 근원(send-admission 완료 drain 굶음). [[node-send-backpressure-architecture]] #151 트랙 |
+| `tcp` | `MULTI_PUBSUB` | 16.1% | 17.1% | 14.6% | 18.0% | 65.2% | 82.0% | 미달 35.5%/lat0.57× · c0180-node-multi-tcp |
+| `tcp` | `MULTI_STREAM` | 42.0% | 32.1% | 22.5% | 해당 없음 | 50.4% | 해당 없음 | 미달 36.8%/lat2.75× · c0180-node-multi-tcp-stream |
+| `ws` | `MULTI_DEALER_DEALER` | 20.1% | 24.3% | 43.8% | 41.4% | 72.2% | 63.7% | 미달 44.2%/lat9.52× · c0180-node-multi-ws |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 실패 | 실패 | 실패 | 실패 | 실패 | 실패 | 미측정 — routed send admission drain 미진행(admissions=0, echo drain timeout). single reqrep과 동일 근원(send-admission 완료 drain 굶음). [[node-send-backpressure-architecture]] #151 트랙 |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 실패 | 실패 | 실패 | 실패 | 실패 | 실패 | 미측정 — routed send admission drain 미진행(admissions=0, echo drain timeout). single reqrep과 동일 근원(send-admission 완료 drain 굶음). [[node-send-backpressure-architecture]] #151 트랙 |
+| `ws` | `MULTI_PUBSUB` | 31.1% | 25.4% | 16.2% | 15.6% | 94.9% | 93.9% | 미달 46.2%/lat0.30× · c0180-node-multi-ws |
+| `ws` | `MULTI_STREAM` | 49.4% | 46.6% | 38.0% | 해당 없음 | 92.1% | 해당 없음 | 미달 56.5%/lat2.08× · c0180-node-multi-ws-stream |
+| `wss` | `MULTI_DEALER_DEALER` | 20.0% | 26.2% | 44.3% | 52.2% | 64.5% | 60.3% | 미달 44.6%/lat8.79× · c0180-node-multi-wss |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 실패 | 실패 | 실패 | 실패 | 실패 | 실패 | 미측정 — routed send admission drain 미진행(admissions=0, echo drain timeout). single reqrep과 동일 근원(send-admission 완료 drain 굶음). [[node-send-backpressure-architecture]] #151 트랙 |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 실패 | 실패 | 실패 | 실패 | 실패 | 실패 | 미측정 — routed send admission drain 미진행(admissions=0, echo drain timeout). single reqrep과 동일 근원(send-admission 완료 drain 굶음). [[node-send-backpressure-architecture]] #151 트랙 |
+| `wss` | `MULTI_PUBSUB` | 23.8% | 22.0% | 21.0% | 39.4% | 77.6% | 84.0% | 미달 44.6%/lat0.39× · c0180-node-multi-wss |
+| `wss` | `MULTI_STREAM` | 83.3% | 80.0% | 64.5% | 해당 없음 | 143.6% | 해당 없음 | 통과 92.8%/lat1.23× · c0180-node-multi-wss-stream |
+| `tls` | `MULTI_DEALER_DEALER` | 20.1% | 41.2% | 56.4% | 41.8% | 83.8% | 67.4% | 미달 51.8%/lat4.26× · c0180-node-multi-tls |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 실패 | 실패 | 실패 | 실패 | 실패 | 실패 | 미측정 — routed send admission drain 미진행(admissions=0, echo drain timeout). single reqrep과 동일 근원(send-admission 완료 drain 굶음). [[node-send-backpressure-architecture]] #151 트랙 |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 실패 | 실패 | 실패 | 실패 | 실패 | 실패 | 미측정 — routed send admission drain 미진행(admissions=0, echo drain timeout). single reqrep과 동일 근원(send-admission 완료 drain 굶음). [[node-send-backpressure-architecture]] #151 트랙 |
+| `tls` | `MULTI_PUBSUB` | 24.5% | 29.6% | 22.4% | 48.8% | 68.8% | 64.2% | 미달 43.0%/lat0.43× · c0180-node-multi-tls |
+| `tls` | `MULTI_STREAM` | 68.4% | 74.9% | 63.0% | 해당 없음 | 110.2% | 해당 없음 | 통과 79.1%/lat1.40× · c0180-node-multi-tls-stream |
 
 ### 9.5 Go
 

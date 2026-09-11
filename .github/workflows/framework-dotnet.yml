@@ -245,6 +245,17 @@ jobs:
       - name: Run stream connector tests (Release, net10.0)
         run: bash scripts/ci/dotnet-test-retry.sh ${{ env.STREAM_CONNECTOR_TESTS }} Release net10.0
 
+      # macOS·Windows 실패는 이 기계에서 재현되지 않는다(#17, 0.19.0). TRX에는 테스트별
+      # stdout과 stack이 들어 있어 raw 로그보다 원인을 좁히기 쉽다. 실패했을 때만 올린다.
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: dotnet-test-results-${{ matrix.target.name }}
+          path: ${{ runner.temp }}/zlink-test-results/**
+          retention-days: 14
+          if-no-files-found: warn
+
   framework-dotnet-gate:
     name: release-gate
     runs-on: ubuntu-24.04
