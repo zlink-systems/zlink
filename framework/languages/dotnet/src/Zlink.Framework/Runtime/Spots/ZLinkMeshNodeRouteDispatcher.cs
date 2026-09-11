@@ -140,6 +140,10 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         if (routeDescriptors.Length == 0 && channelEndpoints.Length == 0)
             return null;
 
+        ZLinkScopedHandlerInstanceOwner.Prepare(services,
+            routeDescriptors.Select(static descriptor => descriptor.HandlerType)
+                .Concat(channelEndpoints.Select(static endpoint => endpoint.DeclaringType)));
+
         var loggerFactory = runtime.Services.GetService<ILoggerFactory>();
         var logger = loggerFactory?.CreateLogger(typeof(ZLinkMeshNodeRouteDispatcher).FullName!)
                      ?? (ILogger)NullLogger.Instance;

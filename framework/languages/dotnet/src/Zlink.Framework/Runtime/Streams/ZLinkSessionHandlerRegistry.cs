@@ -116,6 +116,7 @@ internal sealed class ZLinkSessionHandlerRegistry(ZLinkScopedHandlerInstanceOwne
             throw new ZLinkConfigurationException(
                 $"Session packet handler '{descriptor.PacketName}' is already registered.");
 
+        handlerInstances.Prepare(descriptor.HandlerType);
         _handlers.Add(descriptor.PacketName, descriptor);
     }
 
