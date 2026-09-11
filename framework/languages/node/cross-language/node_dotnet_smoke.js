@@ -982,20 +982,23 @@ async function runInTempDir(callback) {
 
 async function startRedisContainer() {
   const name = `zlink-node-dotnet-location-${process.pid}-${Date.now()}`;
-  const containerId = (await runProcess('docker', [
+  await runProcess('docker', [
     'run', '-d', '--rm', '--tmpfs', '/data',
     '--name', name,
     '-p', '127.0.0.1::6379',
     'redis:7.2-alpine'
-  ], { cwd: repoRoot })).trim();
-  const portLine = (await runProcess('docker', ['port', containerId, '6379/tcp'], { cwd: repoRoot })).trim();
+  ], { cwd: repoRoot });
+  // Address the container by the name we chose. `docker run` writes the pull
+  // progress to stderr when the image is not cached, so its combined output is
+  // not a container id.
+  const portLine = (await runProcess('docker', ['port', name, '6379/tcp'], { cwd: repoRoot, stdoutOnly: true })).trim();
   const port = portLine.split(':').at(-1);
   const endpoint = `127.0.0.1:${port}`;
   await waitTcp(endpoint, 10000);
   return {
     endpoint,
     async stop() {
-      await runProcess('docker', ['rm', '-f', '-v', containerId], { cwd: repoRoot, allowFailure: true });
+      await runProcess('docker', ['rm', '-f', '-v', name], { cwd: repoRoot, allowFailure: true });
     }
   };
 }
@@ -1040,19 +1043,22 @@ async function runProcess(command, args, options = {}) {
     env: options.env ?? process.env,
     stdio: ['ignore', 'pipe', 'pipe']
   });
-  const chunks = [];
+  // Callers that parse the result must not receive stderr: tools write progress
+  // and warnings there, and mixing the two streams corrupts the value.
+  const out = [];
+  const err = [];
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
-  child.stdout.on('data', (chunk) => chunks.push(chunk));
-  child.stderr.on('data', (chunk) => chunks.push(chunk));
+  child.stdout.on('data', (chunk) => out.push(chunk));
+  child.stderr.on('data', (chunk) => err.push(chunk));
   const result = await new Promise((resolve) => {
     child.on('exit', (code, signal) => resolve({ code, signal }));
   });
-  const output = chunks.join('');
+  const combined = out.join('') + err.join('');
   if (result.code !== 0 && options.allowFailure !== true) {
-    throw new Error(`${command} ${args.join(' ')} failed with ${result.code ?? result.signal}\n${output}`);
+    throw new Error(`${command} ${args.join(' ')} failed with ${result.code ?? result.signal}\n${combined}`);
   }
-  return output;
+  return options.stdoutOnly === true ? out.join('') : combined;
 }
 
 async function waitTcp(endpoint, timeoutMs) {

@@ -269,7 +269,8 @@ export interface ReadyBatch {
 }
 
 export interface ReceiveBatch {
-  reset(): void;
+  /** Reuses the batch, limiting this receive to the admitted record count. */
+  reset(messageCapacity?: number): void;
   close(): void;
 }
 

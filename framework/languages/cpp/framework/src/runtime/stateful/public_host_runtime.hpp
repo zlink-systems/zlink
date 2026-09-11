@@ -758,8 +758,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     protocol::application_payload_t
     encode_application (const std::vector<zlink::message_t> &parts,
                         std::span<const std::uint8_t> metadata = {}) const;
-    std::vector<zlink::message_t>
-    decode_application (const protocol::application_payload_t &payload) const;
     actor_ref_t framework_actor_ref (const stateful::object_ref_t &object,
                                      std::string actor_type) const;
     call_id_t next_operation ();
