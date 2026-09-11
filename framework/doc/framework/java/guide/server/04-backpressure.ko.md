@@ -41,14 +41,19 @@ ZLink는 세 번째 방식을 사용한다. 이렇게 **받는 쪽의 처리 지
 
 Framework host의 backpressure는 서로 다른 두 자원을 제한한다. Core HWM은 ordinary
 send·receive queue가 보유한 accounted byte를 origin별로 제한한다. Framework의 Application job
-queue는 handler 실행을 기다리는 job 수를 host instance 전체에서 제한한다. Byte와 job을 같은
-상한으로 합치거나 서로 환산하지 않는다.
+queue는 handler 실행을 기다리는 job 수를 host instance 전체에서 제한한다.
+
+Byte와 job을 같은 상한으로 합치거나 서로 환산하지 않는다.
 
 Core queue가 application record를 binding·Framework에 넘기면 그 record의 Core receive HWM
-계상은 끝난다. Application Job Queue permit은 receive·claim 직전에 얻고 실제 사용자 callback의
-첫 instruction 직전에 반환한다. Handler가 시작된 뒤 비동기 I/O를 기다리는 동안에는 job queue
-permit을 다시 점유하지 않는다. Record payload는 필요한 terminal까지 Framework 쪽 owner가
-유지하지만 Core HWM budget을 계속 점유하지 않는다.
+계상은 끝난다.
+
+Application Job Queue permit은 receive·claim 직전에 얻고 실제 사용자 callback의 첫 instruction
+직전에 반환한다. Handler가 시작된 뒤 비동기 I/O를 기다리는 동안에는 job queue permit을 다시
+점유하지 않는다.
+
+Record payload는 필요한 terminal까지 Framework 쪽 owner가 유지하지만 Core HWM budget을 계속
+점유하지 않는다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/04-flow.html" title="Backpressure 경로 — 송신에서 수신까지, 응답은 점선으로" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/04-flow.html" target="_blank">↗ 크게 보기</a></p>
@@ -114,16 +119,24 @@ Application job queue permit은 queue 게시나 executor task 생성 시점이 �
 
 Receive 전에 식별할 수 있는 terminal reply·error completion은 ordinary ingress permit과 Core
 ordinary byte HWM을 사용하지 않는다. Ordinary connection에서 먼저 받은 record는 분류 후 이 bypass를
-얻지 않는다. 그 밖의 control·malformed record는 receive 전에 permit을 얻고, handler job을 만들지
-않는다고 분류한 직후 반환한다. 이 구분 덕분에 ordinary traffic이 포화되어도 이미 시작한 request의
-terminal completion은 계속 진행한다.
+얻지 않는다.
+
+그 밖의 control·malformed record는 receive 전에 permit을 얻고, handler job을 만들지 않는다고
+분류한 직후 반환한다.
+
+이 구분 덕분에 ordinary traffic이 포화되어도 이미 시작한 request의 terminal completion은 계속
+진행한다.
 
 ### 2.4 Application 연결과 Completion 연결 분리
 
-한 상대와 연결하면 두 개의 경로를 만든다. **Application 연결**은 일반 message와 request뿐 아니라
-Framework heartbeat, topology, relocation과 service-wire `sendReady` kind `12`를 나른다. 이
-Framework control은 data line FIFO에 남는다. **Completion 연결**은 이미 보낸 request의 terminal
-reply와 error reply를 나르며 Framework의 범용 control channel이 아니다.
+한 상대와 연결하면 두 개의 경로를 만든다.
+
+**Application 연결**은 일반 message와 request뿐 아니라 Framework heartbeat, topology,
+relocation과 service-wire `sendReady` kind `12`를 나른다. 이 Framework control은 data line
+FIFO에 남는다.
+
+**Completion 연결**은 이미 보낸 request의 terminal reply와 error reply를 나르며 Framework의
+범용 control channel이 아니다.
 
 경로를 나누는 이유는 backlog가 차서 수신을 멈출 때 reply까지 같은 경로에 있으면 이미 보낸
 request가 완료되지 못하고 그 handler도 끝나지 못해 backlog가 줄어들 방법이 없어지기
@@ -148,9 +161,10 @@ client.sendToChannel("orders", new CancelOrder("order-1042")).submit().toComplet
 
 Framework는 binding operation 하나만 시작한다. 자리가 없으면 Core가 그 같은 operation의 HWM
 대기와 내부 재시도를 소유하고 `DefaultSocketSendTimeout`(기본 1초) 안에 operation별 completion을
-완료한다. 자리가 끝까지 생기지 않으면 `DeadlineExceeded` 예외로 끝난다. **Framework는 두 번째
-operation을 만들거나 다시 보내지 않는다** — terminal 실패 뒤 새 operation으로 재시도할지, 버릴지,
-사용자에게 실패를 알릴지는 application이 정한다.
+완료한다. 자리가 끝까지 생기지 않으면 `DeadlineExceeded` 예외로 끝난다.
+
+**Framework는 두 번째 operation을 만들거나 다시 보내지 않는다** — terminal 실패 뒤 새
+operation으로 재시도할지, 버릴지, 사용자에게 실패를 알릴지는 application이 정한다.
 
 ```java
 try {
@@ -170,8 +184,11 @@ try {
 
 다시 보내도 되는지는 application이 업무 규칙에 따라 판단한다. **같은 명령이 두 번 도착해도
 결과가 같을 때만** 재시도가 안전하다 — 주문 취소는 두 번 도착해도 취소된 상태 하나로
-끝나지만, 결제 승인은 두 번 승인될 수 있다. 후자라면 재시도 대신 실패를 호출자에게
-전달하거나, 명령에 고유 id를 실어 받는 쪽이 중복을 걸러내도록 한 다음에 재시도한다.
+끝나지만, 결제 승인은 두 번 승인될 수 있다.
+
+후자라면 재시도 대신 실패를 호출자에게 전달하거나, 명령에 고유 id를 실어 받는 쪽이 중복을
+걸러내도록 한 다음에 재시도한다.
+
 재시도하더라도 곧바로 다시 보내면 아직 비워지지 않은 queue에 요청을 다시 쌓아 정체를
 키우므로, 재시도 사이에 간격을 둔다.
 
@@ -237,9 +254,10 @@ timeout으로 끝나도 이미 시작된 remote handler의 실행은 취소되�
 
 마지막 줄이 특히 헷갈리는 자리다. **reply에는 호출자가 지정한 request timeout을 쓰지
 않는다.** client가 5초를 기다리기로 했다고 해서 서버의 reply 제출이 5초를 기다리지 않는다.
-STREAM one-way send는 call별 timeout modifier로 이 대기를 더 짧게 제한할 수 있다. Socket timeout을
-연장하지 않고 둘 중 먼저 도달하는 deadline을 사용하며, deadline 뒤에는 late admission이나 replay가 없다.
-이 modifier는 reply에 적용하지 않는다.
+
+STREAM one-way send는 call별 timeout modifier로 이 대기를 더 짧게 제한할 수 있다. Socket
+timeout을 연장하지 않고 둘 중 먼저 도달하는 deadline을 사용하며, deadline 뒤에는 late
+admission이나 replay가 없다. 이 modifier는 reply에 적용하지 않는다.
 
 지정하지 않으면 각 경로가 1초를 쓴다. 값은 millisecond로 올림해 `1` 이상이어야 하며,
 `0` · 음수 · 무한대는 **host 시작에서 거부한다** — 조용히 기본값으로 바뀌지 않는다.
@@ -315,7 +333,10 @@ Framework는 기본적으로 permits in use가 상한의 80%에 도달하면 `pa
 회복되면 `running`으로 바꾼다. Pause permit count는 올림, resume permit count는 내림으로
 계산한다. `setApplicationJobQueuePauseThresholdPercent`(`1..100`)와
 `setApplicationJobQueueResumeThresholdPercent`(`0..99`)로 조정할 수 있지만 resume 값은 pause
-값보다 작아야 한다. Pressure 상태 자체는 readiness나 liveness를 바꾸지 않는다.
+값보다 작아야 한다.
+
+Pressure 상태 자체는 readiness나 liveness를 바꾸지 않는다.
+
 Receive-flow 연동 대상은 RouteMesh와 ClientServer의 paired DEALER/ROUTER뿐이며 PUB/SUB와
 STREAM에는 이 pressure 상태를 적용하지 않는다.
 
@@ -327,9 +348,12 @@ STREAM에는 이 pressure 상태를 적용하지 않는다.
 | `Throughput` | 256 |
 
 `CoreHwmProfile`과 `ApplicationJobQueueProfile`은 같은 label을 사용하지만 서로 다른 public type과
-계산이다. Profile은 benchmark를 시작하기 위한 bootstrap 값이다. 운영에서는 목표 CPU 사용률과
-허용 latency에서 `reserved + queued` permit 분포, payload 크기 분포와 process memory를 함께 측정해
-manual job 상한을 정한다. 큰 payload를 오래 유지하는 workload에서는 Core profile을 바꾸는 대신
+계산이다. Profile은 benchmark를 시작하기 위한 bootstrap 값이다.
+
+운영에서는 목표 CPU 사용률과 허용 latency에서 `reserved + queued` permit 분포, payload 크기
+분포와 process memory를 함께 측정해 manual job 상한을 정한다.
+
+큰 payload를 오래 유지하는 workload에서는 Core profile을 바꾸는 대신
 `maxQueuedApplicationJobs`를 낮춰 Framework가 동시에 소유할 record 수를 줄인다.
 
 상한에 도달하면 새 ordinary ingress는 가장 오래 기다린 source부터 permit 반환을 기다린다. Batch와
@@ -345,10 +369,11 @@ options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS);  // 기
 ```
 
 message flow 기록에 `backpressured`가 남았다면 보낼 자리를 기다리는 일이 실제로 일어났다는
-뜻이다. 함께 확인하는 메트릭은 `zlink.mesh_node.request.timeouts`(request가
-경계에 걸린 횟수)이며, 어느 실행 대상이 지연의 원인인지는 handler 실행 시간과 노드별 처리
-지표로 좁힌다([11. Monitoring](11-monitoring.ko.md) ·
-[12-operations](12-operations.ko.md)).
+뜻이다. 함께 확인하는 메트릭은 `zlink.mesh_node.request.timeouts`(request가 경계에 걸린
+횟수)다.
+
+어느 실행 대상이 지연의 원인인지는 handler 실행 시간과 노드별 처리 지표로 좁힌다
+([11. Monitoring](11-monitoring.ko.md) · [12-operations](12-operations.ko.md)).
 
 Byte 압력은 `zlink.host.core_hwm.effective_budget`, `applied`, `accounted`와 `blocked_ratio`를
 함께 본다. Handler 시작 전 job 압력은 `zlink.host.application_job_queue.limit`, `jobs`,
@@ -363,8 +388,10 @@ gauge를 유지하고 peak를 current로 재기준화하며 현재 epoch의 coun
 이 공통 가이드는 언어별 구현 차이를 열거하지 않는다. 공통 동작은
 [Framework API §2.1](../../../common/spec/server/00-foundation/06-framework-api.ko.md#3-core-memory-budget과-application-job-queue-설정),
 status와 reset 의미는 [runtime monitoring](../../../common/spec/server/06-observability/01-runtime-monitoring.ko.md)이
-소유한다. 각 언어에서 실제로 사용하는 이름과 호출 형태는 해당 언어의 `16. Options`,
-`11. Monitoring`과 [exact interface](../../../common/spec/server/languages/README.ko.md)에서 확인한다.
+소유한다.
+
+각 언어에서 실제로 사용하는 이름과 호출 형태는 해당 언어의 `16. Options`, `11. Monitoring`과
+[exact interface](../../../common/spec/server/languages/README.ko.md)에서 확인한다.
 
 ## 7. 자주 발생하는 문제
 

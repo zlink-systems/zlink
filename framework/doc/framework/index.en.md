@@ -16,7 +16,9 @@ that an existing web service otherwise takes on when it adds real-time features.
 
     Game servers make this problem clearest. The web shares a single shape — "respond when
     a request comes in" — which let standard frameworks like Spring and `ASP.NET Core`
-    take hold. Game servers are different. The genre itself decides the topology: a board
+    take hold.
+
+    Game servers are different. The genre itself decides the topology: a board
     game's room-based matching, a MORPG's room/stage split from the lobby, an MMORPG's zone
     mesh and mass broadcast. With no shape to converge on, every team has redesigned its
     own topology starting from the socket layer.
@@ -32,7 +34,9 @@ that an existing web service otherwise takes on when it adds real-time features.
 
     So for a long time the choice narrowed to two — build all of this yourself from
     scratch, or move to a separate runtime, a game server engine, and relearn everything
-    from how you write code to how you deploy and operate it. The industry has actually
+    from how you write code to how you deploy and operate it.
+
+    The industry has actually
     used four major configurations, and in ZLink all four combine on top of one
     declarative model. How the four map to each other is covered in
     [Overview](dotnet/guide/server/01-overview.en.md) chapter 2.
@@ -42,10 +46,11 @@ that an existing web service otherwise takes on when it adds real-time features.
 This code runs **inside a dungeon room**: when a boss is defeated, it applies part of the
 reward to the player's guild as well. The first handler runs on the player side — it applies
 the kill reward to the player, then sends a request to the guild. The second handles that
-request in the guild Instance Spot, applying it without synchronization. This makes two
-things clear. **There's no lock** — both handlers already run serially inside their own
-spots. And **the async call reads like synchronous code** — the player-side request to the
-guild is just the next line, with no callback or futures composition.
+request in the guild Instance Spot, applying it without synchronization.
+
+This makes two things clear. **There's no lock** — both handlers already run serially inside
+their own spots. And **the async call reads like synchronous code** — the player-side request
+to the guild is just the next line, with no callback or futures composition.
 
 === "C#/.NET"
 

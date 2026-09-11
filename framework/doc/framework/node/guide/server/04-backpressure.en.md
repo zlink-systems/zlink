@@ -46,15 +46,19 @@ symptom isn't "the message vanished" — it's "`send` got slow" or "`DeadlineExc
 
 Framework host backpressure limits two different resources. Core HWM limits accounted bytes
 held by ordinary send/receive queues per origin. The framework's application job queue limits
-the number of jobs waiting to start a handler across the whole host instance. Bytes and jobs
-aren't combined into one ceiling or converted into each other.
+the number of jobs waiting to start a handler across the whole host instance.
+
+Bytes and jobs aren't combined into one ceiling or converted into each other.
 
 When a Core queue hands an application record to the binding/framework, Core receive-HWM
-accounting for that record ends. The framework acquires an application job queue permit
-immediately before receive/claim and returns it immediately before the actual user callback's
-first instruction. A handler that has started and is awaiting asynchronous I/O therefore does
-not reacquire the queue permit. A framework-side owner keeps the record payload valid until its
-required terminal outcome, but it does not continue to occupy Core HWM budget.
+accounting for that record ends.
+
+The framework acquires an application job queue permit immediately before receive/claim and
+returns it immediately before the actual user callback's first instruction. A handler that has
+started and is awaiting asynchronous I/O therefore does not reacquire the queue permit.
+
+A framework-side owner keeps the record payload valid until its required terminal outcome, but
+it does not continue to occupy Core HWM budget.
 
 <iframe class="zlink-diagram" src="/common/diagrams/04-flow-en.html" title="Backpressure path — send to receive, replies dashed" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/04-flow-en.html" target="_blank">↗ View larger</a></p>
@@ -123,18 +127,24 @@ an existing waiter. A handler does not reacquire the permit after it starts and 
 
 Terminal reply/error completion identifiable before receive uses neither an ordinary-ingress
 permit nor the ordinary Core byte HWM. A record received first on an ordinary connection does
-not gain this bypass after classification. Every other control or malformed record acquires
-before receive and returns the permit immediately after being classified as creating no
-handler job. This separation allows terminal completion of an
-already-started request to progress while ordinary traffic is saturated.
+not gain this bypass after classification.
+
+Every other control or malformed record acquires before receive and returns the permit
+immediately after being classified as creating no handler job.
+
+This separation allows terminal completion of an already-started request to progress while
+ordinary traffic is saturated.
 
 ### 2.4 Splitting the Application Connection and Completion Connection
 
-Connecting to one peer creates two paths. The **Application connection** carries ordinary
-messages and requests as well as Framework heartbeat, topology, relocation, and service-wire
-`sendReady` kind `12`; this Framework control remains on the data-line FIFO. The **Completion
-connection** carries terminal replies and error replies for already-sent requests. It is not a
-general-purpose Framework control channel.
+Connecting to one peer creates two paths.
+
+The **Application connection** carries ordinary messages and requests as well as Framework
+heartbeat, topology, relocation, and service-wire `sendReady` kind `12`; this Framework control
+remains on the data-line FIFO.
+
+The **Completion connection** carries terminal replies and error replies for already-sent
+requests. It is not a general-purpose Framework control channel.
 
 The reason for splitting the path is that if the reply were on the same path when the
 backlog fills and receiving stops, an already-sent request could never complete, its handler
@@ -162,9 +172,11 @@ await client.sendToChannel('orders', cancelOrder('order-1042')).submit();
 The framework starts one binding operation. If there is no room, Core owns the HWM wait and
 internal retries for that same operation and completes its per-operation completion within
 `DefaultSocketSendTimeout` (1 second by default). If room never opens up, it ends in a
-`DeadlineExceeded` exception. **The framework does not create or resend a second operation** —
-after a terminal failure, whether to start a new operation, drop it, or tell the user it failed
-is up to the application.
+`DeadlineExceeded` exception.
+
+**The framework does not create or resend a second operation** — after a terminal failure,
+whether to start a new operation, drop it, or tell the user it failed is up to the
+application.
 
 ```typescript
 try {
@@ -182,10 +194,12 @@ try {
 Whether it's OK to resend is judged by the application's business rules. Retry is safe
 **only when the same command arriving twice produces the same result** — canceling an order
 twice still ends in one canceled state, but approving a payment twice can approve it twice.
+
 For the latter, either surface the failure to the caller instead of retrying, or carry a
-unique id on the command so the receiver can filter duplicates before you retry. Even when
-retrying, sending again immediately just piles the request back onto a queue that hasn't
-drained yet and grows the congestion, so leave a gap between retries.
+unique id on the command so the receiver can filter duplicates before you retry.
+
+Even when retrying, sending again immediately just piles the request back onto a queue that
+hasn't drained yet and grows the congestion, so leave a gap between retries.
 
 Only that call is suspended during the wait; the execution thread handles other work
 ([05-channel-messaging](05-channel-messaging.en.md#asynchronous-execution)).
@@ -253,9 +267,10 @@ used is owned by the socket that call uses.
 The last row is an especially easy place to get confused. **A reply doesn't use the request
 timeout the caller specified.** Just because the client decided to wait 5 seconds doesn't
 mean the server's reply submission waits 5 seconds.
-A STREAM one-way send can use a per-call timeout modifier to shorten this wait. It never extends the
-socket timeout; the earlier deadline wins, with no late admission or replay afterward. This modifier
-does not apply to a reply.
+
+A STREAM one-way send can use a per-call timeout modifier to shorten this wait. It never
+extends the socket timeout; the earlier deadline wins, with no late admission or replay
+afterward. This modifier does not apply to a reply.
 
 If unspecified, each path uses 1 second. The value is rounded up to milliseconds and must be
 `1` or greater — `0`, a negative number, or infinity are **rejected at host startup** —
@@ -336,11 +351,14 @@ Manual `maxQueuedApplicationJobs` is an exact limit in `1..2,147,483,647`. `0` i
 unlimited; it is a startup configuration error. Without a manual value, the framework
 calculates the value once at startup from the effective processor count and profile.
 
-By default, the framework changes to `paused` when the number of permits in use reaches 80% of the limit and
-back to `running` at or below 60%. It rounds the pause permit count up and the resume permit
-count down. Tune these boundaries with `applicationJobQueuePauseThresholdPercent` (`1..100`)
-and `applicationJobQueueResumeThresholdPercent` (`0..99`); resume must be below pause.
+By default, the framework changes to `paused` when the number of permits in use reaches 80% of
+the limit and back to `running` at or below 60%. It rounds the pause permit count up and the
+resume permit count down. Tune these boundaries with `applicationJobQueuePauseThresholdPercent`
+(`1..100`) and `applicationJobQueueResumeThresholdPercent` (`0..99`); resume must be below
+pause.
+
 Pressure state itself does not change readiness or liveness.
+
 Receive-flow coupling applies only to paired DEALER/ROUTER sockets for RouteMesh and
 ClientServer; it does not apply this pressure state to PUB/SUB or STREAM.
 
@@ -352,12 +370,15 @@ ClientServer; it does not apply this pressure state to PUB/SUB or STREAM.
 | `Throughput` | 256 |
 
 `CoreHwmProfile` and `ApplicationJobQueueProfile` use the same labels but are different
-public types and calculations. A profile is a bootstrap value for starting a benchmark. In
-production, measure the `reserved + queued` permit distribution, payload-size distribution,
+public types and calculations. A profile is a bootstrap value for starting a benchmark.
+
+In production, measure the `reserved + queued` permit distribution, payload-size distribution,
 and process memory at the target CPU usage and acceptable latency, then set the manual job
-limit. For a workload that retains large payloads for longer, lower `maxQueuedApplicationJobs`
-to reduce the number of records owned concurrently by the framework instead of changing the
-Core profile.
+limit.
+
+For a workload that retains large payloads for longer, lower `maxQueuedApplicationJobs` to
+reduce the number of records owned concurrently by the framework instead of changing the Core
+profile.
 
 At the limit, new ordinary ingress waits for a returned permit in oldest-waiter order. Batch
 and 1:N local dispatch do not create more handler jobs than the permits already secured.
@@ -372,10 +393,11 @@ builder.configureDispatch().messageFlow("errors");  // Default — records error
 ```
 
 If `backpressured` shows up in the message flow record, it means waiting for a send slot
-genuinely happened. The metric to check alongside it is
-`zlink.mesh_node.request.timeouts` (how many times a request hit the boundary). Use handler
-execution time and per-node processing metrics to narrow down which execution target is
-causing the delay (the [11. Monitoring](11-monitoring.en.md) ·
+genuinely happened. The metric to check alongside it is `zlink.mesh_node.request.timeouts`
+(how many times a request hit the boundary).
+
+Use handler execution time and per-node processing metrics to narrow down which execution
+target is causing the delay (the [11. Monitoring](11-monitoring.en.md) ·
 [12-operations](12-operations.en.md)).
 
 For byte pressure, inspect `zlink.host.core_hwm.effective_budget`, `applied`, `accounted`,
@@ -393,8 +415,9 @@ attribute first.
 This common guide does not list per-language implementation differences. Common behavior is
 owned by [Framework API §2.1](../../../common/spec/server/00-foundation/06-framework-api.en.md),
 and status/reset semantics are owned by
-[Runtime Monitoring](../../../common/spec/server/06-observability/01-runtime-monitoring.en.md). See the language's
-`16. Options`, `11. Monitoring`, and
+[Runtime Monitoring](../../../common/spec/server/06-observability/01-runtime-monitoring.en.md).
+
+See the language's `16. Options`, `11. Monitoring`, and
 [exact interface](../../../common/spec/server/languages/README.en.md) for its spelling and
 call form.
 
