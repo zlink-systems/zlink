@@ -7,6 +7,8 @@ const node_test_1 = __importDefault(require("node:test"));
 const strict_1 = __importDefault(require("node:assert/strict"));
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
+const node_os_1 = __importDefault(require("node:os"));
+const node_child_process_1 = __importDefault(require("node:child_process"));
 function collectTypeScriptFiles(root) {
     return node_fs_1.default.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
         const fullPath = node_path_1.default.join(root, entry.name);
@@ -66,6 +68,44 @@ function forbiddenPackageExports(exportsValue) {
     strict_1.default.deepEqual(forbiddenPackageExports({ '.': './dist/index.js', './runtime/native': './dist/runtime/native.js' }), ['./runtime/native']);
     const packageJson = JSON.parse(node_fs_1.default.readFileSync(node_path_1.default.resolve(__dirname, '../../package.json'), 'utf8'));
     strict_1.default.deepEqual(forbiddenPackageExports(packageJson.exports), []);
+});
+(0, node_test_1.default)('Core paths emitted into binding.gyp are safe for the host parser', () => {
+    const root = node_fs_1.default.mkdtempSync(node_path_1.default.join(node_os_1.default.tmpdir(), 'zlink-node-core-path-'));
+    try {
+        const includeDir = node_path_1.default.join(root, 'include');
+        const libraryDir = node_path_1.default.join(root, 'lib');
+        const provenanceDir = node_path_1.default.join(root, 'share', 'zlink');
+        node_fs_1.default.mkdirSync(includeDir, { recursive: true });
+        node_fs_1.default.mkdirSync(libraryDir, { recursive: true });
+        node_fs_1.default.mkdirSync(provenanceDir, { recursive: true });
+        node_fs_1.default.writeFileSync(node_path_1.default.join(includeDir, 'zlink.h'), 'test');
+        const libraryName = process.platform === 'win32'
+            ? 'zlink.lib'
+            : process.platform === 'darwin' ? 'libzlink.dylib' : 'libzlink.so';
+        const library = node_path_1.default.join(libraryDir, libraryName);
+        node_fs_1.default.writeFileSync(library, 'test');
+        node_fs_1.default.writeFileSync(node_path_1.default.join(provenanceDir, 'core-package-provenance.json'), JSON.stringify({
+            package: 'zlink-core',
+            version: '9.8.7',
+            abiMajor: 0
+        }));
+        const resolver = node_path_1.default.resolve(__dirname, '../../scripts/resolve_core.js');
+        const resolve = (query) => node_child_process_1.default.execFileSync(process.execPath, [resolver, query], {
+            encoding: 'utf8',
+            env: { ...process.env, ZLINK_CORE_SOURCE: 'release', ZLINK_CORE_INSTALL_PREFIX: root }
+        });
+        const expected = (value) => process.platform === 'win32'
+            ? value.replaceAll('\\', '/')
+            : value;
+        strict_1.default.equal(resolve('include'), expected(node_fs_1.default.realpathSync(includeDir)));
+        strict_1.default.equal(resolve('library'), expected(node_fs_1.default.realpathSync(library)));
+        if (process.platform === 'win32') {
+            strict_1.default.equal(resolve('library').includes('\\'), false);
+        }
+    }
+    finally {
+        node_fs_1.default.rmSync(root, { recursive: true, force: true });
+    }
 });
 (0, node_test_1.default)('Node requests and writable send retries use pull completion without callback bridges', () => {
     const nativeRoot = node_path_1.default.resolve(__dirname, '../../native/src');

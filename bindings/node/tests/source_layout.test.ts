@@ -4,6 +4,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import childProcess from 'node:child_process';
 
 function collectTypeScriptFiles(root: string): string[] {
   return fs.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
@@ -76,6 +78,50 @@ test('package exports expose only the public root', () => {
     fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf8')
   ) as { exports?: unknown };
   assert.deepEqual(forbiddenPackageExports(packageJson.exports), []);
+});
+
+test('Core paths emitted into binding.gyp are safe for the host parser', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-node-core-path-'));
+  try {
+    const includeDir = path.join(root, 'include');
+    const libraryDir = path.join(root, 'lib');
+    const provenanceDir = path.join(root, 'share', 'zlink');
+    fs.mkdirSync(includeDir, { recursive: true });
+    fs.mkdirSync(libraryDir, { recursive: true });
+    fs.mkdirSync(provenanceDir, { recursive: true });
+    fs.writeFileSync(path.join(includeDir, 'zlink.h'), 'test');
+    const libraryName = process.platform === 'win32'
+      ? 'zlink.lib'
+      : process.platform === 'darwin' ? 'libzlink.dylib' : 'libzlink.so';
+    const library = path.join(libraryDir, libraryName);
+    fs.writeFileSync(library, 'test');
+    fs.writeFileSync(path.join(provenanceDir, 'core-package-provenance.json'), JSON.stringify({
+      package: 'zlink-core',
+      version: '9.8.7',
+      abiMajor: 0
+    }));
+
+    const resolver = path.resolve(__dirname, '../../scripts/resolve_core.js');
+    const resolve = (query: 'include' | 'library') => childProcess.execFileSync(
+      process.execPath,
+      [resolver, query],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, ZLINK_CORE_SOURCE: 'release', ZLINK_CORE_INSTALL_PREFIX: root }
+      }
+    );
+    const expected = (value: string) => process.platform === 'win32'
+      ? value.replaceAll('\\', '/')
+      : value;
+
+    assert.equal(resolve('include'), expected(fs.realpathSync(includeDir)));
+    assert.equal(resolve('library'), expected(fs.realpathSync(library)));
+    if (process.platform === 'win32') {
+      assert.equal(resolve('library').includes('\\'), false);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('Node requests and writable send retries use pull completion without callback bridges', () => {

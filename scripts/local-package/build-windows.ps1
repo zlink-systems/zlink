@@ -5,6 +5,8 @@ param(
   [string[]]$Language = @("cpp", "dotnet", "java", "node"),
   [ValidateSet("Release", "Debug")]
   [string]$Configuration = "Release",
+  [ValidateSet("", "x64", "arm64")]
+  [string]$Architecture = "",
   [string]$PythonExecutable = "",
   [switch]$SyncVersions,
   [switch]$VerifyVersions
@@ -17,6 +19,7 @@ if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
 } else {
   $RepositoryRoot = (Resolve-Path $RepositoryRoot).Path
 }
+. (Join-Path $PSScriptRoot "windows-platform.ps1")
 $syncScript = Join-Path $RepositoryRoot "scripts\local-package\sync-version.py"
 if ([string]::IsNullOrWhiteSpace($PythonExecutable)) {
   $pythonCommand = Get-Command python.exe, python3.exe -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -53,10 +56,8 @@ if ([string]::IsNullOrWhiteSpace($CorePrefix)) {
   throw "CorePrefix is required when building Windows packages"
 }
 $CorePrefix = (Resolve-Path $CorePrefix).Path
-$artifactRoot = Join-Path $RepositoryRoot ".artifacts\windows"
 $versionFile = Join-Path $RepositoryRoot "VERSION"
 $coreVersion = (Select-String -LiteralPath $versionFile -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
-$manifest = Join-Path $CorePrefix "share\zlink\core-package-provenance.json"
 
 if ([string]::IsNullOrWhiteSpace($coreVersion)) {
   throw "Unable to read Core version from $RepositoryRoot"
@@ -64,20 +65,15 @@ if ([string]::IsNullOrWhiteSpace($coreVersion)) {
 if (-not (Test-Path -LiteralPath (Join-Path $CorePrefix "include\zlink.h"))) {
   throw "Core prefix is missing public headers: $CorePrefix"
 }
-if (-not (Test-Path -LiteralPath (Join-Path $CorePrefix "bin\zlink.dll"))) {
-  throw "Core prefix is missing zlink.dll: $CorePrefix"
-}
-if (-not (Test-Path -LiteralPath $manifest)) {
-  throw "Core prefix is missing provenance: $manifest"
-}
-$provenance = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
-if ($provenance.package -ne "zlink-core" -or $provenance.version -ne $coreVersion -or $provenance.abiMajor -ne 0) {
-  throw "Core prefix provenance does not match Core ${coreVersion}: $manifest"
-}
-$runtimeHash = (Get-FileHash -LiteralPath (Join-Path $CorePrefix 'bin\zlink.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($provenance.runtime.sha256 -ne $runtimeHash) {
-  throw "Core runtime hash does not match its provenance: $CorePrefix"
-}
+$corePackage = Resolve-ZLinkWindowsCorePackage `
+  -CorePrefix $CorePrefix `
+  -ExpectedVersion $coreVersion `
+  -RequestedArchitecture $Architecture
+$CorePrefix = $corePackage.Prefix
+$manifest = $corePackage.ManifestPath
+$target = $corePackage.Target
+$artifactDirectory = if ($target.Architecture -eq "x64") { "windows" } else { "windows-arm64" }
+$artifactRoot = Join-Path $RepositoryRoot ".artifacts\$artifactDirectory"
 
 New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 
@@ -131,13 +127,14 @@ function Copy-NodePackageSource([string]$Source, [string]$Destination) {
 }
 
 function Assert-NodePackage([string]$Package, [string]$WorkRoot, [string]$Version,
-                            [string]$CoreRuntime, [string]$CoreManifest) {
+                            [string]$CoreRuntime, [string]$CoreManifest,
+                            [string]$NodePrebuild, [string]$Architecture) {
   $verifyRoot = Join-Path $WorkRoot "verify"
   New-Item -ItemType Directory -Force -Path $verifyRoot | Out-Null
   Invoke-Checked tar.exe @("-xzf", $Package, "-C", $verifyRoot)
 
   $packageRoot = Join-Path $verifyRoot "package"
-  $prebuild = Join-Path $packageRoot "prebuilds\win32-x64"
+  $prebuild = Join-Path $packageRoot ("prebuilds\" + $NodePrebuild)
   $addon = Join-Path $prebuild "zlink.node"
   $runtime = Join-Path $prebuild "zlink.dll"
   $manifest = Join-Path $packageRoot "provenance\core-package-provenance.json"
@@ -160,6 +157,41 @@ function Assert-NodePackage([string]$Package, [string]$WorkRoot, [string]$Versio
       (Get-FileHash -LiteralPath $CoreManifest -Algorithm SHA256).Hash) {
     throw "Node package provenance does not match the approved Core prefix"
   }
+  if ((Get-ZLinkPeArchitecture -Path $addon) -ne $Architecture) {
+    throw "Node addon architecture does not match $Architecture"
+  }
+  $oppositePrebuild = if ($NodePrebuild -eq "win32-x64") {
+    "win32-arm64"
+  } else {
+    "win32-x64"
+  }
+  if (Test-Path -LiteralPath (Join-Path $packageRoot ("prebuilds\" + $oppositePrebuild))) {
+    throw "Node package contains the wrong architecture prebuild $oppositePrebuild"
+  }
+}
+
+function Assert-ZLinkZipEntrySet(
+  [string]$PackagePath,
+  [string[]]$RequiredEntries,
+  [string[]]$ForbiddenEntries
+) {
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $archive = [IO.Compression.ZipFile]::OpenRead($PackagePath)
+  try {
+    $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace("\", "/") })
+  } finally {
+    $archive.Dispose()
+  }
+  foreach ($required in $RequiredEntries) {
+    if ($entries -notcontains $required) {
+      throw "Package is missing architecture-specific entry ${required}: $PackagePath"
+    }
+  }
+  foreach ($forbidden in $ForbiddenEntries) {
+    if ($entries -contains $forbidden) {
+      throw "Package contains the wrong architecture entry ${forbidden}: $PackagePath"
+    }
+  }
 }
 
 foreach ($item in $Language) {
@@ -171,7 +203,7 @@ foreach ($item in $Language) {
       Remove-Item -LiteralPath $prefix -Recurse -Force -ErrorAction SilentlyContinue
       Invoke-Checked cmake @(
         "-S", (Join-Path $RepositoryRoot "bindings\cpp"), "-B", $build,
-        "-G", "Visual Studio 17 2022", "-A", "x64",
+        "-G", "Visual Studio 17 2022", "-A", $target.CMakePlatform,
         "-DCMAKE_INSTALL_PREFIX=$prefix",
         "-DZLINK_CPP_CORE_PACKAGE_PREFIX=$CorePrefix",
         "-DZLINK_CPP_BUILD_TESTS=OFF", "-DZLINK_CPP_BUILD_SAMPLES=OFF"
@@ -184,6 +216,30 @@ foreach ($item in $Language) {
       if (-not (Test-Path -LiteralPath (Join-Path $prefix "lib\zlink_cpp.lib"))) {
         throw "C++ package library is missing: $prefix"
       }
+      $cachePlatform = Select-String -LiteralPath (Join-Path $build "CMakeCache.txt") `
+        -Pattern "^CMAKE_GENERATOR_PLATFORM:INTERNAL=(.+)$"
+      if (-not $cachePlatform -or
+          $cachePlatform.Matches[0].Groups[1].Value -ne $target.CMakePlatform) {
+        throw "C++ package generator does not match Core platform $($target.CorePlatform)"
+      }
+      $packageShare = Join-Path $prefix "share\zlink"
+      New-Item -ItemType Directory -Force -Path $packageShare | Out-Null
+      $cppProvenance = [ordered]@{
+        schema = 1
+        package = "zlink-cpp"
+        version = $bindingVersion
+        coreVersion = $coreVersion
+        corePlatform = $target.CorePlatform
+        architecture = $target.Architecture
+        library = [ordered]@{
+          path = "lib/zlink_cpp.lib"
+          sha256 = (Get-FileHash -LiteralPath (Join-Path $prefix "lib\zlink_cpp.lib") -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+      } | ConvertTo-Json -Depth 5
+      [IO.File]::WriteAllText(
+        (Join-Path $packageShare "zlink-cpp-package-provenance.json"),
+        $cppProvenance + [Environment]::NewLine,
+        (New-Object Text.UTF8Encoding($false)))
     }
     "dotnet" {
       $out = Join-Path $artifactRoot "nuget"
@@ -191,12 +247,16 @@ foreach ($item in $Language) {
       Invoke-Checked dotnet @(
         "pack", (Join-Path $RepositoryRoot "bindings\dotnet\src\Zlink\Zlink.csproj"),
         "-c", $Configuration, "-o", $out,
-        "-p:ZLinkWindowsX64NativeRoot=$(Join-Path $CorePrefix 'bin')",
+        "-p:$($target.DotNetNativeRootProperty)=$(Join-Path $CorePrefix 'bin')",
         "-p:ZLinkCoreVersion=$coreVersion",
         "-p:ZLinkCoreProvenancePath=$manifest"
       )
       $package = Join-Path $out "Zlink.$bindingVersion.nupkg"
       if (-not (Test-Path -LiteralPath $package)) { throw "NuGet package is missing: $package" }
+      $oppositeRid = if ($target.DotNetRid -eq "win-x64") { "win-arm64" } else { "win-x64" }
+      Assert-ZLinkZipEntrySet -PackagePath $package `
+        -RequiredEntries @("runtimes/$($target.DotNetRid)/native/zlink.dll", "provenance/core-package-provenance.json") `
+        -ForbiddenEntries @("runtimes/$oppositeRid/native/zlink.dll")
     }
     "java" {
       $maven = Join-Path $artifactRoot "maven"
@@ -204,6 +264,7 @@ foreach ($item in $Language) {
       $runtime = Join-Path $CorePrefix "bin\zlink.dll"
       $summary = [ordered]@{
         version = $coreVersion
+        platform = $target.CorePlatform
         prefix = $CorePrefix
         provenanceSha256 = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash.ToLowerInvariant()
         runtime = [ordered]@{ sha256 = (Get-FileHash -LiteralPath $runtime -Algorithm SHA256).Hash.ToLowerInvariant(); soname = "zlink.dll" }
@@ -211,11 +272,13 @@ foreach ($item in $Language) {
       $previousPrefix = $env:ZLINK_CORE_PACKAGE_PREFIX
       $previousSummary = $env:ZLINK_CORE_PACKAGE_SUMMARY
       $previousCoreVersion = $env:ZLINK_CORE_VERSION
+      $previousCorePlatform = $env:ZLINK_CORE_PLATFORM
       $previousRepository = $env:MAVEN_REPOSITORY_URL
       try {
         $env:ZLINK_CORE_PACKAGE_PREFIX = $CorePrefix
         $env:ZLINK_CORE_PACKAGE_SUMMARY = $summary
         $env:ZLINK_CORE_VERSION = $coreVersion
+        $env:ZLINK_CORE_PLATFORM = $target.CorePlatform
         $env:MAVEN_REPOSITORY_URL = ([Uri]$maven).AbsoluteUri
         Invoke-Checked (Join-Path $RepositoryRoot "bindings\java\gradlew.bat") @(
           "--no-daemon",
@@ -226,10 +289,16 @@ foreach ($item in $Language) {
         $env:ZLINK_CORE_PACKAGE_PREFIX = $previousPrefix
         $env:ZLINK_CORE_PACKAGE_SUMMARY = $previousSummary
         $env:ZLINK_CORE_VERSION = $previousCoreVersion
+        $env:ZLINK_CORE_PLATFORM = $previousCorePlatform
         $env:MAVEN_REPOSITORY_URL = $previousRepository
       }
       $jar = Join-Path $maven "systems\zlink\zlink\$bindingVersion\zlink-$bindingVersion.jar"
       if (-not (Test-Path -LiteralPath $jar)) { throw "Java binding package is missing: $jar" }
+      $javaEntry = "native/windows-$($target.JavaResourceArchitecture)/zlink.dll"
+      $oppositeJavaArchitecture = if ($target.JavaResourceArchitecture -eq "x86_64") { "aarch64" } else { "x86_64" }
+      Assert-ZLinkZipEntrySet -PackagePath $jar `
+        -RequiredEntries @($javaEntry, "META-INF/zlink/core-package-provenance.json") `
+        -ForbiddenEntries @("native/windows-$oppositeJavaArchitecture/zlink.dll")
     }
     "node" {
       $nodeRoot = Join-Path $RepositoryRoot "bindings\node"
@@ -251,11 +320,24 @@ foreach ($item in $Language) {
         Copy-NodePackageSource -Source $nodeRoot -Destination $nodeStage
         Invoke-Checked $npm @("ci", "--ignore-scripts") $nodeStage
         Invoke-Checked $npm @("run", "build") $nodeStage
-        Invoke-Checked $npx @("node-gyp", "configure", "build") $nodeStage
-        $prebuild = Join-Path $nodeStage "prebuilds\win32-x64"
+        $nodeGypArguments = @(
+          "node-gyp", "configure", "build", "--arch=$($target.NodeArchitecture)"
+        )
+        $nodeBuildConfiguration = "Release"
+        if ($Configuration -eq "Debug") {
+          $nodeGypArguments += "--debug"
+          $nodeBuildConfiguration = "Debug"
+        }
+        Invoke-Checked $npx $nodeGypArguments $nodeStage
+        $prebuild = Join-Path $nodeStage ("prebuilds\" + $target.NodePrebuild)
         New-Item -ItemType Directory -Force -Path $prebuild | Out-Null
-        Copy-Item -LiteralPath (Join-Path $nodeStage "build\Release\zlink.node") -Destination (Join-Path $prebuild "zlink.node") -Force
+        Copy-Item -LiteralPath (Join-Path $nodeStage "build\$nodeBuildConfiguration\zlink.node") `
+          -Destination (Join-Path $prebuild "zlink.node") -Force
         Copy-Item -Path (Join-Path $CorePrefix "bin\*.dll") -Destination $prebuild -Force
+        if ((Get-ZLinkPeArchitecture -Path (Join-Path $prebuild "zlink.node")) -ne
+            $target.Architecture) {
+          throw "Node addon architecture does not match Core platform $($target.CorePlatform)"
+        }
         New-Item -ItemType Directory -Force -Path (Join-Path $nodeStage "provenance") | Out-Null
         Copy-Item -LiteralPath $manifest -Destination (Join-Path $nodeStage "provenance\core-package-provenance.json") -Force
         Invoke-Checked $npm @("pack", "--ignore-scripts", "--pack-destination", $packStage) $nodeStage
@@ -266,7 +348,8 @@ foreach ($item in $Language) {
           throw "Node package is missing from the staging output: $stagedPackage"
         }
         Assert-NodePackage -Package $stagedPackage -WorkRoot $work -Version $bindingVersion `
-          -CoreRuntime (Join-Path $CorePrefix "bin\zlink.dll") -CoreManifest $manifest
+          -CoreRuntime (Join-Path $CorePrefix "bin\zlink.dll") -CoreManifest $manifest `
+          -NodePrebuild $target.NodePrebuild -Architecture $target.Architecture
         Copy-Item -LiteralPath $stagedPackage -Destination (Join-Path $out $packageName) -Force
       } finally {
         $env:ZLINK_CORE_INSTALL_PREFIX = $previousPrefix
@@ -275,6 +358,19 @@ foreach ($item in $Language) {
       }
       $package = Join-Path $out "zlink-systems-zlink-$bindingVersion.tgz"
       if (-not (Test-Path -LiteralPath $package)) { throw "Node package is missing: $package" }
+      $tar = Get-Command tar.exe, tar -ErrorAction SilentlyContinue | Select-Object -First 1
+      if ($null -eq $tar) { throw "tar is required to verify the Node package" }
+      $packageEntries = @(& $tar.Source -tf $package)
+      if ($LASTEXITCODE -ne 0) { throw "Unable to inspect Node package: $package" }
+      $nodeEntry = "package/prebuilds/$($target.NodePrebuild)/zlink.node"
+      $runtimeEntry = "package/prebuilds/$($target.NodePrebuild)/zlink.dll"
+      if ($packageEntries -notcontains $nodeEntry -or $packageEntries -notcontains $runtimeEntry) {
+        throw "Node package is missing $($target.NodePrebuild) addon or Core runtime"
+      }
+      $oppositeNodePrebuild = if ($target.NodePrebuild -eq "win32-x64") { "win32-arm64" } else { "win32-x64" }
+      if ($packageEntries -contains "package/prebuilds/$oppositeNodePrebuild/zlink.node") {
+        throw "Node package contains the wrong architecture prebuild $oppositeNodePrebuild"
+      }
     }
   }
 }

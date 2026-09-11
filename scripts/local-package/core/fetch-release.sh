@@ -112,7 +112,8 @@ esac
 manifest="$prefix/share/zlink/core-package-provenance.json"
 if [[ "$force" -eq 0 && -f "$manifest" ]]; then
   manifest_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -n1)"
-  if [[ "$manifest_version" = "$version" ]]; then
+  manifest_platform="$(sed -n 's/^[[:space:]]*"platform":[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -n1)"
+  if [[ "$manifest_version" = "$version" && "$manifest_platform" = "$platform" ]]; then
     printf '%s\n' "$prefix"
     exit 0
   fi
@@ -274,6 +275,7 @@ const path = require('node:path');
 
 const root = process.env.PREFIX;
 const version = process.env.VERSION;
+const platform = process.env.PLATFORM;
 const runtimePath = process.env.RUNTIME_PATH;
 const files = [];
 
@@ -323,11 +325,30 @@ function walk(directory) {
 walk(root);
 files.sort((a, b) => a.path.localeCompare(b.path, 'en'));
 const runtime = path.join(root, runtimePath);
+if (platform.startsWith('windows-')) {
+  const image = fs.readFileSync(runtime);
+  if (image.length < 64 || image.readUInt16LE(0) !== 0x5a4d) {
+    throw new Error(`Windows Core runtime is not a PE image: ${runtime}`);
+  }
+  const peOffset = image.readInt32LE(0x3c);
+  if (peOffset < 0 || peOffset + 6 > image.length
+      || image.readUInt32LE(peOffset) !== 0x00004550) {
+    throw new Error(`Windows Core runtime has an invalid PE header: ${runtime}`);
+  }
+  const actualMachine = image.readUInt16LE(peOffset + 4);
+  const expectedMachine = platform === 'windows-arm64' ? 0xaa64 : 0x8664;
+  if (actualMachine !== expectedMachine) {
+    throw new Error(
+      `Windows Core runtime machine 0x${actualMachine.toString(16)} does not match ${platform}`
+    );
+  }
+}
 const manifest = {
   schema: 1,
   package: 'zlink-core',
   version,
   abiMajor: 0,
+  platform,
   runtime: {
     path: runtimePath,
     sha256: crypto.createHash('sha256').update(fs.readFileSync(runtime)).digest('hex'),
