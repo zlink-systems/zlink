@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/foundation/operation_registry.hpp"
+#include "runtime/diagnostics/mesh_request_metrics.hpp"
 
 #include <condition_variable>
 #include <memory>
@@ -63,19 +64,32 @@ struct operation_completion_item_t
             owner->release ();
     }
 
+    void finish_metrics (operation_terminal_t terminal) noexcept
+    {
+        const auto outcome = terminal == operation_terminal_t::completed ? "completed"
+                           : terminal == operation_terminal_t::timed_out ? "timed_out"
+                           : terminal == operation_terminal_t::cancelled ? "cancelled"
+                           : terminal == operation_terminal_t::shutdown ? "shutdown"
+                           : "failed";
+        request_metric.complete (outcome);
+    }
+
     operation_registry_t::callback_t callback;
     std::shared_ptr<operation_registry_drain_state_t> drain_state;
     operation_terminal_t terminal = operation_terminal_t::transport_failed;
     std::vector<std::uint8_t> payload;
     std::unique_ptr<operation_completion_item_t> next;
+    mesh_request_metric_t request_metric;
 };
 
 struct operation_completion_chain_t
 {
     void append (std::unique_ptr<operation_completion_item_t> completion,
                  operation_terminal_t terminal,
-                 std::vector<std::uint8_t> payload = {}) noexcept
+                 std::vector<std::uint8_t> payload = {},
+                 std::optional<operation_terminal_t> request_terminal = {}) noexcept
     {
+        completion->finish_metrics (request_terminal.value_or (terminal));
         completion->terminal = terminal;
         completion->payload = std::move (payload);
         auto *next_tail = completion.get ();
@@ -144,11 +158,12 @@ class operation_completion_dispatcher_t
 
     void post (std::unique_ptr<operation_completion_item_t> completion,
                operation_terminal_t terminal,
-               std::vector<std::uint8_t> payload) noexcept
+               std::vector<std::uint8_t> payload,
+               std::optional<operation_terminal_t> request_terminal = {}) noexcept
     {
         operation_completion_chain_t completions;
         completions.append (
-          std::move (completion), terminal, std::move (payload));
+          std::move (completion), terminal, std::move (payload), request_terminal);
         post_chain (std::move (completions));
     }
 
@@ -272,17 +287,19 @@ void notify (
              const std::shared_ptr<operation_completion_dispatcher_t> &dispatcher,
              std::unique_ptr<operation_completion_item_t> completion,
              operation_terminal_t terminal,
-             std::vector<std::uint8_t> payload) noexcept
+             std::vector<std::uint8_t> payload,
+             std::optional<operation_terminal_t> request_terminal = {}) noexcept
 {
     dispatcher->post (
-      std::move (completion), terminal, std::move (payload));
+      std::move (completion), terminal, std::move (payload), request_terminal);
 }
 }
 
 bool operation_registry_t::register_operation (call_id_t id,
                                                clock_t::time_point deadline,
                                                callback_t callback,
-                                               std::vector<std::uint8_t> target_routing_id)
+                                               std::vector<std::uint8_t> target_routing_id,
+                                               mesh_request_metric_t request_metric)
 {
     if (!callback) {
         throw std::invalid_argument ("operation callback is required");
@@ -306,6 +323,8 @@ bool operation_registry_t::register_operation (call_id_t id,
             _pending.erase (inserted.first);
             return false;
         }
+        completion->request_metric = std::move (request_metric);
+        completion->request_metric.start ();
         inserted.first->second.completion = std::move (completion);
         return true;
     }
@@ -337,7 +356,8 @@ bool operation_registry_t::complete (const call_id_t &id,
 
 bool operation_registry_t::complete (const call_id_t &id,
                                      std::vector<std::uint8_t> payload,
-                                     before_dispatch_t before_dispatch)
+                                     before_dispatch_t before_dispatch,
+                                     operation_terminal_t request_terminal)
 {
     std::unique_ptr<operation_completion_item_t> completion;
     if (!take (id, completion)) {
@@ -354,7 +374,7 @@ bool operation_registry_t::complete (const call_id_t &id,
         return true;
     }
     notify (_completion_dispatcher, std::move (completion),
-            operation_terminal_t::completed, std::move (payload));
+            operation_terminal_t::completed, std::move (payload), request_terminal);
     return true;
 }
 
@@ -381,7 +401,8 @@ bool operation_registry_t::fail (
   const call_id_t &id,
   operation_terminal_t terminal,
   std::vector<std::uint8_t> payload,
-  before_dispatch_t before_dispatch)
+  before_dispatch_t before_dispatch,
+  std::optional<operation_terminal_t> request_terminal)
 {
     if (terminal == operation_terminal_t::completed) {
         throw std::invalid_argument ("failure terminal cannot be completed");
@@ -396,10 +417,11 @@ bool operation_registry_t::fail (
     }
     catch (...) {
         terminal = operation_terminal_t::transport_failed;
+        request_terminal.reset ();
         payload.clear ();
     }
     notify (_completion_dispatcher, std::move (completion), terminal,
-            std::move (payload));
+            std::move (payload), request_terminal);
     return true;
 }
 
