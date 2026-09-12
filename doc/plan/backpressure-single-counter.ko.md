@@ -726,3 +726,77 @@ framework보다 먼저라는 것**이다 — 분모가 0.005~0.07인 상태에�
 
 `#296`에서 남은 C++ framework의 G5 실패(68%)는 `#7`의 증상으로 옮겼다. raw가 같은
 하네스에서 3.7%로 재현되므로 그것은 framework 쪽 직렬화의 직접 증거다.
+
+## 13. 재측정 — 두 판정식이 처음으로 함께 나왔다 (2026-09-13)
+
+### 13.1 집계기 결함이 하나 더 있었다
+
+C runner는 `with_grpc_c_<stamp>.txt`를 쓰는데(`run_local.sh:9` `REPORT_FILE`) 집계기가
+`report.txt`만 찾았다. **`#295`로 C 벤치를 되살린 뒤에도 도구가 `zlink-c` 행을 통째로
+놓치고 있었다.** 그래서 formula 1이 계속 비어 있었다. reader를 고쳤다(파일 이름은 schema가
+아니다 — 디렉터리 깊이 때와 같은 판단). `tools/tests` 71건 통과.
+
+### 13.2 .NET — 첫 완전한 판정 (1 KiB)
+
+```
+zlink-dotnet / zlink-c                = 0.300   binding 계층      fail
+zlink-framework-dotnet / zlink-dotnet = 0.266   framework 추가 비용  fail
+                                        ────
+                              C API 대비  0.08
+```
+
+4 KiB는 framework 식이 0.168 fail, binding 식은 분모 G5 44.8%로 unsupported다.
+
+**두 계층이 각각 3~4배씩 잃는다.**
+
+### 13.3 "1.309 통과"가 0.266 실패로 뒤집혔다
+
+| .NET 1 KiB | 하네스 수정 전 | 후 |
+|---|---:|---:|
+| `zlink-dotnet` (raw) | 36.3 KOPS | **180.2** |
+| `zlink-framework-dotnet` | 47.5 | 47.9 |
+| framework/raw | **1.309 "통과"** | **0.266 fail** |
+
+framework 값은 거의 그대로인데 분모가 5배 올라 비율이 뒤집혔다. §10.1에서 "분모가 자기
+발에 걸린 값"이라고 판단한 것이 실측으로 확인됐다. **하네스를 고치지 않았다면 .NET을
+통과로 기록하고 넘어갔을 것이다.**
+
+### 13.4 `#309` — Core byte HWM 회계가 언더플로로 abort한다
+
+`#300`으로 깊이 제한을 풀자 in-flight가 132 → **25,909**가 됐고, 그 부하에서 Core가 죽었다.
+
+```
+Assertion failed: current >= amount_
+  (core/src/runtime/core/ctx_physical_queue_registry.cpp:64)
+```
+
+5 run 중 1건에서 target이 abort해 `Connection refused`, `received=0`이 됐다. 간헐적이다.
+
+**이번에 스펙으로 확정한 두 카운터 중 하나가 높은 깊이에서 언더플로한다.** 깊이가 두
+자릿수로 묶여 있던 동안에는 이 결함이 보이지 않았다.
+
+### 13.5 측정 신뢰성 문제 총 8건
+
+| 이슈 | 무엇 | 상태 |
+|---|---|---|
+| `#295` | C 기준 벤치가 `#63` 이관에서 빠짐 | 해결 |
+| `#296` | C++ 고정 1ms 폴링 | 해결 |
+| `#300` | .NET·Java 제출 직렬화 | 해결 |
+| `#301` | Node raw event loop 1.5% | 해결 |
+| `#303` | .NET 계수 누락 | 해결 |
+| 집계기 §8.1 | 셀 JSON을 디렉터리 깊이 때문에 못 읽음 | 해결 |
+| 집계기 §13.1 | C report 파일 이름을 몰라 `zlink-c` 누락 | 해결 |
+| `#307` | 로컬 패키지가 소스보다 뒤처짐 | 열림 |
+| `#308` | C와 언어 행이 다른 Core 바이너리 | 열림 |
+
+계획이 쫓던 "framework 0.90 미달"이라는 숫자는 이 여러 겹 위에 있었다.
+
+### 13.6 조사 결론 — 두 계층의 공통 비용
+
+| 계층 | 매 메시지마다 하는 일 | 근거 |
+|---|---|---|
+| binding | 정상 admission에도 language request state 객체 + registry 항목 (C++ bundle/entry, Java `Pending`, .NET `RequestCompletionEntry`, Node `CompletionEntry`) | `findings-binding-gap.md` §3 |
+| framework | 직렬화(state lane·socket gate) + service-wire 재포장 전체 복사 | `findings-{cpp,java,dotnet}.md` §2 |
+
+둘 다 **정상 경로에서도 매 메시지마다 만드는 것**이 핵심이다. C 하네스는 slot pointer와
+카운터만 쓴다.
