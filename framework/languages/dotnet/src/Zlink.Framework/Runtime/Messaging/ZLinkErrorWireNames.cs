@@ -16,7 +16,6 @@ internal static class ZLinkErrorWireNames
         ZLinkFrameworkErrorKind.NotConfigured => "not_configured",
         ZLinkFrameworkErrorKind.Rejected => "rejected",
         ZLinkFrameworkErrorKind.Unavailable => "unavailable",
-        ZLinkFrameworkErrorKind.CapacityExceeded => "capacity_exceeded",
         ZLinkFrameworkErrorKind.DeadlineExceeded => "deadline_exceeded",
         ZLinkFrameworkErrorKind.ShuttingDown => "shutting_down",
         ZLinkFrameworkErrorKind.ProtocolError => "protocol_error",
@@ -36,7 +35,6 @@ internal static class ZLinkErrorWireNames
             case "not_configured": kind = ZLinkFrameworkErrorKind.NotConfigured; return true;
             case "rejected": kind = ZLinkFrameworkErrorKind.Rejected; return true;
             case "unavailable": kind = ZLinkFrameworkErrorKind.Unavailable; return true;
-            case "capacity_exceeded": kind = ZLinkFrameworkErrorKind.CapacityExceeded; return true;
             case "deadline_exceeded": kind = ZLinkFrameworkErrorKind.DeadlineExceeded; return true;
             case "shutting_down": kind = ZLinkFrameworkErrorKind.ShuttingDown; return true;
             case "protocol_error": kind = ZLinkFrameworkErrorKind.ProtocolError; return true;

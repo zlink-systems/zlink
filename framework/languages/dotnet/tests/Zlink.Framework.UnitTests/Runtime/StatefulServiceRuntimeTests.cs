@@ -779,13 +779,12 @@ public sealed partial class StatefulServiceRuntimeTests
     }
 
     [Fact]
-    public async Task RequestOperationCapacityBackpressuresBeforeAllocatingMoreWork()
+    public async Task RequestOperationsDoNotHaveACompletionCapacityLimit()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = new ZLinkManagedMeshNode(
             context,
-            "mesh",
-            maxPendingOperations: 1);
+            "mesh");
         node.SetRoutingId(RoutingId.From("capacity-node"));
         var actor = node.CreateActor("capacity-actor");
         DrainAndDispose(node);
@@ -801,23 +800,22 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.NotEqual(default, first);
 
         Assert.Equal(
-            SubmitResult.Backpressured,
+            SubmitResult.Ok,
             node.RequestToActor(
                 actor,
                 [request],
                 out var rejected,
                 TimeSpan.FromSeconds(30)));
-        Assert.Equal(default, rejected);
+        Assert.NotEqual(default, rejected);
     }
 
     [Fact]
-    public async Task RemoteActorRequestCapacityRejectsBeforeTargetAdmission()
+    public async Task RemoteActorRequestsDoNotHaveACompletionCapacityLimit()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var caller = new ZLinkManagedMeshNode(
             context,
-            "mesh",
-            maxPendingOperations: 1);
+            "mesh");
         caller.SetRoutingId(RoutingId.From("capacity-remote-caller"));
         await using var owner = NewNode(context, "capacity-remote-owner");
         owner.SetLocalOwnerLeaseGeneration(127);
@@ -855,28 +853,38 @@ public sealed partial class StatefulServiceRuntimeTests
                 TimeSpan.FromSeconds(30)));
         Assert.NotEqual(default, admitted);
         Assert.Equal(
-            SubmitResult.Backpressured,
+            SubmitResult.Ok,
             caller.RequestToActor(
                 actor,
                 [request],
-                out var rejected,
+                out var second,
                 TimeSpan.FromSeconds(30)));
-        Assert.Equal(default, rejected);
+        Assert.NotEqual(default, second);
 
         await WaitUntilAsync(() =>
-            owner.Status().PendingApplicationMessages == 1);
-        using var ready = new MeshReadyBatch();
-        owner.DrainReady(
-            MeshReadyDomains.Application,
-            ready,
-            RecvFlags.DontWait);
-        Assert.Equal(1, ready.Count);
-        using var claim = ready.TakeClaim(0);
-        using var received = new MeshReceiveBatch();
-        Assert.True(claim.Receive(received, RecvFlags.DontWait));
-        Assert.Equal(1, received.Count);
-        Assert.Equal(admitted, received[0].OperationId);
-        Assert.Equal(admitted.Low, received[0].ReplyRouteId);
+            owner.Status().PendingApplicationMessages == 2);
+        // Both requests are admitted; neither was refused for want of a completion slot.
+        // How many arrive per receive turn is not fixed, so drain until both are seen.
+        var delivered = new List<MeshOperationId>();
+        await WaitUntilAsync(() =>
+        {
+            using var ready = new MeshReadyBatch();
+            owner.DrainReady(
+                MeshReadyDomains.Application,
+                ready,
+                RecvFlags.DontWait);
+            for (var index = 0; index < ready.Count; index++)
+            {
+                using var claim = ready.TakeClaim(index);
+                using var received = new MeshReceiveBatch();
+                if (!claim.Receive(received, RecvFlags.DontWait)) continue;
+                for (var item = 0; item < received.Count; item++)
+                    delivered.Add(received[item].OperationId);
+            }
+            return delivered.Count >= 2;
+        });
+        Assert.Contains(admitted, delivered);
+        Assert.Contains(second, delivered);
     }
 
     [Fact]
@@ -1934,8 +1942,7 @@ public sealed partial class StatefulServiceRuntimeTests
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var caller = new ZLinkManagedMeshNode(
             context,
-            "mesh",
-            maxPendingOperations: 1);
+            "mesh");
         caller.SetRoutingId(RoutingId.From("relocated-reply-caller"));
         await using var owner = NewNode(context, "relocated-reply-owner");
         caller.SetLocalOwnerLeaseGeneration(41);
@@ -2180,8 +2187,7 @@ public sealed partial class StatefulServiceRuntimeTests
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var caller = new ZLinkManagedMeshNode(
             context,
-            "mesh",
-            maxPendingOperations: 1);
+            "mesh");
         caller.SetRoutingId(RoutingId.From("relocated-spot-caller"));
         await using var oldOwner = NewNode(context, "relocated-spot-old-owner");
         await using var target = NewNode(context, "relocated-spot-target");
@@ -2235,16 +2241,18 @@ public sealed partial class StatefulServiceRuntimeTests
                 [request],
                 out var operation,
                 TimeSpan.FromSeconds(3)));
+        // A second request is admitted too; nothing is refused for want of a completion slot.
         Assert.Equal(
-            SubmitResult.Backpressured,
+            SubmitResult.Ok,
             caller.EntrySpot().RequestToSpot(
                 oldOwner.RoutingId,
                 spotId,
                 spot.LifecycleGeneration,
                 [request],
-                out var rejected,
+                out var second,
                 TimeSpan.FromSeconds(3)));
-        Assert.Equal(default, rejected);
+        Assert.NotEqual(default, second);
+        Assert.NotEqual(operation, second);
 
         MeshReceiveRecord inbound = default;
         await WaitUntilAsync(() =>
@@ -2499,7 +2507,7 @@ public sealed partial class StatefulServiceRuntimeTests
                         CancellationToken.None)
                     .AsTask());
             Assert.Equal(
-                ZLinkFrameworkErrorKind.CapacityExceeded,
+                ZLinkFrameworkErrorKind.Unavailable,
                 error.Kind);
 
             if (prepared is { } reservedPrepared)
@@ -2533,7 +2541,7 @@ public sealed partial class StatefulServiceRuntimeTests
                             CancellationToken.None)
                         .AsTask());
                 Assert.Equal(
-                    ZLinkFrameworkErrorKind.CapacityExceeded,
+                    ZLinkFrameworkErrorKind.Unavailable,
                     generatedError.Kind);
             }
             finally
@@ -3887,8 +3895,7 @@ public sealed partial class StatefulServiceRuntimeTests
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var caller = new ZLinkManagedMeshNode(
             context,
-            "mesh",
-            maxPendingOperations: 1);
+            "mesh");
         caller.SetRoutingId(RoutingId.From("relocated-instance-caller"));
         await using var oldOwner = NewNode(
             context,
@@ -3945,19 +3952,21 @@ public sealed partial class StatefulServiceRuntimeTests
                 out var operation,
                 deadline,
                 TimeSpan.FromSeconds(3)));
+        // A second activation is admitted too; nothing is refused for want of a completion slot.
         Assert.Equal(
-            SubmitResult.Backpressured,
+            SubmitResult.Ok,
             caller.ActivateInstanceSpot(
                 activation with { TargetSpotId = "rejected-instance" },
                 "caller-entry",
                 [request],
                 request: true,
-                out var rejected,
+                out var second,
                 deadline,
                 TimeSpan.FromSeconds(3)));
-        Assert.Equal(default, rejected);
+        Assert.NotEqual(default, second);
+        Assert.NotEqual(operation, second);
         await activationTarget.Started.WaitAsync(TimeSpan.FromSeconds(3));
-        Assert.Equal(1, activationTarget.Count);
+        Assert.Equal(2, activationTarget.Count);
 
         var relay = new ZLinkServiceWireCodec.ReplyRelayRecord(
             operation,

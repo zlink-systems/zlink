@@ -21,7 +21,7 @@ internal static class ZLinkClientServerMessageBound
     internal static ZLinkFrameworkException CreateExceededException(
         uint maximumMessageBytes) =>
         new(
-            ZLinkFrameworkErrorKind.CapacityExceeded,
+            ZLinkFrameworkErrorKind.Rejected,
             $"The complete ClientServer message exceeds the admitted {maximumMessageBytes}-byte bound.",
             ZLinkRetryAdvice.DoNotRetry)
         {

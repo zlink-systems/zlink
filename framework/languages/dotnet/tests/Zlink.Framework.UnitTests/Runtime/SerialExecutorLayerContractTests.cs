@@ -243,7 +243,7 @@ public sealed class SerialExecutorLayerContractTests
     }
 
     [Fact]
-    public async Task ActorMailboxCapacity_RejectsOnlyTheFullActorInBothModes()
+    public async Task ActorMailboxQueuesSameActorWorkInBothModes()
     {
         foreach (var mode in new[]
                  {
@@ -255,9 +255,7 @@ public sealed class SerialExecutorLayerContractTests
             await using var executor = CreateSpotExecutor(
                 errorSink,
                 mode,
-                actorLanePolicy: CreatePolicy(
-                    applicationMessageCapacity: 1,
-                    applicationByteCapacity: 1_024));
+                actorLanePolicy: CreatePolicy());
             var firstStarted = NewSignal();
             var releaseFirst = NewSignal();
 
@@ -271,31 +269,28 @@ public sealed class SerialExecutorLayerContractTests
                 });
             await firstStarted.Task.WaitAsync(TestTimeout);
 
-            await AssertCapacityExceededAsync(
-                () => ExecuteActorAsync(
-                    executor,
-                    "actor-a",
-                    static () => ValueTask.CompletedTask));
+            var queued = ExecuteActorAsync(
+                executor,
+                "actor-a",
+                static () => ValueTask.CompletedTask);
 
             var otherActor = ExecuteActorAsync(
                 executor,
                 "actor-b",
                 static () => ValueTask.CompletedTask);
             releaseFirst.TrySetResult();
-            await Task.WhenAll(first, otherActor).WaitAsync(TestTimeout);
+            await Task.WhenAll(first, queued, otherActor).WaitAsync(TestTimeout);
         }
     }
 
     [Fact]
-    public async Task SpotWide_ActorMailboxRejectsLargePayloadBeforeSmallPayload()
+    public async Task SpotWide_ActorMailboxQueuesLargeAndSmallPayloads()
     {
         using var errorSink = new ZLinkRuntimeErrorSink();
         await using var executor = CreateSpotExecutor(
             errorSink,
             ZLinkUserSpotExecutionMode.SpotWide,
-            actorLanePolicy: CreatePolicy(
-                applicationMessageCapacity: 8,
-                applicationByteCapacity: 100));
+            actorLanePolicy: CreatePolicy());
         var firstStarted = NewSignal();
         var releaseFirst = NewSignal();
 
@@ -310,12 +305,11 @@ public sealed class SerialExecutorLayerContractTests
             payloadBytes: 60);
         await firstStarted.Task.WaitAsync(TestTimeout);
 
-        await AssertCapacityExceededAsync(
-            () => ExecuteActorWithPayloadAsync(
-                executor,
-                "actor-a",
-                static () => ValueTask.CompletedTask,
-                payloadBytes: 60));
+        var large = ExecuteActorWithPayloadAsync(
+            executor,
+            "actor-a",
+            static () => ValueTask.CompletedTask,
+            payloadBytes: 60);
         var small = ExecuteActorWithPayloadAsync(
             executor,
             "actor-a",
@@ -323,14 +317,14 @@ public sealed class SerialExecutorLayerContractTests
             payloadBytes: 10);
 
         releaseFirst.TrySetResult();
-        await Task.WhenAll(first, small).WaitAsync(TestTimeout);
+        await Task.WhenAll(first, large, small).WaitAsync(TestTimeout);
     }
 
     [Fact]
-    public async Task SpotWide_UpperQueueSaturatesByCountForSmallAndLargePayloads()
+    public async Task SpotWide_UpperQueueAcceptsSmallAndLargePayloads()
     {
-        await AssertUpperQueueRejectsSecondActorAsync(payloadBytes: 1);
-        await AssertUpperQueueRejectsSecondActorAsync(payloadBytes: 10_000);
+        await AssertUpperQueueAcceptsSecondActorAsync(payloadBytes: 1);
+        await AssertUpperQueueAcceptsSecondActorAsync(payloadBytes: 10_000);
     }
 
     [Fact]
@@ -340,12 +334,7 @@ public sealed class SerialExecutorLayerContractTests
         await using var executor = CreateSpotExecutor(
             errorSink,
             ZLinkUserSpotExecutionMode.SpotWide,
-            spotLanePolicy: CreatePolicy(
-                applicationMessageCapacity: 8,
-                applicationByteCapacity: 1_024,
-                lifecycleMessageCapacity: 8,
-                lifecycleByteCapacity: 1_024,
-                lifecycleBurstLimit: 2));
+            spotLanePolicy: CreatePolicy(lifecycleBurstLimit: 2));
         var blockerStarted = NewSignal();
         var releaseBlocker = NewSignal();
         var order = new ConcurrentQueue<string>();
@@ -393,8 +382,6 @@ public sealed class SerialExecutorLayerContractTests
             errorSink,
             ZLinkUserSpotExecutionMode.PerActor,
             actorLanePolicy: CreatePolicy(
-                applicationMessageCapacity: 8,
-                applicationByteCapacity: 1_024,
                 ownerTimeBudget: TimeSpan.FromMilliseconds(1)));
         using var releaseFirst = new ManualResetEventSlim();
         var firstStarted = NewSignal();
@@ -485,20 +472,10 @@ public sealed class SerialExecutorLayerContractTests
     }
 
     private static ZLinkExecutionLanePolicy CreatePolicy(
-        int applicationMessageCapacity = 32,
-        long applicationByteCapacity = 1_048_576,
-        int lifecycleMessageCapacity = 8,
-        long lifecycleByteCapacity = 1_024,
-        long fixedWorkByteCost = 1,
         int lifecycleBurstLimit = 8,
         TimeSpan? ownerTimeBudget = null)
     {
         return new ZLinkExecutionLanePolicy(
-            applicationMessageCapacity,
-            applicationByteCapacity,
-            lifecycleMessageCapacity,
-            lifecycleByteCapacity,
-            fixedWorkByteCost,
             lifecycleBurstLimit,
             ownerTimeBudget ?? TimeSpan.FromSeconds(1));
     }
@@ -543,26 +520,15 @@ public sealed class SerialExecutorLayerContractTests
             CancellationToken.None).AsTask();
     }
 
-    private static async Task AssertCapacityExceededAsync(
-        Func<Task> operation)
-    {
-        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(operation);
-        Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, failure.Kind);
-    }
-
-    private static async Task AssertUpperQueueRejectsSecondActorAsync(
+    private static async Task AssertUpperQueueAcceptsSecondActorAsync(
         long payloadBytes)
     {
         using var errorSink = new ZLinkRuntimeErrorSink();
         await using var executor = CreateSpotExecutor(
             errorSink,
             ZLinkUserSpotExecutionMode.SpotWide,
-            spotLanePolicy: CreatePolicy(
-                applicationMessageCapacity: 1,
-                applicationByteCapacity: 2),
-            actorLanePolicy: CreatePolicy(
-                applicationMessageCapacity: 8,
-                applicationByteCapacity: 1_048_576));
+            spotLanePolicy: CreatePolicy(),
+            actorLanePolicy: CreatePolicy());
         var firstStarted = NewSignal();
         var releaseFirst = NewSignal();
 
@@ -577,15 +543,14 @@ public sealed class SerialExecutorLayerContractTests
             payloadBytes: 1);
         await firstStarted.Task.WaitAsync(TestTimeout);
 
-        await AssertCapacityExceededAsync(
-            () => ExecuteActorWithPayloadAsync(
-                executor,
-                "actor-b",
-                static () => ValueTask.CompletedTask,
-                payloadBytes));
+        var second = ExecuteActorWithPayloadAsync(
+            executor,
+            "actor-b",
+            static () => ValueTask.CompletedTask,
+            payloadBytes);
 
         releaseFirst.TrySetResult();
-        await first.WaitAsync(TestTimeout);
+        await Task.WhenAll(first, second).WaitAsync(TestTimeout);
     }
 
     private static void BusyWait(TimeSpan duration)

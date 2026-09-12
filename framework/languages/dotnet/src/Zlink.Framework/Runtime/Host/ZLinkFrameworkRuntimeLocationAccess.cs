@@ -163,7 +163,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             static candidate => candidate.PlacementWeight,
             ref _nextInstanceActivationSelection)
             ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.CapacityExceeded,
+                ZLinkFrameworkErrorKind.Unavailable,
                 $"No Ready Instance Spot target is available for '{address.InstanceSpotType}'.",
                 ZLinkRetryAdvice.RetryAfterBackoff);
         var deadlineAt = DateTimeOffset.UtcNow.Add(timeout);

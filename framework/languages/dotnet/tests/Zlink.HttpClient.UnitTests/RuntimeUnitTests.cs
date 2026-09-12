@@ -141,7 +141,7 @@ public sealed class RuntimeUnitTests
         var gz = GzipBytes(payload);
 
         var ex = Assert.Throws<ZLinkFrameworkException>(() => ResponseCompression.Gunzip(gz, 16));
-        Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, ex.Kind);
+        Assert.Equal(ZLinkFrameworkErrorKind.Rejected, ex.Kind);
     }
 
     [Fact]

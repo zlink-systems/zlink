@@ -19,5 +19,4 @@ public interface IZLinkWorkerOptions
 
     TimeSpan IdleTimeout { get; set; }
 
-    int MaxQueueLength { get; set; }
 }

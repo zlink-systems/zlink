@@ -22,11 +22,8 @@ internal sealed class ZLinkSerialWorkItem
         ulong acceptedSequence = 0,
         ReadOnlyMemory<byte> acceptedPayload = default,
         Func<ReadOnlyMemory<byte>>? acceptedPayloadFactory = null,
-        long byteCost = 0,
         bool reservationHeld = true)
     {
-        if (byteCost < 0)
-            throw new ArgumentOutOfRangeException(nameof(byteCost));
         _callback = callback;
         _relocationRelease = relocationRelease;
         PreviousOwnerMessageFollow = previousOwnerMessageFollow;
@@ -35,7 +32,6 @@ internal sealed class ZLinkSerialWorkItem
         _acceptedPayload = acceptedPayload;
         _acceptedPayloadFactory = acceptedPayloadFactory;
         _acceptedPayloadCreated = acceptedPayloadFactory is null;
-        ByteCost = byteCost;
         ReservationHeld = reservationHeld;
     }
 
@@ -64,8 +60,6 @@ internal sealed class ZLinkSerialWorkItem
     public bool IsAccepted => AcceptedSequence != 0;
     public bool PreviousOwnerMessageFollow { get; }
     public ZLinkSerialWorkLane Lane { get; }
-
-    internal long ByteCost { get; }
 
     internal bool ReservationHeld { get; }
 

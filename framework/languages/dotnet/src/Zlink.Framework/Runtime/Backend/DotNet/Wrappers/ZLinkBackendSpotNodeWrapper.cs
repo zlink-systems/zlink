@@ -263,17 +263,6 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         _node.SendTimeout = value;
     }
 
-    public void SetMailboxBudgets(ulong messageBudget, ulong byteBudget)
-    {
-        // Zero means "use the backend default". Writing zero into the managed
-        // node would reject every application and infrastructure record,
-        // including command 47/48 terminal completions.
-        if (messageBudget != 0)
-            _node.MailboxMessageBudget = messageBudget;
-        if (byteBudget != 0)
-            _node.MailboxByteBudget = byteBudget;
-    }
-
     // Explicit host startup calls Start after routing id, bind, and channels
     // are configured. Pull dispatch is activated separately after every
     // framework ingress owner has been installed.
@@ -1535,9 +1524,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
 
     //  Shared ownership-aware remote-reply translator for spot/actor command
     //  replies. A remote target's owner/queue state (ActorLocationStale,
-    //  RouteNotConnected, WorkerQueueFull, SpotMoving) is Unavailable, not a
-    //  source-owned CapacityExceeded (spec 32:99-103); a fine failure code is
-    //  classified precisely instead of collapsing into InternalFailure.
+    //  RouteNotConnected, WorkerQueueFull, SpotMoving) is Unavailable; a fine
+    //  failure code is classified precisely instead of collapsing into InternalFailure.
     private static ZLinkFrameworkErrorKind MapFrameworkErrorCode(
         int terminalResult, int failureErrno)
     {
@@ -1564,10 +1552,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             RequestResult.Terminated => ZLinkFrameworkErrorKind.ShuttingDown,
             RequestResult.ProtocolError => ZLinkFrameworkErrorKind.ProtocolError,
             RequestResult.Rejected => ZLinkFrameworkErrorKind.Rejected,
-            //  Backpressured(113) is the bounded admission terminal: a target's
-            //  placement/admission capacity is CapacityExceeded (spec 32:104-108),
-            //  matching C++ reply_header_exception case 113.
-            RequestResult.Backpressured => ZLinkFrameworkErrorKind.CapacityExceeded,
+            RequestResult.Backpressured => ZLinkFrameworkErrorKind.DeadlineExceeded,
             RequestResult.Conflict or RequestResult.Busy
                 or RequestResult.NotConnected =>
                 ZLinkFrameworkErrorKind.Unavailable,
@@ -1581,7 +1566,6 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     {
         return kind is ZLinkFrameworkErrorKind.Unavailable
             or ZLinkFrameworkErrorKind.DeadlineExceeded
-            or ZLinkFrameworkErrorKind.CapacityExceeded
             ? ZLinkRetryAdvice.RetryAfterBackoff
             : ZLinkRetryAdvice.DoNotRetry;
     }

@@ -1123,7 +1123,7 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 $"Instance Spot '{operation.Target.TargetSpotId}' has another stable type."),
             ZLinkObjectReserveResult.PlacementCapacityExhausted =>
                 new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.CapacityExceeded,
+                    ZLinkFrameworkErrorKind.Unavailable,
                     "The Instance Spot target has no remaining capacity.",
                     ZLinkRetryAdvice.RetryAfterBackoff),
             _ => new ZLinkFrameworkException(

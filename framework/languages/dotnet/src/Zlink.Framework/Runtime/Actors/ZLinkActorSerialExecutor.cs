@@ -159,12 +159,8 @@ internal sealed class ZLinkActorSerialExecutor
         if (countAsPendingRequest) _pendingRequests--;
         waiter.Dispose();
         throw new ZLinkFrameworkException(
-            admission == ZLinkSerialPostAdmission.CapacityExceeded
-                ? ZLinkFrameworkErrorKind.CapacityExceeded
-                : ZLinkFrameworkErrorKind.ShuttingDown,
-            admission == ZLinkSerialPostAdmission.CapacityExceeded
-                ? "Actor dispatch queue capacity was exceeded."
-                : "Actor dispatch queue is closed.");
+            ZLinkFrameworkErrorKind.ShuttingDown,
+            "Actor dispatch queue is closed.");
     }
 
     private ValueTask OnWaiterStartedAsync(Waiter waiter) =>

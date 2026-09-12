@@ -36,7 +36,7 @@ internal sealed class ZLinkActivationConcurrencyAdmission
             var active = Volatile.Read(ref _active);
             if (active >= _limit)
                 throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.CapacityExceeded,
+                    ZLinkFrameworkErrorKind.Unavailable,
                     $"Object activation concurrency limit was reached for {objectDescription}.",
                     ZLinkRetryAdvice.RetryAfterBackoff);
 

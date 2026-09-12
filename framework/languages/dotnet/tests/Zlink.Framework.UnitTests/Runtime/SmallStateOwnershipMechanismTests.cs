@@ -35,7 +35,7 @@ public sealed class SmallStateOwnershipMechanismTests
             () => admission.Acquire("actor-b"));
         admission.Release();
 
-        Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, exhausted.Kind);
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, exhausted.Kind);
         Assert.Equal(ZLinkRetryAdvice.RetryAfterBackoff, exhausted.RetryAdvice);
         Assert.Equal(0, admission.Active);
         Assert.Equal([1, 0], observed);

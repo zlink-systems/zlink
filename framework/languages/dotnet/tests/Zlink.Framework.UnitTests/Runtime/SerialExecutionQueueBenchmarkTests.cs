@@ -90,19 +90,13 @@ public sealed class SerialExecutionQueueBenchmarkTests(ITestOutputHelper output)
             firstReadmission.TotalMilliseconds,
             fullyDrained.TotalMilliseconds);
 
-        // The serial execution queue reserves both application axes while the
-        // handler is pending. The default count limit is reached before the
-        // larger benchmark burst is admitted.
+        // The serial execution queue has no bound of its own, so a burst is
+        // accepted in full and nothing is refused for want of room.
         Assert.Equal(AdmissionAttempts, accepted + rejected);
-        Assert.Equal(
-            AdmissionAttempts - ZLinkExecutionLanePolicy.Default.ApplicationMessageCapacity,
-            rejected);
-        Assert.Equal(
-            ZLinkExecutionLanePolicy.Default.ApplicationMessageCapacity + 1,
-            firstRejectionOrdinal);
-        Assert.Equal(
-            ZLinkExecutionLanePolicy.Default.ApplicationMessageCapacity,
-            peakPending);
+        Assert.Equal(AdmissionAttempts, accepted);
+        Assert.Equal(0, rejected);
+        Assert.Equal(0, firstRejectionOrdinal);
+        Assert.Equal(AdmissionAttempts, peakPending);
         Assert.True(firstReadmission >= TimeSpan.Zero);
         Assert.True(fullyDrained >= firstReadmission);
     }

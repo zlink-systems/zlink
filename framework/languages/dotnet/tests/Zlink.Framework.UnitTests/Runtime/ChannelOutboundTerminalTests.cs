@@ -53,7 +53,6 @@ public sealed class ChannelOutboundTerminalTests
 
     [Theory]
     [InlineData(ZLinkFrameworkErrorKind.ShuttingDown, "shutdown")]
-    [InlineData(ZLinkFrameworkErrorKind.CapacityExceeded, "backpressured")]
     [InlineData(ZLinkFrameworkErrorKind.NotFound, "failed")]
     public void ChannelRequestTerminalClassifiesFailuresAndPassesAtErrorsLevel(
         ZLinkFrameworkErrorKind kind,

@@ -67,20 +67,12 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
 
     internal int Count => AwaitStateLane(_lane.RunAsync(() => _records.Count));
 
-    internal bool TryEnqueue(
-        ZLinkMeshQueuedRecord record,
-        ulong messageBudget,
-        ulong byteBudget)
+    internal bool TryEnqueue(ZLinkMeshQueuedRecord record)
     {
         var pendingBytes = record.PendingBytes;
         return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (pendingBytes == ulong.MaxValue)
-                return false;
-            if ((ulong)_records.Count >= messageBudget
-                || pendingBytes > byteBudget - Math.Min(
-                    _pendingBytes,
-                    byteBudget))
                 return false;
             _records.Enqueue(record);
             if (record.HasApplicationJobAdmission)

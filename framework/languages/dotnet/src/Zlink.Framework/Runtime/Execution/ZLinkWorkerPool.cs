@@ -2,19 +2,16 @@ using System.Diagnostics;
 namespace Zlink.Framework.Runtime.Execution;
 
 /// <summary>
-///     Single elastic bounded worker pool. Threads are spawned on demand up to
+///     Single elastic worker pool. Threads are spawned on demand up to
 ///     <see cref="MaxThreads" />, exit after <see cref="_idleTimeout" /> of
-///     inactivity, and queued work is bounded by <see cref="_maxQueueLength" />.
-///     A full queue fails the submit immediately; the pool never blocks the
-///     submitting dispatcher and never runs work on the caller thread.
+///     inactivity. Work remains queued until a worker can run it; the pool
+///     never runs work on the caller thread.
 /// </summary>
 internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
 {
     private readonly TimeSpan _idleTimeout;
-    private readonly int _maxQueueLength;
     private readonly int _minThreads;
     private readonly Queue<WorkerItem> _directQueue = new();
-    private readonly SemaphoreSlim _directWaiterSlots;
     private readonly Queue<WorkerItem> _queue = new();
     private readonly CancellationTokenSource _shutdownSource = new();
     private readonly object _sync = new();
@@ -29,8 +26,7 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
     public ZLinkWorkerPool(
         int minThreads,
         int maxThreads,
-        TimeSpan idleTimeout,
-        int maxQueueLength)
+        TimeSpan idleTimeout)
     {
         if (minThreads < 0) throw new ArgumentOutOfRangeException(nameof(minThreads));
 
@@ -38,21 +34,14 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
 
         if (idleTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(idleTimeout));
 
-        if (maxQueueLength < 1) throw new ArgumentOutOfRangeException(nameof(maxQueueLength));
-
         _minThreads = minThreads;
         MaxThreads = maxThreads;
         _idleTimeout = idleTimeout;
-        _maxQueueLength = maxQueueLength;
-        _directWaiterSlots = new SemaphoreSlim(maxQueueLength, maxQueueLength);
     }
 
     public CancellationToken ShutdownToken => _shutdownSource.Token;
 
     public int MaxThreads { get; }
-
-    internal int DirectAdmissionWaiterCount =>
-        _maxQueueLength - _directWaiterSlots.CurrentCount;
 
     public int ThreadCount
     {
@@ -151,8 +140,6 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
         lock (_sync)
         {
             if (_disposed) return ZLinkWorkerSubmitResult.Stopped;
-            if (_queue.Count >= _maxQueueLength) return ZLinkWorkerSubmitResult.Full;
-
             _queue.Enqueue(new WorkerItem(work, cancelBeforeStart));
             if (_idleThreads > 0)
             {
@@ -242,7 +229,6 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
             {
                 var remaining = deadline - Stopwatch.GetElapsedTime(0);
                 if (remaining <= TimeSpan.Zero) return ZLinkWorkerSubmitResult.Full;
-                if (!_directWaiterSlots.Wait(0)) return ZLinkWorkerSubmitResult.Full;
                 try
                 {
                     await capacityChanged.WaitAsync(remaining, cancellationToken).ConfigureAwait(false);
@@ -250,10 +236,6 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
                 catch (TimeoutException)
                 {
                     return ZLinkWorkerSubmitResult.Full;
-                }
-                finally
-                {
-                    _directWaiterSlots.Release();
                 }
             }
             finally

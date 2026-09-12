@@ -11,7 +11,7 @@ public sealed class MeshCompletionTableConvergenceTests
     {
         var lane = new ZLinkStateLane();
         var table = await lane.RunAsync(() => new ZLinkMeshCompletionTable(
-            capacity: 1, dispatcher: new ZLinkCompletionDispatcher(1)));
+            dispatcher: new ZLinkCompletionDispatcher()));
         var operationId = new MeshOperationId(91, 1);
         var observed = new TaskCompletionSource<ZLinkStateLane?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -22,26 +22,23 @@ public sealed class MeshCompletionTableConvergenceTests
     }
 
     [Fact]
-    public void PendingOperationBoundRejectsBeforeChangingTheTable()
+    public void PendingOperationsHaveNoCompletionCapacityLimit()
     {
-        var table = new ZLinkMeshCompletionTable(capacity: 1);
+        var table = new ZLinkMeshCompletionTable();
         var first = new MeshOperationId(1, 1);
         var rejected = new MeshOperationId(1, 2);
 
         Assert.True(table.Register(first, static (_, _) => { }));
-        var error = Assert.Throws<ZLinkFrameworkException>(() =>
-            table.Register(rejected, static (_, _) => { }));
-        Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, error.Kind);
+        Assert.True(table.Register(rejected, static (_, _) => { }));
 
         Assert.True(table.TryCancel(first));
-        Assert.True(table.Register(rejected, static (_, _) => { }));
         Assert.True(table.TryCancel(rejected));
     }
 
     [Fact]
     public void FullOperationIdentityDoesNotAliasOnEitherHalf()
     {
-        var table = new ZLinkMeshCompletionTable(capacity: 3);
+        var table = new ZLinkMeshCompletionTable();
         var first = new MeshOperationId(1, 7);
         var differentHigh = new MeshOperationId(2, 7);
         var differentLow = new MeshOperationId(1, 8);
@@ -175,14 +172,12 @@ public sealed class MeshCompletionTableConvergenceTests
     }
 
     [Fact]
-    public async Task ShutdownAcrossTablesReturnsProcessWideReservations()
+    public async Task ShutdownAcrossTablesDrainsTheirPendingCallbacks()
     {
-        var dispatcher = new ZLinkCompletionDispatcher(capacity: 2);
+        var dispatcher = new ZLinkCompletionDispatcher();
         var firstTable = new ZLinkMeshCompletionTable(
-            capacity: 2,
             dispatcher: dispatcher);
         var secondTable = new ZLinkMeshCompletionTable(
-            capacity: 2,
             dispatcher: dispatcher);
         var first = new MeshOperationId(12, 3);
         var second = new MeshOperationId(12, 4);
@@ -196,7 +191,6 @@ public sealed class MeshCompletionTableConvergenceTests
             secondTable.CompletionDrained);
 
         var nextTable = new ZLinkMeshCompletionTable(
-            capacity: 1,
             dispatcher: dispatcher);
         var next = new MeshOperationId(12, 5);
         Assert.True(nextTable.Register(next, static (_, _) => { }));
@@ -320,9 +314,9 @@ public sealed class MeshCompletionTableConvergenceTests
     }
 
     [Fact]
-    public async Task DispatcherBacklogKeepsTheExistingAdmissionReservation()
+    public async Task DispatcherBacklogStillRegistersLaterOperations()
     {
-        var table = new ZLinkMeshCompletionTable(capacity: 1);
+        var table = new ZLinkMeshCompletionTable();
         var first = new MeshOperationId(15, 1);
         var second = new MeshOperationId(15, 2);
         var entered = new TaskCompletionSource(
@@ -341,29 +335,23 @@ public sealed class MeshCompletionTableConvergenceTests
             Array.Empty<Message>());
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var full = Assert.Throws<ZLinkFrameworkException>(() =>
-            table.Register(second, static (_, _) => { }));
-        Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, full.Kind);
-        release.Set();
-        await table.CompletionDrained;
-
         Assert.True(table.Register(second, static (_, _) => { }));
         Assert.True(table.TryCancel(second));
+        release.Set();
+        await table.CompletionDrained;
     }
 
     [Fact]
-    public void ProcessWideBoundAggregatesAcrossCompletionTables()
+    public void CompletionTablesRegisterMoreThanTheFormerProcessWideLimit()
     {
-        const int halfCapacity = 2_048;
-        var dispatcher = new ZLinkCompletionDispatcher(capacity: 4_096);
+        const int requestCount = 4_097;
+        var dispatcher = new ZLinkCompletionDispatcher();
         var firstTable = new ZLinkMeshCompletionTable(
-            capacity: 4_096,
             dispatcher: dispatcher);
         var secondTable = new ZLinkMeshCompletionTable(
-            capacity: 4_096,
             dispatcher: dispatcher);
 
-        for (var index = 1; index <= halfCapacity; index++)
+        for (var index = 1; index <= requestCount; index++)
         {
             Assert.True(firstTable.Register(
                 new MeshOperationId(19, checked((ulong)index)),
@@ -373,13 +361,7 @@ public sealed class MeshCompletionTableConvergenceTests
                 static (_, _) => { }));
         }
 
-        var rejected = Assert.Throws<ZLinkFrameworkException>(() =>
-            secondTable.Register(
-                new MeshOperationId(20, halfCapacity + 1),
-                static (_, _) => { }));
-        Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, rejected.Kind);
-
-        for (var index = 1; index <= halfCapacity; index++)
+        for (var index = 1; index <= requestCount; index++)
         {
             Assert.True(firstTable.TryCancel(
                 new MeshOperationId(19, checked((ulong)index))));
@@ -389,14 +371,12 @@ public sealed class MeshCompletionTableConvergenceTests
     }
 
     [Fact]
-    public async Task RunningCallbackBlocksAnotherTableUntilItsSlotIsReleased()
+    public async Task RunningCallbackDoesNotBlockAnotherTableRegistration()
     {
-        var dispatcher = new ZLinkCompletionDispatcher(capacity: 1);
+        var dispatcher = new ZLinkCompletionDispatcher();
         var firstTable = new ZLinkMeshCompletionTable(
-            capacity: 1,
             dispatcher: dispatcher);
         var secondTable = new ZLinkMeshCompletionTable(
-            capacity: 1,
             dispatcher: dispatcher);
         var first = new MeshOperationId(21, 1);
         var second = new MeshOperationId(21, 2);
@@ -415,13 +395,10 @@ public sealed class MeshCompletionTableConvergenceTests
             Array.Empty<Message>());
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var full = Assert.Throws<ZLinkFrameworkException>(() =>
-            secondTable.Register(second, static (_, _) => { }));
-        Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, full.Kind);
+        Assert.True(secondTable.Register(second, static (_, _) => { }));
 
         release.Set();
         await firstTable.CompletionDrained;
-        Assert.True(secondTable.Register(second, static (_, _) => { }));
         Assert.True(secondTable.TryCancel(second));
     }
 
@@ -495,9 +472,8 @@ public sealed class MeshCompletionTableConvergenceTests
     [Fact]
     public async Task ReentrantTerminalIsQueuedAfterAlreadyAcceptedWork()
     {
-        var dispatcher = new ZLinkCompletionDispatcher(capacity: 3);
+        var dispatcher = new ZLinkCompletionDispatcher();
         var blocker = new ZLinkMeshCompletionTable(
-            capacity: 1,
             dispatcher: dispatcher);
         var blockerOperation = new MeshOperationId(17, 1);
         var blockerEntered = new TaskCompletionSource(
@@ -516,7 +492,6 @@ public sealed class MeshCompletionTableConvergenceTests
         await blockerEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var table = new ZLinkMeshCompletionTable(
-            capacity: 3,
             dispatcher: dispatcher);
         var first = new MeshOperationId(17, 2);
         var second = new MeshOperationId(17, 3);

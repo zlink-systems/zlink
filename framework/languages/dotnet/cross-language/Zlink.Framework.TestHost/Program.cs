@@ -822,7 +822,6 @@ internal static class TestHostErrorWire
         ZLinkFrameworkErrorKind.NotConfigured => "not_configured",
         ZLinkFrameworkErrorKind.Rejected => "rejected",
         ZLinkFrameworkErrorKind.Unavailable => "unavailable",
-        ZLinkFrameworkErrorKind.CapacityExceeded => "capacity_exceeded",
         ZLinkFrameworkErrorKind.DeadlineExceeded => "deadline_exceeded",
         ZLinkFrameworkErrorKind.ShuttingDown => "shutting_down",
         ZLinkFrameworkErrorKind.ProtocolError => "protocol_error",

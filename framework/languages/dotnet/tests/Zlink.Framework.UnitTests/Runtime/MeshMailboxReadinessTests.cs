@@ -19,13 +19,12 @@ public sealed class MeshMailboxReadinessTests
             Assert.NotNull(admission);
             admission.MarkQueued();
             Assert.True(mailbox.TryEnqueue(
-                NewRecord(new ZLinkApplicationJobQueueRecordOwner(null, admission)),
-                2, 1024));
+                NewRecord(new ZLinkApplicationJobQueueRecordOwner(null, admission))));
             Assert.True(mailbox.TryClaim(true, true, out var available, out var admitted));
             Assert.Equal(1, available);
             Assert.True(admitted);
 
-            Assert.True(mailbox.TryEnqueue(NewRecord(), 2, 1024));
+            Assert.True(mailbox.TryEnqueue(NewRecord()));
             using var batch = new MeshReceiveBatch();
             Assert.True(mailbox.Drain(batch, 64));
             Assert.Equal(1, batch.Count);
@@ -60,7 +59,7 @@ public sealed class MeshMailboxReadinessTests
         try
         {
             for (var index = 0; index < 65; index++)
-                Assert.True(mailbox.TryEnqueue(NewRecord(), 65, 65536));
+                Assert.True(mailbox.TryEnqueue(NewRecord()));
             Assert.False(mailbox.TryClaim(true, true, out _, out _));
             Assert.True(mailbox.TryClaim(false, true, out var available, out var admitted));
             Assert.Equal(65, available);
@@ -112,7 +111,7 @@ public sealed class MeshMailboxReadinessTests
             },
             _ => transitions.Enqueue(Interlocked.Decrement(ref count)));
 
-        Assert.True(mailbox.TryEnqueue(NewRecord(), 1, 1024));
+        Assert.True(mailbox.TryEnqueue(NewRecord()));
         await consumer!.WaitAsync(TimeSpan.FromSeconds(3));
 
         Assert.Equal(new long[] { 1, 0 }, transitions.ToArray());
@@ -133,10 +132,10 @@ public sealed class MeshMailboxReadinessTests
                 Assert.NotNull(ZLinkStateLane.Current);
                 Interlocked.Decrement(ref count);
             });
-        Assert.True(mailbox.TryEnqueue(NewRecord(payload), 1, 1024));
-        using var rejected = NewRecord();
-        Assert.False(mailbox.TryEnqueue(rejected, 1, 1024));
-        Assert.Equal(1, Volatile.Read(ref count));
+        Assert.True(mailbox.TryEnqueue(NewRecord(payload)));
+        // The mailbox has no bound of its own, so a further record is accepted too.
+        Assert.True(mailbox.TryEnqueue(NewRecord()));
+        Assert.Equal(2, Volatile.Read(ref count));
 
         mailbox.Dispose();
         mailbox.Dispose();

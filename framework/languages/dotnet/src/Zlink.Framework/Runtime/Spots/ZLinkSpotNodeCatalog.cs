@@ -1647,7 +1647,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         if (registration.SpotLimit > 0
             && total >= registration.SpotLimit)
             throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.CapacityExceeded,
+                ZLinkFrameworkErrorKind.Unavailable,
                 $"SPOT node '{registration.SpotNodeName}' reached its local spot limit.",
                 ZLinkRetryAdvice.RetryAfterBackoff);
 
@@ -1695,7 +1695,7 @@ internal sealed class ZLinkSpotNodeCatalog(
 
         if (typeTotal >= limit)
             throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.CapacityExceeded,
+                ZLinkFrameworkErrorKind.Unavailable,
                 $"SPOT stable type '{stableType}' reached its local activation limit.",
                 ZLinkRetryAdvice.RetryAfterBackoff);
     }

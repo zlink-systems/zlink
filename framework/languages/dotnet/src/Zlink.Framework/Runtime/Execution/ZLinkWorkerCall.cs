@@ -114,9 +114,6 @@ internal sealed class ZLinkWorkerCall<TResult>(
             {
                 case ZLinkWorkerSubmitResult.Accepted:
                     break;
-                case ZLinkWorkerSubmitResult.Full:
-                    FailQueueFull();
-                    break;
                 case ZLinkWorkerSubmitResult.Stopped:
                     FailStopped();
                     break;
@@ -192,17 +189,6 @@ internal sealed class ZLinkWorkerCall<TResult>(
             {
                 Cleanup();
             }
-        }
-
-        public void FailQueueFull()
-        {
-            TrySettle(static (self, _) => self._fail(
-                    new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.CapacityExceeded,
-                        "Worker queue is full.",
-                        ZLinkRetryAdvice.RetryAfterBackoff)),
-                this);
-            Cleanup();
         }
 
         public void FailStopped()

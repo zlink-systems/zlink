@@ -168,7 +168,6 @@ internal static class PlayHostFactory
                     catch (ZLinkFrameworkException error)
                         when (error.Kind is
                             ZLinkFrameworkErrorKind.Unavailable
-                            or ZLinkFrameworkErrorKind.CapacityExceeded
                             or ZLinkFrameworkErrorKind.DeadlineExceeded)
                     {
                         await Task.Delay(25, cancellationToken);

@@ -682,12 +682,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         _errorSink.ReportRuntimeTaskException(
             operation,
             new ZLinkFrameworkException(
-                admission == ZLinkSerialPostAdmission.CapacityExceeded
-                    ? ZLinkFrameworkErrorKind.CapacityExceeded
-                    : ZLinkFrameworkErrorKind.ShuttingDown,
-                admission == ZLinkSerialPostAdmission.CapacityExceeded
-                    ? "The STREAM control queue capacity was exceeded."
-                    : "The STREAM control queue closed before the monitor event was admitted."));
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "The STREAM control queue closed before the monitor event was admitted."));
     }
 
     private void MarkDisconnectedRoutingId(RoutingId routingId)

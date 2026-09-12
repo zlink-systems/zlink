@@ -20,11 +20,6 @@ namespace Zlink.Framework.Runtime.Service;
 internal sealed class ZLinkManagedMeshNode : IMeshNode
 {
     private const int ReceiveBatchSize = 64;
-    private const int DefaultMaxPendingOperations = 65_536;
-    private const int MaxRemoteUserSpotOperations = 4_096;
-    private const int MaxRemoteActorCreateOperations = 4_096;
-    private const int MaxRelocationReplyTerminals = 65_536;
-    private const int MaxRoutedAdmissionWaiters = 8;
     private const int MaxInfrastructureControlParts = 64;
     private const long MaxInfrastructureControlBytes = 256 * 1024;
     private const long MaxInfrastructurePayloadBytes = 4_294_966_774L;
@@ -42,7 +37,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private readonly IContext _context;
     private readonly string _meshName;
-    private readonly int _maxPendingOperations;
     private readonly TimeSpan _remoteUserSpotTerminalRetention;
     private readonly TimeSpan _inboundOperationShutdownTimeout;
     private readonly ZLinkDeadlineClock _deadlineClock;
@@ -57,9 +51,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly ZLinkStateLane _remoteActorCreateLane = new();
     private readonly object _socketGate = new();
     private readonly object _disposeGate = new();
-    private readonly SemaphoreSlim _routedAdmissionWaiters = new(
-        MaxRoutedAdmissionWaiters,
-        MaxRoutedAdmissionWaiters);
     private readonly ConcurrentExclusiveSchedulerPair _routedSubmitScheduler;
     private readonly Func<ISocketMonitor, ISocketMonitor>? _decorateSocketMonitor;
     private readonly Dictionary<ZLinkChannelName, uint> _channels = new();
@@ -190,7 +181,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     internal ZLinkManagedMeshNode(
         IContext context,
         string meshName,
-        int maxPendingOperations = DefaultMaxPendingOperations,
         TimeSpan? remoteUserSpotTerminalRetention = null,
         TimeSpan? inboundOperationShutdownTimeout = null,
         TimeProvider? deadlineTimeProvider = null,
@@ -202,8 +192,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
-        if (maxPendingOperations <= 0)
-            throw new ArgumentOutOfRangeException(nameof(maxPendingOperations));
         if (remoteUserSpotTerminalRetention is { } retention
             && retention < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(
@@ -213,7 +201,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             throw new ArgumentOutOfRangeException(
                 nameof(inboundOperationShutdownTimeout));
         _meshName = meshName;
-        _maxPendingOperations = maxPendingOperations;
         _remoteUserSpotTerminalRetention =
             remoteUserSpotTerminalRetention
             ?? DefaultRemoteUserSpotTerminalRetention;
@@ -233,8 +220,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     internal string MeshName => _meshName;
     public ulong RouterHighWaterMark { get; set; } = 4_096_000;
     public ulong RouterReceiveHighWaterMark { get; set; } = 4_096_000;
-    public ulong MailboxMessageBudget { get; set; } = 10_000;
-    public ulong MailboxByteBudget { get; set; } = 64 * 1024 * 1024;
     //  Direct-transfer relocation options (spec 28 §4.2/§5.3), snapshotted
     //  from ZLinkLocationOptions at host startup.
     public long RelocationPayloadChunkLimit { get; set; } = 256 * 1024;
@@ -1332,17 +1317,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             : timeout;
         if (request)
         {
-            if (!TryCreateOperation(
-                    MeshOperationKind.InstanceSpotRequest,
-                    out replyRouteId,
-                    out pending))
-            {
-                operationId = default;
-                Publish(
-                    MeshMonitorEventKind.Backpressured,
-                    peerRid: target.TargetNodeRid);
-                return SubmitResult.Backpressured;
-            }
+            CreateOperation(
+                MeshOperationKind.InstanceSpotRequest,
+                out replyRouteId,
+                out pending);
             operationId = pending.OperationId;
             var timeoutDeadline = checked((ulong)DateTimeOffset.UtcNow
                 .Add(effectiveTimeout)
@@ -1419,17 +1397,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             || peer.LifecycleGeneration != target.TargetNodeGeneration)
             return SubmitResult.NotConnected;
 
-        if (!TryCreateOperation(
-                MeshOperationKind.InstanceSpotRequest,
-                correlationId,
-                out var replyRouteId,
-                out var pending))
-        {
-            Publish(
-                MeshMonitorEventKind.Backpressured,
-                peerRid: target.TargetNodeRid);
-            return SubmitResult.Backpressured;
-        }
+        CreateOperation(
+            MeshOperationKind.InstanceSpotRequest,
+            correlationId,
+            out var replyRouteId,
+            out var pending);
         var effectiveTimeout = timeout <= TimeSpan.Zero
             ? TimeSpan.FromSeconds(30)
             : timeout;
@@ -3782,15 +3754,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var effectiveTimeout = timeout <= TimeSpan.Zero
                 ? TimeSpan.FromSeconds(30)
                 : timeout;
-            if (!TryCreateOperation(
-                    MeshOperationKind.SpotRequest,
-                    out var correlation,
-                    out var operation,
-                    awaitCompletion: true))
-            {
-                throw new ZlinkSubmitException(
-                    ZlinkSubmitException.ErrorCode.Backpressured);
-            }
+            CreateOperation(
+                MeshOperationKind.SpotRequest,
+                out var correlation,
+                out var operation,
+                awaitCompletion: true);
             operation.DeadlineUnixMs = checked((ulong)DateTimeOffset.UtcNow
                 .Add(effectiveTimeout)
                 .ToUnixTimeMilliseconds());
@@ -4579,8 +4547,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var effectiveTimeout = timeout <= TimeSpan.Zero
             ? TimeSpan.FromSeconds(30)
             : timeout;
-        if (!TryCreateOperation(kind, operationId, out var correlation, out operation))
-            return false;
+        CreateOperation(kind, operationId, out var correlation, out operation);
         operation.DeadlineStartTimestamp = Stopwatch.GetTimestamp();
         operation.DeadlineTimeout = effectiveTimeout;
         operation.DeadlineUnixMs = checked((ulong)DateTimeOffset.UtcNow
@@ -4595,14 +4562,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return true;
     }
 
-    private bool TryCreateOperation(
+    private void CreateOperation(
         MeshOperationKind kind,
         out ulong correlation,
         out PendingOperation operation,
         bool awaitCompletion = false)
     {
         var operationId = NextStandaloneOperationId();
-        return TryCreateOperation(
+        CreateOperation(
             kind,
             operationId,
             out correlation,
@@ -4610,7 +4577,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             awaitCompletion);
     }
 
-    private bool TryCreateOperation(
+    private void CreateOperation(
         MeshOperationKind kind,
         MeshOperationId operationId,
         out ulong correlation,
@@ -4620,10 +4587,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var result = RunOperation(() =>
         {
             RemoveExpiredRelocationReplyTerminalsUnderLock(_deadlineClock.Elapsed);
-            if (_operations.Count >= _maxPendingOperations)
-            {
-                return (Created: false, Correlation: 0UL, Operation: (PendingOperation?)null);
-            }
             if (operationId.High != _lifecycleGeneration
                 || operationId.Low == 0)
                 throw new ArgumentException(
@@ -4651,11 +4614,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         "The relocation reply operation id was reused.");
                 }
             }
-            return (Created: true, Correlation: operationId.Low, Operation: operation);
+            return (Correlation: operationId.Low, Operation: operation);
         });
         correlation = result.Correlation;
         operation = result.Operation!;
-        return result.Created;
     }
 
     public MeshOperationId AllocateOperationId() => NextStandaloneOperationId();
@@ -4897,9 +4859,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         else
             _relocationReplyTerminals[key] = terminal;
 
-        while (_relocationReplyTerminals.Count > MaxRelocationReplyTerminals
-               && _relocationReplyTerminalOrder.TryDequeue(out var oldest))
-            _relocationReplyTerminals.Remove(oldest);
     }
 
     private bool TryGetActor(ActorRef actorRef, out ManagedActor actor) =>
@@ -6220,10 +6179,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ServiceWireConstants.FrameworkErrorCode.RequestRejected,
             ZLinkFrameworkErrorKind.ProtocolError =>
                 ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
-            //  No dedicated "capacity exceeded" wire code exists; a full
-            //  queue is the closest capacity-shaped signal.
-            ZLinkFrameworkErrorKind.CapacityExceeded =>
-                ServiceWireConstants.FrameworkErrorCode.WorkerQueueFull,
             //  No dedicated "deadline exceeded" wire code exists; a worker
             //  timeout is the closest timeout-shaped signal.
             ZLinkFrameworkErrorKind.DeadlineExceeded =>
@@ -6890,16 +6845,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut,
                     Array.Empty<ReadOnlyMemory<byte>>());
             }
-            catch (ZLinkFrameworkException framework)
-                when (framework.Kind == ZLinkFrameworkErrorKind.CapacityExceeded)
-            {
-                //  Spec 32-framework-error-model:104-108 — placement/admission
-                //  capacity is CapacityExceeded, encoded as Backpressured(113).
-                terminal = new InstanceSpotActivationTerminal(
-                    RequestResult.Backpressured,
-                    ServiceWireConstants.FrameworkErrorCode.None,
-                    Array.Empty<ReadOnlyMemory<byte>>());
-            }
             catch
             {
                 terminal = new InstanceSpotActivationTerminal(
@@ -7345,17 +7290,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             record,
             localDeadline,
             () => ExecuteUserSpotOperationAsync(target, record, localDeadline));
-        if (!TryRegisterRemoteUserSpotOperation(key, candidate, out invocation))
-        {
-            SendUserSpotFailure(
-                sourceRid,
-                nativeReply,
-                correlation,
-                record.Command,
-                RequestResult.Rejected,
-                ServiceWireConstants.FrameworkErrorCode.WorkerQueueFull);
-            return;
-        }
+        RegisterRemoteUserSpotOperation(key, candidate, out invocation);
         if (!ReferenceEquals(invocation, candidate))
         {
             if (!SameUserSpotOperation(invocation.Record, record))
@@ -7668,14 +7603,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 new UserSpotOperationTerminal(
                     RequestResult.InternalError,
                     ServiceWireConstants.FrameworkErrorCode.SpotCreateFailed),
-            //  Spec 32-framework-error-model:104-108 — target placement/admission
-            //  capacity is CapacityExceeded, wire-encoded as the bounded-admission
-            //  terminal Backpressured(113) with no fine code (distinct from a
-            //  genuine remote queue/table saturation, which stays Busy+WorkerQueueFull).
-            ZLinkFrameworkErrorKind.CapacityExceeded =>
-                new UserSpotOperationTerminal(
-                    RequestResult.Backpressured,
-                    ServiceWireConstants.FrameworkErrorCode.None),
             ZLinkFrameworkErrorKind.ProtocolError =>
                 new UserSpotOperationTerminal(
                     RequestResult.ProtocolError,
@@ -7806,16 +7733,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 target,
                 operation,
                 localDeadline));
-        if (!TryRegisterRemoteActorCreateOperation(key, candidate, out invocation))
-        {
-            SendActorCreateFailure(
-                sourceRid,
-                nativeReply,
-                operation.Correlation,
-                RequestResult.Rejected,
-                ServiceWireConstants.FrameworkErrorCode.WorkerQueueFull);
-            return;
-        }
+        RegisterRemoteActorCreateOperation(key, candidate, out invocation);
         if (!ReferenceEquals(invocation, candidate)
             && !SameActorCreateOperation(invocation.Record, record))
         {
@@ -8157,13 +8075,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 new ActorCreateOperationTerminal(
                     RequestResult.Conflict,
                     ServiceWireConstants.FrameworkErrorCode.ActorAlreadyExists),
-            //  Spec 32-framework-error-model:104-108 — target placement/admission
-            //  capacity is CapacityExceeded, wire-encoded as Backpressured(113)
-            //  with no fine code (distinct from remote queue/table saturation).
-            ZLinkFrameworkErrorKind.CapacityExceeded =>
-                new ActorCreateOperationTerminal(
-                    RequestResult.Backpressured,
-                    ServiceWireConstants.FrameworkErrorCode.None),
             ZLinkFrameworkErrorKind.ProtocolError =>
                 new ActorCreateOperationTerminal(
                     RequestResult.ProtocolError,
@@ -8871,17 +8782,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var kind = command == ServiceWireConstants.Command.NodeRequest
             ? MeshOperationKind.NodeRequest
             : MeshOperationKind.ChannelRequest;
-        if (!TryCreateOperation(
-                kind,
-                out var correlation,
-                out var pending,
-                awaitCompletion))
-        {
-            operationId = default;
-            completion = null;
-            Publish(MeshMonitorEventKind.Backpressured, peerRid: targetRid);
-            return SubmitResult.Backpressured;
-        }
+        CreateOperation(kind, out var correlation, out var pending, awaitCompletion);
         operationId = pending.OperationId;
         completion = pending.AwaitedCompletion?.Task;
 
@@ -9835,19 +9736,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return SubmitResult.NotConnected;
         }
 
-        var created = correlationId == default
-            ? TryCreateOperation(kind, out var correlation, out var pending)
-            : TryCreateOperation(
-                kind,
-                correlationId,
-                out correlation,
-                out pending);
-        if (!created)
-        {
-            operationId = default;
-            Publish(MeshMonitorEventKind.Backpressured, peerRid: targetRid);
-            return SubmitResult.Backpressured;
-        }
+        ulong correlation;
+        PendingOperation pending;
+        if (correlationId == default)
+            CreateOperation(kind, out correlation, out pending);
+        else
+            CreateOperation(kind, correlationId, out correlation, out pending);
         operationId = pending.OperationId;
         var effectiveTimeout = timeout <= TimeSpan.Zero
             ? TimeSpan.FromSeconds(30)
@@ -10491,10 +10385,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             _ => new OwnedMailbox(
                 RecordOwnedRecordEnqueued,
                 RecordOwnedRecordDequeued));
-        return mailbox.TryEnqueue(
-            queued,
-            MailboxMessageBudget,
-            MailboxByteBudget);
+        return mailbox.TryEnqueue(queued);
     }
 
     private static IDisposable AttachApplicationAdmission(
@@ -10529,10 +10420,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     Admission: { } applicationAdmission
                 })
                 applicationAdmission.MarkQueued();
-            if (!mailbox.TryEnqueue(
-                    queued,
-                    MailboxMessageBudget,
-                    MailboxByteBudget))
+            if (!mailbox.TryEnqueue(queued))
             {
                 RecordInboundBackpressureDrop(record.Kind);
                 queued.Dispose();
@@ -11245,47 +11133,28 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RoutingId target,
         IReadOnlyList<ReadOnlyMemory<byte>> parts)
     {
-        // Spec 04-AJQ §8 requires outbound admission waiters to be bounded.
-        // Without this gate every rejected/slow Core admission created another
-        // Task.Run that blocked on the same socket submit gate. A normal timer
-        // workload could therefore manufacture dozens of blocked workers and
-        // starve unrelated ClientServer/session completions.
-        if (!_routedAdmissionWaiters.Wait(0))
-            return false;
         try
         {
             var scheduled = RunRoutedOperation(async () =>
             {
-                try
-                {
-                    await SendRoutedBestEffortAsync(
-                            target,
-                            parts,
-                            _stop?.Token ?? CancellationToken.None)
-                        .ConfigureAwait(false);
-                }
-                finally
-                {
-                    _routedAdmissionWaiters.Release();
-                }
+                await SendRoutedBestEffortAsync(
+                        target,
+                        parts,
+                        _stop?.Token ?? CancellationToken.None)
+                    .ConfigureAwait(false);
             });
-            if (!scheduled)
-                _routedAdmissionWaiters.Release();
             return scheduled;
         }
         catch (ObjectDisposedException)
         {
-            _routedAdmissionWaiters.Release();
             return false;
         }
         catch (ZlinkException)
         {
-            _routedAdmissionWaiters.Release();
             return false;
         }
         catch
         {
-            _routedAdmissionWaiters.Release();
             throw;
         }
     }
@@ -11524,7 +11393,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private void RunRemoteActorCreateState(Action operation) =>
         AwaitStateLane(_remoteActorCreateLane.RunAsync(operation));
 
-    private bool TryRegisterRemoteUserSpotOperation(
+    private void RegisterRemoteUserSpotOperation(
         RemoteUserSpotOperationKey key,
         RemoteUserSpotInvocation candidate,
         out RemoteUserSpotInvocation invocation)
@@ -11532,17 +11401,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var result = AwaitStateLane(_remoteUserSpotLane.RunAsync(() =>
         {
             if (_remoteUserSpotOperations.TryGetValue(key, out var current))
-                return (Accepted: true, Invocation: current);
-            if (_remoteUserSpotOperations.Count >= MaxRemoteUserSpotOperations)
-                return (Accepted: false, Invocation: (RemoteUserSpotInvocation?)null);
+                return current;
             _remoteUserSpotOperations[key] = candidate;
-            return (Accepted: true, Invocation: candidate);
+            return candidate;
         }));
-        invocation = result.Invocation!;
-        return result.Accepted;
+        invocation = result;
     }
 
-    private bool TryRegisterRemoteActorCreateOperation(
+    private void RegisterRemoteActorCreateOperation(
         RemoteActorCreateOperationKey key,
         RemoteActorCreateInvocation candidate,
         out RemoteActorCreateInvocation invocation)
@@ -11550,14 +11416,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var result = AwaitStateLane(_remoteActorCreateLane.RunAsync(() =>
         {
             if (_remoteActorCreateOperations.TryGetValue(key, out var current))
-                return (Accepted: true, Invocation: current);
-            if (_remoteActorCreateOperations.Count >= MaxRemoteActorCreateOperations)
-                return (Accepted: false, Invocation: (RemoteActorCreateInvocation?)null);
+                return current;
             _remoteActorCreateOperations[key] = candidate;
-            return (Accepted: true, Invocation: candidate);
+            return candidate;
         }));
-        invocation = result.Invocation!;
-        return result.Accepted;
+        invocation = result;
     }
 
     private static void StartDetached(Func<Task> operation)
@@ -11930,9 +11793,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return;
         }
         order.Enqueue(key);
-        while (terminals.Count > MaxRelocationReplyTerminals
-               && order.TryDequeue(out var oldest))
-            terminals.TryRemove(oldest, out _);
     }
 
     private readonly record struct PendingSessionRelocationKey(

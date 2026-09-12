@@ -10,7 +10,7 @@ namespace Zlink.HttpClient.Runtime;
 ///     the caller removes the <c>Content-Encoding</c> header afterwards. Native auto-decompression is
 ///     disabled so streaming downloads are never transparently decoded and the body limit is enforced
 ///     against the decoded size. A malformed body raises <see cref="ZLinkFrameworkErrorKind.ProtocolError" />;
-///     exceeding the configured limit raises <see cref="ZLinkFrameworkErrorKind.CapacityExceeded" />
+///     exceeding the configured limit raises <see cref="ZLinkFrameworkErrorKind.Rejected" />
 ///     with <see cref="ZLinkRetryAdvice.DoNotRetry" />.
 /// </summary>
 internal static class ResponseCompression
@@ -48,7 +48,7 @@ internal static class ResponseCompression
             {
                 if (output.Length + read > maxBytes)
                     throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.CapacityExceeded,
+                        ZLinkFrameworkErrorKind.Rejected,
                         "HTTP response compressed body exceeds max_response_body_size",
                         ZLinkRetryAdvice.DoNotRetry);
 

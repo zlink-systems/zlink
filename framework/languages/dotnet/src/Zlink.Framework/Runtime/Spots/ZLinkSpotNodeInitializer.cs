@@ -50,9 +50,6 @@ internal sealed class ZLinkSpotNodeInitializer(
                 node.SetRouterSendTimeout(
                     router.SocketConfig.SendTimeout
                     ?? registration.DefaultSocketSendTimeout);
-                node.SetMailboxBudgets(
-                    router.SocketConfig.MailboxMessageBudget,
-                    router.SocketConfig.MailboxByteBudget);
             }
             foreach (var membership in spotNodeRegistration.ChannelMemberships)
             {

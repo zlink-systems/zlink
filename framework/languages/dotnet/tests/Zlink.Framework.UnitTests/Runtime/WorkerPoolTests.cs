@@ -156,9 +156,9 @@ public sealed class WorkerPoolTests
     }
 
     [Fact]
-    public async Task RunCpuWorker_Queue_Full_Fails_Fast_With_WorkerQueueFull()
+    public async Task RunCpuWorker_QueueWaitsUntilTheBlockedWorkerCompletes()
     {
-        using var pool = CreatePool(1, 1);
+        using var pool = CreatePool(1);
         await using var queue = CreateQueue();
         using var blockPool = new ManualResetEventSlim(false);
         var workerStarted = new TaskCompletionSource(
@@ -166,7 +166,8 @@ public sealed class WorkerPoolTests
 
         try
         {
-            // Occupy the single pool thread, then fill the single queue slot.
+            // Occupy the single pool thread, then queue more work than the
+            // former worker-queue bound allowed.
             _ = CreateCall(
                 pool,
                 _ =>
@@ -180,11 +181,10 @@ public sealed class WorkerPoolTests
             _ = CreateCall(pool, _ => 0, queue).Async();
             await WaitForAsync(() => pool.QueueLength == 1);
 
-            var overflow = CreateCall(pool, _ => 0, queue).Async();
-            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-                await overflow.AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
-            Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, error.Kind);
-            Assert.True(error.RetryAdvice != ZLinkRetryAdvice.DoNotRetry);
+            var overflow = CreateCall(pool, _ => 3, queue).Async();
+            Assert.False(overflow.IsCompleted);
+            blockPool.Set();
+            Assert.Equal(3, await overflow.AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
         }
         finally
         {
@@ -227,8 +227,7 @@ public sealed class WorkerPoolTests
         using var pool = new ZLinkWorkerPool(
             0,
             2,
-            TimeSpan.FromMilliseconds(150),
-            16);
+            TimeSpan.FromMilliseconds(150));
         await using var queue = CreateQueue();
 
         await CreateCall(pool, _ => 1, queue).Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
@@ -315,14 +314,12 @@ public sealed class WorkerPoolTests
     }
 
     private static ZLinkWorkerPool CreatePool(
-        int maxThreads,
-        int maxQueueLength = 16)
+        int maxThreads)
     {
         return new ZLinkWorkerPool(
             0,
             maxThreads,
-            TimeSpan.FromSeconds(30),
-            maxQueueLength);
+            TimeSpan.FromSeconds(30));
     }
 
     private static ZLinkWorkerCall<TResult> CreateCall<TResult>(

@@ -24,7 +24,6 @@ public sealed class ErrorReplyWireConvergenceTests
         (ZLinkFrameworkErrorKind.NotConfigured, "not_configured"),
         (ZLinkFrameworkErrorKind.Rejected, "rejected"),
         (ZLinkFrameworkErrorKind.Unavailable, "unavailable"),
-        (ZLinkFrameworkErrorKind.CapacityExceeded, "capacity_exceeded"),
         (ZLinkFrameworkErrorKind.DeadlineExceeded, "deadline_exceeded"),
         (ZLinkFrameworkErrorKind.ShuttingDown, "shutting_down"),
         (ZLinkFrameworkErrorKind.ProtocolError, "protocol_error"),
@@ -37,8 +36,8 @@ public sealed class ErrorReplyWireConvergenceTests
     public void ErrorCode_wire_names_pin_the_canonical_cpp_table()
     {
         //  A new enum member must extend the cross-language table explicitly.
-        Assert.Equal(13, Enum.GetValues<ZLinkFrameworkErrorKind>().Length);
-        Assert.Equal(13, WireNameTable.Length);
+        Assert.Equal(12, Enum.GetValues<ZLinkFrameworkErrorKind>().Length);
+        Assert.Equal(12, WireNameTable.Length);
 
         foreach (var (kind, name) in WireNameTable)
         {

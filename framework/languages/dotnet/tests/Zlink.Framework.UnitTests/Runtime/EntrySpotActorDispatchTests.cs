@@ -622,7 +622,7 @@ public sealed partial class EntrySpotActorDispatchTests
             await sessions.CreateAndBindActorAsync(
                 "actor-concurrency-second",
                 "controlled"));
-        Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, rejected.Kind);
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, rejected.Kind);
         Assert.Equal(1, admission.Active);
 
         probe.Release.TrySetResult();

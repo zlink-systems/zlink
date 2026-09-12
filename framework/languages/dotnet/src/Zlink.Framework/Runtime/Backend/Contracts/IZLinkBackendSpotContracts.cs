@@ -59,7 +59,6 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 
     void SetRouterSendTimeout(TimeSpan? value);
 
-    void SetMailboxBudgets(ulong messageBudget, ulong byteBudget);
 
     // Starts the node explicitly at the host-startup point after routing id,
     // bind and channels are applied (spec 21 §3). Idempotent.

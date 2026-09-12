@@ -29,10 +29,6 @@ public interface IZLinkMeshNodeSocketConfig
 
     ulong ReceiveHighWaterMark { get; set; }
 
-    ulong MailboxMessageBudget { get; set; }
-
-    ulong MailboxByteBudget { get; set; }
-
     TimeSpan? ReceiveTimeout { get; set; }
 
     TimeSpan? SendTimeout { get; set; }

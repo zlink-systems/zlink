@@ -16,13 +16,12 @@ public sealed class ErrorContracts
                 [nameof(ZLinkFrameworkErrorKind.NotConfigured)] = 3,
                 [nameof(ZLinkFrameworkErrorKind.Rejected)] = 4,
                 [nameof(ZLinkFrameworkErrorKind.Unavailable)] = 5,
-                [nameof(ZLinkFrameworkErrorKind.CapacityExceeded)] = 6,
-                [nameof(ZLinkFrameworkErrorKind.DeadlineExceeded)] = 7,
-                [nameof(ZLinkFrameworkErrorKind.ShuttingDown)] = 8,
-                [nameof(ZLinkFrameworkErrorKind.ProtocolError)] = 9,
-                [nameof(ZLinkFrameworkErrorKind.InvalidOperation)] = 10,
-                [nameof(ZLinkFrameworkErrorKind.DataLost)] = 11,
-                [nameof(ZLinkFrameworkErrorKind.InternalFailure)] = 12
+                [nameof(ZLinkFrameworkErrorKind.DeadlineExceeded)] = 6,
+                [nameof(ZLinkFrameworkErrorKind.ShuttingDown)] = 7,
+                [nameof(ZLinkFrameworkErrorKind.ProtocolError)] = 8,
+                [nameof(ZLinkFrameworkErrorKind.InvalidOperation)] = 9,
+                [nameof(ZLinkFrameworkErrorKind.DataLost)] = 10,
+                [nameof(ZLinkFrameworkErrorKind.InternalFailure)] = 11
             },
             Enum.GetValues<ZLinkFrameworkErrorKind>()
                 .ToDictionary(static value => value.ToString(), static value => (int)value, StringComparer.Ordinal));
@@ -45,7 +44,6 @@ public sealed class ErrorContracts
             [ZLinkFrameworkErrorKind.NotConfigured] = ZLinkRetryAdvice.DoNotRetry,
             [ZLinkFrameworkErrorKind.Rejected] = ZLinkRetryAdvice.DoNotRetry,
             [ZLinkFrameworkErrorKind.Unavailable] = ZLinkRetryAdvice.RetryAfterBackoff,
-            [ZLinkFrameworkErrorKind.CapacityExceeded] = ZLinkRetryAdvice.RetryAfterBackoff,
             [ZLinkFrameworkErrorKind.DeadlineExceeded] = ZLinkRetryAdvice.RetryAfterBackoff,
             [ZLinkFrameworkErrorKind.ShuttingDown] = ZLinkRetryAdvice.RetryAfterStateChange,
             [ZLinkFrameworkErrorKind.ProtocolError] = ZLinkRetryAdvice.DoNotRetry,

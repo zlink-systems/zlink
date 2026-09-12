@@ -92,7 +92,7 @@ internal sealed class ResponseBodyReader(HttpClientOptions options)
     private static ZLinkFrameworkException RequestError(string message)
     {
         return new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.CapacityExceeded,
+            ZLinkFrameworkErrorKind.Rejected,
             message,
             ZLinkRetryAdvice.DoNotRetry);
     }

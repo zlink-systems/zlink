@@ -348,7 +348,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                     .SendToChannel("work", new EchoSend(payload))
                     .Async()
                     .AsTask());
-            Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, sendError.Kind);
+            Assert.Equal(ZLinkFrameworkErrorKind.Rejected, sendError.Kind);
 
             var requestError = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
                 client.GetRequiredService<IZLinkRouteClient>()
@@ -356,7 +356,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                     .Timeout(TimeSpan.FromSeconds(2))
                     .Async<EchoReply>()
                     .AsTask());
-            Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, requestError.Kind);
+            Assert.Equal(ZLinkFrameworkErrorKind.Rejected, requestError.Kind);
             Assert.False(server.GetRequiredService<EchoProbe>().Received.Task.IsCompleted);
         }
         finally
@@ -367,7 +367,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     }
 
     [Fact]
-    public async Task NegotiatedBoundConvertsOversizedServerReplyToCapacityExceeded()
+    public async Task NegotiatedBoundConvertsOversizedServerReplyToRejected()
     {
         var logDirectory = Environment.GetEnvironmentVariable("ZLINK_TEST_FLOW_DIRECTORY")
             ?? Zlink.Framework.Tests.Common.FrameworkTestEnvironment.CreateTestLogDirectory("oversized-server-reply");
@@ -402,7 +402,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                     .Timeout(TimeSpan.FromSeconds(2))
                     .Async<LargeReply>()
                     .AsTask());
-            Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, error.Kind);
+            Assert.Equal(ZLinkFrameworkErrorKind.Rejected, error.Kind);
         }
         finally
         {

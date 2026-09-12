@@ -621,7 +621,7 @@ public sealed class HttpClientContractTests
         var ex =
             await Assert.ThrowsAsync<ZLinkFrameworkException>(async () => await client.Get("/big").AsyncRaw());
 
-        Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, ex.Kind);
+        Assert.Equal(ZLinkFrameworkErrorKind.Rejected, ex.Kind);
     }
 
     [Fact]
