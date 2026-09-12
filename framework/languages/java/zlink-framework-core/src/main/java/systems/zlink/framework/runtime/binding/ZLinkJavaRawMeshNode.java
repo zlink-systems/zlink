@@ -1201,6 +1201,39 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             admittedInboundPeers.stream()).toList();
     }
 
+    Optional<Integer> classifyNodeSendTarget(RoutingId targetNodeRid) {
+        Map.Entry<Long, PeerIntent> selectedIntent = null;
+        for (Map.Entry<Long, PeerIntent> entry : peerIntents.entrySet()) {
+            if (targetNodeRid.equals(entry.getValue().expectedRoutingId())
+                && (selectedIntent == null
+                    || entry.getKey() < selectedIntent.getKey())) {
+                selectedIntent = entry;
+            }
+        }
+        if (selectedIntent != null) {
+            PeerIntent intent = selectedIntent.getValue();
+            if (isReadyPeer(intent)
+                || admittedPeerChannels.containsKey(targetNodeRid)) {
+                return Optional.empty();
+            }
+            if (notRequiredPeers.contains(targetNodeRid)) {
+                return Optional.of(ZLinkOneWayCalls.TARGET_NOT_FOUND);
+            }
+            if (rejectedPeers.contains(targetNodeRid)
+                || closedPeerIntents.contains(selectedIntent.getKey())) {
+                return Optional.of(ZLinkOneWayCalls.ROUTE_NOT_CONNECTED);
+            }
+            return Optional.empty();
+        }
+        if (automaticNotRequiredPeers.containsKey(targetNodeRid)) {
+            return Optional.of(ZLinkOneWayCalls.TARGET_NOT_FOUND);
+        }
+        ZLinkServiceTopologyRegistry current = topology;
+        return current != null && current.peer(targetNodeRid).isPresent()
+            ? Optional.empty()
+            : Optional.of(ZLinkOneWayCalls.TARGET_NOT_FOUND);
+    }
+
     @Override
     public boolean isCanonicalRelocationTargetAdmitted(
         RoutingId peerRid,

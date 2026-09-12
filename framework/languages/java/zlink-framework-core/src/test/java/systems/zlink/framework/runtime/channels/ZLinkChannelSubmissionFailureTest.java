@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.channels;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -20,6 +21,7 @@ import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOption
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 
@@ -152,6 +154,34 @@ final class ZLinkChannelSubmissionFailureTest {
                 assertEquals(1, attempts.get());
                 assertTrue(payload.empty(),
                     "synchronous node rejection must release encoded parts");
+            } finally {
+                close(runtime, List.of());
+            }
+        }
+    }
+
+    @Test
+    void meshNodeImmediateAdmissionReturnsTheBindingStageWithoutACompletionGraph() {
+        CompletionStage<Void> admitted = ZLinkOneWayCalls.immediateAdmission();
+        ZLinkInternalSpotNode node = nodeSendThatAdmitsImmediately(admitted);
+
+        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
+             Message payload = Message.from("node-send-immediate")) {
+            ZLinkChannelCallRuntime runtime = runtime(scheduler);
+            try {
+                CompletionStage<Void> completion = new RouteSendCall(
+                    runtime,
+                    "orders",
+                    sockets(node),
+                    TARGET,
+                    payload,
+                    Optional.of("command"),
+                    ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
+                    ZLinkApplicationMetadata.empty()).submit();
+
+                assertSame(admitted, completion);
+                assertTrue(payload.empty(),
+                    "immediate admission must release the encoded parts before returning");
             } finally {
                 close(runtime, List.of());
             }
@@ -296,6 +326,20 @@ final class ZLinkChannelSubmissionFailureTest {
                     attempts.incrementAndGet();
                     throw failure;
                 }
+                default -> defaultValue(method.getReturnType());
+            });
+    }
+
+    private static ZLinkInternalSpotNode nodeSendThatAdmitsImmediately(
+        CompletionStage<Void> admitted) {
+        RoutingId source = RoutingId.from("submission-immediate-source");
+        return (ZLinkInternalSpotNode) Proxy.newProxyInstance(
+            ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
+            new Class<?>[] {ZLinkInternalSpotNode.class},
+            (proxy, method, arguments) -> switch (method.getName()) {
+                case "routingId" -> source;
+                case "classifyNodeSendTarget" -> Optional.empty();
+                case "sendToNode" -> admitted;
                 default -> defaultValue(method.getReturnType());
             });
     }

@@ -194,10 +194,14 @@ final class RouteSendCall implements ZLinkSendCall {
             return ZLinkOneWayCalls.oneWayStatus(classified.orElseThrow());
         }
         try {
-            return ZLinkOneWayCalls.adaptOneWay(
-                    node.sendToNode(target, metadata.encode(), sendParts))
-                .whenComplete((ignored, failure) ->
-                    sendParts.forEach(Message::close));
+            CompletionStage<Void> submission = node.sendToNode(
+                target, metadata.encode(), sendParts);
+            if (ZLinkOneWayCalls.isImmediateAdmission(submission)) {
+                sendParts.forEach(Message::close);
+                return submission;
+            }
+            return ZLinkOneWayCalls.adaptOneWay(submission)
+                .whenComplete((ignored, failure) -> sendParts.forEach(Message::close));
         } catch (RuntimeException | Error failure) {
             sendParts.forEach(Message::close);
             throw failure;
