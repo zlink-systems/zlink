@@ -55,13 +55,14 @@ internal static class PerfReqRep
             EmitSingleAutoHwmDetail(clientMonitor, "DEALER_ROUTER_REQREP",
                 transport, "requester", "dealer", size);
 
+            ulong appliedSendHwmBytes = ReadAppliedSendHwmBytes(clientMonitor);
             serverMonitor.Dispose();
             serverMonitor = null;
             clientMonitor.Dispose();
             clientMonitor = null;
 
             var result = RunDealerRouterActive(client, server, size,
-                durationSeconds, latencySampleCap);
+                durationSeconds, latencySampleCap, appliedSendHwmBytes);
             if (result.completed <= 0 || result.latencySamples.Count == 0)
             {
                 DebugLog("single_dealer_router_reqrep_error:active_failed");
@@ -143,13 +144,15 @@ internal static class PerfReqRep
             EmitSingleAutoHwmDetail(clientMonitor, "ROUTER_ROUTER_REQREP",
                 transport, "requester", "router", size);
 
+            ulong appliedSendHwmBytes = ReadAppliedSendHwmBytes(clientMonitor);
             serverMonitor.Dispose();
             serverMonitor = null;
             clientMonitor.Dispose();
             clientMonitor = null;
 
             var result = RunRouterRouterActive(client, server,
-                targetRoutingId.Value, size, durationSeconds, latencySampleCap);
+                targetRoutingId.Value, size, durationSeconds, latencySampleCap,
+                appliedSendHwmBytes);
             if (result.completed <= 0 || result.latencySamples.Count == 0)
             {
                 DebugLog("single_router_router_reqrep_error:active_failed");
@@ -180,7 +183,7 @@ internal static class PerfReqRep
     private static (long completed, List<double> latencySamples)
         RunDealerRouterActive(
         IDealerSocket client, IRouterSocket server, int msgSize,
-        int durationSeconds, int latencyCap)
+        int durationSeconds, int latencyCap, ulong appliedSendHwmBytes)
     {
         Exception? serverError = null;
         long serverReceived = 0;
@@ -207,9 +210,11 @@ internal static class PerfReqRep
         try
         {
             result = RunRequestLoop(
+                client,
                 msgSize,
                 durationSeconds,
                 latencyCap,
+                appliedSendHwmBytes,
                 message =>
                 {
                     using Message? tail = PerfSocketIo.MeasurementPartCount == 2
@@ -327,7 +332,8 @@ internal static class PerfReqRep
     private static (long completed, List<double> latencySamples)
         RunRouterRouterActive(
         IRouterSocket client, IRouterSocket server, RoutingId targetRid,
-        int msgSize, int durationSeconds, int latencyCap)
+        int msgSize, int durationSeconds, int latencyCap,
+        ulong appliedSendHwmBytes)
     {
         Exception? serverError = null;
         long serverReceived = 0;
@@ -354,9 +360,11 @@ internal static class PerfReqRep
         try
         {
             result = RunRequestLoop(
+                client,
                 msgSize,
                 durationSeconds,
                 latencyCap,
+                appliedSendHwmBytes,
                 message =>
                 {
                     using Message? tail = PerfSocketIo.MeasurementPartCount == 2
@@ -394,41 +402,53 @@ internal static class PerfReqRep
     }
 
     private static (long completed, List<double> latencySamples) RunRequestLoop(
-        int msgSize, int durationSeconds, int latencyCap,
+        ISocket requester, int msgSize, int durationSeconds, int latencyCap,
+        ulong appliedSendHwmBytes,
         Func<Message, RequestSubmission> submit)
     {
         int payloadSize = Math.Max(msgSize, PerfMetricHeaderSize);
+        int admissionWindow = ResolveAdmissionWindow(requester,
+            appliedSendHwmBytes, payloadSize);
+        DebugLog("single_reqrep_debug:admission_window="
+            + $"{admissionWindow}:applied_sndhwm_bytes={appliedSendHwmBytes}"
+            + $":wire_size={payloadSize}");
+        using var completionPoller = Zlink.CreatePoller();
+        var completionEvents = new PollEvent[1];
+        // POLLCOMPLETION reserves this poller as the socket's sole
+        // completion-queue drain owner, so the thread that calls Wait() is the
+        // thread that progresses every request (IPoller.Add remarks).
+        completionPoller.Add(requester, PollEventFlags.PollCompletion, 0);
         var samples = new List<double>(Math.Max(0, latencyCap));
-        var replySignal = new SemaphoreSlim(0);
-        object gate = new();
         Exception? completionError = null;
-        int fatal = 0;
-        long pendingReplies = 0;
         long completed = 0;
         long sampleSeen = 0;
         uint rng = 0xA341316Cu;
+        bool fatal = false;
 
         void RecordError(Exception ex)
         {
-            lock (gate)
-                completionError ??= ex;
-            Volatile.Write(ref fatal, 1);
+            completionError ??= ex;
+            fatal = true;
         }
 
+        // PERF_SINGLE_TEST_POLICY.md 1.1.2/1.1.3/1.1.5: this thread owns
+        // submission, completion progress, and settlement. Retain Tasks without
+        // continuations; Poller.Wait completes them and IsCompleted makes
+        // GetResult below nonblocking.
         var requesterThread = new Thread(() =>
         {
             try
             {
                 ulong seq = 1;
+                var pending = new List<Task<IReadOnlyList<Message>>>();
                 long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
 
-                async Task ObserveReplyAsync(
-                    Task<IReadOnlyList<Message>> reply)
+                void SettleOne(Task<IReadOnlyList<Message>> request)
                 {
                     IReadOnlyList<Message>? parts = null;
                     try
                     {
-                        parts = await reply.ConfigureAwait(false);
+                        parts = request.GetAwaiter().GetResult();
                         if (!PerfSocketIo.TryMeasurementPayload(parts,
                                 out Message replyPayload))
                         {
@@ -447,12 +467,9 @@ internal static class PerfReqRep
                         ulong nowNs = EpochNsFromTimestamp(completionTicks);
                         if (nowNs < header.SentTsNs)
                             return;
-                        lock (gate)
-                        {
-                            ReservoirSample(samples!, nowNs - header.SentTsNs,
-                                ref sampleSeen, latencyCap, ref rng);
-                            completed++;
-                        }
+                        ReservoirSample(samples!, nowNs - header.SentTsNs,
+                            ref sampleSeen, latencyCap, ref rng);
+                        completed++;
                     }
                     catch (ZlinkRequestException ex)
                         when (ex.Result == ZlinkRequestException.ErrorCode.TimedOut)
@@ -466,52 +483,114 @@ internal static class PerfReqRep
                     {
                         if (parts != null)
                             Zlink.MultipartClose(parts);
-                        Interlocked.Decrement(ref pendingReplies);
-                        replySignal.Release();
                     }
                 }
 
-                while (Stopwatch.GetTimestamp() < deadlineTicks
-                       && Volatile.Read(ref fatal) == 0)
+                // One forward compaction pass keeps settlement linear in the
+                // un-settled count. The admission window can hold many
+                // thousands of small requests, so per-item List.RemoveAt would
+                // put a quadratic shuffle inside the measured loop.
+                void SettleCompleted()
                 {
-                    using (Message message = Message.Allocate(payloadSize))
+                    // Local alias with the null-forgiving read the enclosing
+                    // lambda already uses for its captured state (samples!).
+                    List<Task<IReadOnlyList<Message>>> queue = pending!;
+                    int keep = 0;
+                    for (int i = 0; i < queue.Count; ++i)
                     {
-                        long sentTicks = Stopwatch.GetTimestamp();
-                        StampMetricHeader(message.AsSpan(), RunId, ActivePhase,
-                            msgSize, seq, EpochNsFromTimestamp(sentTicks));
-                        try
+                        Task<IReadOnlyList<Message>> request = queue[i];
+                        if (!request.IsCompleted)
                         {
-                            RequestSubmission submission = submit(message);
-                            Interlocked.Increment(ref pendingReplies);
-                            _ = ObserveReplyAsync(submission.Reply);
-                            seq++;
-                            if (submission.Result ==
-                                SubmitResult.Backpressured)
+                            queue[keep++] = request;
+                            continue;
+                        }
+                        SettleOne(request);
+                    }
+                    if (keep < queue.Count)
+                        queue.RemoveRange(keep, queue.Count - keep);
+                }
+
+                void ProgressOnce(int waitMs)
+                {
+                    int ready;
+                    try
+                    {
+                        ready = completionPoller.Wait(completionEvents,
+                            TimeSpan.FromMilliseconds(waitMs));
+                    }
+                    catch (Exception ex)
+                    {
+                        RecordError(ex);
+                        return;
+                    }
+                    // This poller owns the socket's completion drain, so a Task
+                    // can only settle inside Wait. No readiness means nothing
+                    // settled and the un-settled set needs no scan.
+                    if (ready > 0)
+                        SettleCompleted();
+                }
+
+                while (Stopwatch.GetTimestamp() < deadlineTicks && !fatal)
+                {
+                    bool submittedAny = false;
+                    int submittedSinceProgress = 0;
+                    // PERF_SINGLE_TEST_POLICY.md 1.1.3 (D-BP40): never wait for
+                    // a reply before submitting the next request. Submit until
+                    // the un-settled set fills the socket's own admission
+                    // window - the same boundary the C runner reaches as
+                    // ZLINK_SUBMIT_BACKPRESSURED (perf_single_reqrep.hpp
+                    // run_request_phase).
+                    while (Stopwatch.GetTimestamp() < deadlineTicks && !fatal
+                           && pending.Count < admissionWindow)
+                    {
+                        using (Message message = Message.Allocate(payloadSize))
+                        {
+                            long sentTicks = Stopwatch.GetTimestamp();
+                            StampMetricHeader(message.AsSpan(), RunId, ActivePhase,
+                                msgSize, seq, EpochNsFromTimestamp(sentTicks));
+                            try
                             {
-                                submission.Admitted.GetAwaiter().GetResult();
+                                RequestSubmission submission = submit(message);
+                                pending.Add(submission.Reply);
+                                seq++;
+                                submittedAny = true;
+                            }
+                            catch (Exception ex)
+                            {
+                                RecordError(ex);
                             }
                         }
-                        catch (Exception ex)
+                        if (fatal)
+                            break;
+                        // Same progress cadence as the C submit cursor: settle
+                        // completions every 64 submissions without blocking.
+                        if (++submittedSinceProgress >= 64)
                         {
-                            RecordError(ex);
+                            submittedSinceProgress = 0;
+                            ProgressOnce(0);
                         }
                     }
+                    if (fatal)
+                        break;
+                    // Progress completions on this same thread. The bounded
+                    // wait is reached only when the admission window is full,
+                    // matching C's blocking poll after backpressure.
+                    ProgressOnce(submittedAny ? 0 : 50);
                 }
 
+                // Bounded completion drain of requests submitted before the
+                // deadline; no new request is submitted here.
                 long drainDeadline = DeadlineTicksFromMilliseconds(
                     ResolveReqRepDrainTimeoutMs());
-                while (Volatile.Read(ref pendingReplies) > 0)
+                while (pending.Count > 0 && !fatal
+                       && Stopwatch.GetTimestamp() < drainDeadline)
                 {
-                    long remainingTicks = drainDeadline
-                        - Stopwatch.GetTimestamp();
-                    if (remainingTicks <= 0
-                        || !replySignal.Wait(TimeSpan.FromSeconds(
-                            remainingTicks / (double)Stopwatch.Frequency)))
-                    {
-                        RecordError(new TimeoutException(
-                            "request/reply operations did not drain"));
-                        break;
-                    }
+                    ProgressOnce(50);
+                }
+                if (pending.Count != 0 && completionError == null)
+                {
+                    RecordError(new TimeoutException(
+                        "request/reply operations did not drain"));
                 }
             }
             catch (Exception ex)
@@ -527,12 +606,9 @@ internal static class PerfReqRep
         requesterThread.Start();
         requesterThread.Join();
 
-        lock (gate)
-        {
-            if (completionError != null)
-                throw completionError;
-            return (completed, samples);
-        }
+        if (completionError != null)
+            throw completionError;
+        return (completed, samples);
     }
 
     private static void RunReplyLoop(IRouterSocket server,
@@ -580,6 +656,36 @@ internal static class PerfReqRep
     private static TimeSpan ResolveReqRepTimeout()
     {
         return ReqRepTimeout;
+    }
+
+    // PERF_SINGLE_TEST_POLICY.md 1.1.3 (D-BP40): the un-settled request set is
+    // bounded by the socket's own admission window - the SNDHWM bytes Core
+    // applied to this socket divided by one request's wire size - not by a
+    // fixed number. That is the same boundary the C runner observes as
+    // ZLINK_SUBMIT_BACKPRESSURED, so the runner keeps no window of its own.
+    // The applied value comes from the auto-HWM monitor snapshot; a manual
+    // PERF_SINGLE_SNDHWM override is read back from the socket option.
+    private static int ResolveAdmissionWindow(ISocket requester,
+        ulong appliedSendHwmBytes, int wireSize)
+    {
+        ulong hwmBytes = appliedSendHwmBytes;
+        if (hwmBytes == 0)
+            hwmBytes = requester.Options.SendHighWaterMark;
+        if (hwmBytes == 0)
+        {
+            throw new InvalidOperationException(
+                "requester socket reports no send high-water mark, so the "
+                + "admission window is unknown");
+        }
+        ulong window = hwmBytes / (ulong)Math.Max(1, wireSize);
+        if (window < 1)
+            window = 1;
+        return window > int.MaxValue ? int.MaxValue : (int)window;
+    }
+
+    private static ulong ReadAppliedSendHwmBytes(MonitorSocket monitor)
+    {
+        return monitor.Status().AutoHwmAppliedSendHighWaterMarkBytes;
     }
 
     private static int ResolveReqRepDrainTimeoutMs()

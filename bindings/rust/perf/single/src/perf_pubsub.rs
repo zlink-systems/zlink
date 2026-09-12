@@ -112,4 +112,11 @@ fn main() {
         config.duration_seconds,
         &result,
     );
+
+    // Match the C guard destruction order: disconnect the subscriber before
+    // closing the inproc publisher endpoint.
+    drop(mon);
+    drop(pub_mon);
+    drop(sub_sock);
+    drop(_pub_sock);
 }

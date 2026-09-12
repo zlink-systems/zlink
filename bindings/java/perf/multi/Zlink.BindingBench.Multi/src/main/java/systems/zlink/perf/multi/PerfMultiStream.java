@@ -45,6 +45,10 @@ final class PerfMultiStream {
                 Duration.ofMillis(config.connectReadyTimeoutMs()),
                 "multi stream server connections ready");
             PerfUtil.recalculateAutoHwm(ctx);
+            // Core permits one monitor per socket. Close the connection-ready
+            // monitor before opening the diagnostic snapshot monitor. C takes
+            // the same snapshot directly while its single monitor is active.
+            monitor.close();
             PerfUtil.printMultiSocketAutoHwm(config, server, "server",
                 "server-connected", SocketType.STREAM);
             PerfControl.emitServerStartReady(config.size());
