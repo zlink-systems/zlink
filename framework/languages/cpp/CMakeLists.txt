@@ -1003,6 +1003,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_definitions(test_cpp_framework_operation_registry PRIVATE
     ZLINK_COMPLETION_TERMINAL_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/completion-terminal-v1.json")
   target_link_libraries(test_cpp_framework_operation_registry PRIVATE
+    opentelemetry-cpp::metrics
     Threads::Threads
     nlohmann_json::nlohmann_json)
   add_test(NAME test_cpp_framework_operation_registry
@@ -1020,6 +1021,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_link_libraries(test_cpp_framework_m6a_runtime PRIVATE
     opentelemetry-cpp::metrics
     zlink_framework_m6a_runtime
+    zlink_framework
     Threads::Threads)
   zlink_framework_cpp_enable_test_assertions(test_cpp_framework_m6a_runtime)
   add_test(NAME test_cpp_framework_m6a_runtime
@@ -1054,7 +1056,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_mesh_shutdown_seal PRIVATE
-    zlink_framework_m6a_runtime Threads::Threads)
+    zlink_framework_m6a_runtime zlink_framework Threads::Threads)
   zlink_framework_cpp_enable_test_assertions(test_cpp_framework_mesh_shutdown_seal)
   add_test(NAME test_cpp_framework_mesh_shutdown_seal
     COMMAND test_cpp_framework_mesh_shutdown_seal)

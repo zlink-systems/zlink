@@ -827,7 +827,7 @@ bool verify_request_turn_mode (bool release_turn, const std::vector<int> &expect
 {
     zlink::framework::runtime::offload_executor_t executor (2);
     zlink::framework::runtime::serial_execution_queue_t queue (
-      executor, 4,
+      executor, {},
       zlink::framework::runtime::serial_execution_queue_t::error_handler_t{},
       zlink::framework::runtime::serial_lane_policy_t::spot_wide ());
     auto reply = std::make_shared<zlink::framework::detail::task_completion_source_t<int>> ();
@@ -882,17 +882,13 @@ bool verify_request_turn_mode (bool release_turn, const std::vector<int> &expect
     return *order == expected;
 }
 
-bool verify_serial_resume_capacity_failure_is_terminal_and_deferred ()
+bool verify_serial_resume_waits_behind_queued_work ()
 {
     using namespace zlink::framework;
     using namespace zlink::framework::runtime;
 
     offload_executor_t executor (2);
     serial_execution_queue_options_t options;
-    options.application_message_capacity = 1;
-    options.application_byte_capacity = serial_execution_queue_t::fixed_work_byte_cost;
-    options.lifecycle_message_capacity = 1;
-    options.lifecycle_byte_capacity = serial_execution_queue_t::fixed_work_byte_cost;
     serial_execution_queue_t queue (
       executor, options, {}, serial_lane_policy_t::spot_wide ());
 
@@ -927,8 +923,7 @@ bool verify_serial_resume_capacity_failure_is_terminal_and_deferred ()
         return false;
     }
 
-    // The probe uses its own order vector above; the first turn must still
-    // release before the filler can occupy the only application slot.
+    // Resumption is queued behind the active filler instead of being rejected.
     std::mutex filler_gate;
     std::condition_variable filler_changed;
     bool filler_entered = false;
@@ -962,48 +957,28 @@ bool verify_serial_resume_capacity_failure_is_terminal_and_deferred ()
     }
 
     reply->complete (result_t<int>::success (7));
-    if (!wait_until ([&] {
-            return task_finished->load (std::memory_order_acquire);
-        })) {
-        {
-            std::lock_guard lock (filler_gate);
-            release_filler = true;
-        }
-        filler_changed.notify_all ();
-        queue.drain ();
+    if (task_finished->load (std::memory_order_acquire))
         return false;
-    }
-    const auto terminal = observed_kind->load (std::memory_order_acquire);
-    if (terminal
-        != static_cast<int> (framework_error_kind_t::capacity_exceeded)) {
-        {
-            std::lock_guard lock (filler_gate);
-            release_filler = true;
-        }
-        filler_changed.notify_all ();
-        queue.drain ();
-        return false;
-    }
 
     {
         std::lock_guard lock (filler_gate);
         release_filler = true;
     }
     filler_changed.notify_all ();
+    if (!wait_until ([&] {
+            return task_finished->load (std::memory_order_acquire);
+        }))
+        return false;
     queue.drain ();
-    return true;
+    return observed_kind->load (std::memory_order_acquire) == -1;
 }
 
-bool verify_serial_queue_lanes_and_byte_budget ()
+bool verify_serial_queue_lanes_are_unbounded ()
 {
     using namespace zlink::framework::runtime;
 
     offload_executor_t executor (2);
     serial_execution_queue_options_t options;
-    options.application_message_capacity = 4;
-    options.application_byte_capacity = 512;
-    options.lifecycle_message_capacity = 2;
-    options.lifecycle_byte_capacity = 512;
     options.lifecycle_burst_limit = 2;
     options.owner_time_budget = std::chrono::milliseconds::zero ();
     serial_execution_queue_t queue (executor, options);
@@ -1049,13 +1024,17 @@ bool verify_serial_queue_lanes_and_byte_budget ()
         || !queue.try_post ("lifecycle-second", [&] {
                order.push_back ("lifecycle-second");
            }, lifecycle)
-        || queue.try_post ("application-over-byte-limit", [] {}, application)
-        || queue.try_post ("lifecycle-over-message-limit", [] {}, lifecycle)) {
+        || !queue.try_post ("application-over-former-byte-limit", [&] {
+               order.push_back ("application-over-former-byte-limit");
+           }, application)
+        || !queue.try_post ("lifecycle-over-former-message-limit", [&] {
+               order.push_back ("lifecycle-over-former-message-limit");
+           }, lifecycle)) {
         return false;
     }
-    if (queue.pending_count (serial_work_lane_t::application) != 2
-        || queue.pending_count (serial_work_lane_t::lifecycle) != 2
-        || queue.pending_bytes () != 1024) {
+    if (queue.pending_count (serial_work_lane_t::application) != 3
+        || queue.pending_count (serial_work_lane_t::lifecycle) != 3
+        || queue.pending_bytes () != 1536) {
         return false;
     }
 
@@ -1065,9 +1044,11 @@ bool verify_serial_queue_lanes_and_byte_budget ()
         changed.notify_all ();
     }
     queue.drain ();
-    return order
-             == std::vector<std::string>{"application-first", "lifecycle-first",
-                                         "lifecycle-second", "application-second"}
+    return order.size () == 6 && order.front () == "application-first"
+           && std::find (order.begin (), order.end (),
+                         "application-over-former-byte-limit") != order.end ()
+           && std::find (order.begin (), order.end (),
+                         "lifecycle-over-former-message-limit") != order.end ()
            && queue.pending_count () == 0
            && queue.pending_bytes () == 0;
 }
@@ -1079,9 +1060,6 @@ bool verify_transferred_owner_reservation_is_continuous_until_terminal ()
 
     offload_executor_t executor (1);
     serial_execution_queue_options_t options;
-    options.application_message_capacity = 1;
-    options.application_byte_capacity =
-      serial_execution_queue_t::fixed_work_byte_cost;
     serial_execution_queue_t queue (executor, options);
 
     std::mutex gate;
@@ -1110,7 +1088,7 @@ bool verify_transferred_owner_reservation_is_continuous_until_terminal ()
         }
     }
 
-    service_mailbox_t mailbox (2, 4096, 1, 1024);
+    service_mailbox_t mailbox;
     service_mailbox_record_t record;
     record.owner = "transferred-owner";
     record.domain = service_mailbox_domain_t::application;
@@ -1188,14 +1166,12 @@ bool verify_transferred_owner_reservation_is_continuous_until_terminal ()
            && queue.pending_count () == 0 && queue.pending_bytes () == 0;
 }
 
-bool verify_transferred_owner_reservation_bypasses_full_lifecycle_lane ()
+bool verify_transferred_owner_reservation_shares_unbounded_lifecycle_lane ()
 {
     using namespace zlink::framework::runtime;
 
     offload_executor_t executor (1);
     serial_execution_queue_options_t options;
-    options.lifecycle_message_capacity = 1;
-    options.lifecycle_byte_capacity = serial_execution_queue_t::fixed_work_byte_cost;
     serial_execution_queue_t queue (executor, options);
 
     std::mutex gate;
@@ -1228,7 +1204,11 @@ bool verify_transferred_owner_reservation_bypasses_full_lifecycle_lane ()
         }
         queue.drain ();
     };
-    if (queue.try_post ("ordinary-lifecycle-over-capacity", [] {}, lifecycle)) {
+    std::atomic_int ordinary_runs{0};
+    if (!queue.try_post (
+          "ordinary-lifecycle-queued",
+          [&] { ordinary_runs.fetch_add (1, std::memory_order_release); },
+          lifecycle)) {
         release_active ();
         return false;
     }
@@ -1248,15 +1228,17 @@ bool verify_transferred_owner_reservation_bypasses_full_lifecycle_lane ()
         return false;
     }
     if (transfer_count.load (std::memory_order_acquire) != 1
-        || queue.pending_count (serial_work_lane_t::lifecycle) != 2
+        || queue.pending_count (serial_work_lane_t::lifecycle) != 3
         || queue.pending_bytes ()
-             != serial_execution_queue_t::fixed_work_byte_cost + transferred_byte_cost) {
+             != 2 * serial_execution_queue_t::fixed_work_byte_cost
+                  + transferred_byte_cost) {
         release_active ();
         return false;
     }
 
     release_active ();
     return transfer_count.load (std::memory_order_acquire) == 1
+           && ordinary_runs.load (std::memory_order_acquire) == 1
            && transferred_runs.load (std::memory_order_acquire) == 1
            && queue.pending_count () == 0 && queue.pending_bytes () == 0;
 }
@@ -1267,10 +1249,6 @@ bool verify_serial_queue_owner_time_budget ()
 
     offload_executor_t executor (1);
     serial_execution_queue_options_t options;
-    options.application_message_capacity = 8;
-    options.application_byte_capacity = 8 * serial_execution_queue_t::fixed_work_byte_cost;
-    options.lifecycle_message_capacity = 8;
-    options.lifecycle_byte_capacity = 8 * serial_execution_queue_t::fixed_work_byte_cost;
     options.owner_time_budget = std::chrono::milliseconds (100);
     serial_execution_queue_t batched_queue (executor, options);
 
@@ -1540,7 +1518,7 @@ bool verify_per_actor_timer_names_overlap_and_keep_fifo ()
                         "tick:second"};
 }
 
-bool verify_actor_mailbox_capacity_isolated_in_both_modes ()
+bool verify_actor_mailbox_backlog_is_accepted_in_both_modes ()
 {
     using namespace zlink::framework::runtime;
 
@@ -1551,8 +1529,6 @@ bool verify_actor_mailbox_capacity_isolated_in_both_modes ()
           : serial_lane_policy_t::spot_wide ();
         serial_executor_test_fixture_t fixture (policy);
         serial_execution_queue_options_t actor_options;
-        actor_options.application_message_capacity = 1;
-        actor_options.application_byte_capacity = 1024;
         auto full_actor_queue = std::make_shared<serial_execution_queue_t> (
           *fixture.worker, actor_options,
           serial_execution_queue_t::error_handler_t{},
@@ -1560,13 +1536,15 @@ bool verify_actor_mailbox_capacity_isolated_in_both_modes ()
         fixture.serial.replace_actor_queue ("actor-full", full_actor_queue);
 
         serial_test_blocker_t first;
+        serial_test_signal_t same_ran;
         serial_test_signal_t other_ran;
         const auto accepted_first = fixture.serial.execute_actor (
           "actor-full", "capacity-first", first.work ());
         if (!accepted_first || !first.wait_for_entry ())
             return false;
         const auto same_actor_accepted = fixture.serial.execute_actor (
-          "actor-full", "capacity-rejected", [] (auto complete) {
+          "actor-full", "queued-same-actor", [&] (auto complete) {
+              same_ran.set ();
               complete ([] {});
           });
         const auto other_actor_accepted = fixture.serial.execute_actor (
@@ -1575,25 +1553,25 @@ bool verify_actor_mailbox_capacity_isolated_in_both_modes ()
               complete ([] {});
           });
         first.release ();
+        const auto same_completed = same_ran.wait_for ();
         const auto other_completed = other_ran.wait_for ();
         full_actor_queue->drain ();
         fixture.spot_queue->drain ();
         fixture.serial.actor_executor ("actor-open")->queue ()->drain ();
-        if (same_actor_accepted || !other_actor_accepted || !other_completed)
+        if (!same_actor_accepted || !same_completed
+            || !other_actor_accepted || !other_completed)
             return false;
     }
     return true;
 }
 
-bool verify_spot_wide_large_payload_rejects_before_small_payload ()
+bool verify_spot_wide_large_and_small_payloads_are_queued ()
 {
     using namespace zlink::framework::runtime;
 
     serial_executor_test_fixture_t fixture (
       serial_lane_policy_t::spot_wide ());
     serial_execution_queue_options_t actor_options;
-    actor_options.application_message_capacity = 8;
-    actor_options.application_byte_capacity = 100;
     auto actor_queue = std::make_shared<serial_execution_queue_t> (
       *fixture.worker, actor_options,
       serial_execution_queue_t::error_handler_t{},
@@ -1601,6 +1579,7 @@ bool verify_spot_wide_large_payload_rejects_before_small_payload ()
     fixture.serial.replace_actor_queue ("actor-a", actor_queue);
 
     serial_test_blocker_t first;
+    serial_test_signal_t second_large_ran;
     serial_test_signal_t small_ran;
     const serial_work_options_t large{serial_work_lane_t::application, 60};
     const serial_work_options_t small{serial_work_lane_t::application, 10};
@@ -1609,7 +1588,8 @@ bool verify_spot_wide_large_payload_rejects_before_small_payload ()
     if (!accepted_first || !first.wait_for_entry ())
         return false;
     const auto second_large_accepted = fixture.serial.execute_actor (
-      "actor-a", "large-second", [] (auto complete) {
+      "actor-a", "large-second", [&] (auto complete) {
+          second_large_ran.set ();
           complete ([] {});
       }, large);
     const auto small_accepted = fixture.serial.execute_actor (
@@ -1618,27 +1598,24 @@ bool verify_spot_wide_large_payload_rejects_before_small_payload ()
           complete ([] {});
       }, small);
     first.release ();
+    const auto second_large_completed = second_large_ran.wait_for ();
     const auto small_completed = small_ran.wait_for ();
     actor_queue->drain ();
     fixture.spot_queue->drain ();
-    return !second_large_accepted && small_accepted && small_completed;
+    return second_large_accepted && second_large_completed
+           && small_accepted && small_completed;
 }
 
-bool verify_spot_wide_upper_queue_saturates_by_count ()
+bool verify_spot_wide_upper_queue_accepts_former_boundaries ()
 {
     using namespace zlink::framework::runtime;
 
-    const auto second_submission_rejected = [] (std::size_t payload_bytes) {
+    const auto second_submission_runs = [] (std::size_t payload_bytes) {
         serial_execution_queue_options_t spot_options;
-        spot_options.application_message_capacity = 1;
-        spot_options.application_byte_capacity =
-          serial_execution_queue_t::fixed_work_byte_cost;
         serial_executor_test_fixture_t fixture (
           serial_lane_policy_t::spot_wide (), spot_options);
 
         serial_execution_queue_options_t actor_options;
-        actor_options.application_message_capacity = 8;
-        actor_options.application_byte_capacity = 1'000'000;
         for (const auto *actor_id : {"actor-a", "actor-b"}) {
             fixture.serial.replace_actor_queue (
               actor_id,
@@ -1649,30 +1626,33 @@ bool verify_spot_wide_upper_queue_saturates_by_count ()
         }
 
         serial_test_blocker_t first;
-        serial_test_signal_t rejected;
+        serial_test_signal_t second_ran;
+        std::atomic_bool rejected{false};
         const auto accepted_first = fixture.serial.execute_actor (
           "actor-a", "upper-first", first.work (),
           serial_work_options_t{serial_work_lane_t::application, 1});
         if (!accepted_first || !first.wait_for_entry ())
             return false;
         const auto admitted_to_actor_queue = fixture.serial.execute_actor (
-          "actor-b", "upper-second", [] (auto complete) {
+          "actor-b", "upper-second", [&] (auto complete) {
+              second_ran.set ();
               complete ([] {});
           },
           serial_work_options_t{serial_work_lane_t::application,
                                 payload_bytes},
           false,
-          [&] { rejected.set (); });
-        const auto upper_rejected = rejected.wait_for ();
+          [&] { rejected.store (true, std::memory_order_release); });
         first.release ();
+        const auto completed = second_ran.wait_for ();
         fixture.spot_queue->drain ();
         fixture.serial.actor_executor ("actor-a")->queue ()->drain ();
         fixture.serial.actor_executor ("actor-b")->queue ()->drain ();
-        return admitted_to_actor_queue && upper_rejected;
+        return admitted_to_actor_queue && completed
+               && !rejected.load (std::memory_order_acquire);
     };
 
-    return second_submission_rejected (1)
-           && second_submission_rejected (10'000);
+    return second_submission_runs (1)
+           && second_submission_runs (10'000);
 }
 
 struct spot_wide_yield_probe_state_t
@@ -2057,14 +2037,11 @@ bool verify_cancellable_serial_submission_lifecycle ()
     using namespace zlink::framework::runtime;
 
     // If the executor rejects the drain job, enqueue rollback removes exactly
-    // one item and restores both capacity counters for the next admission.
+    // one item and restores its accounting before the next admission.
     {
         offload_executor_t executor (1);
         executor.drain ();
         serial_execution_queue_options_t options;
-        options.application_message_capacity = 1;
-        options.application_byte_capacity =
-          serial_execution_queue_t::fixed_work_byte_cost + 37;
         serial_execution_queue_t queue (executor, options);
         const serial_work_options_t work_options{
           serial_work_lane_t::application,
@@ -2096,8 +2073,8 @@ bool verify_cancellable_serial_submission_lifecycle ()
         }
     }
 
-    // A queued cancellation removes its reservation before the stop callback
-    // runs, so a capacity-one lane can accept its replacement immediately.
+    // A queued cancellation removes its accounting before the stop callback
+    // runs, and its replacement is accepted immediately.
     {
         offload_executor_t executor (1);
         std::mutex worker_gate;
@@ -2124,9 +2101,6 @@ bool verify_cancellable_serial_submission_lifecycle ()
         }
 
         serial_execution_queue_options_t options;
-        options.application_message_capacity = 1;
-        options.application_byte_capacity =
-          serial_execution_queue_t::fixed_work_byte_cost;
         serial_execution_queue_t queue (executor, options);
         std::atomic_int cancelled = 0;
         std::atomic_int cancelled_work_runs = 0;
@@ -2163,13 +2137,10 @@ bool verify_cancellable_serial_submission_lifecycle ()
     }
 
     // An active cancellation requests cooperative stop. The active turn and
-    // its capacity reservation remain until work acknowledges completion.
+    // its accounting remains until work acknowledges completion.
     {
         offload_executor_t executor (1);
         serial_execution_queue_options_t options;
-        options.application_message_capacity = 2;
-        options.application_byte_capacity =
-          2 * serial_execution_queue_t::fixed_work_byte_cost;
         serial_execution_queue_t queue (executor, options);
         std::mutex gate;
         std::condition_variable changed;
@@ -2248,7 +2219,7 @@ bool verify_cancellable_serial_submission_lifecycle ()
     // acknowledge and release its active reservation.
     {
         offload_executor_t executor (1);
-        serial_execution_queue_t queue (executor, 2);
+        serial_execution_queue_t queue (executor);
         std::mutex gate;
         std::condition_variable changed;
         std::optional<serial_execution_queue_t::async_completion_t> acknowledge;
@@ -2329,7 +2300,7 @@ bool verify_cancellable_serial_submission_lifecycle ()
             }
         }
 
-        serial_execution_queue_t queue (executor, 1);
+        serial_execution_queue_t queue (executor);
         std::atomic_int cancelled = 0;
         std::atomic_int work_runs = 0;
         const auto submission = queue.try_post_cancellable_async (
@@ -2391,7 +2362,7 @@ bool verify_cancellable_serial_submission_lifecycle ()
             }
         }
 
-        serial_execution_queue_t queue (executor, 2);
+        serial_execution_queue_t queue (executor);
         auto join_barrier = queue.reserve_barrier_next (
           "queued-join-barrier-cancellation");
         auto handoff_barrier = queue.reserve_handoff_barrier (
@@ -2428,7 +2399,7 @@ bool verify_cancellable_serial_submission_lifecycle ()
     // still enters the queue.
     {
         offload_executor_t executor (1);
-        serial_execution_queue_t queue (executor, 8);
+        serial_execution_queue_t queue (executor);
         std::atomic_int fenced_runs{0};
         std::atomic_int unfenced_runs{0};
 
@@ -2492,7 +2463,7 @@ bool verify_cancellable_serial_submission_lifecycle ()
         std::atomic_bool completion_had_turn = false;
         std::atomic_bool follower_had_turn = false;
         serial_execution_queue_t queue (
-          executor, 2,
+          executor, {},
           [&] (const std::string &name, const std::exception_ptr &error) {
               if (name != "throw-after-complete" || !error)
                   return;
@@ -2546,7 +2517,7 @@ bool verify_released_spot_turn_does_not_inline_lifecycle_task ()
     namespace runtime = zlink::framework::runtime;
 
     auto executor = std::make_shared<runtime::offload_executor_t> (
-      2, 8, "released-spot-turn");
+      2, "released-spot-turn");
     auto owner = std::make_shared<spot_context_state_t> ();
     owner->serial_executor = executor;
     owner->serial_queue =
@@ -2624,7 +2595,7 @@ bool verify_spot_serial_task_async_shutdown_settlement ()
     // observer exactly once without invoking application work.
     {
         auto executor = std::make_shared<runtime::offload_executor_t> (
-          1, 8, "spot-serial-queued-cancel");
+          1, "spot-serial-queued-cancel");
         std::mutex worker_mutex;
         std::condition_variable worker_changed;
         bool worker_entered = false;
@@ -2696,7 +2667,7 @@ bool verify_spot_serial_task_async_shutdown_settlement ()
     // observer remains pending until the callback task acknowledges terminal.
     {
         auto executor = std::make_shared<runtime::offload_executor_t> (
-          1, 8, "spot-serial-active-cancel");
+          1, "spot-serial-active-cancel");
         auto owner = std::make_shared<spot_context_state_t> ();
         owner->serial_executor = executor;
         owner->serial_queue =
@@ -2777,22 +2748,6 @@ bool verify_common_dispatch_limits ()
     const receive_batch_budget_t receive_options;
     return fixture.at ("fixture") == "zlink.framework.serial-execution"
            && fixture.at ("version") == 1
-           && queue_options.application_message_capacity
-                == limits.at ("application").at ("messageCapacity")
-           && queue_options.application_message_capacity
-                == dispatch_limits::application_mailbox_messages
-           && queue_options.application_byte_capacity
-                == limits.at ("application").at ("byteCapacity")
-           && queue_options.application_byte_capacity
-                == dispatch_limits::application_mailbox_bytes
-           && queue_options.lifecycle_message_capacity
-                == limits.at ("lifecycle").at ("messageCapacity")
-           && queue_options.lifecycle_message_capacity
-                == dispatch_limits::control_mailbox_messages
-           && queue_options.lifecycle_byte_capacity
-                == limits.at ("lifecycle").at ("byteCapacity")
-           && queue_options.lifecycle_byte_capacity
-                == dispatch_limits::control_mailbox_bytes
            && queue_options.owner_time_budget
                 == std::chrono::milliseconds (
                   limits.at ("ownerTimeBudgetMilliseconds")
@@ -2835,7 +2790,6 @@ bool verify_fixture_accounting_boundaries ()
             const auto byte_cost =
               serial_execution_queue_t::fixed_work_byte_cost + payload_bytes;
             if (accepted == 0
-                || scenario.at ("nextAdmission") != "capacityExceeded"
                 || !scenario.at ("runningWorkConsumesReservation")
                        .get<bool> ()) {
                 return false;
@@ -2872,9 +2826,9 @@ bool verify_fixture_accounting_boundaries ()
                 if (!queue.try_post ("fixture-boundary", [] {}, options))
                     return false;
             }
-            if (queue.try_post ("fixture-over-boundary", [] {}, options)
-                || queue.pending_count (lane) != accepted
-                || queue.pending_bytes () != accepted * byte_cost) {
+            if (!queue.try_post ("fixture-former-boundary", [] {}, options)
+                || queue.pending_count (lane) != accepted + 1
+                || queue.pending_bytes () != (accepted + 1) * byte_cost) {
                 return false;
             }
 
@@ -3057,7 +3011,7 @@ bool verify_fixture_arbitration_and_owner_isolation ()
             if (!owner_a.try_post ("owner-a-saturated", [] {}))
                 return false;
         }
-        if (owner_a.try_post ("owner-a-over-capacity", [] {})
+        if (!owner_a.try_post ("owner-a-former-capacity", [] {})
             || !owner_a.try_post (
               "owner-a-lifecycle",
               [&] {
@@ -3743,10 +3697,10 @@ bool verify_remote_actor_prepare_is_idempotent ()
     target->channel_runtime->serializers = &serializers;
     target->serial_executor =
       std::make_shared<runtime::offload_executor_t> (
-        2, 64, "actor-prepare-idempotency");
+        2, "actor-prepare-idempotency");
     target->serial_queue =
       std::make_shared<runtime::serial_execution_queue_t> (
-        *target->serial_executor, 64,
+        *target->serial_executor, runtime::serial_execution_queue_options_t{},
         runtime::serial_execution_queue_t::error_handler_t{},
         runtime::serial_lane_policy_t::spot_wide ());
     node->spot_contexts_by_id.emplace (
@@ -3869,9 +3823,10 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     target->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     target->channel_runtime->serializers = &serializers;
     target->serial_executor =
-      std::make_shared<runtime::offload_executor_t> (2, 64, "wire-join-admission");
+      std::make_shared<runtime::offload_executor_t> (2, "wire-join-admission");
     target->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
-      *target->serial_executor, 64, runtime::serial_execution_queue_t::error_handler_t{},
+      *target->serial_executor, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
       runtime::serial_lane_policy_t::spot_wide ());
     node->spot_contexts_by_id.emplace (target->spot_id, spot_context_access_t::create (target));
 
@@ -4754,7 +4709,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     auto node = std::make_shared<spot_node_builder_state_t> (
       "actor-finalize-node");
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (
-      1, 64, "actor-finalize");
+      1, "actor-finalize");
     node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
     // The single finalize request keeps its original Join deadline while the
@@ -4770,7 +4725,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     target->channel_runtime->serializers = &serializers;
     target->serial_executor = node->worker_executor;
     target->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
-      *target->serial_executor, 1,
+      *target->serial_executor, runtime::serial_execution_queue_options_t{},
       runtime::serial_execution_queue_t::error_handler_t{},
       runtime::serial_lane_policy_t::spot_wide ());
     node->spot_contexts_by_id.emplace (
@@ -5165,9 +5120,6 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     }
 
     runtime::serial_execution_queue_options_t queued_options;
-    queued_options.application_message_capacity = 2;
-    queued_options.application_byte_capacity =
-      2 * runtime::serial_execution_queue_t::fixed_work_byte_cost;
     auto queued_actor_queue = std::make_shared<runtime::serial_execution_queue_t> (
       *node->worker_executor, queued_options, runtime::serial_execution_queue_t::error_handler_t{},
       runtime::serial_lane_policy_t::actor_delivery ());
@@ -5556,7 +5508,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     target->serial_queue->drain ();
     target->serial_queue =
       std::make_shared<runtime::serial_execution_queue_t> (
-        *target->serial_executor, 1,
+        *target->serial_executor, runtime::serial_execution_queue_options_t{},
         runtime::serial_execution_queue_t::error_handler_t{},
         runtime::serial_lane_policy_t::spot_wide ());
 
@@ -6680,7 +6632,7 @@ int main ()
                   && event.message_kind
                     == zlink::framework::dispatch_message_kind_t::publish
                   && event.reason
-                    == zlink::framework::dispatch_error_reason_t::backpressure
+                    == zlink::framework::dispatch_error_reason_t::handler_exception
                   && event.action
                     == zlink::framework::dispatch_error_action_t::drop
                   && event.packet_name
@@ -6692,8 +6644,8 @@ int main ()
               }
           });
         const zlink::framework::framework_exception_t failure (
-          zlink::framework::framework_error_kind_t::capacity_exceeded,
-          "logical multicast source queue is full");
+          zlink::framework::framework_error_kind_t::rejected,
+          "logical multicast was rejected");
         zlink::framework::detail::report_logical_multicast_failure (
           state, "world", "players", "PlayerMoved", failure);
         if (!wait_until ([&] {
@@ -6706,18 +6658,15 @@ int main ()
     zlink::framework::worker_options_t worker_options;
     if (worker_options.min_threads () > worker_options.max_threads ()
         || worker_options.max_threads () == 0
-        || worker_options.idle_timeout () < std::chrono::milliseconds::zero ()
-        || worker_options.max_queue_length () == 0) {
+        || worker_options.idle_timeout () < std::chrono::milliseconds::zero ()) {
         return 42;
     }
     worker_options.min_threads (2)
       .max_threads (3)
-      .idle_timeout (std::chrono::milliseconds (7))
-      .max_queue_length (11);
+      .idle_timeout (std::chrono::milliseconds (7));
     if (worker_options.min_threads () != 2
         || worker_options.max_threads () != 3
-        || worker_options.idle_timeout () != std::chrono::milliseconds (7)
-        || worker_options.max_queue_length () != 11) {
+        || worker_options.idle_timeout () != std::chrono::milliseconds (7)) {
         return 43;
     }
     bool invalid_worker_options_rejected = false;
@@ -6750,7 +6699,7 @@ int main ()
 
     {
         zlink::framework::runtime::offload_executor_t saturated_executor (
-          1, 1, 1, std::chrono::milliseconds (0));
+          1, 1, std::chrono::milliseconds (0));
         std::mutex state_mutex;
         std::condition_variable state_changed;
         bool entered = false;
@@ -6774,7 +6723,7 @@ int main ()
         if (!saturated_executor.try_submit ([&] { ++queued_runs; })) {
             return 56;
         }
-        if (saturated_executor.try_submit ([] {})) {
+        if (!saturated_executor.try_submit ([&] { ++queued_runs; })) {
             return 57;
         }
         {
@@ -6783,7 +6732,7 @@ int main ()
         }
         state_changed.notify_all ();
         saturated_executor.drain ();
-        if (queued_runs.load () != 1) {
+        if (queued_runs.load () != 2) {
             return 58;
         }
     }
@@ -6804,16 +6753,16 @@ int main ()
     if (!verify_request_turn_mode (true, {1, 2, 3})) {
         return 26;
     }
-    if (!verify_serial_resume_capacity_failure_is_terminal_and_deferred ()) {
+    if (!verify_serial_resume_waits_behind_queued_work ()) {
         return 54;
     }
-    if (!verify_serial_queue_lanes_and_byte_budget ()) {
+    if (!verify_serial_queue_lanes_are_unbounded ()) {
         return 50;
     }
     if (!verify_transferred_owner_reservation_is_continuous_until_terminal ()) {
         return 112;
     }
-    if (!verify_transferred_owner_reservation_bypasses_full_lifecycle_lane ()) {
+    if (!verify_transferred_owner_reservation_shares_unbounded_lifecycle_lane ()) {
         return 113;
     }
     if (!verify_serial_queue_owner_time_budget ()) {
@@ -6834,13 +6783,13 @@ int main ()
     if (!verify_per_actor_timer_names_overlap_and_keep_fifo ()) {
         return 122;
     }
-    if (!verify_actor_mailbox_capacity_isolated_in_both_modes ()) {
+    if (!verify_actor_mailbox_backlog_is_accepted_in_both_modes ()) {
         return 123;
     }
-    if (!verify_spot_wide_large_payload_rejects_before_small_payload ()) {
+    if (!verify_spot_wide_large_and_small_payloads_are_queued ()) {
         return 124;
     }
-    if (!verify_spot_wide_upper_queue_saturates_by_count ()) {
+    if (!verify_spot_wide_upper_queue_accepts_former_boundaries ()) {
         return 125;
     }
     if (!verify_same_actor_synchronous_reentry_is_immediate ()) {
@@ -6942,7 +6891,7 @@ int main ()
     std::string failed_item;
     bool error_seen = false;
     zlink::framework::runtime::serial_execution_queue_t queue (
-      executor, 4, [&] (const std::string &name, const std::exception_ptr &error) {
+      executor, {}, [&] (const std::string &name, const std::exception_ptr &error) {
           failed_item = name;
           try {
               if (error) {
@@ -6982,7 +6931,10 @@ int main ()
 
     bool capacity_error = false;
     try {
-        zlink::framework::runtime::serial_execution_queue_t invalid (executor, 0);
+        zlink::framework::runtime::serial_execution_queue_t invalid (
+          executor,
+          zlink::framework::runtime::serial_execution_queue_options_t{
+            .lifecycle_burst_limit = 0});
     }
     catch (const std::invalid_argument &) {
         capacity_error = true;
@@ -7064,7 +7016,7 @@ int main ()
     const auto full_result = full_task.result ();
     if (full_result
         || full_result.error_kind ()
-             != zlink::framework::framework_error_kind_t::capacity_exceeded) {
+             != zlink::framework::framework_error_kind_t::shutting_down) {
         return 15;
     }
 
@@ -7196,7 +7148,7 @@ int main ()
     {
         zlink::framework::runtime::offload_executor_t deferred_executor (1);
         zlink::framework::runtime::serial_execution_queue_t deferred_queue (
-          deferred_executor, 16);
+          deferred_executor);
         std::vector<std::string> events;
         deferred_queue.run ("deferred-actor-join", [&] {
             zlink::framework::actor_join_call_t ([&] (std::chrono::milliseconds) {
@@ -7431,7 +7383,7 @@ int main ()
 
         zlink::framework::runtime::offload_executor_t target_executor (1);
         zlink::framework::runtime::serial_execution_queue_t target_queue (
-          target_executor, 16);
+          target_executor);
         std::mutex barrier_events_mutex;
         std::vector<std::string> barrier_events;
         auto record_barrier_event = [&] (std::string event) {
@@ -7619,7 +7571,7 @@ int main ()
         }
 
         zlink::framework::runtime::serial_execution_queue_t closing_source_queue (
-          deferred_executor, 16);
+          deferred_executor);
         closing_source_queue.run ("closing-source-cross-actor-barrier", [&] {
             auto reserved = target_queue.reserve_barrier_next (
               "source-close-cancelled-join");
@@ -7739,7 +7691,7 @@ int main ()
 
     {
         zlink::framework::runtime::offload_executor_t fixed_min_executor (
-          2, 4, 8, std::chrono::milliseconds (5));
+          2, 4, std::chrono::milliseconds (5));
         std::mutex state_mutex;
         std::condition_variable state_changed;
         int primed = 0;
@@ -7814,7 +7766,7 @@ int main ()
     }
 
     zlink::framework::runtime::offload_executor_t elastic_executor (
-      0, 2, 8, std::chrono::milliseconds (5));
+      0, 2, std::chrono::milliseconds (5));
     if (elastic_executor.live_worker_count () != 0) {
         return 21;
     }

@@ -96,13 +96,11 @@ class http_host_service_t::listener_t
           std::max<std::size_t> (
             1, handler_worker_count == 0 ? std::thread::hardware_concurrency ()
                                          : handler_worker_count),
-          1024,
           std::chrono::seconds (30),
           "zlink-http-hdl"),
         _connection_workers (
           0,
           std::max<std::size_t> (2, std::thread::hardware_concurrency ()),
-          1024,
           std::chrono::seconds (30),
           "zlink-http-conn"),
         _acceptor (_io),

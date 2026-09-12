@@ -72,15 +72,6 @@ class worker_options_t
         return *this;
     }
 
-    std::size_t max_queue_length () const noexcept { return _max_queue_length; }
-
-    worker_options_t &max_queue_length (std::size_t value)
-    {
-        ensure_mutable ();
-        _max_queue_length = value;
-        return *this;
-    }
-
   private:
     friend class zlink_framework_options_t;
 
@@ -108,7 +99,6 @@ class worker_options_t
     std::size_t _min_threads = 0;
     std::size_t _max_threads = default_max_threads ();
     std::chrono::milliseconds _idle_timeout{std::chrono::seconds (30)};
-    std::size_t _max_queue_length = 1024;
     bool _sealed = false;
 };
 

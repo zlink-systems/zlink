@@ -2222,7 +2222,7 @@ void verify_actor_context_survives_coroutine_await ()
     using namespace zlink::framework;
 
     runtime::offload_executor_t executor (1);
-    runtime::serial_execution_queue_t queue (executor, 16);
+    runtime::serial_execution_queue_t queue (executor);
     recording_actor_client_t actor_client;
     actor_client.delay_next_request.store (true);
     std::optional<task_t<message_t>> operation;
@@ -2760,7 +2760,7 @@ void verify_global_identity_remote_create_and_generation_fence ()
 
 void verify_membership_turns_and_independent_infrastructure ()
 {
-    stateful::stateful_object_runtime_t runtime (4, 2);
+    stateful::stateful_object_runtime_t runtime;
     runtime.replace_placement_candidates (
       {{"mesh-a", "node-a", {"player", "room"}, 100, 16, 0, 8, 0},
        {"mesh-b", "node-b", {"player", "room"}, 100, 16, 0, 8, 0}});
@@ -2985,7 +2985,7 @@ void verify_session_binding_and_terminal_once ()
             == stateful::stateful_error_t::conflict);
     assert (!sessions.is_current (second_binding));
 
-    foundation::operation_registry_t operations (1);
+    foundation::operation_registry_t operations;
     foundation::call_id_t id{};
     id.low = 1;
     std::atomic_size_t terminal_count{0};
@@ -3357,7 +3357,7 @@ void verify_message_follow_route_admission_and_suppression ()
       "player:actor-message-follow", 7, 1, 0, source_fence);
     assert (!accounting_overflow
             && accounting_overflow.error_kind ()
-                 == framework_error_kind_t::capacity_exceeded);
+                 == framework_error_kind_t::internal_failure);
     coordinator.release_message_follow (
       "player:actor-message-follow", source_fence,
       std::numeric_limits<std::size_t>::max ());
@@ -3554,19 +3554,19 @@ void verify_reconcile_management_deadline_advances_after_each_attempt ()
 void verify_terminal_journal_preserves_outstanding_entries ()
 {
     using journal_t = host::relocation_detail::
-      bounded_terminal_journal_t<std::string, int, int>;
+      terminal_journal_t<std::string, int, int>;
     using admission_kind_t = journal_t::admission_kind_t;
     const auto now = journal_t::clock_t::now ();
-    journal_t journal (2, 10ms);
+    journal_t journal (10ms);
 
     assert (journal.try_begin ("outstanding", 1, now).kind
             == admission_kind_t::admitted);
     assert (journal.try_begin ("completed", 2, now).kind
             == admission_kind_t::admitted);
     assert (journal.complete ("completed", 2, 20, now));
-    assert (journal.try_begin ("blocked", 3, now).kind
-            == admission_kind_t::backpressured);
-    assert (journal.size () == 2);
+    assert (journal.try_begin ("beyond-former-capacity", 3, now).kind
+            == admission_kind_t::admitted);
+    assert (journal.size () == 3);
     assert (journal.try_begin ("outstanding", 1, now).kind
             == admission_kind_t::pending);
     assert (journal.try_begin ("outstanding", 9, now).kind
@@ -3574,7 +3574,7 @@ void verify_terminal_journal_preserves_outstanding_entries ()
 
     assert (journal.try_begin ("after-expiry", 3, now + 11ms).kind
             == admission_kind_t::admitted);
-    assert (journal.size () == 2);
+    assert (journal.size () == 3);
     assert (journal.try_begin (
               "outstanding", 1, now + 11ms).kind
             == admission_kind_t::pending);
@@ -5410,11 +5410,7 @@ void verify_atomic_raw_stateful_ingress_commit ()
     target.start ();
     const auto target_descriptor = target.topology ().local_descriptor ();
 
-    stateful::stateful_object_runtime_t objects (
-      1,
-      128,
-      1024,
-      4u * 1024u * 1024u);
+    stateful::stateful_object_runtime_t objects;
     objects.replace_placement_candidates (
       {{"m6b-mesh", "atomic-ingress-target", {"player"},
         100, 16, 0, 8, 0}});
@@ -5487,15 +5483,14 @@ void verify_atomic_raw_stateful_ingress_commit ()
     };
 
     // Authority rejection is outside the accepted-ingress transaction and
-    // cannot allocate sequence 1 or reserve queue capacity.
+    // cannot allocate sequence 1 or reserve application work.
     enqueue (1, "authority-rejected");
     assert (dispatch.ingest (actor) == stateful::stateful_error_t::conflict);
     assert_no_queued_reservation ();
     authority_live = true;
 
-    // Exercise the object enqueue rejection through the production object
-    // port while no transport claim is active. The raw transaction must
-    // remove its provisional pending row and retain sequence 1.
+    // Cross the former one-record object queue boundary through the production
+    // object port while no transport claim is active.
     assert (objects.enqueue (
               actor,
               stateful::turn_domain_t::application,
@@ -5505,18 +5500,16 @@ void verify_atomic_raw_stateful_ingress_commit ()
       actor, stateful::turn_domain_t::application);
     const auto filled_bytes = objects.pending_bytes (
       actor, stateful::turn_domain_t::application);
-    enqueue (2, "capacity-rejected");
-    const auto capacity_rejection = dispatch.ingest (actor);
-    assert (capacity_rejection
-            == stateful::stateful_error_t::backpressured);
+    enqueue (2, "accepted-beyond-former-capacity");
+    assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
     assert (objects.pending (
               actor, stateful::turn_domain_t::application)
-            == filled_count);
+            == filled_count + 1);
     assert (objects.pending_bytes (
               actor, stateful::turn_domain_t::application)
-            == filled_bytes);
-    assert (dispatch.discard_pending (actor, 900)
-            == stateful::stateful_error_t::not_found);
+            > filled_bytes);
+    assert (dispatch.discard_pending (actor, 1)
+            == stateful::stateful_error_t::none);
     assert (objects.discard_application (actor, 900)
             == stateful::stateful_error_t::none);
     assert_no_queued_reservation ();
@@ -5527,20 +5520,20 @@ void verify_atomic_raw_stateful_ingress_commit ()
     authority_live = false;
     const auto [first_error, first] = dispatch.try_claim (actor);
     assert (first_error == stateful::stateful_error_t::none && first);
-    assert (first->turn.sequence == 1);
+    assert (first->turn.sequence == 2);
     assert (first->frozen.source.owner_id == "atomic-source-owner");
     assert (first->frozen.source.lease_generation == 23);
     assert (authority_queries == authority_queries_after_admission);
     assert_no_queued_reservation ();
 
-    // The running item retains the sole object reservation until terminal
-    // completion even though it has left the pending FIFO.
+    // A running item does not prevent another item from waiting in its FIFO.
     assert (objects.enqueue (
               actor,
               stateful::turn_domain_t::application,
               stateful::turn_record_t{901, bytes ("while-running"), 1})
-            == stateful::stateful_error_t::backpressured);
-    assert_no_queued_reservation ();
+            == stateful::stateful_error_t::none);
+    assert (objects.discard_application (actor, 901)
+            == stateful::stateful_error_t::none);
     assert (dispatch.complete_async (*first).result ().value ()
             == stateful::stateful_error_t::none);
     assert (dispatch.complete_async (*first).result ().value ()
@@ -5551,7 +5544,7 @@ void verify_atomic_raw_stateful_ingress_commit ()
     assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
     const auto [second_error, second] = dispatch.try_claim (actor);
     assert (second_error == stateful::stateful_error_t::none && second);
-    assert (second->turn.sequence == 2);
+    assert (second->turn.sequence == 3);
     assert (dispatch.complete_async (*second).result ().value ()
             == stateful::stateful_error_t::none);
 
@@ -5559,7 +5552,7 @@ void verify_atomic_raw_stateful_ingress_commit ()
     assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
     const auto [third_error, third] = dispatch.try_claim (actor);
     assert (third_error == stateful::stateful_error_t::none && third);
-    assert (third->turn.sequence == 3);
+    assert (third->turn.sequence == 4);
     assert (dispatch.complete_async (*third).result ().value ()
             == stateful::stateful_error_t::none);
     assert (authority_queries == 5);
@@ -5732,7 +5725,7 @@ void verify_unadmitted_request_is_rejected_without_framework_queue ()
     target.close ();
 }
 
-void verify_full_owner_rejects_request_without_blocking_other_owner ()
+void verify_queued_owner_accepts_request_without_blocking_other_owner ()
 {
     auto target_descriptor = descriptor ("owner-capacity-target");
     target_descriptor.channels.push_back ({"independent-channel", 100});
@@ -5740,9 +5733,7 @@ void verify_full_owner_rejects_request_without_blocking_other_owner ()
       mesh::raw_mesh_node_options_t{descriptor ("owner-capacity-source")});
     metric_test::provider_t metric_provider;
     mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{
-        .descriptor = target_descriptor,
-        .application_message_budget = 1});
+      mesh::raw_mesh_node_options_t{.descriptor = target_descriptor});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -5783,29 +5774,40 @@ void verify_full_owner_rejects_request_without_blocking_other_owner ()
     assert (first == mesh::raw_mesh_pump_result_t::application);
 
     std::promise<std::pair<foundation::operation_terminal_t,
-                           std::vector<std::uint8_t>>> rejected_promise;
-    auto rejected = rejected_promise.get_future ();
+                           std::vector<std::uint8_t>>> accepted_promise;
+    auto accepted = accepted_promise.get_future ();
     assert (source.request_to_node (
       published_target.node_routing_id, payload, 5s,
-      [&rejected_promise] (foundation::operation_terminal_t terminal,
+      [&accepted_promise] (foundation::operation_terminal_t terminal,
                            std::vector<std::uint8_t> failure) {
-          rejected_promise.set_value (
+          accepted_promise.set_value (
             {terminal, std::move (failure)});
       })
               .result ()
               .value ());
-    mesh::raw_mesh_pump_result_t overflow =
+    mesh::raw_mesh_pump_result_t queued =
       mesh::raw_mesh_pump_result_t::no_data;
-    while (overflow != mesh::raw_mesh_pump_result_t::backpressured
+    while (queued != mesh::raw_mesh_pump_result_t::application
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
-        overflow = target.pump_one (
+        queued = target.pump_one (
           mesh::service_liveness_registry_t::clock_t::now ())
           .result ()
           .value ();
-        assert (overflow != mesh::raw_mesh_pump_result_t::protocol_error);
+        assert (queued != mesh::raw_mesh_pump_result_t::protocol_error);
     }
-    assert (overflow == mesh::raw_mesh_pump_result_t::backpressured);
-    while (rejected.wait_for (0ms) != std::future_status::ready
+    assert (queued == mesh::raw_mesh_pump_result_t::application);
+    auto queued_claim = target.mailbox ().try_claim (
+      mesh::service_mailbox_domain_t::application, 2, 4096);
+    assert (queued_claim && queued_claim->records.size () == 2);
+    const auto request_record = std::find_if (
+      queued_claim->records.begin (), queued_claim->records.end (),
+      [] (const auto &record) { return record.reply_token.has_value (); });
+    assert (request_record != queued_claim->records.end ());
+    assert (target.reply (
+      *request_record,
+      {"OwnerCapacityReply", "application/json", bytes ("reply")}));
+    assert (target.mailbox ().release (*queued_claim));
+    while (accepted.wait_for (0ms) != std::future_status::ready
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         assert (source.pump_one (
                   mesh::service_liveness_registry_t::clock_t::now ())
@@ -5814,21 +5816,14 @@ void verify_full_owner_rejects_request_without_blocking_other_owner ()
                 != mesh::raw_mesh_pump_result_t::protocol_error);
         std::this_thread::sleep_for (1ms);
     }
-    assert (rejected.wait_for (0ms) == std::future_status::ready);
-    auto [rejected_terminal, rejected_failure] = rejected.get ();
-    assert (rejected_terminal
-            == foundation::operation_terminal_t::transport_failed);
-    const auto rejected_reply =
-      protocol::decode_reply_header (rejected_failure);
-    assert (rejected_reply.terminal_result
-            == static_cast<std::uint32_t> (
-              protocol::request_terminal_result::rejected));
-    assert (rejected_reply.failure_code
-            == static_cast<std::uint32_t> (
-              protocol::framework_error_code::workerQueueFull));
+    assert (accepted.wait_for (0ms) == std::future_status::ready);
+    auto [accepted_terminal, accepted_payload] = accepted.get ();
+    assert (accepted_terminal
+            == foundation::operation_terminal_t::completed);
+    assert (protocol::decode_application_payload (accepted_payload).payload_bytes ()
+            == bytes ("reply"));
 
-    // A rejected request already has a terminal reply. It is not a one-way
-    // drop in the cross-language zlink.mesh_node.messages.dropped metric.
+    // Queued requests remain observable as ordinary deliveries, never drops.
     std::size_t drop_series = 0;
     for (auto fields : metric_provider.collect_fields ()) {
         if (fields["name"] == "zlink.mesh_node.messages.dropped") {
@@ -6130,9 +6125,9 @@ void verify_durable_reply_relay_single_winner ()
       "TerminalReply", "application/json", bytes ("completed")};
 
     stateful::raw_relocation_replay_coordinator_t source_coordinator (
-      source, 8, 4096, 1ms, 1ms);
+      source, 1ms, 1ms);
     stateful::raw_relocation_replay_coordinator_t target_coordinator (
-      target, 8, 4096, 1ms, 1ms);
+      target, 1ms, 1ms);
     assert (!source_coordinator.next_activity ());
     assert (!target_coordinator.next_activity ());
     int completion_count = 0;
@@ -6294,9 +6289,9 @@ void verify_durable_reply_relay_single_winner ()
     assert (receive (source, source_coordinator)
             == stateful::raw_relocation_replay_result_t::not_registered);
 
-    stateful::raw_relocation_replay_coordinator_t bounded_target (
-      target, 1, 1, 1ms, 1ms);
-    assert (!bounded_target.register_terminal_target ({
+    stateful::raw_relocation_replay_coordinator_t unbounded_target (
+      target, 1ms, 1ms);
+    assert (unbounded_target.register_terminal_target ({
       relay, request_source, reply,
       [] (protocol::reply_relay_ack_status_t) { return true; },
       [] { return true; }}));
@@ -6594,7 +6589,6 @@ void verify_remote_user_spot_create_close_terminal_once ()
         mesh::raw_mesh_node_options_t{descriptor ("user-source")}});
     host::host_options_t target_options{
       mesh::raw_mesh_node_options_t{descriptor ("user-target")}};
-    target_options.user_spot_operation_capacity = 1;
     target_options.user_spot_operation_replay_retention = 50ms;
     auto target = std::make_shared<host::public_host_runtime_t> (
       std::move (target_options));
@@ -7089,35 +7083,34 @@ void verify_remote_user_spot_create_close_terminal_once ()
       == protocol::user_spot_create_result_t::created);
     assert (materialize_count == 1);
 
-    auto capacity_create = create;
-    capacity_create.operation = {99, 3};
+    auto distinct_create = create;
+    distinct_create.operation = {99, 3};
     std::optional<protocol::user_spot_create_reply_t>
-      capacity_reply;
+      distinct_reply;
     assert (source->create_user_spot_remote (
-      target->status ().routing_id (), capacity_create, 5s,
+      target->status ().routing_id (), distinct_create, 5s,
       [&] (foundation::operation_terminal_t terminal,
            protocol::user_spot_create_reply_t reply,
            std::optional<protocol::application_payload_t>) {
           assert (
             terminal
             == foundation::operation_terminal_t::completed);
-          capacity_reply = std::move (reply);
+          distinct_reply = std::move (reply);
       })
               .result ()
               .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
-    while (!capacity_reply
+    while (!distinct_reply
            && std::chrono::steady_clock::now () < deadline) {
         (void) target->dispatch_ready (dispatch);
         (void) source->dispatch_ready (dispatch);
         std::this_thread::sleep_for (1ms);
     }
-    assert (capacity_reply);
-    //  Spec 32-framework-error-model:99-103 — operation-table saturation is
-    //  wire-encoded Busy(108)+None (the target's queue state -> Unavailable at
-    //  the requester), not Terminated(103), which is reserved for shutdown.
-    assert (capacity_reply->header.terminal_result == 108);
-    assert (capacity_reply->header.failure_code == 0);
+    assert (distinct_reply);
+    assert (distinct_reply->header.terminal_result == 107);
+    assert (distinct_reply->header.failure_code
+            == static_cast<std::uint32_t> (
+              protocol::framework_error_code::spotMoving));
     assert (materialize_count == 1);
     std::this_thread::sleep_for (200ms);
     auto expired_create = create;
@@ -7524,7 +7517,7 @@ void verify_relocation_failure_code_classification_is_distinct ()
     assert (host::classify_relocation_failure_code (
               static_cast<std::uint32_t> (
                 protocol::framework_error_code::workerQueueFull))
-            == zlink::framework::framework_error_kind_t::capacity_exceeded);
+            == zlink::framework::framework_error_kind_t::unavailable);
     assert (host::classify_relocation_failure_code (
               static_cast<std::uint32_t> (
                 protocol::framework_error_code::workerTimedOut))
@@ -7559,7 +7552,7 @@ void verify_relocation_failure_code_classification_is_distinct ()
 int main (int argc, char **argv)
 {
     if (argc == 2 && std::string_view (argv[1]) == "--owner-request-rejection") {
-        verify_full_owner_rejects_request_without_blocking_other_owner ();
+        verify_queued_owner_accepts_request_without_blocking_other_owner ();
         return 0;
     }
     verify_actor_create_replays_after_reciprocal_handover ();
@@ -7614,7 +7607,7 @@ int main (int argc, char **argv)
     verify_relocated_source_reply_failure_keeps_terminal_record ();
     verify_node_request_requires_remote_admission ();
     verify_unadmitted_request_is_rejected_without_framework_queue ();
-    verify_full_owner_rejects_request_without_blocking_other_owner ();
+    verify_queued_owner_accepts_request_without_blocking_other_owner ();
     verify_raw_terminal_reply_relay ();
     verify_relocation_data_duplicates_are_distinct_arrivals ();
     verify_relocation_ingress_boundary_owns_saved_and_follow_only_work ();

@@ -226,8 +226,6 @@ inline dispatch_error_reason_t dispatch_reason_from_error (framework_error_kind_
             return dispatch_error_reason_t::handler_missing;
         case framework_error_kind_t::protocol_error:
             return dispatch_error_reason_t::invalid_frame;
-        case framework_error_kind_t::capacity_exceeded:
-            return dispatch_error_reason_t::backpressure;
         case framework_error_kind_t::shutting_down:
             return dispatch_error_reason_t::shutdown;
         default:

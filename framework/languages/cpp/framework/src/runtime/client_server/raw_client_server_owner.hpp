@@ -90,7 +90,6 @@ class raw_client_server_server_t
       mesh::service_liveness_registry_t::clock_t::time_point now,
       std::shared_ptr<application_job_queue_t::permit_t>
         application_permit = {});
-    bool has_pending_application () const;
     std::size_t last_pump_bytes () const;
     task_t<mesh::service_liveness_tick_t> tick_liveness (
       mesh::service_liveness_registry_t::clock_t::time_point now);
@@ -129,7 +128,6 @@ class raw_client_server_server_t
     std::unique_ptr<zlink::socket_monitor_t> _monitor;
     std::shared_ptr<detail::backend::raw_route_port_t> _port;
     mesh::service_mailbox_t _mailbox;
-    std::optional<mesh::service_mailbox_record_t> _pending_received;
     mesh::service_liveness_registry_t _liveness;
     // The route id is the stable identity available from the public monitor
     // surface; monitor event values are ready counts or disconnect reasons.

@@ -56,8 +56,6 @@ int main ()
     assert (fixture.at ("fixture")
               == "zlink.framework.completion-terminal");
     assert (fixture.at ("version") == 1);
-    assert (fixture.at ("limits").at ("pendingOperationCapacity")
-            == foundation::default_operation_capacity);
     assert (fixture.at ("limits").at ("operationIdBits") == 128);
     assert (fixture.at ("limits").at ("replyRouteIdBits") == 64);
     assert (!fixture.at ("identityInvariants")
@@ -78,7 +76,7 @@ int main ()
     runtime::exactly_once_table_t<foundation::call_id_t,
                                   int,
                                   runtime::call_id_hash_t>
-      completions (2);
+      completions;
     assert (completions.reserve (id (10)));
     assert (completions.claim (id (10)).state
             == runtime::exactly_once_claim_state::pending);
@@ -101,7 +99,7 @@ int main ()
               == runtime::exactly_once_claim_state::completed
             && unreserved_completion.value && *unreserved_completion.value == 9);
 
-    foundation::operation_registry_t registry (2);
+    foundation::operation_registry_t registry;
     const auto now = foundation::operation_registry_t::clock_t::now ();
     bool zero_rejected = false;
     try {
@@ -127,7 +125,8 @@ int main ()
           assert (terminal == foundation::operation_terminal_t::timed_out);
           second_terminal.fetch_add (1, std::memory_order_release);
       }));
-    assert (!registry.register_operation (id (3), now, [] (auto, auto) {}));
+    assert (registry.register_operation (id (3), now, [] (auto, auto) {}));
+    assert (registry.unregister (id (3)));
     assert (registry.complete (id (1), {7}));
     assert (!registry.complete (id (1), {8}));
     assert (registry.expire (now) == 1);
@@ -140,7 +139,7 @@ int main ()
     assert (!registry.register_operation (id (4), now, [] (auto, auto) {}));
 
     std::atomic_int failed_terminals{0};
-    foundation::operation_registry_t failed_registry (1);
+    foundation::operation_registry_t failed_registry;
     std::vector<std::uint8_t> failure_payload;
     assert (failed_registry.register_operation (
       id (4), now + std::chrono::seconds (1),
@@ -162,7 +161,7 @@ int main ()
       id (4), foundation::operation_terminal_t::transport_failed));
     assert (failed_terminals.load (std::memory_order_acquire) == 1);
 
-    foundation::operation_registry_t abandoned_registry (1);
+    foundation::operation_registry_t abandoned_registry;
     std::atomic_int abandoned_callbacks{0};
     assert (abandoned_registry.register_operation (
       foundation::call_id_t{8, 1}, now,
@@ -191,7 +190,7 @@ int main ()
 
     std::atomic_int shutdown_terminals{0};
     {
-        foundation::operation_registry_t scoped_registry (2);
+        foundation::operation_registry_t scoped_registry;
         assert (scoped_registry.register_operation (
           id (5), now,
           [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t>) {
@@ -212,7 +211,7 @@ int main ()
 
     std::atomic_int race_terminals{0};
     std::atomic_int winning_terminal{-1};
-    foundation::operation_registry_t race_registry (1);
+    foundation::operation_registry_t race_registry;
     assert (race_registry.register_operation (
       foundation::call_id_t{9, 1}, now,
       [&] (foundation::operation_terminal_t terminal,
@@ -244,7 +243,7 @@ int main ()
     assert (race_registry.size () == 0);
 
     std::atomic_int cancel_close_terminals{0};
-    foundation::operation_registry_t cancel_close_registry (1);
+    foundation::operation_registry_t cancel_close_registry;
     assert (cancel_close_registry.register_operation (
       foundation::call_id_t{9, 2}, now,
       [&] (foundation::operation_terminal_t terminal,
@@ -270,7 +269,7 @@ int main ()
     }));
     assert (cancel_close_terminals.load (std::memory_order_acquire) == 1);
 
-    foundation::operation_registry_t reentrant_registry (2);
+    foundation::operation_registry_t reentrant_registry;
     std::atomic_bool reentered{false};
     std::atomic_bool outer_callback_active{false};
     assert (reentrant_registry.register_operation (
@@ -297,7 +296,7 @@ int main ()
     }));
     assert (reentrant_registry.size () == 0);
 
-    foundation::operation_registry_t turn_registry (1);
+    foundation::operation_registry_t turn_registry;
     const auto caller_thread = std::this_thread::get_id ();
     std::atomic_bool used_new_turn{false};
     assert (turn_registry.register_operation (
@@ -314,82 +313,69 @@ int main ()
         return used_new_turn.load (std::memory_order_acquire);
     }));
 
-    foundation::operation_registry_t dispatcher_bounded_registry (
-      foundation::default_operation_capacity + 1);
+    constexpr std::size_t operation_count = 4'200;
+    foundation::operation_registry_t dispatcher_registry;
     std::atomic_size_t dispatched{0};
     std::atomic_bool blocked_callback_started{false};
     std::atomic_bool release_blocked_callback{false};
     for (std::size_t index = 1;
-         index <= foundation::default_operation_capacity; ++index) {
-        assert (wait_until ([&, index] {
-            return dispatcher_bounded_registry.register_operation (
-              foundation::call_id_t{11, index}, now,
-              [&, index] (foundation::operation_terminal_t terminal,
-                          std::vector<std::uint8_t>) {
-                  assert (terminal
-                          == (index == 1
-                                ? foundation::operation_terminal_t::completed
-                                : foundation::operation_terminal_t::shutdown));
-                  if (index == 1) {
-                      blocked_callback_started.store (
-                        true, std::memory_order_release);
-                      while (!release_blocked_callback.load (
-                        std::memory_order_acquire)) {
-                          std::this_thread::yield ();
-                      }
+         index <= operation_count; ++index) {
+        assert (dispatcher_registry.register_operation (
+          foundation::call_id_t{11, index}, now,
+          [&, index] (foundation::operation_terminal_t terminal,
+                      std::vector<std::uint8_t>) {
+              assert (terminal
+                      == (index == 1
+                            ? foundation::operation_terminal_t::completed
+                            : foundation::operation_terminal_t::shutdown));
+              if (index == 1) {
+                  blocked_callback_started.store (
+                    true, std::memory_order_release);
+                  while (!release_blocked_callback.load (
+                    std::memory_order_acquire)) {
+                      std::this_thread::yield ();
                   }
-                  dispatched.fetch_add (1, std::memory_order_release);
-              });
-        }));
+              }
+              dispatched.fetch_add (1, std::memory_order_release);
+          }));
     }
-    assert (!dispatcher_bounded_registry.register_operation (
-      foundation::call_id_t{
-        11, foundation::default_operation_capacity + 1},
-      now, [] (auto, auto) {}));
-    assert (dispatcher_bounded_registry.complete (
+    assert (dispatcher_registry.complete (
       foundation::call_id_t{11, 1}, {}));
     assert (wait_until ([&] {
         return blocked_callback_started.load (std::memory_order_acquire);
     }));
     std::atomic_bool dispatcher_shutdown_returned{false};
     std::thread dispatcher_shutdown ([&] {
-        assert (dispatcher_bounded_registry.shutdown ()
-                == foundation::default_operation_capacity - 1);
+        assert (dispatcher_registry.shutdown () == operation_count - 1);
         dispatcher_shutdown_returned.store (true, std::memory_order_release);
     });
 
-    foundation::operation_registry_t backlog_probe_registry (1);
-    assert (!backlog_probe_registry.register_operation (
-      foundation::call_id_t{12, 1}, now, [] (auto, auto) {}));
+    foundation::operation_registry_t backlog_probe_registry;
+    assert (backlog_probe_registry.register_operation (
+      foundation::call_id_t{12, 1}, now,
+      [&] (foundation::operation_terminal_t terminal,
+           std::vector<std::uint8_t>) {
+          assert (terminal == foundation::operation_terminal_t::shutdown);
+          dispatched.fetch_add (1, std::memory_order_release);
+      }));
     assert (!dispatcher_shutdown_returned.load (std::memory_order_acquire));
     release_blocked_callback.store (true, std::memory_order_release);
     dispatcher_shutdown.join ();
     assert (dispatcher_shutdown_returned.load (std::memory_order_acquire));
     assert (wait_until ([&] {
         return dispatched.load (std::memory_order_acquire)
-               == foundation::default_operation_capacity;
-    }));
-    std::atomic_bool probe_drained{false};
-    assert (wait_until ([&] {
-        return backlog_probe_registry.register_operation (
-          foundation::call_id_t{12, 1}, now,
-          [&] (foundation::operation_terminal_t terminal,
-               std::vector<std::uint8_t>) {
-              assert (terminal
-                      == foundation::operation_terminal_t::shutdown);
-              probe_drained.store (true, std::memory_order_release);
-          });
+               == operation_count;
     }));
     assert (backlog_probe_registry.shutdown () == 1);
     assert (wait_until ([&] {
-        return probe_drained.load (std::memory_order_acquire);
+        return dispatched.load (std::memory_order_acquire)
+               == operation_count + 1;
     }));
 
-    foundation::operation_registry_t expiry_batch_registry (
-      foundation::default_operation_capacity);
+    foundation::operation_registry_t expiry_batch_registry;
     std::atomic_size_t expired_batch_callbacks{0};
     for (std::size_t index = 1;
-         index <= foundation::default_operation_capacity; ++index) {
+         index <= operation_count; ++index) {
         assert (expiry_batch_registry.register_operation (
           foundation::call_id_t{13, index}, now,
           [&] (foundation::operation_terminal_t terminal,
@@ -401,11 +387,11 @@ int main ()
           }));
     }
     assert (expiry_batch_registry.expire (now)
-            == foundation::default_operation_capacity);
+            == operation_count);
     assert (expiry_batch_registry.size () == 0);
     assert (wait_until ([&] {
         return expired_batch_callbacks.load (std::memory_order_acquire)
-               == foundation::default_operation_capacity;
+               == operation_count;
     }));
     return 0;
 }

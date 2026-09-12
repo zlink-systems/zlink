@@ -106,8 +106,6 @@ std::string terminal_name (const zlink::framework::result_t<void> &result)
             return "RouteNotConnected";
         case error_kind_t::shutting_down:
             return "RuntimeShutdown";
-        case error_kind_t::capacity_exceeded:
-            return "CapacityExceeded";
         default:
             return std::string ("Exceptional:")
                    + (result.error () ? result.error ()->what () : "submit failed");
@@ -199,7 +197,6 @@ class saturation_probe_state_t
     void note_launched () noexcept { ++launched; }
     void note_entered () noexcept { ++entered; }
     void note_completed () noexcept { ++completed; }
-    void note_capacity_exceeded () noexcept { ++capacity_exceeded; }
     void note_deadline_exceeded () noexcept { ++deadline_exceeded; }
     void note_other_error () noexcept { ++other_errors; }
 
@@ -207,7 +204,6 @@ class saturation_probe_state_t
     std::atomic_uint64_t launched{0};
     std::atomic_uint64_t entered{0};
     std::atomic_uint64_t completed{0};
-    std::atomic_uint64_t capacity_exceeded{0};
     std::atomic_uint64_t deadline_exceeded{0};
     std::atomic_uint64_t other_errors{0};
 
@@ -226,10 +222,7 @@ zlink::framework::task_t<void> observe_saturation_request (
     }
     catch (const zlink::framework::framework_exception_t &error) {
         if (error.kind ()
-            == zlink::framework::framework_error_kind_t::capacity_exceeded) {
-            state.note_capacity_exceeded ();
-        } else if (error.kind ()
-                   == zlink::framework::framework_error_kind_t::deadline_exceeded) {
+            == zlink::framework::framework_error_kind_t::deadline_exceeded) {
             state.note_deadline_exceeded ();
         } else {
             state.note_other_error ();
@@ -402,7 +395,6 @@ class saturation_status_handler_t
                   {"launched", _state.launched.load ()},
                   {"entered", _state.entered.load ()},
                   {"completed", _state.completed.load ()},
-                  {"capacityExceeded", _state.capacity_exceeded.load ()},
                   {"deadlineExceeded", _state.deadline_exceeded.load ()},
                   {"otherErrors", _state.other_errors.load ()}}
                           .dump ()};
@@ -1838,7 +1830,6 @@ int main (int argc, char **argv)
     try {
         auto app = zlink::framework::app_t::create ();
         const auto options = read_options (app, argc, argv);
-        app.advanced ().zlink ().max_pending (1);
         app.logging ()
           .use_file (options.log_dir + "/" + options.role + "-" + options.rid + ".log")
           .set_min_level (zlink::framework::log_level_t::debug);

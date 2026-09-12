@@ -26,8 +26,8 @@ request_failure_mapper_t::completion_exception (request_result_t result,
                                           operation_name + " was rejected.");
         case request_result_t::conflict:
         case request_result_t::busy:
-            return framework_exception_t (framework_error_kind_t::capacity_exceeded,
-                                          operation_name + " exceeded capacity.");
+            return framework_exception_t (framework_error_kind_t::unavailable,
+                                          operation_name + " target is unavailable.");
         case request_result_t::protocol_error:
             return framework_exception_t (framework_error_kind_t::protocol_error,
                                           operation_name + " failed with a protocol error.");
@@ -97,11 +97,6 @@ request_failure_mapper_t::error_header_exception (const std::string &error_code,
           error_message.empty ()
             ? operation_name + " failed because the target route is not connected."
             : error_message);
-    }
-    if (error_code == "capacity_exceeded") {
-        return framework_exception_t (
-          framework_error_kind_t::capacity_exceeded,
-          error_message.empty () ? operation_name + " exceeded capacity." : error_message);
     }
     if (error_code == "deadline_exceeded") {
         return detail::make_boundary_exception (
@@ -230,9 +225,8 @@ request_failure_mapper_t::reply_header_exception (
               framework_error_kind_t::internal_failure,
               operation_name + " failed.");
         case 18:
-            //  Spec 32-framework-error-model:99-100 — this reply comes from a
-            //  remote target, so a full remote worker queue is Unavailable, not
-            //  a source-owned CapacityExceeded.
+            // Legacy peers may still send workerQueueFull for an unavailable
+            // remote target.
             return framework_exception_t (
               framework_error_kind_t::unavailable,
               operation_name + " failed because the remote worker queue is full.");
@@ -285,18 +279,15 @@ request_failure_mapper_t::reply_header_exception (
               request_result_t::rejected, operation_name);
         case 107:
         case 108:
-            //  Spec 32-framework-error-model:99-103 — a terminal-only conflict/
-            //  busy in a remote reply reflects the target's owner/queue state (a
-            //  resource this runtime does not own) and must not be assumed
-            //  source-owned: Unavailable, not CapacityExceeded. A fine failure
-            //  code (spotMoving/actorLocationStale/...) is handled above.
+            // A terminal-only conflict/busy reply identifies an unavailable
+            // remote target. Fine failures are handled above.
             return framework_exception_t (
               framework_error_kind_t::unavailable,
               operation_name + " failed because the remote target was busy.");
         case 113:
             return framework_exception_t (
-              framework_error_kind_t::capacity_exceeded,
-              operation_name + " exceeded capacity.");
+              framework_error_kind_t::unavailable,
+              operation_name + " target is unavailable.");
         case 109:
             return completion_exception (
               request_result_t::not_connected, operation_name);

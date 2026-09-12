@@ -17,13 +17,12 @@ enum class framework_error_kind_t
     not_configured = 3,
     rejected = 4,
     unavailable = 5,
-    capacity_exceeded = 6,
-    deadline_exceeded = 7,
-    shutting_down = 8,
-    protocol_error = 9,
-    invalid_operation = 10,
-    data_lost = 11,
-    internal_failure = 12
+    deadline_exceeded = 6,
+    shutting_down = 7,
+    protocol_error = 8,
+    invalid_operation = 9,
+    data_lost = 10,
+    internal_failure = 11
 };
 
 namespace detail
@@ -215,8 +214,7 @@ inline error_origin_t error_origin (const framework_exception_t &error) noexcept
 inline bool is_transient_error (framework_error_kind_t kind) noexcept
 {
     return kind == framework_error_kind_t::unavailable
-           || kind == framework_error_kind_t::deadline_exceeded
-           || kind == framework_error_kind_t::capacity_exceeded;
+           || kind == framework_error_kind_t::deadline_exceeded;
 }
 
 inline boundary_error_t boundary_state (const framework_exception_t &error) noexcept

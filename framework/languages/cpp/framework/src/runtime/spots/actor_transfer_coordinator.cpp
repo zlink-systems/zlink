@@ -579,7 +579,7 @@ actor_transfer_coordinator_t::try_acquire_message_follow (
     if (route->in_flight_messages == size_max
         || payload_bytes > size_max - route->in_flight_bytes) {
         return result_t<std::optional<actor_message_follow_target_t>>::failure (
-          framework_error_kind_t::capacity_exceeded,
+          framework_error_kind_t::internal_failure,
           "Actor Message Follow in-flight accounting overflowed");
     }
     ++route->in_flight_messages;

@@ -379,8 +379,8 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_remote_actor_cr
             (void) fail_creation ();
             //  A carried wire terminal + fine failure code classifies via the
             //  shared ownership-aware remote-reply mapper (spec 32:83-118,
-            //  99-108) — e.g. Busy+None -> Unavailable, Backpressured+None ->
-            //  CapacityExceeded, workerTimedOut -> DeadlineExceeded.
+            //  99-108) — e.g. Busy+None -> Unavailable and workerTimedOut ->
+            //  DeadlineExceeded.
             co_return result_t<actor_create_result_t>::failure (
               messaging::request_failure_mapper_t{}
                 .reply_header_exception (completed_remote.reply.header.terminal_result,
@@ -588,7 +588,6 @@ mesh_node_host_service_t::mesh_node_host_service_t (
     _application_dispatch (std::make_shared<offload_executor_t> (
       1,
       std::max<std::size_t> (2, std::thread::hardware_concurrency ()),
-      4096,
       std::chrono::milliseconds (100),
       "zlink-mesh-app")),
     _application_jobs (
@@ -803,7 +802,7 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                               candidates.end ());
             if (candidates.empty ())
                 return task_t<actor_create_result_t> (result_t<actor_create_result_t>::failure (
-                  framework_error_kind_t::capacity_exceeded,
+                  framework_error_kind_t::unavailable,
                   "Actor placement candidates were exhausted"));
             target = choose_target ();
             target_runtime = find_target_runtime ();
@@ -1320,7 +1319,7 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
     } while (page.continuation_token);
     if (candidates.empty ())
         return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
-          framework_error_kind_t::capacity_exceeded, "No eligible User Spot target is ready"));
+          framework_error_kind_t::unavailable, "No eligible User Spot target is ready"));
     const auto choose_target = [&] {
         const auto total_weight = std::accumulate (
           candidates.begin (), candidates.end (), std::uint64_t{0},
@@ -1392,7 +1391,7 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
                           candidates.end ());
         if (candidates.empty () || std::chrono::steady_clock::now () >= deadline)
             return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
-              framework_error_kind_t::capacity_exceeded,
+              framework_error_kind_t::unavailable,
               "User Spot placement candidates were exhausted"));
         target = choose_target ();
     }
@@ -1417,7 +1416,7 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
     }
     if (std::holds_alternative<object_placement_capacity_exhausted_t> (reserved))
         return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
-          framework_error_kind_t::capacity_exceeded, "User Spot placement capacity is exhausted"));
+          framework_error_kind_t::unavailable, "User Spot placement capacity is exhausted"));
     if (const auto *created = std::get_if<object_reserved_t> (&reserved)) {
         fence = created->fence;
         source_created_reservation = true;
@@ -2376,8 +2375,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                   if (!accepted) {
                                       reject_application_request (
                                         record, std::move (mailbox_record.application->parts),
-                                        framework_error_kind_t::rejected,
-                                        "MeshNode application owner queue rejected the record");
+                                        framework_error_kind_t::shutting_down,
+                                        "MeshNode application mailbox is closed");
                                       return;
                                   }
                                   if (retain_mailbox_reservation)

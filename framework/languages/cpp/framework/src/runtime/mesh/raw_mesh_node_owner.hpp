@@ -52,21 +52,12 @@ enum class raw_mesh_pump_result_t
     infrastructure,
     application,
     backpressured,
-    capacity_exceeded,
     protocol_error
 };
 
 struct raw_mesh_node_options_t
 {
     service_node_descriptor_t descriptor;
-    std::size_t application_message_budget =
-      dispatch_limits::application_mailbox_messages;
-    std::size_t application_byte_budget =
-      dispatch_limits::application_mailbox_bytes;
-    std::size_t infrastructure_message_budget =
-      dispatch_limits::control_mailbox_messages;
-    std::size_t infrastructure_byte_budget =
-      dispatch_limits::control_mailbox_bytes;
     std::optional<std::string> advertise_host;
     zlink::auto_hwm_profile auto_hwm_profile =
       zlink::auto_hwm_profile::balanced;
@@ -450,16 +441,9 @@ class raw_mesh_node_owner_t
     tick_liveness (service_liveness_registry_t::clock_t::time_point now);
 
   private:
-    struct pending_received_mailbox_record_t
-    {
-        service_mailbox_record_t record;
-        raw_mesh_pump_result_t accepted_result;
-    };
-
     struct pending_admission_t
     {
         detail::backend::raw_received_t received;
-        std::size_t bytes = 0;
     };
 
     static std::string owner_key (const std::vector<std::uint8_t> &routing_id);
@@ -486,8 +470,7 @@ class raw_mesh_node_owner_t
     enum class send_start_result_t
     {
         started,
-        terminated,
-        capacity_exceeded
+        terminated
     };
     struct send_completion_state_t;
     send_start_result_t start_send (
@@ -541,10 +524,9 @@ class raw_mesh_node_owner_t
     bool reply_infrastructure (
       const service_mailbox_record_t &request,
       std::vector<std::uint8_t> header);
-    raw_mesh_pump_result_t enqueue_received_or_retain (
+    raw_mesh_pump_result_t enqueue_received (
       service_mailbox_record_t record,
       raw_mesh_pump_result_t accepted_result);
-    void observe_owner_rejection (const service_mailbox_record_t &record);
     raw_mesh_node_options_t _options;
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
@@ -575,9 +557,7 @@ class raw_mesh_node_owner_t
     std::array<std::atomic_uint64_t, 4> _inbound_drops{};
     opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument> _drop_metric;
     static void publish_drop_metrics (opentelemetry::metrics::ObserverResult result, void *state);
-    std::optional<pending_received_mailbox_record_t> _pending_received;
     std::deque<pending_admission_t> _pending_admissions;
-    std::size_t _pending_admission_bytes = 0;
     std::atomic_size_t _last_pump_bytes{0};
     std::shared_ptr<foundation::operation_registry_t> _operations;
     std::map<std::vector<std::uint8_t>, service_node_descriptor_t,

@@ -1759,7 +1759,7 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
     serializer_registry_t serializers;
     auto node = std::make_shared<spot_node_builder_state_t> ("bound-session-target");
     node->worker_executor =
-      std::make_shared<runtime::offload_executor_t> (1, 16, "bound-session-target");
+      std::make_shared<runtime::offload_executor_t> (1, "bound-session-target");
     node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
@@ -2163,7 +2163,7 @@ int actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwin
     serializer_registry_t serializers;
     auto node = std::make_shared<spot_node_builder_state_t> ("actor-send-admission-node");
     node->worker_executor =
-      std::make_shared<runtime::offload_executor_t> (1, 16, "actor-send-admission");
+      std::make_shared<runtime::offload_executor_t> (1, "actor-send-admission");
     node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
@@ -2274,7 +2274,7 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route ()
     // materializing a duplicate local Actor instance on the old owner.
     serializer_registry_t serializers;
     auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
-    node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, 16, "actor-a-worker");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, "actor-a-worker");
     node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
@@ -2375,7 +2375,7 @@ int returned_owner_serves_locally_past_retained_message_follow_route ()
     serializer_registry_t serializers;
     auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
-      std::make_shared<runtime::offload_executor_t> (1, 16, "returned-owner-worker");
+      std::make_shared<runtime::offload_executor_t> (1, "returned-owner-worker");
     node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
@@ -2590,7 +2590,7 @@ int reconcile_deadline_adopts_target_when_store_shows_committed ()
     // Source dispatch must never reopen.
     auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
-      std::make_shared<runtime::offload_executor_t> (1, 16, "reconcile-adopt-worker");
+      std::make_shared<runtime::offload_executor_t> (1, "reconcile-adopt-worker");
     service_collection_t services;
     node->root_services = services.build_provider ();
 
@@ -2705,7 +2705,7 @@ int relocation_barrier_fences_late_actor_fifo_admission ()
     serializer_registry_t serializers;
     auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
-      std::make_shared<runtime::offload_executor_t> (1, 16, "handoff-fence-worker");
+      std::make_shared<runtime::offload_executor_t> (1, "handoff-fence-worker");
     node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
@@ -2849,7 +2849,7 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     serializer_registry_t serializers;
     auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
-      std::make_shared<runtime::offload_executor_t> (1, 16, "handoff-fence-request-worker");
+      std::make_shared<runtime::offload_executor_t> (1, "handoff-fence-request-worker");
     node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
@@ -2962,7 +2962,7 @@ int reconcile_deadline_fast_fails_without_target_commit (
     serializer_registry_t serializers;
     auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
-      std::make_shared<runtime::offload_executor_t> (1, 16, "reconcile-indeterminate-worker");
+      std::make_shared<runtime::offload_executor_t> (1, "reconcile-indeterminate-worker");
     node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
@@ -3197,7 +3197,7 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
     // SOURCE node ("actor-a"): the Entry Spot the Actor left from.
     auto source_node = std::make_shared<spot_node_builder_state_t> ("actor-a");
     source_node->worker_executor =
-      std::make_shared<runtime::offload_executor_t> (1, 16, "leave-notify-source");
+      std::make_shared<runtime::offload_executor_t> (1, "leave-notify-source");
     source_node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     source_node->channel_runtime->serializers = &serializers;
 
@@ -3427,7 +3427,7 @@ int early_zero_generation_leave_waits_for_source_transfer_completion ()
     // The early OnLeave must still survive until the source transfer completes.
     node->message_follow_duration = std::chrono::milliseconds (0);
     node->worker_executor =
-      std::make_shared<runtime::offload_executor_t> (1, 16, "early-actor-leave");
+      std::make_shared<runtime::offload_executor_t> (1, "early-actor-leave");
     std::mutex blocker_mutex;
     std::condition_variable blocker_changed;
     std::optional<runtime::serial_execution_queue_t::async_completion_t> complete_blocker;
@@ -3465,9 +3465,6 @@ int early_zero_generation_leave_waits_for_source_transfer_completion ()
     entry_spot->channel_runtime->serializers = &serializers;
     entry_spot->serial_executor = node->worker_executor;
     runtime::serial_execution_queue_options_t serial_options;
-    serial_options.lifecycle_message_capacity = 1;
-    serial_options.lifecycle_byte_capacity =
-      runtime::serial_execution_queue_t::fixed_work_byte_cost;
     entry_spot->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
       *entry_spot->serial_executor, serial_options);
     const auto native_entry_spot = std::make_shared<service::spot_t> (
@@ -3592,7 +3589,7 @@ int early_zero_generation_leave_waits_for_source_transfer_completion ()
       runtime::serial_work_lane_t::lifecycle,
       runtime::serial_execution_queue_t::fixed_work_byte_cost};
     if (!entry_spot->serial_queue->try_post_async (
-          "block-source-lifecycle-capacity",
+          "block-source-lifecycle",
           [&] (auto complete) {
               std::lock_guard lock (blocker_mutex);
               complete_blocker.emplace (std::move (complete));
@@ -3609,8 +3606,8 @@ int early_zero_generation_leave_waits_for_source_transfer_completion ()
             return finish (11);
         }
     }
-    if (entry_spot->serial_queue->try_post (
-          "untransferred-source-lifecycle-over-capacity", [] {}, lifecycle)) {
+    if (!entry_spot->serial_queue->try_post (
+          "untransferred-source-lifecycle-behind-blocker", [] {}, lifecycle)) {
         return finish (12);
     }
 
@@ -3693,7 +3690,7 @@ int early_zero_generation_leave_waits_for_source_transfer_completion ()
     }).get ();
     if (owner_reservation_settles.load (std::memory_order_acquire) != 1
         || leave_calls.load (std::memory_order_acquire) != 0
-        || entry_spot->serial_queue->pending_count (runtime::serial_work_lane_t::lifecycle) != 2
+        || entry_spot->serial_queue->pending_count (runtime::serial_work_lane_t::lifecycle) != 3
         || !std::get<0> (admitted_leave_state) || std::get<1> (admitted_leave_state)
         || std::get<2> (admitted_leave_state) != 0) {
         return finish (14);
@@ -4365,7 +4362,7 @@ int remote_actor_join_resolves_store_type_and_reports_typed_terminals ()
         serializer_registry_t serializers;
         auto node = std::make_shared<spot_node_builder_state_t> ("actor-join-target");
         node->worker_executor =
-          std::make_shared<runtime::offload_executor_t> (1, 16, "actor-join-store-resolution");
+          std::make_shared<runtime::offload_executor_t> (1, "actor-join-store-resolution");
         node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
         node->channel_runtime->serializers = &serializers;
 
@@ -4481,13 +4478,12 @@ int remote_actor_join_resolves_store_type_and_reports_typed_terminals ()
 enum class parked_request_case_t
 {
     replay,
-    pending_capacity_full
+    former_pending_capacity
 };
 
 /* Actor requests parked during relocation retain their original reply route.
- * The same production dispatch fixture also pins the bounded pending-reply
- * admission: a fresh request cannot enter the backlog when all 1024 reply
- * reservations are already owned. */
+ * The same production dispatch fixture pins that a fresh request still enters
+ * the backlog beyond the former 1024 pending-reply boundary. */
 int parked_request_reply_case (
   const std::string &requester_rid,
   parked_request_case_t test_case = parked_request_case_t::replay)
@@ -4510,7 +4506,7 @@ int parked_request_reply_case (
     serializer_registry_t serializers;
     auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
-      std::make_shared<runtime::offload_executor_t> (1, 16, "parked-replay-worker");
+      std::make_shared<runtime::offload_executor_t> (1, "parked-replay-worker");
     node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
@@ -4564,7 +4560,7 @@ int parked_request_reply_case (
     constexpr std::size_t pending_handoff_capacity = 1024;
     const auto capacity_sentinel_source =
       zlink::routing_id_t::from ("pending-capacity-holder").to_hex ();
-    if (test_case == parked_request_case_t::pending_capacity_full) {
+    if (test_case == parked_request_case_t::former_pending_capacity) {
         const auto sentinel_deadline =
           std::chrono::steady_clock::now () + std::chrono::hours (1);
         const auto filled = node->lane.run ([&] {
@@ -4627,69 +4623,6 @@ int parked_request_reply_case (
 
     (void) spots.dispatch_mesh_record (owner, record, request_parts, provider, serializers);
 
-    if (test_case == parked_request_case_t::pending_capacity_full) {
-        const auto reply_deadline =
-          std::chrono::steady_clock::now () + std::chrono::seconds (2);
-        while (reply_calls.load (std::memory_order_acquire) == 0
-               && std::chrono::steady_clock::now () < reply_deadline) {
-            std::this_thread::yield ();
-        }
-        node->worker_executor->drain ();
-
-        std::vector<zlink::message_t> delivered;
-        {
-            const std::lock_guard lock (reply_mutex);
-            delivered = reply_parts;
-        }
-        bool capacity_reply = false;
-        if (!delivered.empty ()) {
-            const auto reply_header =
-              codec.decode_header (messaging::message_parts_t (std::move (delivered)));
-            capacity_reply =
-              reply_header
-              && reply_header.value ().kind == messaging::message_kind_t::error
-              && reply_header.value ().error_code.value_or ("") == "capacity_exceeded"
-              && reply_header.value ().correlation_id == "parked-request-1";
-        }
-
-        const auto phase = node->actor_transfer_coordinator.phase (key);
-        const auto backlog = node->actor_transfer_coordinator.take_backlog (key);
-        const auto token_state = node->lane.run ([&] {
-            bool sentinels_preserved =
-              node->pending_handoff_requests.size () == pending_handoff_capacity;
-            for (std::uint64_t index = 1;
-                 sentinels_preserved && index <= pending_handoff_capacity; ++index) {
-                const spot_node_builder_state_t::pending_handoff_request_key_t sentinel_key{
-                  capacity_sentinel_source, 900, index, {}};
-                const auto found = node->pending_handoff_requests.find (sentinel_key);
-                sentinels_preserved = found != node->pending_handoff_requests.end ()
-                                      && found->second.reply_route_id == 10'000 + index;
-            }
-            return std::pair{
-              sentinels_preserved, !node->actor_pending_requests.contains (key)};
-        }).get ();
-        const auto handler_was_skipped =
-          !handler_ran.load (std::memory_order_acquire);
-        const auto callback_rolled_back = !spot->has_active_callback ();
-
-        spots.fail_remote_actor_transfer (actor, false, std::nullopt);
-        node->worker_executor->drain ();
-
-        if (reply_calls.load (std::memory_order_acquire) != 1)
-            return 10;
-        if (!capacity_reply)
-            return 11;
-        if (!handler_was_skipped)
-            return 12;
-        if (!phase || *phase != actor_move_phase_t::local || !backlog.empty ())
-            return 13;
-        if (!token_state.first)
-            return 14;
-        if (!token_state.second || !callback_rolled_back)
-            return 15;
-        return 0;
-    }
-
     // The request must park (not dispatch) and the pending handoff entry
     // that owns the original reply token must be recorded despite the
     // missing route fence.
@@ -4749,8 +4682,12 @@ int parked_request_reply_case (
         return 7;
     {
         std::lock_guard<std::recursive_mutex> lock (node->mutex);
-        if (!node->pending_handoff_requests.empty ())
+        if (test_case == parked_request_case_t::replay) {
+            if (!node->pending_handoff_requests.empty ())
+                return 8;
+        } else if (node->pending_handoff_requests.size () != pending_handoff_capacity) {
             return 8;
+        }
     }
     return 0;
 }
@@ -4761,10 +4698,10 @@ int parked_request_without_route_fence_receives_reply_after_replay ()
     return parked_request_reply_case ("actor-a");
 }
 
-int pending_handoff_capacity_rejects_before_backlog_and_handler ()
+int pending_handoff_accepts_beyond_former_capacity ()
 {
     return parked_request_reply_case (
-      "actor-a", parked_request_case_t::pending_capacity_full);
+      "actor-a", parked_request_case_t::former_pending_capacity);
 }
 
 int same_operation_from_distinct_source_lifecycles_has_distinct_pending_terminal ()
@@ -4837,7 +4774,7 @@ int relayed_request_without_deferred_terminal_receives_follow_reply ()
     serializer_registry_t serializers;
     auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
-      std::make_shared<runtime::offload_executor_t> (1, 16, "follow-relay-worker");
+      std::make_shared<runtime::offload_executor_t> (1, "follow-relay-worker");
     node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
@@ -4951,7 +4888,7 @@ int relayed_request_without_deferred_terminal_receives_follow_reply ()
     return 0;
 }
 
-int session_relay_waiter_capacity_is_bounded ()
+int session_relay_waiter_accepts_beyond_former_capacity ()
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -4973,24 +4910,17 @@ int session_relay_waiter_capacity_is_bounded ()
         return source->task ();
     });
 
-    /* One relay occupies the drain turn; 1024 fill the bounded waiter. */
+    /* One relay occupies the drain turn; the rest cross the former boundary. */
     std::vector<task_t<void>> accepted;
-    accepted.reserve (1025);
-    for (std::size_t index = 0; index != 1025; ++index)
+    accepted.reserve (1026);
+    for (std::size_t index = 0; index != 1026; ++index)
         accepted.push_back (binding.relay ("packet", zlink::message_t{}));
-    auto refused = binding.relay ("packet", zlink::message_t{});
-    if (!refused.await_ready ())
-        return 1;
-    const auto refusal = refused.result ();
-    if (refusal || refusal.error_kind () != framework_error_kind_t::deadline_exceeded)
-        return 2;
 
-    /* Releasing each dispatch drains the FIFO; every admitted relay
-     * completes exactly once and the refused one is never resubmitted. */
+    /* Releasing each dispatch drains the FIFO; every relay completes once. */
     for (std::size_t index = 0; index != dispatched.size (); ++index)
         dispatched[index]->complete (
           result_t<std::optional<zlink::message_t>>::success (std::nullopt));
-    if (dispatched.size () != 1025)
+    if (dispatched.size () != 1026)
         return 3;
     for (auto &admitted : accepted) {
         if (!admitted.await_ready () || !admitted.result ())
@@ -5144,7 +5074,7 @@ int main (int argc, char **argv)
         return 390 + store_resolution;
     }
     if (const auto pending_capacity =
-          pending_handoff_capacity_rejects_before_backlog_and_handler ();
+          pending_handoff_accepts_beyond_former_capacity ();
         pending_capacity != 0) {
         return 385 + pending_capacity;
     }
@@ -5167,7 +5097,8 @@ int main (int argc, char **argv)
         cross_node_terminal != 0) {
         return 380 + cross_node_terminal;
     }
-    if (const auto capacity = session_relay_waiter_capacity_is_bounded (); capacity != 0) {
+    if (const auto capacity = session_relay_waiter_accepts_beyond_former_capacity ();
+        capacity != 0) {
         return 290 + capacity;
     }
     if (const auto finite = bind_or_get_all_exit_paths_complete_within_deadline (); finite != 0) {

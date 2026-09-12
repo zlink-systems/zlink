@@ -22,16 +22,15 @@ inline framework_error_kind_t map_user_spot_wire_failure (
         return framework_error_kind_t::protocol_error;
     if (header.terminal_result == 109)
         return framework_error_kind_t::unavailable;
-    //  Spec 32-framework-error-model:104-108 — only a target's placement/
-    //  admission capacity (Backpressured(113)+None) is CapacityExceeded; it is an
-    //  admission decision, not a queue.
+    // No eligible node can host the Spot; waiting on a queue cannot make a
+    // placement target appear.
     if (creation
         && header.terminal_result == 113
         && header.failure_code == 0)
-        return framework_error_kind_t::capacity_exceeded;
+        return framework_error_kind_t::unavailable;
     //  Spec 32-framework-error-model:99-103 — a remote target's operation-table/
     //  queue saturation (Conflict(107)/Busy(108)+None) is the target's own
-    //  resource, so Unavailable, not source-owned CapacityExceeded. This matches
+    //  resource, so Unavailable. This matches
     //  the request-path reply_header_exception remote mapper.
     if ((header.terminal_result == 107 || header.terminal_result == 108)
         && header.failure_code == 0)
@@ -53,9 +52,8 @@ inline framework_error_kind_t map_user_spot_wire_failure (
         case protocol::framework_error_code::requestFailed:
             return framework_error_kind_t::internal_failure;
         case protocol::framework_error_code::workerQueueFull:
-            //  Spec 32-framework-error-model:99-100 — a full worker queue on the
-            //  remote target this wire reply came from is Unavailable, not a
-            //  source-owned CapacityExceeded.
+            // Legacy peers may still report workerQueueFull for an unavailable
+            // remote target.
             return framework_error_kind_t::unavailable;
         case protocol::framework_error_code::workerTimedOut:
             return framework_error_kind_t::deadline_exceeded;

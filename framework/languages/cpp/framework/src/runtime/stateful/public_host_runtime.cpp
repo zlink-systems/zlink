@@ -97,7 +97,7 @@ framework_error_kind_t map_relocation_failure_code (std::uint32_t wire_code) noe
         case protocol::framework_error_code::payloadDecodeFailed:
             return framework_error_kind_t::protocol_error;
         case protocol::framework_error_code::workerQueueFull:
-            return framework_error_kind_t::capacity_exceeded;
+            return framework_error_kind_t::unavailable;
         case protocol::framework_error_code::workerTimedOut:
             return framework_error_kind_t::deadline_exceeded;
         case protocol::framework_error_code::actorTypeMismatch:
@@ -142,8 +142,6 @@ const char *pump_result_name (mesh::raw_mesh_pump_result_t result) noexcept
             return "application";
         case mesh::raw_mesh_pump_result_t::backpressured:
             return "backpressured";
-        case mesh::raw_mesh_pump_result_t::capacity_exceeded:
-            return "capacity-exceeded";
         case mesh::raw_mesh_pump_result_t::protocol_error:
             return "protocol-error";
     }
@@ -987,10 +985,7 @@ public_host_runtime_t::public_host_runtime_t (host_options_t options) :
       std::make_shared<mesh::raw_mesh_node_owner_t> (_options.mesh, _options.core_context)),
     _relocation_wire (
       std::make_unique<stateful::raw_relocation_replay_coordinator_t> (*_transport)),
-    _objects (_options.mesh.application_message_budget,
-              _options.mesh.infrastructure_message_budget,
-              _options.mesh.application_byte_budget,
-              _options.mesh.infrastructure_byte_budget),
+    _objects (),
     _sessions ([this] (const std::string &actor_id) {
         return _spot_actor_index_lane
           .run ([&] {
@@ -1614,16 +1609,6 @@ public_host_runtime_t::admit_session_relocation_seal (
                                                  std::move (local_completion));
                                            return {{true, std::nullopt}};
                                        }
-                                       if (_session_seal_terminals.size () >= 65'536) {
-                                           const auto consumed = std::find_if (
-                                             _session_seal_terminals.begin (),
-                                             _session_seal_terminals.end (), [] (const auto &entry) {
-                                                 return entry.second.consumed;
-                                             });
-                                           if (consumed == _session_seal_terminals.end ())
-                                               return {{false, std::nullopt}};
-                                           _session_seal_terminals.erase (consumed);
-                                       }
                                        return std::nullopt;
                                    })
                                    .get ();
@@ -1733,8 +1718,6 @@ public_host_runtime_t::seal_session_remote (const zlink::routing_id_t &session_o
                                             if (cached->second.first != seal)
                                                 return false;
                                             cached_result = cached->second.second;
-                                        } else if (_session_journal_terminals.size () >= 65'536) {
-                                            return false;
                                         }
                                         relocations = _session_relocations;
                                         return true;
@@ -1802,29 +1785,18 @@ public_host_runtime_t::seal_session_remote (const zlink::routing_id_t &session_o
               const session_relocation_seal_result_t result{sealed, root};
               std::optional<session_relocation_seal_result_t> existing_result;
               bool conflicting_terminal = false;
-              bool terminal_capacity_exhausted = false;
               host->_relocation_session_terminal_lane
                 .run ([&] {
-                  terminal_capacity_exhausted =
-                    host->_session_journal_terminals.size () >= 65'536
-                    && !host->_session_journal_terminals.contains (relocation_key);
-                  if (!terminal_capacity_exhausted) {
-                      const auto [stored, inserted] = host->_session_journal_terminals.emplace (
-                        relocation_key, std::pair{expected, result});
-                      if (!inserted) {
-                          journal_store.cleanup (root);
-                          conflicting_terminal = stored->second.first != expected;
-                          if (!conflicting_terminal)
-                              existing_result = stored->second.second;
-                      }
+                  const auto [stored, inserted] = host->_session_journal_terminals.emplace (
+                    relocation_key, std::pair{expected, result});
+                  if (!inserted) {
+                      journal_store.cleanup (root);
+                      conflicting_terminal = stored->second.first != expected;
+                      if (!conflicting_terminal)
+                          existing_result = stored->second.second;
                   }
                 })
                 .get ();
-              if (terminal_capacity_exhausted) {
-                  journal_store.cleanup (root);
-                  completion (foundation::operation_terminal_t::transport_failed, std::nullopt);
-                  return;
-              }
               if (conflicting_terminal) {
                   completion (foundation::operation_terminal_t::transport_failed, std::nullopt);
                   return;
@@ -1939,10 +1911,8 @@ stateful::relocation_reason_t classify_relocation_failure_reason (std::uint32_t 
     switch (map_relocation_failure_code (wire_code)) {
         case framework_error_kind_t::data_lost:
             return stateful::relocation_reason_t::checksum_mismatch;
-        // capacity_exceeded here is the REMOTE node's full queue (spec 32
-        // classifies another node's capacity as Unavailable) — it must not
-        // surface as a source-owned permit failure, so it falls through to
-        // restore_failed with the other remote-side terminal codes.
+        // Legacy remote capacity failures cannot identify an available target,
+        // so they fall through with the other remote-side terminal codes.
         case framework_error_kind_t::deadline_exceeded:
             return stateful::relocation_reason_t::turn_active;
         default:
@@ -5015,15 +4985,15 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     std::optional<user_spot_terminal_record_t> cached;
                     _user_spot_terminal_lane
                       .run ([&] {
+                          const auto now = unix_milliseconds_now ();
+                          std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
+                              return user_spot_operation_replay_expired (
+                                entry.second.deadline_unix_ms, now,
+                                _options.user_spot_operation_replay_retention);
+                          });
                           const auto found = _user_spot_terminals.find (operation_key);
-                          if (found != _user_spot_terminals.end ()) {
-                              if (user_spot_operation_replay_expired (
-                                    found->second.deadline_unix_ms, unix_milliseconds_now (),
-                                    _options.user_spot_operation_replay_retention))
-                                  _user_spot_terminals.erase (found);
-                              else
-                                  cached = found->second;
-                          }
+                          if (found != _user_spot_terminals.end ())
+                              cached = found->second;
                       })
                       .get ();
                     if (cached) {
@@ -5040,35 +5010,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     if (request.deadline_unix_ms <= unix_milliseconds_now ()) {
                         protocol::user_spot_create_reply_t reply{
                           {request.correlation, 101, 0},
-                          protocol::user_spot_create_result_t::rejected,
-                          {},
-                          0};
-                        (void) _transport->reply_user_spot_create (mailbox_record, reply,
-                                                                   std::nullopt);
-                        continue;
-                    }
-                    const auto has_terminal_capacity = _user_spot_terminal_lane
-                                                         .run ([&] {
-                        if (_user_spot_terminals.size () >= _options.user_spot_operation_capacity) {
-                            const auto now = unix_milliseconds_now ();
-                            std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
-                                return user_spot_operation_replay_expired (
-                                  entry.second.deadline_unix_ms, now,
-                                  _options.user_spot_operation_replay_retention);
-                            });
-                        }
-                        return _user_spot_terminals.size ()
-                               < _options.user_spot_operation_capacity;
-                    })
-                                                         .get ();
-                    if (!has_terminal_capacity) {
-                        //  Spec 32-framework-error-model:99-103 — encode
-                        //  local operation-table saturation as Busy(108)+
-                        //  None so the requesting peer classifies it as the
-                        //  target's queue state (Unavailable). Terminated
-                        //  (103) is reserved for actual shutdown.
-                        protocol::user_spot_create_reply_t reply{
-                          {request.correlation, 108, 0},
                           protocol::user_spot_create_result_t::rejected,
                           {},
                           0};
@@ -5313,15 +5254,15 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                 std::optional<user_spot_terminal_record_t> cached;
                 _user_spot_terminal_lane
                   .run ([&] {
+                      const auto now = unix_milliseconds_now ();
+                      std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
+                          return user_spot_operation_replay_expired (
+                            entry.second.deadline_unix_ms, now,
+                            _options.user_spot_operation_replay_retention);
+                      });
                       const auto found = _user_spot_terminals.find (operation_key);
-                      if (found != _user_spot_terminals.end ()) {
-                          if (user_spot_operation_replay_expired (
-                                found->second.deadline_unix_ms, unix_milliseconds_now (),
-                                _options.user_spot_operation_replay_retention))
-                              _user_spot_terminals.erase (found);
-                          else
-                              cached = found->second;
-                      }
+                      if (found != _user_spot_terminals.end ())
+                          cached = found->second;
                   })
                   .get ();
                 if (cached) {
@@ -5336,27 +5277,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                 }
                 if (request.deadline_unix_ms <= unix_milliseconds_now ()) {
                     protocol::user_spot_close_reply_t reply{{request.correlation, 101, 0}, false};
-                    (void) _transport->reply_user_spot_close (mailbox_record, reply);
-                    continue;
-                }
-                const auto has_terminal_capacity = _user_spot_terminal_lane
-                                                     .run ([&] {
-                    if (_user_spot_terminals.size () >= _options.user_spot_operation_capacity) {
-                        const auto now = unix_milliseconds_now ();
-                        std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
-                            return user_spot_operation_replay_expired (
-                              entry.second.deadline_unix_ms, now,
-                              _options.user_spot_operation_replay_retention);
-                        });
-                    }
-                    return _user_spot_terminals.size () < _options.user_spot_operation_capacity;
-                })
-                                                     .get ();
-                if (!has_terminal_capacity) {
-                    //  Spec 32-framework-error-model:99-103 — Busy(108)+
-                    //  None: the target's operation-table saturation, not a
-                    //  shutdown terminal (103).
-                    protocol::user_spot_close_reply_t reply{{request.correlation, 108, 0}, false};
                     (void) _transport->reply_user_spot_close (mailbox_record, reply);
                     continue;
                 }
@@ -5670,11 +5590,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
         trace_mesh_host ("pump", std::string ("result=") + pump_result_name (pumped) + " pending="
                                    + std::to_string (_transport->mailbox ().pending_messages (
                                      mesh::service_mailbox_domain_t::application)));
-        if (pumped == mesh::raw_mesh_pump_result_t::capacity_exceeded) {
-            trace_mesh_host (
-              "route-control-capacity-exceeded",
-              "pending admission capacity was exhausted for an ordinary routed control record");
-        }
         if (pumped != mesh::raw_mesh_pump_result_t::no_data)
             ++count;
         bool application_dispatch_started =
@@ -5832,7 +5747,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                && !_transport->mailbox ().has_application_dispatch ()) {
             auto claim = _transport->mailbox ().try_claim (
               mesh::service_mailbox_domain_t::application, 1,
-              dispatch_limits::application_mailbox_bytes);
+              dispatch_limits::receive_batch_bytes);
             if (!claim)
                 break;
             const auto dispatched = dispatch_application_claim (std::move (*claim), dispatch);
@@ -5841,8 +5756,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
         }
         // Management and completion collection belong to the bounded receive
         // turn. Each additional ordinary record still needs a fresh host permit.
-        if (pumped == mesh::raw_mesh_pump_result_t::capacity_exceeded
-            || pumped == mesh::raw_mesh_pump_result_t::backpressured
+        if (pumped == mesh::raw_mesh_pump_result_t::backpressured
             || (pumped == mesh::raw_mesh_pump_result_t::no_data
                 && !application_dispatch_started)
             || budget.exhausted ())
@@ -6264,8 +6178,8 @@ void public_host_runtime_t::register_local_completion (
               }
           }, std::nullopt, request_surface);
         if (!registered)
-            throw framework_exception_t (framework_error_kind_t::capacity_exceeded,
-                                         "Operation completion capacity is exhausted");
+            throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                         "Operation completion registry is closed");
         operation.id = *registered;
     }
     catch (...) {

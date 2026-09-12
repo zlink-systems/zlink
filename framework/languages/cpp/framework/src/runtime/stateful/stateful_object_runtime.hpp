@@ -276,11 +276,7 @@ class stateful_object_runtime_t
     using relocation_state_commit_t = std::function<bool (const std::vector<object_ref_t> &)>;
     using relocation_state_abort_t = std::function<void (const std::vector<object_ref_t> &)>;
 
-    explicit stateful_object_runtime_t (
-      std::size_t application_capacity = dispatch_limits::application_mailbox_messages,
-      std::size_t infrastructure_capacity = dispatch_limits::control_mailbox_messages,
-      std::size_t application_byte_capacity = dispatch_limits::application_mailbox_bytes,
-      std::size_t infrastructure_byte_capacity = dispatch_limits::control_mailbox_bytes);
+    stateful_object_runtime_t ();
     ~stateful_object_runtime_t ();
 
     void configure_relocation_state (relocation_state_capture_t capture,
@@ -465,10 +461,6 @@ class stateful_object_runtime_t
     void notify_quiescence () noexcept;
     void wait_for_quiescence_change (std::uint64_t observed);
 
-    const std::size_t _application_capacity;
-    const std::size_t _infrastructure_capacity;
-    const std::size_t _application_byte_capacity;
-    const std::size_t _infrastructure_byte_capacity;
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
     std::mutex _quiescence_mutex;

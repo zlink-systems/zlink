@@ -402,7 +402,7 @@ class channel_native_client_t
         _runtime (std::move (runtime)),
         _core_context (std::move (core_context)),
         _readiness_executor (std::make_shared<runtime::offload_executor_t> (
-          1, _runtime.pending_limit (), "zlink-channel-ready"))
+          1, "zlink-channel-ready"))
     {
         initialize_transport ();
     }
@@ -1150,9 +1150,6 @@ message_flow_result_t request_terminal_result (const framework_exception_t &erro
     if (detail::boundary_state (error) == detail::boundary_error_t::cancelled) {
         return message_flow_result_t::cancelled;
     }
-    if (error.kind () == framework_error_kind_t::capacity_exceeded) {
-        return message_flow_result_t::backpressured;
-    }
     return message_flow_result_t::failed;
 }
 
@@ -1541,11 +1538,7 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
                   });
                 co_return;
             }
-            catch (const framework_exception_t &error) {
-                if (error.kind () == framework_error_kind_t::capacity_exceeded) {
-                    trace_channel_backpressure (
-                      state->dispatch, channel_name, call_packet_name);
-                }
+            catch (const framework_exception_t &) {
                 throw;
             }
             catch (const std::exception &error) {

@@ -164,10 +164,7 @@ raw_client_server_server_t::raw_client_server_server_t (
     _options (std::move (options)),
     _context (
       context ? std::move (context) : std::make_shared<zlink::context_t> ()),
-    _mailbox (dispatch_limits::application_mailbox_messages,
-              dispatch_limits::application_mailbox_bytes,
-              dispatch_limits::control_mailbox_messages,
-              dispatch_limits::control_mailbox_bytes)
+    _mailbox ()
 {
     if (_options.descriptor.channel_name.empty ()
         || _options.descriptor.server_routing_id.empty ()) {
@@ -436,19 +433,6 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
     if (!port) {
         co_return client_server_pump_result_t::no_data;
     }
-    const auto pending = _lane.run ([this] {
-        if (!_pending_received)
-            return std::optional<client_server_pump_result_t>{};
-        for (const auto &part : _pending_received->parts)
-            _last_pump_bytes += part.size ();
-        if (!_mailbox.try_enqueue (std::move (*_pending_received))) {
-            return std::optional{client_server_pump_result_t::backpressured};
-        }
-        _pending_received.reset ();
-        return std::optional{client_server_pump_result_t::application};
-    }).get ();
-    if (pending)
-        co_return *pending;
     std::optional<detail::backend::raw_received_t> received;
     received = port->try_receive ();
     if (!received) {
@@ -650,17 +634,10 @@ raw_client_server_server_t::enqueue_application_record (
           permit.reset ();
       }};
     return _lane.run ([this, &record] {
-        if (!_mailbox.try_enqueue (std::move (record))) {
-            _pending_received.emplace (std::move (record));
-            return client_server_pump_result_t::backpressured;
-        }
-        return client_server_pump_result_t::application;
+        return _mailbox.try_enqueue (std::move (record))
+                 ? client_server_pump_result_t::application
+                 : client_server_pump_result_t::backpressured;
     }).get ();
-}
-
-bool raw_client_server_server_t::has_pending_application () const
-{
-    return _lane.run ([this] { return _pending_received.has_value (); }).get ();
 }
 
 std::size_t raw_client_server_server_t::last_pump_bytes () const

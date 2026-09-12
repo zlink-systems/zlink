@@ -66,7 +66,7 @@ bool valid_error_code (const std::string &value) noexcept
     return value == "not_found" || value == "already_exists"
            || value == "type_mismatch" || value == "not_configured"
            || value == "rejected" || value == "unavailable"
-           || value == "capacity_exceeded" || value == "deadline_exceeded"
+           || value == "deadline_exceeded"
            || value == "shutting_down" || value == "protocol_error"
            || value == "invalid_operation" || value == "data_lost"
            || value == "internal_failure";

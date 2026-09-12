@@ -118,14 +118,6 @@ class serial_lane_policy_t
 
 struct serial_execution_queue_options_t
 {
-    std::size_t application_message_capacity =
-      dispatch_limits::application_mailbox_messages;
-    std::size_t application_byte_capacity =
-      dispatch_limits::application_mailbox_bytes;
-    std::size_t lifecycle_message_capacity =
-      dispatch_limits::control_mailbox_messages;
-    std::size_t lifecycle_byte_capacity =
-      dispatch_limits::control_mailbox_bytes;
     std::chrono::milliseconds owner_time_budget =
       dispatch_limits::owner_time_budget;
     std::size_t lifecycle_burst_limit =
@@ -135,14 +127,11 @@ struct serial_execution_queue_options_t
 struct serial_work_options_t
 {
     serial_work_lane_t lane = serial_work_lane_t::application;
-    // This is the complete reservation cost: payload, metadata, envelope and
-    // queue-node overhead. A zero value uses the fixed minimum reservation.
+    // Retained for diagnostics and ownership-transfer accounting only; bytes
+    // never participate in Framework queue admission.
     std::size_t byte_cost = dispatch_limits::fixed_work_byte_cost;
-    // A record already accepted by the receiving owner mailbox transfers that
-    // exact reservation into this queue without a second capacity decision.
-    // The callback releases the mailbox side only after queue accounting has
-    // committed. It is consumed by one queue boundary and is not propagated to
-    // an upper Spot execution-gate turn.
+    // A record claimed from the receiving owner mailbox keeps that claim until
+    // the serial queue owns the record.
     std::function<void ()> transfer_owner_reservation;
     // Ordinary Actor ingress opt-in for the relocation admission fence
     // (spot-actor membership §"Defer() 뒤 source seal 전 message"). While an
@@ -182,14 +171,8 @@ class serial_execution_queue_t
     using async_completion_t = std::function<void (std::function<void ()>)>;
     using async_work_t = std::function<void (async_completion_t)>;
 
-    explicit serial_execution_queue_t (offload_executor_t &executor,
-                                       std::size_t capacity =
-                                         dispatch_limits::application_mailbox_messages,
-                                       error_handler_t error_handler = {},
-                                       serial_lane_policy_t policy =
-                                         serial_lane_policy_t::actor_delivery ());
     serial_execution_queue_t (offload_executor_t &executor,
-                              serial_execution_queue_options_t options,
+                              serial_execution_queue_options_t options = {},
                               error_handler_t error_handler = {},
                               serial_lane_policy_t policy =
                                 serial_lane_policy_t::actor_delivery ());
@@ -272,8 +255,6 @@ class serial_execution_queue_t
         std::deque<work_item_t> after_active_queue;
         std::size_t messages = 0;
         std::size_t bytes = 0;
-        std::size_t message_capacity = 0;
-        std::size_t byte_capacity = 0;
     };
 
     struct deferred_work_t
@@ -299,7 +280,6 @@ class serial_execution_queue_t
                        bool allow_inline_claim = true);
     lane_state_t &lane_locked (serial_work_lane_t lane) noexcept;
     const lane_state_t &lane_locked (serial_work_lane_t lane) const noexcept;
-    bool can_enqueue_locked (const serial_work_options_t &options) const noexcept;
     bool enqueue_locked (std::string name,
                          async_work_t work,
                          serial_work_options_t options,
@@ -321,7 +301,6 @@ class serial_execution_queue_t
     error_handler_t _error_handler;
     mutable std::mutex _mutex;
     std::condition_variable _empty;
-    std::condition_variable _capacity_changed;
     lane_state_t _application;
     lane_state_t _lifecycle;
     std::vector<deferred_work_t> _deferred_after_active;

@@ -1950,18 +1950,13 @@ int main ()
                     && channel_hpp.find ("pending_limit () const") == std::string::npos,
                   "IMP-CP-32", "message_bus still exposes its pending request table");
 
-    /* CPP-DISP-001 — application executor saturation is a typed rejection;
-     * it must not throw out of the MeshNode pump thread. */
+    /* CPP-DISP-001 — the application executor has no queue-capacity rejection. */
     gate.require (
-      mesh_node_host_service.find ("_application_dispatch->submit")
-          == std::string::npos
-        && mesh_node_host_service.find ("_application_dispatch->try_submit")
-             != std::string::npos
-        && mesh_node_host_service.find (
+      mesh_node_host_service.find (
              "framework_error_kind_t::capacity_exceeded")
-             != std::string::npos,
+             == std::string::npos,
       "CPP-DISP-001",
-      "MeshNode application executor saturation is not handled as CapacityExceeded");
+      "MeshNode application executor still exposes a queue-capacity failure");
 
     /* CPP-RELOC-001 — only a successful relocation is terminal. A blocked
      * worker is joined and the next call starts a fresh preflight. */
@@ -1998,21 +1993,13 @@ int main ()
       "CPP-DISP-005",
       "local application enqueue does not signal the MeshNode activity poll");
 
-    /* CPP-DISP-003 — a Request that cannot enter the bounded pre-admission
-     * queue receives an existing typed terminal reply instead of waiting for
-     * its transport timeout. */
+    /* CPP-DISP-003 — pre-admission does not reject because a queue is full. */
     gate.require (
-      raw_mesh_node_owner.find (
-        "application_request_correlation")
-          != std::string::npos
-        && raw_mesh_node_owner.find (
-             "protocol::framework_error_code::workerQueueFull")
-             != std::string::npos
-        && raw_mesh_node_owner.find (
-             "reply-worker-queue-full")
-             != std::string::npos,
+      raw_mesh_node_owner.find ("protocol::framework_error_code::workerQueueFull")
+          == std::string::npos
+        && raw_mesh_node_owner.find ("reply-worker-queue-full") == std::string::npos,
       "CPP-DISP-003",
-      "pre-admission Request overflow does not send a terminal capacity reply");
+      "pre-admission still sends a terminal queue-capacity reply");
 
     const auto messaging_runtime = root / "framework/src/runtime/messaging";
     const bool legacy_submit_runtime_absent =
@@ -2442,7 +2429,7 @@ int main ()
      * categories and rejects a revisited node before the hop ceiling. */
     for (const std::string required : {
            "framework_error_kind_t::invalid_operation",
-           "framework_error_kind_t::capacity_exceeded",
+           "framework_error_kind_t::internal_failure",
            "framework_error_kind_t::unavailable"}) {
         gate.require (
           actor_transfer_coordinator.find (required) != std::string::npos,

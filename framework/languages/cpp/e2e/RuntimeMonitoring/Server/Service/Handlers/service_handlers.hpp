@@ -667,8 +667,6 @@ inline const char *monitoring_error_kind_name (
         return "rejected";
       case kind_t::unavailable:
         return "unavailable";
-      case kind_t::capacity_exceeded:
-        return "capacity_exceeded";
       case kind_t::deadline_exceeded:
         return "deadline_exceeded";
       case kind_t::shutting_down:

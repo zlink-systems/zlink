@@ -621,7 +621,6 @@ class spot_serial_executor_t
     {
         if (current_turn && _spot_queue && uses_spot_execution_gate ()) {
             auto spot_options = options;
-            spot_options.byte_cost = queue_t::fixed_work_byte_cost;
             spot_options.transfer_owner_reservation = {};
             // The Actor handoff fence belongs to the per-Actor queue boundary
             // only; the Spot execution-gate hop never carries it.
@@ -641,7 +640,6 @@ class spot_serial_executor_t
                                             std::move (options));
 
         auto spot_options = options;
-        spot_options.byte_cost = queue_t::fixed_work_byte_cost;
         spot_options.transfer_owner_reservation = {};
         spot_options.refuse_when_actor_handoff_fenced = false;
         spot_options.actor_handoff_fence_refused = nullptr;
@@ -747,7 +745,7 @@ class spot_serial_executor_t
             return result_t<actor_queue_submission_t>::failure (
               submitted.error_kind (),
               submitted.error () != nullptr ? submitted.error ()->what ()
-                                            : "Actor handoff queue is full");
+                                            : "Actor handoff queue is closed");
         return result_t<actor_queue_submission_t>::success (
           actor_queue_submission_t{executor->queue (), submitted.value ()});
     }
@@ -758,7 +756,6 @@ class spot_serial_executor_t
                         runtime::serial_work_options_t options = {})
     {
         if (uses_spot_execution_gate ()) {
-            options.byte_cost = queue_t::fixed_work_byte_cost;
             options.transfer_owner_reservation = {};
             return _spot_queue
                    && _spot_queue->try_post_async (
@@ -2543,8 +2540,8 @@ class spot_node_runtime_t
                         create_callback (spot_instance.get (), std::addressof (actor),
                                          create_request, *serializers);
                     })) {
-                    throw framework_exception_t (framework_error_kind_t::rejected,
-                                                 "spot serial queue is full");
+                    throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                                 "spot serial queue is closed");
                 }
             }
         }

@@ -170,7 +170,7 @@ std::size_t serializer_registry_t::begin_registration ()
     if (_state->next_registration
         == std::numeric_limits<std::size_t>::max ()) {
         throw framework_exception_t (
-          framework_error_kind_t::capacity_exceeded,
+          framework_error_kind_t::internal_failure,
           "codec registration identity is exhausted");
     }
     return _state->next_registration++;

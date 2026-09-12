@@ -953,7 +953,7 @@ int main ()
     assigned_bus = std::move (moved_bus);
     auto assigned_bus_runtime =
       zlink::framework::detail::channel_runtime_t::from (assigned_bus);
-    if (assigned_bus_runtime.pending_count () != 0 || assigned_bus_runtime.pending_limit () == 0
+    if (assigned_bus_runtime.pending_count () != 0
         || assigned_bus.default_request_timeout ("missing-channel")
              <= std::chrono::milliseconds::zero ()
         || assigned_bus_runtime.server_peer_weight_override ("missing-channel")) {
@@ -1113,16 +1113,16 @@ int main ()
         // contract; this probe only checks that the runtime stays alive.
     }
 
-    zlink::framework::zlink_builder_t full_queue;
-    full_queue.max_pending (0);
-    full_queue.channel ("profile").enable_client ();
-    auto queue_full_result =
-      full_queue.message_bus ().request ("profile", request_t{5}).async<reply_t> ().result ();
-    if (queue_full_result
-        || queue_full_result.error_kind ()
-             != zlink::framework::framework_error_kind_t::rejected) {
+    zlink::framework::zlink_builder_t unbounded_pending;
+    unbounded_pending.channel ("profile").enable_client ();
+    auto pending_runtime = zlink::framework::detail::channel_runtime_t::from (
+      unbounded_pending.message_bus ());
+    const auto first_pending = pending_runtime.reserve_outbound_request ("profile");
+    const auto second_pending = pending_runtime.reserve_outbound_request ("profile");
+    if (!first_pending || !second_pending || pending_runtime.pending_count () != 2) {
         return 6;
     }
+    pending_runtime.drain ();
 
     zlink::framework::zlink_builder_t outbound_only;
     auto outbound_only_channel = outbound_only.channel ("client-only");

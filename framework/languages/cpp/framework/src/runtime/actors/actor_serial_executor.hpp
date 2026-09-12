@@ -14,7 +14,7 @@ namespace zlink::framework::runtime
 {
 
 /* Owns the one serial execution queue and state lane associated with one Actor
- * activation. The application queue remains the common bounded serial queue
+ * activation. The application queue remains the common serial queue
  * primitive; the state lane does not allocate a dedicated worker. */
 class actor_serial_executor_t
 {

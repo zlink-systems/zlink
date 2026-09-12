@@ -40,7 +40,6 @@ struct errors_t
     static constexpr const char *not_configured = "NotConfigured";
     static constexpr const char *rejected = "Rejected";
     static constexpr const char *unavailable = "Unavailable";
-    static constexpr const char *capacity_exceeded = "CapacityExceeded";
     static constexpr const char *deadline_exceeded = "DeadlineExceeded";
     static constexpr const char *shutting_down = "ShuttingDown";
     static constexpr const char *protocol_error = "ProtocolError";

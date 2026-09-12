@@ -84,7 +84,7 @@ void ensure_stream_dispatch_executor ()
     std::lock_guard lock (stream_dispatch_executor_mutex ());
     if (!stream_dispatch_executor_ref ()) {
         stream_dispatch_executor_ref () = std::make_shared<runtime::offload_executor_t> (
-          0, std::max<std::size_t> (1, std::thread::hardware_concurrency ()), 4096,
+          0, std::max<std::size_t> (1, std::thread::hardware_concurrency ()),
           std::chrono::milliseconds (100), "zlink-stream-ex");
     }
 }

@@ -936,31 +936,6 @@ bool is_blank (const std::string &value)
                         [] (unsigned char ch) { return std::isspace (ch) != 0; });
 }
 
-std::size_t handler_work_byte_cost (const zlink::message_t &message,
-                                    const spot_inbound_message_t &metadata) noexcept
-{
-    std::size_t total = runtime::serial_execution_queue_t::fixed_work_byte_cost;
-    const auto add = [&total] (std::size_t value) {
-        if (value > std::numeric_limits<std::size_t>::max () - total)
-            total = std::numeric_limits<std::size_t>::max ();
-        else
-            total += value;
-    };
-    add (message.size ());
-    add (metadata.content_type.size ());
-    for (const auto &[key, value] : metadata.values) {
-        add (key.size ());
-        add (value.size ());
-    }
-    if (metadata.mesh_name)
-        add (metadata.mesh_name->size ());
-    if (metadata.correlation_id)
-        add (metadata.correlation_id->size ());
-    if (metadata.source)
-        add (metadata.source->size ());
-    return total;
-}
-
 class spot_worker_scheduler_t final : public detail::worker_scheduler_t
 {
   public:
@@ -1003,7 +978,7 @@ framework_worker_executor_core (const std::shared_ptr<detail::spot_node_builder_
     }
     const auto &options = node->worker_options;
     auto executor = std::make_shared<runtime::offload_executor_t> (
-      options.min_threads (), options.max_threads (), options.max_queue_length (),
+      options.min_threads (), options.max_threads (),
       options.idle_timeout (), "zlink-spot-wrk");
     if (node) {
         node->worker_executor = executor;
@@ -1022,7 +997,7 @@ framework_deadline_executor_core (const std::shared_ptr<detail::spot_node_builde
 {
     if (node && node->deadline_executor)
         return node->deadline_executor;
-    auto executor = std::make_shared<runtime::offload_executor_t> (1, 0, "zlink-spot-deadline");
+    auto executor = std::make_shared<runtime::offload_executor_t> (1, "zlink-spot-deadline");
     if (node)
         node->deadline_executor = executor;
     return executor;
@@ -2531,9 +2506,7 @@ void spot_context_state_t::run_serial_task_async (
       },
       std::move (request_cancel),
       runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle,
-                                     owner_reservation
-                                       ? transferred_owner_byte_cost
-                                       : runtime::serial_execution_queue_t::fixed_work_byte_cost,
+                                     transferred_owner_byte_cost,
                                      owner_reservation.callback ()});
     if (submitted)
         owner_reservation.dismiss ();
@@ -2543,7 +2516,7 @@ void spot_context_state_t::run_serial_task_async (
         owner_reservation.settle ();
         settle (result_t<void>::failure (submitted.error_kind (), submitted.error () != nullptr
                                                                     ? submitted.error ()->what ()
-                                                                    : "spot serial queue is full"));
+                                                                    : "spot serial queue is closed"));
     }
 }
 
@@ -2590,8 +2563,7 @@ bool spot_context_state_t::run_serial_sync (std::string name, std::function<void
           }
           leave_callback ();
       },
-      runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle,
-                                     runtime::serial_execution_queue_t::fixed_work_byte_cost});
+      runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle});
     if (!posted) {
         return false;
     }
@@ -2632,11 +2604,10 @@ void spot_context_state_t::defer_relocation_ready ()
           "relocation-ready-continued",
           [this] { complete_relocation_ready (spot_relocation_ready_outcome_t::continued); },
           runtime::serial_work_options_t{
-            runtime::serial_work_lane_t::lifecycle,
-            runtime::serial_execution_queue_t::fixed_work_byte_cost})) {
+            runtime::serial_work_lane_t::lifecycle})) {
         state_sync ([this] { relocation_ready_deferred = false; });
-        throw framework_exception_t (framework_error_kind_t::capacity_exceeded,
-                                     "relocation readiness completion queue is full");
+        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                     "relocation readiness completion queue is closed");
     }
 }
 
@@ -2997,12 +2968,11 @@ task_t<actor_ref_t> spot_context_t::leave_actor_erased (
                     message_flow_reason_t::backpressure);
               }
           },
-          runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle,
-                                         runtime::serial_execution_queue_t::fixed_work_byte_cost});
+          runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle});
         if (!posted) {
             return task_t<actor_ref_t> (result_t<actor_ref_t>::failure (
-              framework_error_kind_t::capacity_exceeded,
-              "Actor leave could not be scheduled after the current handler"));
+              framework_error_kind_t::shutting_down,
+              "Actor leave queue is closed"));
         }
         return task_t<actor_ref_t> (result_t<actor_ref_t>::success (actor_ref));
     }
@@ -3380,13 +3350,12 @@ task_t<void> entry_spot_context_t::destroy_actor_erased (const actor_ref_t &acto
               (void) entry_spot_context_t (state).destroy_actor_erased (deferred_actor).result ();
               state->node->lane.run ([&] { state->node->retiring_actor_keys.erase (key); }).get ();
           },
-          runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle,
-                                         runtime::serial_execution_queue_t::fixed_work_byte_cost});
+          runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle});
         if (!posted) {
             state->node->lane.run ([&] { state->node->retiring_actor_keys.erase (key); }).get ();
             return task_t<void> (result_t<void>::failure (
-              framework_error_kind_t::capacity_exceeded,
-              "Actor destroy could not be scheduled after the current handler"));
+              framework_error_kind_t::shutting_down,
+              "Actor destroy queue is closed"));
         }
         return task_t<void> (result_t<void>::success ());
     }
@@ -4069,9 +4038,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
             const bool fences_on_actor_handoff = actor_handoff_fence_refused != nullptr;
             runtime::serial_work_options_t work_options{
               runtime::serial_work_lane_t::application,
-              has_transferred_owner_reservation
-                ? transferred_owner_byte_cost
-                : handler_work_byte_cost (message, metadata),
+              transferred_owner_byte_cost,
               transfer_owner_reservation};
             work_options.refuse_when_actor_handoff_fenced = fences_on_actor_handoff;
             work_options.actor_handoff_fence_refused =
@@ -4103,12 +4070,8 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                       actor_id, std::move (name), std::move (work), options, current_turn,
                       [completion, options] () mutable {
                           completion.complete (result_t<zlink::message_t>::failure (
-                            options.transfer_owner_reservation
-                              ? framework_error_kind_t::shutting_down
-                              : framework_error_kind_t::capacity_exceeded,
-                            options.transfer_owner_reservation
-                              ? "spot serial queue is closed or stopping"
-                              : "spot serial queue is full"));
+                            framework_error_kind_t::shutting_down,
+                            "spot serial queue is closed or stopping"));
                       });
                 };
             } else {
@@ -4284,12 +4247,8 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                 return task_t<zlink::message_t> (
                   detail::result_access_t::failure<zlink::message_t> (
                     detail::make_framework_origin_exception (
-                      has_transferred_owner_reservation
-                        ? framework_error_kind_t::shutting_down
-                        : framework_error_kind_t::capacity_exceeded,
-                      has_transferred_owner_reservation
-                        ? "spot serial queue is closed or stopping"
-                        : "spot serial queue is full")));
+                      framework_error_kind_t::shutting_down,
+                      "spot serial queue is closed or stopping")));
             }
             if (after_application_admission)
                 after_application_admission ();
@@ -5099,12 +5058,6 @@ class actor_dispatch_admission_token_t final :
                           framework_error_kind_t::unavailable,
                           "actor handoff reply operation is already pending");
                     }
-                    if (_state->pending_handoff_requests.size () >= 1024) {
-                        _pending_handoff.reset ();
-                        return result_t<phase_snapshot_t>::failure (
-                          framework_error_kind_t::capacity_exceeded,
-                          "actor handoff reply reservation capacity is exhausted");
-                    }
                     const auto [_, inserted] = _state->pending_handoff_requests.emplace (
                       *_pending_handoff_key, std::move (*_pending_handoff));
                     if (!inserted) {
@@ -5406,8 +5359,8 @@ void spot_node_runtime_t::commit_accepted_actor_join (
         if (caller_owns_target_turn) {
             create_actor ();
         } else if (!target_state.run_serial_sync ("spot-actor-create", create_actor)) {
-            throw framework_exception_t (framework_error_kind_t::capacity_exceeded,
-                                         "spot serial queue is full");
+            throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                         "spot serial queue is closed or stopping");
         }
         if (!create_result)
             throw framework_exception_t (create_result.error_kind (),
@@ -7839,7 +7792,7 @@ result_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_sp
             }
         })) {
         return result_t<spot_actor_join_result_t>::failure (
-          framework_error_kind_t::capacity_exceeded, "spot serial queue is full");
+          framework_error_kind_t::shutting_down, "spot serial queue is closed or stopping");
     }
     if (admission_conflict) {
         return result_t<spot_actor_join_result_t>::failure (
@@ -10276,8 +10229,7 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
               }
           },
           [commit_state] { commit_state->request_stop (); },
-          runtime::serial_work_options_t{runtime::serial_work_lane_t::application,
-                                         runtime::serial_execution_queue_t::fixed_work_byte_cost});
+          runtime::serial_work_options_t{runtime::serial_work_lane_t::application});
         if (!submitted) {
             commit_state->settle (remote_actor_commit_turn_state_t::outcome_t{
               false, submitted.error_kind (),
@@ -11412,8 +11364,7 @@ spot_node_runtime_t::notify_actor_disconnected_erased (const actor_ref_t &actor_
                   });
             });
       },
-      runtime::serial_work_options_t{runtime::serial_work_lane_t::application,
-                                     runtime::serial_execution_queue_t::fixed_work_byte_cost},
+      runtime::serial_work_options_t{runtime::serial_work_lane_t::application},
       false,
       [completion] () mutable {
           completion.complete (result_t<void>::failure (
@@ -11421,13 +11372,9 @@ spot_node_runtime_t::notify_actor_disconnected_erased (const actor_ref_t &actor_
             "Spot disconnect queue is closed or stopping"));
       });
     if (!posted) {
-        const bool queue_closed = plan.executor->actor_queue_closed (key);
-        return result_t<void>::failure (queue_closed
-                                          ? framework_error_kind_t::shutting_down
-                                          : framework_error_kind_t::capacity_exceeded,
-                                        queue_closed
-                                          ? "Actor disconnect queue is closed"
-                                          : "Actor disconnect queue is full");
+        return result_t<void>::failure (
+          framework_error_kind_t::shutting_down,
+          "Actor disconnect queue is closed or stopping");
     }
     return result.result ();
 }

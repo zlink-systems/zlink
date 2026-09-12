@@ -184,7 +184,7 @@ inline void run_mon_a6_placement_capacity_scenario (const client_options_t &opti
                                      status);
         actor_overflow_status = status;
         actor_overflow_response = over;
-        if (status == 409 && over.value ("error", "") == "capacity_exceeded") {
+        if (status == 409 && over.value ("error", "") == "unavailable") {
             actor_recovery_id = candidate;
             break;
         }
@@ -206,7 +206,7 @@ inline void run_mon_a6_placement_capacity_scenario (const client_options_t &opti
                                      status);
         spot_overflow_status = status;
         spot_overflow_response = over;
-        if (status == 409 && over.value ("error", "") == "capacity_exceeded") {
+        if (status == 409 && over.value ("error", "") == "unavailable") {
             spot_recovery_id = candidate;
             break;
         }

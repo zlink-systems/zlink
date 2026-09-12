@@ -781,10 +781,7 @@ void mesh_node_runtime_t::start ()
                                    ? runtime::mesh::service_object_role_t::server
                                    : runtime::mesh::service_object_role_t::none,
                   .placement_weight = _state->placement_weight},
-                runtime::dispatch_limits::application_mailbox_messages,
-                runtime::dispatch_limits::application_mailbox_bytes,
-                runtime::dispatch_limits::control_mailbox_messages,
-                runtime::dispatch_limits::control_mailbox_bytes, _state->advertise_host,
+                _state->advertise_host,
                 _state->auto_hwm_profile, _state->application_jobs},
               spot_snapshot.entry_spot_name.value_or ("entry"),
               std::move (stable_types),
@@ -4319,11 +4316,6 @@ void mesh_node_runtime_t::set_placement_weight (int weight)
         publisher (channel_weights, weight, descriptor.descriptor_revision);
     native_node ().transport ().topology ().publish_local (std::move (descriptor));
     _state->lane.run ([&] { _state->placement_weight = weight; }).get ();
-}
-
-std::size_t mesh_node_runtime_t::max_pending () const noexcept
-{
-    return _state->max_pending;
 }
 
 void mesh_node_runtime_t::set_channel_weight (const std::string &channel_name, int weight)

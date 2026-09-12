@@ -24,7 +24,6 @@ inline std::string framework_error_name (fw::framework_error_kind_t kind)
         case fw::framework_error_kind_t::not_configured: return errors_t::not_configured;
         case fw::framework_error_kind_t::rejected: return errors_t::rejected;
         case fw::framework_error_kind_t::unavailable: return errors_t::unavailable;
-        case fw::framework_error_kind_t::capacity_exceeded: return errors_t::capacity_exceeded;
         case fw::framework_error_kind_t::deadline_exceeded: return errors_t::deadline_exceeded;
         case fw::framework_error_kind_t::shutting_down: return errors_t::shutting_down;
         case fw::framework_error_kind_t::protocol_error: return errors_t::protocol_error;

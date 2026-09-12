@@ -573,14 +573,13 @@ static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::type_
 static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::not_configured) == 3);
 static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::rejected) == 4);
 static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::unavailable) == 5);
-static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::capacity_exceeded) == 6);
-static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::deadline_exceeded) == 7);
-static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::shutting_down) == 8);
-static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::protocol_error) == 9);
+static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::deadline_exceeded) == 6);
+static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::shutting_down) == 7);
+static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::protocol_error) == 8);
 static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::invalid_operation)
-               == 10);
-static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::data_lost) == 11);
-static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::internal_failure) == 12);
+               == 9);
+static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::data_lost) == 10);
+static_assert (static_cast<int> (zlink::framework::framework_error_kind_t::internal_failure) == 11);
 
 static_assert (has_actor_directory_find<zlink::framework::actor_directory_t>);
 static_assert (
@@ -1048,9 +1047,6 @@ static_assert (
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::worker_options_t &> ().idle_timeout ()),
                  std::chrono::milliseconds>);
-static_assert (std::is_same_v<
-               decltype (std::declval<zlink::framework::worker_options_t &> ().max_queue_length ()),
-               std::size_t>);
 static_assert (
   std::is_same_v<
     decltype (std::declval<zlink::framework::zlink_framework_options_t &> ().configure_core_hwm ()),
@@ -1772,7 +1768,7 @@ int main ()
     if (!user_limit_rejected || !instance_limit_rejected)
         return 7;
 
-    // The public contract defines exactly 13 kinds and does not expose a retry hint.
+    // The public contract defines exactly 12 kinds and does not expose a retry hint.
     const zlink::framework::framework_error_kind_t error_kind_expectations[] = {
       zlink::framework::framework_error_kind_t::not_found,
       zlink::framework::framework_error_kind_t::already_exists,
@@ -1780,14 +1776,13 @@ int main ()
       zlink::framework::framework_error_kind_t::not_configured,
       zlink::framework::framework_error_kind_t::rejected,
       zlink::framework::framework_error_kind_t::unavailable,
-      zlink::framework::framework_error_kind_t::capacity_exceeded,
       zlink::framework::framework_error_kind_t::deadline_exceeded,
       zlink::framework::framework_error_kind_t::shutting_down,
       zlink::framework::framework_error_kind_t::protocol_error,
       zlink::framework::framework_error_kind_t::invalid_operation,
       zlink::framework::framework_error_kind_t::data_lost,
       zlink::framework::framework_error_kind_t::internal_failure};
-    static_assert (sizeof (error_kind_expectations) / sizeof (error_kind_expectations[0]) == 13);
+    static_assert (sizeof (error_kind_expectations) / sizeof (error_kind_expectations[0]) == 12);
     for (std::size_t index = 0; index < std::size (error_kind_expectations); ++index) {
         if (static_cast<std::size_t> (error_kind_expectations[index]) != index)
             return 3;
@@ -1860,11 +1855,9 @@ int main ()
     auto &worker_options = options.worker ();
     worker_options.min_threads (2)
       .max_threads (3)
-      .idle_timeout (std::chrono::milliseconds (17))
-      .max_queue_length (9);
+      .idle_timeout (std::chrono::milliseconds (17));
     if (worker_options.min_threads () != 2 || worker_options.max_threads () != 3
-        || worker_options.idle_timeout () != std::chrono::milliseconds (17)
-        || worker_options.max_queue_length () != 9) {
+        || worker_options.idle_timeout () != std::chrono::milliseconds (17)) {
         return 8;
     }
     options.use_filter<named_filter_t> ();
@@ -1873,7 +1866,7 @@ int main ()
     options.apply ();
     bool sealed = false;
     try {
-        worker_options.max_queue_length (10);
+        worker_options.idle_timeout (std::chrono::milliseconds (10));
     }
     catch (const zlink::framework::framework_exception_t &error) {
         sealed = error.kind () == zlink::framework::framework_error_kind_t::protocol_error;

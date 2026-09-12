@@ -47,7 +47,6 @@ class zlink_builder_t
     zlink_builder_t &operator= (const zlink_builder_t &) = delete;
 
     zlink_builder_t &add_node (std::string node_name);
-    zlink_builder_t &max_pending (std::size_t count);
     zlink_builder_t &default_request_timeout (std::chrono::milliseconds timeout);
     route_channel_builder_t route_channel (std::string route_channel_name);
     channel_builder_t channel (std::string channel_name);
