@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import systems.zlink.TestSupport;
+import systems.zlink.CompletionPollerDriver;
 import systems.zlink.contracts.core.*;
 import systems.zlink.contracts.eventing.*;
 import systems.zlink.contracts.errors.ZlinkRecvException;
@@ -20,7 +21,9 @@ class RouterReceiveStorageContractTest {
         try (Context context = Zlink.createContext();
              DealerSocket dealer = context.createDealerSocket();
              RouterSocket router = context.createRouterSocket();
-             Received received = new Received()) {
+             Received received = new Received();
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(dealer)) {
             String endpoint = TestSupport.inprocEndpoint("three-part-storage");
             router.bind(endpoint);
             dealer.connect(endpoint);

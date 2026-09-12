@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import systems.zlink.TestSupport;
+import systems.zlink.CompletionPollerDriver;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
@@ -46,7 +47,9 @@ final class PullCompletionContractTest {
              RouterSocket owner = context.createRouterSocket();
              RouterSocket other = context.createRouterSocket();
              DealerSocket dealer = context.createDealerSocket();
-             Received request = new Received()) {
+             Received request = new Received();
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(dealer)) {
             dealer.setRoutingId(dealerRid);
             String endpoint = TestSupport.inprocEndpoint("reply-token-owner");
             owner.bind(endpoint);

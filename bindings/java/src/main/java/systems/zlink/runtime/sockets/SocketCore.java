@@ -55,8 +55,7 @@ final class SocketCore {
     private final CompletionOwner completionOwner;
     private final CompletionDispatcher.CompletionLane completionLane;
     SocketCore(NativeSocketRuntime socket,
-               CompletionDispatcher.CompletionLane completionLane,
-               MemorySegment contextHandle) {
+               CompletionDispatcher.CompletionLane completionLane) {
         this.socket = socket;
         this.completionLane = completionLane;
         SocketType type = socket.socketTypeHint();
@@ -64,7 +63,7 @@ final class SocketCore {
             || type == SocketType.DEALER
             || type == SocketType.ROUTER
             || type == SocketType.STREAM
-            ? new CompletionOwner(socket, completionLane, contextHandle) : null;
+            ? new CompletionOwner(socket, completionLane) : null;
     }
 
     void bind(String endpoint) {

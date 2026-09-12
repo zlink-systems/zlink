@@ -16,6 +16,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
 import systems.zlink.TestSupport;
+import systems.zlink.CompletionPollerDriver;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
@@ -62,7 +63,9 @@ class AsyncSubmitTypedResultContractTest {
         RoutingId dealerId = RoutingId.from("typed-route-peer");
         try (Context context = Zlink.createContext();
              RouterSocket router = context.createRouterSocket();
-             DealerSocket dealer = context.createDealerSocket()) {
+             DealerSocket dealer = context.createDealerSocket();
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(router)) {
             connect(transport, router, dealer, dealerId, "exact-route");
             RoutingId absent = RoutingId.from("typed-route-absent");
             try (Message payload = Message.from("missing-route")) {
@@ -82,7 +85,9 @@ class AsyncSubmitTypedResultContractTest {
         RoutingId dealerId = RoutingId.from("typed-admission-peer");
         try (Context context = Zlink.createContext();
              RouterSocket router = context.createRouterSocket();
-             DealerSocket dealer = context.createDealerSocket()) {
+             DealerSocket dealer = context.createDealerSocket();
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(router)) {
             connect(transport, router, dealer, dealerId, "admission");
             try (Message payload = Message.from("request-to-dealer")) {
                 ZlinkSubmitException failure = assertThrows(
@@ -103,7 +108,9 @@ class AsyncSubmitTypedResultContractTest {
         try (Context context = Zlink.createContext()) {
             context.options().autoHwmEnabled(false);
             try (RouterSocket router = context.createRouterSocket();
-                 DealerSocket dealer = context.createDealerSocket()) {
+                 DealerSocket dealer = context.createDealerSocket();
+                 CompletionPollerDriver completions =
+                     new CompletionPollerDriver(router)) {
                 configureSmallHwm(router);
                 configureSmallHwm(dealer);
                 connect(transport, router, dealer, dealerId, "capacity");
@@ -133,7 +140,9 @@ class AsyncSubmitTypedResultContractTest {
         try (Context context = Zlink.createContext()) {
             context.options().autoHwmEnabled(false);
             try (RouterSocket router = context.createRouterSocket();
-                 DealerSocket dealer = context.createDealerSocket()) {
+                 DealerSocket dealer = context.createDealerSocket();
+                 CompletionPollerDriver completions =
+                     new CompletionPollerDriver(router)) {
                 configureSmallHwm(router);
                 configureSmallHwm(dealer);
                 // Weight zero keeps this token unissued until removal. HWM

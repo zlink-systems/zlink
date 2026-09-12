@@ -17,6 +17,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import systems.zlink.TestSupport;
+import systems.zlink.CompletionPollerDriver;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
@@ -181,7 +182,9 @@ class DontWaitBackpressureContractTest {
         try (Context context = Zlink.createContext()) {
             context.options().autoHwmEnabled(false);
             try (RouterSocket router = context.createRouterSocket();
-                 DealerSocket dealer = context.createDealerSocket()) {
+                 DealerSocket dealer = context.createDealerSocket();
+                 CompletionPollerDriver completions =
+                     new CompletionPollerDriver(router)) {
                 configureSmallHwm(router);
                 configureSmallHwm(dealer);
                 String endpoint = TestSupport.inprocEndpoint(
@@ -236,7 +239,9 @@ class DontWaitBackpressureContractTest {
         try (Context context = Zlink.createContext()) {
             context.options().autoHwmEnabled(false);
             try (PairSocket sender = context.createPairSocket();
-                 PairSocket receiver = context.createPairSocket()) {
+                 PairSocket receiver = context.createPairSocket();
+                 CompletionPollerDriver completions =
+                     new CompletionPollerDriver(sender)) {
                 configureSmallHwm(sender);
                 configureSmallHwm(receiver);
                 String endpoint = TestSupport.inprocEndpoint(

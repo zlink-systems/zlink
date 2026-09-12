@@ -181,6 +181,8 @@ public class SocketPollingContractTest {
             server.bind(endpoint);
             client.connect(endpoint);
             serverPoller.add(server, 18L, PollEventFlags.POLLIN);
+            clientPoller.add(client, 19L,
+                PollEventFlags.POLLIN, PollEventFlags.POLLCOMPLETION);
 
             try (Message request = Message.from("completion-request")) {
                 client.request()
@@ -207,12 +209,6 @@ public class SocketPollingContractTest {
                         }
                         });
             }
-
-            // The request starts the binding fallback progress pump first.
-            // Registering the public completion poller afterwards must transfer
-            // ownership without leaving two completion consumers on the socket.
-            clientPoller.add(client, 19L,
-                PollEventFlags.POLLIN, PollEventFlags.POLLCOMPLETION);
 
             PollEvents serverEvents = new PollEvents(1);
             assertEquals(1, serverPoller.wait(serverEvents,
