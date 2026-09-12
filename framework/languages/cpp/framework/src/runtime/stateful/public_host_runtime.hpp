@@ -701,6 +701,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         std::nullopt);
     task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
                                                  const std::vector<zlink::message_t> &parts);
+    task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
+                                                 std::vector<zlink::message_t> &&parts);
     task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,
                                                     const std::vector<zlink::message_t> &parts,
                                                     pending_operation_t &operation,
@@ -752,6 +754,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
 
     protocol::application_payload_t
     encode_application (const std::vector<zlink::message_t> &parts,
+                        std::span<const std::uint8_t> metadata = {}) const;
+    protocol::application_payload_t
+    encode_application (std::vector<zlink::message_t> &&parts,
                         std::span<const std::uint8_t> metadata = {}) const;
     actor_ref_t framework_actor_ref (const stateful::object_ref_t &object,
                                      std::string actor_type) const;

@@ -2979,6 +2979,17 @@ application_payload_t application_payload_t::from_parts (const multipart_t &part
     return result;
 }
 
+application_payload_t application_payload_t::from_parts (multipart_t &&parts)
+{
+    if (parts.empty ())
+        throw std::invalid_argument ("framework multipart requires at least one part");
+    application_payload_t result;
+    result.packet_name = framework_multipart_packet_name;
+    result.content_type = framework_multipart_content_type;
+    result._body = std::make_shared<multipart_t> (std::move (parts));
+    return result;
+}
+
 application_payload_t::multipart_t
 decode_application_parts (const application_payload_t &payload)
 {

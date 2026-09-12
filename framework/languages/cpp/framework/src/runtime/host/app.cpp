@@ -1989,7 +1989,8 @@ void app_t::_apply_zlink_framework ()
                     "MeshNode send");
               }
               co_return one_way_native_submit_result (
-                co_await mesh->send_to_node (target, parts.items ()), "MeshNode send");
+                co_await mesh->send_to_node (target, std::move (parts).take_items ()),
+                "MeshNode send");
           },
           [mesh] (const zlink::routing_id_t &target, runtime::messaging::message_parts_t parts,
                   std::chrono::milliseconds timeout)

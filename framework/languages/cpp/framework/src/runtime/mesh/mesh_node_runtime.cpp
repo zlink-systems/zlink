@@ -4116,6 +4116,22 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
 
 task_t<zlink::submit_result_t>
 mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
+                                   std::vector<zlink::message_t> &&parts,
+                                   std::vector<std::uint8_t> metadata)
+{
+    if (!_node) {
+        throw configuration_error ("MeshNode has not started");
+    }
+    if (!framework_owned_node_message (parts)) {
+        if (const auto classified = classify_node_direct_target (target))
+            co_return *classified;
+    }
+    (void) metadata;
+    co_return co_await _node->send_to_node (target, std::move (parts));
+}
+
+task_t<zlink::submit_result_t>
+mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
                                    const std::vector<zlink::message_t> &parts,
                                    const std::map<std::string, std::string> &metadata)
 {

@@ -69,6 +69,22 @@ struct raw_request_completion_t
     std::optional<raw_request_failure_t> failure;
 };
 
+// A send that the binding accepts immediately has its terminal admission
+// result now.  Only a DONTWAIT rejection needs the binding-owned completion
+// task that retries on writable readiness.
+enum class raw_send_submission_state_t
+{
+    immediate,
+    pending_backpressure
+};
+
+struct raw_send_submission_t
+{
+    raw_send_submission_state_t state;
+    std::optional<result_t<zlink::submit_result_t>> immediate_result;
+    std::shared_ptr<task_t<zlink::submit_result_t>> pending_completion;
+};
+
 class raw_route_port_t
 {
   public:
@@ -80,6 +96,10 @@ class raw_route_port_t
       zlink::poller_t *shared_poller = nullptr,
       std::uintptr_t poller_slot = 1);
 
+    raw_send_submission_t submit_send (
+      const raw_bytes_t &target_routing_id,
+      raw_message_t parts,
+      raw_send_stage_trace_t trace = {});
     task_t<zlink::submit_result_t> send_result (
       const raw_bytes_t &target_routing_id,
       raw_message_t parts,

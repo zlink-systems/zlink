@@ -182,7 +182,7 @@ raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
     _wake_timer.attach (*_poller);
 }
 
-task_t<zlink::submit_result_t> raw_route_port_t::send_result (
+raw_send_submission_t raw_route_port_t::submit_send (
   const raw_bytes_t &target_routing_id,
   raw_message_t parts,
   raw_send_stage_trace_t trace)
@@ -201,17 +201,19 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (
                 trace ("router_admission_submit", "begin");
             }
             catch (const std::exception &error) {
-                return task_t<zlink::submit_result_t> (
-                  result_t<zlink::submit_result_t>::failure (
-                    framework_error_kind_t::internal_failure,
-                    std::string ("raw route send submission trace failed: ")
-                      + error.what ()));
+                return {raw_send_submission_state_t::immediate,
+                        result_t<zlink::submit_result_t>::failure (
+                          framework_error_kind_t::internal_failure,
+                          std::string ("raw route send submission trace failed: ")
+                            + error.what ()),
+                        {}};
             }
             catch (...) {
-                return task_t<zlink::submit_result_t> (
-                  result_t<zlink::submit_result_t>::failure (
-                    framework_error_kind_t::internal_failure,
-                    "raw route send submission trace failed"));
+                return {raw_send_submission_state_t::immediate,
+                        result_t<zlink::submit_result_t>::failure (
+                          framework_error_kind_t::internal_failure,
+                          "raw route send submission trace failed"),
+                        {}};
             }
         }
         std::optional<zlink::async_result_t<void>> pending;
@@ -221,9 +223,10 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (
             if (_socket == nullptr) {
                 if (trace)
                     trace ("router_admission_submit", "terminated");
-                return task_t<zlink::submit_result_t> (
-                  result_t<zlink::submit_result_t>::success (
-                    zlink::submit_result_t::terminated));
+                return {raw_send_submission_state_t::immediate,
+                        result_t<zlink::submit_result_t>::success (
+                          zlink::submit_result_t::terminated),
+                        {}};
             }
             auto operation = std::move (_socket->send (
                                           zlink::routing_id_t::from (target_routing_id)))
@@ -243,32 +246,37 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (
                     trace ("router_admission_complete", "ok");
                 }
                 catch (const std::exception &error) {
-                    return task_t<zlink::submit_result_t> (
-                      result_t<zlink::submit_result_t>::failure (
-                        framework_error_kind_t::internal_failure,
-                        std::string ("raw route send completion trace failed: ")
-                          + error.what ()));
+                    return {raw_send_submission_state_t::immediate,
+                            result_t<zlink::submit_result_t>::failure (
+                              framework_error_kind_t::internal_failure,
+                              std::string ("raw route send completion trace failed: ")
+                                + error.what ()),
+                            {}};
                 }
                 catch (...) {
-                    return task_t<zlink::submit_result_t> (
-                      result_t<zlink::submit_result_t>::failure (
-                        framework_error_kind_t::internal_failure,
-                        "raw route send completion trace failed"));
+                    return {raw_send_submission_state_t::immediate,
+                            result_t<zlink::submit_result_t>::failure (
+                              framework_error_kind_t::internal_failure,
+                              "raw route send completion trace failed"),
+                            {}};
                 }
             }
-            return task_t<zlink::submit_result_t> (
-              result_t<zlink::submit_result_t>::success (
-                zlink::submit_result_t::ok));
+            return {raw_send_submission_state_t::immediate,
+                    result_t<zlink::submit_result_t>::success (
+                      zlink::submit_result_t::ok),
+                    {}};
         }
         if (submission_result != ZLINK_SUBMIT_BACKPRESSURED)
             throw std::logic_error (
               "raw route async send returned an invalid result snapshot");
         auto source =
           std::make_shared<detail::task_completion_source_t<zlink::submit_result_t>> ();
-        auto result = source->task ();
+        auto result = std::make_shared<task_t<zlink::submit_result_t>> (
+          source->task ());
         observe_send_completion (
           std::move (*pending), std::move (trace), source);
-        return result;
+        return {raw_send_submission_state_t::pending_backpressure,
+                std::nullopt, std::move (result)};
     }
     catch (const zlink::submit_error_t &error) {
         if (trace) {
@@ -277,21 +285,24 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (
                 trace ("router_admission_complete", submit_result_name (error.result ()));
             }
             catch (const std::exception &trace_error) {
-                return task_t<zlink::submit_result_t> (
-                  result_t<zlink::submit_result_t>::failure (
-                    framework_error_kind_t::internal_failure,
-                    std::string ("raw route send submission trace failed: ")
-                      + trace_error.what ()));
+                return {raw_send_submission_state_t::immediate,
+                        result_t<zlink::submit_result_t>::failure (
+                          framework_error_kind_t::internal_failure,
+                          std::string ("raw route send submission trace failed: ")
+                            + trace_error.what ()),
+                        {}};
             }
             catch (...) {
-                return task_t<zlink::submit_result_t> (
-                  result_t<zlink::submit_result_t>::failure (
-                    framework_error_kind_t::internal_failure,
-                    "raw route send submission trace failed"));
+                return {raw_send_submission_state_t::immediate,
+                        result_t<zlink::submit_result_t>::failure (
+                          framework_error_kind_t::internal_failure,
+                          "raw route send submission trace failed"),
+                        {}};
             }
         }
-        return task_t<zlink::submit_result_t> (
-          result_t<zlink::submit_result_t>::success (error.result ()));
+        return {raw_send_submission_state_t::immediate,
+                result_t<zlink::submit_result_t>::success (error.result ()),
+                {}};
     }
     catch (const std::exception &error) {
         if (trace) {
@@ -299,29 +310,45 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (
                 trace ("router_admission_submit", "exception");
             }
             catch (const std::exception &trace_error) {
-                return task_t<zlink::submit_result_t> (
-                  result_t<zlink::submit_result_t>::failure (
-                    framework_error_kind_t::internal_failure,
-                    std::string ("raw route send submission trace failed: ")
-                      + trace_error.what ()));
+                return {raw_send_submission_state_t::immediate,
+                        result_t<zlink::submit_result_t>::failure (
+                          framework_error_kind_t::internal_failure,
+                          std::string ("raw route send submission trace failed: ")
+                            + trace_error.what ()),
+                        {}};
             }
             catch (...) {
-                return task_t<zlink::submit_result_t> (
-                  result_t<zlink::submit_result_t>::failure (
-                    framework_error_kind_t::internal_failure,
-                    "raw route send submission trace failed"));
+                return {raw_send_submission_state_t::immediate,
+                        result_t<zlink::submit_result_t>::failure (
+                          framework_error_kind_t::internal_failure,
+                          "raw route send submission trace failed"),
+                        {}};
             }
         }
-        return task_t<zlink::submit_result_t> (
-          result_t<zlink::submit_result_t>::failure (
-            framework_error_kind_t::internal_failure, error.what ()));
+        return {raw_send_submission_state_t::immediate,
+                result_t<zlink::submit_result_t>::failure (
+                  framework_error_kind_t::internal_failure, error.what ()),
+                {}};
     }
     catch (...) {
-        return task_t<zlink::submit_result_t> (
-          result_t<zlink::submit_result_t>::failure (
-            framework_error_kind_t::internal_failure,
-            "raw route send submission failed"));
+        return {raw_send_submission_state_t::immediate,
+                result_t<zlink::submit_result_t>::failure (
+                  framework_error_kind_t::internal_failure,
+                  "raw route send submission failed"),
+                {}};
     }
+}
+
+task_t<zlink::submit_result_t> raw_route_port_t::send_result (
+  const raw_bytes_t &target_routing_id,
+  raw_message_t parts,
+  raw_send_stage_trace_t trace)
+{
+    auto submission = submit_send (
+      target_routing_id, std::move (parts), std::move (trace));
+    if (submission.state == raw_send_submission_state_t::immediate)
+        co_return std::move (*submission.immediate_result);
+    co_return co_await *submission.pending_completion;
 }
 
 task_t<bool> raw_route_port_t::send (const raw_bytes_t &target_routing_id,

@@ -467,16 +467,22 @@ class raw_mesh_node_owner_t
       const std::vector<std::uint8_t> &target_routing_id,
       std::vector<std::uint8_t> header,
       const protocol::application_payload_t &application_payload);
-    enum class send_start_result_t
+    enum class send_start_state_t
     {
         started,
         terminated
+    };
+    struct send_start_result_t
+    {
+        send_start_state_t state;
+        std::optional<result_t<zlink::submit_result_t>> immediate_result;
+        std::shared_ptr<task_t<zlink::submit_result_t>> pending_completion;
     };
     struct send_completion_state_t;
     send_start_result_t start_send (
       std::vector<std::uint8_t> target_routing_id,
       detail::backend::raw_message_t parts,
-      std::shared_ptr<send_completion_state_t> completion,
+      bool needs_public_completion,
       detail::backend::raw_send_stage_trace_t trace = {});
     task_t<zlink::submit_result_t> send_with_header_result (
       std::vector<std::uint8_t> target_routing_id,
@@ -487,7 +493,7 @@ class raw_mesh_node_owner_t
     task_t<bool> send_header_only (
       const std::vector<std::uint8_t> &target_routing_id,
       std::vector<std::uint8_t> header);
-    send_start_result_t submit_header_only (
+    send_start_state_t submit_header_only (
       const std::vector<std::uint8_t> &target_routing_id,
       std::vector<std::uint8_t> header);
     task_t<bool> request_with_header (
