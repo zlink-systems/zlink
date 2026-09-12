@@ -732,10 +732,17 @@ def _structured_cells(run_dir: str, run: str, source: str) -> tuple[list[Cell], 
     A and B may write different JSON files. File names are deliberately not part
     of the schema: either the v1 ``schema`` wrapper or a spec 4 ``role`` at the
     document root identifies cell input; unrelated JSON is ignored.
+
+    Directory depth is not part of the schema either. Every language runner
+    writes its cell documents into a per-cell subdirectory, so a run directory
+    holding only cell directories is the normal shape, not the exception.
     """
     cells: list[Cell] = []
     paths: list[str] = []
-    for path in sorted(glob(os.path.join(run_dir, "*.json"))):
+    candidates = sorted(glob(os.path.join(run_dir, "*.json"))) + sorted(
+        glob(os.path.join(run_dir, "*", "*.json"))
+    )
+    for path in candidates:
         try:
             with open(path, encoding="utf-8") as handle:
                 payload = json.load(handle)
