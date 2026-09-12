@@ -88,3 +88,43 @@ raw 행 전환은 Issue #91~#93의 별도 작업이다. framework 행과 raw 행
 
 request 계열 단위는 KOPS, `send-saturation`은 KMSG/s다. 이전 분모로 계산한 배율이나 이전
 `request-window` 수치는 이 문서에 옮기지 않는다.
+
+## 5.1 결과 — 2026-09-13 기준선 (`request-backpressure`, 1 KiB)
+
+하네스 결함 7건을 고친 뒤 5 run으로 잰 값이다. `zlink-c` = **603.4 KOPS**.
+
+| 언어 | `zlink-<lang> / zlink-c` (binding) | `zlink-framework-<lang> / zlink-<lang>` (framework) |
+|---|---|---|
+| **C++** | **0.644** published, **fail** | (0.082) G5 58.3% |
+| **.NET** | **0.300** published, **fail** | **0.266** published, **fail** |
+| Java | (0.496) G6 — submit 스레드 0.98/1 포화 | (0.041) G6 |
+| Node | (0.151) G6 — event loop 1.00/1 포화 | (0.090) G6+G5 |
+
+통과선은 두 식 모두 0.80이다. **published된 세 값이 모두 fail이다.**
+
+`zlink-cpp / zlink-c = 0.644`가 지금 유일하게 신뢰할 수 있는 binding 값이다. C++만
+단일 실행 단위 제약이 없어 G6에 걸리지 않는다.
+
+.NET은 두 식이 모두 published다 — `0.300 × 0.266 = 0.080`, 즉 framework 경로가 C API의
+8%다.
+
+### 판정이 나오지 않는 이유
+
+| 언어 | 막는 것 | 이슈 |
+|---|---|---|
+| Java·Node | 단일 실행 단위(submit 스레드 1, event loop 1)가 포화 — C 하네스의 여러 client와 같은 조건이 아니다 | `#310` |
+| C++ framework | G5 재현성 58.3%·92.5%. raw는 같은 조건에서 통과하므로 framework 쪽 변동이다 | `#7` |
+| 4 KiB 전반 | `zlink-c` 분모가 G5 44.8% | — |
+
+### 이전 값과 비교하면 안 되는 이유
+
+하네스 수정 전 .NET은 `framework/raw = 1.309 "통과"`, Java는 `1.291 "통과"`였다.
+**분모가 놀던 값이다** — .NET raw는 36.3 → 180.2 KOPS로 5배 올랐는데 framework는
+47.5 → 47.9로 그대로였고, 그래서 비율이 뒤집혔다. 이전 숫자는 이 문서에 옮기지 않는다.
+
+### 함께 기록하는 조건
+
+- `zlink-c` 행과 언어 행이 **서로 다른 Core 바이너리**를 로드한다(`#308`). 이 표의
+  formula 1 값은 그 차이를 포함한다.
+- 높은 in-flight 깊이에서 Core byte HWM 회계가 언더플로로 abort하는 결함이 있다(`#309`).
+  .NET 5 run 중 1건이 그 때문에 실패했다.
