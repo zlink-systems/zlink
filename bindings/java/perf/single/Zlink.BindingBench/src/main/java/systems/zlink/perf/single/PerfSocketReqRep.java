@@ -102,6 +102,9 @@ final class PerfSocketReqRep {
 
             int completionDrainTimeoutMs = Math.max(1, PerfUtil.intEnv(
                 "PERF_SINGLE_REQREP_DRAIN_TIMEOUT_MS", 10_000));
+            long admissionWindow = resolveAdmissionWindow(client,
+                clientMonitor.status().autoHwmAppliedSendHwmBytes(),
+                Math.max(config.size(), PerfUtil.HEADER_SIZE));
             Thread serverThread = new Thread(() -> runServer(server, serverStopped,
                 failure),
                 "single-socket-reqrep-server");
@@ -113,7 +116,8 @@ final class PerfSocketReqRep {
                 PerfUtil.intEnv("PERF_SINGLE_REQREP_TIMEOUT_MS", 200));
             Duration requestTimeout = Duration.ofMillis(requestTimeoutMs);
             runRequestPhase(client, routedClient, config, metrics, failure,
-                activeEnd, requestTimeout, completionDrainTimeoutMs);
+                activeEnd, requestTimeout, completionDrainTimeoutMs,
+                admissionWindow);
             sendStop(client, routedClient);
             PerfUtil.join(serverThread, "socket reqrep server",
                 Duration.ofSeconds(10));
@@ -128,11 +132,11 @@ final class PerfSocketReqRep {
     /**
      * Requester flow of PERF_SINGLE_TEST_POLICY.md 1.1.2/1.1.3.
      *
-     * <p>This method submits one request per turn without waiting for replies,
-     * then progresses ready completions with a nonblocking public poll. An
-     * {@code OK} result permits submission in the next turn; only
-     * {@code BACKPRESSURED} waits for {@code admitted()}. The application adds
-     * no inflight cap or reply-completion wait.</p>
+     * <p>This method runs on the dedicated requester thread. It submits
+     * continuously without waiting for replies and drives reply completions
+     * itself through one public {@code POLLCOMPLETION} poller. The un-settled
+     * set is bounded by the socket's applied HWM admission window, not by a
+     * fixed request count.</p>
      *
      * <p>Throughput and latency are anchored exactly as in the C reference
      * (bindings/c/perf/single/common/perf_single_reqrep.hpp
@@ -140,12 +144,27 @@ final class PerfSocketReqRep {
      * lands before the active deadline, and the latency sample is
      * {@code completion nanoTime - header sent_ts_ns}.</p>
      */
+    private static long resolveAdmissionWindow(Socket client,
+                                               long appliedSendHwmBytes,
+                                               int wireSize) {
+        long hwmBytes = appliedSendHwmBytes;
+        if (hwmBytes == 0L) {
+            hwmBytes = client.options().sendHwm();
+        }
+        if (hwmBytes == 0L) {
+            throw new IllegalStateException(
+                "requester socket reports no send HWM");
+        }
+        return Math.max(1L, hwmBytes / Math.max(1, wireSize));
+    }
+
     private static void runRequestPhase(Socket client, boolean routedClient,
                                         PerfUtil.Config config,
                                         PerfUtil.Metrics metrics,
                                         AtomicReference<Throwable> failure,
                                         long activeEnd, Duration requestTimeout,
-                                        int completionDrainTimeoutMs) {
+                                        int completionDrainTimeoutMs,
+                                        long admissionWindow) {
         AtomicLong outstanding = new AtomicLong();
         java.util.function.BiConsumer<List<Message>, Throwable> completion =
             (parts, error) -> {
@@ -180,23 +199,29 @@ final class PerfSocketReqRep {
         try (PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(
                  List.of(client), PollEventFlags.POLLCOMPLETION)) {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
-                RequestSubmission submission = submitRequest(client,
-                    routedClient, config, requestTimeout, outstanding,
-                    completion);
-                SubmitResult result = submission.result();
-                if (result == SubmitResult.BACKPRESSURED) {
-                    var admitted = submission.admitted().toCompletableFuture();
-                    while (!admitted.isDone() && failure.get() == null) {
-                        completionPoller.poll(50);
+                int submittedSinceProgress = 0;
+                while (System.nanoTime() < activeEnd
+                       && failure.get() == null
+                       && outstanding.get() < admissionWindow) {
+                    RequestSubmission submission = submitRequest(client,
+                        routedClient, config, requestTimeout, outstanding,
+                        completion);
+                    SubmitResult result = submission.result();
+                    if (result != SubmitResult.OK
+                        && result != SubmitResult.BACKPRESSURED) {
+                        throw new IllegalStateException(
+                            "async request returned " + result);
                     }
-                    admitted.join();
-                } else if (result != SubmitResult.OK) {
-                    throw new IllegalStateException(
-                        "async request returned " + result);
+                    // Match the C request cursor: keep the submission burst
+                    // bounded while letting this same thread drain replies.
+                    if (++submittedSinceProgress >= 64) {
+                        submittedSinceProgress = 0;
+                        completionPoller.poll(0);
+                    }
                 }
-                // One submit is one turn. Drain without waiting so reply and
-                // admission completions progress before the next turn.
-                completionPoller.poll(0);
+
+                completionPoller.poll(Math.min(50,
+                    remainingTimeoutMs(activeEnd)));
             }
 
             long drainEnd = System.nanoTime()
