@@ -370,13 +370,19 @@ framework 본체에서는 지웠는데 동반 package가 같은 필드를 **필�
 언어마다 따로 조사를 돌렸는데 **세 언어가 같은 곳을 가리켰다.** 언어별 버그 세 개가 아니라
 같은 설계 비용이 세 번 나타난 것이다.
 
-| 원인 | Java | C++ |
-|---|---|---|
-| service-wire 재포장 — body 전체 복사 (source 2회, target 3회) | 2위 | **1위** |
-| 즉시 수락된 send에도 completion graph를 만든다 | **1위** | 2위 |
-| source owner·state-lane 왕복 (send마다 turn) | 3위 | 3위 |
+| 원인 | .NET | Java | C++ |
+|---|---|---|---|
+| source state lane·socket gate 공유 — 직렬화 | **1위** | 3위 | 3위 |
+| service-wire 재포장 — body 전체 복사 (source 2회, target 3회) | | 2위 | **1위** |
+| 즉시 수락된 send에도 completion graph를 만든다 | | **1위** | 2위 |
 
-원본은 `doc/plan/send-cost-worklog/findings-{java,cpp}.md`.
+원본은 `doc/plan/send-cost-worklog/findings-{dotnet,java,cpp}.md`.
+
+**.NET 조사가 성질이 다른 것을 짚었다.** 나머지 둘이 건당 비용을 본 반면 .NET은
+**직렬화**를 지목했다: framework는 8개 logical stream이 한 RouteMesh node의 state lane과
+`_socketGate` 하나를 공유하는데, raw는 socket을 8개 만들어 각자 자기 semaphore만 쓴다
+(`ZLinkManagedMeshNode.cs:9017,11372`, `ZLinkStateLane.cs:101` 대 `Client/Program.cs:570,674`).
+건당 비용을 줄여도 이 목이 남으면 concurrency를 못 쓴다. 그래서 이것이 1순위다.
 
 ### 7.1 감독자가 코드로 확인한 것
 
@@ -414,3 +420,21 @@ raw는 같은 protobuf DTO와 같은 두 part를 쓰는데도 이 계단이 없�
 
 건당 비용 감축은 **기준선을 새로 잡은 뒤**에 손댄다(§6.4 순서 2 → 3). 지금 고치면
 무엇이 좋아졌는지 말할 수 없다. 순서는 위 표의 1·2위를 언어마다 하나씩, 수정마다 재측정.
+
+### 7.4 `#280` 해소 실측 (2026-09-12 22:09)
+
+C++ request 벤치가 오류 없이 완주한다. RESULT 27행, 오염 0건. 측정 자체가 불가능하던
+상태는 끝났다.
+
+5초 1-run 값(`request-backpressure`, 1 KiB)이라 **판정에 쓰지 않는다.** 그래도
+기록해 둔다 — 5-run 기준선이 이 그림을 확인하는지 봐야 하기 때문이다.
+
+| 행 | throughput | latency |
+|---|---:|---:|
+| `grpc-cpp` | 39,557 | 407.4 |
+| `zlink-cpp` (raw) | 375,717 | 0.389 |
+| `zlink-framework-cpp` | 19,573 | 250.4 |
+
+framework/raw = 0.052. Java·.NET의 request는 1.18~1.31로 목표를 넘겼는데 C++만 다르다.
+latency가 raw의 640배라 건당 비용이 아니라 **직렬화**로 보이고, 이는 §7의 source
+state lane 지적과 같은 방향이다. 5-run 기준선으로 확인한다.
