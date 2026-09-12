@@ -196,7 +196,8 @@ bound Actor로 넘긴다.
         public void Configure()
         {
             Context.Handlers
-                .AddHandler<AuthenticateHandler>(); // Actor binding 전에 처리할 packet을 등록한다.
+                // Actor binding 전에 처리할 packet을 등록한다.
+                .AddHandler<AuthenticateHandler>();
         }
 
         public async ValueTask OnDispatchAsync(
@@ -219,7 +220,8 @@ bound Actor로 넘긴다.
 
             await actor.RelayAsync(
                 payload,
-                cancellationToken); // decode하지 않고 Framework-owned payload를 Actor handler로 넘긴다.
+                // decode하지 않고 Framework-owned payload를 Actor handler로 넘긴다.
+                cancellationToken);
         }
 
         public ValueTask OnConnectedAsync(CancellationToken cancellationToken)

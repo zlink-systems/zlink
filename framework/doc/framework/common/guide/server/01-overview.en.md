@@ -270,7 +270,8 @@ even if they're replaced later — this backend boundary is explained separately
     // Registration — one room mesh and a room type
     var node = options.AddRouteMesh("game.room");
     node.Listen("tcp://0.0.0.0:9001");
-    node.Channel("game.room").Server();     // A mesh has at least 1 logical membership
+    // A mesh has at least 1 logical membership
+    node.Channel("game.room").Server();
     node.Objects().Server().AddSpotFactory<BingoRoomSpot>("room", factory => factory.RecreateOnRelocation());
     ```
 
@@ -282,7 +283,8 @@ even if they're replaced later — this backend boundary is explained separately
         public ValueTask<MarkResult> HandleAsync(
             BingoRoomSpot room, MarkNumber request, CancellationToken ct)
         {
-            room.Board.Mark(request.Number);        // No lock
+            // No lock
+            room.Board.Mark(request.Number);
             room.LastActivity = DateTimeOffset.UtcNow;
             return ValueTask.FromResult(new MarkResult(room.Board.HasBingo()));
         }
@@ -295,7 +297,8 @@ even if they're replaced later — this backend boundary is explained separately
     // Registration — one room mesh and a room type
     auto node = options.add_route_mesh ("game.room");
     node.listen ("tcp://0.0.0.0:9001");
-    node.channel_name ("game.room").server ();  // A mesh has at least 1 logical membership
+    // A mesh has at least 1 logical membership
+    node.channel_name ("game.room").server ();
     node.add_spot_factory<bingo_room_spot_t> (
       "room",
       [] (spot_context_t context) { return std::make_shared<bingo_room_spot_t> (std::move (context)); },
@@ -307,7 +310,8 @@ even if they're replaced later — this backend boundary is explained separately
     // A C++ Spot handler is a Spot member function. The Spot arrives as `this`.
     task_t<mark_result_t> bingo_room_spot_t::mark_number (const mark_number_t &request)
     {
-        _board.mark (request.number);           // No lock
+        // No lock
+        _board.mark (request.number);
         _last_activity = std::chrono::system_clock::now ();
         co_return mark_result_t{_board.has_bingo ()};
     }
@@ -319,7 +323,8 @@ even if they're replaced later — this backend boundary is explained separately
     // Registration — one room mesh and a room type
     ZLinkMeshNodeBuilder node = options.addRouteMesh("game.room");
     node.listen("tcp://0.0.0.0:9001");
-    node.channelName("game.room").server();     // A mesh has at least 1 logical membership
+    // A mesh has at least 1 logical membership
+    node.channelName("game.room").server();
     node.objects().server().addSpotFactory("room", BingoRoomSpot.class, factory -> factory.recreateOnRelocation());
     ```
 
@@ -330,7 +335,8 @@ even if they're replaced later — this backend boundary is explained separately
 
         @Override
         public CompletionStage<MarkResult> handle(BingoRoomSpot room, MarkNumber request) {
-            room.board().mark(request.number());    // No lock
+            // No lock
+            room.board().mark(request.number());
             room.setLastActivity(Instant.now());
             return CompletableFuture.completedFuture(new MarkResult(room.board().hasBingo()));
         }
@@ -343,7 +349,8 @@ even if they're replaced later — this backend boundary is explained separately
     // Registration — one room mesh and a room type
     val node = options.addRouteMesh("game.room")
     node.listen("tcp://0.0.0.0:9001")
-    node.channelName("game.room").server()      // A mesh has at least 1 logical membership
+    // A mesh has at least 1 logical membership
+    node.channelName("game.room").server()
     node.objects().server()
         .addSpotFactory("room", BingoRoomSpot::class.java) { factory ->
             factory.recreateOnRelocation()
@@ -355,7 +362,8 @@ even if they're replaced later — this backend boundary is explained separately
     class MarkNumberHandler : ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
 
         override suspend fun handle(room: BingoRoomSpot, request: MarkNumber): MarkResult {
-            room.board.mark(request.number)         // No lock
+            // No lock
+            room.board.mark(request.number)
             room.lastActivity = Instant.now()
             return MarkResult(room.board.hasBingo())
         }
@@ -368,7 +376,8 @@ even if they're replaced later — this backend boundary is explained separately
     // Registration — one room mesh and a room type
     const node = builder.addRouteMesh('game.room');
     node.listen('tcp://0.0.0.0:9001');
-    node.channel('game.room').server();     // A mesh has at least 1 logical membership
+    // A mesh has at least 1 logical membership
+    node.channel('game.room').server();
     node.objects().server().addSpotFactory('room', BingoRoomSpot, factory => factory.recreateOnRelocation());
     ```
 
@@ -378,7 +387,8 @@ even if they're replaced later — this backend boundary is explained separately
       implements ZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult> {
 
       async handle(room: BingoRoomSpot, request: MarkNumber): Promise<MarkResult> {
-        room.board.mark(request.number);          // No lock
+        // No lock
+        room.board.mark(request.number);
         room.lastActivity = new Date();
         return { bingo: room.board.hasBingo() };
       }
@@ -554,7 +564,8 @@ remains.
     // Inside an HTTP handler — route an order event to that order's workflow Spot.
     // The first request cold-activates the spot keyed on OrderId, and later requests arrive
     // at the same already-created spot, always processed serially in one place (no distributed lock).
-    await spots.RequestToSpot(request.OrderId, request)    // request is already a StartOrderWorkflowReq body.
+    // request is already a StartOrderWorkflowReq body.
+    await spots.RequestToSpot(request.OrderId, request)
         .InstanceSpot("order-workflow")
         .InMesh("commerce")
         .Async<StartOrderWorkflowRes>(ct);
@@ -569,7 +580,8 @@ remains.
     // Inside an HTTP handler — route an order event to that order's workflow Spot.
     // The first request cold-activates the spot keyed on order_id, and later requests arrive
     // at the same already-created spot, always processed serially in one place (no distributed lock).
-    co_await spots.request_to_spot (request.order_id, request)  // request is already a start_order_workflow_req_t body.
+    // request is already a start_order_workflow_req_t body.
+    co_await spots.request_to_spot (request.order_id, request)
       .instance_spot ("order-workflow")
       .in_mesh ("commerce")
       .async<start_order_workflow_res_t> ();
@@ -584,7 +596,8 @@ remains.
     // Inside an HTTP handler — route an order event to that order's workflow Spot.
     // The first request cold-activates the spot keyed on OrderId, and later requests arrive
     // at the same already-created spot, always processed serially in one place (no distributed lock).
-    spots.requestToSpot(request.orderId(), request)    // request is already a StartOrderWorkflowReq body.
+    // request is already a StartOrderWorkflowReq body.
+    spots.requestToSpot(request.orderId(), request)
         .instanceSpot("order-workflow")
         .inMesh("commerce")
         .submit(StartOrderWorkflowRes.class);
@@ -599,7 +612,8 @@ remains.
     // Inside an HTTP handler — route an order event to that order's workflow Spot.
     // The first request cold-activates the spot keyed on OrderId, and later requests arrive
     // at the same already-created spot, always processed serially in one place (no distributed lock).
-    spots.requestToSpot(request.orderId, request)      // request is already a StartOrderWorkflowReq body.
+    // request is already a StartOrderWorkflowReq body.
+    spots.requestToSpot(request.orderId, request)
         .instanceSpot("order-workflow")
         .inMesh("commerce")
         .submit(StartOrderWorkflowRes::class.java)
@@ -615,7 +629,8 @@ remains.
     // Inside an HTTP handler — route an order event to that order's workflow Spot.
     // The first request cold-activates the spot keyed on orderId, and later requests arrive
     // at the same already-created spot, always processed serially in one place (no distributed lock).
-    await spots.requestToSpot(request.orderId, request)  // request is already a StartOrderWorkflowReq body.
+    // request is already a StartOrderWorkflowReq body.
+    await spots.requestToSpot(request.orderId, request)
       .instanceSpot('order-workflow')
       .inMesh('commerce')
       .submit<StartOrderWorkflowRes>();
@@ -728,7 +743,8 @@ pipeline.
     {
         public ValueTask<StartOrderWorkflowRes> HandleAsync(
             OrderWorkflowSpot spot, StartOrderWorkflowReq request, CancellationToken ct)
-            => spot.StartOrderWorkflowAsync(request, ct);   // Accesses spot state without a lock
+            // Accesses spot state without a lock
+            => spot.StartOrderWorkflowAsync(request, ct);
     }
     ```
 
@@ -741,7 +757,8 @@ pipeline.
     task_t<start_order_workflow_res_t>
     order_workflow_spot_t::start_order_workflow (const start_order_workflow_req_t &request)
     {
-        co_return co_await start_workflow (request);   // Accesses spot state without a lock
+        // Accesses spot state without a lock
+        co_return co_await start_workflow (request);
     }
     ```
 
@@ -756,7 +773,8 @@ pipeline.
         @Override
         public CompletionStage<StartOrderWorkflowRes> handle(
             OrderWorkflowSpot spot, StartOrderWorkflowReq request) {
-            return workflow.startInSpot(spot, request); // Accesses spot state without a lock
+            // Accesses spot state without a lock
+            return workflow.startInSpot(spot, request);
         }
     }
     ```
@@ -771,7 +789,8 @@ pipeline.
 
         override suspend fun handle(
             spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): StartOrderWorkflowRes =
-            workflow.startInSpot(spot, request)        // Accesses spot state without a lock
+            // Accesses spot state without a lock
+            workflow.startInSpot(spot, request)
     }
     ```
 
@@ -785,7 +804,8 @@ pipeline.
 
       async handle(
         spot: OrderWorkflowSpot, request: StartOrderWorkflowReq): Promise<StartOrderWorkflowRes> {
-        return spot.start(request);                    // Accesses spot state without a lock
+        // Accesses spot state without a lock
+        return spot.start(request);
       }
     }
     ```
@@ -929,26 +949,33 @@ request/response."
     {
         public ValueTask<PriceReply> HandleAsync(
             PriceRequest request, IZLinkMessageContext context, CancellationToken ct)
-            => ValueTask.FromResult(new PriceReply(request.Symbol, 187.42m));   // 187.42m is a fixed demo value (a real lookup result in practice)
+            // 187.42m is a fixed demo value (a real lookup result in practice)
+            => ValueTask.FromResult(new PriceReply(request.Symbol, 187.42m));
     }
 
     // Registration — declares the MeshNode endpoint and the price membership's handler together.
     builder.Services.AddZLinkFramework(options =>
     {
-        options.AddRouteMesh("services")                         // Scopes the communication range by MeshName.
-            .Listen("tcp://0.0.0.0:7301")                       // Opens this MeshNode's endpoint.
+        // Scopes the communication range by MeshName.
+        options.AddRouteMesh("services")
+            // Opens this MeshNode's endpoint.
+            .Listen("tcp://0.0.0.0:7301")
             .SetRoutingId(RoutingId.From("price-1"))
-            .Channel("price")                                   // Registers the price-handling membership.
+            // Registers the price-handling membership.
+            .Channel("price")
             .Server()
-            .AddRequestHandler<GetPriceHandler>();              // Registers this channel's request handler.
+            // Registers this channel's request handler.
+            .AddRequestHandler<GetPriceHandler>();
     });
 
     // Client: inject IZLinkRouteClient and call by ChannelName.
     var reply = await client
         .RequestToChannel(
-            "price",                                            // The ChannelName to look up process-locally
+            // The ChannelName to look up process-locally
+            "price",
             new PriceRequest("AAPL"))
-        .Async<PriceReply>(ct);                                // Sends, then waits for the reply asynchronously.
+        // Sends, then waits for the reply asynchronously.
+        .Async<PriceReply>(ct);
     ```
 
 === "C++"
@@ -963,16 +990,20 @@ request/response."
 
         reply_type handle (const price_request_t &request)
         {
-            return price_reply_t{request.symbol, 187.42};   // 187.42 is a fixed demo value (a real lookup result in practice)
+            // 187.42 is a fixed demo value (a real lookup result in practice)
+            return price_reply_t{request.symbol, 187.42};
         }
     };
 
     // Registration — declares the MeshNode endpoint and the price membership's handler together.
     app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-        options.add_route_mesh ("services")                 // Scopes the communication range by MeshName.
-          .listen ("tcp://0.0.0.0:7301")                    // Opens this MeshNode's endpoint.
+        // Scopes the communication range by MeshName.
+        options.add_route_mesh ("services")
+          // Opens this MeshNode's endpoint.
+          .listen ("tcp://0.0.0.0:7301")
           .set_routing_id (routing_id_t::from ("price-1"))
-          .channel_name ("price")                           // Registers the price-handling membership.
+          // Registers the price-handling membership.
+          .channel_name ("price")
           .server ()
           .add_request_handler<get_price_handler_t, price_request_t, price_reply_t> ();
     });
@@ -980,9 +1011,11 @@ request/response."
     // Client: inject the route client and call by ChannelName.
     auto reply = co_await client
       .request_to_channel (
-        "price",                                            // The ChannelName to look up process-locally
+        // The ChannelName to look up process-locally
+        "price",
         price_request_t{"AAPL"})
-      .async<price_reply_t> ();                            // Sends, then waits for the reply asynchronously.
+      // Sends, then waits for the reply asynchronously.
+      .async<price_reply_t> ();
     ```
 
 === "Java"
@@ -994,24 +1027,30 @@ request/response."
         @Override
         public CompletionStage<PriceReply> handle(PriceRequest request, ZLinkMessageContext context) {
             return CompletableFuture.completedFuture(
-                new PriceReply(request.symbol(), new BigDecimal("187.42")));  // Fixed demo value (a real lookup result in practice)
+                // Fixed demo value (a real lookup result in practice)
+                new PriceReply(request.symbol(), new BigDecimal("187.42")));
         }
     }
 
     // Registration — declares the MeshNode endpoint and the price membership's handler together.
-    options.addRouteMesh("services")                        // Scopes the communication range by MeshName.
-        .listen("tcp://0.0.0.0:7301")                       // Opens this MeshNode's endpoint.
+    // Scopes the communication range by MeshName.
+    options.addRouteMesh("services")
+        // Opens this MeshNode's endpoint.
+        .listen("tcp://0.0.0.0:7301")
         .setRoutingId(RoutingId.from("price-1"))
-        .channelName("price")                                   // Registers the price-handling membership.
+        // Registers the price-handling membership.
+        .channelName("price")
         .server()
         .addRequestHandler(GetPriceHandler.class, PriceRequest.class, PriceReply.class);
 
     // Client: inject the route client and call by ChannelName.
     PriceReply reply = client
         .requestToChannel(
-            "price",                                        // The ChannelName to look up process-locally
+            // The ChannelName to look up process-locally
+            "price",
             new PriceRequest("AAPL"))
-        .submit(PriceReply.class)                           // Sends, then waits for the reply asynchronously.
+        // Sends, then waits for the reply asynchronously.
+        .submit(PriceReply.class)
         .toCompletableFuture().join();
     ```
 
@@ -1022,23 +1061,29 @@ request/response."
     class GetPriceHandler : ZLinkRequestHandler<PriceRequest, PriceReply> {
 
         override suspend fun handle(request: PriceRequest, context: ZLinkMessageContext): PriceReply =
-            PriceReply(request.symbol, BigDecimal("187.42"))   // Fixed demo value (a real lookup result in practice)
+            // Fixed demo value (a real lookup result in practice)
+            PriceReply(request.symbol, BigDecimal("187.42"))
     }
 
     // Registration — declares the MeshNode endpoint and the price membership's handler together.
-    options.addRouteMesh("services")                        // Scopes the communication range by MeshName.
-        .listen("tcp://0.0.0.0:7301")                       // Opens this MeshNode's endpoint.
+    // Scopes the communication range by MeshName.
+    options.addRouteMesh("services")
+        // Opens this MeshNode's endpoint.
+        .listen("tcp://0.0.0.0:7301")
         .setRoutingId(RoutingId.from("price-1"))
-        .channelName("price")                                   // Registers the price-handling membership.
+        // Registers the price-handling membership.
+        .channelName("price")
         .server()
         .addRequestHandler(GetPriceHandler::class.java, PriceRequest::class.java, PriceReply::class.java)
 
     // Client: inject the route client and call by ChannelName.
     val reply = client
         .requestToChannel(
-            "price",                                        // The ChannelName to look up process-locally
+            // The ChannelName to look up process-locally
+            "price",
             PriceRequest("AAPL"))
-        .submit(PriceReply::class.java)                     // Sends, then waits for the reply asynchronously.
+        // Sends, then waits for the reply asynchronously.
+        .submit(PriceReply::class.java)
         .await()
     ```
 
@@ -1050,24 +1095,30 @@ request/response."
     export class GetPriceHandler implements ZLinkRequestHandler<PriceRequest, PriceReply> {
 
       async handle(request: PriceRequest): Promise<PriceReply> {
-        return { symbol: request.symbol, price: 187.42 };   // 187.42 is a fixed demo value (a real lookup result in practice)
+        // 187.42 is a fixed demo value (a real lookup result in practice)
+        return { symbol: request.symbol, price: 187.42 };
       }
     }
 
     // Registration — declares the MeshNode endpoint and the price membership's handler together.
-    builder.addRouteMesh('services')                        // Scopes the communication range by MeshName.
-      .listen('tcp://0.0.0.0:7301')                         // Opens this MeshNode's endpoint.
+    // Scopes the communication range by MeshName.
+    builder.addRouteMesh('services')
+      // Opens this MeshNode's endpoint.
+      .listen('tcp://0.0.0.0:7301')
       .routingId('price-1')
-      .channel('price')                                     // Registers the price-handling membership.
+      // Registers the price-handling membership.
+      .channel('price')
       .server()
       .addRequestHandler(PacketNames.priceRequest, GetPriceHandler);
 
     // Client: inject the route client and call by ChannelName.
     const reply = await client
       .requestToChannel(
-        'price',                                            // The ChannelName to look up process-locally
+        // The ChannelName to look up process-locally
+        'price',
         priceRequest('AAPL'))
-      .submit<PriceReply>();                                // Sends, then waits for the reply asynchronously.
+      // Sends, then waits for the reply asynchronously.
+      .submit<PriceReply>();
     ```
 
 The connection/setup code disappears, leaving a handler and a few lines of channel
@@ -1093,20 +1144,26 @@ you declare the MeshNode, fanout, and STREAM node.
     ```csharp
     builder.Services.AddZLinkFramework(options =>
     {
-        options.AddLocationStore(new ZLinkRedisLocationStore(...));  // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+        // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+        options.AddLocationStore(new ZLinkRedisLocationStore(...));
 
-        options.AddRouteMesh("services")                         // MeshNode for inter-server request/send
+        // MeshNode for inter-server request/send
+        options.AddRouteMesh("services")
             .Listen("tcp://0.0.0.0:7301")
             .SetRoutingId(RoutingId.From("service-a"))
-            .Channel("orders").Server();                         // The logical membership to handle
+            // The logical membership to handle
+            .Channel("orders").Server();
         options.AddFanoutChannel("events")
-            .EnablePublisher("tcp://0.0.0.0:7302");              // classic event fan-out
-        options.AddRouteMesh("game.room")                        // SPOT/actor are also owned by a MeshNode
+            // classic event fan-out
+            .EnablePublisher("tcp://0.0.0.0:7302");
+        // SPOT/actor are also owned by a MeshNode
+        options.AddRouteMesh("game.room")
             .Listen("tcp://0.0.0.0:7304")
             .SetRoutingId(RoutingId.From("room-a"))
             .Channel("game.room").Server();
         options.AddStreamNode("gateway")
-            .Bind("tcp://0.0.0.0:7400");                         // The external client endpoint
+            // The external client endpoint
+            .Bind("tcp://0.0.0.0:7400");
     });
     ```
 
@@ -1114,20 +1171,26 @@ you declare the MeshNode, fanout, and STREAM node.
 
     ```cpp
     app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-        options.add_location_store (std::make_shared<redis_location_store_t> (...));  // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+        // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+        options.add_location_store (std::make_shared<redis_location_store_t> (...));
 
-        options.add_route_mesh ("services")                     // MeshNode for inter-server request/send
+        // MeshNode for inter-server request/send
+        options.add_route_mesh ("services")
           .listen ("tcp://0.0.0.0:7301")
           .set_routing_id (routing_id_t::from ("service-a"))
-          .channel_name ("orders").server ();                   // The logical membership to handle
+          // The logical membership to handle
+          .channel_name ("orders").server ();
         options.add_fanout_channel ("events")
-          .enable_publisher ("tcp://0.0.0.0:7302");             // classic event fan-out
-        options.add_route_mesh ("game.room")                    // SPOT/actor are also owned by a MeshNode
+          // classic event fan-out
+          .enable_publisher ("tcp://0.0.0.0:7302");
+        // SPOT/actor are also owned by a MeshNode
+        options.add_route_mesh ("game.room")
           .listen ("tcp://0.0.0.0:7304")
           .set_routing_id (routing_id_t::from ("room-a"))
           .channel_name ("game.room").server ();
         options.add_stream_node ("gateway")
-          .bind ("tcp://0.0.0.0:7400");                         // The external client endpoint
+          // The external client endpoint
+          .bind ("tcp://0.0.0.0:7400");
     });
     ```
 
@@ -1135,20 +1198,26 @@ you declare the MeshNode, fanout, and STREAM node.
 
     ```java
     ZLinkFrameworkConfigurer zlink = options -> {
-        options.addLocationStore(new ZLinkRedisLocationStore(...));  // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+        // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+        options.addLocationStore(new ZLinkRedisLocationStore(...));
 
-        options.addRouteMesh("services")                         // MeshNode for inter-server request/send
+        // MeshNode for inter-server request/send
+        options.addRouteMesh("services")
             .listen("tcp://0.0.0.0:7301")
             .setRoutingId(RoutingId.from("service-a"))
-            .channelName("orders").server();                         // The logical membership to handle
+            // The logical membership to handle
+            .channelName("orders").server();
         options.addFanoutChannel("events")
-            .enablePublisher("tcp://0.0.0.0:7302");              // classic event fan-out
-        options.addRouteMesh("game.room")                        // SPOT/actor are also owned by a MeshNode
+            // classic event fan-out
+            .enablePublisher("tcp://0.0.0.0:7302");
+        // SPOT/actor are also owned by a MeshNode
+        options.addRouteMesh("game.room")
             .listen("tcp://0.0.0.0:7304")
             .setRoutingId(RoutingId.from("room-a"))
             .channelName("game.room").server();
         options.addStreamNode("gateway")
-            .bind("tcp://0.0.0.0:7400");                         // The external client endpoint
+            // The external client endpoint
+            .bind("tcp://0.0.0.0:7400");
     };
     ```
 
@@ -1156,20 +1225,26 @@ you declare the MeshNode, fanout, and STREAM node.
 
     ```kotlin
     val zlink = ZLinkFrameworkConfigurer { options ->
-        options.addLocationStore(ZLinkRedisLocationStore(...))   // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+        // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+        options.addLocationStore(ZLinkRedisLocationStore(...))
 
-        options.addRouteMesh("services")                         // MeshNode for inter-server request/send
+        // MeshNode for inter-server request/send
+        options.addRouteMesh("services")
             .listen("tcp://0.0.0.0:7301")
             .setRoutingId(RoutingId.from("service-a"))
-            .channelName("orders").server()                          // The logical membership to handle
+            // The logical membership to handle
+            .channelName("orders").server()
         options.addFanoutChannel("events")
-            .enablePublisher("tcp://0.0.0.0:7302")               // classic event fan-out
-        options.addRouteMesh("game.room")                        // SPOT/actor are also owned by a MeshNode
+            // classic event fan-out
+            .enablePublisher("tcp://0.0.0.0:7302")
+        // SPOT/actor are also owned by a MeshNode
+        options.addRouteMesh("game.room")
             .listen("tcp://0.0.0.0:7304")
             .setRoutingId(RoutingId.from("room-a"))
             .channelName("game.room").server()
         options.addStreamNode("gateway")
-            .bind("tcp://0.0.0.0:7400")                          // The external client endpoint
+            // The external client endpoint
+            .bind("tcp://0.0.0.0:7400")
     }
     ```
 
@@ -1179,20 +1254,26 @@ you declare the MeshNode, fanout, and STREAM node.
     ZLinkModule.forRootFactory({
       useFactory: () => {
         const builder = zlinkFramework();
-        builder.addLocationStore(new ZLinkRedisLocationStore(...));  // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+        // Provides node/actor/spot location info — connections between nodes are automatic on top of this
+        builder.addLocationStore(new ZLinkRedisLocationStore(...));
 
-        builder.addRouteMesh('services')                         // MeshNode for inter-server request/send
+        // MeshNode for inter-server request/send
+        builder.addRouteMesh('services')
           .listen('tcp://0.0.0.0:7301')
           .routingId('service-a')
-          .channel('orders').server();                           // The logical membership to handle
+          // The logical membership to handle
+          .channel('orders').server();
         builder.addFanoutChannel('events')
-          .enablePublisher('tcp://0.0.0.0:7302');                // classic event fan-out
-        builder.addRouteMesh('game.room')                        // SPOT/actor are also owned by a MeshNode
+          // classic event fan-out
+          .enablePublisher('tcp://0.0.0.0:7302');
+        // SPOT/actor are also owned by a MeshNode
+        builder.addRouteMesh('game.room')
           .listen('tcp://0.0.0.0:7304')
           .routingId('room-a')
           .channel('game.room').server();
         builder.addStreamNode('gateway')
-          .bind('tcp://0.0.0.0:7400');                           // The external client endpoint
+          // The external client endpoint
+          .bind('tcp://0.0.0.0:7400');
 
         return builder.build();
       }

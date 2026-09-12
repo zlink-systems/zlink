@@ -8,6 +8,7 @@
 #include "runtime/spots/spot_runtime.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -29,25 +30,66 @@ timer_t &timer_t::operator= (timer_t &&) noexcept = default;
 
 bool timer_t::is_disposed () const noexcept
 {
-    return !_state || _state->disposed;
+    return !_state || _state->disposed.load (std::memory_order_acquire);
 }
 
-void timer_t::cancel () noexcept
+namespace
 {
-    if (_state) {
-        _state->disposed = true;
-        if (_state->native_timer && _state->native_timer->valid ()) {
-            try {
-                _state->native_timer->stop ();
-            }
-            catch (...) {
-            }
+
+void complete_cancel_if_ready (
+  const std::shared_ptr<detail::timer_state_t> &state)
+{
+    std::shared_ptr<detail::task_completion_source_t<void>> completion;
+    std::optional<result_t<void>> result;
+    {
+        std::lock_guard lock (state->mutex);
+        if (!state->cancel_completed && state->cancel_completion
+            && state->cleanup_result && !state->running) {
+            state->cancel_completed = true;
+            completion = state->cancel_completion;
+            result = state->cleanup_result;
         }
-        // The native callback captures the shared timer state. Destroy the
-        // native timer after stopping it so that callback storage releases
-        // that capture and does not keep the state in a cycle.
-        _state->native_timer.reset ();
     }
+    if (completion)
+        completion->complete (std::move (*result));
+}
+
+} // namespace
+
+task_t<void> timer_t::cancel ()
+{
+    if (!_state)
+        return task_t<void> (result_t<void>::success ());
+
+    const auto state = _state;
+    std::shared_ptr<detail::task_completion_source_t<void>> completion;
+    std::unique_ptr<detail::timer_resource_t> resource;
+    bool owns_cleanup = false;
+    {
+        std::lock_guard lock (state->mutex);
+        if (!state->cancel_completion) {
+            state->disposed.store (true, std::memory_order_release);
+            state->pending_fire = false;
+            state->pending_fire_count = 0;
+            state->cancel_completion =
+              std::make_shared<detail::task_completion_source_t<void>> ();
+            resource = std::move (state->native_timer);
+            owns_cleanup = true;
+        }
+        completion = state->cancel_completion;
+    }
+
+    auto task = completion->task ();
+    if (owns_cleanup) {
+        auto cleanup_result = resource ? resource->cancel ()
+                                       : result_t<void>::success ();
+        {
+            std::lock_guard lock (state->mutex);
+            state->cleanup_result = std::move (cleanup_result);
+        }
+        complete_cancel_if_ready (state);
+    }
+    return task;
 }
 
 timer_t spot_context_t::add_timer_erased (std::string name,
@@ -114,10 +156,12 @@ timer_t spot_context_t::add_timer_erased (std::string name,
         if (const auto coordinator = _state->ensure_spot_serial_executor ())
             state->serial_queue = coordinator->timer_queue (state->name);
     }
-    state->native_timer = std::make_unique<detail::core_timer_drain_loop_t> ();
+    auto native_timer = std::make_unique<detail::core_timer_resource_t> ();
+    auto *native_timer_loop = &native_timer->loop ();
+    state->native_timer = std::move (native_timer);
     auto context = _state;
     const auto timer_queue = state->serial_queue;
-    state->native_timer->start (
+    native_timer_loop->start (
       period, std::numeric_limits<std::uint64_t>::max (),
       [context, state, timer_queue] (std::uint64_t fire_count) {
           detail::timer_runtime_t::post_fire_count (context, state, timer_queue, fire_count);
@@ -130,6 +174,48 @@ timer_t spot_context_t::add_timer_erased (std::string name,
 
 namespace zlink::framework::detail
 {
+
+result_t<void> core_timer_resource_t::cancel () noexcept
+{
+    std::optional<framework_exception_t> failure;
+    if (_loop.valid ()) {
+        try {
+            _loop.stop ();
+        }
+        catch (const framework_exception_t &error) {
+            failure = error;
+        }
+        catch (const std::exception &error) {
+            failure.emplace (framework_error_kind_t::internal_failure,
+                             error.what ());
+        }
+        catch (...) {
+            failure.emplace (framework_error_kind_t::internal_failure,
+                             "unknown SPOT timer stop failure");
+        }
+    }
+    try {
+        _loop.close ();
+    }
+    catch (const framework_exception_t &error) {
+        if (!failure)
+            failure = error;
+    }
+    catch (const std::exception &error) {
+        if (!failure) {
+            failure.emplace (framework_error_kind_t::internal_failure,
+                             error.what ());
+        }
+    }
+    catch (...) {
+        if (!failure) {
+            failure.emplace (framework_error_kind_t::internal_failure,
+                             "unknown SPOT timer close failure");
+        }
+    }
+    return failure ? result_access_t::failure<void> (std::move (*failure))
+                   : result_t<void>::success ();
+}
 
 timer_runtime_t::timer_runtime_t (std::shared_ptr<spot_context_state_t> context) :
     _context (std::move (context))
@@ -271,21 +357,37 @@ timer_runtime_t::dispatch_fire_count (timer_t &timer,
         return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
                                                 "SPOT timer is disposed");
     }
-    if (timer._state->running) {
-        return result_t<timer_tick_t>::failure (framework_error_kind_t::rejected,
-                                                "SPOT timer callback is already running");
+    {
+        std::lock_guard lock (timer._state->mutex);
+        if (timer._state->disposed.load (std::memory_order_acquire)) {
+            return detail::boundary_failure<timer_tick_t> (
+              detail::boundary_error_t::closed,
+              "SPOT timer is disposed");
+        }
+        if (timer._state->running) {
+            return result_t<timer_tick_t>::failure (
+              framework_error_kind_t::rejected,
+              "SPOT timer callback is already running");
+        }
+        timer._state->running = true;
     }
-
-    timer._state->running = true;
     if (!_context->enter_callback ()) {
-        timer._state->running = false;
+        {
+            std::lock_guard lock (timer._state->mutex);
+            timer._state->running = false;
+        }
+        complete_cancel_if_ready (timer._state);
         return detail::boundary_failure<timer_tick_t> (
           detail::boundary_error_t::closed,
           "SPOT timer activation is closed");
     }
     auto reset_running = [&timer, this] {
-        timer._state->running = false;
         _context->leave_callback ();
+        {
+            std::lock_guard lock (timer._state->mutex);
+            timer._state->running = false;
+        }
+        complete_cancel_if_ready (timer._state);
     };
 
     try {
@@ -329,6 +431,11 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
     }
     {
         std::lock_guard lock (state->mutex);
+        if (state->disposed.load (std::memory_order_acquire)) {
+            co_return detail::boundary_failure<timer_tick_t> (
+              detail::boundary_error_t::closed,
+              "SPOT timer is disposed");
+        }
         if (state->running) {
             state->pending_fire = true;
             const auto available =
@@ -340,21 +447,39 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
         state->running = true;
     }
     if (!state->handler_invoker) {
+        {
+            std::lock_guard lock (state->mutex);
+            state->running = false;
+        }
+        complete_cancel_if_ready (state);
         co_return result_t<timer_tick_t>::failure (framework_error_kind_t::protocol_error,
                                                    "SPOT timer handler is not configured");
     }
     if (!context) {
+        {
+            std::lock_guard lock (state->mutex);
+            state->running = false;
+        }
+        complete_cancel_if_ready (state);
         co_return result_t<timer_tick_t>::failure (framework_error_kind_t::protocol_error,
                                                    "SPOT timer context is not configured");
     }
     const auto fire_snapshot = context->enter_timer_callback ();
     if (!fire_snapshot.configured) {
+        {
+            std::lock_guard lock (state->mutex);
+            state->running = false;
+        }
+        complete_cancel_if_ready (state);
         co_return result_t<timer_tick_t>::failure (framework_error_kind_t::protocol_error,
                                                    "SPOT timer context is not configured");
     }
     if (!fire_snapshot.admitted) {
-        std::lock_guard lock (state->mutex);
-        state->running = false;
+        {
+            std::lock_guard lock (state->mutex);
+            state->running = false;
+        }
+        complete_cancel_if_ready (state);
         co_return detail::boundary_failure<timer_tick_t> (
           detail::boundary_error_t::closed,
           "SPOT timer activation is closed");
@@ -362,6 +487,7 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
     auto reset_running = [context, state] {
         bool post_pending = false;
         std::uint64_t pending_fire_count = 0;
+        context->leave_callback ();
         {
             std::lock_guard lock (state->mutex);
             state->running = false;
@@ -370,7 +496,7 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
             state->pending_fire = false;
             state->pending_fire_count = 0;
         }
-        context->leave_callback ();
+        complete_cancel_if_ready (state);
         if (post_pending) {
             timer_runtime_t::post_fire_count (context, state, state->serial_queue,
                                               pending_fire_count);
@@ -439,21 +565,21 @@ void timer_runtime_t::cancel_all () const noexcept
 void timer_runtime_t::cancel_all (spot_context_state_t &context) noexcept
 {
     for (const auto &timer : context.timers) {
-        timer->disposed = true;
-        if (timer->native_timer && timer->native_timer->valid ()) {
-            try {
-                timer->native_timer->stop ();
-            }
-            catch (...) {
-            }
-        }
-        timer->running = false;
-        // Stop alone leaves the binding callback object attached to the
-        // native timer. Destroy it to break the callback-to-state cycle.
-        timer->native_timer.reset ();
+        framework::timer_t handle (timer);
+        (void) handle.cancel ();
         if (const auto coordinator = context.ensure_spot_serial_executor ())
             coordinator->cancel_timer (timer->name);
     }
+}
+
+void timer_test_access_t::finish_callback (
+  const std::shared_ptr<timer_state_t> &state)
+{
+    {
+        std::lock_guard lock (state->mutex);
+        state->running = false;
+    }
+    complete_cancel_if_ready (state);
 }
 
 std::vector<timer_failure_event_t> timer_runtime_t::failure_events (const timer_t &timer) const

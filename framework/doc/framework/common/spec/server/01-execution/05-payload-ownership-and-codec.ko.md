@@ -291,7 +291,7 @@ cache 구조는 §2·§3·§7의 규칙 문단에서 확인한다.
 
 **역직렬화 시점과 횟수**
 
-- 대기열 가득참이나 owner 불일치로 거절된 message에는 codec 역직렬화 callback이 호출되지 않는다.
+- 대기열에서 자리를 기다리는 message와 owner 불일치로 거절된 message에는 codec 역직렬화 callback이 호출되지 않는다.
 - 이동 중 보류한 message에는 commit replay 또는 abort 재개 전까지 codec 역직렬화 callback이 호출되지 않는다.
 - 앞선 handler가 같은 실행 권한을 유지하는 동안 다음 message의 codec 역직렬화 callback은 호출되지 않는다.
 - 같은 message를 반복해서 typed 접근하면 첫 접근의 값 또는 오류가 유지되며, codec 역직렬화 callback 호출은 최대 한 번이다.

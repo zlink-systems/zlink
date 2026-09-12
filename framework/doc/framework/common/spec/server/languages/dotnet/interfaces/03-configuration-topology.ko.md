@@ -413,7 +413,7 @@ Node placement weight는 0..10000이고 기본값은 100이다. 범위 밖 값�
 `ZLinkConfigurationException`이다. Actor·Spot population limit의 기본값 `0`은 제한 없음이며,
 pending activation concurrency 기본값은 128이다.
 Type별 limit은 `null`이면 node limit을 공유하고 값이 있으면 1..`int.MaxValue`이며 node limit보다 작은 값을
-적용한다. Capacity를 weight보다 먼저 적용하고 eligible node가 없으면 `CapacityExceeded`다.
+적용한다. Capacity를 weight보다 먼저 적용하고 eligible node가 없으면 `Unavailable`이다.
 
 `SetInstanceSpotIdleTimeout(...)`은 유휴 Instance Spot 정리 기준 시간이다. 기본값은 `TimeSpan.Zero`이고
 `TimeSpan.Zero`는 정리하지 않음을 뜻한다. 허용 범위는 `TimeSpan.Zero`와 양수이며 음수는 startup 전에

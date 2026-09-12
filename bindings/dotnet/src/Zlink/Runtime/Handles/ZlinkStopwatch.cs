@@ -62,7 +62,7 @@ internal sealed class ZlinkStopwatch : NativeOwner, IZlinkStopwatch
         var handle = NativeMethods.zlink_stopwatch_start();
         if (handle == IntPtr.Zero)
             throw ZlinkException.CreateConfigException(
-                NativeMethods.zlink_errno());
+                NativeMethods.GetLastPInvokeError());
         return handle;
     }
 }

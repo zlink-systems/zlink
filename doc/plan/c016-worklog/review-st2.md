@@ -29,7 +29,7 @@
 
 ## S-ST2-1. 코드에서 재구성한 상태 전이
 
-주요 파일: [socket_runtime.hpp](/home/hep7hep7/project/zlink-work/st1/core/src/runtime/sockets/common/socket_runtime.hpp:321), [socket_base_lifecycle.cpp](/home/hep7hep7/project/zlink-work/st1/core/src/runtime/sockets/common/socket_base_lifecycle.cpp:60).
+주요 파일: [socket_runtime.hpp](../../../core/src/runtime/sockets/common/socket_runtime.hpp), [socket_base_lifecycle.cpp](../../../core/src/runtime/sockets/common/socket_base_lifecycle.cpp).
 
 `public_waiting`은 public lease의 소유자를 바꾸지 않고 command 대기 표시만 더한다. `async`는 executor 설치가 완료된 상태만 뜻하지 않는다. 설치 전에 먼저 발행하며 설치 실패·detach까지 유지하는 mutex 모드다(`socket_base_lifecycle.cpp:985`, `:995`, `:1005`).
 
@@ -69,7 +69,7 @@
 
 **차단 / 정적 반례. 기존 해제 경로의 결함이며, 이번 프로토콜 완료 주장에 직접 포함되는 전환이다.**
 
-[release_receive_sync_from_async_owner()](/home/hep7hep7/project/zlink-work/st1/core/src/runtime/sockets/common/socket_runtime.hpp:435)는 release store만 한다. 호출자도 receive.sync를 잡지 않는다. 설치 실패 `socket_base_lifecycle.cpp:1005`, idle detach `:1333`, 종료 detach `:1600`, 일반 quiesce detach `:1629`를 확인했다. idle 경로의 `_transport_pair_owner_progress_sync`(`:1269`)는 has_in/public recv가 취득하는 mutex가 아니다.
+[release_receive_sync_from_async_owner()](../../../core/src/runtime/sockets/common/socket_runtime.hpp)는 release store만 한다. 호출자도 receive.sync를 잡지 않는다. 설치 실패 `socket_base_lifecycle.cpp:1005`, idle detach `:1333`, 종료 detach `:1600`, 일반 quiesce detach `:1629`를 확인했다. idle 경로의 `_transport_pair_owner_progress_sync`(`:1269`)는 has_in/public recv가 취득하는 mutex가 아니다.
 
 | 순서 | 실행 |
 |---|---|

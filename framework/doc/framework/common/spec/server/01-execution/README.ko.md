@@ -92,7 +92,7 @@ flowchart LR
 | Cancellation은 이미 시작된 작업에 무엇을 하는가, 무엇을 못 하는가 | [취소와 종료](03-cancellation-and-shutdown.ko.md) |
 | message가 socket에서 handler까지 가는 동안 byte를 몇 번 복사하는가 | [Payload ownership과 codec](05-payload-ownership-and-codec.ko.md) |
 | 응답·timeout·취소·종료가 동시에 오면 무엇이 이기는가 | [Submit과 완료 「9. Request completion — 완료 경쟁과 timeout budget」](01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget) |
-| 제한은 무엇인가 (`MaxQueuedApplicationJobs`, pause/resume %, lane 상한, dispatcher 4,096) | [§6](#6-수치-요약표) |
+| 제한은 무엇인가 (`MaxQueuedApplicationJobs`, pause/resume %, lane 상한) | [§6](#6-수치-요약표) |
 | Spot의 Actor·Timer 작업은 어느 queue에서 도는가 | [직렬 실행기 계층 「4. Spot 실행 mode와 queue 경로」](07-serial-executor-layers.ko.md#4-spot-실행-mode와-queue-경로) |
 | 한 소유자가 queue를 오래 점유하면 무엇이 막아 주는가 | [직렬 실행기 계층 「6.4 공정성」](07-serial-executor-layers.ko.md#64-공정성) |
 | 컴포넌트 상태는 왜 lock 대신 state lane으로 지키는가 | [상태 소유와 state lane 「3. 금지되는 형태」](06-state-ownership-and-lanes.ko.md#3-금지되는-형태) |
@@ -124,9 +124,9 @@ handler 실행 순서(02)를 이해할 수 있고, 그 위에서 취소(03)·cap
 | 수치 | 기본값 | 소유 문서 |
 |---|---|---|
 | `MaxQueuedApplicationJobs`, pause/resume 비율 | 문서 참고 | [Application job queue와 backpressure](04-application-job-queue-and-backpressure.ko.md) |
-| Application lane / lifecycle lane 상한, owner 점유 시간 예산, lifecycle 연속 실행 상한 | 1,024건·64 MiB / 128건·4 MiB, 10 ms, 8 turn | [Handler turn과 execution gate 「7. Lane 분리와 우선순위 (구현)」](02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현) |
+| owner 점유 시간 예산, lifecycle 연속 실행 상한 | 10 ms, 8 turn | [Handler turn과 execution gate 「7. Lane 분리와 우선순위 (구현)」](02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현) |
 | Send timeout 기본값, admission deadline owner | family별 1초 | [Submit과 완료 「7. Admission deadline — owner와 값 규칙」](01-submit-and-completion.ko.md#7-admission-deadline--owner와-값-규칙) |
-| Dispatcher 동시 callback 상한 | 4,096 | [Submit과 완료 「10. Operation identity와 완료 자리 (구현)」](01-submit-and-completion.ko.md#10-operation-identity와-완료-자리-구현) |
+| Dispatcher 동시 callback 상한 | 없다 — 진행 중 operation 수를 넘지 않는다 | [Submit과 완료 「11. 완료 callback의 execution turn (구현)」](01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현) |
 | Listener가 받을 수 있는 message byte 상한인 [MaxMessageSize](../00-foundation/02-glossary.ko.md#maxmessagesize) (StreamNode) | 64 KiB | [Application job queue와 backpressure](04-application-job-queue-and-backpressure.ko.md) |
 
 ---

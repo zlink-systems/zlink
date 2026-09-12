@@ -9,6 +9,29 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class ProtobufNativePayloadTests
 {
     [Fact]
+    public void Envelope_encode_does_not_allocate_a_managed_payload_sized_buffer()
+    {
+        const int size = 262144;
+        const int iterations = 16;
+        var codecs = Codecs();
+        var value = new BytesValue { Value = ByteString.CopyFrom(new byte[size]) };
+        var expected = value.ToByteArray();
+        for (var index = 0; index < iterations; index++)
+        {
+            using var warmup = ZLinkEnvelopeCodec.EncodeBody(value, typeof(BytesValue), codecs);
+            Assert.Equal(expected, warmup.ToArray());
+        }
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+        {
+            using var part = ZLinkEnvelopeCodec.EncodeBody(value, typeof(BytesValue), codecs);
+            Assert.Equal(expected.Length, part.Size);
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated < (long)size * iterations / 4, $"managed bytes: {allocated}");
+    }
+
+    [Fact]
     public void Envelope_and_public_serializers_preserve_fixed_protobuf_bytes()
     {
         var codecs = Codecs();

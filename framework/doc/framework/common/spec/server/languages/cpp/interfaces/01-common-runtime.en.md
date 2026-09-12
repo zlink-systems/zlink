@@ -119,9 +119,8 @@ following public error meaning.
 | `not_connected`, `route_not_connected` | `unavailable` |
 | `not_found`, `request_target_not_found`, `handler_not_found` | `not_found` |
 | Admission or filter rejection with no typed result | `rejected` |
-| Local queue capacity shortage | `capacity_exceeded` |
-| Target queue capacity shortage a remote error envelope reported | `unavailable` |
-| `busy` | One of the two lines above depending on owner location. If the underlying error alone can't tell the location, `unavailable` |
+| A queue has no room | Not an error. The work waits for room, and if the time runs out, `deadline_exceeded` |
+| `busy` | `unavailable` |
 | `protocol_error`, `request_protocol_error` | `protocol_error` |
 
 This table applies with the same meaning to both request completion
@@ -295,16 +294,12 @@ SPOT and STREAM backpressure is only observed through the public
 
 - **An application handler isn't given an API that directly controls
  the framework queue.**
-- **The default policy isn't an unlimited queue.** Queue bound, submit
- timeout, and overflow policy are closed by framework runtime
- configuration, and **exceeding the bound returns a failed result.**
-- The error kind of an exceeded bound differs by operation family and
- queue location. It follows the §error mapping table above and
- [Spot Messaging §5.3](../../../03-spot-actor/02-spot-messaging.en.md) — it
- isn't uniformly `capacity_exceeded`. Source-local saturation of
- one-way/send is `deadline_exceeded`, a request's local queue
- saturation is `capacity_exceeded`, and a remote queue saturation is
- `unavailable`.
+- **The default policy isn't an unlimited queue.** Queue bound and submit timeout are
+ closed by framework runtime configuration.
+- **A full queue does not end the call with a failure.** The work waits for room, and if the
+ wait runs out of time it ends with `deadline_exceeded`. One-way, send and request behave the
+ same, and so do local and remote queues
+ ([Spot Messaging §5.3](../../../03-spot-actor/02-spot-messaging.en.md)).
 
 This rule applies to ordinary SPOT and STREAM execution queues. Payloads
 temporarily retained by Message Follow relay do not have a separate

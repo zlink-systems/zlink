@@ -98,9 +98,8 @@ serializer 선택은 framework가 처리한다.
 | `not_connected`, `route_not_connected` | `unavailable` |
 | `not_found`, `request_target_not_found`, `handler_not_found` | `not_found` |
 | typed 결과가 없는 admission 또는 filter 거부 | `rejected` |
-| local queue capacity 부족 | `capacity_exceeded` |
-| remote error envelope가 알린 target queue capacity 부족 | `unavailable` |
-| `busy` | 소유 위치에 따라 위 두 줄 중 하나. 하위 오류만으로 위치를 알 수 없으면 `unavailable` |
+| queue에 자리가 없음 | 오류가 아니다. 자리가 날 때까지 기다리고, 시간이 다 되면 `deadline_exceeded` |
+| `busy` | `unavailable` |
 | `protocol_error`, `request_protocol_error` | `protocol_error` |
 
 이 표는 request completion과 error envelope reply에 같은 의미로 적용한다.
@@ -260,12 +259,11 @@ target_link_libraries(app PRIVATE zlink::framework_codec_protobuf)
 SPOT과 STREAM의 backpressure는 public **call object, timeout, result error kind**로만 관찰한다.
 
 - **application handler가 framework queue를 직접 제어하는 API를 두지 않는다.**
-- **기본 정책은 무한 queue가 아니다.** queue 상한·submit timeout·overflow 정책은 framework runtime
- 설정으로 닫고, **한도 초과는 실패 result로 반환한다.**
-- 한도 초과의 error kind는 operation family와 queue 위치에 따라 다르다. 위 §오류 매핑 표와
- [Spot 메시징 §5.3](../../../03-spot-actor/02-spot-messaging.ko.md)을 따른다 — 일괄 `capacity_exceeded`가
- 아니다. one-way·send의 source-local 포화는 `deadline_exceeded`, request의 local queue
- 포화는 `capacity_exceeded`, remote queue 포화는 `unavailable`이다.
+- **기본 정책은 무한 queue가 아니다.** queue 상한과 submit timeout은 framework runtime 설정으로
+ 닫는다.
+- **queue가 가득 찼다고 실패로 끝내지 않는다.** 자리가 날 때까지 기다리고, 기다리다 시간이 다
+ 되면 `deadline_exceeded`다. one-way·send·request가 모두 같고, local이든 remote든 같다
+ ([Spot 메시징 §5.3](../../../03-spot-actor/02-spot-messaging.ko.md)).
 
 이 규칙은 일반 SPOT·STREAM 실행 queue에 적용된다. Message Follow relay가 잠시 보관하는
 payload에는 별도의 message-count·byte 상한을 두지 않는다. 다만 개별 wire message 크기와

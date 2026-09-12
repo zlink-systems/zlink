@@ -98,10 +98,10 @@ class WorkflowSpot implements ZLinkSpot<ZLinkActor> {
 
   async onDisconnectActor(_actor: ZLinkActor): Promise<void> {}
 
-  async completeTimer(): Promise<void> {
+  completeTimer(): void {
     const timer = this.timer;
     this.timer = undefined;
-    await timer?.cancel();
+    void timer?.cancel();
   }
 
   apply(request: WorkflowApplyReq): WorkflowApplyRes {
@@ -135,7 +135,7 @@ class WorkflowTimerHandler implements ZLinkSpotTimerHandler<WorkflowSpot> {
     evidence.add('workflow', String(spot.context.spotId), 'timer', `tick=${tick.deliveryIndex}`);
     await fanoutClient.publish(WORKFLOW_FANOUT,
       new WorkflowProjectedEvent(String(spot.context.spotId), Number(tick.deliveryIndex), options.rid)).submit();
-    await spot.completeTimer();
+    spot.completeTimer();
   }
 }
 

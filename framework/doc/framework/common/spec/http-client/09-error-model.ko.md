@@ -10,7 +10,7 @@ HTTP client는 자체 예외 계층을 만들지 않고 Framework 공용 오류�
 | --- | --- |
 | `ProtocolError` | Builder 형식, body 소스 중복, typed decode, 압축 해제 또는 redirect 형식이 올바르지 않다. |
 | `Unavailable` | Network, DNS, proxy CONNECT 또는 target 연결을 현재 사용할 수 없다. |
-| `CapacityExceeded` | 설정한 response body byte 제한을 넘었다. |
+| `Rejected` | 설정한 response body byte 제한을 넘었다. |
 | `DeadlineExceeded` | 시도당 timeout을 넘었다. |
 | `InternalFailure` | Typed 제출의 HTTP status가 400 이상이거나 위 kind로 분류할 수 없는 실행 실패다. |
 

@@ -136,7 +136,7 @@ native trace, 해당 commit의 두 runtime 변경으로 노출 원인을 판정�
 ## 공개 C API 재현
 
 Framework 없이 공개 C API만 사용하는
-[`repro.c`](../../../framework/languages/cpp/build/linux-ninja-c-e2e/diag-unadmitted/repro.c)를 보존했다.
+`repro.c` (`../../../framework/languages/cpp/build/linux-ninja-c-e2e/diag-unadmitted/repro.c`)를 보존했다.
 별도 context의 TCP DEALER/ROUTER를 연결하고 multipart request를 받은 뒤, ROUTER가 일반 DATA
 `hello`와 `zlink_reply_part()`의 `reply-not-connected`를 차례로 제출한다. DEADLINE은 원래
 테스트와 같은 5000ms다. `drain` 인자는 DEALER public DATA receive를 수행한다.
@@ -206,7 +206,7 @@ event에 의존한 통과를 완료 근거로 사용하지 않는다. Framework 
 ## 보존 증거와 변경 범위
 
 증거 root는
-[`framework/languages/cpp/build/linux-ninja-c-e2e/diag-unadmitted/evidence/`](../../../framework/languages/cpp/build/linux-ninja-c-e2e/diag-unadmitted/evidence/)다.
+`framework/languages/cpp/build/linux-ninja-c-e2e/diag-unadmitted/evidence/` (`../../../framework/languages/cpp/build/linux-ninja-c-e2e/diag-unadmitted/evidence/`)다.
 
 - `new-focused.log`, `new-trace-loaded.log`, `new-hello-memory.log`: 현재 native timeout,
   handover terminal 호출 없음, 실제 hello DATA bytes와 reply submit.

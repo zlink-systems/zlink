@@ -317,7 +317,7 @@ Terminal call은 별도 check와 send로 나누지 않고 다음 순서로 resol
 6. stable type을 생략하면 선택한 Mesh의 serving descriptor에 등록된 distinct Instance type을
    계산한다. 하나면 자동 선택하고, 0개이면 `NotFound`, 둘 이상이면 required type을 생략한
    `InvalidOperation`이다.
-7. 선택한 stable type을 제공하지만 capacity가 남은 node가 없으면 `CapacityExceeded`다.
+7. 선택한 stable type을 제공하면서 더 받을 수 있는 node가 없으면 `Unavailable`이다.
 8. Source는 다음 값을 하나의 activation envelope에 넣어 target으로 보낸다 — global Spot ID,
    선택한 Mesh·stable type과 target descriptor fence, source node RID·lifecycle
    generation·optional source Spot ID, operation identity·reply correlation·deadline, command

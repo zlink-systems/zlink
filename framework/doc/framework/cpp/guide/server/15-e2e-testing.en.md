@@ -7,6 +7,8 @@ title: "15. E2E Testing — Verifying the Whole System with a Client · C++"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 15. E2E Testing — Verifying the Whole System with a Client
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 14. Picking a Sample — Start with the Example Closest to Your Problem](14-samples.en.md) | [Next: 16. Options — Setting List And Defaults](16-options.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "15. E2E Testing — Verifying the Whole System with a Client · C++"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/15-e2e-testing.en.md) · **C++** · [Java](../../../java/guide/server/15-e2e-testing.en.md) · [Kotlin](../../../kotlin/guide/server/15-e2e-testing.en.md) · [Node/TypeScript](../../../node/guide/server/15-e2e-testing.en.md)
 <!-- language-switch:end -->
-
-# 15. E2E Testing — Verifying the Whole System with a Client
 
 > **This chapter has no spec document that owns its contract.** That's because it covers
 > how to build tests in your own system. What each sample verifies is defined by the
@@ -37,10 +37,13 @@ that work. **The client library your real users use is itself the verification t
 E2E test comes down to just this much code.
 
 ```cpp
-co_await client.connect ().async ();                                     // A real connection
-auto auth = co_await client.request (authenticate_req_t{actor_id})       // A real request
+// A real connection
+co_await client.connect ().async ();
+// A real request
+auto auth = co_await client.request (authenticate_req_t{actor_id})
               .async<authenticate_res_t> ();
-auto push = co_await other.wait_for<player_joined_notify_t> ().async (); // Confirms a real push arrived
+// Confirms a real push arrived
+auto push = co_await other.wait_for<player_joined_notify_t> ().async ();
 ensure (push.payload.actor_id == auth.player.actor_id);
 ```
 
@@ -243,7 +246,8 @@ task_t<void> run (const tictactoe_client_options_t &options)
     // 3. Whoever connects first authenticates and enters the empty room.
     co_await client1.connect ().async ();
     co_await client1.request (authenticate_req_t{options.x_actor_id}).async<authenticate_res_t> ();
-    auto join1 = co_await join_game (client1, room.room_id); // Register wait -> send -> receive (see §3)
+    // Register wait -> send -> receive (see §3)
+    auto join1 = co_await join_game (client1, room.room_id);
     ensure (join1.state.status == tictactoe_status_t::waiting_for_players);
 
     // Being alone in the room, their own join notification shouldn't come back to them.
@@ -305,7 +309,8 @@ start_server play-a "$PLAY_BIN" --config="$CONFIG_DIR/play-a.json"
 start_server play-b "$PLAY_BIN" --config="$CONFIG_DIR/play-b.json"
 start_server api-a  "$API_BIN"  --config="$CONFIG_DIR/api-a.json"
 
-wait_port play-a "$PLAY_A_ROUTE_ENDPOINT"   # Wait until the port opens. Doesn't use sleep.
+# Wait until the port opens. Doesn't use sleep.
+wait_port play-a "$PLAY_A_ROUTE_ENDPOINT"
 
 "$CLIENT_BIN" --config="$CONFIG_DIR/client.json" >"$LOG_DIR/client.log" 2>&1
 

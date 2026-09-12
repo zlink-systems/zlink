@@ -85,7 +85,7 @@ is defined by
   running. Async I/O does not occupy a CPU execution slot while waiting for an
   operating-system, transport, or Store completion.
 - I/O admission and completion bookkeeping also use bounded resources, but a full CPU worker
-  queue does not turn an already-submitted I/O completion into `CapacityExceeded`.
+  queue does not turn an already-submitted I/O completion into an error.
 - More I/O operations than the configured CPU-worker thread count may wait for completion.
   Their count is bounded by separate internal I/O admission, not by CPU execution slots or
   CPU queue length.
@@ -94,11 +94,10 @@ is defined by
   completion executor.
 - A worker call keeps the type of the application result it computes, and in the permitted
   `SpotWide`/Instance contexts, that same result can be awaited with `Yield`.
-- Completion is `CapacityExceeded` if the queue is full,
-  [`DeadlineExceeded`](../00-foundation/02-glossary.en.md#deadlineexceeded) — the Framework
-  exception raised when an operation's completion condition isn't met by its allowed
-  [deadline](../00-foundation/02-glossary.en.md#deadline) — if the deadline is exceeded, and
-  `InternalFailure` if the work itself fails.
+- When the queue is full the call waits for room. If the wait passes the operation's allowed
+  [deadline](../00-foundation/02-glossary.en.md#deadline) it ends with
+  [`DeadlineExceeded`](../00-foundation/02-glossary.en.md#deadlineexceeded), and if the work
+  itself fails it ends with `InternalFailure`.
 - Work that finishes late, after a timeout or cancellation, does not produce a second
   terminal result.
 
@@ -184,10 +183,9 @@ create a separate readiness callback, retry waiter, or separate binding adapter,
 - Timeout, shutdown, and cancellation races during Framework queue waiting before binding handoff
   follow [Cancellation and shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race).
   Binding-operation cancellation and native-completion cleanup reference the ownership boundary there.
-- If the internal bounded waiter capacity is fully used, a new payload is not held — the
-  call completes immediately with `DeadlineExceeded`.
-- Even at this hard overload boundary, the `Backpressured` status is not exposed, nor is the
-  message submitted later.
+- The Framework builds no waiting queue of its own, so no call ends for want of a place to
+  wait. A call that waits for room and runs out of time ends with `DeadlineExceeded`.
+- In no case is the `Backpressured` status exposed, nor is the message submitted again later.
 
 | Failure | Error classification |
 |---|---|
@@ -416,15 +414,28 @@ The order is as follows.
 3. Enqueue the callback on the dispatcher.
 4. Run the callback on a new execution turn.
 
-If the terminal winner takes the in-progress call table entry and admission to the dispatcher
-then fails, the application completion is lost. The runtime therefore reserves a completion
-dispatcher slot when it accepts the operation. That reservation remains until the callback
-returns. The combined number of in-progress operations and callbacks waiting or running on
-the dispatcher cannot exceed 4,096, so the callback queue cannot grow without bound.
+**Putting a completion callback on the dispatcher cannot fail.** The dispatcher has no limit.
+Nothing rejects a request for lack of a slot, and nothing throws away the completion of a
+call already accepted.
 
-If no slot can be reserved, the operation is rejected with `CapacityExceeded` before the
-request is sent. Once an operation is accepted, completion enqueue has no reject or drop
-path.
+The number of callbacks waiting or running on the dispatcher never exceeds the number of
+calls in progress, because one call uses one completion slot, as §10 defines.
+
+The Framework does not count the calls in progress. Core does. Core keeps a fixed number of
+completion slots per socket, and once they are taken it stops accepting new calls and says so
+with `ZLINK_SUBMIT_BACKPRESSURED`
+([Core socket contract](../../../../../../../core/doc/spec/core/socket/README.en.md)). That is
+not an error but a signal to wait: the binding takes it, waits for a slot, and completes the
+same call ([binding async coroutine policy](../../../../../../../bindings/doc/spec/async-coroutine-policy.en.md)).
+The same holds when work piles up on the peer host — its `PAUSED` stops this side from
+sending, and Core and the binding wait for room
+([§6](04-application-job-queue-and-backpressure.en.md#6-pressure-state-and-socket-control),
+[§7](04-application-job-queue-and-backpressure.en.md#7-composition-with-send-completion)).
+
+This number counts the calls this host has **sent**. Framework pressure counts the work this
+host has **received** and that waits for a handler. The two count different things, so they
+are never merged
+([§1](04-application-job-queue-and-backpressure.en.md#1-two-independent-capacity-authorities)).
 
 The dispatcher uses a process-shared lane instead of creating a thread per callback,
 and shutdown drains every accepted callback.
@@ -483,7 +494,7 @@ When the framework runtime consumes a binding's HWM-managed send family
 decides immediately from the returned `result`, waits on `admitted` only when
 `result == BACKPRESSURED`, and consumes `reply` for a request. This implements "wait
 only when blocked at HWM" precisely — until now a single stage could not distinguish
-admission from reply, so [three-stage backpressure](04-dispatch-and-worker/README.en.md)
+admission from reply, so [three-stage backpressure](04-application-job-queue-and-backpressure.en.md)
 waiting was imprecise. The framework's **public terminal does not expose backpressure**
 (§5, `Backpressured` is not a public result); this consumption lives only in the framework's
 internal implementation. Core send-completion notification drives the completion, so the
@@ -572,7 +583,7 @@ type, returned error kind, one-way submit's normal/exceptional completion, a req
 reply/error/timeout/cancellation/shutdown completion, and STREAM reply token claim results).
 Each item corresponds to one test. Conditions confirmable only through internal structure —
 that there is one completion-confirmation approach within the runtime, and when the dispatcher
-slot is reserved — are owned, with their rules, by §10/§11 and are not repeated here.
+slot is registered — are owned, with their rules, by §10/§11 and are not repeated here.
 
 **Submit and admission**
 
@@ -582,8 +593,8 @@ slot is reserved — are owned, with their rules, by §10/§11 and are not repea
 - A send whose local capacity is unavailable waits up to the family send timeout; if
   capacity becomes available first it's submitted exactly once and completes normally; if
   the timeout is decided first it completes with `DeadlineExceeded`.
-- A call submitted while the bounded waiter capacity is full completes immediately with
-  `DeadlineExceeded`, with no wait.
+- However far the number of sends and requests in progress grows, no call ends for want of a
+  place to wait; only a call that runs out of time ends with `DeadlineExceeded`.
 - Logical Multicast completes normally with no return data even with zero targets, and an
   individual target's failure after starting does not change the public return value.
 - Classic fanout publish completes normally once the publisher socket queue accepts it, even
@@ -632,8 +643,8 @@ Binding cancellation observations reference
 
 - The completion callback runs on a new execution turn, not the call stack at the moment of
   confirmation.
-- If no slot can be reserved within the combined in-progress-operation and dispatcher limit,
-  the request is rejected with `CapacityExceeded` before it is sent.
+- However far the number of requests in progress grows, no request ends for lack of a
+  completion slot; each ends with a reply, an error, a timeout, a cancellation, or shutdown.
 - Even if the connection drops after transport has accepted the message, the runtime does
   not resend to a different target.
 - A result completed by cancellation, timeout, or shutdown is distinguished by a dedicated

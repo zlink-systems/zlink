@@ -37,11 +37,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <barrier>
 #include <chrono>
 #include <condition_variable>
 #include <exception>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <iterator>
 #include <limits>
@@ -398,6 +400,142 @@ bool verify_timer_handler_activation_lifetime ()
     }
     return timer_activation_handler_t::destroyed.load () == 2
            && timer_activation_dependency_t::destroyed.load () == 2;
+}
+
+struct timer_cleanup_probe_t
+{
+    std::atomic_int stop_calls{0};
+    std::atomic_int close_calls{0};
+    bool fail_close = false;
+};
+
+class controlled_timer_resource_t final :
+    public zlink::framework::detail::timer_resource_t
+{
+  public:
+    explicit controlled_timer_resource_t (
+      std::shared_ptr<timer_cleanup_probe_t> probe) :
+        _probe (std::move (probe))
+    {
+    }
+
+    zlink::framework::result_t<void> cancel () noexcept override
+    {
+        ++_probe->stop_calls;
+        ++_probe->close_calls;
+        if (_probe->fail_close) {
+            return zlink::framework::result_t<void>::failure (
+              zlink::framework::framework_error_kind_t::internal_failure,
+              "controlled timer cleanup failure");
+        }
+        return zlink::framework::result_t<void>::success ();
+    }
+
+  private:
+    std::shared_ptr<timer_cleanup_probe_t> _probe;
+};
+
+std::vector<zlink::framework::task_t<void>> cancel_concurrently (
+  zlink::framework::timer_t timer,
+  int caller_count)
+{
+    std::barrier start (caller_count + 1);
+    std::vector<std::future<zlink::framework::task_t<void>>> futures;
+    futures.reserve (static_cast<std::size_t> (caller_count));
+    for (int index = 0; index < caller_count; ++index) {
+        futures.push_back (std::async (
+          std::launch::async, [timer, &start] () mutable {
+              start.arrive_and_wait ();
+              return timer.cancel ();
+          }));
+    }
+    start.arrive_and_wait ();
+
+    std::vector<zlink::framework::task_t<void>> tasks;
+    tasks.reserve (futures.size ());
+    for (auto &future : futures)
+        tasks.push_back (future.get ());
+    return tasks;
+}
+
+bool verify_timer_cancel_generation_contract ()
+{
+    using zlink::framework::detail::timer_state_t;
+    using zlink::framework::detail::timer_test_access_t;
+
+    {
+        auto probe = std::make_shared<timer_cleanup_probe_t> ();
+        auto state = std::make_shared<timer_state_t> ();
+        state->native_timer =
+          std::make_unique<controlled_timer_resource_t> (probe);
+        auto tasks = cancel_concurrently (
+          timer_test_access_t::create (state), 8);
+        if (probe->stop_calls.load () != 1
+            || probe->close_calls.load () != 1) {
+            return false;
+        }
+        const auto *terminal = &tasks.front ().result ();
+        for (const auto &task : tasks) {
+            if (!task.await_ready () || !task.result ()
+                || &task.result () != terminal) {
+                return false;
+            }
+        }
+    }
+
+    {
+        auto probe = std::make_shared<timer_cleanup_probe_t> ();
+        auto state = std::make_shared<timer_state_t> ();
+        state->running = true;
+        state->native_timer =
+          std::make_unique<controlled_timer_resource_t> (probe);
+        auto timer = timer_test_access_t::create (state);
+        auto cancellation = timer.cancel ();
+        if (probe->stop_calls.load () != 1
+            || probe->close_calls.load () != 1
+            || cancellation.await_ready ()) {
+            return false;
+        }
+        timer_test_access_t::finish_callback (state);
+        if (!cancellation.await_ready () || !cancellation.result ()) {
+            return false;
+        }
+    }
+
+    {
+        auto probe = std::make_shared<timer_cleanup_probe_t> ();
+        probe->fail_close = true;
+        auto state = std::make_shared<timer_state_t> ();
+        state->running = true;
+        state->native_timer =
+          std::make_unique<controlled_timer_resource_t> (probe);
+        auto tasks = cancel_concurrently (
+          timer_test_access_t::create (state), 8);
+        if (probe->stop_calls.load () != 1
+            || probe->close_calls.load () != 1) {
+            return false;
+        }
+        for (const auto &task : tasks) {
+            if (task.await_ready ()) {
+                return false;
+            }
+        }
+        timer_test_access_t::finish_callback (state);
+        const auto *terminal = &tasks.front ().result ();
+        for (const auto &task : tasks) {
+            const auto &result = task.result ();
+            if (!task.await_ready () || result
+                || &result != terminal
+                || result.error_kind ()
+                     != zlink::framework::framework_error_kind_t::internal_failure
+                || !result.error ()
+                || std::string_view (result.error ()->what ())
+                     != "controlled timer cleanup failure") {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 bool verify_close_waits_for_timer_callback_barrier ()
@@ -6652,6 +6790,9 @@ int main ()
 
     if (!verify_timer_handler_activation_lifetime ()) {
         return 40;
+    }
+    if (!verify_timer_cancel_generation_contract ()) {
+        return 114;
     }
     if (!verify_close_waits_for_timer_callback_barrier ()) {
         return 41;

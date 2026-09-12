@@ -506,7 +506,7 @@ Actor slot, and a Spot reserves one whole Spot slot plus that stable
 type's slot. A `SpotWide` User Spot's and `N` member Actors' aggregate
 relocation reserves 1 Spot total, 1 of that Spot's stable type, and `N`
 Actor totals all-or-none. If every candidate's reservation fails due to
-capacity, it completes with `capacity_exceeded` without calling an
+capacity, it completes with `unavailable` without calling an
 application factory or handler.
 An Actor/User Spot/Instance Spot
 [factory](../../../00-foundation/02-glossary.en.md#factory) always specifies a
@@ -772,13 +772,12 @@ enum class framework_error_kind_t {
  not_configured = 3,
  rejected = 4,
  unavailable = 5,
- capacity_exceeded = 6,
- deadline_exceeded = 7,
- shutting_down = 8,
- protocol_error = 9,
- invalid_operation = 10,
- data_lost = 11,
- internal_failure = 12
+ deadline_exceeded = 6,
+ shutting_down = 7,
+ protocol_error = 8,
+ invalid_operation = 9,
+ data_lost = 10,
+ internal_failure = 11
 };
 
 class framework_exception_t : public std::exception {

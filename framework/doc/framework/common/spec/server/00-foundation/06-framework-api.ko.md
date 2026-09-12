@@ -282,7 +282,7 @@ Entry Spot은 Object Server node마다 하나로 고정하며 configurable Spot 
 
 상한 판정은 Active count와 factory가 완료되기 전에 확보한 reserved slot을 함께 계산한다. Location Store가
 reservation과 authority를 같은 transaction에서 확정하며 descriptor count는 후보 선택용 projection이다.
-Capacity를 만족하는 후보가 없으면 `CapacityExceeded`로 완료한다.
+받아 줄 수 있는 후보가 없으면 `Unavailable`로 끝난다.
 
 기존 pending activation `128`
 제한은 object population limit이 아니라 동시에 진행되는 activation을 보호하는 별도 admission 제한이다.
@@ -531,22 +531,13 @@ handler가 실행 중인데 dependency를 먼저 정리하거나, 종료가 시�
 다시 만들면 안 된다. Handler 자신이 종료 operation을 시작하는 경우에도 현재 dispatch를
 기다리는 순환 대기가 생기지 않아야 한다.
 
-Framework scheduler는 ready owner의 bounded mailbox를 부분 drain하고 Node, Spot과 Actor handler를 해당
+Framework scheduler는 ready owner의 mailbox를 부분 drain하고 Node, Spot과 Actor handler를 해당
 application 실행 문맥에서 호출한다.
 
-Mailbox 한도는 **건수와 대기 중 byte 합계 두 축을 모두 강제한다.** 먼저 걸리는 쪽을 적용한다.
-한 축만 두면 다른 축으로 우회할 수 있다 — 건수만 두면 같은 건수가 payload 크기에 따라 수천 배의
-memory를 점유하고, byte만 두면 빈 payload를 무한히 쌓아도 한도에 걸리지 않는다.
-
-Byte 회계는 payload 크기만 세지 않는다. 대기 중인 작업 하나가 점유하는 envelope, metadata, queue
-node를 **더한다** — `payload 크기 + metadata 크기 + 작업당 고정 비용`이다. 큰 payload에서도 고정
-비용은 그대로 더한다. Payload가 비어 있어도 작업 하나는 0 byte가 아니다. 합이 표현 범위를 넘으면
-최댓값으로 고정하고 그 제출을 거절한다.
-
-**두 축은 하나의 작업으로 예약한다.** 건수와 byte를 각각 확인하면 한쪽만 통과한 상태가 생긴다.
-어느 한 축이라도 한도를 넘기면 두 축 모두 바뀌지 않은 채로 실패해야 한다. 반환도 같다 — 반환
-시점은 **작업을 대기열에서 꺼낼 때가 아니라 handler가 끝난 뒤**다. 실행 중인 작업이 점유한
-memory는 아직 해제되지 않았기 때문이다. 따라서 한도는 대기 중 작업과 실행 중 작업을 함께 센다.
+**Mailbox에는 자체 한도가 없다.** 얼마나 쌓였는지는 host가 handler를 기다리는 job 수 하나로
+세고, 메모리를 byte로 재는 것은 Core의 byte HWM이 맡는다
+([Application job queue와 backpressure §1](../01-execution/04-application-job-queue-and-backpressure.ko.md#1-두-독립된-capacity-authority)).
+Mailbox마다 건수나 byte를 따로 세면 같은 것을 두 번 세게 된다.
 
 한 owner가 scheduler를 연속으로 점유하는 시간에는 상한이 있다. 상한에 도달하면 남은 작업을 ready
 상태로 되돌리고 다른 ready owner에게 실행을 넘긴다. 이 상한은 같은 node의 다른 owner가 겪는 최대
@@ -932,7 +923,7 @@ Framework는 용량을 이유로 target을 다시 선택하거나 같은 binding
 | host [shutdown](02-glossary.ko.md#shutdown)으로 신규 admission이 닫힘 | `ShuttingDown` |
 | invalid argument·state, 지원하지 않는 operation 또는 내부 불변 조건 위반 | 언어별 local call 오류. remote error reply로 바꾸지 않음 |
 
-`DeadlineExceeded`는 일반 one-way admission waiter가 family별 send timeout까지 수락되지 않았을 때
+`DeadlineExceeded`는 일반 one-way 제출이 family별 send timeout까지 수락되지 않았을 때
 Framework가 만드는 exception이다. Cancellation은 해당 언어의 cancelled awaitable로 표현한다. Invalid
 argument·handle·state, 이미 사용한 reply token과 중복 terminator 실행은 exceptional completion이다.
 STREAM reply의 유효한 첫 terminator는 transport 시도 전에 one-shot token을 원자적으로 소비한다.
@@ -964,7 +955,7 @@ Create·GetOrCreate의 실패 조건과 error kind는 다음과 같다.
 
 | 조건 | Error kind |
 |---|---|
-| eligible node가 없거나 capacity가 부족하다 | `CapacityExceeded` |
+| 둘 수 있는 node가 하나도 없다 | `Unavailable` |
 | reservation을 확보한 owner route가 준비되지 않았다 | `Unavailable` |
 | Store resolve·reservation·commit과 activation infrastructure가 실패했다 | `InternalFailure` |
 | object kind·stable type이 충돌한다 | `TypeMismatch` |

@@ -7,6 +7,8 @@ title: "15. E2E Testing — Verifying the Whole System with a Client · Java"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 15. E2E Testing — Verifying the Whole System with a Client
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 14. Picking a Sample — Start with the Example Closest to Your Problem](14-samples.en.md) | [Next: 16. Options — Setting List And Defaults](16-options.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "15. E2E Testing — Verifying the Whole System with a Client · Java"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/15-e2e-testing.en.md) · [C++](../../../cpp/guide/server/15-e2e-testing.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/15-e2e-testing.en.md) · [Node/TypeScript](../../../node/guide/server/15-e2e-testing.en.md)
 <!-- language-switch:end -->
-
-# 15. E2E Testing — Verifying the Whole System with a Client
 
 > **This chapter has no spec document that owns its contract.** That's because it covers
 > how to build tests in your own system. What each sample verifies is defined by the
@@ -37,10 +37,13 @@ that work. **The client library your real users use is itself the verification t
 E2E test comes down to just this much code.
 
 ```java
-client.connect().submit().toCompletableFuture().join();               // A real connection
-AuthenticateRes auth = client.request(new AuthenticateReq(actorId))    // A real request
+// A real connection
+client.connect().submit().toCompletableFuture().join();
+// A real request
+AuthenticateRes auth = client.request(new AuthenticateReq(actorId))
     .submit(AuthenticateRes.class).toCompletableFuture().join();
-var push = other.waitFor(PlayerJoinedNotify.class)                    // Confirms a real push arrived
+// Confirms a real push arrived
+var push = other.waitFor(PlayerJoinedNotify.class)
     .submit(PlayerJoinedNotify.class).toCompletableFuture().join();
 ZLinkStreamAssert.ensure(
     push.payload().actorId().equals(auth.player().actorId()), "join push actor mismatch.");
@@ -82,7 +85,8 @@ CreateGameHttpRes room = api.post("/games")
 ZLinkStreamConnector client = ZLinkStreamConnectorFactory.create(
     new ZLinkStreamConnectorOptions(
         URI.create(room.playEndpoints().get(0)),
-        ZLinkStreamDispatchMode.IMMEDIATE, // Console scenarios use the automatic pump.
+        // Console scenarios use the automatic pump.
+        ZLinkStreamDispatchMode.IMMEDIATE,
         options.streamTimeout()));
 ```
 
@@ -240,7 +244,8 @@ public void run(TicTacToeClientOptions options) {
     client1.connect().submit().toCompletableFuture().join();
     client1.request(new AuthenticateReq(options.xActorId()))
         .submit(AuthenticateRes.class).toCompletableFuture().join();
-    JoinGameNotify join1 = joinGame(client1, room.roomId()); // Register wait -> send -> receive (see §3)
+    // Register wait -> send -> receive (see §3)
+    JoinGameNotify join1 = joinGame(client1, room.roomId());
     ZLinkStreamAssert.ensure(
         join1.state().status() == TicTacToeGameStatuses.WaitingForPlayers,
         "room should wait for the second player.");
@@ -310,7 +315,8 @@ start_server play-a "$(app_bin Server Server)" --config "${CONFIG_DIR}/play-a.js
 start_server play-b "$(app_bin Server Server)" --config "${CONFIG_DIR}/play-b.json"
 start_server api-a  "$(app_bin Server Server)" --config "${CONFIG_DIR}/api-a.json"
 
-wait_port "${PLAY_A_ROUTE_ENDPOINT}"        # Wait until the port opens. Doesn't use sleep.
+# Wait until the port opens. Doesn't use sleep.
+wait_port "${PLAY_A_ROUTE_ENDPOINT}"
 
 "$(app_bin Client Client)" --api-url "http://127.0.0.1:${api_a_http_port}" \
   >"${log_dir}/client.log" 2>&1

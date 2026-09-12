@@ -38,7 +38,7 @@ and state — or Actor operates on top of that contract" (creation, relocation).
 | [04. Interaction Model](04-interaction-model.en.md) | The common model for Operation target selection and completion, send/request, Spot [Logical Multicast](02-glossary.en.md#logical-multicast), [classic fanout](02-glossary.en.md#classic-fanout), [STREAM session](02-glossary.en.md#stream-session), the effect of handler failure and termination |
 | [05. Message Model](05-message-model.en.md) | Typed messages, `MessageContext`, `ActorRef`/`SpotRef` JSON, the `framework-json-v1` typed payload profile, application metadata, ownership and size limits |
 | [06. Framework API](06-framework-api.en.md) | The language-neutral public API family — root registration, RouteMesh registration, messaging API, handler registration and filters, codec, Store registration, Spot·Actor·STREAM owner registration, startup validation |
-| [07. Framework Error Model](07-framework-error-model.en.md) | The common `ErrorKind`, the completion/failure boundary of Send·Request, `CapacityExceeded` vs `Unavailable`, retry decisions |
+| [07. Framework Error Model](07-framework-error-model.en.md) | The common `ErrorKind`, the completion/failure boundary of Send·Request, what happens when a queue is full, retry decisions |
 | [08. Layering Boundaries and Identifiers](08-layering.en.md) | The binding boundary every language runtime follows, the shutdown procedure and cleanup order, when registration declarations are validated, the criteria for keeping identifiers separate (implementation spec) |
 
 ## 3. Find by Question
@@ -58,7 +58,7 @@ and state — or Actor operates on top of that contract" (creation, relocation).
 | What must an application host register at root for Framework to start | [Framework API "2. Root Registration"](06-framework-api.en.md#2-root-registration) |
 | What key is a handler registered under, and when is a filter applied | [Framework API "9. Handler Registration and Dispatch"](06-framework-api.en.md#9-handler-registration-and-dispatch) · ["10. Handler Filter"](06-framework-api.en.md#10-handler-filter) |
 | What common error does an application receive when Send·Request fails | [Framework Error Model](07-framework-error-model.en.md) |
-| How are `CapacityExceeded` and `Unavailable` distinguished | [Framework Error Model "5. Request Completion and Failure"](07-framework-error-model.en.md#5-request-completion-and-failure) |
+| What happens when a queue is full | [Framework Error Model "5. Request Completion and Failure"](07-framework-error-model.en.md#5-request-completion-and-failure) |
 | How is runtime code divided, and which values must not be merged into one | [Layering Boundaries and Identifiers "6. Identifiers Are Not Merged"](08-layering.en.md#6-identifiers-are-not-merged) |
 | How does startup validation differ from runtime validation | [Framework API "22. Startup Validation"](06-framework-api.en.md#23-startup-validation) · [Layering Boundaries and Identifiers "5. Registration Declarations Are Validated Only Once, at Startup"](08-layering.en.md#5-registration-declarations-are-validated-only-once-at-startup) |
 

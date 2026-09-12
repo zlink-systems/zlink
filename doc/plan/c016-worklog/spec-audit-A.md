@@ -22,7 +22,7 @@ relative links/anchors touched were verified to resolve.
 - `core/doc/spec/core/03-errors.ko.md:366` (mirrored in `03-errors.en.md`): the `ZLINK_REQUEST_CONFLICT`
   row reads "request correlation 또는 generation 충돌" ("request correlation or generation
   conflict"). It is unclear whether this "generation" is the same concept as
-  [`glossary.ko.md#generation`](/home/hep7/project/zlink/core/doc/spec/core/glossary.ko.md)
+  `glossary.ko.md#generation` (`/home/hep7/project/zlink/core/doc/spec/core/glossary.ko.md`)
   (directional-queue recreation version) or a distinct request/completion generation counter.
   Left unlinked and unchanged — linking it to the glossary term would risk pointing readers at
   the wrong concept if the two are actually different, and merging them silently would be a

@@ -278,72 +278,25 @@ save, and that's the application's job.
 
 ## 6. Which Unit Memory Accounting Uses
 
-Process-unit byte accounting and Spot-unit byte accounting are different accounting
-units. Process-unit byte accounting bounds pending-receive payload in bytes, and
-Spot-unit byte accounting bounds per-lane work count and bytes together. One side's number
-isn't reused as the other side's ceiling.
+**Only one place measures memory in bytes: Core.** Core's byte HWM bounds the frame bytes a
+queue holds, and when nothing reads them they accumulate and hold the sender back.
 
-Execution queues keep application and lifecycle work in separate FIFO lanes, each with
-count and byte reservations. The application-lane defaults are 1,024 items and 64 MiB; the
-lifecycle-lane defaults are 128 items and 4 MiB. Accepted application work reserves its
-payload size plus a fixed retained cost of 256 bytes per work item. The reservation is
-returned at handler terminal completion. The relocation hold has no relocation-specific
-item-count or byte bound.
+**The Framework counts items only.** A host counts the jobs waiting for a handler to start,
+and applies `PAUSED` once that number reaches 80% of its limit. There is one place per host
+that counts. Execution queues, mailboxes and the worker queue have no bound of their own — a
+second bound would count the same thing twice, and the outcome would then depend on which
+layer filled first.
 
-So the Spot queue can saturate first even when the process HWM isn't exhausted, and
-conversely, process inbound admission can stop first even when the Spot queue isn't full.
-The two results aren't merged into one `CapacityExceeded` situation — they're
-distinguished by the queue whose admission actually failed.
+The ownership boundary between the two kinds of accounting belongs to
+[Application Job Queue And Backpressure §1](../01-execution/04-application-job-queue-and-backpressure.en.md#1-two-independent-capacity-authorities).
+What to tune for a workload that holds large payloads for a long time belongs to
+[§9 of the same document](../01-execution/04-application-job-queue-and-backpressure.en.md#9-large-payloads-and-operational-values).
 
-### The Queue Bound Is Set by Accumulated Payload Size
+Execution queues keep application and lifecycle work in separate FIFO lanes, but that
+separation exists to order and prioritise the work, not to bound each lane.
 
-**The execution queue's bound enforces both the count and byte axes, and applies
-whichever is hit first.** The formal spec mandates both axes
-([Framework API](../00-foundation/06-framework-api.en.md)).
-
-A single axis can be circumvented via the other axis. Count alone lets a few large
-payloads fill memory; bytes alone lets empty payloads pile up indefinitely without hitting
-the bound.
-
-**Byte accounting doesn't count only payload size.** It includes the envelope, metadata,
-and queue node occupied by one pending work item. In a language where this can't be
-calculated exactly, use a value with a fixed per-work cost added. Even when the payload is
-empty, one work item isn't 0 bytes.
-
-The queue bound exists for two reasons — deciding how much memory stays tied up, and
-judging how much work is backed up. Count alone tells you neither.
-
-The same count of 1,024 items is about 100 KB at 100 bytes each, and 1 GiB at 1 MiB each. Memory
-differs by 10,000x while the bound triggers the same. The time to drain is the same story
-— throughput tracks bytes per second more closely than items per second, so measuring the
-backlog requires measuring in bytes.
-
-A count bound is wrong in both directions.
-
-| Situation | Result of a count bound |
-|---|---|
-| Small messages pile up | Rejects on hitting the bound despite memory headroom |
-| Large messages pile up | Doesn't hit the bound while memory runs out |
-
-Process-unit accounting is already in bytes (§6 first paragraph). Applying the same
-standard at the Spot unit works, and because both layers use the same unit, the layer that
-triggered the bound can also be distinguished.
-
-**Do not use an unbounded execution queue.** Each lane must have both count and byte
-reservations ([Framework API](../00-foundation/06-framework-api.en.md)).
-
-The result of exceeding a bound varies by submission family and queue location, so an
-implementation must not lump the results together. The [error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure) owns error selection for Request queues.
-
-Two cases outside the Request queue classification above each result in `CapacityExceeded` — the worker
-scheduler queue and batch capacity. The latter is an admission judgment, not queue
-saturation.
-
-The relocation hold has no relocation-specific count or byte bound. An
-execution-lane reservation for already owned work and transport, deadline, and cancellation
-limits aren't reused as a separate relocation-hold ceiling. This is a rule the
-formal spec specifies, so it is followed as written
-([Complete Host Relocation Flow 「9. Moving Pending Messages, Timers, And Sessions」](../05-location-relocation/05-host-relocation-flow.en.md#12-moving-pending-messages-timers-and-sessions)).
+Having nowhere to place a Spot is different from a full queue. Slowing down does not produce
+a node, so that case ends with `Unavailable`.
 
 ## 7. Boundary with Other Topics
 
@@ -392,16 +345,10 @@ admission result. Each item maps to one test.
 - An Instance Spot with work in progress isn't cleaned up even after idle time has passed.
 - When cleaned up, the closing callback is called with shutdown reason `IdleEvicted`.
 
-**Execution Queue Bound**
+**Execution Queue**
 
-- The execution queue is bounded on both the count and byte axes, and whichever is hit
-  first applies.
-- When large messages pile up, the byte bound is hit before the count bound.
-- When empty payloads pile up, the count bound is hit before the byte bound.
-- Byte accounting includes a fixed per-work cost, so even an empty payload counts toward
-  the bound.
-- Every execution lane has both a count and a byte bound — there's no unbounded execution
-  queue.
+- However much is put into an execution queue, no call ends for want of room.
+- When large payloads pile up, the sender is held by Core's byte limit, not by the Framework.
 
 ---
 

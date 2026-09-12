@@ -42,15 +42,18 @@ class condition_variable_t
 
     inline int wait (mutex_t *mutex_, int timeout_)
     {
-        int rc = SleepConditionVariableCS (&_cv, mutex_->get_cs (), timeout_);
+        const int rc = mutex_->uses_srwlock ()
+                         ? SleepConditionVariableSRW (
+                             &_cv, mutex_->get_srwlock (), timeout_, 0)
+                         : SleepConditionVariableCS (
+                             &_cv, mutex_->get_cs (), timeout_);
 
         if (rc != 0)
             return 0;
 
-        rc = GetLastError ();
+        const int error = GetLastError ();
 
-        if (rc != ERROR_TIMEOUT)
-            win_assert (rc);
+        win_assert (error == ERROR_TIMEOUT);
 
         errno = EAGAIN;
         return -1;

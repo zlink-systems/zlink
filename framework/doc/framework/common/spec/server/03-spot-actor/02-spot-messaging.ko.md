@@ -572,7 +572,9 @@ Worker가 작업을 받으면 다음 처리를 시작한다.
 - 처음에 고정한 각 remote target에 message를 한 번 제출한다.
 - 일치한 local Spot queue에는 target별로 즉시 제출한다.
 
-Local Spot queue에 용량이 없으면 기다리지 않고 다음 target을 처리한다. 이 실패를
+Local Spot queue에 자리가 없으면 자리가 날 때까지 기다렸다가 넣는다. 용량을 이유로 target을
+건너뛰지 않는다. 이때 기다리는 것은 worker이고 publish는 이미 완료했으므로 호출자에게
+돌려줄 결과가 바뀌지 않는다. target이 사라지는 등 용량이 아닌 이유로 전달하지 못한 경우는
 publish 전용 결과나 monitoring 값으로 집계하지 않는다.
 
 ### 4.4 Publish가 시작된 이후의 처리
@@ -726,20 +728,19 @@ Spot application queue와 Actor queue는 한도가 있다. 한도를 넘겼을 �
 
 | 계열 | 포화한 대기열 | 호출자가 받는 결과 |
 |---|---|---|
-| Send·one-way | **같은 runtime**의 outbound 또는 Spot·Actor 대기열 | [Async 실행 정책 §1](../01-execution/01-submit-and-completion.ko.md)을 따른다 — send timeout까지 자리를 기다리고, 내부 waiter까지 모두 찼으면 `DeadlineExceeded` |
+| Send·one-way | **같은 runtime**의 outbound 또는 Spot·Actor 대기열 | [Async 실행 정책 §1](../01-execution/01-submit-and-completion.ko.md)을 따른다 — send timeout까지 자리를 기다리고, 시간이 다 되면 `DeadlineExceeded` |
 | Send·one-way | **다른 node**의 Spot·Actor 대기열 | **결과가 없다.** Send는 source outbound queue가 수락한 시점에 이미 완료했다([Framework 오류 모델 §4](../00-foundation/07-framework-error-model.ko.md)). 이후의 target admission 실패는 완료된 결과를 바꾸지 않으며 metric·log·trace로만 남는다 |
 | Publish (시작 전) | worker 자리 또는 source-local outbound | send timeout까지 기다린다. 확보하지 못하면 `DeadlineExceeded` |
-| Publish (시작 후) | local Spot 대기열 | **기다리지 않고 건너뛴다.** publish는 이미 정상 완료했고, 이 실패는 publish 전용 결과나 관측 값으로 집계하지 않는다(§4.3) |
-| Request | 같은 runtime 또는 다른 node의 Spot·Actor 대기열 | 기다리지 않고 [Framework 오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)의 자원 소유 기준으로 완료한다. |
-| Control claim | 같은 runtime 또는 다른 node의 control 한도 | [Framework 오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)의 자원 소유 기준을 따른다. |
+| Publish (시작 후) | local Spot 대기열 | **자리가 날 때까지 기다린다.** publish는 이미 완료했으므로 이 대기가 호출자 결과를 바꾸지 않는다. 용량이 아닌 이유로 전달하지 못한 경우만 관측으로 남긴다(§4.3) |
+| Request | 같은 runtime 또는 다른 node의 Spot·Actor 대기열 | send와 같다 — 자리를 기다리고, 시간이 다 되면 `DeadlineExceeded`다([Framework 오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)). |
+| Control claim | 같은 runtime 또는 다른 node의 control 한도 | 위와 같다([Framework 오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)). |
 
 Publish의 두 줄이 다른 이유는 **완료 시점이 그 사이에 있기** 때문이다. 시작 전에는 아직
 돌려줄 결과가 있으므로 기다리고, 시작 뒤에는 이미 완료했으므로 되돌릴 것이 없다.
 
-Send 계열이 기다리는 것은 반환할 결과가 없어 호출자가 재시도 판단을 할 수 없기 때문이고,
-request 계열이 기다리지 않는 것은 호출자가 오류를 받아 판단할 수 있기 때문이다. Request를
-대기로 처리하면 송신 쪽 실행 자원이 수신 쪽 처리 속도에 묶여 두 노드가 서로를 막는 구간이
-생긴다.
+Send와 request가 같은 이유는 자리가 없다는 것이 오류가 아니기 때문이다. 기다리는 동안 그
+작업은 실행 권한을 쥐고 있지 않으므로, 송신 쪽 실행 자원이 수신 쪽 처리 속도에 묶이지
+않는다([Application job queue와 backpressure §8](../01-execution/04-application-job-queue-and-backpressure.ko.md#8-보낼-때의-대기)).
 
 Local·remote 오류 분류는 [Framework 오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure),
 그 공개 관찰은 [같은 문서 §9](../00-foundation/07-framework-error-model.ko.md#9-검증-요구)가 소유한다.

@@ -1,6 +1,5 @@
 package systems.zlink.e2e.kotlin.automaticturn;
 
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 
@@ -10,7 +9,6 @@ public final class TimerStopMsgHandler
     public CompletionStage<Void> handle(
         ProbeSpot spot,
         Contracts.TimerStopMsg message) {
-        spot.stopTimers(message.requestId());
-        return CompletableFuture.completedFuture(null);
+        return spot.stopTimers(message.requestId());
     }
 }

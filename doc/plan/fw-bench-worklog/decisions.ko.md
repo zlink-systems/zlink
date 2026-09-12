@@ -1,6 +1,6 @@
 # Framework gRPC 비교 bench 5언어 캠페인 — 결정 기록
 
-계획: [`../framework-bench-with-grpc-5lang-plan.ko.md`](../framework-bench-with-grpc-5lang-plan.ko.md)
+계획: [`../archive/framework-bench-with-grpc-5lang-plan.ko.md`](../archive/framework-bench-with-grpc-5lang-plan.ko.md)
 
 각 항목은 결정, 근거, 적용 위치를 남긴다. 번복하면 새 ID로 기록하고 옛 항목에 번복 표시를 단다.
 

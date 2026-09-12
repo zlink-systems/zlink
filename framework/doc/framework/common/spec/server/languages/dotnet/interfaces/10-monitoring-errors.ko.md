@@ -29,13 +29,12 @@ public enum ZLinkFrameworkErrorKind
     NotConfigured = 3,
     Rejected = 4,
     Unavailable = 5,
-    CapacityExceeded = 6,
-    DeadlineExceeded = 7,
-    ShuttingDown = 8,
-    ProtocolError = 9,
-    InvalidOperation = 10,
-    DataLost = 11,
-    InternalFailure = 12
+    DeadlineExceeded = 6,
+    ShuttingDown = 7,
+    ProtocolError = 8,
+    InvalidOperation = 9,
+    DataLost = 10,
+    InternalFailure = 11
 }
 
 public sealed class ZLinkFrameworkException : Exception
@@ -65,7 +64,6 @@ Public exception은 재시도 여부를 제공하지 않는다. Application은 o
 | `NotConfigured` | 필요한 role, handler, Store 또는 object client가 startup에 등록되었는지 확인한다. |
 | `Rejected` | Typed 결과가 없는 Framework admission, filter 또는 runtime policy가 operation을 거부했다. |
 | `Unavailable` | target, route, Store 또는 worker가 현재 operation을 처리할 수 없다. |
-| `CapacityExceeded` | placement, queue 또는 bounded resource의 여유가 없다. |
 | `DeadlineExceeded` | operation이 정한 deadline 안에 완료되지 않았다. 결과의 side effect 여부는 해당 operation 계약을 따른다. |
 | `ShuttingDown` | Runtime이 신규 admission을 받지 않는 상태다. 다른 serving instance를 사용해야 한다. |
 | `ProtocolError` | peer와 protocol 또는 reply 계약이 일치하는지 확인한다. |

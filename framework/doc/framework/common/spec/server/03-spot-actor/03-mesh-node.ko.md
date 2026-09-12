@@ -228,7 +228,7 @@ MeshNode를 선택한다. Placement weight가 `0`인 MeshNode는 이 두 작업�
 
 Framework는 Active count와 reserved slot을 합해 설정한 Actor·Spot limit을 먼저
 검사하고 그 뒤에 weight를 적용한다. Limit `0`은 검사를 생략한다. Capacity 조건을
-만족하는 node가 하나도 없으면 `CapacityExceeded`다. Descriptor의 count는
+만족하는 node가 하나도 없으면 `Unavailable`이다. Descriptor의 count는
 후보 선택용 projection이며 Location Store의 atomic reservation이 최종 판정이다.
 남은 후보의 positive placement weight 합계는 최소 64-bit 정수로 계산하여
 넘치지 않게 한다.

@@ -31,19 +31,18 @@ Framework는 오류와 함께 재시도 여부를 제공하지 않는다. Applic
 | 3 | `NotConfigured` | 필요한 role, handler 또는 Store가 등록되지 않았다. |
 | 4 | `Rejected` | Typed operation 결과가 없는 Framework admission, filter 또는 runtime policy가 operation을 거부했다. |
 | 5 | `Unavailable` | Target, route, Store 또는 worker를 현재 사용할 수 없다. |
-| 6 | `CapacityExceeded` | Placement, queue 또는 bounded resource에 여유가 없다. |
-| 7 | [`DeadlineExceeded`](02-glossary.ko.md#deadlineexceeded) | Operation이 정한 deadline 안에 완료되지 않았다. |
-| 8 | `ShuttingDown` | Runtime이 신규 operation을 받지 않는다. |
-| 9 | `ProtocolError` | Wire, payload 또는 reply 계약을 처리할 수 없다. |
-| 10 | `InvalidOperation` | 현재 object, session 또는 runtime 상태에서 operation을 실행할 수 없다. |
-| 11 | `DataLost` | 공개된 Relocation payload가 없거나 검증에 실패했다. |
-| 12 | `InternalFailure` | 위 분류로 표현할 수 없는 Framework 실패다. |
+| 6 | [`DeadlineExceeded`](02-glossary.ko.md#deadlineexceeded) | Operation이 정한 deadline 안에 완료되지 않았다. |
+| 7 | `ShuttingDown` | Runtime이 신규 operation을 받지 않는다. |
+| 8 | `ProtocolError` | Wire, payload 또는 reply 계약을 처리할 수 없다. |
+| 9 | `InvalidOperation` | 현재 object, session 또는 runtime 상태에서 operation을 실행할 수 없다. |
+| 10 | `DataLost` | 공개된 Relocation payload가 없거나 검증에 실패했다. |
+| 11 | `InternalFailure` | 위 분류로 표현할 수 없는 Framework 실패다. |
 
 Generation, owner fence, moving phase, worker queue 상태와 Relocation 처리 단계는 내부
 원인이다. Application이 별도 대응을 선택할 필요가 없으면 새 public kind로 노출하지 않고
 log와 trace에 기록한다.
 
-다섯 server package와 HTTP client package는 이 13개 kind를 공유한다. 언어별 interface
+다섯 server package와 HTTP client package는 이 12개 kind를 공유한다. 언어별 interface
 문서는 enum 이름, exception과 result 표현만 정의하며 kind를 추가하거나 재시도 boolean을
 추가하지 않는다.
 
@@ -85,30 +84,28 @@ call의 결과를 바꾸지 않는다. Framework는 이 실패를 metric, log와
 - 위 종류로 표현할 수 없는 Framework 실행 실패는 `InternalFailure`다.
 
 <a id="bounded-queue-failure"></a>
-`CapacityExceeded`와 `Unavailable`은 모두 자원 부족을 나타내지만 서로 다른 자원을
-가리킨다.
+**줄이 가득 찼다는 것은 오류가 아니다.** 자리가 날 때까지 기다린다. 들어오는 속도를 늦추는
+수단은 [§6](../01-execution/04-application-job-queue-and-backpressure.ko.md#6-pressure-상태와-socket-제어)의
+`PAUSED` 하나뿐이다.
 
-- **`CapacityExceeded`는 source가 소유한 local bounded resource를 확보하지 못했다는
-  뜻이다.** Reply를 보관할 자리, operation table entry, 같은 runtime 안의 Spot·Actor
-  application·control 대기열이 이 자원이다 — 제출하는 쪽과 대기열이 같은 process에 있으므로 source가
-  소유한다.
-- **`Unavailable`은 다른 node의 대기열이 가득 차서 실패했다는 뜻이다.** Target의 대기열
-  상태는 `CapacityExceeded`로 표현하지 않는다. 두 kind를 나누는 기준은 "실패한 자원을
-  이 runtime이 소유하는가"이며, 호출자는 이 구분으로 재시도 대상을 판단한다.
-- **이 구분은 대기열에만 적용한다.** Target node의 배치 수용량이 부족한 경우는 대기열이
-  아니라 admission 판정이므로 `CapacityExceeded`가 맞다
+- **어느 줄이든 같다.** 같은 runtime의 Spot·Actor 대기열, worker 대기열, 답을 보관할 자리,
+  진행 중인 호출 표와 완료 자리가 모두 그렇다. 기다리는 동안 host permit을 쥐고 있으므로
+  쓰는 permit이 늘고, 경계에 닿으면 `PAUSED`가 나간다.
+- **다른 node의 줄도 같다.** 상대가 밀리면 상대의 `PAUSED`와 Core의 byte 상한이 이쪽 send를
+  늦춘다. 줄을 누가 가졌는지로 오류를 나누지 않는다.
+- **놓을 자리가 없는 것은 다르다.** Spot을 둘 node가 하나도 없으면 늦춘다고 생기지 않는다.
+  이때는 `Unavailable`로 끝낸다
   ([Spot Actor](../03-spot-actor/05-spot-actor-membership.ko.md), [Spot 주소 메시징](../03-spot-actor/06-spot-address-messaging.ko.md)).
 - **Actor나 Spot이 relocation된 뒤에도 이전 owner node에 도착한 message를 새 owner에게
   대신 전달하는 동작인 [Message Follow](02-glossary.ko.md#message-follow) relay queue와
   relocation ingress hold에는 relocation 자체가 정하는
   record 수나 byte 상한이 없다.**
-  - 이 queue나 hold에 보관한 양이 늘었다는 이유만으로 `CapacityExceeded`를 반환하지 않는다.
+  - 여기에 보관한 양이 늘었다는 이유만으로 오류를 돌려주지 않는다.
   - 단일 message에 협상된 크기 상한, transport, deadline과 cancellation이 정하는 제한은
     그대로 적용한다.
   - 보관한 work를 일반 application execution lane이 수락한 뒤에는 그 lane의 reservation을
     적용하지만, 이 reservation을 relay queue나 hold의 보관 상한으로 사용하지 않는다.
-  - 이 제한 때문에 실패하면, 실패한 자원을 어느 runtime이 소유하는지에 따라 위 규칙으로
-    오류를 정한다
+  - 이 제한 때문에 실패하면 위 규칙대로 오류를 정한다
     ([Spot Actor](../03-spot-actor/05-spot-actor-membership.ko.md), [위치 runtime](../05-location-relocation/01-location-runtime.ko.md)).
 
 Cancellation은 각 언어의 cancelled awaitable로 전달한다. `DeadlineExceeded`와 cancellation은
@@ -149,8 +146,8 @@ queue인 [Application job queue](02-glossary.ko.md#application-job-queue)의 Man
 Runtime shared-cap 부족은 public error, typed reject나 drop 사유가 아니라 cancellable
 wait다.
 
-실행 객체별 FIFO의 구조 한도 위반은 [§5](#bounded-queue-failure)의 자원 소유 기준으로
-분류하며 shared-cap wait와 구별한다. FIFO 범위는
+실행 객체별 줄도 같다. 가득 차면 [§5](#bounded-queue-failure)대로 기다리며, 오류로 끝내지
+않는다. 줄의 범위는
 [실행 계약 §7](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-lanes)이 소유한다.
 
 ## 9. 검증 요구
@@ -160,7 +157,7 @@ wait다.
 
 **ErrorKind 값과 개수**
 
-- 각 언어의 13개 `ErrorKind`와 숫자가 일치한다.
+- 각 언어의 12개 `ErrorKind`와 숫자가 일치한다.
 
 **Send 완료 경계**
 
@@ -170,11 +167,10 @@ wait다.
 
 - `Request`는 timeout과 cancellation 뒤 늦게 도착한 reply로 두 번째 결과를 만들지 않는다.
 
-**Bounded queue 오류**
+**줄이 가득 찼을 때**
 
-- Request가 source runtime의 bounded application·control queue 자리를 확보하지 못하면 `CapacityExceeded`를 받는다.
-- Request가 다른 node의 bounded application·control queue 포화로 거부되면 `Unavailable`을 받는다.
-- Target placement capacity 부족은 remote queue 포화와 구분되어 `CapacityExceeded`로 관찰된다.
+- 같은 runtime이든 다른 node든, 줄에 자리가 없다는 이유로 끝나는 request가 없다.
+- Spot을 둘 node가 하나도 없으면 `Unavailable`로 끝난다.
 
 **Typed Rejected 구분**
 

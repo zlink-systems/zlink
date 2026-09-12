@@ -179,7 +179,7 @@ as is. **It doesn't create a new HTTP-client-dedicated error kind.**
 |------|------|
 | Configuration/usage error, typed decode, decompression, or redirect format error | `ProtocolError` |
 | Network, DNS, proxy, and target connection failure | `Unavailable` |
-| Configured response body byte limit exceeded | `CapacityExceeded` |
+| Configured response body byte limit exceeded | `Rejected` |
 | Per-attempt timeout exceeded | `DeadlineExceeded` |
 | HTTP status 400 or above, or an unclassifiable execution failure | `InternalFailure` |
 

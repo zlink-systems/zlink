@@ -633,3 +633,154 @@ bash scripts/perf/perf-ticket.sh submit -p 1 -o supervisor -d '<설명>' -- <명
 유지: `zlink-47-*`(#47 판정 보류) · `zlink-48-*`(#48b 실행 중) · `zlink-49-*`(#49 리뷰 대기) ·
 `zlink-50-*`(#50 리뷰 대기) · `zlink-13-bench-pairing`(#13 리뷰 대기) · `zlink-99-*`(#99 실행 중) ·
 `zlink-16-*`(PR #118) · `zlink-10-*`·`zlink-97-*`(Refs PR이라 유지) · `zlink-12-*`(B의 #90 base).
+
+## 9. 2026-09-11 후반 — 0.18.0 비성능 작업 정리
+
+성능 8건(#5·#6·#7·#45·#47·#48·#50·#14)은 **사용자와 함께 측정하기로 합의**해 남겨뒀다.
+그 앞을 막던 것들을 이 구간에 정리했다.
+
+| PR | 이슈 | 내용 |
+|---|---|---|
+| #219 | #197 | 7언어 결과 객체 선언을 구현에 맞춤 |
+| #220 | — | §4.3 DI 해석 비용 경계 재작성 |
+| #222 | #221 | 문서 계약 검증기 20건 실패 해소 |
+| #224 | #173-B | C++ 누락 계기 8개 구현 |
+| #225 | #171 | .NET 순서 결함 2건 |
+| #227 | #173-C | Java 누락 계기 → 4언어 계기 집합 일치 |
+
+### 9.1 `zlink.mesh_node.*` 계기는 이제 4언어가 같다
+
+제품 소스 기준 9개다. **Java 트리를 통째로 grep하면 `multicast.*` 5개가 더 나오는데 발행 코드가
+아니다** — "발행되지 않아야 한다"를 검사하는 E2E absence 시나리오(`MonBPublishMonitoringAbsence*`)의
+문자열이고 .NET·C++에도 있다. 언어 간 대조는 `src/main`·`src/`로 좁혀서 한다.
+
+### 9.2 #171은 타이밍이 아니라 순서 결함이었다
+
+둘 다 "관측 가능한 상태를 만들기 전에 관측자를 깨운다"는 모양이다.
+
+- **Multicast**: idle 카운트 증가 신호가 `finally`에서 락을 다시 잡아 나갔다. 깨어난 대기자가
+  용량을 0으로 읽었다.
+- **Handover**: `peer.Admitted`(= 우리 Admit **송신**이 수락됐는가)를 **ingress 인증 19곳**이 썼다.
+  상대가 Admit을 받고 되보낸 트래픽이 우리 플래그가 뒤집히기 전에 도착해 버려졌다.
+
+ingress 인증은 `_peersByRid` 소속으로 옮겼다. 그 근거가 성립하려면 소속이 정확해야 하고,
+**거부 경로가 이제 무조건 인덱스에서 제거한다**(`RejectPeerAdmissionUnderLock`). 종전에는
+`_peersByIntent.ContainsKey` 조건이 붙은 조건부 제거였다.
+
+### 9.3 #143 C++ — 사용자 결정으로 이음매를 만든다
+
+Java(#108)는 `ZLinkStateLane(Executor)`에 세는 Executor를 주입해 셌다. `Executor`가 interface라서
+된다. C++의 `state_lane_t (offload_executor_t &)`는 같은 모양이지만 **`offload_executor_t`에
+virtual이 하나도 없어** 상속해도 정적 디스패치다.
+
+**사용자 승인 2026-09-11**: virtual을 추가한다. 조건은 다음과 같다.
+
+- **소멸자도 virtual로 만든다.** `unique_ptr<offload_executor_t>`(`channel_host_service.cpp:385`),
+  `shared_ptr<offload_executor_t>`(`mesh_node_host_service.hpp:175`) 보관처가 있어, 함수만 virtual로
+  만들면 파생 객체가 저기 들어가는 순간 미정의 동작이다.
+- virtual 범위는 관측에 필요한 최소로, 근거를 남긴다.
+- **성능을 변경 전후로 측정**한다. 진짜 비용은 vtable이 아니라 **LTO 인라인이 막히는 것**이다.
+  유의미한 저하면 멈추고 수치와 함께 보고한다.
+
+1차 시도(CMake 옵션 + child build)는 gate가 70.5초 → 282.8초(4.01배)가 되어 폐기했다.
+
+### 9.4 감독 판독 오류 — 이 구간에 7건
+
+전부 **"분기·문자열의 존재"를 "실제 동작"으로 바꿔 쓴 것**이다.
+
+| 내가 쓴 것 | 실제 |
+|---|---|
+| .NET Resolve는 lane 왕복 + blocking | `ZLinkStateLane.cs:78-93` mailbox가 비면 **인라인 실행** |
+| C++은 등록 시점에 instance 캡처 | lambda 캡처는 `[method]`뿐, `get_required`는 dispatch 때 |
+| Java·Node core dispatch에 DI 없음 | core가 dispatch마다 activator·scope 호출 |
+| `state_lane` 이음매로 C++도 셀 수 있다 | `offload_executor_t`가 전부 비가상이라 불가 |
+| virtual은 0.90 캠페인에 역행 | 이미 `std::function` 타입 소거를 거친다. 한계 비용 작음 |
+| Docker가 안 떠 있어 테스트 실패 | Docker 정상. 빈 컨테이너 목록을 오독. 실제 원인은 `ZLINK_LOCAL_PACKAGE_ROOT` 미전달 |
+| Java에만 multicast 계기 5개 | E2E absence 시나리오 문자열 |
+
+**성능·비용 판정을 쓰기 전에 "이 분기를 언제 타는가"에 답한다.** 답하지 못하면 쓰지 않는다.
+
+### 9.5 sub-agent 모델 배정을 AGENTS.md §2.1로 되돌렸다
+
+캠페인 내내 모든 job을 `astra --effort xhigh`로 돌렸다. "codex astra 를 쓸때는 xhigh 로 사용해"는
+**astra를 쓸 때의 effort** 규칙이지 astra를 기본으로 쓰라는 뜻이 아니었다.
+
+기본은 `sol`+`high`. 문서 정정·정해진 패턴 적용은 `terra`/`luna`. `astra`는 **원인 가설이 아예 없는
+진단**과 계약·사양 충돌 해석에만. 실행 중인 job은 모델을 바꾸려고 재투입하지 않는다.
+
+### 9.6 C++ 게이트 명령
+
+`ctest --preset linux-ninja-release -L 'framework-unit|framework-contract'` — 현재 **66/66**.
+
+전체 `ctest`(87개)를 돌리면 자체 vcpkg install·패키지 소비 테스트가 포함된다. 그리고
+**`VCPKG_ROOT`와 `ZLINK_LOCAL_PACKAGE_ROOT`를 export 하지 않으면** 자식 configure가 Core `zlink`
+패키지를 못 찾아 `tooling_contract`가 실패한다. 새 셸마다 넣는다.
+
+## 10. 2026-09-11 야간 — 성능 캠페인과 스펙 공백 2건
+
+### 10.1 성능 이슈가 모두 닫혔다
+
+| 이슈 | PR | 핵심 |
+|---|---|---|
+| #48 .NET | #241 | 9항목 중 8개. **12커밋이 push되지 않은 채 남아 있던 것을 되살렸다** |
+| #47 Java | #247 | DI 활성화 준비·재사용. p99 −35.2 %, throughput +13.3 % |
+| #50 Node | #246 | ingress 폴링 → readiness. 규칙 3→1 |
+| #45 envelope | #245 | **Java·C++은 이미 되어 있었다.** Node 수신만 남았었다 |
+| #14 Java binding | #256 | `sun.misc.Unsafe` 제거. GC 93→25, allocation 37.2GB→11.8GB |
+
+**투입 전에 기존 job 산출물과 브랜치 커밋을 먼저 확인한다.** #48의 12커밋을 그렇게 건졌고,
+확인하지 않았으면 5개 job이 처음부터 다시 할 뻔했다.
+
+### 10.2 측정 방법론이 세 번 값을 했다
+
+**1-run 비교와 순차 측정은 결론을 뒤집는다.**
+
+- **#47** — 이전 보고가 "p99 0.451 → 147.369ms 회귀"로 개선 판정을 보류했다. 5쌍으로 다시 재니
+  **147ms 이상치가 변경 *전* 3회차에서 나왔다**(`peak_in_flight=1042`). 그 보고만 믿었으면
+  멀쩡한 커밋 두 개를 되돌릴 뻔했다.
+- **#143** — 순차 측정이 이상치 하나로 "+16.7 % 개선"이라는 허상을 만들었다. 변경 전 산포가
+  47 %였다.
+- **#14** — `SENDSEND 64B p95`가 **구현 속도가 아니라 in-flight 깊이를 재고 있었다.**
+  처리량(λ)이 유지되는데 깊이(L)가 흔들려 지연(W)이 따라 움직였다(Little's Law).
+  깊이를 계측하니 p95 **−42.79 %**였고, 악화된 유일한 pair에서도 깊이와 p95가 함께 올랐다.
+
+**규칙**: 짝지어 번갈아(B 먼저, 그다음 A), 최소 5쌍, **5개 값을 전부 보고**,
+`peak_in_flight`·`mean_in_flight`를 p99와 **함께** 읽는다.
+
+### 10.3 스펙 공백 2건 — 같은 모양이었다
+
+계약을 지는 것이 **스펙이 아니라 용어의 암묵적 이해나 테스트 이름 하나**뿐이라 언어마다 갈라졌다.
+
+| 공백 | PR | 갈라짐 |
+|---|---|---|
+| `authenticated peer` 미정의 | #240 | .NET이 **송신 준비** 플래그를 ingress 인증에 썼다(#171 `0/101`의 정체) |
+| timer cancel 완료 계약 | #251 · #254 | 4언어 전부 다름. Node는 **실패를 성공으로 바꿨고** C++은 **삼켰다** |
+
+**둘 다 규칙을 늘리지 않고 소유자를 하나로 정해 닫았다.** `authenticated peer`는 새 행동 규칙
+0개에 규범 서술 위치를 2곳→1곳으로 줄였고, timer cancel은 §1 굵은 규칙 수가 3개 그대로다.
+
+**C++ 공개 API가 바뀌었다** — `void cancel() noexcept` → `task_t<void> cancel()`
+(사용자 승인 2026-09-11). self-cancel 교착은 callback 내부에서 취소만 시작하고 기다리지 않는
+방식으로 피했다.
+
+### 10.4 감독 오판 기록
+
+- **#238** — "빌드 트리 순회가 원인" → 가지치기로 0.04초만 줄자 "순회는 병목이 아니다"로 정정 →
+  실제로는 **둘 다였다**(33,919개 순회 + 1,156개 파일 × 14회 읽기). 하나만 고치면 거의 안 줄고
+  둘 다 고쳐야 **7.71초 → 0.11초**가 난다.
+- **#243** — "측정 직렬화가 깨졌다"고 이슈를 올렸으나 틀렸다. runner가 **머신 전역
+  flock**(`/tmp/zlink-perf.lock`)을 쥐고 실행하고, quiet 판정의 `running`도 `pgrep`으로
+  머신 전체를 본다. `[ -z "${running}" ]` 한 줄만 보고 단정했다.
+
+### 10.5 메인 worktree를 다른 세션이 쓴다
+
+`/home/hep7/project/zlink`에서 브랜치가 바뀌어 있는 일이 두 번 있었고, 한 번은 미커밋 문서
+10개가 있었다. **그 worktree에서 브랜치를 바꾸지 않는다.** 검증은 체크아웃 없이 한다.
+
+    git show origin/main:<경로>
+
+### 10.6 모델 배정
+
+사용자 지시 2026-09-11: **코드 작업은 `terra` 이상, `astra`는 정말 필요할 때만.**
+#45를 `luna`로 보냈다가 잘못된 JSON의 오류 종류 보존에서 막혀 `terra`로 교체했다 —
+범위가 좁아도 코드면 terra다.

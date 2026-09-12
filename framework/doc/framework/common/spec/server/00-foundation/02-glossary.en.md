@@ -1722,6 +1722,32 @@ monitoring but excluded from ready/liveness/health failure aggregation.
 `NotConnected` means a connection is needed but no ready connection exists, and it's
 reflected in failure aggregation.
 
+<a id="authenticated-peer"></a>
+### Authenticated Peer
+
+A peer whose identity on the current connection the transport has verified during
+[Peer admission](#peer-admission). The term identifies the sender of a received
+message; it does not mean that the runtime is ready to send new messages to that peer.
+
+[Session-Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover)
+defines the validation checks and their boundaries.
+
+| Item | Content |
+|---|---|
+| Form and management | The peer identity verified by the runtime's existing peer admission. No separate public type is defined. |
+| Validity | While the identity verification remains valid for the current connection. [Wire §4](../02-channel-transport/06-wire-protocol.en.md#4-admission-and-connection-fence) governs admission and connection replacement. |
+| Application authority | Applications do not directly set or change the identity verification result. |
+
+<a id="admitted-peer"></a>
+### Admitted Peer
+
+A remote peer accepted as a current peer connection through
+[Peer admission](#peer-admission).
+[MeshNode §7.1](../03-spot-actor/03-mesh-node.en.md#71-peer-connection)
+governs the end of the peer lifecycle, and
+[§7.3](../03-spot-actor/03-mesh-node.en.md#73-target-selection-per-messaging-method)
+governs eligibility as an outbound target.
+
 <a id="lifecycle-generation"></a>
 ### Lifecycle Generation
 

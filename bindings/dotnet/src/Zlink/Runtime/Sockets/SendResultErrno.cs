@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
 
-using Systems.Zlink.Runtime.Native;
-
 namespace Systems.Zlink.Runtime.Sockets.Internal;
 
 internal static class SendResultErrno
@@ -40,10 +38,5 @@ internal static class SendResultErrno
             ETimedOutWin => SendResult.NotReady,
             _ => null
         };
-    }
-
-    public static SendResult? TryMapCurrent()
-    {
-        return TryMap(NativeMethods.zlink_errno());
     }
 }

@@ -7,6 +7,8 @@ title: "5. Channel Messaging — request · send · pub/sub · Node/TypeScript"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 5. Channel Messaging — request · send · pub/sub
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 4. Backpressure — 처리보다 도착이 빠를 때](04-backpressure.ko.md) | [다음: 6. Spot](06-spot.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "5. Channel Messaging — request · send · pub/sub · Node/TypeScript"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/05-channel-messaging.ko.md) · [C++](../../../cpp/guide/server/05-channel-messaging.ko.md) · [Java](../../../java/guide/server/05-channel-messaging.ko.md) · [Kotlin](../../../kotlin/guide/server/05-channel-messaging.ko.md) · **Node/TypeScript**
 <!-- language-switch:end -->
-
-# 5. Channel Messaging — request · send · pub/sub
 
 > **이 장의 계약 소유 문서** — [Channel 메시징](../../../common/spec/server/02-channel-transport/02-channel-messaging.ko.md)과
 > [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.ko.md)이 동작을,
@@ -191,15 +191,18 @@ mesh 소켓을 그대로 사용하므로 별도 소켓이 없고,
 ```typescript
 // 발행 — TicTacToeGame spot 안에서.
 await this.context.outbound
-  .publish(SampleTopics.playerMilestoneChannel, // 전달 범위를 정하는 ChannelName.
-           SampleTopics.playerMilestone,        // 그 안에서 받을 Spot을 고르는 topic.
+  // 전달 범위를 정하는 ChannelName.
+  .publish(SampleTopics.playerMilestoneChannel,
+           // 그 안에서 받을 Spot을 고르는 topic.
+           SampleTopics.playerMilestone,
            milestoneEvent)
   .submit();
 
 // 구독 — PlayEntrySpot이 시작할 때.
 this.context.handlers.addSubscribe(
   PlayerWinMilestoneEventHandler,
-  SampleTopics.playerMilestoneChannel, // 발행 쪽과 같은 ChannelName·topic이어야 받는다.
+  // 발행 쪽과 같은 ChannelName·topic이어야 받는다.
+  SampleTopics.playerMilestoneChannel,
   SampleTopics.playerMilestone);
 ```
 
@@ -363,8 +366,10 @@ async handle(request: CreateGameRequest, context: ZLinkMessageContext): Promise<
   // 런타임(핸들러) 스레드 — await로 비운다. 동기 blocking은 없다.
   const room = await this.client
     .requestToChannel('tictactoe.play', createRoomRequest(request.gameName))
-    .timeout(5_000)                     // reply를 기다릴 상한.
-    .submit<CreateRoomReply>();         // reply가 도착할 때까지 기다린다.
+    // reply를 기다릴 상한.
+    .timeout(5_000)
+    // reply가 도착할 때까지 기다린다.
+    .submit<CreateRoomReply>();
 
   return createGameReply(room.roomId, room.gameName);
 }
@@ -412,9 +417,11 @@ const mesh = builder.addRouteMesh('services')
   .listen('tcp://0.0.0.0:7101')
   .routingId('api-1');
 
-mesh.channel('api').server()                 // 이 node가 처리하는 channel.
+// 이 node가 처리하는 channel.
+mesh.channel('api').server()
   .addRequestHandler('GetProfileRequest', GetProfileHandler);
-mesh.channel('billing').client();            // 호출만 하는 channel은 client — handler를 등록하지 않는다.
+// 호출만 하는 channel은 client — handler를 등록하지 않는다.
+mesh.channel('billing').client();
 ```
 
 fanout channel의 구독 handler는 fanout builder의 `AddHandler<...>()`로 등록한다.
@@ -545,14 +552,17 @@ export class AuditFilter implements ZLinkHandlerFilter {
   constructor(private readonly logger: Logger) {}
 
   async invoke(
-    context: ZLinkHandlerFilterContext, // 이 dispatch의 message 정보 + 어느 경로로 왔는지.
-    next: ZLinkHandlerFilterNext        // 인자 없는 delegate — 다음 filter 또는 handler를 실행한다.
+    // 이 dispatch의 message 정보 + 어느 경로로 왔는지.
+    context: ZLinkHandlerFilterContext,
+    // 인자 없는 delegate — 다음 filter 또는 handler를 실행한다.
+    next: ZLinkHandlerFilterNext
   ): Promise<void> {
     // 운영 명령만 감사 로그로 남기고 일반 업무 요청은 그냥 통과시킨다.
     if (context.dispatchKind === ZLinkHandlerDispatchKind.NodeDirectRequest) {
       this.logger.log(`ops ${context.packetName} on ${context.meshName}`);
     }
-    await next(); // 호출하지 않으면 handler가 실행되지 않는다.
+    // 호출하지 않으면 handler가 실행되지 않는다.
+    await next();
   }
 }
 
@@ -674,8 +684,10 @@ weight가 모두 같으면 새 요청은 균등하게 round-robin으로 분배�
 
 ```typescript
 // 운영 admin 엔드포인트. "orders"는 등록한 ChannelName이다.
-meshOptions.channel('orders').weight = 0;   // 이 ChannelName을 새 select-one 대상에서 제외
-meshOptions.channel('orders').weight = 100; // 정상 복귀
+// 이 ChannelName을 새 select-one 대상에서 제외
+meshOptions.channel('orders').weight = 0;
+// 정상 복귀
+meshOptions.channel('orders').weight = 100;
 ```
 
 - `Weight = 0`(drain)은 serving socket을 **닫지 않는다**. 이미 들어온 in-flight 요청은
@@ -795,7 +807,8 @@ ChannelName을 물리 송신 경로 둘 이상에 등록하는 것도 **host 시
 const caller = builder.addRouteMesh('media')
   .listen('tcp://0.0.0.0:5590')
   .setRoutingIdPrefix('resize-client');
-caller.channel('image.resize').client();        // 호출만 하므로 client.
+// 호출만 하므로 client.
+caller.channel('image.resize').client();
 caller.peerConnections().connect('tcp://10.30.1.10:5600');
 caller.peerConnections().connect('tcp://10.30.1.10:5601');
 
@@ -876,19 +889,25 @@ SPOT과의 결합은 [06-spot](06-spot.ko.md)에서 이어진다.
           .listen('tcp://0.0.0.0:7101')
           .routingId('api-1');
         mesh.channel('api').server()
-          .addHandlerGroup('api');                   // 노출: handler group을 channel에 연결한다.
-        mesh.channel('account').client();            // 호출만 하는 channel.
+          // 노출: handler group을 channel에 연결한다.
+          .addHandlerGroup('api');
+        // 호출만 하는 channel.
+        mesh.channel('account').client();
 
         const events = builder.addFanoutChannel('api.events');
-        events.enablePublisher('tcp://0.0.0.0:7201'); // 이 process가 발행자다.
-        events.connect('tcp://127.0.0.1:7201');       // 자기 발행도 구독해 보여 주는 예다.
-        events.addHandlerGroup('api.events');         // 구독 handler를 group으로 붙인다.
+        // 이 process가 발행자다.
+        events.enablePublisher('tcp://0.0.0.0:7201');
+        // 자기 발행도 구독해 보여 주는 예다.
+        events.connect('tcp://127.0.0.1:7201');
+        // 구독 handler를 group으로 붙인다.
+        events.addHandlerGroup('api.events');
 
         return builder.build();
       }
     })
   ],
-  providers: [UserHandlers, UserCacheRefreshedEventHandler] // 발견: provider로 등록한다.
+  // 발견: provider로 등록한다.
+  providers: [UserHandlers, UserCacheRefreshedEventHandler]
 })
 export class AppModule {}
 ```

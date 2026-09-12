@@ -94,7 +94,7 @@ owned by
 | What does cancellation do, and not do, to work already started | [Cancellation And Shutdown](03-cancellation-and-shutdown.en.md) |
 | How many times is a byte copied on its way from the socket to the handler | [Payload Ownership And Codec](05-payload-ownership-and-codec.en.md) |
 | When reply, timeout, cancellation, and shutdown arrive at the same time, which one wins | [Submit And Completion "9. Request Completion — The Completion Race And Timeout Budget"](01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget) |
-| What are the limits (`MaxQueuedApplicationJobs`, pause/resume %, lane caps, dispatcher 4,096) | [§6](#6-numeric-summary-table) |
+| What are the limits (`MaxQueuedApplicationJobs`, pause/resume %, lane caps) | [§6](#6-numeric-summary-table) |
 | Which queue does a Spot's Actor and Timer work run on | [Serial Executor Layers "4. Spot Execution Mode And Queue Path"](07-serial-executor-layers.en.md#4-spot-execution-mode-and-queue-path) |
 | What stops one owner from holding a queue too long | [Serial Executor Layers "6.4 Fairness"](07-serial-executor-layers.en.md#64-fairness) |
 | How many execution-resource switches does one request make inside the runtime, how many records does the target take per wake-up | [Messaging Hot Path](08-messaging-hot-path.en.md) |
@@ -128,9 +128,9 @@ number lives.
 | Number | Default | Owning document |
 |---|---|---|
 | `MaxQueuedApplicationJobs`, pause/resume ratio | see document | [Application Job Queue And Backpressure](04-application-job-queue-and-backpressure.en.md) |
-| Application lane / lifecycle lane caps, owner occupancy time budget, lifecycle consecutive-execution cap | 1,024 items·64 MiB / 128 items·4 MiB, 10 ms, 8 turns | [Handler Turn And Execution Gate "7. Lane Separation And Priority (Implementation)"](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation) |
+| Owner occupancy time budget, lifecycle consecutive-execution cap | 10 ms, 8 turns | [Handler Turn And Execution Gate "7. Lane Separation And Priority (Implementation)"](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation) |
 | Send timeout default, admission deadline owner | 1 second per family | [Submit And Completion "7. Admission Deadline — Owner And Value Rules"](01-submit-and-completion.en.md#7-admission-deadline--owner-and-value-rules) |
-| Dispatcher concurrent-callback cap | 4,096 | [Submit And Completion "10. Operation Identity And Where Completion Happens (Implementation)"](01-submit-and-completion.en.md#10-operation-identity-and-where-completion-happens-implementation) |
+| Dispatcher concurrent-callback cap | None — never exceeds the number of in-progress operations | [Submit And Completion "11. The Execution Turn Of The Completion Callback (Implementation)"](01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation) |
 | [MaxMessageSize](../00-foundation/02-glossary.en.md#maxmessagesize), the maximum message size a listener can receive (StreamNode) | 64 KiB | [Application Job Queue And Backpressure](04-application-job-queue-and-backpressure.en.md) |
 
 ---

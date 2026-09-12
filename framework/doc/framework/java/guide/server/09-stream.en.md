@@ -7,6 +7,8 @@ title: "9. STREAM · Java"
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 9. STREAM
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 8. Session and Actor Binding](08-actor-session.en.md) | [Next: 10. Location — Auto-Connect and Object Location](10-location.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "9. STREAM · Java"
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/09-stream.en.md) · [C++](../../../cpp/guide/server/09-stream.en.md) · **Java** · [Kotlin](../../../kotlin/guide/server/09-stream.en.md) · [Node/TypeScript](../../../node/guide/server/09-stream.en.md)
 <!-- language-switch:end -->
-
-# 9. STREAM
 
 > **The documents that own this chapter's contract** —
 > [STREAM server session](../../../common/spec/server/04-session/01-stream-session.en.md) owns the behavior,
@@ -84,7 +84,8 @@ public final class PlaySession implements ZLinkSession {
 
     @Override
     public void configure() {
-        context.handlers().addHandler(PingHandler.class); // Registers a typed session packet handler.
+        // Registers a typed session packet handler.
+        context.handlers().addHandler(PingHandler.class);
     }
 
     @Override
@@ -177,7 +178,8 @@ connector.on(GameStateNotify.class, message -> {
     return CompletableFuture.completedFuture(null);
 });
 
-connector.connect().submit().toCompletableFuture().join(); // Finishes connecting and preparing the receive loop.
+// Finishes connecting and preparing the receive loop.
+connector.connect().submit().toCompletableFuture().join();
 
 while (running) {
     // MANUAL mode runs the callback on this caller.

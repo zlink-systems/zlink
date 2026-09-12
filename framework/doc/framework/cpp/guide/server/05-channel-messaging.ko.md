@@ -7,6 +7,8 @@ title: "5. Channel Messaging — request · send · pub/sub · C++"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 5. Channel Messaging — request · send · pub/sub
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 4. Backpressure — 처리보다 도착이 빠를 때](04-backpressure.ko.md) | [다음: 6. Spot](06-spot.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "5. Channel Messaging — request · send · pub/sub · C++"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/05-channel-messaging.ko.md) · **C++** · [Java](../../../java/guide/server/05-channel-messaging.ko.md) · [Kotlin](../../../kotlin/guide/server/05-channel-messaging.ko.md) · [Node/TypeScript](../../../node/guide/server/05-channel-messaging.ko.md)
 <!-- language-switch:end -->
-
-# 5. Channel Messaging — request · send · pub/sub
 
 > **이 장의 계약 소유 문서** — [Channel 메시징](../../../common/spec/server/02-channel-transport/02-channel-messaging.ko.md)과
 > [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.ko.md)이 동작을,
@@ -202,14 +202,17 @@ mesh 소켓을 그대로 사용하므로 별도 소켓이 없고,
 ```cpp
 // 발행 — game spot 안에서.
 co_await _context.outbound ()
-  .publish (sample_topics_t::player_milestone_channel, // 전달 범위를 정하는 ChannelName.
-            sample_topics_t::player_milestone,         // 그 안에서 받을 Spot을 고르는 topic.
+  // 전달 범위를 정하는 ChannelName.
+  .publish (sample_topics_t::player_milestone_channel,
+            // 그 안에서 받을 Spot을 고르는 topic.
+            sample_topics_t::player_milestone,
             milestone_event)
   .async ();
 
 // 구독 — entry spot이 시작할 때.
 _context.handlers ().add_subscribe<&play_entry_spot_t::on_player_win_milestone> (
-  sample_topics_t::player_milestone_channel, // 발행 쪽과 같은 ChannelName·topic이어야 받는다.
+  // 발행 쪽과 같은 ChannelName·topic이어야 받는다.
+  sample_topics_t::player_milestone_channel,
   sample_topics_t::player_milestone);
 ```
 
@@ -393,8 +396,10 @@ task_t<create_game_reply_t> handle (const create_game_request_t &request)
     auto room = co_await _client
                   .request_to_channel ("tictactoe.play",
                                        create_room_request_t{request.game_name})
-                  .timeout (std::chrono::seconds (5)) // reply를 기다릴 상한.
-                  .async<create_room_reply_t> ();    // reply가 도착할 때까지 기다린다.
+                  // reply를 기다릴 상한.
+                  .timeout (std::chrono::seconds (5))
+                  // reply가 도착할 때까지 기다린다.
+                  .async<create_room_reply_t> ();
 
     co_return create_game_reply_t{room.room_id, room.game_name};
 }
@@ -425,10 +430,12 @@ framework는 발견한 handler를 모든 channel에 자동으로 열지 않는�
 ### RouteMesh와 handler 등록
 
 ```cpp
-options.handlers ().group ("api").add<get_profile_handler_t> ();  // handler를 group에 넣는다.
+// handler를 group에 넣는다.
+options.handlers ().group ("api").add<get_profile_handler_t> ();
 auto mesh = options.add_route_mesh ("services");
 mesh.listen ("tcp://0.0.0.0:7101").set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
-mesh.channel_name ("api").server ()      // server ()가 handler를 받는 역할이다.
+// server ()가 handler를 받는 역할이다.
+mesh.channel_name ("api").server ()
   .use_handler_group ("api");
 ```
 
@@ -440,9 +447,11 @@ mesh.channel_name ("api").server ()      // server ()가 handler를 받는 역�
 auto mesh = options.add_route_mesh ("services");
 mesh.listen ("tcp://0.0.0.0:7101").set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
 
-mesh.channel_name ("api").server ()          // 이 node가 처리하는 channel.
+// 이 node가 처리하는 channel.
+mesh.channel_name ("api").server ()
   .add_request_handler<get_profile_handler_t, get_profile_request_t, get_profile_reply_t> ();
-mesh.channel_name ("billing").client ();     // 호출만 하는 channel은 client — handler를 등록하지 않는다.
+// 호출만 하는 channel은 client — handler를 등록하지 않는다.
+mesh.channel_name ("billing").client ();
 ```
 
 fanout channel의 구독 handler는 fanout builder의 `AddHandler<...>()`로 등록한다.
@@ -587,21 +596,25 @@ class audit_filter_t
   public:
     explicit audit_filter_t (logger_t<audit_filter_t> &logger) : _logger (logger) {}
 
-    task_t<void> invoke (handler_filter_context_t &context, // 이 dispatch의 message 정보.
-                         handler_filter_next_t next)        // 다음 filter 또는 handler를 실행한다.
+    // 이 dispatch의 message 정보.
+    task_t<void> invoke (handler_filter_context_t &context,
+                         // 다음 filter 또는 handler를 실행한다.
+                         handler_filter_next_t next)
     {
         // 운영 명령만 감사 로그로 남기고 일반 업무 요청은 그냥 통과시킨다.
         if (context.dispatch_kind () == handler_dispatch_kind_t::node_direct_request)
             _logger.info (std::string ("ops ") + context.packet_name ());
 
-        co_await next (); // 호출하지 않으면 handler가 실행되지 않는다.
+        // 호출하지 않으면 handler가 실행되지 않는다.
+        co_await next ();
     }
 
   private:
     logger_t<audit_filter_t> _logger;
 };
 
-options.use_filter<audit_filter_t> ();      // 등록한 순서가 곧 실행 순서다.
+// 등록한 순서가 곧 실행 순서다.
+options.use_filter<audit_filter_t> ();
 options.use_filter<validation_filter_t> ();
 ```
 
@@ -716,8 +729,10 @@ weight가 모두 같으면 새 요청은 균등하게 round-robin으로 분배�
 
 ```cpp
 // 운영 admin 경로. "orders"는 등록한 ChannelName이다.
-mesh_options.channel ("orders").weight (0);   // 이 ChannelName을 새 select-one 대상에서 제외
-mesh_options.channel ("orders").weight (100); // 정상 복귀
+// 이 ChannelName을 새 select-one 대상에서 제외
+mesh_options.channel ("orders").weight (0);
+// 정상 복귀
+mesh_options.channel ("orders").weight (100);
 ```
 
 - `Weight = 0`(drain)은 serving socket을 **닫지 않는다**. 이미 들어온 in-flight 요청은
@@ -838,7 +853,8 @@ ChannelName을 물리 송신 경로 둘 이상에 등록하는 것도 **host 시
 auto caller = options.add_route_mesh ("media");
 caller.listen ("tcp://0.0.0.0:5590")
   .set_routing_id (zlink::routing_id_t::from (std::string ("resize-client")));
-caller.channel_name ("image.resize").client ();   // 호출만 하므로 client.
+// 호출만 하므로 client.
+caller.channel_name ("image.resize").client ();
 caller.peer_connections ().connect ("tcp://10.30.1.10:5600");
 caller.peer_connections ().connect ("tcp://10.30.1.10:5601");
 
@@ -918,18 +934,23 @@ int main (int argc, char **argv)
     auto app = framework::app_t::create ();
     app.add_zlink_framework ([] (zlink_framework_options_t &options) {
         options.codecs ().use (protobuf_codec_t::default_instance ());
-        options.handlers ().group ("api").add<user_handlers_t> (); // 노출할 handler group.
+        // 노출할 handler group.
+        options.handlers ().group ("api").add<user_handlers_t> ();
 
         auto mesh = options.add_route_mesh ("services");
         mesh.listen ("tcp://0.0.0.0:7101")
           .set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
         mesh.channel_name ("api").server ().use_handler_group ("api");
-        mesh.channel_name ("account").client ();                   // 호출만 하는 channel.
+        // 호출만 하는 channel.
+        mesh.channel_name ("account").client ();
 
         options.add_fanout_channel ("api.events")
-          .enable_publisher ("tcp://0.0.0.0:7201")                 // 이 process가 발행자다.
-          .connect ("tcp://127.0.0.1:7201")             // 자기 발행도 구독해 보여 준다.
-          .use_handler_group ("api.events"); // 구독 handler를 group으로 붙인다.
+          // 이 process가 발행자다.
+          .enable_publisher ("tcp://0.0.0.0:7201")
+          // 자기 발행도 구독해 보여 준다.
+          .connect ("tcp://127.0.0.1:7201")
+          // 구독 handler를 group으로 붙인다.
+          .use_handler_group ("api.events");
 
         options.http ()
           .listen ("http://0.0.0.0:8080")

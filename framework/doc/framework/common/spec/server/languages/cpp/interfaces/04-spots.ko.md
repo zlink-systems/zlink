@@ -829,8 +829,8 @@ public:
 `spot_manager_t`는 User Spot만 생성한다. `Create`는 Framework가 global SpotId를 생성하고,
 `GetOrCreate`는 caller가 제공한 global SpotId를 사용한다. Instance Spot create/get-or-create member와 kind
 인자는 제공하지 않는다. Call option과 `async()` terminal은 각각 한 번만 사용할 수 있다. Existing authority가 Instance
-kind이거나 stable type이 다르면 `type_mismatch`, eligible capacity가 없으면
-`capacity_exceeded`다.
+kind이거나 stable type이 다르면 `type_mismatch`, 둘 수 있는 node가 없으면
+`unavailable`이다.
 Terminal `async()`은 `spot_ref_t`, `existing`·`created`·`rejected` state와 creation callback reply를
 `spot_create_result_t` 하나로 반환한다.
 

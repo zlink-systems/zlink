@@ -239,6 +239,25 @@ def nav_block(order: list[str], name: str, titles: dict[str, str], suffix: str) 
             + "\n<!-- framework-adapter-nav:end -->\n\n")
 
 
+def insert_after_title(body: str, block: str) -> str:
+    """내비게이션 줄을 제목 아래에 넣는다.
+
+    `spec-writing-guide.ko.md` §2.2는 "모든 문서의 **제목 아래**와 본문 끝에 같은
+    내비게이션 줄을 둔다"고 한다. 손으로 쓰는 spec 문서는 그렇게 돼 있는데 생성판만
+    제목 위에 붙어 있었다. 그러면 사이트에서 장을 열었을 때 링크 두 줄(장 이동 ·
+    언어 전환)을 지나야 제목에 닿는다 — 제목이 페이지의 첫 요소가 아니게 된다.
+
+    공통 원본은 H1으로 시작한다. 그 줄 뒤에 넣고, H1이 없으면 예전처럼 앞에 둔다.
+    """
+    lines = body.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith("# "):
+            head = "\n".join(lines[: i + 1])
+            rest = "\n".join(lines[i + 1 :]).lstrip("\n")
+            return f"{head}\n\n{block}{rest}"
+    return block + body
+
+
 def generate_locale(suffix: str, check_only: bool) -> tuple[int, list[str]]:
     sources = sorted(COMMON.glob(f"*.{suffix}.md"))
     if not sources:
@@ -285,8 +304,10 @@ def generate_locale(suffix: str, check_only: bool) -> tuple[int, list[str]]:
             content = (s["front_matter"].format(
                            title=chapter_title(src), label=label)
                        + s["banner"].format(source=src.name) + "\n"
-                       + nav_block(order, src.name, titles, suffix)
-                       + language_switch(lang_dir, src.name, suffix) + body)
+                       + insert_after_title(
+                           body,
+                           nav_block(order, src.name, titles, suffix)
+                           + language_switch(lang_dir, src.name, suffix)))
             content = re.sub(r"\n{3,}", "\n\n", content).rstrip() + "\n"
 
             out = target_dir / src.name

@@ -210,7 +210,7 @@ enum ZlinkStreamErrorCode {
   CompressionFailed = 'compressionFailed', DecompressionFailed = 'decompressionFailed',
   TlsValidationFailed = 'tlsValidationFailed',
   UserCallbackFailed = 'userCallbackFailed', ObserverFailed = 'observerFailed',
-  ObserverDropped = 'observerDropped', ReceivedMessageDropped = 'receivedMessageDropped',
+  ObserverDropped = 'observerDropped',
   RemoteError = 'remoteError'
 }
 
@@ -384,7 +384,6 @@ waitForSequence<T>(name: string): ZlinkStreamSequenceCall<T>; // .expect(p).expe
 | option | 대상 큐 | overflow 시 error handler로 보고하는 코드 |
 |---|---|---|
 | `maxInboundObserverNotifications` | observer notification 큐 | `ZlinkStreamErrorCode.ObserverDropped` |
-| `maxReceivedMessages` | 수신 메시지 큐(§10.1) | `ZlinkStreamErrorCode.ReceivedMessageDropped` |
 
 observer callback 실패는 `ZlinkStreamErrorCode.ObserverFailed`로 보고한다.
 `maxInboundObserverPayloadPreviewBytes`는 observation에 담을 payload preview 길이를 정한다.

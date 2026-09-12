@@ -7,6 +7,8 @@ title: "9. STREAM · C#/.NET"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 9. STREAM
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 8. Session과 Actor binding](08-actor-session.ko.md) | [다음: 10. Location — 자동 연결과 Object 위치](10-location.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "9. STREAM · C#/.NET"
 <!-- language-switch:start -->
 다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/09-stream.ko.md) · [Java](../../../java/guide/server/09-stream.ko.md) · [Kotlin](../../../kotlin/guide/server/09-stream.ko.md) · [Node/TypeScript](../../../node/guide/server/09-stream.ko.md)
 <!-- language-switch:end -->
-
-# 9. STREAM
 
 > **이 장의 계약 소유 문서** — [STREAM 서버 session](../../../common/spec/server/04-session/01-stream-session.ko.md)이
 > 동작을, [언어별 STREAM session 공개 계약](../../../common/spec/server/languages/README.ko.md)이
@@ -84,7 +84,8 @@ public sealed class PlaySession(
 
     public void Configure()
     {
-        Context.Handlers.AddHandler<PingHandler>(); // typed session packet handler를 등록한다.
+        // typed session packet handler를 등록한다.
+        Context.Handlers.AddHandler<PingHandler>();
     }
 
     public ValueTask OnConnectedAsync(CancellationToken cancellationToken)
@@ -103,7 +104,8 @@ public sealed class PlaySession(
                 payload,
                 cancellationToken))
         {
-            await Context.CloseAsync(); // application protocol에 없는 packet을 받으면 연결을 닫는다.
+            // application protocol에 없는 packet을 받으면 연결을 닫는다.
+            await Context.CloseAsync();
         }
     }
 
@@ -215,11 +217,13 @@ connector.On<GameStateNotify>("GameStateNotify", (message, cancellationToken) =>
     return ValueTask.CompletedTask;
 });
 
-await connector.Connect.Async(cancellationToken); // 연결과 receive loop 준비를 완료한다.
+// 연결과 receive loop 준비를 완료한다.
+await connector.Connect.Async(cancellationToken);
 
 while (running)
 {
-    await connector.Dispatch.Async(cancellationToken); // Manual 모드는 이 caller에서 callback을 실행한다.
+    // Manual 모드는 이 caller에서 callback을 실행한다.
+    await connector.Dispatch.Async(cancellationToken);
 }
 ```
 

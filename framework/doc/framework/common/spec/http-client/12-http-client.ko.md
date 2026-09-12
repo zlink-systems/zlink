@@ -145,7 +145,7 @@ typed body의 encode/decode는 그 registry가 담당한다. raw body API는 reg
 |------|------|
 | 구성·사용 오류, typed decode, 압축 해제 또는 redirect 형식 오류 | `ProtocolError` |
 | Network, DNS, proxy와 target 연결 실패 | `Unavailable` |
-| 설정한 response body byte 제한 초과 | `CapacityExceeded` |
+| 설정한 response body byte 제한 초과 | `Rejected` |
 | 시도당 timeout 초과 | `DeadlineExceeded` |
 | HTTP status가 400 이상이거나 분류할 수 없는 실행 실패 | `InternalFailure` |
 

@@ -114,7 +114,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             }
             CompletionStage<Void> completion;
             try {
-                completion = submit.submit().admitted();
+                completion = ZLinkJavaSocketSupport.submit(submit);
             } catch (RuntimeException failure) {
                 completion = CompletableFuture.failedFuture(failure);
             }
@@ -240,23 +240,23 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         RoutingId target,
         ReplyToken requestSequence,
         List<byte[]> frames) {
-        ensureOwned(router);
-        replyOnLane(router, target, requestSequence, frames);
+        replyMessages(router, target, requestSequence,
+            copyMessages(frames, "service reply requires request sequence and frames"));
     }
 
-    private void replyOnLane(
+    /** Consumes every reply message on every return or throw path. */
+    void replyMessages(
         RouterSocket router,
         RoutingId target,
         ReplyToken requestSequence,
-        List<byte[]> frames) {
-        if (requestSequence == null || frames.isEmpty()) {
-            throw new IllegalArgumentException(
-                "service reply requires request sequence and frames");
-        }
-        List<Message> messages = frames.stream()
-            .map(frame -> Message.from(Objects.requireNonNull(frame, "frame")))
-            .toList();
+        List<Message> replyMessages) {
+        List<Message> messages = claimMessages(replyMessages);
         try {
+            ensureOwned(router);
+            if (requestSequence == null || messages.isEmpty()) {
+                throw new IllegalArgumentException(
+                    "service reply requires request sequence and frames");
+            }
             var submit = router.reply(target, requestSequence)
                 .message(messages.getFirst());
             for (int index = 1; index < messages.size(); index++) {

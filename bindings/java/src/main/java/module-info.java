@@ -1,6 +1,5 @@
 module systems.zlink {
     requires static io.netty.buffer;
-    requires jdk.unsupported;
 
     exports systems.zlink.contracts.core;
     exports systems.zlink.contracts.errors;

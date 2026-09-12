@@ -17,6 +17,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -884,6 +885,135 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             new IllegalStateException("target Spot is closed"));
     }
 
+    @Test
+    void declinedRelocationStageFallsThroughBoundActorAdmissionExactlyOnce()
+        throws Exception {
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId nodeRid = RoutingId.from(
+                "jvm-published-stage-target-" + System.nanoTime());
+            RoutingId sourceRid = RoutingId.from(
+                "jvm-published-stage-source-" + System.nanoTime());
+            RoutingId sessionRid = RoutingId.from(
+                "jvm-published-stage-session-" + System.nanoTime());
+            node.setRoutingId(nodeRid);
+            node.setBind("inproc://jvm-published-stage-"
+                + System.nanoTime());
+            node.start();
+
+            ZLinkJavaRawSpotNode spots =
+                (ZLinkJavaRawSpotNode) node.spotNode();
+            ZLinkBackendActorRef actor;
+            try (Message create = Message.from("create")) {
+                actor = spots.createActor("published-actor", 4, create);
+            }
+            spots.rememberActorAuthority(actor, 8, 23);
+            var route = new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                actor, node.lifecycleGeneration(), 8, 23);
+            assertTrue(spots.acceptRemoteStreamBinding(
+                sourceRid,
+                11,
+                "source-owner",
+                12,
+                new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                    1, route, sessionRid, true, 33)));
+
+            AtomicInteger stagingCalls = new AtomicInteger();
+            spots.setRelocationStagingIngressHandler(
+                new ZLinkInternalSpotNode.RelocationStagingIngressHandler() {
+                    @Override
+                    public boolean handleSpot(
+                        ZLinkInternalMeshNode.PeerAuthorityFence source,
+                        ZLinkServiceM6BWireCodec.SpotMessage header,
+                        byte[] metadata,
+                        java.util.function.Supplier<byte[]> acceptedRecord,
+                        int acceptedRecordSizeHint,
+                        List<Message> parts,
+                        String contentType,
+                        java.util.function.Consumer<List<Message>> reply,
+                        java.util.function.Consumer<Throwable> failure) {
+                        return false;
+                    }
+
+                    @Override
+                    public boolean handleActor(
+                        ZLinkInternalMeshNode.PeerAuthorityFence source,
+                        ZLinkServiceM6BWireCodec.ActorMessage header,
+                        java.util.function.Supplier<byte[]> acceptedRecord,
+                        List<Message> parts,
+                        String contentType,
+                        java.util.function.Consumer<List<Message>> reply,
+                        java.util.function.Consumer<Throwable> failure) {
+                        assertEquals(sourceRid, source.sourceNodeRid());
+                        assertEquals(11, source.sourceNodeGeneration());
+                        assertEquals("source-owner", source.ownerId());
+                        assertEquals(12, source.ownerLeaseGeneration());
+                        assertEquals(route, header.target());
+                        assertEquals(24,
+                            header.boundSession().sourceSessionSequence());
+                        acceptedRecord.get();
+                        stagingCalls.incrementAndGet();
+                        return false;
+                    }
+                });
+            AtomicInteger dispatches = new AtomicInteger();
+            CompletableFuture<Void> dispatched = new CompletableFuture<>();
+            spots.entrySpot().onDispatchEvent(info -> {
+                if (info.event()
+                    != ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
+                    return;
+                }
+                dispatches.incrementAndGet();
+                info.actorMessages().forEach(ZLinkBackendActorReceived::close);
+                dispatched.complete(null);
+            });
+            int boundFlags =
+                systems.zlink.framework.runtime.protocol
+                    .ServiceWireConstants.FLAG_BOUND_SESSION;
+            var header = new ZLinkServiceM6BWireCodec.ActorMessage(
+                false,
+                boundFlags,
+                null,
+                null,
+                route,
+                new ZLinkServiceM6BWireCodec.BoundSessionTail(
+                    sessionRid, 33, 24));
+            AtomicInteger replies = new AtomicInteger();
+            AtomicInteger failures = new AtomicInteger();
+            Message first = Message.from("first-post-move");
+            boolean accepted = spots.enqueueRemoteActor(
+                new ZLinkInternalMeshNode.PeerAuthorityFence(
+                    sourceRid, 11, "source-owner", 12),
+                header,
+                () -> new byte[] {1},
+                List.of(first),
+                null,
+                ignored -> replies.incrementAndGet(),
+                ignored -> failures.incrementAndGet());
+            if (!accepted) {
+                first.close();
+            }
+            assertTrue(accepted);
+            dispatched.get(1, TimeUnit.SECONDS);
+
+            try (Message duplicate = Message.from("duplicate")) {
+                assertFalse(spots.enqueueRemoteActor(
+                    new ZLinkInternalMeshNode.PeerAuthorityFence(
+                        sourceRid, 11, "source-owner", 12),
+                    header,
+                    () -> new byte[] {2},
+                    List.of(duplicate),
+                    null,
+                    ignored -> replies.incrementAndGet(),
+                    ignored -> failures.incrementAndGet()));
+            }
+            assertEquals(2, stagingCalls.get());
+            assertEquals(1, dispatches.get());
+            assertEquals(0, replies.get());
+            assertEquals(0, failures.get());
+        }
+    }
+
     private static void assertActorDispatchFailureTerminal(
         RuntimeException dispatchFailure) throws Exception {
         try (var context = Zlink.createContext();
@@ -1482,6 +1612,107 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     received.result());
             }
             assertEquals(3, handlerCalls.get());
+        }
+    }
+
+    @Test
+    void remoteSpotNativeFramesPreserveLargeMultipartPayloads() throws Exception {
+        String endpoint = "inproc://jvm-m6b-native-spot-" + System.nanoTime();
+        RoutingId leftRid = RoutingId.from("jvm-m6b-native-spot-left");
+        RoutingId rightRid = RoutingId.from("jvm-m6b-native-spot-right");
+        String targetSpotId = "jvm-m6b-native-spot-target";
+        byte[] sendMetadata = {1, 3, 5, 7};
+        byte[] requestMetadata = {2, 4, 6, 8};
+        byte[] sendHead = payloadBytes(1_024, 11);
+        byte[] sendBody = payloadBytes(4_096, 17);
+        byte[] requestHead = payloadBytes(1_024, 23);
+        byte[] requestBody = payloadBytes(4_096, 29);
+        byte[] replyHead = payloadBytes(1_024, 31);
+        byte[] replyBody = payloadBytes(4_096, 37);
+
+        try (var context = Zlink.createContext();
+             var left = new ZLinkJavaRawMeshNode(context, "mesh");
+             var right = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            context.options().autoHwmEnabled(false);
+            left.setRoutingId(leftRid);
+            left.setBind(endpoint);
+            right.setRoutingId(rightRid);
+            right.setBind(
+                "inproc://jvm-m6b-native-spot-right-" + System.nanoTime());
+            left.start();
+            right.start();
+            acceptExactSource(left, rightRid, right.lifecycleGeneration());
+            right.connectPeer(endpoint, leftRid);
+            awaitAdmitted(right);
+
+            ZLinkBackendSpot source = right.spotNode().createSpot("source");
+            ZLinkBackendSpot target = left.spotNode().createSpot(targetSpotId);
+            target.rememberSpotAuthority(
+                leftRid, targetSpotId, target.lifecycleGeneration(), 77, 1);
+            source.rememberSpotAuthority(
+                leftRid, targetSpotId, target.lifecycleGeneration(), 77, 1);
+
+            CompletableFuture<ZLinkBackendReceived> sent = new CompletableFuture<>();
+            CompletableFuture<ZLinkBackendReceived> requested =
+                new CompletableFuture<>();
+            target.onDispatchEvent(info -> {
+                if (info.event() != ZLinkBackendSpotDispatchEvent.ROUTED_READABLE) {
+                    return;
+                }
+                ZLinkBackendReceived received =
+                    target.recvRoute(ZLinkBackendRecvMode.DONT_WAIT);
+                if (received == null) {
+                    return;
+                }
+                CompletableFuture<ZLinkBackendReceived> destination =
+                    received.requestSeq().isPresent() ? requested : sent;
+                if (!destination.complete(received)) {
+                    received.close();
+                }
+            });
+
+            try (Message head = Message.from(sendHead);
+                 Message body = Message.from(sendBody)) {
+                source.sendToSpot(
+                        leftRid,
+                        targetSpotId,
+                        target.lifecycleGeneration(),
+                        sendMetadata,
+                        List.of(head, body))
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
+            }
+            try (ZLinkBackendReceived received = sent.get(2, TimeUnit.SECONDS)) {
+                assertArrayEquals(sendMetadata, received.applicationMetadata());
+                assertArrayEquals(sendHead, received.parts().get(0).toByteArray());
+                assertArrayEquals(sendBody, received.parts().get(1).toByteArray());
+            }
+
+            CompletableFuture<ZLinkBackendReceived> reply;
+            try (Message head = Message.from(requestHead);
+                 Message body = Message.from(requestBody)) {
+                reply = source.requestToSpot(
+                        leftRid,
+                        targetSpotId,
+                        target.lifecycleGeneration(),
+                        requestMetadata,
+                        List.of(head, body),
+                        Duration.ofSeconds(2))
+                    .toCompletableFuture();
+            }
+            try (ZLinkBackendReceived received = requested.get(2, TimeUnit.SECONDS);
+                 Message head = Message.from(replyHead);
+                 Message body = Message.from(replyBody)) {
+                assertArrayEquals(requestMetadata, received.applicationMetadata());
+                assertArrayEquals(requestHead, received.parts().get(0).toByteArray());
+                assertArrayEquals(requestBody, received.parts().get(1).toByteArray());
+                received.reply(List.of(head, body));
+            }
+            try (ZLinkBackendReceived received = reply.get(2, TimeUnit.SECONDS)) {
+                assertEquals(ZLinkBackendRequestResult.OK, received.result());
+                assertArrayEquals(replyHead, received.parts().get(0).toByteArray());
+                assertArrayEquals(replyBody, received.parts().get(1).toByteArray());
+            }
         }
     }
 
@@ -2981,6 +3212,14 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 reactivated.spot().lifecycleGeneration()
                     > firstGeneration);
         }
+    }
+
+    private static byte[] payloadBytes(int length, int seed) {
+        byte[] payload = new byte[length];
+        for (int index = 0; index < payload.length; index++) {
+            payload[index] = (byte) (seed + index * 31);
+        }
+        return payload;
     }
 
     private static void acceptExactSource(

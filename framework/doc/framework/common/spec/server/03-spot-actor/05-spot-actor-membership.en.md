@@ -392,7 +392,7 @@ declines isn't an error, so it's `Rejected`, not `Failed`.
 |---|---|
 | The requested User Spot can't be found. | `NotFound` |
 | There's no Entry Spot to move to, or no compatible target node. | `Unavailable` |
-| The target node's remaining capacity is insufficient. | `CapacityExceeded` |
+| The target node cannot take any more. | `Unavailable` |
 | The Actor's relocation policy forbids cross-node moves. | `Rejected` |
 | The location change wasn't committed by the deadline. | `DeadlineExceeded` |
 | Capture/factory/restore/staging fails with an internal error. | `InternalFailure` |

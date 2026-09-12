@@ -41,7 +41,8 @@ framework는 `"zlink.framework"`라는 이름의 `System.Diagnostics.Metrics.Met
     ```csharp
     // 이 한 줄로 zlink 계기 전체가 앱의 OTel 파이프라인에 들어간다.
     builder.Services.AddOpenTelemetry().WithMetrics(m => m
-        .AddMeter("zlink.framework") // Framework가 계기를 방출하는 정식 meter 이름이다.
+        // Framework가 계기를 방출하는 정식 meter 이름이다.
+        .AddMeter("zlink.framework")
         .AddPrometheusExporter());
     ```
 
@@ -304,7 +305,8 @@ SpotId direct 호출에 Instance intent를 붙였을 때만 시작한다([06-spo
     ```cpp
     relocation_options_t relocation;
     relocation.mode = relocation_mode_t::rolling_update;
-    relocation.target_application_version = 12;              // 지정한 새 버전의 eligible node만 사용한다.
+    // 지정한 새 버전의 eligible node만 사용한다.
+    relocation.target_application_version = 12;
     relocation.deadline = std::chrono::seconds (25);
 
     auto result = co_await runtime.relocate (relocation);
@@ -520,7 +522,8 @@ component 이벤트 스트림을 제공한다. Host termination은 framework run
     ```csharp
     var meshRuntime = app.Services.GetRequiredService<IZLinkRouteMeshRuntime>();
 
-    var status = meshRuntime.GetStatus("game.room"); // 노드·peer·channel의 immutable 현재 상태
+    // 노드·peer·channel의 immutable 현재 상태
+    var status = meshRuntime.GetStatus("game.room");
     var ready = status.IsReady;
 
     await foreach (var observed in meshRuntime.ObserveAsync("game.room", cancellationToken: ct))

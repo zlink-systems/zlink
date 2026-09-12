@@ -7,6 +7,8 @@ title: "12. Operations — Runtime Metrics · Graceful Drain · Readiness · Kot
      Edit the common source instead, then regenerate with `python3 doc/site/scripts/generate_language_guides.py`. -->
 <!-- generated:end -->
 
+# 12. Operations — Runtime Metrics · Graceful Drain · Readiness
+
 <!-- framework-adapter-nav:start -->
 [Guide Home](README.en.md) | [Previous: 11. Monitoring — Status Observation And Diagnostics](11-monitoring.en.md) | [Next: 13. Key Type Usage Index](13-interface-catalog.en.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "12. Operations — Runtime Metrics · Graceful Drain · Readiness · Kot
 <!-- language-switch:start -->
 View in another language — [C#/.NET](../../../dotnet/guide/server/12-operations.en.md) · [C++](../../../cpp/guide/server/12-operations.en.md) · [Java](../../../java/guide/server/12-operations.en.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/12-operations.en.md)
 <!-- language-switch:end -->
-
-# 12. Operations — Runtime Metrics · Graceful Drain · Readiness
 
 > **The documents that own this chapter's contract** — owned by the common spec
 > [Runtime state query and operational diagnostics](../../../common/spec/server/06-observability/01-runtime-monitoring.en.md),
@@ -290,7 +290,8 @@ avoids failures for callers still caching the old route.
 val result = runtime.relocate(
     ZLinkFrameworkRelocationOptions(
         ZLinkFrameworkRelocationMode.ROLLING_UPDATE,
-        12L,                            // Uses only eligible nodes on the specified new version.
+        // Uses only eligible nodes on the specified new version.
+        12L,
         Duration.ofSeconds(25)))
     .await()
 
@@ -374,8 +375,10 @@ A MeshNode registered with `addRouteMesh` is operated through two DI singletons.
 socket options (HWM, timeout) are exclusive to `configureRouterSocket()` before startup.
 
 ```kotlin
-meshOptions.mesh("game.room").setPlacementWeight(0) // Excludes it from new object placement
-meshOptions.channel("game.room").weight(0)      // Excludes it from new channel select-one
+// Excludes it from new object placement
+meshOptions.mesh("game.room").setPlacementWeight(0)
+// Excludes it from new channel select-one
+meshOptions.channel("game.room").weight(0)
 ```
 
 The two weights are independent and take effect on new selections while running. Placement

@@ -79,7 +79,7 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
       const spot_closing_context_t &,
       std::stop_token) override
     {
-        _game_timer.cancel ();
+        co_await _game_timer.cancel ();
         co_return;
     }
 

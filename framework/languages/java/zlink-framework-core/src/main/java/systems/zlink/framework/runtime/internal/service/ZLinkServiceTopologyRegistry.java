@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 import systems.zlink.contracts.core.RoutingId;
 
@@ -253,10 +254,25 @@ public final class ZLinkServiceTopologyRegistry {
 
     /** Selects from the topology/liveness snapshot prepared at change time. */
     public Optional<Peer> selectReadyChannel(String channelName) {
-        String requiredChannelName = requireChannelName(channelName);
-        return inStateLane(() -> selectPreparedOnLane(
-            readyChannelPlans, requiredChannelName));
+        return selectReadyChannel(channelName, null);
     }
+
+    public Optional<Peer> selectReadyChannel(
+        String channelName,
+        BiConsumer<String, ChannelSelectionFailure> onUnavailable) {
+        String requiredChannelName = requireChannelName(channelName);
+        return inStateLane(() -> {
+            ChannelSelectionPlan plan = readyChannelPlans.get(requiredChannelName);
+            Optional<Peer> selected = plan == null ? Optional.empty() : plan.next();
+            if (selected.isEmpty() && onUnavailable != null) {
+                onUnavailable.accept(requiredChannelName, plan == null
+                    ? ChannelSelectionFailure.NO_MEMBER : plan.unavailableReason);
+            }
+            return selected;
+        });
+    }
+
+    public enum ChannelSelectionFailure { NO_MEMBER, NOT_READY, DRAINING }
 
     /**
      * Projects the authoritative connection readiness into the selector. The
@@ -310,11 +326,16 @@ public final class ZLinkServiceTopologyRegistry {
     }
 
     public boolean hasReadyChannel(String channelName) {
+        return readyChannelMemberCount(channelName) > 0;
+    }
+
+    /** Reads the selector's current candidates without advancing its cursor. */
+    public long readyChannelMemberCount(String channelName) {
         String requiredChannelName = requireChannelName(channelName);
         return inStateLane(() -> {
             ChannelSelectionPlan plan = readyChannelPlans.get(
                 requiredChannelName);
-            return plan != null && !plan.isEmpty();
+            return plan == null ? 0L : (long) plan.candidates.size();
         });
     }
 
@@ -454,8 +475,26 @@ public final class ZLinkServiceTopologyRegistry {
                 : previous.currentSnapshot();
             plans.put(
                 channelName,
-                ChannelSelectionPlan.prepare(eligible, currents));
+                eligible.isEmpty()
+                    ? unavailableChannelPlan(channelName, snapshot)
+                    : ChannelSelectionPlan.prepare(eligible, currents));
         }
+    }
+
+    private static ChannelSelectionPlan unavailableChannelPlan(
+        String channelName, List<Peer> snapshot) {
+        // Prepared with the selector at topology-change time, never on a send.
+        for (Peer peer : snapshot) {
+            for (ZLinkServiceNodeDescriptor.Channel channel : peer.descriptor().channels()) {
+                if (channel.name().equals(channelName)) {
+                    switch (peer.descriptor().state()) {
+                        case RETIRING, DRAINING, STOPPED -> { }
+                        default -> { return ChannelSelectionPlan.EMPTY; }
+                    }
+                }
+            }
+        }
+        return ChannelSelectionPlan.DRAINING;
     }
 
     private List<WeightedPeer> eligibleChannelTargets(
@@ -533,9 +572,15 @@ public final class ZLinkServiceTopologyRegistry {
     private static final class ChannelSelectionPlan {
         private static final ChannelSelectionPlan EMPTY =
             new ChannelSelectionPlan(
-                List.of(), new int[0], new long[0][], 0, null);
+                List.of(), new int[0], new long[0][], 0, null,
+                ChannelSelectionFailure.NOT_READY);
+        private static final ChannelSelectionPlan DRAINING =
+            new ChannelSelectionPlan(
+                List.of(), new int[0], new long[0][], 0, null,
+                ChannelSelectionFailure.DRAINING);
 
         private final List<WeightedPeer> candidates;
+        private final ChannelSelectionFailure unavailableReason;
         private final int[] winners;
         private final long[][] statesBefore;
         private final int cycleStart;
@@ -547,8 +592,10 @@ public final class ZLinkServiceTopologyRegistry {
             int[] winners,
             long[][] statesBefore,
             int cycleStart,
-            long[] fallbackCurrents) {
+            long[] fallbackCurrents,
+            ChannelSelectionFailure unavailableReason) {
             this.candidates = candidates;
+            this.unavailableReason = unavailableReason;
             this.winners = winners;
             this.statesBefore = statesBefore;
             this.cycleStart = cycleStart;
@@ -587,7 +634,7 @@ public final class ZLinkServiceTopologyRegistry {
                             .toArray(),
                         preparedStates.toArray(long[][]::new),
                         repeatedAt,
-                        null);
+                        null, ChannelSelectionFailure.NOT_READY);
                 }
                 preparedStates.add(currents.clone());
                 preparedWinners.add(selectAndAdvance(ordered, currents));
@@ -597,7 +644,8 @@ public final class ZLinkServiceTopologyRegistry {
                 }
             }
             return new ChannelSelectionPlan(
-                ordered, new int[0], new long[0][], 0, initial);
+                ordered, new int[0], new long[0][], 0, initial,
+                ChannelSelectionFailure.NOT_READY);
         }
 
         Optional<Peer> next() {

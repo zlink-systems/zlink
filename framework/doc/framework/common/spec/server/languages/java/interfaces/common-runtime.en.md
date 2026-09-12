@@ -370,7 +370,6 @@ public final class systems.zlink.framework.errors.ZLinkFrameworkErrorKind extend
  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind NOT_CONFIGURED;
  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind REJECTED;
  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind UNAVAILABLE;
- public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind CAPACITY_EXCEEDED;
  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind DEADLINE_EXCEEDED;
  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind SHUTTING_DOWN;
  public static final systems.zlink.framework.errors.ZLinkFrameworkErrorKind PROTOCOL_ERROR;

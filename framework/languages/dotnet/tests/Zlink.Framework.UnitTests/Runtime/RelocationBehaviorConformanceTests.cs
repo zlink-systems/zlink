@@ -1000,6 +1000,9 @@ public sealed class RelocationBehaviorConformanceTests
     [Fact]
     public async Task ActorJoin_runtime_preserves_observable_order_and_exact_callback_counts()
     {
+        using var flowListener = Environment.GetEnvironmentVariable("ZLINK_RELOCATION_TEST_FLOW_PATH") is { } flowPath
+            ? new TestHostMessageFlowListener(flowPath)
+            : null;
         using var fixture = LoadBehaviorFixture();
         Assert.Equal(
             "zlink.framework.relocation-behavior",
@@ -1122,6 +1125,11 @@ public sealed class RelocationBehaviorConformanceTests
                 .Timeout(TimeSpan.FromSeconds(15))
                 .Async<BehaviorAck>();
             Assert.Equal("direct", direct.Marker);
+            await trace.WaitAsync("sourceMembershipLeaveStarted");
+            Assert.True(source.Runtime.TryGetCreatedActorState(actorId, out var retainedSource));
+            Assert.NotNull(retainedSource.Actor);
+            Assert.NotNull(retainedSource.Context);
+            Assert.True(retainedSource.Handoff.IsSourceMigrationInProgress);
         }
         finally
         {
@@ -1148,12 +1156,95 @@ public sealed class RelocationBehaviorConformanceTests
             "An unbound ActorJoin must normalize the completed relocation "
             + "before the public join completion can outlive its target process.");
         AssertObservedBehavior(fixture.RootElement, trace.Events);
+        var retiredSource = source.Runtime.GetOrCreateActorState(actorId);
+        await WaitUntilAsync(() => retiredSource.Actor is null);
+        Assert.Null(retiredSource.Context);
+        Assert.Null(retiredSource.Activation);
+        Assert.Null(retiredSource.Handoff.SourceMembershipLeaveCompletion);
+        Assert.False(retiredSource.Handoff.IsSourceMigrationInProgress);
         }
         finally
         {
             trace.ReleaseTargetLifecycle.TrySetResult();
             trace.ReleaseSourceLeave.TrySetResult();
         }
+    }
+
+    [Fact]
+    public async Task ActorJoin_repeated_moves_release_source_instances_and_membership_obligations()
+    {
+        const int iterations = 20;
+        var trace = new RelocationBehaviorTrace();
+        trace.ReleaseJoinHandler.TrySetResult();
+        trace.ReleaseTargetLifecycle.TrySetResult();
+        trace.ReleaseSourceLeave.TrySetResult();
+        var locationStore = new RecordingLocationStore(
+            new ZLinkInMemoryProviderLocationStore(), trace);
+        var relocationStore = new SynchronizedRelocationStore();
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source", trace, locationStore, relocationStore, registerTargetSpot: false);
+        var actorManager = source.Services.GetRequiredService<IZLinkActorManager>();
+        var actorIds = new string[iterations];
+        // Create the workload before the target joins placement discovery,
+        // exactly as in the single-Actor ordering regression.
+        for (var iteration = 0; iteration < iterations; iteration++)
+        {
+            var actorId = actorIds[iteration] = $"cleanup-actor-{Guid.NewGuid():N}";
+            var created = Assert.IsType<ZLinkActorCreateResult.Created>(
+                await actorManager.GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+                    .InMesh(RelocationBehaviorHost.MeshName)
+                    .Request(new BehaviorCreate(iteration))
+                    .Timeout(TimeSpan.FromSeconds(10))
+                    .Async());
+            Assert.Equal(source.LocalNodeRid, created.Actor.NodeRid);
+        }
+        Assert.Equal(iterations, source.Runtime.GetDrainRemainderCounts().Actors);
+        await using var target = await RelocationBehaviorHost.StartAsync(
+            "target", trace, locationStore, relocationStore, registerTargetSpot: true);
+        trace.SourceNodeRid = source.LocalNodeRid;
+        trace.TargetNodeRid = target.LocalNodeRid;
+        await WaitUntilAsync(() =>
+            source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status().ActivePeerCount == 1
+            && target.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status().ActivePeerCount == 1);
+        var targetSpotId = $"cleanup-spot-{Guid.NewGuid():N}";
+        var spot = await source.Services.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate(targetSpotId, RelocationBehaviorHost.SpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Request(ZLinkMessage.Empty)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Async();
+        Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
+        var client = source.Services.GetRequiredService<IZLinkActorClient>();
+
+        for (var iteration = 0; iteration < iterations; iteration++)
+        {
+            var actorId = actorIds[iteration];
+            trace.ActorId = actorId;
+            var sourceState = source.Runtime.GetOrCreateActorState(actorId);
+            _ = await client.RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
+                .Timeout(TimeSpan.FromSeconds(15))
+                .Async<BehaviorAck>();
+            await WaitUntilAsync(() => sourceState.Actor is null);
+            _ = await client.RequestToActor(actorId, new BehaviorWork("direct"))
+                .Timeout(TimeSpan.FromSeconds(15))
+                .Async<BehaviorAck>();
+
+            // Keep both runtimes alive for all iterations. The source may
+            // retain its routing tombstone, but no application activation or
+            // pending source membership obligation may accumulate with it.
+            Assert.Null(sourceState.Context);
+            Assert.Null(sourceState.Activation);
+            Assert.False(sourceState.IsConfigured);
+            Assert.Null(sourceState.Handoff.SourceMembershipLeaveCompletion);
+            Assert.False(sourceState.Handoff.IsSourceMigrationInProgress);
+            Assert.Equal(iterations - iteration - 1, source.Runtime.GetDrainRemainderCounts().Actors);
+            Assert.Equal(iteration + 1, target.Runtime.GetDrainRemainderCounts().Actors);
+            Assert.Equal(iteration + 1, trace.Events.Count(
+                value => value == "sourceMembershipLeaveStarted"));
+        }
+        Assert.Equal(iterations, trace.Events.Count(value => value == "publicJoinCompleted"));
     }
 
     private static void AssertObservedBehavior(
@@ -1602,6 +1693,9 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
                     factory => factory.DisableRelocation());
         });
         var provider = services.BuildServiceProvider();
+        if (Environment.GetEnvironmentVariable("ZLINK_RELOCATION_TEST_FLOW_PATH") is not null)
+            provider.GetRequiredService<ZLinkFrameworkRuntime>().Registration
+                .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
         var hosted = provider.GetServices<IHostedService>().Single(
             static service => service is ZLinkFrameworkHostedService);
         try

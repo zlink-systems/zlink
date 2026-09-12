@@ -162,8 +162,8 @@ pass 1 원본 C++ N=10,920, C N=20,052를 사용했다. PLT처럼 주소만 남�
 - 요청당 다섯 주요 new를 제외한 C++ **1.407509회/시도** 중 Core async write/read가
   **1.214194회/시도**, deque block 확장이 **0.062454회/시도**다. setup·I/O thread 비용을 포함하는 수치다.
 
-전수 파일: [C++ 호출자 TSV](/tmp/zlink-cpp-reqrep-cost-map/cpp-original-new-callers.tsv),
-[C 호출자 TSV](/tmp/zlink-cpp-reqrep-cost-map/c-original-new-callers.tsv).
+전수 파일: C++ 호출자 TSV (`/tmp/zlink-cpp-reqrep-cost-map/cpp-original-new-callers.tsv`),
+C 호출자 TSV (`/tmp/zlink-cpp-reqrep-cost-map/c-original-new-callers.tsv`).
 주표와 동일한 새 셀의 전체 new/시도는 C++ 6.464981, C 0.807523다.
 원본 6.407509와 새 값을 섞어서 합계를 만들지 않았다.
 

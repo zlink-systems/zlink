@@ -7,6 +7,8 @@ title: "1. 개요 · C#/.NET"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 1. 개요
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [다음: 2. 시작하기](02-getting-started.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "1. 개요 · C#/.NET"
 <!-- language-switch:start -->
 다른 언어로 보기 — **C#/.NET** · [C++](../../../cpp/guide/server/01-overview.ko.md) · [Java](../../../java/guide/server/01-overview.ko.md) · [Kotlin](../../../kotlin/guide/server/01-overview.ko.md) · [Node/TypeScript](../../../node/guide/server/01-overview.ko.md)
 <!-- language-switch:end -->
-
-# 1. 개요
 
 > **이 장의 계약 소유 문서** — [Framework 개요](../../../common/spec/server/00-foundation/03-overview.ko.md)와
 > [언어별 공개 계약 목차](../../../common/spec/server/languages/README.ko.md)가 소유한다.
@@ -186,7 +186,8 @@ application 코드는 바뀌지 않는다 — 이 backend 경계는
 // 등록 — room mesh 하나와 room 타입
 var node = options.AddRouteMesh("game.room");
 node.Listen("tcp://0.0.0.0:9001");
-node.Channel("game.room").Server();     // mesh는 최소 1개 logical membership을 갖는다
+// mesh는 최소 1개 logical membership을 갖는다
+node.Channel("game.room").Server();
 node.Objects().Server().AddSpotFactory<BingoRoomSpot>("room", factory => factory.RecreateOnRelocation());
 ```
 
@@ -198,7 +199,8 @@ public sealed class MarkNumberHandler
     public ValueTask<MarkResult> HandleAsync(
         BingoRoomSpot room, MarkNumber request, CancellationToken ct)
     {
-        room.Board.Mark(request.Number);        // lock 없음
+        // lock 없음
+        room.Board.Mark(request.Number);
         room.LastActivity = DateTimeOffset.UtcNow;
         return ValueTask.FromResult(new MarkResult(room.Board.HasBingo()));
     }
@@ -317,7 +319,8 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 세 조각이 사
 // HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
 // 첫 요청이 OrderId 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
 // 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-await spots.RequestToSpot(request.OrderId, request)    // request는 이미 StartOrderWorkflowReq 바디다.
+// request는 이미 StartOrderWorkflowReq 바디다.
+await spots.RequestToSpot(request.OrderId, request)
     .InstanceSpot("order-workflow")
     .InMesh("commerce")
     .Async<StartOrderWorkflowRes>(ct);
@@ -418,7 +421,8 @@ public sealed class StartOrderWorkflowHandler :
 {
     public ValueTask<StartOrderWorkflowRes> HandleAsync(
         OrderWorkflowSpot spot, StartOrderWorkflowReq request, CancellationToken ct)
-        => spot.StartOrderWorkflowAsync(request, ct);   // spot 상태에 lock 없이 접근
+        // spot 상태에 lock 없이 접근
+        => spot.StartOrderWorkflowAsync(request, ct);
 }
 ```
 
@@ -473,26 +477,33 @@ public sealed class GetPriceHandler
 {
     public ValueTask<PriceReply> HandleAsync(
         PriceRequest request, IZLinkMessageContext context, CancellationToken ct)
-        => ValueTask.FromResult(new PriceReply(request.Symbol, 187.42m));   // 187.42m은 데모용 고정값(실제론 조회 결과)
+        // 187.42m은 데모용 고정값(실제론 조회 결과)
+        => ValueTask.FromResult(new PriceReply(request.Symbol, 187.42m));
 }
 
 // 등록 — MeshNode endpoint와 price membership의 handler를 함께 선언한다.
 builder.Services.AddZLinkFramework(options =>
 {
-    options.AddRouteMesh("services")                         // MeshName으로 통신 범위를 구분한다.
-        .Listen("tcp://0.0.0.0:7301")                       // 이 MeshNode의 endpoint를 연다.
+    // MeshName으로 통신 범위를 구분한다.
+    options.AddRouteMesh("services")
+        // 이 MeshNode의 endpoint를 연다.
+        .Listen("tcp://0.0.0.0:7301")
         .SetRoutingId(RoutingId.From("price-1"))
-        .Channel("price")                                   // price 처리 membership을 등록한다.
+        // price 처리 membership을 등록한다.
+        .Channel("price")
         .Server()
-        .AddRequestHandler<GetPriceHandler>();              // 이 channel의 request handler를 등록한다.
+        // 이 channel의 request handler를 등록한다.
+        .AddRequestHandler<GetPriceHandler>();
 });
 
 // 클라이언트: IZLinkRouteClient를 주입받아 ChannelName으로 호출한다.
 var reply = await client
     .RequestToChannel(
-        "price",                                            // process-local로 찾을 ChannelName
+        // process-local로 찾을 ChannelName
+        "price",
         new PriceRequest("AAPL"))
-    .Async<PriceReply>(ct);                                // 송신한 뒤 reply를 비동기로 기다린다.
+    // 송신한 뒤 reply를 비동기로 기다린다.
+    .Async<PriceReply>(ct);
 ```
 
 연결·설정 코드가 사라지고 남는 것은 handler와 channel 등록 몇 줄이다.
@@ -514,20 +525,26 @@ fanout과 STREAM node를 선언한다.
 ```csharp
 builder.Services.AddZLinkFramework(options =>
 {
-    options.AddLocationStore(new ZLinkRedisLocationStore(...));  // node·actor·spot 위치정보 제공 — 이 정보를 기반으로 node 간 연결은 자동
+    // node·actor·spot 위치정보 제공 — 이 정보를 기반으로 node 간 연결은 자동
+    options.AddLocationStore(new ZLinkRedisLocationStore(...));
 
-    options.AddRouteMesh("services")                         // 서버 간 request/send용 MeshNode
+    // 서버 간 request/send용 MeshNode
+    options.AddRouteMesh("services")
         .Listen("tcp://0.0.0.0:7301")
         .SetRoutingId(RoutingId.From("service-a"))
-        .Channel("orders").Server();                         // 처리할 논리 membership
+        // 처리할 논리 membership
+        .Channel("orders").Server();
     options.AddFanoutChannel("events")
-        .EnablePublisher("tcp://0.0.0.0:7302");              // classic event fan-out
-    options.AddRouteMesh("game.room")                        // SPOT·actor도 MeshNode가 소유
+        // classic event fan-out
+        .EnablePublisher("tcp://0.0.0.0:7302");
+    // SPOT·actor도 MeshNode가 소유
+    options.AddRouteMesh("game.room")
         .Listen("tcp://0.0.0.0:7304")
         .SetRoutingId(RoutingId.From("room-a"))
         .Channel("game.room").Server();
     options.AddStreamNode("gateway")
-        .Bind("tcp://0.0.0.0:7400");                         // 외부 client endpoint
+        // 외부 client endpoint
+        .Bind("tcp://0.0.0.0:7400");
 });
 ```
 

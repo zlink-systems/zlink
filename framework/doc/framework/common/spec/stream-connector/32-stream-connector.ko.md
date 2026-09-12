@@ -484,7 +484,6 @@ request callback만 실행한다.
 | `SendFailed` | 전송 실패 |
 | `CompressionFailed` / `DecompressionFailed` | 압축·해제 실패 |
 | `TlsValidationFailed` | TLS 검증 실패 |
-| `ReceivedMessageDropped` | 수신 메시지 큐 overflow(§10.1) |
 | `UserCallbackFailed` | 사용자 callback이 실패 |
 | `ObserverFailed` / `ObserverDropped` | inbound observer callback 실패 / 큐 overflow |
 | `RemoteError` | 서버가 §5.3을 충족하는 Error payload로 응답함. `request_seq`가 pending request와 맞으면 그 request를 실패시키고, 없거나 맞지 않으면 error 이벤트로 전달함 |
@@ -503,7 +502,6 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 | `FrameTooLarge` | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `TransportError` | reconnect option이 켜져 있으면 적용 |
 | `CompressionFailed` | 해당 송신 operation만 실패 | 유지 | 없음 | 안 함 |
 | `DecompressionFailed` | 해당 수신 packet 또는 pending request만 실패 | 유지 | 없음 | 안 함 |
-| `ReceivedMessageDropped` | 새로 도착한 send만 폐기 | 유지 | 없음 | 안 함 |
 | `UserCallbackFailed`, `ObserverFailed`, `ObserverDropped`, `RemoteError` | 오류 event 또는 관련 callback/request로 전달 | 유지 | 없음 | 안 함 |
 
 **전달 방식은 표면에 따라 다르되 의미는 같다.**
@@ -533,8 +531,9 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 서버가 보낸 `Send` packet은 handler(`on` 계열)나 대기 표면(`waitFor` 계열)으로 넘어가기 전까지
 **수신 메시지 큐**에 머문다. 기본 한도는 **message 1024개**이며 option으로 조절한다.
 
-- **큐가 가득 차면 새로 도착한 send message를 버리고 `ReceivedMessageDropped`를 보고한다.**
-  이미 큐에 있는 메시지를 밀어내지 않는다.
+- **큐가 가득 차면 socket에서 더 읽지 않는다.** 메시지를 버리지 않는다. 읽지 않은 것은 Core
+  queue에 남고, Core의 byte 상한이 서버의 send를 그 자리에서 멈춘다. 앱이 큐를 비우면 다시
+  읽는다.
 - **response·error response·heartbeat control frame은 이 한도에 넣지 않는다.** request 완료와
   연결 유지에 필요하기 때문이다.
 - 이 큐는 inbound observer notification 큐와 **별도**다(§10).

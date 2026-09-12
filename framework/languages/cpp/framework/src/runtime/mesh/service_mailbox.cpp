@@ -219,6 +219,7 @@ service_mailbox_t::claim_owner_locked (
         ++source.active_messages;
         claim.claimed_bytes += next_bytes;
         ++claim.claimed_messages;
+        claim.record_bytes.push_back (next_bytes);
         claim.records.push_back (std::move (queue.records.front ()));
         queue.records.pop_front ();
     }

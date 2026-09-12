@@ -166,7 +166,7 @@ RAW 수신 record는 단일 part다. 성공하면 `*part_count_out_ == 1`이고 
 않는다. `parts_capacity_ < 1`이면 record를 소비하지 않고 필요한 수 `1`과
 `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`를 반환한다. `ZLINK_RECV_FLAGS_DONTWAIT` 호출에 데이터가 없으면
 `ZLINK_RECV_NO_DATA`와 `EAGAIN`을 반환한다. `NONE`의 timeout·종료와 output 불변은
-[Socket 공통](README.ko.md#zlink_recv)의 data recv 계약을 따른다.
+[Socket 공통](README.ko.md#zlink_recv-와-zlink_router_recv)의 data recv 계약을 따른다.
 
 ## 6. Packet receive와 framing
 

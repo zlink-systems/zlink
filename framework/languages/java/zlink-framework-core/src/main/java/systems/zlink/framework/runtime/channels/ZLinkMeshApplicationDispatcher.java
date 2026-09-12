@@ -34,6 +34,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationReceiver;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
 
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
@@ -64,6 +65,7 @@ public final class ZLinkMeshApplicationDispatcher
     private final ZLinkChannelHandlerInvoker invoker;
     private final ReplySender replies;
     private final String meshName;
+    private final ZLinkMeshMessageMetrics messageMetrics;
     private final ZLinkMeshDrainCoordinator drains;
     private final ZLinkApplicationJobQueue applicationJobQueue;
     private final ZLinkMessageFlowTracer flow;
@@ -107,6 +109,7 @@ public final class ZLinkMeshApplicationDispatcher
         Objects.requireNonNull(mesh, "mesh");
         Objects.requireNonNull(framework, "framework");
         this.meshName = mesh.meshName();
+        this.messageMetrics = ZLinkMeshMessageMetrics.forMesh(meshName);
         this.drains = drains;
         this.applicationJobQueue = framework.applicationJobQueue();
         this.flow = new ZLinkMessageFlowTracer(
@@ -145,12 +148,14 @@ public final class ZLinkMeshApplicationDispatcher
             ? null
             : drains.tryClaim(meshName);
         if (drains != null && claim == null) {
+            recordDrop(record, "shutdown");
             reject(record, "RouteMesh application admission is sealed", null);
             return;
         }
         RecordKind kind = record.receive().kind();
         Namespace namespace = namespace(kind, record.receive().channelName());
         if (namespace == null || record.parts().size() < 2) {
+            recordDrop(record, namespace == null ? "no_handler" : "decode_error");
             reject(record, "MeshNode message has no registered handler namespace or payload", claim);
             return;
         }
@@ -161,13 +166,13 @@ public final class ZLinkMeshApplicationDispatcher
         } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
             //  A JSON-object first frame that is not a valid shared envelope
             //  is a protocol error (C++ decode parity).
+            recordDrop(record, "decode_error");
             reject(record, invalidEnvelope.getMessage(), claim);
             return;
         }
         String packetName = envelope != null
             ? envelope.messageName()
             : record.parts().get(0).toUtf8String();
-        Message payload = record.parts().get(1);
         String contentType = envelope != null
             ? envelope.contentType()
             : record.receive().contentType() != null
@@ -180,16 +185,18 @@ public final class ZLinkMeshApplicationDispatcher
                 : ZLinkApplicationMetadata.decode(
                     record.receive().applicationMetadata());
         } catch (IllegalArgumentException error) {
+            recordDrop(record, "decode_error");
             reject(record, error.getMessage(), claim);
             return;
         }
         switch (kind) {
             case NODE_SEND, CHANNEL_SEND ->
                   dispatchSend(
-                      record, namespace, packetName, payload, metadata, contentType, claim);
+                      record, namespace, packetName, metadata, contentType, claim);
             case NODE_REQUEST, CHANNEL_REQUEST ->
                   dispatchRequest(
-                      record, namespace, envelope, packetName, payload, metadata,
+                      record, namespace, envelope, packetName,
+                      record.parts().get(1), metadata,
                       contentType, claim);
             default -> closeRecord(record, claim);
         }
@@ -347,13 +354,13 @@ public final class ZLinkMeshApplicationDispatcher
         ZLinkMeshDispatchRecord record,
         Namespace namespace,
         String packetName,
-        Message payload,
         Map<String, String> metadata,
         String contentType,
         ZLinkMeshDrainCoordinator.Claim claim) {
         ChannelRouteSendHandlerRegistration route = namespace.routeSends.get(packetName);
         ChannelSendHandlerRegistration channel = namespace.channelSends.get(packetName);
         if (route == null && channel == null) {
+            recordDrop(record, "no_handler");
             closeRecord(record, claim);
             return;
         }
@@ -364,6 +371,7 @@ public final class ZLinkMeshApplicationDispatcher
         try {
             CompletionStage<Void> queued = namespace.sendQueue
                 .enqueue(() -> {
+                Message payload = record.parts().get(1);
                 traceFlow(
                     ZLinkMessageFlowOutcome.ADMITTED,
                     record,
@@ -388,6 +396,9 @@ public final class ZLinkMeshApplicationDispatcher
                             metadata,
                             contentType));
                 return invocation.whenComplete((ignored, error) -> {
+                    if (ZLinkChannelCallRuntime.unwrap(error) instanceof PayloadDecodeDispatchException) {
+                        recordDrop(record, "decode_error");
+                    }
                     if (error == null) {
                         traceFlow(
                             ZLinkMessageFlowOutcome.COMPLETED,
@@ -503,6 +514,14 @@ public final class ZLinkMeshApplicationDispatcher
 
     private void reject(ZLinkMeshDispatchRecord record, String message) {
         reject(record, message, null);
+    }
+
+    private void recordDrop(ZLinkMeshDispatchRecord record, String reason) {
+        switch (record.receive().kind()) {
+            case NODE_SEND -> messageMetrics.dropped("node", reason);
+            case CHANNEL_SEND -> messageMetrics.dropped("channel", reason);
+            default -> { }
+        }
     }
 
     private void reject(

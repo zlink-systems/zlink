@@ -140,6 +140,10 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         if (routeDescriptors.Length == 0 && channelEndpoints.Length == 0)
             return null;
 
+        ZLinkScopedHandlerInstanceOwner.Prepare(services,
+            routeDescriptors.Select(static descriptor => descriptor.HandlerType)
+                .Concat(channelEndpoints.Select(static endpoint => endpoint.DeclaringType)));
+
         var loggerFactory = runtime.Services.GetService<ILoggerFactory>();
         var logger = loggerFactory?.CreateLogger(typeof(ZLinkMeshNodeRouteDispatcher).FullName!)
                      ?? (ILogger)NullLogger.Instance;
@@ -425,6 +429,15 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 if (received.ChannelName is { } channelName)
                     await DispatchChannelAsync(received, channelName, header, cancellationToken)
                         .ConfigureAwait(false);
+                else if (header.Kind == ZLinkMessageKind.Command
+                         && received.ApplicationPayloadView is { } commandView)
+                    await DispatchNodeRouteAsync(
+                            received,
+                            header,
+                            received.Parts,
+                            cancellationToken,
+                            commandView)
+                        .ConfigureAwait(false);
                 else
                 {
                     Message[]? materialized = null;
@@ -464,7 +477,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header,
         IReadOnlyList<Message> parts,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ZLinkMultipartPayloadView? payloadView = null)
     {
         var isRequest = header.Kind == ZLinkMessageKind.Request;
         var sourceRid = received.SourceNodeRid ?? default;
@@ -507,15 +521,26 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         {
             try
             {
-                await _routeInvoker.InvokeSendAsync(
-                        descriptor,
-                        _meshName.Value,
-                        sourceRid,
-                        header,
-                        parts,
-                        cancellationToken,
-                        received.Metadata)
-                    .ConfigureAwait(false);
+                if (payloadView is not null)
+                    await _routeInvoker.InvokeSendAsync(
+                            descriptor,
+                            _meshName.Value,
+                            sourceRid,
+                            header,
+                            payloadView,
+                            cancellationToken,
+                            received.Metadata)
+                        .ConfigureAwait(false);
+                else
+                    await _routeInvoker.InvokeSendAsync(
+                            descriptor,
+                            _meshName.Value,
+                            sourceRid,
+                            header,
+                            parts,
+                            cancellationToken,
+                            received.Metadata)
+                        .ConfigureAwait(false);
                 scope.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
             }
             catch (Exception ex)

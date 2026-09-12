@@ -7,6 +7,8 @@ title: "15. E2E 테스트 — client로 시스템 전체를 검증하기 · Kotl
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 15. E2E 테스트 — client로 시스템 전체를 검증하기
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 14. 샘플 고르기 — 내 문제에 가까운 예제부터](14-samples.ko.md) | [다음: ../../../java/guide/server/16-options.ko.md](../../../java/guide/server/16-options.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "15. E2E 테스트 — client로 시스템 전체를 검증하기 · Kotl
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/15-e2e-testing.ko.md) · [C++](../../../cpp/guide/server/15-e2e-testing.ko.md) · [Java](../../../java/guide/server/15-e2e-testing.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/15-e2e-testing.ko.md)
 <!-- language-switch:end -->
-
-# 15. E2E 테스트 — client로 시스템 전체를 검증하기
 
 > **이 장에는 계약을 소유하는 스펙 문서가 없다.** 자기 시스템에 테스트를 만드는 방법을
 > 다루기 때문이다. 각 샘플이 무엇을 검증하는지는
@@ -78,7 +78,8 @@ val room = api.post("/games")
 val client = ZLinkStreamConnectorFactory.create(
     ZLinkStreamConnectorOptions(
         URI.create(room.playEndpoints[0]),
-        ZLinkStreamDispatchMode.IMMEDIATE, // console 시나리오는 자동 펌프를 사용한다.
+        // console 시나리오는 자동 펌프를 사용한다.
+        ZLinkStreamDispatchMode.IMMEDIATE,
         options.streamTimeout))
 ```
 
@@ -225,7 +226,8 @@ suspend fun run(options: TicTacToeClientOptions) {
     // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
     client1.connect().submit().await()
     client1.request(AuthenticateReq(options.xActorId)).submit(AuthenticateRes::class.java).await()
-    val join1 = joinGame(client1, room.roomId) // 대기 등록 → send → 수신(§3)
+    // 대기 등록 → send → 수신(§3)
+    val join1 = joinGame(client1, room.roomId)
     ZLinkStreamAssert.ensure(
         join1.state.status == TicTacToeGameStatuses.WaitingForPlayers,
         "room should wait for the second player.")

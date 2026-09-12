@@ -44,7 +44,7 @@ the MeshNode [Owner](../00-foundation/02-glossary.en.md#owner) identified by Loc
 | Unit | One component (for example, one binding table, one catalog) | One execution object (such as Spot/Actor) — see 02 §7 |
 | Purpose | Lets only one turn at a time touch that component's state | Orders the work an owner processes by priority |
 | What it holds | The pieces of code that read or write that component's state | Business payloads and timer callbacks (application), or join/leave/relocation/lifecycle control (lifecycle) |
-| Admission/priority | None — executes strictly in FIFO arrival order, with no count/byte caps or priority between lanes | Present — count/byte caps, an owner occupancy time budget, and a lifecycle priority rule |
+| Order and priority | Executes strictly in FIFO arrival order, with no priority between lanes | An owner occupancy time budget and a lifecycle priority rule |
 | Owning document | This document | [02 §7](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation) |
 
 Assigning a state lane to a component and admitting the handler of its Spot/Actor to the

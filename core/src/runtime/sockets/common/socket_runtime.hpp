@@ -187,6 +187,21 @@ struct socket_endpoint_runtime_t
     const std::string &last_endpoint_uri () const;
 };
 
+struct socket_inproc_reconnect_runtime_t
+{
+    typedef std::multimap<uint64_t, std::string> pending_t;
+
+    socket_inproc_reconnect_runtime_t () : task_id (0), stopping (false) {}
+
+    // One socket-owned timer queue gives every detached inproc connect intent
+    // its configured delay while keeping cancellation and close lifetime in a
+    // single owner. The control task is removed whenever this queue is empty.
+    mutex_t sync;
+    pending_t pending;
+    uint64_t task_id;
+    bool stopping;
+};
+
 class socket_command_runtime_t
 {
   public:
@@ -820,6 +835,7 @@ struct socket_runtime_t
     socket_runtime_t () : receive_runtime (lifecycle_coordinator) {}
     socket_lifecycle_coordinator_t lifecycle_coordinator;
     socket_endpoint_runtime_t endpoint_runtime;
+    socket_inproc_reconnect_runtime_t inproc_reconnect_runtime;
     socket_command_runtime_t command_runtime;
     socket_receive_runtime_t receive_runtime;
     socket_monitor_runtime_t monitor_runtime;

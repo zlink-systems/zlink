@@ -188,16 +188,12 @@ sequenceDiagram
 
     Caller->>Coord: executeActor(actorId, 작업)
     Coord->>AQ: 그 Actor의 queue를 찾거나 만든다
-    AQ->>AQ: 이 작업의 payload 바이트를 예약한다
-    Note over AQ: 그 Actor 몫이 가득 차 있으면<br/>여기서 backpressure로 거절한다
     AQ->>SQ: 자기 turn이 오면 실행 turn을 세운다 (payload는 AQ에 남는다)
-    SQ->>SQ: fixedWorkByteCost만 예약한다
-    Note over SQ: 같은 payload를 다시 예약하지 않는다
     SQ->>H: Spot turn 하나를 점유해 실행한다
     H-->>Caller: 완료
 ```
 
-정상 경로만 그렸다. 예약이 거절되는 backpressure 분기는 §5가, 한 소유자가 turn을 오래
+정상 경로만 그렸다. 두 queue의 관계는 §5가, 한 소유자가 turn을 오래
 점유했을 때 양보하는 분기는 §6.4가 설명한다.
 
 위 두 그림을 코드로 옮기면 다음과 같다. 진입점 하나가 §4의 경로 판정을 전부 안고 있고,
@@ -234,52 +230,36 @@ ExecuteTimer(timerName, work)
     }
 
     timerQueue = lane.Run(() => GetOrCreateTimerQueue(timerName));
-    timerQueue.Enqueue(work);            // payload가 없어 fixedWorkByteCost로 회계한다
+    timerQueue.Enqueue(work);
 }
 ```
 
-## 5. 두 queue가 무엇을 예약하는가
+## 5. 두 queue의 관계
 
-owner queue(mailbox)의 한도는 **건수와 대기 중 byte 합계 두 축**이고, 그 계약은
-[Framework API 「11. Handler 실행 객체와 dependency 수명」](../00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)가
-소유한다. 여기서 다시 정의하지 않고, 이 문서의 queue 배치에 걸리는 두 가지만 밝힌다.
+**두 queue 모두 자체 상한이 없다.** 얼마나 쌓였는지는 host의 job 수 하나로 세고, 그 값이
+80 %에 이르면 `PAUSED`가 나간다([04 §1](04-application-job-queue-and-backpressure.ko.md#1-두-독립된-capacity-authority)).
+queue를 둘로 나누는 것은 실행 순서와 owner isolation을 위한 것이지 각자 얼마를 담을지
+정하기 위한 것이 아니다.
 
-수신 mailbox에서 이 queue로 record가 claim될 때 예약이 **끊기지 않고 이관**되며, 이관은
-재판정이 아니다 — 그 규칙은
-[04 §8 「Owner 예약의 이관」](04-application-job-queue-and-backpressure.ko.md#owner-예약의-이관--두-단계가-빈틈없이-잇는다)이
-소유한다.
-
-**계상 경계가 [Application job queue](../00-foundation/02-glossary.ko.md#application-job-queue)
-permit과 다르다.** permit은 callback의 첫 instruction 직전에 반환되지만, mailbox 예약은
-handler가 끝난 뒤에 반환된다 — 실행 중인 작업이 점유한 memory가 아직 해제되지 않았기
-때문이다. 그래서 두 한도는 서로를 대신하지 못한다(04 §1).
-
-`SpotWide`에서 Actor 작업이 두 queue를 지날 때 **아래 Actor queue가 그 작업의 payload
-바이트를 예약하고, 위 Spot queue는 payload 크기와 무관한 고정 비용 `fixedWorkByteCost`만
-예약한다.** 같은 payload를 두 queue에서 모두 예약하지 않는다. 이중으로 예약하면 아래에서
-통과한 작업이 위에서 다시 걸려 Actor별 상한이 실제 상한이 아니게 되고, Spot queue는 실제
-실행 부하보다 이르게 가득 찬다.
-
-**내부 확인 조건** — `SpotWide`의 Actor 경로에서 위 Spot queue에 제출할 때 payload 바이트를
-인자로 넘기는 자리가 없다.
+메모리를 byte로 재는 것은 Core의 byte HWM이 맡는다. 이 host가 읽지 않으면 그 byte가 Core
+queue에 쌓이고 보내는 쪽이 거기서 막힌다.
 
 ## 6. 직렬 queue primitive
 
-`ZLinkSerialExecutionQueue`는 작업을 순서대로 실행하는 것만이 아니라, **수용량을 넘겼을 때
-거절하는 것과 한 소유자가 오래 점유하지 못하게 하는 것까지 자기 계약으로 갖는다.** 이
-책임을 호출자에게 남기면 호출 지점마다 다르게 처리되고, 그러면 어떤 부하에서도 지연 상한이
-있다는 실시간 보장을 세울 수 없다.
+`ZLinkSerialExecutionQueue`는 작업을 순서대로 실행하는 것만이 아니라, **한 소유자가 오래
+점유하지 못하게 하는 것까지 자기 계약으로 갖는다.** 이 책임을 호출자에게 남기면 호출 지점마다
+다르게 처리되고, 그러면 어떤 부하에서도 지연 상한이 있다는 실시간 보장을 세울 수 없다.
 
 ### 6.1 정책
 
 다음 값은 정책 객체 `ZLinkExecutionLanePolicy`로 주입받는다. queue 안에 상수로 박지
 않는다 — Spot·Actor·session이 서로 다른 값을 쓰기 때문이다.
 
-이 값들은 §5의 owner FIFO 상한을 정하는 것이지 유입 속도를 제한하는 값이 아니다. Ordinary
-ingress의 admission은 [04](04-application-job-queue-and-backpressure.ko.md)가 소유한다.
+이 값들은 실행 순서와 공정성을 정하는 것이지 얼마나 담을지나 유입 속도를 정하는 값이
+아니다. Ordinary ingress의 admission은 [04](04-application-job-queue-and-backpressure.ko.md)가
+소유한다.
 
-각 값의 **기본값**(application 1,024건·64 MiB, lifecycle 128건·4 MiB, 고정 비용 256 byte,
-점유 10 ms, 연속 8 turn)과 byte 회계의 구성, 양보 부채 메커니즘은
+각 값의 **기본값**(점유 10 ms, 연속 8 turn)과 양보 부채 메커니즘은
 [02 「7. Lane 분리와 우선순위」](02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현)가
 소유한다. 이 문서는 주입되는 이름만 고정한다.
 
@@ -288,14 +268,6 @@ exact interface가 정의한다.
 
 ```text
 ZLinkExecutionLanePolicy {
-    applicationMessageCapacity   // application lane이 동시에 담는 작업 수 상한 (건, > 0)
-    applicationByteCapacity      // application lane이 동시에 예약하는 크기 상한 (byte, > 0)
-                                 //   예약 = payload + metadata + fixedWorkByteCost (02 §7)
-    lifecycleMessageCapacity     // lifecycle lane이 동시에 담는 작업 수 상한 (건, > 0)
-    lifecycleByteCapacity        // lifecycle lane이 동시에 예약하는 크기 상한 (byte, > 0)
-    fixedWorkByteCost            // 작업 하나가 payload와 별개로 차지하는 고정 retained
-                                 //   크기 (byte, >= 0). 모든 작업에 더해지며, payload가 없는
-                                 //   작업(timer 등)과 §5의 위 Spot queue는 이 값만 예약한다
     lifecycleBurstLimit          // lifecycle 작업이 application 작업을 연속으로 앞지를 수 있는
                                  //   최대 건수 (건, > 0). 이 수를 넘기면 application 작업이
                                  //   한 건 실행된다
@@ -307,7 +279,7 @@ ZLinkExecutionLanePolicy {
 ### 6.2 진입점
 
 ```text
-enqueue(작업)                    // application lane. fixedWorkByteCost로 예약한다
+enqueue(작업)                    // application lane
 enqueueWithPayloadBytes(작업, n) // application lane. 실제 payload n byte로 예약한다
 enqueueLifecycle(작업)           // lifecycle lane. 대기 중인 application 작업을 앞지른다
 enqueueBarrierNext(작업)         // 현재 turn 직후, 줄 서 있는 application 작업보다 먼저
@@ -316,14 +288,13 @@ awaitQuiescence()                // 줄 선 작업이 모두 끝날 때까지 �
 close()                          // 새 제출을 받지 않고 이미 받은 작업을 끝낸다
 ```
 
-### 6.3 수용량 판정과 순서 발급의 원자적 범위
+### 6.3 순서 발급과 삽입의 원자적 범위
 
-수용량 판정·순서 번호 발급·queue 삽입 셋은 **전부 일어나거나 전혀 일어나지 않는다.**
-호출자 하나의 제출에서 이 셋이 쪼개지지 않는다.
+순서 번호 발급과 queue 삽입은 **함께 일어나거나 전혀 일어나지 않는다.** 호출자 하나의
+제출에서 둘이 쪼개지지 않는다.
 
-세 동작을 각각 별개로 처리하는 동시성 queue 자료구조로 치환하지 않는다. 쪼개면 두 호출자가
-같은 여유를 보고 함께 판정을 통과한 뒤 둘 다 삽입해 상한을 넘기거나, 번호를 먼저 받은
-작업이 나중에 삽입돼 순서가 뒤집힌다. 이 셋은 함께 움직여야 하는 값이므로
+두 동작을 각각 별개로 처리하는 동시성 queue 자료구조로 치환하지 않는다. 쪼개면 번호를 먼저
+받은 작업이 나중에 삽입돼 순서가 뒤집힌다. 이 둘은 함께 움직여야 하는 값이므로
 [06 §4의 C2](06-state-ownership-and-lanes.ko.md#4-상태-분류와-판별-기준)에 해당한다.
 
 ### 6.4 공정성
@@ -553,7 +524,7 @@ claim(`actorClaims.submit(actorId, …)`)을 먼저 잡은 뒤 그 안에서 sha
 
 ## 10. 검증 요구
 
-공개 표면(§3의 진입점 호출과 그 반환값, backpressure 거절, handler·callback이 실행된 순서와
+공개 표면(§3의 진입점 호출과 그 반환값, handler·callback이 실행된 순서와
 시각, 재진입 호출이 받는 예외)만으로 다음을 확인한다. 각 항목은 test 하나로 이어진다.
 
 **제출 경로**
@@ -571,14 +542,10 @@ claim(`actorClaims.submit(actorId, …)`)을 먼저 잡은 뒤 그 안에서 sha
 - `PerActor`에서 서로 다른 timer 이름의 callback은 겹쳐 실행되고, 같은 timer 이름의
   callback은 제출 순서대로 실행된다.
 
-**수용량과 backpressure**
+**제출과 순서**
 
-- 두 mode 모두, Actor 하나에 작업을 몰아 그 Actor mailbox의 한도를 채우면 그 Actor에 대한
-  제출만 거절되고 같은 Spot의 다른 Actor에 대한 제출은 계속 수락된다.
-- `SpotWide`에서 같은 건수의 큰 payload와 작은 payload를 Actor 하나에 제출하면, 큰 쪽이 먼저
-  거절된다 — 아래 Actor queue가 payload 바이트를 예약한다(§5).
-- 같은 제출로 Spot queue가 가득 차는 시점은 payload 크기와 무관하게 제출 건수로 결정된다 —
-  위 Spot queue는 고정 비용만 예약한다(§5).
+- Actor 하나에 작업을 아무리 몰아도 자리가 없다는 이유로 끝나는 제출이 없고, 같은 Spot의
+  다른 Actor에 대한 제출도 계속 수락된다.
 - `enqueueLifecycle`로 제출한 작업은 이미 줄 서 있는 application 작업보다 먼저 실행되고,
   연속으로 앞지르는 건수는 `lifecycleBurstLimit`에서 멈춰 application 작업이 한 건 실행된다.
 

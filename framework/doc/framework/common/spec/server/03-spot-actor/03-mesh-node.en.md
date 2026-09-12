@@ -253,7 +253,7 @@ alone. Changing weight to `0` doesn't cancel a reservation already confirmed.
 
 The framework first checks the configured Actor/Spot limit by summing active
 count and reserved slots, then applies weight. A limit of `0` skips the
-check. If no node satisfies the capacity condition, it's `CapacityExceeded`.
+check. If no node satisfies the capacity condition, it's `Unavailable`.
 The descriptor's count is a projection for candidate selection — the
 Location Store's atomic reservation is the final judgment. The sum of
 positive placement weight across remaining candidates is computed using at

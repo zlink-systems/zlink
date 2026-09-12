@@ -551,7 +551,6 @@ request callback.
 | `SendFailed` | Send failure |
 | `CompressionFailed` / `DecompressionFailed` | Compression/decompression failure |
 | `TlsValidationFailed` | TLS validation failure |
-| `ReceivedMessageDropped` | Receive message queue overflow (§10.1) |
 | `UserCallbackFailed` | A user callback failed |
 | `ObserverFailed` / `ObserverDropped` | Inbound observer callback failure / queue overflow |
 | `RemoteError` | The server responded with an Error payload satisfying §5.3. If `request_seq` matches a pending request, that request fails; if absent or mismatched, it's delivered as an error event |
@@ -572,7 +571,6 @@ reason, or the reconnect condition.
 | `FrameTooLarge` | That frame isn't delivered, and the pending request fails | Ended | `TransportError` | Applied if the reconnect option is on |
 | `CompressionFailed` | Only that send operation fails | Kept | None | Not done |
 | `DecompressionFailed` | Only that receive packet or pending request fails | Kept | None | Not done |
-| `ReceivedMessageDropped` | Only the newly arrived send is discarded | Kept | None | Not done |
 | `UserCallbackFailed`, `ObserverFailed`, `ObserverDropped`, `RemoteError` | Delivered as an error event or the related callback/request | Kept | None | Not done |
 
 **The delivery method differs by surface, but the meaning is the
@@ -610,9 +608,9 @@ until it moves to a handler (`on` family) or a wait surface (`waitFor`
 family). The default bound is **1024 messages**, adjusted with an
 option.
 
-- **If the queue is full, a newly arrived send message is discarded
-  and `ReceivedMessageDropped` is reported.** It doesn't evict a
-  message already in the queue.
+- **When the queue is full the connector stops reading from the socket.** No message is
+  discarded. What is left unread stays in the Core queue, and Core's byte limit holds the
+  server's send right there. Reading resumes once the application drains the queue.
 - **A response, error response, and heartbeat control frame aren't
   counted against this bound.** Because they're needed for request
   completion and connection keep-alive.

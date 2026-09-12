@@ -463,7 +463,7 @@ Descriptor capacity는 candidate filter에만 사용한다. Framework는 선택�
 bundle reservation을 원자적으로 얻은 뒤에만 factory를 실행한다. Actor는 Actor slot 하나, Spot은 Spot 전체
 slot 하나와 해당 stable type slot 하나를 예약한다. `SpotWide` User Spot과 member Actor `N`개의 aggregate relocation은
 Spot total 1개, 해당 Spot stable type 1개와 Actor total `N`개를 all-or-none으로 예약한다. 모든 후보의
-reservation이 capacity 때문에 실패하면 `capacity_exceeded`로 완료하고 application factory나
+reservation이 capacity 때문에 실패하면 `unavailable`로 완료하고 application factory나
 handler를 호출하지 않는다.
 Actor·User Spot·Instance Spot [factory](../../../00-foundation/02-glossary.ko.md#factory)는 relocation policy를 항상 명시하며 이를 생략하는
 overload는 없다. State 보존 Actor factory에는 `actor_relocation_adapter_t<TActor>`, state 보존 User·[Instance Spot](../../../00-foundation/02-glossary.ko.md#entry-spot-user-spot과-instance-spot)
@@ -666,13 +666,12 @@ enum class framework_error_kind_t {
     not_configured = 3,
     rejected = 4,
     unavailable = 5,
-    capacity_exceeded = 6,
-    deadline_exceeded = 7,
-    shutting_down = 8,
-    protocol_error = 9,
-    invalid_operation = 10,
-    data_lost = 11,
-    internal_failure = 12
+    deadline_exceeded = 6,
+    shutting_down = 7,
+    protocol_error = 8,
+    invalid_operation = 9,
+    data_lost = 10,
+    internal_failure = 11
 };
 
 class framework_exception_t : public std::exception {

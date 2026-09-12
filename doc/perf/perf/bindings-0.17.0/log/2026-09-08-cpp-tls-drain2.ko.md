@@ -137,11 +137,11 @@ C++ perf target만 증분 빌드했으며 Core는 재빌드하지 않았다.
 
 | 검증 | pattern / transport | 결과 | 시작 전 idle load | 보고서 |
 |---|---|---|---:|---|
-| 1 | MULTI_DEALER_ROUTER_SENDSEND / tls | complete | 3.61 | [DR/TLS 1차](../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_013451_drain2_final_dr_tls_1.txt) |
-| 3: 1번 연속 재실행 | MULTI_DEALER_ROUTER_SENDSEND / tls | complete | 4.73 | [DR/TLS 2차](../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_013754_drain2_final_dr_tls_2.txt) |
-| 2 | MULTI_ROUTER_ROUTER_SENDSEND / tls | complete | 4.40 | [RR/TLS](../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_014052_drain2_final_rr_tls.txt) |
-| 4: TCP 회귀 | MULTI_DEALER_ROUTER_SENDSEND / tcp | complete | 3.53 | [DR/TCP](../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_014410_drain2_final_dr_tcp.txt) |
-| 4: DEALER 회귀 | MULTI_DEALER_DEALER / tls | complete | 2.82 | [DD/TLS](../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_014709_drain2_final_dd_tls.txt) |
+| 1 | MULTI_DEALER_ROUTER_SENDSEND / tls | complete | 3.61 | DR/TLS 1차 (`../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_013451_drain2_final_dr_tls_1.txt`) |
+| 3: 1번 연속 재실행 | MULTI_DEALER_ROUTER_SENDSEND / tls | complete | 4.73 | DR/TLS 2차 (`../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_013754_drain2_final_dr_tls_2.txt`) |
+| 2 | MULTI_ROUTER_ROUTER_SENDSEND / tls | complete | 4.40 | RR/TLS (`../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_014052_drain2_final_rr_tls.txt`) |
+| 4: TCP 회귀 | MULTI_DEALER_ROUTER_SENDSEND / tcp | complete | 3.53 | DR/TCP (`../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_014410_drain2_final_dr_tcp.txt`) |
+| 4: DEALER 회귀 | MULTI_DEALER_DEALER / tls | complete | 2.82 | DD/TLS (`../../../../../bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260908_014709_drain2_final_dd_tls.txt`) |
 
 실행 예시는 다음과 같다. 나머지는 표의 pattern·transport와 보고서 파일명의 tag를 사용한다.
 

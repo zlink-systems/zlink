@@ -78,15 +78,44 @@ types with different calculations.
 - **The only feedback that Framework job pressure gives Core is one absolute
   `RUNNING`/`PAUSED` receive-flow state applied to supported sockets.** Framework does
   not change Core HWM settings or queued-byte counters to match this state transition.
+- **One host instance owns this limit in its entirety.** However many MeshNodes,
+  ClientServer channels, sockets, and connections a host contains, they all share the one
+  `MaxQueuedApplicationJobs`. The limit is neither divided among components nor multiplied
+  by their number, and one host never holds more than one counter of permits. The pressure
+  state is likewise computed once per host and applied as the same absolute state to every
+  supported socket (§6).
 
 ## 3. Ordinary Ingress Permit Order
 
 Ordinary ingress — every path that receives or claims a record from Core or the binding
 that has not yet received a permit — follows the same rule regardless of the context in
-which it arrives. STREAM application packets, cross-node Session application records
-(see [STREAM Server Session](../04-session/01-stream-session.en.md), [Session And Actor
-Binding](../04-session/02-session-actor-binding.en.md)), handshake/bind/unbind, and every
-other ordinary application job ingress follow this order without exception.
+which it arrives.
+
+**A job created inside this host follows it too.** A send to a Spot or Actor on the same host,
+or the local target of a publish, goes straight into an execution queue without crossing the
+network; it still takes the same host permit before it is enqueued. Otherwise such a job could
+wait in a queue without raising the number of permits in use, `PAUSED` would never go out
+under §6, and a host could overrun itself.
+
+**Messaging ingress is the bulk of this path.** It arrives from two places.
+
+| Where it arrives | What arrives |
+|---|---|
+| The ROUTER-ROUTER socket of a RouteMesh MeshNode | Requests and sends from another node |
+| The Server ROUTER of a [ClientServer Channel](../00-foundation/02-glossary.en.md#clientserver-channel) | Requests and sends from a Client DEALER |
+
+Both use the same permit. They do not count separately. The sockets §6 applies `PAUSED` to
+are these same two.
+
+In a ClientServer Channel the Server ROUTER never sends to the Client DEALER first. What the
+Client DEALER receives is therefore only the reply to a call it sent itself. A reply bypasses
+the permit, as defined later in this section, so nothing in that direction uses one.
+
+Beyond them, STREAM application packets,
+cross-node Session application records (see [STREAM Server Session](../04-session/01-stream-session.en.md),
+[Session And Actor Binding](../04-session/02-session-actor-binding.en.md)),
+handshake/bind/unbind, and every other ordinary application job ingress follow this order
+without exception.
 
 Ordinary ingress follows this order.
 
@@ -193,9 +222,8 @@ Handle the following as one commit inside that span.
 2. Is the target object on this node and is the owner information valid
 3. Is it not sealed for a move, not waiting for creation, and not waiting for a session
    connection
-4. Can both the lane's item count and bytes be reserved together
-5. Commit the accepted-order sequence and append the message to the owner queue
-6. If the queue was empty, put that owner into the set of ready owners and notify the
+4. Commit the accepted-order sequence and append the message to the owner queue
+5. If the queue was empty, put that owner into the set of ready owners and notify the
    execution resource immediately
 
 - **A message that fails a check does not appear in the queue.** It is not implemented as
@@ -302,10 +330,20 @@ satisfy `R < P`. In `running`, the state transitions to `paused` when permits in
 reach the pause count, and in `paused`, it transitions to `running` when they fall to
 the resume count. Between the two thresholds, the current state is retained.
 
-- **Framework applies the transitioned absolute state only to RouteMesh
-  ROUTER-ROUTER two-lane sockets and ClientServer DEALER-ROUTER single-lane
-  sockets.** PUB/SUB, Classic fanout, and STREAM are outside this integration
-  and retain their existing Core byte HWM and structural queue limits.
+- **The state is applied only to the sockets on which a request reaches this host.** `PAUSED`
+  says "stop sending to me", so it only means something toward a peer that sends requests. It
+  is the same set of sockets the permit-consuming ingress of §3 arrives on.
+
+  | Socket | Does a request reach this host here | Is `PAUSED` applied |
+  |---|---|---|
+  | RouteMesh ROUTER-ROUTER | Another node sends them | **Yes** |
+  | ClientServer Server ROUTER | The Client sends them | **Yes** |
+  | ClientServer Client DEALER | No. Only replies to calls it sent itself | **No** |
+  | PUB/SUB, Classic fanout, STREAM | — | **No.** They retain their existing Core byte HWM and structural queue limits |
+
+  There are two reasons not to apply it to a Client DEALER. What it would hold back is not
+  anyone's request but the reply this host is waiting for, and the Server never sends the
+  Client a request in the first place, so there is nothing to ask it to stop.
 - **`PAUSED` does not change a Core HWM value.** Core independently composes a
   remote-pause blocker and a local byte-HWM blocker. `RUNNING` removes only the
   remote-pause reason, so a send remains waiting while local HWM is still full.
@@ -322,6 +360,14 @@ the resume count. Between the two thresholds, the current state is retained.
 - **This receive-flow state API is the only runtime control point between Framework
   pressure and Core send flow.** Framework does not create raw flow frames or use the
   Core control lane as a general Framework channel.
+- **Crossing a threshold never drops or rejects a record.** `PAUSED` does not recall data
+  already sitting in the remote Core queue, OS buffers, the network, or the local Core
+  queue, so records keep arriving after permits in use cross the pause threshold. Every
+  record that arrives waits for a permit in the order §3 defines and is then delivered to a
+  handler, without exception. When permits in use reach the effective maximum, the host
+  simply stops receiving the next record; a record left unreceived stays in the local Core
+  queue, where the Core byte HWM of §1 and transport flow control carry backpressure back to
+  the sender. Crossing the limit is never by itself a reason to drop or reject a record.
 
 Internal confirmation condition — the order in which a new socket applies the current
 host pressure state before publication in the receive-target registry, and close
@@ -343,32 +389,24 @@ close are recorded in diagnostics and metrics.
   `SendReady` kind `12` is a Framework service-control record and is a different
   contract from the removed binding callback.
 
-## 8. The Three Backpressure Stages and Kinds of Limits
+## 8. Waiting to Send
 
-- **The three [Backpressure](../00-foundation/02-glossary.en.md#backpressure) stages apply only to send, publish, and one-way calls.**
-  A Request does not wait to secure a bounded queue because its caller can judge the returned result.
-  Local/remote error selection follows [Framework error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure).
+**The Framework calls the Core socket's send or request once.** Waiting for room to send is
+done by Core and the binding, as §7 defines. The Framework builds no waiting queue of its
+own, never sends again, and never makes a second call with the same content.
 
-1. If the first submission is rejected, wait for send space to open up until a fixed
-   time.
-2. If space opens within the time, submit once.
-3. If the time runs out first, end with
-   [`DeadlineExceeded`](../00-foundation/02-glossary.en.md#deadlineexceeded).
-
-- **These three stages apply only to the span before the public result is finalized.**
-  A failure that happens after an already completed call is not covered here — a
-  skipped local target after publish has started, a dropped one-way during a move, or a
-  target admission failure of a completed send — none has a result to return to the
-  caller, so it is recorded only as an observation.
-- **While waiting, that work does not hold execution authority.** Holding it while
-  waiting blocks another request to the same Spot for as long as it waits for send
-  space.
-- **The waiting slot itself also has a bound.** If the waiting slots are full, it ends
-  immediately with `DeadlineExceeded` without waiting. Being backpressured
-  itself is not a value the caller receives —
-  [`Backpressured`](../00-foundation/02-glossary.en.md#backpressured) is not a public terminal
-  result. Without a bound, this side's memory would keep growing indefinitely,
-  following the peer's processing speed, when the peer is slow.
+- **If the wait runs out of time, the call ends with
+  [`DeadlineExceeded`](../00-foundation/02-glossary.en.md#deadlineexceeded).** Send, publish,
+  one-way and request are all the same here. Being backpressured is not itself a value the
+  caller receives ([`Backpressured`](../00-foundation/02-glossary.en.md#backpressured)).
+- **Having no room is not an error.** No queue rejects a call or throws away what it received
+  because it is full ([error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure)).
+- **This rule applies only before the result is settled.** A failure after a call has already
+  finished has no result to return to the caller, so it is recorded only as an observation —
+  a local target skipped after publish started, a one-way dropped during a move, or a target
+  that could not take a finished send.
+- **While waiting, that work does not hold execution authority.** Holding it would block
+  another request to the same Spot for as long as it waits.
 
 StreamNode's client-to-server complete-message
 [`MaxMessageSize`](../00-foundation/02-glossary.en.md#max-message-size) is an independent
@@ -381,35 +419,8 @@ defaults to `64 KiB`, and does not apply to server-to-client outbound.
 |---|---|---|
 | Core HWM | Directional queued/accounted bytes | Backpressure from Core queue to sender |
 | Application job queue | Host-instance reserved/queued/in-use permits | Cancellable shared-cap wait |
-| FIFO per execution object — [execution contract §7](02-handler-turn-and-execution-gate.en.md#execution-lanes) | Per-execution-object count and bytes | Structural-limit error from [error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure) |
-| Outbound admission waiter | Bounded waiter per operation family | Original send deadline/cancellation result |
 
 No path creates a separate unbounded backlog, polling, busy-spin, or silent replay.
-
-### Transferring the Owner Reservation — Joining Two Stages Without a Gap
-
-The owner FIFO's count and byte reservation is not carried by a single component. The receive
-mailbox carries it from receive acceptance until the record is claimed into the owner's
-execution queue, and the execution queue carries it from that claim until handler terminal
-completion ([02 §7](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation)
-owns the release timing on the execution-queue side).
-
-- **One record's reservation is unbroken from receive acceptance to handler terminal
-  completion.** At the claim boundary, the mailbox return and the execution-queue charge happen
-  together. If there is an uncounted stretch in between, in-flight payload that has been
-  dequeued but whose handler has not finished is caught by no limit at all — and the more
-  handlers hold large payloads for long, the more memory grows without bound during that gap.
-- **The transfer at claim is not a re-decision.** If the execution queue rejects an
-  already-accepted record on capacity grounds, that is the "turning saturation into a reject"
-  that §3 forbids. The execution queue only accounts the transferred reservation; capacity
-  rejection applies only to new local submissions inside the same runtime.
-- **The two stages never count the same record at the same time.** Double counting saturates
-  the owner limit ahead of the real backlog, and the limit's value loses its meaning.
-
-Internal confirmation condition — on the claim path there is no moment at which the record's bytes are
-counted by neither side between the mailbox return and the execution-queue charge, and no site
-where a record transferred with its permit receives a capacity rejection from the execution
-queue.
 
 ## 9. Large Payloads and Operational Values
 
@@ -444,7 +455,7 @@ names — confirms the following. Each item leads to one contract test.
 
 - Without a permit, the next ordinary record is not received first.
 - A send/request that failed a check does not change the owner queue's observed
-  count/byte/sequence values.
+  sequence values.
 - When all shared permits are reserved, ordinary ingress waits cancellably, and terminal
   reply/error completion continues to progress.
 - Once a ClientServer reply reaches the Core physical head and Core identifies
@@ -463,16 +474,16 @@ names — confirms the following. Each item leads to one contract test.
 - The 80% pause, 60% resume, and hysteresis between the thresholds are precise.
 - New-socket synchronization, close races, and stale transitions do not break the
   latest absolute state.
-- Receive-flow state is applied only to RouteMesh ROUTER-ROUTER and
-  ClientServer DEALER-ROUTER sockets.
+- Receive-flow state is applied only to the RouteMesh ROUTER-ROUTER socket and the
+  ClientServer Server ROUTER, and no state at all is applied to a ClientServer Client DEALER.
+- While a host is `PAUSED`, the reply to a request the Client sent still reaches the Client.
 
 **Backpressure and Core HWM**
 
 - Work waiting for send space does not hold execution authority.
-- When the send-wait slot is full, it ends immediately with `DeadlineExceeded` without
-  waiting.
-- Owner structural rejection and shared-cap wait are observed as distinct
-  errors/metrics.
+- When the wait for send space runs out of time, send, publish, one-way and request all end
+  with `DeadlineExceeded`, and no call receives a different error for lack of room.
+- However much is put into a per-execution-object FIFO, no record is rejected.
 - A failure after an already completed call (a skip after publish has started, a
   target failure of a completed send) does not change the caller's result and is recorded
   only as an observation.

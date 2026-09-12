@@ -174,8 +174,8 @@ public interface IZlinkStreamCodecRegistration
 |---|---|
 | `Manual`(기본) | 수신 callback·request callback·lifecycle event가 **`Dispatch.Async(...)`를 호출한 실행 문맥**에서 처리된다 |
 | `Immediate` | **receive 경로에서 인라인 실행한다**(별도 dispatch 작업 없음). 느린 handler는 receive loop를 막으므로 backpressure가 그대로 걸린다 |
-| `MaxPendingDispatchCallbacks` | **`Manual`에서만 적용된다.** 수신 handler뿐 아니라 이미 수락된 request의 완료 callback을 보존할 예약 슬롯도 이 제한에 포함된다. `Immediate`는 큐를 거치지 않으므로 이 bounded admission을 우회한다 |
-| outbound 전송 queue | dispatch 제한과 **별개인 순서 보존 queue**. 최대 **4096개** 전송을 보관하며, 넘치면 **즉시 오류**로 거부한다 |
+| `MaxPendingDispatchCallbacks` | **`Manual`에서만 적용된다.** 수신 handler가 기다리는 자리를 제한하며, 자리가 없으면 날 때까지 기다린다. **이미 수락한 request의 완료 callback은 이 제한에 들지 않는다** — 수락한 호출의 완료는 자리를 이유로 미루거나 거절하지 않는다. `Immediate`는 큐를 거치지 않으므로 이 제한을 지나지 않는다 |
+| outbound 전송 queue | dispatch 제한과 **별개인 순서 보존 queue**. 자리가 없으면 날 때까지 기다리고, 기다리다 시간이 다 되면 `DeadlineExceeded`다. 자리가 없다는 이유로 거절하지 않는다 |
 
 - **먼저 수락한 send는 뒤에 시작한 request보다 먼저 전송된다.** request는 **자기 frame의 실제 write가
   끝난 뒤** response를 기다린다.
@@ -192,7 +192,7 @@ handler snapshot을 인수하면 unread 기록에는 남기지 않는다. handle
 기록을 함께 제한한다. inbound observer는 이 선택과 별도의 관찰 경로이므로 두 경우 모두 frame
 snapshot을 받는다.
 
-**큐가 가득 차면 새로 도착한 message를 거부하고 `ReceivedMessageDropped`를 보고한다**
+**큐가 가득 차면 socket에서 더 읽지 않는다. 메시지를 버리지 않는다**
 ([공통 스펙 §10.1](../../32-stream-connector.ko.md)).
 
 ### 8.1 테스트 대기 표면

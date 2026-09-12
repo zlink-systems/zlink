@@ -7,7 +7,7 @@ client call의 정확한 payload type은 공통 계약의 역할 구분을 Java 
 비동기 `submit()`과 동기 blocking `submit_sync()`를 제공하고, request operation의 `submit(...)`은 terminal
 reply까지 기다리며 동기 `submit_sync(...)`도 제공한다. 동기 `submit_sync` 계열은 application thread 전용이며,
 handler turn·Spot turn·state lane 등 runtime 실행 문맥에서 부르면 `InvalidOperation`으로 즉시 실패한다
-([Submit과 완료 §4 F2-a](../../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)). framework
+([Submit과 완료 §4 F2-a](../../../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)). framework
 공개 종결자는 backpressure를 노출하지 않는다(F1).
 
 **`submit_sync`는 interface의 `default` 메서드다.** 구현이 모든 call type에서 같다 — 문맥을 검사한 뒤

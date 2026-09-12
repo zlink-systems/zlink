@@ -957,7 +957,7 @@ the caller provided. An Instance Spot create/get-or-create member and
 a kind argument aren't provided. A call option and the `async()` terminal can each be
 used only once. If the existing authority is an Instance kind or a
 different stable type, it's `type_mismatch`; with no eligible capacity,
-it's `capacity_exceeded`.
+it's `unavailable`.
 A terminal `async()` returns the `spot_ref_t`, the
 `existing`/`created`/`rejected` state, and the creation callback reply
 together as one `spot_create_result_t`.

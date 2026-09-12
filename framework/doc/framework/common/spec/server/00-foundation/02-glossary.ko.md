@@ -1633,6 +1633,31 @@ membership이 없어 connection이 필요하지 않다는 뜻이다. Public moni
 peer를 남기지만 ready·liveness·health failure 집계에서는 제외한다.
 `NotConnected`는 연결이 필요한데 ready connection이 없다는 뜻이며 장애 집계에 반영한다.
 
+<a id="authenticated-peer"></a>
+### Authenticated peer
+
+Transport가 [Peer admission](#peer-admission)에서 현재 연결의 상대 신원을 확인한
+peer다. 이 용어는 수신한 message의 상대를 가리키며, 그 peer로 새 message를 보낼
+준비가 끝났다는 뜻은 아니다.
+
+검증 항목과 수행 경계는
+[Session·Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환)을 따른다.
+
+| 항목 | 내용 |
+|---|---|
+| 형태·관리 | Runtime이 기존 peer admission에서 확인한 상대 신원이다. 별도 public type을 정의하지 않는다. |
+| 유효기간 | 현재 연결에 대한 신원 확인이 유효한 동안이다. Admission과 연결 교체는 [wire §4](../02-channel-transport/06-wire-protocol.ko.md#4-admission과-connection-fence)를 따른다. |
+| Application 권한 | 신원 확인 결과를 직접 설정하거나 변경하지 않는다. |
+
+<a id="admitted-peer"></a>
+### Admitted peer
+
+[Peer admission](#peer-admission)으로 현재 peer 연결로 받아들인 상대다.
+Peer lifecycle 종료는
+[MeshNode §7.1](../03-spot-actor/03-mesh-node.ko.md#71-peer-연결),
+송신 대상으로 선택하는 조건은
+[§7.3](../03-spot-actor/03-mesh-node.ko.md#73-메시징-방식별-target-선택)을 따른다.
+
 <a id="lifecycle-generation"></a>
 ### Lifecycle generation
 

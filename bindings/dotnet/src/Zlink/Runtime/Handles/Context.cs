@@ -68,7 +68,8 @@ internal sealed class Context : NativeOwner, IContext
         EnsureNotDisposed();
         var rc = NativeMethods.zlink_ctx_shutdown(Handle);
         if (rc < 0)
-            throw ZlinkException.CreateCloseException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateCloseException(
+                NativeMethods.GetLastPInvokeError());
     }
 
     public void RecalculateAutoHwm()
@@ -76,7 +77,8 @@ internal sealed class Context : NativeOwner, IContext
         EnsureNotDisposed();
         var rc = NativeMethods.zlink_ctx_auto_hwm_recalculate(Handle);
         if (rc != 0)
-            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateConfigException(
+                NativeMethods.GetLastPInvokeError());
     }
 
     public unsafe CoreHwmBudgetSnapshot GetCoreHwmBudgetSnapshot()
@@ -90,7 +92,8 @@ internal sealed class Context : NativeOwner, IContext
         var rc = NativeMethods.zlink_ctx_get_auto_hwm_budget_snapshot(Handle,
             ref native);
         if (rc != 0)
-            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateConfigException(
+                NativeMethods.GetLastPInvokeError());
 
         var reserved = new ulong[8];
         for (var index = 0; index < reserved.Length; ++index)
@@ -147,7 +150,8 @@ internal sealed class Context : NativeOwner, IContext
         EnsureNotDisposed();
         var rc = NativeMethods.zlink_ctx_reset_auto_hwm_budget_metrics(Handle);
         if (rc != 0)
-            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateConfigException(
+                NativeMethods.GetLastPInvokeError());
     }
 
     public void Dispose()
@@ -177,7 +181,8 @@ internal sealed class Context : NativeOwner, IContext
         EnumValidation.EnsureContextOption(option, nameof(option));
         var rc = NativeMethods.zlink_ctx_set(Handle, (int)option, value);
         if (rc != 0)
-            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateConfigException(
+                NativeMethods.GetLastPInvokeError());
     }
 
     internal int GetOption(ContextOption option)
@@ -188,7 +193,7 @@ internal sealed class Context : NativeOwner, IContext
             out var errorOut);
         if (errorOut != (int)ConfigResult.Ok)
             throw new ZlinkConfigException((ConfigResult)errorOut,
-                NativeMethods.zlink_errno());
+                NativeMethods.GetLastPInvokeError());
         return value;
     }
 
@@ -238,7 +243,8 @@ internal sealed class Context : NativeOwner, IContext
     {
         var handle = NativeMethods.zlink_ctx_new();
         if (handle == IntPtr.Zero)
-            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
+            throw ZlinkException.CreateConfigException(
+                NativeMethods.GetLastPInvokeError());
         return handle;
     }
 }

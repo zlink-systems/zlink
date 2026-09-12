@@ -7,6 +7,8 @@ title: "6. Spot · Kotlin"
      고칠 곳은 공통 소스이고, `python3 doc/site/scripts/generate_language_guides.py`로 다시 만든다. -->
 <!-- generated:end -->
 
+# 6. Spot
+
 <!-- framework-adapter-nav:start -->
 [가이드 홈](README.ko.md) | [이전: 5. Channel Messaging — request · send · pub/sub](05-channel-messaging.ko.md) | [다음: 7. Actor와 Spot](07-actor-spot.ko.md)
 <!-- framework-adapter-nav:end -->
@@ -14,8 +16,6 @@ title: "6. Spot · Kotlin"
 <!-- language-switch:start -->
 다른 언어로 보기 — [C#/.NET](../../../dotnet/guide/server/06-spot.ko.md) · [C++](../../../cpp/guide/server/06-spot.ko.md) · [Java](../../../java/guide/server/06-spot.ko.md) · **Kotlin** · [Node/TypeScript](../../../node/guide/server/06-spot.ko.md)
 <!-- language-switch:end -->
-
-# 6. Spot
 
 > **이 장의 계약 소유 문서** — [Spot 모델](../../../common/spec/server/03-spot-actor/01-spot-model.ko.md)과
 > [SPOT 메시징](../../../common/spec/server/03-spot-actor/02-spot-messaging.ko.md)이 동작을,
@@ -76,9 +76,11 @@ Instance Spot을 등록한다.
 ```kotlin
 // Play 서버 — Entry Spot과 방을 담을 User Spot.
 mesh.objects().server()
-    .addEntrySpot(BingoEntrySpot::class.java)          // Entry Spot은 stable type이 없다.
+    // Entry Spot은 stable type이 없다.
+    .addEntrySpot(BingoEntrySpot::class.java)
     .addSpotFactory(
-        SampleNames.RoomSpotType,                      // stable type — 생성할 때 이 이름으로 선택한다.
+        // stable type — 생성할 때 이 이름으로 선택한다.
+        SampleNames.RoomSpotType,
         BingoRoom::class.java,
     ) { factory ->
         factory.executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
@@ -104,7 +106,8 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
 // Instance Spot — 생성 호출이 없다. 해당 ID로 보내면 없을 때 생성된다.
 val allocated = spotClient
     .requestToSpot("match:$levelBucket", ReserveBingoRoomReq())
-    .instanceSpot(SampleNames.MatchmakerSpotType) // 없으면 생성해도 된다는 intent.
+    // 없으면 생성해도 된다는 intent.
+    .instanceSpot(SampleNames.MatchmakerSpotType)
     .inMesh(SampleNames.MatchmakingMeshName)
     .submit(ReserveBingoRoomRes::class.java)
     .await()
@@ -113,7 +116,8 @@ val allocated = spotClient
 val created = spots
     .getOrCreate(allocated.roomId, SampleNames.RoomSpotType)
     .inMesh(SampleNames.PlayMeshName)
-    .request(allocated.settings)     // 새 Spot의 onCreate로 전달된다.
+    // 새 Spot의 onCreate로 전달된다.
+    .request(allocated.settings)
     .submit()
     .await()
 ```
@@ -250,13 +254,16 @@ val spotId = created.spot().spotId() // 이후 메시징에는 전역 SpotId만 
 val result = spots
     .getOrCreate("lobby-eu-1", "lobby")
     .inMesh("play")
-    .request(CreateLobby("eu")) // EXISTING으로 끝나면 이 요청은 전달되지 않는다.
+    // EXISTING으로 끝나면 이 요청은 전달되지 않는다.
+    .request(CreateLobby("eu"))
     .submit()
     .await()
 
 when (result.state()) {
-    ZLinkSpotCreateState.EXISTING -> { }  // 이미 있던 lobby를 그대로 쓴다.
-    ZLinkSpotCreateState.CREATED -> { }   // 이 호출이 만들었다.
+    // 이미 있던 lobby를 그대로 쓴다.
+    ZLinkSpotCreateState.EXISTING -> { }
+    // 이 호출이 만들었다.
+    ZLinkSpotCreateState.CREATED -> { }
     // 생성 callback이 거절해 Ready Spot이 없다.
     ZLinkSpotCreateState.REJECTED -> error("Lobby creation was rejected.")
 }
@@ -337,7 +344,8 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
 // Spot 앞 packet — 첫 인자가 대상 Spot instance다.
 class ChatHandler : ZLinkSpotPacketHandler<GameRoom, Chat> {
     override suspend fun handle(spot: GameRoom, message: Chat) {
-        spot.appendChat(message.text) // Spot 상태를 직접 만진다. 락은 필요 없다.
+        // Spot 상태를 직접 만진다. 락은 필요 없다.
+        spot.appendChat(message.text)
     }
 }
 
@@ -357,7 +365,8 @@ class ScoreHandler : ZLinkSpotSubscriptionHandler<GameRoom, ScoreChanged> {
 class PlaceMarkHandler : ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
     override suspend fun handle(
         spot: GameRoom,
-        actor: PlayerActor,             // 이 메시지를 받은 Actor다.
+        // 이 메시지를 받은 Actor다.
+        actor: PlayerActor,
         messageContext: ZLinkMessageContext,
         message: PlaceMark,
     ) {
@@ -377,7 +386,8 @@ class GameRoom(private val spotContext: ZLinkSpotContext) : ZLinkSpot {
     override fun context(): ZLinkSpotContext = spotContext
 
     override fun configure() {
-        spotContext.handlers().addHandler(ChatHandler::class.java) // Spot send handler를 등록한다.
+        // Spot send handler를 등록한다.
+        spotContext.handlers().addHandler(ChatHandler::class.java)
         // 구독 topic은 ScoreHandler에 붙인 @ZLinkSpotSubscription이 정한다.
         spotContext.handlers().addHandler(ScoreHandler::class.java)
     }
@@ -521,15 +531,18 @@ factory로 준비할지 고르는 stable type**이다. 그 mesh에 Instance Spot
 // type이 여럿 등록된 mesh — 어느 factory로 만들지 stable type으로 지정한다.
 val match = spotClient
     .requestToSpot("bronze", FindMatch(playerId))
-    .instanceSpot("matchmaker") // 대상이 없으면 이 stable type의 factory로 준비한다.
-    .inMesh("matchmaking")      // 처음 배치할 mesh를 고른다.
+    // 대상이 없으면 이 stable type의 factory로 준비한다.
+    .instanceSpot("matchmaker")
+    // 처음 배치할 mesh를 고른다.
+    .inMesh("matchmaking")
     .submit(MatchResult::class.java)
     .await()
 
 // type이 하나만 등록된 mesh — 생략하면 Framework가 그 유일한 type을 고른다.
 val single = spotClient
     .requestToSpot("bronze", FindMatch(playerId))
-    .instanceSpot()             // 대상 node에 등록된 유일한 type으로 준비한다.
+    // 대상 node에 등록된 유일한 type으로 준비한다.
+    .instanceSpot()
     .inMesh("matchmaking")
     .submit(MatchResult::class.java)
     .await()
@@ -581,8 +594,10 @@ val options = ZLinkTimerOptions()
     .setStopOnUnhandledException(false)
 
 gameTick = spotContext.addTimer(
-    "game-tick",                    // 같은 Spot 안에서 유일한 이름이다.
-    Duration.ofSeconds(1),          // 주기. 0 이하이면 ZLinkConfigurationException이다.
+    // 같은 Spot 안에서 유일한 이름이다.
+    "game-tick",
+    // 주기. 0 이하이면 ZLinkConfigurationException이다.
+    Duration.ofSeconds(1),
     GameTickHandler::class.java,
     options).await()
 
@@ -760,7 +775,8 @@ Application은 상태가 일관된 turn에서 `defer()`를 호출한다. 이 호
 ```kotlin
 class RoundTickHandler : ZLinkSpotTimerHandler<GameRoom> {
     override suspend fun handle(spot: GameRoom, tick: ZLinkTimerTick) {
-        if (!spot.tryFinishRound()) return // 라운드 진행 중이면 신호하지 않는다.
+        // 라운드 진행 중이면 신호하지 않는다.
+        if (!spot.tryFinishRound()) return
 
         // 라운드가 끝나 상태가 정산된 지점이다. 이 turn의 마지막 Framework 호출이어야 한다.
         spot.context().relocationReady().defer()

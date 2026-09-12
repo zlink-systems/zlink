@@ -250,68 +250,28 @@ Instance Spot 한정으로 추가했다([Spot 모델](01-spot-model.ko.md)). Use
 
 ## 6. 메모리 회계를 어느 단위로 하는가
 
-process 단위 byte 회계와 Spot 단위 byte 회계는 서로 다른 회계 단위다. process
-단위 byte 회계는 수신 대기 payload를 byte로 제한하고, Spot 단위 byte 회계는
-lane별 작업 건수와 byte를 함께 제한한다. 한쪽의 숫자를 다른 쪽의 상한으로 재사용하지
-않는다.
+**메모리를 byte로 재는 곳은 Core 하나다.** Core의 byte HWM이 queue가 보유한 frame byte를
+제한하고, 못 읽으면 그 byte가 쌓여 보내는 쪽을 막는다.
 
-실행 queue는 application과 lifecycle을 별도 FIFO lane으로 두고 각 lane에 count·byte
-reservation을 둔다. Application lane 기본값은 1,024건·64 MiB이고, lifecycle lane
-기본값은 128건·4 MiB다. Accepted application work는 payload 크기와 work당 고정 retained
-cost 256 byte를 함께 예약한다. Reservation은 handler terminal completion에서 반납한다.
-Relocation hold에는 relocation 전용 건수·byte 상한을 두지 않는다.
+**Framework는 건수만 센다.** Host가 handler 시작을 기다리는 job 수를 세고, 그 수가 상한의
+80 %에 이르면 `PAUSED`를 건다. 세는 자리는 host 하나뿐이다. 실행 queue, mailbox, worker
+대기열에는 각자의 상한이 없다 — 있으면 같은 것을 두 번 세게 되고, 어느 층에서 막혔는지에
+따라 결과가 갈린다.
 
-따라서 process HWM이 남아 있어도 Spot queue가 먼저 포화될 수 있고, 반대로 Spot queue에
-여유가 있어도 process inbound admission이 먼저 멈출 수 있다. 두 결과를 같은
-`CapacityExceeded` 상황으로 합치지 않고, 실제로 admission에 실패한 queue에 따라 구분한다.
+두 회계의 소유 경계는
+[Application job queue와 backpressure §1](../01-execution/04-application-job-queue-and-backpressure.ko.md#1-두-독립된-capacity-authority)이
+소유한다. 큰 payload를 오래 보유하는 workload에서 무엇을 조절하는지는
+[같은 문서 §9](../01-execution/04-application-job-queue-and-backpressure.ko.md#9-큰-payload와-운영값)가 정한다.
 
-### 대기열 한도는 쌓인 payload 크기로 정한다
+실행 queue는 application과 lifecycle을 별도 FIFO lane으로 두지만, 그것은 순서와 우선순위를
+가르기 위한 것이지 각 lane에 상한을 두기 위한 것이 아니다.
 
-**실행 대기열의 한도는 건수와 byte 두 축을 모두 강제하고, 먼저 걸리는 쪽을
-적용한다.** 정식 spec이 두 축을 의무화했다
-([Framework API](../00-foundation/06-framework-api.ko.md)).
-
-한 축만으로는 다른 축으로 우회할 수 있다. 건수만 두면 큰 payload 몇 건이 memory를
-채우고, byte만 두면 빈 payload를 무한히 쌓아도 한도에 걸리지 않는다.
-
-**byte 회계는 payload 크기만 세지 않는다.** 대기 중인 작업 하나가 점유하는
-envelope·metadata·queue node를 포함한다. 정확히 계산할 수 없는 언어에서는 작업당 고정
-비용을 더한 값을 쓴다. payload가 비어 있어도 작업 하나는 0 byte가 아니다.
-
-대기열 한도가 존재하는 이유는 두 가지다 — 메모리를 묶어 두는 양을 정하는 것과, 밀린
-일이 얼마나 되는지 판단하는 것. 건수는 둘 중 어느 것도 알려 주지 못한다.
-
-같은 1,024건이라도 100 byte짜리면 약 100 KB이고 1 MiB짜리면 1 GiB다. 메모리가 1만 배
-차이 나는데 한도는 똑같이 걸린다. 배출에 걸리는 시간도 마찬가지다 — 처리량은 초당 몇
-건이 아니라 초당 몇 byte에 가깝게 움직이므로, 밀린 양을 재려면 byte로 재야 한다.
-
-건수 한도는 두 방향으로 다 틀린다.
-
-| 상황 | 건수 한도의 결과 |
-|---|---|
-| 작은 message가 몰린다 | 메모리에 여유가 있는데 한도에 걸려 거절한다 |
-| 큰 message가 몰린다 | 한도에 안 걸리는데 메모리가 고갈된다 |
-
-process 단위 회계가 이미 byte로 되어 있다(§6 첫 문단). 같은 기준을 Spot 단위로 내리면
-되고, 두 층이 같은 단위를 쓰므로 어느 층에서 걸렸는지도 구분된다.
-
-**상한이 없는 실행 대기열을 두지 않는다.** 각 lane은 건수와 byte reservation을
-모두 가져야 한다
-([Framework API](../00-foundation/06-framework-api.ko.md)).
-
-초과했을 때의 결과는 하나가 아니다. 제출 계열과 대기열 위치에 따라 갈리므로 구현이
-하나로 뭉뚱그리면 안 된다. Request queue의 오류 선택은 [오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)가 소유한다.
-
-위 Request queue 판정에 포함하지 않는 두 자리는 각각 `CapacityExceeded`다 — worker scheduler
-대기열과 배치 수용량이다. 뒤의 것은 대기열 포화가 아니라 admission 판정이다.
-
-이동 중 보류에는 relocation 전용 건수·byte 상한이 없다. 이미 work를 소유한 실행 lane의
-reservation과 transport·deadline·cancellation 제한을 relocation hold의 별도 상한으로 재사용하지 않는다. 정식 spec이 정한 규칙이므로 그대로 따른다
-([Host relocation 전체 흐름 「9. 대기 중인 message, timer와 session을 옮긴다」](../05-location-relocation/05-host-relocation-flow.ko.md#12-대기-중인-message-timer와-session을-옮긴다)).
+Spot을 둘 node가 하나도 없는 것은 줄이 찬 것과 다르다. 늦춘다고 node가 생기지 않으므로
+`Unavailable`로 끝난다.
 
 ## 7. 다른 주제와의 경계
 
-Object별 bounded queue는 순서 보장과 owner isolation을 위한 것이며 host shared queue를
+Object별 실행 queue는 순서 보장과 owner isolation을 위한 것이며 host shared queue를
 대체하지 않는다. Permit과 fairness는 [수신과 dispatch loop](../01-execution/04-application-job-queue-and-backpressure.ko.md)가,
 pre-start terminal lease cleanup은 [Payload 소유권](../01-execution/05-payload-ownership-and-codec.ko.md)이
 소유한다. Host shared capacity 자체의 admission과 backpressure는
@@ -349,13 +309,10 @@ pre-start terminal lease cleanup은 [Payload 소유권](../01-execution/05-paylo
 - 진행 중인 작업이 있는 Instance Spot은 쓰지 않은 시간이 지나도 정리되지 않는다.
 - 정리될 때 `IdleEvicted` 종료 사유로 closing callback이 호출된다.
 
-**실행 대기열 상한**
+**실행 대기열**
 
-- 실행 대기열은 건수와 byte 두 축으로 제한되고, 먼저 걸리는 쪽이 적용된다.
-- 큰 message가 몰리면 건수 한도보다 byte 한도에 먼저 걸린다.
-- 빈 payload가 몰리면 byte 한도보다 건수 한도에 먼저 걸린다.
-- byte 회계에 작업당 고정 비용이 포함되어 있어, 빈 payload도 한도를 소진한다.
-- 모든 실행 lane에 건수·byte 상한이 있다 — 상한이 없는 실행 대기열은 없다.
+- 실행 대기열에 얼마를 넣어도 자리가 없다는 이유로 끝나는 호출이 없다.
+- 큰 payload를 쌓으면 Framework가 아니라 Core의 byte 상한에서 보내는 쪽이 막힌다.
 
 ---
 

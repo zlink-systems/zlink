@@ -127,7 +127,7 @@ ST-G2/G6/G2와 관련된 설정 surface도 이미 계약에 있습니다. 4언�
 4. 그 뒤에만 old `transportPairId + transportPairGeneration`을 정확히 종료합니다.
 5. old process가 재개해 보내는 late Hello/READY는 replacement descriptor와 lifecycle이 맞지 않아 reject하고, 현재 replacement의 connection/liveness를 절대 건드리지 않아야 합니다.
 
-이는 “같은 RID, 다른 lifecycle generation은 새 process 실행”으로 다루고, replacement는 current discovery descriptor의 RID·identity·generation fence를 사용해야 한다는 계약에 직접 부합합니다. [Transport liveness](../../../framework/doc/framework/common/spec/server/archive/29-transport-liveness.ko.md#5-ready와-장애-판정) [Reconnect](../../../framework/doc/framework/common/spec/server/archive/29-transport-liveness.ko.md#6-connection-loss와-reconnect) [SF-C3](../../../framework/doc/framework/common/e2e/config-6-store-failure-recovery.ko.md#sf-c3-이전-owner-lifecycle이-replacement를-바꾸지-못한다)
+이는 “같은 RID, 다른 lifecycle generation은 새 process 실행”으로 다루고, replacement는 current discovery descriptor의 RID·identity·generation fence를 사용해야 한다는 계약에 직접 부합합니다. [Transport liveness](../../../framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md#5-ready와-장애-판정) [Reconnect](../../../framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.ko.md#6-connection-loss와-reconnect) [SF-C3](../../../framework/doc/framework/common/e2e/config-6-store-failure-recovery.ko.md#sf-c3-이전-owner-lifecycle이-replacement를-바꾸지-못한다)
 
 파일은 수정하지 않았고, 기존 untracked 변경도 건드리지 않았습니다.
 

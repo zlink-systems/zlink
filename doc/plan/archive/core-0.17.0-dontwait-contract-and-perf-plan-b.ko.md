@@ -2,10 +2,10 @@
 
 > 작성일: 2026-09-05
 > 선행 계획: [`core-send-dontwait-completion-0.16.0-plan-b.ko.md`](core-send-dontwait-completion-0.16.0-plan-b.ko.md)
-> 작업 기록: [`c016-worklog/decisions.ko.md`](c016-worklog/decisions.ko.md) (D-B71~D-B85), 브리프 `c016-worklog/briefs/`
-> 인계 문서(머신 A용): [`c016-worklog/handoff-A-dontwait-backpressure.ko.md`](c016-worklog/handoff-A-dontwait-backpressure.ko.md)
-> bindings 성능 계획: [`../perf/perf/bindings-0.17.0/bindings-library-performance-improvement-plan-core-0.17.0.ko.md`](../perf/perf/bindings-0.17.0/bindings-library-performance-improvement-plan-core-0.17.0.ko.md)
-> 최적화 가이드: [`../perf/BINDINGS_OPTIMIZATION_GUIDE.ko.md`](../perf/BINDINGS_OPTIMIZATION_GUIDE.ko.md)
+> 작업 기록: [`c016-worklog/decisions.ko.md`](../c016-worklog/decisions.ko.md) (D-B71~D-B85), 브리프 `c016-worklog/briefs/`
+> 인계 문서(머신 A용): [`c016-worklog/handoff-A-dontwait-backpressure.ko.md`](../c016-worklog/handoff-A-dontwait-backpressure.ko.md)
+> bindings 성능 계획: [`../perf/perf/bindings-0.17.0/bindings-library-performance-improvement-plan-core-0.17.0.ko.md`](../../perf/perf/bindings-0.17.0/bindings-library-performance-improvement-plan-core-0.17.0.ko.md)
+> 최적화 가이드: [`../perf/BINDINGS_OPTIMIZATION_GUIDE.ko.md`](../../perf/BINDINGS_OPTIMIZATION_GUIDE.ko.md)
 > 역할: 머신 A = framework(필요 시 Core·bindings 버그 수정도 직접 커밋), 머신 B = Core·bindings·perf. 감독관(Claude) =
 > 리뷰·판정·커밋, 구현 = codex sol high/medium·terra(ultra는 정말 필요할 때만, `service_tier=fast` 사용 안 함), 메모리
 > 안전·필터에 걸리는 조사는 Claude 서브에이전트.
@@ -98,7 +98,7 @@ rust 실행기 spin 제거(172k → 259k), python 7.9k → 20k. 표는 인계 �
 
 ## 6. bindings 성능 계획(0.17.0) 실행 계획
 
-[`bindings-library-performance-improvement-plan-core-0.17.0.ko.md`](../perf/perf/bindings-0.17.0/bindings-library-performance-improvement-plan-core-0.17.0.ko.md)
+[`bindings-library-performance-improvement-plan-core-0.17.0.ko.md`](../../perf/perf/bindings-0.17.0/bindings-library-performance-improvement-plan-core-0.17.0.ko.md)
 (이하 "계획서")를 §3의 2~5단계가 끝난 뒤 다음 순서로 실행한다. 계획서 §7.4의 20단계 작업 순서와 §7.5~§7.7 gate를 그대로 따르고,
 이 절은 머신 B가 그것을 어떤 도구·job·커밋 단위로 수행하는지만 정한다.
 
