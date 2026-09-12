@@ -64,21 +64,32 @@ C의 raw readiness, `zlink_completion_recv()`와 record 수명은
 [Core completion pull과 ownership](../../../core/doc/spec/core/socket/README.ko.md#completion-pull과-ownership)이
 소유한다.
 
-- **고수준 바인딩은 socket마다 completion을 읽어 언어 terminal로 전달하는 주체(completion owner)를 하나만 둔다.**
-  같은 queue의 record를 두 주체가 소비하지 않도록 하기 위해서다. Public poller에
-  `PollCompletion`으로 등록하지 않았으면 runtime이 owner이고, 등록하면 `wait()` 호출
-  thread로 원자적으로 이전한다. 제거하거나 completion bit를 빼면 runtime owner로 되돌린다.
+- **고수준 바인딩은 socket마다 completion을 읽어 언어 terminal로 전달하는 completion owner를
+  하나만 두며, 그 owner는 public poller에 `PollCompletion`으로 등록해 `wait()`를 구동하는
+  thread뿐이다.** 같은 queue의 record를 두 주체가 소비하지 않도록 하기 위해서다. 등록하면 그
+  `wait()` 구동 thread가 owner가 되고, 등록을 제거하거나 completion bit를 빼면 owner가 없는
+  상태가 된다. **바인딩은 runtime(백그라운드) owner나 자동 completion drain thread를 두지 않는다**
+  — completion은 오직 caller가 구동하는 poller의 `wait()`(비동기 terminal) 또는 blocking
+  terminal 자신의 in-line drain(아래)으로만 진행한다.
+- **비동기 completion-backed terminal(`admitted`·REQUEST `reply`)은 소켓이 `PollCompletion`
+  owner를 가지고 그 `wait()`가 구동될 때만 진행한다.** owner가 없는 소켓에서 이 terminal을
+  제출하면 바인딩은 **submit 시점에 진행 불가를 즉시 typed 오류(`InvalidState`)로 거부**하며,
+  조용히 hang하거나 백그라운드 drain을 만들지 않는다. 오사용을 지연이 아니라 최전방에서 막기
+  위해서다.
+- **Blocking terminal(동기 request 등)은 호출 thread에서 자신의 completion을 in-line으로
+  drain해 완료하며, 별도 drain thread나 지속 owner를 만들지 않는다.** 소켓이 이미 public poller
+  owner를 가진 동안에는 같은 실행 thread에서 `wait()`와 blocking terminal을 직렬로 호출하지
+  않는다(아래).
 
 고수준 `PollCompletion`은 native queue에서 한 건 이상을 꺼내 live waiter를 끝내거나 detached
 state를 정리한 뒤 반환하는 completion progress event다. 반환할 때 queue가 이미 비어 있을 수
 있고 public awaitable의 새 상태 변화를 보장하지 않는다. `POLLIN`이 함께 준비돼도 application
 DATA는 소비하지 않는다.
 
-Public poller가 owner인 동안 completion-backed terminal은 그 poller의 `wait()` drain에
-의존한다. Blocking request와 Go `Submit(context.Context)`를 함께 사용하려면 다른
-thread·goroutine이 `wait()` loop를 계속 실행해야 한다. 같은 실행 thread에서 `wait()`와
-blocking terminal을 직렬로 호출하지 않는다. Binding은 blocking terminal을 위해 owner를
-가져오거나 별도 drain thread를 만들지 않는다.
+Completion owner인 public poller의 `wait()` drain 동안 비동기 completion-backed terminal이
+진행한다. 한 소켓의 blocking request·Go `Submit(context.Context)`를 비동기 terminal과 함께
+사용하려면 다른 thread·goroutine이 그 poller의 `wait()` loop를 계속 실행해야 한다. 같은 실행
+thread에서 `wait()`와 blocking terminal을 직렬로 호출하지 않는다.
 
 ## 5. Submit 결과와 completion의 합류
 
@@ -146,6 +157,11 @@ C의 raw completion 관측은
   함께 준비된 DATA는 뒤의 application receive에서 읽을 수 있다.
 - Public poller에 completion을 등록한 socket에서 다른 thread·goroutine이 `wait()`를
   실행하면 blocking request와 Go `Submit(context.Context)`가 완료를 받을 수 있다.
+- **`PollCompletion` owner가 없는 socket에서 비동기 completion-backed terminal을 제출하면
+  submit 시점에 진행 불가 typed 오류(`InvalidState`)로 즉시 실패하고, 조용히 대기하거나
+  백그라운드 drain을 시작하지 않는다.** owner를 등록한 뒤 같은 제출은 정상 완료한다.
+- Blocking terminal은 poller owner 없이도 호출 thread의 in-line drain만으로 자신의 completion을
+  한 번 받아 완료하며, 별도 thread를 만들지 않는다.
 
 **Submit과 completion 경합**
 
