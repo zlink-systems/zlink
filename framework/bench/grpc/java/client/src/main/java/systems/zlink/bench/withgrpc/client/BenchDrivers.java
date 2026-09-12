@@ -180,10 +180,21 @@ public final class BenchDrivers {
         long sequence = 0;
         long cpuStart = ClientResources.currentThreadCpuNs();
         Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
+        CompletableFuture<Void> admissionPending = null;
         try (Poller completionPoller = "request-backpressure".equals(trigger.pattern())
                 ? operation.openCompletionPoller() : null) {
             PollEvents events = completionPoller == null ? null : new PollEvents(1);
             while (BenchMetricHeader.nowNs() < deadline) {
+                if (completionPoller != null && admissionPending != null) {
+                    if (admissionPending.isDone()) {
+                        admissionPending = null;
+                    } else {
+                        completionPoller.wait(events, Duration.ofNanos(Math.min(
+                            50_000_000L, Math.max(1L,
+                                deadline - BenchMetricHeader.nowNs()))));
+                        continue;
+                    }
+                }
                 long started = source.begin();
                 RawStack.RawSubmission submission;
                 try {
@@ -202,10 +213,19 @@ public final class BenchDrivers {
                 });
 
                 if (completionPoller != null) {
-                    completionPoller.wait(events, Duration.ofNanos(Math.min(
-                        50_000_000L, Math.max(1L, deadline - BenchMetricHeader.nowNs()))));
+                    if (submission.result()
+                        == systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED) {
+                        // The reply callback is already registered. Park only
+                        // this raw-operation slot until its admission completes.
+                        admissionPending = submission.admitted();
+                    } else if (submission.result()
+                        != systems.zlink.contracts.sockets.SubmitResult.OK) {
+                        throw new IllegalStateException(
+                            "raw submit returned " + submission.result());
+                    }
+                    completionPoller.wait(events, Duration.ZERO);
+                    continue;
                 }
-
                 if (submission.result()
                     == systems.zlink.contracts.sockets.SubmitResult.OK) {
                     continue;
@@ -232,8 +252,12 @@ public final class BenchDrivers {
                     ClientResources.currentThreadCpuNs() - cpuStart);
             }
 
+            List<CompletableFuture<Void>> outstanding = new ArrayList<>(pending);
+            if (admissionPending != null) {
+                outstanding.add(admissionPending);
+            }
             CompletableFuture<Void> settled = CompletableFuture.allOf(
-                pending.toArray(CompletableFuture[]::new));
+                outstanding.toArray(CompletableFuture[]::new));
             try {
                 awaitRawCompletion(settled, completionPoller, events,
                     BenchMetricHeader.nowNs() + options.drainBoundMs * 1_000_000L);

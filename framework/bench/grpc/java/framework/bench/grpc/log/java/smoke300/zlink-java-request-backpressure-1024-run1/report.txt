@@ -1,0 +1,11 @@
+# with-grpc bench, server-driven source A
+
+RESULT,current,zlink-java-request-backpressure,local,1024,throughput,293105.200
+RESULT,current,zlink-java-request-backpressure,local,1024,bandwidth,300.140
+RESULT,current,zlink-java-request-backpressure,local,1024,latency,0.143
+RESULT,current,zlink-java-request-backpressure,local,1024,latency_p95,0.234
+RESULT,current,zlink-java-request-backpressure,local,1024,latency_p99,0.374
+RESULT,current,zlink-java-request-backpressure,local,1024,client_cpu_percent,9.309
+RESULT,current,zlink-java-request-backpressure,local,1024,client_memory_mb,1160.625
+RESULT,current,zlink-java-request-backpressure,local,1024,server_cpu_percent,7.550
+RESULT,current,zlink-java-request-backpressure,local,1024,server_memory_mb,1059.219
