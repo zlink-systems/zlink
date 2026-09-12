@@ -18,8 +18,7 @@ internal static class ZLinkRequestFailureMapper
     //  caller translates a peer reply header (C++ reply_header_exception), never a
     //  source-owned bounded resource. When the reply carried no fine code (errno 0
     //  = None) or an unrecognised one, it falls through to the coarse terminal map,
-    //  which preserves Backpressured(113)+None -> CapacityExceeded (placement/
-    //  admission capacity) and Conflict/Busy -> Unavailable (remote owner/queue).
+    //  which classifies remote owner and route conditions as Unavailable.
     public static Exception CreateCompletionException(
         RequestResult result,
         int failureErrno,
@@ -63,8 +62,7 @@ internal static class ZLinkRequestFailureMapper
                 or ServiceWireConstants.FrameworkErrorCode.RequestProtocolError =>
                 ZLinkFrameworkErrorKind.ProtocolError,
             //  workerQueueFull(18) on a remote reply is the target's queue state,
-            //  a resource this runtime does not own -> Unavailable, not
-            //  CapacityExceeded (spec 32-framework-error-model:99-108).
+            //  a resource this runtime does not own -> Unavailable.
             ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
                 or ServiceWireConstants.FrameworkErrorCode.RouteNotConnected
                 or ServiceWireConstants.FrameworkErrorCode.WorkerQueueFull
@@ -106,9 +104,7 @@ internal static class ZLinkRequestFailureMapper
             //  Spec 32-framework-error-model:99-103 — a terminal-only `Conflict`/
             //  `Busy` on a remote request reply reflects the target's queue/owner
             //  state, a resource this runtime does not own, so it is `Unavailable`
-            //  (a source-owned bounded resource would be `CapacityExceeded`, but
-            //  that must be proven, not assumed from the coarse terminal). Stays
-            //  retryable via RetryAfterBackoff.
+            //  and stays retryable via RetryAfterBackoff.
             RequestResult.Conflict or RequestResult.Busy => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"{operationName} was refused with a transient result '{result}'.",
@@ -120,9 +116,9 @@ internal static class ZLinkRequestFailureMapper
                 ZLinkRetryAdvice.DoNotRetry,
                 CreateRequestException(result)),
             RequestResult.Backpressured => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.CapacityExceeded,
-                $"{operationName} exceeded the bounded completion capacity.",
-                ZLinkRetryAdvice.RetryAfterBackoff,
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                $"{operationName} exceeded its admission deadline.",
+                ZLinkRetryAdvice.DoNotRetry,
                 CreateRequestException(result)),
             RequestResult.ProtocolError => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,

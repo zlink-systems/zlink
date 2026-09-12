@@ -308,8 +308,7 @@ internal sealed class ZLinkActorDrainCoordinator(
     internal static bool IsTargetLocalRetriable(ZLinkFrameworkException error) =>
         error.RetryAdvice != ZLinkRetryAdvice.DoNotRetry
         && error.Kind is ZLinkFrameworkErrorKind.Unavailable
-            or ZLinkFrameworkErrorKind.DeadlineExceeded
-            or ZLinkFrameworkErrorKind.CapacityExceeded;
+            or ZLinkFrameworkErrorKind.DeadlineExceeded;
 
     internal static ZLinkActorRuntimeState[] StandaloneActors(
         IEnumerable<ZLinkActorRuntimeState> states) =>

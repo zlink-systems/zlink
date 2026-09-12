@@ -5,31 +5,17 @@ namespace Zlink.Framework.Runtime.Backend.DotNet;
 // cancellation stacks without creating a thread for every table or callback.
 internal sealed class ZLinkCompletionDispatcher
 {
-    private const int DefaultCapacity = 4_096;
-
     internal static ZLinkCompletionDispatcher Shared { get; } = new();
 
     [ThreadStatic]
     private static bool _isCurrentExecution;
 
     private readonly object _gate = new();
-    private readonly int _capacity;
     private WorkItem? _head;
     private WorkItem? _tail;
-    private int _reservations;
 
-    private ZLinkCompletionDispatcher()
-        : this(DefaultCapacity)
+    internal ZLinkCompletionDispatcher()
     {
-    }
-
-    // Isolated instances let unit tests prove aggregate admission at a small
-    // capacity. Production has exactly one call site: Shared above.
-    internal ZLinkCompletionDispatcher(int capacity)
-    {
-        if (capacity <= 0)
-            throw new ArgumentOutOfRangeException(nameof(capacity));
-        _capacity = capacity;
         var worker = new Thread(Run)
         {
             IsBackground = true,
@@ -44,37 +30,9 @@ internal sealed class ZLinkCompletionDispatcher
 
     internal static bool IsCurrentExecution => _isCurrentExecution;
 
-    // The process-wide admission slot is acquired while the owning table lock
-    // is held. The same preallocated node retains it until synchronous
-    // unregister or callback completion.
-    internal bool TryReserve(WorkItem work)
-    {
-        ArgumentNullException.ThrowIfNull(work);
-        lock (_gate)
-        {
-            if (_reservations >= _capacity)
-                return false;
-            work.HasReservation = true;
-            _reservations++;
-            return true;
-        }
-    }
-
-    internal void ReleaseReservation(WorkItem work)
-    {
-        ArgumentNullException.ThrowIfNull(work);
-        lock (_gate)
-        {
-            if (!work.HasReservation)
-                return;
-            work.HasReservation = false;
-            _reservations--;
-        }
-    }
-
-    // WorkItem is allocated while its pending-operation reservation is being
-    // admitted. Posting a terminal result only links that existing node, so a
-    // reply, cancellation, or close cannot be lost to queue growth allocation.
+    // WorkItem is allocated with the pending operation. Posting a terminal
+    // result only links that existing node, so a reply, cancellation, or close
+    // cannot arrive before its callback has a dispatcher node.
     internal void Post(WorkItem work)
     {
         ArgumentNullException.ThrowIfNull(work);
@@ -143,8 +101,6 @@ internal sealed class ZLinkCompletionDispatcher
 
     internal abstract class WorkItem
     {
-        internal bool HasReservation { get; set; }
-
         internal WorkItem? Next { get; set; }
 
         internal abstract void Execute();

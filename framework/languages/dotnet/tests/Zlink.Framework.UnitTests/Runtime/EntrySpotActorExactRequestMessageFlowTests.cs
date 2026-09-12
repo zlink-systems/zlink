@@ -31,10 +31,10 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, shutdown.Kind);
 
             node.ActorRequestHandler = _ => throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.CapacityExceeded,
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
                 "backpressured");
             var backpressured = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => Request().AsTask());
-            Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, backpressured.Kind);
+            Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, backpressured.Kind);
 
             node.ActorRequestHandler = parts =>
             {
@@ -62,8 +62,10 @@ public sealed partial class EntrySpotActorDispatchTests
                     flow.ActorId == actor.ActorId && flow.Phase == "reply_received")
                 .ToArray();
             Assert.Equal(4, terminals.Length);
+            // The former capacity branch no longer exists; that attempt now ends as a
+            // plain failure like the last one.
             Assert.Equal(
-                ["cancelled", "shutdown", "backpressured", "failed"],
+                ["cancelled", "shutdown", "failed", "failed"],
                 terminals.Select(flow => flow.Outcome));
         }
         finally

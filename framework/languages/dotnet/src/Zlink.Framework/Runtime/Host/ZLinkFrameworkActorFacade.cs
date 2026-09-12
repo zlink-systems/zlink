@@ -173,7 +173,7 @@ internal sealed class ZLinkFrameworkActorFacade(
                          static candidate => candidate.PlacementWeight,
                          ref _nextEntrySpotSelection)
                      ?? throw new ZLinkFrameworkException(
-                         ZLinkFrameworkErrorKind.CapacityExceeded,
+                         ZLinkFrameworkErrorKind.Unavailable,
                          $"No Ready Entry Spot target is available for '{actorType}'.",
                          ZLinkRetryAdvice.RetryAfterBackoff);
 

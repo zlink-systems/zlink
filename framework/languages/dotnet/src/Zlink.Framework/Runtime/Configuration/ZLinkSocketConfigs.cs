@@ -27,10 +27,6 @@ internal sealed class ZLinkSocketConfig
 
     public ulong ReceiveHighWaterMark { get; set; }
 
-    public ulong MailboxMessageBudget { get; set; }
-
-    public ulong MailboxByteBudget { get; set; }
-
     public int SendBufferSize { get; set; }
 
     public int ReceiveBufferSize { get; set; }

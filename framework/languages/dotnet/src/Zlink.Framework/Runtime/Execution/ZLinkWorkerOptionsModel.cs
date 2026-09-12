@@ -8,10 +8,8 @@ internal sealed class ZLinkWorkerOptionsModel : IZLinkWorkerOptions
 
     public TimeSpan IdleTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
-    public int MaxQueueLength { get; set; } = 1024;
-
     public ZLinkWorkerPool CreatePool()
     {
-        return new ZLinkWorkerPool(MinThreads, MaxThreads, IdleTimeout, MaxQueueLength);
+        return new ZLinkWorkerPool(MinThreads, MaxThreads, IdleTimeout);
     }
 }

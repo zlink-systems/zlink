@@ -435,8 +435,6 @@ internal sealed class ZLinkActorClient(
                 OperationCanceledException => ZLinkMessageFlowResult.Cancelled,
                 ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.ShuttingDown } =>
                     ZLinkMessageFlowResult.Shutdown,
-                ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.CapacityExceeded } =>
-                    ZLinkMessageFlowResult.Backpressured,
                 _ => ZLinkMessageFlowResult.Failed
             };
         }

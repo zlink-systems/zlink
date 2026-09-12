@@ -212,7 +212,6 @@ internal static class ConsumerHostFactory
             catch (ZLinkFrameworkException error)
             {
                 var retryable = error.Kind is ZLinkFrameworkErrorKind.Unavailable
-                    or ZLinkFrameworkErrorKind.CapacityExceeded
                     or ZLinkFrameworkErrorKind.DeadlineExceeded
                     or ZLinkFrameworkErrorKind.ShuttingDown;
                 return new ProfileAttemptRes(null, error.Kind.ToString(), retryable);

@@ -7,26 +7,19 @@ namespace Zlink.Framework.Runtime.Backend.DotNet;
 // correlations; it never retains a reply that arrived before registration.
 internal sealed class ZLinkMeshCompletionTable
 {
-    private const int DefaultCapacity = 4_096;
-
     internal delegate void CompletionHandler(
         MeshReceiveRecord record, IReadOnlyList<Message> parts);
 
     private readonly object _gate = new();
     private readonly Dictionary<MeshOperationId, PendingCompletion> _pending = new();
-    private readonly int _capacity;
     private readonly ZLinkCompletionDispatcher _dispatcher;
     private TaskCompletionSource _drained = CompletedSignal();
     private int _outstandingOperations;
     private bool _closed;
 
     internal ZLinkMeshCompletionTable(
-        int capacity = DefaultCapacity,
         ZLinkCompletionDispatcher? dispatcher = null)
     {
-        if (capacity <= 0)
-            throw new ArgumentOutOfRangeException(nameof(capacity));
-        _capacity = capacity;
         _dispatcher = dispatcher ?? ZLinkCompletionDispatcher.Shared;
     }
 
@@ -51,15 +44,8 @@ internal sealed class ZLinkMeshCompletionTable
             if (_pending.ContainsKey(correlationId))
                 throw new InvalidOperationException(
                     "The reply correlation already has a waiter.");
-            // A taken entry keeps its admission reservation until its callback
-            // has run on the shared dispatcher. This transfers ownership to
-            // the dispatch lane instead of creating a second unbounded queue.
-            if (_outstandingOperations >= _capacity)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.CapacityExceeded,
-                    $"The pending operation table reached its {_capacity:N0}-operation bound.");
-            // The dispatch node is part of admission. All allocations happen
-            // before the operation becomes visible in the pending table.
+            // The dispatcher node exists before the operation becomes visible
+            // in the pending table, preserving registration-before-submit.
             var pending = new PendingCompletion(
                 this,
                 correlationId,
@@ -69,14 +55,6 @@ internal sealed class ZLinkMeshCompletionTable
                     TaskCreationOptions.RunContinuationsAsynchronously)
                 : null;
             _pending.Add(correlationId, pending);
-            if (!_dispatcher.TryReserve(pending))
-            {
-                _pending.Remove(correlationId);
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.CapacityExceeded,
-                    "The process-wide pending operation and completion callback "
-                    + "bound of 4,096 was reached.");
-            }
             if (nextDrained is not null)
                 _drained = nextDrained;
             _outstandingOperations++;
@@ -233,7 +211,6 @@ internal sealed class ZLinkMeshCompletionTable
             if (_outstandingOperations <= 0)
                 return;
             _outstandingOperations--;
-            _dispatcher.ReleaseReservation(pending);
             if (_outstandingOperations == 0)
                 drained = _drained;
         }

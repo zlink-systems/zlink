@@ -271,9 +271,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 var anyCompatible = descriptors.Any(
                     candidate => IsCompatibleCandidate(candidate, actorType));
                 throw new ZLinkFrameworkException(
-                    anyCompatible
-                        ? ZLinkFrameworkErrorKind.CapacityExceeded
-                        : ZLinkFrameworkErrorKind.Unavailable,
+                    ZLinkFrameworkErrorKind.Unavailable,
                     anyCompatible
                         ? $"No Ready Actor target has placement capacity for '{actorType}'."
                         : $"No compatible Actor target is available for '{actorType}'.",
@@ -518,9 +516,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
 
     //  A compatible/live target: serving, a server, placeable, has an Entry
     //  Spot, and advertises the Actor type. Capacity is a separate axis so an
-    //  absent compatible target (Unavailable) is distinguished from a compatible
-    //  target that is out of placement capacity (CapacityExceeded), spec
-    //  15-spot-actor:367-368.
+    //  no eligible target can host a new Actor, so the caller sees Unavailable.
     internal static bool IsCompatibleCandidate(
         ZLinkMeshNodeDescriptor candidate,
         string actorType) =>

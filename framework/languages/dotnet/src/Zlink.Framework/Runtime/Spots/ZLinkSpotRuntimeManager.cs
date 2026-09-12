@@ -195,9 +195,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                     var anyCompatible = descriptors.Any(
                         candidate => IsCompatibleCandidate(candidate, stableType));
                     throw new ZLinkFrameworkException(
-                        anyCompatible
-                            ? ZLinkFrameworkErrorKind.CapacityExceeded
-                            : ZLinkFrameworkErrorKind.Unavailable,
+                        ZLinkFrameworkErrorKind.Unavailable,
                         anyCompatible
                             ? $"No Ready User Spot target has placement capacity for '{stableType}'."
                             : $"No compatible User Spot target is available for '{stableType}'.",
@@ -426,8 +424,7 @@ internal sealed class ZLinkSpotRuntimeManager(
 
     //  A compatible/live target: serving, a server, placeable, and advertising
     //  the User Spot type. Capacity is a separate axis so an absent compatible
-    //  target (Unavailable) is distinguished from a compatible target out of
-    //  placement capacity (CapacityExceeded), spec 15-spot-actor:367-368.
+    //  target cannot host a new User Spot, so the caller sees Unavailable.
     internal static bool IsCompatibleCandidate(
         ZLinkMeshNodeDescriptor candidate,
         string stableType) =>

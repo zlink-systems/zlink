@@ -64,7 +64,6 @@ public sealed class LogicalMulticastSubmitTests
             TimeSpan.FromSeconds(1)).AsTask();
 
         Assert.False(pending.IsCompleted);
-        Assert.Equal(1, pool.DirectAdmissionWaiterCount);
 
         var poolType = typeof(ZLinkWorkerPool);
         var sync = poolType.GetField("_sync", BindingFlags.Instance | BindingFlags.NonPublic)!
@@ -133,7 +132,7 @@ public sealed class LogicalMulticastSubmitTests
     }
 
     [Fact]
-    public async Task Publish_BoundsWorkerAdmissionWaitersAndNeverRunsOverflowClosures()
+    public async Task Publish_WaitsForWorkerRoomAndRunsEveryClosure()
     {
         await using var pool = CreatePool();
         using var release = new ManualResetEventSlim(false);
@@ -151,41 +150,24 @@ public sealed class LogicalMulticastSubmitTests
             Interlocked.Increment(ref publishCount);
         }
 
-        var waiter = SubmitAsync(
-            pool,
-            Publish,
-            CancellationToken.None,
-            CancellationToken.None,
-            TimeSpan.FromSeconds(2)).AsTask();
-        Assert.True(SpinWait.SpinUntil(
-            () => pool.DirectAdmissionWaiterCount == 1,
-            TimeSpan.FromSeconds(1)));
-
-        var overflow = Enumerable.Range(0, 32)
+        // No submission is refused for want of a place to wait; every one waits for room and runs.
+        var submissions = Enumerable.Range(0, 33)
             .Select(_ => SubmitAsync(
                 pool,
                 Publish,
                 CancellationToken.None,
                 CancellationToken.None,
-                TimeSpan.FromSeconds(2)).AsTask())
+                TimeSpan.FromSeconds(10)).AsTask())
             .ToArray();
-        var rejected = await Task.WhenAll(overflow);
 
-        Assert.All(rejected, result => Assert.Equal(SubmitResult.Backpressured, result));
-        Assert.Equal(0, publishCount);
-        Assert.Equal(1, pool.DirectAdmissionWaiterCount);
+        Assert.Equal(0, Volatile.Read(ref publishCount));
         release.Set();
 
-        Assert.Equal(
-            SubmitResult.Ok,
-            await waiter.WaitAsync(TimeSpan.FromSeconds(5)));
+        var results = await Task.WhenAll(submissions);
+        Assert.All(results, result => Assert.Equal(SubmitResult.Ok, result));
         Assert.True(SpinWait.SpinUntil(
-            () => Volatile.Read(ref publishCount) == 1,
-            TimeSpan.FromSeconds(5)));
-        Assert.Equal(1, publishCount);
-        Assert.True(SpinWait.SpinUntil(
-            () => pool.DirectAdmissionWaiterCount == 0,
-            TimeSpan.FromSeconds(1)));
+            () => Volatile.Read(ref publishCount) == 33,
+            TimeSpan.FromSeconds(10)));
     }
 
     [Fact]
@@ -254,7 +236,7 @@ public sealed class LogicalMulticastSubmitTests
 
     private static ZLinkWorkerPool CreatePool()
     {
-        return new ZLinkWorkerPool(0, 1, TimeSpan.FromSeconds(30), 1);
+        return new ZLinkWorkerPool(0, 1, TimeSpan.FromSeconds(30));
     }
 
     private class PublishSpotProxy : DispatchProxy

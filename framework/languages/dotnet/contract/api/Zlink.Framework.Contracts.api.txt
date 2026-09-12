@@ -23,16 +23,15 @@ assembly Zlink.Framework.Contracts
   type sealed-class Zlink.Framework.Contracts.Errors.ZLinkConfigurationException : System.InvalidOperationException, System.Runtime.Serialization.ISerializable
   type enum Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
     field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind AlreadyExists = 1 [nullability=read:not-null,write:not-null]
-    field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind CapacityExceeded = 6 [nullability=read:not-null,write:not-null]
-    field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind DataLost = 11 [nullability=read:not-null,write:not-null]
-    field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind DeadlineExceeded = 7 [nullability=read:not-null,write:not-null]
-    field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind InternalFailure = 12 [nullability=read:not-null,write:not-null]
-    field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind InvalidOperation = 10 [nullability=read:not-null,write:not-null]
+    field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind DataLost = 10 [nullability=read:not-null,write:not-null]
+    field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind DeadlineExceeded = 6 [nullability=read:not-null,write:not-null]
+    field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind InternalFailure = 11 [nullability=read:not-null,write:not-null]
+    field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind InvalidOperation = 9 [nullability=read:not-null,write:not-null]
     field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind NotConfigured = 3 [nullability=read:not-null,write:not-null]
     field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind NotFound = 0 [nullability=read:not-null,write:not-null]
-    field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind ProtocolError = 9 [nullability=read:not-null,write:not-null]
+    field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind ProtocolError = 8 [nullability=read:not-null,write:not-null]
     field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind Rejected = 4 [nullability=read:not-null,write:not-null]
-    field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind ShuttingDown = 8 [nullability=read:not-null,write:not-null]
+    field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind ShuttingDown = 7 [nullability=read:not-null,write:not-null]
     field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind TypeMismatch = 2 [nullability=read:not-null,write:not-null]
     field const Zlink.Framework.Contracts.Errors.ZLinkFrameworkErrorKind Unavailable = 5 [nullability=read:not-null,write:not-null]
   type sealed-class Zlink.Framework.Contracts.Errors.ZLinkFrameworkException : System.Exception, System.Runtime.Serialization.ISerializable

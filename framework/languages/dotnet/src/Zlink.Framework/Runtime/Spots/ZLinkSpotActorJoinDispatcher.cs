@@ -362,9 +362,6 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                 ZLinkFrameworkErrorKind.TypeMismatch => (
                     RequestResult.Conflict,
                     (uint)ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch),
-                ZLinkFrameworkErrorKind.CapacityExceeded => (
-                    RequestResult.Backpressured,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.None),
                 ZLinkFrameworkErrorKind.ProtocolError => (
                     RequestResult.ProtocolError,
                     (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError),

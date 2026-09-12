@@ -377,8 +377,6 @@ internal sealed class ZLinkSpotActivationDispatcher
                         ZLinkFrameworkErrorKind.ShuttingDown,
                     ZLinkAcceptedWorkAdmission.RelocationMoving =>
                         ZLinkFrameworkErrorKind.Unavailable,
-                    ZLinkAcceptedWorkAdmission.CapacityExceeded =>
-                        ZLinkFrameworkErrorKind.CapacityExceeded,
                     _ => ZLinkFrameworkErrorKind.Rejected
                 };
                 //  Sealed/rejected admission is framework-generated
@@ -395,8 +393,6 @@ internal sealed class ZLinkSpotActivationDispatcher
                                 "SPOT application admission is closed.",
                             ZLinkAcceptedWorkAdmission.RelocationMoving =>
                                 "SPOT application admission is relocating.",
-                            ZLinkAcceptedWorkAdmission.CapacityExceeded =>
-                                "SPOT application queue capacity was exceeded.",
                             _ => "SPOT application admission was rejected."
                         })
                     {

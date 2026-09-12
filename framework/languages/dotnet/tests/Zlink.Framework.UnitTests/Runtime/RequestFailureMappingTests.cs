@@ -133,15 +133,15 @@ public sealed class RequestFailureMappingTests
     }
 
     [Fact]
-    public void Completion_Backpressure_Maps_To_CapacityExceeded()
+    public void Completion_Backpressure_Maps_To_DeadlineExceeded()
     {
         var error = Assert.IsType<ZLinkFrameworkException>(
             ZLinkRequestFailureMapper.CreateCompletionException(
                 RequestResult.Backpressured,
                 "completion"));
 
-        Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, error.Kind);
-        Assert.Equal(ZLinkRetryAdvice.RetryAfterBackoff, error.RetryAdvice);
+        Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
+        Assert.Equal(ZLinkRetryAdvice.DoNotRetry, error.RetryAdvice);
     }
 
     [Fact]
@@ -186,7 +186,7 @@ public sealed class RequestFailureMappingTests
     [InlineData(RequestResult.ProtocolError, ZLinkFrameworkErrorKind.ProtocolError)]
     [InlineData(RequestResult.Rejected, ZLinkFrameworkErrorKind.Rejected)]
     [InlineData(RequestResult.NotConnected, ZLinkFrameworkErrorKind.Unavailable)]
-    [InlineData(RequestResult.Backpressured, ZLinkFrameworkErrorKind.CapacityExceeded)]
+    [InlineData(RequestResult.Backpressured, ZLinkFrameworkErrorKind.DeadlineExceeded)]
     [InlineData(RequestResult.InvalidArgument, ZLinkFrameworkErrorKind.InvalidOperation)]
     [InlineData(RequestResult.InvalidState, ZLinkFrameworkErrorKind.InvalidOperation)]
     [InlineData(RequestResult.NotSupported, ZLinkFrameworkErrorKind.InternalFailure)]
@@ -221,7 +221,7 @@ public sealed class RequestFailureMappingTests
     [InlineData(RequestResult.Busy, 13, ZLinkFrameworkErrorKind.Unavailable)]
     [InlineData(RequestResult.Busy, 16, ZLinkFrameworkErrorKind.ProtocolError)]
     //  workerQueueFull(18) on a remote reply is the target's queue -> Unavailable,
-    //  NOT CapacityExceeded (which is reserved for placement/admission capacity).
+    //  never a Framework queue-capacity failure.
     [InlineData(RequestResult.Busy, 18, ZLinkFrameworkErrorKind.Unavailable)]
     [InlineData(RequestResult.Busy, 19, ZLinkFrameworkErrorKind.DeadlineExceeded)]
     //  actorLocationStale(21) is a remote ownership race and therefore public
@@ -245,15 +245,13 @@ public sealed class RequestFailureMappingTests
     }
 
     [Theory]
-    //  None(0): placement Backpressured(113) with no fine code stays
-    //  CapacityExceeded — the fine table must not swallow it.
-    [InlineData(RequestResult.Backpressured, 0, ZLinkFrameworkErrorKind.CapacityExceeded)]
+    [InlineData(RequestResult.Backpressured, 0, ZLinkFrameworkErrorKind.DeadlineExceeded)]
     //  None(0): a remote Conflict/Busy with no fine code stays the coarse
     //  Unavailable (remote owner/queue state).
     [InlineData(RequestResult.Conflict, 0, ZLinkFrameworkErrorKind.Unavailable)]
     [InlineData(RequestResult.Busy, 0, ZLinkFrameworkErrorKind.Unavailable)]
     //  An unrecognised fine code falls through to the coarse terminal.
-    [InlineData(RequestResult.Backpressured, 9999, ZLinkFrameworkErrorKind.CapacityExceeded)]
+    [InlineData(RequestResult.Backpressured, 9999, ZLinkFrameworkErrorKind.DeadlineExceeded)]
     public void Completion_FineFailureCode_FallsThrough_To_Coarse_Terminal(
         RequestResult result,
         int failureErrno,
@@ -371,7 +369,7 @@ public sealed class RequestFailureMappingTests
     [InlineData((int)RequestResult.Busy, 0, ZLinkFrameworkErrorKind.Unavailable)]
     [InlineData((int)RequestResult.TimedOut, 0, ZLinkFrameworkErrorKind.DeadlineExceeded)]
     [InlineData((int)RequestResult.Terminated, 0, ZLinkFrameworkErrorKind.ShuttingDown)]
-    [InlineData((int)RequestResult.Backpressured, 0, ZLinkFrameworkErrorKind.CapacityExceeded)]
+    [InlineData((int)RequestResult.Backpressured, 0, ZLinkFrameworkErrorKind.DeadlineExceeded)]
     [InlineData((int)RequestResult.Conflict, 18, ZLinkFrameworkErrorKind.Unavailable)]
     [InlineData((int)RequestResult.Conflict, 19, ZLinkFrameworkErrorKind.DeadlineExceeded)]
     public void Lifecycle_Failure_Classifies_Ok_Missing_Completion_As_Protocol_Error(

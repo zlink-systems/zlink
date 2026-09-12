@@ -404,8 +404,6 @@ assembly Zlink.Framework
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkMeshNodeBuilder SetRoutingId(Systems.Zlink.RoutingId routingId [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkMeshNodeBuilder SetSpotLimit(System.Int32 limit [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Configuration.IZLinkMeshNodeSocketConfig
-    property System.UInt64 MailboxByteBudget { get; set; } [nullability=read:not-null,write:not-null]
-    property System.UInt64 MailboxMessageBudget { get; set; } [nullability=read:not-null,write:not-null]
     property System.UInt64 ReceiveHighWaterMark { get; set; } [nullability=read:not-null,write:not-null]
     property System.Nullable<System.TimeSpan> ReceiveTimeout { get; set; } [nullability=read:nullable,write:nullable]
     property System.UInt64 SendHighWaterMark { get; set; } [nullability=read:not-null,write:not-null]
@@ -1617,6 +1615,5 @@ assembly Zlink.Framework
     method abstract System.Threading.Tasks.ValueTask<TResult?> Yield(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Workers.IZLinkWorkerOptions
     property System.TimeSpan IdleTimeout { get; set; } [nullability=read:not-null,write:not-null]
-    property System.Int32 MaxQueueLength { get; set; } [nullability=read:not-null,write:not-null]
     property System.Int32 MaxThreads { get; set; } [nullability=read:not-null,write:not-null]
     property System.Int32 MinThreads { get; set; } [nullability=read:not-null,write:not-null]
