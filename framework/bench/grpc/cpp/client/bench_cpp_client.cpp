@@ -511,6 +511,29 @@ class zlink_raw_driver_t : public driver_t
             run_slots (deadline, payload_size, phase, counters, latency, _window);
     }
 
+    // The C multi REQREP turn (bindings/c/perf/multi/common/
+    // perf_multi_socket_reqrep.hpp:123 poll_timeout_until): a turn that made
+    // progress only probes readiness, and a turn that made none blocks on the
+    // poller until an event arrives. The cap keeps the loop responsive to the
+    // window boundary without turning the wait into a polling interval — a
+    // fixed short wait makes throughput a function of how much accumulates per
+    // tick instead of how fast the path actually runs.
+    // Same cap as the C multi REQREP turn.
+    static constexpr int64_t poll_max_wait_ms = 50;
+
+    static std::chrono::milliseconds poll_timeout_until (clock_t_::time_point now,
+                                                         clock_t_::time_point deadline,
+                                                         int64_t max_wait_ms)
+    {
+        if (now >= deadline)
+            return std::chrono::milliseconds (0);
+        const auto remaining =
+          std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now).count ();
+        if (remaining <= 0)
+            return std::chrono::milliseconds (1);
+        return std::chrono::milliseconds (std::min<int64_t> (remaining, std::max<int64_t> (1, max_wait_ms)));
+    }
+
     void run_unbounded (clock_t_::time_point deadline,
                         size_t payload_size,
                         phase_t phase,
@@ -542,7 +565,8 @@ class zlink_raw_driver_t : public driver_t
 
             const std::chrono::milliseconds wait =
               resumed != 0 ? std::chrono::milliseconds (0)
-                           : std::chrono::milliseconds (1);
+                           : poll_timeout_until (now, now < deadline ? deadline : hard_stop,
+                                                 poll_max_wait_ms);
             _poller.wait (events.data (), events.size (), wait);
         }
 
@@ -585,12 +609,10 @@ class zlink_raw_driver_t : public driver_t
                 break;
             if (now >= hard_stop)
                 break;
-            const auto wait_until = now < deadline ? deadline : hard_stop;
-            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
-              wait_until - now);
             const std::chrono::milliseconds wait =
               resumed != 0 ? std::chrono::milliseconds (0)
-                           : std::chrono::milliseconds (std::max<int64_t> (1, remaining.count ()));
+                           : poll_timeout_until (now, now < deadline ? deadline : hard_stop,
+                                                 poll_max_wait_ms);
             _poller.wait (events.data (), events.size (), wait);
         }
 
