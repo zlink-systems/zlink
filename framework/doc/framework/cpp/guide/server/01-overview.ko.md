@@ -27,29 +27,35 @@ title: "1. 개요 · C++"
 > [C++ exact interface 목차](../../../common/spec/server/languages/cpp/interfaces/README.ko.md) 문서가 다룬다. 두 표기가 어긋나면
 > spec이 우선이다.
 
-## 1. 한 줄 정의
+## 1. ZLink Framework란
 
 `ZLink Framework`는 **실시간 메시징 프레임워크**다. 다른 언어에서는 `ASP.NET Core`나
 Spring Boot 위에 계층으로 올라가지만, **C++에는 그런 표준 애플리케이션 프레임워크가
 없다.** 그래서 C++ framework는 DI·설정·HTTP hosting을 함께 제공하고 프로세스 자체를
 구성한다. 쓰던 모델 안에 들어가는 대신 그 모델을 같이 준다.
 
-이 계층은 서버 간 호출, pub/sub, 그리고 실시간 상태 단위를 제공한다. 서버 간
-호출과 pub/sub는 별도 **gateway나 전용 로드밸런서 없이** 논리 `channel name`만으로
-대상을 찾는다. 실시간 상태 단위는 `SPOT`(room · stage · zone), actor(연결·사용자
-하나를 대표하는 상태 객체), `STREAM`(외부 client 연결)이다(용어가 낯설면
-[03-concepts](03-concepts.ko.md)의 개념 설명을 먼저 본다). 개발자는 HTTP/gRPC를
-쓰던 감각으로 **handler, client, filter**를 작성하고, 연결·위치 조회·라우팅·재연결·
-correlation은 framework가 처리한다.
+이 계층은 서버 간 호출, pub/sub, 그리고 실시간 상태 단위를 제공한다. 서버 간 호출과
+pub/sub는 별도 **gateway나 전용 로드밸런서 없이** 논리 `channel name`만으로 대상을 찾는다.
 
-> **ZLink는 여러 언어에서 같은 계약으로 쓰는 framework다.** 같은 계층이 Spring
-> (Java/Kotlin)과 NestJS(Node) 위에도 똑같이 올라가고, 호출 계약이 언어 중립 wire
-> protocol(ZMP) + codec + 논리 channel/packet이라 서로 다른 언어로 구현된 서비스가
-> 같은 channel 위에서 상호 호출한다(예: room 서버 C++, API 서버 .NET·Java). 이
-> 가이드는 `.NET` 기준이며 `.NET` 구현을 reference implementation(기준 구현)으로
-> 삼는다. 자세한 cross-language 모델은 [17-alternative §2.1](17-alternative.ko.md)이 다룬다.
+실시간 상태 단위는 `SPOT`(room · stage · zone), actor(연결·사용자 하나를 대표하는 상태
+객체), `STREAM`(외부 client 연결)이다. 용어가 낯설면 [03-concepts](03-concepts.ko.md)의
+개념 설명을 먼저 본다. 개발자는 HTTP/gRPC를 쓰던 감각으로 **handler, client, filter**를
+작성하고, 연결·위치 조회·라우팅·재연결·correlation은 framework가 처리한다.
+
+> **ZLink는 여러 언어에서 같은 계약으로 쓰는 framework다.** 호출 계약이 언어 중립 wire
+> protocol(ZMP) + codec + 논리 channel/packet이라 서로 다른 언어로 구현된 서비스가 같은
+> channel 위에서 상호 호출한다(예: room 서버 C++, API 서버 .NET·Java). 이 가이드는
+> `.NET` 기준이며 `.NET` 구현을 reference implementation(기준 구현)으로 삼는다. 자세한
+> cross-language 모델은 [17-alternative §2.1](17-alternative.ko.md)이 다룬다.
 
 ## 2. 사용이 필요한 상황
+
+| 지금 상황 | 지금은 이렇게 하고 있다 | 읽을 곳 |
+|---|---|---|
+| 실시간 게임 서버를 만든다 | 소켓 계층부터 토폴로지를 직접 설계 | [2.1](#21-실시간-게임-서버-구축) |
+| 길드·주문·재고처럼 한 엔티티에 요청이 몰린다 | 접근할 때마다 Redis 분산 lock | [2.2](#22-하나의-엔티티에-대한-동시-접근) |
+| 운영 중인 웹 서비스에 실시간 기능을 붙인다 | WebSocket 서버, sticky LB, pub/sub broker | [2.3](#23-기존-웹-서비스의-실시간-기능-추가) |
+| 이벤트 파이프라인이 복잡해졌다 | Kafka consumer group, offset 관리, read model | [2.4](#24-이벤트-중심-업무-처리-단순화) |
 
 ### 2.1 실시간 게임 서버 구축
 

@@ -59,14 +59,13 @@
     > [Node.js exact interface index](../../../common/spec/server/languages/node/interfaces/README.en.md)
     > document. If the two disagree, the spec wins.
 
-## 1. One-Line Definition
+## 1. What ZLink Framework Is
 
 === "C#/.NET"
 
-    `ZLink Framework` is a **real-time messaging framework that integrates with the major
-    framework you already use.** The way Spring MVC sits on Spring as its web layer, ZLink
-    Framework sits on `ASP.NET Core` as a **real-time messaging layer.** It's not a switch to
-    a separate runtime or a dedicated server — it drops directly into the DI, hosted service,
+    The way Spring MVC sits on Spring as its web layer, `ZLink Framework` sits on
+    `ASP.NET Core` as a **real-time messaging layer.** It's not a switch to a separate
+    runtime or a dedicated server — it drops directly into the DI, hosted service,
     configuration, and logging model you're already using.
 
 === "C++"
@@ -79,46 +78,50 @@
 
 === "Java"
 
-    `ZLink Framework` is a **real-time messaging framework that integrates with the major
-    framework you already use.** The way Spring MVC sits on Spring as its web layer, ZLink
-    Framework sits on `Spring Boot` as a **real-time messaging layer.** It's not a switch to
-    a separate runtime or a dedicated server — it drops directly into the DI, hosted service,
+    The way Spring MVC sits on Spring as its web layer, `ZLink Framework` sits on
+    `Spring Boot` as a **real-time messaging layer.** It's not a switch to a separate
+    runtime or a dedicated server — it drops directly into the DI, hosted service,
     configuration, and logging model you're already using.
 
 === "Kotlin"
 
-    `ZLink Framework` is a **real-time messaging framework that integrates with the major
-    framework you already use.** The way Spring MVC sits on Spring as its web layer, ZLink
-    Framework sits on `Spring Boot` as a **real-time messaging layer.** It's not a switch to
-    a separate runtime or a dedicated server — it drops directly into the DI, hosted service,
+    The way Spring MVC sits on Spring as its web layer, `ZLink Framework` sits on
+    `Spring Boot` as a **real-time messaging layer.** It's not a switch to a separate
+    runtime or a dedicated server — it drops directly into the DI, hosted service,
     configuration, and logging model you're already using.
 
 === "Node/TypeScript"
 
-    `ZLink Framework` is a **real-time messaging framework that integrates with the major
-    framework you already use.** The way Spring MVC sits on Spring as its web layer, ZLink
-    Framework sits on `NestJS` as a **real-time messaging layer.** It's not a switch to a
-    separate runtime or a dedicated server — it drops directly into the DI, hosted service,
+    The way Spring MVC sits on Spring as its web layer, `ZLink Framework` sits on
+    `NestJS` as a **real-time messaging layer.** It's not a switch to a separate
+    runtime or a dedicated server — it drops directly into the DI, hosted service,
     configuration, and logging model you're already using.
 
 This layer provides inter-server calls, pub/sub, and real-time state units. Inter-server
 calls and pub/sub find their target purely by a logical `channel name`, with **no separate
-gateway or dedicated load balancer.** The real-time state units are `SPOT` (room · stage ·
-zone), an actor (a stateful object representing one connection/user), and `STREAM` (an
-external client connection) — if these terms are unfamiliar, see the concept walkthrough in
-[03-concepts](03-concepts.en.md) first. A developer writes a **handler, client, and filter**
-with the same feel as using HTTP/gRPC, and the framework handles connection, location lookup,
-routing, reconnect, and correlation.
+gateway or dedicated load balancer.**
 
-> **ZLink is a framework used under the same contract across several languages.** The same
-> layer sits identically on Spring (Java/Kotlin) and NestJS (Node) too, and because the call
-> contract is a language-neutral wire protocol (ZMP) + codec + logical channel/packet,
+The real-time state units are `SPOT` (room · stage · zone), an actor (a stateful object
+representing one connection/user), and `STREAM` (an external client connection). If these
+terms are unfamiliar, see the concept walkthrough in [03-concepts](03-concepts.en.md) first.
+A developer writes a **handler, client, and filter** with the same feel as using HTTP/gRPC,
+and the framework handles connection, location lookup, routing, reconnect, and correlation.
+
+> **ZLink is a framework used under the same contract across several languages.** Because the
+> call contract is a language-neutral wire protocol (ZMP) + codec + logical channel/packet,
 > services implemented in different languages call each other over the same channel (e.g., a
 > room server in C++, an API server in .NET/Java). This guide is `.NET`-based and treats the
 > `.NET` implementation as the reference implementation. The detailed cross-language model is
 > covered by [17-alternative §2.1](17-alternative.en.md).
 
 ## 2. Situations Where You Need It
+
+| Your situation | How you handle it today | Read |
+|---|---|---|
+| Building a real-time game server | Designing the topology yourself from the socket layer up | [2.1](#21-building-a-real-time-game-server) |
+| Requests pile onto one entity: a guild, an order, an inventory row | A Redis distributed lock around every access | [2.2](#22-concurrent-access-to-one-entity) |
+| Adding real-time features to a web service you already run | A separate WebSocket server, a sticky load balancer, a pub/sub broker | [2.3](#23-adding-real-time-features-to-an-existing-web-service) |
+| An event pipeline that has grown complicated | Kafka consumer groups, offset management, a read model | [2.4](#24-simplifying-event-driven-business-processing) |
 
 ### 2.1 Building a Real-Time Game Server
 
