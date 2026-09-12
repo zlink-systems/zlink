@@ -75,6 +75,19 @@ Application job queue가 소유한다. 같은 것을 두 번 정의한 것이다
 | send 쪽 | Core의 기존 send 동작 그대로 — `SNDTIMEO`까지 기다린다 | Core socket 스펙 |
 | **resume 경계(기본 60 %)** 복귀 | `RUNNING` 전이 | 04 §6 |
 
+**어느 단계에서도 메시지를 버리지 않는다.** 100 %를 넘겨도 이미 들어온 것은 전부 처리한다.
+이것도 기존 조항이다.
+
+- 04 §10 — "Core receive byte HWM이 찼을 때 sender까지 backpressure가 전달되며 **record를
+  버리지 않는다**."
+- 04 §3 — 금지 목록의 "포화를 reject, **drop**, fixed-delay polling 또는 busy spin으로 바꾸기".
+- 04 §3 순서도 — permit 대기가 cancel·close·shutdown으로 끝나는 것은 "**cancellable wait
+  종료(reject·drop 아님)**".
+- 04 §8 — "한도 종류에 따라 terminal 의미를 구분하고 **조용히 버리지 않는다**."
+
+포화는 **유입 속도를 늦추는 것**이지 이미 받은 일을 없애는 것이 아니다. 그래서 100 % 경로도
+"버린다"가 아니라 "recv를 멈춘다"이고, 멈춘 결과가 TCP와 Core HWM을 통해 sender에게 전달된다.
+
 **100 % 경로는 안전장치다.** 보통은 80 %에서 보낸 `PAUSED`로 상대가 멈추므로 거기까지 가지 않는다.
 
 Framework가 Core에 주는 feedback은 04 §2가 이미 하나로 못박았다.
@@ -97,8 +110,11 @@ Framework가 Core에 주는 feedback은 04 §2가 이미 하나로 못박았다.
 > Request다. 따라서 callback queue가 제한 없이 증가하지 않는다.
 >
 > **포화는 거부가 아니라 흐름 제어로 처리한다.** 같은 문서 §6의 receive-flow 절대 상태가
-> 유일한 제어 지점이며, §3이 금지한 대로 포화를 reject·drop으로 바꾸지 않는다. 한 번 수락한
-> operation의 completion enqueue에도 거부하거나 버리는 경로가 없다.
+> 유일한 제어 지점이며, §3이 금지한 대로 포화를 reject·drop으로 바꾸지 않는다. **permit 상한을
+>넘긴 상태에서도 이미 수신한 record는 하나도 버리지 않고 모두 처리한다** — 포화는 유입 속도를
+> 늦출 뿐이며, 그 수단은 receive를 멈추어 Core HWM과 transport 흐름 제어가 sender에게
+> backpressure를 전달하게 하는 것이다. 한 번 수락한 operation의 completion enqueue에도
+> 거부하거나 버리는 경로가 없다.
 
 **지우는 것**: "4,096개를 넘지 않으므로", "예약할 자리가 없으면 request를 보내기 전에
 `CapacityExceeded`로 거부한다."
