@@ -108,13 +108,15 @@ send·request를 한 번 부르는 것이고, 기다림은 Core와 binding이 �
 
 | Issue | 언어 | worktree | 브랜치 |
 |---|---|---|---|
+| `#277` | Node binding | `zlink-277-node` | `bindings-node/277-reqrep-drain` |
 | `#280` | C++ | `zlink-280-cpp` | `framework-cpp/280-capacity-to-wait` |
 | `#281` | Java | `zlink-281-java` | `framework-java/281-capacity-to-wait` |
 | `#282` | .NET | `zlink-282-dotnet` | `framework-dotnet/282-capacity-to-wait` |
 | `#283` | Node | `zlink-283-node` | `framework-node/283-capacity-to-wait` |
 
 지시서는 `doc/plan/issue-259-worklog/briefs/<lang>.prompt`, 언어별 조사는 같은 디렉터리의
-`gap-survey.ko.md`다.
+`gap-survey.ko.md`다. `#277`은 `zlink-277-node/BRIEF-277.md`를 쓰며 다른 job과 디렉터리가
+겹치지 않으므로 함께 돌린다 — `#101`을 막고 있어 먼저 풀어야 한다.
 
 ### 5.1 한 번 실패한 이유
 
@@ -216,7 +218,16 @@ send가 안 움직이는 이유는 깊이가 아니라 **건당 비용**이다. 
    하나, 수정마다 재측정
 4. **`#277` 해소 → `#101` 재측정** — Node REQREP가 풀려야 7언어 전수 재측정이 가능하다
 
-### 6.5 측정 규칙
+### 6.5 준비 상태 (2026-09-12 확인)
+
+| 항목 | 상태 |
+|---|---|
+| perf 큐 runner | 기동 중 |
+| 벤치 빌드 | `framework/bench/grpc/build_all.sh` |
+| 집계·비교 | `tools/bench_aggregate.py`, `tools/compare-results.py` |
+| 규격 | `framework/bench/grpc/README.ko.md` — 기본 payload `1024,4096`, send concurrency `8`, loopback, Release build |
+
+### 6.6 측정 규칙
 
 - `scripts/perf/perf-ticket.sh submit`으로만 낸다. 직접 벤치를 돌리지 않는다
 - 세션마다 `scripts/perf/perf-queue-runner.sh`를 하나 띄운다
@@ -230,7 +241,7 @@ send가 안 움직이는 이유는 깊이가 아니라 **건당 비용**이다. 
 **주의** — 이번 변경으로 포화 시 거절 대신 대기하므로 수치가 달라진다. 인계 문서
 `handoff-2026-09-12-framework-perf-and-hwm.ko.md` §1.2의 이전 수치와 직접 비교하지 않는다.
 
-### 6.6 완료 조건
+### 6.7 완료 조건
 
 - `#280` `#281` `#282` `#283` 머지
 - gRPC 포함 전체 비교표 게시
