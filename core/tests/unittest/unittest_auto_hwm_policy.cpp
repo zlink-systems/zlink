@@ -538,7 +538,7 @@ void test_single_lane_reply_is_application_accounting_only ()
 
     // counted_message=true models a terminal reply. Its record kind does not
     // reclassify a single Application physical queue as Completion.
-    registry.commit_message (outbound, final_frame, true, false);
+    registry.commit_message (outbound, first_frame, final_frame, true, false);
 
     zlink::physical_queue_registry_snapshot_t committed;
     registry.snapshot (&committed);
@@ -554,6 +554,59 @@ void test_single_lane_reply_is_application_accounting_only ()
                               committed.completion_pending_message_count);
 
     registry.release_committed_frame (outbound, first_frame + final_frame, 0);
+    release_pipepair_queue_handles (&registry, &outbound, &inbound);
+}
+
+void test_concurrent_provisional_transitions_preserve_record_ownership ()
+{
+    zlink::ctx_physical_queue_registry_t registry;
+    zlink::physical_queue_handle_t outbound;
+    zlink::physical_queue_handle_t inbound;
+    zlink::auto_hwm_budget_input_t input;
+    input.enabled = false;
+    zlink::auto_hwm_context_plan_t context;
+    zlink::auto_hwm_context_plan_make (input, &context);
+    TEST_ASSERT_EQUAL_INT (
+      0, registry.create_pipepair_queues (
+           0, 0, zlink::physical_queue_class_completion,
+           zlink::auto_hwm_role_routed, false, context, &outbound, &inbound));
+
+    const uint64_t committed_prefix = 17;
+    const uint64_t rolled_back_prefix = 23;
+    const uint64_t final_frame = 29;
+    std::atomic<unsigned int> prefixes_accounted (0);
+    std::atomic<bool> committed (false);
+    std::thread commit_owner ([&] {
+        registry.account_provisional_frame (outbound, committed_prefix);
+        prefixes_accounted.fetch_add (1, std::memory_order_release);
+        while (prefixes_accounted.load (std::memory_order_acquire) != 2)
+            std::this_thread::yield ();
+        registry.commit_message (outbound, committed_prefix, final_frame,
+                                 true, false);
+        committed.store (true, std::memory_order_release);
+    });
+    std::thread rollback_owner ([&] {
+        registry.account_provisional_frame (outbound, rolled_back_prefix);
+        prefixes_accounted.fetch_add (1, std::memory_order_release);
+        while (!committed.load (std::memory_order_acquire))
+            std::this_thread::yield ();
+        registry.rollback_provisional (outbound, rolled_back_prefix);
+    });
+    commit_owner.join ();
+    rollback_owner.join ();
+
+    zlink::physical_queue_registry_snapshot_t snapshot;
+    registry.snapshot (&snapshot);
+    TEST_ASSERT_EQUAL_UINT64 (0, snapshot.application_provisional_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (committed_prefix + final_frame,
+                              snapshot.completion_current_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (1, snapshot.completion_pending_message_count);
+
+    registry.release_committed_frame (outbound, committed_prefix + final_frame,
+                                      1);
+    registry.snapshot (&snapshot);
+    TEST_ASSERT_EQUAL_UINT64 (0, snapshot.completion_current_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0, snapshot.completion_pending_message_count);
     release_pipepair_queue_handles (&registry, &outbound, &inbound);
 }
 
@@ -594,9 +647,9 @@ void test_last_endpoint_retirement_reconciles_record_owned_accounting ()
            zlink::auto_hwm_role_routed, true, context, &application_first,
            &application_second));
     registry.account_provisional_frame (application_first, 100);
-    registry.commit_message (application_first, 50, false, false);
+    registry.commit_message (application_first, 100, 50, false, false);
     registry.account_provisional_frame (application_second, 75);
-    registry.rollback_provisional (application_second);
+    registry.rollback_provisional (application_second, 75);
     release_pipepair_queue_handles (&registry, &application_first,
                                     &application_second);
 
@@ -608,7 +661,7 @@ void test_last_endpoint_retirement_reconciles_record_owned_accounting ()
            zlink::auto_hwm_role_routed, true, context, &completion_first,
            &completion_second));
     registry.account_provisional_frame (completion_first, 20);
-    registry.commit_message (completion_first, 30, true, false);
+    registry.commit_message (completion_first, 20, 30, true, false);
     release_pipepair_queue_handles (&registry, &completion_first,
                                     &completion_second);
 
@@ -659,8 +712,8 @@ void test_decoder_reservation_enforces_incremental_hwm_and_final_oversize ()
     bool oversize = false;
     TEST_ASSERT_EQUAL_INT (
       0, registry.commit_decoder_frame (
-           first, &reservation, first_part.payload_bytes, first_part.msg_flags,
-           false, &oversize));
+           first, &reservation, 0, first_part.payload_bytes,
+           first_part.msg_flags, false, &oversize));
     TEST_ASSERT_FALSE (oversize);
 
     zlink::decoder_frame_reservation_request_t crossing_more;
@@ -682,8 +735,8 @@ void test_decoder_reservation_enforces_incremental_hwm_and_final_oversize ()
            first, final_part, &reservation_storage, &reservation));
     TEST_ASSERT_EQUAL_INT (
       0, registry.commit_decoder_frame (
-           first, &reservation, final_part.payload_bytes, final_part.msg_flags,
-           true, &oversize));
+           first, &reservation, 0, final_part.payload_bytes,
+           final_part.msg_flags, true, &oversize));
     TEST_ASSERT_FALSE (oversize);
 
     zlink::physical_queue_registry_snapshot_t snapshot;
@@ -730,8 +783,8 @@ void test_decoder_reservation_isolated_by_origin_and_generation ()
     bool oversize = false;
     TEST_ASSERT_EQUAL_INT (
       -1, registry.commit_decoder_frame (
-            first, &first_token, request.payload_bytes, request.msg_flags,
-            false, &oversize));
+            first, &first_token, 0, request.payload_bytes,
+            request.msg_flags, false, &oversize));
     TEST_ASSERT_EQUAL_INT (ETERM, errno);
     registry.release_decoder_frame (&first_token);
     registry.release_decoder_frame (&second_token);
@@ -808,8 +861,8 @@ void test_completion_decoder_reservation_never_applies_hwm ()
     bool oversize = true;
     TEST_ASSERT_EQUAL_INT (
       0, registry.commit_decoder_frame (
-           first, &reservation, request.payload_bytes, request.msg_flags, true,
-           &oversize));
+           first, &reservation, 0, request.payload_bytes, request.msg_flags,
+           true, &oversize));
     TEST_ASSERT_FALSE (oversize);
 
     const uint64_t frame_bytes = request.payload_bytes + sizeof (zlink::msg_t);
@@ -863,6 +916,7 @@ int main ()
     RUN_TEST (test_atomic_pair_minimum_reservation_has_one_linearization_winner);
     RUN_TEST (test_completion_pair_does_not_consume_application_reservation);
     RUN_TEST (test_single_lane_reply_is_application_accounting_only);
+    RUN_TEST (test_concurrent_provisional_transitions_preserve_record_ownership);
     RUN_TEST (test_policy_disabled_pair_does_not_consume_application_reservation);
     RUN_TEST (test_last_endpoint_retirement_reconciles_record_owned_accounting);
     RUN_TEST (test_decoder_reservation_enforces_incremental_hwm_and_final_oversize);
