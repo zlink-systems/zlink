@@ -52,13 +52,19 @@ single-counter backpressure change. `tools/bench_aggregate.py` owns the aggregat
 and the verdict — medians, G5 reproducibility, the §7.2 ratios, and **whether a ratio
 may be published at all**.
 
-| Language | Five runs | `request-backpressure` verdict | Status |
-|---|---|---|---|
-| Java | Complete | **1.291 / 1.255 pass** | Judgeable |
-| .NET | Complete | 1.309 pass / (0.948) G5 31.4% | **Denominator invalid — `#300`** |
-| C++ | Complete | (0.087) G5 90.2% / (0.072) G5 99.7% | **Harness defect — `#296`** |
-| Node.js | Remeasuring | — | Hung on run 2 |
-| C (`zlink-c`) | Not possible | — | **Does not build — `#295`** |
+| Language | Five runs | `request-backpressure` verdict | Peak in-flight (raw / framework) | Status |
+|---|---|---|---|---|
+| Java | Complete | 1.291 / 1.255 | **99–130 / 35–40** | **Pattern not reached — `#300`** |
+| .NET | Complete | 1.309 / (0.948) G5 31.4% | **132 / 6,717** | **Pattern not reached — `#300`** |
+| C++ | Complete | (0.087) G5 90.2% / (0.072) G5 99.7% | 2,130 / 19,014 | **Harness defect — `#296`** |
+| Node.js | Remeasuring | — | — | Hung on run 2 |
+| C (`zlink-c`) | Not possible | — | — | **Does not build — `#295`** |
+
+`request-backpressure` sends with no ceiling until the pipe fills. **Only C++ reaches
+that condition.** Java stays in double digits on both rows at 1.9% client CPU. Java's
+`1.291` compares depth 35 against depth 99; it is not a layer cost. §7.2 already says
+so: a ratio computed under a condition the rows cannot reach measures that condition,
+not the layer.
 
 **No layer is judged from these numbers yet.** Producing the baseline surfaced three
 defects on the measuring side, and all three yield a number the harness made rather
