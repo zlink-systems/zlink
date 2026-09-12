@@ -74,8 +74,8 @@ fn main() {
     }
     ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
 
-    // Receive and Future-based admission run concurrently. Echo receipt never
-    // gates the next send; each socket starts its next send after admission.
+    // Receive and Future-based admission run concurrently. Submit once per
+    // socket per turn so every turn can also progress echoes and completions.
     let poller = Poller::new().expect("poller");
     for (index, sock) in sockets.iter().enumerate() {
         poller
@@ -101,22 +101,19 @@ fn main() {
                 if tasks.is_pending(slot) {
                     continue;
                 }
-                while Instant::now() < deadline {
-                    let mut msg = Message::with_size(payload_size).expect("msg");
-                    common::encode_header(
-                        msg.data_mut(),
-                        common::PHASE_ACTIVE,
-                        args.msg_size as u32,
-                        seqs[slot],
-                    );
-                    seqs[slot] += 1;
-                    submitted = true;
-                    let submission = perf_submit_measurement_async!(socket.send(), msg)
-                        .unwrap_or_else(|err| panic!("send failed: {err}"));
-                    if submission.result == zlink::SubmitResult::Backpressured {
-                        tasks.insert(slot, submission.admitted);
-                        break;
-                    }
+                let mut msg = Message::with_size(payload_size).expect("msg");
+                common::encode_header(
+                    msg.data_mut(),
+                    common::PHASE_ACTIVE,
+                    args.msg_size as u32,
+                    seqs[slot],
+                );
+                seqs[slot] += 1;
+                submitted = true;
+                let submission = perf_submit_measurement_async!(socket.send(), msg)
+                    .unwrap_or_else(|err| panic!("send failed: {err}"));
+                if submission.result == zlink::SubmitResult::Backpressured {
+                    tasks.insert(slot, submission.admitted);
                 }
             }
         }

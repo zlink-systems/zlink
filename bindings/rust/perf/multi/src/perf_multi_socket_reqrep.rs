@@ -264,36 +264,33 @@ pub fn run_client(config: ReqRepConfig) {
     let mut admissions = common::ConcurrentTasks::<AdmissionTask>::new(sockets.len());
     let mut latency = common::LatencyStats::new();
 
-    // Keep submitting on each socket until Core reports backpressure. Only that
-    // socket waits for its admission stage; reply stages progress independently.
+    // Submit once per socket per turn, then progress both admission and reply
+    // completions. This preserves continuous load without starving the poller.
     while Instant::now() < active_deadline {
         let mut progressed = false;
         for (socket_index, socket) in sockets.iter().enumerate() {
             if admissions.is_pending(socket_index) {
                 continue;
             }
-            while Instant::now() < active_deadline {
-                let sequence = sequences[socket_index];
-                sequences[socket_index] = sequence.wrapping_add(1);
-                let mut payload = Message::with_size(payload_size).expect("request payload");
-                common::encode_header(
-                    payload.data_mut(),
-                    common::PHASE_ACTIVE,
-                    args.msg_size as u32,
-                    sequence,
-                );
-                let submission = socket
-                    .submit_request(payload, request_timeout)
-                    .unwrap_or_else(|error| panic!("request submit failed: {error}"));
-                let result = submission.result;
-                requests.push(Box::pin(
-                    async move { (socket_index, submission.reply.await) },
-                ));
-                progressed = true;
-                if result == SubmitResult::Backpressured {
-                    admissions.insert(socket_index, submission.admitted);
-                    break;
-                }
+            let sequence = sequences[socket_index];
+            sequences[socket_index] = sequence.wrapping_add(1);
+            let mut payload = Message::with_size(payload_size).expect("request payload");
+            common::encode_header(
+                payload.data_mut(),
+                common::PHASE_ACTIVE,
+                args.msg_size as u32,
+                sequence,
+            );
+            let submission = socket
+                .submit_request(payload, request_timeout)
+                .unwrap_or_else(|error| panic!("request submit failed: {error}"));
+            let result = submission.result;
+            requests.push(Box::pin(
+                async move { (socket_index, submission.reply.await) },
+            ));
+            progressed = true;
+            if result == SubmitResult::Backpressured {
+                admissions.insert(socket_index, submission.admitted);
             }
         }
 
@@ -306,12 +303,14 @@ pub fn run_client(config: ReqRepConfig) {
         for (_, (_, completion)) in ready {
             process_completion(completion, args.msg_size, active_deadline, &mut latency);
         }
-        if Instant::now() < active_deadline && !progressed {
+        if Instant::now() < active_deadline {
+            let wait_ms = if progressed {
+                0
+            } else {
+                common::poll_timeout_until(active_deadline)
+            };
             completion_poller
-                .wait(
-                    &mut completion_events,
-                    common::poll_timeout_until(active_deadline),
-                )
+                .wait(&mut completion_events, wait_ms)
                 .expect("request completion wait");
         }
     }

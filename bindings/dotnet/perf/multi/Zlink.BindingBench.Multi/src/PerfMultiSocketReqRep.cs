@@ -214,7 +214,7 @@ internal static class PerfMultiSocketReqRep
         }
     }
 
-    private static async Task<(long completed, List<double> latencySamples,
+    private static Task<(long completed, List<double> latencySamples,
         long latencyCount, double latencySum)>
         RunClientLoopAsync(
         List<ClientSlot> slots, bool routerRouter,
@@ -223,8 +223,6 @@ internal static class PerfMultiSocketReqRep
         int payloadSize = Math.Max(msgSize, PerfMetricHeaderSize);
         var samples = new List<double>(Math.Max(0, latencyCap));
         object gate = new();
-        var admissionSignal = new SemaphoreSlim(0);
-        var replySignal = new SemaphoreSlim(0);
         Exception? completionError = null;
         int hasCompletionError = 0;
         long pendingReplies = 0;
@@ -234,6 +232,13 @@ internal static class PerfMultiSocketReqRep
         uint rng = 0xA341316Cu;
         long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
         TimeSpan requestTimeout = ResolveReqRepTimeout();
+        using var completionPoller = Zlink.CreatePoller();
+        var completionEvents = new PollEvent[Math.Max(1, slots.Count)];
+        for (int i = 0; i < slots.Count; i++)
+        {
+            completionPoller.Add(slots[i].Socket,
+                PollEventFlags.PollCompletion, (nuint)i);
+        }
         bool HasCompletionError() => Volatile.Read(ref hasCompletionError) != 0;
 
         void RecordCompletionError(Exception ex)
@@ -331,7 +336,6 @@ internal static class PerfMultiSocketReqRep
                 if (parts != null)
                     Zlink.MultipartClose(parts);
                 Interlocked.Decrement(ref pendingReplies);
-                replySignal.Release();
             }
         }
 
@@ -348,10 +352,12 @@ internal static class PerfMultiSocketReqRep
             finally
             {
                 slot.CompleteAdmission();
-                admissionSignal.Release();
             }
         }
 
+        // Submit once per socket per turn, then explicitly progress both
+        // admission and reply completions. This preserves continuous load
+        // without letting one socket starve the completion owner.
         while (Stopwatch.GetTimestamp() < deadlineTicks && !HasCompletionError())
         {
             bool submittedAny = false;
@@ -360,39 +366,29 @@ internal static class PerfMultiSocketReqRep
                 ClientSlot slot = slots[i];
                 if (slot.AdmissionPending)
                     continue;
-                while (Stopwatch.GetTimestamp() < deadlineTicks
-                       && !HasCompletionError())
+                try
                 {
-                    try
+                    RequestSubmission submission = Submit(slot);
+                    Interlocked.Increment(ref pendingReplies);
+                    _ = ObserveRequestAsync(submission.Reply);
+                    submittedAny = true;
+                    if (submission.Result == SubmitResult.Backpressured)
                     {
-                        RequestSubmission submission = Submit(slot);
-                        Interlocked.Increment(ref pendingReplies);
-                        _ = ObserveRequestAsync(submission.Reply);
-                        submittedAny = true;
-                        if (submission.Result == SubmitResult.Backpressured)
-                        {
-                            slot.BeginAdmission();
-                            _ = AwaitAdmissionAsync(slot,
-                                submission.Admitted);
-                            break;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        RecordCompletionError(ex);
+                        slot.BeginAdmission();
+                        _ = AwaitAdmissionAsync(slot, submission.Admitted);
                     }
                 }
+                catch (Exception ex)
+                {
+                    RecordCompletionError(ex);
+                }
             }
-            if (!submittedAny && !HasCompletionError())
-            {
-                long remainingTicks = deadlineTicks
-                    - Stopwatch.GetTimestamp();
-                if (remainingTicks <= 0)
-                    break;
-                await admissionSignal.WaitAsync(TimeSpan.FromSeconds(
-                    remainingTicks / (double)Stopwatch.Frequency))
-                    .ConfigureAwait(false);
-            }
+
+            int waitMs = submittedAny
+                ? 0
+                : RemainingPollTimeoutMs(deadlineTicks);
+            _ = completionPoller.Wait(completionEvents,
+                TimeSpan.FromMilliseconds(waitMs));
         }
 
         long drainDeadline = Stopwatch.GetTimestamp()
@@ -400,13 +396,12 @@ internal static class PerfMultiSocketReqRep
                 * Stopwatch.Frequency);
         while (Volatile.Read(ref pendingReplies) > 0)
         {
-            long remainingTicks = drainDeadline - Stopwatch.GetTimestamp();
-            if (remainingTicks <= 0
-                || !await replySignal.WaitAsync(TimeSpan.FromSeconds(
-                        remainingTicks / (double)Stopwatch.Frequency))
-                    .ConfigureAwait(false))
+            int waitMs = RemainingPollTimeoutMs(drainDeadline);
+            if (waitMs <= 0)
                 throw new TimeoutException(
                     "multi request/reply operations did not drain");
+            _ = completionPoller.Wait(completionEvents,
+                TimeSpan.FromMilliseconds(waitMs));
         }
 
         lock (gate)
@@ -414,7 +409,17 @@ internal static class PerfMultiSocketReqRep
             if (completionError != null)
                 throw completionError;
         }
-        return (Volatile.Read(ref completed), samples, sampleSeen, sampleSum);
+        return Task.FromResult((Volatile.Read(ref completed), samples,
+            sampleSeen, sampleSum));
+    }
+
+    private static int RemainingPollTimeoutMs(long deadlineTicks)
+    {
+        long remainingTicks = deadlineTicks - Stopwatch.GetTimestamp();
+        if (remainingTicks <= 0)
+            return 0;
+        double remainingMs = remainingTicks * 1000.0 / Stopwatch.Frequency;
+        return Math.Min(50, Math.Max(1, (int)Math.Ceiling(remainingMs)));
     }
 
     /// <summary>

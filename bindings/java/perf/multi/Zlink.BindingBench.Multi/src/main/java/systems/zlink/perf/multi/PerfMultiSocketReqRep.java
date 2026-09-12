@@ -30,7 +30,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.LockSupport;
 
 final class PerfMultiSocketReqRep {
     private static final RoutingId SERVER_RID = RoutingId.from(
@@ -191,7 +190,6 @@ final class PerfMultiSocketReqRep {
         AtomicLong timeouts = new AtomicLong();
         AtomicIntegerArray backpressured = new AtomicIntegerArray(
             clients.size());
-        Thread submitThread = Thread.currentThread();
         long activeEnd = System.nanoTime()
             + config.durationSeconds() * 1_000_000_000L;
         int requestTimeoutMs = resolveRequestTimeoutMs();
@@ -225,19 +223,20 @@ final class PerfMultiSocketReqRep {
                     Message.closeAll(parts);
                 }
                 outstanding.decrementAndGet();
-                LockSupport.unpark(submitThread);
             }
         };
 
         SubmitDiagnostics diagnostics = DIAGNOSTICS
             ? new SubmitDiagnostics(clientCount, completion) : null;
 
-        // PERF_MULTI_TEST_POLICY.md 1.2: OK immediately leaves the socket
-        // eligible for the next sweep. Only BACKPRESSURED makes that socket
-        // unavailable, until its exact admitted() stage completes. Reply
-        // stages progress independently on the binding runtime.
+        // Submit once per socket per turn, then progress admission and reply
+        // completions through the public poller before the next turn. An OK
+        // socket remains eligible; only BACKPRESSURED parks that socket until
+        // its exact admitted() stage completes.
         try (RequestPayloadTemplates payloadTemplates =
-                 new RequestPayloadTemplates(config.size(), clients.size())) {
+                 new RequestPayloadTemplates(config.size(), clients.size());
+             PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(
+                 clients, PollEventFlags.POLLCOMPLETION)) {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
                 boolean submitted = false;
                 for (int i = 0; i < clients.size(); i++) {
@@ -258,41 +257,36 @@ final class PerfMultiSocketReqRep {
                     submitted = true;
                     SubmitResult result = submission.result();
                     if (result == SubmitResult.OK) {
-                        continue;
-                    }
-                    if (result != SubmitResult.BACKPRESSURED) {
-                        throw new IllegalStateException(
-                            "async request returned " + result);
-                    }
-                    backpressured.set(i, 1);
-                    pendingAdmissions.incrementAndGet();
-                    if (diagnostics != null) {
-                        diagnostics.recordBackpressure();
-                    }
-                    int socketIndex = i;
-                    submission.admitted().whenComplete((ignored, error) -> {
-                        if (error != null) {
-                            failure.compareAndSet(null,
-                                PerfMultiAsyncSendLoop.completionCause(error));
+                        // Remains eligible for the next round-robin turn.
+                    } else {
+                        if (result != SubmitResult.BACKPRESSURED) {
+                            throw new IllegalStateException(
+                                "async request returned " + result);
                         }
-                        backpressured.set(socketIndex, 0);
-                        pendingAdmissions.decrementAndGet();
-                        LockSupport.unpark(submitThread);
-                    });
+                        backpressured.set(i, 1);
+                        pendingAdmissions.incrementAndGet();
+                        if (diagnostics != null) {
+                            diagnostics.recordBackpressure();
+                        }
+                        int socketIndex = i;
+                        submission.admitted().whenComplete((ignored, error) -> {
+                            if (error != null) {
+                                failure.compareAndSet(null,
+                                    PerfMultiAsyncSendLoop.completionCause(error));
+                            }
+                            backpressured.set(socketIndex, 0);
+                            pendingAdmissions.decrementAndGet();
+                        });
+                    }
                 }
 
-                if (!submitted && failure.get() == null) {
-                    long remainingNanos = activeEnd - System.nanoTime();
-                    if (remainingNanos > 0L) {
-                        // Every socket is BACKPRESSURED. Its admitted()
-                        // completion is the only event that resumes submits.
-                        LockSupport.parkNanos(PerfMultiSocketReqRep.class,
-                            remainingNanos);
-                    }
-                    if (Thread.currentThread().isInterrupted()) {
-                        throw new IllegalStateException(
-                            "multi socket reqrep interrupted");
-                    }
+                // This nonblocking drain is the Java equivalent of Rust's
+                // completion poll after each round-robin submission turn.
+                completionPoller.poll(0);
+                if (!submitted && failure.get() == null
+                    && System.nanoTime() < activeEnd) {
+                    completionPoller.poll(Math.min(50,
+                        remainingTimeoutMs(activeEnd)));
                 }
             }
             long drainEnd = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
@@ -300,12 +294,7 @@ final class PerfMultiSocketReqRep {
             while ((outstanding.get() > 0 || pendingAdmissions.get() > 0)
                    && failure.get() == null
                    && System.nanoTime() < drainEnd) {
-                LockSupport.parkNanos(PerfMultiSocketReqRep.class,
-                    Math.max(1L, drainEnd - System.nanoTime()));
-                if (Thread.currentThread().isInterrupted()) {
-                    throw new IllegalStateException(
-                        "multi socket reqrep drain interrupted");
-                }
+                completionPoller.poll(remainingTimeoutMs(drainEnd));
             }
             if (outstanding.get() != 0 || pendingAdmissions.get() != 0
                 || failure.get() != null) {
@@ -471,5 +460,14 @@ final class PerfMultiSocketReqRep {
             return 200;
         }
         return Math.max(1, Integer.parseInt(configured));
+    }
+
+    private static int remainingTimeoutMs(long deadline) {
+        long remainingNs = deadline - System.nanoTime();
+        if (remainingNs <= 0L) {
+            return 0;
+        }
+        return (int) Math.min(Integer.MAX_VALUE,
+            (remainingNs + 999_999L) / 1_000_000L);
     }
 }
