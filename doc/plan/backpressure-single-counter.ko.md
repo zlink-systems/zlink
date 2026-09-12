@@ -488,3 +488,52 @@ C++ framework가 5 run 사이에 90.2%·99.7% 흔들린다(한도 10%). 이건 �
 
 `build_all.sh`가 `set -euo pipefail`이라 C에서 멈추면 나머지 언어 빌드까지 막히는
 것도 같은 이슈에 적었다.
+
+## 9. 기준선 — 세 언어 (2026-09-12 22:13~23:40)
+
+`zlink-framework-<lang> / zlink-<lang>`, 5 run, 집계는 `bench_aggregate.py`가 소유한다.
+`request-backpressure`가 README §7.2의 **판정 기준 패턴**이다.
+
+| 패턴 | Java | .NET | C++ |
+|---|---|---|---|
+| **`request-backpressure`** | **1.291 / 1.255 pass** | 1.309 pass / (0.948) G5 31.4% | (0.087) G5 90.2% / (0.072) G5 99.7% |
+| `request-serial` | 0.547 / 0.509 fail | (0.384) G5 16.0% / 0.409 fail | 0.439 / 0.440 fail |
+| `send-saturation` | 0.125 fail / (0.203) G6 | 0.102 / 0.190 fail | 0.064 / 0.105 fail |
+
+### 9.1 request는 이미 목표를 넘겼다 — C++만 빼고
+
+Java가 두 크기 모두 통과(1.291·1.255)다. framework가 raw보다 빠르다. .NET도 1 KiB에서
+1.309로 통과한다. **C++만 0.087·0.072로 두 자릿수 배 뒤처진다.**
+
+그런데 **C++만 벤치 대기 정책이 정본과 어긋나 있었다**(`#296`). 고정 1ms를 쓰는 경로는
+`run_unbounded` 하나뿐이고 그게 `_window <= 0`인 `request-backpressure`다. G5가 깨진 패턴도
+정확히 그 하나다 — `request-serial`·`send-saturation`은 이미 블록하고 있었고 둘 다 G5를
+통과했다. **그러므로 C++의 0.087은 framework 성능이 아니라 하네스가 만든 숫자일 수 있다.**
+`#296`을 고치고 재측정하기 전에는 `#7`을 판정하지 않는다.
+
+### 9.2 send는 세 언어 전부 실패
+
+0.064~0.190이다. 계획의 전제가 맞고, §7의 직렬화·재포장 복사 지적이 여기에 걸린다.
+
+### 9.3 G6 — raw가 CPU에 막히면 분모로 못 쓴다
+
+Java send 4 KiB는 `zlink-java`가 선언한 JVM thread core의 **0.97까지 포화**라 분모 자격이
+없다(spec 5.1, G6). raw가 CPU에 막힌 상태의 값은 계층 비용이 아니라 그 조건을 잰 값이다.
+send를 개선해도 이 크기에서는 판정이 나오지 않으므로, 분모 쪽 포화를 먼저 풀어야 한다.
+
+### 9.4 runner마다 인자 규약과 출력 위치가 다르다
+
+- C++: 위치 인자로 run label, `OUTPUT_DIR`
+- .NET: `OUTPUT` 환경변수, 위치 인자를 거부한다(`unsupported runner argument`)
+- Java·Node: `OUTROOT`+`RUNS`, 그리고 **상대 경로를 자기 디렉터리 기준으로 푼다** —
+  `OUTROOT=framework/bench/grpc/log/java/base`를 주면 결과가
+  `framework/bench/grpc/java/framework/bench/grpc/log/java/base`에 생긴다
+
+첫 .NET 5건은 C++ 규약을 그대로 써서 전부 즉시 실패했다. 측정 티켓을 내기 전에 그 언어
+문서의 입력 표를 확인한다.
+
+### 9.5 Node는 재실행이 필요하다
+
+run 1은 18셀 전부 완주했고 run 2의 `zlink-node-request-serial-1024`에서 멈췄다 —
+source가 뜨고 trigger까지 받은 뒤 출력 없이 hang(`source phase did not complete`).
+run 1의 같은 셀은 정상이라 간헐적이다. 한 번으로 단정하지 않고 재실행해 재현 여부를 본다.
