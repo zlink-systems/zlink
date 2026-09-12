@@ -127,8 +127,18 @@ static async Task<BenchResult> RunActiveAsync(
                 operationCancellation.Token);
             break;
         case "request-backpressure":
-            await RunRequestBackpressureAsync(
-                transport, metrics, trigger, runId, next, deadline, operationCancellation, options.DrainBoundMs);
+            if (transport is RawBenchTransport raw)
+            {
+                await RunRawRequestBackpressureAsync(
+                    raw, metrics, trigger, runId, next, deadline, operationCancellation,
+                    options.DrainBoundMs);
+            }
+            else
+            {
+                await RunRequestBackpressureAsync(
+                    transport, metrics, trigger, runId, next, deadline, operationCancellation,
+                    options.DrainBoundMs);
+            }
             break;
         case "send-saturation":
             await RunSendWorkersAsync(
@@ -159,6 +169,7 @@ static async Task<BenchResult> RunActiveAsync(
         send ? "KMSG/s" : "KOPS",
         trigger.payloadBytes,
         elapsedSeconds,
+        snapshot.Submitted,
         completed,
         snapshot.Errors,
         target.Errors,
@@ -176,7 +187,7 @@ static async Task<BenchResult> RunActiveAsync(
         target.WorkingSetMb,
         snapshot.PeakInFlight,
         trigger.pattern == "request-window" ? trigger.requestWindow : null,
-        snapshot.CurrentInFlight,
+        snapshot.Abandoned,
         snapshot.ErrorSummary,
         snapshot.OtherErrors);
 }
@@ -253,6 +264,163 @@ static async Task RunRequestBackpressureAsync(
             // The recorded abandoned count is the bounded observation result.
         }
     }
+}
+
+static async Task RunRawRequestBackpressureAsync(
+    RawBenchTransport transport,
+    SourceMetrics metrics,
+    BenchTriggerRequest trigger,
+    uint runId,
+    Sequence next,
+    long deadline,
+    CancellationTokenSource operationCancellation,
+    int drainBoundMs)
+{
+    var pendingReplies = new HashSet<Task>();
+    Task? pendingAdmission = null;
+    var completionPoller = transport.OpenRequestCompletionPoller();
+    var completionEvents = new PollEvent[1];
+    Task[] pending;
+
+    try
+    {
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            var submitted = false;
+            if (pendingAdmission is null || pendingAdmission.IsCompleted)
+            {
+                pendingAdmission = null;
+                var sequence = next.Next();
+                var payload = BenchMetricHeaders.CreatePayload(
+                    trigger.payloadBytes,
+                    runId,
+                    BenchPhase.Active,
+                    sequence);
+                var started = metrics.Begin();
+                try
+                {
+                    RawRequestSubmission submission = transport.SubmitRequest(
+                        payload, operationCancellation.Token);
+                    pendingReplies.Add(ObserveRawRequestAsync(
+                        submission.Reply, metrics, trigger, runId, sequence,
+                        started, operationCancellation.Token));
+                    submitted = true;
+                    if (submission.Result == SubmitResult.Backpressured)
+                    {
+                        // The reply observer is already running. Only this raw
+                        // socket waits for its writable admission completion.
+                        pendingAdmission = ObserveRawAdmissionAsync(
+                            submission.Admitted, operationCancellation.Token);
+                    }
+                    else if (submission.Result != SubmitResult.Ok)
+                    {
+                        throw new InvalidOperationException(
+                            $"Raw request submit returned {submission.Result}.");
+                    }
+                }
+                catch (OperationCanceledException)
+                    when (operationCancellation.IsCancellationRequested)
+                {
+                    metrics.Cancel(started);
+                    throw;
+                }
+                catch (Exception error)
+                {
+                    metrics.Complete(started, false, error);
+                }
+            }
+
+            pendingReplies.RemoveWhere(static task => task.IsCompleted);
+            var waitMs = submitted ? 0 : RemainingPollTimeoutMs(deadline);
+            _ = completionPoller.Wait(completionEvents,
+                TimeSpan.FromMilliseconds(waitMs));
+        }
+
+        pending = pendingAdmission is null
+            ? pendingReplies.ToArray()
+            : pendingReplies.Append(pendingAdmission).ToArray();
+    }
+    finally
+    {
+        // The public poller owns completion draining only while requests are
+        // submitted. Return ownership to the socket runtime before its drain.
+        completionPoller.Dispose();
+    }
+
+    if (pending.Length == 0) return;
+    try
+    {
+        await Task.WhenAll(pending).WaitAsync(
+            TimeSpan.FromMilliseconds(drainBoundMs),
+            operationCancellation.Token);
+    }
+    catch (TimeoutException)
+    {
+        metrics.RecordAbandoned(metrics.Snapshot().currentInFlight);
+        operationCancellation.Cancel();
+        try
+        {
+            await Task.WhenAll(pending).WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
+        {
+            // The drain-bound cancellation is already represented by abandoned.
+        }
+        catch (TimeoutException)
+        {
+            // The recorded abandoned count is the bounded observation result.
+        }
+    }
+}
+
+static async Task ObserveRawRequestAsync(
+    Task<BenchPayload> replyTask,
+    SourceMetrics metrics,
+    BenchTriggerRequest trigger,
+    uint runId,
+    ulong sequence,
+    long started,
+    CancellationToken cancellationToken)
+{
+    try
+    {
+        var reply = await replyTask;
+        ValidateReply(reply, runId, BenchPhase.Active, trigger.payloadBytes, sequence);
+        metrics.Complete(started, true);
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        metrics.Cancel(started);
+        throw;
+    }
+    catch (Exception error)
+    {
+        metrics.Complete(started, false, error);
+    }
+}
+
+static async Task ObserveRawAdmissionAsync(Task admission, CancellationToken cancellationToken)
+{
+    try
+    {
+        await admission;
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        // Reply observation accounts for the cancelled request.
+    }
+    catch
+    {
+        // Reply observation accounts for the failed request.
+    }
+}
+
+static int RemainingPollTimeoutMs(long deadline)
+{
+    var remainingTicks = deadline - Stopwatch.GetTimestamp();
+    if (remainingTicks <= 0) return 0;
+    var remainingMs = remainingTicks * 1000.0 / Stopwatch.Frequency;
+    return Math.Min(50, Math.Max(1, (int)Math.Ceiling(remainingMs)));
 }
 
 static async Task RunSendWorkersAsync(
@@ -608,24 +776,45 @@ internal sealed class RawBenchTransport : IBenchTransport
     public async ValueTask<BenchPayload> RequestAsync(
         int stream, BenchPayload payload, CancellationToken cancellationToken)
     {
+        return await SubmitRequest(payload, cancellationToken).Reply;
+    }
+
+    public RawRequestSubmission SubmitRequest(
+        BenchPayload payload, CancellationToken cancellationToken)
+    {
         Message? header = null;
         Message? body = null;
-        IReadOnlyList<Message>? parts = null;
         try
         {
             header = Message.From(RawEnvelopeHeaders.Request);
             body = EncodeRawPayload(payload);
-            RequestSubmission submission = await request!.SubmitRequestAsync(
+            RequestSubmission submission = request!.SubmitRequest(
                 header, body, cancellationToken);
-            parts = await submission.Reply;
-            if (parts.Count == 0) throw new InvalidOperationException("Raw request returned no reply parts.");
-            return RawWire.Decode(parts.Count == 1 ? parts[0].AsReadOnlySpan() : parts[^1].AsReadOnlySpan());
+            return new RawRequestSubmission(
+                submission.Result,
+                submission.Admitted,
+                DecodeRawReplyAsync(submission.Reply, header, body));
         }
-        finally
+        catch
         {
-            if (parts is not null) foreach (var part in parts) part.Dispose();
             body?.Dispose();
             header?.Dispose();
+            throw;
+        }
+    }
+
+    public IPoller OpenRequestCompletionPoller()
+    {
+        var poller = Systems.Zlink.Zlink.CreatePoller();
+        try
+        {
+            poller.Add(request!.Socket, PollEventFlags.PollCompletion, 0);
+            return poller;
+        }
+        catch
+        {
+            poller.Dispose();
+            throw;
         }
     }
 
@@ -669,7 +858,33 @@ internal sealed class RawBenchTransport : IBenchTransport
             throw;
         }
     }
+
+    private static async Task<BenchPayload> DecodeRawReplyAsync(
+        Task<IReadOnlyList<Message>> replyTask, Message header, Message body)
+    {
+        IReadOnlyList<Message>? parts = null;
+        try
+        {
+            parts = await replyTask;
+            if (parts.Count == 0)
+                throw new InvalidOperationException("Raw request returned no reply parts.");
+            return RawWire.Decode(parts.Count == 1
+                ? parts[0].AsReadOnlySpan()
+                : parts[^1].AsReadOnlySpan());
+        }
+        finally
+        {
+            if (parts is not null) foreach (var part in parts) part.Dispose();
+            body.Dispose();
+            header.Dispose();
+        }
+    }
 }
+
+internal readonly record struct RawRequestSubmission(
+    SubmitResult Result,
+    Task Admitted,
+    Task<BenchPayload> Reply);
 
 internal sealed class RawBenchSocket : IDisposable
 {
@@ -707,23 +922,12 @@ internal sealed class RawBenchSocket : IDisposable
 
     public RequestOperation Request() => router is null ? dealer!.Request() : router.Request(peer);
     public SendOperation Send() => router is null ? dealer!.Send() : router.Send(peer);
+    public IZlinkSocket Socket => router is not null ? (IZlinkSocket)router : dealer!;
 
-    public async ValueTask<RequestSubmission> SubmitRequestAsync(
+    public RequestSubmission SubmitRequest(
         Message header, Message body, CancellationToken cancellationToken)
     {
-        await submissionGate.WaitAsync(cancellationToken);
-        try
-        {
-            RequestSubmission submission = Request().Message(header)
-                .Message(body).Async(cancellationToken);
-            if (submission.Result == SubmitResult.Backpressured)
-                await submission.Admitted;
-            return submission;
-        }
-        finally
-        {
-            submissionGate.Release();
-        }
+        return Request().Message(header).Message(body).Async(cancellationToken);
     }
 
     public async ValueTask SubmitSendAsync(Message header, Message body,
@@ -862,6 +1066,7 @@ internal sealed class SourceMetrics(int sampleLimit)
             var sorted = samples.ToArray();
             Array.Sort(sorted);
             return new SourceResultSnapshot(
+                submitted,
                 completed,
                 errors,
                 inFlight,
@@ -890,6 +1095,7 @@ internal sealed class Sequence
 }
 
 internal readonly record struct SourceResultSnapshot(
+    long Submitted,
     long Completed,
     long Errors,
     long CurrentInFlight,
@@ -923,7 +1129,7 @@ internal sealed record StreamDescription(int count, int? inFlightPerStream, stri
     {
         "request-serial" => new(1, 1, ".NET Task; one sequential loop"),
         "request-window" => new(1, requestWindow, ".NET Tasks sharing one logical-stream window"),
-        "request-backpressure" => new(1, null, ".NET Tasks submitted without an application in-flight cap"),
+        "request-backpressure" => new(1, null, ".NET submission/reply pump without an application in-flight cap"),
         "send-saturation" => new(sendConcurrency, 1, ".NET Task per logical stream"),
         _ => throw new InvalidOperationException($"Unknown pattern {pattern}.")
     };
@@ -952,6 +1158,7 @@ internal sealed record BenchCell(
     BenchCellTrigger trigger,
     StreamDescription streams,
     object? target_stats,
+    long submitted,
     long completed,
     long errors,
     long server_errors,
@@ -985,6 +1192,7 @@ internal sealed record BenchCell(
         trigger,
         streams,
         null,
+        result.Submitted,
         result.Completed,
         result.Errors,
         result.ServerErrors,
@@ -1108,6 +1316,7 @@ internal sealed record BenchResult(
     string Unit,
     int PayloadSize,
     double DurationSeconds,
+    long Submitted,
     long Completed,
     long Errors,
     long ServerErrors,

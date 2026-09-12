@@ -137,6 +137,34 @@ trigger_phase() {
   echo
 }
 
+# README §3의 settle 계약: server가 받은 수를 폴링해 더는 증가하지 않을 때까지
+# 기다린다. 셀 끝에서만이 아니라 warmup→active 경계에서도 같은 규칙을 쓴다 —
+# source가 idle이어도 target에는 아직 도착 중인 warmup 요청이 있을 수 있고, 그것이
+# active 구간의 target 계수에 섞이면 request 계수 검증이 깨진다.
+settle_only() {
+  local source_url="$1" target_url="$2"
+  local deadline previous stable stable_needed
+  deadline=$((SECONDS + DRAIN_BOUND_MS / 1000))
+  previous=""
+  stable=0
+  stable_needed=$(((COMMAND_SETTLE_MS + 99) / 100))
+  while ((SECONDS <= deadline)); do
+    local source_body target_body counts
+    source_body="$(curl --silent --show-error --fail "${source_url}/bench/stats")"
+    target_body="$(curl --silent --show-error --fail "${target_url}/bench/stats")"
+    counts="$(python3 -c 'import json,sys; a=json.loads(sys.argv[1]); b=json.loads(sys.argv[2]); print(a.get("completed",0),a.get("currentInFlight",0),b.get("received",0),b.get("errors",0))' "${source_body}" "${target_body}")"
+    if [[ "${counts}" == "${previous}" ]]; then
+      stable=$((stable + 1))
+      ((stable >= stable_needed)) && return 0
+    else
+      previous="${counts}"
+      stable=0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
 settle_and_capture() {
   local source_url="$1" target_url="$2" target_file="$3"
   local started_ms deadline previous stable stable_needed
@@ -344,6 +372,10 @@ for impl in "${implementations[@]}"; do
 
       trigger_phase "${trigger_url}" "${RUN_STAMP}" "${cell_id}" "${pattern}" "${payload}" warmup
       wait_for_idle "${source_stats_url}"
+      if ! settle_only "${source_stats_url}" "${target_stats_url}"; then
+        echo "warmup settle hit ${DRAIN_BOUND_MS}ms bound: ${cell_id}" >&2
+        exit 1
+      fi
       trigger_phase "${trigger_url}" "${RUN_STAMP}" "${cell_id}" "${pattern}" "${payload}" active
       wait_for_idle "${source_stats_url}"
 
