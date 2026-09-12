@@ -255,9 +255,34 @@ send가 안 움직이는 이유는 깊이가 아니라 **건당 비용**이다. 
    이번 백프레셔 변경 뒤 기준으로 **새로 잡는다**
 3. **send 건당 비용 감축** — 언어별로 원인을 좁혀 `#5` `#6` `#7`을 닫는다. 한 job에 원인
    하나, 수정마다 재측정
-4. **`#277` 해소 → `#101` 재측정** — Node REQREP가 풀려야 7언어 전수 재측정이 가능하다
+4. **`#101` 재측정** — `#277`이 풀렸으므로 7언어 전수 재측정을 할 수 있다
 
-### 6.5 준비 상태 (2026-09-12 확인)
+**`#277` 해소 확인 (2026-09-12).** perf 큐 티켓으로 `run_benchmarks_multi.sh`를 돌렸고, 이슈가
+지목한 다섯 조합이 전부 측정된다. REQREP 결과 246행, `request completion drain timed out` 0건.
+
+| 패턴 | 크기 | 결과 |
+|---|---|---|
+| `MULTI_DEALER_ROUTER_REQREP` tcp | 1024B | 120,473 msg/s, 0.726 ms |
+| | 4096B | 93,076 msg/s, 0.678 ms |
+| `MULTI_ROUTER_ROUTER_REQREP` tcp | 64B·1024B·4096B | 측정됨 |
+
+같은 run에서 새로 드러난 SENDSEND 오류(`echoes=515002`인데 `admissions=79`)는 `#291`로 분리했다.
+
+### 6.5 비교표를 채우는 자리
+
+`framework/bench/grpc/doc/comparison.ko.md`가 이미 형식을 정해 두었다. 채울 것은 §4 기준선
+상태 표와 §5 결과 표다.
+
+| 행 이름 | 측정 경로 |
+|---|---|
+| `grpc-<lang>` | server 하나에 연결한 표준 gRPC unary `Echo`·`Command` |
+| `zlink-<lang>` | framework를 거치지 않는 raw binding의 ROUTER↔ROUTER RID 직접 경로 |
+| `zlink-framework-<lang>` | RouteMesh `requestToNode`·`sendToNode`로 server RID를 직접 지정 |
+
+request 계열 단위는 KOPS, `send-saturation`은 KMSG/s다. C++의 `libgrpc++`는 시스템 설치본
+1.51.1을 쓰며 오래된 버전이므로 결과에 반드시 적는다.
+
+### 6.6 준비 상태 (2026-09-12 확인)
 
 | 항목 | 상태 |
 |---|---|
@@ -266,7 +291,7 @@ send가 안 움직이는 이유는 깊이가 아니라 **건당 비용**이다. 
 | 집계·비교 | `tools/bench_aggregate.py`, `tools/compare-results.py` |
 | 규격 | `framework/bench/grpc/README.ko.md` — 기본 payload `1024,4096`, send concurrency `8`, loopback, Release build |
 
-### 6.6 측정 규칙
+### 6.7 측정 규칙
 
 - `scripts/perf/perf-ticket.sh submit`으로만 낸다. 직접 벤치를 돌리지 않는다
 - 세션마다 `scripts/perf/perf-queue-runner.sh`를 하나 띄운다
@@ -280,9 +305,10 @@ send가 안 움직이는 이유는 깊이가 아니라 **건당 비용**이다. 
 **주의** — 이번 변경으로 포화 시 거절 대신 대기하므로 수치가 달라진다. 인계 문서
 `handoff-2026-09-12-framework-perf-and-hwm.ko.md` §1.2의 이전 수치와 직접 비교하지 않는다.
 
-### 6.7 완료 조건
+### 6.8 완료 조건
 
 - `#280` `#281` `#282` `#283` 머지
 - gRPC 포함 전체 비교표 게시
 - `#5` `#6` `#7`의 send 비율이 0.90 이상
-- `#277` 해소, `#101` 재측정 완료
+- `#277` 해소(**완료**), `#101` 재측정 완료
+- `#291`(SENDSEND echo drain) 판정
