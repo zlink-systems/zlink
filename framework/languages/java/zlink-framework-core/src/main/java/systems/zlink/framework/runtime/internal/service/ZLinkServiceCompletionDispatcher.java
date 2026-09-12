@@ -3,12 +3,11 @@ package systems.zlink.framework.runtime.internal.service;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * Owns the process-wide reservation and execution lane for service operation
- * terminals. A reserved work item is also its intrusive queue node, so a
- * terminal winner never needs a second admission or queue allocation.
+ * Owns the process-wide execution lane for service operation terminals. A
+ * registered work item is also its intrusive queue node, so a terminal winner
+ * never needs a second queue allocation.
  */
 final class ZLinkServiceCompletionDispatcher {
-    static final int CAPACITY = 4_096;
     static final ZLinkServiceCompletionDispatcher INSTANCE =
         new ZLinkServiceCompletionDispatcher();
 
@@ -16,7 +15,6 @@ final class ZLinkServiceCompletionDispatcher {
     private final Thread worker;
     private WorkItem head;
     private WorkItem tail;
-    private int reserved;
 
     private ZLinkServiceCompletionDispatcher() {
         worker = Thread.ofPlatform()
@@ -26,31 +24,26 @@ final class ZLinkServiceCompletionDispatcher {
         worker.start();
     }
 
-    boolean tryReserve(WorkItem item) {
+    void register(WorkItem item) {
         synchronized (gate) {
-            if (item.reserved) {
+            if (item.registered) {
                 throw new IllegalStateException(
-                    "completion work item is already reserved");
+                    "completion work item is already registered");
             }
-            if (reserved >= CAPACITY) {
-                return false;
-            }
-            item.reserved = true;
-            reserved++;
-            return true;
+            item.registered = true;
         }
     }
 
     void releaseWithoutDispatch(WorkItem item) {
         synchronized (gate) {
-            releaseReservation(item);
+            releaseRegistration(item);
         }
     }
 
     void post(WorkItem item) {
         item.dispatchNext = null;
         synchronized (gate) {
-            requireReserved(item);
+            requireRegistered(item);
             if (tail == null) {
                 head = item;
             } else {
@@ -68,7 +61,7 @@ final class ZLinkServiceCompletionDispatcher {
         synchronized (gate) {
             WorkItem current = first;
             while (true) {
-                requireReserved(current);
+                requireRegistered(current);
                 if (current == last) {
                     break;
                 }
@@ -101,7 +94,7 @@ final class ZLinkServiceCompletionDispatcher {
                 // One application completion must not stop later completions.
             } finally {
                 synchronized (gate) {
-                    releaseReservation(item);
+                    releaseRegistration(item);
                 }
             }
         }
@@ -122,22 +115,21 @@ final class ZLinkServiceCompletionDispatcher {
         }
     }
 
-    private void releaseReservation(WorkItem item) {
-        requireReserved(item);
-        item.reserved = false;
-        reserved--;
+    private void releaseRegistration(WorkItem item) {
+        requireRegistered(item);
+        item.registered = false;
     }
 
-    private static void requireReserved(WorkItem item) {
-        if (!item.reserved) {
+    private static void requireRegistered(WorkItem item) {
+        if (!item.registered) {
             throw new IllegalStateException(
-                "completion work item has no dispatcher reservation");
+                "completion work item has no dispatcher registration");
         }
     }
 
     abstract static class WorkItem {
         private WorkItem dispatchNext;
-        private boolean reserved;
+        private boolean registered;
 
         final void setDispatchNext(WorkItem value) {
             dispatchNext = value;

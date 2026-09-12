@@ -427,10 +427,10 @@ final class ZLinkCanonicalRelocationStateMachineTest {
     }
 
     @Test
-    void wireFailureKindDecodesWorkerQueueFullToCapacityExceeded() {
+    void wireFailureKindDecodesWorkerQueueFullToUnavailable() {
         assertEquals(
             systems.zlink.framework.errors.ZLinkFrameworkErrorKind
-                .CAPACITY_EXCEEDED,
+                .UNAVAILABLE,
             ZLinkCanonicalRelocationStateMachine.wireFailureKind(
                 ServiceWireConstants.FRAMEWORK_ERROR_WORKER_QUEUE_FULL));
     }

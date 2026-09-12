@@ -264,14 +264,13 @@ final class ZLinkChannelEnvelopeGoldenTest {
         canonical.put(ZLinkFrameworkErrorKind.NOT_CONFIGURED, "not_configured");
         canonical.put(ZLinkFrameworkErrorKind.REJECTED, "rejected");
         canonical.put(ZLinkFrameworkErrorKind.UNAVAILABLE, "unavailable");
-        canonical.put(ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED, "capacity_exceeded");
         canonical.put(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, "deadline_exceeded");
         canonical.put(ZLinkFrameworkErrorKind.SHUTTING_DOWN, "shutting_down");
         canonical.put(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "protocol_error");
         canonical.put(ZLinkFrameworkErrorKind.INVALID_OPERATION, "invalid_operation");
         canonical.put(ZLinkFrameworkErrorKind.DATA_LOST, "data_lost");
         canonical.put(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, "internal_failure");
-        assertEquals(13, canonical.size());
+        assertEquals(12, canonical.size());
         assertEquals(ZLinkFrameworkErrorKind.values().length, canonical.size());
         canonical.forEach((kind, name) -> {
             assertEquals(name, ZLinkChannelEnvelope.errorCodeName(kind));

@@ -1,9 +1,5 @@
 package systems.zlink.framework.execution;
-import java.util.IdentityHashMap;
-import java.util.Map;
 import java.util.Objects;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -23,16 +19,10 @@ import systems.zlink.framework.runtime.internal.relocation
     .ZLinkRetainedSerialQueueCommit;
 
 /**
- * Serializes one logical owner's work and bounds only that owner's queued and
- * claimed records. These reservations are independent from Core byte HWM and
- * from the host-wide application-job supply authority.
+ * Serializes one logical owner's work. Host-shared application-job permits and
+ * Core byte HWM control admission; this queue only orders accepted work.
  */
 public final class ZLinkSerialExecutionQueue {
-    public static final int DEFAULT_APPLICATION_MESSAGE_CAPACITY = 1024;
-    public static final int DEFAULT_LIFECYCLE_MESSAGE_CAPACITY = 128;
-    public static final long DEFAULT_APPLICATION_BYTE_CAPACITY = 64L * 1024 * 1024;
-    public static final long DEFAULT_LIFECYCLE_BYTE_CAPACITY = 4L * 1024 * 1024;
-    public static final long DEFAULT_FIXED_WORK_BYTE_COST = 256;
     public static final int DEFAULT_LIFECYCLE_BURST_LIMIT = 8;
     public static final Duration DEFAULT_OWNER_TIME_BUDGET = Duration.ofMillis(10);
     private static final ThreadLocal<ZLinkSerialExecutionQueue> CURRENT = new ThreadLocal<>();
@@ -47,11 +37,6 @@ public final class ZLinkSerialExecutionQueue {
     private final Executor executor;
     private final ExecutorService ownedExecutor;
     private final ZLinkExecutionLanePolicy lanePolicy;
-    private final int applicationMessageCapacity;
-    private final long applicationByteCapacity;
-    private final int lifecycleMessageCapacity;
-    private final long lifecycleByteCapacity;
-    private final long fixedWorkByteCost;
     private final int lifecycleBurstLimit;
     private final long ownerTimeBudgetNanos;
     private final ArrayDeque<Entry> applicationPending = new ArrayDeque<>();
@@ -59,14 +44,6 @@ public final class ZLinkSerialExecutionQueue {
     // boundary without inserting at the front of the application FIFO.
     private final ArrayDeque<Entry> continuationPending = new ArrayDeque<>();
     private final ArrayDeque<Entry> lifecyclePending = new ArrayDeque<>();
-    private int applicationMessages;
-    private int lifecycleMessages;
-    private long applicationBytes;
-    private long lifecycleBytes;
-    private long relocationApplicationBacklog;
-    private long relocationApplicationBytes;
-    private final Map<Entry, Long> relocationEntryCosts =
-        new IdentityHashMap<>();
     private int lifecycleStreak;
     private long outstanding;
     private long nextSequence = 1L;
@@ -88,11 +65,6 @@ public final class ZLinkSerialExecutionQueue {
         this(
             null,
             lanePolicy,
-            DEFAULT_APPLICATION_MESSAGE_CAPACITY,
-            DEFAULT_APPLICATION_BYTE_CAPACITY,
-            DEFAULT_LIFECYCLE_MESSAGE_CAPACITY,
-            DEFAULT_LIFECYCLE_BYTE_CAPACITY,
-            DEFAULT_FIXED_WORK_BYTE_COST,
             DEFAULT_LIFECYCLE_BURST_LIMIT,
             DEFAULT_OWNER_TIME_BUDGET);
     }
@@ -103,26 +75,6 @@ public final class ZLinkSerialExecutionQueue {
         this(
             executor,
             lanePolicy,
-            DEFAULT_APPLICATION_MESSAGE_CAPACITY,
-            DEFAULT_APPLICATION_BYTE_CAPACITY,
-            DEFAULT_LIFECYCLE_MESSAGE_CAPACITY,
-            DEFAULT_LIFECYCLE_BYTE_CAPACITY,
-            DEFAULT_FIXED_WORK_BYTE_COST,
-            DEFAULT_LIFECYCLE_BURST_LIMIT,
-            DEFAULT_OWNER_TIME_BUDGET);
-    }
-
-    public ZLinkSerialExecutionQueue(
-        ZLinkExecutionLanePolicy lanePolicy,
-        int pendingCapacity) {
-        this(
-            null,
-            lanePolicy,
-            pendingCapacity,
-            DEFAULT_APPLICATION_BYTE_CAPACITY,
-            pendingCapacity,
-            DEFAULT_LIFECYCLE_BYTE_CAPACITY,
-            DEFAULT_FIXED_WORK_BYTE_COST,
             DEFAULT_LIFECYCLE_BURST_LIMIT,
             DEFAULT_OWNER_TIME_BUDGET);
     }
@@ -130,35 +82,9 @@ public final class ZLinkSerialExecutionQueue {
     public ZLinkSerialExecutionQueue(
         Executor executor,
         ZLinkExecutionLanePolicy lanePolicy,
-        int pendingCapacity) {
-        this(
-            executor,
-            lanePolicy,
-            pendingCapacity,
-            DEFAULT_APPLICATION_BYTE_CAPACITY,
-            pendingCapacity,
-            DEFAULT_LIFECYCLE_BYTE_CAPACITY,
-            DEFAULT_FIXED_WORK_BYTE_COST,
-            DEFAULT_LIFECYCLE_BURST_LIMIT,
-            DEFAULT_OWNER_TIME_BUDGET);
-    }
-
-    public ZLinkSerialExecutionQueue(
-        Executor executor,
-        ZLinkExecutionLanePolicy lanePolicy,
-        int applicationMessageCapacity,
-        long applicationByteCapacity,
-        int lifecycleMessageCapacity,
-        long lifecycleByteCapacity,
-        long fixedWorkByteCost,
         int lifecycleBurstLimit,
         Duration ownerTimeBudget) {
-        if (applicationMessageCapacity <= 0
-            || lifecycleMessageCapacity <= 0
-            || applicationByteCapacity <= 0
-            || lifecycleByteCapacity <= 0
-            || fixedWorkByteCost <= 0
-            || lifecycleBurstLimit <= 0
+        if (lifecycleBurstLimit <= 0
             || ownerTimeBudget == null
             || ownerTimeBudget.isNegative()
             || ownerTimeBudget.isZero()) {
@@ -172,11 +98,6 @@ public final class ZLinkSerialExecutionQueue {
             this.executor = executor;
         }
         this.lanePolicy = Objects.requireNonNull(lanePolicy, "lanePolicy");
-        this.applicationMessageCapacity = applicationMessageCapacity;
-        this.applicationByteCapacity = applicationByteCapacity;
-        this.lifecycleMessageCapacity = lifecycleMessageCapacity;
-        this.lifecycleByteCapacity = lifecycleByteCapacity;
-        this.fixedWorkByteCost = fixedWorkByteCost;
         this.lifecycleBurstLimit = lifecycleBurstLimit;
         this.ownerTimeBudgetNanos = ownerTimeBudget.toNanos();
     }
@@ -276,14 +197,11 @@ public final class ZLinkSerialExecutionQueue {
             if (nextSequence == Long.MAX_VALUE) {
                 throw new IllegalStateException("queue sequence exhausted");
             }
-            if (!canReserve(Lane.LIFECYCLE, fixedWorkByteCost)) {
-                return capacityFailure("lifecycle barrier queue is full");
-            }
-            reserve(Lane.LIFECYCLE, fixedWorkByteCost);
             Entry entry = new Entry(
                 nextSequence++, (byte[]) null, operation, () -> { },
                 new CompletableFuture<>(), ZLinkFlowContext.current(), null,
-                Lane.LIFECYCLE, fixedWorkByteCost, false);
+                Lane.LIFECYCLE, false);
+            outstanding++;
             if (relocation != null) {
                 holdRelocationEntry(entry);
                 result = new EnqueueResult(entry.result, false);
@@ -314,14 +232,11 @@ public final class ZLinkSerialExecutionQueue {
             if (nextSequence == Long.MAX_VALUE) {
                 throw new IllegalStateException("queue sequence exhausted");
             }
-            if (!canReserve(Lane.LIFECYCLE, fixedWorkByteCost)) {
-                return capacityFailure("lifecycle barrier queue is full");
-            }
-            reserve(Lane.LIFECYCLE, fixedWorkByteCost);
             Entry entry = new Entry(
                 nextSequence++, (byte[]) null, operation, () -> { },
                 new CompletableFuture<>(), ZLinkFlowContext.current(), null,
-                Lane.LIFECYCLE, fixedWorkByteCost, false);
+                Lane.LIFECYCLE, false);
+            outstanding++;
             lifecyclePending.addLast(entry);
             result = new EnqueueResult(entry.result, requestDrainLocked());
         }
@@ -376,23 +291,15 @@ public final class ZLinkSerialExecutionQueue {
             if (nextSequence == Long.MAX_VALUE) {
                 throw new IllegalStateException("queue sequence exhausted");
             }
-            if (!canRepresentWorkByteCost(recordSizeHint)) {
-                return capacityFailure("application payload exceeds queue byte capacity");
-            }
-            long byteCost = workByteCost(recordSizeHint);
             if (relocation != null) {
                 return holdRelocationIngress(
-                    record, byteCost, operation, relocationRelease);
+                    record, operation, relocationRelease);
             }
-            boolean transferred = hasTransferredApplicationJob();
-            if (!transferred && !canReserve(Lane.APPLICATION, byteCost)) {
-                return capacityFailure("application queue is full");
-            }
-            reserve(Lane.APPLICATION, byteCost, transferred);
             Entry entry = new Entry(
                 nextSequence++, record, operation, relocationRelease,
                 new CompletableFuture<>(), ZLinkFlowContext.current(), null,
-                Lane.APPLICATION, byteCost, false);
+                Lane.APPLICATION, false);
+            outstanding++;
             applicationPending.addLast(entry);
             result = new EnqueueResult(entry.result, requestDrainLocked());
         }
@@ -403,8 +310,7 @@ public final class ZLinkSerialExecutionQueue {
     public boolean tryEnqueue(Supplier<CompletionStage<Void>> operation) {
         EnqueueResult result;
         synchronized (this) {
-            if (relocated || (!hasTransferredApplicationJob()
-                && !canAcceptApplicationWork(fixedWorkByteCost))) {
+            if (relocated) {
                 return false;
             }
             result = enqueueAccepted(null, 0, operation);
@@ -424,10 +330,7 @@ public final class ZLinkSerialExecutionQueue {
         EnqueueResult result;
         synchronized (this) {
             validatePayloadBytes(payloadBytes);
-            if (relocated
-                || !canRepresentWorkByteCost(payloadBytes)
-                || (!hasTransferredApplicationJob()
-                    && !canAcceptApplicationWork(workByteCost(payloadBytes)))) {
+            if (relocated) {
                 return false;
             }
             result = enqueueAccepted(null, payloadBytes, operation);
@@ -442,10 +345,7 @@ public final class ZLinkSerialExecutionQueue {
         EnqueueResult result;
         synchronized (this) {
             Objects.requireNonNull(record, "record");
-            if (relocated
-                || !canRepresentWorkByteCost(record.length)
-                || (!hasTransferredApplicationJob()
-                    && !canAcceptApplicationWork(workByteCost(record.length)))) {
+            if (relocated) {
                 return false;
             }
             result = enqueueAccepted(record.clone(), record.length, operation);
@@ -481,21 +381,10 @@ public final class ZLinkSerialExecutionQueue {
         if (nextSequence == Long.MAX_VALUE) {
             throw new IllegalStateException("queue sequence exhausted");
         }
-        if (!canRepresentWorkByteCost(payloadBytes)) {
-            return new EnqueueResult(
-                capacityFailure("application payload exceeds queue byte capacity"), false);
-        }
-        long byteCost = workByteCost(payloadBytes);
         if (relocation != null) {
             return new EnqueueResult(holdRelocationIngress(
-                record, byteCost, operation, relocationRelease), false);
+                record, operation, relocationRelease), false);
         }
-        boolean transferred = hasTransferredApplicationJob();
-        if (!transferred && !canReserve(Lane.APPLICATION, byteCost)) {
-            return new EnqueueResult(
-                capacityFailure("application queue is full"), false);
-        }
-        reserve(Lane.APPLICATION, byteCost, transferred);
         Entry entry = new Entry(
             nextSequence++,
             record,
@@ -505,20 +394,16 @@ public final class ZLinkSerialExecutionQueue {
             ZLinkFlowContext.current(),
             null,
             Lane.APPLICATION,
-            byteCost,
             false);
+        outstanding++;
         applicationPending.addLast(entry);
         return new EnqueueResult(entry.result, requestDrainLocked());
     }
 
     private CompletionStage<Void> holdRelocationIngress(
         byte[] record,
-        long byteCost,
         Supplier<CompletionStage<Void>> operation,
         Runnable relocationRelease) {
-        if (!canHoldRelocationCost(byteCost)) {
-            return capacityFailure("application queue byte accounting overflow");
-        }
         Entry entry = new Entry(
             nextSequence++,
             record,
@@ -528,24 +413,16 @@ public final class ZLinkSerialExecutionQueue {
             ZLinkFlowContext.current(),
             null,
             Lane.APPLICATION,
-            0L,
             false);
         outstanding++;
-        relocationApplicationBacklog++;
-        relocationApplicationBytes += byteCost;
-        relocationEntryCosts.put(entry, byteCost);
         holdRelocationEntry(entry);
         return entry.result;
     }
 
     private CompletionStage<Void> holdRelocationIngress(
         Supplier<byte[]> record,
-        long byteCost,
         Supplier<CompletionStage<Void>> operation,
         Runnable relocationRelease) {
-        if (!canHoldRelocationCost(byteCost)) {
-            return capacityFailure("application queue byte accounting overflow");
-        }
         Entry entry = new Entry(
             nextSequence++,
             record,
@@ -555,12 +432,8 @@ public final class ZLinkSerialExecutionQueue {
             ZLinkFlowContext.current(),
             null,
             Lane.APPLICATION,
-            0L,
             false);
         outstanding++;
-        relocationApplicationBacklog++;
-        relocationApplicationBytes += byteCost;
-        relocationEntryCosts.put(entry, byteCost);
         holdRelocationEntry(entry);
         return entry.result;
     }
@@ -578,108 +451,11 @@ public final class ZLinkSerialExecutionQueue {
         relocation.acceptanceEpoch++;
     }
 
-    private boolean canReserve(Lane lane, long byteCost) {
-        if (byteCost <= 0) {
-            return false;
-        }
-        if (lane == Lane.APPLICATION) {
-            return applicationMessages < applicationMessageCapacity
-                && relocationApplicationBacklog
-                    < applicationMessageCapacity - applicationMessages
-                && fitsWithinCapacity(
-                    applicationBytes,
-                    relocationApplicationBytes,
-                    byteCost,
-                    applicationByteCapacity);
-        }
-        return lifecycleMessages < lifecycleMessageCapacity
-            && lifecycleBytes <= lifecycleByteCapacity
-            && byteCost <= lifecycleByteCapacity - lifecycleBytes;
-    }
-
-    private void reserve(Lane lane, long byteCost) {
-        reserve(lane, byteCost, false);
-    }
-
-    private void reserve(Lane lane, long byteCost, boolean transferred) {
-        if (!transferred && !canReserve(lane, byteCost)) {
-            throw new IllegalStateException("serial queue reservation is unavailable");
-        }
-        if (lane == Lane.APPLICATION) {
-            applicationMessages++;
-            applicationBytes = Math.addExact(applicationBytes, byteCost);
-        } else {
-            lifecycleMessages++;
-            lifecycleBytes = Math.addExact(lifecycleBytes, byteCost);
-        }
-        outstanding++;
-    }
-
-    private static boolean hasTransferredApplicationJob() {
-        return ZLinkApplicationJobContext.hasTransferableQueuedOwnership();
-    }
-
     private void release(Entry entry) {
         if (entry.applicationJobOwnership != null) {
             entry.applicationJobOwnership.close();
         }
-        if (entry.capacityReserved) {
-            if (entry.lane == Lane.APPLICATION) {
-                applicationMessages--;
-                applicationBytes -= entry.byteCost;
-            } else {
-                lifecycleMessages--;
-                lifecycleBytes -= entry.byteCost;
-            }
-        } else if (entry.lane == Lane.APPLICATION) {
-            relocationApplicationBacklog--;
-            Long cost = relocationEntryCosts.remove(entry);
-            if (cost == null) {
-                throw new IllegalStateException(
-                    "relocation backlog entry has no byte cost");
-            }
-            relocationApplicationBytes -= cost;
-        }
         outstanding--;
-    }
-
-    private long workByteCost(int payloadLength) {
-        return workByteCost((long) payloadLength);
-    }
-
-    private long workByteCost(long payloadBytes) {
-        validatePayloadBytes(payloadBytes);
-        return Math.addExact(fixedWorkByteCost, payloadBytes);
-    }
-
-    private boolean canRepresentWorkByteCost(long payloadBytes) {
-        return payloadBytes <= Long.MAX_VALUE - fixedWorkByteCost;
-    }
-
-    private boolean canAcceptApplicationWork(long byteCost) {
-        return relocation == null
-            ? canReserve(Lane.APPLICATION, byteCost)
-            : canHoldRelocationCost(byteCost);
-    }
-
-    private boolean canHoldRelocationCost(long byteCost) {
-        return byteCost > 0
-            && relocationApplicationBytes <= Long.MAX_VALUE - byteCost;
-    }
-
-    private static boolean fitsWithinCapacity(
-        long first,
-        long second,
-        long added,
-        long capacity) {
-        if (first > capacity) {
-            return false;
-        }
-        long remaining = capacity - first;
-        if (second > remaining) {
-            return false;
-        }
-        return added <= remaining - second;
     }
 
     private static void validatePayloadBytes(long payloadBytes) {
@@ -688,12 +464,6 @@ public final class ZLinkSerialExecutionQueue {
         }
     }
 
-    private CompletionStage<Void> capacityFailure(String message) {
-        return CompletableFuture.failedFuture(
-            new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
-                message));
-    }
 
     private boolean hasPending() {
         return !applicationPending.isEmpty()
@@ -872,16 +642,13 @@ public final class ZLinkSerialExecutionQueue {
             if (nextSequence == Long.MAX_VALUE) {
                 throw new IllegalStateException("queue sequence exhausted");
             }
-            if (!canReserve(Lane.LIFECYCLE, fixedWorkByteCost)) {
-                return Optional.empty();
-            }
             RelocationBoundary boundary = new RelocationBoundary(this);
             Entry entry = new Entry(
                 nextSequence++, (byte[]) null, boundary::reach, () -> { },
                 new CompletableFuture<>(), ZLinkFlowContext.current(), boundary,
-                Lane.LIFECYCLE, fixedWorkByteCost, false);
+                Lane.LIFECYCLE, false);
             boundary.entry = entry;
-            reserve(Lane.LIFECYCLE, fixedWorkByteCost);
+            outstanding++;
             lifecyclePending.addLast(entry);
             result = Optional.of(boundary);
             scheduleDrain = requestDrainLocked();
@@ -1352,14 +1119,11 @@ public final class ZLinkSerialExecutionQueue {
             if (nextSequence == Long.MAX_VALUE) {
                 throw new IllegalStateException("queue sequence exhausted");
             }
-            if (!canReserve(Lane.APPLICATION, fixedWorkByteCost)) {
-                return capacityFailure("application continuation queue is full");
-            }
-            reserve(Lane.APPLICATION, fixedWorkByteCost);
             Entry continuation = new Entry(
                 nextSequence++, (byte[]) null, operation, () -> { },
                 new CompletableFuture<>(), ZLinkFlowContext.current(), null,
-                Lane.APPLICATION, fixedWorkByteCost, true);
+                Lane.APPLICATION, true);
+            outstanding++;
             if (relocation != null) {
                 holdRelocationEntry(continuation);
             } else {
@@ -1722,8 +1486,6 @@ public final class ZLinkSerialExecutionQueue {
             applicationJobOwnership;
         private final RelocationBoundary relocationBoundary;
         private final Lane lane;
-        private final long byteCost;
-        private final boolean capacityReserved;
         private final boolean continuation;
 
         private Entry(
@@ -1735,7 +1497,6 @@ public final class ZLinkSerialExecutionQueue {
             ZLinkFlowContext.State flow,
             RelocationBoundary relocationBoundary,
             Lane lane,
-            long byteCost,
             boolean continuation) {
             this.sequence = sequence;
             this.record = record;
@@ -1748,8 +1509,6 @@ public final class ZLinkSerialExecutionQueue {
                 ZLinkApplicationJobContext.transferToQueuedJob();
             this.relocationBoundary = relocationBoundary;
             this.lane = lane;
-            this.byteCost = byteCost;
-            this.capacityReserved = byteCost > 0L;
             this.continuation = continuation;
         }
 
@@ -1762,7 +1521,6 @@ public final class ZLinkSerialExecutionQueue {
             ZLinkFlowContext.State flow,
             RelocationBoundary relocationBoundary,
             Lane lane,
-            long byteCost,
             boolean continuation) {
             this.sequence = sequence;
             this.record = null;
@@ -1776,8 +1534,6 @@ public final class ZLinkSerialExecutionQueue {
                 ZLinkApplicationJobContext.transferToQueuedJob();
             this.relocationBoundary = relocationBoundary;
             this.lane = lane;
-            this.byteCost = byteCost;
-            this.capacityReserved = byteCost > 0L;
             this.continuation = continuation;
         }
 

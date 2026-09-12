@@ -37,7 +37,6 @@ final class ZLinkServiceOperationRegistryTest {
         try (var scheduler = new CountingScheduler();
              var registry = new ZLinkServiceOperationRegistry(
                  scheduler,
-                 2,
                  new IllegalStateException("closed"),
                  clock::get)) {
             var first = registry.register(Duration.ofNanos(10));
@@ -62,7 +61,7 @@ final class ZLinkServiceOperationRegistryTest {
         AtomicLong clock = new AtomicLong(Long.MAX_VALUE - 2);
         try (var scheduler = new CountingScheduler();
              var registry = new ZLinkServiceOperationRegistry(
-                 scheduler, 1, new IllegalStateException("closed"), clock::get)) {
+                 scheduler, new IllegalStateException("closed"), clock::get)) {
             var operation = registry.register(Duration.ofNanos(5));
 
             assertEquals(0, registry.expire(Long.MAX_VALUE));
@@ -101,7 +100,7 @@ final class ZLinkServiceOperationRegistryTest {
         CompletableFuture<String> transport = new CompletableFuture<>();
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
              var registry = new ZLinkServiceOperationRegistry(
-                 scheduler, 4, closeFailure)) {
+                 scheduler, closeFailure)) {
             Thread submitter = Thread.ofPlatform().start(() ->
                 submittedResult.set(registry.submit(
                     ZLinkServiceOperationIds.next(),
@@ -139,7 +138,7 @@ final class ZLinkServiceOperationRegistryTest {
     void reentrantCloseWinsOverASubsequentSubmissionFailure() {
         var closed = new IllegalStateException("closed during binding submission");
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-             var registry = new ZLinkServiceOperationRegistry(scheduler, 1, closed)) {
+             var registry = new ZLinkServiceOperationRegistry(scheduler, closed)) {
             CompletableFuture<String> result = registry.submit(
                 ZLinkServiceOperationIds.next(), Duration.ofSeconds(1), () -> {
                     registry.close();
@@ -179,7 +178,7 @@ final class ZLinkServiceOperationRegistryTest {
         AtomicInteger starts = new AtomicInteger();
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
              var registry = new ZLinkServiceOperationRegistry(
-                 scheduler, 4, closeFailure)) {
+                 scheduler, closeFailure)) {
             registry.close();
 
             CompletableFuture<String> result = registry.submit(
@@ -200,9 +199,9 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
-    void wireIdentityIsTheRegistryKeyAndInvalidIdentityDoesNotReserveCapacity() {
+    void wireIdentityIsTheRegistryKeyAndInvalidIdentityDoesNotRegister() {
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-             var registry = new ZLinkServiceOperationRegistry(scheduler, 2)) {
+             var registry = new ZLinkServiceOperationRegistry(scheduler)) {
             UUID firstId = new UUID(Long.MIN_VALUE, 7);
             UUID secondId = new UUID(Long.MAX_VALUE, 7);
             var first = registry.register(firstId, Duration.ofSeconds(1));
@@ -292,17 +291,17 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
-    void rejectsRegistrationWhenPendingCapacityIsExhausted() {
+    void registersMoreThanTheFormerPendingCapacity() {
         ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor();
         try (ZLinkServiceOperationRegistry registry =
-                 new ZLinkServiceOperationRegistry(scheduler, 1)) {
-            registry.register(Duration.ofSeconds(1));
-            ZLinkFrameworkException failure = assertThrows(
-                ZLinkFrameworkException.class,
-                () -> registry.register(Duration.ofSeconds(1)));
-            assertEquals(ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED, failure.kind());
-            assertEquals(1, registry.pendingCount());
+                 new ZLinkServiceOperationRegistry(scheduler)) {
+            List<UUID> pending = new ArrayList<>();
+            for (int index = 0; index <= 4_096; index++) {
+                pending.add(registry.register(Duration.ofSeconds(1)).id());
+            }
+            assertEquals(4_097, registry.pendingCount());
+            pending.forEach(registry::discard);
         } finally {
             scheduler.shutdownNow();
         }
@@ -361,7 +360,7 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
-    void capacityIsSharedAcrossRegistriesUntilTerminalCallbacksReturn() {
+    void registrationsAreNotCappedAcrossRegistries() {
         ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor();
         try (ZLinkServiceOperationRegistry first =
@@ -370,29 +369,23 @@ final class ZLinkServiceOperationRegistryTest {
                  new ZLinkServiceOperationRegistry(scheduler)) {
             List<UUID> firstIds = new ArrayList<>();
             List<UUID> secondIds = new ArrayList<>();
-            for (int index = 0; index < 2_048; index++) {
+            for (int index = 0; index <= 2_048; index++) {
                 firstIds.add(first.register(Duration.ofHours(1)).id());
                 secondIds.add(second.register(Duration.ofHours(1)).id());
             }
 
-            ZLinkFrameworkException failure = assertThrows(
-                ZLinkFrameworkException.class,
-                () -> second.register(Duration.ofHours(1)));
-            assertEquals(ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED, failure.kind());
-
-            assertTrue(first.discard(firstIds.removeLast()));
-            UUID admittedAfterRelease =
+            UUID admittedAfterFormerLimit =
                 second.register(Duration.ofHours(1)).id();
             firstIds.forEach(id -> assertTrue(first.discard(id)));
             secondIds.forEach(id -> assertTrue(second.discard(id)));
-            assertTrue(second.discard(admittedAfterRelease));
+            assertTrue(second.discard(admittedAfterFormerLimit));
         } finally {
             scheduler.shutdownNow();
         }
     }
 
     @Test
-    void runningCallbackKeepsItsProcessReservation() throws Exception {
+    void runningCallbackDoesNotCapFurtherRegistrations() throws Exception {
         ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor();
         try (ZLinkServiceOperationRegistry first =
@@ -411,21 +404,14 @@ final class ZLinkServiceOperationRegistryTest {
                 }
             });
             List<UUID> pending = new ArrayList<>();
-            for (int index = 1;
-                 index < ZLinkServiceOperationRegistry.DEFAULT_MAX_PENDING_OPERATIONS;
-                 index++) {
+            for (int index = 1; index <= 4_096; index++) {
                 pending.add(second.register(Duration.ofHours(1)).id());
             }
 
             try {
                 assertTrue(first.complete(running.id(), "reply"));
                 assertTrue(callbackEntered.await(1, TimeUnit.SECONDS));
-                ZLinkFrameworkException failure = assertThrows(
-                    ZLinkFrameworkException.class,
-                    () -> second.register(Duration.ofHours(1)));
-                assertEquals(
-                    ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
-                    failure.kind());
+                pending.add(second.register(Duration.ofHours(1)).id());
                 pending.forEach(id -> assertTrue(second.discard(id)));
                 pending.clear();
             } finally {

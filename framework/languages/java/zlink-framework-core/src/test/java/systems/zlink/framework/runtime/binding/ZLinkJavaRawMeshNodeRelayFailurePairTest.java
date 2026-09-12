@@ -59,13 +59,13 @@ final class ZLinkJavaRawMeshNodeRelayFailurePairTest {
     }
 
     @Test
-    void actorDispatchCapacityAndRejectionKeepTheirFrameworkKinds() {
+    void actorDispatchUnavailableAndRejectionKeepTheirFrameworkKinds() {
         assertArrayEquals(
-            new int[] {106, 18},
+            new int[] {105, 17},
             ZLinkJavaRawMeshNode.relayedFailurePair(
                 new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
-                    "application queue is full")));
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "actor placement unavailable")));
         assertArrayEquals(
             new int[] {106, 15},
             ZLinkJavaRawMeshNode.relayedFailurePair(

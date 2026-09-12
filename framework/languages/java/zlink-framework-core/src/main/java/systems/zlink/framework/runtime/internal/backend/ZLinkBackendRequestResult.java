@@ -24,7 +24,7 @@ public enum ZLinkBackendRequestResult {
      * request_failure_mapper reply_header_exception coarse fallback: because the
      * terminal comes from a remote target, a terminal-only Conflict/Busy is the
      * target's owner/queue state (Unavailable), not a source-owned
-     * CapacityExceeded. A fine failure code refines this — see
+     * queue capacity error. A fine failure code refines this — see
      * {@link #toFrameworkErrorKind(int)}. Spec 32-framework-error-model:81,99-103.
      */
     public ZLinkFrameworkErrorKind toFrameworkErrorKind() {
@@ -36,9 +36,7 @@ public enum ZLinkBackendRequestResult {
             case REJECTED -> ZLinkFrameworkErrorKind.REJECTED;
             case CONFLICT, BUSY -> ZLinkFrameworkErrorKind.UNAVAILABLE;
             case NOT_CONNECTED -> ZLinkFrameworkErrorKind.UNAVAILABLE;
-            //  Backpressured(113) is the bounded admission terminal: a target's
-            //  placement/admission capacity is CapacityExceeded (spec 32:104-108).
-            case BACKPRESSURED -> ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED;
+            case BACKPRESSURED -> ZLinkFrameworkErrorKind.UNAVAILABLE;
             case INVALID_ARGUMENT, INVALID_STATE ->
                 ZLinkFrameworkErrorKind.INVALID_OPERATION;
             case OK, INTERNAL_ERROR, NOT_SUPPORTED ->

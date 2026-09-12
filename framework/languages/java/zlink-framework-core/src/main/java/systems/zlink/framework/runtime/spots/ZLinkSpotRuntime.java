@@ -492,8 +492,7 @@ public final class ZLinkSpotRuntime
         this.workerPool = new ZLinkWorkerPool(
             registration.workers().minThreads(),
             registration.workers().maxThreads(),
-            registration.workers().idleTimeout(),
-            registration.workers().maxQueueLength());
+            registration.workers().idleTimeout());
         ZLinkScannedHandlerCatalog scannedHandlers =
             ZLinkHandlerScanner.scan(registration.handlerPackageMarkers());
         this.actorHandlers = new ZLinkSpotActorHandlerCatalog(scannedHandlers, serializer);
@@ -1300,12 +1299,12 @@ public final class ZLinkSpotRuntime
                     }
                     if (verdict == UserSpotPlacementVerdict.TERMINAL) {
                         throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
-                            "User Spot capacity exceeded");
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "User Spot placement is unavailable");
                     }
                     if (System.currentTimeMillis() >= deadlineUnixMs) {
                         throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
                             "No Ready User Spot placement target");
                     }
                     return null;
@@ -1372,7 +1371,7 @@ public final class ZLinkSpotRuntime
         RETRY,
         /**
          * Every node that serves this stable type is out of room. For
-         * Create/GetOrCreate that is `CapacityExceeded`
+         * Create/GetOrCreate that is `Unavailable`
          * ([06-framework-api] §13, [13-mesh-node] §5.1).
          */
         TERMINAL

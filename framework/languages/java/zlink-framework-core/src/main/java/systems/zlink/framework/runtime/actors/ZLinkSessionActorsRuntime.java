@@ -50,7 +50,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private static final boolean STREAM_TRACE =
         "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
     private static final ZLinkSessionRelayHeaders RELAY_HEADERS = new ZLinkSessionRelayHeaders();
-    static final int TARGET_OUTBOUND_CAPACITY = 4_096;
     private final ZLinkBackendStreamSocket stream;
     private final ZLinkInternalSpotNode spotNode;
     private final RoutingId sessionRid;
@@ -61,7 +60,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private final boolean nativeSessionRelayAttached;
     private final ZLinkStreamCodec defaultCodec;
     private final ZLinkMessageFlowTracer flow;
-    private final int targetOutboundCapacity;
     private final Duration sessionRelocationSealTimeout;
     // This runtime is one Session owner's C2 state boundary.  Keep the concurrent
     // binding views below for the synchronous ZLinkSessionActors query surface;
@@ -244,8 +242,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         this(
             spotNode, stream, sessionRid, actors, serializer, routeReady,
             localActorDispatcher, nativeSessionRelayAttached, defaultCodec,
-            flow, TARGET_OUTBOUND_CAPACITY,
-            defaultSessionRelocationSealTimeout());
+            flow, defaultSessionRelocationSealTimeout());
     }
 
     public ZLinkSessionActorsRuntime(
@@ -260,48 +257,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         ZLinkStreamCodec defaultCodec,
         ZLinkMessageFlowTracer flow,
         Duration sessionRelocationSealTimeout) {
-        this(
-            spotNode, stream, sessionRid, actors, serializer, routeReady,
-            localActorDispatcher, nativeSessionRelayAttached, defaultCodec,
-            flow, TARGET_OUTBOUND_CAPACITY, sessionRelocationSealTimeout);
-    }
-
-    ZLinkSessionActorsRuntime(
-        ZLinkInternalSpotNode spotNode,
-        ZLinkBackendStreamSocket stream,
-        RoutingId sessionRid,
-        ZLinkActorRuntime actors,
-        ZLinkMessageSerializer serializer,
-        Predicate<RoutingId> routeReady,
-        LocalActorDispatcher localActorDispatcher,
-        boolean nativeSessionRelayAttached,
-        ZLinkStreamCodec defaultCodec,
-        ZLinkMessageFlowTracer flow,
-        int targetOutboundCapacity) {
-        this(
-            spotNode, stream, sessionRid, actors, serializer, routeReady,
-            localActorDispatcher, nativeSessionRelayAttached, defaultCodec,
-            flow, targetOutboundCapacity,
-            defaultSessionRelocationSealTimeout());
-    }
-
-    ZLinkSessionActorsRuntime(
-        ZLinkInternalSpotNode spotNode,
-        ZLinkBackendStreamSocket stream,
-        RoutingId sessionRid,
-        ZLinkActorRuntime actors,
-        ZLinkMessageSerializer serializer,
-        Predicate<RoutingId> routeReady,
-        LocalActorDispatcher localActorDispatcher,
-        boolean nativeSessionRelayAttached,
-        ZLinkStreamCodec defaultCodec,
-        ZLinkMessageFlowTracer flow,
-        int targetOutboundCapacity,
-        Duration sessionRelocationSealTimeout) {
-        if (targetOutboundCapacity <= 0) {
-            throw new IllegalArgumentException(
-                "targetOutboundCapacity must be positive");
-        }
         this.spotNode = spotNode;
         this.stream = stream;
         this.sessionRid = sessionRid;
@@ -312,7 +267,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         this.nativeSessionRelayAttached = nativeSessionRelayAttached;
         this.defaultCodec = defaultCodec == null ? ZLinkStreamCodec.JSON : defaultCodec;
         this.flow = flow;
-        this.targetOutboundCapacity = targetOutboundCapacity;
         this.sessionRelocationSealTimeout = validateSessionRelocationSealTimeout(
             sessionRelocationSealTimeout);
     }
@@ -1080,8 +1034,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             TargetOutboundBinding outbound =
                 targetOutboundBindings.get(actorId);
             if (outbound == null) {
-                outbound = new TargetOutboundBinding(
-                    command, targetOutboundCapacity);
+                outbound = new TargetOutboundBinding(command);
                 targetOutboundBindings.put(actorId, outbound);
             } else if (!outbound.matchesBinding(command)) {
                 return CompletableFuture.failedFuture(
@@ -1709,7 +1662,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         private final long objectGeneration;
         private final RoutingId sessionRid;
         private final long bindingGeneration;
-        private final int capacity;
         private final ArrayDeque<TargetOutboundEntry> queue =
             new ArrayDeque<>();
         private TargetOutboundEpoch currentEpoch;
@@ -1719,13 +1671,11 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         private boolean stopped;
 
         private TargetOutboundBinding(
-            ZLinkServiceM6BWireCodec.SessionRelocationSeal seal,
-            int capacity) {
+            ZLinkServiceM6BWireCodec.SessionRelocationSeal seal) {
             actorId = seal.actor().actor().actorId();
             objectGeneration = seal.actor().actor().generation();
             sessionRid = seal.session().sessionRid();
             bindingGeneration = seal.session().bindingGeneration();
-            this.capacity = capacity;
         }
 
         private boolean matchesBinding(
@@ -1758,10 +1708,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             if (stopped) {
                 return TargetOutboundAdmission.rejected(
                     TargetOutboundSettlement.SHUTDOWN);
-            }
-            if (queue.size() >= capacity) {
-                return TargetOutboundAdmission.rejected(
-                    TargetOutboundSettlement.BACKPRESSURED);
             }
             TargetOutboundEntryState state = epoch.acceptedFence == null
                 ? TargetOutboundEntryState.PENDING

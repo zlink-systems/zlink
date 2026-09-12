@@ -108,7 +108,7 @@ final class ZLinkActorEntrySpotJoinCall implements ZLinkActorJoinCall {
                 .thenCompose(result -> {
                     if (result.result() != ZLinkBackendRequestResult.OK) {
                         //  Spec 15-spot-actor:364-375 — a Join Failed.Kind is a
-                        //  runtime terminal (NotFound/Unavailable/CapacityExceeded/
+                        //  runtime terminal (NotFound/Unavailable/
                         //  ...), never NotConfigured.
                         throw new ZLinkFrameworkException(
                             result.result().toFrameworkErrorKind(),

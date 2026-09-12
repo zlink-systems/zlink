@@ -6,13 +6,11 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkWorkerFailedException;
-import systems.zlink.framework.errors.ZLinkWorkerQueueFullException;
 import systems.zlink.framework.errors.ZLinkWorkerTimeoutException;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.spots.ZLinkWorkerCall;
@@ -91,40 +89,31 @@ final class DefaultZLinkWorkerCall<T> implements ZLinkWorkerCall<T> {
         if (result.isDone()) {
             unregisterShutdown.get().run();
         }
-        try {
-            pool.execute(() -> {
-                T value;
-                try {
-                    value = work.run(cancellation);
-                } catch (CancellationException ex) {
-                    if (settled.compareAndSet(false, true)) {
-                        cancelTimeout(timeoutFuture);
-                        result.cancel(false);
-                    }
-                    return;
-                } catch (Exception ex) {
-                    if (settled.compareAndSet(false, true)) {
-                        cancelTimeout(timeoutFuture);
-                        result.completeExceptionally(
-                            new ZLinkWorkerFailedException("worker call failed", ex));
-                    }
-                    return;
-                }
-                // Late completion after a timeout: the settle flag is already
-                // taken, so the result is dropped without user callbacks.
+        pool.execute(() -> {
+            T value;
+            try {
+                value = work.run(cancellation);
+            } catch (CancellationException ex) {
                 if (settled.compareAndSet(false, true)) {
                     cancelTimeout(timeoutFuture);
-                    result.complete(value);
+                    result.cancel(false);
                 }
-            });
-        } catch (RejectedExecutionException ex) {
-            cancellation.cancel();
-            cancelTimeout(timeoutFuture);
-            if (settled.compareAndSet(false, true)) {
-                result.completeExceptionally(
-                    new ZLinkWorkerQueueFullException("worker queue is full"));
+                return;
+            } catch (Exception ex) {
+                if (settled.compareAndSet(false, true)) {
+                    cancelTimeout(timeoutFuture);
+                    result.completeExceptionally(
+                        new ZLinkWorkerFailedException("worker call failed", ex));
+                }
+                return;
             }
-        }
+            // Late completion after a timeout: the settle flag is already
+            // taken, so the result is dropped without user callbacks.
+            if (settled.compareAndSet(false, true)) {
+                cancelTimeout(timeoutFuture);
+                result.complete(value);
+            }
+        });
     }
 
     private void ensureSingleTerminator() {

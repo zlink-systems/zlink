@@ -684,13 +684,13 @@ final class ZLinkM6ARuntimeContractTest {
     }
 
     @Test
-    void mailboxSerializesEachOwnerAndKeepsInfrastructureReserve() {
-        var mailbox = new ZLinkServiceMailbox(2, 512, 1, 256);
+    void mailboxSerializesEachOwnerWithoutAnOwnerAdmissionCap() {
+        var mailbox = new ZLinkServiceMailbox();
         assertTrue(mailbox.tryEnqueue(record(
             "node:a", ZLinkServiceMailbox.Domain.APPLICATION, 4)));
         assertTrue(mailbox.tryEnqueue(record(
             "node:a", ZLinkServiceMailbox.Domain.APPLICATION, 4)));
-        assertFalse(mailbox.tryEnqueue(record(
+        assertTrue(mailbox.tryEnqueue(record(
             "node:a", ZLinkServiceMailbox.Domain.APPLICATION, 1)));
         assertTrue(mailbox.tryEnqueue(record(
             "node:b", ZLinkServiceMailbox.Domain.APPLICATION, 1)));
@@ -699,14 +699,14 @@ final class ZLinkM6ARuntimeContractTest {
 
         var first = mailbox.tryClaim(
             ZLinkServiceMailbox.Domain.APPLICATION, 1, 256).orElseThrow();
-        assertEquals(3, mailbox.pendingMessages(
+        assertEquals(4, mailbox.pendingMessages(
             ZLinkServiceMailbox.Domain.APPLICATION));
-        assertFalse(mailbox.tryEnqueue(record(
+        assertTrue(mailbox.tryEnqueue(record(
             "node:a", ZLinkServiceMailbox.Domain.APPLICATION, 1)));
         assertTrue(mailbox.tryClaim(
             ZLinkServiceMailbox.Domain.APPLICATION, 1, 256).isPresent());
         assertTrue(mailbox.release(first));
-        assertEquals(2, mailbox.pendingMessages(
+        assertEquals(4, mailbox.pendingMessages(
             ZLinkServiceMailbox.Domain.APPLICATION));
         var second = mailbox.tryClaim(
             ZLinkServiceMailbox.Domain.APPLICATION, 1, 256).orElseThrow();

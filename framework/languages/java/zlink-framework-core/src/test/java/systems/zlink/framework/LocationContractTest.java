@@ -264,13 +264,12 @@ final class LocationContractTest {
             Map.entry("NOT_CONFIGURED", 3),
             Map.entry("REJECTED", 4),
             Map.entry("UNAVAILABLE", 5),
-            Map.entry("CAPACITY_EXCEEDED", 6),
-            Map.entry("DEADLINE_EXCEEDED", 7),
-            Map.entry("SHUTTING_DOWN", 8),
-            Map.entry("PROTOCOL_ERROR", 9),
-            Map.entry("INVALID_OPERATION", 10),
-            Map.entry("DATA_LOST", 11),
-            Map.entry("INTERNAL_FAILURE", 12)));
+            Map.entry("DEADLINE_EXCEEDED", 6),
+            Map.entry("SHUTTING_DOWN", 7),
+            Map.entry("PROTOCOL_ERROR", 8),
+            Map.entry("INVALID_OPERATION", 9),
+            Map.entry("DATA_LOST", 10),
+            Map.entry("INTERNAL_FAILURE", 11)));
 
         assertEnumValues(ZLinkLocationRole.class, Map.of(
             "INVALID", 0,

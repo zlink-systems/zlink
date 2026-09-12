@@ -7,8 +7,7 @@ import java.time.Duration;
  * {@code context.runCpuWorker(...)}.
  *
  * <p>Defaults: {@code minThreads=0}, {@code maxThreads=max(2, cpuCount*2)},
- * {@code idleTimeout=30s}, {@code maxQueueLength=1024}. A full queue fails the
- * submit immediately; there is no wait or caller-runs policy.
+ * {@code idleTimeout=30s}. Work waits for a worker when every worker is busy.
  */
 public interface ZLinkWorkerOptions {
     ZLinkWorkerOptions minThreads(int minThreads);
@@ -17,5 +16,4 @@ public interface ZLinkWorkerOptions {
 
     ZLinkWorkerOptions idleTimeout(Duration idleTimeout);
 
-    ZLinkWorkerOptions maxQueueLength(int maxQueueLength);
 }

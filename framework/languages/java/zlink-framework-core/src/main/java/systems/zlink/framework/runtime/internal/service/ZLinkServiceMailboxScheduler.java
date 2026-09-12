@@ -9,7 +9,7 @@ import java.util.Set;
 import java.util.function.Consumer;
 
 /**
- * Bounded level-ready mailbox scheduler shared by service runtime domains.
+ * Level-ready mailbox scheduler shared by service runtime domains.
  *
  * <p>Admission, budget accounting, and the empty-to-ready transition occur
  * under one monitor. A mailbox can have only one active claim, matching the
@@ -43,22 +43,14 @@ final class ZLinkServiceMailboxScheduler {
 
     enum Admission {
         ACCEPTED,
-        SEALED,
-        BACKPRESSURED
+        SEALED
     }
 
-    private final long messageLimit;
-    private final long byteLimit;
     private final Map<Key, Mailbox> mailboxes = new HashMap<>();
     private final Set<Key> ready = new LinkedHashSet<>();
     private boolean sealed;
 
-    ZLinkServiceMailboxScheduler(long messageLimit, long byteLimit) {
-        if (messageLimit <= 0 || byteLimit <= 0) {
-            throw new IllegalArgumentException("mailbox limits must be positive");
-        }
-        this.messageLimit = messageLimit;
-        this.byteLimit = byteLimit;
+    ZLinkServiceMailboxScheduler() {
     }
 
     synchronized Admission admit(Owner owner, Domain domain, Work work) {
@@ -70,10 +62,6 @@ final class ZLinkServiceMailboxScheduler {
         }
         Key key = new Key(owner, domain);
         Mailbox mailbox = mailboxes.computeIfAbsent(key, ignored -> new Mailbox());
-        if (mailbox.queue.size() >= messageLimit
-            || work.retainedBytes() > byteLimit - mailbox.pendingBytes) {
-            return Admission.BACKPRESSURED;
-        }
         boolean wasEmpty = mailbox.queue.isEmpty();
         mailbox.queue.addLast(work);
         mailbox.pendingBytes += work.retainedBytes();

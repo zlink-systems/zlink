@@ -21,7 +21,6 @@ import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.errors.ZLinkWorkerFailedException;
-import systems.zlink.framework.errors.ZLinkWorkerQueueFullException;
 import systems.zlink.framework.errors.ZLinkWorkerTimeoutException;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.spots.ZLinkIoWorkerTask;
@@ -41,7 +40,7 @@ class DefaultZLinkWorkerCallTest {
 
     @Test
     void yieldRejectedBeforeWorkerSubmissionOutsideSharedSpotGate() {
-        pool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(30), 4);
+        pool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(30));
         AtomicInteger executions = new AtomicInteger();
         var execution = new systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.ApplicationExecution(
@@ -65,7 +64,7 @@ class DefaultZLinkWorkerCallTest {
 
     @Test
     void submitCompletesWithWorkerResult() throws Exception {
-        pool = new ZLinkWorkerPool(0, 2, Duration.ofSeconds(30), 16);
+        pool = new ZLinkWorkerPool(0, 2, Duration.ofSeconds(30));
         AtomicReference<String> workerThread = new AtomicReference<>();
 
         Integer result = new DefaultZLinkWorkerCall<>(pool, cancellation -> {
@@ -79,8 +78,8 @@ class DefaultZLinkWorkerCallTest {
     }
 
     @Test
-    void queueFullFailsWithoutBlocking() throws Exception {
-        pool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(30), 1);
+    void queuedWorkWaitsForTheBusyWorker() throws Exception {
+        pool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(30));
         CountDownLatch release = new CountDownLatch(1);
         try {
             new DefaultZLinkWorkerCall<>(pool, cancellation -> {
@@ -91,13 +90,12 @@ class DefaultZLinkWorkerCallTest {
             new DefaultZLinkWorkerCall<>(pool, cancellation -> 0).submit();
             awaitCondition(() -> pool.queueLength() == 1);
 
-            CompletableFuture<Integer> overflow =
+            CompletableFuture<Integer> queued =
                 new DefaultZLinkWorkerCall<Integer>(pool, cancellation -> 0)
                     .submit().toCompletableFuture();
-            ExecutionException failure = assertThrows(
-                ExecutionException.class,
-                () -> overflow.get(5, TimeUnit.SECONDS));
-            assertInstanceOf(ZLinkWorkerQueueFullException.class, failure.getCause());
+            assertTrue(!queued.isDone());
+            release.countDown();
+            assertEquals(0, queued.get(5, TimeUnit.SECONDS));
         } finally {
             release.countDown();
         }
@@ -105,7 +103,7 @@ class DefaultZLinkWorkerCallTest {
 
     @Test
     void timeoutFailsCallerAndDropsLateCompletion() throws Exception {
-        pool = new ZLinkWorkerPool(0, 2, Duration.ofSeconds(30), 16);
+        pool = new ZLinkWorkerPool(0, 2, Duration.ofSeconds(30));
         CountDownLatch release = new CountDownLatch(1);
         AtomicReference<ZLinkWorkerCancellation> cancellation = new AtomicReference<>();
         DefaultZLinkWorkerCall<Integer> call = new DefaultZLinkWorkerCall<>(pool, signal -> {
@@ -128,7 +126,7 @@ class DefaultZLinkWorkerCallTest {
 
     @Test
     void workerExceptionMapsToWorkerFailure() {
-        pool = new ZLinkWorkerPool(0, 2, Duration.ofSeconds(30), 16);
+        pool = new ZLinkWorkerPool(0, 2, Duration.ofSeconds(30));
         CompletableFuture<Integer> result =
             new DefaultZLinkWorkerCall<Integer>(pool, cancellation -> {
                 throw new IllegalStateException("boom");
@@ -141,7 +139,7 @@ class DefaultZLinkWorkerCallTest {
 
     @Test
     void secondSubmitThrows() {
-        pool = new ZLinkWorkerPool(0, 2, Duration.ofSeconds(30), 16);
+        pool = new ZLinkWorkerPool(0, 2, Duration.ofSeconds(30));
         DefaultZLinkWorkerCall<Integer> call =
             new DefaultZLinkWorkerCall<>(pool, cancellation -> 1);
         call.submit();
@@ -169,8 +167,8 @@ class DefaultZLinkWorkerCallTest {
     }
 
     @Test
-    void ioWorkerDoesNotOccupyBoundedCpuPool() throws Exception {
-        pool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(30), 1);
+    void ioWorkerDoesNotOccupyCpuPool() throws Exception {
+        pool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(30));
         CompletableFuture<Integer> pending = new CompletableFuture<>();
 
         CompletableFuture<Integer> result =
@@ -185,7 +183,7 @@ class DefaultZLinkWorkerCallTest {
 
     @Test
     void ioWorkerTimeoutSignalsCancellationAndDropsLateCompletion() throws Exception {
-        pool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(30), 1);
+        pool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(30));
         CompletableFuture<Integer> pending = new CompletableFuture<>();
         AtomicReference<ZLinkWorkerCancellation> cancellation = new AtomicReference<>();
 
@@ -207,7 +205,7 @@ class DefaultZLinkWorkerCallTest {
 
     @Test
     void poolShutdownSignalsRunningWorker() throws Exception {
-        pool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(30), 1);
+        pool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(30));
         CountDownLatch started = new CountDownLatch(1);
         CompletableFuture<Boolean> observed = new CompletableFuture<>();
 
@@ -229,7 +227,7 @@ class DefaultZLinkWorkerCallTest {
 
     @Test
     void callerCancellationSignalsRunningWorkerAndDropsLateCompletion() throws Exception {
-        pool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(30), 1);
+        pool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(30));
         CountDownLatch started = new CountDownLatch(1);
         AtomicReference<ZLinkWorkerCancellation> cancellation = new AtomicReference<>();
         CompletableFuture<Integer> result =

@@ -223,7 +223,6 @@ public final class PlayerActor implements ZLinkActor {
             case "DEADLINE_EXCEEDED" -> "DeadlineExceeded";
             case "SHUTTING_DOWN" -> "ShuttingDown";
             case "NOT_FOUND" -> "NotFound";
-            case "CAPACITY_EXCEEDED" -> "CapacityExceeded";
             case "REJECTED" -> "Rejected";
             default -> "InternalFailure";
         };

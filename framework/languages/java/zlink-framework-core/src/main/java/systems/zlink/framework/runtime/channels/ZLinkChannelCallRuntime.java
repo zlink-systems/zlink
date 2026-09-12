@@ -82,8 +82,7 @@ final class ZLinkChannelCallRuntime {
         LongSupplier nanoTime) {
         this.flow = flow;
         this.operations = new ZLinkServiceOperationRegistry(
-            timeoutExecutor, ZLinkServiceOperationRegistry.DEFAULT_MAX_PENDING_OPERATIONS,
-            closedFailure(), () -> requestFailure(
+            timeoutExecutor, closedFailure(), () -> requestFailure(
                 new TimeoutException("service operation timed out")), nanoTime);
         this.nanoTime = nanoTime;
         this.replyDecoder = replyDecoder;

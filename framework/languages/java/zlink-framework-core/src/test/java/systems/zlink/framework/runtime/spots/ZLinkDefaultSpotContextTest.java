@@ -47,7 +47,7 @@ final class ZLinkDefaultSpotContextTest {
         TestHost host = new TestHost();
         try (Message sendPayload = Message.from("send");
              Message requestPayload = Message.from("request");
-             ZLinkWorkerPool workers = new ZLinkWorkerPool(1, 1, Duration.ofSeconds(5), 4)) {
+             ZLinkWorkerPool workers = new ZLinkWorkerPool(1, 1, Duration.ofSeconds(5))) {
             ZLinkSendCall send = new ZLinkSpotDirectSendCall(
                 null, host.backendSpot, RoutingId.from("target"), "target-spot", 1,
                 sendPayload, Optional.of("packet"));
@@ -448,7 +448,7 @@ final class ZLinkDefaultSpotContextTest {
         throws Exception {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         try (ZLinkWorkerPool workerPool = new ZLinkWorkerPool(
-                0, 1, java.time.Duration.ofSeconds(1), 1)) {
+                0, 1, java.time.Duration.ofSeconds(1))) {
             TestHost host = new TestHost(executor);
             DefaultInstanceSpotContext context =
                 host.instanceContext(workerPool);

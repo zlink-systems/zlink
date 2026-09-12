@@ -325,7 +325,6 @@ public final class ZLinkChannelEnvelope {
             case NOT_CONFIGURED -> "not_configured";
             case REJECTED -> "rejected";
             case UNAVAILABLE -> "unavailable";
-            case CAPACITY_EXCEEDED -> "capacity_exceeded";
             case DEADLINE_EXCEEDED -> "deadline_exceeded";
             case SHUTTING_DOWN -> "shutting_down";
             case PROTOCOL_ERROR -> "protocol_error";
@@ -336,7 +335,7 @@ public final class ZLinkChannelEnvelope {
     }
 
     /**
-     * Maps a wire {@code errorCode} back to the public kind. Only the 13
+     * Maps a wire {@code errorCode} back to the public kind. Only the 12
      * canonical snake_case names are valid; an uninterpretable error reply is
      * a protocol error.
      */
@@ -351,7 +350,6 @@ public final class ZLinkChannelEnvelope {
             case "not_configured": return ZLinkFrameworkErrorKind.NOT_CONFIGURED;
             case "rejected": return ZLinkFrameworkErrorKind.REJECTED;
             case "unavailable": return ZLinkFrameworkErrorKind.UNAVAILABLE;
-            case "capacity_exceeded": return ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED;
             case "deadline_exceeded": return ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED;
             case "shutting_down": return ZLinkFrameworkErrorKind.SHUTTING_DOWN;
             case "protocol_error": return ZLinkFrameworkErrorKind.PROTOCOL_ERROR;

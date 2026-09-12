@@ -65,11 +65,6 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
             Runnable::run,
             ZLinkExecutionLanePolicy.generic(),
             1,
-            4,
-            1,
-            4,
-            4,
-            1,
             java.time.Duration.ofSeconds(1));
         CompletableFuture<Void> firstStarted = new CompletableFuture<>();
         CompletableFuture<Void> firstActive = new CompletableFuture<>();
@@ -98,7 +93,8 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
 
         firstActive.complete(null);
         transferredStarted.get();
-        assertFalse(serial.tryEnqueue(
+        // The serial queue has no bound of its own, so a further enqueue is accepted.
+        assertTrue(serial.tryEnqueue(
             () -> CompletableFuture.completedFuture(null)));
 
         transferredActive.complete(null);

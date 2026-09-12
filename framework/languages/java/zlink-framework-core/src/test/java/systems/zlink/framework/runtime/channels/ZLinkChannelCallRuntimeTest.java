@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -21,12 +22,72 @@ import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 
 final class ZLinkChannelCallRuntimeTest {
+    @Test
+    void routeMeshAndClientServerRequestsBeyondFormerCompletionCapAllComplete()
+        throws Exception {
+        try (var scheduler = Executors.newSingleThreadScheduledExecutor()) {
+            var calls = new ZLinkChannelCallRuntime(null, scheduler, null, null, null);
+            AtomicInteger routeRequests = new AtomicInteger();
+            AtomicInteger clientRequests = new AtomicInteger();
+            ZLinkBackendRouterSocket router = (ZLinkBackendRouterSocket)
+                Proxy.newProxyInstance(getClass().getClassLoader(),
+                    new Class<?>[] {ZLinkBackendRouterSocket.class},
+                    (proxy, method, args) -> {
+                        if (method.getName().equals("request")) {
+                            routeRequests.incrementAndGet();
+                            return CompletableFuture.completedFuture(reply());
+                        }
+                        return null;
+                    });
+            ZLinkBackendDealerSocket dealer = (ZLinkBackendDealerSocket)
+                Proxy.newProxyInstance(getClass().getClassLoader(),
+                    new Class<?>[] {ZLinkBackendDealerSocket.class},
+                    (proxy, method, args) -> {
+                        if (method.getName().equals("request")) {
+                            clientRequests.incrementAndGet();
+                            return CompletableFuture.completedFuture(reply());
+                        }
+                        return null;
+                    });
+            List<CompletableFuture<ZLinkBackendReceived>> replies = new ArrayList<>(8_194);
+            Duration timeout = Duration.ofSeconds(10);
+            for (int index = 0; index <= 4_096; index++) {
+                replies.add(calls.requestRoute(ZLinkServiceOperationIds.next(), router,
+                    RoutingId.from("completion-cap-target"), List.of(), timeout)
+                    .toCompletableFuture());
+                replies.add(calls.requestClient(dealer, List.of(), timeout)
+                    .toCompletableFuture());
+            }
+            CompletableFuture.allOf(replies.toArray(CompletableFuture[]::new))
+                .get(10, TimeUnit.SECONDS);
+            replies.forEach(reply -> reply.join().close());
+            assertEquals(4_097, routeRequests.get());
+            assertEquals(4_097, clientRequests.get());
+            calls.beginClose();
+        }
+    }
+
+    private static ZLinkBackendReceived reply() {
+        return new ZLinkBackendReceived(
+            ZLinkBackendRequestResult.OK,
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            new byte[0],
+            new byte[0],
+            List.of(),
+            null,
+            () -> { },
+            null);
+    }
+
     @Test
     void closedRuntimeRejectsNodeChannelAndSpotBeforeBackendSelection() {
         try (var scheduler = Executors.newSingleThreadScheduledExecutor()) {
