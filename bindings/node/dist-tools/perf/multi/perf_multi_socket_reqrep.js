@@ -5,7 +5,7 @@ const readline = require('node:readline');
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createPayload, createRunId, currentEpochNs, sleepImmediate, stampPayload, summarizeMetrics } = require('../common/perf_metrics');
 const { configureTlsClient } = require('../common/perf_tls');
-const { appendMeasurement, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, waitForConnectionReady } = require('./perf_multi_runtime');
+const { POLLCOMPLETION, appendMeasurement, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, waitPollerOne, waitForConnectionReady } = require('./perf_multi_runtime');
 // Read once per process: the runner fixes PERF_PART_COUNT before launching
 // this process, and this is on the per-message path. A per-message
 // `process.env` lookup puts harness instrumentation inside the measured
@@ -25,10 +25,19 @@ function closeParts(parts) {
     for (const part of parts ?? [])
         part?.close?.();
 }
+function pollTimeoutUntil(deadlineNs, maxWaitMs) {
+    const remainingNs = BigInt(deadlineNs) - BigInt(currentEpochNs());
+    if (remainingNs <= 0n)
+        return 0;
+    const remainingMs = Number(remainingNs / 1000000n);
+    return Math.min(maxWaitMs, Math.max(1, remainingMs));
+}
 async function runSocketReqRepClient({ options, pattern, routerClient, serverRoutingId }) {
     const ctx = zlink.createContext();
     applyContextPolicy(ctx, 'client', pattern);
     const sockets = [];
+    let completionPoller = null;
+    let completionEvents = null;
     let rl = null;
     try {
         for (let i = 0; i < options.clients; i += 1) {
@@ -44,6 +53,11 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
         ctx.recalculateAutoHwm();
         for (const socket of sockets) {
             emitMultiSocketHwmDetail(socket, 'endpoint', options.transport, options.msgSize);
+        }
+        completionPoller = zlink.createPoller();
+        completionEvents = zlink.createPollEvents(Math.max(1, sockets.length));
+        for (let index = 0; index < sockets.length; index += 1) {
+            completionPoller.add(sockets[index], pollEvents(POLLCOMPLETION), index);
         }
         // PERF_POLICY.md:469-471 - the C request/reply client uses no runner
         // CLIENT_READY/START barrier; its own CONNECTION_READY gate above is the
@@ -121,25 +135,29 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
             nextSocket = (sendStart + 1) % sockets.length;
             if (requestFailure)
                 throw requestFailure;
-            if (blocked.size === sockets.length) {
-                await Promise.race(blocked.values());
-            }
-        }
-        while (blocked.size > 0 && !requestFailure) {
-            await Promise.race(blocked.values());
-        }
-        if (requestFailure)
-            throw requestFailure;
-        const drainStopNs = currentEpochNs()
-            + BigInt(Math.max(1_000, requestTimeoutMs * 4)) * 1000000n;
-        while (pending.size > 0 && currentEpochNs() < drainStopNs && !requestFailure) {
+            // Match the C multi REQREP turn: after one bounded socket sweep, drain
+            // the single completion-only poller once and let Promise continuations
+            // run. A fully backpressured sweep may wait for the Core signal; a sweep
+            // that submitted work only probes readiness.
+            const waitMs = blocked.size === sockets.length
+                ? pollTimeoutUntil(activeStopNs, 50)
+                : 0;
+            waitPollerOne(completionPoller, completionEvents, waitMs);
             await sleepImmediate();
         }
-        if (pending.size > 0) {
-            throw new Error('request completion drain timed out');
+        const drainStopNs = currentEpochNs()
+            + BigInt(Math.max(1_000, requestTimeoutMs * 4)) * 1000000n;
+        while ((pending.size > 0 || blocked.size > 0)
+            && currentEpochNs() < drainStopNs && !requestFailure) {
+            waitPollerOne(completionPoller, completionEvents, pollTimeoutUntil(drainStopNs, 50));
+            await sleepImmediate();
         }
         if (requestFailure)
             throw requestFailure;
+        if (pending.size > 0 || blocked.size > 0) {
+            throw new Error('request completion drain timed out '
+                + `(replies=${pending.size}, admissions=${blocked.size})`);
+        }
         const result = await collector.finish();
         for (const line of summarizeMetrics(pattern, options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted, result.latencyMeanNs)) {
             console.log(line);
@@ -163,6 +181,8 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
     }
     finally {
         rl?.close();
+        completionEvents?.close();
+        completionPoller?.close();
         for (const socket of sockets)
             socket.close();
         ctx.close();
