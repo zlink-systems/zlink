@@ -150,7 +150,10 @@ bench에서 옳은 비교인 이유는 아래와 같다.
 - 기본 payload 크기는 `1024,4096` bytes다.
 - `request-backpressure` 패턴에는 미완료 request 상한 설정이 없다. 이 패턴에서 깊이는
   설정하는 조건이 아니라 측정해 기록하는 결과다(§5.2). `request_window` 설정은 이 bench에 없다.
-- 기본 send concurrency는 `8`이다.
+- 기본 send concurrency는 `8`이다. **이것은 stream 수이지 연결 수가 아니다.**
+  세 행 모두 서버 간 연결은 **하나**를 쓴다 — gRPC는 채널 하나를 stub 8개가 공유하고,
+  raw binding은 ROUTER 하나를 stream 8개가 공유하며, framework는 RouteMesh socket 하나다.
+  연결 수가 행마다 다르면 §7.2의 비율이 계층 비용이 아니라 연결 수 차이를 잰다.
 - gRPC와 ZLink framework는 같은 protobuf DTO를 사용한다. ZLink raw binding은 framework를
   거치지 않을 뿐 wire 모양은 같다. envelope 헤더 part 하나와 protobuf로 인코딩한
   `BenchPayload` part 하나, 모두 두 part로 보낸다. 측정 header 29 bytes는 그 protobuf

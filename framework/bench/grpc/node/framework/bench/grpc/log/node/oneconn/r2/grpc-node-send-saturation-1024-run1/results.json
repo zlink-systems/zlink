@@ -1,0 +1,80 @@
+{
+  "schema": "with-grpc-cell-v1",
+  "metadata": {
+    "diagnosticsSchema": "with-grpc-cell-v1",
+    "language": "node",
+    "nodeVersion": "v22.23.2",
+    "grpcJsVersion": "1.14.4",
+    "protoLoaderVersion": "0.7.15",
+    "zlinkBindingVersion": "0.18.0",
+    "grpcServerConfiguration": "@grpc/grpc-js Server, default options, insecure loopback",
+    "logicalCores": 20,
+    "clientSaturationMetric": "event_loop_utilization",
+    "clientParallelismCeiling": 1,
+    "cpu": "Intel(R) Core(TM) Ultra 7 265K",
+    "kernel": "6.6.87.2-microsoft-standard-WSL2",
+    "commit": "af0046fff531988d1cd1790b3f29fe94b3d26cd6",
+    "rawSocket": "router",
+    "warmup": 1000,
+    "requestWindow": 100,
+    "sendConcurrency": 8,
+    "triggerUrl": "http://127.0.0.1:5220",
+    "statsUrl": "http://127.0.0.1:5221",
+    "targetEndpoint": "127.0.0.1:5222",
+    "targetCommandEndpoint": null,
+    "targetStatsUrl": "http://127.0.0.1:5223",
+    "generatedUtc": "2026-09-12T23:06:30.532Z"
+  },
+  "cells": [
+    {
+      "implementation": "grpc-node",
+      "pattern": "send-saturation",
+      "payload_size": 1024,
+      "role": "source",
+      "trigger": {
+        "runId": "20260913_080624-run1",
+        "cellId": "grpc-node-send-saturation-1024",
+        "pattern": "send-saturation",
+        "payloadBytes": 1024,
+        "durationMs": 5000,
+        "warmup": 1000,
+        "endpoint": "http://127.0.0.1:5220/bench/start",
+        "receivedAtUnixMs": 1789254385488
+      },
+      "streams": {
+        "count": 8,
+        "inFlightPerStream": 1,
+        "implementation": "Node loop per logical stream; pause only on BACKPRESSURED admission"
+      },
+      "target_stats": {
+        "received": 55264,
+        "errors": 0,
+        "drainMs": 286.0
+      },
+      "completed": 55264,
+      "errors": 0,
+      "client_error_summary": [],
+      "client_error_other_count": 0,
+      "server_errors": 0,
+      "throughput_per_second": 11052.8,
+      "bandwidth_mb_s": 11.3180672,
+      "latency_mean_ms": 0.32374640963375795,
+      "latency_p95_ms": 0.5798819999999999,
+      "latency_p99_ms": 1.834609,
+      "client_cpu_percent": 4.8339431132025545,
+      "client_memory_mb": 226.5703125,
+      "server_cpu_percent": 2.073994,
+      "server_memory_mb": 129.83203125,
+      "client_cores": 0.9667886226405109,
+      "client_parallelism_ceiling": 1,
+      "client_saturation_metric": "event_loop_utilization",
+      "event_loop_utilization": 0.7124697245824659,
+      "peak_in_flight": 8,
+      "request_window": null,
+      "abandoned": 0,
+      "server_received_at_close": 55264,
+      "drain_ms": 286.0,
+      "drain_bound_hit": false
+    }
+  ]
+}

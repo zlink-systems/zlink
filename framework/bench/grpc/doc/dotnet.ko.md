@@ -66,7 +66,7 @@ A의 trigger·stats·phase 규칙은 canonical perf runner의 `ZLink.Framework.P
 | `request-serial` | 1 | 1 | 순차 Task loop 하나 |
 | `request-window` | 1 | 100 | 하나의 logical window를 공유하는 Task 100개 |
 | `request-backpressure` | 1 | 없음 | application in-flight 상한 없이 제출, 256회마다 `Task.Yield` |
-| `send-saturation` | 8 | 1 | stream마다 Task와 gRPC stub 또는 raw ROUTER 하나 |
+| `send-saturation` | 8 | 1 | stream마다 Task 하나. **연결은 세 행 모두 하나다** — gRPC는 채널 하나를 stub 8개가 공유하고, raw는 ROUTER 하나를 stream 8개가 공유하며, framework는 RouteMesh socket 하나다 |
 
 ## 4. 언어별로 다르게 둔 값
 
