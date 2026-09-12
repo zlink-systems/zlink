@@ -38,14 +38,7 @@ export class ZLinkSpotSerialTurnExecutor {
   ) {
     this.scheduler = new ZLinkSerialExecutionQueue(
       (record) => this.runQueuedRecord(record),
-      {
-        ...schedulerOptions,
-        capacityError: schedulerOptions?.capacityError ?? (() =>
-          createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
-            'Spot execution queue capacity was exceeded.'
-          ))
-      }
+      schedulerOptions
     );
   }
 

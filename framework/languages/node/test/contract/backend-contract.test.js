@@ -1592,7 +1592,6 @@ test('Logical Multicast terminal completes while target processing remains block
   );
   assert.equal(coreCalls, 1);
   assert.equal(result.status, ZLinkSubmitStatus.Submitted);
-  assert.equal(runtime.activePublishes.has('play'), false);
   completeTarget();
 });
 
@@ -1646,7 +1645,6 @@ test('Logical Multicast shutdown after handoff does not change the caller termin
     }
   );
   assert.equal(coreCalls, 1);
-  assert.equal(runtime.activePublishes.has('play'), false);
 });
 
 test('Logical Multicast accepts zero subscribers as normal completion', async () => {
@@ -1667,7 +1665,7 @@ test('Logical Multicast accepts zero subscribers as normal completion', async ()
   assert.equal(result.status, ZLinkSubmitStatus.Submitted);
 });
 
-test('Logical Multicast releases its handoff slot after envelope encoding fails', async () => {
+test('Logical Multicast remains usable after envelope encoding fails', async () => {
   const runtime = new framework.ZLinkSpotNodeRuntimeManager({
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},

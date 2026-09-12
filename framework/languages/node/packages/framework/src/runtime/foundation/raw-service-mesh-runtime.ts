@@ -17,7 +17,7 @@ import {
 } from '../application-jobs/application-ingress-record-owner';
 import { OperationRegistry, type PendingOperation } from './operation-registry';
 import { ServiceLivenessRegistry, type ServiceLivenessTick } from './service-liveness-registry';
-import { ServiceMailbox, type ServiceMailboxLimits, type ServiceMailboxRecord } from './service-mailbox';
+import { ServiceMailbox, type ServiceMailboxRecord } from './service-mailbox';
 import {
   ServiceTopologyRegistry,
   sameServiceNodeDescriptor,
@@ -94,7 +94,6 @@ export type RawServiceIngressHandler = (
 export interface RawServiceMeshRuntimeOptions {
   readonly descriptor: ServiceNodeDescriptor;
   readonly resolveAdvertisedEndpoint?: (boundEndpoint: string) => string;
-  readonly mailbox?: Partial<ServiceMailboxLimits>;
   readonly probeIntervalMs?: number;
   readonly peerTimeoutMs?: number;
   readonly bindingPort: ZLinkRawBindingPort;
@@ -198,7 +197,7 @@ export class RawServiceMeshRuntime {
   constructor(options: RawServiceMeshRuntimeOptions) {
     this.descriptor = options.descriptor;
     this.topology = new ServiceTopologyRegistry(options.descriptor);
-    this.mailbox = new ServiceMailbox(undefined, options.onMailboxReady);
+    this.mailbox = new ServiceMailbox(options.onMailboxReady);
     this.liveness = new ServiceLivenessRegistry(options.probeIntervalMs, options.peerTimeoutMs);
     this.bindingPort = options.bindingPort;
     if (options.applicationJobQueue === undefined) {
@@ -1175,7 +1174,7 @@ export class RawServiceMeshRuntime {
       ? encodeNodeRequestHeader(correlation)
       : encodeChannelRequestHeader(correlation, channelName);
     const encodedPayload = this.applicationFrame(payload);
-    const pending = this.operations.reserve(timeoutMs);
+    const pending = this.operations.register(timeoutMs);
     let selectedTargetNodeRoutingId = targetNodeRoutingId;
     if (
       selectedTargetNodeRoutingId !== this.descriptor.nodeRoutingId

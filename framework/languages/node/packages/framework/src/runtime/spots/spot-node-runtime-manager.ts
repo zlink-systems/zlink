@@ -142,22 +142,6 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
   };
 }
 
-interface ZLinkPublishSlotWaiter {
-  readonly resolve: (acquired: boolean) => void;
-  readonly reject: (error: unknown) => void;
-  readonly signal?: AbortSignal;
-  abortHandler?: () => void;
-  timeout?: ReturnType<typeof setTimeout>;
-  deadlineMs?: number;
-  settled: boolean;
-}
-
-interface ZLinkPublishSlotQueue {
-  readonly waiters: Array<ZLinkPublishSlotWaiter | undefined>;
-  head: number;
-  count: number;
-}
-
 export class ZLinkSpotNodeRuntimeManager {
   private readonly meshNodes = new Map<string, ZLinkBackendMeshNode>();
   private readonly meshPumps = new Map<string, ZLinkMeshDispatchPump>();
@@ -168,8 +152,6 @@ export class ZLinkSpotNodeRuntimeManager {
     string,
     ReturnType<ZLinkBackendMeshNode['createPublisher']>
   >();
-  private readonly activePublishes = new Set<string>();
-  private readonly publishSlotWaiters = new Map<string, ZLinkPublishSlotQueue>();
   private disposed = false;
   private readonly autoConnectLoops: ZLinkAutoConnectLoop[] = [];
   private readonly publishedMeshNodeDescriptors =
@@ -829,7 +811,6 @@ export class ZLinkSpotNodeRuntimeManager {
     this.meshPumps.clear();
     const publishers = [...this.publishers.values()];
     this.publishers.clear();
-    this.rejectPublishSlotWaiters(runtimeShutdownError());
     const errors: unknown[] = [];
     const settle = async (operations: readonly Promise<unknown>[]) => {
       const results = await Promise.allSettled(operations);
@@ -1120,76 +1101,32 @@ export class ZLinkSpotNodeRuntimeManager {
     if (publisher === undefined) {
       throw new ZLinkConfigurationException(`RouteMesh '${meshName}' publisher is not started.`);
     }
-    const sendTimeoutMs = this.options.registration.spotNodes
-      .get(meshName)?.publisherConfig?.sendTimeoutMs ?? 1000;
-    const slot = this.acquirePublishSlot(meshName, sendTimeoutMs, signal);
-    if (slot === false) {
-      // The bounded executor-admission tokens are exhausted. Do not retain the
-      // payload, cancellation state, or a timer for this hard-overload call.
-      return Promise.resolve(this.publishTimedOut());
-    }
-    if (slot === true) {
-      return this.executePublish(
-        publisher,
-        meshName,
-        channelName,
-        topic,
-        packetName,
-        event,
-        metadata
-      );
-    }
-    return slot.then((acquired) => acquired
-      ? this.executePublish(
-        publisher,
-        meshName,
-        channelName,
-        topic,
-        packetName,
-        event,
-        metadata
-      )
-      : this.publishTimedOut());
+    return this.executePublish(publisher, channelName, topic, packetName, event, metadata);
   }
 
   private async executePublish(
     publisher: ReturnType<ZLinkBackendMeshNode['createPublisher']>,
-    meshName: string,
     channelName: string,
     topic: string,
     packetName: string | undefined,
     event: Message,
     metadata: ReadonlyMap<string, string>
   ): Promise<ZLinkSubmitResult> {
-    // The slot is the source-local admission boundary. Once publishAsync takes
-    // the owned frames, target processing cannot change the caller terminal.
-    // Call-scoped flow (spec 27 §4): the fanout envelope flow pair does not
-    // outlive this publish call.
-    try {
-      const parts = runWithOutboundFlow(
-        this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
-        () => encodeChannelPublishEnvelopeParts(
-          channelName,
-          topic,
-          packetName,
-          event,
-          undefined,
-          this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
-          metadata
-        )
-      );
-      const processing = publisher.publishAsync(
+    const parts = runWithOutboundFlow(
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+      () => encodeChannelPublishEnvelopeParts(
         channelName,
         topic,
-        parts,
+        packetName,
+        event,
         undefined,
-        undefined
-      );
-      void Promise.resolve(processing).catch(() => undefined);
-      return Promise.resolve({ status: ZLinkSubmitStatus.Submitted });
-    } finally {
-      this.releasePublishSlot(meshName);
-    }
+        this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+        metadata
+      )
+    );
+    const processing = publisher.publishAsync(channelName, topic, parts, undefined, undefined);
+    void Promise.resolve(processing).catch(() => undefined);
+    return Promise.resolve({ status: ZLinkSubmitStatus.Submitted });
   }
 
   tryPublish(
@@ -1242,163 +1179,6 @@ export class ZLinkSpotNodeRuntimeManager {
     }
   }
 
-  private acquirePublishSlot(
-    meshName: string,
-    timeoutMs: number,
-    signal?: AbortSignal
-  ): boolean | Promise<boolean> {
-    if (!this.activePublishes.has(meshName)) {
-      this.activePublishes.add(meshName);
-      return true;
-    }
-    const waiterCapacity = Math.max(
-      1,
-      this.options.registration.spotNodes
-        .get(meshName)?.publisherConfig?.sendHighWaterMark ?? 1
-    );
-    const queue = this.publishSlotWaiters.get(meshName) ?? {
-      waiters: [],
-      head: 0,
-      count: 0
-    };
-    if (queue.count >= waiterCapacity) {
-      // This call has no bounded executor-admission token. Fail without
-      // retaining its payload in a pending work queue.
-      return false;
-    }
-    return new Promise<boolean>((resolve, reject) => {
-      const waiter: ZLinkPublishSlotWaiter = {
-        resolve,
-        reject,
-        signal,
-        settled: false
-      };
-      if (timeoutMs !== -1) {
-        waiter.deadlineMs = performance.now() + Math.max(0, timeoutMs);
-      }
-      queue.waiters.push(waiter);
-      queue.count += 1;
-      this.publishSlotWaiters.set(meshName, queue);
-      if (timeoutMs !== -1) {
-        waiter.timeout = setTimeout(() => this.settlePublishSlotWaiter(
-          meshName,
-          waiter,
-          false
-        ), Math.max(0, timeoutMs));
-      }
-      if (signal !== undefined) {
-        waiter.abortHandler = () => this.rejectPublishSlotWaiter(
-          meshName,
-          waiter,
-          signal.reason ?? createAbortError()
-        );
-        signal.addEventListener('abort', waiter.abortHandler, { once: true });
-      }
-    });
-  }
-
-  private publishTimedOut(): ZLinkSubmitResult {
-    return { status: ZLinkSubmitStatus.TimedOut };
-  }
-
-  private releasePublishSlot(meshName: string): void {
-    const queue = this.publishSlotWaiters.get(meshName);
-    while (queue !== undefined && queue.count > 0) {
-      const waiter = this.takePublishSlotWaiter(queue);
-      if (waiter === undefined) continue;
-      if (waiter.settled) continue;
-      if (waiter.deadlineMs !== undefined && performance.now() >= waiter.deadlineMs) {
-        this.cleanupPublishSlotWaiter(waiter);
-        waiter.settled = true;
-        waiter.resolve(false);
-        continue;
-      }
-      this.cleanupPublishSlotWaiter(waiter);
-      waiter.settled = true;
-      waiter.resolve(true);
-      if (queue.count === 0) this.publishSlotWaiters.delete(meshName);
-      return;
-    }
-    this.publishSlotWaiters.delete(meshName);
-    this.activePublishes.delete(meshName);
-  }
-
-  private settlePublishSlotWaiter(
-    meshName: string,
-    waiter: ZLinkPublishSlotWaiter,
-    acquired: boolean
-  ): void {
-    if (waiter.settled) return;
-    waiter.settled = true;
-    this.removePublishSlotWaiter(meshName, waiter);
-    this.cleanupPublishSlotWaiter(waiter);
-    waiter.resolve(acquired);
-  }
-
-  private rejectPublishSlotWaiter(
-    meshName: string,
-    waiter: ZLinkPublishSlotWaiter,
-    error: unknown
-  ): void {
-    if (waiter.settled) return;
-    waiter.settled = true;
-    this.removePublishSlotWaiter(meshName, waiter);
-    this.cleanupPublishSlotWaiter(waiter);
-    waiter.reject(error);
-  }
-
-  private removePublishSlotWaiter(meshName: string, waiter: ZLinkPublishSlotWaiter): void {
-    const queue = this.publishSlotWaiters.get(meshName);
-    if (queue === undefined) return;
-    const index = queue.waiters.indexOf(waiter, queue.head);
-    if (index >= 0) {
-      queue.waiters[index] = undefined;
-      queue.count -= 1;
-      this.compactPublishSlotWaiters(queue);
-    }
-    if (queue.count === 0) this.publishSlotWaiters.delete(meshName);
-  }
-
-  private cleanupPublishSlotWaiter(waiter: ZLinkPublishSlotWaiter): void {
-    if (waiter.timeout !== undefined) clearTimeout(waiter.timeout);
-    if (waiter.abortHandler !== undefined) {
-      waiter.signal?.removeEventListener('abort', waiter.abortHandler);
-    }
-  }
-
-  private rejectPublishSlotWaiters(error: unknown): void {
-    for (const [meshName, queue] of this.publishSlotWaiters) {
-      let waiter: ZLinkPublishSlotWaiter | undefined;
-      while ((waiter = this.takePublishSlotWaiter(queue)) !== undefined) {
-        this.rejectPublishSlotWaiter(meshName, waiter, error);
-      }
-      this.publishSlotWaiters.delete(meshName);
-    }
-    this.activePublishes.clear();
-  }
-
-  private takePublishSlotWaiter(queue: ZLinkPublishSlotQueue): ZLinkPublishSlotWaiter | undefined {
-    while (queue.head < queue.waiters.length && queue.waiters[queue.head] === undefined) {
-      queue.head += 1;
-    }
-    const waiter = queue.waiters[queue.head];
-    if (waiter === undefined) return undefined;
-    queue.waiters[queue.head] = undefined;
-    queue.head += 1;
-    queue.count -= 1;
-    this.compactPublishSlotWaiters(queue);
-    return waiter;
-  }
-
-  private compactPublishSlotWaiters(queue: ZLinkPublishSlotQueue): void {
-    if (queue.count === 0) {
-      queue.waiters.length = 0;
-      queue.head = 0;
-    } else if (queue.head >= 1024 && queue.head * 2 >= queue.waiters.length) {
-      queue.waiters.splice(0, queue.head);
-      queue.head = 0;
-    }
-  }
 }
 
 function runtimeShutdownError(): ZLinkFrameworkException {

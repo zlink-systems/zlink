@@ -13,7 +13,6 @@ import {
   EventLoopWorkQueues
 } from '../../packages/framework/src/runtime/foundation/event-loop-resources';
 import {
-  OperationCapacityExceededError,
   OperationCancelledError,
   OperationRegistry,
   OperationTimeoutError,
@@ -93,34 +92,30 @@ class ManualClock implements OperationClock {
 test('Promise completion is terminal once across reply, timeout, and shutdown', async () => {
   const clock = new ManualClock();
   const operations = new OperationRegistry<string>(clock);
-  const completed = operations.reserve(100);
+  const completed = operations.register(100);
   assert.equal(operations.complete(completed.id, 'reply'), true);
   clock.fire();
   assert.equal(operations.complete(completed.id, 'late'), false);
   assert.equal(await completed.promise, 'reply');
 
-  const timedOut = operations.reserve(100);
+  const timedOut = operations.register(100);
   clock.fire();
   await assert.rejects(timedOut.promise, OperationTimeoutError);
   assert.equal(operations.cancel(timedOut.id), false);
 
-  const cancelled = operations.reserve(100);
+  const cancelled = operations.register(100);
   operations.close();
   await assert.rejects(cancelled.promise, OperationCancelledError);
   assert.equal(operations.size, 0);
 });
 
-test('operation registry rejects work before allocating beyond its capacity', async () => {
+test('operation registry registers more than the former completion cap before transport submit', async () => {
   const clock = new ManualClock();
-  const operations = new OperationRegistry<string>(clock, 1);
-  const pending = operations.reserve(100);
-  assert.throws(
-    () => operations.reserve(100),
-    OperationCapacityExceededError
-  );
-  assert.equal(operations.size, 1);
-  operations.complete(pending.id, 'reply');
-  assert.equal(await pending.promise, 'reply');
+  const operations = new OperationRegistry<string>(clock);
+  const pending = Array.from({ length: 4_097 }, () => operations.register(100, 'sender'));
+  assert.equal(operations.size, 4_097);
+  for (const entry of pending) assert.equal(operations.complete(entry.id, 'reply'), true);
+  assert.deepEqual(await Promise.all(pending.map(entry => entry.promise)), Array(4_097).fill('reply'));
   assert.equal(operations.size, 0);
 });
 
@@ -133,11 +128,11 @@ test('event-loop resources close in reverse once and infrastructure remains inde
   assert.deepEqual(order, ['second', 'first']);
   assert.throws(() => resources.own({ close() {} }), /closing/);
 
-  const queues = new EventLoopWorkQueues(1, 1);
+  const queues = new EventLoopWorkQueues();
   let release!: () => void;
   const blocked = new Promise<void>(resolve => (release = resolve));
   assert.equal(queues.submitApplication(() => blocked), true);
-  assert.equal(queues.submitApplication(() => undefined), false);
+  assert.equal(queues.submitApplication(() => undefined), true);
   const infrastructureDone = new Promise<void>(resolve => {
     assert.equal(queues.submitInfrastructure(resolve), true);
   });

@@ -1240,7 +1240,7 @@ export class ServiceStatefulRuntime {
     payload: ServiceApplicationPayload,
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
-    const pending = this.operations.reserve(timeoutMs);
+    const pending = this.operations.register(timeoutMs);
     const target = this.acceptSpotAuthority(requested);
     if (target === undefined) {
       this.operations.reply(pending.id, {
@@ -1294,7 +1294,7 @@ export class ServiceStatefulRuntime {
     sourceActor?: ServiceActorRef,
     boundSession?: { readonly sessionRid: string; readonly bindingGeneration: bigint }
   ): ServiceStatefulPendingOperation {
-    const pending = this.operations.reserve(timeoutMs);
+    const pending = this.operations.register(timeoutMs);
     const route = this.tryActorFence(target);
     if (route === undefined) {
       this.operations.reply(pending.id, {
@@ -1393,7 +1393,7 @@ export class ServiceStatefulRuntime {
     sourceSpotId?: string,
     metadataFrame?: Uint8Array
   ): ServiceStatefulPendingOperation {
-    const pending = this.operations.reserve(timeoutMs);
+    const pending = this.operations.register(timeoutMs);
     this.submitRequest(
       pending,
       route.targetNodeRid,
@@ -1442,7 +1442,7 @@ export class ServiceStatefulRuntime {
     metadataFrame?: Uint8Array
   ): ServiceStatefulPendingOperation {
     const timeoutMs = remainingDeadlineMs(deadlineUnixMs);
-    const pending = this.operations.reserve(timeoutMs);
+    const pending = this.operations.register(timeoutMs);
     this.submitRequest(
       pending,
       target.targetNodeRid,
@@ -1471,7 +1471,7 @@ export class ServiceStatefulRuntime {
     actorId: string,
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
-    const pending = this.operations.reserve(timeoutMs);
+    const pending = this.operations.register(timeoutMs);
     this.submitRequest(
       pending,
       targetNodeRid,
@@ -1483,7 +1483,7 @@ export class ServiceStatefulRuntime {
   }
 
   destroyActor(actor: ServiceActorRef, timeoutMs: number): ServiceStatefulPendingOperation {
-    const pending = this.operations.reserve(timeoutMs);
+    const pending = this.operations.register(timeoutMs);
     const local = actor.nodeRid === this.nodeRid;
     if (local) {
       queueMicrotask(() => {
@@ -1510,7 +1510,7 @@ export class ServiceStatefulRuntime {
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
     const deadlineMs = performance.now() + timeoutMs;
-    const pending = this.operations.reserve(timeoutMs, targetNodeRid === this.nodeRid ? 'registry' : 'sender');
+    const pending = this.operations.register(timeoutMs, targetNodeRid === this.nodeRid ? 'registry' : 'sender');
     const target = this.trySpotFence(targetNodeRid, {
       ...targetSpot,
       generation: targetSpotGeneration
@@ -1537,7 +1537,7 @@ export class ServiceStatefulRuntime {
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
     const deadlineMs = performance.now() + timeoutMs;
-    const pending = this.operations.reserve(timeoutMs, targetNodeRid === this.nodeRid ? 'registry' : 'sender');
+    const pending = this.operations.register(timeoutMs, targetNodeRid === this.nodeRid ? 'registry' : 'sender');
     const target = this.trySpotFence(targetNodeRid, {
       ...targetSpot,
       generation: targetSpotGeneration
@@ -1561,7 +1561,7 @@ export class ServiceStatefulRuntime {
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
     const deadlineMs = performance.now() + timeoutMs;
-    const pending = this.operations.reserve(timeoutMs, targetNodeRid === this.nodeRid ? 'registry' : 'sender');
+    const pending = this.operations.register(timeoutMs, targetNodeRid === this.nodeRid ? 'registry' : 'sender');
     this.submitActorJoin(
       pending,
       actor,
@@ -1582,7 +1582,7 @@ export class ServiceStatefulRuntime {
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
     const deadlineMs = performance.now() + timeoutMs;
-    const pending = this.operations.reserve(timeoutMs, targetNodeRid === this.nodeRid ? 'registry' : 'sender');
+    const pending = this.operations.register(timeoutMs, targetNodeRid === this.nodeRid ? 'registry' : 'sender');
     this.submitActorJoin(
       pending,
       actor,
@@ -1600,7 +1600,7 @@ export class ServiceStatefulRuntime {
     expectedMembershipEpoch: bigint,
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
-    const pending = this.operations.reserve(timeoutMs);
+    const pending = this.operations.register(timeoutMs);
     queueMicrotask(() => {
       try {
         const transition = this.registry.leaveActor(actor, expectedMembershipEpoch);
@@ -1635,7 +1635,7 @@ export class ServiceStatefulRuntime {
     actorAuthority?: StreamSessionActorAuthorityFence
   ): ServiceStatefulPendingOperation {
     const deadlineMs = performance.now() + timeoutMs;
-    const pending = this.operations.reserve(timeoutMs, 'sender');
+    const pending = this.operations.register(timeoutMs, 'sender');
     const generation = this.nextSessionSequence++;
     const localBinding: ServiceSessionBinding = {
       actor,
@@ -1777,7 +1777,7 @@ export class ServiceStatefulRuntime {
     expectedBindingGeneration: bigint,
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
-    const pending = this.operations.reserve(timeoutMs);
+    const pending = this.operations.register(timeoutMs);
     const delivery = this.sessionDeliveries.get(actorKey(actor));
     if (
       delivery === undefined
@@ -2644,7 +2644,7 @@ export class ServiceStatefulRuntime {
       return;
     }
 
-    const pending = this.operations.reserve(remainingMs);
+    const pending = this.operations.register(remainingMs);
     this.submitRequest(
       pending,
       route.targetNodeRid,

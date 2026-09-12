@@ -25,8 +25,7 @@ import {
   defaultWorkerMaxThreads,
   DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE,
   DEFAULT_WORKER_IDLE_TIMEOUT_MS,
-  DEFAULT_WORKER_MIN_THREADS,
-  DEFAULT_WORKER_QUEUE_LENGTH
+  DEFAULT_WORKER_MIN_THREADS
 } from './InternalDefaults';
 
 export function normalizeWorkerOptions(
@@ -37,8 +36,7 @@ export function normalizeWorkerOptions(
   return {
     minThreads: partial.minThreads ?? DEFAULT_WORKER_MIN_THREADS,
     maxThreads: partial.maxThreads ?? defaultWorkerMaxThreads(),
-    idleTimeoutMs: partial.idleTimeoutMs ?? DEFAULT_WORKER_IDLE_TIMEOUT_MS,
-    maxQueueLength: partial.maxQueueLength ?? DEFAULT_WORKER_QUEUE_LENGTH
+    idleTimeoutMs: partial.idleTimeoutMs ?? DEFAULT_WORKER_IDLE_TIMEOUT_MS
   };
 }
 

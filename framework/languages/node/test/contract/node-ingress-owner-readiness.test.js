@@ -6,7 +6,7 @@ const { ServiceMailbox } = require('../../packages/framework/dist/runtime/founda
 
 test('mailbox wakes on a newly ready owner, then again only when its held claim is released', () => {
   const wakes = [];
-  const mailbox = new ServiceMailbox(undefined, domain => wakes.push(domain));
+  const mailbox = new ServiceMailbox(domain => wakes.push(domain));
   const enqueue = owner => mailbox.tryEnqueue({ owner, domain: 'application', parts: [Buffer.from('x')] });
   try {
     for (let i = 0; i < 64; i++) assert.equal(enqueue('first'), true);

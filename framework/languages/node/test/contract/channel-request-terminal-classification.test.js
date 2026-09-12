@@ -28,7 +28,7 @@ test('ClientServer request terminals map to the spec public kind (not collapsed 
     [RequestResult.Rejected, framework.ZLinkFrameworkErrorKind.Rejected],
     [RequestResult.Conflict, framework.ZLinkFrameworkErrorKind.Unavailable],
     [RequestResult.Busy, framework.ZLinkFrameworkErrorKind.Unavailable],
-    [RequestResult.Backpressured, framework.ZLinkFrameworkErrorKind.CapacityExceeded],
+    [RequestResult.Backpressured, framework.ZLinkFrameworkErrorKind.DeadlineExceeded],
     [RequestResult.NotConnected, framework.ZLinkFrameworkErrorKind.Unavailable],
     [RequestResult.InvalidArgument, framework.ZLinkFrameworkErrorKind.InvalidOperation],
     [RequestResult.InvalidState, framework.ZLinkFrameworkErrorKind.InvalidOperation],

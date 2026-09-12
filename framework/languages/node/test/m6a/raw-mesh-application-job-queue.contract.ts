@@ -193,7 +193,7 @@ test('logical 1:N children acquire sequential permits and share one Framework in
   let drained = 0;
   let resolveDrained!: () => void;
   const allDrained = new Promise<void>(resolve => resolveDrained = resolve);
-  const mailbox = new ServiceMailbox(undefined, () => {
+  const mailbox = new ServiceMailbox(() => {
     setImmediate(() => {
       const claim = mailbox.tryClaim('application', 1, Number.MAX_SAFE_INTEGER);
       if (claim === undefined) return;

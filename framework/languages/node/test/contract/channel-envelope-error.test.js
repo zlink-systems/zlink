@@ -835,7 +835,6 @@ const ERROR_CODE_WIRE_NAMES = Object.freeze({
   NotConfigured: 'not_configured',
   Rejected: 'rejected',
   Unavailable: 'unavailable',
-  CapacityExceeded: 'capacity_exceeded',
   DeadlineExceeded: 'deadline_exceeded',
   ShuttingDown: 'shutting_down',
   ProtocolError: 'protocol_error',
@@ -846,7 +845,7 @@ const ERROR_CODE_WIRE_NAMES = Object.freeze({
 
 test('channel Error reply encodes every framework error kind as its snake_case wire name', () => {
   const kindNames = Object.keys(ERROR_CODE_WIRE_NAMES);
-  assert.equal(kindNames.length, 13);
+  assert.equal(kindNames.length, 12);
   const requestParts = envelope.encodeChannelEnvelopeParts(1, 'api', 'Lookup', { id: 'a' });
   const request = envelope.decodeChannelEnvelope(readable(requestParts));
   try {

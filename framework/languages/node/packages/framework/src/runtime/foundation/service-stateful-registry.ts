@@ -619,8 +619,8 @@ export class ServiceTerminalOperationRegistry<T> {
     this.operations = operations;
   }
 
-  reserve(timeoutMs: number, timeoutOwner: 'registry' | 'sender' = 'registry'): PendingOperation<T> {
-    return this.operations.reserve(timeoutMs, timeoutOwner);
+  register(timeoutMs: number, timeoutOwner: 'registry' | 'sender' = 'registry'): PendingOperation<T> {
+    return this.operations.register(timeoutMs, timeoutOwner);
   }
 
   reply(id: bigint, value: T): boolean {

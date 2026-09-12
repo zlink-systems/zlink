@@ -4046,19 +4046,19 @@ test('reply, timeout and shutdown races settle each Promise exactly once', async
     new OperationRegistry<number>(clock)
   );
 
-  const replyWins = operations.reserve(10);
+  const replyWins = operations.register(10);
   assert.equal(operations.reply(replyWins.id, 7), true);
   clock.fireAll();
   assert.equal(await replyWins.promise, 7);
   assert.equal(operations.reply(replyWins.id, 8), false);
 
-  const timeoutWins = operations.reserve(10);
+  const timeoutWins = operations.register(10);
   const timeoutResult = assert.rejects(timeoutWins.promise, OperationTimeoutError);
   clock.fireAll();
   await timeoutResult;
   assert.equal(operations.reply(timeoutWins.id, 9), false);
 
-  const shutdownWins = operations.reserve(10);
+  const shutdownWins = operations.register(10);
   const shutdownResult = assert.rejects(shutdownWins.promise, OperationCancelledError);
   operations.close();
   clock.fireAll();
@@ -4067,10 +4067,10 @@ test('reply, timeout and shutdown races settle each Promise exactly once', async
 
 test('durable sender owns deadline settlement while the registry retains identity and cancellation', async () => {
   const clock = new ManualClock();
-  const registry = new OperationRegistry<string>(clock, 1);
+  const registry = new OperationRegistry<string>(clock);
   const operations = new ServiceTerminalOperationRegistry(registry);
-  const pending = operations.reserve(10, 'sender');
-  assert.throws(() => operations.reserve(10, 'sender'), /capacity/i);
+  const pending = operations.register(10, 'sender');
+  const concurrentlyRegistered = operations.register(10, 'sender');
   clock.fireAll();
   assert.equal(operations.isPending(pending.id), true);
   assert.equal(registry.size, 1);
@@ -4080,16 +4080,18 @@ test('durable sender owns deadline settlement while the registry retains identit
   assert.equal(operations.reply(pending.id, 'late'), false);
   assert.equal(operations.fail(pending.id, exhausted), false);
   await rejected;
+  assert.equal(operations.fail(concurrentlyRegistered.id, exhausted), true);
+  await assert.rejects(concurrentlyRegistered.promise, error => error === exhausted);
   assert.equal(registry.size, 0);
 
-  const cancelled = operations.reserve(10, 'sender');
+  const cancelled = operations.register(10, 'sender');
   const cancellation = assert.rejects(cancelled.promise, OperationCancelledError);
   assert.equal(operations.cancel(cancelled.id), true);
   clock.fireAll();
   await cancellation;
   assert.equal(registry.size, 0);
 
-  const closed = operations.reserve(10, 'sender');
+  const closed = operations.register(10, 'sender');
   const shutdown = assert.rejects(closed.promise, OperationCancelledError);
   operations.close();
   clock.fireAll();
@@ -5971,12 +5973,12 @@ test('Missing Instance distinguishes unsupported types from exhausted placement 
       await assert.rejects(
         () => address.sendToSpotAddress('missing-room', { hello: true }, call),
         (error: unknown) => error instanceof ZLinkFrameworkException
-          && error.kind === ZLinkFrameworkErrorKind.CapacityExceeded
+          && error.kind === ZLinkFrameworkErrorKind.Unavailable
       );
       await assert.rejects(
         () => address.requestToSpotAddress('missing-room', { hello: true }, call),
         (error: unknown) => error instanceof ZLinkFrameworkException
-          && error.kind === ZLinkFrameworkErrorKind.CapacityExceeded
+          && error.kind === ZLinkFrameworkErrorKind.Unavailable
       );
     }
   }
@@ -6054,7 +6056,7 @@ test('Missing Instance placement capacity fails without polling or retaining a c
       timeoutMs: 200
     }),
     (error: unknown) => error instanceof ZLinkFrameworkException
-      && error.kind === ZLinkFrameworkErrorKind.CapacityExceeded
+      && error.kind === ZLinkFrameworkErrorKind.Unavailable
   );
   assert.equal(selectionAttempts, 1);
 });

@@ -435,7 +435,7 @@ test('User Spot reservation maps capacity exhaustion and Pending expiry to exact
       throw new Error('factory must not start');
     }),
     (error: unknown) => error instanceof ZLinkFrameworkException
-      && error.kind === ZLinkFrameworkErrorKind.CapacityExceeded
+      && error.kind === ZLinkFrameworkErrorKind.Unavailable
       && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted
   );
 
@@ -524,7 +524,7 @@ test('User Spot production placement maps no target to retriable capacity exhaus
       throw new Error('factory must not start');
     }),
     (error: unknown) => error instanceof ZLinkFrameworkException
-      && error.kind === ZLinkFrameworkErrorKind.CapacityExceeded
+      && error.kind === ZLinkFrameworkErrorKind.Unavailable
       && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted
   );
 

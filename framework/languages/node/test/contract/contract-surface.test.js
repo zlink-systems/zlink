@@ -187,7 +187,7 @@ test('worker options expose the formal scheduler limits', () => {
   const workerOptions = declarationBody(declarations, 'ZLinkWorkerOptions');
 
   assert.equal(workerOptions.includes('maxThreads'), true);
-  assert.equal(workerOptions.includes('maxQueueLength'), true);
+  assert.equal(workerOptions.includes('maxQueueLength'), false);
   assert.equal(workerOptions.includes('minThreads'), true);
   assert.equal(workerOptions.includes('idleTimeoutMs'), true);
 });
@@ -685,19 +685,18 @@ test('framework error kind values and exception surface match the shared table',
     ['NotConfigured', 3],
     ['Rejected', 4],
     ['Unavailable', 5],
-    ['CapacityExceeded', 6],
-    ['DeadlineExceeded', 7],
-    ['ShuttingDown', 8],
-    ['ProtocolError', 9],
-    ['InvalidOperation', 10],
-    ['DataLost', 11],
-    ['InternalFailure', 12]
+    ['DeadlineExceeded', 6],
+    ['ShuttingDown', 7],
+    ['ProtocolError', 8],
+    ['InvalidOperation', 9],
+    ['DataLost', 10],
+    ['InternalFailure', 11]
   ];
 
-  assert.equal(expected.length, 13);
+  assert.equal(expected.length, 12);
   const enumNames = Object.keys(framework.ZLinkFrameworkErrorKind)
     .filter((name) => Number.isNaN(Number(name)));
-  assert.equal(enumNames.length, 13);
+  assert.equal(enumNames.length, 12);
   assert.deepEqual(
     enumNames.sort(),
     expected.map(([name]) => name).sort()

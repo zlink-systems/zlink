@@ -6,13 +6,12 @@ export enum ZLinkFrameworkErrorKind {
   NotConfigured = 3,
   Rejected = 4,
   Unavailable = 5,
-  CapacityExceeded = 6,
-  DeadlineExceeded = 7,
-  ShuttingDown = 8,
-  ProtocolError = 9,
-  InvalidOperation = 10,
-  DataLost = 11,
-  InternalFailure = 12
+  DeadlineExceeded = 6,
+  ShuttingDown = 7,
+  ProtocolError = 8,
+  InvalidOperation = 9,
+  DataLost = 10,
+  InternalFailure = 11
 }
 
 export class ZLinkFrameworkException extends Error {

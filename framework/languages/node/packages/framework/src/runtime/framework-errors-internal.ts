@@ -69,7 +69,7 @@ const INTERNAL_TO_PUBLIC: Readonly<Record<ZLinkFrameworkInternalErrorKind, ZLink
   [ZLinkFrameworkInternalErrorKind.RequestRejected]: ZLinkFrameworkErrorKind.Rejected,
   [ZLinkFrameworkInternalErrorKind.RequestProtocolError]: ZLinkFrameworkErrorKind.ProtocolError,
   [ZLinkFrameworkInternalErrorKind.RequestFailed]: ZLinkFrameworkErrorKind.InternalFailure,
-  [ZLinkFrameworkInternalErrorKind.WorkerQueueFull]: ZLinkFrameworkErrorKind.CapacityExceeded,
+  [ZLinkFrameworkInternalErrorKind.WorkerQueueFull]: ZLinkFrameworkErrorKind.Unavailable,
   [ZLinkFrameworkInternalErrorKind.WorkerTimedOut]: ZLinkFrameworkErrorKind.DeadlineExceeded,
   [ZLinkFrameworkInternalErrorKind.WorkerFailed]: ZLinkFrameworkErrorKind.InternalFailure,
   [ZLinkFrameworkInternalErrorKind.ActorLocationStale]: ZLinkFrameworkErrorKind.Unavailable,
@@ -82,7 +82,7 @@ const INTERNAL_TO_PUBLIC: Readonly<Record<ZLinkFrameworkInternalErrorKind, ZLink
   [ZLinkFrameworkInternalErrorKind.ActorGenerationStale]: ZLinkFrameworkErrorKind.InvalidOperation,
   [ZLinkFrameworkInternalErrorKind.ActorMoving]: ZLinkFrameworkErrorKind.Unavailable,
   [ZLinkFrameworkInternalErrorKind.DeadlineExceeded]: ZLinkFrameworkErrorKind.DeadlineExceeded,
-  [ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted]: ZLinkFrameworkErrorKind.CapacityExceeded,
+  [ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted]: ZLinkFrameworkErrorKind.Unavailable,
   [ZLinkFrameworkInternalErrorKind.RoutingIdConflict]: ZLinkFrameworkErrorKind.AlreadyExists,
   [ZLinkFrameworkInternalErrorKind.SpotGenerationStale]: ZLinkFrameworkErrorKind.InvalidOperation,
   [ZLinkFrameworkInternalErrorKind.SpotMoving]: ZLinkFrameworkErrorKind.Unavailable,
@@ -145,8 +145,7 @@ const INTERNAL_KIND_BY_WIRE_FAILURE_CODE: ReadonlyMap<number, ZLinkFrameworkInte
   ...Object.entries(ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES)
     .map(([kind, code]) => [code + 1, kind as ZLinkFrameworkInternalErrorKind] as const),
   //  Spec 32-framework-error-model:99-103 — a workerQueueFull(18) received in a
-  //  remote reply is the target's queue state (Unavailable), not the source-owned
-  //  CapacityExceeded that the wire-value-minus-one derivation would give.
+  //  remote reply is the target's queue state and maps to Unavailable.
   [18, ZLinkFrameworkInternalErrorKind.RouteNotConnected]
 ]);
 
@@ -188,8 +187,8 @@ export function internalFrameworkErrorKind(
  * terminal is classified identically across languages instead of collapsing to
  * Unavailable. Spec 32-framework-error-model:81-92 (request-terminal
  * classification); a deadline yields DeadlineExceeded, a lost route Unavailable.
- * Backpressure on the REQUEST path is CapacityExceeded (distinct from the
- * one-way submit path, which is DeadlineExceeded).
+ * Backpressure waits in Core until the operation deadline, so request and
+ * one-way terminals both surface DeadlineExceeded when that wait expires.
  */
 export function requestResultToPublicErrorKind(result: number): ZLinkFrameworkErrorKind {
   switch (result) {
@@ -204,8 +203,7 @@ export function requestResultToPublicErrorKind(result: number): ZLinkFrameworkEr
     case RequestResult.Rejected:
       return ZLinkFrameworkErrorKind.Rejected;
     case RequestResult.Backpressured:
-      //  Source-owned send/completion reservation exhausted (spec 32:93-98).
-      return ZLinkFrameworkErrorKind.CapacityExceeded;
+      return ZLinkFrameworkErrorKind.DeadlineExceeded;
     case RequestResult.Conflict:
     case RequestResult.Busy:
     case RequestResult.NotConnected:
@@ -229,8 +227,8 @@ export function requestResultToPublicErrorKind(result: number): ZLinkFrameworkEr
  * coarse terminal; when absent (0) or unrecognised, the coarse terminal
  * classifies. Remote another-node queue/operation-table saturation
  * (Conflict/Busy) is Unavailable — a resource this runtime does not own — while
- * only the placement admission terminal Backpressured(113) is CapacityExceeded,
- * a target-owned admission decision rather than a queue. Shared by the lifecycle
+ * placement admission terminal Backpressured(113) is Unavailable because no
+ * node can host the Spot. Shared by the lifecycle
  * completion paths (Actor join, User Spot create/close) so they classify
  * identically to the request path instead of collapsing to a single kind.
  */

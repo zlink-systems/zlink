@@ -5,10 +5,6 @@ import {
   type ZLinkSerialWorkOptions,
   type ZLinkSerialWorkRecord
 } from '../execution/serial-execution-queue';
-import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from '../framework-errors-internal';
 import { runZLinkActorExecution } from './actor-execution-context';
 import {
   bindApplicationJobPermit,
@@ -25,14 +21,7 @@ export class ZLinkActorSerialExecutor {
   ) {
     this.scheduler = new ZLinkSerialExecutionQueue(
       (record) => this.runRecord(record),
-      {
-        ...options,
-        capacityError: options?.capacityError ?? (() =>
-          createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
-            'Actor execution queue capacity was exceeded.'
-          ))
-      }
+      options
     );
   }
 

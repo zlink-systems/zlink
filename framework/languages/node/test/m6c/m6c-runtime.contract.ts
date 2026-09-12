@@ -824,12 +824,7 @@ test('relocation inventory preserves 10,100 participants without a Spot member c
 });
 
 test('mailbox seal captures queued work, holds new ingress, and restores or relays in order', () => {
-  const mailbox = new ServiceMailbox({
-    applicationMessages: 16,
-    applicationBytes: 1_024,
-    infrastructureMessages: 4,
-    infrastructureBytes: 256
-  });
+  const mailbox = new ServiceMailbox();
   assert.equal(mailbox.tryEnqueue(mailboxRecord('spot:room', 'application', 'one')), true);
   assert.equal(mailbox.tryEnqueue(mailboxRecord('spot:room', 'application', 'two')), true);
   assert.equal(mailbox.tryEnqueue(mailboxRecord('node', 'infrastructure', 'probe')), true);
@@ -861,12 +856,7 @@ test('mailbox seal captures queued work, holds new ingress, and restores or rela
 });
 
 test('relocation ingress hold adds no relocation-specific message or byte cap', () => {
-  const byCount = new ServiceMailbox({
-    applicationMessages: 2048,
-    applicationBytes: 32 * 1024 * 1024,
-    infrastructureMessages: 4,
-    infrastructureBytes: 256
-  });
+  const byCount = new ServiceMailbox();
   const countSeal = byCount.trySealApplicationOwner('spot:count');
   assert.ok(countSeal);
   for (let index = 0; index < 1024; index++) {
@@ -886,12 +876,7 @@ test('relocation ingress hold adds no relocation-specific message or byte cap', 
   assert.equal(byCount.release(restored), true);
   byCount.close();
 
-  const byBytes = new ServiceMailbox({
-    applicationMessages: 8,
-    applicationBytes: 32 * 1024 * 1024,
-    infrastructureMessages: 4,
-    infrastructureBytes: 256
-  });
+  const byBytes = new ServiceMailbox();
   const byteSeal = byBytes.trySealApplicationOwner('spot:bytes');
   assert.ok(byteSeal);
   assert.equal(byBytes.tryEnqueue({

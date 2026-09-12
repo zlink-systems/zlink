@@ -146,17 +146,10 @@ test('PerActor timer names overlap while one timer name retains submission order
   assert.deepEqual(events, ['tick:first:start', 'beat', 'tick:first:end', 'tick:second']);
 });
 
-test('Actor mailbox capacity rejects only the full Actor and accepts another Actor', async () => {
+test('Actor mailbox queues work for the same Actor while another Actor remains independent', async () => {
   const serialExecutor = executor(
     ZLinkUserSpotExecutionMode.PerActor,
-    undefined,
-    {
-      applicationMessageCapacity: 1,
-      applicationByteCapacity: 1024,
-      lifecycleMessageCapacity: 1,
-      lifecycleByteCapacity: 1024,
-      fixedWorkByteCost: 1
-    }
+    undefined
   );
   const release = deferred<void>();
   const started = deferred<void>();
@@ -166,23 +159,16 @@ test('Actor mailbox capacity rejects only the full Actor and accepts another Act
   });
   await started.promise;
 
-  await assert.rejects(runActor(serialExecutor, 'actor-a', () => undefined), /Actor execution queue capacity was exceeded/u);
+  const queued = runActor(serialExecutor, 'actor-a', () => 'queued');
   assert.equal(await runActor(serialExecutor, 'actor-b', () => 'accepted'), 'accepted');
   release.resolve();
-  await first;
+  await Promise.all([first, queued]);
 });
 
-test('SpotWide Actor mailbox reserves large payloads before small payloads', async () => {
+test('SpotWide Actor mailbox queues large and small payloads in FIFO order', async () => {
   const serialExecutor = executor(
     ZLinkUserSpotExecutionMode.SpotWide,
-    undefined,
-    {
-      applicationMessageCapacity: 8,
-      applicationByteCapacity: 100,
-      lifecycleMessageCapacity: 1,
-      lifecycleByteCapacity: 100,
-      fixedWorkByteCost: 1
-    }
+    undefined
   );
   const release = deferred<void>();
   const started = deferred<void>();
@@ -192,23 +178,16 @@ test('SpotWide Actor mailbox reserves large payloads before small payloads', asy
   }, 80);
   await started.promise;
 
-  await assert.rejects(runActor(serialExecutor, 'actor-a', () => undefined, 80), /Actor execution queue capacity was exceeded/u);
+  const large = runActor(serialExecutor, 'actor-a', () => undefined, 80);
   const small = runActor(serialExecutor, 'actor-a', () => undefined, 10);
   release.resolve();
-  await Promise.all([first, small]);
+  await Promise.all([first, large, small]);
 });
 
-test('SpotWide upper queue capacity is reached by work count for both small and large Actor payloads', async () => {
-  const rejectedAfterOne = async (payloadBytes: number): Promise<void> => {
+test('SpotWide mailbox accepts work count independent of payload size', async () => {
+  const queuedAfterOne = async (payloadBytes: number): Promise<void> => {
     const serialExecutor = executor(
-      ZLinkUserSpotExecutionMode.SpotWide,
-      {
-        applicationMessageCapacity: 1,
-        applicationByteCapacity: 2,
-        lifecycleMessageCapacity: 1,
-        lifecycleByteCapacity: 2,
-        fixedWorkByteCost: 1
-      }
+      ZLinkUserSpotExecutionMode.SpotWide
     );
     const release = deferred<void>();
     const started = deferred<void>();
@@ -217,26 +196,18 @@ test('SpotWide upper queue capacity is reached by work count for both small and 
       await release.promise;
     }, 1);
     await started.promise;
-    await assert.rejects(
-      runActor(serialExecutor, 'actor-b', () => undefined, payloadBytes),
-      /Spot execution queue capacity was exceeded/u
-    );
+    const queued = runActor(serialExecutor, 'actor-b', () => undefined, payloadBytes);
     release.resolve();
-    await first;
+    await Promise.all([first, queued]);
   };
 
-  await rejectedAfterOne(1);
-  await rejectedAfterOne(10_000);
+  await queuedAfterOne(1);
+  await queuedAfterOne(10_000);
 });
 
 test('lifecycle work overtakes application only up to lifecycleBurstLimit', async () => {
   const serialExecutor = executor(ZLinkUserSpotExecutionMode.SpotWide, {
-    applicationMessageCapacity: 8,
-    applicationByteCapacity: 1024,
-    lifecycleMessageCapacity: 8,
-    lifecycleByteCapacity: 1024,
-    lifecycleBurstLimit: 2,
-    fixedWorkByteCost: 1
+    lifecycleBurstLimit: 2
   });
   const events: string[] = [];
 
@@ -254,14 +225,7 @@ test('owner time budget yields an overloaded Actor before its remaining records 
   const serialExecutor = executor(
     ZLinkUserSpotExecutionMode.PerActor,
     undefined,
-    {
-      applicationMessageCapacity: 32,
-      applicationByteCapacity: 1024,
-      lifecycleMessageCapacity: 1,
-      lifecycleByteCapacity: 1024,
-      ownerTimeBudget: 1,
-      fixedWorkByteCost: 1
-    }
+    { ownerTimeBudget: 1 }
   );
   const events: string[] = [];
   const overloaded = Array.from({ length: 8 }, (_, index) =>
