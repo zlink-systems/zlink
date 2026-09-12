@@ -686,19 +686,25 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 ### 9.0 언어별 전체 평균 (요약)
 
-상세 표(§9.1~9.7)의 (transport+pattern) **aggregate throughput 비율(C 대비)** 을 산술평균한 요약이다.
-평균은 통과·보류 셀을 모두 포함하므로 보류(저비율) 셀이 평균을 끌어내린다 — 완료 판정은 평균이 아니라
-"미달 0(통과·보류만)"이다. latency는 §2.2로 별도 판정. 상세 표가 이 요약보다 우선한다. (as-of 2026-09-11)
+상세 표(§9.1~9.7)의 (transport+pattern) **aggregate throughput 비율(C 대비)** 을 요약한다.
+**평균 = 기하평균(geometric mean)** 이며 괄호에 중앙값(median)을 병기한다. 비율 데이터는 곱셈적이라
+산술평균이 소수의 대형 outlier(특히 lossy PUBSUB·대형 메시지에서 C가 낮게 잡혀 비율이 폭등, 예: 한 셀 1128%)에
+끌려 왜곡되므로 산술평균은 폐기했다 — 실제로 산술평균은 Rust single을 128.7%로("C보다 빠름") 부풀렸으나
+geomean은 91.9%로 near-C가 맞다. 어떤 바인딩도 C보다 빠르지 않다. 평균은 통과·보류 셀을 모두 포함하므로
+보류(저비율) 셀이 평균을 끌어내린다 — 완료 판정은 평균이 아니라 "미달 0(통과·보류만)"이다. latency는 §2.2로
+별도 판정. 상세 표가 이 요약보다 우선한다. (평균 방식 갱신 2026-09-12)
 
-| 언어 | Single 평균 | Single 통과/보류/미달/미측정 | Multi 평균 | Multi 통과/보류/미달/미측정 | 상태 |
+| 언어 | Single 평균(geomean·중앙) | Single 통과/보류/미달/미측정 | Multi 평균(geomean·중앙) | Multi 통과/보류/미달/미측정 | 상태 |
 |------|------------|------------------------------|-----------|-----------------------------|------|
-| C++ (§9.1) | 93.3% | 32 / 10 / 0 / 0 | 96.4% | 18 / 10 / 0 / 0 | **완료** — 미달 0(통과/보류만). C 근접, §3.1 퍼진비용 보류 |
-| .NET (§9.2) | 90.1% | 30 / 12 / 0 / 0 | 84.2% | 20 / 8 / 0 / 0 | **완료** — 실패·미측정·미달 0. reqrep 하네스 회귀(G4) 복원 재측정 반영(single 소형 2~7%→40~44%, multi 5~10%→47~79%); 평균·카운트는 §9.2 상세표 재집계 |
-| Java (§9.3) | 99.2% | 30 / 12 / 0 / 0 | 85.5% | 18 / 10 / 0 / 0 | **완료** — 실패·미측정·미달 0. single reqrep 하네스 회귀(G3 810983b674) 복원 재측정 반영(18~66%→41~127%, jmeas 3run); Single 평균·카운트는 §9.3.1 상세표 재집계(Multi 불변) |
-| Node (§9.4) | 73.8% | 16 / 19 / 0 / 0 | 49.6% | 4 / 12 / 0 / 0 | **완료** — 미달 0(통과/보류만). SUB 축약 개선 채택(PUBSUB wss·tls 통과) |
-| Go (§9.5) | 미측정 | 0 / 0 / 0 / 30 | 미측정 | 0 / 0 / 0 / 16 | 미측정 |
-| Rust (§9.6) | 128.7% | 19 / 23 / 0 / 0 | 92.5% | 15 / 13 / 0 / 0 | **완료** — 미달·미측정 0(통과/보류만). 하네스 버그 수정 후 전 셀 측정 |
-| Python (§9.7) | 미측정 | 0 / 0 / 0 / 30 | 미측정 | 0 / 0 / 0 / 27 | 미측정 |
+| C++ (§9.1) | 92.9% (중앙 93) | 32 / 10 / 0 / 0 | 94.8% (중앙 93) | 18 / 10 / 0 / 0 | **완료** — 미달 0(통과/보류만). C 근접, §3.1 퍼진비용 보류 |
+| .NET (§9.2) | 85.5% (중앙 94) | 30 / 12 / 0 / 0 | 82.4% (중앙 81) | 20 / 8 / 0 / 0 | **완료** — 실패·미측정·미달 0. reqrep 하네스 회귀(G4) 복원 재측정 반영(single 소형 2~7%→40~44%, multi 5~10%→47~79%); 평균·카운트는 §9.2 상세표 재집계 |
+| Java (§9.3) | 93.8% (중앙 103) | 30 / 12 / 0 / 0 | 84.2% (중앙 82) | 18 / 10 / 0 / 0 | **완료** — 실패·미측정·미달 0. single reqrep 하네스 회귀(G3 810983b674) 복원 재측정 반영(18~66%→41~127%, jmeas 3run); Single 평균·카운트는 §9.3.1 상세표 재집계(Multi 불변) |
+| Node (§9.4) | 69.8% (중앙 76) | 16 / 19 / 0 / 0 | 50.9% (중앙 50) | 4 / 12 / 0 / 0 | **완료** — 미달 0(통과/보류만). SUB 축약 개선 채택(PUBSUB wss·tls 통과) |
+| Go (§9.5) | 59.9% (중앙 60) | 12 / 18 / 0 / 0 | 미측정 | 0 / 0 / 0 / 16 | **Single one-way 측정 완료(2026-09-12)** — 5 one-way 패턴 30셀 평균 64.2%(통과 12·보류 18, gpfull 1run). reqrep은 §9.5 회귀 수정 별도. Multi·reqrep행 미측정 |
+
+| Rust (§9.6) | 91.9% (중앙 97) | 19 / 23 / 0 / 0 | 90.7% (중앙 97) | 15 / 13 / 0 / 0 | **완료** — 미달·미측정 0(통과/보류만). 하네스 버그 수정 후 전 셀 측정 |
+| Python (§9.7) | 28.7% (중앙 37) | 3 / 27 / 0 / 0 | 미측정 | 0 / 0 / 0 / 27 | **Single one-way 측정 완료(2026-09-12)** — 5 one-way 패턴 30셀 평균 34.6%(통과 3·보류 27, Python 소형 per-op 바닥, gpfull 1run). reqrep은 §9.7 회귀 수정 별도. Multi·reqrep행 미측정 |
+
 
 측정 순서(node→java→dotnet→cpp→rust→go→python)상 Node·Java가 선행 측정됐고 나머지는 대기다. 각 셀의
 근거·결과 파일은 아래 언어별 상세 표에 있다. 이 요약 수치는 상세 표가 갱신될 때 함께 갱신한다.
@@ -1063,7 +1069,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.5 Go
 
 - perf 경로: `bindings/go/perf`
-- Single 상태: `미측정 (단, reqrep 하네스 회귀 수정·측정 완료 2026-09-12)`
+- Single 상태: `one-way 5패턴 측정 완료(64.2%, 통과12/보류18) + reqrep 하네스 회귀 수정·측정(2026-09-12); reqrep행·multi 미측정`
 - Multi 상태: `미측정`
 - **reqrep 하네스 회귀 수정(2026-09-12)**: 전 바인딩 reqrep 조사에서 Go single reqrep이 회귀로 확인됐다 — perf 하네스가 완결을 요청 goroutine이 아니라 별도 백그라운드 runtime goroutine에 맡겨(=.NET/Java와 동일 계열), inproc 소형 mean latency가 C 대비 **237~701×**, throughput은 C의 6~17%였다. 요청 goroutine이 공개 `Poller(PollCompletion)`로 직접 완결을 drain하고 HWM admission window로 연속 제출하도록 복원(커밋 `f8f638a2f8`, `bindings/go/perf/single/perf_reqrep.go`만, 분류 B, 바인딩·Core 불변)하니 소형 throughput 1.58~3.70× 회복(C 대비 aggregate DR 0.62·RR 0.65, Go reqrep 목표 40/53 이상), inproc 소형 latency는 **53.5ms→0.28ms(C 대비 237~701×→1.78~2.23×)**로 정상화. one-way 회귀 없음(216/216, 중앙값 +7.78%). 대형은 C-parity 실측(A) 수용. 상세 수치는 PR 및 goreq-after report.
 - 다음 작업: reqrep 외 나머지 pattern(one-way·PUBSUB·STREAM)의 paired 측정은 미실시 — inventory gate 확인 후 진행한다.
@@ -1072,36 +1078,36 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `PAIR` | 25.7% | 45.2% | 83.0% | 97.1% | 95.3% | 95.0% | 보류 62.7%/lat0.03×(median) · gpfull 측정(1run) |
+| `tcp` | `PUBSUB` | 37.2% | 51.2% | 86.8% | 330.3% | 425.8% | 638.3% | 통과 126.3%/lat0.08×(median) · gpfull 측정(1run) |
+| `tcp` | `DEALER_DEALER` | 24.7% | 36.5% | 63.5% | 91.3% | 85.6% | 83.1% | 보류 54.0%/lat0.05×(median) · gpfull 측정(1run) |
+| `tcp` | `DEALER_ROUTER` | 23.1% | 35.4% | 64.5% | 90.3% | 85.9% | 92.5% | 보류 53.3%/lat0.04×(median) · gpfull 측정(1run) |
+| `tcp` | `ROUTER_ROUTER` | 24.4% | 34.8% | 52.0% | 94.1% | 87.6% | 91.7% | 보류 51.3%/lat0.13×(median) · gpfull 측정(1run) |
+| `ws` | `PAIR` | 27.1% | 43.1% | 67.6% | 91.4% | 89.8% | 88.4% | 보류 57.3%/lat1.38×(median) · gpfull 측정(1run) |
+| `ws` | `PUBSUB` | 38.6% | 45.5% | 76.7% | 232.4% | 292.2% | 444.3% | 보류 98.3%/lat11.64×(median) · gpfull 측정(1run) |
+| `ws` | `DEALER_DEALER` | 27.2% | 39.5% | 49.7% | 82.7% | 82.6% | 81.3% | 보류 49.8%/lat1.73×(median) · gpfull 측정(1run) |
+| `ws` | `DEALER_ROUTER` | 27.3% | 38.1% | 56.6% | 85.3% | 83.6% | 87.4% | 보류 51.8%/lat1.59×(median) · gpfull 측정(1run) |
+| `ws` | `ROUTER_ROUTER` | 26.1% | 35.3% | 54.3% | 86.5% | 86.6% | 83.1% | 보류 50.6%/lat1.22×(median) · gpfull 측정(1run) |
+| `wss` | `PAIR` | 25.0% | 46.4% | 93.4% | 88.5% | 93.4% | 93.1% | 보류 63.3%/lat1.18×(median) · gpfull 측정(1run) |
+| `wss` | `PUBSUB` | 39.5% | 56.5% | 97.1% | 85.3% | 107.5% | 143.4% | 통과 69.6%/lat1.21×(median) · gpfull 측정(1run) |
+| `wss` | `DEALER_DEALER` | 28.1% | 44.7% | 102.6% | 88.8% | 90.6% | 94.5% | 통과 66.0%/lat0.98×(median) · gpfull 측정(1run) |
+| `wss` | `DEALER_ROUTER` | 26.7% | 41.4% | 96.3% | 89.5% | 93.4% | 97.8% | 통과 63.4%/lat1.11×(median) · gpfull 측정(1run) |
+| `wss` | `ROUTER_ROUTER` | 26.9% | 41.9% | 104.1% | 94.8% | 98.8% | 101.2% | 통과 66.9%/lat0.93×(median) · gpfull 측정(1run) |
+| `tls` | `PAIR` | 29.1% | 56.2% | 114.8% | 90.9% | 94.0% | 100.4% | 통과 72.7%/lat0.47×(median) · gpfull 측정(1run) |
+| `tls` | `PUBSUB` | 43.6% | 77.0% | 125.6% | 87.9% | 110.8% | 152.7% | 통과 83.5%/lat0.52×(median) · gpfull 측정(1run) |
+| `tls` | `DEALER_DEALER` | 26.7% | 48.9% | 128.9% | 89.1% | 96.9% | 95.2% | 통과 73.4%/lat0.43×(median) · gpfull 측정(1run) |
+| `tls` | `DEALER_ROUTER` | 26.4% | 50.4% | 132.3% | 89.7% | 90.6% | 93.7% | 통과 74.7%/lat0.41×(median) · gpfull 측정(1run) |
+| `tls` | `ROUTER_ROUTER` | 26.8% | 44.2% | 96.8% | 90.4% | 92.5% | 95.8% | 통과 64.5%/lat0.49×(median) · gpfull 측정(1run) |
+| `inproc` | `PAIR` | 25.3% | 26.7% | 29.1% | 34.6% | 48.7% | 49.4% | 보류 28.9%/lat0.26×(median) · gpfull 측정(1run) |
+| `inproc` | `PUBSUB` | 42.5% | 46.7% | 49.9% | 314.6% | 485.6% | 1267.0% | 통과 113.4%/lat0.20×(median) · gpfull 측정(1run) |
+| `inproc` | `DEALER_DEALER` | 27.5% | 31.5% | 33.3% | 34.2% | 26.0% | 32.9% | 보류 31.6%/lat0.04×(median) · gpfull 측정(1run) |
+| `inproc` | `DEALER_ROUTER` | 24.3% | 27.8% | 28.2% | 46.2% | 29.8% | 36.4% | 보류 31.6%/lat0.06×(median) · gpfull 측정(1run) |
+| `inproc` | `ROUTER_ROUTER` | 27.0% | 29.3% | 31.2% | 42.8% | 80.0% | 198.3% | 보류 32.6%/lat0.41×(median) · gpfull 측정(1run) |
+| `ipc` | `PAIR` | 22.5% | 37.1% | 65.3% | 88.0% | 89.6% | 90.3% | 보류 53.2%/lat0.03×(median) · gpfull 측정(1run) |
+| `ipc` | `PUBSUB` | 37.6% | 47.8% | 84.7% | 349.8% | 459.8% | 628.2% | 통과 130.0%/lat0.07×(median) · gpfull 측정(1run) |
+| `ipc` | `DEALER_DEALER` | 24.3% | 34.5% | 49.8% | 96.7% | 86.0% | 89.1% | 보류 51.3%/lat0.05×(median) · gpfull 측정(1run) |
+| `ipc` | `DEALER_ROUTER` | 24.5% | 33.3% | 52.6% | 89.8% | 86.6% | 97.2% | 보류 50.0%/lat0.05×(median) · gpfull 측정(1run) |
+| `ipc` | `ROUTER_ROUTER` | 24.0% | 32.0% | 47.0% | 94.1% | 90.0% | 92.1% | 보류 49.3%/lat0.20×(median) · gpfull 측정(1run) |
 
 #### 9.5.2 Multi suite
 
@@ -1218,7 +1224,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.7 Python
 
 - perf 경로: `bindings/python/perf`
-- Single 상태: `미측정 (단, reqrep 하네스 회귀 수정·측정 복구 2026-09-12)`
+- Single 상태: `one-way 5패턴 측정 완료(34.6%, 통과3/보류27=Python 소형 바닥) + reqrep 하네스 회귀 수정·측정 복구(2026-09-12); reqrep행·multi 미측정`
 - Multi 상태: `미측정`
 - **reqrep 하네스 회귀 수정(2026-09-12)**: 전 바인딩 reqrep 조사에서 Python single reqrep이 회귀로 확인됐다 — perf 하네스(async API)가 완결을 요청 스레드가 아니라 별도 `zlink-python-completion` 데몬 스레드에 맡겨(=.NET/Java/Go와 동일 계열), **소형 12셀 중 11개가 측정 실패**(`no active round trips`/`requester thread did not finish`)했고 완결된 inproc DR 1024B는 C의 1.14%·mean latency 1392×였다. 요청 스레드가 공개 `Poller(POLLCOMPLETION)`(`add_socket`→`transfer_to_public`)로 완결 소유권을 가져와 제출과 drain을 직접 교대하도록 복원(커밋 `90af2fbf8d`, `bindings/python/perf/single/perf_single_reqrep.py`만, 분류 B, 바인딩·Core 불변)했다. 결과: **소형 12셀 측정 성공(1/11 실패→12/0)**, inproc DR 1024B latency **175ms→0.83ms(C 1392×→6.57×)**, 소형 mean latency median C 대비 4.08×(Python 5× cap 이내). 대형 throughput은 C 대비 중앙값 36%(tcp DR 55%·RR 56%)로 회복. **소형 throughput은 C의 ~1.4%로 남는데, 이는 하네스가 아니라 Python 단일프로세스 GIL 바닥**(requester·replier가 GIL 공유 → 고빈도 소형에서 직렬화)이라 실측 보류. one-way 회귀 0%(경로 blob 동일). 상세 수치는 PR 및 pyreq-after report.
 - 다음 작업: reqrep 외 나머지 pattern의 paired 측정은 미실시 — inventory gate 확인 후 진행한다.
@@ -1227,36 +1233,36 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `PAIR` | 5.5% | 9.7% | 18.4% | 107.4% | 107.2% | 92.5% | 보류 35.2%/lat0.13×(median) · gpfull 측정(1run) |
+| `tcp` | `PUBSUB` | 6.9% | 8.8% | 16.9% | 274.8% | 252.2% | 218.1% | 통과 76.9%/lat0.17×(median) · gpfull 측정(1run) |
+| `tcp` | `DEALER_DEALER` | 5.9% | 8.8% | 14.6% | 102.9% | 103.9% | 96.7% | 보류 33.1%/lat0.13×(median) · gpfull 측정(1run) |
+| `tcp` | `DEALER_ROUTER` | 5.4% | 8.7% | 15.7% | 102.8% | 90.1% | 97.6% | 보류 33.2%/lat0.14×(median) · gpfull 측정(1run) |
+| `tcp` | `ROUTER_ROUTER` | 6.1% | 8.6% | 12.9% | 98.5% | 94.4% | 99.9% | 보류 31.5%/lat0.54×(median) · gpfull 측정(1run) |
+| `ws` | `PAIR` | 6.7% | 10.7% | 15.7% | 127.7% | 101.5% | 104.1% | 보류 40.2%/lat0.01×(median) · gpfull 측정(1run) |
+| `ws` | `PUBSUB` | 8.3% | 9.5% | 15.3% | 212.9% | 174.7% | 150.0% | 통과 61.5%/lat0.17×(median) · gpfull 측정(1run) |
+| `ws` | `DEALER_DEALER` | 7.3% | 10.5% | 14.9% | 114.9% | 107.1% | 101.7% | 보류 36.9%/lat0.01×(median) · gpfull 측정(1run) |
+| `ws` | `DEALER_ROUTER` | 6.8% | 10.2% | 14.1% | 120.7% | 104.2% | 101.1% | 보류 38.0%/lat0.01×(median) · gpfull 측정(1run) |
+| `ws` | `ROUTER_ROUTER` | 6.9% | 9.8% | 13.8% | 119.6% | 110.5% | 104.3% | 보류 37.5%/lat0.01×(median) · gpfull 측정(1run) |
+| `wss` | `PAIR` | 6.3% | 13.0% | 29.3% | 101.8% | 104.5% | 102.3% | 보류 37.6%/lat0.01×(median) · gpfull 측정(1run) |
+| `wss` | `PUBSUB` | 8.1% | 12.6% | 27.6% | 104.2% | 103.4% | 98.3% | 보류 38.1%/lat0.01×(median) · gpfull 측정(1run) |
+| `wss` | `DEALER_DEALER` | 7.3% | 12.2% | 28.7% | 103.2% | 103.2% | 105.5% | 보류 37.8%/lat0.01×(median) · gpfull 측정(1run) |
+| `wss` | `DEALER_ROUTER` | 6.2% | 11.2% | 26.9% | 104.6% | 104.9% | 102.5% | 보류 37.2%/lat0.01×(median) · gpfull 측정(1run) |
+| `wss` | `ROUTER_ROUTER` | 7.2% | 11.7% | 27.4% | 109.4% | 109.9% | 109.5% | 보류 38.9%/lat0.01×(median) · gpfull 측정(1run) |
+| `tls` | `PAIR` | 7.1% | 15.2% | 39.9% | 104.5% | 103.9% | 102.4% | 보류 41.7%/lat0.08×(median) · gpfull 측정(1run) |
+| `tls` | `PUBSUB` | 8.9% | 15.4% | 39.6% | 107.9% | 98.1% | 97.2% | 보류 43.0%/lat0.10×(median) · gpfull 측정(1run) |
+| `tls` | `DEALER_DEALER` | 6.5% | 12.7% | 39.7% | 107.5% | 109.5% | 107.9% | 보류 41.6%/lat0.08×(median) · gpfull 측정(1run) |
+| `tls` | `DEALER_ROUTER` | 6.3% | 12.6% | 37.4% | 108.0% | 102.0% | 102.1% | 보류 41.1%/lat0.09×(median) · gpfull 측정(1run) |
+| `tls` | `ROUTER_ROUTER` | 6.9% | 11.9% | 26.0% | 102.0% | 101.4% | 101.9% | 보류 36.7%/lat0.01×(median) · gpfull 측정(1run) |
+| `inproc` | `PAIR` | 3.5% | 4.1% | 4.3% | 9.3% | 17.0% | 23.5% | 보류 5.3%/lat3.95×(median) · gpfull 측정(1run) |
+| `inproc` | `PUBSUB` | 4.4% | 5.4% | 5.6% | 19.9% | 17.7% | 14.3% | 보류 8.8%/lat1.07×(median) · gpfull 측정(1run) |
+| `inproc` | `DEALER_DEALER` | 4.0% | 4.6% | 5.1% | 8.9% | 14.1% | 22.2% | 보류 5.7%/lat0.33×(median) · gpfull 측정(1run) |
+| `inproc` | `DEALER_ROUTER` | 3.8% | 4.6% | 4.8% | 9.4% | 16.1% | 24.3% | 보류 5.6%/lat0.49×(median) · gpfull 측정(1run) |
+| `inproc` | `ROUTER_ROUTER` | 3.9% | 4.5% | 4.7% | 9.8% | 17.2% | 26.4% | 보류 5.7%/lat5.97×(median) · gpfull 측정(1run) |
+| `ipc` | `PAIR` | 5.3% | 9.0% | 15.1% | 99.9% | 104.3% | 73.0% | 보류 32.3%/lat0.12×(median) · gpfull 측정(1run) |
+| `ipc` | `PUBSUB` | 6.9% | 9.3% | 15.3% | 234.9% | 241.0% | 194.7% | 통과 66.6%/lat0.19×(median) · gpfull 측정(1run) |
+| `ipc` | `DEALER_DEALER` | 5.8% | 8.6% | 12.2% | 101.6% | 99.4% | 95.0% | 보류 32.1%/lat0.14×(median) · gpfull 측정(1run) |
+| `ipc` | `DEALER_ROUTER` | 5.6% | 8.0% | 12.0% | 97.0% | 100.1% | 72.5% | 보류 30.7%/lat0.16×(median) · gpfull 측정(1run) |
+| `ipc` | `ROUTER_ROUTER` | 5.8% | 7.9% | 11.3% | 85.4% | 88.7% | 98.1% | 보류 27.6%/lat0.57×(median) · gpfull 측정(1run) |
 
 #### 9.7.2 Multi suite
 

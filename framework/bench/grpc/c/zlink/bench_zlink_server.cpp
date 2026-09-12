@@ -44,39 +44,22 @@ bool recv_multipart_body (void *router,
 {
     const zlink_routing_id_t *rid = nullptr;
     zlink_reply_token_t reply_token = 0;
-    zlink_part_flag_t more = ZLINK_PART_FINAL;
-    zlink_msg_t header;
-    if (zlink_msg_init (&header) != ZLINK_CONFIG_OK)
+    zlink_msg_t parts[2];
+    size_t part_count = 0;
+    const zlink_recv_result_t rc = zlink_router_recv (
+      router, &rid, &reply_token, parts, 2, &part_count, ZLINK_RECV_FLAGS_NONE);
+    if (rc != ZLINK_RECV_OK)
         return false;
+    if (!rid || !rid_out || !reply_token_out || part_count != 2) {
+        zlink_multipart_close (parts, part_count);
+        return false;
+    }
 
-    const int header_rc =
-      zlink_router_recv_part (router, &rid, &reply_token, &header, &more,
-                              ZLINK_RECV_FLAGS_NONE);
-    if (header_rc != ZLINK_RECV_OK) {
-        zlink_msg_close (&header);
-        return false;
-    }
-    if (!rid || !rid_out || !reply_token_out) {
-        zlink_msg_close (&header);
-        return false;
-    }
     *rid_out = *rid;
     *reply_token_out = reply_token;
-
-    if (more == ZLINK_PART_FINAL) {
-        zlink_msg_move (body_out, &header);
-        zlink_msg_close (&header);
-        return true;
-    }
-
-    zlink_msg_close (&header);
-    const zlink_routing_id_t *body_rid = nullptr;
-    zlink_reply_token_t body_reply_token = 0;
-    const int body_rc =
-      zlink_router_recv_part (router, &body_rid, &body_reply_token, body_out, &more,
-                              ZLINK_RECV_FLAGS_NONE);
-    return body_rc == ZLINK_RECV_OK && more == ZLINK_PART_FINAL && body_rid
-           && body_reply_token == reply_token;
+    zlink_msg_move (body_out, &parts[1]);
+    zlink_multipart_close (parts, part_count);
+    return true;
 }
 
 bool reply_multipart (void *router,
@@ -92,17 +75,7 @@ bool reply_multipart (void *router,
         return false;
     }
 
-    zlink_submit_result_t rc =
-      zlink_reply_part (router, rid, reply_token, &parts[0], ZLINK_PART_MORE);
-    const bool header_submitted = rc == ZLINK_SUBMIT_OK;
-    if (rc == ZLINK_SUBMIT_OK)
-        rc = zlink_reply_part (router, rid, reply_token, &parts[1], ZLINK_PART_FINAL);
-    if (rc != ZLINK_SUBMIT_OK) {
-        zlink_msg_close (&parts[1]);
-        if (!header_submitted)
-            zlink_msg_close (&parts[0]);
-    }
-    return rc == ZLINK_SUBMIT_OK;
+    return zlink_reply (router, rid, reply_token, parts, 2) == ZLINK_SUBMIT_OK;
 }
 
 bool send_multipart (void *router, const zlink_routing_id_t *rid, const zlink_msg_t *request_body)
@@ -115,19 +88,8 @@ bool send_multipart (void *router, const zlink_routing_id_t *rid, const zlink_ms
         return false;
     }
 
-    zlink_submit_result_t rc =
-      zlink_send_part_rid (router, rid, &parts[0], ZLINK_SEND_FLAGS_NONE,
-                           ZLINK_PART_MORE, NULL, NULL);
-    const bool header_submitted = rc == ZLINK_SUBMIT_OK;
-    if (rc == ZLINK_SUBMIT_OK)
-        rc = zlink_send_part_rid (router, rid, &parts[1], ZLINK_SEND_FLAGS_NONE,
-                                  ZLINK_PART_FINAL, NULL, NULL);
-    if (rc != ZLINK_SUBMIT_OK) {
-        zlink_msg_close (&parts[1]);
-        if (!header_submitted)
-            zlink_msg_close (&parts[0]);
-    }
-    return rc == ZLINK_SUBMIT_OK;
+    return zlink_send_rid (router, rid, parts, 2, ZLINK_SEND_FLAGS_NONE, NULL, NULL)
+           == ZLINK_SUBMIT_OK;
 }
 
 void request_loop (void *router)
