@@ -1266,3 +1266,42 @@ framework가 낮다(1.03 GB/s 대 raw 1.53 GB/s). 즉 **framework는 덜 할당�
 
 **"공통 원인"으로 묶인 조사 결론을 언어마다 측정으로 확인해야 한다** — 이번 라운드가
 그것을 일곱 번(성공 2, 실패 5) 보여줬다.
+
+## 22. `#310`은 결정이 필요 없었다 — 내 전제가 틀렸다 (2026-09-13)
+
+§14.2와 `#310`에서 "세 언어는 단일 실행 단위인데 **C 하네스만 여러 client**"라고 적었다.
+**검증 없이 쓴 추측이었고 틀렸다.**
+
+```cpp
+// framework/bench/grpc/c/zlink/bench_zlink_client.cpp:302
+zlink_c_bench::result_t run_request_window (void *dealer, ..., void *poller, ...)
+```
+
+`request-backpressure`가 쓰는 `run_request_window`에 **`std::thread`가 0개다.**
+`send-saturation`의 `run_send_loop`도 같다. **C 하네스는 두 패턴 모두 단일 스레드다.**
+
+| `request-backpressure` 1 KiB | throughput | client 포화 |
+|---|---:|---|
+| `zlink-c` (단일 스레드) | 567~636 KOPS | CPU **11.25%** — 포화 아님 |
+| `zlink-java` | — | submit 스레드 0.98/1 |
+| `zlink-node` | — | event loop 1.00/1 |
+| `zlink-framework-cpp` | — | submit 스레드 1.00/1 |
+
+**C는 단일 스레드로 그 처리량을 내면서 포화하지도 않는다.** 언어 행들은 같은 구조에서
+실행 단위를 100% 쓰고도 훨씬 적게 낸다.
+
+그러므로 G6가 막는 것은 "조건이 달라 측정 불가"가 아니라 **"언어 행이 한 실행 단위로 할 수
+있는 일이 C보다 훨씬 적다"는 실제 결과**다. 규격 결정이 아니라 성능 문제다. `#310`을 닫았다.
+
+### 22.1 같은 실수를 세 번 했다
+
+이 세션에서 **검증 없이 전제를 세웠다가 뒤집힌 것**이 세 번이다.
+
+| 무엇 | 어떻게 드러났나 |
+|---|---|
+| `#295`가 0.90 작업을 막지 않는다 | `#300`이 분모도 병들 수 있음을 보여줬다 |
+| `#310`이 `send-saturation`에도 적용된다 | C의 `run_send_loop`가 단일 스레드였다 |
+| `#310`이 `request-backpressure`에 적용된다 | C의 `run_request_window`도 단일 스레드였다 |
+
+셋 다 **코드를 한 번 열어보면 1분에 끝날 확인**이었다. 성능 판단에서 전제를 세울 때는
+그 전제부터 코드로 확인한다 — 이 세션의 §15.6, §20.2와 같은 계열의 교훈이다.
