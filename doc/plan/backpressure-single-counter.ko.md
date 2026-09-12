@@ -925,3 +925,56 @@ framework-contract'` **67/67 통과**.
 
 측정 기준이 섰기 때문에 이 결론에 도달할 수 있었다. 기준선이 없었다면 두 수정 모두
 "복사를 줄였으니", "lock을 뺐으니" 개선으로 기록됐을 것이다.
+
+## 16. `#7` 2차 — 통했다. §15.6의 결론을 정정한다
+
+즉시 수락된 send가 만들던 completion graph를 없앴다. binding이 `ZLINK_SUBMIT_OK`를 주면
+`raw_route_port_t`가 이미 ready task를 반환하는데도 Framework가 registry entry·
+`task_completion_source`·observer를 만들어 그 callback이 다시 public task를 완료하고 있었다.
+immediate 분기만 고치고 pending(backpressured) 분기는 그대로 뒀다.
+
+**메시지당 heap 할당 6개 제거**: raw-port ready task state, owner completion state,
+owner completion source와 그 task state 2개, running-task wrapper, operation-registry entry.
+
+`ctest -L 'framework-unit|framework-contract'` **67/67 통과**.
+
+### 16.1 결과 — 2.3배
+
+| C++ send-saturation 1 KiB | 기준선 | 1차(복사) | **2차(completion graph)** |
+|---|---:|---:|---:|
+| `zlink-framework-cpp` | 52.8 KMSG/s | 52.9 | **122.8** |
+| `zlink-cpp` (raw) | 822 | 822 | 819 |
+| 비율 | 0.064 | 0.065 | **(0.149)** |
+| 4 KiB 비율 | 0.107 | 0.105 | **(0.242)** |
+
+### 16.2 §15.6은 틀렸다
+
+§15.6에서 "읽기로 세운 가설이 두 번 빗나갔으니 프로파일링으로 전환해야 한다"고 적었다.
+**틀렸다.** 조사(§7)가 C++의 2순위로 지목한 것이 정확히 맞았고, 1차(복사 1회)가 너무
+작았을 뿐이다.
+
+교훈은 "코드 읽기가 부족하다"가 아니라 **"한 순위에서 가장 작은 조각만 떼어내 시험하면
+그 순위 전체를 오판한다"**다. 1차는 §2.1(재포장 복사) 중 source 쪽 1회만 건드렸고,
+같은 항목의 target 쪽 3회는 남아 있었다.
+
+### 16.3 `#5` .NET을 다시 본다
+
+.NET 1차는 조사 1순위(`_socketGate` 직렬화)를 건드려 효과가 없었다. 그런데 C++에서 통한
+것은 **2순위(completion graph)**다. .NET에도 같은 구조가 있다 — `findings-dotnet.md`가
+`RequestCompletionEntry`를 "정상 admission에서도 만드는 것"으로 지목했고,
+`findings-binding-gap.md` §3이 네 언어 공통이라고 적었다.
+
+**`#5`의 다음 시도는 .NET의 completion graph다.**
+
+### 16.4 새 한계 — framework가 submit 스레드를 100% 쓴다
+
+| | throughput | submit_thread_cores |
+|---|---:|---:|
+| `zlink-cpp` (raw) | 819 KMSG/s | 0.82~0.85 |
+| `zlink-framework-cpp` | 122.8 | **1.00** |
+
+판정이 G6로 unsupported가 됐다. Java·Node에서 본 것과 같은 전개다 — **병목을 없애니 일을
+하기 시작했고, 그러자 단일 실행 단위가 새 한계가 됐다.**
+
+이제 C++까지 `#310`(단일 실행 단위를 C 기준과 어떻게 비교할지)에 걸린다. 그 결정 없이는
+다음 개선의 효과를 판정할 수 없다. **`#310`의 우선순위가 올라간다.**
