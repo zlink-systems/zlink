@@ -1,0 +1,15 @@
+# with-grpc bench, node server-driven source A
+# implementation: zlink-node
+# pattern: request-backpressure
+# payload_size: 1024
+# warmup: 1000
+
+RESULT,current,zlink-node-request-backpressure,local,1024,throughput,88633.800
+RESULT,current,zlink-node-request-backpressure,local,1024,bandwidth,90.761
+RESULT,current,zlink-node-request-backpressure,local,1024,latency,1.010
+RESULT,current,zlink-node-request-backpressure,local,1024,latency_p95,3.465
+RESULT,current,zlink-node-request-backpressure,local,1024,latency_p99,5.185
+RESULT,current,zlink-node-request-backpressure,local,1024,client_cpu_percent,8.080
+RESULT,current,zlink-node-request-backpressure,local,1024,client_memory_mb,144.539
+RESULT,current,zlink-node-request-backpressure,local,1024,server_cpu_percent,7.836
+RESULT,current,zlink-node-request-backpressure,local,1024,server_memory_mb,122.449
