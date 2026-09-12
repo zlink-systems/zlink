@@ -151,6 +151,39 @@ function createRawTransport(options) {
       options.targetCommandEndpoint
     ))
     : [];
+  let requestCompletionPump = null;
+
+  const openRequestCompletionPump = () => {
+    if (requestSocket === null) return null;
+    if (requestCompletionPump !== null) {
+      throw new Error('raw request completion pump is already open');
+    }
+    const poller = zlink.createPoller();
+    const events = zlink.createPollEvents(1);
+    try {
+      // The request-backpressure loop owns exactly one completion poller for
+      // its one raw request socket. Registration transfers completion draining
+      // from the binding runtime watch to the bounded benchmark turn.
+      poller.add(requestSocket.socket, [zlink.PollEventFlag.PollCompletion], 0);
+    } catch (error) {
+      events.close();
+      poller.close();
+      throw error;
+    }
+    const pump = {
+      poll(timeoutMs) {
+        poller.wait(events, timeoutMs);
+      },
+      close() {
+        if (requestCompletionPump !== pump) return;
+        events.close();
+        poller.close();
+        requestCompletionPump = null;
+      }
+    };
+    requestCompletionPump = pump;
+    return pump;
+  };
 
   const submitRequest = (payload) => {
     const submission = requestSocket.socket.request(requestSocket.peer)
@@ -184,6 +217,7 @@ function createRawTransport(options) {
       return submitRequest(payload).reply;
     },
     requestSubmission: (_stream, payload) => submitRequest(payload),
+    openRequestCompletionPump,
     send: async (stream, payload) => {
       const submission = submitSend(stream, payload);
       if (submission.result === zlink.SubmitResult.Backpressured) {
@@ -193,6 +227,7 @@ function createRawTransport(options) {
     sendSubmission: (stream, payload) => submitSend(stream, payload),
     backpressuredResult: zlink.SubmitResult.Backpressured,
     close: async () => {
+      requestCompletionPump?.close();
       if (requestSocket !== null) requestSocket.close();
       for (const socket of sendSockets) socket.close();
       context.close();
