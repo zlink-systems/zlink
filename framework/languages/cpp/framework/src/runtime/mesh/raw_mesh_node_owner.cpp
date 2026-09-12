@@ -1396,35 +1396,55 @@ struct raw_mesh_node_owner_t::send_completion_state_t
 raw_mesh_node_owner_t::send_start_result_t raw_mesh_node_owner_t::start_send (
   std::vector<std::uint8_t> target_routing_id,
   detail::backend::raw_message_t parts,
-  std::shared_ptr<send_completion_state_t> completion,
+  bool needs_public_completion,
   detail::backend::raw_send_stage_trace_t trace)
 {
     struct send_start_t
     {
         foundation::call_id_t operation;
-        std::shared_ptr<task_t<zlink::submit_result_t>> running;
+        std::shared_ptr<task_t<zlink::submit_result_t>> public_completion;
         bool registered = false;
     };
     auto start = _lane.run ([this, parts = std::move (parts),
-                             trace = std::move (trace), completion,
+                             trace = std::move (trace), needs_public_completion,
                              target_routing_id = std::move (target_routing_id)] () mutable {
         std::shared_ptr<detail::backend::raw_route_port_t> port;
-        foundation::call_id_t operation;
         {
             std::lock_guard lifecycle_lock (_lifecycle_mutex);
             port = _port;
-            if (port) {
-                operation = operation_id (
-                  _options.descriptor.lifecycle_generation,
-                  take_reply_route_id_locked ());
-            }
         }
         if (!port) {
             if (trace)
                 trace ("router_admission_submit", "terminated");
-            return std::optional<send_start_t>{};
+            return send_start_result_t{
+              send_start_state_t::terminated, std::nullopt, {}};
+        }
+        // `port` is a lifetime-safe snapshot: close cannot take it out from
+        // under this owner turn, and raw_route_port_t serializes close versus
+        // native submission with its socket gate.
+        auto submission = port->submit_send (
+          target_routing_id, std::move (parts), std::move (trace));
+        if (submission.state
+            == detail::backend::raw_send_submission_state_t::immediate) {
+            return send_start_result_t{
+              send_start_state_t::started,
+              std::move (submission.immediate_result), {}};
+        }
+        foundation::call_id_t operation;
+        {
+            std::lock_guard lifecycle_lock (_lifecycle_mutex);
+            operation = operation_id (
+              _options.descriptor.lifecycle_generation,
+              take_reply_route_id_locked ());
         }
         send_start_t value{.operation = operation};
+        auto completion = std::make_shared<send_completion_state_t> ();
+        if (needs_public_completion) {
+            completion->source = std::make_shared<
+              detail::task_completion_source_t<zlink::submit_result_t>> ();
+            value.public_completion = std::make_shared<
+              task_t<zlink::submit_result_t>> (completion->source->task ());
+        }
         value.registered = _operations->register_operation (
           operation, foundation::operation_registry_t::clock_t::time_point::max (),
           [completion] (foundation::operation_terminal_t terminal, auto) {
@@ -1450,48 +1470,42 @@ raw_mesh_node_owner_t::send_start_result_t raw_mesh_node_owner_t::start_send (
           });
         if (value.registered) {
             try {
-                value.running = std::make_shared<task_t<zlink::submit_result_t>> (
-                  port->send_result (target_routing_id, std::move (parts), std::move (trace)));
+                auto running = std::move (submission.pending_completion);
+                if (!running) {
+                    (void) _operations->unregister (operation);
+                    return send_start_result_t{
+                      send_start_state_t::terminated, std::nullopt, {}};
+                }
+                const auto operations = _operations;
+                detail::observe_task_completion (
+                  *running, [operations, operation, completion, running] (
+                              const result_t<zlink::submit_result_t> &settled) {
+                      if (!settled) {
+                          (void) operations->fail (
+                            operation,
+                            foundation::operation_terminal_t::transport_failed);
+                          return;
+                      }
+                      const auto result = settled.value ();
+                      (void) operations->complete (
+                        operation, {},
+                        [completion, result] { completion->result = result; });
+                  });
             }
             catch (...) {
                 (void) _operations->unregister (operation);
                 throw;
             }
         }
-        return std::optional<send_start_t>{std::move (value)};
+        if (!value.registered) {
+            return send_start_result_t{
+              send_start_state_t::terminated, std::nullopt, {}};
+        }
+        return send_start_result_t{
+          send_start_state_t::started, std::nullopt,
+          std::move (value.public_completion)};
     }).get ();
-    if (!start)
-        return send_start_result_t::terminated;
-    if (!start->registered)
-        return send_start_result_t::terminated;
-    if (!start->running) {
-        (void) _operations->unregister (start->operation);
-        return send_start_result_t::terminated;
-    }
-    const auto operations = _operations;
-    const auto operation = start->operation;
-    auto running = std::move (start->running);
-    try {
-        detail::observe_task_completion (
-          *running, [operations, operation, completion, running] (
-                      const result_t<zlink::submit_result_t> &settled) {
-              if (!settled) {
-                  (void) operations->fail (
-                    operation,
-                    foundation::operation_terminal_t::transport_failed);
-                  return;
-              }
-              const auto result = settled.value ();
-              (void) operations->complete (
-                operation, {},
-                [completion, result] { completion->result = result; });
-          });
-    }
-    catch (...) {
-        (void) operations->unregister (operation);
-        throw;
-    }
-    return send_start_result_t::started;
+    return start;
 }
 
 task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_with_header_result (
@@ -1506,19 +1520,17 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_with_header_result (
             trace ("router_admission_submit", "not_connected");
         co_return zlink::submit_result_t::not_connected;
     }
-    auto completion = std::make_shared<send_completion_state_t> ();
-    completion->source =
-      std::make_shared<detail::task_completion_source_t<zlink::submit_result_t>> ();
-    auto pending_completion = completion->source->task ();
     detail::backend::raw_message_t parts;
     parts.reserve (2);
     parts.push_back (std::move (header));
     parts.push_back (protocol::encode_application_payload (application_payload));
-    const auto started = start_send (
-      std::move (target_routing_id), std::move (parts), completion, std::move (trace));
-    if (started == send_start_result_t::terminated)
+    auto started = start_send (
+      std::move (target_routing_id), std::move (parts), true, std::move (trace));
+    if (started.state == send_start_state_t::terminated)
         co_return zlink::submit_result_t::terminated;
-    co_return co_await pending_completion;
+    if (started.immediate_result)
+        co_return std::move (*started.immediate_result);
+    co_return co_await *started.pending_completion;
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_with_header (
@@ -1536,30 +1548,27 @@ task_t<bool> raw_mesh_node_owner_t::send_header_only (
   const std::vector<std::uint8_t> &target_routing_id,
   std::vector<std::uint8_t> header)
 {
-    auto completion = std::make_shared<send_completion_state_t> ();
-    completion->source =
-      std::make_shared<detail::task_completion_source_t<zlink::submit_result_t>> ();
-    auto pending_completion = completion->source->task ();
-    const auto started = start_send (
+    auto started = start_send (
       std::vector<std::uint8_t> (target_routing_id),
-      detail::backend::raw_message_t{std::move (header)}, completion);
-    if (started == send_start_result_t::terminated)
+      detail::backend::raw_message_t{std::move (header)}, true);
+    if (started.state == send_start_state_t::terminated)
         co_return false;
-    co_return co_await pending_completion == zlink::submit_result_t::ok;
+    if (started.immediate_result)
+        co_return started.immediate_result->value () == zlink::submit_result_t::ok;
+    co_return co_await *started.pending_completion == zlink::submit_result_t::ok;
 }
 
-raw_mesh_node_owner_t::send_start_result_t
+raw_mesh_node_owner_t::send_start_state_t
 raw_mesh_node_owner_t::submit_header_only (
   const std::vector<std::uint8_t> &target_routing_id,
   std::vector<std::uint8_t> header)
 {
-    auto completion = std::make_shared<send_completion_state_t> ();
-    const auto started = start_send (
+    auto started = start_send (
       std::vector<std::uint8_t> (target_routing_id),
-      detail::backend::raw_message_t{std::move (header)}, completion);
-    if (started != send_start_result_t::started && mesh_trace_enabled ())
+      detail::backend::raw_message_t{std::move (header)}, false);
+    if (started.state != send_start_state_t::started && mesh_trace_enabled ())
         trace_mesh_enabled ("control-send start=terminated");
-    return started;
+    return started.state;
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_session_relocation_route (
@@ -3284,7 +3293,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                   received->source_routing_id,
                   protocol::encode_liveness (
                     protocol::command::livenessAck, record.probe_id));
-                if (submitted == send_start_result_t::terminated)
+                if (submitted == send_start_state_t::terminated)
                     co_return raw_mesh_pump_result_t::protocol_error;
             } else {
                 (void) _lane.run ([this, &received, &admitted, &record, now] {

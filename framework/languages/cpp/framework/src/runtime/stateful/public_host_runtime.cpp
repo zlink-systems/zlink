@@ -2649,6 +2649,15 @@ public_host_runtime_t::send_to_node (const zlink::routing_id_t &target,
 }
 
 task_t<zlink::submit_result_t>
+public_host_runtime_t::send_to_node (const zlink::routing_id_t &target,
+                                     std::vector<zlink::message_t> &&parts)
+{
+    const auto target_bytes = target.to_bytes ();
+    co_return co_await _transport->send_to_node_result (
+      target_bytes, encode_application (std::move (parts)));
+}
+
+task_t<zlink::submit_result_t>
 public_host_runtime_t::request_to_node (const zlink::routing_id_t &target,
                                         const std::vector<zlink::message_t> &parts,
                                         pending_operation_t &operation,
@@ -6102,6 +6111,13 @@ public_host_runtime_t::encode_application (const std::vector<zlink::message_t> &
                                            std::span<const std::uint8_t>) const
 {
     return protocol::application_payload_t::from_parts (parts);
+}
+
+protocol::application_payload_t
+public_host_runtime_t::encode_application (std::vector<zlink::message_t> &&parts,
+                                           std::span<const std::uint8_t>) const
+{
+    return protocol::application_payload_t::from_parts (std::move (parts));
 }
 
 actor_ref_t public_host_runtime_t::framework_actor_ref (const stateful::object_ref_t &object,

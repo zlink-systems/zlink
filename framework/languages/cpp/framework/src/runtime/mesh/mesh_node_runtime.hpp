@@ -274,6 +274,9 @@ class mesh_node_runtime_t
                                          const std::vector<zlink::message_t> &parts,
                                          std::vector<std::uint8_t> metadata = {});
     task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
+                                         std::vector<zlink::message_t> &&parts,
+                                         std::vector<std::uint8_t> metadata = {});
+    task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
                                          const std::vector<zlink::message_t> &parts,
                                          const std::map<std::string, std::string> &metadata);
     task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,

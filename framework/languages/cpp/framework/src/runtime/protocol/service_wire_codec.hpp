@@ -62,6 +62,7 @@ struct application_payload_t
     }
 
     static application_payload_t from_parts (const multipart_t &parts);
+    static application_payload_t from_parts (multipart_t &&parts);
     const multipart_t *parts () const noexcept
     {
         const auto value = std::get_if<std::shared_ptr<const multipart_t>> (&_body);

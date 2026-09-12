@@ -491,6 +491,13 @@ static void test_application_payload_wire_bytes ()
                     native.flow_origin = payload.flow_origin;
                     assert (protocol::encode_application_payload (native) == expected);
                     assert (protocol::application_payload_hwm_bytes (native) == size);
+                    auto owned_parts = std::vector<zlink::message_t>{
+                      zlink::message_t::from (std::vector<std::uint8_t>{'o', 'w', 'n'})};
+                    const auto *owned_storage = owned_parts.front ().data ();
+                    auto moved_parts = protocol::application_payload_t::from_parts (
+                      std::move (owned_parts));
+                    assert (owned_parts.empty ());
+                    assert (moved_parts.parts ()->front ().data () == owned_storage);
                     const auto retained_copy = native;
                     assert (retained_copy.parts () == native.parts ());
                     assert (native == retained_copy);
