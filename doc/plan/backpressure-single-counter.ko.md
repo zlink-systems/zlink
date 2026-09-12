@@ -364,3 +364,53 @@ framework 본체에서는 지웠는데 동반 package가 같은 필드를 **필�
 몰라 라운드 1이 틀렸을 때 브리프를 다시 쓰고 4개 job을 처음부터 재실행했다.
 리뷰도 `codex exec review --base main`이라는 전용 서브커맨드가 있었다.
 이후 job은 모두 교정된 형태로 띄운다.
+
+## 7. send 건당 비용 — 조사 결과 (2026-09-12)
+
+언어마다 따로 조사를 돌렸는데 **세 언어가 같은 곳을 가리켰다.** 언어별 버그 세 개가 아니라
+같은 설계 비용이 세 번 나타난 것이다.
+
+| 원인 | Java | C++ |
+|---|---|---|
+| service-wire 재포장 — body 전체 복사 (source 2회, target 3회) | 2위 | **1위** |
+| 즉시 수락된 send에도 completion graph를 만든다 | **1위** | 2위 |
+| source owner·state-lane 왕복 (send마다 turn) | 3위 | 3위 |
+
+원본은 `doc/plan/send-cost-worklog/findings-{java,cpp}.md`.
+
+### 7.1 감독자가 코드로 확인한 것
+
+**Java — 1 KiB body가 source에서만 4번 복사된다.**
+`ZLinkProtobufMessageSerializer`가 `toByteArray()`(복사 1),
+`ZLinkEncodedPayload.from()`이 `Arrays.copyOf`(2), `bytes()`가 또 `Arrays.copyOf`(3),
+`Message.from(byte[])`가 native로 복사(4). target은 `ZLinkMessagePayloads.encoded()`가
+`message.toByteArray()`부터 같은 계단을 되풀이한다.
+(`ZLinkEncodedPayload.java:15,19`, `ZLinkMessagePayloads.java:13,18`)
+
+**C++ — service-wire 포장이 body를 두 번 통째로 쓴다.**
+`application_payload_t::from_parts`가 part마다 `part.copy()`
+(`service_wire_codec.cpp:2973`), 이어 `encode_application_payload`가 그 전부를 새
+vector로 다시 쓴다(`:3062`). target은 outer frame 복사 + inner multipart `assign` +
+part별 `message_t` 재생성으로 세 번이다.
+
+raw는 같은 protobuf DTO와 같은 두 part를 쓰는데도 이 계단이 없다. 그래서 **건당 비용
+차이는 wire 모양이 아니라 그 모양을 만드는 과정에서 생긴다.**
+
+### 7.2 건드리지 않을 것 — 두 조사가 같은 선을 그었다
+
+- **send의 완료 의미를 바꾸지 않는다.** send는 source-local queue 수락으로 완료하고
+  remote handler를 기다리지 않는다(`00-foundation/04-interaction-model` §, C++
+  `03-channel-messaging` §). completion graph를 줄이는 것은 같은 결과를 더 싸게
+  표현하는 일이지 target ACK를 더하는 일이 아니다.
+- **wire 형식을 바꾸지 않는다.** `nodeSend` command와 Framework multipart profile의
+  part 순서·길이 형식은 그대로다(`02-channel-transport/06-wire-protocol` §2).
+  최적화 대상은 형식이 아니라 **형식 사이의 불필요한 materialization**이다.
+- **target permit과 handler turn을 우회하지 않는다.** permit을 먼저 얻고 handler
+  turn으로 옮기는 순서는 이번 백프레셔 설계 그 자체다
+  (`01-execution/04-application-job-queue-and-backpressure` §3).
+- **binding의 DONT_WAIT 재시도를 Framework가 다시 구현하지 않는다.**
+
+### 7.3 다음
+
+건당 비용 감축은 **기준선을 새로 잡은 뒤**에 손댄다(§6.4 순서 2 → 3). 지금 고치면
+무엇이 좋아졌는지 말할 수 없다. 순서는 위 표의 1·2위를 언어마다 하나씩, 수정마다 재측정.
