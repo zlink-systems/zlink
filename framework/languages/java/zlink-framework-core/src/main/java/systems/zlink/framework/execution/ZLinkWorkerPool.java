@@ -14,12 +14,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Elastic bounded worker pool for CPU offload.
+ * Elastic worker pool for CPU offload.
  *
  * <p>Semantics: threads are created on demand up to {@code maxThreads}, idle threads
- * above {@code minThreads} are reclaimed after {@code idleTimeout}, at most
- * {@code maxQueueLength} tasks wait in the queue, and a full queue rejects the submit
- * immediately ({@link RejectedExecutionException}) instead of blocking the caller.
+ * above {@code minThreads} are reclaimed after {@code idleTimeout}; waiting work
+ * remains queued until a worker can run it.
  */
 public final class ZLinkWorkerPool implements AutoCloseable {
     private static final AtomicInteger POOL_SEQUENCE = new AtomicInteger();
@@ -35,8 +34,7 @@ public final class ZLinkWorkerPool implements AutoCloseable {
     public ZLinkWorkerPool(
         int minThreads,
         int maxThreads,
-        Duration idleTimeout,
-        int maxQueueLength) {
+        Duration idleTimeout) {
         if (minThreads < 0) {
             throw new IllegalArgumentException("worker minThreads must be >= 0");
         }
@@ -47,11 +45,8 @@ public final class ZLinkWorkerPool implements AutoCloseable {
         if (idleTimeout == null || idleTimeout.isNegative()) {
             throw new IllegalArgumentException("worker idleTimeout must not be negative");
         }
-        if (maxQueueLength < 1) {
-            throw new IllegalArgumentException("worker maxQueueLength must be >= 1");
-        }
         this.minThreads = minThreads;
-        this.queue = new ElasticTaskQueue(maxQueueLength);
+        this.queue = new ElasticTaskQueue();
         int poolId = POOL_SEQUENCE.incrementAndGet();
         AtomicInteger threadSequence = new AtomicInteger();
         this.executor = new ThreadPoolExecutor(
@@ -75,10 +70,7 @@ public final class ZLinkWorkerPool implements AutoCloseable {
         return Math.max(2, Runtime.getRuntime().availableProcessors() * 2);
     }
 
-    /**
-     * Submits a task. Throws {@link RejectedExecutionException} immediately when the
-     * pool is at {@code maxThreads} and the queue is full; never blocks the caller.
-     */
+    /** Submits a task for execution after any work already waiting for a worker. */
     public void execute(Runnable task) {
         inFlightTasks.incrementAndGet();
         boolean submitted = false;
@@ -160,12 +152,7 @@ public final class ZLinkWorkerPool implements AutoCloseable {
         if (pool.isShutdown()) {
             throw new RejectedExecutionException("worker pool is closed");
         }
-        // The elastic queue refused the offer to force thread creation, but the pool
-        // is already at maxThreads. Try to queue the task directly; a full queue is a
-        // hard, immediate rejection (no waiting, no caller-runs).
-        if (!queue.offerDirect(task)) {
-            throw new RejectedExecutionException("worker queue is full");
-        }
+        queue.offerDirect(task);
         ensureQueuedTaskHasWorker(pool);
     }
 
@@ -185,15 +172,15 @@ public final class ZLinkWorkerPool implements AutoCloseable {
     }
 
     /**
-     * Bounded queue that reports itself full while the pool can still grow, so the
+     * Queue that reports itself full while the pool can still grow, so the
      * executor creates threads before queueing (elastic scale-out).
      */
     private static final class ElasticTaskQueue extends LinkedBlockingQueue<Runnable> {
         private transient volatile ThreadPoolExecutor pool;
         private transient volatile AtomicInteger inFlightTasks;
 
-        ElasticTaskQueue(int capacity) {
-            super(capacity);
+        ElasticTaskQueue() {
+            super();
         }
 
         void bind(ThreadPoolExecutor pool, AtomicInteger inFlightTasks) {

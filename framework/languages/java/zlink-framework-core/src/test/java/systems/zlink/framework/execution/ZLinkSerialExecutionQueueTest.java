@@ -420,23 +420,18 @@ final class ZLinkSerialExecutionQueueTest {
     }
 
     @Test
-    void ownerByteReservationRejectsLargeRecordAndReturnsAfterCompletion()
+    void ownerQueueAcceptsRecordsWhileAnEarlierTurnIsRunning()
         throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
             null,
             ZLinkExecutionLanePolicy.generic(),
-            4,
-            10,
-            4,
-            10,
-            4,
             2,
             Duration.ofSeconds(1));
         CompletableFuture<Void> active = new CompletableFuture<>();
 
         queue.enqueueRelocatable(new byte[6], () -> active)
             .toCompletableFuture();
-        assertFalse(queue.tryEnqueueRelocatable(
+        assertTrue(queue.tryEnqueueRelocatable(
             new byte[1],
             () -> CompletableFuture.completedFuture(null)));
 
@@ -449,15 +444,10 @@ final class ZLinkSerialExecutionQueueTest {
     }
 
     @Test
-    void relocationByteAccountingRejectsAnUnrepresentableAggregate() throws Exception {
+    void relocationAcceptsLargePayloadHints() throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
             null,
             ZLinkExecutionLanePolicy.generic(),
-            4,
-            Long.MAX_VALUE,
-            4,
-            4,
-            1,
             2,
             Duration.ofSeconds(1));
         ZLinkSerialExecutionQueue.RelocationSeal seal =
@@ -469,9 +459,9 @@ final class ZLinkSerialExecutionQueueTest {
         CompletableFuture<Void> lastRepresentable = queue.enqueue(
             () -> CompletableFuture.completedFuture(null)).toCompletableFuture();
 
-        assertFalse(queue.tryEnqueue(
+        assertTrue(queue.tryEnqueue(
             () -> CompletableFuture.completedFuture(null)));
-        assertTrue(queue.enqueue(
+        assertFalse(queue.enqueue(
             () -> CompletableFuture.completedFuture(null)).toCompletableFuture()
             .isCompletedExceptionally());
 
@@ -481,22 +471,17 @@ final class ZLinkSerialExecutionQueueTest {
     }
 
     @Test
-    void ownerReservationChargesPayloadAndCountsEmptyTurns()
+    void ownerQueueAcceptsPayloadAndEmptyTurns()
         throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
             null,
             ZLinkExecutionLanePolicy.generic(),
             2,
-            10,
-            2,
-            10,
-            4,
-            2,
             Duration.ofSeconds(1));
         CompletableFuture<Void> active = new CompletableFuture<>();
 
         queue.enqueueWithPayloadBytes(6, () -> active);
-        assertFalse(queue.tryEnqueueWithPayloadBytes(
+        assertTrue(queue.tryEnqueueWithPayloadBytes(
             0,
             () -> CompletableFuture.completedFuture(null)));
 
@@ -509,16 +494,11 @@ final class ZLinkSerialExecutionQueueTest {
     }
 
     @Test
-    void lifecycleOwnerReservationIsSeparateAndStillBounded()
+    void lifecycleLaneRemainsSeparateWithoutAnAdmissionCap()
         throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
             null,
             ZLinkExecutionLanePolicy.generic(),
-            4,
-            64,
-            1,
-            4,
-            4,
             2,
             Duration.ofSeconds(1));
         CompletableFuture<Void> active = new CompletableFuture<>();
@@ -533,7 +513,7 @@ final class ZLinkSerialExecutionQueueTest {
             () -> CompletableFuture.completedFuture(null))
             .toCompletableFuture();
         assertFalse(firstBarrier.isCompletedExceptionally());
-        assertTrue(queue.enqueueBarrierNext(
+        assertFalse(queue.enqueueBarrierNext(
             () -> CompletableFuture.completedFuture(null))
             .toCompletableFuture().isCompletedExceptionally());
         active.complete(null);
@@ -545,11 +525,6 @@ final class ZLinkSerialExecutionQueueTest {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
             null,
             ZLinkExecutionLanePolicy.generic(),
-            16,
-            4096,
-            16,
-            4096,
-            1,
             2,
             Duration.ofSeconds(1));
         CompletableFuture<Void> active = new CompletableFuture<>();
@@ -1113,11 +1088,6 @@ final class ZLinkSerialExecutionQueueTest {
         Executor executor, Duration budget) {
         return new ZLinkSerialExecutionQueue(
             executor, ZLinkExecutionLanePolicy.generic(),
-            ZLinkSerialExecutionQueue.DEFAULT_APPLICATION_MESSAGE_CAPACITY,
-            ZLinkSerialExecutionQueue.DEFAULT_APPLICATION_BYTE_CAPACITY,
-            ZLinkSerialExecutionQueue.DEFAULT_LIFECYCLE_MESSAGE_CAPACITY,
-            ZLinkSerialExecutionQueue.DEFAULT_LIFECYCLE_BYTE_CAPACITY,
-            ZLinkSerialExecutionQueue.DEFAULT_FIXED_WORK_BYTE_COST,
             ZLinkSerialExecutionQueue.DEFAULT_LIFECYCLE_BURST_LIMIT,
             budget);
     }

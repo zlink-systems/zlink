@@ -76,14 +76,14 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
     }
 
     @Test
-    void instanceActivationFailuresPreserveCapacityAndMissingHandlerReasons() throws Exception {
+    void instanceActivationFailuresPreserveUnavailableAndMissingHandlerReasons() throws Exception {
         RecordingSink sink = new RecordingSink();
         try (var metrics = ZLinkRuntimeMetrics.install(sink);
              Pair pair = new Pair()) {
             var spots = (ZLinkJavaRawSpotNode) pair.target.spotNode();
             spots.registerInstanceSpotType("full", (type, route, spot) ->
                 CompletableFuture.failedFuture(new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED, "activation capacity exhausted")));
+                    ZLinkFrameworkErrorKind.UNAVAILABLE, "activation unavailable")));
             try (Message packet = Message.from("Packet"); Message body = Message.from("body")) {
                 pair.source.sendInstanceSpot(pair.instanceRoute("missing"), "unregistered", null,
                         new byte[0], List.of(packet, body))
@@ -94,7 +94,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                 pair.source.sendInstanceSpot(pair.instanceRoute("full"), "full", null,
                         new byte[0], List.of(packet, body))
                     .toCompletableFuture().get(2, TimeUnit.SECONDS);
-                sink.expectDrop("instance_spot", "backpressure");
+                sink.expectDrop("instance_spot", "no_handler");
             }
             assertTrue(sink.events.isEmpty());
         }

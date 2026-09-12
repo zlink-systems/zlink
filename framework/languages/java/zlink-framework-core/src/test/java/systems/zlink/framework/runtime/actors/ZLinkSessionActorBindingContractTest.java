@@ -594,23 +594,6 @@ final class ZLinkSessionActorBindingContractTest {
             sessionRelocationSealTimeout);
     }
 
-    private static ZLinkSessionActorsRuntime runtime(
-        FakeStream stream,
-        int targetOutboundCapacity) {
-        return new ZLinkSessionActorsRuntime(
-            null,
-            stream,
-            SESSION,
-            null,
-            new RawSerializer(),
-            ignored -> true,
-            null,
-            true,
-            ZLinkStreamCodec.RAW,
-            null,
-            targetOutboundCapacity);
-    }
-
     private static ZLinkServiceM6BWireCodec.BoundSessionSend boundSend(
         RoutingId nodeRid,
         long nodeGeneration,

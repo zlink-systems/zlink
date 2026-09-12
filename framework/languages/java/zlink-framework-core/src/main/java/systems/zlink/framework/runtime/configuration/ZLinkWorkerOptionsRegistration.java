@@ -9,7 +9,6 @@ public final class ZLinkWorkerOptionsRegistration implements ZLinkWorkerOptions 
     private int minThreads;
     private int maxThreads = ZLinkWorkerPool.defaultMaxThreads();
     private Duration idleTimeout = Duration.ofSeconds(30);
-    private int maxQueueLength = 1024;
 
     @Override
     public ZLinkWorkerOptionsRegistration minThreads(int minThreads) {
@@ -38,15 +37,6 @@ public final class ZLinkWorkerOptionsRegistration implements ZLinkWorkerOptions 
         return this;
     }
 
-    @Override
-    public ZLinkWorkerOptionsRegistration maxQueueLength(int maxQueueLength) {
-        if (maxQueueLength < 1) {
-            throw new ZLinkConfigurationException("worker maxQueueLength must be >= 1");
-        }
-        this.maxQueueLength = maxQueueLength;
-        return this;
-    }
-
     public int minThreads() {
         return minThreads;
     }
@@ -59,12 +49,8 @@ public final class ZLinkWorkerOptionsRegistration implements ZLinkWorkerOptions 
         return idleTimeout;
     }
 
-    public int maxQueueLength() {
-        return maxQueueLength;
-    }
-
     public ZLinkWorkerPool createPool() {
-        return new ZLinkWorkerPool(minThreads, maxThreads, idleTimeout, maxQueueLength);
+        return new ZLinkWorkerPool(minThreads, maxThreads, idleTimeout);
     }
 
     void validate() {

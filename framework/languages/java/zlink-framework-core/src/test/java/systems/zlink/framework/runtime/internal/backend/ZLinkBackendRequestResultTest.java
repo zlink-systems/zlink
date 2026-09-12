@@ -20,7 +20,7 @@ class ZLinkBackendRequestResultTest {
         assertEquals(ZLinkFrameworkErrorKind.REJECTED,
             ZLinkBackendRequestResult.REJECTED.toFrameworkErrorKind());
         //  A remote reply's conflict/busy is the target's owner/queue state:
-        //  Unavailable, not a source-owned CapacityExceeded (spec 32:99-103).
+        //  Unavailable, not a source-owned queue-capacity error (spec 32:99-103).
         assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
             ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind());
         assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
@@ -35,8 +35,7 @@ class ZLinkBackendRequestResultTest {
             ZLinkBackendRequestResult.NOT_SUPPORTED.toFrameworkErrorKind());
         assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
             ZLinkBackendRequestResult.INTERNAL_ERROR.toFrameworkErrorKind());
-        //  Backpressured(113) is the placement/admission-capacity terminal.
-        assertEquals(ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
+        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
             ZLinkBackendRequestResult.BACKPRESSURED.toFrameworkErrorKind());
         assertEquals(ZLinkBackendRequestResult.BACKPRESSURED,
             ZLinkBackendRequestResult.fromWireTerminal(113));

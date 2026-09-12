@@ -13,13 +13,10 @@ import systems.zlink.contracts.core.RoutingId;
 
 final class ZLinkCompletionTerminalConformanceTest {
     @Test
-    void consumesSharedCapacityIdentityAndWireSeparation() throws Exception {
+    void consumesIdentityAndWireSeparation() throws Exception {
         JsonNode fixture = fixture();
         assertEquals("zlink.framework.completion-terminal", fixture.path("fixture").asText());
         assertEquals(1, fixture.path("version").asInt());
-        assertEquals(
-            ZLinkServiceOperationRegistry.DEFAULT_MAX_PENDING_OPERATIONS,
-            fixture.path("limits").path("pendingOperationCapacity").asInt());
         assertEquals(128, fixture.path("limits").path("operationIdBits").asInt());
         assertEquals(64, fixture.path("limits").path("replyRouteIdBits").asInt());
 

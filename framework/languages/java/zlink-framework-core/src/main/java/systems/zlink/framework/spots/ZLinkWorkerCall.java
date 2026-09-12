@@ -9,9 +9,9 @@ import java.util.concurrent.CompletionStage;
  * <p>{@link #submit()} keeps the current Spot turn. {@link #yield()} releases it
  * while the work is pending and resumes through the Spot queue.
  *
- * <p>Failures are projected as {@code ZLinkWorkerQueueFullException},
- * {@code ZLinkWorkerTimeoutException}, or {@code ZLinkWorkerFailedException}. A late
- * result arriving after a timeout is dropped without invoking user callbacks again.
+ * <p>Failures are projected as {@code ZLinkWorkerTimeoutException} or
+ * {@code ZLinkWorkerFailedException}. A late result arriving after a timeout is
+ * dropped without invoking user callbacks again.
  */
 public interface ZLinkWorkerCall<T> {
     ZLinkWorkerCall<T> timeout(Duration timeout);

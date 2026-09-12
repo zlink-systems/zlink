@@ -186,9 +186,6 @@ public final class ZLinkMessageFlowTracer {
             if (frameworkFailure.kind() == ZLinkFrameworkErrorKind.SHUTTING_DOWN) {
                 return ZLinkMessageFlowResult.SHUTDOWN;
             }
-            if (frameworkFailure.kind() == ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED) {
-                return ZLinkMessageFlowResult.BACKPRESSURED;
-            }
         }
         return actual == null
             ? ZLinkMessageFlowResult.SUCCEEDED

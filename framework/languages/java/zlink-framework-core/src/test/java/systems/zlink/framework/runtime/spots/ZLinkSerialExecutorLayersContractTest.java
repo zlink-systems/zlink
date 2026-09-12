@@ -218,7 +218,7 @@ final class ZLinkSerialExecutorLayersContractTest {
     }
 
     @Test
-    void actorMailboxCapacityRejectsOnlyTheFullActorInBothModes()
+    void actorMailboxAcceptsEveryQueuedTurnInBothModes()
         throws Exception {
         for (ZLinkUserSpotExecutionMode mode : List.of(
                 ZLinkUserSpotExecutionMode.PER_ACTOR,
@@ -232,10 +232,7 @@ final class ZLinkSerialExecutorLayersContractTest {
                     return release;
                 }));
                 started.get(3, TimeUnit.SECONDS);
-                for (int index = 1;
-                     index < ZLinkSerialExecutionQueue
-                         .DEFAULT_APPLICATION_MESSAGE_CAPACITY;
-                     index++) {
+                for (int index = 1; index < 1_025; index++) {
                     CompletionStage<Void> pending = fixture.serial.executeActor(
                         "actor-full", () -> CompletableFuture.completedFuture(null));
                     assertFalse(
@@ -244,7 +241,7 @@ final class ZLinkSerialExecutorLayersContractTest {
                     accepted.add(pending);
                 }
 
-                assertCapacityExceeded(fixture.serial.executeActor(
+                accepted.add(fixture.serial.executeActor(
                     "actor-full", () -> CompletableFuture.completedFuture(null)));
                 CompletionStage<Void> otherActor = fixture.serial.executeActor(
                     "actor-open", () -> CompletableFuture.completedFuture(null));
@@ -263,7 +260,7 @@ final class ZLinkSerialExecutorLayersContractTest {
     }
 
     @Test
-    void spotWideLargeActorPayloadIsRejectedBeforeASmallPayload()
+    void spotWideLargeActorPayloadWaitsAlongsideSmallPayload()
         throws Exception {
         try (Fixture fixture = fixture(ZLinkUserSpotExecutionMode.SPOT_WIDE)) {
             long largePayload = 40L * 1024 * 1024;
@@ -276,30 +273,25 @@ final class ZLinkSerialExecutorLayersContractTest {
                 });
             started.get(3, TimeUnit.SECONDS);
 
-            assertCapacityExceeded(fixture.serial.executeActor(
+            CompletionStage<Void> large = fixture.serial.executeActor(
                 "actor-a",
                 largePayload,
-                () -> CompletableFuture.completedFuture(null)));
+                () -> CompletableFuture.completedFuture(null));
             CompletionStage<Void> small = fixture.serial.executeActor(
                 "actor-a", 1, () -> CompletableFuture.completedFuture(null));
             assertFalse(small.toCompletableFuture().isCompletedExceptionally());
 
             release.complete(null);
-            await(first, small);
+            await(first, large, small);
         }
     }
 
     @Test
-    void spotWideUpperQueueFillsByCountForSmallAndLargePayloads()
+    void spotWideQueueAcceptsSmallAndLargePayloads()
         throws Exception {
         for (long payloadBytes : List.of(1L, 10_000_000L)) {
             try (Fixture fixture = fixture(
-                    ZLinkUserSpotExecutionMode.SPOT_WIDE,
-                    1,
-                    1,
-                    1,
-                    2,
-                    Duration.ofSeconds(1))) {
+                    ZLinkUserSpotExecutionMode.SPOT_WIDE)) {
                 CompletableFuture<Void> release = new CompletableFuture<>();
                 CompletableFuture<Void> started = new CompletableFuture<>();
                 CompletionStage<Void> first = fixture.serial.executeActor(
@@ -309,12 +301,12 @@ final class ZLinkSerialExecutorLayersContractTest {
                     });
                 started.get(3, TimeUnit.SECONDS);
 
-                assertCapacityExceeded(fixture.serial.executeActor(
+                CompletionStage<Void> queued = fixture.serial.executeActor(
                     "actor-b",
                     payloadBytes,
-                    () -> CompletableFuture.completedFuture(null)));
+                    () -> CompletableFuture.completedFuture(null));
                 release.complete(null);
-                first.toCompletableFuture().get(3, TimeUnit.SECONDS);
+                await(first, queued);
             }
         }
     }
@@ -323,10 +315,10 @@ final class ZLinkSerialExecutorLayersContractTest {
     void ownerTimeBudgetCutsAnOverloadedOwnerBeforeItsLastRecord()
         throws Exception {
         ExecutorService executor = Executors.newSingleThreadExecutor();
-        ZLinkSerialExecutionQueue overloaded = queue(
-            executor, 32, 4096, 1, 1024, 1, 8, Duration.ofMillis(1));
-        ZLinkSerialExecutionQueue other = queue(
-            executor, 32, 4096, 1, 1024, 1, 8, Duration.ofMillis(1));
+        ZLinkSerialExecutionQueue overloaded = new ZLinkSerialExecutionQueue(
+            executor, ZLinkExecutionLanePolicy.spot(), 8, Duration.ofMillis(1));
+        ZLinkSerialExecutionQueue other = new ZLinkSerialExecutionQueue(
+            executor, ZLinkExecutionLanePolicy.spot(), 8, Duration.ofMillis(1));
         try {
             List<String> order = new CopyOnWriteArrayList<>();
             CompletableFuture<Void> firstStarted = new CompletableFuture<>();
@@ -437,55 +429,6 @@ final class ZLinkSerialExecutorLayersContractTest {
                 false));
     }
 
-    private static Fixture fixture(
-        ZLinkUserSpotExecutionMode mode,
-        int applicationMessageCapacity,
-        long applicationByteCapacity,
-        long fixedWorkByteCost,
-        int lifecycleBurstLimit,
-        Duration ownerTimeBudget) {
-        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-        ZLinkSerialExecutionQueue spotQueue = queue(
-            executor,
-            applicationMessageCapacity,
-            applicationByteCapacity,
-            8,
-            1024,
-            fixedWorkByteCost,
-            lifecycleBurstLimit,
-            ownerTimeBudget);
-        return new Fixture(
-            executor,
-            new ZLinkSpotSerialExecutor(
-                spotQueue,
-                new ZLinkSerialExecutionQueue(
-                    executor, ZLinkExecutionLanePolicy.spot()),
-                executor,
-                mode,
-                false));
-    }
-
-    private static ZLinkSerialExecutionQueue queue(
-        ExecutorService executor,
-        int applicationMessageCapacity,
-        long applicationByteCapacity,
-        int lifecycleMessageCapacity,
-        long lifecycleByteCapacity,
-        long fixedWorkByteCost,
-        int lifecycleBurstLimit,
-        Duration ownerTimeBudget) {
-        return new ZLinkSerialExecutionQueue(
-            executor,
-            ZLinkExecutionLanePolicy.spot(),
-            applicationMessageCapacity,
-            applicationByteCapacity,
-            lifecycleMessageCapacity,
-            lifecycleByteCapacity,
-            fixedWorkByteCost,
-            lifecycleBurstLimit,
-            ownerTimeBudget);
-    }
-
     private static CompletableFuture<Void> completed(
         List<String> executed,
         String entrypoint) {
@@ -499,19 +442,6 @@ final class ZLinkSerialExecutorLayersContractTest {
                 .map(CompletionStage::toCompletableFuture)
                 .toArray(CompletableFuture[]::new))
             .get(3, TimeUnit.SECONDS);
-    }
-
-    private static void assertCapacityExceeded(CompletionStage<Void> rejected)
-        throws Exception {
-        try {
-            rejected.toCompletableFuture().get(3, TimeUnit.SECONDS);
-            fail("submission was accepted");
-        } catch (ExecutionException failure) {
-            ZLinkFrameworkException capacity = assertInstanceOf(
-                ZLinkFrameworkException.class,
-                failure.getCause());
-            assertEquals(ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED, capacity.kind());
-        }
     }
 
     private static void blockFor(Duration duration) {

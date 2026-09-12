@@ -1,13 +1,11 @@
 package systems.zlink.framework.runtime.channels;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -18,8 +16,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
@@ -55,10 +51,10 @@ final class ZLinkChannelSubmissionFailureTest {
     }
 
     @Test
-    void routeRequestClosesPayloadWhenRegistryCapacityRejectsBeforeBinding() {
+    void routeRequestStartsAfterMoreThanTheFormerRegistryCapacity() {
         AtomicInteger attempts = new AtomicInteger();
         ZLinkBackendRouterSocket router = routerThatThrows(
-            new AssertionError("binding must not start after capacity rejection"), attempts);
+            new IllegalStateException("route rejected"), attempts);
 
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
              Message payload = Message.from("route-capacity-payload")) {
@@ -67,15 +63,15 @@ final class ZLinkChannelSubmissionFailureTest {
             try {
                 pending = exhaustCapacity(runtime);
 
-                ZLinkFrameworkException failure = requestFailure(
+                CompletionException failure = assertThrows(CompletionException.class, () ->
                     new RouteRequestCall(runtime, "orders", sockets(router), TIMEOUT,
                         TARGET, payload, Optional.of("request"), null,
                         ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE, null)
-                        .submit(String.class));
+                        .submit(String.class).toCompletableFuture().join());
 
-                assertEquals(ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED, failure.kind());
-                assertEquals(0, attempts.get());
-                assertTrue(payload.empty(), "capacity rejection must release the caller payload");
+                assertEquals("route rejected", failure.getCause().getMessage());
+                assertEquals(1, attempts.get());
+                assertTrue(payload.empty(), "failed submit must release the caller payload");
             } finally {
                 close(runtime, pending);
             }
@@ -105,7 +101,7 @@ final class ZLinkChannelSubmissionFailureTest {
     }
 
     @Test
-    void meshChannelRequestClosesPayloadWhenRegistryCapacityRejectsBeforeBinding() {
+    void meshChannelRequestStartsAfterMoreThanTheFormerRegistryCapacity() {
         AtomicInteger attempts = new AtomicInteger();
         ZLinkInternalSpotNode node = channelNodeThatUsesCallerRegistry(attempts);
 
@@ -116,13 +112,13 @@ final class ZLinkChannelSubmissionFailureTest {
             try {
                 pending = exhaustCapacity(runtime);
 
-                ZLinkFrameworkException failure = requestFailure(
+                CompletionException failure = assertThrows(CompletionException.class, () ->
                     new ChannelRequestCall(runtime, "orders", sockets(node), TIMEOUT, payload,
-                        Optional.of("request"), TIMEOUT).submit(String.class));
+                        Optional.of("request"), TIMEOUT).submit(String.class)
+                        .toCompletableFuture().join());
 
-                assertEquals(ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED, failure.kind());
-                assertEquals(0, attempts.get());
-                assertTrue(payload.empty(), "capacity rejection must release the caller payload");
+                assertEquals(1, attempts.get());
+                assertTrue(payload.empty(), "failed submit must release the caller payload");
             } finally {
                 close(runtime, pending);
             }
@@ -216,11 +212,8 @@ final class ZLinkChannelSubmissionFailureTest {
 
     private static List<CompletableFuture<Void>> exhaustCapacity(
         ZLinkChannelCallRuntime runtime) {
-        List<CompletableFuture<Void>> pending = new ArrayList<>(
-            ZLinkServiceOperationRegistry.DEFAULT_MAX_PENDING_OPERATIONS);
-        for (int index = 0;
-             index < ZLinkServiceOperationRegistry.DEFAULT_MAX_PENDING_OPERATIONS;
-             index++) {
+        List<CompletableFuture<Void>> pending = new java.util.ArrayList<>(4_097);
+        for (int index = 0; index <= 4_096; index++) {
             pending.add(runtime.submit(TIMEOUT, CompletableFuture<Void>::new, ignored -> { }));
         }
         return pending;
@@ -237,12 +230,6 @@ final class ZLinkChannelSubmissionFailureTest {
                 // Closing settles the registry entries exceptionally on its dispatcher.
             }
         }
-    }
-
-    private static ZLinkFrameworkException requestFailure(CompletionStage<?> request) {
-        CompletionException failure = assertThrows(CompletionException.class,
-            () -> request.toCompletableFuture().join());
-        return assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
     }
 
     private static ZLinkBackendRouterSocket routerThatThrows(

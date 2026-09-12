@@ -139,7 +139,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         4_294_966_774L;
     private static final String RELOCATION_CONTROL_PACKET =
         "zlink.internal.spot.relocation.control.v1";
-    private static final int USER_SPOT_TERMINAL_CAPACITY = 4096;
     private static final long USER_SPOT_TERMINAL_RETENTION_NANOS =
         Duration.ofMinutes(5).toNanos();
 
@@ -2333,7 +2332,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         }
         if (relayFailure instanceof ZLinkFrameworkException framework) {
             return switch (framework.kind()) {
-                case CAPACITY_EXCEEDED -> new int[] {106, 18};
                 case REJECTED -> new int[] {106, 15};
                 default -> new int[] {105, 17};
             };
@@ -4950,7 +4948,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         String reason = "no_handler";
         if (cause instanceof ZLinkFrameworkException framework) {
             reason = switch (framework.kind()) {
-                case CAPACITY_EXCEEDED -> "backpressure";
                 case SHUTTING_DOWN -> "shutdown";
                 case NOT_FOUND, TYPE_MISMATCH -> "stale_target";
                 case PROTOCOL_ERROR -> "decode_error";
@@ -4958,7 +4955,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             };
         }
         // An unsuccessful activation leaves no handler to receive this send.
-        // Only an explicit capacity failure is backpressure.
         messageMetrics.dropped("instance_spot", reason);
     }
 
@@ -7815,9 +7811,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
 
     private static ZLinkBackendRequestResult backendResult(
         RequestResult result) {
-        //  BACKPRESSURED is preserved now that ZLinkBackendRequestResult has a
-        //  matching member (it classifies to CapacityExceeded), instead of being
-        //  collapsed to BUSY (which would be Unavailable).
         return ZLinkBackendRequestResult.valueOf(result.name());
     }
 
@@ -7847,10 +7840,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             if (deadlineUnixMs < now) {
                 return new UserSpotTerminalAdmission(
                     null, false, false, true);
-            }
-            if (userSpotTerminals.size() >= USER_SPOT_TERMINAL_CAPACITY) {
-                return new UserSpotTerminalAdmission(
-                    null, false, false, false);
             }
             UserSpotTerminalSlot created = new UserSpotTerminalSlot(
                 fingerprint.clone(), nowNanos,

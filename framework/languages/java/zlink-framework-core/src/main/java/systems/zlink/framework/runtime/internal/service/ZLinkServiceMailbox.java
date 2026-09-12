@@ -12,8 +12,7 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Owner-serialized mailbox. Its reservations isolate one owner from another;
- * they are not a second, process-wide transport admission authority.
+ * Owner-serialized mailbox that orders accepted records.
  */
 public final class ZLinkServiceMailbox implements AutoCloseable {
     private static final long RECORD_FIXED_BYTES = 96;
@@ -23,17 +22,9 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
     private long nextClaimSerial = 1;
     private boolean closed;
 
-    public ZLinkServiceMailbox(
-        long applicationOwnerMessageLimit,
-        long applicationOwnerByteLimit,
-        long infrastructureOwnerMessageLimit,
-        long infrastructureOwnerByteLimit) {
-        application = new DomainState(
-            applicationOwnerMessageLimit,
-            applicationOwnerByteLimit);
-        infrastructure = new DomainState(
-            infrastructureOwnerMessageLimit,
-            infrastructureOwnerByteLimit);
+    public ZLinkServiceMailbox() {
+        application = new DomainState();
+        infrastructure = new DomainState();
     }
 
     public synchronized boolean tryEnqueue(Record record) {
@@ -45,35 +36,13 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
         long bytes = record.retainedBytes();
         OwnerQueue queue =
             domain.owners.computeIfAbsent(record.owner(), ignored -> new OwnerQueue());
-        long reservedBytes;
-        long reservedMessages;
-        long nextQueueBytes;
-        long nextDomainMessages;
-        long nextDomainBytes;
-        try {
-            reservedBytes = Math.addExact(queue.bytes, queue.claimedBytes);
-            reservedMessages = Math.addExact(
-                queue.records.size(), queue.claimedMessages);
-            nextQueueBytes = Math.addExact(queue.bytes, bytes);
-            nextDomainMessages = Math.addExact(domain.messages, 1);
-            nextDomainBytes = Math.addExact(domain.bytes, bytes);
-        } catch (ArithmeticException overflow) {
-            removeUnclaimedEmptyOwner(domain, record.owner(), queue);
-            return false;
-        }
-        if (reservedMessages >= domain.ownerMessageLimit
-            || reservedBytes > domain.ownerByteLimit
-            || bytes > domain.ownerByteLimit - reservedBytes) {
-            removeUnclaimedEmptyOwner(domain, record.owner(), queue);
-            return false;
-        }
         // Record owns immutable copies of all caller-provided byte arrays at
         // construction time. Retain that owned value instead of cloning the
         // full payload a second time on every enqueue.
         queue.records.addLast(record);
-        queue.bytes = nextQueueBytes;
-        domain.messages = nextDomainMessages;
-        domain.bytes = nextDomainBytes;
+        queue.bytes += bytes;
+        domain.messages++;
+        domain.bytes += bytes;
         if (!queue.claimed && domain.indexed.add(record.owner())) {
             domain.ready.addLast(record.owner());
         }
@@ -171,15 +140,6 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
         return nextClaimSerial++;
     }
 
-    private static void removeUnclaimedEmptyOwner(
-        DomainState domain,
-        String owner,
-        OwnerQueue queue) {
-        if (queue.records.isEmpty() && !queue.claimed) {
-            domain.owners.remove(owner);
-        }
-    }
-
     private DomainState domain(Domain value) {
         return switch (Objects.requireNonNull(value, "domain")) {
             case APPLICATION -> application;
@@ -248,18 +208,10 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
         private final Map<String, OwnerQueue> owners = new HashMap<>();
         private final Deque<String> ready = new ArrayDeque<>();
         private final Set<String> indexed = new HashSet<>();
-        private final long ownerMessageLimit;
-        private final long ownerByteLimit;
         private long messages;
         private long bytes;
 
-        private DomainState(long ownerMessageLimit, long ownerByteLimit) {
-            if (ownerMessageLimit <= 0 || ownerByteLimit <= 0) {
-                throw new IllegalArgumentException(
-                    "owner mailbox limits must be positive");
-            }
-            this.ownerMessageLimit = ownerMessageLimit;
-            this.ownerByteLimit = ownerByteLimit;
+        private DomainState() {
         }
 
         private void clear() {

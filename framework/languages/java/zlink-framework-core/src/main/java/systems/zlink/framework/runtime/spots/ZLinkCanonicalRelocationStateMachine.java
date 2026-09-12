@@ -756,10 +756,6 @@ final class ZLinkCanonicalRelocationStateMachine
                 ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_REJECTED;
             case PROTOCOL_ERROR ->
                 ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_PROTOCOL_ERROR;
-            //  No dedicated "capacity exceeded" wire code exists; a full
-            //  queue is the closest capacity-shaped signal.
-            case CAPACITY_EXCEEDED ->
-                ServiceWireConstants.FRAMEWORK_ERROR_WORKER_QUEUE_FULL;
             //  No dedicated "deadline exceeded" wire code exists; a worker
             //  timeout is the closest timeout-shaped signal.
             case DEADLINE_EXCEEDED ->
@@ -819,7 +815,7 @@ final class ZLinkCanonicalRelocationStateMachine
             case (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_PROTOCOL_ERROR ->
                 ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
             case (int) ServiceWireConstants.FRAMEWORK_ERROR_WORKER_QUEUE_FULL ->
-                ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED;
+                ZLinkFrameworkErrorKind.UNAVAILABLE;
             case (int) ServiceWireConstants.FRAMEWORK_ERROR_WORKER_TIMED_OUT ->
                 ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED;
             case (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_LOCATION_STALE,

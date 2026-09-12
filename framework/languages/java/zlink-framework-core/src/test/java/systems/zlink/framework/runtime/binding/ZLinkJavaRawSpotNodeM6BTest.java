@@ -871,11 +871,11 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     }
 
     @Test
-    void capacityRejectedActorIngressReportsOneTerminalWithoutSilentDrop()
+    void unavailableActorIngressReportsOneTerminalWithoutSilentDrop()
         throws Exception {
         assertActorDispatchFailureTerminal(new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
-            "application queue is full"));
+            ZLinkFrameworkErrorKind.UNAVAILABLE,
+            "actor placement unavailable"));
     }
 
     @Test

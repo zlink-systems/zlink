@@ -14,17 +14,12 @@ import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 /** Owns request correlation, deadline, and terminal-once completion. */
 public final class ZLinkServiceOperationRegistry implements AutoCloseable {
-    public static final int DEFAULT_MAX_PENDING_OPERATIONS = 4_096;
-
     private final ScheduledFuture<?> maintenance;
     private final LongSupplier nanoTime;
     private final Supplier<? extends Throwable> timeoutFailure;
-    private final int maxPendingOperations;
     private final ZLinkServiceCompletionDispatcher completions =
         ZLinkServiceCompletionDispatcher.INSTANCE;
     private final Object gate = new Object();
@@ -35,37 +30,26 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private volatile boolean closed;
 
     public ZLinkServiceOperationRegistry(ScheduledExecutorService scheduler) {
-        this(scheduler, DEFAULT_MAX_PENDING_OPERATIONS);
-    }
-
-    public ZLinkServiceOperationRegistry(
-        ScheduledExecutorService scheduler,
-        int maxPendingOperations) {
         this(
             scheduler,
-            maxPendingOperations,
             new IllegalStateException("service runtime is closed"));
     }
 
     public ZLinkServiceOperationRegistry(
         ScheduledExecutorService scheduler,
-        int maxPendingOperations,
         Throwable closeFailure) {
         this(
             scheduler,
-            maxPendingOperations,
             closeFailure,
             () -> new TimeoutException("service operation timed out"));
     }
 
     public ZLinkServiceOperationRegistry(
         ScheduledExecutorService scheduler,
-        int maxPendingOperations,
         Throwable closeFailure,
         Supplier<? extends Throwable> timeoutFailure) {
         this(
             scheduler,
-            maxPendingOperations,
             closeFailure,
             timeoutFailure,
             System::nanoTime);
@@ -73,12 +57,10 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     ZLinkServiceOperationRegistry(
         ScheduledExecutorService scheduler,
-        int maxPendingOperations,
         Throwable closeFailure,
         LongSupplier nanoTime) {
         this(
             scheduler,
-            maxPendingOperations,
             closeFailure,
             () -> new TimeoutException("service operation timed out"),
             nanoTime);
@@ -86,16 +68,10 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     public ZLinkServiceOperationRegistry(
         ScheduledExecutorService scheduler,
-        int maxPendingOperations,
         Throwable closeFailure,
         Supplier<? extends Throwable> timeoutFailure,
         LongSupplier nanoTime) {
         Objects.requireNonNull(scheduler, "scheduler");
-        if (maxPendingOperations <= 0) {
-            throw new IllegalArgumentException(
-                "maxPendingOperations must be positive");
-        }
-        this.maxPendingOperations = maxPendingOperations;
         this.closeFailure = Objects.requireNonNull(closeFailure, "closeFailure");
         this.timeoutFailure = Objects.requireNonNull(
             timeoutFailure, "timeoutFailure");
@@ -295,12 +271,6 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         entry.activeNext = null;
     }
 
-    private static ZLinkFrameworkException capacityExceeded() {
-        return new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
-            "service operation capacity is exhausted");
-    }
-
     int expire(long nowNanos) {
         Entry<?> expiredHead = null;
         Entry<?> expiredTail = null;
@@ -338,9 +308,6 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("operation registry is closed");
         }
-        if (entries.size() >= maxPendingOperations) {
-            throw capacityExceeded();
-        }
         UUID id = suppliedId;
         if (id == null) {
             do {
@@ -353,9 +320,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 "operation identity is zero or already pending");
         }
         Entry<T> entry = new Entry<>();
-        if (!completions.tryReserve(entry)) {
-            throw capacityExceeded();
-        }
+        completions.register(entry);
         entry.id = id;
         entry.deadlineNanos = nanoTime.getAsLong() + timeoutNanos;
         entry.completion.cancellation(() -> cancel(entry.id, entry));

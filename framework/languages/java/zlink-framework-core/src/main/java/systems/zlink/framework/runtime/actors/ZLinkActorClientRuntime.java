@@ -57,7 +57,6 @@ import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
 
 public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     private static final Duration FALLBACK_ROUTE_RETRY_TIMEOUT = Duration.ofSeconds(5);
-    private static final int MAX_RUNTIME_READY_WAITERS = 4096;
 
     private final Supplier<ZLinkInternalSpotNode> spotNode;
     private final ZLinkStoreLocationResolvers locations;
@@ -283,13 +282,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         if (readyFuture.isDone()) {
             return runtimeReady;
         }
-        int waiters = runtimeReadyWaiters.incrementAndGet();
-        if (waiters > MAX_RUNTIME_READY_WAITERS) {
-            runtimeReadyWaiters.decrementAndGet();
-            return failed(new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
-                "framework startup admission capacity is exhausted"));
-        }
+        runtimeReadyWaiters.incrementAndGet();
         CompletableFuture<Void> result = new CompletableFuture<>();
         AtomicBoolean released =
             new AtomicBoolean();

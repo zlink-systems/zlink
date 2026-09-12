@@ -187,10 +187,10 @@ class ZLinkMessageFlowTracerTest {
             ZLinkMessageFlowTracer.requestTerminalResult(
                 new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.SHUTTING_DOWN, "shutdown"), false));
-        assertEquals(ZLinkMessageFlowResult.BACKPRESSURED,
+        assertEquals(ZLinkMessageFlowResult.FAILED,
             ZLinkMessageFlowTracer.requestTerminalResult(
                 new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED, "full"), false));
+                    ZLinkFrameworkErrorKind.UNAVAILABLE, "unavailable"), false));
 
         ZLinkMessageFlowTracer tracer = tracer(options(ZLinkMessageFlowLogMode.NORMAL));
         CompletableFuture<String> request = new CompletableFuture<>();

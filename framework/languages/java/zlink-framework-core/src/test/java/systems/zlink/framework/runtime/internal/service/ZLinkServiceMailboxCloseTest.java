@@ -11,7 +11,7 @@ final class ZLinkServiceMailboxCloseTest {
     @Test
     void closeReleasesAllRetainedQueueRecords() {
         ZLinkServiceMailbox mailbox =
-            new ZLinkServiceMailbox(4, 4096, 4, 1024);
+            new ZLinkServiceMailbox();
         assertTrue(mailbox.tryEnqueue(new ZLinkServiceMailbox.Record(
             "owner",
             ZLinkServiceMailbox.Domain.APPLICATION,

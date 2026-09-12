@@ -792,8 +792,8 @@ public final class ZLinkActorCreationCoordinator
                     if (capacityKnown) {
                         return CompletableFuture.failedFuture(
                             frameworkFailure(
-                                ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
-                                "Actor capacity exceeded"));
+                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                "Actor placement is unavailable"));
                     }
                     if (System.currentTimeMillis() >= deadline) {
                         return admissionUnavailable(
