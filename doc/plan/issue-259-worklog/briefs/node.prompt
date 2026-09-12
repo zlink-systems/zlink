@@ -1,0 +1,166 @@
+Coding sub-agent for zlink Issue #259. Work ONLY in the worktree you were given (`-C <worktree>`),
+commit ONLY to its branch. Do NOT push, do NOT open a PR, do NOT merge. The supervisor does that.
+
+== Absolute prohibitions ==
+- Do NOT edit any spec document. `framework/doc/**`, `core/doc/**`, `bindings/doc/**` and
+  `doc/**` are off limits. The spec change for this work is ALREADY DONE and committed on main.
+  If you believe the spec is wrong, stop and report it under BLOCKERS — do not edit it.
+- Do NOT touch `scripts/local-package/**`, `core/tests/perf/hotpath_reference.json`, or any
+  other language's directory. One job, one language.
+- Do NOT run the full gate, benchmarks, or perf tickets. Run only the tests named below.
+- Do NOT widen a timeout, add a retry, relax an assertion, or add a sleep to make a test pass.
+
+== The product decision you are implementing ==
+Overload is controlled by backpressure alone. Nothing rejects work because a queue is full.
+
+- Core controls with its byte HWM. Framework controls with the number of jobs queued.
+- One Framework host owns ONE job-permit limit, `MaxQueuedApplicationJobs`. However many
+  MeshNodes, ClientServer channels, sockets or connections the host has, they share that one
+  limit, and only one place in a host counts permits.
+- At 80% of that limit the host applies `PAUSED` to every supported socket; at or below 60%
+  it applies `RUNNING`. Supported sockets are the RouteMesh ROUTER-ROUTER socket and the
+  ClientServer DEALER-ROUTER socket.
+- If usage still reaches 100%, the host stops receiving. What it does not receive stays in
+  the local Core queue, Core hits its byte limit, and the sender is held there.
+- NOTHING IS DROPPED OR REJECTED. Everything received goes to a handler.
+- Sending is a single call to the Core socket's send or request. The Framework builds no
+  waiting queue of its own, does not stage backpressure, and does not retry. Waiting belongs
+  to Core and the binding. If the wait runs out of time the call ends with `DeadlineExceeded`
+  — send, publish, one-way and request alike.
+
+== What that means for the code: three separate deletions ==
+
+**(1) The completion-slot cap.** Sending a request reserved a completion slot and rejected
+when the reservation failed. The cap is gone. So is the reservation itself: it existed only
+to protect against a rejection the cap created, and with no cap there is nothing to protect
+against. What stays is the REGISTRATION that §10 of the submit spec requires for a different
+reason — the pending entry, reply route and dispatcher slot are registered before the
+transport submit so a reply that arrives immediately is never processed before its
+registration. That is an ordering rule, not a capacity rule. A runtime may still pre-allocate
+the queue node to keep the terminal path allocation-free; that is a cost choice it owns.
+
+**(2) Every "queue is full, so fail" path.** A full queue now waits for room. This covers the
+per-execution-object FIFO, the worker scheduler queue, and any slot for holding a reply. If
+the wait passes the deadline the call ends with `DeadlineExceeded`; if the work itself fails,
+`InternalFailure`. Nothing is thrown away.
+
+**(3) The `CapacityExceeded` error kind itself.** With no cap anywhere, nothing can produce
+it. It is removed from the `ErrorKind` enum and the values after it shift down:
+
+```
+0 NotFound        1 AlreadyExists   2 TypeMismatch    3 NotConfigured
+4 Rejected        5 Unavailable     6 DeadlineExceeded
+7 ShuttingDown    8 ProtocolError   9 InvalidOperation
+10 DataLost       11 InternalFailure
+```
+
+Twelve kinds, 0..11. Every existing producer moves:
+
+| Old producer | New result |
+|---|---|
+| A queue, table or slot was full | Not an error. Wait; `DeadlineExceeded` if the time runs out |
+| No node can host the Spot (placement) | `Unavailable` |
+| HTTP client response body exceeded its configured size | `Rejected` |
+
+== Explicitly OUT OF SCOPE — do not touch, and report it if you are tempted ==
+- The per-node Actor limit, per-node Spot limit, per-stable-type Spot limit, and the
+  `Pending activation` default of 128. These stay. Only the NAME of the error they produce
+  changes to `Unavailable`.
+- The topology-reason enum. It has its own `capacity_exceeded` value which is unrelated to
+  `ErrorKind` and stays exactly as it is. Check which enum you are looking at before editing.
+- The wire protocol and runtime metrics.
+- `MaxQueuedApplicationJobs`, the 80/60 percentages, and the profile computation.
+
+== What the spec now says (already committed — read it, do not change it) ==
+- `.../01-execution/01-submit-and-completion.ko.md` §11 — putting a completion callback on
+  the dispatcher cannot fail; nothing rejects a request for lack of a slot. §10 still
+  requires registration before the transport submit. §3 — a full worker queue waits.
+- `.../01-execution/04-application-job-queue-and-backpressure.ko.md` §1 §2 §3 §6 §8 — the two
+  capacity authorities, one limit per host with one counter, which ingress consumes a permit,
+  the no-drop rule, and "the Framework calls the Core socket's send or request once".
+- `.../00-foundation/07-framework-error-model.ko.md` §2 §5 — the 12 kinds, and "a full queue
+  is not an error".
+- `doc/plan/issue-259-worklog/gap-survey.ko.md` — the per-language survey of the caps.
+
+== Repository rules you must follow ==
+- `AGENTS.md` §3 — fix the cause in the module that owns it. Never add a rule: after your
+  change the design must have FEWER rules. No new state, timer, index, helper layer, option,
+  or "only in this case" branch. Leave no branch that can never be taken — if a boolean can
+  no longer be false, delete the boolean.
+- `AGENTS.md` §3 — cross-language check. The other three languages are being changed in
+  parallel to the same decision; if your language needs something the others do not, say why.
+- `doc/principal/source-comment-principles.ko.md` — comments say WHY, never restate the code.
+- One job, one cause. If you cannot finish inside your time budget, write down the facts you
+  proved and what remains, and stop.
+
+== Report format (write it to the summary path given below, in Korean) ==
+  1) 결과 — 한 줄
+  2) 변경 파일 — 경로마다 무엇을 왜
+  3) 소유 계층 / spec 조항 / 교차언어 대조 / 변경 분류(A 계약 적응·B 기존 결함·C 우회·D spec gap)
+     — 네 줄. 이 네 줄이 없으면 감독자가 커밋하지 않는다.
+  4) 규칙 수 — 수정 전 N개 → 수정 후 M개, 무엇이 사라졌는지
+  5) 실행한 test와 결과, 남은 실패
+  6) BLOCKERS — 스펙이 틀렸다고 판단한 것, 다른 언어에 넘길 것
+
+== YOUR LANGUAGE: Node.js ==
+Summary path: `.artifacts/codex/259-node/summary.md`
+Node is the language that kept its counters PER INSTANCE rather than per host. Read the
+host-ownership rule above before you start: one host, one counter. 28 files mention the kind.
+
+Root: `framework/languages/node/packages/framework/src`
+
+**(1) The completion-slot cap.** Node has NO process-shared dispatcher reservation — unlike
+the other three. It has two separate per-instance tables, and both reject.
+   `runtime/foundation/operation-registry.ts:74-76` — `entries.size >= maxPendingOperations`
+     throws `OperationCapacityExceededError` (`:20-24`). Default `:53`
+     `DEFAULT_MAX_PENDING_OPERATIONS = 4_096`, constructor parameter `:62`, validation
+     `:64-66`. Instantiated at `runtime/foundation/raw-service-mesh-runtime.ts:156` and
+     `runtime/foundation/service-stateful-registry.ts:618`.
+   `runtime/backend/mesh-completion-table.ts:68-71` — throws with the kind. Default `:14`
+     `ZLINK_MESH_COMPLETION_CAPACITY = 4_096`, constructor parameter `:41`. Instantiated at
+     `runtime/spots/spot-node-runtime-manager.ts:322`.
+   Delete both limits and both throw paths, and remove `OperationCapacityExceededError` and
+   `ZLINK_MESH_COMPLETION_CAPACITY` if nothing else uses them; follow every import.
+   `operation-registry.ts:69` `reserve(...)` must still hand back a `PendingOperation` — §10
+   needs the entry to exist before the transport submit — but it can no longer refuse, so drop
+   `maxPendingOperations`, its parameter and its validation. The name `reserve` now overstates
+   what it does; rename it to say it registers the pending operation. Keep the closed check
+   and the duplicate/zero id checks.
+
+**(2) Every "queue is full, so fail" path.**
+   `runtime/channels/channel-outbound-operations.ts` and `runtime/channels/channel-envelope.ts`
+   produce the kind — read each and decide: a full queue (→ wait) or placement
+   (→ `Unavailable`). The per-execution-object FIFO and the worker queue must wait for room.
+   While waiting the record keeps its host permit.
+
+**(3) The enum.**
+   `contracts/Errors/ZLinkFrameworkException.ts` and `contracts/RouteMesh/Contracts.ts` —
+   delete `CapacityExceeded` and renumber the values after it down by one. Follow every switch
+   and mapping. The topology-reason enum has its own `CapacityExceeded = 4` — LEAVE IT; check
+   which enum you are editing.
+   Placement sites move to `Unavailable`. Read each one; do not batch-rename.
+
+**Node-specific question you must answer with file:line either way.** After the deletions, does
+Node still keep more than one counter of in-flight permits per host? The spec now forbids that.
+Report every remaining per-MeshNode or per-connection counter in the job-queue path, including
+`runtime/dispatch/application-job-queue.ts`, and say whether it is host-shared. Also state
+whether that file computes its maximum once per host and applies the 80/60 transition to both
+the RouteMesh ROUTER-ROUTER socket and the ClientServer Server ROUTER. If any part is
+per-instance, report it as a finding — do NOT fix it in this job unless it is one line and
+obviously the same cause. A second cause is a second job.
+
+Also decide, with file:line, whether each of these is this resource or a different one:
+`runtime/host/service-relocation-host-runtime.ts:202`, `runtime/host/remote-bound-session-relay.ts:67`,
+`runtime/host/actor-transfer-runtime.ts:74`, `runtime/streams/actor-session-binding-registry.ts:153-154`.
+Different ones stay.
+
+Tests that assert the old behaviour must be rewritten to the new contract, not deleted
+silently. List each one: `test/m5/m5-foundation.contract.ts`, `test/m6b/m6b-runtime.contract.ts`,
+`test/m6c/*`, `test/contract/lifecycle-terminal-classification.test.js`,
+`test/contract/completion-terminal-conformance.test.js`.
+
+Regression test: start far more concurrent mesh requests than 4,096 against a responder and
+assert every one completes with a reply.
+
+Build and test (this worktree only): build the framework package and run its unit tests plus
+your new test. No `npm run test:samples`, e2e, or benchmarks.
