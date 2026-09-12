@@ -693,7 +693,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 언어 | Single 평균 | Single 통과/보류/미달/미측정 | Multi 평균 | Multi 통과/보류/미달/미측정 | 상태 |
 |------|------------|------------------------------|-----------|-----------------------------|------|
 | C++ (§9.1) | 93.3% | 32 / 10 / 0 / 0 | 96.4% | 18 / 10 / 0 / 0 | **완료** — 미달 0(통과/보류만). C 근접, §3.1 퍼진비용 보류 |
-| .NET (§9.2) | 77.3% | 22 / 20 / 0 / 0 | 72.3% | 13 / 15 / 0 / 0 | **완료** — 미달·미측정 0(통과/보류만). §3.1 cost-map 보류 |
+| .NET (§9.2) | 78.1% | 24 / 18 / 0 / 0 | 73.8% | 14 / 14 / 0 / 0 | **완료** — 실패·미측정·미달 0. 하네스 round-robin fix로 SENDSEND 측정, 3-run 재측정+개선(코드 불변) |
 | Java (§9.3) | 88.6% | 23 / 19 / 0 / 0 | 85.5% | 18 / 10 / 0 / 0 | **완료** — 실패·미측정·미달 0. 하네스 fix로 reqrep 측정, 3-run 재측정+개선 사이클로 통과/보류 확정 |
 | Node (§9.4) | 73.8% | 16 / 19 / 0 / 0 | 49.6% | 4 / 12 / 0 / 0 | **완료** — 미달 0(통과/보류만). SUB 축약 개선 채택(PUBSUB wss·tls 통과) |
 | Go (§9.5) | 미측정 | 0 / 0 / 0 / 30 | 미측정 | 0 / 0 / 0 / 16 | 미측정 |
@@ -808,7 +808,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `DEALER_DEALER` | 41.4% | 55.6% | 89.9% | 130.6% | 116.2% | 102.4% | 통과 89.3%/lat0.78× · c0180-dotnet-single-tcp |
 | `tcp` | `DEALER_ROUTER` | 37.8% | 54.5% | 96.9% | 138.3% | 113.9% | 99.1% | 통과 90.1%/lat0.77× · c0180-dotnet-single-tcp |
 | `tcp` | `DEALER_ROUTER_REQREP` | 2.0% | 2.4% | 7.0% | 47.7% | 51.6% | 52.4% | 보류 27.2%/lat1.81× · c0180-dotnet-single-tcp |
-| `tcp` | `ROUTER_ROUTER` | 34.3% | 44.8% | 66.7% | 114.1% | 98.6% | 83.9% | 보류 73.7%/lat1.60× · c0180-dotnet-single-tcp |
+| `tcp` | `ROUTER_ROUTER` | 34.3% | 44.8% | 66.7% | 114.1% | 98.6% | 83.9% | 통과 96.9%/lat0.85× · 3-run(73.7→96.9)·routed 통과 · 3run |
 | `tcp` | `ROUTER_ROUTER_REQREP` | 2.1% | 2.4% | 6.5% | 34.6% | 53.2% | 52.8% | 보류 25.3%/lat1.94× · c0180-dotnet-single-tcp |
 | `ws` | `PAIR` | 48.5% | 63.3% | 92.6% | 135.3% | 132.1% | 119.6% | 통과 98.6%/lat0.06× · c0180-dotnet-single-ws |
 | `ws` | `PUBSUB` | 50.0% | 49.8% | 86.0% | 186.3% | 129.4% | 106.0% | 통과 101.2%/lat1.10× · c0180-dotnet-single-ws |
@@ -833,10 +833,10 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tls` | `ROUTER_ROUTER_REQREP` | 2.0% | 3.6% | 7.5% | 71.4% | 90.4% | 109.3% | 보류 47.4%/lat0.90× · c0180-dotnet-single-tls |
 | `inproc` | `PAIR` | 49.2% | 45.8% | 52.5% | 12.3% | 19.0% | 23.4% | 보류 33.7%/lat1.90× · c0180-dotnet-single-inproc |
 | `inproc` | `PUBSUB` | 51.1% | 53.0% | 55.8% | 187.3% | 152.3% | 31.8% | 통과 88.5%/lat1.13× · c0180-dotnet-single-inproc |
-| `inproc` | `DEALER_DEALER` | 53.9% | 59.1% | 64.5% | 17.4% | 48.4% | 72.4% | 통과 52.6%/lat1.04× · c0180-dotnet-single-inproc · §2.1 .NET inproc 단순 one-way 예외(목표45) 충족 |
+| `inproc` | `DEALER_DEALER` | 53.9% | 59.1% | 64.5% | 17.4% | 48.4% | 72.4% | 통과 58.1%/lat0.77× · 3-run·§2.1 inproc 단순 예외(45) 충족 · 3run |
 | `inproc` | `DEALER_ROUTER` | 50.6% | 56.1% | 56.7% | 23.0% | 64.0% | 83.1% | 보류 55.6%/lat0.70× · c0180-dotnet-single-inproc |
 | `inproc` | `DEALER_ROUTER_REQREP` | 3.8% | 3.1% | 3.2% | 40.8% | 40.1% | 33.0% | 보류 20.7%/lat2.07× · c0180-dotnet-single-inproc |
-| `inproc` | `ROUTER_ROUTER` | 53.2% | 55.7% | 58.3% | 17.8% | 54.3% | 74.8% | 보류 52.4%/lat1.36× · c0180-dotnet-single-inproc |
+| `inproc` | `ROUTER_ROUTER` | 53.2% | 55.7% | 58.3% | 17.8% | 54.3% | 74.8% | 통과 55.0%/lat1.21× · 3-run·§2.1 inproc RR 예외(55) 충족 · 3run |
 | `inproc` | `ROUTER_ROUTER_REQREP` | 3.5% | 3.6% | 3.7% | 41.8% | 37.8% | 32.8% | 보류 20.5%/lat2.31× · c0180-dotnet-single-inproc |
 | `ipc` | `PAIR` | 40.7% | 60.5% | 101.3% | 80.8% | 86.3% | 87.3% | 보류 76.2%/lat0.69× · c0180-dotnet-single-ipc |
 | `ipc` | `PUBSUB` | 40.8% | 50.9% | 92.1% | 153.6% | 162.2% | 169.2% | 통과 111.5%/lat0.81× · c0180-dotnet-single-ipc |
@@ -851,30 +851,30 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
 | `tcp` | `MULTI_DEALER_DEALER` | 38.9% | 60.4% | 102.6% | 86.5% | 140.0% | 120.8% | 통과 91.5%/lat0.43× ·  |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 실패 | 실패 | 1.9% | 53.4% | 76.6% | 44.8% | 보류 44.2%/lat10.14× ·  |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 78% | 77% | 1.9% | 53.4% | 76.6% | 44.8% | 보류 55.3%/lat10.14× · fix2로 소형 measure(round-robin 하네스); echo 목표 근소미달/latency floor · c0180-dotnet-multi-tcp-fix2 |
 | `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 5.2% | 6.4% | 6.3% | 8.3% | 89.7% | 101.6% | 보류 36.2%/lat0.29× ·  |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 실패 | 실패 | 1.9% | 53.8% | 80.3% | 44.9% | 보류 45.2%/lat24.27× ·  |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 60% | 83% | 1.9% | 53.8% | 80.3% | 44.9% | 보류 54.0%/lat24.27× · fix2로 소형 measure(round-robin 하네스); echo 목표 근소미달/latency floor · c0180-dotnet-multi-tcp-fix2 |
 | `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 6.0% | 9.8% | 8.5% | 10.3% | 92.4% | 101.2% | 보류 38.0%/lat0.23× ·  |
 | `tcp` | `MULTI_PUBSUB` | 75.2% | 63.2% | 74.4% | 72.4% | 101.8% | 84.2% | 보류 78.5%/lat1.20× ·  |
 | `tcp` | `MULTI_STREAM` | 75.5% | 76.2% | 72.5% | 해당 없음 | 82.3% | 해당 없음 | 보류 76.6%/lat1.32× ·  |
 | `ws` | `MULTI_DEALER_DEALER` | 60.6% | 57.6% | 120.2% | 139.2% | 153.6% | 108.7% | 통과 106.7%/lat0.21× ·  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 실패 | 실패 | 47.3% | 62.1% | 96.2% | 109.9% | 통과 78.9%/lat1.34× ·  |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 85% | 109% | 47.3% | 62.1% | 96.2% | 109.9% | 통과 84.9%/lat1.34× · fix2로 소형 measure(round-robin 하네스); 하네스 fix 후 통과 · c0180-dotnet-multi-ws-fix2 |
 | `ws` | `MULTI_DEALER_ROUTER_REQREP` | 10.5% | 8.9% | 12.6% | 25.1% | 162.4% | 146.7% | 보류 61.0%/lat0.30× ·  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 실패 | 실패 | 26.5% | 50.5% | 59.7% | 138.6% | 보류 68.8%/lat0.84× ·  |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 108% | 99% | 26.5% | 50.5% | 59.7% | 138.6% | 통과 80.4%/lat0.84× · fix2로 소형 measure(round-robin 하네스); 하네스 fix 후 통과 · c0180-dotnet-multi-ws-fix2 |
 | `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 7.8% | 10.6% | 14.6% | 18.3% | 117.0% | 124.3% | 보류 48.8%/lat0.35× ·  |
 | `ws` | `MULTI_PUBSUB` | 93.0% | 62.3% | 65.4% | 68.3% | 103.9% | 116.0% | 보류 84.8%/lat1.13× ·  |
 | `ws` | `MULTI_STREAM` | 83.7% | 96.7% | 81.2% | 해당 없음 | 102.6% | 해당 없음 | 통과 91.1%/lat1.11× ·  |
 | `wss` | `MULTI_DEALER_DEALER` | 44.1% | 118.6% | 112.8% | 124.4% | 105.7% | 106.9% | 통과 102.1%/lat0.20× ·  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 실패 | 실패 | 49.9% | 63.8% | 85.9% | 92.3% | 통과 73.0%/lat0.84× ·  |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 81% | 79% | 49.9% | 63.8% | 85.9% | 92.3% | 통과 75.3%/lat0.84× · fix2로 소형 measure(round-robin 하네스); 하네스 fix 후 통과 · c0180-dotnet-multi-wss-fix2 |
 | `wss` | `MULTI_DEALER_ROUTER_REQREP` | 9.8% | 10.5% | 13.4% | 27.3% | 92.9% | 94.5% | 보류 41.4%/lat0.11× ·  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 실패 | 실패 | 15.4% | 88.0% | 91.3% | 105.6% | 통과 75.1%/lat0.75× ·  |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 92% | 76% | 15.4% | 88.0% | 91.3% | 105.6% | 통과 78.1%/lat0.75× · fix2로 소형 measure(round-robin 하네스); 하네스 fix 후 통과 · c0180-dotnet-multi-wss-fix2 |
 | `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 7.6% | 10.5% | 12.4% | 22.0% | 97.1% | 97.7% | 보류 41.2%/lat0.09× ·  |
 | `wss` | `MULTI_PUBSUB` | 88.8% | 66.1% | 89.1% | 101.4% | 94.3% | 127.8% | 통과 94.6%/lat1.05× ·  |
 | `wss` | `MULTI_STREAM` | 98.2% | 118.3% | 102.8% | 해당 없음 | 147.6% | 해당 없음 | 통과 116.7%/lat0.91× ·  |
 | `tls` | `MULTI_DEALER_DEALER` | 57.4% | 167.7% | 154.8% | 121.3% | 131.1% | 109.6% | 통과 123.7%/lat0.25× ·  |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 실패 | 실패 | 16.3% | 64.1% | 69.7% | 84.0% | 보류 58.5%/lat0.91× ·  |
-| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 9.7% | 9.9% | 10.7% | 실패 | 59.4% | 82.9% | 보류 34.5%/lat0.09× ·  |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 실패 | 실패 | 20.0% | 110.9% | 75.8% | 99.3% | 통과 76.5%/lat0.68× ·  |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 69% | 60% | 16.3% | 64.1% | 69.7% | 84.0% | 보류 60.5%/lat0.91× · fix2로 소형 measure(round-robin 하네스); echo 목표 근소미달/latency floor · c0180-dotnet-multi-tls-fix2 |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 9.7% | 9.9% | 10.7% | 해당없음 | 59.4% | 82.9% | 보류 34.5%/lat0.09× · 4096B C baseline 누락(drain timeout, 전 언어 공통), 5size 집계; reqrep 소형 floor · c0180-dotnet-multi-tls |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 83% | 65% | 20.0% | 110.9% | 75.8% | 99.3% | 통과 75.7%/lat0.68× · fix2로 소형 measure(round-robin 하네스); 하네스 fix 후 통과 · c0180-dotnet-multi-tls-fix2 |
 | `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 6.7% | 10.9% | 10.7% | 22.0% | 88.2% | 96.8% | 보류 39.2%/lat0.08× ·  |
 | `tls` | `MULTI_PUBSUB` | 86.3% | 86.8% | 55.2% | 107.7% | 115.2% | 105.6% | 통과 92.8%/lat1.19× ·  |
 | `tls` | `MULTI_STREAM` | 95.3% | 106.9% | 97.0% | 해당 없음 | 116.9% | 해당 없음 | 통과 104.0%/lat0.98× ·  |

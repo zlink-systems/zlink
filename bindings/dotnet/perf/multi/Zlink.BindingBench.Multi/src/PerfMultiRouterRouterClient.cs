@@ -152,9 +152,9 @@ internal static class PerfMultiRouterRouterClient
 
         while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
         {
-            // Keep submitting on each socket until Core reports backpressure.
-            // Only that socket pauses on its admission stage; echoed replies
-            // are drained independently and never gate the next send.
+            // Submit once per socket per turn so every turn can also progress
+            // echoed replies and admission completions. Only a backpressured
+            // socket pauses on its exact admission stage.
             bool submittedAny = false;
             int start = roundStart;
             for (int attempts = 0; attempts < slots.Length; attempts++)
@@ -167,15 +167,11 @@ internal static class PerfMultiRouterRouterClient
                 slot.ThrowAdmissionError();
                 if (slot.AdmissionPending)
                     continue;
-                while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
-                {
-                    ulong currentSeq = unchecked((ulong)++seq);
-                    StampMetricHeader(slot.Payload.AsSpan(), runId,
-                        PerfPhase.Active, msgSize, currentSeq, EpochNs());
-                    submittedAny = true;
-                    if (StartAdmission(slot, admissionSignal, replies))
-                        break;
-                }
+                ulong currentSeq = unchecked((ulong)++seq);
+                StampMetricHeader(slot.Payload.AsSpan(), runId,
+                    PerfPhase.Active, msgSize, currentSeq, EpochNs());
+                submittedAny = true;
+                _ = StartAdmission(slot, admissionSignal, replies);
             }
             if (slots.Length > 0)
                 roundStart = (start + 1) % slots.Length;
