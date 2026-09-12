@@ -1102,3 +1102,53 @@ scheduler/stream frame이 있다"까지다.
 
 **읽기는 후보를 좁히는 데 유효하고, 어느 후보가 실제 비용인지는 측정이 가린다.**
 두 방법이 대체 관계가 아니라 순서 관계다.
+
+## 19. .NET 프로파일 — 그리고 두 언어의 공통점 (2026-09-13)
+
+원본은 `doc/plan/send-cost-worklog/profile-dotnet-send.md`.
+
+### 19.1 메시지당 할당 6배
+
+| | 메시지당 할당 |
+|---|---:|
+| `zlink-dotnet` (raw) | **1.6 KiB** |
+| `zlink-framework-dotnet` | **9.5 KiB** |
+
+같은 12초 구간에서 raw가 **9.20배** 많은 메시지를 완료했다.
+
+raw의 할당은 payload 생성(`BenchPayloads.CreateBytes`)에 집중된다. framework는 그 위에
+protobuf `WriteTo`, `Message.From`/`AllocateCoreValidated`,
+**`ExecutionContext`/`AsyncLocalValueMap`**, envelope clone, async state machine 3곳이 얹힌다.
+
+CPU 표본에서 framework에만 나타난 경로: route lookup(3.05%), spot send(6.63%), managed
+mesh send의 중첩 경로. 후보 위치는 `ZLinkRouteClient.cs:305`,
+`ZLinkSpotNodeRuntime.cs:483`, `ZLinkFrameworkRuntimeSpots.cs:254`다.
+
+### 19.2 두 언어가 같은 것을 가리킨다 — 실행 문맥 전파
+
+| 언어 | 관측 | 근거 |
+|---|---|---|
+| Java | `ThreadLocalMap` **3.018 GB** (17.90%) | `ZLinkStateLane.callWithCurrent:197` |
+| .NET | `ExecutionContext` / `AsyncLocalValueMap` | async state machine 표본 |
+
+**둘 다 send 경로에서 실행 문맥을 전파하느라 할당한다.** §7의 읽기 조사는 두 언어 모두에서
+이것을 지목하지 않았다 — 코드에는 한 줄이지만 런타임에서는 매 호출 비용이기 때문이다.
+
+Java는 그 위에 **매 send마다 stream API로 peer를 분류**하는 경로가 더 있다
+(`ReferencePipeline$2` 1.287 GB, 105 표본).
+
+### 19.3 다음 라운드의 근거가 섰다
+
+이 세션 시작 시점에는 "framework send가 raw의 0.06"이라는 숫자만 있었고 그마저
+[측정 장치 결함 10건](#13) 위의 값이었다. 지금은:
+
+- 측정 기준이 선다 — 개선을 숫자로 말할 수 있다(C++ 2.3배가 그 증거)
+- **어디를 고칠지가 표본으로 정해진다** — 실행 문맥 전파, peer 분류, envelope clone
+- 틀린 가설을 싸게 버릴 수 있다 — 이번 라운드에서 셋을 버렸다
+
+### 19.4 정직한 한계
+
+두 프로파일 보고서 모두 **"단일 frame에 전체 차이를 귀속하지 않는다"**고 적었다.
+topN은 중첩 frame을 포함하므로 각 경로의 독립 기여도는 이 표본만으로 계산되지 않는다.
+다음 라운드는 후보를 하나씩 제거하며 A/B로 재는 방식이어야 한다 — §17.4의 규율대로
+**같은 빌드에서 raw와 framework를 함께** 잰다.
