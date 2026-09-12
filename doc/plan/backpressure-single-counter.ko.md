@@ -447,3 +447,44 @@ C++ request 벤치가 오류 없이 완주한다. RESULT 27행, 오염 0건. 측
 framework/raw = 0.052. Java·.NET의 request는 1.18~1.31로 목표를 넘겼는데 C++만 다르다.
 latency가 raw의 640배라 건당 비용이 아니라 **직렬화**로 보이고, 이는 §7의 source
 state lane 지적과 같은 방향이다. 5-run 기준선으로 확인한다.
+
+## 8. 기준선 1차 — C++ (2026-09-12 22:13~22:30)
+
+5 run, rc=0 전부. 집계는 `tools/bench_aggregate.py`가 소유한다(중앙값·G5·§7.2 비율,
+그리고 **그 비율을 공개해도 되는지의 판정**까지). 감독자가 손으로 계산하지 않는다.
+
+| 패턴 | 1 KiB | 4 KiB | 판정 |
+|---|---:|---:|---|
+| `request-serial` | 0.439 | 0.440 | published — **fail** |
+| `send-saturation` | 0.064 | 0.105 | published — **fail** |
+| `request-backpressure` | (0.087) | (0.072) | unsupported — G5 90.2%·99.7% |
+
+`zlink-framework-cpp / zlink-cpp`다. 목표는 0.80(§7.2 문턱) 이상, 계획 목표는 0.90.
+
+### 8.1 집계기 결함 — send 판정이 통째로 막혀 있었다
+
+`_structured_cells`가 `<run>/*.json`만 훑는데 모든 언어 runner는 셀 문서를
+`<run>/<cell>/results.json`에 쓴다. 그래서 구조화된 셀 데이터를 한 번도 읽지 못하고
+`report.txt` 파싱으로 떨어졌고, 거기엔 `server_received_at_close`가 없다.
+G3가 send 셀을 전부 "client 집계"로 판정해 **모든 언어의 모든 send 비율이 공개
+불가**였다. 산출물에는 값이 다 있었다.
+
+한 줄 고침(디렉터리 한 단계 아래도 훑는다), `tools/tests` 71건 통과. 고친 뒤 C++
+send 비율이 published가 됐다. **이걸 안 고쳤으면 send를 최적화하고도 결과를 공개할
+수 없었다.**
+
+### 8.2 `request-backpressure`가 재현되지 않는다
+
+C++ framework가 5 run 사이에 90.2%·99.7% 흔들린다(한도 10%). 이건 느리다는 문제가
+아니라 **같은 조건에서 같은 값이 안 나온다**는 문제다. §7의 source state lane
+직렬화 지적과 맞는 모양이고, 개선 항목 목록에 넣는다.
+
+### 8.3 C 기준 벤치 부패 → `#295`
+
+`framework/bench/grpc/c`가 Core에서 사라진 C API(`zlink_part_flag_t`,
+`zlink_router_recv_part`, `ZLINK_PART_FINAL/MORE`)를 쓴다. `zlink-c` 행을 못 내므로
+§7.2 formula 1이 모든 언어에서 `unsupported`로 남는다. 0.90 목표는 같은 언어 안의
+비율이라 영향이 없어서 send 개선 작업을 막지는 않는다.
+
+`build_all.sh`가 `set -euo pipefail`이라 C에서 멈추면 나머지 언어 빌드까지 막히는
+것도 같은 이슈에 적었다.
