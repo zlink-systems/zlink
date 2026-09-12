@@ -146,9 +146,13 @@ send·request를 한 번 부르는 것이고, 기다림은 Core와 binding이 �
 |---|---|---|---|
 | `#281` Java | 완료 | **1,453개 통과** | [#287](https://github.com/zlink-systems/zlink/pull/287) |
 | `#283` Node | 완료 | **전체 통과** | [#288](https://github.com/zlink-systems/zlink/pull/288) |
-| `#282` .NET | 완료 | 6건 실패 → 수정 후 재실행 중 | — |
-| `#280` C++ | codex 진행 중 | — | — |
-| `#277` | 완료 | 계약 test 2건 통과, perf 실측 큐 대기 | — |
+| `#277` bindings Node | 완료 | 계약 test 2건 통과, 실측 진행 중 | [#289](https://github.com/zlink-systems/zlink/pull/289) |
+| `#282` .NET | 완료 | 빌드 0 error, 전체 test 실행 중 | — |
+| `#280` C++ | codex 진행 중 (55 파일) | — | — |
+
+`#282`는 `ContractSurfaceCoverage`가 "스펙에서 지운 `MailboxMessageBudget`이 소스에 남아
+있다"를 잡아냈다. codex가 놓친 소스 다섯 파일을 그 덕에 찾았다. **스펙과 구현이 어긋나면
+빌드가 깨지는 구조가 실제로 작동한다.**
 
 **codex가 놓친 것을 감독자가 보완한 10건.** 공통 패턴은 구현은 맞게 고쳤으나 그 변경이
 깨뜨린 테스트를 끝까지 따라가지 못한 것이고, 직접 원인은 빌드를 돌리지 못한 것이다.
