@@ -1085,16 +1085,13 @@ void client_server_location_runtime_t::pump ()
             if (!server.pump_task) {
                 std::shared_ptr<application_job_queue_t::permit_t>
                   application_permit;
-                bool may_pump = true;
-                if (!server.owner->has_pending_application ()) {
-                    _application_supply->ensure_waiter ();
-                    auto reserved = _application_supply->take ();
-                    may_pump = reserved.has_value ();
-                    if (reserved) {
-                        application_permit = std::make_shared<
-                          application_job_queue_t::permit_t> (
-                            std::move (*reserved));
-                    }
+                _application_supply->ensure_waiter ();
+                auto reserved = _application_supply->take ();
+                const bool may_pump = reserved.has_value ();
+                if (reserved) {
+                    application_permit = std::make_shared<
+                      application_job_queue_t::permit_t> (
+                        std::move (*reserved));
                 }
                 if (may_pump) {
                     server.pump_task = start_task (pump_server_transport (

@@ -244,13 +244,12 @@ bool drain_bound_session_sends (const std::shared_ptr<detail::actor_gateway_stat
             })) {
             return true;
         }
-        trace_detached_bound_session_send_failure (state, actor_id,
-                                                   "accepted=false detached_queue_full=true",
-                                                   message_flow_reason_t::backpressure);
+        trace_detached_bound_session_send_failure (
+          state, actor_id, "accepted=false executor_stopping=true");
         if (completion_fence) {
             completion_fence->complete (
-              result_t<void>::failure (framework_error_kind_t::capacity_exceeded,
-                                       "bound Session delivery executor is unavailable"));
+              result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                       "bound Session delivery executor is stopping"));
         }
         // The executor refused this head. Drop it and continue so the Actor's
         // per-session FIFO cannot remain permanently marked active.
@@ -263,24 +262,13 @@ bool enqueue_bound_session_send (
   const std::string &actor_id,
   detail::actor_gateway_state_t::pending_bound_session_send_t pending)
 {
-    constexpr std::size_t capacity = 1024;
-    const auto start_drain = state->sync ([&] () -> std::optional<bool> {
+    const auto start_drain = state->sync ([&] {
         auto &queue = state->pending_bound_session_sends[queue_key];
-        if (queue.size () >= capacity)
-            return std::nullopt;
         queue.push_back (std::move (pending));
         return state->active_bound_session_sends.insert (queue_key).second;
     });
-    if (!start_drain) {
-        if (pending.completion_fence) {
-            pending.completion_fence->complete (
-              result_t<void>::failure (framework_error_kind_t::capacity_exceeded,
-                                       "bound Session detached send queue is full"));
-        }
-        return false;
-    }
     trace_detached_bound_session_send_stage (state, actor_id, "fifo_accepted", "accepted");
-    return !*start_drain || drain_bound_session_sends (state, queue_key, actor_id);
+    return !start_drain || drain_bound_session_sends (state, queue_key, actor_id);
 }
 
 void drain_session_relay (const std::shared_ptr<detail::actor_gateway_state_t> &state,
@@ -403,38 +391,14 @@ task_t<void> enqueue_session_relay (const std::shared_ptr<detail::actor_gateway_
                                     std::string packet_name,
                                     std::function<task_t<void> ()> dispatch)
 {
-    /* Session Actor relay shares the bound-session waiter bound
-     * (async-execution-policy §1.3): when the bounded waiter capacity is
-     * fully used a new payload is not held — the call completes immediately
-     * with DeadlineExceeded and the message is never submitted later. */
-    constexpr std::size_t capacity = 1024;
     auto completion = std::make_shared<detail::task_completion_source_t<void>> ();
     auto task = completion->task ();
     const auto start_drain = state->sync ([&] {
         auto &queue = state->pending_session_relays[actor_id];
-        if (queue.size () < capacity) {
-            queue.push_back ({std::move (dispatch), completion, std::move (packet_name)});
-            return std::optional<bool>{state->active_session_relays.insert (actor_id).second};
-        }
-        return std::optional<bool>{};
+        queue.push_back ({std::move (dispatch), completion, std::move (packet_name)});
+        return state->active_session_relays.insert (actor_id).second;
     });
-    if (!start_drain) {
-        const framework_exception_t rejected (framework_error_kind_t::deadline_exceeded,
-                                              "actor session relay waiter capacity is exhausted");
-        detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
-            return message_dispatch_error_event_t{.surface = dispatch_error_surface_t::spot_actor,
-                                                  .message_kind =
-                                                    dispatch_message_kind_t::actor_send,
-                                                  .reason = dispatch_error_reason_t::backpressure,
-                                                  .action = dispatch_error_action_t::drop,
-                                                  .packet_name = packet_name,
-                                                  .actor_id = actor_id,
-                                                  .exception = std::make_exception_ptr (rejected)};
-        });
-        completion->complete (detail::result_access_t::failure<void> (rejected));
-        return task;
-    }
-    if (*start_drain)
+    if (start_drain)
         drain_session_relay (state, actor_id);
     return task;
 }
@@ -1063,7 +1027,7 @@ result_t<std::uint64_t> session_actor_t::reserve_relay_sequence ()
         }
         if (found->second.next_session_relay_sequence
             == std::numeric_limits<std::uint64_t>::max ()) {
-            return result_t<std::uint64_t>::failure (framework_error_kind_t::capacity_exceeded,
+            return result_t<std::uint64_t>::failure (framework_error_kind_t::internal_failure,
                                                      "actor session relay sequence is exhausted");
         }
         return result_t<std::uint64_t>::success (found->second.next_session_relay_sequence++);
@@ -1112,26 +1076,6 @@ task_t<void> session_actor_t::relay_internal (detail::stream_header_t header,
         }
         _ref = found->second.ref;
         if (!_state->relay_dispatcher) {
-            /* Bounded parking (async-execution-policy §1.3, same 1024 bound
-             * as the session relay waiters): beyond the bound the frame is
-             * not held — the call fails immediately with DeadlineExceeded and
-             * the drop is reported. */
-            if (_state->relayed_frames.size () >= detail::relayed_frame_capacity) {
-                const framework_exception_t capacity_rejected (
-                  framework_error_kind_t::deadline_exceeded, "actor relay frame capacity is exhausted");
-                detail::dispatch_error_reporter_t (_state->dispatch).report_lazy ([&] {
-                    return message_dispatch_error_event_t{
-                      .surface = dispatch_error_surface_t::spot_actor,
-                      .message_kind = dispatch_message_kind_t::actor_send,
-                      .reason = dispatch_error_reason_t::backpressure,
-                      .action = dispatch_error_action_t::drop,
-                      .packet_name = std::string (header.packet_name ()),
-                      .actor_id = std::string (_ref.actor_id ().value ()),
-                      .exception = std::make_exception_ptr (capacity_rejected)};
-                });
-                rejected = detail::result_access_t::failure<void> (capacity_rejected);
-                return;
-            }
             _state->relayed_frames.push_back (detail::relayed_frame_t{_ref, header, payload});
             rejected = result_t<void>::success ();
             return;
@@ -1281,26 +1225,7 @@ relay_request_call_t session_actor_t::relay_request (const zlink::message_t &pay
         }
         _ref = found->second.ref;
         if (!_state->relay_dispatcher) {
-            /* Bounded parking (async-execution-policy §1.3): beyond the 1024
-             * bound the frame is dropped instead of retained. The call keeps
-             * its immediate not_found failure either way; the drop event
-             * records the discarded frame. */
-            if (_state->relayed_frames.size () >= detail::relayed_frame_capacity) {
-                const framework_exception_t rejected (framework_error_kind_t::deadline_exceeded,
-                                                      "actor relay frame capacity is exhausted");
-                detail::dispatch_error_reporter_t (_state->dispatch).report_lazy ([&] {
-                    return message_dispatch_error_event_t{
-                      .surface = dispatch_error_surface_t::spot_actor,
-                      .message_kind = dispatch_message_kind_t::actor_request,
-                      .reason = dispatch_error_reason_t::backpressure,
-                      .action = dispatch_error_action_t::drop,
-                      .packet_name = std::string (header->packet_name ()),
-                      .actor_id = std::string (_ref.actor_id ().value ()),
-                      .exception = std::make_exception_ptr (rejected)};
-                });
-            } else {
-                _state->relayed_frames.push_back (detail::relayed_frame_t{_ref, *header, payload});
-            }
+            _state->relayed_frames.push_back (detail::relayed_frame_t{_ref, *header, payload});
             rejected = result_t<zlink::message_t>::failure (
               framework_error_kind_t::not_found, "actor relay dispatcher is not configured");
             return;

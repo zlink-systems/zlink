@@ -900,7 +900,7 @@ void verify_remaining_terminal_outcomes ()
     metric_test::provider_t provider;
     auto metrics =
       std::make_shared<runtime::mesh_request_metrics_t> ("metrics-terminals");
-    foundation::operation_registry_t registry (8);
+    foundation::operation_registry_t registry;
     const auto register_operation =
       [&] (std::uint64_t id, runtime::mesh_request_surface_t surface) {
           require (registry.register_operation (

@@ -23,7 +23,7 @@ class counting_direct_executor_t final : public offload_executor_t
 {
   public:
     counting_direct_executor_t () :
-        offload_executor_t (0, 1, 0, std::chrono::milliseconds{1},
+        offload_executor_t (0, 1, std::chrono::milliseconds{1},
                             "lane-roundtrip-counting")
     {
     }

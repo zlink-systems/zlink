@@ -212,8 +212,6 @@ std::string error_kind_wire_name (fw::framework_error_kind_t kind)
             return "rejected";
         case fw::framework_error_kind_t::unavailable:
             return "unavailable";
-        case fw::framework_error_kind_t::capacity_exceeded:
-            return "capacity_exceeded";
         case fw::framework_error_kind_t::deadline_exceeded:
             return "deadline_exceeded";
         case fw::framework_error_kind_t::shutting_down:

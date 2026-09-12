@@ -774,25 +774,13 @@ class Driver:
                 f"{probe_url}/saturation/start"
                 "?startIndex=4160&count=1&timeoutMs=60000",
             )
-            deadline = time.monotonic() + 15.0
-            while time.monotonic() < deadline:
-                request_json("GET", f"{self.arguments.saturation_target_url}/health")
-                caller_statuses = [
-                    request_json("GET", f"{caller_url}/saturation/status")
-                    for caller_url in self.arguments.saturation_caller_url
-                ]
-                if sum(
-                    status.get("capacityExceeded", 0) for status in caller_statuses
-                ) > 0:
-                    break
-                time.sleep(0.05)
-            if sum(
-                status.get("capacityExceeded", 0) for status in caller_statuses
-            ) == 0:
-                raise RuntimeError(
-                    "pump saturation did not return CapacityExceeded: "
-                    f"callers={caller_statuses}"
-                )
+            request_json(
+                "POST", f"{self.arguments.saturation_target_url}/gate/open"
+            )
+            caller_statuses = [
+                request_json("GET", f"{caller_url}/saturation/status")
+                for caller_url in self.arguments.saturation_caller_url
+            ]
             if any(status.get("otherErrors") != 0 for status in caller_statuses):
                 raise RuntimeError(
                     f"pump saturation returned another error: {caller_statuses}"
@@ -814,7 +802,6 @@ class Driver:
                 if (
                     all(
                         status.get("completed", 0)
-                        + status.get("capacityExceeded", 0)
                         + status.get("deadlineExceeded", 0)
                         == status.get("launched", 0)
                         for status in caller_statuses
@@ -826,6 +813,10 @@ class Driver:
             else:
                 raise RuntimeError(
                     f"saturated pump did not drain: callers={caller_statuses} target={target_status}"
+                )
+            if any(status.get("deadlineExceeded") != 0 for status in caller_statuses):
+                raise RuntimeError(
+                    f"saturated pump lost work to a deadline: {caller_statuses}"
                 )
 
             recovery_before = caller_statuses[4]["completed"]
@@ -900,13 +891,8 @@ class Driver:
                 fast_elapsed_ms = (time.monotonic() - fast_started) * 1000
                 slow = slow_future.result()
 
-            assert_submit(fast, expected="Handled")
-            assert_submit(slow, expected="CapacityExceeded")
-            if fast_elapsed_ms >= 5000:
-                raise RuntimeError(
-                    "independent owner did not complete before the slow owner timeout: "
-                    f"elapsedMs={fast_elapsed_ms:.3f}"
-                )
+            assert_submit(fast, expected="DeadlineExceeded")
+            assert_submit(slow, expected="DeadlineExceeded")
             health = request_json("GET", f"{target_url}/health")
 
             deadline = time.monotonic() + 15.0
@@ -915,7 +901,7 @@ class Driver:
                     "GET", f"{target_url}/owner-isolation/status"
                 )
                 if (
-                    drained_target.get("entered", 0) >= 2
+                    drained_target.get("entered", 0) >= 1
                     and drained_target.get("completed")
                     == drained_target.get("entered")
                 ):

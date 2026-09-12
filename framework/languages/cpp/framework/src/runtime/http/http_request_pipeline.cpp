@@ -517,8 +517,6 @@ const char *error_kind_name (framework_error_kind_t kind) noexcept
             return "rejected";
         case framework_error_kind_t::unavailable:
             return "unavailable";
-        case framework_error_kind_t::capacity_exceeded:
-            return "capacity_exceeded";
         case framework_error_kind_t::deadline_exceeded:
             return "deadline_exceeded";
         case framework_error_kind_t::shutting_down:
@@ -554,8 +552,6 @@ http::status status_for_error (framework_error_kind_t kind) noexcept
             return http::status::service_unavailable;
         case framework_error_kind_t::deadline_exceeded:
             return http::status::gateway_timeout;
-        case framework_error_kind_t::capacity_exceeded:
-            return http::status::too_many_requests;
         default:
             return http::status::internal_server_error;
     }

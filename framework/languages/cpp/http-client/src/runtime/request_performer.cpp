@@ -421,7 +421,7 @@ zlink::framework::result_t<raw_http_response_t> perform_once (const http_client_
         }
         if (ex.code () == boost::beast::http::error::body_limit) {
             return zlink::framework::result_t<raw_http_response_t>::failure (
-              zlink::framework::framework_error_kind_t::capacity_exceeded,
+              zlink::framework::framework_error_kind_t::rejected,
               ex.what ());
         }
         const std::string_view category (ex.code ().category ().name ());

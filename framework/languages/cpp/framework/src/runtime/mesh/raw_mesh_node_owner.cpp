@@ -47,7 +47,6 @@ namespace zlink::framework::runtime::mesh
 namespace
 {
 
-constexpr std::size_t max_pending_admissions = 64;
 // The same bounded surface axis serves accumulation and metric/flow projection.
 struct inbound_surface_t
 {
@@ -65,7 +64,6 @@ constexpr std::array inbound_surfaces{
                     "spot", dispatch_error_surface_t::spot_route},
   inbound_surface_t{protocol::command::actorSend, protocol::command::actorRequest,
                     "actor", dispatch_error_surface_t::spot_actor}};
-constexpr std::size_t max_pending_admission_bytes = 64u * 1024u;
 constexpr auto infrastructure_not_connected_retry_interval =
   std::chrono::milliseconds (75);
 using ::zlink::framework::detail::mesh_trace_enabled;
@@ -607,14 +605,9 @@ raw_mesh_node_owner_t::raw_mesh_node_owner_t (
     _context (
       context ? std::move (context) : std::make_shared<zlink::context_t> ()),
     _topology (_options.descriptor, _options.metric_channel_names),
-    _mailbox (_options.application_message_budget,
-              _options.application_byte_budget,
-              _options.infrastructure_message_budget,
-              _options.infrastructure_byte_budget),
+    _mailbox (),
     _request_metrics (std::make_shared<mesh_request_metrics_t> (_options.descriptor.mesh_name)),
-    _operations (
-      std::make_shared<foundation::operation_registry_t> (
-        foundation::default_operation_capacity))
+    _operations (std::make_shared<foundation::operation_registry_t> ())
 {
     auto meter = opentelemetry::metrics::Provider::GetMeterProvider ()->GetMeter ("zlink.framework");
     constexpr std::array names{"zlink.mesh_node.peers.configured", "zlink.mesh_node.peers.connected",
@@ -739,7 +732,6 @@ void raw_mesh_node_owner_t::close () noexcept
         }
         _closed = true;
         _pending_admissions.clear ();
-        _pending_admission_bytes = 0;
         port = std::move (_port);
         monitor = std::move (_monitor);
         ingress_poller = std::move (_ingress_poller);
@@ -1307,7 +1299,6 @@ void raw_mesh_node_owner_t::discard_pending_admissions_locked (
             ++pending;
             continue;
         }
-        _pending_admission_bytes -= pending->bytes;
         pending = _pending_admissions.erase (pending);
         ++discarded;
     }
@@ -1388,8 +1379,8 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
         co_return false;
     if (!start->registered) {
         throw framework_exception_t (
-          framework_error_kind_t::capacity_exceeded,
-          "raw mesh request completion capacity is exhausted");
+          framework_error_kind_t::shutting_down,
+          "raw mesh request registry is closed");
     }
     co_return co_await observe_request (
       start->operation, start->correlation,
@@ -1472,7 +1463,7 @@ raw_mesh_node_owner_t::send_start_result_t raw_mesh_node_owner_t::start_send (
     if (!start)
         return send_start_result_t::terminated;
     if (!start->registered)
-        return send_start_result_t::capacity_exceeded;
+        return send_start_result_t::terminated;
     if (!start->running) {
         (void) _operations->unregister (start->operation);
         return send_start_result_t::terminated;
@@ -1527,11 +1518,6 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_with_header_result (
       std::move (target_routing_id), std::move (parts), completion, std::move (trace));
     if (started == send_start_result_t::terminated)
         co_return zlink::submit_result_t::terminated;
-    if (started == send_start_result_t::capacity_exceeded) {
-        throw framework_exception_t (
-          framework_error_kind_t::capacity_exceeded,
-          "raw mesh send completion capacity is exhausted");
-    }
     co_return co_await pending_completion;
 }
 
@@ -1559,11 +1545,6 @@ task_t<bool> raw_mesh_node_owner_t::send_header_only (
       detail::backend::raw_message_t{std::move (header)}, completion);
     if (started == send_start_result_t::terminated)
         co_return false;
-    if (started == send_start_result_t::capacity_exceeded) {
-        throw framework_exception_t (
-          framework_error_kind_t::capacity_exceeded,
-          "raw mesh send completion capacity is exhausted");
-    }
     co_return co_await pending_completion == zlink::submit_result_t::ok;
 }
 
@@ -1576,13 +1557,8 @@ raw_mesh_node_owner_t::submit_header_only (
     const auto started = start_send (
       std::vector<std::uint8_t> (target_routing_id),
       detail::backend::raw_message_t{std::move (header)}, completion);
-    if (started != send_start_result_t::started && mesh_trace_enabled ()) {
-        trace_mesh_enabled (
-          std::string ("control-send start=")
-          + (started == send_start_result_t::capacity_exceeded
-               ? "capacity-exceeded"
-               : "terminated"));
-    }
+    if (started != send_start_result_t::started && mesh_trace_enabled ())
+        trace_mesh_enabled ("control-send start=terminated");
     return started;
 }
 
@@ -2991,115 +2967,12 @@ void raw_mesh_node_owner_t::publish_drop_metrics (opentelemetry::metrics::Observ
     }
 }
 
-void raw_mesh_node_owner_t::observe_owner_rejection (const service_mailbox_record_t &record)
-{
-    const auto command = protocol::decode_header (record.parts.front ()).kind;
-    for (std::size_t index = 0; index < inbound_surfaces.size (); ++index) {
-        const auto &surface = inbound_surfaces[index];
-        const bool send = command == surface.send;
-        if (!send && command != surface.request)
-            continue;
-        if (send)
-            _inbound_drops[index].fetch_add (1, std::memory_order_relaxed);
-        const framework::detail::message_flow_tracer_t flow (_options.dispatch);
-        if (flow.enabled (message_flow_log_mode_t::errors)) {
-            flow.trace (message_flow_outcome_t::dropped, message_flow_result_t::failed, [&] {
-                message_flow_event_t event{};
-                auto payload = protocol::decode_application_payload (record.parts.back (), true);
-                if (payload.packet_name == protocol::framework_multipart_packet_name
-                    && payload.content_type == protocol::framework_multipart_content_type) {
-                    const auto parts = protocol::decode_application_parts (payload);
-                    const auto header = messaging::envelope_codec_t ().decode_header (parts.front (), true);
-                    const auto &envelope = header.value ();
-                    payload.packet_name = envelope.message_name;
-                    payload.flow_id = envelope.flow_id;
-                    payload.flow_origin = envelope.flow_origin;
-                    if (!envelope.correlation_id.empty ())
-                        event.correlation_id = envelope.correlation_id;
-                    if (!envelope.channel_name.empty ())
-                        event.channel_name = envelope.channel_name;
-                }
-                auto scope = flow_context_t::enter (
-                  payload.flow_id, payload.flow_origin, flow.mode (), flow_origin_t::inbound);
-                event.outcome = message_flow_outcome_t::dropped;
-                event.surface = surface.flow_surface;
-                event.message_kind = send ? dispatch_message_kind_t::send
-                                          : dispatch_message_kind_t::request;
-                event.packet_name = payload.packet_name;
-                event.mesh_name = _options.descriptor.mesh_name;
-                event.source_rid = zlink::routing_id_t::from (record.source_routing_id).to_string ();
-                if (record.correlation && !event.correlation_id)
-                    event.correlation_id = std::to_string (*record.correlation);
-                event.error_reason = dispatch_error_reason_t::backpressure;
-                event.error_action = send ? dispatch_error_action_t::drop
-                                          : dispatch_error_action_t::reply_error;
-                event.reason = message_flow_reason_t::backpressure;
-                event.exception = std::make_exception_ptr (framework_exception_t (
-                  framework_error_kind_t::unavailable, "Target owner FIFO capacity exceeded"));
-                if (const auto &context = flow_context_t::current ()) {
-                    event.flow_id = context->flow_id;
-                    event.flow_origin = context->origin;
-                }
-                message_dispatch_error_event_t error{};
-                error.surface = event.surface;
-                error.message_kind = event.message_kind;
-                error.reason = *event.error_reason;
-                error.action = *event.error_action;
-                error.packet_name = event.packet_name;
-                error.channel_name = event.channel_name;
-                error.mesh_name = event.mesh_name;
-                error.source_rid = event.source_rid;
-                error.correlation_id = event.correlation_id;
-                error.flow_id = event.flow_id;
-                error.flow_origin = event.flow_origin;
-                error.exception = event.exception;
-                framework::detail::dispatch_error_reporter_t (_options.dispatch).report (std::move (error));
-                return event;
-            });
-        }
-        return;
-    }
-}
-
-raw_mesh_pump_result_t raw_mesh_node_owner_t::enqueue_received_or_retain (
+raw_mesh_pump_result_t raw_mesh_node_owner_t::enqueue_received (
   service_mailbox_record_t record,
   raw_mesh_pump_result_t accepted_result)
 {
-    const auto enqueue_result =
-      _mailbox.try_enqueue_result (std::move (record));
-    if (enqueue_result == service_mailbox_enqueue_result_t::accepted) {
+    if (_mailbox.try_enqueue (std::move (record)))
         return accepted_result;
-    }
-    if (enqueue_result == service_mailbox_enqueue_result_t::closed)
-        return raw_mesh_pump_result_t::backpressured;
-    if (record.domain == service_mailbox_domain_t::application) {
-        observe_owner_rejection (record);
-        bool replied = false;
-        if (record.reply_token && record.correlation) {
-            try {
-                replied = reply_failure (
-                  record,
-                  static_cast<std::uint32_t> (
-                    protocol::request_terminal_result::rejected),
-                  static_cast<std::uint32_t> (
-                    protocol::framework_error_code::workerQueueFull));
-            }
-            catch (...) {
-            }
-        }
-        trace_mesh (
-          "application-reject reason=owner-capacity action="
-          + std::string (replied ? "reply-worker-queue-full"
-                                 : "drop"));
-        return raw_mesh_pump_result_t::backpressured;
-    }
-    if (_pending_received) {
-        throw std::logic_error (
-          "raw mesh owner already retains a received mailbox record");
-    }
-    _pending_received.emplace (
-      pending_received_mailbox_record_t{
-        std::move (record), accepted_result});
     return raw_mesh_pump_result_t::backpressured;
 }
 
@@ -3125,37 +2998,22 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
     struct pending_pump_t
     {
         std::optional<detail::backend::raw_received_t> received;
-        std::optional<raw_mesh_pump_result_t> result;
     };
-    auto pending = _lane.run ([this, accept_application_receive] {
+    auto pending = _lane.run ([this] {
         pending_pump_t value;
         {
             std::lock_guard lifecycle_lock (_lifecycle_mutex);
             if (!_pending_admissions.empty ()) {
                 auto pending = std::move (_pending_admissions.front ());
                 _pending_admissions.pop_front ();
-                _pending_admission_bytes -= pending.bytes;
                 value.received.emplace (std::move (pending.received));
                 trace_mesh (
                   "admission-retry reason=connection-ready pending="
                     + std::to_string (_pending_admissions.size ()));
             }
         }
-        if (value.received || !accept_application_receive || !_pending_received)
-            return value;
-        const auto accepted_result = _pending_received->accepted_result;
-        for (const auto &part : _pending_received->record.parts)
-            _last_pump_bytes += part.size ();
-        if (!_mailbox.try_enqueue (std::move (_pending_received->record))) {
-            value.result = raw_mesh_pump_result_t::backpressured;
-            return value;
-        }
-        _pending_received.reset ();
-        value.result = accepted_result;
         return value;
     }).get ();
-    if (pending.result)
-        co_return *pending.result;
     if (!pending.received && !accept_application_receive) {
         // The ROUTER carries every ordinary record, including control and
         // malformed input.  Without the host-wide supply permit none of
@@ -3208,32 +3066,19 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 std::optional<service_node_descriptor_t> expected_descriptor;
                 bool expected_descriptor_mismatch = false;
                 bool deferred = false;
-                bool capacity_exceeded = false;
             };
             const auto candidate = _lane.run ([this, &received, descriptor,
                                                preferred_direction, header] {
                 admission_candidate_t value{{}, preferred_direction, {},
-                                            std::nullopt, false, false, false};
+                                            std::nullopt, false, false};
                 std::lock_guard lifecycle_lock (_lifecycle_mutex);
                 const auto connection =
                   _connections.for_handshake (
                     received->source_routing_id,
                     preferred_direction);
                 if (!connection) {
-                    const auto bytes = raw_received_bytes (*received);
-                    if (_pending_admissions.size () >= max_pending_admissions
-                        || bytes > max_pending_admission_bytes
-                        || bytes > max_pending_admission_bytes
-                             - _pending_admission_bytes) {
-                        trace_mesh (
-                          "admission-drop reason=pending-queue-full kind="
-                            + std::to_string (static_cast<int> (header.kind)));
-                        value.capacity_exceeded = true;
-                        return value;
-                    }
-                    _pending_admission_bytes += bytes;
                     _pending_admissions.push_back (
-                      pending_admission_t{std::move (*received), bytes});
+                      pending_admission_t{std::move (*received)});
                     trace_mesh (
                       "admission-deferred reason=no-physical-candidate kind="
                         + std::to_string (static_cast<int> (header.kind))
@@ -3264,8 +3109,6 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                     value.expected_descriptor = expected->second;
                 return value;
             }).get ();
-            if (candidate.capacity_exceeded)
-                co_return raw_mesh_pump_result_t::capacity_exceeded;
             if (candidate.deferred) {
                 // The monitor poller is drained by the host before the next
                 // dispatch pass. Returning no_data prevents this same pass
@@ -3277,8 +3120,6 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 const auto submitted = submit_header_only (
                   received->source_routing_id,
                   protocol::encode_reject (3));
-                if (submitted == send_start_result_t::capacity_exceeded)
-                    co_return raw_mesh_pump_result_t::capacity_exceeded;
                 co_return raw_mesh_pump_result_t::infrastructure;
             }
             struct admission_commit_t
@@ -3325,8 +3166,6 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                       protocol::encode_route_mesh_admission (
                         protocol::command::admit,
                         committed.local));
-                    if (submitted == send_start_result_t::capacity_exceeded)
-                        co_return raw_mesh_pump_result_t::capacity_exceeded;
                 } else {
                     _lane.run ([this, &received, &candidate, &descriptor] {
                         std::lock_guard lifecycle_lock (_lifecycle_mutex);
@@ -3358,8 +3197,6 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 const auto submitted = submit_header_only (
                   received->source_routing_id,
                   protocol::encode_reject (reason));
-                if (submitted == send_start_result_t::capacity_exceeded)
-                    co_return raw_mesh_pump_result_t::capacity_exceeded;
                 co_return raw_mesh_pump_result_t::infrastructure;
             }
             if (header.kind == protocol::command::hello) {
@@ -3368,8 +3205,6 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                   protocol::encode_route_mesh_admission (
                     protocol::command::admit,
                     committed.local));
-                if (submitted == send_start_result_t::capacity_exceeded)
-                    co_return raw_mesh_pump_result_t::capacity_exceeded;
             }
             co_return raw_mesh_pump_result_t::infrastructure;
         }
@@ -3449,8 +3284,6 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                   received->source_routing_id,
                   protocol::encode_liveness (
                     protocol::command::livenessAck, record.probe_id));
-                if (submitted == send_start_result_t::capacity_exceeded)
-                    co_return raw_mesh_pump_result_t::capacity_exceeded;
                 if (submitted == send_start_result_t::terminated)
                     co_return raw_mesh_pump_result_t::protocol_error;
             } else {
@@ -3527,7 +3360,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 || !target_matches_topology) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            co_return enqueue_received_or_retain (
+            co_return enqueue_received (
               service_mailbox_record_t{
                 owner_key (local.node_routing_id),
                 service_mailbox_domain_t::infrastructure,
@@ -3556,7 +3389,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
             }
             (void) protocol::decode_application_payload (
               received->parts.back (), false);
-            co_return enqueue_received_or_retain (
+            co_return enqueue_received (
               service_mailbox_record_t{
                 "bound-session:" + send.actor.actor_id,
                 service_mailbox_domain_t::application,
@@ -3580,7 +3413,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                      != local.lifecycle_generation) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            co_return enqueue_received_or_retain (
+            co_return enqueue_received (
               service_mailbox_record_t{
                 owner_key (local.node_routing_id),
                 service_mailbox_domain_t::infrastructure,
@@ -3614,7 +3447,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                      != local.lifecycle_generation) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            co_return enqueue_received_or_retain (
+            co_return enqueue_received (
               service_mailbox_record_t{
                 owner_key (local.node_routing_id),
                 service_mailbox_domain_t::infrastructure,
@@ -3651,7 +3484,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
             }
             (void) protocol::decode_application_payload (
               received->parts.back (), false);
-            co_return enqueue_received_or_retain (
+            co_return enqueue_received (
               service_mailbox_record_t{
                 owner_key (local.node_routing_id),
                 service_mailbox_domain_t::infrastructure,
@@ -3728,7 +3561,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                      != local.lifecycle_generation) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            co_return enqueue_received_or_retain (
+            co_return enqueue_received (
               service_mailbox_record_t{
                 owner_key (local.node_routing_id),
                 service_mailbox_domain_t::infrastructure,
@@ -3779,7 +3612,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                      != admitted->descriptor.lifecycle_generation) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            co_return enqueue_received_or_retain (
+            co_return enqueue_received (
               service_mailbox_record_t{
                 owner_key (local.node_routing_id),
                 service_mailbox_domain_t::infrastructure,
@@ -3845,7 +3678,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
             const auto local = _topology.local_descriptor ();
-            co_return enqueue_received_or_retain (
+            co_return enqueue_received (
               service_mailbox_record_t{
                 owner_key (local.node_routing_id),
                 service_mailbox_domain_t::infrastructure,
@@ -3891,7 +3724,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                     co_return raw_mesh_pump_result_t::protocol_error;
                 }
             }
-            co_return enqueue_received_or_retain (
+            co_return enqueue_received (
               service_mailbox_record_t{
                 owner_key (local.node_routing_id),
                 service_mailbox_domain_t::infrastructure,
@@ -3937,7 +3770,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                          != admitted->descriptor.lifecycle_generation) {
                     co_return raw_mesh_pump_result_t::protocol_error;
                 }
-                co_return enqueue_received_or_retain (
+                co_return enqueue_received (
                   service_mailbox_record_t{
                     owner_key (local.node_routing_id),
                     service_mailbox_domain_t::infrastructure,
@@ -3972,7 +3805,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                          != admitted->descriptor.lifecycle_generation) {
                     co_return raw_mesh_pump_result_t::protocol_error;
                 }
-                co_return enqueue_received_or_retain (
+                co_return enqueue_received (
                   service_mailbox_record_t{
                     owner_key (local.node_routing_id),
                     service_mailbox_domain_t::infrastructure,
@@ -4107,7 +3940,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
             }
             mailbox_owner = service_mailbox_t::application_owner (host::owner_kind_t::actor, actor.target.actor_id);
         }
-        auto result = enqueue_received_or_retain (
+        auto result = enqueue_received (
           service_mailbox_record_t{
             std::move (mailbox_owner),
             service_mailbox_domain_t::application,

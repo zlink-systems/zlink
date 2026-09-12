@@ -136,24 +136,12 @@ class operation_completion_dispatcher_t
         _worker.join ();
     }
 
-    std::unique_ptr<operation_completion_item_t> try_admit (
+    std::unique_ptr<operation_completion_item_t> create_completion_item (
       operation_registry_t::callback_t callback,
       const std::shared_ptr<operation_registry_drain_state_t> &drain_state)
     {
-        {
-            std::lock_guard lock (_state->mutex);
-            if (_state->reserved >= default_operation_capacity)
-                return {};
-            ++_state->reserved;
-        }
-        try {
-            return std::make_unique<operation_completion_item_t> (
-              std::move (callback), drain_state);
-        }
-        catch (...) {
-            release_reservation (_state);
-            throw;
-        }
+        return std::make_unique<operation_completion_item_t> (
+          std::move (callback), drain_state);
     }
 
     void post (std::unique_ptr<operation_completion_item_t> completion,
@@ -186,7 +174,6 @@ class operation_completion_dispatcher_t
     {
         if (!completion)
             return;
-        release_reservation (_state);
         completion->release_owner ();
         completion.reset ();
     }
@@ -198,17 +185,8 @@ class operation_completion_dispatcher_t
         std::condition_variable ready;
         std::unique_ptr<operation_completion_item_t> head;
         operation_completion_item_t *tail = nullptr;
-        std::size_t reserved = 0;
         bool stopping = false;
     };
-
-    static void release_reservation (
-      const std::shared_ptr<state_t> &state) noexcept
-    {
-        std::lock_guard lock (state->mutex);
-        if (state->reserved != 0)
-            --state->reserved;
-    }
 
     static void run (std::shared_ptr<state_t> state) noexcept
     {
@@ -239,7 +217,6 @@ class operation_completion_dispatcher_t
                 // One consumer must not prevent later terminal callbacks
                 // from running on the process-shared dispatcher lane.
             }
-            release_reservation (state);
             completion->release_owner ();
             completion.reset ();
         }
@@ -255,10 +232,8 @@ namespace
 std::shared_ptr<operation_completion_dispatcher_t>
 shared_completion_dispatcher ()
 {
-    // One process-lifetime dispatcher keeps both the worker count and the
-    // aggregate pending-plus-queued reservation bound stable while owners are
-    // stopped and recreated. A weak singleton could temporarily run an old
-    // draining lane beside a newly created lane and multiply that bound.
+    // One process-lifetime dispatcher prevents owners that are stopped and
+    // recreated from temporarily running separate completion lanes.
     static auto dispatcher =
       std::make_shared<operation_completion_dispatcher_t> ();
     return dispatcher;
@@ -266,14 +241,10 @@ shared_completion_dispatcher ()
 
 } // namespace
 
-operation_registry_t::operation_registry_t (std::size_t capacity) :
-    _capacity (capacity),
+operation_registry_t::operation_registry_t () :
     _completion_dispatcher (shared_completion_dispatcher ()),
     _drain_state (std::make_shared<operation_registry_drain_state_t> ())
 {
-    if (capacity == 0) {
-        throw std::invalid_argument ("operation registry capacity must be positive");
-    }
 }
 
 operation_registry_t::~operation_registry_t () noexcept
@@ -308,8 +279,7 @@ bool operation_registry_t::register_operation (call_id_t id,
         throw std::invalid_argument ("operation id must not be zero");
     }
     std::lock_guard lock (_mutex);
-    if (_closed || _pending.size () >= _capacity
-        || _pending.contains (id)) {
+    if (_closed || _pending.contains (id)) {
         return false;
     }
     const auto inserted = _pending.emplace (
@@ -317,12 +287,8 @@ bool operation_registry_t::register_operation (call_id_t id,
     if (!inserted.second)
         return false;
     try {
-        auto completion = _completion_dispatcher->try_admit (
+        auto completion = _completion_dispatcher->create_completion_item (
           std::move (callback), _drain_state);
-        if (!completion) {
-            _pending.erase (inserted.first);
-            return false;
-        }
         completion->request_metric = std::move (request_metric);
         completion->request_metric.start ();
         inserted.first->second.completion = std::move (completion);

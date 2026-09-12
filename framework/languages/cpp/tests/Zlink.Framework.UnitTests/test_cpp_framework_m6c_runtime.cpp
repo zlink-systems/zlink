@@ -541,9 +541,10 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
     state->execution_mode = user_spot_execution_mode_t::spot_wide;
     state->relocation_coordination_mode = spot_relocation_coordination_mode_t::application_signaled;
     state->serial_executor =
-      std::make_shared<runtime::offload_executor_t> (2, 64, "relocation-ready-test");
+      std::make_shared<runtime::offload_executor_t> (2, "relocation-ready-test");
     state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
-      *state->serial_executor, 64, runtime::serial_execution_queue_t::error_handler_t{},
+      *state->serial_executor, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
       runtime::serial_lane_policy_t::spot_wide ());
     state->node = std::make_shared<detail::spot_node_builder_state_t> ("relocation-ready-node");
     state->channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
@@ -664,9 +665,10 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
         state->relocation_coordination_mode =
           spot_relocation_coordination_mode_t::application_signaled;
         state->serial_executor =
-          std::make_shared<runtime::offload_executor_t> (2, 64, "actor-leave-after-defer");
+          std::make_shared<runtime::offload_executor_t> (2, "actor-leave-after-defer");
         state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
-          *state->serial_executor, 64, runtime::serial_execution_queue_t::error_handler_t{},
+          *state->serial_executor, runtime::serial_execution_queue_options_t{},
+          runtime::serial_execution_queue_t::error_handler_t{},
           runtime::serial_lane_policy_t::spot_wide ());
         state->spot_instance = std::make_shared<int> (1);
         return state;
@@ -772,9 +774,10 @@ void test_temporary_channel_request_yield_owns_call_state (test_context_t &test)
     state->node =
       std::make_shared<detail::spot_node_builder_state_t> ("temporary-channel-call-node");
     state->serial_executor =
-      std::make_shared<runtime::offload_executor_t> (2, 64, "temporary-channel-call");
+      std::make_shared<runtime::offload_executor_t> (2, "temporary-channel-call");
     state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
-      *state->serial_executor, 64, runtime::serial_execution_queue_t::error_handler_t{},
+      *state->serial_executor, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
       runtime::serial_lane_policy_t::spot_wide ());
 
     auto reply_source = std::make_shared<detail::task_completion_source_t<zlink::message_t>> ();
@@ -1546,7 +1549,7 @@ inventory_digest_t digest_with (std::uint8_t value)
 
 void test_generation_barrier_quiesces_yield_spot_and_timer (test_context_t &test)
 {
-    stateful_object_runtime_t objects (16, 8);
+    stateful_object_runtime_t objects;
     const auto actor = create_actor (objects, "barrier-actor");
     const auto spot = create_spot (objects, object_kind_t::user_spot, "barrier-spot");
     test.require (objects.register_timer (actor, {9, 1000, 1000, 30}) == stateful_error_t::none,
@@ -1642,7 +1645,7 @@ void test_generation_barrier_quiesces_yield_spot_and_timer (test_context_t &test
 
 void test_close_barrier_waits_and_abort_restores_ingress (test_context_t &test)
 {
-    stateful_object_runtime_t objects (8, 4);
+    stateful_object_runtime_t objects;
     const auto spot = create_spot (objects, object_kind_t::user_spot, "closing-spot");
     test.require (objects.enqueue (spot, turn_domain_t::application, {1, {1}})
                     == stateful_error_t::none,
@@ -3979,11 +3982,11 @@ void test_entry_spot_actor_relocation_restore_fails_without_local_entry_spot (te
     runtime.release_native_handles ();
 }
 
-void test_stateful_application_reservation_includes_active_work (test_context_t &test)
+void test_stateful_application_queue_accepts_active_backlog (test_context_t &test)
 {
     namespace limits = zlink::framework::runtime::dispatch_limits;
     const auto fixed = limits::fixed_work_byte_cost;
-    stateful_object_runtime_t count_limited (1, 1, 1024 * 1024, limits::control_mailbox_bytes);
+    stateful_object_runtime_t count_limited;
     const auto count_actor = create_actor (count_limited, "active-count-actor");
     test.require (count_limited.enqueue (count_actor, turn_domain_t::application, {1, {1}})
                     == stateful_error_t::none,
@@ -3993,18 +3996,25 @@ void test_stateful_application_reservation_includes_active_work (test_context_t 
     test.require (count_claim_error == stateful_error_t::none && count_claim,
                   "active reservation test must claim the first application turn");
     test.require (count_limited.enqueue (count_actor, turn_domain_t::application, {2, {2}})
-                    == stateful_error_t::backpressured,
-                  "application count budget must include the active turn");
+                    == stateful_error_t::none,
+                  "an active turn must not impose a second application queue limit");
     if (count_claim) {
         test.require (count_limited.complete_claim (count_actor, turn_domain_t::application)
                         == stateful_error_t::none,
                       "active count reservation must release at handler completion");
     }
-    test.require (count_limited.enqueue (count_actor, turn_domain_t::application, {2, {2}})
-                    == stateful_error_t::none,
-                  "application count budget must admit work after terminal completion");
+    const auto [count_second_error, count_second] =
+      count_limited.try_claim (count_actor, turn_domain_t::application);
+    test.require (count_second_error == stateful_error_t::none && count_second
+                    && count_second->sequence == 2,
+                  "queued work must remain available after the active turn completes");
+    if (count_second)
+        test.require (count_limited.complete_claim (
+                        count_actor, turn_domain_t::application)
+                        == stateful_error_t::none,
+                      "queued count-regression turn must complete");
 
-    stateful_object_runtime_t byte_limited (2, 1, fixed + 4, limits::control_mailbox_bytes);
+    stateful_object_runtime_t byte_limited;
     const auto byte_actor = create_actor (byte_limited, "active-byte-actor");
     test.require (byte_limited.enqueue (byte_actor, turn_domain_t::application,
                                         {1, std::vector<std::uint8_t> (4, 0x41)})
@@ -4015,18 +4025,25 @@ void test_stateful_application_reservation_includes_active_work (test_context_t 
     test.require (byte_claim_error == stateful_error_t::none && byte_claim,
                   "active byte reservation test must claim the first turn");
     test.require (byte_limited.enqueue (byte_actor, turn_domain_t::application, {2, {}})
-                    == stateful_error_t::backpressured,
-                  "application byte budget must include the active turn");
+                    == stateful_error_t::none,
+                  "payload bytes must not impose a Framework queue limit");
     if (byte_claim) {
         test.require (byte_limited.complete_claim (byte_actor, turn_domain_t::application)
                         == stateful_error_t::none,
                       "active byte reservation must release at handler completion");
     }
-    test.require (byte_limited.enqueue (byte_actor, turn_domain_t::application, {2, {}})
-                    == stateful_error_t::none,
-                  "application byte budget must admit work after terminal completion");
+    const auto [byte_second_error, byte_second] =
+      byte_limited.try_claim (byte_actor, turn_domain_t::application);
+    test.require (byte_second_error == stateful_error_t::none && byte_second
+                    && byte_second->sequence == 2,
+                  "byte-regression work must remain queued after completion");
+    if (byte_second)
+        test.require (byte_limited.complete_claim (
+                        byte_actor, turn_domain_t::application)
+                        == stateful_error_t::none,
+                      "queued byte-regression turn must complete");
 
-    stateful_object_runtime_t multipart_accounting (2, 1, fixed + 4, limits::control_mailbox_bytes);
+    stateful_object_runtime_t multipart_accounting;
     const auto multipart_actor = create_actor (multipart_accounting, "multipart-accounting-actor");
     test.require (multipart_accounting.enqueue (multipart_actor, turn_domain_t::application,
                                                 {1, std::vector<std::uint8_t> (128, 0x43), 4})
@@ -4038,16 +4055,27 @@ void test_stateful_application_reservation_includes_active_work (test_context_t 
                   "multipart accounting test must claim the admitted application turn");
     test.require (
       multipart_accounting.enqueue (multipart_actor, turn_domain_t::application, {2, {}})
-        == stateful_error_t::backpressured,
-      "application HWM must retain the payload-part reservation while active");
+        == stateful_error_t::none,
+      "multipart payload accounting must not become a queue admission cap");
     if (multipart_claim) {
         test.require (
           multipart_accounting.complete_claim (multipart_actor, turn_domain_t::application)
             == stateful_error_t::none,
           "multipart payload reservation must release at completion");
     }
+    const auto [multipart_second_error, multipart_second] =
+      multipart_accounting.try_claim (
+        multipart_actor, turn_domain_t::application);
+    test.require (multipart_second_error == stateful_error_t::none
+                    && multipart_second && multipart_second->sequence == 2,
+                  "multipart backlog must survive the active turn");
+    if (multipart_second)
+        test.require (multipart_accounting.complete_claim (
+                        multipart_actor, turn_domain_t::application)
+                        == stateful_error_t::none,
+                      "multipart backlog turn must complete");
 
-    stateful_object_runtime_t progressive_restore (1, 1, fixed + 1, limits::control_mailbox_bytes);
+    stateful_object_runtime_t progressive_restore;
     bool materialized = false;
     bool lifecycle_committed = false;
     bool lifecycle_saw_closed_dispatch = false;
@@ -4134,10 +4162,10 @@ void test_stateful_application_reservation_includes_active_work (test_context_t 
         && lifecycle_committed && lifecycle_saw_closed_dispatch && !relocation_aborted
         && progressive_fifo && handler_turns == 5,
       "relocation must retain a saved/relay/temporary durable backlog beyond "
-      "live count and byte limits, keep handlers closed through lifecycle, "
+      "the live queue, keep handlers closed through lifecycle, "
       "then admit one FIFO turn at a time");
 
-    stateful_object_runtime_t aggregate_restore (1, 1, fixed + 1, limits::control_mailbox_bytes);
+    stateful_object_runtime_t aggregate_restore;
     std::size_t aggregate_materialized = 0;
     std::size_t aggregate_commit_count = 0;
     aggregate_restore.configure_relocation_materialization (
@@ -4280,8 +4308,7 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
            multipart ({'h', 'e', 'l', 'd'})}};
         return protocol::encode_frozen_record (protocol::encode_frozen_application_record (held));
     }();
-    stateful_object_runtime_t failed_capture (2048, 8, 64u * 1024u * 1024u,
-                                              limits::control_mailbox_bytes);
+    stateful_object_runtime_t failed_capture;
     const auto failed_spot =
       create_spot (failed_capture, object_kind_t::user_spot, "held-capture-failure");
     test.require (failed_capture.enqueue (failed_spot, turn_domain_t::application, {1, {1}})
@@ -4354,8 +4381,7 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
     }
     (void) failed_capture.complete_claim (failed_spot, turn_domain_t::application);
 
-    stateful_object_runtime_t count_limited (2048, 8, 64u * 1024u * 1024u,
-                                             limits::control_mailbox_bytes);
+    stateful_object_runtime_t count_limited;
     const auto count_first =
       create_spot (count_limited, object_kind_t::user_spot, "held-count-first");
     const auto count_second =
@@ -4450,10 +4476,9 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
         }
     }
     test.require (source_abort_fifo,
-                  "source relocation abort must restore an over-capacity hold in FIFO order");
+                  "source relocation abort must restore a hold beyond the former capacity in FIFO order");
 
-    stateful_object_runtime_t byte_limited (4096, 8, 20u * 1024u * 1024u,
-                                            limits::control_mailbox_bytes);
+    stateful_object_runtime_t byte_limited;
     const auto byte_first = create_spot (byte_limited, object_kind_t::user_spot, "held-byte-first");
     const auto byte_second =
       create_spot (byte_limited, object_kind_t::user_spot, "held-byte-second");
@@ -4523,8 +4548,7 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
                     && byte_limited.abort_relocation (byte_seal.token) == stateful_error_t::none,
                   "aggregate hold byte test must close its relocation generation");
 
-    stateful_object_runtime_t target_hold (2, 8, limits::fixed_work_byte_cost + 1,
-                                           limits::control_mailbox_bytes);
+    stateful_object_runtime_t target_hold;
     std::mutex target_mutex;
     std::condition_variable target_condition;
     bool target_restore_entered = false;
@@ -4601,8 +4625,7 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
         }
     }
 
-    stateful_object_runtime_t target_abort (1, 8, limits::fixed_work_byte_cost + 1,
-                                            limits::control_mailbox_bytes);
+    stateful_object_runtime_t target_abort;
     std::mutex abort_mutex;
     std::condition_variable abort_condition;
     bool abort_restore_entered = false;
@@ -4663,8 +4686,7 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
                     && target_abort.pending (abort_target, turn_domain_t::application) == 0,
                   "target relocation abort must leave no held records in a retried restore");
 
-    stateful_object_runtime_t normal_lane_caps (2, 8, 2u * limits::fixed_work_byte_cost + 4,
-                                                limits::control_mailbox_bytes);
+    stateful_object_runtime_t normal_lane_caps;
     const auto membership_capped = create_actor (normal_lane_caps, "membership-normal-cap");
     const object_ref_t remote_membership_target{
       object_kind_t::user_spot, "membership-normal-target", 1, 1, "mesh", "node-b"};
@@ -4675,14 +4697,14 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
         && normal_lane_caps.enqueue (
              membership_capped, turn_domain_t::application,
              {99, std::vector<std::uint8_t> (2u * limits::fixed_work_byte_cost + 5, 0x61)})
-             == stateful_error_t::backpressured
+             == stateful_error_t::none
         && normal_lane_caps.enqueue (membership_capped, turn_domain_t::application, {1, {}})
              == stateful_error_t::none
         && normal_lane_caps.enqueue (membership_capped, turn_domain_t::application, {2, {}})
              == stateful_error_t::none
         && normal_lane_caps.enqueue (membership_capped, turn_domain_t::application, {3, {}})
-             == stateful_error_t::backpressured,
-      "membership-only movement must retain the normal application count and byte caps");
+             == stateful_error_t::none,
+      "membership-only movement must retain work beyond former lane limits");
     if (normal_move_error == stateful_error_t::none)
         (void) normal_lane_caps.abort_membership_move (normal_move);
 
@@ -4694,14 +4716,14 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
         && normal_lane_caps.enqueue (
              closing_capped, turn_domain_t::application,
              {99, std::vector<std::uint8_t> (2u * limits::fixed_work_byte_cost + 5, 0x62)})
-             == stateful_error_t::backpressured
+             == stateful_error_t::none
         && normal_lane_caps.enqueue (closing_capped, turn_domain_t::application, {1, {}})
              == stateful_error_t::none
         && normal_lane_caps.enqueue (closing_capped, turn_domain_t::application, {2, {}})
              == stateful_error_t::none
         && normal_lane_caps.enqueue (closing_capped, turn_domain_t::application, {3, {}})
-             == stateful_error_t::backpressured,
-      "closing objects must retain the normal application count and byte caps");
+             == stateful_error_t::none,
+      "closing objects must retain work beyond former lane limits");
     if (close_token)
         (void) normal_lane_caps.abort_close_spot (*close_token);
 }
@@ -4872,7 +4894,7 @@ int main ()
     test_return_actor_relocation_replaces_departed_spot_instance (test);
     test_entry_spot_actor_relocation_restore_fails_without_local_entry_spot (test);
     test_relocation_hold_restores_without_dedicated_limits (test);
-    test_stateful_application_reservation_includes_active_work (test);
+    test_stateful_application_queue_accepts_active_backlog (test);
     test_advertised_receive_chunk_limit_wiring (test);
     test_actor_join_wire_gate_records_target_authority (test);
     return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

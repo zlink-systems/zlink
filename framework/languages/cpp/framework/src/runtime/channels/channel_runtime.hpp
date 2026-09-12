@@ -202,9 +202,8 @@ class channel_runtime_state_t
     };
 
     std::map<std::string, channel_snapshot_t> channels;
-    runtime::offload_executor_t lane_executor{1, 0, "zlink-channel-state"};
+    runtime::offload_executor_t lane_executor{1, "zlink-channel-state"};
     mutable runtime::state_lane_t lane{lane_executor};
-    std::size_t max_pending = 1024;
     std::chrono::milliseconds default_request_timeout{std::chrono::seconds (30)};
     std::size_t pending = 0;
     channel_pending_requests_t pending_requests;
@@ -309,7 +308,6 @@ class channel_runtime_t
     void remove_subscriber_manual_connection (const std::string &channel_name,
                                               const std::string &endpoint);
     std::size_t pending_count () const noexcept;
-    std::size_t pending_limit () const noexcept;
     std::vector<channel_runtime_state_t::outbound_call_record_t> outbound_calls () const;
     void bind_serializers (serializer_registry_t &serializers) noexcept;
     void bind_listener_statuses (

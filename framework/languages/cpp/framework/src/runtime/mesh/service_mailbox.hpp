@@ -25,13 +25,6 @@ enum class service_mailbox_domain_t
     infrastructure
 };
 
-enum class service_mailbox_enqueue_result_t
-{
-    accepted,
-    capacity_exceeded,
-    closed
-};
-
 struct service_bound_session_source_t
 {
     std::vector<std::uint8_t> session_routing_id;
@@ -68,10 +61,7 @@ struct service_mailbox_claim_t
 class service_mailbox_t
 {
   public:
-    service_mailbox_t (std::size_t application_message_budget,
-                       std::size_t application_byte_budget,
-                       std::size_t infrastructure_message_budget,
-                       std::size_t infrastructure_byte_budget);
+    service_mailbox_t () = default;
 
     static std::string application_owner (host::owner_kind_t kind, std::string_view id = {});
     static std::string application_owner (const host::ready_record_t &owner);
@@ -86,8 +76,6 @@ class service_mailbox_t
     void end_application_drain (const std::string &owner);
 
     bool try_enqueue (service_mailbox_record_t &&record);
-    service_mailbox_enqueue_result_t try_enqueue_result (
-      service_mailbox_record_t &&record);
     std::optional<service_mailbox_claim_t>
     try_claim (service_mailbox_domain_t domain,
                std::size_t message_budget,
@@ -125,8 +113,6 @@ class service_mailbox_t
         std::size_t bytes = 0;
         std::size_t active_messages = 0;
         std::size_t active_bytes = 0;
-        std::size_t message_budget = 0;
-        std::size_t byte_budget = 0;
     };
 
     domain_t &domain (service_mailbox_domain_t value);
@@ -137,12 +123,7 @@ class service_mailbox_t
                         const std::string &owner,
                         std::size_t message_budget,
                         std::size_t byte_budget);
-    struct retained_size_t
-    {
-        std::size_t bytes = 0;
-        bool overflow = false;
-    };
-    static retained_size_t retained_bytes (const service_mailbox_record_t &record);
+    static std::size_t retained_bytes (const service_mailbox_record_t &record);
 
     void notify_application_ready ();
 

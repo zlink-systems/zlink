@@ -22,7 +22,6 @@ runtime::offload_executor_t &blocking_call_executor ()
     static runtime::offload_executor_t executor (
       0,
       std::max<std::size_t> (1, std::thread::hardware_concurrency ()),
-      1024,
       std::chrono::milliseconds (100),
       "zlink-call");
     return executor;

@@ -42,7 +42,7 @@ std::shared_ptr<runtime::offload_executor_t> handler_invocation_executor ()
     std::lock_guard lock (handler_invocation_executor_mutex ());
     if (!handler_invocation_executor_ref ()) {
         handler_invocation_executor_ref () = std::make_shared<runtime::offload_executor_t> (
-          0, std::max<std::size_t> (1, std::thread::hardware_concurrency ()), 4096,
+          0, std::max<std::size_t> (1, std::thread::hardware_concurrency ()),
           std::chrono::milliseconds (100), "zlink-handler");
     }
     return handler_invocation_executor_ref ();

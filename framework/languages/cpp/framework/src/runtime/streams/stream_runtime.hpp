@@ -65,7 +65,6 @@ class stream_runtime_state_t
   public:
     std::map<std::string, std::shared_ptr<stream_builder_state_t>> streams;
     std::uint64_t next_session_id = 1;
-    std::size_t max_pending = 1024;
     dispatch_options_t dispatch;
     serializer_registry_t *serializers = nullptr;
     std::shared_ptr<const stream_compression_codec_t> compression_codec =
@@ -102,7 +101,6 @@ class stream_runtime_t
                                std::optional<zlink::routing_id_t> routing_id,
                                std::optional<std::string> local_address = std::nullopt,
                                std::optional<std::string> remote_address = std::nullopt) const;
-    std::size_t pending_limit () const noexcept { return _state->max_pending; }
     result_t<void> dispatch_connected (packet_stream_session_t &session, stream_t &stream) const;
     result_t<void> dispatch_packet (packet_stream_session_t &session,
                                     stream_t &stream,

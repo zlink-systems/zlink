@@ -18,8 +18,6 @@ namespace zlink::framework::runtime::foundation
 {
 
 using call_id_t = runtime::call_id_t;
-inline constexpr std::size_t default_operation_capacity = 4096;
-
 enum class operation_terminal_t
 {
     completed,
@@ -42,7 +40,7 @@ class operation_registry_t
     using callback_t = std::function<void (operation_terminal_t, std::vector<std::uint8_t>)>;
     using before_dispatch_t = std::function<void ()>;
 
-    explicit operation_registry_t (std::size_t capacity);
+    operation_registry_t ();
     ~operation_registry_t () noexcept;
 
     bool register_operation (call_id_t id,
@@ -89,7 +87,6 @@ class operation_registry_t
       const call_id_t &id,
       std::unique_ptr<operation_completion_item_t> &completion);
 
-    const std::size_t _capacity;
     std::shared_ptr<operation_completion_dispatcher_t>
       _completion_dispatcher;
     std::shared_ptr<operation_registry_drain_state_t> _drain_state;

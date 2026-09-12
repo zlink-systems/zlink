@@ -40,13 +40,10 @@ class exactly_once_table_t
     using value_type = TValue;
     using claim_type = exactly_once_claim_t<value_type>;
 
-    explicit exactly_once_table_t (std::size_t capacity = 0) : _capacity (capacity) {}
-
     bool reserve (const key_type &key)
     {
         std::lock_guard lock (_mutex);
-        if (_entries.contains (key)
-            || (_capacity != 0 && _entries.size () >= _capacity)) {
+        if (_entries.contains (key)) {
             return false;
         }
         _entries.emplace (key, std::nullopt);
@@ -58,9 +55,6 @@ class exactly_once_table_t
         std::lock_guard lock (_mutex);
         const auto found = _entries.find (key);
         if (found == _entries.end ()) {
-            if (_capacity != 0 && _entries.size () >= _capacity) {
-                return claim_type{};
-            }
             _entries.emplace (key, std::nullopt);
             return claim_type{exactly_once_claim_state::claimed, std::nullopt};
         }
@@ -75,8 +69,6 @@ class exactly_once_table_t
         std::lock_guard lock (_mutex);
         auto found = _entries.find (key);
         if (found == _entries.end ()) {
-            if (_capacity != 0 && _entries.size () >= _capacity)
-                return false;
             found = _entries.emplace (key, std::nullopt).first;
         }
         if (found->second) {
@@ -155,7 +147,6 @@ class exactly_once_table_t
     }
 
   private:
-    const std::size_t _capacity;
     mutable std::mutex _mutex;
     std::unordered_map<key_type, std::optional<value_type>, THash> _entries;
 };

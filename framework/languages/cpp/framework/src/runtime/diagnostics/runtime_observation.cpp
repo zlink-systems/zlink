@@ -21,7 +21,6 @@ runtime::offload_executor_t &runtime_observation_dispatcher ()
     static runtime::offload_executor_t dispatcher (
       2,
       maximum,
-      0,
       std::chrono::seconds (30),
       "zlink-observation");
     return dispatcher;

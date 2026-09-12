@@ -176,7 +176,7 @@ route_client_state_t::route_client_state_t (std::shared_ptr<channel_runtime_stat
     const auto hardware_workers =
       static_cast<std::size_t> (std::max (1u, std::thread::hardware_concurrency ()));
     executor = std::make_shared<zlink::framework::runtime::offload_executor_t> (
-      0, hardware_workers, 1024, std::chrono::milliseconds (100), "zlink-route-cli");
+      0, hardware_workers, std::chrono::milliseconds (100), "zlink-route-cli");
     this->runtime->lane.run ([&] {
         this->runtime->route_client_executors.push_back (executor);
     }).get ();
@@ -332,10 +332,6 @@ class outbound_request_controller_t
         if (_state.closed) {
             return detail::boundary_failure<void> (detail::boundary_error_t::closed,
                                             "channel runtime is closed");
-        }
-        if (_state.pending >= _state.max_pending) {
-            return result_t<void>::failure (framework_error_kind_t::rejected,
-                                            "channel pending queue is full");
         }
         return result_t<void>::success ();
     }
@@ -591,11 +587,6 @@ void channel_runtime_t::shutdown () noexcept
 std::size_t channel_runtime_t::pending_count () const noexcept
 {
     return _state->lane.run ([&] { return _state->pending; }).get ();
-}
-
-std::size_t channel_runtime_t::pending_limit () const noexcept
-{
-    return _state->max_pending;
 }
 
 std::vector<channel_runtime_state_t::outbound_call_record_t>
@@ -2215,18 +2206,6 @@ zlink_builder_t &zlink_builder_t::add_node (std::string node_name)
     return *this;
 }
 
-zlink_builder_t &zlink_builder_t::max_pending (std::size_t count)
-{
-    _state->runtime->max_pending = count;
-    _state->stream_runtime->max_pending = count;
-    for (const auto &[_, mesh] : _state->mesh_nodes) {
-        if (mesh) {
-            mesh->max_pending = count;
-        }
-    }
-    return *this;
-}
-
 zlink_builder_t &zlink_builder_t::default_request_timeout (std::chrono::milliseconds timeout)
 {
     if (timeout <= std::chrono::milliseconds::zero ()) {
@@ -2273,7 +2252,6 @@ mesh_node_builder_t zlink_builder_t::add_route_mesh (std::string mesh_name)
                                      "MeshName is already registered: " + mesh_name);
     }
     auto state = std::make_shared<detail::mesh_node_builder_state_t> (mesh_name);
-    state->max_pending = _state->runtime->max_pending;
     state->spot_builder._state->channel_runtime = _state->runtime;
     state->spot_builder._state->dispatch = _state->runtime->dispatch;
     state->spot_builder._state->snapshot.discovery_channel_name = mesh_name;

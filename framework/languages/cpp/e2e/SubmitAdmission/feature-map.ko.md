@@ -43,8 +43,8 @@ runner는 성공으로 건너뛰지 않고 종료 코드 3을 반환한다.
 | SA-REG-03 | 해당 없음 | Kotlin 전용 result 보존 scenario다. Runner는 C++ public 계약에 따른 N/A evidence를 남긴다. |
 | SA-REG-04 | 미구현 | Focused unit fixture는 timeout·shutdown·retry terminal 뒤 waiter reservation이 0인지 확인한다. Process disposal과 send-ready event를 같은 barrier에서 발생시키고 waiter·reservation·callback 수를 확인할 observer는 아직 없다. |
 | CPP-CONTRACT-STREAM-001 | 구현 | Server STREAM과 connector peer 사이의 TCP gate를 닫아 Core send queue를 포화한다. 32 KiB packet 57건이 수락된 뒤 58번째 호출이 설정한 20 ms에 `DeadlineExceeded`로 끝나며, gate가 닫힌 동안 읽은 byte가 0인지 확인한다. Gate를 다시 연 뒤 byte forwarding과 public submit이 복구되는지도 검증한다. 이 항목은 SA-E2E-04 전체 완료를 뜻하지 않는다. |
-| CPP-DISP-001 | 구현 | 다섯 caller process가 서로 다른 4,160개 ChannelName에 public one-way send를 제출해 target MeshNode application executor를 포화한다. 4,161번째 독립 ChannelName의 Request가 `CapacityExceeded`를 받고, 포화 중 target health가 응답하며, gate 자동 해제 뒤 accepted handler drain과 같은 public request 경로의 복구를 확인한다. |
-| CPP-DISP-002 | 구현 | Target의 application mailbox 예산을 1건으로 제한하고 slow ChannelName handler를 gate에서 정지한다. 같은 owner를 향한 다음 Request가 `CapacityExceeded`로 즉시 끝나는 동안 독립 ChannelName owner의 Request와 target health가 계속 응답하는지 확인한다. Gate 자동 해제 뒤 slow owner drain과 같은 public request 경로의 복구도 검증한다. |
+| CPP-DISP-001 | 구현 | 다섯 caller process가 서로 다른 4,160개 ChannelName에 public one-way send를 제출해 target MeshNode application executor를 포화한다. 4,161번째 독립 ChannelName Request도 거부되지 않으며, gate 해제 뒤 4,161건이 모두 handler를 거쳐 완료되고 같은 public request 경로가 계속 동작하는지 확인한다. |
+| CPP-DISP-002 | 구현 | Target의 host application job permit을 1건으로 제한하고 slow ChannelName handler를 gate에서 정지한다. host 전체 backpressure 때문에 같은 owner와 독립 owner의 Request가 모두 `DeadlineExceeded`로 끝나며, gate 자동 해제 뒤 handler drain과 같은 public request 경로의 복구를 확인한다. |
 
 ## 실행
 

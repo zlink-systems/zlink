@@ -225,8 +225,6 @@ class raw_relocation_replay_coordinator_t
     using clock_t = std::chrono::steady_clock;
     explicit raw_relocation_replay_coordinator_t (
       mesh::raw_mesh_node_owner_t &transport,
-      std::size_t terminal_record_limit = 1024,
-      std::size_t terminal_byte_limit = 64u * 1024u * 1024u,
       std::chrono::milliseconds relay_retry_interval =
         std::chrono::seconds (1),
       std::chrono::milliseconds terminal_tombstone_retention =
@@ -354,8 +352,6 @@ class raw_relocation_replay_coordinator_t
     std::map<key_t, target_state_t> _targets;
     std::map<terminal_key_t, terminal_source_state_t> _terminal_sources;
     std::map<terminal_key_t, terminal_target_state_t> _terminal_targets;
-    std::size_t _terminal_record_limit;
-    std::size_t _terminal_byte_limit;
     std::size_t _terminal_retained_bytes = 0;
     std::chrono::milliseconds _relay_retry_interval;
     std::chrono::milliseconds _terminal_tombstone_retention;

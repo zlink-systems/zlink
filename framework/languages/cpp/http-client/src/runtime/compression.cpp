@@ -42,7 +42,7 @@ std::string inflate_raw (const unsigned char *data, std::size_t size, std::size_
         decoded.append (chunk, sizeof chunk - zs.avail_out);
         if (decoded.size () > decoded_limit) {
             throw zlink::framework::framework_exception_t (
-              zlink::framework::framework_error_kind_t::capacity_exceeded,
+              zlink::framework::framework_error_kind_t::rejected,
               "HTTP response compressed body exceeds max_response_body_size");
         }
         if (ec == beast::zlib::error::end_of_stream) {

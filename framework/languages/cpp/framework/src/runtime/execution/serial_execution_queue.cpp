@@ -16,17 +16,11 @@ namespace zlink::framework::runtime
 namespace
 {
 
-serial_execution_queue_options_t legacy_options (std::size_t capacity)
-{
-    serial_execution_queue_options_t options;
-    options.application_message_capacity = capacity;
-    return options;
-}
-
 std::size_t normalized_byte_cost (serial_work_options_t options) noexcept
 {
-    return options.byte_cost == 0 ? serial_execution_queue_t::fixed_work_byte_cost
-                                  : options.byte_cost;
+    return options.byte_cost == 0
+             ? serial_execution_queue_t::fixed_work_byte_cost
+             : options.byte_cost;
 }
 
 } // namespace
@@ -269,17 +263,14 @@ class serial_turn_handle_impl_t final : public detail::serial_turn_t,
                 return;
             }
             if (continuation) {
-                // The continuation must not resume on the producer's stack when
-                // the owner queue is full. The executor fallback lets await_resume
-                // observe CapacityExceeded on a separate scheduling turn.
                 auto continuation_state =
                   std::make_shared<std::function<void ()>> (
                     std::move (continuation));
                 if (!self->_queue._executor.try_submit_internal (
                   [work = continuation_state] () mutable {
                       detail::set_serial_resume_failure (
-                        framework_error_kind_t::capacity_exceeded,
-                        "serial execution queue could not reserve the continuation turn");
+                        framework_error_kind_t::shutting_down,
+                        "serial execution queue executor is stopping");
                       try {
                           (*work) ();
                       }
@@ -287,9 +278,6 @@ class serial_turn_handle_impl_t final : public detail::serial_turn_t,
                       }
                       (void) detail::take_serial_resume_failure ();
                   })) {
-                    // The executor is stopping. The queue is terminal as
-                    // well, so resume only to deliver the terminal error;
-                    // this is not an inline fallback for a full queue.
                     detail::set_serial_resume_failure (
                       framework_error_kind_t::shutting_down,
                       "serial execution queue executor is stopping");
@@ -321,11 +309,6 @@ class serial_turn_handle_impl_t final : public detail::serial_turn_t,
             return result_t<void>::failure (
               framework_error_kind_t::not_configured,
               "Actor join defer requires an open Framework handler turn");
-        }
-        if (_deferred.size () >= 64) {
-            return result_t<void>::failure (
-              framework_error_kind_t::not_configured,
-              "A Framework handler may defer at most 64 Actor joins");
         }
         _deferred.push_back (
           deferred_work_t{std::move (work), std::move (cancel)});
@@ -422,15 +405,6 @@ class serial_turn_handle_impl_t final : public detail::serial_turn_t,
     bool _released = false;
 };
 
-serial_execution_queue_t::serial_execution_queue_t (offload_executor_t &executor,
-                                                    std::size_t capacity,
-                                                    error_handler_t error_handler,
-                                                    serial_lane_policy_t policy) :
-    serial_execution_queue_t (executor, legacy_options (capacity),
-                              std::move (error_handler), std::move (policy))
-{
-}
-
 serial_execution_queue_t::serial_execution_queue_t (
   offload_executor_t &executor,
   serial_execution_queue_options_t options,
@@ -438,17 +412,9 @@ serial_execution_queue_t::serial_execution_queue_t (
   serial_lane_policy_t policy) :
     _executor (executor), _options (options),
     _lane_policy (std::move (policy)),
-    _error_handler (std::move (error_handler)),
-    _application {{}, {}, 0, 0, options.application_message_capacity,
-                  options.application_byte_capacity},
-    _lifecycle {{}, {}, 0, 0, options.lifecycle_message_capacity,
-                options.lifecycle_byte_capacity}
+    _error_handler (std::move (error_handler))
 {
-    if (_options.application_message_capacity == 0
-        || _options.application_byte_capacity == 0
-        || _options.lifecycle_message_capacity == 0
-        || _options.lifecycle_byte_capacity == 0
-        || _options.lifecycle_burst_limit == 0
+    if (_options.lifecycle_burst_limit == 0
         || _options.owner_time_budget < std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument ("serial execution queue limits are invalid");
     }
@@ -510,7 +476,7 @@ bool serial_execution_queue_t::try_post_async (std::string name,
                 *options.actor_handoff_fence_refused = true;
             return false;
         }
-        if (_closed || !can_enqueue_locked (options)) {
+        if (_closed) {
             return false;
         }
         accepted = enqueue_locked (std::move (name), std::move (work), std::move (options));
@@ -548,11 +514,6 @@ serial_execution_queue_t::try_post_cancellable_async (
             return result_t<serial_submission_id_t>::failure (
               framework_error_kind_t::shutting_down,
               "serial execution queue is closed");
-        }
-        if (!can_enqueue_locked (options)) {
-            return result_t<serial_submission_id_t>::failure (
-              framework_error_kind_t::capacity_exceeded,
-              "serial execution queue is full");
         }
         if (_next_submission_id == 0) {
             return result_t<serial_submission_id_t>::failure (
@@ -616,7 +577,6 @@ serial_execution_queue_t::cancel_submission (
 
         if (unlink (_application) || unlink (_lifecycle)) {
             outcome = serial_cancel_submission_outcome_t::queued_cancelled;
-            _capacity_changed.notify_all ();
             if (!has_ready_locked () && _active == 0 && !_draining
                 && !_drain_scheduled) {
                 _empty.notify_all ();
@@ -668,10 +628,6 @@ bool serial_execution_queue_t::post_async_wait (
     bool accepted = false;
     {
         std::unique_lock lock (_mutex);
-        _capacity_changed.wait (lock, [&] {
-            return _closed || can_enqueue_locked (options)
-                   || (stop_requested && stop_requested ());
-        });
         if (_closed || (stop_requested && stop_requested ())) {
             return false;
         }
@@ -695,13 +651,12 @@ bool serial_execution_queue_t::try_post_deferred (
         throw std::invalid_argument ("serial execution queue work is empty");
     }
     std::lock_guard<std::mutex> lock (_mutex);
-    const serial_work_options_t options{
-      serial_work_lane_t::lifecycle, fixed_work_byte_cost};
-    if (_closed || !can_enqueue_locked (options)) {
+    if (_closed) {
         return false;
     }
     _deferred_after_active.push_back (
-      deferred_work_t{std::move (name), std::move (work), fixed_work_byte_cost});
+      deferred_work_t{std::move (name), std::move (work),
+                      fixed_work_byte_cost});
     ++_lifecycle.messages;
     _lifecycle.bytes += fixed_work_byte_cost;
     return true;
@@ -717,12 +672,11 @@ serial_execution_queue_t::reserve_barrier_next (std::string name)
               barrier->reached (std::move (complete));
           },
           [barrier] { barrier->cancel (); },
-          serial_work_options_t{serial_work_lane_t::lifecycle,
-                                fixed_work_byte_cost});
+          serial_work_options_t{serial_work_lane_t::lifecycle});
     if (!submission) {
         return result_t<std::shared_ptr<detail::deferred_barrier_t>>::failure (
           submission.error_kind (),
-          "Deferred Actor join target queue is full or closed");
+          "Deferred Actor join target queue is closed");
     }
     return result_t<std::shared_ptr<detail::deferred_barrier_t>>::success (
       std::move (barrier));
@@ -753,13 +707,12 @@ serial_execution_queue_t::reserve_handoff_barrier (std::string name)
               barrier->reached (std::move (complete));
           },
           [barrier] { barrier->cancel (); },
-          serial_work_options_t{serial_work_lane_t::application,
-                                fixed_work_byte_cost});
+          serial_work_options_t{serial_work_lane_t::application});
     if (!submission) {
         lower_fence ();
         return result_t<std::shared_ptr<detail::deferred_barrier_t>>::failure (
           submission.error_kind (),
-          "Deferred Actor handoff barrier queue is full or closed");
+          "Deferred Actor handoff barrier queue is closed");
     }
     return result_t<std::shared_ptr<detail::deferred_barrier_t>>::success (
       std::move (barrier));
@@ -775,7 +728,7 @@ void serial_execution_queue_t::post (std::string name,
                                      serial_work_options_t options)
 {
     if (!try_post (std::move (name), std::move (work), std::move (options))) {
-        throw std::runtime_error ("serial execution queue is full or closed");
+        throw std::runtime_error ("serial execution queue is closed or stopping");
     }
 }
 
@@ -789,7 +742,7 @@ void serial_execution_queue_t::post_async (std::string name,
                                            serial_work_options_t options)
 {
     if (!try_post_async (std::move (name), std::move (work), std::move (options))) {
-        throw std::runtime_error ("serial execution queue is full or closed");
+        throw std::runtime_error ("serial execution queue is closed or stopping");
     }
 }
 
@@ -816,7 +769,6 @@ void serial_execution_queue_t::close ()
     if (!has_ready_locked () && _active == 0 && !_draining && !_drain_scheduled) {
         _empty.notify_all ();
     }
-    _capacity_changed.notify_all ();
 }
 
 void serial_execution_queue_t::cancel_pending ()
@@ -844,7 +796,9 @@ void serial_execution_queue_t::cancel_pending ()
             const auto queued_messages =
               lane.queue.size () + lane.after_active_queue.size ();
             lane.messages -= queued_messages;
-            lane.bytes = queued_bytes <= lane.bytes ? lane.bytes - queued_bytes : 0;
+            lane.bytes = queued_bytes <= lane.bytes
+                           ? lane.bytes - queued_bytes
+                           : 0;
             lane.queue.clear ();
             lane.after_active_queue.clear ();
         };
@@ -870,7 +824,6 @@ void serial_execution_queue_t::cancel_pending ()
                 }
             }
         }
-        _capacity_changed.notify_all ();
     }
     for (auto &item : cancelled_items) {
         try {
@@ -939,19 +892,6 @@ const serial_execution_queue_t::lane_state_t &
 serial_execution_queue_t::lane_locked (serial_work_lane_t lane) const noexcept
 {
     return lane == serial_work_lane_t::application ? _application : _lifecycle;
-}
-
-bool serial_execution_queue_t::can_enqueue_locked (
-  const serial_work_options_t &options) const noexcept
-{
-    if (options.transfer_owner_reservation) {
-        return true;
-    }
-    const auto &lane = lane_locked (options.lane);
-    const auto bytes = normalized_byte_cost (options);
-    return lane.messages < lane.message_capacity
-           && lane.bytes <= lane.byte_capacity
-           && bytes <= lane.byte_capacity - lane.bytes;
 }
 
 bool serial_execution_queue_t::enqueue_locked (std::string name,
@@ -1184,9 +1124,6 @@ void serial_execution_queue_t::complete_one (std::string name,
                 _lifecycle.after_active_queue.push_back (std::move (item));
             }
             catch (...) {
-                // The reservation belongs to this deferred entry. If the
-                // queue node cannot be allocated, release that reservation
-                // and report the failure without disturbing other entries.
                 if (_lifecycle.messages > 0)
                     --_lifecycle.messages;
                 if (deferred.byte_cost <= _lifecycle.bytes)
@@ -1237,7 +1174,6 @@ void serial_execution_queue_t::complete_one (std::string name,
             if (_active == 0)
                 _empty.notify_all ();
         }
-        _capacity_changed.notify_all ();
     }
     if (execute_next)
         execute_item (std::move (next_item));

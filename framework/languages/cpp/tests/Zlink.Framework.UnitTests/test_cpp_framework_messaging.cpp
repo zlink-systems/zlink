@@ -669,19 +669,18 @@ int main ()
                  != zlink::framework::detail::boundary_error_t::shutdown
             || native_shutdown.kind () != framework_error_kind_t::shutting_down
             || native_rejected.kind () != framework_error_kind_t::rejected
-            || native_busy.kind () != framework_error_kind_t::capacity_exceeded
+            || native_busy.kind () != framework_error_kind_t::unavailable
             || mapper.reply_header_exception (113, 0, "native request").kind ()
-                 != framework_error_kind_t::capacity_exceeded) {
+                 != framework_error_kind_t::unavailable) {
             return 26;
         }
         {
             namespace ust = zlink::framework::runtime::user_spot_terminal;
             using zlink::framework::runtime::protocol::reply_header_t;
             //  Spec 32-framework-error-model:99-108 — user-spot remote reply
-            //  ownership: a peer's operation-table/queue saturation
-            //  Conflict(107)/Busy(108)+None is the target's resource, so
-            //  Unavailable; only a target's placement/admission capacity
-            //  Backpressured(113)+None is CapacityExceeded. Fine codes still
+            //  ownership: Conflict(107), Busy(108), and placement
+            //  Backpressured(113) all mean the remote target is unavailable.
+            //  Fine codes still
             //  refine (spotMoving(34)->Unavailable, spotGenerationStale(33)->
             //  InvalidOperation); Terminated(103)->ShuttingDown.
             if (ust::map_user_spot_wire_failure (reply_header_t{0, 108, 0}, true)
@@ -691,7 +690,7 @@ int main ()
                 || ust::map_user_spot_wire_failure (reply_header_t{0, 108, 0}, false)
                      != framework_error_kind_t::unavailable
                 || ust::map_user_spot_wire_failure (reply_header_t{0, 113, 0}, true)
-                     != framework_error_kind_t::capacity_exceeded
+                     != framework_error_kind_t::unavailable
                 || ust::map_user_spot_wire_failure (reply_header_t{0, 107, 34}, true)
                      != framework_error_kind_t::unavailable
                 || ust::map_user_spot_wire_failure (reply_header_t{0, 107, 33}, true)
@@ -729,7 +728,7 @@ int main ()
         }
         const auto busy = mapper.completion_exception (
           zlink::framework::runtime::messaging::request_result_t::busy, "profile request");
-        if (busy.kind () != zlink::framework::framework_error_kind_t::capacity_exceeded) {
+        if (busy.kind () != zlink::framework::framework_error_kind_t::unavailable) {
             return 15;
         }
         const auto conflict = mapper.completion_exception (
@@ -751,7 +750,7 @@ int main ()
         const auto internal_error = mapper.completion_exception (
           zlink::framework::runtime::messaging::request_result_t::internal_error,
           "profile request");
-        if (conflict.kind () != zlink::framework::framework_error_kind_t::capacity_exceeded
+        if (conflict.kind () != zlink::framework::framework_error_kind_t::unavailable
             || rejected.kind () != zlink::framework::framework_error_kind_t::rejected
             || protocol.kind () != zlink::framework::framework_error_kind_t::protocol_error
             || invalid_argument.kind () != zlink::framework::framework_error_kind_t::invalid_operation
@@ -886,7 +885,7 @@ int main ()
         zlink::framework::publish_call_t failed_after_completion (
           [] (const zlink::framework::publish_call_t::metadata_map_t &) {
               return zlink::framework::result_t<void>::failure (
-                zlink::framework::framework_error_kind_t::capacity_exceeded,
+                zlink::framework::framework_error_kind_t::rejected,
                 "logical multicast observation probe");
           });
         // Dequeue is already terminal for the caller. Application-bound paths

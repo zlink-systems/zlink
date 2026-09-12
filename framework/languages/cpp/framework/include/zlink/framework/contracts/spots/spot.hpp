@@ -1023,7 +1023,7 @@ class spot_context_t
                   completed->store (true);
                   auto complete_full = [completion] () mutable {
                       completion.complete (result_t<result_type>::failure (
-                        framework_error_kind_t::capacity_exceeded, "worker queue is full"));
+                        framework_error_kind_t::shutting_down, "worker scheduler is stopping"));
                   };
                   scheduler->post_owner (std::move (complete_full));
               }
@@ -1101,7 +1101,7 @@ class spot_context_t
                   completed->store (true);
                   scheduler->post_owner ([completion] {
                       completion->complete (result_t<result_type>::failure (
-                        framework_error_kind_t::capacity_exceeded, "worker queue is full"));
+                        framework_error_kind_t::shutting_down, "worker scheduler is stopping"));
                   });
               }
               return result;

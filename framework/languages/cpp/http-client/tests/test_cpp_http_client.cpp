@@ -1572,7 +1572,7 @@ TEST (ZLinkHttpClient, RejectsDecompressedResponseAboveBodyLimit)
 
     ASSERT_FALSE (result);
     EXPECT_EQ (result.error_kind (),
-               zlink::framework::framework_error_kind_t::capacity_exceeded);
+               zlink::framework::framework_error_kind_t::rejected);
 }
 
 TEST (ZLinkHttpClient, DownloadStreamsResponseBody)
@@ -1608,7 +1608,7 @@ TEST (ZLinkHttpClient, RejectsBufferedResponseAboveBodyLimit)
 
     ASSERT_FALSE (result);
     EXPECT_EQ (result.error_kind (),
-               zlink::framework::framework_error_kind_t::capacity_exceeded);
+               zlink::framework::framework_error_kind_t::rejected);
 }
 
 TEST (ZLinkHttpClient, RejectsDownloadResponseAboveBodyLimit)
@@ -1626,7 +1626,7 @@ TEST (ZLinkHttpClient, RejectsDownloadResponseAboveBodyLimit)
 
     ASSERT_FALSE (result);
     EXPECT_EQ (result.error_kind (),
-               zlink::framework::framework_error_kind_t::capacity_exceeded);
+               zlink::framework::framework_error_kind_t::rejected);
     EXPECT_LT (received.size (), big_download_body ().size ());
 }
 

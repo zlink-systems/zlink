@@ -8,29 +8,23 @@
 int main ()
 {
     zlink::framework::zlink_builder_t zlink;
-    zlink.max_pending (1);
     zlink.channel ("profile").enable_client ().connect ("tcp://127.0.0.1:7400");
 
     auto bus = zlink.message_bus ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (bus);
-    if (runtime.pending_limit () != 1) {
-        return 1;
-    }
-
     auto first_request = runtime.reserve_outbound_request ("profile");
     if (!first_request || runtime.pending_count () != 1) {
         return 2;
     }
 
-    auto full_result = runtime.reserve_outbound_request ("profile");
-    if (full_result
-        || full_result.error_kind ()
-             != zlink::framework::framework_error_kind_t::rejected) {
+    auto second_request = runtime.reserve_outbound_request ("profile");
+    if (!second_request || runtime.pending_count () != 2) {
         return 3;
     }
 
     auto completed = runtime.complete_outbound_reply (first_request.value ());
-    if (!completed || runtime.pending_count () != 0) {
+    auto second_completed = runtime.complete_outbound_reply (second_request.value ());
+    if (!completed || !second_completed || runtime.pending_count () != 0) {
         return 4;
     }
 

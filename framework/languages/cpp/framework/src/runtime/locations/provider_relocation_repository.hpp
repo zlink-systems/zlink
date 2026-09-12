@@ -118,7 +118,7 @@ class provider_relocation_repository_t final :
             // Retry with a fresh Framework-issued reference.
         }
         return failed<relocation_stored_t> (
-          framework_error_kind_t::capacity_exceeded,
+          framework_error_kind_t::internal_failure,
           "could not allocate a unique relocation reference");
     }
 

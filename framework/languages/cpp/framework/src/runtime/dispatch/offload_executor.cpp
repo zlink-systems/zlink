@@ -12,11 +12,9 @@ namespace zlink::framework::runtime
 {
 
 offload_executor_t::offload_executor_t (std::size_t worker_count,
-                                        std::size_t max_queue_length,
                                         std::string thread_name) :
     offload_executor_t (worker_count == 0 ? 1 : worker_count,
                         worker_count == 0 ? 1 : worker_count,
-                        max_queue_length,
                         std::chrono::milliseconds{0},
                         std::move (thread_name))
 {
@@ -24,12 +22,10 @@ offload_executor_t::offload_executor_t (std::size_t worker_count,
 
 offload_executor_t::offload_executor_t (std::size_t min_worker_count,
                                         std::size_t max_worker_count,
-                                        std::size_t max_queue_length,
                                         std::chrono::milliseconds idle_timeout,
                                         std::string thread_name) :
     _min_worker_count (min_worker_count),
     _max_worker_count (std::max (min_worker_count, max_worker_count)),
-    _max_queue_length (max_queue_length),
     _idle_timeout (idle_timeout),
     _thread_name (std::move (thread_name))
 {
@@ -50,7 +46,7 @@ offload_executor_t::~offload_executor_t ()
 void offload_executor_t::submit (std::function<void ()> work)
 {
     if (!try_submit (std::move (work))) {
-        throw std::runtime_error ("offload executor queue is full or stopped");
+        throw std::runtime_error ("offload executor is stopped");
     }
 }
 
@@ -94,7 +90,7 @@ bool offload_executor_t::try_submit_cancellable (
 {
     {
         std::lock_guard lock (_mutex);
-        if (_stopping || (_max_queue_length != 0 && _queue.size () >= _max_queue_length)) {
+        if (_stopping) {
             return false;
         }
         _queue.push (work_item_t{std::move (work), std::stop_source{}});

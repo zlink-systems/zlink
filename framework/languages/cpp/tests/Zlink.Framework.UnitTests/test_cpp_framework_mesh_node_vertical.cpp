@@ -701,13 +701,11 @@ class local_route_probe_handler_t
 void verify_local_node_submit_bridge ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "local-route-node");
-    registration->max_pending = 1;
     registration->handlers.on_send<local_route_probe_handler_t, local_route_probe_message_t> (
       "vertical-mesh", "LocalRouteProbe", &local_route_probe_handler_t::handle);
 
     auto independent_registration =
       make_named_node ("independent-mesh", "independent-route-node");
-    independent_registration->max_pending = 1;
     independent_registration->handlers.on_send<local_route_probe_handler_t, local_route_probe_message_t> (
       "independent-mesh", "LocalRouteProbe", &local_route_probe_handler_t::handle);
 

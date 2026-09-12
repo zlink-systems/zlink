@@ -96,7 +96,7 @@ map_request_result_exception (zlink::request_result_t result, std::string messag
         case zlink::request_result_t::conflict:
         case zlink::request_result_t::busy:
             return framework_exception_t (
-              framework_error_kind_t::capacity_exceeded, std::move (message));
+              framework_error_kind_t::unavailable, std::move (message));
         case zlink::request_result_t::not_connected:
             return detail::make_boundary_exception (
               detail::boundary_error_t::disconnected, std::move (message));

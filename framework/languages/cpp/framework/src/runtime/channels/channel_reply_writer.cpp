@@ -26,8 +26,6 @@ std::string error_code_name (framework_error_kind_t kind)
             return "rejected";
         case framework_error_kind_t::unavailable:
             return "unavailable";
-        case framework_error_kind_t::capacity_exceeded:
-            return "capacity_exceeded";
         case framework_error_kind_t::deadline_exceeded:
             return "deadline_exceeded";
         case framework_error_kind_t::shutting_down:

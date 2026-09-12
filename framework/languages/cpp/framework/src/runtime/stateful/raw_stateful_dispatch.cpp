@@ -968,20 +968,15 @@ raw_stateful_dispatch_t::delivery_key (
 
 raw_relocation_replay_coordinator_t::raw_relocation_replay_coordinator_t (
   mesh::raw_mesh_node_owner_t &transport,
-  std::size_t terminal_record_limit,
-  std::size_t terminal_byte_limit,
   std::chrono::milliseconds relay_retry_interval,
   std::chrono::milliseconds terminal_tombstone_retention) :
     _transport (&transport),
     _lane_executor (),
     _lane (_lane_executor),
-    _terminal_record_limit (terminal_record_limit),
-    _terminal_byte_limit (terminal_byte_limit),
     _relay_retry_interval (relay_retry_interval),
     _terminal_tombstone_retention (terminal_tombstone_retention)
 {
-    if (_terminal_record_limit == 0 || _terminal_byte_limit == 0
-        || _relay_retry_interval <= std::chrono::milliseconds::zero ()
+    if (_relay_retry_interval <= std::chrono::milliseconds::zero ()
         || _terminal_tombstone_retention
              <= std::chrono::milliseconds::zero ())
         throw std::invalid_argument (
@@ -1328,8 +1323,6 @@ bool raw_relocation_replay_coordinator_t::register_terminal_source (
         || !registration.complete)
         return false;
     return _lane.run ([this, registration = std::move (registration)] () mutable {
-        if (_terminal_sources.size () >= _terminal_record_limit)
-            return false;
         return _terminal_sources.emplace (
           terminal_key (registration.relocation,
                         registration.operation),
@@ -1376,10 +1369,6 @@ bool raw_relocation_replay_coordinator_t::register_terminal_target (
                         == registration.request_source
                    && existing->second.registration.application_reply
                         == registration.application_reply;
-        if (_terminal_targets.size () >= _terminal_record_limit
-            || bytes > _terminal_byte_limit - std::min (
-                 _terminal_byte_limit, _terminal_retained_bytes))
-            return false;
         terminal_target_state_t state;
         state.registration = std::move (registration);
         state.retained_bytes = bytes;

@@ -59,7 +59,7 @@ namespace zlink::framework::runtime::host
 namespace relocation_detail
 {
 
-template <typename Key, typename Request, typename Terminal> class bounded_terminal_journal_t
+template <typename Key, typename Request, typename Terminal> class terminal_journal_t
 {
   public:
     using clock_t = std::chrono::steady_clock;
@@ -69,18 +69,17 @@ template <typename Key, typename Request, typename Terminal> class bounded_termi
         admitted,
         replay,
         pending,
-        conflicting,
-        backpressured
+        conflicting
     };
 
     struct admission_t
     {
-        admission_kind_t kind = admission_kind_t::backpressured;
+        admission_kind_t kind = admission_kind_t::admitted;
         std::optional<Terminal> terminal;
     };
 
-    bounded_terminal_journal_t (std::size_t capacity, clock_t::duration replay_retention) :
-        _capacity (capacity), _replay_retention (replay_retention)
+    explicit terminal_journal_t (clock_t::duration replay_retention) :
+        _replay_retention (replay_retention)
     {
     }
 
@@ -95,8 +94,6 @@ template <typename Key, typename Request, typename Terminal> class bounded_termi
                 return {admission_kind_t::replay, found->second.terminal};
             return {admission_kind_t::pending, std::nullopt};
         }
-        if (_capacity == 0 || _records.size () >= _capacity)
-            return {admission_kind_t::backpressured, std::nullopt};
         _records.emplace (key, record_t{request});
         return {admission_kind_t::admitted, std::nullopt};
     }
@@ -136,7 +133,6 @@ template <typename Key, typename Request, typename Terminal> class bounded_termi
         }
     }
 
-    std::size_t _capacity;
     clock_t::duration _replay_retention;
     std::map<Key, record_t> _records;
 };
@@ -243,7 +239,6 @@ struct host_options_t
     std::shared_ptr<zlink::context_t> core_context;
     std::chrono::milliseconds session_relocation_seal_timeout =
       location_options_t{}.session_relocation_seal_timeout;
-    std::size_t user_spot_operation_capacity = 65'536;
     std::chrono::milliseconds user_spot_operation_replay_retention = std::chrono::minutes (5);
 };
 

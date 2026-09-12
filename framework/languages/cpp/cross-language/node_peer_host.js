@@ -189,12 +189,12 @@ async function channelPublisher() {
   }
 }
 
-/* Snake_case error-code table (mirrors the shared 13-name wire table) so the
+/* Snake_case error-code table (mirrors the shared 12-name wire table) so the
  * recorded client markers use the wire names. */
 const ERROR_KIND_WIRE_NAMES = [
   'not_found', 'already_exists', 'type_mismatch', 'not_configured', 'rejected',
-  'unavailable', 'capacity_exceeded', 'deadline_exceeded', 'shutting_down',
-  'protocol_error', 'invalid_operation', 'data_lost', 'internal_failure'
+  'unavailable', 'deadline_exceeded', 'shutting_down', 'protocol_error',
+  'invalid_operation', 'data_lost', 'internal_failure'
 ];
 
 function errorKindWireName(kind) {

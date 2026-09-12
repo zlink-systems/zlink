@@ -85,7 +85,7 @@ class channel_host_service_t::server_loop_t
         const auto max_handler_workers = std::max<std::size_t> (
           1, std::min<std::size_t> (hardware_workers, 8));
         _handler_executor = std::make_unique<offload_executor_t> (
-          0, max_handler_workers, dispatch_limits::application_mailbox_messages,
+          0, max_handler_workers,
           std::chrono::milliseconds (100), "zlink-channel-server");
         _poller.add (*_router, zlink::poll_event_flag_t::pollin, 1);
         _poller.add (_monitor, zlink::poll_event_flag_t::pollin, 2);
@@ -421,7 +421,7 @@ class channel_host_service_t::subscriber_loop_t
         const auto max_handler_workers = std::max<std::size_t> (
           1, std::min<std::size_t> (hardware_workers, 8));
         _handler_executor = std::make_unique<offload_executor_t> (
-          0, max_handler_workers, dispatch_limits::application_mailbox_messages,
+          0, max_handler_workers,
           std::chrono::milliseconds (100), "zlink-channel-subscriber");
         _poller.add (*_subscriber, zlink::poll_event_flag_t::pollin, 1);
     }

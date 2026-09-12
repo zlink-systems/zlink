@@ -34,20 +34,7 @@ bool stateful_object_runtime_t::object_key_t::operator< (const object_key_t &oth
     return std::tie (kind, key) < std::tie (other.kind, other.key);
 }
 
-stateful_object_runtime_t::stateful_object_runtime_t (std::size_t application_capacity,
-                                                      std::size_t infrastructure_capacity,
-                                                      std::size_t application_byte_capacity,
-                                                      std::size_t infrastructure_byte_capacity) :
-    _application_capacity (application_capacity),
-    _infrastructure_capacity (infrastructure_capacity),
-    _application_byte_capacity (application_byte_capacity),
-    _infrastructure_byte_capacity (infrastructure_byte_capacity)
-{
-    if (_application_capacity == 0 || _infrastructure_capacity == 0
-        || _application_byte_capacity == 0 || _infrastructure_byte_capacity == 0) {
-        throw std::invalid_argument ("stateful turn capacity is zero");
-    }
-}
+stateful_object_runtime_t::stateful_object_runtime_t () = default;
 
 stateful_object_runtime_t::~stateful_object_runtime_t ()
 {
@@ -798,30 +785,8 @@ stateful_error_t stateful_object_runtime_t::enqueue_locked (object_record_t &obj
     auto &queue = object.queue;
     const auto bytes = retained_bytes (record);
     const auto application = domain == turn_domain_t::application;
-    const auto pending_count = application
-                                 ? queue.application.size () + queue.held_application.size ()
-                                 : queue.infrastructure.size ();
-    const auto active = application ? queue.application_active : queue.infrastructure_active;
-    const auto active_bytes =
-      application ? queue.application_active_bytes : queue.infrastructure_active_bytes;
-    const auto pending_bytes = application ? queue.application_bytes : queue.infrastructure_bytes;
-    const auto count_capacity = application ? _application_capacity : _infrastructure_capacity;
-    const auto byte_capacity =
-      application ? _application_byte_capacity : _infrastructure_byte_capacity;
     const auto relocating = application && object.state == object_state_t::moving
                             && _relocation_holds.contains (object.barrier_generation);
-    const auto relocation_ingress_hold =
-      relocating
-      || (application && object.state == object_state_t::recovering
-          && object.restore_identity.has_value ());
-    const auto active_count = active ? std::size_t{1} : std::size_t{0};
-    if (!relocation_ingress_hold
-        && (pending_count >= count_capacity - std::min (count_capacity, active_count)
-            || bytes > byte_capacity || pending_bytes > byte_capacity
-            || active_bytes > byte_capacity - pending_bytes
-            || bytes > byte_capacity - pending_bytes - active_bytes)) {
-        return stateful_error_t::backpressured;
-    }
     std::map<std::uint64_t, relocation_hold_state_t>::iterator hold;
     if (relocating) {
         hold = _relocation_holds.find (object.barrier_generation);

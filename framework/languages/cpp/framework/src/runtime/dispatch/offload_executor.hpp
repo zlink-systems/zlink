@@ -20,11 +20,9 @@ class offload_executor_t
 {
   public:
     explicit offload_executor_t (std::size_t worker_count = 1,
-                                 std::size_t max_queue_length = 0,
                                  std::string thread_name = "zlink-offload");
     offload_executor_t (std::size_t min_worker_count,
                         std::size_t max_worker_count,
-                        std::size_t max_queue_length,
                         std::chrono::milliseconds idle_timeout,
                         std::string thread_name = "zlink-offload");
     virtual ~offload_executor_t ();
@@ -34,9 +32,8 @@ class offload_executor_t
 
     bool try_submit (std::function<void ()> work);
     bool try_submit_cancellable (std::function<void (std::stop_token)> work);
-    // Internal scheduler work is accounted for by its owning bounded queue.
-    // It must not be rejected only because application worker submissions
-    // filled the executor's public queue.
+    // Internal scheduling retains its separate entry point because shutdown
+    // handling differs from public worker submission.
     virtual bool try_submit_internal (std::function<void ()> work);
     void submit (std::function<void ()> work);
     void request_stop () noexcept;
@@ -63,7 +60,6 @@ class offload_executor_t
     std::vector<std::stop_source *> _active_cancellations;
     std::size_t _min_worker_count = 1;
     std::size_t _max_worker_count = 1;
-    std::size_t _max_queue_length = 0;
     std::chrono::milliseconds _idle_timeout{0};
     std::string _thread_name;
     bool _stopping = false;
