@@ -1305,3 +1305,60 @@ zlink_c_bench::result_t run_request_window (void *dealer, ..., void *poller, ...
 
 셋 다 **코드를 한 번 열어보면 1분에 끝날 확인**이었다. 성능 판단에서 전제를 세울 때는
 그 전제부터 코드로 확인한다 — 이 세션의 §15.6, §20.2와 같은 계열의 교훈이다.
+
+## 23. .NET 원인 확정 — framework가 아니라 binding이었다 (2026-09-13)
+
+lock contention을 EventPipe로 떴다. **`ContentionStart_V2` 42,784건 중 41,360건(96.7%)이
+단일 lock**이다.
+
+```
+Systems.Zlink.CompletionOwner.SendAsync
+  <- SocketSendOperation.Async
+  <- ZLinkManagedMeshNode.SendDirectWireAsync
+  ...
+```
+
+진입 lock은 `bindings/dotnet/src/Zlink/Runtime/Messaging/CompletionOwner.cs:39`의
+**`_submitSync`**이고, **send admission과 `Drain`/`DrainRuntime`을 같은 임계구역으로
+묶는다**(`:268`, `:737`).
+
+비교: framework `_socketGate` stack **4건**, `ZLinkStateLane` stack **0건**.
+
+### 23.1 네 번의 실패가 설명된다
+
+| 시도 | 없앤 것 | 결과 |
+|---|---|---|
+| `_socketGate`에서 submit 분리 | 직렬화 1곳 | 0.104 → 0.101 |
+| 즉시 수락 send의 completion graph | 0개(이미 최적) | 변화 없음 |
+| route lookup closure | 0.204 GB | 0.4% |
+| `AsyncLocal` 문맥 좁히기 | 1.087 GB (11.1%) | 효과 없음 |
+
+**할당 11.1%를 없애도 안 움직인 이유가 이것이다 — 병목이 framework의 할당이 아니라
+binding의 lock이다.** 네 번 다 잘못된 계층을 고쳤다.
+
+`zlink-dotnet / zlink-c = 0.300`(binding 계층이 통과선 아래)과도 맞물린다. §12.3에서
+"binding 계층이 framework보다 먼저"라고 적었는데, .NET에서는 그것이 문자 그대로 맞았다.
+
+### 23.2 고치지 않은 판단이 옳다
+
+조사 job이 **런타임 코드를 바꾸지 않았다.** 원인 lock이 `bindings/**` 소유이고 그것은
+브리프가 금지한 범위다. 그리고 보고서가 이렇게 적었다:
+
+> Framework에서 추가 queue, retry, socket 선택 상태로 이를 숨기는 것은 binding DONT_WAIT
+> ownership과 completion 선형화를 상위 계층에 중복 구현하는 우회가 된다.
+
+맞다. `01-execution/01-submit-and-completion` §5가 그 소유를 binding에 둔다.
+**`#315`로 분리했다.**
+
+### 23.3 세 언어 최종
+
+| 언어 | 지배적 비용 | 계층 | 결과 |
+|---|---|---|---|
+| **C++** | 즉시 수락 send의 completion graph | framework | **2.3배** (PR #313) |
+| **Java** | 매 send의 peer 분류 stream | framework | **+17%** (PR #314) |
+| **.NET** | `CompletionOwner._submitSync` 경합 96.7% | **binding** | `#315` |
+
+**세 언어가 서로 다른 곳에, 심지어 다른 계층에 병목이 있었다.**
+`findings-binding-gap.md` §3의 "네 언어 공통" 결론은 방향을 좁히는 데는 쓸모가 있었으나
+**어느 것이 지배적인지는 언어마다 측정으로만 갈렸다** — 이번 라운드에서 여덟 번
+(성공 2, 실패 5, 계층 오인 1) 확인했다.
