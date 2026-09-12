@@ -809,44 +809,44 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `PUBSUB` | 44.5% | 57.4% | 95.4% | 105.1% | 191.9% | 165.7% | 통과 110.0%/lat0.73× · c0180-dotnet-single-tcp |
 | `tcp` | `DEALER_DEALER` | 41.4% | 55.6% | 89.9% | 130.6% | 116.2% | 102.4% | 통과 89.3%/lat0.78× · c0180-dotnet-single-tcp |
 | `tcp` | `DEALER_ROUTER` | 37.8% | 54.5% | 96.9% | 138.3% | 113.9% | 99.1% | 통과 90.1%/lat0.77× · c0180-dotnet-single-tcp |
-| `tcp` | `DEALER_ROUTER_REQREP` | 39.6% | 42.7% | 132.9% | 71.3% | 89.6% | 97.9% | 통과 76.2%/lat1.51× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
+| `tcp` | `DEALER_ROUTER_REQREP` | 39.6% | 42.7% | 132.9% | 71.3% | 89.6% | 97.9% | 통과 76.2%/lat0.63×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
 | `tcp` | `ROUTER_ROUTER` | 34.3% | 44.8% | 66.7% | 114.1% | 98.6% | 83.9% | 통과 96.9%/lat0.85× · 3-run(73.7→96.9)·routed 통과 · 3run |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 32.2% | 38.5% | 101.9% | 69.3% | 82.4% | 90.2% | 보류 63.8%/lat1.78× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 32.2% | 38.5% | 101.9% | 69.3% | 82.4% | 90.2% | 보류 63.8%/lat0.99×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
 | `ws` | `PAIR` | 48.5% | 63.3% | 92.6% | 135.3% | 132.1% | 119.6% | 통과 98.6%/lat0.06× · c0180-dotnet-single-ws |
 | `ws` | `PUBSUB` | 50.0% | 49.8% | 86.0% | 186.3% | 129.4% | 106.0% | 통과 101.2%/lat1.10× · c0180-dotnet-single-ws |
 | `ws` | `DEALER_DEALER` | 48.0% | 58.6% | 85.5% | 142.5% | 128.0% | 109.2% | 통과 95.3%/lat0.08× · c0180-dotnet-single-ws |
 | `ws` | `DEALER_ROUTER` | 44.8% | 58.5% | 80.8% | 144.7% | 133.3% | 110.0% | 통과 95.3%/lat0.07× · c0180-dotnet-single-ws |
-| `ws` | `DEALER_ROUTER_REQREP` | 51.0% | 74.8% | 62.5% | 66.2% | 72.9% | 81.7% | 보류 65.3%/lat1.46× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
+| `ws` | `DEALER_ROUTER_REQREP` | 51.0% | 74.8% | 62.5% | 66.2% | 72.9% | 81.7% | 보류 65.3%/lat0.05×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
 | `ws` | `ROUTER_ROUTER` | 45.2% | 55.3% | 80.3% | 145.6% | 140.7% | 111.9% | 통과 96.5%/lat0.06× · c0180-dotnet-single-ws |
-| `ws` | `ROUTER_ROUTER_REQREP` | 58.7% | 108.6% | 110.2% | 72.6% | 80.7% | 90.6% | 통과 89.6%/lat1.30× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
+| `ws` | `ROUTER_ROUTER_REQREP` | 58.7% | 108.6% | 110.2% | 72.6% | 80.7% | 90.6% | 통과 89.6%/lat0.01×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
 | `wss` | `PAIR` | 45.6% | 73.5% | 161.5% | 164.9% | 153.7% | 143.6% | 통과 123.8%/lat0.07× · c0180-dotnet-single-wss |
 | `wss` | `PUBSUB` | 46.1% | 64.7% | 143.8% | 123.7% | 111.8% | 91.8% | 통과 97.0%/lat0.06× · c0180-dotnet-single-wss |
 | `wss` | `DEALER_DEALER` | 45.4% | 64.5% | 143.5% | 155.4% | 152.4% | 147.1% | 통과 118.0%/lat0.08× · c0180-dotnet-single-wss |
 | `wss` | `DEALER_ROUTER` | 43.1% | 61.4% | 141.3% | 157.6% | 153.4% | 138.2% | 통과 115.8%/lat0.08× · c0180-dotnet-single-wss |
-| `wss` | `DEALER_ROUTER_REQREP` | 66.7% | 198.0% | 44.0% | 108.7% | 130.1% | 144.4% | 통과 109.7%/lat0.84× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
+| `wss` | `DEALER_ROUTER_REQREP` | 66.7% | 198.0% | 44.0% | 108.7% | 130.1% | 144.4% | 통과 109.7%/lat0.10×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
 | `wss` | `ROUTER_ROUTER` | 44.9% | 64.4% | 152.5% | 167.7% | 159.0% | 148.5% | 통과 122.8%/lat0.07× · c0180-dotnet-single-wss |
-| `wss` | `ROUTER_ROUTER_REQREP` | 67.8% | 173.5% | 144.1% | 100.1% | 126.9% | 138.5% | 통과 128.1%/lat0.81× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
+| `wss` | `ROUTER_ROUTER_REQREP` | 67.8% | 173.5% | 144.1% | 100.1% | 126.9% | 138.5% | 통과 128.1%/lat0.01×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
 | `tls` | `PAIR` | 49.3% | 92.4% | 205.2% | 161.8% | 164.8% | 155.4% | 통과 138.2%/lat0.67× · c0180-dotnet-single-tls |
 | `tls` | `PUBSUB` | 48.0% | 83.7% | 191.3% | 116.1% | 110.4% | 100.2% | 통과 108.3%/lat0.81× · c0180-dotnet-single-tls |
 | `tls` | `DEALER_DEALER` | 41.7% | 75.3% | 191.1% | 152.9% | 160.6% | 154.5% | 통과 129.3%/lat0.80× · c0180-dotnet-single-tls |
 | `tls` | `DEALER_ROUTER` | 39.4% | 75.5% | 190.2% | 154.2% | 154.4% | 148.5% | 통과 127.0%/lat0.96× · c0180-dotnet-single-tls |
-| `tls` | `DEALER_ROUTER_REQREP` | 39.6% | 69.7% | 127.4% | 102.2% | 132.0% | 145.6% | 통과 92.2%/lat1.07× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
+| `tls` | `DEALER_ROUTER_REQREP` | 39.6% | 69.7% | 127.4% | 102.2% | 132.0% | 145.6% | 통과 92.2%/lat0.58×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
 | `tls` | `ROUTER_ROUTER` | 43.6% | 68.1% | 151.2% | 143.9% | 147.4% | 146.9% | 통과 116.8%/lat0.06× · c0180-dotnet-single-tls |
-| `tls` | `ROUTER_ROUTER_REQREP` | 33.2% | 61.1% | 138.6% | 96.0% | 120.5% | 136.1% | 통과 88.3%/lat1.08× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
+| `tls` | `ROUTER_ROUTER_REQREP` | 33.2% | 61.1% | 138.6% | 96.0% | 120.5% | 136.1% | 통과 88.3%/lat0.47×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
 | `inproc` | `PAIR` | 49.2% | 45.8% | 52.5% | 12.3% | 19.0% | 23.4% | 보류 33.7%/lat1.90× · c0180-dotnet-single-inproc |
 | `inproc` | `PUBSUB` | 51.1% | 53.0% | 55.8% | 187.3% | 152.3% | 31.8% | 통과 88.5%/lat1.13× · c0180-dotnet-single-inproc |
 | `inproc` | `DEALER_DEALER` | 53.9% | 59.1% | 64.5% | 17.4% | 48.4% | 72.4% | 통과 58.1%/lat0.77× · 3-run·§2.1 inproc 단순 예외(45) 충족 · 3run |
 | `inproc` | `DEALER_ROUTER` | 50.6% | 56.1% | 56.7% | 23.0% | 64.0% | 83.1% | 보류 55.6%/lat0.70× · c0180-dotnet-single-inproc |
-| `inproc` | `DEALER_ROUTER_REQREP` | 43.1% | 41.2% | 42.9% | 28.7% | 49.8% | 60.5% | 보류 44.2%/lat3.27× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · 대형 inproc은 C-parity 실측 대형비용(A) · dnreq-remeasure-single |
+| `inproc` | `DEALER_ROUTER_REQREP` | 43.1% | 41.2% | 42.9% | 28.7% | 49.8% | 60.5% | 보류 44.2%/lat1.17×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · 대형 inproc은 C-parity 실측 대형비용(A) · dnreq-remeasure-single |
 | `inproc` | `ROUTER_ROUTER` | 53.2% | 55.7% | 58.3% | 17.8% | 54.3% | 74.8% | 통과 55.0%/lat1.21× · 3-run·§2.1 inproc RR 예외(55) 충족 · 3run |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 42.5% | 43.4% | 44.5% | 7.6% | 14.5% | 22.6% | 보류 36.2%/lat33.53× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · 대형 inproc은 C-parity 실측 대형비용(A) · dnreq-remeasure-single |
+| `inproc` | `ROUTER_ROUTER_REQREP` | 42.5% | 43.4% | 44.5% | 7.6% | 14.5% | 22.6% | 보류 36.2%/lat1.48×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · 대형 inproc은 C-parity 실측 대형비용(A) · dnreq-remeasure-single |
 | `ipc` | `PAIR` | 40.7% | 60.5% | 101.3% | 80.8% | 86.3% | 87.3% | 보류 76.2%/lat0.69× · c0180-dotnet-single-ipc |
 | `ipc` | `PUBSUB` | 40.8% | 50.9% | 92.1% | 153.6% | 162.2% | 169.2% | 통과 111.5%/lat0.81× · c0180-dotnet-single-ipc |
 | `ipc` | `DEALER_DEALER` | 40.2% | 53.5% | 80.8% | 119.2% | 88.9% | 88.8% | 보류 78.6%/lat0.61× · c0180-dotnet-single-ipc |
 | `ipc` | `DEALER_ROUTER` | 37.4% | 50.3% | 75.0% | 100.0% | 83.4% | 86.5% | 보류 72.1%/lat0.72× · c0180-dotnet-single-ipc |
-| `ipc` | `DEALER_ROUTER_REQREP` | 37.1% | 46.5% | 85.4% | 69.5% | 91.1% | 91.4% | 보류 65.0%/lat1.44× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
+| `ipc` | `DEALER_ROUTER_REQREP` | 37.1% | 46.5% | 85.4% | 69.5% | 91.1% | 91.4% | 보류 65.0%/lat0.53×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
 | `ipc` | `ROUTER_ROUTER` | 39.8% | 48.6% | 71.2% | 101.4% | 86.0% | 77.1% | 보류 70.7%/lat1.11× · c0180-dotnet-single-ipc |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 36.2% | 35.4% | 62.2% | 64.8% | 79.9% | 82.9% | 보류 53.4%/lat1.89× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 36.2% | 35.4% | 62.2% | 64.8% | 79.9% | 82.9% | 보류 53.4%/lat1.08×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-single |
 
 #### 9.2.2 Multi suite
 
@@ -854,30 +854,30 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
 | `tcp` | `MULTI_DEALER_DEALER` | 38.9% | 60.4% | 102.6% | 86.5% | 140.0% | 120.8% | 통과 91.5%/lat0.43× ·  |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 78% | 77% | 1.9% | 53.4% | 76.6% | 44.8% | 보류 55.3%/lat10.14× · fix2로 소형 measure(round-robin 하네스); echo 목표 근소미달/latency floor · c0180-dotnet-multi-tcp-fix2 |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 51.7% | 52.9% | 56.3% | 65.7% | 103.7% | 148.1% | 보류 66.2%/lat1.10× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-multi |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 51.7% | 52.9% | 56.3% | 65.7% | 103.7% | 148.1% | 보류 66.2%/lat1.01×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-multi |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 60% | 83% | 1.9% | 53.8% | 80.3% | 44.9% | 보류 54.0%/lat24.27× · fix2로 소형 measure(round-robin 하네스); echo 목표 근소미달/latency floor · c0180-dotnet-multi-tcp-fix2 |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 48.6% | 64.0% | 55.3% | 63.6% | 104.1% | 120.7% | 보류 68.0%/lat0.99× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-multi |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 48.6% | 64.0% | 55.3% | 63.6% | 104.1% | 120.7% | 보류 68.0%/lat0.90×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-multi |
 | `tcp` | `MULTI_PUBSUB` | 75.2% | 63.2% | 74.4% | 72.4% | 101.8% | 84.2% | 보류 78.5%/lat1.20× ·  |
 | `tcp` | `MULTI_STREAM` | 75.5% | 76.2% | 72.5% | 해당 없음 | 82.3% | 해당 없음 | 보류 76.6%/lat1.32× ·  |
 | `ws` | `MULTI_DEALER_DEALER` | 60.6% | 57.6% | 120.2% | 139.2% | 153.6% | 108.7% | 통과 106.7%/lat0.21× ·  |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 85% | 109% | 47.3% | 62.1% | 96.2% | 109.9% | 통과 84.9%/lat1.34× · fix2로 소형 measure(round-robin 하네스); 하네스 fix 후 통과 · c0180-dotnet-multi-ws-fix2 |
-| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 78.8% | 73.3% | 95.5% | 167.2% | 177.5% | 152.9% | 보류 106.3%/lat4.73× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · 대형 ws latency outlier · dnreq-remeasure-multi |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 78.8% | 73.3% | 95.5% | 167.2% | 177.5% | 152.9% | 통과 106.3%/lat0.82×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · 대형 ws latency outlier · dnreq-remeasure-multi |
 | `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 108% | 99% | 26.5% | 50.5% | 59.7% | 138.6% | 통과 80.4%/lat0.84× · fix2로 소형 measure(round-robin 하네스); 하네스 fix 후 통과 · c0180-dotnet-multi-ws-fix2 |
-| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 51.9% | 67.9% | 72.2% | 117.0% | 174.6% | 167.4% | 보류 91.6%/lat4.66× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · 대형 ws latency outlier · dnreq-remeasure-multi |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 51.9% | 67.9% | 72.2% | 117.0% | 174.6% | 167.4% | 통과 91.6%/lat0.88×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · 대형 ws latency outlier · dnreq-remeasure-multi |
 | `ws` | `MULTI_PUBSUB` | 93.0% | 62.3% | 65.4% | 68.3% | 103.9% | 116.0% | 보류 84.8%/lat1.13× ·  |
 | `ws` | `MULTI_STREAM` | 83.7% | 96.7% | 81.2% | 해당 없음 | 102.6% | 해당 없음 | 통과 91.1%/lat1.11× ·  |
 | `wss` | `MULTI_DEALER_DEALER` | 44.1% | 118.6% | 112.8% | 124.4% | 105.7% | 106.9% | 통과 102.1%/lat0.20× ·  |
 | `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 81% | 79% | 49.9% | 63.8% | 85.9% | 92.3% | 통과 75.3%/lat0.84× · fix2로 소형 measure(round-robin 하네스); 하네스 fix 후 통과 · c0180-dotnet-multi-wss-fix2 |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 75.6% | 62.8% | 78.5% | 80.8% | 113.2% | 121.4% | 통과 82.5%/lat1.41× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-multi |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 75.6% | 62.8% | 78.5% | 80.8% | 113.2% | 121.4% | 통과 82.5%/lat0.58×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-multi |
 | `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 92% | 76% | 15.4% | 88.0% | 91.3% | 105.6% | 통과 78.1%/lat0.75× · fix2로 소형 measure(round-robin 하네스); 하네스 fix 후 통과 · c0180-dotnet-multi-wss-fix2 |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 47.1% | 55.4% | 74.6% | 116.8% | 116.0% | 108.4% | 통과 73.3%/lat1.39× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-multi |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 47.1% | 55.4% | 74.6% | 116.8% | 116.0% | 108.4% | 통과 73.3%/lat0.72×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-multi |
 | `wss` | `MULTI_PUBSUB` | 88.8% | 66.1% | 89.1% | 101.4% | 94.3% | 127.8% | 통과 94.6%/lat1.05× ·  |
 | `wss` | `MULTI_STREAM` | 98.2% | 118.3% | 102.8% | 해당 없음 | 147.6% | 해당 없음 | 통과 116.7%/lat0.91× ·  |
 | `tls` | `MULTI_DEALER_DEALER` | 57.4% | 167.7% | 154.8% | 121.3% | 131.1% | 109.6% | 통과 123.7%/lat0.25× ·  |
 | `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 69% | 60% | 16.3% | 64.1% | 69.7% | 84.0% | 보류 60.5%/lat0.91× · fix2로 소형 measure(round-robin 하네스); echo 목표 근소미달/latency floor · c0180-dotnet-multi-tls-fix2 |
-| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 70.8% | 64.2% | 60.6% | 해당없음 | 86.9% | 113.8% | 통과 70.6%/lat0.66× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-multi |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 70.8% | 64.2% | 60.6% | 해당없음 | 86.9% | 113.8% | 통과 70.6%/lat0.52×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-multi |
 | `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 83% | 65% | 20.0% | 110.9% | 75.8% | 99.3% | 통과 75.7%/lat0.68× · fix2로 소형 measure(round-robin 하네스); 하네스 fix 후 통과 · c0180-dotnet-multi-tls-fix2 |
-| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 52.8% | 64.6% | 56.9% | 111.5% | 112.3% | 116.9% | 통과 71.6%/lat0.57× · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-multi |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 52.8% | 64.6% | 56.9% | 111.5% | 112.3% | 116.9% | 통과 71.6%/lat0.48×(median) · G4 하네스 회귀(요청-스레드 완결 drain 제거) 복원 재측정 · dnreq-remeasure-multi |
 | `tls` | `MULTI_PUBSUB` | 86.3% | 86.8% | 55.2% | 107.7% | 115.2% | 105.6% | 통과 92.8%/lat1.19× ·  |
 | `tls` | `MULTI_STREAM` | 95.3% | 106.9% | 97.0% | 해당 없음 | 116.9% | 해당 없음 | 통과 104.0%/lat0.98× ·  |
 
