@@ -775,9 +775,19 @@ def _read_run_fragments(run_dir: str, source: str = "") -> tuple[list[Cell], lis
     if structured_cells:
         return structured_cells, structured_notes
 
+    # File names are not part of the schema. The C reference runner writes
+    # ``with_grpc_c_<stamp>.txt`` (``REPORT_FILE`` in its run_local.sh), so a
+    # fixed ``report.txt`` lookup silently drops the whole zlink-c row and with
+    # it the spec 7.2 formula-1 denominator.
     report = os.path.join(run_dir, "report.txt")
     if not os.path.isfile(report):
-        raise ReportError(f"{run_dir}: no structured cell JSON and no report.txt")
+        candidates = sorted(glob(os.path.join(run_dir, "*.txt")))
+        candidates = [c for c in candidates
+                      if os.path.basename(c) not in ("load-gates.txt", "failures.txt",
+                                                     "stdout.txt")]
+        report = candidates[0] if len(candidates) == 1 else ""
+    if not report or not os.path.isfile(report):
+        raise ReportError(f"{run_dir}: no structured cell JSON and no report text")
     with open(report, encoding="utf-8", errors="replace") as handle:
         report_text = handle.read()
     cells, notes = cells_from_report(report_text, run, source)
