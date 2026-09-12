@@ -140,7 +140,42 @@ send·request를 한 번 부르는 것이고, 기다림은 Core와 binding이 �
 | Node 의존성 | `zlink-283-node`에 설치 완료 |
 | 지시서 | 지울 상한 목록, 남길 것 목록, 빌드 절차를 모두 포함 |
 
-### 5.3 감독 기준
+### 5.3 진행 (2026-09-12)
+
+| Issue | 구현 | 빌드·테스트 | PR |
+|---|---|---|---|
+| `#281` Java | 완료 | **1,453개 통과** | [#287](https://github.com/zlink-systems/zlink/pull/287) |
+| `#283` Node | 완료 | **전체 통과** | [#288](https://github.com/zlink-systems/zlink/pull/288) |
+| `#282` .NET | 완료 | 6건 실패 → 수정 후 재실행 중 | — |
+| `#280` C++ | codex 진행 중 | — | — |
+| `#277` | 완료 | 계약 test 2건 통과, perf 실측 큐 대기 | — |
+
+**codex가 놓친 것을 감독자가 보완한 10건.** 공통 패턴은 구현은 맞게 고쳤으나 그 변경이
+깨뜨린 테스트를 끝까지 따라가지 못한 것이고, 직접 원인은 빌드를 돌리지 못한 것이다.
+
+| # | 언어 | 무엇 |
+|---|---|---|
+| 1 | Java | catch만 지우고 `try`를 남겨 컴파일 불가 |
+| 2 | Java | `CompletableFuture` 리스트에 `ZLinkBackendReceived::close` 참조 |
+| 3 | Java | `tryEnqueue`가 false를 반환한다는 옛 단언 |
+| 4 | Java | mailbox drain이 byte 예산으로 끊긴다는 옛 단언 |
+| 5 | Node | worker thread로 보내는 함수가 바깥 변수를 캡처 |
+| 6 | .NET | e2e 두 파일의 `CapacityExceeded` 잔존 |
+| 7 | .NET | dispatcher 생성자를 `private`으로 막아 테스트 격리 불가 |
+| 8 | .NET | 삭제된 lane capacity API를 쓰는 테스트 셋 |
+| 9 | .NET | pending count가 0이 되는 시점을 잘못 봄 |
+| 10 | .NET | `Backpressured`를 기대하는 옛 단언 셋 |
+
+**환경에서 막혔던 것과 해결**
+
+| 언어 | 막힌 이유 | 해결 |
+|---|---|---|
+| Node | 바인딩 패키지가 `0.17.6`이라 기존 TypeScript 오류 | 로컬 `0.18.0` 타르볼로 교체 |
+| .NET | `ZLINK_LOCAL_PACKAGE_ROOT` 미설정으로 restore 실패 | `.artifacts/wsl` 지정 |
+| Java | sandbox에서 Gradle 기동 실패 | JDK 25 + `--offline`로 정상 동작 |
+| C++ | vcpkg 없음 | `~/.cache/zlink/vcpkg` bootstrap, worktree 공유 |
+
+### 5.4 감독 기준
 
 job이 끝날 때마다 다음을 확인한다.
 
