@@ -37,7 +37,7 @@ channel-transport·spot-actor 주제가 정의한다.
 | [04. 상호작용 모델](04-interaction-model.ko.md) | Operation 대상 선택과 완료의 공통 모델, send/request, Spot [Logical Multicast](02-glossary.ko.md#logical-multicast), [classic fanout](02-glossary.ko.md#classic-fanout), [STREAM session](02-glossary.ko.md#stream-session), handler 실패와 종료의 영향 |
 | [05. 메시지 모델](05-message-model.ko.md) | Typed 메시지, `MessageContext`, `ActorRef`/`SpotRef` JSON, `framework-json-v1` typed payload profile, application metadata, ownership과 크기 제한 |
 | [06. Framework API](06-framework-api.ko.md) | 언어 중립 public API family — root 등록, RouteMesh 등록, 메시징 API, handler 등록·filter, codec, Store 등록, Spot·Actor·STREAM owner 등록, startup validation |
-| [07. Framework 오류 모델](07-framework-error-model.ko.md) | 공통 `ErrorKind`, Send·Request의 완료·실패 경계, `CapacityExceeded` vs `Unavailable`, 재시도 판단 |
+| [07. Framework 오류 모델](07-framework-error-model.ko.md) | 공통 `ErrorKind`, Send·Request의 완료·실패 경계, 줄이 가득 찼을 때의 처리, 재시도 판단 |
 | [08. 계층 경계와 식별자](08-layering.ko.md) | 모든 언어 runtime이 따르는 binding 경계, 종료 절차와 정리 순서, 등록 선언 검증 시점, 식별자를 합치지 않는 기준(구현 스펙) |
 
 ## 3. 질문으로 찾기
@@ -57,7 +57,7 @@ channel-transport·spot-actor 주제가 정의한다.
 | Application host는 root에 무엇을 등록해야 Framework가 시작되는가 | [Framework API 「2. Root 등록」](06-framework-api.ko.md#2-root-등록) |
 | Handler는 어떤 key로 등록되고 filter는 언제 적용되는가 | [Framework API 「9. Handler 등록과 dispatch」](06-framework-api.ko.md#9-handler-등록과-dispatch) · [「10. Handler filter」](06-framework-api.ko.md#10-handler-filter) |
 | Send·Request가 실패하면 Application은 어떤 공통 오류를 받는가 | [Framework 오류 모델](07-framework-error-model.ko.md) |
-| `CapacityExceeded`와 `Unavailable`은 어떻게 구분하는가 | [Framework 오류 모델 「5. Request 완료와 실패」](07-framework-error-model.ko.md#5-request-완료와-실패) |
+| 줄이 가득 차면 어떻게 되는가 | [Framework 오류 모델 「5. Request 완료와 실패」](07-framework-error-model.ko.md#5-request-완료와-실패) |
 | runtime 코드는 어떤 덩어리로 나뉘고, 어떤 값을 하나로 합치면 안 되는가 | [계층 경계와 식별자 「6. 식별자를 합치지 않는다」](08-layering.ko.md#6-식별자를-합치지-않는다) |
 | startup에서 검증하는 것과 runtime에 검증하는 것은 어떻게 다른가 | [Framework API 「22. Startup validation」](06-framework-api.ko.md#23-startup-validation) · [계층 경계와 식별자 「5. 등록 선언은 시작할 때 한 번만 검증한다」](08-layering.ko.md#5-등록-선언은-시작할-때-한-번만-검증한다) |
 

@@ -292,8 +292,8 @@ item-count or byte bound.
 
 So the Spot queue can saturate first even when the process HWM isn't exhausted, and
 conversely, process inbound admission can stop first even when the Spot queue isn't full.
-The two results aren't merged into one `CapacityExceeded` situation — they're
-distinguished by the queue whose admission actually failed.
+Neither ends with an error; the work waits until room appears. Which queue it waits in is
+distinguished only by observation.
 
 ### The Queue Bound Is Set by Accumulated Payload Size
 
@@ -332,12 +332,12 @@ triggered the bound can also be distinguished.
 **Do not use an unbounded execution queue.** Each lane must have both count and byte
 reservations ([Framework API](../00-foundation/06-framework-api.en.md)).
 
-The result of exceeding a bound varies by submission family and queue location, so an
-implementation must not lump the results together. The [error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure) owns error selection for Request queues.
+Exceeding a bound does not end the call with an error. The work waits until room appears, a
+rule owned by [error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure).
+The worker queue behaves the same way.
 
-Two cases outside the Request queue classification above each result in `CapacityExceeded` — the worker
-scheduler queue and batch capacity. The latter is an admission judgment, not queue
-saturation.
+One case differs. When no node can host the Spot, nothing is full — the call ends with
+`Unavailable`.
 
 The relocation hold has no relocation-specific count or byte bound. An
 execution-lane reservation for already owned work and transport, deadline, and cancellation

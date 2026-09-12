@@ -23,7 +23,7 @@
 | `defaultHeader` | name, value | 없음(누적) | 모든 요청에 붙는 기본 헤더. 요청별 헤더가 이긴다 |
 | `basicAuth` | user, password | off | `Authorization: Basic` |
 | `bearerToken` | token | off | `Authorization: Bearer` |
-| `maxResponseBodySize` | bytes | **16 MiB** | 응답 body 상한. 압축 해제 후 크기에도 적용. 초과 시 `CapacityExceeded` |
+| `maxResponseBodySize` | bytes | **16 MiB** | 응답 body 상한. 압축 해제 후 크기에도 적용. 초과 시 `Rejected` |
 | `trustCertificateFile` | PEM 경로 | 시스템 root | 신뢰 인증서 **추가**(기본 root 대체 아님) |
 | `clientCertificateFile` | cert 경로, key 경로 | off | mTLS 클라이언트 인증서(PEM) |
 | `followRedirects` | max (무인자 시 **5**) | **off** | redirect 자동 추적 한도([6장](06-redirect-retry-cookie.ko.md)) |

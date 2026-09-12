@@ -376,8 +376,8 @@ performs resolve and activation in the following order.
    registered in the selected Mesh's serving descriptor. If exactly one,
    auto-selects it; with 0, `NotFound`; with two or more, `InvalidOperation`
    for omitting the required type.
-7. If no node providing the selected stable type has remaining capacity,
-   `CapacityExceeded`.
+7. If no node providing the selected stable type can take any more,
+   `Unavailable`.
 8. The source puts the following values into one activation envelope and
    sends it to the target — the global Spot ID, the selected Mesh/stable
    type and target descriptor fence, source node RID/lifecycle

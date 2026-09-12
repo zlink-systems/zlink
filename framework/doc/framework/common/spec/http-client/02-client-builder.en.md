@@ -28,7 +28,7 @@ convention (see
 | `defaultHeader` | name, value | None (accumulates) | Default header attached to every request. A per-request header wins |
 | `basicAuth` | user, password | off | `Authorization: Basic` |
 | `bearerToken` | token | off | `Authorization: Bearer` |
-| `maxResponseBodySize` | bytes | **16 MiB** | Response body bound. Also applies to the size after decompression. Exceeding it is `CapacityExceeded` |
+| `maxResponseBodySize` | bytes | **16 MiB** | Response body bound. Also applies to the size after decompression. Exceeding it is `Rejected` |
 | `trustCertificateFile` | PEM path | System root | **Adds** a trust certificate (doesn't replace the default root) |
 | `clientCertificateFile` | cert path, key path | off | mTLS client certificate (PEM) |
 | `followRedirects` | max (**5** with no argument) | **off** | Automatic redirect follow bound ([Chapter 6](06-redirect-retry-cookie.en.md)) |

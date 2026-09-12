@@ -38,7 +38,7 @@ of reservation, the progress domains themselves are separated. Limits with
 different purposes (Core byte HWM, the shared supply permit queue an
 application callback holds until it starts, the
 [Application job queue](../00-foundation/02-glossary.en.md#application-job-queue),
-per-owner count/byte queues, the outbound admission waiter) do not merge under this
+per-owner count/byte queues) do not merge under this
 separation either — even where they share a profile label or unit, they do
 not share type, computation, or error meaning.
 
@@ -298,7 +298,7 @@ runs on another thread.
 in place instead of reporting a submission failure makes it run
 concurrently with work already in progress, which erases the premise of
 serial execution entirely. Queue admission and error classification have separate owners.
-[Backpressure §8](04-application-job-queue-and-backpressure.en.md#8-the-three-backpressure-stages-and-kinds-of-limits)
+[Backpressure §8](04-application-job-queue-and-backpressure.en.md#8-waiting-to-send)
 owns Send/one-way/publish waiting;
 [Spot messaging §5.3](../03-spot-actor/02-spot-messaging.en.md#53-work-put-on-the-spot-application-queue)
 owns Spot control-claim submission boundaries;

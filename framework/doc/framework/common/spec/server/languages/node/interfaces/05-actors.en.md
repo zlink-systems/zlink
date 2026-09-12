@@ -151,7 +151,7 @@ generation/`OperationId` reads the correlation-free
 the current correlation/reply route. The terminal is kept for 5 minutes
 after the original deadline. A callback exception isn't `rejected` —
 it's a typed creation failure. If the whole deadline ends,
-`DeadlineExceeded`; if there's no capacity, `CapacityExceeded`. An
+`DeadlineExceeded`; if no node can host it, `Unavailable`. An
 lifecycle operation whose ActorRef's object generation differs from
 current is `InvalidOperation`, and `Unavailable` while moving.
 

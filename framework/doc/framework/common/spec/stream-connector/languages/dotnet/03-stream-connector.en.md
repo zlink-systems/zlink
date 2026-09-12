@@ -204,8 +204,8 @@ owned by [Common Spec §6](../../32-stream-connector.en.md).
 |---|---|
 | `Manual` (default) | A receive callback/request callback/lifecycle event is processed in the **execution context that called `Dispatch.Async(...)`** |
 | `Immediate` | **Runs inline on the receive path** (no separate dispatch work). A slow handler blocks the receive loop, so backpressure applies as is |
-| `MaxPendingDispatchCallbacks` | **Applies only in `Manual`.** This bound includes not just a receive handler, but also the reserved slot preserving the completion callback of an already-accepted request. `Immediate` bypasses this bounded admission since it doesn't go through the queue |
-| Outbound send queue | An order-preserving queue **separate** from the dispatch bound. Holds at most **4096** sends, and rejects with an **immediate error** on overflow |
+| `MaxPendingDispatchCallbacks` | **Applies only in `Manual`.** It bounds the places a receive handler waits in; when none is free, the work waits until one appears. **The completion callback of an already-accepted request is not counted here** — the completion of an accepted call is never deferred or refused for want of a place. `Immediate` does not pass through this bound since it doesn't go through the queue |
+| Outbound send queue | An order-preserving queue **separate** from the dispatch bound. When it is full the send waits for room, and ends with `DeadlineExceeded` if the wait runs out of time. It is never rejected for want of room |
 
 - **A send accepted earlier is sent before a request started later.**
   A request waits for the response **only after its own frame's actual
@@ -229,8 +229,8 @@ history together. Since the inbound observer is an observation path
 separate from this selection, it receives the frame snapshot in both
 cases.
 
-**If the queue is full, a newly arrived message is rejected and
-`ReceivedMessageDropped` is reported**
+**When the queue is full the connector stops reading from the socket; no message is
+discarded**
 ([Common Spec §10.1](../../32-stream-connector.en.md)).
 
 ### 8.1 Test Wait Surface

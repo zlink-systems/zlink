@@ -10,7 +10,7 @@
   사용자는 압축이 없었던 것처럼 body를 본다.
 - deflate는 zlib-wrapped와 raw 두 형태를 모두 수용한다(선두 바이트 감지).
 - **해제 후 크기에도 `maxResponseBodySize`를 강제**한다(압축 폭탄 방어).
-  초과 시 `CapacityExceeded`.
+  초과 시 `Rejected`.
 - 손상된 압축 body는 `ProtocolError`.
 - **streaming download에는 해제를 적용하지 않는다** — sink는 원시(압축된)
   바이트를 받는다([4장 §4.4](04-response-model.ko.md)).

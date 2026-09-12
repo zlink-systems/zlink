@@ -227,7 +227,7 @@ enum ZlinkStreamErrorCode {
   CompressionFailed = 'compressionFailed', DecompressionFailed = 'decompressionFailed',
   TlsValidationFailed = 'tlsValidationFailed',
   UserCallbackFailed = 'userCallbackFailed', ObserverFailed = 'observerFailed',
-  ObserverDropped = 'observerDropped', ReceivedMessageDropped = 'receivedMessageDropped',
+  ObserverDropped = 'observerDropped',
   RemoteError = 'remoteError'
 }
 
@@ -424,7 +424,6 @@ default is owned by [Common Spec §6.1](../../32-stream-connector.en.md).
 | Option | Target Queue | The Code Reported To The Error Handler On Overflow |
 |---|---|---|
 | `maxInboundObserverNotifications` | Observer notification queue | `ZlinkStreamErrorCode.ObserverDropped` |
-| `maxReceivedMessages` | Receive message queue (§10.1) | `ZlinkStreamErrorCode.ReceivedMessageDropped` |
 
 An observer callback failure is reported as
 `ZlinkStreamErrorCode.ObserverFailed`.

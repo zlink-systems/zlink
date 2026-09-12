@@ -621,9 +621,11 @@ Once a worker takes the work, it starts the following processing.
 - Submits the message once to each initially fixed remote target.
 - Immediately submits the message to each matching local Spot queue.
 
-If a local Spot queue has no capacity, the next target is processed without
-waiting. This failure isn't aggregated into a publish-only result or monitoring
-value.
+If a local Spot queue has no room, the worker waits until room appears and then enqueues. A
+target is never skipped because of capacity. What waits here is the worker, and the publish
+has already completed, so the caller's result does not change. A delivery that fails for a
+reason other than capacity — the target is gone, for instance — isn't aggregated into a
+publish-only result or monitoring value.
 
 ### 4.4 Processing After Publish Has Started
 
@@ -789,22 +791,21 @@ together.
 
 | Family | Saturated queue | Result the caller gets |
 |---|---|---|
-| Send/one-way | An outbound or Spot/Actor queue **on the same runtime** | Follows [Async Execution Policy §1](../01-execution/01-submit-and-completion.en.md) — waits for a slot up to send timeout; if even the internal waiters are full, `DeadlineExceeded` |
+| Send/one-way | An outbound or Spot/Actor queue **on the same runtime** | Follows [Async Execution Policy §1](../01-execution/01-submit-and-completion.en.md) — waits for a slot up to send timeout; if the time runs out, `DeadlineExceeded` |
 | Send/one-way | A Spot/Actor queue **on a different node** | **No result.** The send already completed once the source outbound queue accepted it ([Framework Error Model §4](../00-foundation/07-framework-error-model.en.md)). A later target admission failure doesn't change the already-completed result — it's only left in metric/log/trace |
 | Publish (before starting) | A worker slot or source-local outbound | Waits up to send timeout. If it can't be secured, `DeadlineExceeded` |
-| Publish (after starting) | Local Spot queue | **Skipped without waiting.** Publish already completed normally, and this failure isn't aggregated into a publish-only result or observability value (§4.3) |
-| Request | A Spot/Actor queue in the same runtime or on another node | Completes without waiting according to resource ownership in [Framework error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure). |
-| Control claim | A control limit in the same runtime or on another node | Follows resource ownership in [Framework error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure). |
+| Publish (after starting) | Local Spot queue | **Waits until room appears.** Publish has already completed, so waiting does not change the caller's result. Only a failure for a reason other than capacity is recorded as an observation (§4.3) |
+| Request | A Spot/Actor queue in the same runtime or on another node | Same as send — it waits for room, and ends with `DeadlineExceeded` when the time runs out ([Framework error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure)). |
+| Control claim | A control limit in the same runtime or on another node | The same as above ([Framework error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure)). |
 
 Publish's two rows differ because **the completion point sits between them.**
 Before starting, there is still a result to return, so it waits; after starting, it
 already completed, so there is nothing to roll back.
 
-The send family waits because there is no return value for the caller to make a
-retry decision with; the request family doesn't wait because the caller receives
-an error it can judge from. Treating a request as a wait would tie the sending
-side's execution resources to the receiving side's processing speed, creating a
-period in which the two nodes block each other.
+Send and request behave the same because having no room is not an error. While waiting, the
+work does not hold execution authority, so the sending side's execution resources are not
+tied to the receiving side's processing speed
+([Application job queue and backpressure §8](../01-execution/04-application-job-queue-and-backpressure.en.md#8-waiting-to-send)).
 
 [Framework error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure)
 owns local/remote error classification; [§9 of that document](../00-foundation/07-framework-error-model.en.md#9-verification-requirements)

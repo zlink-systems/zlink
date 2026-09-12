@@ -323,7 +323,7 @@ limit. A per-Actor-stable-type limit isn't provided.
 Cap enforcement counts active count together with the reserved slots secured before the
 factory finishes. The Location Store confirms reservation and authority in the same
 transaction, and descriptor count is a projection for candidate selection. If no candidate
-satisfies capacity, it completes with `CapacityExceeded`.
+can take it, the call ends with `Unavailable`.
 
 The existing pending-activation
 `128` limit isn't an object population limit — it's a separate admission limit protecting
@@ -1070,8 +1070,8 @@ reselect for capacity or resubmit the same binding operation.
 | New admission closed by host [shutdown](02-glossary.en.md#shutdown) | `ShuttingDown` |
 | Invalid argument/state, an unsupported operation, or an internal invariant violation | a language-specific local call error. Not turned into a remote error reply |
 
-`DeadlineExceeded` is an exception Framework creates when a regular one-way admission
-waiter isn't accepted by the per-family send timeout. Cancellation is expressed as that
+`DeadlineExceeded` is an exception Framework creates when a regular one-way submission
+isn't accepted by the per-family send timeout. Cancellation is expressed as that
 language's cancelled awaitable. Invalid argument/handle/state, an already-used reply token,
 and duplicate terminator execution are exceptional completions. A STREAM reply's first valid
 terminator atomically consumes the one-shot token before attempting transport. Even if it
@@ -1105,7 +1105,7 @@ The failure conditions of Create/GetOrCreate map to error kinds as follows.
 
 | Condition | Error kind |
 |---|---|
-| No eligible node, or insufficient capacity | `CapacityExceeded` |
+| No node can host it | `Unavailable` |
 | An owner route that secured a reservation but isn't ready | `Unavailable` |
 | Store resolve/reservation/commit and activation-infrastructure failures | `InternalFailure` |
 | An object kind/stable-type conflict | `TypeMismatch` |

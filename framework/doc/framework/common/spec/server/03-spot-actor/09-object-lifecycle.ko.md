@@ -261,9 +261,9 @@ reservation을 둔다. Application lane 기본값은 1,024건·64 MiB이고, lif
 cost 256 byte를 함께 예약한다. Reservation은 handler terminal completion에서 반납한다.
 Relocation hold에는 relocation 전용 건수·byte 상한을 두지 않는다.
 
-따라서 process HWM이 남아 있어도 Spot queue가 먼저 포화될 수 있고, 반대로 Spot queue에
-여유가 있어도 process inbound admission이 먼저 멈출 수 있다. 두 결과를 같은
-`CapacityExceeded` 상황으로 합치지 않고, 실제로 admission에 실패한 queue에 따라 구분한다.
+따라서 process HWM이 남아 있어도 Spot queue가 먼저 찰 수 있고, 반대로 Spot queue에 여유가
+있어도 process inbound admission이 먼저 멈출 수 있다. 어느 쪽이든 오류로 끝내지 않고 자리가
+날 때까지 기다린다. 다만 어느 줄에서 기다리는지는 관측으로 구분한다.
 
 ### 대기열 한도는 쌓인 payload 크기로 정한다
 
@@ -299,11 +299,12 @@ process 단위 회계가 이미 byte로 되어 있다(§6 첫 문단). 같은 �
 모두 가져야 한다
 ([Framework API](../00-foundation/06-framework-api.ko.md)).
 
-초과했을 때의 결과는 하나가 아니다. 제출 계열과 대기열 위치에 따라 갈리므로 구현이
-하나로 뭉뚱그리면 안 된다. Request queue의 오류 선택은 [오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)가 소유한다.
+한도를 넘겼다고 오류로 끝내지 않는다. 자리가 날 때까지 기다리며, 그 규칙은
+[오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)가 소유한다.
+Worker 대기열도 같다.
 
-위 Request queue 판정에 포함하지 않는 두 자리는 각각 `CapacityExceeded`다 — worker scheduler
-대기열과 배치 수용량이다. 뒤의 것은 대기열 포화가 아니라 admission 판정이다.
+한 가지만 다르다. Spot을 둘 node가 하나도 없는 것은 줄이 찬 것이 아니므로 `Unavailable`로
+끝난다.
 
 이동 중 보류에는 relocation 전용 건수·byte 상한이 없다. 이미 work를 소유한 실행 lane의
 reservation과 transport·deadline·cancellation 제한을 relocation hold의 별도 상한으로 재사용하지 않는다. 정식 spec이 정한 규칙이므로 그대로 따른다

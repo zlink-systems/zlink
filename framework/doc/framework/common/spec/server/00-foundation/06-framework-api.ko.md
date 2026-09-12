@@ -282,7 +282,7 @@ Entry Spot은 Object Server node마다 하나로 고정하며 configurable Spot 
 
 상한 판정은 Active count와 factory가 완료되기 전에 확보한 reserved slot을 함께 계산한다. Location Store가
 reservation과 authority를 같은 transaction에서 확정하며 descriptor count는 후보 선택용 projection이다.
-Capacity를 만족하는 후보가 없으면 `CapacityExceeded`로 완료한다.
+받아 줄 수 있는 후보가 없으면 `Unavailable`로 끝난다.
 
 기존 pending activation `128`
 제한은 object population limit이 아니라 동시에 진행되는 activation을 보호하는 별도 admission 제한이다.
@@ -540,11 +540,12 @@ memory를 점유하고, byte만 두면 빈 payload를 무한히 쌓아도 한도
 
 Byte 회계는 payload 크기만 세지 않는다. 대기 중인 작업 하나가 점유하는 envelope, metadata, queue
 node를 **더한다** — `payload 크기 + metadata 크기 + 작업당 고정 비용`이다. 큰 payload에서도 고정
-비용은 그대로 더한다. Payload가 비어 있어도 작업 하나는 0 byte가 아니다. 합이 표현 범위를 넘으면
-최댓값으로 고정하고 그 제출을 거절한다.
+비용은 그대로 더한다. Payload가 비어 있어도 작업 하나는 0 byte가 아니다. 합이 표현 범위를 넘으면 최댓값으로 고정한다.
 
 **두 축은 하나의 작업으로 예약한다.** 건수와 byte를 각각 확인하면 한쪽만 통과한 상태가 생긴다.
-어느 한 축이라도 한도를 넘기면 두 축 모두 바뀌지 않은 채로 실패해야 한다. 반환도 같다 — 반환
+어느 한 축이라도 한도를 넘기면 두 축 모두 바뀌지 않은 채로 예약이 성립하지 않고, 그 작업은
+자리가 날 때까지 기다린다. 한도를 넘겼다는 이유로 작업을 거절하거나 버리지 않는다
+([Application job queue와 backpressure §3](../01-execution/04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)). 반환도 같다 — 반환
 시점은 **작업을 대기열에서 꺼낼 때가 아니라 handler가 끝난 뒤**다. 실행 중인 작업이 점유한
 memory는 아직 해제되지 않았기 때문이다. 따라서 한도는 대기 중 작업과 실행 중 작업을 함께 센다.
 
@@ -932,7 +933,7 @@ Framework는 용량을 이유로 target을 다시 선택하거나 같은 binding
 | host [shutdown](02-glossary.ko.md#shutdown)으로 신규 admission이 닫힘 | `ShuttingDown` |
 | invalid argument·state, 지원하지 않는 operation 또는 내부 불변 조건 위반 | 언어별 local call 오류. remote error reply로 바꾸지 않음 |
 
-`DeadlineExceeded`는 일반 one-way admission waiter가 family별 send timeout까지 수락되지 않았을 때
+`DeadlineExceeded`는 일반 one-way 제출이 family별 send timeout까지 수락되지 않았을 때
 Framework가 만드는 exception이다. Cancellation은 해당 언어의 cancelled awaitable로 표현한다. Invalid
 argument·handle·state, 이미 사용한 reply token과 중복 terminator 실행은 exceptional completion이다.
 STREAM reply의 유효한 첫 terminator는 transport 시도 전에 one-shot token을 원자적으로 소비한다.
@@ -964,7 +965,7 @@ Create·GetOrCreate의 실패 조건과 error kind는 다음과 같다.
 
 | 조건 | Error kind |
 |---|---|
-| eligible node가 없거나 capacity가 부족하다 | `CapacityExceeded` |
+| 둘 수 있는 node가 하나도 없다 | `Unavailable` |
 | reservation을 확보한 owner route가 준비되지 않았다 | `Unavailable` |
 | Store resolve·reservation·commit과 activation infrastructure가 실패했다 | `InternalFailure` |
 | object kind·stable type이 충돌한다 | `TypeMismatch` |

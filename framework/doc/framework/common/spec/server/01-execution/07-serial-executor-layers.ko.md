@@ -189,7 +189,7 @@ sequenceDiagram
     Caller->>Coord: executeActor(actorId, 작업)
     Coord->>AQ: 그 Actor의 queue를 찾거나 만든다
     AQ->>AQ: 이 작업의 payload 바이트를 예약한다
-    Note over AQ: 그 Actor 몫이 가득 차 있으면<br/>여기서 backpressure로 거절한다
+    Note over AQ: 그 Actor 몫이 가득 차 있으면<br/>자리가 날 때까지 여기서 기다린다
     AQ->>SQ: 자기 turn이 오면 실행 turn을 세운다 (payload는 AQ에 남는다)
     SQ->>SQ: fixedWorkByteCost만 예약한다
     Note over SQ: 같은 payload를 다시 예약하지 않는다
@@ -197,7 +197,7 @@ sequenceDiagram
     H-->>Caller: 완료
 ```
 
-정상 경로만 그렸다. 예약이 거절되는 backpressure 분기는 §5가, 한 소유자가 turn을 오래
+정상 경로만 그렸다. 예약이 성립하지 않아 기다리는 분기는 §5가, 한 소유자가 turn을 오래
 점유했을 때 양보하는 분기는 §6.4가 설명한다.
 
 위 두 그림을 코드로 옮기면 다음과 같다. 진입점 하나가 §4의 경로 판정을 전부 안고 있고,
@@ -265,8 +265,8 @@ handler가 끝난 뒤에 반환된다 — 실행 중인 작업이 점유한 memo
 
 ## 6. 직렬 queue primitive
 
-`ZLinkSerialExecutionQueue`는 작업을 순서대로 실행하는 것만이 아니라, **수용량을 넘겼을 때
-거절하는 것과 한 소유자가 오래 점유하지 못하게 하는 것까지 자기 계약으로 갖는다.** 이
+`ZLinkSerialExecutionQueue`는 작업을 순서대로 실행하는 것만이 아니라, **자리가 없을 때
+기다리게 하는 것과 한 소유자가 오래 점유하지 못하게 하는 것까지 자기 계약으로 갖는다.** 이
 책임을 호출자에게 남기면 호출 지점마다 다르게 처리되고, 그러면 어떤 부하에서도 지연 상한이
 있다는 실시간 보장을 세울 수 없다.
 
@@ -553,7 +553,7 @@ claim(`actorClaims.submit(actorId, …)`)을 먼저 잡은 뒤 그 안에서 sha
 
 ## 10. 검증 요구
 
-공개 표면(§3의 진입점 호출과 그 반환값, backpressure 거절, handler·callback이 실행된 순서와
+공개 표면(§3의 진입점 호출과 그 반환값, 자리를 기다리는 동안의 관측값, handler·callback이 실행된 순서와
 시각, 재진입 호출이 받는 예외)만으로 다음을 확인한다. 각 항목은 test 하나로 이어진다.
 
 **제출 경로**
@@ -574,9 +574,9 @@ claim(`actorClaims.submit(actorId, …)`)을 먼저 잡은 뒤 그 안에서 sha
 **수용량과 backpressure**
 
 - 두 mode 모두, Actor 하나에 작업을 몰아 그 Actor mailbox의 한도를 채우면 그 Actor에 대한
-  제출만 거절되고 같은 Spot의 다른 Actor에 대한 제출은 계속 수락된다.
+  제출만 자리를 기다리고 같은 Spot의 다른 Actor에 대한 제출은 계속 수락된다.
 - `SpotWide`에서 같은 건수의 큰 payload와 작은 payload를 Actor 하나에 제출하면, 큰 쪽이 먼저
-  거절된다 — 아래 Actor queue가 payload 바이트를 예약한다(§5).
+  기다리게 된다 — 아래 Actor queue가 payload 바이트를 예약한다(§5).
 - 같은 제출로 Spot queue가 가득 차는 시점은 payload 크기와 무관하게 제출 건수로 결정된다 —
   위 Spot queue는 고정 비용만 예약한다(§5).
 - `enqueueLifecycle`로 제출한 작업은 이미 줄 서 있는 application 작업보다 먼저 실행되고,

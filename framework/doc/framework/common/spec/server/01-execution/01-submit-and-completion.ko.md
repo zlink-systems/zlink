@@ -79,8 +79,7 @@ Spot gate를 반납하는 terminal만 `Yield`·`yield`라는 이름을 사용한
   비동기 I/O가 operating system, transport 또는 Store completion을 기다리는 동안에는
   CPU execution slot을 점유하지 않는다.
 - I/O admission과 completion bookkeeping도 bounded resource를 사용하지만, CPU worker
-  queue가 가득 찼다는 이유만으로 이미 제출된 I/O completion을 `CapacityExceeded`로
-  바꾸지 않는다.
+  queue가 가득 찼다는 이유만으로 이미 제출된 I/O completion을 오류로 바꾸지 않는다.
 - CPU worker의 configured thread 수보다 많은 I/O operation이 completion을 기다릴 수
   있다. 이 개수는 CPU execution slot이나 CPU queue length가 아니라 Framework 내부의
   별도 bounded I/O admission이 제한한다.
@@ -89,11 +88,10 @@ Spot gate를 반납하는 terminal만 `Yield`·`yield`라는 이름을 사용한
   있다.
 - Worker call이 계산한 application 결과 type은 유지하고, 허용된 `SpotWide`·Instance
   문맥에서는 같은 결과를 `Yield`로 기다릴 수 있다.
-- Queue가 가득 차면 `CapacityExceeded`,
-  [deadline](../00-foundation/02-glossary.ko.md#deadline)을 넘으면 operation에 허용된 deadline까지
-  완료 조건을 만족하지 못했을 때 발생하는 Framework exception인
-  [`DeadlineExceeded`](../00-foundation/02-glossary.ko.md#deadlineexceeded), 작업이
-  실패하면 `InternalFailure`로 완료한다.
+- Queue가 가득 차면 자리가 날 때까지 기다린다. 기다리다
+  [deadline](../00-foundation/02-glossary.ko.md#deadline)을 넘기면
+  [`DeadlineExceeded`](../00-foundation/02-glossary.ko.md#deadlineexceeded)로, 작업 자체가
+  실패하면 `InternalFailure`로 끝난다.
 - Timeout이나 cancellation 뒤 늦게 끝난 작업은 두 번째 terminal 결과를 만들지 않는다.
 
 ## 4. One-way submit — admission 경계
@@ -170,10 +168,9 @@ operation별 completion awaitable(binding 결과 객체의 `admitted`)을 완료
 - Binding에 넘기기 전 Framework queue 대기의 timeout·shutdown·cancellation 경쟁은
   [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)을 따른다.
   Binding operation의 cancellation과 native completion 정리도 그 절의 소유 경계를 참조한다.
-- 내부 bounded waiter capacity까지 모두 사용 중이면 새 payload를 보관하지 않고
-  `DeadlineExceeded`로 즉시 완료한다.
-- 이 hard overload boundary에서도 `Backpressured` status를 공개하거나 나중에
-  message를 제출하지 않는다.
+- Framework는 기다리는 줄을 따로 만들지 않으므로 "대기 자리가 없다"는 이유로 끝나는
+  호출이 없다. 자리를 기다리다 시간이 다 되면 `DeadlineExceeded`로 끝난다.
+- 어느 경우에도 `Backpressured` status를 공개하거나 나중에 message를 다시 제출하지 않는다.
 
 | 실패 | 오류 분류 |
 |---|---|
@@ -391,14 +388,24 @@ dispatcher에 넣고, 현재 처리가 반환된 뒤 새 execution turn에서 �
 3. callback을 dispatcher에 넣는다.
 4. 새 execution turn에서 callback을 실행한다.
 
-Terminal winner가 진행 중 호출 표의 항목을 꺼낸 뒤 dispatcher admission에 실패하면
-application completion을 잃는다. 따라서 operation을 수락할 때 completion dispatcher
-자리도 함께 예약한다. 이 예약은 callback이 반환할 때까지 유지한다. 진행 중 operation과
-dispatcher에서 대기·실행 중인 callback을 합친 수는 4,096개를 넘지 않으므로 callback
-queue가 제한 없이 증가하지 않는다.
+**완료 callback을 dispatcher에 넣는 일은 실패하지 않는다.** Dispatcher에 상한이 없기
+때문이다. 자리가 없다는 이유로 request를 거부하거나, 이미 수락한 호출의 완료를 버리는
+길은 없다.
 
-예약할 자리가 없으면 request를 보내기 전에 `CapacityExceeded`로 거부한다. 한 번
-수락한 operation의 completion enqueue에는 거부하거나 버리는 경로가 없다.
+Dispatcher에서 기다리거나 실행 중인 callback 수는 진행 중인 호출 수를 넘지 않는다. §10이
+정한 대로 호출 하나가 완료 자리 하나를 쓰기 때문이다.
+
+진행 중인 호출 수는 Framework가 따로 세지 않는다. 그 수를 제한하는 것은 Core다. Core는
+socket마다 completion 자리를 정해 두고, 그 자리가 다 차면 새 호출을 접수하지 않고
+`ZLINK_SUBMIT_BACKPRESSURED`로 알린다([Core socket 계약](../../../../../../../core/doc/spec/core/socket/README.ko.md)).
+이것은 오류가 아니라 기다리라는 신호이며, binding이 받아서 자리가 날 때까지 기다린 뒤 같은
+호출을 완성한다([Binding 비동기 coroutine 정책](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md)).
+상대 host에 일이 쌓였을 때도 같다 — 상대의 `PAUSED`가 이쪽 send를 멈추고, Core와 binding이
+보낼 자리를 기다린다([§6](04-application-job-queue-and-backpressure.ko.md#6-pressure-상태와-socket-제어),
+[§7](04-application-job-queue-and-backpressure.ko.md#7-send-completion과의-합성)).
+
+이 수는 이 host가 **보낸** 호출을 센다. Framework pressure는 이 host가 **받아서** handler를
+기다리는 일을 센다. 둘은 세는 것이 다르므로 하나로 합치지 않는다([§1](04-application-job-queue-and-backpressure.ko.md#1-두-독립된-capacity-authority)).
 
 Dispatcher는
 callback마다 thread를 만드는 대신 process가 공유하는 lane을 사용하며, shutdown에서는
@@ -533,7 +540,7 @@ Callback overload는 parameter list가 다르므로 `submit(callback)`으로 제
 정상·예외 완료, request의 reply·오류·timeout·cancellation·shutdown 완료, STREAM
 reply token의 claim 결과)만으로 다음을 확인한다. 각 항목은 test 하나로 이어진다.
 내부 구조로만 확인할 수 있는 조건(완료 확정 방식이 runtime 안에서 하나라는 것,
-dispatcher 자리 예약 시점)은 §10·§11이 규칙과 함께 소유하며 여기 적지 않는다.
+dispatcher 자리 등록 시점)은 §10·§11이 규칙과 함께 소유하며 여기 적지 않는다.
 
 **Submit과 admission**
 
@@ -542,8 +549,8 @@ dispatcher 자리 예약 시점)은 §10·§11이 규칙과 함께 소유하며 
 - Local capacity가 부족한 send는 family send timeout까지 기다리다가, capacity가
   먼저 생기면 정확히 한 번 제출되어 정상 완료하고, timeout이 먼저 확정되면
   `DeadlineExceeded`로 완료한다.
-- Bounded waiter capacity가 가득 찬 상태에서 제출한 call은 대기 없이 즉시
-  `DeadlineExceeded`로 완료한다.
+- 진행 중인 send·request를 아무리 늘려도 대기 자리가 없다는 이유로 끝나는 call이 없고,
+  시간이 다 된 call만 `DeadlineExceeded`로 끝난다.
 - Logical Multicast는 target이 0개여도 반환 데이터 없이 정상 완료하고, 시작 뒤
   개별 target 실패는 public 반환값을 바꾸지 않는다.
 - Classic fanout publish는 subscriber가 없어도 publisher socket queue가 수락하면
@@ -586,8 +593,8 @@ Binding cancellation 관찰은
 [Binding 비동기 실행 모델 §7](../../../../../../../bindings/doc/spec/async-execution-model.ko.md#7-구현-및-contract-test-검증-요구)을 참조한다.
 
 - 완료 callback은 확정 시점의 호출 stack이 아니라 새 execution turn에서 실행된다.
-- 진행 중 operation과 dispatcher가 예약한 자리가 없으면 request는 보내기 전에
-  `CapacityExceeded`로 거부된다.
+- 진행 중인 request를 아무리 늘려도 완료 자리가 없다는 이유로 끝나는 request가 없고,
+  각 request는 답·오류·timeout·취소·종료 가운데 하나로 끝난다.
 - 전송이 message를 수락한 뒤 연결이 끊겨도 runtime은 다른 대상에 다시 보내지
   않는다.
 - 취소·시간 초과·종료로 완료된 결과는 오류 메시지 문자열이 아니라 별도 타입이나

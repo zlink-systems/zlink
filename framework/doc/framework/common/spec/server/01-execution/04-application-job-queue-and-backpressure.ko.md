@@ -71,14 +71,40 @@ Core와 Framework profile은 같은 label을 사용할 수 있지만 서로 다�
 - **Framework job pressure가 Core에 주는 feedback은 지원 socket에 적용하는 `RUNNING`·
   `PAUSED` receive-flow 절대 상태 하나뿐이다.** Framework는 Core HWM 설정이나 queued-byte
   counter를 상태 전이에 맞춰 변경하지 않는다.
+- **상한은 host 하나에 하나다.** Host 안에 MeshNode가 몇 개든, ClientServer channel이
+  몇 개든, socket과 연결이 몇 개든 `MaxQueuedApplicationJobs` 하나를 함께 쓴다.
+  - 구성 요소마다 나누어 갖지 않는다.
+  - 구성 요소 수만큼 곱하지 않는다.
+  - 한 host 안에서 permit을 세는 자리는 하나뿐이다.
+
+  Pressure 상태도 host가 한 번 계산해 지원 socket 전부에 같은 값을 건다(§6).
 
 ## 3. Ordinary ingress permit 순서
 
 Ordinary ingress — Core나 binding에서 아직 permit을 받지 못한 record를 receive·claim하는 모든
-경로 — 는 어떤 문맥에서 도착했든 같은 규칙을 따른다. STREAM application packet, cross-node
-Session application record([STREAM 서버 session](../04-session/01-stream-session.ko.md),
+경로 — 는 어떤 문맥에서 도착했든 같은 규칙을 따른다.
+
+**같은 host 안에서 만든 job도 마찬가지다.** 같은 host의 Spot이나 Actor에게 보내는 send,
+publish의 local target처럼 network를 거치지 않고 곧바로 실행 대기열에 들어가는 job도 넣기
+전에 같은 host permit을 얻는다. 그러지 않으면 그 job이 대기열에서 기다려도 쓰는 permit이
+늘지 않아 §6의 `PAUSED`가 나가지 않고, 한 host가 자기 자신을 밀어붙일 수 있다.
+
+**Messaging 유입이 이 경로의 본체다.** 두 곳에서 들어온다.
+
+| 어디서 받나 | 무엇을 받나 |
+|---|---|
+| RouteMesh MeshNode의 ROUTER-ROUTER socket | 다른 node가 보낸 request와 send |
+| [ClientServer Channel](../00-foundation/02-glossary.ko.md#clientserver-channel)의 Server ROUTER | Client DEALER가 보낸 request와 send |
+
+둘은 같은 permit을 쓴다. 구조마다 따로 세지 않는다. §6이 `PAUSED`를 거는 socket도 이 둘이다.
+
+ClientServer에서 Server ROUTER는 Client DEALER에게 먼저 보내지 않는다. 그래서 Client DEALER가
+받는 것은 자기가 보낸 호출의 답뿐이다. 답은 이 절 뒤에서 정하는 대로 permit을 거치지 않으므로,
+이 방향에는 permit을 쓰는 유입이 없다.
+
+그 밖에 STREAM application packet, cross-node Session application record([STREAM 서버 session](../04-session/01-stream-session.ko.md),
 [Session과 Actor binding](../04-session/02-session-actor-binding.ko.md) 참고), handshake·bind·
-unbind와 그 밖의 모든 일반 application job 유입이 예외 없이 이 순서를 따른다.
+unbind와 그 밖의 모든 일반 application job 유입도 예외 없이 이 순서를 따른다.
 
 Ordinary ingress는 다음 순서를 지킨다.
 
@@ -264,9 +290,20 @@ resume permit count = floor(M * R / 100)
 `running`에서는 permits in use가 pause count 이상이면 `paused`로 전이하고, `paused`에서는
 resume count 이하이면 `running`으로 전이한다. 두 경계 사이에서는 현재 상태를 유지한다.
 
-- **Framework는 전이한 절대 상태를 RouteMesh의 ROUTER-ROUTER two-lane socket과
-  ClientServer의 DEALER-ROUTER single-lane socket에만 적용한다.** PUB/SUB, Classic fanout과
-  STREAM은 이 연동 범위가 아니며 기존 Core byte HWM과 각 구조적 queue 상한을 유지한다.
+- **상태를 거는 대상은 이 host에게 요청이 들어오는 socket뿐이다.** `PAUSED`는 "나에게 그만
+  보내라"는 말이므로, 보낼 상대가 요청을 보내는 쪽일 때만 뜻이 있다. §3에서 permit을 쓰는
+  유입이 들어오는 socket과 같은 집합이다.
+
+  | socket | 이 host에게 요청이 오나 | `PAUSED`를 거나 |
+  |---|---|---|
+  | RouteMesh ROUTER-ROUTER | 다른 node가 보낸다 | **건다** |
+  | ClientServer Server ROUTER | Client가 보낸다 | **건다** |
+  | ClientServer Client DEALER | 오지 않는다. 자기가 보낸 호출의 답만 온다 | **걸지 않는다** |
+  | PUB/SUB, Classic fanout, STREAM | — | **걸지 않는다.** 기존 Core byte HWM과 각 구조적 queue 상한을 유지한다 |
+
+  Client DEALER에 걸지 않는 이유는 둘이다. 거기서 막히는 것은 상대의 요청이 아니라 자기가
+  기다리는 답이고, Server는 애초에 Client에게 요청을 보내지 않으므로 멈추라고 알릴 내용이
+  없다.
 - **`PAUSED`는 Core HWM 값을 바꾸지 않는다.** Core는 remote-pause blocker와 local
   byte-HWM blocker를 독립적으로 합성한다. `RUNNING`은 remote-pause 원인만 제거하므로
   local HWM이 계속 full이면 send는 계속 대기한다. Pressure 상태 자체는 route ready나
@@ -280,6 +317,14 @@ resume count 이하이면 `running`으로 전이한다. 두 경계 사이에서�
 - **이 receive-flow state API가 Framework pressure와 Core send flow 사이의 유일한 runtime
   제어 지점이다.** Framework는 raw flow frame을 만들거나 Core control lane을 범용
   Framework channel로 사용하지 않는다.
+- **경계를 넘어도 record를 버리거나 거부하지 않는다.** `PAUSED`는 상대에게 그만 보내라고
+  알리는 것일 뿐, 이미 떠난 것을 되돌리지는 못하기 때문이다. 상대 queue와 OS buffer,
+  network, 그리고 이쪽 Core queue에 이미 들어와 있던 것은 경계를 넘은 뒤에도 계속 도착한다.
+
+  도착한 것은 §3 순서대로 permit을 기다렸다가 하나도 빠짐없이 handler로 간다.
+
+  쓰고 있는 permit이 상한에 닿으면 더 받지 않는다. 받지 않은 것은 이쪽 Core queue에
+  그대로 쌓인다. 그러면 Core가 byte 상한에 걸리고, 보내는 쪽이 거기서 막힌다(§1).
 
 내부 확인 조건 — 새 socket은 현재 host pressure 상태를 적용한 뒤 receive 대상 registry에
 게시하고, close는 먼저 registry에서 socket을 제거한 뒤 진행한다는 순서는 registry 구현의
@@ -299,28 +344,22 @@ white-box 불변 조건이다. Binding 호출은 queue, registry와 user callbac
   machine의 첫 terminal 규칙을 따른다. Framework service-wire의 `SendReady` kind `12`는
   Framework service control record이므로 제거된 binding callback과 다른 계약이다.
 
-## 8. Backpressure 3단계와 한도 종류
+## 8. 보낼 때의 대기
 
-- **[Backpressure](../00-foundation/02-glossary.ko.md#backpressure)의 3단계는 send·publish·one-way 계열에만 적용한다.**
-  Request는 caller가 결과를 받아 판단할 수 있으므로 bounded queue 확보를 기다리지 않는다.
-  Local·remote 오류 선택은 [Framework 오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)를 따른다.
+**Framework는 Core socket의 send와 request를 한 번 부른다.** 보낼 자리가 없어 기다리는 일은
+§7대로 Core와 binding이 한다. Framework는 기다리는 줄을 따로 만들지 않고, 다시 보내지 않으며,
+같은 내용으로 두 번째 호출을 만들지 않는다.
 
-1. 첫 제출이 거절되면 정해진 시간까지 보낼 공간이 생기기를 기다린다.
-2. 시간 안에 공간이 생기면 한 번 제출한다.
-3. 시간이 먼저 끝나면 [`DeadlineExceeded`](../00-foundation/02-glossary.ko.md#deadlineexceeded)로
-   끝낸다.
-
-- **이 3단계는 public 결과가 아직 확정되지 않은 구간에만 적용한다.** 이미 완료된 호출
-  뒤에 일어나는 실패(publish가 시작된 뒤의 local target 건너뜀, 이동 중 one-way 버림,
-  완료된 send의 target admission 실패)는 호출자에게 돌려줄 결과가 없으므로 관측으로만
-  남긴다.
-- **기다리는 동안 그 작업은 실행 권한을 쥐고 있지 않는다.** 쥔 채로 기다리면 같은
-  Spot의 다른 요청이 송신 공간을 기다리는 시간만큼 막힌다.
-- **기다리는 자리도 한도가 있다.** 대기 자리가 가득 차면 기다리지 않고 바로
-  `DeadlineExceeded`로 끝낸다. 밀렸다는 사실 자체는 caller가 받는 값이 아니다 —
-  [`Backpressured`](../00-foundation/02-glossary.ko.md#backpressured)는 public terminal result가
-  아니다. 한도가 없으면 상대가 느릴 때 이쪽 메모리가 상대의 처리 속도에 따라 무한정
-  늘어난다.
+- **기다리다 시간이 다 되면 [`DeadlineExceeded`](../00-foundation/02-glossary.ko.md#deadlineexceeded)로
+  끝난다.** send·publish·one-way·request가 모두 같다. 밀렸다는 사실 자체는 호출자가 받는
+  값이 아니다([`Backpressured`](../00-foundation/02-glossary.ko.md#backpressured)).
+- **자리가 없다는 것은 오류가 아니다.** 어느 줄도 자리가 없다는 이유로 호출을 거부하거나
+  받은 것을 버리지 않는다([오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)).
+- **이 규칙은 결과가 아직 정해지지 않은 구간에만 쓴다.** 이미 끝난 호출 뒤에 생긴 실패는
+  호출자에게 돌려줄 결과가 없으므로 관측으로만 남긴다. publish가 시작된 뒤 local target을
+  건너뛴 경우, 이동 중 one-way를 버린 경우, 끝난 send의 target이 받지 못한 경우가 그렇다.
+- **기다리는 동안 그 작업은 실행 권한을 쥐고 있지 않는다.** 쥔 채로 기다리면 같은 Spot의
+  다른 요청이 그 시간만큼 막히기 때문이다.
 
 StreamNode의 client→server complete-message
 [`MaxMessageSize`](../00-foundation/02-glossary.ko.md#max-message-size)는 이 capacity와 독립된
@@ -333,8 +372,7 @@ server→client outbound에는 적용하지 않는다.
 |---|---|---|
 | Core HWM | 방향별 queued/accounted byte | Core queue에서 sender까지 backpressure |
 | Application job queue | host instance의 reserved·queued·in-use permit | cancellable shared-cap wait |
-| 실행 객체별 FIFO — [실행 계약 §7](02-handler-turn-and-execution-gate.ko.md#execution-lanes) | 실행 객체별 count와 byte | [오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)의 구조 한도 오류 |
-| Outbound admission waiter | operation family별 bounded waiter | 원래 send deadline/cancellation 결과 |
+| 실행 객체별 FIFO — [실행 계약 §7](02-handler-turn-and-execution-gate.ko.md#execution-lanes) | 실행 객체별 count와 byte | 자리가 날 때까지 대기하며, 그동안 host permit을 쥐고 있으므로 permits in use가 오른다 |
 
 어느 경로도 별도 unbounded backlog, polling, busy-spin이나 silent replay를 만들지 않는다.
 
@@ -350,15 +388,13 @@ owner 실행 queue로 claim될 때까지를, 실행 queue가 claim부터 handler
   구간이 있으면, dequeue된 뒤 아직 handler가 끝나지 않은 in-flight payload가 어떤 한도에도
   잡히지 않는다 — 큰 payload를 오래 보유하는 handler가 많을수록 그 구간의 memory가
   무한정 자란다.
-- **Claim 시점의 이관은 재판정이 아니다.** 이미 수락된 record를 실행 queue가 용량을 이유로
-  거절하면 §3이 금지한 "포화를 reject로 바꾸기"가 된다. 실행 queue는 이관받은 예약을
-  계상만 하고, 용량 거절 판정은 같은 runtime 안의 새 로컬 제출에만 적용한다.
+- **Claim 시점의 이관은 재판정이 아니다.** 실행 queue는 이관받은 예약을 계상만 한다.
+  용량을 이유로 record를 거절하는 자리는 어디에도 없다 — 자리가 없으면 기다린다(§3).
 - **같은 record를 두 단계가 동시에 계상하지 않는다.** 이중 계상하면 owner 한도가 실제
   적체보다 이르게 포화되어, 한도 값이 뜻하는 것이 사라진다.
 
 내부 확인 조건 — claim 경로에서 mailbox 반환과 실행 queue 계상 사이에 record byte가 어느
-쪽에도 계상되지 않는 순간이 없고, permit을 들고 이관된 record가 실행 queue에서 용량 거절을
-받는 자리가 없다.
+쪽에도 계상되지 않는 순간이 없고, record가 용량을 이유로 거절당하는 자리가 없다.
 
 ## 9. 큰 payload와 운영값
 
@@ -405,13 +441,16 @@ pressure 상태 조회, socket receive-flow 절대 상태, [Runtime metric](../0
 
 - 80% pause, 60% resume과 경계 사이 hysteresis가 정확하다.
 - 새 socket 동기화, close 경쟁과 stale transition이 최신 절대 상태를 깨지 않는다.
-- RouteMesh ROUTER-ROUTER와 ClientServer DEALER-ROUTER socket에만 receive-flow state를 적용한다.
+- RouteMesh ROUTER-ROUTER socket과 ClientServer Server ROUTER에만 receive-flow state를
+  적용하고, ClientServer Client DEALER에는 어떤 상태도 적용하지 않는다.
+- Host가 `PAUSED`인 동안에도 Client가 보낸 request의 답이 Client에 도착한다.
 
 **Backpressure와 Core HWM**
 
 - 송신 공간을 기다리는 작업이 실행 권한을 쥐고 있지 않다.
-- 송신 대기 자리가 가득 차면 기다리지 않고 `DeadlineExceeded`로 끝낸다.
-- Owner structural reject와 shared-cap wait가 서로 다른 error·metric으로 관찰된다.
+- 송신 공간을 기다리다 시간이 다 되면 send·publish·one-way·request가 모두
+  `DeadlineExceeded`로 끝나고, 자리가 없다는 이유로 다른 오류를 받는 호출이 없다.
+- 실행 객체별 FIFO가 가득 차도 record를 거절하지 않고 자리가 날 때까지 기다린다.
 - 이미 완료된 호출 뒤의 실패(publish 시작 후 건너뜀, 완료된 send의 target 실패)는
   caller 결과를 바꾸지 않고 관측에만 남는다.
 - Core receive byte HWM이 찼을 때 sender까지 backpressure가 전달되며 record를 버리지

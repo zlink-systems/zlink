@@ -322,7 +322,7 @@ Session owner에 target route 적용과 seal 해제를 one-way로 알린다.
 |---|---|
 | 요청한 User Spot을 찾을 수 없다. | `NotFound` |
 | 이동할 수 있는 Entry Spot이나 호환 target node가 없다. | `Unavailable` |
-| Target node의 수용 가능량이 부족하다. | `CapacityExceeded` |
+| Target node가 더 받을 수 없다. | `Unavailable` |
 | Actor의 relocation policy가 cross-node 이동을 금지한다. | `Rejected` |
 | Deadline까지 위치 변경을 commit하지 못한다. | `DeadlineExceeded` |
 | Capture·factory·restore·staging이 내부 오류로 실패한다. | `InternalFailure` |

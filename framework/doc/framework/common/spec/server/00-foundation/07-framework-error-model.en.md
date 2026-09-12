@@ -33,19 +33,18 @@ convention. The value `0` is also a valid error value.
 | 3 | `NotConfigured` | The required role, handler, or Store isn't registered. |
 | 4 | `Rejected` | A Framework admission, filter, or runtime policy rejected the operation without producing a typed result. |
 | 5 | `Unavailable` | The target, route, Store, or worker is currently unavailable. |
-| 6 | `CapacityExceeded` | Placement, a queue, or a bounded resource has no room. |
-| 7 | [`DeadlineExceeded`](02-glossary.en.md#deadlineexceeded) | The operation did not complete within its set deadline. |
-| 8 | `ShuttingDown` | The runtime isn't accepting a new operation. |
-| 9 | `ProtocolError` | The wire, payload, or reply contract could not be processed. |
-| 10 | `InvalidOperation` | The operation can't run in the current object, session, or runtime state. |
-| 11 | `DataLost` | The published Relocation payload is missing or failed validation. |
-| 12 | `InternalFailure` | A Framework failure that can't be expressed by the categories above. |
+| 6 | [`DeadlineExceeded`](02-glossary.en.md#deadlineexceeded) | The operation did not complete within its set deadline. |
+| 7 | `ShuttingDown` | The runtime isn't accepting a new operation. |
+| 8 | `ProtocolError` | The wire, payload, or reply contract could not be processed. |
+| 9 | `InvalidOperation` | The operation can't run in the current object, session, or runtime state. |
+| 10 | `DataLost` | The published Relocation payload is missing or failed validation. |
+| 11 | `InternalFailure` | A Framework failure that can't be expressed by the categories above. |
 
 Generation, owner fence, moving phase, worker-queue state, and a Relocation processing step
 are internal causes. When an Application doesn't need to choose a separate response, they are
 recorded in logs and traces rather than exposed as a new public kind.
 
-The five server packages and the HTTP client package share these 13 kinds. A per-language
+The five server packages and the HTTP client package share these 12 kinds. A per-language
 interface document defines only the enum name and the exception/result representation — it
 does not add a kind or a retry boolean.
 
@@ -91,34 +90,31 @@ produced, it completes exactly once with one of the following `ErrorKind`s.
   above.
 
 <a id="bounded-queue-failure"></a>
-`CapacityExceeded` and `Unavailable` both indicate a resource shortage, but they point to
-different resources.
+**A full queue is not an error.** The work waits until room appears. The only way to slow
+what is coming in is the `PAUSED` state of
+[§6](../01-execution/04-application-job-queue-and-backpressure.en.md#6-pressure-state-and-socket-control).
 
-- **`CapacityExceeded` means the source couldn't secure a local bounded resource it owns.**
-  That resource is a slot to hold the reply, an operation-table entry, or a
-  Spot/Actor application or control queue within the same runtime — because the submitting side and the queue are in
-  the same process, the source owns it.
-- **`Unavailable` means the failure came from another node's queue being full.** A target's
-  queue state is not expressed as `CapacityExceeded`. The line between the two kinds is
-  whether this runtime owns the failed resource, and a caller uses this distinction to judge
-  what to retry.
-- **This distinction applies only to a queue.** When a target node's placement capacity is
-  insufficient, that's an admission decision, not a queue, so `CapacityExceeded` is correct
+- **Every queue is the same in this respect.** The Spot/Actor queues in the same runtime, the
+  worker queue, a slot to hold the reply, the in-progress call table and the completion slot
+  all behave this way. While waiting, the work still holds its host permit, so the number of
+  permits in use rises and `PAUSED` goes out at the threshold.
+- **Another node's queue is the same.** When the target falls behind, its `PAUSED` and Core's
+  byte limit slow this side's send. Errors are not split by who owns the queue.
+- **Having nowhere to place something is different.** If no node can host the Spot, slowing
+  down does not produce one. That case completes with `Unavailable`
   ([Spot Actor](../03-spot-actor/05-spot-actor-membership.en.md), [Spot address messaging](../03-spot-actor/06-spot-address-messaging.en.md)).
 - **The [Message Follow](02-glossary.en.md#message-follow) relay queue — the mechanism that
   forwards a message that arrives at the previous owner node, on behalf of the new owner,
   after a relocation — and the relocation ingress hold have no record-count or
   byte bound defined by relocation itself.**
   - The amount retained in this queue or hold does
-    not by itself produce `CapacityExceeded`.
+    not by itself produce an error.
   - The negotiated limit for one message and the
     limits set by transport, the deadline, and cancellation still apply.
   - Once retained work is
     admitted to an ordinary application execution lane, that lane's reservation applies, but
     this reservation is not used as a storage bound for the relay queue or hold.
-  - If one of
-    those limits causes a failure, the error follows the resource-owner rules above, based on
-    which runtime owns the failed resource
+  - If one of those limits causes a failure, the error follows the rules above
     ([Spot Actor](../03-spot-actor/05-spot-actor-membership.en.md), [Location runtime](../05-location-relocation/01-location-runtime.en.md)).
 
 Cancellation is delivered as that language's cancelled awaitable. `DeadlineExceeded` and
@@ -163,8 +159,8 @@ is a configuration error before socket bind.
 A runtime shared-cap shortage is a cancellable wait, not a public error, typed reject, or
 drop reason.
 
-Structural-limit failures of per-execution-object FIFOs are classified by resource ownership
-in [§5](#bounded-queue-failure), separately from shared-cap waiting.
+A per-execution-object FIFO behaves the same way. When it is full the work waits, as
+[§5](#bounded-queue-failure) defines, and does not end with an error.
 [Execution contract §7](../01-execution/02-handler-turn-and-execution-gate.en.md#execution-lanes) owns FIFO scope.
 
 ## 9. Verification Requirements
@@ -175,7 +171,7 @@ item below leads to one contract test.
 
 **`ErrorKind` values and count**
 
-- Each language's 13 `ErrorKind`s and numbers match.
+- Each language's 12 `ErrorKind`s and numbers match.
 
 **`Send` completion boundary**
 
@@ -189,9 +185,8 @@ item below leads to one contract test.
 
 **Bounded queue errors**
 
-- A Request that cannot secure a slot in the source runtime's bounded application/control queue receives `CapacityExceeded`.
-- A Request rejected because another node's bounded application/control queue is full receives `Unavailable`.
-- Insufficient target placement capacity is observed as `CapacityExceeded`, distinct from remote queue saturation.
+- No Request ends because a queue had no room, whether that queue is in the same runtime or on another node.
+- When no node can host the Spot, the call ends with `Unavailable`.
 
 **Typed `Rejected` distinction**
 

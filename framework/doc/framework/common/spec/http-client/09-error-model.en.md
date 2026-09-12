@@ -11,7 +11,7 @@ the Framework's common error.
 | --- | --- |
 | `ProtocolError` | Builder format, duplicate body source, typed decode, decompression, or redirect format is invalid. |
 | `Unavailable` | Network, DNS, proxy CONNECT, or target connection is currently unavailable. |
-| `CapacityExceeded` | Exceeded the configured response body byte limit. |
+| `Rejected` | Exceeded the configured response body byte limit. |
 | `DeadlineExceeded` | Exceeded the per-attempt timeout. |
 | `InternalFailure` | A typed submit's HTTP status is 400 or above, or an execution failure that can't be classified into the kinds above. |
 

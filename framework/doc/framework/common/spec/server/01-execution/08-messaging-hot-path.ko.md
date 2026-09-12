@@ -85,7 +85,7 @@ sequenceDiagram
     R->>B: E4 같은 turn에서 binding 비동기 operation 시작, pending 결과 반환
     B-->>R: (send) local admission 성공 — 즉시 또는 나중의 completion
     B->>R: (request) reply·error·timeout 알림 → terminal 권한 확정
-    R->>D: E5 확정된 결과를 예약한 dispatcher 자리에 전달
+    R->>D: E5 확정된 결과를 등록한 dispatcher 자리에 전달
     D->>C: 새 execution turn에서 caller continuation 실행
 ```
 
@@ -93,9 +93,9 @@ sequenceDiagram
 |---|---|---|---|
 | E1 encode | typed payload를 codec으로 wire part 목록으로 만든다. **wire 형식이 요구하는 자리 하나에 한 번 쓰는 것 외에 Framework가 복사를 더하지 않는다** — part 목록을 그대로 보내는 형식이면 합치지 않고, 하나의 frame으로 합쳐 보내는 service wire라면 전체 크기를 먼저 구해 그 크기의 buffer 하나를 잡고 각 part를 거기에 한 번 쓴다. 중간 byte 배열을 거쳐 되돌아오거나(`message → byte[] → message`), 같은 payload를 표현 두 벌로 동시에 들고 있거나, 결과를 다시 감싸며 또 복사하는 것은 위반이다. | caller | Framework가 **추가하는** 전체 복사가 0이다 — wire 형식이 요구하는 한 번의 쓰기는 이 수에 넣지 않는다([Payload ownership 「2」](05-payload-ownership-and-codec.ko.md#2-없앨-수-있는-복사)). |
 | E2 resolve | 변경 시점에 미리 준비된 후보 목록과 선택 순서에서 target 하나를 고른다. 후보 교체와 선택은 selector 소유자의 state lane에서 하나의 순서로 확정한다 — 선택 상태(후보 목록·누적값·cursor)의 소유, 그 순서를 만드는 방법, 주기 탐색 한도에 닿았을 때 선택 절차를 그대로 수행하는 대체 경로는 [Channel messaging 「후보 목록과 선택 순서는 변경 시점에 미리 준비한다」](../02-channel-transport/02-channel-messaging.ko.md#후보-목록과-선택-순서는-변경-시점에-미리-준비한다)가 소유한다. 준비된 선택 순서의 정상 경로는 target 조회와 cursor 진행만 수행하며, 그를 위해 topology·liveness·port 소유자의 lane에 **추가** turn을 요청해 결과를 기다리지 않는다. 이 문서가 요구하는 것은 선택이 selector 소유자의 turn 하나 안에서 상수 시간에 끝난다는 것이다 — caller가 그 lane 위에 있지 않으면 그 turn으로의 전환 1회가 정상 경로에 포함된다. | selector 소유자의 turn | 요청마다 peer 목록을 훑거나 필터링·정렬을 다시 하지 않고, 다른 소유자의 lane을 기다리지 않는다. |
-| E3 register | terminal 완료가 나중에 도착할 수 있는 모든 operation — request와 send 둘 다 — 에 대해 pending entry와 completion dispatcher 자리를 등록한다. request는 [Submit과 완료 「10」](01-submit-and-completion.ko.md#10-operation-identity와-완료-자리-구현)대로 `OperationId`·`ReplyRouteId`와 reply route도 함께 등록한다. 자리가 없으면 `CapacityExceeded`로 거부한다. 등록·capacity 판정·close는 같은 operation 소유자가 직렬화한다. Terminal 권한의 경쟁 규칙은 [Submit과 완료 「10」](01-submit-and-completion.ko.md#10-operation-identity와-완료-자리-구현)의 원자적 꺼내기가 소유하며, 이 문서는 그 꺼내기가 완료 알림을 받은 자리에서 이뤄지고 소유 turn으로의 추가 왕복을 만들지 않는다는 것만 정한다(E5). 등록은 transport submit 전에 완료하고([상태 소유와 state lane 「반환 전 완료 보장」](06-state-ownership-and-lanes.ko.md#반환-전-완료-보장)), dispatcher 예약은 callback 반환까지 유지한다. 필수 소유 turn 외에 별도 등록 queue나 추가 lane 왕복을 만들지 않는다. pending entry와 dispatcher 예약의 상태 분류와 수명은 [Submit과 완료 「11」](01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현)과 [상태 소유와 state lane 「4」](06-state-ownership-and-lanes.ko.md#4-상태-분류와-판별-기준)이 정한다. 이 문서가 요구하는 것은 등록이 operation 소유자의 turn 하나 안에서 상수 시간에 끝난다는 것이다. | operation 소유자의 turn | 등록보다 완료가 먼저 처리되지 않으며, 별도 timer 객체를 요청마다 만들지 않는다 — deadline은 entry의 값이고 만료 검사는 §4.2의 관리 작업이나 timer wheel이 한다. |
+| E3 register | terminal 완료가 나중에 도착할 수 있는 모든 operation — request와 send 둘 다 — 에 대해 pending entry와 completion dispatcher 자리를 등록한다. request는 [Submit과 완료 「10」](01-submit-and-completion.ko.md#10-operation-identity와-완료-자리-구현)대로 `OperationId`·`ReplyRouteId`와 reply route도 함께 등록한다. 등록은 자리가 없어 실패하지 않으며([Submit과 완료 「11」](01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현)), 등록과 close를 같은 operation 소유자가 직렬화한다. Terminal 권한의 경쟁 규칙은 [Submit과 완료 「10」](01-submit-and-completion.ko.md#10-operation-identity와-완료-자리-구현)의 원자적 꺼내기가 소유하며, 이 문서는 그 꺼내기가 완료 알림을 받은 자리에서 이뤄지고 소유 turn으로의 추가 왕복을 만들지 않는다는 것만 정한다(E5). 등록은 transport submit 전에 완료하고([상태 소유와 state lane 「반환 전 완료 보장」](06-state-ownership-and-lanes.ko.md#반환-전-완료-보장)), 등록한 자리는 callback 반환까지 유지한다. 필수 소유 turn 외에 별도 등록 queue나 추가 lane 왕복을 만들지 않는다. pending entry와 등록한 dispatcher 자리의 상태 분류와 수명은 [Submit과 완료 「11」](01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현)과 [상태 소유와 state lane 「4」](06-state-ownership-and-lanes.ko.md#4-상태-분류와-판별-기준)이 정한다. 이 문서가 요구하는 것은 등록이 operation 소유자의 turn 하나 안에서 상수 시간에 끝난다는 것이다. | operation 소유자의 turn | 등록보다 완료가 먼저 처리되지 않으며, 별도 timer 객체를 요청마다 만들지 않는다 — deadline은 entry의 값이고 만료 검사는 §4.2의 관리 작업이나 timer wheel이 한다. |
 | E4 submit | binding의 비동기 request·send operation을 **한 번** 시작하고 결과 객체(`result`와 `admitted`, request는 `reply`)를 돌려받는다. Framework는 `result`로 즉시 판정하고 `result == BACKPRESSURED`일 때만 `admitted`를 소비한다(§15). E3의 등록을 확정한 그 turn 안에서 이어서 시작하며, caller는 제출의 반환을 관찰하기 전에 등록이 끝나 있음을 믿어도 된다. Framework는 자기 send queue를 두지 않는다. | E3와 같은 turn | operation이 시작된 뒤의 HWM 대기와 재시도는 Core·binding이 소유하며([Submit과 완료 「5」](01-submit-and-completion.ko.md#5-backpressure와-오류-분류)), Framework는 두 번째 operation을 만들지 않는다. 결과 객체 할당 1회가 추가될 뿐 실행 자원 전환(hop) 수는 바뀌지 않는다. |
-| E5 complete | binding의 완료 알림(reply·error·timeout·local admission)을 받은 자리에서 [Submit과 완료 「10」](01-submit-and-completion.ko.md#10-operation-identity와-완료-자리-구현)의 원자적 꺼내기로 terminal 권한을 한 번 확정하고, 결과를 E3에서 예약한 dispatcher 자리에 전달한다. caller continuation은 현재 완료 처리와 lane-current scope가 끝난 뒤 **새 execution turn**에서 실행한다([Submit과 완료 「11」](01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현)). | binding 완료 알림 자원 → completion dispatcher | Framework가 만드는 실행 자원 전환은 dispatcher의 새 turn **하나**다. 완료 알림과 dispatcher 사이에 host mailbox·dispatch thread를 추가로 거치지 않는다. |
+| E5 complete | binding의 완료 알림(reply·error·timeout·local admission)을 받은 자리에서 [Submit과 완료 「10」](01-submit-and-completion.ko.md#10-operation-identity와-완료-자리-구현)의 원자적 꺼내기로 terminal 권한을 한 번 확정하고, 결과를 E3에서 등록한 dispatcher 자리에 전달한다. caller continuation은 현재 완료 처리와 lane-current scope가 끝난 뒤 **새 execution turn**에서 실행한다([Submit과 완료 「11」](01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현)). | binding 완료 알림 자원 → completion dispatcher | Framework가 만드는 실행 자원 전환은 dispatcher의 새 turn **하나**다. 완료 알림과 dispatcher 사이에 host mailbox·dispatch thread를 추가로 거치지 않는다. |
 
 **Source 경로의 실행 자원 전환은 두 구간에서 따로 센다.** 실행 자원 전환이란 message나 그 완료가 queue에
 들어갔다가 다른 thread·task·event loop 회전에서 꺼내지는 지점이다. 제출 구간 — caller의 호출부터 E4의
@@ -116,7 +116,7 @@ pending이면 나중의 completion이 같은 E5 경로를 탄다. 어느 경우�
 gate를 다시 얻은 뒤 실행되며, 그 재획득은 이 전환 수에 포함되지 않는다.
 
 **E2와 E3가 만지는 상태의 분류와 보호 방법은 이 문서가 정하지 않는다** — 선택 상태는 Channel messaging이,
-pending entry와 dispatcher 예약은 Submit과 완료 「10」·「11」이, 분류 기준은
+pending entry와 등록한 dispatcher 자리는 Submit과 완료 「10」·「11」이, 분류 기준은
 [상태 소유와 state lane 「4」](06-state-ownership-and-lanes.ko.md#4-상태-분류와-판별-기준)이 소유한다. 이 문서가
 정하는 것은 그 보호가 제출 경로에서 취하는 **모양**이다: 컴포넌트 상태를 직렬화하는 실행 단위인
 [state lane](../00-foundation/02-glossary.ko.md#state-lane)의 turn에 들어가는 것은 필수 소유 turn
@@ -125,7 +125,7 @@ turn을 요청해 결과를 기다리지 않으며, 각 단계는 자기 turn �
 topology·liveness·port의 lane을 차례로 기다리는 구현은 이 문서 위반이다.
 
 **Binding에 넘기기 전의 Framework capacity 대기**는 [Submit과 완료 「5」](01-submit-and-completion.ko.md#5-backpressure와-오류-분류)와
-[Application job queue 「8」](04-application-job-queue-and-backpressure.ko.md#8-backpressure-3단계와-한도-종류)을
+[Application job queue 「8」](04-application-job-queue-and-backpressure.ko.md#8-보낼-때의-대기)을
 따른다. 내부 상태인 `Backpressured` 자체는 public terminal 결과가 아니지만, deadline·capacity·shutdown 오류는
 그 문서들이 정한 대로 caller에게 돌아간다.
 

@@ -35,7 +35,7 @@ application·lifecycle FIFO 분류와 다른 축이다. 두 FIFO의 user callbac
 자체를 분리한다. 서로 다른 목적의 한도(Core byte HWM, application callback 시작 전까지
 보유하는 공유 supply permit queue인
 [Application job queue](../00-foundation/02-glossary.ko.md#application-job-queue), owner별
-count·byte queue, outbound admission waiter)는 이 분리에서도 합치지 않는다 — 같은 profile
+count·byte queue)는 이 분리에서도 합치지 않는다 — 같은 profile
 label이나 단위를 쓰더라도 type·계산·error 의미를 공유하지 않는다.
 
 Queue는 대기 중인 payload를 구별하고, gate는 실행 중인 callback의 상태 접근을 직렬화한다.
@@ -268,7 +268,7 @@ Actor Join은 [01. Submit과 완료](01-submit-and-completion.ko.md)의 terminat
 **대기열이 가득 찼을 때 그 자리에서 실행하지 않는다.** 제출 실패 대신 그 자리에서 바로
 실행하면 이미 실행 중인 작업과 동시에 실행되어 직렬 실행이라는 전제 자체가 무너진다.
 결과는 queue admission 방식과 오류 분류를 나누어 참조한다.
-Send·one-way·publish의 대기는 [Backpressure §8](04-application-job-queue-and-backpressure.ko.md#8-backpressure-3단계와-한도-종류),
+송신 대기는 [Backpressure §8](04-application-job-queue-and-backpressure.ko.md#8-보낼-때의-대기),
 Spot control claim의 제출 경계는 [Spot 메시징 §5.3](../03-spot-actor/02-spot-messaging.ko.md#53-spot-application-queue에-들어가는-작업),
 local·remote bounded resource의 오류 선택은 [Framework 오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#5-request-완료와-실패)가 소유한다.
 송신 HWM 대기와 binding completion의 경계는 [Backpressure §7](04-application-job-queue-and-backpressure.ko.md#7-send-completion과의-합성)을 따른다.

@@ -489,7 +489,7 @@ limit, and the default for pending activation concurrency is 128. If a
 per-type limit is `null`, it shares the node limit; if it has a value, it
 must be 1..`int.MaxValue`, and a value smaller than the node limit
 applies. Capacity is applied before weight, and if there's no eligible
-node, it's `CapacityExceeded`.
+node, it's `Unavailable`.
 
 `SetInstanceSpotIdleTimeout(...)` is the reference time for cleaning up
 an idle Instance Spot. The default is `TimeSpan.Zero`, and

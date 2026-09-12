@@ -143,7 +143,7 @@ callback 없이 `existing`으로 반환한다. Creating이면 authority 변경�
 `creation-operation-terminal-v1` envelope를 읽고 현재 correlation·reply route로 reply를
 다시 encode한다. Terminal은 original deadline 뒤 5분 동안 유지한다. Callback exception은 `rejected`가 아니라
 typed creation failure다. 전체 deadline이
-끝나면 `DeadlineExceeded`, capacity가 없으면 `CapacityExceeded`다. ActorRef의 object generation이
+끝나면 `DeadlineExceeded`, 둘 수 있는 node가 없으면 `Unavailable`이다. ActorRef의 object generation이
 current와 다른 lifecycle operation은 `InvalidOperation`, 이동 중에는 `Unavailable`이다.
 
 Actor create는 선택한 owner MeshNode의 Entry Spot membership과 Ready barrier를 같은 lifecycle에서 완료한다.

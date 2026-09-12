@@ -14,7 +14,7 @@ The `compression()` opt-in contract:
   leading byte).
 - **Also enforces `maxResponseBodySize` on the size after
   decompression** (compression-bomb defense). Exceeding it is
-  `CapacityExceeded`.
+  `Rejected`.
 - A corrupted compressed body is `ProtocolError`.
 - **Decompression doesn't apply to streaming download** — the sink
   receives the raw (compressed) bytes
