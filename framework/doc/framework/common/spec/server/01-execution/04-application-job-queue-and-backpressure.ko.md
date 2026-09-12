@@ -305,7 +305,7 @@ resume count 이하이면 `running`으로 전이한다. 두 경계 사이에서�
   | RouteMesh ROUTER-ROUTER | 다른 node가 보낸다 | **건다** |
   | ClientServer Server ROUTER | Client가 보낸다 | **건다** |
   | ClientServer Client DEALER | 오지 않는다. 자기가 보낸 호출의 답만 온다 | **걸지 않는다** |
-  | PUB/SUB, Classic fanout, STREAM | — | **걸지 않는다.** 기존 Core byte HWM과 각 구조적 queue 상한을 유지한다 |
+  | PUB/SUB, Classic fanout, STREAM | — | **걸지 않는다.** 이 전송 방식은 Core byte HWM이 그대로 제어한다 |
 
   Client DEALER에 걸지 않는 이유는 둘이다. 거기서 막히는 것은 상대의 요청이 아니라 자기가
   기다리는 답이고, Server는 애초에 Client에게 요청을 보내지 않으므로 멈추라고 알릴 내용이

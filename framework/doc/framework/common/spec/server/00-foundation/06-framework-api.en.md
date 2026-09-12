@@ -463,7 +463,7 @@ auto-copy request metadata.
 ## 8. Logical Multicast Completion
 
 The MeshNode and Spot publish APIs don't provide a publish-only delivery-policy option.
-Framework's bounded I/O executor admits a publish operation up to the send timeout. If it
+Framework's I/O executor admits a publish operation up to the send timeout. If it
 can't start before the timeout, it completes with whichever is confirmed first — the Framework
 exception raised when an operation's allowed deadline passes before its completion condition is
 met, [`DeadlineExceeded`](02-glossary.en.md#deadlineexceeded), cancellation, or `ShuttingDown`.
@@ -1029,7 +1029,7 @@ location store.
 
 ## 19. Error Kinds
 
-Per-language exceptions and error objects use 13 common `ErrorKind` values. A retry flag
+Per-language exceptions and error objects use 12 common `ErrorKind` values. A retry flag
 isn't added to a public error. The precise kinds and numbers, `Send`/`Request` completion
 conditions, and the distinction between a typed `Rejected` result and an exception are
 defined by the [Framework Error Model](07-framework-error-model.en.md).

@@ -24,7 +24,7 @@ currently processes a global Spot or Actor is called
 | [node direct](02-glossary.en.md#node-direct) request | The caller directly specifies one RID belonging to the same MeshName. | Completes with one of reply, timeout, or route error. |
 | channel send | The framework selects one ready target from the [RouteMesh](02-glossary.en.md#routemesh) — a scope in which multiple MeshNodes participate and exchange node and Channel messages — or ClientServer send paths registered under [ChannelName](02-glossary.en.md#channelname) — a name identifying the Channel scope a message is sent to. | Completes with no return data once the selected send path's source-local queue accepts it. |
 | channel request | The framework selects one [ready target](02-glossary.en.md#ready-target) from the [RouteMesh](02-glossary.en.md#routemesh) or ClientServer send paths registered under `ChannelName`. | Completes with one of reply, timeout, or route error. |
-| [Logical Multicast](02-glossary.en.md#logical-multicast) | The framework selects matching targets among `ChannelName`'s remote members and local Spots. | Completes with no return data once it secures a bounded worker and source-local capacity and starts the publish transaction. Doesn't wait for per-target submission or handler completion. |
+| [Logical Multicast](02-glossary.en.md#logical-multicast) | The framework selects matching targets among `ChannelName`'s remote members and local Spots. | Completes with no return data once it starts the publish transaction. Doesn't wait for per-target submission or handler completion. |
 | Spot message | The caller specifies a global [Spot ID](02-glossary.en.md#spot-id) — a globally unique logical address identifying a Spot — and the framework finds the [owner](02-glossary.en.md#owner) of the current [Ready](02-glossary.en.md#ready) — the state where a Spot can receive application messages — [authority](02-glossary.en.md#authority). | Send completes with no return data after source-local queue acceptance; request completes with the reply result. |
 | Actor message | The caller specifies a global Actor ID and the framework finds the current [Ready](02-glossary.en.md#ready) authority's owner. | Send completes with no return data after source-local queue acceptance; request completes with the reply result. |
 | Object create/get-or-create | The caller specifies a global ID and stable type, adding placement intent if needed. | Returns an `ActorRef`/`SpotRef` pointing at the created object, or a typed creation error. |
@@ -295,7 +295,7 @@ matches.
 ```mermaid
 sequenceDiagram
     participant App as Application
-    participant Exec as Bounded I/O executor
+    participant Exec as I/O executor
     participant Rem as Remote MeshNode
     participant Loc as Local Spot queue (same node)
 
@@ -322,9 +322,9 @@ sequenceDiagram
   doesn't stop processing of remaining targets. An earlier-accepted remote
   target or local Spot queue isn't canceled because a later target failed.
 - **It completes normally even if the snapshot has 0 targets.** Remote
-  unreachability, insufficient outbound capacity, and local Spot queue drops
-  occurring after the transaction starts don't roll back already-accepted
-  targets or retry the whole publish. Per-target accept/failure results
+  unreachability after the transaction starts, and waiting for room in a local
+  Spot queue, don't roll back already-accepted targets or retry the whole
+  publish. Per-target accept/failure results
   aren't returned as a public result or aggregated into publish-only
   monitoring values.
 - **Publish's normal completion means the transaction started.** It doesn't

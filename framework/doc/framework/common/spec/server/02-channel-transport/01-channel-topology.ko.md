@@ -595,7 +595,7 @@ Drain을 시작한 MeshNode는 새로운 ChannelName 선택과 Logical Multicast
 제외한다. 이미 제출한 작업과 RID direct의 종료 규칙은
 [Graceful drain](../05-location-relocation/05-host-relocation-flow.ko.md)이 정의한다.
 
-## 11. RouteMesh SS message 크기와 mailbox 상한
+## 11. RouteMesh SS message 크기
 
 RouteMesh MeshNode의 startup 설정에는 Framework-level
 [MaxMessageSize](../00-foundation/02-glossary.ko.md#maxmessagesize)(Listener가 받을 수 있는

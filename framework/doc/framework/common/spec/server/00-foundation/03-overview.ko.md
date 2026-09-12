@@ -128,7 +128,7 @@ Framework는 메시지를 실제 상태를 소유하는 실행 단위로 전달�
 | [STREAM session](02-glossary.ko.md#stream-session) — STREAM 연결 하나를 수락한 때부터 닫을 때까지 유지하는 서버 실행 단위 | 연결 lifecycle, packet dispatch와 Actor binding ingress |
 
 - **Spot과 Actor message를 Node handler에서 다시 분배하도록 application에 요구하지 않는다.**
-  Framework service runtime이 owner별 bounded mailbox를 drain해 등록된 handler 실행 문맥으로
+  Framework service runtime이 owner별 mailbox를 drain해 등록된 handler 실행 문맥으로
   직접 연결하기 때문이다.
 - **transport readiness와 service protocol frame은 application callback에 노출하지 않는다.**
   application이 owner별 실행 상태만으로 처리를 이어갈 수 있게 하기 위해서다.

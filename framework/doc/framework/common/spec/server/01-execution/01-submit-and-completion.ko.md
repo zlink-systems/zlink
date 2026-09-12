@@ -200,7 +200,7 @@ Binding operation이 시작되면 선택한 target이 확정된다. Core가 HWM 
 
 - Operation을 시작할 때 target snapshot을 고정하고 각 target을 한 번씩 시도한다.
 - Operation 자체를 local executor에 제출하지 못하면 send timeout까지 기다린다.
-- Bounded worker와 source-local capacity를 확보해 transaction이 시작되면 public
+- Source-local 자리를 확보해 transaction이 시작되면 public
   terminal은 반환 데이터 없이 정상 완료하고 target별 제출은 내부에서 계속한다.
 - 시작된 뒤 개별 target 실패는 전체 publish를 rollback하거나 exceptional completion으로
   바꾸지 않는다.

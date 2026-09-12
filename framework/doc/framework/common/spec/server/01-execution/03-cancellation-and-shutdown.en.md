@@ -70,15 +70,15 @@ The rules for a call that arrives already pre-cancelled are:
 - Cancellation of [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast) —
   delivering one message by ChannelName and topic to multiple
   [Spot](../00-foundation/02-glossary.en.md#spot) instances, each a logical instance with an
-  address and state, in the same Channel — follows the bounded I/O executor submission and
+  address and state, in the same Channel — follows the I/O executor submission and
   commit boundary in §4 below.
 
 
 ## 4. Logical Multicast Cancellation
 
-The rules for Logical Multicast cancellation's bounded I/O executor
+The rules for Logical Multicast cancellation's I/O executor
 submission and commit boundary are as follows. The Framework service runtime
-submits the publish operation to a [bounded I/O
+submits the publish operation to a [I/O
 executor](../00-foundation/04-interaction-model.en.md#5-spot-logical-multicast),
 and that executor starts the publish transaction once it has secured a
 worker slot.

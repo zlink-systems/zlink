@@ -401,7 +401,7 @@ metadata를 자동 복사하지 않는다.
 
 ## 8. Logical Multicast 완료
 
-MeshNode와 Spot publish API는 publish 전용 전달 정책 option을 제공하지 않는다. Framework의 bounded I/O
+MeshNode와 Spot publish API는 publish 전용 전달 정책 option을 제공하지 않는다. Framework의 I/O
 executor는 publish operation의 admission을 send timeout까지 기다린다. Timeout 전에 시작하지 못하면,
 operation에 허용된 deadline까지 완료 조건을 만족하지 못했을 때 발생하는 Framework exception인
 [`DeadlineExceeded`](02-glossary.ko.md#deadlineexceeded), cancellation 또는 `ShuttingDown` 중
@@ -898,7 +898,7 @@ Actor egress는 bound session FIFO를 사용한다. Actor dispatch capability를
 
 ## 19. 오류 kind
 
-언어별 exception과 error object는 공통 13개 `ErrorKind`를 사용한다. Public 오류에는 재시도 여부를
+언어별 exception과 error object는 공통 12개 `ErrorKind`를 사용한다. Public 오류에는 재시도 여부를
 추가하지 않는다. 정확한 kind와 숫자, `Send`·`Request` 완료 조건, typed `Rejected` 결과와 exception의
 구분은 [Framework 오류 모델](07-framework-error-model.ko.md)이 정의한다.
 

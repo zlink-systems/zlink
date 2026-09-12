@@ -22,7 +22,7 @@ Location Store가 global Spot이나 Actor를
 | [node direct](02-glossary.ko.md#node-direct) request | Caller가 같은 MeshName에 속한 RID 하나를 직접 지정한다. | Reply, timeout 또는 route 오류 가운데 하나로 완료한다. |
 | channel send | Framework가 [ChannelName](02-glossary.ko.md#channelname) — message를 보낼 Channel 범위를 식별하는 이름 — 에 등록된 [RouteMesh](02-glossary.ko.md#routemesh) — 여러 MeshNode가 참여해 node와 Channel message를 주고받는 범위 — 또는 ClientServer 송신 경로에서 ready target 하나를 선택한다. | 선택한 송신 경로의 source-local queue가 수락하면 반환 데이터 없이 완료한다. |
 | channel request | Framework가 `ChannelName`에 등록된 RouteMesh 또는 ClientServer 송신 경로에서 [ready target](02-glossary.ko.md#ready-target) 하나를 선택한다. | Reply, timeout 또는 route 오류 가운데 하나로 완료한다. |
-| Logical Multicast | Framework가 `ChannelName`의 remote member와 local Spot 중에서 조건에 맞는 대상을 선택한다. | Bounded worker와 source-local capacity를 확보해 publish transaction을 시작하면 반환 데이터 없이 완료한다. Target별 제출과 handler 완료를 기다리지 않는다. |
+| Logical Multicast | Framework가 `ChannelName`의 remote member와 local Spot 중에서 조건에 맞는 대상을 선택한다. | publish transaction을 시작하면 반환 데이터 없이 완료한다. Target별 제출과 handler 완료를 기다리지 않는다. |
 | Spot message | Caller가 global [Spot ID](02-glossary.ko.md#spot-id) — Spot을 식별하는 전역 논리 주소 — 를 지정하고 Framework가 current [Ready](02-glossary.ko.md#ready) — Spot이 message를 받을 수 있는 상태 — [authority](02-glossary.ko.md#authority)의 [owner](02-glossary.ko.md#owner)를 찾는다. | Send는 source-local queue 수락 뒤 반환 데이터 없이, request는 reply 결과로 완료한다. |
 | Actor message | Caller가 global Actor ID를 지정하고 Framework가 current [Ready](02-glossary.ko.md#ready) authority의 owner를 찾는다. | Send는 source-local queue 수락 뒤 반환 데이터 없이, request는 reply 결과로 완료한다. |
 | Object create·get-or-create | Caller가 global ID와 stable type을 지정하고 필요하면 placement intent를 추가한다. | 생성한 object를 가리키는 `ActorRef`·`SpotRef` 또는 typed creation 오류를 반환한다. |
@@ -258,7 +258,7 @@ match를 snapshot한다.
 ```mermaid
 sequenceDiagram
     participant App as Application
-    participant Exec as Bounded I/O executor
+    participant Exec as I/O executor
     participant Rem as Remote MeshNode
     participant Loc as Local Spot queue(같은 node)
 
@@ -274,7 +274,7 @@ sequenceDiagram
     end
 ```
 
-- **Framework service runtime은 bounded I/O executor에 publish transaction을 제출한다.** Send
+- **Framework service runtime은 I/O executor에 publish transaction을 제출한다.** Send
   timeout까지 worker slot을 확보하지 못하면 transaction을 시작하지 않고
   `DeadlineExceeded`로 실패한다. Handoff에 성공해 transaction이 시작되면 public terminal은
   반환 데이터 없이 정상 완료하고, runtime은 각 remote target과 local Spot queue의 제출을
@@ -283,8 +283,8 @@ sequenceDiagram
   Cancellation이나 shutdown으로 남은 target 제출을 중단하지 않는다. 앞에서 수락된 remote
   target과 local Spot queue는 뒤 target의 실패 때문에 취소되지 않는다.
 - **Snapshot target이 모두 0이어도 정상 완료한다.** Transaction이 시작된 뒤 발생한 remote
-  연결 불가, outbound capacity 부족과 local Spot queue drop은 이미 수락된 target을 rollback하거나
-  전체 publish를 다시 시도하지 않는다. Target별 수락·실패 결과는 public 결과로 반환하거나 publish
+  연결 불가와 local Spot queue 대기는 이미 수락된 target을 rollback하거나 전체 publish를 다시
+  시도하지 않는다. Target별 수락·실패 결과는 public 결과로 반환하거나 publish
   전용 monitoring 값으로 집계하지 않는다.
 - **Publish 정상 완료는 transaction을 시작했다는 뜻이다.** 고정한 snapshot의 target 제출,
   Spot handler 실행, subscriber 수신 또는 remote ROUTER가 수락한 뒤 수신 MeshNode의 local

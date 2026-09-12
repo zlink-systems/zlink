@@ -395,7 +395,7 @@ default, and `0`, a negative value, a non-integer value, and exceeding
 the cap are rejected with `ZLinkConfigurationError`.
 
 [Logical Multicast](../../../00-foundation/02-glossary.en.md#logical-multicast)'s
-`ZLinkPublishCall.submit(...)` does a direct handoff to a bounded I/O
+`ZLinkPublishCall.submit(...)` does a direct handoff to a I/O
 executor. If a worker slot isn't obtained immediately, it waits for
 capacity up to the send timeout. After obtaining the slot but before the
 publish attempt starts, abort and

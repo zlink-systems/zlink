@@ -345,7 +345,7 @@ local·remote Actor route가 바뀌어도 framework socket send timeout 하나�
 `ZLinkConfigurationError`로 거부한다.
 
 [Logical Multicast](../../../00-foundation/02-glossary.ko.md#logical-multicast)의
-`ZLinkPublishCall.submit(...)`은 bounded I/O executor에 direct handoff한다. 즉시 worker slot을 얻지 못하면
+`ZLinkPublishCall.submit(...)`은 I/O executor에 direct handoff한다. 즉시 worker slot을 얻지 못하면
 send timeout까지 capacity를 기다린다. Slot을 얻은 뒤 publish attempt가 시작되기 전에는 abort와
 [shutdown](../../../00-foundation/02-glossary.ko.md#shutdown)이 operation 시작을 막을 수 있다. Publish attempt를 시작한
 시점이 operation commit barrier이며, 그 뒤의 abort는 이미 확정한

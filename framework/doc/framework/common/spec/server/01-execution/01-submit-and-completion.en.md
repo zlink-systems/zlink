@@ -218,7 +218,7 @@ There is no automatic resubmission after completion.
   once.
 - If the operation itself cannot be submitted to the local executor, it waits up to the send
   timeout.
-- Once the bounded worker and source-local capacity have been secured to start the
+- Once the source-local room has been secured to start the
   transaction, the public terminal completes normally with no return data, and per-target
   submission continues internally.
 - Once started, an individual target's failure does not roll back the whole publish or turn

@@ -347,7 +347,7 @@ the resume count. Between the two thresholds, the current state is retained.
   | RouteMesh ROUTER-ROUTER | Another node sends them | **Yes** |
   | ClientServer Server ROUTER | The Client sends them | **Yes** |
   | ClientServer Client DEALER | No. Only replies to calls it sent itself | **No** |
-  | PUB/SUB, Classic fanout, STREAM | — | **No.** They retain their existing Core byte HWM and structural queue limits |
+  | PUB/SUB, Classic fanout, STREAM | — | **No.** Core's byte HWM controls these transports as before |
 
   There are two reasons not to apply it to a Client DEALER. What it would hold back is not
   anyone's request but the reply this host is waiting for, and the Server never sends the

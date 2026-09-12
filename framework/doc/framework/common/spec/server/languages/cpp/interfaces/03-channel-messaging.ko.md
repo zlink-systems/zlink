@@ -1058,7 +1058,7 @@ millisecond로 올린다. 만료되면 `deadline_exceeded`로 terminal-once 완�
 범위만 허용한다. `0`, 음수와 상한 초과는 설정 시점 또는 늦어도 startup에서 configuration error로
 거부하며 기본값으로 바꾸지 않는다.
 
-Logical Multicast의 `publish_call_t::async()`은 bounded I/O executor에 direct handoff한다. 즉시 worker slot을
+Logical Multicast의 `publish_call_t::async()`은 I/O executor에 direct handoff한다. 즉시 worker slot을
 얻지 못하면 send timeout까지 capacity를 기다린다. Slot을 얻으면 raw binding publish를 정확히 한 번 호출한다.
 이 call이 시작된 시점이 operation commit barrier다. Transaction이 시작된 뒤 개별 target 실패는 이미 수락한
 target을 rollback하거나 전체 publish를 자동 재시도하지 않는다. Remote transport와 local Spot queue의

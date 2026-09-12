@@ -144,7 +144,7 @@ owns the per-execution-object FIFO scope.
 
 - **An application is not required to redistribute a Spot or Actor
   message from a Node handler.** This is because the Framework service
-  runtime drains the per-owner bounded mailbox and connects it directly
+  runtime drains the per-owner mailbox and connects it directly
   to the registered handler's execution context.
 - **Transport readiness and the service protocol frame are not exposed
   to an application callback.** This is so an application can continue

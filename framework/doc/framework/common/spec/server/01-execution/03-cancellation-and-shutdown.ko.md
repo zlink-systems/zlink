@@ -69,13 +69,13 @@ Call이 pre-cancelled 상태로 도착했을 때의 규칙은 다음과 같다.
   [Spot](../00-foundation/02-glossary.ko.md#spot) — 주소와 상태를 가진 논리 instance —
   에 message 하나를 전달하는 방식인
   [Logical Multicast](../00-foundation/02-glossary.ko.md#logical-multicast) cancellation은 아래
-  §4의 bounded I/O executor 제출과 commit 경계를 따른다.
+  §4의 I/O executor 제출과 commit 경계를 따른다.
 
 
 ## 4. Logical Multicast cancellation
 
-Logical Multicast cancellation의 bounded I/O executor 제출과 commit 경계 규칙은 다음과
-같다. Framework service runtime은 publish operation을 [bounded I/O
+Logical Multicast cancellation의 I/O executor 제출과 commit 경계 규칙은 다음과
+같다. Framework service runtime은 publish operation을 [I/O
 executor](../00-foundation/04-interaction-model.ko.md#5-spot-logical-multicast)에
 제출하며, 이 executor가 worker slot을 확보해 publish transaction을 시작한다.
 

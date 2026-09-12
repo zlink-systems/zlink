@@ -646,7 +646,7 @@ A draining MeshNode is excluded from new ChannelName selection and Logical Multi
 remote targets. The termination rule for already-submitted work and RID direct is
 defined by [Graceful drain](../05-location-relocation/05-host-relocation-flow.en.md).
 
-## 11. RouteMesh SS Message Size and Mailbox Ceiling
+## 11. RouteMesh SS Message Size
 
 A RouteMesh MeshNode has no Framework-level
 [MaxMessageSize](../00-foundation/02-glossary.en.md#maxmessagesize) startup setting — the byte

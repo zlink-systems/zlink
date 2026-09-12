@@ -1215,7 +1215,7 @@ exceeding the bound are rejected as a configuration error at setting
 time or, at latest, at startup, and aren't switched to the default.
 
 Logical Multicast's `publish_call_t::async()` does a direct handoff to
-a bounded I/O executor. If a worker slot isn't obtained immediately, it
+a I/O executor. If a worker slot isn't obtained immediately, it
 waits for capacity up to the send timeout. Once a slot is obtained, it
 calls the raw binding publish exactly once. The point this call starts
 is the operation commit barrier. After the transaction starts, an
