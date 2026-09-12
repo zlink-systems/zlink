@@ -47,16 +47,35 @@ the judgement pattern, evaluated separately at 1024 and 4096 bytes.
 
 ## 4. New Baseline Status
 
-| Language | Framework path | Patterns | Baseline values |
+The baseline was remeasured at five runs per language on 2026-09-12, after the
+single-counter backpressure change. `tools/bench_aggregate.py` owns the aggregation
+and the verdict — medians, G5 reproducibility, the §7.2 ratios, and **whether a ratio
+may be published at all**.
+
+| Language | Five runs | `request-backpressure` verdict | Status |
 |---|---|---|---|
-| Java | Direct RID | Three | Round 1 implementation complete; awaiting the new joint baseline run |
-| .NET | Direct RID | Three | Smoke validated; awaiting three-run measurement |
-| C++ | Direct RID | Three | Smoke validated; awaiting three-run measurement |
-| Node.js | Direct RID with schema protobuf serializer | Three | Smoke validated; awaiting three-run measurement |
+| Java | Complete | **1.291 / 1.255 pass** | Judgeable |
+| .NET | Complete | 1.309 pass / (0.948) G5 31.4% | **Denominator invalid — `#300`** |
+| C++ | Complete | (0.087) G5 90.2% / (0.072) G5 99.7% | **Harness defect — `#296`** |
+| Node.js | Remeasuring | — | Hung on run 2 |
+| C (`zlink-c`) | Not possible | — | **Does not build — `#295`** |
+
+**No layer is judged from these numbers yet.** Producing the baseline surfaced three
+defects on the measuring side, and all three yield a number the harness made rather
+than one the framework earned.
+
+| Issue | What | What it blocks |
+|---|---|---|
+| `#295` | The C reference bench was left out of the whole-message migration in `#63` | `zlink-<lang> / zlink-c` does not compute, so **whether the denominator (raw) is healthy cannot be judged** |
+| `#296` | The C++ bench waits a fixed 1 ms on an empty round (the canonical blocks for `min(remaining, 50 ms)`) | C++ `request-backpressure` G5 at 90–100% |
+| `#300` | .NET raw caps itself at depth 132 in a pattern that has no ceiling (one tenth the throughput of C++ raw, at 6% CPU) | .NET's "1.309 pass" is a number its denominator produced |
+
+As `#300` shows, a denominator can be sick. `#295` is therefore not supplementary
+information but **a precondition of the verdict**. The §5 table is settled only after
+the three are fixed and the baseline remeasured.
 
 Raw-row conversion is separate work in Issues #91–#93. New ratios are published only after both
-the framework and raw rows satisfy specification §1.3. Short smoke values from this change verify
-executability only and are not baseline numbers.
+the framework and raw rows satisfy specification §1.3.
 
 ## 5. Result Table Names
 
