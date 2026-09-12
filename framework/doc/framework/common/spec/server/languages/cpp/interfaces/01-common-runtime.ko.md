@@ -259,8 +259,6 @@ target_link_libraries(app PRIVATE zlink::framework_codec_protobuf)
 SPOT과 STREAM의 backpressure는 public **call object, timeout, result error kind**로만 관찰한다.
 
 - **application handler가 framework queue를 직접 제어하는 API를 두지 않는다.**
-- **기본 정책은 무한 queue가 아니다.** queue 상한과 submit timeout은 framework runtime 설정으로
- 닫는다.
 - **queue가 가득 찼다고 실패로 끝내지 않는다.** 자리가 날 때까지 기다리고, 기다리다 시간이 다
  되면 `deadline_exceeded`다. one-way·send·request가 모두 같고, local이든 remote든 같다
  ([Spot 메시징 §5.3](../../../03-spot-actor/02-spot-messaging.ko.md)).
@@ -358,7 +356,7 @@ host 종료와 caller cancellation을 합친 `std::stop_token`을 전달한다. 
 완료하고, 결과를 반환하는 `async()`은 현재 turn을 유지하며 결과를 기다린다. `yield()`는 `SpotWide` User Spot
 또는 Instance Spot의 shared turn에서만 그 turn을 반환하고 결과를 기다린다. 다른 실행 문맥에서는
 worker를 제출하거나 turn을 반환하지 않고 `invalid_operation`으로 완료한다.
-`worker_options_t`의 최소·최대 thread 수, idle timeout과 queue 상한은 host 시작 전에만 설정한다.
+`worker_options_t`의 최소·최대 thread 수와 idle timeout은 host 시작 전에만 설정한다.
 
 ### 7.4 오류 경계
 

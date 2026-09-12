@@ -318,10 +318,9 @@ options.handler_coroutine_workers(8);
 | `.services()` | — | `service_collection_t`. Handler와 hosted component의 service lifetime(`add_singleton`/`add_scoped`/`add_transient`/`add_factory`) 등록 |
 | `.metadata().allow_session_to_actor(key)` / `.allow_actor_to_session(key)` | 지정하지 않은 key는 forward 안 함 | STREAM session↔Actor relay로 넘길 metadata key를 방향별 allowlist에 추가 |
 | `.configure_network()` | `bind_host()`는 `127.0.0.1` | 개별 listen 호출이 override하지 않는 한 쓰는 기본 bind·advertise host |
-| `.worker()` | `worker_options_t` 기본값 | bounded worker pool의 최소·최대 thread 수, idle timeout, queue 상한(`RunCpuWorker`/`RunIoWorker`가 쓰는 pool) |
+| `.worker()` | `worker_options_t` 기본값 | worker pool의 최소·최대 thread 수와 idle timeout(`RunCpuWorker`/`RunIoWorker`가 쓰는 pool) |
 | `.configure_dispatch()` | Framework dispatch·diagnostics 기본값, 두 profile 모두 `balanced`, manual 값은 미지정 | `dispatch_options_t`에서 Dispatch·diagnostics와 Core HWM memory·budget·profile, host-wide Application Job Queue profile 또는 정확한 manual permit limit을 함께 설정 |
 | `.configure_stream_compression()` | 압축 없음 | STREAM 기본 압축 codec(`use_default()`/`use_lz4()`/`use(codec)`/`disable()`) |
-| `.set_max_pending(count)` | Framework 기본값 | runtime 전체 pending queue 상한 |
 | `.set_application_version(version)` / `.set_maintenance_wave(wave)` | `0` / 없음(exclusion 없음) | 모든 local MeshNode가 게시하는 배포 버전과 maintenance wave |
 | `.set_default_request_timeout(timeout)` | Framework 기본값 | host 전체 request 기본 timeout |
 | `.handler_coroutine_workers(count)` | Framework 기본값 | handler coroutine 실행 worker 수 |

@@ -330,10 +330,9 @@ options.handler_coroutine_workers(8);
 | `.services()` | — | `service_collection_t`. Registers the service lifetime (`add_singleton`/`add_scoped`/`add_transient`/`add_factory`) of handlers and hosted components |
 | `.metadata().allow_session_to_actor(key)` / `.allow_actor_to_session(key)` | Keys not specified are not forwarded | Adds a metadata key to forward across the STREAM session↔Actor relay to a direction-specific allowlist |
 | `.configure_network()` | `bind_host()` is `127.0.0.1` | The default bind/advertise host used unless an individual listen call overrides it |
-| `.worker()` | `worker_options_t` default | The bounded worker pool's minimum/maximum thread count, idle timeout, and queue cap (the pool `RunCpuWorker`/`RunIoWorker` use) |
+| `.worker()` | `worker_options_t` default | The worker pool's minimum/maximum thread count and idle timeout (the pool `RunCpuWorker`/`RunIoWorker` use) |
 | `.configure_dispatch()` | Framework dispatch/diagnostics defaults; both profiles are `balanced`; manual values are unset | Configures dispatch/diagnostics and the Core HWM memory/budget/profile inputs plus the host-wide Application Job Queue profile or exact manual permit limit on `dispatch_options_t` |
 | `.configure_stream_compression()` | No compression | The STREAM default compression codec (`use_default()`/`use_lz4()`/`use(codec)`/`disable()`) |
-| `.set_max_pending(count)` | Framework default | The host-wide pending-queue cap |
 | `.set_application_version(version)` / `.set_maintenance_wave(wave)` | `0` / none (no exclusion) | The deployment version and maintenance wave every local MeshNode publishes |
 | `.set_default_request_timeout(timeout)` | Framework default | The host-wide default request timeout |
 | `.handler_coroutine_workers(count)` | Framework default | The number of workers that run handler coroutines |

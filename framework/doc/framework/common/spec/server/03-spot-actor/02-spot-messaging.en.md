@@ -675,10 +675,10 @@ aggregated into monitoring.
 ### 4.5 Publish Completion
 
 Even if the counts of both the initially fixed remote targets and the matching local
-Spots are `0`, publish completes normally. Once the publish transaction starts, insufficient
-queue capacity or an unreachable connection for some targets doesn't roll back or
-retry the whole operation. Remote target connection failure and local Spot queue
-capacity shortage aren't turned into a publish-only result or monitoring value.
+Spots are `0`, publish completes normally. Once the publish transaction starts, an
+unreachable connection for some targets doesn't roll back or retry the whole
+operation. Remote target connection failure isn't turned into a publish-only result
+or monitoring value.
 
 ### 4.6 What Publish Completion Means
 

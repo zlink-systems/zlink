@@ -294,8 +294,6 @@ SPOT and STREAM backpressure is only observed through the public
 
 - **An application handler isn't given an API that directly controls
  the framework queue.**
-- **The default policy isn't an unlimited queue.** Queue bound and submit timeout are
- closed by framework runtime configuration.
 - **A full queue does not end the call with a failure.** The work waits for room, and if the
  wait runs out of time it ends with `deadline_exceeded`. One-way, send and request behave the
  same, and so do local and remote queues
@@ -412,8 +410,8 @@ result only in a `SpotWide` User Spot's or Instance Spot's shared turn.
 In a different execution context, it completes with
 `invalid_operation` without submitting the worker or returning the
 turn.
-`worker_options_t`'s min/max thread count, idle timeout, and queue
-bound are set only before host start.
+`worker_options_t`'s min/max thread count and idle timeout are set
+only before host start.
 
 ### 7.4 Error Boundary
 

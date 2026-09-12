@@ -537,9 +537,9 @@ public:
 } // namespace zlink::framework
 ```
 
-요청 timeout은 call object의 `.timeout(...)`과 route request fluent 표면에서 설정한다. pending
-queue 상한은 `zlink_framework_options_t::set_max_pending(...)`이 runtime 단위로 소유한다. C++ 공개 계약은
-`.NET` 역할 builder에 없는 per-역할 timeout/pending option을 만들지 않는다.
+요청 timeout은 call object의 `.timeout(...)`과 route request fluent 표면에서 설정한다. 답을
+기다리는 요청을 적어 두는 자리에는 상한이 없다. C++ 공개 계약은 `.NET` 역할 builder에 없는
+per-역할 timeout option을 만들지 않는다.
 
 내부 매핑은 아래와 같다.
 

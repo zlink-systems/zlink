@@ -438,8 +438,8 @@ take a MeshName.
 `DefaultSocketSendTimeout`'s default is 1 second.
 `SessionReplacementCallbackTimeout` is the maximum time an actor-binding replacement callback may
 run before Framework force-closes the retired session; its default is 30 seconds. `Worker` sets the
-worker's minimum/maximum thread count, idle timeout, and queue cap before
-host startup.
+worker's minimum/maximum thread count and idle timeout before host
+startup.
 
 `ConfigureStreamCompression()` and `IZLinkStreamCompressionBuilder` pick
 the STREAM payload compression. This builder doesn't configure the

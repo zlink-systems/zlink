@@ -593,10 +593,9 @@ public:
 ```
 
 Request timeout is set on the call object's `.timeout(...)` and the
-route request fluent surface. The pending queue bound is owned by
-`zlink_framework_options_t::set_max_pending(...)` per runtime unit.
-The C++ public contract doesn't create a per-role timeout/pending
-option absent from `.NET`'s role builder.
+route request fluent surface. The table that records requests waiting
+for an answer has no bound. The C++ public contract doesn't create a
+per-role timeout option absent from `.NET`'s role builder.
 
 The internal mapping is below.
 

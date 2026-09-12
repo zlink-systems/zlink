@@ -610,7 +610,6 @@ public:
  inbound_dispatch_options_t &configure_inbound_dispatch();
  location_options_t &configure_locations();
  location_options_t location_options() const;
- zlink_framework_options_t &set_max_pending(std::size_t count);
  zlink_framework_options_t &set_application_version(
  std::int64_t application_version);
  zlink_framework_options_t &set_maintenance_wave(

@@ -621,9 +621,8 @@ sequenceDiagram
 ### 4.5 Publish 완료
 
 처음에 고정한 remote target과 일치하는 local Spot이 모두 `0`이어도 publish는 정상 완료한다. Publish
-transaction이 시작된 뒤 일부 target의 queue 용량이 부족하거나 연결할 수 없어도 전체 작업을 되돌리거나
-다시 시도하지 않는다. Remote target 연결 실패와 local Spot queue 용량 부족을 publish 전용 결과나 monitoring
-값으로 만들지 않는다.
+transaction이 시작된 뒤 일부 target에 연결할 수 없어도 전체 작업을 되돌리거나 다시 시도하지 않는다.
+Remote target 연결 실패를 publish 전용 결과나 monitoring 값으로 만들지 않는다.
 
 ### 4.6 Publish 완료의 의미
 
