@@ -143,13 +143,17 @@ function createRawTransport(options) {
     rawWire.ROUTING_IDS.rawRequestServer,
     options.targetEndpoint
   );
+  // 서버 간 연결은 하나다. `sendConcurrency`는 stream 수이지 연결 수가 아니다.
+  // gRPC 행은 채널 하나를 stub 8개가 공유하고 framework 행은 RouteMesh socket 하나를
+  // 쓴다. raw만 stream마다 ROUTER를 만들면 `zlink-framework-<lang> / zlink-<lang>`이
+  // 계층 비용이 아니라 연결 수 차이를 재게 된다 (#317).
   const sendSockets = options.scenario === 'send-saturation'
-    ? Array.from({ length: options.sendConcurrency }, (_, index) => RawBenchSocket.create(
+    ? [RawBenchSocket.create(
       context,
-      `bench-source-send-${process.pid}-${index}`,
+      `bench-source-send-${process.pid}`,
       rawWire.ROUTING_IDS.rawCommandServer,
       options.targetCommandEndpoint
-    ))
+    )]
     : [];
   let requestCompletionPump = null;
 

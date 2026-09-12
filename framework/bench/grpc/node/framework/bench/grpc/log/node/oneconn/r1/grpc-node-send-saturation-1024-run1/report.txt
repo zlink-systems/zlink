@@ -1,0 +1,15 @@
+# with-grpc bench, node server-driven source A
+# implementation: grpc-node
+# pattern: send-saturation
+# payload_size: 1024
+# warmup: 1000
+
+RESULT,current,grpc-node-send-saturation,local,1024,throughput,10703.400
+RESULT,current,grpc-node-send-saturation,local,1024,bandwidth,10.960
+RESULT,current,grpc-node-send-saturation,local,1024,latency,0.333
+RESULT,current,grpc-node-send-saturation,local,1024,latency_p95,0.584
+RESULT,current,grpc-node-send-saturation,local,1024,latency_p99,1.885
+RESULT,current,grpc-node-send-saturation,local,1024,client_cpu_percent,4.858
+RESULT,current,grpc-node-send-saturation,local,1024,client_memory_mb,228.895
+RESULT,current,grpc-node-send-saturation,local,1024,server_cpu_percent,2.108
+RESULT,current,grpc-node-send-saturation,local,1024,server_memory_mb,131.082

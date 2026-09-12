@@ -737,12 +737,17 @@ internal sealed class RawBenchTransport : IBenchTransport
         context = Systems.Zlink.Zlink.CreateContext();
         if (options.Scenario == "send-saturation")
         {
-            commands = Enumerable.Range(0, options.SendConcurrency).Select(index => RawBenchSocket.Create(
+            // 서버 간 연결은 하나다. `SendConcurrency`는 stream 수이지 연결 수가 아니다.
+            // gRPC 행은 채널 하나를 stub 8개가 공유하고(`GrpcBenchTransport`), framework 행은
+            // RouteMesh node의 socket 하나를 쓴다. raw만 stream마다 ROUTER를 만들면
+            // `zlink-framework-<lang> / zlink-<lang>`이 계층 비용이 아니라 연결 수 차이를
+            // 재게 된다 (#317).
+            commands = [RawBenchSocket.Create(
                 context,
                 options.RawSocket,
-                RoutingId.From($"bench-send-{Environment.ProcessId}-{index}"),
+                RoutingId.From($"bench-send-{Environment.ProcessId}"),
                 RoutingId.From(BenchRoutingIds.RawCommandServer),
-                options.TargetCommandEndpoint!)).ToArray();
+                options.TargetCommandEndpoint!)];
         }
         else
         {

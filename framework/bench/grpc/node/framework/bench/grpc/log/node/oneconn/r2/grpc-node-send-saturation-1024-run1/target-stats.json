@@ -1,0 +1,1 @@
+{"ready":true,"phase":"idle","submitted":0,"completed":55264,"received":55264,"currentInFlight":0,"inFlight":0,"peakInFlight":0,"activeMessages":55264,"errors":0,"meanMicros":323.74640963375793,"p50Micros":253.983,"p95Micros":579.882,"p99Micros":1834.609,"cpuSeconds":2.102704,"workingSetMb":132.1171875}

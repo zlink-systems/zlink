@@ -1,0 +1,15 @@
+# with-grpc bench, node server-driven source A
+# implementation: zlink-framework-node
+# pattern: send-saturation
+# payload_size: 1024
+# warmup: 1000
+
+RESULT,current,zlink-framework-node-send-saturation,local,1024,throughput,10397.600
+RESULT,current,zlink-framework-node-send-saturation,local,1024,bandwidth,10.647
+RESULT,current,zlink-framework-node-send-saturation,local,1024,latency,174.161
+RESULT,current,zlink-framework-node-send-saturation,local,1024,latency_p95,212.394
+RESULT,current,zlink-framework-node-send-saturation,local,1024,latency_p99,276.276
+RESULT,current,zlink-framework-node-send-saturation,local,1024,client_cpu_percent,1.791
+RESULT,current,zlink-framework-node-send-saturation,local,1024,client_memory_mb,142.246
+RESULT,current,zlink-framework-node-send-saturation,local,1024,server_cpu_percent,3.259
+RESULT,current,zlink-framework-node-send-saturation,local,1024,server_memory_mb,265.285
