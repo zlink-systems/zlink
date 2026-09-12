@@ -851,3 +851,47 @@ zlink-framework-dotnet / zlink-dotnet = 0.266  fail
 ```
 
 Java·Node는 G6, C++는 재측정 중이다.
+
+## 15. send 비용 1차 시도 — 효과 없음 (2026-09-13)
+
+### 15.1 `#7` C++ — source 쪽 복사 1회 제거는 움직이지 않는다
+
+§7 조사가 C++의 1순위로 지목한 **service-wire 재포장 복사** 중 source 쪽 1회를 없앴다.
+`from_parts`를 rvalue 오버로드로 만들어 `part.copy()`를 제거하고, `app.cpp` →
+`mesh_node_runtime` → `public_host_runtime` → codec 으로 소유권을 이동 전달했다.
+wire 형식과 outer frame materialization은 그대로 뒀다. `ctest -L 'framework-unit|
+framework-contract'` **67/67 통과**.
+
+| `zlink-framework-cpp / zlink-cpp` (send-saturation) | 기준선 | 수정 후 |
+|---|---:|---:|
+| 1 KiB | 0.064 | **0.065** |
+| 4 KiB | 0.107 | **0.105** |
+
+**측정 오차 범위다. 효과가 없다.**
+
+### 15.2 이것이 측정 기준을 세운 값어치다
+
+**효과 없음을 효과 없음이라고 말할 수 있다.** 기준선이 없었다면 "복사를 줄였으니
+빨라졌겠지"로 넘어갔을 것이고, 다음 수정도 같은 식으로 쌓였을 것이다. 실제로 이 세션
+전까지의 상태가 그랬다 — .NET과 Java가 "1.309 통과", "1.291 통과"로 기록돼 있었다.
+
+### 15.3 다음은 어디를 볼 것인가
+
+§7 조사가 C++에 매긴 순위는 ① 재포장 복사 ② 즉시 수락된 send의 completion graph
+③ source state lane이었다. ①을 **부분적으로**(source 1회) 건드려 변화가 없으므로:
+
+- 남은 복사는 **target 쪽 3회**다(outer frame 복사 + inner multipart `assign` + part별
+  `message_t` 재생성). source 1회보다 크다.
+- 또는 ②·③이 실제 비용이다. `#296`에서 확인한 **framework 행만 4배씩 흔들리는 현상**은
+  ③(직렬화)의 직접 증거였다.
+
+한 번에 하나씩 고치고 매번 측정한다는 §7.3의 방식은 유지한다. 이번 시도가 그 방식이
+실제로 작동함을 보여줬다 — 틀린 가설을 싸게 버렸다.
+
+### 15.4 `#5` .NET — 1단계 완료, 측정 대기
+
+`_socketGate`를 socket 참조 확보용 짧은 경계로만 남기고 submit을 밖으로 뺐다.
+`RequireDirectPeer`의 lane 왕복(2단계)은 손대지 않았다. 단위 테스트 **2,177/2,177 통과**.
+
+처음 실행에서 1건 실패했으나 `#7` 측정과 겹친 부하 때문이었고 격리 재실행으로 통과했다
+([[env-gates-load-sensitive-timing]] 규칙대로 허용치를 넓히지 않았다).
