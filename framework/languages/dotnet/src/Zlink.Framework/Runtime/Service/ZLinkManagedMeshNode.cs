@@ -331,6 +331,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     socket.Options.SubmitRetryAttempts = 16;
                 }
                 socket.SetRoutingId(_routingId);
+                if (_applicationJobQueue is not null)
+                    receiveFlowRegistration =
+                        _applicationJobQueue.RegisterReceiveFlowSocket(socket);
                 var configuredBindEndpoint = _bindEndpoint;
                 socket.Bind(configuredBindEndpoint);
                 _bindEndpoint = socket.Options.LastEndpoint;
