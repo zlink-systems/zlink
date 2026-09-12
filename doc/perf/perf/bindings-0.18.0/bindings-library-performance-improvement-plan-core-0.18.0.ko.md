@@ -1218,9 +1218,10 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.7 Python
 
 - perf 경로: `bindings/python/perf`
-- Single 상태: `미측정`
+- Single 상태: `미측정 (단, reqrep 하네스 회귀 수정·측정 복구 2026-09-12)`
 - Multi 상태: `미측정`
-- 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
+- **reqrep 하네스 회귀 수정(2026-09-12)**: 전 바인딩 reqrep 조사에서 Python single reqrep이 회귀로 확인됐다 — perf 하네스(async API)가 완결을 요청 스레드가 아니라 별도 `zlink-python-completion` 데몬 스레드에 맡겨(=.NET/Java/Go와 동일 계열), **소형 12셀 중 11개가 측정 실패**(`no active round trips`/`requester thread did not finish`)했고 완결된 inproc DR 1024B는 C의 1.14%·mean latency 1392×였다. 요청 스레드가 공개 `Poller(POLLCOMPLETION)`(`add_socket`→`transfer_to_public`)로 완결 소유권을 가져와 제출과 drain을 직접 교대하도록 복원(커밋 `90af2fbf8d`, `bindings/python/perf/single/perf_single_reqrep.py`만, 분류 B, 바인딩·Core 불변)했다. 결과: **소형 12셀 측정 성공(1/11 실패→12/0)**, inproc DR 1024B latency **175ms→0.83ms(C 1392×→6.57×)**, 소형 mean latency median C 대비 4.08×(Python 5× cap 이내). 대형 throughput은 C 대비 중앙값 36%(tcp DR 55%·RR 56%)로 회복. **소형 throughput은 C의 ~1.4%로 남는데, 이는 하네스가 아니라 Python 단일프로세스 GIL 바닥**(requester·replier가 GIL 공유 → 고빈도 소형에서 직렬화)이라 실측 보류. one-way 회귀 0%(경로 blob 동일). 상세 수치는 PR 및 pyreq-after report.
+- 다음 작업: reqrep 외 나머지 pattern의 paired 측정은 미실시 — inventory gate 확인 후 진행한다.
 
 #### 9.7.1 Single suite
 

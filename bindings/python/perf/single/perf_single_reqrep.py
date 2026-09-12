@@ -88,8 +88,28 @@ def _request_operation(requester, routing_id, parts, timeout_s):
     return operation.messages(*parts).timeout(timeout_s).submit()
 
 
+def _admission_window_requests(monitor, requester, wire_size):
+    applied_hwm = int(
+        monitor.status().auto_hwm_applied_sndhwm_bytes or 0
+    )
+    hwm_bytes = applied_hwm or int(requester.options.send_high_water_mark or 0)
+    if hwm_bytes <= 0:
+        raise RuntimeError(
+            "requester socket reports no send high-water mark, "
+            "so the admission window is unknown"
+        )
+    return max(1, hwm_bytes // max(1, int(wire_size)))
+
+
 async def _run_requester_async(
-    requester, routing_id, payload, *, run_id, msg_size, duration_s
+    requester,
+    routing_id,
+    payload,
+    *,
+    run_id,
+    msg_size,
+    duration_s,
+    admission_window,
 ):
     timeout_s = max(0.001, resolve_single_reqrep_timeout_ms() / 1000.0)
     drain_timeout_s = max(
@@ -99,87 +119,137 @@ async def _run_requester_async(
     active_end = time.perf_counter() + duration_s
     seq = 1
     completed = 0
-    pending = set()
-    failures = []
+    pending = []
     expected_part_count = len(measurement_parts(b""))
 
-    async def receive_reply(reply):
+    def settle_completed():
         nonlocal completed
-        parts = None
-        try:
+        keep = 0
+        for reply in pending:
+            if not reply.done():
+                pending[keep] = reply
+                keep += 1
+                continue
+            parts = None
             try:
-                parts = await reply
-            except zlink.RequestError as exc:
-                if exc.result == zlink.RequestResult.TIMED_OUT:
-                    return
-                raise
-            completed_at = time.perf_counter()
-            reply_bytes = tuple(part.to_bytes() for part in parts)
-            data = measurement_payload(reply_bytes)
-            header = None if data is None else decode_header(data)
-            now_ns = time.monotonic_ns()
-            if (
-                data is not None
-                and len(data) == msg_size
-                and header is not None
-                and header["magic"] == HEADER_MAGIC
-                and header["run_id"] == run_id
-                and header["phase"] == 1
-                and header["msg_size"] == msg_size
-                and header["sent_ts_ns"] > 0
-                and now_ns >= header["sent_ts_ns"]
-                and completed_at < active_end
-            ):
-                completed += 1
-                # PERF_SINGLE_TEST_POLICY.md § 1.1: request-reply latency is the
-                # round trip from request submission to reply completion, the
-                # same quantity C records (perf_single_reqrep.hpp
-                # record_request_completion 192-198). It is not halved.
-                latency.add(float(now_ns - header["sent_ts_ns"]))
+                try:
+                    parts = reply.result()
+                except zlink.RequestError as exc:
+                    if exc.result == zlink.RequestResult.TIMED_OUT:
+                        continue
+                    raise
+                completed_at = time.perf_counter()
+                reply_bytes = tuple(part.to_bytes() for part in parts)
+                data = measurement_payload(reply_bytes)
+                header = None if data is None else decode_header(data)
+                now_ns = time.monotonic_ns()
+                if (
+                    data is not None
+                    and len(data) == msg_size
+                    and header is not None
+                    and header["magic"] == HEADER_MAGIC
+                    and header["run_id"] == run_id
+                    and header["phase"] == 1
+                    and header["msg_size"] == msg_size
+                    and header["sent_ts_ns"] > 0
+                    and now_ns >= header["sent_ts_ns"]
+                    and completed_at < active_end
+                ):
+                    completed += 1
+                    # PERF_SINGLE_TEST_POLICY.md § 1.1: request-reply latency
+                    # is the full request submission to reply completion RTT,
+                    # matching C's record_request_completion.
+                    latency.add(float(now_ns - header["sent_ts_ns"]))
+            finally:
+                if parts is not None:
+                    _close_messages(parts)
+        if keep < len(pending):
+            del pending[keep:]
+
+    completion_flag = zlink.PollEventFlag.POLLCOMPLETION
+    with zlink.create_poller() as poller:
+        events = zlink.create_poll_events(1)
+        poller.add_socket(requester, completion_flag, 0)
+        admission = None
+        try:
+            while time.perf_counter() < active_end:
+                submitted_any = False
+                submitted_since_progress = 0
+                while (
+                    time.perf_counter() < active_end
+                    and admission is None
+                    and len(pending) < admission_window
+                ):
+                    stamped = bytes(
+                        stamp_payload(payload, phase=1, run_id=run_id, seq=seq)
+                    )
+                    seq += 1
+                    stamped_parts = (
+                        (stamped,) if expected_part_count == 1 else (stamped, b"")
+                    )
+                    submission = _request_operation(
+                        requester, routing_id, stamped_parts, timeout_s
+                    )
+                    pending.append(submission.reply)
+                    submitted_any = True
+                    if submission.result == zlink.SubmitResult.BACKPRESSURED:
+                        admission = submission.admitted
+                    elif submission.result != zlink.SubmitResult.OK:
+                        raise RuntimeError(
+                            f"request submission failed: {submission.result}"
+                        )
+
+                    submitted_since_progress += 1
+                    if submitted_since_progress >= 4:
+                        submitted_since_progress = 0
+                        # The Python replier shares the GIL with this thread.
+                        # This completion wait is its scheduling handoff; the
+                        # socket HWM remains the only admission boundary.
+                        if poller.wait(events, 50):
+                            settle_completed()
+                        if admission is not None and admission.done():
+                            admission.result()
+                            admission = None
+
+                if admission is not None and admission.done():
+                    admission.result()
+                    admission = None
+                settle_completed()
+                if time.perf_counter() >= active_end:
+                    break
+                if admission is not None or pending:
+                    wait_ms = 0 if submitted_any else min(
+                        50, max(1, int((active_end - time.perf_counter()) * 1000))
+                    )
+                    if poller.wait(events, wait_ms):
+                        settle_completed()
+                    if admission is not None and admission.done():
+                        admission.result()
+                        admission = None
+
+            drain_deadline = time.perf_counter() + drain_timeout_s
+            while pending and time.perf_counter() < drain_deadline:
+                settle_completed()
+                if not pending:
+                    break
+                remaining_ms = max(
+                    1, int((drain_deadline - time.perf_counter()) * 1000)
+                )
+                poller.wait(events, min(50, remaining_ms))
+            settle_completed()
+            if pending:
+                raise RuntimeError("request completion drain timed out")
         finally:
-            if parts is not None:
+            for reply in pending:
+                if not reply.done():
+                    reply.cancel()
+                    continue
+                try:
+                    parts = reply.result()
+                except BaseException:
+                    continue
                 _close_messages(parts)
-
-    def observe_done(task):
-        pending.discard(task)
-        if task.cancelled():
-            return
-        try:
-            task.result()
-        except BaseException as exc:
-            failures.append(exc)
-
-    while time.perf_counter() < active_end and not failures:
-        stamped = bytes(
-            stamp_payload(payload, phase=1, run_id=run_id, seq=seq)
-        )
-        seq += 1
-        stamped_parts = (
-            (stamped,) if expected_part_count == 1 else (stamped, b"")
-        )
-        submission = _request_operation(
-            requester, routing_id, stamped_parts, timeout_s
-        )
-        task = asyncio.ensure_future(receive_reply(submission.reply))
-        pending.add(task)
-        task.add_done_callback(observe_done)
-        if submission.result == zlink.SubmitResult.BACKPRESSURED:
-            await submission.admitted
-
-    if pending:
-        still_pending = tuple(pending)
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(*still_pending), drain_timeout_s
-            )
-        except asyncio.TimeoutError:
-            for task in still_pending:
-                task.cancel()
-            await asyncio.gather(*still_pending, return_exceptions=True)
-            raise RuntimeError("request completion drain timed out")
-
-    if failures:
-        raise failures[0]
+            poller.remove_socket(requester)
 
     if completed == 0 or latency.count == 0:
         raise RuntimeError("request-reply benchmark completed no active round trips")
@@ -193,13 +263,12 @@ async def _run_requester_async(
 
 
 def _run_requester_thread(requester, routing_id, payload, options, state):
-    """Drive the requester on its own OS thread and its own private loop.
+    """Drive submissions and completions on one requester OS thread.
 
     The public request terminal creates its admission and reply stages on the
-    current event loop. This runner-owned loop therefore lives on the same
-    dedicated thread as the requester socket. Each socket keeps submitting
-    after immediate admission and suspends only while its own backpressured
-    admission stage is pending; reply stages progress independently.
+    current event loop. A public POLLCOMPLETION poller transfers completion
+    ownership from the runtime daemon to this thread; its wait drains native
+    completions before this loop harvests the already-settled Future values.
     """
 
     loop = asyncio.new_event_loop()
@@ -260,6 +329,9 @@ def run_reqrep_pattern(argv, *, pattern, routed_request):
                         ready_timeout = resolve_single_connect_ready_timeout_ms()
                         wait_monitor_event(requester_monitor, event, timeout_ms=ready_timeout)
                         wait_monitor_event(replier_monitor, event, timeout_ms=ready_timeout)
+                        admission_window = _admission_window_requests(
+                            requester_monitor, requester, len(payload)
+                        )
 
                 state = {"replied": 0, "error": None, "stop": False}
                 replier_thread = threading.Thread(
@@ -284,6 +356,7 @@ def run_reqrep_pattern(argv, *, pattern, routed_request):
                                 "run_id": run_id,
                                 "msg_size": args.msg_size,
                                 "duration_s": args.duration,
+                                "admission_window": admission_window,
                             },
                             requester_state,
                         ),
