@@ -7,8 +7,7 @@ import { ZLinkConfigurationException } from '../configuration';
 import {
   defaultWorkerMaxThreads,
   DEFAULT_WORKER_IDLE_TIMEOUT_MS,
-  DEFAULT_WORKER_MIN_THREADS,
-  DEFAULT_WORKER_QUEUE_LENGTH
+  DEFAULT_WORKER_MIN_THREADS
 } from '../../contracts/Configuration/InternalDefaults';
 import { createAbortError } from '../abort';
 import {
@@ -24,20 +23,17 @@ export interface ZLinkWorkerRuntimeOptions {
   readonly minThreads: number;
   readonly maxThreads: number;
   readonly idleTimeoutMs: number;
-  readonly maxQueueLength: number;
 }
 
 export function resolveWorkerRuntimeOptions(options?: ZLinkWorkerOptions): ZLinkWorkerRuntimeOptions {
   const resolved = {
     minThreads: options?.minThreads ?? DEFAULT_WORKER_MIN_THREADS,
     maxThreads: options?.maxThreads ?? defaultWorkerMaxThreads(),
-    idleTimeoutMs: options?.idleTimeoutMs ?? DEFAULT_WORKER_IDLE_TIMEOUT_MS,
-    maxQueueLength: options?.maxQueueLength ?? DEFAULT_WORKER_QUEUE_LENGTH
+    idleTimeoutMs: options?.idleTimeoutMs ?? DEFAULT_WORKER_IDLE_TIMEOUT_MS
   };
   requireNonNegativeInteger('Worker minThreads', resolved.minThreads);
   requirePositiveInteger('Worker maxThreads', resolved.maxThreads);
   requireNonNegativeInteger('Worker idleTimeoutMs', resolved.idleTimeoutMs);
-  requirePositiveInteger('Worker maxQueueLength', resolved.maxQueueLength);
   if (resolved.maxThreads < resolved.minThreads) {
     throw new ZLinkConfigurationException('Worker maxThreads must be greater than or equal to minThreads.');
   }
@@ -97,9 +93,6 @@ class ZLinkCpuWorkerPool {
     }
     if (signal?.aborted === true) {
       return Promise.reject(createAbortError());
-    }
-    if (this.queueCount >= this.options.maxQueueLength) {
-      return Promise.reject(workerQueueFull(this.options.maxQueueLength));
     }
     return new Promise<T>((resolve, reject) => {
       const job = {
@@ -533,14 +526,6 @@ class ZLinkSerialDeliveredPromise<T> implements Promise<T> {
       (reason) => this.serial.execute(() => { onfinally?.(); throw reason; })
     );
   }
-}
-
-function workerQueueFull(maxQueueLength: number): ZLinkFrameworkException {
-  return createInternalFrameworkException(
-    ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
-    `CPU worker queue is full (maxQueueLength=${maxQueueLength}).`,
-    true
-  );
 }
 
 function workerTimedOut(timeoutMs: number): ZLinkFrameworkException {

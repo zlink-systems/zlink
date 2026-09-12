@@ -5035,10 +5035,6 @@ export function relocationFailedFailureCode(
       return ServiceWireFrameworkErrorCode.requestRejected;
     case ZLinkFrameworkErrorKind.ProtocolError:
       return ServiceWireFrameworkErrorCode.requestProtocolError;
-    //  No dedicated "capacity exceeded" wire code exists; a full queue is
-    //  the closest capacity-shaped signal.
-    case ZLinkFrameworkErrorKind.CapacityExceeded:
-      return ServiceWireFrameworkErrorCode.workerQueueFull;
     //  No dedicated "deadline exceeded" wire code exists; a worker timeout
     //  is the closest timeout-shaped signal.
     case ZLinkFrameworkErrorKind.DeadlineExceeded:

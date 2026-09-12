@@ -694,7 +694,7 @@ test('a target-side Prepare failure encodes the classified error kind onto the s
   // Kind-shaped codes shared by every object kind.
   assert.equal(relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.Rejected), 'actor'), 15);
   assert.equal(relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.ProtocolError), 'actor'), 16);
-  assert.equal(relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.CapacityExceeded), 'actor'), 18);
+  assert.equal(relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.Unavailable), 'actor'), 17);
   assert.equal(relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.DeadlineExceeded), 'actor'), 19);
   assert.equal(relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.Unavailable), 'actor'), 13);
   assert.equal(relocationFailedFailureCode(framework(ZLinkFrameworkErrorKind.NotFound), 'actor'), 14);

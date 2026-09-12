@@ -497,9 +497,7 @@ test('routed local one-way carries its shared job permit through the owner seria
       finishHandler();
     }
   }
-  const serial = new framework.ZLinkSpotSerialTurnExecutor(true, 'capacity-target', {
-    applicationMessageCapacity: 1
-  });
+  const serial = new framework.ZLinkSpotSerialTurnExecutor(true, 'capacity-target');
   const dispatch = new ZLinkRoutedSpotPacketDispatch({
     resolveActivation: () => ({
       spotId: 'capacity-target',
@@ -706,8 +704,7 @@ test('runCpuWorker reuses an idle worker until the configured idle timeout', asy
   const worker = new framework.ZLinkWorkerRuntime({
     minThreads: 1,
     maxThreads: 1,
-    idleTimeoutMs: 100,
-    maxQueueLength: 4
+    idleTimeoutMs: 100
   });
   const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const firstThreadId = await cpuWorkerCall(
@@ -796,8 +793,8 @@ test('runIoWorker async also works when the call is created outside a Spot turn'
   assert.equal(await call.submit(), 'done');
 });
 
-test('runCpuWorker queue full fails fast with WorkerQueueFull and does not block the dispatcher', async () => {
-  const worker = new framework.ZLinkWorkerRuntime({ maxThreads: 1, maxQueueLength: 1 });
+test('runCpuWorker queues work above the former queue cap while the dispatcher progresses', async () => {
+  const worker = new framework.ZLinkWorkerRuntime({ maxThreads: 1 });
   const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const longCall = cpuWorkerCall(worker, serial, () => {
     const deadline = Date.now() + 100;
@@ -809,35 +806,24 @@ test('runCpuWorker queue full fails fast with WorkerQueueFull and does not block
   const queuedCall = cpuWorkerCall(worker, serial, () => 'queued');
   const queuedJob = queuedCall.submit();
 
-  const overflowCall = cpuWorkerCall(worker, serial, () => 'overflow');
-  const startedAt = Date.now();
-  await assert.rejects(
-    () => overflowCall.submit(),
-    (error) =>
-      error instanceof framework.ZLinkFrameworkException
-      && error.kind === framework.ZLinkFrameworkErrorKind.CapacityExceeded
+  // A CPU worker closure runs in a worker thread, so it must not capture a
+  // variable from this scope.
+  const queuedAfterFormerCap = Array.from(
+    { length: 4_096 },
+    () => cpuWorkerCall(worker, serial, () => 'queued-bulk').submit()
   );
-  assert.equal(Date.now() - startedAt < 100, true);
 
   // The owning dispatcher keeps processing while the queue is saturated.
   const dispatched = await serial.execute(() => 'dispatcher-alive');
   assert.equal(dispatched, 'dispatcher-alive');
 
-  const errors = [];
-  const overflowCallback = cpuWorkerCall(worker, serial, () => 'overflow');
-  void overflowCallback.submit().then(
-    () => errors.push('completed'),
-    (error) => errors.push(`error:${error.kind}:executing=${serial.isExecuting}`)
-  );
-  await delay(10);
-  assert.deepEqual(errors, [`error:${framework.ZLinkFrameworkErrorKind.CapacityExceeded}:executing=true`]);
-
   assert.equal(await longJob, 'long');
   assert.equal(await queuedJob, 'queued');
+  assert.equal((await Promise.all(queuedAfterFormerCap)).length, 4_096);
 });
 
 test('runCpuWorker cancellation removes a queued job before it consumes a worker slot', async () => {
-  const worker = new framework.ZLinkWorkerRuntime({ maxThreads: 1, maxQueueLength: 2 });
+  const worker = new framework.ZLinkWorkerRuntime({ maxThreads: 1 });
   const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const longJob = cpuWorkerCall(worker, serial, () => {
     const deadline = Date.now() + 80;
@@ -860,7 +846,7 @@ test('runCpuWorker cancellation removes a queued job before it consumes a worker
 });
 
 test('runIoWorker timeout fails the caller and drops the late completion without user callbacks', async () => {
-  const worker = new framework.ZLinkWorkerRuntime({ maxThreads: 2, maxQueueLength: 16 });
+  const worker = new framework.ZLinkWorkerRuntime({ maxThreads: 2 });
   const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const events = [];
 
@@ -908,7 +894,7 @@ test('runIoWorker work failure surfaces as WorkerFailed wrapping the cause', asy
 });
 
 test('runIoWorker call accepts only one terminator', async () => {
-  const worker = new framework.ZLinkWorkerRuntime({ maxThreads: 1, maxQueueLength: 16 });
+  const worker = new framework.ZLinkWorkerRuntime({ maxThreads: 1 });
   const serial = new framework.ZLinkSpotSerialTurnExecutor();
 
   const asyncFirst = ioWorkerCall(worker, serial, async () => 'done');
@@ -963,25 +949,22 @@ test('worker options are accepted on the framework options builder and validated
     builder.configureWorker({
       minThreads: 0,
       maxThreads: 8,
-      idleTimeoutMs: 30_000,
-      maxQueueLength: 1024
+      idleTimeoutMs: 30_000
     });
   });
   assert.deepEqual(options.worker, {
     minThreads: 0,
     maxThreads: 8,
-    idleTimeoutMs: 30_000,
-    maxQueueLength: 1024
+    idleTimeoutMs: 30_000
   });
   const registration = framework.createFrameworkRegistration(options);
   assert.deepEqual(registration.worker, options.worker);
 
   for (const invalid of [
-    { minThreads: -1, maxThreads: 1, idleTimeoutMs: 0, maxQueueLength: 1 },
+    { minThreads: -1, maxThreads: 1, idleTimeoutMs: 0 },
     { maxThreads: 0 },
-    { minThreads: 2, maxThreads: 1, idleTimeoutMs: 0, maxQueueLength: 1 },
-    { idleTimeoutMs: -1 },
-    { maxQueueLength: 0 }
+    { minThreads: 2, maxThreads: 1, idleTimeoutMs: 0 },
+    { idleTimeoutMs: -1 }
   ]) {
     assert.throws(
       () => framework.createFrameworkRegistration({ worker: invalid }),

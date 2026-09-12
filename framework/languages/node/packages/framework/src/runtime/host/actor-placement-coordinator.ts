@@ -170,7 +170,7 @@ export class ZLinkActorPlacementCoordinator {
           //  ownership-aware translator instead of collapsing every non-OK
           //  remote create to InternalFailure (spec 32-framework-error-model:
           //  83-118, 99-108). Backpressured(113) still surfaces as target
-          //  placement capacity -> CapacityExceeded through the shared path.
+          //  placement capacity -> Unavailable through the shared path.
           throw wireReplyFailureException(
             remote.terminalResult,
             remote.failureCode,

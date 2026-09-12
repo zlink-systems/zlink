@@ -6,12 +6,6 @@ import type {
   ReceiveRecord
 } from '../foundation/service-runtime-contracts';
 import { operationIdentityKey } from '../foundation/operation-identity';
-import {
-  ZLinkFrameworkErrorKind,
-  ZLinkFrameworkException
-} from '../../contracts';
-
-export const ZLINK_MESH_COMPLETION_CAPACITY = 4_096;
 
 export interface ZLinkMeshCompletionDiagnostic {
   readonly kind: 'unknownOrLate';
@@ -37,14 +31,7 @@ export class ZLinkMeshCompletionTable {
   private readonly pending = new Map<string, PendingCompletion>();
   private disposed = false;
 
-  constructor(
-    private readonly maxPendingOperations = ZLINK_MESH_COMPLETION_CAPACITY,
-    private readonly onDiagnostic?: (diagnostic: ZLinkMeshCompletionDiagnostic) => void
-  ) {
-    if (!Number.isSafeInteger(maxPendingOperations) || maxPendingOperations <= 0) {
-      throw new RangeError('maxPendingOperations must be a positive safe integer.');
-    }
-  }
+  constructor(private readonly onDiagnostic?: (diagnostic: ZLinkMeshCompletionDiagnostic) => void) {}
 
   /**
    * Submits and registers without yielding control to the event loop. Mesh
@@ -63,12 +50,6 @@ export class ZLinkMeshCompletionTable {
       return Promise.reject(
         signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
       );
-    }
-    if (this.pending.size >= this.maxPendingOperations) {
-      return Promise.reject(new ZLinkFrameworkException(
-        ZLinkFrameworkErrorKind.CapacityExceeded,
-        `Mesh completion capacity ${this.maxPendingOperations} is exhausted.`
-      ));
     }
     const operationId = operation();
     // The backend submission callback can synchronously re-enter `dispose()`.

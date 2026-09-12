@@ -1110,7 +1110,7 @@ function remoteUserSpotFailure(
   //  Remote operation-table saturation Busy(108)+None is Unavailable,
   //  InvalidState(111)+None is InvalidOperation, every fine code follows the
   //  shared table, and only placement admission Backpressured(113) stays
-  //  CapacityExceeded.
+  //  Unavailable.
   return wireReplyFailureException(
     terminalResult,
     failureCode,

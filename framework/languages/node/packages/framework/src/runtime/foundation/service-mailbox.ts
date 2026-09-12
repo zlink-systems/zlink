@@ -55,14 +55,6 @@ interface DomainState {
   bytes: number;
 }
 
-export interface ServiceMailboxLimits {
-  readonly applicationMessages: number;
-  readonly applicationBytes: number;
-  readonly infrastructureMessages: number;
-  readonly infrastructureBytes: number;
-}
-
-
 /** Level-triggered queues with one active application claim per owner. */
 export class ServiceMailbox {
   private readonly application: DomainState;
@@ -78,10 +70,7 @@ export class ServiceMailbox {
   private nextRelocationSerial = 1n;
   private closed = false;
 
-  constructor(
-    _legacyLimits?: ServiceMailboxLimits,
-    private readonly onReady?: (domain: ServiceMailboxDomain) => void
-  ) {
+  constructor(private readonly onReady?: (domain: ServiceMailboxDomain) => void) {
     // Host ApplicationJobQueue permits own ordinary-record admission. The
     // Framework-owned payload lifetime does not retain Core HWM credit. A
     // second mailbox cap would reject already-admitted work before the shared

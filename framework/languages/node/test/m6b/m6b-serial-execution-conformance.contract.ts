@@ -38,25 +38,15 @@ function scheduler(
   }, options);
 }
 
-test('serial defaults include bounded owner-local reservations', () => {
+test('serial defaults retain owner fairness without owner-local capacity limits', () => {
   assert.equal(ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS.ownerTimeBudget, 10);
   assert.equal(ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS.lifecycleBurstLimit, 8);
-  assert.ok(ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS.applicationMessageCapacity > 0);
-  assert.ok(ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS.applicationByteCapacity > 0);
-  assert.ok(ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS.lifecycleMessageCapacity > 0);
-  assert.ok(ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS.lifecycleByteCapacity > 0);
-  assert.ok(ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS.fixedWorkByteCost > 0);
 });
 
-test('owner-local reservations survive terminal work and do not block another owner', async () => {
+test('owner-local work waits for terminal progress and does not block another owner', async () => {
   const options = {
-    applicationMessageCapacity: 1,
-    applicationByteCapacity: 256,
-    lifecycleMessageCapacity: 1,
-    lifecycleByteCapacity: 256,
     ownerTimeBudget: 0,
-    lifecycleBurstLimit: 1,
-    fixedWorkByteCost: 64
+    lifecycleBurstLimit: 1
   } as const;
   const serial = scheduler([], options);
   const otherOwner = scheduler([], options);
@@ -69,14 +59,14 @@ test('owner-local reservations survive terminal work and do not block another ow
   await started.promise;
   assert.deepEqual(serial.snapshot(), {
     applicationMessages: 1,
-    applicationBytes: 192,
+    applicationBytes: 0,
     lifecycleMessages: 0,
     lifecycleBytes: 0
   });
-  await assert.rejects(serial.submit(() => undefined), /queue is full/u);
+  const queued = serial.submit(() => 'following');
   assert.equal(await otherOwner.submit(() => 'other'), 'other');
   terminal.resolve();
-  await first;
+  await Promise.all([first, queued]);
   assert.deepEqual(serial.snapshot(), {
     applicationMessages: 0,
     applicationBytes: 0,
@@ -86,15 +76,10 @@ test('owner-local reservations survive terminal work and do not block another ow
   assert.equal(await serial.submit(() => 'following'), 'following');
 });
 
-test('a transferred record is accounted without capacity rejection until terminal completion', async () => {
+test('a transferred record remains queued until terminal completion', async () => {
   const serial = scheduler([], {
-    applicationMessageCapacity: 1,
-    applicationByteCapacity: 128,
-    lifecycleMessageCapacity: 1,
-    lifecycleByteCapacity: 128,
     ownerTimeBudget: 0,
-    lifecycleBurstLimit: 1,
-    fixedWorkByteCost: 32
+    lifecycleBurstLimit: 1
   });
   const localStarted = deferred<void>();
   const localTerminal = deferred<void>();
@@ -112,18 +97,16 @@ test('a transferred record is accounted without capacity rejection until termina
   }, { payloadBytes: 48, metadataBytes: 16 });
   assert.deepEqual(serial.snapshot(), {
     applicationMessages: 2,
-    applicationBytes: 176,
+    applicationBytes: 0,
     lifecycleMessages: 0,
     lifecycleBytes: 0
   });
-  await assert.rejects(serial.submit(() => undefined), /queue is full/u);
-
   localTerminal.resolve();
   await local;
   await transferredStarted.promise;
   assert.deepEqual(serial.snapshot(), {
     applicationMessages: 1,
-    applicationBytes: 96,
+    applicationBytes: 0,
     lifecycleMessages: 0,
     lifecycleBytes: 0
   });
@@ -186,13 +169,8 @@ test('durable readiness yields to lifecycle arbitration without claiming the ser
 
 test('a yielded Spot owner retains its reservation until the actual owner terminal', async () => {
   const serial = new ZLinkSpotSerialTurnExecutor(true, undefined, {
-    applicationMessageCapacity: 1,
-    applicationByteCapacity: 256,
-    lifecycleMessageCapacity: 2,
-    lifecycleByteCapacity: 256,
     ownerTimeBudget: 0,
-    lifecycleBurstLimit: 1,
-    fixedWorkByteCost: 64
+    lifecycleBurstLimit: 1
   });
   const entered = deferred<void>();
   const resume = deferred<void>();
@@ -201,12 +179,9 @@ test('a yielded Spot owner retains its reservation until the actual owner termin
     await serial.yieldPromise(resume.promise);
   });
   await entered.promise;
-  await assert.rejects(
-    serial.post(() => undefined),
-    /Spot execution queue capacity was exceeded/u
-  );
+  const following = serial.post(() => undefined);
   resume.resolve();
-  await owner;
+  await Promise.all([owner, following]);
   let progressed = false;
   await serial.post(() => { progressed = true; });
   assert.equal(progressed, true);

@@ -5,7 +5,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const framework = require('../../packages/framework/dist/internal');
 const completion = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
 
 const fixture = JSON.parse(fs.readFileSync(path.resolve(
@@ -34,11 +33,6 @@ function record(operationId, terminal) {
 
 test('mesh completion table consumes the shared identity and terminal fixture', async () => {
   assert.equal(fixture.fixture, 'zlink.framework.completion-terminal');
-  assert.equal(
-    completion.ZLINK_MESH_COMPLETION_CAPACITY,
-    fixture.limits.pendingOperationCapacity
-  );
-
   const alpha = operation('alpha');
   const gamma = operation('gamma');
   assert.equal(alpha.low, gamma.low);
@@ -54,10 +48,7 @@ test('mesh completion table consumes the shared identity and terminal fixture', 
 
   for (const scenario of fixture.raceScenarios) {
     const diagnostics = [];
-    const table = new completion.ZLinkMeshCompletionTable(
-      fixture.limits.pendingOperationCapacity,
-      (diagnostic) => diagnostics.push(diagnostic)
-    );
+    const table = new completion.ZLinkMeshCompletionTable((diagnostic) => diagnostics.push(diagnostic));
     const operationId = operation(scenario.operation);
     const controller = new AbortController();
     let applicationCompletionCount = 0;
@@ -101,22 +92,14 @@ test('mesh completion table consumes the shared identity and terminal fixture', 
   }
 });
 
-test('mesh completion capacity rejects before starting another backend operation', async () => {
-  const table = new completion.ZLinkMeshCompletionTable(1);
-  const first = table.submit(() => operation('alpha'));
-  let started = false;
-  await assert.rejects(
-    table.submit(() => {
-      started = true;
-      return operation('beta');
-    }),
-    (error) => error instanceof framework.ZLinkFrameworkException
-      && error.kind === framework.ZLinkFrameworkErrorKind.CapacityExceeded
-  );
-  assert.equal(started, false);
-  assert.equal(table.pendingCount, 1);
-  table.complete(record(operation('alpha'), 'reply:success'));
-  await first;
+test('mesh completion registrations above 4,096 all reach their replies', async () => {
+  const table = new completion.ZLinkMeshCompletionTable();
+  const operations = Array.from({ length: 4_097 }, (_, index) => ({ high: BigInt(index + 1), low: 0n }));
+  const pending = operations.map(operationId => table.submit(() => operationId));
+  assert.equal(table.pendingCount, 4_097);
+  for (const operationId of operations) table.complete(record(operationId, 'reply:success'));
+  assert.equal((await Promise.all(pending)).every(value => value.terminalResult === 0), true);
+  assert.equal(table.pendingCount, 0);
   table.dispose();
 });
 
@@ -135,10 +118,7 @@ test('mesh completion dispatch occurs after the atomic entry take', async () => 
 
 test('mesh completion copy failure still consumes the terminal winner', async () => {
   const diagnostics = [];
-  const table = new completion.ZLinkMeshCompletionTable(
-    fixture.limits.pendingOperationCapacity,
-    (diagnostic) => diagnostics.push(diagnostic)
-  );
+  const table = new completion.ZLinkMeshCompletionTable((diagnostic) => diagnostics.push(diagnostic));
   const operationId = operation('alpha');
   const pending = table.submit(() => operationId);
   const broken = record(operationId, 'reply:success');

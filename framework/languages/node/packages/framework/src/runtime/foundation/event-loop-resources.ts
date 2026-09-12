@@ -51,17 +51,8 @@ export class EventLoopWorkQueues {
   private applicationScheduled = false;
   private accepting = true;
 
-  constructor(
-    private readonly infrastructureLimit: number,
-    private readonly applicationLimit: number
-  ) {
-    if (infrastructureLimit < 1 || applicationLimit < 1) {
-      throw new RangeError('Queue limits must be positive.');
-    }
-  }
-
   submitInfrastructure(task: EventLoopTask): boolean {
-    if (!this.accepting || this.infrastructureCount >= this.infrastructureLimit) return false;
+    if (!this.accepting) return false;
     this.infrastructure.push(task);
     this.infrastructureCount += 1;
     this.scheduleInfrastructure();
@@ -69,7 +60,7 @@ export class EventLoopWorkQueues {
   }
 
   submitApplication(task: EventLoopTask): boolean {
-    if (!this.accepting || this.applicationCount >= this.applicationLimit) return false;
+    if (!this.accepting) return false;
     this.application.push(task);
     this.applicationCount += 1;
     this.scheduleApplication();

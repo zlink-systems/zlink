@@ -916,7 +916,7 @@ function submitted(): ZLinkSubmitResult {
 //  the reply comes from a remote target, so a fine framework failure code
 //  refines the coarse terminal, and a terminal-only conflict/busy is the
 //  target's owner/queue state (retryable stale/Unavailable), never a
-//  source-owned CapacityExceeded. Backpressure never appears on this reply
+//  source-owned queue exhaustion. Backpressure never appears on this reply
 //  path. Internal kinds are preserved so the stale-actor re-resolve retry
 //  (isStaleActorError) keeps working.
 function actorFailureCodeKind(

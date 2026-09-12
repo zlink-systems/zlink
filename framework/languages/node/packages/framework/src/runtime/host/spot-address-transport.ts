@@ -763,7 +763,7 @@ function missingInstanceRequestFailure(
           ? ZLinkFrameworkInternalErrorKind.RuntimeShutdown
           : result === RequestResult.Backpressured
             //  Spec 32-framework-error-model:104-108 — the bounded admission
-            //  terminal is target placement capacity: CapacityExceeded.
+            //  terminal is target placement capacity: Unavailable.
             ? ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted
             : result === RequestResult.NotConnected
               ? ZLinkFrameworkInternalErrorKind.RouteNotConnected

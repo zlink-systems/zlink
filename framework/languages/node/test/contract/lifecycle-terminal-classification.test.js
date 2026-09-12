@@ -18,19 +18,19 @@ const {
 //  non-OK terminal to NotFound / InternalFailure; per spec
 //  32-framework-error-model:81-118, 99-108 the (terminal, fine) pair determines
 //  the public kind, a remote another-node queue is Unavailable, and only the
-//  placement admission terminal Backpressured(113) is CapacityExceeded.
+//  placement admission terminal Backpressured(113) is Unavailable.
 
 test('coarse lifecycle terminals classify by ownership (finding 3)', () => {
   const cases = [
     //  Remote operation-table saturation is another node's queue: Unavailable,
-    //  NOT CapacityExceeded and NOT InternalFailure.
+    //  NOT InternalFailure.
     [RequestResult.Busy, 0, ZLinkFrameworkErrorKind.Unavailable],
     [RequestResult.Conflict, 0, ZLinkFrameworkErrorKind.Unavailable],
     [RequestResult.NotConnected, 0, ZLinkFrameworkErrorKind.Unavailable],
     //  A missing handler surfaced as InvalidState is an invalid operation.
     [RequestResult.InvalidState, 0, ZLinkFrameworkErrorKind.InvalidOperation],
     //  Placement admission capacity is the target's admission decision.
-    [RequestResult.Backpressured, 0, ZLinkFrameworkErrorKind.CapacityExceeded],
+    [RequestResult.Backpressured, 0, ZLinkFrameworkErrorKind.Unavailable],
     [RequestResult.TimedOut, 0, ZLinkFrameworkErrorKind.DeadlineExceeded],
     [RequestResult.Terminated, 0, ZLinkFrameworkErrorKind.ShuttingDown],
     [RequestResult.NotFound, 0, ZLinkFrameworkErrorKind.NotFound]
@@ -75,8 +75,8 @@ test('remote Actor create classifies by ownership, not InternalFailure (round-10
     [RequestResult.TimedOut, 0, ZLinkFrameworkErrorKind.DeadlineExceeded],
     //  Target shutting down is not an internal failure.
     [RequestResult.Terminated, 0, ZLinkFrameworkErrorKind.ShuttingDown],
-    //  Placement admission capacity keeps its round-9 classification.
-    [RequestResult.Backpressured, 0, ZLinkFrameworkErrorKind.CapacityExceeded],
+    //  No node able to host placement is Unavailable.
+    [RequestResult.Backpressured, 0, ZLinkFrameworkErrorKind.Unavailable],
     //  A protocol-level fine code refines the terminal.
     [RequestResult.Conflict, 16, ZLinkFrameworkErrorKind.ProtocolError]
   ];

@@ -16,13 +16,7 @@ import {
 export class ZLinkSessionSerialExecutor {
   private readonly scheduler = new ZLinkSerialExecutionQueue(
     async (record) => this.execute(record),
-    {
-      capacityError: (lane) => createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
-        `Stream Session ${lane} execution capacity is full.`,
-        true
-      )
-    }
+    {}
   );
   private closed = false;
 

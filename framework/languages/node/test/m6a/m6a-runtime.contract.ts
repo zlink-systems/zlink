@@ -1198,12 +1198,7 @@ test('runtime weight changes increment the local descriptor revision and preserv
 });
 
 test('mailbox has no hidden admission cap and owner claims progress independently', () => {
-  const mailbox = new ServiceMailbox({
-    applicationMessages: 2,
-    applicationBytes: 8,
-    infrastructureMessages: 1,
-    infrastructureBytes: 8
-  });
+  const mailbox = new ServiceMailbox();
   assert.equal(mailbox.tryEnqueue({
     owner: 'spot-a',
     domain: 'application',
@@ -1243,7 +1238,6 @@ test('remote request is not rejected by legacy mailbox limits after shared admis
   const jobs = applicationJobQueue();
   const runtime = rawServiceRuntime({
     descriptor: descriptor('local'),
-    mailbox: { applicationMessages: 1, applicationBytes: 4_096 },
     applicationJobQueue: jobs
   });
   assert.equal(runtime.topology.admit({

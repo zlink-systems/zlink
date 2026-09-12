@@ -6,36 +6,20 @@ export interface ZLinkSerialWorkOptions {
   readonly metadataBytes?: number;
 }
 
-/** Internal per-owner reservation limits, never a shared ingress budget. */
+/** Internal per-owner fairness settings; ingress capacity belongs to the host queue. */
 export interface ZLinkSerialSchedulerOptions {
-  readonly applicationMessageCapacity?: number;
-  readonly applicationByteCapacity?: number;
-  readonly lifecycleMessageCapacity?: number;
-  readonly lifecycleByteCapacity?: number;
   readonly ownerTimeBudget?: number;
   readonly lifecycleBurstLimit?: number;
-  readonly fixedWorkByteCost?: number;
-  readonly capacityError?: (lane: ZLinkSerialWorkLane) => unknown;
 }
 
-export const ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS: Required<
-  Omit<ZLinkSerialSchedulerOptions, 'capacityError'>
-> = Object.freeze({
-  applicationMessageCapacity: 1_024,
-  applicationByteCapacity: 64 * 1024 * 1024,
-  lifecycleMessageCapacity: 128,
-  lifecycleByteCapacity: 4 * 1024 * 1024,
+export const ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS: Required<ZLinkSerialSchedulerOptions> = Object.freeze({
   ownerTimeBudget: 10,
   lifecycleBurstLimit: 8,
-  fixedWorkByteCost: 256
 });
-
-const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 
 export interface ZLinkSerialWorkRecord<T> {
   readonly acceptedSequence: bigint;
   readonly lane: ZLinkSerialWorkLane;
-  readonly byteCost: number;
   readonly operation: () => Promise<T> | T;
   readonly context?: unknown;
   resolve(value: T): void;
@@ -61,26 +45,17 @@ type SerialWorkRecord<T> = Omit<ZLinkSerialWorkRecord<T>, 'acceptedSequence'> & 
 
 interface ZLinkSerialAdmissionLane {
   readonly records: Array<SerialWorkRecord<unknown>>;
-  readonly messageCapacity: number;
-  readonly byteCapacity: number;
-  messageCount: number;
-  byteCount: number;
 }
-
-type ZLinkSerialReservationMode = 'enforce-capacity' | 'transferred' | 'none';
 
 /**
  * One event-loop serial execution queue per Spot, Actor mailbox, or Stream session.
- * Its reservations are owner-local and span queued plus running work until the
- * execution owner reaches its terminal transition.
+ * Application work carries the host permit through the queue until the handler starts.
  */
 export class ZLinkSerialExecutionQueue {
   private readonly application: ZLinkSerialAdmissionLane;
   private readonly lifecycle: ZLinkSerialAdmissionLane;
   private readonly ownerTimeBudget: number;
   private readonly lifecycleBurstLimit: number;
-  private readonly fixedWorkByteCost: number;
-  private readonly capacityError: (lane: ZLinkSerialWorkLane) => unknown;
   private nextAcceptedSequence = 1n;
   private draining = false;
   private drainScheduled = false;
@@ -95,26 +70,12 @@ export class ZLinkSerialExecutionQueue {
     options: ZLinkSerialSchedulerOptions = {}
   ) {
     const configured = { ...ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS, ...options };
-    validatePositive(configured.applicationMessageCapacity, 'applicationMessageCapacity');
-    validatePositive(configured.applicationByteCapacity, 'applicationByteCapacity');
-    validatePositive(configured.lifecycleMessageCapacity, 'lifecycleMessageCapacity');
-    validatePositive(configured.lifecycleByteCapacity, 'lifecycleByteCapacity');
     validateNonNegative(configured.ownerTimeBudget, 'ownerTimeBudget');
     validatePositive(configured.lifecycleBurstLimit, 'lifecycleBurstLimit');
-    validatePositive(configured.fixedWorkByteCost, 'fixedWorkByteCost');
-    this.application = createLane(
-      configured.applicationMessageCapacity,
-      configured.applicationByteCapacity
-    );
-    this.lifecycle = createLane(
-      configured.lifecycleMessageCapacity,
-      configured.lifecycleByteCapacity
-    );
+    this.application = createLane();
+    this.lifecycle = createLane();
     this.ownerTimeBudget = configured.ownerTimeBudget;
     this.lifecycleBurstLimit = configured.lifecycleBurstLimit;
-    this.fixedWorkByteCost = configured.fixedWorkByteCost;
-    this.capacityError = options.capacityError
-      ?? (lane => new Error(`The ${lane} execution queue is full.`));
   }
 
   submit<T>(
@@ -139,15 +100,14 @@ export class ZLinkSerialExecutionQueue {
   }
 
   /**
-   * Enqueues a continuation for an already-reserved owner turn. It preserves
-   * application FIFO order without taking a second owner-local reservation.
+   * Enqueues a continuation for an already-admitted owner turn.
    */
   submitContinuation<T>(
     operation: () => Promise<T> | T,
     context?: unknown
   ): Promise<T> {
     try {
-      return this.admit(operation, { lane: 'application' }, context, 'none');
+      return this.admit(operation, { lane: 'application' }, context);
     } catch (error) {
       return Promise.reject(error);
     }
@@ -155,9 +115,7 @@ export class ZLinkSerialExecutionQueue {
 
   /**
    * Atomically transfers an already-accepted durable FIFO prefix into this
-   * owner queue. Admission failures remain synchronous so the durable owner
-   * cannot publish a restore linearization point for a prefix that was never
-   * queued.
+   * owner queue.
    *
    * @internal
    */
@@ -171,22 +129,20 @@ export class ZLinkSerialExecutionQueue {
       operation,
       { ...options, lane: 'application' },
       context,
-      'transferred',
       preparation
     );
   }
 
   /**
    * Enqueues work that already owns the host-wide application job permit.
-   * Its owner-local reservation transfers from the mailbox without a second
-   * capacity decision and remains held through handler terminal completion.
+   * It remains held through handler terminal completion.
    */
   submitPreAdmitted<T>(
     operation: () => Promise<T> | T,
     options: ZLinkSerialWorkOptions = {},
     context?: unknown
   ): Promise<T> {
-    return this.admit(operation, options, context, 'transferred');
+    return this.admit(operation, options, context);
   }
 
   snapshot(): {
@@ -196,10 +152,10 @@ export class ZLinkSerialExecutionQueue {
     readonly lifecycleBytes: number;
   } {
     return {
-      applicationMessages: this.application.messageCount,
-      applicationBytes: this.application.byteCount,
-      lifecycleMessages: this.lifecycle.messageCount,
-      lifecycleBytes: this.lifecycle.byteCount
+      applicationMessages: this.application.records.length,
+      applicationBytes: 0,
+      lifecycleMessages: this.lifecycle.records.length,
+      lifecycleBytes: 0
     };
   }
 
@@ -224,19 +180,11 @@ export class ZLinkSerialExecutionQueue {
     operation: () => Promise<T> | T,
     options: ZLinkSerialWorkOptions,
     context?: unknown,
-    reservationMode: ZLinkSerialReservationMode = 'enforce-capacity',
     preparation?: ZLinkSerialWorkPreparation
   ): Promise<T> {
     if (this.closed) throw new Error('The serial execution queue is closed.');
     const lane = options.lane ?? 'application';
-    const reservationHeld = reservationMode !== 'none';
-    const byteCost = reservationHeld ? this.byteCost(options) : 0;
     const target = lane === 'application' ? this.application : this.lifecycle;
-    if (reservationMode === 'enforce-capacity' && !reserve(target, byteCost)) {
-      throw this.capacityError(lane);
-    }
-    if (reservationMode === 'transferred') reserveTransferred(target, byteCost);
-
     let settled = false;
     let released = false;
     let resolveResult!: (value: T | PromiseLike<T>) => void;
@@ -248,7 +196,6 @@ export class ZLinkSerialExecutionQueue {
     const release = (): void => {
       if (released) return;
       released = true;
-      if (reservationHeld) releaseReservation(target, byteCost);
     };
     const resolve = (value: T): void => {
       if (settled) return;
@@ -263,7 +210,6 @@ export class ZLinkSerialExecutionQueue {
     const record: SerialWorkRecord<T> = {
       acceptedSequence: 0n,
       lane,
-      byteCost,
       operation,
       context,
       preparation,
@@ -289,18 +235,6 @@ export class ZLinkSerialExecutionQueue {
     }
     this.scheduleDrain();
     return result;
-  }
-
-  private byteCost(options: ZLinkSerialWorkOptions): number {
-    const payloadBytes = options.payloadBytes ?? 0;
-    const metadataBytes = options.metadataBytes ?? 0;
-    validateNonNegative(payloadBytes, 'payloadBytes');
-    validateNonNegative(metadataBytes, 'metadataBytes');
-    if (payloadBytes > MAX_SAFE_INTEGER - metadataBytes) return MAX_SAFE_INTEGER;
-    const payloadAndMetadata = payloadBytes + metadataBytes;
-    return payloadAndMetadata > MAX_SAFE_INTEGER - this.fixedWorkByteCost
-      ? MAX_SAFE_INTEGER
-      : payloadAndMetadata + this.fixedWorkByteCost;
   }
 
   private scheduleDrain(): void {
@@ -485,36 +419,10 @@ export class ZLinkSerialExecutionQueue {
   }
 }
 
-function createLane(messageCapacity: number, byteCapacity: number): ZLinkSerialAdmissionLane {
+function createLane(): ZLinkSerialAdmissionLane {
   return {
-    records: [],
-    messageCapacity,
-    byteCapacity,
-    messageCount: 0,
-    byteCount: 0
+    records: []
   };
-}
-
-function reserve(lane: ZLinkSerialAdmissionLane, byteCost: number): boolean {
-  if (
-    lane.messageCount >= lane.messageCapacity
-    || byteCost > lane.byteCapacity - lane.byteCount
-  ) {
-    return false;
-  }
-  lane.messageCount += 1;
-  lane.byteCount += byteCost;
-  return true;
-}
-
-function reserveTransferred(lane: ZLinkSerialAdmissionLane, byteCost: number): void {
-  lane.messageCount += 1;
-  lane.byteCount += byteCost;
-}
-
-function releaseReservation(lane: ZLinkSerialAdmissionLane, byteCost: number): void {
-  lane.messageCount -= 1;
-  lane.byteCount -= byteCost;
 }
 
 function validatePositive(value: number, field: string): void {
