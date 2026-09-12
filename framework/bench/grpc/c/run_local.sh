@@ -3,6 +3,19 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${ROOT_DIR}/../../../.." && pwd)"
+
+# README §7.2 formula 1은 `zlink-<lang> / zlink-c`다. 두 행이 같은 조건에서 잰 값이어야
+# 그 비율이 binding 계층 비용이 된다. 언어 행은 모두 로컬 패키지의 Core를 로드하므로
+# C 기준도 같은 바이너리를 써야 한다 — `core/build`의 개발 빌드와는 실측 6% 차이가
+# 난다(#308: 600.2 대 636.6 KOPS, latency 13.1 대 8.1 ms).
+ZLINK_LOCAL_PACKAGE_ROOT="${ZLINK_LOCAL_PACKAGE_ROOT:-${REPO_ROOT}/.artifacts/wsl}"
+ZLINK_C_CORE_VERSION="${ZLINK_C_CORE_VERSION:-$(sed -n 's/^LIBZLINK_VERSION=//p' "${REPO_ROOT}/VERSION")}"
+ZLINK_C_CORE_DEFAULT_PREFIX="${ZLINK_LOCAL_PACKAGE_ROOT}/install/zlink-core/${ZLINK_C_CORE_VERSION}"
+if [[ ! -d "${ZLINK_C_CORE_DEFAULT_PREFIX}" ]]; then
+  echo "C 기준 벤치가 쓸 Core 패키지가 없다: ${ZLINK_C_CORE_DEFAULT_PREFIX}" >&2
+  echo "ZLINK_CORE_PACKAGE_PREFIX로 명시하거나 로컬 패키지를 먼저 만들어라." >&2
+  exit 1
+fi
 BUILD_DIR="${BUILD_DIR:-${ROOT_DIR}/build}"
 RUN_STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
 OUTPUT="${OUTPUT:-${ROOT_DIR}/../log/c/with_grpc_c_${RUN_STAMP}}"
@@ -19,7 +32,7 @@ ENABLE_ZMQ_SEND_SEND="${ENABLE_ZMQ_SEND_SEND:-0}"
 # may overlap a measurement). Pre-build with the same targets, then measure.
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
 cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" \
-  -DZLINK_C_CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${REPO_ROOT}/core/build}"
+  -DZLINK_C_CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ZLINK_C_CORE_DEFAULT_PREFIX}}"
 build_targets=(
   bench_c_with_grpc_zlink_server
   bench_c_with_grpc_zlink_client
