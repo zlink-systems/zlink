@@ -17,6 +17,7 @@ public sealed class test_pull_completion_contract
         string endpoint = CoreTestSupport.NewEndpoint("inproc", "reply-owner");
         owner.Bind(endpoint);
         dealer.Connect(endpoint);
+        using var completions = new CompletionPollerDriver(dealer);
 
         using Message request = Message.From("request");
         Task<IReadOnlyList<Message>> replyTask = dealer.Request()
@@ -43,7 +44,7 @@ public sealed class test_pull_completion_contract
     }
 
     [Fact]
-    public async Task public_poller_owns_completion_and_transfers_it_back()
+    public async Task public_poller_release_removes_completion_owner()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -74,10 +75,20 @@ public sealed class test_pull_completion_contract
         poller.Modify(dealer, PollEventFlags.PollCompletion);
         Assert.True(poller.Remove(dealer));
 
-        Task responderAfterTransfer = Task.Run(() => ReplyOnce(router, "two"));
         using Message second = Message.From("two");
-        IReadOnlyList<Message> secondReply = await dealer.Request()
+        ZlinkSubmitException ownerless = Assert.Throws<ZlinkSubmitException>(
+            () => dealer.Request().Message(second)
+                .Timeout(TimeSpan.FromSeconds(2)).Async());
+        Assert.Equal(ZlinkSubmitException.ErrorCode.InvalidState,
+            ownerless.Result);
+        Assert.Equal("two", second.GetString());
+
+        poller.Add(dealer, PollEventFlags.PollCompletion, 18);
+        Task responderAfterTransfer = Task.Run(() => ReplyOnce(router, "two"));
+        Task<IReadOnlyList<Message>> secondPending = dealer.Request()
             .Message(second).Timeout(TimeSpan.FromSeconds(2)).Async().Reply;
+        Assert.Equal(1, poller.Wait(events, TimeSpan.FromSeconds(2)));
+        IReadOnlyList<Message> secondReply = await secondPending;
         Zlink.MultipartClose(secondReply);
         await responderAfterTransfer;
     }
@@ -120,6 +131,7 @@ public sealed class test_pull_completion_contract
         string endpoint = CoreTestSupport.NewEndpoint("inproc", "late-cleanup");
         router.Bind(endpoint);
         dealer.Connect(endpoint);
+        using var completions = new CompletionPollerDriver(dealer);
 
         const int droppedCount = 32;
         Task responder = Task.Run(() =>
@@ -156,6 +168,7 @@ public sealed class test_pull_completion_contract
         string endpoint = CoreTestSupport.NewEndpoint("inproc", "typed-timeout");
         router.Bind(endpoint);
         dealer.Connect(endpoint);
+        using var completions = new CompletionPollerDriver(dealer);
 
         using Message request = Message.From("no-reply");
         ZlinkRequestException error = await Assert.ThrowsAsync<ZlinkRequestException>(

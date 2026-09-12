@@ -25,6 +25,7 @@ public sealed class test_submit_result_terminal_contract
         using var server = context.CreateRouterSocket();
         using var client = context.CreateDealerSocket();
         ConnectReady(server, client, $"submit-result-ok-{repetition}");
+        using var completions = new CompletionPollerDriver(client);
 
         using (Message payload = Message.From("send-ok"))
         {

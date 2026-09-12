@@ -131,7 +131,7 @@ public sealed class test_completion_lifecycle_regressions
     }
 
     [Fact]
-    public async Task context_shutdown_settles_runtime_owned_request_as_terminated()
+    public void ownerless_async_request_fails_fast_without_submission()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -146,14 +146,14 @@ public sealed class test_completion_lifecycle_regressions
         EstablishConnection(dealer, router);
 
         using Message request = Message.From("pending");
-        Task<IReadOnlyList<Message>> pending = dealer.Request()
-            .Message(request).Timeout(TimeSpan.FromSeconds(30)).Async().Reply;
-
-        context.Shutdown();
-
-        ZlinkRequestException error = await Assert.ThrowsAsync<ZlinkRequestException>(
-            () => pending.WaitAsync(TimeSpan.FromSeconds(2)));
-        Assert.Equal(ZlinkRequestException.ErrorCode.Terminated, error.Result);
+        ZlinkSubmitException error = Assert.Throws<ZlinkSubmitException>(() =>
+            dealer.Request().Message(request)
+                .Timeout(TimeSpan.FromSeconds(30)).Async());
+        Assert.Equal(ZlinkSubmitException.ErrorCode.InvalidState,
+            error.Result);
+        Assert.Equal("pending", request.GetString());
+        using var received = Received.Create();
+        Assert.False(router.Recv(received, RecvFlags.DontWait));
     }
 
     [Fact]
@@ -233,6 +233,8 @@ public sealed class test_completion_lifecycle_regressions
         dealer.Connect(endpoint);
         using (Message handshake = Message.From("ready"))
             dealer.Send().Message(handshake).Submit();
+        using var completions = Zlink.CreatePoller();
+        completions.Add(dealer, PollEventFlags.PollCompletion, 0);
         using Message request = Message.From("pending");
         Task<IReadOnlyList<Message>> pending = dealer.Request()
             .Message(request).Timeout(TimeSpan.FromSeconds(30)).Async().Reply;

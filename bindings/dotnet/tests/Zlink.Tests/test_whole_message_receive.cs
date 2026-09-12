@@ -16,6 +16,7 @@ public sealed class test_whole_message_receive
         var endpoint = CoreTestSupport.NewEndpoint("inproc", "whole-request");
         router.Bind(endpoint);
         dealer.Connect(endpoint);
+        using var completions = new CompletionPollerDriver(dealer);
         using var received = Received.Create();
 
         // Exceed the initial native pool capacity, then reuse the same result

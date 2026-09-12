@@ -97,6 +97,7 @@ public sealed class test_hot_path_ownership_contract
         var endpoint = CoreTestSupport.NewEndpoint("inproc", "reply-scratch-alias");
         router.Bind(endpoint);
         dealer.Connect(endpoint);
+        using var completions = new CompletionPollerDriver(dealer);
         using Message request = Message.From("request");
         var pending = dealer.Request().Message(request)
             .Timeout(TimeSpan.FromSeconds(2)).Async().Reply;
@@ -144,6 +145,7 @@ public sealed class test_hot_path_ownership_contract
         var endpoint = CoreTestSupport.NewEndpoint("inproc", "reply-scratch-invalid");
         router.Bind(endpoint);
         dealer.Connect(endpoint);
+        using var completions = new CompletionPollerDriver(dealer);
         using Message request = Message.From("request");
         var pending = dealer.Request().Message(request)
             .Timeout(TimeSpan.FromSeconds(2)).Async().Reply;
@@ -222,6 +224,7 @@ public sealed class test_hot_path_ownership_contract
         var endpoint = CoreTestSupport.NewEndpoint("inproc", "request-identity");
         router.Bind(endpoint);
         dealer.Connect(endpoint);
+        using var completions = new CompletionPollerDriver(dealer);
         using var received = Received.Create();
 
         Task<IReadOnlyList<Message>> Exchange(string text)

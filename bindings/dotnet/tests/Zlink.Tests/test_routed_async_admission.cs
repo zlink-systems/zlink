@@ -37,7 +37,7 @@ public sealed class test_routed_async_admission
     }
 
     [Fact]
-    public async Task async_terminal_waits_for_writable_without_blocking_for_credit()
+    public void ownerless_async_send_fails_fast_when_writable_is_required()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -53,21 +53,30 @@ public sealed class test_routed_async_admission
         router.Bind(endpoint);
         dealer.Connect(endpoint);
         Thread.Sleep(100);
-        _ = FillDealerTarget(dealer, out List<Task> filler);
+        for (var attempt = 0; attempt < 16; attempt++)
+        {
+            using Message payload = Message.From(FillerPayload);
+            var started = Stopwatch.StartNew();
+            try
+            {
+                SendSubmission submission = dealer.Send().Message(payload)
+                    .Async();
+                Assert.Equal(SubmitResult.Ok, submission.Result);
+                Assert.True(submission.Admitted.IsCompletedSuccessfully);
+            }
+            catch (ZlinkSubmitException error)
+            {
+                started.Stop();
+                Assert.Equal(ZlinkSubmitException.ErrorCode.InvalidState,
+                    error.Result);
+                Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(250));
+                Assert.Equal(FillerPayload, payload.GetString());
+                return;
+            }
+        }
 
-        using var cancellation = new CancellationTokenSource();
-        using Message payload = Message.From("pending");
-        var started = Stopwatch.StartNew();
-        Task pending = dealer.Send().Message(payload).Async(cancellation.Token).Admitted;
-        started.Stop();
-
-        Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(250));
-        await Task.Delay(25);
-        Assert.False(pending.IsCompleted);
-        cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            async () => await pending);
-        SwallowAll(filler);
+        throw new Xunit.Sdk.XunitException(
+            "The DEALER target never reached ownerless backpressure.");
     }
 
     [Fact]
@@ -83,6 +92,7 @@ public sealed class test_routed_async_admission
             "inproc", "dotnet-request-wait-cancel");
         router.Bind(endpoint);
         dealer.Connect(endpoint);
+        using var completions = new CompletionPollerDriver(dealer);
 
         using var cancellation = new CancellationTokenSource();
         using Message payload = Message.From("cancel-wait");
@@ -453,6 +463,8 @@ public sealed class test_routed_async_admission
         router.Bind(endpoint);
         dealer.Connect(endpoint);
         Thread.Sleep(100);
+        using var completions = Zlink.CreatePoller();
+        completions.Add(dealer, PollEventFlags.PollCompletion, 0);
         _ = FillDealerTarget(dealer, out List<Task> filler);
 
         using var cancellation = new CancellationTokenSource();
@@ -489,6 +501,8 @@ public sealed class test_routed_async_admission
         router.Bind(endpoint);
         dealer.Connect(endpoint);
         Thread.Sleep(100);
+        using var completions = Zlink.CreatePoller();
+        completions.Add(dealer, PollEventFlags.PollCompletion, 0);
         _ = FillDealerTarget(dealer, out List<Task> filler);
 
         using Message payload = Message.From("pending-close");
@@ -518,6 +532,8 @@ public sealed class test_routed_async_admission
         router.Bind(endpoint);
         dealer.Connect(endpoint);
         Thread.Sleep(100);
+        using var completions = Zlink.CreatePoller();
+        completions.Add(dealer, PollEventFlags.PollCompletion, 0);
 
         using Message request = Message.From("accepted-before-close");
         Task<IReadOnlyList<Message>> pending = dealer.Request()
@@ -554,6 +570,7 @@ public sealed class test_routed_async_admission
         router.Bind(endpoint);
         dealer.Connect(endpoint);
         Thread.Sleep(100);
+        using var completions = new CompletionPollerDriver(router);
         _ = FillRouterTarget(router, dealerRid, out List<Task> filler);
 
         using Message payload = Message.From("pending-disconnect");
@@ -588,6 +605,7 @@ public sealed class test_routed_async_admission
         router.Bind(endpoint);
         dealer.Connect(endpoint);
         Thread.Sleep(100);
+        using var completions = new CompletionPollerDriver(dealer);
 
         using Message request = Message.From("deadline-request");
         var started = Stopwatch.StartNew();

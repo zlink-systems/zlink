@@ -74,6 +74,7 @@ public sealed class test_request_writable_contract
         string endpoint = CoreTestSupport.NewEndpoint(
             "inproc", "request-writable-connect-first");
         dealer.Connect(endpoint);
+        using var completions = new CompletionPollerDriver(dealer);
 
         using Message part = Message.From("connect-before-bind");
         Task<IReadOnlyList<Message>> pending = dealer.Request()
@@ -103,6 +104,8 @@ public sealed class test_request_writable_contract
         string endpoint = CoreTestSupport.NewEndpoint(
             "inproc", "request-writable-close");
         dealer.Connect(endpoint);
+        using var completions = Zlink.CreatePoller();
+        completions.Add(dealer, PollEventFlags.PollCompletion, 0);
 
         using Message part = Message.From("close-before-admission");
         RequestSubmission pending = dealer.Request()
@@ -145,6 +148,7 @@ public sealed class test_request_writable_contract
         server.Bind(endpoint);
         client.Connect(endpoint);
         Handshake(client, server, serverRid);
+        using var completions = new CompletionPollerDriver(client);
 
         using Message admittedPart = Message.From(LargePayload + "-admitted");
         using Message waitingPart = Message.From(LargePayload + "-waiting");
@@ -182,6 +186,7 @@ public sealed class test_request_writable_contract
         string endpoint = CoreTestSupport.NewEndpoint(
             "inproc", "request-writable-mixed");
         dealer.Connect(endpoint);
+        using var completions = new CompletionPollerDriver(dealer);
 
         using Message sendPart = Message.From("mixed-send");
         using Message requestPart = Message.From("mixed-request");

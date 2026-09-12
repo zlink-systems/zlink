@@ -74,7 +74,7 @@ public sealed class test_optimization_guard
     }
 
     [Fact]
-    public void async_send_recovery_does_not_create_a_dedicated_wait_thread()
+    public void completion_progress_has_no_runtime_background_owner()
     {
         string path = Path.Combine(BindingRoot(), "src", "Zlink", "Runtime",
             "Messaging", "CompletionOwner.cs");
@@ -92,15 +92,16 @@ public sealed class test_optimization_guard
             StringComparison.Ordinal);
         Assert.DoesNotContain("Task.Yield()", source,
             StringComparison.Ordinal);
-        Assert.Contains("events, 1, 25, out var error", source,
+        Assert.DoesNotContain("Task.Run(", source,
             StringComparison.Ordinal);
-        Assert.Contains("var events = PollEventFlags.PollCompletion;", source,
+        Assert.DoesNotContain("RuntimePump", source,
             StringComparison.Ordinal);
-        // A signal-interrupted runtime wait keeps pumping instead of failing
-        // every armed waiter.
-        Assert.Contains(
-            "if (ZlinkException.MapErrorCode(errno) != ErrorCode.EIntr)",
-            source, StringComparison.Ordinal);
+        Assert.Contains("EnsurePublicOwner();", source,
+            StringComparison.Ordinal);
+        Assert.Contains("DrainInline(entry);", source,
+            StringComparison.Ordinal);
+        Assert.Contains("zlink_completion_recv(_handle,", source,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -284,13 +285,11 @@ public sealed class test_optimization_guard
 
         Assert.Contains("RequestSubmission submission = submit(message);", source,
             StringComparison.Ordinal);
-        Assert.Contains("SubmitResult.Backpressured", source,
+        Assert.Contains("completionPoller.Add(requester,",
+            source, StringComparison.Ordinal);
+        Assert.Contains("submission.Reply", source,
             StringComparison.Ordinal);
-        Assert.Contains("submission.Admitted.GetAwaiter().GetResult();", source,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("completionPoller", source,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain(".IsCompleted", source,
+        Assert.Contains("completionPoller.Wait(", source,
             StringComparison.Ordinal);
     }
 

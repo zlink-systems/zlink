@@ -16,14 +16,11 @@ internal sealed class CompletionOwner
     private readonly SocketType _socketType;
     private readonly object _sync = new();
     private readonly object _submitSync = new();
-    private readonly object _runtimeSync = new();
+    private readonly object _inlineDrainSync = new();
     private readonly Dictionary<IntPtr, CompletionEntry> _entries = new();
     private List<CompletionEntry>? _retries;
 
     private object? _publicOwner;
-    private IntPtr _runtimePoller;
-    private long _runtimeEpoch;
-    private bool _runtimePumpStarted;
     private bool _closing;
     private long _nextContext;
 
@@ -46,8 +43,11 @@ internal sealed class CompletionOwner
             // calls. The common noncancelable path needs no entry or Task until
             // Core actually returns a writable token. Drain shares _submitSync,
             // so that token cannot be pulled before registration and Arm.
+            var hasPublicOwner = HasPublicOwner();
             SendCompletionEntry? entry = null;
-            var context = NextContext();
+            var context = hasPublicOwner || cancellationToken.CanBeCanceled
+                ? NextContext()
+                : IntPtr.Zero;
             if (cancellationToken.CanBeCanceled)
             {
                 entry = new SendCompletionEntry(this, target, cancellationToken);
@@ -74,6 +74,13 @@ internal sealed class CompletionOwner
 
             if (IsWritableWait(attempt))
             {
+                if (!hasPublicOwner)
+                {
+                    var failure = new ZlinkSubmitException(
+                        SubmitResult.InvalidState);
+                    entry?.AbortBeforeNativeWait(failure);
+                    throw failure;
+                }
                 if (entry is null)
                 {
                     entry = new SendCompletionEntry(this, target, cancellationToken);
@@ -92,10 +99,8 @@ internal sealed class CompletionOwner
                 catch (Exception exception)
                 {
                     entry.ArmFailed(attempt.CompletionId, retained, exception);
-                    StartRuntimePump();
                     throw;
                 }
-                StartRuntimePump();
                 return new SendSubmission(SubmitResult.Backpressured,
                     entry.Task);
             }
@@ -124,6 +129,8 @@ internal sealed class CompletionOwner
         {
             RequestReplySupport.EnsureParts(parts, nameof(parts));
             cancellationToken.ThrowIfCancellationRequested();
+            EnsureOpenForSubmit();
+            EnsurePublicOwner();
 
             var entry = new RequestCompletionEntry(this, target, timeoutMs,
                 cancellationToken);
@@ -140,7 +147,6 @@ internal sealed class CompletionOwner
                 }
 
                 entry.PublishRequest(attempt.CompletionId);
-                StartRuntimePump();
                 return new RequestSubmission(SubmitResult.Ok,
                     entry.Admitted, entry.Task);
             }
@@ -159,10 +165,8 @@ internal sealed class CompletionOwner
                 catch (Exception exception)
                 {
                     entry.ArmFailed(attempt.CompletionId, retained, exception);
-                    StartRuntimePump();
                     throw;
                 }
-                StartRuntimePump();
                 return new RequestSubmission(SubmitResult.Backpressured,
                     entry.Admitted, entry.Task);
             }
@@ -176,6 +180,7 @@ internal sealed class CompletionOwner
         IReadOnlyList<Message> parts, uint timeoutMs)
     {
         RequestReplySupport.EnsureParts(parts, nameof(parts));
+        EnsureOpenForSubmit();
         var entry = new RequestCompletionEntry(this, target, timeoutMs,
             CancellationToken.None);
         Register(entry);
@@ -193,7 +198,7 @@ internal sealed class CompletionOwner
             throw failure;
         }
         entry.PublishRequest(attempt.CompletionId);
-        StartRuntimePump();
+        DrainInline(entry);
         return entry.Task.GetAwaiter().GetResult();
     }
 
@@ -226,42 +231,37 @@ internal sealed class CompletionOwner
 
     internal bool TransferToPublic(object pollerOwner)
     {
-        lock (_sync)
+        lock (_inlineDrainSync)
         {
-            if (_closing)
-                throw new ZlinkConfigException(ConfigResult.InvalidState);
-            if (_publicOwner is not null
-                && !ReferenceEquals(_publicOwner, pollerOwner))
-                throw new ZlinkConfigException(ConfigResult.InvalidState,
-                    (int)ErrorCode.EBusy);
-            if (ReferenceEquals(_publicOwner, pollerOwner))
-                return false;
-            _publicOwner = pollerOwner;
+            lock (_submitSync)
+            {
+                lock (_sync)
+                {
+                    if (_closing)
+                        throw new ZlinkConfigException(
+                            ConfigResult.InvalidState);
+                    if (_publicOwner is not null
+                        && !ReferenceEquals(_publicOwner, pollerOwner))
+                        throw new ZlinkConfigException(
+                            ConfigResult.InvalidState, (int)ErrorCode.EBusy);
+                    if (ReferenceEquals(_publicOwner, pollerOwner))
+                        return false;
+                    _publicOwner = pollerOwner;
+                }
+            }
         }
-        StopRuntimePump();
         return true;
     }
 
-    internal void TransferToRuntime(object pollerOwner)
+    internal void ReleasePublic(object pollerOwner)
     {
-        lock (_sync)
+        lock (_submitSync)
         {
-            if (!ReferenceEquals(_publicOwner, pollerOwner))
-                return;
-            _publicOwner = null;
-        }
-        try
-        {
-            PrepareRuntimeDrain();
-            StartRuntimePump();
-        }
-        catch
-        {
-            // Native removal has already committed, so ownership cannot be
-            // rolled back. Settle managed waiters instead of leaking a wait
-            // with no completion drain owner.
-            StopRuntimePump();
-            FailUnownedWaits();
+            lock (_sync)
+            {
+                if (ReferenceEquals(_publicOwner, pollerOwner))
+                    _publicOwner = null;
+            }
         }
     }
 
@@ -328,22 +328,26 @@ internal sealed class CompletionOwner
                 throw ZlinkException.CreateRecvException((RecvResult)rc);
             }
 
-            CompletionEntry? entry;
-            lock (_sync)
-                _entries.TryGetValue(completion.UserContext, out entry);
-            var isRequest = completion.Kind == CompletionKind.Request;
             try
             {
-                entry?.Capture(ref completion);
+                if (Capture(ref completion))
+                    requests++;
             }
             finally
             {
                 NativeMethods.zlink_completion_close(ref completion);
             }
-            if (isRequest)
-                requests++;
             processed++;
         }
+    }
+
+    private bool Capture(ref ZlinkCompletion completion)
+    {
+        CompletionEntry? entry;
+        lock (_sync)
+            _entries.TryGetValue(completion.UserContext, out entry);
+        entry?.Capture(ref completion);
+        return completion.Kind == CompletionKind.Request;
     }
 
     internal void PrepareClose()
@@ -352,7 +356,6 @@ internal sealed class CompletionOwner
         // waits on close while holding an entry lock.
         lock (_sync)
             _closing = true;
-        StopRuntimePump();
         Monitor.Enter(_submitSync);
     }
 
@@ -362,8 +365,6 @@ internal sealed class CompletionOwner
         {
             lock (_sync)
                 _closing = false;
-            PrepareRuntimeDrain();
-            StartRuntimePump();
         }
         finally
         {
@@ -420,7 +421,6 @@ internal sealed class CompletionOwner
 
         try
         {
-            PrepareRuntimeDrain();
             entry.EnableCancellation();
         }
         catch
@@ -435,6 +435,18 @@ internal sealed class CompletionOwner
         if (Volatile.Read(ref _closing))
             throw new ZlinkSubmitException(SubmitResult.Terminated,
                 (int)ErrorCode.EShutdown);
+    }
+
+    private bool HasPublicOwner()
+    {
+        lock (_sync)
+            return _publicOwner is not null;
+    }
+
+    private void EnsurePublicOwner()
+    {
+        if (!HasPublicOwner())
+            throw new ZlinkSubmitException(SubmitResult.InvalidState);
     }
 
     private void Remove(CompletionEntry entry, IntPtr context)
@@ -457,7 +469,8 @@ internal sealed class CompletionOwner
             Target = target.HasValue ? target.Value.ToNative() : default,
             Routed = target.HasValue,
             Flags = flags,
-            Context = userContext
+            Context = userContext,
+            TrackCompletion = flags == DontWait
         };
         try
         {
@@ -475,6 +488,7 @@ internal sealed class CompletionOwner
         internal IntPtr Handle, Context;
         internal ZlinkRoutingId Target;
         internal bool Routed;
+        internal bool TrackCompletion;
         internal int Flags;
         internal ulong CompletionId;
 
@@ -483,7 +497,7 @@ internal sealed class CompletionOwner
         {
             fixed (ulong* id = &self.CompletionId)
             {
-                var idOut = self.Context != IntPtr.Zero ? id : null;
+                var idOut = self.TrackCompletion ? id : null;
                 return self.Routed
                     ? NativeMethods.zlink_send_rid(self.Handle,
                         ref self.Target, ref parts[0], (nuint)parts.Length,
@@ -552,120 +566,35 @@ internal sealed class CompletionOwner
     private static ZlinkSubmitException CreateProtocolFailure() =>
         new(SubmitResult.InternalError, (int)ErrorCode.EProtoNoSupport);
 
-    private void PrepareRuntimeDrain()
+    private void DrainInline(RequestCompletionEntry entry)
     {
-        lock (_runtimeSync)
+        lock (_inlineDrainSync)
         {
-            lock (_sync)
-            {
-                if (_closing || _publicOwner is not null
-                    || _entries.Count == 0 || _runtimePoller != IntPtr.Zero)
-                    return;
-            }
-
-            var poller = NativeMethods.zlink_poller_new();
-            if (poller == IntPtr.Zero)
-                throw ZlinkException.CreateConfigException(
-                    NativeMethods.GetLastPInvokeError());
-            var events = PollEventFlags.PollCompletion;
-            var rc = NativeMethods.zlink_poller_add(poller, _handle,
-                IntPtr.Zero, (short)events);
-            if (rc != 0)
-            {
-                _ = NativeMethods.zlink_poller_destroy(ref poller);
-                throw ZlinkException.CreateConfigException((ConfigResult)rc);
-            }
-            _runtimePoller = poller;
-            _runtimePumpStarted = false;
-            _runtimeEpoch++;
-        }
-    }
-
-    private void StartRuntimePump()
-    {
-        PrepareRuntimeDrain();
-        long epoch;
-        lock (_runtimeSync)
-        {
-            lock (_sync)
-            {
-                if (_closing || _publicOwner is not null
-                    || _entries.Count == 0 || _runtimePoller == IntPtr.Zero
-                    || _runtimePumpStarted)
-                    return;
-            }
-            _runtimePumpStarted = true;
-            epoch = _runtimeEpoch;
-        }
-
-        // Start on the shared managed scheduler so a caller's single-threaded
-        // SynchronizationContext cannot own or block completion progress.
-        // Scope both captures after the early returns: an existing pump or a
-        // public drain owner needs no scheduled callback or closure allocation.
-        {
-            var owner = this;
-            var pumpEpoch = epoch;
-            _ = Task.Run(() => owner.RuntimePump(pumpEpoch));
-        }
-    }
-
-    private void RuntimePump(long epoch)
-    {
-        var events = new ZlinkPollerEvent[1];
-        while (true)
-        {
-            var ready = false;
-            var waitFailed = false;
-            var waitTerminated = false;
-            lock (_runtimeSync)
-            {
-                lock (_sync)
-                {
-                    if (epoch != _runtimeEpoch || _closing
-                        || _publicOwner is not null || _entries.Count == 0
-                        || _runtimePoller == IntPtr.Zero)
-                    {
-                        if (epoch == _runtimeEpoch)
-                            _runtimePumpStarted = false;
-                        return;
-                    }
-                }
-
-                var rc = NativeMethods.zlink_poller_wait(_runtimePoller,
-                    events, 1, 25, out var error);
-                if (rc > 0)
-                    ready = true;
-                else if (rc < 0 && (ConfigResult)error != ConfigResult.Ok)
-                {
-                    // A signal-interrupted wait (EINTR) leaves the queue and
-                    // every token intact; only a real failure ends the pump.
-                    var errno = NativeMethods.GetLastPInvokeError();
-                    if (ZlinkException.MapErrorCode(errno) != ErrorCode.EIntr)
-                    {
-                        waitFailed = true;
-                        waitTerminated =
-                            ZlinkException.IsTerminationError(errno);
-                    }
-                }
-            }
-
-            if (waitFailed)
-            {
-                FailRuntimeWaits(epoch, waitTerminated);
+            if (HasPublicOwner())
                 return;
-            }
-
-            if (ready)
+            while (!entry.Task.IsCompleted)
             {
+                ZlinkCompletion completion = default;
+                completion.StructSize = checked(
+                    (uint)Marshal.SizeOf<ZlinkCompletion>());
+                var rc = NativeMethods.zlink_completion_recv(_handle,
+                    ref completion, 0);
+                if ((RecvResult)rc == RecvResult.NoData)
+                    continue;
+                if ((RecvResult)rc != RecvResult.Ok)
+                {
+                    FailDrainWaits((RecvResult)rc);
+                    throw ZlinkException.CreateRecvException((RecvResult)rc);
+                }
                 try
                 {
-                    DrainRuntime(epoch);
+                    Capture(ref completion);
                 }
-                catch
+                finally
                 {
-                    FailRuntimeWaits(epoch);
-                    return;
+                    NativeMethods.zlink_completion_close(ref completion);
                 }
+                DrainCore();
             }
         }
     }
@@ -685,86 +614,7 @@ internal sealed class CompletionOwner
             if (result == RecvResult.Terminated)
                 entry.FailLifecycle();
             else
-                entry.FailRuntimeWait();
-        }
-    }
-
-    private void FailUnownedWaits()
-    {
-        lock (_submitSync)
-        {
-            CompletionEntry[] entries;
-            lock (_sync)
-            {
-                if (_closing || _publicOwner is not null)
-                    return;
-                entries = _entries.Values.ToArray();
-            }
-            foreach (var entry in entries)
-                entry.FailRuntimeWait();
-        }
-    }
-
-    private void FailRuntimeWaits(long epoch, bool terminated = false)
-    {
-        // A poll/drain failure must not leave an awaiter unresolved. Native may
-        // still own each published token, so entries become payload-free
-        // tombstones and retain their registry identity until that token is pulled by a
-        // later pump/public poller or the socket closes.
-        lock (_submitSync)
-        {
-            CompletionEntry[] entries;
-            lock (_runtimeSync)
-                lock (_sync)
-                {
-                    if (epoch != _runtimeEpoch || _closing
-                        || _publicOwner is not null)
-                        return;
-                    _runtimePumpStarted = false;
-                    entries = _entries.Values.ToArray();
-                }
-
-            foreach (var entry in entries)
-            {
-                if (terminated)
-                    entry.FailLifecycle();
-                else
-                    entry.FailRuntimeWait();
-            }
-        }
-    }
-
-    private void DrainRuntime(long epoch)
-    {
-        lock (_submitSync)
-        {
-            lock (_runtimeSync)
-            {
-                lock (_sync)
-                {
-                    if (epoch != _runtimeEpoch || _closing
-                        || _publicOwner is not null
-                        || _runtimePoller == IntPtr.Zero)
-                        return;
-                }
-            }
-            DrainCore();
-        }
-    }
-
-    private void StopRuntimePump()
-    {
-        lock (_runtimeSync)
-        {
-            _runtimeEpoch++;
-            _runtimePumpStarted = false;
-            if (_runtimePoller != IntPtr.Zero)
-                _ = NativeMethods.zlink_poller_destroy(ref _runtimePoller);
-        }
-        // Wait for an already-claimed drain turn to leave the queue before a
-        // public owner starts pulling from it.
-        lock (_submitSync)
-        {
+                entry.FailDrainWait();
         }
     }
 
@@ -778,7 +628,7 @@ internal sealed class CompletionOwner
         void Capture(ref ZlinkCompletion completion);
         void Retry();
         void AbortBeforeNativeWait(Exception exception);
-        void FailRuntimeWait();
+        void FailDrainWait();
         void FailLifecycle();
     }
 
@@ -1025,7 +875,7 @@ internal sealed class CompletionOwner
                 SubmitResult.Terminated, (int)ErrorCode.EShutdown));
         }
 
-        public void FailRuntimeWait()
+        public void FailDrainWait()
         {
             if (_state == SendEntryState.Retrying)
             {
@@ -1398,7 +1248,7 @@ internal sealed class CompletionOwner
             AbortBeforeNativeWait(failure);
         }
 
-        public void FailRuntimeWait()
+        public void FailDrainWait()
         {
             if (_state == RequestEntryState.Retrying)
             {
