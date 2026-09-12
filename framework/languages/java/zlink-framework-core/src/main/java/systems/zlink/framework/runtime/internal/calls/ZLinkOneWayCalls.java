@@ -17,6 +17,11 @@ public final class ZLinkOneWayCalls {
     public static final int ROUTE_NOT_CONNECTED = 3;
     public static final int TARGET_NOT_FOUND = 4;
     public static final int SHUTDOWN = 5;
+    // CompletableFuture.completedStage returns a minimal stage: callers receive
+    // an independent CompletableFuture from toCompletableFuture(), so the
+    // shared already-completed admission still satisfies stage isolation.
+    private static final CompletionStage<Void> IMMEDIATE_ADMISSION =
+        CompletableFuture.completedStage(null);
 
     private ZLinkOneWayCalls() {
     }
@@ -60,7 +65,26 @@ public final class ZLinkOneWayCalls {
         };
     }
 
+    /**
+     * Returns the binding's successful DONT_WAIT admission marker.
+     *
+     * <p>Only this marker means that admission is already terminal. A generic
+     * completed stage can still represent a mapped failure and must retain the
+     * normal one-way adapter.
+     */
+    public static CompletionStage<Void> immediateAdmission() {
+        return IMMEDIATE_ADMISSION;
+    }
+
+    /** True when the binding accepted this send before returning to Framework. */
+    public static boolean isImmediateAdmission(CompletionStage<Void> submission) {
+        return submission == IMMEDIATE_ADMISSION;
+    }
+
     public static CompletionStage<Void> adaptOneWay(CompletionStage<Void> submission) {
+        if (isImmediateAdmission(submission)) {
+            return submission;
+        }
         CompletableFuture<Void> source = submission.toCompletableFuture();
         CompletableFuture<Void> result = new CompletableFuture<>() {
             @Override

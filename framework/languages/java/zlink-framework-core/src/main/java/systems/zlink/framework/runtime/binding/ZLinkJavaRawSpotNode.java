@@ -53,7 +53,6 @@ import systems.zlink.framework.runtime.internal.streams.ZLinkStreamErrorPayload;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 /**
@@ -296,19 +295,7 @@ final class ZLinkJavaRawSpotNode
         if (routingId().equals(targetNodeRid)) {
             return Optional.empty();
         }
-        Optional<MeshPeerState> peerState = owner.peers().stream()
-            .filter(peer -> peer.routingId().equals(targetNodeRid))
-            .map(peer -> peer.state())
-            .findFirst();
-        if (peerState.isPresent()) {
-            return switch (peerState.orElseThrow()) {
-                case ADMITTED, CONFIGURED, CONNECTING -> Optional.empty();
-                case NOT_REQUIRED -> Optional.of(ZLinkOneWayCalls.TARGET_NOT_FOUND);
-                case CLOSED, DRAINING, ERROR ->
-                    Optional.of(ZLinkOneWayCalls.ROUTE_NOT_CONNECTED);
-            };
-        }
-        return Optional.of(ZLinkOneWayCalls.TARGET_NOT_FOUND);
+        return owner.classifyNodeSendTarget(targetNodeRid);
     }
 
     @Override

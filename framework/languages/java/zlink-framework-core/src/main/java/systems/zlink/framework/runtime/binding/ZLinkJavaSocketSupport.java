@@ -21,12 +21,9 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
 final class ZLinkJavaSocketSupport {
-    // Callers can mutate only the independent future returned by toCompletableFuture().
-    private static final CompletionStage<Void> ADMITTED =
-        CompletableFuture.completedStage(null);
-
     private ZLinkJavaSocketSupport() {
     }
 
@@ -67,7 +64,7 @@ final class ZLinkJavaSocketSupport {
         var submission = operation.submit();
         return submission.result() == SubmitResult.BACKPRESSURED
             ? submission.admitted()
-            : ADMITTED;
+            : ZLinkOneWayCalls.immediateAdmission();
     }
 
     static boolean submitSync(

@@ -26,6 +26,7 @@ import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
 /**
  * Private binding-facing port for the JVM service runtime.
@@ -118,8 +119,12 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             } catch (RuntimeException failure) {
                 completion = CompletableFuture.failedFuture(failure);
             }
-            completion = completion.whenComplete((ignored, failure) ->
-                Message.closeAll(ownedMessages));
+            if (ZLinkOneWayCalls.isImmediateAdmission(completion)) {
+                Message.closeAll(ownedMessages);
+            } else {
+                completion = completion.whenComplete((ignored, failure) ->
+                    Message.closeAll(ownedMessages));
+            }
             completionOwns = true;
             return completion;
         } finally {

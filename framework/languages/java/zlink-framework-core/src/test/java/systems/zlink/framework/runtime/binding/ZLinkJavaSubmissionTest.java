@@ -22,6 +22,7 @@ import systems.zlink.contracts.messaging.SendSubmission;
 import systems.zlink.contracts.messaging.SendSubmitOperation;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
 final class ZLinkJavaSubmissionTest {
     private static final Duration TIMEOUT = Duration.ofSeconds(5);
@@ -39,6 +40,7 @@ final class ZLinkJavaSubmissionTest {
 
             assertTrue(completed.toCompletableFuture().isDone());
             assertNull(completed.toCompletableFuture().join());
+            assertTrue(ZLinkOneWayCalls.isImmediateAdmission(completed));
             assertFalse(binding.admission.isDone());
             assertEquals(1, binding.resultReads);
             assertEquals(0, binding.admissionReads);
