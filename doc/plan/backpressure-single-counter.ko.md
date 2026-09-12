@@ -315,3 +315,52 @@ request 계열 단위는 KOPS, `send-saturation`은 KMSG/s다. C++의 `libgrpc++
 - `#5` `#6` `#7`의 send 비율이 0.90 이상
 - `#277` 해소(**완료**), `#101` 재측정 완료
 - `#291`(SENDSEND echo drain) 판정
+
+### 5.x C++ (#280) 검증과 감독자 보완 4건 — 2026-09-12
+
+codex job이 83 파일을 고쳐 빌드 93/93은 통과했지만 sandbox가 socket 생성·bind·DNS를
+막아 테스트 21개를 돌리지 못했다. 감독 환경에서 다시 돌려 **환경 실패 21건 → 실제 결함
+3건**으로 좁혔고, 넷을 고쳤다.
+
+1. **wire decode 교차언어 불일치.** Java `ZLinkChannelEnvelope`, .NET `ZLinkErrorWireNames`,
+   Node `channel-envelope.ts`는 `capacity_exceeded`를 인코딩·디코딩 표에서 모두 지웠는데
+   C++ `envelope_codec.cpp:69`와 `request_failure_mapper.cpp:101`만 남겨 `unavailable`로
+   매핑했다. 제거해 맞췄다 — 해독할 수 없는 error reply는 protocol error다.
+2. **mailbox claim 예산을 queue 상한으로 오인.** `try_claim(…, 2, 1)`이 record 2개를
+   준다고 고쳐놨다. claim의 byte 예산은 **receive turn 배치 예산**이라 그대로 남는다
+   (`claim_owner_locked`는 첫 record를 무조건 담고 그 다음부터 예산을 본다). 되돌렸다.
+3. **사라진 드랍 계약을 그대로 단언.** `owner_rejection_observability`가 "mailbox가 가득
+   차면 두 번째 one-way를 버린다 + 드랍 계기 1 + `Target owner FIFO capacity exceeded`"를
+   단언하고 있었다. "그대로 받는다 + 드랍 계기 0 + dropped 이벤트 없음 + 두 번째 record는
+   여전히 claim된다"로 다시 썼다. 계기 `zlink.mesh_node.messages.dropped`는 스펙이
+   요구하므로 남긴다 — backpressure가 더는 그 원인이 아닐 뿐이다.
+4. **새 4,200-request 회귀가 동작하지 않음.** 완료 payload는 encode된
+   `application_payload_t`인데 raw `bytes("reply")`와 비교했고, 앞 구간의 512 KiB
+   saturating one-way가 이제 버려지지 않고 보존되는데 그걸 비우지 않아 reply token
+   단언에서 멈췄다. 둘 다 고쳤다.
+
+`test_cpp_framework_tooling_contract` 실패는 제품과 무관했다 — codex가 `/tmp/zlink-280-vcpkg`
+toolchain으로 configure해 둬서 isolated configure가 Core package를 못 찾았다. 올바른
+`VCPKG_ROOT`·`ZLINK_LOCAL_PACKAGE_ROOT`로 직접 돌리면 8초에 통과한다.
+
+최종: `cmake --build build/ci -j10` 93/93, `ctest -L 'framework-unit|framework-contract|
+http-client-unit|http-client-contract'` **67/67**. PR **#294**.
+
+### 5.y 스펙에 남아 있던 상한 표현 (ab657858f0)
+
+C++ 구현을 검토하다 per-language 문서에 상한이 남은 것을 찾았다. `set_max_pending`
+(runtime 전체 pending queue 상한), `worker_options_t`·`Worker`의 queue 상한, C++ §6.1의
+"기본 정책은 무한 queue가 아니다", Spot publish §4.5의 "queue 용량 부족". 모두 걷어냈고
+`verify-framework-doc-contracts.sh` CLEAN이다.
+
+Node PR에는 NestJS 동반 package의 `ZLinkWorkerOptions.maxQueueLength`가 남아 있었다.
+framework 본체에서는 지웠는데 동반 package가 같은 필드를 **필수로** 요구한 채였다.
+지우고 `npm run typecheck` 통과 — #288에 포함.
+
+### 5.z codex 호출 형태 교정
+
+`codex --help`를 제대로 읽지 않아 생긴 손실이 있었다. `-s danger-full-access`와
+`--add-dir`를 주지 않아 #280 job이 테스트를 못 돌렸고, `codex exec resume <session_id>`를
+몰라 라운드 1이 틀렸을 때 브리프를 다시 쓰고 4개 job을 처음부터 재실행했다.
+리뷰도 `codex exec review --base main`이라는 전용 서브커맨드가 있었다.
+이후 job은 모두 교정된 형태로 띄운다.

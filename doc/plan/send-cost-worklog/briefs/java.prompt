@@ -1,0 +1,100 @@
+# 공통 지시 — framework send 건당 비용 조사
+
+## 배경
+
+zlink framework의 RouteMesh `send`(one-way)가 같은 언어 raw binding 대비 목표
+(`framework ≥ 0.90 × raw`)에 크게 못 미친다. request 계열은 이미 목표를 넘겼다.
+
+| 언어 | request 비율 | send 비율 |
+|---|---|---|
+| .NET | 1.1775 (PASS) | 0.0677 / 0.1185 |
+| Java | 1.3033 / 1.3142 (PASS) | 0.0997 |
+| C++ | (측정 불가였음, 지금은 해소) | 0.0608 / 0.0983 |
+
+깊이 문제가 아니다. raw는 concurrency 1~2만 쓰고도 10배 빠르고 framework는 8을
+다 쓰고도 느리다. 파이프가 꽉 찬 상태에서도 느리므로 **건당 비용이 지배한다.**
+
+건당 비용 실측(`µs/message`, CPU core-seconds ÷ 메시지 수 중앙값, 1 KiB payload):
+
+| 언어 | source raw → framework | target raw → framework |
+|---|---:|---:|
+| .NET | 4.44 → 108.50 (24.4배) | 1.98 → 75.72 (38.2배) |
+| Java | 1.48 → 11.56 (7.8배) | 1.88 → 26.56 (14.1배) |
+| C++ | 1.04 → 19.43 (18.7배) | 1.37 → 32.01 (23.4배) |
+
+## 의심 지점 넷
+
+지금까지 좁혀 둔 곳이다. 이 넷에 갇히지 말고, 근거가 있으면 다른 곳을 지목해도 된다.
+
+1. **typed encode** — 응용 DTO를 wire bytes로 만드는 경로
+2. **service-wire 포장** — envelope header와 body part를 만드는 경로
+3. **owner turn** — 실행 객체의 turn 진입·이탈
+4. **공개 completion 처리** — send는 답을 기다리지 않는데도 완료 경로를 지나는가
+
+## 하는 일
+
+**조사만 한다. 제품 코드를 고치지 않는다. 벤치를 돌리지 않는다.**
+
+측정은 감독자가 perf 티켓 큐로만 낸다. 너는 코드를 읽고 근거를 만든다.
+
+산출물은 `doc/plan/send-cost-worklog/findings-<언어>.md` 하나다. 형식:
+
+```
+# <언어> send 건당 비용 — 조사 결과
+
+## 1. send 한 건이 지나는 경로
+
+응용 호출부터 socket send까지 실제로 지나는 지점을 순서대로, `파일:줄`로.
+같은 언어 raw binding의 send 경로도 같은 방식으로 적어 둘 것 — 두 경로의
+차이가 곧 건당 비용이다.
+
+## 2. 지목한 비용, 비싼 순서로
+
+각 항목:
+- **무엇** — 한 줄
+- **어디** — `파일:줄`
+- **왜 비싼가** — 메시지마다 몇 번 일어나는지, 무엇을 할당·복사·잠그는지.
+  "느려 보인다"가 아니라 코드에서 읽은 근거로.
+- **raw는 어떻게 하는가** — raw binding의 대응 지점 `파일:줄`
+- **고치는 방법** — 구체적으로. 공개 계약을 바꿔야 하면 그렇게 적을 것
+- **위험** — 무엇이 깨질 수 있는가
+
+## 3. 고치지 말아야 할 것
+
+비싸 보이지만 스펙이 요구해서 남겨야 하는 지점. 근거 스펙 조항과 함께.
+
+## 4. 확인 못 한 것
+```
+
+## 규칙
+
+- **스펙 문서(`framework/doc/**`)를 절대 고치지 않는다.** 스펙이 틀렸다고 판단하면
+  산출물의 §4에 적기만 한다.
+- **제품 코드·테스트를 고치지 않는다.** 이번 job은 읽기 전용이다.
+- 빌드는 해도 된다(심볼 확인용). 벤치 실행은 하지 않는다.
+- 존재하지 않는다고 결론 내기 전에 같은 저장소에서 같은 패턴을 찾아 인용한다.
+  특히 raw binding 쪽(`bindings/<언어>/`)에 이미 있는 방법을 놓치지 않는다.
+- 추측과 확인을 섞지 않는다. 읽어서 확인한 것만 §2에 쓰고 나머지는 §4로 보낸다.
+
+---
+
+# 이번 job — java (Issue #6)
+
+| 항목 | 경로 |
+|---|---|
+| framework 구현 | `framework/languages/java/zlink-framework-core` |
+| raw binding | `bindings/java` |
+| 벤치 하네스 | `framework/bench/grpc/java` |
+| 벤치 문서 | `framework/bench/grpc/doc/java.ko.md` |
+
+벤치 문서의 구현 표에서 `zlink-framework-java` 행과 `zlink-java` 행이 각각 어떤
+클라이언트·서버를 쓰는지 먼저 읽어라. 그 두 진입점에서 출발해 경로를 따라간다.
+
+산출물: `doc/plan/send-cost-worklog/findings-java.md`
+
+## 빌드 환경
+
+```bash
+export ZLINK_LOCAL_PACKAGE_ROOT=/home/hep7/project/zlink/.artifacts/wsl
+export JAVA_HOME=/usr/lib/jvm/jdk-25.0.4.1+1
+```
