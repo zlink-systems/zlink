@@ -572,7 +572,6 @@ function requestTerminalResult(
   if (signal?.aborted === true) return 'cancelled';
   if (error instanceof ZLinkFrameworkException) {
     if (error.kind === ZLinkFrameworkErrorKind.ShuttingDown) return 'shutdown';
-    if (error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded) return 'backpressured';
   }
   return 'failed';
 }
