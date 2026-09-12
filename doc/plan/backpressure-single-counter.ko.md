@@ -384,6 +384,15 @@ framework 본체에서는 지웠는데 동반 package가 같은 필드를 **필�
 (`ZLinkManagedMeshNode.cs:9017,11372`, `ZLinkStateLane.cs:101` 대 `Client/Program.cs:570,674`).
 건당 비용을 줄여도 이 목이 남으면 concurrency를 못 쓴다. 그래서 이것이 1순위다.
 
+감독자가 main에서 확인했다. `ZLinkManagedMeshNode.cs:9116` `RequireDirectPeer`는
+`_lane.IsOnLane ? resolve() : RunState(resolve)`라 lane 밖 caller가 매 send마다 state
+lane을 거치고, `:9159` `SendDirectWireAsync`는 모든 sender가 `lock (_socketGate)` 안에서
+socket submit builder를 만든다. 8개 stream이 두 곳을 공유한다.
+
+같은 파일 `:9125` `CreateApplicationWire`가
+`ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(parts)`를 호출하므로
+**재포장 복사는 .NET에도 있다.** 세 언어 전부다.
+
 ### 7.1 감독자가 코드로 확인한 것
 
 **Java — 1 KiB body가 source에서만 4번 복사된다.**
