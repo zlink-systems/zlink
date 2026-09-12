@@ -128,7 +128,7 @@ number lives.
 | Number | Default | Owning document |
 |---|---|---|
 | `MaxQueuedApplicationJobs`, pause/resume ratio | see document | [Application Job Queue And Backpressure](04-application-job-queue-and-backpressure.en.md) |
-| Application lane / lifecycle lane caps, owner occupancy time budget, lifecycle consecutive-execution cap | 1,024 items·64 MiB / 128 items·4 MiB, 10 ms, 8 turns | [Handler Turn And Execution Gate "7. Lane Separation And Priority (Implementation)"](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation) |
+| Owner occupancy time budget, lifecycle consecutive-execution cap | 10 ms, 8 turns | [Handler Turn And Execution Gate "7. Lane Separation And Priority (Implementation)"](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation) |
 | Send timeout default, admission deadline owner | 1 second per family | [Submit And Completion "7. Admission Deadline — Owner And Value Rules"](01-submit-and-completion.en.md#7-admission-deadline--owner-and-value-rules) |
 | Dispatcher concurrent-callback cap | None — never exceeds the number of in-progress operations | [Submit And Completion "11. The Execution Turn Of The Completion Callback (Implementation)"](01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation) |
 | [MaxMessageSize](../00-foundation/02-glossary.en.md#maxmessagesize), the maximum message size a listener can receive (StreamNode) | 64 KiB | [Application Job Queue And Backpressure](04-application-job-queue-and-backpressure.en.md) |

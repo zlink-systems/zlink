@@ -38,7 +38,7 @@ of reservation, the progress domains themselves are separated. Limits with
 different purposes (Core byte HWM, the shared supply permit queue an
 application callback holds until it starts, the
 [Application job queue](../00-foundation/02-glossary.en.md#application-job-queue),
-per-owner count/byte queues) do not merge under this
+per-owner queues) do not merge under this
 separation either — even where they share a profile label or unit, they do
 not share type, computation, or error meaning.
 
@@ -344,19 +344,16 @@ only a side effect is left remotely and the caller receives a failure.
 **Keep two FIFO lanes per serial execution object, such as a Spot, Actor, or Session.** Here,
 owner means that execution object, distinct from the MeshNode
 [Owner](../00-foundation/02-glossary.en.md#owner) identified by Location Store authority.
-This distinction keeps capacity and ordering scoped to each execution object.
+This distinction keeps ordering scoped to each execution object.
 
-| Lane | Holds | Bound |
-|---|---|---|
-| [application lane](../00-foundation/02-glossary.en.md#application-lane) | Business payload, timer callback | Two axes: count and bytes |
-| [lifecycle lane](../00-foundation/02-glossary.en.md#lifecycle-lane) | join/leave/relocation/lifecycle control | A separate bound not shared with the application lane |
+| Lane | Holds |
+|---|---|
+| [application lane](../00-foundation/02-glossary.en.md#application-lane) | Business payload, timer callback |
+| [lifecycle lane](../00-foundation/02-glossary.en.md#lifecycle-lane) | join/leave/relocation/lifecycle control |
 
-The default admission limits are 1,024 items and 64 MiB for the application
-lane, and 128 items and 4 MiB for the lifecycle lane. An application work
-item's byte reservation includes its payload and a fixed retained cost of
-256 bytes per item. In both lanes, a work item keeps its reservation after
-leaving the queue and while it is running; the reservation is returned only
-at handler terminal completion.
+**Neither lane has a bound of its own.** Splitting the lanes orders and prioritises the work;
+how much has piled up is counted once, as the host's job count
+([Application Job Queue And Backpressure §1](04-application-job-queue-and-backpressure.en.md#1-two-independent-capacity-authorities)).
 
 At a turn boundary, which lane to run is decided by a single atomic
 judgment. If both are ready, the lifecycle lane goes first.
@@ -407,10 +404,9 @@ application turn.
 The order within each lane is exactly the order accepted. Neither lane has
 front insertion.
 
-The two lanes exist per owner as physically distinct FIFOs and do not
-share count/byte reservation or admission state with each other.
-Already-accepted lifecycle work can still be enqueued and run even when
-the application FIFO is full.
+The two lanes exist per owner as physically distinct FIFOs and do not affect
+each other's ordering. However much work has piled up in the application
+FIFO, lifecycle work still runs in its own lane.
 
 ## 8. Cleanup and the Turn Boundary (Implementation)
 

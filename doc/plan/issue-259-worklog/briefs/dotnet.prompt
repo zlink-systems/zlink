@@ -39,10 +39,42 @@ transport submit so a reply that arrives immediately is never processed before i
 registration. That is an ordering rule, not a capacity rule. A runtime may still pre-allocate
 the queue node to keep the terminal path allocation-free; that is a cost choice it owns.
 
-**(2) Every "queue is full, so fail" path.** A full queue now waits for room. This covers the
-per-execution-object FIFO, the worker scheduler queue, and any slot for holding a reply. If
-the wait passes the deadline the call ends with `DeadlineExceeded`; if the work itself fails,
-`InternalFailure`. Nothing is thrown away.
+**(2) Every queue limit other than the host job permit, and every "queue is full, so fail"
+path that went with it.**
+
+**There is exactly one limit left in the Framework: `MaxQueuedApplicationJobs`, the number of
+jobs a host has waiting for a handler.** Bytes are Core's business — Core's byte HWM bounds
+what a queue holds, and when this host stops reading, those bytes hold the sender back. The
+Framework counts items, at one place per host, and nowhere else.
+
+So these all go, along with the failures they produced:
+
+| Limit | Where |
+|---|---|
+| completion slot 4,096 | operation registry and completion dispatcher |
+| application lane 1,024 items / 64 MiB | per-execution-object FIFO |
+| lifecycle lane 128 items / 4 MiB | per-execution-object FIFO |
+| mailbox count and bytes | owner mailbox |
+| worker scheduler queue bound | worker pool |
+| any slot for holding a reply | wherever it is kept |
+
+Delete the fields, the constructor parameters, the options that carry them, and every branch
+that failed when they were reached. Leave no branch that can never be taken.
+
+**These are limits too, but they stay — they are not queue capacity:**
+
+| | Why it stays |
+|---|---|
+| Per-node Actor/Spot limit, per-stable-type limit | "How many Spots may live on this node", not a queue. Waiting does not create one — it ends with `Unavailable` |
+| `MaxMessageSize` | The size of one message, not the length of a queue |
+| Pending activation 128 | Activations in progress |
+| Owner time budget 10 ms, lifecycle 8 consecutive turns | Fairness, not capacity — they stop one owner from holding the turn |
+
+Separating the application and lifecycle lanes also stays. That separation orders and
+prioritises work; it never bounded anything.
+
+**Do not remove a public API, builder option, or configuration surface that is not one of the
+deleted limits.** If a change seems to need one, stop and report it under BLOCKERS.
 
 **(3) The `CapacityExceeded` error kind itself.** With no cap anywhere, nothing can produce
 it. It is removed from the `ErrorKind` enum and the values after it shift down:

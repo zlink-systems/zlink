@@ -604,26 +604,13 @@ handler must not be re-created in an activation whose termination has started. E
 handler itself starts the termination operation, it must not create a circular wait on the
 current dispatch.
 
-The framework scheduler partially drains a ready owner's bounded mailbox and calls Node,
+The framework scheduler partially drains a ready owner's mailbox and calls Node,
 Spot, and Actor handlers in that application's execution context.
 
-The mailbox limit **enforces both a count axis and a pending-bytes-total axis.** Whichever
-triggers first applies. With only one axis, the other can be bypassed — with only a count
-limit, the same count can occupy thousands of times more memory depending on payload size;
-with only a byte limit, empty payloads can pile up indefinitely without ever hitting the
-limit.
-
-Byte accounting doesn't count only payload size. It **adds together** the envelope,
-metadata, and queue node one pending job occupies — `payload size + metadata size + a fixed
-per-job cost`. Even for a large payload, the fixed cost is still added. Even with an empty
-payload, one job isn't 0 bytes. If the sum exceeds the representable range, it's clamped to
-the maximum and that submission is rejected.
-
-**Both axes are reserved as one operation.** Checking count and bytes separately can leave a
-state where only one passed. If either axis exceeds its limit, both axes must fail
-unchanged. The return works the same way — the return point is **after the handler
-finishes, not when the job is pulled off the queue**, because the memory a running job
-occupies isn't freed yet. So the limit counts pending and executing jobs together.
+**A mailbox has no bound of its own.** How much has piled up is counted once, as the number
+of jobs the host has waiting for a handler, and memory is measured in bytes by Core's byte
+HWM ([Application Job Queue And Backpressure §1](../01-execution/04-application-job-queue-and-backpressure.en.md#1-two-independent-capacity-authorities)).
+Counting items or bytes again per mailbox would count the same thing twice.
 
 There's a cap on how long one owner continuously occupies the scheduler. Once the cap is
 reached, remaining work is returned to the ready state and execution is handed to another

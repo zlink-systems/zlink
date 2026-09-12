@@ -196,7 +196,6 @@ sequenceDiagram
     AQ->>AQ: reserve this work's payload bytes
     Note over AQ: if that Actor's share is full,<br/>it is rejected here as backpressure
     AQ->>SQ: on its own turn, place an execution turn (payload stays in AQ)
-    SQ->>SQ: reserve fixedWorkByteCost only
     Note over SQ: the same payload is not reserved again
     SQ->>Handler: hold one Spot turn and run
     Handler-->>Caller: complete
@@ -240,35 +239,20 @@ ExecuteTimer(timerName, work)
     }
 
     timerQueue = lane.Run(() => GetOrCreateTimerQueue(timerName));
-    timerQueue.Enqueue(work);            // no payload, so charged at fixedWorkByteCost
+    timerQueue.Enqueue(work);
 }
 ```
 
-## 5. What Each Queue Reserves
+## 5. How the Two Queues Relate
 
-An owner queue (mailbox) is limited on **two axes — item count and total queued bytes** — and
-that contract is owned by
-[Framework API "11. Handler Execution Objects And Dependency Lifetime"](../00-foundation/06-framework-api.en.md).
-It is not redefined here; only the two things that bear on this document's queue layout are.
+**Neither queue has a bound of its own.** How much has piled up is counted once, as the host's
+job count, and `PAUSED` goes out when that number reaches 80%
+([04 §1](04-application-job-queue-and-backpressure.en.md#1-two-independent-capacity-authorities)).
+Splitting the work into two queues orders it and isolates owners; it never decided how much
+each may hold.
 
-When a record is claimed from the receive mailbox into this queue, its reservation **transfers
-without a gap**, and the transfer is not a re-decision — that rule is owned by
-[04 §8 "Transferring the Owner Reservation"](04-application-job-queue-and-backpressure.en.md#transferring-the-owner-reservation--joining-two-stages-without-a-gap).
-
-**Its accounting boundary differs from the
-[Application job queue](../00-foundation/02-glossary.en.md#application-job-queue) permit.** The
-permit is returned right before the callback's first instruction, while the mailbox reservation
-is returned after the handler finishes — the memory held by in-flight work has not yet been released. The
-two limits therefore cannot stand in for each other (04 §1).
-
-When Actor work crosses two queues under `SpotWide`, **the lower Actor queue reserves that work's
-payload bytes, and the upper Spot queue reserves only `fixedWorkByteCost`, a fixed cost
-independent of payload size.** The same payload is not reserved on both. Reserving twice means
-work that passed below is caught again above, so the per-Actor ceiling stops being the real
-ceiling, and the Spot queue fills ahead of the real execution load.
-
-**Internal check condition** — on the `SpotWide` Actor path, no submission to the upper Spot
-queue passes payload bytes as an argument.
+Measuring memory in bytes is Core's byte HWM. When this host stops reading, those bytes
+accumulate in the Core queue and the sender is held there.
 
 ## 6. The Serial Queue Primitive
 
@@ -283,13 +267,12 @@ guarantee — that latency is bounded under any load — can be stated.
 The following values are injected as a policy object, `ZLinkExecutionLanePolicy`. They are not
 baked into the queue as constants, because Spot, Actor, and session use different values.
 
-These set §5's owner FIFO ceilings; they are not values that limit the rate of inbound work.
-Admission for ordinary ingress is owned by
+These set execution order and fairness; they do not decide how much a queue may hold, nor the
+rate of inbound work. Admission for ordinary ingress is owned by
 [04](04-application-job-queue-and-backpressure.en.md).
 
-The **defaults** of these values (application 1,024 items / 64 MiB, lifecycle 128 items / 4 MiB,
-fixed cost 256 bytes, 10 ms hold, 8 consecutive turns), the composition of the byte accounting,
-and the yield-debt mechanism are owned by
+The **defaults** of these values (10 ms hold, 8 consecutive turns) and the yield-debt mechanism
+are owned by
 [02 "7. Lane Separation And Priority"](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation).
 This document fixes only the injected names.
 
@@ -298,18 +281,6 @@ signature is defined by each language's exact interface.
 
 ```text
 ZLinkExecutionLanePolicy {
-    applicationMessageCapacity   // ceiling on work items the application lane holds at once
-                                 //   (count, > 0)
-    applicationByteCapacity      // ceiling on what the application lane reserves at once
-                                 //   (bytes, > 0); reservation = payload + metadata
-                                 //   + fixedWorkByteCost (02 §7)
-    lifecycleMessageCapacity     // ceiling on work items the lifecycle lane holds at once
-                                 //   (count, > 0)
-    lifecycleByteCapacity        // ceiling on size the lifecycle lane reserves at once
-                                 //   (bytes, > 0)
-    fixedWorkByteCost            // fixed retained size one work item occupies besides its
-                                 //   payload (bytes, >= 0). added to every item; payload-less
-                                 //   work (timers) and §5's upper Spot queue reserve only this
     lifecycleBurstLimit          // how many lifecycle items may consecutively overtake
                                  //   application work (count, > 0). past this count, one
                                  //   application item runs
@@ -321,7 +292,7 @@ ZLinkExecutionLanePolicy {
 ### 6.2 Entry Points
 
 ```text
-enqueue(work)                    // application lane; reserved at fixedWorkByteCost
+enqueue(work)                    // application lane
 enqueueWithPayloadBytes(work, n) // application lane; reserved at the actual n payload bytes
 enqueueLifecycle(work)           // lifecycle lane; overtakes queued application work
 enqueueBarrierNext(work)         // right after the current turn, ahead of queued application work
@@ -330,15 +301,14 @@ awaitQuiescence()                // wait until all queued work has finished
 close()                          // accept no new submissions; finish what was already accepted
 ```
 
-### 6.3 Atomic Scope of the Capacity Decision and Sequence-Number Issuance
+### 6.3 Atomic Scope of Sequence-Number Issuance and Insertion
 
-The capacity decision, sequence-number issuance, and queue insertion **either all happen or none
-happen.** For one caller's submission these three are not split apart.
+Sequence-number issuance and queue insertion **either both happen or neither happens.** For one
+caller's submission the two are not split apart.
 
-Do not substitute a concurrent queue data structure that handles the three separately. Split
-apart, two callers can see the same headroom, both pass the decision, and both insert, exceeding
-the ceiling; or work that took a number first can be inserted later, inverting the order. These
-three must move together, which makes them class C2 of
+Do not substitute a concurrent queue data structure that handles them separately. Split apart,
+work that took a number first can be inserted later, inverting the order. The two must move
+together, which makes them class C2 of
 [06 §4](06-state-ownership-and-lanes.en.md#4-state-classifications-and-how-to-tell-them-apart).
 
 ### 6.4 Fairness
@@ -596,16 +566,10 @@ and the exception a reentrant call receives). Each item maps to one test.
 - Under `PerActor`, callbacks with different timer names overlap, and callbacks with the same
   timer name run in submission order.
 
-**Capacity and backpressure**
+**Submission and order**
 
-- Under both modes, piling work onto one Actor until its mailbox reaches capacity rejects only
-  submissions to that Actor; submissions to other Actors in the same Spot are still accepted.
-- Under `SpotWide`, when the same number of large-payload and small-payload items are submitted
-  to one Actor, the large-payload items are rejected first — the lower Actor queue reserves the
-  payload bytes (§5).
-- For the same submissions, the point at which the Spot queue reaches capacity is determined by
-  item count, regardless of payload size — the upper Spot queue reserves only the fixed cost
-  (§5).
+- However much work is piled onto one Actor, no submission ends for want of room, and
+  submissions to other Actors in the same Spot are still accepted.
 - Work submitted with `enqueueLifecycle` runs ahead of already queued application work, and the
   consecutive overtaking stops at `lifecycleBurstLimit` so one application item runs.
 

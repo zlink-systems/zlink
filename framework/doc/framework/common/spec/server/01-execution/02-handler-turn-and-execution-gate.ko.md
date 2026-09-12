@@ -303,23 +303,23 @@ local·remote bounded resource의 오류 선택은 [Framework 오류 모델 §5]
 <a id="execution-lanes"></a>
 **Spot·Actor·Session 등 직렬 실행 객체마다 두 개의 FIFO lane을 둔다.** 이 절의 owner는
 그 실행 객체이며, Location Store authority가 가리키는 MeshNode
-[Owner](../00-foundation/02-glossary.ko.md#owner)와 다르다. 실행 객체별 용량과 순서를
+[Owner](../00-foundation/02-glossary.ko.md#owner)와 다르다. 실행 객체별 실행 순서를
 관리하기 위해 두 단위를 구별한다.
 
-| lane | 담는 것 | 한도 |
-|---|---|---|
-| [application lane](../00-foundation/02-glossary.ko.md#application-lane) | 업무 payload, timer callback | 건수·byte 두 축 |
-| [lifecycle lane](../00-foundation/02-glossary.ko.md#lifecycle-lane) | join·leave·relocation·lifecycle control | application lane과 공유하지 않는 별도 한도 |
+| lane | 담는 것 |
+|---|---|
+| [application lane](../00-foundation/02-glossary.ko.md#application-lane) | 업무 payload, timer callback |
+| [lifecycle lane](../00-foundation/02-glossary.ko.md#lifecycle-lane) | join·leave·relocation·lifecycle control |
 
-기본 admission은 application lane이 1,024건·64 MiB이고 lifecycle lane이 128건·4 MiB다.
-Application work의 byte reservation에는 payload와 work당 고정 retained cost 256 byte를
-함께 포함한다. 두 lane 모두 work가 queue에서 나와 실행 중이어도 reservation을
-유지하며, handler의 terminal completion에서만 반환한다.
+**두 lane에는 각자의 상한이 없다.** lane을 나누는 것은 순서와 우선순위를 가르기 위한
+것이며, 얼마나 쌓였는지는 host의 job 수 하나로 센다
+([Application job queue와 backpressure §1](04-application-job-queue-and-backpressure.ko.md#1-두-독립된-capacity-authority)).
 
 turn 경계에서 어느 lane을 실행할지 하나의 원자적 판단으로 정한다. 둘 다 ready이면
 lifecycle lane이 먼저다.
 
-**우선순위만으로는 굶주림을 막지 못한다.** 여기에는 서로 다른 두 상한이 관여한다.
+**우선순위만으로는 굶주림을 막지 못한다.** 여기에는 용량이 아니라 공정성을 위한 두 상한이
+관여한다.
 
 | 상한 | 무엇 사이의 공정성인가 | 세는 단위 |
 |---|---|---|
@@ -354,9 +354,8 @@ lifecycle을 고르지 않는다. 실행하면 부채를 지운다. 부채 표�
 
 각 lane 안의 순서는 수락 순서 그대로다. 어느 lane에도 앞쪽 삽입은 없다.
 
-두 lane은 owner마다 물리적으로 다른 FIFO로 존재하며, 건수·byte reservation과 admission
-상태를 서로 공유하지 않는다. Application FIFO가 가득 차도 이미 수락한 lifecycle 작업은
-넣고 실행할 수 있다.
+두 lane은 owner마다 물리적으로 다른 FIFO로 존재하며 서로의 순서에 영향을 주지 않는다.
+Application FIFO에 일이 아무리 쌓여 있어도 lifecycle 작업은 자기 lane에서 실행된다.
 
 ## 8. 뒤처리와 turn 경계 (구현)
 

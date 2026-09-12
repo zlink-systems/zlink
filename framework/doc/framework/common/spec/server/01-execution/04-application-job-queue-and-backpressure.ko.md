@@ -198,16 +198,14 @@ node에 있는지, 자리가 있는지, 이동으로 봉인되지 않았는지.
 1. [Host relocation §14·§15](../05-location-relocation/05-host-relocation-flow.ko.md#14-shutdown과-relocate의-경쟁)의 host·unit admission 판정을 확인한다.
 2. 대상 객체가 이 node에 있고 owner 정보가 유효한가
 3. 이동 봉인·생성 대기·session 연결 대기 중이 아닌가
-4. 해당 lane의 건수와 byte를 함께 예약할 수 있는가
-5. 수락 순서를 나타내는 sequence를 확정하고 owner queue 뒤에 넣는다
-6. 비어 있던 queue가 채워졌으면 준비된 owner 집합에 그 owner를 넣고 실행 자원에 즉시
+4. 수락 순서를 나타내는 sequence를 확정하고 owner queue 뒤에 넣는다
+5. 비어 있던 queue가 채워졌으면 준비된 owner 집합에 그 owner를 넣고 실행 자원에 즉시
    알린다
 
 - **확인에 실패한 message는 대기열에 나타나지 않는다.** 일단 넣었다가 빼는 방식으로 만들지
   않는다 — 넣었다 빼면 그 사이에 실행될 수 있고, 뺐다는 사실을 관측에서 구분할 수도 없다.
-  응답을 기다리는 호출은 실패 이유를 결과로 받는다. 예약이나 enqueue에 실패한 경우에도
-  건수·byte 사용량과 수락 sequence는 이전 값 그대로다. 실패한 시도가 다음 정상 작업의
-  순서나 admission 가능 여부를 바꾸지 않는다.
+  응답을 기다리는 호출은 실패 이유를 결과로 받는다. 대상·owner 검증에 실패한 경우에도
+  수락 sequence는 이전 값 그대로이며, 실패한 시도가 다음 정상 작업의 순서를 바꾸지 않는다.
 
 **언어별 재량** — 이 구간을 잠금으로 만들지 다른 방법으로 만들지는 자유다. 판정 기준은 확인과
 넣기만 이 구간 안에 있고, 역직렬화나 handler 조회처럼 구간을 길게 만드는 일은 구간 밖에서
@@ -372,29 +370,8 @@ server→client outbound에는 적용하지 않는다.
 |---|---|---|
 | Core HWM | 방향별 queued/accounted byte | Core queue에서 sender까지 backpressure |
 | Application job queue | host instance의 reserved·queued·in-use permit | cancellable shared-cap wait |
-| 실행 객체별 FIFO — [실행 계약 §7](02-handler-turn-and-execution-gate.ko.md#execution-lanes) | 실행 객체별 count와 byte | 자리가 날 때까지 대기하며, 그동안 host permit을 쥐고 있으므로 permits in use가 오른다 |
 
 어느 경로도 별도 unbounded backlog, polling, busy-spin이나 silent replay를 만들지 않는다.
-
-### Owner 예약의 이관 — 두 단계가 빈틈없이 잇는다
-
-Owner FIFO의 count·byte 예약은 한 컴포넌트가 지지 않는다. 수신 mailbox가 receive 수락부터
-owner 실행 queue로 claim될 때까지를, 실행 queue가 claim부터 handler terminal completion까지를
-각각 진다([02 §7](02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현)이
-실행 queue 쪽의 반환 시점을 소유한다).
-
-- **한 record의 예약은 receive 수락부터 handler terminal completion까지 끊기지 않는다.**
-  claim 경계에서 mailbox 반환과 실행 queue 계상이 함께 일어난다. 사이에 계상되지 않는
-  구간이 있으면, dequeue된 뒤 아직 handler가 끝나지 않은 in-flight payload가 어떤 한도에도
-  잡히지 않는다 — 큰 payload를 오래 보유하는 handler가 많을수록 그 구간의 memory가
-  무한정 자란다.
-- **Claim 시점의 이관은 재판정이 아니다.** 실행 queue는 이관받은 예약을 계상만 한다.
-  용량을 이유로 record를 거절하는 자리는 어디에도 없다 — 자리가 없으면 기다린다(§3).
-- **같은 record를 두 단계가 동시에 계상하지 않는다.** 이중 계상하면 owner 한도가 실제
-  적체보다 이르게 포화되어, 한도 값이 뜻하는 것이 사라진다.
-
-내부 확인 조건 — claim 경로에서 mailbox 반환과 실행 queue 계상 사이에 record byte가 어느
-쪽에도 계상되지 않는 순간이 없고, record가 용량을 이유로 거절당하는 자리가 없다.
 
 ## 9. 큰 payload와 운영값
 
@@ -424,7 +401,7 @@ pressure 상태 조회, socket receive-flow 절대 상태, [Runtime metric](../0
 **Permit 획득과 순서**
 
 - Permit이 없으면 다음 ordinary record를 먼저 receive하지 않는다.
-- 확인에 실패한 send·request는 owner queue의 건수·byte·sequence 관측값을 바꾸지 않는다.
+- 확인에 실패한 send·request는 owner queue의 sequence 관측값을 바꾸지 않는다.
 - Shared permit이 모두 예약되면 ordinary ingress가 cancellable wait하고, terminal
   reply·error completion은 계속 진행한다.
 - ClientServer reply가 Core physical head에 도달해 completion으로 식별된 뒤에는 permit을 얻지
@@ -450,7 +427,7 @@ pressure 상태 조회, socket receive-flow 절대 상태, [Runtime metric](../0
 - 송신 공간을 기다리는 작업이 실행 권한을 쥐고 있지 않다.
 - 송신 공간을 기다리다 시간이 다 되면 send·publish·one-way·request가 모두
   `DeadlineExceeded`로 끝나고, 자리가 없다는 이유로 다른 오류를 받는 호출이 없다.
-- 실행 객체별 FIFO가 가득 차도 record를 거절하지 않고 자리가 날 때까지 기다린다.
+- 실행 객체별 FIFO에 얼마를 넣어도 record를 거절하지 않는다.
 - 이미 완료된 호출 뒤의 실패(publish 시작 후 건너뜀, 완료된 send의 target 실패)는
   caller 결과를 바꾸지 않고 관측에만 남는다.
 - Core receive byte HWM이 찼을 때 sender까지 backpressure가 전달되며 record를 버리지

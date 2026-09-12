@@ -124,7 +124,7 @@ handler 실행 순서(02)를 이해할 수 있고, 그 위에서 취소(03)·cap
 | 수치 | 기본값 | 소유 문서 |
 |---|---|---|
 | `MaxQueuedApplicationJobs`, pause/resume 비율 | 문서 참고 | [Application job queue와 backpressure](04-application-job-queue-and-backpressure.ko.md) |
-| Application lane / lifecycle lane 상한, owner 점유 시간 예산, lifecycle 연속 실행 상한 | 1,024건·64 MiB / 128건·4 MiB, 10 ms, 8 turn | [Handler turn과 execution gate 「7. Lane 분리와 우선순위 (구현)」](02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현) |
+| owner 점유 시간 예산, lifecycle 연속 실행 상한 | 10 ms, 8 turn | [Handler turn과 execution gate 「7. Lane 분리와 우선순위 (구현)」](02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현) |
 | Send timeout 기본값, admission deadline owner | family별 1초 | [Submit과 완료 「7. Admission deadline — owner와 값 규칙」](01-submit-and-completion.ko.md#7-admission-deadline--owner와-값-규칙) |
 | Dispatcher 동시 callback 상한 | 없다 — 진행 중 operation 수를 넘지 않는다 | [Submit과 완료 「11. 완료 callback의 execution turn (구현)」](01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현) |
 | Listener가 받을 수 있는 message byte 상한인 [MaxMessageSize](../00-foundation/02-glossary.ko.md#maxmessagesize) (StreamNode) | 64 KiB | [Application job queue와 backpressure](04-application-job-queue-and-backpressure.ko.md) |

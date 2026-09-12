@@ -40,7 +40,7 @@ Handler FIFO의 실행 객체별 범위는 [Handler turn과 execution gate §7](
 | 단위 | 컴포넌트 하나(예: 하나의 binding table, 하나의 catalog) | 실행 객체(Spot·Actor 등) 하나 — 02 §7 참조 |
 | 목적 | 그 컴포넌트의 상태를 한 번에 하나의 turn만 만지게 한다 | Owner가 처리할 작업을 우선순위별로 줄 세운다 |
 | 담는 것 | 그 컴포넌트의 상태를 읽고 쓰는 코드 조각 | 업무 payload·timer callback(application) 또는 join·leave·relocation·lifecycle control(lifecycle) |
-| admission·우선순위 | 없다 — 들어온 순서대로(FIFO) 실행할 뿐 건수·byte 한도나 lane 간 우선순위가 없다 | 있다 — 건수·byte 한도, owner 점유 시간 예산, lifecycle 우선순위 규칙 |
+| 순서와 우선순위 | 들어온 순서대로(FIFO) 실행할 뿐 lane 간 우선순위가 없다 | owner 점유 시간 예산과 lifecycle 우선순위 규칙이 있다 |
 | 소유 문서 | 이 문서 | [02 §7](02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현) |
 
 컴포넌트 하나가 state lane을 가지는 것과, 그 컴포넌트가 속한 Spot·Actor의 handler가

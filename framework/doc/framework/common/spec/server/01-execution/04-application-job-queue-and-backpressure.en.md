@@ -222,9 +222,8 @@ Handle the following as one commit inside that span.
 2. Is the target object on this node and is the owner information valid
 3. Is it not sealed for a move, not waiting for creation, and not waiting for a session
    connection
-4. Can both the lane's item count and bytes be reserved together
-5. Commit the accepted-order sequence and append the message to the owner queue
-6. If the queue was empty, put that owner into the set of ready owners and notify the
+4. Commit the accepted-order sequence and append the message to the owner queue
+5. If the queue was empty, put that owner into the set of ready owners and notify the
    execution resource immediately
 
 - **A message that fails a check does not appear in the queue.** It is not implemented as
@@ -420,32 +419,8 @@ defaults to `64 KiB`, and does not apply to server-to-client outbound.
 |---|---|---|
 | Core HWM | Directional queued/accounted bytes | Backpressure from Core queue to sender |
 | Application job queue | Host-instance reserved/queued/in-use permits | Cancellable shared-cap wait |
-| FIFO per execution object — [execution contract §7](02-handler-turn-and-execution-gate.en.md#execution-lanes) | Per-execution-object count and bytes | Waits until room appears; meanwhile it holds its host permit, so permits in use rise |
 
 No path creates a separate unbounded backlog, polling, busy-spin, or silent replay.
-
-### Transferring the Owner Reservation — Joining Two Stages Without a Gap
-
-The owner FIFO's count and byte reservation is not carried by a single component. The receive
-mailbox carries it from receive acceptance until the record is claimed into the owner's
-execution queue, and the execution queue carries it from that claim until handler terminal
-completion ([02 §7](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation)
-owns the release timing on the execution-queue side).
-
-- **One record's reservation is unbroken from receive acceptance to handler terminal
-  completion.** At the claim boundary, the mailbox return and the execution-queue charge happen
-  together. If there is an uncounted stretch in between, in-flight payload that has been
-  dequeued but whose handler has not finished is caught by no limit at all — and the more
-  handlers hold large payloads for long, the more memory grows without bound during that gap.
-- **The transfer at claim is not a re-decision.** The execution queue only accounts the
-  transferred reservation. There is no site anywhere that rejects a record because it is
-  full — when there is no room, the work waits (§3).
-- **The two stages never count the same record at the same time.** Double counting saturates
-  the owner limit ahead of the real backlog, and the limit's value loses its meaning.
-
-Internal confirmation condition — on the claim path there is no moment at which the record's bytes are
-counted by neither side between the mailbox return and the execution-queue charge, and no site
-where a record is rejected for lack of room.
 
 ## 9. Large Payloads and Operational Values
 
@@ -480,7 +455,7 @@ names — confirms the following. Each item leads to one contract test.
 
 - Without a permit, the next ordinary record is not received first.
 - A send/request that failed a check does not change the owner queue's observed
-  count/byte/sequence values.
+  sequence values.
 - When all shared permits are reserved, ordinary ingress waits cancellably, and terminal
   reply/error completion continues to progress.
 - Once a ClientServer reply reaches the Core physical head and Core identifies
@@ -508,8 +483,7 @@ names — confirms the following. Each item leads to one contract test.
 - Work waiting for send space does not hold execution authority.
 - When the wait for send space runs out of time, send, publish, one-way and request all end
   with `DeadlineExceeded`, and no call receives a different error for lack of room.
-- A full per-execution-object FIFO does not reject a record; the work waits until room
-  appears.
+- However much is put into a per-execution-object FIFO, no record is rejected.
 - A failure after an already completed call (a skip after publish has started, a
   target failure of a completed send) does not change the caller's result and is recorded
   only as an observation.
