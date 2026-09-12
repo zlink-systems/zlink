@@ -625,7 +625,7 @@ bool zlink::pipe_t::append_pending_peer_controls_unlocked ()
         //  without registry accounting keep the plain write and no release.
         if (_registry_accounting) {
             get_ctx ()->_physical_queue_registry.commit_message (
-              _out_physical_queue, control_bytes,
+              _out_physical_queue, 0, control_bytes,
               counted_pending_message_ref (command), false);
             publish_outbound_frame_unlocked (command, false);
         } else {
@@ -1242,7 +1242,7 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
                   || UINT64_MAX - in_flight < _out_incomplete_bytes
                   || in_flight + _out_incomplete_bytes > hwm);
             get_ctx ()->_physical_queue_registry.commit_message (
-              _out_physical_queue, frame_bytes,
+              _out_physical_queue, incomplete_before, frame_bytes,
               counted_pending_message_ref (*msg_),
               oversize_admission);
         }

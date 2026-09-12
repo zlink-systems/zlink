@@ -112,11 +112,12 @@ class ctx_physical_queue_registry_t
     void account_provisional_frame (const physical_queue_handle_t &direction_,
                                     uint64_t frame_bytes_);
     void commit_message (const physical_queue_handle_t &direction_,
+                         uint64_t provisional_frame_bytes_,
                          uint64_t final_frame_bytes_,
                          bool counted_message_,
                          bool oversize_admission_);
     void rollback_provisional (const physical_queue_handle_t &direction_,
-                               uint64_t frame_bytes_ = 0);
+                               uint64_t frame_bytes_);
     void release_committed_frame (const physical_queue_handle_t &direction_,
                                   uint64_t frame_bytes_,
                                   uint64_t counted_message_count_);
@@ -127,7 +128,8 @@ class ctx_physical_queue_registry_t
       decoder_frame_reservation_t **reservation_out_);
     int commit_decoder_frame (
       const physical_queue_handle_t &direction_,
-      decoder_frame_reservation_t **reservation_, uint64_t payload_bytes_,
+      decoder_frame_reservation_t **reservation_,
+      uint64_t provisional_frame_bytes_, uint64_t payload_bytes_,
       unsigned char msg_flags_, bool counted_message_,
       bool *oversize_admission_out_);
     void release_decoder_frame (decoder_frame_reservation_t **reservation_);

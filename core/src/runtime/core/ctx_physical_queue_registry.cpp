@@ -607,18 +607,21 @@ void zlink::ctx_physical_queue_registry_t::account_provisional_frame (
 }
 
 void zlink::ctx_physical_queue_registry_t::commit_message (
-  const physical_queue_handle_t &direction_, uint64_t final_frame_bytes_,
+  const physical_queue_handle_t &direction_, uint64_t provisional_frame_bytes_,
+  uint64_t final_frame_bytes_,
   bool counted_message_, bool oversize_admission_)
 {
     zlink_assert (direction_);
     zlink_assert (final_frame_bytes_ > 0);
     const int lane = accounting_lane (*direction_);
-    const uint64_t provisional =
-      direction_->provisional_accounted_bytes.exchange (
-        0, std::memory_order_relaxed);
-    const bool message_overflow = UINT64_MAX - provisional < final_frame_bytes_;
+    if (provisional_frame_bytes_ > 0)
+        subtract_exact (&direction_->provisional_accounted_bytes,
+                        provisional_frame_bytes_);
+    const bool message_overflow =
+      UINT64_MAX - provisional_frame_bytes_ < final_frame_bytes_;
     const uint64_t message_bytes =
-      message_overflow ? UINT64_MAX : provisional + final_frame_bytes_;
+      message_overflow ? UINT64_MAX
+                       : provisional_frame_bytes_ + final_frame_bytes_;
     if (message_overflow)
         _aggregate_overflow.store (true, std::memory_order_relaxed);
     saturating_add (&direction_->committed_accounted_bytes, message_bytes,
@@ -646,13 +649,9 @@ void zlink::ctx_physical_queue_registry_t::rollback_provisional (
     if (!direction_)
         return;
 
-    uint64_t removed = frame_bytes_;
-    if (removed == 0) {
-        removed = direction_->provisional_accounted_bytes.exchange (
-          0, std::memory_order_relaxed);
-    } else {
+    const uint64_t removed = frame_bytes_;
+    if (removed > 0)
         subtract_exact (&direction_->provisional_accounted_bytes, removed);
-    }
     if (removed == 0)
         return;
     const int lane = accounting_lane (*direction_);
@@ -757,7 +756,8 @@ int zlink::ctx_physical_queue_registry_t::reserve_decoder_frame (
 
 int zlink::ctx_physical_queue_registry_t::commit_decoder_frame (
   const physical_queue_handle_t &direction_,
-  decoder_frame_reservation_t **reservation_, uint64_t payload_bytes_,
+  decoder_frame_reservation_t **reservation_,
+  uint64_t provisional_frame_bytes_, uint64_t payload_bytes_,
   unsigned char msg_flags_, bool counted_message_,
   bool *oversize_admission_out_)
 {
@@ -790,14 +790,14 @@ int zlink::ctx_physical_queue_registry_t::commit_decoder_frame (
             // totals from their owning pipe. The reservation carries metadata
             // only and does not mutate shared registry counters.
         } else if ((msg_flags_ & msg_t::more) == 0) {
-            const uint64_t message_bytes =
-              direction_->provisional_accounted_bytes.exchange (
-                0, std::memory_order_relaxed);
-            const bool overflow = UINT64_MAX - message_bytes
+            if (provisional_frame_bytes_ > 0)
+                subtract_exact (&direction_->provisional_accounted_bytes,
+                                provisional_frame_bytes_);
+            const bool overflow = UINT64_MAX - provisional_frame_bytes_
                                   < reservation->frame_bytes;
             const uint64_t committed_bytes =
               overflow ? UINT64_MAX
-                       : message_bytes + reservation->frame_bytes;
+                       : provisional_frame_bytes_ + reservation->frame_bytes;
             if (overflow)
                 _aggregate_overflow.store (true, std::memory_order_relaxed);
             saturating_add (&direction_->committed_accounted_bytes,

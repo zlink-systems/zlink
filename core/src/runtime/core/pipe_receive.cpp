@@ -555,7 +555,8 @@ int zlink::pipe_t::write_reserved_decoder_frame (
     bool registry_oversize = false;
     const int commit_rc =
       get_ctx ()->_physical_queue_registry.commit_decoder_frame (
-        _out_physical_queue, reservation_, payload_bytes, msg_->flags (),
+        _out_physical_queue, reservation_, incomplete_before, payload_bytes,
+        msg_->flags (),
         counted_pending_message_ref (*msg_), &registry_oversize);
     if (commit_rc != 0) {
         _out_incomplete_bytes = incomplete_before;
