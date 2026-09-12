@@ -1,9 +1,10 @@
 # 인계 — framework 성능(gRPC bench)과 HWM 흐름 제어
 
 작성 2026-09-12. 이전 세션이 길어져 판단이 흔들렸고, 같은 결론을 두 번 도출했다.
-**§3이 HWM 결론이고, §5가 남은 이슈다. 새 세션은 §5.0부터 읽어라 — main이 적색이다.**
+**§3이 HWM 결론이고, §5가 남은 이슈다. 새 세션은 §5부터 읽어라.**
+**#259 스펙 개정안은 `doc/plan/spec-259-completion-capacity-proposal.ko.md`에 있고 사용자 결정을 기다린다.**
 
-관련 이슈: **#278**(main 적색·최우선), **#5 #6 #7**(0.90), **#259**(capacity 고갈), **#277**(Node 측정 불가), #101, #60. 열린 PR #276.
+관련 이슈: **#5 #6 #7**(0.90), **#259**(capacity 고갈), **#277**(Node 측정 불가), #101, #60. #276·#278·#279는 머지·해소됨.
 
 ---
 
@@ -319,41 +320,35 @@ framework/languages/node/packages/framework/src/runtime/dispatch/application-job
 
 ## 5. 남은 이슈 — 2026-09-12 세션 종료 시점
 
-### 5.0 먼저 — main이 Windows에서 적색이다
+### 5.0 main은 green이다 — #278 해소됨
 
-**#278이 최우선이다. 다른 어떤 작업보다 먼저 해소한다.**
+PR #270 머지 이후 main의 win-x64·win-arm64가 적색이었고, **PR #279로 고쳐 머지했다.**
+`origin/main` = `560d3d8bdc` 기준 전 플랫폼 통과.
 
-PR #270(2026-09-11 20:16 머지) 이후 main의 win-x64·win-arm64가 계속 실패한다
-(run `34643333076`, 단계 `Run framework unit tests (Debug, net8.0)`, 9건).
-Linux x64/arm64와 macOS arm64는 통과한다.
+원인은 `SetLastError = true`가 캡처하는 값의 플랫폼 차이였다. Unix에서 CLR은 CRT `errno`를
+스냅숏하지만 Windows에서는 Win32 `GetLastError()`를 스냅숏한다. Core는 두 플랫폼 모두 CRT
+`errno`만 쓴다 — `err.cpp:223`이 `WSAEWOULDBLOCK`을 `EBUSY`로 **번역**해서 넣기 때문에
+`errno`에 Winsock 원본 값이 남는 경로가 없다.
 
-원인은 확정했다. `SetLastError = true`가 캡처하는 값이 플랫폼마다 다르다.
+수정은 `NativeMethods.Core.cs`의 `GetLastPInvokeError()` **한 곳에서만** 분기한다.
+Windows는 `zlink_errno()`를 반환 직후 즉시 호출하고, Unix는 기존 경로를 유지한다.
+호출부 41곳은 그대로라 규칙 수가 늘지 않는다.
 
-| 플랫폼 | CLR이 캡처 | Core가 설정 | 일치 |
-|---|---|---|---|
-| Linux / macOS | CRT `errno` | CRT `errno` | O |
-| **Windows** | **Win32 `GetLastError()`** | CRT `errno` | **X** |
+**함께 고친 것 — 테스트가 회귀를 통과시킨 이유.** 기존 단언이
+`NativeErrno is 11 or 35 or 10035`였다. `10035`는 WSAEWOULDBLOCK이고 `errno`에는 들어올 수
+없는 값이며 **깨진 Win32 경로에서만** 나온다. 이를 허용하는 단언이 #270의 결함을 가렸다.
+`11 or 35`로 좁혔다.
 
-Core는 CRT `errno`를 설정한다 — `core/src/runtime/sockets/common/socket_send_complete.cpp:169,234`의
-`errno = EAGAIN;`, `core/src/api/core/context_api.cpp:90`의 `zlink_errno()`.
-Windows에서 `Marshal.GetLastPInvokeError()`는 이 값을 보지 못한다.
-
-실패 테스트가 전부 backpressure 경로라는 점이 진단과 맞는다
-(`BackpressuredSend_*`, `ZlinkSubmitException : zlink error code 1`).
-
-수정 방향은 `NativeMethods.Core.cs:176`의 `GetLastPInvokeError()` **한 곳에서만** 분기하는 것이다.
-Windows는 `zlink_errno()`를 반환 직후 즉시 호출하고, Linux·macOS는 현행을 유지한다.
-호출부가 41곳이므로 분기가 helper 밖으로 새면 안 된다.
-
-**`errno` 검사를 빼는 우회(PR #263 방식)로 되돌리지 마라.** 그것은 #262의 재발이다.
-지켜야 할 계약은 `result == BACKPRESSURED` AND `errno == EAGAIN` AND `completionId != 0`이다.
+**남은 같은 종류의 마스킹(후속 과제).** 제품 소스에 Win32 변형을 함께 받는 매핑이 있다 —
+`ZlinkException.Native.cs:222,266`의 `11 or 35 or 10035`, `SendResultErrno.cs`의
+`EWouldBlockWin`·`ENotConnWin`·`ETimedOutWin`·`EHostUnreachWin`,
+`test_tokenless_backpressure.cs:57`. Core가 번역해서 넣으므로 닿지 않는 경로다. 정리 대상.
 
 ### 5.1 0.18.0 열린 이슈
 
 | 이슈 | 상태 | 다음 행동 |
 |---|---|---|
-| **#278** | **main 적색 — 최우선** | §5.0. codex job `winerrno-278` 착수함 |
-| **#259** | 조사 완료, 스펙 개정 대기 | §3.5·§3.6의 문안 확정 → codex 리뷰 → 사용자 승인 → 4언어 적용 |
+| **#259** | 조사 완료. **개정안 문서 작성됨** | `doc/plan/spec-259-completion-capacity-proposal.ko.md` §3의 ①②③을 **사용자가 결정** → codex 리뷰 → 4언어 적용 |
 | **#5 #6 #7** | request PASS, send 미달 | send **건당 비용**(§1.3) 감축. 깊이 문제가 아니다 |
 | **#101** | **#277에 막혀 있다** | #277 해소 후 7언어 전수 재측정 |
 | **#277** | 신규 | Node REQREP가 `request completion drain timed out`으로 측정 불가 |
@@ -363,7 +358,8 @@ Windows는 `zlink_errno()`를 반환 직후 즉시 호출하고, Linux·macOS는
 
 | PR | 상태 |
 |---|---|
-| **#276** | .NET RouteMesh receive-flow 등록(#259 조사 중 발견한 §6 위반). Linux·macOS 통과, Windows는 #278 때문에 적색. **#278 해소 후 재실행하고 머지한다.** #259는 닫지 않는다 |
+| ~~#276~~ | **머지됨** (`560d3d8bdc`). .NET RouteMesh receive-flow 등록 — 4언어 중 유일한 §6 위반이었다. #259 본체는 닫지 않았다 |
+| ~~#279~~ | **머지됨**. §5.0 |
 | #275 #274 #272 | 0.19.0 Windows 계열 draft. 타 담당 |
 | #226 #213 #31 | 원작업자 담당 (사용자 지시) |
 
