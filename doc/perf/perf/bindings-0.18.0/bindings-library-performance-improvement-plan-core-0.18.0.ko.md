@@ -1063,9 +1063,10 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.5 Go
 
 - perf 경로: `bindings/go/perf`
-- Single 상태: `미측정`
+- Single 상태: `미측정 (단, reqrep 하네스 회귀 수정·측정 완료 2026-09-12)`
 - Multi 상태: `미측정`
-- 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
+- **reqrep 하네스 회귀 수정(2026-09-12)**: 전 바인딩 reqrep 조사에서 Go single reqrep이 회귀로 확인됐다 — perf 하네스가 완결을 요청 goroutine이 아니라 별도 백그라운드 runtime goroutine에 맡겨(=.NET/Java와 동일 계열), inproc 소형 mean latency가 C 대비 **237~701×**, throughput은 C의 6~17%였다. 요청 goroutine이 공개 `Poller(PollCompletion)`로 직접 완결을 drain하고 HWM admission window로 연속 제출하도록 복원(커밋 `f8f638a2f8`, `bindings/go/perf/single/perf_reqrep.go`만, 분류 B, 바인딩·Core 불변)하니 소형 throughput 1.58~3.70× 회복(C 대비 aggregate DR 0.62·RR 0.65, Go reqrep 목표 40/53 이상), inproc 소형 latency는 **53.5ms→0.28ms(C 대비 237~701×→1.78~2.23×)**로 정상화. one-way 회귀 없음(216/216, 중앙값 +7.78%). 대형은 C-parity 실측(A) 수용. 상세 수치는 PR 및 goreq-after report.
+- 다음 작업: reqrep 외 나머지 pattern(one-way·PUBSUB·STREAM)의 paired 측정은 미실시 — inventory gate 확인 후 진행한다.
 
 #### 9.5.1 Single suite
 
