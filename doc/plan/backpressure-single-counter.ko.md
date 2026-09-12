@@ -1062,3 +1062,43 @@ JIT이 상당 부분 처리하는 `CompletableFuture` 체인이었을 수 있다
 **같은 빌드에서 raw와 framework를 함께 재야 비교가 성립한다.** C++은 그랬고(raw 불변이
 그 증거), .NET·Java는 기준선이 `#311` 이전이라 조건이 달랐다. 앞으로 개선 전후를 잴 때는
 raw 행도 같은 시점에 다시 재서 분모가 움직이지 않았음을 확인한다.
+
+## 18. Java 프로파일 — 읽기 조사가 못 본 것이 나왔다 (2026-09-13)
+
+§17.5의 결론대로 JFR로 실제 비용 분포를 봤다. 원본은
+`doc/plan/send-cost-worklog/profile-java-send.md`.
+
+### 18.1 framework에만 있는 할당 셋
+
+| 항목 | JFR 근거 | 위치 |
+|---|---|---|
+| **state lane의 current-context** | `ThreadLocalMap` **3.018 GB** (17.90%), 39 표본 | `ZLinkStateLane.java:197` |
+| **매 send의 node peer 분류** | `ReferencePipeline$2` **1.287 GB** (7.63%), 105 표본 | `ZLinkChannelRouteCalls.java:191` → `ZLinkJavaRawSpotNode.java:299` |
+| framework envelope + multipart | header 1.150 GB, `DirectByteBufferR` 1.022 GB | — |
+
+**`ReferencePipeline$2`는 stream API다** — 매 send마다 peer를 분류하려고 stream을 돌린다.
+**§7의 읽기 조사는 이것을 지목하지 않았다.**
+
+### 18.2 raw와의 대비
+
+raw는 ExecutionSample의 **77.24%**가 `Message.from:285`와 bench submit leaf에 있고,
+allocation은 `byte[]` 세 항목이 **98.74%**다 — payload가 거의 전부다.
+
+framework는 최대 leaf가 `MappedByteBuffer.limit` 9.06%로 **한 곳에 집중되지 않고**,
+위의 state-lane·peer 분류·envelope이 payload 위에 얹힌다.
+
+### 18.3 정직한 한계
+
+프로파일 보고서가 **"이 JFR은 8배 throughput 차이를 단일 frame에 귀속하지 않는다"**고
+적었다. 맞는 말이다. 표본이 보여 주는 것은 "framework 경로에 raw에 없는 추가 allocation과
+scheduler/stream frame이 있다"까지다.
+
+### 18.4 이번 라운드가 보여준 것
+
+| 방법 | 결과 |
+|---|---|
+| 코드 읽기 (§7) | C++ 2순위 적중(2.3배), Java·.NET 빗나감 |
+| 프로파일링 (§18) | Java에서 읽기가 못 본 후보 셋 |
+
+**읽기는 후보를 좁히는 데 유효하고, 어느 후보가 실제 비용인지는 측정이 가린다.**
+두 방법이 대체 관계가 아니라 순서 관계다.
