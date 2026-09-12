@@ -146,9 +146,9 @@ send·request를 한 번 부르는 것이고, 기다림은 Core와 binding이 �
 |---|---|---|---|
 | `#281` Java | 완료 | **1,453개 통과** | [#287](https://github.com/zlink-systems/zlink/pull/287) |
 | `#283` Node | 완료 | **전체 통과** | [#288](https://github.com/zlink-systems/zlink/pull/288) |
-| `#277` bindings Node | 완료 | 계약 test 2건 통과, 실측 진행 중 | [#289](https://github.com/zlink-systems/zlink/pull/289) |
-| `#282` .NET | 완료 | 빌드 0 error, 전체 test 실행 중 | — |
-| `#280` C++ | codex 진행 중 (55 파일) | — | — |
+| `#277` bindings Node | 완료 | **실측으로 해소 확인** | [#289](https://github.com/zlink-systems/zlink/pull/289) |
+| `#282` .NET | 완료 | **2,526개 전부 통과** | [#292](https://github.com/zlink-systems/zlink/pull/292) |
+| `#280` C++ | codex 진행 중 | — | — |
 
 `#282`는 `ContractSurfaceCoverage`가 "스펙에서 지운 `MailboxMessageBudget`이 소스에 남아
 있다"를 잡아냈다. codex가 놓친 소스 다섯 파일을 그 덕에 찾았다. **스펙과 구현이 어긋나면
@@ -169,6 +169,9 @@ send·request를 한 번 부르는 것이고, 기다림은 Core와 binding이 �
 | 8 | .NET | 삭제된 lane capacity API를 쓰는 테스트 셋 |
 | 9 | .NET | pending count가 0이 되는 시점을 잘못 봄 |
 | 10 | .NET | `Backpressured`를 기대하는 옛 단언 셋 |
+| 11 | .NET | `ErrorKind` 개수를 13으로 고정한 wire 표와 계약 snapshot 잔존 |
+| 12 | .NET | mailbox budget이 소스 다섯 파일에 남아 `ContractSurfaceCoverage` 실패 |
+| 13 | .NET | 계약이 사라진 테스트 하나(`..._full_mailbox_returns_backpressured_terminal`) |
 
 **환경에서 막혔던 것과 해결**
 
