@@ -79,7 +79,7 @@ is defined by
 
 ## 3. Worker Offload
 
-- CPU work and async I/O work are submitted to a bounded worker scheduler owned by the
+- CPU work and async I/O work are submitted to a worker scheduler owned by the
   Framework.
 - A CPU execution slot is occupied only while an application CPU callback is actually
   running. Async I/O does not occupy a CPU execution slot while waiting for an
@@ -87,8 +87,8 @@ is defined by
 - I/O admission and completion bookkeeping also use bounded resources, but a full CPU worker
   queue does not turn an already-submitted I/O completion into an error.
 - More I/O operations than the configured CPU-worker thread count may wait for completion.
-  Their count is bounded by separate internal I/O admission, not by CPU execution slots or
-  CPU queue length.
+  The Framework does not bound that count separately — starting I/O requires a handler to be
+  running, so the caller's own concurrency is the ceiling.
 - This isolation contract does not require a separate public I/O thread-count or queue
   setting. A language runtime may implement it with native async I/O, an event loop, or a
   completion executor.

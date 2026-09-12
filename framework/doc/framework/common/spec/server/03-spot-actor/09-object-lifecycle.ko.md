@@ -261,7 +261,7 @@ Instance Spot 한정으로 추가했다([Spot 모델](01-spot-model.ko.md)). Use
 두 회계의 소유 경계는
 [Application job queue와 backpressure §1](../01-execution/04-application-job-queue-and-backpressure.ko.md#1-두-독립된-capacity-authority)이
 소유한다. 큰 payload를 오래 보유하는 workload에서 무엇을 조절하는지는
-[같은 문서 §9](../01-execution/04-application-job-queue-and-backpressure.ko.md#9-큰-payload와-운영값)가 정한다.
+[같은 문서 §9](../01-execution/04-application-job-queue-and-backpressure.ko.md#9-큰-payload)가 정한다.
 
 실행 queue는 application과 lifecycle을 별도 FIFO lane으로 두지만, 그것은 순서와 우선순위를
 가르기 위한 것이지 각 lane에 상한을 두기 위한 것이 아니다.

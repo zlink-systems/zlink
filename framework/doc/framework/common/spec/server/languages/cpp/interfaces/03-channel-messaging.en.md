@@ -98,8 +98,6 @@ struct mesh_node_socket_config_t {
  zlink::byte_count_t::bytes(4'096'000);
  zlink::byte_count_t receive_high_water_mark =
  zlink::byte_count_t::bytes(4'096'000);
- std::uint64_t mailbox_message_budget = 1024;
- std::uint64_t mailbox_byte_budget = 64 * 1024 * 1024;
  std::optional<std::chrono::milliseconds> receive_timeout;
  std::optional<std::chrono::milliseconds> send_timeout;
 };
@@ -395,20 +393,6 @@ public:
 
 } // namespace zlink::framework
 ```
-
-`mailbox_message_budget` and `mailbox_byte_budget` bound the message
-count and byte sum the per-owner application mailbox can hold. Byte
-accounting doesn't count only payload size — it adds
-`payload size + metadata size + a fixed per-job cost`. Even with an
-empty payload, one job isn't `0` bytes, and even for a large payload,
-the fixed cost is still added. If the sum exceeds `std::uint64_t`'s
-representable range, it's pinned to the maximum value and that submit
-is rejected. The accounting rule is owned by
-[Framework API §8.2](../../../00-foundation/06-framework-api.en.md#11-handler-execution-object-and-dependency-lifetime).
-Both values are set only before startup. `0` isn't unlimited — it
-selects the finite default the Framework profile decides. A Logical
-Multicast local target also judges admission using this capacity
-limit.
 
 After `channel(channel_name)`, `client()` or `server()` is called
 exactly once. Only the builder `server()` returns sets weight and

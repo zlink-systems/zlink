@@ -125,6 +125,16 @@ Twelve kinds, 0..11. Every existing producer moves:
 - One job, one cause. If you cannot finish inside your time budget, write down the facts you
   proved and what remains, and stop.
 
+== Build environment (already prepared — just use it) ==
+```bash
+cd framework/languages/node
+npm run build
+npm test
+```
+`node_modules` is already installed in this worktree; do not reinstall it. Local npm tarballs are
+under `/home/hep7/project/zlink/.artifacts/wsl/npm` if a dependency is missing. Run the unit
+tests plus your new test. No `npm run test:samples`, e2e, or benchmarks.
+
 == Report format (write it to the summary path given below, in Korean) ==
   1) 결과 — 한 줄
   2) 변경 파일 — 경로마다 무엇을 왜

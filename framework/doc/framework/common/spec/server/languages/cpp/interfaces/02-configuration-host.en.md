@@ -789,9 +789,8 @@ is.
 
 `configure_network()` returns the process-wide BindHost and
 AdvertiseHost default, and a per-listener setting overrides this value.
-`worker()` returns the bounded worker pool's min/max thread count,
-idle timeout, and queue bound. Both options can be changed only before
-host start.
+`worker()` returns the worker pool's min/max thread count and idle
+timeout. Both options can be changed only before host start.
 
 `configure_dispatch()` returns host-wide diagnostics and unhandled-dispatch settings.
 `configure_inbound_dispatch()` returns the Core HWM and application-job-queue settings. The

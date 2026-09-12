@@ -323,9 +323,8 @@ Enqueue(work)
 {
     bool startDrain;
 
-    lock (gate)                      // §6.3 — 자리 판정·번호 발급·삽입이 한 구간
+    lock (gate)                      // §6.3 — 번호 발급과 삽입이 한 구간
     {
-        if (!HasRoom(lane)) return Rejected;
         queue.Add(work, nextSequence++);
 
         // 이미 누가 이 queue를 돌리고 있으면 넣는 것으로 끝난다.

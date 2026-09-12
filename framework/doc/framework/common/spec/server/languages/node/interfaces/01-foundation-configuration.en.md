@@ -177,8 +177,6 @@ export interface ZLinkMeshChannelServerBuilder {
 export interface ZLinkMeshNodeSocketConfig {
  sendHighWaterMark: bigint;
  receiveHighWaterMark: bigint;
- mailboxMessageBudget: number;
- mailboxByteBudget: number;
  receiveTimeoutMs?: number;
  sendTimeoutMs?: number;
 }
@@ -480,21 +478,6 @@ node RID, node generation), and status — it doesn't carry payload or
 metadata. A physical connection close isn't terminal evidence. Only the
 matching request-source lease expiry stored in an ACK or accepted record
 completes terminal accounting — there's no public ACK API.
-
-`mailboxMessageBudget` and `mailboxByteBudget` are the caps on message
-count and byte sum for the per-owner application mailbox, set only
-before startup. Byte accounting doesn't count only payload size — it
-adds `payload size + metadata size + a fixed per-job cost`. Even if
-payload is empty, one job isn't `0` bytes, and even for a large
-payload, the fixed cost is still added. If the sum exceeds
-`Number.MAX_SAFE_INTEGER`, it's pinned to that value and that submit is
-rejected. The accounting rule is owned by
-[Framework API §8.2](../../../00-foundation/06-framework-api.en.md#11-handler-execution-object-and-dependency-lifetime).
-`0` isn't unlimited — it selects the Framework profile's finite
-default. A negative value, a non-integer value, and a value outside
-the safe integer range are startup configuration errors. A Logical
-Multicast local target also judges admission using this capacity
-limit.
 
 `setInstanceSpotIdleTimeout(timeoutMs)` sets the reference time for
 cleaning up an idle Instance Spot, in milliseconds. The default is `0`,

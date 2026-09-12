@@ -125,6 +125,19 @@ Twelve kinds, 0..11. Every existing producer moves:
 - One job, one cause. If you cannot finish inside your time budget, write down the facts you
   proved and what remains, and stop.
 
+== Build environment (already prepared — just export these) ==
+```bash
+export JAVA_HOME=/usr/lib/jvm/jdk-25.0.4.1+1
+export PATH="$JAVA_HOME/bin:$PATH"
+export ZLINK_LOCAL_PACKAGE_ROOT=/home/hep7/project/zlink/.artifacts/wsl
+cd framework/languages/java && ./gradlew --offline :zlink-framework-core:test
+```
+JDK 25 is required and Gradle toolchain auto-download is not configured, so `JAVA_HOME` must
+point at the Temurin 25 above. Local Maven artifacts are under
+`$ZLINK_LOCAL_PACKAGE_ROOT/maven`. Use `--offline` first; drop it only if a dependency is
+genuinely missing. Run the `zlink-framework-core` unit tests plus your new test. No e2e,
+samples, or benchmarks.
+
 == Report format (write it to the summary path given below, in Korean) ==
   1) 결과 — 한 줄
   2) 변경 파일 — 경로마다 무엇을 왜

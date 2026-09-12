@@ -100,6 +100,10 @@ what is coming in is the `PAUSED` state of
   permits in use rises and `PAUSED` goes out at the threshold.
 - **Another node's queue is the same.** When the target falls behind, its `PAUSED` and Core's
   byte limit slow this side's send. Errors are not split by who owns the queue.
+- **Observation is outside this rule.** A status snapshot, a trace, or an observer
+  notification is not work to be done but a value that reports what happened. To keep a slow
+  observer from holding work back, the newest may be kept or several coalesced. That is not
+  throwing work away.
 - **Having nowhere to place something is different.** If no node can host the Spot, slowing
   down does not produce one. That case completes with `Unavailable`
   ([Spot Actor](../03-spot-actor/05-spot-actor-membership.en.md), [Spot address messaging](../03-spot-actor/06-spot-address-messaging.en.md)).
@@ -108,7 +112,9 @@ what is coming in is the `PAUSED` state of
   after a relocation — and the relocation ingress hold have no record-count or
   byte bound defined by relocation itself.**
   - The amount retained in this queue or hold does
-    not by itself produce an error.
+    not by itself produce an error. While retained, the record keeps holding its host permit,
+    so as more pile up the number of permits in use rises and `PAUSED` goes out at the
+    threshold.
   - The negotiated limit for one message and the
     limits set by transport, the deadline, and cancellation still apply.
   - Once retained work is

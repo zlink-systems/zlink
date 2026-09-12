@@ -97,8 +97,6 @@ struct mesh_node_socket_config_t {
         zlink::byte_count_t::bytes(4'096'000);
     zlink::byte_count_t receive_high_water_mark =
         zlink::byte_count_t::bytes(4'096'000);
-    std::uint64_t mailbox_message_budget = 1024;
-    std::uint64_t mailbox_byte_budget = 64 * 1024 * 1024;
     std::optional<std::chrono::milliseconds> receive_timeout;
     std::optional<std::chrono::milliseconds> send_timeout;
 };
@@ -394,15 +392,6 @@ public:
 
 } // namespace zlink::framework
 ```
-
-`mailbox_message_budget`와 `mailbox_byte_budget`은 owner별 application mailbox가 보관할 수 있는 메시지 수와
-byte 합계를 제한한다. Byte 회계는 payload 크기만 세지 않는다 —
-`payload 크기 + metadata 크기 + 작업당 고정 비용`을 더한다. Payload가 비어 있어도 작업 하나는 `0` byte가
-아니며, 큰 payload에서도 고정 비용은 그대로 더한다. 합이 `std::uint64_t` 표현 범위를 넘으면 최댓값으로
-고정하고 그 제출을 거절한다. 회계 규칙은
-[Framework API §8.2](../../../00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)가 소유한다.
-두 값은 startup 전에만 설정한다. `0`은 unlimited가 아니라 Framework profile이
-정한 유한 기본값을 선택한다. Logical Multicast의 local target도 이 용량 제한으로 admission을 판단한다.
 
 `channel(channel_name)` 뒤에는 `client()` 또는 `server()`를 정확히 한 번 호출한다.
 `server()`가 반환한 builder만 weight와 handler를 설정한다. Server [membership](../../../00-foundation/02-glossary.ko.md#membership)이 없는

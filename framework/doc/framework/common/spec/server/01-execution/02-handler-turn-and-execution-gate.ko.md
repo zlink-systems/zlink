@@ -274,8 +274,8 @@ local·remote bounded resource의 오류 선택은 [Framework 오류 모델 §5]
 송신 HWM 대기와 binding completion의 경계는 [Backpressure §7](04-application-job-queue-and-backpressure.ko.md#7-send-completion과의-합성)을 따른다.
 
 **대기열 앞쪽에 넣는 새치기 경로를 두지 않는다.** 먼저 처리할 작업이 있으면 별도
-대기열을 두고 우선순위를 명시한다. Owner마다 두는 두 FIFO lane의 구체적인 한도와
-우선순위 규칙은 [§7](#7-lane-분리와-우선순위-구현)이 소유한다.
+대기열을 두고 우선순위를 명시한다. Owner마다 두는 두 FIFO lane의 작업 분류와 우선순위
+규칙은 [§7](#7-lane-분리와-우선순위-구현)이 소유한다.
 
 **재진입을 허용하지 않는다.** 이미 그 권한 안에서 실행 중이면 대기열을 거치지 않고 그
 자리에서 실행하는 우회는 자기 자신을 기다리는 호출의 교착을 피할 수 있지만, 관찰 가능한

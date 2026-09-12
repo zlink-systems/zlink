@@ -78,8 +78,6 @@ public interface IZLinkMeshNodeSocketConfig
 {
     ulong SendHighWaterMark { get; set; }     // send-direction socket HWM.
     ulong ReceiveHighWaterMark { get; set; }  // receive-direction socket HWM.
-    ulong MailboxMessageBudget { get; set; }  // per-owner mailbox message count cap, separate from socket HWM.
-    ulong MailboxByteBudget { get; set; }     // per-owner mailbox byte cap, separate from socket HWM.
     TimeSpan? ReceiveTimeout { get; set; }
     TimeSpan? SendTimeout { get; set; }
 }
@@ -659,12 +657,6 @@ Framework-level `MaxMessageSize`.
 
 `ConfigureRouterSocket()` applies `SendHighWaterMark` and `ReceiveHighWaterMark`, and
 `SendTimeout` and `ReceiveTimeout`, to separate socket directions.
-
-`MailboxMessageBudget` and `MailboxByteBudget` are separate from socket HWM. They cap
-the message count and total bytes held by each owner's application mailbox. The
-amount a socket can receive and the amount an owner can retain for execution aren't
-interpreted under the same setting. Their two byte-accounting rules are defined by
-[Framework API §8.2](../00-foundation/06-framework-api.en.md#11-handler-execution-object-and-dependency-lifetime).
 
 Messages still follow the transport and service-wire protocol's representation limits,
 and the process-memory limit. If a message is rejected at one of these lower limits,

@@ -75,7 +75,6 @@ public interface IZLinkWorkerOptions
  int MinThreads { get; set; }
  int MaxThreads { get; set; }
  TimeSpan IdleTimeout { get; set; }
- int MaxQueueLength { get; set; }
 }
 ```
 

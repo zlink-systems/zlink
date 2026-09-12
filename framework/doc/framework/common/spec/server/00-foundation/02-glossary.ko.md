@@ -1217,7 +1217,7 @@ Spot Logical Multicast와 물리 연결이나 subscription 상태를 공유하�
 |---|---|
 | 형태 | 실행 객체별 runtime FIFO |
 | .NET 표기 | public type 없음 |
-| 공개 구성 | 공개 field 없음. 작업 분류·한도는 [실행 계약 §7](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-lanes)이 소유한다. |
+| 공개 구성 | 공개 field 없음. 작업 분류와 우선순위는 [실행 계약 §7](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-lanes)이 소유한다. |
 | 생성·관리 | Runtime이 해당 실행 객체의 queue를 관리한다. MeshNode Owner별 queue라는 뜻이 아니다. |
 | 전달 | Wire로 전달하지 않는다. 수락한 runtime work를 보관한다. |
 | 수명 | 실행 객체가 존재하는 동안 사용하며 work reservation의 수명은 실행 계약 §7을 따른다. |
@@ -1232,7 +1232,7 @@ Spot Logical Multicast와 물리 연결이나 subscription 상태를 공유하�
 |---|---|
 | 형태 | 실행 객체별 runtime FIFO |
 | .NET 표기 | public type 없음 |
-| 공개 구성 | 공개 field 없음. Application lane과의 분리·우선순위·한도는 [실행 계약 §7](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-lanes)이 소유한다. |
+| 공개 구성 | 공개 field 없음. Application lane과의 분리와 우선순위는 [실행 계약 §7](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-lanes)이 소유한다. |
 | 생성·관리 | Runtime이 해당 실행 객체의 lifecycle 작업을 관리한다. |
 | 전달 | Wire로 전달하지 않는다. Runtime이 생성하거나 수신 작업에서 분류한 work를 보관한다. |
 | 수명 | 실행 객체의 lifecycle 동안 사용하며 work reservation의 수명은 실행 계약 §7을 따른다. |

@@ -159,7 +159,6 @@ export interface ZLinkWorkerOptions {
  readonly minThreads: number;
  readonly maxThreads: number;
  readonly idleTimeoutMs: number;
- readonly maxQueueLength: number;
 }
 ```
 

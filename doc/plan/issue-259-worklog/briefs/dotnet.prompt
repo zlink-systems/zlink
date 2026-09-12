@@ -125,6 +125,19 @@ Twelve kinds, 0..11. Every existing producer moves:
 - One job, one cause. If you cannot finish inside your time budget, write down the facts you
   proved and what remains, and stop.
 
+== Build environment (already prepared — just export these) ==
+```bash
+export ZLINK_LOCAL_PACKAGE_ROOT=/home/hep7/project/zlink/.artifacts/wsl
+cd framework/languages/dotnet
+dotnet restore Zlink.Framework.ci.slnf
+dotnet build Zlink.Framework.ci.slnf -c Debug
+dotnet test  Zlink.Framework.ci.slnf -c Debug
+```
+`Zlink.Framework.sln` and `Zlink.Framework.ci.slnf` are both present in this worktree. The local
+NuGet feed is `$ZLINK_LOCAL_PACKAGE_ROOT/nuget` and is added automatically once the variable is
+set — a restore failure almost always means the variable is unset, not that a file is missing.
+Run the unit and contract tests plus your new test. No e2e, samples, or benchmarks.
+
 == Report format (write it to the summary path given below, in Korean) ==
   1) 결과 — 한 줄
   2) 변경 파일 — 경로마다 무엇을 왜

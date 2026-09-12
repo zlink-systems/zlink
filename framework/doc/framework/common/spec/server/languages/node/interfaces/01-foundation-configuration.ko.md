@@ -174,8 +174,6 @@ export interface ZLinkMeshChannelServerBuilder {
 export interface ZLinkMeshNodeSocketConfig {
  sendHighWaterMark: bigint;
  receiveHighWaterMark: bigint;
- mailboxMessageBudget: number;
- mailboxByteBudget: number;
  receiveTimeoutMs?: number;
  sendTimeoutMs?: number;
 }
@@ -410,16 +408,6 @@ Relocated terminal reply accounting은 internal command ID 46 `replyRelayAck`를
 relocation ID, operation ID, 일치하는 request-source fence(owner ID, lease generation, node RID, node generation)와
 status만 가지며 payload와 metadata를 싣지 않는다. Physical connection close는 terminal 증거가 아니다. ACK 또는
 accepted record에 저장한 일치하는 request-source lease expiry만 terminal accounting을 완료하며 public ACK API는 없다.
-
-`mailboxMessageBudget`와 `mailboxByteBudget`은 owner별 application mailbox의 메시지 수와 byte 합계
-상한이며 startup 전에만 설정한다. Byte 회계는 payload 크기만 세지 않는다 —
-`payload 크기 + metadata 크기 + 작업당 고정 비용`을 더한다. Payload가 비어 있어도 작업 하나는 `0` byte가
-아니며, 큰 payload에서도 고정 비용은 그대로 더한다. 합이 `Number.MAX_SAFE_INTEGER`를 넘으면 그 값으로
-고정하고 그 제출을 거절한다. 회계 규칙은
-[Framework API §8.2](../../../00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)가 소유한다.
-`0`은 unlimited가 아니라 Framework profile의 유한 기본값을 선택한다.
-음수, 정수가 아닌 값과 안전 정수 범위를 벗어난 값은 startup 설정 오류다. Logical Multicast의 local target도
-이 용량 제한으로 admission을 판단한다.
 
 `setInstanceSpotIdleTimeout(timeoutMs)`은 유휴 Instance Spot 정리 기준 시간을 millisecond로 설정한다.
 기본값은 `0`이고 `0`은 정리하지 않음을 뜻한다. 허용 범위는 `0`과 양수이며 음수, 정수가 아닌 값과 안전

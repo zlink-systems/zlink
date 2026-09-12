@@ -97,15 +97,21 @@ network; it still takes the same host permit before it is enqueued. Otherwise su
 wait in a queue without raising the number of permits in use, `PAUSED` would never go out
 under §6, and a host could overrun itself.
 
+**Counting and applying are different layers.** A permit counts every job this host has
+received and that waits for a handler, **whatever it arrived from**. `PAUSED` is applied only
+to the sockets that have a peer to tell (§6). Forcing the two to the same scope either leaves
+jobs uncounted or applies the state to a socket that cannot act on it.
+
 **Messaging ingress is the bulk of this path.** It arrives from two places.
 
 | Where it arrives | What arrives |
 |---|---|
-| The ROUTER-ROUTER socket of a RouteMesh MeshNode | Requests and sends from another node |
+| The ROUTER-ROUTER socket of a RouteMesh MeshNode | Requests and sends from another node, and [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast) |
 | The Server ROUTER of a [ClientServer Channel](../00-foundation/02-glossary.en.md#clientserver-channel) | Requests and sends from a Client DEALER |
 
-Both use the same permit. They do not count separately. The sockets §6 applies `PAUSED` to
-are these same two.
+Logical Multicast arrives here too. The sender sends it once per remote node, and the
+receiving node decides which of its local Spots take it. When one record goes to N Spots on
+this node, it uses N permits.
 
 In a ClientServer Channel the Server ROUTER never sends to the Client DEALER first. What the
 Client DEALER receives is therefore only the reply to a call it sent itself. A reply bypasses
@@ -125,8 +131,10 @@ Ordinary ingress follows this order.
    serial queue.
 4. Return the permit after finite internal handling of a control or malformed
    ordinary record.
-5. Return the permit at the common invocation boundary immediately before the
-   callback's actual first instruction.
+5. Each job leaves the queue and returns its permit right before the callback handler that
+   runs it starts. Whether that handler is a Node handler or a Spot/Actor handler differs per
+   job, but the return point is one — right before that handler's first instruction. No kind
+   of ingress gets a different point.
 
 ```mermaid
 sequenceDiagram
@@ -422,20 +430,16 @@ defaults to `64 KiB`, and does not apply to server-to-client outbound.
 
 No path creates a separate unbounded backlog, polling, busy-spin, or silent replay.
 
-## 9. Large Payloads and Operational Values
+## 9. Large Payloads
 
-- **The Application job queue limits job count; it does not weight jobs by payload
-  bytes.** An empty payload and a large payload each consume one job. The Framework
-  queue limit is therefore not a process-memory byte hard cap.
-- For workloads that retain large payloads for a long time, measure production-
-  equivalent payload distribution, permits in use, process memory, throughput, and
-  latency together, then lower `MaxQueuedApplicationJobs`. Limit an individual message
-  size separately with `MaxMessageSize`. Do not connect the Core profile to the
-  Framework profile or restore retained-credit leases to solve this problem.
-- **Core HWM remains the final safety boundary for Core queue memory.** When Framework
-  stops ordinary receive because of a permit, bytes accumulate in the local Core
-  receive queue, and finite Core HWM plus TCP backpressure limits the sender's
-  progress.
+- **The Framework counts jobs only.** An empty payload and a large payload each count as one
+  job. The Framework's limit is not a process-memory byte cap.
+- **Core is what bounds memory in bytes.** When the Framework has no permit and stops
+  receiving, bytes accumulate in the local Core queue, and Core's HWM plus TCP flow control
+  hold the sender back. That path works the same when large payloads arrive, so the Framework
+  neither counts bytes separately nor tunes its job limit to payload size.
+- Limit an individual message size separately with `MaxMessageSize`. Do not connect the Core
+  profile to the Framework profile or restore retained-credit leases.
 
 ## 10. Verification Requirements
 

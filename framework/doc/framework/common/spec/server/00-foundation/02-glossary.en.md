@@ -1283,7 +1283,7 @@ The FIFO classification retaining a serial execution object's business payloads 
 |---|---|
 | Shape | Runtime FIFO per execution object |
 | .NET notation | No public type. |
-| Public composition | No public fields. [Execution contract §7](../01-execution/02-handler-turn-and-execution-gate.en.md#execution-lanes) owns work classification and bounds. |
+| Public composition | No public fields. [Execution contract §7](../01-execution/02-handler-turn-and-execution-gate.en.md#execution-lanes) owns work classification and priority. |
 | Creation/management | The runtime manages the execution object's queue; this does not mean one queue per MeshNode Owner. |
 | Transfer | Not transmitted on the wire; retains accepted runtime work. |
 | Lifetime | Used during the execution object's lifetime; work-reservation lifetime follows execution contract §7. |

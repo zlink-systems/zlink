@@ -59,7 +59,7 @@ public interface IZLinkRouteClient
 ```
 
 How Node direct and ChannelName use different handler interfaces is explained in
-[6. How To Find And Run A Handler](#6-how-to-find-and-run-a-handlernamespace-context-information).
+[6. How To Find And Run A Handler](#6-how-to-find-and-run-a-handler-namespace-context-information).
 
 The following code is an example using both targeting methods from the same client.
 

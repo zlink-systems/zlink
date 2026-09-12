@@ -128,10 +128,6 @@ public interface ZLinkMeshNodeSocketConfig {
  void setSendHighWaterMark(long value);
  long receiveHighWaterMark();
  void setReceiveHighWaterMark(long value);
- long mailboxMessageBudget();
- void setMailboxMessageBudget(long value);
- long mailboxByteBudget();
- void setMailboxByteBudget(long value);
  Optional<Duration> receiveTimeout();
  void setReceiveTimeout(Duration value);
  Optional<Duration> sendTimeout();
@@ -422,22 +418,7 @@ substitute for transport liveness.
 `ZLinkMeshNodeSocketConfig` doesn't provide a Framework-level message-size
 setting for RouteMesh SS. A sender or receiver doesn't reject a message because
 of a Framework-level complete-message cap. Transport and service-wire
-representation bounds, HWM, and mailbox budgets remain separate resource and
-wire guards.
-
-`mailboxMessageBudget` and `mailboxByteBudget` are the caps on message
-count and byte sum for the per-owner application mailbox. Byte
-accounting doesn't count only payload size — it adds `payload size +
-metadata size + a fixed per-job cost`. Even if payload is empty, one job
-isn't `0` bytes, and even for a large payload, the fixed cost is still
-added. If the sum exceeds the `long` representable range, it's pinned to
-`Long.MAX_VALUE` and that submit is rejected. The accounting rule is
-owned by
-[Framework API §8.2](../../../00-foundation/06-framework-api.en.md#11-handler-execution-object-and-dependency-lifetime).
-Both values are only set before startup. `0` isn't unlimited — it
-selects the Framework profile's finite default. A negative value is a
-startup configuration error. A Logical Multicast local target also
-judges admission using this capacity limit.
+representation bounds and HWM remain separate resource and wire guards.
 
 `setInstanceSpotIdleTimeout(...)` is the reference time for cleaning up
 an idle Instance Spot. The default is `Duration.ZERO`, and
@@ -571,10 +552,6 @@ public interface systems.zlink.framework.configuration.ZLinkMeshNodeSocketConfig
  public abstract void setSendHighWaterMark(long);
  public abstract long receiveHighWaterMark();
  public abstract void setReceiveHighWaterMark(long);
- public abstract long mailboxMessageBudget();
- public abstract void setMailboxMessageBudget(long);
- public abstract long mailboxByteBudget();
- public abstract void setMailboxByteBudget(long);
  public abstract java.util.Optional<java.time.Duration> receiveTimeout();
  public abstract void setReceiveTimeout(java.time.Duration);
  public abstract java.util.Optional<java.time.Duration> sendTimeout();
@@ -662,7 +639,6 @@ public interface systems.zlink.framework.configuration.ZLinkWorkerOptions {
  public abstract systems.zlink.framework.configuration.ZLinkWorkerOptions minThreads(int);
  public abstract systems.zlink.framework.configuration.ZLinkWorkerOptions maxThreads(int);
  public abstract systems.zlink.framework.configuration.ZLinkWorkerOptions idleTimeout(java.time.Duration);
- public abstract systems.zlink.framework.configuration.ZLinkWorkerOptions maxQueueLength(int);
 }
 ```
 

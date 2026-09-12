@@ -194,7 +194,7 @@ The ClientServer complete-message limit is fixed at startup admission.
 - The sender uses the smaller of the local and remote `normalizedEffectiveMaxMessageBytes`, and the receiver uses its own admitted limit.
 - This value cannot change during the admitted connection's lifetime, and is applied before allocation.
 - If both sides' limits are 32 MiB, a 17 MiB payload is allowed, since the complete message stays within 32 MiB.
-- RouteMesh admission doesn't carry this field, and an SS sender or receiver doesn't reject a message because of this value. HWM, mailbox byte budgets, and protocol representation bounds remain separate resource and wire guards.
+- RouteMesh admission doesn't carry this field, and an SS sender or receiver doesn't reject a message because of this value. HWM and protocol representation bounds remain separate resource and wire guards.
 
 ### Typed Payload Envelope
 

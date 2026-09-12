@@ -680,7 +680,7 @@ handoff payload는 source memory에서 target으로 직접 전송한다. Store�
 소유하므로 이 등록 요구는 그대로 유지된다.
 
 `configure_network()`는 process 전체의 BindHost와 AdvertiseHost 기본값을 반환하며 listener별 설정이 이 값을
-재정의한다. `worker()`는 bounded worker pool의 최소·최대 thread 수, idle timeout과 queue 상한을 반환한다.
+재정의한다. `worker()`는 worker pool의 최소·최대 thread 수와 idle timeout을 반환한다.
 두 option은 host 시작 전에만 변경할 수 있다.
 
 `configure_dispatch()`는 host 전체 진단·unhandled dispatch 설정을 반환한다.

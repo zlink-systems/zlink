@@ -741,8 +741,6 @@ public interface IZLinkMeshNodeSocketConfig
 {
  ulong SendHighWaterMark { get; set; }
  ulong ReceiveHighWaterMark { get; set; }
- ulong MailboxMessageBudget { get; set; }
- ulong MailboxByteBudget { get; set; }
  TimeSpan? ReceiveTimeout { get; set; }
  TimeSpan? SendTimeout { get; set; }
 }
@@ -763,18 +761,6 @@ some target's failure. It completes normally even with no targets.
 
 `IZLinkRouteMeshRuntimeOptions` is a public DI singleton. Querying
 unregistered membership is `ZLinkConfigurationException`.
-`MailboxMessageBudget` and `MailboxByteBudget` are the caps on message
-count and byte sum for the per-[owner](../../../00-foundation/02-glossary.en.md#owner)
-application mailbox. Byte accounting doesn't count only payload size —
-it adds `payload size + metadata size + a fixed per-job cost`. Even if
-payload is empty, one job isn't 0 bytes, and even for a large payload,
-the fixed cost is still added. If the sum exceeds the `ulong`
-representable range, it's pinned to `ulong.MaxValue` and that submit is
-rejected. The accounting rule is owned by
-[Framework API §8.2](../../../00-foundation/06-framework-api.en.md#11-handler-execution-object-and-dependency-lifetime).
-0 uses the Framework profile's finite default. Both values are set
-before startup in `ConfigureRouterSocket()`, and Logical Multicast's
-local target drop also follows this public capacity setting.
 
 At runtime, `Mesh(meshName).PlacementWeight` and
 `Channel(channelName).Weight` can be changed. The two weights are

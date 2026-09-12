@@ -173,7 +173,7 @@ ClientServer complete-message 상한은 startup admission에서 정한다.
 - Sender는 local과 remote의 `normalizedEffectiveMaxMessageBytes` 중 작은 값을 사용하고 receiver는 자신의 admitted 상한을 사용한다.
 - 이 값은 admitted connection lifetime 동안 바꿀 수 없으며, allocation 전에 적용한다.
 - 양쪽 상한이 32 MiB이면 complete message가 32 MiB 이내인 17 MiB payload를 허용한다.
-- RouteMesh admission에는 이 field를 싣지 않으며 SS sender·receiver는 이 값으로 message를 거절하지 않는다. HWM, mailbox byte budget과 protocol 표현 한계는 별도 자원·wire guard로 유지한다.
+- RouteMesh admission에는 이 field를 싣지 않으며 SS sender·receiver는 이 값으로 message를 거절하지 않는다. HWM과 protocol 표현 한계는 별도 자원·wire guard로 유지한다.
 
 ### Typed payload envelope
 

@@ -89,14 +89,19 @@ publish의 local target처럼 network를 거치지 않고 곧바로 실행 대�
 전에 같은 host permit을 얻는다. 그러지 않으면 그 job이 대기열에서 기다려도 쓰는 permit이
 늘지 않아 §6의 `PAUSED`가 나가지 않고, 한 host가 자기 자신을 밀어붙일 수 있다.
 
+**세는 것과 거는 것은 층이 다르다.** permit은 이 host가 받아서 handler를 기다리는 job을
+**출처와 무관하게 모두** 센다. `PAUSED`는 그중 멈추라고 알릴 상대가 있는 socket에만 건다(§6).
+둘을 같은 범위로 맞추려 하면, 셀 수 없는 job이 생기거나 걸 수 없는 socket에 걸게 된다.
+
 **Messaging 유입이 이 경로의 본체다.** 두 곳에서 들어온다.
 
 | 어디서 받나 | 무엇을 받나 |
 |---|---|
-| RouteMesh MeshNode의 ROUTER-ROUTER socket | 다른 node가 보낸 request와 send |
+| RouteMesh MeshNode의 ROUTER-ROUTER socket | 다른 node가 보낸 request와 send, 그리고 [Logical Multicast](../00-foundation/02-glossary.ko.md#logical-multicast) |
 | [ClientServer Channel](../00-foundation/02-glossary.ko.md#clientserver-channel)의 Server ROUTER | Client DEALER가 보낸 request와 send |
 
-둘은 같은 permit을 쓴다. 구조마다 따로 세지 않는다. §6이 `PAUSED`를 거는 socket도 이 둘이다.
+Logical Multicast도 여기로 들어온다. 보내는 쪽이 remote node마다 한 번씩 보내고, 받은 node가
+자기 local Spot을 정한다. 한 record가 이 node의 Spot N개로 가면 permit도 N개를 쓴다.
 
 ClientServer에서 Server ROUTER는 Client DEALER에게 먼저 보내지 않는다. 그래서 Client DEALER가
 받는 것은 자기가 보낸 호출의 답뿐이다. 답은 이 절 뒤에서 정하는 대로 permit을 거치지 않으므로,
@@ -112,7 +117,10 @@ Ordinary ingress는 다음 순서를 지킨다.
 2. Permit을 얻은 뒤에만 Core·binding에서 record를 receive·claim한다.
 3. Application record는 permit을 owner mailbox나 serial queue의 handler turn으로 이전한다.
 4. Control 또는 malformed ordinary record는 유한한 내부 처리를 마친 뒤 permit을 반환한다.
-5. 공통 invocation boundary는 callback의 실제 첫 instruction 직전에 permit을 반환한다.
+5. 각 job은 자신을 실행하는 callback handler가 시작되기 직전에 queue에서 빠지고 permit을
+   반환한다. 그 handler가 Node handler인지 Spot·Actor handler인지는 job마다 다르지만 반환
+   시점은 하나다 — 자기 handler의 첫 instruction 직전이다. 유입 종류에 따라 다른 시점을
+   두지 않는다.
 
 ```mermaid
 sequenceDiagram
@@ -373,18 +381,16 @@ server→client outbound에는 적용하지 않는다.
 
 어느 경로도 별도 unbounded backlog, polling, busy-spin이나 silent replay를 만들지 않는다.
 
-## 9. 큰 payload와 운영값
+## 9. 큰 payload
 
-- **Application job queue는 job count를 제한하지 payload byte를 가중하지 않는다.** 빈
-  payload와 큰 payload는 각각 job 하나다. 따라서 Framework queue 상한은 process memory의
-  byte hard cap이 아니다.
-- 큰 payload를 오래 보유하는 workload는 production과 같은 payload 분포, permits in
-  use, process memory, throughput과 latency를 함께 측정해 `MaxQueuedApplicationJobs`를
-  낮춘다. 단일 message 크기는 `MaxMessageSize`로 별도 제한한다. 이 문제를 해결하려고
-  Core profile을 Framework profile에 연결하거나 retained-credit lease를 복구하지 않는다.
-- **Core HWM은 Core queue memory의 마지막 안전장치로 계속 동작한다.** Framework가
-  permit 때문에 ordinary receive를 멈추면 local Core receive queue에 byte가 쌓이고,
-  finite Core HWM과 TCP backpressure가 sender의 진행을 제한한다.
+- **Framework는 job 개수만 센다.** 빈 payload와 큰 payload는 각각 job 하나다. Framework의
+  상한은 process memory의 byte 상한이 아니다.
+- **메모리를 byte로 막는 것은 Core다.** Framework가 permit이 없어 receive를 멈추면 byte가
+  local Core queue에 쌓이고, Core HWM과 TCP 흐름 제어가 보내는 쪽을 막는다. 큰 payload가
+  몰려도 이 경로가 그대로 동작하므로 Framework가 byte를 따로 세거나 job 상한을 payload
+  크기에 맞춰 조절할 필요가 없다.
+- 단일 message 크기는 `MaxMessageSize`로 따로 제한한다. Core profile을 Framework profile에
+  연결하거나 retained-credit lease를 되살리지 않는다.
 
 ## 10. 검증 요구
 

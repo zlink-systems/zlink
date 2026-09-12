@@ -290,7 +290,7 @@ layer filled first.
 The ownership boundary between the two kinds of accounting belongs to
 [Application Job Queue And Backpressure §1](../01-execution/04-application-job-queue-and-backpressure.en.md#1-two-independent-capacity-authorities).
 What to tune for a workload that holds large payloads for a long time belongs to
-[§9 of the same document](../01-execution/04-application-job-queue-and-backpressure.en.md#9-large-payloads-and-operational-values).
+[§9 of the same document](../01-execution/04-application-job-queue-and-backpressure.en.md#9-large-payloads).
 
 Execution queues keep application and lifecycle work in separate FIFO lanes, but that
 separation exists to order and prioritise the work, not to bound each lane.

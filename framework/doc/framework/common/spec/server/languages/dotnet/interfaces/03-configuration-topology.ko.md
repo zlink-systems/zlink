@@ -627,8 +627,6 @@ public interface IZLinkMeshNodeSocketConfig
 {
     ulong SendHighWaterMark { get; set; }
     ulong ReceiveHighWaterMark { get; set; }
-    ulong MailboxMessageBudget { get; set; }
-    ulong MailboxByteBudget { get; set; }
     TimeSpan? ReceiveTimeout { get; set; }
     TimeSpan? SendTimeout { get; set; }
 }
@@ -644,15 +642,7 @@ source-local 실행 용량을 send timeout 안에 확보하면 시작하고 결�
 자동 재시도하지 않는다. Target이 없어도 정상 완료한다.
 
 `IZLinkRouteMeshRuntimeOptions`는 public DI singleton이다. 등록되지 않은 membership을 조회하면
-`ZLinkConfigurationException`이다. `MailboxMessageBudget`와 `MailboxByteBudget`은 [owner](../../../00-foundation/02-glossary.ko.md#owner)별 application
-mailbox의 메시지 수와 byte 합계 상한이다. Byte 회계는 payload 크기만 세지 않는다 —
-`payload 크기 + metadata 크기 + 작업당 고정 비용`을 더한다. Payload가 비어 있어도 작업 하나는 0 byte가
-아니며, 큰 payload에서도 고정 비용은 그대로 더한다. 합이 `ulong` 표현 범위를 넘으면 `ulong.MaxValue`로
-고정하고 그 제출을 거절한다. 회계 규칙은
-[Framework API §8.2](../../../00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)가 소유한다.
-0은 Framework profile의 유한 기본값을 사용한다. 두 값은
-`ConfigureRouterSocket()`에서 startup 전에 설정하며, Logical Multicast의 local target drop도 이 공개
-용량 설정을 따른다.
+`ZLinkConfigurationException`이다.
 
 실행 중에는 `Mesh(meshName).PlacementWeight`와 `Channel(channelName).Weight`를 변경할 수 있다.
 두 weight는 서로 독립적이며 node weight는 object create·relocation target selection에만 사용한다.

@@ -718,7 +718,8 @@ Control 작업의 범위와 Actor control claim과의 실행 순서는
 | Actor queue | Actor 업무 payload | Spot callback을 거쳐 전달하는 Actor payload |
 
 Actor join·leave와 lifecycle control callback은 Spot application queue가 아니라 **Spot control
-claim**으로 처리한다. 두 자리는 한도도 실행 순서도 다르므로 섞지 않는다.
+claim**으로 처리한다. 두 자리는 실행 순서가 다르므로 섞지 않는다. 다만 둘 다 같은 host job
+permit을 쓴다.
 Instance Spot의 Actor control이나 Logical Multicast subscription은 등록할 때 또는
 Spot을 준비할 때 거부한다.
 
@@ -749,11 +750,9 @@ Spot control claim으로 처리하는 작업은 application queue 한도를 **�
 Join·leave와 lifecycle control이 업무 payload가 밀려 실패하면 그 밀림을 해소할 방법
 자체가 사라지기 때문이다.
 
-다만 control claim도 **자기 몫의 한도를 갖는다.** application queue와 별개로 잡되 무한이
-아니다. 무한으로 두면 control이 계속 도착하는 동안 memory가 한도 없이 늘고, 아래 우선순위
-규칙과 맞물려 application payload가 실행 기회를 얻지 못한다.
-
-Control 한도를 넘긴 결과도 위 오류 모델의 자원 소유 기준을 따른다.
+**control claim에는 자기 몫의 한도가 없다.** application queue와 실행 순서를 나눌 뿐,
+얼마나 쌓였는지는 host의 job 수 하나로 센다. control이 계속 도착하면 그 수가 올라 `PAUSED`가
+나가고, 아래 우선순위 규칙의 연속 상한이 application payload에도 실행 기회를 준다.
 
 ### 5.4 Spot turn과 callback 순서
 

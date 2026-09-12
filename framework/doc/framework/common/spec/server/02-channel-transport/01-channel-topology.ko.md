@@ -74,8 +74,6 @@ public interface IZLinkMeshNodeSocketConfig
 {
     ulong SendHighWaterMark { get; set; }     // 송신 방향 socket HWM.
     ulong ReceiveHighWaterMark { get; set; }  // 수신 방향 socket HWM.
-    ulong MailboxMessageBudget { get; set; }  // socket HWM과 별개인 owner별 mailbox message 수 상한.
-    ulong MailboxByteBudget { get; set; }     // socket HWM과 별개인 owner별 mailbox byte 상한.
     TimeSpan? ReceiveTimeout { get; set; }
     TimeSpan? SendTimeout { get; set; }
 }
@@ -607,12 +605,6 @@ ServerServer(SS) transport는 listener message-size setter를 제공하지 않�
 
 `ConfigureRouterSocket()`의 `SendHighWaterMark`와 `ReceiveHighWaterMark`, `SendTimeout`과
 `ReceiveTimeout`은 서로 다른 방향의 socket option으로 적용한다.
-
-`MailboxMessageBudget`과 `MailboxByteBudget`은 socket HWM과 별개로 owner별 application
-mailbox에 적용하는 message 수와 byte 합계 상한이다. Socket이 수신할 수 있는 양과 owner가
-실행을 위해 보관할 수 있는 양을 같은 설정으로 해석하지 않는다. 두 byte 회계 규칙은
-[Framework API §8.2](../00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)가
-정의한다.
 
 메시지는 transport와 service-wire protocol의 표현 한계, 그리고 process memory 한계를 계속
 따른다. 이 하위 한계에서 message가 거부되면 payload 일부를 handler에 전달하지 않고 request는

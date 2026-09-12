@@ -193,17 +193,13 @@ sequenceDiagram
 
     Caller->>Coord: executeActor(actorId, work)
     Coord->>AQ: find or create that Actor's queue
-    AQ->>AQ: reserve this work's payload bytes
-    Note over AQ: if that Actor's share is full,<br/>it is rejected here as backpressure
     AQ->>SQ: on its own turn, place an execution turn (payload stays in AQ)
-    Note over SQ: the same payload is not reserved again
     SQ->>Handler: hold one Spot turn and run
     Handler-->>Caller: complete
 ```
 
-Only the normal path is drawn. The backpressure branch where a reservation is rejected is
-covered by §5, and the branch where an owner that has held a turn too long yields is covered by
-§6.4.
+Only the normal path is drawn. How the two queues relate is explained in §5, and the branch
+where one owner holds its turn too long and yields is explained in §6.4.
 
 The pseudocode below expresses the two diagrams above. One entry point carries the whole §4
 path decision, and the caller never sees a queue.
@@ -256,9 +252,8 @@ accumulate in the Core queue and the sender is held there.
 
 ## 6. The Serial Queue Primitive
 
-`ZLinkSerialExecutionQueue` does more than run work in order. **Rejecting work once capacity is
-exceeded, and stopping one owner from holding its turn too long, are part of its
-own contract.**
+`ZLinkSerialExecutionQueue` does more than run work in order. **Stopping one owner from
+holding its turn too long is part of its own contract.**
 Leaving those to callers means each call site handles them differently, and then no real-time
 guarantee — that latency is bounded under any load — can be stated.
 
@@ -337,9 +332,8 @@ Enqueue(work)
 {
     bool startDrain;
 
-    lock (gate)                      // §6.3 — room decision, sequence issue, insertion in one section
+    lock (gate)                      // §6.3 — issuing the number and inserting are one region
     {
-        if (!HasRoom(lane)) return Rejected;
         queue.Add(work, nextSequence++);
 
         // if someone is already driving this queue, enqueuing is the whole job.

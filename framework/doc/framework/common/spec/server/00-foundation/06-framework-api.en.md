@@ -40,7 +40,7 @@ configuration provides the following capabilities.
 | [Relocation Store](02-glossary.en.md#relocation-store) | Registers an instance to store the activation envelope an Instance [Spot](02-glossary.en.md#spot)'s cold activation needs and cross-node relocation's immutable state/journal/replay payload completed after relocation |
 | codec extension | Registers a typed-payload serializer |
 | handler and filter | Registers dispatch handlers, filters, and metadata policy |
-| worker | Configures the bounded worker scheduler's concurrency, idle timeout, and queue cap |
+| worker | Configures the worker scheduler's concurrency and idle timeout. It has no queue cap |
 | network identity | Configures the bind host and advertised host common to listeners |
 | deployment identity | Configures the application version and maintenance wave used for target eligibility |
 | inbound dispatch | Configures the forwarded [Core HWM budget](02-glossary.en.md#core-hwm-budget) values — the byte budget forwarded to Core for directional queue HWMs — and the host-wide [Application job queue](02-glossary.en.md#application-job-queue) profile/capacity — the shared supply-permit queue held until an application callback actually starts |
@@ -473,7 +473,7 @@ to cancellation or shutdown.
 
 Per-target accept/failure results aren't returned as a public publish result or aggregated
 into publish-only monitoring values. It completes normally even with 0 snapshot targets.
-Remote capacity/connection failure and local Spot queue drops after the transaction starts
+A connection failure after the transaction starts, and waiting for room in a local Spot queue,
 don't roll back the whole publish or turn it into an exceptional completion. Targets
 accepted earlier aren't canceled because a later target failed.
 

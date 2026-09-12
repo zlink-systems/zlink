@@ -74,15 +74,15 @@ Spot gate를 반납하는 terminal만 `Yield`·`yield`라는 이름을 사용한
 
 ## 3. Worker offload
 
-- CPU 작업과 비동기 I/O 작업은 Framework가 소유한 bounded worker scheduler에 제출한다.
+- CPU 작업과 비동기 I/O 작업은 Framework가 소유한 worker scheduler에 제출한다.
 - CPU execution slot은 application CPU callback이 실제로 실행되는 동안만 점유한다.
   비동기 I/O가 operating system, transport 또는 Store completion을 기다리는 동안에는
   CPU execution slot을 점유하지 않는다.
 - I/O admission과 completion bookkeeping도 bounded resource를 사용하지만, CPU worker
   queue가 가득 찼다는 이유만으로 이미 제출된 I/O completion을 오류로 바꾸지 않는다.
-- CPU worker의 configured thread 수보다 많은 I/O operation이 completion을 기다릴 수
-  있다. 이 개수는 CPU execution slot이나 CPU queue length가 아니라 Framework 내부의
-  별도 bounded I/O admission이 제한한다.
+- CPU worker의 configured thread 수보다 많은 I/O operation이 completion을 기다릴 수 있다.
+  이 개수를 Framework가 따로 제한하지 않는다 — I/O를 시작하려면 handler가 돌아야 하므로
+  호출자의 동시성이 곧 상한이다.
 - 이 격리 계약은 별도의 public I/O thread-count 또는 queue 설정을 요구하지 않는다.
   언어 runtime은 native async I/O, event loop 또는 completion executor로 구현할 수
   있다.

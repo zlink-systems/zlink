@@ -37,7 +37,7 @@ Framework root는 process의 host lifecycle과 DI에 한 번 등록한다. Root 
 | [Relocation Store](02-glossary.ko.md#relocation-store) | 주소와 상태를 가진 논리 instance인 [Spot](02-glossary.ko.md#spot)의 Instance 종류가 cold activation할 때 필요한 activation envelope와 relocation 뒤 완료되는 cross-node relocation의 immutable state·journal·replay payload를 저장할 instance를 등록한다 |
 | codec extension | typed payload serializer를 등록한다 |
 | handler와 filter | dispatch handler, filter와 metadata policy를 등록한다 |
-| worker | bounded worker scheduler의 동시성, idle timeout과 queue 상한을 설정한다 |
+| worker | worker scheduler의 동시성과 idle timeout을 설정한다. queue 상한은 두지 않는다 |
 | network identity | listener가 공통으로 사용할 bind host와 advertised host를 설정한다 |
 | deployment identity | target eligibility에 사용할 application version과 maintenance wave를 설정한다 |
 | inbound dispatch | Core가 messaging budget 계산에 사용하는 [Core HWM budget](02-glossary.ko.md#core-hwm-budget) 전달값과, handler 시작을 기다리는 application job 수를 제한하는 host 전체 [Application job queue](02-glossary.ko.md#application-job-queue) profile/capacity를 설정한다 |
@@ -410,8 +410,8 @@ operation에 허용된 deadline까지 완료 조건을 만족하지 못했을 �
 중단하지 않는다.
 
 Target별 수락·실패 결과는 public publish 결과로 반환하거나 publish 전용 monitoring 값으로 집계하지
-않는다. Snapshot target이 0개여도 정상 완료한다. Transaction 시작 뒤 remote capacity·연결 실패와 local
-Spot queue drop은 전체 publish를 rollback하거나 exceptional completion으로 바꾸지 않는다. 앞에서 수락한
+않는다. Snapshot target이 0개여도 정상 완료한다. Transaction 시작 뒤 연결 실패와 local
+Spot queue 대기는 전체 publish를 rollback하거나 exceptional completion으로 바꾸지 않는다. 앞에서 수락한
 target은 뒤 target의 실패 때문에 취소하지 않는다.
 
 ## 9. Handler 등록과 dispatch

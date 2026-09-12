@@ -312,7 +312,7 @@ own rule paragraphs in §2, §3, and §7.
 
 **Deserialization Timing and Count**
 
-- The codec deserialization callback isn't called for a message rejected for queue-full or owner mismatch.
+- The codec deserialization callback isn't called for a message waiting for room in a queue, or rejected for owner mismatch.
 - The codec deserialization callback isn't called for a message held during a move until commit replay or abort resumption.
 - While an earlier handler retains the same execution authority, the next message's codec deserialization callback isn't called.
 - Repeated typed access to the same message preserves the first value or error, with at most one codec deserialization callback invocation.

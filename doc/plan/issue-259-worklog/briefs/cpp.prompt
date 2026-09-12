@@ -125,6 +125,18 @@ Twelve kinds, 0..11. Every existing producer moves:
 - One job, one cause. If you cannot finish inside your time budget, write down the facts you
   proved and what remains, and stop.
 
+== Build environment (already prepared — just export these) ==
+```bash
+export VCPKG_ROOT=/home/hep7/.cache/zlink/vcpkg
+export VCPKG_OVERLAY_PORTS=<this worktree>/vcpkg/ports
+export ZLINK_LOCAL_PACKAGE_ROOT=/home/hep7/project/zlink/.artifacts/wsl
+cmake --preset linux-ninja -S framework/languages/cpp
+cmake --build --preset linux-ninja
+```
+vcpkg is already cloned and bootstrapped at `VCPKG_ROOT`; do not clone it again. If a configure
+fails, delete that build directory and configure again rather than patching the cache. Run the
+unit and contract tests of the C++ framework plus your new test. No e2e, samples, or benchmarks.
+
 == Report format (write it to the summary path given below, in Korean) ==
   1) 결과 — 한 줄
   2) 변경 파일 — 경로마다 무엇을 왜

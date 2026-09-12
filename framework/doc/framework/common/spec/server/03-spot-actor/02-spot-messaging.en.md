@@ -815,12 +815,10 @@ Work handled by the Spot control claim **doesn't share** the application queue
 limit. If join/leave and lifecycle control failed due to business-payload backlog,
 there would be no way left to clear the backlog.
 
-However, the control claim also **has its own limit.** It's kept separate from
-the application queue, but isn't unlimited. Left unlimited, memory would grow
-without bound while control keeps arriving, and combined with the priority rule
-above, application payload would never get a chance to run.
-
-Exceeding a control limit follows the same resource-ownership criterion in the error model.
+**The control claim has no limit of its own.** It is kept separate from the application queue
+only to order the work; how much has piled up is counted once, as the host's job count. As
+control keeps arriving that number rises and `PAUSED` goes out, and the consecutive cap in the
+priority rule below still gives application payload its turn.
 
 ### 5.4 Spot Turn and Callback Order
 

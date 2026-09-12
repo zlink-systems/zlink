@@ -309,8 +309,8 @@ The boundary between send HWM waiting and binding completion follows
 
 **Don't open a cut-in path at the front of the queue.** If there's work
 that must be handled first, add another queue and state the priority
-explicitly. The specific bounds and priority rules for the two FIFO lanes kept
-per owner are owned by
+explicitly. The work classification and priority rules for the two FIFO lanes
+kept per owner are owned by
 [§7](#7-lane-separation-and-priority-implementation).
 
 **Do not allow reentrancy.** Running right there without going through the

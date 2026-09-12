@@ -154,7 +154,14 @@ source는 그 payload를 원래 queue 순서로 되돌린다.
 
 Source mailbox나 이전 route로 새 message가 계속 도착할 수 있으므로 queue가 비기를 기다리지
 않는다. Restore 요청을 보낸 뒤 target이 relay 수신 준비를 알릴 때까지 새 message를 source
-ingress hold에 계속 넣는다. Target 준비를 기다리는 동안에도 transport 수신은 멈추지 않는다.
+ingress hold에 계속 넣는다.
+
+**hold에 들어간 record는 그동안 host permit을 계속 쥔다.** Core에서 꺼낸 뒤로는 Core의 byte
+회계가 끝나므로, permit을 놓으면 그 record가 어느 counter에도 잡히지 않고 hold가 제한 없이
+자란다. 쥐고 있으면 쓰는 permit이 늘어 경계에서 `PAUSED`가 나가고 보내는 쪽이 늦춰진다
+([Application job queue와 backpressure §3](../01-execution/04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)).
+permit은 새 owner에서 그 job의 handler가 시작되기 직전에 반납한다.
+
 개별 message 크기, transport, deadline과 cancellation 제한은 이 보관 중에도 그대로 적용한다.
 
 ### 4.3 Target은 실행하지 않은 상태로 복원한다

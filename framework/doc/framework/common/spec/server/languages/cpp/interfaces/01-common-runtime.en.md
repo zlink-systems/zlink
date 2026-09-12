@@ -397,8 +397,6 @@ public:
  worker_options_t &max_threads(std::size_t value);
  std::chrono::milliseconds idle_timeout() const noexcept;
  worker_options_t &idle_timeout(std::chrono::milliseconds value);
- std::size_t max_queue_length() const noexcept;
- worker_options_t &max_queue_length(std::size_t value);
 };
 ```
 

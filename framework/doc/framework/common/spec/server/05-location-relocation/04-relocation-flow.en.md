@@ -171,9 +171,17 @@ source returns that payload to the original queue order.
 The source doesn't wait for the queue to become empty, because new messages can keep
 arriving at the source mailbox or previous route. After sending the Restore request, it
 keeps placing new messages in the source ingress hold until the target reports that
-relay reception is ready. Transport reception doesn't stop while target preparation is
-pending, either. Limits on individual message size, transport, deadline, and
-cancellation still apply during this holding.
+relay reception is ready.
+
+**A record in the hold keeps holding its host permit the whole time.** Once it has been taken
+out of Core, Core's byte accounting for it is over, so releasing the permit would leave it
+counted by nothing and let the hold grow without bound. Holding it raises the number of
+permits in use, so `PAUSED` goes out at the threshold and the sender is slowed
+([Application Job Queue And Backpressure §3](../01-execution/04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order)).
+The permit is returned on the new owner, right before that job's handler starts.
+
+Limits on individual message size, transport, deadline, and cancellation still apply during
+this holding.
 
 ### 4.3 Restore the Target Without Running It
 
