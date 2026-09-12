@@ -172,12 +172,8 @@ bool submit_request_once (void *dealer,
     metrics->max_outstanding = std::max<uint64_t> (
       metrics->max_outstanding, cb->outstanding.load (std::memory_order_acquire));
     const uint64_t submit_start = zlink_c_bench::now_ns ();
-    zlink_submit_result_t rc = zlink_request_part (
-      dealer, target_rid, &parts[0], flags, ZLINK_PART_MORE, 0, NULL, NULL);
-    const bool header_submitted = rc == ZLINK_SUBMIT_OK;
-    if (rc == ZLINK_SUBMIT_OK)
-        rc = zlink_request_part (dealer, target_rid, &parts[1], flags, ZLINK_PART_FINAL,
-                                 5000, cb, NULL);
+    const zlink_submit_result_t rc = zlink_request (
+      dealer, target_rid, parts, 2, flags, 5000, cb, NULL);
     const uint64_t submit_stop = zlink_c_bench::now_ns ();
     metrics->submit_wait_ms += submit_stop >= submit_start
                                  ? static_cast<double> (submit_stop - submit_start) / 1000000.0
@@ -188,11 +184,6 @@ bool submit_request_once (void *dealer,
     }
 
     cb->outstanding.fetch_sub (1, std::memory_order_release);
-    if (rc != ZLINK_SUBMIT_OK) {
-        zlink_msg_close (&parts[1]);
-        if (!header_submitted)
-            zlink_msg_close (&parts[0]);
-    }
     if (rc == ZLINK_SUBMIT_BACKPRESSURED || zlink_errno () == EAGAIN || zlink_errno () == EWOULDBLOCK)
         ++metrics->blocked;
     else
@@ -383,16 +374,9 @@ zlink_c_bench::result_t run_send_loop (void *dealer,
             continue;
         }
         const uint64_t submit_start = zlink_c_bench::now_ns ();
-        zlink_submit_result_t rc =
-          target_rid
-            ? zlink_send_part_rid (dealer, target_rid, &parts[0], flags, ZLINK_PART_MORE, NULL, NULL)
-            : zlink_send_part (dealer, &parts[0], flags, ZLINK_PART_MORE, NULL, NULL);
-        const bool header_submitted = rc == ZLINK_SUBMIT_OK;
-        if (rc == ZLINK_SUBMIT_OK)
-            rc = target_rid ? zlink_send_part_rid (dealer, target_rid, &parts[1], flags,
-                                                   ZLINK_PART_FINAL, NULL, NULL)
-                            : zlink_send_part (dealer, &parts[1], flags, ZLINK_PART_FINAL, NULL,
-                                               NULL);
+        const zlink_submit_result_t rc =
+          target_rid ? zlink_send_rid (dealer, target_rid, parts, 2, flags, NULL, NULL)
+                     : zlink_send (dealer, parts, 2, flags, NULL, NULL);
         const uint64_t submit_stop = zlink_c_bench::now_ns ();
         submit_wait_ms += submit_stop >= submit_start
                             ? static_cast<double> (submit_stop - submit_start) / 1000000.0
@@ -400,9 +384,6 @@ zlink_c_bench::result_t run_send_loop (void *dealer,
         if (rc == ZLINK_SUBMIT_OK) {
             ++seq;
         } else {
-            zlink_msg_close (&parts[1]);
-            if (!header_submitted)
-                zlink_msg_close (&parts[0]);
             if (rc == ZLINK_SUBMIT_BACKPRESSURED || zlink_errno () == EAGAIN
                 || zlink_errno () == EWOULDBLOCK)
                 ++blocked;
@@ -452,26 +433,15 @@ zlink_c_bench::result_t run_send_send_serial (void *dealer,
         }
 
         const uint64_t submit_start = zlink_c_bench::now_ns ();
-        zlink_submit_result_t send_rc =
-          target_rid ? zlink_send_part_rid (dealer, target_rid, &parts[0], ZLINK_SEND_FLAGS_NONE,
-                                            ZLINK_PART_MORE, NULL, NULL)
-                     : zlink_send_part (dealer, &parts[0], ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE,
-                                        NULL, NULL);
-        const bool header_submitted = send_rc == ZLINK_SUBMIT_OK;
-        if (send_rc == ZLINK_SUBMIT_OK)
-            send_rc = target_rid
-                        ? zlink_send_part_rid (dealer, target_rid, &parts[1], ZLINK_SEND_FLAGS_NONE,
-                                               ZLINK_PART_FINAL, NULL, NULL)
-                        : zlink_send_part (dealer, &parts[1], ZLINK_SEND_FLAGS_NONE,
-                                           ZLINK_PART_FINAL, NULL, NULL);
+        const zlink_submit_result_t send_rc =
+          target_rid ? zlink_send_rid (dealer, target_rid, parts, 2, ZLINK_SEND_FLAGS_NONE,
+                                       NULL, NULL)
+                     : zlink_send (dealer, parts, 2, ZLINK_SEND_FLAGS_NONE, NULL, NULL);
         const uint64_t submit_stop = zlink_c_bench::now_ns ();
         submit_wait_ms += submit_stop >= submit_start
                             ? static_cast<double> (submit_stop - submit_start) / 1000000.0
                             : 0.0;
         if (send_rc != ZLINK_SUBMIT_OK) {
-            zlink_msg_close (&parts[1]);
-            if (!header_submitted)
-                zlink_msg_close (&parts[0]);
             if (send_rc == ZLINK_SUBMIT_BACKPRESSURED || zlink_errno () == EAGAIN
                 || zlink_errno () == EWOULDBLOCK)
                 ++blocked;
@@ -482,28 +452,21 @@ zlink_c_bench::result_t run_send_send_serial (void *dealer,
         ++submitted;
 
         const zlink_routing_id_t *source_rid = nullptr;
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
         zlink_msg_t reply_parts[2];
-        if (zlink_msg_init (&reply_parts[0]) != ZLINK_CONFIG_OK
-            || zlink_msg_init (&reply_parts[1]) != ZLINK_CONFIG_OK) {
+        zlink_reply_token_t reply_token = 0;
+        size_t reply_part_count = 0;
+        const zlink_recv_result_t recv_rc =
+          target_rid
+            ? zlink_router_recv (dealer, &source_rid, &reply_token, reply_parts, 2,
+                                  &reply_part_count, ZLINK_RECV_FLAGS_NONE)
+            : zlink_recv (dealer, &source_rid, reply_parts, 2, &reply_part_count,
+                          ZLINK_RECV_FLAGS_NONE);
+        if (recv_rc != ZLINK_RECV_OK) {
             ++errors;
             continue;
         }
-        zlink_reply_token_t reply_token = 0;
-        zlink_recv_result_t recv_rc =
-          target_rid ? zlink_router_recv_part (dealer, &source_rid, &reply_token, &reply_parts[0],
-                                               &has_more, ZLINK_RECV_FLAGS_NONE)
-                     : zlink_recv_part (dealer, &source_rid, &reply_parts[0], &has_more,
-                                        ZLINK_RECV_FLAGS_NONE);
-        if (recv_rc == ZLINK_RECV_OK && has_more == ZLINK_PART_MORE)
-            recv_rc = target_rid
-                        ? zlink_router_recv_part (dealer, &source_rid, &reply_token,
-                                                  &reply_parts[1], &has_more, ZLINK_RECV_FLAGS_NONE)
-                        : zlink_recv_part (dealer, &source_rid, &reply_parts[1], &has_more,
-                                           ZLINK_RECV_FLAGS_NONE);
-        if (recv_rc != ZLINK_RECV_OK || has_more != ZLINK_PART_FINAL) {
-            zlink_msg_close (&reply_parts[0]);
-            zlink_msg_close (&reply_parts[1]);
+        if (reply_part_count != 2) {
+            zlink_multipart_close (reply_parts, reply_part_count);
             ++errors;
             continue;
         }
@@ -525,8 +488,7 @@ zlink_c_bench::result_t run_send_send_serial (void *dealer,
         } else {
             ++errors;
         }
-        zlink_msg_close (&reply_parts[0]);
-        zlink_msg_close (&reply_parts[1]);
+        zlink_multipart_close (reply_parts, reply_part_count);
     }
     const auto stop = std::chrono::steady_clock::now ();
     zlink_c_bench::result_t r;
