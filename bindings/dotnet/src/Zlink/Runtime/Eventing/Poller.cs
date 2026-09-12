@@ -51,7 +51,7 @@ internal sealed class Poller : NativeOwner, IPoller
         if (rc != 0)
         {
             if (acquiredCompletion)
-                completionOwner!.TransferToRuntime(this);
+                completionOwner!.ReleasePublic(this);
             ZlinkException.ThrowConfigIfError(rc);
         }
         RegisterItem(new PollItem(PollItemKind.Socket, socket, socketHandle, 0,
@@ -125,14 +125,14 @@ internal sealed class Poller : NativeOwner, IPoller
         if (rc != 0)
         {
             if (acquiredCompletion)
-                item.CompletionOwner!.TransferToRuntime(this);
+                item.CompletionOwner!.ReleasePublic(this);
             ZlinkException.ThrowConfigIfError(rc);
         }
         var hadCompletion = item.OwnsCompletion;
         item.Events = events;
         item.OwnsCompletion = wantsCompletion;
         if (hadCompletion && !wantsCompletion)
-            item.CompletionOwner!.TransferToRuntime(this);
+            item.CompletionOwner!.ReleasePublic(this);
     }
 
     public void Modify(ISocketMonitor monitor, PollEventFlags events)
@@ -179,7 +179,7 @@ internal sealed class Poller : NativeOwner, IPoller
         var item = _items[index];
         UnregisterItem(index);
         if (item.OwnsCompletion)
-            item.CompletionOwner!.TransferToRuntime(this);
+            item.CompletionOwner!.ReleasePublic(this);
         return true;
     }
 
@@ -475,7 +475,7 @@ internal sealed class Poller : NativeOwner, IPoller
     {
         foreach (var item in _items)
             if (item.OwnsCompletion)
-                item.CompletionOwner!.TransferToRuntime(this);
+                item.CompletionOwner!.ReleasePublic(this);
     }
 
     private void FailPublicWaitsTerminated()

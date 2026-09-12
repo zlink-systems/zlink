@@ -44,6 +44,7 @@ public sealed class test_request_reply
         router.Bind(endpoint);
         dealer.Connect(endpoint);
         CoreTestSupport.WaitReady(dealer);
+        using var completions = new CompletionPollerDriver(dealer);
 
         Task server = Task.Run(() => ReplyOnce(router, "callback-pong"));
         using Message request = Message.From("callback-ping");
@@ -90,6 +91,7 @@ public sealed class test_request_reply
         routerSocket.Bind(endpoint);
         dealerSocket.Connect(endpoint);
         CoreTestSupport.WaitReady(dealerSocket);
+        using var completions = new CompletionPollerDriver(dealerSocket);
 
         using var handled = new ManualResetEventSlim(false);
         Task serverTask = Task.Run(() =>
@@ -151,6 +153,7 @@ public sealed class test_request_reply
         server.Bind(endpoint);
         client.Connect(endpoint);
         CoreTestSupport.WaitReady(client);
+        using var completions = new CompletionPollerDriver(client);
 
         using Message request = Message.From("ping");
         Task<IReadOnlyList<Message>> completion = client.Request(serverRid)
@@ -195,6 +198,7 @@ public sealed class test_request_reply
         router.Bind(endpoint);
         dealer.Connect(endpoint);
         CoreTestSupport.WaitReady(dealer);
+        using var completions = new CompletionPollerDriver(dealer);
 
         using Message request = Message.From("hello");
         Task<IReadOnlyList<Message>> replyTask = dealer.Request()
@@ -239,6 +243,7 @@ public sealed class test_request_reply
         router.Bind(endpoint);
         dealer.Connect(endpoint);
         CoreTestSupport.WaitReady(dealer);
+        using var completions = new CompletionPollerDriver(dealer);
 
         using Message request = Message.From("hello");
         Task<IReadOnlyList<Message>> replyTask = dealer.Request()
@@ -326,6 +331,7 @@ public sealed class test_request_reply
         routerSocket.Bind(endpoint);
         dealerSocket.Connect(endpoint);
         CoreTestSupport.WaitReady(dealerSocket);
+        using var completions = new CompletionPollerDriver(dealerSocket);
 
         using var handled = new ManualResetEventSlim(false);
         Message? owned = null;

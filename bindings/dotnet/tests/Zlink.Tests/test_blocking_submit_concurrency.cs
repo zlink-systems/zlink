@@ -29,9 +29,13 @@ public sealed class test_blocking_submit_concurrency
 
         using var readyInbound = Received.Create();
         Task<IReadOnlyList<Message>>? readyOrigin = null;
+        CompletionPollerDriver? readyCompletions = null;
         if (competingReply)
+        {
+            readyCompletions = new CompletionPollerDriver(readyPeer);
             readyOrigin = BeginInbound(readyPeer, socket, socketRid,
                 readyInbound);
+        }
 
         using var monitor = socket.MonitorOpen(SocketEvent.SendFlowPaused);
         blockedPeer.SetReceiveFlowState(ReceiveFlowState.Paused);
@@ -95,6 +99,7 @@ public sealed class test_blocking_submit_concurrency
         }
         finally
         {
+            readyCompletions?.Dispose();
             context.Shutdown();
             // Observe all terminals even when an assertion fails, then dispose
             // sockets only after native submissions have returned.

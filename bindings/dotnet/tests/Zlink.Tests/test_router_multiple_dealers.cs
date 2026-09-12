@@ -220,6 +220,7 @@ public sealed class test_router_multiple_dealers
         router.Bind(endpoint);
         dealer.Connect(endpoint);
         Thread.Sleep(100);
+        using var completions = new CompletionPollerDriver(dealer);
 
         using Message request = Message.From("request");
         Task<IReadOnlyList<Message>> completion = dealer.Request()

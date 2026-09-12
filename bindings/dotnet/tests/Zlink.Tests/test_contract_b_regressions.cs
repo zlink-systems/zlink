@@ -60,6 +60,7 @@ public sealed class test_contract_b_regressions
         router.Bind(endpoint);
         dealer.Connect(endpoint);
         Handshake(dealer, router);
+        using var completions = new CompletionPollerDriver(dealer);
 
         // Two records wait behind the same target. The first WRITABLE edge
         // admits one; the other retry is back-pressured again and must keep
@@ -126,6 +127,8 @@ public sealed class test_contract_b_regressions
         router.Bind(endpoint);
         dealer.Connect(endpoint);
         Handshake(dealer, router);
+        using var completions = Zlink.CreatePoller();
+        completions.Add(dealer, PollEventFlags.PollCompletion, 0);
 
         Task? blockedAdmission = null;
         var acceptedCount = 0;

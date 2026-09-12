@@ -23,6 +23,8 @@ internal static class Program
         routerSocket.Bind(endpoint);
         dealerSocket.Connect(endpoint);
         SampleSupport.WaitConnected(routerMonitor, dealerMonitor);
+        using var completionPoller = Zlink.CreatePoller();
+        completionPoller.Add(dealerSocket, PollEventFlags.PollCompletion, 0);
 
         using var requestHandled = new ManualResetEventSlim(false);
         Task serverTask = Task.Run(() =>
@@ -47,6 +49,12 @@ internal static class Program
             }
         });
 
+        Task completionTask = Task.Run(() =>
+        {
+            var events = new PollEvent[1];
+            if (completionPoller.Wait(events, TimeSpan.FromSeconds(2)) != 1)
+                throw new TimeoutException("request completion timed out");
+        });
         using var sent = Message.From("ping");
         IReadOnlyList<Message> replyReceived = await dealerSocket.Request()
             .Message(sent)
@@ -57,6 +65,7 @@ internal static class Program
         for (int i = 1; i < replyReceived.Count; i++)
             replyReceived[i].Dispose();
         SampleSupport.WaitOrThrow(() => requestHandled.IsSet, 2000, "request/reply async sample");
+        await completionTask;
         await serverTask;
         Console.WriteLine("[dealer-router/request-reply/async] send: \"ping\" -> recv: \"pong\"");
         // --8<-- [end:doc]
