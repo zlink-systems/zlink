@@ -1208,3 +1208,61 @@ C++에서 2.3배를 낸 completion graph가 Java에서는 0.9%였고 .NET에는 
 .NET은 프로파일이 가장 크게 짚은 곳으로 간다 — 실행 문맥 전파와 메시지당 9.5 KiB.
 `ExecutionContext` 흐름을 끄는 것이 아니라 **send hot path에서만 필요한 문맥으로 좁히는**
 설계가 필요하다. diagnostics·flow id 전파가 깨지지 않아야 한다.
+
+## 21. .NET — 네 번 빗나갔다. 병목은 할당이 아니다 (2026-09-13)
+
+프로파일 **최상위** 항목을 고쳤다. `ZLinkStateLane.CurrentLane`이 `AsyncLocal`인데
+**동기 lane turn에서도** 매번 설정·복원했고, 그 두 대입이 caller `ExecutionContext`를
+복사했다(`ExecutionContext.SetLocalValue` 0.600 GB + `AsyncLocalValueMap.Set` 0.487 GB
+= **1.087 GB, 11.1%**). `await`를 넘는 queued turn에만 `AsyncLocal`을 남기고 동기 turn은
+`[ThreadStatic]`으로 바꿨다 — Java가 같은 마커에 이미 `ThreadLocal`을 쓴다.
+
+`ZLinkFlowContext`는 건드리지 않아 flow id 전파는 그대로다. 테스트 **2,178/2,178**.
+
+| .NET send 1 KiB | A (main) | B (이 변경) |
+|---|---:|---:|
+| `zlink-framework-dotnet` | 107.21 KMSG/s | **103.01** |
+| `zlink-dotnet` (raw) | 1035.29 | 1064.11 |
+
+**효과 없음.** 오차 범위이거나 약간 나쁘다.
+
+### 21.1 네 번의 기록
+
+| 시도 | 근거 | 없앤 것 | 결과 |
+|---|---|---|---|
+| 1차 `_socketGate` 분리 | 코드 읽기 1순위 | 직렬화 1곳 | 0.104 → 0.101 |
+| 2차 completion graph | C++에서 통한 것 | **0개**(이미 최적) | 변화 없음 |
+| 3차 route lookup closure | 프로파일 0.204 GB | closure | 0.4% |
+| 4차 `AsyncLocal` 좁히기 | 프로파일 **1.087 GB** | 문맥 복사 2회/send | **효과 없음** |
+
+**할당 1.087 GB(11.1%)를 없앴는데 처리량이 안 움직인다.** 그러면 .NET framework send의
+병목은 **할당이 아니다.**
+
+### 21.2 남은 단서 — lock contention 20~35배
+
+프로파일이 준 다른 수치가 있다. §19에 적지 않고 넘어갔다.
+
+| | monitor lock contention |
+|---|---:|
+| `zlink-framework-dotnet` | **3,845~4,264 회/s** |
+| `zlink-dotnet` (raw) | 110~216 회/s |
+
+**20~35배다.** GC 시간도 framework 3~12% 대 raw 1~4%인데, allocation rate는 오히려
+framework가 낮다(1.03 GB/s 대 raw 1.53 GB/s). 즉 **framework는 덜 할당하면서 GC를 더
+쓰고 lock을 훨씬 많이 다툰다.**
+
+이것이 다음 후보다. 할당을 줄이는 방향은 네 번 시도해 모두 빗나갔다.
+
+### 21.3 세 언어 최종
+
+| 언어 | 지배적 비용 | 결과 |
+|---|---|---|
+| **C++** | 즉시 수락 send의 completion graph | **2.3배** (PR #313 머지) |
+| **Java** | 매 send의 peer 분류 stream | **+17%** (PR #314) |
+| .NET | **미확정 — lock contention이 유력** | 네 번 실패 |
+
+같은 구조가 언어마다 다르게 작동했다. C++에서 2.3배를 낸 completion graph가 Java에서는
+0.9%, .NET에는 아예 없었다. Java에서 17%를 낸 stream은 다른 언어에 없다.
+
+**"공통 원인"으로 묶인 조사 결론을 언어마다 측정으로 확인해야 한다** — 이번 라운드가
+그것을 일곱 번(성공 2, 실패 5) 보여줬다.
