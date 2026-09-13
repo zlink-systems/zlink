@@ -40,7 +40,6 @@ runner는 run을 반복하지 않는다 — run 하나가 실행 하나다.
 | 입력 | 기본값 | 의미 |
 |---|---|---|
 | `BUILD_DIR` | `cpp/build` | 사전에 빌드한 실행 파일 위치. 이 runner는 빌드하지 않는다 |
-| `WARMUP_SECONDS` | `5` | warmup 초 |
 | `WARMUP_SEGMENTS` | `10` | warmup throughput 관측 구간 수 |
 | `LOAD_GATE` | `2.0` | 측정을 시작할 load average 상한 |
 | `LOAD_GATE_WAIT_SECONDS` | `600` | 그 상한이 내려오기를 기다리는 시간 |

@@ -14,6 +14,7 @@ declare -A BENCH_RETIRED_INPUTS=(
   [DURATION]=DURATION_SECONDS
   [RUNS]="(제거) run 하나가 실행 하나다 — 호출자가 OUTPUT을 바꿔 반복한다"
   [REPORT_FILE]="(제거) run report는 늘 report.txt다"
+  [WARMUP]="WARMUP_SECONDS (초 단위 시간이다 — 호출 수가 아니다)"
   [STAMP]=OUTPUT
   [RUN_STAMP]=OUTPUT
 )
@@ -32,6 +33,7 @@ bench_runner_args() {
   done
 
   SCENARIO="${SCENARIO:-all}"
+  WARMUP_SECONDS="${WARMUP_SECONDS:-2}"
   IMPLEMENTATION="${IMPLEMENTATION:-all}"
   PAYLOAD_SIZES="${PAYLOAD_SIZES:-1024,4096}"
   DURATION_SECONDS="${DURATION_SECONDS:-5}"
@@ -45,6 +47,7 @@ bench_runner_args() {
       --implementation) IMPLEMENTATION="${2:?--implementation requires a value}"; shift 2 ;;
       --payload-sizes) PAYLOAD_SIZES="${2:?--payload-sizes requires a value}"; shift 2 ;;
       --duration-seconds) DURATION_SECONDS="${2:?--duration-seconds requires a value}"; shift 2 ;;
+      --warmup-seconds) WARMUP_SECONDS="${2:?--warmup-seconds requires a value}"; shift 2 ;;
       --skip-build) SKIP_BUILD=1; shift ;;
       *) echo "unsupported runner argument: $1" >&2; return 2 ;;
     esac
@@ -73,6 +76,8 @@ bench_runner_args() {
 
   [[ "${DURATION_SECONDS}" =~ ^[1-9][0-9]*$ ]] || {
     echo "DURATION_SECONDS must be a positive integer" >&2; return 2; }
+  [[ "${WARMUP_SECONDS}" =~ ^[1-9][0-9]*$ ]] || {
+    echo "WARMUP_SECONDS must be a positive integer" >&2; return 2; }
   [[ "${SKIP_BUILD}" == 0 || "${SKIP_BUILD}" == 1 ]] || {
     echo "SKIP_BUILD must be 0 or 1" >&2; return 2; }
   OUTPUT="${OUTPUT:-${bench_root}/log/${lang}/$(date +%Y%m%d_%H%M%S)}"
@@ -81,7 +86,7 @@ bench_runner_args() {
   # 결과가 호출자가 보는 곳이 아닌 곳에 생긴다.
   [[ "${OUTPUT}" == /* ]] || OUTPUT="$(pwd)/${OUTPUT}"
 
-  export SCENARIO IMPLEMENTATION PAYLOAD_SIZES DURATION_SECONDS SKIP_BUILD OUTPUT
+  export SCENARIO IMPLEMENTATION PAYLOAD_SIZES DURATION_SECONDS WARMUP_SECONDS SKIP_BUILD OUTPUT
 }
 
 # The run-level report is never formatted by a runner (README §4).

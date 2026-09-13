@@ -27,7 +27,6 @@ esac
   echo "Kotlin 보조 셀의 payload는 1024 하나다: ${PAYLOAD_SIZES}" >&2; exit 2; }
 
 RUN_ID="$(basename "${OUTPUT}")"
-WARMUP_SECONDS="${WARMUP_SECONDS:-20}"
 WINDOW=100
 SEND_CONCURRENCY=8
 TIMEOUT_SECONDS=300
@@ -37,7 +36,6 @@ REQUEST_TIMEOUT_MS=30000
 ROUTE_READY_MS=30000
 LATENCY_SAMPLE_LIMIT=200000
 
-[[ "${WARMUP_SECONDS}" =~ ^[1-9][0-9]*$ ]] || { echo "WARMUP_SECONDS must be positive" >&2; exit 2; }
 
 if [[ "${SKIP_BUILD}" != 1 ]]; then
   load_average="$(cut -d' ' -f1 /proc/loadavg)"

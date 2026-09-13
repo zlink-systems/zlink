@@ -9,7 +9,6 @@ bench_runner_args cpp "$@"
 
 BUILD_DIR="${BUILD_DIR:-${SCRIPT_DIR}/build}"
 RUN_ID="$(basename "${OUTPUT}")"
-WARMUP_SECONDS="${WARMUP_SECONDS:-5}"
 WARMUP_SEGMENTS="${WARMUP_SEGMENTS:-10}"
 REQUEST_WINDOW=100
 SEND_CONCURRENCY=8
@@ -20,7 +19,6 @@ TIMEOUT_SECONDS=300
 LOAD_GATE="${LOAD_GATE:-2.0}"
 LOAD_GATE_WAIT_SECONDS="${LOAD_GATE_WAIT_SECONDS:-600}"
 
-[[ "${WARMUP_SECONDS}" =~ ^[1-9][0-9]*$ ]] || { echo "WARMUP_SECONDS must be a positive integer" >&2; exit 2; }
 [[ "${WARMUP_SEGMENTS}" =~ ^[1-9][0-9]*$ ]] || { echo "WARMUP_SEGMENTS must be a positive integer" >&2; exit 2; }
 
 mkdir -p "${OUTPUT}"

@@ -44,7 +44,6 @@ Beyond the six inputs of §3.1 this runner reads only the following.
 | Input | Default | Meaning |
 |---|---|---|
 | `BUILD_DIR` | `cpp/build` | where the pre-built binaries are; this runner builds nothing |
-| `WARMUP_SECONDS` | `5` | warmup seconds |
 | `WARMUP_SEGMENTS` | `10` | warmup throughput observation segments |
 | `LOAD_GATE` | `2.0` | load average a measurement may start under |
 | `LOAD_GATE_WAIT_SECONDS` | `600` | how long to wait for that gate |

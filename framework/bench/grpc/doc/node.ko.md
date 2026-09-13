@@ -34,11 +34,7 @@ bash framework/bench/grpc/node/run_local.sh --skip-build --scenario request-seri
 여러 언어를 3 run씩 돌려 §7.2 판정까지 받으려면 `framework/bench/grpc/run_all.sh`를 쓴다.
 runner는 run을 반복하지 않는다 — run 하나가 실행 하나다.
 
-§3.1의 여섯 입력 밖에서 이 runner가 읽는 값은 아래뿐이다.
-
-| 입력 | 기본값 | 의미 |
-|---|---|---|
-| `WARMUP` | `1000` | active 전 warmup 호출 수 |
+이 runner는 §3.1의 입력 밖에서 읽는 값이 없다.
 
 고정값: request window 100, send concurrency 8, raw socket ROUTER, process 상한 300초,
 route·request·drain 상한 30초, settle quiet 200ms. 빌드는 `npm ci`와 `npm run build`다.

@@ -565,11 +565,12 @@ int main ()
         // the aggregator's attribution deterministic rather than positional.
         std::fprintf (stderr, "[bench] request payload=%zu\n", size);
         if (zlink_c_bench::scenario_enabled (scenarios, "request-serial"))
-            zlink_c_bench::print_result (run_request_serial (request_dealer, request_rid, poller, size));
+            zlink_c_bench::print_result (zlink_c_bench::warm_then_measure ([&] { return 
+              run_request_serial (request_dealer, request_rid, poller, size); }));
         if (zlink_c_bench::scenario_enabled (scenarios, "request-window"))
-            zlink_c_bench::print_result (
+            zlink_c_bench::print_result (zlink_c_bench::warm_then_measure ([&] { return 
               run_request_window (request_dealer, request_rid, poller, size, window,
-                                  "zlink-c-request-window"));
+                                  "zlink-c-request-window"); }));
         // spec 2 request-backpressure: no application ceiling on outstanding
         // requests. UINT64_MAX makes the window test in the submit loop
         // unreachable, so the only thing that stops submission is the request
@@ -578,21 +579,21 @@ int main ()
         // bindings cannot observe that refusal and run the cooperative-yield
         // variant instead.
         if (zlink_c_bench::scenario_enabled (scenarios, "request-backpressure"))
-            zlink_c_bench::print_result (
+            zlink_c_bench::print_result (zlink_c_bench::warm_then_measure ([&] { return 
               run_request_window (request_dealer, request_rid, poller, size, UINT64_MAX,
-                                  "zlink-c-request-backpressure"));
+                                  "zlink-c-request-backpressure"); }));
         if (zlink_c_bench::scenario_enabled (scenarios, "request-saturation"))
-            zlink_c_bench::print_result (run_request_window (
+            zlink_c_bench::print_result (zlink_c_bench::warm_then_measure ([&] { return run_request_window (
               request_dealer, request_rid, poller, size, saturation_window,
-              "zlink-c-request-saturation"));
+              "zlink-c-request-saturation"); }));
         if (zlink_c_bench::scenario_enabled (scenarios, "send-blocking"))
-            zlink_c_bench::print_result (
+            zlink_c_bench::print_result (zlink_c_bench::warm_then_measure ([&] { return 
               run_send_loop (send_dealer, send_rid, size, ZLINK_SEND_FLAGS_NONE,
-                             "zlink-c-send-blocking"));
+                             "zlink-c-send-blocking"); }));
         if (zlink_c_bench::scenario_enabled (scenarios, "send-saturation"))
-            zlink_c_bench::print_result (run_send_loop (
+            zlink_c_bench::print_result (zlink_c_bench::warm_then_measure ([&] { return run_send_loop (
               send_dealer, send_rid, size, ZLINK_SEND_FLAGS_DONTWAIT,
-              "zlink-c-send-saturation"));
+              "zlink-c-send-saturation"); }));
         if (scenarios != "all" && zlink_c_bench::scenario_enabled (scenarios, "send-send-serial"))
             zlink_c_bench::print_result (run_send_send_serial (send_dealer, send_rid, size));
     }

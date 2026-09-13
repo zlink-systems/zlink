@@ -37,11 +37,7 @@ To run several languages three times each and get the §7.2 judgement, use
 `framework/bench/grpc/run_all.sh`. A runner never repeats a run: one run is one
 invocation.
 
-Beyond the six inputs of §3.1 this runner reads only the following.
-
-| Input | Default | Meaning |
-|---|---|---|
-| `WARMUP` | `1000` | warmup calls before the active window |
+This runner reads nothing beyond the inputs of §3.1.
 
 Fixed: request window 100, send concurrency 8, ROUTER raw socket, 300s process bound,
 30s route/request/drain bounds, 200ms settle quiet period. The build is `npm ci` and
