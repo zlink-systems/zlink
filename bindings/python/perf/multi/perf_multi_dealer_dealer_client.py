@@ -10,14 +10,17 @@ from perf_multi_common import (
     apply_multi_socket_options,
     benchmark_run_id,
     configure_multi_tls_client,
+    MultiSendTurnCoordinator,
     new_payload,
     parse_client_args,
     perf_client_context,
     print_multi_auto_hwm_detail,
     resolve_multi_monitor_hwm_bytes,
     resolve_multi_connect_ready_timeout_ms,
+    resolve_multi_send_drain_timeout_ms,
     send_routed,
     stamp_payload,
+    submit_routed,
     wait_monitor_event,
 )
 
@@ -80,33 +83,35 @@ async def main(argv=None):
                             index,
                         )
 
-                    async def send_loop(index, current_sock):
+                    def submit(index):
                         nonlocal seq
-                        while time.perf_counter() < active_deadline:
-                            seq += 1
-                            await send_routed(
-                                current_sock,
-                                stamp_payload(
-                                    payloads[index],
-                                    phase=1,
-                                    run_id=run_id,
-                                    seq=seq,
-                                ),
-                                completion_poller=completion_poller,
-                                completion_events=completion_events,
-                            )
+                        seq += 1
+                        return submit_routed(
+                            sockets[index],
+                            stamp_payload(
+                                payloads[index],
+                                phase=1,
+                                run_id=run_id,
+                                seq=seq,
+                            ),
+                        )
+
+                    coordinator = MultiSendTurnCoordinator(
+                        completion_poller,
+                        completion_events,
+                        len(sockets),
+                    )
+                    await coordinator.run(
+                        active_deadline,
+                        submit,
+                        drain_timeout_ms=resolve_multi_send_drain_timeout_ms(),
+                    )
+                    for current_sock in sockets:
                         await _send_stop_token(
                             current_sock,
                             completion_poller,
                             completion_events,
                         )
-
-                    await asyncio.gather(
-                        *(
-                            send_loop(index, sock)
-                            for index, sock in enumerate(sockets)
-                        )
-                    )
                 if sockets:
                     print_multi_auto_hwm_detail(
                         sockets[0], "endpoint", args.transport, args.msg_size, "dealer"

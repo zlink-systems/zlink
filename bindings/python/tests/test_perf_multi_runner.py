@@ -3,7 +3,6 @@ import os
 import subprocess
 import sys
 import unittest
-import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -24,6 +23,7 @@ from perf_multi_common import (
     PERF_MULTI_AUX_POLL_WAIT_MS,
     PYTHON_MULTI_DEFAULT_IO_THREADS,
     RELAY_SCHEDULER_QUANTUM,
+    MultiSendTurnCoordinator,
     RelaySchedulerQuantum,
     RoutedReplySender,
     STOP_TOKEN,
@@ -33,6 +33,7 @@ from perf_multi_common import (
     scoped_relay_eager_task_factory,
     send_routed,
     track_relay_send_task,
+    wait_monitor_event,
 )
 from perf_multi_dealer_dealer_server import (
     dealer_dealer_active_poll_timeout_ms,
@@ -69,13 +70,30 @@ class PerfMultiRunnerTests(unittest.TestCase):
             with zlink.create_context() as context:
                 with zlink.create_router_socket(context) as router:
                     with zlink.create_dealer_socket(context) as dealer:
-                        endpoint = "inproc://python-perf-relay-" + uuid.uuid4().hex
+                        endpoint = benchmark_endpoint("tcp", "python-perf-relay")
                         router.bind(endpoint)
-                        dealer.connect(endpoint)
+                        with dealer.monitor_open(
+                            zlink.MonitorEventMask.CONNECTION_READY, 4096
+                        ) as monitor:
+                            dealer.connect(endpoint)
+                            wait_monitor_event(
+                                monitor,
+                                zlink.MonitorEventMask.CONNECTION_READY,
+                                timeout_ms=1000,
+                            )
+                        context.recalculate_auto_hwm()
                         submission = dealer.send().messages(b"payload", b"").submit()
                         await submission.admitted
 
                         received = zlink.create_received()
+                        with zlink.create_poller() as request_poller:
+                            request_events = zlink.create_poll_events(1)
+                            request_poller.add_socket(
+                                router, zlink.PollEventFlag.POLLIN, 0
+                            )
+                            self.assertEqual(
+                                request_poller.wait(request_events, 1000), 1
+                            )
                         self.assertTrue(router.recv_into(received))
                         with zlink.create_poller() as completion_poller:
                             completion_events = zlink.create_poll_events(1)
@@ -94,6 +112,14 @@ class PerfMultiRunnerTests(unittest.TestCase):
                         self.assertIs(sender.acquire_storage(), received)
                         received.close()
                         with zlink.create_received() as echoed:
+                            with zlink.create_poller() as reply_poller:
+                                reply_events = zlink.create_poll_events(1)
+                                reply_poller.add_socket(
+                                    dealer, zlink.PollEventFlag.POLLIN, 0
+                                )
+                                self.assertEqual(
+                                    reply_poller.wait(reply_events, 1000), 1
+                                )
                             self.assertTrue(dealer.recv_into(echoed))
                             self.assertEqual(echoed.to_bytes_list(), [b"payload", b""])
 
@@ -683,6 +709,41 @@ class PerfMultiRunnerTests(unittest.TestCase):
         )
         self.assertEqual(socket.attempts, [(b"payload", b"")])
         self.assertEqual(completion_poller.wait_count, 1)
+
+    def test_multi_send_turn_coordinator_polls_once_for_all_waiters(self):
+        admissions = []
+
+        class CompletionPoller:
+            def __init__(self):
+                self.wait_count = 0
+
+            def wait(self, events, timeout_ms):
+                self.wait_count += 1
+                self.timeout_ms = timeout_ms
+                for admission in admissions:
+                    admission.set_result(None)
+                return len(admissions)
+
+        def submit(_index):
+            admission = asyncio.get_running_loop().create_future()
+            admissions.append(admission)
+            return zlink.SendSubmission(
+                zlink.SubmitResult.BACKPRESSURED, admission
+            )
+
+        async def scenario():
+            poller = CompletionPoller()
+            coordinator = MultiSendTurnCoordinator(poller, object(), 100)
+            self.assertEqual(coordinator._submit_round(float("inf"), submit), 100)
+            self.assertTrue(coordinator.has_pending())
+            dispatched = []
+            self.assertEqual(coordinator.poll_once(dispatched.append), 100)
+            self.assertFalse(coordinator.has_pending())
+            self.assertEqual(poller.wait_count, 1)
+            self.assertEqual(poller.timeout_ms, 0)
+            self.assertEqual(dispatched, [100])
+
+        asyncio.run(scenario())
 
     def test_immediate_routed_admission_does_not_add_scheduler_pacing(self):
         events = []
