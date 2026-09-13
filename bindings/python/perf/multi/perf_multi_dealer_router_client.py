@@ -60,6 +60,7 @@ async def main(argv=None):
                         zlink.MonitorEventMask.CONNECTION_READY,
                         timeout_ms=resolve_multi_connect_ready_timeout_ms(),
                     )
+                stack.close()
                 ctx.recalculate_auto_hwm()
 
                 active_deadline = time.perf_counter() + args.duration
@@ -69,7 +70,8 @@ async def main(argv=None):
                     for index, sock in enumerate(sockets):
                         poller.add_socket(
                             sock,
-                            zlink.PollEventFlag.POLLIN,
+                            zlink.PollEventFlag.POLLIN
+                            | zlink.PollEventFlag.POLLCOMPLETION,
                             index,
                         )
 
@@ -128,6 +130,8 @@ async def main(argv=None):
                                 stamp_payload(
                                     payloads[index], phase=1, run_id=run_id, seq=seq
                                 ),
+                                completion_poller=poller,
+                                completion_events=poll_events,
                             )
 
                     senders = asyncio.gather(*(

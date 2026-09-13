@@ -77,9 +77,18 @@ class PerfMultiRunnerTests(unittest.TestCase):
 
                         received = zlink.create_received()
                         self.assertTrue(router.recv_into(received))
-                        sender = RoutedReplySender()
-                        sender.enqueue(received)
-                        await sender.drain()
+                        with zlink.create_poller() as completion_poller:
+                            completion_events = zlink.create_poll_events(1)
+                            completion_poller.add_socket(
+                                router,
+                                zlink.PollEventFlag.POLLCOMPLETION,
+                                0,
+                            )
+                            sender = RoutedReplySender(
+                                completion_poller, completion_events
+                            )
+                            sender.enqueue(received)
+                            await sender.drain()
 
                         self.assertEqual(received.parts, ())
                         self.assertIs(sender.acquire_storage(), received)
@@ -124,7 +133,7 @@ class PerfMultiRunnerTests(unittest.TestCase):
         received = Received()
 
         async def scenario():
-            sender = RoutedReplySender()
+            sender = RoutedReplySender(object(), object())
             sender.enqueue(received)
             await sender.drain()
 
@@ -298,25 +307,43 @@ class PerfMultiRunnerTests(unittest.TestCase):
             with self.subTest(filename=filename):
                 source = (multi_dir / filename).read_text(encoding="utf-8")
                 ready_wait = source.index("for monitor in monitors:")
+                readiness_close = source.index("stack.close()", ready_wait)
                 recalculate = source.index("ctx.recalculate_auto_hwm()")
                 active_phase = source.index("active_deadline =")
-                self.assertLess(ready_wait, recalculate)
+                self.assertLess(ready_wait, readiness_close)
+                self.assertLess(readiness_close, recalculate)
                 self.assertLess(recalculate, active_phase)
 
-    def test_reqrep_client_uses_submission_stages_without_completion_poller(self):
+    def test_dealer_dealer_releases_readiness_monitors_before_measurement(self):
+        source = (
+            PERF_DIR / "multi" / "perf_multi_dealer_dealer_client.py"
+        ).read_text(encoding="utf-8")
+        ready_wait = source.index("for monitor in monitors:")
+        readiness_close = source.index("stack.close()", ready_wait)
+        active_phase = source.index("active_deadline =")
+
+        self.assertLess(ready_wait, readiness_close)
+        self.assertLess(readiness_close, active_phase)
+
+    def test_reqrep_client_drives_submission_stages_with_completion_poller(self):
         source = (
             PERF_DIR / "multi" / "perf_multi_reqrep_client.py"
         ).read_text(encoding="utf-8")
         reply_stage = source.index("submission.reply")
         backpressure = source.index(
-            "submission.result == zlink.SubmitResult.BACKPRESSURED"
+            "zlink.SubmitResult.BACKPRESSURED", reply_stage
         )
-        admitted_stage = source.index("await submission.admitted", backpressure)
+        admitted_stage = source.index(
+            "admissions[index] = submission.admitted", backpressure
+        )
+        completion_registration = source.index("PollEventFlag.POLLCOMPLETION")
+        completion_wait = source.index("completion_poller.wait")
 
+        self.assertLess(completion_registration, reply_stage)
         self.assertLess(reply_stage, backpressure)
         self.assertLess(backpressure, admitted_stage)
-        self.assertNotIn("POLLCOMPLETION", source)
-        self.assertNotIn(".done()", source)
+        self.assertLess(admitted_stage, completion_wait)
+        self.assertNotIn("await submission.admitted", source)
 
     def test_dealer_dealer_stop_token_has_raw_message_shape(self):
         class Part:
@@ -606,6 +633,15 @@ class PerfMultiRunnerTests(unittest.TestCase):
             )
 
     def test_routed_send_waits_for_backpressured_admission_without_retry(self):
+        class CompletionPoller:
+            def __init__(self):
+                self.wait_count = 0
+
+            def wait(self, events, timeout_ms):
+                self.wait_count += 1
+                socket.admission.set_result(None)
+                return 1
+
         class SendOperation:
             def __init__(self, owner):
                 self.owner = owner
@@ -622,7 +658,7 @@ class PerfMultiRunnerTests(unittest.TestCase):
             def submit(self):
                 self.owner.attempts.append(tuple(self.parts))
                 admitted = asyncio.get_running_loop().create_future()
-                asyncio.get_running_loop().call_soon(admitted.set_result, None)
+                self.owner.admission = admitted
                 return zlink.SendSubmission(
                     zlink.SubmitResult.BACKPRESSURED, admitted
                 )
@@ -630,13 +666,23 @@ class PerfMultiRunnerTests(unittest.TestCase):
         class Socket:
             def __init__(self):
                 self.attempts = []
+                self.admission = None
 
             def send(self):
                 return SendOperation(self)
 
         socket = Socket()
-        asyncio.run(send_routed(socket, b"payload"))
+        completion_poller = CompletionPoller()
+        asyncio.run(
+            send_routed(
+                socket,
+                b"payload",
+                completion_poller=completion_poller,
+                completion_events=object(),
+            )
+        )
         self.assertEqual(socket.attempts, [(b"payload", b"")])
+        self.assertEqual(completion_poller.wait_count, 1)
 
     def test_immediate_routed_admission_does_not_add_scheduler_pacing(self):
         events = []
@@ -655,9 +701,19 @@ class PerfMultiRunnerTests(unittest.TestCase):
             def send(self):
                 return SendOperation()
 
+        class CompletionPoller:
+            def wait(self, events, timeout_ms):
+                events.append("completion-wait")
+                return 0
+
         async def scenario():
             async def send_once():
-                await send_routed(Socket(), b"payload")
+                await send_routed(
+                    Socket(),
+                    b"payload",
+                    completion_poller=CompletionPoller(),
+                    completion_events=events,
+                )
                 events.append("send-done")
 
             async def receive_progress():
@@ -671,6 +727,12 @@ class PerfMultiRunnerTests(unittest.TestCase):
     def test_one_shot_routed_reply_waits_for_backpressured_admission(self):
         events = []
 
+        class CompletionPoller:
+            def wait(self, poll_events, timeout_ms):
+                events.append("completion-wait")
+                socket.admission.set_result(None)
+                return 1
+
         class SendOperation:
             def __init__(self, owner):
                 self.owner = owner
@@ -683,12 +745,7 @@ class PerfMultiRunnerTests(unittest.TestCase):
                 events.append(f"submit-{self.owner.attempts}")
                 loop = asyncio.get_running_loop()
                 admitted = loop.create_future()
-
-                def finish_admission():
-                    events.append("admitted")
-                    admitted.set_result(None)
-
-                loop.call_soon(finish_admission)
+                self.owner.admission = admitted
                 return zlink.SendSubmission(
                     zlink.SubmitResult.BACKPRESSURED, admitted
                 )
@@ -696,14 +753,22 @@ class PerfMultiRunnerTests(unittest.TestCase):
         class Socket:
             def __init__(self):
                 self.attempts = 0
+                self.admission = None
 
             def send(self):
                 return SendOperation(self)
 
         socket = Socket()
-        asyncio.run(send_routed(socket, b"payload"))
+        asyncio.run(
+            send_routed(
+                socket,
+                b"payload",
+                completion_poller=CompletionPoller(),
+                completion_events=object(),
+            )
+        )
         self.assertEqual(socket.attempts, 1)
-        self.assertEqual(events, ["submit-1", "admitted"])
+        self.assertEqual(events, ["submit-1", "completion-wait"])
 
     def test_active_message_latency_validates_and_decodes_once(self):
         payload = stamp_payload(new_payload(64), phase=1, run_id=7, seq=11)
