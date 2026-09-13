@@ -209,7 +209,10 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
     echo "load average must be below 10 before build (current ${load_average})" >&2
     exit 1
   }
-  dotnet build "${ROOT_DIR}/WithGrpcBench.sln" -c "${CONFIGURATION}"
+  # Framework references live outside this solution. Preserve its configuration
+  # throughout the graph instead of silently building those references as Debug.
+  dotnet build "${ROOT_DIR}/WithGrpcBench.sln" -c "${CONFIGURATION}" \
+    -p:ShouldUnsetParentConfigurationAndPlatform=false
 fi
 
 check_ports_free
