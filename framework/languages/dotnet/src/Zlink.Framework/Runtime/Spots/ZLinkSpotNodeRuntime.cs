@@ -505,6 +505,12 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         {
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
         }
+        finally
+        {
+            // The backend borrows these parts to build its wire frame. This
+            // transport owns the originals, including rejected/cancelled sends.
+            ZLinkMessageParts.DisposeAll(parts);
+        }
     }
 
     private ValueTask<ZLinkOneWaySubmitResult> SubmitToLocalNodeAsync(
@@ -516,9 +522,15 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (_stopSource.IsCancellationRequested)
+            {
+                ZLinkMessageParts.DisposeAll(parts);
                 return ValueTask.FromResult(new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown));
+            }
             if (_nodeRouteDispatcher is null)
+            {
+                ZLinkMessageParts.DisposeAll(parts);
                 return ValueTask.FromResult(new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.TargetNotFound));
+            }
             if (!ZLinkMeshMetadataCodec.TryDecode(metadata.Span, out var decodedMetadata))
                 throw new ArgumentException("Application metadata is malformed.", nameof(metadata));
 
@@ -560,6 +572,10 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         catch (ObjectDisposedException)
         {
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
         }
     }
 
@@ -614,6 +630,10 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         {
             throw ZLinkRequestFailureMapper.CreateSubmitException(
                 failure, $"Node request to '{targetNodeRid}'");
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
         }
     }
 

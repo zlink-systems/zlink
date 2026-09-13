@@ -60,15 +60,15 @@ internal sealed class ZLinkSpotOutboundTransport(
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default)
     {
-        ObserveSpotAuthority(
-            targetNodeRid,
-            targetSpotId,
-            targetSpotGeneration,
-            targetNodeGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration);
         try
         {
+            ObserveSpotAuthority(
+                targetNodeRid,
+                targetSpotId,
+                targetSpotGeneration,
+                targetNodeGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration);
             await nativeSpot.SendToSpotAsync(
                     targetNodeRid,
                     targetSpotId,
@@ -87,6 +87,10 @@ internal sealed class ZLinkSpotOutboundTransport(
         catch (ObjectDisposedException)
         {
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
         }
     }
 
@@ -211,6 +215,10 @@ internal sealed class ZLinkSpotOutboundTransport(
         {
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
         }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
     }
 
     public async ValueTask<ZLinkBackendRouteReceived> RequestToChannelAsync(
@@ -244,6 +252,10 @@ internal sealed class ZLinkSpotOutboundTransport(
             throw ZLinkRequestFailureMapper.CreateSubmitException(
                 failure, $"Channel request to '{channelName}'");
         }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
     }
 
     public async ValueTask<ZLinkBackendRouteReceived> RequestToSpotAsync(
@@ -258,15 +270,15 @@ internal sealed class ZLinkSpotOutboundTransport(
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default)
     {
-        ObserveSpotAuthority(
-            targetNodeRid,
-            targetSpotId,
-            targetSpotGeneration,
-            targetNodeGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration);
         try
         {
+            ObserveSpotAuthority(
+                targetNodeRid,
+                targetSpotId,
+                targetSpotGeneration,
+                targetNodeGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration);
             return await nativeSpot.RequestToSpotAsync(
                     targetNodeRid,
                     targetSpotId,
@@ -295,6 +307,10 @@ internal sealed class ZLinkSpotOutboundTransport(
         {
             throw ZLinkRequestFailureMapper.CreateSubmitException(
                 failure, $"SPOT request to '{targetSpotId}' on node '{targetNodeRid}'");
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
         }
     }
 

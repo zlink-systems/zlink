@@ -77,6 +77,7 @@
         <Compile Include="Runtime/MeshMailboxReadinessTests.cs"/>
         <Compile Include="Runtime/MeshPermitHandoffTests.cs"/>
         <Compile Include="Runtime/MeshReplyPayloadOwnershipTests.cs"/>
+        <Compile Include="Runtime/MeshOutboundPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/MeshMonitorHotPathTests.cs"/>
         <Compile Include="Runtime/MeshChannelSelectionHotPathTests.cs"/>
         <Compile Include="Runtime/EnvelopeHeaderCacheHotPathTests.cs"/>
