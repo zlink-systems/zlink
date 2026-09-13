@@ -51,14 +51,19 @@ submit 시점 fail-fast**.
 |--------|------|-----------|--------|-----------|
 | .NET | ✅ 머지 | #316 | 252/252 + 동시성 91/91 ×5 | 없음(42/42 complete) |
 | Java | ✅ 머지 | #321 | unit128+integ35 + 동시성 ×5 | 없음(24/24 complete) |
-| Go | ✅ 코드·게이트 완료, 머지 대기 | 커밋 `9ee3d41f9d`(branch `bindings/go-completion-owner-mandatory`) | go test ./… + ×5 green | **perf 체크 남음** |
-| Python | ⏳ 착수 예정 | 브리프 준비됨 | — | — |
+| Go | ✅ 머지 | #322 (커밋 9ee3d41f9d + one-way hang 회귀 수정 dca30bc5bd) | go test ×5 green | 없음(ALL/tcp/65536 complete) |
+| Python | ✅ 코드·게이트 완료, perf 체크 중 | 커밋 `c005e8b8c2` | pytest 248 + 동시성 73×5 green | 진행 |
+| C++ | ✅ 코드·게이트 완료, perf 체크 중 | 커밋 `002973fbc8` | contract 20/20 + 동시성 9파일×5 green | 진행 |
+| Rust | 🔄 코드 진행 중 | branch `bindings/rust-completion-owner-mandatory` | — | — |
 
 - Go 특이: 공개 API가 async-only(`Submit(ctx)`) 표면이라 completion-backed blocking terminal 없음
   → runtime goroutine 제거 + async fail-fast만. 규칙 2→1.
 - Python 특이: async 경로 데몬 스레드(`zlink-python-completion`)가 #293 deadlock 원인 영역 →
   제거로 #293 해소 여부를 함께 확인.
-- C++·Rust: 이미 poller 기반인지 확인 필요(미착수).
+- **C++·Rust도 전환 대상(2026-09-13 확인)**: 둘 다 바인딩 본체에 runtime(백그라운드) owner 스레드가
+  있다 — C++ `completion_owner.cpp:709`의 `_runtime_thread`, Rust `completion_owner.rs`의
+  `runtime_loop` reactor thread(REACTOR_WAIT_MS=25). perf 하네스가 poller 구동이라 회귀는
+  없었지만, 스펙 #299(single public owner)에는 미준수 → .NET/Java/Go/Python과 동일 전환 필요.
 
 ## 4. 부수 작업
 
@@ -69,9 +74,9 @@ submit 시점 fail-fast**.
   geomean 59.9%, Python 28.7%(소형 per-op 바닥). §9.5.1/§9.7.1·§9.0 반영.
 - **Go/Python multi 측정(남음)**: multi suite 전 패턴 미측정 → 측정해 §9.5.2/§9.7.2 채우기.
   결과는 geomean/median으로 보고. (코드 캠페인 사이 자원 경합 피해 실행.)
-- **#293 Python 간헐 deadlock**: send-HWM 포화+mandatory+inproc에서 OK-admitted 미전달로
-  수신 blocking. 이 환경은 sudo/ptrace 불가로 gdb·py-spy 네이티브 스택 불가 → ptrace 가능
-  환경에서 후속. Phase 2 Python 전환이 이 경로를 없애므로 해소 가능성 확인 대상.
+- **#293 Python 간헐 deadlock: 해소됨(2026-09-13)**. Phase 2 Python 전환이 원인이던
+  백그라운드 daemon 완결 스레드를 제거하면서, 그 deadlock 테스트가 5×5 green·hang 없음으로
+  확인됨(Python 전환 커밋 `c005e8b8c2`). 별도 gdb 규명 불필요.
 
 ## 5. 남은 작업 순서
 
