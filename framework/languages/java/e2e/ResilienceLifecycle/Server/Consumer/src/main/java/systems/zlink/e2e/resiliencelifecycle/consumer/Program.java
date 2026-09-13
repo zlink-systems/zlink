@@ -71,7 +71,7 @@ public final class Program {
             options.addRouteMesh(Contracts.CHANNEL)
                 .listen("tcp://127.0.0.1:0")
                 .setRoutingIdPrefix("resilience-consumer")
-                .channelName(Contracts.CHANNEL)
+                .channel(Contracts.CHANNEL)
                 .client();
         };
     }

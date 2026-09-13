@@ -110,7 +110,7 @@ public final class Program {
                 // The Session gateway relays requests and is not an Actor or
                 // User Spot placement target.
                 .setPlacementWeight(0);
-            mesh.channelName(Contracts.ROUTE_CHANNEL).server();
+            mesh.channel(Contracts.ROUTE_CHANNEL).server();
             mesh.peerConnections().connect(config.routeEndpoint());
             String routeBEndpoint = config.routeBEndpoint();
             if (!routeBEndpoint.isBlank()) {

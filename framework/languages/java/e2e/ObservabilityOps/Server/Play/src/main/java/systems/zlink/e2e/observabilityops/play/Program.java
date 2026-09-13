@@ -136,7 +136,7 @@ public final class Program {
                 .listen(config.routeEndpoint())
                 .setRoutingId(RoutingId.from(nodeRid))
                 .setPlacementWeight(config.placementWeight());
-            mesh.channelName(Contracts.ROUTE_CHANNEL).server();
+            mesh.channel(Contracts.ROUTE_CHANNEL).server();
             String routePeerEndpoint = config.routePeerEndpoint();
             if (!config.automaticTopology() && !routePeerEndpoint.isBlank()) {
                 mesh.peerConnections().connect(routePeerEndpoint);

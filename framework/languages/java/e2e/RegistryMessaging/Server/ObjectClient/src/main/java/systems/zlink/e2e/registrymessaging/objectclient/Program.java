@@ -47,11 +47,11 @@ public final class Program {
                 .setDefaultRequestTimeout(Duration.ofSeconds(2));
             mesh.objects().client();
             if (!client.serverWeight().isBlank()) {
-                mesh.channelName(RM_A3_SERVER_CHANNEL)
+                mesh.channel(RM_A3_SERVER_CHANNEL)
                     .server()
                     .setWeight(Integer.parseInt(client.serverWeight()));
             } else {
-                mesh.channelName(RM_A3_SERVER_CHANNEL).client();
+                mesh.channel(RM_A3_SERVER_CHANNEL).client();
             }
             for (String connection : client.peerConnections().split(",")) {
                 if (connection.isBlank()) {

@@ -79,7 +79,7 @@ class ProviderApplication {
                 val route = framework.addRouteMesh(Contracts.PROFILE_ROUTE_CHANNEL)
                     .listen(options.routeEndpoint)
                     .setRoutingId(RoutingId.from(options.rid))
-                route.channelName(Contracts.PROFILE_ROUTE_CHANNEL)
+                route.channel(Contracts.PROFILE_ROUTE_CHANNEL)
                     .server()
                     .addHandlerGroup(Contracts.ROUTE_HANDLER_GROUP)
                 route.addRouteRequestHandler(

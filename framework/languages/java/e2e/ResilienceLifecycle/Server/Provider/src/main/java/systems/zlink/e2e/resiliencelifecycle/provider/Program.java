@@ -90,7 +90,7 @@ public final class Program {
             var mesh = options.addRouteMesh(Contracts.CHANNEL)
                 .listen(provider.apiEndpoint())
                 .setRoutingId(RoutingId.from(state.providerRid()));
-            mesh.channelName(Contracts.CHANNEL)
+            mesh.channel(Contracts.CHANNEL)
                 .server()
                 .addHandlerGroup(Contracts.HANDLER_GROUP);
         };

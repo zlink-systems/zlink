@@ -69,7 +69,7 @@ class ProviderApplication {
             val mesh = options.addRouteMesh(Contracts.CHANNEL)
                 .listen(providerOptions.apiEndpoint())
                 .setRoutingIdPrefix(state.providerRid)
-            mesh.channelName(Contracts.CHANNEL)
+            mesh.channel(Contracts.CHANNEL)
                 .server()
                 .addHandlerGroup(Contracts.HANDLER_GROUP)
             mesh.objects().server().addInstanceSpotFactory(

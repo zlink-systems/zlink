@@ -126,7 +126,7 @@ public final class Program {
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(config.routeEndpoint())
                 .setRoutingId(RoutingId.from(nodeRid));
-            mesh.channelName(Contracts.ROUTE_CHANNEL).server();
+            mesh.channel(Contracts.ROUTE_CHANNEL).server();
             String routePeerEndpoint = config.routePeerEndpoint();
             if (!routePeerEndpoint.isBlank()) {
                 mesh.peerConnections().connect(routePeerEndpoint);

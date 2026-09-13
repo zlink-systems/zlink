@@ -251,12 +251,12 @@ public final class Program {
         String[] servers,
         String[] clients) {
         for (String channel : servers) {
-            node.channelName(channel)
+            node.channel(channel)
                 .server()
                 .addHandlerGroup(Contracts.HANDLER_GROUP);
         }
         for (String channel : clients) {
-            node.channelName(channel).client();
+            node.channel(channel).client();
         }
     }
 

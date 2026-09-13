@@ -12,11 +12,11 @@ fun ZLinkFrameworkOptions.routeMesh(
 ): ZLinkMeshNodeBuilder =
     addRouteMesh(meshName).also(configure)
 
-fun ZLinkMeshNodeBuilder.channelName(
+fun ZLinkMeshNodeBuilder.channel(
     channelName: String,
     configure: ZLinkMeshChannelBuilder.() -> Unit = {},
 ): ZLinkMeshChannelBuilder =
-    channelName(channelName).also(configure)
+    channel(channelName).also(configure)
 
 fun ZLinkMeshPeerConnections.connect(
     expectedRoutingId: RoutingId,

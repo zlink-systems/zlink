@@ -143,7 +143,7 @@ final class DefaultZLinkFrameworkOptionsTest {
 
         var mesh = options.addRouteMesh("game")
             .listen("inproc://game");
-        mesh.channelName("orders").server().setWeight(2);
+        mesh.channel("orders").server().setWeight(2);
         mesh.peerConnections().connect(
             RoutingId.from("game-2"),
             "inproc://game-2");
@@ -163,10 +163,10 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         var mesh = options.addRouteMesh("game");
 
-        assertDoesNotThrow(() -> mesh.channelName("disabled").server().setWeight(0));
+        assertDoesNotThrow(() -> mesh.channel("disabled").server().setWeight(0));
         assertDoesNotThrow(
-            () -> mesh.channelName("maximum").server().setWeight(10_000));
-        mesh.channelName("default").server();
+            () -> mesh.channel("maximum").server().setWeight(10_000));
+        mesh.channel("default").server();
         assertEquals(
             100,
             options.registration().meshNodes().getFirst()
@@ -179,8 +179,8 @@ final class DefaultZLinkFrameworkOptionsTest {
         var mesh = options.addRouteMesh("game").listen("inproc://game");
 
         mesh.objects().client();
-        mesh.channelName("outbound").client();
-        mesh.channelName("disabled-server").server().setWeight(0);
+        mesh.channel("outbound").client();
+        mesh.channel("disabled-server").server().setWeight(0);
 
         var registration = options.registration().meshNodes().getFirst();
         registration.validate();
@@ -198,10 +198,10 @@ final class DefaultZLinkFrameworkOptionsTest {
 
         assertThrows(
             ZLinkConfigurationException.class,
-            () -> mesh.channelName("negative").server().setWeight(-1));
+            () -> mesh.channel("negative").server().setWeight(-1));
         assertThrows(
             ZLinkConfigurationException.class,
-            () -> mesh.channelName("too-large").server().setWeight(10_001));
+            () -> mesh.channel("too-large").server().setWeight(10_001));
     }
 
     @Test
@@ -453,7 +453,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     @Test
     void routeMeshAndClientServerChannelNameCollisionIsRejectedInEitherOrder() {
         DefaultZLinkFrameworkOptions routeFirst = new DefaultZLinkFrameworkOptions();
-        routeFirst.addRouteMesh("mesh-a").channelName("orders");
+        routeFirst.addRouteMesh("mesh-a").channel("orders");
         routeFirst.addClientServerChannel("orders").client()
             .connect("inproc://orders");
         assertThrows(ZLinkConfigurationException.class, routeFirst::validate);
@@ -462,7 +462,7 @@ final class DefaultZLinkFrameworkOptionsTest {
             new DefaultZLinkFrameworkOptions();
         clientServerFirst.addClientServerChannel("orders").client()
             .connect("inproc://orders");
-        clientServerFirst.addRouteMesh("mesh-a").channelName("orders");
+        clientServerFirst.addRouteMesh("mesh-a").channel("orders");
         assertThrows(
             ZLinkConfigurationException.class,
             clientServerFirst::validate);

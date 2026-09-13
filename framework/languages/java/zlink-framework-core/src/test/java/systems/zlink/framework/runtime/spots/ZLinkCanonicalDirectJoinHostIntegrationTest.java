@@ -642,7 +642,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         var mesh = options.addRouteMesh(MESH)
             .setRoutingId(rid)
             .listen(endpoint);
-        mesh.channelName(MESH).server();
+        mesh.channel(MESH).server();
         mesh.objects().server()
             .addEntrySpot(TrackingEntrySpot.class)
             .addSpotFactory(

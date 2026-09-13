@@ -65,7 +65,7 @@ class GatewayApplication {
             val mesh = framework.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(requireOption(options.spotPubEndpoint, "--spot-pub-endpoint"))
                 .setRoutingId(RoutingId.from(options.rid))
-            mesh.channelName(Contracts.ROUTE_CHANNEL).client()
+            mesh.channel(Contracts.ROUTE_CHANNEL).client()
             mesh.configureSpotPublisher()
         }
 

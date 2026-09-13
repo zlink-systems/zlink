@@ -472,7 +472,7 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
         var mesh = options.addRouteMesh(MESH)
             .setRoutingIdPrefix(SOURCE_RID.toString())
             .listen("inproc://retire-source");
-        mesh.channelName(MESH).server();
+        mesh.channel(MESH).server();
         mesh.objects().server().addSpotFactory(
             STABLE_TYPE,
             LiveSpot.class,

@@ -296,7 +296,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
         var mesh = options.addRouteMesh(MESH)
             .setRoutingId(TARGET_RID)
             .listen("inproc://prewarm-ingress-target");
-        mesh.channelName(MESH).server();
+        mesh.channel(MESH).server();
         mesh.objects().server()
             .addSpotFactory(
                 SPOT_TYPE,
