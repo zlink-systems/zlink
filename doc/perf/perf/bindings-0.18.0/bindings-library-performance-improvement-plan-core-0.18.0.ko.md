@@ -700,10 +700,10 @@ geomean은 91.9%로 near-C가 맞다. 어떤 바인딩도 C보다 빠르지 않�
 | .NET (§9.2) | 85.5% (중앙 94) | 30 / 12 / 0 / 0 | 82.4% (중앙 81) | 20 / 8 / 0 / 0 | **완료** — 실패·미측정·미달 0. reqrep 하네스 회귀(G4) 복원 재측정 반영(single 소형 2~7%→40~44%, multi 5~10%→47~79%); 평균·카운트는 §9.2 상세표 재집계 |
 | Java (§9.3) | 93.8% (중앙 103) | 30 / 12 / 0 / 0 | 84.2% (중앙 82) | 18 / 10 / 0 / 0 | **완료** — 실패·미측정·미달 0. single reqrep 하네스 회귀(G3 810983b674) 복원 재측정 반영(18~66%→41~127%, jmeas 3run); Single 평균·카운트는 §9.3.1 상세표 재집계(Multi 불변) |
 | Node (§9.4) | 69.8% (중앙 76) | 16 / 19 / 0 / 0 | 50.9% (중앙 50) | 4 / 12 / 0 / 0 | **완료** — 미달 0(통과/보류만). SUB 축약 개선 채택(PUBSUB wss·tls 통과) |
-| Go (§9.5) | 59.9% (중앙 60) | 12 / 18 / 0 / 0 | 미측정 | 0 / 0 / 0 / 16 | **Single one-way 측정 완료(2026-09-12)** — 5 one-way 패턴 30셀 평균 64.2%(통과 12·보류 18, gpfull 1run). reqrep은 §9.5 회귀 수정 별도. Multi·reqrep행 미측정 |
+| Go (§9.5) | 59.9% (중앙 60) | 12 / 18 / 0 / 0 | 56.0% (중앙 55) | 14 / 14 / 0 / 0 | **완료** — Multi 측정 완료(2026-09-13, matched C baseline). multi 하네스 완결 드레인 복원(#328) 후 전 패턴 24/24 complete. 보류는 소형 goroutine/cgo per-op 바닥(대형 회복), 미달 0(통과/보류만) |
 
 | Rust (§9.6) | 91.9% (중앙 97) | 19 / 23 / 0 / 0 | 90.7% (중앙 97) | 15 / 13 / 0 / 0 | **완료** — 미달·미측정 0(통과/보류만). 하네스 버그 수정 후 전 셀 측정 |
-| Python (§9.7) | 28.7% (중앙 37) | 3 / 27 / 0 / 0 | 미측정 | 0 / 0 / 0 / 27 | **Single one-way 측정 완료(2026-09-12)** — 5 one-way 패턴 30셀 평균 34.6%(통과 3·보류 27, Python 소형 per-op 바닥, gpfull 1run). reqrep은 §9.7 회귀 수정 별도. Multi·reqrep행 미측정 |
+| Python (§9.7) | 28.7% (중앙 37) | 3 / 27 / 0 / 0 | 34.7% (중앙 37) | 1 / 27 / 0 / 0 | **완료** — Multi 측정 완료(2026-09-13, matched C baseline). multi 하네스 완결 드레인 복원(#329)+SENDSEND 소형·DEALER_DEALER 직렬화 수정(#330) 후 전 패턴 24/24 complete. 보류는 소형 GIL+asyncio per-op 바닥(대형 46~126% 회복), 미달 0(통과/보류만) |
 
 
 측정 순서(node→java→dotnet→cpp→rust→go→python)상 Node·Java가 선행 측정됐고 나머지는 대기다. 각 셀의
@@ -1111,28 +1111,42 @@ geomean은 91.9%로 near-C가 맞다. 어떤 바인딩도 C보다 빠르지 않�
 
 #### 9.5.2 Multi suite
 
-| Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
+> 측정: Core 0.18.0, clients=100, duration 5s, runs 1. C 대비 비율(throughput %, latency median ×)은
+> **동일 조건으로 재측정한 matched C multi baseline**(`cbase2-*`, non-STREAM 64/256/1024/4096/65536/131072,
+> STREAM 64/256/1024/65536)에 대해 산출. 판정 gate = size ratio 산술평균 vs 중앙값 목표.
+> Go multi 하네스는 G4(`ae7a8b5a1c`)가 제거했던 public `PollCompletion` 완결 드레인을 복원(#328)해 전 패턴 24/24 complete.
+> 소형(64~1024B)은 goroutine/cgo per-op 바닥, 대형은 C에 회복(전 언어 동류).
+
+| Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 11% | 21% | 22% | 53% | 102% | 123% | 보류 55.4%/lat0.1× · 소형 per-op 바닥(대형 회복) · 목표 55/65 · go2-tcp |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 40% | 37% | 46% | 47% | 72% | 90% | 통과 55.3%/lat1.2× · 목표 40/53 · go2-tcp |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 29% | 30% | 35% | 42% | 97% | 23% | 보류 42.9%/lat1.2× · 소형 per-op 바닥(대형 회복) · 목표 40/53 · go2-tcp |
+| `tcp` | `MULTI_PUBSUB` | 32% | 33% | 34% | 45% | 78% | 82% | 보류 50.6%/lat1.8× · 소형 per-op 바닥(대형 회복) · 목표 55/65 · go2-tcp |
+| `tcp` | `MULTI_STREAM` | 53% | 52% | 42% | 해당 없음 | 41% | 해당 없음 | 보류 47.0%/lat2.2× · 소형 per-op 바닥(대형 회복), 소형 latency 바닥 · 목표 55/65 · go2-tcp |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 22% | 24% | 26% | 29% | 47% | 54% | 보류 33.8%/lat1.6× · 소형 per-op 바닥(대형 회복) · 목표 40/53 · go2-tcp |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 24% | 27% | 30% | 32% | 55% | 55% | 보류 37.2%/lat1.5× · 소형 per-op 바닥(대형 회복) · 목표 40/53 · go2-tcp |
+| `ws` | `MULTI_DEALER_DEALER` | 16% | 18% | 21% | 55% | 99% | 83% | 보류 48.7%/lat0.6× · 소형 per-op 바닥(대형 회복) · 목표 55/65 · go2-ws |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 44% | 44% | 61% | 111% | 103% | 121% | 통과 80.5%/lat0.5× · 목표 40/53 · go2-ws |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 38% | 48% | 52% | 141% | 89% | 105% | 통과 78.8%/lat0.9× · 목표 40/53 · go2-ws |
+| `ws` | `MULTI_PUBSUB` | 41% | 38% | 37% | 37% | 79% | 87% | 보류 53.2%/lat1.4× · 소형 per-op 바닥(대형 회복) · 목표 55/65 · go2-ws |
+| `ws` | `MULTI_STREAM` | 54% | 54% | 55% | 해당 없음 | 62% | 해당 없음 | 보류 56.5%/lat1.8× · 소형 per-op 바닥(대형 회복) · 목표 55/65 · go2-ws |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 28% | 34% | 45% | 73% | 103% | 79% | 통과 60.3%/lat3.1× · 소형 latency 바닥 · 목표 40/53 · go2-ws |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 30% | 41% | 46% | 68% | 110% | 69% | 통과 60.6%/lat2.2× · 소형 latency 바닥 · 목표 40/53 · go2-ws |
+| `wss` | `MULTI_DEALER_DEALER` | 12% | 16% | 27% | 49% | 103% | 109% | 보류 52.7%/lat0.5× · 소형 per-op 바닥(대형 회복) · 목표 55/65 · go2-wss |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 39% | 40% | 90% | 54% | 92% | 104% | 통과 69.8%/lat0.5× · 목표 40/53 · go2-wss |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 36% | 36% | 65% | 108% | 90% | 98% | 통과 72.2%/lat0.3× · 목표 40/53 · go2-wss |
+| `wss` | `MULTI_PUBSUB` | 38% | 38% | 40% | 76% | 98% | 106% | 통과 65.8%/lat1.7× · 목표 55/65 · go2-wss |
+| `wss` | `MULTI_STREAM` | 61% | 62% | 63% | 해당 없음 | 107% | 해당 없음 | 통과 73.2%/lat1.6× · 목표 55/65 · go2-wss |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 32% | 40% | 46% | 66% | 83% | 79% | 통과 57.8%/lat1.4× · 목표 40/53 · go2-wss |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 33% | 33% | 40% | 64% | 76% | 73% | 통과 53.2%/lat0.9× · 목표 40/53 · go2-wss |
+| `tls` | `MULTI_DEALER_DEALER` | 12% | 21% | 26% | 47% | 115% | 97% | 보류 52.9%/lat0.2× · 소형 per-op 바닥(대형 회복) · 목표 55/65 · go2-tls |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 40% | 46% | 40% | 86% | 87% | 85% | 통과 64.2%/lat0.4× · 목표 40/53 · go2-tls |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 38% | 40% | 39% | — | 75% | 85% | 통과 55.4%/lat0.4× · C 4096B tls 실패(전 언어 공통) · 목표 40/53 · go2-tls |
+| `tls` | `MULTI_PUBSUB` | 30% | 41% | 40% | 67% | 97% | 105% | 보류 63.1%/lat1.5× · 소형 per-op 바닥(대형 회복) · 목표 55/65 · go2-tls |
+| `tls` | `MULTI_STREAM` | 58% | 59% | 57% | 해당 없음 | 67% | 해당 없음 | 보류 60.2%/lat1.7× · 소형 per-op 바닥(대형 회복) · 목표 55/65 · go2-tls |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 32% | 35% | 31% | — | 53% | 61% | 보류 42.4%/lat0.8× · 소형 per-op 바닥, C 4096B tls 실패(전 언어 공통) · 목표 40/53 · go2-tls |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 29% | 29% | 31% | 78% | 80% | 83% | 통과 55.1%/lat0.8× · 목표 40/53 · go2-tls |
 
 ### 9.6 Rust
 
@@ -1266,28 +1280,43 @@ geomean은 91.9%로 near-C가 맞다. 어떤 바인딩도 C보다 빠르지 않�
 
 #### 9.7.2 Multi suite
 
-| Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
+> 측정: Core 0.18.0, clients=100, duration 5s, runs 1. matched C baseline(`cbase2-*`) 대비.
+> Python multi 하네스는 G4(`1cb0d0befe`)가 제거했던 public `POLLCOMPLETION` 완결 드레인을 복원(#329)하고,
+> SENDSEND 소형 "no active reply"·DEALER_DEALER 100-client 직렬화를 turn당 공유 poller 1회 구동
+> 모델(`MultiSendTurnCoordinator`, .NET PollManager·Go·C와 동종)로 수정(#330)해 전 패턴 24/24 complete.
+> 소형(64~4096B)은 GIL+asyncio per-op 바닥(전 언어 중 최저), 대형은 C에 회복(46~126%).
+> DEALER_DEALER 65536B는 수정으로 2727→30424 msg/s(≈11×) 회복.
+
+| Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 2% | 3% | 4% | 8% | 46% | 52% | 보류 19.2%/lat0.0× · 소형 per-op 바닥(대형 회복) · 목표 35/60 · py3-tcp |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 5% | 6% | 8% | 9% | 55% | 62% | 보류 24.3%/lat266.6× · 소형 per-op 바닥(대형 회복), 소형 latency 바닥 · 목표 30/60 · py3-tcp |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 7% | 7% | 8% | 11% | 58% | 59% | 보류 25.0%/lat177.3× · 소형 per-op 바닥(대형 회복), 소형 latency 바닥 · 목표 30/60 · py3-tcp |
+| `tcp` | `MULTI_PUBSUB` | 14% | 13% | 15% | 22% | 77% | 93% | 보류 39.1%/lat1.0× · 소형 per-op 바닥(대형 회복) · 목표 35/60 · py3-tcp |
+| `tcp` | `MULTI_STREAM` | 13% | 12% | 11% | 해당 없음 | 47% | 해당 없음 | 보류 21.0%/lat7.8× · 소형 per-op 바닥(대형 회복), 소형 latency 바닥 · 목표 35/60 · py3-tcp |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 7% | 7% | 7% | 9% | 43% | 46% | 보류 19.8%/lat2.0× · 소형 per-op 바닥(대형 회복) · 목표 30/60 · py3-tcp |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 7% | 8% | 9% | 10% | 39% | 50% | 보류 20.5%/lat2.3× · 소형 per-op 바닥(대형 회복), 소형 latency 바닥 · 목표 30/60 · py3-tcp |
+| `ws` | `MULTI_DEALER_DEALER` | 2% | 3% | 4% | 9% | 77% | 93% | 보류 31.4%/lat0.1× · 소형 per-op 바닥(대형 회복) · 목표 35/60 · py3-ws |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 7% | 7% | 9% | 25% | 104% | 246% | 통과 66.5%/lat0.5× · 목표 30/60 · py3-ws |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 8% | 10% | 15% | 56% | 85% | 125% | 보류 49.8%/lat0.6× · 소형 per-op 바닥(대형 회복) · 목표 30/60 · py3-ws |
+| `ws` | `MULTI_PUBSUB` | 14% | 16% | 17% | 18% | 98% | 99% | 보류 43.5%/lat1.1× · 소형 per-op 바닥(대형 회복) · 목표 35/60 · py3-ws |
+| `ws` | `MULTI_STREAM` | 11% | 12% | 13% | 해당 없음 | 79% | 해당 없음 | 보류 28.5%/lat8.3× · 소형 per-op 바닥(대형 회복), 소형 latency 바닥 · 목표 35/60 · py3-ws |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 6% | 8% | 11% | 22% | 75% | 80% | 보류 33.8%/lat3.8× · 소형 per-op 바닥(대형 회복), 소형 latency 바닥 · 목표 30/60 · py3-ws |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 7% | 13% | 13% | 24% | 88% | 79% | 보류 37.2%/lat3.0× · 소형 per-op 바닥(대형 회복), 소형 latency 바닥 · 목표 30/60 · py3-ws |
+| `wss` | `MULTI_DEALER_DEALER` | 2% | 3% | 6% | 11% | 76% | 91% | 보류 31.5%/lat0.3× · 소형 per-op 바닥(대형 회복) · 목표 35/60 · py3-wss |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 7% | 8% | 20% | 30% | 102% | 114% | 보류 46.7%/lat0.9× · 소형 per-op 바닥(대형 회복) · 목표 30/60 · py3-wss |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 7% | 9% | 18% | 45% | 91% | 100% | 보류 45.1%/lat1.0× · 소형 per-op 바닥(대형 회복) · 목표 30/60 · py3-wss |
+| `wss` | `MULTI_PUBSUB` | 13% | 19% | 21% | 50% | 106% | 95% | 보류 50.6%/lat0.2× · 소형 per-op 바닥(대형 회복) · 목표 35/60 · py3-wss |
+| `wss` | `MULTI_STREAM` | 17% | 18% | 21% | 해당 없음 | 126% | 해당 없음 | 보류 45.3%/lat5.3× · 소형 per-op 바닥(대형 회복), 소형 latency 바닥 · 목표 35/60 · py3-wss |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 8% | 10% | 14% | 24% | 82% | 91% | 보류 38.3%/lat1.1× · 소형 per-op 바닥(대형 회복) · 목표 30/60 · py3-wss |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 9% | 10% | 14% | 24% | 82% | 93% | 보류 38.6%/lat0.8× · 소형 per-op 바닥(대형 회복) · 목표 30/60 · py3-wss |
+| `tls` | `MULTI_DEALER_DEALER` | 2% | 4% | 6% | 10% | 82% | 78% | 보류 30.4%/lat0.1× · 소형 per-op 바닥(대형 회복) · 목표 35/60 · py3-tls |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 7% | 10% | 11% | 27% | 95% | 104% | 보류 42.4%/lat1.6× · 소형 per-op 바닥(대형 회복) · 목표 30/60 · py3-tls |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 8% | 11% | 11% | — | 85% | 77% | 보류 38.1%/lat34.8× · 소형 per-op 바닥, C 4096B tls 실패(전 언어 공통) · 목표 30/60 · py3-tls |
+| `tls` | `MULTI_PUBSUB` | 15% | 20% | 22% | 45% | 88% | 116% | 보류 51.0%/lat0.3× · 소형 per-op 바닥(대형 회복) · 목표 35/60 · py3-tls |
+| `tls` | `MULTI_STREAM` | 15% | 16% | 18% | 해당 없음 | 85% | 해당 없음 | 보류 33.1%/lat6.1× · 소형 per-op 바닥(대형 회복), 소형 latency 바닥 · 목표 35/60 · py3-tls |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 8% | 9% | 11% | — | 55% | 74% | 보류 31.5%/lat1.1× · 소형 per-op 바닥, C 4096B tls 실패(전 언어 공통) · 목표 30/60 · py3-tls |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 8% | 10% | 11% | 28% | 69% | 90% | 보류 36.0%/lat0.9× · 소형 per-op 바닥(대형 회복) · 목표 30/60 · py3-tls |
 
 
 ## 10. 전체 진행 상태
