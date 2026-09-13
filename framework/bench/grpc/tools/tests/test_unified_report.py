@@ -1,0 +1,154 @@
+"""The unified run report (spec §4) and the C report -> cell conversion."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+TOOLS = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(TOOLS))
+import bench_report  # noqa: E402
+from benchagg.readers import CELL_JSON_VERSION  # noqa: E402
+
+GRID = TOOLS.parent
+
+
+def cell(implementation: str, pattern: str, **fields) -> dict:
+    document = {
+        "implementation": implementation, "pattern": pattern, "payload_size": 1024,
+        "throughput_per_second": 12345.6, "bandwidth_mb_s": 12.6,
+        "latency_mean_ms": 1.5, "latency_p95_ms": 2.5, "latency_p99_ms": 3.5,
+    }
+    document.update(fields)
+    return document
+
+
+class UnifiedReportTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.run = Path(self.directory.name)
+
+    def write(self, *cells: dict):
+        for document in cells:
+            name = f'{document["implementation"]}-{document["pattern"]}-{document["payload_size"]}'
+            (self.run / name).mkdir(parents=True, exist_ok=True)
+            (self.run / name / "results.json").write_text(
+                json.dumps({"schema": CELL_JSON_VERSION, "cells": [document]}))
+
+    def test_request_patterns_are_kops_and_send_is_kmsg(self):
+        self.write(cell("zlink-c", "request-backpressure"), cell("zlink-c", "send-saturation"))
+        rendered = bench_report.render(str(self.run))
+        self.assertIn("12.346 KOPS", rendered)
+        self.assertIn("12.346 Kmsg/s", rendered)
+        # The two units share a scale; only the name says what was counted.
+        self.assertEqual(rendered.count("12.346"), 2)
+
+    def test_columns_are_the_five_the_spec_names(self):
+        self.write(cell("zlink-c", "request-serial"))
+        header = bench_report.render(str(self.run)).splitlines()[0]
+        self.assertEqual(
+            [name.strip() for name in header.strip("| ").split("|")],
+            ["Scenario", "Size", "Throughput", "Lat.Mean(ms)", "Lat.P95(ms)", "Lat.P99(ms)"])
+        self.assertNotIn("Bandwidth", header)
+        self.assertNotIn("CPU", header)
+
+    def test_every_language_renders_through_the_same_function(self):
+        # A row missing a measurement says so rather than printing a zero.
+        self.write(cell("zlink-node", "request-serial", latency_p99_ms=None))
+        self.assertIn("n/a", bench_report.render(str(self.run)))
+
+
+class CConversionTest(unittest.TestCase):
+    REPORT = """\
+| Scenario | Size | Throughput | Bandwidth |
+RESULT,current,zlink-c-request-serial,local,1024,throughput,600.000
+RESULT,current,zlink-c-request-serial,local,1024,bandwidth,614.400
+RESULT,current,zlink-c-request-serial,local,1024,latency,1.000
+RESULT,current,zlink-c-request-serial,local,1024,latency_p95,2.000
+RESULT,current,zlink-c-request-serial,local,1024,latency_p99,3.000
+RESULT,current,zlink-c-send-blocking,local,1024,throughput,100.000
+RESULT,current,zlink-c-send-blocking,local,1024,bandwidth,102.400
+"""
+
+    def convert(self, text: str) -> Path:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        report = Path(directory.name) / "client.log"
+        report.write_text(text)
+        out = Path(directory.name) / "run"
+        result = subprocess.run(
+            [sys.executable, str(TOOLS / "c_cells_from_report.py"), str(report), str(out)],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return out
+
+    def test_kops_report_is_converted_to_completions_per_second(self):
+        out = self.convert(self.REPORT)
+        document = json.loads((out / "zlink-c-request-serial-1024" / "results.json").read_text())
+        self.assertEqual(document["schema"], CELL_JSON_VERSION)
+        # 600 KOPS in the report, 600000/s in the record: the scale comes from the
+        # report's own bandwidth column, not from an assumption about the runner.
+        self.assertAlmostEqual(document["cells"][0]["throughput_per_second"], 600000.0, places=3)
+
+    def test_patterns_outside_the_grid_do_not_become_cells(self):
+        out = self.convert(self.REPORT)
+        self.assertFalse((out / "zlink-c-send-blocking-1024").exists())
+        self.assertEqual(sorted(path.name for path in out.iterdir()),
+                         ["zlink-c-request-serial-1024"])
+
+    def test_a_report_with_no_grid_cell_fails_rather_than_writing_nothing(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        report = Path(directory.name) / "client.log"
+        report.write_text("RESULT,current,zlink-c-send-blocking,local,1024,throughput,1.000\n"
+                          "RESULT,current,zlink-c-send-blocking,local,1024,bandwidth,1.024\n")
+        result = subprocess.run(
+            [sys.executable, str(TOOLS / "c_cells_from_report.py"), str(report),
+             str(Path(directory.name) / "run")],
+            capture_output=True, text=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unreadable client report", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+
+class RunnerContractTest(unittest.TestCase):
+    """Every runner takes the same inputs and rejects the same mistakes (§3.1)."""
+
+    RUNNERS = ("c/run_local.sh", "cpp/run_local.sh", "dotnet/run_local.sh",
+               "java/run_local.sh", "java/run_local_kotlin.sh", "node/run_local.sh")
+
+    def run_runner(self, runner: str, *args: str, **environment: str):
+        import os
+        env = dict(os.environ, **environment)
+        return subprocess.run(["bash", str(GRID / runner), *args],
+                              capture_output=True, text=True, check=False, env=env)
+
+    def test_every_runner_rejects_an_unknown_argument(self):
+        for runner in self.RUNNERS:
+            with self.subTest(runner=runner):
+                result = self.run_runner(runner, "--patterns", "send-saturation")
+                self.assertEqual(result.returncode, 2, result.stdout)
+                self.assertIn("unsupported runner argument: --patterns", result.stderr)
+
+    def test_every_runner_rejects_a_retired_input_by_name(self):
+        for runner in self.RUNNERS:
+            with self.subTest(runner=runner):
+                result = self.run_runner(runner, OUTROOT="/tmp/somewhere")
+                self.assertEqual(result.returncode, 2, result.stdout)
+                self.assertIn("retired runner input: OUTROOT -> OUTPUT", result.stderr)
+
+    def test_every_runner_rejects_a_payload_size_outside_the_spec(self):
+        for runner in self.RUNNERS:
+            with self.subTest(runner=runner):
+                result = self.run_runner(runner, "--payload-sizes", "2048")
+                self.assertEqual(result.returncode, 2, result.stdout)
+                self.assertIn("2048", result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

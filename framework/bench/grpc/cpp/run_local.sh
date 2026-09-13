@@ -3,88 +3,29 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${BUILD_DIR:-${SCRIPT_DIR}/build}"
-RUN_LABEL="cpp-router-1"
-if (($# > 0)) && [[ "$1" != --* ]]; then
-  RUN_LABEL="$1"
-  shift
-fi
+# shellcheck source=../runner_args.sh
+source "${SCRIPT_DIR}/../runner_args.sh"
+bench_runner_args cpp "$@"
 
-STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
-LOG_ROOT="${SCRIPT_DIR}/../log/cpp"
-LOG_DIR="${OUTPUT_DIR:-${LOG_ROOT}/${STAMP}/${RUN_LABEL}}"
-IMPLEMENTATIONS="${IMPLEMENTATIONS:-grpc-cpp,zlink-cpp,zlink-framework-cpp}"
-PATTERNS="${PATTERNS:-request-serial,request-backpressure,send-saturation}"
-PAYLOAD_SIZES="${PAYLOAD_SIZES:-1024,4096}"
-DURATION_SECONDS="${DURATION_SECONDS:-5}"
-WARMUP_SECONDS="${WARMUP_SECONDS:-${WARMUP:-5}}"
+BUILD_DIR="${BUILD_DIR:-${SCRIPT_DIR}/build}"
+RUN_ID="$(basename "${OUTPUT}")"
+WARMUP_SECONDS="${WARMUP_SECONDS:-5}"
 WARMUP_SEGMENTS="${WARMUP_SEGMENTS:-10}"
-REQUEST_WINDOW="${REQUEST_WINDOW:-100}"
-SEND_CONCURRENCY="${SEND_CONCURRENCY:-8}"
-REQUEST_TIMEOUT_MS="${REQUEST_TIMEOUT_MS:-30000}"
-DRAIN_BOUND_MS="${DRAIN_BOUND_MS:-30000}"
-COMMAND_SETTLE_MS="${COMMAND_SETTLE_MS:-200}"
-TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-300}"
+REQUEST_WINDOW=100
+SEND_CONCURRENCY=8
+REQUEST_TIMEOUT_MS=30000
+DRAIN_BOUND_MS=30000
+COMMAND_SETTLE_MS=200
+TIMEOUT_SECONDS=300
 LOAD_GATE="${LOAD_GATE:-2.0}"
 LOAD_GATE_WAIT_SECONDS="${LOAD_GATE_WAIT_SECONDS:-600}"
-RAW_SOCKET="router"
 
-while (($# > 0)); do
-  case "$1" in
-    --implementations) IMPLEMENTATIONS="${2:?--implementations requires a value}"; shift 2 ;;
-    --patterns) PATTERNS="${2:?--patterns requires a value}"; shift 2 ;;
-    --payload-sizes) PAYLOAD_SIZES="${2:?--payload-sizes requires a value}"; shift 2 ;;
-    --duration-seconds) DURATION_SECONDS="${2:?--duration-seconds requires a value}"; shift 2 ;;
-    --warmup) WARMUP_SECONDS="${2:?--warmup requires a value}"; shift 2 ;;
-    --warmup-segments) WARMUP_SEGMENTS="${2:?--warmup-segments requires a value}"; shift 2 ;;
-    --request-window) REQUEST_WINDOW="${2:?--request-window requires a value}"; shift 2 ;;
-    --send-concurrency) SEND_CONCURRENCY="${2:?--send-concurrency requires a value}"; shift 2 ;;
-    --request-timeout-ms) REQUEST_TIMEOUT_MS="${2:?--request-timeout-ms requires a value}"; shift 2 ;;
-    --drain-bound-ms) DRAIN_BOUND_MS="${2:?--drain-bound-ms requires a value}"; shift 2 ;;
-    --raw-socket) RAW_SOCKET="${2:?--raw-socket requires a value}"; shift 2 ;;
-    --output-dir) LOG_DIR="${2:?--output-dir requires a value}"; shift 2 ;;
-    *) echo "unsupported runner argument: $1" >&2; exit 2 ;;
-  esac
-done
+[[ "${WARMUP_SECONDS}" =~ ^[1-9][0-9]*$ ]] || { echo "WARMUP_SECONDS must be a positive integer" >&2; exit 2; }
+[[ "${WARMUP_SEGMENTS}" =~ ^[1-9][0-9]*$ ]] || { echo "WARMUP_SEGMENTS must be a positive integer" >&2; exit 2; }
 
-[[ "${DURATION_SECONDS}" =~ ^[1-9][0-9]*$ ]] || { echo "--duration-seconds must be a positive integer" >&2; exit 2; }
-[[ "${WARMUP_SECONDS}" =~ ^[1-9][0-9]*$ ]] || { echo "--warmup must be a positive integer" >&2; exit 2; }
-[[ "${WARMUP_SEGMENTS}" =~ ^[1-9][0-9]*$ ]] || { echo "--warmup-segments must be a positive integer" >&2; exit 2; }
-[[ "${REQUEST_WINDOW}" == 100 ]] || { echo "--request-window must remain 100" >&2; exit 2; }
-[[ "${SEND_CONCURRENCY}" == 8 ]] || { echo "--send-concurrency must remain 8" >&2; exit 2; }
-[[ "${RAW_SOCKET}" == router ]] || { echo "--raw-socket must remain router" >&2; exit 2; }
-for value in "${REQUEST_TIMEOUT_MS}" "${DRAIN_BOUND_MS}" "${COMMAND_SETTLE_MS}" "${TIMEOUT_SECONDS}"; do
-  [[ "${value}" =~ ^[1-9][0-9]*$ ]] || { echo "timeout and settle values must be positive integers" >&2; exit 2; }
-done
-
-IFS=',' read -r -a implementations <<<"${IMPLEMENTATIONS}"
-for implementation in "${implementations[@]}"; do
-  case "${implementation}" in
-    grpc-cpp|zlink-cpp|zlink-framework-cpp) ;;
-    *) echo "unknown implementation: ${implementation}" >&2; exit 2 ;;
-  esac
-done
-
-IFS=',' read -r -a patterns <<<"${PATTERNS}"
-for pattern in "${patterns[@]}"; do
-  case "${pattern}" in
-    request-serial|request-backpressure|send-saturation) ;;
-    *) echo "unknown pattern: ${pattern}" >&2; exit 2 ;;
-  esac
-done
-
-IFS=',' read -r -a payloads <<<"${PAYLOAD_SIZES}"
-for payload in "${payloads[@]}"; do
-  [[ "${payload}" == 1024 || "${payload}" == 4096 ]] || {
-    echo "--payload-sizes entries must be 1024 or 4096" >&2
-    exit 2
-  }
-done
-
-mkdir -p "${LOG_DIR}"
-RUNNER_LOG="${LOG_DIR}/runner.log"
-OVERALL_REPORT="${LOG_DIR}/report.txt"
-: >"${OVERALL_REPORT}"
+mkdir -p "${OUTPUT}"
+RUNNER_LOG="${OUTPUT}/runner.log"
+: >"${RUNNER_LOG}"
 
 log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "${RUNNER_LOG}" >&2; }
 
@@ -115,8 +56,8 @@ check_load() {
   while :; do
     load="$(awk '{print $1}' /proc/loadavg)"
     log "loadavg1=${load} gate=${LOAD_GATE}"
-    printf '%s loadavg1=%s gate=%s at=%s\n' "${RUN_LABEL}" "${load}" "${LOAD_GATE}" "$(date -Is)" \
-      >>"${LOG_DIR}/load-gates.txt"
+    printf '%s loadavg1=%s gate=%s at=%s\n' "${RUN_ID}" "${load}" "${LOAD_GATE}" "$(date -Is)" \
+      >>"${OUTPUT}/load-gates.txt"
     if awk -v measured_load="${load}" -v gate="${LOAD_GATE}" 'BEGIN { exit !(measured_load < gate) }'; then
       return 0
     fi
@@ -347,7 +288,7 @@ trap cleanup_cell EXIT
 check_ports_free
 check_load
 
-for implementation in "${implementations[@]}"; do
+for implementation in "${bench_implementations[@]}"; do
   case "${implementation}" in
     grpc-cpp)
       trigger_port=5280; source_stats_port=5281
@@ -370,10 +311,10 @@ for implementation in "${implementations[@]}"; do
   source_stats_url="http://127.0.0.1:${source_stats_port}"
   target_stats_url="http://127.0.0.1:${target_stats_port}"
 
-  for pattern in "${patterns[@]}"; do
-    for payload in "${payloads[@]}"; do
+  for pattern in "${bench_patterns[@]}"; do
+    for payload in "${bench_payloads[@]}"; do
       cell_id="${implementation}-${pattern}-${payload}"
-      cell_dir="${LOG_DIR}/${cell_id}"
+      cell_dir="${OUTPUT}/${cell_id}"
       result_file="${cell_dir}/results.json"
       target_stats_file="${cell_dir}/target-stats.json"
       mkdir -p "${cell_dir}"
@@ -398,7 +339,7 @@ for implementation in "${implementations[@]}"; do
       a_pid=$!
       wait_for_stats "${source_stats_url}" 1
 
-      trigger_phase "${trigger_url}" "${STAMP}-${RUN_LABEL}" "${cell_id}" "${pattern}" \
+      trigger_phase "${trigger_url}" "${RUN_ID}" "${cell_id}" "${pattern}" \
         "${payload}" warmup "$((WARMUP_SECONDS * 1000))"
       wait_for_idle "${source_stats_url}"
       if ! settle_and_capture "${source_stats_url}" "${target_stats_url}" \
@@ -406,7 +347,7 @@ for implementation in "${implementations[@]}"; do
         log "warmup settle hit ${DRAIN_BOUND_MS}ms bound: ${cell_id} (recorded; cell continues)"
       fi
       reset_target "${target_stats_url}"
-      trigger_phase "${trigger_url}" "${STAMP}-${RUN_LABEL}" "${cell_id}" "${pattern}" \
+      trigger_phase "${trigger_url}" "${RUN_ID}" "${cell_id}" "${pattern}" \
         "${payload}" active "$((DURATION_SECONDS * 1000))"
       wait_for_idle "${source_stats_url}"
 
@@ -430,7 +371,7 @@ PY
         log "cell settle hit ${DRAIN_BOUND_MS}ms total bound: ${cell_id} (recorded; run continues)"
       fi
       verify_counts "${result_file}"
-      emit_final_results "${result_file}" | tee -a "${OVERALL_REPORT}"
+      emit_final_results "${result_file}" | tee -a "${RUNNER_LOG}"
 
       cleanup_cell
       wait_for_ports_free
@@ -438,4 +379,5 @@ PY
   done
 done
 
-log "results=${LOG_DIR}"
+bench_write_report "${OUTPUT}"
+log "results=${OUTPUT}"

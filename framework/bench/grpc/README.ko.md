@@ -185,19 +185,69 @@ server가 받은 수를 폴링해 그 값이 더는 증가하지 않을 때까�
 값이다. 상한을 작게 잡으면 정상적인 실행에서도 셀을 잃게 되므로, 건강한 실행이 상한에 닿지
 않을 만큼 충분히 크게 잡는다. 기준값은 30초다.
 
-## 4. 출력 형식
+### 3.1 runner 실행 계약
 
-report 표는 패턴별로 묶고, 각 행에 구현 이름을 표시한다. 예시는 아래 형식이다.
+언어 harness는 서로 다르지만 `run_local.sh`의 실행 인자와 결과물 배치는 같다. 인자 이름이
+언어마다 다르면 한 언어만 다른 조건으로 측정하고도 표에서는 구분되지 않는다. 실제로 상대 경로
+`OUTROOT`를 받은 runner가 저장소 밖처럼 보이는 곳에 결과를 만들었고, `RUNS`를 가진 언어만 run
+세 번을 한 디렉터리에 겹쳐 써 집계기가 run 하나로 읽었다.
+
+모든 runner는 아래 입력만 받는다. 환경 변수와 같은 뜻의 flag를 함께 받고 flag가 이긴다. 그 밖의
+인자는 `unsupported runner argument: <이름>`으로 거절하고 2로 끝낸다.
+
+| 환경 변수 | flag | 값 | 기본값 |
+|---|---|---|---|
+| `OUTPUT` | `--output` | run 디렉터리 | `log/<lang>/<stamp>` |
+| `SCENARIO` | `--scenario` | `all`·`request`·`send`·§2의 패턴 이름 하나 | `all` |
+| `IMPLEMENTATION` | `--implementation` | `all`·§1.1의 구현 이름 하나 | `all` |
+| `PAYLOAD_SIZES` | `--payload-sizes` | `1024`·`4096`의 쉼표 목록 | `1024,4096` |
+| `DURATION_SECONDS` | `--duration-seconds` | 양의 정수 | `5` |
+| `SKIP_BUILD` | `--skip-build` | `0`·`1` | `0` |
+
+한 번 실행하면 run 하나를 만든다. runner는 run을 반복하지 않는다. §7.2의 G5가 요구하는 3 run은
+호출자가 `OUTPUT`을 달리해 세 번 부르고 그 사이에 다른 언어를 끼워 순서 효과를 줄인다.
+`framework/bench/grpc/run_all.sh`가 그 호출자다.
+
+결과물 배치도 언어마다 같다.
 
 ```text
-  > Benchmarking current for request-backpressure...
-    Testing local:
-      | Implementation          | Size     |       Throughput |    Bandwidth |  Lat.Mean(ms) |   Lat.P95(ms) |   Lat.P99(ms) | Client CPU | Client Mem | Server CPU | Server Mem |
-      |-------------------------|----------|------------------|--------------|--------------|--------------|--------------|------------|------------|------------|------------|
-      | grpc-dotnet             | 1024B    |       10.00 KOPS |   10.24 MB/s |     1.000 ms |     2.000 ms |     3.000 ms |      10.0% |  100.0 MB |      10.0% |  100.0 MB |
-      | zlink-dotnet            | 1024B    |       30.00 KOPS |   30.72 MB/s |     0.300 ms |     0.600 ms |     0.900 ms |      10.0% |  100.0 MB |      10.0% |  100.0 MB |
-      | zlink-framework-dotnet  | 1024B    |       20.00 KOPS |   20.48 MB/s |     0.500 ms |     0.900 ms |     1.200 ms |      10.0% |  100.0 MB |      10.0% |  100.0 MB |
+<OUTPUT>/
+  report.txt                          # §4의 통일 표. tools/bench_report.py가 만든다
+  runner.log                          # runner 자신의 진행 기록
+  <구현 이름>-<패턴 이름>-<payload>/
+      results.json                    # §4의 셀 원본(with-grpc-cell-v1)
+      report.txt                      # 그 셀만의 표
+      source.log  target.log          # A와 B의 출력
+      target-stats.json               # settle 뒤 읽은 B의 stats 스냅샷
 ```
+
+셀 디렉터리 이름에는 run 번호를 붙이지 않는다. run 하나가 디렉터리 하나이므로 번호는 `OUTPUT`이
+갖는다.
+
+C 기준 bench(§1.2)는 client-driven이다. client 하나가 격자를 전부 돌고 server 쌍은 run 내내
+하나다. 그래서 셀 디렉터리에는 `results.json`만 있고 process 로그는 run 수준에 있다.
+
+## 4. 출력 형식
+
+`report.txt`는 언어와 무관하게 같은 표다. runner가 표를 직접 찍지 않고 셀 원본에서
+`tools/bench_report.py`가 만든다. runner마다 형식을 두면 언어를 나란히 놓고 볼 때만 드러나는
+방식으로 어긋난다.
+
+열은 여섯 개다. 처리량은 초당 천 단위로 찍고, 단위 이름이 무엇을 센 값인지 말한다 — request
+계열은 완료한 왕복 수라 `KOPS`, `send-saturation`은 target이 받은 단방향 메시지 수라 `Kmsg/s`다.
+두 이름의 수치 배율은 같다.
+
+```text
+| Scenario                                    | Size   | Throughput      | Lat.Mean(ms) | Lat.P95(ms) | Lat.P99(ms) |
+|---------------------------------------------|--------|-----------------|--------------|-------------|-------------|
+| grpc-dotnet-request-backpressure            |   1024 |   10.000 KOPS   |        1.000 |       2.000 |       3.000 |
+| zlink-dotnet-request-backpressure           |   1024 |   30.000 KOPS   |        0.300 |       0.600 |       0.900 |
+| zlink-framework-dotnet-request-backpressure |   1024 |   20.000 KOPS   |        0.500 |       0.900 |       1.200 |
+| zlink-dotnet-send-saturation                |   1024 |  487.000 Kmsg/s |        1.745 |       5.720 |       8.387 |
+```
+
+대역폭·CPU·메모리·깊이 같은 나머지 메트릭은 표에서 빼고 셀 원본(`results.json`)에만 둔다.
+표는 사람이 언어를 가로질러 읽는 용도이고, 판정과 진단은 원본을 읽는 집계기가 한다.
 
 보고서와 콘솔 출력은 perf runner에서 다루기 쉽게 metric별 `RESULT,current,...` 형식도 같이
 남긴다. 한 행의 필드는 아래 순서다.

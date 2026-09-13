@@ -19,30 +19,39 @@ envelope와 protobuf body 두 part를 보내며 request와 command endpoint를 �
 
 ## 2. 실행 방법
 
+실행 인자와 결과물 배치는 언어와 무관하게 같다. 규격 §3.1이 그 계약이고, runner는 그 밖의
+인자를 거절한다. 측정은 항상 perf 티켓 큐로 낸다.
+
 ```bash
-cd framework/bench/grpc/java
-./run_local.sh                                   # Java 전체 matrix
-./run_local_kotlin.sh                            # Kotlin 보조 2셀
-RUNS=1 PAYLOADS=1024 SCENARIO=request-window IMPLEMENTATION=zlink-framework-java ./run_local.sh
+# 전체 격자 1 run
+bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "java with-grpc r1" -- \
+  bash framework/bench/grpc/java/run_local.sh --skip-build \
+    --output framework/bench/grpc/log/java/<이름>/r1
+
+# 한 셀
+bash framework/bench/grpc/java/run_local.sh --skip-build --scenario request-serial \
+  --implementation zlink-framework-java --payload-sizes 1024 --duration-seconds 2 \
+  --output /tmp/java-smoke
 ```
 
-측정은 항상 perf 티켓 큐로 낸다. Kotlin 보조 셀은 Java의 B를 그대로 쓰므로 Java 측정과 동시에
-돌리지 않는다(runner가 두 대역을 함께 확인한다).
+여러 언어를 3 run씩 돌려 §7.2 판정까지 받으려면 `framework/bench/grpc/run_all.sh`를 쓴다.
+runner는 run을 반복하지 않는다 — run 하나가 실행 하나다.
 
-| 입력 | Java 기본값 | Kotlin 기본값 |
+§3.1의 여섯 입력 밖에서 이 runner가 읽는 값은 아래뿐이다.
+
+| 입력 | 기본값 | 의미 |
 |---|---|---|
-| `RUNS` | `3` | `3` |
-| `RUN_DEALER` | `0`(다른 값 거부) | `0` |
-| `DURATION` | `5` | `5` |
-| `WARMUP_SECONDS` | `20` | `20` |
-| `PAYLOADS` | `1024,4096` | `1024`만 |
-| `SCENARIO` | `all`, `request`, 네 패턴 이름 | `all`·`request`·`request-window` |
-| `IMPLEMENTATION` | `all` 또는 세 구현 | `all` 또는 두 구현 |
-| `STAMP` / `OUTROOT` | 실행 시각 / `log/java/with_grpc_java_<stamp>` | 실행 시각 / `log/java/with_grpc_kotlin_<stamp>` |
-| `SKIP_BUILD` | `0`(`1`이면 Gradle build 생략) | 동일 |
+| `WARMUP_SECONDS` | `20` | warmup 초 |
+| `JAVA_HOME` | 자동 탐색 | JDK 25. `runner_common.sh`가 고른다 |
 
-고정값: request window 100, send concurrency 8, request·route-ready timeout 30초, drain 상한
-30초, settle quiet 200ms. build는 `./gradlew --no-daemon --max-workers=1 assemble installDist`.
+Kotlin 보조 셀은 `java/run_local_kotlin.sh`이며 같은 입력을 받되 격자를 좁힌다 — 패턴은
+`request-window` 하나, payload는 `1024` 하나, 구현은 `grpc-kotlin`과
+`zlink-framework-kotlin` 둘이다(§10.5). Java의 B를 그대로 쓰므로 Java 측정과 동시에 돌리지
+않는다. runner가 두 포트 대역을 함께 확인한다.
+
+고정값: request window 100, send concurrency 8, raw socket ROUTER, request·route-ready 상한
+30초, drain 상한 30초, settle quiet 200ms. build는
+`./gradlew --no-daemon --max-workers=1 assemble installDist`.
 
 ## 3. 프로세스 구성
 
@@ -85,9 +94,9 @@ trigger·stats·phase 규칙은 `shared/.../BenchHttpApplication.java`(JDK `Http
 ## 5. 결과 위치
 
 ```text
-framework/bench/grpc/log/java/with_grpc_java_<stamp>/     # Kotlin은 with_grpc_kotlin_<stamp>
-├── with_grpc_java_<stamp>.txt
-└── <implementation>-<pattern>-<payload>-run<n>/
+<OUTPUT>/
+├── report.txt · runner.log
+└── <implementation>-<pattern>-<payload>/
     ├── results.json        # with-grpc-cell-v1: role·trigger·streams·target_stats
     ├── report.txt
     ├── source.log / target.log

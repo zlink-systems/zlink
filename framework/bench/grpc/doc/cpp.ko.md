@@ -17,39 +17,36 @@ RouteMesh용 `route_client_t`를 쓴다(`channel_client_t`는 ClientServer 채�
 
 ## 2. 실행 방법
 
-runner는 빌드하지 않는다. 먼저 빌드하고, 측정은 항상 perf 티켓 큐로 낸다.
+실행 인자와 결과물 배치는 언어와 무관하게 같다. 규격 §3.1이 그 계약이고, runner는 그 밖의
+인자를 거절한다. 측정은 항상 perf 티켓 큐로 낸다.
 
 ```bash
-# 빌드 — local package root(기본 .artifacts/wsl)에 install/zlink-cpp/0.17.6 과
-# install/zlink-core/0.17.5 (릴리스 Core prefix로의 symlink여도 됨)가 있어야 한다.
-cmake -S framework/bench/grpc/cpp -B framework/bench/grpc/cpp/build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build framework/bench/grpc/cpp/build --parallel 2
-
-# 전체 matrix 1 run — 항상 perf 티켓 큐로
-bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "cpp with-grpc run 1/3" -- \
-  bash framework/bench/grpc/cpp/run_local.sh cpp-s3-run1
+# 전체 격자 1 run
+bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "cpp with-grpc r1" -- \
+  bash framework/bench/grpc/cpp/run_local.sh --skip-build \
+    --output framework/bench/grpc/log/cpp/<이름>/r1
 
 # 한 셀
-bash framework/bench/grpc/cpp/run_local.sh smoke --implementations zlink-framework-cpp \
-  --patterns request-window --payload-sizes 1024 --duration-seconds 2
+bash framework/bench/grpc/cpp/run_local.sh --skip-build --scenario request-serial \
+  --implementation zlink-framework-cpp --payload-sizes 1024 --duration-seconds 2 \
+  --output /tmp/cpp-smoke
 ```
+
+여러 언어를 3 run씩 돌려 §7.2 판정까지 받으려면 `framework/bench/grpc/run_all.sh`를 쓴다.
+runner는 run을 반복하지 않는다 — run 하나가 실행 하나다.
+
+§3.1의 여섯 입력 밖에서 이 runner가 읽는 값은 아래뿐이다.
 
 | 입력 | 기본값 | 의미 |
 |---|---|---|
-| 첫 인자 | `cpp-router-1` | run label(결과 디렉터리 이름) |
-| `BUILD_DIR` | `cpp/build` | 사전에 빌드한 실행 파일 위치 |
-| `--implementations` / `IMPLEMENTATIONS` | 세 구현 | 구현 목록 |
-| `--patterns` / `PATTERNS` | 네 패턴 | 패턴 목록 |
-| `--payload-sizes` / `PAYLOAD_SIZES` | `1024,4096` | body 크기(다른 값은 거부) |
-| `--duration-seconds` / `DURATION_SECONDS` | 5 | active 초 |
-| `--warmup` / `WARMUP_SECONDS` | 5 | warmup 초 |
-| `--warmup-segments` / `WARMUP_SEGMENTS` | 10 | warmup throughput 관측 구간 수 |
-| `REQUEST_WINDOW`, `SEND_CONCURRENCY` | 100, 8 | 다른 값은 거부 |
-| `REQUEST_TIMEOUT_MS` / `DRAIN_BOUND_MS` | 30000 / 30000 | request timeout / drain·settle 상한 |
-| `COMMAND_SETTLE_MS` | 200 | 수신·완료 count 안정 확인 구간 |
-| `OUTPUT_DIR` / `--output-dir` | `log/cpp/<stamp>/<label>` | 결과 디렉터리 |
-| `RUN_STAMP` | 현재 시각 | run 묶음 ID |
-| `LOAD_GATE` | 2.0 | 측정 시작 load average 기준 |
+| `BUILD_DIR` | `cpp/build` | 사전에 빌드한 실행 파일 위치. 이 runner는 빌드하지 않는다 |
+| `WARMUP_SECONDS` | `5` | warmup 초 |
+| `WARMUP_SEGMENTS` | `10` | warmup throughput 관측 구간 수 |
+| `LOAD_GATE` | `2.0` | 측정을 시작할 load average 상한 |
+| `LOAD_GATE_WAIT_SECONDS` | `600` | 그 상한이 내려오기를 기다리는 시간 |
+
+고정값: request window 100, send concurrency 8, raw socket ROUTER, request timeout·drain 상한
+30초, settle quiet 200ms.
 
 ## 3. 프로세스 구성
 
@@ -95,8 +92,8 @@ completion을 직접 drain하거나 두 번째 poller를 두지 않는다.
 ## 5. 결과 위치
 
 ```text
-framework/bench/grpc/log/cpp/<stamp>/<label>/
-├── runner.log · report.txt · load-gates.txt
+<OUTPUT>/
+├── report.txt · runner.log · load-gates.txt
 └── <implementation>-<pattern>-<payload>/
     ├── results.json            # with-grpc-cell-v1: role·trigger·streams·target_stats
     ├── source.log / target.log
