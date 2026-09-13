@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -18,27 +20,26 @@ type recvSocket interface {
 func runSingleOneWay(
 	cfg benchmarkConfig,
 	receiver recvSocket,
-	sendActive func(*zlink.Message) (bool, error),
-	sendStop func(*zlink.Message) error,
+	sender zlink.SocketTarget,
+	sendActive func(*zlink.Message) (zlink.SendSubmission, error),
+	sendStop func(*zlink.Message) (zlink.SendSubmission, error),
 ) perfcommon.Result {
-	return runSingleOneWayWithTransient(cfg, receiver, sendActive, sendStop, perfcommon.IsTransient)
+	return runSingleOneWayWithTransient(cfg, receiver, sender, sendActive, sendStop, perfcommon.IsTransient)
 }
 
 func runSingleOneWayWithTransient(
 	cfg benchmarkConfig,
 	receiver recvSocket,
-	sendActive func(*zlink.Message) (bool, error),
-	sendStop func(*zlink.Message) error,
+	sender zlink.SocketTarget,
+	sendActive func(*zlink.Message) (zlink.SendSubmission, error),
+	sendStop func(*zlink.Message) (zlink.SendSubmission, error),
 	isTransient func(error) bool,
 ) perfcommon.Result {
 	if isTransient == nil {
 		isTransient = perfcommon.IsTransient
 	}
 	if sendStop == nil {
-		sendStop = func(message *zlink.Message) error {
-			_, err := sendActive(message)
-			return err
-		}
+		sendStop = sendActive
 	}
 	window := perfcommon.NewBenchmarkWindow(cfg.duration)
 	stats := perfcommon.NewStats()
@@ -78,11 +79,17 @@ func runSingleOneWayWithTransient(
 			}
 		}
 	}()
+	completionPoller := perfcommon.NewSocketPoller(sender, zlink.PollCompletion)
+	defer completionPoller.Close()
+	completionEvents := make([]zlink.PollEvent, 1)
 
 	sequence := perfcommon.NextMetricSequence()
 	for time.Now().Before(window.StopAt) {
 		message := perfcommon.NewActiveMessageWithSequence(cfg.msgSize, sequence)
-		sent, err := sendActive(message)
+		submission, err := sendActive(message)
+		if err == nil {
+			err = admitSingleOneWaySend(completionPoller, completionEvents, submission)
+		}
 		if err != nil {
 			_ = message.Close()
 			if isTransient(err) {
@@ -94,17 +101,18 @@ func runSingleOneWayWithTransient(
 			}
 			perfcommon.Must(err)
 		}
-		if !sent {
-			_ = message.Close()
-			perfcommon.PollIdle(time.Millisecond)
-			continue
-		}
 		sequence = perfcommon.NextMetricSequence()
 	}
 	// PERF_SINGLE_TEST_POLICY § 1.4: signal phase end via wire-level
 	// stop token. Managed send handles WRITABLE retry internally; the outer
 	// bound still prevents terminal-phase connection failures from hanging.
-	if !sendStopTokenSingle(sendStop, isTransient) {
+	if !sendStopTokenSingle(func(message *zlink.Message) error {
+		submission, err := sendStop(message)
+		if err != nil {
+			return err
+		}
+		return admitSingleOneWaySend(completionPoller, completionEvents, submission)
+	}, isTransient) {
 		perfcommon.Must(fmt.Errorf("single stop token send failed"))
 	}
 	if err := <-receiverDone; err != nil {
@@ -112,6 +120,37 @@ func runSingleOneWayWithTransient(
 	}
 
 	return stats.Snapshot(cfg.duration, cfg.msgSize)
+}
+
+// admitSingleOneWaySend keeps completion progress in the requesting goroutine.
+// A WRITABLE-only drain can return no caller-visible event, so admission state
+// is checked after every public PollCompletion wait.
+func admitSingleOneWaySend(
+	poller *zlink.Poller,
+	events []zlink.PollEvent,
+	submission zlink.SendSubmission,
+) error {
+	if submission == nil {
+		return fmt.Errorf("single one-way send returned no submission")
+	}
+	if submission.Result() == zlink.SubmitOK {
+		return nil
+	}
+	if submission.Result() != zlink.SubmitBackpressured {
+		return fmt.Errorf("single one-way send returned submit result %d", submission.Result())
+	}
+
+	readyContext, cancelReady := context.WithCancel(context.Background())
+	cancelReady()
+	for {
+		err := submission.Admitted(readyContext)
+		if !errors.Is(err, context.Canceled) {
+			return err
+		}
+		if _, err := poller.Wait(events, -1); err != nil {
+			return err
+		}
+	}
 }
 
 func recvSingleOneWayUntilStop(

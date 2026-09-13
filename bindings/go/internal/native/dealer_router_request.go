@@ -230,7 +230,6 @@ func submitManagedSend(
 		send.payload.close()
 		return nil, &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.ESHUTDOWN)}
 	}
-	hasPublicOwner := owner.publicOwner != nil
 	completionID, err := send.attempt(key)
 	if err == nil && completionID == 0 {
 		owner.mu.Unlock()
@@ -247,11 +246,6 @@ func submitManagedSend(
 			return nil, &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
 		}
 		return nil, err
-	}
-	if !hasPublicOwner {
-		owner.mu.Unlock()
-		send.payload.close()
-		return nil, &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.EBUSY)}
 	}
 	// A token now exists. Publish the entry before a drain can look it up;
 	// immediate admission has no entry, channel, or global handle registration.

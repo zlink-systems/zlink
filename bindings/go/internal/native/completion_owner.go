@@ -355,7 +355,7 @@ func (o *completionOwner) registerLocked(entry *completionEntry) error {
 	if o.shutdown {
 		return &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.ESHUTDOWN)}
 	}
-	if entry.kind == completionRequest && o.publicOwner == nil {
+	if o.publicOwner == nil && (entry.kind == completionRequest || entry.writableWaiting) {
 		return &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.EBUSY)}
 	}
 	entry.owner = o

@@ -46,11 +46,10 @@ func runDealerRouter(cfg benchmarkConfig) perfcommon.Result {
 		return err
 	}, router)
 
-	result := runSingleRoutedOneWay(cfg, router, func(message *zlink.Message) (bool, error) {
-		err := perfcommon.SubmitMeasurementSend(dealer.Send(), message)
-		return err == nil, err
-	}, func(message *zlink.Message) error {
-		return perfcommon.SubmitSend(context.Background(), dealer.Send().MoveMessage(message))
+	result := runSingleRoutedOneWay(cfg, router, dealer, func(message *zlink.Message) (zlink.SendSubmission, error) {
+		return perfcommon.SubmitMeasurementSendSubmission(context.Background(), dealer.Send(), message)
+	}, func(message *zlink.Message) (zlink.SendSubmission, error) {
+		return dealer.Send().MoveMessage(message).Submit(context.Background())
 	})
 	perfcommon.PrintSingleAutoHWMDetail(routerMon, cfg.pattern, cfg.transport, "router", zlink.SocketTypeRouter, cfg.msgSize)
 	perfcommon.PrintSingleAutoHWMDetail(dealerMon, cfg.pattern, cfg.transport, "dealer", zlink.SocketTypeDealer, cfg.msgSize)

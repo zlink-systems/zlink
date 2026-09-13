@@ -224,11 +224,57 @@ func TestPublicBackpressuredSendReportsRouteRemoval(t *testing.T) {
 func TestOwnerlessBackpressuredSendFailsFast(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
-	dealer, _ := ctx.DealerSocket()
-	defer dealer.Close()
-	if err := dealer.Connect(inprocEndpoint("ownerless-backpressure")); err != nil {
-		t.Fatal(err)
+	if err := ctx.Options().SetAutoHwmEnabled(false); err != nil {
+		t.Fatalf("SetAutoHwmEnabled(false) error = %v", err)
 	}
+
+	dealer, _ := ctx.DealerSocket()
+	router, _ := ctx.RouterSocket()
+	defer dealer.Close()
+	defer router.Close()
+	if err := dealer.SetLinger(0); err != nil {
+		t.Fatalf("dealer SetLinger(0) error = %v", err)
+	}
+	if err := router.SetLinger(0); err != nil {
+		t.Fatalf("router SetLinger(0) error = %v", err)
+	}
+	if err := dealer.SetSendHighWaterMark(1); err != nil {
+		t.Fatalf("dealer SetSendHighWaterMark(1) error = %v", err)
+	}
+	if err := router.SetReceiveHighWaterMark(1); err != nil {
+		t.Fatalf("router SetReceiveHighWaterMark(1) error = %v", err)
+	}
+
+	endpoint := inprocEndpoint("ownerless-backpressure")
+	if err := router.Bind(endpoint); err != nil {
+		t.Fatalf("router Bind() error = %v", err)
+	}
+	if err := dealer.Connect(endpoint); err != nil {
+		t.Fatalf("dealer Connect() error = %v", err)
+	}
+	setupCompletions := startCompletionPoller(t, dealer)
+
+	prime, err := dealer.Send().Bytes([]byte("route-prime")).Submit(context.Background())
+	if err != nil {
+		t.Fatalf("prime Submit() error = %v", err)
+	}
+	if err := prime.Admitted(context.Background()); err != nil {
+		t.Fatalf("prime Admitted() error = %v", err)
+	}
+	var received zlink.Received
+	if ok, err := router.Recv(&received, zlink.RecvFlagsNone); err != nil || !ok {
+		t.Fatalf("prime Recv() = (%v, %v), want (true, nil)", ok, err)
+	}
+	_ = received.Close()
+
+	filler, err := dealer.Send().Bytes([]byte("fill-hwm")).Submit(context.Background())
+	if err != nil {
+		t.Fatalf("filler Submit() error = %v", err)
+	}
+	if err := filler.Admitted(context.Background()); err != nil {
+		t.Fatalf("filler Admitted() error = %v", err)
+	}
+	setupCompletions.close(t)
 	message := newMessage(t, "ownerless-send")
 	defer message.Close()
 
