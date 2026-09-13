@@ -279,7 +279,6 @@ final class NativeContext implements Context {
         }
         NativeErrno.retryWhileInterrupted(() -> Native.ctxShutdown(handle),
             rc -> rc != 0);
-        completionDispatcher.closeNativeWait();
         NativeErrno.retryWhileInterrupted(() -> Native.ctxTerm(handle),
             rc -> rc != 0);
         handle = MemorySegment.NULL;

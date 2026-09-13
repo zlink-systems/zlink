@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import systems.zlink.TestSupport;
+import systems.zlink.CompletionPollerDriver;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
@@ -39,7 +40,9 @@ final class RequestWaitTokenContractTest {
         TestSupport.assumeNative();
         try (Context context = Zlink.createContext();
              RouterSocket server = context.createRouterSocket();
-             DealerSocket client = context.createDealerSocket()) {
+             DealerSocket client = context.createDealerSocket();
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(client)) {
             context.options().autoHwmEnabled(false);
             configureSmallHwm(server);
             configureSmallHwm(client);
@@ -81,7 +84,9 @@ final class RequestWaitTokenContractTest {
         TestSupport.assumeNative();
         try (Context context = Zlink.createContext();
              RouterSocket server = context.createRouterSocket();
-             DealerSocket client = context.createDealerSocket()) {
+             DealerSocket client = context.createDealerSocket();
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(client)) {
             String endpoint = TestSupport.inprocEndpoint("request-before-bind");
             client.connect(endpoint);
             CompletableFuture<List<Message>> future;
@@ -100,7 +105,9 @@ final class RequestWaitTokenContractTest {
         TestSupport.assumeNative();
         try (Context context = Zlink.createContext();
              RouterSocket server = context.createRouterSocket();
-             DealerSocket client = context.createDealerSocket()) {
+             DealerSocket client = context.createDealerSocket();
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(client)) {
             context.options().autoHwmEnabled(false);
             configureSmallHwm(server);
             configureSmallHwm(client);
@@ -132,7 +139,9 @@ final class RequestWaitTokenContractTest {
         TestSupport.assumeNative();
         try (Context context = Zlink.createContext();
              RouterSocket server = context.createRouterSocket();
-             DealerSocket client = context.createDealerSocket()) {
+             DealerSocket client = context.createDealerSocket();
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(client)) {
             String endpoint = TestSupport.inprocEndpoint("mixed-wait-tokens");
             client.connect(endpoint);
             CompletableFuture<Void> send;

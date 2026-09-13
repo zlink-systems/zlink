@@ -5,6 +5,8 @@ import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.sockets.DealerSocket;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.eventing.MonitorEventType;
+import systems.zlink.contracts.eventing.PollEventFlags;
+import systems.zlink.contracts.eventing.PollEvents;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RouterSocket;
@@ -28,11 +30,14 @@ public final class RequestReplyAsyncSample {
              var routerMonitor = routerSocket.monitorOpen(
                  systems.zlink.contracts.eventing.MonitorEventType.CONNECTION_READY);
              var dealerMonitor = dealerSocket.monitorOpen(
-                 systems.zlink.contracts.eventing.MonitorEventType.CONNECTION_READY)) {
+                 systems.zlink.contracts.eventing.MonitorEventType.CONNECTION_READY);
+             var completionPoller = Zlink.createPoller()) {
             dealerSocket.setRoutingId(RoutingId.from("request-reply-client".getBytes()));
             routerSocket.bind(endpoint);
             dealerSocket.connect(endpoint);
             SampleSupport.waitConnected(routerMonitor, dealerMonitor);
+            completionPoller.add(dealerSocket, 1,
+                PollEventFlags.POLLCOMPLETION);
 
             CompletableFuture<Void> replyHandled = new CompletableFuture<>();
 
@@ -79,6 +84,11 @@ public final class RequestReplyAsyncSample {
                     });
             }
 
+            PollEvents completionEvents = new PollEvents(1);
+            while (!roundTrip.toCompletableFuture().isDone()) {
+                completionPoller.wait(completionEvents,
+                    Duration.ofSeconds(2));
+            }
             roundTrip.toCompletableFuture().get(2, TimeUnit.SECONDS);
             replyHandled.get(2, TimeUnit.SECONDS);
             SampleSupport.await(requestHandled, "request reply async");

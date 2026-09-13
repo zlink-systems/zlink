@@ -1,6 +1,7 @@
 package systems.zlink.contract;
 
 import systems.zlink.TestSupport;
+import systems.zlink.CompletionPollerDriver;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.sockets.DealerSocket;
@@ -98,7 +99,9 @@ public class ReceivedContractTest {
         try (Context ctx = Zlink.createContext();
              RouterSocket caller = ctx.createRouterSocket();
              RouterSocket source = ctx.createRouterSocket();
-             RouterSocket target = ctx.createRouterSocket()) {
+             RouterSocket target = ctx.createRouterSocket();
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(caller, source)) {
             caller.setRoutingId(callerRid);
             source.setRoutingId(sourceRid);
             target.setRoutingId(targetRid);
@@ -157,7 +160,8 @@ public class ReceivedContractTest {
 
             forwardedTerminal.get(TestSupport.DEFAULT_TIMEOUT_MS,
                 TimeUnit.MILLISECONDS);
-            assertEquals("zlink-send-completion", completionThread.get());
+            assertEquals("zlink-test-public-completion-owner",
+                completionThread.get());
             List<Message> reply = callerPending.reply().toCompletableFuture().get(
                 TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             try {

@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.RepeatedTest;
 import systems.zlink.TestSupport;
+import systems.zlink.CompletionPollerDriver;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.eventing.PollEventFlags;
@@ -46,7 +47,9 @@ final class SubmitResultTerminalContractTest {
 
         try (Context context = Zlink.createContext();
              RouterSocket server = context.createRouterSocket();
-             DealerSocket client = context.createDealerSocket()) {
+             DealerSocket client = context.createDealerSocket();
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(client)) {
             connectReady(server, client, "submit-result-immediate");
 
             try (Message payload = Message.from("send-ok")) {

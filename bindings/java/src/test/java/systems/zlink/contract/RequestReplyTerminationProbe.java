@@ -3,6 +3,7 @@
 package systems.zlink.contract;
 
 import systems.zlink.TestSupport;
+import systems.zlink.CompletionPollerDriver;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.sockets.DealerSocket;
@@ -39,7 +40,9 @@ public final class RequestReplyTerminationProbe {
         try (Context ctx = Zlink.createContext();
              RouterSocket routerSocket = ctx.createRouterSocket();
              DealerSocket dealerSocket = ctx.createDealerSocket();
-             ExecutorService serverExecutor = daemonExecutor("zlink-reqrep-probe")) {
+             ExecutorService serverExecutor = daemonExecutor("zlink-reqrep-probe");
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(dealerSocket)) {
             String endpoint = TestSupport.inprocEndpoint(
                 "request-reply-exit-regression");
             log("bind");
