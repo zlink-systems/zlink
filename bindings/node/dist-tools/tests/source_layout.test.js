@@ -102,6 +102,9 @@ function forbiddenPackageExports(exportsValue) {
     strict_1.default.ok(completionOwner.includes('awaitWritable'));
     strict_1.default.ok(completionOwner.includes('transferToPublic'));
     strict_1.default.ok(completionOwner.includes('socketReadableWatchStart'));
+    strict_1.default.equal(completionOwner.includes('runtimeWatch'), false);
+    strict_1.default.equal(completionOwner.includes('ensureRuntimeWatch'), false);
+    strict_1.default.equal(completionOwner.includes('transferToRuntime'), false);
     strict_1.default.equal(completionOwner.includes('COMPLETION_SEND'), false);
     strict_1.default.equal(completionOwner.includes('setInterval('), false);
     strict_1.default.equal(completionOwner.includes('setTimeout('), false);

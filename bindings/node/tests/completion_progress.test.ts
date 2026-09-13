@@ -5,10 +5,11 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { CompletionPollerDriver } from './completion_poller';
 
 const zlink = require('@zlink-systems/zlink');
 
-test('runtime completion resolves consecutive requests without another event-loop source', () => {
+test('public poller resolves consecutive requests without another event-loop source', () => {
   const packagePath = path.resolve(__dirname, '../../dist');
   const child = spawnSync(process.execPath, ['-e', `
     const assert = require('node:assert/strict');
@@ -18,21 +19,25 @@ test('runtime completion resolves consecutive requests without another event-loo
       const router = z.createRouterSocket(ctx);
       const dealer = z.createDealerSocket(ctx);
       const received = new z.Received();
+      const poller = z.createPoller();
+      const events = z.createPollEvents(1);
       router.bind('inproc://completion-progress');
       dealer.connect('inproc://completion-progress');
+      poller.add(dealer, [z.PollEventFlag.PollCompletion], 1);
       try {
         for (let index = 0; index < 10; ++index) {
           const pending = dealer.request().message(String(index)).timeout(1000).submit().reply;
           assert.equal(router.recv(received), true);
           received.reply().message(String(index)).submit();
           received.close();
+          assert.equal(poller.wait(events, 1000), 1);
           const parts = await pending;
           assert.equal(parts[0].getString(), String(index));
           parts.forEach(part => part.close());
         }
         process.stdout.write('completed');
       } finally {
-        received.close(); dealer.close(); router.close(); ctx.close();
+        events.close(); poller.close(); received.close(); dealer.close(); router.close(); ctx.close();
       }
     })().catch(error => { console.error(error); process.exitCode = 1; });
   `], { encoding: 'utf8', timeout: 5000 });
@@ -41,7 +46,7 @@ test('runtime completion resolves consecutive requests without another event-loo
   assert.equal(child.stdout, 'completed', child.stderr);
 });
 
-test('pending requests move between runtime and public completion ownership without consuming DATA', async () => {
+test('public completion ownership persists across requests without consuming DATA', async () => {
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
@@ -50,10 +55,10 @@ test('pending requests move between runtime and public completion ownership with
   const events = zlink.createPollEvents(1);
   router.bind('inproc://completion-owner-transfer');
   dealer.connect('inproc://completion-owner-transfer');
+  poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 31);
   try {
     const first = dealer.request().message('public').timeout(1000).submit().reply;
     assert.equal(router.recv(received), true);
-    poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 31);
     received.reply().message('first').submit();
     received.close();
     assert.equal(poller.wait(events, 1000), 1);
@@ -62,25 +67,31 @@ test('pending requests move between runtime and public completion ownership with
     assert.equal(firstParts[0].getString(), 'first');
     firstParts.forEach(part => part.close());
 
-    const second = dealer.request().message('runtime').timeout(1000).submit().reply;
+    const second = dealer.request().message('second').timeout(1000).submit().reply;
     assert.equal(router.recv(received), true);
     const peer = received.routingId;
     received.reply().message('second').submit();
     received.close();
     router.send(peer).message('application-data').submit_sync();
-    assert.equal(poller.remove(dealer), true);
+    assert.equal(poller.wait(events, 1000), 1);
     const secondParts = await second;
     assert.equal(secondParts[0].getString(), 'second');
     secondParts.forEach(part => part.close());
     assert.equal(dealer.recv(received), true);
     assert.equal(received.parts[0].getString(), 'application-data');
+    assert.equal(poller.remove(dealer), true);
+    assert.throws(
+      () => dealer.request().message('ownerless').timeout(1000).submit(),
+      (error: any) => error instanceof zlink.SubmitError
+        && error.result === zlink.SubmitResult.InvalidState
+    );
   } finally {
     events.close(); poller.close(); received.close();
     dealer.close(); router.close(); ctx.close();
   }
 });
 
-test('runtime completion survives shutdown of an independent Context', async () => {
+test('public completion owners isolate independent Context shutdown', async () => {
   const groups = Array.from({ length: 2 }, (_, group) => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);
@@ -91,7 +102,8 @@ test('runtime completion survives shutdown of an independent Context', async () 
       socket.connect(address);
       return socket;
     });
-    return { ctx, router, dealers };
+    const completions = new CompletionPollerDriver(dealers);
+    return { ctx, router, dealers, completions };
   });
   const exchange = async (group) => {
     const pending = group.dealers.map((socket, index) =>
@@ -104,7 +116,7 @@ test('runtime completion survives shutdown of an independent Context', async () 
         received.reply().message(value).submit();
         received.close();
       }
-      const results = await Promise.all(pending);
+      const results = await group.completions.settle(Promise.all(pending));
       results.forEach((parts, index) => {
         assert.equal(parts[0].getString(), String(index));
         parts.forEach(part => part.close());
@@ -112,6 +124,7 @@ test('runtime completion survives shutdown of an independent Context', async () 
     } finally { received.close(); }
   };
   const close = (group) => {
+    group.completions.close();
     group.dealers.forEach(socket => socket.close());
     group.router.close(); group.ctx.close();
   };
@@ -122,6 +135,8 @@ test('runtime completion survives shutdown of an independent Context', async () 
     const rejected = assert.rejects(terminated, (error: any) =>
       error instanceof zlink.RequestError && error.result === zlink.RequestResult.Terminated);
     groups[0].ctx.shutdown();
+    assert.throws(() => groups[0].completions.wait(100), (error: any) =>
+      error instanceof zlink.RecvError && error.result === zlink.RecvResult.Terminated);
     await rejected;
     await exchange(groups[1]);
     close(groups[0]);
@@ -177,7 +192,7 @@ test('native completion callbacks retain async context and run Promise continuat
   }
 });
 
-test('public completion ownership defers settlement until wait and close rejects runtime requests', async () => {
+test('public completion ownership defers settlement until wait and removal rejects new requests', async () => {
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
@@ -186,11 +201,11 @@ test('public completion ownership defers settlement until wait and close rejects
   const events = zlink.createPollEvents(1);
   router.bind('inproc://completion-explicit-owner');
   dealer.connect('inproc://completion-explicit-owner');
+  poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 7);
   try {
     const pending = dealer.request().message('owned').timeout(1000).submit().reply;
     let settled = false;
     void pending.then(() => { settled = true; });
-    poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 7);
     assert.equal(router.recv(received), true);
     received.reply().message('reply').submit();
     received.close();
@@ -199,11 +214,11 @@ test('public completion ownership defers settlement until wait and close rejects
     assert.equal(poller.wait(events, 1000), 1);
     (await pending).forEach(part => part.close());
     poller.remove(dealer);
-    const closing = dealer.request().message('closing').timeout(1000).submit().reply;
-    const rejected = assert.rejects(closing, (error: any) =>
-      error instanceof zlink.RequestError && error.result === zlink.RequestResult.Terminated);
-    dealer.close();
-    await rejected;
+    assert.throws(
+      () => dealer.request().message('ownerless').timeout(1000).submit(),
+      (error: any) => error instanceof zlink.SubmitError
+        && error.result === zlink.SubmitResult.InvalidState
+    );
   } finally {
     events.close(); poller.close(); received.close();
     dealer.close(); router.close(); ctx.close();

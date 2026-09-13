@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlink = require('@zlink-systems/zlink');
+import { CompletionPollerDriver } from './completion_poller';
 
 test('dealer/router send captures target and refills Received', async () => {
   const ctx = zlink.createContext();
@@ -35,6 +36,7 @@ test('request receive exposes opaque ReplyToken and reusable state resets', asyn
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
+  const completions = new CompletionPollerDriver(dealer);
   router.bind('inproc://dealer-router-reply-token');
   dealer.connect('inproc://dealer-router-reply-token');
   try {
@@ -48,11 +50,11 @@ test('request receive exposes opaque ReplyToken and reusable state resets', asyn
     assert.ok(received.replyToken instanceof zlink.ReplyToken);
     assert.equal(received.replyToken.toString(), 'ReplyToken');
     received.reply().message('reply').submit();
-    const reply = await pending;
+    const reply = await completions.settle<any[]>(pending);
     assert.equal(reply[0].getString(), 'reply');
     reply[0].close(); received.close();
   } finally {
-    dealer.close(); router.close(); ctx.close();
+    completions.close(); dealer.close(); router.close(); ctx.close();
   }
 });
 
@@ -61,6 +63,7 @@ test('ReplyToken from another RouterSocket is rejected before native submit', as
   const first = zlink.createRouterSocket(ctx);
   const second = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
+  const completions = new CompletionPollerDriver(dealer);
   first.bind('inproc://reply-token-owner');
   dealer.connect('inproc://reply-token-owner');
   try {
@@ -75,8 +78,8 @@ test('ReplyToken from another RouterSocket is rejected before native submit', as
     );
     assert.equal(message.getString(), 'must-remain-owned');
     message.close(); request.close();
-    await assert.rejects(pending, zlink.RequestError);
+    await assert.rejects(completions.settle(pending), zlink.RequestError);
   } finally {
-    dealer.close(); second.close(); first.close(); ctx.close();
+    completions.close(); dealer.close(); second.close(); first.close(); ctx.close();
   }
 });

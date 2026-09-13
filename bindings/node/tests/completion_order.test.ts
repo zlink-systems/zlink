@@ -4,18 +4,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const zlink = require('@zlink-systems/zlink');
+import { CompletionPollerDriver } from './completion_poller';
 
 for (const transport of ['inproc', 'tcp']) {
   test(`one socket preserves multipart send and completion order (${transport})`, async () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);
     const dealer = zlink.createDealerSocket(ctx);
+    const completions = new CompletionPollerDriver(dealer);
     const received = new zlink.Received();
     router.bind(transport === 'tcp' ? 'tcp://127.0.0.1:*' : 'inproc://completion-order');
     dealer.connect(router.options.lastEndpoint);
     try {
       // Complete the handshake before submitting a burst on this socket.
-      await dealer.send().message('ready').submit().admitted;
+      await completions.settle(dealer.send().message('ready').submit().admitted);
       assert.equal(router.recv(received), true);
       received.close();
       const expected = Array.from({ length: 128 }, (_, index) => index);
@@ -25,7 +27,7 @@ for (const transport of ['inproc', 'tcp']) {
         .message(Buffer.from(`payload-${index}`))
         .submit().admitted.then(() => { completed.push(index); }));
       for (const index of expected) {
-        assert.equal(router.recv(received), true);
+        while (!router.recv(received, zlink.RecvFlags.DontWait)) completions.wait();
         assert.deepEqual(received.parts.map(part => part.getString()),
           [String(index), `payload-${index}`]);
         received.close();
@@ -33,8 +35,8 @@ for (const transport of ['inproc', 'tcp']) {
       await Promise.all(pending);
       assert.deepEqual(completed, expected);
 
-      // Queue replies in request submission order and observe the runtime's
-      // completion callback delivery without adding a public poller owner.
+      // Queue replies in request submission order and observe public-poller
+      // completion delivery.
       completed.length = 0;
       const requests = expected.map(index => dealer.request()
         .message(String(index)).timeout(1000).submit().reply.then(parts => {
@@ -47,15 +49,15 @@ for (const transport of ['inproc', 'tcp']) {
         }));
       const replies: Promise<unknown>[] = [];
       for (const index of expected) {
-        assert.equal(router.recv(received), true);
+        while (!router.recv(received, zlink.RecvFlags.DontWait)) completions.wait();
         assert.equal(received.parts[0].getString(), String(index));
         replies.push(received.reply().message(String(index)).submit());
         received.close();
       }
-      await Promise.all([...requests, ...replies]);
+      await completions.settle(Promise.all([...requests, ...replies]));
       assert.deepEqual(completed, expected);
     } finally {
-      received.close(); dealer.close(); router.close(); ctx.close();
+      completions.close(); received.close(); dealer.close(); router.close(); ctx.close();
     }
   });
 }

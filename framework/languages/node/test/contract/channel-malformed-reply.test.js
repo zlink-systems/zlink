@@ -3,6 +3,7 @@ const test = require('node:test');
 
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
+const { ownCompletions } = require('./helpers/completion-poller');
 
 test('ZLinkChannelClient rejects an invalid reply kind', async () => {
   await withMalformedChannelReply(
@@ -51,6 +52,7 @@ async function withMalformedChannelReply(endpoint, replyParts, expectedError) {
   const context = zlink.createContext();
   const dealer = zlink.createDealerSocket(context);
   const router = zlink.createRouterSocket(context);
+  const completionPoller = ownCompletions(dealer);
   try {
     router.bind(endpoint);
     dealer.connect(endpoint);
@@ -68,6 +70,7 @@ async function withMalformedChannelReply(endpoint, replyParts, expectedError) {
     await assert.rejects(() => withTimeout(reply, 1000), expectedError);
     request.close();
   } finally {
+    completionPoller.close();
     dealer.close();
     router.close();
     context.close();

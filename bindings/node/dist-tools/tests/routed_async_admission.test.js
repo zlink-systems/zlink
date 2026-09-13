@@ -5,6 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Worker } = require('node:worker_threads');
 const zlink = require('@zlink-systems/zlink');
+const completion_poller_1 = require("./completion_poller");
 let sequence = 0;
 function endpoint(label) {
     return `inproc://node-pull-completion-${label}-${process.pid}-${++sequence}`;
@@ -62,10 +63,34 @@ test('routed send without a route fails immediately and preserves Message owners
         closeAll(context, router);
     }
 });
+test('ownerless async request fails before native submission with typed InvalidState', () => {
+    const context = zlink.createContext();
+    const router = zlink.createRouterSocket(context);
+    const dealer = zlink.createDealerSocket(context);
+    const payload = zlink.Message.from('ownerless-request');
+    router.bind(endpoint('ownerless-request'));
+    dealer.connect(router.options.lastEndpoint);
+    try {
+        dealer.send().message('ready').submit_sync();
+        const received = new zlink.Received();
+        assert.equal(router.recv(received), true);
+        received.close();
+        assert.throws(() => dealer.request().message(payload).timeout(1_000).submit(), (error) => error instanceof zlink.SubmitError
+            && error.result === zlink.SubmitResult.InvalidState
+            && error.nativeErrno === 0);
+        assert.equal(payload.getString(), 'ownerless-request');
+        assert.equal(router.recv(received, zlink.RecvFlags.DontWait), false);
+    }
+    finally {
+        payload.close();
+        closeAll(context, dealer, router);
+    }
+});
 test('request Promise settles from a pulled completion', async () => {
     const context = zlink.createContext();
     const router = zlink.createRouterSocket(context);
     const dealer = zlink.createDealerSocket(context);
+    const completions = new completion_poller_1.CompletionPollerDriver(dealer);
     router.bind(endpoint('request'));
     dealer.connect(router.options.lastEndpoint);
     try {
@@ -74,12 +99,13 @@ test('request Promise settles from a pulled completion', async () => {
         assert.equal(router.recv(request), true);
         assert.ok(request.replyToken instanceof zlink.ReplyToken);
         request.reply().message('answer').submit();
-        const reply = await pending;
+        const reply = await completions.settle(pending);
         assert.equal(reply[0].getString(), 'answer');
         reply[0].close();
         request.close();
     }
     finally {
+        completions.close();
         closeAll(context, dealer, router);
     }
 });
@@ -322,17 +348,19 @@ test('request non-OK completion rejects with typed RequestError only', async () 
     const context = zlink.createContext();
     const router = zlink.createRouterSocket(context);
     const dealer = zlink.createDealerSocket(context);
+    const completions = new completion_poller_1.CompletionPollerDriver(dealer);
     router.bind(endpoint('timeout'));
     dealer.connect(router.options.lastEndpoint);
     try {
         const pending = dealer.request().message('never-replied').timeout(20).submit().reply;
         const request = new zlink.Received();
         assert.equal(router.recv(request), true);
-        await assert.rejects(pending, (error) => error instanceof zlink.RequestError
+        await assert.rejects(completions.settle(pending), (error) => error instanceof zlink.RequestError
             && error.result === zlink.RequestResult.TimedOut);
         request.close();
     }
     finally {
+        completions.close();
         closeAll(context, dealer, router);
     }
 });
@@ -340,6 +368,7 @@ test('closing a socket rejects its live request with typed RequestError', async 
     const context = zlink.createContext();
     const router = zlink.createRouterSocket(context);
     const dealer = zlink.createDealerSocket(context);
+    const completions = new completion_poller_1.CompletionPollerDriver(dealer);
     router.bind(endpoint('request-close'));
     dealer.connect(router.options.lastEndpoint);
     try {
@@ -352,6 +381,7 @@ test('closing a socket rejects its live request with typed RequestError', async 
         request.close();
     }
     finally {
+        completions.close();
         closeAll(context, dealer, router);
     }
 });

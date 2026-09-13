@@ -24,6 +24,7 @@ import {
 } from '@zlink-systems/zlink';
 import { translateBindingResultError } from './node-backend-adapter-support';
 import { isEndpointCloseIgnorableError } from './node-socket-backend-adapter';
+import { ZLinkNodeEventLoopPoller } from './node-event-loop-poller';
 import type {
   ZLinkRawBindingPort,
   ZLinkRawDealerPort,
@@ -120,13 +121,20 @@ class NodeRawHostPort implements ZLinkRawHostPort {
 abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSocketPort {
   private readonly endpoints = new Set<string>();
   private readonly monitors = new Set<NodeRawMonitorPort>();
+  private readonly eventLoopPoller: ZLinkNodeEventLoopPoller;
   private closed = false;
 
-  protected constructor(protected readonly socket: TSocket) {}
+  protected constructor(protected readonly socket: TSocket) {
+    this.eventLoopPoller = new ZLinkNodeEventLoopPoller(
+      socket,
+      true,
+      () => {}
+    );
+  }
 
   setReadableHandler(handler: () => void): void {
     this.requireOpen();
-    this.socket.setReadableHandler(handler);
+    this.eventLoopPoller.setReadableHandler(handler);
   }
 
   bind(endpoint: string): void {
@@ -171,6 +179,11 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
   close(): void {
     if (this.closed) return;
     const failures: unknown[] = [];
+    try {
+      this.eventLoopPoller.dispose();
+    } catch (error) {
+      failures.push(error);
+    }
     for (const monitor of [...this.monitors].reverse()) {
       try {
         monitor.close();

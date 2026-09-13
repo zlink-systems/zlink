@@ -7,6 +7,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const node_test_1 = __importDefault(require("node:test"));
 const strict_1 = __importDefault(require("node:assert/strict"));
 const zlink = require('@zlink-systems/zlink');
+const completion_poller_1 = require("./completion_poller");
 for (const count of [2, 17]) {
     (0, node_test_1.default)(`routed ${count}-part reply preserves bytes, properties and consumption`, async () => {
         const context = zlink.createContext();
@@ -68,6 +69,7 @@ for (const count of [2, 17]) {
     const context = zlink.createContext();
     const router = zlink.createRouterSocket(context);
     const dealer = zlink.createDealerSocket(context);
+    const completions = new completion_poller_1.CompletionPollerDriver(dealer);
     const received = new zlink.Received();
     try {
         router.bind('inproc://multipart-observed-data');
@@ -79,7 +81,7 @@ for (const count of [2, 17]) {
             view.write('edited');
             received.reply().message(received.parts[0]).message(received.parts[1]).submit();
             received.close();
-            const parts = await pending;
+            const parts = await completions.settle(pending);
             strict_1.default.equal(parts[0].getString(), 'edited');
             for (const part of parts)
                 part.close();
@@ -87,6 +89,7 @@ for (const count of [2, 17]) {
         }
     }
     finally {
+        completions.close();
         received.close();
         dealer.close();
         router.close();

@@ -11,6 +11,7 @@ const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 
 const telemetry = require('./helpers/telemetry-log-capture');
+const { ownCompletions } = require('./helpers/completion-poller');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const { resolveFrameworkPacketName } = require('../../packages/framework/dist/runtime/messaging/packet-name');
@@ -1305,6 +1306,7 @@ test('ZLinkChannelClient request/reply round-trips through public binding socket
   const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
   let routerMonitor;
   let dealerMonitor;
+  const completionPoller = ownCompletions(dealer);
 
   try {
     routerMonitor = router.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
@@ -1350,6 +1352,7 @@ test('ZLinkChannelClient request/reply round-trips through public binding socket
     assert.deepEqual(reply, { value: 'pong' });
     request.close();
   } finally {
+    completionPoller.close();
     dealerMonitor?.close();
     routerMonitor?.close();
     dealer.close();
@@ -3382,6 +3385,7 @@ test('ZLinkRoutePacketDispatcher invokes routed send and request handlers', asyn
   const remoteDealer = zlink.createDealerSocket(ctx);
   const endpoint = `inproc://route-dispatch-${process.pid}-${Date.now()}`;
   const events = [];
+  const completionPoller = ownCompletions(remoteDealer);
 
   try {
     localRouter.setRoutingId(zlink.RoutingId.from('node-a'));
@@ -3464,6 +3468,7 @@ test('ZLinkRoutePacketDispatcher invokes routed send and request handlers', asyn
     assert.match(events[1], /^request:mesh:RoutePing:ping$/);
     reply.forEach((part) => part.close());
   } finally {
+    completionPoller.close();
     remoteDealer.close();
     localRouter.close();
     ctx.close();
@@ -3959,6 +3964,7 @@ test('ZLinkChannelRequestDispatcher invokes request handler and replies through 
   const filterEvents = [];
   let routerMonitor;
   let dealerMonitor;
+  const completionPoller = ownCompletions(dealer);
 
   try {
     routerMonitor = router.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
@@ -4009,6 +4015,7 @@ test('ZLinkChannelRequestDispatcher invokes request handler and replies through 
     assert.deepEqual(filterEvents, ['before', 'after']);
     received.close();
   } finally {
+    completionPoller.close();
     dealerMonitor?.close();
     routerMonitor?.close();
     dealer.close();

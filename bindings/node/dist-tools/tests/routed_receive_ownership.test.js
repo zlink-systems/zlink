@@ -7,10 +7,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const node_test_1 = __importDefault(require("node:test"));
 const strict_1 = __importDefault(require("node:assert/strict"));
 const zlink = require('@zlink-systems/zlink');
+const completion_poller_1 = require("./completion_poller");
 (0, node_test_1.default)('multipart receive reuse preserves captured reply routes and collection identities', async () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);
     const dealers = [zlink.createDealerSocket(ctx), zlink.createDealerSocket(ctx)];
+    const completions = new completion_poller_1.CompletionPollerDriver(dealers);
     const received = new zlink.Received();
     const saved = [];
     const requests = [];
@@ -43,7 +45,7 @@ const zlink = require('@zlink-systems/zlink');
         strict_1.default.throws(() => router.reply(saved[0].route, {}), TypeError);
         saved[1].reply.submit();
         saved[0].reply.submit();
-        const replies = await Promise.all(requests);
+        const replies = await completions.settle(Promise.all(requests));
         try {
             strict_1.default.deepEqual(replies.map(parts => parts[0].getString()), ['reply-0', 'reply-1']);
         }
@@ -54,6 +56,7 @@ const zlink = require('@zlink-systems/zlink');
         }
     }
     finally {
+        completions.close();
         received.close();
         for (const dealer of dealers)
             dealer.close();

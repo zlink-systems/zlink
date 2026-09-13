@@ -124,11 +124,14 @@ test('WRITABLE returned by the existing sync native bridge also waits for the ow
     },
   };
   try {
+    const publicOwner = {};
+    owner.transferToPublic(publicOwner);
     const send = owner.submitSend(Buffer.from('retained'), null);
     const other = owner.submitRequest(Buffer.from('other'), null, 1000);
     const syncParts = owner.requestSync(Buffer.from('sync'), null, 1000);
     try { assert.equal(syncParts[0].getString(), 'sync reply'); }
     finally { syncParts.forEach((part: any) => part.close()); }
+    owner.drain(publicOwner);
     assert.deepEqual(order, ['other completion', 'NO_DATA', 'resubmit']);
     await send.admitted;
     const otherParts = await other.reply;

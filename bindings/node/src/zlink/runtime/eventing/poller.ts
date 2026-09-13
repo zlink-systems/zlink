@@ -5,7 +5,7 @@ import {
   RecvFlags,
   type PollEventFlagValue,
 } from '../../contracts/sockets/socket_constants';
-import { createError } from '../errors/error_mapping';
+import { createError, isTerminationErrno } from '../errors/error_mapping';
 import {
   closeCall,
   configCall,
@@ -166,7 +166,15 @@ export class Poller {
         timeoutMs | 0
       ) as number;
     } catch (error) {
-      if (isWouldBlock()) {
+      const nativeErrno = readErrno();
+      if (isTerminationErrno(nativeErrno)) {
+        for (const registration of this._socketRegistrations.values()) {
+          if (registration.transferred) {
+            registration.owner!.failPublicWaitTerminated(this, nativeErrno);
+          }
+        }
+      }
+      if (isWouldBlock(nativeErrno)) {
         events.markCombined(0, []);
         return 0;
       }
@@ -223,7 +231,7 @@ export class Poller {
       });
       this._native = null;
       for (const registration of this._socketRegistrations.values()) {
-        if (registration.transferred) registration.owner!.transferToRuntime(this);
+        if (registration.transferred) registration.owner!.releasePublic(this);
       }
     }
     this._socketRegistrations.clear();
@@ -261,7 +269,7 @@ export class Poller {
       this._socketRegistrations.set(socket, registration);
       this._registrationsByToken.set(nativeToken, registration);
     } catch (error) {
-      if (acquired) owner!.transferToRuntime(this);
+      if (acquired) owner!.releasePublic(this);
       throw createError('config', readErrno(), nativeErrorMessage(error, 'poller socket add failed'));
     }
   }
@@ -279,12 +287,12 @@ export class Poller {
         requireNative().pollerModify(this._native, handle, events | 0);
       });
     } catch (error) {
-      if (acquired) registration!.owner.transferToRuntime(this);
+      if (acquired) registration!.owner.releasePublic(this);
       throw error;
     }
     if (registration) {
       if (!shouldTransfer && registration.transferred) {
-        registration.owner!.transferToRuntime(this);
+        registration.owner!.releasePublic(this);
       }
       registration.events = events | 0;
       registration.transferred = shouldTransfer;
@@ -296,7 +304,7 @@ export class Poller {
       requireNative().pollerRemove(this._native, getNativeHandle(socket));
     });
     const registration = this._socketRegistrations.get(socket);
-    if (registration?.transferred) registration.owner!.transferToRuntime(this);
+    if (registration?.transferred) registration.owner!.releasePublic(this);
     this._socketRegistrations.delete(socket);
     if (registration) this._registrationsByToken.delete(registration.nativeToken);
     return true;

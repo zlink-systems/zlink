@@ -115,6 +115,9 @@ test('Node requests and writable send retries use pull completion without callba
   assert.ok(completionOwner.includes('awaitWritable'));
   assert.ok(completionOwner.includes('transferToPublic'));
   assert.ok(completionOwner.includes('socketReadableWatchStart'));
+  assert.equal(completionOwner.includes('runtimeWatch'), false);
+  assert.equal(completionOwner.includes('ensureRuntimeWatch'), false);
+  assert.equal(completionOwner.includes('transferToRuntime'), false);
   assert.equal(completionOwner.includes('COMPLETION_SEND'), false);
   assert.equal(completionOwner.includes('setInterval('), false);
   assert.equal(completionOwner.includes('setTimeout('), false);

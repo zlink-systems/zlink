@@ -4,6 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlink = require('@zlink-systems/zlink');
+const completion_poller_1 = require("./completion_poller");
 function payloads(count) {
     return Array.from({ length: count }, (_, index) => index === 1 ? Buffer.alloc(0) : Buffer.alloc(1024, index));
 }
@@ -47,6 +48,7 @@ test('whole-message REQUEST growth preserves the route, reply token, and indepen
     const context = zlink.createContext();
     const router = zlink.createRouterSocket(context);
     const dealer = zlink.createDealerSocket(context);
+    const completions = new completion_poller_1.CompletionPollerDriver(dealer);
     const received = new zlink.Received();
     const peer = zlink.RoutingId.from(Buffer.from('whole-message-client'));
     try {
@@ -68,7 +70,7 @@ test('whole-message REQUEST growth preserves the route, reply token, and indepen
             reply.submit();
             sent.forEach(part => assert.equal(part.size(), 0));
             received.close();
-            const response = await pending;
+            const response = await completions.settle(pending);
             assert.deepEqual(response.map(part => part.data()), expected);
             response.forEach(part => { part.close(); part.close(); });
             assert.deepEqual(retained.map(part => part.data()), expected);
@@ -82,6 +84,7 @@ test('whole-message REQUEST growth preserves the route, reply token, and indepen
         }
     }
     finally {
+        completions.close();
         received.close();
         dealer.close();
         router.close();

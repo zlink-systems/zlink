@@ -5,6 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlink = require('@zlink-systems/zlink');
+import { CompletionPollerDriver } from './completion_poller';
 
 let sequence = 0;
 
@@ -30,6 +31,7 @@ test('submit result reports immediate SEND and REQUEST admission', async () => {
   const context = zlink.createContext();
   const dealer = zlink.createDealerSocket(context);
   const router = zlink.createRouterSocket(context);
+  const completions = new CompletionPollerDriver(dealer);
   const address = endpoint('immediate');
   router.bind(address);
   dealer.connect(address);
@@ -56,13 +58,14 @@ test('submit result reports immediate SEND and REQUEST admission', async () => {
     received.reply().message('reply').submit();
     received.close();
 
-    const reply = await requested.reply;
+    const reply = await completions.settle<any[]>(requested.reply);
     try {
       assert.equal(reply[0].getString(), 'reply');
     } finally {
       for (const part of reply) part.close();
     }
   } finally {
+    completions.close();
     closeAll(context, dealer, router);
   }
 });

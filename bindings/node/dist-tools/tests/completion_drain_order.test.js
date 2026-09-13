@@ -134,6 +134,8 @@ for (const kind of ['send', 'request']) {
         },
     };
     try {
+        const publicOwner = {};
+        owner.transferToPublic(publicOwner);
         const send = owner.submitSend(Buffer.from('retained'), null);
         const other = owner.submitRequest(Buffer.from('other'), null, 1000);
         const syncParts = owner.requestSync(Buffer.from('sync'), null, 1000);
@@ -143,6 +145,7 @@ for (const kind of ['send', 'request']) {
         finally {
             syncParts.forEach((part) => part.close());
         }
+        owner.drain(publicOwner);
         strict_1.default.deepEqual(order, ['other completion', 'NO_DATA', 'resubmit']);
         await send.admitted;
         const otherParts = await other.reply;

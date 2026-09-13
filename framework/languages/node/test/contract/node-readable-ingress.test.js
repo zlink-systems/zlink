@@ -137,14 +137,13 @@ test('RouteMesh startup fails and closes its socket if readiness registration fa
   assert.equal(f.state.receives, 0);
 });
 
-test('raw binding port delegates registration to the public socket handler', t => {
+test('raw binding port keeps its socket-lifetime event-loop poller on handler replacement', t => {
   const host = new ZLinkNodeRawBindingPort().createHost();
   try {
     const router = host.createRouter();
     const registered = t.mock.method(router.socket, 'setReadableHandler');
     const handler = () => {};
     router.setReadableHandler(handler);
-    assert.equal(registered.mock.callCount(), 1);
-    assert.equal(registered.mock.calls[0].arguments[0], handler);
+    assert.equal(registered.mock.callCount(), 0);
   } finally { host.close(); }
 });
