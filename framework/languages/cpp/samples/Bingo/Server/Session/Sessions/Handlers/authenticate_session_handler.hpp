@@ -28,11 +28,10 @@ class authenticate_session_handler_t
     }
 
     task_t<session_actor_t>
-    handle (session_actor_manager_t &actors, stream_t &stream, const zlink::message_t &payload)
+    handle (session_actor_manager_t &actors, stream_t &stream, const zlink::framework::message_t &payload)
     {
         /* client stream의 payload도 Protobuf다 — JSON으로 파싱하지 않는다. */
-        authenticate_req_t request;
-        zlink::stream_connector::from_stream_payload (payload, request);
+        auto request = payload.decode<authenticate_req_t> ();
         authenticate_player_req_t authenticate_request;
         authenticate_request.set_access_token (request.access_token ());
         auto authenticated =
@@ -62,7 +61,7 @@ class authenticate_session_handler_t
         authenticate_res_t reply_payload;
         reply_payload.set_actor_id (authenticated.actor_id ());
         reply_payload.set_display_name (authenticated.display_name ());
-        const auto reply_message = zlink::stream_connector::to_stream_payload (reply_payload);
+        const auto reply_message = zlink::framework::message_t::from (reply_payload);
         stream.reply_packet (reply_message).async ();
 
         co_return actor;

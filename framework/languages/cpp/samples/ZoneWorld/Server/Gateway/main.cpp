@@ -31,11 +31,11 @@ class game_session_t final : public fw::packet_stream_session_t
 
     fw::task_t<void> on_packet (fw::stream_t &stream,
                                 const fw::session_message_context_t &dispatch,
-                                const zlink::message_t &payload) override
+                                const zlink::framework::message_t &payload) override
     {
         const auto packet = std::string (dispatch.packet_name);
         if (packet == actor_location_probe_req_t::packet_name) {
-            const auto request = payload.parse_json<actor_location_probe_req_t> ();
+            const auto request = payload.decode<actor_location_probe_req_t> ();
             actor_location_probe_res_t response;
             try {
                 response =
@@ -45,11 +45,11 @@ class game_session_t final : public fw::packet_stream_session_t
             catch (const fw::framework_exception_t &) {
                 response = {request.actor_id, 0, {}, errors_t::not_found};
             }
-            stream.reply_packet (zlink::message_t::from_json (response)).async ();
+            stream.reply_packet (zlink::framework::message_t::from (response)).async ();
             co_return;
         }
         if (packet == fresh_actor_probe_req_t::packet_name) {
-            const auto request = payload.parse_json<fresh_actor_probe_req_t> ();
+            const auto request = payload.decode<fresh_actor_probe_req_t> ();
             try {
                 auto &actors = stream.actors ();
                 auto located = actors.get_or_create (names_t::player_actor, request.actor_id);
@@ -62,14 +62,14 @@ class game_session_t final : public fw::packet_stream_session_t
                                                   actor_location_probe_req_t{request.actor_id})
                                         .async<actor_location_probe_res_t> ();
                 stream
-                  .reply_packet (zlink::message_t::from_json (
+                  .reply_packet (zlink::framework::message_t::from (
                     fresh_actor_probe_res_t{observed.actor_id, observed.object_generation,
                                             observed.owner_node_rid, observed.error}))
                   .async ();
             }
             catch (const fw::framework_exception_t &error) {
                 stream
-                  .reply_packet (zlink::message_t::from_json (fresh_actor_probe_res_t{
+                  .reply_packet (zlink::framework::message_t::from (fresh_actor_probe_res_t{
                     request.actor_id,
                     0,
                     {},
@@ -81,16 +81,16 @@ class game_session_t final : public fw::packet_stream_session_t
             co_return;
         }
         if (packet == message_follow_probe_req_t::packet_name) {
-            const auto request = payload.parse_json<message_follow_probe_req_t> ();
+            const auto request = payload.decode<message_follow_probe_req_t> ();
             try {
                 const auto reply =
                   co_await _actor_client.request (fw::actor_id_t (request.actor_id), request)
                     .async<message_follow_probe_res_t> ();
-                stream.reply_packet (zlink::message_t::from_json (reply)).async ();
+                stream.reply_packet (zlink::framework::message_t::from (reply)).async ();
             }
             catch (const fw::framework_exception_t &error) {
                 stream
-                  .reply_packet (zlink::message_t::from_json (message_follow_probe_res_t{
+                  .reply_packet (zlink::framework::message_t::from (message_follow_probe_res_t{
                     request.probe_id,
                     {},
                     error.kind () == fw::framework_error_kind_t::deadline_exceeded
@@ -101,7 +101,7 @@ class game_session_t final : public fw::packet_stream_session_t
             co_return;
         }
         if (packet == message_follow_probe_msg_t::packet_name) {
-            const auto message = payload.parse_json<message_follow_probe_msg_t> ();
+            const auto message = payload.decode<message_follow_probe_msg_t> ();
             try {
                 co_await _actor_client.send (fw::actor_id_t (message.actor_id), message).async ();
             }
@@ -114,7 +114,7 @@ class game_session_t final : public fw::packet_stream_session_t
             if (packet != join_world_req_t::packet_name)
                 throw fw::framework_exception_t (fw::framework_error_kind_t::protocol_error,
                                                  "JoinWorldReq must be the first game packet");
-            const auto request = payload.parse_json<join_world_req_t> ();
+            const auto request = payload.decode<join_world_req_t> ();
             auto &actors = stream.actors ();
             auto located = actors.get_or_create (names_t::player_actor, request.player_id);
             if (!located)

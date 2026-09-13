@@ -26,7 +26,7 @@ class push_bound_session_handler_t
               "push actor route was not found");
         }
         auto reply =
-          actor->relay_request ("PushReq", zlink::message_t::from_json (request.push))
+          actor->relay_request ("PushReq", zlink::framework::message_t::from (request.push))
             .async ()
             .result ();
         if (!reply) {
@@ -37,13 +37,13 @@ class push_bound_session_handler_t
 
         zlink::framework::http_response_t response;
         try {
-            response.body = nlohmann::json (reply.value ().parse_json<e2e::actor_push_res_t> ()).dump ();
+            response.body = nlohmann::json (reply.value ().decode<e2e::actor_push_res_t> ()).dump ();
         }
         catch (const std::exception &error) {
             throw zlink::framework::framework_exception_t (
               zlink::framework::framework_error_kind_t::protocol_error,
               std::string ("PushReq reply decode failed: ") + error.what ()
-                + " body=" + reply.value ().to_string ());
+                + " body=" + reply.value ().decode<nlohmann::json> ().dump ());
         }
         return response;
     }

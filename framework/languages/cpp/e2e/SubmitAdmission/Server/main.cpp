@@ -1054,11 +1054,11 @@ class submit_admission_stream_session_t final :
     zlink::framework::task_t<void> on_packet (
       zlink::framework::stream_t &stream,
       const zlink::framework::session_message_context_t &dispatch,
-      const zlink::message_t &payload) override
+      const zlink::framework::message_t &payload) override
     {
         const auto packet_name = std::string (dispatch.packet_name);
         if (packet_name == sa::actor_bind_req_t::packet_name) {
-            const auto target = payload.parse_json<sa::actor_bind_req_t> ();
+            const auto target = payload.decode<sa::actor_bind_req_t> ();
             zlink::framework::actor_ref_t ref (
               zlink::framework::actor_id_t (target.actor_id), target.generation,
               sa::mesh_name,
@@ -1066,7 +1066,7 @@ class submit_admission_stream_session_t final :
             auto bound = co_await _actors.bind_or_get (std::move (ref)).async ();
             const auto &bound_ref = bound.ref ();
             stream
-              .reply_packet (zlink::message_t::from_json (sa::actor_bind_res_t{
+              .reply_packet (zlink::framework::message_t::from (sa::actor_bind_res_t{
                 .operation_id = target.operation_id,
                 .actor_id = std::string (bound_ref.actor_id ().value ()),
                 .node_rid = std::string (bound_ref.node_rid ().value ()),
@@ -1075,7 +1075,7 @@ class submit_admission_stream_session_t final :
             co_return;
         }
         if (packet_name == sa::actor_relay_req_t::packet_name) {
-            const auto request = payload.parse_json<sa::actor_relay_req_t> ();
+            const auto request = payload.decode<sa::actor_relay_req_t> ();
             auto actor = _actors.find (request.actor_id);
             if (!actor) {
                 throw zlink::framework::framework_exception_t (
@@ -1084,9 +1084,9 @@ class submit_admission_stream_session_t final :
             }
             co_await actor->relay (
               sa::admission_msg_t::packet_name,
-              zlink::message_t::from_json (request.message));
+              zlink::framework::message_t::from (request.message));
             stream
-              .reply_packet (zlink::message_t::from_json (
+              .reply_packet (zlink::framework::message_t::from (
                 sa::admission_res_t{.operation_id = request.message.operation_id,
                                       .status = "Submitted",
                                       .public_invocation_count = 1,
@@ -1095,8 +1095,8 @@ class submit_admission_stream_session_t final :
             co_return;
         }
         if (packet_name == "AdmissionNoTokenMsg") {
-            const auto message = payload.parse_json<sa::admission_msg_t> ();
-            auto invalid = stream.reply_packet (zlink::message_t::from_json (
+            const auto message = payload.decode<sa::admission_msg_t> ();
+            auto invalid = stream.reply_packet (zlink::framework::message_t::from (
               sa::admission_res_t{.operation_id = message.operation_id,
                                   .status = "UnexpectedReply",
                                   .public_invocation_count = 1,
@@ -1109,14 +1109,14 @@ class submit_admission_stream_session_t final :
         if (!dispatch.can_reply) {
             co_return;
         }
-        const auto message = payload.parse_json<sa::admission_req_t> ();
+        const auto message = payload.decode<sa::admission_req_t> ();
         const auto response = sa::admission_res_t{
           .operation_id = message.operation_id,
           .status = "ReplyObserved",
           .public_invocation_count = 1,
           .terminal_count = 1};
         if (packet_name == "AdmissionSequentialReq") {
-            auto reply = stream.reply_packet (zlink::message_t::from_json (response));
+            auto reply = stream.reply_packet (zlink::framework::message_t::from (response));
             std::vector<std::string> terminals;
             terminals.push_back (stream_terminal (reply.async ().result ()));
             terminals.push_back (stream_terminal (reply.async ().result ()));
@@ -1126,8 +1126,8 @@ class submit_admission_stream_session_t final :
         if (packet_name != "AdmissionConcurrentReq") {
             co_return;
         }
-        auto first = stream.reply_packet (zlink::message_t::from_json (response));
-        auto second = stream.reply_packet (zlink::message_t::from_json (response));
+        auto first = stream.reply_packet (zlink::framework::message_t::from (response));
+        auto second = stream.reply_packet (zlink::framework::message_t::from (response));
         std::barrier start (3);
         std::vector<std::string> terminals (2);
         std::thread first_submit ([&] {
@@ -1168,7 +1168,7 @@ class stream_send_handler_t
               "STREAM peer is not connected");
         }
         auto operation = stream->write_packet (
-          zlink::message_t::from_json (as_msg (message)));
+          zlink::framework::message_t::from (as_msg (message)));
         operation.packet_name (sa::admission_msg_t::packet_name);
         return response_after_submit (message.operation_id, operation.async ());
     }
@@ -1210,7 +1210,7 @@ class stream_backpressure_handler_t
             return {.status = 400,
                     .body = R"({"error":"backpressure parameters are out of range"})"};
         }
-        const auto message = zlink::message_t::from_json (
+        const auto message = zlink::framework::message_t::from (
           sa::admission_msg_t{.operation_id = "stream-timeout-load",
                                   .sequence = 1,
                                   .payload = std::string (payload_bytes, 'x')});

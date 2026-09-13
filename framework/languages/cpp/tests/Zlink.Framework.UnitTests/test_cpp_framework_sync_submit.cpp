@@ -381,19 +381,23 @@ TEST (ZLinkFrameworkSyncSubmit, ChannelRequestWaitsForTypedApplicationReply)
 
 TEST (ZLinkFrameworkSyncSubmit, StreamSendWaitsForAdmission)
 {
-    detail::stream_runtime_t runtime (std::make_shared<detail::stream_runtime_state_t> ());
-    stream_t stream;
+    serializer_registry_t serializers;
+    zlink_builder_t builder;
+    builder.stream ("sync").register_session ("session");
+    detail::bind_stream_serializers (builder, serializers);
+    auto runtime = detail::stream_runtime_t::from (builder);
+    auto stream = runtime.open_session ("sync");
     detail::task_completion_source_t<void> admitted;
     std::promise<void> submitted;
     runtime.attach_transport_writer (
       stream, [&] (const auto &header, const auto &payload, auto timeout) {
           EXPECT_EQ ("sync-packet", header.packet_name ());
-          EXPECT_EQ ("payload", payload.to_string ());
+          EXPECT_EQ ("\"payload\"", payload.to_string ());
           EXPECT_EQ (250ms, timeout);
           submitted.set_value ();
           return admitted.task ();
       });
-    auto call = stream.write_packet (zlink::message_t::from (std::string ("payload")));
+    auto call = stream.write_packet (message_t::from (std::string ("payload")));
     call.packet_name ("sync-packet").timeout (250ms);
     auto result = std::async (std::launch::async, [&] { call.submit (); });
     submitted.get_future ().wait ();
@@ -404,15 +408,19 @@ TEST (ZLinkFrameworkSyncSubmit, StreamSendWaitsForAdmission)
 
 TEST (ZLinkFrameworkSyncSubmit, StreamSendPropagatesDeferredAdmissionFailure)
 {
-    detail::stream_runtime_t runtime (std::make_shared<detail::stream_runtime_state_t> ());
-    stream_t stream;
+    serializer_registry_t serializers;
+    zlink_builder_t builder;
+    builder.stream ("sync").register_session ("session");
+    detail::bind_stream_serializers (builder, serializers);
+    auto runtime = detail::stream_runtime_t::from (builder);
+    auto stream = runtime.open_session ("sync");
     detail::task_completion_source_t<void> admitted;
     std::promise<void> submitted;
     runtime.attach_transport_writer (stream, [&] (const auto &, const auto &, auto) {
         submitted.set_value ();
         return admitted.task ();
     });
-    auto call = stream.write_packet (zlink::message_t::from (std::string ("payload")));
+    auto call = stream.write_packet (message_t::from (std::string ("payload")));
     auto result = std::async (std::launch::async, [&] { call.submit (); });
     submitted.get_future ().wait ();
     admitted.complete (result_t<void>::failure (
@@ -438,7 +446,7 @@ class reply_session_t final : public packet_stream_session_t
 
     task_t<void> on_packet (stream_t &stream,
                             const session_message_context_t &,
-                            const zlink::message_t &payload) override
+                            const zlink::framework::message_t &payload) override
     {
         reply.emplace (stream.reply_packet (payload));
         expect_invalid_operation ([&] { reply->submit (); });
@@ -453,8 +461,12 @@ TEST (ZLinkFrameworkSyncSubmit, SessionHandlerRejectionPreservesReplyAdmission)
         dispatch_executor_scope_t () { detail::configure_stream_dispatch_executor (); }
         ~dispatch_executor_scope_t () { detail::shutdown_stream_dispatch_executor (); }
     } dispatch_executor_scope;
-    detail::stream_runtime_t runtime (std::make_shared<detail::stream_runtime_state_t> ());
-    stream_t stream;
+    serializer_registry_t serializers;
+    zlink_builder_t builder;
+    builder.stream ("sync").register_session ("session");
+    detail::bind_stream_serializers (builder, serializers);
+    auto runtime = detail::stream_runtime_t::from (builder);
+    auto stream = runtime.open_session ("sync");
     reply_session_t session;
     detail::task_completion_source_t<void> admitted;
     std::promise<void> submitted;

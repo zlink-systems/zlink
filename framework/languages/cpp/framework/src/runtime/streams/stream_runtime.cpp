@@ -409,7 +409,7 @@ task_t<void> dispatch_packet_session (
   stream_t stream,
   std::shared_ptr<stream_header_t> header,
   std::shared_ptr<session_message_context_t> context,
-  std::shared_ptr<zlink::message_t> payload)
+  std::shared_ptr<message_t> payload)
 {
     auto task = [&] {
         const stream_relay_dispatch_scope_t relay_scope (*header);
@@ -795,14 +795,25 @@ stream_submitter (std::shared_ptr<detail::stream_state_t> state)
 
 } // namespace
 
-stream_send_call_t stream_t::write_packet (const zlink::message_t &payload)
+stream_send_call_t stream_t::write_packet (const message_t &payload)
 {
-    stream_header_t header (stream_message_kind_t::send,
-                            _state->application_codec.load (
-                              std::memory_order_acquire),
-                            stream_header_flags_t::none, std::nullopt, "", {});
-    return stream_send_call_t (std::move (header), payload, _state->compression_codec,
-                               stream_submitter (_state));
+    if (!_state->serializers) {
+        return stream_send_call_t (result_t<void>::failure (
+          framework_error_kind_t::protocol_error, "STREAM write requires a serializer registry"));
+    }
+    try {
+        const auto codec = payload.encoded ()
+          ? _state->application_codec.load (std::memory_order_acquire)
+          : detail::stream_codec_from_content_type (_state->serializers->content_type (payload._type));
+        stream_header_t header (stream_message_kind_t::send, codec,
+                                stream_header_flags_t::none, std::nullopt, payload._packet_name, {});
+        return stream_send_call_t (std::move (header),
+          detail::message_to_raw (payload, *_state->serializers), _state->compression_codec,
+          stream_submitter (_state));
+    }
+    catch (const framework_exception_t &error) {
+        return stream_send_call_t (detail::result_access_t::failure<void> (error));
+    }
 }
 
 stream_write_call_t stream_t::write_packet_with_header (detail::stream_header_t header,
@@ -824,7 +835,7 @@ stream_write_call_t stream_t::write_packet_with_header (detail::stream_header_t 
       stream_submitter (_state));
 }
 
-stream_write_call_t stream_t::reply_packet (const zlink::message_t &payload)
+stream_write_call_t stream_t::reply_packet (const message_t &payload)
 {
     const auto request_header = _reply_header;
     if (!request_header) {
@@ -837,15 +848,26 @@ stream_write_call_t stream_t::reply_packet (const zlink::message_t &payload)
           result_t<void>::failure (framework_error_kind_t::protocol_error,
                                    "STREAM reply requires request sequence"));
     }
-    stream_header_t reply_header (stream_message_kind_t::response, request_header->codec (),
-                                  stream_header_flags_t::has_request_seq,
-                                  request_header->request_seq (), "", {});
-    if (auto correlation = request_header->correlation_id ()) {
-        reply_header.with_correlation_id (std::string (*correlation));
+    if (!_state->serializers) {
+        return stream_write_call_t (result_t<void>::failure (
+          framework_error_kind_t::protocol_error, "STREAM reply requires a serializer registry"));
     }
-    auto call = write_packet_with_header (std::move (reply_header), payload);
-    call._state->reply_submission (_reply_submission);
-    return call;
+    try {
+        stream_header_t reply_header (stream_message_kind_t::response, payload.encoded () ? request_header->codec ()
+          : detail::stream_codec_from_content_type (_state->serializers->content_type (payload._type)),
+                                      stream_header_flags_t::has_request_seq,
+                                      request_header->request_seq (), "", {});
+        if (auto correlation = request_header->correlation_id ()) {
+            reply_header.with_correlation_id (std::string (*correlation));
+        }
+        auto call = write_packet_with_header (std::move (reply_header),
+          detail::message_to_raw (payload, *_state->serializers));
+        call._state->reply_submission (_reply_submission);
+        return call;
+    }
+    catch (const framework_exception_t &error) {
+        return stream_write_call_t (detail::result_access_t::failure<void> (error));
+    }
 }
 
 stream_builder_t::stream_builder_t () :
@@ -1683,7 +1705,8 @@ result_t<void> stream_runtime_t::dispatch_packet (packet_stream_session_t &sessi
     dispatch_context->packet_name = std::string (header.packet_name ());
     dispatch_context->metadata = message_metadata_t (header.metadata ().values ());
     dispatch_context->can_reply = header.request_seq ().has_value ();
-    auto dispatch_payload = std::make_shared<zlink::message_t> (std::move (handler_payload));
+    auto dispatch_payload = std::make_shared<message_t> (
+      message_t::from_raw (std::move (handler_payload), _state->serializers));
     return dispatch_application (
       stream, "packet:" + std::string (header.packet_name ()),
       [session = &session, dispatch_stream = std::move (dispatch_stream),
@@ -1764,7 +1787,8 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
     dispatch_context->packet_name = std::string (header.packet_name ());
     dispatch_context->metadata = message_metadata_t (header.metadata ().values ());
     dispatch_context->can_reply = header.request_seq ().has_value ();
-    auto dispatch_payload = std::make_shared<zlink::message_t> (std::move (handler_payload));
+    auto dispatch_payload = std::make_shared<message_t> (
+      message_t::from_raw (std::move (handler_payload), _state->serializers));
     return dispatch_application_async (
       stream, "packet:" + std::string (header.packet_name ()),
       [session = &session, dispatch_stream = std::move (dispatch_stream),

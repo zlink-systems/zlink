@@ -409,6 +409,14 @@ class actor_gateway_runtime_t
     void trace_bound_session_send_stage (const std::string &actor_id,
                                          std::string_view stage,
                                          std::string_view result = {}) const;
+    static task_t<message_t> complete_session_actor_relay_request (
+      std::shared_ptr<actor_gateway_state_t> state,
+      actor_gateway_state_t::relay_dispatcher_t dispatcher,
+      actor_ref_t actor,
+      actor_context_t actor_context,
+      stream_header_t relay_header,
+      zlink::message_t payload,
+      std::optional<bound_session_relay_source_t> relay_source);
     void bind_serializers (serializer_registry_t &serializers);
     void set_dispatch (dispatch_options_t options);
 

@@ -62,7 +62,7 @@ class ops_console_registry_t
         writes.reserve (streams.size ());
         for (auto &stream : streams) {
             try {
-                writes.push_back (stream.write_packet (zlink::message_t::from_json (message))
+                writes.push_back (stream.write_packet (zlink::framework::message_t::from (message))
                                     .packet_name (T::packet_name)
                                     .timeout (std::chrono::seconds (2))
                                     .async ());
@@ -369,30 +369,30 @@ class ops_session_t final : public fw::packet_stream_session_t
 
     fw::task_t<void> on_packet (fw::stream_t &stream,
                                 const fw::session_message_context_t &dispatch,
-                                const zlink::message_t &payload) override
+                                const zlink::framework::message_t &payload) override
     {
         const auto packet = std::string (dispatch.packet_name);
         if (packet == watch_nodes_req_t::packet_name) {
-            stream.reply_packet (zlink::message_t::from_json (watch_nodes_res_t{_state.nodes ()}))
+            stream.reply_packet (zlink::framework::message_t::from (watch_nodes_res_t{_state.nodes ()}))
               .async ();
             co_return;
         }
         if (packet == relocation_pair_req_t::packet_name) {
-            stream.reply_packet (zlink::message_t::from_json (_state.relocation_pair ())).async ();
+            stream.reply_packet (zlink::framework::message_t::from (_state.relocation_pair ())).async ();
             co_return;
         }
         if (packet == announce_world_req_t::packet_name) {
-            const auto request = payload.parse_json<announce_world_req_t> ();
+            const auto request = payload.decode<announce_world_req_t> ();
             const auto id = "announce-" + std::to_string (++_announcement);
             co_await _publisher
               .publish (names_t::broadcast_channel, names_t::announce_topic,
                         world_announce_event_t{id, request.text})
               .async ();
-            stream.reply_packet (zlink::message_t::from_json (announce_world_res_t{id})).async ();
+            stream.reply_packet (zlink::framework::message_t::from (announce_world_res_t{id})).async ();
             co_return;
         }
         if (packet == set_maintenance_req_t::packet_name) {
-            const auto request = payload.parse_json<set_maintenance_req_t> ();
+            const auto request = payload.decode<set_maintenance_req_t> ();
             try {
                 _maintenance.write (request.node_id, request.enabled);
                 const auto applied = co_await _routes
@@ -408,13 +408,13 @@ class ops_session_t final : public fw::packet_stream_session_t
                 if (const auto changed = _state.set_maintenance (request.node_id, request.enabled))
                     co_await _consoles.publish (*changed);
                 stream
-                  .reply_packet (zlink::message_t::from_json (set_maintenance_res_t{
+                  .reply_packet (zlink::framework::message_t::from (set_maintenance_res_t{
                     applied.node_id, applied.enabled, applied.zones, std::nullopt}))
                   .async ();
             }
             catch (const fw::framework_exception_t &error) {
                 stream
-                  .reply_packet (zlink::message_t::from_json (set_maintenance_res_t{
+                  .reply_packet (zlink::framework::message_t::from (set_maintenance_res_t{
                     request.node_id,
                     request.enabled,
                     {},
@@ -426,7 +426,7 @@ class ops_session_t final : public fw::packet_stream_session_t
             co_return;
         }
         if (packet == node_diagnostics_req_t::packet_name) {
-            const auto request = payload.parse_json<node_diagnostics_req_t> ();
+            const auto request = payload.decode<node_diagnostics_req_t> ();
             try {
                 const auto result =
                   co_await _routes
@@ -435,14 +435,14 @@ class ops_session_t final : public fw::packet_stream_session_t
                     .timeout (std::chrono::seconds (10))
                     .async<get_node_diagnostics_res_t> ();
                 stream
-                  .reply_packet (zlink::message_t::from_json (
+                  .reply_packet (zlink::framework::message_t::from (
                     node_diagnostics_res_t{result.node_id, result.zones, result.player_count,
                                            result.maintenance, std::nullopt}))
                   .async ();
             }
             catch (const fw::framework_exception_t &) {
                 stream
-                  .reply_packet (zlink::message_t::from_json (
+                  .reply_packet (zlink::framework::message_t::from (
                     node_diagnostics_res_t{request.node_id, {}, 0, false, errors_t::unavailable}))
                   .async ();
             }

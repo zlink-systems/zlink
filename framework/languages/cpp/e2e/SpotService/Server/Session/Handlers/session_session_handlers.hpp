@@ -44,7 +44,7 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
     {
         _state.record ("ActorBindingReplacedCallback", actor_id, {}, "started");
         auto notice = stream.write_packet (
-          zlink::message_t::from_json (
+          zlink::framework::message_t::from (
             e2e::actor_push_notify_t{actor_id, "duplicate-session", 0}));
         notice.packet_name ("ActorBindingReplacedNotify");
         co_await notice.async ();
@@ -61,10 +61,10 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
     zlink::framework::task_t<void> on_packet (
       zlink::framework::stream_t &stream,
       const zlink::framework::session_message_context_t &dispatch,
-      const zlink::message_t &payload) override
+      const zlink::framework::message_t &payload) override
     {
         if (dispatch.packet_name == "StreamAuthReq") {
-            auto request = payload.parse_json<e2e::stream_auth_req_t> ();
+            auto request = payload.decode<e2e::stream_auth_req_t> ();
             if (request.actor.actor_id.empty () || request.actor.actor_type.empty ()
                 || (request.target_node_rid != "play-a" && request.target_node_rid != "play-b")) {
                 _state.record ("StreamAuthFailed", request.actor_id, {}, request.target_node_rid);
@@ -95,14 +95,14 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
             }
               stream
                 .reply_packet (
-                  zlink::message_t::from_json (
+                  zlink::framework::message_t::from (
                     e2e::stream_auth_res_t{request.actor, _state.node_rid}))
                 .async ();
             _state.record ("StreamAuthReplied", actor_id, {}, request.target_node_rid);
             co_return;
         }
         if (dispatch.packet_name == "StreamEnsureAuthReq") {
-            auto request = payload.parse_json<e2e::stream_ensure_auth_req_t> ();
+            auto request = payload.decode<e2e::stream_ensure_auth_req_t> ();
             if (request.target_node_rid != "play-a" && request.target_node_rid != "play-b") {
                 _state.record ("StreamAuthFailed", request.actor_id, {}, request.target_node_rid);
                 throw zlink::framework::framework_exception_t (
@@ -143,7 +143,7 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
             }
               stream
                 .reply_packet (
-                  zlink::message_t::from_json (
+                  zlink::framework::message_t::from (
                     e2e::stream_auth_res_t{ensured.actor, _state.node_rid}))
                 .async ();
             co_return;
@@ -158,7 +158,7 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
         if (dispatch.can_reply) {
             auto reply = co_await actor.value ().relay_request (payload).async ();
             if (dispatch.packet_name == "JoinReq") {
-                const auto joined = reply.parse_json<e2e::join_res_t> ();
+                const auto joined = reply.decode<e2e::join_res_t> ();
                 auto rebound_result =
                   _actors.bind_or_get (to_actor_ref (joined.actor)).async ().result ();
                 if (!rebound_result) {
