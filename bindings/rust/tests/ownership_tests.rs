@@ -204,7 +204,7 @@ fn request_future_preserves_more_than_1024_reply_parts() {
     let router = ctx.router_socket().unwrap();
     router.bind("inproc://own-request-many-parts").unwrap();
 
-    let (_dealer, _, future, request) = test_support::request_until_received(
+    let (_dealer, _completion_driver, _, future, request) = test_support::request_until_received(
         &ctx,
         &router,
         "inproc://own-request-many-parts",

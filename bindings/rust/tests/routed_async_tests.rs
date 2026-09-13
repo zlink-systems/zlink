@@ -96,6 +96,45 @@ fn inline_admission_resolves_the_future_on_its_first_poll() {
 }
 
 #[test]
+fn ownerless_backpressured_send_fails_fast() {
+    let ctx = Context::new().unwrap();
+    ctx.options().set_auto_hwm_enabled(false).unwrap();
+    let receiver = ctx.pair_socket().unwrap();
+    let sender = ctx.pair_socket().unwrap();
+    sender
+        .common_options()
+        .set_send_high_water_mark(RECORD_HWM)
+        .unwrap();
+    receiver
+        .common_options()
+        .set_receive_high_water_mark(RECORD_HWM)
+        .unwrap();
+    receiver.bind("inproc://rust-ownerless-send").unwrap();
+    sender.connect("inproc://rust-ownerless-send").unwrap();
+    sender
+        .send()
+        .message(Message::try_from(b"ready").unwrap())
+        .submit_sync()
+        .unwrap();
+    let mut received = Received::empty();
+    assert!(receiver.recv(&mut received, RecvFlags::NONE).unwrap());
+
+    let error = (0..64)
+        .find_map(
+            |_| match sender.send().message(large_filler(b'o')).submit() {
+                Ok(submission) => {
+                    assert_eq!(submission.result, SubmitResult::Ok);
+                    test_support::block_on(submission.admitted).unwrap();
+                    None
+                }
+                Err(error) => Some(error),
+            },
+        )
+        .expect("test target did not reach ownerless backpressure");
+    assert_eq!(error.code(), SubmitResult::InvalidState);
+}
+
+#[test]
 fn public_poller_drains_writable_and_retries_the_same_packet() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
@@ -136,6 +175,12 @@ fn public_poller_drains_writable_and_retries_the_same_packet() {
     assert!(receiver.recv(&mut handshake, RecvFlags::NONE).unwrap());
     assert_eq!(handshake.single_part().unwrap().as_bytes(), b"ready");
 
+    let poller = Poller::new().unwrap();
+    poller
+        .add_socket(&sender, POLLOUT | POLLCOMPLETION, 41)
+        .unwrap();
+    let mut events = [PollEvent::default()];
+
     let mut admitted = Vec::new();
     let mut waiting = None;
     for index in 0..512usize {
@@ -164,13 +209,6 @@ fn public_poller_drains_writable_and_retries_the_same_packet() {
     );
     let (waiting_header, waiting_body, mut waiting) = waiting.expect("HWM produced no wait token");
 
-    // Transfer completion-queue ownership only after backpressure so an
-    // initial writable edge cannot be mistaken for this token's WRITABLE.
-    let poller = Poller::new().unwrap();
-    poller
-        .add_socket(&sender, POLLOUT | POLLCOMPLETION, 41)
-        .unwrap();
-    let mut events = [PollEvent::default()];
     assert_eq!(poller.wait(&mut events, 0).unwrap(), 0);
 
     let mut received = Received::empty();
@@ -282,6 +320,12 @@ fn request_backpressure_retries_after_its_writable_then_receives_reply() {
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
 
+    let poller = Poller::new().unwrap();
+    poller
+        .add_socket(&dealer, POLLOUT | POLLCOMPLETION, 51)
+        .unwrap();
+    let mut events = [PollEvent::default()];
+
     let mut first = request_stage(
         dealer
             .request()
@@ -298,12 +342,6 @@ fn request_backpressure_retries_after_its_writable_then_receives_reply() {
     );
     assert!(test_support::poll_once(&mut first).is_pending());
     assert!(test_support::poll_once(&mut retry).is_pending());
-
-    let poller = Poller::new().unwrap();
-    poller
-        .add_socket(&dealer, POLLOUT | POLLCOMPLETION, 51)
-        .unwrap();
-    let mut events = [PollEvent::default()];
 
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
     assert_eq!(received.parts()[0].as_bytes()[0], b'a');
@@ -336,7 +374,7 @@ fn request_backpressure_retries_after_its_writable_then_receives_reply() {
 }
 
 #[test]
-fn backpressured_request_resumes_from_runtime_owner_without_repolling() {
+fn backpressured_request_resumes_from_public_owner_without_repolling() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
     let router = ctx.router_socket().unwrap();
@@ -354,10 +392,10 @@ fn backpressured_request_resumes_from_runtime_owner_without_repolling() {
         .set_receive_timeout(Duration::from_secs(5))
         .unwrap();
     router
-        .bind("inproc://rust-request-writable-runtime-owner")
+        .bind("inproc://rust-request-writable-public-owner")
         .unwrap();
     dealer
-        .connect("inproc://rust-request-writable-runtime-owner")
+        .connect("inproc://rust-request-writable-public-owner")
         .unwrap();
     dealer
         .send()
@@ -366,6 +404,7 @@ fn backpressured_request_resumes_from_runtime_owner_without_repolling() {
         .unwrap();
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
 
     let mut first = request_stage(
         dealer
@@ -400,15 +439,15 @@ fn backpressured_request_resumes_from_runtime_owner_without_repolling() {
     assert_eq!(received.parts()[0].as_bytes()[0], b'b');
     received
         .reply()
-        .message(Message::try_from(b"runtime-reply").unwrap())
+        .message(Message::try_from(b"public-reply").unwrap())
         .submit()
         .unwrap();
 
     let reply = done_rx
         .recv_timeout(Duration::from_secs(5))
-        .expect("runtime owner did not resume the request")
+        .expect("public owner did not resume the request")
         .unwrap();
-    assert_eq!(reply[0].as_bytes(), b"runtime-reply");
+    assert_eq!(reply[0].as_bytes(), b"public-reply");
     waiter.join().unwrap();
     assert!(matches!(
         test_support::poll_once(&mut first),
@@ -435,6 +474,12 @@ fn request_connect_before_bind_waits_for_writable_without_sleep() {
         .connect("inproc://rust-request-connect-before-bind")
         .unwrap();
 
+    let poller = Poller::new().unwrap();
+    poller
+        .add_socket(&dealer, POLLOUT | POLLCOMPLETION, 52)
+        .unwrap();
+    let mut events = [PollEvent::default()];
+
     let mut request = request_stage(
         dealer
             .request()
@@ -444,11 +489,6 @@ fn request_connect_before_bind_waits_for_writable_without_sleep() {
     );
     assert!(test_support::poll_once(&mut request).is_pending());
 
-    let poller = Poller::new().unwrap();
-    poller
-        .add_socket(&dealer, POLLOUT | POLLCOMPLETION, 52)
-        .unwrap();
-    let mut events = [PollEvent::default()];
     router
         .bind("inproc://rust-request-connect-before-bind")
         .unwrap();
@@ -476,6 +516,7 @@ fn closing_a_socket_cleans_up_a_request_wait_token() {
     let mut dealer = ctx.dealer_socket().unwrap();
     dealer.common_options().set_immediate(true).unwrap();
     dealer.connect("inproc://rust-request-token-close").unwrap();
+    let completion_driver = test_support::CompletionPollerDriver::new(&dealer);
     let mut request = request_stage(
         dealer
             .request()
@@ -486,6 +527,7 @@ fn closing_a_socket_cleans_up_a_request_wait_token() {
     assert!(test_support::poll_once(&mut request).is_pending());
 
     dealer.close().unwrap();
+    drop(completion_driver);
     let error = match test_support::block_on(request) {
         Ok(_) => panic!("closed request must fail"),
         Err(error) => error,
@@ -528,6 +570,12 @@ fn request_and_send_wait_tokens_share_the_completion_lane() {
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
 
+    let poller = Poller::new().unwrap();
+    poller
+        .add_socket(&dealer, POLLOUT | POLLCOMPLETION, 53)
+        .unwrap();
+    let mut events = [PollEvent::default()];
+
     for marker in *b"12" {
         let result = test_support::block_on(send_stage(
             dealer.send().message(large_filler(marker)).submit(),
@@ -545,11 +593,6 @@ fn request_and_send_wait_tokens_share_the_completion_lane() {
     assert!(test_support::poll_once(&mut request).is_pending());
     assert!(test_support::poll_once(&mut send).is_pending());
 
-    let poller = Poller::new().unwrap();
-    poller
-        .add_socket(&dealer, POLLOUT | POLLCOMPLETION, 53)
-        .unwrap();
-    let mut events = [PollEvent::default()];
     for marker in *b"12" {
         assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
         assert_eq!(received.parts()[0].as_bytes()[0], marker);
@@ -594,6 +637,7 @@ fn dropping_a_pending_send_future_detaches_the_waiter() {
             .connect("inproc://rust-send-complete-cancel")
             .unwrap()
     });
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
 
     let pending = saturate(|| send_stage(dealer.send().message(large_filler(b'd')).submit()));
     assert!(!pending.is_empty(), "test target did not reach HWM");
@@ -637,6 +681,7 @@ fn dropped_send_tokens_do_not_starve_an_existing_request() {
         .unwrap();
     let mut ready = Received::empty();
     assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
 
     let request = request_stage(
         dealer
@@ -687,6 +732,7 @@ fn closing_a_socket_completes_its_pending_send_once() {
     test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
         dealer.connect("inproc://rust-routed-async-close").unwrap()
     });
+    let completion_driver = test_support::CompletionPollerDriver::new(&dealer);
 
     let filler = saturate(|| send_stage(dealer.send().message(large_filler(b'c')).submit()));
     assert!(!filler.is_empty(), "test target did not reach HWM");
@@ -706,6 +752,7 @@ fn closing_a_socket_completes_its_pending_send_once() {
     assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
 
     dealer.close().unwrap();
+    drop(completion_driver);
     let outcome = done_rx
         .recv_timeout(Duration::from_secs(3))
         .expect("close did not complete the pending send");
@@ -751,6 +798,7 @@ fn blocked_router_target_does_not_delay_another_target() {
             .connect("inproc://rust-routed-async-targets")
             .unwrap()
     });
+    let _completion_driver = test_support::CompletionPollerDriver::new(&router);
 
     let blocked_a =
         saturate(|| send_stage(router.send(&rid_a).message(large_filler(b'a')).submit()));
@@ -808,6 +856,7 @@ fn request_timeout_is_owned_by_core() {
         .unwrap();
     let mut ready = Received::empty();
     assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
 
     // The terminal submits immediately, so the Core-owned deadline starts
     // before either returned stage is polled.
@@ -886,6 +935,7 @@ fn dropped_request_future_cleans_up_its_late_completion() {
         .unwrap();
     let mut ready = Received::empty();
     assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
 
     let responder = thread::spawn(move || {
         for payload in [b"late-reply".as_slice(), b"next-reply".as_slice()] {
@@ -927,7 +977,7 @@ fn dropped_request_future_cleans_up_its_late_completion() {
 }
 
 /// Counts executor polls so a parked SEND/REQUEST future can prove it is
-/// resumed by the binding reactor rather than by executor re-polling.
+/// resumed by the public completion poller rather than by executor re-polling.
 struct PollCounter<F> {
     inner: F,
     polls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -988,6 +1038,7 @@ fn backpressured_send_resumes_without_executor_repolls() {
         .unwrap();
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
 
     let filler = saturate(|| send_stage(dealer.send().message(large_filler(b'p')).submit()));
     assert!(!filler.is_empty(), "test target did not reach HWM");
@@ -1008,7 +1059,7 @@ fn backpressured_send_resumes_without_executor_repolls() {
     });
 
     // Drain the receiver until the parked packet arrives; the waiter thread is
-    // parked the whole time and must be woken by the reactor, not by polling.
+    // parked the whole time and must be woken by the public poller, not by polling.
     let mut got_parked = false;
     while !got_parked {
         assert!(
@@ -1020,7 +1071,7 @@ fn backpressured_send_resumes_without_executor_repolls() {
     assert_eq!(received.parts().len(), 2);
     done_rx
         .recv_timeout(Duration::from_secs(3))
-        .expect("parked SEND was not resumed by the reactor")
+        .expect("parked SEND was not resumed by the public poller")
         .unwrap();
     waiter.join().unwrap();
     let polls = polls.load(std::sync::atomic::Ordering::SeqCst);
@@ -1054,6 +1105,7 @@ fn request_alongside_live_send_tokens_is_not_repolled() {
         .unwrap();
     let mut ready = Received::empty();
     assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
 
     let mut request = request_stage(
         dealer
@@ -1121,6 +1173,7 @@ fn removing_the_target_fails_a_parked_router_send() {
         .unwrap();
     let mut ready = Received::empty();
     assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
+    let _completion_driver = test_support::CompletionPollerDriver::new(&router);
 
     let filler = saturate(|| send_stage(router.send(&rid).message(large_filler(b't')).submit()));
     assert!(!filler.is_empty(), "test target did not reach HWM");
@@ -1177,6 +1230,7 @@ fn removing_the_target_fails_a_parked_router_request_with_typed_error() {
         .unwrap();
     let mut ready = Received::empty();
     assert!(peer.recv(&mut ready, RecvFlags::NONE).unwrap());
+    let _completion_driver = test_support::CompletionPollerDriver::new(&router);
 
     let filler = saturate(|| send_stage(router.send(&rid).message(large_filler(b't')).submit()));
     assert!(!filler.is_empty(), "test target did not reach HWM");

@@ -2,22 +2,17 @@
 
 //! Socket-local ownership of the Core completion queue.
 //!
-//! One owner drains a socket at a time.  The binding runtime owns unregistered
-//! sockets and drains them from one lazily started reactor thread that blocks
-//! in a native poller; a public poller atomically takes that responsibility
-//! while it has a `POLLCOMPLETION` registration. REQUEST entries are
-//! registered before the native FINAL call and may move from WRITABLE waits to
-//! the final REQUEST completion. SEND entries are registered only when Core
-//! hands out a wait token: a WRITABLE record that a concurrent drain pulls
-//! before that registration lands is parked by its opaque context and replayed
-//! when the registration arrives.
+//! A public poller with a `POLLCOMPLETION` registration is the only asynchronous
+//! drain owner. REQUEST entries are registered before the native FINAL call and
+//! may move from WRITABLE waits to the final REQUEST completion. SEND entries
+//! are registered only when Core hands out a wait token. Blocking requests may
+//! drain their own completion in-line when no public owner exists.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::task::{Poll, Waker};
-use std::thread::JoinHandle;
 
 use crate::error::{
     ConfigError, ConfigResult, RecvError, RequestError, RequestResult, SubmitError, SubmitResult,
@@ -26,15 +21,8 @@ use crate::error::{
 use crate::ffi;
 use crate::message::Message;
 use crate::native_errors::{
-    check_config_rc, check_recv_rc, request_error_from_result, send_terminal_error,
-    submit_error_from_errno,
+    check_recv_rc, request_error_from_result, send_terminal_error, submit_error_from_errno,
 };
-
-/// Reactor thread wait bound. The thread wakes early on any completion record;
-/// this only bounds how long a stop or ownership transfer waits for it.
-const REACTOR_WAIT_MS: i64 = 25;
-/// Idle wait rounds before an unused reactor thread retires itself.
-const REACTOR_IDLE_ROUNDS: u32 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CompletionEntryKind {
@@ -53,14 +41,6 @@ enum CompletionOutcome {
 struct CaptureResult {
     detached: bool,
     wakers: [Option<Waker>; 2],
-}
-
-/// A WRITABLE record pulled before its SEND registration landed.
-#[derive(Clone, Copy)]
-struct ParkedWritable {
-    completion_id: u64,
-    send_result: ffi::zlink_send_complete_result_t,
-    send_terminal_errno: i32,
 }
 
 struct EntryState {
@@ -107,10 +87,6 @@ impl CompletionEntry {
         })
     }
 
-    pub(crate) fn kind(&self) -> CompletionEntryKind {
-        self.kind
-    }
-
     fn publish(&self, completion_id: u64, awaiting_writable: bool) {
         let waker = {
             let mut state = self.state.lock().expect("completion entry");
@@ -149,16 +125,6 @@ impl CompletionEntry {
 
     fn capture(&self, completion: &mut ffi::zlink_completion_t) -> CaptureResult {
         let outcome = completion_outcome(self.kind, completion);
-        self.capture_outcome(outcome)
-    }
-
-    fn capture_parked(&self, parked: &ParkedWritable) -> CaptureResult {
-        let outcome = writable_outcome(
-            ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE,
-            parked.completion_id,
-            parked.send_result,
-            parked.send_terminal_errno,
-        );
         self.capture_outcome(outcome)
     }
 
@@ -325,6 +291,10 @@ impl CompletionEntry {
         }
     }
 
+    fn is_settled(&self) -> bool {
+        self.state.lock().expect("completion entry").settled
+    }
+
     fn wait_settled(&self) {
         let mut state = self.state.lock().expect("completion entry");
         while !state.settled {
@@ -380,11 +350,7 @@ impl CompletionEntry {
 
 struct OwnerState {
     entries: HashMap<usize, Arc<CompletionEntry>>,
-    parked_writables: HashMap<usize, ParkedWritable>,
     public_owner: Option<usize>,
-    runtime_poller: usize,
-    runtime_thread: Option<JoinHandle<()>>,
-    runtime_stop: bool,
     shutdown: bool,
 }
 
@@ -392,7 +358,9 @@ struct OwnerState {
 pub(crate) struct CompletionOwner {
     socket: usize,
     state: Mutex<OwnerState>,
-    drain_gate: Mutex<()>,
+    /// Serializes completion-backed submit/token publication, owner changes,
+    /// and completion pulls so each operation has one linearization point.
+    completion_gate: Mutex<()>,
     /// Native submits hold this shared; close takes it exclusively so a raw
     /// handle is never entered after the native close returned.
     lifecycle: RwLock<bool>,
@@ -408,14 +376,10 @@ impl CompletionOwner {
             socket: socket as usize,
             state: Mutex::new(OwnerState {
                 entries: HashMap::new(),
-                parked_writables: HashMap::new(),
                 public_owner: None,
-                runtime_poller: 0,
-                runtime_thread: None,
-                runtime_stop: false,
                 shutdown: false,
             }),
-            drain_gate: Mutex::new(()),
+            completion_gate: Mutex::new(()),
             lifecycle: RwLock::new(false),
             next_context: AtomicUsize::new(1),
         })
@@ -439,6 +403,41 @@ impl CompletionOwner {
         action()
     }
 
+    /// Runs one asynchronous completion-backed submit while ownership changes
+    /// and completion pulls are excluded. The native handle remains open for
+    /// the whole submit/token-publication transaction.
+    pub(crate) fn with_completion_submit<T, E>(
+        &self,
+        action: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<SubmitError>,
+    {
+        let closed = self.lifecycle.read().expect("completion lifecycle");
+        if *closed {
+            return Err(SubmitError::new(SubmitResult::Terminated, libc::ESHUTDOWN).into());
+        }
+        let _completion = self
+            .completion_gate
+            .lock()
+            .expect("completion operation gate");
+        action()
+    }
+
+    pub(crate) fn ensure_public_owner(&self) -> Result<(), SubmitError> {
+        let state = self.state.lock().expect("completion owner");
+        if state.shutdown {
+            Err(SubmitError::new(
+                SubmitResult::InvalidState,
+                libc::ESHUTDOWN,
+            ))
+        } else if state.public_owner.is_none() {
+            Err(SubmitError::new(SubmitResult::InvalidState, libc::EBUSY))
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) fn register_request(
         self: &Arc<Self>,
     ) -> Result<(Arc<CompletionEntry>, *mut c_void), SubmitError> {
@@ -452,56 +451,33 @@ impl CompletionOwner {
             ));
         }
         state.entries.insert(context as usize, Arc::clone(&entry));
-        if let Err(error) = self.start_runtime_locked(&mut state) {
-            state.entries.remove(&(context as usize));
-            return Err(SubmitError::new(
-                SubmitResult::InternalError,
-                error.native_errno(),
-            ));
-        }
         Ok((entry, context))
     }
 
     /// Registers the SEND entry behind `context` for the wait token Core just
-    /// issued, replays a WRITABLE record that arrived first, and makes sure a
-    /// drain owner is running. The entry stays registered across repeated
-    /// backpressure until the waiter unregisters or detaches it.
+    /// issued. The entry stays registered across repeated backpressure until
+    /// the waiter unregisters or detaches it.
     pub(crate) fn register_send_token(
         self: &Arc<Self>,
         context: *mut c_void,
         entry: &Arc<CompletionEntry>,
         completion_id: u64,
     ) -> Result<(), SubmitError> {
-        let (parked, start_error) = {
+        {
             let mut state = self.state.lock().expect("completion owner");
             if state.shutdown {
                 return Err(SubmitError::new(SubmitResult::Terminated, libc::ESHUTDOWN));
+            }
+            if state.public_owner.is_none() {
+                return Err(SubmitError::new(SubmitResult::InvalidState, libc::EBUSY));
             }
             state
                 .entries
                 .entry(context as usize)
                 .or_insert_with(|| Arc::clone(entry));
-            let parked = state.parked_writables.remove(&(context as usize));
-            let start_error = self.start_runtime_locked(&mut state).err();
-            (parked, start_error)
-        };
+        }
         entry.publish_writable(completion_id);
-        if let Some(parked) = parked {
-            let captured = entry.capture_parked(&parked);
-            if captured.detached {
-                self.unregister(context);
-            }
-            for waker in captured.wakers.into_iter().flatten() {
-                waker.wake();
-            }
-        }
-        match start_error {
-            Some(error) => Err(SubmitError::new(
-                SubmitResult::InternalError,
-                error.native_errno(),
-            )),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     pub(crate) fn unregister(&self, user_context: *mut c_void) {
@@ -512,18 +488,18 @@ impl CompletionOwner {
             .remove(&(user_context as usize));
     }
 
-    pub(crate) fn drain(self: &Arc<Self>, public_owner: bool) -> Result<usize, RecvError> {
-        let drain_guard = self.drain_gate.lock().expect("completion drain gate");
+    pub(crate) fn drain(self: &Arc<Self>) -> Result<usize, RecvError> {
+        let _completion = self
+            .completion_gate
+            .lock()
+            .expect("completion operation gate");
         let mut processed = 0;
         let mut wakers = Vec::new();
         let mut failure = None;
         loop {
             {
                 let state = self.state.lock().expect("completion owner");
-                if state.shutdown
-                    || (public_owner && state.public_owner.is_none())
-                    || (!public_owner && (state.runtime_stop || state.public_owner.is_some()))
-                {
+                if state.shutdown || state.public_owner.is_none() {
                     break;
                 }
             }
@@ -543,56 +519,103 @@ impl CompletionOwner {
                 break;
             }
 
-            let context = completion.user_context as usize;
-            let entry = self
-                .state
-                .lock()
-                .expect("completion owner")
-                .entries
-                .get(&context)
-                .cloned();
-            if let Some(entry) = entry {
-                let captured = entry.capture(&mut completion);
-                wakers.extend(captured.wakers.into_iter().flatten());
-                let request_completion =
-                    completion.kind == ffi::zlink_completion_kind_t::ZLINK_COMPLETION_REQUEST;
-                if public_owner && entry.kind() == CompletionEntryKind::Request {
-                    entry.wait_settled();
-                }
-                if request_completion || captured.detached {
-                    self.unregister(context as *mut c_void);
-                }
-            } else {
-                if context != 0
-                    && completion.kind == ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE
-                {
-                    // The wait token was issued but its SEND registration has
-                    // not landed yet; replay this record when it does.
-                    let parked = ParkedWritable {
-                        completion_id: completion.completion_id,
-                        send_result: completion.send_result,
-                        send_terminal_errno: completion.send_terminal_errno,
-                    };
-                    let mut state = self.state.lock().expect("completion owner");
-                    if !state.shutdown {
-                        state.parked_writables.insert(context, parked);
-                    }
-                }
-                unsafe { ffi::zlink_completion_close(&mut completion) };
-            }
+            wakers.extend(
+                self.capture_completion(&mut completion)
+                    .into_iter()
+                    .flatten(),
+            );
             processed += 1;
         }
-        drop(drain_guard);
         for waker in wakers {
             waker.wake();
         }
         failure.map_or(Ok(processed), Err)
     }
 
-    pub(crate) fn transfer_to_public(
+    /// Completes a blocking REQUEST on the caller thread when no public poller
+    /// owns this socket. A public owner, when present, remains the only drainer.
+    pub(crate) fn wait_request_inline(
+        self: &Arc<Self>,
+        entry: &Arc<CompletionEntry>,
+    ) -> Result<Vec<Message>, ZlinkError> {
+        let closed = self.lifecycle.read().expect("completion lifecycle");
+        if *closed {
+            return Err(SubmitError::new(SubmitResult::Terminated, libc::ESHUTDOWN).into());
+        }
+        let _completion = self
+            .completion_gate
+            .lock()
+            .expect("completion operation gate");
+        if self
+            .state
+            .lock()
+            .expect("completion owner")
+            .public_owner
+            .is_some()
+        {
+            drop(_completion);
+            drop(closed);
+            return entry.wait_request().map_err(Into::into);
+        }
+
+        while !entry.is_settled() {
+            let mut completion = ffi::zlink_completion_t::empty();
+            let rc = unsafe {
+                ffi::zlink_completion_recv(self.socket as *mut c_void, &mut completion, 0)
+            };
+            if rc == crate::error::RecvResult::NoData as i32 {
+                continue;
+            }
+            if let Err(error) = check_recv_rc(rc) {
+                entry.detach();
+                return Err(error.into());
+            }
+            for waker in self
+                .capture_completion(&mut completion)
+                .into_iter()
+                .flatten()
+            {
+                waker.wake();
+            }
+        }
+        entry.wait_request().map_err(Into::into)
+    }
+
+    fn capture_completion(&self, completion: &mut ffi::zlink_completion_t) -> [Option<Waker>; 2] {
+        let context = completion.user_context as usize;
+        let entry = self
+            .state
+            .lock()
+            .expect("completion owner")
+            .entries
+            .get(&context)
+            .cloned();
+        if let Some(entry) = entry {
+            let request_completion =
+                completion.kind == ffi::zlink_completion_kind_t::ZLINK_COMPLETION_REQUEST;
+            let captured = entry.capture(completion);
+            if entry.kind == CompletionEntryKind::Request {
+                entry.wait_settled();
+            }
+            if request_completion || captured.detached {
+                self.unregister(context as *mut c_void);
+            }
+            captured.wakers
+        } else {
+            unsafe { ffi::zlink_completion_close(completion) };
+            [None, None]
+        }
+    }
+
+    pub(crate) fn acquire_public_with(
         self: &Arc<Self>,
         poller_owner: usize,
+        acquire: impl FnOnce() -> Result<(), ConfigError>,
     ) -> Result<(), ConfigError> {
+        let _completion = self
+            .completion_gate
+            .lock()
+            .expect("completion operation gate");
         let mut state = self.state.lock().expect("completion owner");
         if state.shutdown {
             return Err(ConfigError::new(
@@ -606,30 +629,40 @@ impl CompletionOwner {
         {
             return Err(ConfigError::new(ConfigResult::InvalidState, libc::EBUSY));
         }
-        if state.public_owner.is_none() {
-            // Publish ownership before stop_runtime_locked drops the mutex;
-            // concurrent registrations must not install a replacement private
-            // drainer while the old one is joining.
-            state.public_owner = Some(poller_owner);
-            state = self.stop_runtime_locked(state);
-        }
+        state.public_owner = Some(poller_owner);
         drop(state);
-        // Wait for a private drain that crossed the ownership check before
-        // publication. No new private drain can start while public_owner is set.
-        drop(self.drain_gate.lock().expect("completion drain gate"));
+        if let Err(error) = acquire() {
+            let mut state = self.state.lock().expect("completion owner");
+            if state.public_owner == Some(poller_owner) {
+                state.public_owner = None;
+            }
+            return Err(error);
+        }
         Ok(())
     }
 
-    pub(crate) fn transfer_to_runtime(self: &Arc<Self>, poller_owner: usize) {
-        let _drain_guard = self.drain_gate.lock().expect("completion drain gate");
+    pub(crate) fn release_public_with(
+        self: &Arc<Self>,
+        poller_owner: usize,
+        release: impl FnOnce() -> Result<(), ConfigError>,
+    ) -> Result<(), ConfigError> {
+        let _completion = self
+            .completion_gate
+            .lock()
+            .expect("completion operation gate");
         let mut state = self.state.lock().expect("completion owner");
         if state.public_owner != Some(poller_owner) {
-            return;
+            return release();
         }
+        drop(state);
+        release()?;
+        state = self.state.lock().expect("completion owner");
         state.public_owner = None;
-        if !state.entries.is_empty() && !state.shutdown {
-            let _ = self.start_runtime_locked(&mut state);
-        }
+        Ok(())
+    }
+
+    pub(crate) fn release_public(self: &Arc<Self>, poller_owner: usize) {
+        let _ = self.release_public_with(poller_owner, || Ok(()));
     }
 
     pub(crate) fn shutdown_with<T>(self: &Arc<Self>, close_native: impl FnOnce() -> T) -> T {
@@ -646,130 +679,17 @@ impl CompletionOwner {
                 return;
             }
             state.shutdown = true;
-            state = self.stop_runtime_locked(state);
-            drop(state);
         }
         let entries = {
-            let _drain_guard = self.drain_gate.lock().expect("completion drain gate");
+            let _completion = self
+                .completion_gate
+                .lock()
+                .expect("completion operation gate");
             let mut state = self.state.lock().expect("completion owner");
-            state.parked_writables.clear();
             std::mem::take(&mut state.entries)
         };
         for entry in entries.into_values() {
             entry.shutdown();
-        }
-    }
-
-    fn start_runtime_locked(self: &Arc<Self>, state: &mut OwnerState) -> Result<(), ConfigError> {
-        if state.runtime_thread.is_some() || state.shutdown || state.public_owner.is_some() {
-            return Ok(());
-        }
-        let poller = unsafe { ffi::zlink_poller_new() };
-        if poller.is_null() {
-            return Err(ConfigError::new(ConfigResult::InternalError, unsafe {
-                ffi::zlink_errno()
-            }));
-        }
-        if let Err(error) = check_config_rc(unsafe {
-            ffi::zlink_poller_add(
-                poller,
-                self.socket as *mut c_void,
-                std::ptr::null_mut(),
-                crate::POLLCOMPLETION,
-            )
-        }) {
-            let mut raw = poller;
-            unsafe { ffi::zlink_poller_destroy(&mut raw) };
-            return Err(error);
-        }
-        state.runtime_poller = poller as usize;
-        state.runtime_stop = false;
-        let owner = Arc::clone(self);
-        state.runtime_thread = Some(std::thread::spawn(move || owner.runtime_loop()));
-        Ok(())
-    }
-
-    fn stop_runtime_locked<'a>(
-        &'a self,
-        mut state: MutexGuard<'a, OwnerState>,
-    ) -> MutexGuard<'a, OwnerState> {
-        state.runtime_stop = true;
-        let thread = state.runtime_thread.take();
-        let poller = std::mem::take(&mut state.runtime_poller);
-        drop(state);
-        if let Some(thread) = thread {
-            if thread.thread().id() == std::thread::current().id() {
-                drop(thread);
-            } else {
-                let _ = thread.join();
-            }
-        }
-        if poller != 0 {
-            let mut raw = poller as *mut c_void;
-            unsafe { ffi::zlink_poller_destroy(&mut raw) };
-        }
-        self.state.lock().expect("completion owner")
-    }
-
-    /// Retires the calling reactor thread: releases its poller and clears the
-    /// thread slot so the next registration can start a fresh reactor.
-    fn retire_runtime(&self, owned_poller: usize) {
-        let poller = {
-            let mut state = self.state.lock().expect("completion owner");
-            if state.runtime_stop || state.runtime_poller != owned_poller {
-                // A stopper already took the poller and is joining this thread.
-                return;
-            }
-            drop(state.runtime_thread.take());
-            std::mem::take(&mut state.runtime_poller)
-        };
-        if poller != 0 {
-            let mut raw = poller as *mut c_void;
-            unsafe { ffi::zlink_poller_destroy(&mut raw) };
-        }
-    }
-
-    fn runtime_loop(self: Arc<Self>) {
-        let mut idle_rounds = 0u32;
-        let owned_poller = self.state.lock().expect("completion owner").runtime_poller;
-        loop {
-            {
-                let state = self.state.lock().expect("completion owner");
-                if state.runtime_stop || state.shutdown || state.runtime_poller != owned_poller {
-                    return;
-                }
-                if state.entries.is_empty() {
-                    idle_rounds += 1;
-                    if idle_rounds > REACTOR_IDLE_ROUNDS {
-                        drop(state);
-                        self.retire_runtime(owned_poller);
-                        return;
-                    }
-                } else {
-                    idle_rounds = 0;
-                }
-            }
-            let poller = owned_poller as *mut c_void;
-            let mut event = ffi::zlink_poller_event_t::empty();
-            let rc = unsafe {
-                ffi::zlink_poller_wait(poller, &mut event, 1, REACTOR_WAIT_MS, std::ptr::null_mut())
-            };
-            match rc.cmp(&0) {
-                std::cmp::Ordering::Greater => {
-                    if self.drain(false).is_err() {
-                        self.retire_runtime(owned_poller);
-                        return;
-                    }
-                }
-                std::cmp::Ordering::Less => {
-                    let errno = unsafe { ffi::zlink_errno() };
-                    if errno != libc::EINTR && errno != libc::EAGAIN {
-                        self.retire_runtime(owned_poller);
-                        return;
-                    }
-                }
-                std::cmp::Ordering::Equal => {}
-            }
         }
     }
 }
@@ -988,21 +908,6 @@ mod tests {
         let waker = Waker::noop();
         assert!(entry.poll_writable(waker).is_pending());
         entry.publish_writable(41);
-        assert!(matches!(entry.poll_writable(waker), Poll::Ready(Ok(()))));
-    }
-
-    #[test]
-    fn parked_writable_replays_like_a_live_record() {
-        let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
-        entry.publish_writable(71);
-        let parked = ParkedWritable {
-            completion_id: 71,
-            send_result: ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED,
-            send_terminal_errno: 0,
-        };
-        let captured = entry.capture_parked(&parked);
-        assert!(!captured.detached);
-        let waker = Waker::noop();
         assert!(matches!(entry.poll_writable(waker), Poll::Ready(Ok(()))));
     }
 

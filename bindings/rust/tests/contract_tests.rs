@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use zlink::{
     Context, DealerSocket, Message, POLLCOMPLETION, POLLIN, Poller, Received, RecvFlags,
-    RouterSocket, RoutingId, SubmitResult, has, version,
+    RouterSocket, RoutingId, SubmitResult, ZlinkError, has, version,
 };
 
 fn packaged_core_version() -> (i32, i32, i32) {
@@ -333,20 +333,102 @@ fn poller_modify_transfers_completion_ownership() {
 }
 
 #[test]
+fn ownerless_async_request_fails_fast_and_reacquires_through_public_poller() {
+    let ctx = Context::new().unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    router.bind("inproc://rust-ownerless-request").unwrap();
+    dealer.connect("inproc://rust-ownerless-request").unwrap();
+    dealer
+        .send()
+        .message(Message::try_from(b"ready").unwrap())
+        .submit_sync()
+        .unwrap();
+    let mut received = Received::empty();
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+
+    let submit_ownerless = || {
+        dealer
+            .request()
+            .message(Message::try_from(b"must-not-submit").unwrap())
+            .timeout(Duration::from_secs(2))
+            .submit()
+    };
+    let error = match submit_ownerless() {
+        Err(ZlinkError::Submit(error)) => error,
+        Err(error) => panic!("expected submit error, got {error}"),
+        Ok(_) => panic!("ownerless async request was accepted"),
+    };
+    assert_eq!(error.code(), SubmitResult::InvalidState);
+    assert!(!router.recv(&mut received, RecvFlags::DONT_WAIT).unwrap());
+
+    let poller = Poller::new().unwrap();
+    poller.add_socket(&dealer, POLLCOMPLETION, 23).unwrap();
+    let request = dealer
+        .request()
+        .message(Message::try_from(b"owned-request").unwrap())
+        .timeout(Duration::from_secs(2))
+        .submit()
+        .unwrap();
+    test_support::block_on(request.admitted).unwrap();
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    received
+        .reply()
+        .message(Message::try_from(b"owned-reply").unwrap())
+        .submit()
+        .unwrap();
+    let mut events = [zlink::PollEvent::default()];
+    assert_eq!(poller.wait(&mut events, 5_000).unwrap(), 1);
+    assert_eq!(events[0].slot, 23);
+    assert_eq!(
+        test_support::block_on(request.reply).unwrap()[0].as_bytes(),
+        b"owned-reply"
+    );
+
+    poller.modify_socket(&dealer, POLLIN).unwrap();
+    let error = match submit_ownerless() {
+        Err(ZlinkError::Submit(error)) => error,
+        Err(error) => panic!("expected submit error, got {error}"),
+        Ok(_) => panic!("request was accepted after completion owner release"),
+    };
+    assert_eq!(error.code(), SubmitResult::InvalidState);
+    assert!(!router.recv(&mut received, RecvFlags::DONT_WAIT).unwrap());
+}
+
+#[test]
+fn completion_owner_source_has_no_background_reactor() {
+    let source = include_str!("../src/internal/completion_owner.rs");
+    for forbidden in [
+        "std::thread::spawn",
+        "runtime_loop",
+        "runtime_poller",
+        "runtime_thread",
+        "REACTOR_WAIT_MS",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "completion owner contains forbidden background path: {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn pollcompletion_reports_only_after_request_future_is_settled() {
     let ctx = Context::new().unwrap();
     let router = ctx.router_socket().unwrap();
     router
         .bind("inproc://rust-public-completion-owner")
         .unwrap();
-    let (dealer, result, mut future, request) = test_support::request_until_received(
-        &ctx,
-        &router,
-        "inproc://rust-public-completion-owner",
-        b"poller-request",
-        Duration::from_secs(2),
-    );
+    let (dealer, completion_driver, result, mut future, request) =
+        test_support::request_until_received(
+            &ctx,
+            &router,
+            "inproc://rust-public-completion-owner",
+            b"poller-request",
+            Duration::from_secs(2),
+        );
     assert_eq!(result, SubmitResult::Ok);
+    drop(completion_driver);
 
     let poller = Poller::new().unwrap();
     poller.add_socket(&dealer, POLLCOMPLETION, 17).unwrap();
@@ -395,6 +477,7 @@ fn submit_result_immediate_admission_exposes_completed_stage_and_reply() {
     assert_eq!(test_support::poll_once(&mut admitted), Poll::Ready(Ok(())));
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
     assert_eq!(received.parts()[0].as_bytes(), b"send-ok");
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
 
     let request = dealer
         .request()
@@ -453,6 +536,10 @@ fn submit_result_backpressure_admits_after_writable_then_completes_reply() {
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
 
+    let poller = Poller::new().unwrap();
+    poller.add_socket(&dealer, POLLCOMPLETION, 29).unwrap();
+    let mut events = [zlink::PollEvent::default()];
+
     let first = dealer
         .request()
         .message(Message::try_from(vec![b'a'; 65_536].as_slice()).unwrap())
@@ -472,9 +559,6 @@ fn submit_result_backpressure_admits_after_writable_then_completes_reply() {
     let mut second_admitted = second.admitted;
     assert!(test_support::poll_once(&mut second_admitted).is_pending());
 
-    let poller = Poller::new().unwrap();
-    poller.add_socket(&dealer, POLLCOMPLETION, 29).unwrap();
-    let mut events = [zlink::PollEvent::default()];
     assert_eq!(poller.wait(&mut events, 0).unwrap(), 0);
 
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
