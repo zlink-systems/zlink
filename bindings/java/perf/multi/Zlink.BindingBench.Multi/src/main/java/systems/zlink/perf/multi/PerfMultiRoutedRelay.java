@@ -43,7 +43,8 @@ final class PerfMultiRoutedRelay {
                 cause -> isStaleRoute(cause) || stopRequested.get());
         try (Received received = new Received();
              PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                 List.of(server), PollEventFlags.POLLIN)) {
+                 List.of(server), PollEventFlags.POLLIN,
+                 PollEventFlags.POLLCOMPLETION)) {
             while (!stopRequested.get() && !replies.hasFailure()) {
                 int readyCount = pollSet.poll(50);
                 if (readyCount <= 0
@@ -53,7 +54,8 @@ final class PerfMultiRoutedRelay {
                 drainRequests(server, received, stopRequested, replies);
             }
             if (!replies.drain(
-                    PerfMultiRoutedSendCoordinator.sendDrainTimeout())
+                    PerfMultiRoutedSendCoordinator.sendDrainTimeout(),
+                    pollSet::poll)
                 && !replies.hasFailure()) {
                 System.err.println("RELAY_DRAIN_DETAIL,timed_out,pending="
                     + replies.pendingCount() + ",sending=" + replies.sending());
@@ -80,11 +82,11 @@ final class PerfMultiRoutedRelay {
         while (!stopRequested.get() && !replies.hasFailure()) {
             // Do not pull another request out of Core's receive queue while
             // the previous reply is still awaiting admission. The C relay
-            // refuses a second reply under a live wait token; parking here
-            // keeps the un-forwarded reply backpressuring its source through
-            // Core's receive queue instead of an unbounded application queue.
-            if (!replies.awaitIdle(50L)) {
-                continue;
+            // refuses a second reply under a live wait token. Return to the
+            // shared public poller so it can drive that completion; leaving
+            // the next request in Core preserves source backpressure.
+            if (replies.sending()) {
+                return;
             }
             boolean ok;
             try {
