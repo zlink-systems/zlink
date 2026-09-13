@@ -55,6 +55,7 @@ submit 시점 fail-fast**.
 | Python | ✅ 머지 | #324 (#293 CLOSED) | pytest 248 + 동시성 73×5 green | 없음(42/42 complete) |
 | C++ | ✅ 머지 | #323 | contract 20/20 + 동시성 9파일×5 green | 없음(42/42 complete) |
 | Rust | ✅ 머지 | #325 | cargo test 188 + 동시성 83×5 green | 없음(42/42 complete) |
+| Node | 🔄 전환 중(Phase 2에서 누락 발견) | branch `bindings/node-completion-owner-mandatory` | — | — |
 
 - Go 특이: 공개 API가 async-only(`Submit(ctx)`) 표면이라 completion-backed blocking terminal 없음
   → runtime goroutine 제거 + async fail-fast만. 규칙 2→1.
@@ -83,7 +84,9 @@ submit 시점 fail-fast**.
 1. **Go**: perf 회귀 체크 → 통과 시 PR·머지.
 2. **Python**: Phase 2 전환(코드+게이트+perf 체크+#293 재현 확인) → PR·머지.
 3. **C++·Rust**: completion ownership이 이미 poller 기반인지 확인, 필요 시 정합.
-4. **framework**: 바인딩 async 사용부가 새 계약(poller 필수)에 맞는지 점검·수정.
+4. **framework: ✅ #326 머지** — .NET/Java receive poller에 PollCompletion 추가(위반 재현·수정), C++ 이미 준수(무변경), Go/Rust/Python framework 런타임 없음. .NET 2177/0·Java green·cpp cross-language smoke green.
+   - **Node binding 누락 발견**: Phase 2 6개 전환에서 Node 제외됨(runtimeWatch background 잔존, 스펙 §4 위반) → 전환 중. Node framework도 그 뒤. Node는 단일 이벤트루프라 모델 매핑 주의(새 thread 금지).
+   - **관찰(범위 밖)**: 통합 build 중 Go binding test `TestPublicRequestRetriesExactPacketAfterWritable/run-4` 실패 관찰 — 별도 확인 필요.
 5. **Go/Python multi 측정** → 문서 반영.
 6. (별도 환경) **#293** 네이티브 규명.
 
