@@ -100,13 +100,13 @@ class actor_session_t final : public fw::packet_stream_session_t
 
     fw::task_t<void> on_packet (fw::stream_t &stream,
                                 const fw::session_message_context_t &dispatch,
-                                const zlink::message_t &payload) override
+                                const zlink::framework::message_t &payload) override
     {
         if (dispatch.packet_name != e2e::bind_actor_session_req_t::packet_name) {
             throw fw::framework_exception_t (fw::framework_error_kind_t::protocol_error,
                                              "actor session expects BindActorSessionReq");
         }
-        const auto request = payload.parse_json<e2e::bind_actor_session_req_t> ();
+        const auto request = payload.decode<e2e::bind_actor_session_req_t> ();
         const auto actor_ref = co_await _directory.find (request.actor_id);
         if (!actor_ref) {
             throw fw::framework_exception_t (fw::framework_error_kind_t::not_found,
@@ -117,7 +117,7 @@ class actor_session_t final : public fw::packet_stream_session_t
         _bind_scenario = request.scenario;
         _evidence.append ({request.scenario, _bound_actor_id, "bind", _gateway_rid});
         stream
-          .reply_packet (zlink::message_t::from_json (
+          .reply_packet (zlink::framework::message_t::from (
             e2e::bind_actor_session_res_t{request.scenario, _bound_actor_id}))
           .async ();
     }

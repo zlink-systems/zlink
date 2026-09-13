@@ -37,6 +37,16 @@
 namespace
 {
 
+void bind_relay_string_fixture (
+  zlink::framework::detail::actor_gateway_runtime_t &gateway,
+  zlink::framework::serializer_registry_t &serializers)
+{
+    serializers.add<std::string> (
+      [] (const std::string &text) { return zlink::framework::encoded_payload_t::from_string (text); },
+      [] (const zlink::framework::encoded_payload_t &encoded) { return encoded.to_string (); });
+    gateway.bind_serializers (serializers);
+}
+
 zlink::framework::actor_ref_t test_actor_ref (std::string node,
                                               std::string actor_type,
                                               std::string actor_id,
@@ -862,6 +872,8 @@ int route_update_preserves_object_generation ()
     using namespace zlink::framework::detail;
 
     actor_gateway_runtime_t gateway;
+    serializer_registry_t relay_serializers;
+    bind_relay_string_fixture (gateway, relay_serializers);
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
     const actor_ref_t original = test_actor_ref ("actor-node-a", "player", "actor-route", 7);
@@ -881,7 +893,7 @@ int route_update_preserves_object_generation ()
     const actor_ref_t relocated = test_actor_ref ("actor-node-b", "player", "actor-route", 7);
     if (!gateway.update_actor_ref (relocated))
         return 1;
-    if (!original_binding.relay ("packet", zlink::message_t{}).result ()
+    if (!original_binding.relay ("packet", message_t::from (std::string{})).result ()
         || relay_routes.size () != 1
         || relay_routes.front ().node_rid ().value () != original.node_rid ().value ()) {
         return 5;
@@ -891,12 +903,12 @@ int route_update_preserves_object_generation ()
         return 7;
     }
     auto relocated_binding = manager.bind (relocated).async ().result ().value ();
-    if (!relocated_binding.relay ("packet", zlink::message_t{}).result ()
+    if (!relocated_binding.relay ("packet", message_t::from (std::string{})).result ()
         || relay_routes.size () != 2
         || relay_routes.back ().node_rid ().value () != relocated.node_rid ().value ()) {
         return 8;
     }
-    if (!unaffected_binding.relay ("packet", zlink::message_t{}).result ()
+    if (!unaffected_binding.relay ("packet", message_t::from (std::string{})).result ()
         || relay_routes.size () != 3
         || relay_routes.back ().node_rid ().value () != unaffected.node_rid ().value ()) {
         return 6;
@@ -1907,6 +1919,8 @@ int session_relay_queue_is_ordered_without_blocking_other_actors ()
     using namespace zlink::framework::detail;
 
     actor_gateway_runtime_t gateway;
+    serializer_registry_t relay_serializers;
+    bind_relay_string_fixture (gateway, relay_serializers);
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
     const auto actor_a = test_actor_ref ("actor-owner", "game.actor", "relay-a", 1);
@@ -1943,9 +1957,9 @@ int session_relay_queue_is_ordered_without_blocking_other_actors ()
           result_t<std::optional<zlink::message_t>>::success (std::nullopt));
     });
 
-    auto first = bound_a.relay ("A1", zlink::message_t{});
-    auto second = bound_a.relay ("A2", zlink::message_t{});
-    auto independent = bound_b.relay ("B1", zlink::message_t{});
+    auto first = bound_a.relay ("A1", message_t::from (std::string{}));
+    auto second = bound_a.relay ("A2", message_t::from (std::string{}));
+    auto independent = bound_b.relay ("B1", message_t::from (std::string{}));
     {
         std::unique_lock lock (mutex);
         if (!changed.wait_for (lock, std::chrono::seconds (2), [&] {
@@ -1979,6 +1993,8 @@ int session_relay_does_not_start_actor_dispatch_on_session_thread ()
     using namespace zlink::framework::detail;
 
     actor_gateway_runtime_t gateway;
+    serializer_registry_t relay_serializers;
+    bind_relay_string_fixture (gateway, relay_serializers);
     gateway.offload_session_relay ();
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
@@ -1994,7 +2010,7 @@ int session_relay_does_not_start_actor_dispatch_on_session_thread ()
           result_t<std::optional<zlink::message_t>>::success (std::nullopt));
     });
 
-    const auto delivered = binding.relay ("execution", zlink::message_t{}).result ();
+    const auto delivered = binding.relay ("execution", message_t::from (std::string{})).result ();
     return !delivered || actor_dispatch_thread == std::thread::id{}
            || actor_dispatch_thread == session_thread
              ? 1
@@ -2084,6 +2100,8 @@ int relay_request_survives_pending_dispatcher_completion ()
     using namespace zlink::framework::detail;
 
     actor_gateway_runtime_t gateway;
+    serializer_registry_t relay_serializers;
+    bind_relay_string_fixture (gateway, relay_serializers);
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
     const std::string actor_id (96, 'a');
@@ -2102,7 +2120,7 @@ int relay_request_survives_pending_dispatcher_completion ()
     });
 
     auto request =
-      bound.relay_request (packet_name, zlink::message_t::from (payload_text)).async ();
+      bound.relay_request (packet_name, message_t::from (payload_text)).async ();
     if (!relay_started->load (std::memory_order_acquire))
         return 1;
 
@@ -2114,7 +2132,7 @@ int relay_request_survives_pending_dispatcher_completion ()
     std::thread completion ([pending] { pending->complete (result_t<void>::success ()); });
     completion.join ();
     const auto completed = request.result ();
-    return completed && completed.value ().to_string () == "delayed-reply" ? 0 : 2;
+    return completed && completed.value ().decode<std::string> () == "delayed-reply" ? 0 : 2;
 }
 
 int relay_send_survives_pending_dispatcher_completion ()
@@ -2123,6 +2141,8 @@ int relay_send_survives_pending_dispatcher_completion ()
     using namespace zlink::framework::detail;
 
     actor_gateway_runtime_t gateway;
+    serializer_registry_t relay_serializers;
+    bind_relay_string_fixture (gateway, relay_serializers);
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
     const std::string actor_id (96, 's');
@@ -2140,7 +2160,7 @@ int relay_send_survives_pending_dispatcher_completion ()
                                                 relay_started, actor_id, packet_name, payload_text);
     });
 
-    auto relayed = bound.relay (packet_name, zlink::message_t::from (payload_text));
+    auto relayed = bound.relay (packet_name, message_t::from (payload_text));
     if (!relay_started->load (std::memory_order_acquire))
         return 1;
 
@@ -4894,6 +4914,8 @@ int session_relay_waiter_accepts_beyond_former_capacity ()
     using namespace zlink::framework::detail;
 
     actor_gateway_runtime_t gateway;
+    serializer_registry_t relay_serializers;
+    bind_relay_string_fixture (gateway, relay_serializers);
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
     const actor_ref_t actor = test_actor_ref ("actor-node-a", "player", "actor-capacity", 1);
@@ -4914,7 +4936,7 @@ int session_relay_waiter_accepts_beyond_former_capacity ()
     std::vector<task_t<void>> accepted;
     accepted.reserve (1026);
     for (std::size_t index = 0; index != 1026; ++index)
-        accepted.push_back (binding.relay ("packet", zlink::message_t{}));
+        accepted.push_back (binding.relay ("packet", message_t::from (std::string{})));
 
     /* Releasing each dispatch drains the FIFO; every relay completes once. */
     for (std::size_t index = 0; index != dispatched.size (); ++index)
@@ -5035,10 +5057,46 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
     return next_succeeded && next_terminal_calls.load (std::memory_order_relaxed) == 1 ? 0 : 10;
 }
 
+int canonical_session_relay_failures ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    auto manager = gateway.manager ();
+    session_actor_manager_access_t::attach (manager, stream_t{});
+    const auto actor = test_actor_ref ("node", "player", "canonical-negative", 1);
+    auto bound = manager.bind (actor).async ().result ().value ();
+    const auto missing_registry = bound.relay_request (
+      "packet", message_t::from (std::string("value"))).async ().result ();
+    if (missing_registry || missing_registry.error_kind () != framework_error_kind_t::protocol_error)
+        return 1;
+    serializer_registry_t serializers;
+    gateway.bind_serializers (serializers);
+    const auto invalid_json_value = message_t::from (std::string(1, static_cast<char>(0xff)));
+    const auto bad_encoding = bound.relay_request ("packet", invalid_json_value).async ().result ();
+    if (bad_encoding || bad_encoding.error_kind () != framework_error_kind_t::protocol_error)
+        return 2;
+    state->sync ([&] { state->actors_by_id.erase ("canonical-negative"); });
+    const auto missing_actor = bound.relay_request ("packet", invalid_json_value).async ().result ();
+    if (missing_actor || missing_actor.error_kind () != framework_error_kind_t::not_found)
+        return 3;
+    const auto missing_send_actor = bound.relay ("packet", invalid_json_value).result ();
+    if (missing_send_actor || missing_send_actor.error_kind () != framework_error_kind_t::not_found)
+        return 4;
+    return 0;
+}
+
 int main (int argc, char **argv)
 {
     if (argc == 2) {
         const std::string test (argv[1]);
+        if (test == "--canonical-message") {
+            if (const int negative = canonical_session_relay_failures (); negative != 0) return negative;
+            if (const int request = relay_request_survives_pending_dispatcher_completion (); request != 0)
+                return 10 + request;
+            return relay_send_survives_pending_dispatcher_completion ();
+        }
         if (test == "--reconcile-source")
             return reconcile_deadline_fast_fails_when_store_shows_source ();
         if (test == "--reconcile-no-commit")
@@ -5049,6 +5107,7 @@ int main (int argc, char **argv)
             return reconcile_deadline_fast_fails_when_store_is_indeterminate ();
         return 1;
     }
+    if (const auto canonical = canonical_session_relay_failures (); canonical != 0) return 500 + canonical;
     if (const auto protobuf_bound =
           generated_protobuf_bound_session_uses_typed_serializer_codec ();
         protobuf_bound != 0) {

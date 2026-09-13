@@ -917,18 +917,18 @@ class obs_session_t final : public fw::packet_stream_session_t
 
     fw::task_t<void> on_packet (fw::stream_t &stream,
                                 const fw::session_message_context_t &dispatch,
-                                const zlink::message_t &payload) override
+                                const zlink::framework::message_t &payload) override
     {
         if (dispatch.packet_name != obs::obs_action_req_t::packet_name) {
             throw fw::framework_exception_t (fw::framework_error_kind_t::not_found,
                                              "ObservabilityOps session has no handler for "
                                                + std::string (dispatch.packet_name));
         }
-        auto request = payload.parse_json<obs::obs_action_req_t> ();
+        auto request = payload.decode<obs::obs_action_req_t> ();
         auto reply = co_await _routes.request_to_spot (request.spot_id, request)
                        .timeout (std::chrono::milliseconds (5000))
                        .async<obs::obs_action_res_t> ();
-        stream.reply_packet (zlink::message_t::from_json (reply))
+        stream.reply_packet (zlink::framework::message_t::from (reply))
           .async ();
         co_return;
     }

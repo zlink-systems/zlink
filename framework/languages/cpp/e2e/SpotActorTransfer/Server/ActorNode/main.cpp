@@ -798,10 +798,10 @@ class transfer_session_t final : public fw::packet_stream_session_t
 
     fw::task_t<void> on_packet (fw::stream_t &stream,
                                 const fw::session_message_context_t &dispatch,
-                                const zlink::message_t &payload) override
+                                const zlink::framework::message_t &payload) override
     {
         if (dispatch.packet_name == e2e::bind_actor_session_req_t::packet_name) {
-            const auto request = payload.parse_json<e2e::bind_actor_session_req_t> ();
+            const auto request = payload.decode<e2e::bind_actor_session_req_t> ();
             auto actor_ref = co_await _directory.find (request.actor_id);
             std::optional<fw::actor_ref_t> resolved;
             if (!request.node_rid.empty () && request.generation) {
@@ -818,7 +818,7 @@ class transfer_session_t final : public fw::packet_stream_session_t
             _bound_actor_id = std::string (bound.actor_id ());
             g_evidence->add (request.scenario, request.actor_id, "session_bound", "stream");
             stream
-              .reply_packet (zlink::message_t::from_json (e2e::bind_actor_session_res_t{
+              .reply_packet (zlink::framework::message_t::from (e2e::bind_actor_session_res_t{
                 request.scenario, std::string (resolved->actor_id ().value ()),
                 std::string (resolved->node_rid ().value ()),
                 static_cast<std::int64_t> (resolved->object_generation ())}))
@@ -838,7 +838,7 @@ class transfer_session_t final : public fw::packet_stream_session_t
         if (dispatch.packet_name == e2e::bound_actor_ref_req_t::packet_name) {
             const auto &ref = actor->ref ();
             stream
-              .reply_packet (zlink::message_t::from_json (e2e::bound_actor_ref_res_t{
+              .reply_packet (zlink::framework::message_t::from (e2e::bound_actor_ref_res_t{
                 std::string (ref.actor_id ().value ()),
                 std::string (ref.node_rid ().value ()),
                 static_cast<std::int64_t> (ref.object_generation ())}))
@@ -852,7 +852,7 @@ class transfer_session_t final : public fw::packet_stream_session_t
             co_return;
         }
         const auto marker = dispatch.packet_name == e2e::handoff_packet_msg_t::packet_name
-                              ? payload.parse_json<e2e::handoff_packet_msg_t> ()
+                              ? payload.decode<e2e::handoff_packet_msg_t> ()
                               : e2e::handoff_packet_msg_t{};
         try {
             co_await actor->relay (std::string (dispatch.packet_name), payload);

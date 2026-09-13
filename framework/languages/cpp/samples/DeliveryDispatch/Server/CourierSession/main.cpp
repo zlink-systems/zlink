@@ -31,13 +31,13 @@ class courier_session_t final : public packet_stream_session_t
 
     task_t<void> on_packet (stream_t &stream,
                             const session_message_context_t &dispatch,
-                            const zlink::message_t &payload) override
+                            const zlink::framework::message_t &payload) override
     {
         std::cerr << "deliverydispatch courier-session: dispatch packet=" << dispatch.packet_name
                   << "\n";
         auto &actors = stream.actors ();
         if (dispatch.packet_name == bind_courier_session_req_t::packet_name) {
-            const auto request = payload.parse_json<bind_courier_session_req_t> ();
+            const auto request = payload.decode<bind_courier_session_req_t> ();
             /* Global ActorId로 current owner를 찾거나 eligible node에 생성한다. Application은
              * courier id에서 physical NodeRid를 계산하지 않는다. */
             auto located =
@@ -55,7 +55,7 @@ class courier_session_t final : public packet_stream_session_t
             _bound_actors.insert (actor_id);
             auto reply = co_await actor
                            .relay_request (bind_courier_session_req_t::packet_name,
-                                           zlink::message_t::from_json (
+                                           zlink::framework::message_t::from (
                                              bind_courier_session_req_t{request.courier_id}))
                            .async ();
             stream.reply_packet (reply).async ();
@@ -65,7 +65,7 @@ class courier_session_t final : public packet_stream_session_t
         }
         if (dispatch.packet_name == courier_decision_msg_t::packet_name) {
             auto actor = require_bound_actor (
-              stream, payload.parse_json<courier_decision_msg_t> ().courier_id);
+              stream, payload.decode<courier_decision_msg_t> ().courier_id);
             co_await actor.relay (payload);
             co_return;
         }

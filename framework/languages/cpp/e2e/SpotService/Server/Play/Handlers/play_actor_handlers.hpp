@@ -51,7 +51,7 @@ class join_spot_handler_t
               "joined actor route was not found");
         }
         auto reply =
-          current->relay_request ("JoinReq", zlink::message_t::from_json (request))
+          current->relay_request ("JoinReq", zlink::framework::message_t::from (request))
             .async ()
             .result ();
         if (!reply) {
@@ -60,7 +60,7 @@ class join_spot_handler_t
               reply.error () ? reply.error ()->what () : "JoinReq failed");
         }
         zlink::framework::http_response_t response;
-        response.body = nlohmann::json (reply.value ().parse_json<e2e::join_res_t> ()).dump ();
+        response.body = nlohmann::json (reply.value ().decode<e2e::join_res_t> ()).dump ();
         return response;
     }
 
@@ -165,7 +165,7 @@ class mutate_spot_state_handler_t
               "state actor route was not found");
         }
         auto reply =
-          actor->relay_request ("StateReq", zlink::message_t::from_json (request.state))
+          actor->relay_request ("StateReq", zlink::framework::message_t::from (request.state))
             .async ()
             .result ();
         if (!reply) {
@@ -175,7 +175,7 @@ class mutate_spot_state_handler_t
         }
 
         zlink::framework::http_response_t response;
-        response.body = nlohmann::json (reply.value ().parse_json<e2e::state_res_t> ()).dump ();
+        response.body = nlohmann::json (reply.value ().decode<e2e::state_res_t> ()).dump ();
         return response;
     }
 
@@ -217,7 +217,7 @@ class complex_actor_handler_t
               "complex actor route was not found");
         }
         auto join_reply =
-          current->relay_request ("JoinReq", zlink::message_t::from_json (request.join))
+          current->relay_request ("JoinReq", zlink::framework::message_t::from (request.join))
             .async ()
             .result ();
         if (!join_reply) {
@@ -227,7 +227,7 @@ class complex_actor_handler_t
         }
         auto complex_reply =
           current->relay_request ("ComplexActorReq",
-                                  zlink::message_t::from_json (request.complex))
+                                  zlink::framework::message_t::from (request.complex))
             .async ()
             .result ();
         if (!complex_reply) {
@@ -240,8 +240,8 @@ class complex_actor_handler_t
         zlink::framework::http_response_t response;
         response.body =
           nlohmann::json (e2e::spot_complex_actor_res_t{
-            .join = join_reply.value ().parse_json<e2e::join_res_t> (),
-            .complex = complex_reply.value ().parse_json<e2e::complex_actor_res_t> ()})
+            .join = join_reply.value ().decode<e2e::join_res_t> (),
+            .complex = complex_reply.value ().decode<e2e::complex_actor_res_t> ()})
             .dump ();
         return response;
     }
@@ -284,7 +284,7 @@ class missing_actor_handler_t
               "missing actor route was not found");
         }
         auto join_reply =
-          current->relay_request ("JoinReq", zlink::message_t::from_json (request.join))
+          current->relay_request ("JoinReq", zlink::framework::message_t::from (request.join))
             .async ()
             .result ();
         if (!join_reply) {
@@ -295,7 +295,7 @@ class missing_actor_handler_t
         auto missing =
           current
             ->relay_request (request.packet_name,
-                             zlink::message_t::from_json (e2e::state_req_t{"add", 1}))
+                             zlink::framework::message_t::from (e2e::state_req_t{"add", 1}))
             .async ()
             .result ();
         const auto failed = !missing.has_value ();
@@ -355,7 +355,7 @@ class remote_actor_flow_handler_t
               "remote actor route was not found");
         }
         auto join_reply =
-          current->relay_request ("JoinReq", zlink::message_t::from_json (request.join))
+          current->relay_request ("JoinReq", zlink::framework::message_t::from (request.join))
             .async ()
             .result ();
         if (!join_reply) {
@@ -364,7 +364,7 @@ class remote_actor_flow_handler_t
               join_reply.error () ? join_reply.error ()->what () : "remote JoinReq failed");
         }
         auto state_reply =
-          current->relay_request ("StateReq", zlink::message_t::from_json (request.state))
+          current->relay_request ("StateReq", zlink::framework::message_t::from (request.state))
             .async ()
             .result ();
         if (!state_reply) {
@@ -376,8 +376,8 @@ class remote_actor_flow_handler_t
         zlink::framework::http_response_t response;
         response.body =
           nlohmann::json (e2e::remote_actor_flow_res_t{
-            .join = join_reply.value ().parse_json<e2e::join_res_t> (),
-            .state = state_reply.value ().parse_json<e2e::state_res_t> ()})
+            .join = join_reply.value ().decode<e2e::join_res_t> (),
+            .state = state_reply.value ().decode<e2e::state_res_t> ()})
             .dump ();
         co_return response;
     }
@@ -457,7 +457,7 @@ class remote_actor_request_handler_t
               "remote actor route was not found");
         }
         auto join_reply =
-          current->relay_request ("JoinReq", zlink::message_t::from_json (request.join))
+          current->relay_request ("JoinReq", zlink::framework::message_t::from (request.join))
             .async ()
             .result ();
         if (!join_reply) {
@@ -468,7 +468,7 @@ class remote_actor_request_handler_t
         _state.record ("RemoteActorRequestSent", request.join.actor_id, {},
                        target_node + ":" + std::to_string (request.state.amount));
         auto reply =
-          current->relay_request ("StateReq", zlink::message_t::from_json (request.state))
+          current->relay_request ("StateReq", zlink::framework::message_t::from (request.state))
             .async ()
             .result ();
         if (!reply) {
@@ -476,7 +476,7 @@ class remote_actor_request_handler_t
               reply.error_kind (),
               reply.error () ? reply.error ()->what () : "remote actor request failed");
         }
-        auto state = reply.value ().parse_json<e2e::state_res_t> ();
+        auto state = reply.value ().decode<e2e::state_res_t> ();
         _state.record ("RemoteActorRequestReply", request.join.actor_id, {},
                        state.owner_node_rid + ":" + std::to_string (state.value));
 
@@ -537,7 +537,7 @@ class worker_spot_handler_t
               "worker actor route was not found");
         }
         auto reply =
-          actor->relay_request ("WorkerReq", zlink::message_t::from_json (request.worker))
+          actor->relay_request ("WorkerReq", zlink::framework::message_t::from (request.worker))
             .async ()
             .result ();
         if (!reply) {
@@ -547,7 +547,7 @@ class worker_spot_handler_t
         }
 
         zlink::framework::http_response_t response;
-        response.body = nlohmann::json (reply.value ().parse_json<e2e::worker_res_t> ()).dump ();
+        response.body = nlohmann::json (reply.value ().decode<e2e::worker_res_t> ()).dump ();
         return response;
     }
 
