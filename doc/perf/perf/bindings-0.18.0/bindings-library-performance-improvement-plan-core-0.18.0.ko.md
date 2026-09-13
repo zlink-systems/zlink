@@ -697,8 +697,8 @@ geomean은 91.9%로 near-C가 맞다. 어떤 바인딩도 C보다 빠르지 않�
 | 언어 | Single 평균(geomean·중앙) | Single 통과/보류/미달/미측정 | Multi 평균(geomean·중앙) | Multi 통과/보류/미달/미측정 | 상태 |
 |------|------------|------------------------------|-----------|-----------------------------|------|
 | C++ (§9.1) | 92.9% (중앙 93) | 32 / 10 / 0 / 0 | 94.8% (중앙 93) | 18 / 10 / 0 / 0 | **완료** — 미달 0(통과/보류만). C 근접, §3.1 퍼진비용 보류 |
-| .NET (§9.2) | 85.5% (중앙 94) | 30 / 12 / 0 / 0 | 82.4% (중앙 81) | 20 / 8 / 0 / 0 | **완료** — 실패·미측정·미달 0. reqrep 하네스 회귀(G4) 복원 재측정 반영(single 소형 2~7%→40~44%, multi 5~10%→47~79%); 평균·카운트는 §9.2 상세표 재집계 |
-| Java (§9.3) | 93.8% (중앙 103) | 30 / 12 / 0 / 0 | 84.2% (중앙 82) | 18 / 10 / 0 / 0 | **완료** — 실패·미측정·미달 0. single reqrep 하네스 회귀(G3 810983b674) 복원 재측정 반영(18~66%→41~127%, jmeas 3run); Single 평균·카운트는 §9.3.1 상세표 재집계(Multi 불변) |
+| .NET (§9.2) | 85.5% (중앙 94) | 30 / 12 / 0 / 0 | 82.4% (중앙 81) | 20 / 8 / 0 / 0 | **완료** — 실패·미측정·미달 0. reqrep 하네스 회귀(G4) 복원 재측정 반영(single 소형 2~7%→40~44%, multi 5~10%→47~79%). **multi SENDSEND·DEALER_DEALER·STREAM 완결 owner도 #332로 복원**(Phase 2 회귀), matched cbase2 전 패턴 24/24 재확인(cbase2 geomean 76.1%). 평균·카운트는 §9.2 상세표 재집계 |
+| Java (§9.3) | 93.8% (중앙 103) | 30 / 12 / 0 / 0 | 84.2% (중앙 82) | 18 / 10 / 0 / 0 | **완료** — 실패·미측정·미달 0. single reqrep 하네스 회귀(G3 810983b674) 복원 재측정 반영(18~66%→41~127%, jmeas 3run). **multi SENDSEND·DEALER_DEALER·STREAM 완결 owner도 #333으로 복원**(Phase 2 회귀), matched cbase2 전 패턴 24/24 재확인(cbase2 geomean 71.1%). Single 평균·카운트는 §9.3.1 상세표 재집계 |
 | Node (§9.4) | 69.8% (중앙 76) | 16 / 19 / 0 / 0 | 50.9% (중앙 50) | 4 / 12 / 0 / 0 | **완료** — 미달 0(통과/보류만). SUB 축약 개선 채택(PUBSUB wss·tls 통과) |
 | Go (§9.5) | 59.9% (중앙 60) | 12 / 18 / 0 / 0 | 56.0% (중앙 55) | 14 / 14 / 0 / 0 | **완료** — Multi 측정 완료(2026-09-13, matched C baseline). multi 하네스 완결 드레인 복원(#328) 후 전 패턴 24/24 complete. 보류는 소형 goroutine/cgo per-op 바닥(대형 회복), 미달 0(통과/보류만) |
 
@@ -856,6 +856,13 @@ geomean은 91.9%로 near-C가 맞다. 어떤 바인딩도 C보다 빠르지 않�
 
 #### 9.2.2 Multi suite
 
+> **완결 owner 복원(2026-09-13, #332)**: 완결자 단일화(#316)가 바인딩 백그라운드 owner를 제거한 뒤,
+> multi 하네스에서 REQREP만 public `PollCompletion` poller를 소유하고 SENDSEND relay·DEALER_DEALER·
+> STREAM 송신 경로는 미소유여서 대형(backpressure) 셀이 `InvalidState`(code 8)로 실패했다(그 사이 main 회귀).
+> 이 경로들이 모두 public 완결 poller를 소유·구동(turn당 1회, immediate Ok 무대기)하도록 복원. **matched
+> C baseline(cbase2)로 전 패턴 24/24 complete 재확인**(geomean 76.1%, 중앙 76 — cbase2 기준; 아래 표 수치는
+> 원 baseline 기준 기록 유지). 아래 per-cell 값은 판정 근거로 남긴다.
+
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
 | `tcp` | `MULTI_DEALER_DEALER` | 38.9% | 60.4% | 102.6% | 86.5% | 140.0% | 120.8% | 통과 91.5%/lat0.43× ·  |
@@ -951,6 +958,13 @@ geomean은 91.9%로 near-C가 맞다. 어떤 바인딩도 C보다 빠르지 않�
 | `ipc` | `ROUTER_ROUTER_REQREP` | 41.4% | 41.2% | 74.1% | 32.8% | 36.6% | 41.4% | 보류 47.4%/lat1.80×(median) · G3(810983b674) 하네스 회귀 복원 재측정 · jmeas(3run) |
 
 #### 9.3.2 Multi suite
+
+> **완결 owner 복원(2026-09-13, #333)**: 완결자 단일화(#321)가 바인딩 백그라운드 owner를 제거한 뒤,
+> multi 하네스에서 REQREP만 public `POLLCOMPLETION` poller를 소유하고 SENDSEND relay·DEALER_DEALER·
+> STREAM 송신 경로는 미소유여서 대형(backpressure) 셀이 `InvalidState`(client_exit)로 실패했다(그 사이 main 회귀).
+> 이 경로들이 모두 공유 public 완결 poller를 turn당 1회 구동(immediate OK 무대기)하도록 복원. **matched
+> C baseline(cbase2)로 전 패턴 24/24 complete 재확인**(geomean 71.1%, 중앙 74 — cbase2 기준; 아래 표 수치는
+> 원 baseline 기준 기록 유지). 아래 per-cell 값은 판정 근거로 남긴다.
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
