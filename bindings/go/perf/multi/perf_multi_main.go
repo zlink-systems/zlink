@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -28,49 +29,36 @@ func multiSendDrainTimeout() time.Duration {
 	return time.Duration(value) * time.Millisecond
 }
 
-type multiSendTurnResult struct {
-	index int
-	err   error
-}
-
 // multiSendTurnCoordinator keeps one admission owner per socket. An
 // immediately admitted send makes that socket available for the next round;
 // a backpressured send remains unavailable until its exact WRITABLE retry
-// completes inside the binding.
+// completes through the harness-owned public completion poller.
 type multiSendTurnCoordinator struct {
-	available []bool
-	completed chan multiSendTurnResult
-	pending   int
-	next      int
+	pending []zlink.SendSubmission
+	count   int
+	next    int
 }
 
 func newMultiSendTurnCoordinator(socketCount int) *multiSendTurnCoordinator {
-	available := make([]bool, socketCount)
-	for index := range available {
-		available[index] = true
-	}
-	return &multiSendTurnCoordinator{
-		available: available,
-		completed: make(chan multiSendTurnResult, socketCount),
-	}
+	return &multiSendTurnCoordinator{pending: make([]zlink.SendSubmission, socketCount)}
 }
 
 func (c *multiSendTurnCoordinator) submitRound(
 	stopAt time.Time,
 	submit func(int) (zlink.SendSubmission, error),
 ) (int, error) {
-	if len(c.available) == 0 {
+	if len(c.pending) == 0 {
 		return 0, nil
 	}
 	start := c.next
-	c.next = (c.next + 1) % len(c.available)
+	c.next = (c.next + 1) % len(c.pending)
 	submitted := 0
-	for attempt := 0; attempt < len(c.available); attempt++ {
+	for attempt := 0; attempt < len(c.pending); attempt++ {
 		if !time.Now().Before(stopAt) {
 			break
 		}
-		index := (start + attempt) % len(c.available)
-		if !c.available[index] {
+		index := (start + attempt) % len(c.pending)
+		if c.pending[index] != nil {
 			continue
 		}
 		submission, err := submit(index)
@@ -78,48 +66,78 @@ func (c *multiSendTurnCoordinator) submitRound(
 			return submitted, err
 		}
 		submitted++
-		if submission.Result() == zlink.SubmitBackpressured {
-			c.available[index] = false
-			c.pending++
-			go func() {
-				c.completed <- multiSendTurnResult{index: index, err: submission.Admitted(context.Background())}
-			}()
+		if submission == nil {
+			return submitted, fmt.Errorf("multi send returned no submission")
+		}
+		switch submission.Result() {
+		case zlink.SubmitOK:
+		case zlink.SubmitBackpressured:
+			c.pending[index] = submission
+			c.count++
+		default:
+			return submitted, fmt.Errorf("multi send returned submit result %d", submission.Result())
 		}
 	}
 	return submitted, nil
 }
 
-func (c *multiSendTurnCoordinator) drainReady() (bool, error) {
+// resumeReady observes admission only after the public completion poller has
+// had a turn. A canceled context makes the check nonblocking without canceling
+// the submission retained by the binding.
+func (c *multiSendTurnCoordinator) resumeReady() (bool, error) {
 	progressed := false
-	for {
-		select {
-		case result := <-c.completed:
-			progressed = true
-			c.available[result.index] = true
-			c.pending--
-			if result.err != nil {
-				return progressed, result.err
-			}
-		default:
-			return progressed, nil
+	for index, submission := range c.pending {
+		if submission == nil {
+			continue
+		}
+		ready, err := multiSendAdmissionReady(submission)
+		if !ready {
+			continue
+		}
+		c.pending[index] = nil
+		c.count--
+		progressed = true
+		if err != nil {
+			return progressed, err
 		}
 	}
+	return progressed, nil
 }
 
-func (c *multiSendTurnCoordinator) waitReady(deadline time.Time) error {
-	wait := time.Until(deadline)
-	if wait <= 0 {
-		return nil
+func multiSendAdmissionReady(submission zlink.SendSubmission) (bool, error) {
+	readyContext, cancelReady := context.WithCancel(context.Background())
+	cancelReady()
+	err := submission.Admitted(readyContext)
+	if errors.Is(err, context.Canceled) {
+		return false, nil
 	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case result := <-c.completed:
-		c.available[result.index] = true
-		c.pending--
-		return result.err
-	case <-timer.C:
+	return true, err
+}
+
+func waitMultiSendAdmission(
+	poller *zlink.Poller,
+	events []zlink.PollEvent,
+	submission zlink.SendSubmission,
+) error {
+	if submission == nil {
+		return fmt.Errorf("multi send returned no submission")
+	}
+	switch submission.Result() {
+	case zlink.SubmitOK:
 		return nil
+	case zlink.SubmitBackpressured:
+	default:
+		return fmt.Errorf("multi send returned submit result %d", submission.Result())
+	}
+	for {
+		ready, err := multiSendAdmissionReady(submission)
+		if ready {
+			return err
+		}
+		if _, err := poller.Wait(events, 50*time.Millisecond); err != nil &&
+			!perfcommon.IsTransient(err) {
+			return err
+		}
 	}
 }
 
@@ -132,6 +150,9 @@ func runMultiSendTurns(
 	onSubmitted func(int),
 	hasDrainWork func() bool,
 ) error {
+	if progress == nil {
+		return fmt.Errorf("%s requires a public completion poller", label)
+	}
 	coordinator := newMultiSendTurnCoordinator(socketCount)
 	for time.Now().Before(window.StopAt) {
 		submitted, err := coordinator.submitRound(window.StopAt, submit)
@@ -141,20 +162,11 @@ func runMultiSendTurns(
 		if onSubmitted != nil {
 			onSubmitted(submitted)
 		}
-		progressed := submitted > 0
-		drained, err := coordinator.drainReady()
-		if err != nil {
+		if err := progress(multiSendTurnWait(window.StopAt, submitted > 0)); err != nil {
 			return err
 		}
-		progressed = progressed || drained
-		if progress != nil {
-			if err := progress(multiSendTurnWait(window.StopAt, progressed)); err != nil {
-				return err
-			}
-		} else if !progressed && coordinator.pending > 0 {
-			if err := coordinator.waitReady(window.StopAt); err != nil {
-				return err
-			}
+		if _, err := coordinator.resumeReady(); err != nil {
+			return err
 		}
 	}
 
@@ -170,25 +182,18 @@ func runMultiSendTurns(
 		}
 	}
 	drainDeadline := time.Now().Add(drainWindow)
-	for coordinator.pending > 0 || (hasDrainWork != nil && hasDrainWork()) {
-		progressed, err := coordinator.drainReady()
-		if err != nil {
-			return err
-		}
-		if coordinator.pending == 0 && (hasDrainWork == nil || !hasDrainWork()) {
+	for coordinator.count > 0 || (hasDrainWork != nil && hasDrainWork()) {
+		if coordinator.count == 0 && (hasDrainWork == nil || !hasDrainWork()) {
 			break
 		}
 		if !time.Now().Before(drainDeadline) {
 			return fmt.Errorf("%s send drain timed out", label)
 		}
-		if progress != nil {
-			if err := progress(multiSendTurnWait(drainDeadline, progressed)); err != nil {
-				return err
-			}
-		} else if !progressed && coordinator.pending > 0 {
-			if err := coordinator.waitReady(drainDeadline); err != nil {
-				return err
-			}
+		if err := progress(multiSendTurnWait(drainDeadline, false)); err != nil {
+			return err
+		}
+		if _, err := coordinator.resumeReady(); err != nil {
+			return err
 		}
 	}
 	return nil

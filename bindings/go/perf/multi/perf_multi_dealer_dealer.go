@@ -226,6 +226,14 @@ func runMultiDealerDealerSendWindow(clients []dealerDealerClient, cfg multiConfi
 	if len(clients) == 0 {
 		return
 	}
+	completionPoller, err := zlink.NewPoller()
+	perfcommon.Must(err)
+	defer completionPoller.Close()
+	completionEvents := make([]zlink.PollEvent, len(clients))
+	for index := range clients {
+		perfcommon.Must(completionPoller.AddSocket(
+			clients[index].socket, zlink.PollCompletion, uintptr(index)))
+	}
 
 	submit := func(index int) (zlink.SendSubmission, error) {
 		client := clients[index]
@@ -249,8 +257,15 @@ func runMultiDealerDealerSendWindow(clients []dealerDealerClient, cfg multiConfi
 		}
 		return submission, nil
 	}
+	progress := func(wait time.Duration) error {
+		_, waitErr := completionPoller.Wait(completionEvents, wait)
+		if waitErr != nil && !perfcommon.IsTransient(waitErr) {
+			return fmt.Errorf("multi dealer/dealer client completion poll: %w", waitErr)
+		}
+		return nil
+	}
 	perfcommon.Must(runMultiSendTurns(
-		len(clients), window, "multi dealer/dealer", submit, nil, nil, nil))
+		len(clients), window, "multi dealer/dealer", submit, progress, nil, nil))
 }
 
 func useMultiDealerDealerMoveMessage(transport string, msgSize int) bool {
@@ -268,12 +283,21 @@ func useMultiDealerDealerMoveMessage(transport string, msgSize int) bool {
 }
 
 // sendMultiDealerStopToken pushes the wire-level stop token through the
-// dealer socket. Submit handles WRITABLE retry internally; the outer bound
-// remains for terminal-phase connection and lifecycle failures.
+// dealer socket. Its public completion poller drives a WRITABLE retry before
+// the outer bound handles other terminal-phase connection/lifecycle failures.
 func sendMultiDealerStopToken(socket *zlink.DealerSocket) {
+	completionPoller, err := zlink.NewPoller()
+	perfcommon.Must(err)
+	defer completionPoller.Close()
+	perfcommon.Must(completionPoller.AddSocket(socket, zlink.PollCompletion, 0))
+	completionEvents := make([]zlink.PollEvent, 1)
 	for attempt := 0; attempt < perfcommon.StopTokenSendAttempts; attempt++ {
 		sent, err := perfcommon.SubmitRoutedPayload(perfcommon.StopToken, func(message *zlink.Message) error {
-			return perfcommon.SubmitSend(context.Background(), socket.Send().MoveMessage(message))
+			submission, submitErr := socket.Send().MoveMessage(message).Submit(context.Background())
+			if submitErr != nil {
+				return submitErr
+			}
+			return waitMultiSendAdmission(completionPoller, completionEvents, submission)
 		})
 		if err == nil && sent {
 			return
