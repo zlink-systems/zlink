@@ -91,7 +91,14 @@ public sealed record TimeSeriesInterval(double offsetMs, double durationMs, Dict
 public sealed record Workload(int requestPayloadBytes, int responsePayloadBytes, int sendPayloadBytes, double durationSeconds, double warmupSeconds,
     int inflight, int? connections, int? logicalStreams, int clientCount, int? connectConcurrency,
     int requestTimeoutMs, int correlationExpiryMs, int settleTimeoutMs, int setupTimeoutMs,
-    int adminTimeoutMs, int socketSendTimeoutMs, int applicationDeadlineMs = 50, int workerTaskMillis = 5, int workerPoolSize = 8, int subscriberCount = 8);
+    int adminTimeoutMs, int socketSendTimeoutMs, int applicationDeadlineMs = 50, int workerTaskMillis = 5, int workerPoolSize = 8, int subscriberCount = 8)
+{
+    public void ValidateCcu()
+    {
+        if (connections is < 1 or > 1000 || logicalStreams is < 1 or > 1000)
+            throw new ArgumentException("Connections and logical streams must be between 1 and 1000; inflight is separate from CCU.");
+    }
+}
 public sealed record RoleConfig(string runId, string cellId, string configHash, string role,
     int roleInstance, string scenario, string? topology, string? channelName, string? meshName,
     string? listenerEndpoint, string? peerEndpoint, string metricsUrl, string applicationTriggerUrl,

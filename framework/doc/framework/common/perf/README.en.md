@@ -167,8 +167,8 @@ to applicable consumers.
 | Option | Default and range | Consumer and meaning |
 |---|---|---|
 | `--scenario` | Required for `run_single.sh`; all for `run_perf.sh` | Script selects an executable name from §8.4 or §11 |
-| `--connections` | 10000, positive int32 | CS connection pool only: total physical connectors |
-| `--logical-streams` | 10000 normally, 8 for worker; positive int32 | Server-driven source workload loop: stream count |
+| `--connections` | 1000, 1..1000 | CS connection pool only: total physical connectors |
+| `--logical-streams` | 1000 normally, 8 for worker; 1..1000 | Server-driven source workload loop: stream count |
 | `--client-count` | 1, positive int32 | Script and CS partition plan: client process count; 1 for server-driven cells |
 | `--client-index` | 0, `0 <= index < count` | Script assigns the partition index to a child CS client; not a top-level input |
 | `--duration-seconds` | 5, finite > 0 | Aggregation owner's measured window |
@@ -254,7 +254,7 @@ executor limits. Apply these only through each language's public worker options 
 Request/send-send workloads are closed-loop, with `inflight` independent slots per stream.
 A slot starts its next operation after the final outcome. One-way/PS slots are released after the
 public admission terminal; never add a consumer acknowledgement window.
-Worker defaults to 8 streams and inflight 1, avoiding 10000 queued operations for 5ms work and 8
+Worker defaults to 8 streams and inflight 1, avoiding 1000 queued operations for 5ms work and 8
 workers. Explicit overload belongs to a separate §24 manifest, not the normal baseline.
 Rate, burst and Core/queue-profile inputs belong only to the §23–24 manifest.
 
@@ -311,9 +311,12 @@ Casing follows language convention consistently within each language.
 `Program.*` handles only parsing, logging, DI/host configuration and scenario selection.
 This structure includes no new runtime adapter or raw-frame processing helper.
 
-### 6.2 The 10,000-Client Driving Model
+### 6.2 The Maximum 1,000-CCU Driving Model
 
-CS partitions 10000 physical connectors among `client-count` processes.
+All languages have a 1000-CCU ceiling. CCU means total physical connectors for CS,
+and logical user streams for server-driven workloads. `inflight` is concurrent requests per user,
+separate from CCU; its default remains 1. Both CLI and manifest preflight reject CCU above 1000.
+CS partitions the default 1000 physical connectors among `client-count` processes.
 For `N=connections`, `P=clientCount`, `i=clientIndex`, `q=floor(N/P)`, `r=N mod P`,
 a process owns `q + (i < r ? 1 : 0)` connectors starting at ID `i*q + min(i,r)`.
 `P <= N`; global client IDs do not overlap.
@@ -1365,6 +1368,8 @@ The run summary has one row per cell and no cross-cell throughput total.
 Default output columns are `bandwidth`, `throughput`, `latency mean`, `latency p95`,
 `latency p99`, `cpu`, and `mem`, in that order. Bandwidth is the directional logical
 payload rate above in `MiB/sec`; latency uses `ms`, CPU uses `%`, and memory is process RSS in `MiB`.
+Display CPU and memory with each process name and its actual observation. Do not sum independent
+process values into a simultaneous global observation; retain the detailed JSON `MULTIPLE_OWNERS` policy.
 Request/reply and send-send echo completion throughput displays `throughput.kops` in `kops/sec`.
 One-way send displays `send.deliveryOpsPerSec / 1000`, and PS displays the sum across subscribers,
 `fanout.deliveryOpsPerSec / 1000`, in `kmsg/sec`. Label PS throughput as a subscriber total.

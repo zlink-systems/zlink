@@ -3096,6 +3096,36 @@
         "timingEvidence"
       ],
       "additionalProperties": false
+    },
+    "CcuWorkload": {
+      "type": "object",
+      "properties": {
+        "connections": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "logicalStreams": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "Physical connections and logical streams each use CCU<=1000. Per-user inflight requests are independent."
     }
   },
   "oneOf": [

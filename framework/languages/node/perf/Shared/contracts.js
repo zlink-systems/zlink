@@ -15,6 +15,12 @@ function registerPackets(framework) {
     framework.ZLinkPacket(type.name)(type);
   }
 }
+function validateCcu(workload) {
+  for (const key of ['connections', 'logicalStreams']) {
+    const value = workload?.[key];
+    if (value != null && (!Number.isInteger(value) || value < 1 || value > 1000)) throw new Error(`workload.${key} must be between 1 and 1000; inflight is separate from CCU.`);
+  }
+}
 function pattern(size) {
   const bytes = Buffer.alloc(size);
   for (let i = 0; i < size; i++) bytes[i] = (31 * i + 17 * Math.floor(i / 251) + 29) % 256;
@@ -44,4 +50,4 @@ function validateIdentity(request, reply) {
 function json(value) {
   return JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? String(item) : item instanceof Map ? Object.fromEntries(item) : item);
 }
-module.exports = { PerfEchoRequest, PerfEchoReply, PerfDriveRequest, PerfDriveReply, PerfPublishEvent, PerfBindRequest, PerfBindReply, PerfProbeRequest, registerPackets, pattern, validatePattern, validateIdentity, decimal, validation, json };
+module.exports = { PerfEchoRequest, PerfEchoReply, PerfDriveRequest, PerfDriveReply, PerfPublishEvent, PerfBindRequest, PerfBindReply, PerfProbeRequest, registerPackets, validateCcu, pattern, validatePattern, validateIdentity, decimal, validation, json };

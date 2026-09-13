@@ -159,8 +159,8 @@ Shell runner의 옵션 이름과 consumer는 다음과 같다. 미적용 옵션�
 | 옵션 | 기본값·범위 | Consumer와 의미 |
 |---|---|---|
 | `--scenario` | `run_single.sh` 필수; `run_perf.sh`는 전체 | Script가 §8.4·§10.12·§11의 실행 이름을 선택한다 |
-| `--connections` | 10000, 양의 int32 | CS connection pool만 소비하는 전체 physical connector 수 |
-| `--logical-streams` | 일반 10000, worker 8; 양의 int32 | Server-driven source의 workload loop가 소비하는 stream 수 |
+| `--connections` | 1000, 1..1000 | CS connection pool만 소비하는 전체 physical connector 수 |
+| `--logical-streams` | 일반 1000, worker 8; 1..1000 | Server-driven source의 workload loop가 소비하는 stream 수 |
 | `--client-count` | 1, 양의 int32 | Script·CS 분할 계획이 소비하는 client process 수; server-driven은 1 |
 | `--client-index` | 0, `0 <= index < count` | Script가 child CS client에 부여하는 분할 index; top-level 입력은 받지 않음 |
 | `--duration-seconds` | 5, finite > 0 | 집계 owner의 measured window |
@@ -244,7 +244,7 @@ Worker config에는 `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
 Request/send-send workload는 stream마다 `inflight`개의 독립 slot을 유지하는 closed-loop다.
 각 slot은 최종 결과 뒤 다음 operation을 시작한다. One-way/PS slot은 public admission terminal
 뒤 반납한다. 소비자의 수신을 기다리는 ACK window를 추가하지 않는다.
-Worker는 8 stream·inflight 1을 기본으로 하여 5ms 작업·8 worker에 10000건을 적재하지 않는다.
+Worker는 8 stream·inflight 1을 기본으로 하여 5ms 작업·8 worker에 1000건을 적재하지 않는다.
 과부하가 필요하면 §24의 별도 부하 manifest를 사용하고 정상 기준 셀과 구분한다.
 Rate·burst·Core/queue profile을 바꾸는 입력은 §23–24 manifest만 소유한다.
 
@@ -301,9 +301,13 @@ Casing은 언어 관례를 따르되 같은 언어 안에서 일관되게 쓴다
 `Program.*`은 옵션 해석, logging·DI·host 구성과 scenario 선택만 담당한다.
 새 runtime adapter나 raw frame 처리 helper는 이 구조에 포함하지 않는다.
 
-### 6.2 10,000 client 구동 모델
+### 6.2 최대 1,000 CCU 구동 모델
 
-CS는 physical connector 10000개를 `client-count` process에 나눈다.
+모든 언어의 CCU 상한은 1000이다. CS에서는 전체 physical connector 수,
+server-driven에서는 논리적 사용자에 해당하는 stream 수를 기준으로 한다.
+`inflight`는 사용자당 동시 요청 수이며 CCU와 별개다. 기본값은 1을 유지한다.
+CLI와 manifest 모두 CCU 1000 초과를 preflight에서 거부한다.
+CS는 기본 physical connector 1000개를 `client-count` process에 나눈다.
 `N=connections`, `P=clientCount`, `i=clientIndex`, `q=floor(N/P)`, `r=N mod P`이면
 현재 process는 `q + (i < r ? 1 : 0)`개를 맡고 시작 ID는 `i*q + min(i,r)`다.
 `P <= N`이며 전역 client ID가 중복되지 않는다.
@@ -1346,6 +1350,8 @@ Run root summary는 셀별 행이며 셀 사이 throughput 합계가 없다.
 기본 출력은 `bandwidth`, `throughput`, `latency mean`, `latency p95`, `latency p99`,
 `cpu`, `mem` 순서다. Bandwidth는 위 directional logical payload 대역폭인 `MiB/sec`,
 latency는 `ms`, CPU는 `%`, mem은 process RSS인 `MiB`로 표시한다.
+CPU와 mem은 프로세스 이름과 실제 관측값을 함께 표시한다. 여러 프로세스의 값을
+동시 전역 관측값으로 합산하지 않으며, 상세 JSON의 `MULTIPLE_OWNERS` 정책은 유지한다.
 요청·응답 및 send-send echo의 완료 처리량은 `throughput.kops`를 `kops/sec`로 표시한다.
 단방향 send는 `send.deliveryOpsPerSec / 1000`, PS는 subscriber 전체의
 `fanout.deliveryOpsPerSec / 1000`을 `kmsg/sec`로 표시한다. PS 출력은 subscriber 합산임을 명시한다.

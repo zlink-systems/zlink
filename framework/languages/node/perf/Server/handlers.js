@@ -147,7 +147,7 @@ function createHandlers(framework, nestjs, measure, clients) {
   }
   const providers = [ChannelRequestHandler, ChannelSendHandler, ChannelReturnHandler, PerfSpot, SpotEchoHandler, SpotProbeHandler, SpotDriveHandler, SpotReturnHandler, PerfActorFactory, PerfEntrySpot, ActorRequestHandler, ActorProbeHandler, ActorSendHandler, PerfSessionFactory, FanoutHandler];
   providers.forEach(type => Injectable()(type));
-  if (kind.oneWay || kind.correlated && !kind.driver) framework.ZLinkPacket('PerfEchoRequest')(SpotEchoHandler);
+  if ((kind.oneWay || kind.correlated) && !kind.driver) framework.ZLinkPacket('PerfEchoRequest')(SpotEchoHandler);
   else framework.ZLinkSpotRequest('PerfEchoRequest')(SpotEchoHandler.prototype, 'handle', Object.getOwnPropertyDescriptor(SpotEchoHandler.prototype, 'handle'));
   framework.ZLinkSpotRequest('PerfProbeRequest')(SpotProbeHandler.prototype, 'handle', Object.getOwnPropertyDescriptor(SpotProbeHandler.prototype, 'handle'));
   framework.ZLinkSpotRequest('PerfDriveRequest')(SpotDriveHandler.prototype, 'handle', Object.getOwnPropertyDescriptor(SpotDriveHandler.prototype, 'handle'));

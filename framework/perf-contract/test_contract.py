@@ -152,6 +152,8 @@ class ContractTests(unittest.TestCase):
                     'mode':'request','workload':{'subscriberCount':8},'metricOwners':['client-0.json','client-1.json']}
             result=aggregate(p,config,['client-0.json','client-1.json'],[],[])
             self.assertEqual(result['status'],'valid',result['reasons']);validate_result(result)
+            self.assertTrue(all('nullReasons' in item for item in result['processes']))
+            self.assertEqual(result['processes'][0]['nullReasons'].get('/metrics/process.cpuPercent'),a['nullReasons'].get('/metrics/process.cpuPercent'))
             self.assertEqual(result['metrics']['throughput.kops'],.002)
             self.assertEqual(result['histograms']['latencyMs']['count'],'3')
             self.assertAlmostEqual(result['metrics']['latency.meanMs'],.667)
@@ -229,14 +231,22 @@ class ContractTests(unittest.TestCase):
 
 class PresentationTests(unittest.TestCase):
     def test_default_row_preserves_units_nulls_and_delivery_semantics(self):
-        detail={'language':'node','cellId':'cell','status':'failed','metrics':metric_defaults(),'nullReasons':{}}
+        detail={'language':'node','cellId':'cell','status':'failed','metrics':metric_defaults(),'nullReasons':{},'processes':[{'sourceFile':'server-channel-0.json','resources':{'process.cpuPercent':125,'process.rssMb':64}}]}
         detail['metrics'].update({'throughput.megabytesPerSec':2,'throughput.kops':3,'send.deliveryOpsPerSec':4000,'fanout.deliveryOpsPerSec':8000,
                                   'latency.meanMs':1,'latency.p95Ms':2,'latency.p99Ms':3,'process.cpuPercent':125,'process.rssMb':64})
         detail['nullReasons']['/metrics/send.deliveryLatency.meanMs']=reason('CLOCK_DOMAIN_UNVERIFIED','No clock alignment.')
         echo=display_row(detail,'send-send')
-        self.assertEqual(echo[3:10],('2.000','3.000 kops/sec','1.000','2.000','3.000','125.000','64.000'))
+        self.assertEqual(echo[3:10],('2.000','3.000 kops/sec','1.000','2.000','3.000','channel-0=125.000','channel-0=64.000'))
         send=display_row(detail,'send');self.assertEqual(send[4],'4.000 kmsg/sec');self.assertEqual(send[5],'N/A (CLOCK_DOMAIN_UNVERIFIED)')
         self.assertEqual(display_row(detail,'publish',8)[4],'8.000 kmsg/sec (8 subscribers sum)')
+        detail['processes'].append({'sourceFile':'server-spot-0.json','resources':{'process.cpuPercent':384.542,'process.rssMb':523.793}})
+        detail['servers']=['server-channel-0.json','server-spot-0.json','server-missing-0.json']
+        per_process=display_row(detail,'request')
+        self.assertEqual(per_process[8],'channel-0=125.000; spot-0=384.542; missing-0=N/A (COLLECTION_FAILED; server-missing-0.json#/metrics/process.cpuPercent)')
+        self.assertTrue(per_process[9].startswith('channel-0=64.000; spot-0=523.793;'))
+        detail['processes'][1]['resources']['process.cpuPercent']=None
+        detail['processes'][1]['nullReasons']={'/metrics/process.cpuPercent':reason('CLOCK_DOMAIN_UNVERIFIED','Original public observation reason.')}
+        self.assertIn('spot-0=N/A (CLOCK_DOMAIN_UNVERIFIED;',display_row(detail,'request')[8])
         detail['metrics']['throughput.kops']=None
         self.assertEqual(display_row(detail,'request')[4],'N/A (COLLECTION_FAILED) kops/sec')
 

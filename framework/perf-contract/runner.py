@@ -19,7 +19,7 @@ import urllib.request
 import uuid
 from environment import ROOT, collect, digest, native_file, CORE_HASH
 from results import aggregate, write_json, display_row, DISPLAY_COLUMNS
-from validator import validate_result
+from validator import validate_result, validate_schema
 HERE=Path(__file__).resolve().parent
 MATRIX=json.loads((HERE/'matrix.json').read_text())
 DEFAULTS=MATRIX['defaults']
@@ -39,6 +39,13 @@ def positive_int(value):
     number=int(value)
     if number <= 0: raise argparse.ArgumentTypeError('positive integer required')
     return number
+
+
+def validate_ccu(values):
+    for key in ('connections','logicalStreams'):
+        if values.get(key) is not None and type(values[key]) is not int:raise InvalidSetupError('CCU '+key+' requires an integer JSON token')
+    try:validate_schema(values,'CcuWorkload')
+    except ValueError as error:raise InvalidSetupError('CCU connections/logicalStreams must each be an integer from 1 through 1000; inflight is separate: '+str(error)) from error
 
 
 def options(argv):
@@ -67,6 +74,8 @@ def options(argv):
     p.add_argument('--skip-build',action='store_true')
     p.add_argument('--prepare-only',action='store_true',help='Setup probe and preserve originals; no warmup/measured phase')
     args=p.parse_args(argv)
+    try:validate_ccu({'connections':args.connections,'logicalStreams':args.logical_streams})
+    except InvalidSetupError as error:p.error(str(error))
     if args.runs!=1:p.error("Every selected cell uses runs=1; repeated runs are not authorized")
     comparable=('scenario','mode','terminal','spot_count','channel_topology','connections','logical_streams','client_count','connect_concurrency','inflight','subscriber_count','warmup_seconds','duration_seconds','worker_task_millis','worker_pool_size')
     if args.comparison_config and any(getattr(args,key) is not None for key in comparable): p.error('comparison-config owns comparable fields; duplicate CLI consumers are forbidden')
@@ -292,6 +301,7 @@ def workload(args,cell):
         supplied=cell['optionalManifest']
         aliases={'measuredSeconds':'durationSeconds'}
         result.update({aliases.get(key,key):value for key,value in supplied.items() if aliases.get(key,key) in result})
+    validate_ccu(result)
     if (result['requestPayloadBytes'],result['responsePayloadBytes'],result['sendPayloadBytes'])!=(64,4096,4096):raise InvalidSetupError('Logical payload sizes are fixed at 64/4096/4096')
     if result['applicationDeadlineMs']>result['settleTimeoutMs']:raise InvalidSetupError('Business deadline must fit settle bound')
     cs=cell['streamTransport'] is not None
@@ -303,15 +313,19 @@ def workload(args,cell):
 def selected_cells(args):
     if args.comparison_config and not args.workload_config:
         data=json.loads(args.comparison_config.read_bytes())
+        validate_ccu(data.get('workload',{}))
         cells=data.get('cells',[data.get('cell',data)])
         selected=[]
         for item in cells:
+            validate_ccu(item)
             matches=[dict(c) for c in MATRIX['cells'] if all(c.get(key)==item.get(key) for key in ('scenario','mode','terminal','spotCount','topology') if key in item)]
             if len(matches)!=1:raise InvalidSetupError('comparison-config must select an exact public matrix cell')
+            matches[0].update({key:item[key] for key in ('connections','logicalStreams') if key in item})
             selected.append(matches[0])
         return selected
     if args.workload_config:
         manifest=json.loads(args.workload_config.read_bytes())
+        validate_ccu(manifest)
         if 'scenario' not in manifest:raise InvalidSetupError('workload-config requires scenario')
         cells=[dict(c) for c in MATRIX['cells'] if c['scenario']==manifest['scenario']]
         if not cells:raise UnsupportedCellError('Manifest scenario has no public application consumer')
@@ -502,7 +516,8 @@ def collect_phase(owned,roles,clients,config,cell,phase):
     deadline=time.monotonic()+duration+config['workload']['settleTimeoutMs']/1000
     for c in clients:c.send('wait')
     # Observe the fixed window after issuance ends; admin snapshots are not hot-path polling.
-    time.sleep(duration)
+    sealed_observation=config['mode'] in ('send','publish')
+    time.sleep(duration+(config['workload']['settleTimeoutMs']/1000 if sealed_observation else 0))
     pending=list(roles);snapshots={}
     while pending:
         owned.check()
@@ -511,14 +526,16 @@ def collect_phase(owned,roles,clients,config,cell,phase):
             value=get_json(role['metrics']['baseUrl']+'/perf/stats',config['workload']['adminTimeoutMs']/1000)
             snapshots[name]=value
             active=value.get('runtimeMetrics',{}).get('activeHandlers',{}).get('value')
-            if value['phase']=='complete' and (active is None or active=='0'):pending.remove(role)
-        if pending and time.monotonic()>deadline:raise TimeoutError('Application phase/active handler drain exceeded configured duration+settle bound')
+            window=value.get('window',{})
+            actual_completed_window=not sealed_observation or (window.get('measuredSeconds')==duration and window.get('startTicks') is not None and window.get('endTicks') is not None and int(window['endTicks'])-int(window['startTicks'])==round(duration*1_000_000_000))
+            if value['phase']=='complete' and actual_completed_window and (active=='0' if sealed_observation else active is None or active=='0'):pending.remove(role)
+        if pending and (sealed_observation or time.monotonic()>deadline):raise TimeoutError('Application phase/active handler drain exceeded configured duration+settle bound')
         if pending:time.sleep(.02)
     for index,c in enumerate(clients):
         c.receive(config['workload']['adminTimeoutMs']/1000)
         snapshots['client-'+str(index)+'.json']=c.call('stats',seconds=config['workload']['adminTimeoutMs']/1000)
     # Receiver observations are collected together after every participant reached its terminal bound.
-    for role in roles:
+    for role in ([] if sealed_observation else roles):
         name='server-'+role['role']+'-'+str(role['roleInstance'])+'.json'
         snapshots[name]=get_json(role['metrics']['baseUrl']+'/perf/stats',config['workload']['adminTimeoutMs']/1000)
     for name,value in snapshots.items():
@@ -697,6 +714,7 @@ def cell_run(args,language,spec,environment,manifest,redis,exact,repetition=0):
                     if c.prepared_path is not None and c.prepared_path.exists():
                         prepared=json.loads(c.prepared_path.read_text())
                         if isinstance(prepared.get('snapshot'),dict):write_json(path,prepared['snapshot'])
+        if isinstance(error,KeyboardInterrupt):raise
     finally:
         try:owned.cleanup()
         except (OSError,RuntimeError) as e:issues.append({'code':'CollectionFailure','message':'Shutdown: '+str(e),'sourceFile':'cleanup.json'})
@@ -747,6 +765,8 @@ def main(argv=None):
     inputs=[comparison_input(args,spec,environment,manifest['redis']) for spec in specs]
     redis=RunRedis(args.output,manifest['redis']);results=[]
     print('\t'.join(DISPLAY_COLUMNS),flush=True)
+    def cancel(signum,frame):raise KeyboardInterrupt('Signal '+str(signum))
+    previous_term_handler=signal.signal(signal.SIGTERM,cancel)
     try:
         for language in args.selected_languages:
             for repetition in range(args.runs):
@@ -755,7 +775,15 @@ def main(argv=None):
                     result,cell=cell_run(args,language,spec,environment,manifest,redis,exact,repetition)
                     results.append({'cellId':result['cellId'],'language':language,'resultFile':str((cell/'result.json').relative_to(args.output)),
                         'status':result['status'],'baselineEligible':result['baselineEligible'],'comparisonKey':result['comparisonKey']})
-    finally:redis.close()
+    except KeyboardInterrupt as error:
+        write_json(args.output/'index.json',{'schemaVersion':3,'runId':args.run_id,'cells':results})
+        write_json(args.output/'abort.json',{'runId':args.run_id,'reason':str(error) or 'KeyboardInterrupt','completedCells':results,
+            'interruptedCellFiles':[str(p.relative_to(args.output)) for p in args.output.glob('*/*/*/failure.json')],
+            'finalComparisonComplete':False})
+        raise
+    finally:
+        try:redis.close()
+        finally:signal.signal(signal.SIGTERM,previous_term_handler)
     write_json(args.output/'index.json',{'schemaVersion':3,'runId':args.run_id,'cells':results})
     write_json(args.output/'summary.json',{'schemaVersion':3,'runId':args.run_id,'cells':results,'counts':{status:sum(r['status']==status for r in results) for status in ('valid','invalid','failed','unsupported')}})
     table=['\t'.join(DISPLAY_COLUMNS)]

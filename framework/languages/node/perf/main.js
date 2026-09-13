@@ -2,15 +2,19 @@
 'use strict';
 require('reflect-metadata');
 const fs = require('node:fs');
+const { validateCcu } = require('./Shared/contracts');
 
 async function main() {
   const args = process.argv.slice(2);
   if (args.length === 4 && args[0] === '--endpoint-config' && args[2] === '--client-index') {
-    await require('./Client/main').runClient(JSON.parse(fs.readFileSync(args[1], 'utf8')), Number(args[3]));
+    const manifest = JSON.parse(fs.readFileSync(args[1], 'utf8'));
+    validateCcu(manifest.workload);
+    await require('./Client/main').runClient(manifest, Number(args[3]));
     return;
   }
   if (args.length !== 2 || args[0] !== '--config') throw new Error('Use --config <role.json> or --endpoint-config <endpoints.json> --client-index <index>.');
   const config = JSON.parse(fs.readFileSync(args[1], 'utf8'));
+  validateCcu(config.role === 'client' ? config.endpointManifest.workload : config.workload);
   if (config.role === 'client') { await require('./Client/main').runClient(config.endpointManifest, config.roleInstance); return; }
   const application = await require('./Server/application').createApplication(config);
   let closing = false;

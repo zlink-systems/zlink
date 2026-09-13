@@ -127,3 +127,22 @@ test('worker callback actual thread spans are recorded once by the application h
   for(const key of ['workerCallLatencyMs','workerTaskLatencyMs','workerSubmitToStartMs','workerResultToContinuationMs'])assert.equal(m.hist.get(key).count,1n,key);
   if(process.env.PERF_WORKER_SNAPSHOT)require('node:fs').writeFileSync(process.env.PERF_WORKER_SNAPSHOT,JSON.stringify(m.snapshot()));
 });
+
+test('physical and logical CCU cap is independent of in-flight requests', () => {
+  const { validateCcu } = require('../Shared/contracts');
+  validateCcu({ connections: 1000, logicalStreams: 1000, inflight: 2 });
+  validateCcu({ connections: null, logicalStreams: 8, inflight: 1 });
+  for (const key of ['connections', 'logicalStreams']) for (const value of [1001, 0, -1, 1.5, '1000']) assert.throws(() => validateCcu({ [key]: value }), /between 1 and 1000/);
+});
+
+test('independent client config entrypoint rejects CCU above 1000 before setup', () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-336-node-ccu-'));
+  try {
+    const config = path.join(folder, 'endpoints.json');
+    fs.writeFileSync(config, JSON.stringify({ workload: { connections: 1001 } }));
+    const result = spawnSync(process.execPath, [path.join(__dirname, '../main.js'), '--endpoint-config', config, '--client-index', '0'], { encoding: 'utf8', timeout: 5000 });
+    assert.equal(result.status, 1); assert.match(result.stderr, /between 1 and 1000/);
+  } finally { fs.rmSync(folder, { recursive: true }); }
+});

@@ -18,12 +18,62 @@ class RunnerTests(unittest.TestCase):
             c={**cell,'workload':workload(args,cell)};plan=role_specs(c)
             self.assertTrue(plan)
             if cell['streamTransport']:
-                self.assertEqual(c['workload']['connections'],10000);self.assertIsNone(c['workload']['logicalStreams'])
+                self.assertEqual(c['workload']['connections'],1000);self.assertIsNone(c['workload']['logicalStreams'])
                 self.assertEqual(sum(p[0]=='session' for p in plan),1)
             else:
                 self.assertEqual(sum(p[2] for p in plan),1)
             if cell['mode']=='publish':self.assertEqual(sum(p[0]=='subscriber' for p in plan),8)
             self.assertEqual((c['workload']['warmupSeconds'],c['workload']['durationSeconds']),(2,5))
+    def test_ccu_cap_applies_to_cli_and_both_manifest_owners_without_inflight_product(self):
+        from runner import InvalidSetupError
+        from validator import validate_schema
+        validate_schema({'connections':1000,'logicalStreams':1000,'inflight':2},'CcuWorkload')
+        for key in ('connections','logical-streams'):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):self.args('--'+key,'1001')
+        for key in ('connections','logicalStreams'):
+            with self.assertRaises(ValueError):validate_schema({key:1001},'CcuWorkload')
+        for spec in MATRIX['cells']:
+            configured=workload(self.args('--inflight','2'),spec)
+            if spec['scenario']=='spot-worker-offload-echo':self.assertEqual(configured['logicalStreams'],8)
+            elif spec['streamTransport']:self.assertEqual(configured['connections'],1000)
+            else:self.assertEqual(configured['logicalStreams'],1000)
+        self.assertEqual(workload(self.args('--logical-streams','1000','--inflight','2'),MATRIX['cells'][19])['inflight'],2)
+        for key in ('connections','logicalStreams'):
+            with self.assertRaises(InvalidSetupError):
+                from runner import validate_ccu
+                validate_ccu({key:1000.0})
+        with tempfile.TemporaryDirectory() as folder:
+            p=Path(folder)/'manifest.json'
+            for key in ('connections','logicalStreams'):
+                for switch,data in (('--comparison-config',{'cell':MATRIX['cells'][19],'workload':{key:1001}}),
+                                    ('--comparison-config',{'cell':{**MATRIX['cells'][19],key:1001}}),
+                                    ('--workload-config',{**MATRIX['cells'][19],key:1001})):
+                    p.write_text(json.dumps(data))
+                    with self.subTest(key=key,switch=switch),self.assertRaises(InvalidSetupError):selected_cells(self.args(switch,str(p)))
+
+    def test_sealed_receivers_use_one_final_admin_snapshot_after_app_observation_bound(self):
+        from runner import collect_phase
+        from unittest.mock import patch
+        for mode in ('send','publish'):
+            for phase,duration in (('warmup',2),('measured',5)):
+                with self.subTest(mode=mode,phase=phase),tempfile.TemporaryDirectory() as folder:
+                    cell=Path(folder);(cell/'tmp').mkdir()
+                    roles=[{'role':'subscriber','roleInstance':i,'metrics':{'baseUrl':'http://receiver/'+str(i)}} for i in range(2)]
+                    snapshot={'phase':'complete','window':{'startTicks':'-100','endTicks':str(duration*1_000_000_000-100),'measuredSeconds':duration},
+                              'runtimeMetrics':{'activeHandlers':{'value':'0'}},'metrics':{'errors.harness':{}}}
+                    owned=SimpleNamespace(check=lambda:None)
+                    config={'mode':mode,'workload':{'warmupSeconds':2,'durationSeconds':5,'settleTimeoutMs':5000,'adminTimeoutMs':5000}}
+                    with patch('runner.time.sleep') as sleep,patch('runner.get_json',return_value=snapshot) as query:
+                        self.assertEqual(len(collect_phase(owned,roles,[],config,cell,phase)),2)
+                    sleep.assert_called_once_with(duration+5)
+                    self.assertEqual(query.call_count,2)
+                    self.assertTrue(all(call.args[1]==5 for call in query.call_args_list))
+                    for bad in ({**snapshot,'phase':'measured'},{**snapshot,'window':{}},
+                                {**snapshot,'window':{**snapshot['window'],'endTicks':'100'}},
+                                {**snapshot,'runtimeMetrics':{'activeHandlers':{'value':None}}}):
+                        with patch('runner.time.sleep'),patch('runner.get_json',return_value=bad):
+                            with self.assertRaises(TimeoutError):collect_phase(owned,roles,[],config,cell,phase)
+
     def test_default_single_selection(self):
         args=options(['single','--scenario','channel-echo-only','--output','/tmp/zlink-336-contract-unused'])
         self.assertEqual(selected_cells(args)[0]['topology'],'routemesh')
@@ -208,5 +258,44 @@ class ArtifactPreservationTests(unittest.TestCase):
                 self.assertEqual(observation['coreObservation']['reasonCode'],'NO_CORE_MAPPING')
                 self.assertTrue(any(a['evidence']=='observedProcessExecutable' for a in observation['launcherArtifacts']))
             finally:process.kill();process.wait()
+
+
+class CancellationTests(unittest.TestCase):
+    def test_sigterm_and_keyboard_interrupt_preserve_original_and_cleanup_without_next_cell(self):
+        import subprocess,sys,os
+        script = r"""
+import json,os,signal,sys
+from pathlib import Path
+from unittest.mock import patch
+import runner
+output=Path(sys.argv[1]); manifest=output.parent/'launchers.json'
+manifest.write_text(json.dumps({'corePackagePrefix':'fixture','languages':{'node':{'server':['node']}},'redis':{}}))
+class Redis:
+    def __init__(self,*args):pass
+    def close(self):(output/'redis-cleanup.json').write_text(json.dumps({'exactOwnedCleanupInvoked':True}))
+def interrupted(args,config,owned,redis):
+    with (output/'cell-starts.txt').open('a') as stream:stream.write('start\n')
+    child=owned.start('fixture-owned-child',[sys.executable,'-c','import time; time.sleep(30)'])
+    if sys.argv[2] in ('sigterm','sigint'):os.kill(os.getpid(),signal.SIGTERM if sys.argv[2]=='sigterm' else signal.SIGINT)
+    raise KeyboardInterrupt('fixture cancellation')
+try:
+    with patch('runner.collect',return_value={'commit':'fixture','corePackage':{}}),patch('runner.build_languages'),patch('runner.comparison_input',return_value=b'{}'),patch('runner.resolve_runtime_manifest'),patch('runner.RunRedis',Redis),patch('runner.make_roles',side_effect=interrupted):
+        runner.main(['matrix','--language','node','--skip-build','--executables-manifest',str(manifest),'--output',str(output)])
+except KeyboardInterrupt:sys.exit(130)
+"""
+        for cause in ('sigterm','sigint','keyboard'):
+            with self.subTest(cause=cause),tempfile.TemporaryDirectory() as folder:
+                output=Path(folder)/'run'
+                completed=subprocess.run([sys.executable,'-c',script,str(output),cause],cwd=Path(__file__).parent,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=15)
+                self.assertEqual(completed.returncode,130,completed.stderr)
+                self.assertEqual(len((output/'cell-starts.txt').read_text().splitlines()),1)
+                self.assertEqual(json.loads((output/'index.json').read_text())['cells'],[])
+                self.assertFalse(json.loads((output/'abort.json').read_text())['finalComparisonComplete'])
+                self.assertTrue(json.loads((output/'redis-cleanup.json').read_text())['exactOwnedCleanupInvoked'])
+                cell=next(output.glob('node/*/*/cleanup.json')).parent
+                self.assertTrue((cell/'failure.json').exists())
+                cleanup=json.loads((cell/'cleanup.json').read_text())['ownedProcesses']
+                self.assertEqual(len(cleanup),1);self.assertTrue(cleanup[0]['reaped'])
+                with self.assertRaises(ProcessLookupError):os.kill(cleanup[0]['pid'],0)
 
 if __name__=='__main__':unittest.main()

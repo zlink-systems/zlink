@@ -6,6 +6,12 @@ import java.util.Arrays;
 /** Pure application contract checks; these do not replace real Framework scenario runs. */
 public final class ContractCheck {
     public static void main(String[] args)throws Exception{
+        new Config(Config.JSON.readTree("{\"workload\":{\"connections\":1000,\"logicalStreams\":1000,\"inflight\":2}}"));
+        new Config(Config.JSON.readTree("{\"workload\":{\"logicalStreams\":8}}"));
+        for(String key:new String[]{"connections","logicalStreams"}) {
+            try { new Config(Config.JSON.readTree("{\"workload\":{\""+key+"\":1001}}"));throw new AssertionError("CCU above 1000 accepted"); }
+            catch(IllegalArgumentException expected){}
+        }
         for(int size:new int[]{64,4096})validatePayload(payload(size),size);
         try{validatePayload(payload(64),4096);throw new AssertionError("Wrong length accepted");}catch(Validation expected){}
         var histogram=new Histogram();histogram.record(1000);histogram.record(60_000_000_001L);

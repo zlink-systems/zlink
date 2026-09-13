@@ -14,6 +14,15 @@ public sealed class HarnessContractTests
     { runId = measurement.Config.runId, cellId = measurement.Config.cellId, resetSeq = seq };
 
     [Fact]
+    public void PhysicalAndLogicalCcuCapIsIndependentOfInflight()
+    {
+        var workload = Config().workload with { connections = 1000, logicalStreams = 1000, inflight = 2 };
+        workload.ValidateCcu();
+        (workload with { connections = null, logicalStreams = 8 }).ValidateCcu();
+        Assert.Throws<ArgumentException>(() => (workload with { connections = 1001 }).ValidateCcu());
+        Assert.Throws<ArgumentException>(() => (workload with { logicalStreams = 1001 }).ValidateCcu());
+    }
+    [Fact]
     public void PayloadValidatesEveryByteAndCanonicalPaddedBase64()
     {
         foreach (var size in new[] { 64, 4096 })

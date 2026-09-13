@@ -26,6 +26,7 @@ public static class ServerApplication
     {
         if (args.Length != 2 || args[0] != "--config") throw new ArgumentException("Server requires --config <file> only.");
         var config = PerfJson.Read<RoleConfig>(File.ReadAllText(args[1]));
+        config.workload.ValidateCcu();
         if (config.workload.requestPayloadBytes != 64 || config.workload.responsePayloadBytes != 4096 || config.workload.sendPayloadBytes != 4096)
             throw new ArgumentException("Standard payload is request64/response4096/send4096 logical bytes.");
         if (config.workload.applicationDeadlineMs > config.workload.settleTimeoutMs || config.workload.applicationDeadlineMs <= 0)

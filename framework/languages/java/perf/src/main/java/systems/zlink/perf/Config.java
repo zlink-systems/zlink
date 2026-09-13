@@ -7,6 +7,13 @@ import java.util.List;
 
 /** Application control/config JSON only; Framework owns all message serialization. */
 public record Config(JsonNode root) {
+    public Config {
+        for (String key : List.of("connections", "logicalStreams")) {
+            JsonNode value=root.path("workload").path(key);
+            if (!value.isMissingNode() && !value.isNull() && (!value.isIntegralNumber() || !value.canConvertToInt() || value.asInt()<1 || value.asInt()>1000))
+                throw new IllegalArgumentException("workload."+key+" must be between 1 and 1000; inflight is separate from CCU");
+        }
+    }
     public static final ObjectMapper JSON = new ObjectMapper();
     public static Config read(String path) throws Exception { return new Config(JSON.readTree(Path.of(path).toFile())); }
     public String text(String key) { return root.path(key).asText(""); }

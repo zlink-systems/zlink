@@ -146,7 +146,7 @@ def metric_defaults():
     return {key: {} if key in CATALOG['errorNamespaces'] else None for key in sorted(keys)}
 
 
-DISPLAY_COLUMNS = ('language', 'cell', 'status', 'bandwidth (MiB/sec)', 'throughput', 'mean (ms)', 'p95 (ms)', 'p99 (ms)', 'CPU (%)', 'mem (RSS MiB)')
+DISPLAY_COLUMNS = ('language', 'cell', 'status', 'bandwidth (MiB/sec)', 'throughput', 'mean (ms)', 'p95 (ms)', 'p99 (ms)', 'CPU (%, per process)', 'mem (RSS MiB, per process)')
 
 
 def display_row(result, mode, subscriber_count=None):
@@ -157,6 +157,18 @@ def display_row(result, mode, subscriber_count=None):
             why = nulls.get('/metrics/' + key, {}).get('code', 'COLLECTION_FAILED')
             return 'N/A (' + why + ')'
         return format(float(observed) / divisor, '.3f')
+    def process_values(key):
+        observations={item['sourceFile']:item for item in result.get('processes',[])}
+        names=list(dict.fromkeys([*result.get('servers',[]),*result.get('clients',[]),*observations]))
+        if not names:return 'N/A (COLLECTION_FAILED; no process observations)'
+        entries=[]
+        for name in names:
+            observed=observations.get(name,{}).get('resources',{}).get(key)
+            label=Path(name).stem.removeprefix('server-')
+            why=observations.get(name,{}).get('nullReasons',{}).get('/metrics/'+key,{}).get('code','NO_SAMPLES' if name in observations else 'COLLECTION_FAILED')
+            rendered=format(float(observed),'.3f') if observed is not None else 'N/A ('+why+'; '+name+'#/metrics/'+key+')'
+            entries.append(label+'='+rendered)
+        return '; '.join(entries)
     if mode == 'publish':
         rate = value('fanout.deliveryOpsPerSec', 1000) + ' kmsg/sec (' + (str(subscriber_count) + ' subscribers' if subscriber_count is not None else 'subscriber') + ' sum)'
         latency_prefix = 'fanout.deliveryLatency'
@@ -166,7 +178,7 @@ def display_row(result, mode, subscriber_count=None):
         rate, latency_prefix = value('throughput.kops') + ' kops/sec', 'latency'
     return (result['language'], result['cellId'], result['status'], value('throughput.megabytesPerSec'), rate,
             *(value(latency_prefix + '.' + suffix) for suffix in ('meanMs', 'p95Ms', 'p99Ms')),
-            value('process.cpuPercent'), value('process.rssMb'))
+            process_values('process.cpuPercent'), process_values('process.rssMb'))
 
 
 def evidence(snapshot, key):
@@ -359,6 +371,7 @@ def aggregate(cell, config, client_files, server_files, issues):
               'nullReasons': nulls, 'clients': client_files, 'servers': server_files,
               'processes': [{'sourceFile': name, 'pid': item['provenance']['pid'], 'clock': item['clock'],
                             'resources': {key: value for key, value in item['metrics'].items() if key.startswith(('process.', 'gc.'))},
+                            'nullReasons': {key: value for key, value in item['nullReasons'].items() if key.startswith(('/metrics/process.', '/metrics/gc.'))},
                             'publicStatusFile': name} for name, item in originals.items()]}
     write_json(cell / 'result.json', result)
     write_json(cell / 'summary.json', {key: result[key] for key in ('schemaVersion', 'runId', 'cellId', 'scenario', 'status', 'baselineEligible', 'reasons', 'metrics', 'metricOwners', 'ownerWindows')})

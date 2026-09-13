@@ -4,6 +4,7 @@ using ZLink.Framework.Perf;
 if (args.Length != 4 || args[0] != "--endpoint-config" || args[2] != "--client-index" || !int.TryParse(args[3], out var index))
     throw new ArgumentException("Client requires --endpoint-config <file> --client-index <index>.");
 var manifest = PerfJson.Read<EndpointManifest>(File.ReadAllText(args[1]));
+manifest.workload.ValidateCcu();
 if (index < 0 || index >= manifest.workload.clientCount) throw new ArgumentOutOfRangeException(nameof(index));
 var cs = manifest.roles.Any(r => r.streamEndpoint is not null);
 var config = new RoleConfig(manifest.runId, manifest.cellId, manifest.configHash, "client", index,

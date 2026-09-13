@@ -4,7 +4,7 @@ const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const framework = require('@zlink-systems/framework');
 const nestjs = require('@zlink-systems/nestjs');
-const { registerPackets, json, validation } = require('../Shared/contracts');
+const { registerPackets, validateCcu, json, validation } = require('../Shared/contracts');
 const { Measurement, unix } = require('../Shared/measurement');
 const { createHandlers } = require('./handlers');
 const { workload, prepare } = require('./Scenarios/workload');
@@ -16,6 +16,7 @@ function validateConfig(config) {
   if (!config.runId || !config.cellId || !config.configHash) throw new Error('Role config identity required.');
   if (w.requestPayloadBytes !== 64 || w.responsePayloadBytes !== 4096 || w.sendPayloadBytes !== 4096) throw new Error('Default request/reply/send logical byte counts are 64/4096/4096.');
   for (const key of ['durationSeconds', 'warmupSeconds', 'inflight', 'requestTimeoutMs', 'settleTimeoutMs', 'setupTimeoutMs', 'applicationDeadlineMs', 'workerTaskMillis', 'workerPoolSize']) if (!(w[key] > 0)) throw new Error(`Invalid workload.${key}.`);
+  validateCcu(w);
   if (new URL(config.metricsUrl).port === new URL(config.applicationTriggerUrl).port) throw new Error('Admin and application trigger listeners must differ.');
   if (config.store && config.store.provider !== 'redis') throw new Error('Object scenarios require the configured public Redis Location Store.');
 }
