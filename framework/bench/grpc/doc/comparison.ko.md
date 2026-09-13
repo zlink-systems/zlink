@@ -39,7 +39,7 @@ node 선택 비용이 섞이지 않는다.
 warmup, active duration, admission/backpressure, in-flight 계측, active 종료 뒤 drain, 오류와
 abandoned 집계, 결과 JSON 필드는 기존 계약을 그대로 유지한다. `send-saturation`은 source 제출
 수가 아니라 target 수신 수로 계산하며, 오류·유실·drain bound 위반 셀은 게재 조건을 통과할 수
-없다. 판정 기준 패턴은 `request-backpressure`이고 두 payload(1024, 4096 B)를 각각 판정한다.
+없다. 판정 기준 패턴은 `request-backpressure`이고 payload는 4096 B 하나다.
 
 ## 4. 새 기준선 상태
 

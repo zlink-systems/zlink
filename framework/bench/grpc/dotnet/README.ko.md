@@ -24,7 +24,7 @@ bash scripts/perf/perf-ticket.sh submit -p 2 -o <owner> -d '<설명>' -- \
     --output framework/bench/grpc/log/dotnet/<이름>/r1
 ```
 
-기본 실행은 payload 1024·4096 B에서 `request-serial`, `request-backpressure`,
+기본 실행은 payload 4096 B에서 `request-serial`, `request-backpressure`,
 `send-saturation` 세 패턴을 돈다. framework 행의 serial 셀만 실행하려면 다음처럼 지정한다.
 
 ```bash

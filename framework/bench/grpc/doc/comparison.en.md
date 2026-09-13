@@ -43,7 +43,7 @@ The existing contract for warmup, active duration, admission/backpressure, in-fl
 post-active drain, error and abandoned accounting, and result JSON fields is unchanged.
 `send-saturation` is calculated from target receives, not source submissions. Cells with errors,
 loss, or a drain-bound violation cannot satisfy publication gates. `request-backpressure` remains
-the judgement pattern, evaluated separately at 1024 and 4096 bytes.
+the judgement pattern, evaluated at 4096 bytes.
 
 ## 4. New Baseline Status
 

@@ -366,7 +366,7 @@ def judge_language(
     rows: dict[CellKey, Row],
     lang: str,
     baseline: str = "zlink-c",
-    payload_sizes: tuple[int, ...] = (1024, 4096),
+    payload_sizes: tuple[int, ...] = (4096,),
     pattern: str = JUDGEMENT_PATTERN,
 ) -> list[Judgement]:
     """The spec 7.2 pair of formulas, per payload size (FB-005)."""

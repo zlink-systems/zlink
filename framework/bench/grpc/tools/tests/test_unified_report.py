@@ -19,7 +19,7 @@ GRID = TOOLS.parent
 
 def cell(implementation: str, pattern: str, **fields) -> dict:
     document = {
-        "implementation": implementation, "pattern": pattern, "payload_size": 1024,
+        "implementation": implementation, "pattern": pattern, "payload_size": 4096,
         "throughput_per_second": 12345.6, "bandwidth_mb_s": 12.6,
         "latency_mean_ms": 1.5, "latency_p95_ms": 2.5, "latency_p99_ms": 3.5,
     }
@@ -66,13 +66,13 @@ class UnifiedReportTest(unittest.TestCase):
 class CConversionTest(unittest.TestCase):
     REPORT = """\
 | Scenario | Size | Throughput | Bandwidth |
-RESULT,current,zlink-c-request-serial,local,1024,throughput,600.000
-RESULT,current,zlink-c-request-serial,local,1024,bandwidth,614.400
-RESULT,current,zlink-c-request-serial,local,1024,latency,1.000
-RESULT,current,zlink-c-request-serial,local,1024,latency_p95,2.000
-RESULT,current,zlink-c-request-serial,local,1024,latency_p99,3.000
-RESULT,current,zlink-c-send-blocking,local,1024,throughput,100.000
-RESULT,current,zlink-c-send-blocking,local,1024,bandwidth,102.400
+RESULT,current,zlink-c-request-serial,local,4096,throughput,600.000
+RESULT,current,zlink-c-request-serial,local,4096,bandwidth,2457.600
+RESULT,current,zlink-c-request-serial,local,4096,latency,1.000
+RESULT,current,zlink-c-request-serial,local,4096,latency_p95,2.000
+RESULT,current,zlink-c-request-serial,local,4096,latency_p99,3.000
+RESULT,current,zlink-c-send-blocking,local,4096,throughput,100.000
+RESULT,current,zlink-c-send-blocking,local,4096,bandwidth,409.600
 """
 
     def convert(self, text: str) -> Path:
@@ -89,7 +89,7 @@ RESULT,current,zlink-c-send-blocking,local,1024,bandwidth,102.400
 
     def test_kops_report_is_converted_to_completions_per_second(self):
         out = self.convert(self.REPORT)
-        document = json.loads((out / "zlink-c-request-serial-1024" / "results.json").read_text())
+        document = json.loads((out / "zlink-c-request-serial-4096" / "results.json").read_text())
         self.assertEqual(document["schema"], CELL_JSON_VERSION)
         # 600 KOPS in the report, 600000/s in the record: the scale comes from the
         # report's own bandwidth column, not from an assumption about the runner.
@@ -97,9 +97,9 @@ RESULT,current,zlink-c-send-blocking,local,1024,bandwidth,102.400
 
     def test_patterns_outside_the_grid_do_not_become_cells(self):
         out = self.convert(self.REPORT)
-        self.assertFalse((out / "zlink-c-send-blocking-1024").exists())
+        self.assertFalse((out / "zlink-c-send-blocking-4096").exists())
         self.assertEqual(sorted(path.name for path in out.iterdir()),
-                         ["zlink-c-request-serial-1024"])
+                         ["zlink-c-request-serial-4096"])
 
     def test_a_report_with_no_grid_cell_fails_rather_than_writing_nothing(self):
         directory = tempfile.TemporaryDirectory()
@@ -157,9 +157,9 @@ class RunnerContractTest(unittest.TestCase):
     def test_every_runner_rejects_a_payload_size_outside_the_spec(self):
         for runner in self.RUNNERS:
             with self.subTest(runner=runner):
-                result = self.run_runner(runner, "--payload-sizes", "2048")
+                result = self.run_runner(runner, "--payload-sizes", "1024")
                 self.assertEqual(result.returncode, 2, result.stdout)
-                self.assertIn("2048", result.stderr)
+                self.assertIn("1024", result.stderr)
 
 
 if __name__ == "__main__":

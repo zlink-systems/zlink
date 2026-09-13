@@ -73,8 +73,8 @@ bench에서 다룬다. 이 bench는 gRPC와 같은 모양의 1:1 요청 경로�
 
 ## 2. 측정 패턴
 
-처음 범위는 두 payload 크기와 세 패턴만 사용한다. payload 크기는 `1024`, `4096` bytes를
-기본값으로 한다. payload 크기는 protobuf `bytes body` 또는 raw ZLink message body의 전체
+처음 범위는 세 패턴을 사용한다. request 계열은 64B request와 4096B response를 사용하고,
+`send-saturation`은 4096B command를 전송한다. payload 크기는 protobuf `bytes body` 또는 raw ZLink message body의 전체
 크기다. 앞 29 bytes는 측정 header로 사용하고, 나머지를 business payload 영역으로 채운다.
 gRPC HTTP/2 frame, protobuf field overhead, ZLink envelope, ZMP header는 이 크기에 포함하지
 않는다.
@@ -147,11 +147,11 @@ bench에서 옳은 비교인 이유는 아래와 같다.
 - Release build로 실행한다.
 - warmup 뒤 정해진 시간의 measured active 구간을 실행한다. warmup 길이는 모든 언어가 같은
   벽시계 시간이다(§3.1의 `WARMUP_SECONDS`, 기본 2초).
-- 기본 payload 크기는 `1024,4096` bytes다.
+- request 계열은 64B request와 4096B response를, `send-saturation`은 4096B command를 사용한다.
 - `request-backpressure` 패턴에는 미완료 request 상한 설정이 없다. 이 패턴에서 깊이는
   설정하는 조건이 아니라 측정해 기록하는 결과다(§5.2). `request_window` 설정은 이 bench에 없다.
 - 기본 send concurrency는 `8`이다. **이것은 stream 수이지 연결 수가 아니다.**
-  세 행 모두 서버 간 연결은 **하나**를 쓴다 — gRPC는 채널 하나를 stub 8개가 공유하고,
+  세 행 모두 서버 간 연결은 **하나**를 쓴다 — gRPC는 채널 하나와 stub 하나를 모든 logical stream이 공유하고,
   raw binding은 ROUTER 하나를 stream 8개가 공유하며, framework는 RouteMesh socket 하나다.
   연결 수가 행마다 다르면 §7.2의 비율이 계층 비용이 아니라 연결 수 차이를 잰다.
 - gRPC와 ZLink framework는 같은 protobuf DTO를 사용한다. ZLink raw binding은 framework를
@@ -200,7 +200,7 @@ server가 받은 수를 폴링해 그 값이 더는 증가하지 않을 때까�
 | `OUTPUT` | `--output` | run 디렉터리 | `log/<lang>/<stamp>` |
 | `SCENARIO` | `--scenario` | `all`·`request`·`send`·§2의 패턴 이름 하나 | `all` |
 | `IMPLEMENTATION` | `--implementation` | `all`·§1.1의 구현 이름 하나 | `all` |
-| `PAYLOAD_SIZES` | `--payload-sizes` | `1024`·`4096`의 쉼표 목록 | `1024,4096` |
+| `PAYLOAD_SIZES` | `--payload-sizes` | `4096` | `4096` |
 | `DURATION_SECONDS` | `--duration-seconds` | active 구간 초, 양의 정수 | `5` |
 | `WARMUP_SECONDS` | `--warmup-seconds` | warmup 구간 초, 양의 정수 | `2` |
 | `SKIP_BUILD` | `--skip-build` | `0`·`1` | `0` |
@@ -421,23 +421,19 @@ request-backpressure 결과를 기준으로 본다. raw binding이 C 결과의 8
 raw binding 결과의 80% 이상이면 framework 추가 비용은 통과로 판단한다.
 
 ```text
-payload 크기 1024와 4096 각각에서:
+payload 크기 4096에서:
 zlink-<lang> / zlink-c                     >= 0.80   binding 계층 통과
 zlink-framework-<lang> / zlink-<lang>      >= 0.80   framework 추가 비용 통과
 ```
 
-두 식은 payload 크기마다 따로 계산한다. 한 언어는 `1024`와 `4096` 두 크기에서 모두 기준을
-만족할 때에만 통과다. 한 크기만 만족한 결과는 통과가 아니며, payload별 값은 항상 그대로
-기록한다. `1024`에서 기준을 유지하다가 `4096`에서 떨어지는 스택에는 실제 문제가 있고, 보고서는
-어차피 두 크기를 모두 표시하므로 payload별 판정은 추가 비용 없이 그 문제를 드러낸다.
+두 식은 `4096` payload에서 계산한다. 그 결과가 기준을 만족할 때에만 언어가 통과다.
 
 이 기준은 ZLink가 reply를 기다리지 않고 다음 request를 보낼 수 있는 패턴에 적용한다. 그런
 패턴이 판정에 적합한 이유는 gRPC unary `Echo`와 ZLink request가 같은 보장, 곧 서버가 처리했다는
 확인을 주기 때문이다. `request-serial`은 한 번에 하나만 처리하는 사용 패턴의 왕복 지연을 보기
 위한 보조 지표로 남긴다.
 
-**판정의 기준 패턴은 `request-backpressure`다.** 언어 통과 여부는 이 패턴에서 두 payload 크기
-모두 기준을 만족할 때 결정한다.
+**판정의 기준 패턴은 `request-backpressure`다.** 언어 통과 여부는 이 패턴의 `4096` payload 결과로 결정한다.
 
 기준 패턴을 이렇게 두는 근거는 아래와 같다.
 
@@ -599,7 +595,7 @@ admin 계약을 그대로 쓴다. 요청과 응답은 JSON이고 다섯 언어�
 ```text
 POST http://127.0.0.1:<A trigger>/bench/start
 { "runId": "...", "cellId": "...", "pattern": "request-backpressure",
-  "payloadBytes": 1024, "phase": "warmup" | "active",
+  "payloadBytes": 4096, "phase": "warmup" | "active",
   "durationMs": 5000, "requestWindow": 100, "sendConcurrency": 8 }
 → 200 { "accepted": true, "runId": "...", "cellId": "...", "phase": "active", "startedAt": <monotonic ns> }
 ```

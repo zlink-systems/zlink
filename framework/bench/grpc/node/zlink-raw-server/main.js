@@ -18,6 +18,7 @@ const { argValue, argInt } = require('../shared/args');
 const { BenchServerMetrics, startStatsServer } = require('../shared/bench-server-metrics');
 const { RESPONSE_ENVELOPE, ROUTING_IDS, encodeBenchPayloadMessage, decodeBenchPayloadBody } =
   require('../shared/raw-wire');
+const header = require('../shared/bench-metric-header');
 
 const argv = process.argv.slice(2);
 const endpoint = argValue(argv, '--endpoint', 'tcp://127.0.0.1:5227');
@@ -79,7 +80,7 @@ function pumpRequests() {
       const body = part === null ? null : decodeBenchPayloadBody(part.data());
       if (body === null) throw new Error('invalid raw protobuf payload');
       metrics.record(body);
-      const reply = encodeBenchPayloadMessage(body);
+      const reply = encodeBenchPayloadMessage(header.createResponsePayloadBytes(body));
       const operation = requestReceived.replyToken !== null
         ? requestReceived.reply()
         : requestReceived.send();

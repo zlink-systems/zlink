@@ -8,7 +8,7 @@
 # Inputs (all optional):
 #   BENCH_LANGS   측정할 언어 (기본: c cpp dotnet java node) — 판정 분모인 c는 빼지 마라
 #   RUNS          언어별 run 수 (기본: 3 — G5 재현성 판정의 최소치)
-#   PAYLOAD_SIZES payload 크기 (기본: 1024,4096)
+#   PAYLOAD_SIZES payload 크기 (기본: 4096)
 #   SCENARIO      all·request·send·패턴 이름 하나 (기본: all)
 #   LABEL         결과 디렉터리 이름 (기본: 실행 시각)
 #   PRIORITY      perf 티켓 우선순위 1|2|3 (기본: 1 = 감독자 판정 측정)
@@ -19,7 +19,7 @@ ROOT="$(cd "${HERE}/../../.." && pwd)"
 
 LANGS="${BENCH_LANGS:-c cpp dotnet java node}"
 RUNS="${RUNS:-3}"
-PAYLOAD_SIZES="${PAYLOAD_SIZES:-1024,4096}"
+PAYLOAD_SIZES="${PAYLOAD_SIZES:-4096}"
 SCENARIO="${SCENARIO:-all}"
 LABEL="${LABEL:-$(date +%Y%m%d_%H%M%S)}"
 PRIORITY="${PRIORITY:-1}"

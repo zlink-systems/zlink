@@ -29,7 +29,7 @@ bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "node with-grpc r1" -
 
 # One cell
 bash framework/bench/grpc/node/run_local.sh --skip-build --scenario request-serial \
-  --implementation zlink-node --payload-sizes 1024 --duration-seconds 2 \
+  --implementation zlink-node --payload-sizes 4096 --duration-seconds 2 \
   --output /tmp/node-smoke
 ```
 

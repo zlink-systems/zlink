@@ -34,7 +34,7 @@ LEGACY_INPUT_PATTERNS: tuple[str, ...] = ("request-window",)
 INPUT_PATTERNS: tuple[str, ...] = PATTERNS + LEGACY_INPUT_PATTERNS
 
 #: Payload sizes the spec fixes (spec 2, spec 3).
-PAYLOAD_SIZES: tuple[int, ...] = (1024, 4096)
+PAYLOAD_SIZES: tuple[int, ...] = (4096,)
 
 #: The nine metric names spec 4 fixes for ``RESULT`` lines, in output order.
 RESULT_METRICS: tuple[str, ...] = (

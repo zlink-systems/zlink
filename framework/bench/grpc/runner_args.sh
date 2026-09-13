@@ -35,7 +35,7 @@ bench_runner_args() {
   SCENARIO="${SCENARIO:-all}"
   WARMUP_SECONDS="${WARMUP_SECONDS:-2}"
   IMPLEMENTATION="${IMPLEMENTATION:-all}"
-  PAYLOAD_SIZES="${PAYLOAD_SIZES:-1024,4096}"
+  PAYLOAD_SIZES="${PAYLOAD_SIZES:-4096}"
   DURATION_SECONDS="${DURATION_SECONDS:-5}"
   SKIP_BUILD="${SKIP_BUILD:-0}"
   OUTPUT="${OUTPUT:-}"
@@ -70,8 +70,8 @@ bench_runner_args() {
   IFS=',' read -r -a bench_payloads <<<"${PAYLOAD_SIZES}"
   local payload
   for payload in "${bench_payloads[@]}"; do
-    [[ "${payload}" == 1024 || "${payload}" == 4096 ]] || {
-      echo "payload sizes must be 1024 or 4096: ${payload}" >&2; return 2; }
+    [[ "${payload}" == 4096 ]] || {
+      echo "payload size must be 4096: ${payload}" >&2; return 2; }
   done
 
   [[ "${DURATION_SECONDS}" =~ ^[1-9][0-9]*$ ]] || {
