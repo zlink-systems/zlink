@@ -122,6 +122,8 @@ def test_request_tokenless_backpressure_preserves_core_error(
         dealer.options.linger_ms = 0
         owner = runtime.CompletionOwner(dealer)
         dealer._completion_owner = owner
+        public_owner = object()
+        owner.transfer_to_public(public_owner)
         submissions = []
 
         def submit(target, native_parts, flags, entry, timeout_ms):
@@ -154,7 +156,6 @@ def test_request_tokenless_backpressure_preserves_core_error(
         try:
             with (
                 patch.object(owner, "_submit_parts", side_effect=submit),
-                patch.object(owner, "_schedule_runtime_owner_locked") as schedule,
                 patch.object(lib(), "zlink_completion_recv", side_effect=receive),
             ):
                 operation = dealer.request().message(b"request").timeout(1)
@@ -165,9 +166,7 @@ def test_request_tokenless_backpressure_preserves_core_error(
                     assert not result.reply.done()
                     assert submissions[0].waiting_native
                     assert owner._entries_by_id == {71: submissions[0]}
-                    schedule.assert_called_once()
-                    schedule.reset_mock()
-                    assert owner.drain().total_count == 1
+                    assert owner.drain(public_owner).total_count == 1
                     with pytest.raises(zlink.SubmitError) as admitted:
                         await result.admitted
                     with pytest.raises(zlink.SubmitError) as reply:
@@ -180,7 +179,6 @@ def test_request_tokenless_backpressure_preserves_core_error(
 
                 assert raised.value.result == zlink.SubmitResult.BACKPRESSURED
                 assert raised.value.native_errno == errno.EAGAIN
-                schedule.assert_not_called()
                 assert len(submissions) == (2 if stage == "retry" else 1)
                 assert len(receives) == (2 if stage == "retry" else 0)
                 assert len({id(entry) for entry in submissions}) == 1

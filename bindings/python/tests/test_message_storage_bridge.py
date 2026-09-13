@@ -167,7 +167,7 @@ def test_admitted_send_has_no_completion_registration_or_private_condition():
                 assert entry.admitted.done()
                 assert not owner._entries
                 assert not owner._entries_by_id
-                assert owner._runtime_poller is None
+                assert owner._public_owner is None
                 with zlink.create_received() as received:
                     assert receiver.recv_into(received)
                     assert received.single_part_or_throw().to_bytes() == b"payload"

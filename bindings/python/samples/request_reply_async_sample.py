@@ -37,17 +37,34 @@ async def main():
                         dealer_socket.connect(endpoint)
                         wait_connected(router_monitor, dealer_monitor)
 
-                submission = (
-                    dealer_socket.request().message(b"ping").timeout(2.0).submit()
-                )
-                await asyncio.to_thread(respond, router_socket)
-                reply = await submission.reply
-                try:
-                    if [part.to_bytes() for part in reply] != [b"pong"]:
-                        raise AssertionError("unexpected reply payload")
-                finally:
-                    for part in reply:
-                        part.close()
+                with zlink.create_poller() as completion_poller:
+                    completion_poller.add_socket(
+                        dealer_socket,
+                        zlink.PollEventFlag.POLLCOMPLETION,
+                        1,
+                    )
+                    completion_events = zlink.create_poll_events(1)
+                    submission = (
+                        dealer_socket.request()
+                        .message(b"ping")
+                        .timeout(2.0)
+                        .submit()
+                    )
+                    ready, _ = await asyncio.gather(
+                        asyncio.to_thread(
+                            completion_poller.wait, completion_events, 2000
+                        ),
+                        asyncio.to_thread(respond, router_socket),
+                    )
+                    if ready != 1:
+                        raise AssertionError("request completion timed out")
+                    reply = await submission.reply
+                    try:
+                        if [part.to_bytes() for part in reply] != [b"pong"]:
+                            raise AssertionError("unexpected reply payload")
+                    finally:
+                        for part in reply:
+                            part.close()
                 print('[dealer-router/request-reply/async] send: "ping" -> recv: "pong"')
 # --8<-- [end:doc]
 

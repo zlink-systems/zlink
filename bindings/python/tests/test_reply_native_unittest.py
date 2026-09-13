@@ -7,6 +7,7 @@ import unittest
 import uuid
 
 import zlink
+from completion_poller import CompletionPollerDriver
 
 
 class ReplyNativeTests(unittest.TestCase):
@@ -124,42 +125,46 @@ class ReplyNativeTests(unittest.TestCase):
                                     received.reply().messages(*received).submit()
                                     received.close()
 
-                        with concurrent.futures.ThreadPoolExecutor(1) as executor:
-                            server_done = executor.submit(serve)
-                            cancelled = asyncio.ensure_future(
-                                client.request()
-                                .messages(b"cancel", b"")
-                                .timeout(2)
-                                .submit()
-                                .reply
-                            )
-                            try:
-                                await asyncio.wait_for(arrived.wait(), 2)
-                                cancelled.cancel()
-                                with self.assertRaises(asyncio.CancelledError):
-                                    await cancelled
-                            finally:
-                                release.set()
-
-                            async def request(index):
-                                expected = [str(index).encode(), b""]
-                                submission = (
+                        with CompletionPollerDriver(client):
+                            with concurrent.futures.ThreadPoolExecutor(1) as executor:
+                                server_done = executor.submit(serve)
+                                cancelled = asyncio.ensure_future(
                                     client.request()
-                                    .messages(*expected)
+                                    .messages(b"cancel", b"")
                                     .timeout(2)
                                     .submit()
+                                    .reply
                                 )
-                                parts = await submission.reply
                                 try:
-                                    self.assertEqual([part.to_bytes() for part in parts], expected)
+                                    await asyncio.wait_for(arrived.wait(), 2)
+                                    cancelled.cancel()
+                                    with self.assertRaises(asyncio.CancelledError):
+                                        await cancelled
                                 finally:
-                                    for part in parts:
-                                        part.close()
+                                    release.set()
 
-                            await asyncio.wait_for(
-                                asyncio.gather(*(request(index) for index in range(64))), 2
-                            )
-                            server_done.result(timeout=3)
+                                async def request(index):
+                                    expected = [str(index).encode(), b""]
+                                    submission = (
+                                        client.request()
+                                        .messages(*expected)
+                                        .timeout(2)
+                                        .submit()
+                                    )
+                                    parts = await submission.reply
+                                    try:
+                                        self.assertEqual(
+                                            [part.to_bytes() for part in parts],
+                                            expected,
+                                        )
+                                    finally:
+                                        for part in parts:
+                                            part.close()
+
+                                await asyncio.wait_for(
+                                    asyncio.gather(*(request(index) for index in range(64))), 2
+                                )
+                                server_done.result(timeout=3)
 
         asyncio.run(exercise())
 

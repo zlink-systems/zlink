@@ -61,20 +61,24 @@ def test_raw_hot_path_keeps_gil_release_and_whole_message_calls():
     assert "zlink_multipart_close (native_parts, (size_t) moved)" in hotpath_text
 
 
-def test_async_completion_runtime_uses_blocking_event_wait_without_timer_polling():
+def test_async_completion_has_no_runtime_owner_or_timer_polling():
     completion_text = (
         SRC / "_runtime" / "messaging" / "routed_async.py"
     ).read_text(encoding="utf-8")
+    hotpath_text = (SRC / "_native" / "hotpath.h").read_text(encoding="utf-8")
     for forbidden in (
         "asyncio.sleep",
         "call_later",
         "self._runtime_pump",
         "run_in_executor",
+        "zlink-python-completion",
+        "threading.Thread(",
+        "daemon=True",
     ):
         assert forbidden not in completion_text, forbidden
-    assert "target=self._runtime_wait_loop" in completion_text
-    assert "daemon=True" in completion_text
-    assert "ctypes.byref(native_event),\n                    1,\n                    -1," in completion_text
+    assert "_schedule_runtime_owner_locked" not in hotpath_text
+    assert "self._require_public_owner_locked()" in completion_text
+    assert "ctypes.byref(completion),\n                        0," in completion_text
 
 
 def test_managed_send_retains_native_messages_instead_of_bytes_snapshots():
