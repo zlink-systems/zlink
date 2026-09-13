@@ -4,6 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlink = require('@zlink-systems/zlink');
+const completion_poller_1 = require("./completion_poller");
 let sequence = 0;
 function endpoint(label) {
     return `inproc://node-submit-result-${label}-${process.pid}-${++sequence}`;
@@ -27,6 +28,7 @@ test('submit result reports immediate SEND and REQUEST admission', async () => {
     const context = zlink.createContext();
     const dealer = zlink.createDealerSocket(context);
     const router = zlink.createRouterSocket(context);
+    const completions = new completion_poller_1.CompletionPollerDriver(dealer);
     const address = endpoint('immediate');
     router.bind(address);
     dealer.connect(address);
@@ -49,7 +51,7 @@ test('submit result reports immediate SEND and REQUEST admission', async () => {
         assert.equal(received.singlePartOrThrow().getString(), 'request');
         received.reply().message('reply').submit();
         received.close();
-        const reply = await requested.reply;
+        const reply = await completions.settle(requested.reply);
         try {
             assert.equal(reply[0].getString(), 'reply');
         }
@@ -59,6 +61,7 @@ test('submit result reports immediate SEND and REQUEST admission', async () => {
         }
     }
     finally {
+        completions.close();
         closeAll(context, dealer, router);
     }
 });

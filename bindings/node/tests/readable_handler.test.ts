@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const zlink = require('@zlink-systems/zlink');
 const { completionOwnerOf } = require('../../dist/zlink/runtime/messaging/completion_owner');
+import { CompletionPollerDriver } from './completion_poller';
 
 test('readable handler replaces its predecessor and drains a queued batch through no data', async () => {
   const ctx = zlink.createContext();
@@ -120,10 +121,11 @@ for (const paused of [false, true]) {
   });
 }
 
-test('watch acknowledgement preserves typed request termination during context shutdown', async () => {
+test('public completion poller preserves typed request termination during context shutdown', async () => {
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
+  const completions = new CompletionPollerDriver(dealer);
   const request = new zlink.Received();
   const incoming = new zlink.Received();
   const receiveFailures: unknown[] = [];
@@ -145,10 +147,11 @@ test('watch acknowledgement preserves typed request termination during context s
     assert.equal(router.recv(request), true);
     request.close();
     ctx.shutdown();
+    assert.throws(() => completions.wait(100), (error: any) =>
+      error instanceof zlink.RecvError && error.result === zlink.RecvResult.Terminated);
     await rejected;
-    assert.ok(receiveFailures.some(error => error instanceof zlink.RecvError));
   } finally {
-    request.close(); incoming.close(); dealer.close(); router.close(); ctx.close();
+    completions.close(); request.close(); incoming.close(); dealer.close(); router.close(); ctx.close();
   }
 });
 
@@ -174,7 +177,7 @@ test('one readable watch serves replacement handlers and completion ownership tr
     const publicOwner = {};
     owner.transferToPublic(publicOwner);
     wake(0);
-    owner.transferToRuntime(publicOwner);
+    owner.releasePublic(publicOwner);
     wake(0);
     assert.equal(starts, 1);
     assert.equal(stops, 0);
@@ -190,7 +193,7 @@ test('one readable watch serves replacement handlers and completion ownership tr
   } finally { socket.close(); ctx.close(); }
 });
 
-test('readable notifications coexist with runtime and public request completion drains', async () => {
+test('readable notifications coexist with public request completion drains', async () => {
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
@@ -200,6 +203,7 @@ test('readable notifications coexist with runtime and public request completion 
   const events = zlink.createPollEvents(1);
   router.bind('inproc://readable-handler-completions');
   dealer.connect('inproc://readable-handler-completions');
+  poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 7);
   let served: () => void;
   let delivered: () => void;
   let failServing: (error: unknown) => void;
@@ -227,30 +231,26 @@ test('readable notifications coexist with runtime and public request completion 
         }
       } catch (error) { failDelivery(error); }
     });
-    for (const mode of ['public', 'runtime']) {
+    for (const mode of ['first', 'second']) {
       const servedRequest = new Promise<void>((resolve, reject) => { served = resolve; failServing = reject; });
       const receivedData = new Promise<void>((resolve, reject) => { delivered = resolve; failDelivery = reject; });
       const pending = dealer.request().message(mode).timeout(1000).submit().reply;
-      if (mode === 'public') poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 7);
       await servedRequest;
-      if (mode === 'public') {
-        assert.equal(poller.wait(events, 1000), 1);
-        assert.equal(events.hasEvent(0, zlink.PollEventFlag.PollCompletion), true);
-      }
+      assert.equal(poller.wait(events, 1000), 1);
+      assert.equal(events.hasEvent(0, zlink.PollEventFlag.PollCompletion), true);
       const parts = await pending;
       try { assert.equal(parts[0].getString(), `reply:${mode}`); }
       finally { parts.forEach((part: any) => part.close()); }
       await receivedData;
-      if (mode === 'public') assert.equal(poller.remove(dealer), true);
     }
-    assert.deepEqual(values, ['data:public', 'data:runtime']);
+    assert.deepEqual(values, ['data:first', 'data:second']);
   } finally {
     events.close(); poller.close(); request.close(); data.close();
     dealer.close(); router.close(); ctx.close();
   }
 });
 
-test('watch failure rejects all pending operations and reaches the handler only through its next receive', async () => {
+test('watch failure does not become a completion owner and reaches the handler through receive', async () => {
   const ctx = zlink.createContext();
   const socket = zlink.createPairSocket(ctx);
   const received = new zlink.Received();
@@ -268,6 +268,8 @@ test('watch failure rejects all pending operations and reaches the handler only 
       : { result: zlink.SubmitResult.Backpressured, nativeErrno: constants.errno.EAGAIN, completionId: 13n },
   };
   try {
+    const publicOwner = {};
+    owner.transferToPublic(publicOwner);
     socket.setReadableHandler(function () {
       calls += 1;
       assert.equal(arguments.length, 0);
@@ -279,22 +281,19 @@ test('watch failure rejects all pending operations and reaches the handler only 
     const send = owner.submitSend(Buffer.from('send'), null);
     const request = owner.submitRequest(Buffer.from('request'), null, 1000);
     const queuedRequest = owner.submitRequest(Buffer.from('queued'), null, 1000);
-    const submitFailed = (error: any) => error instanceof zlink.SubmitError
-      && error.result === zlink.SubmitResult.InternalError;
-    const failed = [
-      assert.rejects(send.admitted, submitFailed),
-      assert.rejects(request.reply, (error: any) => error instanceof zlink.RequestError
-        && error.result === zlink.RequestResult.InternalError),
-      assert.rejects(queuedRequest.admitted, submitFailed),
-      assert.rejects(queuedRequest.reply, submitFailed),
-    ];
+    let settled = 0;
+    for (const stage of [send.admitted, request.reply, queuedRequest.admitted, queuedRequest.reply]) {
+      void stage.then(() => { settled += 1; }, () => { settled += 1; });
+    }
     assert.equal(socket.recv(received, zlink.RecvFlags.DontWait), false);
     wake(-9);
-    await Promise.all(failed);
+    await Promise.resolve();
+    assert.equal(settled, 0, 'readiness failure must not settle completion-backed terminals');
     assert.equal(calls, 1);
     assert.equal(stops, 1);
-    assert.equal(owner.hasManagedWritableWait(), false);
     socket.close();
+    await Promise.resolve();
+    assert.equal(settled, 4, 'socket lifecycle owns terminal failure after watch loss');
     wake(0);
     assert.equal(calls, 1);
   } finally { received.close(); socket.close(); ctx.close(); }

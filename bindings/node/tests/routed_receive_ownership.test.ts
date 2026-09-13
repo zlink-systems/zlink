@@ -2,11 +2,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 const zlink = require('@zlink-systems/zlink');
+import { CompletionPollerDriver } from './completion_poller';
 
 test('multipart receive reuse preserves captured reply routes and collection identities', async () => {
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealers = [zlink.createDealerSocket(ctx), zlink.createDealerSocket(ctx)];
+  const completions = new CompletionPollerDriver(dealers);
   const received = new zlink.Received();
   const saved: any[] = [];
   const requests: Promise<any>[] = [];
@@ -39,11 +41,11 @@ test('multipart receive reuse preserves captured reply routes and collection ide
     assert.throws(() => router.reply(saved[0].route, {}), TypeError);
     saved[1].reply.submit();
     saved[0].reply.submit();
-    const replies = await Promise.all(requests);
+    const replies = await completions.settle(Promise.all(requests));
     try { assert.deepEqual(replies.map(parts => parts[0].getString()), ['reply-0', 'reply-1']); }
     finally { for (const parts of replies) for (const part of parts) part.close(); }
   } finally {
-    received.close();
+    completions.close(); received.close();
     for (const dealer of dealers) dealer.close();
     router.close(); ctx.close();
   }

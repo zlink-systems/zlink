@@ -5,6 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlink = require('@zlink-systems/zlink');
+import { CompletionPollerDriver } from './completion_poller';
 
 let sequence = 0;
 
@@ -27,6 +28,45 @@ function drainAvailable(socket: any, values: string[]): void {
     }
   }
 }
+
+test('ownerless backpressured send fails immediately with typed InvalidState', () => {
+  const context = zlink.createContext();
+  context.options.autoHwmEnabled = false;
+  const sender = zlink.createPairSocket(context);
+  const receiver = zlink.createPairSocket(context);
+  sender.options.immediate = true;
+  sender.options.sendHwm = 512n;
+  receiver.options.recvHwm = 512n;
+  receiver.bind(endpoint());
+  sender.connect(receiver.options.lastEndpoint);
+  try {
+    sender.send().message('ready').submit_sync();
+    const received = new zlink.Received();
+    assert.equal(receiver.recv(received), true);
+    received.close();
+    for (let index = 0; index < 512; index += 1) {
+      const payload = zlink.Message.from(Buffer.alloc(64, index));
+      try {
+        const submission = sender.send().message(payload).submit();
+        assert.equal(submission.result, zlink.SubmitResult.Ok);
+        assert.equal(payload.size(), 0);
+      } catch (error) {
+        assert.ok(error instanceof zlink.SubmitError);
+        assert.equal((error as { result: number }).result, zlink.SubmitResult.InvalidState);
+        assert.equal((error as { nativeErrno: number }).nativeErrno, 0);
+        assert.equal(payload.size(), 64, 'rejected caller retains Message ownership');
+        payload.close();
+        return;
+      }
+      payload.close();
+    }
+    assert.fail('small HWM did not produce ownerless backpressure');
+  } finally {
+    receiver.close();
+    sender.close();
+    context.close();
+  }
+});
 
 test('managed send snapshots a backpressured Buffer and retries it after peer drain', async () => {
   const context = zlink.createContext();
@@ -51,6 +91,10 @@ test('managed send snapshots a backpressured Buffer and retries it after peer dr
     receiver.options.recvHwm = 512n;
     receiver.bind(endpoint());
     sender.connect(receiver.options.lastEndpoint);
+    readiness.add(sender, [
+      zlink.PollEventFlag.PollOut,
+      zlink.PollEventFlag.PollCompletion,
+    ], 79);
 
     // Ordinary connectivity no longer publishes POLLOUT. A blocking prime is
     // the deterministic inproc attach synchronization point.
@@ -83,13 +127,7 @@ test('managed send snapshots a backpressured Buffer and retries it after peer dr
     assert.notEqual(pendingIndex, -1);
     payloads[pendingIndex].fill(0x7a);
 
-    // The first event-loop turn created the binding's lazy completion poller.
-    // Transfer ownership to a public poller while sends are still waiting,
-    // then prove that WRITABLE is surfaced as POLLOUT and processed there.
-    readiness.add(sender, [
-      zlink.PollEventFlag.PollOut,
-      zlink.PollEventFlag.PollCompletion,
-    ], 79);
+    // Prove that WRITABLE is surfaced as POLLOUT and processed by the public owner.
     let sawWritablePollOut = false;
     for (let turn = 0; turn < sends.length && !sawWritablePollOut; turn += 1) {
       const next = new zlink.Received();
@@ -108,10 +146,9 @@ test('managed send snapshots a backpressured Buffer and retries it after peer dr
     }
     assert.equal(sawWritablePollOut, true,
       'a matching WRITABLE completion must wake the public poller as POLLOUT');
-    assert.equal(readiness.remove(sender), true);
-
     for (let turn = 0; turn < 10_000; turn += 1) {
       drainAvailable(receiver, received);
+      readiness.wait(events, 0);
       if (settled === sends.length && received.length === sends.length) break;
       await yieldToEventLoop();
     }
@@ -138,6 +175,7 @@ test('retry completion does not consume a Message wrapper reused by the caller',
   context.options.autoHwmEnabled = false;
   const sender = zlink.createPairSocket(context);
   const receiver = zlink.createPairSocket(context);
+  const completions = new CompletionPollerDriver(sender);
   const messages: any[] = [];
   const sends: Promise<void>[] = [];
   const expected: string[] = [];
@@ -200,6 +238,7 @@ test('retry completion does not consume a Message wrapper reused by the caller',
 
     for (let turn = 0; turn < 10_000; turn += 1) {
       drainAvailable(receiver, received);
+      completions.wait(0);
       if (settled === sends.length && received.length === sends.length) break;
       await yieldToEventLoop();
     }
@@ -211,6 +250,7 @@ test('retry completion does not consume a Message wrapper reused by the caller',
     assert.equal(replacement.getString(), 'replacement-wrapper',
       'retry success must not consume the caller-reused wrapper');
   } finally {
+    completions.close();
     for (const message of new Set(messages)) message.close();
     replacement?.close();
     receiver.close();
@@ -224,6 +264,7 @@ test('context shutdown rejects a backpressured managed send as Terminated', asyn
   context.options.autoHwmEnabled = false;
   const sender = zlink.createPairSocket(context);
   const receiver = zlink.createPairSocket(context);
+  const completions = new CompletionPollerDriver(sender);
   const attempts: Array<{ settled: boolean; error?: unknown; done: Promise<void> }> = [];
 
   try {
@@ -259,6 +300,8 @@ test('context shutdown rejects a backpressured managed send as Terminated', asyn
     const pending = attempts.find((attempt) => !attempt.settled);
     assert.ok(pending, 'HWM must leave at least one managed send waiting');
     context.shutdown();
+    assert.throws(() => completions.wait(100), (error: any) =>
+      error instanceof zlink.RecvError && error.result === zlink.RecvResult.Terminated);
     for (let turn = 0; turn < 10_000 && !pending.settled; turn += 1) {
       await yieldToEventLoop();
     }
@@ -268,6 +311,7 @@ test('context shutdown rejects a backpressured managed send as Terminated', asyn
     assert.equal((pending.error as { result: number }).result,
       zlink.SubmitResult.Terminated);
   } finally {
+    completions.close();
     receiver.close();
     sender.close();
     context.close();
@@ -280,6 +324,7 @@ test('managed routed send retries the same target and packet after HWM drain', a
   context.options.autoHwmEnabled = false;
   const router = zlink.createRouterSocket(context);
   const dealer = zlink.createDealerSocket(context);
+  const completions = new CompletionPollerDriver(router);
   const peer = zlink.RoutingId.from('node-managed-routed-peer');
   const payloads: Buffer[] = [];
   const sends: Promise<void>[] = [];
@@ -333,6 +378,7 @@ test('managed routed send retries the same target and packet after HWM drain', a
 
     for (let turn = 0; turn < 10_000; turn += 1) {
       drainAvailable(dealer, received);
+      completions.wait(0);
       if (settled === sends.length && received.length === sends.length) break;
       await yieldToEventLoop();
     }
@@ -343,6 +389,7 @@ test('managed routed send retries the same target and packet after HWM drain', a
     assert.deepEqual(received, expected,
       'managed routed retry must preserve both submit-time payload and target');
   } finally {
+    completions.close();
     dealer.close();
     router.close();
     context.close();

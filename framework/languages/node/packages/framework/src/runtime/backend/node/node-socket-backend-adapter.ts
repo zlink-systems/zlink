@@ -1,3 +1,4 @@
+import type { Socket } from '@zlink-systems/zlink';
 import type { ZLinkBackendObject } from '../contracts';
 import {
   closeWithBusyRetry,
@@ -17,10 +18,13 @@ import {
   type ZLinkBindingReplyOperation,
   type ZLinkBindingAsyncSendOperation
 } from './node-backend-adapter-support';
+import { ZLinkNodeEventLoopPoller } from './node-event-loop-poller';
 
+const eventLoopPollers = new WeakMap<object, ZLinkNodeEventLoopPoller>();
 
 export function wrapSocket<T extends { close(): void }>(
-  nativeInstance: T
+  nativeInstance: T,
+  pollCompletion?: boolean
 ): T & ZLinkBackendObject {
   const boundEndpoints = new Set<string>();
   const connectedEndpoints = new Set<string>();
@@ -40,15 +44,24 @@ export function wrapSocket<T extends { close(): void }>(
   const hasRoutedPeer = hasRequest
     && typeof (nativeInstance as { reply?: unknown }).reply === 'function';
   const hasStream = typeof (nativeInstance as { recvPacket?: unknown }).recvPacket === 'function';
+  const eventLoopPoller = pollCompletion === undefined
+    ? undefined
+    : new ZLinkNodeEventLoopPoller(
+      nativeInstance as unknown as Socket,
+      pollCompletion,
+      () => {}
+    );
   const adapter = {
     nativeInstance,
     async dispose(): Promise<void> {
+      eventLoopPoller?.dispose();
       disableSocketLinger(nativeInstance);
       closeSocketRoutes(nativeInstance, peerRoutingIds);
       closeSocketEndpoints(nativeInstance, boundEndpoints, connectedEndpoints);
       await closeWithBusyRetry(nativeInstance);
     },
     close(): void {
+      eventLoopPoller?.dispose();
       nativeInstance.close();
     },
     bind(endpoint: string): void {
@@ -287,7 +300,16 @@ export function wrapSocket<T extends { close(): void }>(
       return false;
     }
   };
+  if (eventLoopPoller !== undefined) eventLoopPollers.set(adapter, eventLoopPoller);
   return adapter as unknown as T & ZLinkBackendObject;
+}
+
+export function nodeEventLoopPollerOf(socket: object): ZLinkNodeEventLoopPoller {
+  const poller = eventLoopPollers.get(socket);
+  if (poller === undefined) {
+    throw new TypeError('Node backend socket does not own an event-loop poller.');
+  }
+  return poller;
 }
 
 export function disconnectStreamPeer(

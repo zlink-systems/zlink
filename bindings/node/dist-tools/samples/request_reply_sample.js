@@ -15,8 +15,12 @@ async function main() {
     const ctx = zlink.createContext();
     const routerSocket = zlink.createRouterSocket(ctx);
     const dealerSocket = zlink.createDealerSocket(ctx);
+    const completionPoller = zlink.createPoller();
+    const completionEvents = zlink.createPollEvents(1);
     const clientRoutingId = zlink.RoutingId.from(Buffer.from('request-reply-client'));
     try {
+        completionPoller.add(dealerSocket, [zlink.PollEventFlag.PollCompletion], 0);
+        dealerSocket.setReadableHandler(() => completionPoller.wait(completionEvents, 0));
         const routerMonitor = routerSocket.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
         const dealerMonitor = dealerSocket.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
         try {
@@ -58,6 +62,8 @@ async function main() {
         console.log('[dealer-router/request-reply] send: "ping" -> recv: "pong"');
     }
     finally {
+        completionEvents.close();
+        completionPoller.close();
         dealerSocket.close();
         routerSocket.close();
         ctx.close();

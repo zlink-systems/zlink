@@ -23,6 +23,10 @@ import { withRuntimeErrorMessage } from './error_state';
 
 const ETERM = 156384765;
 
+export function isTerminationErrno(errno: number): boolean {
+  return errno === 125 || errno === 108 || errno === ETERM;
+}
+
 export type NativeErrorCategory =
   | 'submit'
   | 'request'
@@ -80,7 +84,9 @@ export function mapNativeErrno(category: NativeErrorCategory, errno: number): nu
         case 11: return RecvResult.NoData;
         case 4: return RecvResult.NoData;
         case 16: return RecvResult.Busy;
-        case 125: return RecvResult.Terminated;
+        case 125:
+        case 108:
+        case ETERM: return RecvResult.Terminated;
         case 14: return RecvResult.InvalidHandle;
         default: return RecvResult.InternalError;
       }

@@ -28,7 +28,7 @@ import {
   type ZLinkBindingModule
 } from './node-backend-adapter-support';
 import { wrapMonitorSocket } from './node-monitor-backend-adapter';
-import { wrapSocket } from './node-socket-backend-adapter';
+import { nodeEventLoopPollerOf, wrapSocket } from './node-socket-backend-adapter';
 import { ZLinkNodeMeshBackendAdapter } from './node-mesh-backend-adapter';
 
 export { isDisconnectRouteNotFoundError } from './node-socket-backend-adapter';
@@ -69,11 +69,17 @@ class ZLinkNodeChannelBackendAdapter implements ZLinkChannelBackendAdapter {
   }
 
   createDealerSocket(context: ZLinkBackendContext): ZLinkBackendDealerSocket {
-    return wrapSocket(zlink.createDealerSocket(asNodeContext(context))) as unknown as ZLinkBackendDealerSocket;
+    return wrapSocket(
+      zlink.createDealerSocket(asNodeContext(context)),
+      true
+    ) as unknown as ZLinkBackendDealerSocket;
   }
 
   createRouterSocket(context: ZLinkBackendContext): ZLinkBackendRouterSocket {
-    return wrapSocket(zlink.createRouterSocket(asNodeContext(context))) as unknown as ZLinkBackendRouterSocket;
+    return wrapSocket(
+      zlink.createRouterSocket(asNodeContext(context)),
+      true
+    ) as unknown as ZLinkBackendRouterSocket;
   }
 
   createPublisherSocket(context: ZLinkBackendContext): ZLinkBackendPublisherSocket {
@@ -81,7 +87,10 @@ class ZLinkNodeChannelBackendAdapter implements ZLinkChannelBackendAdapter {
   }
 
   createSubscriberSocket(context: ZLinkBackendContext): ZLinkBackendSubscriberSocket {
-    return wrapSocket(zlink.createSubSocket(asNodeContext(context))) as unknown as ZLinkBackendSubscriberSocket;
+    return wrapSocket(
+      zlink.createSubSocket(asNodeContext(context)),
+      false
+    ) as unknown as ZLinkBackendSubscriberSocket;
   }
 
   createReadablePoller(socket: ZLinkBackendSubscriberSocket): ZLinkBackendReadablePoller {
@@ -93,7 +102,7 @@ class ZLinkNodeStreamBackendAdapter implements ZLinkStreamBackendAdapter {
   createStreamSocket(context: ZLinkBackendContext): ZLinkBackendStreamSocket {
     const socket = zlink.createStreamSocket(asNodeContext(context));
     socket.options.recvMode = zlink.StreamRecvMode.Packet;
-    return wrapSocket(socket) as unknown as ZLinkBackendStreamSocket;
+    return wrapSocket(socket, true) as unknown as ZLinkBackendStreamSocket;
   }
 
   createStreamPacket(): ZLinkBackendStreamPacket {
@@ -166,9 +175,7 @@ function asNodeContext(context: ZLinkBackendContext): Context {
 function createNodeReadablePoller(
   socket: { readonly nativeInstance: unknown }
 ): ZLinkBackendReadablePoller {
-  const nativeSocket = socket.nativeInstance as {
-    setReadableHandler(handler: () => void): void;
-  };
+  const eventLoopPoller = nodeEventLoopPollerOf(socket);
   let disposed = false;
   let readable = false;
   let pending: {
@@ -188,7 +195,7 @@ function createNodeReadablePoller(
     current.resolve(value);
   };
 
-  nativeSocket.setReadableHandler(() => {
+  eventLoopPoller.setReadableHandler(() => {
     if (disposed) return;
     readable = true;
     settlePending(true);
@@ -224,6 +231,7 @@ function createNodeReadablePoller(
       disposed = true;
       readable = false;
       settlePending(false);
+      eventLoopPoller.setReadableHandler(() => {});
     }
   };
 }

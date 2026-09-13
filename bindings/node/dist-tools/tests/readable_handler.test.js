@@ -12,6 +12,7 @@ const node_path_1 = __importDefault(require("node:path"));
 const promises_1 = require("node:timers/promises");
 const zlink = require('@zlink-systems/zlink');
 const { completionOwnerOf } = require('../../dist/zlink/runtime/messaging/completion_owner');
+const completion_poller_1 = require("./completion_poller");
 (0, node_test_1.default)('readable handler replaces its predecessor and drains a queued batch through no data', async () => {
     const ctx = zlink.createContext();
     const sender = zlink.createPairSocket(ctx);
@@ -135,10 +136,11 @@ for (const paused of [false, true]) {
         }
     });
 }
-(0, node_test_1.default)('watch acknowledgement preserves typed request termination during context shutdown', async () => {
+(0, node_test_1.default)('public completion poller preserves typed request termination during context shutdown', async () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);
     const dealer = zlink.createDealerSocket(ctx);
+    const completions = new completion_poller_1.CompletionPollerDriver(dealer);
     const request = new zlink.Received();
     const incoming = new zlink.Received();
     const receiveFailures = [];
@@ -163,10 +165,11 @@ for (const paused of [false, true]) {
         strict_1.default.equal(router.recv(request), true);
         request.close();
         ctx.shutdown();
+        strict_1.default.throws(() => completions.wait(100), (error) => error instanceof zlink.RecvError && error.result === zlink.RecvResult.Terminated);
         await rejected;
-        strict_1.default.ok(receiveFailures.some(error => error instanceof zlink.RecvError));
     }
     finally {
+        completions.close();
         request.close();
         incoming.close();
         dealer.close();
@@ -196,7 +199,7 @@ for (const paused of [false, true]) {
         const publicOwner = {};
         owner.transferToPublic(publicOwner);
         wake(0);
-        owner.transferToRuntime(publicOwner);
+        owner.releasePublic(publicOwner);
         wake(0);
         strict_1.default.equal(starts, 1);
         strict_1.default.equal(stops, 0);
@@ -213,7 +216,7 @@ for (const paused of [false, true]) {
         ctx.close();
     }
 });
-(0, node_test_1.default)('readable notifications coexist with runtime and public request completion drains', async () => {
+(0, node_test_1.default)('readable notifications coexist with public request completion drains', async () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);
     const dealer = zlink.createDealerSocket(ctx);
@@ -223,6 +226,7 @@ for (const paused of [false, true]) {
     const events = zlink.createPollEvents(1);
     router.bind('inproc://readable-handler-completions');
     dealer.connect('inproc://readable-handler-completions');
+    poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 7);
     let served;
     let delivered;
     let failServing;
@@ -256,17 +260,13 @@ for (const paused of [false, true]) {
                 failDelivery(error);
             }
         });
-        for (const mode of ['public', 'runtime']) {
+        for (const mode of ['first', 'second']) {
             const servedRequest = new Promise((resolve, reject) => { served = resolve; failServing = reject; });
             const receivedData = new Promise((resolve, reject) => { delivered = resolve; failDelivery = reject; });
             const pending = dealer.request().message(mode).timeout(1000).submit().reply;
-            if (mode === 'public')
-                poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 7);
             await servedRequest;
-            if (mode === 'public') {
-                strict_1.default.equal(poller.wait(events, 1000), 1);
-                strict_1.default.equal(events.hasEvent(0, zlink.PollEventFlag.PollCompletion), true);
-            }
+            strict_1.default.equal(poller.wait(events, 1000), 1);
+            strict_1.default.equal(events.hasEvent(0, zlink.PollEventFlag.PollCompletion), true);
             const parts = await pending;
             try {
                 strict_1.default.equal(parts[0].getString(), `reply:${mode}`);
@@ -275,10 +275,8 @@ for (const paused of [false, true]) {
                 parts.forEach((part) => part.close());
             }
             await receivedData;
-            if (mode === 'public')
-                strict_1.default.equal(poller.remove(dealer), true);
         }
-        strict_1.default.deepEqual(values, ['data:public', 'data:runtime']);
+        strict_1.default.deepEqual(values, ['data:first', 'data:second']);
     }
     finally {
         events.close();
@@ -290,7 +288,7 @@ for (const paused of [false, true]) {
         ctx.close();
     }
 });
-(0, node_test_1.default)('watch failure rejects all pending operations and reaches the handler only through its next receive', async () => {
+(0, node_test_1.default)('watch failure does not become a completion owner and reaches the handler through receive', async () => {
     const ctx = zlink.createContext();
     const socket = zlink.createPairSocket(ctx);
     const received = new zlink.Received();
@@ -308,6 +306,8 @@ for (const paused of [false, true]) {
             : { result: zlink.SubmitResult.Backpressured, nativeErrno: node_os_1.constants.errno.EAGAIN, completionId: 13n },
     };
     try {
+        const publicOwner = {};
+        owner.transferToPublic(publicOwner);
         socket.setReadableHandler(function () {
             calls += 1;
             strict_1.default.equal(arguments.length, 0);
@@ -318,22 +318,19 @@ for (const paused of [false, true]) {
         const send = owner.submitSend(Buffer.from('send'), null);
         const request = owner.submitRequest(Buffer.from('request'), null, 1000);
         const queuedRequest = owner.submitRequest(Buffer.from('queued'), null, 1000);
-        const submitFailed = (error) => error instanceof zlink.SubmitError
-            && error.result === zlink.SubmitResult.InternalError;
-        const failed = [
-            strict_1.default.rejects(send.admitted, submitFailed),
-            strict_1.default.rejects(request.reply, (error) => error instanceof zlink.RequestError
-                && error.result === zlink.RequestResult.InternalError),
-            strict_1.default.rejects(queuedRequest.admitted, submitFailed),
-            strict_1.default.rejects(queuedRequest.reply, submitFailed),
-        ];
+        let settled = 0;
+        for (const stage of [send.admitted, request.reply, queuedRequest.admitted, queuedRequest.reply]) {
+            void stage.then(() => { settled += 1; }, () => { settled += 1; });
+        }
         strict_1.default.equal(socket.recv(received, zlink.RecvFlags.DontWait), false);
         wake(-9);
-        await Promise.all(failed);
+        await Promise.resolve();
+        strict_1.default.equal(settled, 0, 'readiness failure must not settle completion-backed terminals');
         strict_1.default.equal(calls, 1);
         strict_1.default.equal(stops, 1);
-        strict_1.default.equal(owner.hasManagedWritableWait(), false);
         socket.close();
+        await Promise.resolve();
+        strict_1.default.equal(settled, 4, 'socket lifecycle owns terminal failure after watch loss');
         wake(0);
         strict_1.default.equal(calls, 1);
     }

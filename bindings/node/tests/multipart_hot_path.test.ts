@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const zlink = require('@zlink-systems/zlink');
+import { CompletionPollerDriver } from './completion_poller';
 
 for (const count of [2, 17]) {
   test(`routed ${count}-part reply preserves bytes, properties and consumption`, async () => {
@@ -59,6 +60,7 @@ test('observed multipart data survives receive reuse and reply consumption', asy
   const context = zlink.createContext();
   const router = zlink.createRouterSocket(context);
   const dealer = zlink.createDealerSocket(context);
+  const completions = new CompletionPollerDriver(dealer);
   const received = new zlink.Received();
   try {
     router.bind('inproc://multipart-observed-data');
@@ -70,13 +72,13 @@ test('observed multipart data survives receive reuse and reply consumption', asy
       view.write('edited');
       received.reply().message(received.parts[0]).message(received.parts[1]).submit();
       received.close();
-      const parts = await pending;
+      const parts = await completions.settle<any[]>(pending);
       assert.equal(parts[0].getString(), 'edited');
       for (const part of parts) part.close();
       assert.equal(view.toString(), 'edited');
     }
   } finally {
-    received.close(); dealer.close(); router.close(); context.close();
+    completions.close(); received.close(); dealer.close(); router.close(); context.close();
   }
 });
 

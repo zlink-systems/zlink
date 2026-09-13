@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlink = require('@zlink-systems/zlink');
+const completion_poller_1 = require("./completion_poller");
 test('request/reply public surface is token-based and flag-free', () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);
@@ -25,6 +26,7 @@ test('ReplyToken equality and hash include the socket owner', async () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);
     const dealer = zlink.createDealerSocket(ctx);
+    const completions = new completion_poller_1.CompletionPollerDriver(dealer);
     router.bind('inproc://reply-token-value-contract');
     dealer.connect('inproc://reply-token-value-contract');
     try {
@@ -38,12 +40,13 @@ test('ReplyToken equality and hash include the socket owner', async () => {
         assert.equal(Object.keys(token).length, 0);
         assert.equal('value' in token, false);
         received.reply().message('pong').submit();
-        const reply = await pending;
+        const reply = await completions.settle(pending);
         assert.equal(reply[0].getString(), 'pong');
         reply[0].close();
         received.close();
     }
     finally {
+        completions.close();
         dealer.close();
         router.close();
         ctx.close();

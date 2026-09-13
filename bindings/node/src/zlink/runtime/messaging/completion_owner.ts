@@ -229,10 +229,11 @@ export class CompletionOwner {
   private readonly writableRetries: CompletionEntry<unknown>[] = [];
   private nextToken = 1n;
   private publicOwner: object | null = null;
-  private runtimeWatch: NativeHandle | null = null;
+  private readableWatch: NativeHandle | null = null;
   private readableHandler: ZLinkReadableHandler | null = null;
   private receiveError: RecvError | null = null;
-  private readonly runtimeReady = (status = 0, nativeErrno = 0): void => this.runtimeWake(status, nativeErrno);
+  private readonly readableReady = (status = 0, nativeErrno = 0): void =>
+    this.notifyReadable(status, nativeErrno);
   private managedWritableWaitCount = 0;
   private closed = false;
 
@@ -246,7 +247,7 @@ export class CompletionOwner {
     const previousHandler = this.readableHandler;
     this.readableHandler = handler;
     try {
-      this.ensureRuntimeWatch();
+      this.ensureReadableWatch();
     } catch (error) {
       this.readableHandler = previousHandler;
       throw withRuntimeErrorMessage(
@@ -256,7 +257,7 @@ export class CompletionOwner {
     }
     // The mailbox fd reports later progress; an initial drain also observes
     // already-queued data and arms an empty receive pipe before waiting.
-    queueMicrotask(this.runtimeReady);
+    queueMicrotask(this.readableReady);
   }
 
   throwReceiveError(): void {
@@ -322,6 +323,23 @@ export class CompletionOwner {
       );
     }
 
+    if (this.publicOwner === null) {
+      // Core owns the issued WRITABLE token until it is pulled or the socket
+      // closes. Retain only its correlation entry for later public-poller or
+      // lifecycle cleanup; the rejected caller keeps ownership of its payload.
+      const entry = new CompletionEntry<void>(token, 'send', false);
+      entry.awaitWritable(result.completionId);
+      this.byToken.set(token, entry as CompletionEntry<unknown>);
+      this.byId.set(result.completionId, entry as CompletionEntry<unknown>);
+      const error = submitError(
+        SubmitResult.InvalidState,
+        0,
+        'async send requires a PollCompletion owner when backpressured'
+      );
+      entry.fail(error, true);
+      throw error;
+    }
+
     let retryPayload: ReturnType<typeof normalizeOperationPayload>;
     try {
       // Core retains no SEND payload. Copy only after actual rejection, before
@@ -343,7 +361,6 @@ export class CompletionOwner {
       timeoutMs: 0,
     });
     this.managedWritableWaitCount += 1;
-    this.ensureRuntimeWatch();
     return { result: SubmitResult.Backpressured, admitted: entry.admitted };
   }
 
@@ -360,6 +377,7 @@ export class CompletionOwner {
     } catch (error) {
       throw submitNativeError(error, DONTWAIT, 'request submit failed');
     }
+    this.requirePublicOwner('async request requires a PollCompletion owner');
 
     let result: NativeSubmitResult;
     try {
@@ -391,7 +409,6 @@ export class CompletionOwner {
       const entry = this.createEntry<Message[]>('request', token);
       entry.admit();
       this.publish(entry, result.completionId);
-      this.ensureRuntimeWatch();
       return {
         result: SubmitResult.Ok,
         admitted: entry.admitted,
@@ -434,7 +451,6 @@ export class CompletionOwner {
       timeoutMs,
     });
     this.managedWritableWaitCount += 1;
-    this.ensureRuntimeWatch();
     return {
       result: SubmitResult.Backpressured,
       admitted: entry.admitted,
@@ -447,7 +463,7 @@ export class CompletionOwner {
     target: Buffer | null,
     timeoutMs: number
   ): Message[] {
-    const entry = this.register<Message[]>('request', false, false);
+    const entry = this.register<Message[]>('request', false);
     void entry.promise.catch(() => {});
     let result: NativeSyncRequestResult;
     try {
@@ -508,17 +524,13 @@ export class CompletionOwner {
       throw submitError(SubmitResult.InvalidState, 0, 'completion owner already transferred');
     }
     if (this.publicOwner === owner) return false;
-    // A public readable handler still needs this one event-loop watch;
-    // completion settlement alone transfers to the public Core poller.
-    if (this.readableHandler === null) this.closeRuntimeWatch();
     this.publicOwner = owner;
     return true;
   }
 
-  transferToRuntime(owner: object): void {
+  releasePublic(owner: object): void {
     if (this.publicOwner !== owner) return;
     this.publicOwner = null;
-    this.ensureRuntimeWatch();
   }
 
   drain(caller?: object): number {
@@ -544,6 +556,24 @@ export class CompletionOwner {
     return this.managedWritableWaitCount !== 0;
   }
 
+  failPublicWaitTerminated(caller: object, nativeErrno: number): void {
+    if (this.publicOwner !== caller) return;
+    for (const entry of this.byToken.values()) {
+      const admissionPending = this.retries.has(entry.token);
+      const error = createError(
+        entry.kind === 'request' && !admissionPending ? 'request' : 'submit',
+        nativeErrno,
+        'completion poller was terminated'
+      );
+      entry.fail(error, admissionPending);
+    }
+    this.byToken.clear();
+    this.byId.clear();
+    this.retries.clear();
+    this.writableRetries.length = 0;
+    this.managedWritableWaitCount = 0;
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -551,28 +581,26 @@ export class CompletionOwner {
     this.readableHandler = null;
     this.receiveError = null;
     for (const entry of this.byToken.values()) {
-      entry.fail(entry.kind === 'request'
+      const admissionPending = this.retries.has(entry.token);
+      entry.fail(entry.kind === 'request' && !admissionPending
         ? requestError(RequestResult.Terminated, 'socket closed')
         : submitError(SubmitResult.Terminated, 0, 'socket closed'),
-      this.retries.has(entry.token));
+      admissionPending);
     }
     this.byToken.clear();
     this.byId.clear();
     this.retries.clear();
     this.writableRetries.length = 0;
     this.managedWritableWaitCount = 0;
-    this.closeRuntimeWatch();
+    this.closeReadableWatch();
   }
 
   private register<T>(
     kind: CompletionKind,
-    schedule = true,
     expectsUserContext = true
   ): CompletionEntry<T> {
     if (this.closed) throw submitError(SubmitResult.InvalidState, 0, 'socket is closed');
-    const entry = this.createEntry<T>(kind, this.nextToken++, expectsUserContext);
-    if (schedule) this.ensureRuntimeWatch();
-    return entry;
+    return this.createEntry<T>(kind, this.nextToken++, expectsUserContext);
   }
 
   private createEntry<T>(
@@ -689,7 +717,6 @@ export class CompletionOwner {
         entry.admit();
         entry.publish(result.completionId);
         this.byId.set(result.completionId, entry);
-        this.ensureRuntimeWatch();
       }
       return;
     }
@@ -706,7 +733,6 @@ export class CompletionOwner {
       if (entry.completionId !== 0n) this.byId.delete(entry.completionId);
       entry.awaitWritable(result.completionId);
       this.byId.set(result.completionId, entry);
-      this.ensureRuntimeWatch();
       return;
     }
 
@@ -733,60 +759,39 @@ export class CompletionOwner {
     if (this.retries.delete(entry.token)) this.managedWritableWaitCount -= 1;
   }
 
-  private ensureRuntimeWatch(): void {
-    if (this.closed || this.runtimeWatch !== null) return;
-    if (this.readableHandler === null && (this.publicOwner || this.byToken.size === 0)) return;
-    this.runtimeWatch = this.native.socketReadableWatchStart(
+  private requirePublicOwner(message: string): void {
+    if (this.publicOwner === null) {
+      throw submitError(SubmitResult.InvalidState, 0, message);
+    }
+  }
+
+  private ensureReadableWatch(): void {
+    if (this.closed || this.readableWatch !== null || this.readableHandler === null) return;
+    this.readableWatch = this.native.socketReadableWatchStart(
       this.handle,
-      this.runtimeReady
+      this.readableReady
     ) as NativeHandle;
   }
 
-  private runtimeWake(status: number, watchErrno: number): void {
-    if (this.closed || this.runtimeWatch === null) return;
-    try {
-      if (status < 0) {
-        const message = watchErrno === 0
-          ? `socket readable watch failed (${status})`
-          : `socket readable watch acknowledgement failed (${watchErrno})`;
-        this.receiveError = watchErrno === 0
-          ? withRuntimeErrorMessage(new RecvError(RecvResult.InternalError, status), message)
-          : createError('recv', watchErrno, message) as RecvError;
-        this.closeRuntimeWatch();
-        throw this.receiveError;
-      }
-      if (this.publicOwner === null && this.byToken.size !== 0) this.drain();
-    } catch (error) {
-      const nativeErrno = status < 0 ? (watchErrno || status) : readErrno();
-      const message = nativeErrorMessage(error, 'completion drain failed');
-      for (const entry of this.byToken.values()) {
-        entry.fail(this.retries.has(entry.token)
-          ? (nativeErrno === 0
-              ? submitError(SubmitResult.InternalError, 0, message)
-              : createError('submit', nativeErrno, message))
-          : entry.kind === 'request'
-          ? (nativeErrno === 0 || (status < 0 && watchErrno === 0)
-              ? withRuntimeErrorMessage(new RequestError(RequestResult.InternalError, nativeErrno), message)
-              : createError('request', nativeErrno, message))
-          : (nativeErrno === 0
-              ? submitError(SubmitResult.InternalError, 0, message)
-              : createError('submit', nativeErrno, message)),
-        this.retries.has(entry.token));
-      }
-      this.byToken.clear();
-      this.byId.clear();
-      this.retries.clear();
-      this.writableRetries.length = 0;
-      this.managedWritableWaitCount = 0;
+  private notifyReadable(status: number, watchErrno: number): void {
+    if (this.closed || this.readableWatch === null) return;
+    if (status < 0) {
+      const message = watchErrno === 0
+        ? `socket readable watch failed (${status})`
+        : `socket readable watch acknowledgement failed (${watchErrno})`;
+      this.receiveError = watchErrno === 0
+        ? withRuntimeErrorMessage(new RecvError(RecvResult.InternalError, status), message)
+        : createError('recv', watchErrno, message) as RecvError;
+      this.closeReadableWatch();
     }
-    if (this.byToken.size === 0 && this.readableHandler === null) this.closeRuntimeWatch();
-    // User exceptions belong to the caller, outside completion failure handling.
+    // The libuv watch only delivers readiness. The handler's public Poller
+    // wait owns any completion drain and may also consume application data.
     this.readableHandler?.();
   }
 
-  private closeRuntimeWatch(): void {
-    const watch = this.runtimeWatch;
-    this.runtimeWatch = null;
+  private closeReadableWatch(): void {
+    const watch = this.readableWatch;
+    this.readableWatch = null;
     if (watch === null) return;
     this.native.socketReadableWatchStop(watch);
   }
