@@ -17,6 +17,7 @@ public sealed record PerfEchoRequest : Identity
     public required int clientId { get; init; }
     public required string sequence { get; init; }
     public required string correlationId { get; init; }
+    public string? scheduledTicks { get; init; }
     public required string sentTicks { get; init; }
     public required string clockDomainId { get; init; }
     public required string? returnSpotId { get; init; }
@@ -34,6 +35,8 @@ public sealed record PerfEchoReply : Identity
     public required string payload { get; init; }
 }
 
+public sealed record PerfBindRequest(string runId, string cellId, int clientId);
+public sealed record PerfBindReply(string actorId, bool bound);
 public sealed record PerfDriveRequest(PerfEchoRequest echo);
 public sealed record PerfDriveReply(bool started, PerfEchoReply? echo);
 public sealed record PerfTriggerRequest : Identity;
@@ -48,6 +51,7 @@ public sealed record PerfPublishEvent : Identity
 {
     public required string sequence { get; init; }
     public required string topic { get; init; }
+    public string? scheduledTicks { get; init; }
     public required string sentTicks { get; init; }
     public required string clockDomainId { get; init; }
     public required string payload { get; init; }
@@ -80,24 +84,28 @@ public sealed record PerfMetricsSnapshot(int schemaVersion, string runId, string
     ClockMetadata clock, SerializedMessageBytes[] serializedMessageBytes,
     Dictionary<string, object?> metrics, Dictionary<string, object?> histograms,
     Dictionary<string, NullReason> nullReasons, object? publicStatus, object[] publicMetrics,
-    Dictionary<string, object?> runtimeMetrics, Dictionary<string, object?> provenance);
+    Dictionary<string, object?> runtimeMetrics, Dictionary<string, object?> provenance, string comparisonKey, TimeSeriesInterval[] timeSeries);
 
-public sealed record Workload(int payloadSize, double durationSeconds, double warmupSeconds,
+public sealed record TimeSeriesInterval(double offsetMs, double durationMs, Dictionary<string, string> counts,
+    double? cpuPercent, Dictionary<string, NullReason> nullReasons);
+public sealed record Workload(int requestPayloadBytes, int responsePayloadBytes, int sendPayloadBytes, double durationSeconds, double warmupSeconds,
     int inflight, int? connections, int? logicalStreams, int clientCount, int? connectConcurrency,
     int requestTimeoutMs, int correlationExpiryMs, int settleTimeoutMs, int setupTimeoutMs,
-    int adminTimeoutMs, int socketSendTimeoutMs);
+    int adminTimeoutMs, int socketSendTimeoutMs, int applicationDeadlineMs = 50, int workerTaskMillis = 5, int workerPoolSize = 8, int subscriberCount = 8);
 public sealed record RoleConfig(string runId, string cellId, string configHash, string role,
     int roleInstance, string scenario, string? topology, string? channelName, string? meshName,
     string? listenerEndpoint, string? peerEndpoint, string metricsUrl, string applicationTriggerUrl,
-    bool source, string objectRole, object? store, string[] spotIds, string[] actorIds,
-    string executionMode, Workload workload, Dictionary<string, object?> provenance, DiagnosticsConfig? diagnostics = null);
+    bool source, string objectRole, StoreConfig? store, string[] spotIds, string[] actorIds,
+    string executionMode, Workload workload, Dictionary<string, object?> provenance, DiagnosticsConfig? diagnostics = null, string mode = "request", string terminal = "ordinary",
+    string? meshEndpoint = null, string? fanoutEndpoint = null, string[]? peerEndpoints = null);
+public sealed record StoreConfig(string provider, string endpoint, string @namespace);
 public sealed record DiagnosticsConfig(string level, string flowFile);
 public sealed record EndpointRole(string role, int roleInstance, string configFile,
     string? streamEndpoint, string applicationTriggerUrl, MetricsEndpoint metrics,
     Dictionary<string, string> transportEndpoints, string[] spotIds, string[] actorIds);
 public sealed record MetricsEndpoint(string transport, string baseUrl);
 public sealed record EndpointManifest(string runId, string cellId, string configHash,
-    Workload workload, EndpointRole[] roles, Dictionary<string, object?> provenance);
+    Workload workload, EndpointRole[] roles, Dictionary<string, object?> provenance, string scenario = "session-echo-only", string mode = "request");
 
 public static class PerfJson
 {

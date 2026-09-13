@@ -1,0 +1,86 @@
+{
+  "ranges": {
+    "source": [
+      {
+        "first": "1",
+        "last": "5"
+      },
+      {
+        "first": "8",
+        "last": "9"
+      }
+    ],
+    "receiverWindow": [
+      {
+        "first": "2",
+        "last": "4"
+      },
+      {
+        "first": "8",
+        "last": "8"
+      }
+    ],
+    "receiverSettle": [
+      {
+        "first": "5",
+        "last": "7"
+      },
+      {
+        "first": "9",
+        "last": "9"
+      }
+    ],
+    "expectedWindow": "4",
+    "expectedSettle": "2",
+    "expectedDelivered": "6",
+    "expectedRatio": 0.8571428571428571
+  },
+  "histogramSamplesNs": [
+    "0",
+    "999",
+    "1000",
+    "1001",
+    "60000000000",
+    "60000000001"
+  ],
+  "expectedOverflow": "1",
+  "p999MinimumSamples": "100000",
+  "window": {
+    "startTicks": "100",
+    "endTicks": "200",
+    "expected": [
+      "outside",
+      "window",
+      "window",
+      "settle"
+    ],
+    "completionTicks": [
+      "99",
+      "100",
+      "199",
+      "200"
+    ]
+  },
+  "firstTerminalRaces": [
+    {
+      "observations": [
+        "echo",
+        "failure",
+        "echo"
+      ],
+      "outcome": "completed",
+      "duplicateReply": "1",
+      "lateReply": "0"
+    },
+    {
+      "observations": [
+        "expiry",
+        "echo",
+        "failure"
+      ],
+      "outcome": "timeout",
+      "duplicateReply": "0",
+      "lateReply": "1"
+    }
+  ]
+}

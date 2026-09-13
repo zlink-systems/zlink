@@ -6,9 +6,8 @@ namespace ZLink.Framework.Perf;
 
 // §11.2: two Channel processes, manual RouteMesh or ClientServer, no Store/objects.
 // Source public request -> typed identity/full-byte validation is one operation.
-// JSON payloads: 1024/4096, request/ordinary. Connector/Actor/Spot/worker/fanout metrics do not apply.
-public sealed class ChannelEchoOnlyScenario(IZLinkRouteClient client, Measurement measurement,
-    IZLinkRouteMeshRuntime meshRuntime, IZLinkClientServerRuntime channelRuntime)
+// Typed JSON payloads: request64/response4096, request/ordinary. Connector/Actor/Spot/worker/fanout metrics do not apply.
+public sealed class ChannelEchoOnlyScenario(IZLinkRouteClient client, Measurement measurement)
 {
     private readonly RoleConfig config = measurement.Config;
     private long[] sequences = [];
@@ -18,29 +17,13 @@ public sealed class ChannelEchoOnlyScenario(IZLinkRouteClient client, Measuremen
         timeout.CancelAfter(config.workload.setupTimeoutMs);
         try
         {
-            // ObserveAsync is a change stream, not an initial snapshot (monitoring §6).
-            // Query public status until setup evidence is ready; never retry the probe call.
-            while (true)
-            {
-                timeout.Token.ThrowIfCancellationRequested();
-                if (config.topology == "routemesh")
-                {
-                    var status = meshRuntime.GetStatus(config.meshName!);
-                    if (status.IsReady && status.Channels.Any(c => c.ChannelName == config.channelName && c.IsReady && c.ReadyTargetCount > 0)) break;
-                }
-                else
-                {
-                    var status = channelRuntime.GetStatus(config.channelName!);
-                    if (status.IsReady && status.ReadyTargetCount > 0) break;
-                }
-                await Task.Yield();
-            }
+            // The shared coordinator owns infrastructure readiness; this public probe is issued once.
             sequences = new long[config.workload.logicalStreams!.Value];
             var request = measurement.Request(0, (ulong)Interlocked.Increment(ref sequences[0]), probe: true);
             var reply = await client.RequestToChannel(config.channelName!, request)
                 .Timeout(TimeSpan.FromMilliseconds(config.workload.requestTimeoutMs)).Async<PerfEchoReply>(timeout.Token);
             PayloadPattern.ValidateIdentity(request, reply);
-            measurement.Pattern.Validate(reply.payload);
+            measurement.ReplyPattern.Validate(reply.payload);
             measurement.SetupEvidence = [new { kind = "typedProbeEcho", source = "IZLinkRouteClient.RequestToChannel.Async<PerfEchoReply>",
                 observedValue = new { request.correlationId, reply.receivedTicks, reply.clockDomainId } }];
         }
@@ -60,7 +43,7 @@ public sealed class ChannelEchoOnlyScenario(IZLinkRouteClient client, Measuremen
                 var reply = await client.RequestToChannel(config.channelName!, request)
                     .Timeout(TimeSpan.FromMilliseconds(config.workload.requestTimeoutMs)).Async<PerfEchoReply>();
                 PayloadPattern.ValidateIdentity(request, reply);
-                measurement.Pattern.Validate(reply.payload);
+                measurement.ReplyPattern.Validate(reply.payload);
                 measurement.CompleteOperation(started);
             }
             catch (Exception error) { measurement.CompleteOperation(started, error); }

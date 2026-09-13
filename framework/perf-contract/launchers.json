@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 3,
+  "languages": {
+    "cpp": {
+      "server": [
+        "framework/languages/cpp/perf/build/zlink_framework_perf"
+      ],
+      "client": [
+        "framework/languages/cpp/perf/build/zlink_framework_perf"
+      ],
+      "build": {
+        "useSystemBoost": true
+      }
+    },
+    "dotnet": {
+      "server": [
+        "dotnet",
+        "framework/languages/dotnet/perf/ZLink.Framework.Perf.ChannelServer/bin/Release/net8.0/ZLink.Framework.Perf.ChannelServer.dll"
+      ],
+      "session": [
+        "dotnet",
+        "framework/languages/dotnet/perf/ZLink.Framework.Perf.SessionServer/bin/Release/net8.0/ZLink.Framework.Perf.SessionServer.dll"
+      ],
+      "client": [
+        "dotnet",
+        "framework/languages/dotnet/perf/ZLink.Framework.Perf.Client/bin/Release/net8.0/ZLink.Framework.Perf.Client.dll"
+      ]
+    },
+    "java": {
+      "server": [
+        "framework/languages/java/perf/build/install/zlink-framework-perf/bin/zlink-framework-perf"
+      ],
+      "client": [
+        "framework/languages/java/perf/build/install/zlink-framework-perf/bin/zlink-framework-perf"
+      ]
+    },
+    "node": {
+      "server": [
+        "node",
+        "framework/languages/node/perf/main.js"
+      ],
+      "client": [
+        "node",
+        "framework/languages/node/perf/main.js"
+      ]
+    }
+  },
+  "redis": {
+    "image": "redis:7.4-alpine",
+    "cpus": 1,
+    "memory": "256m"
+  },
+  "requiredCoreSha256": "b8483d3e4107bf85560d197a667aab00dc07128c9e97a97dc7b3abf647b7b60c"
+}

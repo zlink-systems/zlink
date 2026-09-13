@@ -1,0 +1,40 @@
+{
+  "assignment": "floor(actual startOffsetNs / 100000000); span starts inside window; actual end retained",
+  "windowDurationNs": "350000000",
+  "samples": [
+    {
+      "binIndex": 0,
+      "startOffsetMs": 0,
+      "endOffsetMs": 25,
+      "observedDurationNs": "25000000",
+      "cpuDeltaNs": "12500000"
+    },
+    {
+      "binIndex": 0,
+      "startOffsetMs": 25,
+      "endOffsetMs": 100,
+      "observedDurationNs": "75000000",
+      "cpuDeltaNs": "0"
+    },
+    {
+      "binIndex": 1,
+      "startOffsetMs": 100,
+      "endOffsetMs": 310,
+      "observedDurationNs": "210000000",
+      "cpuDeltaNs": "42000000"
+    },
+    {
+      "binIndex": 3,
+      "startOffsetMs": 310,
+      "endOffsetMs": 365,
+      "observedDurationNs": "55000000",
+      "cpuDeltaNs": "11000000"
+    }
+  ],
+  "expectedCpuPercent": [
+    12.5,
+    20,
+    null,
+    20
+  ]
+}

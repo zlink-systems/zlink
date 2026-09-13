@@ -7,8 +7,8 @@ var manifest = PerfJson.Read<EndpointManifest>(File.ReadAllText(args[1]));
 if (index < 0 || index >= manifest.workload.clientCount) throw new ArgumentOutOfRangeException(nameof(index));
 var cs = manifest.roles.Any(r => r.streamEndpoint is not null);
 var config = new RoleConfig(manifest.runId, manifest.cellId, manifest.configHash, "client", index,
-    cs ? "session-echo-only" : "channel-echo-only", null, null, null, null, null, "", "", false,
-    "None", null, [], [], "Immediate", manifest.workload, manifest.provenance);
+    manifest.scenario, null, null, null, null, null, "", "", false,
+    "None", null, [], [], "Immediate", manifest.workload, manifest.provenance, mode: manifest.mode);
 using var measurement = new Measurement(config, cs);
 await using var scenario = cs ? new SessionEchoOnlyScenario(manifest, measurement, index) : null;
 using var admin = new MetricsClient(manifest);

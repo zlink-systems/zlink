@@ -54,11 +54,12 @@ public sealed class PayloadPattern(int size)
             throw new PerfValidationException("IdentityMismatch", "Echo identity differs from the submitted operation.");
         DecimalText.I64(reply.receivedTicks);
     }
+    public static PayloadPattern Response { get; } = new(4096);
     public static PerfEchoReply Reply(PerfEchoRequest request, long receivedTicks) => new()
     {
         runId = request.runId, cellId = request.cellId, resetSeq = request.resetSeq, phase = request.phase,
         clientId = request.clientId, sequence = request.sequence, correlationId = request.correlationId,
-        receivedTicks = DecimalText.Of(receivedTicks), clockDomainId = PerfClock.Domain, payload = request.payload
+        receivedTicks = DecimalText.Of(receivedTicks), clockDomainId = PerfClock.Domain, payload = Response.Base64
     };
 }
 public sealed class PerfValidationException(string kind, string message) : Exception(message)
