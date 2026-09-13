@@ -43,6 +43,7 @@ public sealed class SubmitAdmissionRuntimeTests
         {
             using var received = Received.Create();
             Assert.True(pair.Server.Recv(received));
+            pair.DrainCompletions();
             Assert.Equal(AdmissionPair.Payload(sequence),
                 received.SinglePartOrThrow().ToArray());
         }
@@ -131,6 +132,14 @@ public sealed class SubmitAdmissionRuntimeTests
             {
                 using var payload = Message.From(new byte[] { (byte)sequence });
                 received[sequence]!.Reply().Message(payload).Submit();
+                Assert.True(SpinWait.SpinUntil(
+                    () =>
+                    {
+                        client.TryReceive(out var unexpected);
+                        unexpected?.Dispose();
+                        return requests[sequence].IsCompleted;
+                    },
+                    TimeSpan.FromSeconds(5)));
                 using var reply = await requests[sequence].WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.Equal(new byte[] { (byte)sequence }, Assert.Single(reply.Parts).ToArray());
                 for (var pending = 0; pending < sequence; pending++)
@@ -193,6 +202,8 @@ public sealed class SubmitAdmissionRuntimeTests
     private sealed class AdmissionPair : IDisposable
     {
         private readonly IContext _context = Systems.Zlink.Zlink.CreateContext();
+        private readonly IPoller _completionPoller;
+        private readonly PollEvent[] _completionEvents = new PollEvent[1];
         internal IRouterSocket Server { get; }
         internal IDealerSocket Client { get; }
 
@@ -216,7 +227,12 @@ public sealed class SubmitAdmissionRuntimeTests
             using var received = Received.Create();
             Assert.True(Server.Recv(received));
             Assert.Equal("ready", received.SinglePartOrThrow().GetString());
+            _completionPoller = Systems.Zlink.Zlink.CreatePoller();
+            _completionPoller.Add(Client, PollEventFlags.PollCompletion, 1);
         }
+
+        internal void DrainCompletions() =>
+            _completionPoller.Wait(_completionEvents, TimeSpan.Zero);
 
         internal static byte[] Payload(int sequence)
         {
@@ -227,6 +243,7 @@ public sealed class SubmitAdmissionRuntimeTests
 
         public void Dispose()
         {
+            _completionPoller.Dispose();
             Client.Dispose();
             Server.Dispose();
             _context.Dispose();

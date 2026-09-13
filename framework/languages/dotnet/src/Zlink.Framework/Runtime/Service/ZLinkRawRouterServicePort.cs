@@ -4,10 +4,8 @@ namespace Zlink.Framework.Runtime.Service;
 
 // Private transport seam for the Framework service runtime. This type owns a
 // raw ROUTER socket only; service state machines stay in the runtime owners that
-// consume this port. Its poller owns receive readiness, while each binding
-// asynchronous operation owns its request completion. Keeping those
-// responsibilities separate prevents an awaited request from depending on a
-// caller that happens to poll the socket for receive readiness.
+// consume this port. Its public poller owns both receive readiness and async
+// completion progress for the socket.
 internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
 {
     private readonly IRouterSocket _socket;
@@ -47,7 +45,9 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
         {
             poller.Add(
                 _socket,
-                PollEventFlags.PollIn | PollEventFlags.PollErr,
+                PollEventFlags.PollIn
+                | PollEventFlags.PollErr
+                | PollEventFlags.PollCompletion,
                 1);
             _receivePoller = poller;
         }

@@ -3,8 +3,8 @@ using Zlink.Framework.Runtime.Backend.Contracts;
 namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 
 // One Framework receive owner registers one native socket with one public ZLink
-// poller. Only receive readiness is owned here; asynchronous request progress
-// remains inside the binding operation.
+// poller. Completion-capable sockets use that same poller as their sole async
+// completion owner.
 internal sealed class ZLinkBackendSocketPoller : IZLinkBackendSocketPoller
 {
     private const nuint Slot = 1;
@@ -22,9 +22,13 @@ internal sealed class ZLinkBackendSocketPoller : IZLinkBackendSocketPoller
         var poller = Systems.Zlink.Zlink.CreatePoller();
         try
         {
+            var events = PollEventFlags.PollIn;
+            if (socket is IPairSocket or IDealerSocket or IRouterSocket
+                or IStreamSocket)
+                events |= PollEventFlags.PollCompletion;
             poller.Add(
                 socket,
-                PollEventFlags.PollIn,
+                events,
                 Slot);
             return new ZLinkBackendSocketPoller(poller);
         }

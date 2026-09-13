@@ -307,6 +307,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         target.Start();
 
         await using var source = context.CreateDealerSocket();
+        using var sourceCompletionOwner = new TestCompletionPollerDriver(source);
         source.SetRoutingId(sourceRid);
         source.Connect(targetEndpoint);
         using (var hello = Message.From(
@@ -1195,7 +1196,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             string targetSpotId,
             ulong targetSpotGeneration,
             string targetEndpoint,
-            string sourceEndpoint)
+            string sourceEndpoint,
+            TestCompletionPollerDriver sourceCompletionOwner)
         {
             Context = context;
             Target = target;
@@ -1208,6 +1210,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             TargetEndpoint = targetEndpoint;
             SourceEndpoint = sourceEndpoint;
             _createdSources.Add(source);
+            _completionOwners.Add(sourceCompletionOwner);
         }
 
         internal IContext Context { get; }
@@ -1222,6 +1225,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         private string SourceEndpoint { get; }
         private IDealerSocket? PriorSource { get; set; }
         private readonly List<IDealerSocket> _createdSources = new();
+        private readonly List<TestCompletionPollerDriver> _completionOwners = new();
 
         internal ValueTask DisconnectSourceAsync() => Source.DisposeAsync();
 
@@ -1235,6 +1239,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         {
             var replacement = Context.CreateDealerSocket();
             _createdSources.Add(replacement);
+            _completionOwners.Add(new TestCompletionPollerDriver(replacement));
             replacement.SetRoutingId(SourceRid);
             replacement.Connect(TargetEndpoint);
             await WaitUntilAsync(() =>
@@ -1249,6 +1254,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         {
             var replacement = Context.CreateDealerSocket();
             _createdSources.Add(replacement);
+            _completionOwners.Add(new TestCompletionPollerDriver(replacement));
             replacement.SetRoutingId(SourceRid);
             replacement.Connect(TargetEndpoint);
             await WaitUntilAsync(() =>
@@ -1328,6 +1334,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             target.Start();
 
             var source = context.CreateDealerSocket();
+            var sourceCompletionOwner = new TestCompletionPollerDriver(source);
             source.SetRoutingId(sourceRid);
             source.Connect(targetEndpoint);
             await WaitUntilAsync(() =>
@@ -1347,11 +1354,14 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 targetSpotId,
                 targetSpot.LifecycleGeneration,
                 targetEndpoint,
-                sourceEndpoint);
+                sourceEndpoint,
+                sourceCompletionOwner);
         }
 
         public async ValueTask DisposeAsync()
         {
+            foreach (var completionOwner in _completionOwners)
+                completionOwner.Dispose();
             foreach (var source in _createdSources)
                 await source.DisposeAsync();
             await Target.DisposeAsync();

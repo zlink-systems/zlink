@@ -1957,6 +1957,14 @@ public sealed class ServiceRuntimeFoundationTests
             requestEnvelope.Reply(
                 new ReadOnlyMemory<byte>[] { new byte[] { 7, 6, 5 } });
         }
+        Assert.True(SpinWait.SpinUntil(
+            () =>
+            {
+                sender.TryReceive(out var unexpected);
+                unexpected?.Dispose();
+                return requestTask.IsCompleted;
+            },
+            TimeSpan.FromSeconds(5)));
         using var reply = await requestTask;
         Assert.Equal(new byte[] { 7, 6, 5 },
             Assert.Single(reply.Parts).ToArray());

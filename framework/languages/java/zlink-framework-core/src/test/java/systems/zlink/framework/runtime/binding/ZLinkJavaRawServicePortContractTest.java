@@ -55,6 +55,7 @@ final class ZLinkJavaRawServicePortContractTest {
         try (ZLinkJavaRawServicePort port = new ZLinkJavaRawServicePort()) {
             var target = port.openRouter(targetId);
             var caller = port.openRouter(callerId);
+            port.ensureReceivePollerRegistered(caller);
             String endpoint = "inproc://native-reply-" + System.nanoTime();
             target.bind(endpoint);
             caller.connect(endpoint);
@@ -75,6 +76,7 @@ final class ZLinkJavaRawServicePortContractTest {
                 port.reply(target, incoming.source(), incoming.requestSequence(),
                     List.of(new byte[] {2, 3, 4}));
             }
+            port.waitForReadable(caller, Duration.ofSeconds(2));
             assertEquals(9, reply.get(2, TimeUnit.SECONDS));
         }
     }
@@ -91,6 +93,7 @@ final class ZLinkJavaRawServicePortContractTest {
              ZLinkJavaRawServicePort foreign = new ZLinkJavaRawServicePort()) {
             var target = port.openRouter(targetId);
             var caller = port.openRouter(callerId);
+            port.ensureReceivePollerRegistered(caller);
             var other = foreign.openRouter(RoutingId.from("native-reply-foreign"));
             String endpoint = "inproc://native-reply-ownership-" + System.nanoTime();
             target.bind(endpoint);
@@ -118,6 +121,7 @@ final class ZLinkJavaRawServicePortContractTest {
                 assertConsumed(header);
                 assertConsumed(payload);
             }
+            port.waitForReadable(caller, Duration.ofSeconds(2));
             List<byte[]> received = reply.get(2, TimeUnit.SECONDS);
             assertEquals(2, received.size());
             assertArrayEquals(new byte[] {0, 127, -1}, received.getFirst());
@@ -183,6 +187,7 @@ final class ZLinkJavaRawServicePortContractTest {
         try (ZLinkJavaRawServicePort port = new ZLinkJavaRawServicePort()) {
             var target = port.openRouter(targetId);
             var caller = port.openRouter(callerId);
+            port.ensureReceivePollerRegistered(caller);
             target.bind(endpoint);
             caller.connect(endpoint);
 
@@ -199,6 +204,7 @@ final class ZLinkJavaRawServicePortContractTest {
                 port.reply(target, inbound.source(), inbound.requestSequence(),
                     List.of(new byte[] {9}));
             }
+            port.waitForReadable(caller, Duration.ofSeconds(2));
             assertEquals(9,
                 Byte.toUnsignedInt(reply.get(2, TimeUnit.SECONDS)));
             assertConsumed(successful);
@@ -215,6 +221,7 @@ final class ZLinkJavaRawServicePortContractTest {
             try (var ignored = port.receiveNow(target).orElseThrow()) {
                 // Keep the request unanswered so its accepted async path times out.
             }
+            port.waitForReadable(caller, Duration.ofSeconds(2));
             assertThrows(ExecutionException.class,
                 () -> failure.get(2, TimeUnit.SECONDS));
             assertConsumed(timedOut);

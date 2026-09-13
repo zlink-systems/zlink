@@ -25,8 +25,14 @@ final class ZLinkJavaRouterSocket
 
     @Override public Socket nativeSocket() { return socket; }
     @Override public String name() { return "router"; }
-    @Override public synchronized void bind(String endpoint) { socket.bind(endpoint); }
-    @Override public synchronized void connect(String endpoint) { socket.connect(endpoint); }
+    @Override public synchronized void bind(String endpoint) {
+        socket.bind(endpoint);
+        receivePoller.ensureRegistered();
+    }
+    @Override public synchronized void connect(String endpoint) {
+        socket.connect(endpoint);
+        receivePoller.ensureRegistered();
+    }
     @Override public synchronized void disconnect(String endpoint) { socket.disconnect(endpoint); }
     @Override public void setChannelName(String channelName) { ZLinkJavaSocketSupport.validateChannelName(channelName); }
     @Override public void setReceiveFlowState(ReceiveFlowState state) {

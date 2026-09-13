@@ -1718,6 +1718,9 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var router = context.CreateRouterSocket();
         await using var dealer = context.CreateDealerSocket();
+        using var poller = Systems.Zlink.Zlink.CreatePoller();
+        poller.Add(dealer, PollEventFlags.PollCompletion, 1);
+        poller.Add(router, PollEventFlags.PollCompletion, 2);
         var endpoint = $"inproc://liveness-probe-{Guid.NewGuid():N}";
         dealer.SetRoutingId(RoutingId.From("probe-client"));
         router.Bind(endpoint);
@@ -1749,13 +1752,18 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 4096,
                 endpoint));
         router.Reply(sourceRid, replyToken).Message(admit).Submit();
+        var events = new PollEvent[2];
+        Assert.True(poller.Wait(events, TimeSpan.FromSeconds(2)) > 0);
         ZLinkMessageParts.DisposeAll(await admissionTask);
 
         var probe =
             ZLinkClientServerControlProtocol.EncodeLivenessProbe(17);
-        await router.Send(sourceRid)
+        var probeAdmission = router.Send(sourceRid)
             .Message(probe)
             .Async(CancellationToken.None).Admitted;
+        if (!probeAdmission.IsCompleted)
+            Assert.True(poller.Wait(events, TimeSpan.FromSeconds(2)) > 0);
+        await probeAdmission;
         using var delivered = await PollReceivedAsync(
             storage => dealer.Recv(storage, RecvFlags.DontWait),
             TimeSpan.FromSeconds(2));
