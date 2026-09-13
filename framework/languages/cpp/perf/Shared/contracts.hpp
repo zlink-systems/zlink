@@ -65,6 +65,16 @@ inline void validate_identity(const json &request,const json &reply) {
 inline json reason(std::string code,std::string text) { return {{"code",code},{"reason",text},{"owner","perf/README.ko.md"}}; }
 struct config_t {
     json value;
+    explicit config_t(json configuration) : value(std::move(configuration)) {
+        for (const char *key : {"connections", "logicalStreams"}) {
+            const auto &settings = workload();
+            if (!settings.contains(key) || settings.at(key).is_null()) continue;
+            if (!settings.at(key).is_number_integer()
+                || settings.at(key).get<std::int64_t>() < 1
+                || settings.at(key).get<std::int64_t>() > 1000)
+                throw std::invalid_argument(std::string(key) + " must be between 1 and 1000.");
+        }
+    }
     const json &workload() const { return value.at("workload"); }
     bool diagnostics_enabled() const {const auto d=value.value("diagnostics",json(nullptr));if(d.is_string())return d.get<std::string>()=="Normal";if(d.is_object())return d.value("level","")=="Normal";return value.at("provenance").value("diagnostics","")=="Normal";}
     bool source() const { return value.value("source",false); }
