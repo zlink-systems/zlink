@@ -30,6 +30,61 @@ func requestAndWait(ctx context.Context, op zlink.RequestSubmitOp) ([]*zlink.Mes
 	return submission.Reply(ctx)
 }
 
+type completionPollerDriver struct {
+	poller *zlink.Poller
+	stop   chan struct{}
+	done   chan error
+}
+
+func startCompletionPoller(t testing.TB, sockets ...zlink.SocketTarget) *completionPollerDriver {
+	t.Helper()
+	if len(sockets) == 0 {
+		t.Fatal("completion poller requires at least one socket")
+	}
+	poller, err := zlink.NewPoller()
+	if err != nil {
+		t.Fatalf("NewPoller() error = %v", err)
+	}
+	for index, socket := range sockets {
+		if err := poller.AddSocket(socket, zlink.PollCompletion, uintptr(index)); err != nil {
+			_ = poller.Close()
+			t.Fatalf("AddSocket(PollCompletion) error = %v", err)
+		}
+	}
+	driver := &completionPollerDriver{
+		poller: poller,
+		stop:   make(chan struct{}),
+		done:   make(chan error, 1),
+	}
+	go func() {
+		events := make([]zlink.PollEvent, len(sockets))
+		for {
+			select {
+			case <-driver.stop:
+				driver.done <- nil
+				return
+			default:
+			}
+			if _, err := poller.Wait(events, 25*time.Millisecond); err != nil {
+				driver.done <- err
+				return
+			}
+		}
+	}()
+	return driver
+}
+
+func (d *completionPollerDriver) close(t testing.TB) {
+	t.Helper()
+	close(d.stop)
+	if err := <-d.done; err != nil {
+		t.Errorf("completion poller Wait() error = %v", err)
+	}
+	if err := d.poller.Close(); err != nil {
+		t.Errorf("completion poller Close() error = %v", err)
+	}
+}
+
 var endpointCounter uint64
 
 func newContext(t testing.TB) *zlink.Context {

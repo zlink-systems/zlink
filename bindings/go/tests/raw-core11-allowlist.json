@@ -90,7 +90,6 @@
     "zlink_multipart_close",
     "zlink_option_t",
     "zlink_poll",
-    "zlink_poller_add",
     "zlink_poller_destroy",
     "zlink_poller_event_t",
     "zlink_poller_modify",

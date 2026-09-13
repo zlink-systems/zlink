@@ -33,6 +33,10 @@ func main() {
 	samplecommon.Must(dealerSocket.SetRoutingID(rid))
 	samplecommon.Must(dealerSocket.Connect(endpoint))
 	samplecommon.WaitConnected(routerMon, dealerMon)
+	completionPoller, err := zlink.NewPoller()
+	samplecommon.Must(err)
+	defer completionPoller.Close()
+	samplecommon.Must(completionPoller.AddSocket(dealerSocket, zlink.PollCompletion, 0))
 
 	requestDone := make(chan error, 1)
 	go func() {
@@ -70,8 +74,18 @@ func main() {
 		Timeout(2 * time.Second).
 		Submit(context.Background())
 	samplecommon.Must(err)
+	completionDone := make(chan error, 1)
+	go func() {
+		events := make([]zlink.PollEvent, 1)
+		n, waitErr := completionPoller.Wait(events, 2*time.Second)
+		if waitErr == nil && n != 1 {
+			waitErr = fmt.Errorf("request completion timed out")
+		}
+		completionDone <- waitErr
+	}()
 	reply, err := submission.Reply(context.Background())
 	samplecommon.Must(err)
+	samplecommon.Must(<-completionDone)
 	defer func() {
 		for _, part := range reply {
 			part.Close()

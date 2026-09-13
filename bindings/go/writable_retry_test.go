@@ -185,6 +185,14 @@ func TestPublicBackpressuredSendReportsRouteRemoval(t *testing.T) {
 	if err := fillerSubmission.Admitted(context.Background()); err != nil {
 		t.Fatalf("HWM filler Admitted() error = %v", err)
 	}
+	poller, err := zlink.NewPoller()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer poller.Close()
+	if err := poller.AddSocket(router, zlink.PollOut|zlink.PollCompletion, 1); err != nil {
+		t.Fatalf("AddSocket(PollCompletion) error = %v", err)
+	}
 
 	retrySubmission, err := router.SendTo(dealerRID).Bytes([]byte("must-not-send")).Submit(context.Background())
 	if err != nil {
@@ -196,6 +204,10 @@ func TestPublicBackpressuredSendReportsRouteRemoval(t *testing.T) {
 	if err := router.DisconnectRID(dealerRID); err != nil {
 		t.Fatalf("DisconnectRID() error = %v", err)
 	}
+	events := make([]zlink.PollEvent, 1)
+	if _, err := poller.Wait(events, 5*time.Second); err != nil {
+		t.Fatalf("terminal completion Wait() error = %v", err)
+	}
 
 	waitCtx, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelWait()
@@ -206,6 +218,73 @@ func TestPublicBackpressuredSendReportsRouteRemoval(t *testing.T) {
 	}
 	if !errors.Is(err, syscall.ENOENT) {
 		t.Fatalf("terminal send error = %v, want ENOENT", err)
+	}
+}
+
+func TestOwnerlessBackpressuredSendFailsFast(t *testing.T) {
+	ctx := newContext(t)
+	defer ctx.Close()
+	if err := ctx.Options().SetAutoHwmEnabled(false); err != nil {
+		t.Fatalf("SetAutoHwmEnabled(false) error = %v", err)
+	}
+
+	dealer, _ := ctx.DealerSocket()
+	router, _ := ctx.RouterSocket()
+	defer dealer.Close()
+	defer router.Close()
+	if err := dealer.SetLinger(0); err != nil {
+		t.Fatalf("dealer SetLinger(0) error = %v", err)
+	}
+	if err := router.SetLinger(0); err != nil {
+		t.Fatalf("router SetLinger(0) error = %v", err)
+	}
+	if err := dealer.SetSendHighWaterMark(1); err != nil {
+		t.Fatalf("dealer SetSendHighWaterMark(1) error = %v", err)
+	}
+	if err := router.SetReceiveHighWaterMark(1); err != nil {
+		t.Fatalf("router SetReceiveHighWaterMark(1) error = %v", err)
+	}
+
+	endpoint := inprocEndpoint("ownerless-backpressure")
+	if err := router.Bind(endpoint); err != nil {
+		t.Fatalf("router Bind() error = %v", err)
+	}
+	if err := dealer.Connect(endpoint); err != nil {
+		t.Fatalf("dealer Connect() error = %v", err)
+	}
+	setupCompletions := startCompletionPoller(t, dealer)
+
+	prime, err := dealer.Send().Bytes([]byte("route-prime")).Submit(context.Background())
+	if err != nil {
+		t.Fatalf("prime Submit() error = %v", err)
+	}
+	if err := prime.Admitted(context.Background()); err != nil {
+		t.Fatalf("prime Admitted() error = %v", err)
+	}
+	var received zlink.Received
+	if ok, err := router.Recv(&received, zlink.RecvFlagsNone); err != nil || !ok {
+		t.Fatalf("prime Recv() = (%v, %v), want (true, nil)", ok, err)
+	}
+	_ = received.Close()
+
+	filler, err := dealer.Send().Bytes([]byte("fill-hwm")).Submit(context.Background())
+	if err != nil {
+		t.Fatalf("filler Submit() error = %v", err)
+	}
+	if err := filler.Admitted(context.Background()); err != nil {
+		t.Fatalf("filler Admitted() error = %v", err)
+	}
+	setupCompletions.close(t)
+	message := newMessage(t, "ownerless-send")
+	defer message.Close()
+
+	submission, err := dealer.Send().Message(message).Submit(context.Background())
+	var submitErr *zlink.SubmitError
+	if submission != nil || !errors.As(err, &submitErr) || submitErr.Result != zlink.SubmitInvalidState {
+		t.Fatalf("ownerless backpressured Submit() = (%v, %v), want SubmitInvalidState", submission, err)
+	}
+	if got := string(message.Data()); got != "ownerless-send" {
+		t.Fatalf("ownerless backpressured send consumed message = %q", got)
 	}
 }
 

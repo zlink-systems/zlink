@@ -32,6 +32,8 @@ func testRequestSubmissionImmediateAdmission(t *testing.T) {
 	if err := dealer.Connect(endpoint); err != nil {
 		t.Fatal(err)
 	}
+	completions := startCompletionPoller(t, dealer)
+	defer completions.close(t)
 	primeSubmission, err := dealer.Send().Bytes([]byte("route-prime")).Submit(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -127,6 +129,8 @@ func testRequestSubmissionBackpressuredAdmission(t *testing.T) {
 	if err := dealer.Connect(endpoint); err != nil {
 		t.Fatal(err)
 	}
+	completions := startCompletionPoller(t, dealer)
+	defer completions.close(t)
 	primeSubmission, err := dealer.Send().Bytes([]byte("route-prime")).Submit(context.Background())
 	if err != nil {
 		t.Fatal(err)

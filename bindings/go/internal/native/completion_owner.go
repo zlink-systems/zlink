@@ -327,22 +327,14 @@ func (e *completionEntry) waitRequest(ctx context.Context) ([]*Message, error) {
 
 func (e *completionEntry) waitSettled() { <-e.settledDone }
 
-type runtimeCompletionDrain struct {
-	poller unsafe.Pointer
-	wake   chan struct{}
-	stop   chan struct{}
-	done   chan struct{}
-}
-
-// completionOwner owns the only drain path for one socket. Runtime polling
-// and public Poller.Wait transfer this ownership; they never drain together.
+// completionOwner routes one socket's completion queue through its public
+// PollCompletion poller owner. No binding-runtime goroutine drains this queue.
 type completionOwner struct {
 	socket unsafe.Pointer
 
 	mu          sync.Mutex
 	entries     map[uintptr]*completionEntry
 	publicOwner *Poller
-	runtime     *runtimeCompletionDrain
 	shutdown    bool
 }
 
@@ -356,20 +348,18 @@ func (o *completionOwner) register(entry *completionEntry) error {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	return o.registerLocked(entry)
+}
+
+func (o *completionOwner) registerLocked(entry *completionEntry) error {
 	if o.shutdown {
 		return &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.ESHUTDOWN)}
 	}
+	if o.publicOwner == nil && (entry.kind == completionRequest || entry.writableWaiting) {
+		return &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.EBUSY)}
+	}
 	entry.owner = o
 	o.entries[entry.handleKey] = entry
-	// REQUEST may complete before submit returns. SEND registers only after
-	// receiving a wait token, while the drain owner lock excludes lookup.
-	if entry.kind == completionRequest && o.publicOwner == nil && o.runtime == nil {
-		if err := o.startRuntimeLocked(); err != nil {
-			delete(o.entries, entry.handleKey)
-			return err
-		}
-	}
-	o.wakeRuntimeLocked()
 	return nil
 }
 
@@ -387,29 +377,6 @@ func (o *completionOwner) unregister(entry *completionEntry) {
 	o.mu.Unlock()
 }
 
-func (o *completionOwner) startRuntimeLocked() error {
-	poller := C.zlink_poller_new()
-	if poller == nil {
-		return configErrorFromErrno(currentErrno())
-	}
-	events := C.short(C.ZLINK_POLLCOMPLETION)
-	if err := configErrorFromResult(C.zlink_poller_add(
-		poller, o.socket, nil, events)); err != nil {
-		handle := poller
-		_ = closeErrorFromResult(C.zlink_poller_destroy(&handle))
-		return err
-	}
-	runtime := &runtimeCompletionDrain{
-		poller: poller,
-		wake:   make(chan struct{}, 1),
-		stop:   make(chan struct{}),
-		done:   make(chan struct{}),
-	}
-	o.runtime = runtime
-	go o.runtimeLoop(runtime)
-	return nil
-}
-
 func (o *completionOwner) setWritableWaiting(entry *completionEntry, waiting bool) error {
 	if o == nil || entry == nil {
 		return &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
@@ -422,111 +389,11 @@ func (o *completionOwner) setWritableWaiting(entry *completionEntry, waiting boo
 	if entry.writableWaiting == waiting {
 		return nil
 	}
+	if waiting && o.publicOwner == nil {
+		return &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.EBUSY)}
+	}
 	entry.writableWaiting = waiting
-	if waiting {
-		if o.publicOwner == nil && o.runtime == nil {
-			if err := o.startRuntimeLocked(); err != nil {
-				entry.writableWaiting = false
-				return err
-			}
-		}
-	}
-	o.wakeRuntimeLocked()
 	return nil
-}
-
-// wakeRuntimeLocked wakes a parked goroutine; it never creates another native
-// progress thread or poller. The owner lock protects runtime lifetime.
-func (o *completionOwner) wakeRuntimeLocked() {
-	if o.runtime != nil {
-		select {
-		case o.runtime.wake <- struct{}{}:
-		default:
-		}
-	}
-}
-
-func (o *completionOwner) runtimeLoop(runtime *runtimeCompletionDrain) {
-	defer close(runtime.done)
-	for {
-		select {
-		case <-runtime.stop:
-			return
-		default:
-		}
-		o.mu.Lock()
-		active := len(o.entries) != 0
-		o.mu.Unlock()
-		if !active {
-			// A socket with no pending work parks in Go, releasing its OS thread.
-			// Registration and stop are the only wake sources while idle.
-			select {
-			case <-runtime.stop:
-				return
-			case <-runtime.wake:
-			}
-			continue
-		}
-		var event C.zlink_poller_event_t
-		count, _, errno := nativePollerWait(runtime.poller, &event, 1, 100)
-		if count > 0 {
-			if _, err := o.drain(false); err != nil {
-				o.failRuntimeLoop(runtime)
-				return
-			}
-		} else if count < 0 {
-			if errno != int(C.EINTR) && errno != int(C.EAGAIN) {
-				o.failRuntimeLoop(runtime)
-				return
-			}
-		}
-	}
-}
-
-func (o *completionOwner) failRuntimeLoop(runtime *runtimeCompletionDrain) {
-	if o == nil || runtime == nil {
-		return
-	}
-	o.mu.Lock()
-	if o.shutdown || o.runtime != runtime || o.publicOwner != nil {
-		o.mu.Unlock()
-		return
-	}
-	entries := make([]*completionEntry, 0, len(o.entries))
-	for _, entry := range o.entries {
-		entries = append(entries, entry)
-	}
-	// Keep close from tearing down the socket until the
-	// failed runtime poller is no longer registered on it.
-	handle := runtime.poller
-	_ = closeErrorFromResult(C.zlink_poller_destroy(&handle))
-	runtime.poller = nil
-	o.runtime = nil
-	o.mu.Unlock()
-	failCompletionEntries(entries)
-}
-
-func failCompletionEntries(entries []*completionEntry) {
-	for _, entry := range entries {
-		if entry == nil {
-			continue
-		}
-		if entry.kind == completionRequest {
-			entry.cancel(&RequestError{Result: RequestInternalError, nativeErrno: int(C.EIO)})
-			continue
-		}
-		entry.cancel(&SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EIO)})
-	}
-}
-
-func stopRuntimeCompletionDrain(runtime *runtimeCompletionDrain) {
-	if runtime == nil {
-		return
-	}
-	close(runtime.stop)
-	<-runtime.done
-	handle := runtime.poller
-	_ = closeErrorFromResult(C.zlink_poller_destroy(&handle))
 }
 
 func (o *completionOwner) transferToPublic(poller *Poller) error {
@@ -547,14 +414,11 @@ func (o *completionOwner) transferToPublic(poller *Poller) error {
 		return nil
 	}
 	o.publicOwner = poller
-	runtime := o.runtime
-	o.runtime = nil
 	o.mu.Unlock()
-	stopRuntimeCompletionDrain(runtime)
 	return nil
 }
 
-func (o *completionOwner) transferToRuntime(poller *Poller) {
+func (o *completionOwner) releasePublic(poller *Poller) {
 	if o == nil || poller == nil {
 		return
 	}
@@ -564,17 +428,7 @@ func (o *completionOwner) transferToRuntime(poller *Poller) {
 		return
 	}
 	o.publicOwner = nil
-	var failed []*completionEntry
-	if len(o.entries) > 0 && o.runtime == nil {
-		if err := o.startRuntimeLocked(); err != nil {
-			failed = make([]*completionEntry, 0, len(o.entries))
-			for _, entry := range o.entries {
-				failed = append(failed, entry)
-			}
-		}
-	}
 	o.mu.Unlock()
-	failCompletionEntries(failed)
 }
 
 type completionDrainResult struct {
@@ -943,8 +797,6 @@ func (o *completionOwner) shutdownOwner() {
 		return
 	}
 	o.shutdown = true
-	runtime := o.runtime
-	o.runtime = nil
 	entries := make([]*completionEntry, 0, len(o.entries))
 	for _, entry := range o.entries {
 		entries = append(entries, entry)
@@ -952,7 +804,6 @@ func (o *completionOwner) shutdownOwner() {
 	o.entries = make(map[uintptr]*completionEntry)
 	o.mu.Unlock()
 
-	stopRuntimeCompletionDrain(runtime)
 	for _, entry := range entries {
 		entry.shutdown()
 	}
