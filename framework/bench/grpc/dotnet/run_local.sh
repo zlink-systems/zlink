@@ -2,69 +2,22 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../runner_args.sh
+source "${ROOT_DIR}/../runner_args.sh"
+bench_runner_args dotnet "$@"
+
 CONFIGURATION="${CONFIGURATION:-Release}"
-RUN_STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
-OUTPUT="${OUTPUT:-${ROOT_DIR}/../log/dotnet/with_grpc_dotnet_${RUN_STAMP}}"
-REPORT_FILE="${REPORT_FILE:-with_grpc_dotnet_${RUN_STAMP}.txt}"
-PAYLOAD_SIZES="${PAYLOAD_SIZES:-1024,4096}"
-DURATION_SECONDS="${DURATION_SECONDS:-5}"
+RUN_ID="$(basename "${OUTPUT}")"
 WARMUP="${WARMUP:-1000}"
-REQUEST_WINDOW="${REQUEST_WINDOW:-100}"
-SEND_CONCURRENCY="${SEND_CONCURRENCY:-8}"
-TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-300}"
-COMMAND_SETTLE_MS="${COMMAND_SETTLE_MS:-200}"
-DRAIN_BOUND_MS="${DRAIN_BOUND_MS:-30000}"
-LATENCY_SAMPLE_LIMIT="${LATENCY_SAMPLE_LIMIT:-200000}"
-RAW_SOCKET="${RAW_SOCKET:-router}"
+REQUEST_WINDOW=100
+SEND_CONCURRENCY=8
+TIMEOUT_SECONDS=300
+COMMAND_SETTLE_MS=200
+DRAIN_BOUND_MS=30000
+LATENCY_SAMPLE_LIMIT=200000
+RAW_SOCKET=router
 
-scenario="all"
-implementation="all"
-while (($# > 0)); do
-  case "$1" in
-    --scenario)
-      scenario="${2:?--scenario requires a value}"
-      shift 2
-      ;;
-    --implementation)
-      implementation="${2:?--implementation requires a value}"
-      shift 2
-      ;;
-    *)
-      echo "unsupported runner argument: $1" >&2
-      exit 2
-      ;;
-  esac
-done
-
-[[ "${REQUEST_WINDOW}" == "100" ]] || { echo "REQUEST_WINDOW must remain 100" >&2; exit 2; }
-[[ "${SEND_CONCURRENCY}" == "8" ]] || { echo "SEND_CONCURRENCY must remain 8" >&2; exit 2; }
-[[ "${TIMEOUT_SECONDS}" == "300" ]] || { echo "TIMEOUT_SECONDS must remain 300" >&2; exit 2; }
-[[ "${RAW_SOCKET}" == "router" ]] || { echo "RAW_SOCKET must remain router" >&2; exit 2; }
-[[ "${DURATION_SECONDS}" =~ ^[1-9][0-9]*$ ]] || { echo "DURATION_SECONDS must be a positive integer" >&2; exit 2; }
 [[ "${WARMUP}" =~ ^[0-9]+$ ]] || { echo "WARMUP must be a non-negative integer" >&2; exit 2; }
-[[ "${COMMAND_SETTLE_MS}" =~ ^[1-9][0-9]*$ ]] || { echo "COMMAND_SETTLE_MS must be a positive integer" >&2; exit 2; }
-
-IFS=',' read -r -a payloads <<<"${PAYLOAD_SIZES}"
-for payload in "${payloads[@]}"; do
-  [[ "${payload}" == "1024" || "${payload}" == "4096" ]] || {
-    echo "PAYLOAD_SIZES entries must be 1024 or 4096" >&2
-    exit 2
-  }
-done
-
-case "${scenario}" in
-  all) patterns=(request-serial request-backpressure send-saturation) ;;
-  request) patterns=(request-serial request-backpressure) ;;
-  request-serial|request-backpressure|send-saturation) patterns=("${scenario}") ;;
-  send|command) patterns=(send-saturation) ;;
-  *) echo "unknown scenario: ${scenario}" >&2; exit 2 ;;
-esac
-
-case "${implementation}" in
-  all) implementations=(grpc-dotnet zlink-dotnet zlink-framework-dotnet) ;;
-  grpc-dotnet|zlink-dotnet|zlink-framework-dotnet) implementations=("${implementation}") ;;
-  *) echo "unknown implementation: ${implementation}" >&2; exit 2 ;;
-esac
 
 check_ports_free() {
   local used
@@ -263,8 +216,8 @@ fi
 
 check_ports_free
 mkdir -p "${OUTPUT}"
-overall_report="${OUTPUT}/${REPORT_FILE}"
-: >"${overall_report}"
+runner_log="${OUTPUT}/runner.log"
+: >"${runner_log}"
 b_pid=""
 a_pid=""
 
@@ -299,7 +252,7 @@ cleanup_cell() {
 }
 trap cleanup_cell EXIT
 
-for impl in "${implementations[@]}"; do
+for impl in "${bench_implementations[@]}"; do
   case "${impl}" in
     grpc-dotnet)
       trigger_url="http://127.0.0.1:5200"
@@ -330,8 +283,8 @@ for impl in "${implementations[@]}"; do
       ;;
   esac
 
-  for pattern in "${patterns[@]}"; do
-    for payload in "${payloads[@]}"; do
+  for pattern in "${bench_patterns[@]}"; do
+    for payload in "${bench_payloads[@]}"; do
       cell_id="${impl}-${pattern}-${payload}"
       cell_dir="${OUTPUT}/${cell_id}"
       mkdir -p "${cell_dir}"
@@ -370,13 +323,13 @@ for impl in "${implementations[@]}"; do
       a_pid=$!
       wait_for_stats "${source_stats_url}" 1
 
-      trigger_phase "${trigger_url}" "${RUN_STAMP}" "${cell_id}" "${pattern}" "${payload}" warmup
+      trigger_phase "${trigger_url}" "${RUN_ID}" "${cell_id}" "${pattern}" "${payload}" warmup
       wait_for_idle "${source_stats_url}"
       if ! settle_only "${source_stats_url}" "${target_stats_url}"; then
         echo "warmup settle hit ${DRAIN_BOUND_MS}ms bound: ${cell_id}" >&2
         exit 1
       fi
-      trigger_phase "${trigger_url}" "${RUN_STAMP}" "${cell_id}" "${pattern}" "${payload}" active
+      trigger_phase "${trigger_url}" "${RUN_ID}" "${cell_id}" "${pattern}" "${payload}" active
       wait_for_idle "${source_stats_url}"
 
       result_file="${cell_dir}/results.json"
@@ -390,11 +343,12 @@ for impl in "${implementations[@]}"; do
         verify_request_counts "${result_file}"
       fi
 
-      grep '^RESULT,' "${source_log}" | tee -a "${overall_report}"
+      grep '^RESULT,' "${source_log}" | tee -a "${runner_log}"
       cleanup_cell
       wait_for_ports_free
     done
   done
 done
 
+bench_write_report "${OUTPUT}"
 echo "[bench] results=${OUTPUT}" >&2

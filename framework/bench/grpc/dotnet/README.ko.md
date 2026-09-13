@@ -15,37 +15,35 @@ server는 node request/send handler를 하나씩 등록하고, 세 행 모두 �
 
 ## 실행
 
+실행 인자와 결과물 배치는 언어와 무관하게 같다. 계약은 규격 §3.1이고 runner는 그 밖의 인자를
+거절한다.
+
 ```bash
 bash scripts/perf/perf-ticket.sh submit -p 2 -o <owner> -d '<설명>' -- \
-  bash framework/bench/grpc/dotnet/run_local.sh
+  bash framework/bench/grpc/dotnet/run_local.sh --skip-build \
+    --output framework/bench/grpc/log/dotnet/<이름>/r1
 ```
 
 기본 실행은 payload 1024·4096 B에서 `request-serial`, `request-backpressure`,
-`send-saturation` 세 패턴을 돈다. 예를 들어 framework 행의 serial 셀만 실행하려면 다음처럼
-지정한다.
+`send-saturation` 세 패턴을 돈다. framework 행의 serial 셀만 실행하려면 다음처럼 지정한다.
 
 ```bash
-bash scripts/perf/perf-ticket.sh submit -p 2 -o <owner> -d '<설명>' -- \
-  bash framework/bench/grpc/dotnet/run_local.sh \
-    --implementation zlink-framework-dotnet --scenario request-serial
+bash framework/bench/grpc/dotnet/run_local.sh --skip-build \
+  --implementation zlink-framework-dotnet --scenario request-serial \
+  --output /tmp/dotnet-smoke
 ```
 
-| 변수 | 기본값 | 의미 |
-|---|---:|---|
-| `PAYLOAD_SIZES` | `1024,4096` | payload 크기 목록 |
-| `SEND_CONCURRENCY` | `8` | `send-saturation` logical stream 수 |
-| `WARMUP` | `1000` | active 전에 수행할 warmup 호출 수 |
-| `DURATION_SECONDS` | `5` | active 구간 시간 |
-| `DRAIN_BOUND_MS` | `30000` | active 뒤 drain 상한 |
-| `TIMEOUT_SECONDS` | `300` | 시나리오 종료 상한 |
+§3.1의 여섯 입력 밖에서 이 runner가 읽는 값은 `CONFIGURATION`(기본 `Release`)과
+`WARMUP`(기본 `1000`) 둘이다. 나머지는 고정값이다 — send concurrency 8, request window 100,
+drain 상한 30초, 시나리오 종료 상한 300초.
 
 `request-backpressure`에는 application in-flight 상한을 추가하지 않는다. runner가 결과 JSON
 계약을 위해 request-window 값을 전달하더라도 이 값은 선택된 세 패턴의 제출 깊이를 제한하지
 않는다.
 
 포트 범위는 `5200`~`5219`다. framework 행은 source trigger/stats `5212`/`5213`, target
-RouteMesh/stats `5214`/`5215`를 사용한다. 결과는 기본적으로
-`framework/bench/grpc/log/dotnet/with_grpc_dotnet_<stamp>/` 아래에 기록된다.
+RouteMesh/stats `5214`/`5215`를 사용한다. 결과 배치는 §3.1이 정하고, `--output`을 주지 않으면
+`framework/bench/grpc/log/dotnet/<실행 시각>/`에 쓴다.
 
 request 처리량은 정상 echo 완료 수(KOPS), `send-saturation`은 target이 active header로 받은
 메시지 수(KMSG/s)를 기준으로 한다. 판정 기준 패턴은 `request-backpressure`이며, 이전
