@@ -52,9 +52,9 @@ submit 시점 fail-fast**.
 | .NET | ✅ 머지 | #316 | 252/252 + 동시성 91/91 ×5 | 없음(42/42 complete) |
 | Java | ✅ 머지 | #321 | unit128+integ35 + 동시성 ×5 | 없음(24/24 complete) |
 | Go | ✅ 머지 | #322 (커밋 9ee3d41f9d + one-way hang 회귀 수정 dca30bc5bd) | go test ×5 green | 없음(ALL/tcp/65536 complete) |
-| Python | ✅ 코드·게이트 완료, perf 체크 중 | 커밋 `c005e8b8c2` | pytest 248 + 동시성 73×5 green | 진행 |
-| C++ | ✅ 코드·게이트 완료, perf 체크 중 | 커밋 `002973fbc8` | contract 20/20 + 동시성 9파일×5 green | 진행 |
-| Rust | 🔄 코드 진행 중 | branch `bindings/rust-completion-owner-mandatory` | — | — |
+| Python | ✅ 머지 | #324 (#293 CLOSED) | pytest 248 + 동시성 73×5 green | 없음(42/42 complete) |
+| C++ | ✅ 머지 | #323 | contract 20/20 + 동시성 9파일×5 green | 없음(42/42 complete) |
+| Rust | ✅ 코드·게이트 완료, perf 체크 중 | 커밋 `7985439105` | cargo test 188 + 동시성 83×5 green | 진행 |
 
 - Go 특이: 공개 API가 async-only(`Submit(ctx)`) 표면이라 completion-backed blocking terminal 없음
   → runtime goroutine 제거 + async fail-fast만. 규칙 2→1.
