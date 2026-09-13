@@ -62,6 +62,10 @@ def main(argv=None):
             ) as monitor:
                 dealer.bind(endpoint)
                 print(f"READY,{endpoint}", flush=True)
+                # The socket supports one public monitor owner. Release the
+                # readiness monitor before the measured-path HWM snapshot
+                # opens its short-lived monitor.
+                monitor.close()
                 with zlink.create_poller() as poller:
                     poller.add_socket(dealer, zlink.PollEventFlag.POLLIN, 0)
                     poll_events = zlink.create_poll_events(1)

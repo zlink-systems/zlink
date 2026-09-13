@@ -15,6 +15,7 @@ from perf_multi_common import (
     perf_server_context,
     resolve_multi_monitor_hwm_bytes,
     resolve_multi_connect_ready_timeout_ms,
+    safe_poll,
     send_routed,
     wait_monitor_event,
 )
@@ -66,7 +67,10 @@ async def main(argv=None):
     threading.Thread(target=wait_control, daemon=True).start()
 
     with perf_server_context() as ctx:
-        with zlink.create_stream_socket(ctx) as server:
+        with (
+            zlink.create_stream_socket(ctx) as server,
+            zlink.create_poller() as completion_poller,
+        ):
             configure_multi_tls_server(server, args.transport)
             apply_multi_socket_options(server)
             server.options.tcp_no_delay = True
@@ -76,6 +80,10 @@ async def main(argv=None):
                 resolve_multi_monitor_hwm_bytes(),
             )
             server.bind(endpoint)
+            completion_events = zlink.create_poll_events(1)
+            completion_poller.add_socket(
+                server, zlink.PollEventFlag.POLLCOMPLETION, 0
+            )
 
             def packet_handler(routing_id, header, body):
                 body_view = body.data
@@ -90,6 +98,8 @@ async def main(argv=None):
                     await send_routed(
                         server,
                         frame,
+                        completion_poller=completion_poller,
+                        completion_events=completion_events,
                         routing_id=routing_id,
                         measurement=False,
                         method="send",
@@ -153,6 +163,7 @@ async def main(argv=None):
                         packet_handler(packet.routing_id, packet.header, packet.body)
                         packet.close()
                     else:
+                        safe_poll(completion_poller, completion_events, 0)
                         await asyncio.sleep(0)
             finally:
                 packet.close()

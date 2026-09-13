@@ -42,10 +42,15 @@ async def main(argv=None):
             router.bind(endpoint)
             print(f"READY,{endpoint}", flush=True)
             with zlink.create_poller() as poller:
-                poller.add_socket(router, zlink.PollEventFlag.POLLIN, 0)
+                poller.add_socket(
+                    router,
+                    zlink.PollEventFlag.POLLIN
+                    | zlink.PollEventFlag.POLLCOMPLETION,
+                    0,
+                )
                 poll_events = zlink.create_poll_events(1)
                 recv_storage = zlink.create_received()
-                replies = RoutedReplySender()
+                replies = RoutedReplySender(poller, poll_events)
                 # Python 3.12 starts each reply task through its public
                 # coroutine immediately. Older runtimes retain create_task
                 # scheduling and receive a bounded turn every quantum.

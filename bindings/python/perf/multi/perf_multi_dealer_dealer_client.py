@@ -22,8 +22,14 @@ from perf_multi_common import (
 )
 
 
-async def _send_stop_token(sock):
-    await send_routed(sock, STOP_TOKEN, measurement=False)
+async def _send_stop_token(sock, completion_poller, completion_events):
+    await send_routed(
+        sock,
+        STOP_TOKEN,
+        completion_poller=completion_poller,
+        completion_events=completion_events,
+        measurement=False,
+    )
 
 
 async def main(argv=None):
@@ -54,26 +60,53 @@ async def main(argv=None):
                         zlink.MonitorEventMask.CONNECTION_READY,
                         timeout_ms=resolve_multi_connect_ready_timeout_ms(),
                     )
+                # Readiness ownership ends at the barrier. Release these
+                # monitors before the measured-path HWM snapshot opens one.
+                stack.close()
                 print(f"CLIENT_READY,{args.msg_size}", flush=True)
                 command = sys.stdin.readline().strip()
                 if command != f"START,{args.msg_size}":
                     raise SystemExit(f"unexpected command: {command}")
 
                 active_deadline = time.perf_counter() + args.duration
-                async def send_loop(index, current_sock):
-                    nonlocal seq
-                    while time.perf_counter() < active_deadline:
-                        seq += 1
-                        await send_routed(
-                            current_sock,
-                            stamp_payload(
-                                payloads[index], phase=1, run_id=run_id, seq=seq
-                            ),
+                with zlink.create_poller() as completion_poller:
+                    completion_events = zlink.create_poll_events(
+                        max(1, len(sockets))
+                    )
+                    for index, sock in enumerate(sockets):
+                        completion_poller.add_socket(
+                            sock,
+                            zlink.PollEventFlag.POLLCOMPLETION,
+                            index,
                         )
-                    await _send_stop_token(current_sock)
-                await asyncio.gather(*(
-                    send_loop(index, sock) for index, sock in enumerate(sockets)
-                ))
+
+                    async def send_loop(index, current_sock):
+                        nonlocal seq
+                        while time.perf_counter() < active_deadline:
+                            seq += 1
+                            await send_routed(
+                                current_sock,
+                                stamp_payload(
+                                    payloads[index],
+                                    phase=1,
+                                    run_id=run_id,
+                                    seq=seq,
+                                ),
+                                completion_poller=completion_poller,
+                                completion_events=completion_events,
+                            )
+                        await _send_stop_token(
+                            current_sock,
+                            completion_poller,
+                            completion_events,
+                        )
+
+                    await asyncio.gather(
+                        *(
+                            send_loop(index, sock)
+                            for index, sock in enumerate(sockets)
+                        )
+                    )
                 if sockets:
                     print_multi_auto_hwm_detail(
                         sockets[0], "endpoint", args.transport, args.msg_size, "dealer"

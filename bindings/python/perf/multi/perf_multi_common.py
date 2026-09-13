@@ -444,10 +444,27 @@ def measurement_parts(payload):
     return (payload,) if measurement_part_count() == 1 else (payload, b"")
 
 
+async def wait_for_backpressured_admission(
+    submission, completion_poller, completion_events
+):
+    """Drive the public completion owner until one refused send is admitted."""
+
+    zlink_mod = _require_zlink()
+    if submission.result != zlink_mod.SubmitResult.BACKPRESSURED:
+        return
+    admission = submission.admitted
+    while not admission.done():
+        safe_poll(completion_poller, completion_events, 50)
+        await asyncio.sleep(0)
+    admission.result()
+
+
 async def send_routed(
     sock,
     payload,
     *,
+    completion_poller,
+    completion_events,
     routing_id=None,
     measurement=True,
     method="send",
@@ -455,8 +472,9 @@ async def send_routed(
     """Submit one HWM-managed send through the public async terminal.
 
     Immediate admission returns without scheduler pacing. Backpressure waits
-    only for this socket's binding-owned admission stage; it never waits for
-    an echo or retries outside the binding.
+    only while the harness-owned public POLLCOMPLETION poller transfers the
+    socket's completion; it never waits for an echo or retries outside the
+    binding.
     """
 
     send_method = getattr(sock, method)
@@ -468,18 +486,28 @@ async def send_routed(
     else:
         op.message(payload)
     submission = op.submit()
-    if submission.result == _require_zlink().SubmitResult.BACKPRESSURED:
-        await submission.admitted
+    await wait_for_backpressured_admission(
+        submission, completion_poller, completion_events
+    )
     return True
 
 
 class RoutedReplySender:
     """Submit received routed parts in FIFO admission order."""
 
-    __slots__ = ("_available", "_ignored_results", "_pending", "_task")
+    __slots__ = (
+        "_available",
+        "_completion_events",
+        "_completion_poller",
+        "_ignored_results",
+        "_pending",
+        "_task",
+    )
 
-    def __init__(self):
+    def __init__(self, completion_poller, completion_events):
         zlink_mod = _require_zlink()
+        self._completion_poller = completion_poller
+        self._completion_events = completion_events
         self._ignored_results = {
             zlink_mod.SubmitResult.NOT_CONNECTED,
             zlink_mod.SubmitResult.NOT_FOUND,
@@ -523,8 +551,11 @@ class RoutedReplySender:
                 try:
                     try:
                         submission = received.send().messages(*received.parts).submit()
-                        if submission.result == zlink_mod.SubmitResult.BACKPRESSURED:
-                            await submission.admitted
+                        await wait_for_backpressured_admission(
+                            submission,
+                            self._completion_poller,
+                            self._completion_events,
+                        )
                     except zlink_mod.SubmitError as exc:
                         if exc.result not in self._ignored_results:
                             raise

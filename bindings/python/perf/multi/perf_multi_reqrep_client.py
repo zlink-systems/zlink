@@ -151,52 +151,125 @@ async def run_reqrep_client(argv, *, pattern, routed_request):
                 except Exception as exc:
                     failures.append(exc)
 
-            async def submit_loop(index):
-                while perf_counter() < active_deadline and not failures:
-                    stamped = bytes(
-                        stamp_payload(
-                            payloads[index],
-                            phase=1,
-                            run_id=run_id,
-                            seq=seqs[index],
-                        )
-                    )
-                    seqs[index] += 1
-                    stamped_parts = (
-                        (stamped,)
-                        if expected_part_count == 1
-                        else (stamped, b"")
-                    )
-                    submission = submit_managed_request(
-                        sockets[index],
-                        stamped_parts,
-                        routing_id=b"SERVER" if routed_request else None,
-                        timeout_s=timeout_s,
-                    )
-                    task = asyncio.ensure_future(
-                        receive_reply(index, submission.reply)
-                    )
-                    pending.add(task)
-                    task.add_done_callback(observe_done)
-                    if submission.result == zlink.SubmitResult.BACKPRESSURED:
-                        await submission.admitted
-
-            with scoped_relay_eager_task_factory():
-                await asyncio.gather(
-                    *(submit_loop(index) for index in range(len(sockets)))
+            # G4 keeps submission stages separate, but the harness still owns
+            # their progress. One completion-only public poller transfers both
+            # admission and reply completions on this event-loop thread.
+            with zlink.create_poller() as completion_poller:
+                completion_events = zlink.create_poll_events(
+                    max(1, len(sockets))
                 )
+                registered_sockets = []
+                admissions = [None for _ in sockets]
 
-            if pending:
-                still_pending = tuple(pending)
+                def settle_admissions():
+                    for index, admission in enumerate(admissions):
+                        if admission is not None and admission.done():
+                            admission.result()
+                            admissions[index] = None
+
                 try:
-                    await asyncio.wait_for(
-                        asyncio.gather(*still_pending), drain_timeout_s
-                    )
-                except asyncio.TimeoutError:
-                    for task in still_pending:
-                        task.cancel()
-                    await asyncio.gather(*still_pending, return_exceptions=True)
-                    raise RuntimeError("request completion drain timed out")
+                    for index, sock in enumerate(sockets):
+                        completion_poller.add_socket(
+                            sock,
+                            zlink.PollEventFlag.POLLCOMPLETION,
+                            index,
+                        )
+                        registered_sockets.append(sock)
+
+                    with scoped_relay_eager_task_factory():
+                        while perf_counter() < active_deadline and not failures:
+                            settle_admissions()
+                            submitted_any = False
+                            for index, sock in enumerate(sockets):
+                                if perf_counter() >= active_deadline:
+                                    break
+                                if admissions[index] is not None:
+                                    continue
+                                stamped = bytes(
+                                    stamp_payload(
+                                        payloads[index],
+                                        phase=1,
+                                        run_id=run_id,
+                                        seq=seqs[index],
+                                    )
+                                )
+                                seqs[index] += 1
+                                stamped_parts = (
+                                    (stamped,)
+                                    if expected_part_count == 1
+                                    else (stamped, b"")
+                                )
+                                submission = submit_managed_request(
+                                    sock,
+                                    stamped_parts,
+                                    routing_id=(
+                                        b"SERVER" if routed_request else None
+                                    ),
+                                    timeout_s=timeout_s,
+                                )
+                                task = asyncio.ensure_future(
+                                    receive_reply(index, submission.reply)
+                                )
+                                pending.add(task)
+                                task.add_done_callback(observe_done)
+                                submitted_any = True
+                                if (
+                                    submission.result
+                                    == zlink.SubmitResult.BACKPRESSURED
+                                ):
+                                    admissions[index] = submission.admitted
+
+                            wait_ms = 0 if submitted_any else min(
+                                50,
+                                max(
+                                    1,
+                                    int(
+                                        (active_deadline - perf_counter())
+                                        * 1000
+                                    ),
+                                ),
+                            )
+                            completion_poller.wait(completion_events, wait_ms)
+                            await asyncio.sleep(0)
+
+                    drain_deadline = perf_counter() + drain_timeout_s
+                    while (
+                        (pending or any(admissions))
+                        and perf_counter() < drain_deadline
+                        and not failures
+                    ):
+                        settle_admissions()
+                        if not pending and not any(admissions):
+                            break
+                        remaining_ms = max(
+                            1, int((drain_deadline - perf_counter()) * 1000)
+                        )
+                        completion_poller.wait(
+                            completion_events, min(50, remaining_ms)
+                        )
+                        await asyncio.sleep(0)
+                    settle_admissions()
+
+                    if pending or any(admissions):
+                        still_pending = tuple(pending)
+                        for task in still_pending:
+                            task.cancel()
+                        await asyncio.gather(
+                            *still_pending, return_exceptions=True
+                        )
+                        if not failures:
+                            raise RuntimeError(
+                                "request completion drain timed out"
+                            )
+                finally:
+                    for sock in registered_sockets:
+                        try:
+                            completion_poller.remove_socket(sock)
+                        except Exception as exc:
+                            print(
+                                f"[perf] completion poller remove failed: {exc}",
+                                file=sys.stderr,
+                            )
 
             if failures:
                 raise failures[0]
