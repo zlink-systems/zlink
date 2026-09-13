@@ -234,20 +234,22 @@ C 기준 bench(§1.2)는 client-driven이다. client 하나가 격자를 전부 
 `tools/bench_report.py`가 만든다. runner마다 형식을 두면 언어를 나란히 놓고 볼 때만 드러나는
 방식으로 어긋난다.
 
-열은 여섯 개다. 처리량은 초당 천 단위로 찍고, 단위 이름이 무엇을 센 값인지 말한다 — request
+열은 열 개다. 처리량은 초당 천 단위로 찍고, 단위 이름이 무엇을 센 값인지 말한다 — request
 계열은 완료한 왕복 수라 `KOPS`, `send-saturation`은 target이 받은 단방향 메시지 수라 `Kmsg/s`다.
 두 이름의 수치 배율은 같다.
 
 ```text
-| Scenario                                    | Size   | Throughput      | Lat.Mean(ms) | Lat.P95(ms) | Lat.P99(ms) |
-|---------------------------------------------|--------|-----------------|--------------|-------------|-------------|
-| grpc-dotnet-request-backpressure            |   1024 |   10.000 KOPS   |        1.000 |       2.000 |       3.000 |
-| zlink-dotnet-request-backpressure           |   1024 |   30.000 KOPS   |        0.300 |       0.600 |       0.900 |
-| zlink-framework-dotnet-request-backpressure |   1024 |   20.000 KOPS   |        0.500 |       0.900 |       1.200 |
-| zlink-dotnet-send-saturation                |   1024 |  487.000 Kmsg/s |        1.745 |       5.720 |       8.387 |
+| Scenario | Size | Throughput | Lat.Mean(ms) | Lat.P95(ms) | Lat.P99(ms) | Source CPU(%) | Source Mem(MB) | Target CPU(%) | Target Mem(MB) |
+|---|---|---|---|---|---|---|---|---|---|
+| grpc-dotnet-request-backpressure | 4096 | 10.000 KOPS | 1.000 | 2.000 | 3.000 | 12.000 | 120.000 | 8.000 | 100.000 |
+| zlink-dotnet-request-backpressure | 4096 | 30.000 KOPS | 0.300 | 0.600 | 0.900 | 10.000 | 110.000 | 6.000 | 90.000 |
+| zlink-framework-dotnet-request-backpressure | 4096 | 20.000 KOPS | 0.500 | 0.900 | 1.200 | 14.000 | 150.000 | 10.000 | 140.000 |
+| zlink-dotnet-send-saturation | 4096 | 487.000 Kmsg/s | 1.745 | 5.720 | 8.387 | 20.000 | 130.000 | 9.000 | 110.000 |
 ```
 
-대역폭·CPU·메모리·깊이 같은 나머지 메트릭은 표에서 빼고 셀 원본(`results.json`)에만 둔다.
+`Source`는 송신 프로세스 A, `Target`은 수신 프로세스 B다. CPU는 원본의 사용률(%), 메모리는
+원본의 사용량(MB)을 출력하며, 측정값이 없으면 `n/a`로 표시한다. 위 수치는 출력 형식 예시다.
+대역폭·깊이 같은 나머지 메트릭은 셀 원본(`results.json`)에만 둔다.
 표는 사람이 언어를 가로질러 읽는 용도이고, 판정과 진단은 원본을 읽는 집계기가 한다.
 
 보고서와 콘솔 출력은 perf runner에서 다루기 쉽게 metric별 `RESULT,current,...` 형식도 같이

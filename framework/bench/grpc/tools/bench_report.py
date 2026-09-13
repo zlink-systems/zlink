@@ -10,6 +10,8 @@ Throughput is printed in thousands per second, labelled by what the pattern
 counts: ``KOPS`` for the request patterns (completed request/reply round trips)
 and ``Kmsg/s`` for ``send-saturation`` (one-way messages the target received).
 The number is the same scale in both; the label says what was counted.
+Source and target CPU percentages and memory in MB come from the cell records;
+unavailable measurements are printed as ``n/a`` rather than zero.
 """
 
 from __future__ import annotations
@@ -22,9 +24,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from benchagg.readers import read_run  # noqa: E402
 
-COLUMNS = ("Scenario", "Size", "Throughput", "Lat.Mean(ms)", "Lat.P95(ms)", "Lat.P99(ms)")
+COLUMNS = (
+    "Scenario", "Size", "Throughput", "Lat.Mean(ms)", "Lat.P95(ms)", "Lat.P99(ms)",
+    "Source CPU(%)", "Source Mem(MB)", "Target CPU(%)", "Target Mem(MB)",
+)
 # The widest scenario name in the grid is ``zlink-framework-dotnet-request-backpressure``.
-WIDTHS = (43, 6, 15, 12, 11, 11)
+WIDTHS = (43, 6, 15, 12, 11, 11, 13, 14, 13, 14)
 
 
 def throughput_cell(pattern: str, value: float | None) -> str:
@@ -52,6 +57,10 @@ def render(run_dir: str) -> str:
             number(cell.latency_mean_ms).rjust(WIDTHS[3]),
             number(cell.latency_p95_ms).rjust(WIDTHS[4]),
             number(cell.latency_p99_ms).rjust(WIDTHS[5]),
+            number(cell.client_cpu_percent).rjust(WIDTHS[6]),
+            number(cell.client_memory_mb).rjust(WIDTHS[7]),
+            number(cell.server_cpu_percent).rjust(WIDTHS[8]),
+            number(cell.server_memory_mb).rjust(WIDTHS[9]),
         )
         lines.append("| " + " | ".join(row) + " |")
     for note in notes:
