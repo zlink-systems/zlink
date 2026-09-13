@@ -47,9 +47,13 @@ internal static class PerfMultiStreamServer
         var control = new ControlState(dispatchQueue.StopAccepting);
         StartControlWatcher(control, options.Size);
         var sends = new SendTracker();
+        using var completionPoller = Zlink.CreatePoller();
+        completionPoller.Add(server, PollEventFlags.PollCompletion, 0);
+        var completionEvents = new PollEvent[1];
         using var drainCancellation = new CancellationTokenSource();
         Task dispatcher = DispatchSendsAsync(server, dispatchQueue, sends,
-            control, drainCancellation.Token);
+            control, completionPoller, completionEvents,
+            drainCancellation.Token);
         Task receiver = Task.Run(() =>
         {
             using var result = StreamPacket.Create();
@@ -257,19 +261,43 @@ internal static class PerfMultiStreamServer
 
     private static async Task DispatchSendsAsync(IStreamSocket server,
         StreamDispatchQueue dispatchQueue, SendTracker sends,
-        ControlState control, CancellationToken cancellationToken)
+        ControlState control, IPoller completionPoller,
+        PollEvent[] completionEvents, CancellationToken cancellationToken)
     {
         try
         {
-            await foreach (PendingStreamPacket packet in dispatchQueue.Reader
-                               .ReadAllAsync(cancellationToken)
-                               .ConfigureAwait(false))
+            while (true)
             {
-                Task send = SendMessageAsync(server, packet.RoutingId,
-                    packet.Payload, cancellationToken);
-                sends.Track(send, control);
+                while (dispatchQueue.Reader.TryRead(
+                           out PendingStreamPacket? packet))
+                {
+                    Task send = SendMessageAsync(server, packet.RoutingId,
+                        packet.Payload, cancellationToken);
+                    sends.Track(send, control);
+                    // Immediate Ok submissions need no wait. A zero-time turn
+                    // nevertheless drains any earlier backpressured submission.
+                    _ = completionPoller.Wait(completionEvents, TimeSpan.Zero);
+                }
+
+                if (sends.Count != 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    _ = completionPoller.Wait(completionEvents,
+                        TimeSpan.FromMilliseconds(50));
+                    continue;
+                }
+
+                if (!await dispatchQueue.Reader.WaitToReadAsync(
+                        cancellationToken).ConfigureAwait(false))
+                    break;
             }
 
+            while (sends.Count != 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _ = completionPoller.Wait(completionEvents,
+                    TimeSpan.FromMilliseconds(50));
+            }
             await sends.DrainTask.WaitAsync(cancellationToken)
                 .ConfigureAwait(false);
         }

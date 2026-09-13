@@ -11,7 +11,10 @@ internal static class PerfMultiRoutedRelayServer
         PollManager pollManager, int pollTimeoutMs, int drainTimeoutMs)
     {
         var sockets = new[] { (ISocket)server };
-        var eventMasks = new[] { SocketPollIn };
+        var eventMasks = new[]
+        {
+            SocketPollIn | PollEventFlags.PollCompletion
+        };
         var replySender = new PendingReplySender();
         Received receivedBuffer = Received.Create();
 
@@ -99,13 +102,20 @@ internal static class PerfMultiRoutedRelayServer
             replySender.Complete();
             if (success)
             {
-                Task completed = await Task.WhenAny(replySender.Completion,
-                    Task.Delay(Math.Max(1, drainTimeoutMs)))
-                    .ConfigureAwait(false);
-                if (!ReferenceEquals(completed, replySender.Completion))
+                long drainDeadline = DeadlineTicksFromMilliseconds(
+                    Math.Max(1, drainTimeoutMs));
+                while (!replySender.Completion.IsCompleted)
                 {
-                    DebugFailure("async reply drain timed out", null);
-                    return 2;
+                    int remainingMs =
+                        PerfMultiAdmissionSignal.RemainingTimeoutMilliseconds(
+                            drainDeadline);
+                    if (remainingMs <= 0)
+                    {
+                        DebugFailure("async reply drain timed out", null);
+                        return 2;
+                    }
+                    _ = PollSocketEvents(pollManager, sockets, eventMasks,
+                        Math.Min(50, remainingMs));
                 }
                 success = await replySender.Completion.ConfigureAwait(false);
             }
