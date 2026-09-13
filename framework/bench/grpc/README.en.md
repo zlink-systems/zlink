@@ -252,20 +252,22 @@ logs are at the run level.
 produced from the cell records by `tools/bench_report.py`. A per-runner format drifts in ways
 that only show when two languages are read side by side.
 
-There are six columns. Throughput is printed in thousands per second, and the unit name says what
+There are ten columns. Throughput is printed in thousands per second, and the unit name says what
 was counted: `KOPS` for the request patterns (completed round trips) and `Kmsg/s` for
 `send-saturation` (one-way messages the target received). The numeric scale is the same for both.
 
 ```text
-| Scenario                                    | Size   | Throughput      | Lat.Mean(ms) | Lat.P95(ms) | Lat.P99(ms) |
-|---------------------------------------------|--------|-----------------|--------------|-------------|-------------|
-| grpc-dotnet-request-backpressure            |   1024 |   10.000 KOPS   |        1.000 |       2.000 |       3.000 |
-| zlink-dotnet-request-backpressure           |   1024 |   30.000 KOPS   |        0.300 |       0.600 |       0.900 |
-| zlink-framework-dotnet-request-backpressure |   1024 |   20.000 KOPS   |        0.500 |       0.900 |       1.200 |
-| zlink-dotnet-send-saturation                |   1024 |  487.000 Kmsg/s |        1.745 |       5.720 |       8.387 |
+| Scenario | Size | Throughput | Lat.Mean(ms) | Lat.P95(ms) | Lat.P99(ms) | Source CPU(%) | Source Mem(MB) | Target CPU(%) | Target Mem(MB) |
+|---|---|---|---|---|---|---|---|---|---|
+| grpc-dotnet-request-backpressure | 4096 | 10.000 KOPS | 1.000 | 2.000 | 3.000 | 12.000 | 120.000 | 8.000 | 100.000 |
+| zlink-dotnet-request-backpressure | 4096 | 30.000 KOPS | 0.300 | 0.600 | 0.900 | 10.000 | 110.000 | 6.000 | 90.000 |
+| zlink-framework-dotnet-request-backpressure | 4096 | 20.000 KOPS | 0.500 | 0.900 | 1.200 | 14.000 | 150.000 | 10.000 | 140.000 |
+| zlink-dotnet-send-saturation | 4096 | 487.000 Kmsg/s | 1.745 | 5.720 | 8.387 | 20.000 | 130.000 | 9.000 | 110.000 |
 ```
 
-Bandwidth, CPU, memory, depth and the rest stay out of the table and live in the cell record
+`Source` is sending process A and `Target` is receiving process B. CPU percentages and memory
+in MB are printed from the records; unavailable measurements are shown as `n/a`. The values
+above illustrate the output format. Bandwidth, depth and other metrics remain in the cell record
 (`results.json`). The table is for reading across languages by eye; judgement and diagnosis are
 the aggregator's job, and it reads the records.
 

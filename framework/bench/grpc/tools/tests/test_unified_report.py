@@ -48,14 +48,29 @@ class UnifiedReportTest(unittest.TestCase):
         # The two units share a scale; only the name says what was counted.
         self.assertEqual(rendered.count("12.346"), 2)
 
-    def test_columns_are_the_five_the_spec_names(self):
+    def test_columns_include_source_and_target_resources(self):
         self.write(cell("zlink-c", "request-serial"))
         header = bench_report.render(str(self.run)).splitlines()[0]
         self.assertEqual(
             [name.strip() for name in header.strip("| ").split("|")],
-            ["Scenario", "Size", "Throughput", "Lat.Mean(ms)", "Lat.P95(ms)", "Lat.P99(ms)"])
+            ["Scenario", "Size", "Throughput", "Lat.Mean(ms)", "Lat.P95(ms)", "Lat.P99(ms)",
+             "Source CPU(%)", "Source Mem(MB)", "Target CPU(%)", "Target Mem(MB)"])
         self.assertNotIn("Bandwidth", header)
-        self.assertNotIn("CPU", header)
+
+    def test_resource_values_keep_source_and_target_distinct(self):
+        self.write(cell("zlink-dotnet", "send-saturation",
+                        client_cpu_percent=18.92, client_memory_mb=2951.71875,
+                        server_cpu_percent=8.09, server_memory_mb=495.18359375))
+        row = bench_report.render(str(self.run)).splitlines()[2]
+        values = [value.strip() for value in row.strip("| ").split("|")]
+        self.assertEqual(values[6:], ["18.920", "2951.719", "8.090", "495.184"])
+
+    def test_missing_resources_are_not_reported_as_zero(self):
+        self.write(cell("zlink-c", "request-serial",
+                        client_cpu_percent=0, server_memory_mb=0))
+        row = bench_report.render(str(self.run)).splitlines()[2]
+        values = [value.strip() for value in row.strip("| ").split("|")]
+        self.assertEqual(values[6:], ["0.000", "n/a", "n/a", "0.000"])
 
     def test_every_language_renders_through_the_same_function(self):
         # A row missing a measurement says so rather than printing a zero.
