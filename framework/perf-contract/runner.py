@@ -670,7 +670,11 @@ def cell_run(args,language,spec,environment,manifest,redis,exact,repetition=0):
                                 'sourceFile':'tmp/warmup-'+name,'errorCounts':{'byKind':value['metrics']['errors.byKind'],'language':value['metrics']['errors.language']}})
     except (Exception,KeyboardInterrupt) as error:
         code='PublicContractMismatch' if isinstance(error,UnsupportedCellError) else 'ArtifactMismatch' if 'ArtifactMismatch' in str(error) else 'InvalidSetup' if isinstance(error,InvalidSetupError) else 'CollectionFailure'
-        issues.append({'code':code,'message':type(error).__name__+': '+str(error),'sourceFile':'logs/'})
+        source='logs/'
+        if isinstance(error,urllib.error.HTTPError):
+            source='tmp/http-error.json'
+            write_json(cell/source,{'status':error.code,'url':error.url,'body':error.read().decode('utf-8',errors='replace')})
+        issues.append({'code':code,'message':type(error).__name__+': '+str(error),'sourceFile':source})
         write_json(cell/'failure.json',issues)
         if owned.processes and not (cell/'loaded-artifacts.json').exists():
             try:loaded_artifacts(owned,cell,language,allow_exited=True)

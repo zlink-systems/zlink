@@ -75,7 +75,7 @@ async function createApplication(config) {
     }
     if (kind.publish) {
       const fanout = builder.addFanoutChannel(config.channelName);
-      if (config.source) fanout.enablePublisher(config.fanoutEndpoint ?? config.listenerEndpoint);
+      if (config.source) fanout.enablePublisher(config.fanoutEndpoint ?? config.listenerEndpoint).setRoutingIdPrefix(config.channelName);
       else fanout.enableSubscriber().addPublishHandler('PerfPublishEvent', h.FanoutHandler);
     }
     return builder.build();

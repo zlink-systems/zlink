@@ -55,6 +55,19 @@ test('SLO denominator retains failures and settle successes outside the time bud
   const s = m.snapshot(); assert.equal(s.metrics['slo.eligible'], '2'); assert.equal(s.metrics['slo.met'], '0'); assert.equal(s.metrics['slo.missed'], '2'); assert.equal(s.metrics['slo.missRatio'], 1);
 });
 
+test('applicable echo histograms retain an observed zero-success cohort', () => {
+  const m = measure();
+  const op = m.begin(m.request(0, 1n)); m.finish(op, Object.assign(new Error('unavailable'), { kind: 0 }));
+  const s = m.snapshot();
+  assert.equal(s.metrics['messages.completed'], '0'); assert.equal(s.metrics['messages.settleCompleted'], '0');
+  for (const [key, prefix] of [['latencyMs', 'latency'], ['settleLatencyMs', 'settle.latency']]) {
+    assert.equal(s.histograms[key].count, '0'); assert.equal(s.histograms[key].sumNs, '0');
+    assert.equal(s.histograms[key].maxNs, null); assert.equal(s.nullReasons[`/histograms/${key}/maxNs`].code, 'NO_SAMPLES');
+    assert.equal(s.metrics[`${prefix}.meanMs`], null); assert.equal(s.nullReasons[`/metrics/${prefix}.meanMs`].code, 'NO_SAMPLES');
+  }
+  if (process.env.PERF_ZERO_COHORT_SNAPSHOT) require('node:fs').writeFileSync(process.env.PERF_ZERO_COHORT_SNAPSHOT, JSON.stringify(s));
+});
+
 test('schema3 emits catalog metrics and actual dense 100ms event bins', () => {
   const m = measure(); m.resetSeq = '1'; m.phase = 'measured'; m.end = m.start + 250000000n;
   const op = m.begin(m.request(0, 1n)); m.finish(op, null, m.start + 150000000n);
@@ -99,9 +112,10 @@ test('worker callback actual thread spans are recorded once by the application h
   const seed=measure('spot-worker-offload-echo');const m=new Measurement({...seed.config,workload:{...seed.config.workload,warmupSeconds:.01,durationSeconds:.25}});
   m.startPhase({runId:'r',cellId:'c',resetSeq:'0',phase:'warmup'},async()=>{});await m.phaseTask;assert.equal(m.reset({runId:'r',cellId:'c',resetSeq:'1'}).ok,true);
   let handlerType;
-  const decorators={zlinkSpotPacketHandler:options=>type=>{if(options.packetName==='PerfEchoRequest')handlerType??=type;},
-    zlinkEntrySpotActorRequestHandler:()=>()=>{},zlinkEntrySpotActorSendHandler:()=>()=>{}};
-  createHandlers({},decorators,m,{});
+  const decorators={ZLinkPacket:name=>type=>{if(name==='PerfEchoRequest')handlerType??=type;},
+    ZLinkSpotRequest:name=>(target)=>{if(name==='PerfEchoRequest')handlerType??=target.constructor;},
+    ZLinkSpotActorRequest:()=>()=>{},ZLinkSpotActorSend:()=>()=>{}};
+  createHandlers(decorators,{},m,{});
   let calls=0;
   const context={runCpuWorker:job=>({timeoutMs:()=>({submit:()=>new Promise((resolve,reject)=>{
     calls++;const worker=new Worker(`const {parentPort,workerData}=require('node:worker_threads');parentPort.postMessage(eval('('+workerData+')')(new AbortController().signal));`,{eval:true,workerData:job.toString()});

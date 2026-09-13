@@ -147,13 +147,14 @@ function createHandlers(framework, nestjs, measure, clients) {
   }
   const providers = [ChannelRequestHandler, ChannelSendHandler, ChannelReturnHandler, PerfSpot, SpotEchoHandler, SpotProbeHandler, SpotDriveHandler, SpotReturnHandler, PerfActorFactory, PerfEntrySpot, ActorRequestHandler, ActorProbeHandler, ActorSendHandler, PerfSessionFactory, FanoutHandler];
   providers.forEach(type => Injectable()(type));
-  nestjs.zlinkSpotPacketHandler({ spot: () => PerfSpot, packetName: 'PerfEchoRequest' })(SpotEchoHandler);
-  nestjs.zlinkSpotPacketHandler({ spot: () => PerfSpot, packetName: 'PerfProbeRequest' })(SpotProbeHandler);
-  nestjs.zlinkSpotPacketHandler({ spot: () => PerfSpot, packetName: 'PerfDriveRequest' })(SpotDriveHandler);
-  nestjs.zlinkSpotPacketHandler({ spot: () => PerfSpot, packetName: PerfEchoReply.name })(SpotReturnHandler);
-  nestjs.zlinkEntrySpotActorRequestHandler({ entrySpot: () => PerfEntrySpot, actor: () => PerfActor, packetName: 'PerfEchoRequest' })(ActorRequestHandler);
-  nestjs.zlinkEntrySpotActorRequestHandler({ entrySpot: () => PerfEntrySpot, actor: () => PerfActor, packetName: 'PerfProbeRequest' })(ActorProbeHandler);
-  nestjs.zlinkEntrySpotActorSendHandler({ entrySpot: () => PerfEntrySpot, actor: () => PerfActor, packetName: 'PerfEchoRequest' })(ActorSendHandler);
+  if (kind.oneWay || kind.correlated && !kind.driver) framework.ZLinkPacket('PerfEchoRequest')(SpotEchoHandler);
+  else framework.ZLinkSpotRequest('PerfEchoRequest')(SpotEchoHandler.prototype, 'handle', Object.getOwnPropertyDescriptor(SpotEchoHandler.prototype, 'handle'));
+  framework.ZLinkSpotRequest('PerfProbeRequest')(SpotProbeHandler.prototype, 'handle', Object.getOwnPropertyDescriptor(SpotProbeHandler.prototype, 'handle'));
+  framework.ZLinkSpotRequest('PerfDriveRequest')(SpotDriveHandler.prototype, 'handle', Object.getOwnPropertyDescriptor(SpotDriveHandler.prototype, 'handle'));
+  framework.ZLinkPacket(PerfEchoReply.name)(SpotReturnHandler);
+  framework.ZLinkSpotActorRequest('PerfEchoRequest')(ActorRequestHandler.prototype, 'handle', Object.getOwnPropertyDescriptor(ActorRequestHandler.prototype, 'handle'));
+  framework.ZLinkSpotActorRequest('PerfProbeRequest')(ActorProbeHandler.prototype, 'handle', Object.getOwnPropertyDescriptor(ActorProbeHandler.prototype, 'handle'));
+  framework.ZLinkSpotActorSend('PerfEchoRequest')(ActorSendHandler.prototype, 'handle', Object.getOwnPropertyDescriptor(ActorSendHandler.prototype, 'handle'));
   return { providers, ChannelRequestHandler, ChannelSendHandler, ChannelReturnHandler, PerfSpot, PerfActorFactory, PerfEntrySpot, PerfSessionFactory, FanoutHandler };
 }
 module.exports = { createHandlers, cpuWork };

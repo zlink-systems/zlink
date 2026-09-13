@@ -95,6 +95,23 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(launch_command(manifest,'java','client')[0].endswith('/zlink-framework-perf'))
         self.assertTrue(launch_command(manifest,'cpp','client')[0].endswith('/zlink_framework_perf'))
 
+    def test_http_failure_preserves_response_body_without_another_request(self):
+        import urllib.error
+        from unittest.mock import patch
+        from runner import cell_run
+        with tempfile.TemporaryDirectory() as folder:
+            args=options(['single','--scenario','channel-echo-only','--language','node','--output',str(Path(folder)/'run')])
+            spec=selected_cells(args)[0]
+            body='{"errorType":"ZLinkConfigurationException","message":"public setup failure"}'
+            error=urllib.error.HTTPError('http://127.0.0.1/app/perf/prepare',400,'Bad Request',{},io.BytesIO(body.encode()))
+            manifest={'languages':{'node':{'server':['node']}}}
+            with patch('runner.make_roles',side_effect=error) as request,contextlib.redirect_stdout(io.StringIO()):
+                result,cell=cell_run(args,'node',spec,{'commit':'fixture'},manifest,None,b'{}')
+            self.assertEqual(request.call_count,1)
+            self.assertEqual(json.loads((cell/'tmp/http-error.json').read_text()),{'status':400,'url':error.url,'body':body})
+            self.assertEqual(result['status'],'failed')
+            self.assertEqual(json.loads((cell/'failure.json').read_text())[0]['sourceFile'],'tmp/http-error.json')
+
 class ClientControlTests(unittest.TestCase):
     def test_failed_prepared_original_is_saved_before_rejection(self):
         from runner import ClientControl, InvalidSetupError

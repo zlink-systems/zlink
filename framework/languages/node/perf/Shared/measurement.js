@@ -209,7 +209,8 @@ class Measurement {
     }
     const families = catalog.histogramPrefixes;
     for (const [key, prefix] of Object.entries(families)) {
-      const h = this.hist.get(key) ?? (this.kind.worker && key.startsWith("worker") && this.start ? new Histogram() : null);
+      const emptyApplicable = this.start && (this.kind.worker && key.startsWith('worker') || this.primary && !this.kind.oneWay && !this.kind.publish && ['latencyMs', 'settleLatencyMs'].includes(key));
+      const h = this.hist.get(key) ?? (emptyApplicable ? new Histogram() : null);
       if (h) h.export(key, prefix, metrics, histograms, nullReasons);
       else { const workerEmpty=this.kind.worker && key.startsWith('worker'); const unsupported = key.includes('DeliveryLatency') && (this.kind.publish || this.kind.oneWay); histograms[key] = null; nullReasons[`/histograms/${key}`] = nullReason(unsupported ? 'CLOCK_DOMAIN_UNVERIFIED' : workerEmpty ? 'NO_SAMPLES' : 'NOT_APPLICABLE', unsupported ? 'No verified cross-process delivery clock alignment.' : workerEmpty ? 'No successful worker terminal occurred inside the window.' : 'Interval not observed by this role.'); for (const suffix of catalog.latencySuffixes) nil(`${prefix}.${suffix}`, unsupported ? 'CLOCK_DOMAIN_UNVERIFIED' : 'NOT_APPLICABLE'); }
     }
