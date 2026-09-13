@@ -145,7 +145,7 @@ struct poller_t::impl
     {
         for (const auto &item : items) {
             if (item->owns_completion)
-                item->completion_owner->transfer_to_runtime (this);
+                item->completion_owner->release_public (this);
         }
         items.clear ();
         socket_item_indexes.clear ();
@@ -273,7 +273,7 @@ struct poller_t::impl
                                 static_cast<short> (events_)));
             if (rc != config_result_t::ok) {
                 if (item->owns_completion)
-                    item->completion_owner->transfer_to_runtime (this);
+                    item->completion_owner->release_public (this);
                 detail::throw_if_failed<config_error_t> (rc);
             }
         }
@@ -365,13 +365,13 @@ struct poller_t::impl
           zlink_poller_modify (poller.load (std::memory_order_acquire), socket_handle_,
                                static_cast<short> (events_)));
         if (rc != config_result_t::ok && !had_completion && wants_completion)
-            owner->transfer_to_runtime (this);
+            owner->release_public (this);
         detail::throw_if_failed<config_error_t> (rc);
         item.events = events_;
         item.owns_completion = wants_completion;
         item.native_poller_only = wants_completion;
         if (had_completion && !wants_completion)
-            owner->transfer_to_runtime (this);
+            owner->release_public (this);
     }
 
     void modify_fd (int fd_, poll_event_flag_t events_)
@@ -408,7 +408,7 @@ struct poller_t::impl
         const bool native_only = items[static_cast<size_t> (index)]->native_poller_only;
         erase_item_at (index, native_only);
         if (owned_completion)
-            owner->transfer_to_runtime (this);
+            owner->release_public (this);
         return true;
     }
 
@@ -471,7 +471,7 @@ struct poller_t::impl
             if (!item->owns_completion || !item->completion_owner)
                 continue;
             try {
-                (void) item->completion_owner->drain (true);
+                (void) item->completion_owner->drain ();
             }
             catch (const binding_error_t &failure_) {
                 const int failure_errno = failure_.internal_errno ();
@@ -526,7 +526,7 @@ struct poller_t::impl
                     & static_cast<short> (poll_event_flag_t::pollcompletion))) {
                 size_t processed = 0;
                 try {
-                    processed = item->completion_owner->drain (true);
+                    processed = item->completion_owner->drain ();
                 }
                 catch (const binding_error_t &failure_) {
                     const int failure_errno = failure_.internal_errno ();

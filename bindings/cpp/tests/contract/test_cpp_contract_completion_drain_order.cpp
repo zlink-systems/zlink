@@ -16,7 +16,7 @@ void test_queued_send_and_request ()
     fixture.writable (0, "peer");
     fixture.writable (1, "peer");
     fixture.events.clear ();
-    assert (fixture.owner->drain (true) == 2);
+    assert (fixture.owner->drain () == 2);
     const std::vector<std::string> expected = {
       "recv:1", "recv:2", "NO_DATA", "submit:send", "submit:request"};
     assert (fixture.events == expected);
@@ -24,7 +24,7 @@ void test_queued_send_and_request ()
     send_wait.await_resume ();
     // A completion produced by resubmission belongs to the next drain.
     assert (!request_wait.await_ready ());
-    assert (fixture.owner->drain (true) == 1);
+    assert (fixture.owner->drain () == 1);
     assert (request_wait.await_ready ());
     assert (request_wait.await_resume ().empty ());
 }
@@ -51,7 +51,7 @@ void test_writable_before_send_registration ()
     std::thread drain;
     fixture.first_submit = [&] {
         fixture.writable (0, "peer");
-        drain = std::thread ([&] { assert (fixture.owner->drain (true) == 1); });
+        drain = std::thread ([&] { assert (fixture.owner->drain () == 1); });
         assert (received_future.wait_for (std::chrono::seconds (5))
                 == std::future_status::ready);
     };

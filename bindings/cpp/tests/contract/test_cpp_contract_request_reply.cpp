@@ -65,7 +65,7 @@ class close_task_t
     std::future<void> _future;
 };
 
-close_task_t close_from_runtime_continuation (
+close_task_t close_from_poller_continuation (
   zlink::dealer_socket_t &dealer_,
   zlink::async_result_t<std::vector<zlink::message_t>> result_)
 {
@@ -210,6 +210,8 @@ void test_dropped_async_result_late_completion_cleanup ()
     const std::string endpoint = zlink_cpp_contract::unique_inproc ("drop-request");
     router.bind (endpoint);
     dealer.connect (endpoint);
+    zlink::poller_t poller;
+    poller.add (dealer, zlink::poll_event_flag_t::pollcompletion, 31);
 
     std::thread responder ([&] {
         receive_and_reply (router, "drop-request", "late-reply");
@@ -221,7 +223,9 @@ void test_dropped_async_result_late_completion_cleanup ()
         (void) dropped;
     }
     responder.join ();
-    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+    zlink::poll_event_t event{};
+    assert (poller.wait (&event, 1, std::chrono::seconds (5)) == 1);
+    assert (event.slot == 31);
 }
 
 void test_request_completion_publish_and_capture_join_once ()
@@ -265,7 +269,7 @@ void test_non_ok_request_is_typed_without_payload ()
     assert (!request.valid ());
 }
 
-void test_runtime_continuation_can_close_socket ()
+void test_public_poller_continuation_can_close_socket ()
 {
     zlink::context_t context;
     zlink::dealer_socket_t dealer (context);
@@ -275,13 +279,17 @@ void test_runtime_continuation_can_close_socket ()
     const std::string endpoint = zlink_cpp_contract::unique_inproc ("close-continuation");
     router.bind (endpoint);
     dealer.connect (endpoint);
+    zlink::poller_t poller;
+    poller.add (dealer, zlink::poll_event_flag_t::pollcompletion, 37);
     std::thread responder ([&] {
         receive_and_reply (router, "close-request", "close-reply");
     });
     zlink::message_t request = zlink_cpp_contract::make_message ("close-request");
-    close_task_t task = close_from_runtime_continuation (
+    close_task_t task = close_from_poller_continuation (
       dealer, dealer.request ().message (request)
                 .timeout (std::chrono::seconds (2)).async ().reply);
+    zlink::poll_event_t event{};
+    assert (poller.wait (&event, 1, std::chrono::seconds (5)) == 1);
     task.get ();
     responder.join ();
     assert (!dealer.valid ());
@@ -297,6 +305,6 @@ int main ()
     test_dropped_async_result_late_completion_cleanup ();
     test_request_completion_publish_and_capture_join_once ();
     test_non_ok_request_is_typed_without_payload ();
-    test_runtime_continuation_can_close_socket ();
+    test_public_poller_continuation_can_close_socket ();
     return 0;
 }

@@ -194,6 +194,9 @@ void immediate_admission_returns_completed_stage_before_reply ()
 
     zlink::message_t request_payload =
       zlink_cpp_contract::make_message ("request-ok");
+    zlink::poller_t poller;
+    poller.add (client, zlink::poll_event_flag_t::pollcompletion,
+                completion_slot);
     zlink::request_submission_t request =
       client.request ().message (request_payload)
         .timeout (std::chrono::seconds (30)).async ();
@@ -206,6 +209,7 @@ void immediate_admission_returns_completed_stage_before_reply ()
     assert (!reply.ready ());
 
     reply_once (server, "request-ok", "reply-ok");
+    wait_for_reply (poller, reply);
     reply_parts_t reply_parts = reply.get ();
     assert (reply_parts.size () == 1);
     assert (reply_parts.front ().to_string () == "reply-ok");

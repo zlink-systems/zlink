@@ -501,6 +501,21 @@ int test_admitted_async_send_leaves_no_waiter_identity ()
 
     zlink::message_t rejected =
       zlink_cpp_contract::make_message ("resumed-after-admitted");
+    bool ownerless_rejected = false;
+    try {
+        (void) dealer.send ().message (rejected).async ();
+    }
+    catch (const zlink::submit_error_t &error) {
+        ownerless_rejected =
+          error.result () == zlink::submit_result_t::invalid_state;
+    }
+    if (!ownerless_rejected || !rejected.valid ()) {
+        std::fprintf (stderr, "ownerless backpressured send was not rejected\n");
+        return 4;
+    }
+
+    zlink::poller_t poller;
+    poller.add (dealer, zlink::poll_event_flag_t::pollcompletion, 71);
     auto pending = dealer.send ().message (rejected).async ();
     if (pending.result != ZLINK_SUBMIT_BACKPRESSURED) {
         std::fprintf (stderr, "a send without credit must report backpressure\n");
@@ -513,11 +528,13 @@ int test_admitted_async_send_leaves_no_waiter_identity ()
     }
 
     // Only Core's WRITABLE for this operation's own token can release it. The
-    // runtime completion owner drains it; nothing here retries by hand.
+    // public completion poller drains it; nothing here retries by hand.
     size_t resumed_payload_seen = 0;
     const auto deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (10);
     while (std::chrono::steady_clock::now () < deadline) {
+        zlink::poll_event_t event{};
+        (void) poller.wait (&event, 1, std::chrono::milliseconds (0));
         zlink::received_t received;
         if (router.recv (received, zlink::recv_flags_t::dontwait) != 0) {
             if (pending_awaiter.await_ready () && resumed_payload_seen > 0)
