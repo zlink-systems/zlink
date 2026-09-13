@@ -8,7 +8,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.LockSupport;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.messaging.SendSubmission;
@@ -58,10 +57,11 @@ final class PerfMultiRoutedSendCoordinator {
                 break;
             }
 
-            // Reply progress never gates submission. This receive poll is
-            // nonblocking; admission waits are driven only by BACKPRESSURED.
-            int readyCount = pollSet.poll(0);
-            boolean drainedReply = false;
+            // One public poller turn services both reply readiness and async
+            // admission completions for every socket. Immediate OK never
+            // blocks; only a turn with no eligible sender may wait briefly.
+            int readyCount = pollSet.poll(submitted ? 0
+                : pollWaitMillis(activeEnd));
             for (int readyOffset = 0; readyOffset < readyCount;
                  readyOffset++) {
                 if (!pollSet.readyHasEventAt(readyOffset,
@@ -69,14 +69,6 @@ final class PerfMultiRoutedSendCoordinator {
                     continue;
                 }
                 received += replyDrainer.drain(pollSet.readyIndexAt(readyOffset));
-                drainedReply = true;
-            }
-            if (!submitted && !drainedReply
-                && !submissions.awaitAvailability(activeEnd)) {
-                if (Thread.currentThread().isInterrupted()) {
-                    throw new IllegalStateException(label + " interrupted");
-                }
-                break;
             }
         }
 
@@ -108,27 +100,30 @@ final class PerfMultiRoutedSendCoordinator {
 
     static void runAdmissions(int socketCount,
                               long activeEnd,
+                              CompletionPoller completionPoller,
                               Submitter submitter,
                               Duration terminalTimeout,
                               String label) {
+        Objects.requireNonNull(completionPoller, "completionPoller");
         Objects.requireNonNull(terminalTimeout, "terminalTimeout");
         BackpressureCoordinator submissions = new BackpressureCoordinator(
             socketCount, activeEnd, submitter);
 
         while (System.nanoTime() < activeEnd && !submissions.hasFailure()) {
-            if (submissions.submitRound()) {
-                continue;
-            }
-            if (!submissions.awaitAvailability(activeEnd)) {
-                if (Thread.currentThread().isInterrupted()) {
-                    throw new IllegalStateException(label + " interrupted");
-                }
+            boolean submitted = submissions.submitRound();
+            if (submissions.hasFailure()) {
                 break;
             }
+            completionPoller.poll(submitted ? 0 : pollWaitMillis(activeEnd));
         }
 
-        submissions.awaitPending(terminalTimeout, label);
+        submissions.awaitPending(terminalTimeout, label, completionPoller);
         submissions.throwIfFailed(label);
+    }
+
+    @FunctionalInterface
+    interface CompletionPoller {
+        void poll(int timeoutMillis);
     }
 
     @FunctionalInterface
@@ -156,6 +151,15 @@ final class PerfMultiRoutedSendCoordinator {
         return drained;
     }
 
+    private static int pollWaitMillis(long deadline) {
+        long remainingNanos = deadline - System.nanoTime();
+        if (remainingNanos <= 0L) {
+            return 0;
+        }
+        return (int) Math.min(50L,
+            Math.max(1L, remainingNanos / 1_000_000L));
+    }
+
     @FunctionalInterface
     interface ReplyDrainer {
         /** @return the number of replies consumed from this socket. */
@@ -164,8 +168,8 @@ final class PerfMultiRoutedSendCoordinator {
 
     /**
      * Keeps state only for submissions that actually returned BACKPRESSURED.
-     * The caller thread remains the sole submitter; completion threads only
-     * make their socket available and wake that caller.
+     * The caller thread remains the sole submitter; completion callbacks only
+     * make their socket available for a later poller turn.
      */
     static final class BackpressureCoordinator {
         private static final int AVAILABLE = 0;
@@ -175,7 +179,6 @@ final class PerfMultiRoutedSendCoordinator {
         private final long activeEnd;
         private final Submitter submitter;
         private final AtomicIntegerArray states;
-        private final Thread coordinatorThread;
         private final AtomicInteger pendingCount = new AtomicInteger();
         private final AtomicLong admittedCount = new AtomicLong();
         private final AtomicReference<Throwable> failure =
@@ -193,7 +196,6 @@ final class PerfMultiRoutedSendCoordinator {
             this.activeEnd = activeEnd;
             this.submitter = Objects.requireNonNull(submitter, "submitter");
             this.states = new AtomicIntegerArray(socketCount);
-            this.coordinatorThread = Thread.currentThread();
         }
 
         boolean submitRound() {
@@ -252,21 +254,6 @@ final class PerfMultiRoutedSendCoordinator {
             }
             states.set(index, AVAILABLE);
             pendingCount.decrementAndGet();
-            LockSupport.unpark(coordinatorThread);
-        }
-
-        boolean awaitAvailability(long deadline) {
-            while (!hasFailure() && !hasAvailable()) {
-                long remainingNanos = deadline - System.nanoTime();
-                if (remainingNanos <= 0L) {
-                    return false;
-                }
-                LockSupport.parkNanos(this, remainingNanos);
-                if (Thread.currentThread().isInterrupted()) {
-                    return false;
-                }
-            }
-            return !hasFailure() && hasAvailable();
         }
 
         boolean hasFailure() {
@@ -285,17 +272,15 @@ final class PerfMultiRoutedSendCoordinator {
             return admittedCount.get();
         }
 
-        void awaitPending(Duration timeout, String label) {
+        void awaitPending(Duration timeout, String label,
+                          CompletionPoller completionPoller) {
             long deadline = System.nanoTime() + timeout.toNanos();
             while (pendingCount() > 0 && !hasFailure()) {
-                long remainingNanos = deadline - System.nanoTime();
-                if (remainingNanos <= 0L) {
+                int waitMillis = pollWaitMillis(deadline);
+                if (waitMillis == 0) {
                     break;
                 }
-                LockSupport.parkNanos(this, remainingNanos);
-                if (Thread.currentThread().isInterrupted()) {
-                    throw new IllegalStateException(label + " interrupted");
-                }
+                completionPoller.poll(waitMillis);
             }
             if (pendingCount() > 0 && !hasFailure()) {
                 throw new IllegalStateException(label + " timed out");
@@ -349,16 +334,6 @@ final class PerfMultiRoutedSendCoordinator {
                 return;
             }
             failure.compareAndSet(null, cause);
-            LockSupport.unpark(coordinatorThread);
-        }
-
-        private boolean hasAvailable() {
-            for (int index = 0; index < socketCount; index++) {
-                if (states.get(index) == AVAILABLE) {
-                    return true;
-                }
-            }
-            return false;
         }
     }
 }

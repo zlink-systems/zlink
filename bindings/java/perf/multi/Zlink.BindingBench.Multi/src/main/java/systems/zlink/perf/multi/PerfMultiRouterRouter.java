@@ -111,9 +111,8 @@ final class PerfMultiRouterRouter {
         return metrics.finishMulti(config);
     }
 
-    // One receive poll set multiplexes all client sockets. Send backpressure
-    // remains Core-owned by each public async terminal and never enters this
-    // poller's event mask or gates on an echo reply.
+    // One public poll set multiplexes receive readiness and completion
+    // progress for every client socket. Send admission never gates on an echo.
     private static void runRouterRouterClientLoop(List<RouterSocket> clients,
                                                   PerfUtil.Config config,
                                                   int durationSeconds,
@@ -129,7 +128,8 @@ final class PerfMultiRouterRouter {
         // avoiding the per-recv Received + ArrayList allocation.
         systems.zlink.contracts.messaging.Received replyBuffer = new systems.zlink.contracts.messaging.Received();
         try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                socketsAsBase, PollEventFlags.POLLIN)) {
+                socketsAsBase, PollEventFlags.POLLIN,
+                PollEventFlags.POLLCOMPLETION)) {
             long activeEnd = System.nanoTime()
                 + (long) durationSeconds * 1_000_000_000L;
             PerfMultiRoutedSendCoordinator.run(n, activeEnd, pollSet,

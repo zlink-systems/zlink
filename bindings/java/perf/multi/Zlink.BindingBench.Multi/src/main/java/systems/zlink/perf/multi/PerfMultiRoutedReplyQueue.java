@@ -7,6 +7,7 @@ import java.util.ArrayDeque;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.IntConsumer;
 import java.util.function.Predicate;
 import systems.zlink.contracts.messaging.SendSubmission;
 
@@ -78,32 +79,6 @@ final class PerfMultiRoutedReplyQueue<T> {
     }
 
     /**
-     * Waits, at most once and for at most {@code timeoutMillis}, until no
-     * submit is outstanding.
-     *
-     * <p>The C relay refuses to offer a second reply while one wait token is
-     * live ({@code perf_multi_relay_server.hpp:200-201}). Letting the caller
-     * park on that condition keeps an un-forwarded reply backpressuring its
-     * source through Core's receive queue instead of an application queue.</p>
-     *
-     * @return true when nothing is outstanding
-     */
-    boolean awaitIdle(long timeoutMillis) {
-        synchronized (lock) {
-            if (!sending) {
-                return true;
-            }
-            try {
-                lock.wait(timeoutMillis);
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-            return !sending;
-        }
-    }
-
-    /**
      * Waits for the outstanding admissions within a bounded window and then
      * releases whatever the window did not admit.
      *
@@ -113,28 +88,32 @@ final class PerfMultiRoutedReplyQueue<T> {
      *
      * @return true when the FIFO emptied before the deadline
      */
-    boolean drain(Duration timeout) {
+    boolean drain(Duration timeout, IntConsumer completionPoller) {
         Objects.requireNonNull(timeout, "timeout");
+        Objects.requireNonNull(completionPoller, "completionPoller");
         long deadlineNanos = System.nanoTime() + timeout.toNanos();
-        boolean drained;
         synchronized (lock) {
             pump();
-            while (!hasFailure() && (sending || !pending.isEmpty())) {
-                long remainingNanos = deadlineNanos - System.nanoTime();
-                if (remainingNanos <= 0L) {
-                    break;
-                }
-                try {
-                    lock.wait(Math.max(1L, remainingNanos / 1_000_000L));
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
-            drained = !sending && pending.isEmpty();
-            releasePendingLocked();
         }
-        return drained;
+        while (!hasFailure() && hasPendingWork()) {
+            long remainingNanos = deadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0L) {
+                break;
+            }
+            completionPoller.accept((int) Math.min(50L,
+                Math.max(1L, remainingNanos / 1_000_000L)));
+        }
+        synchronized (lock) {
+            boolean drained = !sending && pending.isEmpty();
+            releasePendingLocked();
+            return drained;
+        }
+    }
+
+    private boolean hasPendingWork() {
+        synchronized (lock) {
+            return sending || !pending.isEmpty();
+        }
     }
 
     /** Releases every reply the FIFO still owns. Caller holds {@code lock}. */

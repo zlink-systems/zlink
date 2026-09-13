@@ -93,7 +93,7 @@ class PerfMultiRoutedReplyQueueTest {
         replies.enqueue(1);
         replies.enqueue(2);
         assertFalse(replies.hasFailure());
-        assertFalse(replies.drain(Duration.ofMillis(20)),
+        assertFalse(replies.drain(Duration.ofMillis(20), ignored -> { }),
             "an unadmitted reply must not be reported as drained");
 
         stages.get(0).complete(null);
@@ -121,7 +121,7 @@ class PerfMultiRoutedReplyQueueTest {
         assertEquals(List.of(1), released,
             "the dropped reply is released exactly once");
         assertNull(replies.failure());
-        assertTrue(replies.drain(Duration.ofMillis(20)));
+        assertTrue(replies.drain(Duration.ofMillis(20), ignored -> { }));
     }
 
     @Test
@@ -141,8 +141,24 @@ class PerfMultiRoutedReplyQueueTest {
         assertEquals(List.of(1), submitted,
             "a failed sender must not submit the rest of the FIFO");
         assertSame(terminal, replies.failure());
-        assertFalse(replies.drain(Duration.ofMillis(20)));
+        assertFalse(replies.drain(Duration.ofMillis(20), ignored -> { }));
         assertEquals(List.of(2), released);
+    }
+
+    @Test
+    void drainRunsCompletionPollerUntilBackpressureSettles() {
+        CompletableFuture<Void> stage = new CompletableFuture<>();
+        var replies = queue(reply -> backpressured(stage), new ArrayList<>());
+        replies.enqueue(1);
+        int[] pollTurns = {0};
+
+        assertTrue(replies.drain(Duration.ofSeconds(1), timeoutMillis -> {
+            pollTurns[0]++;
+            stage.complete(null);
+        }));
+
+        assertEquals(1, pollTurns[0]);
+        assertFalse(replies.sending());
     }
 
     private static SendSubmission ok() {

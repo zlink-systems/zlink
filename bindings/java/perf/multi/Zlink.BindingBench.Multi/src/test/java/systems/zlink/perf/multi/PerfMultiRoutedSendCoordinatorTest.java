@@ -12,10 +12,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.messaging.SendSubmission;
@@ -162,43 +160,34 @@ class PerfMultiRoutedSendCoordinatorTest {
     }
 
     @Test
-    void admissionOnlyRunWakesAndResubmitsOnCallerThread() throws Exception {
+    void admissionOnlyRunPollsAndResubmitsOnCallerThread() {
         Thread callerThread = Thread.currentThread();
         List<Thread> submitThreads = new ArrayList<>();
         CompletableFuture<Void> first = new CompletableFuture<>();
-        CountDownLatch firstSubmitted = new CountDownLatch(1);
-        AtomicReference<Throwable> completionFailure = new AtomicReference<>();
         long activeEnd = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
         IllegalArgumentException terminalFailure =
             new IllegalArgumentException("stop test admission loop");
 
-        Thread completionThread = new Thread(() -> {
-            try {
-                assertTrue(firstSubmitted.await(1, TimeUnit.SECONDS));
-                first.complete(null);
-            } catch (Throwable error) {
-                completionFailure.set(error);
-                first.completeExceptionally(error);
-            }
-        }, "test-admission-only-completion");
-        completionThread.start();
-
         int[] submissions = {0};
+        int[] pollTurns = {0};
         IllegalStateException failure = assertThrows(IllegalStateException.class,
             () -> PerfMultiRoutedSendCoordinator.runAdmissions(1, activeEnd,
+                timeoutMillis -> {
+                    pollTurns[0]++;
+                    first.complete(null);
+                },
                 index -> {
                     submitThreads.add(Thread.currentThread());
                     submissions[0]++;
                     if (submissions[0] == 1) {
-                        firstSubmitted.countDown();
                         return backpressuredSubmission(first);
                     }
                     throw terminalFailure;
                 }, Duration.ofSeconds(1), "test admission-only sends"));
-        completionThread.join();
 
-        assertNull(completionFailure.get());
         assertSame(terminalFailure, failure.getCause());
+        assertEquals(1, pollTurns[0],
+            "the harness-owned completion poller drives the admission");
         assertEquals(2, submissions[0]);
         assertEquals(List.of(callerThread, callerThread), submitThreads);
     }

@@ -180,12 +180,18 @@ final class PerfMultiDealerDealer {
             PerfControl.awaitStart(config.size(), "dealer/dealer client");
             long activeEnd = System.nanoTime()
                 + config.durationSeconds() * 1_000_000_000L;
-            PerfMultiRoutedSendCoordinator.runAdmissions(clients.size(),
-                activeEnd,
-                index -> sendOneActive(clients.get(index), config.size(),
-                    activeEnd),
-                PerfMultiRoutedSendCoordinator.sendDrainTimeout(),
-                "multi dealer/dealer async sends");
+            List<systems.zlink.contracts.sockets.Socket> completionSockets =
+                new ArrayList<>(clients);
+            try (PerfSocketPollSet completionPoller =
+                     PerfSocketPollSet.fromSockets(completionSockets,
+                         PollEventFlags.POLLCOMPLETION)) {
+                PerfMultiRoutedSendCoordinator.runAdmissions(clients.size(),
+                    activeEnd, completionPoller::poll,
+                    index -> sendOneActive(clients.get(index), config.size(),
+                        activeEnd),
+                    PerfMultiRoutedSendCoordinator.sendDrainTimeout(),
+                    "multi dealer/dealer async sends");
+            }
             // C parity: send one wire-level stop token on every client socket
             // so the server's signal-driven receive loop is guaranteed to wake.
             for (DealerSocket client : clients) {
