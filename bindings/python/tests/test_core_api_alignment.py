@@ -7,6 +7,7 @@ import time
 import unittest
 
 import zlink
+from completion_poller import CompletionPollerDriver
 from zlink._native.ffi import (
     ZlinkMonitorEvent,
     ZlinkMonitorStatus,
@@ -233,7 +234,8 @@ class CoreApiAlignmentTests(unittest.TestCase):
                             for part in parts:
                                 part.close()
 
-                    asyncio.run(exchange())
+                    with CompletionPollerDriver(dealer):
+                        asyncio.run(exchange())
 
     def test_pending_request_close_delivers_termination_without_close_error(self):
         with zlink.create_context() as ctx:
@@ -242,11 +244,17 @@ class CoreApiAlignmentTests(unittest.TestCase):
                     router.bind("inproc://python-core-11-pending-close")
                     dealer.connect("inproc://python-core-11-pending-close")
 
+                    completion_poller = zlink.create_poller()
+                    completion_poller.add_socket(
+                        dealer, zlink.PollEventFlag.POLLCOMPLETION, 1
+                    )
+
                     async def close_pending():
                         submission = dealer.request().message(b"pending").submit()
                         received = zlink.create_received()
                         self.assertTrue(router.recv_into(received))
                         received.close()
+                        completion_poller.remove_socket(dealer)
                         dealer.close()
                         with self.assertRaises(zlink.RequestError) as raised:
                             await submission.reply
@@ -255,7 +263,10 @@ class CoreApiAlignmentTests(unittest.TestCase):
                             zlink.RequestResult.TERMINATED,
                         )
 
-                    asyncio.run(close_pending())
+                    try:
+                        asyncio.run(close_pending())
+                    finally:
+                        completion_poller.close()
 
     def test_routed_request_has_only_the_canonical_async_terminal(self):
         with zlink.create_context() as ctx:
@@ -292,7 +303,8 @@ class CoreApiAlignmentTests(unittest.TestCase):
                             for part in parts:
                                 part.close()
 
-                    asyncio.run(exchange())
+                    with CompletionPollerDriver(dealer):
+                        asyncio.run(exchange())
 
     def test_router_recv_into_keeps_storage_and_snapshot_contract(self):
         with zlink.create_context() as ctx:

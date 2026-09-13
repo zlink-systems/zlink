@@ -672,7 +672,7 @@ def test_public_poller_atomically_takes_and_returns_completion_owner():
         def transfer_to_public(self, poller):
             self.public.append(poller)
 
-        def transfer_to_runtime(self, poller):
+        def release_public(self, poller):
             self.runtime.append(poller)
 
     class FakeLib:

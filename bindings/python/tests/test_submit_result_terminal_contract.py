@@ -1,5 +1,7 @@
 import asyncio
+import errno
 import uuid
+from unittest.mock import patch
 
 import pytest
 import zlink
@@ -48,6 +50,53 @@ def _poll_until(poller, predicate):
     assert predicate()
 
 
+def test_ownerless_async_request_fails_before_native_submission():
+    async def exercise():
+        with zlink.create_context() as context:
+            with zlink.create_dealer_socket(context) as client:
+                owner = client._completion_owner
+                with zlink.create_poller() as poller:
+                    poller.add_socket(
+                        client, zlink.PollEventFlag.POLLCOMPLETION, 1
+                    )
+                    poller.remove_socket(client)
+                assert owner._public_owner is None
+                with patch.object(owner, "_submit_parts") as submit:
+                    with pytest.raises(zlink.SubmitError) as raised:
+                        client.request().message(b"ownerless").submit()
+                assert raised.value.result == zlink.SubmitResult.INVALID_STATE
+                assert raised.value.native_errno == 0
+                submit.assert_not_called()
+                assert not owner._entries
+                assert not owner._entries_by_id
+
+    asyncio.run(exercise())
+
+
+def test_ownerless_backpressured_send_fails_fast_without_runtime_drain():
+    async def exercise():
+        with zlink.create_context() as context:
+            with zlink.create_dealer_socket(context) as client:
+                owner = client._completion_owner
+
+                def backpressure(_target, native_parts, _flags, _entry):
+                    owner._close_unsubmitted(native_parts)
+                    return int(zlink.SubmitResult.BACKPRESSURED), errno.EAGAIN, 91
+
+                with patch.object(
+                    owner, "_submit_parts", side_effect=backpressure
+                ):
+                    with pytest.raises(zlink.SubmitError) as raised:
+                        client.send().message(b"ownerless").submit()
+                assert raised.value.result == zlink.SubmitResult.INVALID_STATE
+                assert raised.value.native_errno == 0
+                assert not hasattr(owner, "_runtime_handle")
+                assert owner._entries
+                assert owner._entries_by_id
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize("round_index", range(5))
 def test_immediate_admission_returns_ok_with_completed_stage_before_reply(
     round_index,
@@ -69,29 +118,37 @@ def test_immediate_admission_returns_ok_with_completed_stage_before_reply(
                     finally:
                         received.close()
 
-                    request = (
-                        client.request().message(b"request-ok").timeout(30).submit()
-                    )
-                    assert isinstance(request, zlink.RequestSubmission)
-                    assert request.result == zlink.SubmitResult.OK
-                    assert request.admitted.done()
-                    assert await request.admitted is None
-                    assert not request.reply.done()
+                    with zlink.create_poller() as poller:
+                        poller.add_socket(
+                            client, zlink.PollEventFlag.POLLCOMPLETION, 1
+                        )
+                        request = (
+                            client.request()
+                            .message(b"request-ok")
+                            .timeout(30)
+                            .submit()
+                        )
+                        assert isinstance(request, zlink.RequestSubmission)
+                        assert request.result == zlink.SubmitResult.OK
+                        assert request.admitted.done()
+                        assert await request.admitted is None
+                        assert not request.reply.done()
 
-                    received = _receive(server)
-                    try:
-                        assert received.to_bytes_list() == [b"request-ok"]
-                        received.reply().message(b"reply-ok").submit()
-                    finally:
-                        received.close()
-                    reply = await asyncio.wait_for(
-                        asyncio.shield(request.reply), 5
-                    )
-                    try:
-                        assert [part.to_bytes() for part in reply] == [b"reply-ok"]
-                    finally:
-                        for part in reply:
-                            part.close()
+                        received = _receive(server)
+                        try:
+                            assert received.to_bytes_list() == [b"request-ok"]
+                            received.reply().message(b"reply-ok").submit()
+                        finally:
+                            received.close()
+                        _poll_until(poller, request.reply.done)
+                        reply = await asyncio.wait_for(
+                            asyncio.shield(request.reply), 5
+                        )
+                        try:
+                            assert [part.to_bytes() for part in reply] == [b"reply-ok"]
+                        finally:
+                            for part in reply:
+                                part.close()
 
     asyncio.run(exercise())
 

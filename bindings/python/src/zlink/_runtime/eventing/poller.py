@@ -99,7 +99,7 @@ class NativePoller:
         rc = lib().zlink_poller_add(self._handle, socket._handle, user_data, int(events))
         if rc != 0:
             if owner is not None:
-                owner.transfer_to_runtime(self)
+                owner.release_public(self)
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
         self._socket_registrations[int(socket._handle)] = [socket, int(events), owner]
 
@@ -138,13 +138,13 @@ class NativePoller:
         rc = lib().zlink_poller_modify(self._handle, socket._handle, int(events))
         if rc != 0:
             if old_owner is None and new_owner is not None:
-                new_owner.transfer_to_runtime(self)
+                new_owner.release_public(self)
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
         if registration is not None:
             registration[1] = int(events)
             registration[2] = new_owner
         if old_owner is not None and new_owner is None:
-            old_owner.transfer_to_runtime(self)
+            old_owner.release_public(self)
 
     def modify_fd(self, fd, events):
         rc = lib().zlink_poller_modify_fd(self._handle, int(fd), int(events))
@@ -158,7 +158,7 @@ class NativePoller:
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
         registration = self._socket_registrations.pop(key, None)
         if registration is not None and registration[2] is not None:
-            registration[2].transfer_to_runtime(self)
+            registration[2].release_public(self)
 
     def remove_fd(self, fd):
         rc = lib().zlink_poller_remove_fd(self._handle, int(fd))
@@ -255,7 +255,7 @@ class NativePoller:
         registrations_map.clear()
         for _socket, _events, owner in registrations:
             if owner is not None:
-                owner.transfer_to_runtime(self)
+                owner.release_public(self)
 
     def __enter__(self):
         return self

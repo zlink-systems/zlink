@@ -45,7 +45,6 @@
     X(_release_payload) \
     X(_reply_owner) \
     X(_router_socket) \
-    X(_schedule_runtime_owner_locked) \
     X(_settled) \
     X(_socket) \
     X(_state_changed) \
@@ -1278,6 +1277,16 @@ static PyObject *owner_attempt_send (PyObject *owner, PyObject *entry)
             result = Py_NewRef (Py_None);
         goto done;
     }
+    PyObject *entries_before = PyObject_GetAttr (owner, hp__entries);
+    PyObject *context_before = PyObject_GetAttr (entry, hp_context);
+    PyObject *found_before = entries_before && context_before
+      ? hot_call (entries_before, hp_get, "(O)", context_before) : NULL;
+    Py_XDECREF (entries_before);
+    Py_XDECREF (context_before);
+    if (!found_before)
+        goto done;
+    int initial_attempt = found_before != entry;
+    Py_DECREF (found_before);
     PyObject *target = PyObject_GetAttr (entry, hp_target);
     if (!target) {
         close_storage_list (parts, 0);
@@ -1303,6 +1312,15 @@ static PyObject *owner_attempt_send (PyObject *owner, PyObject *entry)
     if (!PyArg_ParseTuple (submitted, "iiK", &rc, &err, &completion_id))
         goto done;
     attempt_rc = rc;
+    PyObject *public_owner = PyObject_GetAttr (owner, hp__public_owner);
+    if (!public_owner)
+        goto done;
+    int ownerless_wait = initial_attempt
+      && public_owner == Py_None
+      && rc == ZLINK_SUBMIT_BACKPRESSURED
+      && err == EAGAIN
+      && completion_id;
+    Py_DECREF (public_owner);
     if (completion_id) {
         PyObject *entries = PyObject_GetAttr (owner, hp__entries);
         PyObject *context = PyObject_GetAttr (entry, hp_context);
@@ -1321,7 +1339,14 @@ static PyObject *owner_attempt_send (PyObject *owner, PyObject *entry)
         Py_DECREF (tracked);
     }
     PyObject *error = NULL;
-    if (rc == ZLINK_SUBMIT_OK && !completion_id) {
+    if (ownerless_wait) {
+        PyObject *module = PyImport_ImportModule ("zlink.contracts.errors.errors");
+        error = module ? hot_call (module, hp_SubmitError, "ii", ZLINK_SUBMIT_INVALID_STATE, 0) : NULL;
+        Py_XDECREF (module);
+        attempt_rc = ZLINK_SUBMIT_INVALID_STATE;
+        if (!error)
+            goto done;
+    } else if (rc == ZLINK_SUBMIT_OK && !completion_id) {
         PyObject *succeeded = hot_call (entry, hp_succeed_send, NULL);
         if (!succeeded)
             goto done;
@@ -1358,10 +1383,6 @@ static PyObject *owner_attempt_send (PyObject *owner, PyObject *entry)
             result = found == entry ? hot_call (owner, hp__unregister, "(O)", entry) : Py_NewRef (Py_None);
             Py_DECREF (found);
         }
-    } else {
-        PyObject *loop = PyObject_GetAttr (entry, hp_loop);
-        result = loop ? hot_call (owner, hp__schedule_runtime_owner_locked, "(O)", loop) : NULL;
-        Py_XDECREF (loop);
     }
     if (!PyErr_Occurred ()) {
         Py_CLEAR (result);
@@ -1528,14 +1549,8 @@ static PyObject *py_start_request (PyObject *self, PyObject *args)
             raise_submit_error (ZLINK_SUBMIT_INTERNAL_ERROR, EPROTO);
             goto done;
         }
-        PyObject *finish = PyObject_GetAttr (owner, hp__finish_request_submit);
-        PyObject *finish_args = Py_BuildValue ("OK", entry, completion_id);
-        PyObject *finish_kwargs = Py_BuildValue ("{s:O}", "schedule", Py_True);
-        PyObject *finished = finish && finish_args && finish_kwargs
-          ? PyObject_Call (finish, finish_args, finish_kwargs) : NULL;
-        Py_XDECREF (finish);
-        Py_XDECREF (finish_args);
-        Py_XDECREF (finish_kwargs);
+        PyObject *finished = hot_call (owner, hp__finish_request_submit,
+                                       "OK", entry, completion_id);
         if (!finished)
             goto done;
         Py_DECREF (finished);
@@ -1580,8 +1595,7 @@ static PyObject *py_start_request (PyObject *self, PyObject *args)
         if (rc == ZLINK_SUBMIT_BACKPRESSURED && entry_truth (entry, hp_releasable)) {
             if (call_entry_method (owner, "_unregister", entry) < 0)
                 goto done;
-        } else if (call_entry_method (owner, "_schedule_runtime_owner_locked", loop) < 0)
-            goto done;
+        }
     }
     result = Py_BuildValue ("iO", rc, entry);
 done:
