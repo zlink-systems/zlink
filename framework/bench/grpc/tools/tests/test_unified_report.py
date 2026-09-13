@@ -150,6 +150,11 @@ class RunnerContractTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stdout)
                 self.assertIn("unsupported runner argument: --patterns", result.stderr)
 
+    def test_dotnet_build_preserves_configuration_for_external_references(self):
+        runner = (TOOLS.parent / "dotnet" / "run_local.sh").read_text()
+        self.assertIn('-c "${CONFIGURATION}"', runner)
+        self.assertIn('-p:ShouldUnsetParentConfigurationAndPlatform=false', runner)
+
     def test_every_runner_rejects_a_retired_input_by_name(self):
         for runner in self.RUNNERS:
             with self.subTest(runner=runner):
