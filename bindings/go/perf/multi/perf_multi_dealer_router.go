@@ -102,7 +102,7 @@ func runMultiDealerRouterEchoWindow(
 	events := make([]zlink.PollEvent, len(dealers))
 	for i, dealer := range dealers {
 		perfcommon.Must(poller.AddSocket(
-			dealer.socket, perfcommon.ZLinkPollIn, uintptr(i)))
+			dealer.socket, perfcommon.ZLinkPollIn|zlink.PollCompletion, uintptr(i)))
 	}
 
 	payloads := make([][]byte, len(dealers))

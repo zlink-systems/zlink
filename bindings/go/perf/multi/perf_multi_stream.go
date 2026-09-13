@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -88,36 +87,74 @@ func multiStreamExpectedClients(cfg multiConfig) int {
 }
 
 func startMultiStreamEchoServer(server *zlink.StreamSocket) (func() error, <-chan error) {
+	poller := perfcommon.NewSocketPoller(
+		server, perfcommon.ZLinkPollIn|zlink.PollCompletion)
 	dispatch := newMultiStreamRouteDispatch(server)
 	stop := make(chan struct{})
 	done := make(chan struct{})
+	stopResult := make(chan error, 1)
 	go func() {
 		defer close(done)
+		defer poller.Close()
 		var received zlink.StreamPacket
 		defer received.Close()
+		events := make([]zlink.PollEvent, 1)
+		var dispatchDone <-chan error
+		beginStop := func() {
+			if dispatchDone != nil {
+				return
+			}
+			result := make(chan error, 1)
+			dispatchDone = result
+			go func() { result <- dispatch.stop() }()
+		}
 		for {
-			select {
-			case <-stop:
-				return
-			default:
+			if dispatchDone == nil {
+				select {
+				case <-stop:
+					beginStop()
+				default:
+				}
+			} else {
+				select {
+				case err := <-dispatchDone:
+					stopResult <- err
+					return
+				default:
+				}
 			}
-			ok, err := server.RecvPacket(&received, zlink.RecvFlagsDontWait)
+
+			event, err := perfcommon.WaitPollerOne(poller, events, 50*time.Millisecond)
 			if err != nil {
-				dispatch.recordError(err)
-				return
-			}
-			if !ok {
-				runtime.Gosched()
+				if perfcommon.IsTransient(err) {
+					continue
+				}
+				dispatch.recordError(fmt.Errorf("multi stream server poll: %w", err))
+				beginStop()
 				continue
 			}
-			packet := perfcommon.FrameStreamPacketMessage(received.Header(), received.Body())
-			dispatch.enqueue(received.RoutingID(), packet)
+			// Poller.Wait above is the only completion drain. While stopping, keep
+			// giving retained sends poller turns but admit no new packets.
+			if dispatchDone != nil || event == nil ||
+				event.Revents&perfcommon.ZLinkPollIn == 0 {
+				continue
+			}
+			ok, recvErr := server.RecvPacket(&received, zlink.RecvFlagsDontWait)
+			if recvErr != nil {
+				dispatch.recordError(fmt.Errorf("multi stream server recv: %w", recvErr))
+				beginStop()
+				continue
+			}
+			if ok {
+				packet := perfcommon.FrameStreamPacketMessage(received.Header(), received.Body())
+				dispatch.enqueue(received.RoutingID(), packet)
+			}
 		}
 	}()
 	return func() error {
 		close(stop)
 		<-done
-		return dispatch.stop()
+		return <-stopResult
 	}, dispatch.errors
 }
 
@@ -126,9 +163,10 @@ type multiStreamPacketNode struct {
 	next   *multiStreamPacketNode
 }
 
-// A route owns exactly one blocking Submit goroutine. Its linked queue is
+// A route owns exactly one admission-waiting Submit goroutine. Its linked queue is
 // intentionally unbounded: application code imposes no fixed in-flight window,
-// while Core/HWM blocks only this route's sender when it cannot admit more data.
+// while the receive loop's public poller advances only the route whose send
+// Core/HWM could not admit immediately.
 type multiStreamRouteSender struct {
 	dispatch *multiStreamRouteDispatch
 	source   zlink.RoutingID

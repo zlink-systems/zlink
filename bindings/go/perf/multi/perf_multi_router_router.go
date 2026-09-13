@@ -232,7 +232,7 @@ func runMultiRouterRouterEchoWindow(
 	events := make([]zlink.PollEvent, len(clients))
 	for i, client := range clients {
 		perfcommon.Must(poller.AddSocket(
-			client.socket, perfcommon.ZLinkPollIn, uintptr(i)))
+			client.socket, perfcommon.ZLinkPollIn|zlink.PollCompletion, uintptr(i)))
 	}
 
 	payloads := make([][]byte, len(clients))
@@ -304,25 +304,39 @@ func recvMultiRouterRouterReply(
 
 func validateMultiRouterRoutes(serverID zlink.RoutingID, clients []multiRouterClient, msgSize int) {
 	for index, client := range clients {
-		poller := perfcommon.NewSocketPoller(client.socket, perfcommon.ZLinkPollIn)
+		poller := perfcommon.NewSocketPoller(
+			client.socket, perfcommon.ZLinkPollIn|zlink.PollCompletion)
 		events := make([]zlink.PollEvent, 1)
 		deadline := time.Now().Add(perfcommon.MultiReadyTimeout())
 		validated := false
 		probeSubmitted := false
+		var pendingProbe zlink.SendSubmission
 		for time.Now().Before(deadline) {
-			if !probeSubmitted {
+			if !probeSubmitted && pendingProbe == nil {
 				payload := perfcommon.PreparePayload(msgSize)
 				perfcommon.StampProbePayload(payload)
 				message := perfcommon.NewMessage(payload)
-				sendErr := perfcommon.SubmitMeasurementSend(
-					client.socket.SendTo(serverID), message)
+				submission, sendErr := perfcommon.SubmitMeasurementSendSubmission(
+					context.Background(), client.socket.SendTo(serverID), message)
 				if sendErr != nil {
 					if perfcommon.IsReadyProbeTransient(sendErr) {
 						continue
 					}
 					perfcommon.Must(fmt.Errorf("multi router/router route probe[%d] send: %w", index, sendErr))
 				}
-				probeSubmitted = true
+				if submission == nil {
+					perfcommon.Must(fmt.Errorf(
+						"multi router/router route probe[%d] returned no submission", index))
+				}
+				switch submission.Result() {
+				case zlink.SubmitOK:
+					probeSubmitted = true
+				case zlink.SubmitBackpressured:
+					pendingProbe = submission
+				default:
+					perfcommon.Must(fmt.Errorf(
+						"multi router/router route probe[%d] submit result: %d", index, submission.Result()))
+				}
 			}
 
 			wait := time.Until(deadline)
@@ -335,6 +349,17 @@ func validateMultiRouterRoutes(serverID zlink.RoutingID, clients []multiRouterCl
 					continue
 				}
 				perfcommon.Must(fmt.Errorf("multi router/router route probe[%d] poll: %w", index, err))
+			}
+			if pendingProbe != nil {
+				ready, admissionErr := multiSendAdmissionReady(pendingProbe)
+				if ready {
+					if admissionErr != nil {
+						perfcommon.Must(fmt.Errorf(
+							"multi router/router route probe[%d] admission: %w", index, admissionErr))
+					}
+					pendingProbe = nil
+					probeSubmitted = true
+				}
 			}
 			if event == nil || event.Revents&perfcommon.ZLinkPollIn == 0 {
 				continue
@@ -368,70 +393,70 @@ func startMultiRouterRouterEchoServer(
 ) {
 	defer close(done)
 
-	// Reply admission stays unbounded for the whole measurement window: the
-	// blocking Submit terminal is the backpressure signal (D-BP15), never a
-	// deadline. Only the control STOP arms a bound, and only for a reply that
-	// is already waiting on a WRITABLE token. Without it a reply admitted for a
-	// client that has since exited parks in waitSend forever, the main
-	// goroutine never leaves `<-serverDone`, and the socket close that would
-	// release the token never runs.
-	sendCtx, cancelSend := context.WithCancel(context.Background())
-	defer cancelSend()
-	loopDone := make(chan struct{})
-	defer close(loopDone)
-	go func() {
-		select {
-		case <-loopDone:
-			return
-		case <-stop:
-		}
-		window := relayShutdownDrainWindow()
-		timer := time.NewTimer(window)
-		defer timer.Stop()
-		select {
-		case <-loopDone:
-		case <-timer.C:
-			inflight := relayReplySubmitStart.Load() - relayReplySubmitEnd.Load()
-			fmt.Fprintf(
-				os.Stderr,
-				"[perf-multi-relay] shutdown drain expired window_ms=%d reply_submit_inflight=%d\n",
-				window.Milliseconds(), inflight)
-			cancelSend()
-		}
-	}()
-
-	poller := perfcommon.NewSocketPoller(server, perfcommon.ZLinkPollIn)
+	// This receive loop is also the sole completion owner for replies. A
+	// backpressured send remains retained while PollCompletion drives its exact
+	// WRITABLE retry; no background completion drainer is involved.
+	poller := perfcommon.NewSocketPoller(
+		server, perfcommon.ZLinkPollIn|zlink.PollCompletion)
 	defer poller.Close()
 	waitEvents := make([]zlink.PollEvent, 1)
 
 	stopRequested := false
+	var shutdownDeadline time.Time
+	var pendingReply zlink.SendSubmission
 
-	for !stopRequested {
+	for {
 		select {
 		case <-stop:
-			return
+			stopRequested = true
 		default:
+		}
+		if stopRequested && pendingReply == nil {
+			return
+		}
+		if stopRequested && shutdownDeadline.IsZero() {
+			shutdownDeadline = time.Now().Add(relayShutdownDrainWindow())
+		}
+		if pendingReply != nil && !shutdownDeadline.IsZero() && !time.Now().Before(shutdownDeadline) {
+			inflight := relayReplySubmitStart.Load() - relayReplySubmitEnd.Load()
+			fmt.Fprintf(
+				os.Stderr,
+				"[perf-multi-relay] shutdown drain expired window_ms=%d reply_submit_inflight=%d\n",
+				relayShutdownDrainWindow().Milliseconds(), inflight)
+			relayReplySubmitEnd.Add(1)
+			return
 		}
 
 		// The data path remains event driven. The bounded wait only lets the
 		// role-control signal terminate a quiet server without relying on
 		// closing a socket from another goroutine to wake the native poller.
-		event, err := perfcommon.WaitPollerOne(poller, waitEvents, 100*time.Millisecond)
+		wait := 100 * time.Millisecond
+		if !shutdownDeadline.IsZero() && time.Until(shutdownDeadline) < wait {
+			wait = max(time.Until(shutdownDeadline), 0)
+		}
+		event, err := perfcommon.WaitPollerOne(poller, waitEvents, wait)
 		if err != nil {
 			if perfcommon.IsTransient(err) {
 				continue
 			}
 			perfcommon.Must(fmt.Errorf("multi router/router server poll: %w", err))
 		}
-		if event == nil {
-			continue
+		if pendingReply != nil {
+			ready, admissionErr := multiSendAdmissionReady(pendingReply)
+			if ready {
+				relayReplySubmitEnd.Add(1)
+				pendingReply = nil
+				if admissionErr != nil && !perfcommon.IsStaleRoute(admissionErr) {
+					perfcommon.Must(fmt.Errorf("multi router/router server send: %w", admissionErr))
+				}
+			}
 		}
-
-		if event.Revents&perfcommon.ZLinkPollIn == 0 {
+		if pendingReply != nil || stopRequested || event == nil ||
+			event.Revents&perfcommon.ZLinkPollIn == 0 {
 			continue
 		}
 		var received zlink.Received
-		for {
+		for pendingReply == nil {
 			ok, recvErr := server.Recv(&received, zlink.RecvFlagsDontWait)
 			if recvErr != nil {
 				if perfcommon.IsTransient(recvErr) {
@@ -452,20 +477,16 @@ func startMultiRouterRouterEchoServer(
 			_, partErr := perfcommon.MeasurementPayload(parts)
 			if partErr == nil {
 				relayReplySubmitStart.Add(1)
-				replyErr := submitMultiRouterReply(sendCtx, &received)
-				relayReplySubmitEnd.Add(1)
-				if replyErr != nil && sendCtx.Err() != nil {
-					// The bounded post-STOP drain expired. Name the abandoned
-					// reply and leave the loop so teardown releases the token
-					// inside the runner shutdown budget.
-					fmt.Fprintf(
-						os.Stderr,
-						"[perf-multi-relay] reply abandoned after shutdown drain: %v\n", replyErr)
-					stopRequested = true
-					_ = received.Close()
-					break
+				submission, replyErr := submitMultiRouterReply(&received)
+				if replyErr != nil {
+					relayReplySubmitEnd.Add(1)
+					perfcommon.Must(replyErr)
 				}
-				perfcommon.Must(replyErr)
+				if submission == nil {
+					relayReplySubmitEnd.Add(1)
+				} else {
+					pendingReply = submission
+				}
 			}
 			_ = received.Close()
 		}
@@ -473,28 +494,50 @@ func startMultiRouterRouterEchoServer(
 }
 
 func submitMultiRouterReply(
-	ctx context.Context,
 	received *zlink.Received,
-) error {
+) (zlink.SendSubmission, error) {
 	parts := received.Parts()
 	reply := received.Send().MoveMessage(parts[0])
 	for _, part := range parts[1:] {
 		reply = reply.MoveMessage(part)
 	}
-	err := perfcommon.SubmitSend(ctx, reply)
-	if err == nil || perfcommon.IsStaleRoute(err) {
-		return nil
+	submission, err := reply.Submit(context.Background())
+	if err != nil {
+		if perfcommon.IsStaleRoute(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("multi router/router server send: %w", err)
 	}
-	return fmt.Errorf("multi router/router server send: %w", err)
+	if submission == nil {
+		return nil, fmt.Errorf("multi router/router server send returned no submission")
+	}
+	switch submission.Result() {
+	case zlink.SubmitOK:
+		return nil, nil
+	case zlink.SubmitBackpressured:
+		return submission, nil
+	default:
+		return nil, fmt.Errorf(
+			"multi router/router server send returned submit result %d", submission.Result())
+	}
 }
 
 // sendMultiRouterStopToken pushes the wire-level stop token through the
-// supplied router socket addressed to the server. Submit handles WRITABLE
-// retry internally; the outer bound covers other transient shutdown failures.
+// supplied router socket addressed to the server. Its public completion poller
+// drives WRITABLE retry; the outer bound covers other transient failures.
 func sendMultiRouterStopToken(socket *zlink.RouterSocket, serverID zlink.RoutingID) {
+	completionPoller, err := zlink.NewPoller()
+	perfcommon.Must(err)
+	defer completionPoller.Close()
+	perfcommon.Must(completionPoller.AddSocket(socket, zlink.PollCompletion, 0))
+	completionEvents := make([]zlink.PollEvent, 1)
 	for attempt := 0; attempt < perfcommon.StopTokenSendAttempts; attempt++ {
 		sent, err := perfcommon.SubmitRoutedPayload(perfcommon.StopToken, func(message *zlink.Message) error {
-			return perfcommon.SubmitSend(context.Background(), socket.SendTo(serverID).MoveMessage(message))
+			submission, submitErr := socket.SendTo(serverID).MoveMessage(message).Submit(context.Background())
+			if submitErr != nil {
+				return submitErr
+			}
+			return waitMultiSendAdmission(completionPoller, completionEvents, submission)
 		})
 		if err == nil && sent {
 			return

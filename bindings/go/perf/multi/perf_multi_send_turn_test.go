@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"runtime"
 	"testing"
 	"time"
 
@@ -15,11 +14,16 @@ type testSendSubmission struct {
 }
 
 func (s testSendSubmission) Result() zlink.SubmitResult { return s.result }
-func (s testSendSubmission) Admitted(context.Context) error {
-	if s.release != nil {
-		<-s.release
+func (s testSendSubmission) Admitted(ctx context.Context) error {
+	if s.release == nil {
+		return nil
 	}
-	return nil
+	select {
+	case <-s.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func TestMultiSendTurnWaitsForSocketAdmission(t *testing.T) {
@@ -49,13 +53,9 @@ func TestMultiSendTurnWaitsForSocketAdmission(t *testing.T) {
 	}
 
 	close(release[0])
-	deadline := time.Now().Add(time.Second)
-	for len(coordinator.completed) == 0 && time.Now().Before(deadline) {
-		runtime.Gosched()
-	}
-	progressed, err := coordinator.drainReady()
+	progressed, err := coordinator.resumeReady()
 	if err != nil || !progressed {
-		t.Fatalf("drainReady() = (%v, %v), want (true, nil)", progressed, err)
+		t.Fatalf("resumeReady() = (%v, %v), want (true, nil)", progressed, err)
 	}
 	if submitted, err := coordinator.submitRound(stopAt, submit); err != nil || submitted != 1 {
 		t.Fatal("completed socket was not available in the next round")
@@ -70,4 +70,27 @@ func TestMultiSendTurnWaitsForSocketAdmission(t *testing.T) {
 	}
 
 	close(release[1])
+}
+
+func TestMultiSendTurnDoesNotWaitForImmediateAdmission(t *testing.T) {
+	coordinator := newMultiSendTurnCoordinator(1)
+	admitted := false
+	submit := func(int) (zlink.SendSubmission, error) {
+		return immediateTestSendSubmission{admitted: &admitted}, nil
+	}
+
+	if submitted, err := coordinator.submitRound(time.Now().Add(time.Second), submit); err != nil || submitted != 1 {
+		t.Fatalf("submitRound() = (%d, %v), want (1, nil)", submitted, err)
+	}
+	if admitted {
+		t.Fatal("immediately admitted send called Admitted")
+	}
+}
+
+type immediateTestSendSubmission struct{ admitted *bool }
+
+func (s immediateTestSendSubmission) Result() zlink.SubmitResult { return zlink.SubmitOK }
+func (s immediateTestSendSubmission) Admitted(context.Context) error {
+	*s.admitted = true
+	return nil
 }

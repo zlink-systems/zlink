@@ -228,6 +228,19 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 	totalOutstanding := 0
 	pendingAdmissions := 0
 
+	var completionPoller *zlink.Poller
+	completionEvents := make([]zlink.PollEvent, max(1, len(clients)))
+	if len(clients) > 0 && clients[0].target != nil {
+		var pollerErr error
+		completionPoller, pollerErr = zlink.NewPoller()
+		perfcommon.Must(pollerErr)
+		defer completionPoller.Close()
+		for index := range clients {
+			perfcommon.Must(completionPoller.AddSocket(
+				clients[index].target, zlink.PollCompletion, uintptr(index)))
+		}
+	}
+
 	submitOne := func(index int) {
 		countsByClient[index].attempts++
 		payload := perfcommon.PreparePayload(cfg.msgSize)
@@ -303,9 +316,22 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 		}
 	}
 
-	waitForProgress := func(deadline time.Time) {
+	waitForProgress := func(deadline time.Time, progressed bool) {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
+			return
+		}
+		if completionPoller != nil {
+			if progressed {
+				remaining = 0
+			} else if remaining > 50*time.Millisecond {
+				remaining = 50 * time.Millisecond
+			}
+			_, pollErr := completionPoller.Wait(completionEvents, remaining)
+			perfcommon.Must(pollErr)
+			return
+		}
+		if progressed {
 			return
 		}
 		select {
@@ -322,7 +348,6 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 	}
 
 	for time.Now().Before(window.StopAt) {
-		submitted := false
 		for index := range clients {
 			if !time.Now().Before(window.StopAt) {
 				break
@@ -331,12 +356,11 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 				continue
 			}
 			submitOne(index)
-			submitted = true
 		}
 		progressed := drainReady()
-		if !submitted && !progressed {
-			waitForProgress(window.StopAt)
-		}
+		// Even an immediately admitted round gives the public completion poller
+		// a nonblocking turn so request replies and WRITABLE retries are drained.
+		waitForProgress(window.StopAt, progressed)
 	}
 
 	drainTimeout := max(1000*time.Millisecond, timeout*4)
@@ -352,9 +376,7 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 		if !time.Now().Before(drainDeadline) {
 			perfcommon.Must(fmt.Errorf("multi reqrep completion drain timed out with %d outstanding", totalOutstanding))
 		}
-		if !progressed {
-			waitForProgress(drainDeadline)
-		}
+		waitForProgress(drainDeadline, progressed)
 	}
 	var total counts
 	for _, count := range countsByClient {
