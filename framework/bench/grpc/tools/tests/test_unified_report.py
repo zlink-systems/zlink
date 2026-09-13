@@ -142,6 +142,18 @@ class RunnerContractTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stdout)
                 self.assertIn("retired runner input: OUTROOT -> OUTPUT", result.stderr)
 
+    def test_warmup_is_a_time_every_runner_takes_the_same_way(self):
+        # A call count warms each runtime for a different length of time; §3.1 makes warmup
+        # one wall-clock input so the rows spec 7.2 divides were produced the same way.
+        for runner in self.RUNNERS:
+            with self.subTest(runner=runner):
+                result = self.run_runner(runner, WARMUP="1000")
+                self.assertEqual(result.returncode, 2, result.stdout)
+                self.assertIn("retired runner input: WARMUP -> WARMUP_SECONDS", result.stderr)
+                result = self.run_runner(runner, "--warmup-seconds", "0")
+                self.assertEqual(result.returncode, 2, result.stdout)
+                self.assertIn("WARMUP_SECONDS must be a positive integer", result.stderr)
+
     def test_every_runner_rejects_a_payload_size_outside_the_spec(self):
         for runner in self.RUNNERS:
             with self.subTest(runner=runner):

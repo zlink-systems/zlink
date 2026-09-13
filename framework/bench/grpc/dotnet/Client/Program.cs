@@ -65,7 +65,13 @@ static async Task RunWarmupAsync(
     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stopping);
     timeout.CancelAfter(options.Timeout);
     var runId = HeaderRunId(trigger.runId);
-    for (var index = 0; index < options.Warmup; index++)
+    // Warmup lasts the wall-clock time the trigger names, exactly like the active window and
+    // like every other language. A call count warms each runtime for a different length of
+    // time -- 1000 calls was 0.13s here against 20s of JIT warmup in Java -- and spec 7.2
+    // then divides two rows that were not given the same chance to reach steady state.
+    var deadline = Stopwatch.GetTimestamp()
+        + checked((long)(Stopwatch.Frequency * (trigger.durationMs / 1000.0)));
+    for (var index = 0; Stopwatch.GetTimestamp() < deadline; index++)
     {
         var payload = BenchMetricHeaders.CreatePayload(
             trigger.payloadBytes,
@@ -173,7 +179,7 @@ static async Task<BenchResult> RunActiveAsync(
         completed,
         snapshot.Errors,
         target.Errors,
-        options.Warmup,
+        options.WarmupSeconds,
         completed / Math.Max(0.001, elapsedSeconds),
         snapshot.MeanMicros,
         snapshot.P95Micros,
@@ -533,7 +539,7 @@ static async Task WriteResultAsync(
         trigger.pattern,
         trigger.payloadBytes,
         trigger.durationMs,
-        options.Warmup,
+        options.WarmupSeconds,
         options.TriggerUrl,
         trigger.receivedAtUnixMs);
     var report = new BenchReport("with-grpc-cell-v1", metadata, [BenchCell.From(result, cellTrigger, streams)]);
@@ -1263,7 +1269,7 @@ internal sealed record BenchMetadata(
         await RunCommandAsync("git", "rev-parse", "--short", "HEAD"),
         options.Configuration,
         options.Implementation,
-        options.Warmup,
+        options.WarmupSeconds,
         trigger.requestWindow,
         trigger.sendConcurrency,
         options.LatencySampleLimit,
@@ -1384,7 +1390,7 @@ internal sealed record BenchOptions(
     int RequestWindow,
     int SendConcurrency,
     int LatencySampleLimit,
-    int Warmup,
+    int WarmupSeconds,
     int DrainBoundMs,
     string TriggerUrl,
     string StatsUrl,
@@ -1406,7 +1412,7 @@ internal sealed record BenchOptions(
         ParseInt(Value(args, "--request-window"), 100),
         ParseInt(Value(args, "--send-concurrency"), 8),
         ParseInt(Value(args, "--latency-sample-limit"), 200_000),
-        ParseInt(Value(args, "--warmup"), 1000),
+        ParseInt(Value(args, "--warmup-seconds"), 2),
         ParseInt(Value(args, "--drain-bound-ms"), 30_000),
         Value(args, "--trigger-url") ?? throw new ArgumentException("--trigger-url is required."),
         Value(args, "--stats-url") ?? throw new ArgumentException("--stats-url is required."),
@@ -1426,7 +1432,7 @@ internal sealed record BenchOptions(
         if (Scenario is not ("request-serial" or "request-window" or "request-backpressure" or "send-saturation"))
             throw new InvalidOperationException("Unknown scenario.");
         if (PayloadSize < BenchMetricHeaders.HeaderSize || RequestWindow <= 0 || SendConcurrency <= 0
-            || LatencySampleLimit <= 0 || Warmup < 0 || DrainBoundMs <= 0 || Timeout <= TimeSpan.Zero)
+            || LatencySampleLimit <= 0 || WarmupSeconds <= 0 || DrainBoundMs <= 0 || Timeout <= TimeSpan.Zero)
             throw new InvalidOperationException("Numeric benchmark options are invalid.");
         if (RawSocket is not ("router" or "dealer")) throw new InvalidOperationException("RAW_SOCKET must be router or dealer.");
         ValidateHttp(TriggerUrl, nameof(TriggerUrl));

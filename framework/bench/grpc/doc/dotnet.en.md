@@ -43,7 +43,6 @@ Beyond the six inputs of §3.1 this runner reads only the following.
 | Input | Default | Meaning |
 |---|---|---|
 | `CONFIGURATION` | `Release` | build and `dotnet run` configuration |
-| `WARMUP` | `1000` | warmup calls before the active window |
 
 Fixed: request window 100, send concurrency 8, ROUTER raw socket, 300s process bound,
 30s drain bound, 200ms settle quiet period. The build produces `WithGrpcBench.sln` in Release.
