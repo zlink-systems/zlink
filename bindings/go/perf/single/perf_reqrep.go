@@ -64,8 +64,8 @@ func runSingleReqRep(
 	completionPoller, err := zlink.NewPoller()
 	perfcommon.Must(err)
 	defer completionPoller.Close()
-	// PollCompletion transfers the binding's completion-drain ownership to this
-	// poller. The requester goroutine that submits requests also calls Wait.
+	// PollCompletion makes this public poller the completion-drain owner. The
+	// requester goroutine that submits requests also calls Wait.
 	perfcommon.Must(completionPoller.AddSocket(requester, zlink.PollCompletion, 0))
 	completionEvents := make([]zlink.PollEvent, 1)
 	pending := make([]zlink.RequestSubmission, 0, admissionWindow)

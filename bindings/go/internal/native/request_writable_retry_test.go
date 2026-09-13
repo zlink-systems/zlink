@@ -153,6 +153,10 @@ func TestPublicRequestConnectBeforeBindUsesWritable(t *testing.T) {
 		ctx, _ := NewContext()
 		router, _ := ctx.RouterSocket()
 		dealer, _ := ctx.DealerSocket()
+		poller, _ := NewPoller()
+		if err := poller.AddSocket(dealer, PollCompletion, 1); err != nil {
+			t.Fatalf("AddSocket(PollCompletion) error = %v", err)
+		}
 		endpoint := fmt.Sprintf("inproc://go-request-connect-before-bind-%p-%d", ctx, run)
 		if err := dealer.Connect(endpoint); err != nil {
 			t.Fatalf("Connect() error = %v", err)
@@ -163,8 +167,16 @@ func TestPublicRequestConnectBeforeBindUsesWritable(t *testing.T) {
 		if err := router.Bind(endpoint); err != nil {
 			t.Fatalf("Bind() error = %v", err)
 		}
+		events := make([]PollEvent, 1)
+		if _, err := poller.Wait(events, 5*time.Second); err != nil {
+			t.Fatalf("WRITABLE Wait() error = %v", err)
+		}
 		serverReply(t, router, "before-bind", "after-bind")
+		if _, err := poller.Wait(events, 5*time.Second); err != nil {
+			t.Fatalf("reply Wait() error = %v", err)
+		}
 		assertRequestTestResult(t, <-done, "after-bind")
+		_ = poller.Close()
 		_ = dealer.Close()
 		_ = router.Close()
 		_ = ctx.Close()
@@ -175,6 +187,10 @@ func TestPublicRequestCloseCleansWritableToken(t *testing.T) {
 	for run := 0; run < requestWritableRegressionRuns; run++ {
 		ctx, _ := NewContext()
 		dealer, _ := ctx.DealerSocket()
+		poller, _ := NewPoller()
+		if err := poller.AddSocket(dealer, PollCompletion, 1); err != nil {
+			t.Fatalf("AddSocket(PollCompletion) error = %v", err)
+		}
 		endpoint := fmt.Sprintf("inproc://go-request-close-token-%p-%d", ctx, run)
 		if err := dealer.Connect(endpoint); err != nil {
 			t.Fatalf("Connect() error = %v", err)
@@ -210,6 +226,7 @@ func TestPublicRequestCloseCleansWritableToken(t *testing.T) {
 		if remaining != 0 {
 			t.Fatalf("completion entries after close = %d, want 0", remaining)
 		}
+		_ = poller.Close()
 		_ = ctx.Close()
 	}
 }
@@ -219,6 +236,10 @@ func TestPublicRequestAndSendWritableTokensCoexist(t *testing.T) {
 		ctx, _ := NewContext()
 		router, _ := ctx.RouterSocket()
 		dealer, _ := ctx.DealerSocket()
+		poller, _ := NewPoller()
+		if err := poller.AddSocket(dealer, PollCompletion, 1); err != nil {
+			t.Fatalf("AddSocket(PollCompletion) error = %v", err)
+		}
 		endpoint := fmt.Sprintf("inproc://go-request-send-mixed-%p-%d", ctx, run)
 		if err := dealer.Connect(endpoint); err != nil {
 			t.Fatalf("Connect() error = %v", err)
@@ -236,6 +257,10 @@ func TestPublicRequestAndSendWritableTokensCoexist(t *testing.T) {
 
 		if err := router.Bind(endpoint); err != nil {
 			t.Fatalf("Bind() error = %v", err)
+		}
+		events := make([]PollEvent, 1)
+		if _, err := poller.Wait(events, 5*time.Second); err != nil {
+			t.Fatalf("mixed WRITABLE Wait() error = %v", err)
 		}
 		seenRequest := false
 		seenSend := false
@@ -264,10 +289,14 @@ func TestPublicRequestAndSendWritableTokensCoexist(t *testing.T) {
 		if !seenRequest || !seenSend {
 			t.Fatalf("mixed delivery = request:%v send:%v", seenRequest, seenSend)
 		}
+		if _, err := poller.Wait(events, 5*time.Second); err != nil {
+			t.Fatalf("mixed reply Wait() error = %v", err)
+		}
 		assertRequestTestResult(t, <-requestDone, "mixed-reply")
 		if err := <-sendDone; err != nil {
 			t.Fatalf("mixed send error = %v", err)
 		}
+		_ = poller.Close()
 		_ = dealer.Close()
 		_ = router.Close()
 		_ = ctx.Close()

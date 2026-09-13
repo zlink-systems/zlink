@@ -76,6 +76,8 @@ func TestRequestSubmitReturnsReply(t *testing.T) {
 	if err := dealer.Connect(endpoint); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
+	completions := startCompletionPoller(t, dealer)
+	defer completions.close(t)
 	if err := router.SetReceiveTimeout(5 * time.Second); err != nil {
 		t.Fatalf("SetReceiveTimeout() error = %v", err)
 	}
@@ -115,7 +117,7 @@ func TestRequestSubmitReturnsReply(t *testing.T) {
 	}
 }
 
-func TestPollerModifyCompletionDoesNotDisableRequestCompletion(t *testing.T) {
+func TestPollerModifyWithoutCompletionRemovesRequestOwner(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -152,39 +154,14 @@ func TestPollerModifyCompletionDoesNotDisableRequestCompletion(t *testing.T) {
 	if err := poller.ModifySocket(dealer, zlink.PollIn); err != nil {
 		t.Fatalf("ModifySocket(PollIn) error = %v", err)
 	}
-	reply, err := zlink.NewMessage([]byte("pong"))
-	if err != nil {
-		t.Fatalf("NewMessage() error = %v", err)
-	}
-	defer reply.Close()
-
-	serverDone := make(chan error, 1)
-	go func() {
-		var request zlink.Received
-		if _, err := router.Recv(&request, zlink.RecvFlagsNone); err != nil {
-			serverDone <- err
-			return
-		}
-		defer request.Close()
-		serverDone <- request.Reply().Message(reply).Submit(context.Background())
-	}()
-
-	parts, err := requestAndWait(context.Background(), dealer.Request().Bytes([]byte("ping")).Timeout(time.Second))
-	if err != nil {
-		t.Fatalf("request error after owner transfer = %v", err)
-	}
-	zlink.MultipartClose(parts)
-	select {
-	case err := <-serverDone:
-		if err != nil {
-			t.Fatalf("server request handling error = %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatalf("server request handler did not finish")
+	submission, err := dealer.Request().Bytes([]byte("ping")).Timeout(time.Second).Submit(context.Background())
+	var submitErr *zlink.SubmitError
+	if submission != nil || !errors.As(err, &submitErr) || submitErr.Result != zlink.SubmitInvalidState {
+		t.Fatalf("request after removing PollCompletion = (%v, %v), want SubmitInvalidState", submission, err)
 	}
 }
 
-func TestPollerCompletionOwnsRequestProgressAndTransfersBack(t *testing.T) {
+func TestPollerCompletionOwnsRequestProgressAndReleaseRemovesOwner(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -300,14 +277,10 @@ firstComplete:
 	}
 	registered = false
 
-	serverDone = serveRequest("internal-reply")
-	second, err := requestAndWait(context.Background(), dealer.Request().Bytes([]byte("internal-request")).Timeout(2*time.Second))
-	if err != nil {
-		t.Fatalf("request completion did not continue after RemoveSocket: %v", err)
-	}
-	zlink.MultipartClose(second)
-	if err := <-serverDone; err != nil {
-		t.Fatalf("second server request error = %v", err)
+	second, err := dealer.Request().Bytes([]byte("ownerless-request")).Timeout(2 * time.Second).Submit(context.Background())
+	var submitErr *zlink.SubmitError
+	if second != nil || !errors.As(err, &submitErr) || submitErr.Result != zlink.SubmitInvalidState {
+		t.Fatalf("request after RemoveSocket = (%v, %v), want SubmitInvalidState", second, err)
 	}
 }
 

@@ -185,6 +185,14 @@ func TestPublicBackpressuredSendReportsRouteRemoval(t *testing.T) {
 	if err := fillerSubmission.Admitted(context.Background()); err != nil {
 		t.Fatalf("HWM filler Admitted() error = %v", err)
 	}
+	poller, err := zlink.NewPoller()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer poller.Close()
+	if err := poller.AddSocket(router, zlink.PollOut|zlink.PollCompletion, 1); err != nil {
+		t.Fatalf("AddSocket(PollCompletion) error = %v", err)
+	}
 
 	retrySubmission, err := router.SendTo(dealerRID).Bytes([]byte("must-not-send")).Submit(context.Background())
 	if err != nil {
@@ -196,6 +204,10 @@ func TestPublicBackpressuredSendReportsRouteRemoval(t *testing.T) {
 	if err := router.DisconnectRID(dealerRID); err != nil {
 		t.Fatalf("DisconnectRID() error = %v", err)
 	}
+	events := make([]zlink.PollEvent, 1)
+	if _, err := poller.Wait(events, 5*time.Second); err != nil {
+		t.Fatalf("terminal completion Wait() error = %v", err)
+	}
 
 	waitCtx, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelWait()
@@ -206,6 +218,27 @@ func TestPublicBackpressuredSendReportsRouteRemoval(t *testing.T) {
 	}
 	if !errors.Is(err, syscall.ENOENT) {
 		t.Fatalf("terminal send error = %v, want ENOENT", err)
+	}
+}
+
+func TestOwnerlessBackpressuredSendFailsFast(t *testing.T) {
+	ctx := newContext(t)
+	defer ctx.Close()
+	dealer, _ := ctx.DealerSocket()
+	defer dealer.Close()
+	if err := dealer.Connect(inprocEndpoint("ownerless-backpressure")); err != nil {
+		t.Fatal(err)
+	}
+	message := newMessage(t, "ownerless-send")
+	defer message.Close()
+
+	submission, err := dealer.Send().Message(message).Submit(context.Background())
+	var submitErr *zlink.SubmitError
+	if submission != nil || !errors.As(err, &submitErr) || submitErr.Result != zlink.SubmitInvalidState {
+		t.Fatalf("ownerless backpressured Submit() = (%v, %v), want SubmitInvalidState", submission, err)
+	}
+	if got := string(message.Data()); got != "ownerless-send" {
+		t.Fatalf("ownerless backpressured send consumed message = %q", got)
 	}
 }
 

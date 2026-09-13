@@ -106,6 +106,8 @@ func TestRequestReplyCanonicalDealerRouterRoundTrip(t *testing.T) {
 	if err := dealerSocket.Connect(endpoint); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
+	completions := startCompletionPoller(t, dealerSocket)
+	defer completions.close(t)
 
 	done := make(chan struct{})
 	go func() {

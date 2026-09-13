@@ -7,18 +7,6 @@ import (
 	"testing"
 )
 
-func TestImmediateSendRegistrationDoesNotStartRuntimeDrain(t *testing.T) {
-	owner := newCompletionOwner(nil)
-	entry := newSendCompletionEntry(nil, nextCompletionContext())
-	if err := owner.register(entry); err != nil {
-		t.Fatalf("register(send) error = %v", err)
-	}
-	if owner.runtime != nil {
-		t.Fatal("immediate send registration started a completion poller before backpressure")
-	}
-	owner.unregister(entry)
-}
-
 func TestSendTerminalErrorPreservesCauseCategory(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -95,87 +83,6 @@ func TestCompletionEntryPreservesLateRequestAfterWaitCancellation(t *testing.T) 
 		t.Fatalf("late request result = (%v, %v)", parts, err)
 	}
 	MultipartClose(parts)
-}
-
-func TestRuntimeOwnerReusesPollerAcrossCompletedRequests(t *testing.T) {
-	ctx, err := NewContext()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ctx.Close()
-	server, err := ctx.RouterSocket()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Close()
-	client, err := ctx.DealerSocket()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	endpoint := "inproc://completion-owner-reuse"
-	if err := server.Bind(endpoint); err != nil {
-		t.Fatal(err)
-	}
-	if err := client.Connect(endpoint); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() {
-		for i := 0; i < 20; i++ {
-			var r Received
-			ok, err := server.Recv(&r, RecvFlagsNone)
-			if err != nil || !ok {
-				done <- err
-				return
-			}
-			err = r.Reply().Message(r.Parts()[0]).Submit(context.Background())
-			r.Close()
-			if err != nil {
-				done <- err
-				return
-			}
-		}
-		done <- nil
-	}()
-	var first *runtimeCompletionDrain
-	for i := 0; i < 20; i++ {
-		var parts []*Message
-		submission, err := client.Request().Bytes([]byte("echo")).Submit(context.Background())
-		if err == nil {
-			parts, err = submission.Reply(context.Background())
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(parts) != 1 || string(parts[0].Data()) != "echo" {
-			t.Fatal("reply payload changed")
-		}
-		MultipartClose(parts)
-		owner := client.completion
-		owner.mu.Lock()
-		current := owner.runtime
-		owner.mu.Unlock()
-		if current == nil {
-			t.Fatal("completed request discarded socket-owned runtime")
-		}
-		if first == nil {
-			first = current
-		} else if first != current {
-			t.Fatal("request created a second runtime poller")
-		}
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if err := client.Close(); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-first.done:
-	default:
-		t.Fatal("socket close did not join its idle runtime")
-	}
 }
 
 func TestImmediateManagedSendAllocationBudget(t *testing.T) {

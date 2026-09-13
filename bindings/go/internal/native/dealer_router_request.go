@@ -230,6 +230,7 @@ func submitManagedSend(
 		send.payload.close()
 		return nil, &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.ESHUTDOWN)}
 	}
+	hasPublicOwner := owner.publicOwner != nil
 	completionID, err := send.attempt(key)
 	if err == nil && completionID == 0 {
 		owner.mu.Unlock()
@@ -247,26 +248,27 @@ func submitManagedSend(
 		}
 		return nil, err
 	}
+	if !hasPublicOwner {
+		owner.mu.Unlock()
+		send.payload.close()
+		return nil, &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.EBUSY)}
+	}
 	// A token now exists. Publish the entry before a drain can look it up;
 	// immediate admission has no entry, channel, or global handle registration.
 	retry := new(sendRetryState)
 	*retry = send
 	entry := newSendCompletionEntry(retry, key)
-	entry.owner = owner
+	entry.writableWaiting = true
 	entry.attemptMu.Lock()
-	owner.entries[key] = entry
+	if registerErr := owner.registerLocked(entry); registerErr != nil {
+		entry.attemptMu.Unlock()
+		owner.mu.Unlock()
+		send.payload.close()
+		return nil, registerErr
+	}
 	owner.mu.Unlock()
 	send.payload.takeSourceOwnership()
 	entry.publishSendWait(completionID)
-	if activateErr := entry.setWritableWaiting(true); activateErr != nil {
-		entry.mu.Lock()
-		entry.err = activateErr
-		entry.finishAdmittedLocked(activateErr)
-		entry.publicDone = true
-		close(entry.done)
-		entry.mu.Unlock()
-		send.payload.close()
-	}
 	entry.attemptMu.Unlock()
 	return &sendSubmission{result: SubmitBackpressured, entry: entry}, nil
 }
@@ -293,13 +295,17 @@ func submitCompletionRequest(
 	}
 
 	entry := newCompletionEntry(completionRequest)
-	if err := core.completion.register(entry); err != nil {
+	owner := core.completion
+	owner.mu.Lock()
+	if registerErr := owner.registerLocked(entry); registerErr != nil {
+		owner.mu.Unlock()
 		entry.failSubmit()
-		return nil, err
+		return nil, registerErr
 	}
 	if err := contextError(ctx); err != nil {
 		entry.failSubmit()
-		core.completion.unregister(entry)
+		delete(owner.entries, entry.handleKey)
+		owner.mu.Unlock()
 		return nil, err
 	}
 
@@ -321,12 +327,14 @@ func submitCompletionRequest(
 		if completionID == 0 {
 			entry.attemptMu.Unlock()
 			entry.failSubmit()
-			core.completion.unregister(entry)
+			delete(owner.entries, entry.handleKey)
+			owner.mu.Unlock()
 			return nil, &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
 		}
 		entry.finishAdmitted(nil)
 		entry.publish(uint64(completionID))
 		entry.attemptMu.Unlock()
+		owner.mu.Unlock()
 		return &requestSubmission{result: SubmitOK, entry: entry}, nil
 	}
 
@@ -339,11 +347,8 @@ func submitCompletionRequest(
 		if snapshotErr == nil {
 			retry.payload.takeSourceOwnership()
 		}
-		activateErr := entry.setWritableWaiting(true)
-		if snapshotErr != nil || activateErr != nil {
-			if snapshotErr == nil {
-				snapshotErr = requestWaitActivationError(activateErr)
-			}
+		entry.writableWaiting = true
+		if snapshotErr != nil {
 			entry.mu.Lock()
 			if !entry.publicDone {
 				entry.err = snapshotErr
@@ -357,15 +362,18 @@ func submitCompletionRequest(
 			}
 		}
 		entry.attemptMu.Unlock()
+		owner.mu.Unlock()
 		return &requestSubmission{result: SubmitBackpressured, entry: entry}, nil
 	}
 
 	entry.attemptMu.Unlock()
 	if err != nil {
 		entry.failSubmit()
-		core.completion.unregister(entry)
+		delete(owner.entries, entry.handleKey)
+		owner.mu.Unlock()
 		return nil, err
 	}
+	owner.mu.Unlock()
 	return nil, &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
 }
 
