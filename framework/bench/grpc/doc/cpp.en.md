@@ -31,7 +31,7 @@ bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "cpp with-grpc r1" --
 
 # One cell
 bash framework/bench/grpc/cpp/run_local.sh --skip-build --scenario request-serial \
-  --implementation zlink-framework-cpp --payload-sizes 1024 --duration-seconds 2 \
+  --implementation zlink-framework-cpp --payload-sizes 4096 --duration-seconds 2 \
   --output /tmp/cpp-smoke
 ```
 
@@ -73,7 +73,7 @@ after each cell ends.
 | `request-serial` | 1 | 1 | sequential submit/completion on one application thread |
 | `request-window` | 1 | 100 | outstanding set of 100 gRPC async calls / raw coroutines / framework tasks |
 | `request-backpressure` | 1 | none | submits without an application bound, yielding to the completion pump per submit |
-| `send-saturation` | 8 | 1 | one stub per stream for gRPC, a coroutine slot for raw, a task slot for framework |
+| `send-saturation` | 8 | 1 | one shared gRPC stub, a coroutine slot for raw, a task slot for framework |
 
 All three drivers observe submit/completion on one application thread. Framework task completion
 is observed by polling the public `await_ready()`; that CPU is included in `submit_thread_cores`.

@@ -62,7 +62,7 @@ internal sealed class BenchGrpcService(BenchServerMetrics metrics) : BenchServic
     public override Task<BenchPayload> Echo(BenchPayload request, ServerCallContext context)
     {
         metrics.RecordReceived(request);
-        return Task.FromResult(request);
+        return Task.FromResult(BenchMetricHeaders.CreateResponsePayload(request));
     }
 
     public override Task<Empty> Command(BenchPayload request, ServerCallContext context)

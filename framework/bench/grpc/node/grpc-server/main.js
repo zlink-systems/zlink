@@ -11,6 +11,7 @@ const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
 const { argValue } = require('../shared/args');
 const { BenchServerMetrics, startStatsServer } = require('../shared/bench-server-metrics');
+const header = require('../shared/bench-metric-header');
 
 const argv = process.argv.slice(2);
 const url = argValue(argv, '--url', '127.0.0.1:5222');
@@ -30,11 +31,10 @@ const metrics = new BenchServerMetrics();
 const server = new grpc.Server();
 
 server.addService(proto.BenchService.service, {
-  // spec section 2: `Echo` returns the payload, so the client can validate the
-  // 29-byte header that came back (G2).
+  // Request rows return a 4096-byte body carrying the original flow header.
   Echo(call, callback) {
     metrics.record(call.request.body);
-    callback(null, { body: call.request.body });
+    callback(null, { body: header.createResponsePayloadBytes(call.request.body) });
   },
   // FB-002: the send comparison keeps this unary Command returning Empty. No
   // client-streaming RPC is added and no RPC is added to the proto.

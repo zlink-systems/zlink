@@ -30,7 +30,7 @@ bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "dotnet with-grpc r1"
 
 # One cell
 bash framework/bench/grpc/dotnet/run_local.sh --skip-build --scenario request-serial \
-  --implementation zlink-framework-dotnet --payload-sizes 1024 --duration-seconds 2 \
+  --implementation zlink-framework-dotnet --payload-sizes 4096 --duration-seconds 2 \
   --output /tmp/dotnet-smoke
 ```
 

@@ -74,7 +74,7 @@ static async Task RunWarmupAsync(
     for (var index = 0; Stopwatch.GetTimestamp() < deadline; index++)
     {
         var payload = BenchMetricHeaders.CreatePayload(
-            trigger.payloadBytes,
+            trigger.pattern == "send-saturation" ? trigger.payloadBytes : BenchMetricHeaders.RequestPayloadSize,
             runId,
             BenchPhase.Warmup,
             (ulong)index);
@@ -297,8 +297,7 @@ static async Task RunRawRequestBackpressureAsync(
             {
                 pendingAdmission = null;
                 var sequence = next.Next();
-                var payload = BenchMetricHeaders.CreatePayload(
-                    trigger.payloadBytes,
+                var payload = BenchMetricHeaders.CreateRequestPayload(
                     runId,
                     BenchPhase.Active,
                     sequence);
@@ -478,8 +477,7 @@ static async Task ExecuteRequestAsync(
     ulong sequence,
     CancellationToken cancellationToken)
 {
-    var payload = BenchMetricHeaders.CreatePayload(
-        trigger.payloadBytes,
+    var payload = BenchMetricHeaders.CreateRequestPayload(
         runId,
         BenchPhase.Active,
         sequence);
@@ -582,9 +580,7 @@ internal static class BenchTransport
     {
         IBenchTransport transport = options.Implementation switch
         {
-            "grpc-dotnet" => new GrpcBenchTransport(
-                options.TargetEndpoint,
-                options.Scenario == "send-saturation" ? options.SendConcurrency : 1),
+            "grpc-dotnet" => new GrpcBenchTransport(options.TargetEndpoint),
             "zlink-dotnet" => new RawBenchTransport(options),
             "zlink-framework-dotnet" => await FrameworkBenchTransport.CreateAsync(options),
             _ => throw new InvalidOperationException($"Unknown implementation {options.Implementation}.")
@@ -636,14 +632,12 @@ internal sealed class GrpcBenchTransport : IBenchTransport
         MaxConnectionsPerServer = 1
     };
     private readonly GrpcChannel channel;
-    private readonly BenchService.BenchServiceClient[] clients;
+    private readonly BenchService.BenchServiceClient client;
 
-    public GrpcBenchTransport(string endpoint, int streams)
+    public GrpcBenchTransport(string endpoint)
     {
         channel = GrpcChannel.ForAddress(endpoint, new GrpcChannelOptions { HttpHandler = handler });
-        clients = Enumerable.Range(0, Math.Max(1, streams))
-            .Select(_ => new BenchService.BenchServiceClient(channel))
-            .ToArray();
+        client = new BenchService.BenchServiceClient(channel);
     }
 
     public bool Ready { get; private set; }
@@ -651,19 +645,19 @@ internal sealed class GrpcBenchTransport : IBenchTransport
 
     public async ValueTask ProbeAsync(CancellationToken cancellationToken)
     {
-        var payload = BenchMetricHeaders.CreatePayload(1024, 1, BenchPhase.Warmup, 0);
+        var payload = BenchMetricHeaders.CreateRequestPayload(1, BenchPhase.Warmup, 0);
         var reply = await RequestAsync(0, payload, cancellationToken);
         if (!BenchMetricHeaders.TryDecode(reply, out var header)
-            || !BenchMetricHeaders.IsExpected(header, 1, BenchPhase.Warmup, 1024, 0))
+            || !BenchMetricHeaders.IsExpected(header, 1, BenchPhase.Warmup, BenchMetricHeaders.ResponsePayloadSize, 0))
             throw new InvalidOperationException("gRPC target probe returned an invalid payload.");
     }
 
     public async ValueTask<BenchPayload> RequestAsync(
         int stream, BenchPayload payload, CancellationToken cancellationToken) =>
-        await clients[stream % clients.Length].EchoAsync(payload, cancellationToken: cancellationToken);
+        await client.EchoAsync(payload, cancellationToken: cancellationToken);
 
     public async ValueTask SendAsync(int stream, BenchPayload payload, CancellationToken cancellationToken) =>
-        await clients[stream % clients.Length].CommandAsync(payload, cancellationToken: cancellationToken);
+        await client.CommandAsync(payload, cancellationToken: cancellationToken);
 
     public ValueTask DisposeAsync()
     {
@@ -690,10 +684,10 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
 
     public async ValueTask ProbeAsync(CancellationToken cancellationToken)
     {
-        var payload = BenchMetricHeaders.CreatePayload(1024, 1, BenchPhase.Warmup, 0);
+        var payload = BenchMetricHeaders.CreateRequestPayload(1, BenchPhase.Warmup, 0);
         var reply = await RequestAsync(0, payload, cancellationToken);
         if (!BenchMetricHeaders.TryDecode(reply, out var header)
-            || !BenchMetricHeaders.IsExpected(header, 1, BenchPhase.Warmup, 1024, 0))
+            || !BenchMetricHeaders.IsExpected(header, 1, BenchPhase.Warmup, BenchMetricHeaders.ResponsePayloadSize, 0))
             throw new InvalidOperationException("Framework target probe returned an invalid payload.");
     }
 
@@ -744,7 +738,7 @@ internal sealed class RawBenchTransport : IBenchTransport
         if (options.Scenario == "send-saturation")
         {
             // 서버 간 연결은 하나다. `SendConcurrency`는 stream 수이지 연결 수가 아니다.
-            // gRPC 행은 채널 하나를 stub 8개가 공유하고(`GrpcBenchTransport`), framework 행은
+            // gRPC 행은 채널 하나와 stub 하나를 모든 logical stream이 공유하고(`GrpcBenchTransport`), framework 행은
             // RouteMesh node의 socket 하나를 쓴다. raw만 stream마다 ROUTER를 만들면
             // `zlink-framework-<lang> / zlink-<lang>`이 계층 비용이 아니라 연결 수 차이를
             // 재게 된다 (#317).
@@ -772,7 +766,9 @@ internal sealed class RawBenchTransport : IBenchTransport
 
     public async ValueTask ProbeAsync(CancellationToken cancellationToken)
     {
-        var payload = BenchMetricHeaders.CreatePayload(1024, 1, BenchPhase.Warmup, 0);
+        var payload = commands.Length > 0
+            ? BenchMetricHeaders.CreatePayload(BenchMetricHeaders.ResponsePayloadSize, 1, BenchPhase.Warmup, 0)
+            : BenchMetricHeaders.CreateRequestPayload(1, BenchPhase.Warmup, 0);
         if (commands.Length > 0)
         {
             await SendAsync(0, payload, cancellationToken);
@@ -780,7 +776,7 @@ internal sealed class RawBenchTransport : IBenchTransport
         }
         var reply = await RequestAsync(0, payload, cancellationToken);
         if (!BenchMetricHeaders.TryDecode(reply, out var header)
-            || !BenchMetricHeaders.IsExpected(header, 1, BenchPhase.Warmup, 1024, 0))
+            || !BenchMetricHeaders.IsExpected(header, 1, BenchPhase.Warmup, BenchMetricHeaders.ResponsePayloadSize, 0))
             throw new InvalidOperationException("Raw target probe returned an invalid payload.");
     }
 

@@ -20,6 +20,7 @@ const {
 
 const { argValue } = require('../shared/args');
 const { BenchServerMetrics, startStatsServer } = require('../shared/bench-server-metrics');
+const header = require('../shared/bench-metric-header');
 const contract = require('../shared/framework-bench-contract');
 const { createBenchPayloadSerializer } = require('../shared/framework-protobuf');
 
@@ -30,11 +31,10 @@ const metricsUrl = argValue(argv, '--metrics-url', 'http://127.0.0.1:5235');
 const metrics = new BenchServerMetrics();
 
 class EchoHandler {
-  // spec section 2: request patterns echo the payload back so the
-  // client can validate the 29-byte header it sent (G2).
+  // Request rows return a 4096-byte body carrying the original flow header.
   async handle(request) {
     metrics.record(toBuffer(request && request.body));
-    return request;
+    return new contract.BenchPayload(header.createResponsePayloadBytes(toBuffer(request && request.body)));
   }
 }
 Injectable()(EchoHandler);

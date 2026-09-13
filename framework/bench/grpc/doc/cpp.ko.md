@@ -28,7 +28,7 @@ bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "cpp with-grpc r1" --
 
 # 한 셀
 bash framework/bench/grpc/cpp/run_local.sh --skip-build --scenario request-serial \
-  --implementation zlink-framework-cpp --payload-sizes 1024 --duration-seconds 2 \
+  --implementation zlink-framework-cpp --payload-sizes 4096 --duration-seconds 2 \
   --output /tmp/cpp-smoke
 ```
 
@@ -79,7 +79,7 @@ completion을 직접 drain하거나 두 번째 poller를 두지 않는다.
 | 항목 | 값 |
 |---|---|
 | warmup | 5초, 10구간. trigger 원본의 `warmup`은 ms 단위(`5000`) |
-| gRPC source | channel 하나, logical stream당 unary stub 하나, application thread의 `CompletionQueue` |
+| gRPC source | channel 하나, 모든 logical stream이 공유하는 unary stub 하나, application thread의 `CompletionQueue` |
 | gRPC target | synchronous `ServerBuilder` 기본값, insecure loopback |
 | compiler | GNU C++ 13.3.0, C++20, Release `-O3` |
 | gRPC / protobuf | 시스템 1.51.1 / 3.21.12 |

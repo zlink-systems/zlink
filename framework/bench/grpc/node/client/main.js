@@ -94,22 +94,19 @@ function createGrpcTransport(options) {
     keepCase: true, longs: String, enums: String, defaults: true, oneofs: true, bytes: Buffer
   });
   const proto = grpc.loadPackageDefinition(definition).zlink.framework.bench.withgrpc;
-  const streamCount = options.scenario === 'send-saturation' ? options.sendConcurrency : 1;
-  const clients = Array.from({ length: streamCount }, () => new proto.BenchService(
+  const client = new proto.BenchService(
     options.targetEndpoint, grpc.credentials.createInsecure()
-  ));
+  );
   return {
-    request: async (stream, payload) => {
-      const reply = await grpcCall(
-        clients[stream % clients.length], 'Echo', payload, options.requestTimeoutMs
-      );
+    request: async (_stream, payload) => {
+      const reply = await grpcCall(client, 'Echo', payload, options.requestTimeoutMs);
       return reply.body;
     },
-    send: async (stream, payload) => {
-      await grpcCall(clients[stream % clients.length], 'Command', payload, options.requestTimeoutMs);
+    send: async (_stream, payload) => {
+      await grpcCall(client, 'Command', payload, options.requestTimeoutMs);
     },
     close: async () => {
-      for (const client of clients) grpc.closeClient(client);
+      grpc.closeClient(client);
     }
   };
 }
@@ -144,7 +141,7 @@ function createRawTransport(options) {
     options.targetEndpoint
   );
   // 서버 간 연결은 하나다. `sendConcurrency`는 stream 수이지 연결 수가 아니다.
-  // gRPC 행은 채널 하나를 stub 8개가 공유하고 framework 행은 RouteMesh socket 하나를
+  // gRPC 행은 채널 하나와 stub 하나를 모든 logical stream이 공유하고 framework 행은 RouteMesh socket 하나를
   // 쓴다. raw만 stream마다 ROUTER를 만들면 `zlink-framework-<lang> / zlink-<lang>`이
   // 계층 비용이 아니라 연결 수 차이를 재게 된다 (#317).
   const sendSockets = options.scenario === 'send-saturation'

@@ -13,6 +13,8 @@
 //  21  8  send timestamp ns
 
 const HEADER_SIZE = 29;
+const REQUEST_PAYLOAD_SIZE = 64;
+const RESPONSE_PAYLOAD_SIZE = 4096;
 const MAGIC = 0x5a4c4e4b;
 
 const PHASE_WARMUP = 0;
@@ -39,13 +41,22 @@ function createPayloadBytes(payloadSize, runId, phase, sequence) {
   return bytes;
 }
 
-function stamp(bytes, runId, phase, payloadSize, sequence) {
+function stamp(bytes, runId, phase, payloadSize, sequence, sentTimestampNs = nowNs()) {
   bytes.writeUInt32LE(MAGIC, 0);
   bytes.writeUInt32LE(runId >>> 0, 4);
   bytes.writeUInt8(phase, 8);
   bytes.writeUInt32LE(payloadSize >>> 0, 9);
   bytes.writeBigUInt64LE(BigInt(sequence), 13);
-  bytes.writeBigInt64LE(nowNs(), 21);
+  bytes.writeBigInt64LE(sentTimestampNs, 21);
+  return bytes;
+}
+
+function createResponsePayloadBytes(request, payloadSize = RESPONSE_PAYLOAD_SIZE) {
+  const decoded = decode(request);
+  if (decoded === null) throw new Error('bench request has no valid measurement header');
+  const bytes = Buffer.allocUnsafe(payloadSize);
+  bytes.fill(0xab);
+  stamp(bytes, decoded.runId, decoded.phase, payloadSize, decoded.sequence, decoded.sentTimestampNs);
   return bytes;
 }
 
@@ -72,11 +83,14 @@ function isExpected(header, runId, phase, payloadSize, sequence) {
 
 module.exports = {
   HEADER_SIZE,
+  REQUEST_PAYLOAD_SIZE,
+  RESPONSE_PAYLOAD_SIZE,
   MAGIC,
   PHASE_WARMUP,
   PHASE_ACTIVE,
   nowNs,
   createPayloadBytes,
+  createResponsePayloadBytes,
   stamp,
   decode,
   isExpected
