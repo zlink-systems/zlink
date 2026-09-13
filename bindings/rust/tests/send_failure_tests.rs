@@ -103,6 +103,7 @@ fn router_request_to_a_dealer_is_immediately_not_admitted() {
         .unwrap();
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    let _completion_driver = test_support::CompletionPollerDriver::new(&router);
 
     let error = match match router
         .request(&dealer_rid)
@@ -150,6 +151,7 @@ fn send_without_peer_keeps_only_a_payload_free_token_after_drop() {
     let ctx = Context::new().unwrap();
     let sock = ctx.pair_socket().unwrap();
     sock.bind("inproc://sf-try-send-nr").unwrap();
+    let _completion_driver = test_support::CompletionPollerDriver::new(&sock);
     // No peer connected: Core keeps the wait token and the Future retains the
     // payload until this explicit drop.
 

@@ -27,6 +27,7 @@ fn pair_send_recv_roundtrip() {
 
     let client = ctx.pair_socket().unwrap();
     client.connect("inproc://beh-pair").unwrap();
+    let _completion_driver = test_support::CompletionPollerDriver::new(&client);
 
     let msg = Message::try_from(b"pair-payload-42").unwrap();
     await_send(client.send().message(msg).submit()).unwrap();
@@ -45,6 +46,7 @@ fn pair_multipart_send_recv_grows_whole_message_buffer() {
 
     let b = ctx.pair_socket().unwrap();
     b.connect("inproc://beh-pair-multi").unwrap();
+    let _completion_driver = test_support::CompletionPollerDriver::new(&b);
 
     let payloads = (0..10)
         .map(|index| format!("frame-{index}"))
@@ -92,6 +94,8 @@ fn dealer_router_roundtrip() {
     test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
         dealer.connect("inproc://beh-dr").unwrap()
     });
+    let _dealer_completion_driver = test_support::CompletionPollerDriver::new(&dealer);
+    let _router_completion_driver = test_support::CompletionPollerDriver::new(&router);
 
     // Dealer sends to Router
     let msg = Message::try_from(b"request-payload").unwrap();
@@ -128,6 +132,8 @@ fn dealer_recv_reuse_keeps_ordinary_messages_non_replyable() {
     test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
         dealer.connect("inproc://beh-dealer-request-seq").unwrap()
     });
+    let _dealer_completion_driver = test_support::CompletionPollerDriver::new(&dealer);
+    let _router_completion_driver = test_support::CompletionPollerDriver::new(&router);
 
     await_send(
         dealer
@@ -165,6 +171,7 @@ fn router_recv_preserves_routing_id_and_multipart_payload() {
     test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
         dealer.connect("inproc://beh-router-part").unwrap()
     });
+    let _completion_driver = test_support::CompletionPollerDriver::new(&dealer);
 
     await_send(
         dealer
@@ -228,6 +235,7 @@ fn send_without_peer_retains_packet_until_writable_or_drop() {
     let ctx = Context::new().unwrap();
     let sock = ctx.pair_socket().unwrap();
     sock.bind("inproc://beh-try-send").unwrap();
+    let _completion_driver = test_support::CompletionPollerDriver::new(&sock);
     // With no peer, Core returns a wait token but keeps no payload. The Future
     // owns the packet until it is retried or dropped.
 
@@ -350,6 +358,7 @@ fn stream_backpressure_retries_the_retained_packet_after_writable() {
     let mut received = Received::empty();
     assert!(stream.recv(&mut received, RecvFlags::NONE).unwrap());
     let target = *received.routing_id().expect("missing STREAM routing id");
+    let _completion_driver = test_support::CompletionPollerDriver::new(&stream);
 
     let payload = vec![0x73; PAYLOAD_SIZE];
     for _ in 0..4096 {
@@ -407,6 +416,8 @@ fn dealer_router_pull_receive_then_send() {
     dealer_mon.recv().unwrap();
     drop(router_mon);
     drop(dealer_mon);
+    let _dealer_completion_driver = test_support::CompletionPollerDriver::new(&dealer);
+    let _router_completion_driver = test_support::CompletionPollerDriver::new(&router);
 
     // Dealer sends request.
     await_send(
@@ -455,6 +466,8 @@ fn pair_pull_receive_then_send() {
     client_mon.recv().unwrap();
     drop(server_mon);
     drop(client_mon);
+    let _client_completion_driver = test_support::CompletionPollerDriver::new(&client);
+    let _server_completion_driver = test_support::CompletionPollerDriver::new(&server);
 
     // Client sends and receives.
     await_send(

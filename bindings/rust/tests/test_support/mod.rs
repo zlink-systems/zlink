@@ -1,17 +1,57 @@
 use std::future::Future;
 use std::pin::pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
 use zlink::{
-    Context as ZlinkContext, DealerSocket, Message, PairSocket, Received, RecvFlags, RequestResult,
-    RouterSocket, SubmitResult, ZlinkError,
+    Context as ZlinkContext, DealerSocket, Message, POLLCOMPLETION, PairSocket, PollEvent,
+    Pollable, Poller, Received, RecvFlags, RequestResult, RouterSocket, SubmitResult, ZlinkError,
 };
 
 pub(crate) type RequestReplyFuture =
     std::pin::Pin<Box<dyn Future<Output = Result<Vec<Message>, ZlinkError>> + Send>>;
+
+/// Drives a public `PollCompletion` owner for tests whose application work
+/// blocks on another thread instead of calling `Poller::wait` directly.
+pub(crate) struct CompletionPollerDriver {
+    stop: Arc<AtomicBool>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl CompletionPollerDriver {
+    pub(crate) fn new(socket: &dyn Pollable) -> Self {
+        let poller = Poller::new().expect("completion poller creation failed");
+        poller
+            .add_socket(socket, POLLCOMPLETION, 0)
+            .expect("completion owner registration failed");
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = thread::spawn(move || {
+            let mut events = [PollEvent::default()];
+            while !worker_stop.load(Ordering::Acquire) {
+                if poller.wait(&mut events, 10).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            stop,
+            worker: Some(worker),
+        }
+    }
+}
+
+impl Drop for CompletionPollerDriver {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            worker.join().expect("completion poller worker panicked");
+        }
+    }
+}
 
 struct ThreadWake(Thread);
 
@@ -86,7 +126,13 @@ pub(crate) fn request_until_received(
     endpoint: &str,
     payload: &[u8],
     request_timeout: Duration,
-) -> (DealerSocket, SubmitResult, RequestReplyFuture, Received) {
+) -> (
+    DealerSocket,
+    CompletionPollerDriver,
+    SubmitResult,
+    RequestReplyFuture,
+    Received,
+) {
     const READY_TIMEOUT: Duration = Duration::from_secs(5);
 
     let deadline = Instant::now() + READY_TIMEOUT;
@@ -99,6 +145,7 @@ pub(crate) fn request_until_received(
         dealer
             .connect(endpoint)
             .expect("request dealer connect failed");
+        let completion_driver = CompletionPollerDriver::new(&dealer);
         let submission = match dealer
             .request()
             .message(Message::try_from(payload).expect("request payload creation failed"))
@@ -128,7 +175,7 @@ pub(crate) fn request_until_received(
                 .recv(&mut request, RecvFlags::DONT_WAIT)
                 .expect("request barrier receive failed")
             {
-                return (dealer, result, reply, request);
+                return (dealer, completion_driver, result, reply, request);
             }
             assert!(
                 Instant::now() < deadline,

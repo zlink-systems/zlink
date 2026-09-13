@@ -56,39 +56,48 @@ pub(crate) fn submit_routed_request(
 ) -> Result<RequestSubmission, ZlinkError> {
     validate_request(&operation)?;
     let owner = Arc::clone(&operation.completion_owner);
-    let (entry, context) = owner.register_request()?;
-    match submit_request_attempt(&mut operation, &entry, context) {
-        Ok(RequestAttempt::Admitted) => {
-            entry.admission_succeeded();
-            Ok(RequestSubmission {
-                result: SubmitResult::Ok,
-                admitted: Box::pin(std::future::ready(Ok(()))),
-                reply: Box::pin(RequestReplyFuture::new(entry, owner, context)),
-            })
-        }
-        Ok(RequestAttempt::Waiting) => Ok(RequestSubmission {
-            result: SubmitResult::Backpressured,
-            admitted: Box::pin(RequestAdmissionFuture {
-                operation: Some(operation),
-                entry: Arc::clone(&entry),
-                owner: Arc::clone(&owner),
-                context,
-                waiting_for_writable: true,
-                finished: false,
-            }),
-            reply: Box::pin(RequestReplyFuture::new(entry, owner, context)),
-        }),
-        Err(failure) => {
-            if failure.live_token {
-                if entry.detach() {
-                    owner.unregister(context);
+    owner
+        .with_completion_submit(|| {
+            owner.ensure_public_owner()?;
+            let (entry, context) = owner.register_request()?;
+            match submit_request_attempt(&mut operation, &entry, context) {
+                Ok(RequestAttempt::Admitted) => {
+                    entry.admission_succeeded();
+                    Ok(RequestSubmission {
+                        result: SubmitResult::Ok,
+                        admitted: Box::pin(std::future::ready(Ok(()))),
+                        reply: Box::pin(RequestReplyFuture::new(
+                            entry,
+                            Arc::clone(&owner),
+                            context,
+                        )),
+                    })
                 }
-            } else {
-                owner.unregister(context);
+                Ok(RequestAttempt::Waiting) => Ok(RequestSubmission {
+                    result: SubmitResult::Backpressured,
+                    admitted: Box::pin(RequestAdmissionFuture {
+                        operation: Some(operation),
+                        entry: Arc::clone(&entry),
+                        owner: Arc::clone(&owner),
+                        context,
+                        waiting_for_writable: true,
+                        finished: false,
+                    }),
+                    reply: Box::pin(RequestReplyFuture::new(entry, Arc::clone(&owner), context)),
+                }),
+                Err(failure) => {
+                    if failure.live_token {
+                        if entry.detach() {
+                            owner.unregister(context);
+                        }
+                    } else {
+                        owner.unregister(context);
+                    }
+                    Err(failure.error)
+                }
             }
-            Err(failure.error.into())
-        }
-    }
+        })
+        .map_err(Into::into)
 }
 
 pub(crate) fn submit_routed_request_sync(
@@ -109,7 +118,7 @@ pub(crate) fn submit_routed_request_sync(
         owner.unregister(user_context);
         return Err(error.into());
     }
-    Ok(entry.wait_request()?)
+    owner.wait_request_inline(&entry)
 }
 
 /// Managed DONTWAIT REQUEST.
@@ -146,12 +155,14 @@ impl Future for RequestAdmissionFuture {
                 }
             }
 
+            let owner = Arc::clone(&self.owner);
             let context = self.context;
             let entry = Arc::clone(&self.entry);
-            let attempt = {
+            let attempt = owner.with_completion_submit(|| {
+                owner.ensure_public_owner()?;
                 let operation = self.operation.as_mut().expect("active request");
                 submit_request_attempt(operation, &entry, context)
-            };
+            });
             match attempt {
                 Ok(RequestAttempt::Admitted) => {
                     self.operation.take();
@@ -257,6 +268,12 @@ impl RequestAttemptError {
     }
 }
 
+impl From<SubmitError> for RequestAttemptError {
+    fn from(error: SubmitError) -> Self {
+        Self::without_token(error)
+    }
+}
+
 fn validate_request(operation: &RequestOpStorage) -> Result<(), SubmitError> {
     if operation.parts.is_empty() {
         Err(SubmitError::new(
@@ -281,52 +298,50 @@ fn submit_request_attempt(
         .map_or(std::ptr::null(), |rid| rid.as_raw() as *const _);
     let timeout_ms = duration_to_timeout_ms(operation.timeout);
     let mut completion_id = 0;
-    let owner = Arc::clone(&operation.completion_owner);
-    owner
-        .with_submit(|| {
-            let handle = operation.routed.handle();
-            if handle.is_null() {
-                return Err(submit_error_from_errno(libc::ECANCELED));
-            }
-            let (rc, errno) = submit_shared_message(&mut operation.parts, |parts, count| unsafe {
-                ffi::zlink_request(
-                    handle,
-                    target,
-                    parts,
-                    count,
-                    ffi::ZLINK_DONTWAIT,
-                    timeout_ms,
-                    user_context,
-                    &mut completion_id,
-                )
-            })?;
+    let handle = operation.routed.handle();
+    if handle.is_null() {
+        return Err(RequestAttemptError::without_token(submit_error_from_errno(
+            libc::ECANCELED,
+        )));
+    }
+    let (rc, errno) = submit_shared_message(&mut operation.parts, |parts, count| unsafe {
+        ffi::zlink_request(
+            handle,
+            target,
+            parts,
+            count,
+            ffi::ZLINK_DONTWAIT,
+            timeout_ms,
+            user_context,
+            &mut completion_id,
+        )
+    })
+    .map_err(RequestAttemptError::without_token)?;
 
-            if rc == SubmitResult::Ok as i32 && completion_id != 0 {
-                entry.publish_request(completion_id);
-                return Ok(Ok(RequestAttempt::Admitted));
-            }
-            if rc == SubmitResult::Backpressured as i32 && completion_id != 0 {
-                entry.publish_writable(completion_id);
-                return Ok(Ok(RequestAttempt::Waiting));
-            }
-            if completion_id != 0 {
-                entry.publish_writable(completion_id);
-                return Ok(Err(RequestAttemptError {
-                    error: SubmitError::new(SubmitResult::InternalError, libc::EPROTO),
-                    live_token: true,
-                }));
-            }
-            if rc == SubmitResult::Ok as i32 {
-                return Ok(Err(RequestAttemptError::without_token(SubmitError::new(
-                    SubmitResult::InternalError,
-                    libc::EPROTO,
-                ))));
-            }
-            Ok(Err(RequestAttemptError::without_token(
-                submit_error_from_rc(rc, errno),
-            )))
-        })
-        .map_err(RequestAttemptError::without_token)?
+    if rc == SubmitResult::Ok as i32 && completion_id != 0 {
+        entry.publish_request(completion_id);
+        return Ok(RequestAttempt::Admitted);
+    }
+    if rc == SubmitResult::Backpressured as i32 && completion_id != 0 {
+        entry.publish_writable(completion_id);
+        return Ok(RequestAttempt::Waiting);
+    }
+    if completion_id != 0 {
+        entry.publish_writable(completion_id);
+        return Err(RequestAttemptError {
+            error: SubmitError::new(SubmitResult::InternalError, libc::EPROTO),
+            live_token: true,
+        });
+    }
+    if rc == SubmitResult::Ok as i32 {
+        return Err(RequestAttemptError::without_token(SubmitError::new(
+            SubmitResult::InternalError,
+            libc::EPROTO,
+        )));
+    }
+    Err(RequestAttemptError::without_token(submit_error_from_rc(
+        rc, errno,
+    )))
 }
 
 fn submit_request_parts(

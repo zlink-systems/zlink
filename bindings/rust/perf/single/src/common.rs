@@ -154,8 +154,7 @@ thread_local! {
 }
 
 /// Registers the sender socket with a public `Poller` owned by this thread so
-/// `submit_now` drives parked SEND admission stages from that poller's `wait()` (the
-/// application-owned completion path) instead of the binding reactor thread.
+/// `submit_now` drives parked SEND admission stages from that poller's `wait()`.
 pub fn drive_sends_with_poller(socket: &dyn zlink::Pollable) {
     let poller = zlink::Poller::new().expect("sender poller");
     poller
@@ -196,8 +195,8 @@ pub fn submit_now(
             match future.as_mut().poll(&mut context) {
                 Poll::Ready(result) => return result,
                 // Preserve this exact packet and token until WRITABLE drives
-                // its retry: either this thread's public poller pulls it or
-                // the binding reactor unparks this thread.
+                // its retry: this thread's public poller pulls the completion
+                // and wakes the Future.
                 Poll::Pending => wait_for_send_progress(),
             }
         }
