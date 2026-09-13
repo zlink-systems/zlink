@@ -82,7 +82,7 @@ std::vector<message_t> request_submit_operation_t::submit () &&
         throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
 
     auto entry = std::make_shared<detail::completion_entry_t> (nullptr);
-    runtime->completion->register_entry (entry);
+    runtime->completion->register_blocking_entry (entry);
     try {
         operation.flags = send_flags_t::none;
         zlink_completion_id_t completion_id = 0;
@@ -95,6 +95,7 @@ std::vector<message_t> request_submit_operation_t::submit () &&
         runtime->completion->unregister_entry (entry->context ());
         throw;
     }
+    runtime->completion->drain_inline (entry);
     return entry->wait_request ();
 }
 
@@ -126,9 +127,8 @@ request_submission_t request_submit_operation_t::async () &&
         }
         throw;
     }
-    runtime->completion->register_entry (entry);
     try {
-        const bool admitted = entry->start_request ();
+        const bool admitted = runtime->completion->start_async_request (entry);
         detail::async_result_state_t<void> *const admitted_result =
           &bundle->admitted;
         detail::async_result_state_t<std::vector<message_t>> *const reply_result =

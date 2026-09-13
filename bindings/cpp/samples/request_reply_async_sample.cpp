@@ -2,10 +2,8 @@
 
 #include "sample_common.hpp"
 
-// The request suspension is completed by Core from its reply handler callback,
-// so the coroutine resumes in that context. Keep socket and context lifetime
-// with the owner that started the operation: closing them from inside the
-// resumed continuation would tear Core down from one of its own callbacks.
+// The request suspension is completed by the public completion poller, so the
+// coroutine resumes on the thread that drives poller.wait().
 detail::sample_task_t run_request (zlink::dealer_socket_t &dealer,
                                    std::string &reply_payload_out)
 {
@@ -38,6 +36,8 @@ int main ()
     const std::string endpoint = router.options ().last_endpoint ();
     dealer.connect (endpoint);
     assert (detail::wait_connected (router_monitor, dealer_monitor, 2000, &router));
+    zlink::poller_t completion_poller;
+    completion_poller.add (dealer, zlink::poll_event_flag_t::pollcompletion, 1);
 
     // 응답하는 쪽. 요청을 받아 캡슐화된 reply token으로 되돌려준다.
     std::future<void> responder = std::async (std::launch::async, [&] {
@@ -51,7 +51,13 @@ int main ()
     });
 
     std::string reply_payload;
-    run_request (dealer, reply_payload).get ();
+    detail::sample_task_t request = run_request (dealer, reply_payload);
+    zlink::poll_event_t event{};
+    assert (completion_poller.wait (&event, 1,
+                                    std::chrono::milliseconds (2000)) == 1);
+    assert ((static_cast<short> (event.revents)
+             & static_cast<short> (zlink::poll_event_flag_t::pollcompletion)) != 0);
+    request.get ();
     responder.get ();
     assert (reply_payload == detail::k_dealer_router_reply);
 

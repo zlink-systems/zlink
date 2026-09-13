@@ -14,7 +14,6 @@
 #include <memory>
 #include <memory_resource>
 #include <mutex>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -62,6 +61,7 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
     void terminate (int terminal_errno_) noexcept;
     void wait_settled () noexcept;
     std::vector<message_t> wait_request ();
+    bool settled () noexcept;
     kind_t kind () const noexcept { return _kind; }
 
   private:
@@ -89,7 +89,7 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
     bool _settled = false;
 };
 
-class completion_owner_t : public std::enable_shared_from_this<completion_owner_t>
+class completion_owner_t
 {
   public:
     explicit completion_owner_t (void *socket_);
@@ -98,23 +98,24 @@ class completion_owner_t : public std::enable_shared_from_this<completion_owner_
     completion_owner_t (const completion_owner_t &) = delete;
     completion_owner_t &operator= (const completion_owner_t &) = delete;
 
-    void register_entry (const std::shared_ptr<completion_entry_t> &entry_);
+    bool start_async_request (const std::shared_ptr<completion_entry_t> &entry_);
+    void register_blocking_entry (const std::shared_ptr<completion_entry_t> &entry_);
     void register_send_entry (const std::shared_ptr<completion_entry_t> &entry_);
     void unregister_entry (void *submit_context_) noexcept;
-    size_t drain (bool wait_for_publish_, uint64_t runtime_generation_ = 0);
+    size_t drain ();
+    void drain_inline (const std::shared_ptr<completion_entry_t> &entry_);
 
     void transfer_to_public (const void *poller_owner_);
-    void transfer_to_runtime (const void *poller_owner_) noexcept;
+    void release_public (const void *poller_owner_) noexcept;
     void shutdown (int terminal_errno_ = ESHUTDOWN) noexcept;
 
   private:
-    void start_runtime_owner_locked ();
-    void stop_runtime_owner_locked (std::unique_lock<std::mutex> &lock_) noexcept;
-    void runtime_loop (uint64_t runtime_generation_) noexcept;
+    void insert_entry_locked (const std::shared_ptr<completion_entry_t> &entry_);
+    size_t drain_impl (completion_entry_t *inline_target_);
 
     void *_socket;
-    void *_runtime_poller = nullptr;
     std::mutex _mutex;
+    std::mutex _inline_drain_mutex;
     // Entry identities are never pooled: Core may still carry one as callback
     // userdata until its exact completion is drained. Only the unordered-map
     // nodes are recycled under _mutex, avoiding one allocator round trip for
@@ -130,9 +131,6 @@ class completion_owner_t : public std::enable_shared_from_this<completion_owner_
     std::pmr::unordered_map<void *, zlink_completion_t> _early_send_completions;
     std::condition_variable _send_registered;
     const void *_public_owner = nullptr;
-    std::thread _runtime_thread;
-    uint64_t _runtime_generation = 0;
-    bool _runtime_stop = false;
     bool _shutdown = false;
 };
 

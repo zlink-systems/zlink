@@ -8,9 +8,7 @@
 #include <zlink.h>
 
 #include <cerrno>
-#include <chrono>
 #include <exception>
-#include <system_error>
 
 namespace zlink::detail
 {
@@ -510,6 +508,12 @@ std::vector<message_t> completion_entry_t::wait_request ()
     return result;
 }
 
+bool completion_entry_t::settled () noexcept
+{
+    std::lock_guard<std::mutex> lock (_mutex);
+    return _settled;
+}
+
 completion_owner_t::completion_owner_t (void *socket_) :
     _socket (socket_), _entries (&_entry_map_pool),
     _early_send_completions (&_entry_map_pool)
@@ -518,35 +522,39 @@ completion_owner_t::completion_owner_t (void *socket_) :
 
 completion_owner_t::~completion_owner_t () { shutdown (); }
 
-void completion_owner_t::register_entry (const std::shared_ptr<completion_entry_t> &entry_)
+void completion_owner_t::insert_entry_locked (
+  const std::shared_ptr<completion_entry_t> &entry_)
+{
+    if (_inline_entry.get () == entry_.get ())
+        throw submit_error_t (submit_result_t::invalid_state, EBUSY);
+    if (!_inline_entry)
+        _inline_entry = entry_;
+    else {
+        const auto result = _entries.emplace (entry_->context (), entry_);
+        if (!result.second)
+            throw submit_error_t (submit_result_t::invalid_state, EBUSY);
+    }
+}
+
+bool completion_owner_t::start_async_request (
+  const std::shared_ptr<completion_entry_t> &entry_)
 {
     std::lock_guard<std::mutex> lock (_mutex);
     if (_shutdown)
         throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
-    if (_inline_entry.get () == entry_.get ())
+    if (!_public_owner)
         throw submit_error_t (submit_result_t::invalid_state, EBUSY);
-    bool inline_inserted = false;
-    decltype (_entries)::iterator inserted = _entries.end ();
-    if (!_inline_entry) {
-        _inline_entry = entry_;
-        inline_inserted = true;
-    } else {
-        const auto result = _entries.emplace (entry_->context (), entry_);
-        if (!result.second)
-            throw submit_error_t (submit_result_t::invalid_state, EBUSY);
-        inserted = result.first;
-    }
-    try {
-        if (!_public_owner)
-            start_runtime_owner_locked ();
-    }
-    catch (...) {
-        if (inline_inserted)
-            _inline_entry.reset ();
-        else
-            _entries.erase (inserted);
-        throw;
-    }
+    insert_entry_locked (entry_);
+    return entry_->start_request ();
+}
+
+void completion_owner_t::register_blocking_entry (
+  const std::shared_ptr<completion_entry_t> &entry_)
+{
+    std::lock_guard<std::mutex> lock (_mutex);
+    if (_shutdown)
+        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
+    insert_entry_locked (entry_);
 }
 
 void completion_owner_t::register_send_entry (
@@ -558,18 +566,10 @@ void completion_owner_t::register_send_entry (
     std::unique_lock<std::mutex> lock (_mutex);
     if (_shutdown)
         throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
-    if (_inline_entry.get () == entry_.get ())
-        throw submit_error_t (submit_result_t::invalid_state, EBUSY);
-    if (!_inline_entry)
-        _inline_entry = entry_;
-    else {
-        const auto inserted = _entries.emplace (entry_->context (), entry_);
-        if (!inserted.second)
-            throw submit_error_t (submit_result_t::invalid_state, EBUSY);
-    }
     if (!_public_owner)
-        start_runtime_owner_locked ();
-    // Detach before publishing the entry to a concurrent drain. The runtime
+        throw submit_error_t (submit_result_t::invalid_state, EBUSY);
+    insert_entry_locked (entry_);
+    // Detach before publishing the entry to a concurrent drain. The public
     // owner may immediately resubmit it once this lock is released.
     entry_->detach_send_sources ();
     // An early WRITABLE stays with the drain that received it. Registration
@@ -591,21 +591,46 @@ void completion_owner_t::unregister_entry (void *submit_context_) noexcept
     }
 }
 
-size_t completion_owner_t::drain (bool wait_for_publish_,
-                                  uint64_t runtime_generation_)
+size_t completion_owner_t::drain ()
+{
+    return drain_impl (nullptr);
+}
+
+void completion_owner_t::drain_inline (
+  const std::shared_ptr<completion_entry_t> &entry_)
+{
+    std::lock_guard<std::mutex> inline_drain (_inline_drain_mutex);
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        if (_public_owner)
+            return;
+    }
+    if (entry_->settled ())
+        return;
+    try {
+        (void) drain_impl (entry_.get ());
+    }
+    catch (const binding_error_t &failure_) {
+        const int error = failure_.internal_errno ();
+        shutdown (error != 0 ? error : EIO);
+        throw;
+    }
+    catch (...) {
+        shutdown (EIO);
+        throw;
+    }
+}
+
+size_t completion_owner_t::drain_impl (completion_entry_t *inline_target_)
 {
     size_t processed = 0;
     std::vector<std::shared_ptr<completion_entry_t>> retries;
     {
         std::lock_guard<std::mutex> lock (_mutex);
-        if (_shutdown
-            || (!wait_for_publish_
-                && (_runtime_stop || _public_owner
-                    || runtime_generation_ != _runtime_generation)))
+        if (_shutdown)
             return processed;
     }
-    // Ownership transfer joins this entire drain, including its retries.
-    // Stopping between records would strand a WRITABLE already captured here.
+    bool blocking_receive = inline_target_ != nullptr;
     for (;;) {
         {
             std::lock_guard<std::mutex> lock (_mutex);
@@ -615,7 +640,10 @@ size_t completion_owner_t::drain (bool wait_for_publish_,
         zlink_completion_t completion{};
         completion.struct_size = sizeof (completion);
         const zlink_recv_result_t rc = zlink_completion_recv (
-          _socket, &completion, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
+          _socket, &completion,
+          static_cast<zlink_recv_flags_t> (blocking_receive ? ZLINK_RECV_FLAGS_NONE
+                                                           : ZLINK_RECV_FLAGS_DONTWAIT));
+        blocking_receive = false;
         if (rc == ZLINK_RECV_NO_DATA) {
             for (const auto &entry : retries) {
                 {
@@ -625,6 +653,11 @@ size_t completion_owner_t::drain (bool wait_for_publish_,
                 }
                 if (entry->retry ())
                     unregister_entry (entry->context ());
+            }
+            retries.clear ();
+            if (inline_target_ && !inline_target_->settled ()) {
+                blocking_receive = true;
+                continue;
             }
             break;
         }
@@ -687,123 +720,25 @@ size_t completion_owner_t::drain (bool wait_for_publish_,
     return processed;
 }
 
-void completion_owner_t::start_runtime_owner_locked ()
-{
-    if (_runtime_poller || _runtime_thread.joinable () || _shutdown)
-        return;
-    _runtime_poller = zlink_poller_new ();
-    if (!_runtime_poller)
-        throw std::system_error (zlink_errno (), std::generic_category ());
-    const zlink_config_result_t rc = zlink_poller_add (
-      _runtime_poller, _socket, this, static_cast<short> (ZLINK_POLLCOMPLETION));
-    if (rc != ZLINK_CONFIG_OK) {
-        void *poller = _runtime_poller;
-        _runtime_poller = nullptr;
-        (void) zlink_poller_destroy (&poller);
-        throw config_error_t (static_cast<config_result_t> (rc), zlink_errno ());
-    }
-    _runtime_stop = false;
-    const uint64_t runtime_generation = ++_runtime_generation;
-    const std::shared_ptr<completion_owner_t> self = shared_from_this ();
-    try {
-        _runtime_thread = std::thread (
-          [self, runtime_generation] { self->runtime_loop (runtime_generation); });
-    }
-    catch (...) {
-        void *poller = _runtime_poller;
-        _runtime_poller = nullptr;
-        _runtime_stop = true;
-        ++_runtime_generation;
-        (void) zlink_poller_destroy (&poller);
-        throw;
-    }
-}
-
-void completion_owner_t::stop_runtime_owner_locked (
-  std::unique_lock<std::mutex> &lock_) noexcept
-{
-    _runtime_stop = true;
-    ++_runtime_generation;
-    std::thread thread = std::move (_runtime_thread);
-    void *poller = _runtime_poller;
-    _runtime_poller = nullptr;
-    lock_.unlock ();
-    if (thread.joinable ()) {
-        if (thread.get_id () == std::this_thread::get_id ())
-            thread.detach ();
-        else
-            thread.join ();
-    }
-    if (poller)
-        (void) zlink_poller_destroy (&poller);
-    lock_.lock ();
-}
-
-void completion_owner_t::runtime_loop (uint64_t runtime_generation_) noexcept
-{
-    while (true) {
-        void *poller = nullptr;
-        {
-            std::lock_guard<std::mutex> lock (_mutex);
-            if (_runtime_stop || _shutdown
-                || runtime_generation_ != _runtime_generation)
-                return;
-            poller = _runtime_poller;
-        }
-        zlink_poller_event_t event{};
-        zlink_config_result_t error = ZLINK_CONFIG_OK;
-        const int rc = zlink_poller_wait (poller, &event, 1, 25, &error);
-        if (rc > 0) {
-            try {
-                (void) drain (false, runtime_generation_);
-            }
-            catch (const binding_error_t &error_) {
-                shutdown (error_.internal_errno () != 0 ? error_.internal_errno () : EIO);
-                return;
-            }
-            catch (...) {
-                shutdown (EIO);
-                return;
-            }
-        } else if (rc < 0 && zlink_errno () != EINTR && zlink_errno () != EAGAIN) {
-            const int error_code = zlink_errno ();
-            shutdown (error_code != 0 ? error_code : EIO);
-            return;
-        }
-    }
-}
-
 void completion_owner_t::transfer_to_public (const void *poller_owner_)
 {
-    std::unique_lock<std::mutex> lock (_mutex);
+    std::lock_guard<std::mutex> inline_drain (_inline_drain_mutex);
+    std::lock_guard<std::mutex> lock (_mutex);
     if (_shutdown)
         throw config_error_t (config_result_t::invalid_state, ESHUTDOWN);
     if (_public_owner && _public_owner != poller_owner_)
         throw config_error_t (config_result_t::invalid_state, EBUSY);
-    if (!_public_owner) {
-        // Publish public ownership before join drops the mutex so a concurrent
-        // REQUEST registration cannot start a replacement fallback owner.
+    if (!_public_owner)
         _public_owner = poller_owner_;
-        stop_runtime_owner_locked (lock);
-    }
 }
 
-void completion_owner_t::transfer_to_runtime (const void *poller_owner_) noexcept
+void completion_owner_t::release_public (const void *poller_owner_) noexcept
 {
     try {
-        std::unique_lock<std::mutex> lock (_mutex);
+        std::lock_guard<std::mutex> lock (_mutex);
         if (_public_owner != poller_owner_)
             return;
         _public_owner = nullptr;
-        if (_inline_entry || !_entries.empty ()) {
-            try {
-                start_runtime_owner_locked ();
-            }
-            catch (...) {
-                lock.unlock ();
-                shutdown (EIO);
-            }
-        }
     }
     catch (...) {
         shutdown (EIO);
@@ -817,7 +752,6 @@ void completion_owner_t::shutdown (int terminal_errno_) noexcept
         return;
     _shutdown = true;
     _send_registered.notify_all ();
-    stop_runtime_owner_locked (lock);
     std::shared_ptr<completion_entry_t> inline_entry = std::move (_inline_entry);
     auto entries = std::move (_entries);
     _entries.clear ();

@@ -19,16 +19,16 @@ int main ()
     // and context even when this boundary fixture changes the echoed RID.
     fixture.writable (0, "submit-target");
     fixture.completions.back ().completion_id += 100;
-    assert (fixture.owner->drain (true) == 1);
+    assert (fixture.owner->drain () == 1);
     assert (!send_wait.await_ready () && !request_wait.await_ready ());
     assert (fixture.attempts.size () == 2);
 
     fixture.writable (0, "different-peer");
     fixture.writable (1, "");
-    assert (fixture.owner->drain (true) >= 2);
+    assert (fixture.owner->drain () >= 2);
     assert (send_wait.await_ready ());
     send_wait.await_resume ();
-    fixture.owner->drain (true);
+    fixture.owner->drain ();
     assert (request_wait.await_ready ());
     assert (request_wait.await_resume ().empty ());
     assert (fixture.attempts.size () == 4);

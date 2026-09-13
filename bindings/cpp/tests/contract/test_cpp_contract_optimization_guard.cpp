@@ -136,7 +136,7 @@ int main ()
     const std::size_t blocking_terminal = request_reply.find (
       "request_submit_operation_t::submit ()");
     const std::size_t provisional = request_reply.find (
-      "register_entry (entry)", blocking_terminal);
+      "register_blocking_entry (entry)", blocking_terminal);
     const std::size_t native_submit = request_reply.find (
       "submit_raw_request_state (", provisional);
     assert (blocking_terminal != std::string::npos
@@ -148,10 +148,21 @@ int main ()
 
     const std::string completion_owner = read_file (
       cpp_root / "src" / "Runtime" / "Messaging" / "completion_owner.cpp");
+    const std::string completion_owner_header = read_file (
+      cpp_root / "src" / "Runtime" / "Messaging" / "completion_owner.hpp");
     assert (completion_owner.find ("ZLINK_RECV_NO_DATA") != std::string::npos);
     assert (completion_owner.find ("completion_guard_t guard") != std::string::npos);
     assert (completion_owner.find ("settle_if_joined") != std::string::npos);
     assert (completion_owner.find ("_early_send_completions.emplace")
+            != std::string::npos);
+    assert (completion_owner.find ("std::thread") == std::string::npos);
+    assert (completion_owner.find ("runtime_loop") == std::string::npos);
+    assert (completion_owner.find ("zlink_poller_new") == std::string::npos);
+    assert (completion_owner_header.find ("<thread>") == std::string::npos);
+    assert (completion_owner_header.find ("_runtime_thread")
+            == std::string::npos);
+    assert (completion_owner.find ("ZLINK_RECV_FLAGS_NONE") != std::string::npos);
+    assert (request_reply.find ("drain_inline (entry)", blocking_terminal)
             != std::string::npos);
     const std::size_t request_attempt = completion_owner.find (
       "submit_request_attempt (bool initial_,");
