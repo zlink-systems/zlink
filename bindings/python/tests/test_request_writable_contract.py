@@ -29,6 +29,12 @@ def _serve(router, count):
     return received_payloads
 
 
+def _drive_completion(poller, futures):
+    events = zlink.create_poll_events(1)
+    while not all(future.done() for future in futures):
+        poller.wait(events, 50)
+
+
 def _observe_owner(owner):
     native_submit = owner._submit_parts
     native_capture = owner._capture_writable
@@ -92,6 +98,7 @@ def test_request_hwm_waits_for_its_writable_then_retries_and_receives_reply(
         context.options.auto_hwm_enabled = False
         dealer = zlink.create_dealer_socket(context)
         router = zlink.create_router_socket(context)
+        completion_poller = zlink.create_poller()
         tasks = []
         try:
             _configure(dealer, router)
@@ -107,6 +114,9 @@ def test_request_hwm_waits_for_its_writable_then_retries_and_receives_reply(
                 barrier.close()
 
             owner = dealer._completion_owner
+            completion_poller.add_socket(
+                dealer, zlink.PollEventFlag.POLLCOMPLETION, 2
+            )
             submissions, writables, observe_submit, observe_writable = (
                 _observe_owner(owner)
             )
@@ -142,7 +152,10 @@ def test_request_hwm_waits_for_its_writable_then_retries_and_receives_reply(
                 assert blocked["timeout_ms"] == 5000
                 sources[-1][:] = b"z" * len(sources[-1])
 
-                received = await asyncio.to_thread(_serve, router, len(tasks))
+                received, _ = await asyncio.gather(
+                    asyncio.to_thread(_serve, router, len(tasks)),
+                    asyncio.to_thread(_drive_completion, completion_poller, tasks),
+                )
                 replies = await asyncio.gather(*tasks)
 
             assert received == expected
@@ -172,6 +185,7 @@ def test_request_hwm_waits_for_its_writable_then_retries_and_receives_reply(
                     task.cancel()
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
+            completion_poller.close()
             dealer.close()
             router.close()
             context.close()
@@ -185,6 +199,7 @@ def test_connect_before_bind_request_resumes_from_writable(round_index):
         context = zlink.create_context()
         dealer = zlink.create_dealer_socket(context)
         router = zlink.create_router_socket(context)
+        completion_poller = zlink.create_poller()
         task = None
         try:
             _configure(dealer, router)
@@ -193,6 +208,9 @@ def test_connect_before_bind_request_resumes_from_writable(round_index):
             )
             dealer.connect(endpoint)
             owner = dealer._completion_owner
+            completion_poller.add_socket(
+                dealer, zlink.PollEventFlag.POLLCOMPLETION, 2
+            )
             submissions, writables, observe_submit, observe_writable = (
                 _observe_owner(owner)
             )
@@ -215,8 +233,11 @@ def test_connect_before_bind_request_resumes_from_writable(round_index):
                 source[:] = b"z" * len(source)
 
                 router.bind(endpoint)
-                received, reply = await asyncio.gather(
+                received, _, reply = await asyncio.gather(
                     asyncio.to_thread(_serve, router, 1),
+                    asyncio.to_thread(
+                        _drive_completion, completion_poller, [task]
+                    ),
                     task,
                 )
 
@@ -232,6 +253,7 @@ def test_connect_before_bind_request_resumes_from_writable(round_index):
             if task is not None and not task.done():
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+            completion_poller.close()
             dealer.close()
             router.close()
             context.close()
@@ -244,6 +266,7 @@ def test_close_clears_request_wait_token_with_typed_failure(round_index):
     async def exercise():
         context = zlink.create_context()
         dealer = zlink.create_dealer_socket(context)
+        completion_poller = zlink.create_poller()
         task = None
         try:
             dealer.options.linger_ms = 0
@@ -253,6 +276,9 @@ def test_close_clears_request_wait_token_with_typed_failure(round_index):
             )
             dealer.connect(endpoint)
             owner = dealer._completion_owner
+            completion_poller.add_socket(
+                dealer, zlink.PollEventFlag.POLLCOMPLETION, 2
+            )
             submissions, _, observe_submit, _ = _observe_owner(owner)
             with patch.object(
                 owner, "_submit_parts", side_effect=observe_submit
@@ -267,6 +293,7 @@ def test_close_clears_request_wait_token_with_typed_failure(round_index):
                 assert submissions[0]["completion_id"] != 0
                 assert owner._entries
                 assert owner._entries_by_id
+                completion_poller.close()
                 dealer.close()
                 with pytest.raises(zlink.SubmitError) as raised:
                     await task
@@ -280,6 +307,7 @@ def test_close_clears_request_wait_token_with_typed_failure(round_index):
             if task is not None and not task.done():
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+            completion_poller.close()
             dealer.close()
             context.close()
 
@@ -292,6 +320,7 @@ def test_send_and_request_wait_tokens_share_completion_owner(round_index):
         context = zlink.create_context()
         dealer = zlink.create_dealer_socket(context)
         router = zlink.create_router_socket(context)
+        completion_poller = zlink.create_poller()
         send_task = None
         request_task = None
         try:
@@ -301,6 +330,9 @@ def test_send_and_request_wait_tokens_share_completion_owner(round_index):
             )
             dealer.connect(endpoint)
             owner = dealer._completion_owner
+            completion_poller.add_socket(
+                dealer, zlink.PollEventFlag.POLLCOMPLETION, 2
+            )
             submissions, writables, observe_submit, observe_writable = (
                 _observe_owner(owner)
             )
@@ -330,8 +362,13 @@ def test_send_and_request_wait_tokens_share_completion_owner(round_index):
                 assert len({record["completion_id"] for record in blocked}) == 2
 
                 router.bind(endpoint)
-                received, _, reply = await asyncio.gather(
+                received, _, _, reply = await asyncio.gather(
                     asyncio.to_thread(_serve, router, 2),
+                    asyncio.to_thread(
+                        _drive_completion,
+                        completion_poller,
+                        [send_task, request_task],
+                    ),
                     send_task,
                     request_task,
                 )
@@ -362,6 +399,7 @@ def test_send_and_request_wait_tokens_share_completion_owner(round_index):
                 *(task for task in (send_task, request_task) if task is not None),
                 return_exceptions=True,
             )
+            completion_poller.close()
             dealer.close()
             router.close()
             context.close()

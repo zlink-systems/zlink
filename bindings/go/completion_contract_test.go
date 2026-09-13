@@ -27,6 +27,8 @@ func TestReplyTokenRejectsZeroAndDifferentRouterOwner(t *testing.T) {
 	if err := dealer.Connect(endpoint); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
+	completions := startCompletionPoller(t, dealer)
+	defer completions.close(t)
 
 	serverDone := make(chan error, 1)
 	go func() {
@@ -128,6 +130,65 @@ func TestOrdinaryAdmittedSendsReturnAndDeliver(t *testing.T) {
 	}
 }
 
+func TestOwnerlessRequestFailsFastWithoutSubmission(t *testing.T) {
+	ctx := newContext(t)
+	defer ctx.Close()
+	router, _ := ctx.RouterSocket()
+	dealer, _ := ctx.DealerSocket()
+	defer router.Close()
+	defer dealer.Close()
+	endpoint := inprocEndpoint("ownerless-request")
+	if err := router.Bind(endpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err := dealer.Connect(endpoint); err != nil {
+		t.Fatal(err)
+	}
+
+	request := newMessage(t, "ownerless")
+	defer request.Close()
+	submission, err := dealer.Request().Message(request).Timeout(time.Second).Submit(context.Background())
+	var submitErr *zlink.SubmitError
+	if submission != nil || !errors.As(err, &submitErr) || submitErr.Result != zlink.SubmitInvalidState {
+		t.Fatalf("ownerless Request().Submit() = (%v, %v), want (nil, SubmitInvalidState)", submission, err)
+	}
+	if got := string(request.Data()); got != "ownerless" {
+		t.Fatalf("ownerless request consumed message = %q", got)
+	}
+	var received zlink.Received
+	if ok, err := router.Recv(&received, zlink.RecvFlagsDontWait); err != nil || ok {
+		t.Fatalf("ownerless request reached peer = (%v, %v), want (false, nil)", ok, err)
+	}
+
+	completions := startCompletionPoller(t, dealer)
+	defer completions.close(t)
+	serverDone := make(chan error, 1)
+	go func() {
+		var request zlink.Received
+		if _, err := router.Recv(&request, zlink.RecvFlagsNone); err != nil {
+			serverDone <- err
+			return
+		}
+		defer request.Close()
+		serverDone <- request.Reply().Message(newMessage(t, "owned-reply")).Submit(context.Background())
+	}()
+	submission, err = dealer.Request().Message(request).Timeout(time.Second).Submit(context.Background())
+	if err != nil {
+		t.Fatalf("owned Request().Submit() error = %v", err)
+	}
+	parts, err := submission.Reply(context.Background())
+	if err != nil {
+		t.Fatalf("owned Request().Reply() error = %v", err)
+	}
+	defer zlink.MultipartClose(parts)
+	if len(parts) != 1 || string(parts[0].Data()) != "owned-reply" {
+		t.Fatalf("owned reply = %v", parts)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("owned server error = %v", err)
+	}
+}
+
 func TestCanceledRequestLateResultIsCleanedAndOwnerContinues(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
@@ -142,6 +203,8 @@ func TestCanceledRequestLateResultIsCleanedAndOwnerContinues(t *testing.T) {
 	if err := dealer.Connect(endpoint); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
+	completions := startCompletionPoller(t, dealer)
+	defer completions.close(t)
 
 	serverDone := make(chan error, 1)
 	go func() {

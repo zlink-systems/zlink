@@ -101,6 +101,7 @@ class CompletionBatchContractTest {
                 receiverPoller.add(receiver, 1, PollEventFlags.POLLIN);
                 PollEvents events = new PollEvents(1);
                 for (int round = 0; round < 3; round++) {
+                    handover.add(sender, 2, PollEventFlags.POLLCOMPLETION);
                     java.util.concurrent.CompletableFuture<Void> pending = null;
                     int submitted = 0;
                     for (int i = 0; i < 1000; i++) {
@@ -117,16 +118,21 @@ class CompletionBatchContractTest {
                     }
                     assertTrue(submitted < 1000, "fill must reach backpressure");
                     for (int i = 0; i < submitted; i++) {
+                        handover.wait(events, Duration.ofMillis(25));
                         assertEquals(1, receiverPoller.wait(events,
                             Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS)));
                         assertTrue(receiver.recv(received, RecvFlags.DONT_WAIT));
                         assertEquals(i, received.firstPart().readIntLe(0));
                         received.close();
                     }
-                    pending.get(TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-                    // Transfer waits for the old runtime owner to exit. Removing
-                    // this owner leaves the next episode to the ordinary runtime.
-                    handover.add(sender, 2, PollEventFlags.POLLCOMPLETION);
+                    while (!pending.isDone()) {
+                        handover.wait(events, Duration.ofMillis(
+                            TestSupport.DEFAULT_TIMEOUT_MS));
+                    }
+                    pending.get(TestSupport.DEFAULT_TIMEOUT_MS,
+                        TimeUnit.MILLISECONDS);
+                    // Removing PollCompletion leaves the socket ownerless until
+                    // the next round explicitly registers the public owner.
                     handover.remove(sender);
                 }
             }

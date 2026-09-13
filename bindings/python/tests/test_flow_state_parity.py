@@ -12,6 +12,7 @@ import time as _time
 import unittest
 
 import zlink
+from completion_poller import CompletionPollerDriver
 
 
 def _connected_pair(ctx, endpoint):
@@ -74,7 +75,8 @@ class ReceiveFlowStateDealerRouterTests(unittest.TestCase):
                         for part in parts:
                             part.close()
 
-                asyncio.run(exchange())
+                with CompletionPollerDriver(dealer):
+                    asyncio.run(exchange())
 
 
 class ReceiveFlowStateUnsupportedSocketTests(unittest.TestCase):

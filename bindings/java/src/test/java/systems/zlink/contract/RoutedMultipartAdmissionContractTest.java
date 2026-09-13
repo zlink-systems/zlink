@@ -17,6 +17,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import systems.zlink.TestSupport;
+import systems.zlink.CompletionPollerDriver;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
@@ -36,7 +37,9 @@ class RoutedMultipartAdmissionContractTest {
         try (Context context = Zlink.createContext();
              RouterSocket router = context.createRouterSocket();
              DealerSocket dealer = context.createDealerSocket();
-             ExecutorService server = Executors.newSingleThreadExecutor()) {
+             ExecutorService server = Executors.newSingleThreadExecutor();
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(dealer)) {
             String endpoint = TestSupport.inprocEndpoint(
                 "routed-multipart-admission");
             dealer.setRoutingId(RoutingId.from("multipart-client"));
@@ -86,7 +89,9 @@ class RoutedMultipartAdmissionContractTest {
         try (Context context = Zlink.createContext();
              RouterSocket router = context.createRouterSocket();
              DealerSocket dealer = context.createDealerSocket();
-             ExecutorService workers = Executors.newFixedThreadPool(threadCount)) {
+             ExecutorService workers = Executors.newFixedThreadPool(threadCount);
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(dealer)) {
             String endpoint = TestSupport.inprocEndpoint(
                 "concurrent-routed-multipart-admission");
             dealer.setRoutingId(RoutingId.from("multipart-client"));

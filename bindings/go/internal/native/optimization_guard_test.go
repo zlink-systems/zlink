@@ -48,6 +48,30 @@ func TestCompletionCleanupHasOneNativeCloseSite(t *testing.T) {
 	}
 }
 
+func TestCompletionProgressHasNoRuntimeBackgroundOwner(t *testing.T) {
+	path := filepath.Join(bindingRoot(t), "completion_owner.go")
+	bodyBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(bodyBytes)
+	for _, forbidden := range []string{
+		"runtimeCompletionDrain",
+		"runtimeLoop",
+		"startRuntime",
+		"go o.",
+		"zlink_poller_new",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("completion owner contains background drain token %q", forbidden)
+		}
+	}
+	if !strings.Contains(body, "publicOwner *Poller") ||
+		!strings.Contains(body, "SubmitInvalidState") {
+		t.Fatal("completion owner must require the public poller for async progress")
+	}
+}
+
 func bindingRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)

@@ -18,17 +18,19 @@ type routedRecvSocket interface {
 func runSingleRoutedOneWay(
 	cfg benchmarkConfig,
 	receiver routedRecvSocket,
-	sendActive func(*zlink.Message) (bool, error),
-	sendStop func(*zlink.Message) error,
+	sender zlink.SocketTarget,
+	sendActive func(*zlink.Message) (zlink.SendSubmission, error),
+	sendStop func(*zlink.Message) (zlink.SendSubmission, error),
 ) perfcommon.Result {
-	return runSingleRoutedOneWayWithTransient(cfg, receiver, sendActive, sendStop, perfcommon.IsTransient)
+	return runSingleRoutedOneWayWithTransient(cfg, receiver, sender, sendActive, sendStop, perfcommon.IsTransient)
 }
 
 func runSingleRoutedOneWayWithTransient(
 	cfg benchmarkConfig,
 	receiver routedRecvSocket,
-	sendActive func(*zlink.Message) (bool, error),
-	sendStop func(*zlink.Message) error,
+	sender zlink.SocketTarget,
+	sendActive func(*zlink.Message) (zlink.SendSubmission, error),
+	sendStop func(*zlink.Message) (zlink.SendSubmission, error),
 	isTransient func(error) bool,
 ) perfcommon.Result {
 	if isTransient == nil {
@@ -41,10 +43,16 @@ func runSingleRoutedOneWayWithTransient(
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
+		completionPoller := perfcommon.NewSocketPoller(sender, zlink.PollCompletion)
+		defer completionPoller.Close()
+		completionEvents := make([]zlink.PollEvent, 1)
 		sequence := perfcommon.NextMetricSequence()
 		for time.Now().Before(window.StopAt) {
 			message := perfcommon.NewActiveMessageWithSequence(cfg.msgSize, sequence)
-			sent, err := sendActive(message)
+			submission, err := sendActive(message)
+			if err == nil {
+				err = admitSingleOneWaySend(completionPoller, completionEvents, submission)
+			}
 			if err != nil {
 				_ = message.Close()
 				if isTransient(err) {
@@ -57,14 +65,15 @@ func runSingleRoutedOneWayWithTransient(
 				senderDone <- err
 				return
 			}
-			if !sent {
-				_ = message.Close()
-				perfcommon.PollIdle(time.Millisecond)
-				continue
-			}
 			sequence = perfcommon.NextMetricSequence()
 		}
-		if !sendStopTokenSingle(sendStop, isTransient) {
+		if !sendStopTokenSingle(func(message *zlink.Message) error {
+			submission, err := sendStop(message)
+			if err != nil {
+				return err
+			}
+			return admitSingleOneWaySend(completionPoller, completionEvents, submission)
+		}, isTransient) {
 			senderDone <- fmt.Errorf("single routed stop token send failed")
 			return
 		}

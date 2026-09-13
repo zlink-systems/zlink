@@ -8,6 +8,7 @@ import systems.zlink.contracts.core.ContextOptions;
 import systems.zlink.contracts.core.CoreHwmBudgetSnapshot;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
+import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.sockets.RecvFlags;
 import java.lang.reflect.Method;
 import java.time.Duration;
@@ -23,25 +24,27 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class ContextContractTest {
-    @ParameterizedTest(name = "completion pump cleanup after {0} shutdown calls")
+    @ParameterizedTest(name = "public owner cleanup after {0} shutdown calls")
     @ValueSource(ints = {0, 1, 2})
     @Timeout(10)
-    public void closeReleasesCompletionPumpAfterShutdown(int shutdownCalls) {
+    public void closeReleasesPublicOwnerAfterShutdown(int shutdownCalls) {
         TestSupport.assumeNative();
 
         try (Context context = Zlink.createContext()) {
             try (var router = context.createRouterSocket();
-                 var dealer = context.createDealerSocket()) {
+                 var dealer = context.createDealerSocket();
+                 var completions = Zlink.createPoller()) {
                 Duration timeout = Duration.ofSeconds(2);
                 String endpoint = TestSupport.inprocEndpoint("context-close");
                 router.options().recvTimeout(timeout);
                 router.bind(endpoint);
                 dealer.connect(endpoint);
+                completions.add(dealer, 1, PollEventFlags.POLLCOMPLETION);
                 dealer.request().message(Message.from("request"))
                     .timeout(timeout).submit();
                 try (Received received = new Received()) {
                     assertTrue(router.recv(received, RecvFlags.NONE),
-                        "request must be received before completion pump teardown");
+                        "request must be received before public owner teardown");
                 }
             }
 

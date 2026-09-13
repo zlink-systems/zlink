@@ -3,10 +3,11 @@
 #[path = "sample_support.rs"]
 mod sample_support;
 
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use zlink::{Context, Message, RoutingId, SocketMonitor};
+use zlink::{Context, Message, POLLCOMPLETION, PollEvent, Poller, RoutingId, SocketMonitor};
 
 fn main() {
     // --8<-- [start:doc]
@@ -62,6 +63,21 @@ fn main() {
         router_thread
     });
 
+    // Async request completion is owned only by a caller-driven public poller.
+    let completion_poller = Poller::new().expect("completion poller failed");
+    completion_poller
+        .add_socket(&dealer_socket, POLLCOMPLETION, 0)
+        .expect("completion owner registration failed");
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let completion_thread = thread::spawn(move || {
+        let mut events = [PollEvent::default()];
+        while stop_rx.try_recv().is_err() {
+            completion_poller
+                .wait(&mut events, 10)
+                .expect("completion poller wait failed");
+        }
+    });
+
     let submission = dealer_socket
         .request()
         .message(Message::try_from(b"ping").expect("request message failed"))
@@ -71,6 +87,10 @@ fn main() {
     sample_support::block_on(submission.admitted).expect("request admission failed");
     let reply = sample_support::block_on(submission.reply).expect("request reply failed");
     assert_eq!(reply[0].as_str().unwrap_or("?"), "pong");
+    stop_tx.send(()).expect("completion stop failed");
+    completion_thread
+        .join()
+        .expect("completion poller thread failed");
     drop(request_handler.join().expect("request handler failed"));
 
     println!("[dealer-router/request-reply/future] send: \"ping\" -> recv: \"pong\"");

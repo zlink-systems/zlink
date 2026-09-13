@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: MPL-2.0
 
-"""Socket-local pull completion ownership for Core 0.17.0 operations."""
+"""Socket-local pull completion ownership for Core operations."""
 
 import asyncio
 import ctypes
 import errno
-import socket as _socket
 import threading
 
 from ..._native.ffi import (
@@ -17,7 +16,6 @@ from ..._native.ffi import (
     ZLINK_SEND_TERMINAL,
     ZlinkCompletion,
     ZlinkMsg,
-    ZlinkPollerEvent,
     lib,
 )
 from ...contracts.errors.codes import ConfigResult, ErrorCode
@@ -27,7 +25,6 @@ from ...contracts.errors.errors import (
     RequestError,
     SubmitError,
 )
-from ...contracts.eventing.codes import PollEventFlag, PollSourceKind
 from ...contracts.sockets.codes import RecvResult, RequestResult, SubmitResult
 from ..handles.native_support import (
     _clone_native_msg,
@@ -547,20 +544,14 @@ class CompletionOwner:
         self._lock = threading.RLock()
         self._state_changed = threading.Condition(self._lock)
         self._drain_lock = threading.Lock()
-        self._poll_wait_lock = threading.Lock()
+        self._inline_drain_lock = threading.Lock()
         self._entries = {}
         self._entries_by_id = {}
         self._public_owner = None
-        self._runtime_poller = None
-        self._runtime_loop = None
-        self._runtime_handle = None
-        self._wake_reader = None
-        self._wake_writer = None
-        self._sync_waiters = 0
         self._closing_entries = []
         self._shutdown = False
 
-    def _register(self, entry, *, schedule=False):
+    def _register(self, entry):
         with self._lock:
             if self._shutdown:
                 raise SubmitError(
@@ -568,8 +559,6 @@ class CompletionOwner:
                     getattr(errno, "ESHUTDOWN", errno.ECANCELED),
                 )
             self._entries[entry.context] = entry
-            if schedule:
-                self._schedule_runtime_owner_locked(entry.loop)
 
     def _unregister(self, entry):
         with self._lock:
@@ -577,8 +566,6 @@ class CompletionOwner:
             completion_id = int(entry.completion_id)
             if self._entries_by_id.get(completion_id) is entry:
                 self._entries_by_id.pop(completion_id, None)
-            if not self._entries:
-                self._cancel_runtime_callback_locked()
             self._state_changed.notify_all()
 
     def _track_native_wait_locked(self, entry):
@@ -597,142 +584,7 @@ class CompletionOwner:
         if self._entries_by_id.get(completion_id) is entry:
             self._entries_by_id.pop(completion_id, None)
 
-    def _select_runtime_loop_locked(self, preferred=None):
-        candidates = [preferred]
-        candidates.extend(entry.loop for entry in self._entries.values())
-        for loop in candidates:
-            if loop is not None and not loop.is_closed() and loop.is_running():
-                return loop
-        return None
-
-    def _schedule_runtime_owner_locked(self, preferred=None):
-        if self._runtime_handle is not None:
-            thread = self._runtime_handle
-            loop = self._runtime_loop
-            if (
-                thread.is_alive()
-                and loop is not None
-                and not loop.is_closed()
-                and loop.is_running()
-            ):
-                return
-            self._cancel_runtime_callback_locked()
-        if (
-            self._public_owner is not None
-            or self._sync_waiters != 0
-            or self._shutdown
-            or not self._entries
-        ):
-            return
-        loop = self._select_runtime_loop_locked(preferred)
-        if loop is None:
-            return
-        try:
-            self._ensure_runtime_poller_locked()
-        except Exception:
-            self._fail_runtime_wait(lib().zlink_errno())
-            return
-        self._runtime_loop = loop
-        try:
-            thread = threading.Thread(
-                target=self._runtime_wait_loop,
-                name="zlink-python-completion",
-                daemon=True,
-            )
-            self._runtime_handle = thread
-            thread.start()
-        except RuntimeError:
-            self._runtime_loop = None
-            self._runtime_handle = None
-
-    def _cancel_runtime_callback_locked(self):
-        self._runtime_handle = None
-        self._runtime_loop = None
-        self._signal_runtime_wait_locked()
-
-    def _ensure_wake_pair_locked(self):
-        if self._wake_reader is not None:
-            return
-        reader, writer = _socket.socketpair()
-        reader.setblocking(False)
-        writer.setblocking(False)
-        self._wake_reader = reader
-        self._wake_writer = writer
-
-    def _signal_runtime_wait_locked(self):
-        writer = self._wake_writer
-        if writer is None:
-            return
-        try:
-            writer.send(b"\0")
-        except (BlockingIOError, OSError):
-            pass
-
-    def _clear_runtime_wake(self):
-        with self._lock:
-            reader = self._wake_reader
-        if reader is None:
-            return
-        while True:
-            try:
-                if not reader.recv(256):
-                    return
-            except BlockingIOError:
-                return
-            except OSError:
-                return
-
-    def _ensure_runtime_poller_locked(self):
-        if self._runtime_poller is not None:
-            return
-        poller = lib().zlink_poller_new()
-        if not poller:
-            raise OSError(lib().zlink_errno(), "zlink_poller_new failed")
-        self._ensure_wake_pair_locked()
-        # Every WRITABLE record also holds POLLCOMPLETION level-ready. Watching
-        # only that bit prevents an unrelated socket-wide POLLOUT state from
-        # waking a synchronous REQUEST waiter before its completion exists.
-        events = int(PollEventFlag.POLLCOMPLETION)
-        rc = lib().zlink_poller_add(poller, self._socket._handle, None, events)
-        if rc != int(ConfigResult.OK):
-            native_errno = lib().zlink_errno()
-            handle = ctypes.c_void_p(poller)
-            lib().zlink_poller_destroy(ctypes.byref(handle))
-            _raise_result_error(ConfigError, ConfigResult, rc, native_errno)
-        rc = lib().zlink_poller_add_fd(
-            poller,
-            self._wake_reader.fileno(),
-            None,
-            int(PollEventFlag.POLLIN),
-        )
-        if rc != int(ConfigResult.OK):
-            native_errno = lib().zlink_errno()
-            handle = ctypes.c_void_p(poller)
-            lib().zlink_poller_destroy(ctypes.byref(handle))
-            _raise_result_error(ConfigError, ConfigResult, rc, native_errno)
-        self._runtime_poller = poller
-
-    def _stop_runtime_owner_locked(self):
-        self._cancel_runtime_callback_locked()
-        poller = self._runtime_poller
-        self._runtime_poller = None
-        if poller:
-            handle = ctypes.c_void_p(poller)
-            lib().zlink_poller_destroy(ctypes.byref(handle))
-
-    def _close_wake_pair_locked(self):
-        reader = self._wake_reader
-        writer = self._wake_writer
-        self._wake_reader = None
-        self._wake_writer = None
-        for endpoint in (reader, writer):
-            if endpoint is not None:
-                try:
-                    endpoint.close()
-                except OSError:
-                    pass
-
-    def _fail_runtime_wait(self, native_errno):
+    def _fail_drain_wait(self, native_errno):
         with self._lock:
             entries = list(self._entries.values())
         for entry in entries:
@@ -757,84 +609,34 @@ class CompletionOwner:
         with self._lock:
             self._state_changed.notify_all()
 
-    def _runtime_wait_loop(self):
-        """Block on Core progress; the wake FD handles ownership changes."""
-
-        current = threading.current_thread()
-        while True:
-            with self._lock:
-                if (
-                    self._runtime_handle is not current
-                    or self._shutdown
-                    or self._public_owner is not None
-                    or self._sync_waiters != 0
-                    or not self._entries
-                ):
-                    return
-            with self._poll_wait_lock:
-                with self._lock:
-                    if (
-                        self._runtime_handle is not current
-                        or self._shutdown
-                        or self._public_owner is not None
-                        or self._sync_waiters != 0
-                        or not self._entries
-                    ):
-                        return
-                    poller = self._runtime_poller
-                native_event = ZlinkPollerEvent()
-                error_out = ctypes.c_int()
-                rc = lib().zlink_poller_wait(
-                    poller,
-                    ctypes.byref(native_event),
-                    1,
-                    -1,
-                    ctypes.byref(error_out),
-                )
-                native_errno = lib().zlink_errno() if rc < 0 else 0
-            with self._lock:
-                self._state_changed.notify_all()
-            if rc > 0 and int(native_event.source_kind) == int(PollSourceKind.FD):
-                self._clear_runtime_wake()
-                continue
-            if rc > 0:
-                try:
-                    self.drain()
-                except Exception:
-                    self._fail_runtime_wait(lib().zlink_errno())
-                    return
-                continue
-            if rc < 0 and native_errno not in (errno.EINTR, errno.EAGAIN):
-                self._fail_runtime_wait(native_errno)
-                return
-
     def transfer_to_public(self, poller_owner):
-        with self._lock:
-            if self._shutdown:
-                raise ConfigError(
-                    ConfigResult.INVALID_STATE,
-                    getattr(errno, "ESHUTDOWN", errno.ECANCELED),
-                )
-            if self._public_owner is not None and self._public_owner is not poller_owner:
-                raise ConfigError(ConfigResult.INVALID_STATE, errno.EBUSY)
-            if self._public_owner is poller_owner:
-                return
-            self._public_owner = poller_owner
-            self._cancel_runtime_callback_locked()
-            self._signal_runtime_wait_locked()
-            self._state_changed.notify_all()
-        with self._poll_wait_lock:
+        with self._inline_drain_lock:
             with self._lock:
-                self._stop_runtime_owner_locked()
+                if self._shutdown:
+                    raise ConfigError(
+                        ConfigResult.INVALID_STATE,
+                        getattr(errno, "ESHUTDOWN", errno.ECANCELED),
+                    )
+                if (
+                    self._public_owner is not None
+                    and self._public_owner is not poller_owner
+                ):
+                    raise ConfigError(ConfigResult.INVALID_STATE, errno.EBUSY)
+                if self._public_owner is poller_owner:
+                    return
+                self._public_owner = poller_owner
+                self._state_changed.notify_all()
 
-    def transfer_to_runtime(self, poller_owner):
+    def release_public(self, poller_owner):
         with self._lock:
             if self._public_owner is not poller_owner:
                 return
             self._public_owner = None
             self._state_changed.notify_all()
-            if self._entries and not self._shutdown:
-                self._schedule_runtime_owner_locked()
+
+    def _require_public_owner_locked(self):
+        if self._public_owner is None:
+            raise SubmitError(SubmitResult.INVALID_STATE, 0)
 
     def has_managed_writable_wait(self):
         with self._lock:
@@ -925,6 +727,43 @@ class CompletionOwner:
         with self._drain_lock:
             return self._drain(caller)
 
+    def _process_completion(self, completion, retry_entries):
+        completion_kind = int(completion.kind)
+        completion_id = int(completion.completion_id)
+        context = int(completion.user_context or 0)
+        request_progress = False
+        with self._lock:
+            entry = self._entries_by_id.get(completion_id)
+            if entry is None:
+                entry = self._entries.get(context)
+        if entry is None:
+            lib().zlink_completion_close(ctypes.byref(completion))
+        elif entry.settled and entry.waiting_native:
+            lib().zlink_completion_close(ctypes.byref(completion))
+            if entry.retire_native(completion_id):
+                with self._lock:
+                    self._release_native_wait_locked(entry, completion_id)
+                self._unregister(entry)
+            request_progress = completion_kind == ZLINK_COMPLETION_REQUEST
+        elif completion_kind == ZLINK_COMPLETION_WRITABLE and isinstance(
+            entry, (_SendEntry, _RequestEntry)
+        ):
+            if self._capture_writable(entry, completion):
+                retry_entries.append(entry)
+            if entry.releasable:
+                self._unregister(entry)
+        else:
+            with self._lock:
+                if completion_id == entry.completion_id:
+                    self._release_native_wait_locked(entry, completion_id)
+            entry.capture(completion)
+            request_progress = completion_kind == ZLINK_COMPLETION_REQUEST
+            if entry.releasable:
+                self._unregister(entry)
+        with self._lock:
+            self._state_changed.notify_all()
+        return int(request_progress)
+
     def _drain(self, caller=None):
         processed = 0
         request_count = 0
@@ -944,42 +783,8 @@ class CompletionOwner:
                 break
             if rc != int(RecvResult.OK):
                 _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
-            completion_kind = int(completion.kind)
-            completion_id = int(completion.completion_id)
-            context = int(completion.user_context or 0)
-            with self._lock:
-                entry = self._entries_by_id.get(completion_id)
-                if entry is None:
-                    entry = self._entries.get(context)
-            if entry is None:
-                lib().zlink_completion_close(ctypes.byref(completion))
-            elif entry.settled and entry.waiting_native:
-                lib().zlink_completion_close(ctypes.byref(completion))
-                if entry.retire_native(completion_id):
-                    with self._lock:
-                        self._release_native_wait_locked(entry, completion_id)
-                    self._unregister(entry)
-                if completion_kind == ZLINK_COMPLETION_REQUEST:
-                    request_count += 1
-            elif completion_kind == ZLINK_COMPLETION_WRITABLE and isinstance(
-                entry, (_SendEntry, _RequestEntry)
-            ):
-                if self._capture_writable(entry, completion):
-                    retry_entries.append(entry)
-                if entry.releasable:
-                    self._unregister(entry)
-            else:
-                with self._lock:
-                    if completion_id == entry.completion_id:
-                        self._release_native_wait_locked(entry, completion_id)
-                entry.capture(completion)
-                if completion_kind == ZLINK_COMPLETION_REQUEST:
-                    request_count += 1
-                if entry.releasable:
-                    self._unregister(entry)
+            request_count += self._process_completion(completion, retry_entries)
             processed += 1
-            with self._lock:
-                self._state_changed.notify_all()
         for entry in retry_entries:
             self._dispatch_retry(entry)
         return _DrainResult(processed, request_count)
@@ -1045,6 +850,7 @@ class CompletionOwner:
         with self._lock:
             if self._shutdown or entry.settled:
                 return None
+            initial_attempt = self._entries.get(entry.context) is not entry
         try:
             native_parts = entry.clone_payload()
         except Exception as error:
@@ -1068,6 +874,13 @@ class CompletionOwner:
                 entry.fail(error)
                 self._unregister(entry)
                 return None
+            ownerless_wait = (
+                initial_attempt
+                and self._public_owner is None
+                and rc == int(SubmitResult.BACKPRESSURED)
+                and native_errno == errno.EAGAIN
+                and completion_id != 0
+            )
             # Admission and token publication share the drain owner's lock.
             # A successful SEND never enters either completion registry.
             if completion_id != 0:
@@ -1083,7 +896,10 @@ class CompletionOwner:
                 if completion_id != 0:
                     entry.await_writable(completion_id)
                     self._track_native_wait_locked(entry)
-                if native_errno != errno.EAGAIN or completion_id == 0:
+                if ownerless_wait:
+                    entry.fail(SubmitError(SubmitResult.INVALID_STATE, 0))
+                    rc = int(SubmitResult.INVALID_STATE)
+                elif native_errno != errno.EAGAIN or completion_id == 0:
                     entry.fail(SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO))
             else:
                 if completion_id != 0:
@@ -1094,8 +910,6 @@ class CompletionOwner:
             if entry.releasable:
                 if self._entries.get(entry.context) is entry:
                     self._unregister(entry)
-            else:
-                self._schedule_runtime_owner_locked(entry.loop)
             return rc
 
     def _attempt_request(self, entry):
@@ -1150,8 +964,6 @@ class CompletionOwner:
 
             if entry.releasable:
                 self._unregister(entry)
-            else:
-                self._schedule_runtime_owner_locked(entry.loop)
 
     def submit_send(self, target, payload):
         loop = asyncio.get_running_loop()
@@ -1194,7 +1006,7 @@ class CompletionOwner:
         if completion_id != 0:
             raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO)
 
-    def _finish_request_submit(self, entry, completion_id, *, schedule):
+    def _finish_request_submit(self, entry, completion_id):
         if not entry.publish_request(completion_id):
             return
         with self._lock:
@@ -1204,19 +1016,23 @@ class CompletionOwner:
                 self._unregister(entry)
                 return
             self._track_native_wait_locked(entry)
-            if schedule:
-                self._schedule_runtime_owner_locked(entry.loop)
 
     def submit_request(self, target, payload, timeout_ms):
         loop = asyncio.get_running_loop()
-        if _native_extension is not None:
-            rc, entry = _native_extension.start_request(
-                self, target, payload, loop, int(timeout_ms)
-            )
-        else:
-            native_parts = _materialize_native_parts(payload)
-            entry = _RequestEntry(loop, timeout_ms)
-            with self._lock:
+        with self._lock:
+            if self._shutdown:
+                raise SubmitError(
+                    SubmitResult.INVALID_STATE,
+                    getattr(errno, "ESHUTDOWN", errno.ECANCELED),
+                )
+            self._require_public_owner_locked()
+            if _native_extension is not None:
+                rc, entry = _native_extension.start_request(
+                    self, target, payload, loop, int(timeout_ms)
+                )
+            else:
+                native_parts = _materialize_native_parts(payload)
+                entry = _RequestEntry(loop, timeout_ms)
                 if self._shutdown:
                     self._close_unsubmitted(native_parts)
                     raise SubmitError(
@@ -1237,7 +1053,7 @@ class CompletionOwner:
                         entry.fail_submit()
                         self._unregister(entry)
                         raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO)
-                    self._finish_request_submit(entry, completion_id, schedule=True)
+                    self._finish_request_submit(entry, completion_id)
                 elif (
                     rc == int(SubmitResult.BACKPRESSURED)
                     and native_errno == errno.EAGAIN
@@ -1251,14 +1067,11 @@ class CompletionOwner:
                         entry.fail(error)
                     if entry.releasable:
                         self._unregister(entry)
-                    else:
-                        self._schedule_runtime_owner_locked(entry.loop)
                 else:
                     if completion_id != 0:
                         entry.await_writable(completion_id)
                         self._track_native_wait_locked(entry)
                         entry.fail(self._submit_error(rc, native_errno))
-                        self._schedule_runtime_owner_locked(entry.loop)
                     else:
                         entry.fail_submit()
                         self._unregister(entry)
@@ -1296,65 +1109,36 @@ class CompletionOwner:
             entry.fail_submit()
             self._unregister(entry)
             raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO)
-        self._finish_request_submit(entry, completion_id, schedule=False)
+        self._finish_request_submit(entry, completion_id)
         return self._wait_request(entry)
 
     def _wait_request(self, entry):
-        with self._lock:
-            self._sync_waiters += 1
-            self._cancel_runtime_callback_locked()
-        try:
-            while not entry.settled:
-                with self._state_changed:
-                    while (
-                        self._public_owner is not None
-                        and not self._shutdown
-                        and not entry.settled
-                    ):
-                        self._state_changed.wait()
-                    if self._shutdown or entry.settled:
-                        continue
-                    if not self._poll_wait_lock.acquire(blocking=False):
-                        self._state_changed.wait()
-                        continue
-
-                native_event = ZlinkPollerEvent()
-                error_out = ctypes.c_int()
-                try:
-                    with self._lock:
-                        if (
-                            self._shutdown
-                            or self._public_owner is not None
-                            or entry.settled
-                        ):
-                            continue
-                        self._ensure_runtime_poller_locked()
-                        poller = self._runtime_poller
-                    rc = lib().zlink_poller_wait(
-                        poller,
-                        ctypes.byref(native_event),
-                        1,
-                        -1,
-                        ctypes.byref(error_out),
-                    )
-                    if rc > 0:
-                        if int(native_event.source_kind) == int(PollSourceKind.FD):
-                            self._clear_runtime_wake()
-                        else:
-                            self.drain()
-                    elif rc < 0 and lib().zlink_errno() != errno.EINTR:
-                        self._fail_runtime_wait(lib().zlink_errno())
-                except Exception:
-                    self._fail_runtime_wait(lib().zlink_errno())
-                finally:
-                    self._poll_wait_lock.release()
-                    with self._lock:
-                        self._state_changed.notify_all()
-        finally:
+        with self._inline_drain_lock:
             with self._lock:
-                self._sync_waiters -= 1
-                self._state_changed.notify_all()
-                self._schedule_runtime_owner_locked()
+                public_owner = self._public_owner is not None
+            if not public_owner:
+                while not entry.settled:
+                    completion = ZlinkCompletion()
+                    completion.struct_size = ctypes.sizeof(ZlinkCompletion)
+                    rc = lib().zlink_completion_recv(
+                        self._socket._handle,
+                        ctypes.byref(completion),
+                        0,
+                    )
+                    if rc == int(RecvResult.NO_DATA):
+                        continue
+                    if rc != int(RecvResult.OK):
+                        native_errno = lib().zlink_errno()
+                        self._fail_drain_wait(native_errno)
+                        _raise_result_error(
+                            RecvError, RecvResult, rc, native_errno
+                        )
+                    retry_entries = []
+                    with self._drain_lock:
+                        self._process_completion(completion, retry_entries)
+                        self._drain()
+                    for retry in retry_entries:
+                        self._dispatch_retry(retry)
         return entry.wait_request()
 
     def shutdown(self):
@@ -1363,8 +1147,6 @@ class CompletionOwner:
                 return
             self._shutdown = True
             self._public_owner = None
-            self._cancel_runtime_callback_locked()
-            self._signal_runtime_wait_locked()
             entries = list(self._entries.values())
             self._closing_entries = entries
             self._entries.clear()
@@ -1374,10 +1156,6 @@ class CompletionOwner:
             entry.shutdown()
         with self._lock:
             self._state_changed.notify_all()
-        with self._poll_wait_lock:
-            with self._lock:
-                self._stop_runtime_owner_locked()
-                self._close_wake_pair_locked()
 
     def finish_shutdown(self):
         """Release native user-context roots after the socket is discarded."""

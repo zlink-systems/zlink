@@ -112,15 +112,15 @@ pub(crate) fn submit_send(mut op: SendOpStorage) -> Result<SendSubmission, Submi
     }
     live_handle(&op)?;
 
-    let context = op.completion_owner.next_context();
-    match submit_send_attempt(&mut op, context) {
+    let owner = Arc::clone(&op.completion_owner);
+    let context = owner.next_context();
+    owner.with_completion_submit(|| match submit_send_attempt(&mut op, context) {
         Ok(SendAttempt::Admitted) => Ok(SendSubmission {
             result: SubmitResult::Ok,
             admitted: Box::pin(std::future::ready(Ok(()))),
         }),
         Ok(SendAttempt::Waiting(completion_id)) => {
             let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
-            let owner = Arc::clone(&op.completion_owner);
             if let Err(error) = owner.register_send_token(context, &entry, completion_id) {
                 if entry.detach() {
                     owner.unregister(context);
@@ -141,7 +141,6 @@ pub(crate) fn submit_send(mut op: SendOpStorage) -> Result<SendSubmission, Submi
         Err(failure) => {
             if let Some(completion_id) = failure.live_token {
                 let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
-                let owner = Arc::clone(&op.completion_owner);
                 let _ = owner.register_send_token(context, &entry, completion_id);
                 if entry.detach() {
                     owner.unregister(context);
@@ -149,7 +148,7 @@ pub(crate) fn submit_send(mut op: SendOpStorage) -> Result<SendSubmission, Submi
             }
             Err(failure.error)
         }
-    }
+    })
 }
 
 pub(crate) fn submit_send_blocking(mut op: SendOpStorage) -> Result<(), SubmitError> {
@@ -192,7 +191,7 @@ pub(crate) fn submit_send_blocking(mut op: SendOpStorage) -> Result<(), SubmitEr
 /// parts; when Core answers with a wait token the entry is registered with the
 /// socket's completion owner and the Future parks until the WRITABLE record
 /// for exactly that token (same context, same routed target) is drained by the
-/// owner's reactor thread or by the public poller that owns the queue.
+/// public poller that owns the queue.
 struct SendFuture {
     operation: Option<SendOpStorage>,
     context: *mut c_void,
@@ -220,22 +219,12 @@ impl Future for SendFuture {
                 }
             }
 
-            let context = self.context;
-            let attempt = {
-                let operation = self.operation.as_mut().expect("active send");
-                submit_send_attempt(operation, context)
-            };
+            let attempt = self.submit_attempt();
             match attempt {
                 Ok(SendAttempt::Admitted) => return self.finish(Ok(())),
-                Ok(SendAttempt::Waiting(completion_id)) => {
-                    if let Err(error) = self.arm(completion_id) {
-                        return self.finish_detached(Err(error));
-                    }
-                    self.waiting_for_writable = true;
-                }
+                Ok(SendAttempt::Waiting(_)) => self.waiting_for_writable = true,
                 Err(failure) => {
-                    if let Some(completion_id) = failure.live_token {
-                        let _ = self.arm(completion_id);
+                    if failure.live_token.is_some() {
                         return self.finish_detached(Err(failure.error));
                     }
                     return self.finish(Err(failure.error));
@@ -246,6 +235,39 @@ impl Future for SendFuture {
 }
 
 impl SendFuture {
+    /// Serializes the native retry and its wait-token registration with public
+    /// owner changes and completion pulls.
+    fn submit_attempt(&mut self) -> Result<SendAttempt, SendAttemptError> {
+        let owner = Arc::clone(
+            &self
+                .operation
+                .as_ref()
+                .expect("active send")
+                .completion_owner,
+        );
+        owner.with_completion_submit(|| {
+            let context = self.context;
+            let attempt = {
+                let operation = self.operation.as_mut().expect("active send");
+                submit_send_attempt(operation, context)
+            };
+            match attempt {
+                Ok(SendAttempt::Waiting(completion_id)) => {
+                    self.arm(completion_id)
+                        .map_err(SendAttemptError::without_token)?;
+                    Ok(SendAttempt::Waiting(completion_id))
+                }
+                Err(failure) => {
+                    if let Some(completion_id) = failure.live_token {
+                        let _ = self.arm(completion_id);
+                    }
+                    Err(failure)
+                }
+                admitted => admitted,
+            }
+        })
+    }
+
     /// Registers (once) and publishes the wait token Core just issued.
     fn arm(&mut self, completion_id: u64) -> Result<(), SubmitError> {
         let operation = self.operation.as_ref().expect("active send");
@@ -320,6 +342,12 @@ impl SendAttemptError {
     }
 }
 
+impl From<SubmitError> for SendAttemptError {
+    fn from(error: SubmitError) -> Self {
+        Self::without_token(error)
+    }
+}
+
 /// Submits one whole-message array built from shared copies of `parts`.
 /// Core consumes every array slot on every result; the builder-owned packet is
 /// retained so completion-backed operations can rebuild and retry the record.
@@ -386,34 +414,30 @@ fn submit_send_attempt(
         .as_ref()
         .map_or(std::ptr::null(), |rid| rid.as_raw() as *const _);
     let mut completion_id = 0;
-    let owner = Arc::clone(&op.completion_owner);
-    let (rc, errno) = owner
-        .with_submit(|| {
-            let handle = live_handle(op)?;
-            submit_shared_message(&mut op.parts, |parts, count| unsafe {
-                if target.is_null() {
-                    ffi::zlink_send(
-                        handle,
-                        parts,
-                        count,
-                        ffi::ZLINK_DONTWAIT,
-                        user_context,
-                        &mut completion_id,
-                    )
-                } else {
-                    ffi::zlink_send_rid(
-                        handle,
-                        target,
-                        parts,
-                        count,
-                        ffi::ZLINK_DONTWAIT,
-                        user_context,
-                        &mut completion_id,
-                    )
-                }
-            })
-        })
-        .map_err(SendAttemptError::without_token)?;
+    let handle = live_handle(op).map_err(SendAttemptError::without_token)?;
+    let (rc, errno) = submit_shared_message(&mut op.parts, |parts, count| unsafe {
+        if target.is_null() {
+            ffi::zlink_send(
+                handle,
+                parts,
+                count,
+                ffi::ZLINK_DONTWAIT,
+                user_context,
+                &mut completion_id,
+            )
+        } else {
+            ffi::zlink_send_rid(
+                handle,
+                target,
+                parts,
+                count,
+                ffi::ZLINK_DONTWAIT,
+                user_context,
+                &mut completion_id,
+            )
+        }
+    })
+    .map_err(SendAttemptError::without_token)?;
     if rc == 0 {
         if completion_id != 0 {
             return Err(SendAttemptError {

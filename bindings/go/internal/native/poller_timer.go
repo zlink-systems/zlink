@@ -275,7 +275,7 @@ func (p *Poller) AddSocket(socket SocketTarget, events PollEventFlag, slot uintp
 	}
 	if err := configErrorFromResult(C.zlink_go_poller_add_slot(p.handle, raw, C.uintptr_t(entry.slot), C.short(events))); err != nil {
 		if entry.ownsCompletion {
-			entry.owner.transferToRuntime(p)
+			entry.owner.releasePublic(p)
 		}
 		return err
 	}
@@ -316,14 +316,14 @@ func (p *Poller) ModifySocket(socket SocketTarget, events PollEventFlag) error {
 	}
 	if err := configErrorFromResult(C.zlink_poller_modify(p.handle, raw, C.short(events))); err != nil {
 		if !hadCompletion && wantsCompletion {
-			entry.owner.transferToRuntime(p)
+			entry.owner.releasePublic(p)
 		}
 		return err
 	}
 	entry.events = events
 	entry.ownsCompletion = wantsCompletion
 	if hadCompletion && !wantsCompletion {
-		entry.owner.transferToRuntime(p)
+		entry.owner.releasePublic(p)
 	}
 	return nil
 }
@@ -348,7 +348,7 @@ func (p *Poller) RemoveSocket(socket SocketTarget) error {
 	}
 	delete(p.sockets, uintptr(raw))
 	if entry != nil && entry.ownsCompletion {
-		entry.owner.transferToRuntime(p)
+		entry.owner.releasePublic(p)
 	}
 	return nil
 }
@@ -544,7 +544,7 @@ func (p *Poller) Close() error {
 	}
 	for _, entry := range p.sockets {
 		if entry.ownsCompletion && entry.owner != nil {
-			entry.owner.transferToRuntime(p)
+			entry.owner.releasePublic(p)
 		}
 	}
 	for k := range p.sockets {

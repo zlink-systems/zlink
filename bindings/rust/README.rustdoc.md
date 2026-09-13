@@ -47,16 +47,15 @@ completion records through NO_DATA after `POLLOUT`, matches the token, user
 context, and routed target, then resubmits that packet. A repeated backpressure
 result arms the new token and repeats the same state transition. After REQUEST
 admission, its reply stage waits for the existing REQUEST reply or terminal
-completion. Without a public poller the socket's completion queue is drained by
-one binding reactor thread per socket that blocks in a native poller on
-`POLLCOMPLETION`, starts with the first wait token or REQUEST, and retires when
-no operation is outstanding; parked stages are woken by that thread, never by
-executor re-polling.
+completion. Async REQUEST requires a public `POLLCOMPLETION` owner before
+submission. An ownerless SEND may complete immediately, but if it encounters
+backpressure its submit fails immediately with `SubmitResult::InvalidState`.
+The binding never creates a background completion thread.
 
-Registering a socket with a public `Poller` for `POLLCOMPLETION` transfers
-completion-queue ownership to that poller. Include `POLLOUT` in the mask and
-keep calling `Poller::wait()` while it drives backpressured SEND or REQUEST
-admission stages.
+Registering a socket with a public `Poller` for `POLLCOMPLETION` gives
+completion-queue ownership to that poller. Keep calling `Poller::wait()` while
+it drives async SEND admission or REQUEST reply stages. A blocking REQUEST
+without a public owner drains its own completion on the calling thread.
 Register a `SocketMonitor` with `Poller::add_monitor`; monitors accept only `POLLIN` and are drained with `recv_with_flags(RecvFlags::DONT_WAIT)` after readiness.
 REQUEST admission can use the same WRITABLE path. A successful REQUEST FINAL
 reserves a different nonzero completion ID and then completes with its reply or

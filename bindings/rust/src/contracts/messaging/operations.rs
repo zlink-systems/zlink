@@ -165,7 +165,9 @@ impl SendOp<Ready> {
     /// An immediately admitted SEND has completion ID zero and resolves on the
     /// first poll. Under backpressure the future retains the packet, waits for
     /// its exact WRITABLE token through the socket poller, and retries the same
-    /// packet. No ordinary SEND completion is produced.
+    /// packet. No ordinary SEND completion is produced. If backpressure needs
+    /// a completion and no public `POLLCOMPLETION` poller owns the socket, this
+    /// returns `SubmitResult::InvalidState`.
     pub fn submit(self) -> Result<SendSubmission, SubmitError> {
         crate::operations::submit_send(self.inner)
     }
@@ -197,12 +199,15 @@ impl RequestOp<Ready> {
     ///
     /// Under backpressure the future retains the multipart request, waits for
     /// its exact WRITABLE token, and resubmits it once. Repeated refusals repeat
-    /// that transition. The reply timeout starts only after admission.
+    /// that transition. The reply timeout starts only after admission. A public
+    /// `POLLCOMPLETION` poller must own the socket before submission; otherwise
+    /// this returns `SubmitResult::InvalidState`.
     pub fn submit(self) -> Result<RequestSubmission, ZlinkError> {
         crate::operations::submit_routed_request(self.inner)
     }
 
-    /// Uses Core blocking admission and waits for the reply.
+    /// Uses Core blocking admission and waits for the reply. Without a public
+    /// completion owner, the calling thread drains this request in-line.
     pub fn submit_sync(self) -> Result<Vec<Message>, ZlinkError> {
         crate::operations::submit_routed_request_sync(self.inner)
     }

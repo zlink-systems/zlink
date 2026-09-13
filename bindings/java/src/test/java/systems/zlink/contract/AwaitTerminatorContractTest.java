@@ -13,6 +13,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import systems.zlink.TestSupport;
+import systems.zlink.CompletionPollerDriver;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
@@ -40,7 +41,9 @@ class AwaitTerminatorContractTest {
         try (Context ctx = Zlink.createContext();
              RouterSocket server = ctx.createRouterSocket();
              DealerSocket client = ctx.createDealerSocket();
-             ExecutorService serverExecutor = Executors.newSingleThreadExecutor()) {
+             ExecutorService serverExecutor = Executors.newSingleThreadExecutor();
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(client)) {
             String endpoint = TestSupport.inprocEndpoint("await-terminator-reply");
             client.setRoutingId(RoutingId.from("await-client"));
             server.bind(endpoint);
@@ -77,7 +80,9 @@ class AwaitTerminatorContractTest {
 
         try (Context ctx = Zlink.createContext();
              RouterSocket server = ctx.createRouterSocket();
-             DealerSocket client = ctx.createDealerSocket()) {
+             DealerSocket client = ctx.createDealerSocket();
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(client)) {
             // The peer is connected, so submit() succeeds synchronously and
             // returns a CompletionStage; nobody ever replies, so the
             // request completes exceptionally later, on the CompletionStage

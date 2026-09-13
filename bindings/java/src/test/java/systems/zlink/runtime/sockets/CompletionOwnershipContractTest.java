@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import systems.zlink.CompletionPollerDriver;
 import systems.zlink.TestSupport;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.Zlink;
@@ -68,7 +69,9 @@ final class CompletionOwnershipContractTest {
         try (Context context = Zlink.createContext();
              DealerSocket dealer = context.createDealerSocket();
              RouterSocket router = context.createRouterSocket();
-             Received request = new Received()) {
+             Received request = new Received();
+             CompletionPollerDriver completions =
+                 new CompletionPollerDriver(dealer)) {
             String endpoint = TestSupport.inprocEndpoint(
                 "late-completion-cleanup");
             router.bind(endpoint);
@@ -90,6 +93,37 @@ final class CompletionOwnershipContractTest {
             Thread.sleep(25L);
             assertEquals(before + 1,
                 CompletionOwner.closedCompletionCount());
+        }
+    }
+
+    @Test
+    void blockingRequestCompletesWithoutPoller() throws Exception {
+        TestSupport.assumeNative();
+        try (Context context = Zlink.createContext();
+             DealerSocket dealer = context.createDealerSocket();
+             RouterSocket router = context.createRouterSocket()) {
+            String endpoint = TestSupport.inprocEndpoint("blocking-inline-drain");
+            router.bind(endpoint);
+            dealer.connect(endpoint);
+            Thread responder = Thread.ofVirtual().start(() -> {
+                try (Received request = new Received()) {
+                    router.recv(request, RecvFlags.NONE);
+                    request.reply().message(Message.from("reply")).submit();
+                }
+            });
+
+            List<Message> reply;
+            try (Message request = Message.from("request")) {
+                reply = dealer.request().message(request)
+                    .timeout(Duration.ofSeconds(2)).submit_sync();
+            }
+            try {
+                assertEquals("reply", reply.getFirst().toUtf8String());
+            } finally {
+                Message.closeAll(reply);
+            }
+            responder.join(TestSupport.DEFAULT_TIMEOUT_MS);
+            assertFalse(responder.isAlive());
         }
     }
 }

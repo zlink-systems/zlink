@@ -44,18 +44,15 @@ impl PollerStorage {
             let completion_owner = completion_owner.as_ref().ok_or_else(|| {
                 ConfigError::new(crate::ConfigResult::InvalidArgument, libc::EINVAL)
             })?;
-            completion_owner.transfer_to_public(owner)?;
-        }
-        if let Err(error) = check_config_rc(unsafe {
-            ffi::zlink_poller_add(self.handle, handle, slot as *mut c_void, events)
-        }) {
-            if events & POLLCOMPLETION != 0 {
-                completion_owner
-                    .as_ref()
-                    .expect("completion owner")
-                    .transfer_to_runtime(owner);
-            }
-            return Err(error);
+            completion_owner.acquire_public_with(owner, || {
+                check_config_rc(unsafe {
+                    ffi::zlink_poller_add(self.handle, handle, slot as *mut c_void, events)
+                })
+            })?;
+        } else {
+            check_config_rc(unsafe {
+                ffi::zlink_poller_add(self.handle, handle, slot as *mut c_void, events)
+            })?;
         }
         self.sockets.lock().expect("poller sockets").insert(
             handle as usize,
@@ -89,18 +86,21 @@ impl PollerStorage {
             let completion_owner = completion_owner
                 .as_ref()
                 .ok_or_else(|| ConfigError::new(crate::ConfigResult::InvalidState, libc::EINVAL))?;
-            completion_owner.transfer_to_public(owner)?;
-        }
-        if let Err(error) =
-            check_config_rc(unsafe { ffi::zlink_poller_modify(self.handle, handle, events) })
-        {
-            if !had_completion && wants_completion {
-                completion_owner
-                    .as_ref()
-                    .expect("completion owner")
-                    .transfer_to_runtime(owner);
-            }
-            return Err(error);
+            completion_owner.acquire_public_with(owner, || {
+                check_config_rc(unsafe { ffi::zlink_poller_modify(self.handle, handle, events) })
+            })?;
+        } else if had_completion && !wants_completion {
+            previous
+                .completion_owner
+                .as_ref()
+                .expect("completion owner")
+                .release_public_with(owner, || {
+                    check_config_rc(unsafe {
+                        ffi::zlink_poller_modify(self.handle, handle, events)
+                    })
+                })?;
+        } else {
+            check_config_rc(unsafe { ffi::zlink_poller_modify(self.handle, handle, events) })?;
         }
         self.sockets.lock().expect("poller sockets").insert(
             handle as usize,
@@ -109,12 +109,6 @@ impl PollerStorage {
                 completion_owner,
             },
         );
-        if had_completion && !wants_completion {
-            previous
-                .completion_owner
-                .expect("completion owner")
-                .transfer_to_runtime(owner);
-        }
         Ok(())
     }
 
@@ -127,18 +121,21 @@ impl PollerStorage {
             .expect("poller sockets")
             .get(&(handle as usize))
             .cloned();
-        check_config_rc(unsafe { ffi::zlink_poller_remove(self.handle, handle) })?;
+        if let Some(owner) = registration
+            .as_ref()
+            .filter(|item| item.events & POLLCOMPLETION != 0)
+            .and_then(|item| item.completion_owner.as_ref())
+        {
+            owner.release_public_with(self as *const Self as usize, || {
+                check_config_rc(unsafe { ffi::zlink_poller_remove(self.handle, handle) })
+            })?;
+        } else {
+            check_config_rc(unsafe { ffi::zlink_poller_remove(self.handle, handle) })?;
+        }
         self.sockets
             .lock()
             .expect("poller sockets")
             .remove(&(handle as usize));
-        if let Some(registration) = registration {
-            if registration.events & POLLCOMPLETION != 0 {
-                if let Some(owner) = registration.completion_owner {
-                    owner.transfer_to_runtime(self as *const Self as usize);
-                }
-            }
-        }
         Ok(())
     }
 
@@ -276,7 +273,7 @@ impl PollerStorage {
             {
                 let drained = registration
                     .and_then(|item| item.completion_owner.as_ref())
-                    .map(|owner| owner.drain(true))
+                    .map(|owner| owner.drain())
                     .transpose()?
                     .unwrap_or(0);
                 if drained == 0 {
@@ -311,18 +308,18 @@ impl PollerStorage {
 
 impl Drop for PollerStorage {
     fn drop(&mut self) {
-        unsafe {
-            let mut h = self.handle;
-            ffi::zlink_poller_destroy(&mut h);
-        }
         let owner = self as *const Self as usize;
         let registrations = self.sockets.get_mut().expect("poller sockets");
         for registration in registrations.drain().map(|(_, value)| value) {
             if registration.events & POLLCOMPLETION != 0 {
                 if let Some(completion_owner) = registration.completion_owner {
-                    completion_owner.transfer_to_runtime(owner);
+                    completion_owner.release_public(owner);
                 }
             }
+        }
+        unsafe {
+            let mut h = self.handle;
+            ffi::zlink_poller_destroy(&mut h);
         }
     }
 }
