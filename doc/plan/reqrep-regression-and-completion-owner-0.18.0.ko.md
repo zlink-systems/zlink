@@ -80,11 +80,37 @@ submit 시점 fail-fast**.
   (Rust 91.9%=near-C). 판정(통과/보류) 불변.
 - **Go/Python single one-way 측정(완료 #297)**: 미측정이던 5 one-way 패턴 30셀씩 측정. Go
   geomean 59.9%, Python 28.7%(소형 per-op 바닥). §9.5.1/§9.7.1·§9.0 반영.
-- **Go/Python multi 측정(남음)**: multi suite 전 패턴 미측정 → 측정해 §9.5.2/§9.7.2 채우기.
-  결과는 geomean/median으로 보고. (코드 캠페인 사이 자원 경합 피해 실행.)
+- **Go/Python multi 측정(✅ 완료 2026-09-13)**: multi 하네스 완결 드레인 결손이 근본 원인이었다(아래
+  Phase 3). Go/Python(및 .NET/Java) 하네스 복원 후 **동일 조건 matched C baseline(`cbase2`)**로 전 패턴
+  24/24 측정. C multi를 Go/Python과 동일한 7패턴·tcp/ws/wss/tls·doc 표준 사이즈(non-STREAM
+  64/256/1024/4096/65536/131072, STREAM 64/256/1024/65536)로 Core 0.18.0에서 재측정해 baseline을 맞췄다
+  (기존 C 리포트는 4패턴·131072까지만이라 REQREP/STREAM 대비값 부재 — "제약"이 아니라 baseline 맞춤 수정).
+  §9.5.2/§9.7.2/§9.0 반영·머지(#331). Go geomean 56.0%, Python 34.7%.
 - **#293 Python 간헐 deadlock: 해소됨(2026-09-13)**. Phase 2 Python 전환이 원인이던
   백그라운드 daemon 완결 스레드를 제거하면서, 그 deadlock 테스트가 5×5 green·hang 없음으로
   확인됨(Python 전환 커밋 `c005e8b8c2`). 별도 gdb 규명 불필요.
+
+## Phase 3 — multi perf 하네스 C-parity 완결 드레인 복원 (✅ 완료 2026-09-13)
+
+multi 측정 착수 시 Go multi가 REQREP SIGPIPE·대형 send `server_shutdown_failed`로 전멸. git 규명 결과
+**submit-result 캠페인 G4**(Go `ae7a8b5a1c`, Python `1cb0d0befe`)가 Go·Python **multi** 하네스에서만
+C-parity 완결 poller 드레인을 제거하고 `Admitted()`/Task 대기로 바꿨음(당시 바인딩 백그라운드 owner가 가림).
+Phase 2(#299)가 그 백그라운드(잘못 사용) 경로를 fail-fast로 막자 크래시로 드러났다. 공용 모델(async send는
+즉시 Ok 무대기, `Backpressured`만 하네스 소유 public `PollCompletion` poller가 turn당 1회 drain해 resume;
+request는 완결 poller 상시 소유)로 **복원**:
+
+| 바인딩 | 복원 PR | 결과 |
+|--------|---------|------|
+| Go | #328 | 전 패턴 24/24, cbase2 geomean 56.0% |
+| Python | #329(드레인)+#330(SENDSEND 소형·DEALER_DEALER 100-client 직렬화) | 24/24, geomean 34.7%. DEALER_DEALER 65536 2727→30424 msg/s |
+| .NET | #332 (SENDSEND relay·DEALER_DEALER·STREAM 송신도 poller 소유) | 24/24, cbase2 geomean 76.1% |
+| Java | #333 (동일) | 24/24, cbase2 geomean 71.1% |
+| Rust·C | 불필요(원래 정상) | Rust 스모크 통과·C cbase2 168셀 |
+| Node | 불필요(G4 미변경) | 완결 경로 정상(typecheck green); gpreq worktree tsc TS4078은 별도 build-env |
+
+- **교훈**: perf 회귀 체크는 single만이 아니라 **multi도** 봐야 한다(G4·Phase 2 게이트가 single 위주라 놓침).
+- 문서: Go/Python §9.5.2/§9.7.2 채움(#331), .NET/Java §9.2.2/§9.3.2 복원 노트(#334), §9.0 4개 바인딩 multi 반영.
+- 보류 셀은 소형 per-op 바닥(Go goroutine/cgo, Python GIL+asyncio)이며 대형은 C에 회복 — 언어 floor, 미달 0.
 
 ## 5. 남은 작업 순서
 
