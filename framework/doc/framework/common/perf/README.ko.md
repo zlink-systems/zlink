@@ -1343,6 +1343,16 @@ Histogram·label·unit을 임의로 바꿔 같은 provider metric처럼 export�
 `index.json`은 `{schemaVersion:3, runId, cells:[{cellId, resultFile, status}]}`다.
 Run root summary는 셀별 행이며 셀 사이 throughput 합계가 없다.
 
+기본 출력은 `bandwidth`, `throughput`, `latency mean`, `latency p95`, `latency p99`,
+`cpu`, `mem` 순서다. Bandwidth는 위 directional logical payload 대역폭인 `MiB/sec`,
+latency는 `ms`, CPU는 `%`, mem은 process RSS인 `MiB`로 표시한다.
+요청·응답 및 send-send echo의 완료 처리량은 `throughput.kops`를 `kops/sec`로 표시한다.
+단방향 send는 `send.deliveryOpsPerSec / 1000`, PS는 subscriber 전체의
+`fanout.deliveryOpsPerSec / 1000`을 `kmsg/sec`로 표시한다. PS 출력은 subscriber 합산임을 명시한다.
+표본이 없거나 측정하지 못한 값은 reason code와 함께 `N/A`로 표시하고 0으로 대체하지 않는다.
+Cell summary, run summary와 표준 출력은 같은 표시 규칙을 사용한다.
+상세 JSON의 기존 지표·histogram·null reason은 유지한다.
+
 PS Publisher는 측정 시작 sequence 범위와 성공 publish sequence 집합을 보존한다.
 `published=publishedInWindow+settlePublished`이며 둘 다 measured cohort의 public admission 성공이다.
 `sent=published+failed+timeout+cancelled+unresolved`로 결산한다.

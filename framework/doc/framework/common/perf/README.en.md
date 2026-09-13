@@ -1362,6 +1362,16 @@ Do not change histograms, labels or units and export them as the same provider m
 `index.json` is `{schemaVersion:3, runId, cells:[{cellId, resultFile, status}]}`.
 The run summary has one row per cell and no cross-cell throughput total.
 
+Default output columns are `bandwidth`, `throughput`, `latency mean`, `latency p95`,
+`latency p99`, `cpu`, and `mem`, in that order. Bandwidth is the directional logical
+payload rate above in `MiB/sec`; latency uses `ms`, CPU uses `%`, and memory is process RSS in `MiB`.
+Request/reply and send-send echo completion throughput displays `throughput.kops` in `kops/sec`.
+One-way send displays `send.deliveryOpsPerSec / 1000`, and PS displays the sum across subscribers,
+`fanout.deliveryOpsPerSec / 1000`, in `kmsg/sec`. Label PS throughput as a subscriber total.
+Values with no samples or no measured observation display `N/A` with their reason code, never an invented zero.
+Cell summaries, run summaries and standard output use the same presentation rules.
+Retain the existing detailed JSON metrics, histograms and null reasons.
+
 The PS Publisher preserves the measured starting-sequence range and successful publication set.
 `published=publishedInWindow+settlePublished`; both are successful public admissions of the measured cohort.
 Reconcile `sent=published+failed+timeout+cancelled+unresolved`.

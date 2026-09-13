@@ -18,7 +18,7 @@ import urllib.error
 import urllib.request
 import uuid
 from environment import ROOT, collect, digest, native_file, CORE_HASH
-from results import aggregate, write_json
+from results import aggregate, write_json, display_row, DISPLAY_COLUMNS
 from validator import validate_result
 HERE=Path(__file__).resolve().parent
 MATRIX=json.loads((HERE/'matrix.json').read_text())
@@ -702,7 +702,7 @@ def cell_run(args,language,spec,environment,manifest,redis,exact,repetition=0):
         except (OSError,RuntimeError) as e:issues.append({'code':'CollectionFailure','message':'Shutdown: '+str(e),'sourceFile':'cleanup.json'})
     result=aggregate(cell,config,client_files,server_files,issues)
     validate_result(result)
-    print('language='+language+' cell='+cell_id+' status='+result['status']+' result='+str(cell/'result.json'),flush=True)
+    print('\t'.join(display_row(result, config['mode'], config['workload'].get('subscriberCount'))),flush=True)
     return result,cell
 
 
@@ -746,6 +746,7 @@ def main(argv=None):
     build_languages(args,manifest)
     inputs=[comparison_input(args,spec,environment,manifest['redis']) for spec in specs]
     redis=RunRedis(args.output,manifest['redis']);results=[]
+    print('\t'.join(DISPLAY_COLUMNS),flush=True)
     try:
         for language in args.selected_languages:
             for repetition in range(args.runs):
@@ -757,6 +758,14 @@ def main(argv=None):
     finally:redis.close()
     write_json(args.output/'index.json',{'schemaVersion':3,'runId':args.run_id,'cells':results})
     write_json(args.output/'summary.json',{'schemaVersion':3,'runId':args.run_id,'cells':results,'counts':{status:sum(r['status']==status for r in results) for status in ('valid','invalid','failed','unsupported')}})
+    table=['\t'.join(DISPLAY_COLUMNS)]
+    for item in results:
+        cell=args.output/Path(item['resultFile']).parent
+        detail=json.loads((cell/'result.json').read_text());config=json.loads((cell/'config.json').read_text())
+        table.append('\t'.join(display_row(detail,config['mode'],config['workload'].get('subscriberCount'))))
+    rendered='\n'.join(table)+'\n'
+    (args.output/'summary.tsv').write_text(rendered)
+    (args.output/'summary.txt').write_text(rendered)
     return 0 if all(r['status']=='valid' for r in results) else 1
 
 if __name__=='__main__':

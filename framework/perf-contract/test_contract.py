@@ -227,4 +227,17 @@ class ContractTests(unittest.TestCase):
             r=aggregate(p,config,[],['server-source.json'],[])
             self.assertEqual(r['status'],'invalid');self.assertFalse(r['baselineEligible'])
 
+class PresentationTests(unittest.TestCase):
+    def test_default_row_preserves_units_nulls_and_delivery_semantics(self):
+        detail={'language':'node','cellId':'cell','status':'failed','metrics':metric_defaults(),'nullReasons':{}}
+        detail['metrics'].update({'throughput.megabytesPerSec':2,'throughput.kops':3,'send.deliveryOpsPerSec':4000,'fanout.deliveryOpsPerSec':8000,
+                                  'latency.meanMs':1,'latency.p95Ms':2,'latency.p99Ms':3,'process.cpuPercent':125,'process.rssMb':64})
+        detail['nullReasons']['/metrics/send.deliveryLatency.meanMs']=reason('CLOCK_DOMAIN_UNVERIFIED','No clock alignment.')
+        echo=display_row(detail,'send-send')
+        self.assertEqual(echo[3:10],('2.000','3.000 kops/sec','1.000','2.000','3.000','125.000','64.000'))
+        send=display_row(detail,'send');self.assertEqual(send[4],'4.000 kmsg/sec');self.assertEqual(send[5],'N/A (CLOCK_DOMAIN_UNVERIFIED)')
+        self.assertEqual(display_row(detail,'publish',8)[4],'8.000 kmsg/sec (8 subscribers sum)')
+        detail['metrics']['throughput.kops']=None
+        self.assertEqual(display_row(detail,'request')[4],'N/A (COLLECTION_FAILED) kops/sec')
+
 if __name__=='__main__': unittest.main()
