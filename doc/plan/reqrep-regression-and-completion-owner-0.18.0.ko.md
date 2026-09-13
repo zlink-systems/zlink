@@ -32,7 +32,7 @@ coroutine)이 아니라 별도 백그라운드 drain**에 맡긴 회귀. C·cpp�
 
 - C++·Rust·Node는 원래 정상(회귀 아님). Node·Rust·Python 소형은 각 런타임 per-op 바닥.
 
-## 3. Phase 2 — completion owner를 public poller로 단일화 (바인딩 6/6 완료)
+## 3. Phase 2 — completion owner를 public poller로 단일화 (바인딩 7/7 완료)
 
 Phase 1에서 드러난 사실: 바인딩은 poller 미등록 시 **runtime(백그라운드) owner**로 completion을
 drain하는데(스펙 §4 구 조항), 이 경로에 락 결함·Python 간헐 deadlock(#293)이 있었고, 스펙 §4가
@@ -55,10 +55,17 @@ submit 시점 fail-fast**.
 | Python | ✅ 머지 | #324 (#293 CLOSED) | pytest 248 + 동시성 73×5 green | 없음(42/42 complete) |
 | C++ | ✅ 머지 | #323 | contract 20/20 + 동시성 9파일×5 green | 없음(42/42 complete) |
 | Rust | ✅ 머지 | #325 | cargo test 188 + 동시성 83×5 green | 없음(42/42 complete) |
-| Node | 🔄 전환 중(Phase 2에서 누락 발견) | branch `bindings/node-completion-owner-mandatory` | — | — |
+| Node | ✅ 머지 | #327 (커밋 32250cbf31) | binding 182/182 + samples 7/7 + 동시성 서브셋 ×5 green | 없음(single reqrep+one-way tcp: complete, fail_fast 0, InvalidState/hang 없음) |
 
 - Go 특이: 공개 API가 async-only(`Submit(ctx)`) 표면이라 completion-backed blocking terminal 없음
   → runtime goroutine 제거 + async fail-fast만. 규칙 2→1.
+- **Node 특이(2026-09-13 전환 완료 #327)**: Node는 blocking terminal 없이 async(Promise)만이고
+  `wait()` 구동 thread가 없다. libuv readable 콜백은 event-loop wakeup만 전달하고, 그 안에서
+  socket-lifetime public `Poller.wait(events, 0)`(nonblocking)가 completion을 drain한다(**새 thread
+  없음**). binding `runtimeWatch` background drain 제거→readable-only watch, async request/
+  backpressured send는 owner 없으면 즉시 `InvalidState`. framework는 신규
+  `node-event-loop-poller.ts`가 socket-lifetime public poller를 libuv 콜백에서 구동(completion-capable
+  socket만 `PollCompletion` 등록). 규칙 3→2. binding/framework 동종 소유 구조.
 - Python 특이: async 경로 데몬 스레드(`zlink-python-completion`)가 #293 deadlock 원인 영역 →
   제거로 #293 해소 여부를 함께 확인.
 - **C++·Rust도 전환 대상(2026-09-13 확인)**: 둘 다 바인딩 본체에 runtime(백그라운드) owner 스레드가
@@ -81,14 +88,13 @@ submit 시점 fail-fast**.
 
 ## 5. 남은 작업 순서
 
-1. **Go**: perf 회귀 체크 → 통과 시 PR·머지.
-2. **Python**: Phase 2 전환(코드+게이트+perf 체크+#293 재현 확인) → PR·머지.
-3. **C++·Rust**: completion ownership이 이미 poller 기반인지 확인, 필요 시 정합.
-4. **framework: ✅ #326 머지** — .NET/Java receive poller에 PollCompletion 추가(위반 재현·수정), C++ 이미 준수(무변경), Go/Rust/Python framework 런타임 없음. .NET 2177/0·Java green·cpp cross-language smoke green.
-   - **Node binding 누락 발견**: Phase 2 6개 전환에서 Node 제외됨(runtimeWatch background 잔존, 스펙 §4 위반) → 전환 중. Node framework도 그 뒤. Node는 단일 이벤트루프라 모델 매핑 주의(새 thread 금지).
+1. **바인딩 Phase 2: ✅ 7/7 완료** — .NET#316·Java#321·Go#322·Python#324·C++#323·Rust#325·Node#327 전부 머지.
+2. **framework: ✅ #326 머지** — .NET/Java receive poller에 PollCompletion 추가(위반 재현·수정), C++ 이미 준수(무변경), Go/Rust/Python framework 런타임 없음. .NET 2177/0·Java green·cpp cross-language smoke green.
+   - **Node framework: ✅ #327에 포함 머지** — 신규 `node-event-loop-poller.ts`가 socket-lifetime public poller를 libuv 콜백에서 구동, completion-capable socket에 `PollCompletion` 등록. typecheck/build/lint green, 영향 contract 번들 214/215.
+   - **기존 인프라 이슈(범위 밖, 본 전환 무관)**: (a) `channel-client.test.js`의 `AbortSignal` fixture가 Node 24.19 `AbortSignal.any()` strictness로 실패(이 커밋이 건드리지 않은 fixture), (b) `run_node_runtime_gate.js`의 TAP integrity 파서가 Node 24.19 파일별 TAP 출력과 비호환 → 공식 gate command 실패(개별 파일 실행은 회귀 없음). 둘 다 별도 수정 필요.
    - **관찰(범위 밖)**: 통합 build 중 Go binding test `TestPublicRequestRetriesExactPacketAfterWritable/run-4` 실패 관찰 — 별도 확인 필요.
-5. **Go/Python multi 측정** → 문서 반영.
-6. (별도 환경) **#293** 네이티브 규명.
+3. **Go/Python multi 측정(진행 중)** → §9.5.2/§9.7.2 반영. single one-way·reqrep은 이미 측정·반영(§9.5.1/§9.7.1). multi는 fresh main 워크트리에서 별도 측정(codex terra, geomean/median 보고).
+4. (별도 환경) **#293** 네이티브 규명(단, Phase 2 Python 전환으로 재현 테스트는 5×5 green·해소됨 — §4 참조).
 
 ## 6. 운영 메모 (재현·함정)
 
