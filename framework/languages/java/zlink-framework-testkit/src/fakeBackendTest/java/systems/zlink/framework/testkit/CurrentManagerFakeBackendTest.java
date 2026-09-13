@@ -26,7 +26,7 @@ final class CurrentManagerFakeBackendTest {
         var mesh = options.addRouteMesh("game")
             .listen("inproc://current-manager")
             .setRoutingIdPrefix("current-manager");
-        mesh.channelName("game").server();
+        mesh.channel("game").server();
         mesh.objects().server()
             .addSpotFactory(
                 "room",

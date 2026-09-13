@@ -91,7 +91,7 @@ class SubmitAdmissionApplication {
                     .setRoutingId(RoutingId.from(config.rid))
                     .setDefaultRequestTimeout(Duration.ofSeconds(1))
                 mesh.addRouteSendHandler(RouteHandler::class.java, RouteProbeMsg::class.java)
-                mesh.channelName(CHANNEL)
+                mesh.channel(CHANNEL)
                     .server()
                     .setWeight(if (config.role == "target") 100 else 0)
                     .addSendHandler(ChannelHandler::class.java, ChannelProbeMsg::class.java)

@@ -73,7 +73,7 @@ public final class Program {
             if (spotOnly) {
                 System.out.println("[topology] role=gateway route_mesh=enabled route_channel=disabled");
             } else {
-                node.channelName(Contracts.ROUTE_CHANNEL).client();
+                node.channel(Contracts.ROUTE_CHANNEL).client();
             }
             // The gateway is the Client role for the channel served by each Play role.
             // Both sides must register the same ChannelName so the Spot callback can

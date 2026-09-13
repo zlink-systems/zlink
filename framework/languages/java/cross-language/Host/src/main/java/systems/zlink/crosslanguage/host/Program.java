@@ -180,7 +180,7 @@ public final class Program {
                     // actor creation, so the pre-relocation owner assertion
                     // is meaningful rather than an accident of placement.
                     .setPlacementWeight("entry-spot-source".equals(mode) ? 100 : 0);
-                mesh.channelName(meshName).server();
+                mesh.channel(meshName).server();
                 mesh.objects().client();
                 var objects = mesh.objects().server();
                 objects.addEntrySpot(RelocationEntrySpot.class);
@@ -215,7 +215,7 @@ public final class Program {
                     // The target drops to zero once its fixed Spot exists, so
                     // the source always wins the Actor's initial placement.
                     .setPlacementWeight(100);
-                mesh.channelName(meshName).server();
+                mesh.channel(meshName).server();
                 mesh.addRouteRequestHandler(
                     UserSpotDiscoveryProbeHandler.class,
                     UserSpotDiscoveryProbeReq.class,
@@ -243,7 +243,7 @@ public final class Program {
                 var mesh = options.addRouteMesh(channel)
                     .listen(args.require("server-endpoint"))
                     .setRoutingId(RoutingId.from(args.option("node-rid", "java-spot-route")));
-                mesh.channelName(channel).server();
+                mesh.channel(channel).server();
                 mesh.addRouteRequestHandler(
                     SpotRouteRequestHandler.class,
                     TestHostSpotRouteRequest.class,
@@ -267,7 +267,7 @@ public final class Program {
                 // when their monitor edge has not supplied a remote RID.
                 mesh.setRoutingId(
                     RoutingId.from(args.option("node-rid", "java-spot-route-client")));
-                mesh.channelName(channel).client();
+                mesh.channel(channel).client();
                 mesh.peerConnections().connect(
                     RoutingId.from(args.require("peer-rid")),
                     args.require("server-endpoint"));

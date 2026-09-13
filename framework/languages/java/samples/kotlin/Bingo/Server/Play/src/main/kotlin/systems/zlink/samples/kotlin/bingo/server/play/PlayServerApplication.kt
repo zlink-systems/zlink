@@ -67,7 +67,7 @@ class PlayServerApplication {
             node.listen(topology.selectedPlaySpotRouterEndpoint())
                 .setRoutingIdPrefix("play")
             options.addClientServerChannel(SampleNames.ApiChannel).client()
-            node.channelName(SampleNames.RoomRewardChannel).server()
+            node.channel(SampleNames.RoomRewardChannel).server()
             node.objects().server()
                 .addEntrySpot(BingoEntrySpot::class.java)
                 .addSpotFactory(

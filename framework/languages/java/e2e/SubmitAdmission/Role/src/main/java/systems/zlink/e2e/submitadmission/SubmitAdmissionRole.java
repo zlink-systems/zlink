@@ -90,7 +90,7 @@ public class SubmitAdmissionRole {
                     .setRoutingId(RoutingId.from(config.rid()))
                     .setDefaultRequestTimeout(Duration.ofSeconds(1));
                 mesh.addRouteSendHandler(RouteHandler.class, RouteProbeMsg.class);
-                mesh.channelName(CHANNEL)
+                mesh.channel(CHANNEL)
                     .server()
                     .setWeight("target".equals(config.role()) ? 100 : 0)
                     .addSendHandler(ChannelHandler.class, ChannelProbeMsg.class);

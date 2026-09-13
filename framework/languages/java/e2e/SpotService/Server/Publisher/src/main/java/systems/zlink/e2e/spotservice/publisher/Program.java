@@ -56,7 +56,7 @@ public final class Program {
             var mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(publisher.spotPublisherEndpoint())
                 .setRoutingId(RoutingId.from("publisher"));
-            mesh.channelName(Contracts.ROUTE_CHANNEL).client();
+            mesh.channel(Contracts.ROUTE_CHANNEL).client();
             mesh.configureSpotPublisher();
         };
     }

@@ -40,7 +40,7 @@ public final class SessionApplication {
                 .setRoutingId(RoutingId.from(nodeRid))
                 // Session relays requests and is not a User Spot placement target.
                 .setPlacementWeight(0);
-            mesh.channelName(Contracts.ROUTE_CHANNEL).server();
+            mesh.channel(Contracts.ROUTE_CHANNEL).server();
             mesh.peerConnections().connect(Env.get("playRouteEndpoint"));
             String playBRoute = Env.get("playBRouteEndpoint", "");
             if (!playBRoute.isBlank()) {

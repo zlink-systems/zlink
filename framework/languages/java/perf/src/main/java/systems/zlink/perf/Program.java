@@ -89,13 +89,13 @@ public class Program {
         }
         boolean targetChannel=config.scenario().equals("channel-echo-only")?!config.source():config.spotDriver()&&!config.source();
         if(targetChannel){
-            var server=mesh.channelName(config.text("channelName")).server();
+            var server=mesh.channel(config.text("channelName")).server();
             server.addRequestHandler(Handlers.ChannelRequest.class,Contracts.PerfEchoRequest.class,Contracts.PerfEchoReply.class);
             server.addSendHandler(Handlers.ChannelSend.class,Contracts.PerfEchoRequest.class);
-        }else if(config.spotDriver()||config.scenario().equals("channel-echo-only"))mesh.channelName(config.text("channelName")).client();
+        }else if(config.spotDriver()||config.scenario().equals("channel-echo-only"))mesh.channel(config.text("channelName")).client();
         if(config.sendSend()&&!config.spotDriver()){
-            if(config.source())mesh.channelName(config.returnChannel()).server().addSendHandler(Handlers.ChannelReturn.class,Contracts.PerfEchoReply.class);
-            else mesh.channelName(config.returnChannel()).client();
+            if(config.source())mesh.channel(config.returnChannel()).server().addSendHandler(Handlers.ChannelReturn.class,Contracts.PerfEchoReply.class);
+            else mesh.channel(config.returnChannel()).client();
         }
         if(config.objects()){
             if(config.objectServer()){

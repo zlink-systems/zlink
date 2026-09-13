@@ -144,7 +144,7 @@ final class ZLinkMeshApplicationDispatcherTest {
     void dispatchesChannelSendThroughTypedChannelHandler() throws Exception {
         MeshNodeRegistration mesh = new MeshNodeRegistration("game");
         mesh.listen("inproc://mesh-dispatch-channel");
-        mesh.channelName("play").server()
+        mesh.channel("play").server()
             .addSendHandler(ChannelHandler.class, String.class);
         ZLinkMeshApplicationDispatcher dispatcher = dispatcher(mesh);
 
@@ -166,7 +166,7 @@ final class ZLinkMeshApplicationDispatcherTest {
         throws Exception {
         MeshNodeRegistration mesh = new MeshNodeRegistration("game");
         mesh.listen("inproc://mesh-dispatch-channel-route");
-        mesh.channelName("play").server()
+        mesh.channel("play").server()
             .addRouteSendHandler(ChannelRouteHandler.class, String.class);
         ZLinkMeshApplicationDispatcher dispatcher = dispatcher(mesh);
 
@@ -186,7 +186,7 @@ final class ZLinkMeshApplicationDispatcherTest {
         throws Exception {
         MeshNodeRegistration mesh = new MeshNodeRegistration("game");
         mesh.listen("inproc://mesh-dispatch-scanned-channel-route");
-        mesh.channelName("report").server().addHandlerGroup("ops");
+        mesh.channel("report").server().addHandlerGroup("ops");
         ZLinkFrameworkRegistration framework = new ZLinkFrameworkRegistration();
         framework.handlerPackageMarkers().add(ZLinkMeshApplicationDispatcherTest.class);
         ZLinkMeshApplicationDispatcher dispatcher = new ZLinkMeshApplicationDispatcher(
@@ -235,7 +235,7 @@ final class ZLinkMeshApplicationDispatcherTest {
         throws Exception {
         MeshNodeRegistration mesh = new MeshNodeRegistration("game");
         mesh.listen("inproc://mesh-dispatch-scanned-channel");
-        mesh.channelName("play");
+        mesh.channel("play");
         ZLinkFrameworkRegistration framework = new ZLinkFrameworkRegistration();
         framework.handlerPackageMarkers().add(ZLinkMeshApplicationDispatcherTest.class);
         ZLinkMeshApplicationDispatcher dispatcher = new ZLinkMeshApplicationDispatcher(

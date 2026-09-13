@@ -106,7 +106,7 @@ public final class Program {
                     MultiNodeSpot.class,
                     factory -> factory.disableRelocation());
             if (!multi.spotOnly()) {
-                node.channelName(Contracts.ROUTE_CHANNEL).server();
+                node.channel(Contracts.ROUTE_CHANNEL).server();
             } else {
                 System.out.println("[topology] role=" + nodeRid + " route_mesh=disabled");
             }

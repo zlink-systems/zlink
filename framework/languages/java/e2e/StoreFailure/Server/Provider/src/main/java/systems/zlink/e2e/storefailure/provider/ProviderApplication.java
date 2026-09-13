@@ -47,20 +47,20 @@ public final class ProviderApplication {
             var mesh = framework.addRouteMesh(Contracts.CHANNEL)
                 .listen(options.channelEndpoint())
                 .setRoutingIdPrefix(options.rid());
-            mesh.channelName(Contracts.CHANNEL)
+            mesh.channel(Contracts.CHANNEL)
                 .server()
                 .addHandlerGroup(Contracts.HANDLER_GROUP);
             if (options.c4Roles()) {
                 framework.addRouteMesh(Contracts.C4_ROUTE_A_MESH)
                     .listen(options.c4RouteAEndpoint())
                     .setRoutingIdPrefix(options.rid() + "-c4-a")
-                    .channelName(Contracts.C4_ROUTE_A_CHANNEL)
+                    .channel(Contracts.C4_ROUTE_A_CHANNEL)
                     .server()
                     .addHandlerGroup(Contracts.HANDLER_GROUP);
                 framework.addRouteMesh(Contracts.C4_ROUTE_B_MESH)
                     .listen(options.c4RouteBEndpoint())
                     .setRoutingIdPrefix(options.rid() + "-c4-b")
-                    .channelName(Contracts.C4_ROUTE_B_CHANNEL)
+                    .channel(Contracts.C4_ROUTE_B_CHANNEL)
                     .server()
                     .addHandlerGroup(Contracts.HANDLER_GROUP);
                 framework.addClientServerChannel(Contracts.C4_CLIENT_SERVER_CHANNEL)

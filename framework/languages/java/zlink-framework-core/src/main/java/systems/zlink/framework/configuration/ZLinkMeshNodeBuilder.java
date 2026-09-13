@@ -4,7 +4,7 @@ import systems.zlink.contracts.core.RoutingId;
 import java.time.Duration;
 
 public interface ZLinkMeshNodeBuilder {
-    ZLinkMeshChannelBuilder channelName(String channelName);
+    ZLinkMeshChannelBuilder channel(String channelName);
 
     ZLinkMeshNodeBuilder listen(String endpoint);
 

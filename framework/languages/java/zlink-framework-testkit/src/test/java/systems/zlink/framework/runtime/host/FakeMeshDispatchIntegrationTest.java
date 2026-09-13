@@ -27,7 +27,7 @@ final class FakeMeshDispatchIntegrationTest {
         var mesh = options.addRouteMesh("game")
             .listen("inproc://formal-mesh-dispatch")
             .addRouteSendHandler(NodeHandler.class, String.class);
-        mesh.channelName("play")
+        mesh.channel("play")
             .server()
             .addSendHandler(ChannelHandler.class, String.class);
         FakeZLinkBackendAdapterFactory backend = new FakeZLinkBackendAdapterFactory();

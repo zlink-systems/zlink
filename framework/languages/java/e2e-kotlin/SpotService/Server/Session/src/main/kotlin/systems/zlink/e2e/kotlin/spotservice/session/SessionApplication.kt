@@ -71,7 +71,7 @@ class SessionApplication {
             val mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(Env.get("e2e.spot.endpoint"))
                 .setRoutingId(RoutingId.from(nodeRid))
-            mesh.channelName(Contracts.ROUTE_CHANNEL).server()
+            mesh.channel(Contracts.ROUTE_CHANNEL).server()
             mesh.peerConnections().connect(Env.get("e2e.route.a.endpoint", ""))
             mesh.peerConnections().connect(Env.get("e2e.route.b.endpoint", ""))
             mesh.objects().server()

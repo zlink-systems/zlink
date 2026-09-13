@@ -57,7 +57,7 @@ class ConsumerApplication {
             options.addRouteMesh(Contracts.CHANNEL)
                 .listen("tcp://127.0.0.1:0")
                 .setRoutingIdPrefix(consumerOptions.rid)
-                .channelName(Contracts.CHANNEL)
+                .channel(Contracts.CHANNEL)
                 .client()
         }
 

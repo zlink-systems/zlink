@@ -93,7 +93,7 @@ class MultiNodeApplication {
                 )
                 .setRoutingId(RoutingId.from(node.rid))
             if (!options.spotOnly) {
-                mesh.channelName(node.routeChannel).server()
+                mesh.channel(node.routeChannel).server()
             }
             @Suppress("UNCHECKED_CAST")
             val spotClass = node.spotClass as Class<ZLinkSpot<*>>

@@ -117,7 +117,7 @@ public final class Program {
                 .setRoutingId(RoutingId.from("session-a"))
                 // Session relays requests but is not a placement target for User Spots.
                 .setPlacementWeight(0);
-            mesh.channelName(Contracts.ROUTE_CHANNEL).server();
+            mesh.channel(Contracts.ROUTE_CHANNEL).server();
             mesh.peerConnections().connect(config.routeEndpoint());
             String routeBEndpoint = config.routeBEndpoint();
             if (!routeBEndpoint.isBlank()) {

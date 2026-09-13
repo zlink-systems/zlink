@@ -124,7 +124,7 @@ public final class Program {
                 var route = options.addRouteMesh(Contracts.ROUTE_CHANNEL)
                     .listen(routeEndpoint)
                     .setRoutingId(RoutingId.from(state.providerRid()));
-                route.channelName(Contracts.ROUTE_CHANNEL).server();
+                route.channel(Contracts.ROUTE_CHANNEL).server();
                 route.addRouteRequestHandler(
                     RouteReqHandler.class,
                     Contracts.RouteReq.class,

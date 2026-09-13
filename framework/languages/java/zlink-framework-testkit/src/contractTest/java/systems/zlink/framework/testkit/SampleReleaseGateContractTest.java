@@ -847,7 +847,7 @@ final class SampleReleaseGateContractTest {
             () -> assertTrue(playSource.contains(
                 "node.setRoutingId(RoutingId.from(\"tictactoe-play-${settings.nodeId}\"))\n"
                     + "                .listen(routeEndpoint)")),
-            () -> assertTrue(playSource.contains("node.channelName(SampleNames.PlayNode)")),
+            () -> assertTrue(playSource.contains("node.channel(SampleNames.PlayNode)")),
             () -> assertTrue(playSource.contains("node.peerConnections().connect(")),
             () -> assertFalse(playSource.contains("configureEntrySpot()")),
             () -> assertTrue(playSource.contains(".enableActorDispatch()")),
@@ -1709,7 +1709,7 @@ final class SampleReleaseGateContractTest {
                 && playSource.contains(
                     "node.setRoutingId(RoutingId.from(\"tictactoe-play-${settings.nodeId}\"))\n"
                         + "                .listen(routeEndpoint)")
-                && playSource.contains("node.channelName(SampleNames.PlayNode)")
+                && playSource.contains("node.channel(SampleNames.PlayNode)")
                 && playSource.contains(
                     "node.peerConnections().connect(\n"
                         + "                RoutingId.from(\"tictactoe-play-$peerNodeId\"),\n"

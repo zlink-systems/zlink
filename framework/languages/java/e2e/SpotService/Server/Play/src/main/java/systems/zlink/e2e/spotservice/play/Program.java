@@ -125,7 +125,7 @@ public final class Program {
             ZLinkMeshNodeBuilder node = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(play.routeEndpoint())
                 .setRoutingId(RoutingId.from(nodeRid));
-            node.channelName(Contracts.ROUTE_CHANNEL).server();
+            node.channel(Contracts.ROUTE_CHANNEL).server();
             node.addRouteRequestHandler(
                 RouteReqHandler.class,
                 Contracts.RouteReq.class,
