@@ -16,31 +16,32 @@ framework envelope와 protobuf body를 두 part로 보낸다.
 
 ## 2. 실행 방법
 
+실행 인자와 결과물 배치는 언어와 무관하게 같다. 규격 §3.1이 그 계약이고, runner는 그 밖의
+인자를 거절한다. 측정은 항상 perf 티켓 큐로 낸다.
+
 ```bash
-# 전체 matrix — 항상 perf 티켓 큐로
-bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "node with-grpc run" -- \
-  bash framework/bench/grpc/node/run_local.sh
+# 전체 격자 1 run
+bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "node with-grpc r1" -- \
+  bash framework/bench/grpc/node/run_local.sh --skip-build \
+    --output framework/bench/grpc/log/node/<이름>/r1
 
 # 한 셀
-env PAYLOADS=1024 SCENARIO=request-window IMPLEMENTATION=zlink-node \
-  bash framework/bench/grpc/node/run_local.sh
+bash framework/bench/grpc/node/run_local.sh --skip-build --scenario request-serial \
+  --implementation zlink-node --payload-sizes 1024 --duration-seconds 2 \
+  --output /tmp/node-smoke
 ```
 
-| 입력 | 기본값 | 동작 |
-|---|---|---|
-| `RUNS` | `1` | runner process가 수행할 run 수(측정 티켓은 run 단위) |
-| `RUN_DEALER` | `0` | 비교 계약상 `0`만 허용 |
-| `DURATION` | `5` | active 시간(초) |
-| `WARMUP` | `1000` | active 전 warmup 호출 수 |
-| `PAYLOADS` | `1024,4096` | payload 목록. 두 값 밖은 preflight 실패 |
-| `SCENARIO` | `all` | `all`, `request`, 네 패턴 이름 |
-| `IMPLEMENTATION` | `all` | `all` 또는 세 구현 이름 |
-| `WINDOW` | `100` | `request-window` in-flight. 다른 값은 preflight 실패 |
-| `STAMP` | 실행 시각 | run ID와 결과 경로 |
-| `OUTROOT` | `framework/bench/grpc/log/node/with_grpc_node_<stamp>` | run root |
-| `SKIP_BUILD` | `0` | `1`이면 `npm ci`·`npm run build` 생략 |
+여러 언어를 3 run씩 돌려 §7.2 판정까지 받으려면 `framework/bench/grpc/run_all.sh`를 쓴다.
+runner는 run을 반복하지 않는다 — run 하나가 실행 하나다.
 
-고정값: send concurrency 8, process 상한 300초, route/request/drain 상한 30초, settle quiet 200ms.
+§3.1의 여섯 입력 밖에서 이 runner가 읽는 값은 아래뿐이다.
+
+| 입력 | 기본값 | 의미 |
+|---|---|---|
+| `WARMUP` | `1000` | active 전 warmup 호출 수 |
+
+고정값: request window 100, send concurrency 8, raw socket ROUTER, process 상한 300초,
+route·request·drain 상한 30초, settle quiet 200ms. 빌드는 `npm ci`와 `npm run build`다.
 
 ## 3. 프로세스 구성
 
@@ -77,10 +78,10 @@ trigger client는 runner의 `curl`이며 부하를 만들지 않는다. 셀 순�
 ## 5. 결과 위치
 
 ```text
-<OUTROOT>/
-├── with_grpc_node_<stamp>.txt
+<OUTPUT>/
+├── report.txt · runner.log
 ├── unsupported.json            # 실행하지 않은 셀과 이유
-└── <implementation>-<pattern>-<payload>-run<run>/
+└── <implementation>-<pattern>-<payload>/
     ├── results.json            # with-grpc-cell-v1: role·trigger·streams·target_stats
     ├── report.txt
     ├── source.log / target.log

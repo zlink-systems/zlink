@@ -199,20 +199,73 @@ drain time is recorded per cell in the results. This bound is not a formality; i
 A bound set too small loses cells even on a healthy run, so it must be large enough that a healthy
 run never reaches it. The reference value is 30 seconds.
 
-## 4. Output Format
+### 3.1 Runner invocation contract
 
-The report table is grouped by pattern, with the implementation name shown on each row. The
-example follows the format below.
+The harnesses differ, but the inputs of every `run_local.sh` and the layout of its results do
+not. When the names differ per language, one language can be measured under conditions the table
+cannot show. That is not hypothetical: a runner handed a relative `OUTROOT` wrote its results
+somewhere that looked outside the repository, and the languages that had a `RUNS` input wrote
+three runs into one directory, which the aggregator then read as a single run.
+
+Every runner takes these inputs and nothing else. Each environment variable has a flag of the
+same meaning, and the flag wins. Anything else is rejected with
+`unsupported runner argument: <name>` and exit 2.
+
+| Environment variable | Flag | Values | Default |
+|---|---|---|---|
+| `OUTPUT` | `--output` | run directory | `log/<lang>/<stamp>` |
+| `SCENARIO` | `--scenario` | `all`, `request`, `send`, or one pattern name from §2 | `all` |
+| `IMPLEMENTATION` | `--implementation` | `all` or one implementation name from §1.1 | `all` |
+| `PAYLOAD_SIZES` | `--payload-sizes` | comma list of `1024` and `4096` | `1024,4096` |
+| `DURATION_SECONDS` | `--duration-seconds` | positive integer | `5` |
+| `SKIP_BUILD` | `--skip-build` | `0`, `1` | `0` |
+
+One invocation produces one run. A runner never repeats runs. The three runs G5 (§7.2) asks for
+come from the caller invoking it three times with a different `OUTPUT`, interleaving other
+languages between them so ordering effects do not favour one language.
+`framework/bench/grpc/run_all.sh` is that caller.
+
+The result layout is the same in every language too.
 
 ```text
-  > Benchmarking current for request-backpressure...
-    Testing local:
-      | Implementation          | Size     |       Throughput |    Bandwidth |  Lat.Mean(ms) |   Lat.P95(ms) |   Lat.P99(ms) | Client CPU | Client Mem | Server CPU | Server Mem |
-      |-------------------------|----------|------------------|--------------|--------------|--------------|--------------|------------|------------|------------|------------|
-      | grpc-dotnet             | 1024B    |       10.00 KOPS |   10.24 MB/s |     1.000 ms |     2.000 ms |     3.000 ms |      10.0% |  100.0 MB |      10.0% |  100.0 MB |
-      | zlink-dotnet            | 1024B    |       30.00 KOPS |   30.72 MB/s |     0.300 ms |     0.600 ms |     0.900 ms |      10.0% |  100.0 MB |      10.0% |  100.0 MB |
-      | zlink-framework-dotnet  | 1024B    |       20.00 KOPS |   20.48 MB/s |     0.500 ms |     0.900 ms |     1.200 ms |      10.0% |  100.0 MB |      10.0% |  100.0 MB |
+<OUTPUT>/
+  report.txt                          # the §4 table, written by tools/bench_report.py
+  runner.log                          # the runner's own progress record
+  <implementation>-<pattern>-<payload>/
+      results.json                    # the §4 cell record (with-grpc-cell-v1)
+      report.txt                      # the table for that cell alone
+      source.log  target.log          # output of A and B
+      target-stats.json               # B's stats snapshot after settle
 ```
+
+Cell directory names carry no run number. One run is one directory, so `OUTPUT` carries it.
+
+The C reference bench (§1.2) is client-driven: one client process walks the grid and one server
+pair lives for the whole run. Its cell directories hold `results.json` only, and the process
+logs are at the run level.
+
+## 4. Output Format
+
+`report.txt` is the same table regardless of language. A runner does not format it; it is
+produced from the cell records by `tools/bench_report.py`. A per-runner format drifts in ways
+that only show when two languages are read side by side.
+
+There are six columns. Throughput is printed in thousands per second, and the unit name says what
+was counted: `KOPS` for the request patterns (completed round trips) and `Kmsg/s` for
+`send-saturation` (one-way messages the target received). The numeric scale is the same for both.
+
+```text
+| Scenario                                    | Size   | Throughput      | Lat.Mean(ms) | Lat.P95(ms) | Lat.P99(ms) |
+|---------------------------------------------|--------|-----------------|--------------|-------------|-------------|
+| grpc-dotnet-request-backpressure            |   1024 |   10.000 KOPS   |        1.000 |       2.000 |       3.000 |
+| zlink-dotnet-request-backpressure           |   1024 |   30.000 KOPS   |        0.300 |       0.600 |       0.900 |
+| zlink-framework-dotnet-request-backpressure |   1024 |   20.000 KOPS   |        0.500 |       0.900 |       1.200 |
+| zlink-dotnet-send-saturation                |   1024 |  487.000 Kmsg/s |        1.745 |       5.720 |       8.387 |
+```
+
+Bandwidth, CPU, memory, depth and the rest stay out of the table and live in the cell record
+(`results.json`). The table is for reading across languages by eye; judgement and diagnosis are
+the aggregator's job, and it reads the records.
 
 The report and console output also leave a per-metric `RESULT,current,...` format alongside, for
 easier handling by the perf runner. The fields of one row are in the following order.
