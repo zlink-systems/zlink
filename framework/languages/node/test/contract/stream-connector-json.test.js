@@ -96,6 +96,67 @@ test('stream connector json codec decodes reply payload through connector', asyn
   await instance.close();
 });
 
+test('stream connector typed request abort cancels reply wait after transport write', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = connector.zlinkStreamConnectorFactory.create({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    diagnosticsLevel: connector.ZlinkStreamDiagnosticsLevel.Normal,
+  });
+  const controller = new AbortController();
+  const requestTimeoutMs = 1000;
+  await instance.connect();
+  try {
+    const terminal = instance.request(new Join()).timeout(requestTimeoutMs).submit(controller.signal)
+      .then(value => ({ value }), error => ({ error }));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(transportFactory.connection.frames.length, 1, 'typed request write completed before abort');
+    const abortedAt = performance.now();
+    controller.abort();
+    const result = await terminal;
+    const elapsedMs = performance.now() - abortedAt;
+    assert.ok(result.error, 'aborted reply wait must reject');
+    assert.equal(result.error.error.code, connector.ZlinkStreamErrorCode.Disconnected,
+      `reply wait ended after ${elapsedMs.toFixed(1)}ms with ${result.error.error.code}; request timeout is ${requestTimeoutMs}ms`);
+    assert.match(result.error.message, /cancel/i);
+    assert.ok(elapsedMs < requestTimeoutMs / 2, `cancellation took ${elapsedMs.toFixed(1)}ms`);
+  } finally {
+    await instance.close();
+  }
+});
+
+for (const outcome of ['abort', 'timeout']) {
+  test(`stream connector typed request ${outcome} settles while transport write is pending`, async () => {
+    const transportFactory = new MemoryTransportFactory();
+    transportFactory.connection.delayWrites = true;
+    const instance = connector.zlinkStreamConnectorFactory.create({
+      endpoint: 'ws://127.0.0.1:19000',
+      transportFactory,
+      diagnosticsLevel: connector.ZlinkStreamDiagnosticsLevel.Normal,
+    });
+    const controller = new AbortController();
+    await instance.connect();
+    try {
+      const terminal = instance.request(new Join()).timeout(outcome === 'abort' ? 1000 : 50)
+        .submit(controller.signal).then(value => ({ value }), error => ({ error }));
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(transportFactory.connection.frames.length, 0);
+      if (outcome === 'abort') controller.abort();
+      const result = await terminal;
+      assert.ok(result.error);
+      assert.equal(result.error.error.code, outcome === 'abort'
+        ? connector.ZlinkStreamErrorCode.Disconnected : connector.ZlinkStreamErrorCode.RequestTimeout);
+      transportFactory.connection.releaseWrites();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(transportFactory.connection.frames.length, 1);
+      assert.equal(await terminal, result, 'late write completion does not replace the request terminal');
+    } finally {
+      transportFactory.connection.releaseWrites();
+      await instance.close();
+    }
+  });
+}
+
 test('stream connector json codec decodes plain-object request replies through connector', async () => {
   const transportFactory = new MemoryTransportFactory();
   const instance = connector.zlinkStreamConnectorFactory.create({

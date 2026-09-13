@@ -1,5 +1,5 @@
 import { ZlinkStreamEncodedPayload, ZlinkStreamError, ZlinkStreamErrorCode } from '../Contracts';
-import { connectorError } from './ZlinkStreamSupport';
+import { connectorError, throwIfAborted } from './ZlinkStreamSupport';
 
 export interface PendingZlinkStreamRequest {
   readonly requestSeq: bigint;
@@ -8,10 +8,9 @@ export interface PendingZlinkStreamRequest {
 
 interface TrackedPendingRequest {
   readonly packetName: string;
-  readonly promise: Promise<ZlinkStreamEncodedPayload>;
   resolve(value: ZlinkStreamEncodedPayload): void;
   reject(error: ZlinkStreamError): void;
-  cancel(): void;
+  dispose(): void;
 }
 
 export class ZlinkStreamPendingRequests {
@@ -22,78 +21,73 @@ export class ZlinkStreamPendingRequests {
     return this.active.size;
   }
 
-  create(packetName: string, timeoutMs: number): PendingZlinkStreamRequest {
+  create(packetName: string, timeoutMs: number, signal?: AbortSignal): PendingZlinkStreamRequest {
+    throwIfAborted(signal);
     const requestSeq = this.nextRequestSeq++;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let resolvePending!: (value: ZlinkStreamEncodedPayload) => void;
     let rejectPending!: (error: ZlinkStreamError) => void;
     const promise = new Promise<ZlinkStreamEncodedPayload>((resolve, reject) => {
-      timeout = setTimeout(() => {
-        this.active.delete(requestSeq);
-        reject(connectorError(ZlinkStreamErrorCode.RequestTimeout, `Request '${packetName}' timed out.`));
-      }, timeoutMs);
       resolvePending = resolve;
       rejectPending = (error) => reject(connectorError(error.code, error.message, error.cause));
     });
+    const onAbort = () => this.reject(requestSeq, {
+      code: ZlinkStreamErrorCode.Disconnected,
+      message: 'Operation canceled.',
+      cause: signal?.reason
+    });
     this.active.set(requestSeq, {
       packetName,
-      promise,
-      resolve: (value) => {
+      resolve: resolvePending,
+      reject: rejectPending,
+      dispose: () => {
         if (timeout !== undefined) {
           clearTimeout(timeout);
         }
-        resolvePending(value);
-      },
-      reject: (error) => {
-        if (timeout !== undefined) {
-          clearTimeout(timeout);
-        }
-        rejectPending(error);
-      },
-      cancel: () => {
-        if (timeout !== undefined) {
-          clearTimeout(timeout);
-        }
+        signal?.removeEventListener('abort', onAbort);
       }
     });
+    timeout = setTimeout(() => this.reject(requestSeq, {
+      code: ZlinkStreamErrorCode.RequestTimeout,
+      message: `Request '${packetName}' timed out.`
+    }), timeoutMs);
+    signal?.addEventListener('abort', onAbort, { once: true });
     return { requestSeq, promise };
   }
 
   /* stream connector spec §5.2: a pending request is matched by request_seq alone. Diagnostics
    * use the original request name retained by this registry, never a legacy reply name. */
   resolve(requestSeq: bigint, value: ZlinkStreamEncodedPayload): boolean {
-    const pending = this.active.get(requestSeq);
+    const pending = this.take(requestSeq);
     if (pending === undefined) {
       return false;
     }
-    this.active.delete(requestSeq);
     pending.resolve(value);
     return true;
   }
 
   reject(requestSeq: bigint, error: ZlinkStreamError): boolean {
-    const pending = this.active.get(requestSeq);
+    const pending = this.take(requestSeq);
     if (pending === undefined) {
       return false;
     }
-    this.active.delete(requestSeq);
     pending.reject(error);
     return true;
   }
 
-  cancel(requestSeq: bigint): void {
+  private take(requestSeq: bigint): TrackedPendingRequest | undefined {
     const pending = this.active.get(requestSeq);
     if (pending === undefined) {
-      return;
+      return undefined;
     }
     this.active.delete(requestSeq);
-    pending.cancel();
+    pending.dispose();
+    return pending;
   }
 
   failAll(error: ZlinkStreamError): void {
-    for (const [requestSeq, pending] of this.active) {
-      this.active.delete(requestSeq);
-      pending.reject(error);
+    for (const requestSeq of this.active.keys()) {
+      this.reject(requestSeq, error);
     }
   }
 }

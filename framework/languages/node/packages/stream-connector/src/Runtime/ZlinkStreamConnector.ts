@@ -32,7 +32,7 @@ import {
 import { validateName } from './Protocol/ZlinkStreamPacketNameValidator';
 import { normalizeOptions } from './ZlinkStreamConnectorOptions';
 import { ZlinkStreamDiagnosticsLevelCell } from './ZlinkStreamDiagnosticsLevelCell';
-import { connectorError, throwIfAborted } from './ZlinkStreamSupport';
+import { connectorError, throwIfAborted, unwrapStreamError } from './ZlinkStreamSupport';
 import { ZlinkStreamPendingRequests } from './ZlinkStreamPendingRequests';
 import { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
 import { ZlinkStreamInboundObservers } from './ZlinkStreamInboundObservers';
@@ -344,24 +344,22 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     signal?: AbortSignal,
     flow?: ZlinkStreamFlow
   ): Promise<ZlinkStreamEncodedPayload> {
-    const pending = this.pendingRequests.create(name, timeoutMs);
-    try {
-      await this.sendEncoded(
-        ZlinkStreamMessageKind.Request,
-        name,
-        payload,
-        metadata,
-        compress,
-        pending.requestSeq,
-        signal,
-        flow,
-        this.nextCorrelationId()
-      );
-      return await pending.promise;
-    } catch (error) {
-      this.pendingRequests.cancel(pending.requestSeq);
-      throw error;
-    }
+    const pending = this.pendingRequests.create(name, timeoutMs, signal);
+    // The registry owns the terminal even while the transport write is pending.
+    void this.sendEncoded(
+      ZlinkStreamMessageKind.Request,
+      name,
+      payload,
+      metadata,
+      compress,
+      pending.requestSeq,
+      signal,
+      flow,
+      this.nextCorrelationId()
+    ).catch(error => {
+      this.pendingRequests.reject(pending.requestSeq, unwrapStreamError(error));
+    });
+    return pending.promise;
   }
 
   private resolveNameOrDefault(payload: ZlinkStreamEncodedPayload): string | undefined {
