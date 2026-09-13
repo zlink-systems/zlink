@@ -1704,6 +1704,15 @@ Perf 구현의 첫 단계에서 다음 공통 산출물을 `framework/perf-contr
 그 구간들은 독립 반복 측정이라고 해석하지 않는다. 표본 부족이나 JIT/GC 변동을 기록하고도
 warmup·duration·runs를 자동으로 늘리지 않는다.
 
+구간 CPU는 기존 100ms CPU·RSS sampler가 읽은 public cumulative CPU의 증가분을 실제
+monotonic sample 시간으로 나눈 값이다. 한 코어를 모두 쓰면 100%이며, 실제 sample 시작
+offset을 100ms로 나눈 정수 부분의 bin에 배정한다. 같은 bin에 여러 sample이 있으면 실제
+sample 시간으로 가중 평균한다. `runtimeMetrics.cpuSamples`에 `binIndex`, `startOffsetMs`,
+`endOffsetMs`, `observedDurationNs`, `cpuDeltaNs`를 남겨 timer 지터와 마지막 부분 구간을
+확인할 수 있게 한다. Window 끝 뒤에 시작한 sample은 측정 bin에 넣지 않는다. 긴 sample을
+다른 bin에 복제하거나 보간하지 않으며 sample이 없는 bin은 `NO_SAMPLES`다. 이 값은 정확한
+100ms 경계 사이의 CPU 사용량이 아니라 배정된 실제 sample 구간의 CPU 사용률이다.
+
 ### 19.2 짧은 실행의 비용
 
 기본 21셀은 언어당 warmup 42초·measured 105초·셀 전환 cooldown 60초로 **207초**다.

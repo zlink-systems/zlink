@@ -1733,6 +1733,15 @@ Keep 100ms completion/error/CPU intervals to identify abrupt changes within 5 se
 not independent repetitions. Record insufficient samples or JIT/GC variation without automatically
 increasing warmup, duration or runs.
 
+Interval CPU uses the increase in public cumulative CPU read by the existing 100ms CPU/RSS
+sampler, divided by its actual monotonic sample span. One fully occupied core is 100%. Assign
+each sample to the bin given by the integer part of its start offset divided by 100ms; weight
+multiple samples in one bin by their actual spans. Preserve `binIndex`, `startOffsetMs`,
+`endOffsetMs`, `observedDurationNs` and `cpuDeltaNs` in `runtimeMetrics.cpuSamples` to expose
+timer jitter and the final partial span. Samples starting after the window do not enter measured
+bins. Never duplicate a long sample into other bins or interpolate; an empty bin is `NO_SAMPLES`.
+The value describes the assigned actual sample spans, rather than CPU between exact 100ms boundaries.
+
 ### 19.2 Cost of the Short Run
 
 The 21 default cells require 42s warmup, 105s measured and 60s between-cell cooldown per language:
