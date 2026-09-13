@@ -30,7 +30,7 @@ bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "java with-grpc r1" -
 
 # 한 셀
 bash framework/bench/grpc/java/run_local.sh --skip-build --scenario request-serial \
-  --implementation zlink-framework-java --payload-sizes 1024 --duration-seconds 2 \
+  --implementation zlink-framework-java --payload-sizes 4096 --duration-seconds 2 \
   --output /tmp/java-smoke
 ```
 
@@ -44,7 +44,7 @@ runner는 run을 반복하지 않는다 — run 하나가 실행 하나다.
 | `JAVA_HOME` | 자동 탐색 | JDK 25. `runner_common.sh`가 고른다 |
 
 Kotlin 보조 셀은 `java/run_local_kotlin.sh`이며 같은 입력을 받되 격자를 좁힌다 — 패턴은
-`request-window` 하나, payload는 `1024` 하나, 구현은 `grpc-kotlin`과
+`request-window` 하나, payload는 `4096` 하나, 구현은 `grpc-kotlin`과
 `zlink-framework-kotlin` 둘이다(§10.5). Java의 B를 그대로 쓰므로 Java 측정과 동시에 돌리지
 않는다. runner가 두 포트 대역을 함께 확인한다.
 

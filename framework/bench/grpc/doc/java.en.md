@@ -33,7 +33,7 @@ bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "java with-grpc r1" -
 
 # One cell
 bash framework/bench/grpc/java/run_local.sh --skip-build --scenario request-serial \
-  --implementation zlink-framework-java --payload-sizes 1024 --duration-seconds 2 \
+  --implementation zlink-framework-java --payload-sizes 4096 --duration-seconds 2 \
   --output /tmp/java-smoke
 ```
 
@@ -48,7 +48,7 @@ Beyond the six inputs of §3.1 this runner reads only the following.
 | `JAVA_HOME` | discovered | JDK 25, chosen by `runner_common.sh` |
 
 The Kotlin auxiliary cells live in `java/run_local_kotlin.sh`. It takes the same inputs
-but narrows the grid: one pattern (`request-window`), one payload (`1024`) and two
+but narrows the grid: one pattern (`request-window`), one payload (`4096`) and two
 implementations (`grpc-kotlin`, `zlink-framework-kotlin`) — spec §10.5. It reuses Java's
 B process, so it never runs at the same time as the Java measurement; the runner checks
 both port bands.

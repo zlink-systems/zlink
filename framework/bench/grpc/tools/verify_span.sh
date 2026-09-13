@@ -161,7 +161,7 @@ main () {
         --output "${GRPC_DIR}/log/java/verify-${STAMP}/java-router-1" || rc=1
 
   run_language kotlin 'bench-(kotlin-client|grpc-server|zlink-raw-server|zlink-framework-server)' \
-    "${JAVA_DIR}/run_local_kotlin.sh" --skip-build --payload-sizes 1024 \
+    "${JAVA_DIR}/run_local_kotlin.sh" --skip-build --payload-sizes 4096 \
         --output "${GRPC_DIR}/log/kotlin/verify-${STAMP}/kotlin-router-1" || rc=1
 
   for cpp_implementation in grpc-cpp zlink-cpp; do

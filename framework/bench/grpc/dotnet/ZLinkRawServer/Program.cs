@@ -61,7 +61,7 @@ static void RunRequestRouter(IRouterSocket router, BenchServerMetrics metrics)
             var body = PayloadPart(received);
             var payload = RawWire.Decode(body.AsReadOnlySpan());
             metrics.RecordReceived(payload);
-            var reply = new BenchPayload { Body = payload.Body };
+            var reply = BenchMetricHeaders.CreateResponsePayload(payload);
             if (received.ReplyToken is not null)
             {
                 ReplyMultipart(received, reply);

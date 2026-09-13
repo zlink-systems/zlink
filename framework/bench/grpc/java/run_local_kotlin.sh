@@ -14,7 +14,7 @@ select_java_home
 export PATH="${JAVA_HOME}/bin:${PATH}"
 
 # §10.5의 보조 셀이라 셋 중 좁힌 격자만 돈다: raw binding 행이 없고, 패턴은
-# request-window 하나이며, payload는 1024 하나다. 입력 이름은 §3.1과 같고 좁히기만 한다.
+# request-window 하나이며, payload는 4096 하나다. 입력 이름은 §3.1과 같고 좁히기만 한다.
 case "${IMPLEMENTATION}" in
   all) bench_implementations=(grpc-kotlin zlink-framework-kotlin) ;;
   zlink-kotlin) echo "Kotlin 보조 셀에는 raw binding 행이 없다" >&2; exit 2 ;;
@@ -23,8 +23,8 @@ case "${SCENARIO}" in
   all|request) pattern=request-window ;;
   *) echo "Kotlin 보조 셀의 패턴은 request-window 하나다: ${SCENARIO}" >&2; exit 2 ;;
 esac
-[[ "${PAYLOAD_SIZES}" == 1024 ]] || {
-  echo "Kotlin 보조 셀의 payload는 1024 하나다: ${PAYLOAD_SIZES}" >&2; exit 2; }
+[[ "${PAYLOAD_SIZES}" == 4096 ]] || {
+  echo "Kotlin 보조 셀의 payload는 4096 하나다: ${PAYLOAD_SIZES}" >&2; exit 2; }
 
 RUN_ID="$(basename "${OUTPUT}")"
 WINDOW=100
@@ -81,7 +81,7 @@ for impl in "${bench_implementations[@]}"; do
       ;;
   esac
 
-  cell_id="${impl}-${pattern}-1024"
+  cell_id="${impl}-${pattern}-4096"
   cell_dir="${OUTPUT}/${cell_id}"
   mkdir -p "${cell_dir}"
   target_log="${cell_dir}/target.log"
@@ -93,7 +93,7 @@ for impl in "${bench_implementations[@]}"; do
   b_pid=$!
   wait_for_stats "${target_stats_url}" 0
   setsid "${SOURCE_BIN}" \
-    --implementation "${impl}" --scenario "${pattern}" --payload-size 1024 \
+    --implementation "${impl}" --scenario "${pattern}" --payload-size 4096 \
     --request-window "${WINDOW}" --send-concurrency "${SEND_CONCURRENCY}" \
     --latency-sample-limit "${LATENCY_SAMPLE_LIMIT}" \
     --warmup-seconds "${WARMUP_SECONDS}" --drain-bound-ms "${DRAIN_BOUND_MS}" \

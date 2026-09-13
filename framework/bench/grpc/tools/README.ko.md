@@ -73,13 +73,13 @@ source와 target이 별도 파일을 쓰더라도 집계기는 `trigger.runId`�
     {
       "implementation": "zlink-framework-node",
       "pattern": "request-window",
-      "payload_size": 1024,
+      "payload_size": 4096,
       "role": "source",
       "trigger": {
         "runId": "run-01",
         "cellId": "framework-window-1024",
         "pattern": "request-window",
-        "payloadBytes": 1024,
+        "payloadBytes": 4096,
         "durationMs": 5000,
         "warmup": 1000,
         "endpoint": "http://127.0.0.1:5212/bench/start",
@@ -102,13 +102,13 @@ source와 target이 별도 파일을 쓰더라도 집계기는 `trigger.runId`�
     {
       "implementation": "zlink-framework-node",
       "pattern": "request-window",
-      "payload_size": 1024,
+      "payload_size": 4096,
       "role": "target",
       "trigger": {
         "runId": "run-01",
         "cellId": "framework-window-1024",
         "pattern": "request-window",
-        "payloadBytes": 1024,
+        "payloadBytes": 4096,
         "durationMs": 5000,
         "warmup": 1000,
         "endpoint": "http://127.0.0.1:5212/bench/start",
@@ -148,7 +148,7 @@ Phase 0에서 그럴듯해 보이는 잘못된 수치가 두 번 나왔다. 세 
 | 조건 | 근거 |
 |---|---|
 | 분자 행과 분모 행이 **모두** G5를 통과한다 | FB-011 |
-| payload `1024`와 `4096`을 따로 판정하고, 둘 다 통과해야 그 언어가 통과다 | FB-005, 규격 §7.2 |
+| payload `4096`을 판정하고, 기준을 통과해야 그 언어가 통과다 | FB-005, 규격 §7.2 |
 | 오염된 셀은 중앙값에도 판정에도 들어가지 않는다 | FB-008 |
 | 사용한 core 수가 **선언한 client 병렬성 상한**의 0.95배에 이른 행은 처리량 우열 판정에 쓰지 않는다 | 규격 §5.1, G6, FB-019 |
 | `send-saturation` 처리량이 server 수신 수여야 한다 | 규격 §5, G3 |

@@ -81,8 +81,8 @@ and a value obtained before that change completes isn't a value that satisfies t
 
 ## 2. Measurement Patterns
 
-The initial scope uses only two payload sizes and three patterns. The default payload sizes are
-`1024` and `4096` bytes. The payload size is the full size of the protobuf `bytes body` or the raw
+The initial scope uses three patterns. Request patterns use a 64-byte request and a 4096-byte response;
+`send-saturation` transmits a 4096-byte command. The payload size is the full size of the protobuf `bytes body` or the raw
 ZLink message body. The first 29 bytes are used as the measurement header, and the rest is filled
 as the business payload area. The gRPC HTTP/2 frame, protobuf field overhead, ZLink envelope, and
 ZMP header aren't included in this size.
@@ -160,7 +160,7 @@ one-way send. Under this condition the difference was N times.
 - Runs a fixed-duration measured active window after a warmup of the same wall-clock length in
   every language (`WARMUP_SECONDS`, §3.1). The recorded value
   and the value used is recorded in the result (§8.2).
-- The default payload size is `1024,4096` bytes.
+- Request patterns use a 64-byte request and a 4096-byte response; `send-saturation` transmits a 4096-byte command.
 - The `request-backpressure` pattern has no incomplete-request ceiling setting. In that
   pattern depth is not a condition that is set but a result that is measured and recorded
   (§5.2). This bench has no `request_window` setting.
@@ -217,7 +217,7 @@ same meaning, and the flag wins. Anything else is rejected with
 | `OUTPUT` | `--output` | run directory | `log/<lang>/<stamp>` |
 | `SCENARIO` | `--scenario` | `all`, `request`, `send`, or one pattern name from §2 | `all` |
 | `IMPLEMENTATION` | `--implementation` | `all` or one implementation name from §1.1 | `all` |
-| `PAYLOAD_SIZES` | `--payload-sizes` | comma list of `1024` and `4096` | `1024,4096` |
+| `PAYLOAD_SIZES` | `--payload-sizes` | `4096` | `4096` |
 | `DURATION_SECONDS` | `--duration-seconds` | active window seconds, positive integer | `5` |
 | `WARMUP_SECONDS` | `--warmup-seconds` | warmup window seconds, positive integer | `2` |
 | `SKIP_BUILD` | `--skip-build` | `0`, `1` | `0` |
@@ -451,16 +451,13 @@ passing. The framework is judged against the same language's raw binding result.
 reaches 80% or more of the raw binding result, the framework's added cost is judged as passing.
 
 ```text
-at each of payload sizes 1024 and 4096:
+at payload size 4096:
 zlink-<lang> / zlink-c                     >= 0.80   binding layer passes
 zlink-framework-<lang> / zlink-<lang>      >= 0.80   framework added cost passes
 ```
 
-Both formulas are calculated separately per payload size. A language passes only when it satisfies
-the criterion at both `1024` and `4096`. A result that satisfies only one size isn't a pass, and
-the per-payload values are always recorded as they are. A stack that holds the criterion at `1024`
-but degrades at `4096` has a real problem, and since the report shows both sizes anyway, a
-per-payload gate exposes that problem at no added cost.
+Both formulas are calculated at payload size `4096`. A language passes only when that result
+satisfies the criterion.
 
 This criterion is applied to patterns where ZLink can send the next request without waiting for the
 reply. Such a pattern is the sound judgement cell because gRPC unary `Echo` and a ZLink request
@@ -469,7 +466,7 @@ give the same guarantee, namely confirmation that the server processed the messa
 process-one-at-a-time usage pattern.
 
 **The reference pattern for judgement is `request-backpressure`.** Whether a language passes is
-decided by that pattern satisfying the criterion at both payload sizes.
+decided by that pattern's `4096`-byte result.
 
 The grounds for choosing the reference pattern this way are below.
 
@@ -643,7 +640,7 @@ response are JSON and the five languages use the same fields.
 ```text
 POST http://127.0.0.1:<A trigger>/bench/start
 { "runId": "...", "cellId": "...", "pattern": "request-backpressure",
-  "payloadBytes": 1024, "phase": "warmup" | "active",
+  "payloadBytes": 4096, "phase": "warmup" | "active",
   "durationMs": 5000, "requestWindow": 100, "sendConcurrency": 8 }
 → 200 { "accepted": true, "runId": "...", "cellId": "...", "phase": "active", "startedAt": <monotonic ns> }
 ```

@@ -27,7 +27,7 @@ bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "node with-grpc r1" -
 
 # 한 셀
 bash framework/bench/grpc/node/run_local.sh --skip-build --scenario request-serial \
-  --implementation zlink-node --payload-sizes 1024 --duration-seconds 2 \
+  --implementation zlink-node --payload-sizes 4096 --duration-seconds 2 \
   --output /tmp/node-smoke
 ```
 
@@ -57,7 +57,7 @@ trigger client는 runner의 `curl`이며 부하를 만들지 않는다. 셀 순�
 | `request-serial` | 1 | 1 | Promise 순차 loop 하나 |
 | `request-window` | 1 | 100 | 한 socket의 logical window를 Promise worker 100개가 공유 |
 | `request-backpressure` | 1 | 없음 | 상한 없이 Promise 생성, 256회마다 event loop에 양보 |
-| `send-saturation` | 8 | 1 | stream마다 Promise worker 하나. **연결은 세 행 모두 하나다** — gRPC는 채널 하나를 stub 8개가 공유하고, raw는 ROUTER 하나를 stream 8개가 공유하며, framework는 RouteMesh socket 하나다 |
+| `send-saturation` | 8 | 1 | stream마다 Promise worker 하나. **연결은 세 행 모두 하나다** — gRPC는 채널 하나와 stub 하나를 모든 stream이 공유하고, raw는 ROUTER 하나를 stream 8개가 공유하며, framework는 RouteMesh socket 하나다 |
 
 ## 4. 언어별로 다르게 둔 값
 
