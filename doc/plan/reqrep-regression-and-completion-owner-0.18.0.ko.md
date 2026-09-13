@@ -32,7 +32,7 @@ coroutine)이 아니라 별도 백그라운드 drain**에 맡긴 회귀. C·cpp�
 
 - C++·Rust·Node는 원래 정상(회귀 아님). Node·Rust·Python 소형은 각 런타임 per-op 바닥.
 
-## 3. Phase 2 — completion owner를 public poller로 단일화 (진행 중)
+## 3. Phase 2 — completion owner를 public poller로 단일화 (바인딩 6/6 완료)
 
 Phase 1에서 드러난 사실: 바인딩은 poller 미등록 시 **runtime(백그라운드) owner**로 completion을
 drain하는데(스펙 §4 구 조항), 이 경로에 락 결함·Python 간헐 deadlock(#293)이 있었고, 스펙 §4가
@@ -54,7 +54,7 @@ submit 시점 fail-fast**.
 | Go | ✅ 머지 | #322 (커밋 9ee3d41f9d + one-way hang 회귀 수정 dca30bc5bd) | go test ×5 green | 없음(ALL/tcp/65536 complete) |
 | Python | ✅ 머지 | #324 (#293 CLOSED) | pytest 248 + 동시성 73×5 green | 없음(42/42 complete) |
 | C++ | ✅ 머지 | #323 | contract 20/20 + 동시성 9파일×5 green | 없음(42/42 complete) |
-| Rust | ✅ 코드·게이트 완료, perf 체크 중 | 커밋 `7985439105` | cargo test 188 + 동시성 83×5 green | 진행 |
+| Rust | ✅ 머지 | #325 | cargo test 188 + 동시성 83×5 green | 없음(42/42 complete) |
 
 - Go 특이: 공개 API가 async-only(`Submit(ctx)`) 표면이라 completion-backed blocking terminal 없음
   → runtime goroutine 제거 + async fail-fast만. 규칙 2→1.
