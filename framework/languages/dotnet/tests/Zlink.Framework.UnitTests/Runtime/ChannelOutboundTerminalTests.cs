@@ -202,6 +202,12 @@ public sealed class ChannelOutboundTerminalTests
             {
                 await using var context = Systems.Zlink.Zlink.CreateContext();
                 await using var dealer = context.CreateDealerSocket();
+                using var completionPoller = Systems.Zlink.Zlink.CreatePoller();
+                var completionEvents = new PollEvent[1];
+                completionPoller.Add(
+                    dealer,
+                    PollEventFlags.PollCompletion,
+                    1);
                 dealer.SetRoutingId(RoutingId.From("mal-client"));
                 dealer.Connect($"tcp://127.0.0.1:{port}");
 
@@ -218,10 +224,14 @@ public sealed class ChannelOutboundTerminalTests
                             1024 * 1024));
                     try
                     {
-                        ZLinkMessageParts.DisposeAll(await dealer.Request()
+                        var admission = dealer.Request()
                             .Message(hello)
                             .Timeout(TimeSpan.FromSeconds(5))
-                            .Async(CancellationToken.None).Reply);
+                            .Async(CancellationToken.None).Reply;
+                        completionPoller.Wait(
+                            completionEvents,
+                            TimeSpan.FromSeconds(5));
+                        ZLinkMessageParts.DisposeAll(await admission);
                         break;
                     }
                     catch (ZlinkSubmitException) when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)

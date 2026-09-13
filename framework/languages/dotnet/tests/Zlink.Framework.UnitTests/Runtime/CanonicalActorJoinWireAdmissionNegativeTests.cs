@@ -150,6 +150,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         private const string ActorType = "actor-type";
         private readonly IContext _sourceContext;
         private readonly IDealerSocket _source;
+        private readonly IPoller _sourcePoller;
+        private readonly PollEvent[] _sourceEvents = new PollEvent[1];
         private readonly ServiceProvider _services;
         private readonly RoutingId _sourceRid;
         private readonly RoutingId _targetRid;
@@ -170,6 +172,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         {
             _sourceContext = sourceContext;
             _source = source;
+            _sourcePoller = Systems.Zlink.Zlink.CreatePoller();
+            _sourcePoller.Add(_source, PollEventFlags.PollCompletion, 1);
             _services = services;
             Runtime = runtime;
             _sourceRid = sourceRid;
@@ -364,15 +368,20 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                     "JoinRequest",
                     "application/json",
                     "{}"u8));
-            return await _source.Request()
+            var replyTask = _source.Request()
                 .Message(requestHead)
                 .Message(payload)
                 .Timeout(TimeSpan.FromSeconds(2))
                 .Async(CancellationToken.None).Reply;
+            Assert.Equal(
+                1,
+                _sourcePoller.Wait(_sourceEvents, TimeSpan.FromSeconds(2)));
+            return await replyTask;
         }
 
         public async ValueTask DisposeAsync()
         {
+            _sourcePoller.Dispose();
             await _source.DisposeAsync();
             await _sourceContext.DisposeAsync();
             await Runtime.StopAsync(CancellationToken.None);

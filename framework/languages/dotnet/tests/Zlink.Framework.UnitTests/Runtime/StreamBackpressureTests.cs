@@ -212,6 +212,8 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
         private readonly CancellationTokenSource _timeout = new(TimeSpan.FromSeconds(10));
         private readonly TcpClient _peer = new() { ReceiveBufferSize = 4096 };
         private readonly ZLinkBackendStreamSocketWrapper _backend;
+        private readonly IPoller _completionPoller;
+        private readonly PollEvent[] _completionEvents = new PollEvent[1];
 
         private SaturatedStream(ITestOutputHelper output)
         {
@@ -224,6 +226,8 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
             Socket.Options.SendBufferSize = 4096;
             Socket.Options.ReceiveTimeout = TimeSpan.FromSeconds(5);
             Socket.Options.Linger = TimeSpan.Zero;
+            _completionPoller = Systems.Zlink.Zlink.CreatePoller();
+            _completionPoller.Add(Socket, PollEventFlags.PollCompletion, 1);
             _backend = new ZLinkBackendStreamSocketWrapper(
                 Socket, null!, new ZLinkMeshCompletionTable(), ownsNode: false);
         }
@@ -324,18 +328,25 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
 
         private async Task<byte[]> ReadRestAsync(byte[] prefix, int length)
         {
+            PumpCompletions();
             var bytes = new byte[length];
             prefix.CopyTo(bytes, 0);
             await _peer.GetStream().ReadExactlyAsync(bytes.AsMemory(prefix.Length), Token);
+            PumpCompletions();
             return bytes;
         }
 
         public async Task<byte[]> ReadAsync(int length)
         {
+            PumpCompletions();
             var bytes = new byte[length];
             await _peer.GetStream().ReadExactlyAsync(bytes, Token);
+            PumpCompletions();
             return bytes;
         }
+
+        private void PumpCompletions() =>
+            _completionPoller.Wait(_completionEvents, TimeSpan.Zero);
 
         public async Task<byte[]> ReadFrameAsync()
         {
@@ -362,6 +373,7 @@ public sealed class StreamBackpressureTests(ITestOutputHelper output)
         public async ValueTask DisposeAsync()
         {
             _peer.Dispose();
+            _completionPoller.Dispose();
             await _backend.DisposeAsync();
             await Context.DisposeAsync();
             _timeout.Dispose();

@@ -89,12 +89,14 @@ public sealed class BackendAdapterFactoryTests
     }
 
     [Fact]
-    public async Task Dealer_Request_Completes_Through_Binding_Progress_Without_Framework_Poll_Worker()
+    public async Task Dealer_Request_Completes_Through_Public_Poller_Owner()
     {
         var factory = new ZLinkDotNetBackendAdapterFactory();
         await using var context = factory.CreateRuntimeContext();
         await using var dealer = context.CreateDealerSocket();
         await using var router = context.CreateRouterSocket();
+        using var poller = Systems.Zlink.Zlink.CreatePoller();
+        poller.Add(dealer, PollEventFlags.PollCompletion, 1);
         var endpoint = $"inproc://binding-progress-{Guid.NewGuid():N}";
         router.Bind(endpoint);
         dealer.Connect(endpoint);
@@ -115,6 +117,11 @@ public sealed class BackendAdapterFactoryTests
                 .Message(reply)
                 .Submit();
 
+        var events = new PollEvent[1];
+        Assert.Equal(1, poller.Wait(events, TimeSpan.FromSeconds(2)));
+        Assert.NotEqual(
+            PollEventFlags.None,
+            events[0].Revents & PollEventFlags.PollCompletion);
         var replyParts = await requestTask.WaitAsync(TimeSpan.FromSeconds(2));
         try
         {

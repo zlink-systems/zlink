@@ -137,6 +137,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     @Override public void bind(String endpoint) {
         inStateLane(() -> {
             socket.bind(endpoint);
+            receivePoller.ensureRegistered();
             return null;
         });
     }

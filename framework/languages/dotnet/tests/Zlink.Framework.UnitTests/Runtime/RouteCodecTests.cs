@@ -181,6 +181,8 @@ public sealed class RouteCodecTests
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var dealer = context.CreateDealerSocket();
         await using var router = context.CreateRouterSocket();
+        using var poller = Systems.Zlink.Zlink.CreatePoller();
+        poller.Add(dealer, PollEventFlags.PollCompletion, 1);
         var endpoint = $"inproc://route-reply-codec-{Guid.NewGuid():N}";
         router.Bind(endpoint);
         dealer.Connect(endpoint);
@@ -212,6 +214,8 @@ public sealed class RouteCodecTests
             typeof(RouteProbe),
             codecs);
 
+        var events = new PollEvent[1];
+        Assert.Equal(1, poller.Wait(events, TimeSpan.FromSeconds(2)));
         var parts = await replyTask;
         try
         {

@@ -630,6 +630,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private readonly ZLinkStateLane _lane = new();
         private readonly object _socketLifecycleGate = new();
         private readonly IZLinkBackendSocketMonitor _monitor;
+        private readonly IZLinkBackendSocketPoller _receivePoller;
         private ZLinkClientServerServerDescriptor? _expected;
         private bool _disposed;
         private Task? _disposeTask;
@@ -693,6 +694,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             ZLinkChannelBundleFactory.ApplySocketConfig(Socket.Options, socketConfig);
             Socket.Options.Probe = false;
             _monitor = monitoring.OpenSocketMonitor(Socket);
+            _receivePoller = ZLinkBackendSocketPoller.Create(Socket);
             _receiveFlowRegistration =
                 applicationJobQueue.RegisterReceiveFlowSocket(Socket);
         }
@@ -836,6 +838,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 if (_monitorTask is null)
                 {
                     using (ExecutionContext.SuppressFlow())
+                    {
                         _monitorTask = Task.Factory.StartNew(
                                 static state =>
                                     ((Connection)state!).RunMonitorLoopAsync(),
@@ -844,6 +847,15 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                                 TaskCreationOptions.LongRunning,
                                 TaskScheduler.Default)
                             .Unwrap();
+                        _controlTask = Task.Factory.StartNew(
+                                static state =>
+                                    ((Connection)state!).RunControlLoopAsync(),
+                                this,
+                                CancellationToken.None,
+                                TaskCreationOptions.LongRunning,
+                                TaskScheduler.Default)
+                            .Unwrap();
+                    }
                 }
             });
             lock (_socketLifecycleGate)
@@ -923,6 +935,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
             await failures.CaptureAsync(_monitor.DisposeAsync)
                 .ConfigureAwait(false);
+            failures.Capture(_receivePoller.Dispose);
             await failures.CaptureAsync(DisposeSocketAsync)
                 .ConfigureAwait(false);
             failures.Capture(_admissionStop.Dispose);
@@ -1254,14 +1267,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         _diagnostics = "ready";
                         using (ExecutionContext.SuppressFlow())
                         {
-                            _controlTask ??= Task.Factory.StartNew(
-                                    static state =>
-                                        ((Connection)state!).RunControlLoopAsync(),
-                                    this,
-                                    CancellationToken.None,
-                                    TaskCreationOptions.LongRunning,
-                                    TaskScheduler.Default)
-                                .Unwrap();
                             _livenessTask ??=
                                 RunLivenessLoopAsync(_admissionStop.Token);
                         }
@@ -1293,25 +1298,17 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private async Task RunControlLoopAsync()
         {
             var cancellationToken = _admissionStop.Token;
-            using var receivePoller = ZLinkBackendSocketPoller.Create(Socket);
             using var received = Received.Create();
             while (!cancellationToken.IsCancellationRequested)
             {
-                var admissionEstablished = RunState(() => !_disposed
-                        && _admissionCompleted
-                        && _currentAdmission is not null);
-                if (!admissionEstablished)
-                {
-                    await Task.Delay(
-                            ControlReceivePollInterval,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    continue;
-                }
-
                 try
                 {
-                    var readiness = receivePoller.Wait(ControlReceivePollInterval);
+                    var readiness = _receivePoller.Wait(ControlReceivePollInterval);
+                    var admissionEstablished = RunState(() => !_disposed
+                            && _admissionCompleted
+                            && _currentAdmission is not null);
+                    if (!admissionEstablished)
+                        continue;
                     if ((readiness & (ZLinkBackendSocketReadiness.Readable
                                       | ZLinkBackendSocketReadiness.Error
                                       | ZLinkBackendSocketReadiness.Priority)) == 0)

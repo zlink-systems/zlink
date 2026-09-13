@@ -39,7 +39,7 @@ final class ZLinkJavaSocketReceiveOwnerTest {
     }
 
     @Test
-    void dealerRequestReplyArrivesWithoutAnotherReadinessPoll() throws Exception {
+    void dealerRequestReplyArrivesThroughTheReceivePollerCompletionOwner() throws Exception {
         String endpoint = "inproc://receive-owner-dealer-request-" + System.nanoTime();
         try (var context = Zlink.createContext();
              DealerSocket nativeDealer = context.createDealerSocket();
@@ -50,11 +50,9 @@ final class ZLinkJavaSocketReceiveOwnerTest {
             nativeDealer.connect(endpoint);
             ZLinkJavaDealerSocket dealer = new ZLinkJavaDealerSocket(nativeDealer);
             try {
-                //  The ClientServer control tick asks this socket for readiness
-                //  with a zero timeout before the first business request. That
-                //  probe must not take the completion queue away from the
-                //  binding: nothing polls the socket again until the next tick,
-                //  so a poller-owned completion queue would hold the reply.
+                // The ClientServer control tick is the socket's receive and
+                // completion owner. It registers before submit and drives the
+                // public poller again after the reply becomes ready.
                 dealer.waitForReadable(Duration.ZERO);
 
                 List<Message> parts = List.of(Message.from("ping"));
@@ -62,6 +60,7 @@ final class ZLinkJavaSocketReceiveOwnerTest {
                     dealer.request(parts, OPERATION_TIMEOUT);
                 assertTrue(nativeRouter.recv(request, RecvFlags.NONE));
                 request.reply().message(Message.from("pong")).submit();
+                dealer.waitForReadable(OPERATION_TIMEOUT);
 
                 try (ZLinkBackendReceived received = reply.toCompletableFuture()
                         .get(OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
