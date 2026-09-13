@@ -117,8 +117,10 @@ auto apply_packet_payload (TMessage &message,
     from_stream_payload (payload, message);
 }
 
-template <typename TMessage> void apply_packet_payload (TMessage &, const zlink::message_t &, ...)
+template <typename TMessage>
+void apply_packet_payload (TMessage &message, const zlink::message_t &payload, ...)
 {
+    message = payload.parse_json<TMessage> ();
 }
 
 } // namespace zlink::stream_connector::detail
