@@ -109,17 +109,15 @@ internal sealed class PerfMultiEchoReplyDrain
         FinishOne("echo reply without a matching submission");
     }
 
-    internal async Task WaitAsync(long deadlineTicks,
-        PerfMultiAdmissionSignal admissionSignal,
-        Action completeAdmissions, Func<bool> hasPendingAdmissions,
-        Func<int, int> poll, Action<int> dispatch)
+    internal Task WaitAsync(long deadlineTicks,
+        Func<bool> hasPendingAdmissions, Func<int, int> poll,
+        Action<int> dispatch)
     {
         while (true)
         {
-            completeAdmissions();
             bool admissionsPending = hasPendingAdmissions();
             if (!admissionsPending && Pending == 0)
-                return;
+                return Task.CompletedTask;
 
             int timeoutMs =
                 PerfMultiAdmissionSignal.RemainingTimeoutMilliseconds(
@@ -127,18 +125,10 @@ internal sealed class PerfMultiEchoReplyDrain
             if (timeoutMs <= 0)
                 throw DrainTimeout(admissionsPending);
 
-            // If every echo has already arrived, only an admission continuation
-            // remains. Otherwise keep receiving replies while each socket's
-            // binding runtime continues its async admission independently.
-            if (Pending == 0)
-            {
-                if (!await admissionSignal.WaitAsync(deadlineTicks)
-                        .ConfigureAwait(false))
-                    throw DrainTimeout(hasPendingAdmissions());
-                continue;
-            }
-
-            int readyCount = poll(timeoutMs);
+            // PollCompletion is the sole admission progress path. Keep giving
+            // the shared public owner bounded turns even when every echo has
+            // already arrived and only an admission continuation remains.
+            int readyCount = poll(Math.Min(50, timeoutMs));
             if (readyCount > 0)
                 dispatch(readyCount);
         }

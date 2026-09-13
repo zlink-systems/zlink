@@ -134,7 +134,12 @@ internal static class PerfMultiRouterRouterClient
 
         var sockets = CollectSockets(slots);
         var eventMasks = new PollEventFlags[slots.Length];
-        Array.Fill(eventMasks, SocketPollIn);
+        Array.Fill(eventMasks,
+            SocketPollIn | PollEventFlags.PollCompletion);
+
+        // Register the public completion owner before the first async submit.
+        // The same poller turn services every client socket and POLLIN.
+        _ = PollSocketEvents(pollManager, sockets, eventMasks, 0);
 
         long benchStartTicks = Stopwatch.GetTimestamp();
         long benchDeadlineTicks = benchStartTicks
@@ -147,7 +152,6 @@ internal static class PerfMultiRouterRouterClient
             benchDeadlineTicks,
             Math.Max(sendDrainTimeoutMs, Math.Max(1, durationSeconds) * 3000));
         int roundStart = 0;
-        var admissionSignal = new PerfMultiAdmissionSignal();
         var replies = new PerfMultiEchoReplyDrain();
 
         while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
@@ -171,25 +175,22 @@ internal static class PerfMultiRouterRouterClient
                 StampMetricHeader(slot.Payload.AsSpan(), runId,
                     PerfPhase.Active, msgSize, currentSeq, EpochNs());
                 submittedAny = true;
-                _ = StartAdmission(slot, admissionSignal, replies);
+                _ = StartAdmission(slot, replies);
             }
             if (slots.Length > 0)
                 roundStart = (start + 1) % slots.Length;
 
-            // POLLIN never owns the admission wait. Drain ready replies only;
-            // if no work progressed, wait on an actual admission completion.
+            // One shared turn progresses both replies and async admissions.
+            // Only an all-backpressured round uses a bounded blocking wait.
+            int completionWaitMs = submittedAny
+                ? 0
+                : Math.Min(50,
+                    PerfMultiAdmissionSignal.RemainingTimeoutMilliseconds(
+                        benchDeadlineTicks));
             int readyCount = PollSocketEvents(pollManager, sockets, eventMasks,
-                0);
+                completionWaitMs);
             if (readyCount <= 0)
-            {
-                if (!submittedAny && HasPendingAdmissions(slots))
-                {
-                    if (!await admissionSignal.WaitAsync(benchDeadlineTicks)
-                            .ConfigureAwait(false))
-                        break;
-                }
                 continue;
-            }
 
             for (int i = 0; i < readyCount; i++)
                 HandleClientEvent(pollManager, slots,
@@ -201,8 +202,7 @@ internal static class PerfMultiRouterRouterClient
 
         // Keep receiving every admitted echo inside the configured drain
         // deadline while the binding runtime completes async admissions.
-        await replies.WaitAsync(drainDeadlineTicks, admissionSignal,
-            static () => { },
+        await replies.WaitAsync(drainDeadlineTicks,
             () => HasPendingAdmissions(slots),
             timeoutMs => PollSocketEvents(pollManager, sockets, eventMasks,
                 timeoutMs),
@@ -237,7 +237,6 @@ internal static class PerfMultiRouterRouterClient
     }
 
     private static bool StartAdmission(RouterRouterClientSlot slot,
-        PerfMultiAdmissionSignal admissionSignal,
         PerfMultiEchoReplyDrain replies)
     {
         Message message = Message.Allocate(slot.Payload.Length);
@@ -254,9 +253,8 @@ internal static class PerfMultiRouterRouterClient
             }
 
             slot.BeginAdmission();
-            Task tracked = AwaitRouterAdmissionAndDisposeAsync(
+            _ = AwaitRouterAdmissionAndDisposeAsync(
                 submission.Admitted, message, replies, slot);
-            admissionSignal.Track(tracked);
             return true;
         }
         catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))

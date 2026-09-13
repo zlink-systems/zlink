@@ -207,7 +207,7 @@ public sealed class test_optimization_guard
     }
 
     [Fact]
-    public void routed_multi_clients_use_fair_async_admission_rounds()
+    public void routed_multi_clients_use_public_completion_poller_rounds()
     {
         string sourceRoot = Path.Combine(BindingRoot(), "perf", "multi",
             "Zlink.BindingBench.Multi", "src");
@@ -242,14 +242,16 @@ public sealed class test_optimization_guard
                 StringComparison.Ordinal);
             Assert.Contains("submission.Result == SubmitResult.Ok", source,
                 StringComparison.Ordinal);
-            Assert.Contains("admissionSignal.Track(tracked)", source,
+            Assert.Contains(
+                "SocketPollIn | PollEventFlags.PollCompletion", source,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "await admissionSignal.WaitAsync(benchDeadlineTicks)", source,
+                "PollSocketEvents(pollManager, sockets, eventMasks, 0);", source,
                 StringComparison.Ordinal);
-            Assert.Matches(
-                @"PollSocketEvents\(pollManager,\s*sockets,\s*eventMasks,\s*0\)",
-                source);
+            Assert.Contains("int completionWaitMs = submittedAny", source,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("admissionSignal.", source,
+                StringComparison.Ordinal);
             Assert.DoesNotContain("Math.Min(50, remainingMs)", source,
                 StringComparison.Ordinal);
             Assert.DoesNotContain("await Task.Yield()", source,
@@ -268,12 +270,45 @@ public sealed class test_optimization_guard
 
         string signal = File.ReadAllText(Path.Combine(sourceRoot,
             "PerfMultiAdmissionSignal.cs"));
-        Assert.Contains("UnsafeOnCompleted(_signalAction)", signal,
+        Assert.Contains("poll(Math.Min(50, timeoutMs))", signal,
             StringComparison.Ordinal);
-        Assert.Contains("TaskCreationOptions.RunContinuationsAsynchronously",
-            signal, StringComparison.Ordinal);
         Assert.DoesNotContain("Task.Delay", signal,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void remaining_multi_async_senders_register_public_completion_owners()
+    {
+        string sourceRoot = Path.Combine(BindingRoot(), "perf", "multi",
+            "Zlink.BindingBench.Multi", "src");
+
+        string dealerDealer = File.ReadAllText(Path.Combine(sourceRoot,
+            "PerfMultiDealerDealerClient.cs"));
+        Assert.Contains("Array.Fill(completionMasks, PollEventFlags.PollCompletion)",
+            dealerDealer, StringComparison.Ordinal);
+        Assert.True(dealerDealer.IndexOf(
+                "PollSocketEvents(pollManager, activeClients, completionMasks, 0)",
+                StringComparison.Ordinal)
+            < dealerDealer.IndexOf("sendTasks[i] = SendLoopAsync",
+                StringComparison.Ordinal));
+
+        string relay = File.ReadAllText(Path.Combine(sourceRoot,
+            "PerfMultiRoutedRelayServer.cs"));
+        Assert.Contains("SocketPollIn | PollEventFlags.PollCompletion", relay,
+            StringComparison.Ordinal);
+        Assert.Contains("while (!replySender.Completion.IsCompleted)", relay,
+            StringComparison.Ordinal);
+
+        string stream = File.ReadAllText(Path.Combine(sourceRoot,
+            "PerfMultiStreamServer.cs"));
+        Assert.Contains(
+            "completionPoller.Add(server, PollEventFlags.PollCompletion, 0)",
+            stream, StringComparison.Ordinal);
+        Assert.True(stream.IndexOf(
+                "completionPoller.Add(server, PollEventFlags.PollCompletion, 0)",
+                StringComparison.Ordinal)
+            < stream.IndexOf("Task dispatcher = DispatchSendsAsync",
+                StringComparison.Ordinal));
     }
 
     [Fact]

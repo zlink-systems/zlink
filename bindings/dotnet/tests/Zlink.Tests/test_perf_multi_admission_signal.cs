@@ -6,6 +6,27 @@ namespace Systems.Zlink.Tests;
 public sealed class test_perf_multi_admission_signal
 {
     [Fact]
+    public async Task echo_drain_polls_when_only_admission_is_pending()
+    {
+        var drain = new global::PerfMultiEchoReplyDrain();
+        bool admissionPending = true;
+        int pollCalls = 0;
+
+        await drain.WaitAsync(Deadline(), () => admissionPending,
+            timeoutMs =>
+            {
+                Assert.InRange(timeoutMs, 1, 50);
+                pollCalls++;
+                admissionPending = false;
+                return 0;
+            },
+            static _ => throw new InvalidOperationException(
+                "no readiness was reported"));
+
+        Assert.Equal(1, pollCalls);
+    }
+
+    [Fact]
     public async Task tracked_admission_completion_wakes_waiter()
     {
         var signal = new global::PerfMultiAdmissionSignal();

@@ -66,8 +66,8 @@ internal static class PerfMultiDealerDealerClient
                 return controlState.StopRequested ? 0 : 2;
             }
 
-            if (!await RunSendPhaseAsync(activeClients, size, durationSeconds,
-                    controlState).ConfigureAwait(false))
+            if (!await RunSendPhaseAsync(pollManager, activeClients, size,
+                    durationSeconds, controlState).ConfigureAwait(false))
                 return 2;
 
             WriteStdoutLine($"CLIENT_DONE,{size}");
@@ -80,7 +80,7 @@ internal static class PerfMultiDealerDealerClient
         }
     }
 
-    private static async Task<bool> RunSendPhaseAsync(
+    private static async Task<bool> RunSendPhaseAsync(PollManager pollManager,
         List<ISocket> activeClients, int msgSize,
         int durationSeconds, RunnerControlState controlState)
     {
@@ -108,10 +108,22 @@ internal static class PerfMultiDealerDealerClient
             }
         }
 
+        var completionMasks = new PollEventFlags[activeClients.Count];
+        Array.Fill(completionMasks, PollEventFlags.PollCompletion);
+        // Transfer every socket to one public completion owner before any
+        // async send can encounter backpressure.
+        _ = PollSocketEvents(pollManager, activeClients, completionMasks, 0);
+
         var sendTasks = new Task[activeClients.Count];
         for (int i = 0; i < activeClients.Count; i++)
             sendTasks[i] = SendLoopAsync((IDealerSocket)activeClients[i]);
-        await Task.WhenAll(sendTasks).ConfigureAwait(false);
+        Task allSends = Task.WhenAll(sendTasks);
+        while (!allSends.IsCompleted)
+        {
+            _ = PollSocketEvents(pollManager, activeClients, completionMasks,
+                50);
+        }
+        await allSends.ConfigureAwait(false);
 
         // PERF_MULTI_TEST_POLICY § 1.3.1 / C
         // perf_multi_dealer_dealer_client.cpp sends one blocking wire-level
