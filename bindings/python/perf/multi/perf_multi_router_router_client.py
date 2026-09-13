@@ -11,6 +11,7 @@ from perf_multi_common import (
     benchmark_run_id,
     configure_multi_tls_client,
     LatencySampler,
+    MultiSendTurnCoordinator,
     new_payload,
     parse_client_args,
     perf_client_context,
@@ -22,9 +23,8 @@ from perf_multi_common import (
     resolve_multi_connect_ready_timeout_ms,
     resolve_multi_send_drain_timeout_ms,
     result_metrics,
-    safe_poll,
-    send_routed,
     stamp_payload,
+    submit_routed,
     wait_monitor_event,
 )
 
@@ -76,9 +76,8 @@ async def main(argv=None):
                             index,
                         )
 
-                    def drain_replies():
+                    def drain_replies(ready_count):
                         nonlocal received
-                        ready_count = safe_poll(poller, poll_events, 0)
                         for offset in range(ready_count):
                             index = poll_events.slot(offset)
                             if index < 0 or index >= len(sockets):
@@ -120,29 +119,16 @@ async def main(argv=None):
                     # admission. Same stop/resume boundary as the C reference
                     # retained message + POLLOUT resume
                     # (bindings/c/perf/multi/src/perf_multi_dealer_dealer_client.cpp:424-450).
-                    async def send_loop(index, current_sock):
+                    def submit(index):
                         nonlocal seq
-                        while time.perf_counter() < active_deadline:
-                            seq += 1
-                            await send_routed(
-                                current_sock,
-                                stamp_payload(
-                                    payloads[index], phase=1, run_id=run_id, seq=seq
-                                ),
-                                completion_poller=poller,
-                                completion_events=poll_events,
-                                routing_id=b"SERVER",
-                            )
-
-                    senders = asyncio.gather(*(
-                        send_loop(index, sock)
-                        for index, sock in enumerate(sockets)
-                    ))
-
-                    async def recv_loop():
-                        while not senders.done() or time.perf_counter() < active_deadline:
-                            drain_replies()
-                            await asyncio.sleep(0)
+                        seq += 1
+                        return submit_routed(
+                            sockets[index],
+                            stamp_payload(
+                                payloads[index], phase=1, run_id=run_id, seq=seq
+                            ),
+                            routing_id=b"SERVER",
+                        )
 
                     # PERF_MULTI_TEST_POLICY.md § 12.3
                     # PERF_MULTI_SEND_DRAIN_TIMEOUT_MS bounds the post-deadline
@@ -152,16 +138,18 @@ async def main(argv=None):
                     # teardown window is max(PERF_MULTI_SEND_DRAIN_TIMEOUT_MS,
                     # 3 s per active second) because small messages can fill
                     # every per-client Core queue.
-                    await asyncio.wait_for(
-                        asyncio.gather(senders, recv_loop()),
-                        timeout=args.duration
-                        + max(
+                    coordinator = MultiSendTurnCoordinator(
+                        poller, poll_events, len(sockets)
+                    )
+                    await coordinator.run(
+                        active_deadline,
+                        submit,
+                        dispatch=drain_replies,
+                        drain_timeout_ms=max(
                             resolve_multi_send_drain_timeout_ms(),
                             max(1, int(args.duration)) * 3000,
-                        )
-                        / 1000.0,
+                        ),
                     )
-                    drain_replies()
                 if received == 0:
                     raise RuntimeError(
                         "multi router-router benchmark did not receive any active reply"

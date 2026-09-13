@@ -454,9 +454,30 @@ async def wait_for_backpressured_admission(
         return
     admission = submission.admitted
     while not admission.done():
-        safe_poll(completion_poller, completion_events, 50)
+        safe_poll(completion_poller, completion_events, 0)
         await asyncio.sleep(0)
     admission.result()
+
+
+def submit_routed(
+    sock,
+    payload,
+    *,
+    routing_id=None,
+    measurement=True,
+    method="send",
+):
+    """Submit one routed payload and return its public admission terminal."""
+
+    send_method = getattr(sock, method)
+    op = send_method() if routing_id is None else send_method(routing_id)
+    if measurement and not isinstance(payload, (list, tuple)):
+        op.messages(*measurement_parts(payload))
+    elif isinstance(payload, (list, tuple)):
+        op.messages(*payload)
+    else:
+        op.message(payload)
+    return op.submit()
 
 
 async def send_routed(
@@ -477,19 +498,93 @@ async def send_routed(
     binding.
     """
 
-    send_method = getattr(sock, method)
-    op = send_method() if routing_id is None else send_method(routing_id)
-    if measurement and not isinstance(payload, (list, tuple)):
-        op.messages(*measurement_parts(payload))
-    elif isinstance(payload, (list, tuple)):
-        op.messages(*payload)
-    else:
-        op.message(payload)
-    submission = op.submit()
+    submission = submit_routed(
+        sock,
+        payload,
+        routing_id=routing_id,
+        measurement=measurement,
+        method=method,
+    )
     await wait_for_backpressured_admission(
         submission, completion_poller, completion_events
     )
     return True
+
+
+class MultiSendTurnCoordinator:
+    """Own one shared completion-poller turn for all client senders."""
+
+    __slots__ = (
+        "_completion_events",
+        "_completion_poller",
+        "_next",
+        "_pending",
+    )
+
+    def __init__(self, completion_poller, completion_events, socket_count):
+        if socket_count <= 0:
+            raise ValueError("socket_count must be positive")
+        self._completion_poller = completion_poller
+        self._completion_events = completion_events
+        self._pending = [None] * socket_count
+        self._next = 0
+
+    def _submit_round(self, active_deadline, submit):
+        zlink_mod = _require_zlink()
+        submitted = 0
+        start = self._next
+        self._next = (start + 1) % len(self._pending)
+        for offset in range(len(self._pending)):
+            if time.perf_counter() >= active_deadline:
+                break
+            index = (start + offset) % len(self._pending)
+            if self._pending[index] is not None:
+                continue
+            submission = submit(index)
+            submitted += 1
+            if submission.result == zlink_mod.SubmitResult.OK:
+                continue
+            if submission.result != zlink_mod.SubmitResult.BACKPRESSURED:
+                raise RuntimeError(
+                    f"multi send returned submit result {submission.result}"
+                )
+            self._pending[index] = submission.admitted
+        return submitted
+
+    def _resume_ready(self):
+        for index, admission in enumerate(self._pending):
+            if admission is None or not admission.done():
+                continue
+            self._pending[index] = None
+            admission.result()
+
+    def poll_once(self, dispatch=None):
+        ready_count = safe_poll(
+            self._completion_poller, self._completion_events, 0
+        )
+        if dispatch is not None and ready_count:
+            dispatch(ready_count)
+        self._resume_ready()
+        return ready_count
+
+    def has_pending(self):
+        return any(admission is not None for admission in self._pending)
+
+    async def run(self, active_deadline, submit, *, dispatch=None, drain_timeout_ms):
+        """Run fair send rounds, then drain only outstanding admissions."""
+
+        while time.perf_counter() < active_deadline:
+            self._submit_round(active_deadline, submit)
+            self.poll_once(dispatch)
+            await asyncio.sleep(0)
+
+        drain_deadline = active_deadline + max(1, drain_timeout_ms) / 1000.0
+        while self.has_pending():
+            if time.perf_counter() >= drain_deadline:
+                raise TimeoutError("multi send admission drain timed out")
+            self.poll_once(dispatch)
+            await asyncio.sleep(0)
+        self.poll_once(dispatch)
 
 
 class RoutedReplySender:
@@ -539,6 +634,14 @@ class RoutedReplySender:
         task = self._task
         if task is not None:
             try:
+                await asyncio.sleep(0)
+                while not task.done():
+                    safe_poll(
+                        self._completion_poller,
+                        self._completion_events,
+                        0,
+                    )
+                    await asyncio.sleep(0)
                 await task
             finally:
                 self._task = None
@@ -551,11 +654,8 @@ class RoutedReplySender:
                 try:
                     try:
                         submission = received.send().messages(*received.parts).submit()
-                        await wait_for_backpressured_admission(
-                            submission,
-                            self._completion_poller,
-                            self._completion_events,
-                        )
+                        if submission.result == zlink_mod.SubmitResult.BACKPRESSURED:
+                            await submission.admitted
                     except zlink_mod.SubmitError as exc:
                         if exc.result not in self._ignored_results:
                             raise
