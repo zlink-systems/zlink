@@ -33,8 +33,7 @@ bash framework/bench/grpc/dotnet/run_local.sh --skip-build \
   --output /tmp/dotnet-smoke
 ```
 
-§3.1의 여섯 입력 밖에서 이 runner가 읽는 값은 `CONFIGURATION`(기본 `Release`)과
-`WARMUP`(기본 `1000`) 둘이다. 나머지는 고정값이다 — send concurrency 8, request window 100,
+§3.1의 입력 밖에서 이 runner가 읽는 값은 `CONFIGURATION`(기본 `Release`) 하나다. 나머지는 고정값이다 — send concurrency 8, request window 100,
 drain 상한 30초, 시나리오 종료 상한 300초.
 
 `request-backpressure`에는 application in-flight 상한을 추가하지 않는다. runner가 결과 JSON

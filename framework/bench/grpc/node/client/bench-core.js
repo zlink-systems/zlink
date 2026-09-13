@@ -179,7 +179,11 @@ function headerRunId(runId) {
 
 async function runWarmup(transport, options, trigger) {
   const runId = headerRunId(trigger.runId);
-  for (let index = 0; index < options.warmup; index++) {
+  // warmup은 trigger가 말하는 벽시계 시간만큼 돈다. active 구간과 같고 다른 언어와도 같다.
+  // 호출 수로 정하면 runtime마다 warmup 길이가 달라진다 — 1000 호출은 여기서 0.2초였고
+  // Java는 같은 이름 아래 20초였다. §7.2는 그렇게 서로 다른 조건으로 잰 두 행을 나눈다.
+  const deadline = header.nowNs() + BigInt(Math.round(trigger.durationMs * 1e6));
+  for (let index = 0; header.nowNs() < deadline; index++) {
     const stream = trigger.pattern === 'send-saturation'
       ? index % trigger.sendConcurrency
       : 0;

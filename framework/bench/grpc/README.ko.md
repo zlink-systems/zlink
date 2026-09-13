@@ -145,8 +145,8 @@ bench에서 옳은 비교인 이유는 아래와 같다.
   runner 자체는 부하를 만들지 않는다.
 - loopback 주소(`127.0.0.1`)만 사용한다. 포트는 §9의 언어별 대역을 사용한다.
 - Release build로 실행한다.
-- warmup 뒤 정해진 시간의 measured active 구간을 실행한다. warmup 길이는 언어마다 다르게
-  두고 사용한 값을 결과에 기록한다(§8.2).
+- warmup 뒤 정해진 시간의 measured active 구간을 실행한다. warmup 길이는 모든 언어가 같은
+  벽시계 시간이다(§3.1의 `WARMUP_SECONDS`, 기본 2초).
 - 기본 payload 크기는 `1024,4096` bytes다.
 - `request-backpressure` 패턴에는 미완료 request 상한 설정이 없다. 이 패턴에서 깊이는
   설정하는 조건이 아니라 측정해 기록하는 결과다(§5.2). `request_window` 설정은 이 bench에 없다.
@@ -201,7 +201,8 @@ server가 받은 수를 폴링해 그 값이 더는 증가하지 않을 때까�
 | `SCENARIO` | `--scenario` | `all`·`request`·`send`·§2의 패턴 이름 하나 | `all` |
 | `IMPLEMENTATION` | `--implementation` | `all`·§1.1의 구현 이름 하나 | `all` |
 | `PAYLOAD_SIZES` | `--payload-sizes` | `1024`·`4096`의 쉼표 목록 | `1024,4096` |
-| `DURATION_SECONDS` | `--duration-seconds` | 양의 정수 | `5` |
+| `DURATION_SECONDS` | `--duration-seconds` | active 구간 초, 양의 정수 | `5` |
+| `WARMUP_SECONDS` | `--warmup-seconds` | warmup 구간 초, 양의 정수 | `2` |
 | `SKIP_BUILD` | `--skip-build` | `0`·`1` | `0` |
 
 한 번 실행하면 run 하나를 만든다. runner는 run을 반복하지 않는다. §7.2의 G5가 요구하는 3 run은
@@ -278,7 +279,7 @@ server-driven 모델(§10)에서 `client_*`는 **source process A**, `server_*`�
 | 필드 | 의미 |
 |------|------|
 | `role` | `source` 또는 `target`. A와 B가 각자 원본을 쓰고 runner가 셀 하나로 합친다 |
-| `trigger` | A가 받은 trigger 요청을 그대로 둔 객체. 필드는 `runId`, `cellId`, `pattern`, `payloadBytes`, `durationMs`, `warmup`(warmup 길이; 언어 harness의 단위를 §8.2대로 기록), `endpoint`(A의 trigger URL, §7.1의 동반 정보), `receivedAtUnixMs`(A가 trigger를 받은 wall-clock 시각). 여덟 필드 모두 필수이며 집계기는 별칭이나 기본값을 두지 않는다 |
+| `trigger` | A가 받은 trigger 요청을 그대로 둔 객체. 필드는 `runId`, `cellId`, `pattern`, `payloadBytes`, `durationMs`, `warmup`(warmup 길이, 초. 모든 언어가 같은 단위다 — §3.1), `endpoint`(A의 trigger URL, §7.1의 동반 정보), `receivedAtUnixMs`(A가 trigger를 받은 wall-clock 시각). 여덟 필드 모두 필수이며 집계기는 별칭이나 기본값을 두지 않는다 |
 | `streams` | A의 logical stream 수와 stream당 in-flight 상한(§10.3) |
 | `target_stats` | settle 뒤 runner가 B의 stats endpoint에서 읽은 수신 수·오류 수·drain 시간 |
 
@@ -539,14 +540,24 @@ raw 직렬화 비용을 포함한 결과를 새 기준으로 사용한다. 직�
 
 ### 8.2 언어마다 다르게 두되 반드시 기록하는 값
 
-아래 세 값은 언어마다 다르게 설정한다. 같게 맞추는 것이 목적이 아니라, 사용한 값을 결과에
+아래 두 값은 언어마다 다르게 설정한다. 같게 맞추는 것이 목적이 아니라, 사용한 값을 결과에
 남기는 것이 목적이다.
 
 | 항목 | 이유 |
 |------|------|
-| warmup 길이 | JVM은 JIT 예열이 끝난 뒤에 정상 상태가 된다. `.NET`과 같은 warmup을 강요하면 예열되지 않은 런타임을 측정하게 된다 |
 | gRPC server 구성 | 언어마다 기본 server 구현이 다르다. gRPC 쪽은 각 언어의 기본 구성으로 두고 그 구성을 결과에 남긴다 |
 | 런타임과 gRPC 라이브러리 version | SDK version, 런타임 version, gRPC 라이브러리 version을 셀 원본과 보고서에 함께 남긴다 |
+
+**warmup 길이는 여기 없다.** warmup은 §3.1의 `WARMUP_SECONDS`로 모든 언어가 같은 벽시계
+시간을 쓴다. 예전에는 언어마다 두었는데, 그러자 같은 `warmup` 필드에 서로 다른 단위가
+들어갔다 — C++은 5000(ms), Java는 20.0(초), .NET과 Node는 1000(호출 수)이었고, 호출 수
+1000은 실측 0.13~0.2초였다. 150배 차이다. C 기준 bench는 warmup이 아예 없었는데 그 행이
+§7.2 formula 1의 분모다. 값을 기록하는 것만으로는 비교가 성립하지 않는다. 두 행을 나누려면
+두 행이 같은 조건에서 나와야 한다.
+
+기본값 2초는 관측으로 정했다. Java `zlink-java-request-serial@1024`은 warmup 20초에서
+6.293 KOPS, 2초에서 6.187 KOPS로 1.7% 차이이며 이는 run 간 편차 범위다. JIT가 있는 런타임도
+2초면 정상 상태에 든다.
 
 ## 9. 포트 대역
 

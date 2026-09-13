@@ -157,7 +157,8 @@ one-way send. Under this condition the difference was N times.
   endpoint over HTTP. The runner itself generates no load.
 - Only a loopback address (`127.0.0.1`) is used. Ports use the per-language bands in §9.
 - Runs as a Release build.
-- Runs a fixed-duration measured active window after warmup. The warmup length is set per language
+- Runs a fixed-duration measured active window after a warmup of the same wall-clock length in
+  every language (`WARMUP_SECONDS`, §3.1). The recorded value
   and the value used is recorded in the result (§8.2).
 - The default payload size is `1024,4096` bytes.
 - The `request-backpressure` pattern has no incomplete-request ceiling setting. In that
@@ -217,7 +218,8 @@ same meaning, and the flag wins. Anything else is rejected with
 | `SCENARIO` | `--scenario` | `all`, `request`, `send`, or one pattern name from §2 | `all` |
 | `IMPLEMENTATION` | `--implementation` | `all` or one implementation name from §1.1 | `all` |
 | `PAYLOAD_SIZES` | `--payload-sizes` | comma list of `1024` and `4096` | `1024,4096` |
-| `DURATION_SECONDS` | `--duration-seconds` | positive integer | `5` |
+| `DURATION_SECONDS` | `--duration-seconds` | active window seconds, positive integer | `5` |
+| `WARMUP_SECONDS` | `--warmup-seconds` | warmup window seconds, positive integer | `2` |
 | `SKIP_BUILD` | `--skip-build` | `0`, `1` | `0` |
 
 One invocation produces one run. A runner never repeats runs. The three runs G5 (§7.2) asks for
@@ -298,7 +300,7 @@ the following in addition.
 | Field | Meaning |
 |-------|---------|
 | `role` | `source` or `target`. A and B each write their own raw file and the runner merges them into one cell |
-| `trigger` | The trigger request A received, kept as is. Fields: `runId`, `cellId`, `pattern`, `payloadBytes`, `durationMs`, `warmup` (the warmup length, in the unit the language harness records per §8.2), `endpoint` (A's trigger URL, the companion information of §7.1) and `receivedAtUnixMs` (the wall-clock time A received the trigger). All eight are required; the aggregator accepts no alias or default |
+| `trigger` | The trigger request A received, kept as is. Fields: `runId`, `cellId`, `pattern`, `payloadBytes`, `durationMs`, `warmup` (the warmup length in seconds; the same unit in every language, §3.1), `endpoint` (A's trigger URL, the companion information of §7.1) and `receivedAtUnixMs` (the wall-clock time A received the trigger). All eight are required; the aggregator accepts no alias or default |
 | `streams` | A's logical stream count and the per-stream in-flight ceiling (§10.3) |
 | `target_stats` | Receive count, error count, and drain time the runner read from B's stats endpoint after settle |
 
@@ -583,9 +585,19 @@ to leave the values used in the result.
 
 | Item | Reason |
 |------|------|
-| Warmup length | The JVM reaches steady state only after JIT warmup finishes. Forcing the same warmup as `.NET` would measure an unwarmed runtime |
 | gRPC server configuration | The default server implementation differs per language. The gRPC side is left at each language's default configuration, and that configuration is recorded in the result |
 | Runtime and gRPC library version | The SDK version, runtime version, and gRPC library version are recorded in the cell's raw output and in the report |
+
+**Warmup length is not on this list.** Warmup is `WARMUP_SECONDS` in §3.1 and is the same
+wall-clock time in every language. It used to be per-language, and the same `warmup` field then
+carried a different unit in each: 5000 (ms) in C++, 20.0 (seconds) in Java, 1000 (a call count) in
+.NET and Node — and 1000 calls measured 0.13-0.2s. A 150x spread. The C reference bench had no
+warmup at all, and that row is the denominator of §7.2 formula 1. Recording the value is not enough
+to make rows comparable; dividing two rows requires that both were produced under the same
+conditions.
+
+The 2s default comes from observation: Java `zlink-java-request-serial@1024` measured 6.293 KOPS
+with a 20s warmup and 6.187 KOPS with 2s, a 1.7% difference that sits inside run-to-run spread.
 
 ## 9. Port Bands
 

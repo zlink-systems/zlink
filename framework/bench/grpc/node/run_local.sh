@@ -13,7 +13,6 @@ cd "${HERE}"
 export NODE_PATH="${REPO}/framework/languages/node/node_modules${NODE_PATH:+:${NODE_PATH}}"
 
 RUN_ID="$(basename "${OUTPUT}")"
-WARMUP="${WARMUP:-1000}"
 WINDOW=100
 SEND_CONCURRENCY=8
 TIMEOUT_SECONDS=300
@@ -23,7 +22,6 @@ REQUEST_TIMEOUT_MS=30000
 ROUTE_READY_MS=30000
 LATENCY_SAMPLE_LIMIT=200000
 
-[[ "${WARMUP}" =~ ^[0-9]+$ ]] || { echo "WARMUP must be a non-negative integer" >&2; exit 2; }
 
 check_ports_free() {
   local used
@@ -84,10 +82,10 @@ wait_for_idle() {
 }
 
 trigger_phase() {
-  local url="$1" run_id="$2" cell_id="$3" pattern="$4" payload="$5" phase="$6"
+  local url="$1" run_id="$2" cell_id="$3" pattern="$4" payload="$5" phase="$6" duration_ms="$7"
   curl --silent --show-error --fail \
     -H 'content-type: application/json' \
-    -d "{\"runId\":\"${run_id}\",\"cellId\":\"${cell_id}\",\"pattern\":\"${pattern}\",\"payloadBytes\":${payload},\"phase\":\"${phase}\",\"durationMs\":$((DURATION_SECONDS * 1000)),\"requestWindow\":${WINDOW},\"sendConcurrency\":${SEND_CONCURRENCY}}" \
+    -d "{\"runId\":\"${run_id}\",\"cellId\":\"${cell_id}\",\"pattern\":\"${pattern}\",\"payloadBytes\":${payload},\"phase\":\"${phase}\",\"durationMs\":${duration_ms},\"requestWindow\":${WINDOW},\"sendConcurrency\":${SEND_CONCURRENCY}}" \
     "${url}/bench/start"
   echo
 }
@@ -277,7 +275,7 @@ for pattern in "${bench_patterns[@]}"; do
         --request-window "${WINDOW}"
         --send-concurrency "${SEND_CONCURRENCY}"
         --latency-sample-limit "${LATENCY_SAMPLE_LIMIT}"
-        --warmup "${WARMUP}"
+        --warmup-seconds "${WARMUP_SECONDS}"
         --drain-bound-ms "${DRAIN_BOUND_MS}"
         --request-timeout-ms "${REQUEST_TIMEOUT_MS}"
         --route-ready-ms "${ROUTE_READY_MS}"
@@ -296,9 +294,9 @@ for pattern in "${bench_patterns[@]}"; do
       a_pid=$!
       wait_for_stats "${source_stats_url}" 1
 
-      trigger_phase "${trigger_url}" "${RUN_ID}" "${cell_id}" "${pattern}" "${payload}" warmup
+      trigger_phase "${trigger_url}" "${RUN_ID}" "${cell_id}" "${pattern}" "${payload}" warmup "$((WARMUP_SECONDS * 1000))"
       wait_for_idle "${source_stats_url}"
-      trigger_phase "${trigger_url}" "${RUN_ID}" "${cell_id}" "${pattern}" "${payload}" active
+      trigger_phase "${trigger_url}" "${RUN_ID}" "${cell_id}" "${pattern}" "${payload}" active "$((DURATION_SECONDS * 1000))"
       wait_for_idle "${source_stats_url}"
 
       result_file="${cell_dir}/results.json"

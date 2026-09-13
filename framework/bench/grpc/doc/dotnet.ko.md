@@ -40,7 +40,6 @@ runner는 run을 반복하지 않는다 — run 하나가 실행 하나다.
 | 입력 | 기본값 | 의미 |
 |---|---|---|
 | `CONFIGURATION` | `Release` | build와 `dotnet run` 구성 |
-| `WARMUP` | `1000` | active 전 warmup 호출 수 |
 
 고정값: request window 100, send concurrency 8, raw socket ROUTER, process 상한 300초,
 drain 상한 30초, settle quiet 200ms. 빌드는 `WithGrpcBench.sln`을 Release로 만든다.

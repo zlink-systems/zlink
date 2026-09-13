@@ -27,7 +27,7 @@ function parseOptions(argv) {
     requestWindow: argInt(argv, '--request-window', 100),
     sendConcurrency: argInt(argv, '--send-concurrency', 8),
     latencySampleLimit: argInt(argv, '--latency-sample-limit', 200000),
-    warmup: argInt(argv, '--warmup', 1000),
+    warmupSeconds: argInt(argv, '--warmup-seconds', 2),
     drainBoundMs: argInt(argv, '--drain-bound-ms', 30000),
     requestTimeoutMs: argInt(argv, '--request-timeout-ms', 30000),
     routeReadyMs: argInt(argv, '--route-ready-ms', 30000),
@@ -46,7 +46,7 @@ function validateOptions(options) {
   if (!IMPLEMENTATIONS.includes(options.implementation)) throw new Error('unknown implementation');
   if (!PATTERNS.includes(options.scenario)) throw new Error('unknown scenario');
   if (options.payloadSize < header.HEADER_SIZE || options.requestWindow !== 100
-      || options.sendConcurrency !== 8 || options.warmup < 0
+      || options.sendConcurrency !== 8 || options.warmupSeconds <= 0
       || options.latencySampleLimit <= 0 || options.drainBoundMs !== 30000
       || options.requestTimeoutMs !== 30000 || options.routeReadyMs !== 30000) {
     throw new Error('fixed benchmark options are invalid');
@@ -307,7 +307,7 @@ async function writeResult(options, observedTrigger, result) {
     pattern: observedTrigger.pattern,
     payloadBytes: observedTrigger.payloadBytes,
     durationMs: observedTrigger.durationMs,
-    warmup: options.warmup,
+    warmup: options.warmupSeconds,
     endpoint: `${options.triggerUrl}/bench/start`,
     receivedAtUnixMs: observedTrigger.receivedAtUnixMs
   };
@@ -334,7 +334,7 @@ async function writeResult(options, observedTrigger, result) {
     `# implementation: ${options.implementation}`,
     `# pattern: ${options.scenario}`,
     `# payload_size: ${options.payloadSize}`,
-    `# warmup: ${options.warmup}`,
+    `# warmup_seconds: ${options.warmupSeconds}`,
     ''
   ];
   for (const error of result.client_error_summary) {
@@ -408,7 +408,7 @@ async function collectMetadata(options) {
     kernel: os.release(),
     commit,
     rawSocket: options.rawSocket,
-    warmup: options.warmup,
+    warmup: options.warmupSeconds,
     requestWindow: options.requestWindow,
     sendConcurrency: options.sendConcurrency,
     triggerUrl: options.triggerUrl,

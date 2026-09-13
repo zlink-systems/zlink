@@ -41,7 +41,6 @@ runner는 run을 반복하지 않는다 — run 하나가 실행 하나다.
 
 | 입력 | 기본값 | 의미 |
 |---|---|---|
-| `WARMUP_SECONDS` | `20` | warmup 초 |
 | `JAVA_HOME` | 자동 탐색 | JDK 25. `runner_common.sh`가 고른다 |
 
 Kotlin 보조 셀은 `java/run_local_kotlin.sh`이며 같은 입력을 받되 격자를 좁힌다 — 패턴은

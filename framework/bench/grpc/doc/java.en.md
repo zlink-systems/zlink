@@ -45,7 +45,6 @@ Beyond the six inputs of §3.1 this runner reads only the following.
 
 | Input | Default | Meaning |
 |---|---|---|
-| `WARMUP_SECONDS` | `20` | warmup seconds |
 | `JAVA_HOME` | discovered | JDK 25, chosen by `runner_common.sh` |
 
 The Kotlin auxiliary cells live in `java/run_local_kotlin.sh`. It takes the same inputs
