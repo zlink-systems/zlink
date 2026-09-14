@@ -81,8 +81,8 @@ and a value obtained before that change completes isn't a value that satisfies t
 
 ## 2. Measurement Patterns
 
-The initial scope uses only two payload sizes and three patterns. The default payload sizes are
-`1024` and `4096` bytes. The payload size is the full size of the protobuf `bytes body` or the raw
+The initial scope uses three patterns. Request patterns use a 64-byte request and a 4096-byte response;
+`send-saturation` transmits a 4096-byte command. The payload size is the full size of the protobuf `bytes body` or the raw
 ZLink message body. The first 29 bytes are used as the measurement header, and the rest is filled
 as the business payload area. The gRPC HTTP/2 frame, protobuf field overhead, ZLink envelope, and
 ZMP header aren't included in this size.
@@ -157,9 +157,10 @@ one-way send. Under this condition the difference was N times.
   endpoint over HTTP. The runner itself generates no load.
 - Only a loopback address (`127.0.0.1`) is used. Ports use the per-language bands in §9.
 - Runs as a Release build.
-- Runs a fixed-duration measured active window after warmup. The warmup length is set per language
+- Runs a fixed-duration measured active window after a warmup of the same wall-clock length in
+  every language (`WARMUP_SECONDS`, §3.1). The recorded value
   and the value used is recorded in the result (§8.2).
-- The default payload size is `1024,4096` bytes.
+- Request patterns use a 64-byte request and a 4096-byte response; `send-saturation` transmits a 4096-byte command.
 - The `request-backpressure` pattern has no incomplete-request ceiling setting. In that
   pattern depth is not a condition that is set but a result that is measured and recorded
   (§5.2). This bench has no `request_window` setting.
@@ -199,20 +200,76 @@ drain time is recorded per cell in the results. This bound is not a formality; i
 A bound set too small loses cells even on a healthy run, so it must be large enough that a healthy
 run never reaches it. The reference value is 30 seconds.
 
-## 4. Output Format
+### 3.1 Runner invocation contract
 
-The report table is grouped by pattern, with the implementation name shown on each row. The
-example follows the format below.
+The harnesses differ, but the inputs of every `run_local.sh` and the layout of its results do
+not. When the names differ per language, one language can be measured under conditions the table
+cannot show. That is not hypothetical: a runner handed a relative `OUTROOT` wrote its results
+somewhere that looked outside the repository, and the languages that had a `RUNS` input wrote
+three runs into one directory, which the aggregator then read as a single run.
+
+Every runner takes these inputs and nothing else. Each environment variable has a flag of the
+same meaning, and the flag wins. Anything else is rejected with
+`unsupported runner argument: <name>` and exit 2.
+
+| Environment variable | Flag | Values | Default |
+|---|---|---|---|
+| `OUTPUT` | `--output` | run directory | `log/<lang>/<stamp>` |
+| `SCENARIO` | `--scenario` | `all`, `request`, `send`, or one pattern name from §2 | `all` |
+| `IMPLEMENTATION` | `--implementation` | `all` or one implementation name from §1.1 | `all` |
+| `PAYLOAD_SIZES` | `--payload-sizes` | `4096` | `4096` |
+| `DURATION_SECONDS` | `--duration-seconds` | active window seconds, positive integer | `5` |
+| `WARMUP_SECONDS` | `--warmup-seconds` | warmup window seconds, positive integer | `2` |
+| `SKIP_BUILD` | `--skip-build` | `0`, `1` | `0` |
+
+One invocation produces one run. A runner never repeats runs. The three runs G5 (§7.2) asks for
+come from the caller invoking it three times with a different `OUTPUT`, interleaving other
+languages between them so ordering effects do not favour one language.
+`framework/bench/grpc/run_all.sh` is that caller.
+
+The result layout is the same in every language too.
 
 ```text
-  > Benchmarking current for request-backpressure...
-    Testing local:
-      | Implementation          | Size     |       Throughput |    Bandwidth |  Lat.Mean(ms) |   Lat.P95(ms) |   Lat.P99(ms) | Client CPU | Client Mem | Server CPU | Server Mem |
-      |-------------------------|----------|------------------|--------------|--------------|--------------|--------------|------------|------------|------------|------------|
-      | grpc-dotnet             | 1024B    |       10.00 KOPS |   10.24 MB/s |     1.000 ms |     2.000 ms |     3.000 ms |      10.0% |  100.0 MB |      10.0% |  100.0 MB |
-      | zlink-dotnet            | 1024B    |       30.00 KOPS |   30.72 MB/s |     0.300 ms |     0.600 ms |     0.900 ms |      10.0% |  100.0 MB |      10.0% |  100.0 MB |
-      | zlink-framework-dotnet  | 1024B    |       20.00 KOPS |   20.48 MB/s |     0.500 ms |     0.900 ms |     1.200 ms |      10.0% |  100.0 MB |      10.0% |  100.0 MB |
+<OUTPUT>/
+  report.txt                          # the §4 table, written by tools/bench_report.py
+  runner.log                          # the runner's own progress record
+  <implementation>-<pattern>-<payload>/
+      results.json                    # the §4 cell record (with-grpc-cell-v1)
+      report.txt                      # the table for that cell alone
+      source.log  target.log          # output of A and B
+      target-stats.json               # B's stats snapshot after settle
 ```
+
+Cell directory names carry no run number. One run is one directory, so `OUTPUT` carries it.
+
+The C reference bench (§1.2) is client-driven: one client process walks the grid and one server
+pair lives for the whole run. Its cell directories hold `results.json` only, and the process
+logs are at the run level.
+
+## 4. Output Format
+
+`report.txt` is the same table regardless of language. A runner does not format it; it is
+produced from the cell records by `tools/bench_report.py`. A per-runner format drifts in ways
+that only show when two languages are read side by side.
+
+There are ten columns. Throughput is printed in thousands per second, and the unit name says what
+was counted: `KOPS` for the request patterns (completed round trips) and `Kmsg/s` for
+`send-saturation` (one-way messages the target received). The numeric scale is the same for both.
+
+```text
+| Scenario | Size | Throughput | Lat.Mean(ms) | Lat.P95(ms) | Lat.P99(ms) | Source CPU(%) | Source Mem(MB) | Target CPU(%) | Target Mem(MB) |
+|---|---|---|---|---|---|---|---|---|---|
+| grpc-dotnet-request-backpressure | 4096 | 10.000 KOPS | 1.000 | 2.000 | 3.000 | 12.000 | 120.000 | 8.000 | 100.000 |
+| zlink-dotnet-request-backpressure | 4096 | 30.000 KOPS | 0.300 | 0.600 | 0.900 | 10.000 | 110.000 | 6.000 | 90.000 |
+| zlink-framework-dotnet-request-backpressure | 4096 | 20.000 KOPS | 0.500 | 0.900 | 1.200 | 14.000 | 150.000 | 10.000 | 140.000 |
+| zlink-dotnet-send-saturation | 4096 | 487.000 Kmsg/s | 1.745 | 5.720 | 8.387 | 20.000 | 130.000 | 9.000 | 110.000 |
+```
+
+`Source` is sending process A and `Target` is receiving process B. CPU percentages and memory
+in MB are printed from the records; unavailable measurements are shown as `n/a`. The values
+above illustrate the output format. Bandwidth, depth and other metrics remain in the cell record
+(`results.json`). The table is for reading across languages by eye; judgement and diagnosis are
+the aggregator's job, and it reads the records.
 
 The report and console output also leave a per-metric `RESULT,current,...` format alongside, for
 easier handling by the perf runner. The fields of one row are in the following order.
@@ -245,7 +302,7 @@ the following in addition.
 | Field | Meaning |
 |-------|---------|
 | `role` | `source` or `target`. A and B each write their own raw file and the runner merges them into one cell |
-| `trigger` | The trigger request A received, kept as is. Fields: `runId`, `cellId`, `pattern`, `payloadBytes`, `durationMs`, `warmup` (the warmup length, in the unit the language harness records per §8.2), `endpoint` (A's trigger URL, the companion information of §7.1) and `receivedAtUnixMs` (the wall-clock time A received the trigger). All eight are required; the aggregator accepts no alias or default |
+| `trigger` | The trigger request A received, kept as is. Fields: `runId`, `cellId`, `pattern`, `payloadBytes`, `durationMs`, `warmup` (the warmup length in seconds; the same unit in every language, §3.1), `endpoint` (A's trigger URL, the companion information of §7.1) and `receivedAtUnixMs` (the wall-clock time A received the trigger). All eight are required; the aggregator accepts no alias or default |
 | `streams` | A's logical stream count and the per-stream in-flight ceiling (§10.3) |
 | `target_stats` | Receive count, error count, and drain time the runner read from B's stats endpoint after settle |
 
@@ -396,16 +453,13 @@ passing. The framework is judged against the same language's raw binding result.
 reaches 80% or more of the raw binding result, the framework's added cost is judged as passing.
 
 ```text
-at each of payload sizes 1024 and 4096:
+at payload size 4096:
 zlink-<lang> / zlink-c                     >= 0.80   binding layer passes
 zlink-framework-<lang> / zlink-<lang>      >= 0.80   framework added cost passes
 ```
 
-Both formulas are calculated separately per payload size. A language passes only when it satisfies
-the criterion at both `1024` and `4096`. A result that satisfies only one size isn't a pass, and
-the per-payload values are always recorded as they are. A stack that holds the criterion at `1024`
-but degrades at `4096` has a real problem, and since the report shows both sizes anyway, a
-per-payload gate exposes that problem at no added cost.
+Both formulas are calculated at payload size `4096`. A language passes only when that result
+satisfies the criterion.
 
 This criterion is applied to patterns where ZLink can send the next request without waiting for the
 reply. Such a pattern is the sound judgement cell because gRPC unary `Echo` and a ZLink request
@@ -414,7 +468,7 @@ give the same guarantee, namely confirmation that the server processed the messa
 process-one-at-a-time usage pattern.
 
 **The reference pattern for judgement is `request-backpressure`.** Whether a language passes is
-decided by that pattern satisfying the criterion at both payload sizes.
+decided by that pattern's `4096`-byte result.
 
 The grounds for choosing the reference pattern this way are below.
 
@@ -530,9 +584,19 @@ to leave the values used in the result.
 
 | Item | Reason |
 |------|------|
-| Warmup length | The JVM reaches steady state only after JIT warmup finishes. Forcing the same warmup as `.NET` would measure an unwarmed runtime |
 | gRPC server configuration | The default server implementation differs per language. The gRPC side is left at each language's default configuration, and that configuration is recorded in the result |
 | Runtime and gRPC library version | The SDK version, runtime version, and gRPC library version are recorded in the cell's raw output and in the report |
+
+**Warmup length is not on this list.** Warmup is `WARMUP_SECONDS` in §3.1 and is the same
+wall-clock time in every language. It used to be per-language, and the same `warmup` field then
+carried a different unit in each: 5000 (ms) in C++, 20.0 (seconds) in Java, 1000 (a call count) in
+.NET and Node — and 1000 calls measured 0.13-0.2s. A 150x spread. The C reference bench had no
+warmup at all, and that row is the denominator of §7.2 formula 1. Recording the value is not enough
+to make rows comparable; dividing two rows requires that both were produced under the same
+conditions.
+
+The 2s default comes from observation: Java `zlink-java-request-serial@1024` measured 6.293 KOPS
+with a 20s warmup and 6.187 KOPS with 2s, a 1.7% difference that sits inside run-to-run spread.
 
 ## 9. Port Bands
 
@@ -578,7 +642,7 @@ response are JSON and the five languages use the same fields.
 ```text
 POST http://127.0.0.1:<A trigger>/bench/start
 { "runId": "...", "cellId": "...", "pattern": "request-backpressure",
-  "payloadBytes": 1024, "phase": "warmup" | "active",
+  "payloadBytes": 4096, "phase": "warmup" | "active",
   "durationMs": 5000, "requestWindow": 100, "sendConcurrency": 8 }
 → 200 { "accepted": true, "runId": "...", "cellId": "...", "phase": "active", "startedAt": <monotonic ns> }
 ```

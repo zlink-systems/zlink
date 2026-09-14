@@ -73,8 +73,8 @@ bench에서 다룬다. 이 bench는 gRPC와 같은 모양의 1:1 요청 경로�
 
 ## 2. 측정 패턴
 
-처음 범위는 두 payload 크기와 세 패턴만 사용한다. payload 크기는 `1024`, `4096` bytes를
-기본값으로 한다. payload 크기는 protobuf `bytes body` 또는 raw ZLink message body의 전체
+처음 범위는 세 패턴을 사용한다. request 계열은 64B request와 4096B response를 사용하고,
+`send-saturation`은 4096B command를 전송한다. payload 크기는 protobuf `bytes body` 또는 raw ZLink message body의 전체
 크기다. 앞 29 bytes는 측정 header로 사용하고, 나머지를 business payload 영역으로 채운다.
 gRPC HTTP/2 frame, protobuf field overhead, ZLink envelope, ZMP header는 이 크기에 포함하지
 않는다.
@@ -145,13 +145,13 @@ bench에서 옳은 비교인 이유는 아래와 같다.
   runner 자체는 부하를 만들지 않는다.
 - loopback 주소(`127.0.0.1`)만 사용한다. 포트는 §9의 언어별 대역을 사용한다.
 - Release build로 실행한다.
-- warmup 뒤 정해진 시간의 measured active 구간을 실행한다. warmup 길이는 언어마다 다르게
-  두고 사용한 값을 결과에 기록한다(§8.2).
-- 기본 payload 크기는 `1024,4096` bytes다.
+- warmup 뒤 정해진 시간의 measured active 구간을 실행한다. warmup 길이는 모든 언어가 같은
+  벽시계 시간이다(§3.1의 `WARMUP_SECONDS`, 기본 2초).
+- request 계열은 64B request와 4096B response를, `send-saturation`은 4096B command를 사용한다.
 - `request-backpressure` 패턴에는 미완료 request 상한 설정이 없다. 이 패턴에서 깊이는
   설정하는 조건이 아니라 측정해 기록하는 결과다(§5.2). `request_window` 설정은 이 bench에 없다.
 - 기본 send concurrency는 `8`이다. **이것은 stream 수이지 연결 수가 아니다.**
-  세 행 모두 서버 간 연결은 **하나**를 쓴다 — gRPC는 채널 하나를 stub 8개가 공유하고,
+  세 행 모두 서버 간 연결은 **하나**를 쓴다 — gRPC는 채널 하나와 stub 하나를 모든 logical stream이 공유하고,
   raw binding은 ROUTER 하나를 stream 8개가 공유하며, framework는 RouteMesh socket 하나다.
   연결 수가 행마다 다르면 §7.2의 비율이 계층 비용이 아니라 연결 수 차이를 잰다.
 - gRPC와 ZLink framework는 같은 protobuf DTO를 사용한다. ZLink raw binding은 framework를
@@ -185,19 +185,72 @@ server가 받은 수를 폴링해 그 값이 더는 증가하지 않을 때까�
 값이다. 상한을 작게 잡으면 정상적인 실행에서도 셀을 잃게 되므로, 건강한 실행이 상한에 닿지
 않을 만큼 충분히 크게 잡는다. 기준값은 30초다.
 
-## 4. 출력 형식
+### 3.1 runner 실행 계약
 
-report 표는 패턴별로 묶고, 각 행에 구현 이름을 표시한다. 예시는 아래 형식이다.
+언어 harness는 서로 다르지만 `run_local.sh`의 실행 인자와 결과물 배치는 같다. 인자 이름이
+언어마다 다르면 한 언어만 다른 조건으로 측정하고도 표에서는 구분되지 않는다. 실제로 상대 경로
+`OUTROOT`를 받은 runner가 저장소 밖처럼 보이는 곳에 결과를 만들었고, `RUNS`를 가진 언어만 run
+세 번을 한 디렉터리에 겹쳐 써 집계기가 run 하나로 읽었다.
+
+모든 runner는 아래 입력만 받는다. 환경 변수와 같은 뜻의 flag를 함께 받고 flag가 이긴다. 그 밖의
+인자는 `unsupported runner argument: <이름>`으로 거절하고 2로 끝낸다.
+
+| 환경 변수 | flag | 값 | 기본값 |
+|---|---|---|---|
+| `OUTPUT` | `--output` | run 디렉터리 | `log/<lang>/<stamp>` |
+| `SCENARIO` | `--scenario` | `all`·`request`·`send`·§2의 패턴 이름 하나 | `all` |
+| `IMPLEMENTATION` | `--implementation` | `all`·§1.1의 구현 이름 하나 | `all` |
+| `PAYLOAD_SIZES` | `--payload-sizes` | `4096` | `4096` |
+| `DURATION_SECONDS` | `--duration-seconds` | active 구간 초, 양의 정수 | `5` |
+| `WARMUP_SECONDS` | `--warmup-seconds` | warmup 구간 초, 양의 정수 | `2` |
+| `SKIP_BUILD` | `--skip-build` | `0`·`1` | `0` |
+
+한 번 실행하면 run 하나를 만든다. runner는 run을 반복하지 않는다. §7.2의 G5가 요구하는 3 run은
+호출자가 `OUTPUT`을 달리해 세 번 부르고 그 사이에 다른 언어를 끼워 순서 효과를 줄인다.
+`framework/bench/grpc/run_all.sh`가 그 호출자다.
+
+결과물 배치도 언어마다 같다.
 
 ```text
-  > Benchmarking current for request-backpressure...
-    Testing local:
-      | Implementation          | Size     |       Throughput |    Bandwidth |  Lat.Mean(ms) |   Lat.P95(ms) |   Lat.P99(ms) | Client CPU | Client Mem | Server CPU | Server Mem |
-      |-------------------------|----------|------------------|--------------|--------------|--------------|--------------|------------|------------|------------|------------|
-      | grpc-dotnet             | 1024B    |       10.00 KOPS |   10.24 MB/s |     1.000 ms |     2.000 ms |     3.000 ms |      10.0% |  100.0 MB |      10.0% |  100.0 MB |
-      | zlink-dotnet            | 1024B    |       30.00 KOPS |   30.72 MB/s |     0.300 ms |     0.600 ms |     0.900 ms |      10.0% |  100.0 MB |      10.0% |  100.0 MB |
-      | zlink-framework-dotnet  | 1024B    |       20.00 KOPS |   20.48 MB/s |     0.500 ms |     0.900 ms |     1.200 ms |      10.0% |  100.0 MB |      10.0% |  100.0 MB |
+<OUTPUT>/
+  report.txt                          # §4의 통일 표. tools/bench_report.py가 만든다
+  runner.log                          # runner 자신의 진행 기록
+  <구현 이름>-<패턴 이름>-<payload>/
+      results.json                    # §4의 셀 원본(with-grpc-cell-v1)
+      report.txt                      # 그 셀만의 표
+      source.log  target.log          # A와 B의 출력
+      target-stats.json               # settle 뒤 읽은 B의 stats 스냅샷
 ```
+
+셀 디렉터리 이름에는 run 번호를 붙이지 않는다. run 하나가 디렉터리 하나이므로 번호는 `OUTPUT`이
+갖는다.
+
+C 기준 bench(§1.2)는 client-driven이다. client 하나가 격자를 전부 돌고 server 쌍은 run 내내
+하나다. 그래서 셀 디렉터리에는 `results.json`만 있고 process 로그는 run 수준에 있다.
+
+## 4. 출력 형식
+
+`report.txt`는 언어와 무관하게 같은 표다. runner가 표를 직접 찍지 않고 셀 원본에서
+`tools/bench_report.py`가 만든다. runner마다 형식을 두면 언어를 나란히 놓고 볼 때만 드러나는
+방식으로 어긋난다.
+
+열은 열 개다. 처리량은 초당 천 단위로 찍고, 단위 이름이 무엇을 센 값인지 말한다 — request
+계열은 완료한 왕복 수라 `KOPS`, `send-saturation`은 target이 받은 단방향 메시지 수라 `Kmsg/s`다.
+두 이름의 수치 배율은 같다.
+
+```text
+| Scenario | Size | Throughput | Lat.Mean(ms) | Lat.P95(ms) | Lat.P99(ms) | Source CPU(%) | Source Mem(MB) | Target CPU(%) | Target Mem(MB) |
+|---|---|---|---|---|---|---|---|---|---|
+| grpc-dotnet-request-backpressure | 4096 | 10.000 KOPS | 1.000 | 2.000 | 3.000 | 12.000 | 120.000 | 8.000 | 100.000 |
+| zlink-dotnet-request-backpressure | 4096 | 30.000 KOPS | 0.300 | 0.600 | 0.900 | 10.000 | 110.000 | 6.000 | 90.000 |
+| zlink-framework-dotnet-request-backpressure | 4096 | 20.000 KOPS | 0.500 | 0.900 | 1.200 | 14.000 | 150.000 | 10.000 | 140.000 |
+| zlink-dotnet-send-saturation | 4096 | 487.000 Kmsg/s | 1.745 | 5.720 | 8.387 | 20.000 | 130.000 | 9.000 | 110.000 |
+```
+
+`Source`는 송신 프로세스 A, `Target`은 수신 프로세스 B다. CPU는 원본의 사용률(%), 메모리는
+원본의 사용량(MB)을 출력하며, 측정값이 없으면 `n/a`로 표시한다. 위 수치는 출력 형식 예시다.
+대역폭·깊이 같은 나머지 메트릭은 셀 원본(`results.json`)에만 둔다.
+표는 사람이 언어를 가로질러 읽는 용도이고, 판정과 진단은 원본을 읽는 집계기가 한다.
 
 보고서와 콘솔 출력은 perf runner에서 다루기 쉽게 metric별 `RESULT,current,...` 형식도 같이
 남긴다. 한 행의 필드는 아래 순서다.
@@ -228,7 +281,7 @@ server-driven 모델(§10)에서 `client_*`는 **source process A**, `server_*`�
 | 필드 | 의미 |
 |------|------|
 | `role` | `source` 또는 `target`. A와 B가 각자 원본을 쓰고 runner가 셀 하나로 합친다 |
-| `trigger` | A가 받은 trigger 요청을 그대로 둔 객체. 필드는 `runId`, `cellId`, `pattern`, `payloadBytes`, `durationMs`, `warmup`(warmup 길이; 언어 harness의 단위를 §8.2대로 기록), `endpoint`(A의 trigger URL, §7.1의 동반 정보), `receivedAtUnixMs`(A가 trigger를 받은 wall-clock 시각). 여덟 필드 모두 필수이며 집계기는 별칭이나 기본값을 두지 않는다 |
+| `trigger` | A가 받은 trigger 요청을 그대로 둔 객체. 필드는 `runId`, `cellId`, `pattern`, `payloadBytes`, `durationMs`, `warmup`(warmup 길이, 초. 모든 언어가 같은 단위다 — §3.1), `endpoint`(A의 trigger URL, §7.1의 동반 정보), `receivedAtUnixMs`(A가 trigger를 받은 wall-clock 시각). 여덟 필드 모두 필수이며 집계기는 별칭이나 기본값을 두지 않는다 |
 | `streams` | A의 logical stream 수와 stream당 in-flight 상한(§10.3) |
 | `target_stats` | settle 뒤 runner가 B의 stats endpoint에서 읽은 수신 수·오류 수·drain 시간 |
 
@@ -370,23 +423,19 @@ request-backpressure 결과를 기준으로 본다. raw binding이 C 결과의 8
 raw binding 결과의 80% 이상이면 framework 추가 비용은 통과로 판단한다.
 
 ```text
-payload 크기 1024와 4096 각각에서:
+payload 크기 4096에서:
 zlink-<lang> / zlink-c                     >= 0.80   binding 계층 통과
 zlink-framework-<lang> / zlink-<lang>      >= 0.80   framework 추가 비용 통과
 ```
 
-두 식은 payload 크기마다 따로 계산한다. 한 언어는 `1024`와 `4096` 두 크기에서 모두 기준을
-만족할 때에만 통과다. 한 크기만 만족한 결과는 통과가 아니며, payload별 값은 항상 그대로
-기록한다. `1024`에서 기준을 유지하다가 `4096`에서 떨어지는 스택에는 실제 문제가 있고, 보고서는
-어차피 두 크기를 모두 표시하므로 payload별 판정은 추가 비용 없이 그 문제를 드러낸다.
+두 식은 `4096` payload에서 계산한다. 그 결과가 기준을 만족할 때에만 언어가 통과다.
 
 이 기준은 ZLink가 reply를 기다리지 않고 다음 request를 보낼 수 있는 패턴에 적용한다. 그런
 패턴이 판정에 적합한 이유는 gRPC unary `Echo`와 ZLink request가 같은 보장, 곧 서버가 처리했다는
 확인을 주기 때문이다. `request-serial`은 한 번에 하나만 처리하는 사용 패턴의 왕복 지연을 보기
 위한 보조 지표로 남긴다.
 
-**판정의 기준 패턴은 `request-backpressure`다.** 언어 통과 여부는 이 패턴에서 두 payload 크기
-모두 기준을 만족할 때 결정한다.
+**판정의 기준 패턴은 `request-backpressure`다.** 언어 통과 여부는 이 패턴의 `4096` payload 결과로 결정한다.
 
 기준 패턴을 이렇게 두는 근거는 아래와 같다.
 
@@ -489,14 +538,24 @@ raw 직렬화 비용을 포함한 결과를 새 기준으로 사용한다. 직�
 
 ### 8.2 언어마다 다르게 두되 반드시 기록하는 값
 
-아래 세 값은 언어마다 다르게 설정한다. 같게 맞추는 것이 목적이 아니라, 사용한 값을 결과에
+아래 두 값은 언어마다 다르게 설정한다. 같게 맞추는 것이 목적이 아니라, 사용한 값을 결과에
 남기는 것이 목적이다.
 
 | 항목 | 이유 |
 |------|------|
-| warmup 길이 | JVM은 JIT 예열이 끝난 뒤에 정상 상태가 된다. `.NET`과 같은 warmup을 강요하면 예열되지 않은 런타임을 측정하게 된다 |
 | gRPC server 구성 | 언어마다 기본 server 구현이 다르다. gRPC 쪽은 각 언어의 기본 구성으로 두고 그 구성을 결과에 남긴다 |
 | 런타임과 gRPC 라이브러리 version | SDK version, 런타임 version, gRPC 라이브러리 version을 셀 원본과 보고서에 함께 남긴다 |
+
+**warmup 길이는 여기 없다.** warmup은 §3.1의 `WARMUP_SECONDS`로 모든 언어가 같은 벽시계
+시간을 쓴다. 예전에는 언어마다 두었는데, 그러자 같은 `warmup` 필드에 서로 다른 단위가
+들어갔다 — C++은 5000(ms), Java는 20.0(초), .NET과 Node는 1000(호출 수)이었고, 호출 수
+1000은 실측 0.13~0.2초였다. 150배 차이다. C 기준 bench는 warmup이 아예 없었는데 그 행이
+§7.2 formula 1의 분모다. 값을 기록하는 것만으로는 비교가 성립하지 않는다. 두 행을 나누려면
+두 행이 같은 조건에서 나와야 한다.
+
+기본값 2초는 관측으로 정했다. Java `zlink-java-request-serial@1024`은 warmup 20초에서
+6.293 KOPS, 2초에서 6.187 KOPS로 1.7% 차이이며 이는 run 간 편차 범위다. JIT가 있는 런타임도
+2초면 정상 상태에 든다.
 
 ## 9. 포트 대역
 
@@ -538,7 +597,7 @@ admin 계약을 그대로 쓴다. 요청과 응답은 JSON이고 다섯 언어�
 ```text
 POST http://127.0.0.1:<A trigger>/bench/start
 { "runId": "...", "cellId": "...", "pattern": "request-backpressure",
-  "payloadBytes": 1024, "phase": "warmup" | "active",
+  "payloadBytes": 4096, "phase": "warmup" | "active",
   "durationMs": 5000, "requestWindow": 100, "sendConcurrency": 8 }
 → 200 { "accepted": true, "runId": "...", "cellId": "...", "phase": "active", "startedAt": <monotonic ns> }
 ```

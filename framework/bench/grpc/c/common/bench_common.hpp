@@ -133,6 +133,27 @@ inline std::string env_string (const char *name, const char *fallback)
     return value && *value ? std::string (value) : std::string (fallback);
 }
 
+// 측정 구간이 소켓에 처음 흐르는 트래픽이면 안 된다. 같은 코드 경로를 WARMUP_SECONDS
+// 동안 한 번 돌고 그 결과를 버린 뒤 측정한다. 시나리오 함수는 호출할 때마다
+// DURATION_SECONDS를 읽으므로, warmup 길이는 그 값을 잠시 바꿔 전달한다.
+//
+// C 기준 bench는 §7.2 formula 1의 분모다. 분자인 언어 행들이 2초를 받는데 분모만
+// warmup 없이 재면 그 비율은 계층 비용이 아니라 warmup 차이를 재게 된다.
+template <typename Fn> inline auto warm_then_measure (Fn run) -> decltype (run ())
+{
+    const int warmup_s = env_int ("WARMUP_SECONDS", 2);
+    const char *previous = std::getenv ("DURATION_SECONDS");
+    const std::string saved = previous ? std::string (previous) : std::string ();
+    const std::string warmup_value = std::to_string (warmup_s);
+    ::setenv ("DURATION_SECONDS", warmup_value.c_str (), 1);
+    (void) run ();
+    if (previous)
+        ::setenv ("DURATION_SECONDS", saved.c_str (), 1);
+    else
+        ::unsetenv ("DURATION_SECONDS");
+    return run ();
+}
+
 inline bool scenario_enabled (const std::string &enabled, const char *scenario)
 {
     if (enabled == "all")

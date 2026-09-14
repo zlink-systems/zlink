@@ -11,6 +11,12 @@ const CLIENT_PARALLELISM_CEILING = 1.0;
 const ERROR_KIND_LIMIT = 8;
 const ERROR_MESSAGE_LIMIT = 200;
 
+function outboundPayloadSize(trigger) {
+  return trigger.pattern === 'send-saturation'
+    ? trigger.payloadBytes
+    : header.REQUEST_PAYLOAD_SIZE;
+}
+
 class ResourceSample {
   constructor() {
     this.cpuStart = process.cpuUsage();
@@ -179,12 +185,16 @@ function headerRunId(runId) {
 
 async function runWarmup(transport, options, trigger) {
   const runId = headerRunId(trigger.runId);
-  for (let index = 0; index < options.warmup; index++) {
+  // warmup은 trigger가 말하는 벽시계 시간만큼 돈다. active 구간과 같고 다른 언어와도 같다.
+  // 호출 수로 정하면 runtime마다 warmup 길이가 달라진다 — 1000 호출은 여기서 0.2초였고
+  // Java는 같은 이름 아래 20초였다. §7.2는 그렇게 서로 다른 조건으로 잰 두 행을 나눈다.
+  const deadline = header.nowNs() + BigInt(Math.round(trigger.durationMs * 1e6));
+  for (let index = 0; header.nowNs() < deadline; index++) {
     const stream = trigger.pattern === 'send-saturation'
       ? index % trigger.sendConcurrency
       : 0;
     const payload = header.createPayloadBytes(
-      trigger.payloadBytes, runId, header.PHASE_WARMUP, index
+      outboundPayloadSize(trigger), runId, header.PHASE_WARMUP, index
     );
     if (trigger.pattern === 'send-saturation') await transport.send(stream, payload);
     else {
@@ -283,7 +293,7 @@ async function requestBackpressure(
         if (blocked === null) {
           const sequence = nextSequence();
           const payload = header.createPayloadBytes(
-            trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence
+            outboundPayloadSize(trigger), runId, header.PHASE_ACTIVE, sequence
           );
           const started = metrics.begin();
           let submission;
@@ -362,7 +372,7 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
     while (header.nowNs() < deadline) {
       const sequence = nextSequence();
       const payload = header.createPayloadBytes(
-        trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence
+        outboundPayloadSize(trigger), runId, header.PHASE_ACTIVE, sequence
       );
       const started = metrics.begin();
       try {
@@ -388,7 +398,7 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
 
 async function executeRequest(transport, metrics, trigger, runId, stream, sequence) {
   const payload = header.createPayloadBytes(
-    trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence
+    outboundPayloadSize(trigger), runId, header.PHASE_ACTIVE, sequence
   );
   const started = metrics.begin();
   try {

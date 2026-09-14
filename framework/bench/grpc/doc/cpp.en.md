@@ -19,39 +19,37 @@ ClientServer channels).
 
 ## 2. How to run
 
-The runner does not build. Build first; measurements always go through the perf ticket queue.
+The runner inputs and the result layout are the same in every language; spec §3.1
+is that contract, and a runner rejects anything outside it. Measurements always go
+through the perf ticket queue.
 
 ```bash
-# Build — the local package root (default .artifacts/wsl) must hold install/zlink-cpp/0.17.6 and
-# install/zlink-core/0.17.5 (a symlink to the release Core prefix is fine).
-cmake -S framework/bench/grpc/cpp -B framework/bench/grpc/cpp/build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build framework/bench/grpc/cpp/build --parallel 2
-
-# Full matrix, one run — always through the perf ticket queue
-bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "cpp with-grpc run 1/3" -- \
-  bash framework/bench/grpc/cpp/run_local.sh cpp-s3-run1
+# One run of the whole grid
+bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "cpp with-grpc r1" -- \
+  bash framework/bench/grpc/cpp/run_local.sh --skip-build \
+    --output framework/bench/grpc/log/cpp/<name>/r1
 
 # One cell
-bash framework/bench/grpc/cpp/run_local.sh smoke --implementations zlink-framework-cpp \
-  --patterns request-window --payload-sizes 1024 --duration-seconds 2
+bash framework/bench/grpc/cpp/run_local.sh --skip-build --scenario request-serial \
+  --implementation zlink-framework-cpp --payload-sizes 4096 --duration-seconds 2 \
+  --output /tmp/cpp-smoke
 ```
+
+To run several languages three times each and get the §7.2 judgement, use
+`framework/bench/grpc/run_all.sh`. A runner never repeats a run: one run is one
+invocation.
+
+Beyond the six inputs of §3.1 this runner reads only the following.
 
 | Input | Default | Meaning |
 |---|---|---|
-| first argument | `cpp-router-1` | run label (result directory name) |
-| `BUILD_DIR` | `cpp/build` | location of the prebuilt executables |
-| `--implementations` / `IMPLEMENTATIONS` | all three | implementation list |
-| `--patterns` / `PATTERNS` | all four | pattern list |
-| `--payload-sizes` / `PAYLOAD_SIZES` | `1024,4096` | body sizes (other values are rejected) |
-| `--duration-seconds` / `DURATION_SECONDS` | 5 | active seconds |
-| `--warmup` / `WARMUP_SECONDS` | 5 | warmup seconds |
-| `--warmup-segments` / `WARMUP_SEGMENTS` | 10 | warmup throughput observation segments |
-| `REQUEST_WINDOW`, `SEND_CONCURRENCY` | 100, 8 | other values are rejected |
-| `REQUEST_TIMEOUT_MS` / `DRAIN_BOUND_MS` | 30000 / 30000 | request timeout / drain and settle bound |
-| `COMMAND_SETTLE_MS` | 200 | quiet window for stable receive/complete counts |
-| `OUTPUT_DIR` / `--output-dir` | `log/cpp/<stamp>/<label>` | result directory |
-| `RUN_STAMP` | current time | run group id |
-| `LOAD_GATE` | 2.0 | load-average gate before measuring |
+| `BUILD_DIR` | `cpp/build` | where the pre-built binaries are; this runner builds nothing |
+| `WARMUP_SEGMENTS` | `10` | warmup throughput observation segments |
+| `LOAD_GATE` | `2.0` | load average a measurement may start under |
+| `LOAD_GATE_WAIT_SECONDS` | `600` | how long to wait for that gate |
+
+Fixed: request window 100, send concurrency 8, ROUTER raw socket, 30s request timeout
+and drain bound, 200ms settle quiet period.
 
 ## 3. Process layout
 
@@ -75,7 +73,7 @@ after each cell ends.
 | `request-serial` | 1 | 1 | sequential submit/completion on one application thread |
 | `request-window` | 1 | 100 | outstanding set of 100 gRPC async calls / raw coroutines / framework tasks |
 | `request-backpressure` | 1 | none | submits without an application bound, yielding to the completion pump per submit |
-| `send-saturation` | 8 | 1 | one stub per stream for gRPC, a coroutine slot for raw, a task slot for framework |
+| `send-saturation` | 8 | 1 | one shared gRPC stub, a coroutine slot for raw, a task slot for framework |
 
 All three drivers observe submit/completion on one application thread. Framework task completion
 is observed by polling the public `await_ready()`; that CPU is included in `submit_thread_cores`.
@@ -98,13 +96,13 @@ No driver drains transport completions directly or installs a second poller.
 ## 5. Where results go
 
 ```text
-framework/bench/grpc/log/cpp/<stamp>/<label>/
-├── runner.log · report.txt · load-gates.txt
+<OUTPUT>/
+├── report.txt · runner.log · load-gates.txt
 └── <implementation>-<pattern>-<payload>/
-    ├── results.json            # with-grpc-cell-v1: role, trigger, streams, target_stats
+    ├── results.json            # with-grpc-cell-v1: role·trigger·streams·target_stats
     ├── source.log / target.log
     ├── warmup-target-stats.json
-    └── target-stats.json       # { "snapshot": <B stats response> }
+    └── target-stats.json       # { "snapshot": <B's stats response> }
 ```
 
 The two stats files are diagnostic snapshots and are wrapped in a `snapshot` container (a

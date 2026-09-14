@@ -20,6 +20,8 @@ public readonly record struct BenchMetricHeader(
 public static class BenchMetricHeaders
 {
     public const int HeaderSize = 29;
+    public const int RequestPayloadSize = 64;
+    public const int ResponsePayloadSize = 4096;
     private const uint Magic = 0x5A4C4E4B; // "ZLNK"
 
     public static BenchPayload CreatePayload(int payloadSize, uint runId, BenchPhase phase, ulong sequence)
@@ -28,6 +30,22 @@ public static class BenchMetricHeaders
         {
             Body = UnsafeByteOperations.UnsafeWrap(CreatePayloadBytes(payloadSize, runId, phase, sequence))
         };
+    }
+
+    public static BenchPayload CreateRequestPayload(uint runId, BenchPhase phase, ulong sequence) =>
+        CreatePayload(RequestPayloadSize, runId, phase, sequence);
+
+    public static BenchPayload CreateResponsePayload(BenchPayload request)
+    {
+        if (!TryDecode(request, out var requestHeader))
+        {
+            throw new InvalidOperationException("Bench request has no valid measurement header.");
+        }
+
+        var bytes = BenchPayloads.CreateBytes(ResponsePayloadSize);
+        Stamp(bytes, requestHeader.RunId, requestHeader.Phase, ResponsePayloadSize,
+            requestHeader.Sequence, requestHeader.SentTimestampNs);
+        return new BenchPayload { Body = UnsafeByteOperations.UnsafeWrap(bytes) };
     }
 
     public static byte[] CreatePayloadBytes(int payloadSize, uint runId, BenchPhase phase, ulong sequence)

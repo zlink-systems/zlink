@@ -21,31 +21,41 @@ command endpoints separate.
 
 ## 2. How to run
 
+The runner inputs and the result layout are the same in every language; spec §3.1
+is that contract, and a runner rejects anything outside it. Measurements always go
+through the perf ticket queue.
+
 ```bash
-cd framework/bench/grpc/java
-./run_local.sh                                   # full Java matrix
-./run_local_kotlin.sh                            # the two Kotlin supplementary cells
-RUNS=1 PAYLOADS=1024 SCENARIO=request-window IMPLEMENTATION=zlink-framework-java ./run_local.sh
+# One run of the whole grid
+bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "java with-grpc r1" -- \
+  bash framework/bench/grpc/java/run_local.sh --skip-build \
+    --output framework/bench/grpc/log/java/<name>/r1
+
+# One cell
+bash framework/bench/grpc/java/run_local.sh --skip-build --scenario request-serial \
+  --implementation zlink-framework-java --payload-sizes 4096 --duration-seconds 2 \
+  --output /tmp/java-smoke
 ```
 
-Measurements always go through the perf ticket queue. The Kotlin cells reuse Java's B, so they never
-run at the same time as a Java measurement (the runner checks both port bands).
+To run several languages three times each and get the §7.2 judgement, use
+`framework/bench/grpc/run_all.sh`. A runner never repeats a run: one run is one
+invocation.
 
-| Input | Java default | Kotlin default |
+Beyond the six inputs of §3.1 this runner reads only the following.
+
+| Input | Default | Meaning |
 |---|---|---|
-| `RUNS` | `3` | `3` |
-| `RUN_DEALER` | `0` (other values rejected) | `0` |
-| `DURATION` | `5` | `5` |
-| `WARMUP_SECONDS` | `20` | `20` |
-| `PAYLOADS` | `1024,4096` | `1024` only |
-| `SCENARIO` | `all`, `request`, one of the four patterns | `all`, `request`, `request-window` |
-| `IMPLEMENTATION` | `all` or one of three | `all` or one of two |
-| `STAMP` / `OUTROOT` | run time / `log/java/with_grpc_java_<stamp>` | run time / `log/java/with_grpc_kotlin_<stamp>` |
-| `SKIP_BUILD` | `0` (`1` skips the Gradle build) | same |
+| `JAVA_HOME` | discovered | JDK 25, chosen by `runner_common.sh` |
 
-Fixed: request window 100, send concurrency 8, request and route-ready timeout 30 s, drain ceiling
-30 s, settle quiet period 200 ms. The build is `./gradlew --no-daemon --max-workers=1 assemble
-installDist`.
+The Kotlin auxiliary cells live in `java/run_local_kotlin.sh`. It takes the same inputs
+but narrows the grid: one pattern (`request-window`), one payload (`4096`) and two
+implementations (`grpc-kotlin`, `zlink-framework-kotlin`) — spec §10.5. It reuses Java's
+B process, so it never runs at the same time as the Java measurement; the runner checks
+both port bands.
+
+Fixed: request window 100, send concurrency 8, ROUTER raw socket, 30s request/route-ready
+and drain bounds, 200ms settle quiet period. The build is
+`./gradlew --no-daemon --max-workers=1 assemble installDist`.
 
 ## 3. Process layout
 
@@ -88,10 +98,10 @@ HTTP ports first and then starts the RouteMesh listener. The runner checks LISTE
 ## 5. Where results go
 
 ```text
-framework/bench/grpc/log/java/with_grpc_java_<stamp>/     # Kotlin: with_grpc_kotlin_<stamp>
-├── with_grpc_java_<stamp>.txt
-└── <implementation>-<pattern>-<payload>-run<n>/
-    ├── results.json        # with-grpc-cell-v1: role, trigger, streams, target_stats
+<OUTPUT>/
+├── report.txt · runner.log
+└── <implementation>-<pattern>-<payload>/
+    ├── results.json        # with-grpc-cell-v1: role·trigger·streams·target_stats
     ├── report.txt
     ├── source.log / target.log
     └── target-stats.json

@@ -15,6 +15,9 @@
 #define ZLINK_CPP_BENCH_ASYNC_HPP
 
 #include <zlink.hpp>
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
 
 #include <coroutine>
 #include <deque>
@@ -28,6 +31,29 @@
 
 namespace zlink_cpp_bench
 {
+
+// The C multi REQREP turn (bindings/c/perf/multi/common/
+// perf_multi_socket_reqrep.hpp:123 poll_timeout_until): a turn that made
+// progress only probes readiness, and a turn that made none blocks on the
+// poller until an event arrives. The cap keeps the loop responsive to the
+// window boundary without turning the wait into a polling interval — a
+// fixed short wait makes throughput a function of how much accumulates per
+// tick instead of how fast the path actually runs.
+// Same cap as the C multi REQREP turn.
+inline constexpr int64_t poll_max_wait_ms = 50;
+
+inline std::chrono::milliseconds poll_timeout_until (std::chrono::steady_clock::time_point now,
+                                                    std::chrono::steady_clock::time_point deadline,
+                                                    int64_t max_wait_ms)
+{
+    if (now >= deadline)
+        return std::chrono::milliseconds (0);
+    const auto remaining =
+      std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now).count ();
+    if (remaining <= 0)
+        return std::chrono::milliseconds (1);
+    return std::chrono::milliseconds (std::min<int64_t> (remaining, std::max<int64_t> (1, max_wait_ms)));
+}
 
 // Continuations may be published from Core's completion drain; only the
 // application thread runs them. `_ready` is touched by the application thread

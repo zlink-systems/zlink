@@ -223,8 +223,7 @@ class grpc_driver_t : public driver_t
         _options (options), _window (window), _command_path (command_path)
     {
         _channel = grpc::CreateChannel (options.grpc_endpoint, grpc::InsecureChannelCredentials ());
-        for (int i = 0; i < (command_path ? 8 : 1); ++i)
-            _stubs.push_back (zlink::framework::bench::withgrpc::BenchService::NewStub (_channel));
+        _stub = zlink::framework::bench::withgrpc::BenchService::NewStub (_channel);
     }
 
 
@@ -238,7 +237,7 @@ class grpc_driver_t : public driver_t
             request.mutable_body ()->assign (1024, '\xab');
             stamp_payload (request.mutable_body ()->data (), 1024, 0, phase_warmup, 0);
             zlink::framework::bench::withgrpc::BenchPayload reply;
-            if (_stubs.front ()->Echo (&context, request, &reply).ok ())
+            if (_stub->Echo (&context, request, &reply).ok ())
                 return true;
             std::this_thread::sleep_for (std::chrono::milliseconds (100));
         }
@@ -271,7 +270,7 @@ class grpc_driver_t : public driver_t
         grpc::CompletionQueue cq;
         uint64_t seq = 0;
         long long open = 0;
-        std::vector<bool> busy (_stubs.size (), false);
+        std::vector<bool> busy (_command_path ? 8 : 1, false);
 
         // spec 2 request-backpressure: _window <= 0 means no application
         // ceiling. gRPC returns no admission refusal to the caller, so this is
@@ -294,7 +293,6 @@ class grpc_driver_t : public driver_t
                 call->stream = static_cast<size_t> (std::find (busy.begin (), busy.end (), false) - busy.begin ());
                 busy[call->stream] = true;
             }
-            _submit_stream = call->stream;
             call->sent_ns = now_ns ();
             call->reader = prepare<TReply> (&call->context, request, &cq);
             call->reader->StartCall ();
@@ -399,8 +397,7 @@ class grpc_driver_t : public driver_t
     bool _command_path;
     uint32_t _run_id = static_cast<uint32_t> (now_ns ());
     std::shared_ptr<grpc::Channel> _channel;
-    std::vector<std::unique_ptr<zlink::framework::bench::withgrpc::BenchService::Stub>> _stubs;
-    size_t _submit_stream = 0;
+    std::unique_ptr<zlink::framework::bench::withgrpc::BenchService::Stub> _stub;
 };
 
 template <>
@@ -410,7 +407,7 @@ grpc_driver_t::prepare<zlink::framework::bench::withgrpc::BenchPayload> (
   const zlink::framework::bench::withgrpc::BenchPayload &request,
   grpc::CompletionQueue *cq)
 {
-    return _stubs[_submit_stream]->PrepareAsyncEcho (context, request, cq);
+    return _stub->PrepareAsyncEcho (context, request, cq);
 }
 
 template <>
@@ -420,7 +417,7 @@ grpc_driver_t::prepare<google::protobuf::Empty> (
   const zlink::framework::bench::withgrpc::BenchPayload &request,
   grpc::CompletionQueue *cq)
 {
-    return _stubs[_submit_stream]->PrepareAsyncCommand (context, request, cq);
+    return _stub->PrepareAsyncCommand (context, request, cq);
 }
 
 template <>
@@ -509,29 +506,6 @@ class zlink_raw_driver_t : public driver_t
             run_unbounded (deadline, payload_size, phase, counters, latency);
         else
             run_slots (deadline, payload_size, phase, counters, latency, _window);
-    }
-
-    // The C multi REQREP turn (bindings/c/perf/multi/common/
-    // perf_multi_socket_reqrep.hpp:123 poll_timeout_until): a turn that made
-    // progress only probes readiness, and a turn that made none blocks on the
-    // poller until an event arrives. The cap keeps the loop responsive to the
-    // window boundary without turning the wait into a polling interval — a
-    // fixed short wait makes throughput a function of how much accumulates per
-    // tick instead of how fast the path actually runs.
-    // Same cap as the C multi REQREP turn.
-    static constexpr int64_t poll_max_wait_ms = 50;
-
-    static std::chrono::milliseconds poll_timeout_until (clock_t_::time_point now,
-                                                         clock_t_::time_point deadline,
-                                                         int64_t max_wait_ms)
-    {
-        if (now >= deadline)
-            return std::chrono::milliseconds (0);
-        const auto remaining =
-          std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now).count ();
-        if (remaining <= 0)
-            return std::chrono::milliseconds (1);
-        return std::chrono::milliseconds (std::min<int64_t> (remaining, std::max<int64_t> (1, max_wait_ms)));
     }
 
     void run_unbounded (clock_t_::time_point deadline,
@@ -1240,7 +1214,7 @@ class source_t
         value["streams"] = {{"count", _options.pattern == "send-saturation" ? 8 : 1},
           {"inFlightPerStream", _options.pattern == "request-backpressure" ? json (nullptr)
              : json (_options.pattern == "request-window" ? 100 : 1)},
-          {"implementation", _options.implementation == "grpc-cpp" ? "one application thread; async unary CompletionQueue; one stub per logical stream"
+          {"implementation", _options.implementation == "grpc-cpp" ? "one application thread; async unary CompletionQueue; one shared stub"
              : _options.implementation == "zlink-cpp" ? "one application thread; coroutine slots and binding completion poller"
              : "one application thread; Framework task completion notifications"}};
         value["completed_at_close"] = completed_at_close;

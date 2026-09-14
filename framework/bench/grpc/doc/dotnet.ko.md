@@ -17,36 +17,32 @@ framework envelope와 protobuf body를 두 part로 보낸다.
 
 ## 2. 실행 방법
 
+실행 인자와 결과물 배치는 언어와 무관하게 같다. 규격 §3.1이 그 계약이고, runner는 그 밖의
+인자를 거절한다. 측정은 항상 perf 티켓 큐로 낸다.
+
 ```bash
-# 전체 matrix (3 구현 × 4 패턴 × payload 1024·4096)
-./framework/bench/grpc/dotnet/run_local.sh
+# 전체 격자 1 run
+bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "dotnet with-grpc r1" -- \
+  bash framework/bench/grpc/dotnet/run_local.sh --skip-build \
+    --output framework/bench/grpc/log/dotnet/<이름>/r1
 
 # 한 셀
-PAYLOAD_SIZES=1024 ./framework/bench/grpc/dotnet/run_local.sh \
-  --scenario request-window --implementation zlink-framework-dotnet
+bash framework/bench/grpc/dotnet/run_local.sh --skip-build --scenario request-serial \
+  --implementation zlink-framework-dotnet --payload-sizes 4096 --duration-seconds 2 \
+  --output /tmp/dotnet-smoke
 ```
 
-빌드는 runner가 `WithGrpcBench.sln`을 Release로 빌드한다(`SKIP_BUILD=1`이면 생략). binding은
-published package, framework는 저장소 소스를 참조한다.
+여러 언어를 3 run씩 돌려 §7.2 판정까지 받으려면 `framework/bench/grpc/run_all.sh`를 쓴다.
+runner는 run을 반복하지 않는다 — run 하나가 실행 하나다.
 
-| 입력 | 기본값 | 동작 |
+§3.1의 여섯 입력 밖에서 이 runner가 읽는 값은 아래뿐이다.
+
+| 입력 | 기본값 | 의미 |
 |---|---|---|
-| `PAYLOAD_SIZES` | `1024,4096` | payload 목록. 두 값 밖은 preflight 실패 |
-| `DURATION_SECONDS` | `5` | active 시간 |
-| `WARMUP` | `1000` | active 전 warmup 호출 수 |
-| `REQUEST_WINDOW` | `100` | `request-window`의 합계 in-flight. 다른 값은 preflight 실패 |
-| `SEND_CONCURRENCY` | `8` | `send-saturation`의 stream 수. 다른 값은 preflight 실패 |
-| `TIMEOUT_SECONDS` | `300` | process·operation 상한 |
-| `COMMAND_SETTLE_MS` | `200` | counter가 안정됐다고 보는 최소 quiet 구간 |
-| `DRAIN_BOUND_MS` | `30000` | settle 상한 |
-| `SKIP_BUILD` | `0` | `1`이면 solution build 생략 |
-| `OUTPUT` | `framework/bench/grpc/log/dotnet/with_grpc_dotnet_<stamp>` | run root |
-| `CONFIGURATION` | `Release` | build·`dotnet run` 구성 |
-| `--scenario` | `all` | `all`, `request`, 네 패턴 이름 |
-| `--implementation` | `all` | `all` 또는 세 구현 이름 |
+| `CONFIGURATION` | `Release` | build와 `dotnet run` 구성 |
 
-측정은 항상 perf 티켓 큐로 낸다(`scripts/perf/perf-ticket.sh submit -p 1 -- env SKIP_BUILD=1 bash
-framework/bench/grpc/dotnet/run_local.sh`).
+고정값: request window 100, send concurrency 8, raw socket ROUTER, process 상한 300초,
+drain 상한 30초, settle quiet 200ms. 빌드는 `WithGrpcBench.sln`을 Release로 만든다.
 
 ## 3. 프로세스 구성
 
@@ -66,7 +62,7 @@ A의 trigger·stats·phase 규칙은 canonical perf runner의 `ZLink.Framework.P
 | `request-serial` | 1 | 1 | 순차 Task loop 하나 |
 | `request-window` | 1 | 100 | 하나의 logical window를 공유하는 Task 100개 |
 | `request-backpressure` | 1 | 없음 | application in-flight 상한 없이 제출, 256회마다 `Task.Yield` |
-| `send-saturation` | 8 | 1 | stream마다 Task 하나. **연결은 세 행 모두 하나다** — gRPC는 채널 하나를 stub 8개가 공유하고, raw는 ROUTER 하나를 stream 8개가 공유하며, framework는 RouteMesh socket 하나다 |
+| `send-saturation` | 8 | 1 | stream마다 Task 하나. **연결은 세 행 모두 하나다** — gRPC는 채널 하나와 stub 하나를 모든 stream이 공유하고, raw는 ROUTER 하나를 stream 8개가 공유하며, framework는 RouteMesh socket 하나다 |
 
 ## 4. 언어별로 다르게 둔 값
 
@@ -83,11 +79,11 @@ A의 trigger·stats·phase 규칙은 canonical perf runner의 `ZLink.Framework.P
 ## 5. 결과 위치
 
 ```text
-framework/bench/grpc/log/dotnet/with_grpc_dotnet_<stamp>/
-├── with_grpc_dotnet_<stamp>.txt
+<OUTPUT>/
+├── report.txt · runner.log
 └── <implementation>-<pattern>-<payload>/
     ├── results.json        # with-grpc-cell-v1: role·trigger·streams·target_stats
-    ├── report.txt          # RESULT 라인
+    ├── report.txt          # 그 셀만의 표
     ├── source.log / target.log
     └── target-stats.json
 ```

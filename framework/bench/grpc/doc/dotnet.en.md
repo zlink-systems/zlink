@@ -18,36 +18,34 @@ All three use the same `BenchPayload` protobuf DTO and the 29-byte header in fro
 
 ## 2. How to run
 
-```bash
-# full matrix (3 implementations × 4 patterns × payload 1024 and 4096)
-./framework/bench/grpc/dotnet/run_local.sh
+The runner inputs and the result layout are the same in every language; spec §3.1
+is that contract, and a runner rejects anything outside it. Measurements always go
+through the perf ticket queue.
 
-# one cell
-PAYLOAD_SIZES=1024 ./framework/bench/grpc/dotnet/run_local.sh \
-  --scenario request-window --implementation zlink-framework-dotnet
+```bash
+# One run of the whole grid
+bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "dotnet with-grpc r1" -- \
+  bash framework/bench/grpc/dotnet/run_local.sh --skip-build \
+    --output framework/bench/grpc/log/dotnet/<name>/r1
+
+# One cell
+bash framework/bench/grpc/dotnet/run_local.sh --skip-build --scenario request-serial \
+  --implementation zlink-framework-dotnet --payload-sizes 4096 --duration-seconds 2 \
+  --output /tmp/dotnet-smoke
 ```
 
-The runner builds `WithGrpcBench.sln` in Release (skipped with `SKIP_BUILD=1`). The binding is the
-published package; the framework is the repository source.
+To run several languages three times each and get the §7.2 judgement, use
+`framework/bench/grpc/run_all.sh`. A runner never repeats a run: one run is one
+invocation.
 
-| Input | Default | Behaviour |
+Beyond the six inputs of §3.1 this runner reads only the following.
+
+| Input | Default | Meaning |
 |---|---|---|
-| `PAYLOAD_SIZES` | `1024,4096` | payload list; other values fail preflight |
-| `DURATION_SECONDS` | `5` | active window |
-| `WARMUP` | `1000` | warmup calls before active |
-| `REQUEST_WINDOW` | `100` | total in-flight of `request-window`; other values fail preflight |
-| `SEND_CONCURRENCY` | `8` | stream count of `send-saturation`; other values fail preflight |
-| `TIMEOUT_SECONDS` | `300` | process and operation ceiling |
-| `COMMAND_SETTLE_MS` | `200` | minimum quiet period that counts as settled |
-| `DRAIN_BOUND_MS` | `30000` | settle ceiling |
-| `SKIP_BUILD` | `0` | `1` skips the solution build |
-| `OUTPUT` | `framework/bench/grpc/log/dotnet/with_grpc_dotnet_<stamp>` | run root |
 | `CONFIGURATION` | `Release` | build and `dotnet run` configuration |
-| `--scenario` | `all` | `all`, `request`, or one of the four pattern names |
-| `--implementation` | `all` | `all` or one of the three implementation names |
 
-Measurements always go through the perf ticket queue (`scripts/perf/perf-ticket.sh submit -p 1 --
-env SKIP_BUILD=1 bash framework/bench/grpc/dotnet/run_local.sh`).
+Fixed: request window 100, send concurrency 8, ROUTER raw socket, 300s process bound,
+30s drain bound, 200ms settle quiet period. The build produces `WithGrpcBench.sln` in Release.
 
 ## 3. Process layout
 
@@ -85,11 +83,11 @@ run and after each cell and stops, without moving ports, if one is in use.
 ## 5. Where results go
 
 ```text
-framework/bench/grpc/log/dotnet/with_grpc_dotnet_<stamp>/
-├── with_grpc_dotnet_<stamp>.txt
+<OUTPUT>/
+├── report.txt · runner.log
 └── <implementation>-<pattern>-<payload>/
-    ├── results.json        # with-grpc-cell-v1: role, trigger, streams, target_stats
-    ├── report.txt          # RESULT lines
+    ├── results.json        # with-grpc-cell-v1: role·trigger·streams·target_stats
+    ├── report.txt          # this cell alone
     ├── source.log / target.log
     └── target-stats.json
 ```

@@ -326,22 +326,25 @@ int main ()
     for (const size_t size : zlink_c_bench::parse_sizes ()) {
         std::fprintf (stderr, "[bench] request payload=%zu\n", size);
         if (zlink_c_bench::scenario_enabled (scenarios, "request-serial"))
-            zlink_c_bench::print_result (run_request_serial (stub.get (), size));
-        if (zlink_c_bench::scenario_enabled (scenarios, "request-window"))
             zlink_c_bench::print_result (
-              run_request_async (stub.get (), size, window, "grpc-c-request-window"));
+              zlink_c_bench::warm_then_measure ([&] { return run_request_serial (stub.get (), size); }));
+        if (zlink_c_bench::scenario_enabled (scenarios, "request-window"))
+            zlink_c_bench::print_result (zlink_c_bench::warm_then_measure ([&] { return 
+              run_request_async (stub.get (), size, window, "grpc-c-request-window"); }));
         // spec 2 request-backpressure: no application ceiling. gRPC submits
         // until its own flow control stops it.
         if (zlink_c_bench::scenario_enabled (scenarios, "request-backpressure"))
-            zlink_c_bench::print_result (run_request_async (
-              stub.get (), size, INT_MAX, "grpc-c-request-backpressure"));
+            zlink_c_bench::print_result (zlink_c_bench::warm_then_measure ([&] { return run_request_async (
+              stub.get (), size, INT_MAX, "grpc-c-request-backpressure"); }));
         if (zlink_c_bench::scenario_enabled (scenarios, "request-saturation"))
-            zlink_c_bench::print_result (run_request_async (stub.get (), size, max_outstanding,
-                                                            "grpc-c-request-saturation"));
+            zlink_c_bench::print_result (zlink_c_bench::warm_then_measure ([&] { return run_request_async (
+              stub.get (), size, max_outstanding, "grpc-c-request-saturation"); }));
         if (zlink_c_bench::scenario_enabled (scenarios, "send-blocking"))
-            zlink_c_bench::print_result (run_send_blocking (stub.get (), size));
+            zlink_c_bench::print_result (
+              zlink_c_bench::warm_then_measure ([&] { return run_send_blocking (stub.get (), size); }));
         if (zlink_c_bench::scenario_enabled (scenarios, "send-saturation"))
-            zlink_c_bench::print_result (run_send_async (stub.get (), size, max_outstanding));
+            zlink_c_bench::print_result (
+              zlink_c_bench::warm_then_measure ([&] { return run_send_async (stub.get (), size, max_outstanding); }));
     }
     return 0;
 }

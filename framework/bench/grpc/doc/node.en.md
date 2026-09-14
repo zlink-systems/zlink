@@ -17,32 +17,31 @@ gRPC and raw use the same `BenchPayload` protobuf body and the 29-byte header in
 
 ## 2. How to run
 
-```bash
-# full matrix, always through the perf ticket queue
-bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "node with-grpc run" -- \
-  bash framework/bench/grpc/node/run_local.sh
+The runner inputs and the result layout are the same in every language; spec §3.1
+is that contract, and a runner rejects anything outside it. Measurements always go
+through the perf ticket queue.
 
-# one cell
-env PAYLOADS=1024 SCENARIO=request-window IMPLEMENTATION=zlink-node \
-  bash framework/bench/grpc/node/run_local.sh
+```bash
+# One run of the whole grid
+bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "node with-grpc r1" -- \
+  bash framework/bench/grpc/node/run_local.sh --skip-build \
+    --output framework/bench/grpc/log/node/<name>/r1
+
+# One cell
+bash framework/bench/grpc/node/run_local.sh --skip-build --scenario request-serial \
+  --implementation zlink-node --payload-sizes 4096 --duration-seconds 2 \
+  --output /tmp/node-smoke
 ```
 
-| Input | Default | Behaviour |
-|---|---|---|
-| `RUNS` | `1` | runs per runner process (measurement tickets are per run) |
-| `RUN_DEALER` | `0` | only `0` is accepted under the comparison contract |
-| `DURATION` | `5` | active window in seconds |
-| `WARMUP` | `1000` | warmup calls before active |
-| `PAYLOADS` | `1024,4096` | payload list; other values fail preflight |
-| `SCENARIO` | `all` | `all`, `request`, or one of the four pattern names |
-| `IMPLEMENTATION` | `all` | `all` or one of the three implementation names |
-| `WINDOW` | `100` | `request-window` in-flight; other values fail preflight |
-| `STAMP` | run time | run id and result path |
-| `OUTROOT` | `framework/bench/grpc/log/node/with_grpc_node_<stamp>` | run root |
-| `SKIP_BUILD` | `0` | `1` skips `npm ci` and `npm run build` |
+To run several languages three times each and get the §7.2 judgement, use
+`framework/bench/grpc/run_all.sh`. A runner never repeats a run: one run is one
+invocation.
 
-Fixed: send concurrency 8, process ceiling 300 s, route/request/drain ceiling 30 s, settle quiet
-period 200 ms.
+This runner reads nothing beyond the inputs of §3.1.
+
+Fixed: request window 100, send concurrency 8, ROUTER raw socket, 300s process bound,
+30s route/request/drain bounds, 200ms settle quiet period. The build is `npm ci` and
+`npm run build`.
 
 ## 3. Process layout
 
@@ -79,11 +78,11 @@ before the run and after each cell and stops, without moving ports, if one is in
 ## 5. Where results go
 
 ```text
-<OUTROOT>/
-├── with_grpc_node_<stamp>.txt
-├── unsupported.json            # cells not run, with the reason
-└── <implementation>-<pattern>-<payload>-run<run>/
-    ├── results.json            # with-grpc-cell-v1: role, trigger, streams, target_stats
+<OUTPUT>/
+├── report.txt · runner.log
+├── unsupported.json            # cells not run, and why
+└── <implementation>-<pattern>-<payload>/
+    ├── results.json            # with-grpc-cell-v1: role·trigger·streams·target_stats
     ├── report.txt
     ├── source.log / target.log
     └── target-stats.json

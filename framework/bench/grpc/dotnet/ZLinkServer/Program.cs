@@ -58,7 +58,7 @@ internal sealed class EchoHandler(BenchServerMetrics metrics)
         CancellationToken cancellationToken)
     {
         metrics.RecordReceived(request);
-        return ValueTask.FromResult(request);
+        return ValueTask.FromResult(BenchMetricHeaders.CreateResponsePayload(request));
     }
 }
 

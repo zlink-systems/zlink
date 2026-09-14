@@ -19,8 +19,7 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 GRPC_DIR="${REPO}/framework/bench/grpc"
-STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
-export RUN_STAMP="${STAMP}"
+STAMP="${SPAN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
 SPAN_DIR="${GRPC_DIR}/log/tools/verify-${STAMP}"
 DRY_RUN="${DRY_RUN:-0}"
 LOAD_GATE="${LOAD_GATE:-2.0}"
@@ -147,40 +146,38 @@ main () {
   # one. MSBUILDDISABLENODEREUSE keeps an MSBuild daemon from inheriting the
   # lock file descriptor and holding the lock past the run.
   run_language dotnet 'WithGrpcBench' \
-    env MSBUILDDISABLENODEREUSE=1 SKIP_BUILD=1 \
-        OUTPUT="${GRPC_DIR}/log/dotnet/verify-${STAMP}/dotnet-router-1" \
-        REPORT_FILE=report.txt RAW_SOCKET=router \
-        "${DOTNET_DIR}/run_local.sh" || rc=1
+    env MSBUILDDISABLENODEREUSE=1 \
+        "${DOTNET_DIR}/run_local.sh" --skip-build \
+        --output "${GRPC_DIR}/log/dotnet/verify-${STAMP}/dotnet-router-1" || rc=1
 
   # Node. Its runner always appends one DEALER run after the ROUTER runs; that
   # extra run is recorded but the comparison uses node-router-1.
   run_language node 'node (client|grpc-server|zlink-raw-server|zlink-framework-server)/main.js' \
-    env RUNS=1 STAMP="verify-${STAMP}" OUTROOT="${GRPC_DIR}/log/node/verify-${STAMP}" \
-        "${NODE_DIR}/run_local.sh" || rc=1
+    "${NODE_DIR}/run_local.sh" --skip-build \
+        --output "${GRPC_DIR}/log/node/verify-${STAMP}/node-router-1" || rc=1
 
   run_language java 'bench-(client|grpc-server|zlink-raw-server|zlink-framework-server)' \
-    env RUNS=1 RUN_DEALER=0 SKIP_BUILD=1 STAMP="verify-${STAMP}" \
-        OUTROOT="${GRPC_DIR}/log/java/verify-${STAMP}" \
-        "${JAVA_DIR}/run_local.sh" || rc=1
+    "${JAVA_DIR}/run_local.sh" --skip-build \
+        --output "${GRPC_DIR}/log/java/verify-${STAMP}/java-router-1" || rc=1
 
   run_language kotlin 'bench-(kotlin-client|grpc-server|zlink-raw-server|zlink-framework-server)' \
-    env RUNS=1 RUN_DEALER=0 SKIP_BUILD=1 STAMP="verify-${STAMP}" \
-        OUTROOT="${GRPC_DIR}/log/java/verify-${STAMP}" \
-        "${JAVA_DIR}/run_local_kotlin.sh" || rc=1
+    "${JAVA_DIR}/run_local_kotlin.sh" --skip-build --payload-sizes 4096 \
+        --output "${GRPC_DIR}/log/kotlin/verify-${STAMP}/kotlin-router-1" || rc=1
 
-  run_language cpp 'bench_cpp_(client|grpc_server|zlink_server)' \
-    env RUN_STAMP="verify-${STAMP}" LOAD_GATE="${LOAD_GATE}" \
-        "${CPP_DIR}/run_local.sh" cpp-router-1 \
-        --implementations grpc-cpp,zlink-cpp \
-        --duration-seconds 5 --warmup 5 --raw-socket router || rc=1
+  for cpp_implementation in grpc-cpp zlink-cpp; do
+    run_language "cpp-${cpp_implementation}" 'bench_cpp_(client|grpc_server|zlink_server)' \
+      env LOAD_GATE="${LOAD_GATE}" WARMUP_SECONDS=5 \
+          "${CPP_DIR}/run_local.sh" --implementation "${cpp_implementation}" \
+          --duration-seconds 5 \
+          --output "${GRPC_DIR}/log/cpp/verify-${STAMP}/cpp-router-1" || rc=1
+  done
 
   # The C baseline is not a sixth language. It is the shared denominator of
   # formula 1, and both published judgements divide by it, so a reading of it
   # inside this span is what makes the two judgements comparable to the rest.
   run_language cbase 'bench_c_with_grpc_(zlink|grpc)_(client|server)' \
-    env SKIP_BUILD=1 \
-        OUTPUT="${GRPC_DIR}/log/c/verify-${STAMP}/c-router-1" REPORT_FILE=report.txt \
-        "${C_DIR}/run_local.sh" || rc=1
+    "${C_DIR}/run_local.sh" --skip-build \
+        --output "${GRPC_DIR}/log/c/verify-${STAMP}/c-router-1" || rc=1
 
   note "loadavg at span end: $(cat /proc/loadavg)"
   note "verification span ${STAMP} end rc=${rc}"
