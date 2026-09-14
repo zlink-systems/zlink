@@ -5,8 +5,9 @@
 
 #include <array>
 #include <memory>
-#include <utility>
 #include <typeindex>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -93,6 +94,76 @@ struct inferred_logger_handler_t
 
     zlink::framework::logger_t<inferred_logger_handler_t> logger;
 };
+
+template <int Id> struct destruction_probe_t
+{
+    explicit destruction_probe_t (std::vector<int> &destroyed) : destroyed (destroyed) {}
+    ~destruction_probe_t () { destroyed.push_back (Id); }
+
+    std::vector<int> &destroyed;
+};
+
+bool verify_reverse_creation_cleanup ()
+{
+    std::vector<int> destroyed;
+    {
+        zlink::framework::service_collection_t services;
+        services.add_factory<destruction_probe_t<1>> (
+          [&destroyed] (zlink::framework::service_provider_t &) {
+              return std::make_unique<destruction_probe_t<1>> (destroyed);
+          },
+          zlink::framework::service_lifetime_t::singleton);
+        services.add_factory<destruction_probe_t<2>> (
+          [&destroyed] (zlink::framework::service_provider_t &provider) {
+              (void) provider.get_required<destruction_probe_t<1>> ();
+              return std::make_unique<destruction_probe_t<2>> (destroyed);
+          },
+          zlink::framework::service_lifetime_t::singleton);
+        services.add_factory<destruction_probe_t<3>> (
+          [&destroyed] (zlink::framework::service_provider_t &) {
+              return std::make_unique<destruction_probe_t<3>> (destroyed);
+          },
+          zlink::framework::service_lifetime_t::scoped);
+        services.add_factory<destruction_probe_t<4>> (
+          [&destroyed] (zlink::framework::service_provider_t &provider) {
+              (void) provider.get_required<destruction_probe_t<3>> ();
+              return std::make_unique<destruction_probe_t<4>> (destroyed);
+          },
+          zlink::framework::service_lifetime_t::transient);
+        services.add_factory<destruction_probe_t<5>> (
+          [&destroyed] (zlink::framework::service_provider_t &provider) {
+              (void) provider.get_required<destruction_probe_t<4>> ();
+              return std::make_unique<destruction_probe_t<5>> (destroyed);
+          },
+          zlink::framework::service_lifetime_t::scoped);
+
+        auto provider = services.build_provider ();
+        (void) provider.get_required<destruction_probe_t<2>> ();
+        {
+            auto scope = zlink::framework::detail::service_scope_t::create (provider);
+            (void) scope.get_required<destruction_probe_t<5>> ();
+        }
+        if (destroyed != std::vector<int>{5, 4, 3}) {
+            return false;
+        }
+    }
+    if (destroyed != std::vector<int>{5, 4, 3, 2, 1}) {
+        return false;
+    }
+
+    destroyed.clear ();
+    {
+        zlink::framework::service_collection_t services;
+        auto first = std::make_unique<destruction_probe_t<6>> (destroyed);
+        auto second = std::make_unique<destruction_probe_t<7>> (destroyed);
+        services.add_singleton<destruction_probe_t<6>> (std::move (first));
+        services.add_singleton<destruction_probe_t<7>> (std::move (second));
+        auto provider = services.build_provider ();
+        (void) provider.get_required<destruction_probe_t<7>> ();
+        (void) provider.get_required<destruction_probe_t<6>> ();
+    }
+    return destroyed == std::vector<int>{7, 6};
+}
 
 } // namespace
 
@@ -249,6 +320,10 @@ int main ()
 
     if (!verify_independent_scoped_cache (std::make_index_sequence<32>{})) {
         return 17;
+    }
+
+    if (!verify_reverse_creation_cleanup ()) {
+        return 18;
     }
 
     return 0;
