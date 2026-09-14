@@ -19,3 +19,9 @@ tasks.register<JavaExec>("contractCheck") {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass.set("systems.zlink.perf.ContractCheck")
 }
+tasks.register<JavaExec>("sessionPatternCheck") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("systems.zlink.perf.SessionPatternCheck")
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+}

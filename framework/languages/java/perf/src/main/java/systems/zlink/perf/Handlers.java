@@ -2,6 +2,7 @@ package systems.zlink.perf;
 
 import static systems.zlink.perf.Contracts.*;
 import java.util.concurrent.*;
+import org.springframework.beans.factory.ObjectProvider;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.actors.*;
 import systems.zlink.framework.channels.*;
@@ -137,13 +138,13 @@ public final class Handlers {
         @Override public CompletionStage<Void> onDisconnected(){return done(null);}
         @Override public CompletionStage<Void> onError(ZLinkStreamError error){metrics.diagnostic(new IllegalStateException(error.toString()));return done(null);}
         @Override public CompletionStage<Void> onDispatch(ZLinkSessionDispatchContext dispatch,ZLinkMessage payload){
-            return dispatcher.tryHandle(context,dispatch,payload).thenCompose(handled->{
-                if(handled)return done(null);
-                var bound=context.actors().bound();
-                if(bound.size()!=1)return CompletableFuture.failedFuture(new Validation("SetupIncomplete","Session needs exactly one bound Actor"));
-                metrics.handlerEnter();metrics.consumersReady=true;
-                return bound.get(0).relay(dispatch,payload).whenComplete((r,e)->metrics.handlerExit());
-            });
+            if(!metrics.config.objects()||dispatch.packetName().equals(PerfBindRequest.class.getSimpleName()))
+                return dispatcher.tryHandle(context,dispatch,payload).thenCompose(handled->handled?done(null):
+                    CompletableFuture.failedFuture(new Validation("SetupIncomplete","Session needs exactly one bound Actor")));
+            var bound=context.actors().bound();
+            if(bound.size()!=1)return CompletableFuture.failedFuture(new Validation("SetupIncomplete","Session needs exactly one bound Actor"));
+            metrics.handlerEnter();metrics.consumersReady=true;
+            return bound.get(0).relay(dispatch,payload).whenComplete((r,e)->metrics.handlerExit());
         }
     }
     public static final class SessionEcho implements ZLinkTypedSessionPacketHandler<ZLinkSessionContext,PerfEchoRequest> {
@@ -158,11 +159,11 @@ public final class Handlers {
         }
     }
     public static final class SessionBind implements ZLinkTypedSessionPacketHandler<ZLinkSessionContext,PerfBindRequest> {
-        private final ZLinkActorManager actors;
-        public SessionBind(ZLinkActorManager actors){this.actors=actors;}
+        private final ObjectProvider<ZLinkActorManager> actors;
+        public SessionBind(ObjectProvider<ZLinkActorManager> actors){this.actors=actors;}
         @Override public Class<PerfBindRequest> messageType(){return PerfBindRequest.class;}
         @Override public CompletionStage<Void> handle(ZLinkSessionContext context,ZLinkSessionDispatchContext dispatch,PerfBindRequest request){
-            return actors.getOrCreate(request.actorId(),ACTOR_TYPE).request(ZLinkMessage.of(new PerfCreateRequest("setup"))).submit()
+            return actors.getObject().getOrCreate(request.actorId(),ACTOR_TYPE).request(ZLinkMessage.of(new PerfCreateRequest("setup"))).submit()
                 .thenCompose(result->context.actors().bindOrGet(actorRef(result)))
                 .thenCompose(bound->context.client().reply(new PerfBindReply(bound.actorId())).submit());
         }
