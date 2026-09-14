@@ -504,6 +504,11 @@ Level 0은 이전 mailbox 단계, 1은 독립 Received/reply context, 2는 host 
 | Permit static callback 최적화 | 6,752.2 (2.0%) | 164,184.7 (−6.3%) | 417,300.3 (−8.0%) |
 | + Worker 전달 — 원인 조사 중 | 5,898.4 (12.6%) | 16,299.4 (90.1%) | 314,568.9 (24.6%) |
 | 전용 수신 작업 분리 — 진단, 채택 보류 | 5,717.6 (3.1%) | 17,444.2 (−7.0%) | 266,625.7 (15.2%) |
+| Lane drain global queue — 진단, 채택 검토 중 | 5,640.2 (1.4%) | 18,525.0 (−6.2%) | 269,106.0 (−0.9%) |
+
+괄호는 직전 행 대비 처리량 감소율이다. 마지막 행은 warmup 2초·active 5초,
+직전 행까지는 warmup 3초·active 10초이며 모두 runs=1이다. 측정 시간 차이가 있으므로
+마지막 행의 증감을 변경 효과로 확정하지 않는다.
 
 수신/reply 소유권 단계는 수신마다 `Received.Create()`를 사용한다. Request reply callback은
 기존 `MeshReceiveRecord`에 보관하고, reply parts는 그 callback을 통해 기존 binding operation으로
@@ -543,15 +548,44 @@ producer 실행과 permit 완료 대기만 compile-time으로 변경한 원인 �
 통과했다. 오류 검증은 정확한 예외 종류를 확인하고 모든 worker/producer 종료와 permit·pending byte
 반환을 검사한다. 세 live 패턴도 오류·누락·drain 검사를 통과했다.
 
-이 마지막 비교는 설정 변경 요청 당시 이미 실행 중이어서 warmup 3초·active 10초로 완료했다.
-Backpressure 평균 지연은 약 834 ms, p99는 약 1,064 ms다. 전용 producer만으로 큰 손실이
-회복되지 않았으므로 이 변경을 성능 해결책으로 채택하지 않는다. Worker의 동기 lane
+전용 수신 작업 비교는 설정 변경 요청 당시 이미 실행 중이어서 warmup 3초·active 10초로 완료했다.
+Backpressure 평균 지연은 약 834 ms, p99는 약 1,064 ms다. Backpressure 처리량은 7.0% 증가했고,
+serial은 3.1%, send는 15.2% 감소했다. Backpressure의 관측된 개선과 큰 손실의 미회복을
+구분하며, 세 패턴에 공통인 성능 해결책으로는 채택을 보류한다. Worker의 동기 lane
 대기와 scheduler 의존성을 다음 조사 대상으로 남긴다. 원자료는
 `worker-dedicated-ingress/summary.json`, `fixed-worker-dedicated-ingress/*/results.json` 및
 `build.log`, `shared-build.log`, `tests.log`, `lifecycle.log`다. 실제 production ingress의 I0 계약을
 모두 구현한 변경으로 해석하지 않는다.
 
-| 마지막 진단 패턴 | Bandwidth MB/s | Source CPU % | Target CPU % | Source memory MB | Target memory MB |
+Global queue 진단은 `Runtime/Execution/ZLinkStateLane.cs`의 기존 drain 제출에서
+`preferLocal`만 false로 변경한다. FIFO·단일 처리권·기존 turn budget은 유지하며 새 queue나
+retry 규칙은 추가하지 않는다. 실행 worker의 local queue에 후속 drain을 두고 같은 worker가
+동기 lane 완료를 기다리는 의존성을 제거하는 B 후보이며, 이 의존성이 큰 손실의 주원인이라는
+증거는 아직 없다. 관련 테스트 82개와 실제 socket의 lifecycle 검증 3개가 통과했다.
+소유 계층은 Framework state lane이며 계약 기준은 `06-state-ownership-and-lanes` §2·§4다.
+새 경합 테스트는 등록 순서·배타 실행을 확인하지만, scheduler 대기 원인을 입증하거나
+경합 중 close/cancel 조합 전체를 직접 검증한 결과는 아니다.
+세 패턴의 오류·누락·abandoned는 0이며 drain 조건도 통과했다.
+Backpressure 평균 지연은 약 830 ms, p99는 약 1,037 ms로, worker 추가 전 처리량으로는
+회복되지 않았다. 원자료는 `worker-global-drain/summary.json`과 패턴별 결과다.
+
+이 비교에서는 문서 commit SHA로만 달라진 Shared·Contracts·Protobuf codec DLL을 저장된
+직전 driver의 DLL로 맞췄다. Public signature·assembly identity·해당 source hash가 같은지
+확인했고, 변경 대상 Framework DLL은 교체하지 않았다. 실제 비교 driver로 위 테스트와
+payload fidelity를 다시 확인했다. 검증 근거는 `worker-global-drain-overlay.log`에 보관한다.
+Java/Kotlin의 executor와 C++의 coroutine completion driver에는 같은 ThreadPool local queue
+규칙이 없으므로 이 변경을 다른 언어에 그대로 적용하지 않는다.
+
+| Global queue 진단 패턴 | 직전 → 현재 server CPU µs/message |
+| --- | ---: |
+| request-serial | 141.84 → 136.52 |
+| request-backpressure | 23.10 → 27.75 |
+| send-saturation | 10.97 → 10.52 |
+
+값은 기존 runner의 server CPU % × 논리 core 수 × 10,000 / 처리량으로 계산한다.
+Backpressure 처리량 증가와 CPU 비용 증가가 함께 관측됐으므로 CPU 비용 감소로 설명하지 않는다.
+
+| 전용 수신 진단 패턴 | Bandwidth MB/s | Source CPU % | Target CPU % | Source memory MB | Target memory MB |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | request-serial | 23.42 | 3.28 | 4.06 | 122.96 | 474.38 |
 | request-backpressure | 71.45 | 5.31 | 2.02 | 190.29 | 542.58 |
