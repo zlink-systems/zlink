@@ -28,9 +28,7 @@ function Cleanup {
     Print-Logs $Status
     for ($i = $Processes.Count - 1; $i -ge 0; $i--) {
         $process = $Processes[$i]
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        }
+        Stop-ZlinkSampleProcessTree -Process $process
     }
     if ($RedisContainer) {
         Remove-ZlinkSampleRedis $RedisContainer
@@ -105,37 +103,40 @@ function Protect-ConfigFile {
 
 $Status = 1
 try {
-    $ports = @(Get-ZlinkSampleApplicationPorts -Language Java -Count 12)
+    $ports = @(Get-ZlinkSampleApplicationPorts -Language Java -Count 15)
     $ApiAPort = $ports[0]
     $ApiBPort = $ports[1]
     $ApiAChannelPort = $ports[2]
     $ApiBChannelPort = $ports[3]
-    $PlayAStreamPort = $ports[4]
-    $PlayBStreamPort = $ports[5]
-    $PlayAChannelPort = $ports[6]
-    $PlayBChannelPort = $ports[7]
+    $PlayAStreamPort = $ports[6]
+    $PlayBStreamPort = $ports[7]
     $PlayASpotPort = $ports[8]
     $PlayBSpotPort = $ports[9]
     $PlayAPubPort = $ports[10]
     $PlayBPubPort = $ports[11]
+    $UnusedRouteAPort = $ports[12]
+    $UnusedRouteBPort = $ports[13]
     $redis = Start-ZlinkSampleRedis "zlink-redis-java-sample-tictactoe" `
         "redis:7-alpine" -Language Java
     $RedisContainer = $redis.ContainerId
     $RedisEndpoint = $redis.Endpoint
     $RedisKeyPrefix = "zlink:tictactoe:${PID}:$([Guid]::NewGuid().ToString('N')):room:"
 
-    $PlayChannels = "tcp://127.0.0.1:$PlayAChannelPort,tcp://127.0.0.1:$PlayBChannelPort"
     $ApiChannels = "tcp://127.0.0.1:$ApiAChannelPort,tcp://127.0.0.1:$ApiBChannelPort"
     $PlayStreams = "tcp://127.0.0.1:$PlayAStreamPort,tcp://127.0.0.1:$PlayBStreamPort"
+    $Spots = "tcp://127.0.0.1:$PlayASpotPort,tcp://127.0.0.1:$PlayBSpotPort"
     function Write-ApiConfig {
-        param([string]$Name, [int]$HttpPort, [int]$ChannelPort)
+        param([string]$Name, [int]$HttpPort, [int]$ChannelPort, [int]$RoutePort)
         $path = Join-Path $RunDir "$Name.properties"
         Set-ZlinkSampleUtf8File -Path $path -Value @(
             "sample.nodeId=$Name",
             "sample.apiBindUrl=http://127.0.0.1:$HttpPort",
             "sample.apiChannelEndpoint=tcp://127.0.0.1:$ChannelPort",
-            "sample.playChannelEndpoint=tcp://127.0.0.1:$PlayAChannelPort",
-            "sample.playChannelEndpoints=$PlayChannels",
+            "sample.playEndpoints=$PlayStreams",
+            "sample.routeEndpoint=tcp://127.0.0.1:$RoutePort",
+            "sample.spotEndpoints=$Spots",
+            "sample.redisEndpoint=$RedisEndpoint",
+            "sample.redisKeyPrefix=$RedisKeyPrefix",
             "sample.logDirectory=$LogDir"
         )
         Protect-ConfigFile $path
@@ -144,7 +145,6 @@ try {
     function Write-PlayConfig {
         param(
             [string]$Name,
-            [int]$ChannelPort,
             [int]$StreamPort,
             [int]$SpotPort,
             [int]$PubPort,
@@ -154,7 +154,6 @@ try {
         Set-ZlinkSampleUtf8File -Path $path -Value @(
         "sample.nodeId=$Name",
         "sample.apiChannelEndpoints=$ApiChannels",
-        "sample.playChannelEndpoint=tcp://127.0.0.1:$ChannelPort",
         "sample.playEndpoint=tcp://127.0.0.1:$StreamPort",
         "sample.playEndpoints=$PlayStreams",
         "sample.spotEndpoint=tcp://127.0.0.1:$SpotPort",
@@ -168,11 +167,11 @@ try {
         Protect-ConfigFile $path
         return $path
     }
-    $ApiAConfig = Write-ApiConfig "api-a" $ApiAPort $ApiAChannelPort
-    $ApiBConfig = Write-ApiConfig "api-b" $ApiBPort $ApiBChannelPort
-    $PlayAConfig = Write-PlayConfig "play-a" $PlayAChannelPort $PlayAStreamPort `
+    $ApiAConfig = Write-ApiConfig "api-a" $ApiAPort $ApiAChannelPort $UnusedRouteAPort
+    $ApiBConfig = Write-ApiConfig "api-b" $ApiBPort $ApiBChannelPort $UnusedRouteBPort
+    $PlayAConfig = Write-PlayConfig "play-a" $PlayAStreamPort `
         $PlayASpotPort $PlayAPubPort $PlayBSpotPort $PlayBPubPort
-    $PlayBConfig = Write-PlayConfig "play-b" $PlayBChannelPort $PlayBStreamPort `
+    $PlayBConfig = Write-PlayConfig "play-b" $PlayBStreamPort `
         $PlayBSpotPort $PlayBPubPort $PlayASpotPort $PlayAPubPort
 
     Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @(
@@ -182,17 +181,15 @@ try {
 
     Start-SampleRole "play" $PlayBConfig "play-b.log"
     Wait-Port $PlayBStreamPort
-    Wait-Port $PlayBChannelPort
+    Wait-Port $PlayBSpotPort
     Start-SampleRole "play" $PlayAConfig "play-a.log"
     Wait-Port $PlayAStreamPort
-    Wait-Port $PlayAChannelPort
+    Wait-Port $PlayASpotPort
 
     Start-SampleRole "api" $ApiAConfig "api-a.log"
     Wait-Port $ApiAPort
-    Wait-Port $ApiAChannelPort
     Start-SampleRole "api" $ApiBConfig "api-b.log"
     Wait-Port $ApiBPort
-    Wait-Port $ApiBChannelPort
 
     Wait-LogCount (Join-Path $LogDir "play-a.log") "tictactoe-ready kind=peer-route node=play-a peer=play-b" 1
     Wait-LogCount (Join-Path $LogDir "play-b.log") "tictactoe-ready kind=peer-route node=play-b peer=play-a" 1

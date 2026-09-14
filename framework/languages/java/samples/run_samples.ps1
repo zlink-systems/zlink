@@ -9,6 +9,9 @@ $ErrorActionPreference = "Stop"
 
 $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$RootDir/redis-common.ps1"
+if ($IsWindows) {
+    Set-ZlinkSampleJavaRuntime -SamplesRoot $RootDir
+}
 $JavaRoot = Split-Path -Parent $RootDir
 $ManifestPath = Join-Path $RootDir "sample-manifest.env"
 
@@ -56,35 +59,47 @@ if (-not $PowerShell) {
     throw "PowerShell executable was not found."
 }
 
-function Invoke-SampleWithRetry {
+function Invoke-Sample {
     param([string]$ScriptPath)
-    $output = New-TemporaryFile
-    try {
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
-            if ($ScriptPath.EndsWith(".sh")) {
-                & bash $ScriptPath *> $output
-            } else {
-                & $PowerShell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath *> $output
-            }
-            if ($LASTEXITCODE -eq 0) {
-                Get-Content $output
-                return
-            }
-            $text = Get-Content $output -Raw
-            if ($text -notmatch "ZlinkBindException|Timed out waiting") {
-                [Console]::Error.WriteLine($text)
-                throw "Sample failed: $ScriptPath"
-            }
-            if ($attempt -eq 3) {
-                [Console]::Error.WriteLine($text)
-                throw "Sample failed after retries: $ScriptPath"
-            }
-            [Console]::Error.WriteLine(
-                "sample transient port bind failure; retrying $ScriptPath ($attempt/3)")
+    if ($ScriptPath.EndsWith(".sh")) {
+        & bash $ScriptPath
+        if ($LASTEXITCODE -ne 0) {
+            throw "Sample failed: $ScriptPath"
         }
-    } finally {
-        Remove-Item -Force -ErrorAction SilentlyContinue $output
+        return
     }
+
+    $stdoutLog = (New-TemporaryFile).FullName
+    $stderrLog = (New-TemporaryFile).FullName
+    $process = Start-Process -FilePath $PowerShell `
+        -ArgumentList @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$ScriptPath`"") `
+        -WindowStyle Hidden -RedirectStandardOutput $stdoutLog `
+        -RedirectStandardError $stderrLog -Wait -PassThru
+
+    $stdout = if (Test-Path -LiteralPath $stdoutLog) {
+        Get-Content -Raw -LiteralPath $stdoutLog
+    } else { "" }
+    $stderr = if (Test-Path -LiteralPath $stderrLog) {
+        Get-Content -Raw -LiteralPath $stderrLog
+    } else { "" }
+    if ($stdout) {
+        Write-Output $stdout.TrimEnd()
+    }
+    if ($stderr) {
+        [Console]::Error.WriteLine($stderr)
+    }
+    $sampleExitCode = $process.ExitCode
+    $process.Dispose()
+    if ($null -eq $sampleExitCode) {
+        throw "Sample exit code was unavailable: $ScriptPath"
+    }
+    if ($sampleExitCode -ne 0) {
+        [Console]::Error.WriteLine("sample stdout log: $stdoutLog")
+        [Console]::Error.WriteLine("sample stderr log: $stderrLog")
+        throw "Sample failed: $ScriptPath"
+    }
+    Remove-Item -LiteralPath $stdoutLog, $stderrLog -Force
 }
 
 function Invoke-ManifestSamples {
@@ -96,7 +111,7 @@ function Invoke-ManifestSamples {
         $scriptName = if ($IsWindows) { "run_sample.ps1" } else { "run_sample.sh" }
         $script = Join-Path $RootDir "$Language/$sample/$scriptName"
         if (Test-Path $script) {
-            Invoke-SampleWithRetry $script
+            Invoke-Sample $script
         } else {
             throw "sample runner missing: $Language/$sample ($script)"
         }
@@ -117,22 +132,31 @@ try {
         "--no-parallel",
         ":zlink-framework-testkit:fakeBackendTest",
         "--tests",
-        "systems.zlink.framework.testkit.ActorRuntimeFakeBackendTest.entrySpotDestroyActorRemovesEntryOwnedActorWithoutLeftCallback"
+        "systems.zlink.framework.testkit.CurrentManagerFakeBackendTest.actorAndSpotManagersExposeCurrentFluentCallsAgainstFakeBackend"
     )
 } finally {
     Pop-Location
 }
-Write-Output "java actor lifecycle sample gate completed"
+Write-Output "java fake-backend public-manager gate completed"
 
 Invoke-ManifestSamples "java" $Manifest["JAVA_SAMPLES"]
 Invoke-ManifestSamples "kotlin" $Manifest["KOTLIN_SAMPLES"]
 
-$sources = Get-ChildItem -Path $RootDir -Recurse -Include *.java,*.kt -File |
-    Where-Object { $_.FullName -notmatch "[/\\](build|bin)[/\\]" }
-$offenders = $sources | Select-String -Pattern $Manifest["FORBIDDEN_SAMPLE_PATTERN"]
-if ($offenders) {
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = "Continue"
+    $offenders = & rg -n $Manifest["FORBIDDEN_SAMPLE_PATTERN"] $RootDir `
+        -g "*.java" -g "*.kt" 2>&1
+    $policyExitCode = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
+if ($policyExitCode -eq 0) {
     $offenders | ForEach-Object { [Console]::Error.WriteLine($_.ToString()) }
     throw "sample gate failed: forbidden sample pattern found"
+}
+if ($policyExitCode -ne 1) {
+    throw "sample gate failed: source policy scan exited with code $policyExitCode"
 }
 
 Write-Output "All Java/Kotlin samples passed"

@@ -29,9 +29,7 @@ function Cleanup {
     Print-Logs $Status
     for ($i = $Processes.Count - 1; $i -ge 0; $i--) {
         $process = $Processes[$i]
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        }
+        Stop-ZlinkSampleProcessTree -Process $process
     }
     if ($RedisContainerId) {
         Remove-ZlinkSampleRedis $RedisContainerId
@@ -234,7 +232,7 @@ try {
     Set-ZlinkSampleUtf8File -Path $missionBConfig -Value @("sample.instanceName=mission-b", "sample.logDirectory=$LogDir", "sample.channelEndpoint=$missionBChannelEndpoint", "sample.httpEndpoint=$missionBHttpEndpoint", "sample.redisEndpoint=$redisEndpoint", "sample.redisKeyPrefix=$redisKeyPrefix")
     Set-ZlinkSampleUtf8File -Path $apiAConfig -Value @("sample.instanceName=api-a", "sample.logDirectory=$LogDir", "sample.streamEndpoint=$apiAStreamEndpoint", "sample.httpEndpoint=$apiAHttpEndpoint", "sample.missionAChannelEndpoint=$missionAChannelEndpoint", "sample.missionBChannelEndpoint=$missionBChannelEndpoint", "sample.redisEndpoint=$redisEndpoint", "sample.redisKeyPrefix=$redisKeyPrefix")
     Set-ZlinkSampleUtf8File -Path $apiBConfig -Value @("sample.instanceName=api-b", "sample.logDirectory=$LogDir", "sample.streamEndpoint=$apiBStreamEndpoint", "sample.httpEndpoint=$apiBHttpEndpoint", "sample.missionAChannelEndpoint=$missionAChannelEndpoint", "sample.missionBChannelEndpoint=$missionBChannelEndpoint", "sample.redisEndpoint=$redisEndpoint", "sample.redisKeyPrefix=$redisKeyPrefix")
-    Set-ZlinkSampleUtf8File -Path $clientConfig -Value @("sample.apiAStreamEndpoint=$apiAStreamEndpoint", "sample.apiBStreamEndpoint=$apiBStreamEndpoint", "sample.apiAHttpEndpoint=$apiAHttpEndpoint", "sample.apiBHttpEndpoint=$apiBHttpEndpoint", "sample.missionAHttpEndpoint=$missionAHttpEndpoint", "sample.missionBHttpEndpoint=$missionBHttpEndpoint", "sample.controlDirectory=$controlDir")
+    Set-ZlinkSampleUtf8File -Path $clientConfig -Value @("sample.apiAStreamEndpoint=$apiAStreamEndpoint", "sample.apiBStreamEndpoint=$apiBStreamEndpoint", "sample.apiAHttpEndpoint=$apiAHttpEndpoint", "sample.apiBHttpEndpoint=$apiBHttpEndpoint", "sample.missionAHttpEndpoint=$missionAHttpEndpoint", "sample.missionBHttpEndpoint=$missionBHttpEndpoint", "sample.controlDirectory=$($controlDir.Replace('\', '/'))")
     @($missionAConfig, $missionBConfig, $apiAConfig, $apiBConfig, $clientConfig) | ForEach-Object { Protect-ConfigFile $_ }
 
     Push-Location "../../.."
@@ -286,11 +284,7 @@ try {
     Wait-LogLine $clientLog "gamequest-owner-termination-ready player=player-alice"
     $ownerRole = Wait-ReplayedOwner $missionALog $missionBLog
     $ownerProcess = if ($ownerRole -eq "mission-a") { $missionAProcess } else { $missionBProcess }
-    if ($ownerRole -eq "mission-a") {
-        Stop-Process -Id $missionAProcess.Id -Force
-    } else {
-        Stop-Process -Id $missionBProcess.Id -Force
-    }
+    Stop-ZlinkSampleProcessTree -Process $ownerProcess
     $ownerProcess.WaitForExit()
     [System.IO.File]::WriteAllText((Join-Path $controlDir "owner-terminated"), "released")
     $clientProcess.WaitForExit()

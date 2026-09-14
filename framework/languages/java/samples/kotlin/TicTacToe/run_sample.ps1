@@ -27,9 +27,7 @@ function Cleanup {
     Print-Logs $Status
     for ($i = $Processes.Count - 1; $i -ge 0; $i--) {
         $process = $Processes[$i]
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        }
+        Stop-ZlinkSampleProcessTree -Process $process
     }
     if ($RedisContainer) {
         Remove-ZlinkSampleRedis $RedisContainer
@@ -114,8 +112,10 @@ try {
     $PlayBStreamPort = $ports[7]
     $PlayASpotPort = $ports[8]
     $PlayBSpotPort = $ports[9]
-    $PlayAPubPort = $ports[12]
-    $PlayBPubPort = $ports[13]
+    $PlayAPubPort = $ports[10]
+    $PlayBPubPort = $ports[11]
+    $UnusedRouteAPort = $ports[12]
+    $UnusedRouteBPort = $ports[13]
 
     $redis = Start-ZlinkSampleRedis "zlink-redis-kotlin-sample-tictactoe" `
         "redis:7-alpine" -Language Kotlin
@@ -146,7 +146,7 @@ try {
         "sample.playEndpoint=tcp://127.0.0.1:$PlayAStreamPort",
         "sample.playEndpoints=$commonPlayStreams",
         "sample.spotEndpoint=tcp://127.0.0.1:$PlayASpotPort",
-        "sample.routeEndpoint=tcp://127.0.0.1:$PlayASpotPort",
+        "sample.routeEndpoint=tcp://127.0.0.1:$UnusedRouteAPort",
         "sample.spotEndpoints=$commonSpots",
         "sample.spotPubSubEndpoint=tcp://127.0.0.1:$PlayAPubPort",
         "sample.spotPubSubEndpoints=$commonPubs",
@@ -162,7 +162,8 @@ try {
         -replace 'sample\.nodeId=.*', "sample.nodeId=api-b" `
         -replace 'sample\.apiBindUrl=.*', "sample.apiBindUrl=http://127.0.0.1:$ApiBHttpPort" `
         -replace 'sample\.apiPublicUrl=.*', "sample.apiPublicUrl=http://127.0.0.1:$ApiBHttpPort" `
-        -replace 'sample\.apiChannelEndpoint=.*', "sample.apiChannelEndpoint=tcp://127.0.0.1:$ApiBChannelPort"
+        -replace 'sample\.apiChannelEndpoint=.*', "sample.apiChannelEndpoint=tcp://127.0.0.1:$ApiBChannelPort" `
+        -replace 'sample\.routeEndpoint=.*', "sample.routeEndpoint=tcp://127.0.0.1:$UnusedRouteBPort"
     Set-ZlinkSampleUtf8File -Path $apiBConfig -Value $apiBContent
 
     Copy-Item $apiAConfig $playAConfig
@@ -178,7 +179,8 @@ try {
         -replace 'sample\.peerSpotPubSubEndpoint=.*', "sample.peerSpotPubSubEndpoint=tcp://127.0.0.1:$PlayAPubPort"
     Set-ZlinkSampleUtf8File -Path $playBConfig -Value $playBContent
     $playAContent = (Get-Content $playAConfig) `
-        -replace 'sample\.nodeId=.*', "sample.nodeId=play-a"
+        -replace 'sample\.nodeId=.*', "sample.nodeId=play-a" `
+        -replace 'sample\.routeEndpoint=.*', "sample.routeEndpoint=tcp://127.0.0.1:$PlayASpotPort"
     Set-ZlinkSampleUtf8File -Path $playAConfig -Value $playAContent
 
     Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @("--no-daemon", ":Server:installDist", ":Client:installDist", "--quiet")

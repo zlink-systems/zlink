@@ -48,6 +48,102 @@ function Optimize-ZlinkSampleWindowsLaunchers {
         }
 }
 
+function Set-ZlinkSampleJavaRuntime {
+    param([Parameter(Mandatory = $true)][string]$SamplesRoot)
+
+    $baselinePath = Join-Path $SamplesRoot "gradle/zlink-jvm-baseline.settings.gradle.kts"
+    $baselineText = [System.IO.File]::ReadAllText($baselinePath)
+    $versionMatch = [regex]::Match(
+        $baselineText,
+        '(?m)^val zlinkJavaLanguageVersion = ([0-9]+)$')
+    if (-not $versionMatch.Success) {
+        throw "Java language version was not found in $baselinePath"
+    }
+    $requiredVersion = $versionMatch.Groups[1].Value
+
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    if ($env:JAVA_HOME) {
+        $candidates.Add($env:JAVA_HOME)
+    }
+    $gradleProperties = Join-Path $env:USERPROFILE ".gradle/gradle.properties"
+    if (Test-Path -LiteralPath $gradleProperties -PathType Leaf) {
+        $installationLine = Select-String -LiteralPath $gradleProperties `
+            -Pattern '^org\.gradle\.java\.installations\.paths=(.+)$' |
+            Select-Object -First 1
+        if ($installationLine) {
+            foreach ($candidate in $installationLine.Matches[0].Groups[1].Value.Split(',')) {
+                $candidates.Add($candidate.Trim().Replace('\\', '\'))
+            }
+        }
+    }
+
+    foreach ($candidate in $candidates) {
+        $releasePath = Join-Path $candidate "release"
+        if (-not (Test-Path -LiteralPath $releasePath -PathType Leaf)) {
+            continue
+        }
+        $releaseText = [System.IO.File]::ReadAllText($releasePath)
+        $releasePattern = '(?m)^JAVA_VERSION="' +
+            [regex]::Escape($requiredVersion) + '(?:\.|\")'
+        if ($releaseText -match $releasePattern) {
+            $env:JAVA_HOME = [System.IO.Path]::GetFullPath($candidate)
+            $env:PATH = "$(Join-Path $env:JAVA_HOME 'bin');$env:PATH"
+            return
+        }
+    }
+    throw "JDK $requiredVersion was not found in JAVA_HOME or Gradle installations.paths"
+}
+
+function Invoke-ZlinkSampleExecutable {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$OutputPath
+    )
+
+    $errorPath = "$OutputPath.err.log"
+    $argumentLine = ($Arguments | ForEach-Object {
+        ConvertTo-ZlinkSampleProcessArgument $_
+    }) -join " "
+    $process = Start-Process -FilePath $Executable -ArgumentList $argumentLine `
+        -WorkingDirectory (Get-Location).Path -NoNewWindow `
+        -RedirectStandardOutput $OutputPath -RedirectStandardError $errorPath `
+        -Wait -PassThru
+    try {
+        $exitCode = [int]$process.ExitCode
+    } finally {
+        $process.Dispose()
+    }
+    if ($exitCode -ne 0) {
+        throw "Sample command failed (exit=$exitCode): $Executable $argumentLine"
+    }
+}
+
+function Stop-ZlinkSampleProcessTree {
+    param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process)
+
+    $descendants = [System.Collections.Generic.List[int]]::new()
+    if ($IsWindows -and -not $Process.HasExited) {
+        $pending = [System.Collections.Generic.Queue[int]]::new()
+        $pending.Enqueue($Process.Id)
+        while ($pending.Count -gt 0) {
+            $parentId = $pending.Dequeue()
+            Get-CimInstance Win32_Process -Filter "ParentProcessId=$parentId" |
+                ForEach-Object {
+                    $childId = [int]$_.ProcessId
+                    $descendants.Add($childId)
+                    $pending.Enqueue($childId)
+                }
+        }
+    }
+    for ($i = $descendants.Count - 1; $i -ge 0; $i--) {
+        Stop-Process -Id $descendants[$i] -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $Process.HasExited) {
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-ZlinkSamplePortPool {
     param(
         [Parameter(Mandatory = $true)]
@@ -188,8 +284,17 @@ function Invoke-ZlinkSampleGradleBuild {
             Copy-Item -LiteralPath $settingsSourcePath -Destination $settingsTargetPath
             $temporarySettingsPath = $settingsTargetPath
         }
-        & $GradleExecutable @Arguments
-        if ($LASTEXITCODE -ne 0) {
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            # Windows PowerShell wraps legitimate Gradle stderr warnings as
+            # NativeCommandError records. The native exit code remains the verdict.
+            $ErrorActionPreference = "Continue"
+            & $GradleExecutable @Arguments
+            $gradleExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($gradleExitCode -ne 0) {
             throw "Gradle build failed: $($Arguments -join ' ')"
         }
         if ($Arguments -match ':installDist$') {

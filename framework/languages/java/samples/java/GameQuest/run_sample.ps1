@@ -3,6 +3,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $SampleDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $SampleDir
 $RunDir = Join-Path ([IO.Path]::GetTempPath()) ("zlink-gamequest-" + [Guid]::NewGuid().ToString("N"))
 $LogDir = Join-Path $RunDir "logs"
 $Processes = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
@@ -76,9 +77,24 @@ function Get-AppBin([string]$Project, [string]$Name) {
 
 function Start-Role([string]$Role, [string]$Project, [string]$Name, [string]$Config) {
     $log = Join-Path $LogDir "$Role.log"
-    $process = Start-Process -FilePath (Get-AppBin $Project $Name) -ArgumentList @("--config", $Config) `
-        -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $log `
-        -RedirectStandardError "$log.err" -PassThru
+    $bin = Get-AppBin $Project $Name
+    $filePath = $bin
+    $argumentList = "--config " + (ConvertTo-ZlinkSampleProcessArgument $Config)
+    if ($IsWindows) {
+        $filePath = $env:ComSpec
+        $argumentList = "/d /s /c `"`"$bin`" $argumentList > `"$log`" 2> `"$log.err`"`""
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $filePath
+        $startInfo.Arguments = $argumentList
+        $startInfo.WorkingDirectory = $SampleDir
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+    } else {
+        $process = Start-Process -FilePath $filePath -ArgumentList $argumentList `
+            -WorkingDirectory $SampleDir -NoNewWindow -RedirectStandardOutput $log `
+            -RedirectStandardError "$log.err" -PassThru
+    }
     $Processes.Add($process)
     $RoleProcesses[$Role] = $process
     return $process
@@ -90,7 +106,7 @@ function Assert-ClientMarker([string]$Path, [string]$Marker) {
 
 function Cleanup([int]$Status) {
     if ($Status -ne 0) {
-        Get-ChildItem $LogDir -Filter "*.log" -ErrorAction SilentlyContinue | ForEach-Object {
+        Get-ChildItem $LogDir -File -ErrorAction SilentlyContinue | ForEach-Object {
             [Console]::Error.WriteLine("===== $($_.FullName) =====")
             Get-Content $_.FullName -Tail 200 -ErrorAction SilentlyContinue | ForEach-Object {
                 [Console]::Error.WriteLine($_)
@@ -98,7 +114,7 @@ function Cleanup([int]$Status) {
         }
     }
     foreach ($process in $Processes) {
-        if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+        Stop-ZlinkSampleProcessTree -Process $process
     }
     if ($RedisContainer) { Remove-ZlinkSampleRedis $RedisContainer }
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $RunDir
@@ -135,7 +151,7 @@ try {
         $path = Join-Path $RunDir "$Name.properties"
         $content = @(
             "sample.instanceName=$Instance",
-            "sample.logDirectory=$LogDir",
+            "sample.logDirectory=$($LogDir.Replace('\', '/'))",
             "sample.$EndpointKey=$Endpoint",
             "sample.httpEndpoint=$HttpEndpoint",
             "sample.redisEndpoint=$($redis.Endpoint)",
@@ -154,7 +170,7 @@ try {
             "sample.apiAHttpEndpoint=$apiAHttp",
             "sample.apiBHttpEndpoint=$apiBHttp",
             "sample.scenario=$Scenario"
-        ) + $(if ($ReleaseFile) { "sample.ownerUnavailableReleaseFile=$ReleaseFile" })
+        ) + $(if ($ReleaseFile) { "sample.ownerUnavailableReleaseFile=$($ReleaseFile.Replace('\', '/'))" })
         Set-ZlinkSampleUtf8File -Path $path -Value $content
         Protect-ConfigFile $path
         return $path
@@ -192,8 +208,8 @@ try {
     Wait-LogCount @((Join-Path $LogDir "api-b.log")) "gamequest-ready kind=spot-route node=api-b mesh=gamequest.player-quests" 1
 
     $clientLog = Join-Path $LogDir "client.log"
-    & (Get-AppBin "Client" "Client") --config $clientConfig *> $clientLog
-    if ($LASTEXITCODE -ne 0) { throw "Full client scenario failed." }
+    Invoke-ZlinkSampleExecutable -Executable (Get-AppBin "Client" "Client") `
+        -Arguments @("--config", $clientConfig) -OutputPath $clientLog
     Assert-ClientMarker $clientLog "gamequest=completed"
     Assert-ClientMarker $clientLog "gamequest-server-evidence=completed"
     $apiLogs = @((Join-Path $LogDir "api-a.log"), (Join-Path $LogDir "api-b.log"))
@@ -205,14 +221,14 @@ try {
     $close = Invoke-RestMethod -Method Post "$missionAHttp/self-check/owner/player-alice/close"
     if (-not $close.closed) { throw "Owner close did not complete." }
     $rehydrateLog = Join-Path $LogDir "rehydrate-client.log"
-    & (Get-AppBin "Client" "Client") --config $rehydrateConfig *> $rehydrateLog
-    if ($LASTEXITCODE -ne 0) { throw "Rehydrate client scenario failed." }
+    Invoke-ZlinkSampleExecutable -Executable (Get-AppBin "Client" "Client") `
+        -Arguments @("--config", $rehydrateConfig) -OutputPath $rehydrateLog
     Wait-LogCount $missionLogs "gamequest-mission replayed player=player-alice generation=" 1
 
     $ownerClient = Start-Role "owner-unavailable-client" "Client" "Client" $ownerUnavailableConfig
     Wait-LogCount @((Join-Path $LogDir "mission-a.log"), (Join-Path $LogDir "mission-b.log")) "gamequest-owner-ready player=player-owner-unavailable" 1
     $ownerNode = if ((Get-LogCount @((Join-Path $LogDir "mission-a.log")) "gamequest-owner-ready player=player-owner-unavailable node=mission-a") -eq 1) { "mission-a" } else { "mission-b" }
-    Stop-Process -Id $RoleProcesses[$ownerNode].Id -Force
+    Stop-ZlinkSampleProcessTree -Process $RoleProcesses[$ownerNode]
     $ownerClientRelease = New-Item -ItemType File -Path $releaseFile -Force
     $ownerClient.WaitForExit()
     if ($ownerClient.ExitCode -ne 0) { throw "Owner unavailable client scenario failed." }

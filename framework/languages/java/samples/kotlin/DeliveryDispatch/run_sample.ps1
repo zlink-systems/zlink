@@ -31,9 +31,7 @@ function Cleanup {
     Print-Logs $Status
     for ($i = $Processes.Count - 1; $i -ge 0; $i--) {
         $process = $Processes[$i]
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        }
+        Stop-ZlinkSampleProcessTree -Process $process
     }
     if ($RedisContainer) {
         Remove-ZlinkSampleRedis $RedisContainer
@@ -192,8 +190,8 @@ try {
     $clientBin = Join-Path $SampleDir "Client/build/install/Client/bin/Client"
     if ($IsWindows) { $clientBin = "$clientBin.bat" }
     $clientLog = Join-Path $LogDir "client.log"
-    & $clientBin --config $clientConfig *> $clientLog
-    if ($LASTEXITCODE -ne 0) { throw "Client failed." }
+    Invoke-ZlinkSampleExecutable -Executable $clientBin `
+        -Arguments @("--config", $clientConfig) -OutputPath $clientLog
 
     Wait-LogCount $clientLog "deliverydispatch-reassignment=completed" 1
     Wait-LogCount $clientLog "deliverydispatch-server-evidence=completed" 1

@@ -32,9 +32,7 @@ function Cleanup {
     Print-Logs $Status
     for ($i = $Processes.Count - 1; $i -ge 0; $i--) {
         $process = $Processes[$i]
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        }
+        Stop-ZlinkSampleProcessTree -Process $process
     }
     if ($RedisContainer) {
         Remove-ZlinkSampleRedis $RedisContainer
@@ -233,17 +231,15 @@ sample.session-node=a
     Wait-LogCount @((Join-Path $LogDir "session-b.log")) "bingo-ready kind=mesh-route node=session-b mesh=room" 1
 
     $clientLog = Join-Path $LogDir "client.log"
-    & (Get-AppBin "Client" "Client") --config $clientConfig *> $clientLog
-    if ($LASTEXITCODE -ne 0) {
-        throw "Client run failed."
-    }
+    Invoke-ZlinkSampleExecutable -Executable (Get-AppBin "Client" "Client") `
+        -Arguments @("--config", $clientConfig) -OutputPath $clientLog
     if (-not (Select-String -Path $clientLog -Pattern "bingo=completed" -Quiet)) {
         throw "Client completion marker was not found."
     }
     if (-not (Select-String -Path $clientLog -Pattern "stream-inbound sample=Bingo" -Quiet)) {
         throw "Client inbound stream evidence was not found."
     }
-    if (-not (Select-String -Path (Join-Path $env:BINGO_LOG_DIR "*.log") -Pattern "zlink flow: event_id=zlink.message_flow" -SimpleMatch -Quiet)) {
+    if (-not (Select-String -Path (Join-Path $LogDir "*.log") -Pattern "zlink flow: event_id=zlink.message_flow" -SimpleMatch -Quiet)) {
         throw "Message flow evidence was not found."
     }
 
