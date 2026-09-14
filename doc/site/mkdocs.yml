@@ -108,7 +108,6 @@ plugins:
 
             # Framework messaging bench.
             Bench: 벤치
-            gRPC comparison: gRPC 비교
             Bench specification: 벤치 규격
             .NET bench: .NET 벤치
             Node.js bench: Node.js 벤치
@@ -432,7 +431,6 @@ nav:
               - "Message Flow Tracing": common/spec/server/06-observability/03-message-flow-tracing.md
               - "Request Correlation And Business Flow Identification": common/spec/server/06-observability/04-flow-correlation.md
       - Bench:
-          - "gRPC comparison": bench/comparison.md
           - "Bench specification": common/bench/with-grpc-local.md
           - ".NET bench": bench/dotnet.md
           - "Node.js bench": bench/node.md

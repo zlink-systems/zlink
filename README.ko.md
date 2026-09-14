@@ -97,12 +97,6 @@ client는 노드를 지정하지 않고 `greeting`을 호출하며, 어느 프�
 있습니다. [설치와 첫 실행](https://zlink.systems/ko/dotnet/guide/server/02-getting-started/)에서
 장 상단의 언어 탭을 바꿔 확인하세요.
 
-## 성능
-
-Framework 언어 전반에 걸쳐 messaging 처리량과 지연을 gRPC와 비교 측정하며, 측정
-규격과 언어별 결과를 함께 공개합니다:
-[gRPC 비교 보고서](https://zlink.systems/ko/bench/comparison/).
-
 ## 언어 지원
 
 **ZLink Framework — 4개 런타임.** 각 런타임은 host 언어로 독립 구현됩니다. 네이티브
