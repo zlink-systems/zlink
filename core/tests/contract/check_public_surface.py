@@ -124,21 +124,26 @@ def package_version_and_soname(root, failures):
         "LIBZLINK_ABI_SOVERSION": re.compile(r"0|[1-9][0-9]*"),
     }
     values = {}
+    seen = set()
+    invalid = False
     for line in version_file.read_text(encoding="utf-8").splitlines():
         key, separator, value = line.partition("=")
         if not separator or key not in patterns:
             continue
-        if key in values:
+        if key in seen:
             failures.append(f"VERSION contains duplicate {key}")
             continue
+        seen.add(key)
         if not patterns[key].fullmatch(value):
             failures.append(f"VERSION has invalid {key}: {value!r}")
+            invalid = True
             continue
         values[key] = value
 
-    missing = sorted(key for key in patterns if key not in values)
+    missing = sorted(key for key in patterns if key not in seen)
     if missing:
         failures.append(f"VERSION missing required fields: {', '.join(missing)}")
+    if invalid or missing:
         return None
     return values["LIBZLINK_VERSION"], values["LIBZLINK_ABI_SOVERSION"]
 
