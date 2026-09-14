@@ -324,31 +324,33 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default)
     {
-        using var operation = EnterOperation();
-        var handedOff = false;
-        try
+        return await ExecuteOperationAsync(async () =>
         {
-            await EnsureKnownRouteMeshPeerAsync(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'").ConfigureAwait(false);
+            var handedOff = false;
+            try
+            {
+                await EnsureKnownRouteMeshPeerAsync(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'").ConfigureAwait(false);
 
-            var accepted = _spotRouteRouter.SendAsync(
-                routerChannelId,
-                targetNodeRid,
-                targetSpotId,
-                targetSpotGeneration,
-                targetNodeGeneration,
-                authorityOwnerGeneration,
-                ownerLeaseGeneration,
-                parts,
-                cancellationToken,
-                metadata);
-            handedOff = true;
-            return await accepted.ConfigureAwait(false);
-        }
-        catch
-        {
-            if (!handedOff) ZLinkMessageParts.DisposeAll(parts);
-            throw;
-        }
+                var accepted = _spotRouteRouter.SendAsync(
+                    routerChannelId,
+                    targetNodeRid,
+                    targetSpotId,
+                    targetSpotGeneration,
+                    targetNodeGeneration,
+                    authorityOwnerGeneration,
+                    ownerLeaseGeneration,
+                    parts,
+                    cancellationToken,
+                    metadata);
+                handedOff = true;
+                return await accepted.ConfigureAwait(false);
+            }
+            catch
+            {
+                if (!handedOff) ZLinkMessageParts.DisposeAll(parts);
+                throw;
+            }
+        }).ConfigureAwait(false);
     }
 
     internal RoutingId ResolveAcceptedSpotRouteNodeRid(string targetSpotNodeChannelName)
@@ -398,46 +400,48 @@ internal sealed partial class ZLinkFrameworkRuntime
     {
         try
         {
-            using var operation = EnterOperation(countAsRequest: true);
-            var metric = ZLinkRuntimeMetrics.StartRequest(routerChannelId, "spot");
-            var outcome = "completed";
-            try
+            return await ExecuteOperationAsync(async () =>
             {
-                await EnsureKnownRouteMeshPeerAsync(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'").ConfigureAwait(false);
+                var metric = ZLinkRuntimeMetrics.StartRequest(routerChannelId, "spot");
+                var outcome = "completed";
+                try
+                {
+                    await EnsureKnownRouteMeshPeerAsync(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'").ConfigureAwait(false);
 
-                return await _spotRouteRouter.RequestAsync(
-                        routerChannelId,
-                        targetNodeRid,
-                        targetSpotId,
-                        targetSpotGeneration,
-                        targetNodeGeneration,
-                        authorityOwnerGeneration,
-                        ownerLeaseGeneration,
-                        parts,
-                        timeout,
-                        cancellationToken,
-                        metadata)
-                    .ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                outcome = "timed_out";
-                throw;
-            }
-            catch (OperationCanceledException)
-            {
-                outcome = "cancelled";
-                throw;
-            }
-            catch
-            {
-                outcome = "failed";
-                throw;
-            }
-            finally
-            {
-                metric.Complete(outcome);
-            }
+                    return await _spotRouteRouter.RequestAsync(
+                            routerChannelId,
+                            targetNodeRid,
+                            targetSpotId,
+                            targetSpotGeneration,
+                            targetNodeGeneration,
+                            authorityOwnerGeneration,
+                            ownerLeaseGeneration,
+                            parts,
+                            timeout,
+                            cancellationToken,
+                            metadata)
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    outcome = "timed_out";
+                    throw;
+                }
+                catch (OperationCanceledException)
+                {
+                    outcome = "cancelled";
+                    throw;
+                }
+                catch
+                {
+                    outcome = "failed";
+                    throw;
+                }
+                finally
+                {
+                    metric.Complete(outcome);
+                }
+            }, countAsRequest: true).ConfigureAwait(false);
         }
         finally
         {

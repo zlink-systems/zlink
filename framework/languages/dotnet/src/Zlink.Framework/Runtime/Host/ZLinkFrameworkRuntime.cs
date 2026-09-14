@@ -656,24 +656,39 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
     internal ZLinkRuntimeOperationLease EnterOperation(bool countAsRequest = false)
     {
-        if (AmbientOperation.Value is { IsActive: true } current
+        // State ownership §5: synchronous callers must observe admission and
+        // their ambient ownership before returning. Async callers use the same
+        // admission body through ExecuteOperationAsync instead of blocking.
+        return AttachOperation(AwaitStateLane(CaptureOperationAdmissionAsync(countAsRequest)));
+    }
+
+    private async ValueTask<ZLinkRuntimeOperationLease> CaptureOperationAdmissionAsync(
+        bool countAsRequest)
+    {
+        var previous = AmbientOperation.Value;
+        if (previous is { IsActive: true } current
             && ReferenceEquals(current.Runtime, this))
         {
             EnsureAmbientOperationCurrent(current);
             if (!countAsRequest) return ZLinkRuntimeOperationLease.None;
-            AwaitStateLane(_stateLane.RunAsync(() => _activeRequests++));
+            await _stateLane.RunAsync(() => _activeRequests++).ConfigureAwait(false);
             return new ZLinkRuntimeOperationLease(this, countsRequest: true);
         }
 
-        return EnterOperationUnnested(countAsRequest);
+        return await CaptureOperationUnnestedAdmissionAsync(countAsRequest, previous).ConfigureAwait(false);
     }
 
-    private ZLinkRuntimeOperationLease EnterOperationUnnested(bool countAsRequest)
+    private async ValueTask<ZLinkRuntimeOperationLease> CaptureOperationUnnestedAdmissionAsync(
+        bool countAsRequest,
+        ZLinkRuntimeOperationLease? previous)
     {
-        ZLinkFrameworkComponentState admitted;
-        admitted = AwaitStateLane(_stateLane.RunAsync(
-            () => AdmitOperationOnLane(countAsRequest)));
-        return AttachOperation(admitted, countAsRequest);
+        // Keep the capturing admission delegate out of the allocation-free
+        // nested neutral path, as on the original unnested method boundary.
+        var admitted = await _stateLane.RunAsync(
+            () => AdmitOperationOnLane(countAsRequest)).ConfigureAwait(false);
+        // Do not write AsyncLocal in this child async context: the executing
+        // scope attaches the captured lease before invoking its operation.
+        return new ZLinkRuntimeOperationLease(this, admitted, previous, countAsRequest);
     }
 
     /// <summary>
@@ -806,15 +821,21 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             AttachOperation(admitted, countAsRequest));
     }
 
-    internal async ValueTask ExecuteOperationAsync(Func<ValueTask> operation)
+    internal async ValueTask ExecuteOperationAsync(
+        Func<ValueTask> operation,
+        bool countAsRequest = false)
     {
-        using var lease = EnterOperation();
+        await using var lease = AttachOperation(
+            await CaptureOperationAdmissionAsync(countAsRequest).ConfigureAwait(false));
         await operation().ConfigureAwait(false);
     }
 
-    internal async ValueTask<T> ExecuteOperationAsync<T>(Func<ValueTask<T>> operation)
+    internal async ValueTask<T> ExecuteOperationAsync<T>(
+        Func<ValueTask<T>> operation,
+        bool countAsRequest = false)
     {
-        using var lease = EnterOperation();
+        await using var lease = AttachOperation(
+            await CaptureOperationAdmissionAsync(countAsRequest).ConfigureAwait(false));
         return await operation().ConfigureAwait(false);
     }
 
@@ -1249,9 +1270,15 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         ZLinkFrameworkComponentState state,
         bool countAsRequest)
     {
-        var previous = AmbientOperation.Value;
-        var lease = new ZLinkRuntimeOperationLease(this, state, previous, countAsRequest);
-        AmbientOperation.Value = lease;
+        return AttachOperation(new ZLinkRuntimeOperationLease(
+            this, state, AmbientOperation.Value, countAsRequest));
+    }
+
+    private static ZLinkRuntimeOperationLease AttachOperation(ZLinkRuntimeOperationLease lease)
+    {
+        // Nested count-only leases and the neutral lease retain the outer
+        // ambient ownership, as they did on the synchronous surface.
+        if (lease.State is not null) AmbientOperation.Value = lease;
         return lease;
     }
 
@@ -1267,11 +1294,11 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 "The framework runtime operation belongs to a stopped generation.");
     }
 
-    private void ExitOperation(bool countsOperation, bool countsRequest)
+    private async ValueTask ExitOperationAsync(bool countsOperation, bool countsRequest)
     {
         TaskCompletionSource? drained = null;
         TaskCompletionSource? atZero = null;
-        AwaitStateLane(_stateLane.RunAsync(() =>
+        await _stateLane.RunAsync(() =>
         {
             if (countsRequest && --_activeRequests < 0)
                 throw new InvalidOperationException("Runtime request lease count became negative.");
@@ -1286,12 +1313,12 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 atZero = _operationsAtZero;
                 _operationsAtZero = null;
             }
-        }));
+        }).ConfigureAwait(false);
         drained?.TrySetResult();
         atZero?.TrySetResult();
     }
 
-    internal sealed class ZLinkRuntimeOperationLease : IDisposable
+    internal sealed class ZLinkRuntimeOperationLease : IDisposable, IAsyncDisposable
     {
         internal static readonly ZLinkRuntimeOperationLease None = new();
 
@@ -1348,11 +1375,26 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            // State ownership §5: IDisposable is a synchronous completion
+            // contract. Reuse the same release body and complete before return.
+            DisposeAsync().GetAwaiter().GetResult();
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return ValueTask.CompletedTask;
+            // This method must stay non-async: restore the caller's AsyncLocal
+            // context synchronously before returning the pending lane release.
+            RestoreAmbient();
+            return _runtime?.ExitOperationAsync(_countsOperation, _countsRequest)
+                   ?? ValueTask.CompletedTask;
+        }
+
+        private void RestoreAmbient()
+        {
             Deactivate();
             if (ReferenceEquals(AmbientOperation.Value, this))
                 AmbientOperation.Value = _previous;
-            _runtime?.ExitOperation(_countsOperation, _countsRequest);
         }
     }
 }
