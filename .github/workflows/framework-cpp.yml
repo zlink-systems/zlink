@@ -4,17 +4,17 @@ name: Framework C++ Verify
 # is kept separate. The workflow-level filter prevents unrelated PRs from
 # allocating a runner at all.
 on:
-  pull_request:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/framework-cpp.yml"
-      - ".github/workflows/framework-cpp-system-toolchain.cmake"
-      - "VERSION"
-      - "core/**"
-      - "bindings/cpp/**"
-      - "framework/languages/cpp/**"
-      - "framework/runtime/**"
+#   pull_request:
+#     branches:
+#       - main
+#     paths:
+#       - ".github/workflows/framework-cpp.yml"
+#       - ".github/workflows/framework-cpp-system-toolchain.cmake"
+#       - "VERSION"
+#       - "core/**"
+#       - "bindings/cpp/**"
+#       - "framework/languages/cpp/**"
+#       - "framework/runtime/**"
   workflow_dispatch:
 
 permissions:

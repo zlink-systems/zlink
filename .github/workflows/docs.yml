@@ -1,16 +1,16 @@
 name: Deploy Documentation
 
 on:
-  push:
-    branches:
-      - main
-    # 사이트가 담는 트리 전부. core·bindings 문서를 고쳐도 다시 나가야 한다.
-    paths:
-      - 'doc/site/**'
-      - 'framework/doc/framework/**'
-      - 'core/doc/**'
-      - 'bindings/doc/**'
-      - '.github/workflows/docs.yml'
+#   push:
+#     branches:
+#       - main
+#     # 사이트가 담는 트리 전부. core·bindings 문서를 고쳐도 다시 나가야 한다.
+#     paths:
+#       - 'doc/site/**'
+#       - 'framework/doc/framework/**'
+#       - 'core/doc/**'
+#       - 'bindings/doc/**'
+#       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 permissions:
