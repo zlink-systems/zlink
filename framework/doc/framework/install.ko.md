@@ -58,6 +58,27 @@ windows-arm64다.
     CLion은 `windows-ninja`·`linux-ninja`·`macos-ninja`다. 다음 절차는
     [설치와 첫 동작](cpp/guide/server/02-getting-started.ko.md)에 있다.
 
+    **의존 패키지.** 설치 config는 어떤 서드파티 라이브러리도 함께 설치하지 않고
+    `find_dependency`로 찾기만 한다. 소비자의 빌드에 이미 있는 라이브러리와 중복되지 않게 하고,
+    버전을 소비자가 고르게 하기 위해서다.
+
+    vcpkg overlay port `zlink-framework`로 설치하면 아래를 vcpkg가 함께 받으므로 따로 할 일이 없다.
+    **source archive를 CMake로 직접 설치할 때는 아래를 먼저 갖춰야 한다.**
+
+    | 패키지 | 쓰이는 곳 | 끄는 방법 |
+    | --- | --- | --- |
+    | `lz4` | STREAM 압축(`use_lz4()`) | `-DZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4=OFF -DZLINK_STREAM_CONNECTOR_WITH_LZ4=OFF` |
+    | `openssl` | Stream Connector TLS | `-DZLINK_STREAM_CONNECTOR_WITH_TLS=OFF` |
+    | `boost`(asio·beast) | HTTP·전송 | `-DZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST=OFF`(동봉본 사용) |
+    | `nlohmann_json` | 기본 JSON serializer | 끌 수 없다 |
+    | `opentelemetry-cpp` | 관측 | 끌 수 없다 |
+    | `protobuf` | protobuf codec | |
+    | `redis-plus-plus` | Redis location store | |
+
+    압축 옵션은 둘 다 기본값이 `ON`이고, 켜져 있으면 `find_package(lz4 REQUIRED)`라 **없으면
+    configure가 실패한다.** 압축을 쓰지 않는다면 위 표의 방법으로 끄면 `lz4` 없이 빌드된다.
+    설치되는 `Findlz4.cmake`는 CMake config package를 먼저 찾고 없으면 시스템 설치본을 쓴다.
+
 === "Java"
 
     ```kotlin
