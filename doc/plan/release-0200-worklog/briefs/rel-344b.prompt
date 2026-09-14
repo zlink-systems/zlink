@@ -1,0 +1,72 @@
+# rel-344b — "Core ABI major는 0" 가정을 제거한다 (Issue #344 후속)
+
+저장소 worktree `/home/hep7/project/zlink-344-soname`, branch `bindings-node/344-soname-derive`
+(1차 작업 `20c26cea7a`가 이미 커밋돼 있다. 그 위에 이어서 작업한다).
+한국어로 보고. 감독자(Claude)가 diff를 검토하고 커밋한다. **git commit/push 금지.**
+
+먼저 읽는다: root `AGENTS.md` (§3 "원칙이 단순해지는 근본 수정" 필수).
+
+금지: `git commit`/`push`/`rm -rf`/`git clean`/`git stash`/`git checkout --`/`git restore`;
+앵커 없는 `pkill -f`; `doc/**`·`core/doc/**`·`framework/doc/**`·`scripts/local-package/**` 수정
+(`scripts/local-package/core/{fetch-release,verify-package}.sh`는 감독자가 같은 원칙으로 함께 고친다).
+임시 산출물은 `/tmp/zlink-rel-344b/`.
+
+## 진짜 원인
+
+`node/v1.0.0` 릴리스가 이렇게 실패했다:
+
+```
+Error: bindings/node/prebuilds/linux-x64 is missing libzlink.so.0
+  at validateLinux (bindings/node/scripts/verify_prebuilds.js:92)
+```
+
+`verify_prebuilds.js`는 soname을 `libzlink.so.${coreMajor}`로 **유도**한다. 문제는 `coreMajor`다:
+
+```js
+const coreMajor = Number(provenance?.abiMajor ?? 0);
+if (coreMajor !== 0) throw new Error(`prebuild verification requires Core ABI 0, found ${coreMajor}`);
+```
+
+**"Core ABI major는 0"이라는 가정이 생성 측과 검증 측 양쪽에 박혀 있다.**
+Core가 1.0.0이 되면서 이 가정이 깨졌다.
+
+## 이 job의 범위
+
+| 파일 | 줄 | 지금 |
+| --- | --- | --- |
+| `bindings/node/scripts/verify_prebuilds.js` | 29–30 | `abiMajor ?? 0`, `!== 0`이면 throw |
+| `bindings/node/scripts/resolve_core.js` | 50 | `Number(manifest.abiMajor) !== 0` |
+| `scripts/gate/materialize-local-core-prefix.sh` | 92 | provenance에 `abiMajor: 0` 기록 |
+| `bindings/node/provenance/core-package-provenance.json` | 5 | `abiMajor: 0`, `version: 0.17.3` |
+
+## 원칙
+
+`abiMajor`는 **Core 버전의 major**다. 별도로 저장할 사실이 아니라 버전에서 나오는 값이다.
+
+- **생성 측**은 실제 Core 버전의 major를 쓴다. `0` 리터럴을 쓰지 않는다.
+- **검증 측**은 "0인가"를 보지 말고 **"패키지 version의 major와 일치하는가"**를 본다.
+  불일치는 여전히 오류다(그 검사의 원래 목적은 stale ABI 탐지이며 유지한다).
+- major가 2가 되어도 고칠 곳이 없어야 한다.
+
+`provenance/core-package-provenance.json`은 커밋된 파일이다. **릴리스마다 재생성되는지 먼저
+확인한다.** 재생성된다면 손대지 말고 보고만 한다. 재생성되지 않고 실제로 읽힌다면 현재 Core
+버전에 맞게 갱신한다(version과 abiMajor가 서로 모순되지 않게).
+
+## 검증
+
+| 항목 | 조건 |
+| --- | --- |
+| `rg -n 'abiMajor' bindings/node scripts/gate` | `!== 0`·`?? 0`·`: 0` 같은 0 리터럴 가정 0건 |
+| `node bindings/node/scripts/verify_prebuilds.js` | Core 1.0.0 prebuild에 대해 통과 (prebuild가 없으면 왜 못 돌렸는지 보고) |
+| major 2 가정 | 코드상 `libzlink.so.2`를 기대하게 되는지 확인(함수 단위로라도) |
+| `node -c` / 문법 | 두 JS 파일 통과 |
+| `bash -n scripts/gate/materialize-local-core-prefix.sh` | 통과 |
+
+## 보고 (표준출력)
+
+- 변경 파일과 유도 방식 `file:line`
+- 수정 전/후 **규칙 수** 한 줄
+- provenance JSON 재생성 여부 판정과 근거
+- `scripts/local-package/core/{fetch-release,verify-package}.sh`에 감독자가 적용해야 할 동일 수정의
+  구체적 형태(감독자가 그대로 옮길 수 있게 `file:line`과 바꿀 내용)
+- 검증 표, BLOCKERS

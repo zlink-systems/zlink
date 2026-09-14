@@ -20,7 +20,7 @@ class SyncError(RuntimeError):
     pass
 
 
-def repository_version() -> tuple[str, str, str, str]:
+def repository_version() -> tuple[str, str, str, str, str]:
     values: dict[str, str] = {}
     for line in (REPO_ROOT / "VERSION").read_text(encoding="utf-8").splitlines():
         if "=" not in line:
@@ -34,9 +34,13 @@ def repository_version() -> tuple[str, str, str, str]:
         "LIBZLINK_VERSION_MINOR",
         "LIBZLINK_VERSION_PATCH",
         "LIBZLINK_VERSION",
+        # The linker SONAME major. It is deliberately independent of the package
+        # version: Core 1.0.0 still ships libzlink.so.0 because the C ABI has not
+        # broken. Nothing may derive the SONAME from the package version.
+        "LIBZLINK_ABI_SOVERSION",
     }
     if set(values) != expected:
-        raise SyncError("VERSION must contain exactly the four LIBZLINK_VERSION fields")
+        raise SyncError("VERSION must contain exactly the five LIBZLINK fields")
     major = values["LIBZLINK_VERSION_MAJOR"]
     minor = values["LIBZLINK_VERSION_MINOR"]
     patch = values["LIBZLINK_VERSION_PATCH"]
@@ -45,7 +49,10 @@ def repository_version() -> tuple[str, str, str, str]:
     version = values["LIBZLINK_VERSION"]
     if version != f"{major}.{minor}.{patch}":
         raise SyncError("LIBZLINK_VERSION does not match its major/minor/patch fields")
-    return major, minor, patch, version
+    abi_soversion = values["LIBZLINK_ABI_SOVERSION"]
+    if not re.fullmatch(r"0|[1-9][0-9]*", abi_soversion):
+        raise SyncError("LIBZLINK_ABI_SOVERSION must be a canonical non-negative integer")
+    return major, minor, patch, version, abi_soversion
 
 
 def package_version(relative: str, key: str) -> str:
@@ -416,7 +423,7 @@ def synchronize_framework(sync: Synchronizer, versions: dict[str, str]) -> None:
 def synchronize(
     write: bool,
 ) -> tuple[str, dict[str, str], dict[str, str], list[Path], list[Path]]:
-    major, minor, patch, core_version = repository_version()
+    major, minor, patch, core_version, _abi_soversion = repository_version()
     bindings = binding_versions()
     frameworks = framework_versions()
     version_path = f"{major}_{minor}_{patch}"

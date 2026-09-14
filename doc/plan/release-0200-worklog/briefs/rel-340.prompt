@@ -1,0 +1,93 @@
+# rel-340 — Node raw binding send admission 실패 진단 (Issue #340)
+
+저장소 worktree `/home/hep7/project/zlink-340-node`, branch `framework-node/340-send-admission`.
+한국어로 보고. 감독자(Claude)가 diff를 검토하고 커밋한다. **git commit/push 금지.**
+
+먼저 읽는다: 저장소 root `AGENTS.md` (특히 §3 구현 원칙과 "진단 먼저, 구현은 승인 뒤"),
+`framework/AGENTS.md`.
+
+금지: `git commit`/`push`/`rm -rf`/`git clean`/`git stash`/`git checkout --`/`git restore`;
+앵커 없는 `pkill -f`; `doc/**`·`core/doc/**`·`framework/doc/**`·`scripts/local-package/**` 수정;
+Core·binding 소스를 고쳐 framework 문제를 보상하기; timeout·retry·budget 증가; 두 번째 poller;
+테스트 기대값을 구현에 맞춰 낮추기. 임시 산출물은 `/tmp/zlink-rel-340/`.
+
+## 이 job은 1단계(진단)만 한다
+
+**코드를 고치지 않는다.** 원인을 특정해 보고만 한다. 감독이 분류 A 또는 B로 승인한 뒤에
+2단계(구현)를 별도 job으로 연다. 진단 중 필요한 실험적 수정은 해도 되지만, 보고 전에
+`git diff`가 비어 있어야 한다(실험은 되돌린다). 되돌리기 어려우면 그대로 두고 보고에 적는다.
+
+## 증상 (현재 main에서 로컬 재현됨)
+
+`framework/languages/node`에서 `npm run verify:p0` 실행 시 한 파일이 실패한다.
+GitHub Actions `Framework Node`에서도 darwin-arm64·linux-arm64·linux-x64·win-x64 **전 플랫폼**에서
+같은 테스트가 실패한다(run 34735386407).
+
+```
+not ok 1 - raw binding port keeps consecutive OK send depth bounded
+  test/contract/node-raw-binding-send-admission.test.js:14:1
+  error: 'socket has no completion owner'
+  name: TypeError
+```
+
+스택:
+
+```
+completionOwnerOf (node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:626)
+Poller.addSocketInternal (node_modules/@zlink-systems/zlink/dist/.../eventing/poller.js:177)
+Poller.add (node_modules/@zlink-systems/zlink/dist/.../eventing/poller.js:48)
+new ZLinkNodeEventLoopPoller (packages/framework/dist/runtime/backend/node/node-event-loop-poller.js:21)
+new NodeRawSocketPort (packages/framework/dist/runtime/backend/node/node-raw-binding-port.js:86)
+new NodeRawRouterPort (packages/framework/.../node-raw-binding-port.js:182)
+NodeRawHostPort.createRouter (packages/framework/.../node-raw-binding-port.js:29)
+```
+
+던지는 쪽은 `node_modules`에 설치된 **공개** binding이고, 부르는 쪽은 framework의
+`ZLinkNodeEventLoopPoller`다. 이 파일은 최근에 main에 들어왔다
+(`git log --oneline -- packages/framework/src/runtime/backend/node/node-event-loop-poller.ts`로 확인).
+
+## 가설 (검증하고 기각/채택을 명시한다)
+
+**H1 — binding 버전 skew.** framework source가 기대하는 completion owner 등록을 공개 binding이
+아직 하지 않는다. 즉 코드 결함이 아니라 릴리스 순서 문제다.
+
+**H2 — 실제 결함.** `node-event-loop-poller.ts`가 completion owner가 없는 socket을 poller에
+넣는다. 소유권 규칙 위반이다.
+
+### H1 판별 (먼저 한다)
+
+`ZLINK_NODE_USE_BINDINGS_SOURCE=1`로 소스 binding을 쓰게 하고 같은 테스트를 돌린다.
+(로컬 절차: `npm run use:bindings-source`가 있으면 그것을 쓴다. 끝나면 원래대로 되돌린다.)
+
+- 통과하면 → **H1**. 공개 binding과 소스 binding에서 `completionOwnerOf`가 무엇을 요구하는지
+  차이를 `file:line`으로 대조해 보고한다. 분류 A(계약 적응) 후보다.
+- 실패하면 → **H2**. 아래를 계속한다.
+
+### H2 조사
+
+- `completionOwnerOf`가 무엇을 근거로 owner를 찾는지, socket에 owner가 언제 등록되는지
+  `bindings/node` 소스에서 `file:line`으로 찾는다.
+- `NodeRawSocketPort`가 socket을 만들고 poller에 넣는 순서를 읽는다. owner 등록보다 먼저
+  `Poller.add`를 부르는지 확인한다.
+- 이 테스트가 언제부터 깨졌는지 `git log`·`git bisect`로 좁힌다(bisect는 시간이 남을 때만).
+
+## 보고 (AGENTS §4 필수 4줄 포함)
+
+표준출력으로 보고한다. 다음을 반드시 포함한다:
+
+1. **원인** `file:line`
+2. **소유 계층** — 이 결정(완료 소유권 등록과 poller 등록 순서)을 소유한 계층이 Core인지
+   binding인지 framework인지, 근거 spec 조항
+3. **교차언어 대조** — .NET·Java·C++ framework의 같은 지점이 어떻게 하는지. 한 언어만
+   다르면 구조적 차이인지 다른 root cause의 증상인지
+4. **분류** A(계약 적응) / B(기존 결함) / C(우회) / D(spec gap)
+
+추가로: H1/H2 판별 결과와 근거, 수정 제안(고치지는 않는다, 어디를 어떻게 고칠지만),
+수정 후 규칙 수가 늘어나는지 줄어드는지 한 줄, BLOCKERS.
+
+## 참고
+
+- Node framework 로컬 검증은 http-client 로컬 빌드와 `package.json`의 binding 참조 스위치가
+  필요할 수 있다. `npm run use:bindings-source` / `use:bindings-package` 스크립트가 있다.
+  **바꿨으면 반드시 되돌린다.**
+- 1.5시간 상한. 원인을 못 좁히면 실증한 사실과 후보를 적고 끝낸다.
