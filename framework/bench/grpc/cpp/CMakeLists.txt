@@ -165,3 +165,25 @@ target_include_directories(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTO_GEN_DIR
 target_link_directories(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTOBUF_LIBRARY_DIRS})
 target_link_libraries(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTOBUF_LIBRARIES})
 add_test(NAME bench_cpp_raw_wire_identity COMMAND bench_cpp_raw_wire_test)
+
+# Diagnostic executables select a feature path at compile time. Internal
+# headers remain private to tests; production runtime and public targets do not
+# gain options or alternate codec implementations.
+set(diagnostic_stage_number 0)
+foreach(stage IN ITEMS core codec)
+  add_executable(bench_cpp_diag_${stage} tests/messaging_feature_ramp.cpp ${BENCH_PROTO_CC})
+  bench_target(bench_cpp_diag_${stage})
+  target_include_directories(bench_cpp_diag_${stage} PRIVATE
+    ${BENCH_PROTO_GEN_DIR}
+    ${BENCH_REPO_ROOT}/bindings/cpp/perf/common
+    ${BENCH_REPO_ROOT}/framework/languages/cpp/framework/src
+    ${BENCH_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+  target_link_libraries(bench_cpp_diag_${stage} PRIVATE
+    zlink::framework_codec_protobuf Threads::Threads)
+  target_compile_definitions(bench_cpp_diag_${stage} PRIVATE
+    BENCH_DIAGNOSTIC_STAGE=${diagnostic_stage_number}
+    BENCH_DIAGNOSTIC_STAGE_NAME="${stage}")
+  add_test(NAME bench_cpp_diag_${stage}_fidelity
+    COMMAND bench_cpp_diag_${stage} --role fidelity)
+  math(EXPR diagnostic_stage_number "${diagnostic_stage_number} + 1")
+endforeach()
