@@ -4,7 +4,6 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 source "../../runner-common.sh"
 zlink_sample_configure_port_pool kotlin
-ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(-c standalone.settings.gradle.kts)
 
 readonly WAIT_ATTEMPTS=300
 readonly WAIT_INTERVAL_SECONDS=0.1

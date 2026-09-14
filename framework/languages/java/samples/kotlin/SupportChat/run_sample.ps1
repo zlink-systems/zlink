@@ -149,9 +149,7 @@ try {
         "sample.supportSpotRouterEndpoint=$SupportRouterEndpoint"
     )
 
-    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
-        "--settings-file",
-        "standalone.settings.gradle.kts",
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @(
         "--no-daemon",
         "--no-parallel",
         "--max-workers=1",

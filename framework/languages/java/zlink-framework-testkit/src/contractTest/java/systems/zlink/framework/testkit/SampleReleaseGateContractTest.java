@@ -121,6 +121,13 @@ final class SampleReleaseGateContractTest {
         assertFalse(aggregatePowerShellRunner.contains("ZLINK_LIBRARY_PATH"),
             "aggregate PowerShell sample runner must preserve the caller's native library selection; "
                 + "an unset path uses the installed binding package");
+        String commonRunner = Files.readString(samplesRoot.resolve("runner-common.sh"));
+        assertTrue(commonRunner.contains("cp -- \"${settings_source}\" \"${settings_target}\""),
+            "POSIX sample runner must stage standalone settings under Gradle's standard filename");
+        String commonPowerShellRunner = Files.readString(samplesRoot.resolve("redis-common.ps1"));
+        assertTrue(commonPowerShellRunner.contains(
+                "Copy-Item -LiteralPath $settingsSourcePath -Destination $settingsTargetPath"),
+            "PowerShell sample runner must stage standalone settings under Gradle's standard filename");
 
         for (String language : REQUIRED_LANGUAGES) {
             Path languageRoot = samplesRoot.resolve(language);
@@ -149,16 +156,14 @@ final class SampleReleaseGateContractTest {
                     }
                 }
                 String runner = Files.readString(sampleRoot.resolve("run_sample.sh"));
-                assertTrue(runner.contains("--settings-file standalone.settings.gradle.kts")
-                        || runner.contains("-c standalone.settings.gradle.kts"),
+                assertTrue(runner.contains("gradle_run")
+                        || runner.contains("zlink_sample_gradle_standalone standalone.settings.gradle.kts"),
                     "run_sample.sh must use standalone settings for " + sampleName);
                 Path powerShellRunnerPath = sampleRoot.resolve("run_sample.ps1");
                 if (Files.isRegularFile(powerShellRunnerPath)) {
                     String powerShellRunner = Files.readString(powerShellRunnerPath);
-                    assertTrue((powerShellRunner.contains("--settings-file")
-                                && powerShellRunner.contains("standalone.settings.gradle.kts"))
-                            || powerShellRunner.contains(
-                                "@(\"-c\", \"standalone.settings.gradle.kts\""),
+                    assertTrue(powerShellRunner.contains(
+                            "-SettingsPath \"standalone.settings.gradle.kts\""),
                         "run_sample.ps1 must use standalone settings for " + sampleName);
                 }
             }

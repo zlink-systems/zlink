@@ -5,7 +5,6 @@ set +m
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../../runner-common.sh"
 zlink_sample_configure_port_pool java
-ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
 
 RUN_DIR=""
 LOG_DIR=""
@@ -104,7 +103,7 @@ EOF
 chmod 0600 "$api_config" "$session_config" "$support_config"
 
 cd "$ROOT_DIR"
-zlink_sample_gradle_locked ../../gradlew --settings-file standalone.settings.gradle.kts \
+zlink_sample_gradle_standalone standalone.settings.gradle.kts ../../gradlew \
   --no-daemon --no-parallel --max-workers=1 \
   :Server:Api:installDist \
   :Server:Session:installDist \

@@ -5,7 +5,6 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 source "../../runner-common.sh"
 zlink_sample_configure_port_pool java
-ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
 readonly DELIVERYDISPATCH_WAIT_ATTEMPTS=300
 readonly DELIVERYDISPATCH_WAIT_INTERVAL_SECONDS=0.1
 

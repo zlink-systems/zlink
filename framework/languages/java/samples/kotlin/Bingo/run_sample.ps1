@@ -203,7 +203,7 @@ sample.session-node=a
         Pop-Location
     }
 
-    Invoke-Gradle @("--settings-file", "standalone.settings.gradle.kts", "--no-daemon", ":Server:Session:installDist", ":Server:Api:installDist", ":Server:Play:installDist", ":Server:Matchmaking:installDist", ":Client:installDist", "--quiet")
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @("--no-daemon", ":Server:Session:installDist", ":Server:Api:installDist", ":Server:Play:installDist", ":Server:Matchmaking:installDist", ":Client:installDist", "--quiet")
 
     Start-AppRole "Server/Session" "Session" $sessionAConfig "session-a.log"
     Start-AppRole "Server/Matchmaking" "Matchmaking" $matchmakingConfig "matchmaking.log"

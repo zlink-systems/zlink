@@ -5,7 +5,6 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 source "../../runner-common.sh"
 zlink_sample_configure_port_pool java
-ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
 
 game_source="Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/TicTacToeGame.java"
 if grep -n 'leaveFinishedActors' "${game_source}"; then
@@ -41,7 +40,13 @@ for settings in ApiSettings PlaySettings; do
   fi
 done
 
-core_lib="$(cd ../../../../../.. && pwd)/.artifacts/wsl/install/zlink-core/0.16.0/lib/libzlink.so"
+repo_root="$(cd ../../../../../.. && pwd)"
+core_version="$(awk -F= '/^LIBZLINK_VERSION=/{ print $2; exit }' "${repo_root}/VERSION")"
+if [[ -z "${core_version}" ]]; then
+  echo "Unable to resolve LIBZLINK_VERSION from ${repo_root}/VERSION" >&2
+  exit 1
+fi
+core_lib="${repo_root}/.artifacts/wsl/install/zlink-core/${core_version}/lib/libzlink.so"
 if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${core_lib}" ]]; then
   export ZLINK_LIBRARY_PATH="${core_lib}"
 fi

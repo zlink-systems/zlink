@@ -241,7 +241,7 @@ try {
         (Join-Path $SampleDir "Server/OrderWorkflow/build/install/OrderWorkflow"), `
         (Join-Path $SampleDir "Client/build/install/Client")
 
-    Invoke-Gradle @("--settings-file", "standalone.settings.gradle.kts", "--no-daemon", ":Server:CommerceApi:installDist", ":Server:OrderWorkflow:installDist", ":Client:installDist", "--quiet")
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @("--no-daemon", ":Server:CommerceApi:installDist", ":Server:OrderWorkflow:installDist", ":Client:installDist", "--quiet")
 
     Start-Role -ScriptPath (App-Bin "Server/OrderWorkflow" "OrderWorkflow") -LogName "workflow-a.log" -ConfigPath $workflowAConfig
     Start-Role -ScriptPath (App-Bin "Server/OrderWorkflow" "OrderWorkflow") -LogName "workflow-b.log" -ConfigPath $workflowBConfig

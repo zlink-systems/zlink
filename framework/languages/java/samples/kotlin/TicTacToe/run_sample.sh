@@ -21,7 +21,6 @@ done
 
 source "../../runner-common.sh"
 zlink_sample_configure_port_pool kotlin
-ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
 
 pids=()
 redis_container_id=""

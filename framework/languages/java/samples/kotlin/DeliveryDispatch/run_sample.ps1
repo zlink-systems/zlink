@@ -158,8 +158,8 @@ try {
     } finally {
         Pop-Location
     }
-    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
-        "--settings-file", "standalone.settings.gradle.kts", "--no-daemon", "--no-parallel", "--max-workers=1",
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @(
+        "--no-daemon", "--no-parallel", "--max-workers=1",
         ":Server:Tracking:installDist", ":Server:CustomerGateway:installDist", ":Server:CourierSession:installDist",
         ":Server:CourierSpotNode:installDist", ":Server:Dispatch:installDist", ":Client:installDist", "--quiet")
 

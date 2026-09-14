@@ -421,15 +421,36 @@ zlink_sample_gradle_locked() {
   flock --exclusive --close "${lock_path}" "$@"
 }
 
-gradle_run() {
-  local -a command=(../../gradlew)
-  if declare -p ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS >/dev/null 2>&1; then
-    command+=("${ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS[@]}")
-  else
-    command+=(--settings-file standalone.settings.gradle.kts)
+zlink_sample_gradle_standalone() (
+  local settings_source="${1}"
+  shift
+  local settings_target="settings.gradle.kts"
+  local lock_path="/tmp/zlink-framework-java-kotlin-sample-gradle.lock"
+
+  if ! command -v flock >/dev/null 2>&1; then
+    echo 'flock is required to serialize Java and Kotlin sample builds.' >&2
+    return 1
   fi
-  command+=(--no-daemon --no-parallel --max-workers=1 "$@" --quiet)
-  zlink_sample_gradle_locked "${command[@]}"
+  if [[ ! -f "${settings_source}" ]]; then
+    echo "Missing standalone Gradle settings: ${settings_source}" >&2
+    return 1
+  fi
+
+  exec 9>"${lock_path}"
+  flock --exclusive 9
+  if [[ -e "${settings_target}" || -L "${settings_target}" ]]; then
+    echo "Refusing to replace existing ${settings_target}" >&2
+    return 1
+  fi
+
+  cp -- "${settings_source}" "${settings_target}"
+  trap 'rm -f -- "${settings_target}"' EXIT
+  "$@"
+)
+
+gradle_run() {
+  zlink_sample_gradle_standalone standalone.settings.gradle.kts \
+    ../../gradlew --no-daemon --no-parallel --max-workers=1 "$@" --quiet
 }
 
 app_bin() {

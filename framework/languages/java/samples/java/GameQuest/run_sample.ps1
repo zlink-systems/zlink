@@ -174,7 +174,7 @@ try {
     try {
         Invoke-ZlinkSampleGradleBuild -GradleExecutable $gradle -Arguments @("--no-daemon", ":zlink-framework-core:jar", ":zlink-framework-spring-boot-starter:jar", ":zlink-framework-locations-redis:jar", ":zlink-stream-connector:jar", "--quiet")
     } finally { Pop-Location }
-    Invoke-ZlinkSampleGradleBuild -GradleExecutable $gradle -Arguments @("--settings-file", "standalone.settings.gradle.kts", "--no-daemon", ":Server:GameApi:installDist", ":Server:QuestMission:installDist", ":Client:installDist", "--quiet")
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @("--no-daemon", ":Server:GameApi:installDist", ":Server:QuestMission:installDist", ":Client:installDist", "--quiet")
 
     Start-Role "mission-a" "Server/QuestMission" "QuestMission" $missionAConfig | Out-Null
     Start-Role "mission-b" "Server/QuestMission" "QuestMission" $missionBConfig | Out-Null

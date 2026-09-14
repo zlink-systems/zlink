@@ -118,8 +118,8 @@ try {
     Protect-ConfigFile $apiConfig; Protect-ConfigFile $sessionConfig; Protect-ConfigFile $supportConfig
 
     $gradle = if ($IsWindows) { Join-Path $SampleDir "../../gradlew.bat" } else { Join-Path $SampleDir "../../gradlew" }
-    Invoke-ZlinkSampleGradleBuild -GradleExecutable $gradle -Arguments @(
-        "--settings-file", "standalone.settings.gradle.kts", "--no-daemon", "--no-parallel", "--max-workers=1",
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @(
+        "--no-daemon", "--no-parallel", "--max-workers=1",
         ":Server:Api:installDist", ":Server:Session:installDist", ":Server:Support:installDist", ":Client:installDist"
     )
 
