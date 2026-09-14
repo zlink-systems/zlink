@@ -1,3 +1,4 @@
+import { SubmitResult } from '../../packages/framework/src/runtime/backend/runtime-values';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { test } from 'node:test';
@@ -1597,7 +1598,7 @@ test('raw runtime admits peers and completes node/channel requests once', async 
       packetName: 'ChannelNotice',
       contentType: 'application/json',
       payload: Buffer.from('notice')
-    }), true);
+    }), SubmitResult.Ok);
     let observedSourceRoutingId: string | undefined;
     let observedByteCount = 0;
     await pollUntil(async () => await right.pumpOne(
@@ -2038,7 +2039,7 @@ async function verifyBilateralEndpointRequests(
   }
 }
 
-test('local channel requests preserve successful and failed terminal results', async () => {
+test('internal local Node terminal primitive preserves success and failure', async () => {
   const local = rawServiceRuntime({
     descriptor: descriptor(
       'm6a-local-channel',
@@ -2047,7 +2048,7 @@ test('local channel requests preserve successful and failed terminal results', a
   });
   local.start();
   try {
-    const success = local.requestToChannel('alpha', {
+    const success = local.requestToNode('m6a-local-channel', {
       packetName: 'Question',
       contentType: 'application/json',
       payload: Buffer.from('request')
@@ -2070,7 +2071,7 @@ test('local channel requests preserve successful and failed terminal results', a
     assert.equal(successResult.terminalResult, 0);
     assert.equal(Buffer.from(successResult.payload!.payload).toString(), 'reply');
 
-    const failure = local.requestToChannel('alpha', {
+    const failure = local.requestToNode('m6a-local-channel', {
       packetName: 'MissingHandler',
       contentType: 'application/json',
       payload: Buffer.from('request')
