@@ -253,7 +253,7 @@ try {
         Pop-Location
     }
 
-    Invoke-Gradle @("--settings-file", "standalone.settings.gradle.kts", "--no-daemon", ":Server:GameApi:installDist", ":Server:QuestMission:installDist", ":Client:installDist", "--quiet")
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @("--no-daemon", ":Server:GameApi:installDist", ":Server:QuestMission:installDist", ":Client:installDist", "--quiet")
 
     $missionAProcess = Start-Role -Project "Server/QuestMission" -ScriptName "QuestMission" -LogName "mission-a.log" -ConfigPath $missionAConfig
     $missionBProcess = Start-Role -Project "Server/QuestMission" -ScriptName "QuestMission" -LogName "mission-b.log" -ConfigPath $missionBConfig

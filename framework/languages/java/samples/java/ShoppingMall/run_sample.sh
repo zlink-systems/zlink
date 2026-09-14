@@ -5,7 +5,6 @@ set +m
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../../runner-common.sh"
 zlink_sample_configure_port_pool java
-ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
 
 RUN_DIR=""
 LOG_DIR=""

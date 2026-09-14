@@ -6,7 +6,6 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 source "../../runner-common.sh"
 zlink_sample_configure_port_pool java
-ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
 
 if rg -n 'System\.(getProperty|getenv)' Server Client --glob '*.java'; then
   echo "Bingo application code must use sample config files" >&2

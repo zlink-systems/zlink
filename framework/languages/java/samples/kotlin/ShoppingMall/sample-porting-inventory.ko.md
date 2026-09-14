@@ -45,7 +45,8 @@ self-check가 실행 코드와 runner에서 실제로 검증되는지이다.
 
 ```bash
 cd framework/languages/java/samples/kotlin/ShoppingMall
-../../gradlew --settings-file standalone.settings.gradle.kts --no-daemon --no-parallel --max-workers=1 classes --quiet
+source ../../runner-common.sh
+zlink_sample_gradle_standalone standalone.settings.gradle.kts ../../gradlew --no-daemon --no-parallel --max-workers=1 classes --quiet
 nice -n 10 timeout 600s ./run_sample.sh
 pwsh -NoProfile -ExecutionPolicy Bypass -File ./run_sample.ps1
 ```

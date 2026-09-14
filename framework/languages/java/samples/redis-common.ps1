@@ -150,6 +150,7 @@ function Test-ZlinkSampleTcpPortAvailable {
 function Invoke-ZlinkSampleGradleBuild {
     param(
         [Parameter(Mandatory = $true)][string]$GradleExecutable,
+        [string]$SettingsPath = "",
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [int]$LockTimeoutSeconds = 600
     )
@@ -174,35 +175,29 @@ function Invoke-ZlinkSampleGradleBuild {
     }
 
     try {
-        $normalizedArguments = @($Arguments | ForEach-Object {
-            if ($_ -eq "--settings-file") { "-c" } else { $_ }
-        })
-        $settingsIndex = [Array]::IndexOf($normalizedArguments, "-c")
         $temporarySettingsPath = $null
-        $existingSettingsContent = $null
-        if ($settingsIndex -ge 0 -and $settingsIndex + 1 -lt $normalizedArguments.Count) {
-            $settingsSourcePath = Join-Path (Get-Location) $normalizedArguments[$settingsIndex + 1]
-            $temporarySettingsPath = Join-Path (Get-Location) "settings.gradle.kts"
-            if (Test-Path -LiteralPath $temporarySettingsPath) {
-                $existingSettingsContent = Get-Content -LiteralPath $temporarySettingsPath -Raw
+        if ($SettingsPath) {
+            $settingsSourcePath = Join-Path (Get-Location) $SettingsPath
+            $settingsTargetPath = Join-Path (Get-Location) "settings.gradle.kts"
+            if (-not (Test-Path -LiteralPath $settingsSourcePath -PathType Leaf)) {
+                throw "Missing standalone Gradle settings: $settingsSourcePath"
             }
-            Copy-Item -LiteralPath $settingsSourcePath -Destination $temporarySettingsPath -Force
-            $normalizedArguments = @($normalizedArguments | Where-Object { $_ -ne "-c" -and $_ -ne $normalizedArguments[$settingsIndex + 1] })
+            if (Test-Path -LiteralPath $settingsTargetPath) {
+                throw "Refusing to replace existing $settingsTargetPath"
+            }
+            Copy-Item -LiteralPath $settingsSourcePath -Destination $settingsTargetPath
+            $temporarySettingsPath = $settingsTargetPath
         }
-        & $GradleExecutable @normalizedArguments
+        & $GradleExecutable @Arguments
         if ($LASTEXITCODE -ne 0) {
-            throw "Gradle build failed: $($normalizedArguments -join ' ')"
+            throw "Gradle build failed: $($Arguments -join ' ')"
         }
         if ($Arguments -match ':installDist$') {
             Optimize-ZlinkSampleWindowsLaunchers -Root (Get-Location).Path
         }
     } finally {
         if ($temporarySettingsPath) {
-            if ($null -eq $existingSettingsContent) {
-                Remove-Item -LiteralPath $temporarySettingsPath -Force -ErrorAction SilentlyContinue
-            } else {
-                Set-Content -LiteralPath $temporarySettingsPath -Value $existingSettingsContent -NoNewline
-            }
+            Remove-Item -LiteralPath $temporarySettingsPath -Force -ErrorAction SilentlyContinue
         }
         $lockStream.Dispose()
     }

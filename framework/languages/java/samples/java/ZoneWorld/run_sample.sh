@@ -7,7 +7,6 @@ SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SO
 ROOT_DIR="$(dirname "$SCRIPT_PATH")"
 source "$ROOT_DIR/../../runner-common.sh"
 zlink_sample_configure_port_pool java
-ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
 cd "$ROOT_DIR"
 
 SCENARIO=all

@@ -16,7 +16,8 @@ role launch.
 Options:
 
 ```bash
-../../gradlew --settings-file standalone.settings.gradle.kts :Client:run --args='--api-url http://127.0.0.1:18080 --game-name tictactoe-game --x-actor-id player-x --o-actor-id player-o'
+source ../../runner-common.sh
+zlink_sample_gradle_standalone standalone.settings.gradle.kts ../../gradlew :Client:run --args='--api-url http://127.0.0.1:18080 --game-name tictactoe-game --x-actor-id player-x --o-actor-id player-o'
 ```
 
 The options command assumes that the server roles were started with matching

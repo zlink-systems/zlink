@@ -181,7 +181,7 @@ try {
         -replace 'sample\.nodeId=.*', "sample.nodeId=play-a"
     Set-ZlinkSampleUtf8File -Path $playAConfig -Value $playAContent
 
-    Invoke-Gradle @("--settings-file", "standalone.settings.gradle.kts", "--no-daemon", ":Server:installDist", ":Client:installDist", "--quiet")
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @("--no-daemon", ":Server:installDist", ":Client:installDist", "--quiet")
 
     Start-SampleRole "play" $playBConfig "play-b.log"
     Wait-Endpoint "play-b-stream" "tcp://127.0.0.1:$PlayBStreamPort"

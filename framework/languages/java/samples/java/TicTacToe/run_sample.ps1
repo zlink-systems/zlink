@@ -175,9 +175,7 @@ try {
     $PlayBConfig = Write-PlayConfig "play-b" $PlayBChannelPort $PlayBStreamPort `
         $PlayBSpotPort $PlayBPubPort $PlayASpotPort $PlayAPubPort
 
-    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
-        "--settings-file",
-        "standalone.settings.gradle.kts",
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @(
         ":Server:installDist",
         ":Client:installDist",
         "--quiet")
