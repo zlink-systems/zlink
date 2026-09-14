@@ -32,6 +32,11 @@ per-language version ownership was adopted on 2026-09-10.
   the framework installs that binding.
 - After 1.0, changes within a `MAJOR` do not break the public Core C API/ABI (`core/include/**`,
   `core/src/libzlink.vers`) or public binding/framework APIs. Breaking changes increment `MAJOR`.
+- **The linker SONAME is not the package version.** The root `VERSION` file owns it as
+  `LIBZLINK_ABI_SOVERSION`, and `core/CMakeLists.txt`, the build scripts and the release workflows
+  all read it from there. Never derive a SONAME from a package version. A package `MAJOR` bump
+  leaves the soversion alone unless the public C API changed, so Core 1.0.0 ships `libzlink.so.0`.
+  Raise `LIBZLINK_ABI_SOVERSION` only for an ABI break, and raise only that.
 
 ## 3. Release order and tags
 

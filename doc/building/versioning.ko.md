@@ -30,6 +30,11 @@
   사용자가 framework를 설치하면 해당 binding이 함께 설치된다.
 - 1.0 이후: 같은 `MAJOR` 안에서 Core의 공개 C API·ABI(`core/include/**`, `core/src/libzlink.vers`)와
   binding·framework의 공개 API를 깨지 않는다. 깨는 변경은 `MAJOR`를 올린다.
+- **링커 SONAME은 패키지 버전과 별개다.** root `VERSION`의 `LIBZLINK_ABI_SOVERSION`이 이 값을
+  소유하고, `core/CMakeLists.txt`·빌드 스크립트·릴리스 워크플로우가 모두 거기서 읽는다.
+  패키지 버전에서 SONAME을 뽑지 않는다. 공개 C API가 바뀌지 않으면 패키지 `MAJOR`가 올라도
+  soversion은 그대로다(Core 1.0.0의 라이브러리는 `libzlink.so.0`이다). ABI를 깨는 변경에서만
+  `LIBZLINK_ABI_SOVERSION`을 올리고, 그것만 올린다.
 
 ## 3. 릴리스 순서와 태그
 
