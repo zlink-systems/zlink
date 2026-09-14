@@ -116,8 +116,8 @@ const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
 const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 const MAX_DRAIN_RECORDS = 64;
-// Preserve the existing monitor/admission/liveness cadence. Only the binding
-// readable handler admits receive work; this timer never probes the socket.
+// Preserve the existing monitor/admission/liveness cadence.
+// Each platform turn drives the public poller; DATA readiness admits receive work.
 const MESH_BACKEND_MAINTENANCE_INTERVAL_MS = 1;
 /**
  * Conservative Actor Join admission cap for relocation state chunks (spec 15

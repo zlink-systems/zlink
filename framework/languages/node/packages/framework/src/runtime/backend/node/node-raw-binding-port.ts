@@ -1,6 +1,7 @@
 import {
   Message,
   Received,
+  PollEventFlag,
   RecvFlags,
   RoutingId as BindingRoutingId,
   createContext,
@@ -134,7 +135,12 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
 
   setReadableHandler(handler: () => void): void {
     this.requireOpen();
-    this.eventLoopPoller.setReadableHandler(handler);
+    this.socket.setReadableHandler(handler);
+  }
+
+  poll(): boolean {
+    this.requireOpen();
+    return (this.eventLoopPoller.poll() & PollEventFlag.PollIn) !== 0;
   }
 
   bind(endpoint: string): void {
