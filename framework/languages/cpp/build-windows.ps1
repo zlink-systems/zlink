@@ -2,6 +2,7 @@
 param(
     [string]$BuildDir,
     [string]$LocalPackageRoot,
+    [string]$CorePackagePrefix,
     [string]$VcpkgInstalledDir,
     [ValidateSet("Debug", "Release", "RelWithDebInfo", "MinSizeRel")]
     [string]$Configuration = "Release",
@@ -35,62 +36,19 @@ function Invoke-ZlinkCMake {
     }
 }
 
-function Get-ZlinkVersion {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$Key
-    )
-    $VersionMatches = @(Select-String -LiteralPath $Path -Pattern "^$([regex]::Escape($Key))=(\d+\.\d+\.\d+)$")
-    if ($VersionMatches.Count -ne 1) {
-        throw "Expected exactly one canonical $Key version in $Path."
-    }
-    return $VersionMatches[0].Matches[0].Groups[1].Value
-}
-
-function Get-StableBuildToken {
-    param([Parameter(Mandatory = $true)][string]$Path)
-    $Sha256 = [Security.Cryptography.SHA256]::Create()
-    try {
-        $Bytes = [Text.Encoding]::UTF8.GetBytes($Path.ToLowerInvariant())
-        return ([BitConverter]::ToString($Sha256.ComputeHash($Bytes), 0, 4)).Replace("-", "").ToLowerInvariant()
-    } finally {
-        $Sha256.Dispose()
-    }
-}
-
 $CppRoot = $PSScriptRoot
-$RepositoryRoot = (Resolve-Path (Join-Path $CppRoot "../../..")).Path
-$CoreVersion = Get-ZlinkVersion -Path (Join-Path $RepositoryRoot "VERSION") -Key "LIBZLINK_VERSION"
-$BindingVersion = Get-ZlinkVersion -Path (Join-Path $RepositoryRoot "bindings/cpp/VERSION") -Key "ZLINK_BINDING_VERSION"
-$FrameworkVersion = Get-ZlinkVersion -Path (Join-Path $CppRoot "VERSION") -Key "ZLINK_FRAMEWORK_VERSION"
-$CleanPackageRoot = Join-Path $RepositoryRoot ".artifacts/cpp-clean-$BindingVersion-package"
-
-if (-not $BuildDir) {
-    $BuildDrive = Split-Path -Qualifier $RepositoryRoot
-    if (-not $BuildDrive) {
-        $BuildDrive = [IO.Path]::GetTempPath()
-    }
-    $BuildDir = Join-Path $BuildDrive ".zlink-build/cpp-$(Get-StableBuildToken -Path $RepositoryRoot)"
-}
-if (-not $LocalPackageRoot) {
-    $LocalPackageRoot = if ($env:ZLINK_LOCAL_PACKAGE_ROOT) {
-        $env:ZLINK_LOCAL_PACKAGE_ROOT
-    } elseif (Test-Path $CleanPackageRoot) {
-        $CleanPackageRoot
-    } else {
-        Join-Path $RepositoryRoot ".artifacts/windows"
-    }
-}
-if (-not $VcpkgInstalledDir) {
-    $VcpkgInstalledDir = if (Test-Path (Join-Path $RepositoryRoot ".artifacts/windows-vcpkg-installed")) {
-        Join-Path $RepositoryRoot ".artifacts/windows-vcpkg-installed"
-    } else {
-        Join-Path $RepositoryRoot ".artifacts/windows/vcpkg-installed"
-    }
-}
-
-$CorePrefix = Join-Path $LocalPackageRoot "install/zlink-core/$CoreVersion"
-$CppPrefix = Join-Path $LocalPackageRoot "install/zlink-cpp/$BindingVersion"
+. (Join-Path $CppRoot "windows-build-common.ps1")
+$Inputs = Resolve-ZlinkCppWindowsBuildInputs -CppRoot $CppRoot -BuildDir $BuildDir `
+    -LocalPackageRoot $LocalPackageRoot -CorePackagePrefix $CorePackagePrefix `
+    -VcpkgInstalledDir $VcpkgInstalledDir
+$CoreVersion = $Inputs.CoreVersion
+$BindingVersion = $Inputs.BindingVersion
+$FrameworkVersion = $Inputs.FrameworkVersion
+$BuildDir = $Inputs.BuildDir
+$LocalPackageRoot = $Inputs.LocalPackageRoot
+$CorePrefix = $Inputs.CorePackagePrefix
+$CppPrefix = $Inputs.CppPackagePrefix
+$VcpkgInstalledDir = $Inputs.VcpkgInstalledDir
 foreach ($Prefix in @($CorePrefix, $CppPrefix)) {
     if (-not (Test-Path $Prefix)) {
         throw "Missing local package: $Prefix. Publish Core and the C++ binding locally first."
@@ -168,9 +126,10 @@ $ConfigureArguments = @(
     "-DVCPKG_INSTALLED_DIR=$VcpkgInstalledDir",
     "-DVCPKG_MANIFEST_MODE=OFF",
     "-Dzlink_DIR=$CoreCMakeDir",
-    "-DCMAKE_CXX_FLAGS=/EHsc /bigobj /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00",
+    "-DCMAKE_CXX_FLAGS=/EHsc /utf-8 /bigobj /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00",
     "-DCMAKE_CXX_FLAGS_RELEASE=/Od /DNDEBUG",
     "-DZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT=$LocalPackageRoot",
+    "-DZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX=$CorePrefix",
     "-DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION=$CoreVersion",
     "-DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=$BindingVersion",
     "-DZLINK_FRAMEWORK_CPP_BUILD_TESTS=$TestsEnabled",

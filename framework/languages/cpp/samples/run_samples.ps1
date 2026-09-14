@@ -2,6 +2,7 @@
 param(
     [string]$BuildDir,
     [string]$LocalPackageRoot,
+    [string]$CorePackagePrefix,
     [string]$VcpkgInstalledDir,
     [ValidateSet("Debug", "Release", "RelWithDebInfo", "MinSizeRel")]
     [string]$Configuration = "Release",
@@ -13,38 +14,22 @@ Set-StrictMode -Version Latest
 
 $ScriptDir = $PSScriptRoot
 $CppRoot = (Resolve-Path (Join-Path $ScriptDir "..")).Path
-$RepositoryRoot = (Resolve-Path (Join-Path $CppRoot "../../..")).Path
-if ($BuildDir) {
-    $env:ZLINK_CPP_BUILD_DIR = $BuildDir
-}
+. (Join-Path $CppRoot "windows-build-common.ps1")
+$Inputs = Resolve-ZlinkCppWindowsBuildInputs -CppRoot $CppRoot -BuildDir $BuildDir `
+    -LocalPackageRoot $LocalPackageRoot -CorePackagePrefix $CorePackagePrefix `
+    -VcpkgInstalledDir $VcpkgInstalledDir
+$env:ZLINK_CPP_BUILD_DIR = $Inputs.BuildDir
 $env:ZLINK_CPP_BUILD_CONFIGURATION = $Configuration
 
 if ($env:OS -eq "Windows_NT") {
-    if (-not $LocalPackageRoot) {
-        $LocalPackageRoot = if ($env:ZLINK_LOCAL_PACKAGE_ROOT) {
-            $env:ZLINK_LOCAL_PACKAGE_ROOT
-        } elseif (Test-Path (Join-Path $RepositoryRoot ".artifacts/cpp-clean-0.17.3-package")) {
-            Join-Path $RepositoryRoot ".artifacts/cpp-clean-0.17.3-package"
-        } else {
-            Join-Path $RepositoryRoot ".artifacts/windows"
-        }
-    }
-    if (-not $VcpkgInstalledDir) {
-        $VcpkgInstalledDir = if (Test-Path (Join-Path $RepositoryRoot ".artifacts/windows-vcpkg-installed")) {
-            Join-Path $RepositoryRoot ".artifacts/windows-vcpkg-installed"
-        } else {
-            Join-Path $RepositoryRoot ".artifacts/windows/vcpkg-installed"
-        }
-    }
-
-    $CoreRuntimeDir = Join-Path $LocalPackageRoot "install/zlink-core/0.17.3/bin"
+    $CoreRuntimeDir = Join-Path $Inputs.CorePackagePrefix "bin"
     $RuntimeDirs = @(@(
         $CoreRuntimeDir,
-        (Join-Path $LocalPackageRoot "install/zlink-cpp/0.17.3/bin"),
-        (Join-Path $VcpkgInstalledDir "x64-windows/bin")
+        (Join-Path $Inputs.CppPackagePrefix "bin"),
+        (Join-Path $Inputs.VcpkgInstalledDir "x64-windows/bin")
     ) | Where-Object { Test-Path $_ } | ForEach-Object { (Resolve-Path $_).Path })
     if (-not (Test-Path (Join-Path $CoreRuntimeDir "zlink.dll"))) {
-        throw "Missing Core 0.17.3 Windows runtime under $LocalPackageRoot"
+        throw "Missing Core $($Inputs.CoreVersion) Windows runtime under $($Inputs.CorePackagePrefix)"
     }
     $env:PATH = ($RuntimeDirs -join ";") + ";" + $env:PATH
 }

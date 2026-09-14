@@ -9,8 +9,17 @@ zlink_cpp_sample_prepare_build() {
   # canonical package versions before each sample build so a stale cache
   # cannot silently select a second build provenance.
   BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-$cpp_root/build}"
-  local cpp_version="1.1.0"
-  local core_version="1.1.0"
+  local repository_root
+  repository_root="$(cd "$cpp_root/../../.." && pwd)"
+  local cpp_version
+  cpp_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$repository_root/bindings/cpp/VERSION")"
+  local core_version
+  core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repository_root/VERSION")"
+  if [[ ! "$cpp_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ \
+    || ! "$core_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Failed to read canonical C++ binding/Core versions." >&2
+    return 1
+  fi
   local dependency_prefix=""
   local toolchain_file=""
   local build_type="Release"
