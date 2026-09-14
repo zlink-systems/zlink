@@ -3,6 +3,8 @@
 #include <zlink/framework.hpp>
 #include <zlink/codecs/protobuf.hpp>
 
+#include "test_completion_poller_driver.hpp"
+
 #include "runtime/channels/channel_packet_dispatcher.hpp"
 #include "runtime/configuration/endpoint_connections.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
@@ -1737,6 +1739,8 @@ int main ()
     zlink::context_t native_context;
     zlink::router_socket_t native_server (native_context);
     zlink::dealer_socket_t native_client (native_context);
+    zlink::framework::test::completion_poller_driver_t native_client_completion_owner (
+      native_client);
     zlink::socket_monitor_t native_server_monitor = native_server.monitor_open ();
     zlink::socket_monitor_t native_client_monitor = native_client.monitor_open ();
     const auto native_endpoint = unique_inproc_endpoint ("framework-channel-request");
@@ -1958,6 +1962,8 @@ int main ()
     hosted_handler.send_gate_changed.notify_all ();
     zlink::context_t peer_context;
     zlink::router_socket_t peer_router (peer_context);
+    zlink::framework::test::completion_poller_driver_t peer_completion_owner (
+      peer_router);
     peer_router.connect (hosted_endpoint);
     zlink::framework::runtime::messaging::envelope_header_t hosted_header;
     hosted_header.kind = zlink::framework::runtime::messaging::message_kind_t::request;

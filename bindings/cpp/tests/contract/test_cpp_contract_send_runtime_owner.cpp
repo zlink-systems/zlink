@@ -45,6 +45,26 @@ task_t<std::vector<zlink::message_t>> await_request (
     co_return co_await std::move (result_);
 }
 
+void test_typed_error_message_separates_result_from_native_errno ()
+{
+    const zlink::submit_error_t error (
+      zlink::submit_result_t::invalid_state, EBUSY);
+    const std::string message = error.what ();
+    assert (error.result () == zlink::submit_result_t::invalid_state);
+    assert (error.internal_errno () == EBUSY);
+    assert (message.find (
+              "zlink result code "
+              + std::to_string (static_cast<int> (
+                zlink::submit_result_t::invalid_state)))
+            != std::string::npos);
+    assert (message.find ("native errno=" + std::to_string (EBUSY))
+            != std::string::npos);
+    assert (message.find (zlink::error_text (EBUSY)) != std::string::npos);
+    assert (message.find (zlink::error_text (static_cast<int> (
+              zlink::submit_result_t::invalid_state)))
+            == std::string::npos);
+}
+
 void test_ownerless_async_completion_fails_fast_then_public_poller_progresses ()
 {
     {
@@ -162,5 +182,6 @@ void test_ownerless_async_completion_fails_fast_then_public_poller_progresses ()
 
 int main ()
 {
+    test_typed_error_message_separates_result_from_native_errno ();
     test_ownerless_async_completion_fails_fast_then_public_poller_progresses ();
 }

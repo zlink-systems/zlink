@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "metric_test_reader.hpp"
+#include "test_completion_poller_driver.hpp"
 
 #include "runtime/foundation/operation_registry.hpp"
 #include <runtime/locations/location_repository.hpp>
@@ -5673,6 +5674,7 @@ void verify_unadmitted_request_is_rejected_without_framework_queue ()
 
     zlink::context_t context;
     zlink::dealer_socket_t source (context);
+    zlink::framework::test::completion_poller_driver_t completion_owner (source);
     source.set_routing_id (zlink::routing_id_t::from ("overflow-source"));
     source.connect (target.endpoint ());
     std::this_thread::sleep_for (50ms);

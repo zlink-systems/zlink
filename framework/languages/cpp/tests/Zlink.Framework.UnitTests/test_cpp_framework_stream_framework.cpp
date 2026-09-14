@@ -1580,7 +1580,7 @@ int main ()
     catch (const zlink::framework::framework_exception_t &error) {
         duplicate_send_rejected =
           error.kind ()
-          == zlink::framework::framework_error_kind_t::protocol_error;
+          == zlink::framework::framework_error_kind_t::invalid_operation;
     }
     if (runtime.written_headers (fluent_stream).size () != 1
         || !duplicate_send_rejected
