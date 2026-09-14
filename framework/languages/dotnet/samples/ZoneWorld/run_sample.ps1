@@ -413,6 +413,11 @@ function Get-ZoneWorldLogText {
     }) -join [Environment]::NewLine
 }
 
+function Split-ZoneWorldLogLines {
+    param([Parameter(Mandatory = $true)][string]$Text)
+    return $Text -split "`r`n|`n|`r"
+}
+
 function Test-ZoneWorldEveryLog {
     param(
         [Parameter(Mandatory = $true)][string[]]$Names,
@@ -430,10 +435,11 @@ function Assert-ZoneWorldPhase {
         [Parameter(Mandatory = $true)][string[]]$Ids
     )
 
-    $verdictText = (Get-Content -Raw -LiteralPath $ClientLog) + [Environment]::NewLine +
+    $verdictLines = @(Split-ZoneWorldLogLines ((Get-Content -Raw -LiteralPath $ClientLog) + [Environment]::NewLine +
         (Get-Content -Raw -LiteralPath $RunnerLog)
+    ))
     foreach ($id in $Ids) {
-        if ($verdictText -notmatch "(?m)^scenario $([regex]::Escape($id)) passed$") {
+        if ($verdictLines -notcontains "scenario $id passed") {
             throw "$Marker withheld: $id did not pass."
         }
     }
@@ -680,16 +686,17 @@ try {
     elseif ($clientScenarios.Count -gt 0) { Invoke-ZoneWorldClient ($clientScenarios -join ',') }
 
     $zoneLogs = Get-ZoneWorldLogText @("zone-node-1", "zone-node-2", "zone-node-3")
+    $zoneLogLines = @(Split-ZoneWorldLogLines $zoneLogs)
     if (Test-ZoneWorldVerdictSelected "ZW-B5") {
         $line = @(Select-String -LiteralPath $ClientLog -Pattern 'message-follow-one-way completed actor=([^ ]+) probe=([^ ]+)')[-1]
         $passed = $null -ne $line
         if ($passed) {
             $actor = $line.Matches[0].Groups[1].Value; $probe = $line.Matches[0].Groups[2].Value
             $payload = [BitConverter]::ToString([Text.Encoding]::UTF8.GetBytes("one-way-payload")).Replace('-', '')
-            $handlerCount = @($zoneLogs -split "`r?`n" | Where-Object {
+            $handlerCount = @($zoneLogLines | Where-Object {
                 $_ -like "*message-follow probe one-way handled.*actor=$actor,*probe=$probe,*payload=$payload*"
             }).Count
-            $relayCount = @($zoneLogs -split "`r?`n" | Where-Object {
+            $relayCount = @($zoneLogLines | Where-Object {
                 $_ -like "*message_follow_relay*actor=$actor*"
             }).Count
             $passed = $handlerCount -eq 1 -and $relayCount -eq 1
@@ -702,10 +709,10 @@ try {
         if ($passed) {
             $actor = $line.Matches[0].Groups[1].Value; $request = $line.Matches[0].Groups[2].Value
             $payload = [BitConverter]::ToString([Text.Encoding]::UTF8.GetBytes("request-payload")).Replace('-', '')
-            $handlerCount = @($zoneLogs -split "`r?`n" | Where-Object {
+            $handlerCount = @($zoneLogLines | Where-Object {
                 $_ -like "*message-follow probe handled.*actor=$actor,*probe=$request,*payload=$payload*"
             }).Count
-            $relayCount = @($zoneLogs -split "`r?`n" | Where-Object {
+            $relayCount = @($zoneLogLines | Where-Object {
                 $_ -like "*message_follow_relay*actor=$actor*"
             }).Count
             $passed = $handlerCount -eq 1 -and $relayCount -eq 1
@@ -750,7 +757,7 @@ try {
             'bot=bot-sw-x, zone=zone-sw, start=(10,85), dir=(1,0)', 'bot=bot-sw-y, zone=zone-sw, start=(15,90), dir=(0,-1)',
             'bot=bot-se-x, zone=zone-se, start=(90,85), dir=(-1,0)', 'bot=bot-se-y, zone=zone-se, start=(85,90), dir=(0,-1)'
         )
-        $allBots = @($zoneLogs -split "`r?`n" | Select-String -Pattern 'bot spawned\. bot=([a-z0-9-]+)' |
+        $allBots = @($zoneLogLines | Select-String -Pattern 'bot spawned\. bot=([a-z0-9-]+)' |
             ForEach-Object { $_.Matches[0].Groups[1].Value } | Sort-Object -Unique)
         $fixedRoster = @($expectedBots | Where-Object { $zoneLogs -notlike "*$_*" }).Count -eq 0
         Add-ZoneWorldVerdict "ZW-F1-population" ($allBots.Count -eq 8 -and $fixedRoster) "The fixed eight-bot roster was not observed."
@@ -760,7 +767,7 @@ try {
         for ($attempt = 0; $attempt -lt 600 -and -not $correlated; $attempt++) {
             $node1 = Get-ZoneWorldLogText @("zone-node-1")
             $node2 = Get-ZoneWorldLogText @("zone-node-2")
-            $actors = @($node1 -split "`r?`n" | Select-String -Pattern 'player=(bot-[^,]+), bot=True, initial=False' |
+            $actors = @(Split-ZoneWorldLogLines $node1 | Select-String -Pattern 'player=(bot-[^,]+), bot=True, initial=False' |
                 ForEach-Object { $_.Matches[0].Groups[1].Value } | Sort-Object -Unique)
             $correlated = @($actors | Where-Object { $node2 -like "*player=$_, bot=True, initial=False*" }).Count -gt 0
             if (-not $correlated) { Start-Sleep -Milliseconds 100 }
