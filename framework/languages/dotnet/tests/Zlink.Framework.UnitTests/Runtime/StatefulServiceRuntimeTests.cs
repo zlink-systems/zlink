@@ -2254,7 +2254,9 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.NotEqual(default, second);
         Assert.NotEqual(operation, second);
 
-        MeshReceiveRecord inbound = default;
+        await WaitUntilAsync(() =>
+            oldOwner.Status().PendingApplicationMessages == 2);
+        var inboundRecords = new List<MeshReceiveRecord>();
         await WaitUntilAsync(() =>
         {
             using var ready = new MeshReadyBatch();
@@ -2262,13 +2264,18 @@ public sealed partial class StatefulServiceRuntimeTests
                 MeshReadyDomains.Application,
                 ready,
                 RecvFlags.DontWait);
-            if (ready.Count == 0) return false;
-            using var claim = ready.TakeClaim(0);
-            using var received = new MeshReceiveBatch();
-            if (!claim.Receive(received, RecvFlags.DontWait)) return false;
-            inbound = received[0];
-            return true;
+            for (var index = 0; index < ready.Count; index++)
+            {
+                using var claim = ready.TakeClaim(index);
+                using var received = new MeshReceiveBatch();
+                if (!claim.Receive(received, RecvFlags.DontWait)) continue;
+                for (var item = 0; item < received.Count; item++)
+                    inboundRecords.Add(received[item]);
+            }
+            return inboundRecords.Count >= 2;
         });
+        var inbound = Assert.Single(
+            inboundRecords.Where(record => record.OperationId == operation));
         Assert.NotEqual(caller.RoutingId, oldOwner.RoutingId);
         Assert.NotEqual(oldOwner.RoutingId, target.RoutingId);
         Assert.Equal(MeshRecordKind.SpotRequest, inbound.Kind);
@@ -3965,8 +3972,7 @@ public sealed partial class StatefulServiceRuntimeTests
                 TimeSpan.FromSeconds(3)));
         Assert.NotEqual(default, second);
         Assert.NotEqual(operation, second);
-        await activationTarget.Started.WaitAsync(TimeSpan.FromSeconds(3));
-        Assert.Equal(2, activationTarget.Count);
+        await WaitUntilAsync(() => activationTarget.Count == 2);
 
         var relay = new ZLinkServiceWireCodec.ReplyRelayRecord(
             operation,
@@ -4610,15 +4616,11 @@ public sealed partial class StatefulServiceRuntimeTests
     private sealed class BlockingInstanceSpotActivationTarget
         : IInstanceSpotActivationTarget
     {
-        private readonly TaskCompletionSource _started = new(
-            TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<InstanceSpotActivationTerminal>
             _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _count;
 
         internal int Count => Volatile.Read(ref _count);
-        internal Task Started => _started.Task;
-
         internal void Complete() => _completion.TrySetResult(
             new InstanceSpotActivationTerminal(
                 RequestResult.Ok,
@@ -4632,7 +4634,6 @@ public sealed partial class StatefulServiceRuntimeTests
             CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _count);
-            _started.TrySetResult();
             return await _completion.Task.WaitAsync(cancellationToken)
                 .ConfigureAwait(false);
         }
