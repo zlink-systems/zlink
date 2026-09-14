@@ -73,7 +73,7 @@ function createHandlers(framework, nestjs, measure, clients) {
       if (!probe && !measure.canIssue) { measure.inc(measure.counts, 'driver.notStarted'); return new PerfDriveReply(false); }
       const at = now(); enter(request); measure.inc(measure.counts, 'spot.applicationHandlerEntries');
       const op = measure.operations.get(request.correlationId);
-      if (op) { op.primaryStarted = now(); if (!op.counted) { op.counted = true; measure.inc(measure.counts, 'sent'); } }
+      if (op) { op.primaryStarted = now(); if (!op.counted) { op.counted = true; measure.inc(measure.counts, 'sent'); measure.attempted.add(request.clientId, request.sequence); } }
       try {
         const outbound = spot.context.outbound;
         if (kind.correlated || kind.oneWay) {

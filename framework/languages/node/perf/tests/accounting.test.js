@@ -195,3 +195,33 @@ test('canonical role preparation completes CS server Actors before source probes
     } finally { release(); await runtime.close(); }
   }
 });
+
+test('driver source evidence includes only actual primary starts and excludes setup probes', async () => {
+  const { createHandlers } = require('../Server/handlers');
+  const m = measure('s2s-spot-to-channel-send'); m.phase = 'measured'; m.resetSeq = '1';
+  let Handler;
+  createHandlers({ ZLinkPacket: () => () => {}, ZLinkSpotRequest: name => target => { if (name === 'PerfDriveRequest') Handler = target.constructor; },
+    ZLinkSpotActorRequest: () => () => {}, ZLinkSpotActorSend: () => () => {} }, {}, m, {});
+  const handler = new Handler();
+  const spot = { context: { outbound: { sendToChannel: () => ({ async submit() {} }) } } };
+  const delayed = m.request(0, 0), delayedOp = m.begin(delayed);
+  assert.equal(m.attempted.count(), 0n);
+  m.end = 1n;
+  assert.equal((await handler.handle(spot, { echo: delayed })).started, false);
+  assert.equal(delayedOp.counted, false); assert.equal(m.attempted.count(), 0n);
+  m.end = now() + 1000000000n;
+  const primary = m.request(0, 1), primaryOp = m.begin(primary);
+  assert.equal((await handler.handle(spot, { echo: primary })).started, true);
+  m.finish(primaryOp);
+  assert.equal(primaryOp.counted, true);
+  assert.equal(m.counts['driver.issued'], 2n); assert.equal(m.counts['driver.notStarted'], 1n);
+  assert.equal(m.counts['sent'], 1n); assert.equal(m.counts['admitted'], 1n);
+  assert.equal(m.attempted.count(), m.counts['sent']);
+  assert.equal(m.windowAdmission.count() + m.settleAdmission.count(), m.counts['admitted']);
+  assert.deepEqual(m.attempted.forStream(0), [{ first: '1', last: '1' }]);
+  m.phase = 'setup';
+  await handler.handle(spot, { echo: m.request(0, 2, true) });
+  assert.equal(m.counts['sent'], 1n); assert.equal(m.attempted.count(), 1n); assert.equal(m.counts['admitted'], 1n);
+  const ordinary = measure(); ordinary.begin(ordinary.request(0, 0));
+  assert.equal(ordinary.counts['sent'], 1n); assert.equal(ordinary.attempted.count(), 1n);
+});

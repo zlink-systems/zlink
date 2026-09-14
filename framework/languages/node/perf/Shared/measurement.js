@@ -88,7 +88,7 @@ class Measurement {
     if (!this.kind.driver) this.inc(this.counts, 'sent'); else this.inc(this.counts, 'driver.issued');
     this.operations.set(request.correlationId, op);
     this.inflight++; if (this.inflight > this.maxInflight) this.maxInflight = this.inflight;
-    this.attempted.add(request.clientId, request.sequence);
+    if (!this.kind.driver) this.attempted.add(request.clientId, request.sequence);
     return op;
   }
   finish(op, error = null, at = now(), started = op.primaryStarted ?? op.started) {
