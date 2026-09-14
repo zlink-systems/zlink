@@ -1,6 +1,46 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Help must not validate run inputs, build, or start benchmark processes.
+for argument in "$@"; do
+  case "${argument}" in
+    -h|--help)
+      printf '%s\n' 'Usage: bash run_local.sh [options]
+
+Run the .NET gRPC, Zlink Core, and Zlink Framework benchmarks.
+
+Options:
+  -h, --help                    Show this help and exit.
+  --scenario NAME               all (default), request, send, request-serial,
+                                request-backpressure, or send-saturation.
+  --implementation NAME         all (default), grpc-dotnet, zlink-dotnet,
+                                or zlink-framework-dotnet.
+  --payload-sizes BYTES         Response/send payload size: 4096 only (default).
+  --duration-seconds N           Measurement duration in seconds (default: 5).
+  --warmup-seconds N             Warmup duration in seconds (default: 2).
+  --skip-build                  Use existing build output (default: build first).
+  --output DIR                  Run output directory. Default:
+                                framework/bench/grpc/log/dotnet/YYYYMMDD_HHMMSS
+
+request-serial: one request at a time, 64-byte request / 4096-byte response.
+request-backpressure: concurrent requests, 64-byte request / 4096-byte response.
+send-saturation: 4096-byte one-way messages.
+Each run writes report.txt inside its output directory.
+
+Environment defaults (command-line options take precedence):
+  SCENARIO, IMPLEMENTATION, PAYLOAD_SIZES, DURATION_SECONDS,
+  WARMUP_SECONDS, SKIP_BUILD, OUTPUT.
+  CONFIGURATION sets the .NET build configuration (default: Release).
+
+Examples (from framework/bench/grpc/dotnet):
+  bash run_local.sh --scenario request-serial
+  bash run_local.sh --scenario request-serial --implementation zlink-framework-dotnet
+  bash run_local.sh --skip-build --scenario request-serial --duration-seconds 10 --output ./log/serial'
+      exit 0
+      ;;
+  esac
+done
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../runner_args.sh
 source "${ROOT_DIR}/../runner_args.sh"
