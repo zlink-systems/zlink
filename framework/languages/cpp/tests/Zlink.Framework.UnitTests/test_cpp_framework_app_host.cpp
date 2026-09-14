@@ -881,8 +881,13 @@ int main (int test_argc, char **test_argv)
         config
           << R"({"node":"json-node","server":{"endpoint":"tcp://json:7100","queue":42,"enabled":true}})";
     }
+#ifdef _WIN32
+    _putenv_s ("ZLINK_REGION", "local");
+    _putenv_s ("ZLINK_server__queue", "64");
+#else
     setenv ("ZLINK_REGION", "local", 1);
     setenv ("ZLINK_server__queue", "64", 1);
+#endif
 
     app.config ()
       .use_environment ("development")

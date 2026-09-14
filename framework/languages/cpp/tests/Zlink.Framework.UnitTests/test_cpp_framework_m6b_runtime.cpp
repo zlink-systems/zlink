@@ -1902,13 +1902,13 @@ void verify_public_host_route_cache_stops_at_owner_admission_deadline ()
       store->commit ({reserve.key, reserved.fence, {std::byte{1}}})
         .result ().value ());
 
-    host::host_options_t source_options{
-      mesh::raw_mesh_node_options_t{descriptor ("route-cache-source")}};
-    source_options.object_stable_types.insert ("framework.spot");
-    source_options.route_cache_max_age = 10s;
-    source_options.owner_lease_fencing_margin = 3s;
     auto source = std::make_shared<host::public_host_runtime_t> (
-      std::move (source_options));
+      host::host_options_t{
+        mesh::raw_mesh_node_options_t{descriptor ("route-cache-source")},
+        "entry",
+        {"framework.spot"},
+        10s,
+        3s});
     auto target = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{
         descriptor ("route-cache-target")}});
@@ -6589,11 +6589,10 @@ void verify_remote_user_spot_create_close_terminal_once ()
     auto source = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{
         mesh::raw_mesh_node_options_t{descriptor ("user-source")}});
-    host::host_options_t target_options{
-      mesh::raw_mesh_node_options_t{descriptor ("user-target")}};
-    target_options.user_spot_operation_replay_retention = 50ms;
     auto target = std::make_shared<host::public_host_runtime_t> (
-      std::move (target_options));
+      host::host_options_t{
+        .mesh = mesh::raw_mesh_node_options_t{descriptor ("user-target")},
+        .user_spot_operation_replay_retention = 50ms});
     std::size_t materialize_count = 0;
     target->configure_user_spot_operations (
       store,

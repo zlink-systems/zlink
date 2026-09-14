@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include <zlink/framework.hpp>
+
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
 #include <zlink/codecs/protobuf.hpp>
 
 #include "test_completion_poller_driver.hpp"
@@ -61,11 +64,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 namespace
 {
@@ -727,27 +725,11 @@ std::string unique_inproc_endpoint (const char *base)
 
 std::string unique_tcp_endpoint ()
 {
-    const int fd = ::socket (AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        throw std::runtime_error ("failed to create TCP probe socket");
-    }
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-    address.sin_port = 0;
-    if (::bind (fd, reinterpret_cast<sockaddr *> (&address), sizeof (address)) != 0) {
-        ::close (fd);
-        throw std::runtime_error ("failed to bind TCP probe socket");
-    }
-    socklen_t length = sizeof (address);
-    if (::getsockname (fd, reinterpret_cast<sockaddr *> (&address), &length) != 0) {
-        ::close (fd);
-        throw std::runtime_error ("failed to read TCP probe socket port");
-    }
-    const auto port = ntohs (address.sin_port);
-    ::close (fd);
+    boost::asio::io_context io;
+    boost::asio::ip::tcp::acceptor reservation (
+      io, {boost::asio::ip::address_v4::loopback (), 0});
     std::ostringstream stream;
-    stream << "tcp://127.0.0.1:" << port;
+    stream << "tcp://127.0.0.1:" << reservation.local_endpoint ().port ();
     return stream.str ();
 }
 

@@ -922,6 +922,35 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   enable_testing()
 endif()
 
+function(zlink_framework_cpp_add_test)
+  set(one_value_args NAME LABELS TIMEOUT)
+  set(multi_value_args COMMAND ENVIRONMENT PROPERTIES)
+  cmake_parse_arguments(PARSE_ARGV 0 ZLINK_TEST "" "${one_value_args}" "${multi_value_args}")
+  if(NOT ZLINK_TEST_NAME OR NOT ZLINK_TEST_COMMAND OR
+      NOT ZLINK_TEST_LABELS OR NOT DEFINED ZLINK_TEST_TIMEOUT OR
+      ZLINK_TEST_UNPARSED_ARGUMENTS OR ZLINK_TEST_KEYWORDS_MISSING_VALUES)
+    message(FATAL_ERROR "Invalid zlink framework CTest registration: ${ARGV}")
+  endif()
+
+  add_test(NAME "${ZLINK_TEST_NAME}" COMMAND ${ZLINK_TEST_COMMAND})
+  set(test_environment ${ZLINK_TEST_ENVIRONMENT})
+  if(WIN32)
+    set(test_path
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin;${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/bin;${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin;$ENV{PATH}")
+    string(REPLACE ";" "\\;" test_path "${test_path}")
+    list(PREPEND test_environment "PATH=${test_path}")
+  endif()
+  set_tests_properties("${ZLINK_TEST_NAME}" PROPERTIES
+    LABELS "${ZLINK_TEST_LABELS}"
+    TIMEOUT "${ZLINK_TEST_TIMEOUT}")
+  if(test_environment)
+    set_property(TEST "${ZLINK_TEST_NAME}" PROPERTY ENVIRONMENT "${test_environment}")
+  endif()
+  if(ZLINK_TEST_PROPERTIES)
+    set_tests_properties("${ZLINK_TEST_NAME}" PROPERTIES ${ZLINK_TEST_PROPERTIES})
+  endif()
+endfunction()
+
 function(zlink_framework_cpp_enable_test_assertions target_name)
   # Several process tests keep syscall, mailbox, and future side effects in
   # assertion expressions. Release evidence must execute those expressions;
@@ -950,9 +979,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink::cpp
     Threads::Threads)
   zlink_framework_cpp_enable_test_assertions(test_cpp_framework_raw_route_port_contract)
-  add_test(NAME test_cpp_framework_raw_route_port_contract
-    COMMAND test_cpp_framework_raw_route_port_contract)
-  set_tests_properties(test_cpp_framework_raw_route_port_contract PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_raw_route_port_contract
+    COMMAND test_cpp_framework_raw_route_port_contract
     LABELS "framework-contract;framework-unit;framework-foundation;raw-binding"
     TIMEOUT 30)
 
@@ -987,9 +1016,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     opentelemetry-cpp::api
     Threads::Threads)
   zlink_framework_cpp_enable_test_assertions(test_cpp_framework_service_wire_codec)
-  add_test(NAME test_cpp_framework_service_wire_codec
-    COMMAND test_cpp_framework_service_wire_codec)
-  set_tests_properties(test_cpp_framework_service_wire_codec PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_service_wire_codec
+    COMMAND test_cpp_framework_service_wire_codec
     LABELS "framework-unit;framework-foundation;protocol"
     TIMEOUT 30)
 
@@ -999,9 +1028,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_include_directories(test_cpp_framework_endpoint_notation PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-  add_test(NAME test_cpp_framework_endpoint_notation
-    COMMAND test_cpp_framework_endpoint_notation)
-  set_tests_properties(test_cpp_framework_endpoint_notation PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_endpoint_notation
+    COMMAND test_cpp_framework_endpoint_notation
     LABELS "framework-unit;framework-foundation;protocol"
     TIMEOUT 30)
 
@@ -1016,9 +1045,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_link_libraries(test_cpp_framework_authority_key_codec PRIVATE
     zlink::framework
     nlohmann_json::nlohmann_json)
-  add_test(NAME test_cpp_framework_authority_key_codec
-    COMMAND test_cpp_framework_authority_key_codec)
-  set_tests_properties(test_cpp_framework_authority_key_codec PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_authority_key_codec
+    COMMAND test_cpp_framework_authority_key_codec
     LABELS "framework-unit;framework-foundation;protocol"
     TIMEOUT 30)
 
@@ -1035,9 +1064,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     nlohmann_json::nlohmann_json
     zlink::framework
     Threads::Threads)
-  add_test(NAME test_cpp_framework_relocation_envelope_golden
-    COMMAND test_cpp_framework_relocation_envelope_golden)
-  set_tests_properties(test_cpp_framework_relocation_envelope_golden PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_relocation_envelope_golden
+    COMMAND test_cpp_framework_relocation_envelope_golden
     LABELS "framework-unit;framework-foundation;protocol"
     TIMEOUT 30)
 
@@ -1053,9 +1082,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_link_libraries(test_cpp_framework_actor_authority_payload PRIVATE
     nlohmann_json::nlohmann_json
     zlink::framework)
-  add_test(NAME test_cpp_framework_actor_authority_payload
-    COMMAND test_cpp_framework_actor_authority_payload)
-  set_tests_properties(test_cpp_framework_actor_authority_payload PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_actor_authority_payload
+    COMMAND test_cpp_framework_actor_authority_payload
     LABELS "framework-unit;framework-contract;protocol"
     TIMEOUT 30)
 
@@ -1073,9 +1102,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     nlohmann_json::nlohmann_json
     zlink::framework
     Threads::Threads)
-  add_test(NAME test_cpp_framework_store_record_golden
-    COMMAND test_cpp_framework_store_record_golden)
-  set_tests_properties(test_cpp_framework_store_record_golden PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_store_record_golden
+    COMMAND test_cpp_framework_store_record_golden
     LABELS "framework-unit;framework-foundation;protocol"
     TIMEOUT 30)
 
@@ -1091,9 +1120,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     opentelemetry-cpp::metrics
     Threads::Threads
     nlohmann_json::nlohmann_json)
-  add_test(NAME test_cpp_framework_operation_registry
-    COMMAND test_cpp_framework_operation_registry)
-  set_tests_properties(test_cpp_framework_operation_registry PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_operation_registry
+    COMMAND test_cpp_framework_operation_registry
     LABELS "framework-unit;framework-foundation;operation;resource"
     TIMEOUT 30)
 
@@ -1109,30 +1138,38 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink_framework
     Threads::Threads)
   zlink_framework_cpp_enable_test_assertions(test_cpp_framework_m6a_runtime)
-  add_test(NAME test_cpp_framework_m6a_runtime
-    COMMAND test_cpp_framework_m6a_runtime)
-  add_test(NAME test_cpp_framework_owner_rejection_observability
-    COMMAND test_cpp_framework_m6a_runtime --owner-rejection-observability)
-  set_tests_properties(test_cpp_framework_owner_rejection_observability PROPERTIES
-    LABELS "framework-unit")
-  set_tests_properties(test_cpp_framework_m6a_runtime PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_m6a_runtime
+    COMMAND test_cpp_framework_m6a_runtime
     LABELS "framework-unit;framework-m6-runtime;topology;mailbox;liveness;raw-binding"
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_owner_rejection_observability
+    COMMAND test_cpp_framework_m6a_runtime
+      --owner-rejection-observability
+    LABELS "framework-unit"
+    TIMEOUT 0)
 
-  add_test(NAME test_cpp_framework_r6_create_lifecycle
-    COMMAND test_cpp_framework_m6a_runtime --r6-create-lifecycle)
-  set_tests_properties(test_cpp_framework_r6_create_lifecycle PROPERTIES
-    LABELS "framework-unit;framework-regression" TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_r6_create_lifecycle
+    COMMAND test_cpp_framework_m6a_runtime
+      --r6-create-lifecycle
+    LABELS "framework-unit;framework-regression"
+    TIMEOUT 30)
 
-  add_test(NAME test_cpp_framework_r6_join_durable
-    COMMAND test_cpp_framework_m6a_runtime --r6-join-durable)
-  set_tests_properties(test_cpp_framework_r6_join_durable PROPERTIES
-    LABELS "framework-unit;framework-regression" TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_r6_join_durable
+    COMMAND test_cpp_framework_m6a_runtime
+      --r6-join-durable
+    LABELS "framework-unit;framework-regression"
+    TIMEOUT 30)
 
-  add_test(NAME test_cpp_framework_r6_join_owner_loss
-    COMMAND test_cpp_framework_m6a_runtime --r6-join-owner-loss)
-  set_tests_properties(test_cpp_framework_r6_join_owner_loss PROPERTIES
-    LABELS "framework-unit;framework-regression" TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_r6_join_owner_loss
+    COMMAND test_cpp_framework_m6a_runtime
+      --r6-join-owner-loss
+    LABELS "framework-unit;framework-regression"
+    TIMEOUT 30)
 
   add_executable(test_cpp_framework_mesh_shutdown_seal
     tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_shutdown_seal.cpp)
@@ -1143,9 +1180,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_link_libraries(test_cpp_framework_mesh_shutdown_seal PRIVATE
     zlink_framework_m6a_runtime zlink_framework Threads::Threads)
   zlink_framework_cpp_enable_test_assertions(test_cpp_framework_mesh_shutdown_seal)
-  add_test(NAME test_cpp_framework_mesh_shutdown_seal
-    COMMAND test_cpp_framework_mesh_shutdown_seal)
-  set_tests_properties(test_cpp_framework_mesh_shutdown_seal PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_mesh_shutdown_seal
+    COMMAND test_cpp_framework_mesh_shutdown_seal
     LABELS "framework-unit;topology;liveness;raw-binding"
     TIMEOUT 30)
 
@@ -1162,9 +1199,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink_framework
     Threads::Threads)
   zlink_framework_cpp_enable_test_assertions(test_cpp_framework_m6b_runtime)
-  add_test(NAME test_cpp_framework_m6b_runtime
-    COMMAND test_cpp_framework_m6b_runtime)
-  set_tests_properties(test_cpp_framework_m6b_runtime PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_m6b_runtime
+    COMMAND test_cpp_framework_m6b_runtime
     LABELS "framework-unit;framework-m6-runtime;stateful;spot;actor;stream-session"
     TIMEOUT 30)
 
@@ -1180,9 +1217,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink_framework
     Threads::Threads)
   zlink_framework_cpp_enable_test_assertions(test_cpp_framework_reply_submit_claim)
-  add_test(NAME test_cpp_framework_reply_submit_claim
-    COMMAND test_cpp_framework_reply_submit_claim)
-  set_tests_properties(test_cpp_framework_reply_submit_claim PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_reply_submit_claim
+    COMMAND test_cpp_framework_reply_submit_claim
     LABELS "framework-unit;framework-m6-runtime;stateful;reply;claim"
     TIMEOUT 10)
 
@@ -1196,9 +1233,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_link_libraries(test_cpp_framework_m6c_runtime PRIVATE
     zlink_framework
     Threads::Threads)
-  add_test(NAME test_cpp_framework_m6c_runtime
-    COMMAND test_cpp_framework_m6c_runtime)
-  set_tests_properties(test_cpp_framework_m6c_runtime PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_m6c_runtime
+    COMMAND test_cpp_framework_m6c_runtime
     LABELS "framework-unit;framework-m6-runtime;maintenance;relocation;recovery;resource"
     TIMEOUT 30)
 
@@ -1210,9 +1247,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_link_libraries(test_cpp_framework_host_lifecycle PRIVATE
     zlink_framework
     Threads::Threads)
-  add_test(NAME test_cpp_framework_host_lifecycle
-    COMMAND test_cpp_framework_host_lifecycle)
-  set_tests_properties(test_cpp_framework_host_lifecycle PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_host_lifecycle
+    COMMAND test_cpp_framework_host_lifecycle
     LABELS "framework-unit;framework-m6-runtime;maintenance;relocation;termination"
     TIMEOUT 30)
 
@@ -1235,9 +1272,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(zlink_cpp_framework_mesh_node_vertical_test PRIVATE
     zlink::framework
     Threads::Threads)
-  add_test(NAME zlink_cpp_framework_mesh_node_vertical_test
-    COMMAND zlink_cpp_framework_mesh_node_vertical_test)
-  set_tests_properties(zlink_cpp_framework_mesh_node_vertical_test PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME zlink_cpp_framework_mesh_node_vertical_test
+    COMMAND zlink_cpp_framework_mesh_node_vertical_test
     LABELS "framework-unit;framework-zlink;framework-zlink-channel;framework-zlink-spot;framework-zlink-actor-gateway"
     TIMEOUT 30)
 
@@ -1272,8 +1309,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     target_link_zlink_test_harness(${target_name})
     target_include_directories(${target_name} PRIVATE
       ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-    add_test(NAME ${target_name} COMMAND ${target_name})
-    set_tests_properties(${target_name} PROPERTIES
+    zlink_framework_cpp_add_test(
+      NAME ${target_name}
+      COMMAND ${target_name}
       LABELS "${labels}"
       TIMEOUT 30)
   endfunction()
@@ -1287,8 +1325,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     # Test sources include Boost directly; they must resolve the same Boost
     # tree as the connector objects (see zlink_framework_cpp_add_boost_headers).
     zlink_framework_cpp_add_boost_headers(${target_name})
-    add_test(NAME ${target_name} COMMAND ${target_name})
-    set_tests_properties(${target_name} PROPERTIES
+    zlink_framework_cpp_add_test(
+      NAME ${target_name}
+      COMMAND ${target_name}
       LABELS "${labels}"
       TIMEOUT 30)
   endfunction()
@@ -1302,8 +1341,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     # Test sources include Boost (beast test server); they must resolve the
     # same Boost tree as the http client objects.
     zlink_framework_cpp_add_boost_headers(${target_name})
-    add_test(NAME ${target_name} COMMAND ${target_name})
-    set_tests_properties(${target_name} PROPERTIES
+    if(ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL)
+      list(APPEND labels http-client-https)
+    endif()
+    zlink_framework_cpp_add_test(
+      NAME ${target_name}
+      COMMAND ${target_name}
       LABELS "${labels}"
       TIMEOUT 30)
   endfunction()
@@ -1320,14 +1363,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::stream_connector_throwing
     GTest::gtest
     GTest::gmock)
-  add_test(NAME test_cpp_framework_contract_headers
-    COMMAND test_cpp_framework_contract_headers)
-  set_tests_properties(test_cpp_framework_contract_headers PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_contract_headers
+    COMMAND test_cpp_framework_contract_headers
     LABELS "framework-contract"
     TIMEOUT 30)
-  add_test(NAME test_cpp_framework_async_contract
-    COMMAND test_cpp_framework_contract_headers)
-  set_tests_properties(test_cpp_framework_async_contract PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_async_contract
+    COMMAND test_cpp_framework_contract_headers
     LABELS "framework-contract;framework-unit;async"
     TIMEOUT 30)
 
@@ -1335,8 +1378,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.ContractTests/test_cpp_framework_provider_task.cpp)
   target_link_libraries(test_cpp_framework_provider_task PRIVATE
     zlink::framework_provider_abstractions Threads::Threads)
-  add_test(NAME test_cpp_framework_provider_task COMMAND test_cpp_framework_provider_task)
-  set_tests_properties(test_cpp_framework_provider_task PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_provider_task
+    COMMAND test_cpp_framework_provider_task
     LABELS "framework-contract;async"
     TIMEOUT 30)
 
@@ -1351,14 +1395,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     GTest::gmock)
   target_include_directories(test_cpp_framework_sample_parity PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-  add_test(NAME test_cpp_framework_sample_parity
-    COMMAND test_cpp_framework_sample_parity)
-  set_tests_properties(test_cpp_framework_sample_parity PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_sample_parity
+    COMMAND test_cpp_framework_sample_parity
     LABELS "framework-contract;framework-sample-parity"
     TIMEOUT 30)
-  add_test(NAME test_cpp_framework_parity_contract
-    COMMAND test_cpp_framework_sample_parity)
-  set_tests_properties(test_cpp_framework_parity_contract PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_parity_contract
+    COMMAND test_cpp_framework_sample_parity
     LABELS "framework-regression;framework-sample-parity;parity"
     TIMEOUT 30)
 
@@ -1368,9 +1412,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}")
   target_compile_features(test_cpp_framework_layout_contract PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_layout_contract)
-  add_test(NAME test_cpp_framework_layout_contract
-    COMMAND test_cpp_framework_layout_contract)
-  set_tests_properties(test_cpp_framework_layout_contract PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_layout_contract
+    COMMAND test_cpp_framework_layout_contract
     LABELS "framework-contract"
     TIMEOUT 30)
 
@@ -1380,16 +1424,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}")
   target_compile_features(test_cpp_framework_target_contract PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_target_contract)
-  add_test(NAME test_cpp_framework_target_contract
-    COMMAND test_cpp_framework_target_contract)
-  set_tests_properties(test_cpp_framework_target_contract PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_target_contract
+    COMMAND test_cpp_framework_target_contract
     LABELS "framework-contract"
     TIMEOUT 60)
-  add_test(
+  zlink_framework_cpp_add_test(
     NAME test_cpp_framework_common_e2e_inventory
     COMMAND bash
-      ${CMAKE_CURRENT_LIST_DIR}/e2e/verify_common_inventory.sh)
-  set_tests_properties(test_cpp_framework_common_e2e_inventory PROPERTIES
+      ${CMAKE_CURRENT_LIST_DIR}/e2e/verify_common_inventory.sh
     LABELS "framework-contract;framework-e2e"
     TIMEOUT 30)
   set(ZLINK_FRAMEWORK_CPP_TOOLING_CONTRACT_ARGS
@@ -1409,23 +1452,27 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
         -D ZLINK_FRAMEWORK_CPP_TOOLING_${tooling_dependency}=${${tooling_dependency}})
     endif()
   endforeach()
-  add_test(
+  zlink_framework_cpp_add_test(
     NAME test_cpp_framework_tooling_contract
     COMMAND ${CMAKE_COMMAND}
       ${ZLINK_FRAMEWORK_CPP_TOOLING_CONTRACT_ARGS}
-      -P ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.ContractTests/verify_tooling_contract.cmake)
-  set_tests_properties(test_cpp_framework_tooling_contract PROPERTIES
+      -P
+      ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.ContractTests/verify_tooling_contract.cmake
     LABELS "framework-contract;framework-package;framework-tooling"
-    RESOURCE_LOCK "zlink-cpp-vcpkg"
-    TIMEOUT 120)
-  add_test(
+    TIMEOUT 120
+    PROPERTIES
+      RESOURCE_LOCK "zlink-cpp-vcpkg")
+  zlink_framework_cpp_add_test(
     NAME test_cpp_framework_label_contract
     COMMAND ${CMAKE_COMMAND}
-      -D ZLINK_FRAMEWORK_CPP_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}
-      -D ZLINK_FRAMEWORK_CPP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
-      -D ZLINK_FRAMEWORK_CPP_EXPECT_COVERAGE_LABEL=${ZLINK_FRAMEWORK_CPP_ENABLE_COVERAGE}
-      -P ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.ContractTests/verify_ctest_label_contract.cmake)
-  set_tests_properties(test_cpp_framework_label_contract PROPERTIES
+      -D
+      ZLINK_FRAMEWORK_CPP_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}
+      -D
+      ZLINK_FRAMEWORK_CPP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -D
+      ZLINK_FRAMEWORK_CPP_EXPECT_COVERAGE_LABEL=${ZLINK_FRAMEWORK_CPP_ENABLE_COVERAGE}
+      -P
+      ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.ContractTests/verify_ctest_label_contract.cmake
     LABELS "framework-contract;framework-regression"
     TIMEOUT 30)
 
@@ -1450,8 +1497,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_client_server_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   set_tests_properties(test_cpp_framework_client_server_runtime PROPERTIES
-    RESOURCE_LOCK "zlink_cpp_heavy_runtime"
-    TIMEOUT 30)
+    RESOURCE_LOCK "zlink_cpp_heavy_runtime")
   add_zlink_framework_test(
     test_cpp_framework_actor_gateway
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway.cpp
@@ -1461,9 +1507,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_actor_gateway PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   foreach(reconcile_case source no-commit target indeterminate)
-    add_test(NAME test_cpp_framework_reconcile_${reconcile_case}
-      COMMAND test_cpp_framework_actor_gateway --reconcile-${reconcile_case})
-    set_tests_properties(test_cpp_framework_reconcile_${reconcile_case} PROPERTIES
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_reconcile_${reconcile_case}
+      COMMAND test_cpp_framework_actor_gateway
+        --reconcile-${reconcile_case}
       LABELS "framework-unit;framework-regression;framework-actor;relocation"
       TIMEOUT 30)
   endforeach()
@@ -1490,25 +1537,28 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       ZLINK_FRAMEWORK_HTTP_TEST_CERT="${ZLINK_HTTP_CLIENT_TEST_CERT}"
       ZLINK_FRAMEWORK_HTTP_TEST_KEY="${ZLINK_HTTP_CLIENT_TEST_KEY}")
   endif()
-  add_test(NAME test_cpp_framework_http_integration
-    COMMAND test_cpp_framework_app_host)
-  set_tests_properties(test_cpp_framework_http_integration PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_http_integration
+    COMMAND test_cpp_framework_app_host
     LABELS "framework-integration;framework-http;framework-http-e2e;http"
     TIMEOUT 30)
-  add_test(NAME test_cpp_framework_http_sync_submit
-    COMMAND test_cpp_framework_app_host --http-submit-only)
-  set_tests_properties(test_cpp_framework_http_sync_submit PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_http_sync_submit
+    COMMAND test_cpp_framework_app_host
+      --http-submit-only
     LABELS "framework-unit;framework-regression;framework-http"
     TIMEOUT 30)
   if(ZLINK_FRAMEWORK_CPP_REQUIRE_HTTP_PERF_REPORT)
-    add_test(NAME test_cpp_framework_http_perf_gate
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_http_perf_gate
       COMMAND ${CMAKE_COMMAND}
-        -D ZLINK_FRAMEWORK_CPP_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}
-        -P ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.PerfTests/http_perf_gate.cmake)
-    set_tests_properties(test_cpp_framework_http_perf_gate PROPERTIES
-      ENVIRONMENT "ZLINK_FRAMEWORK_HTTP_PERF_REQUIRED=1"
+        -D
+        ZLINK_FRAMEWORK_CPP_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}
+        -P
+        ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.PerfTests/http_perf_gate.cmake
       LABELS "framework-http-perf;framework-regression;http"
-      TIMEOUT 30)
+      TIMEOUT 30
+      ENVIRONMENT "ZLINK_FRAMEWORK_HTTP_PERF_REQUIRED=1")
   endif()
   add_executable(test_cpp_framework_entry_spot_admission_burst
     tests/Zlink.Framework.PerfTests/entry_spot_admission_burst.cpp)
@@ -1517,9 +1567,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_entry_spot_admission_burst PRIVATE
     zlink_framework Threads::Threads)
-  add_test(NAME test_cpp_framework_entry_spot_admission_burst
-    COMMAND test_cpp_framework_entry_spot_admission_burst)
-  set_tests_properties(test_cpp_framework_entry_spot_admission_burst PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_entry_spot_admission_burst
+    COMMAND test_cpp_framework_entry_spot_admission_burst
     LABELS "framework-perf-smoke;framework-regression;spot-actor"
     TIMEOUT 30)
   set_tests_properties(
@@ -1568,9 +1618,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_state_lane PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
   zlink_enable_coverage(test_cpp_framework_state_lane)
-  add_test(NAME test_cpp_framework_state_lane
-    COMMAND test_cpp_framework_state_lane)
-  set_tests_properties(test_cpp_framework_state_lane PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_state_lane
+    COMMAND test_cpp_framework_state_lane
     LABELS "framework-unit;framework-regression;execution"
     TIMEOUT 30)
   add_executable(test_cpp_framework_lane_roundtrip
@@ -1582,9 +1632,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_lane_roundtrip PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
   zlink_enable_coverage(test_cpp_framework_lane_roundtrip)
-  add_test(NAME test_cpp_framework_lane_roundtrip
-    COMMAND test_cpp_framework_lane_roundtrip)
-  set_tests_properties(test_cpp_framework_lane_roundtrip PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_lane_roundtrip
+    COMMAND test_cpp_framework_lane_roundtrip
     LABELS "framework-unit;framework-regression;execution"
     TIMEOUT 30)
   add_zlink_framework_test(
@@ -1611,9 +1661,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_location_key_codec PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-  add_test(NAME test_cpp_framework_location_key_codec
-    COMMAND test_cpp_framework_location_key_codec)
-  set_tests_properties(test_cpp_framework_location_key_codec PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_location_key_codec
+    COMMAND test_cpp_framework_location_key_codec
     LABELS "framework-unit;framework-regression;framework-location"
     TIMEOUT 30)
   add_executable(test_cpp_framework_in_memory_location_store
@@ -1626,9 +1676,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_in_memory_location_store PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-  add_test(NAME test_cpp_framework_in_memory_location_store
-    COMMAND test_cpp_framework_in_memory_location_store)
-  set_tests_properties(test_cpp_framework_in_memory_location_store PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_in_memory_location_store
+    COMMAND test_cpp_framework_in_memory_location_store
     LABELS "framework-unit;framework-regression;framework-location"
     TIMEOUT 30)
 
@@ -1642,17 +1692,19 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_opaque_store_providers PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-  add_test(NAME test_cpp_framework_opaque_store_providers
-    COMMAND test_cpp_framework_opaque_store_providers)
-  set_tests_properties(test_cpp_framework_opaque_store_providers PROPERTIES
+  # The bounded-batch aggregate stress case commits 2050 participants through
+  # the in-memory fixture store and legitimately runs for tens of seconds.
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_opaque_store_providers
+    COMMAND test_cpp_framework_opaque_store_providers
     LABELS "framework-unit;framework-location;framework-regression"
-    # The bounded-batch aggregate stress case commits 2050 participants through
-    # the in-memory fixture store and legitimately runs for tens of seconds.
     TIMEOUT 120)
-  add_test(NAME test_cpp_framework_r6_creation_terminal
-    COMMAND test_cpp_framework_opaque_store_providers --gtest_filter=*CreationTerminal*)
-  set_tests_properties(test_cpp_framework_r6_creation_terminal PROPERTIES
-    LABELS "framework-unit;framework-regression" TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_r6_creation_terminal
+    COMMAND test_cpp_framework_opaque_store_providers
+      --gtest_filter=*CreationTerminal*
+    LABELS "framework-unit;framework-regression"
+    TIMEOUT 30)
 
   add_executable(test_cpp_framework_location_runtime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime.cpp)
@@ -1664,9 +1716,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_location_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-  add_test(NAME test_cpp_framework_location_runtime
-    COMMAND test_cpp_framework_location_runtime)
-  set_tests_properties(test_cpp_framework_location_runtime PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_location_runtime
+    COMMAND test_cpp_framework_location_runtime
     LABELS "framework-unit;framework-regression;framework-location"
     TIMEOUT 30)
   add_executable(test_cpp_framework_location_lifecycle
@@ -1679,9 +1731,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_location_lifecycle PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-  add_test(NAME test_cpp_framework_location_lifecycle
-    COMMAND test_cpp_framework_location_lifecycle)
-  set_tests_properties(test_cpp_framework_location_lifecycle PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_location_lifecycle
+    COMMAND test_cpp_framework_location_lifecycle
     LABELS "framework-unit;framework-regression;framework-location"
     TIMEOUT 30)
   add_executable(test_cpp_framework_store_location_resolvers
@@ -1698,12 +1750,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   zlink_framework_cpp_enable_test_assertions(
     test_cpp_framework_store_location_resolvers)
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_store_location_resolvers)
-  add_test(NAME test_cpp_framework_store_location_resolvers
-    COMMAND test_cpp_framework_store_location_resolvers)
-  set_tests_properties(test_cpp_framework_store_location_resolvers PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_store_location_resolvers
+    COMMAND test_cpp_framework_store_location_resolvers
     LABELS "framework-unit;framework-regression;framework-location"
-    RESOURCE_LOCK zlink_cpp_heavy_runtime
-    TIMEOUT 30)
+    TIMEOUT 30
+    PROPERTIES
+      RESOURCE_LOCK zlink_cpp_heavy_runtime)
   add_zlink_framework_test(
     test_cpp_framework_handler_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_registry.cpp
@@ -1712,6 +1765,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_channel_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp
     "framework-unit;framework-regression;channel")
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_channel_messaging)
   target_link_libraries(test_cpp_framework_channel_messaging PRIVATE
     zlink::framework_codec_protobuf)
   add_zlink_framework_test(
@@ -1794,9 +1848,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::framework
     GTest::gtest_main
     GTest::gmock)
-  add_test(NAME test_cpp_framework_gtest_harness
-    COMMAND test_cpp_framework_gtest_harness)
-  set_tests_properties(test_cpp_framework_gtest_harness PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_gtest_harness
+    COMMAND test_cpp_framework_gtest_harness
     LABELS "framework-unit;framework-regression;gtest"
     TIMEOUT 30)
   add_executable(test_cpp_framework_redis_blob_bound
@@ -1811,9 +1865,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(test_cpp_framework_redis_blob_bound PRIVATE
     zlink::framework
     GTest::gtest_main)
-  add_test(NAME test_cpp_framework_redis_blob_bound
-    COMMAND test_cpp_framework_redis_blob_bound)
-  set_tests_properties(test_cpp_framework_redis_blob_bound PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_redis_blob_bound
+    COMMAND test_cpp_framework_redis_blob_bound
     LABELS "framework-unit;framework-regression;framework-location;redis"
     TIMEOUT 30)
   if(TARGET redis++::redis++ OR TARGET redis++::redis++_static)
@@ -1823,22 +1877,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     target_link_libraries(test_cpp_framework_locations_redis PRIVATE
       zlink::framework_locations_redis
       GTest::gtest_main)
-    add_test(NAME test_cpp_framework_locations_redis
-      COMMAND test_cpp_framework_locations_redis)
-    set_tests_properties(test_cpp_framework_locations_redis PROPERTIES
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_locations_redis
+      COMMAND test_cpp_framework_locations_redis
       LABELS "framework-extension;framework-location;redis"
       TIMEOUT 30)
   endif()
-  add_test(NAME test_cpp_framework_install_consumer
-    COMMAND
-      ${CMAKE_COMMAND}
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_install_consumer
+    COMMAND ${CMAKE_COMMAND}
       -DZLINK_FRAMEWORK_CPP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
       -DZLINK_FRAMEWORK_CPP_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/package-consumer-install
       "-DZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH=${ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH}"
       -DZLINK_FRAMEWORK_CPP_EXPECT_REDIS_PLUS_PLUS=${ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS}
       -DZLINK_FRAMEWORK_CPP_EXPECT_LIBUV=${ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV}
-      -P ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.PackageTests/install_consumer.cmake)
-  set_tests_properties(test_cpp_framework_install_consumer PROPERTIES
+      -P
+      ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.PackageTests/install_consumer.cmake
     LABELS "framework-package;framework-regression;connector-package"
     TIMEOUT 120)
   if(CMAKE_CONFIGURATION_TYPES)
@@ -1848,19 +1902,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     set(ZLINK_FRAMEWORK_CPP_PACKAGE_TEST_CONFIGURATION "${CMAKE_BUILD_TYPE}")
     set(ZLINK_FRAMEWORK_CPP_PACKAGE_TEST_IS_MULTI_CONFIG OFF)
   endif()
-  add_test(NAME test_cpp_stream_connector_install_consumer
-    COMMAND
-      ${CMAKE_COMMAND}
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_stream_connector_install_consumer
+    COMMAND ${CMAKE_COMMAND}
       -DZLINK_FRAMEWORK_CPP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
       -DZLINK_FRAMEWORK_CPP_CONFIGURATION=${ZLINK_FRAMEWORK_CPP_PACKAGE_TEST_CONFIGURATION}
       -DZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG=${ZLINK_FRAMEWORK_CPP_PACKAGE_TEST_IS_MULTI_CONFIG}
       "-DZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH=${ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH}"
       -DZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX=${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}
-      -P ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.PackageTests/stream_connector_consumer.cmake)
-  set_tests_properties(test_cpp_stream_connector_install_consumer PROPERTIES
+      -P
+      ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.PackageTests/stream_connector_consumer.cmake
     LABELS "connector-package;connector-regression"
-    RESOURCE_LOCK zlink_cpp_package
-    TIMEOUT 120)
+    TIMEOUT 120
+    PROPERTIES
+      RESOURCE_LOCK zlink_cpp_package)
   add_zlink_connector_test(
     test_cpp_stream_connector
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector.cpp
@@ -1887,23 +1942,25 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       connector/core/samples/core_client_smoke.cpp)
     target_link_libraries(sample_stream_connector_core_client PRIVATE
       zlink::stream_connector)
-    add_test(NAME sample_stream_connector_core_client
-      COMMAND sample_stream_connector_core_client)
-    set_tests_properties(sample_stream_connector_core_client PROPERTIES
+    zlink_framework_cpp_add_test(
+      NAME sample_stream_connector_core_client
+      COMMAND sample_stream_connector_core_client
       LABELS "connector-e2e;connector-contract"
-      RESOURCE_LOCK zlink_cpp_heavy_runtime
-      TIMEOUT 30)
+      TIMEOUT 30
+      PROPERTIES
+        RESOURCE_LOCK zlink_cpp_heavy_runtime)
 
     add_executable(sample_stream_e2e_client
       connector/e2e-client/samples/e2e_client_smoke.cpp)
     target_link_libraries(sample_stream_e2e_client PRIVATE
       zlink::stream_e2e_client)
-    add_test(NAME sample_stream_e2e_client
-      COMMAND sample_stream_e2e_client)
-    set_tests_properties(sample_stream_e2e_client PROPERTIES
+    zlink_framework_cpp_add_test(
+      NAME sample_stream_e2e_client
+      COMMAND sample_stream_e2e_client
       LABELS "connector-e2e"
-      RESOURCE_LOCK zlink_cpp_heavy_runtime
-      TIMEOUT 30)
+      TIMEOUT 30
+      PROPERTIES
+        RESOURCE_LOCK zlink_cpp_heavy_runtime)
 
   endif()
 
@@ -1915,16 +1972,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::stream_e2e_client)
   add_custom_target(connector_perf_smoke
     DEPENDS connector_perf_client)
-  add_test(NAME connector_perf_smoke
+  zlink_framework_cpp_add_test(
+    NAME connector_perf_smoke
     COMMAND connector_perf_client
-      --clients 100
-      --workers 2
-      --duration 5s
-      --warmup 0s
-      --request-timeout-ms 100
+      --clients
+      100
+      --workers
+      2
+      --duration
+      5s
+      --warmup
+      0s
+      --request-timeout-ms
+      100
       --loopback
-      --report ${CMAKE_CURRENT_BINARY_DIR}/connector-perf-smoke.json)
-  set_tests_properties(connector_perf_smoke PROPERTIES
+      --report
+      ${CMAKE_CURRENT_BINARY_DIR}/connector-perf-smoke.json
     LABELS "connector-perf-smoke;connector-perf-scale"
     TIMEOUT 30)
 
@@ -1940,8 +2003,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     target_link_libraries(test_cpp_http_client PRIVATE
       OpenSSL::SSL
       OpenSSL::Crypto)
-    set_tests_properties(test_cpp_http_client PROPERTIES
-      LABELS "http-client-contract;http-client-unit;http-client-e2e;http-client-https;http-client-regression")
   endif()
 
   add_executable(test_unreal_stream_connector
@@ -1950,27 +2011,30 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink_unreal_stream_connector
     GTest::gtest
     GTest::gmock)
-  add_test(NAME test_unreal_stream_connector COMMAND test_unreal_stream_connector)
-  set_tests_properties(test_unreal_stream_connector PROPERTIES
+  zlink_framework_cpp_add_test(
+    NAME test_unreal_stream_connector
+    COMMAND test_unreal_stream_connector
     LABELS "connector-unreal-contract;connector-unreal-compile;connector-unreal-smoke"
-    RESOURCE_LOCK zlink_cpp_heavy_runtime
-    TIMEOUT 30)
+    TIMEOUT 30
+    PROPERTIES
+      RESOURCE_LOCK zlink_cpp_heavy_runtime)
 
   set(ZLINK_UNREAL_PACKAGE_CONFIGURATION "${CMAKE_BUILD_TYPE}")
   if(NOT ZLINK_UNREAL_PACKAGE_CONFIGURATION)
     set(ZLINK_UNREAL_PACKAGE_CONFIGURATION Release)
   endif()
-  add_test(NAME test_unreal_stream_connector_package_contract
-    COMMAND
-      ${CMAKE_COMMAND}
+  zlink_framework_cpp_add_test(
+    NAME test_unreal_stream_connector_package_contract
+    COMMAND ${CMAKE_COMMAND}
       -DZLINK_UNREAL_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
       -DZLINK_UNREAL_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/unreal-package-contract
       -DZLINK_UNREAL_CONFIGURATION=${ZLINK_UNREAL_PACKAGE_CONFIGURATION}
-      -P ${CMAKE_CURRENT_LIST_DIR}/connector/engines/unreal/Tools/package-third-party.cmake)
-  set_tests_properties(test_unreal_stream_connector_package_contract PROPERTIES
+      -P
+      ${CMAKE_CURRENT_LIST_DIR}/connector/engines/unreal/Tools/package-third-party.cmake
     LABELS "connector-unreal-contract;connector-package"
-    RESOURCE_LOCK zlink_cpp_package
-    TIMEOUT 120)
+    TIMEOUT 120
+    PROPERTIES
+      RESOURCE_LOCK zlink_cpp_package)
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_E2E)
@@ -2479,14 +2543,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
   add_subdirectory(samples/ZoneWorld)
 
   function(add_zlink_framework_sample_runner sample_name labels timeout_seconds)
-    add_test(
+    zlink_framework_cpp_add_test(
       NAME sample_smoke_sample_cpp_framework_${sample_name}
-      COMMAND bash "${ZLINK_FRAMEWORK_CPP_DIR}/samples/${sample_name}/run_sample.sh")
-    set_tests_properties(sample_smoke_sample_cpp_framework_${sample_name} PROPERTIES
+      COMMAND bash
+        "${ZLINK_FRAMEWORK_CPP_DIR}/samples/${sample_name}/run_sample.sh"
       LABELS "${labels};framework-sample-smoke"
-      RESOURCE_LOCK "zlink-cpp-sample-runtime"
+      TIMEOUT ${timeout_seconds}
       ENVIRONMENT "ZLINK_CPP_BUILD_DIR=${CMAKE_BINARY_DIR}"
-      TIMEOUT ${timeout_seconds})
+      PROPERTIES
+        RESOURCE_LOCK "zlink-cpp-sample-runtime")
   endfunction()
 
   add_zlink_framework_sample_runner(
@@ -2522,16 +2587,21 @@ endif()
 if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS AND ZLINK_FRAMEWORK_CPP_ENABLE_COVERAGE)
   find_program(ZLINK_GCOV_EXECUTABLE gcov REQUIRED)
   get_property(ZLINK_FRAMEWORK_CPP_TESTS DIRECTORY PROPERTY TESTS)
-  add_test(
+  zlink_framework_cpp_add_test(
     NAME test_cpp_framework_coverage_threshold
     COMMAND ${CMAKE_COMMAND}
-      -D ZLINK_FRAMEWORK_CPP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
-      -D ZLINK_FRAMEWORK_CPP_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}
-      -D ZLINK_FRAMEWORK_CPP_COVERAGE_THRESHOLD=${ZLINK_FRAMEWORK_CPP_COVERAGE_THRESHOLD}
-      -D ZLINK_GCOV_EXECUTABLE=${ZLINK_GCOV_EXECUTABLE}
-      -P ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.Coverage/coverage_threshold.cmake)
-  set_tests_properties(test_cpp_framework_coverage_threshold PROPERTIES
+      -D
+      ZLINK_FRAMEWORK_CPP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -D
+      ZLINK_FRAMEWORK_CPP_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}
+      -D
+      ZLINK_FRAMEWORK_CPP_COVERAGE_THRESHOLD=${ZLINK_FRAMEWORK_CPP_COVERAGE_THRESHOLD}
+      -D
+      ZLINK_GCOV_EXECUTABLE=${ZLINK_GCOV_EXECUTABLE}
+      -P
+      ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.Coverage/coverage_threshold.cmake
     LABELS "framework-coverage;framework-regression"
-    DEPENDS "${ZLINK_FRAMEWORK_CPP_TESTS}"
-    TIMEOUT 120)
+    TIMEOUT 120
+    PROPERTIES
+      DEPENDS "${ZLINK_FRAMEWORK_CPP_TESTS}")
 endif()

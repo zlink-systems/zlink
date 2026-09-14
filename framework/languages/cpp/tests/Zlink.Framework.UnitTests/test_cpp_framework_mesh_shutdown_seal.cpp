@@ -292,7 +292,11 @@ void verify_crossed_admission_diagnostics ()
 
 int main ()
 {
+#ifdef _WIN32
+    _putenv_s ("ZLINK_CPP_MESH_TRACE", "1");
+#else
     setenv ("ZLINK_CPP_MESH_TRACE", "1", 1);
+#endif
     verify_monitor_wakes_ingress_without_application_permit ();
     verify_close_wakes_unbounded_ingress_wait ();
     verify_inbound_hello (true);

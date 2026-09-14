@@ -2991,7 +2991,8 @@ bool verify_fixture_arbitration_and_owner_isolation ()
             const auto &rules = fixture.at ("sameOwnerCalls");
             const auto found = std::find_if (
               rules.begin (), rules.end (), [&] (const auto &rule) {
-                  return rule.at ("target") == target;
+                  return rule.at ("target").template get_ref<const std::string &> ()
+                         == target;
               });
             if (found == rules.end ())
                 throw std::runtime_error ("same-owner fixture rule is missing");
