@@ -229,9 +229,9 @@ history together. Since the inbound observer is an observation path
 separate from this selection, it receives the frame snapshot in both
 cases.
 
-**When the queue is full the connector stops reading from the socket; no message is
-discarded**
-([Common Spec §10.1](../../32-stream-connector.en.md)).
+**When the queue is full a new message is dropped and reported as
+`ReceivedMessageDropped`** ([Common Spec §10.1](../../32-stream-connector.en.md)).
+The connector applies no backpressure.
 
 ### 8.1 Test Wait Surface
 

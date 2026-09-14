@@ -423,6 +423,7 @@ default is owned by [Common Spec §6.1](../../32-stream-connector.en.md).
 
 | Option | Target Queue | The Code Reported To The Error Handler On Overflow |
 |---|---|---|
+| `maxReceivedMessages` | Receive message queue | `ZlinkStreamErrorCode.ReceivedMessageDropped` |
 | `maxInboundObserverNotifications` | Observer notification queue | `ZlinkStreamErrorCode.ObserverDropped` |
 
 An observer callback failure is reported as

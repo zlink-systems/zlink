@@ -383,6 +383,7 @@ waitForSequence<T>(name: string): ZlinkStreamSequenceCall<T>; // .expect(p).expe
 
 | option | 대상 큐 | overflow 시 error handler로 보고하는 코드 |
 |---|---|---|
+| `maxReceivedMessages` | 수신 메시지 큐 | `ZlinkStreamErrorCode.ReceivedMessageDropped` |
 | `maxInboundObserverNotifications` | observer notification 큐 | `ZlinkStreamErrorCode.ObserverDropped` |
 
 observer callback 실패는 `ZlinkStreamErrorCode.ObserverFailed`로 보고한다.
