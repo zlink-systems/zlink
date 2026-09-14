@@ -1602,8 +1602,9 @@ void app_t::_apply_zlink_framework ()
         auto location_runtime = provider.get<location_runtime_query_t> ();
         auto location_store = provider.get<location_repository_t> ();
         auto mesh_runtime = std::make_shared<runtime::route_mesh_runtime_service_t> (
-          mesh_nodes, location_runtime ? &location_runtime->get () : nullptr,
-          location_store ? &location_store->get () : nullptr, _state->monitoring);
+          mesh_nodes, has_public_location_store && location_runtime ? &location_runtime->get () : nullptr,
+          has_public_location_store && location_store ? &location_store->get () : nullptr,
+          _state->monitoring);
         _state->services.add_factory<route_mesh_runtime_t> (
           [mesh_runtime] (service_provider_t &) {
               return std::static_pointer_cast<route_mesh_runtime_t> (mesh_runtime);
