@@ -502,15 +502,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
             Connection candidate = connection;
             ZLinkSocketMonitorDrainLoop.start(
                 "zlink-fanout-location-monitor", monitor, event -> {
-                if (isReadyEvent(event.event())) {
-                    inStateLane(() -> {
-                        if (connections.get(connectionId) == candidate
-                            && candidate.phase != ConnectionPhase.CLOSING) {
-                            candidate.nativeReady = true;
-                        }
-                        return null;
-                    });
-                } else if (isTerminatedEvent(event.event())) {
+                if (isTerminatedEvent(event.event())) {
                     remove(connectionId, candidate, null);
                 }
                 });
@@ -651,9 +643,8 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                                 connection.connectionId,
                                 frames,
                                 System.nanoTime());
-                        connection.ready = connection.nativeReady
-                            && connection.liveness.isReady(
-                                connection.descriptor.publisherRid());
+                        connection.ready = connection.liveness.isReady(
+                            connection.descriptor.publisherRid());
                         return accepted;
                     });
                     if (kind == null) {
@@ -850,11 +841,6 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         return value == 0 ? 1 : value;
     }
 
-    private static boolean isReadyEvent(String event) {
-        return "CONNECTION_READY".equals(event)
-            || "ConnectionReady".equals(event);
-    }
-
     private static boolean isTerminatedEvent(String event) {
         return "DISCONNECTED".equals(event)
             || "CLOSED".equals(event)
@@ -1012,7 +998,6 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         private final CompletableFuture<Void> closeSettlement =
             new CompletableFuture<>();
         private ConnectionPhase phase = ConnectionPhase.OPENING;
-        private boolean nativeReady;
         private boolean ready;
 
         private Connection(
