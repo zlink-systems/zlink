@@ -105,7 +105,7 @@ function createStreamControlBarrier(rl, msgSize, timeoutMs = streamStartTimeoutM
 async function main() {
     const options = parseMultiArgs(process.argv.slice(2));
     const ctx = zlink.createContext();
-    applyContextPolicy(ctx, 'server', 'MULTI_STREAM');
+    applyContextPolicy(ctx, 'server', 'STREAM');
     const stream = zlink.createStreamSocket(ctx);
     const packet = new zlink.StreamPacket();
     let rl = null;

@@ -295,15 +295,15 @@ void test_count_duration_and_bandwidth ()
     const double one_way = throughput_per_second (250, 2.5);
     assert (close_to (one_way, 100.0));
     assert (close_to (
-      bandwidth_mb_per_second ("MULTI_PUBSUB", 1000, one_way), 0.1));
+      bandwidth_mb_per_second ("PUBSUB", 1000, one_way), 0.1));
     assert (close_to (throughput_per_second (250, 0.0), 0.0));
 }
 
 void test_echo_latency_uses_one_way_estimate ()
 {
     assert (close_to (
-      latency_sample_ns ("MULTI_ROUTER_ROUTER_REQREP", 200), 100.0));
-    assert (close_to (latency_sample_ns ("MULTI_PUBSUB", 200), 200.0));
+      latency_sample_ns ("ROUTER_ROUTER_REQREP", 200), 100.0));
+    assert (close_to (latency_sample_ns ("PUBSUB", 200), 200.0));
 }
 
 void require_stream_test (bool condition);

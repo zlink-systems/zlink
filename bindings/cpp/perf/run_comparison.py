@@ -40,7 +40,9 @@ STREAM_VARIANT_PATTERNS = ("STREAM",)
 # C parity: bindings/c/perf/run_comparison.py:39. No multi pattern uses a
 # control plane today; the empty tuple keeps select_transports() identical.
 CONTROL_PLANE_PATTERNS = ()
-PATTERN_ALIASES = {
+MULTI_PATTERN_ALIASES = {
+    "DEALER_ROUTER": ("DEALER_ROUTER_SENDSEND",),
+    "ROUTER_ROUTER": ("ROUTER_ROUTER_SENDSEND",),
     "STREAM": ("STREAM",),
     "STREAMS": STREAM_VARIANT_PATTERNS,
 }
@@ -50,20 +52,16 @@ STREAM_SERVER_BINARY_BY_PATTERN = {
 }
 PATTERN_SUFFIX = {
     "DEALER_DEALER": "dealer_dealer",
-    "DEALER_ROUTER": "dealer_router",
     "DEALER_ROUTER_SENDSEND": "dealer_router",
     "DEALER_ROUTER_REQREP": "dealer_router_reqrep",
-    "ROUTER_ROUTER": "router_router",
     "ROUTER_ROUTER_SENDSEND": "router_router",
     "ROUTER_ROUTER_REQREP": "router_router_reqrep",
     "PUBSUB": "pubsub",
     "STREAM": "stream",
 }
 ECHO_PATTERNS = {
-    "DEALER_ROUTER",
     "DEALER_ROUTER_SENDSEND",
     "DEALER_ROUTER_REQREP",
-    "ROUTER_ROUTER",
     "ROUTER_ROUTER_SENDSEND",
     "ROUTER_ROUTER_REQREP",
     "STREAM",
@@ -87,7 +85,10 @@ def report_runner_warning(context, exc):
 
 
 SINGLE_ECHO_PATTERNS = set()
-ALLOW_MULTI = os.environ.get("PERF_ALLOW_MULTI", "0") == "1"
+PERF_MODE = os.environ.get("PERF_MODE", "single").strip().lower()
+if PERF_MODE not in {"single", "multi"}:
+    raise ValueError("PERF_MODE must be 'single' or 'multi'")
+IS_MULTI_MODE = PERF_MODE == "multi"
 SINGLE_COMPARISONS = [
     ("cpp_perf_pair", "PAIR"),
     ("cpp_perf_pubsub", "PUBSUB"),
@@ -107,10 +108,8 @@ MULTI_COMPARISONS = [
 MULTI_PATTERN_NAMES = {pattern for _, pattern in MULTI_COMPARISONS}
 SUPPORTED_MULTI_RECV_MODES = {
     "DEALER_DEALER": ("recv",),
-    "DEALER_ROUTER": ("recv",),
     "DEALER_ROUTER_SENDSEND": ("recv",),
     "DEALER_ROUTER_REQREP": ("recv",),
-    "ROUTER_ROUTER": ("recv",),
     "ROUTER_ROUTER_SENDSEND": ("recv",),
     "ROUTER_ROUTER_REQREP": ("recv",),
     "PUBSUB": ("recv",),
@@ -164,28 +163,17 @@ class TeeStream:
             stream.flush()
 
 
-def normalize_multi_pattern_name(pattern_name):
-    pattern = (pattern_name or "").strip().upper()
-    if pattern.startswith("MULTI_"):
-        pattern = pattern[6:]
-    if ALLOW_MULTI:
-        if pattern == "DEALER_ROUTER":
-            return "DEALER_ROUTER_SENDSEND"
-        if pattern == "ROUTER_ROUTER":
-            return "ROUTER_ROUTER_SENDSEND"
-    return pattern
+def normalize_pattern_name(pattern_name):
+    return (pattern_name or "").strip().upper()
 
 
 def display_pattern_name(pattern_name):
-    pattern = normalize_multi_pattern_name(pattern_name)
-    if ALLOW_MULTI and pattern:
-        return f"MULTI_{pattern}"
-    return pattern
+    return normalize_pattern_name(pattern_name)
 
 
-def display_multi_label(label):
+def display_pattern_label(label):
     raw = (label or "").strip()
-    if not ALLOW_MULTI or not raw:
+    if not raw:
         return raw
     if " " not in raw:
         return display_pattern_name(raw)
@@ -194,8 +182,8 @@ def display_multi_label(label):
 
 
 def is_echo_pattern(pattern_name):
-    pattern = normalize_multi_pattern_name(pattern_name)
-    if ALLOW_MULTI:
+    pattern = normalize_pattern_name(pattern_name)
+    if IS_MULTI_MODE:
         return pattern in ECHO_PATTERNS
     return pattern in SINGLE_ECHO_PATTERNS
 
@@ -203,10 +191,10 @@ def is_echo_pattern(pattern_name):
 def expand_pattern_aliases(requested_patterns):
     expanded = set()
     for pattern in requested_patterns:
-        normalized = normalize_multi_pattern_name(pattern)
+        normalized = normalize_pattern_name(pattern)
         if not normalized:
             continue
-        alias_members = PATTERN_ALIASES.get(normalized)
+        alias_members = MULTI_PATTERN_ALIASES.get(normalized) if IS_MULTI_MODE else None
         if alias_members:
             expanded.update(alias_members)
             continue
@@ -218,10 +206,10 @@ def expand_pattern_aliases_ordered(requested_patterns):
     expanded = []
     seen = set()
     for pattern in requested_patterns:
-        normalized = normalize_multi_pattern_name(pattern)
+        normalized = normalize_pattern_name(pattern)
         if not normalized:
             continue
-        alias_members = PATTERN_ALIASES.get(normalized)
+        alias_members = MULTI_PATTERN_ALIASES.get(normalized) if IS_MULTI_MODE else None
         members = alias_members if alias_members else (normalized,)
         for member in members:
             if member in seen:
@@ -232,13 +220,13 @@ def expand_pattern_aliases_ordered(requested_patterns):
 
 
 def resolve_stream_server_binary(pattern_name):
-    pattern = normalize_multi_pattern_name(pattern_name)
+    pattern = normalize_pattern_name(pattern_name)
     return STREAM_SERVER_BINARY_BY_PATTERN.get(pattern, "")
 
 
 def resolve_required_binaries(current_bin, pattern_name):
-    pattern = normalize_multi_pattern_name(pattern_name)
-    if ALLOW_MULTI:
+    pattern = normalize_pattern_name(pattern_name)
+    if IS_MULTI_MODE:
         if pattern in STREAM_VARIANT_PATTERNS:
             server_binary = resolve_stream_server_binary(pattern)
             if not server_binary:
@@ -251,12 +239,12 @@ def resolve_required_binaries(current_bin, pattern_name):
 
 
 def collect_unsupported_patterns(pattern_names, recv_mode):
-    if not ALLOW_MULTI:
+    if not IS_MULTI_MODE:
         return []
 
     unsupported = []
     for pattern in pattern_names:
-        normalized = normalize_multi_pattern_name(pattern)
+        normalized = normalize_pattern_name(pattern)
         supported_modes = SUPPORTED_MULTI_RECV_MODES.get(normalized, ())
         if recv_mode not in supported_modes:
             unsupported.append(display_pattern_name(normalized))
@@ -264,7 +252,7 @@ def collect_unsupported_patterns(pattern_names, recv_mode):
 
 
 def resolve_split_required_binaries(pattern_name):
-    pattern = normalize_multi_pattern_name(pattern_name)
+    pattern = normalize_pattern_name(pattern_name)
     suffix = PATTERN_SUFFIX.get(pattern)
     if not suffix:
         return []
@@ -296,7 +284,7 @@ def resolve_latency_triplet(latency, latency_p95, latency_p99):
 
 def resolve_linux_paths():
     """Return binding-local C++ perf runtime paths."""
-    suite = "multi" if ALLOW_MULTI else "single"
+    suite = PERF_MODE
     runtime_root = os.path.join(
         ROOT_DIR, "bindings", "cpp", "perf", ".runtime", suite
     )
@@ -404,7 +392,7 @@ def derive_cmake_build_dir(runtime_build_dir):
 
 
 if IS_WINDOWS:
-    _suite = "multi" if ALLOW_MULTI else "single"
+    _suite = PERF_MODE
     BUILD_DIR = normalize_build_dir(
         os.path.join(ROOT_DIR, "bindings", "cpp", "perf", ".runtime", _suite, "bin")
     )
@@ -418,7 +406,7 @@ DEFAULT_NUM_RUNS = 1
 def _read_env_value(name, *fallback_names):
     keys = []
     for key in (name,) + fallback_names:
-        if ALLOW_MULTI:
+        if IS_MULTI_MODE:
             alias = MULTI_ENV_ALIAS_MAP.get(key)
             if alias:
                 keys.append(alias)
@@ -642,7 +630,7 @@ FAIL_FAST = os.environ.get("PERF_FAIL_FAST", "0") == "1"
 
 
 def is_pattern(pattern_name):
-    if not ALLOW_MULTI:
+    if not IS_MULTI_MODE:
         return False
     pattern = (pattern_name or "").strip().upper()
     return pattern in MULTI_PATTERN_NAMES
@@ -679,7 +667,7 @@ DEFAULT_MULTI_MSG_SIZES = [64, 256, 1024, 4096, 65536, 131072]
 DEFAULT_MULTI_STREAM_MSG_SIZES = [64, 256, 1024, 65536]
 if _env_sizes:
     MSG_SIZES = _env_sizes
-elif ALLOW_MULTI:
+elif IS_MULTI_MODE:
     MSG_SIZES = DEFAULT_MULTI_MSG_SIZES
 else:
     MSG_SIZES = DEFAULT_MSG_SIZES
@@ -736,7 +724,7 @@ ENV_ALIAS_KEYS = (
     "PERF_STREAM_DRAIN_RELAY_BUDGET",
 )
 def env_pair_value(env, key):
-    if ALLOW_MULTI:
+    if IS_MULTI_MODE:
         alias = MULTI_ENV_ALIAS_MAP.get(key)
         if alias:
             value = env.get(alias, "").strip()
@@ -747,7 +735,7 @@ def env_pair_value(env, key):
 
 def set_env_pair(env, key, value):
     env[key] = str(value)
-    if ALLOW_MULTI:
+    if IS_MULTI_MODE:
         alias = MULTI_ENV_ALIAS_MAP.get(key)
         if alias:
             env[alias] = str(value)
@@ -875,7 +863,6 @@ def emit_auto_hwm_detail_line(line):
         fields.get("scope_count", ""),
         fields.get("sndhwm", ""),
         fields.get("rcvhwm", ""),
-        fields.get("effective_message_bytes", ""),
         fields.get("effective_sndbuf", ""),
         fields.get("effective_rcvbuf", ""),
         fields.get("socket_message_slots", ""),
@@ -938,73 +925,24 @@ def _auto_hwm_bytes_to_mb_display(value):
     return str(parsed // (1024 * 1024))
 
 
-def _auto_hwm_expected_hwm(fields):
-    unit_budget = _auto_hwm_parse_int(fields.get("unit_budget_bytes", ""), 0)
-    msg_unit = _auto_hwm_parse_int(
-        fields.get("effective_message_bytes", ""), 0
-    )
-    size_cap = _auto_hwm_parse_int(fields.get("size_cap", ""), 0)
-    if unit_budget <= 0 or msg_unit <= 0:
-        return None
-
-    hwm = (unit_budget + msg_unit - 1) // msg_unit
-    if hwm < 1:
-        hwm = 1
-    if size_cap > 0:
-        hwm = min(hwm, size_cap)
-    return hwm
-
-
-def _auto_hwm_expected_match_score(fields):
-    expected = _auto_hwm_expected_hwm(fields)
-    if expected is None:
-        return 2
-
-    sndhwm = _auto_hwm_parse_int(fields.get("sndhwm", ""), -1)
-    rcvhwm = _auto_hwm_parse_int(fields.get("rcvhwm", ""), -1)
-    matches = 0
-    visible = 0
-    if sndhwm >= 0:
-        visible += 1
-        if sndhwm == expected:
-            matches += 1
-    if rcvhwm >= 0:
-        visible += 1
-        if rcvhwm == expected:
-            matches += 1
-    if visible == 0:
-        return 2
-    return 0 if matches == visible else 1 if matches > 0 else 2
-
-
 def _auto_hwm_select_display_rows(rows):
     selected = {}
-    for index, fields in enumerate(rows):
+    for fields in rows:
         logical_key = (
             fields.get("msg_size", ""),
             fields.get("component", ""),
             fields.get("socket_type", ""),
             fields.get("unit_budget_bytes", ""),
-            fields.get("effective_message_bytes", ""),
         )
-        score = _auto_hwm_expected_match_score(fields)
-        previous = selected.get(logical_key)
-        if previous is None:
-            selected[logical_key] = (score, index, fields)
-            continue
-        previous_score, previous_index, _previous_fields = previous
-        if score < previous_score or (
-            score == previous_score and index > previous_index
-        ):
-            selected[logical_key] = (score, index, fields)
-    return [item[2] for item in selected.values()]
+        selected[logical_key] = fields
+    return list(selected.values())
 
 
 def emit_auto_hwm_detail_table(emit, pattern_name):
-    pattern = normalize_multi_pattern_name(pattern_name)
+    pattern = normalize_pattern_name(pattern_name)
     rows = []
     for fields in _AUTO_HWM_DETAIL_ROWS:
-        row_pattern = normalize_multi_pattern_name(fields.get("pattern", ""))
+        row_pattern = normalize_pattern_name(fields.get("pattern", ""))
         if row_pattern != pattern:
             continue
         dedup_key = fields.get("_dedup_key")
@@ -1054,7 +992,6 @@ def emit_auto_hwm_detail_table(emit, pattern_name):
                 "component",
                 "type",
                 "unit_budget_kb",
-                "effective_message_bytes",
                 "sndhwm",
                 "rcvhwm",
                 "effective_sndbuf_kb",
@@ -1073,7 +1010,6 @@ def emit_auto_hwm_detail_table(emit, pattern_name):
             ("Component", "component"),
             ("Type", "type"),
             ("UnitBudget(KB)", "unit_budget_kb"),
-            ("MsgUnit(B)", "effective_message_bytes"),
             ("SNDHWM", "sndhwm"),
             ("RCVHWM", "rcvhwm"),
             ("SNDBUF(KB)", "effective_sndbuf_kb"),
@@ -1122,7 +1058,7 @@ def parse_special_token(line):
             return (
                 "unsupported",
                 parts[1].strip(),
-                normalize_multi_pattern_name(parts[2].strip()),
+                normalize_pattern_name(parts[2].strip()),
                 parts[3].strip().lower(),
             )
     if stripped.startswith("SKIP,"):
@@ -1132,7 +1068,7 @@ def parse_special_token(line):
             return (
                 "skip",
                 parts[1].strip(),
-                normalize_multi_pattern_name(parts[2].strip()),
+                normalize_pattern_name(parts[2].strip()),
                 parts[3].strip().lower(),
                 reason,
             )
@@ -1140,7 +1076,7 @@ def parse_special_token(line):
 
 
 def detect_special_status(stdout, expected_lib, expected_pattern, expected_transport):
-    expected_pattern = normalize_multi_pattern_name(expected_pattern)
+    expected_pattern = normalize_pattern_name(expected_pattern)
     expected_transport = expected_transport.lower()
     for raw in stdout.splitlines():
         token = parse_special_token(raw)
@@ -2622,7 +2558,7 @@ def run_sizes_test_split(
             # server's RESULT metrics for every size are captured. Mirrors the
             # C reference (bindings/c/perf/run_comparison.py:2645-2691, called
             # at 2815) so cpp does not race STOP ahead of the server metrics.
-            if normalize_multi_pattern_name(pattern_name) != "DEALER_DEALER":
+            if normalize_pattern_name(pattern_name) != "DEALER_DEALER":
                 return
             if not expected_sizes:
                 return
@@ -2695,7 +2631,7 @@ def run_sizes_test_split(
                 return
             done_size = parse_client_done_size(line)
             if done_size is not None:
-                if normalize_multi_pattern_name(pattern_name) in SOCKET_REQREP_PATTERNS:
+                if normalize_pattern_name(pattern_name) in SOCKET_REQREP_PATTERNS:
                     if (
                         done_size == final_size
                         and done_size not in stop_requested_sizes
@@ -2705,7 +2641,7 @@ def run_sizes_test_split(
                         stop_client()
                     return
                 if (
-                    normalize_multi_pattern_name(pattern_name) != "DEALER_DEALER"
+                    normalize_pattern_name(pattern_name) != "DEALER_DEALER"
                     and done_size == final_size
                     and done_size not in stop_requested_sizes
                 ):
@@ -4133,7 +4069,7 @@ def build_effective_option_items(args, selected_patterns):
 def print_effective_options(label, option_items):
     print(f"\n## Effective Options ({label})")
     print(f"- lang: {RESULT_LANG}")
-    print(f"- suite: {'multi' if ALLOW_MULTI else 'single'}")
+    print(f"- suite: {PERF_MODE}")
     for key, value in option_items:
         print(f"- {key}: {value}")
 
@@ -4252,7 +4188,7 @@ def build_result_filename(tag=""):
         platform_tag = "windows"
     elif platform_tag.startswith("linux"):
         platform_tag = "linux"
-    suite = "multi" if ALLOW_MULTI else "single"
+    suite = PERF_MODE
     name = f"perf_{RESULT_LANG}_{suite}_{platform_tag}_{ts}"
     clean_tag = re.sub(r"[^A-Za-z0-9._-]+", "_", (tag or "").strip())
     if clean_tag:
@@ -4272,7 +4208,7 @@ def emit_result_lines(result_map):
 
 
 def parse_args():
-    mode_scope = "multi patterns" if ALLOW_MULTI else "single patterns"
+    mode_scope = f"{PERF_MODE} patterns"
     usage = (
         "Usage: run_comparison.py [PATTERN] [options]\n\n"
         "Measure current zlink benchmarks.\n\n"
@@ -4546,7 +4482,7 @@ def main():
         base_env[env_key] = env_value
         os.environ[env_key] = env_value
 
-    comparisons = list(MULTI_COMPARISONS if ALLOW_MULTI else SINGLE_COMPARISONS)
+    comparisons = list(MULTI_COMPARISONS if IS_MULTI_MODE else SINGLE_COMPARISONS)
 
     if p_req == "ALL":
         requested = None
@@ -4773,7 +4709,7 @@ def main():
     if all_skips:
         print("\n## Skips")
         for pattern, reason in all_skips:
-            print(f"- {display_multi_label(pattern)}: {reason}")
+            print(f"- {display_pattern_label(pattern)}: {reason}")
 
     if all_failures:
         print("\n## Failures")

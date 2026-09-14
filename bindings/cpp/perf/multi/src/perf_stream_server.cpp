@@ -25,7 +25,7 @@
 namespace
 {
 
-static const char *k_pattern = "MULTI_STREAM";
+static const char *k_pattern = "STREAM";
 static const char k_stop_token[] = "__zlink_perf_stop__";
 static std::atomic<bool> g_stop_requested (false);
 

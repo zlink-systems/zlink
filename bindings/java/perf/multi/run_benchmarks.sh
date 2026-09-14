@@ -119,7 +119,11 @@ Usage: perf/multi/run_benchmarks.sh [options]
 
 Options:
   -h, --help            Show this help.
-  --pattern NAME         Pattern list or ALL.
+  --pattern NAME         Pattern list or ALL. Accepted: DEALER_DEALER,
+                         DEALER_ROUTER, DEALER_ROUTER_SENDSEND,
+                         DEALER_ROUTER_REQREP, ROUTER_ROUTER,
+                         ROUTER_ROUTER_SENDSEND, ROUTER_ROUTER_REQREP,
+                         PUBSUB, STREAM.
   --transports LIST      Transport list override.
   --msg-sizes LIST       Payload sizes.
   --clients N            Client count.
@@ -270,7 +274,7 @@ for numeric_opt in SNDTIMEO_MS RCVTIMEO_MS CONNECT_READY_TIMEOUT_MS TRANSPORT_TR
 done
 
 if [[ "${PATTERN}" == "ALL" ]]; then
-  PATTERN="MULTI_DEALER_DEALER,MULTI_DEALER_ROUTER_SENDSEND,MULTI_DEALER_ROUTER_REQREP,MULTI_ROUTER_ROUTER_SENDSEND,MULTI_ROUTER_ROUTER_REQREP,MULTI_PUBSUB,MULTI_STREAM"
+  PATTERN="DEALER_DEALER,DEALER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_SENDSEND,ROUTER_ROUTER_REQREP,PUBSUB,STREAM"
 fi
 
 detect_platform() {
@@ -288,7 +292,7 @@ trim_csv() {
 
 default_msg_sizes_for_pattern() {
   local pattern="$1"
-  if [[ "${pattern}" == "MULTI_STREAM" ]]; then
+  if [[ "${pattern}" == "STREAM" ]]; then
     if [[ "${explicit_msg_sizes}" -eq 0 ]]; then
       echo "${STREAM_DEFAULT_MSG_SIZES}"
       return
@@ -309,7 +313,7 @@ PY
 
 default_clients_for_pattern() {
   local pattern="$1"
-  if [[ "${pattern}" == "MULTI_STREAM" && "${explicit_clients}" -eq 0 ]]; then
+  if [[ "${pattern}" == "STREAM" && "${explicit_clients}" -eq 0 ]]; then
     echo "${STREAM_DEFAULT_CLIENTS}"
   elif [[ "${explicit_clients}" -eq 0 ]]; then
     echo "${DEFAULT_CLIENTS}"
@@ -322,7 +326,7 @@ effective_clients_for_transport() {
   local pattern="${1:-}"
   local transport="${2:-}"
   local requested="${3:-}"
-  if [[ "${pattern}" == "MULTI_STREAM" && "${transport}" != "tcp" \
+  if [[ "${pattern}" == "STREAM" && "${transport}" != "tcp" \
         && "${requested}" =~ ^[0-9]+$ \
         && "${STREAM_NON_TCP_CLIENTS_MAX}" =~ ^[0-9]+$ \
         && "${requested}" -gt "${STREAM_NON_TCP_CLIENTS_MAX}" ]]; then
@@ -479,11 +483,15 @@ wait_for_pid_or_kill() {
 normalize_multi_pattern() {
   local value="$1"
   value="${value^^}"
-  if [[ "${value}" == MULTI_* ]]; then
-    printf '%s' "${value}"
-  else
-    printf 'MULTI_%s' "${value}"
-  fi
+  case "${value}" in
+    DEALER_DEALER|DEALER_ROUTER|DEALER_ROUTER_SENDSEND|DEALER_ROUTER_REQREP|ROUTER_ROUTER|ROUTER_ROUTER_SENDSEND|ROUTER_ROUTER_REQREP|PUBSUB|STREAM)
+      printf '%s' "${value}"
+      ;;
+    *)
+      echo "unsupported pattern: ${value}" >&2
+      return 1
+      ;;
+  esac
 }
 
 prune_reports() {
@@ -750,8 +758,7 @@ from collections import defaultdict
 
 pattern, transport, size, metrics_file, prefix = sys.argv[1:]
 size = int(size)
-bare = pattern.removeprefix("MULTI_")
-unit = "Kops/s" if pattern in {"MULTI_DEALER_ROUTER", "MULTI_DEALER_ROUTER_SENDSEND", "MULTI_DEALER_ROUTER_REQREP", "MULTI_ROUTER_ROUTER", "MULTI_ROUTER_ROUTER_SENDSEND", "MULTI_ROUTER_ROUTER_REQREP", "MULTI_STREAM"} else "Kmsg/s"
+unit = "Kops/s" if pattern in {"DEALER_ROUTER", "DEALER_ROUTER_SENDSEND", "DEALER_ROUTER_REQREP", "ROUTER_ROUTER", "ROUTER_ROUTER_SENDSEND", "ROUTER_ROUTER_REQREP", "STREAM"} else "Kmsg/s"
 values = defaultdict(list)
 with open(metrics_file, newline="", encoding="utf-8") as f:
     for row in csv.reader(f):
@@ -790,7 +797,7 @@ case_status() {
   local transport="$2"
   local size="$3"
   local source_file="$4"
-  local prefix="${public_pattern#MULTI_}"
+  local prefix="${public_pattern}"
   local unsupported_line
   unsupported_line="$(awk -F',' -v pattern="${prefix}" -v transport="${transport}" \
     '$1=="UNSUPPORTED" && $3==pattern && $4==transport {print $0; exit}' "${source_file}")"
@@ -807,6 +814,13 @@ case_status() {
   fi
   printf 'ok,-\n'
 }
+
+IFS=',' read -r -a patterns <<< "$(trim_csv "${PATTERN}")"
+for i in "${!patterns[@]}"; do
+  if ! patterns[$i]="$(normalize_multi_pattern "${patterns[$i]}")"; then
+    exit 1
+  fi
+done
 
 runner_prefix=()
 stream_client_prefix=()
@@ -916,7 +930,7 @@ append_metrics() {
   local size="$3"
   local run="$4"
   local source_file="$5"
-  local prefix="${public_pattern#MULTI_}"
+  local prefix="${public_pattern}"
   local required_count=0
 
   while IFS= read -r line; do
@@ -1245,14 +1259,10 @@ run_socket_case() {
   CASE_METRIC_LOG="${metric_log}"
 }
 
-IFS=',' read -r -a patterns <<< "$(trim_csv "${PATTERN}")"
-if printf '%s\n' "${patterns[@]}" | grep -qx 'MULTI_STREAM'; then
+if printf '%s\n' "${patterns[@]}" | grep -qx 'STREAM'; then
   ensure_core_stream_client
 fi
 IFS=',' read -r -a transports <<< "$(trim_csv "${TRANSPORTS}")"
-for i in "${!patterns[@]}"; do
-  patterns[$i]="$(normalize_multi_pattern "${patterns[$i]}")"
-done
 requested_patterns="$(IFS=,; echo "${patterns[*]}")"
 display_msg_sizes="${MSG_SIZES}"
 display_clients="${CLIENTS}"
@@ -1275,7 +1285,7 @@ fi
 skip_entries=()
 run_patterns=()
 for pattern in "${patterns[@]}"; do
-  bare_pattern="${pattern#MULTI_}"
+  bare_pattern="${pattern}"
   pattern_clients="$(default_clients_for_pattern "${pattern}")"
   if ! ensure_nofile_limit "${pattern_clients}"; then
     skip_entries+=("${pattern}: nofile_guard_${NOFILE_SKIP_REASON}")
@@ -1305,7 +1315,7 @@ fi
 
 patterns=("${run_patterns[@]}")
 
-if printf '%s\n' "${patterns[@]}" | grep -qx 'MULTI_STREAM'; then
+if printf '%s\n' "${patterns[@]}" | grep -qx 'STREAM'; then
   if [[ "${explicit_msg_sizes}" -eq 0 ]]; then
     display_msg_sizes="${MSG_SIZES} (STREAM: ${STREAM_DEFAULT_MSG_SIZES})"
   fi
@@ -1324,7 +1334,7 @@ for pattern_index in "${!patterns[@]}"; do
     break
   fi
   pattern="${patterns[pattern_index]}"
-  bare_pattern="${pattern#MULTI_}"
+  bare_pattern="${pattern}"
   requested_pattern_clients="$(default_clients_for_pattern "${pattern}")"
   pattern_clients="${requested_pattern_clients}"
   pattern_msg_sizes="$(default_msg_sizes_for_pattern "${pattern}")"
@@ -1480,9 +1490,8 @@ actual_result_lines = int(actual_result_lines)
 all_metrics = ["throughput", "bandwidth", "latency", "latency_p95", "latency_p99"]
 
 ECHO_PATTERNS = {
-    "MULTI_DEALER_ROUTER", "MULTI_DEALER_ROUTER_REQREP",
-    "MULTI_DEALER_ROUTER_SENDSEND", "MULTI_ROUTER_ROUTER",
-    "MULTI_ROUTER_ROUTER_SENDSEND", "MULTI_ROUTER_ROUTER_REQREP", "MULTI_STREAM",
+    "DEALER_ROUTER", "DEALER_ROUTER_REQREP", "DEALER_ROUTER_SENDSEND",
+    "ROUTER_ROUTER", "ROUTER_ROUTER_SENDSEND", "ROUTER_ROUTER_REQREP", "STREAM",
 }
 
 
@@ -1653,7 +1662,7 @@ def emit_auto_hwm_rows(pattern_rows):
         display["effective_rcvbuf_kb"] = bytes_to_kb(row.get("effective_rcvbuf", ""))
         key = tuple(display.get(name, "") for name in (
             "msg_size", "component", "type", "unit_budget_kb",
-            "effective_message_bytes", "sndhwm", "rcvhwm",
+            "sndhwm", "rcvhwm",
             "effective_sndbuf_kb", "effective_rcvbuf_kb",
         ))
         if key in seen:
@@ -1673,7 +1682,6 @@ def emit_auto_hwm_rows(pattern_rows):
         ("Component", "component"),
         ("Type", "type"),
         ("UnitBudget(KB)", "unit_budget_kb"),
-        ("MsgUnit(B)", "effective_message_bytes"),
         ("SNDHWM", "sndhwm"),
         ("RCVHWM", "rcvhwm"),
         ("SNDBUF(KB)", "effective_sndbuf_kb"),
@@ -1771,11 +1779,9 @@ else:
 # runs over tcp, `none` otherwise. Report key names are not fixed by doc/perf
 # policy, so the C runner is the reference [정책 미규정 -> C 구현 준용].
 _sendsend_patterns = (
-    "MULTI_DEALER_ROUTER",
-    "MULTI_DEALER_ROUTER_SENDSEND",
-    "MULTI_ROUTER_ROUTER",
-    "MULTI_ROUTER_ROUTER_SENDSEND",
+    "DEALER_ROUTER",
     "DEALER_ROUTER_SENDSEND",
+    "ROUTER_ROUTER",
     "ROUTER_ROUTER_SENDSEND",
 )
 routed_echo_per_socket_payload = (

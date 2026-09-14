@@ -159,7 +159,7 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
                 + `(replies=${pending.size}, admissions=${blocked.size})`);
         }
         const result = await collector.finish();
-        for (const line of summarizeMetrics(pattern, options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted, result.latencyMeanNs)) {
+        for (const line of summarizeMetrics(pattern, options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted, result.latencyMeanNs, 'multi')) {
             console.log(line);
         }
         console.log(`CLIENT_DONE,${options.msgSize}`);

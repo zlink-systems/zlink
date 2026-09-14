@@ -53,7 +53,7 @@ final class PerfAutoHwm {
             return;
         }
         System.out.println("AUTO_HWM_DETAIL"
-            + ",pattern=MULTI_" + config.pattern()
+            + ",pattern=" + config.pattern()
             + ",transport=" + config.transport()
             + ",component=" + component
             + ",label=" + label

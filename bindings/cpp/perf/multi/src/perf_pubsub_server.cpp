@@ -118,7 +118,7 @@ bool perf_pubsub_server (const std::string &lib_name, const std::string &transpo
     perf::multi::set_perf_pattern_env ("PUBSUB");
 
     if (!perf::multi::is_supported_transport (transport)) {
-        std::cout << "UNSUPPORTED," << lib_name << ",MULTI_PUBSUB," << transport << std::endl;
+        std::cout << "UNSUPPORTED," << lib_name << ",PUBSUB," << transport << std::endl;
         return true;
     }
 

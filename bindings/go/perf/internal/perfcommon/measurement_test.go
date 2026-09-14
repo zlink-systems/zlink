@@ -55,10 +55,10 @@ func TestRecordBytesRTTLatencyExcludesPostDeadlineMessage(t *testing.T) {
 
 func TestLoadMultiConfigCanonicalizesSendSendAliases(t *testing.T) {
 	tests := map[string]string{
-		"MULTI_DEALER_ROUTER":          "MULTI_DEALER_ROUTER_SENDSEND",
-		"DEALER_ROUTER_SENDSEND":       "MULTI_DEALER_ROUTER_SENDSEND",
-		"MULTI_ROUTER_ROUTER":          "MULTI_ROUTER_ROUTER_SENDSEND",
-		"MULTI_ROUTER_ROUTER_SENDSEND": "MULTI_ROUTER_ROUTER_SENDSEND",
+		"DEALER_ROUTER":          "DEALER_ROUTER_SENDSEND",
+		"DEALER_ROUTER_SENDSEND": "DEALER_ROUTER_SENDSEND",
+		"ROUTER_ROUTER":          "ROUTER_ROUTER_SENDSEND",
+		"ROUTER_ROUTER_SENDSEND": "ROUTER_ROUTER_SENDSEND",
 	}
 	for input, want := range tests {
 		t.Run(input, func(t *testing.T) {
@@ -73,7 +73,7 @@ func TestLoadMultiConfigCanonicalizesSendSendAliases(t *testing.T) {
 func TestLoadMultiConfigDefaultsEveryPatternToOneHundredClients(t *testing.T) {
 	t.Setenv("PERF_MULTI_CLIENTS", "")
 
-	for _, pattern := range []string{"MULTI_DEALER_DEALER", "MULTI_STREAM"} {
+	for _, pattern := range []string{"DEALER_DEALER", "STREAM"} {
 		t.Run(pattern, func(t *testing.T) {
 			got := LoadMultiConfig(pattern, "tcp", MetricHeaderSize, 1, 0).Clients
 			if got != 100 {
@@ -136,14 +136,32 @@ func TestNewStatsHonorsZeroLatencySampleCap(t *testing.T) {
 
 func TestFinalizeResultUsesRoundTripBandwidthForMultiReqRep(t *testing.T) {
 	for _, pattern := range []string{
-		"MULTI_DEALER_ROUTER_REQREP",
-		"MULTI_ROUTER_ROUTER_REQREP",
+		"DEALER_ROUTER_REQREP",
+		"ROUTER_ROUTER_REQREP",
 	} {
 		t.Run(pattern, func(t *testing.T) {
-			result := FinalizeResult(pattern, 1024, Result{Throughput: 1000})
+			result := FinalizeResult(SuiteMulti, pattern, 1024, Result{Throughput: 1000})
 			if result.Bandwidth != 2.048 {
 				t.Fatalf("bandwidth = %v, want 2.048", result.Bandwidth)
 			}
 		})
+	}
+}
+
+func TestFinalizeResultUsesSuiteContextForCollidingPatternName(t *testing.T) {
+	single := FinalizeResult(SuiteSingle, "ROUTER_ROUTER", 1024, Result{Throughput: 1000})
+	multi := FinalizeResult(SuiteMulti, "ROUTER_ROUTER", 1024, Result{Throughput: 1000})
+	if single.Bandwidth != 1.024 {
+		t.Fatalf("single bandwidth = %v, want 1.024", single.Bandwidth)
+	}
+	if multi.Bandwidth != 2.048 {
+		t.Fatalf("multi bandwidth = %v, want 2.048", multi.Bandwidth)
+	}
+}
+
+func TestLoadMultiConfigDoesNotAcceptLegacyPrefix(t *testing.T) {
+	const legacy = "MULTI_ROUTER_ROUTER"
+	if got := LoadMultiConfig(legacy, "tcp", MetricHeaderSize, 1, 1).Pattern; got != legacy {
+		t.Fatalf("legacy pattern = %q, want unsupported token %q unchanged", got, legacy)
 	}
 }

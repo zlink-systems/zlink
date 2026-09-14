@@ -24,7 +24,7 @@ class PerfArgsRegressionTest {
     void multiArgsRejectMissingOptionValue() {
         IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
             () -> PerfUtil.parseMultiArgs(new String[] {
-                "--multi-server", "MULTI_DEALER_DEALER", "tcp", "64",
+                "--multi-server", "DEALER_DEALER", "tcp", "64",
                 "--duration"
             }));
 
@@ -32,8 +32,19 @@ class PerfArgsRegressionTest {
     }
 
     @Test
+    void multiArgsRejectLegacyPrefixedPattern() {
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+            () -> PerfUtil.parseMultiArgs(new String[] {
+                "--multi-server", "MULTI_ROUTER_ROUTER", "tcp", "64"
+            }));
+
+        assertTrue(failure.getMessage().contains("unsupported pattern"));
+    }
+
+    @Test
     void bandwidthDirectionIsSuiteAware() {
         assertEquals("0.001", bandwidthValue("single", "DEALER_ROUTER"));
+        assertEquals("0.002", bandwidthValue("multi", "DEALER_ROUTER"));
         assertEquals("0.001", bandwidthValue("single", "ROUTER_ROUTER"));
         assertEquals("0.002", bandwidthValue("single", "DEALER_ROUTER_REQREP"));
         assertEquals("0.002", bandwidthValue("multi", "DEALER_ROUTER_SENDSEND"));

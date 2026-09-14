@@ -23,7 +23,7 @@ test('shared STREAM client is spawned behind the START gate', () => {
     process.env.PERF_STREAM_CLIENT_BINARY = '/tmp/perf_stream_client';
     try {
         const spawn = buildClientSpawn(null, ['--endpoint', 'tcp://127.0.0.1:5555'], {
-            pattern: 'MULTI_STREAM',
+            pattern: 'STREAM',
             transport: 'tcp',
             clients: 100,
             msgSize: 1024,
@@ -58,7 +58,7 @@ test('runner does not release STREAM client before exact server ACK', async () =
     server.stdin.on('data', (chunk) => { serverInput += chunk.toString(); });
     client.stdin.on('data', (chunk) => { clientInput += chunk.toString(); });
     const barrier = coordinateRunnerStart(server, client, {
-        pattern: 'MULTI_STREAM',
+        pattern: 'STREAM',
         msgSize: 1024,
         connectReadyTimeoutMs: 1000
     }, 'stream-server');
@@ -72,7 +72,7 @@ test('runner fails a mismatched STREAM server ACK', async () => {
     const server = fakeManagedProcess();
     const client = fakeManagedProcess();
     const barrier = coordinateRunnerStart(server, client, {
-        pattern: 'MULTI_STREAM',
+        pattern: 'STREAM',
         msgSize: 1024,
         connectReadyTimeoutMs: 1000
     }, 'stream-server');

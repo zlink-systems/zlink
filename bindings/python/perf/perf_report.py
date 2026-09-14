@@ -21,13 +21,13 @@ METRIC_ORDER = {
 REQUIRED_METRICS = ("throughput", "bandwidth", "latency", "latency_p95", "latency_p99")
 RESULT_METRICS = ("bandwidth", "latency", "latency_p95", "latency_p99", "throughput")
 ECHO_MULTI_PATTERNS = {
-    "MULTI_DEALER_ROUTER",
-    "MULTI_DEALER_ROUTER_SENDSEND",
-    "MULTI_DEALER_ROUTER_REQREP",
-    "MULTI_ROUTER_ROUTER",
-    "MULTI_ROUTER_ROUTER_SENDSEND",
-    "MULTI_ROUTER_ROUTER_REQREP",
-    "MULTI_STREAM",
+    "DEALER_ROUTER",
+    "DEALER_ROUTER_SENDSEND",
+    "DEALER_ROUTER_REQREP",
+    "ROUTER_ROUTER",
+    "ROUTER_ROUTER_SENDSEND",
+    "ROUTER_ROUTER_REQREP",
+    "STREAM",
 }
 
 SINGLE_TABLE_HEADER_LINES = (
@@ -89,11 +89,11 @@ def single_auto_hwm_detail_lines(patterns, msg_sizes, rows=None):
         yield f"- pattern: {pattern}"
         yield (
             "| Size(B) | Component | Owner | Socket | Type | Role | SNDHWM | RCVHWM | "
-            "SNDBUF(KB) | RCVBUF(KB) | MsgUnit(B) | Slots |"
+            "SNDBUF(KB) | RCVBUF(KB) | Slots |"
         )
         yield (
             "|---------|-----------|-------|--------|------|------|--------|--------|"
-            "-----------|-----------|------------|-------|"
+            "-----------|-----------|-------|"
         )
         display_rows = []
         seen = set()
@@ -114,7 +114,6 @@ def single_auto_hwm_detail_lines(patterns, msg_sizes, rows=None):
                 display.get("rcvhwm", ""),
                 display.get("sndbuf_kb", ""),
                 display.get("rcvbuf_kb", ""),
-                display.get("effective_message_bytes", ""),
                 display.get("socket_message_slots", ""),
             )
             if key in seen:
@@ -137,46 +136,44 @@ def single_auto_hwm_detail_lines(patterns, msg_sizes, rows=None):
                     f"{row.get('socket_type', '?')} | {row.get('role', '?')} | "
                     f"{row.get('sndhwm', '?')} | {row.get('rcvhwm', '?')} | "
                     f"{row.get('sndbuf_kb', '?')} | {row.get('rcvbuf_kb', '?')} | "
-                    f"{row.get('effective_message_bytes', '?')} | "
                     f"{row.get('socket_message_slots', '?')} |"
                 )
             continue
         for msg_size in msg_sizes:
             yield (
                 f"| {msg_size} | unavailable | binding | n/a | n/a | n/a | "
-                "n/a | n/a | n/a | n/a | n/a | n/a |"
+                "n/a | n/a | n/a | n/a | n/a |"
             )
 
 
 def multi_auto_hwm_lines(pattern, msg_sizes, rows=None):
     yield "    Auto-HWM detail:"
     yield (
-        "      | Size(B) | Component   | Type | UnitBudget(KB) | MsgUnit(B) | "
-        "SNDHWM | RCVHWM | SNDBUF(KB) | RCVBUF(KB) |"
+        "      | Size(B) | Component   | Type | UnitBudget(KB) | SNDHWM | "
+        "RCVHWM | SNDBUF(KB) | RCVBUF(KB) |"
     )
     yield (
-        "      |---------|-------------|------|----------------|------------|--------|"
-        "--------|------------|------------|"
+        "      |---------|-------------|------|----------------|--------|--------|"
+        "------------|------------|"
     )
     rows = rows or []
     for msg_size in msg_sizes:
         matching = [
             row
             for row in rows
-            if row.get("pattern", "").removeprefix("MULTI_")
-            == pattern.removeprefix("MULTI_")
+            if row.get("pattern", "") == pattern
             and row.get("msg_size") == str(msg_size)
         ]
         if not matching:
             yield (
                 f"      | {msg_size:<7} | unavailable | n/a  | n/a            | "
-                f"{msg_size:<10} | n/a    | n/a    | n/a        | n/a        |"
+                "n/a    | n/a    | n/a        | n/a        |"
             )
             continue
         for row in matching:
             yield (
                 f"      | {msg_size:<7} | {row.get('component', '?'):<11} | "
-                f"{row.get('socket_type', '?'):<4} | n/a            | {msg_size:<10} | "
+                f"{row.get('socket_type', '?'):<4} | n/a            | "
                 f"{row.get('sndhwm', '?'):<6} | {row.get('rcvhwm', '?'):<6} | "
                 f"{auto_hwm_bytes_to_kb_display(row.get('effective_sndbuf')):<10} | "
                 f"{auto_hwm_bytes_to_kb_display(row.get('effective_rcvbuf')):<10} |"
@@ -532,7 +529,7 @@ def _multi_effective_options(args, section):
         or "4096000"
     )
     selected_patterns = [
-        item.strip().removeprefix("MULTI_")
+        item.strip()
         for item in (args.patterns or "").split(",")
         if item.strip()
     ]

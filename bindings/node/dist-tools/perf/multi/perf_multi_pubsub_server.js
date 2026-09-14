@@ -12,7 +12,7 @@ const TOPIC = 'bench';
 async function main() {
     const options = parseMultiArgs(process.argv.slice(2));
     const ctx = zlink.createContext();
-    applyContextPolicy(ctx, 'server', 'MULTI_PUBSUB');
+    applyContextPolicy(ctx, 'server', 'PUBSUB');
     const pub = zlink.createPubSocket(ctx);
     const payload = createPayload(options.msgSize);
     const measurementRecord = measurementParts(payload);

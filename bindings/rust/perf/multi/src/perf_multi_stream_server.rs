@@ -47,7 +47,7 @@ fn main() {
         .set_recv_mode(StreamRecvMode::Packet)
         .expect("stream packet receive mode");
     let mut ready_monitor = common::open_connection_ready_monitor(&stream);
-    let Some(bind_endpoint) = common::resolve_server_bind_endpoint("MULTI_STREAM", &args.transport)
+    let Some(bind_endpoint) = common::resolve_server_bind_endpoint("STREAM", &args.transport)
     else {
         return;
     };
@@ -56,7 +56,7 @@ fn main() {
         common::setup_raw_tls_server(&stream, &tls).expect("stream tls");
     }
     if let Err(err) = stream.bind(&bind_endpoint) {
-        if common::handle_transport_setup_error("MULTI_STREAM", &args.transport, "bind", err) {
+        if common::handle_transport_setup_error("STREAM", &args.transport, "bind", err) {
             return;
         }
         panic!("bind: {err}");

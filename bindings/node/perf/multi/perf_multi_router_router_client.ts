@@ -12,7 +12,7 @@ async function main() {
     await runRoutedSendSendClient({ options, pattern, routerClient: true });
     return;
   }
-  await runSocketReqRepClient({ options, pattern: 'MULTI_ROUTER_ROUTER_REQREP',
+  await runSocketReqRepClient({ options, pattern: 'ROUTER_ROUTER_REQREP',
     routerClient: true, serverRoutingId: SERVER_ROUTING_ID });
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

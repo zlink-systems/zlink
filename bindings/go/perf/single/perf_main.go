@@ -71,7 +71,7 @@ func main() {
 		perfcommon.PrintFail(cfg.pattern, cfg.transport, cfg.msgSize)
 		os.Exit(1)
 	}
-	result = perfcommon.FinalizeResult(cfg.pattern, cfg.msgSize, result)
+	result = perfcommon.FinalizeResult(perfcommon.SuiteSingle, cfg.pattern, cfg.msgSize, result)
 	perfcommon.PrintResult(cfg.pattern, cfg.transport, cfg.msgSize, result)
 }
 

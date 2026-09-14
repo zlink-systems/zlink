@@ -64,7 +64,7 @@ if [[ "${ZLINK_CORE_SOURCE}" == "release" ]]; then
   GO_NATIVE_DIR_OVERRIDE="${ZLINK_CORE_PACKAGE_PREFIX}/lib"
 fi
 
-PERF_REPORT_PY="${REPO_DIR}/bindings/python/perf/perf_report.py"
+PERF_REPORT_PY="${SCRIPT_DIR}/perf_report.py"
 TOTAL_TIME_ENABLED=0
 
 print_total_time() {

@@ -163,8 +163,6 @@ class bench_latency_sampler_t
 inline bool is_echo_pattern (const std::string &pattern)
 {
     std::string normalized = pattern;
-    if (normalized.compare (0, 6, "MULTI_") == 0)
-        normalized.erase (0, 6);
     if (normalized == "DEALER_ROUTER")
         normalized = "DEALER_ROUTER_SENDSEND";
     else if (normalized == "ROUTER_ROUTER")
@@ -210,8 +208,6 @@ inline void print_result (const std::string &lib_type,
                           double latency_p99_ns)
 {
     std::string normalized_pattern = pattern;
-    if (normalized_pattern.compare (0, 6, "MULTI_") == 0)
-        normalized_pattern.erase (0, 6);
     if (normalized_pattern == "DEALER_ROUTER")
         normalized_pattern = "DEALER_ROUTER_SENDSEND";
     else if (normalized_pattern == "ROUTER_ROUTER")

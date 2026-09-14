@@ -162,7 +162,7 @@ fn main() {
         );
     }
     common::print_result(
-        "MULTI_PUBSUB",
+        "PUBSUB",
         &args.transport,
         args.msg_size,
         settings.duration_seconds,

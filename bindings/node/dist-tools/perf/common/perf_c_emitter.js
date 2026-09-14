@@ -14,15 +14,16 @@ const fs = require('node:fs');
 const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 const { resolveLatencyTriplet, fixed, padStart, padEnd } = require('./perf_c_format');
-const STREAM_VARIANT_PATTERNS = new Set(['MULTI_STREAM']);
+const { isEchoPattern } = require('./perf_pattern');
+const STREAM_VARIANT_PATTERNS = new Set(['STREAM']);
 // The two patterns whose SENDSEND client borrows a per-socket payload over tcp
 // (bindings/c/perf/multi/src/perf_multi_dealer_router_client.cpp:53,
 //  bindings/c/perf/multi/src/perf_multi_router_router_client.cpp:53).
 const SENDSEND_PATTERNS = new Set([
-    'MULTI_DEALER_ROUTER',
-    'MULTI_DEALER_ROUTER_SENDSEND',
-    'MULTI_ROUTER_ROUTER',
-    'MULTI_ROUTER_ROUTER_SENDSEND'
+    'DEALER_ROUTER',
+    'DEALER_ROUTER_SENDSEND',
+    'ROUTER_ROUTER',
+    'ROUTER_ROUTER_SENDSEND'
 ]);
 function envGet(name) {
     const value = process.env[name];
@@ -93,17 +94,8 @@ function multiTableSeparatorLine() {
     return (`|${'-'.repeat(10)}|${'-'.repeat(20)}|${'-'.repeat(16)}|`
         + `${'-'.repeat(15)}|${'-'.repeat(15)}|${'-'.repeat(15)}|`);
 }
-function isEchoPattern(pattern) {
-    return pattern === 'MULTI_DEALER_ROUTER'
-        || pattern === 'MULTI_DEALER_ROUTER_SENDSEND'
-        || pattern === 'MULTI_DEALER_ROUTER_REQREP'
-        || pattern === 'MULTI_ROUTER_ROUTER'
-        || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
-        || pattern === 'MULTI_ROUTER_ROUTER_REQREP'
-        || pattern === 'MULTI_STREAM';
-}
 function multiFormatThroughput(pattern, throughputPerSec) {
-    const unit = isEchoPattern(pattern) ? 'Kops/s' : 'Kmsg/s';
+    const unit = isEchoPattern(pattern, 'multi') ? 'Kops/s' : 'Kmsg/s';
     return `${fixed(throughputPerSec / 1e3, 3, 8)} ${unit}`;
 }
 function multiFormatBandwidth(bandwidthMbS) {
@@ -446,11 +438,7 @@ function multiResultDataLines(records) {
 // emitters (emit_auto_hwm_detail_line .. emit_auto_hwm_detail_table,
 // ~lines 813-1395). Presentation only.
 function normalizeMultiPatternName(patternName) {
-    let pattern = String(patternName || '').trim().toUpperCase();
-    if (pattern.startsWith('MULTI_')) {
-        pattern = pattern.slice(6);
-    }
-    return pattern;
+    return String(patternName || '').trim().toUpperCase();
 }
 function autoHwmParseDetailLine(line) {
     const stripped = String(line || '').trim();

@@ -180,7 +180,7 @@ def main(argv=None):
                         latency_sampler=latency_sampler,
                     )
                     print_result_lines(
-                        "MULTI_DEALER_DEALER",
+                        "DEALER_DEALER",
                         args.transport,
                         args.msg_size,
                         metrics,

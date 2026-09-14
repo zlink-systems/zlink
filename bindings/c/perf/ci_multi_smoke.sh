@@ -63,7 +63,6 @@ normalize_result_pattern() {
   pattern="$(trim "${1:-}")"
   pattern="$(printf '%s' "${pattern}" | tr '[:lower:]' '[:upper:]')"
   [[ "${pattern}" =~ ^[A-Z0-9_]+$ ]] || return 1
-  pattern="${pattern#MULTI_}"
   case "${pattern}" in
     DEALER_ROUTER)
       pattern="DEALER_ROUTER_SENDSEND"
@@ -74,8 +73,13 @@ normalize_result_pattern() {
     STREAMS)
       pattern="STREAM"
       ;;
+    DEALER_DEALER|DEALER_ROUTER_SENDSEND|ROUTER_ROUTER_SENDSEND|DEALER_ROUTER_REQREP|ROUTER_ROUTER_REQREP|PUBSUB|STREAM)
+      ;;
+    *)
+      return 1
+      ;;
   esac
-  printf 'MULTI_%s' "${pattern}"
+  printf '%s' "${pattern}"
 }
 
 ccu="${CCU:-8}"
@@ -164,13 +168,13 @@ expected_patterns=()
 if [[ "${#requested_patterns[@]}" -eq 1 \
       && "$(printf '%s' "$(trim "${requested_patterns[0]}")" | tr '[:lower:]' '[:upper:]')" == "ALL" ]]; then
   expected_patterns=(
-    MULTI_DEALER_DEALER
-    MULTI_DEALER_ROUTER_SENDSEND
-    MULTI_ROUTER_ROUTER_SENDSEND
-    MULTI_DEALER_ROUTER_REQREP
-    MULTI_ROUTER_ROUTER_REQREP
-    MULTI_PUBSUB
-    MULTI_STREAM
+    DEALER_DEALER
+    DEALER_ROUTER_SENDSEND
+    ROUTER_ROUTER_SENDSEND
+    DEALER_ROUTER_REQREP
+    ROUTER_ROUTER_REQREP
+    PUBSUB
+    STREAM
   )
 else
   for raw_pattern in "${requested_patterns[@]}"; do

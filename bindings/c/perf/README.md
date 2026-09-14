@@ -34,6 +34,11 @@ deadline expires. Override those values with `CCU`, `DUR`, `SIZES`, `PATTERNS`,
 and `TIMEOUT` (or the corresponding `--ccu`, `--dur`, `--sizes`, `--patterns`,
 and `--timeout` arguments), for example:
 
+The multi runner accepts `DEALER_DEALER`, `DEALER_ROUTER_SENDSEND`,
+`ROUTER_ROUTER_SENDSEND`, `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_REQREP`,
+`PUBSUB`, and `STREAM`. `DEALER_ROUTER`, `ROUTER_ROUTER`, and `STREAMS` are
+accepted aliases.
+
 ```bash
 CCU=4 DUR=1 SIZES=4096 PATTERNS=DEALER_DEALER TIMEOUT=60 \
   ./bindings/c/perf/ci_multi_smoke.sh
@@ -92,18 +97,6 @@ different value.
 Manual HWM values are bytes. The previous message-count meaning is not
 accepted. A former 1,000-message setting maps to `4,096,000` bytes when the
 4 KiB planning unit is used.
-
-Multi benchmarks set the auto-HWM message unit from the current message size
-before each run:
-
-| Socket family | Message unit used by perf |
-|---------------|---------------------------|
-| raw multi perf sockets | `msg_size` |
-
-A visible `MsgUnit(B)=4096` row is only valid for a 4096 byte test case.
-If a 64 byte or 1024 byte run prints `4096`, the run is not a valid comparison
-because the effective slot budget and socket buffers are different from the
-target message size.
 
 All single benchmarks use one context I/O thread by default. Pass
 `--io-threads` or set `PERF_IO_THREADS` only when intentionally running a

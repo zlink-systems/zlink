@@ -16,18 +16,18 @@ SPEC.loader.exec_module (GATE)
 
 
 CELLS = {
-    ("MULTI_DEALER_DEALER", "tcp", 1024): 1000.0,
-    ("MULTI_DEALER_DEALER", "ws", 1024): 900.0,
-    ("MULTI_DEALER_DEALER", "wss", 1024): 850.0,
-    ("MULTI_DEALER_ROUTER_SENDSEND", "tcp", 1024): 500.0,
-    ("MULTI_DEALER_ROUTER_SENDSEND", "ws", 1024): 405.0,
-    ("MULTI_DEALER_ROUTER_SENDSEND", "wss", 1024): 382.5,
-    ("MULTI_DEALER_DEALER", "tcp", 65536): 100.0,
-    ("MULTI_DEALER_DEALER", "ws", 65536): 70.0,
-    ("MULTI_DEALER_DEALER", "wss", 65536): 65.0,
-    ("MULTI_DEALER_ROUTER_SENDSEND", "tcp", 65536): 50.0,
-    ("MULTI_DEALER_ROUTER_SENDSEND", "ws", 65536): 35.0,
-    ("MULTI_DEALER_ROUTER_SENDSEND", "wss", 65536): 32.5,
+    ("DEALER_DEALER", "tcp", 1024): 1000.0,
+    ("DEALER_DEALER", "ws", 1024): 900.0,
+    ("DEALER_DEALER", "wss", 1024): 850.0,
+    ("DEALER_ROUTER_SENDSEND", "tcp", 1024): 500.0,
+    ("DEALER_ROUTER_SENDSEND", "ws", 1024): 405.0,
+    ("DEALER_ROUTER_SENDSEND", "wss", 1024): 382.5,
+    ("DEALER_DEALER", "tcp", 65536): 100.0,
+    ("DEALER_DEALER", "ws", 65536): 70.0,
+    ("DEALER_DEALER", "wss", 65536): 65.0,
+    ("DEALER_ROUTER_SENDSEND", "tcp", 65536): 50.0,
+    ("DEALER_ROUTER_SENDSEND", "ws", 65536): 35.0,
+    ("DEALER_ROUTER_SENDSEND", "wss", 65536): 32.5,
 }
 
 
@@ -117,7 +117,7 @@ class WsRoundtripGateTests (unittest.TestCase):
 
     def test_rejects_large_ws_roundtrip_collapse (self):
         collapsed = dict (CELLS)
-        collapsed[("MULTI_DEALER_ROUTER_SENDSEND", "ws", 65536)] = 20.0
+        collapsed[("DEALER_ROUTER_SENDSEND", "ws", 65536)] = 20.0
         exit_code, output = self.run_gate (measured_report (collapsed))
         self.assertEqual (exit_code, 1)
         self.assertIn ("ws Q64/Q1 = 0.634921", output)
@@ -144,21 +144,21 @@ class WsRoundtripGateTests (unittest.TestCase):
 
     def test_rejects_missing_required_cell (self):
         incomplete = dict (CELLS)
-        del incomplete[("MULTI_DEALER_ROUTER_SENDSEND", "ws", 65536)]
+        del incomplete[("DEALER_ROUTER_SENDSEND", "ws", 65536)]
         exit_code, output = self.run_gate (measured_report (incomplete))
         self.assertEqual (exit_code, 1)
         self.assertIn ("missing required cell", output)
 
     def test_rejects_missing_required_wss_cell (self):
         incomplete = dict (CELLS)
-        del incomplete[("MULTI_DEALER_ROUTER_SENDSEND", "wss", 65536)]
+        del incomplete[("DEALER_ROUTER_SENDSEND", "wss", 65536)]
         exit_code, output = self.run_gate (measured_report (incomplete))
         self.assertEqual (exit_code, 1)
         self.assertIn ("wss/65536/throughput", output)
 
     def test_rejects_large_wss_roundtrip_collapse (self):
         collapsed = dict (CELLS)
-        collapsed[("MULTI_DEALER_ROUTER_SENDSEND", "wss", 65536)] = 20.0
+        collapsed[("DEALER_ROUTER_SENDSEND", "wss", 65536)] = 20.0
         exit_code, output = self.run_gate (measured_report (collapsed))
         self.assertEqual (exit_code, 1)
         self.assertIn ("ws Q64/Q1 = 1.111111", output)
@@ -166,7 +166,7 @@ class WsRoundtripGateTests (unittest.TestCase):
         self.assertIn ("Final: FAIL", output)
 
     def test_rejects_duplicate_cell (self):
-        duplicate = ("MULTI_DEALER_DEALER", "tcp", 1024)
+        duplicate = ("DEALER_DEALER", "tcp", 1024)
         exit_code, output = self.run_gate (
           measured_report (duplicate=duplicate))
         self.assertEqual (exit_code, 1)
@@ -176,8 +176,8 @@ class WsRoundtripGateTests (unittest.TestCase):
         for bad_value in ("0", "-1", "nan", "inf"):
             with self.subTest (bad_value=bad_value):
                 text = measured_report ().replace (
-                  "RESULT,current,MULTI_DEALER_DEALER,tcp,1024,throughput,1000.000",
-                  f"RESULT,current,MULTI_DEALER_DEALER,tcp,1024,throughput,{bad_value}")
+                  "RESULT,current,DEALER_DEALER,tcp,1024,throughput,1000.000",
+                  f"RESULT,current,DEALER_DEALER,tcp,1024,throughput,{bad_value}")
                 exit_code, output = self.run_gate (text)
                 self.assertEqual (exit_code, 1)
                 self.assertIn ("finite and positive", output)

@@ -161,7 +161,7 @@ function applySocketPolicy(
 function resolveMultiIoThreads(role, pattern) {
   const normalizedRole = String(role || '').trim().toLowerCase();
   const roleKey = normalizedRole === 'server' ? 'SERVER' : 'CLIENT';
-  const isStream = pattern === 'MULTI_STREAM';
+  const isStream = pattern === 'STREAM';
   const envNames = isStream
     ? [`PERF_MULTI_STREAM_${roleKey}_IO_THREADS`, `PERF_MULTI_${roleKey}_IO_THREADS`]
     : [`PERF_MULTI_${roleKey}_IO_THREADS`];

@@ -25,7 +25,8 @@ This suite follows the binding-wide perf rules in
 Top-level shell scripts are the stable user entrypoints. They dispatch to the
 local single or multi runner in this directory. The compatibility adapter
 `run_comparison.py` accepts the older core-style invocation and forwards to the
-same local runners.
+same local runners. Its `--suite single|multi` option supplies the mode
+explicitly; the default is `single`.
 
 ## Current Scope
 
@@ -41,14 +42,14 @@ from `bindings/README.md` for CLI names, defaults, result file naming, and the
   - default sizes: `64,256,1024,65536,131072,262144`
 - multi:
   - entrypoint: `./perf/run_benchmarks_multi.sh`
-  - default patterns: `MULTI_DEALER_DEALER`, `MULTI_DEALER_ROUTER`, `MULTI_ROUTER_ROUTER`, `MULTI_PUBSUB`, `MULTI_STREAM`
+  - default patterns: `DEALER_DEALER`, `DEALER_ROUTER_SENDSEND`, `ROUTER_ROUTER_SENDSEND`, `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_REQREP`, `PUBSUB`, `STREAM`
   - public receive surface: `recv`
   - default transports: `tcp,tls,ws,wss`
-  - default clients: `100` for all multi patterns, including `MULTI_STREAM`
+  - default clients: `100` for all multi patterns, including `STREAM`
   - default sizes: `64,256,1024,65536,131072,262144`
   - stream default sizes: `64,256,1024,65536`
   - runner behavior: the client is pointed at the server's emitted `READY,<endpoint>` value so the measured path matches the actual bind endpoint
-  - `MULTI_STREAM` keeps a single canonical pattern surface in the runner and report output
+  - `STREAM` keeps a single canonical pattern surface in the runner and report output
 
 ## Design Constraints
 
@@ -57,9 +58,10 @@ from `bindings/README.md` for CLI names, defaults, result file naming, and the
 - Hot-path send/recv/publish/subscribe logic stays visible in the pattern file instead of being hidden behind broad helper layers.
 - Results use the official `RESULT,current,...` metric format so they can be
   compared with the core perf shape.
-- Multi reports normalize pattern names to `MULTI_*` in the saved report even
-  when the underlying process emits the base pattern token.
-- Multi STREAM keeps a single canonical `MULTI_STREAM` public surface.
+- Multi mode is selected by the multi entrypoint or the compatibility runner's
+  explicit `--suite multi` option, not inferred from the pattern name.
+- Multi reports and processes use the same unprefixed pattern token.
+- Multi STREAM keeps a single canonical `STREAM` public surface.
 - Multi STREAM uses the shared core stream client path required by policy.
 
 ## Execution
@@ -68,8 +70,9 @@ Examples:
 
 ```bash
 ./perf/run_benchmarks.sh --pattern PAIR --transports inproc --msg-sizes 64 --duration 1
-./perf/run_benchmarks_multi.sh --pattern MULTI_DEALER_DEALER --transports tcp --msg-sizes 64 --clients 4 --duration 1
+./perf/run_benchmarks_multi.sh --pattern DEALER_DEALER --transports tcp --msg-sizes 64 --clients 4 --duration 1
 python3 ./perf/run_comparison.py PAIR --duration 1
+python3 ./perf/run_comparison.py ROUTER_ROUTER --suite multi --duration 1
 ```
 
 The shell runners execute the existing Release benchmark outputs produced by the

@@ -88,9 +88,6 @@ def auto_hwm_detail_line(pattern, transport, component, msg_size, **fields):
         "source": fields.pop("source", "socket_snapshot"),
         "role": fields.pop("role", "peer_queue"),
         "unit_budget_bytes": fields.pop("unit_budget_bytes", "524288"),
-        "effective_message_bytes": fields.pop(
-            "effective_message_bytes", str(msg_size)
-        ),
         "sndhwm": fields.pop("sndhwm", "512"),
         "rcvhwm": fields.pop("rcvhwm", "512"),
         "effective_sndbuf": fields.pop("effective_sndbuf", "-1"),
@@ -318,6 +315,42 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
             RC.ALLOW_MULTI = old_allow_multi
             RC._env_transports = old_env_transports
 
+    def test_router_router_alias_is_resolved_by_explicit_mode(self):
+        old_allow_multi = RC.ALLOW_MULTI
+        try:
+            RC.ALLOW_MULTI = True
+            self.assertEqual(
+                RC.normalize_multi_pattern_name("ROUTER_ROUTER"),
+                "ROUTER_ROUTER_SENDSEND",
+            )
+            self.assertEqual(
+                RC.display_pattern_name("ROUTER_ROUTER"),
+                "ROUTER_ROUTER_SENDSEND",
+            )
+
+            RC.ALLOW_MULTI = False
+            self.assertEqual(
+                RC.normalize_multi_pattern_name("ROUTER_ROUTER"),
+                "ROUTER_ROUTER",
+            )
+            self.assertEqual(
+                RC.display_pattern_name("ROUTER_ROUTER"),
+                "ROUTER_ROUTER",
+            )
+        finally:
+            RC.ALLOW_MULTI = old_allow_multi
+
+    def test_old_multi_prefix_is_not_normalized_as_a_pattern_alias(self):
+        old_allow_multi = RC.ALLOW_MULTI
+        try:
+            RC.ALLOW_MULTI = True
+            self.assertEqual(
+                RC.normalize_multi_pattern_name("MULTI_ROUTER_ROUTER"),
+                "MULTI_ROUTER_ROUTER",
+            )
+        finally:
+            RC.ALLOW_MULTI = old_allow_multi
+
     def test_paired_gate_selects_process_per_peer_router_echo_clients(self):
         previous = os.environ.get("PERF_MULTI_MATCHED_BASELINE")
         try:
@@ -354,16 +387,16 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             RC.emit_benchmark_diag_line(
-                "RESULT,current,MULTI_ROUTER_ROUTER_REQREP,tcp,64,throughput,1\n"
+                "RESULT,current,ROUTER_ROUTER_REQREP,tcp,64,throughput,1\n"
             )
             RC.emit_benchmark_diag_line(
-                "MATCHED_DIAG,current,MULTI_ROUTER_ROUTER_REQREP,tcp,64,"
+                "MATCHED_DIAG,current,ROUTER_ROUTER_REQREP,tcp,64,"
                 "role=peers,processes=100,contexts=100,sockets=100\n"
             )
         self.assertEqual(
             output.getvalue(),
             (
-                "MATCHED_DIAG,current,MULTI_ROUTER_ROUTER_REQREP,tcp,64,"
+                "MATCHED_DIAG,current,ROUTER_ROUTER_REQREP,tcp,64,"
                 "role=peers,processes=100,contexts=100,sockets=100\n"
             ),
         )
@@ -374,8 +407,8 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
 
     def test_result_lines_keep_latency_at_six_decimal_places(self):
         result_map = {
-            ("MULTI_DEALER_ROUTER_REQREP", "tcp", 64, "throughput"): 123.456789,
-            ("MULTI_DEALER_ROUTER_REQREP", "tcp", 64, "latency"): 0.006789,
+            ("DEALER_ROUTER_REQREP", "tcp", 64, "throughput"): 123.456789,
+            ("DEALER_ROUTER_REQREP", "tcp", 64, "latency"): 0.006789,
         }
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
@@ -820,7 +853,7 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
                 return self.returncode
 
         result_lines = "".join(
-            "RESULT,current,MULTI_DEALER_ROUTER_REQREP,tcp,65536,"
+            "RESULT,current,DEALER_ROUTER_REQREP,tcp,65536,"
             f"{metric_name},1.0\n"
             for metric_name, _ in tier1_metrics(1.0)
         )
@@ -915,7 +948,7 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
                 return self.returncode
 
         result_lines = "".join(
-            "RESULT,current,MULTI_DEALER_DEALER,tcp,65536,"
+            "RESULT,current,DEALER_DEALER,tcp,65536,"
             f"{metric_name},1.0\n"
             for metric_name, _ in tier1_metrics(1.0)
         )
@@ -1331,7 +1364,6 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
                             transport,
                             component,
                             65536,
-                            effective_message_bytes="65536",
                             sndhwm="8",
                             rcvhwm="8",
                         )
@@ -1354,7 +1386,7 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
         finally:
             reset_auto_hwm_detail_state()
 
-    def test_auto_hwm_detail_prefers_expected_hwm_when_transport_samples_conflict(self):
+    def test_auto_hwm_detail_prefers_latest_when_transport_samples_conflict(self):
         reset_auto_hwm_detail_state()
         try:
             RC.emit_auto_hwm_detail_line(
@@ -1364,7 +1396,6 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
                     "server",
                     131072,
                     socket_type="router",
-                    effective_message_bytes="131072",
                     size_cap="512",
                     sndhwm="128",
                     rcvhwm="128",
@@ -1379,7 +1410,6 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
                     "server",
                     131072,
                     socket_type="router",
-                    effective_message_bytes="131072",
                     size_cap="512",
                     sndhwm="4",
                     rcvhwm="4",
@@ -1414,7 +1444,6 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
                         socket_type="stream",
                         role="stream",
                         unit_budget_bytes="65536",
-                        effective_message_bytes=str(size),
                         sndhwm=str(hwm),
                         rcvhwm=str(hwm),
                     )

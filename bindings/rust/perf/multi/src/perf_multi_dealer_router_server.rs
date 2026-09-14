@@ -29,13 +29,13 @@ fn main() {
         common::setup_raw_tls_server(&router, &tls).expect("server tls");
     }
     let Some(bind_endpoint) =
-        common::resolve_server_bind_endpoint("MULTI_DEALER_ROUTER_SENDSEND", &args.transport)
+        common::resolve_server_bind_endpoint("DEALER_ROUTER_SENDSEND", &args.transport)
     else {
         return;
     };
     if let Err(err) = router.bind(&bind_endpoint) {
         if common::handle_transport_setup_error(
-            "MULTI_DEALER_ROUTER_SENDSEND",
+            "DEALER_ROUTER_SENDSEND",
             &args.transport,
             "bind",
             err,

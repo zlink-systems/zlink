@@ -56,7 +56,7 @@ class EchoReplyDrain {
     }
 }
 function resolveRoutedPattern(pattern, family) {
-    const base = `MULTI_${family}`;
+    const base = family;
     const normalized = String(pattern || `${base}_REQREP`).trim().toUpperCase();
     if (normalized === base || normalized === `${base}_SENDSEND`) {
         return `${base}_SENDSEND`;
@@ -308,7 +308,7 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
             drainReplies: drainReadyReplies
         });
         const result = await collector.finish();
-        for (const metricLine of summarizeMetrics(pattern, options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted, result.latencyMeanNs)) {
+        for (const metricLine of summarizeMetrics(pattern, options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted, result.latencyMeanNs, 'multi')) {
             console.log(metricLine);
         }
         // No CLIENT_DONE here: the C send/send echo client emits none

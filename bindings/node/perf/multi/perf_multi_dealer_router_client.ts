@@ -10,7 +10,7 @@ async function main() {
     await runRoutedSendSendClient({ options, pattern, routerClient: false });
     return;
   }
-  await runSocketReqRepClient({ options, pattern: 'MULTI_DEALER_ROUTER_REQREP',
+  await runSocketReqRepClient({ options, pattern: 'DEALER_ROUTER_REQREP',
     routerClient: false, serverRoutingId: null });
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

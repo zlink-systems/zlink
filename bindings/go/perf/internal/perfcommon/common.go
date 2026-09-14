@@ -557,20 +557,34 @@ func BindEndpoint(transport, prefix string) string {
 	}
 }
 
-func FinalizeResult(pattern string, msgSize int, result Result) Result {
+type Suite uint8
+
+const (
+	SuiteSingle Suite = iota
+	SuiteMulti
+)
+
+func FinalizeResult(suite Suite, pattern string, msgSize int, result Result) Result {
 	factor := 1.0
-	if isEchoPattern(pattern) {
+	if isEchoPattern(suite, pattern) {
 		factor = 2.0
 	}
 	result.Bandwidth = result.Throughput * float64(msgSize) * factor / 1_000_000.0
 	return result
 }
 
-func isEchoPattern(pattern string) bool {
+func isEchoPattern(suite Suite, pattern string) bool {
+	if suite == SuiteMulti {
+		switch pattern {
+		case "DEALER_ROUTER", "DEALER_ROUTER_SENDSEND", "DEALER_ROUTER_REQREP",
+			"ROUTER_ROUTER", "ROUTER_ROUTER_SENDSEND", "ROUTER_ROUTER_REQREP", "STREAM":
+			return true
+		default:
+			return false
+		}
+	}
 	switch pattern {
-	case "DEALER_ROUTER_REQREP", "ROUTER_ROUTER_REQREP",
-		"MULTI_DEALER_ROUTER_SENDSEND", "MULTI_DEALER_ROUTER_REQREP",
-		"MULTI_ROUTER_ROUTER_SENDSEND", "MULTI_ROUTER_ROUTER_REQREP", "MULTI_STREAM":
+	case "DEALER_ROUTER_REQREP", "ROUTER_ROUTER_REQREP":
 		return true
 	default:
 		return false

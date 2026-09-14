@@ -112,7 +112,7 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
     perf::multi::set_perf_pattern_env ("DEALER_DEALER");
 
     if (!perf::multi::is_supported_transport (transport)) {
-        std::cout << "UNSUPPORTED," << lib_name << ",MULTI_DEALER_DEALER," << transport
+        std::cout << "UNSUPPORTED," << lib_name << ",DEALER_DEALER," << transport
                   << std::endl;
         return true;
     }
@@ -260,7 +260,7 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
         const double throughput =
           static_cast<double> (active_count) / static_cast<double> (std::max (1, active_seconds));
         const double bandwidth = throughput * static_cast<double> (msg_size) / 1000000.0;
-        perf::multi::print_result (lib_name, "MULTI_DEALER_DEALER", transport, msg_size, throughput,
+        perf::multi::print_result (lib_name, "DEALER_DEALER", transport, msg_size, throughput,
                                    bandwidth, latency_stats.mean_ns, latency_stats.p95_ns,
                                    latency_stats.p99_ns);
         return true;

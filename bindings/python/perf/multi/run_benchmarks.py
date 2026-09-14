@@ -14,6 +14,7 @@ from datetime import datetime
 from perf_multi_common import (
     build_report_path,
     parse_result_lines,
+    pattern_direction_label,
     pin_current_process_cpu0,
     PYTHON_MULTI_DEFAULT_IO_THREADS,
     render_effective_options,
@@ -35,7 +36,7 @@ from perf_runtime import configure_runtime
 ROOT = Path(__file__).resolve().parent
 REPO_ROOT = ROOT.parent.parent.parent.parent
 DEFAULT_PYTHONPATH = ROOT.parent.parent / "src"
-# MULTI_STREAM client must be the shared C perf_stream_client binary so the
+# STREAM client must be the shared C perf_stream_client binary so the
 # measured surface stays the Python STREAM server (see PERF_MULTI_TEST_POLICY).
 STREAM_CLIENT_DIR = REPO_ROOT / "bindings" / "c" / "perf" / "common" / "streamclient"
 STREAM_MULTI_COMMON_DIR = REPO_ROOT / "bindings" / "c" / "perf" / "multi" / "common"
@@ -239,7 +240,15 @@ def _validate_python_build_options(args):
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(prog="run_benchmarks_multi.sh")
-    parser.add_argument("--pattern", default="ALL")
+    parser.add_argument(
+        "--pattern",
+        default="ALL",
+        help=(
+            "comma-separated patterns: DEALER_DEALER, DEALER_ROUTER_SENDSEND "
+            "(or DEALER_ROUTER), ROUTER_ROUTER_SENDSEND (or ROUTER_ROUTER), "
+            "DEALER_ROUTER_REQREP, ROUTER_ROUTER_REQREP, PUBSUB, STREAM, or ALL"
+        ),
+    )
     parser.add_argument(
         "--build-dir",
         default="",
@@ -308,8 +317,6 @@ def _parse_csv(value):
 
 def _normalize_pattern(value):
     pattern = value.strip().upper()
-    if pattern.startswith("MULTI_"):
-        pattern = pattern[6:]
     if pattern == "STREAMS":
         pattern = "STREAM"
     if pattern == "DEALER_ROUTER_SENDSEND":
@@ -321,10 +328,10 @@ def _normalize_pattern(value):
 
 def _result_pattern(pattern):
     if pattern == "DEALER_ROUTER":
-        return "MULTI_DEALER_ROUTER_SENDSEND"
+        return "DEALER_ROUTER_SENDSEND"
     if pattern == "ROUTER_ROUTER":
-        return "MULTI_ROUTER_ROUTER_SENDSEND"
-    return f"MULTI_{pattern}"
+        return "ROUTER_ROUTER_SENDSEND"
+    return pattern
 
 
 def _parse_patterns(value):
@@ -397,7 +404,7 @@ def _transports_for_pattern(pattern, transports):
     return selected
 
 
-def _grouped_option_text(patterns, value_for_pattern, *, prefix="MULTI_"):
+def _grouped_option_text(patterns, value_for_pattern):
     groups = []
     for pattern in patterns:
         values = tuple(value_for_pattern(pattern))
@@ -412,7 +419,7 @@ def _grouped_option_text(patterns, value_for_pattern, *, prefix="MULTI_"):
     rendered = []
     for grouped_patterns, values in groups:
         rendered.append(
-            f"{','.join(f'{prefix}{pattern}' for pattern in grouped_patterns)}={','.join(values)}"
+            f"{','.join(_result_pattern(pattern) for pattern in grouped_patterns)}={','.join(values)}"
         )
     return "; ".join(rendered)
 
@@ -651,7 +658,7 @@ def _result_metrics_for_case(output, pattern, transport, msg_size):
 
 
 def _metric_row(pattern, msg_size, metrics, *, indent="      "):
-    unit = throughput_unit(_result_pattern(pattern))
+    unit = throughput_unit(_result_pattern(pattern), suite="multi")
     throughput = f"{float(metrics.get('throughput', 0.0)) / 1000.0:8.3f} {unit}"
     return (
         f"{indent}| {str(msg_size) + 'B':<8} | "
@@ -664,18 +671,7 @@ def _metric_row(pattern, msg_size, metrics, *, indent="      "):
 
 
 def pattern_direction(pattern):
-    if pattern in {
-        "MULTI_DEALER_ROUTER_REQREP",
-        "MULTI_ROUTER_ROUTER_REQREP",
-    }:
-        return "request-reply"
-    return "echo" if pattern in {
-        "MULTI_DEALER_ROUTER",
-        "MULTI_DEALER_ROUTER_SENDSEND",
-        "MULTI_ROUTER_ROUTER",
-        "MULTI_ROUTER_ROUTER_SENDSEND",
-        "MULTI_STREAM",
-    } else "one-way"
+    return pattern_direction_label(pattern, suite="multi")
 
 
 def _status_row(msg_size, status, *, indent="      "):
@@ -957,7 +953,7 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
         endpoint = ready.split(",", 1)[1]
         if pattern == "STREAM":
             # Spawn the shared C perf_stream_client (mirrors the Go/dotnet
-            # runner: --pattern MULTI_STREAM so RESULT lines match the
+            # runner: --pattern STREAM so RESULT lines match the
             # Python runner parser. Server teardown remains owned by the
             # runner's control channel after the client exits.
             stream_client_bin = _ensure_stream_client(reuse_build=args.reuse_build)
@@ -972,7 +968,7 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
                 "--transport",
                 transport,
                 "--pattern",
-                "MULTI_STREAM",
+                "STREAM",
                 "--sizes",
                 msg_size,
                 "--runs",
@@ -1499,7 +1495,6 @@ def main(argv=None):
                     # unit). Numeric PERF_MULTI_HWM is only honoured under
                     # PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES, so do NOT
                     # force it here.
-                    case_env["PERF_MULTI_MSG_UNIT_BYTES"] = str(msg_size)
                     case_env["PERF_MULTI_PATTERN"] = _result_pattern(pattern)
                     case_env["PERF_MULTI_TRANSPORT"] = transport
                     case_ordinal += 1
@@ -1567,7 +1562,6 @@ def main(argv=None):
                         # socket per-size msg-unit. Numeric PERF_MULTI_HWM only
                         # honoured under PERF_MULTI_ALLOW_MANUAL_SOCKET_
                         # OVERRIDES; do NOT force it here.
-                        case_env["PERF_MULTI_MSG_UNIT_BYTES"] = str(msg_size)
                         case_ordinal += 1
                         output, case_failed = _run_pattern_captured(
                             args,

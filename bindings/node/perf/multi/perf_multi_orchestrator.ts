@@ -461,20 +461,20 @@ function serverStartReadyLine(msgSize) {
 //  perf_multi_pubsub_client.cpp and the shared stream client are the only
 //  C multi clients that do).
 function needsClientReady(pattern) {
-  return pattern === 'MULTI_DEALER_DEALER'
-    || pattern === 'MULTI_PUBSUB'
-    || pattern === 'MULTI_STREAM';
+  return pattern === 'DEALER_DEALER'
+    || pattern === 'PUBSUB'
+    || pattern === 'STREAM';
 }
 
 function needsRunnerStart(pattern) {
-  return pattern === 'MULTI_DEALER_DEALER'
-    || pattern === 'MULTI_PUBSUB'
-    || pattern === 'MULTI_STREAM';
+  return pattern === 'DEALER_DEALER'
+    || pattern === 'PUBSUB'
+    || pattern === 'STREAM';
 }
 
 function isSocketReqRepPattern(pattern) {
-  return pattern === 'MULTI_DEALER_ROUTER_REQREP'
-    || pattern === 'MULTI_ROUTER_ROUTER_REQREP';
+  return pattern === 'DEALER_ROUTER_REQREP'
+    || pattern === 'ROUTER_ROUTER_REQREP';
 }
 
 function childEnv(args, component) {
@@ -580,7 +580,7 @@ function resolveSharedStreamClientBinary() {
 }
 
 function buildClientSpawn(clientPath, clientArgs, args) {
-  if (args.pattern !== 'MULTI_STREAM') {
+  if (args.pattern !== 'STREAM') {
     return buildPinnedSpawn(process.execPath, [clientPath, ...clientArgs], args);
   }
   const streamClients = resolveMultiStreamClientCount(args.clients, args.transport);
@@ -594,7 +594,7 @@ function buildClientSpawn(clientPath, clientArgs, args) {
   const streamClientArgs = [
     '--endpoint', clientArgs[1],
     '--transport', args.transport,
-    '--pattern', 'MULTI_STREAM',
+    '--pattern', 'STREAM',
     '--ccu', String(streamClients),
     '--sizes', String(args.msgSize),
     '--runs', '1',
@@ -619,7 +619,7 @@ function resolveMultiTimeoutSeconds(args) {
   }
   const duration = Math.max(Number(args.duration) || 0, 1);
   const msgSize = Math.max(Number(args.msgSize) || 0, 64);
-  if (args.pattern === 'MULTI_STREAM') {
+  if (args.pattern === 'STREAM') {
     return Math.max(45, Math.floor(duration * 3) + 20);
   }
   if ((args.transport === 'tls' || args.transport === 'wss') && msgSize >= 131072) {
@@ -635,7 +635,7 @@ function resolveClientReadyTimeoutMs(args) {
 }
 
 async function coordinateRunnerStart(server, client, args, serverLabel = 'server') {
-  if (args.pattern === 'MULTI_STREAM') {
+  if (args.pattern === 'STREAM') {
     writeChildLine(server, `${startLine(args.msgSize)}\n`);
     await waitForExactControlLine(
       server,
@@ -655,7 +655,7 @@ async function coordinateRunnerStart(server, client, args, serverLabel = 'server
 
 async function spawnMultiPair(serverScript, clientScript, args) {
   const serverPath = path.join(__dirname, serverScript);
-  // MULTI_STREAM has no Node client script: buildClientSpawn spawns the
+  // STREAM has no Node client script: buildClientSpawn spawns the
   // shared C `perf_stream_client` binary instead (parity with cpp/dotnet).
   const clientPath = clientScript ? path.join(__dirname, clientScript) : null;
   const resultLines = [];
@@ -713,7 +713,7 @@ async function spawnMultiPair(serverScript, clientScript, args) {
   try {
     if (needsClientReady(args.pattern)) {
       const clientLabel = clientScript || 'perf_stream_client';
-      if (args.pattern === 'MULTI_STREAM') {
+      if (args.pattern === 'STREAM') {
         await waitForExactControlLine(
           client,
           clientReadyLine(args.msgSize),
@@ -845,7 +845,7 @@ async function spawnMultiPair(serverScript, clientScript, args) {
   await flushProcessOutput();
 
   // C parity: for patterns where the SERVER is the measurer (e.g.
-  // MULTI_DEALER_DEALER after the C-correct role re-alignment — C's
+  // DEALER_DEALER after the C-correct role re-alignment — C's
   // perf_multi_dealer_dealer_server.cpp prints RESULT), the sender client
   // exits first while the server is still finishing its measure window +
   // tail drain. The C engine (run_comparison.py) waits for the measuring

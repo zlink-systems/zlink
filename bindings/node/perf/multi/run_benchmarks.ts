@@ -9,6 +9,7 @@ const {
   defaultMultiTransports,
   hasPrimaryMetricsFromResultLines,
   medianMetrics,
+  MULTI_PATTERN_NAMES,
   parseCommonArgs,
   primaryMetricsFromResultLines,
   resolveMultiPatternNames
@@ -42,7 +43,7 @@ const {
 // C parity: bindings/c/perf/run_comparison.py pattern_direction_label
 // — "echo" for the echo patterns, "one-way" otherwise.
 function patternDirectionLabel(patternName) {
-  return isEchoPattern(patternName) ? 'echo' : 'one-way';
+  return isEchoPattern(patternName, 'multi') ? 'echo' : 'one-way';
 }
 
 const PATTERN_SEPARATOR =
@@ -57,6 +58,7 @@ interface PerfMetrics {
 }
 
 function usage() {
+  const supportedPatterns = MULTI_PATTERN_NAMES.join(', ');
   console.log(`Usage: bindings/node/perf/run_benchmarks_multi.sh [options]
 
 Measure current zlink Node multi-pattern performance.
@@ -64,6 +66,7 @@ Measure current zlink Node multi-pattern performance.
 Options:
   -h, --help            Show this help.
   --pattern NAME        Pattern list (comma-separated) or ALL.
+                       Supported: ${supportedPatterns}.
   --build-dir PATH      Unsupported: Node artifacts use fixed package paths.
   --reuse-build         Reuse existing fixed Node outputs; skip rebuild.
   --clean-build         Remove TypeScript and native build outputs, then rebuild.
@@ -140,10 +143,10 @@ async function main() {
   const options = parseCommonArgs(process.argv.slice(2), {
     pattern: 'ALL',
     duration: 5,
-    msgSizes: defaultMultiMsgSizes(['MULTI_DEALER_DEALER'], false),
+    msgSizes: defaultMultiMsgSizes(['DEALER_DEALER'], false),
     resultsDir: path.join(process.cwd(), 'perf', 'results'),
     transports: defaultMultiTransports(),
-    clients: defaultClientsForPattern('MULTI_DEALER_DEALER')
+    clients: defaultClientsForPattern('DEALER_DEALER')
   });
 
   if (options.helpRequested) {

@@ -145,20 +145,15 @@ class TeeStream:
 
 def normalize_multi_pattern_name(pattern_name):
     pattern = (pattern_name or "").strip().upper()
-    if pattern.startswith("MULTI_"):
-        pattern = pattern[6:]
-    if pattern == "DEALER_ROUTER":
+    if ALLOW_MULTI and pattern == "DEALER_ROUTER":
         return "DEALER_ROUTER_SENDSEND"
-    if pattern == "ROUTER_ROUTER":
+    if ALLOW_MULTI and pattern == "ROUTER_ROUTER":
         return "ROUTER_ROUTER_SENDSEND"
     return pattern
 
 
 def display_pattern_name(pattern_name):
-    pattern = normalize_multi_pattern_name(pattern_name)
-    if ALLOW_MULTI and pattern:
-        return f"MULTI_{pattern}"
-    return pattern
+    return normalize_multi_pattern_name(pattern_name)
 
 
 def display_multi_label(label):
@@ -923,7 +918,6 @@ def emit_auto_hwm_detail_line(line):
         fields.get("bucket_limited_hwm_4k", ""),
         fields.get("sndhwm", ""),
         fields.get("rcvhwm", ""),
-        fields.get("effective_message_bytes", ""),
         fields.get("effective_sndbuf", ""),
         fields.get("effective_rcvbuf", ""),
         fields.get("socket_message_slots", ""),
@@ -1008,66 +1002,17 @@ def _auto_hwm_bytes_to_mb_display(value):
     return str(parsed // (1024 * 1024))
 
 
-def _auto_hwm_expected_hwm(fields):
-    unit_budget = _auto_hwm_parse_int(fields.get("unit_budget_bytes", ""), 0)
-    msg_unit = _auto_hwm_parse_int(
-        fields.get("effective_message_bytes", ""), 0
-    )
-    size_cap = _auto_hwm_parse_int(fields.get("size_cap", ""), 0)
-    if unit_budget <= 0 or msg_unit <= 0:
-        return None
-
-    hwm = (unit_budget + msg_unit - 1) // msg_unit
-    if hwm < 1:
-        hwm = 1
-    if size_cap > 0:
-        hwm = min(hwm, size_cap)
-    return hwm
-
-
-def _auto_hwm_expected_match_score(fields):
-    expected = _auto_hwm_expected_hwm(fields)
-    if expected is None:
-        return 2
-
-    sndhwm = _auto_hwm_parse_int(fields.get("sndhwm", ""), -1)
-    rcvhwm = _auto_hwm_parse_int(fields.get("rcvhwm", ""), -1)
-    matches = 0
-    visible = 0
-    if sndhwm >= 0:
-        visible += 1
-        if sndhwm == expected:
-            matches += 1
-    if rcvhwm >= 0:
-        visible += 1
-        if rcvhwm == expected:
-            matches += 1
-    if visible == 0:
-        return 2
-    return 0 if matches == visible else 1 if matches > 0 else 2
-
-
 def _auto_hwm_select_display_rows(rows):
     selected = {}
-    for index, fields in enumerate(rows):
+    for fields in rows:
         logical_key = (
             fields.get("msg_size", ""),
             fields.get("component", ""),
             fields.get("socket_type", ""),
             fields.get("unit_budget_bytes", ""),
-            fields.get("effective_message_bytes", ""),
         )
-        score = _auto_hwm_expected_match_score(fields)
-        previous = selected.get(logical_key)
-        if previous is None:
-            selected[logical_key] = (score, index, fields)
-            continue
-        previous_score, previous_index, _previous_fields = previous
-        if score < previous_score or (
-            score == previous_score and index > previous_index
-        ):
-            selected[logical_key] = (score, index, fields)
-    return [item[2] for item in selected.values()]
+        selected[logical_key] = fields
+    return list(selected.values())
 
 
 def emit_auto_hwm_detail_table(emit, pattern_name):
@@ -1124,7 +1069,6 @@ def emit_auto_hwm_detail_table(emit, pattern_name):
                 "component",
                 "type",
                 "unit_budget_kb",
-                "effective_message_bytes",
                 "sndhwm",
                 "rcvhwm",
                 "effective_sndbuf_kb",
@@ -1143,7 +1087,6 @@ def emit_auto_hwm_detail_table(emit, pattern_name):
             ("Component", "component"),
             ("Type", "type"),
             ("UnitBudget(KB)", "unit_budget_kb"),
-            ("MsgUnit(B)", "effective_message_bytes"),
             ("SNDHWM", "sndhwm"),
             ("RCVHWM", "rcvhwm"),
             ("SNDBUF(KB)", "effective_sndbuf_kb"),

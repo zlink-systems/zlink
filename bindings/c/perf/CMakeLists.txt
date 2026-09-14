@@ -148,7 +148,7 @@ endif()
             multi/src/perf_multi_router_router_matched_client.cpp)
         target_compile_definitions(
             comp_src_${matched_pattern}_matched_client
-            PRIVATE PERF_MATCHED_PATTERN_NAME="MULTI_${matched_pattern_upper}")
+            PRIVATE PERF_MATCHED_PATTERN_NAME="${matched_pattern_upper}")
     endforeach()
     add_current_bench_multi(comp_src_pubsub_client
                            multi/src/perf_multi_pubsub_client.cpp)
@@ -171,4 +171,4 @@ endif()
                            multi/src/perf_multi_stream_server.cpp)
 target_compile_features(comp_src_stream_server PRIVATE cxx_std_17)
 target_compile_definitions(comp_src_stream_server PRIVATE
-                           PERF_MULTI_STREAM_PATTERN_NAME="MULTI_STREAM")
+                           PERF_MULTI_STREAM_PATTERN_NAME="STREAM")

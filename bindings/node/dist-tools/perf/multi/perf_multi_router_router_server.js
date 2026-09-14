@@ -8,7 +8,7 @@ const { parseMultiArgs } = require('./perf_multi_common');
 const { isStopTokenParts } = require('../perf_stop_token');
 const { POLLIN, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, measurementPayload, submitReply, waitPollerOne } = require('./perf_multi_runtime');
 const { resolveRoutedPattern, runRoutedSendSendServer } = require('./perf_multi_routed_sendsend');
-const PATTERN = 'MULTI_ROUTER_ROUTER_REQREP';
+const PATTERN = 'ROUTER_ROUTER_REQREP';
 function receiveAndReply(router, received) {
     while (true) {
         try {

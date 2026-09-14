@@ -67,7 +67,7 @@ perf::async_task_t<bool> perf_router_router_server (const std::string &lib_name,
     perf::multi::set_perf_pattern_env ("ROUTER_ROUTER_SENDSEND");
 
     if (!perf::multi::is_supported_transport (transport)) {
-        std::cout << "UNSUPPORTED," << lib_name << ",MULTI_ROUTER_ROUTER_SENDSEND," << transport
+        std::cout << "UNSUPPORTED," << lib_name << ",ROUTER_ROUTER_SENDSEND," << transport
                   << std::endl;
         co_return true;
     }

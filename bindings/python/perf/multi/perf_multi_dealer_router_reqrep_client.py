@@ -8,7 +8,7 @@ if __name__ == "__main__":
     asyncio.run(
         run_reqrep_client(
             sys.argv[1:],
-            pattern="MULTI_DEALER_ROUTER_REQREP",
+            pattern="DEALER_ROUTER_REQREP",
             routed_request=False,
         )
     )

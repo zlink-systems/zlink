@@ -93,7 +93,7 @@ final class PerfMultiPubSub {
             // any connect, so the per-message sizing is in effect when each
             // SUB transport pipe is created. Connecting first and recalcing
             // afterwards left tcp SUB pipes on the pre-recalc default and
-            // collapsed MULTI_PUBSUB/tcp ~10x while tls/ws/wss were far less
+            // collapsed PUBSUB/tcp ~10x while tls/ws/wss were far less
             // affected.
             PerfUtil.recalculateAutoHwm(ctx);
             for (SubSocket sub : subscribers) {

@@ -39,7 +39,7 @@ function isStopTokenPayload(buffer, size) {
 async function main() {
   const options = parseMultiArgs(process.argv.slice(2));
   const ctx = zlink.createContext();
-  applyContextPolicy(ctx, 'client', 'MULTI_PUBSUB');
+  applyContextPolicy(ctx, 'client', 'PUBSUB');
   const subs = [];
   const receivedBySub = [];
   let rl = null;
@@ -131,14 +131,15 @@ async function main() {
 
     const result = collector ? await collector.finish() : { latenciesNs: [] };
     for (const line of summarizeMetrics(
-      'MULTI_PUBSUB',
+      'PUBSUB',
       options.transport,
       options.msgSize,
       result.latenciesNs,
       options.duration,
       'current',
       result.accepted,
-      result.latencyMeanNs
+      result.latencyMeanNs,
+      'multi'
     )) {
       console.log(line);
     }

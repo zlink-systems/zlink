@@ -214,7 +214,7 @@ func multiSendTurnWait(deadline time.Time, progressed bool) time.Duration {
 }
 
 var (
-	multiPattern   = flag.String("pattern", "MULTI_PUBSUB", "")
+	multiPattern   = flag.String("pattern", "PUBSUB", "")
 	multiTransport = flag.String("transport", "tcp", "")
 	multiSize      = flag.Int("msg-size", 64, "")
 	multiDuration  = flag.Int("duration", 5, "")
@@ -274,19 +274,19 @@ func runMultiRole(cfg multiConfig, role, endpoint string) {
 
 func runMultiServerRole(cfg multiConfig) {
 	switch cfg.pattern {
-	case "MULTI_PUBSUB":
+	case "PUBSUB":
 		runMultiPubSubServer(cfg)
-	case "MULTI_DEALER_DEALER":
+	case "DEALER_DEALER":
 		runMultiDealerDealerServer(cfg)
-	case "MULTI_DEALER_ROUTER_SENDSEND":
+	case "DEALER_ROUTER_SENDSEND":
 		runMultiDealerRouterServer(cfg)
-	case "MULTI_DEALER_ROUTER_REQREP":
+	case "DEALER_ROUTER_REQREP":
 		runMultiDealerRouterReqRepServer(cfg)
-	case "MULTI_ROUTER_ROUTER_SENDSEND":
+	case "ROUTER_ROUTER_SENDSEND":
 		runMultiRouterRouterServer(cfg)
-	case "MULTI_ROUTER_ROUTER_REQREP":
+	case "ROUTER_ROUTER_REQREP":
 		runMultiRouterRouterReqRepServer(cfg)
-	case "MULTI_STREAM":
+	case "STREAM":
 		runMultiStreamServer(cfg)
 	default:
 		perfcommon.Must(&unsupportedMultiPatternError{pattern: cfg.pattern})
@@ -295,22 +295,22 @@ func runMultiServerRole(cfg multiConfig) {
 
 func runMultiClientRole(cfg multiConfig, endpoint string) {
 	switch cfg.pattern {
-	case "MULTI_PUBSUB":
+	case "PUBSUB":
 		result := runMultiPubSubClient(cfg, endpoint)
 		printMultiResult(cfg, result)
-	case "MULTI_DEALER_DEALER":
+	case "DEALER_DEALER":
 		runMultiDealerDealerClient(cfg, endpoint)
-	case "MULTI_DEALER_ROUTER_SENDSEND":
+	case "DEALER_ROUTER_SENDSEND":
 		result := runMultiDealerRouterClient(cfg, endpoint)
 		printMultiResult(cfg, result)
-	case "MULTI_DEALER_ROUTER_REQREP":
+	case "DEALER_ROUTER_REQREP":
 		runMultiDealerRouterReqRepClient(cfg, endpoint)
-	case "MULTI_ROUTER_ROUTER_SENDSEND":
+	case "ROUTER_ROUTER_SENDSEND":
 		result := runMultiRouterRouterClientRole(cfg, endpoint)
 		printMultiResult(cfg, result)
-	case "MULTI_ROUTER_ROUTER_REQREP":
+	case "ROUTER_ROUTER_REQREP":
 		runMultiRouterRouterReqRepClient(cfg, endpoint)
-	// MULTI_STREAM has no Go client role: the shared C
+	// STREAM has no Go client role: the shared C
 	// perf_stream_client binary is the reference client (spawned by
 	// run_benchmarks_multi.sh).
 	default:
@@ -326,7 +326,7 @@ func printMultiResult(cfg multiConfig, result perfcommon.Result) {
 		perfcommon.PrintFail(cfg.pattern, cfg.transport, cfg.msgSize)
 		os.Exit(1)
 	}
-	result = perfcommon.FinalizeResult(cfg.pattern, cfg.msgSize, result)
+	result = perfcommon.FinalizeResult(perfcommon.SuiteMulti, cfg.pattern, cfg.msgSize, result)
 	perfcommon.PrintResult(cfg.pattern, cfg.transport, cfg.msgSize, result)
 }
 

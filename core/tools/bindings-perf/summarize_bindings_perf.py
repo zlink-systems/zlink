@@ -273,7 +273,7 @@ def expected_clients_for(pattern: str, options: Dict[str, str]) -> Optional[int]
         return None
     lowered = raw.lower()
     if "auto" in lowered:
-        if pattern == "MULTI_STREAM":
+        if pattern == "STREAM":
             return parse_option_int(options, "default_stream_clients", "clients")
         return parse_option_int(options, "default_clients", "clients")
     digits = "".join(ch for ch in raw if ch.isdigit())

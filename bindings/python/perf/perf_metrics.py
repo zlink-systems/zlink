@@ -521,35 +521,33 @@ def rows_by_case(rows, *, warn=None):
     return grouped
 
 
-def pattern_direction_label(pattern):
-    if pattern in {
-        "DEALER_ROUTER_REQREP",
-        "ROUTER_ROUTER_REQREP",
-        "MULTI_DEALER_ROUTER_REQREP",
-        "MULTI_ROUTER_ROUTER_REQREP",
-    }:
+def pattern_direction_label(pattern, *, suite):
+    if pattern in {"DEALER_ROUTER_REQREP", "ROUTER_ROUTER_REQREP"}:
         return "request-reply"
-    if pattern in {
-        "MULTI_DEALER_ROUTER",
-        "MULTI_DEALER_ROUTER_SENDSEND",
-        "MULTI_ROUTER_ROUTER",
-        "MULTI_ROUTER_ROUTER_SENDSEND",
-        "MULTI_STREAM",
+    if suite == "multi" and pattern in {
+        "DEALER_ROUTER",
+        "DEALER_ROUTER_SENDSEND",
+        "ROUTER_ROUTER",
+        "ROUTER_ROUTER_SENDSEND",
+        "STREAM",
     }:
         return "echo"
     return "one-way"
 
 
-def throughput_unit(pattern):
+def throughput_unit(pattern, *, suite):
     return (
         "Kops/s"
-        if pattern_direction_label(pattern) in {"echo", "request-reply"}
+        if pattern_direction_label(pattern, suite=suite) in {"echo", "request-reply"}
         else "Kmsg/s"
     )
 
 
-def _metric_row_text(pattern, size, metrics):
-    throughput = f"{float(metrics.get('throughput', 0.0)) / 1000.0:8.3f} {throughput_unit(pattern)}"
+def _metric_row_text(pattern, size, metrics, *, suite):
+    throughput = (
+        f"{float(metrics.get('throughput', 0.0)) / 1000.0:8.3f} "
+        f"{throughput_unit(pattern, suite=suite)}"
+    )
     return (
         f"| {str(size) + 'B':<8} | "
         f"{throughput:>16} | "
@@ -578,7 +576,7 @@ def status_row_text(size, status):
     )
 
 
-def render_result_tables(rows):
+def render_result_tables(rows, *, suite):
     if not rows:
         return ""
     grouped = rows_by_case(rows)
@@ -589,7 +587,10 @@ def render_result_tables(rows):
         if pattern != last_pattern:
             if last_pattern is not None:
                 lines.extend(["", "===============================================================================", ""])
-            lines.append(f"## PATTERN: {pattern} ({pattern_direction_label(pattern)})")
+            lines.append(
+                f"## PATTERN: {pattern} "
+                f"({pattern_direction_label(pattern, suite=suite)})"
+            )
             lines.append("")
             last_pattern = pattern
             last_transport = None
@@ -599,9 +600,16 @@ def render_result_tables(rows):
             lines.append(f"### Transport: {transport}")
             lines.extend(table_header_lines())
             last_transport = transport
-        lines.append(_metric_row_text(pattern, size, grouped[(pattern, transport, size)]))
+        lines.append(
+            _metric_row_text(
+                pattern,
+                size,
+                grouped[(pattern, transport, size)],
+                suite=suite,
+            )
+        )
     return "\n".join(lines)
 
 
-def render_markdown_summary(rows):
-    return render_result_tables(rows)
+def render_markdown_summary(rows, *, suite):
+    return render_result_tables(rows, suite=suite)

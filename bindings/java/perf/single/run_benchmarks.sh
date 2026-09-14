@@ -736,7 +736,7 @@ def emit_auto_hwm(pattern):
         key = tuple(display.get(name, "") for name in (
             "msg_size", "component", "owner", "socket", "socket_type",
             "role", "sndhwm", "rcvhwm", "sndbuf_kb", "rcvbuf_kb",
-            "effective_message_bytes", "socket_message_slots",
+            "socket_message_slots",
         ))
         if key in seen:
             continue
@@ -761,7 +761,6 @@ def emit_auto_hwm(pattern):
         ("RCVHWM", "rcvhwm"),
         ("SNDBUF(KB)", "sndbuf_kb"),
         ("RCVBUF(KB)", "rcvbuf_kb"),
-        ("MsgUnit(B)", "effective_message_bytes"),
         ("Slots", "socket_message_slots"),
     )
     widths = []

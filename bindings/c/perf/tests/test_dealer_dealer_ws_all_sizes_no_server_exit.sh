@@ -12,7 +12,7 @@ trap 'rm -f "${log_file}"' EXIT
 set +e
 PERF_FAIL_FAST=1 \
 "${RUNNER}" \
-  --pattern MULTI_DEALER_DEALER \
+  --pattern DEALER_DEALER \
   --transports ws \
   --msg-sizes 64,256,1024,4096,65536,131072 \
   --duration 5 \

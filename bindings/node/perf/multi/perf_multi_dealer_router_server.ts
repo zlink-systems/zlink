@@ -22,7 +22,7 @@ const {
   runRoutedSendSendServer
 } = require('./perf_multi_routed_sendsend');
 
-const PATTERN = 'MULTI_DEALER_ROUTER_REQREP';
+const PATTERN = 'DEALER_ROUTER_REQREP';
 
 function receiveAndReply(router, received) {
   while (true) {

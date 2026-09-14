@@ -34,7 +34,7 @@ not to provide demo code or hide the hot path behind a complex harness.
 - `perf/run_benchmarks_multi.sh` or `perf/multi/run_benchmarks.sh`
 
 Each suite builds and runs the Java binding perf entrypoints directly. There is
-no shared cross-binding runner, except for the policy-mandated `MULTI_STREAM`
+no shared cross-binding runner, except for the policy-mandated `STREAM`
 raw client from `bindings/c/perf/common/streamclient`.
 
 ## Layout
@@ -62,11 +62,11 @@ Single suite pattern files:
 
 Multi suite pattern files:
 
-- `MULTI_DEALER_DEALER`
-- `MULTI_DEALER_ROUTER`
-- `MULTI_ROUTER_ROUTER`
-- `MULTI_PUBSUB`
-- `MULTI_STREAM`
+- `DEALER_DEALER`
+- `DEALER_ROUTER`, `DEALER_ROUTER_SENDSEND`, `DEALER_ROUTER_REQREP`
+- `ROUTER_ROUTER`, `ROUTER_ROUTER_SENDSEND`, `ROUTER_ROUTER_REQREP`
+- `PUBSUB`
+- `STREAM`
 
 Each messaging pattern stays in its own source file so the hot path remains
 readable and reviewable.

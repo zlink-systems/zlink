@@ -74,7 +74,8 @@ final class PerfArgs {
         }
         String pattern = args[1].toUpperCase(Locale.ROOT);
         if (pattern.startsWith("MULTI_")) {
-            pattern = pattern.substring("MULTI_".length());
+            throw new IllegalArgumentException(
+                "unsupported pattern: " + pattern);
         }
         String transport = args[2].toLowerCase(Locale.ROOT);
         int size = Integer.parseInt(args[3]);

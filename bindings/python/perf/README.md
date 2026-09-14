@@ -82,17 +82,17 @@ native callback threads contending on the GIL. Use `--io-threads 4` or
 
 Patterns:
 
-- `MULTI_DEALER_DEALER`
-- `MULTI_DEALER_ROUTER_SENDSEND` (`MULTI_DEALER_ROUTER` input alias)
-- `MULTI_ROUTER_ROUTER_SENDSEND` (`MULTI_ROUTER_ROUTER` input alias)
-- `MULTI_DEALER_ROUTER_REQREP`
-- `MULTI_ROUTER_ROUTER_REQREP`
-- `MULTI_PUBSUB`
-- `MULTI_STREAM`
+- `DEALER_DEALER`
+- `DEALER_ROUTER_SENDSEND` (`DEALER_ROUTER` input alias)
+- `ROUTER_ROUTER_SENDSEND` (`ROUTER_ROUTER` input alias)
+- `DEALER_ROUTER_REQREP`
+- `ROUTER_ROUTER_REQREP`
+- `PUBSUB`
+- `STREAM`
 
 Shared component contract:
 
-- `MULTI_STREAM` client uses the shared core `perf_stream_client` path required
+- `STREAM` client uses the shared core `perf_stream_client` path required
   by the perf policy and execution guide. Python sets
   `--completion-wait-ms` to `PERF_MULTI_STREAM_COMPLETION_WAIT_MS`, then
   `PERF_STREAM_COMPLETION_WAIT_MS`, then `10000` so the shared client can wait
