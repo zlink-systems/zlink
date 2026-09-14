@@ -1375,6 +1375,16 @@ struct automatic_identity_echo_t
     std::string handle (const std::string &request) { return request; }
 };
 
+struct automatic_identity_send_t
+{
+    inline static std::atomic<unsigned> deliveries{0};
+    void handle (const std::string &message)
+    {
+        assert (message == "public-channel-send");
+        ++deliveries;
+    }
+};
+
 class automatic_identity_probe_t final : public zlink::framework::hosted_service_t
 {
   public:
@@ -1420,7 +1430,8 @@ void verify_default_store_identity_and_manual_identity (
             }
             if (serving)
                 mesh.channel ("identity-echo").server ().add_request_handler<
-                  automatic_identity_echo_t, std::string, std::string> ();
+                  automatic_identity_echo_t, std::string, std::string> ()
+                  .add_send_handler<automatic_identity_send_t, std::string> ();
             else
                 mesh.channel ("identity-echo").client ();
             const auto states = zlink::framework::detail::mesh_node_runtime_t::registrations (
@@ -1485,6 +1496,32 @@ void verify_default_store_identity_and_manual_identity (
               "identity-echo", std::string ("default-identity-probe"))
               .timeout (1s).async<std::string> ();
             assert (request.result ().value () == "default-identity-probe");
+            auto &channels = services.get_required<zlink::framework::channel_client_t> ();
+            auto public_request = channels.request_to_channel (
+              "identity-echo", std::string ("public-channel-request"))
+              .metadata ("probe", "public-channel").timeout (1s).async<std::string> ();
+            assert (public_request.result ().value () == "public-channel-request");
+            const auto before = automatic_identity_send_t::deliveries.load ();
+            const auto sent = channels.send_to_channel (
+              "identity-echo", std::string ("public-channel-send")).async ().result ();
+            assert (sent);
+            const auto delivery_deadline = std::chrono::steady_clock::now () + 1s;
+            while (automatic_identity_send_t::deliveries.load () == before
+                   && std::chrono::steady_clock::now () < delivery_deadline)
+                std::this_thread::sleep_for (1ms);
+            assert (automatic_identity_send_t::deliveries.load () == before + 1);
+            const auto absent_request = channels.request_to_channel (
+              "absent-public-channel", std::string ("missing"))
+              .timeout (1s).async<std::string> ().result ();
+            assert (!absent_request);
+            assert (absent_request.error_kind ()
+                    == zlink::framework::framework_error_kind_t::not_found);
+            const auto absent_send = channels.send_to_channel (
+              "absent-public-channel", std::string ("missing")).async ().result ();
+            assert (!absent_send);
+            assert (absent_send.error_kind ()
+                    == zlink::framework::framework_error_kind_t::not_found);
+
             for (const auto &state : {server_state, client_state}) {
                 assert (state->routing_id);
                 const auto identity = state->routing_id->to_string ();

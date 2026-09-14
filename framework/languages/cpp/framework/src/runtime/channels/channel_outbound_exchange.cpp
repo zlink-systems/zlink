@@ -47,6 +47,44 @@
 namespace zlink::framework::detail
 {
 
+std::optional<channel_runtime_state_t::mesh_channel_send_t>
+mesh_channel_sender (const std::shared_ptr<channel_runtime_state_t> &state,
+                     const std::string &channel_name)
+{
+    return state->lane.run ([&] {
+        const auto found = state->mesh_channel_senders.find (channel_name);
+        return found == state->mesh_channel_senders.end ()
+                 ? std::nullopt
+                 : std::optional<channel_runtime_state_t::mesh_channel_send_t> (found->second);
+    }).get ();
+}
+
+std::optional<channel_runtime_state_t::mesh_channel_request_t>
+mesh_channel_requester (const std::shared_ptr<channel_runtime_state_t> &state,
+                        const std::string &channel_name)
+{
+    return state->lane.run ([&] {
+        const auto found = state->mesh_channel_requesters.find (channel_name);
+        return found == state->mesh_channel_requesters.end ()
+                 ? std::nullopt
+                 : std::optional<channel_runtime_state_t::mesh_channel_request_t> (found->second);
+    }).get ();
+}
+
+
+runtime::messaging::message_parts_t
+encode_channel_payload_parts (runtime::messaging::envelope_header_t header,
+                              std::type_index,
+                              const message_bus_t::payload_encoder_t &encode_payload,
+                              serializer_registry_t &serializers)
+{
+    auto serialized = encode_payload (serializers);
+    header.content_type = std::move (serialized.content_type);
+    runtime::messaging::envelope_codec_t envelope;
+    return envelope.encode_raw_body_parts (
+      header, detail::encoded_payload_to_raw (serialized.payload));
+}
+
 namespace
 {
 
@@ -170,18 +208,6 @@ const char *channel_runtime_outbound_error_message_locked (
     return state.shutdown ? "channel runtime is shutting down" : "channel runtime is closed";
 }
 
-runtime::messaging::message_parts_t
-encode_channel_payload_parts (runtime::messaging::envelope_header_t header,
-                              std::type_index,
-                              const message_bus_t::payload_encoder_t &encode_payload,
-                              serializer_registry_t &serializers)
-{
-    auto serialized = encode_payload (serializers);
-    header.content_type = std::move (serialized.content_type);
-    runtime::messaging::envelope_codec_t envelope;
-    return envelope.encode_raw_body_parts (
-      header, detail::encoded_payload_to_raw (serialized.payload));
-}
 
 framework_exception_t map_native_request_exception (const std::exception &error)
 {
@@ -1217,6 +1243,166 @@ struct channel_request_terminal_trace_t
 
 } // namespace
 
+task_t<result_t<void>> channel_outbound_exchange_t::submit_mesh_channel_send (
+  const std::string &channel_name,
+  const std::string &packet_name,
+  std::type_index message_type,
+  message_bus_t::payload_encoder_t encode_payload,
+  const route_send_call_t::metadata_map_t &metadata)
+{
+    const auto state = _state;
+    auto submit_flow = runtime::flow_context_t::enter_current_or_create (
+      flow_origin_t::application,
+      state
+        ? detail::message_flow_tracer_t (state->dispatch).mode ()
+        : message_flow_log_mode_t::off);
+    if (!state || state->serializers == nullptr) {
+        co_return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                           "route client is not configured");
+    }
+    const auto sender = detail::mesh_channel_sender (state, channel_name);
+    if (!sender) {
+        co_return result_t<void>::failure (
+          framework_error_kind_t::not_found,
+          "RouteMesh channel '" + channel_name + "' is not registered");
+    }
+    try {
+        runtime::messaging::client_call_codec_t codec;
+        auto header = codec.create_envelope (runtime::messaging::message_kind_t::command,
+                                             channel_name, packet_name);
+        header.metadata = metadata;
+        detail::message_flow_tracer_t (state->dispatch)
+          .trace (message_flow_outcome_t::sent, [&] {
+              return message_flow_event_t{message_flow_outcome_t::sent,
+                                          dispatch_error_surface_t::route_mesh_channel,
+                                          dispatch_message_kind_t::send,
+                                          packet_name,
+                                          channel_name,
+                                          std::nullopt,
+                                          header.correlation_id,
+                                          std::nullopt,
+                                          std::nullopt,
+                                          std::nullopt,
+                                          std::nullopt};
+          });
+        auto parts = encode_channel_payload_parts (std::move (header), message_type,
+                                                 std::move (encode_payload),
+                                                 *state->serializers);
+        co_return co_await (*sender) (std::move (parts));
+    }
+    catch (const framework_exception_t &error) {
+        co_return detail::result_access_t::failure<void> (error);
+    }
+    catch (const std::exception &error) {
+        co_return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
+    }
+}
+
+task_t<zlink::message_t> channel_outbound_exchange_t::submit_mesh_channel_request (
+  std::string channel_name,
+  std::string packet_name,
+  std::type_index request_type,
+  message_bus_t::payload_encoder_t encode_payload,
+  std::chrono::milliseconds timeout,
+  std::map<std::string, std::string> metadata)
+{
+    /* Frame-owned copy: the referenced shared_ptr lives in the call object's
+     * closure, which can unwind while the request is suspended. */
+    const auto state = _state;
+    auto submit_flow = runtime::flow_context_t::enter_current_or_create (
+      flow_origin_t::application,
+      state
+        ? detail::message_flow_tracer_t (state->dispatch).mode ()
+        : message_flow_log_mode_t::off);
+    const auto ambient_context = detail::capture_ambient_context ();
+    if (!state || state->serializers == nullptr) {
+        co_return result_t<zlink::message_t>::failure (
+          framework_error_kind_t::protocol_error, "route client is not configured");
+    }
+    const auto requester = detail::mesh_channel_requester (state, channel_name);
+    if (!requester) {
+        co_return result_t<zlink::message_t>::failure (
+          framework_error_kind_t::not_found,
+          "RouteMesh channel '" + channel_name + "' is not registered");
+    }
+    const auto effective_timeout = timeout > std::chrono::milliseconds::zero ()
+                                     ? timeout
+                                     : state->default_request_timeout;
+    runtime::messaging::message_parts_t parts;
+    try {
+        runtime::messaging::client_call_codec_t codec;
+        auto header = codec.create_envelope (runtime::messaging::message_kind_t::request,
+                                             channel_name, packet_name, effective_timeout);
+        header.metadata = std::move (metadata);
+        detail::message_flow_tracer_t (state->dispatch)
+          .trace (message_flow_outcome_t::sent, [&] {
+              return message_flow_event_t{message_flow_outcome_t::sent,
+                                          dispatch_error_surface_t::route_mesh_channel,
+                                          dispatch_message_kind_t::request,
+                                          packet_name,
+                                          channel_name,
+                                          std::nullopt,
+                                          header.correlation_id,
+                                          std::nullopt,
+                                          std::nullopt,
+                                          std::nullopt,
+                                          std::nullopt};
+          });
+        parts = encode_channel_payload_parts (std::move (header), request_type,
+                                            std::move (encode_payload), *state->serializers);
+    }
+    catch (const framework_exception_t &error) {
+        co_return detail::result_access_t::failure<zlink::message_t> (error);
+    }
+
+    const auto ambient_guard = detail::enter_ambient_context (ambient_context);
+    try {
+        runtime::messaging::envelope_codec_t envelope;
+        auto reply = co_await (*requester) (std::move (parts), effective_timeout);
+        if (!reply) {
+            co_return detail::propagate_failure<zlink::message_t> (
+              reply, "RouteMesh channel request failed");
+        }
+        auto reply_header = envelope.decode_header (reply.value (), false);
+        if (!reply_header) {
+            co_return result_t<zlink::message_t>::failure (
+              reply_header.error_kind (), reply_header.error () ? reply_header.error ()->what ()
+                                                                : "RouteMesh channel reply header decode failed");
+        }
+        if (reply_header.value ().kind == runtime::messaging::message_kind_t::error) {
+            runtime::messaging::request_failure_mapper_t failure_mapper;
+            co_return detail::result_access_t::failure<zlink::message_t> (
+              failure_mapper.error_header_exception (
+                reply_header.value ().error_code.value_or ("request_failed"),
+                reply_header.value ().error_message.value_or ("RouteMesh channel request failed"),
+                "RouteMesh channel request"));
+        }
+        auto body = envelope.decode_body (reply.value ());
+        if (!body) {
+            co_return detail::propagate_failure<zlink::message_t> (
+              body, "RouteMesh channel reply body decode failed");
+        }
+        detail::message_flow_tracer_t (state->dispatch)
+          .trace (message_flow_outcome_t::reply_received, [&] {
+              return message_flow_event_t{message_flow_outcome_t::reply_received,
+                                          dispatch_error_surface_t::route_mesh_channel,
+                                          dispatch_message_kind_t::response,
+                                          packet_name, channel_name, std::nullopt,
+                                          reply_header.value ().correlation_id,
+                                          std::nullopt, std::nullopt, std::nullopt,
+                                          std::nullopt};
+          });
+        co_return body.value ();
+    }
+    catch (const framework_exception_t &error) {
+        co_return detail::result_access_t::failure<zlink::message_t> (error);
+    }
+    catch (const std::exception &error) {
+        co_return result_t<zlink::message_t>::failure (
+          framework_error_kind_t::internal_failure, error.what ());
+    }
+}
+
 task_t<zlink::message_t>
 channel_outbound_exchange_t::submit_request (std::string channel_name,
                                              std::string packet_name,
@@ -1231,6 +1417,15 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
       detail::message_flow_tracer_t (state->dispatch).mode ());
+    if (state->lane.run ([&] { return state->mesh_channel_requesters.contains (channel_name); }).get ()) {
+        co_return co_await submit_mesh_channel_request (
+          std::move (channel_name), std::move (packet_name), request_type,
+          std::move (encode_payload), timeout, metadata);
+    }
+    if (state->lane.run ([&] { return !state->channels.contains (channel_name); }).get ()) {
+        co_return result_t<zlink::message_t>::failure (
+          framework_error_kind_t::not_found, "ChannelName is not registered: " + channel_name);
+    }
     channel_runtime_t runtime (state);
     const auto *client = client_capability (*state, channel_name);
     const auto call_packet_name = std::move (packet_name);
@@ -1497,6 +1692,19 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
         state->outbound_calls.push_back (
           {"send", channel_name, "", call_packet_name, timeout, metadata});
     }).get ();
+    if (state->lane.run ([&] { return state->mesh_channel_senders.contains (channel_name); }).get ()) {
+        const auto sent = co_await submit_mesh_channel_send (
+          channel_name, call_packet_name, message_type, std::move (encode_payload), metadata);
+        if (!sent) {
+            if (sent.error ()) throw *sent.error ();
+            throw framework_exception_t (sent.error_kind (), "RouteMesh channel send failed");
+        }
+        co_return;
+    }
+    if (state->lane.run ([&] { return !state->channels.contains (channel_name); }).get ()) {
+        throw framework_exception_t (
+          framework_error_kind_t::not_found, "ChannelName is not registered: " + channel_name);
+    }
     const auto *client = client_capability (*state, channel_name);
     if (client == nullptr || !client->enabled) {
         throw framework_exception_t (
