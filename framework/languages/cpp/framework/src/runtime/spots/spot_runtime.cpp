@@ -13013,13 +13013,19 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                                       record.transferred_owner_byte_cost);
         return true;
     }
+    const bool route_send = record.kind == service::record_kind_t::spot_send
+                            || record.kind == service::record_kind_t::node_send
+                            || record.kind == service::record_kind_t::channel_send;
+    const bool route_request = record.kind == service::record_kind_t::spot_request
+                               || record.kind == service::record_kind_t::node_request
+                               || record.kind == service::record_kind_t::channel_request;
     const bool spot_record = owner.owner_kind == service::owner_kind_t::spot
                              && (record.kind == service::record_kind_t::spot_send
                                  || record.kind == service::record_kind_t::spot_request);
     const bool node_record = owner.owner_kind == service::owner_kind_t::node
                              && (record.kind == service::record_kind_t::node_send
                                  || record.kind == service::record_kind_t::node_request);
-    if (spot_record || node_record) {
+    if (route_send || route_request) {
         const auto route_client =
           _state->route_client_lane.run ([&] { return _state->route_client; }).get ();
         if (!route_client)
@@ -13131,9 +13137,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
         auto &actor_gateway = services.get_required<actor_gateway_runtime_t> ();
         spot_route_internal_dispatcher_t dispatcher (*this, actor_gateway, *route_client,
                                                      serializers);
-        if ((record.kind == service::record_kind_t::spot_send
-             || record.kind == service::record_kind_t::node_send)
-            && dispatcher.can_handle_send (header.value ().message_name)) {
+        if (route_send && dispatcher.can_handle_send (header.value ().message_name)) {
             const bool transfer_actor_leave_owner_reservation =
               node_record
               && header.value ().message_name == spot_actor_leave_route_command_t::packet_name
@@ -13167,9 +13171,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
             }
             return true;
         }
-        if ((record.kind == service::record_kind_t::spot_request
-             || record.kind == service::record_kind_t::node_request)
-            && dispatcher.can_handle_request (header.value ().message_name)) {
+        if (route_request && dispatcher.can_handle_request (header.value ().message_name)) {
             route_received_packet_t received{record.source_node_rid,
                                              record.operation_id.low == 0
                                                ? std::nullopt
