@@ -29,6 +29,18 @@ resource 정리가 끝난 뒤 그 generation에 하나뿐인 결과로 완료된
 어느 호출자가 먼저 불렀는지에 따라 관측이 달라지지 않는다. 정리 실패는 삼키지 않고 그 결과로
 전달하며, 분류는 [오류 모델](../00-foundation/07-framework-error-model.ko.md)을 따른다.
 
+**Callback 종료는 timer generation이 먼저 확정하고, 그 뒤에 Spot의 turn을 놓는다.**
+Callback이 반환하면 runtime은 그 generation의 실행 표시를 내리고 대기 중인 `cancel`의 terminal을
+확정한 뒤에야 Spot turn을 반납한다 — turn을 먼저 놓으면 같은 turn에서 이어지는 lifecycle 단계가
+아직 실행 중인 timer를 관찰하게 되고, 그 단계에서 부른 `cancel`이 자기 자신을 기다리게 된다. 이
+순서 덕분에 close가 실행하는 lifecycle callback에서 방금 끝난 timer를 `cancel`하면 이미 terminal이
+확정돼 있어 즉시 완료된다.
+
+**Callback 본문 안에서는 자기 generation의 `cancel` 완료를 기다리지 않는다.** 그 완료는 위 계약상
+그 callback이 끝나야 확정되므로 같은 callback 안에서 기다리면 완료될 수 없다 — callback 안에서는
+`cancel`을 호출만 하고 결과를 기다리지 않는다. 호출 즉시 새 callback 시작은 막히고, 결과는 그
+callback이 끝난 뒤 다른 호출자와 같은 하나의 terminal로 확정된다.
+
 **반복 timer가 handler 실행보다 빠르게 만료돼도 같은 key의 callback을 동시에 실행하지
 않는다.** 중복 만료는 하나의 pending record로 합칠 수 있다 — 동시 실행을 허용하면 같은
 timer의 두 callback이 같은 상태를 동시에 바꿀 수 있기 때문이다.
@@ -39,6 +51,8 @@ timer의 두 callback이 같은 상태를 동시에 바꿀 수 있기 때문이�
 | 이전 generation의 queue record | callback 실행 안 함 |
 | cancel | 해당 generation의 새 callback 시작을 막고, 이미 시작한 callback과 timer resource 정리가 끝나면 모든 cancel 호출자를 같은 성공 또는 실패 결과로 완료한다 |
 | 반복 timer가 handler보다 빠르게 만료 | 같은 key의 callback을 동시 실행하지 않음, 중복 만료를 pending record 1개로 병합 가능 |
+| Callback 반환 | generation의 실행 표시를 내리고 대기 중인 cancel terminal을 확정한 뒤 Spot turn 반납 |
+| Callback 안에서 자기 generation cancel | 호출만 하고 결과를 기다리지 않는다; terminal은 그 callback 종료 뒤 확정 |
 
 Callback은 다음 tick 정보를 받는다.
 
@@ -151,6 +165,10 @@ batch로 처리한다.
   timer resource 정리가 끝난 뒤 완료되며, 정리가 실패하면 모든 호출자가 같은 실패를 본다.
 - 반복 주기가 handler 실행 시간보다 짧아도 같은 key의 callback이 동시에 두 번 실행되지
   않는다.
+- Timer callback이 끝난 뒤 같은 turn에서 이어지는 lifecycle callback에서 그 timer를 `cancel`하면
+  기다림 없이 완료된다.
+- Timer callback 안에서 결과를 기다리지 않고 자기 generation의 `cancel`을 호출하면 그 callback은
+  정상으로 끝나고, cancel 결과는 callback 종료 뒤 확정된다.
 
 **Tick 정보**
 

@@ -1,0 +1,78 @@
+# rel-358 — C++ spot 내부 패킷에 핸들러가 없다 (Issue #358)
+
+worktree `/home/hep7/project/zlink-358-cpp`, branch `framework-cpp/358-spot-internal-packets`.
+한국어로 보고. 감독자가 검토·커밋한다. **git commit/push 금지.**
+
+먼저 읽는다: root `AGENTS.md` (§3, 특히 **"진단 먼저, 구현은 승인 뒤"**), `framework/AGENTS.md`.
+
+금지: `git commit`/`push`/`rm -rf`/`git clean`/`git stash`/`git checkout --`/`git restore`;
+**앵커 없는 `pkill -f`/`pgrep -f`(자기 셸을 죽인다)**;
+`doc/**`·`core/doc/**`·`framework/doc/**`·`scripts/local-package/**` 수정;
+샘플에서 기다리는 신호를 빼거나 timeout·retry 늘리기; 샘플에 internal helper 넣기;
+Core·binding을 고쳐 framework 문제를 보상하기.
+임시 산출물은 `/tmp/zlink-rel-358/`. **`/tmp`는 8 GB다. 쓰기 전에 `df -h /tmp` 확인.**
+
+## 이 job은 1단계(진단)다
+
+원인을 특정해 보고한다. **런타임 수정은 감독 승인 뒤**다.
+
+## 증상 (감독이 단독 실행으로 재현함)
+
+C++ 7샘플 중 TicTacToe·Bingo·ZoneWorld 3개가 실패한다. 부하 무관(시작 load 3.46).
+
+```
+warn  dispatch error reason=no_handler action=drop
+      packet=__zlink.spot.multicast channel=spot channel_route=route_mesh mesh=spot
+error dispatch error reason=no_handler action=reply_error
+      packet=__zlink.spot.actor.disconnect
+      exception=No routed request handler is registered for 'spot:__zlink.spot.actor.disconnect'.
+```
+
+`__zlink.` 접두는 framework 자신의 내부 패킷이다. **런타임이 보내는 패킷을 같은 런타임이 받지
+못한다.** `spot.actor.disconnect`가 `reply_error`로 끝나 `leave-completed`가 오지 않고 샘플이
+timeout한다.
+
+### 재현
+
+```bash
+export ZLINK_CPP_BUILD_DIR=/home/hep7/project/zlink-358-cpp/framework/languages/cpp/build/<빌드>
+export VCPKG_ROOT=/home/hep7/.cache/zlink/pr/vcpkg
+cd framework/languages/cpp && bash samples/run_samples.sh TicTacToe
+```
+
+빌드 디렉터리가 없으면 만든다. **`build-asan`이나 여러 개의 낡은 빌드 트리를 남기지 않는다** —
+`test_cpp_framework_layout_contract`가 자기 것 외의 빌드 산출물 내용을 읽어 timeout한다.
+
+## 조사 순서
+
+1. **세 샘플이 같은 원인인지 먼저 가른다.** Bingo·ZoneWorld의 "stream connector wait timed out"이
+   같은 `no_handler`에서 오는지 확인한다. 다르면 따로 보고한다.
+2. `__zlink.spot.actor.disconnect`와 `__zlink.spot.multicast`의 **송신 지점과 수신 등록 지점**을
+   찾는다. 관련: `framework/src/runtime/spots/spot_route_internal_dispatcher.cpp`,
+   `spot_route_packets.{hpp,cpp}`, `runtime/mesh/mesh_node_runtime.cpp`,
+   `runtime/channels/channel_runtime.cpp`.
+3. **교차언어 대조가 이 조사의 핵심이다.** .NET과 Node는 같은 구성에서 7샘플을 모두 통과한다.
+   .NET이 이 두 패킷의 핸들러를 **어디서 어떻게 등록하는지** 찾아 C++와 나란히 놓는다.
+   C++에만 없는 것이 무엇인지 `file:line`으로 특정한다.
+4. 언제부터인지 `git log -S '__zlink.spot.actor.disconnect'` 등으로 좁힌다. 최근 제거·이동
+   커밋이 있으면 그 의도를 먼저 읽는다.
+
+## 스펙 취급
+
+**스펙을 수정하지 않는다.** 감독자만 한다. 실패가 스펙과 관련되면 셋 중 무엇인지 판별해 보고한다.
+
+1. 구현이 스펙을 안 지킴 — 조항 `file:line` 인용
+2. 스펙이 침묵해 구현이 갈라짐 — 언어별 차이 대조
+3. 스펙과 무관
+
+확신이 없으면 "미판별"로 쓰고 근거만 남긴다.
+
+## 보고 (AGENTS §4 필수 4줄 포함)
+
+1. **판정** — 세 샘플이 같은 원인인가
+2. **원인** `file:line` — 무엇이 등록되지 않는가, 왜
+3. **소유 계층**·spec 조항·**교차언어 대조**(.NET·Node가 하는 것과 C++가 빠뜨린 것)
+4. **분류** A/B/C/D
+5. 수정 제안(고치지 말고 어디를 어떻게 고칠지만), 수정 전/후 규칙 수, BLOCKERS
+
+1.5시간 상한.
