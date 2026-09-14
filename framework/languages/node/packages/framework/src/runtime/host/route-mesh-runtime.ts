@@ -146,15 +146,13 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       };
     });
     const channels = Object.entries(this.options.meshOptions.get(meshName)?.meshChannels ?? {})
-      .map(([channelName, channel]) => {
+      .map(([channelName]) => {
         const readyMemberCount = BigInt(peerChannels.filter((entry, index) =>
           peers[index]?.state === ZLinkPeerState.Ready
           && entry.names.some((name, channelIndex) =>
             name === channelName && (entry.weights[channelIndex] ?? 0) > 0)
         ).length);
-        const localWeight = descriptor?.channelWeights[channelName] ?? channel.weight ?? 100;
-        const readyTargetCount = Number(readyMemberCount)
-          + (channel.server === true && localWeight > 0 ? 1 : 0);
+        const readyTargetCount = Number(readyMemberCount);
         return { channelName, isReady: readyTargetCount > 0, readyTargetCount };
       });
     const backendTopologyState = backendState(status.state);

@@ -299,12 +299,7 @@ export class ServiceTopologyRegistry {
     return this.selectWeightedCycle(
       `channel:${channelName}`,
       () => {
-        const local: AdmittedServicePeer = {
-          descriptor: cloneDescriptor(this.local),
-          connectionId: 'local',
-          connectionDiscriminator: 'local'
-        };
-        return [local, ...this.peersByRid.values()].map(peer => ({
+        return [...this.peersByRid.values()].map(peer => ({
           peer: clonePeer(peer),
           channel: findChannel(peer.descriptor, channelName)
         })).filter((value): value is {

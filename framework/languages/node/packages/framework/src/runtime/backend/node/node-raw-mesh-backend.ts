@@ -647,10 +647,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     channelName: string,
     parts: MessageLike | readonly MessageLike[]
   ): Promise<SubmitResultValue> {
-    return await this.requireRuntime().sendToChannel(
+    return this.requireRuntime().sendToChannel(
       channelName,
       encodeMultipartApplicationFrame(parts)
-    ) ? SubmitResult.Ok : SubmitResult.NotConnected;
+    );
   }
 
   requestToChannel(

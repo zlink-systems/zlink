@@ -7,7 +7,7 @@ import type {
   ZLinkRawReceivedRecord,
   ZLinkRawRouterPort
 } from '../backend/raw-binding-port';
-import { RequestResult } from '../backend/runtime-values';
+import { RequestResult, SubmitResult } from '../backend/runtime-values';
 import type {
   ApplicationJobPermitPort,
   ApplicationJobQueuePort
@@ -487,34 +487,17 @@ export class RawServiceMeshRuntime {
   async sendToChannel(
     channelName: string,
     payload: ServiceApplicationPayloadInput
-  ): Promise<boolean> {
+  ): Promise<SubmitResult> {
     const selected = this.topology.selectChannel(
       channelName,
-      peer => this.isLocalOrReadyPeer(peer.descriptor.nodeRoutingId)
+      peer => this.isPeerRouteReady(peer.descriptor.nodeRoutingId)
     );
-    if (selected === undefined) return false;
+    if (selected === undefined) return SubmitResult.NotFound;
     const applicationFrame = this.applicationFrame(payload);
-    if (selected.descriptor.nodeRoutingId === this.descriptor.nodeRoutingId) {
-      const applicationJobOwner = await this.reserveLocalIngress();
-      try {
-        const applicationJob = await applicationJobOwner.acquire('application');
-        const accepted = this.mailbox.tryEnqueue({
-          owner: `channel:${channelName}`,
-          domain: 'application',
-          parts: [encodeChannelSendHeader(channelName), applicationFrame],
-          sourceRoutingId: this.descriptor.nodeRoutingId,
-          applicationJob
-        });
-        if (!accepted) applicationJob.close();
-        return accepted;
-      } finally {
-        applicationJobOwner.close();
-      }
-    }
-    return this.send(selected.descriptor.nodeRoutingId, [
+    return await this.send(selected.descriptor.nodeRoutingId, [
       encodeChannelSendHeader(channelName),
       applicationFrame
-    ]);
+    ]) ? SubmitResult.Ok : SubmitResult.NotConnected;
   }
 
   requestToNode(
@@ -532,16 +515,11 @@ export class RawServiceMeshRuntime {
   ): PendingOperation<RawServiceRequestResult> | undefined {
     const selected = this.topology.selectChannel(
       channelName,
-      peer => this.isLocalOrReadyPeer(peer.descriptor.nodeRoutingId)
+      peer => this.isPeerRouteReady(peer.descriptor.nodeRoutingId)
     );
     return selected === undefined
       ? undefined
       : this.requestToTarget(selected.descriptor.nodeRoutingId, payload, timeoutMs, channelName);
-  }
-
-  private isLocalOrReadyPeer(nodeRoutingId: string): boolean {
-    return nodeRoutingId === this.descriptor.nodeRoutingId
-      || this.isPeerRouteReady(nodeRoutingId);
   }
 
   setServiceIngress(handler: RawServiceIngressHandler): void {
@@ -1194,15 +1172,12 @@ export class RawServiceMeshRuntime {
             peer => {
               const candidate = peer.descriptor.nodeRoutingId;
               return !excludedTargets.has(candidate)
-                && this.isLocalOrReadyPeer(candidate);
+                && this.isPeerRouteReady(candidate);
             }
           );
           if (alternate === undefined) break;
           selectedTargetNodeRoutingId = alternate.descriptor.nodeRoutingId;
-          if (
-            selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId
-            || this.isPeerRouteReady(selectedTargetNodeRoutingId)
-          ) {
+          if (this.isPeerRouteReady(selectedTargetNodeRoutingId)) {
             break;
           }
           excludedTargets.add(selectedTargetNodeRoutingId);

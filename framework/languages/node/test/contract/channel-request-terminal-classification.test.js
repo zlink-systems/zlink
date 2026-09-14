@@ -77,3 +77,29 @@ test('malformed reply rejections synthesize ProtocolError, not NotConnected (rou
     { terminalResult: RequestResult.NotConnected, failureCode: 0 }
   );
 });
+
+test('Mesh native completion terminals use request coarse and fine error owners', async () => {
+  const cases = [
+    [RequestResult.NotFound, 0, framework.ZLinkFrameworkErrorKind.NotFound],
+    [RequestResult.TimedOut, 0, framework.ZLinkFrameworkErrorKind.DeadlineExceeded],
+    [RequestResult.Backpressured, 0, framework.ZLinkFrameworkErrorKind.DeadlineExceeded],
+    [RequestResult.NotConnected, 0, framework.ZLinkFrameworkErrorKind.Unavailable],
+    [RequestResult.ProtocolError, 16, framework.ZLinkFrameworkErrorKind.ProtocolError]
+  ];
+  class MeshProbe { constructor() { this.value = 'probe'; } }
+  for (const [terminalResult, failureErrno, expectedKind] of cases) {
+    let submitted = 0;
+    const node = { requestToChannel() { submitted++; return { high: 1n, low: 1n }; } };
+    const table = { async submit(attempt) { attempt(); return { terminalResult, failureErrno, parts: [] }; } };
+    const transport = new framework.ZLinkRuntimeRouteTransport(
+      () => undefined, undefined,
+      () => ({ meshNode: () => node, meshCompletionTable: () => table })
+    );
+    await assert.rejects(transport.requestToChannel('mesh', 'api', 'MeshProbe', new MeshProbe(), 1000), error => {
+      assert.equal(error.kind, expectedKind, `${terminalResult}/${failureErrno}`);
+      assert.equal(error.physicalSubmission, true);
+      return true;
+    });
+    assert.equal(submitted, 1);
+  }
+});
