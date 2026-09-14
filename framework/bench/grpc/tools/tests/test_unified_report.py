@@ -48,14 +48,52 @@ class UnifiedReportTest(unittest.TestCase):
         # The two units share a scale; only the name says what was counted.
         self.assertEqual(rendered.count("12.346"), 2)
 
-    def test_columns_include_source_and_target_resources(self):
+    def test_columns_include_bandwidth_and_source_and_target_resources(self):
         self.write(cell("zlink-c", "request-serial"))
         header = bench_report.render(str(self.run)).splitlines()[0]
         self.assertEqual(
             [name.strip() for name in header.strip("| ").split("|")],
-            ["Scenario", "Size", "Throughput", "Lat.Mean(ms)", "Lat.P95(ms)", "Lat.P99(ms)",
+            ["Scenario", "Size", "Throughput", "Bandwidth(MB/s)",
+             "Lat.Mean(ms)", "Lat.P95(ms)", "Lat.P99(ms)",
              "Source CPU(%)", "Source Mem(MB)", "Target CPU(%)", "Target Mem(MB)"])
-        self.assertNotIn("Bandwidth", header)
+
+    def test_bandwidth_reuses_the_normalized_record_measurement(self):
+        self.write(cell("zlink-dotnet", "request-serial", bandwidth_mb_s=50.56789),
+                   cell("zlink-dotnet", "send-saturation", bandwidth_mb_s=60.76543))
+        rows = bench_report.render(str(self.run)).splitlines()[2:4]
+        values = [[value.strip() for value in row.strip("| ").split("|")] for row in rows]
+        self.assertEqual([row[3] for row in values], ["50.568", "60.765"])
+
+    def test_missing_bandwidth_is_not_invented_and_zero_is_preserved(self):
+        self.write(cell("zlink-dotnet", "request-serial", bandwidth_mb_s=None),
+                   cell("zlink-dotnet", "send-saturation", bandwidth_mb_s=0))
+        rows = bench_report.render(str(self.run)).splitlines()[2:4]
+        values = [[value.strip() for value in row.strip("| ").split("|")] for row in rows]
+        self.assertEqual([row[3] for row in values], ["n/a", "0.000"])
+
+    def test_bandwidth_explains_counted_direction_and_decimal_units(self):
+        self.write(cell("zlink-dotnet", "request-serial"))
+        rendered = bench_report.render(str(self.run))
+        self.assertIn("derived application payload MB/s (1 MB = 1,000,000 bytes)", rendered)
+        self.assertIn("completed requests/s x response Size / 1,000,000", rendered)
+        self.assertIn("(64-byte requests excluded)", rendered)
+        self.assertIn("send-saturation target-received messages/s x Size / 1,000,000", rendered)
+        self.assertIn("Protocol overhead is excluded.", rendered)
+
+    def test_send_bandwidth_uses_target_received_not_source_submitted(self):
+        self.write(cell("zlink-dotnet", "send-saturation",
+                        role="source",
+                        trigger={"runId": "run", "cellId": "send", "pattern": "send-saturation",
+                                 "payloadBytes": 4096, "durationMs": 5000, "warmup": 0,
+                                 "endpoint": "http://127.0.0.1:5200/bench/start",
+                                 "receivedAtUnixMs": 1788937000000},
+                        streams={"count": 1, "inFlightPerStream": 8},
+                        target_stats={"received": 5000, "errors": 0, "drainMs": 20},
+                        submitted=10000, bandwidth_mb_s=8.192))
+        row = bench_report.render(str(self.run)).splitlines()[2]
+        values = [value.strip() for value in row.strip("| ").split("|")]
+        # 5000 target receipts / 5 seconds x 4096 bytes / 1,000,000.
+        self.assertEqual(values[2:4], ["1.000 Kmsg/s", "4.096"])
 
     def test_resource_values_keep_source_and_target_distinct(self):
         self.write(cell("zlink-dotnet", "send-saturation",
@@ -63,14 +101,14 @@ class UnifiedReportTest(unittest.TestCase):
                         server_cpu_percent=8.09, server_memory_mb=495.18359375))
         row = bench_report.render(str(self.run)).splitlines()[2]
         values = [value.strip() for value in row.strip("| ").split("|")]
-        self.assertEqual(values[6:], ["18.920", "2951.719", "8.090", "495.184"])
+        self.assertEqual(values[7:], ["18.920", "2951.719", "8.090", "495.184"])
 
     def test_missing_resources_are_not_reported_as_zero(self):
         self.write(cell("zlink-c", "request-serial",
                         client_cpu_percent=0, server_memory_mb=0))
         row = bench_report.render(str(self.run)).splitlines()[2]
         values = [value.strip() for value in row.strip("| ").split("|")]
-        self.assertEqual(values[6:], ["0.000", "n/a", "n/a", "0.000"])
+        self.assertEqual(values[7:], ["0.000", "n/a", "n/a", "0.000"])
 
     def test_every_language_renders_through_the_same_function(self):
         # A row missing a measurement says so rather than printing a zero.
@@ -154,6 +192,32 @@ class RunnerContractTest(unittest.TestCase):
         runner = (TOOLS.parent / "dotnet" / "run_local.sh").read_text()
         self.assertIn('-c "${CONFIGURATION}"', runner)
         self.assertIn('-p:ShouldUnsetParentConfigurationAndPlatform=false', runner)
+
+    def test_dotnet_help_lists_options_and_serial_example(self):
+        for flag in ("--help", "-h"):
+            with self.subTest(flag=flag):
+                result = self.run_runner("dotnet/run_local.sh", flag)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, "")
+                for option in ("--help", "--scenario", "--implementation",
+                               "--payload-sizes", "--duration-seconds",
+                               "--warmup-seconds", "--skip-build", "--output"):
+                    self.assertIn(option, result.stdout)
+                self.assertIn("bash run_local.sh --scenario request-serial", result.stdout)
+                self.assertIn("64-byte request / 4096-byte response", result.stdout)
+
+    def test_dotnet_help_does_not_validate_environment_or_create_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "not-created"
+            result = self.run_runner(
+                "dotnet/run_local.sh", "--output", str(output),
+                "--scenario", "request-serial", "--help",
+                OUTROOT="retired-input", SCENARIO="invalid-scenario",
+                DURATION_SECONDS="invalid-duration")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stderr, "")
+            self.assertIn("Usage:", result.stdout)
+            self.assertFalse(output.exists())
 
     def test_every_runner_rejects_a_retired_input_by_name(self):
         for runner in self.RUNNERS:

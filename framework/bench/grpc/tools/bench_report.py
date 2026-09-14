@@ -12,6 +12,8 @@ and ``Kmsg/s`` for ``send-saturation`` (one-way messages the target received).
 The number is the same scale in both; the label says what was counted.
 Source and target CPU percentages and memory in MB come from the cell records;
 unavailable measurements are printed as ``n/a`` rather than zero.
+Bandwidth reuses the records' application-payload MB/s: response payloads for
+requests and received payloads for sends, not both directions or wire bytes.
 """
 
 from __future__ import annotations
@@ -25,11 +27,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from benchagg.readers import read_run  # noqa: E402
 
 COLUMNS = (
-    "Scenario", "Size", "Throughput", "Lat.Mean(ms)", "Lat.P95(ms)", "Lat.P99(ms)",
+    "Scenario", "Size", "Throughput", "Bandwidth(MB/s)",
+    "Lat.Mean(ms)", "Lat.P95(ms)", "Lat.P99(ms)",
     "Source CPU(%)", "Source Mem(MB)", "Target CPU(%)", "Target Mem(MB)",
 )
 # The widest scenario name in the grid is ``zlink-framework-dotnet-request-backpressure``.
-WIDTHS = (43, 6, 15, 12, 11, 11, 13, 14, 13, 14)
+WIDTHS = (43, 6, 15, 15, 12, 11, 11, 13, 14, 13, 14)
 
 
 def throughput_cell(pattern: str, value: float | None) -> str:
@@ -54,15 +57,22 @@ def render(run_dir: str) -> str:
             cell.key.scenario().ljust(WIDTHS[0]),
             str(cell.key.payload_size).rjust(WIDTHS[1]),
             throughput_cell(cell.key.pattern, cell.throughput_per_second).rjust(WIDTHS[2]),
-            number(cell.latency_mean_ms).rjust(WIDTHS[3]),
-            number(cell.latency_p95_ms).rjust(WIDTHS[4]),
-            number(cell.latency_p99_ms).rjust(WIDTHS[5]),
-            number(cell.client_cpu_percent).rjust(WIDTHS[6]),
-            number(cell.client_memory_mb).rjust(WIDTHS[7]),
-            number(cell.server_cpu_percent).rjust(WIDTHS[8]),
-            number(cell.server_memory_mb).rjust(WIDTHS[9]),
+            number(cell.bandwidth_mb_s).rjust(WIDTHS[3]),
+            number(cell.latency_mean_ms).rjust(WIDTHS[4]),
+            number(cell.latency_p95_ms).rjust(WIDTHS[5]),
+            number(cell.latency_p99_ms).rjust(WIDTHS[6]),
+            number(cell.client_cpu_percent).rjust(WIDTHS[7]),
+            number(cell.client_memory_mb).rjust(WIDTHS[8]),
+            number(cell.server_cpu_percent).rjust(WIDTHS[9]),
+            number(cell.server_memory_mb).rjust(WIDTHS[10]),
         )
         lines.append("| " + " | ".join(row) + " |")
+    lines.append(
+        "# Bandwidth is derived application payload MB/s (1 MB = 1,000,000 bytes): "
+        "completed requests/s x response Size / 1,000,000 (64-byte requests excluded); "
+        "send-saturation target-received messages/s x Size / 1,000,000. "
+        "Protocol overhead is excluded."
+    )
     for note in notes:
         lines.append(f"# {note}")
     return "\n".join(lines) + "\n"
