@@ -169,6 +169,12 @@ public static class ServerApplication
         if (config.topology == "routemesh" && config.mode != "publish")
         {
             var mesh = services.GetRequiredService<IZLinkRouteMeshRuntime>().GetStatus(config.meshName!);
+            // IsReady also permits local traffic with no peers (topology monitoring §4).
+            // This caller's object target is on the separate server role, so §16.1
+            // infrastructure readiness requires a ready remote connection before its probe.
+            var remoteObjectTarget = config.source && config.objectRole == "Client"
+                && !config.scenario.StartsWith("cs-", StringComparison.Ordinal);
+            infrastructure &= !remoteObjectTarget || mesh.ReadyPeerCount > 0;
             // Channel messaging §3: RouteMesh excludes the sending node itself from candidates.
             // Only the source needs a selectable remote target; the receiver proves dispatch by echo.
             infrastructure &= mesh.IsReady && (!(config.source && (config.role == "spot" && config.scenario.StartsWith("s2s-spot", StringComparison.Ordinal) || config.scenario == "channel-echo-only")) || mesh.Channels.Any(c =>

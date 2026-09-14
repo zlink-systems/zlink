@@ -44,7 +44,15 @@ public class Program {
             boolean ready=runtime.status().isReady();
             if(config.publish()&&!config.source())ready&=context.getBean(ZLinkFanoutRuntime.class).snapshot(config.text("channelName")).isReady();
             else if(config.text("topology").equals("clientserver"))ready&=context.getBean(ZLinkClientServerRuntime.class).isReady(config.text("channelName"));
-            else if(!config.publish()&&!(config.cs()&&!config.objects())&&!config.listener().isEmpty()&&!config.text("meshName").isEmpty())ready&=context.getBean(ZLinkRouteMeshRuntime.class).isReady(config.text("meshName"));
+            else if(!config.publish()&&!(config.cs()&&!config.objects())&&!config.listener().isEmpty()&&!config.text("meshName").isEmpty()){
+                var mesh=context.getBean(ZLinkRouteMeshRuntime.class).snapshot(config.text("meshName"));
+                ready&=mesh.isReady();
+                if(config.source()&&!config.cs()){
+                    if(config.objects()&&!config.objectServer()&&!config.spotDriver())ready&=mesh.readyPeerCount()>0;
+                    else if(!config.objects()||config.spotDriver())ready&=mesh.channels().stream().anyMatch(channel->
+                        channel.channelName().equals(config.text("channelName"))&&channel.isReady()&&channel.readyTargetCount()>0);
+                }
+            }
             return ready;
         });
         admin.start();Runtime.getRuntime().addShutdownHook(new Thread(admin::close));
