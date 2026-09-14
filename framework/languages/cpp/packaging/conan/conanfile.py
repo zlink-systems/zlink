@@ -31,7 +31,7 @@ class ZlinkFrameworkConan(ConanFile):
 
     def requirements(self):
         for dependency in (
-            "zlink-cpp/1.0.0",
+            "zlink-cpp/1.1.0",
             "boost/1.85.0",
             "nlohmann_json/3.11.3",
             "openssl/[>=3.0 <4]",

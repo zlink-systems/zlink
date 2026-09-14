@@ -13,6 +13,30 @@ Design decisions are in `doc/plan/c016-worklog/decisions.ko.md` (D-B…).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-14
+
+Packaging fix for the Linux release archives. The library itself is
+unchanged from 1.0.0: same public C API, same `libzlink.vers`, same
+`libzlink.so.0` SONAME.
+
+### Fixed
+
+- The Linux release archives ship `libzlink.so` together with a
+  `libzlink.so.0` symlink, the name the dynamic linker resolves. The
+  1.0.0 archives instead carried a `libzlink.so.1` copy and no
+  `libzlink.so.0`, so consumers that link against the archive directly
+  (the C++ binding, the vcpkg port and the Conan recipe) failed at load
+  time. Use 1.1.0 rather than 1.0.0 for those consumers; packages
+  installed from npm, NuGet and Maven Central were unaffected.
+
+### Changed
+
+- The SONAME major is owned by `LIBZLINK_ABI_SOVERSION` in the root
+  `VERSION` file. `core/CMakeLists.txt`, the Linux build script and the
+  binding release workflow read it from there instead of deriving it
+  from the package version. See
+  `doc/building/release-prep/2026-09-14-core-abi-soversion.ko.md`.
+
 ## [1.0.0] - 2026-09-14
 
 First stable release. The public C API (`core/include/**`,
