@@ -82,5 +82,16 @@ if (!library) {
   fail(`Core library is missing ${libraryNames.join(' or ')} from ${libraryDirs.join(' or ')}`);
 }
 
-const values = { prefix: prefix || '', include: includeDir, library, version };
+// gyp evaluates condition values as Python string literals. Normalize every
+// path emitted by this script so Windows path separators cannot become escapes.
+function gypPath(value) {
+  return value.replace(/\\/g, '/');
+}
+
+const values = {
+  prefix: gypPath(prefix || ''),
+  include: gypPath(includeDir),
+  library: gypPath(library),
+  version,
+};
 process.stdout.write(values[query]);
