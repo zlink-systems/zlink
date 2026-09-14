@@ -288,7 +288,7 @@ class type_mismatch_spot_handler_t
         auto join_reply =
           current
             ->relay_request ("JoinReq",
-                             zlink::message_t::from_json (e2e::join_req_t{
+                             zlink::framework::message_t::from (e2e::join_req_t{
                                .key = request.probe,
                                .actor_id = actor_id,
                                .display_name = "SM-A7",
@@ -304,7 +304,7 @@ class type_mismatch_spot_handler_t
         auto seeded =
           current
             ->relay_request ("StateReq",
-                             zlink::message_t::from_json (
+                             zlink::framework::message_t::from (
                                e2e::state_req_t{.op = "set", .amount = 17}))
             .async ()
             .result ();
@@ -322,7 +322,7 @@ class type_mismatch_spot_handler_t
                 auto observed =
                   current
                     ->relay_request ("StateReq",
-                                     zlink::message_t::from_json (
+                                     zlink::framework::message_t::from (
                                        e2e::state_req_t{.op = "noop", .amount = 0}))
                     .async ()
                     .result ();
@@ -339,7 +339,7 @@ class type_mismatch_spot_handler_t
                                   .rejected = true,
                                   .error_kind = "spot_type_mismatch",
                                   .spot_name = spot_name,
-                                  .value = observed.value ().parse_json<e2e::state_res_t> ().value})
+                                  .value = observed.value ().decode<e2e::state_res_t> ().value})
                                   .dump ();
                 return response;
             }

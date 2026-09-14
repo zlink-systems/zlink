@@ -2,8 +2,8 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
   internalFrameworkErrorKind,
-  internalFrameworkErrorKindFromWireReply,
-  isCanonicalWireReplyTerminal
+  internalFrameworkErrorKindFromWireFailureCode,
+  requestResultToPublicErrorKind
 } from '../framework-errors-internal';
 import { ZLinkBufferMessage } from '../backend/runtime-message';
 import {
@@ -16,9 +16,6 @@ import type {
   ZLinkBackendMeshNode,
   ZLinkBackendSpot
 } from '../backend/contracts';
-import type {
-  ZLinkFrameworkInternalErrorKind as ZLinkFrameworkInternalErrorKindType
-} from '../framework-errors-internal';
 import {
   ZLinkFrameworkException
 } from '../../contracts';
@@ -1121,28 +1118,17 @@ function mapMeshSubmissionError(error: unknown, operation: string): Error {
 }
 
 function meshRequestFailure(meshName: string, result: number, nativeErrno: number): ZLinkFrameworkException {
-  const canonical = isCanonicalWireReplyTerminal(result, nativeErrno);
-  const wireKind = canonical
-    ? internalFrameworkErrorKindFromWireReply(result, nativeErrno)
+  const fineKind = nativeErrno !== 0
+    ? internalFrameworkErrorKindFromWireFailureCode(nativeErrno)
     : undefined;
-  const kind: ZLinkFrameworkInternalErrorKindType = !canonical
-    ? ZLinkFrameworkInternalErrorKind.RequestProtocolError
-    : result === RequestResult.NotFound
-      ? ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
-      : result === RequestResult.TimedOut
-        ? ZLinkFrameworkInternalErrorKind.DeadlineExceeded
-        : result === RequestResult.Terminated
-          ? ZLinkFrameworkInternalErrorKind.RuntimeShutdown
-          : result === RequestResult.Conflict || result === RequestResult.InternalError
-            ? wireKind ?? ZLinkFrameworkInternalErrorKind.RequestProtocolError
-            : result === RequestResult.NotConnected || result === RequestResult.Backpressured
-              ? ZLinkFrameworkInternalErrorKind.RouteNotConnected
-              : wireKind ?? ZLinkFrameworkInternalErrorKind.RequestFailed;
-  const error = createInternalFrameworkException(
-    kind,
-    `MeshNode '${meshName}' request failed with result ${result} and errno ${nativeErrno}.`,
-    result === RequestResult.NotConnected || result === RequestResult.Backpressured
-  );
+  const message = `MeshNode '${meshName}' request failed with result ${result} and errno ${nativeErrno}.`;
+  const error = fineKind !== undefined
+    ? createInternalFrameworkException(
+        fineKind,
+        message,
+        result === RequestResult.NotConnected || result === RequestResult.Backpressured
+      )
+    : new ZLinkFrameworkException(requestResultToPublicErrorKind(result), message);
   // An operation id was returned before this completion was observed. The
   // application envelope therefore crossed the native submission boundary,
   // including terminal NotFound replies; callers must not resubmit it through

@@ -89,10 +89,15 @@ internal sealed class ZLinkEndpointConnections : IZLinkEndpointConnections, IRea
         }
     }
 
-    public IReadOnlyList<string> ListConnections()
-    {
-        return AwaitStateLane(_lane.RunAsync(() => _endpoints.ToArray()));
-    }
+    // State ownership §5: IZLinkEndpointConnections has a public synchronous
+    // snapshot signature. Capture is complete before return; this turn only
+    // copies endpoints and reacquires no external gate. Internal async
+    // classification awaits the same owner turn.
+    public IReadOnlyList<string> ListConnections() =>
+        AwaitStateLane(ListConnectionsAsync());
+
+    internal ValueTask<IReadOnlyList<string>> ListConnectionsAsync() =>
+        _lane.RunAsync<IReadOnlyList<string>>(() => _endpoints.ToArray());
 
     internal IDisposable Attach(Action<string> connect, Action<string> disconnect)
     {

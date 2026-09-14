@@ -139,7 +139,7 @@ public final class Program {
                     .setActorCapacity(config.actorCapacity())
                     .setSpotCapacity(config.spotCapacity());
                 node.configureRouterSocket().setReceiveHighWaterMark(1);
-                node.channelName(Contracts.SPOT_CHANNEL)
+                node.channel(Contracts.SPOT_CHANNEL)
                     .server()
                     .addRequestHandler(
                         WorkReqHandler.class,

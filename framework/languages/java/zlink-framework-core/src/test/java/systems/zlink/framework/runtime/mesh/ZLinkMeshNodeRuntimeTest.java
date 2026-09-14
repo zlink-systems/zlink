@@ -52,7 +52,7 @@ class ZLinkMeshNodeRuntimeTest {
         registration.setPlacementWeight(300);
         registration.listen("inproc://game-1");
         registration.objects().client();
-        registration.channelName("orders").server().setWeight(2);
+        registration.channel("orders").server().setWeight(2);
         registration.peerConnections().connect(
             RoutingId.from("game-2"),
             "inproc://game-2");
@@ -105,7 +105,7 @@ class ZLinkMeshNodeRuntimeTest {
     void startInstallsIngressOwnersBeforeTheBackendCanReceive() {
         MeshNodeRegistration registration = new MeshNodeRegistration("game");
         registration.listen("inproc://game-ingress-owner");
-        registration.channelName("orders").server();
+        registration.channel("orders").server();
         RecordingMeshNode node = new RecordingMeshNode();
         AtomicInteger immediateDispatches = new AtomicInteger();
         ZLinkMeshApplicationReceiver receiver = new ZLinkMeshApplicationReceiver() {

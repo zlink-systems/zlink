@@ -151,7 +151,8 @@ export function createIntegrationRouteClient(
   return new DefaultZLinkRouteClient(
     registration,
     host.routeTransport,
-    host.spotRouterChannelIdForMesh
+    host.spotRouterChannelIdForMesh,
+    host.channelTransport
   );
 }
 

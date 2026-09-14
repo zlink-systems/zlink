@@ -620,11 +620,11 @@ class raw_stream_session_t final : public fw::packet_stream_session_t
 
     fw::task_t<void> on_packet (fw::stream_t &stream,
                                 const fw::session_message_context_t &dispatch,
-                                const zlink::message_t &payload) override
+                                const zlink::framework::message_t &payload) override
     {
         _sink.append ("raw|" + std::string (dispatch.packet_name) + "|"
-                      + payload.to_string ());
-        stream.reply_packet (zlink::message_t::from_json (std::string ("pong"))).async ();
+                      + payload.decode<nlohmann::json> ().dump ());
+        stream.reply_packet (zlink::framework::message_t::from (std::string ("pong"))).async ();
         co_return;
     }
 

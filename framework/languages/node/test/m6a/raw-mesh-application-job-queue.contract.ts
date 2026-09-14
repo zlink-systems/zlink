@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { createContext, createRouterSocket } from '@zlink-systems/zlink';
+import { ZLinkNodeEventLoopPoller } from '../../packages/framework/src/runtime/backend/node/node-event-loop-poller';
 
 import {
   ApplicationIngressRecordOwner
@@ -58,9 +60,11 @@ test('raw receive waits for the host permit before touching the binding', async 
   let receives = 0;
   const router = {
     setRoutingId() {},
+    setReceiveFlowState() {},
     bind() {},
     localEndpoint: () => 'inproc://raw-job-queue',
-    monitor: () => ({ statusReady: () => false, close() {} }),
+    monitor: () => ({ drain: () => 0, statusReady: () => false, close() {} }),
+    poll: () => false,
     receive: () => {
       receives += 1;
       return undefined;
@@ -101,9 +105,11 @@ test('raw shutdown cancels a pre-receive capacity wait without touching the bind
   let receives = 0;
   const router = {
     setRoutingId() {},
+    setReceiveFlowState() {},
     bind() {},
     localEndpoint: () => 'inproc://raw-job-queue-cancel',
-    monitor: () => ({ statusReady: () => false, close() {} }),
+    monitor: () => ({ drain: () => 0, statusReady: () => false, close() {} }),
+    poll: () => false,
     receive: () => {
       receives += 1;
       return undefined;
@@ -150,9 +156,11 @@ test('raw protocol drop closes its retained Core record and permit exactly once'
   let next = true;
   const router = {
     setRoutingId() {},
+    setReceiveFlowState() {},
     bind() {},
     localEndpoint: () => 'inproc://raw-job-queue-protocol',
-    monitor: () => ({ statusReady: () => false, close() {} }),
+    monitor: () => ({ drain: () => 0, statusReady: () => false, close() {} }),
+    poll: () => false,
     receive: () => {
       if (!next) return undefined;
       next = false;
@@ -245,4 +253,64 @@ test('mailbox shutdown closes queued permits and ingress records without a leak'
   mailbox.close();
   assert.equal(retainedCloseCount, 1);
   assert.equal(applicationJobs.snapshot().permitsInUse, 0n);
+});
+
+
+test('idle Mesh platform turns drive completion without fabricating receive readiness', async () => {
+  let polls = 0;
+  let receives = 0;
+  let completionPending = true;
+  let completions = 0;
+  let dataReady = false;
+  const router = {
+    setRoutingId() {}, bind() {}, close() {},
+    setReceiveFlowState() {},
+    localEndpoint: () => 'inproc://raw-platform-turn',
+    monitor: () => ({ drain: () => 0, statusReady: () => false, close() {} }),
+    poll() {
+      polls++;
+      if (completionPending) { completionPending = false; completions++; }
+      return dataReady;
+    },
+    receive() { receives++; dataReady = false; return undefined; }
+  } as unknown as ZLinkRawRouterPort;
+  const binding = {
+    createHost: () => ({ createRouter: () => router, close() {}, shutdown() {} } as unknown as ZLinkRawHostPort)
+  } satisfies ZLinkRawBindingPort;
+  const runtime = new RawServiceMeshRuntime({
+    descriptor: descriptor(), bindingPort: binding, applicationJobQueue: queue()
+  });
+  runtime.start();
+  try {
+    assert.equal(await runtime.pumpBatch(false), false);
+    assert.equal(polls, 1);
+    assert.equal(completions, 1);
+    assert.equal(receives, 0);
+    dataReady = true;
+    assert.equal(await runtime.pumpBatch(false), false);
+    assert.equal(receives, 1);
+    assert.equal(await runtime.pumpBatch(false), false);
+    assert.equal(polls, 3);
+    assert.equal(receives, 1);
+  } finally { runtime.close(); }
+});
+
+test('platform poll does not invoke receive callbacks when idle or disposed', async () => {
+  const context = createContext();
+  const socket = createRouterSocket(context);
+  let callbacks = 0;
+  const poller = new ZLinkNodeEventLoopPoller(socket, true, () => { callbacks++; });
+  // Mesh replaces the initial callback with its DATA wake on the same watch.
+  socket.setReadableHandler(() => { callbacks++; });
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    callbacks = 0;
+    assert.equal(poller.poll(), 0);
+    assert.equal(callbacks, 0);
+    poller.dispose();
+    assert.equal(poller.poll(), 0);
+    assert.equal(callbacks, 0);
+  } finally {
+    poller.dispose(); socket.close(); context.close();
+  }
 });

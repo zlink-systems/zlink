@@ -629,13 +629,13 @@ class actor_join_call_t
 };
 
 
-class relay_request_call_t : private detail::call_facade_t<relay_request_call_t, zlink::message_t>
+class relay_request_call_t : private detail::call_facade_t<relay_request_call_t, message_t>
 {
   private:
-    using base_t = detail::call_facade_t<relay_request_call_t, zlink::message_t>;
+    using base_t = detail::call_facade_t<relay_request_call_t, message_t>;
 
   public:
-    explicit relay_request_call_t (result_t<zlink::message_t> result) : base_t (std::move (result))
+    explicit relay_request_call_t (result_t<message_t> result) : base_t (std::move (result))
     {
     }
 
@@ -646,7 +646,7 @@ class relay_request_call_t : private detail::call_facade_t<relay_request_call_t,
   private:
     friend class session_actor_t;
 
-    explicit relay_request_call_t (task_t<zlink::message_t> task) : base_t (
+    explicit relay_request_call_t (task_t<message_t> task) : base_t (
       std::move (task))
     {
     }
@@ -871,10 +871,10 @@ class session_actor_t
     std::string_view actor_id () const noexcept;
     actor_context_t context () const;
     bound_session_t bound_session () const;
-    task_t<void> relay (const zlink::message_t &payload);
-    task_t<void> relay (std::string packet_name, const zlink::message_t &payload);
-    relay_request_call_t relay_request (const zlink::message_t &payload);
-    relay_request_call_t relay_request (std::string packet_name, const zlink::message_t &payload);
+    task_t<void> relay (const message_t &payload);
+    task_t<void> relay (std::string packet_name, const message_t &payload);
+    relay_request_call_t relay_request (const message_t &payload);
+    relay_request_call_t relay_request (std::string packet_name, const message_t &payload);
     task_t<void> notify_disconnected ();
 
   private:
@@ -887,7 +887,7 @@ class session_actor_t
     result_t<std::uint64_t> reserve_relay_sequence ();
     task_t<void> relay_internal (detail::stream_header_t header,
                                  std::uint64_t relay_sequence,
-                                 const zlink::message_t &payload);
+                                 const message_t &payload);
 
     std::shared_ptr<detail::actor_gateway_state_t> _state;
     actor_ref_t _ref;

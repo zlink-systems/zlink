@@ -36,7 +36,7 @@ public final class PlayServer {
                 : settings.routeEndpoint();
             node.listen(routeEndpoint)
                 .setRoutingId(RoutingId.from("tictactoe-" + settings.nodeId()));
-            node.channelName(SampleNames.PlayNode).server();
+            node.channel(SampleNames.PlayNode).server();
             node.peerConnections().connect(settings.peerSpotEndpoint());
             node.objects()
                 .server()

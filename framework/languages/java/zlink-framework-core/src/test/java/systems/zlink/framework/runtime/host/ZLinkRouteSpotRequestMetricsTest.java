@@ -20,7 +20,7 @@ final class ZLinkRouteSpotRequestMetricsTest {
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.addRouteMesh("modern-mesh")
             .listen("inproc://modern-mesh-" + UUID.randomUUID())
-            .channelName("requests")
+            .channel("requests")
             .client();
 
         try (ZLinkRequestMetricProbe metrics = ZLinkRequestMetricProbe.install();

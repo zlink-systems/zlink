@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Dispatch;
+using Zlink.Framework.Locations.Redis;
 
 namespace ZLink.Framework.Perf;
 
@@ -25,8 +26,20 @@ public static class ServerApplication
     {
         if (args.Length != 2 || args[0] != "--config") throw new ArgumentException("Server requires --config <file> only.");
         var config = PerfJson.Read<RoleConfig>(File.ReadAllText(args[1]));
-        if (config.objectRole != "None" || config.store is not null || config.spotIds.Length != 0 || config.actorIds.Length != 0)
-            throw new ArgumentException("Phase 1 baselines register no object role or Store.");
+        config.workload.ValidateCcu();
+        if (config.workload.requestPayloadBytes != 64 || config.workload.responsePayloadBytes != 4096 || config.workload.sendPayloadBytes != 4096)
+            throw new ArgumentException("Standard payload is request64/response4096/send4096 logical bytes.");
+        if (config.workload.applicationDeadlineMs > config.workload.settleTimeoutMs || config.workload.applicationDeadlineMs <= 0)
+            throw new ArgumentException("Application deadline must be positive and within settle bound.");
+        if (!double.IsFinite(config.workload.durationSeconds) || config.workload.durationSeconds <= 0 ||
+            !double.IsFinite(config.workload.warmupSeconds) || config.workload.warmupSeconds <= 0 || config.workload.inflight <= 0)
+            throw new ArgumentException("Duration, warmup and in-flight must be positive finite values.");
+        using var matrix = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "matrix.json")));
+        if (!matrix.RootElement.GetProperty("cells").EnumerateArray().Any(cell =>
+            cell.GetProperty("scenario").GetString() == config.scenario && cell.GetProperty("mode").GetString() == config.mode &&
+            cell.GetProperty("terminal").GetString() == config.terminal))
+            throw new ArgumentException("Scenario, mode and terminal must match a common matrix cell.");
+        Histogram.ValidateFixture();
         if (new Uri(config.metricsUrl).Port == new Uri(config.applicationTriggerUrl).Port)
             throw new ArgumentException("Admin and application trigger require separate listeners.");
         return config;
@@ -54,11 +67,20 @@ public static class ServerApplication
             options.ConfigureDispatch().Diagnostics.SetLevel(config.diagnostics is null ? ZLinkDiagnosticsLevel.Off : ZLinkDiagnosticsLevel.Normal);
             options.ConfigureNetwork().BindHost = "127.0.0.1";
             options.ConfigureNetwork().AdvertiseHost = "127.0.0.1";
+            if (config.store is { } store)
+            {
+                if (store.provider != "redis") throw new ArgumentException("Standard object/discovery workloads require Redis.");
+                options.AddLocationStore(new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions
+                    { ConnectionString = store.endpoint, KeyPrefix = store.@namespace }));
+            }
+            options.Worker.MinThreads = config.workload.workerPoolSize;
+            options.Worker.MaxThreads = config.workload.workerPoolSize;
+            options.Worker.IdleTimeout = TimeSpan.FromMilliseconds(60000);
             configure(options);
         });
         return builder;
     }
-    public static void Map(WebApplication app, Func<Task>? workload = null)
+    public static void Map(WebApplication app, Func<Task>? workload = null, Func<CancellationToken, Task>? prepare = null)
     {
         var config = app.Services.GetRequiredService<RoleConfig>();
         var measurement = app.Services.GetRequiredService<Measurement>();
@@ -90,6 +112,21 @@ public static class ServerApplication
             }
             catch (JsonException error) { return Json(new { reason = error.Message }, 400); }
         });
+        var prepareGate = new object();
+        Task? prepareTask = null;
+        app.MapPost("/app/perf/prepare", async (HttpContext context) =>
+        {
+            var request = await Read<PerfTriggerRequest>(context);
+            if (request.runId != config.runId || request.cellId != config.cellId || request.phase != "setup" || request.resetSeq != "0")
+                return Json(new { ok = false, reason = "Preparation identity differs." }, 409);
+            if (prepare is not null)
+            {
+                Task pending;
+                lock (prepareGate) pending = prepareTask ??= prepare(app.Lifetime.ApplicationStopping);
+                await pending;
+            }
+            return Json(new { ok = !measurement.HasErrors, ready = Ready(app.Services) });
+        });
         app.MapPost("/app/perf/start", async (HttpContext context) =>
         {
             try
@@ -118,7 +155,8 @@ public static class ServerApplication
     {
         var config = services.GetRequiredService<RoleConfig>();
         var host = services.GetRequiredService<IZLinkFrameworkRuntime>().Status;
-        if (config.topology == "routemesh") return new { host, routeMesh = services.GetRequiredService<IZLinkRouteMeshRuntime>().GetStatus(config.meshName!) };
+        if (config.mode == "publish" && !config.source) return new { host, fanout = services.GetRequiredService<IZLinkFanoutRuntime>().GetStatus(config.channelName!) };
+        if (config.topology == "routemesh" && config.mode != "publish" || config.scenario == "cs-remote-session-actor-echo" && config.objectRole == "Client") return new { host, routeMesh = services.GetRequiredService<IZLinkRouteMeshRuntime>().GetStatus(config.meshName!) };
         if (config.topology == "clientserver") return new { host, clientServer = services.GetRequiredService<IZLinkClientServerRuntime>().GetStatus(config.channelName!) };
         return new { host };
     }
@@ -128,12 +166,19 @@ public static class ServerApplication
         var measurement = services.GetRequiredService<Measurement>();
         var host = services.GetRequiredService<IZLinkFrameworkRuntime>().Status;
         var infrastructure = host.IsReady;
-        if (config.topology == "routemesh")
+        if (config.topology == "routemesh" && config.mode != "publish" || config.scenario == "cs-remote-session-actor-echo" && config.objectRole == "Client")
         {
             var mesh = services.GetRequiredService<IZLinkRouteMeshRuntime>().GetStatus(config.meshName!);
+            // IsReady also permits local traffic with no peers (topology monitoring §4).
+            // This caller's object target is on the separate server role, so §16.1
+            // infrastructure readiness requires a ready remote connection before its probe.
+            var remoteObjectTarget = config.objectRole == "Client" &&
+                (config.source && !config.scenario.StartsWith("cs-", StringComparison.Ordinal)
+                    || config.scenario == "cs-remote-session-actor-echo");
+            infrastructure &= !remoteObjectTarget || mesh.ReadyPeerCount > 0;
             // Channel messaging §3: RouteMesh excludes the sending node itself from candidates.
             // Only the source needs a selectable remote target; the receiver proves dispatch by echo.
-            infrastructure &= mesh.IsReady && (!config.source || mesh.Channels.Any(c =>
+            infrastructure &= mesh.IsReady && (!(config.source && (config.role == "spot" && config.scenario.StartsWith("s2s-spot", StringComparison.Ordinal) || config.scenario == "channel-echo-only")) || mesh.Channels.Any(c =>
                 c.ChannelName == config.channelName && c.IsReady && c.ReadyTargetCount > 0));
         }
         else if (config.topology == "clientserver")
@@ -141,7 +186,11 @@ public static class ServerApplication
             var channel = services.GetRequiredService<IZLinkClientServerRuntime>().GetStatus(config.channelName!);
             infrastructure &= channel.IsReady && channel.ReadyTargetCount > 0;
         }
-        var probe = measurement.SetupEvidence.Length > 0;
+        if (config.mode == "publish" && !config.source) infrastructure &= services.GetRequiredService<IZLinkFanoutRuntime>().GetStatus(config.channelName!).IsReady;
+        var preparedObjects = measurement.ObjectPreparationEvidence;
+        var needsPreparedObjects = config.objectRole != "None" && (config.source || config.objectRole == "Server");
+        var objects = !needsPreparedObjects || preparedObjects is not null;
+        var probe = measurement.SetupEvidence.Any(item => !ReferenceEquals(item, preparedObjects));
         List<object> evidence = [new { kind = "publicStatus", source = "public Framework runtime status", observedValue = PublicStatus(services) }];
         if (config.listenerEndpoint is not null) evidence.Add(new { kind = "verifiedListenerReservation",
             source = "role config; coordinator OS bind reservation and public host startup", observedValue = config.listenerEndpoint });
@@ -149,10 +198,11 @@ public static class ServerApplication
         evidence.AddRange(measurement.ErrorEvidence);
         List<string> reasons = [];
         if (!infrastructure) reasons.Add("Public host/channel/listener infrastructure is not ready.");
+        if (!objects) reasons.Add("Public object preparation has not completed.");
         if (!probe) reasons.Add("No successful typed probe echo has been observed.");
         if (measurement.HasErrors) reasons.Add("Application preparation or phase failed.");
         return new(config.runId, config.cellId, config.role, config.roleInstance, infrastructure,
-            true, probe, infrastructure && probe && !measurement.HasErrors, PerfClock.UnixMs, evidence.ToArray(), reasons.ToArray());
+            objects, probe, infrastructure && objects && probe && !measurement.HasErrors, PerfClock.UnixMs, evidence.ToArray(), reasons.ToArray());
     }
 }
 

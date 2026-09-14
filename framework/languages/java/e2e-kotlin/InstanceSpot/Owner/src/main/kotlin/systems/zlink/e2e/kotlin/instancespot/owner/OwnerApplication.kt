@@ -55,7 +55,7 @@ class OwnerApplication {
             val mesh = framework.addRouteMesh(Contracts.MESH)
                 .listen(options.meshEndpoint)
                 .setRoutingIdPrefix(options.rid)
-            mesh.channelName(Contracts.MESH).server().addHandlerGroup(Contracts.HANDLER_GROUP)
+            mesh.channel(Contracts.MESH).server().addHandlerGroup(Contracts.HANDLER_GROUP)
             mesh.objects().server().addInstanceSpotFactory(
                 Contracts.STABLE_TYPE,
                 ProbeSpot::class.java,

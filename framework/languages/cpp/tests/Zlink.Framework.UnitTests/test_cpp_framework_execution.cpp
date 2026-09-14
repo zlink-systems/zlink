@@ -107,12 +107,6 @@ class controlled_worker_scheduler_t final : public zlink::framework::detail::wor
         return true;
     }
 
-    void post_owner (std::function<void ()> work) override
-    {
-        std::lock_guard lock (mutex);
-        owner_jobs.push (std::move (work));
-    }
-
     void run_worker_job ()
     {
         std::function<void (std::stop_token)> job;
@@ -124,27 +118,10 @@ class controlled_worker_scheduler_t final : public zlink::framework::detail::wor
         job (cancellation.get_token ());
     }
 
-    void run_owner_job ()
-    {
-        std::function<void ()> job;
-        {
-            std::lock_guard lock (mutex);
-            job = std::move (owner_jobs.front ());
-            owner_jobs.pop ();
-        }
-        job ();
-    }
-
     std::size_t worker_job_count () const
     {
         std::lock_guard lock (mutex);
         return worker_jobs.size ();
-    }
-
-    std::size_t owner_job_count () const
-    {
-        std::lock_guard lock (mutex);
-        return owner_jobs.size ();
     }
 
     std::stop_token stop_token () const noexcept override
@@ -160,7 +137,6 @@ class controlled_worker_scheduler_t final : public zlink::framework::detail::wor
     bool queue_full = false;
     mutable std::mutex mutex;
     std::queue<std::function<void (std::stop_token)>> worker_jobs;
-    std::queue<std::function<void ()>> owner_jobs;
     std::stop_source cancellation;
 };
 
@@ -6406,6 +6382,173 @@ bool verify_remote_actor_completion_keeps_session_ref_until_route_ack ()
            && route->second.spot_id == "target-spot";
 }
 
+struct worker_turn_observation_t
+{
+    std::promise<void> worker_entered;
+    std::promise<void> worker_release;
+    std::promise<void> worker_returned;
+    std::promise<void> next_entered;
+    std::shared_future<void> release = worker_release.get_future ().share ();
+    zlink::framework::detail::task_completion_source_t<void> finish_handler;
+    zlink::framework::detail::task_scheduler_t next_scheduler;
+    std::shared_ptr<zlink::framework::detail::serial_turn_t> original_turn;
+    std::atomic_bool next_ran{false};
+    std::atomic_bool worker_succeeded{false};
+    std::atomic_bool continuation_owns_turn{false};
+    std::atomic_bool continuation_is_original{false};
+    bool yield = false;
+};
+
+class worker_turn_spot_t final : public zlink::framework::spot_t<zlink::framework::actor_t>
+{
+  public:
+    worker_turn_spot_t (zlink::framework::spot_context_t context,
+                        std::shared_ptr<worker_turn_observation_t> observation) :
+        _context (std::move (context)), _observation (std::move (observation))
+    {
+    }
+    zlink::framework::spot_context_t &context () noexcept override { return _context; }
+    const zlink::framework::spot_context_t &context () const noexcept override { return _context; }
+    void configure () override
+    {
+        _context.handlers ().add_subscribe<&worker_turn_spot_t::run> ("worker-turn");
+    }
+    zlink::framework::task_t<zlink::framework::spot_create_response_t>
+    on_create (const zlink::framework::message_t &) override
+    {
+        co_return zlink::framework::spot_create_response_t::accept ();
+    }
+    zlink::framework::task_t<void> run (const int &)
+    {
+        auto observation = _observation;
+        observation->original_turn = zlink::framework::detail::capture_current_serial_turn ();
+        if (!observation->original_turn) {
+            std::cerr << "real Spot worker handler entered without a Spot turn\n";
+            observation->worker_returned.set_value ();
+            co_return;
+        }
+        observation->next_scheduler = observation->original_turn->resume_scheduler ();
+        auto call = _context.run_cpu_worker ([observation] {
+            observation->worker_entered.set_value ();
+            observation->release.wait ();
+            return 73;
+        });
+        call.timeout (std::chrono::seconds (1));
+        try {
+            const auto result = co_await (observation->yield ? call.yield () : call.async ());
+            const auto turn = zlink::framework::detail::capture_current_serial_turn ();
+            observation->worker_succeeded.store (result == 73);
+            observation->continuation_owns_turn.store (turn && !turn->released ());
+            observation->continuation_is_original.store (turn == observation->original_turn);
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            std::cerr << "real Spot worker failed: " << error.what () << '\n';
+            observation->worker_succeeded.store (false);
+        }
+        observation->worker_returned.set_value ();
+        co_await observation->finish_handler.task ();
+        co_return;
+    }
+    zlink::framework::task_t<void> on_initialize () override { co_return; }
+    zlink::framework::task_t<zlink::framework::spot_actor_join_result_t>
+    on_actor_join (std::string_view, const zlink::framework::message_t &) override
+    {
+        co_return zlink::framework::spot_actor_join_result_t::reject ();
+    }
+    zlink::framework::task_t<void> on_actor_joined (zlink::framework::actor_t &) override { co_return; }
+    zlink::framework::task_t<void> on_leave_actor (zlink::framework::actor_t &) override { co_return; }
+
+  private:
+    zlink::framework::spot_context_t _context;
+    std::shared_ptr<worker_turn_observation_t> _observation;
+};
+
+bool verify_real_spot_worker_terminal_preserves_ordinary_and_yield_turns ()
+{
+    using namespace zlink::framework;
+    namespace messaging = zlink::framework::runtime::messaging;
+    bool success = true;
+    const auto require = [&success] (bool condition, const char *message) {
+        if (!condition) {
+            success = false;
+            std::cerr << "real Spot worker turn: " << message << '\n';
+        }
+    };
+    for (const bool yield : {false, true}) {
+        auto observation = std::make_shared<worker_turn_observation_t> ();
+        observation->yield = yield;
+        auto entered = observation->worker_entered.get_future ();
+        auto returned = observation->worker_returned.get_future ();
+        auto next = observation->next_entered.get_future ();
+        zlink_builder_t builder;
+        std::shared_ptr<worker_turn_spot_t> spot;
+        builder.add_route_mesh ("worker-turn-mesh").add_spot_factory<worker_turn_spot_t> (
+          "worker-turn", [observation, &spot] (spot_context_t context) {
+              spot = std::make_shared<worker_turn_spot_t> (std::move (context), observation);
+              return spot;
+          }, [] (auto &factory) { factory.disable_relocation (); });
+        serializer_registry_t serializers;
+        serializers.add<int> (
+          [] (const int &value) { return encoded_payload_t::from_string (std::to_string (value)); },
+          [] (const encoded_payload_t &value) { return std::stoi (value.to_string ()); });
+        detail::channel_runtime_t::from (builder.message_bus ()).bind_serializers (serializers);
+        auto runtime = *detail::spot_node_runtime_t::from (builder, "worker-turn-mesh");
+        const auto created = runtime.get_or_create_spot ("worker-turn", spot_id_t ("worker-turn-id"));
+        require (created.state == spot_create_state_t::created,
+                      "worker turn regression must activate a real User Spot");
+        if (created.state != spot_create_state_t::created || !spot)
+            return false;
+        service_provider_t services;
+        bool handled = false;
+        std::thread handler ([&] {
+            const messaging::envelope_codec_t codec;
+            const auto packet_name = spot->context ().handlers ().descriptors ().front ().packet_name;
+            const auto envelope = codec.encode_parts (
+              messaging::envelope_header_t{
+                .kind = messaging::message_kind_t::publish,
+                .channel_name = "worker-turn-mesh",
+                .message_name = packet_name,
+                .topic = "worker-turn"},
+              1, serializers);
+            const auto result = runtime.dispatch_subscription (
+              spot->context (), "worker-turn", envelope.items (), services, serializers);
+            handled = static_cast<bool> (result);
+            if (!result)
+                std::cerr << "real Spot worker packet failed: "
+                          << (result.error () ? result.error ()->what () : "no error message")
+                          << '\n';
+        });
+        const auto worker_started = entered.wait_for (std::chrono::seconds (2))
+                                    == std::future_status::ready;
+        require (worker_started, "real Spot must enter the CPU worker");
+        if (worker_started) {
+            observation->next_scheduler ([observation] {
+                observation->next_ran.store (true);
+                observation->next_entered.set_value ();
+            });
+            if (yield)
+                require (next.wait_for (std::chrono::milliseconds (500))
+                                == std::future_status::ready,
+                              "Yield must admit the next Spot turn before the worker returns");
+        }
+        observation->worker_release.set_value ();
+        require (returned.wait_for (std::chrono::seconds (2)) == std::future_status::ready
+                        && observation->worker_succeeded.load (),
+                      "ordinary and Yield CPU worker results must arrive without deadline failure");
+        require (observation->continuation_owns_turn.load ()
+                        && observation->continuation_is_original.load () == !yield,
+                      "ordinary must retain its turn and Yield must resume in a new turn");
+        if (!yield)
+            require (!observation->next_ran.load (),
+                          "ordinary worker completion must not release the unfinished handler turn");
+        observation->finish_handler.complete (result_t<void>::success ());
+        handler.join ();
+        require (handled && next.wait_for (std::chrono::seconds (2)) == std::future_status::ready,
+                      "finishing the handler must release its next Spot turn");
+    }
+    return success;
+}
+
 } // namespace
 
 int main ()
@@ -6418,6 +6561,8 @@ int main ()
             zlink::framework::runtime::shutdown_handler_coroutine_executor ();
         }
     } executor_shutdown;
+    if (!verify_real_spot_worker_terminal_preserves_ordinary_and_yield_turns ())
+        return 103;
     {
         using queue_t =
           zlink::framework::runtime::application_job_queue_t;
@@ -6980,14 +7125,13 @@ int main ()
         return 42;
     });
     auto submit_task = submit_call.async ();
-    if (scheduler->worker_job_count () != 1 || scheduler->owner_job_count () != 0) {
+    if (scheduler->worker_job_count () != 1) {
         return 10;
     }
     scheduler->run_worker_job ();
-    if (scheduler->owner_job_count () != 1) {
+    if (!submit_task.await_ready ()) {
         return 11;
     }
-    scheduler->run_owner_job ();
     const auto submit_result = submit_task.result ();
     if (worker_thread == std::thread::id{} || !submit_result || submit_result.value () != 42) {
         return 12;
@@ -6998,7 +7142,6 @@ int main ()
     auto worker_call = async_context.run_cpu_worker ([] { return 7; });
     auto worker_task = worker_call.async ();
     async_scheduler->run_worker_job ();
-    async_scheduler->run_owner_job ();
     const auto worker_result = worker_task.result ();
     if (!worker_result || worker_result.value () != 7) {
         return 13;
@@ -7009,10 +7152,9 @@ int main ()
     auto full_context = context_with_scheduler (full_scheduler);
     auto full_call = full_context.run_cpu_worker ([] { return 3; });
     auto full_task = full_call.async ();
-    if (full_scheduler->worker_job_count () != 0 || full_scheduler->owner_job_count () != 1) {
+    if (full_scheduler->worker_job_count () != 0 || !full_task.await_ready ()) {
         return 14;
     }
-    full_scheduler->run_owner_job ();
     const auto full_result = full_task.result ();
     if (full_result
         || full_result.error_kind ()
@@ -7042,8 +7184,7 @@ int main ()
         return 19;
     }
     timeout_scheduler->run_worker_job ();
-    if (timeout_scheduler->owner_job_count () != 0
-        || !timeout_saw_cancellation.load ()) {
+    if (!timeout_saw_cancellation.load ()) {
         return 20;
     }
 
@@ -7067,8 +7208,7 @@ int main ()
         return 22;
     }
     shutdown_scheduler->run_worker_job ();
-    if (!shutdown_saw_cancellation.load ()
-        || shutdown_scheduler->owner_job_count () != 0) {
+    if (!shutdown_saw_cancellation.load ()) {
         return 23;
     }
 
@@ -7084,7 +7224,7 @@ int main ()
         io_tasks.push_back (call.async ());
         io_sources.push_back (std::move (source));
     }
-    if (io_scheduler->worker_job_count () != 8 || io_scheduler->owner_job_count () != 0) {
+    if (io_scheduler->worker_job_count () != 8) {
         return 27;
     }
     for (int value = 0; value < 8; ++value) {
@@ -7099,6 +7239,21 @@ int main ()
         if (!io_result || io_result.value () != value) {
             return 28;
         }
+    }
+
+    auto io_full_call = full_context.run_io_worker ([] {
+        return zlink::framework::task_t<int> (
+          zlink::framework::result_t<int>::success (3));
+    });
+    auto io_full_task = io_full_call.async ();
+    if (!io_full_task.await_ready ()) {
+        return 16;
+    }
+    const auto io_full_result = io_full_task.result ();
+    if (io_full_result
+        || io_full_result.error_kind ()
+             != zlink::framework::framework_error_kind_t::shutting_down) {
+        return 16;
     }
 
     auto io_thread_source =

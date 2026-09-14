@@ -990,6 +990,96 @@ final class ZLinkStreamConnectorTest {
     }
 
     @Test
+    void webSocketChunkedTypedResponseAndNextMessageUsePublicConnector() throws Exception {
+        try (WebSocketStreamConnectorTestServer server = new WebSocketStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector = createConnector(server.options(ZLinkStreamDispatchMode.IMMEDIATE));
+            ConnectorTestAwait.await(connector.connect());
+            for (String value : List.of("x".repeat(4096), "next")) {
+                var incoming = server.readFrameAsync();
+                var reply = connector.request(new NamedPayload("request"))
+                    .submit(NamedPayload.class).toCompletableFuture();
+                var request = incoming.join();
+                server.sendFragmentedAsync(new ZLinkStreamWireProtocol.Header(
+                    ZLinkStreamWireProtocol.KIND_RESPONSE, ZLinkStreamWireProtocol.CODEC_JSON,
+                    ZLinkStreamWireProtocol.FLAG_HAS_REQUEST_SEQ, request.header().requestSeq(),
+                    "NamedPayload", Map.of(), null),
+                    TcpStreamConnectorTestServer.bytes("{\"value\":\"" + value + "\"}"), 37).join();
+                assertEquals(new NamedPayload(value), reply.join());
+                assertTrue(connector.isConnected());
+                assertEquals(0, connector.pendingDispatchCount());
+            }
+        }
+    }
+
+    @Test
+    void webSocketChunkedResponseAcceptsExactPayloadLimit() throws Exception {
+        try (WebSocketStreamConnectorTestServer server = new WebSocketStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector = createConnector(server.options(ZLinkStreamDispatchMode.IMMEDIATE));
+            ConnectorTestAwait.await(connector.connect());
+            var incoming = server.readFrameAsync();
+            var reply = connector.request(payload("Echo", "request")).submit().toCompletableFuture();
+            var request = incoming.join();
+            byte[] expected = new byte[64 * 1024];
+            Arrays.fill(expected, (byte) 42);
+            server.sendFragmentedAsync(TcpStreamConnectorTestServer.responseTo(request, "Echo", Map.of()),
+                expected, 4093).join();
+            var received = reply.join();
+            try { assertArrayEquals(expected, received.payload().toByteArray()); }
+            finally { received.payload().close(); }
+            assertTrue(connector.isConnected());
+        }
+    }
+
+    @Test
+    void webSocketChunkedResponseRejectsPayloadAboveLimit() throws Exception {
+        try (WebSocketStreamConnectorTestServer server = new WebSocketStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector = createConnector(options(server.endpoint(), ZLinkStreamDispatchMode.IMMEDIATE,
+                64 * 1024, 1, false, false, ZLinkStreamCompression.NONE));
+            ConnectorTestAwait.await(connector.connect());
+            var incoming = server.readFrameAsync();
+            var reply = connector.request(payload("Echo", "request")).submit().toCompletableFuture();
+            var request = incoming.join();
+            byte[] valid = ZLinkStreamWireProtocol.encodeFrame(
+                ZLinkStreamWireProtocol.encodeHeader(TcpStreamConnectorTestServer.responseTo(request, "Echo", Map.of())),
+                new byte[64 * 1024 + 1], 64 * 1024 + 1);
+            server.sendRawFragmentedAsync(valid, 4093, true).join();
+            assertThrows(CompletionException.class, reply::join);
+            TcpStreamConnectorTestServer.awaitCondition(
+                () -> connector.state() == ZLinkStreamConnectionState.DISCONNECTED);
+            assertEquals(0, connector.pendingDispatchCount());
+        }
+    }
+
+    @Test
+    void webSocketChunkedMessageRejectsCumulativeFrameAboveLimit() throws Exception {
+        try (WebSocketStreamConnectorTestServer server = new WebSocketStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector = createConnector(options(server.endpoint(), ZLinkStreamDispatchMode.IMMEDIATE,
+                64 * 1024, 1, false, false, ZLinkStreamCompression.NONE));
+            ConnectorTestAwait.await(connector.connect());
+            server.sendRawFragmentedAsync(new byte[(int) ZLinkStreamWireProtocol.maxFrameLength(64 * 1024) + 1],
+                4093, false).join();
+            TcpStreamConnectorTestServer.awaitCondition(
+                () -> connector.state() == ZLinkStreamConnectionState.DISCONNECTED);
+        }
+    }
+
+    @Test
+    void webSocketCloseDuringChunkedResponseDrainsPendingRequest() throws Exception {
+        try (WebSocketStreamConnectorTestServer server = new WebSocketStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector = createConnector(server.options(ZLinkStreamDispatchMode.IMMEDIATE));
+            ConnectorTestAwait.await(connector.connect());
+            var incoming = server.readFrameAsync();
+            var reply = connector.request(new NamedPayload("request")).submit(NamedPayload.class).toCompletableFuture();
+            incoming.join();
+            server.sendRawFragmentedAsync(new byte[] {0, 1, 2}, 1, false).join();
+            ConnectorTestAwait.await(connector.close());
+            assertThrows(CompletionException.class, reply::join);
+            assertEquals(0, connector.pendingDispatchCount());
+            assertEquals(ZLinkStreamConnectionState.CLOSED, connector.state());
+        }
+    }
+
+    @Test
     void tcpTransportRejectsOversizedInboundPayloadPrefix() throws Exception {
         try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
             ZLinkStreamConnector connector =

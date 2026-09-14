@@ -36,7 +36,7 @@ object PlayServer {
 
             node.setRoutingId(RoutingId.from("tictactoe-play-${settings.nodeId}"))
                 .listen(routeEndpoint)
-            node.channelName(SampleNames.PlayNode).server()
+            node.channel(SampleNames.PlayNode).server()
             node.peerConnections().connect(
                 RoutingId.from("tictactoe-play-$peerNodeId"),
                 settings.peerSpotEndpoint,

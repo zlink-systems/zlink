@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/dotnet-env.sh"
-# Separate identity/config hash; these tracing runs are never baseline eligible.
-exec flock --exclusive --close /tmp/zlink-samples-gate.lock \
-  python3 "${SCRIPT_DIR}/runner.py" diagnostic "$@"
+PERF_ENTRY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PERF_ENTRY_ROOT="$(cd "${PERF_ENTRY_DIR}/../../../../.." && pwd)"
+exec python3 "${PERF_ENTRY_ROOT}/framework/perf-contract/runner.py" diagnostic --language dotnet "$@"

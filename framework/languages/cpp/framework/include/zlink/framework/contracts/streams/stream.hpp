@@ -212,8 +212,8 @@ class stream_t
     std::optional<std::string> remote_address () const;
     session_actor_manager_t &actors ();
     task_t<void> close ();
-    stream_send_call_t write_packet (const zlink::message_t &payload);
-    stream_write_call_t reply_packet (const zlink::message_t &payload);
+    stream_send_call_t write_packet (const message_t &payload);
+    stream_write_call_t reply_packet (const message_t &payload);
 
   private:
     friend class detail::actor_gateway_runtime_t;
@@ -228,9 +228,8 @@ class stream_t
     std::shared_ptr<detail::submit_once_t> _reply_submission;
 };
 
-/* Typed session packet handler contract: the serializer registry decodes the
- * payload first, then the handler completes with task_t<void>. The raw
- * message_t on_packet callback stays at the session runtime boundary. */
+/* Typed session packet handlers and the canonical message callback share
+ * the Framework serializer registry. */
 template <typename THandler, typename TSessionContext, typename TPayload>
 concept typed_session_packet_handler_for =
   requires (THandler &handler, TSessionContext &context, const TPayload &payload) {
@@ -265,7 +264,7 @@ class packet_stream_session_t
     }
     virtual task_t<void> on_packet (stream_t &stream,
                                     const session_message_context_t &context,
-                                    const zlink::message_t &payload)
+                                    const message_t &payload)
     {
         (void) stream;
         (void) context;

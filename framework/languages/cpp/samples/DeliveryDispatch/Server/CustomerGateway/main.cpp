@@ -178,7 +178,7 @@ class customer_gateway_session_t final : public packet_stream_session_t
 
     task_t<void> on_packet (stream_t &stream,
                             const session_message_context_t &dispatch,
-                            const zlink::message_t &payload) override
+                            const zlink::framework::message_t &payload) override
     {
         std::cerr << "deliverydispatch customer-gateway: dispatch packet=" << dispatch.packet_name
                   << "\n";
@@ -192,7 +192,7 @@ class customer_gateway_session_t final : public packet_stream_session_t
             co_await actor.relay (payload);
             co_return;
         }
-        const auto request = payload.parse_json<subscribe_delivery_req_t> ();
+        const auto request = payload.decode<subscribe_delivery_req_t> ();
         auto &actors = stream.actors ();
         auto actor =
           actors.get_or_create (sample_names_t::customer_actor_type, sample_names_t::customer_id,
@@ -215,7 +215,7 @@ class customer_gateway_session_t final : public packet_stream_session_t
                                          "bound customer actor route is not found");
         }
         auto reply =
-          co_await current->relay_request (zlink::message_t::from_json (request)).async ();
+          co_await current->relay_request (zlink::framework::message_t::from (request)).async ();
         _sessions.subscribe (actor_id, request.delivery_id, stream);
         stream.reply_packet (reply).async ();
         std::cerr << "deliverydispatch customer-session: subscribed customer="

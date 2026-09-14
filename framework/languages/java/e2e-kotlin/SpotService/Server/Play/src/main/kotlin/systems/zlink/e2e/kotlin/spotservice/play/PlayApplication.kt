@@ -73,7 +73,7 @@ class PlayApplication {
             val node: ZLinkMeshNodeBuilder = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(Env.get("e2e.route.endpoint"))
                 .setRoutingId(RoutingId.from(nodeRid))
-            node.channelName(Contracts.ROUTE_CHANNEL).server()
+            node.channel(Contracts.ROUTE_CHANNEL).server()
             if (nodeRid != "play-a") {
                 node.peerConnections().connect(
                     RoutingId.from("play-a"),

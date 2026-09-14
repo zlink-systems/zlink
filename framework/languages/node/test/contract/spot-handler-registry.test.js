@@ -6,7 +6,30 @@ const {
   ZLinkActorPacketKind,
   ZLinkSpotActorHandlerRegistryRuntime
 } = require('../../packages/framework/dist/runtime/actors');
-const { ZLinkSpotActorSend } = require('../../packages/framework/dist');
+const { ZLinkSpotActorSend, ZLinkSpotRequest } = require('../../packages/framework/dist');
+const { ZLinkSpotSerialTurnExecutor } = require('../../packages/framework/dist/internal');
+const { ZLinkRoutedSpotPacketDispatch } = require('../../packages/framework/dist/runtime/spots/spot-routed-spot-packet-dispatch');
+
+test('Spot addPacket preserves the public request name and returns its typed reply', async () => {
+  class RequestHandler {
+    async handle(_spot, request) { return { value: request.value + 1 }; }
+  }
+  ZLinkSpotRequest('request.contract')(
+    RequestHandler.prototype, 'handle', Object.getOwnPropertyDescriptor(RequestHandler.prototype, 'handle')
+  );
+  const handlers = new DefaultZLinkSpotHandlerRegistry();
+  handlers.addPacket(RequestHandler);
+  const spot = {};
+  const dispatch = new ZLinkRoutedSpotPacketDispatch({
+    resolveActivation: () => ({
+      spotId: 'request-contract-spot', spot,
+      serial: new ZLinkSpotSerialTurnExecutor(true, 'request-contract-spot'), handlers
+    })
+  });
+  assert.deepEqual(await dispatch.request('request-contract-spot', 'request.contract', { value: 41 }, {
+    channelName: 'request-contract-channel'
+  }), { value: 42 });
+});
 
 test('Spot addHandler projects actor metadata into the actor dispatcher registry', () => {
   class PlayerActor {}

@@ -46,11 +46,13 @@ internal sealed class ZLinkLocationRuntimeQueryService :
             storeHealth);
     }
 
-    public ValueTask<ZLinkLocationRuntimeStatus> GetStatusAsync(
+    public async ValueTask<ZLinkLocationRuntimeStatus> GetStatusAsync(
         CancellationToken cancellationToken = default)
     {
         var health = _runtime.GetHealthSnapshot();
-        var store = _storeHealth?.GetSnapshot();
+        var store = _storeHealth is null
+            ? (ZLinkLocationStoreHealth.Snapshot?)null
+            : await _storeHealth.GetSnapshotAsync().ConfigureAwait(false);
         var lastRefreshAt = store?.LastSuccessAt;
         if (health.RenewedAt is { } renewedAt
             && (lastRefreshAt is null || renewedAt > lastRefreshAt))
@@ -58,11 +60,11 @@ internal sealed class ZLinkLocationRuntimeQueryService :
             lastRefreshAt = renewedAt;
         }
 
-        return ValueTask.FromResult(new ZLinkLocationRuntimeStatus(
+        return new ZLinkLocationRuntimeStatus(
             StoreHealthy: health.LastError is null && (store?.Healthy ?? true),
             LastRefreshAt: lastRefreshAt,
             OwnerLeaseHealthy: health.Healthy,
-            OwnerLeaseRenewedAt: health.RenewedAt));
+            OwnerLeaseRenewedAt: health.RenewedAt);
     }
 
     public async ValueTask<ZLinkLocationPage<ZLinkMeshNodeDescriptor>>

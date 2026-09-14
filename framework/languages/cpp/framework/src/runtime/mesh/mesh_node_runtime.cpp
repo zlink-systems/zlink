@@ -472,6 +472,20 @@ mesh_node_builder_state_t::mesh_node_builder_state_t (std::string name) :
       "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (bind_host) + ":0");
 }
 
+void mesh_node_builder_state_t::assign_automatic_routing_id (std::string prefix)
+{
+    if (!valid_routing_id_prefix (prefix))
+        throw configuration_error ("MeshNode automatic routing id prefix must contain "
+                                   "1..64 ASCII letters, digits, '.', '_' or '-'");
+    if (routing_id)
+        throw configuration_error ("MeshNode cannot configure both a fixed routing "
+                                   "id and an automatic routing id prefix");
+    automatic_routing_id_prefix = std::move (prefix);
+    routing_id = zlink::routing_id_t::from (
+      *automatic_routing_id_prefix + "-" + detail::new_uuid_v4 ());
+    spot_state->lane.run ([&] { spot_state->snapshot.routing_id = *routing_id; }).get ();
+}
+
 void bind_mesh_handler_services (std::shared_ptr<mesh_node_builder_state_t> state,
                                  service_collection_t &services)
 {
@@ -732,7 +746,11 @@ void mesh_node_runtime_t::start ()
                 throw configuration_error ("MeshNode listen endpoint is required");
             }
             if (!_state->routing_id) {
-                throw configuration_error ("MeshNode routing id is required");
+                const auto framework_options = _state->framework_options.lock ();
+                if (framework_options && framework_options->has_location_store_instance)
+                    _state->assign_automatic_routing_id (_state->mesh_name);
+                else
+                    throw configuration_error ("MeshNode routing id is required");
             }
             if (!_state->core_context) {
                 throw configuration_error ("MeshNode shared Core Context is required");
@@ -2005,8 +2023,7 @@ mesh_node_runtime_t::send_to_spot (const std::string &source_spot_id,
                                    const std::vector<zlink::message_t> &parts,
                                    std::vector<std::uint8_t> metadata)
 {
-    co_return co_await get_or_create_spot (source_spot_id)
-      .send_to_spot (target_node_rid, target_spot_id, target_spot_generation, parts,
+    co_return co_await native_node ().send_to_spot (source_spot_id, target_node_rid, target_spot_id, target_spot_generation, parts,
                      zlink::send_flags_t::dontwait, metadata);
 }
 
@@ -2020,8 +2037,7 @@ mesh_node_runtime_t::request_to_spot (const std::string &source_spot_id,
                                       std::chrono::milliseconds timeout,
                                       std::vector<std::uint8_t> metadata)
 {
-    co_return co_await get_or_create_spot (source_spot_id)
-      .request_to_spot (target_node_rid, target_spot_id, target_spot_generation, parts,
+    co_return co_await native_node ().request_to_spot (source_spot_id, target_node_rid, target_spot_id, target_spot_generation, parts,
                         operation_id, zlink::send_flags_t::none, timeout, metadata);
 }
 
@@ -2289,9 +2305,9 @@ mesh_node_runtime_t::request_actor_join_spot_route (const runtime::spot_address_
                                                     runtime::messaging::message_parts_t encoded,
                                                     std::chrono::milliseconds timeout)
 {
-    auto origin = get_or_create_spot ("__zlink-route-origin-" + routing_id ()->to_hex ());
+    const auto origin = "__zlink-route-origin-" + routing_id ()->to_hex ();
     host::pending_operation_t operation;
-    const auto submitted = co_await origin.request_to_spot (
+    const auto submitted = co_await _node->request_to_spot (origin,
       target.node_rid, spot_id_t (target.spot_id), target.object_generation, encoded.items (),
       operation, zlink::send_flags_t::none, timeout);
     if (submitted != zlink::submit_result_t::ok) {
@@ -3536,9 +3552,9 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
                   framework_error_kind_t::not_found,
                   "Actor message follow target Spot generation is unavailable");
             }
-            auto origin = get_or_create_spot ("__zlink-route-origin-" + routing_id ()->to_hex ());
+            const auto origin = "__zlink-route-origin-" + routing_id ()->to_hex ();
             host::pending_operation_t operation;
-            const auto submitted = co_await origin.request_to_spot (
+            const auto submitted = co_await _node->request_to_spot (origin,
               target_node, follow_target.route.spot_id, *target_generation, request_parts.items (),
               operation, zlink::send_flags_t::none, timeout);
             if (submitted != zlink::submit_result_t::ok) {
@@ -4692,19 +4708,9 @@ mesh_node_builder_t &mesh_node_builder_t::set_routing_id (zlink::routing_id_t ro
 
 mesh_node_builder_t &mesh_node_builder_t::set_automatic_routing_id_prefix (std::string prefix)
 {
-    if (!detail::valid_routing_id_prefix (prefix))
-        throw detail::configuration_error ("MeshNode automatic routing id prefix must contain "
-                                           "1..64 ASCII letters, digits, '.', '_' or '-'");
     _state->lane
       .run ([&] {
-          if (_state->routing_id)
-              throw detail::configuration_error ("MeshNode cannot configure both a fixed routing "
-                                                 "id and an automatic routing id prefix");
-          _state->automatic_routing_id_prefix = prefix;
-          _state->routing_id = zlink::routing_id_t::from (prefix + "-" + detail::new_uuid_v4 ());
-          _state->spot_state->lane
-            .run ([&] { _state->spot_state->snapshot.routing_id = *_state->routing_id; })
-            .get ();
+          _state->assign_automatic_routing_id (std::move (prefix));
       })
       .get ();
     return *this;

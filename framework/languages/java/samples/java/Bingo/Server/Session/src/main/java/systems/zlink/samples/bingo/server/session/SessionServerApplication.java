@@ -47,7 +47,7 @@ public final class SessionServerApplication {
                 .setRoutingIdPrefix("session");
             node.objects().client();
             options.addClientServerChannel(SampleNames.ApiChannel).client();
-            node.channelName(SampleNames.RoomSpotDiscovery).client();
+            node.channel(SampleNames.RoomSpotDiscovery).client();
             options.addStreamNode(SampleNames.StreamNode)
                 .bind(topology.selectedStreamEndpoint())
                 .enableActorDispatch()

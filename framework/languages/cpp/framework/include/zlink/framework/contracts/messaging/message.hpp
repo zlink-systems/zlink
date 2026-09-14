@@ -29,6 +29,7 @@ class app_t;
 class bound_session_t;
 class message_t;
 class session_actor_t;
+class stream_t;
 class spot_actor_join_result_t;
 class spot_create_response_t;
 class spot_handler_registry_t;
@@ -111,6 +112,7 @@ class message_t
     friend class actor_context_t;
     friend class bound_session_t;
     friend class session_actor_t;
+    friend class stream_t;
     friend class spot_actor_join_result_t;
     friend class spot_create_response_t;
     friend class spot_handler_registry_t;

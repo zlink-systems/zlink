@@ -1,10 +1,10 @@
 using ZLink.Framework.Perf;
 
 var config = ServerApplication.ReadConfig(args);
-if (config.scenario != "channel-echo-only" || config.role != "channel")
-    throw new ArgumentException("ChannelServer supports the channel-echo-only source and target.");
+
 var builder = ServerApplication.Builder(config, options =>
 {
+    if (config.scenario != "channel-echo-only") { PerfScenario.Configure(options, config); return; }
     if (config.topology == "routemesh")
     {
         var mesh = options.AddRouteMesh(config.meshName!).Listen(config.listenerEndpoint!);
@@ -25,9 +25,13 @@ var builder = ServerApplication.Builder(config, options =>
     else throw new ArgumentException("Unsupported channel topology.");
 });
 builder.Services.AddSingleton<ChannelEchoOnlyScenario>();
+builder.Services.AddSingleton<PerfScenario>();
 var app = builder.Build();
-var scenario = app.Services.GetRequiredService<ChannelEchoOnlyScenario>();
-ServerApplication.Map(app, config.source ? scenario.RunAsync : null);
+var baseline = config.scenario == "channel-echo-only";
+var scenario = app.Services.GetRequiredService<PerfScenario>();
+var channel = baseline ? app.Services.GetRequiredService<ChannelEchoOnlyScenario>() : null;
+ServerApplication.Map(app, config.source ? (baseline ? channel!.RunAsync : scenario.RunAsync) : null,
+    baseline ? (config.source ? channel!.PrepareAsync : null) : scenario.PrepareAsync);
 await app.StartAsync();
-if (config.source) await scenario.PrepareAsync(app.Lifetime.ApplicationStopping);
+
 await app.WaitForShutdownAsync();

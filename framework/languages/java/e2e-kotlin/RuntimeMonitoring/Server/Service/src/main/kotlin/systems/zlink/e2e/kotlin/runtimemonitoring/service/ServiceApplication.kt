@@ -81,7 +81,7 @@ class ServiceApplication {
                 .setRoutingId(RoutingId.from(Env.get("e2e.rid", "svc-a") + "-spot"))
                 .setActorCapacity(1)
                 .setSpotCapacity(2)
-            node.channelName(Contracts.SPOT_CHANNEL).server()
+            node.channel(Contracts.SPOT_CHANNEL).server()
             node.objects().server()
                 .addSpotFactory(
                     "monitoring",

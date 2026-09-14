@@ -21,6 +21,8 @@ export interface ZLinkRawMonitorRecord {
 }
 
 export interface ZLinkRawSocketPort {
+  /** Drive the existing public poller; return application receive readiness. */
+  poll(): boolean;
   setReadableHandler(handler: () => void): void;
   bind(endpoint: string): void;
   unbind(endpoint: string): void;

@@ -1,10 +1,14 @@
 using ZLink.Framework.Perf;
 
 var config = ServerApplication.ReadConfig(args);
-if (config.scenario != "session-echo-only" || config.role != "session" || config.source)
+if (!config.scenario.StartsWith("cs-", StringComparison.Ordinal) && config.scenario != "session-echo-only" || config.source)
     throw new ArgumentException("SessionServer supports the session-echo-only receiver role.");
 var builder = ServerApplication.Builder(config, options =>
-    options.AddStreamNode("perf-session").Bind(config.listenerEndpoint!).AddSession<PerfSession>());
+{
+    var stream = options.AddStreamNode("perf-session").Bind(config.listenerEndpoint!).AddSession<PerfSession>();
+    if (config.scenario != "session-echo-only") { stream.EnableActorDispatch(); PerfScenario.Configure(options, config); }
+});
+builder.Services.AddSingleton<PerfScenario>();
 var app = builder.Build();
-ServerApplication.Map(app);
+ServerApplication.Map(app, prepare: app.Services.GetRequiredService<PerfScenario>().PrepareAsync);
 await app.RunAsync();

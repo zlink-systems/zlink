@@ -41,19 +41,19 @@ public final class ConsumerApplication {
             framework.addRouteMesh(Contracts.CHANNEL)
                 .listen("tcp://127.0.0.1:0")
                 .setRoutingIdPrefix(options.rid())
-                .channelName(Contracts.CHANNEL)
+                .channel(Contracts.CHANNEL)
                 .client();
             if (options.c4Roles()) {
                 var c4RouteA = framework.addRouteMesh(Contracts.C4_ROUTE_A_MESH)
                     .listen("tcp://127.0.0.1:0")
                     .setRoutingIdPrefix(options.rid() + "-c4-a");
                 c4RouteA.peerConnections().connect(options.c4RouteAEndpoint());
-                c4RouteA.channelName(Contracts.C4_ROUTE_A_CHANNEL).client();
+                c4RouteA.channel(Contracts.C4_ROUTE_A_CHANNEL).client();
                 var c4RouteB = framework.addRouteMesh(Contracts.C4_ROUTE_B_MESH)
                     .listen("tcp://127.0.0.1:0")
                     .setRoutingIdPrefix(options.rid() + "-c4-b");
                 c4RouteB.peerConnections().connect(options.c4RouteBEndpoint());
-                c4RouteB.channelName(Contracts.C4_ROUTE_B_CHANNEL).client();
+                c4RouteB.channel(Contracts.C4_ROUTE_B_CHANNEL).client();
                 framework.addClientServerChannel(Contracts.C4_CLIENT_SERVER_CHANNEL)
                     .client()
                     .connect(options.c4ClientServerEndpoint());

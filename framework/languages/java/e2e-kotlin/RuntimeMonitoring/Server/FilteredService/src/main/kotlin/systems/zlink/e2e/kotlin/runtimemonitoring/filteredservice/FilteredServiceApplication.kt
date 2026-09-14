@@ -62,7 +62,7 @@ class FilteredServiceApplication {
                 .setRoutingId(RoutingId.from(Env.get("e2e.rid", "svc-b") + "-spot"))
                 .setActorCapacity(1)
                 .setSpotCapacity(2)
-            node.channelName(Contracts.SPOT_CHANNEL).server()
+            node.channel(Contracts.SPOT_CHANNEL).server()
             node.objects().server()
                 .addSpotFactory("monitoring", MonitoringSpot::class.java) { factory -> factory.disableRelocation() }
                 .addActorFactory(

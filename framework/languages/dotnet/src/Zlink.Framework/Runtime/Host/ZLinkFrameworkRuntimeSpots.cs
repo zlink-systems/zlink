@@ -251,20 +251,34 @@ internal sealed partial class ZLinkFrameworkRuntime
     /// <summary>The registered MeshNode for a physical mesh. ChannelName
     /// select-one calls (IZLinkRouteClient) submit through this node's entry
     /// spot so weight, ready and drain admission stay Core-owned (spec 11 §3).</summary>
-    internal ZLinkSpotNodeRuntime GetMeshNodeRuntime(string meshName)
+    // State ownership §5: synchronous status and first-admission callers must
+    // capture the registered component before returning. Async callers await
+    // the same component-lane lookup instead of blocking on its completion.
+    internal ZLinkSpotNodeRuntime GetMeshNodeRuntime(string meshName) =>
+        AwaitStateLane(GetMeshNodeRuntimeAsync(meshName));
+
+    internal ValueTask<ZLinkSpotNodeRuntime> GetMeshNodeRuntimeAsync(string meshName)
     {
         var state = GetOrStartState();
-        return AwaitStateLane(state.RunStateAsync(() =>
+        return state.RunStateAsync(() =>
             state.SpotNodes.TryGetValue(meshName, out var nodeRuntime)
                 ? nodeRuntime
                 : throw new ZLinkConfigurationException(
-                    $"RouteMesh '{meshName}' is not registered.")));
+                    $"RouteMesh '{meshName}' is not registered."));
     }
 
     internal ZLinkSpotNodeRuntime ResolveRouteMeshNodeForChannel(string channelName)
     {
+        // State ownership §5: synchronous routing callers must complete their
+        // process-local registration capture before returning. Async callers
+        // await the same owner body instead of blocking its completion.
+        return AwaitStateLane(ResolveRouteMeshNodeForChannelAsync(channelName));
+    }
+
+    internal ValueTask<ZLinkSpotNodeRuntime> ResolveRouteMeshNodeForChannelAsync(string channelName)
+    {
         var state = GetOrStartState();
-        return AwaitStateLane(state.RunStateAsync(() =>
+        return state.RunStateAsync(() =>
         {
             if (state.RouteMeshNodesByChannel.TryGetValue(channelName, out var nodeRuntime))
                 return nodeRuntime;
@@ -272,7 +286,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
                 $"No process-local RouteMesh or ClientServer client is registered for ChannelName '{channelName}'.");
-        }));
+        });
     }
 
     internal ZLinkSpotNodeRuntime GetActorClientSpotNodeRuntime()

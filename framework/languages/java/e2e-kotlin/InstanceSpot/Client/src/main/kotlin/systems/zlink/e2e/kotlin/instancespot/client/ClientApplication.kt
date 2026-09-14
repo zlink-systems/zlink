@@ -53,7 +53,7 @@ class ClientApplication {
             val mesh = framework.addRouteMesh(Contracts.MESH)
                 .listen(options.meshEndpoint)
                 .setRoutingIdPrefix(options.rid)
-            mesh.channelName(Contracts.MESH).client()
+            mesh.channel(Contracts.MESH).client()
             mesh.objects().server()
         }
 

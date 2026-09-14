@@ -302,15 +302,15 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
     {
         _submission.Claim();
         cancellationToken.ThrowIfCancellationRequested();
-        var nodeRuntime = runtime.GetMeshNodeRuntime(meshName);
+        var nodeRuntime = await runtime.GetMeshNodeRuntimeAsync(meshName).ConfigureAwait(false);
         var parts = Encode();
         var handedOff = false;
         try
         {
-            runtime.EnsureKnownRouteMeshPeer(
+            await runtime.EnsureKnownRouteMeshPeerAsync(
                 meshName,
                 targetNodeRid,
-                $"packet '{_messageName}'");
+                $"packet '{_messageName}'").ConfigureAwait(false);
             handedOff = true;
             var result = await nodeRuntime
                 .SendToNodeAsync(targetNodeRid, parts, cancellationToken, _metadata.Encode())
@@ -391,7 +391,7 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
 
     private async ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
     {
-        var nodeRuntime = runtime.GetMeshNodeRuntime(meshName);
+        var nodeRuntime = await runtime.GetMeshNodeRuntimeAsync(meshName).ConfigureAwait(false);
         var timeout = _timeout ?? nodeRuntime.Registration.DefaultRequestTimeout
             ?? runtime.Registration.DefaultRequestTimeout;
         var packetName = ZLinkMessageNameResolver.ResolveFromMessage(request);
@@ -405,7 +405,7 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
             : null;
         try
         {
-            runtime.EnsureKnownRouteMeshPeer(meshName, targetNodeRid, $"packet '{packetName}'");
+            await runtime.EnsureKnownRouteMeshPeerAsync(meshName, targetNodeRid, $"packet '{packetName}'").ConfigureAwait(false);
             var header = ZLinkClientCallCodec.CreateEnvelope(
                 ZLinkMessageKind.Request,
                 meshName,

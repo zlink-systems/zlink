@@ -437,7 +437,13 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         return targetEndpoints.All(endpoint => !configuredEndpoints.Contains(endpoint, StringComparer.Ordinal));
     }
 
+    // State ownership §5: synchronous first admission must classify before
+    // return. Its bridge reuses the async captures used by Send/Request.
     internal ZLinkRouteMeshTargetClassification ClassifyManualRouterTarget(
+        RoutingId targetNodeRid) =>
+        ClassifyManualRouterTargetAsync(targetNodeRid).GetAwaiter().GetResult();
+
+    internal async ValueTask<ZLinkRouteMeshTargetClassification> ClassifyManualRouterTargetAsync(
         RoutingId targetNodeRid)
     {
         if (Registration.Router is not
@@ -446,7 +452,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             } router)
             return ZLinkRouteMeshTargetClassification.Unknown;
 
-        var peer = Node.MeshPeers().FirstOrDefault(candidate =>
+        var peer = (await Node.MeshPeersAsync().ConfigureAwait(false)).FirstOrDefault(candidate =>
             candidate.RoutingId == targetNodeRid);
         if (peer is not null)
         {
@@ -462,12 +468,12 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             .ToArray();
         if (matchingEndpoints.Length == 0)
         {
-            return _peerConnections.HasRetainedManualPeer(targetNodeRid)
+            return await _peerConnections.HasRetainedManualPeerAsync(targetNodeRid).ConfigureAwait(false)
                 ? ZLinkRouteMeshTargetClassification.RequiredNotConnected
                 : ZLinkRouteMeshTargetClassification.Unknown;
         }
 
-        return router.ManualConnections.ListConnections().Any(endpoint =>
+        return (await router.ManualConnections.ListConnectionsAsync().ConfigureAwait(false)).Any(endpoint =>
             matchingEndpoints.Contains(endpoint, StringComparer.Ordinal))
                 ? ZLinkRouteMeshTargetClassification.RequiredNotConnected
                 : ZLinkRouteMeshTargetClassification.Unknown;

@@ -1,11 +1,57 @@
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
+using System.Reflection;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class AutoConnectReconcilerTests
 {
     private static readonly TimeSpan LeaseTtl = TimeSpan.FromSeconds(15);
+
+    [Fact]
+    public async Task Async_Target_Classification_And_Complete_Snapshot_Await_Actual_Reconciler_Owner()
+    {
+        var time = new ManualTimeProvider();
+        var store = new ZLinkInMemoryLocationStore(time);
+        var options = new ZLinkLocationOptions();
+        var runtime = new ZLinkLocationRuntime(options, store, time);
+        var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
+        var resolvers = new ZLinkStoreLocationResolvers(store, tracker, new ZLinkObservedLocationGenerations());
+        var reconciler = new ZLinkAutoConnectReconciler(
+            Local(ZLinkLocationAutoConnectType.RouteMesh, ZLinkLocationRole.Router, "local", "inproc://local"),
+            null, runtime, resolvers, new RecordingAutoConnectExecutor(), options, time);
+        var lane = (ZLinkStateLane)typeof(ZLinkAutoConnectReconciler)
+            .GetField("_lane", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(reconciler)!;
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holding = Task.Run(() => lane.RunAsync(() =>
+        {
+            entered.TrySetResult(true);
+            release.Wait();
+        }));
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var classifyInvocation = Task.Run(() => reconciler.ClassifyTargetAsync(RoutingId.From("unknown")));
+            var snapshotInvocation = Task.Run(reconciler.CompleteMeshPeersAsync);
+            var classification = await classifyInvocation.WaitAsync(TimeSpan.FromSeconds(5));
+            var snapshot = await snapshotInvocation.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(classification.IsCompleted);
+            Assert.False(snapshot.IsCompleted);
+            release.Set();
+            Assert.Equal(ZLinkRouteMeshTargetClassification.Unknown, await classification);
+            Assert.Null(await snapshot);
+            Assert.Equal(ZLinkRouteMeshTargetClassification.Unknown, reconciler.ClassifyTarget(RoutingId.From("unknown")));
+            Assert.Null(reconciler.CompleteMeshPeers());
+        }
+        finally
+        {
+            release.Set();
+            await (await holding.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+    }
 
     [Fact]
     public void Planner_Excludes_Self_And_Foreign_Meshes()

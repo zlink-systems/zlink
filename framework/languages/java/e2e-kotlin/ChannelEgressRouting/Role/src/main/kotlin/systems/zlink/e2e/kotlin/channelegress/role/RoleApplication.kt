@@ -271,8 +271,8 @@ class RoleApplication {
         servers: List<String>,
         clients: List<String>,
     ) {
-        servers.forEach { node.channelName(it).server().addHandlerGroup(Contracts.HANDLER_GROUP) }
-        clients.forEach { node.channelName(it).client() }
+        servers.forEach { node.channel(it).server().addHandlerGroup(Contracts.HANDLER_GROUP) }
+        clients.forEach { node.channel(it).client() }
     }
 
     private fun connectPeers(

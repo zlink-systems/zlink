@@ -83,6 +83,27 @@ final class WebSocketStreamConnectorTestServer implements Closeable {
         }, executor);
     }
 
+    CompletableFuture<Void> sendFragmentedAsync(
+        ZLinkStreamWireProtocol.Header header, byte[] payload, int chunkSize) {
+        return sendRawFragmentedAsync(ZLinkStreamWireProtocol.encodeFrame(
+            ZLinkStreamWireProtocol.encodeHeader(header), payload, 64 * 1024), chunkSize, true);
+    }
+
+    CompletableFuture<Void> sendRawFragmentedAsync(byte[] payload, int chunkSize, boolean complete) {
+        return CompletableFuture.runAsync(() -> {
+            try {
+                OutputStream output = socket().getOutputStream();
+                for (int offset = 0; offset < payload.length; offset += chunkSize) {
+                    int end = Math.min(offset + chunkSize, payload.length);
+                    writeBinaryFrame(output, java.util.Arrays.copyOfRange(payload, offset, end),
+                        offset == 0 ? 2 : 0, complete && end == payload.length);
+                }
+            } catch (IOException ex) {
+                throw new RuntimeException(ex);
+            }
+        }, executor);
+    }
+
     ZLinkStreamConnectorOptions options(ZLinkStreamDispatchMode dispatchMode) {
         return new ZLinkStreamConnectorOptions(
             endpoint(),
@@ -202,7 +223,12 @@ final class WebSocketStreamConnectorTestServer implements Closeable {
     }
 
     private static void writeBinaryMessage(OutputStream output, byte[] payload) throws IOException {
-        output.write(0x82);
+        writeBinaryFrame(output, payload, 2, true);
+    }
+
+    private static void writeBinaryFrame(OutputStream output, byte[] payload,
+                                         int opcode, boolean last) throws IOException {
+        output.write((last ? 0x80 : 0) | opcode);
         if (payload.length < 126) {
             output.write(payload.length);
         } else if (payload.length <= 0xffff) {

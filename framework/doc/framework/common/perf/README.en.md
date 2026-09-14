@@ -3,7 +3,7 @@
 [Document list][docs] · [Common specification][common] · [Scenario E2E][e2e]
 
 This specification defines execution conditions and result formats for comparing throughput,
-latency and resource use through the same public calls in .NET, C++, Java, Kotlin and Node.js.
+latency and resource use through the same public calls in C++, .NET, Java and Node.js.
 It owns standard scenario names, the payload matrix, CLI and result formats. Language plans
 supplement only implementation tools and runtime metadata.
 
@@ -23,6 +23,9 @@ it adds no connection selection, replay, turn, completion or error contract.
 | Public errors | [Framework error model][errors] |
 | Physical admission and completion drain | [Core socket][core-socket], [Binding async execution model §4][binding-async] |
 
+Results use schema 3; do not relabel schema 2 results or assume existing perf already implements
+this revision.
+
 ## 1. Goals
 
 Performance results must answer these questions.
@@ -33,21 +36,27 @@ Performance results must answer these questions.
 - When selecting the ordinary terminal that retains a [Spot turn][g-turn] or Yield that releases it,
   how do Spot count, remote call completion and progress of other callbacks relate ([owning contract][turn])?
 - How much do CPU worker execution and submission/result-delivery intervals contribute to completion latency?
-- Can differences between 1 KiB and 4 KiB payloads be related to client, server, codec or transport bottleneck candidates?
+- Can 64B request→4KiB reply and 4KiB one-way delivery be compared through throughput, tail latency and application time budgets?
+- Do normal messages progress during overload and recover after a burst (optional §24 experiments)?
 
 ## 2. Scope
 
-Standard scenarios use the names in §10 and run with `1024` and `4096` logical payload bytes each.
-An independent execution of one scenario, payload, terminal and placement combination is a
-**measurement cell**. Throughput from different cells is not averaged into one result.
+Standard scenarios use the names in §10. One independently executed scenario, terminal and
+placement combination is a **measurement cell**. There is no payload-size sweep.
+The four required implementations are C++, .NET, Java and Node.js. Kotlin is an optional extension;
+its interface tables remain reference material and it is excluded from required completion counts.
 
-| Family | Question covered | Representative payload |
-|---|---|---:|
-| CS | Connector → session → local/remote Actor echo | 1024 |
-| S2S | Channel → Spot and Spot → Channel request or send/send | 4096 |
-| Spot local/worker | Local public Spot dispatch and CPU offload | 1024 |
-| AC | Session-less ActorCaller → ActorId direct messaging | 4096 |
-| PS | Classic fanout publication and subscriber delivery | 1024 |
+| Call form | Request / initial message | Reply / return | Purpose |
+|---|---:|---:|---|
+| Request/reply, including local Spot, worker and session baseline | 64B | 4096B | Typical server request and result completion |
+| One-way send and Classic fanout | 4096B | None | Actual delivery throughput and latency, separate from admission |
+| Send/send echo | 4096B | 4096B | Application round trip using two one-way calls |
+
+Sizes are application logical bytes, excluding Base64, JSON, identity and Framework headers (§12).
+Defaults are **2 seconds warmup**, **5 seconds measured**, and **one run**, all duration-based;
+message count never ends a phase. Restart server and source/client processes between patterns and
+variants (§20). This is a short comparison under equal conditions, not proof of long-term stability
+or maximum sustainable load. Never average throughput across different cells.
 
 A [Spot][g-spot] is a logical object with an address and state; these cells use prepared User Spots.
 Their [Spot IDs][g-spot-id] are recorded in `spotIds`. Object roles and Store requirements follow
@@ -59,6 +68,9 @@ The `session-echo-only` baseline, both RouteMesh/ClientServer request cells of `
 and the `spot-no-await-echo` local reference in §11 are required reference measurements.
 Section 19 governs release performance thresholds. Fake backend and micro benchmark figures
 are not counted toward common perf completion.
+
+All four languages use WebSocket (`ws://`) for standard CS cells and TCP (`tcp://`) for S2S.
+This matches the Node.js public connector; a comparison never mixes transports across languages.
 
 ### 2.1 Follow-up candidates
 
@@ -155,33 +167,35 @@ to applicable consumers.
 | Option | Default and range | Consumer and meaning |
 |---|---|---|
 | `--scenario` | Required for `run_single.sh`; all for `run_perf.sh` | Script selects an executable name from §8.4 or §11 |
-| `--connections` | 10000, positive int32 | CS connection pool only: total physical connectors |
-| `--logical-streams` | 10000, positive int32 | Server-driven source workload loop: stream count |
+| `--connections` | 1000, 1..1000 | CS connection pool only: total physical connectors |
+| `--logical-streams` | 1000 normally, 8 for worker; 1..1000 | Server-driven source workload loop: stream count |
 | `--client-count` | 1, positive int32 | Script and CS partition plan: client process count; 1 for server-driven cells |
 | `--client-index` | 0, `0 <= index < count` | Script assigns the partition index to a child CS client; not a top-level input |
-| `--duration-seconds` | 30, finite > 0 | Aggregation owner's measured window |
-| `--warmup-seconds` | 5, finite > 0 | The same owner's warmup loop |
-| `--payload-size` | Scenario representative; 1024 or 4096 | `run_single.sh` and payload factory |
-| `--payload-sizes` | `1024,4096` | `run_perf.sh` matrix expansion; mutually exclusive with the single-value option |
+| `--duration-seconds` | 5, finite > 0 | Aggregation owner's measured window |
+| `--warmup-seconds` | 2, finite > 0 | The same owner's warmup loop |
 | `--inflight` | 1, positive int32 | Logical-operation cap per CS connector or server-driven stream; publish-admission cap for PS |
 | `--connect-concurrency` | 256, positive int32 | CS pool's concurrent connect/setup count; absent for server-driven cells |
 | `--spot-count` | 16, positive int32 | Spot Object Server preparation and stream→Spot mapping; §10.5 standard matrix uses 1/16 |
 | `--subscriber-count` | 8, positive int32 | PS script's independent Subscriber process count |
 | `--worker-task-millis` | 5, positive int32 | CPU-duration target in the worker callback (§10.8) |
 | `--worker-pool-size` | 8, positive int32 | Worker host's public MaxThreads setting |
-| `--mode` | Fixed by scenario | Dispatcher accepts only the applicable value among `request`, `send-send`, `no-await`, `worker-offload`, `publish` |
+| `--mode` | Fixed by scenario | Dispatcher accepts only the applicable value among `request`, `send-send`, `no-await`, `worker-offload`, `send`, `publish` |
 | `--terminal` | `ordinary`, or `yield` for worker | §10.5/§10.8 handlers consume `ordinary`/`yield`; other cells are fixed to ordinary |
 | `--channel-topology` | `routemesh` | `channel-echo-only` bootstrap consumes `routemesh`/`clientserver`; other S2S Channels are fixed to RouteMesh |
 | `--codec` | Only `json` | Typed-payload configuration validation and serializer metadata |
 | `--output` | `perf-results/<run-id>` | Run root for script and writer |
 | `--run-id` | UTC label plus unique suffix | Script uses it for resources, logs and result identity; `[A-Za-z0-9_-]+` |
 | `--endpoint-config` | Script-generated file | Actual endpoint manifest read by the standalone client |
-| `--workload-config` | Omitted for standard echo | Production workload manifest consumed by the §23 script; separate from ordinary cells |
+| `--comparison-config` | Script-generated for a single language | §19 common comparison input; pass the same file to all four languages |
+| `--workload-config` | Omitted by default | Optional experiment manifest for §23–24; never added to the default matrix automatically |
 | `--config` | Required for role execution | One role config file read before that server executable starts |
 
-For every payload, `run_perf.sh` executes all `ordinary/yield × SpotId 1/16` cells in §10.5,
-both `ordinary/yield` cells in §10.8, and both `routemesh/clientserver` cells in §11.
-`run_single.sh` selects one cell. A single-cell result does not establish full standard-matrix completion.
+With fixed payloads, `run_perf.sh` executes every `ordinary/yield × SpotId 1/16` cell in §10.5,
+both worker terminals in §10.8, both baseline topologies in §11, and the three one-way cells in §10.12
+once each: **21 cells per language, 84 across four languages**. `run_single.sh` selects one cell.
+If `--runs` is exposed, it accepts only `1`. No standard payload override, size list or automatic
+repetition is accepted. Optional durations/workloads are fixed in the manifest before execution;
+never extend them automatically after inspecting results.
 
 ### 5.1 Role config and endpoint manifest
 
@@ -200,7 +214,7 @@ The manifest shares identity and config hash; `roles` is an array with one entry
 ```json
 {
   "runId": "20260906-example",
-  "cellId": "s2s-channel-to-spot-request-echo-4096-example",
+  "cellId": "s2s-channel-to-spot-request-echo-req64-rep4096-example",
   "roles": [
     {
       "role": "channel",
@@ -228,6 +242,8 @@ Each subscriber has an entry with `role=subscriber`, `roleInstance=subscriberId`
 
 Standard echo role config records `requestTimeoutMs=1000`, `correlationExpiryMs=1000`,
 `settleTimeoutMs=5000`, `setupTimeoutMs=30000`, and `adminTimeoutMs=5000`.
+Role configs also carry §20.1 startup/shutdown/transition limits and §12 directional sizes.
+`applicationDeadlineMs=50` and its SLO meaning follow §24.1.
 Consumers are respectively public request calls, harness correlations, phase owners, script/setup
 callers and HTTP clients. Record effective family send timeouts from public socket configuration
 (standard: 1000ms; [owning contract][submit]).
@@ -235,8 +251,12 @@ callers and HTTP clients. Record effective family send timeouts from public sock
 Worker config records `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
 `maxQueueLength=4096`, `idleTimeoutMs=60000`, `workerTimeoutMs=requestTimeoutMs`, and effective
 executor limits. Apply these only through each language's public worker options (§10.8).
-Ordinary workloads are closed-loop: a stream starts its next operation after completion.
-Inputs changing rate, bursts or Core/queue profiles belong only to the §23 manifest.
+Request/send-send workloads are closed-loop, with `inflight` independent slots per stream.
+A slot starts its next operation after the final outcome. One-way/PS slots are released after the
+public admission terminal; never add a consumer acknowledgement window.
+Worker defaults to 8 streams and inflight 1, avoiding 1000 queued operations for 5ms work and 8
+workers. Explicit overload belongs to a separate §24 manifest, not the normal baseline.
+Rate, burst and Core/queue-profile inputs belong only to the §23–24 manifest.
 
 ## 6. Standard Project Structure
 
@@ -291,9 +311,12 @@ Casing follows language convention consistently within each language.
 `Program.*` handles only parsing, logging, DI/host configuration and scenario selection.
 This structure includes no new runtime adapter or raw-frame processing helper.
 
-### 6.2 The 10,000-Client Driving Model
+### 6.2 The Maximum 1,000-CCU Driving Model
 
-CS partitions 10000 physical connectors among `client-count` processes.
+All languages have a 1000-CCU ceiling. CCU means total physical connectors for CS,
+and logical user streams for server-driven workloads. `inflight` is concurrent requests per user,
+separate from CCU; its default remains 1. Both CLI and manifest preflight reject CCU above 1000.
+CS partitions the default 1000 physical connectors among `client-count` processes.
 For `N=connections`, `P=clientCount`, `i=clientIndex`, `q=floor(N/P)`, `r=N mod P`,
 a process owns `q + (i < r ? 1 : 0)` connectors starting at ID `i*q + min(i,r)`.
 `P <= N`; global client IDs do not overlap.
@@ -421,6 +444,9 @@ objects. Physical retries, completion drain and reconnect belong to [Core][core-
 | `actor-no-bind-request-echo` | `ActorNoBindRequestEchoScenario` |
 | `actor-no-bind-send-send-echo` | `ActorNoBindSendSendEchoScenario` |
 | `pubsub-fanout-echo` | `PubSubFanoutEchoScenario` |
+| `s2s-channel-to-spot-send` | `S2sChannelToSpotSendScenario` |
+| `s2s-spot-to-channel-send` | `S2sSpotToChannelSendScenario` |
+| `actor-no-bind-send` | `ActorNoBindSendScenario` |
 
 Only casing may vary by language. Historical labels are not relabeled as standard results without
 verified semantic equivalence. A pure Channel request differs from a STREAM session→Actor request.
@@ -467,7 +493,7 @@ same local object node, through the [session binding and original-reply contract
 | Item | Measurement condition |
 |---|---|
 | Roles/processes | CS Client × clientCount, SessionActorLocal × 1; session Actor route and Actor owner share the same local object node |
-| Load/mode | Physical connectors; `request`, ordinary; representative 1024 bytes |
+| Load/mode | Physical connectors; `request`, ordinary; payload per §12 |
 | Completion/owner | Client: immediately before public request through validated typed echo on the original STREAM request |
 | Preparation | Public manager prepares one Actor per connector ID; bind its Ref to that session |
 | Location Store/Docker | Required for Object Server; run-dedicated Docker Redis |
@@ -476,19 +502,20 @@ same local object node, through the [session binding and original-reply contract
 | Language | Public calls and exact interface |
 |---|---|
 | .NET | Use connector `Request(dto).Async<PerfEchoReply>()`, setup `Actors.BindOrGetAsync(ref)` and session `RelayAsync(payload)` ([connector][d-connector], [session][d-session], [Actor][d-actor]). |
-| C++ | Use connector `request(dto).submit<PerfEchoReply>(callback)`, public `dispatch()`, `stream.actors().bind_or_get(ref)` and session relay, subject to the declaration check in §10.1 ([connector][c-connector], [session][c-session], [Actor][c-actor]). |
+| C++ | Use connector `request(dto).submit<PerfEchoReply>(callback)`, public `dispatch()`, `stream.actors().bind_or_get(ref)` and session relay, using the relay/reply completion boundary in §10.1 ([connector][c-connector], [session][c-session], [Actor][c-actor]). |
 | Java | Use connector `request(dto).submit(PerfEchoReply.class)`, session `actors().bindOrGet(ref)` and `relay(dispatch,payload)` ([connector][j-connector], [session][j-session]). |
 | Kotlin | Use connector wrapper `request<PerfEchoReply>(dto).await()`, `bindOrGetActor(ref)` and session wrapper `relay(dispatch,payload).await()` ([connector][j-connector], [session][k-session]). |
 | Node.js | Use connector `request(dto).submit<PerfEchoReply>()`, session `actors.bindOrGet(ref)` and `relay(dispatch,payload)` ([connector][n-connector], [session][n-session]). |
 
-C++ session relay has a declaration difference between the [exact Actor interface][c-actor] and
-public-header `relay_request`, requiring the contract owner's reconciliation. If that language
-cell cannot be implemented and verified, record `unsupported` with a declaration-mismatch reason
-and do not count it as complete. Add no perf-specific raw codec. .NET also needs reconciliation
-between the explicit-reply description in its [exact Session interface][d-session] and the
-[original-reply observation in Session binding][binding]. Do not count relay admission as Actor echo
-completion or invent an unconfirmed reply path in perf. These limitations apply to both languages
-in §10.2; unresolved contract/declaration differences produce unsupported cells.
+C++ `relay_request` is declared in both the [exact Actor interface][c-actor] and public header.
+The .NET [exact Session interface][d-session] distinguishes `RelayAsync` source admission from
+Actor typed-reply completion of the original STREAM correlation. Do not mark these cells
+unsupported because of the historical declaration mismatch.
+C++ public `relay_request` followed by session reply and .NET Framework-owned reply forwarding
+may hold the session callback differently. A small public API smoke must first confirm exactly
+one original connector reply at the same inflight setting in all four languages. Measure from
+client request through typed reply validation; never count relay admission as completion or add
+a private reply path to perf.
 
 ### 10.2 `cs-remote-session-actor-echo`
 
@@ -498,7 +525,7 @@ Calls follow [Session binding][binding], with Actor count and payload matched to
 | Item | Measurement condition |
 |---|---|
 | Roles/processes | CS Client × clientCount, Session(Object Client) × 1, Actor(Object Server) × 1; distinct server PIDs |
-| Load/mode | Physical connectors; `request`, ordinary; representative 1024 bytes |
+| Load/mode | Physical connectors; `request`, ordinary; payload per §12 |
 | Completion/owner | Client: public request through validated original STREAM echo |
 | Preparation | Prepare Actors on the Actor server and bind Refs to sessions; separate create/bind latency |
 | Location Store/Docker | Both object roles require Docker Redis in the same run namespace |
@@ -507,7 +534,7 @@ Calls follow [Session binding][binding], with Actor count and payload matched to
 | Language | Public calls and exact interface |
 |---|---|
 | .NET | Use connector `Request(dto).Async<PerfEchoReply>()`, setup `Actors.BindOrGetAsync(ref)` and session `RelayAsync(payload)` ([connector][d-connector], [session][d-session], [Actor][d-actor]). |
-| C++ | Use connector `request(dto).submit<PerfEchoReply>(callback)`, public `dispatch()`, `stream.actors().bind_or_get(ref)` and session relay, subject to the declaration check in §10.1 ([connector][c-connector], [session][c-session], [Actor][c-actor]). |
+| C++ | Use connector `request(dto).submit<PerfEchoReply>(callback)`, public `dispatch()`, `stream.actors().bind_or_get(ref)` and session relay, using the relay/reply completion boundary in §10.1 ([connector][c-connector], [session][c-session], [Actor][c-actor]). |
 | Java | Use connector `request(dto).submit(PerfEchoReply.class)`, session `actors().bindOrGet(ref)` and `relay(dispatch,payload)` ([connector][j-connector], [session][j-session]). |
 | Kotlin | Use connector wrapper `request<PerfEchoReply>(dto).await()`, `bindOrGetActor(ref)` and session wrapper `relay(dispatch,payload).await()` ([connector][j-connector], [session][k-session]). |
 | Node.js | Use connector `request(dto).submit<PerfEchoReply>()`, session `actors.bindOrGet(ref)` and `relay(dispatch,payload)` ([connector][n-connector], [session][n-session]). |
@@ -521,7 +548,7 @@ global SpotId. Targeting and completion refer to [Spot addressing][spot-address]
 | Item | Measurement condition |
 |---|---|
 | Roles/processes | HTTP trigger Client × 1, Channel(Object Client) × 1, Spot(Object Server) × 1 |
-| Load/mode | Logical streams on Channel; `request`, ordinary; representative 4096 bytes |
+| Load/mode | Logical streams on Channel; `request`, ordinary; payload per §12 |
 | Completion/owner | Channel process: immediately before RequestToSpot through validated typed echo |
 | Preparation | Manager-prepared User Spot `spotIds`, assigned by streamId mod spotCount |
 | Location Store/Docker | Required for both Object Client/Server; run-dedicated Docker Redis |
@@ -547,7 +574,7 @@ owned by their contracts.
 | Item | Measurement condition |
 |---|---|
 | Roles/processes | HTTP Client × 1, Channel(Object Client+return Channel Server) × 1, Spot(Object Server) × 1 |
-| Load/mode | Channel logical streams; `send-send`, ordinary; representative 4096 bytes |
+| Load/mode | Channel logical streams; `send-send`, ordinary; payload per §12 |
 | Completion/owner | Channel: correlation registration/just before first public send through echo validation in the return Channel handler |
 | Return | Run/cell-specific ChannelName with this caller as its sole Server, configured during setup |
 | Location Store/Docker | Run-dedicated Docker Redis for global Spot calls and automatic RouteMesh |
@@ -571,7 +598,7 @@ other callbacks on the same Spot→Channel remote request. The [execution contra
 |---|---|
 | Roles/processes | HTTP Client × 1, Spot(Object Server+local public driver) × 1, Channel echo target × 1 |
 | Required cells | `ordinary × 1`, `ordinary × 16`, `yield × 1`, `yield × 16` SpotId; all at each payload |
-| Load/mode | Logical streams in Spot process; `request`; representative 4096 bytes |
+| Load/mode | Logical streams in Spot process; `request`; payload per §12 |
 | Execution | Actor-free `SpotWide` User Spot direct request handler; streams evenly assigned to SpotIds |
 | Completion/owner | Spot handler: just before the public remote Channel request through reply validation after its terminal; driver RTT separate |
 | Fixed comparison inputs | Remote Channel process configuration, payload, logicalStreams, inflight, deadlines and execution mode |
@@ -605,7 +632,7 @@ send handler on the original Spot. Application correlation follows [Spot outboun
 | Item | Measurement condition |
 |---|---|
 | Roles/processes | HTTP Client × 1, Spot(Object Server+driver) × 1, Channel(Object Client) × 1 |
-| Load/mode | Spot logical streams; `send-send`, ordinary; representative 4096 bytes |
+| Load/mode | Spot logical streams; `send-send`, ordinary; payload per §12 |
 | Completion/owner | Source Spot handler: correlation registration/just before Channel send through echo validation in the original Spot return handler |
 | Return | Explicit source User SpotId in DTO `returnSpotId`; Channel handler makes a public send to that ID |
 | Location Store/Docker | Run-dedicated Docker Redis for source User Spot and return caller Object Client |
@@ -632,7 +659,7 @@ It uses [public Spot dispatch][spot-address] and is not interpreted as pure inte
 | Item | Measurement condition |
 |---|---|
 | Roles/processes | HTTP Client × 1, Spot(Object Server+local application driver) × 1 |
-| Load/mode | Logical streams, `no-await`; ordinary request at caller, immediate typed reply at handler; representative 1024 bytes |
+| Load/mode | Logical streams, `no-await`; ordinary request at caller, immediate typed reply at handler; payload per §12 |
 | Completion/owner | Spot process: just before local public RequestToSpot through validated echo; includes codec/local dispatch, excludes HTTP trigger |
 | Preparation | Prepare User Spots with only the local Object Server eligible for placement; Actor count 0 |
 | Location Store/Docker | Local User Spots also require run-dedicated Docker Redis |
@@ -655,7 +682,7 @@ Worker execution and terminals refer to [Submit §3][submit] and [execution][tur
 | Item | Measurement condition |
 |---|---|
 | Roles/processes | HTTP Client × 1, Spot(Object Server+local driver+Framework worker) × 1; no remote echo process |
-| Load/mode | Logical streams, `worker-offload`; ordinary/yield comparison, default yield; representative 1024 bytes |
+| Load/mode | Logical streams, `worker-offload`; ordinary/yield comparison, default yield; payload per §12 |
 | Execution | Actor-free SpotWide User Spots; same local public driver as §10.7 |
 | Completion/owner | Spot process: local RequestToSpot through validated echo after worker result; separate public worker-call interval |
 | Workload | Identical worker-task-millis and §5.2 pool/executor settings |
@@ -693,7 +720,7 @@ Measures lookup and remote-request cost when accessing global ActorId without se
 | Item | Measurement condition |
 |---|---|
 | Roles/processes | HTTP Client × 1, ActorCaller(Object Client) × 1, Actor(Object Server) × 1 |
-| Load/mode | ActorCaller logical streams; `request`, ordinary; representative 4096 bytes |
+| Load/mode | ActorCaller logical streams; `request`, ordinary; payload per §12 |
 | Completion/owner | ActorCaller: just before RequestToActor through validated typed echo |
 | Preparation | One ActorId per stream; await public GetOrCreate, then use unbound Actors in Entry membership |
 | Location Store/Docker | Run-dedicated Docker Redis required for Actor authority |
@@ -716,7 +743,7 @@ Measurement intervals refer to [Actor messaging][actor] and [source-local admiss
 | Item | Measurement condition |
 |---|---|
 | Roles/processes | HTTP Client × 1, ActorCaller(Object Client+return Channel Server) × 1, Actor(Object Server) × 1 |
-| Load/mode | ActorCaller logical streams; `send-send`, ordinary; representative 4096 bytes |
+| Load/mode | ActorCaller logical streams; `send-send`, ordinary; payload per §12 |
 | Completion/owner | ActorCaller: correlation registration/just before SendToActor through validated echo in the return Channel handler |
 | Separate interval | Same call start through SendToActor terminal: `actor.sourceAdmission.*` |
 | Preparation/return | One unbound Actor per stream; run/cell-specific RouteMesh return ChannelName with caller as sole Server |
@@ -743,7 +770,7 @@ subscribers; completion and delivery refer to the [owning contract][fanout].
 | Item | Measurement condition |
 |---|---|
 | Roles/processes | HTTP Client × 1, Publisher × 1, Subscriber × subscriberCount; distinct subscriber PIDs |
-| Load/mode | Publisher logical streams; `publish`, ordinary; representative 1024 bytes |
+| Load/mode | Publisher logical streams; `publish`, ordinary; payload per §12 |
 | Completion/owners | Publisher public-publish admission and each Subscriber typed handler's unique delivery, aggregated separately |
 | In-flight | Limits publisher-local admission waits only; no subscriber ACK window |
 | Preparation | Automatic discovery; per-subscriber public Ready and first warmup-marker receipt |
@@ -768,6 +795,45 @@ Do not assume per-subscriber transport topic filters for Classic fanout.
 Inject no late join, restart or reconnect into this steady cell. Record loss through deliveryRatio
 and Framework failures through their actual public kinds.
 
+### 10.12 One-way Send Reference Cells
+
+Do not substitute request or send/send round trips for one-way real-time messaging.
+These three scenarios belong to the default matrix and transmit one 4096B message.
+
+| Scenario | Public call and placement | Delivery observation |
+|---|---|---|
+| `s2s-channel-to-spot-send` | Initial SendToSpot from §10.4; Channel Object Client → remote User Spot | Spot typed send handler |
+| `s2s-spot-to-channel-send` | Initial SendToChannel from §10.6; local driver → User Spot → remote Channel | Channel typed send handler |
+| `actor-no-bind-send` | Initial SendToActor from §10.10; ActorCaller → remote unbound ActorId | Actor typed send handler |
+
+Use the referenced language calls, setup and Store requirements. Register no return Channel or
+return Spot handler; return addresses are null. The Spot→Channel driver distinguishes whether
+the source handler started and holds its slot through initial send admission. There is no remote ACK.
+
+The source uses the common `PerfEchoRequest` identity with a 4096B payload and records admission
+latency and outcomes. The receiver records first delivery of each sequence after validating the
+entire pattern. Echo completed count, echo latency and KOPS are null with `NOT_APPLICABLE`.
+Record `send.admissionOpsPerSec`, `send.deliveryOpsPerSec`, `send.deliveryRatio`,
+`send.admissionLatency.*` and `send.deliveryLatency.*` separately, in op/s, ratio and ms.
+Delivery latency spans call start to typed-handler entry only with verified common clock domains;
+otherwise use null with `CLOCK_DOMAIN_UNVERIFIED`. Never report RTT/2 as one-way latency.
+
+At report time, compare source/receiver sequence sets. Source rows contain
+`{clientId, attemptedRanges, windowAdmissionRanges, settleAdmissionRanges}`; receiver rows contain
+`{clientId, windowRanges, settleRanges, duplicateCount}`. Range ordering and unique timing use the
+PS evidence rules in §15.4. Intersect with source `windowAdmissionRanges` and keep receiver
+window/settle separate. Admission rate uses the source window; delivery rate uses the receiver
+window. Ratio is all unique intersection deliveries divided by window admissions. Zero denominator
+is invalid. Reconcile source `sent=admitted+failed+timeout+cancelled+unresolved`, splitting admission
+into window/settle. Never invent a Framework error for missing delivery. Error-free one-way baseline
+eligibility requires complete collection, zero public failures, deliveryRatio 1 and zero duplicates.
+
+Warmup ends after public-call terminals and current application handlers finish. Do not wait
+indefinitely for PS losses or unobservable transport queues. Warmup identities arriving after reset
+are excluded from the new cohort and recorded as `load.lateWarmupMessages`. Any nonzero value
+invalidates the cell because prior load overlapped measured work. Do not overwrite the run with
+a restart or increased deadline.
+
 ## 11. Baseline Scenarios
 
 Baselines use the §4 phases and §15 per-cell originals. Validate the apparatus first with
@@ -781,7 +847,7 @@ A [public session callback][session] echoes the typed payload.
 | Item | Measurement condition |
 |---|---|
 | Roles/processes | CS Client × clientCount, Session × 1; no Actor dispatch or object role |
-| Load/mode | Physical connectors, `request`, ordinary; representative 1024 bytes, also run 4096 |
+| Load/mode | Physical connectors, `request`, ordinary; 64B request → 4096B reply |
 | Completion/owner | Client: just before public request through validated typed echo |
 | Location Store/Docker | Not required for pure STREAM; add no automatic discovery |
 | Null/unsupported | Actor, Spot, worker and fanout metrics inapplicable; infer no remote object behavior |
@@ -803,7 +869,7 @@ ClientServer. Refer to [Channel messaging][channel] and [ClientServer request/re
 |---|---|---|
 | Roles/processes | HTTP Client × 1, Channel source × 1, Channel target × 1 | Same process separation |
 | Configuration | Object role None; manual RouteMesh peer and Channel Client/Server | Manual ClientServer client and remote Server |
-| Load/mode | Source logical streams, `request`, ordinary; representative 4096 bytes, also run 1024 | Same |
+| Load/mode | Source logical streams, `request`, ordinary; 64B request → 4096B reply | Same |
 | Completion/owner | Source: just before public Channel request through validated typed echo | Same |
 | Location Store/Docker | Not required without object roles or automatic discovery | Not required with manual endpoints |
 | Null/unsupported | Physical connectors, Actor, Spot, worker and fanout inapplicable | Same; do not substitute separate Completion-connection bytes for this topology's reply bytes |
@@ -830,13 +896,18 @@ that same §10.7 cell.
 
 - **Framework messages use the default typed JSON serializer.** Section 15 fixes payload JSON
   representation so languages need no separate message codec to reconcile native byte-array defaults.
-- **Echo returns received identity and payload unchanged.** Regeneration, compression or partial
-  replies must not create false fast successes. Receivers validate length and the entire byte pattern.
+- **Copy identity unchanged and use the direction-specific payload size.** Request/reply validates
+  a 64B request and returns 4096B. Send/send uses 4096B on each leg; one-way/PS sends only 4096B.
+  Existing `echo` names describe identity correlation, not byte-for-byte request payload reflection.
+- **Prepare the fixed pattern and Base64 strings once per size during setup.** A request handler
+  validates all 64B and puts the prepared 4096B response payload in its typed DTO. The client validates
+  all 4096B; one-way/PS receivers do likewise. No per-operation payload regeneration, extra serialization,
+  compression or partial reply is permitted. Default typed JSON serialization remains in the measurement.
 
 | Application DTO | Use and purpose |
 |---|---|
 | `PerfEchoRequest` | Measured public request or initial send: identity, logical sequence and return address |
-| `PerfEchoReply` | Typed request reply or return send: same identity and payload |
+| `PerfEchoReply` | Typed request reply or return send: copied identity and the direction-specific payload |
 | `PerfDriveRequest` / `PerfDriveReply` | Local public Spot driver in §10.5/§10.6: whether the measured operation started and driver completion |
 | `PerfTriggerRequest` / `PerfTriggerReply` | Phase start and acknowledgement on the separate application HTTP endpoint |
 | `PerfPublishEvent` | Typed fanout event with sole-publisher sequence and fixed topic |
@@ -859,8 +930,9 @@ The local Spot driver in §4.2 submits this unit; nested public calls are not ex
   perf observes one public awaitable's result.
 - **All languages use harness correlationId for send/send.** Two one-way calls form an application
   echo regardless of whether Framework request correlation is available.
-- **Compare request and send/send with the same stream count, inflight, payload, placement and deadlines.**
-  Unbounded send accumulation or a different return target measures a different completion cost.
+- **Compare the four languages within a pattern using identical stream counts, inflight, directional
+  sizes, placement and deadlines.** Request/reply uses 64+4096B; send/send uses 4096+4096B. Their KOPS
+  difference is not API overhead alone. Never rank 4096B one-way delivery ops/sec together with round-trip KOPS.
 
 Request terminal selection and conditions allowing remote work to remain belong to [Submit §9][submit].
 The harness records validated public-reply success, public failure and cancellation as exclusive outcomes.
@@ -920,7 +992,7 @@ object with dotted keys.
 | `throughput.kops` | number, kop/s | Owner's window echo successes/sec/1000; §15.4 covers CS aggregation |
 | `throughput.messagesPerSec` | number, message/s | Sum of application message counts/sec; excludes native attempts, headers, fragments, handshakes, drivers and admin |
 | `throughput.megabytesPerSec` | number, MiB/s | Sum of directional logical payload bytes/sec/1048576; includes both echo directions, not wire bandwidth |
-| `latency.meanMs/p50Ms/p95Ms/p99Ms/maxMs` | number or null, ms | Window echo-success histogram `latencyMs` |
+| `latency.meanMs/p50Ms/p95Ms/p99Ms/p999Ms/maxMs` | number or null, ms | Window echo-success histogram `latencyMs` |
 | `settle.latency.*` | number or null, ms | Settle echo-success histogram `settleLatencyMs` |
 | `actor.sourceAdmission.latency.*` | number or null, ms | AC send start→successful source admission, derived from `sourceAdmissionMs` |
 | `spot.remoteCallLatency.*` | number or null, ms | §10.5 call start→validated reply, including gate reacquisition/continuation; same interval as `latencyMs` |
@@ -950,12 +1022,18 @@ object with dotted keys.
 | `errors.harness` | object of count strings | Application instrumentation, validation and correlation failures |
 | `errors.language` | object of count strings | Argument/configuration errors without a public kind and language cancellation; preserve actual type |
 
-Each latency `*` expands to `meanMs`, `p50Ms`, `p95Ms`, `p99Ms`, `maxMs`.
+Each latency `*` expands to `meanMs`, `p50Ms`, `p95Ms`, `p99Ms`, `p999Ms`, `maxMs`.
 Keep scalar keys for inapplicable standard families as null per §15.5 rather than omitting them.
-`driver.*` applies only to the auxiliary local driver in §10.5–10.6. The local public caller
+`driver.*` applies to §10.5–10.6 and the §10.12 Spot→Channel auxiliary local driver. The local public caller
 interval in §10.7–10.8 is already primary latency and is not duplicated in driver histograms.
 Physical connection metrics are null for server-driven cells; CS has `load.logicalStreams=null`.
 Record CS in-flight through per-connector configuration and actual instrumentation.
+
+Record §10.12 `send.*` and §24 `slo.*`, `load.scheduleLag.*` and `load.scheduledLatency.*` in
+the same metrics object. send.* is inapplicable outside one-way; scheduling values are inapplicable
+outside scheduled experiments. `load.lateWarmupMessages` is a count for every cell.
+slo.eligible/met/missed are U64; ratios/rates and recovery.timeMs are numbers or null.
+Recovery applies only to selected experiments; distinguish unobserved from inapplicable.
 
 ### 14.1 Values Without Public Observations
 
@@ -994,7 +1072,7 @@ units in `runtimeMetrics` for JVM heap/non-heap, Node event-loop delay and simil
 
 - **Preserve each cell's originals in its own directory.** A new scenario, payload, terminal or
   placement in the same run must not overwrite earlier results.
-- **Fail when an output path already exists.** Repeated execution needs a new runId or §23 repetition
+- **Fail when an output path already exists.** An explicitly requested later run needs a new runId
   so comparison inputs remain distinguishable.
 
 ```text
@@ -1002,7 +1080,7 @@ perf-results/<run-id>/
 |-- index.json
 |-- summary.txt
 `-- <scenario>/
-    `-- <payload-bytes>/
+    `-- <payload-profile>/
         `-- <variant>/
             |-- config.json
             |-- endpoints.json
@@ -1013,21 +1091,24 @@ perf-results/<run-id>/
             |-- server-<role>-<instance>.json
             |-- publisher-sequences.json
             |-- subscriber-<id>-sequences.json
+            |-- source-sequences.json       // one-way only
+            |-- receiver-sequences.json     // one-way only
             `-- logs/
                 |-- client-<index>.log
                 |-- server-<role>-<instance>.log
                 `-- message-flow-<role>-<instance>.log
 ```
 
-Sequence files are PS-only. Do not enable extra tracing in ordinary measurement merely to create
+Sequence files are required for PS and §10.12 one-way cells. Do not enable extra tracing in ordinary measurement merely to create
 message-flow files. Section 21 separates diagnostic runs from standard performance results.
-`variant` is `<mode>-<terminal>-<topology>-s<spotCount>-n<subscriberCount>-<configHash>`.
+`payload-profile` is `req64-rep4096` for requests, `send4096-return4096` for send/send,
+or `send4096` for one-way/PS. `variant` is `<mode>-<terminal>-<topology>-s<spotCount>-n<subscriberCount>-<configHash>`.
 Use `na` for inapplicable counts/topology in paths. `configHash` is the full lowercase SHA-256 hex
 of comparison-input JSON UTF-8 bytes fixed before phase start. Preserve those exact input bytes in config.
 
 Comparison inputs include language, mode, terminal, topology/discovery, execution mode, Spot/Actor
 mapping rules/counts, subscriber count, connection/stream partition, in-flight, timeouts, worker workload/options,
-CPU/memory/runtime options, serializer, and §23 workload hash/repetition. Exclude runId, PIDs,
+CPU/memory/runtime options, serializer, directional sizes, warmup/duration/runs=1 and §23 workload hash. Exclude runId, PIDs,
 dynamic ports and output paths from the comparison hash; retain them as environment metadata.
 Generate concrete run/cell SpotIds and ActorIds after fixing the hash; hash placement/partition rules
 instead of those ID strings. `cellId` is this relative directory within the run.
@@ -1035,7 +1116,7 @@ instead of those ID strings. `cellId` is this relative directory within the run.
 ### 15.2 DTO Field Types and JSON
 
 These declarations are **contract pseudocode for common application DTOs, not actual Framework APIs**.
-All JSON property names use the lowerCamelCase shown. Schema version is integer `2`.
+All JSON property names use the lowerCamelCase shown. Schema version is integer `3`.
 
 ```text
 U64 = decimal JSON string               // 0..18446744073709551615; "0" or digits without leading zeroes
@@ -1055,6 +1136,7 @@ PerfEchoRequest extends Identity {
   clientId: Index                       // Global CS connector ID or source logical stream ID
   sequence: U64                         // Issued per clientId by source; never reused within cell
   correlationId: Text                   // cellId/phase/clientId/sequence; harness identity
+  scheduledTicks: I64 | null            // Optional scheduled experiment; same source clock, otherwise null
   sentTicks: I64                        // Monotonic nanoseconds immediately before measured call
   clockDomainId: Text                   // Identifies the epoch/unit of these ticks
   returnSpotId: Text | null             // Only send/send requiring Spot return
@@ -1067,7 +1149,7 @@ PerfEchoReply extends Identity {
   correlationId: Text                   // Copied unchanged from request
   receivedTicks: I64                    // Target handler's local monotonic time; diagnostic only
   clockDomainId: Text                   // Domain of receivedTicks; RTT uses caller's own clock
-  payload: Text                         // Echo received Base64 unchanged
+  payload: Text                         // Base64 with the reply size and pattern from §12
 }
 PerfDriveRequest {
   echo: PerfEchoRequest                 // Measured operation requested by local driver
@@ -1085,6 +1167,7 @@ PerfTriggerReply extends Identity {
 }
 PerfPublishEvent extends Identity {
   sequence: U64                         // Sole Publisher issues throughout the entire run
+  scheduledTicks: I64 | null            // Optional scheduled experiment; same source clock, otherwise null
   topic: Text                           // Fixed "perf.echo"
   sentTicks: I64
   clockDomainId: Text
@@ -1100,7 +1183,8 @@ WorkerObservation {
 ```
 
 Logical payload byte `b[i]` is `(31*i + 17*floor(i/251) + 29) mod 256`.
-`payloadSize` counts these bytes, excluding Base64 expansion, JSON properties and Framework headers.
+`requestPayloadBytes=64`, `replyPayloadBytes=4096` and `sendPayloadBytes=4096` count these directional
+bytes, excluding Base64 expansion, JSON properties and Framework headers.
 Base64 is an application field representation, not a manual codec for the whole message.
 Use the same default typed JSON serializer without per-packet encoders/decoders.
 Snapshot `serializedMessageBytes` is an array of `{direction:Text, packetName:Text,
@@ -1138,40 +1222,40 @@ Node bigint and all 64-bit values are decimal strings, never narrowed to JSON nu
 
 ### 15.3 Histograms and Percentiles
 
-Application latency histograms use this format. Do not merge public providers' own histograms
-with these application histograms.
+Compute common histograms with integer nanosecond bounds. For
+`bucketSpec="ns-1us-1pct-60s-v1"`, generate `b[0]=1000`, then
+`b[i+1]=min(60000000000, ceil(b[i]*101/100))` through the final value, using integer arithmetic.
+Each language checks against the same boundary fixture in §19. Upper-bound error is at most 1µs
+below 1µs and at most 1% above it. This does not improve actual timer resolution or accuracy;
+preserve clock evidence separately.
 
-```json
-{
-  "unit": "ms",
-  "ticksUnit": "ns",
-  "bounds": [0.1, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024],
-  "counts": ["0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"],
-  "overflow": "0",
-  "count": "0",
-  "sumNs": "0",
-  "maxNs": null,
-  "percentileMethod": "nearest-rank-bucket-upper-bound"
+```text
+Histogram {
+  unit: "ms"; ticksUnit: "ns"
+  bucketSpec: "ns-1us-1pct-60s-v1"
+  boundsNs: U64[]                 // Every bound generated by the recurrence
+  counts: U64[]                   // Same length as boundsNs, noncumulative
+  overflow: U64; count: U64
+  sumNs: decimal string           // Arbitrary-precision nonnegative integer
+  maxNs: U64 | null
+  percentileMethod: "nearest-rank-bucket-upper-bound"
 }
 ```
 
-- **Buckets are `[0,b0]`, then `(b[i-1],b[i]]`, with noncumulative counts.** Every sample must enter
-  exactly one bucket or overflow to support aggregation.
-- **Estimate a percentile from the upper bound of its nearest-rank bucket.** Use the first bucket
-  containing sample rank `ceil(p*count)`. Compute p50/p95/p99 rank with integer arithmetic
-  `ceil(q*count/100)` for `q=50,95,99`, without narrowing count to floating point.
-  Even a p50 below 0.1ms is reported as a quantized `0.1`
-  estimate, not an exact observation.
-- **If the selected rank is in overflow, the percentile is null.** Capping it at the last bound
-  would understate the tail. Record `HISTOGRAM_OVERFLOW` and `lowerBoundMs=1024`.
-- **Do not reconstruct mean/max from buckets.** Compute them from exact integer `sumNs`, `count`
-  and `maxNs` over all valid samples, including overflow.
+- Buckets are `[0,b0]`, then `(b[i-1],b[i]]`; each sample enters one bucket or overflow.
+- p50/p95/p99/p99.9 use integer rank `ceil(q*count/1000)` for `q=500,950,990,999`.
+  Divide the selected upper bound by 1000000 for the ms estimate. `p999Ms` means p99.9.
+  Preserve sample counts in the originals.
+- p99.9 is null with `INSUFFICIENT_SAMPLES` below 100000 samples in that histogram. Do not
+  lengthen a short run or duplicate samples to obtain a tail percentile.
+- An overflow rank means null with `HISTOGRAM_OVERFLOW`, `lowerBoundMs=60000`. Never discard
+  overflow counts or move them into the last bucket.
+- Compute mean/max from exact observations: `meanMs=sumNs/count/1000000`,
+  `maxMs=maxNs/1000000`. Empty histograms use null with `NO_SAMPLES`.
 
-`count=sum(counts)+overflow`. Count fields are U64; integer overflow fails the cell.
-`sumNs` is an arbitrary-precision nonnegative decimal string, without overflow.
-`maxNs` is U64 or null; no samples means null with `NO_SAMPLES`.
-`meanMs=sumNs/count/1000000`; `maxMs=maxNs/1000000`.
-When sample count is zero, all percentiles, mean and max are null with `NO_SAMPLES`.
+`count=sum(counts)+overflow`; U64 count overflow fails the cell. Accumulate integers on the hot
+path and convert to decimal strings only at snapshot time. Never merge schema 2 coarse histograms
+with schema 3 or compare their percentiles as equivalent. Public provider histograms remain separate.
 
 Merge counts/sums and take the maximum of max values only for matching units, bounds, cohorts and
 intervals. Do not average process percentiles or means. Differing bucket originals fail with
@@ -1190,6 +1274,9 @@ keys to sample sets prevents collectors from merging different intervals.
 | `workerTaskLatencyMs` | `worker.taskLatency.*`; the same callbacks as those worker calls |
 | `workerResultToContinuationMs` | `worker.resultToContinuation.*`; the same callbacks as those worker calls |
 | `fanoutDeliveryLatencyMs` / `fanoutSettleDeliveryLatencyMs` | `fanout.deliveryLatency.*` / `fanout.settleDeliveryLatency.*`; §15.4 window/settle unique intersections |
+| `sendAdmissionLatencyMs` | `send.admissionLatency.*`; one-way admission terminals in window |
+| `sendDeliveryLatencyMs` / `sendSettleDeliveryLatencyMs` | `send.deliveryLatency.*` / `send.settleDeliveryLatency.*`; unique receipt intersections in window/settle |
+| `scheduleLagMs` / `scheduledLatencyMs` | `load.scheduleLag.*` / `load.scheduledLatency.*`; issued scheduled work, with validated completions in window for the latter |
 
 All successful samples above belong to the measured cohort. Do not mix auxiliary settle samples
 into primary echo histograms. Inapplicable histograms also carry null plus a reason.
@@ -1217,11 +1304,12 @@ All snapshots share this structure. `Object` means JSON object; `[]` means JSON 
 
 ```text
 PerfMetricsSnapshot {
-  schemaVersion: JSON integer           // 2
+  schemaVersion: JSON integer           // 3
   runId: Text; cellId: Text; resetSeq: U64
-  language: "dotnet" | "cpp" | "java" | "kotlin" | "node"
+  language: "dotnet" | "cpp" | "java" | "node"
   role: Text; roleInstance: Index
   configHash: Text
+  comparisonKey: Text                 // §19 common-input SHA-256
   phase: "setup" | "warmup" | "reset" | "measured" | "settle" | "complete"
   window: {
     startedAtUnixMs: I64 | null         // Display only; null before start
@@ -1238,12 +1326,20 @@ PerfMetricsSnapshot {
   nullReasons: Object                  // §15.5 JSON pointer → reason
   publicStatus: Object | null          // Actual public host snapshot; retain language fields/enums
   publicMetrics: Object[]              // name, kind, unit, labels, value; preserve owning metric names/units
+  timeSeries: TimeSeriesInterval[]     // Complete window partition, final partial interval retained
   runtimeMetrics: Object               // Language process supplements with name/unit/type/value
   provenance: Object                   // §19 environment/artifact/PID information
 }
+TimeSeriesInterval {
+  offsetMs: Number; durationMs: Number  // Source-local window offsets; default 100ms
+  counts: Object                      // Dotted application count keys, U64 values
+  cpuPercent: Number | null           // This process interval; null requires reason
+  nullReasons: Object
+}
 PerfResult {
-  schemaVersion: JSON integer           // 2
+  schemaVersion: JSON integer           // 3
   runId: Text; cellId: Text; configHash: Text
+  comparisonKey: Text                 // §19 common-input SHA-256
   language: Text; scenario: Text
   configFile: Text; endpointsFile: Text // Relative paths within cell
   status: "valid" | "failed" | "invalid" | "unsupported"
@@ -1266,8 +1362,20 @@ PerfResult {
 Public status 64-bit fields also use §15.2 representation; the exact interface defines original types.
 Public metric `value` is a string for integer declarations and a finite number for floating declarations.
 Do not change histograms, labels or units and export them as the same provider metric.
-`index.json` is `{schemaVersion:2, runId, cells:[{cellId, resultFile, status}]}`.
+`index.json` is `{schemaVersion:3, runId, cells:[{cellId, resultFile, status}]}`.
 The run summary has one row per cell and no cross-cell throughput total.
+
+Default output columns are `bandwidth`, `throughput`, `latency mean`, `latency p95`,
+`latency p99`, `cpu`, and `mem`, in that order. Bandwidth is the directional logical
+payload rate above in `MiB/sec`; latency uses `ms`, CPU uses `%`, and memory is process RSS in `MiB`.
+Display CPU and memory with each process name and its actual observation. Do not sum independent
+process values into a simultaneous global observation; retain the detailed JSON `MULTIPLE_OWNERS` policy.
+Request/reply and send-send echo completion throughput displays `throughput.kops` in `kops/sec`.
+One-way send displays `send.deliveryOpsPerSec / 1000`, and PS displays the sum across subscribers,
+`fanout.deliveryOpsPerSec / 1000`, in `kmsg/sec`. Label PS throughput as a subscriber total.
+Values with no samples or no measured observation display `N/A` with their reason code, never an invented zero.
+Cell summaries, run summaries and standard output use the same presentation rules.
+Retain the existing detailed JSON metrics, histograms and null reasons.
 
 The PS Publisher preserves the measured starting-sequence range and successful publication set.
 `published=publishedInWindow+settlePublished`; both are successful public admissions of the measured cohort.
@@ -1295,7 +1403,7 @@ SubscriberSequences extends Identity {
 ReceiptTiming {
   sequence: U64
   sentTicks: I64; publisherClockDomainId: Text
-  receivedTicks: I64; subscriberClockDomainId: Text
+  receivedTicks: I64; validatedTicks: I64; subscriberClockDomainId: Text
   receivedIn: "window" | "settle"
 }
 ```
@@ -1334,8 +1442,8 @@ collection method and retained bytes in provenance.
 ```
 
 Reason codes are `NOT_APPLICABLE`, `PUBLIC_OBSERVATION_UNSUPPORTED`, `RUNTIME_METRIC_UNSUPPORTED`,
-`CLOCK_DOMAIN_UNVERIFIED`, `NO_SAMPLES`, `HISTOGRAM_OVERFLOW`, `ZERO_DENOMINATOR`,
-`MULTIPLE_OWNERS`, `PHASE_NOT_STARTED`, `COLLECTION_FAILED`.
+`CLOCK_DOMAIN_UNVERIFIED`, `NO_SAMPLES`, `INSUFFICIENT_SAMPLES`, `HISTOGRAM_OVERFLOW`, `ZERO_DENOMINATOR`,
+`MULTIPLE_OWNERS`, `NOT_OBSERVED_WITHIN_WINDOW`, `PHASE_NOT_STARTED`, `COLLECTION_FAILED`.
 Every null metric, histogram and window value has a nonempty reason.
 DTO return addresses, replies and trigger reasons explicitly declared nullable follow their field comments.
 A failed required collection produces `COLLECTION_FAILED` and a failed cell, not an unsupported metric.
@@ -1360,6 +1468,13 @@ acknowledgement. These control messages are client-application interfaces, not F
 Acknowledge receiver phase starts before starting sources/CS clients. Record each trigger send and
 acknowledgement on the coordinator’s single monotonic clock to bound observed start skew. Without
 common-clock evidence, exact inter-process start differences are null with reasons.
+
+Fix `maxStartSkewMs=50` in comparison inputs. Measure the coordinator-clock bound from the
+first trigger send through the last start acknowledgement. Exceeding it invalidates the cell and
+excludes rate aggregation from comparisons. Receivers may close their windows before sources;
+classify final receipts by their own window/settle. Merely recording skew does not make differently
+overlapping windows a simultaneous 5s workload. Apply the same start-error limit even with verified
+common clocks.
 
 ### 16.1 Readiness
 
@@ -1467,7 +1582,7 @@ framework/languages/java/perf/
 The Java implementation provides a Gradle standalone runner. Server metrics include JVM GC count,
 heap/non-heap usage, and process CPU.
 
-### 17.3 Kotlin
+### 17.3 Kotlin (Optional Extension)
 
 Since Kotlin shares a build root with the Java framework, its standard location is fixed at
 `framework/languages/java/perf/kotlin/`. It must use the same scenario names and result schema as
@@ -1589,6 +1704,68 @@ Summary also identifies client CPU saturation, subscriber evidence cost, clock e
 and histogram quantization. PS results with loss or §23 saturation results do not establish ordinary
 echo completion guarantees.
 
+### 19.1 Equal Conditions and Shared Validation Across Four Languages
+
+Before comparison, freeze one common input containing scenarios, directional payload sizes, topology,
+terminal, streams/connections, inflight, Spot/Actor placement, deadlines, 2s warmup, 5s measured and
+one run. Its `resourcePlan` fixes CPU affinity/cpuset, quota and memory per role, client/server host
+placement and CPU sharing, and Core HWM/application queue profiles or manual limits. Apply the
+same plan to all four languages. Record executor/GC differences and distinguish public settings to
+hold constant from allowed language-specific settings. Matching CPU models alone is insufficient;
+results with different actual prepared connection counts are not directly comparable.
+
+All four languages use the same release Core binary hash. Record language-specific binding and
+Framework versions, commits, hashes and actual loaded paths separately. Different Core binaries,
+debug/stale libraries, unapplied resource plans or concurrent builds/tests/perf invalidate preflight
+or comparison. Build each language once before measurement. Redis image, CPU/memory and network
+placement are comparison inputs too. Execute one measurement at a time through the repository
+[perf ticket queue][perf-policy].
+
+Keep `configHash` as language-specific execution identity. `comparisonKey` is SHA-256 of the exact
+UTF-8 JSON bytes of the common input. Exclude language, runtime/serializer names and versions,
+artifact paths, runId/PID/ports from this key; version and artifact conditions still pass the separate
+checks above. For a single-language run, the script creates the common-input file. For a four-language comparison,
+pass the same file with `--comparison-config` and reject duplicate CLI inputs. Runners read the same
+bytes instead of independently serializing JSON to hash.
+Directional sizes or resourcePlan differences must change the comparison key.
+
+The first perf implementation step must create the following shared artifacts under
+`framework/perf-contract/`. These are **required artifacts to implement**, not a claim that they
+already exist.
+
+| Artifact | Validation |
+|---|---|
+| `matrix.json` | All 21 scenarios/variants, modes, topologies, sizes and defaults; Kotlin excluded |
+| `schema.json` | Schema 3 DTOs, originals, result, null reasons and count types |
+| `histogram-bounds-ns.json` | Complete integer bounds from §15.3; byte-identical across languages |
+| `fixtures/` | 64/4096B patterns/JSON DTOs; bucket boundaries, overflow, insufficient p99.9 samples; window/settle boundaries; first-outcome races; one-way/PS intersections |
+| Shared validator | Identical counts, histograms and comparison decisions for fixtures and language originals |
+
+No language recreates existing common files or substitutes its own expected results. Differences
+between the matrix and documentation, or originals and aggregation, fail validation. Never invent
+medians, standard deviations or repeated-run confidence intervals from the default single run.
+Keep 100ms completion/error/CPU intervals to identify abrupt changes within 5 seconds; these are
+not independent repetitions. Record insufficient samples or JIT/GC variation without automatically
+increasing warmup, duration or runs.
+
+Interval CPU uses the increase in public cumulative CPU read by the existing 100ms CPU/RSS
+sampler, divided by its actual monotonic sample span. One fully occupied core is 100%. Assign
+each sample to the bin given by the integer part of its start offset divided by 100ms; weight
+multiple samples in one bin by their actual spans. Preserve `binIndex`, `startOffsetMs`,
+`endOffsetMs`, `observedDurationNs` and `cpuDeltaNs` in `runtimeMetrics.cpuSamples` to expose
+timer jitter and the final partial span. Samples starting after the window do not enter measured
+bins. Never duplicate a long sample into other bins or interpolate; an empty bin is `NO_SAMPLES`.
+The value describes the assigned actual sample spans, rather than CPU between exact 100ms boundaries.
+
+### 19.2 Cost of the Short Run
+
+The 21 default cells require 42s warmup, 105s measured and 60s between-cell cooldown per language:
+**207 seconds**, or **13 minutes 48 seconds** across four languages for those components alone.
+Build, setup, readiness, actual drain/shutdown and reporting are additional; this is not a total wall
+time guarantee. Print cell count and fixed cost before execution and actual phase durations afterward.
+Readiness, drain and shutdown advance immediately when their evidence is complete; timeout limits
+must not become unconditional waits.
+
 ## 20. Operating System And Execution Environment
 
 - **Use public port-0 listener observations or verified port reservations.** Avoid sample/E2E port
@@ -1617,6 +1794,30 @@ Readiness, liveness and shutdown refer to [Channel][channel], [liveness][livenes
 Record PAUSED and not-ready separately and compare connection changes under saturation with the contracts.
 Do not hide outcomes through timeout increases, manual reconnect or propagation sleeps.
 
+### 20.1 Process Restart and Transition Timing
+
+Use [bindings multi perf process isolation, cooldown and shutdown][bindings-perf] as the reference.
+Do not copy its raw-socket ready tokens or active-only phase into Framework. Use §16 public
+readiness and the Framework's 2s warmup.
+
+| Item | Default and behavior |
+|---|---|
+| Server startup readiness | At most 10000ms; advance on public infrastructureReady |
+| Connection/object setup | At most 30000ms; finish on connect/create/bind evidence |
+| Warmup / measured | Start new operations for exactly 2s / 5s respectively; never count-based |
+| Warmup drain / measured settle | At most 5000ms each; finish when public terminals, current handlers and required receipt evidence are complete |
+| Graceful shutdown | Request all owned processes to stop, then wait concurrently for at most 5000ms |
+| Shutdown failure | Terminate surviving owned PIDs, kill after at most another 5000ms, reap for at most 2000ms; record cleanup failures |
+| Next cell | One 3000ms script-level cooldown after prior process exits are confirmed |
+
+Restart all application servers and source/clients when pattern, terminal, Spot count or topology
+changes. Keep the same processes between warmup and measured within a cell, using drain/reset.
+No cooldown follows the final cell. Do not stack pattern/transport/run cooldowns when several
+variant fields change. Three seconds does not imply that all TCP TIME_WAIT has cleared; retain
+fresh endpoints and resource isolation. Add no sleeps/retries to runtime calls. Keep the run-owned
+Redis as defined in §20, always using a new cell namespace. Never rerun a cell automatically after
+startup, connection or cleanup failure.
+
 ## 21. Prohibited
 
 - **Do not compensate for public-API completion at another layer.** Raw sockets, private runtime,
@@ -1641,12 +1842,12 @@ transport implementation state.
 
 **Matrices and public calls**
 
-- Running `run_perf.sh` produces 1024/4096 results for each §8.4 name and independently queryable results for all four §10.5 cells.
+- Running `run_perf.sh` produces fixed directional-payload results for each §8.4/§10.12 name and independently queryable results for all four §10.5 cells.
 - Running `channel-echo-only` records distinct RouteMesh/ClientServer topologies and source/target PIDs in their results.
 - Running `session-echo-only` and local Spot baselines records the §11 boundaries, with local Spot referencing a single §10.7 result.
-- Sending a CS request yields an original STREAM reply with matching identity/payload, without create/bind setup time in the echo histogram.
+- Sending a CS request yields an original STREAM reply with matching identity and a 4096B payload, without create/bind setup time in the echo histogram.
 - Running no-bind Actor cells records configured global ActorIds and public request/send results, without session-binding evidence.
-- Running request/send-send with matching inputs records the same logical in-flight definition and separate send-admission/echo-completion metrics.
+- Running all four languages within a pattern records the same directional sizes and logical in-flight definition and separate send-admission/echo-completion metrics.
 - Running worker cells records the public callback checksum, iterations, actual callback time and selected ordinary/Yield value.
 
 **Phases and results**
@@ -1668,6 +1869,11 @@ transport implementation state.
 - Without common-clock-domain evidence, process one-way latency is null while delivery count and ratio remain queryable.
 - A Store-dependent run exposes Docker container ID and cell namespace in config, and cleanup stops only that run's owned resources.
 - Executing a §23 manifest records public capacity snapshots and outcomes by topology, without internal permit-handoff judgments.
+- Default matrix: 21 fixed-payload cells, 2s warmup, 5s measured, one run; fresh server/source PIDs per cell, no final cooldown or automatic repeats.
+- Four-language comparisonKey, Core hash and applied resourcePlan agree and pass the §19 shared fixtures.
+- §10.12 computes admission/delivery separately from 4096B one-way receipt evidence, with no echo KOPS.
+- SLO denominators include failed/unresolved work; insufficient p99.9 samples and excess start skew are explicit.
+- Run only selected §24 experiments; report unrecovered/unsupplied load at 5s without automatic extension.
 
 ## 23. Measuring Production Values For Core HWM And The Application Job Queue
 
@@ -1678,24 +1884,25 @@ Perf records public settings, snapshots and completion evidence.
 
 ### 23.1 Fixed Workload And CPU Matrix
 
-`--workload-config` owns all workload values for this experiment. Reject duplicate CLI/manifest
+`--workload-config` owns all workload values for the optional §23–24 experiments. Reject duplicate CLI/manifest
 inputs for the same value. The manifest identifies these inputs and consumers.
 
 | Manifest input | Consumer |
 |---|---|
-| `scenario`, `payloadDistribution`, `requestOneWayRatio` | Application generator: packet-kind/logical-byte proportions |
-| `logicalStreams` or `connections`, `inflight`, `ratePerSecond`, `burstRatePerSecond`, `burstDurationMs` | Corresponding CS/source generator: steady/burst load |
+| `scenario`, `requestOneWayRatio` | Application generator: packet-kind proportions; directional bytes are fixed by §12 |
+| `logicalStreams` or `connections`, `inflight`, §24 `segments` | Corresponding CS/source generator: steady/burst load |
 | `handlerCpuWork`, `handlerIoWork` | Public application handler/worker: fixed CPU/I/O ratio |
-| `warmupSeconds=30`, `measuredSeconds=60`, `repetitions=5`, deadlines and settle values | Phase owner; recorded explicit inputs |
+| `warmupSeconds=2`, `measuredSeconds=5`, `repetitions=1`, deadlines and settle values | Phase owner; recorded explicit inputs |
 | `requestedProcessors=[4,8,16]`, `cpuQuota`, `cpuset`, `executorMaximum` | Process/container execution and public executor configuration |
 | `memoryLimitBytes`, `runtimeOptions`, `gcOptions` | Process/container execution |
 | `coreProfiles`, `coreBudgetCandidatesBytes`, `applicationQueueProfiles`, `manualQueueCandidates` | Public host configuration builder |
 | `pauseThresholdPercent`, `resumeThresholdPercent` | Public application-queue configuration; record 80/60 defaults and actual values |
 | `capacitySampleIntervalMs=100` | Application public-status sampler |
-| `targetCpuRange`, `minThroughput`, `maxP99Ms`, `maxDeadlineMissRatio`, `maxMemoryBytes`, `lossPolicy`, `minDeliveryRatio`, `safetyMargin` | Production-candidate report judgment; minDeliveryRatio is PS-only |
+| `targetCpuRange`, `minThroughput`, `maxP99Ms`, `applicationDeadlineMs`, `maxDeadlineMissRatio`, `maxMemoryBytes`, `lossPolicy`, `minDeliveryRatio`, `safetyMargin` | Production-candidate report judgment; minDeliveryRatio is PS-only |
 
 Fix units and valid ranges in the manifest; exact interfaces own applicable public options.
-`ratePerSecond` means logical operations/sec; burst duration uses monotonic milliseconds.
+`segments[].ratePerSecond` means logical operations/sec; durationMs uses monotonic milliseconds.
+`maxDeadlineMissRatio` limits the §24.1 application SLO missRatio, not the public timeout ratio.
 `lossPolicy` is `lossless` or `observe-delivery`; Classic fanout uses the latter.
 
 Alongside requested CPU count, record runtime constrained count, affinity/cpuset count,
@@ -1715,10 +1922,11 @@ pre-bind ordering. Confirm Core manual/profile precedence through public effecti
 
 ### 23.2 Measurement Phases And Reset Baseline
 
-Each repetition follows §4 warmup drain→reset acknowledgement→measured→settle.
-Run at least 30s warmup and 60s measurement five times, with steady/burst intervals fixed in the manifest.
-If the coefficient of variation exceeds 5%, mark results unstable and retain originals.
-Do not extend the same run's duration/timeouts to turn it into a pass.
+Run each candidate once through warmup drain → reset acknowledgement → measured → settle (§4).
+Defaults are 2 seconds warmup and 5 seconds measured. Repetitions, coefficient of variation and
+medians are not required. The §24 steady/burst/recovery segments fit inside the same 5-second
+window. If recovery is not observed, record `recovery=notObservedWithinWindow`; never extend
+the run automatically or hide the result.
 
 Record public capacity snapshots before/after reset: configured values, current gauges, pressure
 state/current pause duration, epoch, peaks, transitions, cumulative pause and configuration failures.
@@ -1784,6 +1992,130 @@ labels according to their [owning metric contract][metrics].
 - Per-role resources, source/subscriber evidence, selected candidate/margin and threshold judgments
 
 [Document list][docs] · [Common specification][common] · [Scenario E2E][e2e]
+## 24. Real-Time Messaging Metrics and Optional Experiments
+
+The default 5s run is a short comparison of the same public calls. Real-time servers also need
+timely completion, progress for less-active sources and recovery under normal load after a burst.
+Run only cells explicitly selected by `--workload-config` once. Do not multiply the default 21-cell
+matrix by rates, sizes or CPU counts. Retain the default payloads and 2s warmup.
+
+### 24.1 Application Time Budgets and Goodput
+
+Separate the application completion budget `applicationDeadlineMs` from the Framework public
+call's `requestTimeoutMs`. The former is a perf workload objective; the latter keeps its existing
+deadline contract. Default comparison uses `applicationDeadlineMs=50`, a common comparison
+criterion rather than a product guarantee or universal production SLA. Fix production objectives
+in the manifest before execution.
+
+| Metric | Meaning |
+|---|---|
+| `slo.eligible` | Started request/send-send operations; all scheduled operations for scheduled experiments |
+| `slo.met` | Unique validated completions within the application budget, observed in window or settle |
+| `slo.missed` | eligible−met; failure, timeout, cancellation, unresolved and unissued work remain in the denominator |
+| `slo.missRatio` | missed/eligible; zero denominator is null with `ZERO_DENOMINATOR` |
+| `slo.goodputOpsPerSec` | Met operations completing inside the window divided by measuredSeconds, in op/s |
+
+Counts use U64 strings; ratios/rates use finite numbers. Compute budget success from actual
+completion timestamps, never histogram buckets. Require applicationDeadlineMs ≤ settleTimeoutMs
+so the observation can cover the budget. Use the caller's validated completion, not an inferred
+remote reply-ready time. Spot→Channel SLO includes the entire local driver call, separately from
+its remote-call latency.
+
+A low success p99 does not establish good real-time performance when many operations fail.
+Public timeout/cancellation does not prove remote nonexecution or message loss ([errors][errors]).
+One-way/PS SLO ends at full payload validation, separately from handler-entry latency, and requires
+receipt evidence and verified common clocks. For default runs the denominators
+are window admissions and window publications respectively, reporting PS per subscriber. **In scheduled
+experiments both families instead retain all `load.scheduled` as the SLO denominator.** Unissued work
+and admission failures remain included; correlate actual receipt evidence with scheduled operations.
+Do not filter SLO samples to successful admission/publication intersections. DeliveryRatio remains
+the existing conditional ratio for successful admissions/publications. Without verified clocks, delivery
+SLOs are null with a reason while deliveryRatio remains available.
+Never conflate publisher-local admission SLO with subscriber delivery SLO.
+
+### 24.2 Load Generation and Latency Start Points
+
+Default closed-loop traffic slows its input when replies slow down. It cannot alone characterize
+latency under a fixed arrival rate. Rate-controlled experiments schedule independently of completion
+and record scheduled→call, call→completion and scheduled→completion separately. This addresses
+the issue described in [wrk2's latency measurement explanation](https://github.com/giltene/wrk2#readme)
+while retaining the Framework public API, inflight and deadline boundaries defined here.
+
+Each manifest segment contains `{name, durationMs, ratePerSecond}`; durations sum to the default
+`5000`. Rate is a positive integer of logical operations/sec for the whole source. Given segment
+start t0 and zero-based ordinal k, due time is `t0+floor(k*1000000000/rate)`. Include only due times
+before segment end. Map global ordinal modulo streamCount to streams. Multiple CS processes
+partition the same overall schedule using the global ID rules in §6.2.
+
+At each due time, check the slot without retaining an unbounded pending queue or sending a catch-up
+burst. Fix `maxScheduleLatenessMs=1` before execution. Exceeding it increments `load.notIssuedLate`;
+otherwise lack of a slot increments `load.notIssuedCapacity`. These are exclusive. Remaining work
+starts one public call. Account for schedule ordinals missed during source stalls; do not reissue
+them with new timestamps.
+
+```text
+load.scheduled = load.issued + load.notIssuedLate + load.notIssuedCapacity
+```
+
+For driver-based cells, load.issued means driver starts and may differ from remote messages.sent.
+Scheduled latency and SLO include that entire driver interval. These counts are not added again to
+Framework failure counts. For other cells load.issued equals messages.sent. `load.scheduleLag.*`
+covers scheduled→actual public call; `load.scheduledLatency.*` covers scheduled→validated completion,
+both using §15.3 histograms. Unissued work belongs to SLO misses, not success histograms. Do not
+add synthetic samples as coordinated-omission correction.
+
+Record source CPU/event-loop, schedule lag and unissued ratio. A generator that cannot supply the
+rate does not establish target-only maximum throughput. When source and generator share a server
+process, report their combined CPU cost. Use identical explicit rate lists across languages; do not
+place independently auto-selected language rates in one comparison row.
+
+### 24.3 Burst, Recovery and Isolation Within Five Seconds
+
+| Optional experiment | Fixed workload | Observations |
+|---|---|---|
+| Constant rate | One common manifest rate, 5s measured | Completion/delivery, p99 and supported p99.9, SLO misses/goodput, source limits |
+| Burst and recovery | Normal 1500ms → burst 500ms → normal 3000ms; manifest supplies both rates | Segment completions/errors/SLO and recovery under normal load |
+| Hot/cold groups | Same payload/handler work, explicit stream/Spot/Actor groups and rates | Per-group SLO, p99 and completion counts; cold-group delay hidden by aggregates |
+| Slow PS subscriber | Fixed manifest CPU work added to one subscriber | Publisher admission and normal/slow subscriber deliveryRatio and latency |
+
+Do not reset, drain or restart during recovery; maintain normal input. The manifest fixes maximum
+missRatio, minimum goodput and consecutive qualifying 100ms intervals (default 3). Attribute work
+to its scheduled-start segment; late burst completions never become fresh recovery successes.
+Once recovery-origin work meets the criteria for consecutive intervals, record first qualifying
+interval start minus burst end as `recovery.timeMs`, and the confirmation time separately.
+Attribute each interval SLO to its scheduled operations and finalize it only after observing the last
+operation’s application deadline. Confirmation must also fall within measured time to count as recovery.
+If not confirmed within the window, use null with `NOT_OBSERVED_WITHIN_WINDOW` without extending
+it. Only remaining public-call terminal observation uses the existing settle bound.
+
+Host pressure, capacity waits and RSS are auxiliary evidence. RUNNING alone does not establish
+recovery and queue zero is not required: local Core HWM may still block sends ([queue][queue]).
+Do not infer per-source queue depth or permit handoff order. Measure hot/cold effects with
+application group identities; add no unique Actor/Spot labels to Framework metrics. Equal throughput
+allocation is not a Framework fairness guarantee.
+
+Classic fanout can lose messages for a slow subscriber and provides no ACK/replay ([fanout][channel]).
+Observe normal subscriber and publisher progress separately. Add no ACK window, manual reconnect
+or retransmission. All payloads remain 4096B; only the specified slow-handler work differs.
+
+### 24.4 Observation Cost and Completion
+
+Default required results are public outcome reconciliation, directional bytes, separate admission
+and delivery, RTT or verified one-way latency, SLO and process CPU/RSS. Unsupported internal
+queue-wait/turn metrics remain null. Do not change the runtime to enlarge perf observations.
+
+Prepare payloads, histogram and 100ms interval storage during setup. Record local counters/histograms
+and merge at report time. Retain correlation outcomes compactly using fixed IDs/sequences; do not
+duplicate payloads and long identity strings for every operation. Apply the same rule to PS/one-way
+receipt evidence. Record collection/retention method and memory; discarded required evidence is a
+collection failure. Report insufficient samples, unrecovered load and errors at the 5s boundary.
+Longer runs are explicitly selected experiments, never hidden default completion requirements.
+
+Also see [OpenMessaging Benchmark metrics](https://openmessaging.cloud/docs/benchmarks/) for the
+separation of public admission, actual receipt and input delay. Do not import broker durable-ACK
+or consumer-backlog contracts into Framework.
+
+
 
 [docs]: ../../../../../framework/doc/README.en.md
 [common]: ../../../../../framework/doc/framework/common/README.en.md
@@ -1855,3 +2187,6 @@ labels according to their [owning metric contract][metrics].
 [c-connector]: ../../../../../framework/doc/framework/common/spec/stream-connector/languages/cpp/03-stream-connector.en.md
 [j-connector]: ../../../../../framework/doc/framework/common/spec/stream-connector/languages/java/03-stream-connector.en.md
 [n-connector]: ../../../../../framework/doc/framework/common/spec/stream-connector/languages/typescript/03-stream-connector.en.md
+
+[bindings-perf]: ../../../../../doc/perf/PERF_MULTI_TEST_POLICY.md
+[perf-policy]: ../../../../../CONTRIBUTING.ko.md#7-성능-판정

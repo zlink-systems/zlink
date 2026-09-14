@@ -43,7 +43,7 @@ public final class PlayApplication {
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(Env.get("playRouteEndpoint"))
                 .setRoutingId(RoutingId.from(nodeRid));
-            mesh.channelName(Contracts.ROUTE_CHANNEL).server();
+            mesh.channel(Contracts.ROUTE_CHANNEL).server();
             mesh.peerConnections().connect(Env.get("sessionRouteEndpoint"));
             mesh.addRouteRequestHandler(
                 EvidenceRouteRequestHandler.class,

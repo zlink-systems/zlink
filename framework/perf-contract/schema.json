@@ -1,0 +1,3139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zlink.systems/framework/perf/schema3.json",
+  "title": "Framework perf schema 3",
+  "$defs": {
+    "u64": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "description": "0..18446744073709551615; validator enforces bound"
+    },
+    "i64": {
+      "type": "string",
+      "pattern": "^(0|-?[1-9][0-9]*)$",
+      "description": "Signed 64-bit canonical decimal; validator enforces bound"
+    },
+    "decimal": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "text": {
+      "type": "string"
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "number": {
+      "type": "number"
+    },
+    "nullReason": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "enum": [
+            "NOT_APPLICABLE",
+            "PUBLIC_OBSERVATION_UNSUPPORTED",
+            "RUNTIME_METRIC_UNSUPPORTED",
+            "CLOCK_DOMAIN_UNVERIFIED",
+            "NO_SAMPLES",
+            "INSUFFICIENT_SAMPLES",
+            "HISTOGRAM_OVERFLOW",
+            "ZERO_DENOMINATOR",
+            "MULTIPLE_OWNERS",
+            "NOT_OBSERVED_WITHIN_WINDOW",
+            "PHASE_NOT_STARTED",
+            "COLLECTION_FAILED"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner": {
+          "$ref": "#/$defs/text"
+        },
+        "lowerBoundMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "nullReasons": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/nullReason"
+      }
+    },
+    "PerfEchoRequest": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "$ref": "#/$defs/text"
+        },
+        "cellId": {
+          "$ref": "#/$defs/text"
+        },
+        "resetSeq": {
+          "$ref": "#/$defs/u64"
+        },
+        "phase": {
+          "enum": [
+            "warmup",
+            "measured"
+          ]
+        },
+        "clientId": {
+          "$ref": "#/$defs/index"
+        },
+        "sequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "correlationId": {
+          "$ref": "#/$defs/text"
+        },
+        "scheduledTicks": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/i64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sentTicks": {
+          "$ref": "#/$defs/i64"
+        },
+        "clockDomainId": {
+          "$ref": "#/$defs/text"
+        },
+        "returnSpotId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/text"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "returnChannel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/text"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "runId",
+        "cellId",
+        "resetSeq",
+        "phase",
+        "clientId",
+        "sequence",
+        "correlationId",
+        "scheduledTicks",
+        "sentTicks",
+        "clockDomainId",
+        "returnSpotId",
+        "returnChannel",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "PerfEchoReply": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "$ref": "#/$defs/text"
+        },
+        "cellId": {
+          "$ref": "#/$defs/text"
+        },
+        "resetSeq": {
+          "$ref": "#/$defs/u64"
+        },
+        "phase": {
+          "enum": [
+            "warmup",
+            "measured"
+          ]
+        },
+        "clientId": {
+          "$ref": "#/$defs/index"
+        },
+        "sequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "correlationId": {
+          "$ref": "#/$defs/text"
+        },
+        "receivedTicks": {
+          "$ref": "#/$defs/i64"
+        },
+        "clockDomainId": {
+          "$ref": "#/$defs/text"
+        },
+        "payload": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "runId",
+        "cellId",
+        "resetSeq",
+        "phase",
+        "clientId",
+        "sequence",
+        "correlationId",
+        "receivedTicks",
+        "clockDomainId",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "PerfDriveRequest": {
+      "type": "object",
+      "properties": {
+        "echo": {
+          "$ref": "#/$defs/PerfEchoRequest"
+        }
+      },
+      "required": [
+        "echo"
+      ],
+      "additionalProperties": false
+    },
+    "PerfDriveReply": {
+      "type": "object",
+      "properties": {
+        "started": {
+          "type": "boolean"
+        },
+        "echo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PerfEchoReply"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "started",
+        "echo"
+      ],
+      "additionalProperties": false
+    },
+    "PerfTriggerRequest": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "$ref": "#/$defs/text"
+        },
+        "cellId": {
+          "$ref": "#/$defs/text"
+        },
+        "resetSeq": {
+          "$ref": "#/$defs/u64"
+        },
+        "phase": {
+          "enum": [
+            "setup",
+            "warmup",
+            "measured"
+          ]
+        }
+      },
+      "required": [
+        "runId",
+        "cellId",
+        "resetSeq",
+        "phase"
+      ],
+      "additionalProperties": false
+    },
+    "PerfTriggerReply": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "$ref": "#/$defs/text"
+        },
+        "cellId": {
+          "$ref": "#/$defs/text"
+        },
+        "resetSeq": {
+          "$ref": "#/$defs/u64"
+        },
+        "phase": {
+          "enum": [
+            "setup",
+            "warmup",
+            "measured"
+          ]
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "state": {
+          "enum": [
+            "started",
+            "alreadyStarted",
+            "rejected"
+          ]
+        },
+        "configHash": {
+          "$ref": "#/$defs/text"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/text"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "runId",
+        "cellId",
+        "resetSeq",
+        "phase",
+        "accepted",
+        "state",
+        "configHash",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "PerfPublishEvent": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "$ref": "#/$defs/text"
+        },
+        "cellId": {
+          "$ref": "#/$defs/text"
+        },
+        "resetSeq": {
+          "$ref": "#/$defs/u64"
+        },
+        "phase": {
+          "enum": [
+            "warmup",
+            "measured"
+          ]
+        },
+        "sequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "scheduledTicks": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/i64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "topic": {
+          "const": "perf.echo"
+        },
+        "sentTicks": {
+          "$ref": "#/$defs/i64"
+        },
+        "clockDomainId": {
+          "$ref": "#/$defs/text"
+        },
+        "payload": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "runId",
+        "cellId",
+        "resetSeq",
+        "phase",
+        "sequence",
+        "scheduledTicks",
+        "topic",
+        "sentTicks",
+        "clockDomainId",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "WorkerObservation": {
+      "type": "object",
+      "properties": {
+        "startedTicks": {
+          "$ref": "#/$defs/i64"
+        },
+        "endedTicks": {
+          "$ref": "#/$defs/i64"
+        },
+        "clockDomainId": {
+          "$ref": "#/$defs/text"
+        },
+        "iterations": {
+          "$ref": "#/$defs/u64"
+        },
+        "checksum": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "startedTicks",
+        "endedTicks",
+        "clockDomainId",
+        "iterations",
+        "checksum"
+      ],
+      "additionalProperties": false
+    },
+    "ClockMetadata": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/text"
+        },
+        "nativeFrequencyHz": {
+          "$ref": "#/$defs/u64"
+        },
+        "ticksUnit": {
+          "const": "ns"
+        },
+        "clockDomainId": {
+          "$ref": "#/$defs/text"
+        },
+        "scope": {
+          "enum": [
+            "process",
+            "host",
+            "aligned-hosts"
+          ]
+        },
+        "alignmentMethod": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/text"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maxErrorNs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "validFromTicks": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/i64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "validThroughTicks": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/i64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          }
+        }
+      },
+      "required": [
+        "source",
+        "nativeFrequencyHz",
+        "ticksUnit",
+        "clockDomainId",
+        "scope",
+        "alignmentMethod",
+        "maxErrorNs",
+        "validFromTicks",
+        "validThroughTicks",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
+    "Histogram": {
+      "type": "object",
+      "properties": {
+        "unit": {
+          "const": "ms"
+        },
+        "ticksUnit": {
+          "const": "ns"
+        },
+        "bucketSpec": {
+          "const": "ns-1us-1pct-60s-v1"
+        },
+        "boundsNs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/u64"
+          }
+        },
+        "counts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/u64"
+          }
+        },
+        "overflow": {
+          "$ref": "#/$defs/u64"
+        },
+        "count": {
+          "$ref": "#/$defs/u64"
+        },
+        "sumNs": {
+          "$ref": "#/$defs/decimal"
+        },
+        "maxNs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "percentileMethod": {
+          "const": "nearest-rank-bucket-upper-bound"
+        }
+      },
+      "required": [
+        "unit",
+        "ticksUnit",
+        "bucketSpec",
+        "boundsNs",
+        "counts",
+        "overflow",
+        "count",
+        "sumNs",
+        "maxNs",
+        "percentileMethod"
+      ],
+      "additionalProperties": false
+    },
+    "Window": {
+      "type": "object",
+      "properties": {
+        "startedAtUnixMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/i64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endedAtUnixMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/i64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startTicks": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/i64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endTicks": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/i64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "measuredSeconds": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settleSeconds": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "startedAtUnixMs",
+        "endedAtUnixMs",
+        "startTicks",
+        "endTicks",
+        "measuredSeconds",
+        "settleSeconds"
+      ],
+      "additionalProperties": false
+    },
+    "SerializedMessageBytes": {
+      "type": "object",
+      "properties": {
+        "direction": {
+          "enum": [
+            "request",
+            "send",
+            "reply",
+            "event"
+          ]
+        },
+        "packetName": {
+          "$ref": "#/$defs/text"
+        },
+        "logicalPayloadBytes": {
+          "$ref": "#/$defs/u64"
+        },
+        "observedSerializedBytes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "direction",
+        "packetName",
+        "logicalPayloadBytes",
+        "observedSerializedBytes"
+      ],
+      "additionalProperties": false
+    },
+    "TimeSeriesInterval": {
+      "type": "object",
+      "properties": {
+        "offsetMs": {
+          "$ref": "#/$defs/number"
+        },
+        "durationMs": {
+          "$ref": "#/$defs/number"
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/u64"
+          }
+        },
+        "cpuPercent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nullReasons": {
+          "$ref": "#/$defs/nullReasons"
+        }
+      },
+      "required": [
+        "offsetMs",
+        "durationMs",
+        "counts",
+        "cpuPercent",
+        "nullReasons"
+      ],
+      "additionalProperties": false
+    },
+    "Metrics": {
+      "type": "object",
+      "properties": {
+        "connections.requested": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "connections.connected": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "connections.failed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.logicalStreams": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.inflightPerStream": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.inflight.max": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.lateWarmupMessages": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.scheduled": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.issued": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.notIssuedLate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.notIssuedCapacity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.sent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.admitted": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.admittedInWindow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.settleAdmitted": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.completed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.settleCompleted": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.failed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.timeout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.cancelled": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.unresolved": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.expired": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.duplicateReply": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.lateReply": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.unknownCorrelation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.published": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.publishedInWindow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages.settlePublished": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "applicationMessages.request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "applicationMessages.send": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "applicationMessages.reply": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "applicationMessages.event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "applicationPayloadBytes.request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "applicationPayloadBytes.send": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "applicationPayloadBytes.reply": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "applicationPayloadBytes.event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spot.applicationYieldCalls": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spot.applicationHandlerEntries": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "driver.issued": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "driver.notStarted": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "driver.failed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.subscriberCount": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.uniqueDelivered": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.deliveredInWindow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.settleDelivered": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.duplicateEvents": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.outOfCohortEvents": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slo.eligible": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slo.met": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slo.missed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gc.gen0": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gc.gen1": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gc.gen2": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "throughput.kops": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "throughput.messagesPerSec": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "throughput.megabytesPerSec": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.deliveryRatio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.publishOpsPerSec": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.deliveryOpsPerSec": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.admissionOpsPerSec": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.deliveryOpsPerSec": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.deliveryRatio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slo.missRatio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slo.goodputOpsPerSec": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "process.cpuPercent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "process.rssMb": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "process.allocatedMb": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recovery.timeMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spot.mailboxDepth.max": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spot.mailboxDepth.mean": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spot.suspendedTurns": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spot.resumedTurns": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spot.resumeLatency.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spot.resumeLatency.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.pool.queueDepth.max": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.pool.queueDepth.mean": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host.queueWaitLatency.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host.queueWaitLatency.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host.queueWaitLatency.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latency.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latency.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latency.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latency.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latency.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latency.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settle.latency.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settle.latency.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settle.latency.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settle.latency.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settle.latency.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settle.latency.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "actor.sourceAdmission.latency.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "actor.sourceAdmission.latency.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "actor.sourceAdmission.latency.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "actor.sourceAdmission.latency.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "actor.sourceAdmission.latency.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "actor.sourceAdmission.latency.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "driver.latency.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "driver.latency.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "driver.latency.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "driver.latency.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "driver.latency.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "driver.latency.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.callLatency.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.callLatency.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.callLatency.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.callLatency.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.callLatency.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.callLatency.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.submitToStart.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.submitToStart.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.submitToStart.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.submitToStart.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.submitToStart.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.submitToStart.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.taskLatency.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.taskLatency.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.taskLatency.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.taskLatency.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.taskLatency.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.taskLatency.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.resultToContinuation.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.resultToContinuation.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.resultToContinuation.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.resultToContinuation.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.resultToContinuation.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker.resultToContinuation.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.deliveryLatency.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.deliveryLatency.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.deliveryLatency.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.deliveryLatency.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.deliveryLatency.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.deliveryLatency.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.settleDeliveryLatency.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.settleDeliveryLatency.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.settleDeliveryLatency.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.settleDeliveryLatency.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.settleDeliveryLatency.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fanout.settleDeliveryLatency.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.admissionLatency.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.admissionLatency.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.admissionLatency.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.admissionLatency.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.admissionLatency.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.admissionLatency.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.deliveryLatency.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.deliveryLatency.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.deliveryLatency.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.deliveryLatency.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.deliveryLatency.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.deliveryLatency.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.settleDeliveryLatency.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.settleDeliveryLatency.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.settleDeliveryLatency.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.settleDeliveryLatency.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.settleDeliveryLatency.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "send.settleDeliveryLatency.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.scheduleLag.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.scheduleLag.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.scheduleLag.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.scheduleLag.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.scheduleLag.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.scheduleLag.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.scheduledLatency.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.scheduledLatency.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.scheduledLatency.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.scheduledLatency.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.scheduledLatency.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load.scheduledLatency.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spot.remoteCallLatency.meanMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spot.remoteCallLatency.p50Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spot.remoteCallLatency.p95Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spot.remoteCallLatency.p99Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spot.remoteCallLatency.p999Ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spot.remoteCallLatency.maxMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "errors.byKind": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/u64"
+          }
+        },
+        "errors.harness": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/u64"
+          }
+        },
+        "errors.language": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/u64"
+          }
+        }
+      },
+      "required": [
+        "connections.requested",
+        "connections.connected",
+        "connections.failed",
+        "load.logicalStreams",
+        "load.inflightPerStream",
+        "load.inflight.max",
+        "load.lateWarmupMessages",
+        "load.scheduled",
+        "load.issued",
+        "load.notIssuedLate",
+        "load.notIssuedCapacity",
+        "messages.sent",
+        "messages.admitted",
+        "messages.admittedInWindow",
+        "messages.settleAdmitted",
+        "messages.completed",
+        "messages.settleCompleted",
+        "messages.failed",
+        "messages.timeout",
+        "messages.cancelled",
+        "messages.unresolved",
+        "messages.expired",
+        "messages.duplicateReply",
+        "messages.lateReply",
+        "messages.unknownCorrelation",
+        "messages.published",
+        "messages.publishedInWindow",
+        "messages.settlePublished",
+        "applicationMessages.request",
+        "applicationMessages.send",
+        "applicationMessages.reply",
+        "applicationMessages.event",
+        "applicationPayloadBytes.request",
+        "applicationPayloadBytes.send",
+        "applicationPayloadBytes.reply",
+        "applicationPayloadBytes.event",
+        "spot.applicationYieldCalls",
+        "spot.applicationHandlerEntries",
+        "driver.issued",
+        "driver.notStarted",
+        "driver.failed",
+        "fanout.subscriberCount",
+        "fanout.uniqueDelivered",
+        "fanout.deliveredInWindow",
+        "fanout.settleDelivered",
+        "fanout.duplicateEvents",
+        "fanout.outOfCohortEvents",
+        "slo.eligible",
+        "slo.met",
+        "slo.missed",
+        "gc.gen0",
+        "gc.gen1",
+        "gc.gen2",
+        "throughput.kops",
+        "throughput.messagesPerSec",
+        "throughput.megabytesPerSec",
+        "fanout.deliveryRatio",
+        "fanout.publishOpsPerSec",
+        "fanout.deliveryOpsPerSec",
+        "send.admissionOpsPerSec",
+        "send.deliveryOpsPerSec",
+        "send.deliveryRatio",
+        "slo.missRatio",
+        "slo.goodputOpsPerSec",
+        "process.cpuPercent",
+        "process.rssMb",
+        "process.allocatedMb",
+        "recovery.timeMs",
+        "spot.mailboxDepth.max",
+        "spot.mailboxDepth.mean",
+        "spot.suspendedTurns",
+        "spot.resumedTurns",
+        "spot.resumeLatency.p95Ms",
+        "spot.resumeLatency.p99Ms",
+        "worker.pool.queueDepth.max",
+        "worker.pool.queueDepth.mean",
+        "host.queueWaitLatency.p50Ms",
+        "host.queueWaitLatency.p95Ms",
+        "host.queueWaitLatency.p99Ms",
+        "latency.meanMs",
+        "latency.p50Ms",
+        "latency.p95Ms",
+        "latency.p99Ms",
+        "latency.p999Ms",
+        "latency.maxMs",
+        "settle.latency.meanMs",
+        "settle.latency.p50Ms",
+        "settle.latency.p95Ms",
+        "settle.latency.p99Ms",
+        "settle.latency.p999Ms",
+        "settle.latency.maxMs",
+        "actor.sourceAdmission.latency.meanMs",
+        "actor.sourceAdmission.latency.p50Ms",
+        "actor.sourceAdmission.latency.p95Ms",
+        "actor.sourceAdmission.latency.p99Ms",
+        "actor.sourceAdmission.latency.p999Ms",
+        "actor.sourceAdmission.latency.maxMs",
+        "driver.latency.meanMs",
+        "driver.latency.p50Ms",
+        "driver.latency.p95Ms",
+        "driver.latency.p99Ms",
+        "driver.latency.p999Ms",
+        "driver.latency.maxMs",
+        "worker.callLatency.meanMs",
+        "worker.callLatency.p50Ms",
+        "worker.callLatency.p95Ms",
+        "worker.callLatency.p99Ms",
+        "worker.callLatency.p999Ms",
+        "worker.callLatency.maxMs",
+        "worker.submitToStart.meanMs",
+        "worker.submitToStart.p50Ms",
+        "worker.submitToStart.p95Ms",
+        "worker.submitToStart.p99Ms",
+        "worker.submitToStart.p999Ms",
+        "worker.submitToStart.maxMs",
+        "worker.taskLatency.meanMs",
+        "worker.taskLatency.p50Ms",
+        "worker.taskLatency.p95Ms",
+        "worker.taskLatency.p99Ms",
+        "worker.taskLatency.p999Ms",
+        "worker.taskLatency.maxMs",
+        "worker.resultToContinuation.meanMs",
+        "worker.resultToContinuation.p50Ms",
+        "worker.resultToContinuation.p95Ms",
+        "worker.resultToContinuation.p99Ms",
+        "worker.resultToContinuation.p999Ms",
+        "worker.resultToContinuation.maxMs",
+        "fanout.deliveryLatency.meanMs",
+        "fanout.deliveryLatency.p50Ms",
+        "fanout.deliveryLatency.p95Ms",
+        "fanout.deliveryLatency.p99Ms",
+        "fanout.deliveryLatency.p999Ms",
+        "fanout.deliveryLatency.maxMs",
+        "fanout.settleDeliveryLatency.meanMs",
+        "fanout.settleDeliveryLatency.p50Ms",
+        "fanout.settleDeliveryLatency.p95Ms",
+        "fanout.settleDeliveryLatency.p99Ms",
+        "fanout.settleDeliveryLatency.p999Ms",
+        "fanout.settleDeliveryLatency.maxMs",
+        "send.admissionLatency.meanMs",
+        "send.admissionLatency.p50Ms",
+        "send.admissionLatency.p95Ms",
+        "send.admissionLatency.p99Ms",
+        "send.admissionLatency.p999Ms",
+        "send.admissionLatency.maxMs",
+        "send.deliveryLatency.meanMs",
+        "send.deliveryLatency.p50Ms",
+        "send.deliveryLatency.p95Ms",
+        "send.deliveryLatency.p99Ms",
+        "send.deliveryLatency.p999Ms",
+        "send.deliveryLatency.maxMs",
+        "send.settleDeliveryLatency.meanMs",
+        "send.settleDeliveryLatency.p50Ms",
+        "send.settleDeliveryLatency.p95Ms",
+        "send.settleDeliveryLatency.p99Ms",
+        "send.settleDeliveryLatency.p999Ms",
+        "send.settleDeliveryLatency.maxMs",
+        "load.scheduleLag.meanMs",
+        "load.scheduleLag.p50Ms",
+        "load.scheduleLag.p95Ms",
+        "load.scheduleLag.p99Ms",
+        "load.scheduleLag.p999Ms",
+        "load.scheduleLag.maxMs",
+        "load.scheduledLatency.meanMs",
+        "load.scheduledLatency.p50Ms",
+        "load.scheduledLatency.p95Ms",
+        "load.scheduledLatency.p99Ms",
+        "load.scheduledLatency.p999Ms",
+        "load.scheduledLatency.maxMs",
+        "spot.remoteCallLatency.meanMs",
+        "spot.remoteCallLatency.p50Ms",
+        "spot.remoteCallLatency.p95Ms",
+        "spot.remoteCallLatency.p99Ms",
+        "spot.remoteCallLatency.p999Ms",
+        "spot.remoteCallLatency.maxMs",
+        "errors.byKind",
+        "errors.harness",
+        "errors.language"
+      ],
+      "additionalProperties": true
+    },
+    "PerfMetricsSnapshot": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 3
+        },
+        "runId": {
+          "$ref": "#/$defs/text"
+        },
+        "cellId": {
+          "$ref": "#/$defs/text"
+        },
+        "configHash": {
+          "$ref": "#/$defs/text"
+        },
+        "comparisonKey": {
+          "$ref": "#/$defs/text"
+        },
+        "resetSeq": {
+          "$ref": "#/$defs/u64"
+        },
+        "language": {
+          "enum": [
+            "cpp",
+            "dotnet",
+            "java",
+            "node"
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/text"
+        },
+        "roleInstance": {
+          "$ref": "#/$defs/index"
+        },
+        "phase": {
+          "enum": [
+            "setup",
+            "warmup",
+            "reset",
+            "measured",
+            "settle",
+            "complete"
+          ]
+        },
+        "window": {
+          "$ref": "#/$defs/Window"
+        },
+        "clock": {
+          "$ref": "#/$defs/ClockMetadata"
+        },
+        "serializedMessageBytes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SerializedMessageBytes"
+          }
+        },
+        "metrics": {
+          "$ref": "#/$defs/Metrics"
+        },
+        "histograms": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Histogram"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "nullReasons": {
+          "$ref": "#/$defs/nullReasons"
+        },
+        "publicStatus": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "publicMetrics": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "timeSeries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TimeSeriesInterval"
+          }
+        },
+        "runtimeMetrics": {
+          "type": "object"
+        },
+        "provenance": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "runId",
+        "cellId",
+        "configHash",
+        "comparisonKey",
+        "resetSeq",
+        "language",
+        "role",
+        "roleInstance",
+        "phase",
+        "window",
+        "clock",
+        "serializedMessageBytes",
+        "metrics",
+        "histograms",
+        "nullReasons",
+        "publicStatus",
+        "publicMetrics",
+        "timeSeries",
+        "runtimeMetrics",
+        "provenance"
+      ],
+      "additionalProperties": false
+    },
+    "PerfResult": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 3
+        },
+        "runId": {
+          "$ref": "#/$defs/text"
+        },
+        "cellId": {
+          "$ref": "#/$defs/text"
+        },
+        "configHash": {
+          "$ref": "#/$defs/text"
+        },
+        "comparisonKey": {
+          "$ref": "#/$defs/text"
+        },
+        "language": {
+          "$ref": "#/$defs/text"
+        },
+        "scenario": {
+          "$ref": "#/$defs/text"
+        },
+        "configFile": {
+          "$ref": "#/$defs/text"
+        },
+        "endpointsFile": {
+          "$ref": "#/$defs/text"
+        },
+        "status": {
+          "enum": [
+            "valid",
+            "failed",
+            "invalid",
+            "unsupported"
+          ]
+        },
+        "baselineEligible": {
+          "type": "boolean"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "metricOwners": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          }
+        },
+        "ownerWindows": {
+          "type": "object"
+        },
+        "measuredSeconds": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "aggregation": {
+          "type": "object"
+        },
+        "metrics": {
+          "$ref": "#/$defs/Metrics"
+        },
+        "histograms": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Histogram"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "nullReasons": {
+          "$ref": "#/$defs/nullReasons"
+        },
+        "clients": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          }
+        },
+        "servers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          }
+        },
+        "processes": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "runId",
+        "cellId",
+        "configHash",
+        "comparisonKey",
+        "language",
+        "scenario",
+        "configFile",
+        "endpointsFile",
+        "status",
+        "baselineEligible",
+        "reasons",
+        "metricOwners",
+        "ownerWindows",
+        "measuredSeconds",
+        "aggregation",
+        "metrics",
+        "histograms",
+        "nullReasons",
+        "clients",
+        "servers",
+        "processes"
+      ],
+      "additionalProperties": false
+    },
+    "Range": {
+      "type": "object",
+      "properties": {
+        "first": {
+          "$ref": "#/$defs/u64"
+        },
+        "last": {
+          "$ref": "#/$defs/u64"
+        }
+      },
+      "required": [
+        "first",
+        "last"
+      ],
+      "additionalProperties": false
+    },
+    "PublisherSequences": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "$ref": "#/$defs/text"
+        },
+        "cellId": {
+          "$ref": "#/$defs/text"
+        },
+        "resetSeq": {
+          "$ref": "#/$defs/u64"
+        },
+        "phase": {
+          "enum": [
+            "warmup",
+            "measured"
+          ]
+        },
+        "attemptedRanges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Range"
+          }
+        },
+        "windowSuccessRanges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Range"
+          }
+        },
+        "settleSuccessRanges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Range"
+          }
+        }
+      },
+      "required": [
+        "runId",
+        "cellId",
+        "resetSeq",
+        "phase",
+        "attemptedRanges",
+        "windowSuccessRanges",
+        "settleSuccessRanges"
+      ],
+      "additionalProperties": false
+    },
+    "ReceiptTiming": {
+      "type": "object",
+      "properties": {
+        "sequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "sentTicks": {
+          "$ref": "#/$defs/i64"
+        },
+        "publisherClockDomainId": {
+          "$ref": "#/$defs/text"
+        },
+        "receivedTicks": {
+          "$ref": "#/$defs/i64"
+        },
+        "validatedTicks": {
+          "$ref": "#/$defs/i64"
+        },
+        "subscriberClockDomainId": {
+          "$ref": "#/$defs/text"
+        },
+        "receivedIn": {
+          "enum": [
+            "window",
+            "settle"
+          ]
+        }
+      },
+      "required": [
+        "sequence",
+        "sentTicks",
+        "publisherClockDomainId",
+        "receivedTicks",
+        "validatedTicks",
+        "subscriberClockDomainId",
+        "receivedIn"
+      ],
+      "additionalProperties": false
+    },
+    "SubscriberSequences": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "$ref": "#/$defs/text"
+        },
+        "cellId": {
+          "$ref": "#/$defs/text"
+        },
+        "resetSeq": {
+          "$ref": "#/$defs/u64"
+        },
+        "phase": {
+          "enum": [
+            "warmup",
+            "measured"
+          ]
+        },
+        "subscriberId": {
+          "$ref": "#/$defs/index"
+        },
+        "windowRanges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Range"
+          }
+        },
+        "settleRanges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Range"
+          }
+        },
+        "duplicateEvents": {
+          "$ref": "#/$defs/u64"
+        },
+        "nullReasons": {
+          "$ref": "#/$defs/nullReasons"
+        },
+        "timingEvidence": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ReceiptTiming"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "runId",
+        "cellId",
+        "resetSeq",
+        "phase",
+        "subscriberId",
+        "windowRanges",
+        "settleRanges",
+        "duplicateEvents",
+        "nullReasons",
+        "timingEvidence"
+      ],
+      "additionalProperties": false
+    },
+    "CcuWorkload": {
+      "type": "object",
+      "properties": {
+        "connections": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "logicalStreams": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "Physical connections and logical streams each use CCU<=1000. Per-user inflight requests are independent."
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/PerfMetricsSnapshot"
+    },
+    {
+      "$ref": "#/$defs/PerfResult"
+    }
+  ]
+}

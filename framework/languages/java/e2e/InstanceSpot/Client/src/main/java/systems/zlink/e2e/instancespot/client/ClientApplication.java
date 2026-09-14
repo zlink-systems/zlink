@@ -36,7 +36,7 @@ public final class ClientApplication {
             var mesh = framework.addRouteMesh(Contracts.MESH);
             mesh.listen(options.meshEndpoint())
                 .setRoutingIdPrefix(options.rid());
-            mesh.channelName(Contracts.MESH).client();
+            mesh.channel(Contracts.MESH).client();
             // The caller uses the public Spot lookup API for Ready evidence;
             // no Spot factory is registered on this process.
             mesh.objects().server();

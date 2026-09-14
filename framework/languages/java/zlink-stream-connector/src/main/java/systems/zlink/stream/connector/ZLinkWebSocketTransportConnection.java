@@ -1,5 +1,6 @@
 package systems.zlink.stream.connector;
 import java.io.EOFException;
+import java.io.ByteArrayOutputStream;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -17,6 +18,7 @@ final class ZLinkWebSocketTransportConnection
     private final Queue<ZLinkStreamWireProtocol.Frame> frames = new ArrayDeque<>();
     private final Queue<CompletableFuture<ZLinkStreamWireProtocol.Frame>> waiters =
         new ArrayDeque<>();
+    private ByteArrayOutputStream message;
     private volatile WebSocket webSocket;
     private volatile Throwable failure;
     private final int maxReceivePayloadSize;
@@ -50,20 +52,33 @@ final class ZLinkWebSocketTransportConnection
 
     @Override
     public CompletionStage<?> onBinary(WebSocket socket, ByteBuffer data, boolean last) {
-        if (!last) {
-            fail(new IllegalArgumentException("fragmented WebSocket frames are not supported"));
-            socket.request(1);
-            return CompletableFuture.completedFuture(null);
-        }
-        if (data.remaining() > ZLinkStreamWireProtocol.maxFrameLength(maxReceivePayloadSize)) {
-            fail(new IllegalArgumentException("websocket frame exceeds max receive payload size"));
-            socket.request(1);
-            return CompletableFuture.completedFuture(null);
-        }
-        byte[] frame = new byte[data.remaining()];
-        data.get(frame);
+        ZLinkStreamWireProtocol.Frame frame = null;
         try {
-            enqueue(ZLinkStreamWireProtocol.decodeFrame(frame, maxReceivePayloadSize));
+            synchronized (this) {
+                if (failure != null) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                int received = message == null ? 0 : message.size();
+                if ((long) received + data.remaining()
+                        > ZLinkStreamWireProtocol.maxFrameLength(maxReceivePayloadSize)) {
+                    throw new IllegalArgumentException(
+                        "websocket frame exceeds max receive payload size");
+                }
+                if (message == null) {
+                    message = new ByteArrayOutputStream();
+                }
+                byte[] chunk = new byte[data.remaining()];
+                data.get(chunk);
+                message.writeBytes(chunk);
+                if (last) {
+                    byte[] complete = message.toByteArray();
+                    message = null;
+                    frame = ZLinkStreamWireProtocol.decodeFrame(complete, maxReceivePayloadSize);
+                }
+            }
+            if (frame != null) {
+                enqueue(frame);
+            }
         } catch (RuntimeException ex) {
             fail(ex);
         }
@@ -126,6 +141,9 @@ final class ZLinkWebSocketTransportConnection
     private void enqueue(ZLinkStreamWireProtocol.Frame frame) {
         CompletableFuture<ZLinkStreamWireProtocol.Frame> waiter;
         synchronized (this) {
+            if (failure != null) {
+                return;
+            }
             waiter = waiters.poll();
             if (waiter == null) {
                 frames.add(frame);
@@ -141,6 +159,7 @@ final class ZLinkWebSocketTransportConnection
             if (failure == null) {
                 failure = ex;
             }
+            message = null;
             opened.completeExceptionally(ex);
             pending = new ArrayDeque<>(waiters);
             waiters.clear();

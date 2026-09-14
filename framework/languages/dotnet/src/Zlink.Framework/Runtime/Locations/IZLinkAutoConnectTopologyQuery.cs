@@ -21,8 +21,15 @@ internal interface IZLinkAutoConnectTopologyQuery
         string meshName,
         RoutingId nodeRid);
 
+    ValueTask<ZLinkRouteMeshTargetClassification> ClassifyRouteMeshTargetAsync(
+        string meshName,
+        RoutingId nodeRid);
+
     IReadOnlyList<ZLinkRouteMeshPeerIdentity>? GetCompleteRouteMeshPeers(
         string meshName) => null;
+
+    ValueTask<IReadOnlyList<ZLinkRouteMeshPeerIdentity>?> GetCompleteRouteMeshPeersAsync(
+        string meshName);
 }
 
 internal readonly record struct ZLinkRouteMeshPeerIdentity(

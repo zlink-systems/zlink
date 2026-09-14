@@ -105,9 +105,9 @@ class Program {
                     .enableActorDispatch().registerSession(GameSession::class.java)
             }
             "zone" -> {
-                mesh.channelName(ZoneWorldNames.ZONE_CHANNEL).server()
+                mesh.channel(ZoneWorldNames.ZONE_CHANNEL).server()
                     .addHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
-                mesh.channelName(ZoneWorldNames.REPORT_CHANNEL).client()
+                mesh.channel(ZoneWorldNames.REPORT_CHANNEL).client()
                 mesh.objects().server()
                     .addEntrySpot(ZoneEntrySpot::class.java)
                     .addSpotFactory(ZoneWorldNames.ZONE_SPOT_TYPE, ZoneSpot::class.java) {
@@ -122,7 +122,7 @@ class Program {
                     .addHandlerGroup(ZoneWorldNames.BROADCAST_HANDLER_GROUP)
             }
             "ops" -> {
-                mesh.channelName(ZoneWorldNames.REPORT_CHANNEL).server()
+                mesh.channel(ZoneWorldNames.REPORT_CHANNEL).server()
                     .addHandlerGroup(ZoneWorldNames.OPS_HANDLER_GROUP)
                 mesh.objects().client()
                 options.addFanoutChannel(ZoneWorldNames.BROADCAST_CHANNEL)

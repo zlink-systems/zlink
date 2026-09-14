@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <Content Include="histogram-bounds.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../../../perf-contract/metric-catalog.json" Link="metric-catalog.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../../../perf-contract/matrix.json" Link="matrix.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../../../perf-contract/histogram-bounds-ns.json" Link="histogram-bounds-ns.json" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../../src/Zlink.Framework.Contracts/Zlink.Framework.Contracts.csproj" />
     <ProjectReference Include="../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj" />
   </ItemGroup>

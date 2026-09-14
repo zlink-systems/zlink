@@ -60,7 +60,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkSpotNodeRuntime nodeRuntime;
         try
         {
-            nodeRuntime = ResolveRouteMeshNodeForChannel(channelName);
+            nodeRuntime = await ResolveRouteMeshNodeForChannelAsync(channelName).ConfigureAwait(false);
         }
         catch
         {
@@ -149,7 +149,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkSpotNodeRuntime nodeRuntime;
         try
         {
-            nodeRuntime = ResolveRouteMeshNodeForChannel(channelName);
+            nodeRuntime = await ResolveRouteMeshNodeForChannelAsync(channelName).ConfigureAwait(false);
         }
         catch
         {
@@ -207,15 +207,15 @@ internal sealed partial class ZLinkFrameworkRuntime
             $"ClientServer channel '{channelName}' has no local Client role.");
     }
 
-    private ZLinkRouteMeshTargetClassification ClassifyAutomaticRouteMeshTarget(
+    private async ValueTask<ZLinkRouteMeshTargetClassification> ClassifyAutomaticRouteMeshTargetAsync(
         ZLinkSpotNodeRuntime nodeRuntime,
         string meshName,
         RoutingId targetNodeRid)
     {
-        var classification = _topologyQuery?.ClassifyRouteMeshTarget(
-                meshName,
-                targetNodeRid)
-            ?? ZLinkRouteMeshTargetClassification.Unknown;
+        var classification = _topologyQuery is null
+            ? ZLinkRouteMeshTargetClassification.Unknown
+            : await _topologyQuery.ClassifyRouteMeshTargetAsync(
+                meshName, targetNodeRid).ConfigureAwait(false);
 
         // A location row can become visible before the local reconciler has
         // completed its first full descriptor snapshot. The target is then
@@ -224,26 +224,37 @@ internal sealed partial class ZLinkFrameworkRuntime
         // absent from a completed snapshot.
         if (classification == ZLinkRouteMeshTargetClassification.Unknown
             && _topologyQuery is not null
-            && _topologyQuery.GetCompleteRouteMeshPeers(meshName) is null)
+            && await _topologyQuery.GetCompleteRouteMeshPeersAsync(meshName)
+                .ConfigureAwait(false) is null)
             classification = ZLinkRouteMeshTargetClassification.RequiredNotConnected;
 
         if (classification
             != ZLinkRouteMeshTargetClassification.RequiredNotConnected)
             return classification;
 
-        return nodeRuntime.Node.MeshPeers().Any(peer =>
+        return (await nodeRuntime.Node.MeshPeersAsync().ConfigureAwait(false)).Any(peer =>
             peer.RoutingId == targetNodeRid
             && peer.State == MeshPeerState.Admitted)
                 ? ZLinkRouteMeshTargetClassification.ReadyEligible
                 : classification;
     }
 
+    // State ownership §5: the synchronous first-admission surface must finish
+    // target classification before returning. Reuse the async canonical body;
+    // async Send/Request callers await it directly.
     internal void EnsureKnownRouteMeshPeer(
+        string routerChannelId,
+        RoutingId targetNodeRid,
+        string targetDescription) =>
+        EnsureKnownRouteMeshPeerAsync(routerChannelId, targetNodeRid, targetDescription)
+            .GetAwaiter().GetResult();
+
+    internal async ValueTask EnsureKnownRouteMeshPeerAsync(
         string routerChannelId,
         RoutingId targetNodeRid,
         string targetDescription)
     {
-        var nodeRuntime = GetMeshNodeRuntime(routerChannelId);
+        var nodeRuntime = await GetMeshNodeRuntimeAsync(routerChannelId).ConfigureAwait(false);
         if (nodeRuntime.Node.RoutingId == targetNodeRid)
         {
             if (nodeRuntime.Registration.ObjectRole
@@ -257,7 +268,7 @@ internal sealed partial class ZLinkFrameworkRuntime
 
         if (nodeRuntime.UsesManualRouterAcquisition)
         {
-            switch (nodeRuntime.ClassifyManualRouterTarget(targetNodeRid))
+            switch (await nodeRuntime.ClassifyManualRouterTargetAsync(targetNodeRid).ConfigureAwait(false))
             {
                 case ZLinkRouteMeshTargetClassification.ReadyEligible:
                     return;
@@ -278,10 +289,10 @@ internal sealed partial class ZLinkFrameworkRuntime
             }
         }
 
-        switch (ClassifyAutomaticRouteMeshTarget(
+        switch (await ClassifyAutomaticRouteMeshTargetAsync(
                     nodeRuntime,
                     routerChannelId,
-                    targetNodeRid))
+                    targetNodeRid).ConfigureAwait(false))
         {
             case ZLinkRouteMeshTargetClassification.ReadyEligible:
                 return;
@@ -314,31 +325,33 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default)
     {
-        using var operation = EnterOperation();
-        var handedOff = false;
-        try
+        return await ExecuteOperationAsync(async () =>
         {
-            EnsureKnownRouteMeshPeer(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'");
+            var handedOff = false;
+            try
+            {
+                await EnsureKnownRouteMeshPeerAsync(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'").ConfigureAwait(false);
 
-            var accepted = _spotRouteRouter.SendAsync(
-                routerChannelId,
-                targetNodeRid,
-                targetSpotId,
-                targetSpotGeneration,
-                targetNodeGeneration,
-                authorityOwnerGeneration,
-                ownerLeaseGeneration,
-                parts,
-                cancellationToken,
-                metadata);
-            handedOff = true;
-            return await accepted.ConfigureAwait(false);
-        }
-        catch
-        {
-            if (!handedOff) ZLinkMessageParts.DisposeAll(parts);
-            throw;
-        }
+                var accepted = _spotRouteRouter.SendAsync(
+                    routerChannelId,
+                    targetNodeRid,
+                    targetSpotId,
+                    targetSpotGeneration,
+                    targetNodeGeneration,
+                    authorityOwnerGeneration,
+                    ownerLeaseGeneration,
+                    parts,
+                    cancellationToken,
+                    metadata);
+                handedOff = true;
+                return await accepted.ConfigureAwait(false);
+            }
+            catch
+            {
+                if (!handedOff) ZLinkMessageParts.DisposeAll(parts);
+                throw;
+            }
+        }).ConfigureAwait(false);
     }
 
     internal RoutingId ResolveAcceptedSpotRouteNodeRid(string targetSpotNodeChannelName)
@@ -388,46 +401,48 @@ internal sealed partial class ZLinkFrameworkRuntime
     {
         try
         {
-            using var operation = EnterOperation(countAsRequest: true);
-            var metric = ZLinkRuntimeMetrics.StartRequest(routerChannelId, "spot");
-            var outcome = "completed";
-            try
+            return await ExecuteOperationAsync(async () =>
             {
-                EnsureKnownRouteMeshPeer(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'");
+                var metric = ZLinkRuntimeMetrics.StartRequest(routerChannelId, "spot");
+                var outcome = "completed";
+                try
+                {
+                    await EnsureKnownRouteMeshPeerAsync(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'").ConfigureAwait(false);
 
-                return await _spotRouteRouter.RequestAsync(
-                        routerChannelId,
-                        targetNodeRid,
-                        targetSpotId,
-                        targetSpotGeneration,
-                        targetNodeGeneration,
-                        authorityOwnerGeneration,
-                        ownerLeaseGeneration,
-                        parts,
-                        timeout,
-                        cancellationToken,
-                        metadata)
-                    .ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                outcome = "timed_out";
-                throw;
-            }
-            catch (OperationCanceledException)
-            {
-                outcome = "cancelled";
-                throw;
-            }
-            catch
-            {
-                outcome = "failed";
-                throw;
-            }
-            finally
-            {
-                metric.Complete(outcome);
-            }
+                    return await _spotRouteRouter.RequestAsync(
+                            routerChannelId,
+                            targetNodeRid,
+                            targetSpotId,
+                            targetSpotGeneration,
+                            targetNodeGeneration,
+                            authorityOwnerGeneration,
+                            ownerLeaseGeneration,
+                            parts,
+                            timeout,
+                            cancellationToken,
+                            metadata)
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    outcome = "timed_out";
+                    throw;
+                }
+                catch (OperationCanceledException)
+                {
+                    outcome = "cancelled";
+                    throw;
+                }
+                catch
+                {
+                    outcome = "failed";
+                    throw;
+                }
+                finally
+                {
+                    metric.Complete(outcome);
+                }
+            }, countAsRequest: true).ConfigureAwait(false);
         }
         finally
         {

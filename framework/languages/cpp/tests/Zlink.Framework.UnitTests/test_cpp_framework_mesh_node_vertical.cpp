@@ -12,6 +12,8 @@
 #include "runtime/mesh/route_mesh_runtime_service.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 
+#include <zlink/framework.hpp>
+#include "runtime/locations/in_memory_store_providers.hpp"
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 
 #include <algorithm>
@@ -1340,6 +1342,271 @@ void verify_automatic_identity_and_port_builder ()
     assert (rejected_prefix);
 }
 
+// Factory registration requires provider options; reuse the existing in-memory
+// Store implementation for all operations rather than introducing test semantics.
+class automatic_identity_store_t final : public zlink::framework::location_store_t
+{
+  public:
+    struct options_type {
+        std::shared_ptr<zlink::framework::runtime::in_memory_location_store_t> store;
+    };
+    struct options_builder_type {
+        explicit options_builder_type (std::shared_ptr<options_type> value) : options (std::move (value)) {}
+        void use_store (std::shared_ptr<zlink::framework::runtime::in_memory_location_store_t> store)
+        { options->store = std::move (store); }
+        std::shared_ptr<options_type> options;
+    };
+    explicit automatic_identity_store_t (const options_type &options) : _store (options.store) {}
+    zlink::framework::task_t<zlink::framework::store_read_result_t> read (
+      zlink::framework::store_key_t key) override
+    { return _store->read (std::move (key)); }
+    zlink::framework::task_t<zlink::framework::store_write_result_t> write (
+      zlink::framework::store_write_request_t request) override
+    { return _store->write (std::move (request)); }
+    zlink::framework::task_t<zlink::framework::store_scan_result_t> scan (
+      zlink::framework::store_scan_request_t request) override
+    { return _store->scan (std::move (request)); }
+  private:
+    std::shared_ptr<zlink::framework::runtime::in_memory_location_store_t> _store;
+};
+
+struct automatic_identity_echo_t
+{
+    std::string handle (const std::string &request) { return request; }
+};
+
+struct automatic_identity_send_t
+{
+    inline static std::atomic<unsigned> deliveries{0};
+    void handle (const std::string &message)
+    {
+        assert (message == "public-channel-send");
+        ++deliveries;
+    }
+};
+
+class automatic_source_spot_t final : public zlink::framework::spot_t<contract_actor_t>
+{
+  public:
+    explicit automatic_source_spot_t (zlink::framework::spot_context_t context) :
+        _context (std::move (context)) {}
+    zlink::framework::spot_context_t &context () noexcept override { return _context; }
+    const zlink::framework::spot_context_t &context () const noexcept override { return _context; }
+    void configure () override
+    {
+        _context.handlers ().add_handler<&automatic_source_spot_t::request> ();
+        _context.handlers ().add_handler<&automatic_source_spot_t::send> ();
+    }
+    std::string request (const std::string &message) { return message; }
+    void send (const int &message)
+    {
+        assert (message == 42);
+        ++automatic_identity_send_t::deliveries;
+    }
+    zlink::framework::task_t<zlink::framework::spot_actor_join_result_t>
+    on_actor_join (std::string_view, const zlink::framework::message_t &) override
+    { co_return zlink::framework::spot_actor_join_result_t::accept (); }
+    zlink::framework::task_t<void> on_actor_joined (contract_actor_t &) override { co_return; }
+    zlink::framework::task_t<void> on_leave_actor (contract_actor_t &) override { co_return; }
+  private:
+    zlink::framework::spot_context_t _context;
+};
+
+class automatic_identity_probe_t final : public zlink::framework::hosted_service_t
+{
+  public:
+    explicit automatic_identity_probe_t (
+      std::promise<zlink::framework::service_provider_t *> &available) :
+        _available (available) {}
+    zlink::framework::task_t<void> start (
+      zlink::framework::service_provider_t &services) override
+    {
+        _available.set_value (&services);
+        co_return;
+    }
+    void stop () noexcept override {}
+  private:
+    std::promise<zlink::framework::service_provider_t *> &_available;
+};
+
+void verify_default_store_identity_and_manual_identity (
+  std::initializer_list<int> registration_kinds, bool object_client_source = false)
+{
+#if defined(__unix__)
+    // RouteMesh selects a remote Server: a node never selects its own membership.
+    for (const int registration_kind : registration_kinds) {
+        auto shared_store = std::make_shared<
+          zlink::framework::runtime::in_memory_location_store_t> ();
+        auto server = zlink::framework::app_t::create ();
+        auto client = zlink::framework::app_t::create ();
+        const auto server_endpoint = reserve_loopback_endpoint ();
+        const auto client_endpoint = reserve_loopback_endpoint ();
+        const auto configure = [&] (zlink::framework::app_t &app, bool serving) {
+            auto &options = app.add_zlink_framework ();
+            if (registration_kind == 0)
+                options.add_location_store (shared_store);
+            else if (registration_kind == 1)
+                options.add_location_store<automatic_identity_store_t> ().use_store (shared_store);
+            auto mesh = options.add_route_mesh ("default-identity-mesh");
+            mesh.listen (serving ? server_endpoint : client_endpoint);
+            if (registration_kind == 2) {
+                mesh.set_object_role (zlink::framework::object_role_t::none);
+                mesh.set_routing_id (zlink::routing_id_t::from (
+                  serving ? "manual-server" : "manual-client"));
+                mesh.peer_connections ().connect (serving ? client_endpoint : server_endpoint);
+            }
+            if (object_client_source) {
+                if (serving)
+                    mesh.objects ().server ().add_spot_factory<automatic_source_spot_t> (
+                      "source-authority-spot").disable_relocation ();
+                else {
+                    mesh.objects ().client ();
+                    mesh.set_placement_weight (0);
+                }
+            }
+            if (serving)
+                mesh.channel ("identity-echo").server ().add_request_handler<
+                  automatic_identity_echo_t, std::string, std::string> ()
+                  .add_send_handler<automatic_identity_send_t, std::string> ();
+            else
+                mesh.channel ("identity-echo").client ();
+            const auto states = zlink::framework::detail::mesh_node_runtime_t::registrations (
+              app.advanced ().zlink ());
+            assert (states.size () == 1);
+            if (registration_kind != 2)
+                assert (!states.front ()->routing_id);
+            return states.front ();
+        };
+        const auto server_state = configure (server, true);
+        const auto client_state = configure (client, false);
+        std::promise<zlink::framework::service_provider_t *> server_available, client_available;
+        auto server_services = server_available.get_future ().share ();
+        auto client_services = client_available.get_future ().share ();
+        server.add_hosted_service (std::make_unique<automatic_identity_probe_t> (server_available));
+        client.add_hosted_service (std::make_unique<automatic_identity_probe_t> (client_available));
+        std::exception_ptr server_error, client_error;
+        int server_exit = -1, client_exit = -1;
+        std::thread server_thread ([&] {
+            try { server_exit = server.run (0, nullptr); }
+            catch (...) {
+                server_error = std::current_exception ();
+                if (server_services.wait_for (0s) != std::future_status::ready)
+                    server_available.set_exception (server_error);
+            }
+        });
+        std::thread client_thread ([&] {
+            try { client_exit = client.run (0, nullptr); }
+            catch (...) {
+                client_error = std::current_exception ();
+                if (client_services.wait_for (0s) != std::future_status::ready)
+                    client_available.set_exception (client_error);
+            }
+        });
+        const auto stop = [&] {
+            client.stop ();
+            server.stop ();
+            client_thread.join ();
+            server_thread.join ();
+        };
+        try {
+            assert (server_services.wait_for (5s) == std::future_status::ready);
+            assert (client_services.wait_for (5s) == std::future_status::ready);
+            (void) server_services.get ();
+            auto &services = *client_services.get ();
+            auto &topology = services.get_required<zlink::framework::route_mesh_runtime_t> ();
+            const auto deadline = std::chrono::steady_clock::now () + 5s;
+            bool ready = false;
+            do {
+                const auto snapshot = topology.snapshot ("default-identity-mesh");
+                ready = server.is_ready () && client.is_ready () && snapshot.is_ready
+                  && std::any_of (snapshot.channels.begin (), snapshot.channels.end (), [] (const auto &channel) {
+                      return channel.channel_name == "identity-echo" && channel.is_ready
+                             && channel.ready_target_count == 1;
+                  });
+                if (ready) break;
+                std::this_thread::sleep_for (10ms);
+            } while (std::chrono::steady_clock::now () < deadline);
+            assert (ready);
+            auto &routes = services.get_required<zlink::framework::route_client_t> ();
+            auto request = routes.request_to_channel (
+              "identity-echo", std::string ("default-identity-probe"))
+              .timeout (1s).async<std::string> ();
+            assert (request.result ().value () == "default-identity-probe");
+            auto &channels = services.get_required<zlink::framework::channel_client_t> ();
+            auto public_request = channels.request_to_channel (
+              "identity-echo", std::string ("public-channel-request"))
+              .metadata ("probe", "public-channel").timeout (1s).async<std::string> ();
+            assert (public_request.result ().value () == "public-channel-request");
+            const auto before = automatic_identity_send_t::deliveries.load ();
+            const auto sent = channels.send_to_channel (
+              "identity-echo", std::string ("public-channel-send")).async ().result ();
+            assert (sent);
+            const auto delivery_deadline = std::chrono::steady_clock::now () + 1s;
+            while (automatic_identity_send_t::deliveries.load () == before
+                   && std::chrono::steady_clock::now () < delivery_deadline)
+                std::this_thread::sleep_for (1ms);
+            assert (automatic_identity_send_t::deliveries.load () == before + 1);
+            const auto absent_request = channels.request_to_channel (
+              "absent-public-channel", std::string ("missing"))
+              .timeout (1s).async<std::string> ().result ();
+            assert (!absent_request);
+            assert (absent_request.error_kind ()
+                    == zlink::framework::framework_error_kind_t::not_found);
+            const auto absent_send = channels.send_to_channel (
+              "absent-public-channel", std::string ("missing")).async ().result ();
+            assert (!absent_send);
+            assert (absent_send.error_kind ()
+                    == zlink::framework::framework_error_kind_t::not_found);
+
+            for (const auto &state : {server_state, client_state}) {
+                assert (state->routing_id);
+                const auto identity = state->routing_id->to_string ();
+                if (registration_kind == 2)
+                    assert (identity == (state == server_state ? "manual-server" : "manual-client"));
+                else
+                    assert (std::regex_match (identity, std::regex (
+                      R"(default-identity-mesh-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})")));
+                assert (state->spot_state->snapshot.routing_id
+                        && state->spot_state->snapshot.routing_id->to_string () == identity);
+            }
+            if (object_client_source) {
+                auto &manager = server_services.get ()->get_required<zlink::framework::spot_manager_t> ();
+                for (const auto *target_id : {"public-source-authority-target", "public-source-authority-target-2"}) {
+                    const auto created = manager.get_or_create (
+                      zlink::framework::spot_id_t (target_id), "source-authority-spot")
+                      .in_mesh ("default-identity-mesh").timeout (1s).async ().result ();
+                    assert (created);
+                    const auto response = routes.request_to_spot (
+                      zlink::framework::spot_id_t (target_id),
+                      std::string ("object-client-weight-zero"))
+                      .timeout (1s).async<std::string> ().result ();
+                    assert (response && response.value () == "object-client-weight-zero");
+                    const auto before = automatic_identity_send_t::deliveries.load ();
+                    const auto sent = routes.send_to_spot (
+                      zlink::framework::spot_id_t (target_id),
+                      42).async ().result ();
+                    assert (sent);
+                    const auto deadline = std::chrono::steady_clock::now () + 1s;
+                    while (automatic_identity_send_t::deliveries.load () == before
+                           && std::chrono::steady_clock::now () < deadline)
+                        std::this_thread::sleep_for (1ms);
+                    assert (automatic_identity_send_t::deliveries.load () == before + 1);
+                }
+            }
+            assert (server_state->routing_id != client_state->routing_id);
+        }
+        catch (...) {
+            stop ();
+            throw;
+        }
+        stop ();
+        if (server_error) std::rethrow_exception (server_error);
+        if (client_error) std::rethrow_exception (client_error);
+        assert (server_exit == 0 && client_exit == 0);
+    }
+#endif
+}
+
 void verify_slow_observer_does_not_block_stop ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "slow-observer");
@@ -2090,12 +2357,36 @@ int run_cross_process_delivery ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--object-client-source") {
+        verify_default_store_identity_and_manual_identity ({0}, true);
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--public-runtime-surface") {
+        verify_public_runtime_surface ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--automatic-store-identity") {
+        verify_automatic_identity_and_port_builder ();
+        verify_default_store_identity_and_manual_identity ({0, 1});
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--manual-no-store-identity") {
+        verify_default_store_identity_and_manual_identity ({2});
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--automatic-identity") {
+        verify_automatic_identity_and_port_builder ();
+        verify_default_store_identity_and_manual_identity ({0, 1, 2});
+        return 0;
+    }
 #if defined(__unix__)
     if (argc == 2 && std::string_view (argv[1]) == "--cross-process")
         return run_cross_process_delivery ();
 #endif
     verify_local_join_timeout_releases_membership ();
     verify_automatic_identity_and_port_builder ();
+    verify_default_store_identity_and_manual_identity ({0, 1, 2});
+    verify_default_store_identity_and_manual_identity ({0}, true);
     verify_public_runtime_surface ();
     verify_slow_observer_does_not_block_stop ();
     verify_object_client_registration_boundary ();

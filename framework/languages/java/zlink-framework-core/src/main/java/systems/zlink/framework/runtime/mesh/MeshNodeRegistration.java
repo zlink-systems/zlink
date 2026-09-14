@@ -293,7 +293,7 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     }
 
     @Override
-    public ZLinkMeshChannelBuilder channelName(String channelName) {
+    public ZLinkMeshChannelBuilder channel(String channelName) {
         String name = requireText(channelName, "channel name");
         Channel channel = new Channel(name);
         if (channels.putIfAbsent(name, channel) != null) {

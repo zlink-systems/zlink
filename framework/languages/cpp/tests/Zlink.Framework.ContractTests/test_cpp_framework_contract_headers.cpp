@@ -374,7 +374,7 @@ static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::fanout_publish_call_t &> ().async ()),
                  zlink::framework::task_t<void>>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::session_actor_t &> ().relay (
-                                std::declval<const zlink::message_t &> ())),
+                                std::declval<const zlink::framework::message_t &> ())),
                               zlink::framework::task_t<void>>);
 template <typename T> concept has_blocking_wait = requires (T value)
 {
@@ -915,7 +915,7 @@ class named_session_t final : public zlink::framework::packet_stream_session_t
 
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
     }
@@ -1013,10 +1013,10 @@ static_assert (!has_create_scope<zlink::framework::service_provider_t>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::stream_t &> ().close ()),
                               zlink::framework::task_t<void>>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::stream_t &> ().write_packet (
-                                std::declval<const zlink::message_t &> ())),
+                                std::declval<const zlink::framework::message_t &> ())),
                               zlink::framework::stream_send_call_t>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::stream_t &> ().reply_packet (
-                                std::declval<const zlink::message_t &> ())),
+                                std::declval<const zlink::framework::message_t &> ())),
                               zlink::framework::stream_write_call_t>);
 
 static_assert (
@@ -1498,11 +1498,11 @@ static_assert (!std::is_constructible_v<zlink::framework::actor_join_call_t,
                                         zlink::framework::actor_join_call_t::deferred_fn_t,
                                         zlink::framework::detail::deferred_barrier_reserver_t>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::session_actor_t &> ().relay (
-                                std::declval<const zlink::message_t &> ())),
+                                std::declval<const zlink::framework::message_t &> ())),
                               zlink::framework::task_t<void>>);
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::session_actor_t &> ().relay_request (
-                   std::declval<const zlink::message_t &> ())),
+                   std::declval<const zlink::framework::message_t &> ())),
                  zlink::framework::relay_request_call_t>);
 
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::mesh_node_builder_t &> ()
@@ -1951,3 +1951,6 @@ static_assert (sizeof (spot_packet_context_t) == 1);
 static_assert (sizeof (spot_actor_send_context_t) == 1);
 static_assert (sizeof (spot_actor_request_context_t) == 1);
 static_assert (sizeof (spot_actor_reply_options_t) == 1);
+
+static_assert (std::is_same_v<decltype (std::declval<zlink::framework::relay_request_call_t &> ().async ()),
+                              zlink::framework::task_t<zlink::framework::message_t>>);

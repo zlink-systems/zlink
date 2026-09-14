@@ -594,7 +594,7 @@ build_snapshot (
         const auto peer_rid = zlink::routing_id_t::from (
           peer.descriptor.node_routing_id);
         const auto location = location_by_rid.find (peer_rid.to_hex ());
-        if (location_is_healthy
+        if (state->location_store != nullptr && location_is_healthy
             && (location == location_by_rid.end ()
                 || location->second->state != framework_runtime_state_t::serving
                 || location->second->lifecycle_generation
@@ -648,7 +648,7 @@ build_snapshot (
           zlink::routing_id_t::from (peer.node_routing_id);
         if (!classified_peer_ids.insert (rid.to_hex ()).second)
             continue;
-        if (location_is_healthy
+        if (state->location_store != nullptr && location_is_healthy
             && location_by_rid.find (rid.to_hex ()) == location_by_rid.end ())
             continue;
         peer_snapshots.push_back (mesh_peer_snapshot_t{

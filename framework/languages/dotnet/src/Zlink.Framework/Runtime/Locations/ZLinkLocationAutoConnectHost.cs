@@ -509,23 +509,35 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         _localLoops[(type, meshName, role)] = loop;
     }
 
+    // State ownership §5: synchronous topology/status observations finish
+    // their capture before returning. Async dispatch awaits the same
+    // reconciler-owned captures through the internal query seam.
     public ZLinkRouteMeshTargetClassification ClassifyRouteMeshTarget(
+        string meshName,
+        RoutingId nodeRid) =>
+        ClassifyRouteMeshTargetAsync(meshName, nodeRid).GetAwaiter().GetResult();
+
+    public ValueTask<ZLinkRouteMeshTargetClassification> ClassifyRouteMeshTargetAsync(
         string meshName,
         RoutingId nodeRid)
     {
         var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
         return _routeMeshReconcilers.TryGetValue(meshKey, out var reconciler)
-            ? reconciler.ClassifyTarget(nodeRid)
-            : ZLinkRouteMeshTargetClassification.Unknown;
+            ? reconciler.ClassifyTargetAsync(nodeRid)
+            : ValueTask.FromResult(ZLinkRouteMeshTargetClassification.Unknown);
     }
 
     public IReadOnlyList<ZLinkRouteMeshPeerIdentity>? GetCompleteRouteMeshPeers(
+        string meshName) =>
+        GetCompleteRouteMeshPeersAsync(meshName).GetAwaiter().GetResult();
+
+    public ValueTask<IReadOnlyList<ZLinkRouteMeshPeerIdentity>?> GetCompleteRouteMeshPeersAsync(
         string meshName)
     {
         var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
         return _routeMeshReconcilers.TryGetValue(meshKey, out var reconciler)
-            ? reconciler.CompleteMeshPeers()
-            : null;
+            ? reconciler.CompleteMeshPeersAsync()
+            : ValueTask.FromResult<IReadOnlyList<ZLinkRouteMeshPeerIdentity>?>(null);
     }
 
     internal void SetLocalWeight(

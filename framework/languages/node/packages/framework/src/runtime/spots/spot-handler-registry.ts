@@ -80,7 +80,7 @@ export class DefaultZLinkSpotHandlerRegistry<TActor extends ZLinkActor = ZLinkAc
 
   addPacket(handlerType: Type, packetName?: string): this {
     const declared = readZLinkDecoratorMetadata(handlerType)
-      .find((entry) => entry.kind === 'packet')?.packetName;
+      .find((entry) => entry.kind === 'packet' || entry.kind === 'spotRequest')?.packetName;
     this.entries.push({ kind: 'packet', handlerType, packetName: packetName ?? declared ?? handlerType.name });
     return this;
   }
