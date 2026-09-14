@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -52,8 +53,38 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.runtime.internal.service.ZLinkClassicFanoutLiveness;
 
 final class ZLinkFanoutLocationRuntimeTest {
+    @Test
+    void validBeaconMakesPublicSnapshotReadyWithoutConnectionReadyEvent()
+        throws Exception {
+        TestStore store = new TestStore();
+        store.rows = List.of(descriptor());
+        try (Fixture fixture = new Fixture(store)) {
+            fixture.start();
+            ControlledSubscriber subscriber = fixture.awaitSubscriber();
+            var sockets = new ZLinkChannelSocketRegistry();
+            var channel = new ChannelRegistration("events", ChannelKind.FANOUT);
+            channel.enableSubscriber();
+            sockets.registerChannel(channel);
+            var view = new ZLinkFanoutRuntimeView(
+                sockets, () -> fixture.runtime,
+                () -> null, () -> ZLinkFrameworkRuntimeState.SERVING);
+            assertFalse(view.snapshot("events").isReady());
+            List<byte[]> beacon = ZLinkClassicFanoutLiveness.beaconRecord();
+            subscriber.inbound.add(new ZLinkBackendTopicMessage(
+                Optional.empty(), new String(beacon.getFirst(), StandardCharsets.UTF_8),
+                List.of(Message.from(beacon.get(1)))));
+            subscriber.readable.set(true);
+
+            awaitCondition(() -> view.snapshot("events").isReady());
+            assertEquals(1, view.snapshot("events").readyPublisherCount());
+            subscriber.monitor.emit("DISCONNECTED");
+            awaitCondition(() -> !view.snapshot("events").isReady());
+        }
+    }
+
     @Test
     void monitorAndStopJoinTheAdmittedSubscriberReceive() throws Exception {
         TestStore store = new TestStore();
@@ -465,6 +496,8 @@ final class ZLinkFanoutLocationRuntimeTest {
         private volatile int readinessWaits;
         private volatile int subscribeCalls;
         private final AtomicBoolean readable = new AtomicBoolean();
+        private final LinkedBlockingQueue<ZLinkBackendTopicMessage> inbound =
+            new LinkedBlockingQueue<>();
         private final AtomicBoolean blockReceive = new AtomicBoolean();
         private final boolean blockConnect;
         private final CountDownLatch connectEntered = new CountDownLatch(1);
@@ -498,6 +531,11 @@ final class ZLinkFanoutLocationRuntimeTest {
         public ZLinkBackendTopicMessage subscribe(
             ZLinkBackendRecvMode mode) {
             subscribeCalls++;
+            ZLinkBackendTopicMessage record = inbound.poll();
+            if (record != null) {
+                readable.set(!inbound.isEmpty());
+                return record;
+            }
             if (blockReceive.get()) {
                 events.add("subscribe-enter");
                 subscribeEntered.countDown();
