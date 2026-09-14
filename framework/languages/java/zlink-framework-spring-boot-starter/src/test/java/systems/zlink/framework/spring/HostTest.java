@@ -37,7 +37,7 @@ final class HostTest {
             context.register(ProfileChannelConfig.class, ZLinkFrameworkAutoConfiguration.class);
             context.refresh();
             monitor.awaitRecv();
-            assertEquals(List.of("socketMonitor.recv"), monitor.calls());
+            assertEquals(List.of("socketMonitor.waitForReadable"), monitor.calls());
 
             lifecycle = context.getBean(ZLinkFrameworkLifecycle.class);
 
@@ -65,7 +65,9 @@ final class HostTest {
                 "close.dealer",
                 "close.context"),
             backendFactory.calls());
-        assertEquals(List.of("socketMonitor.recv", "close.socketMonitor"), monitor.calls());
+        assertEquals(List.of(
+            "socketMonitor.waitForReadable", "close.socketMonitor"),
+            monitor.calls());
     }
 
     @Configuration

@@ -721,7 +721,7 @@ final class ZLinkFrameworkAutoConfigurationTest {
             context.register(TestConfig.class, ZLinkFrameworkAutoConfiguration.class);
             context.refresh();
             monitor.awaitRecv();
-            assertEquals(List.of("socketMonitor.recv"), monitor.calls());
+            assertEquals(List.of("socketMonitor.waitForReadable"), monitor.calls());
 
             assertEquals(
                 List.of(
@@ -750,7 +750,9 @@ final class ZLinkFrameworkAutoConfigurationTest {
                 "close.dealer",
                 "close.context"),
             backendFactory.calls());
-        assertEquals(List.of("socketMonitor.recv", "close.socketMonitor"), monitor.calls());
+        assertEquals(List.of(
+            "socketMonitor.waitForReadable", "close.socketMonitor"),
+            monitor.calls());
     }
 
     @Configuration

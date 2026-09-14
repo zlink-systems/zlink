@@ -27,6 +27,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -572,24 +573,38 @@ final class ZLinkFanoutLocationRuntimeTest {
     private static final class Monitor implements ZLinkBackendSocketMonitor {
         private final LinkedBlockingQueue<ZLinkBackendSocketMonitorEvent> events =
             new LinkedBlockingQueue<>();
+        private final Semaphore readable = new Semaphore(0);
         private final AtomicInteger closeCalls = new AtomicInteger();
         private final CompletableFuture<Void> handlerReady =
             new CompletableFuture<>();
+        private volatile boolean closed;
 
         private void emit(String event) {
             events.add(new ZLinkBackendSocketMonitorEvent(
                 event, Optional.empty(), "", ""));
+            readable.release();
         }
 
         @Override
-        public ZLinkBackendSocketMonitorEvent recv() {
+        public boolean waitForReadable(Duration timeout) {
             handlerReady.complete(null);
             try {
-                return events.take();
+                return readable.tryAcquire(timeout.toMillis(), TimeUnit.MILLISECONDS)
+                    && !closed;
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
-                throw new IllegalStateException("monitor receive interrupted", interrupted);
+                return false;
             }
+        }
+
+        @Override
+        public ZLinkBackendSocketMonitorEvent recvDontWait() {
+            return events.poll();
+        }
+
+        @Override
+        public boolean isClosed() {
+            return closed;
         }
 
         @Override
@@ -599,6 +614,8 @@ final class ZLinkFanoutLocationRuntimeTest {
 
         @Override
         public void close() {
+            closed = true;
+            readable.release();
             closeCalls.incrementAndGet();
         }
     }
