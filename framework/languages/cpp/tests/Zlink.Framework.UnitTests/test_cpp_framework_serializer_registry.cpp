@@ -229,6 +229,78 @@ int main ()
     if (retained.to_string () != large_body)
         return 32;
 
+    // Inline storage may move to a new address; large owned storage must not.
+    for (const std::size_t size : {std::size_t{0}, std::size_t{1}, std::size_t{28},
+                                   std::size_t{29}, std::size_t{30}, std::size_t{64},
+                                   std::size_t{4096}}) {
+        const std::string body (size, 'm');
+        auto native = zlink::message_t::from (body);
+        const auto *storage = native.data ();
+        auto owned = zlink::framework::detail::encoded_payload_from_raw (std::move (native));
+        auto moved = zlink::framework::detail::encoded_payload_to_raw (std::move (owned));
+        if (!moved.valid () || moved.to_string () != body || !owned.empty ()
+            || (size > 29 && moved.data () != storage))
+            return 60;
+        auto moved_again = zlink::framework::detail::encoded_payload_to_raw (std::move (owned));
+        if (moved_again.valid ())
+            return 61;
+
+        zlink::message_t materialized;
+        {
+            auto source = zlink::message_t::from (body);
+            auto borrowed = zlink::framework::detail::encoded_payload_from_raw (source);
+            auto const_materialized = zlink::framework::detail::encoded_payload_to_raw (borrowed);
+            if (const_materialized.to_string () != body
+                || (size > 0 && const_materialized.data () == source.data ()))
+                return 70;
+            materialized = zlink::framework::detail::encoded_payload_to_raw (std::move (borrowed));
+            if (!materialized.valid () || materialized.to_string () != body
+                || borrowed.to_string () != body
+                || (size > 0 && materialized.data () == source.data ()))
+                return 62;
+        }
+        if (materialized.to_string () != body)
+            return 63;
+    }
+
+    zlink::framework::encoded_payload_t empty_owned;
+    auto empty_raw = zlink::framework::detail::encoded_payload_to_raw (std::move (empty_owned));
+    if (!empty_raw.valid () || empty_raw.size () != 0 || !empty_owned.empty ())
+        return 64;
+
+    // Closing the moved owner while the encoded value is still alive must
+    // release external storage immediately: there is no hidden native clone.
+    int external_releases = 0;
+    std::string external_body (4096, 'e');
+    auto external = zlink::advanced::external_message_t::from (
+      std::as_writable_bytes (std::span<char> (external_body.data (), external_body.size ())),
+      [] (void *, void *hint) { ++*static_cast<int *> (hint); }, &external_releases);
+    if (!external.valid ())
+        return 65;
+    auto external_owned = zlink::framework::detail::encoded_payload_from_raw (std::move (external));
+    auto external_moved = zlink::framework::detail::encoded_payload_to_raw (std::move (external_owned));
+    if (static_cast<const void *> (external_moved.data ()) != external_body.data ()
+        || external_releases != 0
+        || !external_owned.empty ())
+        return 66;
+    external_moved.close ();
+    if (external_releases != 1)
+        return 67;
+
+    // The existing const bridge deliberately retains an independent owner.
+    external_releases = 0;
+    external = zlink::advanced::external_message_t::from (
+      std::as_writable_bytes (std::span<char> (external_body.data (), external_body.size ())),
+      [] (void *, void *hint) { ++*static_cast<int *> (hint); }, &external_releases);
+    external_owned = zlink::framework::detail::encoded_payload_from_raw (std::move (external));
+    auto external_clone = zlink::framework::detail::encoded_payload_to_raw (external_owned);
+    external_clone.close ();
+    if (external_releases != 0 || external_owned.to_string () != external_body)
+        return 68;
+    external_owned = {};
+    if (external_releases != 1)
+        return 69;
+
     for (const auto &scenario : fixture.at ("normalizationScenarios")) {
         zlink::framework::serializer_registry_t registry;
         bool rejected = false;

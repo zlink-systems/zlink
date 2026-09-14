@@ -33,6 +33,7 @@ struct serializer_registry_test_access_t;
 encoded_payload_t encoded_payload_from_raw (const zlink::message_t &message);
 encoded_payload_t encoded_payload_from_raw (zlink::message_t &&message);
 zlink::message_t encoded_payload_to_raw (const encoded_payload_t &payload);
+zlink::message_t encoded_payload_to_raw (encoded_payload_t &&payload);
 
 template <typename T, typename = void> struct extension_serializer_traits_t
 {
@@ -145,6 +146,7 @@ class encoded_payload_t
     friend encoded_payload_t detail::encoded_payload_from_raw (const zlink::message_t &message);
     friend encoded_payload_t detail::encoded_payload_from_raw (zlink::message_t &&message);
     friend zlink::message_t detail::encoded_payload_to_raw (const encoded_payload_t &payload);
+    friend zlink::message_t detail::encoded_payload_to_raw (encoded_payload_t &&payload);
 
     static encoded_payload_t from_raw (const zlink::message_t &message)
     {
@@ -205,6 +207,13 @@ inline encoded_payload_t encoded_payload_from_raw (zlink::message_t &&message)
 inline zlink::message_t encoded_payload_to_raw (const encoded_payload_t &payload)
 {
     return payload.to_raw ();
+}
+
+inline zlink::message_t encoded_payload_to_raw (encoded_payload_t &&payload)
+{
+    // Borrowed views still require owned storage at the transport boundary.
+    return payload._borrowed_bytes ? zlink::message_t::from (*payload._borrowed_bytes)
+                                   : std::move (payload._message);
 }
 } // namespace detail
 
