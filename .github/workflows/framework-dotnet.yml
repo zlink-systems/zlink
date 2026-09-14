@@ -1,48 +1,48 @@
 name: Framework .NET
 
 on:
-  push:
-    branches:
-      - main
-    # Production code only: runtime sources, unit/contract tests and the cross-language host.
-    # Docs, plans, bench, perf, samples and scenario e2e never start this workflow (user decision 2026-09-09).
-    paths:
-      - ".github/workflows/framework-dotnet.yml"
-      - "scripts/ci/**"
-      - "framework/languages/dotnet/VERSION"
-      - "bindings/dotnet/VERSION"
-      - "framework/runtime/**"
-      - "framework/languages/dotnet/Directory.Build.props"
-      - "framework/languages/dotnet/Directory.Build.targets"
-      - "framework/languages/dotnet/Directory.Packages.props"
-      - "framework/languages/dotnet/nuget.config"
-      - "framework/languages/dotnet/Zlink.Framework.ci.slnf"
-      - "framework/languages/dotnet/src/**"
-      - "framework/languages/dotnet/tests/**"
-      - "framework/languages/dotnet/cross-language/**"
-      - "bindings/dotnet/src/Zlink/**"
-      - "bindings/dotnet/native/**"
-  pull_request:
-    branches:
-      - main
-    # Production code only: runtime sources, unit/contract tests and the cross-language host.
-    # Docs, plans, bench, perf, samples and scenario e2e never start this workflow (user decision 2026-09-09).
-    paths:
-      - ".github/workflows/framework-dotnet.yml"
-      - "scripts/ci/**"
-      - "framework/languages/dotnet/VERSION"
-      - "bindings/dotnet/VERSION"
-      - "framework/runtime/**"
-      - "framework/languages/dotnet/Directory.Build.props"
-      - "framework/languages/dotnet/Directory.Build.targets"
-      - "framework/languages/dotnet/Directory.Packages.props"
-      - "framework/languages/dotnet/nuget.config"
-      - "framework/languages/dotnet/Zlink.Framework.ci.slnf"
-      - "framework/languages/dotnet/src/**"
-      - "framework/languages/dotnet/tests/**"
-      - "framework/languages/dotnet/cross-language/**"
-      - "bindings/dotnet/src/Zlink/**"
-      - "bindings/dotnet/native/**"
+#   push:
+#     branches:
+#       - main
+#     # Production code only: runtime sources, unit/contract tests and the cross-language host.
+#     # Docs, plans, bench, perf, samples and scenario e2e never start this workflow (user decision 2026-09-09).
+#     paths:
+#       - ".github/workflows/framework-dotnet.yml"
+#       - "scripts/ci/**"
+#       - "framework/languages/dotnet/VERSION"
+#       - "bindings/dotnet/VERSION"
+#       - "framework/runtime/**"
+#       - "framework/languages/dotnet/Directory.Build.props"
+#       - "framework/languages/dotnet/Directory.Build.targets"
+#       - "framework/languages/dotnet/Directory.Packages.props"
+#       - "framework/languages/dotnet/nuget.config"
+#       - "framework/languages/dotnet/Zlink.Framework.ci.slnf"
+#       - "framework/languages/dotnet/src/**"
+#       - "framework/languages/dotnet/tests/**"
+#       - "framework/languages/dotnet/cross-language/**"
+#       - "bindings/dotnet/src/Zlink/**"
+#       - "bindings/dotnet/native/**"
+#   pull_request:
+#     branches:
+#       - main
+#     # Production code only: runtime sources, unit/contract tests and the cross-language host.
+#     # Docs, plans, bench, perf, samples and scenario e2e never start this workflow (user decision 2026-09-09).
+#     paths:
+#       - ".github/workflows/framework-dotnet.yml"
+#       - "scripts/ci/**"
+#       - "framework/languages/dotnet/VERSION"
+#       - "bindings/dotnet/VERSION"
+#       - "framework/runtime/**"
+#       - "framework/languages/dotnet/Directory.Build.props"
+#       - "framework/languages/dotnet/Directory.Build.targets"
+#       - "framework/languages/dotnet/Directory.Packages.props"
+#       - "framework/languages/dotnet/nuget.config"
+#       - "framework/languages/dotnet/Zlink.Framework.ci.slnf"
+#       - "framework/languages/dotnet/src/**"
+#       - "framework/languages/dotnet/tests/**"
+#       - "framework/languages/dotnet/cross-language/**"
+#       - "bindings/dotnet/src/Zlink/**"
+#       - "bindings/dotnet/native/**"
   workflow_dispatch:
 
 env:

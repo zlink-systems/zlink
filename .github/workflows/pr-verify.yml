@@ -9,28 +9,28 @@ name: PR Verify
 # changes job이 base와의 diff로 어느 job을 돌릴지 정한다. 외부 action을 쓰지 않는다.
 
 on:
-  pull_request:
-    branches:
-      - main
-    # 운영 코드만. 문서·계획·bench·sample은 이 워크플로우를 시작하지 않는다.
-    paths:
-      - ".github/workflows/pr-verify.yml"
-      - "VERSION"
-      - "core/include/**"
-      - "core/src/**"
-      - "core/tests/**"
-      - "core/CMakeLists.txt"
-      - "core/cmake/**"
-      - "bindings/c/**"
-      - "bindings/cpp/**"
-      - "bindings/java/**"
-      - "bindings/python/**"
-      - "bindings/tools/**"
-      # mirror 대조 대상. go·rust는 헤더 미러만 본다.
-      - "bindings/go/include/**"
-      - "bindings/rust/include/**"
-      - "framework/languages/java/**"
-      - "framework/runtime/**"
+#   pull_request:
+#     branches:
+#       - main
+#     # 운영 코드만. 문서·계획·bench·sample은 이 워크플로우를 시작하지 않는다.
+#     paths:
+#       - ".github/workflows/pr-verify.yml"
+#       - "VERSION"
+#       - "core/include/**"
+#       - "core/src/**"
+#       - "core/tests/**"
+#       - "core/CMakeLists.txt"
+#       - "core/cmake/**"
+#       - "bindings/c/**"
+#       - "bindings/cpp/**"
+#       - "bindings/java/**"
+#       - "bindings/python/**"
+#       - "bindings/tools/**"
+#       # mirror 대조 대상. go·rust는 헤더 미러만 본다.
+#       - "bindings/go/include/**"
+#       - "bindings/rust/include/**"
+#       - "framework/languages/java/**"
+#       - "framework/runtime/**"
   workflow_dispatch:
 
 concurrency:
