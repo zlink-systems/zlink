@@ -44,6 +44,7 @@ jobs:
     outputs:
       core: ${{ steps.select.outputs.core }}
       framework_java: ${{ steps.select.outputs.framework_java }}
+      windows_x64_contract: ${{ steps.select.outputs.windows_x64_contract }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -58,7 +59,7 @@ jobs:
           set -euo pipefail
           if [ "${EVENT}" != "pull_request" ]; then
             # 손으로 돌릴 때는 전부 돈다.
-            printf 'core=true\nframework_java=true\n' >> "${GITHUB_OUTPUT}"
+            printf 'core=true\nframework_java=true\nwindows_x64_contract=true\n' >> "${GITHUB_OUTPUT}"
             exit 0
           fi
           git fetch --no-tags --depth=200 origin "${BASE}"
@@ -73,6 +74,19 @@ jobs:
           }
           emit core '^(VERSION|core/|bindings/(c|cpp|python|tools)/|bindings/(go|rust)/include/|\.github/workflows/pr-verify\.yml)'
           emit framework_java '^(VERSION|core/|bindings/(java|tools)/|framework/languages/java/|framework/runtime/|\.github/workflows/pr-verify\.yml)'
+          emit windows_x64_contract '^(VERSION|core/builds/windows/.*\.ps1$|bindings/(cpp|dotnet|java|node|tools)/|framework/languages/(cpp|dotnet|java|node)/|scripts/(local-package/.*\.ps1|gate/rebuild-dev\.ps1)|\.github/workflows/pr-verify\.yml)'
+
+  windows-x64-contract:
+    name: Windows x64 static contracts
+    needs: changes
+    if: needs.changes.outputs.windows_x64_contract == 'true'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Parse PowerShell and verify x64 package contracts
+        shell: powershell
+        run: .\bindings\tools\verify-windows-x64-contract.ps1
 
   core:
     name: Core ctest and binding smoke
