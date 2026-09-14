@@ -7,6 +7,7 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1002,8 +1003,119 @@ bool contains_error_frame (
 
 } // namespace
 
+namespace {
+struct ws_relay_actor_t final : zlink::framework::actor_t {
+    explicit ws_relay_actor_t(zlink::framework::actor_context_t value) : context_(std::move(value)) {}
+    zlink::framework::actor_context_t &context() noexcept override { return context_; }
+    const zlink::framework::actor_context_t &context() const noexcept override { return context_; }
+    zlink::framework::actor_context_t context_;
+};
+struct ws_relay_factory_t final : zlink::framework::actor_factory_t<ws_relay_actor_t> {
+    zlink::framework::task_t<std::shared_ptr<ws_relay_actor_t>> create(
+      zlink::framework::actor_context_t context, std::stop_token) override {
+        co_return std::make_shared<ws_relay_actor_t>(std::move(context));
+    }
+};
+struct ws_relay_entry_t final : zlink::framework::entry_spot_t<ws_relay_actor_t> {
+    explicit ws_relay_entry_t(zlink::framework::entry_spot_context_t value) : context_(std::move(value)) {}
+    zlink::framework::entry_spot_context_t &context() noexcept override { return context_; }
+    const zlink::framework::entry_spot_context_t &context() const noexcept override { return context_; }
+    void configure() override { context_.handlers().add_actor_request<&ws_relay_entry_t::echo>(); }
+    std::string echo(ws_relay_actor_t &, zlink::framework::message_context_t &, const std::string &value) {
+        return value + ":actor";
+    }
+    zlink::framework::task_t<zlink::framework::spot_actor_join_result_t> on_actor_join(
+      std::string_view, const zlink::framework::message_t &) override {
+        co_return zlink::framework::spot_actor_join_result_t::accept();
+    }
+    zlink::framework::task_t<void> on_actor_joined(ws_relay_actor_t &) override { co_return; }
+    zlink::framework::task_t<void> on_leave_actor(ws_relay_actor_t &) override { co_return; }
+    zlink::framework::entry_spot_context_t context_;
+};
+struct ws_relay_session_t final : zlink::framework::packet_stream_session_t {
+    explicit ws_relay_session_t(zlink::framework::actor_manager_t &value) : actors(value) {}
+    zlink::framework::task_t<void> on_connected(zlink::framework::stream_t &stream) override {
+        // The application-visible SessionId remains textual.
+        if (!stream.session_id().starts_with("ws-relay:")) throw std::runtime_error("SessionId changed");
+        co_return;
+    }
+    zlink::framework::task_t<void> on_disconnected(zlink::framework::stream_t &) override { co_return; }
+    zlink::framework::task_t<void> on_error(zlink::framework::stream_t &, const zlink::framework::stream_error_t &error) override {
+        throw std::runtime_error(std::string(error.message())); co_return;
+    }
+    zlink::framework::task_t<void> on_packet(zlink::framework::stream_t &stream,
+      const zlink::framework::session_message_context_t &context,
+      const zlink::framework::message_t &message) override {
+        if (!actor) {
+            auto create = actors.get_or_create(zlink::framework::actor_id_t("ws-relay-actor"), "ws-relay-actor-type");
+            create.in_mesh("ws-relay-mesh");
+            auto created = co_await create.async();
+            const auto reference = [&] {
+                if (const auto *value = std::get_if<zlink::framework::actor_create_existing_t>(&created)) return value->actor;
+                if (const auto *value = std::get_if<zlink::framework::actor_create_created_t>(&created)) return value->actor;
+                throw std::runtime_error("Actor creation rejected");
+            }();
+            auto bind = stream.actors().bind_or_get(reference);
+            actor = co_await bind.async();
+        }
+        auto relay = actor->relay_request(context.packet_name, message);
+        auto reply = co_await relay.async();
+        auto send = stream.reply_packet(reply);
+        co_await send.async();
+    }
+    zlink::framework::actor_manager_t &actors;
+    std::optional<zlink::framework::session_actor_t> actor;
+};
+int public_websocket_bound_relay() {
+    using namespace std::chrono_literals;
+    auto app = zlink::framework::app_t::create();
+    auto &options = app.add_zlink_framework();
+    options.add_location_store(std::make_shared<zlink::framework::runtime::in_memory_location_store_t>());
+    options.configure_network().set_bind_host("127.0.0.1").set_advertise_host("127.0.0.1");
+    auto mesh = options.add_route_mesh("ws-relay-mesh");
+    mesh.listen("tcp://127.0.0.1:" + std::to_string(reserve_loopback_port()));
+    mesh.objects().server().add_entry_spot<ws_relay_entry_t>()
+      .add_actor_factory<ws_relay_actor_t, ws_relay_factory_t>("ws-relay-actor-type").disable_relocation();
+    options.services().add_scoped<ws_relay_session_t, zlink::framework::actor_manager_t>();
+    const auto endpoint = "ws://127.0.0.1:" + std::to_string(reserve_loopback_port());
+    options.add_stream_node("ws-relay").bind(endpoint).enable_actor_dispatch().register_session<ws_relay_session_t>();
+    std::thread host([&] { app.run(0, nullptr); });
+    try {
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        while (!app.is_ready() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(10ms);
+        if (!app.is_ready()) throw std::runtime_error("host startup timed out");
+        zlink::stream_connector::connector_options_t config;
+        config.endpoint = endpoint;
+        config.transport = zlink::stream_connector::transport_t::websocket;
+        config.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
+        auto connector = zlink::stream_connector::connector_factory_t::create(config);
+        std::promise<bool> connected;
+        connector.connect([&](zlink::stream_connector::result_t<void> result) { connected.set_value(bool(result)); });
+        auto connected_result = connected.get_future();
+        if (connected_result.wait_for(5s) != std::future_status::ready || !connected_result.get()) throw std::runtime_error("connect failed");
+        for (const std::string value : {"first", "second"}) {
+            std::promise<std::string> received;
+            connector.request(value).timeout(1s).submit<std::string>(
+              [&](zlink::stream_connector::result_t<std::string> result) {
+                  received.set_value(result ? result.value() : result.error()->message);
+              });
+            auto reply = received.get_future();
+            if (reply.wait_for(2s) != std::future_status::ready || reply.get() != value + ":actor")
+                throw std::runtime_error("public WS bound Actor relay failed");
+        }
+        connector.close();
+    } catch (const std::exception &) {
+        app.stop(); host.join(); throw;
+    }
+    app.stop(); host.join();
+    return 0;
+}
+} // namespace
+
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string(argv[1]) == "--public-ws-relay") return public_websocket_bound_relay();
     using zlink::framework::framework_error_kind_t;
     using zlink::framework::stream_codec_t;
     using zlink::framework::detail::stream_header_flags_t;
@@ -1373,6 +1485,7 @@ int main (int argc, char **argv)
         return 312;
 
     if (argc == 2 && std::string (argv[1]) == "--typed-message") return 0;
+    if (const int ws_relay = public_websocket_bound_relay(); ws_relay != 0) return ws_relay;
 
     auto push_codec_stream = runtime.open_session ("client-stream");
     sample_session_t push_codec_session;

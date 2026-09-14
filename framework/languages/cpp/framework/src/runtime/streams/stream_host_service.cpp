@@ -3446,7 +3446,7 @@ class stream_host_service_t::listener_t
         if (_mesh_node) {
             session_registry = &_mesh_node->native_node ().sessions ();
             transport_connection = session_registry->open (
-              stream_instance.session_id (),
+              session_rid.to_hex (),
               [this, connection] { request_close (*connection); });
         }
         auto connection_state = std::make_shared<stream_connection_state_t> (
