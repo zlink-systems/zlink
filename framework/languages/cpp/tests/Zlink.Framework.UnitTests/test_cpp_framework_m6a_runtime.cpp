@@ -2699,6 +2699,7 @@ void verify_raw_owner_node_send_and_liveness (
       std::vector<std::uint8_t> (512u * 1024u, 0x5a)};
     std::vector<std::shared_ptr<zlink::framework::task_t<zlink::submit_result_t>>>
       saturated_sends;
+    std::size_t saturated_received = 0;
     for (std::size_t index = 0;
          index < 128 && first.pending_operation_count () == 0;
          ++index) {
@@ -2754,8 +2755,11 @@ void verify_raw_owner_node_send_and_liveness (
           mesh::service_mailbox_domain_t::application,
           1,
           1024u * 1024u);
-        if (claim)
+        if (claim) {
+            saturated_received += claim->records.size ();
+            assert (saturated_received <= saturated_sends.size ());
             assert (second.mailbox ().release (*claim));
+        }
 
         auto source_pump = first.pump_one (
           mesh::service_liveness_registry_t::clock_t::now ());
@@ -2770,29 +2774,27 @@ void verify_raw_owner_node_send_and_liveness (
     for (const auto &send : saturated_sends)
         assert (send->result ().value () == zlink::submit_result_t::ok);
 
-    // Every saturating one-way send is retained, so the target still holds the
-    // ones that arrived after the submit side went terminal. Drain them before
-    // the request burst; a leftover one-way record has no reply token.
+    // Every saturating one-way send is retained. Cross the phase boundary only
+    // after the target has received exactly that many application records; an
+    // idle pump does not prove that the transport has finished delivering them.
     const auto quiesce_deadline = std::chrono::steady_clock::now () + 10s;
-    int idle_pumps = 0;
-    while (idle_pumps < 50
+    while (saturated_received < saturated_sends.size ()
            && std::chrono::steady_clock::now () < quiesce_deadline) {
         const auto pumped_quiesce = await_task (second.pump_one (
           mesh::service_liveness_registry_t::clock_t::now ()));
         assert (pumped_quiesce != mesh::raw_mesh_pump_result_t::protocol_error);
-        bool progressed =
-          pumped_quiesce != mesh::raw_mesh_pump_result_t::no_data;
         while (auto quiesce_claim = second.mailbox ().try_claim (
                  mesh::service_mailbox_domain_t::application, 256,
                  16u * 1024u * 1024u)) {
-            progressed = true;
+            saturated_received += quiesce_claim->records.size ();
+            assert (saturated_received <= saturated_sends.size ());
             assert (second.mailbox ().release (*quiesce_claim));
         }
         const auto source_quiesce = await_task (first.pump_one (
           mesh::service_liveness_registry_t::clock_t::now ()));
         assert (source_quiesce != mesh::raw_mesh_pump_result_t::protocol_error);
-        idle_pumps = progressed ? 0 : idle_pumps + 1;
     }
+    assert (saturated_received == saturated_sends.size ());
     assert (second.mailbox ().pending_messages (
               mesh::service_mailbox_domain_t::application)
             == 0);

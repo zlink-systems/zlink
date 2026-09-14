@@ -2,6 +2,8 @@
 
 #include <zlink/framework.hpp>
 
+#include "test_completion_poller_driver.hpp"
+
 #include "runtime/channels/channel_host_service.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
@@ -256,6 +258,7 @@ TEST (ChannelHostReplyAdmission,
 
     zlink::router_socket_t source (*context);
     runtime_cleanup_t cleanup (handler, host, source);
+    zlink::framework::test::completion_poller_driver_t completion_owner (source);
     source.set_routing_id (source_rid);
     auto source_monitor = source.monitor_open (
       zlink::monitor_event::connection_ready
