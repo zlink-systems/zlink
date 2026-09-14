@@ -62,6 +62,31 @@ class ZLinkRedisOpaqueLocationStoreTest {
     }
 
     @Test
+    void repeatedConditionalUpdatesWithoutSnapshotDoNotExhaustVersionBacklog() throws Exception {
+        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
+        assumeTrue(endpoint != null && !endpoint.isBlank(), "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        try (var store = new ZLinkRedisLocationStore(
+            new ZLinkRedisLocationOptions().setConnectionString(endpoint)
+                .setKeyPrefix("opaque-repeat:" + UUID.randomUUID()))) {
+            var key = new ZLinkStoreKey("counter");
+            var current = assertInstanceOf(ZLinkStoreWriteApplied.class,
+                store.write(new ZLinkStoreWriteRequest(
+                    List.of(new ZLinkStoreMissingCondition(key)),
+                    List.of(new ZLinkStorePut(key, new byte[] {0}, null))),
+                    () -> false).toCompletableFuture().get());
+            for (int update = 1; update <= 257; update++) {
+                current = assertInstanceOf(ZLinkStoreWriteApplied.class,
+                    store.write(new ZLinkStoreWriteRequest(
+                        List.of(new ZLinkStoreVersionCondition(key, current.putVersions().get(key))),
+                        List.of(new ZLinkStorePut(key, new byte[] {(byte) update}, null))),
+                        () -> false).toCompletableFuture().get());
+            }
+            assertArrayEquals(new byte[] {1}, assertInstanceOf(ZLinkStoreReadFound.class,
+                store.read(key, () -> false).toCompletableFuture().get()).value().bytes());
+        }
+    }
+
+    @Test
     void conditionalBatchAndScanUseStableOpaqueSnapshot() throws Exception {
         String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
         assumeTrue(
